@@ -27,6 +27,7 @@ import {
   ProviderLoginRefusalAction,
   ProviderLoginRefusalMessage,
 } from "@/components/providers/provider-login-refusal";
+import { providerHostBlock } from "@/components/providers/provider-signin-availability";
 import { providerLoginRetryLabel } from "@/lib/providers/provider-login-retry-label";
 import {
   AddProfileIdentityStep,
@@ -97,7 +98,9 @@ export function ProviderProfileReauthPanel({
   // profile was when the user started, and everything below wants exactly it.
   const [entryProfile] = useState(profile);
   const supportsLoginOwnership = useProvidersLoginOwnership();
+  const hostBlock = providerHostBlock(state, "sign-in");
   const flow = useProviderProfileLoginFlow({
+    hostBlock,
     supportsLoginOwnership,
     mode: "reauth",
     providerId: state.providerId,
@@ -218,6 +221,7 @@ export function ProviderProfileReauthPanel({
           void openLink(url, "auth", null);
         }}
         onCancel={cancel}
+        retryBlocked={hostBlock?.kind === "macos"}
         onRetry={start}
         onSignInAgain={signInAgain}
         onDone={onDone}
@@ -240,6 +244,7 @@ function ProviderProfileReauthState({
   onOpenExternalLink,
   onCancel,
   onRetry,
+  retryBlocked,
   onSignInAgain,
   onDone,
 }: {
@@ -259,6 +264,7 @@ function ProviderProfileReauthState({
   readonly onOpenExternalLink: (url: string) => void;
   readonly onCancel: () => void;
   readonly onRetry: () => void;
+  readonly retryBlocked: boolean;
   readonly onSignInAgain: () => void;
   readonly onDone: () => void;
 }): ReactNode {
@@ -336,6 +342,7 @@ function ProviderProfileReauthState({
         showIdentity={showIdentity}
         identityChanged={identityChanged}
         onCancel={onCancel}
+        retryBlocked={retryBlocked}
         onRetry={onRetry}
         onSignInAgain={onSignInAgain}
         onDone={onDone}
@@ -351,6 +358,7 @@ function ProviderProfileReauthActions({
   identityChanged,
   onCancel,
   onRetry,
+  retryBlocked,
   onSignInAgain,
   onDone,
 }: {
@@ -360,6 +368,7 @@ function ProviderProfileReauthActions({
   readonly identityChanged: boolean;
   readonly onCancel: () => void;
   readonly onRetry: () => void;
+  readonly retryBlocked: boolean;
   readonly onSignInAgain: () => void;
   readonly onDone: () => void;
 }): ReactNode {
@@ -381,7 +390,7 @@ function ProviderProfileReauthActions({
             type="button"
             size="sm"
             variant="secondary"
-            disabled={flow.busy}
+            disabled={flow.busy || retryBlocked}
             onClick={onRetry}
           >
             {flow.busy ? <MutedAgentSpinner /> : null}

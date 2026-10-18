@@ -3694,7 +3694,18 @@ export function createChatSessionStoreWithNotificationDependencies(
       // snapshot either names the message or hands the prompt back. Saying
       // "not confirmed" over a stream already known to be down would only
       // restate what the reconnect state beside the composer is showing.
-      if (pending.connectionEpoch !== connectionEpoch) return;
+      if (pending.connectionEpoch !== connectionEpoch) {
+        // Not shown to the user (the reconnect settles it), but triage could
+        // not otherwise tell a send that outlived its connection from a lost
+        // one. Ids and a status only: no draft text, no account identifier.
+        appLogger.info("[chat] send deadline fired after a reconnect", {
+          chatId: options.chatId,
+          hostId: options.hostId,
+          connectionStatus: input.get().connectionStatus,
+          reason: "send-from-earlier-connection",
+        });
+        return;
+      }
       input.set((state) => ({
         unconfirmedSendActionIds: new Set([
           ...state.unconfirmedSendActionIds,

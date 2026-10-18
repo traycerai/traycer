@@ -5,6 +5,7 @@ import {
   NO_SESSION_OBJECT_URL,
 } from "@/components/chat/composer/attachments/attachment-strip";
 import { BrowserAnnotationCard } from "@/components/chat/composer/browser-annotation-card";
+import { AppMessageDraftPill } from "@/components/chat/composer/app-message-draft-pill";
 import { QueueEditDraftPill } from "@/components/chat/composer/queue-edit-draft-pill";
 import { useLandingImageFetcher } from "@/hooks/composer/use-landing-image-fetcher";
 import { useChatImageFetcher } from "@/lib/attachments/use-chat-image-fetcher";
@@ -46,6 +47,7 @@ export function ChatComposerAttachmentsStrip(
         editingQueueItemId={props.editingQueueItemId}
         onCancel={props.onCancelQueueEdit}
       />
+      {taskId === null ? null : <AppMessageDraftPill chatId={taskId} />}
       <AttachmentStrip
         content={props.content}
         onRemoveImage={props.onRemoveImage}

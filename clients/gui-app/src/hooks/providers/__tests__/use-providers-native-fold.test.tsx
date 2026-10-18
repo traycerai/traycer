@@ -154,8 +154,13 @@ describe("native response mappers", () => {
         native: { ok: true, kind: "mcp", servers: [] },
       },
     });
-    expect(Object.keys(mapped).sort()).toEqual(["refreshError", "servers"]);
+    expect(Object.keys(mapped).sort()).toEqual([
+      "notices",
+      "refreshError",
+      "servers",
+    ]);
     expect(mapped.servers).toEqual([]);
+    expect(mapped.notices).toEqual([]);
     expect(mapped.refreshError).toBeNull();
   });
 
@@ -237,10 +242,12 @@ describe("useProvidersMcpList fold", () => {
     });
     const cached = fixture.queryClient.getQueryData<McpListData>(key);
     expect(Object.keys(cached ?? {}).sort()).toEqual([
+      "notices",
       "refreshError",
       "servers",
     ]);
     expect(cached?.servers).toEqual([EMPTY_SERVER]);
+    expect(cached?.notices).toEqual([]);
     expect(cached?.refreshError).toBeNull();
     const classicKey = [
       "host",

@@ -722,3 +722,114 @@ describe("the add-profile dialog when the provider refuses the sign-in", () => {
     expect(screen.queryByRole("button", { name: "Verify account" })).toBeNull();
   });
 });
+
+// The host settled that nothing can run Antigravity on this Mac
+// (`macosRequirement.launch`). Both Settings sign-in surfaces drive the one
+// login flow, so neither may send a request, and each says why.
+const MACOS_SENTENCE =
+  "Antigravity needs macOS 14.0 or later. This Mac runs macOS 13.6.";
+
+function antigravityMacosState(profile: ProviderProfile): ProviderCliState {
+  return {
+    ...antigravityState(profile),
+    candidates: [],
+    cliBinaryResolved: false,
+    macosRequirement: {
+      runningMacos: "13.6",
+      managed: { requiredMacos: "14.0" },
+      launch: { requiredMacos: "14.0" },
+      refusedVersions: [],
+    },
+  };
+}
+
+function hostCallsFor(method: string): number {
+  return (
+    host.request.mock.calls.filter(([called]) => called === method).length +
+    host.requestWithOptions.mock.calls.filter(([called]) => called === method)
+      .length
+  );
+}
+
+describe.each(MOUNT_MODES)(
+  "Settings sign-in on a Mac that cannot run Antigravity $name",
+  ({ Wrapper }) => {
+    it("the reauth panel's mount effect lands on the sentence without startLogin or ensurePack", async () => {
+      const queryClient = new QueryClient({
+        defaultOptions: {
+          queries: { retry: false },
+          mutations: { retry: false },
+        },
+      });
+      const profile = signedOutProfile();
+      render(
+        <Wrapper>
+          <QueryClientProvider client={queryClient}>
+            <TooltipProvider>
+              <ProfileEditDialog
+                state={antigravityMacosState(profile)}
+                profile={profile}
+                profiles={[profile]}
+                canOauth
+                oauthUnavailableHint={null}
+                startInReauth
+                isLocalHost
+                open
+                onOpenChange={() => undefined}
+                remainingProfilesAfterRemoval={[]}
+                onSelectedProfileIdChange={() => undefined}
+                profileEnablementAvailable
+                profileEnablementPending={() => false}
+                onSetProfileEnabled={() => undefined}
+              />
+            </TooltipProvider>
+          </QueryClientProvider>
+        </Wrapper>,
+      );
+
+      expect(await screen.findByText(MACOS_SENTENCE)).toBeTruthy();
+      expect(screen.queryByText("Opening the sign-in page…")).toBeNull();
+      expect(hostCallsFor("providers.startLogin")).toBe(0);
+      expect(hostCallsFor("providers.ensurePack")).toBe(0);
+    });
+
+    it("the add-profile dialog shows the sentence and its Link account control sends nothing", async () => {
+      const queryClient = new QueryClient({
+        defaultOptions: {
+          queries: { retry: false },
+          mutations: { retry: false },
+        },
+      });
+      const client = Object.assign({} as HostClient<HostRpcRegistry>, {
+        getActiveHostId: () => "host-local",
+        request: host.request,
+        requestWithSignal: host.request,
+        requestWithOptions: host.requestWithOptions,
+      });
+      render(
+        <Wrapper>
+          <QueryClientProvider client={queryClient}>
+            <TooltipProvider>
+              <AddProviderProfileDialog
+                state={antigravityMacosState(signedOutProfile())}
+                client={client}
+                isLocalHost
+                open
+                onOpenChange={() => undefined}
+                onFailedAttempt={() => undefined}
+                onProfileCreated={() => undefined}
+              />
+            </TooltipProvider>
+          </QueryClientProvider>
+        </Wrapper>,
+      );
+
+      expect(await screen.findByText(MACOS_SENTENCE)).toBeTruthy();
+      const link = screen.getByRole("button", { name: /Link account/u });
+      expect(link.hasAttribute("disabled")).toBe(true);
+      fireEvent.click(link);
+      expect(hostCallsFor("providers.startLogin")).toBe(0);
+      expect(hostCallsFor("providers.ensurePack")).toBe(0);
+    });
+  },
+);

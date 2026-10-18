@@ -22,6 +22,7 @@ export const configMutationKeys = {
   logLevelsSet: () => ["config.logLevels.set"] as const,
   browserSet: () => ["config.browser.set"] as const,
   worktreesSet: () => ["config.worktrees.set"] as const,
+  visualizationSet: () => ["config.visualization.set"] as const,
   // Host-scoped: the Model list rows read "a write is outstanding on this
   // host" from the mutation cache (`useIsMutating`) by this key, which counts a
   // write whose rows have since unmounted.

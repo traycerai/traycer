@@ -39,6 +39,7 @@ import {
   readDevHostDiscovery,
   type DevHostSignIn,
 } from "./dev-host-discovery";
+import { installNativeHttpToken } from "./native-http-token";
 import { AuthSession, MobileAuthSheet } from "../auth-sheet";
 import { SANDBOXES_UNAVAILABLE_IN_STAGING } from "@traycer-clients/shared/host-client/sandbox-control";
 import { MobileRunnerHost } from "../mobile-runner-host";
@@ -47,6 +48,7 @@ import { MobileDeviceDescriber } from "../device-describer";
 import { MobileFileSave, supportsDirectDownload } from "../file-save";
 import { MobileLinkCodeScanner } from "../link-code-scanner";
 import { MobileLinkLoginDeepLinks } from "../link-login-deep-links";
+import { MobileStatusBarTap } from "../status-bar-tap";
 import { MobileSystemBack } from "../system-back";
 import {
   MobilePushRegistration,
@@ -128,6 +130,23 @@ function devHostSignIn(stored: StoredCredentials | null): DevHostSignIn | null {
     : { bearerToken: stored.token, accountId: stored.user.id };
 }
 
+/**
+ * Narrows the shell's static `frame-src 'self'` (index.html) to the one
+ * document the app frames, the sandbox loader, so a sandboxed page cannot
+ * navigate its own frame to another app route or to a `/_capacitor_*` native
+ * route. Added at runtime because the origin differs per shell -
+ * `capacitor://localhost` on iOS, `http://localhost` on Android, the dev
+ * server under live reload - and a meta policy only narrows: the two
+ * intersect. Spelled from protocol and host because `location.origin` can be
+ * "null" for a custom scheme. Before the first render, so before any frame.
+ */
+function restrictFramesToSandboxLoader(): void {
+  const meta = document.createElement("meta");
+  meta.httpEquiv = "Content-Security-Policy";
+  meta.content = `frame-src ${location.protocol}//${location.host}/sandbox/index.html`;
+  document.head.append(meta);
+}
+
 function bootstrap(): void {
   // Crash reporting comes up before anything that can fail, so a bootstrap
   // error below is the first thing it sees rather than the one it misses.
@@ -140,7 +159,15 @@ function bootstrap(): void {
   if (sentryOptions !== null) {
     initSentry(sentryOptions);
   }
+  // Before the app's first request: Capacitor's native HTTP proxy refuses a
+  // request without the per-launch token (`native-http-token.ts`).
+  if (!installNativeHttpToken(window) && Capacitor.isNativePlatform()) {
+    console.error(
+      "[mobile] native HTTP token or server URL missing: native HTTP requests will fail",
+    );
+  }
   document.documentElement.classList.add("traycer-mobile-client");
+  restrictFramesToSandboxLoader();
   // LAYOUT policy: the installed app runs the phone layout at every width, an
   // iPad's included, while the dev browser tab described below keeps deciding
   // by width like any other window. The stylesheet has to say the same, so
@@ -323,6 +350,10 @@ async function mount(input: {
     // that recognizer; the dev web entry has the browser's own back.
     systemBack:
       Capacitor.getPlatform() === "android" ? new MobileSystemBack(App) : null,
+    // iOS's half of the same rule: tapping the status bar is that platform's
+    // "scroll to top", and no other shell has a status bar to tap.
+    statusBarTap:
+      Capacitor.getPlatform() === "ios" ? new MobileStatusBarTap(window) : null,
   });
   // After the host exists: registration follows the token store (sign-in,
   // app start while signed in, sign-out) and the host's resume edge (a

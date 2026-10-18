@@ -23,10 +23,18 @@ import {
   readEpicCreateSeed,
 } from "@/lib/worktree/pending-epic-create-seeds";
 import {
+  HostMethodVersionUnsatisfiedError,
   HostRpcError,
   HostTransportFailureError,
   RetryableTransportError,
+  type IHostMessenger,
 } from "@traycer-clients/shared/host-transport/host-messenger";
+import { createRetryingMessenger } from "@traycer-clients/shared/host-transport/retrying-messenger";
+import { z } from "zod";
+import {
+  defineRpcContract,
+  defineVersionedRpcRegistry,
+} from "@traycer/protocol/framework/index";
 import type { EpicExistenceVerdict } from "@/lib/epics/epic-existence-poll";
 
 const pollMocks = vi.hoisted(() => ({
@@ -122,6 +130,85 @@ vi.mock("sonner", () => {
     }),
   };
 });
+
+/**
+ * The error the real retrying messenger hands back when a keyed `epic.create`
+ * was sent and its answer lost, and the retry was then refused with
+ * `refusal` (thread TEUc).
+ */
+async function episodeEndedByRefusal(
+  refusal: HostRpcError,
+): Promise<HostRpcError> {
+  const createV10 = defineRpcContract({
+    method: "epic.create",
+    schemaVersion: { major: 1, minor: 0 } as const,
+    requestSchema: z.object({ epicId: z.string() }),
+    responseSchema: z.object({ ok: z.boolean() }),
+  });
+  const registry = defineVersionedRpcRegistry({
+    "epic.create": {
+      1: {
+        latestMinor: 0,
+        versions: {
+          0: { contract: createV10, upgradeFromPreviousVersion: null },
+        },
+        downgradePathsFromLatest: {},
+      },
+    },
+  });
+  const outcomes: HostRpcError[] = [
+    new RetryableTransportError({
+      replaySafetyFromKey: true,
+      code: "RPC_ERROR",
+      message: "connection dropped after dispatch",
+      requestId: "req-1",
+      method: "epic.create",
+      fatalDetails: null,
+    }),
+    refusal,
+  ];
+  const request = vi
+    .fn()
+    .mockImplementation(() =>
+      Promise.reject(outcomes.shift() ?? new Error("no outcome queued")),
+    );
+  const inner: IHostMessenger<typeof registry> = {
+    request,
+    requestWithResponseTimeout: request,
+  };
+  const episodeError = await createRetryingMessenger(inner, {
+    maxRetries: 2,
+    initialDelayMs: 0,
+    maxDelayMs: 0,
+    sleep: () => Promise.resolve(),
+    random: () => 0.5,
+  })
+    .request(
+      "epic.create",
+      { epicId: "epic-held" },
+      {
+        idempotencyKey: "create-key",
+        authority: {
+          endpoint: { hostId: "host-1", websocketUrl: "ws://host-1/rpc" },
+          bearer: {
+            identity: { userId: "user-1" },
+            getBearerToken: () => "token",
+          },
+          abortSignal: new AbortController().signal,
+        },
+        replayMustBeKeyed: false,
+        requiredHostMethodVersion: null,
+      },
+    )
+    .then(
+      () => null,
+      (error: unknown) => error,
+    );
+  if (!(episodeError instanceof HostRpcError)) {
+    throw new Error("expected the episode to end in a HostRpcError");
+  }
+  return episodeError;
+}
 
 function makeWrapper(
   queryClient: QueryClient,
@@ -779,6 +866,188 @@ describe("useEpicCreateForClient seed hold", () => {
 
       expect(toast.error).toHaveBeenCalled();
       expect(pollMocks.pollEpicExistence).not.toHaveBeenCalled();
+    });
+
+    // Thread TEUc: the create's first attempt was sent and its answer lost;
+    // the retry reconnected to a host below the call's method floor and was
+    // refused before dispatch. The first attempt may have created the epic,
+    // so the error the retrying messenger hands the hook must poll.
+    it("polls when a retry episode's later attempt was refused after its first was sent and dropped", async () => {
+      pollMocks.pollEpicExistence.mockResolvedValue("exists");
+      const episodeError = await episodeEndedByRefusal(
+        new HostMethodVersionUnsatisfiedError({
+          requirement: {
+            method: "epic.create",
+            version: { major: 1, minor: 2 },
+          },
+          negotiated: { major: 1, minor: 0 },
+          requestId: "req-2",
+          method: "epic.create",
+          hostId: "host-1",
+        }),
+      );
+      const options = renderOptions();
+
+      options.onError(episodeError, chatVariables, {
+        hostId: "host-1",
+        userId: "user-1",
+      });
+
+      expect(toast).not.toHaveBeenCalled();
+      expect(toast.error).not.toHaveBeenCalled();
+      expect(pollMocks.pollEpicExistence).toHaveBeenCalledWith(
+        expect.objectContaining({ hostId: "host-1", epicId: "epic-held" }),
+      );
+      await vi.waitFor(() => {
+        expect(pollMocks.pollEpicExistence).toHaveBeenCalledTimes(1);
+      });
+    });
+
+    // An `absent` poll is the last observation at the end of its budget, not
+    // proof the earlier send never ran: a create still in flight can publish
+    // after it. So the outcome stays unknown - and the refusal that ended the
+    // retry episode is said beside it, labelled as the retry's, when it
+    // carries guidance of its own.
+    function toastText(): string {
+      return JSON.stringify([
+        vi.mocked(toast).mock.calls,
+        vi.mocked(toast.error).mock.calls,
+      ]);
+    }
+
+    function forbidden(): HostRpcError {
+      return new HostRpcError({
+        code: "FORBIDDEN",
+        message: "not allowed",
+        requestId: "req-2",
+        method: "epic.create",
+        fatalDetails: null,
+      });
+    }
+
+    it("keeps the outcome unknown and labels the retry's refusal when the poll finds no epic", async () => {
+      pollMocks.pollEpicExistence.mockResolvedValue("absent");
+      const episodeError = await episodeEndedByRefusal(forbidden());
+      const options = renderOptions();
+
+      options.onError(episodeError, chatVariables, {
+        hostId: "host-1",
+        userId: "user-1",
+      });
+
+      await vi.waitFor(() => {
+        expect(toastText()).toContain("may or may not have gone through");
+      });
+      expect(toastText()).toContain("it may still appear");
+      expect(toastText()).toContain(
+        "The retry was refused: You don't have permission to do that.",
+      );
+      // Never the definite failure: nobody verified the create did not run.
+      expect(toastText()).not.toContain("Couldn't create epic.");
+    });
+
+    it("says the uncertainty alone when the retry's refusal is itself an unknown outcome", async () => {
+      pollMocks.pollEpicExistence.mockResolvedValue("absent");
+      const episodeError = await episodeEndedByRefusal(
+        new HostRpcError({
+          code: "E_IDEMPOTENCY_OUTCOME_UNKNOWN",
+          message: "the original attempt's outcome is not known",
+          requestId: "req-2",
+          method: "epic.create",
+          fatalDetails: null,
+        }),
+      );
+      const options = renderOptions();
+
+      options.onError(episodeError, chatVariables, {
+        hostId: "host-1",
+        userId: "user-1",
+      });
+
+      await vi.waitFor(() => {
+        expect(toastText()).toContain("may or may not have gone through");
+      });
+      expect(toastText()).not.toContain("The retry was refused");
+      expect(toastText()).not.toContain("Couldn't create epic.");
+    });
+
+    // A poll that cannot tell, or one that rejects, leaves the outcome as
+    // unknown as `absent` does - and the retry's refusal is just as true, so
+    // its guidance is said beside the uncertainty there too.
+    it("keeps the outcome unknown and labels the retry's refusal when the poll cannot tell", async () => {
+      pollMocks.pollEpicExistence.mockResolvedValue("unknown");
+      const episodeError = await episodeEndedByRefusal(forbidden());
+      const options = renderOptions();
+
+      options.onError(episodeError, chatVariables, {
+        hostId: "host-1",
+        userId: "user-1",
+      });
+
+      await vi.waitFor(() => {
+        expect(toastText()).toContain("may or may not have gone through");
+      });
+      expect(toastText()).toContain(
+        "The retry was refused: You don't have permission to do that.",
+      );
+      expect(toastText()).not.toContain("Couldn't create epic.");
+    });
+
+    it("keeps the outcome unknown and labels the retry's refusal when the poll rejects", async () => {
+      pollMocks.pollEpicExistence.mockRejectedValue(new Error("poll failed"));
+      const episodeError = await episodeEndedByRefusal(forbidden());
+      const options = renderOptions();
+
+      options.onError(episodeError, chatVariables, {
+        hostId: "host-1",
+        userId: "user-1",
+      });
+
+      await vi.waitFor(() => {
+        expect(toastText()).toContain("may or may not have gone through");
+      });
+      expect(toastText()).toContain(
+        "The retry was refused: You don't have permission to do that.",
+      );
+      expect(toastText()).not.toContain("Couldn't create epic.");
+    });
+
+    // The error the retrying messenger hands back when attempt 1 was sent
+    // and dropped and every retry then timed out with the host attesting no
+    // dispatch: attested, but carrying the episode's earlier send. The create
+    // may have committed, so the production hook must poll, not toast.
+    it("polls, rather than toasting, after a keyed sent-and-dropped attempt whose retries the host attested were never dispatched", async () => {
+      pollMocks.pollEpicExistence.mockResolvedValue("exists");
+      const options = renderOptions();
+
+      options.onError(
+        new RetryableTransportError({
+          replaySafetyFromKey: true,
+          code: "RPC_ERROR",
+          message: "Host timed out awaiting the request frame",
+          requestId: "req-exhausted",
+          method: "epic.create",
+          fatalDetails: {
+            code: "RPC_REQUEST_TIMEOUT",
+            reason: "Host timed out awaiting the request frame",
+            incompatibleMethods: null,
+            upgradeGuidance: null,
+            retryable: true,
+          },
+        }),
+        chatVariables,
+        { hostId: "host-1", userId: "user-1" },
+      );
+
+      expect(toast).not.toHaveBeenCalled();
+      expect(toast.error).not.toHaveBeenCalled();
+      expect(pollMocks.pollEpicExistence).toHaveBeenCalledWith(
+        expect.objectContaining({ hostId: "host-1", epicId: "epic-held" }),
+      );
+      await vi.waitFor(() => {
+        expect(pollMocks.pollEpicExistence).toHaveBeenCalledTimes(1);
+      });
+      expect(toast).not.toHaveBeenCalled();
     });
 
     it("a RetryableTransportError keeps the pre-send notice immediately, without polling", () => {

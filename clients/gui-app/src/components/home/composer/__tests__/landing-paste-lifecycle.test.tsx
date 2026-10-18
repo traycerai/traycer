@@ -185,6 +185,7 @@ vi.mock(
         return result;
       },
       insertDictatedText: (text) => instance.insertDictatedText(text),
+      draftGeneration: () => instance.draftGeneration(),
       dismissActiveSuggestion: () => instance.dismissActiveSuggestion(),
     });
     const Forwarded = React.forwardRef<

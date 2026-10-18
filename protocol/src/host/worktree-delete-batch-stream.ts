@@ -2,6 +2,7 @@
  * `worktree.deleteBatchByPath@1.0` - one host-owned deletion COMMAND over N
  * approved targets. `@1.1` adds per-target `stopOwners` consent and typed busy
  * details on `target.failed` while keeping the released `@1.0` schemas frozen.
+ * `@1.3` adds the decline kind on `target.complete`.
  *
  * Added rather than growing `worktree.deleteByPath@1.0`, whose request and
  * frames are released and frozen. The two differ in ownership, not in
@@ -64,6 +65,9 @@
  * - `target.output`   - a chunk of teardown stdout/stderr.
  * - `target.complete` - terminal for that target; `deleted` is its outcome
  *                       (a declined/no-op delete is `false`, not a failure).
+ *                       From `@1.3` a `deleted: false` also names WHY in
+ *                       `declined`, so a client can say what happened instead
+ *                       of one line for three unrelated non-deletions.
  * - `target.failed`   - terminal for that target; displayable reason.
  * - `command.complete`- terminal for the COMMAND, after every target settled.
  * - `command.failed`  - terminal: no work ran or will run UNDER THIS
@@ -408,6 +412,95 @@ export type WorktreeDeleteBatchByPathServerFrameV12 = z.infer<
   typeof worktreeDeleteBatchByPathServerFrameSchemaV12
 >;
 
+/**
+ * Why a target was declined rather than removed (`target.complete` with
+ * `deleted: false`, `@1.3`). The same three kinds the host already records on
+ * the completion notification row, and nothing more: no path, no stderr.
+ *
+ * - `not_managed`     - not a deletable managed worktree (outside the managed
+ *                       root, a main worktree, or a directory git does not
+ *                       track as a linked worktree). Retrying never helps.
+ * - `teardown_failed` - the teardown script ran and exited non-zero, so the
+ *                       worktree was left in place.
+ * - `removal_failed`  - the removal ran and did not clear the directory.
+ */
+export const worktreeDeleteDeclinedKindSchema = lazySchema(() =>
+  z.enum(["not_managed", "teardown_failed", "removal_failed"]),
+);
+export type WorktreeDeleteDeclinedKind = z.infer<
+  typeof worktreeDeleteDeclinedKindSchema
+>;
+
+/**
+ * `@1.3` - open request unchanged (aliased). `target.complete` may carry
+ * `declined` when `deleted` is `false`; the host emits the key only to a
+ * subscriber that negotiated this minor, and the frozen `@1.0`-`@1.2` frames
+ * above strip it. A kind this build does not know sanitizes to absent rather
+ * than dropping the terminal frame and stranding the target.
+ */
+export const worktreeDeleteBatchByPathOpenRequestSchemaV13 =
+  worktreeDeleteBatchByPathOpenRequestSchemaV11;
+export type WorktreeDeleteBatchByPathOpenRequestV13 =
+  WorktreeDeleteBatchByPathOpenRequestV11;
+
+export const worktreeDeleteBatchByPathServerFrameSchemaV13 = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    z.object({
+      kind: z.literal("target.started"),
+      worktreePath: z.string().min(1),
+      hasTeardown: z.boolean(),
+      hasBinaryPayload: z.literal(false),
+    }),
+    z.object({
+      kind: z.literal("target.phase"),
+      worktreePath: z.string().min(1),
+      phase: worktreeDeleteBatchPhaseSchema,
+      hasBinaryPayload: z.literal(false),
+    }),
+    z.object({
+      kind: z.literal("target.output"),
+      worktreePath: z.string().min(1),
+      channel: worktreeDeleteBatchOutputChannelSchema,
+      chunk: z.string(),
+      hasBinaryPayload: z.literal(false),
+    }),
+    z.object({
+      kind: z.literal("target.complete"),
+      worktreePath: z.string().min(1),
+      deleted: z.boolean(),
+      declined: worktreeDeleteDeclinedKindSchema.optional().catch(undefined),
+      hasBinaryPayload: z.literal(false),
+    }),
+    z.object({
+      kind: z.literal("target.failed"),
+      worktreePath: z.string().min(1),
+      reason: z.string(),
+      holders: worktreeBusyHoldersWireFieldSchema,
+      code: z.literal("WORKTREE_BUSY").optional().catch(undefined),
+      hasBinaryPayload: z.literal(false),
+    }),
+    z.object({
+      kind: z.literal("command.complete"),
+      requestedCount: z.number().int().nonnegative(),
+      deletedCount: z.number().int().nonnegative(),
+      failedCount: z.number().int().nonnegative(),
+      hasBinaryPayload: z.literal(false),
+    }),
+    z.object({
+      kind: z.literal("command.failed"),
+      reason: z.string(),
+      hasBinaryPayload: z.literal(false),
+    }),
+    z.object({
+      kind: z.literal("pong"),
+      hasBinaryPayload: z.literal(false),
+    }),
+  ]),
+);
+export type WorktreeDeleteBatchByPathServerFrameV13 = z.infer<
+  typeof worktreeDeleteBatchByPathServerFrameSchemaV13
+>;
+
 export const worktreeDeleteBatchByPathClientFrameSchema = lazySchema(() =>
   z.discriminatedUnion("kind", [
     z.object({
@@ -441,5 +534,13 @@ export const worktreeDeleteBatchByPathStreamV12 = defineStreamRpcContract({
   schemaVersion: { major: 1, minor: 2 } as const,
   openRequestSchema: worktreeDeleteBatchByPathOpenRequestSchemaV12,
   serverFrameSchema: worktreeDeleteBatchByPathServerFrameSchemaV12,
+  clientFrameSchema: worktreeDeleteBatchByPathClientFrameSchema,
+});
+
+export const worktreeDeleteBatchByPathStreamV13 = defineStreamRpcContract({
+  method: "worktree.deleteBatchByPath",
+  schemaVersion: { major: 1, minor: 3 } as const,
+  openRequestSchema: worktreeDeleteBatchByPathOpenRequestSchemaV13,
+  serverFrameSchema: worktreeDeleteBatchByPathServerFrameSchemaV13,
   clientFrameSchema: worktreeDeleteBatchByPathClientFrameSchema,
 });

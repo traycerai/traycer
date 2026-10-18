@@ -1016,6 +1016,7 @@ const DOWNLOADING_STATUS: ResponseOfMethod<HostRpcRegistry, "host.status"> = {
   updateTransaction: { recordSchemaVersion: 2, authority: "attempt" },
   storeFormats: null,
   install: null,
+  processMemory: null,
 };
 
 function completeStatus(
@@ -1050,6 +1051,7 @@ function completeStatus(
     updateTransaction: { recordSchemaVersion: 2, authority: "attempt" },
     storeFormats: null,
     install: null,
+    processMemory: null,
   };
 }
 
@@ -1068,6 +1070,7 @@ function pendingDrainStatus(
     updateTransaction: null,
     storeFormats: null,
     install: null,
+    processMemory: null,
   };
 }
 
@@ -1291,6 +1294,7 @@ describe("the one-wait rule: the account's drain gate withdraws once the host re
           updateTransaction: { recordSchemaVersion: 2, authority: "attempt" },
           storeFormats: null,
           install: null,
+          processMemory: null,
         }),
       },
     });
@@ -1704,6 +1708,7 @@ describe("the bound activation offer's auto-open reaches a person who has moved 
           },
           storeFormats: null,
           install: null,
+          processMemory: null,
         }),
         "host.update.check": () => ({
           outcome: "ok" as const,
@@ -1819,6 +1824,7 @@ describe("the staged-wait Force update… dialog dispatches through the same bus
           updateTransaction: null,
           storeFormats: null,
           install: null,
+          processMemory: null,
         }),
         "host.update.check": () => ({
           outcome: "ok" as const,

@@ -289,6 +289,7 @@ export const PERSIST_STORES = [
     kind: "static",
   },
   { camelName: "gitPanel", leaf: "git-panel", kind: "static" },
+  { camelName: "prPanel", leaf: "pr-panel", kind: "static" },
   { camelName: "prPresence", leaf: "pr-presence", kind: "static" },
   {
     camelName: "initialChatHandoff",
@@ -443,6 +444,14 @@ export const PERSIST_STORES = [
   {
     camelName: "teamContinueCautionSeen",
     leaf: "team-continue-caution-seen",
+    kind: "static",
+  },
+  // The bot tabs open in this window, each with the host it is bound to for
+  // life (`bot-tabs-store.ts`). A bot id is a cloud entity, so no host scoping
+  // on the key; the host rides on each record instead.
+  {
+    camelName: "botTabs",
+    leaf: "bot-tabs",
     kind: "static",
   },
 

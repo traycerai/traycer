@@ -7,10 +7,11 @@ import { FeatureVideo } from "/snippets/feature-video.jsx";
 
 Keybindings are local keyboard shortcuts. They are a UI preference stored on this device, not shared Task content.
 
-This page covers four kinds of shortcut:
+This page covers five kinds of shortcut:
 
 - [Shortcuts you can rebind](#default-shortcuts) in **Settings → Keybindings**.
 - [Number shortcuts](#number-shortcuts), which are fixed.
+- [List navigation](#list-navigation-on-macos) shortcuts on macOS.
 - The [global Summon shortcut](#global-shortcut), which works even when Traycer is in the background.
 - [Menu shortcuts](#menu-shortcuts), which belong to the app menu and are fixed.
 
@@ -53,6 +54,10 @@ Traycer checks each new chord as you capture it:
 On Windows and Linux, many <kbd>Ctrl</kbd> chords mean something to the shell. While a terminal tile has focus, these default shortcuts go to the terminal instead of Traycer: **New task**, **New tab**, **Close tab**, **Close other tabs**, **Next tab**, **Previous tab**, **Add current tab to new split view**, **Split group horizontally**, **Split group to the right**, **Focus active tab editor**, **Toggle left panel**, **Open history**, **Toggle terminal panel**, **Maximize terminal panel**, **Drafts**, and <kbd>Ctrl</kbd> + <kbd>K</kbd> for the command palette.
 
 Use <kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>P</kbd> to open the command palette from a terminal. A shortcut you rebind yourself always goes to Traycer. On macOS, <kbd>Cmd</kbd> shortcuts always go to Traycer.
+
+## List Navigation On macOS
+
+In lists such as History, the model picker, and the composer’s `@`, `/`, and `$` suggestions, press <kbd>Control</kbd> + <kbd>N</kbd> or <kbd>Control</kbd> + <kbd>J</kbd> to move down, and <kbd>Control</kbd> + <kbd>P</kbd> or <kbd>Control</kbd> + <kbd>K</kbd> to move up. These work wherever those controls accept arrow keys. Keep focus in the composer while its suggestions are open. Other dropdowns and context menus may not support these shortcuts.
 
 ## Default Shortcuts
 

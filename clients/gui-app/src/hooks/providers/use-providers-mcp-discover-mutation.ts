@@ -109,6 +109,7 @@ export function useProvidersMcpDiscover(): UseMutationResult<
         (server) => server.name === data.server.name,
       );
       queryClient.setQueryData<McpListData>(listKey, {
+        notices: previous.notices,
         servers: found
           ? previous.servers.map((server) =>
               server.name === data.server.name ? data.server : server,

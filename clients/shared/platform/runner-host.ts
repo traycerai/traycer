@@ -811,6 +811,14 @@ export interface IRunnerHost {
    * to sit on a press that visibly did nothing.
    */
   readonly systemBack: ISystemBackHost | null;
+  /**
+   * The iOS status-bar tap, the platform's "scroll to top" gesture. iOS
+   * answers it on its own only for a page that scrolls as a whole, and this
+   * app's page never does - every screen scrolls inside its own box - so the
+   * shell forwards the tap and the GUI picks the box. Present only on the iOS
+   * shell; `null` everywhere else, since no other platform has the gesture.
+   */
+  readonly statusBarTap: IStatusBarTapHost | null;
 }
 
 /**
@@ -1066,6 +1074,14 @@ export interface ISystemBackHost {
 }
 
 /**
+ * The status-bar tap, where the OS has one. See `IRunnerHost.statusBarTap`.
+ */
+export interface IStatusBarTapHost {
+  /** Fires once per tap on the status bar; carries nothing. */
+  onTap(handler: () => void): Disposable;
+}
+
+/**
  * The three states the GUI reasons about. Deliberately platform-neutral:
  * Capacitor's fourth state (`prompt-with-rationale`, Android's "we may ask
  * once more") collapses to `prompt` at the mobile boundary, so plugin
@@ -1138,6 +1154,13 @@ export interface FileSaveRequest {
   readonly bytes: ArrayBuffer;
 }
 
+/** A URL to download, and the name and type to suggest for it. */
+export interface UrlDownloadRequest {
+  readonly url: string;
+  readonly name: string;
+  readonly type: string;
+}
+
 /**
  * Where a completed save landed. `name` is display copy for the confirmation;
  * `path` is the absolute location, which only a shell whose save mechanism
@@ -1198,6 +1221,18 @@ export interface IFileSaveHost {
    * sheet - the exact defect this contract exists to prevent.
    */
   readonly saveRoute: "download" | "share";
+  /**
+   * Downloads an https URL natively, the bytes going network to disk without
+   * passing through the page - what a large published file needs, which a Blob
+   * in memory would not survive. Resolves with where it landed, or `null` when
+   * the user dismissed the chooser or cancelled the download.
+   *
+   * `null` on a shell with no native downloader for a URL; callers then read
+   * the bytes themselves, within a cap.
+   */
+  readonly downloadUrl:
+    | ((request: UrlDownloadRequest) => Promise<SavedFileLocation | null>)
+    | null;
 }
 
 /**

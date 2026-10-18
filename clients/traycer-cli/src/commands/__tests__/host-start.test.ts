@@ -323,6 +323,8 @@ interface Recorded {
   // Fleet crash telemetry (`deps.reportHostCrash`) observations. Injected so
   // suites never touch a real Sentry client or a real pid.json.
   readonly crashReports: HostCrashTelemetry[];
+  /** Environments the supervisor asked to resume crash-report state for. */
+  readonly resumedCrashReports: Environment[];
   /** When set, reportHostCrash never resolves (report-timeout path). */
   reportHostCrashHangs: boolean;
   /** When set, reportHostCrash rejects (must not skip marker/exit). */
@@ -408,6 +410,7 @@ function makeRunStubs(
     findCrashReportHangs: false,
     findCrashReportRejects: false,
     crashReports: [],
+    resumedCrashReports: [],
     reportHostCrashHangs: false,
     reportHostCrashRejects: false,
     lastStderrTee: null,
@@ -584,6 +587,9 @@ function makeRunStubs(
         });
       }
       recorded.crashReports.push(telemetry);
+    },
+    resumeCrashReports: async (environment) => {
+      recorded.resumedCrashReports.push(environment);
     },
     createStderrTee: (_environment: Environment): StderrTee => {
       const tee = new MemoryStderrTee();
@@ -1279,6 +1285,11 @@ describe("runHostStart - signal/exit propagation", () => {
     recorded.findCrashReportResult = {
       filename: "report.oom.json",
       summary: "event=Allocation failed trigger=FatalError",
+      memory: {
+        heapLimitBytes: 4831838208,
+        heapUsedBytes: 4100000000,
+        rssBytes: 4750000000,
+      },
     };
 
     const originalSpawn = deps.spawn;
@@ -1350,10 +1361,20 @@ describe("runHostStart - signal/exit propagation", () => {
     expect(report.signal).toBeNull();
     expect(report.exitMeaning).toContain("0xC0000409");
     expect(report.hasDiagnosticReport).toBe(true);
+    // The report's memory numbers reach the telemetry the supervisor sends.
+    expect(report.reportMemory).toEqual({
+      heapLimitBytes: 4831838208,
+      heapUsedBytes: 4100000000,
+      rssBytes: 4750000000,
+    });
     expect(report.hostVersion).toBe(sampleRecord(exec).version);
     expect(report.attemptId).toBe(crashed?.fields.attemptId);
     expect(report.uptimeMs).toBeGreaterThanOrEqual(0);
     expect(report.environment).toBe("production");
+    // The two verdicts the event splits an exit status on: this child wrote
+    // a fatal block to stderr and nobody asked for a stop.
+    expect(report.stderrEmpty).toBe(false);
+    expect(report.stopRequested).toBe(false);
     // The crashed child's pid, as spawned by the stub - the crash telemetry
     // uses it to decide whether the pid.json on disk was written by THIS
     // child before attributing its published version to the crash.
@@ -1380,6 +1401,7 @@ describe("runHostStart - signal/exit propagation", () => {
       recorded.findCrashReportResult = {
         filename: "report.abrt.json",
         summary: "event=FatalError",
+        memory: { heapLimitBytes: null, heapUsedBytes: null, rssBytes: null },
       };
       const originalSpawn = deps.spawn;
       if (originalSpawn === undefined) {
@@ -1429,6 +1451,10 @@ describe("runHostStart - signal/exit propagation", () => {
       expect(abrtReport.signal).toBe("SIGABRT");
       expect(abrtReport.exitCode).toBeNull();
       expect(abrtReport.exitMeaning).toContain("SIGABRT");
+      // The signal path carries the same two verdicts as a nonzero exit: the
+      // child wrote to stderr, and no stop was asked for.
+      expect(abrtReport.stderrEmpty).toBe(false);
+      expect(abrtReport.stopRequested).toBe(false);
     }
 
     {
@@ -1594,12 +1620,294 @@ describe("runHostStart - signal/exit propagation", () => {
     expect(elapsed).toBeGreaterThanOrEqual(STDERR_END_WAIT_TIMEOUT_MS - 200);
   }, 10_000);
 
-  it("does not hold the relaunch decision on a reportHostCrash that never resolves", async () => {
-    // The reporter is dispatched WITHOUT awaiting it: the relaunch decision
-    // and its backoff must start the moment the marker is written, not after
-    // HOST_CRASH_REPORT_TIMEOUT_MS. Real timers, so the elapsed-time bound
-    // below is the invariant itself - a run that waited on the reporter's
-    // 1.5 s race would fail it.
+  describe("crash event: which kind of fatal the stderr capture holds", () => {
+    // Real headline shapes. Each is written as the chunks the pipe delivers.
+    const kb = (text: string, bytes: number): string =>
+      text.repeat(Math.ceil(bytes / text.length));
+    const oomBlock =
+      "<--- Last few GCs --->\n\n[4121:0x5a3c0b0]   482113 ms: Mark-Compact 4039.6 (4082.3) -> 4038.9 (4081.8) MB, pooled: 0 MB, 1203.40 / 0.00 ms  (average mu = 0.081, current mu = 0.012) allocation failure; scavenge might not succeed\n\n\n<--- JS stacktrace --->\n\nFATAL ERROR: Ineffective mark-compacts near heap limit Allocation failed - JavaScript heap out of memory\n----- Native stack trace -----\n\n" +
+      kb(" 1: 0x7ff6a4d1b2c3 node::SetCppgcFlags+4129\n", 6_000);
+    const priorWarnings = kb(
+      "(node:4121) MaxListenersExceededWarning: Possible EventEmitter memory leak detected.\n",
+      3_000,
+    );
+
+    const cases: ReadonlyArray<{
+      readonly name: string;
+      readonly chunks: readonly string[];
+      readonly expected: string;
+    }> = [
+      {
+        name: "heap exhaustion (Reached heap limit)",
+        chunks: [
+          "FATAL ERROR: Reached heap limit Allocation failed - JavaScript heap out of memory\n----- Native stack trace -----\n",
+        ],
+        expected: "v8-heap-oom",
+      },
+      {
+        name: "heap exhaustion whose block arrives after about 3 KB of earlier stderr",
+        chunks: [priorWarnings, oomBlock],
+        expected: "v8-heap-oom",
+      },
+      {
+        name: "another V8 fatal",
+        chunks: [
+          "FATAL ERROR: v8::ToLocalChecked Empty MaybeLocal\n----- Native stack trace -----\n",
+        ],
+        expected: "v8-fatal",
+      },
+      {
+        name: "process (not heap) out of memory",
+        chunks: [
+          "FATAL ERROR: Failed to reserve virtual memory for CodeRange Allocation failed - process out of memory\n",
+        ],
+        expected: "v8-fatal",
+      },
+      {
+        name: "a V8 CHECK block, after earlier stderr",
+        chunks: [
+          priorWarnings,
+          "\n\n#\n# Fatal error in , line 0\n# Check failed: !IsInstructionStart(pc).\n#\n#\n#\n#FailureMessage Object: 0000007AFDFFD3E0\n",
+        ],
+        expected: "check-failed",
+      },
+      {
+        name: "a libuv assertion on Windows",
+        chunks: [
+          "Assertion failed: !(handle->flags & UV_HANDLE_CLOSING), file src\\win\\async.c, line 76\n",
+        ],
+        expected: "assertion",
+      },
+      {
+        name: "a glibc assertion",
+        chunks: [
+          "node: ../deps/uv/src/unix/core.c:1066: uv__io_poll: Assertion `loop->watchers[w->fd] == w' failed.\n",
+        ],
+        expected: "assertion",
+      },
+      {
+        name: "a console.assert line (the bare phrase, no native location)",
+        chunks: ["Assertion failed: config ok\nError: boom\n"],
+        expected: "other",
+      },
+      { name: "no stderr at all", chunks: [], expected: "none" },
+      {
+        name: "output that matches nothing",
+        chunks: ["Error: spawn EBUSY\n    at ChildProcess.spawn\n"],
+        expected: "other",
+      },
+    ];
+
+    it.each(cases)("tags $name as $expected", async ({ chunks, expected }) => {
+      const exec = "/opt/traycer/host/install/traycer-host";
+      const { child, recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+      const stderr = new PassThrough();
+      Object.assign(child, { stderr });
+      const originalSpawn = deps.spawn;
+      if (originalSpawn === undefined) {
+        throw new Error("test spawn dependency missing");
+      }
+      await runUntilExit(
+        () =>
+          runHostStart(
+            { environment: "production", cwd: null },
+            {
+              ...deps,
+              spawn: (command, args, options) => {
+                const spawned = originalSpawn(command, args, options);
+                setImmediate(() => {
+                  for (const chunk of chunks) {
+                    stderr.write(Buffer.from(chunk));
+                  }
+                  stderr.end();
+                  child.emit("exit", 3221226505, null);
+                });
+                return spawned;
+              },
+            },
+          ),
+        recorded,
+      );
+      expect(recorded.crashReports).toHaveLength(1);
+      expect(recorded.crashReports[0]?.stderrFatal).toBe(expected);
+    });
+
+    it("tags a SIGABRT death the same way", async () => {
+      const exec = "/opt/traycer/host/install/traycer-host";
+      const { child, recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+      const stderr = new PassThrough();
+      Object.assign(child, { stderr });
+      const originalSpawn = deps.spawn;
+      if (originalSpawn === undefined) {
+        throw new Error("test spawn dependency missing");
+      }
+      await runUntilExit(
+        () =>
+          runHostStart(
+            { environment: "production", cwd: null },
+            {
+              ...deps,
+              spawn: (command, args, options) => {
+                const spawned = originalSpawn(command, args, options);
+                setImmediate(() => {
+                  stderr.write(Buffer.from(oomBlock));
+                  stderr.end();
+                  child.emit("exit", null, "SIGABRT");
+                });
+                return spawned;
+              },
+            },
+          ),
+        recorded,
+      );
+      expect(recorded.crashReports).toHaveLength(1);
+      expect(recorded.crashReports[0]?.signal).toBe("SIGABRT");
+      expect(recorded.crashReports[0]?.stderrFatal).toBe("v8-heap-oom");
+    });
+
+    it("tags nothing-recognised as incomplete when the stderr pipe errored before it ended", async () => {
+      const exec = "/opt/traycer/host/install/traycer-host";
+      const { child, recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+      const stderr = new PassThrough();
+      Object.assign(child, { stderr });
+      const originalSpawn = deps.spawn;
+      if (originalSpawn === undefined) {
+        throw new Error("test spawn dependency missing");
+      }
+      await runUntilExit(
+        () =>
+          runHostStart(
+            { environment: "production", cwd: null },
+            {
+              ...deps,
+              spawn: (command, args, options) => {
+                const spawned = originalSpawn(command, args, options);
+                setImmediate(() => {
+                  stderr.write(Buffer.from("partial\n"));
+                  // EIO / EPIPE after an abnormal death: bytes may be lost.
+                  stderr.emit("error", new Error("EIO on host stderr"));
+                  child.emit("exit", 7, null);
+                });
+                return spawned;
+              },
+            },
+          ),
+        recorded,
+      );
+      expect(recorded.crashReports[0]?.stderrFatal).toBe("incomplete");
+    });
+
+    // The wait for the pipe to end is bounded, but classification runs later,
+    // after the tee flush and the report scan, while the capture is still fed.
+    // A pipe a grandchild held past the deadline and then released in that
+    // window leaves a whole capture, so it must read as whole.
+    it.each([
+      {
+        name: "a silent capture whose pipe ends during the scan is none",
+        chunks: [] as string[],
+        settle: "end" as const,
+        expected: "none",
+      },
+      {
+        name: "an unrecognised capture whose pipe ends during the scan is other",
+        chunks: ["Error: spawn EBUSY\n"],
+        settle: "end" as const,
+        expected: "other",
+      },
+      {
+        name: "a pipe that errors during the scan stays incomplete",
+        chunks: ["partial\n"],
+        settle: "error" as const,
+        expected: "incomplete",
+      },
+    ])(
+      "$name, after the end-of-stream wait timed out",
+      async ({ chunks, settle, expected }) => {
+        const exec = "/opt/traycer/host/install/traycer-host";
+        const { child, recorded, deps } = makeRunStubs(
+          sampleRecord(exec),
+          null,
+        );
+        const stderr = new PassThrough();
+        Object.assign(child, { stderr });
+        const originalSpawn = deps.spawn;
+        const originalScan = deps.findCrashReport;
+        if (originalSpawn === undefined || originalScan === undefined) {
+          throw new Error("test dependency missing");
+        }
+        await runUntilExit(
+          () =>
+            runHostStart(
+              { environment: "production", cwd: null },
+              {
+                ...deps,
+                spawn: (command, args, options) => {
+                  const spawned = originalSpawn(command, args, options);
+                  setImmediate(() => {
+                    for (const chunk of chunks) {
+                      stderr.write(Buffer.from(chunk));
+                    }
+                    // Not ended: the supervisor waits out the deadline.
+                    child.emit("exit", 7, null);
+                  });
+                  return spawned;
+                },
+                findCrashReport: async (dir, sinceMs, excludeNames) => {
+                  // The scan runs after the deadline and the flush.
+                  if (settle === "end") {
+                    stderr.end();
+                  } else {
+                    stderr.emit("error", new Error("EIO on host stderr"));
+                  }
+                  await new Promise<void>((resolve) => setImmediate(resolve));
+                  return originalScan(dir, sinceMs, excludeNames);
+                },
+              },
+            ),
+          recorded,
+        );
+        expect(recorded.crashReports[0]?.stderrFatal).toBe(expected);
+      },
+      15_000,
+    );
+
+    it("tags nothing-recognised as incomplete when the stream had not ended at the deadline", async () => {
+      const exec = "/opt/traycer/host/install/traycer-host";
+      const { child, recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+      const stderr = new PassThrough();
+      Object.assign(child, { stderr });
+      const originalSpawn = deps.spawn;
+      if (originalSpawn === undefined) {
+        throw new Error("test spawn dependency missing");
+      }
+      await runUntilExit(
+        () =>
+          runHostStart(
+            { environment: "production", cwd: null },
+            {
+              ...deps,
+              spawn: (command, args, options) => {
+                const spawned = originalSpawn(command, args, options);
+                setImmediate(() => {
+                  stderr.write(Buffer.from("partial\n"));
+                  // Never end: a grandchild holds the inherited descriptor.
+                  child.emit("exit", 7, null);
+                });
+                return spawned;
+              },
+            },
+          ),
+        recorded,
+      );
+      expect(recorded.crashReports[0]?.stderrFatal).toBe("incomplete");
+    }, 10_000);
+  });
+
+  it("holds the supervisor exit for a reportHostCrash that never resolves until the report bound, and no longer", async () => {
+    // Two contracts. The supervisor's EXIT waits for a report still in flight,
+    // because the report writes the throttle state the next supervisor starts
+    // from, but never past HOST_CRASH_REPORT_TIMEOUT_MS (this test). A RELAUNCH
+    // never waits for it (see "crash-report settling at exit"). Real timers.
     const exec = "/opt/traycer/host/install/traycer-host";
     const { child, recorded, deps } = makeRunStubs(sampleRecord(exec), null);
     recorded.reportHostCrashHangs = true;
@@ -1624,8 +1932,278 @@ describe("runHostStart - signal/exit propagation", () => {
       recorded.sequence.indexOf("terminal-marker:crashed"),
     );
     expect(recorded.crashReports).toHaveLength(0);
-    expect(elapsedMs).toBeLessThan(HOST_CRASH_REPORT_TIMEOUT_MS);
+    expect(elapsedMs).toBeGreaterThanOrEqual(
+      HOST_CRASH_REPORT_TIMEOUT_MS - 200,
+    );
+    // No upper wall-clock bound: a wait that never ended would hit the test
+    // timeout below, and a tight bound would only measure CI event-loop delay.
   }, 10_000);
+
+  // The supervisor's EXIT waits, for at most HOST_CRASH_REPORT_TIMEOUT_MS, for a
+  // crash report and the start-up throttle-state resume still in flight (the
+  // state they write is what the next supervisor starts from). A RELAUNCH never
+  // waits for either. The tests below hold a dependency on a gate the test
+  // opens and fake only setTimeout/clearTimeout, so the bound is crossed by
+  // advancing a fake clock and no assertion reads a wall clock.
+  describe("crash-report settling at exit", () => {
+    const exec = "/opt/traycer/host/install/traycer-host";
+
+    interface Gate {
+      readonly promise: Promise<void>;
+      readonly open: () => void;
+    }
+
+    function gate(): Gate {
+      let open: () => void = () => undefined;
+      const promise = new Promise<void>((resolve) => {
+        open = resolve;
+      });
+      return { promise, open };
+    }
+
+    async function flushUntil(condition: () => boolean): Promise<void> {
+      for (let turn = 0; turn < 200 && !condition(); turn += 1) {
+        await new Promise<void>((resolve) => setImmediate(resolve));
+      }
+    }
+
+    /** `deps` with `probe` called as the supervisor exits, before the exit. */
+    function withExitProbe(
+      deps: Partial<RunHostStartDeps>,
+      probe: () => void,
+    ): Partial<RunHostStartDeps> {
+      const originalExit = deps.exit;
+      if (originalExit === undefined) {
+        throw new Error("test exit dependency missing");
+      }
+      return {
+        ...deps,
+        exit: (code) => {
+          probe();
+          return originalExit(code);
+        },
+      };
+    }
+
+    beforeEach(() => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("lets the last crash report land before the supervisor exits", async () => {
+      const { child, recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+      const reporting = gate();
+      let reportStarted = false;
+      let landed = false;
+      let landedAtExit: boolean | null = null;
+      const slowReporting: Partial<RunHostStartDeps> = {
+        ...deps,
+        reportHostCrash: async () => {
+          reportStarted = true;
+          await reporting.promise;
+          landed = true;
+        },
+      };
+
+      const run = runHostStart(
+        { environment: "production", cwd: null },
+        withChildExit(
+          withExitProbe(slowReporting, () => {
+            landedAtExit = landed;
+          }),
+          child,
+          7,
+          null,
+        ),
+      );
+      await flushUntil(() => reportStarted);
+      await flushUntil(() => recorded.exited !== null);
+      // The bound has not passed, so the exit is still waiting.
+      expect(recorded.exited).toBeNull();
+      reporting.open();
+      await run;
+
+      expect(recorded.exited).toBe(7);
+      expect(landedAtExit).toBe(true);
+    }, 10_000);
+
+    it("does not wait past the report bound for a crash report that is merely slow", async () => {
+      const { child, recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+      const reporting = gate();
+      let reportStarted = false;
+      let landed = false;
+      let landedAtExit: boolean | null = null;
+      const slowReporting: Partial<RunHostStartDeps> = {
+        ...deps,
+        reportHostCrash: async () => {
+          reportStarted = true;
+          await reporting.promise;
+          landed = true;
+        },
+      };
+
+      const run = runHostStart(
+        { environment: "production", cwd: null },
+        withChildExit(
+          withExitProbe(slowReporting, () => {
+            landedAtExit = landed;
+          }),
+          child,
+          7,
+          null,
+        ),
+      );
+      await flushUntil(() => reportStarted);
+      await vi.advanceTimersByTimeAsync(HOST_CRASH_REPORT_TIMEOUT_MS - 1);
+      expect(recorded.exited).toBeNull();
+      await vi.advanceTimersByTimeAsync(1);
+      await run;
+
+      expect(recorded.exited).toBe(7);
+      expect(landedAtExit).toBe(false);
+      reporting.open();
+    }, 10_000);
+
+    it("never holds a relaunch on a crash report that never resolves", async () => {
+      const { recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+      const reporting = gate();
+      const scripted = withScriptedAttempts(
+        {
+          ...deps,
+          reportHostCrash: async () => reporting.promise,
+        },
+        [
+          { code: 9, signal: null },
+          { code: 0, signal: null },
+        ],
+      );
+      const originalSpawn = scripted.deps.spawn;
+      if (originalSpawn === undefined) {
+        throw new Error("test spawn dependency missing");
+      }
+      let spawns = 0;
+
+      const run = runHostStart(
+        { environment: "production", cwd: null },
+        {
+          ...scripted.deps,
+          maxRelaunches: 1,
+          spawn: (command, args, options) => {
+            spawns += 1;
+            return originalSpawn(command, args, options);
+          },
+        },
+      );
+      // No timer is advanced: a relaunch that waited on the report would be
+      // waiting on its bound timer and never spawn the second attempt.
+      await flushUntil(() => spawns >= 2);
+      expect(spawns).toBe(2);
+      reporting.open();
+      await vi.advanceTimersByTimeAsync(HOST_CRASH_REPORT_TIMEOUT_MS);
+      await run;
+      expect(recorded.exited).toBe(0);
+    }, 10_000);
+
+    it("lets a throttle-state resume still in flight finish before a supervisor exit", async () => {
+      const { child, recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+      const resuming = gate();
+      let resumeStarted = false;
+      let resumed = false;
+      let resumedAtExit: boolean | null = null;
+      const slowResume: Partial<RunHostStartDeps> = {
+        ...deps,
+        resumeCrashReports: async () => {
+          resumeStarted = true;
+          await resuming.promise;
+          resumed = true;
+        },
+      };
+
+      const run = runHostStart(
+        { environment: "production", cwd: null },
+        withChildExit(
+          withExitProbe(slowResume, () => {
+            resumedAtExit = resumed;
+          }),
+          child,
+          7,
+          null,
+        ),
+      );
+      await flushUntil(() => resumeStarted);
+      await flushUntil(() => recorded.exited !== null);
+      expect(recorded.exited).toBeNull();
+      resuming.open();
+      await run;
+
+      expect(resumedAtExit).toBe(true);
+    }, 10_000);
+
+    it("lets a throttle-state resume still in flight finish before the exit that declines for a live incumbent", async () => {
+      const { recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+      const resuming = gate();
+      let resumeStarted = false;
+      let resumed = false;
+      let resumedAtExit: boolean | null = null;
+      const guarded: Partial<RunHostStartDeps> = {
+        ...deps,
+        findIncumbentHost: async () => ({
+          pid: 40769,
+          version: "1.1.8",
+          websocketUrl: "ws://127.0.0.1:58036/rpc",
+        }),
+        resumeCrashReports: async () => {
+          resumeStarted = true;
+          await resuming.promise;
+          resumed = true;
+        },
+      };
+
+      const run = runHostStart(
+        { environment: "production", cwd: null },
+        withExitProbe(guarded, () => {
+          resumedAtExit = resumed;
+        }),
+      );
+      await flushUntil(() => resumeStarted);
+      await flushUntil(() => recorded.exited !== null);
+      expect(recorded.exited).toBeNull();
+      resuming.open();
+      await run;
+
+      expect(recorded.exited).toBe(0);
+      expect(resumedAtExit).toBe(true);
+    }, 10_000);
+
+    it("stops waiting for a throttle-state resume that never resolves at the report bound", async () => {
+      const { recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+      let resumeStarted = false;
+      const stuck: Partial<RunHostStartDeps> = {
+        ...deps,
+        findIncumbentHost: async () => ({
+          pid: 40769,
+          version: "1.1.8",
+          websocketUrl: "ws://127.0.0.1:58036/rpc",
+        }),
+        resumeCrashReports: async () => {
+          resumeStarted = true;
+          return new Promise<void>(() => undefined);
+        },
+      };
+
+      const run = runHostStart({ environment: "production", cwd: null }, stuck);
+      await flushUntil(() => resumeStarted);
+      await vi.advanceTimersByTimeAsync(HOST_CRASH_REPORT_TIMEOUT_MS - 1);
+      expect(recorded.exited).toBeNull();
+      await vi.advanceTimersByTimeAsync(1);
+      await run;
+
+      expect(recorded.exited).toBe(0);
+    }, 10_000);
+  });
 
   it("spawn() throw is translated into HOST_SPAWN_FAILED + exit 66", async () => {
     const exec = "/opt/traycer/host/install/traycer-host";
@@ -1875,6 +2453,10 @@ describe("runHostStart - Windows requested-kill arm", () => {
     expect(recorded.markers.some((m) => m.phase === "killed")).toBe(false);
     expect(recorded.crashReports).toHaveLength(1);
     expect(recorded.crashReports[0]?.exitCode).toBe(accessViolation);
+    // Reported as a crash AND carrying that a stop was asked for and that the
+    // child said nothing: the two facts that tell this from an unprompted one.
+    expect(recorded.crashReports[0]?.stopRequested).toBe(true);
+    expect(recorded.crashReports[0]?.stderrEmpty).toBe(true);
     expect(
       recorded.loggerErrors.some(
         (e) => e.message === "Host child exited with non-zero status",
@@ -2004,6 +2586,113 @@ describe("runHostStart - Windows requested-kill arm", () => {
         rmSync(devHome, { recursive: true, force: true });
       }
     });
+  });
+});
+
+// --------------------------------- Windows session-end exits
+//
+// A relaunch attempted while the window station is closing fails at DLL
+// initialisation with STATUS_DLL_INIT_FAILED_LOGOFF (0xC000026B), which is a
+// session ending by its own name. The crash marker and the diagnostics line
+// stay (support still reads them), but the fleet crash count must not carry
+// it. 0xC0000142 and DBG_TERMINATE_PROCESS (0x40010004) are NOT skipped: the
+// latter is most often the user's session ending but any caller of
+// TerminateProcess can produce it, so it is reported (as a warning, see
+// crash-telemetry) rather than dropped. Controls pin that every other code,
+// and the same code on another platform, is still reported.
+
+describe("runHostStart - Windows session-end exits", () => {
+  const exec = "/opt/traycer/host/install/traycer-host";
+  const DBG_TERMINATE_PROCESS = 0x40010004;
+  const DLL_INIT_FAILED_LOGOFF = 0xc000026b;
+
+  it("writes the crash marker but reports no crash telemetry for STATUS_DLL_INIT_FAILED_LOGOFF on win32", async () => {
+    const { child, recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+    const win32Deps = withLifecyclePlatform(deps, "win32");
+
+    await runUntilExit(
+      () =>
+        runHostStart(
+          { environment: "production", cwd: null },
+          withChildExit(win32Deps, child, DLL_INIT_FAILED_LOGOFF, null),
+        ),
+      recorded,
+    );
+
+    const crashed = recorded.markers.find((m) => m.phase === "crashed");
+    expect(crashed).toBeDefined();
+    expect(crashed?.fields.exitCode).toBe(DLL_INIT_FAILED_LOGOFF);
+    expect(
+      recorded.loggerErrors.some((e) => e.message === "Host crash diagnostics"),
+    ).toBe(true);
+    expect(recorded.crashReports).toHaveLength(0);
+  });
+
+  it("resumes the crash-report throttle state once as the supervisor starts, before any crash", async () => {
+    const { child, recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+
+    await runUntilExit(
+      () =>
+        runHostStart(
+          { environment: "production", cwd: null },
+          withChildExit(deps, child, 3, null),
+        ),
+      recorded,
+    );
+
+    expect(recorded.resumedCrashReports).toEqual(["production"]);
+  });
+
+  it("control: DBG_TERMINATE_PROCESS on win32 still produces a crash report", async () => {
+    const { child, recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+    const win32Deps = withLifecyclePlatform(deps, "win32");
+
+    await runUntilExit(
+      () =>
+        runHostStart(
+          { environment: "production", cwd: null },
+          withChildExit(win32Deps, child, DBG_TERMINATE_PROCESS, null),
+        ),
+      recorded,
+    );
+
+    expect(recorded.crashReports).toHaveLength(1);
+    expect(recorded.crashReports[0]?.exitCode).toBe(DBG_TERMINATE_PROCESS);
+  });
+
+  it("control: the same code on a non-Windows platform is still reported", async () => {
+    const { child, recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+    const linuxDeps = withLifecyclePlatform(deps, "linux");
+
+    await runUntilExit(
+      () =>
+        runHostStart(
+          { environment: "production", cwd: null },
+          withChildExit(linuxDeps, child, DBG_TERMINATE_PROCESS, null),
+        ),
+      recorded,
+    );
+
+    expect(recorded.crashReports).toHaveLength(1);
+    expect(recorded.crashReports[0]?.exitCode).toBe(DBG_TERMINATE_PROCESS);
+  });
+
+  it("control: a win32 native crash code is still reported", async () => {
+    const { child, recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+    const win32Deps = withLifecyclePlatform(deps, "win32");
+    const accessViolation = 0xc0000005;
+
+    await runUntilExit(
+      () =>
+        runHostStart(
+          { environment: "production", cwd: null },
+          withChildExit(win32Deps, child, accessViolation, null),
+        ),
+      recorded,
+    );
+
+    expect(recorded.crashReports).toHaveLength(1);
+    expect(recorded.crashReports[0]?.exitCode).toBe(accessViolation);
   });
 });
 

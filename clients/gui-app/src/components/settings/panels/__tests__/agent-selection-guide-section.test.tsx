@@ -23,6 +23,10 @@ type GuideData = {
   readonly generatedDefaultContent: string;
 };
 
+vi.mock("@/components/settings/panels/host-environment-section", () => ({
+  HostEnvironmentSection: () => null,
+}));
+
 type Deferred<T> = {
   readonly promise: Promise<T>;
   readonly resolve: (value: T) => void;

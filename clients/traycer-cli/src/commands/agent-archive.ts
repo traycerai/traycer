@@ -33,6 +33,11 @@ const TARGET_NOT_LOCAL_PREFIX = "TARGET_NOT_LOCAL:";
  * `updated: false`, distinct from a missing record, which is a hard failure
  * (`RECORD_NOT_FOUND:`) rather than silently folded into `updated: false`.
  *
+ * `outcome` is the host's own answer (`epic.setChatArchived@1.1`): `applied`
+ * when it changed its own record, `requested` when the agent's host is not
+ * reachable and this host wrote the change to the cloud for that host to
+ * finish when it is back. An older host answers `applied`.
+ *
  * `--agent-id` takes the full id as-is - no prefix resolution, same caveat
  * as `agent stop`.
  */
@@ -53,13 +58,13 @@ export function buildAgentArchiveCommand(opts: {
     ).catch((err: unknown) => {
       throw remapArchiveError(err, opts.agentId);
     });
-    const { updated } = parseCanonicalHostResponse(
+    const { updated, outcome } = parseCanonicalHostResponse(
       "epic.setChatArchived",
       setChatArchivedResponseSchema,
       result,
     );
-    const human = archiveHumanMessage(opts.agentId, archived, updated);
-    return { data: { updated }, human, exitCode: 0 };
+    const human = archiveHumanMessage(opts.agentId, archived, updated, outcome);
+    return { data: { updated, outcome }, human, exitCode: 0 };
   };
 }
 
@@ -67,9 +72,16 @@ function archiveHumanMessage(
   agentId: string,
   archived: boolean,
   updated: boolean,
+  outcome: "applied" | "requested",
 ): string {
-  if (updated)
-    return archived ? `${agentId} archived` : `${agentId} unarchived`;
+  const done = archived ? `${agentId} archived` : `${agentId} unarchived`;
+  // A requested write was accepted for the agent's host to finish, whether or
+  // not the cloud row already held the value; a missing record is
+  // `RECORD_NOT_FOUND:`, never `updated: false`, on this arm.
+  if (outcome === "requested") {
+    return `${done}; its host will finish when it is back`;
+  }
+  if (updated) return done;
   // Deliberately noncommittal about WHY nothing changed. This host throws
   // `RECORD_NOT_FOUND:` for an absent id, but `epic.setChatArchived@1.0`'s
   // response contract also permits `updated: false` for a record that did not

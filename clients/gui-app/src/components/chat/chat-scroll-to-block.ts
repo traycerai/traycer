@@ -24,6 +24,21 @@ export const ChatScrollToBlockContext = createContext<ScrollToChatBlock | null>(
 );
 
 /**
+ * Scrolls to the row that showed the page `path@sha` (a stamp's
+ * `derivedFrom`) and returns `true`, or returns `false` when this transcript
+ * has no such row loaded. Same owner as {@link ScrollToChatBlock}.
+ */
+export type ScrollToChatPage = (pageRef: string) => boolean;
+
+export const ChatScrollToPageContext = createContext<ScrollToChatPage | null>(
+  null,
+);
+
+export function useScrollToChatPage(): ScrollToChatPage | null {
+  return use(ChatScrollToPageContext);
+}
+
+/**
  * Returns the scroll-to-card handler, or `null` when there is no chat tile in
  * context (isolated render / tests) - callers then render the reference as
  * non-interactive.

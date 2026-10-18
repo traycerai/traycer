@@ -289,7 +289,25 @@ export class RetryableTransportError extends HostTransportFailureError {
 }
 
 export class HostRequestAbortedError extends HostTransportFailureError {
-  constructor(details: { message: string; requestId: string; method: string }) {
+  /**
+   * Whether the request may already have reached the host before its
+   * authority was aborted: the frame had been sent on this connection, or an
+   * earlier attempt of the same retry episode was sent and its answer lost.
+   * An abort stops the caller from WAITING for the answer; it does not recall
+   * a request the host may already be running, so a caller that reports
+   * outcomes must not read a dispatched abort as "nothing happened".
+   *
+   * Stated at every construction, never defaulted, for the reason
+   * `RetryableTransportError.replaySafetyFromKey` gives.
+   */
+  readonly mayHaveDispatched: boolean;
+
+  constructor(details: {
+    message: string;
+    requestId: string;
+    method: string;
+    mayHaveDispatched: boolean;
+  }) {
     super({
       code: "RPC_ERROR",
       message: details.message,
@@ -298,5 +316,6 @@ export class HostRequestAbortedError extends HostTransportFailureError {
       fatalDetails: null,
     });
     this.name = "HostRequestAbortedError";
+    this.mayHaveDispatched = details.mayHaveDispatched;
   }
 }

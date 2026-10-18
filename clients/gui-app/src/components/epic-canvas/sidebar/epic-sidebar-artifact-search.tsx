@@ -55,6 +55,7 @@ import {
   isEpicArtifactKind,
 } from "@/lib/artifacts/node-display";
 import { displayTitle } from "@/lib/display-title";
+import { listNavigationKey } from "@/lib/keybindings/list-navigation-key";
 import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
 import {
   STATUS_DOT_CLASSES,
@@ -330,10 +331,11 @@ export function ArtifactSearchBox(props: ArtifactSearchBoxProps) {
         return;
       }
       if (resultCount === 0) return;
-      if (event.key === "ArrowDown") {
+      const navigationKey = listNavigationKey(event);
+      if (navigationKey === "ArrowDown") {
         event.preventDefault();
         setActiveIndex((index) => Math.min(index + 1, resultCount - 1));
-      } else if (event.key === "ArrowUp") {
+      } else if (navigationKey === "ArrowUp") {
         event.preventDefault();
         setActiveIndex((index) => Math.max(index - 1, 0));
       } else if (event.key === "Home") {

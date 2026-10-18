@@ -1,5 +1,7 @@
 import { useCallback, type KeyboardEvent, type RefObject } from "react";
 
+import { listNavigationKey } from "@/lib/keybindings/list-navigation-key";
+
 /**
  * `data-history-row-target` marks a row's full-card activation control in
  * `epics-list-panel.tsx` - the `<Link>` overlay in normal mode, the toggle
@@ -76,7 +78,7 @@ export function useHistoryListKeyboardNav(
 ): HistoryListKeyboardNav {
   const onSearchKeyDown = useCallback(
     (event: KeyboardEvent<HTMLInputElement>) => {
-      if (event.key !== "ArrowDown") return;
+      if (listNavigationKey(event) !== "ArrowDown") return;
       const targets = rowTargets(rowsScopeRef.current);
       if (targets.length === 0) return;
       // Only claim the key once there is somewhere to go, so an empty result
@@ -89,7 +91,8 @@ export function useHistoryListKeyboardNav(
 
   const onRowKeyDown = useCallback(
     (event: KeyboardEvent<HTMLElement>) => {
-      if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+      const navigationKey = listNavigationKey(event);
+      if (navigationKey !== "ArrowDown" && navigationKey !== "ArrowUp") return;
       const targets = rowTargets(rowsScopeRef.current);
       const index = targets.indexOf(event.currentTarget);
       // The row unmounted from the list this keystroke resolves against (a
@@ -97,7 +100,7 @@ export function useHistoryListKeyboardNav(
       // arbitrary.
       if (index < 0) return;
       event.preventDefault();
-      if (event.key === "ArrowDown") {
+      if (navigationKey === "ArrowDown") {
         targets[Math.min(index + 1, targets.length - 1)].focus();
         return;
       }

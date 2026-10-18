@@ -37,7 +37,14 @@ export function staleField<T>(value: T): CapturedField<T> {
 export interface SupportContextSnapshot {
   /** Route template, e.g. `/epics/$epicId/$tabId` - never a full URL/path. */
   readonly routeTemplate: CapturedField<string>;
+  /** The app-wide effective host - NOT the host a chat tab is bound to. */
   readonly hostId: CapturedField<string>;
+  /**
+   * The host the active chat / terminal-agent tab is bound to for life, or
+   * `unavailable` outside such a tab. Differs from `hostId` whenever the tab
+   * was opened on a host other than the app default.
+   */
+  readonly tabHostId: CapturedField<string>;
   readonly epicId: CapturedField<string>;
   readonly tabId: CapturedField<string>;
   readonly artifactId: CapturedField<string>;
@@ -55,6 +62,7 @@ export interface SupportContextSnapshot {
 export const EMPTY_SUPPORT_CONTEXT_SNAPSHOT: SupportContextSnapshot = {
   routeTemplate: UNAVAILABLE,
   hostId: UNAVAILABLE,
+  tabHostId: UNAVAILABLE,
   epicId: UNAVAILABLE,
   tabId: UNAVAILABLE,
   artifactId: UNAVAILABLE,

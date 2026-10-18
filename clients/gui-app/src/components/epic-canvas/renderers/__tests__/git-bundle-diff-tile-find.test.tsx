@@ -66,6 +66,16 @@ const state = vi.hoisted(() => ({
   } satisfies GitGetFileDiffResponse,
 }));
 
+// The no-menu open surfaces read the install probe; none of this suite's claims
+// depend on it, so it stays "still in flight".
+vi.mock("@/hooks/editor/use-editor-availability-query", () => ({
+  useEditorAvailability: () => ({ data: undefined }),
+}));
+
+vi.mock("@/hooks/editor/use-no-editor-installed-notice", () => ({
+  useNoEditorInstalledNotice: () => vi.fn(),
+}));
+
 // The tile re-provides its own `StreamRuntimeContext` for the host it is BOUND
 // to, so `git.subscribeStatus` cannot ride the window's effective host while
 // carrying the tile's host id as a param. `null` is that hook's FOLLOWING

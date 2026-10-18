@@ -764,6 +764,7 @@ class RuntimeHostMessenger<
         message: "Request authority was aborted before dispatch",
         requestId: this.requestId(),
         method,
+        mayHaveDispatched: false,
       }),
     );
   }

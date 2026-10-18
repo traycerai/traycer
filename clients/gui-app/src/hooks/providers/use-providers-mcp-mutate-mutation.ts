@@ -62,6 +62,16 @@ interface McpMutateResult {
   readonly snapshot: McpMutateSnapshot;
 }
 
+function listChangedDuringMutation(
+  currentData: McpListData | undefined,
+  snapshot: McpMutateSnapshot,
+): boolean {
+  return (
+    currentData?.servers !== snapshot.listData?.servers ||
+    currentData?.notices !== snapshot.listData?.notices
+  );
+}
+
 /**
  * Mutates MCP config via `providers.nativeMutate` and writes the
  * returned full server list into the semantic mcp list cache. Response-equals-
@@ -171,7 +181,7 @@ export function useProvidersMcpMutate(): UseMutationResult<
       }
       if (
         fetchStatus === "fetching" ||
-        currentData?.servers !== snapshot.listData?.servers ||
+        listChangedDuringMutation(currentData, snapshot) ||
         listQuery !== snapshot.listQuery ||
         mutationCompletionRevision !== snapshot.mutationCompletionRevision
       ) {
@@ -188,4 +198,14 @@ export function useProvidersMcpMutate(): UseMutationResult<
       toastFromHostError(error, "Couldn't update MCP server.");
     },
   });
+}
+
+/** Give confirmations their own Query observer and pending state. */
+export function useProvidersMcpApplyRemedy(): UseMutationResult<
+  McpMutateResult,
+  HostRpcError,
+  McpMutateVariables,
+  McpMutateContext
+> {
+  return useProvidersMcpMutate();
 }

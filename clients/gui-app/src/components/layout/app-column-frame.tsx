@@ -1,5 +1,8 @@
 import { useLayoutEffect, type ReactNode } from "react";
-import { SheetJoinBridge } from "@/components/layout/tabs/sheet-join";
+import {
+  JoinedTabDim,
+  SheetJoinBridge,
+} from "@/components/layout/tabs/sheet-join";
 import { DesktopMenuHeader } from "@/components/layout/header/desktop-menu-header";
 import type { AppColumnChrome } from "@/components/layout/header/app-title-band-kind";
 import { SWIPE_NAV_SCREEN_ATTRIBUTE } from "@/components/layout/shell/screen-snapshot";
@@ -98,6 +101,7 @@ export function AppColumnFrame(props: AppColumnFrameProps): ReactNode {
         <>
           <div data-strip-drag-overlay-host className="contents" />
           <SheetJoinBridge edge="top" />
+          <JoinedTabDim />
         </>
       ) : null}
       {props.tail}

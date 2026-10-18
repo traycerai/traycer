@@ -60,6 +60,8 @@ describe("persist key builders — output-preserving against current source", ()
     );
     // Source: src/stores/epics/git-panel-store.ts
     expect(persistKey("git-panel")).toBe("traycer-gui-app:git-panel");
+    // Source: src/stores/epics/pr-panel-store.ts
+    expect(persistKey("pr-panel")).toBe("traycer-gui-app:pr-panel");
     // Source: src/stores/epics/pr-presence-store.ts
     expect(persistKey("pr-presence")).toBe("traycer-gui-app:pr-presence");
     // Source: src/stores/epics/initial-chat-handoff-store.ts (plural divergence)

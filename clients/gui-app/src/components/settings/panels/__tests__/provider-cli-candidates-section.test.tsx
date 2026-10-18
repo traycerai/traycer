@@ -23,6 +23,11 @@ type CapturedVersionManagerProps = {
   readonly packId: string;
   readonly packDisplayName: string;
   readonly managedVersions: ProviderManagedVersions;
+  readonly refusedVersions: readonly {
+    readonly version: string;
+    readonly requiredMacos: string;
+  }[];
+  readonly runningMacos: string | null;
 };
 
 /**
@@ -1413,6 +1418,8 @@ describe("ProviderCliCandidatesSection: version menu capability gate", () => {
       packId: "opencode",
       packDisplayName: "opencode CLI",
       managedVersions,
+      refusedVersions: [],
+      runningMacos: null,
     });
   });
 });
@@ -1557,5 +1564,140 @@ describe("ProviderCliCandidatesSection: missing-binary notice reflects custom-pa
         "No Codex CLI was found on this machine, and Traycer ships no bundled copy of it. Install it, or add its path below.",
       ),
     ).toBeDefined();
+  });
+});
+
+describe("ProviderCliCandidatesSection: macOS requirement", () => {
+  const SENTENCE =
+    "Antigravity needs macOS 14.0 or later. This Mac runs macOS 13.6.";
+  const MANAGED_NOTE =
+    "Traycer's managed Antigravity needs macOS 14.0 or later. This Mac runs macOS 13.6.";
+
+  function withRequirement(
+    state: ProviderCliState,
+    macosRequirement: {
+      readonly runningMacos: string;
+      readonly managed: { readonly requiredMacos: string } | null;
+      readonly launch: { readonly requiredMacos: string } | null;
+      readonly refusedVersions: {
+        readonly version: string;
+        readonly requiredMacos: string;
+      }[];
+    },
+  ): ProviderCliState {
+    return { ...state, macosRequirement };
+  }
+
+  it("replaces the empty state's install guide with the sentence when the host settled that nothing can run", () => {
+    const state = withRequirement(
+      providerState({
+        providerId: "antigravity",
+        selected: { kind: "path" },
+        candidates: [],
+      }),
+      {
+        runningMacos: "13.6",
+        managed: { requiredMacos: "14.0" },
+        launch: { requiredMacos: "14.0" },
+        refusedVersions: [],
+      },
+    );
+    renderSection(state);
+
+    expect(screen.getByText(SENTENCE)).toBeDefined();
+    expect(screen.queryByText(/No Antigravity CLI was found/u)).toBeNull();
+    expect(
+      screen.queryByRole("link", { name: "Antigravity installation guide" }),
+    ).toBeNull();
+  });
+
+  it("shows only the one-line managed note when a compatible PATH binary runs", () => {
+    const state = withRequirement(
+      providerState({
+        providerId: "antigravity",
+        selected: { kind: "path" },
+        candidates: [pathCandidate({ path: "/usr/local/bin/agy_acp_server" })],
+      }),
+      {
+        runningMacos: "13.6",
+        managed: { requiredMacos: "14.0" },
+        launch: null,
+        refusedVersions: [],
+      },
+    );
+    renderSection(state);
+
+    expect(screen.getByText(MANAGED_NOTE)).toBeDefined();
+    expect(screen.queryByText(SENTENCE)).toBeNull();
+  });
+
+  it("shows neither sentence on a host that omits the field, keeping today's empty state", () => {
+    const state = providerState({
+      providerId: "antigravity",
+      selected: { kind: "path" },
+      candidates: [],
+    });
+    renderSection(state);
+
+    expect(screen.queryByText(SENTENCE)).toBeNull();
+    expect(screen.queryByText(MANAGED_NOTE)).toBeNull();
+    expect(
+      screen.getByText(
+        "No Antigravity CLI was found on this machine, and Traycer ships no bundled copy of it. Install it.",
+      ),
+    ).toBeDefined();
+  });
+
+  it("hands the host's refused versions and running macOS to the version manager unchanged", () => {
+    mocks.hostSupportsMethod = true;
+    const managedVersions: ProviderManagedVersions = {
+      ...emptyManagedVersions(),
+      available: [
+        {
+          version: "2.0.0",
+          sizeBytes: null,
+          certification: "eligible",
+          recommended: false,
+          current: false,
+          installState: { status: "installed" },
+        },
+      ],
+    };
+    const refusedVersions = [
+      { version: "2.0.0", requiredMacos: "15.0" },
+      { version: "3.0.0", requiredMacos: "16.0" },
+    ];
+    const state = withRequirement(
+      providerState({
+        providerId: "antigravity",
+        selected: { kind: "bundled" },
+        candidates: [
+          {
+            kind: "bundled",
+            path: "/store/antigravity/1.0.0/agy_acp_server",
+            version: "1.0.0",
+            available: true,
+            versionPending: false,
+          },
+        ],
+        managedInstallState: { status: "installed", version: "1.0.0" },
+        packId: "antigravity",
+        managedVersions,
+      }),
+      {
+        runningMacos: "14.2",
+        managed: null,
+        launch: null,
+        refusedVersions,
+      },
+    );
+    renderSection(state);
+
+    fireEvent.click(screen.getByRole("button", { name: /CLI version/u }));
+
+    expect(mocks.lastVersionManagerProps?.refusedVersions).toEqual(
+      refusedVersions,
+    );
+    expect(mocks.lastVersionManagerProps?.runningMacos).toBe("14.2");
   });
 });

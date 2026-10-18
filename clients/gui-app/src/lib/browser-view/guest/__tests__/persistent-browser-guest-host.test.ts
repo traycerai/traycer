@@ -523,6 +523,62 @@ describe("persistent browser guest host", () => {
       expect(readBrowserGuestViewport(REGISTRATION_A)).toBeNull();
     });
 
+    it("finishes a Fit the host kept unconfirmed once the guest lays it out", async () => {
+      const bridge = new FakeBrowserViewBridge({});
+      startHost(bridge, NOOP_ACTIVATE);
+      bridge.emitGuestMountRequested(mountRequest(REGISTRATION_A, PARTITION_A));
+      const guest = guestNodes(REGISTRATION_A);
+      bridge.emitGuestViewportRequested({
+        requestId: "viewport-fit",
+        registrationId: REGISTRATION_A,
+        revision: 1,
+        width: 800,
+        height: 600,
+        intent: { mode: "fit" },
+        zoom: 1,
+      });
+      // A window that draws no frames never reports an applied size, so the
+      // host keeps the Fit at the request's own revision. A new tab holds the
+      // same state before its first Fit lands.
+      const unconfirmedFit: BrowserViewportState = {
+        sessionId: "session-1",
+        tabId: "tab-1",
+        intent: { mode: "fit" },
+        applied: null,
+        revision: 1,
+        source: "user",
+        fitOwnerId: null,
+      };
+
+      confirmBrowserGuestViewport({
+        registrationId: REGISTRATION_A,
+        state: unconfirmedFit,
+        zoom: 1,
+      });
+      expect(readBrowserGuestViewport(REGISTRATION_A)).toMatchObject({
+        confirmed: false,
+        requestId: "viewport-fit",
+      });
+
+      setMeasuredGuestSize(guest.webview, 800, 600);
+      await waitForViewportRequest();
+      expect(bridge.guestViewportResultCalls).toEqual([
+        {
+          requestId: "viewport-fit",
+          registrationId: REGISTRATION_A,
+          revision: 1,
+          applied: true,
+        },
+      ]);
+
+      confirmBrowserGuestViewport({
+        registrationId: REGISTRATION_A,
+        state: unconfirmedFit,
+        zoom: 1,
+      });
+      expect(readBrowserGuestViewport(REGISTRATION_A)).toBeNull();
+    });
+
     it("waits for the matching presented placement before applying native layout", async () => {
       const bridge = new FakeBrowserViewBridge({});
       startHost(bridge, NOOP_ACTIVATE);
@@ -1045,6 +1101,42 @@ describe("persistent browser guest host", () => {
       expect(wrapper.contains(document.activeElement)).toBe(false);
       expect(usedPresentationLoss).toBe(true);
       expect(wrapper.getAttribute("data-browser-guest-state")).toBe("retained");
+    });
+
+    it("keeps the size a presented guest was laid out at when its tile is hidden", () => {
+      const bridge = new FakeBrowserViewBridge({});
+      startHost(bridge, NOOP_ACTIVATE);
+      bridge.emitGuestMountRequested(mountRequest(REGISTRATION_A, PARTITION_A));
+      const { wrapper, webview } = guestNodes(REGISTRATION_A);
+      const owner = Symbol("tile");
+      setOwnedPlacement(owner, {
+        registrationId: REGISTRATION_A,
+        instanceId: INSTANCE_A,
+        viewTabId: "view-1",
+        paneId: "pane-1",
+        presented: true,
+        viewport: null,
+      });
+
+      // The frame the guest was laid out in its tile, where the anchor resolves.
+      setMeasuredGuestSize(webview, 797, 877);
+      triggerGuestResizeObservers();
+
+      // React hides the tile before the host hears of it, so a read at the hide
+      // finds no anchor and measures the bare 300x150 webview.
+      setMeasuredGuestSize(webview, 300, 150);
+      setOwnedPlacement(owner, {
+        registrationId: REGISTRATION_A,
+        instanceId: INSTANCE_A,
+        viewTabId: "view-1",
+        paneId: "pane-1",
+        presented: false,
+        viewport: null,
+      });
+
+      expect(wrapper.getAttribute("data-browser-guest-state")).toBe("retained");
+      expect(webview.style.width).toBe("797px");
+      expect(webview.style.height).toBe("877px");
     });
   });
 

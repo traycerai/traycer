@@ -73,11 +73,14 @@ function historyResult(
     // The identity the fixture's rows belong to. The palette source never
     // reads it; it is here so the stub still satisfies the hook's contract.
     currentUserId: "user-1",
+    localContextMatchKey: "[]",
     activityRefreshScope: "fixture-recent-list",
     refetch: () => Promise.resolve(),
     refetchTasks: () => Promise.resolve(),
     fetchNextPage: () => undefined,
+    fetchAllItems: () => Promise.resolve([]),
     hasNextPage: false,
+    hasUnloadedItems: false,
     isFetchingNextPage: false,
     // Same reasoning as `completeness` above: the palette source never reads
     // it, so `false` is the quiet fixture rather than a claim that a cloud

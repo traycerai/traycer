@@ -56,11 +56,15 @@ import {
   providersListRequestSchema,
   providersListRequestSchemaBeforeV70,
   providersListResponseSchema,
+  providersListResponseSchemaV100Preimage,
+  providersListResponseSchemaV101Preimage,
+  providersUsePackVersionResponseSchemaV10,
+  providersUsePackVersionResponseSchema,
   providersListResponseSchemaV70,
   providersListResponseSchemaV90,
   providersListResponseSchemaV91,
   providersListResponseSchemaV92,
-  providersListResponseSchemaV100,
+  providersListResponseSchemaV102Preimage,
   providersListResponseSchemaV80,
   providersListResponseSchemaV10,
   providersListResponseSchemaV20,
@@ -212,14 +216,18 @@ const FIXTURES = {
   // Code). It is RELEASED - the 1.5.0 tags ship it - so it names its own frozen
   // schema and must not regenerate. Its dump did not change by the freeze.
   "providers.list@9.2": dump(providersListResponseSchemaV92),
-  // 10.0 froze when 10.1 opened for `credentialsManagedInAccount`:
-  // `host-v1.5.1` shipped 10.0. Its dump did not change by the freeze.
-  "providers.list@10.0": dump(providersListResponseSchemaV100),
+  "providers.list@10.0": dump(providersListResponseSchemaV100Preimage),
+  "providers.list@10.1": dump(providersListResponseSchemaV101Preimage),
+  // 10.2 froze when `credentialsManagedInAccount`, `scope` and `onHostOnly`
+  // opened 10.3 (ticket E7). Its dump did not change by the freeze.
+  "providers.list@10.2": dump(providersListResponseSchemaV102Preimage),
   // The head line. It dumps the LIVE schema, so the FIRST attempt to grow the
   // live shape goes red on this row rather than on the release that ships the
   // growth. Same response then applies - freeze the line that stopped being
   // head, open the next one.
-  "providers.list@10.1": dump(providersListResponseSchema),
+  "providers.list@10.3": dump(providersListResponseSchema),
+  "providers.usePackVersion@1.0": dump(providersUsePackVersionResponseSchemaV10),
+  "providers.usePackVersion@1.1": dump(providersUsePackVersionResponseSchema),
   // The REQUEST lines carry their own freeze history (`native` grew the
   // already-shipped v4.0/v5.0/v6.0 requests before `host-v1.1.10` re-pinned
   // them), and nothing pinned them locally until now - the tag-based gate was

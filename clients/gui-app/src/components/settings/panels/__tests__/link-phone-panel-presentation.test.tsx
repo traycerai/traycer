@@ -147,8 +147,8 @@ describe("LinkPhonePanel presentation", () => {
     mocks.useLinkLoginWatch.mockReturnValue(showing(Date.now(), "ABCDE-FGHJK"));
     const view = render(<LinkPhonePanel />);
     const rows = () =>
-      screen.getByTestId("link-phone-single-use-hint").parentElement
-        ?.parentElement?.children.length;
+      screen.getByTestId("link-phone-instructions").parentElement?.children
+        .length;
     const withCode = {
       tile: screen.getByTestId("link-phone-qr-tile"),
       rows: rows(),
@@ -167,12 +167,12 @@ describe("LinkPhonePanel presentation", () => {
     expect(pending.className).toBe(withCode.tile.className);
     expect(pending.getAttribute("data-tile-state")).toBe("loading");
     // Same rows around the tile: instructions, the code's box, the status
-    // pair. Only their contents go quiet.
+    // line. Only their contents go quiet.
     expect(rows()).toBe(withCode.rows);
     expect(screen.getByTestId("link-phone-code-pending").textContent).toBe(
       "Getting a new code…",
     );
-    expect(screen.getByTestId("link-phone-single-use-hint")).toBeTruthy();
+    expect(screen.getByTestId("link-phone-instructions")).toBeTruthy();
     expect(screen.queryByTestId("link-phone-countdown")).toBeNull();
 
     // And back again when the new code lands.
@@ -184,12 +184,12 @@ describe("LinkPhonePanel presentation", () => {
     expect(rows()).toBe(withCode.rows);
   });
 
-  it("shows the code with its scan instructions and single-use terms", () => {
+  it("shows the code with its scan instructions", () => {
     mocks.useLinkLoginWatch.mockReturnValue(showing(Date.now(), "ABCDE-FGHJK"));
     render(<LinkPhonePanel />);
     expect(screen.getByTestId("link-phone-qr")).toBeTruthy();
-    expect(screen.getByTestId("link-phone-single-use-hint").textContent).toBe(
-      "Each code signs in one phone, expires in about a minute, and only takes effect once you approve it here.",
+    expect(screen.getByTestId("link-phone-instructions").textContent).toBe(
+      "In the mobile app, tap Scan QR code, or enter this code:",
     );
   });
 

@@ -11,6 +11,7 @@ import { HostReadyGate } from "@/components/layout/host-ready-gate";
 import { GATE_BYPASS_PATH_PREFIX } from "@/lib/host/gate-bypass-path";
 import { HostScopeReady } from "@/components/layout/host-readiness-controller";
 import { AppShell } from "@/components/layout/app-shell";
+import { useStatusBarTapScrollToTop } from "@/components/layout/shell/use-status-bar-tap-scroll-to-top";
 import { DesktopMenuHeader } from "@/components/layout/header/desktop-menu-header";
 import { useDesktopMenuBarActive } from "@/components/layout/header/use-desktop-menu-bar-active";
 import { MenuCommandListener } from "@/components/layout/bridges/menu-command-listener";
@@ -74,6 +75,11 @@ export function RootComponent() {
   const admission = useShellLocalPlaneAdmission();
   const isStandalone =
     !admission.admitted || showOnboarding || isOnboardingRoute;
+  // The iOS status-bar tap scrolls whatever is in front back to its top. Here
+  // rather than in AppShell so sign-in and the tour, which render without it,
+  // answer too, and outside HostReadyGate like the bridges below. Self-gated
+  // on the shell capability, so every other shell attaches nothing.
+  useStatusBarTapScrollToTop();
 
   return (
     <>

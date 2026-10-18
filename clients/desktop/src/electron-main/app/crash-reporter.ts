@@ -14,8 +14,63 @@ import {
   sentryOfflineQueuePath,
   sentryReportRateLimitWindow,
 } from "./sentry-delivery-observer";
+import {
+  boundFeedbackEvent,
+  FEEDBACK_EVENT_BUDGET_BYTES,
+} from "./support-report-size-guard";
 
 export { isSentryEnabled } from "./crash-reporter-state";
+
+/**
+ * Keeps a support report's `feedback` event under Relay's event size limit,
+ * which `beforeSend` cannot do: core applies it to error events only. An
+ * event processor on the global scope runs for every event type from every
+ * scope, inside `prepareEvent`, before the SDK reads `hint.attachments` for
+ * the envelope - so the guard can move an oversize report text into an
+ * attachment on the same hint. (The bare `addEventProcessor` export registers
+ * on the current isolation scope instead; that is the same thing only as
+ * long as nothing forks one.) See `support-report-size-guard.ts` for why the
+ * drop it prevents is invisible to the client otherwise.
+ *
+ * A guard that throws would make the SDK drop the report, which is the one
+ * outcome worse than an unbounded one, so a failure inside it is logged and
+ * the event goes out as it was.
+ */
+function installSupportReportSizeGuard(): void {
+  SentryElectron.getGlobalScope().addEventProcessor((event, hint) => {
+    if (event.type !== "feedback") return event;
+    const reportId = event.tags?.reportId ?? null;
+    try {
+      const bounded = boundFeedbackEvent(event, hint);
+      if (bounded.trimmed !== null) {
+        log.warn("[support] report trimmed to fit Sentry's event size limit", {
+          reportId,
+          trimmed: bounded.trimmed,
+          droppedContexts: bounded.droppedContexts,
+          originalBytes: bounded.originalBytes,
+          sentBytes: bounded.sentBytes,
+        });
+      }
+      if (bounded.sentBytes > FEEDBACK_EVENT_BUDGET_BYTES) {
+        // Only when something the guard does not trim (a tag, `extra`,
+        // `user`) is large: see the guard's module comment. The budget is
+        // 256 KiB under Relay's limit, so this is a warning sign, not yet a
+        // discard; it is logged so the next too_large has a trail.
+        log.error("[support] report still over the event size budget", {
+          reportId,
+          sentBytes: bounded.sentBytes,
+        });
+      }
+      return bounded.event;
+    } catch (err) {
+      log.error("[support] report size guard failed, sending as is", {
+        reportId,
+        err,
+      });
+      return event;
+    }
+  });
+}
 
 /**
  * Wires native crash collection. `crashReporter.start()` must be called before
@@ -118,6 +173,7 @@ export function initCrashReporter(): void {
       return span;
     },
   });
+  installSupportReportSizeGuard();
   installSentryRateLimitObserver();
   markSentryEnabled();
   log.info("[crash-reporter] sentry initialized", { environment });

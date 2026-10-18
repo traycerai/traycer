@@ -11,6 +11,7 @@ import {
   ChevronRight,
   FolderGit2,
   GitPullRequest,
+  Layers,
 } from "lucide-react";
 import type {
   PrLightItem,
@@ -43,14 +44,19 @@ import {
 import { makePrDetailTile, prDetailTileId } from "@/lib/pr/pr-detail-tile";
 import {
   formatPrRowTitle,
+  filterPrRepoGroups,
+  formatPrStackCount,
   formatRepoGroupLabel,
+  prStackRailEntries,
   fullyIdentifiedPrBase,
   groupPrItemsByRepo,
   prListRowKey,
+  type PrRepoBlock,
   type PrRepoGroup,
 } from "@/lib/pr/pr-list-projection";
 import { cn } from "@/lib/utils";
 import { useMainPanelCollapsed } from "@/stores/epics/left-panel-store";
+import { usePrPanelStore } from "@/stores/epics/pr-panel-store";
 import { tileIntent } from "@/lib/canvas/tile-open/intent";
 import {
   clearSidebarNodeRevealRequest,
@@ -178,7 +184,22 @@ export function PrPanelBodyContent(props: {
   readonly hasCachedData: boolean;
 }): ReactNode {
   const { openTile } = useEpicTileNavigation();
-  const groups = useMemo(() => groupPrItemsByRepo(props.items), [props.items]);
+  const openOnly = usePrPanelStore((state) => state.openOnly);
+  // Grouped on the complete list, then filtered: stack membership is decided
+  // with every row present, so hiding a merged dependent cannot turn its
+  // siblings into a stack they are not in (see `filterPrRepoGroups`).
+  const allGroups = useMemo(
+    () => groupPrItemsByRepo(props.items),
+    [props.items],
+  );
+  const groups = useMemo(
+    () => (openOnly ? filterPrRepoGroups(allGroups, isOpenPrItem) : allGroups),
+    [allGroups, openOnly],
+  );
+  const visibleCount = useMemo(
+    () => groups.reduce((count, group) => count + group.items.length, 0),
+    [groups],
+  );
   const [collapsedRepos, setCollapsedRepos] = useState<ReadonlySet<string>>(
     new Set<string>(),
   );
@@ -326,6 +347,15 @@ export function PrPanelBodyContent(props: {
           testId="pr-panel-error-notice"
         />
       ) : null}
+      {visibleCount === 0 && props.items.length > 0 ? (
+        <p
+          role="status"
+          className="px-3 py-2 text-ui-xs text-muted-foreground"
+          data-testid="pr-panel-all-hidden"
+        >
+          {formatAllHiddenMessage(props.items.length)}
+        </p>
+      ) : null}
       {/* One clock for every row's owners card, across repos. */}
       <HoverCardGroup>
         {groups.map((group) => (
@@ -395,15 +425,27 @@ function PrRepoGroupSection(props: {
       </button>
       {props.collapsed ? null : (
         <div className="flex min-w-0 flex-col divide-y divide-border/25 border-y border-border/25">
-          {props.group.items.map((item) => {
-            const entry = props.buildEntry(item);
+          {props.group.blocks.map((block) => {
+            if (block.kind === "single") {
+              const entry = props.buildEntry(block.item);
+              return (
+                <PrRow
+                  key={entry.key}
+                  entry={entry}
+                  hostId={props.hostId}
+                  epicId={props.epicId}
+                  tabId={props.tabId}
+                />
+              );
+            }
             return (
-              <PrRow
-                key={entry.key}
-                entry={entry}
+              <PrStackBlockView
+                key={block.key}
+                block={block}
                 hostId={props.hostId}
                 epicId={props.epicId}
                 tabId={props.tabId}
+                buildEntry={props.buildEntry}
               />
             );
           })}
@@ -411,6 +453,153 @@ function PrRepoGroupSection(props: {
       )}
     </div>
   );
+}
+
+type PrStackBlock = Extract<PrRepoBlock, { readonly kind: "stack" }>;
+
+/**
+ * A stack drawn the way GitHub draws one: a header naming the stack, then
+ * its layers top first down a vertical rail, and the base branch as the
+ * rail's end. Every row sits on the rail with a node, so the eye reads
+ * "these land on each other" without a label; a layer this epic did not
+ * open is a dashed stretch of rail with a count, where it belongs in the
+ * order, and the base is a hollow node, since it is a branch and not a PR.
+ */
+function PrStackBlockView(props: {
+  readonly block: PrStackBlock;
+  readonly hostId: string | null;
+  readonly epicId: string;
+  readonly tabId: string;
+  readonly buildEntry: (item: PrLightItem) => PrRowEntry;
+}): ReactNode {
+  const entries = prStackRailEntries(props.block);
+  return (
+    <div className="flex min-w-0 flex-col" data-testid="pr-stack">
+      <PrStackHeader block={props.block} />
+      {entries.map((entry, index) =>
+        entry.kind === "layer" ? (
+          <PrStackRailRow
+            key={props.buildEntry(entry.item).key}
+            first={index === 0}
+            node="solid"
+          >
+            <PrRow
+              entry={props.buildEntry(entry.item)}
+              hostId={props.hostId}
+              epicId={props.epicId}
+              tabId={props.tabId}
+            />
+          </PrStackRailRow>
+        ) : (
+          <PrStackRailRow
+            key={`absent:${entry.topPosition}`}
+            first={index === 0}
+            node="dashed"
+          >
+            <p
+              className="px-3 py-1.5 text-ui-xs text-muted-foreground"
+              data-testid="pr-stack-absent"
+            >
+              {formatAbsentLayers(entry.count)}
+            </p>
+          </PrStackRailRow>
+        ),
+      )}
+      <PrStackRailRow first={entries.length === 0} node="base">
+        <p
+          className="flex min-w-0 items-center gap-1.5 px-3 py-1.5 text-ui-xs text-muted-foreground"
+          data-testid="pr-stack-base"
+        >
+          <span className="truncate font-mono">
+            {props.block.baseRefName ?? "unknown base"}
+          </span>
+        </p>
+      </PrStackRailRow>
+    </div>
+  );
+}
+
+/**
+ * One slot on the stack rail: a gutter carrying the rail and this entry's
+ * node, and the entry beside it. The rail runs from the first entry's node
+ * down through the base node, so the top entry has no rail above it and the
+ * base none below. A dashed node and rail mark layers that are not here.
+ */
+function PrStackRailRow(props: {
+  readonly first: boolean;
+  readonly node: "solid" | "dashed" | "base";
+  readonly children: ReactNode;
+}): ReactNode {
+  const dashed = props.node === "dashed";
+  return (
+    <div className="flex min-w-0" data-testid="pr-stack-rail-row">
+      <div className="flex w-6 shrink-0 flex-col items-center pl-3" aria-hidden>
+        <span
+          className={cn(
+            "w-0 flex-1 border-l-2",
+            props.first ? "border-transparent" : "border-primary/50",
+            dashed && "border-dashed",
+          )}
+        />
+        <span
+          className={cn(
+            "size-2.5 shrink-0 rounded-full border-2",
+            props.node === "solid" && "border-primary bg-primary",
+            dashed && "border-dashed border-primary/50 bg-background",
+            props.node === "base" && "border-primary/60 bg-background",
+          )}
+        />
+        <span
+          className={cn(
+            "w-0 flex-1 border-l-2",
+            props.node === "base" ? "border-transparent" : "border-primary/50",
+            dashed && "border-dashed",
+          )}
+        />
+      </div>
+      <div className="min-w-0 flex-1">{props.children}</div>
+    </div>
+  );
+}
+
+/**
+ * The line above a stack's layers: which stack it is, the branch it lands
+ * on, and how many of its layers this epic carries. Label register (small,
+ * muted) so it reads as a heading for the rail below.
+ */
+function PrStackHeader(props: { readonly block: PrStackBlock }): ReactNode {
+  return (
+    <div
+      className="flex min-w-0 items-center gap-1.5 px-3 py-1 text-ui-xs text-muted-foreground"
+      data-testid="pr-stack-header"
+    >
+      <Layers className="size-3.5 shrink-0" aria-hidden />
+      <span className="min-w-0 flex-1 truncate">
+        {props.block.number === null ? "Stack" : `Stack #${props.block.number}`}
+        {" → "}
+        {props.block.baseRefName ?? "unknown"}
+      </span>
+      <span className="shrink-0 tabular-nums">
+        {formatPrStackCount(props.block)}
+      </span>
+    </div>
+  );
+}
+
+function formatAbsentLayers(count: number): string {
+  return count === 1
+    ? "1 layer not in this task"
+    : `${count} layers not in this task`;
+}
+
+function isOpenPrItem(item: PrLightItem): boolean {
+  return item.state === "open";
+}
+
+function formatAllHiddenMessage(count: number): string {
+  return count === 1
+    ? "The only pull request is merged or closed"
+    : `All ${count} pull requests are merged or closed`;
 }
 
 function formatPrFallbackKey(item: PrLightItem): string {

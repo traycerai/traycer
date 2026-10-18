@@ -1621,6 +1621,7 @@ function openSession(options: SessionOptions): Session {
             "Host request authority was aborted while the WebSocket was open",
           requestId,
           method,
+          mayHaveDispatched: requestSent,
         }),
       );
       if (closed) {
@@ -1740,5 +1741,6 @@ function throwIfAuthorityAborted(
     message: "Host request authority was aborted before the WebSocket dial",
     requestId,
     method,
+    mayHaveDispatched: false,
   });
 }

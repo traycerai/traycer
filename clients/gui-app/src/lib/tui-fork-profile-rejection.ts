@@ -1,4 +1,5 @@
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import { isProfileLifecycleRejection } from "@traycer-clients/shared/host-transport/profile-lifecycle-rejection";
 import type { TuiForkProfileAdmissionSubcode } from "@traycer/protocol/host/agent/tui/unary-schemas";
 
 /**
@@ -92,34 +93,17 @@ function parseLateGuardRejection(error: unknown): {
   return parseProfileLifecycleRejection(error);
 }
 
-/**
- * The four fixed message templates `profile-resolver.ts`'s lifecycle-error
- * classes construct (`ProfileNotFoundError`/`ProfileTombstonedError`/
- * `ProfileSetupPendingError`/`ProfileNotSupportedByProviderError`), matched
- * loosely enough to survive the interpolated profile/provider id and the
- * host's optional appended `FORK_REJECTION_RESIDUE_DISCLOSURE` sentence.
- * Coupled to those constructors by construction - update both together.
- */
-const PROFILE_LIFECYCLE_MESSAGE_PATTERNS: ReadonlyArray<RegExp> = [
-  /^No profile ".*" is registered for provider ".*"\./,
-  /^Profile ".*" for provider ".*" was removed and can no longer be used\./,
-  /^Profile ".*" for provider ".*" is still completing setup and cannot be used yet\./,
-  /^Provider ".*" does not support managed profiles\./,
-];
-
 function parseProfileLifecycleRejection(error: HostRpcError): {
   readonly subcode: TuiForkProfileAdmissionSubcode;
   readonly detail: string;
 } | null {
   // The lifecycle family maps to `RPC_ERROR` on the wire (`handler.ts`'s
   // batch-2 400 branch), never `E_INVALID_ARGUMENT` (reserved for
-  // `TuiForkScopeGuardError`'s `InvalidArgumentError` base) - checking it
-  // narrows the message-pattern match to the failure family it's meant for.
-  if (error.code !== "RPC_ERROR") return null;
-  const matches = PROFILE_LIFECYCLE_MESSAGE_PATTERNS.some((pattern) =>
-    pattern.test(error.message),
-  );
-  if (!matches) return null;
+  // `TuiForkScopeGuardError`'s `InvalidArgumentError` base) - the shared
+  // predicate checks the code, which narrows the message-pattern match to the
+  // failure family it's meant for. The templates live in one module the CLI
+  // uses too.
+  if (!isProfileLifecycleRejection(error.code, error.message)) return null;
   return { subcode: "TARGET_PROFILE_UNAVAILABLE", detail: error.message };
 }
 

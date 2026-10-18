@@ -7,6 +7,7 @@ import {
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactElement, ReactNode } from "react";
+import type { ReportIssueContext } from "@/lib/report-issue-context";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   ProviderCliState,
@@ -95,6 +96,7 @@ const mocks = vi.hoisted(() => ({
   openLink: vi.fn(),
   reportableErrorToast: vi.fn(),
   openSettings: vi.fn(),
+  reportContexts: new Array<ReportIssueContext>(),
   hostKind: "local",
   /** What `useHostCredentialRefusal` answers for the tab's host; `null` takes sign-ins. */
   credentialRefusal: null as string | null,
@@ -197,6 +199,12 @@ vi.mock("@/hooks/providers/use-tab-refresh-providers", () => ({
 }));
 vi.mock("@/lib/links/open-link", () => ({
   useOpenLink: () => mocks.openLink,
+}));
+vi.mock("@/components/report-issue/report-issue-action", () => ({
+  ReportIssueAction: (props: { readonly context: ReportIssueContext }) => {
+    mocks.reportContexts.push(props.context);
+    return null;
+  },
 }));
 vi.mock("@/lib/reportable-error-toast", () => ({
   reportableErrorToast: mocks.reportableErrorToast,
@@ -522,6 +530,7 @@ describe("<ProviderReauthBanner />", () => {
     mocks.openLink.mockClear();
     mocks.reportableErrorToast.mockClear();
     mocks.hostKind = "local";
+    mocks.reportContexts.length = 0;
     useProvidersFocusStore.getState().clearFocusHarnessId();
   });
 
@@ -611,6 +620,59 @@ describe("<ProviderReauthBanner />", () => {
     );
 
     expect(screen.queryByRole("button", { name: /Authenticate/ })).toBeNull();
+  });
+
+  // The host settled that nothing can run Antigravity on this Mac. The banner
+  // is one of three sign-in surfaces fed by `providerHostBlock`, so it must show
+  // the sentence instead of an action that could only end in a failed start.
+  it("shows the macOS sentence instead of Authenticate when the host says nothing can run here", () => {
+    render(
+      <ProviderReauthBanner
+        epicId={null}
+        viewTabId={null}
+        providerId="antigravity"
+        state={{
+          ...antigravityState(ANTIGRAVITY_ACP_AUTH_CAP),
+          candidates: [],
+          cliBinaryResolved: false,
+          macosRequirement: {
+            runningMacos: "13.6",
+            managed: { requiredMacos: "14.0" },
+            launch: { requiredMacos: "14.0" },
+            refusedVersions: [],
+          },
+        }}
+        reason="provider_unauthenticated"
+        profileId={null}
+        profileLabel={null}
+        onContinueOnAmbient={null}
+      />,
+    );
+
+    expect(
+      screen.getByText(
+        "Antigravity needs macOS 14.0 or later. This Mac runs macOS 13.6.",
+      ),
+    ).toBeDefined();
+    expect(screen.queryByRole("button", { name: /Authenticate/ })).toBeNull();
+    expect(mocks.startLoginMutate).not.toHaveBeenCalled();
+  });
+
+  it("keeps offering Authenticate when a host that omits the field has a runnable CLI", () => {
+    render(
+      <ProviderReauthBanner
+        epicId={null}
+        viewTabId={null}
+        providerId="antigravity"
+        state={antigravityState(ANTIGRAVITY_ACP_AUTH_CAP)}
+        reason="provider_unauthenticated"
+        profileId={null}
+        profileLabel={null}
+        onContinueOnAmbient={null}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: /Authenticate/ })).toBeDefined();
   });
 
   // Row 1 of the terminal-login contract table: the banner is one of three
@@ -2222,5 +2284,53 @@ describe("<ProviderReauthBanner /> on a host that takes no credentials", () => {
 
     expect(screen.queryByTestId("credential-refusal")).toBeNull();
     expect(screen.getByRole("button", { name: /Authenticate/ })).toBeDefined();
+  });
+});
+
+describe("<ProviderReauthBanner /> report action code", () => {
+  beforeEach(() => {
+    mocks.reportContexts.length = 0;
+  });
+
+  function lastReportCode(): string | null {
+    const context = mocks.reportContexts.at(-1);
+    if (context === undefined) throw new Error("no report action rendered");
+    return context.code;
+  }
+
+  it("carries the provider and reason so a report says what was blocked", () => {
+    render(
+      <ProviderReauthBanner
+        epicId={null}
+        viewTabId={null}
+        providerId="codex"
+        state={codexState(CLAUDE_CAP)}
+        reason="provider_unauthenticated"
+        profileId={null}
+        profileLabel={null}
+        onContinueOnAmbient={null}
+      />,
+    );
+
+    expect(lastReportCode()).toBe("codex:provider_unauthenticated");
+  });
+
+  it("never carries the profile id", () => {
+    render(
+      <ProviderReauthBanner
+        epicId={null}
+        viewTabId={null}
+        providerId="codex"
+        state={codexState(CLAUDE_CAP)}
+        reason="profile_unauthenticated"
+        profileId="prof-SECRET-123"
+        profileLabel="Work"
+        onContinueOnAmbient={vi.fn()}
+      />,
+    );
+
+    const code = lastReportCode();
+    expect(code).toBe("codex:profile_unauthenticated");
+    expect(code ?? "").not.toContain("prof-SECRET-123");
   });
 });

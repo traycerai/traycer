@@ -103,6 +103,7 @@ export function WorkspaceHostSwitcher(
       onRetryLists={props.onRetryLists}
       updateViewForHost={null}
       offersAutomations={props.offersAutomations}
+      environmentLabelForHost={null}
       disabled={props.disabled}
       keepFocusableWhenDisabled={props.keepFocusableWhenDisabled}
     />

@@ -35,11 +35,15 @@ import {
   providersListRequestSchema,
   providersListRequestSchemaBeforeV70,
   providersListResponseSchema,
+  providersListResponseSchemaV100Preimage,
+  providersListResponseSchemaV101Preimage,
+  providersUsePackVersionResponseSchema,
+  providersUsePackVersionResponseSchemaV10,
   providersListResponseSchemaV70,
   providersListResponseSchemaV90,
   providersListResponseSchemaV91,
   providersListResponseSchemaV92,
-  providersListResponseSchemaV100,
+  providersListResponseSchemaV102Preimage,
   providersListResponseSchemaV80,
   providersListResponseSchemaV10,
   providersListResponseSchemaV20,
@@ -262,11 +266,27 @@ const LIVE_FROZEN_EXPORTS = {
   // design, so the two markers landing on the live capability regenerated it
   // without complaint. The rows above are the ones that refuse; a line earns
   // one the moment a host advertising it is published.
-  "providers.list@10.0": providersListResponseSchemaV100,
-  // 10.0 froze above when `credentialsManagedInAccount` opened 10.1
-  // (`host-v1.5.1` shipped 10.0); its dump did not change by the freeze. This
-  // is the head line now, naming the LIVE schema.
-  "providers.list@10.1": providersListResponseSchema,
+  // 10.0 froze when MCP remedies and notices opened 10.1: its MCP rows, notices
+  // and `applyRemedy` capability scopes are the pre-remedy shape, so a released
+  // 10.0 reader never sees a field it cannot spell. Its dump did not change by
+  // the freeze.
+  "providers.list@10.0": providersListResponseSchemaV100Preimage,
+  // 10.1 froze when `macosRequirement` opened 10.2: its row is the pre-field
+  // shape, so a released 10.1 reader never sees a key it cannot spell. Its dump
+  // did not change by the freeze.
+  "providers.list@10.1": providersListResponseSchemaV101Preimage,
+  // 10.2 froze when `credentialsManagedInAccount`, `scope` and `onHostOnly`
+  // opened 10.3 (ticket E7): its envelope is the two-key shape. Its dump did
+  // not change by the freeze.
+  "providers.list@10.2": providersListResponseSchemaV102Preimage,
+  // The head line: it names the LIVE schema, so the next growth of the provider
+  // state fails here first.
+  "providers.list@10.3": providersListResponseSchema,
+  // 1.0 is hand-frozen at the three-code failure arm when `macos-ineligible`
+  // opened 1.1; its dump did not change by the freeze.
+  "providers.usePackVersion@1.0": providersUsePackVersionResponseSchemaV10,
+  // The head line: it names the LIVE response, so the next arm fails here first.
+  "providers.usePackVersion@1.1": providersUsePackVersionResponseSchema,
   // The fourth method (see the snapshot script for why it is here): its
   // response carries the PERSISTED harness enum, it is off the released floor,
   // and nothing local guarded it until Reasonix grew it and only the tag gate

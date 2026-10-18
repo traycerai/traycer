@@ -156,6 +156,13 @@ export interface FileSaveResult {
   readonly path: string;
 }
 
+/** What `fileDownloadUrl` downloads: an https URL and its suggested name. */
+export interface FileDownloadUrlInput {
+  readonly url: string;
+  readonly name: string;
+  readonly type: string;
+}
+
 /**
  * Which surface a trust grant applies to. Grants are scope-specific: trusting
  * a cert for an in-app browser tab never grants it to the app shell itself,

@@ -104,6 +104,50 @@ describe("devices/sessions authn fetcher", () => {
     await expect(pending).resolves.toEqual({ kind: "network-error" });
   });
 
+  it("still sends the request and aborts it with the reader's signal on a WebView without AbortSignal.any", async () => {
+    // `AbortSignal.any` is Chromium 116 / iOS 17.4; older WebViews threw a
+    // TypeError out of the call and the session list never loaded (#2308).
+    const nativeAny = Object.getOwnPropertyDescriptor(AbortSignal, "any");
+    Object.defineProperty(AbortSignal, "any", {
+      value: undefined,
+      writable: true,
+      configurable: true,
+    });
+    try {
+      const fetchMock = vi.fn(
+        async (_url: string, init: RequestInit | undefined) => {
+          await new Promise<void>((_resolve, reject) => {
+            init?.signal?.addEventListener("abort", () => {
+              reject(init.signal?.reason);
+            });
+          });
+          return jsonResponse(200, sessionListBody());
+        },
+      );
+      vi.stubGlobal("fetch", fetchMock);
+
+      const controller = new AbortController();
+      const pending = listUserSessionsViaHttp(
+        AUTHN,
+        "jwt-abc",
+        controller.signal,
+      );
+      const [, init] = fetchMock.mock.calls[0] ?? [];
+      expect(init?.signal?.aborted).toBe(false);
+
+      controller.abort();
+
+      expect(init?.signal?.aborted).toBe(true);
+      await expect(pending).resolves.toEqual({ kind: "network-error" });
+    } finally {
+      if (nativeAny === undefined) {
+        Reflect.deleteProperty(AbortSignal, "any");
+      } else {
+        Object.defineProperty(AbortSignal, "any", nativeAny);
+      }
+    }
+  });
+
   it("maps per-session 401 step_up_required to step-up-required", async () => {
     vi.stubGlobal(
       "fetch",

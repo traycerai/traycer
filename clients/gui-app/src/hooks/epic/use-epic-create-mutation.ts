@@ -12,6 +12,7 @@ import type {
   RequiredHostMethodVersion,
   ResponseOfMethod,
 } from "@traycer-clients/shared/host-transport/host-messenger";
+import { RetryEpisodeOutcomeUnknownError } from "@traycer-clients/shared/host-transport/retrying-messenger";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type {
   ListTasksFacets,
@@ -42,7 +43,10 @@ import {
 import { cloudEpicTasksQueryKeyMatchesScope } from "@/lib/cloud-epic-tasks-query/cache";
 import type { ListCloudTasksRequest } from "@/lib/cloud-epic-tasks-query";
 import { toast } from "sonner";
-import { toastFromHostError } from "@/lib/host-error-toast";
+import {
+  toastFromHostError,
+  toastUnknownOutcomeAfterRefusedRetry,
+} from "@/lib/host-error-toast";
 import {
   createOutcomeIsDecidable,
   pollEpicExistence,
@@ -313,16 +317,37 @@ export function useEpicCreateForClient(
             // create did not land, the second says the poll could not tell -
             // and a poll that could not tell leaves the outcome exactly as
             // ambiguous as it was, which is what this notice describes.
+            //
+            // A retry episode a refusal ended keeps those words too: `absent`
+            // is the poll's last look, not proof the earlier send never ran.
             if (verdict === "exists") return;
-            toastFromHostError(error, "Couldn't create epic.");
+            toastCreateOutcomeUnknown(error);
           },
+          // A poll that rejected could not tell either.
           () => {
-            toastFromHostError(error, "Couldn't create epic.");
+            toastCreateOutcomeUnknown(error);
           },
         );
       },
     },
   });
+}
+
+/**
+ * The notice for a create whose existence poll did not find it - `absent`,
+ * `unknown`, or a poll that rejected. Each leaves the outcome unknown. A retry
+ * episode a refusal ended adds that refusal's guidance, labelled as the
+ * retry's: the refusal stays true about the retry whatever the poll saw.
+ */
+function toastCreateOutcomeUnknown(error: HostRpcError): void {
+  if (error instanceof RetryEpisodeOutcomeUnknownError) {
+    toastUnknownOutcomeAfterRefusedRetry(
+      error.finalRefusal,
+      "Couldn't create epic.",
+    );
+    return;
+  }
+  toastFromHostError(error, "Couldn't create epic.");
 }
 
 function patchCreatedTaskIntoCloudTaskCaches(

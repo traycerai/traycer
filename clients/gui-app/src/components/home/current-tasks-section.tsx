@@ -46,6 +46,7 @@ import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id
 import { useTaskWorktreeMetadataForClient } from "@/hooks/worktree/use-task-worktree-metadata-query";
 import { onMiddleClick } from "@/lib/dom/on-middle-click";
 import { formatChordForDisplay } from "@/lib/keybindings/chord";
+import { listNavigationKey } from "@/lib/keybindings/list-navigation-key";
 import {
   authorizesCloudCapability,
   useAuthStore,
@@ -435,14 +436,15 @@ function useCurrentTaskFocus(
     next?.focus();
   });
   return (event) => {
-    if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+    const navigationKey = listNavigationKey(event);
+    if (navigationKey !== "ArrowDown" && navigationKey !== "ArrowUp") return;
     const section = sectionRef.current;
     if (section === null) return;
     const targets = currentTaskTargets(section);
     const index = targets.indexOf(event.currentTarget);
     if (index < 0) return;
     event.preventDefault();
-    const delta = event.key === "ArrowDown" ? 1 : -1;
+    const delta = navigationKey === "ArrowDown" ? 1 : -1;
     targets[Math.max(0, Math.min(index + delta, targets.length - 1))].focus();
   };
 }

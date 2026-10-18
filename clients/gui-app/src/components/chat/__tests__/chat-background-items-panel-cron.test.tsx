@@ -37,13 +37,14 @@ vi.mock("@/lib/links/open-link", () => ({
 }));
 
 import { BackgroundItemsPanel } from "@/components/chat/chat-background-items-panel";
+import { formatClockTime, formatWaitTime } from "@/lib/relative-time";
 import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
 
 const queryClient = new QueryClient({
   defaultOptions: { mutations: { retry: false } },
 });
 
-const CRON_ITEM: BackgroundItem = {
+const CRON_ITEM: Extract<BackgroundItem, { kind: "cron" }> = {
   taskId: "cron-job-1",
   kind: "cron",
   title: "Every 5 minutes",
@@ -53,7 +54,12 @@ const CRON_ITEM: BackgroundItem = {
   humanSchedule: "Every 5 minutes",
   prompt: "check the build and report failures",
   recurring: true,
+  scheduledFor: null,
 };
+
+const HOUR_MS = 60 * 60 * 1000;
+const DAY_MS = 24 * HOUR_MS;
+const MINUTE_MS = 60 * 1000;
 
 function renderCronPanel(
   items: ReadonlyArray<BackgroundItem>,
@@ -130,6 +136,85 @@ describe("<BackgroundItemsPanel /> cron rows (T15)", () => {
       "a job already running at that moment finishes first",
     );
     expect(text).not.toMatch(/Waiting until|in \d+ ?(m|min|s)\b/);
+  });
+
+  it("shows the CLI-reported next run under the schedule when it is in the future", () => {
+    const scheduledFor = Date.now() + 2 * HOUR_MS;
+    renderCronPanel([{ ...CRON_ITEM, scheduledFor }], {
+      onStopItem: () => null,
+      onStopAll: () => null,
+      onStopSession: () => null,
+    });
+    openPanel();
+    const line = screen.getByText(/^Next run /);
+    expect(line.textContent).toBe(
+      `Next run ${formatWaitTime(scheduledFor, Date.now())}`,
+    );
+    // Still a row with a schedule and the session-lifetime sentence, no countdown.
+    expect(document.body.textContent).toContain(
+      "scheduled jobs run while the session is otherwise alive",
+    );
+    expect(document.body.textContent).not.toMatch(/Waiting until/);
+  });
+
+  describe("seven-day boundary", () => {
+    // A whole-minute clock, so the shared minute sample equals Date.now().
+    const NOW = new Date(2026, 9, 14, 12, 0, 0).getTime();
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    function renderAt(scheduledFor: number): string {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(NOW);
+      renderCronPanel([{ ...CRON_ITEM, scheduledFor }], {
+        onStopItem: () => null,
+        onStopAll: () => null,
+        onStopSession: () => null,
+      });
+      openPanel();
+      return screen.getByText(/^Next run /).textContent;
+    }
+
+    it("keeps the weekday-and-time form at exactly seven days", () => {
+      const at = NOW + 7 * DAY_MS;
+      expect(renderAt(at)).toBe(`Next run ${formatWaitTime(at, NOW)}`);
+    });
+
+    it("shows an absolute local calendar date and time just beyond seven days", () => {
+      const at = NOW + 7 * DAY_MS + MINUTE_MS;
+      const text = renderAt(at);
+      const date = new Date(at).toLocaleDateString(undefined, {
+        month: "short",
+        day: "numeric",
+      });
+      expect(text).toContain(date);
+      expect(text).toContain(formatClockTime(at));
+      expect(text).not.toBe(`Next run ${formatWaitTime(at, NOW)}`);
+    });
+  });
+
+  it("renders no next-run line for a null time", () => {
+    renderCronPanel([CRON_ITEM], {
+      onStopItem: () => null,
+      onStopAll: () => null,
+      onStopSession: () => null,
+    });
+    openPanel();
+    expect(screen.queryByText(/Next run/)).toBeNull();
+    expect(screen.getByText(/\*\/5 \* \* \* \*/)).toBeTruthy();
+  });
+
+  it("renders no next-run line for a time that has already passed", () => {
+    renderCronPanel([{ ...CRON_ITEM, scheduledFor: Date.now() - HOUR_MS }], {
+      onStopItem: () => null,
+      onStopAll: () => null,
+      onStopSession: () => null,
+    });
+    openPanel();
+    expect(screen.queryByText(/Next run/)).toBeNull();
+    expect(screen.getByText(/Every 5 minutes/)).toBeTruthy();
   });
 
   it("offers no per-row stop and no Stop all when only crons are listed", () => {

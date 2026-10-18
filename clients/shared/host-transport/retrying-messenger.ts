@@ -1,6 +1,9 @@
 import type { VersionedRpcRegistry } from "@traycer/protocol/framework/index";
 import {
+  HostAuthoritySupersededError,
   HostRequestAbortedError,
+  HostRpcError,
+  HostTransportFailureError,
   RetryableTransportError,
   type HostRequestAuthority,
   type HostRequestOptions,
@@ -87,17 +90,18 @@ export function createRetryingMessenger<Registry extends VersionedRpcRegistry>(
     // fail pre-dispatch. Recomputing it per attempt would forget that.
     let replayMustBeKeyed = false;
     for (let attempt = 0; attempt < policy.maxRetries; attempt += 1) {
-      throwIfAuthorityAborted(authority, method);
+      throwIfAuthorityAborted(authority, method, replayMustBeKeyed);
       try {
         return await attemptCall(replayMustBeKeyed);
       } catch (cause) {
         if (!(cause instanceof RetryableTransportError)) {
-          throw cause;
+          throw withEpisodeDispatch(cause, method, replayMustBeKeyed);
         }
         replayMustBeKeyed = replayMustBeKeyed || cause.replaySafetyFromKey;
         await waitForRetryDelay(
           authority,
           method,
+          replayMustBeKeyed,
           policy.sleep(
             jitteredBackoffFor(
               attempt,
@@ -109,12 +113,34 @@ export function createRetryingMessenger<Registry extends VersionedRpcRegistry>(
         );
       }
     }
-    // Final attempt: out of the retry budget, so let whatever it throws -
-    // retryable or not - propagate to the caller unchanged. Still carries the
-    // requirement: being the last attempt does not make an unkeyed replay any
-    // safer.
-    throwIfAuthorityAborted(authority, method);
-    return attemptCall(replayMustBeKeyed);
+    // Final attempt: out of the retry budget, so whatever it throws -
+    // retryable or not - propagates to the caller, with the episode's earlier
+    // send restored below. Still carries the requirement: being the last
+    // attempt does not make an unkeyed replay any safer.
+    throwIfAuthorityAborted(authority, method, replayMustBeKeyed);
+    try {
+      return await attemptCall(replayMustBeKeyed);
+    } catch (cause) {
+      // An earlier attempt was sent and its answer lost, so the host may have
+      // run the call. A final PRE-send failure must not erase that: handed on
+      // as it is, it reads as "the host never saw it". Same error, with the
+      // sent-and-dropped ground restored.
+      if (
+        replayMustBeKeyed &&
+        cause instanceof RetryableTransportError &&
+        !cause.replaySafetyFromKey
+      ) {
+        throw new RetryableTransportError({
+          code: cause.code,
+          message: cause.message,
+          requestId: cause.requestId,
+          method: cause.method,
+          fatalDetails: cause.fatalDetails,
+          replaySafetyFromKey: true,
+        });
+      }
+      throw withEpisodeDispatch(cause, method, replayMustBeKeyed);
+    }
   };
 
   return {
@@ -143,9 +169,96 @@ export function createRetryingMessenger<Registry extends VersionedRpcRegistry>(
   };
 }
 
+/**
+ * The ending of a retry episode whose earlier attempt was sent and its answer
+ * lost, when a LATER attempt was refused: the outcome is unknown, because the
+ * refusal speaks for the later attempt only and the host may have run the
+ * earlier one. A refusal that never reached the host proves this most
+ * plainly - a reconnect to an incarnation below the method floor the call
+ * requires (`HostMethodVersionUnsatisfiedError`), or an `UNAUTHORIZED` the
+ * auth layer could not recover - but no refusal of a later attempt recalls
+ * an earlier one.
+ *
+ * An unattested `HostTransportFailureError`, so every reader of an ambiguous
+ * post-send drop reads it as one (the create flow polls for the epic; an owner
+ * write says no reply came back). The refusal is kept as `finalRefusal`, for a
+ * caller that has guidance to give once the outcome is settled.
+ */
+export class RetryEpisodeOutcomeUnknownError extends HostTransportFailureError {
+  readonly finalRefusal: HostRpcError;
+
+  constructor(finalRefusal: HostRpcError) {
+    super({
+      code: "RPC_ERROR",
+      message: `An earlier attempt may have reached the host before a later one was refused: ${finalRefusal.message}`,
+      requestId: finalRefusal.requestId,
+      method: finalRefusal.method,
+      fatalDetails: null,
+    });
+    this.name = "RetryEpisodeOutcomeUnknownError";
+    this.finalRefusal = finalRefusal;
+  }
+}
+
+/**
+ * A later attempt's failure, after an earlier one was sent and its answer
+ * lost, carries the episode's possible dispatch: the host may be running the
+ * earlier send whatever this attempt did. An abort says so on its own flag; a
+ * refusal becomes {@link RetryEpisodeOutcomeUnknownError}. An unattested
+ * transport drop already reads as unknown and is passed on as it is.
+ *
+ * The auth layer's `HostAuthoritySupersededError` - the session was replaced
+ * while a later attempt's `UNAUTHORIZED` was being recovered - is no
+ * `HostRpcError`, and normalized at the app's boundary it would read as a
+ * definite failure. It becomes an unattested transport failure instead, so
+ * it reads as the unknown outcome it is. Nothing reads the superseded class
+ * itself; with no earlier send it is passed on as it is.
+ */
+function withEpisodeDispatch(
+  cause: unknown,
+  method: string,
+  sentEarlier: boolean,
+): unknown {
+  if (!sentEarlier) return cause;
+  if (cause instanceof HostAuthoritySupersededError) {
+    return new HostTransportFailureError({
+      code: "RPC_ERROR",
+      message: `An earlier attempt may have reached the host before authentication recovery was superseded: ${cause.message}`,
+      requestId: "authority-superseded",
+      method,
+      fatalDetails: null,
+    });
+  }
+  if (!(cause instanceof HostRpcError)) return cause;
+  // States its own ground; the final attempt restores the keyed one.
+  if (cause instanceof RetryableTransportError) return cause;
+  if (cause instanceof HostRequestAbortedError) {
+    return cause.mayHaveDispatched
+      ? cause
+      : new HostRequestAbortedError({
+          message: cause.message,
+          requestId: cause.requestId,
+          method: cause.method,
+          mayHaveDispatched: true,
+        });
+  }
+  if (
+    cause instanceof HostTransportFailureError &&
+    cause.fatalDetails === null
+  ) {
+    return cause;
+  }
+  return new RetryEpisodeOutcomeUnknownError(cause);
+}
+
+/**
+ * `sentEarlier` is the episode's latch: an earlier attempt was sent and its
+ * answer lost, so an abort now still leaves a request the host may be running.
+ */
 function throwIfAuthorityAborted(
   authority: HostRequestAuthority,
   method: string,
+  sentEarlier: boolean,
 ): void {
   if (!authority.abortSignal.aborted) {
     return;
@@ -154,12 +267,14 @@ function throwIfAuthorityAborted(
     message: "Host request authority was aborted before transport dispatch",
     requestId: "authority-aborted",
     method,
+    mayHaveDispatched: sentEarlier,
   });
 }
 
 function waitForRetryDelay(
   authority: HostRequestAuthority,
   method: string,
+  sentEarlier: boolean,
   delay: Promise<void>,
 ): Promise<void> {
   return new Promise<void>((resolve, reject) => {
@@ -171,6 +286,7 @@ function waitForRetryDelay(
             "Host request authority was aborted during transport retry backoff",
           requestId: "authority-aborted",
           method,
+          mayHaveDispatched: sentEarlier,
         }),
       );
     };

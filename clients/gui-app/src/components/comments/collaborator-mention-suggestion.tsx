@@ -16,6 +16,7 @@ import {
 import type { MentionCollaborator } from "@/hooks/comments/use-mention-collaborators";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { usePanePortalContainer } from "@/components/epic-tabs/pane-visibility-context";
+import { listNavigationKey } from "@/lib/keybindings/list-navigation-key";
 import { cn } from "@/lib/utils";
 import { deriveInitials } from "./mention-utils";
 
@@ -87,11 +88,12 @@ function MentionSuggestionListContent({
     () => ({
       onKeyDown(event: KeyboardEvent) {
         if (items.length === 0) return false;
-        if (event.key === "ArrowDown") {
+        const navigationKey = listNavigationKey(event);
+        if (navigationKey === "ArrowDown") {
           setSelectedIndex((prior) => (prior + 1) % items.length);
           return true;
         }
-        if (event.key === "ArrowUp") {
+        if (navigationKey === "ArrowUp") {
           setSelectedIndex(
             (prior) => (prior - 1 + items.length) % items.length,
           );

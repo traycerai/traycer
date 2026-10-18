@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import type { TaskPinnedState } from "@/hooks/epic/use-epic-task-pinned-states-query";
 import { INERT_ROOT_STATE_PORT } from "@/stores/epics/open-epic/test-support/root-state-port-fixture";
 import {
@@ -1324,27 +1325,28 @@ describe("<TabStrip />", () => {
 
   it("uses the manual color for a focused split member and retains the primary fallback", () => {
     const { rerender } = render(<SplitMemberChrome focused color="#12ab34" />);
+    expect(screen.queryByTestId("tab-chrome-box")).toBeNull();
     expect(
       screen
-        .getByTestId("tab-chrome-box")
-        .style.getPropertyValue("--swatch-border"),
+        .getByTestId("split-member-raised-tab")
+        .style.getPropertyValue("--swatch"),
     ).toBe("#12ab34");
 
     rerender(<SplitMemberChrome focused color={null} />);
     expect(
       screen
-        .getByTestId("tab-chrome-box")
-        .style.getPropertyValue("--swatch-border"),
+        .getByTestId("split-member-raised-tab")
+        .style.getPropertyValue("--swatch"),
     ).toBe("var(--color-primary)");
 
     rerender(<SplitMemberChrome focused={false} color="#12ab34" />);
-    expect(screen.queryByTestId("tab-chrome-box")).toBeNull();
+    expect(screen.queryByTestId("split-member-raised-tab")).toBeNull();
+    expect(screen.queryByTestId("split-underline-segment")).toBeNull();
     expect(screen.getByTestId("tab-hover-box").className).toContain(
       "group-hover/tab:bg-foreground/5",
     );
-    // An unfocused colored member has no box to wear its color in, so it
-    // gets the same edge line an inactive lone tab does. The focused member
-    // above never draws one - its box border carries the color.
+    // Outside a selected pair a colored member has no underline to wear its
+    // color in, so it gets the same edge line an inactive lone tab does.
     expect(
       screen
         .getByTestId("tab-color-edge-line")
@@ -1353,6 +1355,90 @@ describe("<TabStrip />", () => {
 
     rerender(<SplitMemberChrome focused={false} color={null} />);
     expect(screen.queryByTestId("tab-color-edge-line")).toBeNull();
+  });
+
+  it("runs a selected pair's underline under its unfocused member in that member's color", () => {
+    const pair = (rightColor: string | null): ReactNode => (
+      <SplitTabLayout
+        splitId="pair"
+        selectedSide="left"
+        joined={null}
+        control={null}
+        left={<SplitMemberChrome focused color={null} />}
+        right={<SplitMemberChrome focused={false} color={rightColor} />}
+      />
+    );
+    const { rerender } = render(pair("#12ab34"));
+    expect(screen.getByTestId("split-underline-control-pair")).toBeTruthy();
+    expect(screen.getAllByTestId("split-member-raised-tab")).toHaveLength(1);
+    // The underline carries the member's color, so the edge line would draw
+    // it twice.
+    expect(
+      screen
+        .getByTestId("split-underline-segment")
+        .style.getPropertyValue("--swatch"),
+    ).toBe("#12ab34");
+    expect(screen.queryByTestId("tab-color-edge-line")).toBeNull();
+
+    rerender(pair(null));
+    expect(
+      screen
+        .getByTestId("split-underline-segment")
+        .style.getPropertyValue("--swatch"),
+    ).toBe("var(--color-primary)");
+  });
+
+  it("fills the raised member wherever nothing behind it paints the pane", () => {
+    const pair = (joined: "surface" | null): ReactNode => (
+      <SplitTabLayout
+        splitId="pair"
+        selectedSide="left"
+        joined={joined}
+        control={null}
+        left={<SplitMemberChrome focused color={null} />}
+        right={<SplitMemberChrome focused={false} color={null} />}
+      />
+    );
+    const fill = (): string | undefined =>
+      screen.getByTestId("split-member-raised-tab").dataset.fill;
+    // Joined: the pair's box paints the pane, but only from md, where the
+    // sheet join lives, so below it the member still fills itself.
+    const { rerender } = render(pair("surface"));
+    expect(fill()).toBe("below-md");
+    expect(screen.getByTestId("split-member-raised-fill").className).toContain(
+      "md:hidden",
+    );
+
+    // Unjoined (partly out of the strip, or while the selection slides
+    // here): nothing behind the member paints, so it fills itself at every
+    // width.
+    rerender(pair(null));
+    expect(fill()).toBe("always");
+    expect(
+      screen.getByTestId("split-member-raised-fill").className,
+    ).not.toContain("md:hidden");
+  });
+
+  it("draws no underline or raised member on an unselected pair", () => {
+    render(
+      <SplitTabLayout
+        splitId="pair"
+        selectedSide={null}
+        joined={null}
+        control={null}
+        left={<SplitMemberChrome focused={false} color={null} />}
+        right={<SplitMemberChrome focused={false} color="#12ab34" />}
+      />,
+    );
+    expect(screen.queryByTestId("split-underline-control-pair")).toBeNull();
+    expect(screen.queryByTestId("split-underline-segment")).toBeNull();
+    expect(screen.queryByTestId("split-member-raised-tab")).toBeNull();
+    expect(screen.getByTestId("split-tab-divider-pair")).toBeTruthy();
+    expect(
+      screen
+        .getByTestId("tab-color-edge-line")
+        .style.getPropertyValue("--swatch"),
+    ).toBe("#12ab34");
   });
 
   it("draws a grouped tab in its group's colour, and in its own again once it leaves the group", async () => {
@@ -2034,9 +2120,9 @@ describe("<TabStrip />", () => {
     // Purely cosmetic geometry (frame width, member padding) is not asserted
     // via Tailwind class strings - those break on any restyle without proving
     // behavior. The focus semantics that matter are the
-    // data-focused-side/data-focused attributes and the box below (F4 round
-    // 2 dropped the group underline; the focused member's own box is now
-    // what says which side is focused).
+    // data-focused-side/data-focused attributes and the selected pair's
+    // contour below: the focused member is a raised tab, and the underline
+    // runs under the split control and the other member.
     await screen.findByTestId("split-tab-group-split-a");
     const trigger = screen.getByTestId("split-quick-actions-split-a");
     const indicator = screen.getByTestId("split-focus-indicator-split-a");
@@ -2047,11 +2133,24 @@ describe("<TabStrip />", () => {
     expect(screen.queryByTestId("split-tab-divider-split-a")).toBeNull();
     expect(
       within(leftTab)
-        .getByTestId("tab-chrome-box")
-        .style.getPropertyValue("--swatch-border"),
+        .getByTestId("split-member-raised-tab")
+        .style.getPropertyValue("--swatch"),
     ).toBe("var(--color-primary)");
-    expect(within(rightTab).queryByTestId("tab-chrome-box")).toBeNull();
-    expect(screen.queryByTestId("split-member-focus-accent")).toBeNull();
+    expect(within(leftTab).queryByTestId("split-underline-segment")).toBeNull();
+    expect(
+      within(rightTab).queryByTestId("split-member-raised-tab"),
+    ).toBeNull();
+    expect(
+      within(rightTab)
+        .getByTestId("split-underline-segment")
+        .style.getPropertyValue("--swatch"),
+    ).toBe("var(--color-primary)");
+    expect(screen.getByTestId("split-underline-control-split-a")).toBeTruthy();
+    expect(
+      within(screen.getByTestId("split-tab-group-split-a")).queryByTestId(
+        "tab-chrome-box",
+      ),
+    ).toBeNull();
     expect(trigger.className).toContain("text-info-foreground");
     expect(
       screen.queryByTestId("split-quick-actions-status-split-a"),
@@ -2085,12 +2184,16 @@ describe("<TabStrip />", () => {
     expect(rightTab.className).toContain(
       "px-[var(--header-tab-padding,1.25rem)]",
     );
-    expect(within(leftTab).queryByTestId("tab-chrome-box")).toBeNull();
+    expect(within(leftTab).queryByTestId("split-member-raised-tab")).toBeNull();
+    expect(within(leftTab).getByTestId("split-underline-segment")).toBeTruthy();
     expect(
       within(rightTab)
-        .getByTestId("tab-chrome-box")
-        .style.getPropertyValue("--swatch-border"),
+        .getByTestId("split-member-raised-tab")
+        .style.getPropertyValue("--swatch"),
     ).toBe("var(--color-primary)");
+    expect(
+      within(rightTab).queryByTestId("split-underline-segment"),
+    ).toBeNull();
 
     fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false });
     fireEvent.click(await screen.findByTestId("split-quick-swap-epic-e-a"));

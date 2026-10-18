@@ -51,6 +51,7 @@ export { managedCommandMutationKeys } from "@/lib/query-keys/managed-command-mut
 export { agentMutationKeys } from "@/lib/query-keys/agent-mutation-keys";
 export { worktreeMutationKeys } from "@/lib/query-keys/worktree-mutation-keys";
 export { snapshotsMutationKeys } from "@/lib/query-keys/snapshots-mutation-keys";
+export { epicFileMutationKeys } from "@/lib/query-keys/epic-file-mutation-keys";
 export { providersMutationKeys } from "@/lib/query-keys/providers-mutation-keys";
 export { profileSyncKeys } from "@/lib/query-keys/profile-sync-keys";
 export { fallbackPolicyWriteScope } from "@/lib/query-keys/providers-fallback-policy-scope";
@@ -76,6 +77,8 @@ export { speechMutationKeys } from "@/lib/query-keys/speech-mutation-keys";
 export { notificationsMutationKeys } from "@/lib/query-keys/notifications-mutation-keys";
 export { notificationsQueryKeys } from "@/lib/query-keys/notifications-query-keys";
 export { prQueryKeys } from "@/lib/query-keys/pr-query-keys";
+export { botQueryKeys } from "@/lib/query-keys/bot-query-keys";
+export { botMutationKeys } from "@/lib/query-keys/bot-mutation-keys";
 export { mentionQueryKeys } from "@/lib/query-keys/mention-query-keys";
 export { imageMutationKeys } from "@/lib/query-keys/image-mutation-keys";
 export { appearanceQueryKeys } from "@/lib/query-keys/appearance-query-keys";

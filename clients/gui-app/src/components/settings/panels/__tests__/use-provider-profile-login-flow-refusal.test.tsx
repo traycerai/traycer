@@ -203,6 +203,7 @@ function LoginFlowHarness(props: {
     providerId: PROVIDER_ID,
     existingProfileId: props.existingProfileId,
     loginCapability: null,
+    hostBlock: null,
     startLogin,
     awaitLogin,
     cancelLogin,

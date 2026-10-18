@@ -13,6 +13,11 @@ import {
   chatSubscribeV120,
   chatSubscribeV121,
   chatSubscribeV122,
+  chatSubscribeV123,
+  chatSubscribeV124,
+  chatSubscribeV125,
+  chatSubscribeV126,
+  chatSubscribeV127,
   chatSubscribeWindowedClientFrameSchema,
   chatSubscribeWindowedServerFrameSchema,
   openChatSubscribeWindowedServerFrameSchema,
@@ -46,10 +51,11 @@ const PRE_KEY_LINES = [
   { label: "1.16", contract: chatSubscribeV116 },
 ] as const;
 
-describe("chat.subscribe registry: 1.17 installed below the 1.18 through 1.21 lines, 1.16 still installed", () => {
-  it("binds 1.17 and 1.16 to their own contracts - the head has since moved to 1.22", () => {
+describe("chat.subscribe registry: 1.17 installed below the 1.18 through 1.22 lines, 1.16 still installed", () => {
+  it("binds 1.17 and 1.16 to their own contracts - the head has since moved to 1.27", () => {
     const line = hostStreamRpcRegistry["chat.subscribe"][1];
-    expect(line.latestMinor).toBe(22);
+    expect(line.latestMinor).toBe(27);
+    expect(line.versions[23].contract).toBe(chatSubscribeV123);
     expect(line.versions[22].contract).toBe(chatSubscribeV122);
     expect(line.versions[21].contract).toBe(chatSubscribeV121);
     expect(line.versions[20].contract).toBe(chatSubscribeV120);
@@ -85,18 +91,32 @@ describe("chat.subscribe registry: 1.17 installed below the 1.18 through 1.21 li
     expect(chatSubscribeV117.serverFrameSchema).not.toBe(
       chatSubscribeWindowedServerFrameSchema,
     );
-    // 1.20 froze when 1.21 opened above it; 1.21 binds the closed live union
-    // the host builds, 1.22 the open twin a client parses.
+    // 1.20 froze when 1.21 opened above it; 1.21 and 1.22 froze when 1.23
+    // opened above them, with pre-page bodies (1.22 keeps its open harness
+    // leaves); 1.23 froze when 1.24 added the cron next-run key, and 1.24
+    // binds the open twin a client parses.
     expect(chatSubscribeV120.serverFrameSchema).not.toBe(
       chatSubscribeWindowedServerFrameSchema,
     );
-    expect(chatSubscribeV121.serverFrameSchema).toBe(
+    expect(chatSubscribeV121.serverFrameSchema).not.toBe(
       chatSubscribeWindowedServerFrameSchema,
     );
     expect(chatSubscribeV122.serverFrameSchema).not.toBe(
       chatSubscribeWindowedServerFrameSchema,
     );
-    expect(chatSubscribeV122.serverFrameSchema).toBe(
+    expect(chatSubscribeV123.serverFrameSchema).not.toBe(
+      openChatSubscribeWindowedServerFrameSchema,
+    );
+    expect(chatSubscribeV124.serverFrameSchema).not.toBe(
+      openChatSubscribeWindowedServerFrameSchema,
+    );
+    expect(chatSubscribeV125.serverFrameSchema).not.toBe(
+      openChatSubscribeWindowedServerFrameSchema,
+    );
+    expect(chatSubscribeV126.serverFrameSchema).not.toBe(
+      openChatSubscribeWindowedServerFrameSchema,
+    );
+    expect(chatSubscribeV127.serverFrameSchema).toBe(
       openChatSubscribeWindowedServerFrameSchema,
     );
   });

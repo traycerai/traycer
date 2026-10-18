@@ -172,6 +172,17 @@ fetch + bearer + entitlement), the per-render session cache
 those in. Put a change in `protocol/` if both peers need it; in
 `clients/shared/` if only the desktop does.
 
+**User-facing copy** — a setting description, label, tooltip, toast, error
+message or docs row says what the thing does and what it costs the person, and
+nothing else. Leave out how it is built: the model or library behind a
+feature, its licence or version, per-engine language lists, the mechanism.
+Test every sentence: does the reader need it to decide or to act? Keep to the
+length of the neighbouring rows. When a reviewer calls copy inaccurate or
+incomplete, cut the claim before adding words; never enumerate to make a broad
+sentence true. A change that gives the person nothing new to configure changes
+no copy. Licence and attribution text goes in a notices file, not in the
+interface.
+
 ## Type safety (ESLint — do not bypass)
 
 ```ts
@@ -182,6 +193,13 @@ fn(x = 1)                      fn(x: number)  // caller passes explicitly
 as any / as unknown / chained  // narrow or define a real type
 ReturnType<typeof fn>          // name the concrete type
 ```
+
+## Slop the sweep keeps finding
+
+| BAD                                                        | GOOD                                                                              |
+| ---------------------------------------------------------- | --------------------------------------------------------------------------------- |
+| Repeat the same input, path and assertion in another test. | Keep one case; add coverage only for a distinct regression.                       |
+| Leave A's contract above newly inserted B.                 | Keep each contract comment attached to the declaration or operation it describes. |
 
 ## Skills
 

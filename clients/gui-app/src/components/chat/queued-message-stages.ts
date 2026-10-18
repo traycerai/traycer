@@ -1,4 +1,5 @@
 import { createContext } from "react";
+import type { StreamConnectionStatus } from "@traycer-clients/shared/host-transport/i-stream-session";
 import type { QueueItemInFlight } from "@/stores/chats/queue-edit-custody";
 
 /**
@@ -25,6 +26,12 @@ export interface QueuedMessageStages {
    * reachability: a host can be reachable while this chat's stream is down.
    */
   readonly streamReconnecting: boolean;
+  /**
+   * This chat's stream status, or `null` where no session backs the surface.
+   * Read for diagnostics only (the log line of a refused submit); the UI keys
+   * on `streamReconnecting`.
+   */
+  readonly connectionStatus: StreamConnectionStatus | null;
 }
 
 export const NO_QUEUED_MESSAGE_STAGES: QueuedMessageStages = {
@@ -32,6 +39,7 @@ export const NO_QUEUED_MESSAGE_STAGES: QueuedMessageStages = {
   unconfirmedSendActionIds: new Set(),
   onCheckDelivery: null,
   streamReconnecting: false,
+  connectionStatus: null,
 };
 
 /**

@@ -44,6 +44,7 @@ import type {
 import type {
   DesktopAuthSessionSetResult,
   DesktopAuthSessionSnapshot,
+  DesktopAuthVerificationRevoked,
   DesktopLocalAuthSessionRestoreResult,
 } from "../ipc-contracts/window-types";
 import { subscribe, type Disposable, type Listener } from "./subscribe";
@@ -431,8 +432,9 @@ export interface AuthSessionBridgeSurface {
    * Withdraws main's verification of the held session without replacing it -
    * the renderer's terminal verdict loss, which `set` cannot carry: the
    * nearest status it flattens to would sign sibling windows out.
+   * `revocation` is passed on to the other windows (`onVerificationRevoked`).
    */
-  revoke(rejectedToken: string): Promise<void>;
+  revoke(rejectedToken: string, revocation: "user-epoch" | null): Promise<void>;
   onChange(handler: Listener<DesktopAuthSessionSnapshot>): Disposable;
   /**
    * The verdict-loss edge, fanned to every window - including the one that
@@ -440,9 +442,12 @@ export interface AuthSessionBridgeSurface {
    * republishing the SAME snapshot, which every window's latch reads as an
    * echo; a sibling that only listens to `onChange` therefore never learns
    * its bearer was refused. Carries that bearer so each window fences the
-   * demotion to the session it actually holds.
+   * demotion to the session it actually holds, and the revocation scope so a
+   * "sign out everywhere" reaches every window as one.
    */
-  onVerificationRevoked(handler: Listener<string>): Disposable;
+  onVerificationRevoked(
+    handler: (rejectedToken: string, revocation: "user-epoch" | null) => void,
+  ): Disposable;
 }
 
 export function buildAuthSessionBridge(): AuthSessionBridgeSurface {
@@ -461,10 +466,11 @@ export function buildAuthSessionBridge(): AuthSessionBridgeSurface {
         RunnerHostInvoke.authSessionSet,
         snapshot,
       ) as Promise<DesktopAuthSessionSetResult>,
-    revoke: (rejectedToken) =>
+    revoke: (rejectedToken, revocation) =>
       ipcRenderer.invoke(
         RunnerHostInvoke.authSessionRevoke,
         rejectedToken,
+        revocation,
       ) as Promise<void>,
     onChange: (handler) =>
       subscribe<DesktopAuthSessionSnapshot>(
@@ -472,6 +478,11 @@ export function buildAuthSessionBridge(): AuthSessionBridgeSurface {
         handler,
       ),
     onVerificationRevoked: (handler) =>
-      subscribe<string>(RunnerHostEvent.authVerificationRevoked, handler),
+      subscribe<DesktopAuthVerificationRevoked>(
+        RunnerHostEvent.authVerificationRevoked,
+        (revoked) => {
+          handler(revoked.token, revoked.revocation);
+        },
+      ),
   };
 }

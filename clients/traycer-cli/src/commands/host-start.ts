@@ -5,6 +5,7 @@ import {
 } from "node:child_process";
 import { constants as osConstants } from "node:os";
 import { randomUUID } from "node:crypto";
+import { performance } from "node:perf_hooks";
 import { access } from "node:fs/promises";
 import type { Readable } from "node:stream";
 import {
@@ -39,10 +40,12 @@ import {
   StderrLogTee,
   type StderrTee,
   type CrashReportMatch,
+  type CrashReportMemory,
   crashReportsDirFor,
   describeExitCode,
   describeFatalSignal,
   findCrashReportSince,
+  isWindowsSessionEndExit,
   prepareCrashReportsDir,
 } from "../host/crash-diagnostics";
 import {
@@ -54,6 +57,8 @@ import { hostHomeDir } from "../store/paths";
 import {
   HOST_CRASH_REPORT_TIMEOUT_MS,
   reportHostCrashToSentry,
+  resumeHostCrashReports,
+  settleHostCrashThrottleWrites,
   type HostCrashTelemetry,
 } from "../host/crash-telemetry";
 import {
@@ -669,6 +674,12 @@ export interface RunHostStartDeps extends ResolveHostStartTargetDeps {
   // pid.json read never touches a real host home. Best-effort: the marker is
   // written first and the relaunch does not wait on the network.
   readonly reportHostCrash: (telemetry: HostCrashTelemetry) => Promise<void>;
+  // Called once as a supervisor starts: takes the crash-report throttle state
+  // the previous supervisor left on disk, so the bound on full reports holds
+  // across the restarts a service manager makes of a host that cannot start,
+  // and a count that supervisor left open is still sent. Best-effort; must
+  // never throw.
+  readonly resumeCrashReports: (environment: Environment) => Promise<void>;
   // The lifecycle policy's park rule and the supervisor's `supervisor.json` /
   // `supervisor-run.json`. The defaults read and WRITE the real host home, so
   // a test that runs a labelled start, or reaches an admitted spawn, must
@@ -825,6 +836,7 @@ const defaultRunDeps: RunHostStartDeps = {
   readStopIntentIdentity,
   maxRelaunches: MAX_CONSECUTIVE_RELAUNCHES,
   reportHostCrash: reportHostCrashToSentry,
+  resumeCrashReports: resumeHostCrashReports,
   lifecycle: {
     readPolicy: readHostLifecyclePolicy,
     readPresence: readDesktopPresence,
@@ -1010,6 +1022,19 @@ export async function runHostStart(
     return deps.exit(0);
   }
 
+  // Pick up the crash-report throttle state the previous supervisor left, so a
+  // host that crashes on every start does not get a fresh budget of full
+  // reports per supervisor life, and a count that supervisor left open is
+  // sent. Not awaited here, but an exit before it ends waits for it (bounded),
+  // for the summary to be queued and the file written, not for Sentry to
+  // deliver it: an overdue count is sent at most once, and not sent twice
+  // because its write was cut off.
+  trackPendingCrashTelemetry(
+    Promise.resolve()
+      .then(() => deps.resumeCrashReports(opts.environment))
+      .catch(() => undefined),
+  );
+
   // Best-effort backstop against stacking a second host on a live one.
   // BE PRECISE ABOUT WHAT THIS DOES AND DOES NOT COVER.
   //
@@ -1078,6 +1103,7 @@ export async function runHostStart(
         supervisorPid,
       },
     );
+    await settlePendingCrashTelemetry();
     return deps.exit(0);
   }
 
@@ -1441,6 +1467,7 @@ export async function runHostStart(
       exitOwesSuccessor(exitCode) ? "keep-run-state" : "all",
     );
     releaseShutdownHandlers();
+    await settlePendingCrashTelemetry();
     return deps.exit(exitCode);
   };
 
@@ -1986,6 +2013,10 @@ export async function runHostStart(
     // report before any post-spawn statement runs, and the report scan treats
     // this as its lower bound (with additional slack for mtime granularity).
     let childSpawnedAtMs = 0;
+    // The same instant on the monotonic clock: the crash telemetry's uptime
+    // is a duration, and a wall-clock step between spawn and exit must not
+    // turn a host that died at boot into a long run or a negative one.
+    let childSpawnedMonoMs = 0;
     let child: ChildProcess;
     const spawnedWhileAdmitting: { child: ChildProcess | null } = {
       child: null,
@@ -2084,6 +2115,7 @@ export async function runHostStart(
             throw new StopAnnouncedDuringAdmission(announcedDuringAdmission);
           }
           childSpawnedAtMs = Date.now();
+          childSpawnedMonoMs = performance.now();
           spawnedWhileAdmitting.child = deps.spawn(
             launch.command,
             launch.args,
@@ -2459,12 +2491,24 @@ export async function runHostStart(
     // on THIS (bounded) before writing the marker - otherwise the fatal text can
     // still be unread in the pipe and the capture comes out empty in exactly the
     // abnormal-death case this feature exists for.
+    //
+    // How it settled is kept in `stderrSettle`, first settle wins: `true` when
+    // the pipe ended or closed, `false` when it errored first (a dead pipe may
+    // have lost bytes, so the capture is not known to be whole). The crash
+    // event's `incomplete` kind reads it when it classifies, NOT when the
+    // bounded wait returns: the capture is fed until `disposeAttemptStderr`,
+    // so a pipe released after the deadline still completes it.
+    const stderrSettle: StderrSettle = { drained: null };
     let resolveStderrEnded: () => void = () => undefined;
     const stderrEnded = new Promise<void>((resolve) => {
       resolveStderrEnded = resolve;
     });
-    if (child.stderr === null || child.stderr === undefined) {
+    const settleStderr = (drained: boolean): void => {
+      stderrSettle.drained ??= drained;
       resolveStderrEnded();
+    };
+    if (child.stderr === null || child.stderr === undefined) {
+      settleStderr(true);
     } else {
       const stderr = child.stderr;
       stderr.on("data", (chunk: Buffer) => {
@@ -2478,18 +2522,18 @@ export async function runHostStart(
       // settle the wait: whatever bytes arrived are still worth recording, and
       // `error` may arrive instead of `end`.
       stderr.on("error", () => {
-        resolveStderrEnded();
+        settleStderr(false);
       });
       stderr.on("end", () => {
-        resolveStderrEnded();
+        settleStderr(true);
       });
       stderr.on("close", () => {
-        resolveStderrEnded();
+        settleStderr(true);
       });
       // The spawn-site recorder may have observed the stream's one `error`
       // before any of the listeners above existed; a dead stream emits
       // nothing further, so settle the wait from the recorded state.
-      if (stderrErroredEarly) resolveStderrEnded();
+      if (stderrErroredEarly) settleStderr(false);
     }
 
     const probeObservation =
@@ -2694,6 +2738,7 @@ export async function runHostStart(
     // `SUSTAINED_UPTIME_RESET_MS` over the line and reset the budget, which is
     // the governor's own re-arming bug in a narrower window.
     const childEndedAtMs = Date.now();
+    const childEndedMonoMs = performance.now();
     currentChild = null;
 
     if (ending.kind === "spawn-error") {
@@ -2859,8 +2904,11 @@ export async function runHostStart(
       probeObservation,
       childSpawnedAtMs,
       childEndedAtMs,
+      childSpawnedMonoMs,
+      childEndedMonoMs,
       stderrTee,
       stderrEnded,
+      stderrSettle,
       crashReportsDirPath,
       preexistingReportNames,
     });
@@ -2875,7 +2923,9 @@ export async function runHostStart(
     // crash cycles accumulate without limit. Same argument as the log fd.
     //
     // Best-effort and deliberately last: the marker and the capture have both
-    // already been written from this stream by the time we get here.
+    // already been written from this stream by the time we get here. It must
+    // stay after `persistChildExit`, which classifies the capture from the
+    // stream's settle state while the stream is still being read.
     disposeAttemptStderr(child.stderr);
 
     // A clean exit is the host standing down on purpose - never relaunch it.
@@ -3439,6 +3489,14 @@ async function finalizeAttemptProbe(input: {
 }
 
 /**
+ * How the child's stderr pipe settled, first settle wins: `true` when it
+ * ended or closed, `false` when it errored first, `null` while it is open.
+ */
+interface StderrSettle {
+  drained: boolean | null;
+}
+
+/**
  * Wait for the child pipe and its path-addressed tee exactly once per attempt.
  * Both calls are bounded: an inherited stderr descriptor must not make a
  * restart (or a crash exit) wait forever.
@@ -3498,8 +3556,13 @@ async function persistChildExit(input: {
   // finalization, the stderr drain, the report scan) would otherwise be
   // counted as time the child ran.
   readonly childEndedAtMs: number;
+  // The same two instants on the monotonic clock; the telemetry's uptime is
+  // taken from these.
+  readonly childSpawnedMonoMs: number;
+  readonly childEndedMonoMs: number;
   readonly stderrTee: StderrTee;
   readonly stderrEnded: Promise<void>;
+  readonly stderrSettle: StderrSettle;
   readonly crashReportsDirPath: string;
   readonly preexistingReportNames: ReadonlySet<string>;
 }): Promise<ChildExitOutcome> {
@@ -3622,7 +3685,16 @@ async function persistChildExit(input: {
         signal,
         exitMeaning: fatalMeaning,
         hasDiagnosticReport: crashReport !== null,
-        uptimeMs: Math.max(0, input.childEndedAtMs - input.childSpawnedAtMs),
+        reportMemory: crashReportMemory(crashReport),
+        uptimeMs: Math.max(
+          0,
+          input.childEndedMonoMs - input.childSpawnedMonoMs,
+        ),
+        stopRequested: input.stopRequested,
+        stderrEmpty: input.stderrTee.capture.isEmpty(),
+        stderrFatal: input.stderrTee.capture.classifyFatal(
+          input.stderrSettle.drained === true,
+        ),
       });
     }
     return outcome;
@@ -3756,7 +3828,12 @@ async function persistChildExit(input: {
   // a telemetry stall must not delay it. Not awaited either: the relaunch
   // decision and its backoff start now, and a stalled reporter is bounded
   // and discarded on its own. Every nonzero exit is reported, not only the
-  // decodable ones - an undecoded code is still a crash to count.
+  // decodable ones - an undecoded code is still a crash to count. The one
+  // exception is the Windows session ending: the marker and the diagnostics
+  // line above stay, but the fleet crash count does not carry a logoff.
+  if (input.platform === "win32" && isWindowsSessionEndExit(code)) {
+    return outcome;
+  }
   void boundedCrashTelemetry(input, {
     environment,
     attemptId,
@@ -3767,7 +3844,13 @@ async function persistChildExit(input: {
     signal: null,
     exitMeaning: exitMeaning ?? null,
     hasDiagnosticReport: crashReport !== null,
-    uptimeMs: Math.max(0, input.childEndedAtMs - input.childSpawnedAtMs),
+    reportMemory: crashReportMemory(crashReport),
+    uptimeMs: Math.max(0, input.childEndedMonoMs - input.childSpawnedMonoMs),
+    stopRequested: input.stopRequested,
+    stderrEmpty: input.stderrTee.capture.isEmpty(),
+    stderrFatal: input.stderrTee.capture.classifyFatal(
+      input.stderrSettle.drained === true,
+    ),
   });
   return outcome;
 }
@@ -3784,7 +3867,7 @@ function boundedCrashTelemetry(
   input: { readonly deps: RunHostStartDeps },
   telemetry: HostCrashTelemetry,
 ): Promise<void> {
-  return Promise.race([
+  const bounded = Promise.race([
     Promise.resolve()
       .then(() => input.deps.reportHostCrash(telemetry))
       .catch(() => undefined),
@@ -3793,6 +3876,53 @@ function boundedCrashTelemetry(
       timer.unref?.();
     }),
   ]);
+  trackPendingCrashTelemetry(bounded);
+  return bounded;
+}
+
+function trackPendingCrashTelemetry(task: Promise<void>): void {
+  pendingCrashTelemetry.add(task);
+  void task.then(() => pendingCrashTelemetry.delete(task));
+}
+
+/**
+ * Reports (and the throttle-state resume at start) still in flight; a report
+ * is inside its {@link HOST_CRASH_REPORT_TIMEOUT_MS} bound. The
+ * relaunch never waits on them, but the supervisor's own exit does: the last
+ * crash of a supervisor's life is reported just before it exits, and the
+ * throttle state that report writes is what the next supervisor starts from.
+ */
+const pendingCrashTelemetry = new Set<Promise<void>>();
+
+/** Wait, for at most the report bound, for the reports still in flight. */
+async function settlePendingCrashTelemetry(): Promise<void> {
+  const waiting = [...pendingCrashTelemetry];
+  let timer: NodeJS.Timeout | undefined;
+  await Promise.race([
+    (async () => {
+      await Promise.allSettled(waiting);
+      // After the reports, not beside them: a summary timer can fire while
+      // they are awaited, and its write and upload are queued only then. The
+      // throttle's own writes and uploads are waited for within the same
+      // deadline, since nothing else awaits them before a clean stop.
+      await settleHostCrashThrottleWrites().catch(() => undefined);
+    })(),
+    new Promise<void>((resolve) => {
+      // Referenced on purpose: with the report's own timer unref'd, this is
+      // what keeps the process alive until the wait ends.
+      timer = setTimeout(resolve, HOST_CRASH_REPORT_TIMEOUT_MS);
+    }),
+  ]);
+  clearTimeout(timer);
+  // Waited for, or given up on: either way nothing is left to wait for.
+  for (const task of waiting) pendingCrashTelemetry.delete(task);
+}
+
+/** The report's memory numbers, every field `null` when there was no report. */
+function crashReportMemory(report: CrashReportMatch | null): CrashReportMemory {
+  return report === null
+    ? { heapLimitBytes: null, heapUsedBytes: null, rssBytes: null }
+    : report.memory;
 }
 
 /**

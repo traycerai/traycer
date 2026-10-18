@@ -29,10 +29,9 @@ export function isPaid(status: SubscriptionStatus): boolean {
   return status !== "FREE" && status !== "PENDING";
 }
 
-// V3 plans bill against credits; every other (legacy / v2) plan is rate-limit
-// based. Ported from an internal shared package's `isCreditBasedPricing`
-// (clients can't import that package). Credit plans → credit breakdown; the
-// rest → rate limit.
+// V3 plans bill against credits by status. Ported from an internal shared
+// package's `isCreditBasedPricing` (clients can't import that package). Which
+// view a subscription renders is `usesCreditView`'s call, not this one's.
 const CREDIT_BASED_STATUSES: ReadonlySet<SubscriptionStatus> = new Set([
   "FREE",
   "LITE_V3",
@@ -47,6 +46,19 @@ const CREDIT_BASED_STATUSES: ReadonlySet<SubscriptionStatus> = new Set([
 
 export function isCreditBasedPricing(status: SubscriptionStatus): boolean {
   return CREDIT_BASED_STATUSES.has(status);
+}
+
+/**
+ * Whether a subscription renders the credit breakdown rather than the
+ * rate-limit view: a credit-based status, or any plan the server reports plan
+ * credits for. Legacy / v2 plans gain plan credits when the server moves them
+ * to credits, so this follows `totalPlanCredits` with no client clock.
+ */
+export function usesCreditView(subscription: TraycerSubscription): boolean {
+  return (
+    isCreditBasedPricing(subscription.subscriptionStatus) ||
+    (subscription.totalPlanCredits ?? 0) > 0
+  );
 }
 
 // A trailing `_V2`/`_V3` is an internal pricing-generation tag, not part of

@@ -76,6 +76,10 @@ export const RPC_ERROR_CODES = [
   // be read safely. Distinct from FORBIDDEN: the caller may hold editor access
   // while the document itself is intentionally read-only.
   "E_EPIC_READ_ONLY",
+  // `environment.host.bind` refused: a live bot of the host's current
+  // environment is bound to it, and a host belongs to exactly one
+  // environment. Same additive degrade story as E_INVALID_ARGUMENT.
+  "E_HOST_HAS_BOTS_OF_ANOTHER_ENVIRONMENT",
   // A keyed unary was refused before resolver dispatch because the bounded
   // replay cache had no safe slot. The command definitely did not run and may
   // retry with the SAME key once capacity returns. This meaning is part of the

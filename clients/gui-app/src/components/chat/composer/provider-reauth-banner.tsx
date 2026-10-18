@@ -174,7 +174,12 @@ function ProfileUnavailableBanner({
     });
   };
   return (
-    <ReauthBannerShell icon={BANNER_HEADER_ICON} action={null}>
+    <ReauthBannerShell
+      icon={BANNER_HEADER_ICON}
+      action={null}
+      providerId={providerId}
+      reason={reason}
+    >
       <span className="text-foreground/90">{message}</span>
       <div className="flex flex-wrap items-center gap-3">
         <Button size="sm" variant="secondary" onClick={onContinueOnAmbient}>
@@ -204,13 +209,22 @@ function ProfileUnavailableBanner({
 // rides above the box in every state, so it lives here rather than at each call.
 // `action` is a top-right slot for the manual Refresh control; the unreachable
 // state passes `null` (no tab client to re-probe with).
+//
+// `providerId` and `reason` ride in the report's `code` so a report sent from
+// this banner says which provider was blocked and why; without them every
+// banner report reads the same. Never the profile id: the code is shown to the
+// person and travels in the report.
 function ReauthBannerShell({
   icon,
   action,
+  providerId,
+  reason,
   children,
 }: {
   readonly icon: ReactNode;
   readonly action: ReactNode;
+  readonly providerId: ProviderId;
+  readonly reason: ProviderReauthReason;
   readonly children: ReactNode;
 }) {
   return (
@@ -225,7 +239,7 @@ function ReauthBannerShell({
               context={createReportIssueContext({
                 title: "Provider needs to be reconnected",
                 message: null,
-                code: null,
+                code: `${providerId}:${reason}`,
                 source: "Provider sign-in",
               })}
               presentation="icon"
@@ -456,7 +470,12 @@ export function ProviderReauthBanner({
 
   if (credentialRefusal !== null) {
     return (
-      <ReauthBannerShell icon={BANNER_HEADER_ICON} action={null}>
+      <ReauthBannerShell
+        icon={BANNER_HEADER_ICON}
+        action={null}
+        providerId={providerId}
+        reason={reason}
+      >
         <span className="text-foreground/90">{message}</span>
         <CredentialRefusalNote refusal={credentialRefusal} />
       </ReauthBannerShell>
@@ -467,7 +486,12 @@ export function ProviderReauthBanner({
   // resolving, or genuinely offline): re-auth can't be driven from here.
   if (scopedBinding === null) {
     return (
-      <ReauthBannerShell icon={BANNER_HEADER_ICON} action={null}>
+      <ReauthBannerShell
+        icon={BANNER_HEADER_ICON}
+        action={null}
+        providerId={providerId}
+        reason={reason}
+      >
         <span className="text-foreground/90">{message}</span>
         <span className="text-ui-xs text-muted-foreground">
           This agent&apos;s machine is unavailable. Reconnect once it&apos;s
@@ -539,6 +563,8 @@ function ReauthBannerInner({
       <ReauthBannerShell
         icon={BANNER_HEADER_ICON}
         action={<BannerRefreshButton />}
+        providerId={providerId}
+        reason="provider_unauthenticated"
       >
         <span className="text-foreground/90">{message}</span>
         <span className="text-ui-xs text-muted-foreground">
@@ -552,6 +578,8 @@ function ReauthBannerInner({
     <ReauthBannerShell
       icon={BANNER_HEADER_ICON}
       action={<BannerRefreshButton />}
+      providerId={providerId}
+      reason="provider_unauthenticated"
     >
       <span className="text-foreground/90">{message}</span>
       {canOauth ? (
@@ -559,6 +587,7 @@ function ReauthBannerInner({
           providerId={providerId}
           providerLabel={providerLabel}
           loginCapability={state?.loginCapability ?? null}
+          hostBlock={signInHostBlock}
           isLocalHost={isLocalHost}
         />
       ) : null}
@@ -662,11 +691,13 @@ function OAuthReauthForm({
   providerId,
   providerLabel,
   loginCapability,
+  hostBlock,
   isLocalHost,
 }: {
   readonly providerId: ProviderId;
   readonly providerLabel: string;
   readonly loginCapability: ProviderLoginCapability | null;
+  readonly hostBlock: ProviderHostBlock | null;
   readonly isLocalHost: boolean;
 }) {
   const startLogin = useProvidersStartLogin();
@@ -678,6 +709,7 @@ function OAuthReauthForm({
 
   const supportsLoginOwnership = useProvidersLoginOwnership();
   const flow = useProviderProfileLoginFlow({
+    hostBlock,
     supportsLoginOwnership,
     mode: "reauth",
     providerId,

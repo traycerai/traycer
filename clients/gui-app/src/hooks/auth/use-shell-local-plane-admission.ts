@@ -9,12 +9,18 @@ import { useRunnerHostOrNull } from "@/providers/use-runner-host";
  * Why a session that `admitsLocalPlane` would admit is being held on the auth
  * surface anyway, or `null` when it is admitted.
  *
- * One value today, and a union rather than a boolean on purpose: the surface
- * renders a SENTENCE, and the next reason to refuse admission will want a
- * different one. A boolean would have the copy guess which refusal it is
- * describing.
+ * A union rather than a boolean on purpose: the surface renders a SENTENCE,
+ * and each reason to refuse admission wants a different one. A boolean would
+ * have the copy guess which refusal it is describing.
+ *
+ * - `unverified-relay-only` - the shell has no local host to fall back to.
+ * - `unverified-host-refused` - it has one, but authn refused the session and
+ *   the bearer it holds has expired, so the host refuses it too
+ *   (`hostRefusedHeldBearer`).
  */
-export type ShellAdmissionRefusal = "unverified-relay-only";
+export type ShellAdmissionRefusal =
+  | "unverified-relay-only"
+  | "unverified-host-refused";
 
 export interface ShellLocalPlaneAdmission {
   readonly admitted: boolean;
@@ -41,8 +47,15 @@ export interface ShellLocalPlaneAdmission {
  */
 export function useShellLocalPlaneAdmission(): ShellLocalPlaneAdmission {
   const status = useAuthStore((state) => state.status);
+  const hostRefusedHeldBearer = useAuthStore(
+    (state) => state.hostRefusedHeldBearer,
+  );
   const hasLocalHost = useRunnerHostOrNull()?.hasLocalHost ?? true;
-  return resolveShellLocalPlaneAdmission(status, hasLocalHost);
+  return resolveShellLocalPlaneAdmission(
+    status,
+    hasLocalHost,
+    hostRefusedHeldBearer,
+  );
 }
 
 /**
@@ -53,16 +66,22 @@ export function useShellLocalPlaneAdmission(): ShellLocalPlaneAdmission {
 export function resolveShellLocalPlaneAdmission(
   status: AuthStatus,
   hasLocalHost: boolean,
+  hostRefusedHeldBearer: boolean,
 ): ShellLocalPlaneAdmission {
-  if (admitsLocalPlaneOnShell({ status, hasLocalHost })) {
+  if (
+    admitsLocalPlaneOnShell({ status, hasLocalHost, hostRefusedHeldBearer })
+  ) {
     return { admitted: true, refusal: null };
   }
   // A refusal is only worth EXPLAINING when the status alone would have
   // admitted it. `signed-out` / `signing-in` land on the auth surface for the
   // ordinary reason, and a notice there would be answering a question nobody
   // asked.
+  if (status !== "unverified") {
+    return { admitted: false, refusal: null };
+  }
   return {
     admitted: false,
-    refusal: status === "unverified" ? "unverified-relay-only" : null,
+    refusal: hasLocalHost ? "unverified-host-refused" : "unverified-relay-only",
   };
 }

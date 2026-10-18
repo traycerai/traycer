@@ -353,10 +353,14 @@ describe("MockHostMessenger", () => {
 
     controller.abort();
 
+    // The handler - the mock's host - already ran, so the write may have
+    // applied: the abort must not read as one that never left
+    // (traycerai/traycer#2546, round 11).
     await expect(request).rejects.toMatchObject({
       name: "HostRequestAbortedError",
       requestId: "req-abort",
       method: "host.echo",
+      mayHaveDispatched: true,
     });
     expect(messenger.phases.map((event) => event.kind)).toEqual([
       "open",

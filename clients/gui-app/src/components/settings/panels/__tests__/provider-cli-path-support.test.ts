@@ -29,7 +29,7 @@ describe("providerCustomCliPathHeldReason", () => {
     );
   });
 
-  it("holds on every platform: names no managed download, which an Intel Mac lacks", () => {
+  it("holds on every platform without naming a managed download", () => {
     expect(providerCustomCliPathHeldReason("antigravity")).not.toMatch(
       /download/iu,
     );

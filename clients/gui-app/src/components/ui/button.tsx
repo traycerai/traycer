@@ -171,6 +171,10 @@ const buttonVariants = cva(
           "size-6 rounded-sm in-data-[slot=button-group]:rounded-md [&_svg:not([class*='size-'])]:size-3",
         "icon-sm": "size-7 rounded-sm in-data-[slot=button-group]:rounded-md",
         "icon-lg": "size-9",
+        // A round control floating over content rather than sitting in a bar:
+        // the always-visible actions button a page row wears on a coarse
+        // pointer (D40, the MobileChat artboard's 30px circle).
+        "icon-round": "size-7.5 rounded-full",
         // The vertical strip's nav controls (Notifications, All tasks, Home), as a
         // Button: `nav-tile` is the collapsed rail's 32px tile, `nav-row` the
         // expanded strip's 32px row. The row's padding is 1px short of the

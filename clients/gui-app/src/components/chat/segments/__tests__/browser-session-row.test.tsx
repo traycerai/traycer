@@ -18,6 +18,12 @@ const mocks = vi.hoisted(() => ({
   reachability: null as HostReachability | null,
 }));
 
+// The row reads its container through the session handle (an Epic here);
+// the open action shows only inside an Epic session, so the suite is in one.
+vi.mock("@/providers/use-open-epic-handle", () => ({
+  useMaybeOpenEpicHandle: () => ({ epicId: EPIC_ID }),
+  useOpenEpicHandle: () => ({ epicId: EPIC_ID }),
+}));
 vi.mock("@/lib/epic-selectors", () => ({
   useOpenEpicId: () => EPIC_ID,
 }));

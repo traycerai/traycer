@@ -250,6 +250,7 @@ const DELIVERY_FORM: SupportSubmitReportRequest = {
     registry: {
       routeTemplate: { status: "unavailable" },
       hostId: { status: "unavailable" },
+      tabHostId: { status: "unavailable" },
       epicId: { status: "unavailable" },
       tabId: { status: "unavailable" },
       artifactId: { status: "unavailable" },
@@ -665,6 +666,7 @@ describe("DesktopSupportService.submitReport - delivered", () => {
           registry: {
             routeTemplate: { status: "unavailable" },
             hostId: { status: "unavailable" },
+            tabHostId: { status: "unavailable" },
             epicId: { status: "unavailable" },
             tabId: { status: "unavailable" },
             artifactId: { status: "unavailable" },
@@ -999,6 +1001,7 @@ describe("DesktopSupportService.submitReport - includeDiagnostics gate", () => {
       registry: {
         routeTemplate: { status: "unavailable" },
         hostId: { status: "unavailable" },
+        tabHostId: { status: "unavailable" },
         epicId: { status: "unavailable" },
         tabId: { status: "unavailable" },
         artifactId: { status: "unavailable" },

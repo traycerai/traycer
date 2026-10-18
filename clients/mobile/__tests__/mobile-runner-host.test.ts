@@ -271,6 +271,7 @@ function runner(returnScheme: string | null): MobileRunnerHost {
     // The Android back adapter has its own suite (`system-back.test.ts`);
     // `null` is every other platform's answer.
     systemBack: null,
+    statusBarTap: null,
   });
 }
 
@@ -303,6 +304,7 @@ function runnerWithSandboxReason(
     // The Android back adapter has its own suite (`system-back.test.ts`);
     // `null` is every other platform's answer.
     systemBack: null,
+    statusBarTap: null,
   });
 }
 
@@ -376,6 +378,7 @@ function phoneRunner(input: {
     fileSave: null,
     canCopyImages: true,
     systemBack: null,
+    statusBarTap: null,
   });
 }
 
@@ -448,6 +451,7 @@ function runnerWithAuthSheet(
     fileSave: null,
     canCopyImages: true,
     systemBack: null,
+    statusBarTap: null,
   });
 }
 

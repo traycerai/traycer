@@ -415,7 +415,7 @@ function StaticOptionRow(props: {
             selected={props.selected}
           />
         )}
-        {/* Historical option labels intentionally wrap while live rows truncate for review readability. */}
+        {/* Option labels wrap here and in the live row: a one-line ellipsis hides the choice in a narrow pane. */}
         <span
           data-chat-find-unit={props.labelFindUnitId ?? undefined}
           className="min-w-0 flex-1 break-words font-medium text-foreground/90"

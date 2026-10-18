@@ -83,6 +83,18 @@ export function defineConditionPolicy<
   };
 }
 
+/** An epic file the host cannot serve yet; it usually lands on its own. */
+const EPIC_FILE_UNAVAILABLE_POLL_LANE: ConditionPollLane = {
+  id: "epic.readFile.unavailable",
+  initialDelayMs: 15 * SECOND_MS,
+  maxDelayMs: 15 * SECOND_MS,
+};
+const EPIC_FILE_ERROR_POLL_LANE: ConditionPollLane = {
+  id: "epic.readFile.error",
+  initialDelayMs: 15 * SECOND_MS,
+  maxDelayMs: MINUTE_MS,
+};
+
 export const PROVIDERS_PENDING_POLL_LANE: ConditionPollLane = {
   id: "providers.pending",
   initialDelayMs: 800,
@@ -1431,6 +1443,57 @@ export const HOST_METHOD_POLL_TABLE = {
   // their content hash and the image cache owns retry after a transient miss.
   // Polling this unary method would only re-fetch immutable bytes.
   "epic.fetchArtifactAttachment": { ...LATEST_SCHEDULING, poll: null },
+  // Epic files are content-addressed too: a read names its sha. Download
+  // progress rides the files lane's `localState`, never a poll; only an
+  // unavailable answer is asked again, since an upload landing on another
+  // host reaches no lane here.
+  "epic.readFile": {
+    ...LATEST_SCHEDULING,
+    poll: defineConditionPolicy("epic.readFile", {
+      // Three caches share this method: the text and blob reads keep a
+      // `kind` at the top, the signed-URL read keeps it under `result`.
+      classify: (data) => {
+        if (data === undefined) return false;
+        if (data.kind === "unavailable") return EPIC_FILE_UNAVAILABLE_POLL_LANE;
+        if (!("result" in data)) return false;
+        const result = data.result;
+        return typeof result === "object" &&
+          result !== null &&
+          "kind" in result &&
+          result.kind === "unavailable"
+          ? EPIC_FILE_UNAVAILABLE_POLL_LANE
+          : false;
+      },
+      initialErrorLane: EPIC_FILE_ERROR_POLL_LANE,
+      staleDataErrorLane: EPIC_FILE_ERROR_POLL_LANE,
+      resetLaneIds: new Set(),
+    }),
+  },
+  "epic.fetchFile": { ...LATEST_SCHEDULING, poll: null },
+  // User actions: each one runs, in order.
+  "epic.cancelFetchFile": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "epic.deleteFile": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
+  "epic.restoreFile": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
+  // An MCP App's reads answer from the harness's live server, on demand; the
+  // app asks again when it wants a fresher answer, so nothing polls.
+  "chat.mcpApp.describeTool": { ...LATEST_SCHEDULING, poll: null },
+  "chat.mcpApp.readResource": { ...LATEST_SCHEDULING, poll: null },
+  // A tool call and a model-context update change something: each one runs,
+  // in order.
+  "chat.mcpApp.callTool": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "chat.mcpApp.updateModelContext": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
   // Not polled, and this is a deliberate freshness choice rather than a copy of
   // the row above it. The answer is "which cloud row does this local chat
   // publish into", which changes exactly once in a chat's life - when a fork
@@ -1521,6 +1584,42 @@ export const HOST_METHOD_POLL_TABLE = {
   "drafts.upsert": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
   "drafts.delete": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
   "drafts.retract": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
+  // `bot.*` (Tracy Bots): cloud-backed reads and writes. The reads take the
+  // latest caller like every other cloud list. `fifo` on the mutations only
+  // stops two identical calls (same method, same params) from coalescing into
+  // one; it orders nothing across different params, as the drafts note above
+  // says - the cloud's own row versioning (`host_epoch`, owner-bound updates)
+  // decides between two mutations of one bot. No polling: `bot.subscribe`
+  // carries changes, and the list query is refetched by the mutation hooks
+  // that change it.
+  "bot.create": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
+  "bot.list": { ...LATEST_SCHEDULING, poll: null },
+  "bot.read": { ...LATEST_SCHEDULING, poll: null },
+  "bot.updateTitle": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
+  "bot.updateRunSettings": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "bot.delete": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
+  "bot.claimAuthority": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // Opening a bot may claim it onto this host (T18): `fifo`, like the claim
+  // itself, so two opens are never coalesced into one answer that was decided
+  // before the other's claim.
+  "bot.open": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
+  // The conversation list is a cloud list like `bot.list`. A send is a
+  // mutation that mints a request: `fifo` keeps two identical sends from
+  // coalescing into one message.
+  "bot.conversation.list": { ...LATEST_SCHEDULING, poll: null },
+  "bot.conversation.send": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
   // Unary byte channel, same posture as `epic.readChatAttachment` - but the
   // only one of the drafts methods whose BODY is megabytes rather than KB, so
   // it is also the only one that declares a budget. The value is declared once
@@ -2329,6 +2428,12 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
+  "config.visualization.get": { ...LATEST_SCHEDULING, poll: null },
+  "config.visualization.set": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
   "config.catalog.get": { ...LATEST_SCHEDULING, poll: null },
   "config.catalog.set": {
     mode: "fifo",
@@ -2390,6 +2495,16 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
+  // The user's team environments, cached by the host for the signed-in
+  // session; no GUI reads them yet.
+  "environment.list": { ...LATEST_SCHEDULING, poll: null },
+  "environment.host.read": { ...LATEST_SCHEDULING, poll: null },
+  "environment.host.bind": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "environment.host.list": { ...LATEST_SCHEDULING, poll: null },
   "diagnostics.logs.list": { ...LATEST_SCHEDULING, poll: null },
   "diagnostics.logs.tail": { ...LATEST_SCHEDULING, poll: null },
   // A bounded read over settled facts (Usage page + epic cost badge). The

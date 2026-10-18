@@ -1,6 +1,7 @@
 import { v4 as uuidv4 } from "uuid";
 import { create } from "zustand";
 import type { AutoJudgeNoticeMarker } from "@traycer/protocol/persistence/chat-transcript/row-order";
+import type { ConversationRequest } from "@traycer/protocol/persistence/epic/messages";
 import type {
   ChatQueueSteerMode,
   ChatRunSettings,
@@ -40,6 +41,8 @@ import type {
   ProviderNoticeReceipt,
   ProviderNoticeTone,
   ToolCallManagedCommand,
+  ToolCallMcpAppStamp,
+  ToolCallPageStamp,
   ToolInputDetail,
   WorkflowMeta,
 } from "@traycer/protocol/persistence/epic/content-blocks";
@@ -184,6 +187,13 @@ export interface ToolSegment {
   parentId: string | null;
   /** Generated images carried by chat.subscribe@1.6. Normalized at projection. */
   imageResults: ReadonlyArray<ImageGenerationResult>;
+  // The page a `traycer_show_page` call showed, stamped by the host when the
+  // call completes (`chat.subscribe@1.22`). Null for every other call, and for
+  // a show-page call that is still running or failed.
+  page: ToolCallPageStamp | null;
+  // The MCP App the call rendered, stamped by the host (`chat.subscribe@1.22`).
+  // Null for every other call, and on a harness without app support.
+  mcpApp: ToolCallMcpAppStamp | null;
 }
 
 // Recursive: a subagent's own children can themselves be nested subagent
@@ -668,6 +678,7 @@ export interface AssistantTurnMeta {
   /** Picker-style label resolved from the selected model's reasoning options. */
   readonly reasoningEffortLabel: string | null;
   readonly serviceTier: string | null;
+  readonly serviceTierLabel: string | null;
   /**
    * Cumulative billed cost for the turn in USD, from the turn's final usage.
    * `null` for harnesses that don't price the turn (Codex/Cursor) and for live/
@@ -722,6 +733,15 @@ export interface ChatMessage {
   role: ChatMessageRole;
   content: string;
   segments: ReadonlyArray<MessageSegment>;
+  /**
+   * The request this user row opened in a bot conversation (Tracy Bots), or
+   * absent on every row outside one. `resolvedAt: null` is an OPEN request;
+   * a resolved one may name the bot's reply row by `resolvedByMessageId`.
+   * Carried from the persisted row untouched: the resolution state lives on
+   * the USER row, never on the reply, so this is the one place a surface
+   * reads it.
+   */
+  conversationRequest?: ConversationRequest;
   structuredContent: JsonContent | null;
   attachments: ReadonlyArray<Attachment>;
   browserAnnotations?: ReadonlyArray<BrowserAnnotationRecord>;

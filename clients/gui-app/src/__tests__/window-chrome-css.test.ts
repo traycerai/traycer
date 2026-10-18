@@ -77,7 +77,7 @@ describe("window-chrome.css", () => {
   it("starts modal overlays below the band height", () => {
     expect(
       body(
-        '.wco :is([data-slot="dialog-overlay"], [data-slot="sheet-overlay"], [data-slot="drawer-overlay"])',
+        '.wco :is([data-slot="dialog-overlay"], [data-slot="sheet-overlay"], [data-slot="drawer-overlay"]):not([data-overlay-scope="surface"])',
       ),
     ).toBe("top: var(--app-title-band-height);");
   });

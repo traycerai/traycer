@@ -76,6 +76,10 @@ export function createStreamAuthRevalidator(
         appLogger.warn("[stream-auth] reconnect revalidation demoted", {
           reason: "cloud-verdict-withdrawn",
         });
+        // A host refused (or, pre-dial, would refuse) the held bearer. The
+        // service decides whether that ends the local plane, so the unary path
+        // and this one apply one rule.
+        authService.noteHostRefusedHeldBearer();
         return "local-plane-retained";
       }
       appLogger.warn("[stream-auth] reconnect revalidation rejected", {

@@ -106,6 +106,7 @@ const ROUTE_TEMPLATE_LABELS: Readonly<
   "/epics/$epicId/$tabId": "Epic tab",
   "/draft/new": "New chat draft",
   "/draft/$draftId": "Chat draft",
+  "/bot/$botId": "Bot",
   "/sample-workspace": "Sample workspace",
   "/home": "Home",
   "/onboarding": "Onboarding",

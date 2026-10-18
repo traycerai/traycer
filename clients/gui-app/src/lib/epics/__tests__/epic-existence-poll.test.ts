@@ -7,6 +7,13 @@ import {
   RetryableTransportError,
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostRpcRegistry } from "@/lib/host";
+import { z } from "zod";
+import {
+  defineRpcContract,
+  defineVersionedRpcRegistry,
+} from "@traycer/protocol/framework/index";
+import type { IHostMessenger } from "@traycer-clients/shared/host-transport/host-messenger";
+import { createRetryingMessenger } from "@traycer-clients/shared/host-transport/retrying-messenger";
 import {
   createOutcomeIsDecidable,
   EPIC_EXISTENCE_POLL_BUDGET_MS,
@@ -381,11 +388,47 @@ describe("createOutcomeIsDecidable", () => {
     expect(createOutcomeIsDecidable(error)).toBe(false);
   });
 
+  it("is true for a keyed request whose earlier attempt was sent and dropped - the host may have created it", () => {
+    // The retrying messenger re-throws its final pre-send error with
+    // `replaySafetyFromKey: true` once any attempt in the episode was sent.
+    const error = new RetryableTransportError({
+      code: "RPC_ERROR",
+      message: "Remote session is not ready",
+      requestId: "r1",
+      method: "epic.create",
+      fatalDetails: null,
+      replaySafetyFromKey: true,
+    });
+    expect(createOutcomeIsDecidable(error)).toBe(true);
+  });
+
+  it("is true for a keyed episode restored as sent-and-dropped even though its final attempt carries the host's attestation", () => {
+    // A raw attestation is minted with `replaySafetyFromKey: false`, so true
+    // with `fatalDetails` is the retrying messenger's restoration: the final
+    // attempt did not dispatch, but an earlier one was sent and dropped.
+    const error = new RetryableTransportError({
+      code: "RPC_ERROR",
+      message: "Host timed out awaiting the request frame",
+      requestId: "r1",
+      method: "epic.create",
+      fatalDetails: {
+        code: "RPC_REQUEST_TIMEOUT",
+        reason: "Host timed out awaiting the request frame",
+        incompatibleMethods: null,
+        upgradeGuidance: null,
+        retryable: true,
+      },
+      replaySafetyFromKey: true,
+    });
+    expect(createOutcomeIsDecidable(error)).toBe(true);
+  });
+
   it("is false for a HostRequestAbortedError - a caller-owned cancellation", () => {
     const error = new HostRequestAbortedError({
       message: "aborted",
       requestId: "r1",
       method: "epic.create",
+      mayHaveDispatched: false,
     });
     expect(createOutcomeIsDecidable(error)).toBe(false);
   });
@@ -399,5 +442,111 @@ describe("createOutcomeIsDecidable", () => {
       fatalDetails: null,
     });
     expect(createOutcomeIsDecidable(error)).toBe(false);
+  });
+});
+
+describe("a keyed create retried to exhaustion", () => {
+  const echoV10 = defineRpcContract({
+    method: "host.echo",
+    schemaVersion: { major: 1, minor: 0 } as const,
+    requestSchema: z.object({ message: z.string() }),
+    responseSchema: z.object({ echoed: z.string() }),
+  });
+  const registry = defineVersionedRpcRegistry({
+    "host.echo": {
+      1: {
+        latestMinor: 0,
+        versions: {
+          0: { contract: echoV10, upgradeFromPreviousVersion: null },
+        },
+        downgradePathsFromLatest: {},
+      },
+    },
+  });
+
+  function attestedNotDispatched(): RetryableTransportError {
+    return new RetryableTransportError({
+      replaySafetyFromKey: false,
+      code: "RPC_ERROR",
+      message: "Host timed out awaiting the request frame",
+      requestId: "r2",
+      method: "host.echo",
+      fatalDetails: {
+        code: "RPC_REQUEST_TIMEOUT",
+        reason: "Host timed out awaiting the request frame",
+        incompatibleMethods: null,
+        upgradeGuidance: null,
+        retryable: true,
+      },
+    });
+  }
+
+  it("a sent-and-dropped attempt followed by attested timeouts ends decidable, and the poll finds the Task", async () => {
+    // Attempt 1 committed on the host and lost its answer; the retries then
+    // each timed out before dispatch, with the host attesting so.
+    const outcomes: RetryableTransportError[] = [
+      new RetryableTransportError({
+        replaySafetyFromKey: true,
+        code: "RPC_ERROR",
+        message: "connection dropped after dispatch",
+        requestId: "r1",
+        method: "host.echo",
+        fatalDetails: null,
+      }),
+      attestedNotDispatched(),
+      attestedNotDispatched(),
+    ];
+    const request = vi.fn().mockImplementation(() => {
+      const outcome = outcomes.shift();
+      return outcome === undefined
+        ? Promise.resolve({ echoed: "HI" })
+        : Promise.reject(outcome);
+    });
+    const inner: IHostMessenger<typeof registry> = {
+      request,
+      requestWithResponseTimeout: request,
+    };
+    const messenger = createRetryingMessenger(inner, {
+      maxRetries: 2,
+      initialDelayMs: 1,
+      maxDelayMs: 1,
+      sleep: () => Promise.resolve(),
+      random: () => 0.5,
+    });
+
+    const failure = await messenger
+      .request(
+        "host.echo",
+        { message: "hi" },
+        {
+          idempotencyKey: "k-1",
+          authority: {
+            endpoint: { hostId: HOST, websocketUrl: "ws://host-1/rpc" },
+            bearer: {
+              identity: { userId: "u1" },
+              getBearerToken: () => "token",
+            },
+            abortSignal: new AbortController().signal,
+          },
+          replayMustBeKeyed: false,
+          requiredHostMethodVersion: null,
+        },
+      )
+      .then(
+        () => null,
+        (error: unknown) => error,
+      );
+
+    expect(failure).toBeInstanceOf(RetryableTransportError);
+    if (!(failure instanceof RetryableTransportError)) return;
+    expect(failure.fatalDetails).not.toBeNull();
+    expect(createOutcomeIsDecidable(failure)).toBe(true);
+
+    const { client } = fakeClient(() =>
+      Promise.resolve({ tasks: { [EPIC]: { status: "found", task: {} } } }),
+    );
+    await expect(
+      pollEpicExistence({ client, hostId: HOST, epicId: EPIC }),
+    ).resolves.toBe("exists");
   });
 });

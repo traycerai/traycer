@@ -53,6 +53,8 @@ import {
   readFeatureSettingsSync,
   readLogLevels,
   readLogLevelsSync,
+  readVisualizationConfig,
+  readVisualizationConfigSync,
   readWorktreesConfig,
   readWorktreesConfigSync,
   readCatalogConfig,
@@ -64,6 +66,7 @@ import {
   revertShellArgs,
   setEnvOverride,
   setAgentBrowserAccess,
+  setAgentPages,
   setAgentRolesEnabled,
   setAgentWorktreeCreatePolicy,
   setLogLevels,
@@ -500,6 +503,80 @@ describe("cli config store", () => {
     await expect(readCliConfig()).rejects.toThrow(
       /does not match the expected schema/,
     );
+  });
+});
+
+describe("visualization config (agent pages)", () => {
+  const BASE = {
+    version: 1,
+    shell: { path: null, args: null },
+    envOverrides: {},
+  };
+
+  it("reads agent pages as on from a file with no visualization block", async () => {
+    await writeRaw(JSON.stringify(BASE));
+    expect(await readVisualizationConfig()).toEqual({ agentPages: true });
+    expect(readVisualizationConfigSync()).toEqual({ agentPages: true });
+  });
+
+  it("round-trips the switch and keeps every other block", async () => {
+    await setShell("/bin/fish", ["-l"]);
+    await setEnvOverride("FOO", "bar");
+    await setAgentBrowserAccess(false);
+
+    await setAgentPages(false);
+    expect(await readVisualizationConfig()).toEqual({ agentPages: false });
+    expect(readVisualizationConfigSync()).toEqual({ agentPages: false });
+    expect(await readCliConfig()).toMatchObject({
+      shell: { path: "/bin/fish", args: ["-l"] },
+      envOverrides: { FOO: "bar" },
+      browser: { agentAccess: false },
+      visualization: { agentPages: false },
+    });
+
+    await setAgentPages(true);
+    expect(await readVisualizationConfig()).toEqual({ agentPages: true });
+  });
+
+  it("surfaces a malformed block to the async reader", async () => {
+    await writeRaw(
+      JSON.stringify({ ...BASE, visualization: { agentPages: "no" } }),
+    );
+    await expect(readVisualizationConfig()).rejects.toThrow();
+  });
+
+  it("fails OPEN for unparseable and malformed sync reads", async () => {
+    await writeRaw("{ not json");
+    expect(readVisualizationConfigSync()).toEqual({ agentPages: true });
+
+    await writeRaw(
+      JSON.stringify({ ...BASE, visualization: { agentPages: "no" } }),
+    );
+    expect(readVisualizationConfigSync()).toEqual({ agentPages: true });
+  });
+
+  it("fails open when the config file does not exist", () => {
+    expect(readVisualizationConfigSync()).toEqual({ agentPages: true });
+  });
+
+  it("honours an explicit agentPages:false when an unrelated part of the document is invalid", async () => {
+    await writeRaw(
+      JSON.stringify({
+        ...BASE,
+        version: 999,
+        visualization: { agentPages: false },
+      }),
+    );
+    expect(readVisualizationConfigSync()).toEqual({ agentPages: false });
+
+    await writeRaw(
+      JSON.stringify({
+        ...BASE,
+        logs: { cliLogLevel: "shouty" },
+        visualization: { agentPages: false },
+      }),
+    );
+    expect(readVisualizationConfigSync()).toEqual({ agentPages: false });
   });
 });
 

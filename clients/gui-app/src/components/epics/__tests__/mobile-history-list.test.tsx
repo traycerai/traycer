@@ -259,6 +259,18 @@ vi.mock("@/hooks/epic/use-epic-activity-status", () => ({
   useEpicActivityStatus: () => "idle",
 }));
 
+// The panel binds a delete to the account it was chosen under, read by the
+// real `useEpicDeleteRequestUserId` through `useHostClient()`, which throws
+// without a host runtime (this suite mounts none). The delete itself is mocked
+// above, so the stub only has to answer the identity.
+vi.mock("@/lib/host", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/host")>();
+  const stubHostClient = {
+    getRequestContextUserId: (): string | null => "user-test",
+  };
+  return { ...actual, useHostClient: () => stubHostClient };
+});
+
 /**
  * `useEpicPinLocalHomeSupported` reads `useHostClient()`, which throws
  * outside a `<HostRuntimeProvider>` - absent in this file. Fixed at `false`:

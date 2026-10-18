@@ -1,0 +1,246 @@
+diff --git a/capacitor/src/main/java/com/getcapacitor/Bridge.java b/capacitor/src/main/java/com/getcapacitor/Bridge.java
+index d4995fb..70fdcec 100644
+--- a/capacitor/src/main/java/com/getcapacitor/Bridge.java
++++ b/capacitor/src/main/java/com/getcapacitor/Bridge.java
+@@ -44,6 +44,9 @@ import com.getcapacitor.util.WebColor;
+ import java.io.File;
+ import java.net.SocketTimeoutException;
+ import java.net.URL;
++import java.nio.charset.StandardCharsets;
++import java.security.MessageDigest;
++import java.security.SecureRandom;
+ import java.util.ArrayList;
+ import java.util.Arrays;
+ import java.util.Collections;
+@@ -271,6 +274,21 @@ public class Bridge {
+             } catch (IllegalArgumentException ex) {
+                 Logger.warn("Invalid url, using fallback");
+             }
++            // Traycer: the native route token, for the top-level app document only. The origin
++            // rule never matches a sandboxed frame (its origin is opaque, which only "*" matches),
++            // and the script checks it is the top frame as well. Without document-start scripts
++            // the token is never handed out and every native route is refused: fail closed.
++            try {
++                String tokenScript =
++                    "if (window.top === window) Object.defineProperty(window, '__traycerNativeHttpToken', { value: '" +
++                    nativeRouteToken +
++                    "' });";
++                WebViewCompat.addDocumentStartJavaScript(webView, tokenScript, Collections.singleton(allowedOrigin));
++            } catch (IllegalArgumentException ex) {
++                Logger.error("Native route token not injected; native routes will refuse every request", ex);
++            }
++        } else {
++            Logger.error("Document-start scripts unsupported; native routes will refuse every request");
+         }
+         localServer = new WebViewLocalServer(context, this, injector, authorities, html5mode);
+         localServer.hostAssets(DEFAULT_WEB_ASSET_DIR);
+@@ -1437,6 +1455,36 @@ public class Bridge {
+         return localUrl;
+     }
+
++    /**
++     * Traycer: the query parameter that carries {@link #nativeRouteToken}. Every `/_capacitor_*`
++     * request without it is refused (`WebViewLocalServer.shouldInterceptRequest`).
++     */
++    public static final String NATIVE_ROUTE_TOKEN_PARAM = "traycer_native_http_token";
++
++    /**
++     * Traycer: a fresh 256-bit token per launch. Only the app's top-level document is given it
++     * (`loadWebView`), and the app attaches it to Capacitor's own requests for its native routes
++     * (`clients/mobile/src/web/native-http-token.ts`). The sandbox frames agent pages and MCP
++     * Apps run in never hold it, so they cannot reach the native HTTP proxy or the file routes.
++     */
++    private final String nativeRouteToken = newNativeRouteToken();
++
++    private static String newNativeRouteToken() {
++        byte[] bytes = new byte[32];
++        new SecureRandom().nextBytes(bytes);
++        StringBuilder hex = new StringBuilder();
++        for (byte b : bytes) {
++            hex.append(String.format("%02x", b));
++        }
++        return hex.toString();
++    }
++
++    /** Traycer: whether {@code url} carries this launch's token, compared in constant time. */
++    public boolean hasNativeRouteToken(Uri url) {
++        String given = url.getQueryParameter(NATIVE_ROUTE_TOKEN_PARAM);
++        return given != null && MessageDigest.isEqual(given.getBytes(StandardCharsets.UTF_8), nativeRouteToken.getBytes(StandardCharsets.UTF_8));
++    }
++
+     public WebViewLocalServer getLocalServer() {
+         return localServer;
+     }
+diff --git a/capacitor/src/main/java/com/getcapacitor/BridgeWebViewClient.java b/capacitor/src/main/java/com/getcapacitor/BridgeWebViewClient.java
+index f9df97b..654f48e 100644
+--- a/capacitor/src/main/java/com/getcapacitor/BridgeWebViewClient.java
++++ b/capacitor/src/main/java/com/getcapacitor/BridgeWebViewClient.java
+@@ -8,7 +8,11 @@ import android.webkit.WebResourceRequest;
+ import android.webkit.WebResourceResponse;
+ import android.webkit.WebView;
+ import android.webkit.WebViewClient;
++import java.io.ByteArrayInputStream;
++import java.util.HashMap;
+ import java.util.List;
++import java.util.Map;
++import java.util.Objects;
+
+ public class BridgeWebViewClient extends WebViewClient {
+
+@@ -20,9 +24,65 @@ public class BridgeWebViewClient extends WebViewClient {
+
+     @Override
+     public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
++        if (isBlockedSandboxRequest(request)) {
++            Logger.warn("Sandbox guard blocked a subframe request to the app origin");
++            return new WebResourceResponse("text/plain", "utf-8", 403, "Forbidden", new HashMap<>(), new ByteArrayInputStream(new byte[0]));
++        }
+         return bridge.getLocalServer().shouldInterceptRequest(request);
+     }
+
++    private static final String SANDBOX_LOADER_PATH = "/sandbox/index.html";
++
++    /**
++     * Traycer: a frame below the app document - the opaque sandbox frames that agent pages,
++     * wireframes and MCP Apps run in, and anything they frame - may load exactly one document
++     * this server answers for: the sandbox loader. Not another `.html`, not an extensionless
++     * route answered with the app's index, not a `/_capacitor_*` route. Any scheme counts: the
++     * server answers its host on http and https alike. Checked here, before the request:
++     * `shouldOverrideUrlLoading` is not called reliably for subframes, this is.
++     *
++     * Main-frame loads and every subresource are left alone (`isForMainFrame()` is false for
++     * the app's own subresources too, the dev server's modules among them). Native routes are
++     * guarded for every frame by their token (`WebViewLocalServer.shouldInterceptRequest`).
++     */
++    private boolean isBlockedSandboxRequest(WebResourceRequest request) {
++        if (request.isForMainFrame()) {
++            return false;
++        }
++        Uri url = request.getUrl();
++        Uri app = Uri.parse(bridge.getLocalUrl());
++        if (!Objects.equals(url.getAuthority(), app.getAuthority())) {
++            return false;
++        }
++        String path = url.getPath() == null ? "/" : url.getPath();
++        return isDocumentRequest(request.getRequestHeaders()) && !path.equals(SANDBOX_LOADER_PATH);
++    }
++
++    /**
++     * `Sec-Fetch-Dest` when the WebView reports it, else an `Accept` that asks for HTML. A
++     * request that says neither is treated as a document: unknown fails closed.
++     */
++    private static boolean isDocumentRequest(Map<String, String> headers) {
++        String dest = header(headers, "Sec-Fetch-Dest");
++        if (dest != null) {
++            return dest.equals("iframe") || dest.equals("frame") || dest.equals("document");
++        }
++        String accept = header(headers, "Accept");
++        return accept == null || accept.contains("text/html");
++    }
++
++    private static String header(Map<String, String> headers, String name) {
++        if (headers == null) {
++            return null;
++        }
++        for (Map.Entry<String, String> entry : headers.entrySet()) {
++            if (name.equalsIgnoreCase(entry.getKey())) {
++                return entry.getValue();
++            }
++        }
++        return null;
++    }
++
+     @Override
+     public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
+         Uri url = request.getUrl();
+diff --git a/capacitor/src/main/java/com/getcapacitor/MessageHandler.java b/capacitor/src/main/java/com/getcapacitor/MessageHandler.java
+index dc91c9b..2567931 100644
+--- a/capacitor/src/main/java/com/getcapacitor/MessageHandler.java
++++ b/capacitor/src/main/java/com/getcapacitor/MessageHandler.java
+@@ -35,10 +35,14 @@ public class MessageHandler {
+             try {
+                 WebViewCompat.addWebMessageListener(webView, "androidBridge", bridge.getAllowedOriginRules(), capListener);
+             } catch (Exception ex) {
+-                webView.addJavascriptInterface(this, "androidBridge");
++                // Traycer: no JavascriptInterface fallback. It is exposed to every frame,
++                // including the opaque sandbox frames that run agent pages and MCP Apps,
++                // and it cannot tell which frame called. Without the main-frame,
++                // origin-checked listener the bridge fails closed.
++                Logger.error("WebMessageListener unavailable; native bridge disabled", ex);
+             }
+         } else {
+-            webView.addJavascriptInterface(this, "androidBridge");
++            Logger.error("WebMessageListener unsupported; native bridge disabled");
+         }
+     }
+
+diff --git a/capacitor/src/main/java/com/getcapacitor/WebViewLocalServer.java b/capacitor/src/main/java/com/getcapacitor/WebViewLocalServer.java
+index 0c54800..ff7995f 100755
+--- a/capacitor/src/main/java/com/getcapacitor/WebViewLocalServer.java
++++ b/capacitor/src/main/java/com/getcapacitor/WebViewLocalServer.java
+@@ -25,6 +25,7 @@ import android.webkit.WebResourceRequest;
+ import android.webkit.WebResourceResponse;
+ import com.getcapacitor.plugin.util.CapacitorHttpUrlConnection;
+ import com.getcapacitor.plugin.util.HttpRequestHandler;
++import java.io.ByteArrayInputStream;
+ import java.io.IOException;
+ import java.io.InputStream;
+ import java.net.HttpURLConnection;
+@@ -184,8 +185,19 @@ public class WebViewLocalServer {
+     public WebResourceResponse shouldInterceptRequest(WebResourceRequest request) {
+         Uri loadingUrl = request.getUrl();
+
++        // Traycer: every native route - the HTTP proxy, the file and content routes - performs
++        // native I/O, and is reachable on any scheme and host the WebView loads, from any frame.
++        // Only a request carrying this launch's token, which only the top-level app document
++        // holds, gets past here. Missing or wrong is refused, before any I/O.
++        String requestPath = loadingUrl.getPath();
++        if (requestPath != null && requestPath.startsWith("/_capacitor_") && !bridge.hasNativeRouteToken(loadingUrl)) {
++            Logger.warn("Native route request without the native route token refused");
++            return new WebResourceResponse("text/plain", "utf-8", 403, "Forbidden", new HashMap<>(), new ByteArrayInputStream(new byte[0]));
++        }
++
+         if (null != loadingUrl.getPath() && loadingUrl.getPath().startsWith(Bridge.CAPACITOR_HTTP_INTERCEPTOR_START)) {
+-            Logger.debug("Handling CapacitorHttp request: " + loadingUrl);
++            // Traycer: the path only; the query carries the native route token.
++            Logger.debug("Handling CapacitorHttp request: " + loadingUrl.getPath());
+             try {
+                 return handleCapacitorHttpRequest(request);
+             } catch (Exception e) {
+@@ -203,7 +215,8 @@ public class WebViewLocalServer {
+         }
+
+         if (isLocalFile(loadingUrl) || isMainUrl(loadingUrl) || !isAllowedUrl(loadingUrl) || isErrorUrl(loadingUrl)) {
+-            Logger.debug("Handling local request: " + request.getUrl().toString());
++            // Traycer: the path only; a native route's query carries the native route token.
++            Logger.debug("Handling local request: " + request.getUrl().getPath());
+             return handleLocalRequest(request, handler);
+         } else {
+             return handleProxyRequest(request, handler);
+@@ -667,7 +680,8 @@ public class WebViewLocalServer {
+                         stream = protocolHandler.openAsset(assetPath + path);
+                     }
+                 } catch (IOException e) {
+-                    Logger.error("Unable to open asset URL: " + url);
++                    // Traycer: the path only; a native route's query carries the native route token.
++                    Logger.error("Unable to open asset URL: " + url.getPath());
+                     return null;
+                 }
+
+diff --git a/capacitor/src/main/java/com/getcapacitor/plugin/CapacitorCookies.java b/capacitor/src/main/java/com/getcapacitor/plugin/CapacitorCookies.java
+index 6ba4605..bf089ba 100644
+--- a/capacitor/src/main/java/com/getcapacitor/plugin/CapacitorCookies.java
++++ b/capacitor/src/main/java/com/getcapacitor/plugin/CapacitorCookies.java
+@@ -20,7 +20,11 @@ public class CapacitorCookies extends Plugin {
+
+     @Override
+     public void load() {
+-        this.bridge.getWebView().addJavascriptInterface(this, "CapacitorCookiesAndroidInterface");
++        // Traycer: no `CapacitorCookiesAndroidInterface`. A JavascriptInterface is exposed to every
++        // frame, the opaque sandbox frames that run agent pages and MCP Apps included, and cannot
++        // tell which one called, so its `setCookie` would let any of them write the cookie jar
++        // native HTTP requests use. The app keeps CapacitorCookies disabled, so the bridge never
++        // patches `document.cookie` with it (`native-bridge.js` checks the interface exists first).
+         this.cookieManager = new CapacitorCookieManager(null, java.net.CookiePolicy.ACCEPT_ALL, this.bridge);
+         this.cookieManager.removeSessionCookies();
+         CookieHandler.setDefault(this.cookieManager);

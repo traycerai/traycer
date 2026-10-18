@@ -134,6 +134,7 @@ function worktreeDeleteToastKey(
     summary.deleted,
     summary.failed,
     summary.active,
+    summary.declinedKind ?? "none",
     JSON.stringify(summary.scopeKeys),
   ].join(":");
 }

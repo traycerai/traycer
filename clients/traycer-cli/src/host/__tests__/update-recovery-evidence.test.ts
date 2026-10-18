@@ -206,6 +206,7 @@ function hostStatusResponse(
     // which is what a host predating the field sends.
     storeFormats: null,
     install: null,
+    processMemory: null,
     ...overrides,
   };
 }

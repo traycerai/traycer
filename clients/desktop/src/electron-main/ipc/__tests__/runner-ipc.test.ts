@@ -871,6 +871,7 @@ describe("RunnerIpcBridge", () => {
           RunnerHostInvoke.fileDropReadNativeClipboardPaths,
           RunnerHostInvoke.fileSave,
           RunnerHostInvoke.fileOpenSaved,
+          RunnerHostInvoke.fileDownloadUrl,
           RunnerHostInvoke.clipboardWriteImage,
           RunnerHostInvoke.gpuAccelerationGet,
           RunnerHostInvoke.gpuAccelerationSet,
@@ -3699,6 +3700,114 @@ describe("RunnerIpcBridge", () => {
     expect(authSession.get()).toEqual({ ...owner, verified: true });
     expect(window.sentMessages).toEqual([]);
     bridge.dispose();
+  });
+
+  describe("authSessionRevoke", () => {
+    /**
+     * A bridge with two windows and the auth-session handlers registered, the
+     * install-time fan-out already drained. The revoke handler needs no signed
+     * session: the fan-out it owes the other windows does not depend on main
+     * holding the bearer (an unordered revoke is fenced by the receivers).
+     */
+    async function installRevokeHarness(): Promise<{
+      readonly bridge: { dispose(): void };
+      readonly windowA: CapturingWindow;
+      readonly windowB: CapturingWindow;
+      readonly revoke: InvokeHandler;
+    }> {
+      const mod = await import("../register-runner-ipc");
+      const registry = new FakeWindowRegistry();
+      const windowA = buildWindow();
+      const windowB = buildWindow();
+      registry.add("window-a", 101, windowA);
+      registry.add("window-b", 202, windowB);
+      const bridge = new mod.RunnerIpcBridge({
+        host: new FakeHost(),
+        hostController: new FakeHostController(),
+        authnBaseUrl: "http://localhost:5005",
+        authRedirectUri: null,
+        tray: null,
+        zoomController: undefined,
+        authTokenStore: undefined,
+        windowRegistry: registry,
+        ownership: new EpicWindowOwnership(null),
+        perWindowState: new PerWindowState(null),
+        authSession: new DesktopAuthSession(),
+        quitState: undefined,
+      });
+      bridge.install();
+      const revoke = ipcMainState.handlers.get(
+        RunnerHostInvoke.authSessionRevoke,
+      );
+      if (revoke === undefined) {
+        throw new Error("authSession revoke handler missing");
+      }
+      windowA.sentMessages.length = 0;
+      windowB.sentMessages.length = 0;
+      return { bridge, windowA, windowB, revoke };
+    }
+
+    it.each([
+      {
+        label: "a user-epoch revocation",
+        scope: ["user-epoch"],
+        revocation: "user-epoch",
+      },
+      {
+        label: "an unrecognised scope",
+        scope: ["junk"],
+        revocation: null,
+      },
+      {
+        label: "an explicit null scope",
+        scope: [null],
+        revocation: null,
+      },
+      {
+        label: "no scope at all, as a shell that predates it sends",
+        scope: [],
+        revocation: null,
+      },
+    ])(
+      "fans the revoked bearer out to every window with $label",
+      async ({ scope, revocation }) => {
+        const { bridge, windowA, windowB, revoke } =
+          await installRevokeHarness();
+
+        await revoke(sender(101), "bearer-a", ...scope);
+
+        // The originating window is told too: its own demotion has already
+        // run, and the receivers fence on the bearer they hold.
+        const expected = [
+          {
+            channel: RunnerHostEvent.authVerificationRevoked,
+            payload: { token: "bearer-a", revocation },
+          },
+        ];
+        expect(windowA.sentMessages).toEqual(expected);
+        expect(windowB.sentMessages).toEqual(expected);
+        bridge.dispose();
+      },
+    );
+
+    it.each([
+      { label: "a number", token: 42 },
+      { label: "null", token: null },
+      { label: "nothing", token: undefined },
+      { label: "an object", token: { token: "bearer-a" } },
+    ])(
+      "drops a revoke whose bearer is $label, fanning out nothing",
+      async ({ token }) => {
+        const { bridge, windowA, windowB, revoke } =
+          await installRevokeHarness();
+
+        await revoke(sender(101), token, "user-epoch");
+
+        expect(windowA.sentMessages).toEqual([]);
+        expect(windowB.sentMessages).toEqual([]);
+        bridge.dispose();
+      },
+    );
   });
 
   it("retains step-up credentials in main and returns only expiry metadata to the renderer", async () => {

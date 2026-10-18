@@ -81,6 +81,7 @@ export const SHIPPED_DEFAULT_VALUES: LayoutValues = {
   railTerminals: { shown: "shown" },
   railBrowsers: { shown: "shown" },
   railArtifacts: { shown: "shown" },
+  railFiles: { shown: "shown" },
   railGitDiff: { shown: "shown" },
   railPullRequests: { shown: "auto" },
   railFileTree: { shown: "shown" },
@@ -215,6 +216,7 @@ export function effectiveLayoutValues(
     railTerminals: { ...base.railTerminals, ...overrides.railTerminals },
     railBrowsers: { ...base.railBrowsers, ...overrides.railBrowsers },
     railArtifacts: { ...base.railArtifacts, ...overrides.railArtifacts },
+    railFiles: { ...base.railFiles, ...overrides.railFiles },
     railGitDiff: { ...base.railGitDiff, ...overrides.railGitDiff },
     railPullRequests: {
       ...base.railPullRequests,

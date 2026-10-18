@@ -20,8 +20,13 @@ import {
   useActiveEpicArtifactRef,
   useActiveEpicId,
   useActiveTabId,
+  useActiveTileRef,
 } from "@/stores/epics/canvas/store";
-import type { EpicCanvasTileRef } from "@/stores/epics/canvas/types";
+import {
+  isBlankTileRef,
+  isCommGraphTileRef,
+  type EpicCanvasTileRef,
+} from "@/stores/epics/canvas/types";
 import type {
   OpenEpicState,
   OpenEpicStoreHandle,
@@ -169,6 +174,10 @@ export function SupportContextRegistryBridge(
   const epicId = useActiveEpicId();
   const tabId = useActiveTabId();
   const artifactRef = useActiveEpicArtifactRef(tabId ?? undefined);
+  // The active tile as the pane holds it. `artifactRef` above keeps only
+  // record-backed tiles, so a terminal, browser, diff or PR tile is `null`
+  // there while it is still bound to a host.
+  const activeTileRef = useActiveTileRef(tabId ?? undefined);
   const routeTemplate = useRouteTemplate(props.router);
   const providersListQuery = useProvidersList({
     enabled: true,
@@ -187,16 +196,29 @@ export function SupportContextRegistryBridge(
       : subscribedHarnessContext;
 
   const artifactId = artifactRef === null ? null : artifactRef.id;
+  // The tile's own binding, the value `<TabHostProvider>` hands to
+  // `useTabHostId()` inside it. This bridge is mounted above every tab, where
+  // that hook has no provider (it throws), so the ref the provider is fed from
+  // is read instead. Every tile kind carries one, except the two that hold
+  // only an inert placeholder because they have no host binding (the blank
+  // tab and the communication graph).
+  const tabHostId =
+    activeTileRef === null ||
+    isBlankTileRef(activeTileRef) ||
+    isCommGraphTileRef(activeTileRef)
+      ? null
+      : activeTileRef.hostId;
 
   useEffect(() => {
     setSupportContextSnapshot({
       routeTemplate: toKnown(routeTemplate),
       hostId: toKnown(hostId),
+      tabHostId: toKnown(tabHostId),
       epicId: toKnown(epicId),
       tabId: toKnown(tabId),
       artifactId: toKnown(artifactId),
     });
-  }, [routeTemplate, hostId, epicId, tabId, artifactId]);
+  }, [routeTemplate, hostId, tabHostId, epicId, tabId, artifactId]);
 
   useEffect(() => {
     if (epicId === null || artifactRef === null) return undefined;

@@ -121,6 +121,7 @@ export function createFakeComposerPromptEditorHandle(
     removeImageAttachmentById: () => undefined,
     rewriteImageAttachmentHashById: () => false,
     insertDictatedText: () => undefined,
+    draftGeneration: () => 0,
     dismissActiveSuggestion: () => false,
   });
 

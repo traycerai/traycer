@@ -15,6 +15,7 @@ const TRUNCATION_MARKER = " (truncated, see support report)";
 const emptyRegistry: SupportContextRegistrySnapshot = {
   routeTemplate: { status: "unavailable" },
   hostId: { status: "unavailable" },
+  tabHostId: { status: "unavailable" },
   epicId: { status: "unavailable" },
   tabId: { status: "unavailable" },
   artifactId: { status: "unavailable" },

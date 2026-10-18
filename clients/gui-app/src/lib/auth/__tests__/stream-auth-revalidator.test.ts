@@ -16,11 +16,23 @@ import { useAuthStore } from "@/stores/auth/auth-store";
  * projected store status (not the outcome kind) to tell the two arms apart,
  * so these tests drive the store directly rather than the full sign-in flow.
  *
+ * In that same branch the revalidator reports a host refusal of the held
+ * bearer to the service (`AuthService.noteHostRefusedHeldBearer`), exactly as
+ * the unary path does, and nothing more: whether the refusal ends the local
+ * plane (authn refused the session AND the held bearer has expired) is the
+ * service's call, because only it holds the bearer and the terminal latch. So
+ * this suite pins the WIRING - the service is told once on that branch and on
+ * no other, and a service that never latched stays inert however the store was
+ * set up - and leaves the decision itself to
+ * `auth-service-held-session-host-refusal.test.ts`, which also drives this
+ * revalidator end to end against a real refused session.
+ *
  * `revalidateCurrentContext` is spied on a REAL `AuthService` instance
  * (built the same way `auth-service-authorization-loss.test.ts` does)
  * instead of a hand-rolled stub, because the production type is the concrete
  * class - a narrower object literal would need a cast this repo's lint rules
- * forbid.
+ * forbid. `noteHostRefusedHeldBearer` is spied on the same instance WITHOUT
+ * replacing it, so the real method runs behind every call count.
  */
 function makeService(): AuthService {
   const host = new MockRunnerHost({
@@ -45,6 +57,8 @@ function resetAuth(
       profile: { userId: "user-1", userName: "user-1", email: "u@e.com" },
       contextMetadata: { userId: "user-1", username: "user-1" },
       subscriptionStatus: status === "signed-in" ? "FREE" : null,
+      cloudVerdictLoss: "unreachable",
+      hostRefusedHeldBearer: false,
     });
     return;
   }
@@ -53,6 +67,8 @@ function resetAuth(
     profile: null,
     contextMetadata: null,
     subscriptionStatus: null,
+    cloudVerdictLoss: "unreachable",
+    hostRefusedHeldBearer: false,
   });
 }
 
@@ -82,19 +98,77 @@ describe("createStreamAuthRevalidator", () => {
     expect(outcome).toBe("local-plane-retained");
   });
 
-  it('returns "rejected" when the outcome is rejected and the store is signed-out (the revalidator already signed out)', async () => {
+  it("reports the host refusal to the service exactly once on the local-plane-retained branch", async () => {
+    resetAuth("unverified");
+    useAuthStore.setState({ cloudVerdictLoss: "session-rejected" });
+    vi.spyOn(service, "revalidateCurrentContext").mockResolvedValue({
+      kind: "rejected",
+    });
+    const noteRefusal = vi.spyOn(service, "noteHostRefusedHeldBearer");
+    const revalidator = createStreamAuthRevalidator(service);
+
+    const outcome = await revalidator.revalidateForReconnect();
+
+    expect(outcome).toBe("local-plane-retained");
+    expect(noteRefusal).toHaveBeenCalledTimes(1);
+    // Reported, not acted on by the revalidator itself: the session stays
+    // `unverified` and the flag is the service's to set.
+    expect(useAuthStore.getState().status).toBe("unverified");
+  });
+
+  it("leaves the decision to the service: a service that never latched stays inert behind the call, whatever the store says", async () => {
+    resetAuth("unverified");
+    // The store alone says authn refused the session. The flag is not the
+    // store's to infer from that (it used to be): only the service holds both
+    // the terminal latch and the bearer whose expiry decides it, and this one
+    // never latched.
+    useAuthStore.setState({ cloudVerdictLoss: "session-rejected" });
+    vi.spyOn(service, "revalidateCurrentContext").mockResolvedValue({
+      kind: "rejected",
+    });
+    const noteRefusal = vi.spyOn(service, "noteHostRefusedHeldBearer");
+    const revalidator = createStreamAuthRevalidator(service);
+
+    const outcome = await revalidator.revalidateForReconnect();
+
+    expect(outcome).toBe("local-plane-retained");
+    expect(noteRefusal).toHaveBeenCalledTimes(1);
+    expect(useAuthStore.getState().hostRefusedHeldBearer).toBe(false);
+  });
+
+  it("reports the refusal once for a session that is still signed-in too (a store fault, not an authn verdict), and the service records nothing", async () => {
+    resetAuth("signed-in");
+    // A stale latched loss must not turn a signed-in session into a refusal.
+    useAuthStore.setState({ cloudVerdictLoss: "session-rejected" });
+    vi.spyOn(service, "revalidateCurrentContext").mockResolvedValue({
+      kind: "rejected",
+    });
+    const noteRefusal = vi.spyOn(service, "noteHostRefusedHeldBearer");
+    const revalidator = createStreamAuthRevalidator(service);
+
+    const outcome = await revalidator.revalidateForReconnect();
+
+    expect(outcome).toBe("local-plane-retained");
+    expect(noteRefusal).toHaveBeenCalledTimes(1);
+    expect(useAuthStore.getState().hostRefusedHeldBearer).toBe(false);
+  });
+
+  it('returns "rejected" and reports no host refusal when the outcome is rejected and the store is signed-out (the revalidator already signed out)', async () => {
     resetAuth("signed-out");
     vi.spyOn(service, "revalidateCurrentContext").mockResolvedValue({
       kind: "rejected",
     });
+    const noteRefusal = vi.spyOn(service, "noteHostRefusedHeldBearer");
     const revalidator = createStreamAuthRevalidator(service);
 
     const outcome = await revalidator.revalidateForReconnect();
 
     expect(outcome).toBe("rejected");
+    expect(noteRefusal).not.toHaveBeenCalled();
+    expect(useAuthStore.getState().hostRefusedHeldBearer).toBe(false);
   });
 
-  it('returns "rotated" when the outcome is valid', async () => {
+  it('returns "rotated" and reports no host refusal when the outcome is valid', async () => {
     const now = new Date("2026-01-01T00:00:00.000Z");
     vi.spyOn(service, "revalidateCurrentContext").mockResolvedValue({
       kind: "valid",
@@ -133,30 +207,38 @@ describe("createStreamAuthRevalidator", () => {
         teamSubscriptions: [],
       },
     });
+    const noteRefusal = vi.spyOn(service, "noteHostRefusedHeldBearer");
     const revalidator = createStreamAuthRevalidator(service);
 
     const outcome = await revalidator.revalidateForReconnect();
 
     expect(outcome).toBe("rotated");
+    expect(noteRefusal).not.toHaveBeenCalled();
   });
 
-  it('returns "network-error" when the outcome is a network error', async () => {
+  it('returns "network-error" and reports no host refusal when the outcome is a network error', async () => {
+    resetAuth("unverified");
+    useAuthStore.setState({ cloudVerdictLoss: "session-rejected" });
     vi.spyOn(service, "revalidateCurrentContext").mockResolvedValue({
       kind: "network-error",
     });
+    const noteRefusal = vi.spyOn(service, "noteHostRefusedHeldBearer");
     const revalidator = createStreamAuthRevalidator(service);
 
     const outcome = await revalidator.revalidateForReconnect();
 
     expect(outcome).toBe("network-error");
+    expect(noteRefusal).not.toHaveBeenCalled();
   });
 
-  it('returns "rejected" when revalidateCurrentContext resolves null (no live context to revalidate)', async () => {
+  it('returns "rejected" and reports no host refusal when revalidateCurrentContext resolves null (no live context to revalidate)', async () => {
     vi.spyOn(service, "revalidateCurrentContext").mockResolvedValue(null);
+    const noteRefusal = vi.spyOn(service, "noteHostRefusedHeldBearer");
     const revalidator = createStreamAuthRevalidator(service);
 
     const outcome = await revalidator.revalidateForReconnect();
 
     expect(outcome).toBe("rejected");
+    expect(noteRefusal).not.toHaveBeenCalled();
   });
 });

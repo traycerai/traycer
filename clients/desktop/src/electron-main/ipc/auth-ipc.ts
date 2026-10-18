@@ -36,6 +36,7 @@ import { config } from "../../config";
 import type {
   DesktopAuthSessionSetResult,
   DesktopAuthSessionSnapshot,
+  DesktopAuthVerificationRevoked,
 } from "../../ipc-contracts/window-types";
 import { createDesktopBearerVerifier } from "../auth/bearer-verifier";
 import { log } from "../app/logger";
@@ -578,10 +579,11 @@ export function registerAuthIpc(bridge: RunnerIpcBridge): void {
   // revoke names the bearer it is about: windows' IPC is unordered, so one
   // that arrives after a sibling's fresh sign-in must not strip THAT session
   // (`DesktopAuthSession.revokeVerification`). A revoke without a bearer
-  // names nothing and is dropped.
+  // names nothing and is dropped. The revocation scope rides along for the
+  // other windows only; main's own withdrawal does not depend on it.
   bridge.handleInvoke(
     RunnerHostInvoke.authSessionRevoke,
-    (_event, rejectedToken: unknown) => {
+    (_event, rejectedToken: unknown, revocation: unknown) => {
       if (typeof rejectedToken !== "string") return;
       bridge.authSession.revokeVerification(rejectedToken);
       // Withdrawing main's verification protects what MAIN speaks for. It
@@ -593,7 +595,11 @@ export function registerAuthIpc(bridge: RunnerIpcBridge): void {
       // channel and naming the bearer so each can fence it. The originating
       // window included: its own demotion has already run, and re-ingesting a
       // bearer it no longer holds verified is a no-op there.
-      bridge.fanOut(RunnerHostEvent.authVerificationRevoked, rejectedToken);
+      const revoked: DesktopAuthVerificationRevoked = {
+        token: rejectedToken,
+        revocation: revocation === "user-epoch" ? "user-epoch" : null,
+      };
+      bridge.fanOut(RunnerHostEvent.authVerificationRevoked, revoked);
     },
   );
 

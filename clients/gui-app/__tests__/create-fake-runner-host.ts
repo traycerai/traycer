@@ -200,6 +200,8 @@ export function createFakeRunnerHost(
     // Likewise: a shell that raises an OS back request passes its own
     // `systemBack` double through `overrides`.
     systemBack: null,
+    // The iOS status-bar tap, passed the same way by a test that needs it.
+    statusBarTap: null,
   };
   return { ...base, ...overrides };
 }

@@ -395,12 +395,14 @@ export type DesktopCapturedField<T> =
 
 /**
  * Field-for-field match with ticket 05's `SupportContextSnapshot`
- * (`@/lib/support-context-registry`). `hostId` here is the tab-bound host,
- * not necessarily the "local host" Electron main attaches logs from.
+ * (`@/lib/support-context-registry`). `hostId` here is the app-wide effective
+ * host; `tabHostId` is the host the active chat tab is bound to. Neither is
+ * necessarily the "local host" Electron main attaches logs from.
  */
 export interface DesktopContextRegistrySnapshot {
   readonly routeTemplate: DesktopCapturedField<string>;
   readonly hostId: DesktopCapturedField<string>;
+  readonly tabHostId: DesktopCapturedField<string>;
   readonly epicId: DesktopCapturedField<string>;
   readonly tabId: DesktopCapturedField<string>;
   readonly artifactId: DesktopCapturedField<string>;
@@ -905,9 +907,13 @@ export interface DesktopWindowsBridge {
      * bearer expires) rather than failing the `isDesktopWindowsBridge` guard.
      * Names the rejected bearer: main applies it only while that is still
      * the session it holds, so a revoke racing a sibling window's fresh
-     * sign-in cannot strip the new session.
+     * sign-in cannot strip the new session. `revocation` is passed on to the
+     * other windows (`onVerificationRevoked`).
      */
-    revoke?(rejectedToken: string): Promise<void>;
+    revoke?(
+      rejectedToken: string,
+      revocation: "user-epoch" | null,
+    ): Promise<void>;
     onChange(handler: (snapshot: DesktopAuthSessionSnapshot) => void): {
       dispose(): void;
     };
@@ -925,9 +931,14 @@ export interface DesktopWindowsBridge {
      * desktop shell built before the channel existed does not have it, and
      * the bridge degrades to the pre-channel behaviour rather than failing
      * the `isDesktopWindowsBridge` guard. Carries the rejected bearer so each
-     * window fences the demotion to the session it actually holds.
+     * window fences the demotion to the session it actually holds, and the
+     * revocation scope so a "sign out everywhere" reaches every window as one.
+     * A shell built before the scope existed passes no second argument, which
+     * reads as no revocation.
      */
-    onVerificationRevoked?(handler: (rejectedToken: string) => void): {
+    onVerificationRevoked?(
+      handler: (rejectedToken: string, revocation: "user-epoch" | null) => void,
+    ): {
       dispose(): void;
     };
   };

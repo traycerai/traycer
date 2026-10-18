@@ -1,7 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("sonner", () => ({
-  toast: { error: vi.fn(), success: vi.fn() },
+  toast: {
+    error: vi.fn(),
+    success: vi.fn(),
+    message: vi.fn(),
+    warning: vi.fn(),
+    dismiss: vi.fn(),
+  },
 }));
 
 // Two DISTINGUISHABLE sentinels, so a regression to the ambient host fails on
@@ -79,10 +85,15 @@ import { act, renderHook } from "@testing-library/react";
 import {
   useEpicCreateArtifact,
   useEpicDeleteArtifact,
+  useEpicDeleteArtifactInBatch,
   useEpicUpdateArtifactStatus,
   useEpicRenameArtifact,
 } from "@/hooks/epic/use-epic-node-mutations";
-import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import {
+  HostRpcError,
+  toHostRpcError,
+} from "@traycer-clients/shared/host-transport/host-messenger";
+import { toastFromOwnerHostBatchWriteFailures } from "@/lib/owner-host-write-error-toast";
 import type { RpcErrorCode } from "@traycer/protocol/framework/index";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import { hostQueryKeys } from "@/lib/query-keys";
@@ -535,5 +546,111 @@ describe("isPending is scoped to the artifact the hook speaks for", () => {
     ];
     const forNull = renderHook(() => useEpicUpdateArtifactStatus(null));
     expect(forNull.result.current.isPending).toBe(false);
+  });
+});
+
+// The sidebar's bulk delete reports artifact refusals in one batch notice,
+// and its delete hook raises no toast of its own there - so the refusal's
+// code is the only way its guidance reaches the person. This runs the real
+// command boundary (a rejected resolution from the write queue), the
+// sidebar's normalization step and the real batch reporter.
+describe("a refused artifact delete in a batch keeps its guidance", () => {
+  const artifactCopy = {
+    single: "Couldn't delete artifact.",
+    partial: (applied: number, failed: number) =>
+      `Deleted ${String(applied)} of ${String(applied + failed)} selected artifacts.`,
+    none: (attempted: number) =>
+      `Couldn't delete any of the ${String(attempted)} selected artifacts.`,
+    unconfirmed: (attempted: number) =>
+      `Couldn't confirm all ${String(attempted)} selected artifacts were deleted.`,
+  };
+
+  function refuse(code: string, reason: string): void {
+    commandFixture.state.enqueueWriteCommand.mockReturnValue("command-1");
+    commandFixture.state.waitForWriteCommand.mockResolvedValue({
+      state: "rejected",
+      resolution: { kind: "rejected", code, reason, retryable: false },
+    });
+  }
+
+  async function refusedDelete(artifactId: string): Promise<HostRpcError> {
+    const { result } = renderHook(() => useEpicDeleteArtifactInBatch());
+    let caught: unknown = null;
+    await act(async () => {
+      await result.current
+        .mutateAsync({ epicId: "epic-1", artifactId })
+        .catch((error: unknown) => {
+          caught = error;
+        });
+    });
+    return toHostRpcError(caught, "epic.deleteArtifact");
+  }
+
+  function everyToastText(): string {
+    return JSON.stringify([
+      vi.mocked(toast.error).mock.calls,
+      vi.mocked(toast.message).mock.calls,
+      vi.mocked(toast.warning).mock.calls,
+    ]);
+  }
+
+  it("says the host is out of disk space for two refused artifacts", async () => {
+    refuse("E_HOST_STORAGE_FULL", "host storage is full");
+    const first = await refusedDelete("artifact-1");
+    const second = await refusedDelete("artifact-2");
+    // The in-batch hook raised nothing of its own.
+    expect(toast.error).not.toHaveBeenCalled();
+
+    toastFromOwnerHostBatchWriteFailures(
+      [first, second].map((error) => ({
+        kind: "artifact" as const,
+        hostId: "session-host",
+        selectedRows: 1,
+        error,
+      })),
+      artifactCopy,
+    );
+
+    expect(first.code).toBe("E_HOST_STORAGE_FULL");
+    expect(everyToastText()).toContain(
+      "The host machine is out of disk space. Free some space on it, then try again.",
+    );
+  });
+
+  it("says why for a lone refused artifact, too", async () => {
+    refuse("E_HOST_STORAGE_FULL", "host storage is full");
+    const only = await refusedDelete("artifact-1");
+
+    toastFromOwnerHostBatchWriteFailures(
+      [
+        {
+          kind: "artifact",
+          hostId: "session-host",
+          selectedRows: 1,
+          error: only,
+        },
+      ],
+      artifactCopy,
+    );
+
+    expect(everyToastText()).toContain("out of disk space");
+  });
+
+  it("keeps an unknown refusal code on the generic copy, never the host's own text", async () => {
+    refuse("E_SOMETHING_NEW", "raw host text for an agent");
+    const first = await refusedDelete("artifact-1");
+    const second = await refusedDelete("artifact-2");
+
+    toastFromOwnerHostBatchWriteFailures(
+      [first, second].map((error) => ({
+        kind: "artifact" as const,
+        hostId: "session-host",
+        selectedRows: 1,
+        error,
+      })),
+      artifactCopy,
+    );
+
+    expect(everyToastText()).not.toContain("raw host text for an agent");
   });
 });

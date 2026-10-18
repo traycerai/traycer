@@ -646,6 +646,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
       getActiveTurnForSteer,
       hasPendingApprovals,
       sendDisabled: sendBlocked,
+      sendDisabledHint: sendBlockedHint,
       workspaceBlocked,
       imagesUnsupported,
       attachmentPreparationPending: pastePending,

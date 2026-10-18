@@ -1843,16 +1843,11 @@ describe("attempt lifecycle is encodable end to end", () => {
 });
 
 describe("the v7.0 capability freeze around the model-provider surface", () => {
-  // Hand-frozen copies that still deep-equal their live counterparts. Green
-  // today; red the day a live subtree grows past the frozen line - and the
-  // answer to red is main's freeze rule: keep the copy frozen and extend the
-  // v8->v7 projection/bridge to say what a v7.0 peer sees instead.
+  // Hand-frozen copies that still deep-equal their live counterparts. MCP
+  // diverged when applyRemedy opened on the new carrier and is checked below.
+  // For the others, red means a live subtree grew past the frozen line: keep
+  // the copy frozen and extend the v8->v7 projection/bridge.
   const PAIRS = [
-    [
-      "mcp capabilities",
-      providerMcpCapabilitiesSchema,
-      providerMcpCapabilitiesSchemaV70,
-    ],
     [
       "plugins capabilities",
       providerPluginsCapabilitiesSchema,
@@ -1873,6 +1868,19 @@ describe("the v7.0 capability freeze around the model-provider surface", () => {
       );
     },
   );
+
+  it("frozen MCP capabilities match the live descriptor except applyRemedy", () => {
+    const liveBeforeRemedies = providerMcpCapabilitiesSchema.extend({
+      actionScopes: providerMcpCapabilitiesSchema.shape.actionScopes.omit({
+        applyRemedy: true,
+      }),
+    });
+    expect(
+      z.toJSONSchema(providerMcpCapabilitiesSchemaV70, {
+        unrepresentable: "any",
+      }),
+    ).toEqual(z.toJSONSchema(liveBeforeRemedies, { unrepresentable: "any" }));
+  });
 
   it("frozen skills actionScopes = live keys minus inspect/edit/update, exactly", () => {
     const liveKeys = Object.keys(

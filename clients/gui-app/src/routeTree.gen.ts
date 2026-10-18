@@ -16,6 +16,7 @@ import { Route as OnboardingRouteImport } from "./routes/onboarding";
 import { Route as SampleWorkspaceRouteImport } from "./routes/sample-workspace";
 import { Route as SettingsRouteImport } from "./routes/settings";
 import { Route as WhenYouQuitRouteImport } from "./routes/when-you-quit";
+import { Route as BotBotIdRouteImport } from "./routes/bot.$botId";
 import { Route as DraftDraftIdRouteImport } from "./routes/draft.$draftId";
 import { Route as DraftNewRouteImport } from "./routes/draft.new";
 import { Route as EpicsIndexRouteImport } from "./routes/epics/index";
@@ -84,6 +85,11 @@ const SettingsRoute = SettingsRouteImport.update({
 const WhenYouQuitRoute = WhenYouQuitRouteImport.update({
   id: "/when-you-quit",
   path: "/when-you-quit",
+  getParentRoute: () => rootRouteImport,
+} as any);
+const BotBotIdRoute = BotBotIdRouteImport.update({
+  id: "/bot/$botId",
+  path: "/bot/$botId",
   getParentRoute: () => rootRouteImport,
 } as any);
 const DraftDraftIdRoute = DraftDraftIdRouteImport.update({
@@ -268,6 +274,7 @@ export interface FileRoutesByFullPath {
   "/sample-workspace": typeof SampleWorkspaceRoute;
   "/settings": typeof SettingsRouteWithChildren;
   "/when-you-quit": typeof WhenYouQuitRoute;
+  "/bot/$botId": typeof BotBotIdRoute;
   "/draft/$draftId": typeof DraftDraftIdRoute;
   "/draft/new": typeof DraftNewRoute;
   "/settings/agent-definitions": typeof SettingsAgentDefinitionsRoute;
@@ -309,6 +316,7 @@ export interface FileRoutesByTo {
   "/onboarding": typeof OnboardingRoute;
   "/sample-workspace": typeof SampleWorkspaceRoute;
   "/when-you-quit": typeof WhenYouQuitRoute;
+  "/bot/$botId": typeof BotBotIdRoute;
   "/draft/$draftId": typeof DraftDraftIdRoute;
   "/draft/new": typeof DraftNewRoute;
   "/settings/agent-definitions": typeof SettingsAgentDefinitionsRoute;
@@ -353,6 +361,7 @@ export interface FileRoutesById {
   "/sample-workspace": typeof SampleWorkspaceRoute;
   "/settings": typeof SettingsRouteWithChildren;
   "/when-you-quit": typeof WhenYouQuitRoute;
+  "/bot/$botId": typeof BotBotIdRoute;
   "/draft/$draftId": typeof DraftDraftIdRoute;
   "/draft/new": typeof DraftNewRoute;
   "/settings/agent-definitions": typeof SettingsAgentDefinitionsRoute;
@@ -398,6 +407,7 @@ export interface FileRouteTypes {
     | "/sample-workspace"
     | "/settings"
     | "/when-you-quit"
+    | "/bot/$botId"
     | "/draft/$draftId"
     | "/draft/new"
     | "/settings/agent-definitions"
@@ -439,6 +449,7 @@ export interface FileRouteTypes {
     | "/onboarding"
     | "/sample-workspace"
     | "/when-you-quit"
+    | "/bot/$botId"
     | "/draft/$draftId"
     | "/draft/new"
     | "/settings/agent-definitions"
@@ -482,6 +493,7 @@ export interface FileRouteTypes {
     | "/sample-workspace"
     | "/settings"
     | "/when-you-quit"
+    | "/bot/$botId"
     | "/draft/$draftId"
     | "/draft/new"
     | "/settings/agent-definitions"
@@ -526,6 +538,7 @@ export interface RootRouteChildren {
   SampleWorkspaceRoute: typeof SampleWorkspaceRoute;
   SettingsRoute: typeof SettingsRouteWithChildren;
   WhenYouQuitRoute: typeof WhenYouQuitRoute;
+  BotBotIdRoute: typeof BotBotIdRoute;
   DraftDraftIdRoute: typeof DraftDraftIdRoute;
   DraftNewRoute: typeof DraftNewRoute;
 }
@@ -579,6 +592,13 @@ declare module "@tanstack/react-router" {
       path: "/when-you-quit";
       fullPath: "/when-you-quit";
       preLoaderRoute: typeof WhenYouQuitRouteImport;
+      parentRoute: typeof rootRouteImport;
+    };
+    "/bot/$botId": {
+      id: "/bot/$botId";
+      path: "/bot/$botId";
+      fullPath: "/bot/$botId";
+      preLoaderRoute: typeof BotBotIdRouteImport;
       parentRoute: typeof rootRouteImport;
     };
     "/draft/$draftId": {
@@ -912,6 +932,7 @@ const rootRouteChildren: RootRouteChildren = {
   SampleWorkspaceRoute: SampleWorkspaceRoute,
   SettingsRoute: SettingsRouteWithChildren,
   WhenYouQuitRoute: WhenYouQuitRoute,
+  BotBotIdRoute: BotBotIdRoute,
   DraftDraftIdRoute: DraftDraftIdRoute,
   DraftNewRoute: DraftNewRoute,
 };

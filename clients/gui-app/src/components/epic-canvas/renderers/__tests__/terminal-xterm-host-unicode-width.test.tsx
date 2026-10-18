@@ -105,7 +105,7 @@ function lineText(term: Terminal, row: number): string {
 // (claude-code, codex) do their cursor math with string-width semantics, where
 // U+2705 / U+274C are width 2. xterm defaults to the Unicode 6 tables, where
 // they are width 1. These tests pin the renderer to the same width model the
-// TUIs assume - see the Unicode11Addon comment in terminal-tile-xterm.tsx.
+// TUIs assume - see the UnicodeGraphemesAddon comment in terminal-tile-xterm.tsx.
 describe("<TerminalXtermHost /> emoji cell width", () => {
   afterEach(() => {
     cleanup();
@@ -116,6 +116,21 @@ describe("<TerminalXtermHost /> emoji cell width", () => {
     const term = await mountedTerminal();
 
     await write(term, "✅X");
+
+    expect(term.buffer.active.cursorX).toBe(3);
+  });
+
+  it.each([
+    // Unicode 11 measured these per code point: one column for the warning
+    // sign (it ignores U+FE0F) and eight for the family (four people, each
+    // two columns, joined by zero-width joiners).
+    ["an emoji-style warning sign", "\u26a0\ufe0f"],
+    ["a ZWJ family", "\u{1f468}\u200d\u{1f469}\u200d\u{1f467}\u200d\u{1f466}"],
+    ["a flag", "\u{1f1ee}\u{1f1f3}"],
+  ])("measures %s as one two-column cluster", async (_label, cluster) => {
+    const term = await mountedTerminal();
+
+    await write(term, `${cluster}X`);
 
     expect(term.buffer.active.cursorX).toBe(3);
   });

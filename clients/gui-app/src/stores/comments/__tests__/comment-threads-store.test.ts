@@ -73,6 +73,7 @@ describe("useCommentThreadsStore", () => {
 
   it("setDraft + clearDraft round-trip per epic", () => {
     const draft = {
+      draftId: "draft-a",
       tileId: "tile-a",
       artifactId: "spec-a",
       from: 4,

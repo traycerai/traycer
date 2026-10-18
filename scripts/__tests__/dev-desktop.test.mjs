@@ -166,6 +166,21 @@ describe("dev-desktop host archive cache", () => {
   });
 });
 
+describe("dev-desktop host registry client", () => {
+  // traycerai/traycer#1571: the call omitted `onProgress`, so the registry
+  // client's first manifest heartbeat called `undefined` and the archive cache
+  // was never used ("onProgress is not a function").
+  it("passes the registry client an explicit null onProgress, never undefined", async () => {
+    const createDefaultRegistryClient = vi.fn(async () => ({}));
+    await devDesktop.createHostRegistryClient(
+      { createDefaultRegistryClient },
+      "dev",
+    );
+    expect(createDefaultRegistryClient).toHaveBeenCalledTimes(1);
+    expect(createDefaultRegistryClient.mock.calls[0]).toEqual(["dev", null]);
+  });
+});
+
 describe("dev-desktop same-slot live guard", () => {
   it("isProcessAlive is true for the current process and false for a bogus pid", () => {
     expect(devDesktop.isProcessAlive(process.pid)).toBe(true);

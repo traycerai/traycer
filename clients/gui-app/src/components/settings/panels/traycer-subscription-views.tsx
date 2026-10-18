@@ -49,7 +49,7 @@ import {
   formatCredits,
   formatCreditsPlain,
   formatRechargeRate,
-  isCreditBasedPricing,
+  usesCreditView,
   type CreditBreakdown,
   type TraycerSubscription,
 } from "@/lib/auth/traycer-subscription-content";
@@ -99,9 +99,11 @@ export function TraycerAccountSelect({
 }
 
 /**
- * The shared subscription body: either the credit breakdown (V3 credit plans)
- * or the rate-limit view (legacy / v2 plans) - now the single source both
- * surfaces render through.
+ * The shared subscription body: either the credit breakdown (credit-based
+ * statuses - FREE and the V3 plans - and any plan the server reports plan
+ * credits for) or the rate-limit view
+ * (legacy / v2 plans without plan credits) - see `usesCreditView`. The single
+ * source both surfaces render through.
  */
 export function TraycerSubscriptionView({
   subscription,
@@ -110,8 +112,7 @@ export function TraycerSubscriptionView({
   readonly subscription: TraycerSubscription;
   readonly accountContext: AccountContext;
 }): ReactNode {
-  const status = subscription.subscriptionStatus;
-  return isCreditBasedPricing(status) ? (
+  return usesCreditView(subscription) ? (
     <CreditBreakdownView breakdown={creditBreakdown(subscription)} />
   ) : (
     <RateLimitView

@@ -116,11 +116,11 @@ import {
 } from "@/stores/auth/account-context-store";
 import {
   accountContextValue,
-  isCreditBasedPricing,
   isTraycerEligible,
   resolveTraycerSubscriptionState,
   selectSubscription,
   subscriptionPlanLabel,
+  usesCreditView,
   type TraycerSubscription,
   type TraycerSubscriptionState,
 } from "@/lib/auth/traycer-subscription-content";
@@ -364,8 +364,7 @@ function useTraycerSubscription() {
   const rateLimitAccountContexts = accountSubscriptions
     .filter(
       (account) =>
-        account.subscription !== null &&
-        !isCreditBasedPricing(account.subscription.subscriptionStatus),
+        account.subscription !== null && !usesCreditView(account.subscription),
     )
     .map((account) => account.accountContext);
   return {
@@ -1052,6 +1051,7 @@ function RateLimitHostPickerRow({
         onRetryLists={scope.retryLists}
         updateViewForHost={null}
         offersAutomations={false}
+        environmentLabelForHost={null}
       />
     </div>
   );

@@ -13,6 +13,7 @@ import {
   supportedImageMediaTypeSchema,
 } from "@traycer/protocol/persistence/epic/images";
 import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
+import { jsonObjectSchema } from "@traycer/protocol/persistence/chat-sync/json";
 
 /**
  * Discriminated union of content blocks rendered inside an assistant
@@ -681,6 +682,142 @@ export type ToolCallManagedCommand = z.infer<
   typeof toolCallManagedCommandSchema
 >;
 
+/** Lowercase hex sha256 - the only form a content address is written in. */
+const stampSha256Schema = lazySchema(() => z.string().regex(/^[0-9a-f]{64}$/));
+
+/**
+ * The page an agent showed with `traycer_show_page`, stamped on that call's
+ * `tool_call` block (`chat.subscribe@1.23`). The bytes are an epic file
+ * (`files/pages/<slug>-<id>.html`, written once); the stamp names them by path
+ * and sha so a row renders exactly the page that was shown, whatever the path
+ * holds later.
+ *
+ * - `height` is the agent's requested height (80-2000 px), used until the frame
+ *   reports its own size.
+ * - `heights` are publish-time measurements, one `{ width, height }` per
+ *   measured width. Best effort: `[]` when the host could not measure.
+ * - `derivedFrom` is the `"path@sha"` of the page this one replaced, or `null`.
+ * - `originChatId` is the chat the tool ran in. A fork copies the block and
+ *   KEEPS the source's id, which is what lets the host tell a copy from the
+ *   original when it decides the page's network policy.
+ *
+ * Every string a renderer shows is agent-authored, so none is trusted.
+ */
+export const toolCallPageStampSchema = lazySchema(() =>
+  z.object({
+    path: z.string().min(1),
+    sha256: stampSha256Schema,
+    title: z.string(),
+    height: z.number().int().min(80).max(2000),
+    heights: z.array(
+      z.object({
+        width: z.number().int().positive(),
+        height: z.number().int().nonnegative(),
+      }),
+    ),
+    derivedFrom: z.string().nullable(),
+    originChatId: z.string().min(1),
+  }),
+);
+export type ToolCallPageStamp = z.infer<typeof toolCallPageStampSchema>;
+
+/**
+ * One origin an MCP App's CSP may name. Anything but an https or wss origin
+ * (optionally `*.`-wildcarded, optionally with a port) is rejected, so no `;`,
+ * quote, space or CSP keyword can reach the policy the client builds from it.
+ */
+export const MCP_UI_CSP_DOMAIN_PATTERN =
+  /^(https|wss):\/\/(\*\.)?[a-z0-9.-]+(:\d{1,5})?$/;
+const mcpUiCspDomainListSchema = lazySchema(() =>
+  z.array(z.string().regex(MCP_UI_CSP_DOMAIN_PATTERN)).max(32),
+);
+
+/**
+ * An MCP App's `_meta.ui.csp`, normalized by the host at capture: every list
+ * present, every entry a checked origin. The client builds a deny-by-default
+ * policy from it and admits only what is listed.
+ */
+export const mcpUiCspNormalizedSchema = lazySchema(() =>
+  z.object({
+    connectDomains: mcpUiCspDomainListSchema,
+    resourceDomains: mcpUiCspDomainListSchema,
+    frameDomains: mcpUiCspDomainListSchema,
+    baseUriDomains: mcpUiCspDomainListSchema,
+  }),
+);
+export type McpUiCspNormalized = z.infer<typeof mcpUiCspNormalizedSchema>;
+
+/**
+ * The device permissions an MCP App may ask for. The frame's `allow` attribute
+ * is built from this enum and nothing else.
+ */
+export const mcpUiPermissionSchema = lazySchema(() =>
+  z.enum(["camera", "microphone", "geolocation", "clipboard-write"]),
+);
+export type McpUiPermission = z.infer<typeof mcpUiPermissionSchema>;
+
+/**
+ * An MCP `CallToolResult`, kept as the server sent it: `content` blocks and
+ * `structuredContent` are opaque JSON (predicate-checked, never rebuilt, so
+ * nothing in them is dropped), and keys MCP adds later ride through.
+ */
+export const mcpCallToolResultSchema = lazySchema(() =>
+  z.looseObject({
+    content: z.array(jsonObjectSchema),
+    structuredContent: jsonObjectSchema.optional(),
+    isError: z.boolean().optional(),
+  }),
+);
+export type McpCallToolResult = z.infer<typeof mcpCallToolResultSchema>;
+
+/**
+ * The MCP App a tool call rendered, stamped on its `tool_call` block
+ * (`chat.subscribe@1.23`). The host captures the `ui://` resource into an epic
+ * file (`files/mcp-apps/<sha>.html`) and records everything the app needs to
+ * render without a live server: its input and result, its CSP and permissions.
+ *
+ * - `toolInput` and `toolResult` together stay under 256 KiB; a bigger call is
+ *   left a plain row and never stamped. The host enforces that, not this
+ *   schema.
+ * - `source` pins the app to the harness session and server it came from. An
+ *   app request is refused when the chat's current session no longer matches.
+ *   `serverKey` is the sha256 of the normalized server command or URL, never
+ *   its environment. `harnessId` is an open string: this block is published,
+ *   and a harness a reader has not heard of must not fail the record.
+ * - `modelContext` is the latest context the app gave the model (16 KiB of
+ *   UTF-8 at most, host-enforced), or `null`. It lives on the block so a
+ *   rollback removes it and a fork inherits it.
+ */
+export const toolCallMcpAppStampSchema = lazySchema(() =>
+  z.object({
+    server: z.string().min(1),
+    tool: z.string().min(1),
+    resourceUri: z.string().startsWith("ui://"),
+    snapshot: z.object({
+      path: z.string().min(1),
+      sha256: stampSha256Schema,
+    }),
+    csp: mcpUiCspNormalizedSchema.nullable(),
+    permissions: z.array(mcpUiPermissionSchema),
+    prefersBorder: z.boolean(),
+    toolInput: jsonObjectSchema,
+    toolResult: mcpCallToolResultSchema,
+    source: z.object({
+      originChatId: z.string().min(1),
+      harnessId: z.string().min(1),
+      nativeSessionId: z.string().min(1),
+      serverKey: stampSha256Schema,
+    }),
+    modelContext: z
+      .object({
+        text: z.string(),
+        updatedAt: z.number(),
+      })
+      .nullable(),
+  }),
+);
+export type ToolCallMcpAppStamp = z.infer<typeof toolCallMcpAppStampSchema>;
+
 export const toolCallBlockSchema = lazySchema(() =>
   z.object({
     ...baseBlockFields,
@@ -755,9 +892,44 @@ export const toolCallBlockSchema = lazySchema(() =>
     // persisted before this field existed parse cleanly. See
     // `imageGenerationResultSchema`.
     imageResults: z.array(imageGenerationResultSchema).default([]),
+    // The page this call showed, or the MCP App it rendered
+    // (`chat.subscribe@1.23`) - see `toolCallPageStampSchema` and
+    // `toolCallMcpAppStampSchema`. Null for every other call and for blocks
+    // persisted before these fields. Deliberately NOT on the hand-frozen
+    // `toolCallBlockSchemaPrePage` below, so `1.21` and older never see them.
+    page: toolCallPageStampSchema.nullable().default(null),
+    mcpApp: toolCallMcpAppStampSchema.nullable().default(null),
   }),
 );
 export type ToolCallBlock = z.infer<typeof toolCallBlockSchema>;
+
+// Wire-freeze copy of `toolCallBlockSchema` as every `chat.subscribe` line up to
+// `@1.21` ships it: the live block without the `page` / `mcpApp` stamps `1.23`
+// added. Bound by every historical content-block union that used to reference
+// the live block, so those lines keep their vocabulary and lose only the two
+// keys. Hand-frozen, NOT `.omit()`-derived, so a later key cannot reach them.
+export const toolCallBlockSchemaPrePage = lazySchema(() =>
+  z.object({
+    ...baseBlockFields,
+    status: actionBlockStatus,
+    type: z.literal("tool_call"),
+    toolName: z.string(),
+    inputSummary: z.string().nullable().default(null),
+    inputDetail: toolInputDetailSchema.nullable().default(null),
+    taskTodoItems: z.array(parsedTaskTodoSchema).nullable().default(null),
+    error: z.string().nullable(),
+    agentMessageSend: agentMessageSendSchema.nullable().default(null),
+    agentMessageReceipt: agentMessageReceiptSchema.nullable().default(null),
+    managedCommand: toolCallManagedCommandSchema.nullable().default(null),
+    progress: z.string().nullable().default(null),
+    backgroundOutput: backgroundTaskOutputSchema.nullable().default(null),
+    startedAt: z.number().nullable().default(null),
+    endedAt: z.number().nullable().default(null),
+    backgroundTask: z.boolean().nullable().default(false),
+    stopped: z.boolean().default(false),
+    imageResults: z.array(imageGenerationResultSchema).default([]),
+  }),
+);
 
 // Wire-freeze copy of `toolCallBlockSchema` as `chat.subscribe@1.6` shipped it
 // in `host-v1.2.0`: image results present, `agentMessageReceipt` absent. Bound
@@ -2294,7 +2466,7 @@ export const contentBlockSchemaPreReasonix = lazySchema(() =>
   z.discriminatedUnion("type", [
     textBlockSchemaPreReasonix,
     reasoningBlockSchema,
-    toolCallBlockSchema,
+    toolCallBlockSchemaPrePage,
     fileChangeBlockSchema,
     commandBlockSchema,
     subAgentBlockSchema,
@@ -2425,7 +2597,7 @@ export const contentBlockSchemaPreFallback = lazySchema(() =>
   z.discriminatedUnion("type", [
     textBlockSchemaPreFallback,
     reasoningBlockSchema,
-    toolCallBlockSchema,
+    toolCallBlockSchemaPrePage,
     fileChangeBlockSchema,
     commandBlockSchema,
     subAgentBlockSchema,
@@ -2453,7 +2625,7 @@ export const contentBlockSchemaPreShellHost = lazySchema(() =>
   z.discriminatedUnion("type", [
     textBlockSchemaPreBrowser,
     reasoningBlockSchema,
-    toolCallBlockSchema,
+    toolCallBlockSchemaPrePage,
     fileChangeBlockSchema,
     commandBlockSchema,
     subAgentBlockSchema,
@@ -2477,7 +2649,7 @@ export const contentBlockSchemaPreBrowser = lazySchema(() =>
   z.discriminatedUnion("type", [
     textBlockSchemaPreBrowser,
     reasoningBlockSchema,
-    toolCallBlockSchema,
+    toolCallBlockSchemaPrePage,
     fileChangeBlockSchema,
     commandBlockSchema,
     subAgentBlockSchema,
@@ -2504,7 +2676,34 @@ export const contentBlockSchemaPreReceipt = lazySchema(() =>
   z.discriminatedUnion("type", [
     textBlockSchemaPreReceipt,
     reasoningBlockSchema,
-    toolCallBlockSchema,
+    toolCallBlockSchemaPrePage,
+    fileChangeBlockSchema,
+    commandBlockSchema,
+    subAgentBlockSchema,
+    approvalBlockSchema,
+    todoBlockSchema,
+    planBlockSchema,
+    errorBlockSchema,
+    compactionBlockSchema,
+    autonomousResumeBlockSchema,
+    steerBlockSchema,
+    interviewBlockSchema,
+    artifactOperationBlockSchema,
+  ]),
+);
+
+// ── Wire-freeze variant (pre-page, `chat.subscribe@1.18`-`@1.21`) ──────────
+//
+// The live block vocabulary as those lines ship it, holding back exactly what
+// `1.23` added: the `page` / `mcpApp` stamps on a tool call
+// (`toolCallBlockSchemaPrePage`). Every older union above takes the same leaf
+// in place of the live block. Every other member binds its live schema: freeze
+// the member here before adding a field to it.
+export const contentBlockSchemaPrePage = lazySchema(() =>
+  z.discriminatedUnion("type", [
+    textBlockSchema,
+    reasoningBlockSchema,
+    toolCallBlockSchemaPrePage,
     fileChangeBlockSchema,
     commandBlockSchema,
     subAgentBlockSchema,
@@ -2548,7 +2747,7 @@ export const contentBlockSchemaV18 = lazySchema(() =>
   z.discriminatedUnion("type", [
     textBlockSchemaPreFallback,
     reasoningBlockSchema,
-    toolCallBlockSchema,
+    toolCallBlockSchemaPrePage,
     fileChangeBlockSchema,
     commandBlockSchema,
     subAgentBlockSchema,

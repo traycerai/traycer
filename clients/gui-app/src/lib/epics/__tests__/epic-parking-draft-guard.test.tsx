@@ -231,7 +231,8 @@ function Harness(props: {
               placeholder="Reply A"
               focusOnMount={false}
               submitLabel="Reply"
-              onSubmit={() => undefined}
+              isPending={false}
+              onSubmit={() => Promise.resolve()}
               onCancel={null}
               className={undefined}
               ref={refA}
@@ -245,7 +246,8 @@ function Harness(props: {
               placeholder="Reply B"
               focusOnMount={false}
               submitLabel="Reply"
-              onSubmit={() => undefined}
+              isPending={false}
+              onSubmit={() => Promise.resolve()}
               onCancel={null}
               className={undefined}
               ref={refB}
@@ -619,7 +621,8 @@ function EditHarness(props: {
             placeholder="Edit reply"
             focusOnMount={false}
             submitLabel="Save"
-            onSubmit={() => undefined}
+            isPending={false}
+            onSubmit={() => Promise.resolve()}
             onCancel={null}
             className={undefined}
             ref={refA}

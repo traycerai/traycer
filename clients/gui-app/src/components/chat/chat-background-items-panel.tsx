@@ -14,7 +14,11 @@ import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-di
 import { LivePulse } from "@/components/ui/live-pulse";
 import { LiveElapsed } from "@/components/chat/segments/segment-elapsed";
 import { fallbackProviderLabelFor } from "@/components/chat/fallback/fallback-identity";
-import { formatWaitTime, useSampledNow } from "@/lib/relative-time";
+import {
+  formatResetFullDateTime,
+  formatWaitTime,
+  useSampledNow,
+} from "@/lib/relative-time";
 import { useChatDockSectionAttached } from "@/components/chat/chat-dock-compact-context";
 import {
   CHAT_DOCK_PANEL_LIST,
@@ -618,6 +622,7 @@ function BackgroundTreeRow(props: {
             <p className="mt-1 break-words text-ui-xs text-muted-foreground">
               Schedule · <code>{item.schedule}</code>
             </p>
+            <CronNextRun scheduledFor={item.scheduledFor} />
             <p className="mt-1 whitespace-pre-wrap break-words text-ui-xs text-foreground/85">
               {item.prompt}
             </p>
@@ -721,6 +726,23 @@ function BackgroundWaitTitle({
 }) {
   const now = useSampledNow();
   return <>{backgroundItemDisplayTitle(item, now)}</>;
+}
+
+// Keep the minute-clock subscription in this leaf so a tick does not repaint
+// the cron row's schedule, prompt or session-lifetime explanation.
+function CronNextRun({
+  scheduledFor,
+}: {
+  readonly scheduledFor: number | null;
+}) {
+  const now = useSampledNow();
+  if (scheduledFor === null || scheduledFor <= now) return null;
+  // A weekday alone cannot identify a monthly or yearly job's next run.
+  const time =
+    scheduledFor - now > 7 * 24 * 60 * 60 * 1_000
+      ? formatResetFullDateTime(scheduledFor)
+      : formatWaitTime(scheduledFor, now);
+  return <p className="mt-1 text-ui-xs text-foreground/85">Next run {time}</p>;
 }
 
 export function BackgroundItemsPanel(props: {

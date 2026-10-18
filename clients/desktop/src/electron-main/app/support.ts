@@ -85,10 +85,11 @@ const SENTRY_FLUSH_TIMEOUT_MS = 10_000;
 // outcome is chained off that same settlement through its own, separately
 // registered `.then()`s - close, but not guaranteed to fire before `flush`
 // resolves. This only bounds the (practically unreachable, since nothing in
-// this app's Sentry init samples or filters feedback events) case where the
-// hook never fires at all despite `flush` saying the queue is empty; in the
-// normal case the hook resolves within a handful of microtasks, nowhere near
-// this window.
+// this app's Sentry init samples or filters feedback events - the size guard
+// in `support-report-size-guard.ts` trims a report, never drops it) case
+// where the hook never fires at all despite `flush` saying the queue is
+// empty; in the normal case the hook resolves within a handful of
+// microtasks, nowhere near this window.
 const SEND_OUTCOME_GRACE_MS = 500;
 // A draft's frozen evidence is dropped explicitly on cancel/replacement; this
 // is only a backstop against a lost discard message (e.g. a window force-
@@ -471,10 +472,10 @@ export class DesktopSupportService {
           ...(privateDiagnostics?.cause == null
             ? {}
             : { errorCause: { ...privateDiagnostics.cause } }),
-          // D10: the registry's `hostId` is the tab-bound host, which can
-          // differ from the "local host" this file attaches logs and
-          // version from below - named `registry`, never `host`, so the
-          // two can't be read as one.
+          // D10: the registry's `hostId` is the app-wide effective host and
+          // `tabHostId` the tab's binding; either can differ from the
+          // "local host" this file attaches logs and version from below -
+          // named `registry`, never `host`, so the two can't be read as one.
           ...(privateDiagnostics === undefined
             ? {}
             : { registry: { ...privateDiagnostics.registry } }),

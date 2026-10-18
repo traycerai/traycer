@@ -31,6 +31,7 @@ import {
 } from "@/components/minimap/minimap-track-geometry";
 import { useCoarsePointer } from "@/hooks/ui/use-coarse-pointer";
 import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
+import { listNavigationKey } from "@/lib/keybindings/list-navigation-key";
 import { mergeRefs } from "@/lib/merge-refs";
 import { cn } from "@/lib/utils";
 import type { TranscriptListRow } from "@/stores/chats/transcript-list-rows";
@@ -262,10 +263,11 @@ export function ChatTurnMinimap(props: ChatTurnMinimapProps) {
 
   const handleHitStripKeyDown = useCallback(
     (event: ReactKeyboardEvent<HTMLButtonElement>): void => {
-      if (event.key === "ArrowDown") {
+      const navigationKey = listNavigationKey(event);
+      if (navigationKey === "ArrowDown") {
         event.preventDefault();
         moveCursor((open ? resolvedCursorIndex : resolvedCurrentIndex) + 1);
-      } else if (event.key === "ArrowUp") {
+      } else if (navigationKey === "ArrowUp") {
         event.preventDefault();
         moveCursor((open ? resolvedCursorIndex : resolvedCurrentIndex) - 1);
       } else if (event.key === "Home") {

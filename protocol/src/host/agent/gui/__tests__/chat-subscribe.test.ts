@@ -29,6 +29,11 @@ import {
   chatSubscribeV120,
   chatSubscribeV121,
   chatSubscribeV122,
+  chatSubscribeV123,
+  chatSubscribeV124,
+  chatSubscribeV125,
+  chatSubscribeV126,
+  chatSubscribeV127,
   createImageResolutionUpdatedFrame,
   chatApprovalStateSchema,
   chatApprovalStateSchemaPreAuto,
@@ -1910,6 +1915,8 @@ describe("chat.subscribe@1.6 (image generation)", () => {
     backgroundTask: false,
     stopped: false,
     imageResults: [imageResultA, imageResultB],
+    page: null,
+    mcpApp: null,
   };
 
   const resolutionStates = imageResolutionStateSchema.options;
@@ -2287,7 +2294,7 @@ describe("chat.subscribe@1.6 (image generation)", () => {
 });
 
 describe("chat.subscribe registry membership", () => {
-  it("registers chat.subscribe major 1 latestMinor 22 as chatSubscribeV122", () => {
+  it("registers chat.subscribe major 1 latestMinor 27 as chatSubscribeV127", () => {
     const entry = hostStreamRpcRegistry["chat.subscribe"];
     expect(entry).toBeDefined();
     // Registering `8` was the switch to the windowed line: a stream minor
@@ -2342,7 +2349,19 @@ describe("chat.subscribe registry membership", () => {
     // `22` is the open-harness-id line: no new key either, only the heard-from
     // harness leaves reopened to a string; `21` stays the frozen union the
     // head has since moved off.
-    expect(entry[1].latestMinor).toBe(22);
+    // `23` adds the agent-page / MCP App line: `page` and `mcpApp` on a tool
+    // call, projected away for every `<=1.22` peer.
+    // `24` adds the CLI-reported next-run time to cron items, projected away
+    // for every peer that can see cron but predates this key.
+    // `25` is the bot-conversation line: `conversationRequest` on a user row
+    // (tolerated: an optional key a `<=1.24` peer drops) and the
+    // `conversation-message` queue item (projected away below it, as the
+    // port-forward item is below `14`).
+    // `26` is the task check-in line: the `task-checkin` queue item on a
+    // bot's trunk (projected away below it, as the conversation-message item
+    // is below `25`). `27` is the task-overdue line: the `task-overdue` queue
+    // item on a bot's trunk (projected away below it the same way).
+    expect(entry[1].latestMinor).toBe(27);
     expect(entry[1].versions[6].contract).toBe(chatSubscribeV16);
     expect(entry[1].versions[7].contract).toBe(chatSubscribeV17);
     expect(entry[1].versions[8].contract).toBe(chatSubscribeV18);
@@ -2360,6 +2379,11 @@ describe("chat.subscribe registry membership", () => {
     expect(entry[1].versions[20].contract).toBe(chatSubscribeV120);
     expect(entry[1].versions[21].contract).toBe(chatSubscribeV121);
     expect(entry[1].versions[22].contract).toBe(chatSubscribeV122);
+    expect(entry[1].versions[23].contract).toBe(chatSubscribeV123);
+    expect(entry[1].versions[24].contract).toBe(chatSubscribeV124);
+    expect(entry[1].versions[25].contract).toBe(chatSubscribeV125);
+    expect(entry[1].versions[26].contract).toBe(chatSubscribeV126);
+    expect(entry[1].versions[27].contract).toBe(chatSubscribeV127);
     expect(chatSubscribeV17.schemaVersion).toEqual({ major: 1, minor: 7 });
     expect(chatSubscribeV18.schemaVersion).toEqual({ major: 1, minor: 8 });
     expect(chatSubscribeV19.schemaVersion).toEqual({ major: 1, minor: 9 });
@@ -2414,6 +2438,26 @@ describe("chat.subscribe registry membership", () => {
     expect(chatSubscribeV122.schemaVersion).toEqual({
       major: 1,
       minor: 22,
+    });
+    expect(chatSubscribeV123.schemaVersion).toEqual({
+      major: 1,
+      minor: 23,
+    });
+    expect(chatSubscribeV124.schemaVersion).toEqual({
+      major: 1,
+      minor: 24,
+    });
+    expect(chatSubscribeV125.schemaVersion).toEqual({
+      major: 1,
+      minor: 25,
+    });
+    expect(chatSubscribeV126.schemaVersion).toEqual({
+      major: 1,
+      minor: 26,
+    });
+    expect(chatSubscribeV127.schemaVersion).toEqual({
+      major: 1,
+      minor: 27,
     });
   });
 

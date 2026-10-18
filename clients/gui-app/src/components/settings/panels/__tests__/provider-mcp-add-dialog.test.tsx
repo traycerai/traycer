@@ -41,6 +41,10 @@ vi.mock("@/hooks/providers/use-providers-mcp-mutate-mutation", () => ({
     reset: mcpMocks.reset,
     isPending: mcpMocks.mutateIsPending,
   }),
+  useProvidersMcpApplyRemedy: () => ({
+    mutateAsync: mcpMocks.mutateAsync,
+    isPending: false,
+  }),
 }));
 
 const BOTH_SCOPES = ["global", "project"] as const;

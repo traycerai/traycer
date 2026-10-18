@@ -188,6 +188,8 @@ function renderSend(error: string, variant: "card" | "row"): void {
           expectReply: false,
         }}
         managedCommand={null}
+        page={null}
+        mcpApp={null}
         agentMessageReceipt={null}
         isStreaming={false}
         endState={null}

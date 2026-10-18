@@ -17,6 +17,7 @@ import {
   AnalyticsEvent,
   analyticsBlockerFromError,
 } from "@/lib/analytics";
+import type { ComposerEditorIncarnation } from "@/lib/composer/composer-editor-incarnation";
 
 export type VoiceDictationState =
   | "idle"
@@ -57,6 +58,27 @@ export interface UseVoiceDictationArgs {
   // Called with each finalized transcript segment (the engine emits per-pause
   // finals, no interims).
   readonly onText: (text: string) => void;
+  /**
+   * Which draft `onText` would insert into right now: the editor incarnation
+   * and its draft generation. A final that arrives after `stop` belongs to
+   * the draft that was open when the mic stopped; if that draft has been
+   * sent, replaced, or its editor remounted since (a fresh editor starts at
+   * generation 0 again, so the generation alone cannot tell), the final is
+   * not inserted.
+   */
+  readonly draftIdentity: () => DictationDraftIdentity;
+}
+
+export interface DictationDraftIdentity {
+  readonly incarnation: ComposerEditorIncarnation | null;
+  readonly generation: number;
+}
+
+function sameDraft(
+  a: DictationDraftIdentity,
+  b: DictationDraftIdentity,
+): boolean {
+  return a.incarnation === b.incarnation && a.generation === b.generation;
 }
 
 export interface UseVoiceDictation {
@@ -89,10 +111,27 @@ export interface UseVoiceDictation {
 // separate worklet asset + CSP `script-src` widening and is adequate for STT.)
 const PROCESSOR_BUFFER_SIZE = 2048;
 // After `flush`, the host transcribes the buffered utterance and replies
-// `flushed`; we close then. This fallback only fires if that reply never
-// arrives (e.g., an unusually long decode) so the UI never hangs in
-// "transcribing".
+// `flushed`; we close then. This fallback only fires if that reply has not
+// arrived (a cold model load plus a long utterance on a slow machine) so the
+// UI never hangs in "transcribing". It returns the UI to idle but leaves the
+// session open: a transcript that lands after it is still inserted, where it
+// used to be discarded with the session.
 const FINALIZE_FALLBACK_MS = 15000;
+// How much longer a session left open by the fallback may wait for its final
+// before it is closed for good. The host always answers a flush (even a failed
+// decode sends `flushed`), so this only bounds a host that has stopped
+// answering altogether.
+const LATE_FINAL_CAP_MS = 60_000;
+
+function decodeDurationBucket(
+  flushRequestedAtMs: number | null,
+): "under_1s" | "1_to_5s" | "over_5s" {
+  const elapsed =
+    flushRequestedAtMs === null ? 0 : Date.now() - flushRequestedAtMs;
+  if (elapsed < 1_000) return "under_1s";
+  if (elapsed <= 5_000) return "1_to_5s";
+  return "over_5s";
+}
 
 /**
  * Splits a rejected `getUserMedia` into the denial the user can act on and
@@ -139,7 +178,7 @@ function dictationDurationBucket(
 export function useVoiceDictation(
   args: UseVoiceDictationArgs,
 ): UseVoiceDictation {
-  const { language, onText } = args;
+  const { language, onText, draftIdentity } = args;
   const wsStreamClient = useWsStreamClient();
   const runnerHost = useRunnerHost();
   const [state, setState] = useState<VoiceDictationState>("idle");
@@ -153,8 +192,8 @@ export function useVoiceDictation(
   const handlersRef = useRef(args);
   const stateRef = useRef(state);
   useEffect(() => {
-    handlersRef.current = { language, onText };
-  }, [language, onText]);
+    handlersRef.current = { language, onText, draftIdentity };
+  }, [language, onText, draftIdentity]);
   useEffect(() => {
     stateRef.current = state;
   }, [state]);
@@ -174,6 +213,17 @@ export function useVoiceDictation(
   const pendingChunksRef = useRef<Uint8Array[]>([]);
   // Browser `setTimeout` returns a numeric handle.
   const finalizeTimerRef = useRef<number | null>(null);
+  // Armed by the fallback above: closes a session it left open for a late
+  // final once LATE_FINAL_CAP_MS have passed without one.
+  const lateFinalCapTimerRef = useRef<number | null>(null);
+  // When `stop` asked the host to transcribe, for the decode-wait bucket.
+  const flushRequestedAtRef = useRef<number | null>(null);
+  // The draft the mic stopped over, for finals that arrive after `stop`.
+  const draftAtStopRef = useRef<DictationDraftIdentity | null>(null);
+  // True once this session inserted any transcript text - the funnel's
+  // "succeeded" fires on `flushed`, which the host sends even for an empty
+  // decode, so this is what separates text from no text.
+  const receivedTextRef = useRef(false);
   // True once we've asked to end the session (stop/cancel/fail). Lets the
   // connection-close handler tell an expected close from an unexpected drop.
   const closingRef = useRef(false);
@@ -222,17 +272,25 @@ export function useVoiceDictation(
     }
   }, []);
 
-  const teardownAll = useCallback(() => {
+  const clearFinalizeTimers = useCallback(() => {
     if (finalizeTimerRef.current !== null) {
       window.clearTimeout(finalizeTimerRef.current);
       finalizeTimerRef.current = null;
     }
+    if (lateFinalCapTimerRef.current !== null) {
+      window.clearTimeout(lateFinalCapTimerRef.current);
+      lateFinalCapTimerRef.current = null;
+    }
+  }, []);
+
+  const teardownAll = useCallback(() => {
+    clearFinalizeTimers();
     teardownAudio();
     speechClientRef.current?.close();
     speechClientRef.current = null;
     readyRef.current = false;
     pendingChunksRef.current = [];
-  }, [teardownAudio]);
+  }, [clearFinalizeTimers, teardownAudio]);
 
   const fail = useCallback(
     (
@@ -265,7 +323,12 @@ export function useVoiceDictation(
         },
         error,
       );
-      if (stateRef.current === "transcribing") {
+      // A flush still pending is a transcription failure even after the
+      // fallback returned the UI to idle with the session open.
+      if (
+        stateRef.current === "transcribing" ||
+        flushRequestedAtRef.current !== null
+      ) {
         Analytics.getInstance().track(AnalyticsEvent.VoiceTranscriptionFailed, {
           blocker: analyticsBlockerFromError(error),
         });
@@ -295,15 +358,34 @@ export function useVoiceDictation(
   // Normal end-of-session: the host has flushed all transcripts. Close the
   // stream and return to idle.
   const finalize = useCallback(() => {
-    if (finalizeTimerRef.current !== null) {
-      window.clearTimeout(finalizeTimerRef.current);
-      finalizeTimerRef.current = null;
-    }
+    clearFinalizeTimers();
     speechClientRef.current?.close();
     speechClientRef.current = null;
     readyRef.current = false;
     setState("idle");
-  }, []);
+  }, [clearFinalizeTimers]);
+
+  // The fallback: `flushed` has not arrived FINALIZE_FALLBACK_MS after stop.
+  // The UI goes back to idle so it never hangs, but the session stays open so
+  // a final that is merely late still reaches the composer; `finalize` runs
+  // when it does, when the host closes the stream, when a new dictation
+  // starts, or at the cap below. Logged because a decode this slow is the
+  // thing the host's latency counters exist to explain.
+  const idleAfterFallback = useCallback(() => {
+    finalizeTimerRef.current = null;
+    appLogger.warn("[voice-dictation] no flushed within fallback; waiting", {
+      fallbackMs: FINALIZE_FALLBACK_MS,
+      msSinceFlush:
+        flushRequestedAtRef.current === null
+          ? null
+          : Date.now() - flushRequestedAtRef.current,
+    });
+    setState("idle");
+    lateFinalCapTimerRef.current = window.setTimeout(
+      finalize,
+      LATE_FINAL_CAP_MS,
+    );
+  }, [finalize]);
 
   // The "recording" transition: taken only once BOTH readiness signals are in
   // for the same live session - the speech session's `ready` (readyRef) and
@@ -512,6 +594,12 @@ export function useVoiceDictation(
     // telling the user to grant microphone access.
     recordingStartedAtRef.current = null;
     lastConnectionStatusRef.current = null;
+    // The previous session's flush marker too, before the not-connected
+    // branch: a failure there is a capture failure of THIS attempt, not a
+    // transcription failure of a flush that already completed.
+    flushRequestedAtRef.current = null;
+    draftAtStopRef.current = null;
+    receivedTextRef.current = false;
     setErrorMessage(null);
     setFailureClass(null);
     setPermissionDenied(false);
@@ -524,12 +612,12 @@ export function useVoiceDictation(
       );
       return;
     }
-    // Cancel any fallback timer left armed by a previous stop() so it can't
-    // later finalize() this fresh session.
-    if (finalizeTimerRef.current !== null) {
-      window.clearTimeout(finalizeTimerRef.current);
-      finalizeTimerRef.current = null;
-    }
+    // Close a session the fallback left open for a late final (and cancel its
+    // timers) before this fresh one takes its place: a late transcript from
+    // it would otherwise be dropped on the active-client guard with the
+    // stream still open, and its cap timer would later finalize() THIS one.
+    if (speechClientRef.current !== null) finalize();
+    clearFinalizeTimers();
     setState("requesting");
     readyRef.current = false;
     audioGraphReadyRef.current = false;
@@ -592,6 +680,22 @@ export function useVoiceDictation(
           // newer recording's composer. (Finals after stop, during
           // "transcribing", are still wanted, so this isn't gated on closing.)
           if (frame.isFinal && speechClientRef.current === client) {
+            // After stop, a final belongs to the draft the mic stopped over.
+            // Sent or replaced since, it would land in the next message, so
+            // it is not inserted. The session stays open for the host's
+            // `flushed`, which still records the outcome (the text WAS
+            // produced) and closes it; `start`, the cap or the host closing
+            // the stream do otherwise.
+            // The same criterion the editor inserts by: a whitespace-only
+            // final inserts nothing and is "no text" for the funnel.
+            if (frame.text.trim().length > 0) receivedTextRef.current = true;
+            const draftAtStop = draftAtStopRef.current;
+            if (
+              draftAtStop !== null &&
+              !sameDraft(handlersRef.current.draftIdentity(), draftAtStop)
+            ) {
+              return;
+            }
             handlersRef.current.onText(frame.text);
           }
         },
@@ -609,6 +713,10 @@ export function useVoiceDictation(
               {
                 duration_bucket: dictationDurationBucket(
                   recordingStartedAtRef.current,
+                ),
+                had_text: receivedTextRef.current,
+                decode_bucket: decodeDurationBucket(
+                  flushRequestedAtRef.current,
                 ),
               },
             );
@@ -632,9 +740,10 @@ export function useVoiceDictation(
           lastConnectionStatusRef.current = status;
           if (status !== "closed") return;
           if (closingRef.current) {
-            // Expected close (we flushed / tore down). Settle the UI if it's
-            // still waiting on a `flushed` the dropped socket can't deliver.
-            if (stateRef.current === "transcribing") finalize();
+            // Expected close (we flushed / tore down). Settle whatever is
+            // still waiting on a `flushed` the dropped socket can't deliver:
+            // the "transcribing" UI, or a session the fallback left open.
+            finalize();
             return;
           }
           // Unexpected drop mid-recording: surface it and stop capturing,
@@ -660,12 +769,18 @@ export function useVoiceDictation(
     wsStreamClient,
     fail,
     finalize,
+    clearFinalizeTimers,
     markClosing,
     startAudioGraph,
     tryBeginRecording,
   ]);
 
   const stop = useCallback(() => {
+    // Only a capture in progress is stopped. A session the fallback left open
+    // for its late final is not re-flushed by a hotkey released after the
+    // fallback fired: that would send a second flush and restart its timers.
+    if (stateRef.current !== "recording" && stateRef.current !== "requesting")
+      return;
     const client = speechClientRef.current;
     if (client === null) {
       setState("idle");
@@ -684,18 +799,19 @@ export function useVoiceDictation(
     markClosing();
     // Stop capturing immediately and ask the host to transcribe the buffered
     // utterance. Stay connected until it replies `flushed` (→ `finalize`); the
-    // timer is only a fallback if that reply never lands.
+    // timer is only a fallback for the UI if that reply is late.
     teardownAudio();
     readyRef.current = false;
     setState("transcribing");
+    flushRequestedAtRef.current = Date.now();
+    draftAtStopRef.current = handlersRef.current.draftIdentity();
     client.flush();
-    if (finalizeTimerRef.current !== null)
-      window.clearTimeout(finalizeTimerRef.current);
+    clearFinalizeTimers();
     finalizeTimerRef.current = window.setTimeout(
-      finalize,
+      idleAfterFallback,
       FINALIZE_FALLBACK_MS,
     );
-  }, [teardownAudio, finalize, markClosing]);
+  }, [teardownAudio, clearFinalizeTimers, idleAfterFallback, markClosing]);
 
   const toggle = useCallback(() => {
     if (state === "recording" || state === "requesting") {

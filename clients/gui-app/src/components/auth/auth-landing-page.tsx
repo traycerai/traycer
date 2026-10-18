@@ -38,6 +38,7 @@ const SIGN_IN_LANE_CLASS =
 const REFUSAL_MESSAGES: Record<ShellAdmissionRefusal, string> = {
   "unverified-relay-only":
     "Your sign-in couldn't be confirmed, and this device has no Traycer host of its own — everything here is served from another device over the network. Sign in again to reconnect.",
+  "unverified-host-refused": "Your session has ended.",
 };
 
 function refusalMessage(refusal: ShellAdmissionRefusal): string {

@@ -7,6 +7,7 @@ import { resolve } from "path";
 import { defineConfig, type HtmlTagDescriptor, type UserConfig } from "vite";
 import { asciiOnlyOutput } from "../gui-app/vite/ascii-only-output";
 import { pdfjsAssets } from "../gui-app/vite/pdfjs-assets";
+import { sandboxAssets } from "../gui-app/vite/sandbox-assets";
 import { CONTENT_SECURITY_POLICY } from "./src/shared/content-security-policy";
 
 const rendererEnvPrefix = [
@@ -73,6 +74,7 @@ export default defineConfig((): UserConfig => {
       react(),
       tailwindcss(),
       pdfjsAssets(),
+      sandboxAssets(),
       // Emitted JS as pure ASCII: one character above U+00FF makes the engine
       // keep a whole chunk's source as UTF-16 (see the plugin).
       asciiOnlyOutput(),

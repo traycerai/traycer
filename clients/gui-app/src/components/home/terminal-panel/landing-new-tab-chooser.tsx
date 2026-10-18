@@ -7,6 +7,7 @@ import {
 } from "react";
 import { Globe, TerminalSquare } from "lucide-react";
 import { formatChordForDisplay } from "@/lib/keybindings/chord";
+import { listNavigationKey } from "@/lib/keybindings/list-navigation-key";
 import { useBindingForAction } from "@/stores/settings/keybinding-store";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { cn } from "@/lib/utils";
@@ -144,8 +145,11 @@ export function LandingNewTabChooser(
   // are focusable, and each one knows where "the other" is. Escape bubbles from
   // here to the container listener above, so it needs no branch of its own.
   const handleKeyDown = (event: KeyboardEvent<HTMLButtonElement>): void => {
-    const forward = event.key === "ArrowRight" || event.key === "ArrowDown";
-    const backward = event.key === "ArrowLeft" || event.key === "ArrowUp";
+    const navigationKey = listNavigationKey(event);
+    const forward =
+      navigationKey === "ArrowRight" || navigationKey === "ArrowDown";
+    const backward =
+      navigationKey === "ArrowLeft" || navigationKey === "ArrowUp";
     if (!forward && !backward) return;
     event.preventDefault();
     // Two cards, so either direction is "the other one". Focus moves onto a

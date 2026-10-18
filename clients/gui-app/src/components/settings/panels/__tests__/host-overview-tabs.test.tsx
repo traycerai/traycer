@@ -182,6 +182,7 @@ const DOWNLOADING_STATUS: ResponseOfMethod<HostRpcRegistry, "host.status"> = {
   updateTransaction: { recordSchemaVersion: 2, authority: "attempt" },
   storeFormats: null,
   install: null,
+  processMemory: null,
 };
 
 function scopeFrom(

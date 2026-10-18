@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useRef, useState, type Ref } from "react";
 import { MoreHorizontal, CheckCircle2, RotateCcw, Trash2 } from "lucide-react";
 import {
   type EpicArtifactKind,
@@ -89,30 +89,30 @@ export function CommentThreadCard(props: CommentThreadCardProps) {
   const deleteThreadMutation = useDeleteCommentThreadForClient(hostClient);
   const setResolvedMutation = useSetCommentThreadResolvedForClient(hostClient);
 
-  const [editingCommentId, setEditingCommentId] = useState<string | null>(null);
+  const [editingComment, setEditingComment] = useState<{
+    readonly commentId: string;
+  } | null>(null);
   const replyHandleRef = useRef<CommentComposerHandle | null>(null);
+  const editHandleRef = useRef<CommentComposerHandle | null>(null);
 
   const isAuthor =
     currentUserId !== null && currentUserId === thread.data.createdByUserId;
   const canManageThread = isAuthor || canModerate;
 
   const handleReplySubmit = useCallback(
-    (content: JsonContent) => {
-      replyMutation.mutate(
-        {
-          epicId,
-          artifactType,
-          artifactId,
-          threadId: thread.threadId,
-          content,
-        },
-        {
-          onSuccess: () => {
-            replyHandleRef.current?.reset();
-            replyHandleRef.current?.focus();
-          },
-        },
-      );
+    async (content: JsonContent) => {
+      const submittedComposer = replyHandleRef.current;
+      await replyMutation.mutateAsync({
+        epicId,
+        artifactType,
+        artifactId,
+        threadId: thread.threadId,
+        content,
+      });
+      if (replyHandleRef.current === submittedComposer) {
+        submittedComposer?.reset();
+        submittedComposer?.focus();
+      }
     },
     [replyMutation, epicId, artifactType, artifactId, thread.threadId],
   );
@@ -215,21 +215,28 @@ export function CommentThreadCard(props: CommentThreadCardProps) {
                 epicId={epicId}
                 hostClient={hostClient}
                 currentUserId={currentUserId}
-                isEditing={editingCommentId === comment.commentId}
-                onStartEdit={() => setEditingCommentId(comment.commentId)}
-                onCancelEdit={() => setEditingCommentId(null)}
-                onSubmitEdit={(next) => {
-                  editMutation.mutate(
-                    {
-                      epicId,
-                      artifactType,
-                      artifactId,
-                      threadId: thread.threadId,
-                      commentId: comment.commentId,
-                      content: next,
-                    },
-                    { onSuccess: () => setEditingCommentId(null) },
-                  );
+                isEditing={editingComment?.commentId === comment.commentId}
+                isPending={editMutation.isPending}
+                editComposerRef={editHandleRef}
+                onStartEdit={() =>
+                  setEditingComment({ commentId: comment.commentId })
+                }
+                onCancelEdit={() => setEditingComment(null)}
+                onSubmitEdit={async (next) => {
+                  const submittedComposer = editHandleRef.current;
+                  await editMutation.mutateAsync({
+                    epicId,
+                    artifactType,
+                    artifactId,
+                    threadId: thread.threadId,
+                    commentId: comment.commentId,
+                    content: next,
+                  });
+                  if (editHandleRef.current === submittedComposer) {
+                    setEditingComment((current) =>
+                      current === editingComment ? null : current,
+                    );
+                  }
                 }}
                 onDelete={() => {
                   deleteCommentMutation.mutate({
@@ -252,6 +259,7 @@ export function CommentThreadCard(props: CommentThreadCardProps) {
             placeholder="Reply…"
             focusOnMount={false}
             submitLabel="Reply"
+            isPending={replyMutation.isPending}
             onSubmit={handleReplySubmit}
             onCancel={null}
             className={undefined}
@@ -304,9 +312,11 @@ interface CommentEntryProps {
   readonly hostClient: HostClient<HostRpcRegistry> | null;
   readonly currentUserId: string | null;
   readonly isEditing: boolean;
+  readonly isPending: boolean;
+  readonly editComposerRef: Ref<CommentComposerHandle>;
   readonly onStartEdit: () => void;
   readonly onCancelEdit: () => void;
-  readonly onSubmitEdit: (content: JsonContent) => void;
+  readonly onSubmitEdit: (content: JsonContent) => Promise<void>;
   readonly onDelete: () => void;
 }
 
@@ -317,6 +327,8 @@ function CommentEntry(props: CommentEntryProps) {
     hostClient,
     currentUserId,
     isEditing,
+    isPending,
+    editComposerRef,
     onStartEdit,
     onCancelEdit,
     onSubmitEdit,
@@ -367,12 +379,14 @@ function CommentEntry(props: CommentEntryProps) {
       </header>
       {isEditing ? (
         <CommentComposer
+          ref={editComposerRef}
           epicId={epicId}
           hostClient={hostClient}
           initialContent={comment.content}
           placeholder="Edit comment…"
           focusOnMount
           submitLabel="Save"
+          isPending={isPending}
           onSubmit={onSubmitEdit}
           onCancel={onCancelEdit}
           className={undefined}

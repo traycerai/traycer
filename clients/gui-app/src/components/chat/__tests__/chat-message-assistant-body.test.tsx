@@ -179,6 +179,7 @@ const META: AssistantTurnMeta = {
   reasoningEffort: "high",
   reasoningEffortLabel: "High",
   serviceTier: null,
+  serviceTierLabel: null,
   envCredentialVar: null,
   costUsd: null,
 };
@@ -823,6 +824,49 @@ describe("AssistantMessageBody Timing tooltip section", () => {
     expect(screen.queryByText("Stopped at")).toBeNull();
   });
 
+  it("names the requested speed tier on the tooltip, and shows no Speed row without one", async () => {
+    const user = userEvent.setup();
+    const { unmount } = render(
+      <AssistantMessageBody
+        turnId={null}
+        {...bodyProps({
+          segments: [TEXT_SEGMENT],
+          elapsedStartedAt: Date.now() - 5_000,
+          completedAt: Date.now(),
+          meta: {
+            ...META,
+            serviceTier: "ultrafast",
+            serviceTierLabel: "Ultrafast",
+          },
+        })}
+      />,
+    );
+    await user.tab();
+    await waitFor(() => {
+      expect(screen.getAllByText("Speed").length).toBeGreaterThan(0);
+    });
+    expect(screen.getAllByText("Ultrafast").length).toBeGreaterThan(0);
+    expect(screen.queryByText("Fast mode")).toBeNull();
+    unmount();
+
+    render(
+      <AssistantMessageBody
+        turnId={null}
+        {...bodyProps({
+          segments: [TEXT_SEGMENT],
+          elapsedStartedAt: Date.now() - 5_000,
+          completedAt: Date.now(),
+          meta: META,
+        })}
+      />,
+    );
+    await user.tab();
+    await waitFor(() => {
+      expect(screen.getAllByText("Started").length).toBeGreaterThan(0);
+    });
+    expect(screen.queryByText("Speed")).toBeNull();
+  });
+
   // The live pre-turn run indicator's `createdAt` is a synthetic sort anchor,
   // not a real send time (it can be epoch+1 on an empty transcript), so its
   // tooltip is wired with `startedAt={null}` and the whole Timing section is
@@ -996,6 +1040,8 @@ const SHARED_TOOL: ToolSegment = {
   durationMs: null,
   parentId: null,
   imageResults: [],
+  page: null,
+  mcpApp: null,
 };
 
 const SHARED_APPROVAL: ApprovalSegment = {

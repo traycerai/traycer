@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { renderHook } from "@testing-library/react";
 import {
   MOUNTED_PANE_TAB_LRU_CAP,
+  RETAINED_PANE_PAGE_CAP,
   useMountedPaneTabs,
   type UseMountedPaneTabsInput,
 } from "@/components/epic-canvas/canvas/use-mounted-pane-tabs";
@@ -26,6 +27,19 @@ function chatTab(n: number): EpicCanvasTileRef {
     type: "chat",
     name: `Chat ${n}`,
     hostId: "host-A",
+  };
+}
+
+function epicFileTab(n: number, extension: string): EpicCanvasTileRef {
+  return {
+    id: `files/pages/page-${n}.${extension}`,
+    instanceId: `inst-file-${n}`,
+    type: "epic-file",
+    name: `Page ${n}`,
+    hostId: "host-A",
+    path: `files/pages/page-${n}.${extension}`,
+    sha256: "a".repeat(64),
+    via: null,
   };
 }
 
@@ -379,5 +393,64 @@ describe("useMountedPaneTabs", () => {
     });
     rerender({ activeTabId: "inst-chat-1", tabs, paneVisible: false });
     expect([...result.current]).toEqual(["inst-term-1", "inst-chat-1"]);
+  });
+
+  describe("page tabs", () => {
+    it("keeps the most recent pages mounted past the LRU, and only up to their cap", () => {
+      const pages = [1, 2, 3, 4, 5].map((n) => epicFileTab(n, "html"));
+      const specs = [specTab(1), specTab(2), specTab(3), specTab(4)];
+      const tabs = [...pages, ...specs];
+      const { result, rerender } = renderMounted({
+        activeTabId: "inst-file-1",
+        tabs,
+        paneVisible: true,
+      });
+      for (const page of pages.slice(1)) {
+        rerender({ activeTabId: page.instanceId, tabs, paneVisible: true });
+      }
+      // Enough editor visits to have evicted every page from a shared LRU.
+      for (const spec of specs) {
+        rerender({ activeTabId: spec.instanceId, tabs, paneVisible: true });
+      }
+
+      const mountedPages = [...result.current].filter((id) =>
+        id.startsWith("inst-file-"),
+      );
+      expect(mountedPages).toHaveLength(RETAINED_PANE_PAGE_CAP);
+      expect(mountedPages).toEqual([
+        "inst-file-5",
+        "inst-file-4",
+        "inst-file-3",
+        "inst-file-2",
+      ]);
+    });
+
+    it("keeps pages mounted while the pane is hidden", () => {
+      const tabs = [epicFileTab(1, "html"), epicFileTab(2, "html"), specTab(1)];
+      const { result, rerender } = renderMounted({
+        activeTabId: "inst-file-1",
+        tabs,
+        paneVisible: true,
+      });
+      rerender({ activeTabId: "inst-file-2", tabs, paneVisible: true });
+      rerender({ activeTabId: "inst-spec-1", tabs, paneVisible: false });
+
+      expect(result.current.has("inst-file-1")).toBe(true);
+      expect(result.current.has("inst-file-2")).toBe(true);
+    });
+
+    it("leaves a non-HTML epic file to the ordinary LRU", () => {
+      const tabs = [epicFileTab(1, "png"), specTab(1), specTab(2), specTab(3)];
+      const { result, rerender } = renderMounted({
+        activeTabId: "inst-file-1",
+        tabs,
+        paneVisible: true,
+      });
+      for (const spec of [specTab(1), specTab(2), specTab(3)]) {
+        rerender({ activeTabId: spec.instanceId, tabs, paneVisible: true });
+      }
+
+      expect(result.current.has("inst-file-1")).toBe(false);
+    });
   });
 });

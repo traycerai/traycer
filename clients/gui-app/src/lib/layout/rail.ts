@@ -43,6 +43,7 @@ export type RailEntry =
 export const RAIL_REGION_IDS: ReadonlyArray<RailRegionId> = [
   "railAgents",
   "railArtifacts",
+  "railFiles",
   "railTerminals",
   "railBrowsers",
   "railGitDiff",
@@ -62,6 +63,7 @@ export const RAIL_REGION_IDS: ReadonlyArray<RailRegionId> = [
 const PANEL_BY_RAIL_REGION: Readonly<Record<RailRegionId, LeftPanelId>> = {
   railAgents: "chats",
   railArtifacts: "artifacts",
+  railFiles: "files",
   railTerminals: "terminals",
   railBrowsers: "browsers",
   railGitDiff: "git-diff",
@@ -80,6 +82,7 @@ export const RAIL_REGION_BY_PANEL: Readonly<Record<LeftPanelId, RailRegionId>> =
   {
     chats: "railAgents",
     artifacts: "railArtifacts",
+    files: "railFiles",
     terminals: "railTerminals",
     browsers: "railBrowsers",
     "git-diff": "railGitDiff",
@@ -434,12 +437,21 @@ export function areRailsEqual(
 export function railFromPanelIdOrder(
   panelIds: ReadonlyArray<string>,
 ): ReadonlyArray<RailEntry> {
-  return normalizeRail(
-    panelIds.flatMap((panelId): RailEntry[] => {
-      const regionId = railRegionForPanelId(panelId);
-      return regionId === null ? [] : [{ kind: "panel", id: regionId }];
-    }),
-  );
+  return normalizeRail(railPanelEntriesFromIds(panelIds));
+}
+
+/**
+ * A stored panel order as raw panel entries, unknown ids dropped and nothing
+ * put back. For a caller that adds stack links before it normalizes, so that a
+ * panel the record never named is placed knowing which stacks to keep whole.
+ */
+export function railPanelEntriesFromIds(
+  panelIds: ReadonlyArray<string>,
+): ReadonlyArray<RailEntry> {
+  return panelIds.flatMap((panelId): RailEntry[] => {
+    const regionId = railRegionForPanelId(panelId);
+    return regionId === null ? [] : [{ kind: "panel", id: regionId }];
+  });
 }
 
 function railRegionForPanelId(panelId: string): RailRegionId | null {
@@ -492,12 +504,38 @@ function railJoins(
   });
 }
 
+/**
+ * Where a panel the stored rail never named may go: `at`, unless that would
+ * land between two members of one stack the user made, in which case after the
+ * run. A panel a build adds is never a reason to split a stack - without this a
+ * stored Agents + Artifacts + Terminals stack came back as two pieces the day
+ * Files appeared between Artifacts and Terminals.
+ */
+function afterStackRun(
+  entries: ReadonlyArray<RailEntry>,
+  at: number,
+  joins: ReadonlyArray<ReadonlyArray<RailRegionId>>,
+): number {
+  let index = at;
+  while (index > 0 && index < entries.length) {
+    const before = entries[index - 1];
+    const after = entries[index];
+    if (before.kind !== "panel" || after.kind !== "panel") break;
+    if (!joins.some((m) => m.includes(before.id) && m.includes(after.id))) {
+      break;
+    }
+    index += 1;
+  }
+  return index;
+}
+
 function normalizedPanelsAndDividers(
   rail: ReadonlyArray<RailEntry>,
 ): ReadonlyArray<RailEntry> {
   const seenPanels = new Set<RailRegionId>();
   const seenDividers = new Set<string>();
   const entries: RailEntry[] = [];
+  const joins = railJoins(rail);
   for (const entry of rail) {
     if (entry.kind === "stack") continue;
     if (entry.kind === "divider") {
@@ -524,7 +562,10 @@ function normalizedPanelsAndDividers(
         : entries.findIndex(
             (entry) => entry.kind === "panel" && entry.id === anchor,
           );
-    entries.splice(anchorIndex + 1, 0, { kind: "panel", id: regionId });
+    entries.splice(afterStackRun(entries, anchorIndex + 1, joins), 0, {
+      kind: "panel",
+      id: regionId,
+    });
     seenPanels.add(regionId);
   }
   return entries;

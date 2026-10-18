@@ -34,6 +34,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
 import { hostQueryKeys } from "@/lib/query-keys";
 import type { HostRpcRegistry } from "@/lib/host";
+import { listNavigationKey } from "@/lib/keybindings/list-navigation-key";
 import { useRunnerHostOrNull } from "@/providers/use-runner-host";
 import { Switch } from "@/components/ui/switch";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
@@ -1201,12 +1202,13 @@ function handlePickerFieldKeys(
     actions.openSelectedRow();
     return;
   }
-  if (event.key === "ArrowDown") {
+  const navigationKey = listNavigationKey(event);
+  if (navigationKey === "ArrowDown") {
     event.preventDefault();
     actions.moveSelection(1);
     return;
   }
-  if (event.key === "ArrowUp") {
+  if (navigationKey === "ArrowUp") {
     event.preventDefault();
     actions.moveSelection(-1);
   }

@@ -26,9 +26,11 @@ import { describe, expect, it } from "vitest";
 import {
   editorOpenPathsUpgradeV10ToV11,
   editorOpenPathsUpgradeV11ToV12,
+  editorOpenPathsUpgradeV12ToV13,
   editorOpenPathsV10,
   editorOpenPathsV11,
   editorOpenPathsV12,
+  editorOpenPathsV13,
 } from "@traycer/protocol/host/editor/contracts";
 import { EDITORS } from "@traycer/protocol/host/editor/unary-schemas";
 import { hostRpcRegistry } from "@traycer/protocol/host/index";
@@ -86,19 +88,24 @@ describe("editor.openPaths 1.0 -> 1.1 compatibility", () => {
   });
 
   it("pins 1.1's target enum to exactly the known set", () => {
-    // 1.1's `editorId` is derived from the live `EDITORS` registry, so an
-    // appended editor is accepted by 1.1 the moment it is added - silently
-    // changing what a host advertising 1.1 must accept. Adding an editor is
-    // therefore a WIRE decision, not a registry edit: freeze the current ids
-    // into 1.1 the way 1.0 is frozen, mint 1.2 for the new one, and update
-    // this list. Widening this expectation alone is the wrong fix.
+    // 1.1's `editorId` is frozen to a literal list of the editors it shipped
+    // with, so adding to the live `EDITORS` registry does not widen it. Adding
+    // an editor is a WIRE decision: mint a new minor for it (1.3 did for
+    // `"code-oss"`) and update this list.
     expect(EDITORS.map((editor) => editor.id)).toEqual([
       "vscode",
       "cursor",
       "windsurf",
       "zed",
       "vscodium",
+      "code-oss",
     ]);
+    expect(
+      editorOpenPathsV11.requestSchema.safeParse({
+        ...V10_REQUEST,
+        editorId: "code-oss",
+      }).success,
+    ).toBe(false);
 
     // The two non-editor targets 1.1 adds on top of that registry, and the
     // proof the enum is closed rather than open-ended.
@@ -187,12 +194,72 @@ describe("editor.openPaths 1.1 -> 1.2 compatibility", () => {
     expect(editorOpenPathsUpgradeV11ToV12.to).toEqual({ major: 1, minor: 2 });
   });
 
-  it("advertises latestMinor 2 with all three minors registered", () => {
+  it("keeps code-oss out of 1.2, which stays frozen with 1.1", () => {
+    expect(
+      editorOpenPathsV12.requestSchema.safeParse({
+        ...V10_REQUEST,
+        editorId: "code-oss",
+      }).success,
+    ).toBe(false);
+  });
+
+  it("registers 1.2 on its own minor", () => {
     const method = hostRpcRegistry["editor.openPaths"][1];
-    expect(method.latestMinor).toBe(2);
     expect(method.versions[2]?.contract).toBe(editorOpenPathsV12);
     expect(method.versions[2]?.upgradeFromPreviousVersion).toBe(
       editorOpenPathsUpgradeV11ToV12,
+    );
+  });
+});
+
+describe("editor.openPaths 1.2 -> 1.3 compatibility", () => {
+  it("accepts code-oss and every 1.2 target under 1.3", () => {
+    for (const editorId of [...V11_TARGETS, "code-oss"]) {
+      expect(
+        editorOpenPathsV13.requestSchema.safeParse({ ...V10_REQUEST, editorId })
+          .success,
+      ).toBe(true);
+    }
+    expect(
+      editorOpenPathsV13.requestSchema.safeParse({
+        ...V10_REQUEST,
+        editorId: "not-a-real-target",
+      }).success,
+    ).toBe(false);
+  });
+
+  it("rejects code-oss under every earlier minor", () => {
+    // A host on 1.0 - 1.2 fails this exact parse; the client's negotiated
+    // minor gate is what keeps it off those connections.
+    for (const contract of [
+      editorOpenPathsV10,
+      editorOpenPathsV11,
+      editorOpenPathsV12,
+    ]) {
+      expect(
+        contract.requestSchema.safeParse({
+          ...V10_REQUEST,
+          editorId: "code-oss",
+        }).success,
+      ).toBe(false);
+    }
+  });
+
+  it("upgrades 1.2 requests and responses by identity", () => {
+    expect(editorOpenPathsUpgradeV12ToV13.upgradeRequest(V10_REQUEST)).toEqual(
+      V10_REQUEST,
+    );
+    expect(editorOpenPathsUpgradeV12ToV13.upgradeResponse({})).toEqual({});
+    expect(editorOpenPathsUpgradeV12ToV13.from).toEqual({ major: 1, minor: 2 });
+    expect(editorOpenPathsUpgradeV12ToV13.to).toEqual({ major: 1, minor: 3 });
+  });
+
+  it("advertises latestMinor 3 with all four minors registered", () => {
+    const method = hostRpcRegistry["editor.openPaths"][1];
+    expect(method.latestMinor).toBe(3);
+    expect(method.versions[3]?.contract).toBe(editorOpenPathsV13);
+    expect(method.versions[3]?.upgradeFromPreviousVersion).toBe(
+      editorOpenPathsUpgradeV12ToV13,
     );
   });
 });

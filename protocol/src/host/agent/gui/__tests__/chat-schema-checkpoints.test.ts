@@ -29,6 +29,10 @@ import {
   chatSubscribeV120,
   chatSubscribeV121,
   chatSubscribeV122,
+  chatSubscribeV123,
+  chatSubscribeV124,
+  chatSubscribeV125,
+  chatSubscribeV126,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 
 function canonical(value: unknown): unknown {
@@ -164,9 +168,20 @@ function schemaDigest(schema: z.ZodType, io: "input" | "output"): string {
 // actors, provider notices, plan sources, session announcements) are still the
 // closed enum, and the first that may name `commandcode`. Its server-frame
 // union is the closed live `chatSubscribeWindowedServerFrameSchema`, which the
-// host builds; 1.22 binds its open twin. 1.22 is the live line: it reopens exactly those heard-from
-// leaves to a string (`open-harness-wire.ts`) and moves nothing else, so the
-// 1.0-1.21 digests above did not change when it opened.
+// host builds; 1.22 binds its open twin.
+//
+// 1.22 is main's released line, frozen byte for byte: it reopens exactly those
+// heard-from leaves to a string (`open-harness-wire.ts`) and moves nothing
+// else, so the 1.0-1.21 digests above did not change when it opened. It does
+// NOT carry the tool-call `page` / `mcpApp` stamps.
+//
+// 1.23 is the live line: the open-harness 1.22 plus the tool-call `page` /
+// `mcpApp` stamps (agent pages and MCP Apps). The stamps first reached
+// 1.13-1.22 by reference, through the live tool-call block and
+// `tool_call.completed` event; the hand-frozen `toolCallBlockSchemaPrePage` /
+// `toolCallCompletedEventSchemaPrePage` leaves, swapped into every historical
+// union, are what keep them off. Every digest below 1.23 is identical with
+// and without the stamps.
 const SERVER_FRAME_DIGESTS = {
   0: [
     "ca66e3d49016048e7390b4c9904f6978f7c31d9098dd2ce4369f51239d0f411e",
@@ -260,6 +275,29 @@ const SERVER_FRAME_DIGESTS = {
     "c196eb5624840268d72b08b89b20fc50202d06d01f6999e506f48b02f2c7c46c",
     "216acc0693d0dd96ad6ec383481ae964fdcd8392a20db3d3fcc005c48cebc5a6",
   ],
+  23: [
+    "f5b56223b15cc20745f64c6fc12c12139770f769afd3ecb236db0a60b7577ff7",
+    "85f17a63cb8ad0aead1ae6d97ccbfb1b33d0b423c86415286cdaa876c3be52ff",
+  ],
+  // Captured from the live schema the moment before 1.25 opened above it: the
+  // cron next-run line, with no bot-conversation request on a user row and no
+  // conversation-message queue item.
+  24: [
+    "76fd9f55395a8589fb22b18260e5c7e89a9978b2cdd27733c13d8403a4c071ff",
+    "dfd3fd0c3e80e407fa2a94754897c7a4108fd4d671c008d08ec9a44a3d860101",
+  ],
+  // Captured from the live schema the moment before 1.26 opened above it: the
+  // bot-conversation line, with no task-checkin queue item.
+  25: [
+    "45696e34f99e3395c6ee65f36228a9afebe3cd42e2f6de0189e85d5cadc33a01",
+    "21d55b25706c2fc3ba1ee5dffe631e690632c8092fd8e35f9c6ee55b9e0d7f56",
+  ],
+  // Captured from the live schema the moment before 1.27 opened above it: the
+  // task-checkin line, with no task-overdue queue item.
+  26: [
+    "8f1526bc99e13c0e4f311bddb9dd60d4fa834717c8ae7723c199b91d547d8b38",
+    "e19f9e26679c833d184d861b3c1b271b321e411b5888f91fd13f09384fb2b14e",
+  ],
 } as const;
 
 const contracts = [
@@ -286,10 +324,14 @@ const contracts = [
   chatSubscribeV120,
   chatSubscribeV121,
   chatSubscribeV122,
+  chatSubscribeV123,
+  chatSubscribeV124,
+  chatSubscribeV125,
+  chatSubscribeV126,
 ] as const;
 
 describe("chat.subscribe placement freeze", () => {
-  it("keeps every 1.0–1.22 server schema input/output surface byte-stable", () => {
+  it("keeps every 1.0–1.26 server schema input/output surface byte-stable", () => {
     for (const contract of contracts) {
       const minor = contract.schemaVersion.minor;
       expect([
@@ -397,7 +439,15 @@ describe("chat.subscribe placement freeze", () => {
       chatSubscribeV122.serverFrameSchema.safeParse(rangeFrame("claude"))
         .success,
     ).toBe(true);
-    // The heard-from leaf: open on 1.22, still the closed enum on 1.21.
+    expect(
+      chatSubscribeV123.serverFrameSchema.safeParse(rangeFrame("claude"))
+        .success,
+    ).toBe(true);
+    // The heard-from leaf: open on 1.22 and 1.23, still the closed enum on 1.21.
+    expect(
+      chatSubscribeV123.serverFrameSchema.safeParse(rangeFrame("zzz-future"))
+        .success,
+    ).toBe(true);
     expect(
       chatSubscribeV122.serverFrameSchema.safeParse(rangeFrame("zzz-future"))
         .success,
@@ -408,7 +458,7 @@ describe("chat.subscribe placement freeze", () => {
     ).toBe(false);
   });
 
-  it("keeps the harness a client DRIVES closed on 1.22: the snapshot's chat settings and the active turn", () => {
+  it("keeps the harness a client DRIVES closed on 1.22 and 1.23: the snapshot's chat settings and the active turn", () => {
     const settings = (harnessId: string) => ({
       harnessId,
       model: "model-1",
@@ -468,6 +518,10 @@ describe("chat.subscribe placement freeze", () => {
       chatSubscribeV122.serverFrameSchema.safeParse(snapshotFrame("claude"))
         .success,
     ).toBe(true);
+    expect(
+      chatSubscribeV123.serverFrameSchema.safeParse(snapshotFrame("claude"))
+        .success,
+    ).toBe(true);
     // The drive carrier stays closed on BOTH lines.
     expect(
       chatSubscribeV121.serverFrameSchema.safeParse(snapshotFrame("zzz-future"))
@@ -475,6 +529,10 @@ describe("chat.subscribe placement freeze", () => {
     ).toBe(false);
     expect(
       chatSubscribeV122.serverFrameSchema.safeParse(snapshotFrame("zzz-future"))
+        .success,
+    ).toBe(false);
+    expect(
+      chatSubscribeV123.serverFrameSchema.safeParse(snapshotFrame("zzz-future"))
         .success,
     ).toBe(false);
 
@@ -495,7 +553,11 @@ describe("chat.subscribe placement freeze", () => {
         updatedAt: 1,
       },
     });
-    for (const contract of [chatSubscribeV121, chatSubscribeV122]) {
+    for (const contract of [
+      chatSubscribeV121,
+      chatSubscribeV122,
+      chatSubscribeV123,
+    ]) {
       expect(
         contract.serverFrameSchema.safeParse(turnFrame("claude")).success,
       ).toBe(true);

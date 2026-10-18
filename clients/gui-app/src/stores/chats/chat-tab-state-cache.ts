@@ -92,6 +92,35 @@ export function restoreChatTabState(
   };
 }
 
+/**
+ * `restoreChatTabState` for a tile that is mounting, where the result seeds
+ * the list's `initialScrollAtEnd` / `initialScrollIndex`.
+ *
+ * A free scroll that was SAVED without an anchor names no row to restore to:
+ * the list would mount at scroll 0, the top of the transcript, with no follow
+ * permission to correct it. Following the latest is the fallback.
+ *
+ * A saved anchor that does not resolve yet is not that shape. It may be a row
+ * the transcript has not hydrated (an empty or partial one), which the
+ * pending-hydration restore replays once it arrives, so it is left to it.
+ *
+ * Only mounting wants this. A kept-alive tile that is shown again replays
+ * through `restoreChatTabState` itself, where an anchorless free scroll means
+ * "leave the viewport where the reader put it", not "jump to the end".
+ */
+export function restoreChatTabStateForMount(
+  identity: ChatTabPersistenceIdentity,
+  rowKeys: ReadonlyArray<string>,
+): SavedChatTabScrollState {
+  const restored = restoreChatTabState(identity, rowKeys);
+  if (restored.mode !== "free-scrolling" || restored.anchorMessageId !== null) {
+    return restored;
+  }
+  const saved = peekSavedChatTabState(identity);
+  if (saved !== null && saved.anchorMessageId !== null) return restored;
+  return DEFAULT_CHAT_TAB_SCROLL_STATE;
+}
+
 export interface SaveChatTabStateInput extends SavedChatTabScrollState {
   readonly identity: ChatTabPersistenceIdentity;
 }

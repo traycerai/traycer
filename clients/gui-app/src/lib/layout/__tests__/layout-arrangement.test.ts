@@ -104,11 +104,12 @@ function withRail(rail: ReadonlyArray<RailEntry>): LayoutArrangement {
 }
 
 describe("the shipped rail (L-155, L-166)", () => {
-  it("is the nine panels in order, with one stack and no dividers", () => {
+  it("is the ten panels in order, with one stack and no dividers", () => {
     expect(idsOf(DEFAULT_RAIL)).toEqual([
       "railAgents",
       "stack:railAgents+railArtifacts",
       "railArtifacts",
+      "railFiles",
       "railTerminals",
       "railBrowsers",
       "railGitDiff",
@@ -139,10 +140,11 @@ describe("the shipped rail (L-155, L-166)", () => {
     expect(added.rail[3]).toEqual(divider("divider:1"));
   });
 
-  it("reads back as the nine panel ids", () => {
+  it("reads back as the ten panel ids", () => {
     expect(panelIdsOf(DEFAULT_RAIL)).toEqual([
       "chats",
       "artifacts",
+      "files",
       "terminals",
       "browsers",
       "git-diff",
@@ -189,6 +191,7 @@ describe("a panel moved within the rail", () => {
       "railComments",
       "railAgents",
       "railArtifacts",
+      "railFiles",
       "railTerminals",
       "railBrowsers",
       "railGitDiff",
@@ -207,6 +210,7 @@ describe("a panel moved within the rail", () => {
       ),
     ).toEqual([
       "railArtifacts",
+      "railFiles",
       "railTerminals",
       "railAgents",
       "railBrowsers",
@@ -338,6 +342,7 @@ describe("railFromPanelIdOrder", () => {
       "railComments",
       "railAgents",
       "railArtifacts",
+      "railFiles",
       "railTerminals",
       "railBrowsers",
       "railGitDiff",
@@ -547,7 +552,7 @@ describe("a canvas drop written back into the full order (4.7)", () => {
       "railAgents",
       "divider:1",
       "railArtifacts",
-      "railTerminals",
+      "railFiles",
     ]);
   });
 
@@ -561,9 +566,10 @@ describe("a canvas drop written back into the full order (4.7)", () => {
       placeAfter: true,
     });
 
-    expect(idsOf(next.rail).slice(0, 4)).toEqual([
+    expect(idsOf(next.rail).slice(0, 5)).toEqual([
       "railAgents",
       "railArtifacts",
+      "railFiles",
       "railTerminals",
       "divider:1",
     ]);
@@ -950,10 +956,11 @@ describe("resolvePersistedArrangement", () => {
     // piling up at the end. The stored divider survives with its id.
     expect(
       arrangement.rail.filter((entry) => entry.kind === "panel"),
-    ).toHaveLength(9);
+    ).toHaveLength(10);
     expect(idsOf(arrangement.rail)).toEqual([
       "railAgents",
       "railArtifacts",
+      "railFiles",
       "railTerminals",
       "railBrowsers",
       "railGitDiff",
@@ -1149,6 +1156,7 @@ describe("a stack link, normalised (L-166)", () => {
 
     expect(idsOf(normalizeRail(moved))).toEqual([
       "railAgents",
+      "railFiles",
       "railTerminals",
       "railBrowsers",
       "railGitDiff",
@@ -1157,6 +1165,38 @@ describe("a stack link, normalised (L-166)", () => {
       "railSharing",
       "railComments",
       "railArtifacts",
+    ]);
+  });
+
+  it("is kept whole when a panel the record never named belongs between its members", () => {
+    // A record from before Files existed: Agents, Artifacts and Terminals
+    // stacked. Files canonically follows Artifacts, but landing there would cut
+    // the stack the user made in two, so it goes after the run instead.
+    const stored = [
+      panel("railAgents"),
+      stack("stack:railAgents+railArtifacts+railTerminals"),
+      panel("railArtifacts"),
+      panel("railTerminals"),
+      panel("railBrowsers"),
+      panel("railGitDiff"),
+      panel("railPullRequests"),
+      panel("railFileTree"),
+      panel("railSharing"),
+      panel("railComments"),
+    ];
+
+    expect(idsOf(normalizeRail(stored))).toEqual([
+      "railAgents",
+      "stack:railAgents+railArtifacts+railTerminals",
+      "railArtifacts",
+      "railTerminals",
+      "railFiles",
+      "railBrowsers",
+      "railGitDiff",
+      "railPullRequests",
+      "railFileTree",
+      "railSharing",
+      "railComments",
     ]);
   });
 
@@ -1253,6 +1293,7 @@ describe("stacking and unstacking (L-168)", () => {
       "railAgents",
       "stack:railAgents+railArtifacts",
       "railArtifacts",
+      "railFiles",
       "railBrowsers",
       "stack:railBrowsers+railTerminals",
       "railTerminals",
@@ -1271,6 +1312,7 @@ describe("stacking and unstacking (L-168)", () => {
       "stack:railAgents+railArtifacts+railTerminals",
       "railArtifacts",
       "railTerminals",
+      "railFiles",
       "railBrowsers",
       "railGitDiff",
       "railPullRequests",
@@ -1304,30 +1346,30 @@ describe("stacking and unstacking (L-168)", () => {
   it("joins a fifth panel onto a stack of four: a stack has no cap (L-181)", () => {
     const fourMember: ReadonlyArray<RailEntry> = [
       panel("railAgents"),
-      stack("stack:railAgents+railArtifacts+railTerminals+railBrowsers"),
+      stack("stack:railAgents+railArtifacts+railFiles+railTerminals"),
       panel("railArtifacts"),
+      panel("railFiles"),
       panel("railTerminals"),
-      panel("railBrowsers"),
       ...FLAT_RAIL.slice(4),
     ];
     const arrangement = withRail(fourMember);
 
-    expect(railStackJoin(arrangement.rail, "git-diff", "chats", "panel")).toBe(
+    expect(railStackJoin(arrangement.rail, "browsers", "chats", "panel")).toBe(
       "join",
     );
     expect(
       idsOf(
         normalizeRail(
-          stackRailPanels(arrangement, "git-diff", "chats", "panel").rail,
+          stackRailPanels(arrangement, "browsers", "chats", "panel").rail,
         ),
       ),
     ).toEqual([
       "railAgents",
-      "stack:railAgents+railArtifacts+railTerminals+railBrowsers+railGitDiff",
+      "stack:railAgents+railArtifacts+railFiles+railTerminals+railBrowsers",
       "railArtifacts",
+      "railFiles",
       "railTerminals",
       "railBrowsers",
-      "railGitDiff",
       ...idsOf(FLAT_RAIL).slice(5),
     ]);
   });
@@ -1353,6 +1395,7 @@ describe("stacking and unstacking (L-168)", () => {
       "railArtifacts",
       "railTerminals",
       "railBrowsers",
+      "railFiles",
       "railGitDiff",
       "railPullRequests",
       "railFileTree",
@@ -1375,6 +1418,7 @@ describe("stacking and unstacking (L-168)", () => {
 
     expect(idsOf(normalizeRail(joined.rail))).toEqual([
       "railArtifacts",
+      "railFiles",
       "railTerminals",
       "stack:railTerminals+railAgents",
       "railAgents",
@@ -1410,17 +1454,18 @@ describe("stacking and unstacking (L-168)", () => {
       "railAgents",
       "stack:railAgents+railArtifacts",
       "railArtifacts",
+      "railFiles",
       "railBrowsers",
       "railTerminals",
-      ...idsOf(FLAT_RAIL).slice(4),
+      ...idsOf(FLAT_RAIL).slice(5),
     ]);
   });
 
   const THREE_MEMBER_RAIL: ReadonlyArray<RailEntry> = [
     panel("railAgents"),
-    stack("stack:railAgents+railArtifacts+railTerminals"),
+    stack("stack:railAgents+railArtifacts+railFiles"),
     panel("railArtifacts"),
-    panel("railTerminals"),
+    panel("railFiles"),
     ...FLAT_RAIL.slice(3),
   ];
 
@@ -1433,8 +1478,8 @@ describe("stacking and unstacking (L-168)", () => {
 
       expect(idsOf(normalizeRail(result))).toEqual([
         "railAgents",
-        "stack:railAgents+railTerminals",
-        "railTerminals",
+        "stack:railAgents+railFiles",
+        "railFiles",
         "railArtifacts",
         ...idsOf(FLAT_RAIL).slice(3),
       ]);
@@ -1462,7 +1507,7 @@ describe("stacking and unstacking (L-168)", () => {
     it("removes a 3-member stack in one write, leaving every member in place", () => {
       const result = unstackRail(
         withRail(THREE_MEMBER_RAIL),
-        "stack:railAgents+railArtifacts+railTerminals",
+        "stack:railAgents+railArtifacts+railFiles",
       ).rail;
 
       expect(idsOf(result)).toEqual(
@@ -1481,11 +1526,12 @@ describe("stacking and unstacking (L-168)", () => {
       }).rail;
 
       expect(idsOf(normalizeRail(moved))).toEqual([
+        "railFiles",
         "railTerminals",
         "railAgents",
         "stack:railAgents+railArtifacts",
         "railArtifacts",
-        ...idsOf(FLAT_RAIL).slice(3),
+        ...idsOf(FLAT_RAIL).slice(4),
       ]);
     });
 
@@ -1507,8 +1553,9 @@ describe("stacking and unstacking (L-168)", () => {
     it("joins two whole stacks together, whatever their combined size", () => {
       const rail: ReadonlyArray<RailEntry> = [
         panel("railAgents"),
-        stack("stack:railAgents+railArtifacts+railTerminals"),
+        stack("stack:railAgents+railArtifacts+railFiles"),
         panel("railArtifacts"),
+        panel("railFiles"),
         panel("railTerminals"),
         panel("railBrowsers"),
         stack("stack:railBrowsers+railGitDiff"),
@@ -1531,14 +1578,15 @@ describe("stacking and unstacking (L-168)", () => {
         "stack",
       );
       expect(idsOf(normalizeRail(joined.rail))).toEqual([
+        "railTerminals",
         "railBrowsers",
         "stack:railBrowsers+railGitDiff",
         "railGitDiff",
         "railPullRequests",
-        "stack:railPullRequests+railAgents+railArtifacts+railTerminals",
+        "stack:railPullRequests+railAgents+railArtifacts+railFiles",
         "railAgents",
         "railArtifacts",
-        "railTerminals",
+        "railFiles",
         "railFileTree",
         "railSharing",
         "railComments",
@@ -1555,12 +1603,13 @@ describe("stacking and unstacking (L-168)", () => {
           ),
         ),
       ).toEqual([
+        "railTerminals",
         "railBrowsers",
-        "stack:railBrowsers+railGitDiff+railAgents+railArtifacts+railTerminals",
+        "stack:railBrowsers+railGitDiff+railAgents+railArtifacts+railFiles",
         "railGitDiff",
         "railAgents",
         "railArtifacts",
-        "railTerminals",
+        "railFiles",
         "railPullRequests",
         "railFileTree",
         "railSharing",
@@ -1578,11 +1627,12 @@ describe("stacking and unstacking (L-168)", () => {
 
       expect(idsOf(normalizeRail(moved))).toEqual([
         "railAgents",
-        "stack:railAgents+railTerminals",
+        "stack:railAgents+railFiles",
+        "railFiles",
         "railTerminals",
         "railBrowsers",
         "railArtifacts",
-        ...idsOf(FLAT_RAIL).slice(4),
+        ...idsOf(FLAT_RAIL).slice(5),
       ]);
     });
 
@@ -1615,8 +1665,9 @@ describe("stacking and unstacking (L-168)", () => {
         "stack:railAgents+railArtifacts",
         "railArtifacts",
         "railBrowsers",
+        "railFiles",
         "railTerminals",
-        ...idsOf(FLAT_RAIL).slice(4),
+        ...idsOf(FLAT_RAIL).slice(5),
       ]);
     });
 
@@ -1632,11 +1683,11 @@ describe("stacking and unstacking (L-168)", () => {
           carry: "panel",
         }).rail,
       ).toBe(arrangement.rail);
-      // And directly before Terminals.
+      // And directly before Files.
       expect(
         moveRailPanelBeside(arrangement, {
           sourcePanelId: "artifacts",
-          targetPanelId: "terminals",
+          targetPanelId: "files",
           placeAfter: false,
           carry: "panel",
         }).rail,
@@ -1644,18 +1695,18 @@ describe("stacking and unstacking (L-168)", () => {
     });
 
     it("moves a NON-adjacent reorder within a 3-stack, which the old pair-only early return wrongly refused", () => {
-      // Terminals is the LAST member, dropped before the FIRST: a real move
+      // Files is the LAST member, dropped before the FIRST: a real move
       // across the whole stack, not a swap of adjacent members.
       const moved = moveRailPanelBeside(withRail(THREE_MEMBER_RAIL), {
-        sourcePanelId: "terminals",
+        sourcePanelId: "files",
         targetPanelId: "chats",
         placeAfter: false,
         carry: "panel",
       }).rail;
 
       expect(idsOf(normalizeRail(moved))).toEqual([
-        "railTerminals",
-        "stack:railTerminals+railAgents+railArtifacts",
+        "railFiles",
+        "stack:railFiles+railAgents+railArtifacts",
         "railAgents",
         "railArtifacts",
         ...idsOf(FLAT_RAIL).slice(3),
@@ -1696,17 +1747,15 @@ describe("stacking and unstacking (L-168)", () => {
 
       // Agents is the FIRST member of the shipped pair, not the last.
       expect(railPanelToStackBelow(rail, "railAgents")).toBeNull();
-      expect(railPanelToStackBelow(rail, "railArtifacts")).toBe(
-        "railTerminals",
-      );
+      expect(railPanelToStackBelow(rail, "railArtifacts")).toBe("railFiles");
       expect(railPanelToStackBelow(rail, "railTerminals")).toBe("railBrowsers");
     });
 
     it("offers nothing when the next entry is a divider, or there is none", () => {
       const withDivider = [
-        ...FLAT_RAIL.slice(0, 3),
+        ...FLAT_RAIL.slice(0, 4),
         divider("divider:1"),
-        ...FLAT_RAIL.slice(3),
+        ...FLAT_RAIL.slice(4),
       ];
 
       expect(railPanelToStackBelow(withDivider, "railTerminals")).toBeNull();
@@ -1716,15 +1765,15 @@ describe("stacking and unstacking (L-168)", () => {
     it("offers the join below a stack of four: a stack has no cap", () => {
       const fourAboveOne: ReadonlyArray<RailEntry> = [
         panel("railAgents"),
-        stack("stack:railAgents+railArtifacts+railTerminals+railBrowsers"),
+        stack("stack:railAgents+railArtifacts+railFiles+railTerminals"),
         panel("railArtifacts"),
+        panel("railFiles"),
         panel("railTerminals"),
-        panel("railBrowsers"),
         ...FLAT_RAIL.slice(4),
       ];
 
-      expect(railPanelToStackBelow(fourAboveOne, "railBrowsers")).toBe(
-        "railGitDiff",
+      expect(railPanelToStackBelow(fourAboveOne, "railTerminals")).toBe(
+        "railBrowsers",
       );
     });
 
@@ -1736,9 +1785,9 @@ describe("stacking and unstacking (L-168)", () => {
 
       expect(idsOf(normalizeRail(joined))).toEqual([
         "railAgents",
-        "stack:railAgents+railArtifacts+railTerminals",
+        "stack:railAgents+railArtifacts+railFiles",
         "railArtifacts",
-        "railTerminals",
+        "railFiles",
         ...idsOf(FLAT_RAIL).slice(3),
       ]);
     });
@@ -1818,6 +1867,7 @@ describe("the last shown rail panel (T3)", () => {
     railTerminals: { shown: "hidden" },
     railBrowsers: { shown: "hidden" },
     railGitDiff: { shown: "hidden" },
+    railFiles: { shown: "hidden" },
     railFileTree: { shown: "hidden" },
     railSharing: { shown: "hidden" },
     // `auto` panels draw only when the task holds something, so the saved

@@ -39,6 +39,11 @@ import {
   analyticsBlockerFromError,
   type AnalyticsBlocker,
 } from "@/lib/analytics";
+import {
+  providerHostBlockLabel,
+  type ProviderHostBlock,
+} from "@/components/providers/provider-signin-availability";
+import { providerDisplayName } from "@/lib/provider-ordering";
 import { appLogger } from "@/lib/logger";
 
 type LoginMutationContext = { readonly hostId: string | null };
@@ -311,6 +316,7 @@ export interface ProviderProfileLoginFlowCodePaste {
 }
 
 interface UseProviderProfileLoginFlowInput {
+  readonly hostBlock: ProviderHostBlock | null;
   readonly supportsLoginOwnership: boolean;
   readonly mode: ProviderProfileLoginFlowMode;
   readonly providerId: ProviderCliState["providerId"];
@@ -420,6 +426,7 @@ export function useProviderProfileLoginFlow(
   input: UseProviderProfileLoginFlowInput,
 ): ProviderProfileLoginFlow {
   const {
+    hostBlock,
     supportsLoginOwnership,
     mode,
     providerId,
@@ -1174,6 +1181,16 @@ export function useProviderProfileLoginFlow(
       readonly label: string | null;
       readonly shareSkillsAndPlugins: boolean;
     }): void => {
+      // Guard every caller, including reauth's automatic mount-effect start.
+      if (hostBlock?.kind === "macos") {
+        const message = providerHostBlockLabel(
+          hostBlock,
+          providerDisplayName(providerId),
+        );
+        setState({ kind: "failed", message, refusal: null });
+        onFailed(message);
+        return;
+      }
       // `starting`, not `startLogin.isPending`: see `busy` below.
       if (
         state.kind === "starting" ||
@@ -1208,7 +1225,9 @@ export function useProviderProfileLoginFlow(
     [
       awaitLogin.isPending,
       beginLogin,
+      hostBlock,
       mode,
+      onFailed,
       providerId,
       settleOwedReleases,
       state.kind,

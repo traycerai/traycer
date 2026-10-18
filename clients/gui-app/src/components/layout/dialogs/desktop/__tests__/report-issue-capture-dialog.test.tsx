@@ -330,6 +330,7 @@ function createBaseRunnerHost(): IRunnerHost {
     zoom: null,
     pushPermission: null,
     systemBack: null,
+    statusBarTap: null,
   };
 }
 

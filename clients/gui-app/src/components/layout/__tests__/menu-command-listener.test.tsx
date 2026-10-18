@@ -223,6 +223,25 @@ function openEpicFixture(tab: EpicTab): string {
   return tabId;
 }
 
+/**
+ * An `unverified` session authn refused (`session-rejected`), as the store
+ * holds it after startup or a demotion. `hostRefused` is the
+ * `hostRefusedHeldBearer` flag `AuthService.noteHostRefusedHeldBearer` raises
+ * once the bearer it holds has expired: set through the store's own reducer,
+ * which accepts it only on exactly this state.
+ */
+function holdRefusedSession(hostRefused: boolean): void {
+  const store = useAuthStore.getState();
+  store.setUnverifiedSession(
+    { userId: "user-1", userName: "User One", email: "user@example.com" },
+    { userId: "user-1", username: "User One" },
+  );
+  store.setCloudVerdictLoss("session-rejected");
+  if (hostRefused) {
+    store.noteHostRefusedHeldBearer();
+  }
+}
+
 function resetStores(): void {
   useAuthStore.getState().setSignedOut();
   __resetTabNavigationControllerForTesting();
@@ -419,6 +438,67 @@ describe("<MenuCommandListener />", () => {
     // caller and P3.4 deleted the port itself, so the property is now
     // structural - there is no picker for a command to open, and a revival
     // would have to re-add the capability to `IRunnerHost` first.
+  });
+
+  describe("the Settings command when the shell may refuse admission", () => {
+    function openSettingsFrom(
+      runnerHost: FakeRunnerHost,
+      menu: FakeDesktopMenu,
+    ): void {
+      render(
+        <QueryClientProvider client={makeQueryClient()}>
+          <RunnerHostProvider runnerHost={runnerHost}>
+            <MenuCommandListener />
+          </RunnerHostProvider>
+        </QueryClientProvider>,
+      );
+      act(() => {
+        menu.emit("app.openSettings");
+      });
+    }
+
+    it("opens Settings on an unverified session no host has refused", () => {
+      holdRefusedSession(false);
+      const menu = createMenu();
+
+      openSettingsFrom(createRunnerHost(menu), menu);
+
+      // Control for the cases below: the same refused session, on the same
+      // local-host shell, is admitted until the flag is up - so "navigates
+      // nowhere" there is the flag's doing, not a harness that never fires.
+      expect(latestNavigation().to).toBe("/settings/general");
+    });
+
+    it("navigates nowhere once a host has refused the bearer an unverified session holds: the sign-in page owns the shell", () => {
+      holdRefusedSession(true);
+      const menu = createMenu();
+
+      openSettingsFrom(createRunnerHost(menu), menu);
+
+      // `/when-you-quit` would not render over the sign-in page, and would
+      // surface only once a sign-in began, in place of its device code.
+      expect(navigateMock).not.toHaveBeenCalled();
+    });
+
+    it("navigates nowhere on an unverified session whose shell has no local host either", () => {
+      holdRefusedSession(false);
+      const menu = createMenu();
+
+      openSettingsFrom(
+        Object.assign(createRunnerHost(menu), { hasLocalHost: false }),
+        menu,
+      );
+
+      expect(navigateMock).not.toHaveBeenCalled();
+    });
+
+    it("still sends a signed-out shell to the quit-behaviour route", () => {
+      const menu = createMenu();
+
+      openSettingsFrom(createRunnerHost(menu), menu);
+
+      expect(navigateMock).toHaveBeenCalledWith({ to: "/when-you-quit" });
+    });
   });
 
   it("gates the native report command on current support capability", () => {

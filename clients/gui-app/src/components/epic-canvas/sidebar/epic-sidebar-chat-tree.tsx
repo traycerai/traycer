@@ -45,6 +45,7 @@ import {
   SET_CHAT_ARCHIVED_METHOD,
 } from "@/hooks/epic/use-chat-archive-support";
 import { useHostSupportsMethod } from "@/hooks/host/use-host-supports-method";
+import { useRecordWriteServingHostId } from "@/hooks/epic/use-epic-record-mutation-client";
 import { useChatWriteRoute } from "@/hooks/epic/use-chat-write-route";
 import {
   CHAT_NOT_ADOPTED_COPY,
@@ -65,8 +66,8 @@ import {
   type EpicNodeKind,
 } from "@/lib/artifacts/node-display";
 import {
-  computeDescendantCountsFromTree,
-  formatCascadeSummary,
+  countDirectAgentChildren,
+  formatAgentDeleteNesting,
 } from "@/lib/epic-tree-cascade";
 import { useOpenEpicHandle } from "@/providers/use-open-epic-handle";
 import { cn } from "@/lib/utils";
@@ -1656,8 +1657,9 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
   const renameTerminalAgent = useEpicRenameTuiAgent();
   const renameArtifactInTab = useEpicCanvasStore((s) => s.renameArtifactInTab);
 
-  // The cascade-delete summary, subscribed to its ANSWER rather than to the
-  // record list it is computed from.
+  // How many agents sit directly under this row (they move to the top level
+  // when it is deleted), subscribed to its ANSWER rather than to the record
+  // list it is computed from.
   //
   // `useEpicArtifactRecords()` hands back an array whose identity moves whenever
   // ANY record in the epic changes - a body write, a chat token, a timestamp
@@ -1666,18 +1668,11 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
   // bursted): 40 of 40 re-rendered per burst, bystanders included. `memo` is no
   // defence, because this is the row's OWN subscription rather than a prop.
   //
-  // The tree walk is the same counts by a different route: `childrenByParent`
-  // and `nodeById` are the normalised structure this sidebar already renders, so
-  // it agrees with what the user sees. `useShallow` is required rather than
-  // decorative - the selector returns a fresh object per call, and without it
-  // `useSyncExternalStore` sees a change on every notification and loops.
-  //
-  // The artifact row was moved to exactly this in `d1cb1b3a`; this row is the
-  // same defect in the second copy of it.
-  const cascadeCounts = useEpicStore(
-    useShallow((state: OpenEpicState) =>
-      computeDescendantCountsFromTree(state.tree, nodeId),
-    ),
+  // `childrenByParent` and `nodeById` are the normalised structure this sidebar
+  // already renders, so the count agrees with what the user sees. The selector
+  // returns a number, so it needs no `useShallow`.
+  const nestedAgentCount = useEpicStore((state: OpenEpicState) =>
+    countDirectAgentChildren(state.tree, nodeId),
   );
 
   const expanded = expandedIds.has(nodeId);
@@ -1714,8 +1709,15 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
   const ownerHostId = useEpicNodeHostId(nodeId);
   const sessionHostId = useEpicSessionHostId();
   const mutationHostId = ownerHostId ?? sessionHostId;
-  const archiveSupported = useHostSupportsMethod(
+  // Gated on the host the archive will be SENT to: a live stand-in when the
+  // owner is down, whose manifest this renderer has, rather than an owner that
+  // may never have handshaken with it.
+  const archiveServingHostId = useRecordWriteServingHostId(
     mutationHostId,
+    "epic.setChatArchived",
+  );
+  const archiveSupported = useHostSupportsMethod(
+    archiveServingHostId,
     SET_CHAT_ARCHIVED_METHOD,
   );
   const isArchived = useEpicNodeArchived(nodeId);
@@ -2028,7 +2030,7 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
   if (node === null) return null;
   if (!treeFilter(node.type)) return null;
 
-  const cascadeSummary = formatCascadeSummary(cascadeCounts);
+  const nestingNote = formatAgentDeleteNesting(nestedAgentCount);
   const rowClick = (event: React.MouseEvent<HTMLButtonElement>) => {
     if (selectionMode || event.ctrlKey || event.metaKey) {
       event.preventDefault();
@@ -2084,7 +2086,7 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
       onPerformDelete={performDelete}
       confirmDeleteOpen={confirmDeleteOpen}
       onConfirmDeleteOpenChange={setConfirmDeleteOpen}
-      cascadeSummary={cascadeSummary}
+      nestingNote={nestingNote}
       deletePending={deletePending}
       onConfirmDelete={confirmDelete}
       archive={archiveRow}
@@ -2134,7 +2136,7 @@ interface ChatNodeShellProps {
   readonly onPerformDelete: () => void;
   readonly confirmDeleteOpen: boolean;
   readonly onConfirmDeleteOpenChange: (open: boolean) => void;
-  readonly cascadeSummary: string | null;
+  readonly nestingNote: string | null;
   readonly deletePending: boolean;
   readonly onConfirmDelete: () => void;
   readonly archive: ChatRowArchiveInputs;
@@ -2235,7 +2237,7 @@ function ChatNodeShellBody(
     onPerformDelete,
     confirmDeleteOpen,
     onConfirmDeleteOpenChange,
-    cascadeSummary,
+    nestingNote,
     deletePending,
     onConfirmDelete,
     archive: archiveRow,
@@ -2409,8 +2411,12 @@ function ChatNodeShellBody(
         open={confirmDeleteOpen}
         onOpenChange={onConfirmDeleteOpenChange}
         title={`Delete ${EPIC_NODE_SENTENCE_NOUNS[artifactType]} "${nodeName}"?`}
-        description="This action cannot be undone."
-        cascadeSummary={cascadeSummary}
+        description={
+          nestingNote === null
+            ? "This action cannot be undone."
+            : `This action cannot be undone. ${nestingNote}`
+        }
+        cascadeSummary={null}
         actionLabel="Delete"
         isPending={deletePending}
         onConfirm={onConfirmDelete}

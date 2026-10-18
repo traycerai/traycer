@@ -1,0 +1,299 @@
+import { useState, type ReactNode } from "react";
+import { AlertTriangle, Download, FileCode, RotateCw } from "lucide-react";
+import { SandboxFrame } from "@/components/sandbox/sandbox-frame";
+import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
+import { Button } from "@/components/ui/button";
+import { Skeleton } from "@/components/ui/skeleton";
+import { useEpicFileCopy } from "@/hooks/files/use-epic-file-copy";
+import { useEpicFileRecord } from "@/hooks/files/use-epic-file-record";
+import { formatByteSize } from "@/lib/format-byte-size";
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
+import {
+  epicFileUnavailableMessage,
+  epicFileUnavailableRetries,
+  useEpicFileTextQuery,
+  type EpicFileAddress,
+} from "@/hooks/files/use-epic-file-text-query";
+import type { SandboxSize, SandboxStatus } from "@/lib/sandbox/bridge-host";
+import type { SandboxPermission } from "@/lib/sandbox/sandbox-url";
+import { cn } from "@/lib/utils";
+
+/** The stamp's floor, and the tallest page a preview ever captures. */
+const MIN_PAGE_HEIGHT_PX = 80;
+const MAX_PAGE_HEIGHT_PX = 4000;
+const NO_PERMISSIONS: readonly SandboxPermission[] = [];
+
+export interface HtmlViewerProps {
+  readonly hostId: string;
+  readonly address: EpicFileAddress;
+  readonly title: string;
+  /**
+   * Inline (a page row): the height to hold until the page reports its own.
+   * `null` fills the container (the epic-file tile).
+   */
+  readonly initialHeight: number | null;
+}
+
+function ignoreTeardown(): void {}
+
+function clampPageHeight(height: number): number {
+  return Math.min(MAX_PAGE_HEIGHT_PX, Math.max(MIN_PAGE_HEIGHT_PX, height));
+}
+
+/**
+ * An HTML epic file - an agent page - in the shared sandbox frame (D12), with
+ * the network policy the host answered for this caller and row. Owns the
+ * page's states: loading (PageStates 3), not on this device (5) and crashed
+ * (7).
+ *
+ * A new mount is a new document, so a row that scrolls back on screen loads
+ * its page again (D10); the tile keeps one mounted for long work.
+ */
+export function HtmlViewer(props: HtmlViewerProps) {
+  const { hostId, address, title, initialHeight } = props;
+  const query = useEpicFileTextQuery(hostId, address);
+  const [measuredHeight, setMeasuredHeight] = useState<number | null>(null);
+  const [crashed, setCrashed] = useState(false);
+  const [generation, setGeneration] = useState(0);
+
+  if (query.isPending) {
+    return <PageSkeleton height={initialHeight} />;
+  }
+  if (query.isError) {
+    return (
+      <PageNotice
+        icon={<FileCode aria-hidden />}
+        title={title}
+        detail="Couldn't load this page."
+        actions={<RetryButton onRetry={() => void query.refetch()} />}
+      />
+    );
+  }
+  const response = query.data;
+  if (
+    response.kind === "unavailable" &&
+    (response.reason === "not-downloaded" || response.reason === "failed")
+  ) {
+    return (
+      <HtmlNotDownloaded
+        hostId={hostId}
+        address={address}
+        title={title}
+        failedAt={response.reason === "failed" ? query.dataUpdatedAt : null}
+      />
+    );
+  }
+  if (response.kind === "unavailable") {
+    return (
+      <PageNotice
+        icon={<FileCode aria-hidden />}
+        title={title}
+        detail={epicFileUnavailableMessage(response.reason)}
+        actions={
+          epicFileUnavailableRetries(response.reason) ? (
+            <RetryButton onRetry={() => void query.refetch()} />
+          ) : null
+        }
+      />
+    );
+  }
+  if (response.kind !== "text") {
+    return (
+      <PageNotice
+        icon={<FileCode aria-hidden />}
+        title={title}
+        detail="This file has no page to show."
+        actions={null}
+      />
+    );
+  }
+  if (crashed) {
+    return (
+      <PageNotice
+        icon={<AlertTriangle aria-hidden />}
+        title="This page stopped responding"
+        detail="Reload it to run it again."
+        actions={
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              setCrashed(false);
+              setMeasuredHeight(null);
+              setGeneration((value) => value + 1);
+            }}
+          >
+            Reload
+          </Button>
+        }
+      />
+    );
+  }
+
+  const handleSize = (size: SandboxSize): void => {
+    if (initialHeight === null || size.height === null) return;
+    setMeasuredHeight(clampPageHeight(size.height));
+  };
+  const handleStatus = (status: SandboxStatus): void => {
+    if (status === "crashed") setCrashed(true);
+  };
+
+  return (
+    <SandboxFrame
+      key={generation}
+      html={response.text}
+      kind="page"
+      title={title}
+      appName={null}
+      networkPolicy={response.networkPolicy}
+      appCsp={null}
+      permissions={NO_PERMISSIONS}
+      appRequests={null}
+      className=""
+      height={initialHeight === null ? null : (measuredHeight ?? initialHeight)}
+      onSize={handleSize}
+      onStatus={handleStatus}
+      onRequestTeardown={ignoreTeardown}
+      displayMode="inline"
+      onBridge={null}
+      ref={null}
+    />
+  );
+}
+
+/**
+ * PageStates 5, the too-big-to-mirror case and the failed copy: nothing copies
+ * the page until someone asks, so re-reading alone would wait forever.
+ * `epic.fetchFile` is the ask - for a fork's failed carriage it re-runs the
+ * carriage. Where the files lane speaks for this host it reports the copy's
+ * progress, so a copy started elsewhere shows here too.
+ */
+function HtmlNotDownloaded(props: {
+  readonly hostId: string;
+  readonly address: EpicFileAddress;
+  readonly title: string;
+  /** When the read last answered `failed`; `null` for not downloaded. */
+  readonly failedAt: number | null;
+}) {
+  const { hostId, address, title, failedAt } = props;
+  const failed = failedAt !== null;
+  const copy = useEpicFileCopy(hostId, address, failedAt);
+  const record = useEpicFileRecord(address.path);
+  const { progress } = copy;
+  const size = record === null ? null : formatByteSize(record.entry.byteLength);
+  let detail = epicFileUnavailableMessage(failed ? "failed" : "not-downloaded");
+  let startLabel = size === null ? "Download" : `Download ${size}`;
+  if (failed) startLabel = "Retry";
+  if (progress !== null) {
+    detail = `Downloading to this device: ${formatByteSize(progress.received)} of ${formatByteSize(progress.total)}.`;
+  } else if (copy.copying) {
+    detail = "Downloading to this device. It shows here when it lands.";
+  }
+  const actions: ReactNode = copy.copying ? (
+    <Button
+      variant="outline"
+      size="sm"
+      disabled={copy.cancelPending}
+      onClick={copy.cancel}
+    >
+      Cancel
+    </Button>
+  ) : (
+    <Button
+      variant="outline"
+      size="sm"
+      disabled={copy.startPending}
+      onClick={copy.start}
+    >
+      {failed ? <RotateCw aria-hidden /> : <Download aria-hidden />}
+      {startLabel}
+      {copy.startPending ? (
+        <AgentSpinningDots
+          className={undefined}
+          testId={undefined}
+          variant={undefined}
+        />
+      ) : null}
+    </Button>
+  );
+  return (
+    <PageNotice
+      icon={<FileCode aria-hidden />}
+      title={title}
+      detail={detail}
+      actions={actions}
+    />
+  );
+}
+
+/** PageStates 3: the page's rough shape, at the height the stamp promised. */
+function PageSkeleton(props: { readonly height: number | null }) {
+  return (
+    <div
+      aria-hidden
+      data-testid="page-skeleton"
+      className={cn(
+        "flex w-full flex-col gap-3 overflow-hidden pt-1",
+        props.height === null && "h-full p-6",
+      )}
+      style={{ height: props.height ?? undefined }}
+    >
+      <div className="grid grid-cols-4 gap-3">
+        <Skeleton className="h-14 opacity-70" />
+        <Skeleton className="h-14 opacity-70" />
+        <Skeleton className="h-14 opacity-70" />
+        <Skeleton className="h-14 opacity-70" />
+      </div>
+      <Skeleton className="h-3 w-2/5 opacity-60" />
+      <Skeleton className="h-3 w-7/10 opacity-50" />
+      <Skeleton className="h-3 w-11/20 opacity-40" />
+    </div>
+  );
+}
+
+/**
+ * PageStates 5 and 7: a one-line box standing in for the page. On a narrow row
+ * the actions wrap below the text rather than squeeze it.
+ */
+function PageNotice(props: {
+  readonly icon: ReactNode;
+  readonly title: string;
+  readonly detail: string;
+  readonly actions: ReactNode;
+}) {
+  return (
+    <div
+      role="status"
+      className="flex w-full flex-wrap items-center gap-x-2.5 gap-y-2 rounded-md border border-canvas-border/40 bg-foreground/5 px-3 py-2 text-ui-sm [&>svg]:size-4 [&>svg]:shrink-0 [&>svg]:text-muted-foreground"
+    >
+      {props.icon}
+      <div className="min-w-48 flex-1 basis-0">
+        <TooltipWrapper
+          label={props.title}
+          side="top"
+          sideOffset={undefined}
+          align={undefined}
+        >
+          <div dir="auto" className="truncate">
+            {props.title}
+          </div>
+        </TooltipWrapper>
+        <div className="text-ui-xs text-muted-foreground">{props.detail}</div>
+      </div>
+      {props.actions === null ? null : (
+        <div className="ms-auto flex shrink-0 flex-wrap items-center gap-2">
+          {props.actions}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function RetryButton(props: { readonly onRetry: () => void }) {
+  return (
+    <Button variant="outline" size="sm" onClick={props.onRetry}>
+      <RotateCw aria-hidden />
+      Retry
+    </Button>
+  );
+}

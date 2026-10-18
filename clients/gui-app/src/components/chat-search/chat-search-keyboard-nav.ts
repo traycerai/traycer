@@ -7,6 +7,8 @@ import {
   type RefObject,
 } from "react";
 
+import { listNavigationKey } from "@/lib/keybindings/list-navigation-key";
+
 /**
  * Marks a result control (a row, an expand toggle, a show-more button) as a
  * stop for the dialog's arrow keys. The traversal order is the DOM order,
@@ -59,7 +61,7 @@ export function useChatSearchKeyboardNav(
 } {
   const onInputKeyDown = useCallback(
     (event: KeyboardEvent<HTMLInputElement>) => {
-      if (event.key !== "ArrowDown") return;
+      if (listNavigationKey(event) !== "ArrowDown") return;
       const stops = navStops(scopeRef.current);
       if (stops.length === 0) return;
       event.preventDefault();
@@ -69,18 +71,19 @@ export function useChatSearchKeyboardNav(
   );
   const onResultKeyDown = useCallback(
     (event: KeyboardEvent<HTMLElement>) => {
-      if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+      const navigationKey = listNavigationKey(event);
+      if (navigationKey !== "ArrowDown" && navigationKey !== "ArrowUp") return;
       const stops = navStops(scopeRef.current);
       const index = stops.indexOf(event.currentTarget);
       if (index < 0) return;
       event.preventDefault();
-      if (event.key === "ArrowUp" && index === 0) {
+      if (navigationKey === "ArrowUp" && index === 0) {
         inputRef.current?.focus();
         return;
       }
       const next =
         stops[
-          event.key === "ArrowDown"
+          navigationKey === "ArrowDown"
             ? Math.min(stops.length - 1, index + 1)
             : index - 1
         ];

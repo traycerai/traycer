@@ -21,6 +21,8 @@
  *  - `connect-src blob: data:` lets the image lightbox `fetch()` its own
  *    blob-cache / data-URL sources to copy or save them; both schemes are
  *    local byte access, not network reach.
+ *  - `frame-src traycer-sandbox:` admits the sandbox loader only; the
+ *    sandbox's own header keeps the app policy out of it (`security.ts`).
  *  - The localhost entries cover the default Vite dev server. Multi-run
  *    `make dev-desktop` can use another loopback port; the renderer page is
  *    served from that origin, so `'self'` covers its own assets and `ws:`
@@ -87,7 +89,13 @@ export function buildCspDirectives(env: NodeJS.ProcessEnv): readonly string[] {
     `connect-src 'self' blob: data: https: wss: ws: sentry-ipc: http://localhost:5173 ws://localhost:5173${devConnectSrcExtras(
       env,
     )}`,
-    "frame-src 'none'",
+    // Agent pages, wireframes and MCP Apps, each in an opaque frame on the
+    // sandbox scheme (`electron-main/app/sandbox-protocol.ts`). This is also
+    // what stops such a frame navigating itself anywhere else.
+    "frame-src traycer-sandbox:",
+    // Epic-file video: a Blob URL of bytes read over RPC, or a signed https
+    // URL once the file is published.
+    "media-src 'self' blob: https:",
     "object-src 'none'",
     "base-uri 'self'",
     "form-action 'self'",

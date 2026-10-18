@@ -1,7 +1,10 @@
 import { act, cleanup, render } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WindowsBridgeAuthSessionBridge } from "@/providers/windows-bridge-auth-session";
-import type { AuthSessionSnapshot } from "@/lib/auth/auth-service";
+import type {
+  AuthSessionSnapshot,
+  RevokedCloudAuthorization,
+} from "@/lib/auth/auth-service";
 import type {
   DesktopLocalAuthSessionRestoreResult,
   DesktopAuthSessionSetResult,
@@ -48,6 +51,9 @@ const UNVERIFIED_DESKTOP_SNAPSHOT: DesktopAuthSessionSnapshot = {
   profile: SIGNED_IN_SNAPSHOT.profile,
 };
 
+/** What the cross-window revoke channel says about a refusal. */
+type RevocationScope = "user-epoch" | null;
+
 type RenderWithFakesOptions = {
   readonly replayOutboundSnapshot?: AuthSessionSnapshot;
   readonly deferSet?: boolean;
@@ -61,9 +67,16 @@ type AuthSessionSetResolution =
 interface AuthSessionBridgeTestHarness {
   readonly emitInbound: (snapshot: DesktopAuthSessionSnapshot) => void;
   readonly emitOutbound: (snapshot: AuthSessionSnapshot) => void;
-  readonly emitRevoked: (token: string) => void;
+  readonly emitRevoked: (token: string, revocation: RevocationScope) => void;
+  readonly emitVerificationRevoked: (
+    token: string,
+    revocation: RevocationScope,
+  ) => void;
   readonly get: Mock<() => Promise<DesktopAuthSessionSnapshot>>;
   readonly ingest: Mock<(snapshot: AuthSessionSnapshot) => Promise<void>>;
+  readonly ingestRevoked: Mock<
+    (rejectedToken: string, revocation: RevocationScope) => void
+  >;
   readonly restoreLocal: Mock<
     (expected: {
       readonly userId: string;
@@ -73,7 +86,9 @@ interface AuthSessionBridgeTestHarness {
   readonly inboundDispose: Mock<() => void>;
   readonly outboundDispose: Mock<() => void>;
   readonly resolveSet: (resolution: AuthSessionSetResolution) => void;
-  readonly revoke: Mock<(rejectedToken: string) => Promise<void>>;
+  readonly revoke: Mock<
+    (rejectedToken: string, revocation: RevocationScope) => Promise<void>
+  >;
   readonly set: Mock<
     (
       snapshot: DesktopAuthSessionSnapshot,
@@ -98,8 +113,11 @@ function renderWithFakes(
   let outboundListener: ((snapshot: AuthSessionSnapshot) => void) | null = null;
   let inboundListener: ((snapshot: DesktopAuthSessionSnapshot) => void) | null =
     null;
-  let revokedListener: ((revoked: { readonly token: string }) => void) | null =
+  let revokedListener: ((revoked: RevokedCloudAuthorization) => void) | null =
     null;
+  let verificationRevokedListener:
+    | ((rejectedToken: string, revocation: RevocationScope) => void)
+    | null = null;
   let resolveSetPromise:
     | ((resolution: AuthSessionSetResolution) => void)
     | null = null;
@@ -114,6 +132,9 @@ function renderWithFakes(
   const ingest = vi.fn((_snapshot: AuthSessionSnapshot): Promise<void> =>
     Promise.resolve(),
   );
+  const ingestRevoked = vi.fn(
+    (_rejectedToken: string, _revocation: RevocationScope): void => undefined,
+  );
   mockUseAuthService.mockReturnValue({
     onSessionSnapshotChange: (
       handler: (snapshot: AuthSessionSnapshot) => void,
@@ -127,7 +148,7 @@ function renderWithFakes(
       };
     },
     onCloudAuthorizationRevoked: (
-      handler: (revoked: { readonly token: string }) => void,
+      handler: (revoked: RevokedCloudAuthorization) => void,
     ) => {
       revokedListener = handler;
       return {
@@ -138,9 +159,12 @@ function renderWithFakes(
     },
     getIdentityGeneration: () => 0,
     ingestProjectedSessionSnapshot: ingest,
+    ingestCloudAuthorizationRevoked: ingestRevoked,
   });
 
-  const revoke = vi.fn((_rejectedToken: string) => Promise.resolve());
+  const revoke = vi.fn((_rejectedToken: string, _revocation: RevocationScope) =>
+    Promise.resolve(),
+  );
   const set = vi.fn((snapshot: DesktopAuthSessionSnapshot) => {
     if (!options.deferSet) {
       if (setResult.outcome === "accepted") {
@@ -176,6 +200,16 @@ function renderWithFakes(
         inboundListener = handler;
         return { dispose: inboundDispose };
       },
+      onVerificationRevoked: (
+        handler: (rejectedToken: string, revocation: RevocationScope) => void,
+      ) => {
+        verificationRevokedListener = handler;
+        return {
+          dispose: () => {
+            verificationRevokedListener = null;
+          },
+        };
+      },
     },
   });
 
@@ -188,6 +222,7 @@ function renderWithFakes(
   return {
     get,
     ingest,
+    ingestRevoked,
     restoreLocal,
     inboundDispose,
     outboundDispose,
@@ -207,9 +242,15 @@ function renderWithFakes(
     emitOutbound: (snapshot) => {
       act(() => outboundListener?.(snapshot));
     },
-    emitRevoked: (token) => {
+    emitRevoked: (token, revocation) => {
       if (revokedListener === null) throw new Error("no revoke listener");
-      act(() => revokedListener?.({ token }));
+      act(() => revokedListener?.({ token, revocation }));
+    },
+    emitVerificationRevoked: (token, revocation) => {
+      if (verificationRevokedListener === null) {
+        throw new Error("no verification-revoked listener");
+      }
+      act(() => verificationRevokedListener?.(token, revocation));
     },
   };
 }
@@ -237,7 +278,7 @@ describe("<WindowsBridgeAuthSessionBridge />", () => {
     expect(set).toHaveBeenCalledTimes(1);
 
     await act(async () => {
-      emitRevoked(SIGNED_IN_TOKEN);
+      emitRevoked(SIGNED_IN_TOKEN, null);
       await Promise.resolve();
     });
 
@@ -247,9 +288,49 @@ describe("<WindowsBridgeAuthSessionBridge />", () => {
     // Revoke names the rejected bearer, which is main's fence against a
     // revoke that lands after a sibling window's fresh sign-in.
     expect(revoke).toHaveBeenCalledTimes(1);
-    expect(revoke).toHaveBeenCalledWith(SIGNED_IN_TOKEN);
+    expect(revoke).toHaveBeenCalledWith(SIGNED_IN_TOKEN, null);
     expect(set).toHaveBeenCalledTimes(1);
   });
+
+  it("passes the user-epoch revocation scope through to main, so the other windows can be told", async () => {
+    const { emitOutbound, emitRevoked, set, revoke } = renderWithFakes(
+      { outcome: "accepted" },
+      {},
+    );
+    await act(async () => {
+      emitOutbound(SIGNED_IN_SNAPSHOT);
+      await Promise.resolve();
+    });
+
+    await act(async () => {
+      emitRevoked(SIGNED_IN_TOKEN, "user-epoch");
+      await Promise.resolve();
+    });
+
+    expect(revoke).toHaveBeenCalledTimes(1);
+    expect(revoke).toHaveBeenCalledWith(SIGNED_IN_TOKEN, "user-epoch");
+    // Still only the revoke: the scope does not turn it into a session write.
+    expect(set).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    { label: "a user-epoch revocation", revocation: "user-epoch" as const },
+    { label: "a revocation without a scope", revocation: null },
+  ])(
+    "hands a sibling window's verdict loss to the service with its scope: $label",
+    ({ revocation }) => {
+      const { emitVerificationRevoked, ingestRevoked, ingest, set } =
+        renderWithFakes({ outcome: "accepted" }, {});
+
+      emitVerificationRevoked(SIGNED_IN_TOKEN, revocation);
+
+      expect(ingestRevoked).toHaveBeenCalledTimes(1);
+      expect(ingestRevoked).toHaveBeenCalledWith(SIGNED_IN_TOKEN, revocation);
+      // It is a verdict-loss edge, not a session projection either way.
+      expect(ingest).not.toHaveBeenCalled();
+      expect(set).not.toHaveBeenCalled();
+    },
+  );
 
   it("surfaces a toast naming the reason when main refuses the pushed session", async () => {
     const { emitOutbound } = renderWithFakes(

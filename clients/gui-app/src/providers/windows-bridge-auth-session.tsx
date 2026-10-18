@@ -170,7 +170,10 @@ export function WindowsBridgeAuthSessionBridge(
     // new serialization and is written. A desktop shell built before the
     // channel existed has no `revoke`; it keeps the pre-channel behaviour.
     const revokeSubscription = auth.onCloudAuthorizationRevoked((revoked) => {
-      const pending = bridge.authSession.revoke?.(revoked.token);
+      const pending = bridge.authSession.revoke?.(
+        revoked.token,
+        revoked.revocation,
+      );
       if (pending === undefined) return;
       void pending.catch((cause: unknown) => {
         appLogger.warn("[auth] could not revoke the desktop auth session", {
@@ -193,9 +196,11 @@ export function WindowsBridgeAuthSessionBridge(
     // shell built before the channel existed has no `onVerificationRevoked`;
     // it keeps the pre-channel behaviour.
     const verdictLossSubscription =
-      bridge.authSession.onVerificationRevoked?.((rejectedToken) => {
-        auth.ingestCloudAuthorizationRevoked(rejectedToken);
-      }) ?? null;
+      bridge.authSession.onVerificationRevoked?.(
+        (rejectedToken, revocation) => {
+          auth.ingestCloudAuthorizationRevoked(rejectedToken, revocation);
+        },
+      ) ?? null;
 
     // HostRuntimeProvider has already awaited auth.start(), restoring the
     // shared credentials file. Subscribing synchronously replays that session

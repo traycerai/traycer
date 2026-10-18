@@ -288,6 +288,13 @@ export function HostSwitcher(props: {
    * picker). See `hostOptionPickerGroup`.
    */
   readonly offersAutomations: boolean;
+  /**
+   * Resolves each row's environment label (Tracy Bots), or `null` for a
+   * picker that does not say. Settings' host list is the one caller: the
+   * environment is changed there, so it is read there. Same shape as
+   * `updateViewForHost`, for the same reason - a resolver, never a flag.
+   */
+  readonly environmentLabelForHost: ((hostId: string) => string | null) | null;
 }): ReactNode {
   const [open, setOpenState] = useState(false);
   const [search, setSearch] = useState("");
@@ -443,6 +450,9 @@ export function HostSwitcher(props: {
                     host.hostId !== props.inertExceptHostId
                   }
                   updateView={props.updateViewForHost?.(host.hostId) ?? null}
+                  environmentLabel={
+                    props.environmentLabelForHost?.(host.hostId) ?? null
+                  }
                   onSelect={() => {
                     // A `pin` or `bind` pick of a sleeping sandbox wakes it.
                     if (props.intent !== "view") wakeSandboxOnPick(host);
@@ -803,6 +813,8 @@ function HostSwitcherRow(props: {
   readonly surfaceInert: boolean;
   /** This row's projected update state, or `null` for a non-badging picker. */
   readonly updateView: FleetUpdateView | null;
+  /** This row's environment label, or `null` for a picker that does not say. */
+  readonly environmentLabel: string | null;
   readonly onSelect: () => void;
 }): ReactNode {
   const { host } = props;
@@ -841,6 +853,7 @@ function HostSwitcherRow(props: {
         surfaceState={surfaceState}
         updateView={props.updateView}
         nameRef={null}
+        environmentLabel={props.environmentLabel}
       />
     </CommandItem>
   );

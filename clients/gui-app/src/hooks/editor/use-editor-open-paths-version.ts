@@ -10,7 +10,8 @@ export function useEditorOpenPathsVersion(
 /**
  * Whether `hostId` negotiated `editor.openPaths` 1.1 - the minor that widened
  * the request's target enum past the frozen 1.0 editor set with `"system"`,
- * `"finder"`, and every later `EDITORS` id.
+ * `"finder"`, and `"vscodium"`. Later editors carry their own floor
+ * (`useOfferableEditors`).
  *
  * A 1.0 host's request schema rejects those literals at PARSE, so this is the
  * emission gate they share rather than a belt-and-braces check. Fails closed:

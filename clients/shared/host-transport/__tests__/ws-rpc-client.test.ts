@@ -1366,6 +1366,111 @@ describe("WsRpcClient", () => {
     });
   });
 
+  // An abort stops the caller waiting; it does not recall a frame already on
+  // the wire. The two aborts differ only in whether the request was sent
+  // (traycerai/traycer#2546, round 10, finding 4).
+  it("an abort after the request frame was sent says the request may have reached the host", async () => {
+    const { factory, sockets } = makeFactory();
+    const client = new WsRpcClient<typeof testRegistry>({
+      clientIdentity: TEST_CLIENT_IDENTITY,
+      registry: testRegistry,
+      requestId: () => "req-abort-after-send",
+      webSocketFactory: factory,
+      dialTimeoutMs: 1000,
+      frameTimeoutMs: 1000,
+      hostAttestationWindowMs: 0,
+      evidence: NO_TRANSPORT_EVIDENCE,
+    });
+    const lifetime = new AbortController();
+    const outcome = client
+      .request(
+        "host.echo",
+        { message: "hi" },
+        {
+          replayMustBeKeyed: false,
+          requiredHostMethodVersion: null,
+          idempotencyKey: null,
+          authority: {
+            endpoint: {
+              hostId: mockLocalHostEntry.hostId,
+              websocketUrl: mockLocalHostEntry.websocketUrl,
+            },
+            bearer: new MutableBearerLease("token-abc", "test-user"),
+            abortSignal: lifetime.signal,
+          },
+        },
+      )
+      .then(
+        () => null,
+        (reason: unknown) => reason,
+      );
+    await flush();
+    sockets[0].socket.fireOpen();
+    await flush();
+    sockets[0].socket.fireMessage(
+      openAckWithOptionalHostEcho({ major: 1, minor: 0 }),
+    );
+    await flush();
+    expect(sockets[0].sent).toHaveLength(2);
+
+    lifetime.abort("host-replaced");
+
+    const error: unknown = await outcome;
+    expect(error).toBeInstanceOf(HostRequestAbortedError);
+    expect(
+      error instanceof HostRequestAbortedError && error.mayHaveDispatched,
+    ).toBe(true);
+  });
+
+  it("an abort before the request frame was sent says the request never left", async () => {
+    const { factory, sockets } = makeFactory();
+    const client = new WsRpcClient<typeof testRegistry>({
+      clientIdentity: TEST_CLIENT_IDENTITY,
+      registry: testRegistry,
+      requestId: () => "req-abort-before-send",
+      webSocketFactory: factory,
+      dialTimeoutMs: 1000,
+      frameTimeoutMs: 1000,
+      hostAttestationWindowMs: 0,
+      evidence: NO_TRANSPORT_EVIDENCE,
+    });
+    const lifetime = new AbortController();
+    const outcome = client
+      .request(
+        "host.echo",
+        { message: "hi" },
+        {
+          replayMustBeKeyed: false,
+          requiredHostMethodVersion: null,
+          idempotencyKey: null,
+          authority: {
+            endpoint: {
+              hostId: mockLocalHostEntry.hostId,
+              websocketUrl: mockLocalHostEntry.websocketUrl,
+            },
+            bearer: new MutableBearerLease("token-abc", "test-user"),
+            abortSignal: lifetime.signal,
+          },
+        },
+      )
+      .then(
+        () => null,
+        (reason: unknown) => reason,
+      );
+    await flush();
+    sockets[0].socket.fireOpen();
+    await flush();
+    expect(sockets[0].sent).toHaveLength(1);
+
+    lifetime.abort("host-replaced");
+
+    const error: unknown = await outcome;
+    expect(error).toBeInstanceOf(HostRequestAbortedError);
+    expect(
+      error instanceof HostRequestAbortedError && error.mayHaveDispatched,
+    ).toBe(false);
+  });
+
   /**
    * C5. A socket that never opened reports a dial REFUSAL on close, which is
    * correct only when the host is the one that closed it. Every teardown we

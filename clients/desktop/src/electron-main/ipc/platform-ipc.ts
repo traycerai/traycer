@@ -65,6 +65,7 @@ import type {
   LocalHostCapability,
 } from "../../ipc-contracts/host-lifecycle-types";
 import type {
+  FileDownloadUrlInput,
   FileSaveInput,
   FileSaveResult,
 } from "../../ipc-contracts/platform-types";
@@ -75,7 +76,10 @@ import {
   dialog,
   nativeImage,
   shell,
+  type DownloadItem,
+  type Event as ElectronEvent,
   type ProxyConfig,
+  type WebContents,
 } from "electron";
 import { randomUUID } from "node:crypto";
 import { copyFile, mkdir, writeFile } from "node:fs/promises";
@@ -189,20 +193,28 @@ export function registerPlatformIpc(
     RunnerHostInvoke.fileSave,
     async (event, input: unknown): Promise<FileSaveResult | null> => {
       const file = parseFileSaveInput(input);
-      const defaultPath = path.basename(file.name) || "download";
-      const options = {
-        defaultPath,
-        filters: buildSaveFileFilters(file.name, file.type),
-      };
-      const window = BrowserWindow.fromWebContents(event.sender);
-      const result =
-        window === null || window.isDestroyed()
-          ? await dialog.showSaveDialog(options)
-          : await dialog.showSaveDialog(window, options);
-      if (result.canceled || !result.filePath) return null;
-      await writeFile(result.filePath, Buffer.from(new Uint8Array(file.bytes)));
-      savedFilePaths.add(result.filePath);
-      return { name: path.basename(result.filePath), path: result.filePath };
+      const filePath = await pickSavePath(event.sender, file.name, file.type);
+      if (filePath === null) return null;
+      await writeFile(filePath, Buffer.from(new Uint8Array(file.bytes)));
+      savedFilePaths.add(filePath);
+      return { name: path.basename(filePath), path: filePath };
+    },
+  );
+
+  bridge.handleInvoke(
+    RunnerHostInvoke.fileDownloadUrl,
+    async (event, input: unknown): Promise<FileSaveResult | null> => {
+      const request = parseFileDownloadUrlInput(input);
+      const filePath = await pickSavePath(
+        event.sender,
+        request.name,
+        request.type,
+      );
+      if (filePath === null) return null;
+      const landed = await downloadUrlTo(event.sender, request.url, filePath);
+      if (!landed) return null;
+      savedFilePaths.add(filePath);
+      return { name: path.basename(filePath), path: filePath };
     },
   );
 
@@ -676,6 +688,132 @@ function parseTemporaryDroppedFileInput(
     throw new Error("fileDrops.writeTemporary requires ArrayBuffer bytes");
   }
   return { name, type, bytes };
+}
+
+/** The native save dialog over the sender's window; `null` when dismissed. */
+async function pickSavePath(
+  sender: WebContents,
+  name: string,
+  type: string,
+): Promise<string | null> {
+  const options = {
+    defaultPath: path.basename(name) || "download",
+    filters: buildSaveFileFilters(name, type),
+  };
+  const window = BrowserWindow.fromWebContents(sender);
+  const result =
+    window === null || window.isDestroyed()
+      ? await dialog.showSaveDialog(options)
+      : await dialog.showSaveDialog(window, options);
+  if (result.canceled || !result.filePath) return null;
+  return result.filePath;
+}
+
+/**
+ * Downloads `url` to `filePath` through the sender's session, claiming the one
+ * download whose chain starts at `url` and giving it the path so no second
+ * dialog appears. Resolves `true` once it completes and `false` when it is
+ * cancelled; an interrupted download rejects.
+ */
+const claimedDownloads = new WeakSet<DownloadItem>();
+const DOWNLOAD_START_TIMEOUT_MS = 30_000;
+
+function downloadUrlTo(
+  sender: WebContents,
+  url: string,
+  filePath: string,
+): Promise<boolean> {
+  if (sender.isDestroyed()) return Promise.resolve(false);
+  const wanted = new URL(url).href;
+  const session = sender.session;
+  return new Promise((resolve, reject) => {
+    let claimed: DownloadItem | null = null;
+    let settled = false;
+    const cleanup = (): void => {
+      clearTimeout(timer);
+      session.off("will-download", onWillDownload);
+      sender.off("destroyed", onDestroyed);
+      claimed?.off("done", onDone);
+    };
+    const finish = (success: boolean, error: Error | null): void => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      if (error !== null) reject(error);
+      else resolve(success);
+    };
+    const onDestroyed = (): void => {
+      finish(false, null);
+      claimed?.cancel();
+    };
+    const onDone = (_event: ElectronEvent, state: string): void => {
+      if (state === "completed") finish(true, null);
+      else if (state === "cancelled") finish(false, null);
+      else finish(false, new Error(`The download was ${state}`));
+    };
+    const onWillDownload = (
+      _event: ElectronEvent,
+      item: DownloadItem,
+      source: WebContents,
+    ): void => {
+      const first = item.getURLChain()[0];
+      if (
+        source !== sender ||
+        claimedDownloads.has(item) ||
+        first === undefined ||
+        !URL.canParse(first) ||
+        new URL(first).href !== wanted
+      )
+        return;
+      // Session listeners run in registration order. A concurrent request for
+      // this same URL must claim the next item, never overwrite this save path.
+      claimedDownloads.add(item);
+      claimed = item;
+      clearTimeout(timer);
+      session.off("will-download", onWillDownload);
+      item.once("done", onDone);
+      try {
+        item.setSavePath(filePath);
+      } catch {
+        finish(false, new Error("The download destination could not be set"));
+        item.cancel();
+      }
+    };
+    // Only admission is timed: an accepted large download may take longer.
+    const timer = setTimeout(() => {
+      finish(false, new Error("The download did not start"));
+    }, DOWNLOAD_START_TIMEOUT_MS);
+    session.on("will-download", onWillDownload);
+    sender.once("destroyed", onDestroyed);
+    try {
+      sender.downloadURL(url);
+    } catch (error) {
+      finish(
+        false,
+        error instanceof Error
+          ? error
+          : new Error("The download could not start"),
+      );
+    }
+  });
+}
+
+function parseFileDownloadUrlInput(input: unknown): FileDownloadUrlInput {
+  if (!isRecord(input)) {
+    throw new Error("file.downloadUrl requires an object payload");
+  }
+  const { url, name, type } = input;
+  if (typeof url !== "string" || typeof name !== "string") {
+    throw new Error("file.downloadUrl requires a string url and name");
+  }
+  if (typeof type !== "string") {
+    throw new Error("file.downloadUrl requires a string type");
+  }
+  // Only a signed https URL is ever handed out for a download.
+  if (!URL.canParse(url) || new URL(url).protocol !== "https:") {
+    throw new Error("file.downloadUrl requires an https URL");
+  }
+  return { url, name, type };
 }
 
 function parseFileSaveInput(input: unknown): FileSaveInput {

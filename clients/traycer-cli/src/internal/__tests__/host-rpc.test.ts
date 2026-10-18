@@ -17,7 +17,7 @@ import {
 } from "../../../../shared/host-transport/host-messenger";
 import { createCliCredentialsStore } from "../../store/credentials-store";
 import type { CredentialsMutationStore } from "@traycer/protocol/config/credentials-mutation";
-import { CLI_ERROR_CODES } from "../../runner/errors";
+import { CLI_ERROR_CODES, EXPECTED_CLI_ERROR_CODES } from "../../runner/errors";
 import {
   hostRpcRegistry,
   hostStreamRpcRegistry,
@@ -430,6 +430,176 @@ describe("callHostRpc", () => {
       message: "traycer: Message exceeds the maximum size.",
       details: null,
     });
+  });
+
+  // The host answers these with a typed wire code for a state of the person's
+  // own machine or workspace, and its message names the remedy. Each used to
+  // fall through to UNEXPECTED, which the runner captures as a CLI defect
+  // (TRAYCER-CLI-7). The mapped code must also be one the runner leaves
+  // uncaptured, so each case checks both.
+  it.each([
+    {
+      wire: "WORKTREE_MISSING" as const,
+      cli: CLI_ERROR_CODES.WORKTREE_MISSING,
+      message:
+        "A bound folder is missing on disk: /gone. Restore it, re-bind to another folder, or remove it to continue.",
+    },
+    {
+      wire: "WORKSPACE_BINDING_REQUIRED" as const,
+      cli: CLI_ERROR_CODES.WORKSPACE_BINDING_REQUIRED,
+      message:
+        "Unable to resolve this agent's workspace selection. Choose a workspace before sending a message.",
+    },
+    {
+      wire: "E_HOST_STORAGE_FULL" as const,
+      cli: CLI_ERROR_CODES.HOST_STORAGE_FULL,
+      message:
+        "The host machine is out of disk space. Free some space on it, then try again.",
+    },
+    {
+      // Sent for a reply on a thread that belongs to another pair
+      // (RESPONSE_ID_MISMATCH): the caller's own input.
+      wire: "E_INVALID_ARGUMENT" as const,
+      cli: CLI_ERROR_CODES.INVALID_ARGUMENT,
+      message:
+        "agent.sendMessage: RESPONSE_ID_MISMATCH - 'r1' belongs to a different (sender, receiver) pair.",
+    },
+  ])(
+    "maps the host's $wire refusal to an expected CLI code and keeps its message",
+    async ({ wire, cli, message }) => {
+      const mapped = await toAgentCliError(
+        Promise.reject(
+          new HostRpcError({
+            code: wire,
+            message,
+            requestId: "r1",
+            method: "agent.sendMessage",
+            fatalDetails: null,
+          }),
+        ),
+      ).catch((error: unknown) => error);
+      expect(mapped).toMatchObject({
+        code: cli,
+        message: `traycer: ${message}`,
+        details: null,
+        exitCode: 1,
+      });
+      expect(EXPECTED_CLI_ERROR_CODES.has(cli)).toBe(true);
+    },
+  );
+
+  // The host sends a request that names a managed profile it cannot use as a
+  // 400 `RPC_ERROR` with one of four fixed messages (the person's own
+  // selection, TRAYCER-CLI-4W). They end as the expected INVALID_ARGUMENT, with
+  // the same output the host's `E_INVALID_ARGUMENT` gets.
+  it.each([
+    'No profile "p-1" is registered for provider "claude-code".',
+    'Profile "p-1" for provider "claude-code" was removed and can no longer be used.',
+    'Profile "p-1" for provider "claude-code" is still completing setup and cannot be used yet.',
+    'Provider "cursor" does not support managed profiles.',
+  ])(
+    "maps an RPC_ERROR carrying the profile-selection refusal %s to an expected INVALID_ARGUMENT",
+    async (message) => {
+      const mapped = await toAgentCliError(
+        Promise.reject(
+          new HostRpcError({
+            code: "RPC_ERROR",
+            message,
+            requestId: "r1",
+            method: "agent.sendMessage",
+            fatalDetails: null,
+          }),
+        ),
+      ).catch((error: unknown) => error);
+      expect(mapped).toMatchObject({
+        code: CLI_ERROR_CODES.INVALID_ARGUMENT,
+        message: `traycer: ${message}`,
+        details: null,
+        exitCode: 1,
+      });
+      expect(
+        EXPECTED_CLI_ERROR_CODES.has(CLI_ERROR_CODES.INVALID_ARGUMENT),
+      ).toBe(true);
+    },
+  );
+
+  // Control: an RPC_ERROR whose message is not a profile-selection refusal
+  // stays UNEXPECTED and captured, so a host-side request-validation defect
+  // is still reported.
+  it("keeps an RPC_ERROR with a params-validation message as a captured UNEXPECTED", async () => {
+    const mapped = await toAgentCliError(
+      Promise.reject(
+        new HostRpcError({
+          code: "RPC_ERROR",
+          message: "Invalid params for agent.sendMessage: profile: Required",
+          requestId: "r1",
+          method: "agent.sendMessage",
+          fatalDetails: null,
+        }),
+      ),
+    ).catch((error: unknown) => error);
+    expect(mapped).toMatchObject({
+      code: CLI_ERROR_CODES.UNEXPECTED,
+      message: "Invalid params for agent.sendMessage: profile: Required",
+    });
+    expect(EXPECTED_CLI_ERROR_CODES.has(CLI_ERROR_CODES.UNEXPECTED)).toBe(
+      false,
+    );
+  });
+
+  // TRAYCER-CLI-P: a provider the person turned off in Settings -> Providers.
+  // The host refuses a run or launch on it with HTTP 403 and the typed
+  // `PROVIDER_DISABLED` code. It is the person's own setting, so the mapped
+  // code is an expected one the runner leaves uncaptured, and the host's
+  // message (which names the provider and the setting) is kept exactly as the
+  // fall-through printed it, with no prefix added. `--json`
+  // carries the new code in place of `E_UNEXPECTED`.
+  it("maps the host's PROVIDER_DISABLED refusal to E_PROVIDER_DISABLED and keeps its message", async () => {
+    const message = "Kilo Code is disabled. Enable it in Settings → Providers.";
+    const mapped = await toAgentCliError(
+      Promise.reject(
+        new HostRpcError({
+          code: "PROVIDER_DISABLED",
+          message,
+          requestId: "r1",
+          method: "agent.sendMessage",
+          fatalDetails: null,
+        }),
+      ),
+    ).catch((error: unknown) => error);
+    expect(mapped).toMatchObject({
+      code: "E_PROVIDER_DISABLED",
+      message,
+      details: null,
+      exitCode: 1,
+    });
+    expect(EXPECTED_CLI_ERROR_CODES.has("E_PROVIDER_DISABLED")).toBe(true);
+  });
+
+  // The arm keys on the typed wire code, never on the host's wording: the same
+  // sentence arriving as an untyped `RPC_ERROR` stays a captured defect.
+  it("keeps an untyped RPC_ERROR as UNEXPECTED even when its text reads like a disabled provider", async () => {
+    await expect(
+      toAgentCliError(
+        Promise.reject(
+          new HostRpcError({
+            code: "RPC_ERROR",
+            message:
+              "Kilo Code is disabled. Enable it in Settings → Providers.",
+            requestId: "r1",
+            method: "agent.sendMessage",
+            fatalDetails: null,
+          }),
+        ),
+      ),
+    ).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.UNEXPECTED,
+      message: "Kilo Code is disabled. Enable it in Settings → Providers.",
+      details: null,
+    });
+    expect(EXPECTED_CLI_ERROR_CODES.has(CLI_ERROR_CODES.UNEXPECTED)).toBe(
+      false,
+    );
   });
 
   // A `HostTransportFailureError` means the connection itself failed or went

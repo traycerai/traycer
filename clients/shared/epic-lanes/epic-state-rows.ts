@@ -65,6 +65,7 @@ import type {
   EpicDeletedArtifactRecord,
   EpicMeta,
 } from "@traycer/protocol/host/epic/state-subscribe";
+import type { EpicStateFileRecord } from "@traycer/protocol/host/epic/files";
 import type { RoleClaim } from "@traycer/protocol/persistence/epic/role-claims";
 
 /** One row on the records lane, tagged by which population it came from. */
@@ -90,6 +91,14 @@ export type EpicStateRow =
    * and the set revision is what fences it.
    */
   | { readonly kind: "role-claims"; readonly claims: readonly RoleClaim[] }
+  /**
+   * The whole epic-files SET (`epic.state.subscribe@1.2`), revisioned as a set
+   * for the same reason role claims are: a file's entry is replaced when its
+   * bytes change, and what races is the set. Each record carries this HOST's
+   * `localState`, so the row describes the serving host's disk as well as the
+   * shared manifest, tombstones included - the panel decides what to hide.
+   */
+  | { readonly kind: "files"; readonly files: readonly EpicStateFileRecord[] }
   /** The epic's metadata, complete. Replaces whatever is held. */
   | { readonly kind: "epic-meta"; readonly meta: EpicMeta }
   /**
@@ -140,6 +149,9 @@ export function commentThreadRowId(
  * wholesale and fenced by the set's own revision.
  */
 export const ROLE_CLAIMS_ROW_ID = "role-claims";
+
+/** The files set's row key. A singleton, fenced by the set's own revision. */
+export const FILES_ROW_ID = "files";
 
 /**
  * The epic-metadata row's key. Also a singleton, and the whole and patch shapes

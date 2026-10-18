@@ -162,6 +162,11 @@ function ClearFileEditSnapshotsRow(props: {
         cascadeSummary={null}
         actionLabel="Clear snapshots"
         isPending={clearSnapshotsMutation.isPending}
+        // The clear is one host call that can run long on a large store and
+        // finishes on its own once dispatched. Closing abandons nothing: the
+        // opener above stays disabled while it runs, so it cannot be stacked,
+        // and the result still arrives as a toast.
+        dismissableWhilePending
         onConfirm={() => {
           if (!props.enabled || client === null) return;
           clearSnapshotsMutation.mutate(SNAPSHOTS_LOCAL_STORAGE_PARAMS);

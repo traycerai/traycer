@@ -1,5 +1,9 @@
-import { describe, expect, it } from "vitest";
-import { useAuthStore, type AuthState } from "@/stores/auth/auth-store";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import {
+  useAuthStore,
+  type AuthState,
+  type TerminalCloudVerdictLoss,
+} from "@/stores/auth/auth-store";
 
 /**
  * Static / structural guard for the GUI auth store boundary contract.
@@ -103,4 +107,175 @@ describe("auth-store: cloudVerdictLoss", () => {
       before.setCloudVerdictLoss("unreachable");
     }
   });
+});
+
+// ── hostRefusedHeldBearer ─────────────────────────────────────────────────
+//
+// A host refused the bearer an `unverified` session holds AFTER authn refused
+// the session. The rule for when that is recorded lives in the store so every
+// transport that sees a refusal can report it without restating it; these
+// tests pin the rule and the five status reducers that retire the fact.
+describe("auth-store: hostRefusedHeldBearer", () => {
+  const profile = {
+    userId: "refused-user",
+    userName: "Refused",
+    email: "refused@example.com",
+  } as const;
+  const contextMetadata = {
+    userId: "refused-user",
+    username: "Refused",
+  } as const;
+  const terminalLosses: ReadonlyArray<TerminalCloudVerdictLoss> = [
+    "session-rejected",
+    "account-unavailable",
+    "ended-elsewhere",
+  ];
+
+  function resetStore(): void {
+    useAuthStore.getState().setSignedOut();
+    useAuthStore.getState().setCloudVerdictLoss("unreachable");
+  }
+
+  /** `unverified` on a refused cloud verdict, host refusal NOT yet recorded. */
+  function holdRefusedSession(loss: TerminalCloudVerdictLoss): void {
+    const state = useAuthStore.getState();
+    state.setUnverifiedSession(profile, contextMetadata);
+    state.setCloudVerdictLoss(loss);
+  }
+
+  beforeEach(resetStore);
+  afterEach(resetStore);
+
+  it("defaults to false", () => {
+    expect(useAuthStore.getState().hostRefusedHeldBearer).toBe(false);
+  });
+
+  it("records nothing when the session is signed-in, even with a refused verdict latched", () => {
+    const state = useAuthStore.getState();
+    state.setSignedIn(profile, contextMetadata, []);
+    // A latched loss under `signed-in` is a stale value the status guard must
+    // ignore: the rule keys on the STATUS, not on the loss alone.
+    state.setCloudVerdictLoss("session-rejected");
+
+    state.noteHostRefusedHeldBearer();
+
+    expect(useAuthStore.getState().status).toBe("signed-in");
+    expect(useAuthStore.getState().hostRefusedHeldBearer).toBe(false);
+  });
+
+  it("records nothing when the session is signed-out", () => {
+    const state = useAuthStore.getState();
+    state.setSignedOut();
+    state.setCloudVerdictLoss("session-rejected");
+
+    state.noteHostRefusedHeldBearer();
+
+    expect(useAuthStore.getState().status).toBe("signed-out");
+    expect(useAuthStore.getState().hostRefusedHeldBearer).toBe(false);
+  });
+
+  it("records nothing while a sign-in is in flight", () => {
+    const state = useAuthStore.getState();
+    state.setSigningIn("device");
+    state.setCloudVerdictLoss("session-rejected");
+
+    state.noteHostRefusedHeldBearer();
+
+    expect(useAuthStore.getState().status).toBe("signing-in");
+    expect(useAuthStore.getState().hostRefusedHeldBearer).toBe(false);
+  });
+
+  it("records nothing for an unverified session whose authn was merely unreachable", () => {
+    const state = useAuthStore.getState();
+    state.setUnverifiedSession(profile, contextMetadata);
+    expect(useAuthStore.getState().cloudVerdictLoss).toBe("unreachable");
+
+    state.noteHostRefusedHeldBearer();
+
+    expect(useAuthStore.getState().status).toBe("unverified");
+    expect(useAuthStore.getState().hostRefusedHeldBearer).toBe(false);
+  });
+
+  for (const loss of terminalLosses) {
+    it(`records the refusal for an unverified session whose cloud verdict was lost as ${loss}`, () => {
+      holdRefusedSession(loss);
+      expect(useAuthStore.getState().hostRefusedHeldBearer).toBe(false);
+
+      useAuthStore.getState().noteHostRefusedHeldBearer();
+
+      const after = useAuthStore.getState();
+      expect(after.hostRefusedHeldBearer).toBe(true);
+      // The status stays `unverified`: the identity is kept and nothing
+      // account-scoped is purged. Only the shell's admission changes.
+      expect(after.status).toBe("unverified");
+      expect(after.cloudVerdictLoss).toBe(loss);
+      expect(after.profile?.userId).toBe("refused-user");
+      expect(after.contextMetadata?.userId).toBe("refused-user");
+    });
+  }
+
+  it("does not notify subscribers when it records nothing", () => {
+    // The stream revalidator reports every reconnect refusal, so a no-op that
+    // still produced a new state would re-render every subscriber each time.
+    useAuthStore.getState().setUnverifiedSession(profile, contextMetadata);
+    let notifications = 0;
+    const unsubscribe = useAuthStore.subscribe(() => {
+      notifications += 1;
+    });
+    try {
+      useAuthStore.getState().noteHostRefusedHeldBearer();
+      expect(notifications).toBe(0);
+    } finally {
+      unsubscribe();
+    }
+  });
+
+  const resettingReducers: ReadonlyArray<{
+    readonly name: string;
+    readonly apply: (state: AuthState) => void;
+  }> = [
+    {
+      name: "setSigningIn",
+      apply: (state) => {
+        state.setSigningIn("device");
+      },
+    },
+    {
+      name: "setSignedIn",
+      apply: (state) => {
+        state.setSignedIn(profile, contextMetadata, []);
+      },
+    },
+    {
+      name: "setUnverifiedSession",
+      apply: (state) => {
+        state.setUnverifiedSession(profile, contextMetadata);
+      },
+    },
+    {
+      name: "setSignedOut",
+      apply: (state) => {
+        state.setSignedOut();
+      },
+    },
+    {
+      name: "setInteractiveAttemptFailed",
+      apply: (state) => {
+        state.setInteractiveAttemptFailed();
+      },
+    },
+  ];
+
+  for (const reducer of resettingReducers) {
+    it(`${reducer.name} retires the recorded refusal`, () => {
+      holdRefusedSession("session-rejected");
+      useAuthStore.getState().noteHostRefusedHeldBearer();
+      // Guard against a vacuous reset: the flag really was set going in.
+      expect(useAuthStore.getState().hostRefusedHeldBearer).toBe(true);
+
+      reducer.apply(useAuthStore.getState());
+
+      expect(useAuthStore.getState().hostRefusedHeldBearer).toBe(false);
+    });
+  }
 });

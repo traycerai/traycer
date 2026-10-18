@@ -4,6 +4,7 @@ import type {
   CommGraphTileRef,
   DeletedArtifactsTileRef,
   EpicArtifactRef,
+  EpicFileTileRef,
   EpicTerminalRef,
   GitDiffTileRef,
   ManagedCommandOutputTileRef,
@@ -41,6 +42,7 @@ export interface TileKindToRefMap {
   readonly "published-chat": PublishedChatTileRef;
   readonly "pr-detail": PrDetailTileRef;
   readonly "pr-diff": PrDiffTileRef;
+  readonly "epic-file": EpicFileTileRef;
   readonly blank: BlankTileRef;
 }
 

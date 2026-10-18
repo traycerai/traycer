@@ -43,6 +43,7 @@ import {
 } from "@/components/settings/host-scope/host-option-model";
 import type { HostScopeOption } from "@/components/settings/host-scope/host-scope-model";
 import { useFleetUpdateViews } from "@/hooks/host/use-fleet-update-views";
+import { useHostEnvironmentLabelResolver } from "@/hooks/bots/use-host-environment-labels";
 import { SettingsSearch } from "@/components/settings/settings-search-box";
 import { isSettingsSearchActive } from "@/lib/settings-search/settings-search";
 import { useSettingsSearchStore } from "@/stores/settings/settings-search-store";
@@ -189,8 +190,16 @@ function SettingsSidebarHostPicker(props: {
   // have a borrowable session, so opening this list causes no connection and
   // improves no badge by dialling — every other host simply projects `unknown`
   // and shows nothing.
-  const updateViewForHost = useFleetUpdateViews(
-    useMemo(() => scope.hosts.map((host) => host.hostId), [scope.hosts]),
+  const hostIds = useMemo(
+    () => scope.hosts.map((host) => host.hostId),
+    [scope.hosts],
+  );
+  const updateViewForHost = useFleetUpdateViews(hostIds);
+  // Same rule for the environment label (Tracy Bots): read only over a
+  // session this client already holds; every other row says nothing.
+  const environmentLabelForHost = useHostEnvironmentLabelResolver(
+    hostIds,
+    scope.hostId,
   );
   // `gap-0.5` matches the section rows below, so the picker reads as the first
   // row of the tier it heads rather than a control docked above it.
@@ -217,6 +226,7 @@ function SettingsSidebarHostPicker(props: {
         onRetryLists={scope.retryLists}
         updateViewForHost={updateViewForHost}
         offersAutomations={false}
+        environmentLabelForHost={environmentLabelForHost}
       />
       {/* A sandbox is an account's machine: nothing to create signed out,
           and nothing at all from a build that cannot reach the control

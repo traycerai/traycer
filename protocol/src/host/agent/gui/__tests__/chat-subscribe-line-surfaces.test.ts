@@ -83,13 +83,45 @@ const MODEL_ROUTING_NEEDLES = ['"receipt":', '"pausedReason":'];
 const CLAUDE_PARITY_MINOR = 20;
 // `1.21` is the Command Code line: it adds no key, only which harnesses the
 // shapes may name. `1.22` is the open-harness-id line: it adds no key either,
-// only reopens the heard-from harness leaves to a string, so every threshold
-// above still reads `>=` against it.
-const LIVE_MINOR = 22;
+// only reopens the heard-from harness leaves to a string. `1.23` adds the
+// tool-call `page` / `mcpApp` stamps (pinned below). `1.24` adds the cron
+// next-run time, whose `scheduledFor` key already exists on other item kinds;
+// `chat-subscribe-cron-next-run-v124.test.ts` pins that arm directly. `1.25`
+// adds the bot-conversation request on a user row and the
+// `conversation-message` queue item (pinned below). `1.26` adds the
+// `task-checkin` queue item (pinned below). `1.27` adds the `task-overdue`
+// queue item (pinned below). Every threshold above still reads `>=` against
+// the live line.
+const LIVE_MINOR = 27;
+// `1.27`: the task-overdue surface - the queue item's discriminant, its one
+// needle for the same reason as the check-in's.
+const TASK_OVERDUE_MINOR = 27;
+const TASK_OVERDUE_NEEDLES = ['"task-overdue"'];
+// `1.26`: the task check-in surface - the queue item's discriminant. The item
+// is content-free (it carries no key of its own beside the shared queue-item
+// fields), so the discriminant is its one needle.
+const TASK_CHECKIN_MINOR = 26;
+const TASK_CHECKIN_NEEDLES = ['"task-checkin"'];
+// `1.25`: the conversation surface - the user row's request key and the key
+// only that request carries, the queue item's discriminant and the key only
+// that item carries. (`requestId` is not a needle: a `range` response has
+// carried one since `1.8`.) All or none - a line that carried the queue item
+// without the row key would show a chip for a request it cannot name.
+const CONVERSATION_MINOR = 25;
+const CONVERSATION_NEEDLES = [
+  '"conversationRequest":',
+  '"resolvedByMessageId":',
+  '"conversation-message"',
+  '"conversationId":',
+];
 // Object keys carry their colon so a needle cannot hit an enum value or a
 // description that merely mentions the name; the two literals (`thinkingTokens`
 // frame kind, `cron` background kind) are matched with both quotes, which
 // `"thinkingTokensEstimate":` and `"cron..."` cannot satisfy by prefix.
+// `1.23`: the tool-call `page` / `mcpApp` stamps, server frames only (a client
+// never sends a body).
+const PAGE_STAMP_MINOR = 23;
+const PAGE_STAMP_NEEDLES = ['"page":', '"mcpApp":'];
 const CLAUDE_PARITY_NEEDLES = [
   '"suggestedPrompt":',
   '"thinkingTokensEstimate":',
@@ -225,13 +257,13 @@ function actionAckPropertyNames(serverFrameSchema: z.ZodType): string[] {
 }
 
 describe("chat.subscribe line surfaces", () => {
-  it("covers chat.subscribe@1.0 through @1.22 (a line added later cannot drop out)", () => {
+  it("covers chat.subscribe@1.0 through @1.27 (a line added later cannot drop out)", () => {
     // RESTATED on purpose: this is the change-detector for the line SET, so a
     // derived list would assert the registry against itself. When a new minor
     // lands, extending this by hand is the acknowledgement.
     expect(MINORS).toEqual([
       0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20,
-      21, 22,
+      21, 22, 23, 24, 25, 26, 27,
     ]);
     expect(chatSubscribeLine.latestMinor).toBe(LIVE_MINOR);
   });
@@ -256,6 +288,57 @@ describe("chat.subscribe line surfaces", () => {
       const carriesPlacement = minor >= 9;
       const carriesRefusalCause = minor >= DRAFT_IMAGE_CAUSE_MINOR;
       const carriesClaudeParity = minor >= CLAUDE_PARITY_MINOR;
+      const carriesPageStamps = minor >= PAGE_STAMP_MINOR;
+      const carriesConversation = minor >= CONVERSATION_MINOR;
+
+      it(`server frames ${carriesConversation ? "carry" : "hold back"} the bot-conversation surface`, () => {
+        const text = schemaText(contract.serverFrameSchema);
+        const found = CONVERSATION_NEEDLES.filter((needle) =>
+          text.includes(needle),
+        );
+        expect(found).toEqual(carriesConversation ? CONVERSATION_NEEDLES : []);
+      });
+
+      it("client frames hold back the bot-conversation surface on every line", () => {
+        const text = schemaText(contract.clientFrameSchema);
+        expect(
+          CONVERSATION_NEEDLES.filter((needle) => text.includes(needle)),
+        ).toEqual([]);
+      });
+
+      const carriesTaskOverdue = minor >= TASK_OVERDUE_MINOR;
+
+      it(`server frames ${carriesTaskOverdue ? "carry" : "hold back"} the task-overdue queue item`, () => {
+        const text = schemaText(contract.serverFrameSchema);
+        const found = TASK_OVERDUE_NEEDLES.filter((needle) =>
+          text.includes(needle),
+        );
+        expect(found).toEqual(carriesTaskOverdue ? TASK_OVERDUE_NEEDLES : []);
+      });
+
+      it("client frames hold back the task-overdue queue item on every line", () => {
+        const text = schemaText(contract.clientFrameSchema);
+        expect(
+          TASK_OVERDUE_NEEDLES.filter((needle) => text.includes(needle)),
+        ).toEqual([]);
+      });
+
+      const carriesTaskCheckin = minor >= TASK_CHECKIN_MINOR;
+
+      it(`server frames ${carriesTaskCheckin ? "carry" : "hold back"} the task-checkin queue item`, () => {
+        const text = schemaText(contract.serverFrameSchema);
+        const found = TASK_CHECKIN_NEEDLES.filter((needle) =>
+          text.includes(needle),
+        );
+        expect(found).toEqual(carriesTaskCheckin ? TASK_CHECKIN_NEEDLES : []);
+      });
+
+      it("client frames hold back the task-checkin queue item on every line", () => {
+        const text = schemaText(contract.clientFrameSchema);
+        expect(
+          TASK_CHECKIN_NEEDLES.filter((needle) => text.includes(needle)),
+        ).toEqual([]);
+      });
 
       it(`server frames ${carriesClaudeParity ? "carry" : "hold back"} every Claude-parity surface`, () => {
         const text = schemaText(contract.serverFrameSchema);
@@ -263,6 +346,21 @@ describe("chat.subscribe line surfaces", () => {
           text.includes(needle),
         );
         expect(found).toEqual(carriesClaudeParity ? CLAUDE_PARITY_NEEDLES : []);
+      });
+
+      it(`server frames ${carriesPageStamps ? "carry" : "hold back"} the tool-call page and MCP App stamps`, () => {
+        const text = schemaText(contract.serverFrameSchema);
+        const found = PAGE_STAMP_NEEDLES.filter((needle) =>
+          text.includes(needle),
+        );
+        expect(found).toEqual(carriesPageStamps ? PAGE_STAMP_NEEDLES : []);
+      });
+
+      it("client frames hold back the page and MCP App stamps on every line", () => {
+        const text = schemaText(contract.clientFrameSchema);
+        expect(
+          PAGE_STAMP_NEEDLES.filter((needle) => text.includes(needle)),
+        ).toEqual([]);
       });
 
       it("client frames hold back the Claude-parity surface on every line (host-authored)", () => {

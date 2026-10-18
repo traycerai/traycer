@@ -36,6 +36,7 @@ function cron(taskId: string): BackgroundItem {
   return {
     taskId,
     kind: "cron",
+    scheduledFor: null,
     title: `Cron ${taskId}`,
     blockId: `${taskId}-block`,
     parentTaskId: null,

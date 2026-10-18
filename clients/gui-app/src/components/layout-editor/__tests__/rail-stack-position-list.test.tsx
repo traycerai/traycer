@@ -192,6 +192,7 @@ describe("the stack link as its own Position-list row (L-166, L-168)", () => {
       "railAgents",
       "railTerminals",
       "railArtifacts",
+      "railFiles",
       "railBrowsers",
       "railGitDiff",
       "railPullRequests",

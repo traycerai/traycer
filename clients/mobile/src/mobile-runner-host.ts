@@ -79,6 +79,7 @@ import type {
   IPushPermissionHost,
   IRunnerHost,
   ISecureStorage,
+  IStatusBarTapHost,
   ISystemBackHost,
   ITokenStore,
   ITrayState,
@@ -255,6 +256,11 @@ export interface MobileRunnerHostOptions {
    * above: which platform this is stays the entry's business.
    */
   readonly systemBack: ISystemBackHost | null;
+  /**
+   * The status-bar tap, or `null` where the OS has none - see
+   * `IRunnerHost.statusBarTap`. Decided by the entry point, like `systemBack`.
+   */
+  readonly statusBarTap: IStatusBarTapHost | null;
 }
 
 const STEP_UP_EXPIRY_SKEW_MS = 5_000;
@@ -326,6 +332,7 @@ export class MobileRunnerHost implements IRunnerHost {
    */
   readonly pushPermission: IPushPermissionHost | null;
   readonly systemBack: ISystemBackHost | null;
+  readonly statusBarTap: IStatusBarTapHost | null;
   private retainedStepUpCredential: RetainedStepUpCredential | null = null;
   // One evidence pair per platform - see `resumeEvidenceModeFor` and the
   // MobileSystemResume class doc for why the same Capacitor event names mean
@@ -375,6 +382,7 @@ export class MobileRunnerHost implements IRunnerHost {
     this.fileSave = options.fileSave;
     this.canCopyImages = options.canCopyImages;
     this.systemBack = options.systemBack;
+    this.statusBarTap = options.statusBarTap;
     this.authSheet = options.authSheet;
     this.notifications = buildNotifications(options.pushRegistration);
     this.pushPermission = buildPushPermission(

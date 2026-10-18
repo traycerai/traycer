@@ -1,3 +1,5 @@
+import { listNavigationKey } from "@/lib/keybindings/list-navigation-key";
+
 /**
  * Rows are located by the same `data-notification-id` attribute the scroll
  * anchor measures with, so traversal order is exactly the rendered feed order
@@ -42,15 +44,22 @@ function nextRowIndex(
  * order is untouched: the rows are not tab stops, and their controls still
  * are.
  *
- * Bare keys only. A modified arrow belongs to whatever else claims it (the
- * global keybinding map runs in the capture phase and never reaches here).
+ * Bare keys only, plus the macOS Ctrl+N/P/J/K list aliases. A modified arrow
+ * belongs to whatever else claims it (the global keybinding map runs in the
+ * capture phase and never reaches here).
  */
 export function handleNotificationFeedKeyboardNavigation(
   shell: HTMLElement,
   event: KeyboardEvent,
 ): void {
-  if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
-  const key = navigationKey(event.key);
+  const listKey = listNavigationKey(event);
+  const isListAlias = listKey !== event.key;
+  if (
+    !isListAlias &&
+    (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey)
+  )
+    return;
+  const key = navigationKey(listKey);
   if (key === null) return;
   const rows = Array.from(shell.querySelectorAll<HTMLElement>(ROW_SELECTOR));
   if (rows.length === 0) return;

@@ -110,6 +110,7 @@ interface GuestRecord {
     observer: ResizeObserver | null;
   } | null;
   retainedSize: { readonly width: number; readonly height: number } | null;
+  readonly sizeObserver: ResizeObserver;
 }
 
 interface RunningHost {
@@ -153,7 +154,14 @@ export function confirmBrowserGuestViewport(input: {
     input.state.revision < request.revision
   )
     return;
-  if (input.state.applied === null && input.state.revision > request.revision) {
+  // No applied size means the host gave up confirming: a newer revision rolled
+  // back, or this Fit was kept unconfirmed because the window drew no frame in
+  // time. Once that Fit has laid out, it is done; the guest follows its tile.
+  if (
+    input.state.applied === null &&
+    (input.state.revision > request.revision ||
+      (request.intent.mode === "fit" && guest.viewportAcknowledged))
+  ) {
     finishViewportLayout(guest, false);
     guest.viewportRequest = null;
     notifyViewportListeners();
@@ -289,7 +297,19 @@ function handleMount(request: BrowserViewGuestMountRequested): void {
     viewportAcknowledged: false,
     pendingViewport: null,
     retainedSize: null,
+    // The size a hidden guest keeps is read while it is laid out in its tile.
+    // By the time a hide reaches this host the tile has already left layout,
+    // so a read then finds no anchor and measures the bare 300x150 webview.
+    sizeObserver: new ResizeObserver(() => {
+      if (wrapper.getAttribute(BROWSER_GUEST_STATE_ATTRIBUTE) !== "presented")
+        return;
+      guest.retainedSize = {
+        width: webview.offsetWidth,
+        height: webview.offsetHeight,
+      };
+    }),
   };
+  guest.sizeObserver.observe(webview);
   guests.set(request.registrationId, guest);
   wrapper.addEventListener(
     "pointerdown",
@@ -366,6 +386,7 @@ function removeGuest(registrationId: string): void {
   const guest = guests.get(registrationId);
   if (guest === undefined) return;
   guests.delete(registrationId);
+  guest.sizeObserver.disconnect();
   finishViewportLayout(guest, false);
   notifyViewportListeners();
   relinquishGuestFocus(guest);
@@ -468,10 +489,6 @@ function applyGuestPresentation(
     guest.wrapper.getAttribute(BROWSER_GUEST_STATE_ATTRIBUTE) === "presented" &&
     !nextPresented
   ) {
-    guest.retainedSize = {
-      width: guest.webview.offsetWidth,
-      height: guest.webview.offsetHeight,
-    };
     relinquishGuestFocus(guest);
   }
   if (placement !== null && placement.presented) {

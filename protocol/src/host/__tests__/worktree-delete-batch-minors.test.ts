@@ -6,6 +6,7 @@ import {
   worktreeDeleteBatchByPathServerFrameSchema,
   worktreeDeleteBatchByPathServerFrameSchemaV11,
   worktreeDeleteBatchByPathServerFrameSchemaV12,
+  worktreeDeleteBatchByPathServerFrameSchemaV13,
 } from "@traycer/protocol/host/worktree-delete-batch-stream";
 
 const commandId = "2f1d0a2c-0000-4000-8000-000000000000";
@@ -29,7 +30,7 @@ const holderWithChatTier = {
 describe("worktree.deleteBatchByPath@1.1", () => {
   it("is registered alongside the frozen 1.0 contract", () => {
     const registry = hostStreamRpcRegistry["worktree.deleteBatchByPath"];
-    expect(registry[1].latestMinor).toBe(2);
+    expect(registry[1].latestMinor).toBe(3);
     expect(registry[1].versions[0].contract.schemaVersion).toEqual({
       major: 1,
       minor: 0,
@@ -195,6 +196,95 @@ describe("worktree.deleteBatchByPath@1.2 chatTier", () => {
       if (parsed.data.kind === "target.failed") {
         expect(parsed.data.reason).toBe("in use");
         expect(parsed.data.holders).toBeUndefined();
+      }
+    }
+  });
+});
+
+describe("worktree.deleteBatchByPath@1.3 declined", () => {
+  it("1.3 target.complete carries the decline kind of a non-deletion", () => {
+    for (const declined of [
+      "not_managed",
+      "teardown_failed",
+      "removal_failed",
+    ] as const) {
+      const parsed = worktreeDeleteBatchByPathServerFrameSchemaV13.parse({
+        kind: "target.complete",
+        worktreePath: "/wt",
+        deleted: false,
+        declined,
+        hasBinaryPayload: false,
+      });
+      expect(parsed.kind).toBe("target.complete");
+      if (parsed.kind === "target.complete") {
+        expect(parsed.deleted).toBe(false);
+        expect(parsed.declined).toBe(declined);
+      }
+    }
+  });
+
+  it("1.3 target.complete accepts the 1.2-shaped frame without declined", () => {
+    const parsed = worktreeDeleteBatchByPathServerFrameSchemaV13.parse({
+      kind: "target.complete",
+      worktreePath: "/wt",
+      deleted: true,
+      hasBinaryPayload: false,
+    });
+    expect(parsed.kind).toBe("target.complete");
+    if (parsed.kind === "target.complete") {
+      expect(parsed.declined).toBeUndefined();
+    }
+  });
+
+  it("1.3 sanitizes an unknown future decline kind to absent, keeping the outcome", () => {
+    const parsed = worktreeDeleteBatchByPathServerFrameSchemaV13.parse({
+      kind: "target.complete",
+      worktreePath: "/wt",
+      deleted: false,
+      declined: "disk_full",
+      hasBinaryPayload: false,
+    });
+    expect(parsed.kind).toBe("target.complete");
+    if (parsed.kind === "target.complete") {
+      expect(parsed.deleted).toBe(false);
+      expect(parsed.declined).toBeUndefined();
+    }
+  });
+
+  it("1.3 target.failed keeps the 1.2 busy details", () => {
+    const parsed = worktreeDeleteBatchByPathServerFrameSchemaV13.parse({
+      kind: "target.failed",
+      worktreePath: "/wt",
+      reason: "in use",
+      holders: [holderWithChatTier],
+      code: "WORKTREE_BUSY",
+      hasBinaryPayload: false,
+    });
+    expect(parsed.kind).toBe("target.failed");
+    if (parsed.kind === "target.failed") {
+      expect(parsed.holders).toEqual([holderWithChatTier]);
+      expect(parsed.code).toBe("WORKTREE_BUSY");
+    }
+  });
+
+  it("frozen 1.0, 1.1 and 1.2 target.complete strip declined (old-client degrade)", () => {
+    const frame = {
+      kind: "target.complete",
+      worktreePath: "/wt",
+      deleted: false,
+      declined: "not_managed",
+      hasBinaryPayload: false,
+    };
+    for (const schema of [
+      worktreeDeleteBatchByPathServerFrameSchema,
+      worktreeDeleteBatchByPathServerFrameSchemaV11,
+      worktreeDeleteBatchByPathServerFrameSchemaV12,
+    ]) {
+      const parsed = schema.parse(frame);
+      expect(parsed.kind).toBe("target.complete");
+      expect(parsed).not.toHaveProperty("declined");
+      if (parsed.kind === "target.complete") {
+        expect(parsed.deleted).toBe(false);
       }
     }
   });

@@ -3007,9 +3007,12 @@ window`, recorded in the type as `coverage.browsersAreMountedOnly` -
     is not needed, just show plan, bonus and credits"); the tier chip lives on
     the header popover's account cards instead. Each bar is shown only when that
     bucket's total > 0; amounts
-    are `$`-denominated. Credit-based vs rate-limit-based is decided exactly like
-    the extension (`isCreditBasedPricing` - V3 plans are credit-based); **legacy /
-    v2 (usage-limit) plans** instead render a **Usage limit** section with the
+    are `$`-denominated. Credit-based vs rate-limit-based is decided by
+    `usesCreditView`: a credit-based status (`isCreditBasedPricing` - FREE and
+    the V3 plans), or any plan whose
+    server payload carries `totalPlanCredits > 0`, shows the credit breakdown. No
+    client clock is involved, so legacy plans switch when the server grants them
+    plan credits. **Legacy / v2 (usage-limit) plans without plan credits** instead render a **Usage limit** section with the
     recharge rate ("New artifact every N minutes", from `rechargeRateSeconds`)
     plus the Bundle bar. The extension's live "Artifact Used" bar is omitted -
     `totalTokens`/`remainingTokens` come from the inference `GetRateLimitUsage`
@@ -4480,6 +4483,25 @@ min`): "The judge didn't finish in time, so it's asking you instead."
   hooks. This settings panel edits only the global guide. A workspace can add
   `.traycer/agent-selection-guide.md` manually; agents layer that file over the
   global guide when they work in that workspace.
+  - **Environment** (`panels/host-environment-section.tsx`, above the guide
+    editor, Tracy Bots). Which environment THIS host runs: the personal one
+    unless it was bound to a team. Reads `environment.list` and
+    `environment.host.read` through the scope's client, marks the environment
+    the host reports (`aria-pressed`), and binds on a click through
+    `environment.host.bind`; the mutation has no toast - a refusal is shown in
+    place under the list (`role="alert"`). Nothing is pre-selected: the marked
+    row is the host's own answer, never a default the panel chose. On a host
+    whose handshake lacks `environment.host.read` the section shows one
+    sentence saying the host predates environments; while the capability is
+    unknown it renders nothing. The copy says the host's bots and the guide
+    below belong to the environment. The sidebar's host list shows each
+    host's environment label beside its name (`HostOptionRow`'s
+    `environmentLabel`, resolved by `useHostEnvironmentLabelResolver` in
+    `settings-sidebar.tsx`), read under the same rule as the update badges:
+    only over a session this client already holds (the local host, the
+    scoped host, a remote host with a borrowable session); any other row says
+    nothing. Every other host picker passes `environmentLabelForHost={null}`
+    and shows no label.
 - `Fallback` (section id `fallback`, route `/settings/fallback`,
   `panels/fallback-settings-panel.tsx` plus `panels/fallback/`) The whole
   configuration surface for **automatic provider fallback**: what the host does

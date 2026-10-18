@@ -819,6 +819,12 @@ describe("downgradeProviderCliStateToV10 strips every later-than-v1.0 field", ()
       },
       cliBinaryResolved: false,
       autoJudge: "traycer",
+      macosRequirement: {
+        runningMacos: "13.6",
+        managed: { requiredMacos: "14.0" },
+        launch: { requiredMacos: "14.0" },
+        refusedVersions: [{ version: "2.0.0", requiredMacos: "15.0" }],
+      },
     });
 
   it("has a non-empty obligation set, so nothing below can pass vacuously", () => {
@@ -833,6 +839,15 @@ describe("downgradeProviderCliStateToV10 strips every later-than-v1.0 field", ()
     expect(laterThanV10.filter((key) => key in live).sort()).toEqual(
       [...laterThanV10].sort(),
     );
+    // `macosRequirement` is `.catch(null)`: a malformed fixture value would
+    // parse to a present-but-null key and keep the check above green while
+    // proving nothing, so the populated object itself has to survive.
+    expect(live.macosRequirement).toEqual({
+      runningMacos: "13.6",
+      managed: { requiredMacos: "14.0" },
+      launch: { requiredMacos: "14.0" },
+      refusedVersions: [{ version: "2.0.0", requiredMacos: "15.0" }],
+    });
   });
 
   it("downgrades without vanishing, and none of them survive", () => {

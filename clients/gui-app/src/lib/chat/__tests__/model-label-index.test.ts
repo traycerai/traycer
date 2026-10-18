@@ -7,6 +7,7 @@ import {
   type ModelLabelIndex,
 } from "@/lib/chat/model-label-index";
 import {
+  agentModelKey,
   resolveAgentReasoningLabel,
   resolveAgentSenderDisplay,
   type SenderDisplayContext,
@@ -81,6 +82,7 @@ function displayContextFrom(index: ModelLabelIndex): SenderDisplayContext {
     collaborators: [],
     modelLabels: index.modelLabels,
     modelReasoningLabels: index.modelReasoningLabels,
+    modelServiceTierLabels: index.modelServiceTierLabels,
   };
 }
 
@@ -115,6 +117,7 @@ function expectSharedIndex(
     expect(index).toBe(first);
     expect(index.modelLabels).toBe(first.modelLabels);
     expect(index.modelReasoningLabels).toBe(first.modelReasoningLabels);
+    expect(index.modelServiceTierLabels).toBe(first.modelServiceTierLabels);
   }
   return first;
 }
@@ -257,10 +260,12 @@ describe("getModelLabelIndex", () => {
     const empty = emptyCatalogs[0];
     expect(empty.modelLabels.size).toBe(0);
     expect(empty.modelReasoningLabels.size).toBe(0);
+    expect(empty.modelServiceTierLabels.size).toBe(0);
     for (const index of emptyCatalogs) {
       expect(index).toBe(empty);
       expect(index.modelLabels).toBe(empty.modelLabels);
       expect(index.modelReasoningLabels).toBe(empty.modelReasoningLabels);
+      expect(index.modelServiceTierLabels).toBe(empty.modelServiceTierLabels);
     }
     expect(empty).not.toBe(full);
     expect(getModelLabelIndex([catalogEntry("codex", codexModels)])).toBe(full);
@@ -391,5 +396,32 @@ describe("getModelLabelIndex", () => {
         mismatchedContext,
       ),
     ).toBe("Extra High");
+  });
+  it("maps each advertised service tier id to its label per model", () => {
+    const dualTier: GuiAgentModelOption = {
+      ...modelOption("codex", "gpt-6.1-sol", "GPT-6.1-Sol", []),
+      supportedServiceTiers: [
+        { id: "priority", label: "Fast", description: "2x speed" },
+        { id: "ultrafast", label: "Ultrafast", description: null },
+      ],
+    };
+    const plain = modelOption("codex", "gpt-6-sol", "GPT-6-Sol", []);
+
+    const index = getModelLabelIndex([
+      catalogEntry("codex", [dualTier, plain]),
+    ]);
+
+    expect(
+      index.modelServiceTierLabels.get(agentModelKey("codex", "gpt-6.1-sol")),
+    ).toEqual(
+      new Map([
+        ["priority", "Fast"],
+        ["ultrafast", "Ultrafast"],
+      ]),
+    );
+    expect(
+      index.modelServiceTierLabels.get(agentModelKey("codex", "gpt-6-sol"))
+        ?.size,
+    ).toBe(0);
   });
 });

@@ -10,7 +10,9 @@ import {
   verticalListSortingStrategy,
 } from "@dnd-kit/sortable";
 import {
+  AlarmClock,
   Cable,
+  ClipboardList,
   GripVertical,
   ChevronDown,
   Inbox,
@@ -969,7 +971,14 @@ function QueuedMessageRowContent(props: {
             ) : null}
             {props.showManagedCommandCancel ? (
               <ManagedCommandCancelButton
-                kind={item.kind === "port-forward" ? "port-forward" : "shell"}
+                kind={
+                  item.kind === "port-forward" ||
+                  item.kind === "conversation-message" ||
+                  item.kind === "task-checkin" ||
+                  item.kind === "task-overdue"
+                    ? item.kind
+                    : "shell"
+                }
                 onCancel={props.handleCancel}
               />
             ) : null}
@@ -1209,6 +1218,9 @@ function queuedMessageProvenanceBadge(item: OpenChatQueuedItem): ReactNode {
       />
     );
   if (item.kind === "port-forward") return <PortForwardBadge />;
+  if (item.kind === "conversation-message") return <ConversationMessageBadge />;
+  if (item.kind === "task-checkin") return <TaskCheckinBadge />;
+  if (item.kind === "task-overdue") return <TaskOverdueBadge />;
   return null;
 }
 
@@ -1311,6 +1323,105 @@ function PortForwardBadge() {
 }
 
 /**
+ * A human's message in a bot conversation waiting to reach the bot (a
+ * `conversation-message` item on the bot's trunk). Content-free like the
+ * port-forward chip: the message itself is read from the conversation record
+ * when it is delivered.
+ */
+function ConversationMessageBadge() {
+  return (
+    <TooltipWrapper
+      label="A message from a conversation is waiting for the bot's next turn."
+      side="top"
+      sideOffset={6}
+      align={undefined}
+    >
+      <Badge variant="muted" data-testid="queued-conversation-message-badge">
+        <Inbox aria-hidden />
+        Conversation
+      </Badge>
+    </TooltipWrapper>
+  );
+}
+
+/**
+ * A check-in on the tasks a bot tracks, waiting for the bot's next turn (a
+ * `task-checkin` item on the bot's trunk). Content-free like the two chips
+ * above it: the report is composed when the item is delivered, from whatever
+ * has changed by then.
+ */
+function TaskCheckinBadge() {
+  return (
+    <TooltipWrapper
+      label="A check-in on the bot's tasks is waiting for its next turn."
+      side="top"
+      sideOffset={6}
+      align={undefined}
+    >
+      <Badge variant="muted" data-testid="queued-task-checkin-badge">
+        <ClipboardList aria-hidden />
+        Check-in
+      </Badge>
+    </TooltipWrapper>
+  );
+}
+
+/**
+ * A notice that one of the bot's tasks is overdue for its check-in, waiting
+ * for the bot's next turn (a `task-overdue` item on the bot's trunk).
+ * Content-free like the check-in chip: which tasks are overdue is read when
+ * the item is delivered.
+ */
+function TaskOverdueBadge() {
+  return (
+    <TooltipWrapper
+      label="A task's check-in is overdue; the bot is told on its next turn."
+      side="top"
+      sideOffset={6}
+      align={undefined}
+    >
+      <Badge variant="muted" data-testid="queued-task-overdue-badge">
+        <AlarmClock aria-hidden />
+        Overdue
+      </Badge>
+    </TooltipWrapper>
+  );
+}
+
+const CANCEL_COPY: Record<
+  | "shell"
+  | "port-forward"
+  | "conversation-message"
+  | "task-checkin"
+  | "task-overdue",
+  { readonly ariaLabel: string; readonly tooltip: string }
+> = {
+  shell: {
+    ariaLabel: "Cancel queued command output",
+    tooltip: "Skip this delivery — later output still arrives",
+  },
+  "port-forward": {
+    ariaLabel: "Dismiss port forward notice",
+    tooltip:
+      "Dismiss this notice — the agent won't be told about the interruption",
+  },
+  "conversation-message": {
+    ariaLabel: "Dismiss conversation message",
+    tooltip:
+      "Dismiss this message — the bot won't see it, and its request stays open",
+  },
+  "task-checkin": {
+    ariaLabel: "Dismiss task check-in",
+    tooltip:
+      "Dismiss this check-in — the bot won't see it; the next one covers what it would have",
+  },
+  "task-overdue": {
+    ariaLabel: "Dismiss overdue notice",
+    tooltip: "Dismiss this notice — the bot won't see it",
+  },
+};
+
+/**
  * The only affordance a host-authored row offers. For a shell, cancelling is
  * not destructive to the underlying output: the host leaves the delivery
  * cursor where it is, so the next output from that command re-queues a fresh
@@ -1318,9 +1429,15 @@ function PortForwardBadge() {
  * it means the agent is not told - and the copy says which.
  */
 function ManagedCommandCancelButton(props: {
-  readonly kind: "shell" | "port-forward";
+  readonly kind:
+    | "shell"
+    | "port-forward"
+    | "conversation-message"
+    | "task-checkin"
+    | "task-overdue";
   readonly onCancel: () => void;
 }) {
+  const { ariaLabel, tooltip } = CANCEL_COPY[props.kind];
   return (
     <Tooltip>
       <TooltipTrigger asChild>
@@ -1330,22 +1447,14 @@ function ManagedCommandCancelButton(props: {
             size="icon-xs"
             variant="muted"
             className="shrink-0"
-            aria-label={
-              props.kind === "shell"
-                ? "Cancel queued command output"
-                : "Dismiss port forward notice"
-            }
+            aria-label={ariaLabel}
             onClick={props.onCancel}
           >
             <Trash2 className="size-3.5" />
           </Button>
         </span>
       </TooltipTrigger>
-      <TooltipContent sideOffset={6}>
-        {props.kind === "shell"
-          ? "Skip this delivery — later output still arrives"
-          : "Dismiss this notice — the agent won't be told about the interruption"}
-      </TooltipContent>
+      <TooltipContent sideOffset={6}>{tooltip}</TooltipContent>
     </Tooltip>
   );
 }

@@ -87,8 +87,9 @@ function AgentBrowserAccessRow(props: {
   readonly hostId: string | null;
 }): ReactNode {
   const client = useHostClient();
-  const entry = useHostDirectoryEntry(props.hostId);
-  const hostName = entry?.label ?? props.hostId;
+  // A blank label is no label - "On ." is not a sentence.
+  const label = useHostDirectoryEntry(props.hostId)?.label.trim() ?? "";
+  const hostName = label.length > 0 ? label : props.hostId;
   const query = useHostQuery<HostRpcRegistry, "config.browser.get">({
     cacheKeyIdentity: undefined,
     client,
@@ -108,7 +109,7 @@ function AgentBrowserAccessRow(props: {
       row={BROWSER_AGENT_ACCESS.definitions.agentBrowserAccess}
       status={
         query.isError
-          ? "Couldn't read this host's browser setting. Repair ~/.traycer/cli/config.json on that machine, or back it up before resetting it, then reopen Settings."
+          ? "Couldn't read this host's browser setting. Repair Traycer's config.json on that machine, or back it up before resetting it, then reopen Settings."
           : `On ${hostName ?? "this host"}. ${BROWSER_AGENT_ACCESS.definitions.agentBrowserAccess.description} Running agents pick this up on their next turn.`
       }
       control={

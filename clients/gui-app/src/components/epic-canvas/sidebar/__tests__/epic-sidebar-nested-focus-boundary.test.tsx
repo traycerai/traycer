@@ -348,6 +348,11 @@ vi.mock("@/hooks/epic/use-epic-chat-mutations", () => ({
     mutateAsync: testState.deleteChatMutateAsync,
     isPending: false,
   }),
+  useEpicDeleteChatInBatch: () => ({
+    mutate: vi.fn(),
+    mutateAsync: testState.deleteChatMutateAsync,
+    isPending: false,
+  }),
   useEpicRenameChat: () => ({ mutate: vi.fn(), isPending: false }),
 }));
 
@@ -405,11 +410,30 @@ vi.mock("@/hooks/epic/use-epic-node-mutations", () => ({
     mutateAsync: testState.deleteArtifactMutateAsync,
     isPending: false,
   }),
+  useEpicDeleteArtifactInBatch: () => ({
+    mutate: (
+      variables: { readonly epicId: string; readonly artifactId: string },
+      options: {
+        readonly onSuccess: () => void;
+        readonly onError: () => void;
+      },
+    ) => {
+      testState.deleteArtifactMutate(variables);
+      options.onSuccess();
+    },
+    mutateAsync: testState.deleteArtifactMutateAsync,
+    isPending: false,
+  }),
   useEpicRenameArtifact: () => ({ mutate: vi.fn(), isPending: false }),
 }));
 
 vi.mock("@/hooks/epic/use-epic-tui-agent-mutations", () => ({
   useEpicDeleteTuiAgent: () => ({
+    mutate: vi.fn(),
+    mutateAsync: testState.deleteTuiAgentMutateAsync,
+    isPending: false,
+  }),
+  useEpicDeleteTuiAgentInBatch: () => ({
     mutate: vi.fn(),
     mutateAsync: testState.deleteTuiAgentMutateAsync,
     isPending: false,

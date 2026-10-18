@@ -23,6 +23,10 @@ import {
   derivePromotedSubagentRenderId,
 } from "./chat-collapsible-key";
 import { isTraycerBrowserReplToolName } from "@traycer/protocol/host/agent/gui/browser-tools";
+import type {
+  ToolCallMcpAppStamp,
+  ToolCallPageStamp,
+} from "@traycer/protocol/persistence/epic/content-blocks";
 
 export type ActivitySegment =
   | ToolSegment
@@ -552,11 +556,58 @@ function approvalActivityLabel(segment: ApprovalSegment): string {
     : `Denied ${singleLine(label)}`;
 }
 
+/**
+ * `traycer_show_page` under the three spellings harnesses report an A2A tool
+ * in (the host's `isAgentSendMessageToolName` list): bare, server-prefixed
+ * (`traycer_a2a/…`) or MCP-namespaced (`mcp__traycer_a2a__…`). Complete names
+ * only, like `isTraycerBrowserReplToolName`: a suffix match would let any
+ * server's `…_traycer_show_page` render as one of our pages.
+ */
+export function isShowPageToolName(toolName: string): boolean {
+  const normalized = toolName.toLowerCase().replaceAll("-", "_");
+  return (
+    normalized === "traycer_show_page" ||
+    normalized === "traycer_a2a/traycer_show_page" ||
+    normalized === "mcp__traycer_a2a__traycer_show_page"
+  );
+}
+
+/**
+ * The one test for "this tool call renders as a page row": a host-stamped page
+ * whatever the tool is called, or a show-page call still being written. Every
+ * surface that treats a page differently (promotion, rendering, find) asks
+ * this, so they cannot disagree on a row.
+ */
+export function isPageToolCall(call: {
+  readonly page: ToolCallPageStamp | null;
+  readonly toolName: string;
+}): boolean {
+  return call.page !== null || isShowPageToolName(call.toolName);
+}
+
+/**
+ * "This tool call renders as an MCP App row": the host stamped the app it
+ * rendered. Keyed on the stamp alone - a harness without app support never
+ * stamps, and its call stays an ordinary row in the group.
+ */
+export function isMcpAppToolCall(call: {
+  readonly mcpApp: ToolCallMcpAppStamp | null;
+}): boolean {
+  return call.mcpApp !== null;
+}
+
 function shouldPromoteToolSegment(
   segment: ToolSegment,
   promotedToolBlockIds: ReadonlySet<string>,
 ): boolean {
   if (segment.toolName === "image_generation") return true;
+  // A shown page is the reply itself, at the point the agent showed it (D05):
+  // never "Used N tools". Keyed on the name too, so the "Building page" row
+  // stands where the page will land while the agent is still writing it. A
+  // preview call is the agent checking its work, and stays in the group.
+  if (isPageToolCall(segment)) return true;
+  // An app is the call's result, rendered where the call was made.
+  if (isMcpAppToolCall(segment)) return true;
   if (segment.agentMessageSend !== null) return true;
   // A shell the agent ran or restarted (`traycer_run_shell` /
   // `traycer_restart_shell`, host-stamped) is a background process that

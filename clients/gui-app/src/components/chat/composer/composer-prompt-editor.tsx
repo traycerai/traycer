@@ -59,7 +59,10 @@ import type {
   ImageAttachmentRewrite,
 } from "./editor/extensions/image-attachment-extension";
 import type { ComposerPickerStore } from "./picker/composer-picker-store";
-import { bumpComposerDraftGeneration } from "@/lib/composer/composer-draft-generation";
+import {
+  bumpComposerDraftGeneration,
+  composerDraftGeneration,
+} from "@/lib/composer/composer-draft-generation";
 
 const composerEditorIncarnations = new WeakMap<
   Editor,
@@ -97,6 +100,12 @@ export interface ComposerPromptEditorHandle {
   readonly getJSON: () => JsonContent;
   readonly isEmpty: () => boolean;
   readonly clear: () => void;
+  /**
+   * Which draft the editor holds: bumped by `clear` (an accepted send) and
+   * by a content replacement, so work started against one draft can tell it
+   * has been superseded (`composer-draft-generation.ts`).
+   */
+  readonly draftGeneration: () => number;
   /**
    * Replace the document and notify the owner via the normal `onDocumentChange`
    * signal (a real editor-level document mutation). The landing and new-
@@ -458,7 +467,14 @@ function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
         containsActiveElement: (activeElement) =>
           activeElement === editor.view.dom ||
           (activeElement !== null && editor.view.dom.contains(activeElement)),
-        isEligible: () => editor.view.dom.isConnected,
+        // A modal dialog aria-hides (and may inert) the chat behind it while
+        // its own new-agent composer stays mounted. Both editors can still
+        // claim `isActive` in the same pane; the hidden one's DOM is connected
+        // but cannot own keyboard focus. Let the registry skip it so a picker
+        // closing in the dialog returns focus to the dialog's editor.
+        isEligible: () =>
+          editor.view.dom.isConnected &&
+          editor.view.dom.closest('[aria-hidden="true"], [inert]') === null,
       },
       isActive,
       isPaneFocusedNow,
@@ -537,6 +553,11 @@ function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
     if (editor === null) return true;
     return editor.isEmpty;
   }, [editor]);
+
+  const draftGeneration = useCallback(
+    () => (editor === null ? 0 : composerDraftGeneration(editor)),
+    [editor],
+  );
 
   const clear = useCallback(() => {
     if (editor === null) return;
@@ -734,6 +755,7 @@ function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
       getJSON,
       isEmpty,
       clear,
+      draftGeneration,
       setContent,
       syncContent,
       insertImageAttachments,
@@ -748,6 +770,7 @@ function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
       beginPathInsertion,
       clear,
       dismissActiveSuggestion,
+      draftGeneration,
       focus,
       focusAtEnd,
       getEditorIncarnation,

@@ -85,6 +85,7 @@ function cron(
     blockId,
     parentTaskId,
     kind: "cron",
+    scheduledFor: null,
     schedule: "*/5 * * * *",
     humanSchedule: "Every 5 minutes",
     prompt: "check",

@@ -31,13 +31,23 @@ export function preconnectTraycerHosts(): void {
 
 /**
  * Sets a Traycer-specific User-Agent on Traycer's own default-session
- * requests. Guests and popups deliberately keep Electron's default UA
- * (product token + `Electron/<ver>`): presenting a bare Chrome UA made
- * Google sign-in reject the guest as "not secure", because the JS
- * environment (`window.chrome`, etc.) is not actually Chrome (2026-09-14).
+ * requests, and drops the `Electron/<ver>` token from the UA every other
+ * session falls back to: browser guests and their popups.
+ *
+ * Guests keep the rest of Electron's default UA, `Traycer/<ver>` included: a
+ * bare Chrome UA made Google sign-in reject the guest as "not secure", because
+ * the JS environment (`window.chrome`, etc.) is not actually Chrome
+ * (2026-09-14). The `Electron/<ver>` token goes because sites that ship their
+ * own Electron app read it as "inside our app" and call APIs only their
+ * preload provides: GoHighLevel's login threw after a correct 2FA code
+ * (2026-10-16).
  */
 export function configureUserAgent(): void {
   const ua = `TraycerDesktop/${app.getVersion()} Electron/${process.versions.electron} Chrome/${process.versions.chrome}`;
   session.defaultSession.setUserAgent(ua);
-  log.debug("[network] user agent set", { ua });
+  app.userAgentFallback = app.userAgentFallback.replace(/ Electron\/\S+/, "");
+  log.debug("[network] user agent set", {
+    ua,
+    fallback: app.userAgentFallback,
+  });
 }

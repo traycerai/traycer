@@ -218,6 +218,7 @@ function mutableFakeEditor(initial: JsonContent): {
       removeImageAttachmentById: () => undefined,
       rewriteImageAttachmentHashById: () => false,
       insertDictatedText: () => undefined,
+      draftGeneration: () => 0,
       dismissActiveSuggestion: () => false,
     },
     setJSON: (next: JsonContent) => {
@@ -275,6 +276,7 @@ function mountSubmit(args: MountArgs) {
       getActiveTurnForSteer: args.getActiveTurnForSteer ?? (() => null),
       hasPendingApprovals: false,
       sendDisabled: false,
+      sendDisabledHint: null,
       workspaceBlocked: false,
       imagesUnsupported: false,
       attachmentPreparationPending: false,
@@ -536,6 +538,7 @@ function mountSteerConflictLiveBlock(args: {
         getActiveTurnForSteer: driftedTurn,
         hasPendingApprovals: false,
         sendDisabled: false,
+        sendDisabledHint: null,
         workspaceBlocked: props.workspaceBlocked,
         imagesUnsupported: false,
         attachmentPreparationPending: false,
@@ -747,6 +750,7 @@ function Harness(props: {
     getActiveTurnForSteer: props.getActiveTurnForSteer ?? (() => null),
     hasPendingApprovals: false,
     sendDisabled: false,
+    sendDisabledHint: null,
     workspaceBlocked: false,
     imagesUnsupported: false,
     attachmentPreparationPending: false,
@@ -836,6 +840,7 @@ describe("R5 (6, drive-red): the bridge capability is read live at the decision,
           removeImageAttachmentById: () => undefined,
           rewriteImageAttachmentHashById: () => false,
           insertDictatedText: () => undefined,
+          draftGeneration: () => 0,
           dismissActiveSuggestion: () => false,
         }}
         onSubmitMessage={submit}
@@ -946,6 +951,7 @@ describe("R5 (7): the deferred steer confirm reads the same live getter", () => 
           removeImageAttachmentById: () => undefined,
           rewriteImageAttachmentHashById: () => false,
           insertDictatedText: () => undefined,
+          draftGeneration: () => 0,
           dismissActiveSuggestion: () => false,
         }}
         onSubmitMessage={submit}

@@ -34,8 +34,8 @@ import {
   PROMOTE_TO_PERSONAL_REQUIRED_HOST_VERSION,
   hostRpcRegistry,
   providersListV100,
-  providersNativeMutateUpgradeV10ToV11,
-  providersNativeMutateV10,
+  providersNativeMutateUpgradeV11ToV12,
+  providersNativeMutateV11,
   providersSetEnvOverrideUpgradeV21ToV22,
   providersSetEnvOverrideV10,
   providersSetEnvOverrideV20,
@@ -54,7 +54,7 @@ import { supportMatrix } from "./__fixtures__/support-matrix";
 /**
  * The wire of ticket E7, checkpoint 1: the 26 environment methods, the
  * executable-write grant on every method that reaches an execution sink, the
- * `providers.list@10.1` envelope keys, `providers.nativeMutate@1.1`'s
+ * `providers.list@10.3` envelope keys, `providers.nativeMutate@1.2`'s
  * `promoteToPersonal`, and the five secret shapes that follow the secrets
  * plan field for field.
  *
@@ -227,10 +227,10 @@ describe("a 10.0 caller of providers.list receives no scope or onHostOnly", () =
     onHostOnly: [{ providerId: "claude-code", profileId: "p1" }],
   };
 
-  it("keeps both envelope keys on the live 10.1 response schema", () => {
+  it("keeps both envelope keys on the live 10.3 response schema", () => {
     const line = hostRpcRegistry["providers.list"][10];
-    expect(line.latestMinor).toBe(1);
-    const live = line.versions[1].contract.responseSchema.parse(tenOne);
+    expect(line.latestMinor).toBe(3);
+    const live = line.versions[3].contract.responseSchema.parse(tenOne);
     expect(live.scope).toBe("personal");
     expect(live.onHostOnly).toEqual([
       { providerId: "claude-code", profileId: "p1" },
@@ -294,12 +294,12 @@ interface ReleasedSinkCase {
 
 const releasedSinkCases: readonly ReleasedSinkCase[] = [
   {
-    label: "providers.nativeMutate@1.1",
+    label: "providers.nativeMutate@1.2",
     registry: hostRpcRegistry["providers.nativeMutate"],
     method: "providers.nativeMutate",
-    clientVersion: { major: 1, minor: 1 },
+    clientVersion: { major: 1, minor: 2 },
     latestRequestSchema:
-      hostRpcRegistry["providers.nativeMutate"][1].versions[1].contract
+      hostRpcRegistry["providers.nativeMutate"][1].versions[2].contract
         .requestSchema,
     legacyRequest: {
       providerId: "claude-code",
@@ -312,17 +312,17 @@ const releasedSinkCases: readonly ReleasedSinkCase[] = [
     },
     hostLines: [
       {
-        version: { major: 1, minor: 0 },
-        requestSchema: providersNativeMutateV10.requestSchema,
+        version: { major: 1, minor: 1 },
+        requestSchema: providersNativeMutateV11.requestSchema,
       },
     ],
-    upgradePath: providersNativeMutateUpgradeV10ToV11,
+    upgradePath: providersNativeMutateUpgradeV11ToV12,
     registeredUpgrade:
-      hostRpcRegistry["providers.nativeMutate"][1].versions[1]
+      hostRpcRegistry["providers.nativeMutate"][1].versions[2]
         .upgradeFromPreviousVersion,
     upgrade: (legacy) =>
-      providersNativeMutateUpgradeV10ToV11.upgradeRequest(
-        providersNativeMutateV10.requestSchema.parse(legacy),
+      providersNativeMutateUpgradeV11ToV12.upgradeRequest(
+        providersNativeMutateV11.requestSchema.parse(legacy),
       ),
   },
   {
@@ -816,7 +816,7 @@ describe("every sink-reaching method parses with and without executableWriteGran
 
 // ── (d) ─────────────────────────────────────────────────────────────────────
 
-describe("promoteToPersonal toward a 1.0 host is refused, never dropped", () => {
+describe("promoteToPersonal toward a 1.1 host is refused, never dropped", () => {
   const promote = {
     kind: "promoteToPersonal",
     entryKind: "mcp",
@@ -825,7 +825,7 @@ describe("promoteToPersonal toward a 1.0 host is refused, never dropped", () => 
     name: "x",
   };
 
-  it("throws DOWNGRADE_UNSUPPORTED from 1.1 to 1.0 for a promoteToPersonal mutation", () => {
+  it("throws DOWNGRADE_UNSUPPORTED from 1.2 to 1.1 for a promoteToPersonal mutation", () => {
     const params = {
       providerId: "claude-code",
       mutation: promote,
@@ -833,18 +833,18 @@ describe("promoteToPersonal toward a 1.0 host is refused, never dropped", () => 
     };
     expect(
       accepts(
-        hostRpcRegistry["providers.nativeMutate"][1].versions[1].contract
+        hostRpcRegistry["providers.nativeMutate"][1].versions[2].contract
           .requestSchema,
         params,
       ),
     ).toBe(true);
-    expect(accepts(providersNativeMutateV10.requestSchema, params)).toBe(false);
+    expect(accepts(providersNativeMutateV11.requestSchema, params)).toBe(false);
     expectDowngradeUnsupported(
       captureThrown(() =>
         prepareRequestPayload(
           hostRpcRegistry["providers.nativeMutate"],
+          { major: 1, minor: 2 },
           { major: 1, minor: 1 },
-          { major: 1, minor: 0 },
           params,
           "r-promote",
           "providers.nativeMutate",
@@ -853,7 +853,7 @@ describe("promoteToPersonal toward a 1.0 host is refused, never dropped", () => 
     );
   });
 
-  it("passes a v1.0-shaped mutation from 1.1 to 1.0 with the grant stripped", () => {
+  it("passes a v1.1-shaped mutation from 1.2 to 1.1 with the grant stripped", () => {
     const legacyMutation = {
       kind: "mcp",
       scope: "global",
@@ -862,8 +862,8 @@ describe("promoteToPersonal toward a 1.0 host is refused, never dropped", () => 
     };
     const prepared = prepareRequestPayload(
       hostRpcRegistry["providers.nativeMutate"],
+      { major: 1, minor: 2 },
       { major: 1, minor: 1 },
-      { major: 1, minor: 0 },
       {
         providerId: "claude-code",
         mutation: legacyMutation,
@@ -872,14 +872,14 @@ describe("promoteToPersonal toward a 1.0 host is refused, never dropped", () => 
       "r-legacy",
       "providers.nativeMutate",
     );
-    expect(prepared.onWireVersion).toEqual({ major: 1, minor: 0 });
+    expect(prepared.onWireVersion).toEqual({ major: 1, minor: 1 });
     expect(prepared.onWirePayload).toEqual({
       providerId: "claude-code",
       mutation: legacyMutation,
     });
   });
 
-  it("delivers promoteToPersonal intact between two 1.1 peers", () => {
+  it("delivers promoteToPersonal intact between two 1.2 peers", () => {
     const params = {
       providerId: "claude-code",
       mutation: promote,
@@ -887,8 +887,8 @@ describe("promoteToPersonal toward a 1.0 host is refused, never dropped", () => 
     };
     const prepared = prepareRequestPayload(
       hostRpcRegistry["providers.nativeMutate"],
-      { major: 1, minor: 1 },
-      { major: 1, minor: 1 },
+      { major: 1, minor: 2 },
+      { major: 1, minor: 2 },
       params,
       "r-same",
       "providers.nativeMutate",
@@ -899,17 +899,17 @@ describe("promoteToPersonal toward a 1.0 host is refused, never dropped", () => 
   it("names the refusal with the typed floor the GUI shows in copy", () => {
     expect(PROMOTE_TO_PERSONAL_REQUIRED_HOST_VERSION).toEqual({
       method: "providers.nativeMutate",
-      version: { major: 1, minor: 1 },
+      version: { major: 1, minor: 2 },
     });
     expect(
       negotiatedVersionMeetsRequirement(
-        { major: 1, minor: 0 },
+        { major: 1, minor: 1 },
         PROMOTE_TO_PERSONAL_REQUIRED_HOST_VERSION,
       ),
     ).toBe(false);
     expect(
       negotiatedVersionMeetsRequirement(
-        { major: 1, minor: 1 },
+        { major: 1, minor: 2 },
         PROMOTE_TO_PERSONAL_REQUIRED_HOST_VERSION,
       ),
     ).toBe(true);

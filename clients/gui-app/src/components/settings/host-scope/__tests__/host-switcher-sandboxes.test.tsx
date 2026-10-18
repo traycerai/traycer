@@ -181,6 +181,7 @@ function renderSwitcherOffering(
       listsFailed={false}
       onRetryLists={() => undefined}
       updateViewForHost={null}
+      environmentLabelForHost={null}
       offersAutomations={offersAutomations}
     />,
   );

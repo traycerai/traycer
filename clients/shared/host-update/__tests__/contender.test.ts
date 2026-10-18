@@ -1286,8 +1286,15 @@ describe("withSupervisorRelaunchContender - the parked-record admission exemptio
     expect(callbackCalls).toBe(1);
   });
 
+  // The pre-placement rows are written NOW: a record written within
+  // `RECOMMENDED_ATTEMPT_STALENESS_MS` is not interrupted, and that freshness
+  // is what keeps them refused. The `applying` rows keep the fixture's
+  // long-past stamp on purpose - `applying` refuses at any age.
   it.each([
-    ["downloading", record({ claim: claim({}) })],
+    [
+      "downloading",
+      record({ claim: claim({}), updatedAt: new Date().toISOString() }),
+    ],
     [
       "applying",
       record({ phase: "applying", execution: "active", claim: claim({}) }),
@@ -1303,7 +1310,12 @@ describe("withSupervisorRelaunchContender - the parked-record admission exemptio
     ],
     [
       "preparing",
-      record({ phase: "preparing", execution: "active", claim: claim({}) }),
+      record({
+        phase: "preparing",
+        execution: "active",
+        claim: claim({}),
+        updatedAt: new Date().toISOString(),
+      }),
     ],
     [
       "preparing-resume-apply",
@@ -1312,6 +1324,7 @@ describe("withSupervisorRelaunchContender - the parked-record admission exemptio
         execution: "active",
         continuation: "resume-apply",
         claim: claim({}),
+        updatedAt: new Date().toISOString(),
       }),
     ],
   ] as const)(
@@ -1553,6 +1566,184 @@ describe("withSupervisorRelaunchContender - the parked-record admission exemptio
 
     expect(outcome).toEqual({ kind: "ran", result: "host-spawned" });
     expect(callbackCalls).toBe(1);
+  });
+
+  describe("an INTERRUPTED pre-placement record - the updater died between its pre-swap stop and `applying`", () => {
+    // The field shape (RCA forced-host-update-stuck-restart, 2026-10-09): a
+    // `host update` CLI killed after it stopped the host for the swap but
+    // before it wrote `applying`. The supervisor exited 0 under a `stop`
+    // reason, the record stayed `preparing`/active, and every automatic start
+    // refused it until a person ran `host restart`.
+    const minutesAgo = (minutes: number): string =>
+      new Date(Date.now() - minutes * 60_000).toISOString();
+    const secondsAgo = (seconds: number): string =>
+      new Date(Date.now() - seconds * 1_000).toISOString();
+
+    it.each([
+      [
+        "preparing / resume-apply",
+        record({
+          phase: "preparing",
+          execution: "active",
+          continuation: "resume-apply",
+          claim: claim({}),
+          updatedAt: minutesAgo(3),
+        }),
+      ],
+      [
+        "preparing / null continuation",
+        record({
+          phase: "preparing",
+          execution: "active",
+          continuation: null,
+          claim: claim({}),
+          updatedAt: minutesAgo(3),
+        }),
+      ],
+      [
+        "downloading",
+        record({
+          phase: "downloading",
+          execution: "active",
+          claim: claim({}),
+          updatedAt: minutesAgo(3),
+        }),
+      ],
+    ] as const)(
+      "admits a relaunch over a stale, unheld %s record and leaves the record byte for byte",
+      async (_label, current) => {
+        const hostHomeDir = await freshHome();
+        await writeRecord(hostHomeDir, current);
+        const before = await readFile(
+          updateAttemptRecordPath(hostHomeDir),
+          "utf8",
+        );
+
+        const { outcome, callbackCalls } = await relaunch(
+          hostHomeDir,
+          // The INSTALLED bytes are the pre-attempt version, not the target:
+          // nothing was placed, so what comes up is what was running before.
+          installed({ installedVersion: "1.2.2" }),
+        );
+
+        expect(outcome).toEqual({ kind: "ran", result: "host-spawned" });
+        expect(callbackCalls).toBe(1);
+        // Left for `host update` to recover: the supervisor holds no
+        // capability that could advance or terminalize it, and must not.
+        expect(
+          await readFile(updateAttemptRecordPath(hostHomeDir), "utf8"),
+        ).toBe(before);
+      },
+    );
+
+    it("control: refuses a preparing record written 30 s ago - an updater between writes may still be alive", async () => {
+      const hostHomeDir = await freshHome();
+      const current = record({
+        phase: "preparing",
+        execution: "active",
+        continuation: "resume-apply",
+        claim: claim({}),
+        updatedAt: secondsAgo(30),
+      });
+      await writeRecord(hostHomeDir, current);
+
+      const { outcome, callbackCalls, readerCalls } = await relaunch(
+        hostHomeDir,
+        installed({}),
+      );
+
+      expect(outcome.kind).toBe("nonterminal-attempt");
+      if (outcome.kind !== "nonterminal-attempt") return;
+      expect(outcome.disposition).toBe("refuse");
+      expect(outcome.record).toEqual(current);
+      expect(callbackCalls).toBe(0);
+      expect(readerCalls).toBe(0);
+    });
+
+    it("control: a stale preparing record whose attempt lock is HELD by a live process answers busy", async () => {
+      const hostHomeDir = await freshHome();
+      await writeRecord(
+        hostHomeDir,
+        record({
+          phase: "preparing",
+          execution: "active",
+          continuation: "resume-apply",
+          claim: claim({}),
+          updatedAt: minutesAgo(3),
+        }),
+      );
+      const barrierDir = join(hostHomeDir, "live-holder-barrier");
+      await mkdir(barrierDir, { recursive: true });
+      const holder = spawnAttemptCompetitor(hostHomeDir, barrierDir);
+      await waitForFile(join(barrierDir, "held"), 10_000);
+
+      try {
+        const { outcome, callbackCalls, readerCalls } = await relaunch(
+          hostHomeDir,
+          installed({}),
+        );
+
+        expect(outcome.kind).toBe("busy");
+        expect(callbackCalls).toBe(0);
+        expect(readerCalls).toBe(0);
+      } finally {
+        await writeFile(join(barrierDir, "release"), "");
+        if (holder.exitCode === null) {
+          await new Promise<void>((resolve) => {
+            holder.once("exit", () => resolve());
+          });
+        }
+        forgetChild(holder);
+      }
+    });
+
+    it("control: refuses a stale, unheld applying record at any age - byte placement keeps today's answer", async () => {
+      const hostHomeDir = await freshHome();
+      const current = record({
+        phase: "applying",
+        execution: "active",
+        continuation: "resume-apply",
+        claim: claim({}),
+        updatedAt: minutesAgo(3),
+      });
+      await writeRecord(hostHomeDir, current);
+
+      const { outcome, callbackCalls, readerCalls } = await relaunch(
+        hostHomeDir,
+        installed({}),
+      );
+
+      expect(outcome.kind).toBe("nonterminal-attempt");
+      if (outcome.kind !== "nonterminal-attempt") return;
+      expect(outcome.disposition).toBe("refuse");
+      expect(callbackCalls).toBe(0);
+      expect(readerCalls).toBe(0);
+    });
+
+    it("control: refuses a stale, unheld preparing record when there is NO readable install record - there are no installed bytes to start", async () => {
+      const hostHomeDir = await freshHome();
+      await writeRecord(
+        hostHomeDir,
+        record({
+          phase: "preparing",
+          execution: "active",
+          continuation: "resume-apply",
+          claim: claim({}),
+          updatedAt: minutesAgo(3),
+        }),
+      );
+
+      const { outcome, callbackCalls, readerCalls } = await relaunch(
+        hostHomeDir,
+        null,
+      );
+
+      expect(outcome.kind).toBe("nonterminal-attempt");
+      if (outcome.kind !== "nonterminal-attempt") return;
+      expect(outcome.disposition).toBe("refuse");
+      expect(callbackCalls).toBe(0);
+      expect(readerCalls).toBe(1);
+    });
   });
 
   it.each([

@@ -1,14 +1,17 @@
 import { useStore } from "zustand";
 
 import { Popover, PopoverTrigger } from "@/components/ui/popover";
-import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
+import { HarnessModelPickerTriggerTooltip } from "@/components/home/pickers/harness-model-picker-trigger-tooltip";
 import { Kbd } from "@/components/ui/kbd";
 import { ShortcutHint } from "@/components/ui/shortcut-hint";
 import { HarnessModelTrigger } from "@/components/home/pickers/harness-model-trigger";
 import { useLayoutRegion } from "@/components/layout-editor/use-layout-region";
 import { useComposerTileId } from "@/components/home/composer/composer-tile-hooks";
 import {
-  findUpgradeServiceTierForModel,
+  nonDefaultServiceTiersForModel,
+  selectedServiceTierOption,
+  serviceTierControlForModel,
+  standardServiceTierLabel,
   findReasoningOptionsForModel,
   type HarnessModelSelection,
   type HarnessOption,
@@ -1194,7 +1197,7 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
         presentation.reasoningLabel,
         presentation.reasoningStep,
       )}
-      fastModeLabel={fastModeTooltipLabel(serviceTierFooter, selectedModel)}
+      serviceTierTooltip={serviceTierTooltip(serviceTierFooter, selectedModel)}
       profileLabel={profileTooltipLabel(
         profilesByHarnessId.get(selection.harnessId) ?? [],
         selection.profileId,
@@ -1208,11 +1211,9 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
   );
 
   const composerFace = (
-    <TooltipWrapper
+    <HarnessModelPickerTriggerTooltip
+      pickerOpen={visibleOpen}
       label={tooltipLabel}
-      side="top"
-      sideOffset={undefined}
-      align={undefined}
     >
       <HarnessModelTrigger
         {...paneActivationDeferProps}
@@ -1230,7 +1231,7 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
         disabled={disabled}
         labelDisplay={props.labelDisplay}
       />
-    </TooltipWrapper>
+    </HarnessModelPickerTriggerTooltip>
   );
 
   return (
@@ -1490,14 +1491,17 @@ function HarnessModelPickerTooltip({
   harnessLabel,
   modelLabel,
   reasoningLabel,
-  fastModeLabel,
+  serviceTierTooltip,
   profileLabel,
   shortcutLabel,
 }: {
   readonly harnessLabel: string;
   readonly modelLabel: string;
   readonly reasoningLabel: string | null;
-  readonly fastModeLabel: string | null;
+  readonly serviceTierTooltip: {
+    readonly label: string;
+    readonly value: string;
+  } | null;
   readonly profileLabel: string | null;
   readonly shortcutLabel: string | null;
 }): ReactNode {
@@ -1508,8 +1512,11 @@ function HarnessModelPickerTooltip({
       {reasoningLabel === null ? null : (
         <TooltipSummaryRow label="Effort" value={reasoningLabel} />
       )}
-      {fastModeLabel === null ? null : (
-        <TooltipSummaryRow label="Fast" value={fastModeLabel} />
+      {serviceTierTooltip === null ? null : (
+        <TooltipSummaryRow
+          label={serviceTierTooltip.label}
+          value={serviceTierTooltip.value}
+        />
       )}
       {profileLabel === null ? null : (
         <TooltipSummaryRow label="Profile" value={profileLabel} />
@@ -1562,15 +1569,28 @@ function reasoningTooltipLabel(
   return position === null ? reasoningLabel : `${reasoningLabel} (${position})`;
 }
 
-function fastModeTooltipLabel(
+function serviceTierTooltip(
   serviceTierFooter: ServiceTierFooterConfig | null,
   selectedModel: ModelOption | null,
-): string | null {
+): { readonly label: string; readonly value: string } | null {
   if (serviceTierFooter === null) return null;
-  const upgrade = findUpgradeServiceTierForModel(selectedModel);
-  if (upgrade === null) return null;
-  const active = serviceTierFooter.value === upgrade.id;
-  return `${upgrade.label} ${active ? "on" : "off"}`;
+  const control = serviceTierControlForModel(selectedModel);
+  if (control === "none") return null;
+  const selected = selectedServiceTierOption(
+    serviceTierFooter.value,
+    selectedModel,
+  );
+  if (control === "menu") {
+    return {
+      label: "Speed",
+      value: selected?.label ?? standardServiceTierLabel(selectedModel),
+    };
+  }
+  const upgrade = nonDefaultServiceTiersForModel(selectedModel)[0];
+  return {
+    label: "Fast",
+    value: `${upgrade.label} ${selected === null ? "off" : "on"}`,
+  };
 }
 
 function profileTooltipLabel(

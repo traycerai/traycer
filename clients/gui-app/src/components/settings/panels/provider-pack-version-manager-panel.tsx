@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 import type {
   ProviderManagedVersions,
+  ProviderMacosRequirement,
   ProviderPackVersion,
 } from "@traycer/protocol/host/provider-schemas";
 import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
@@ -26,6 +27,8 @@ import { useProviderPackVersionManagerSupport } from "./provider-pack-version-ma
 import {
   createVersionManagerPanelToken,
   registerVersionManagerPanel,
+  versionManagerPanelIsMounted,
+  type VersionManagerPanelToken,
 } from "./provider-pack-version-manager-presence";
 import { useHostSupportsMethod } from "@/hooks/host/use-host-supports-method";
 import { useProvidersInstallPackVersion } from "@/hooks/providers/use-providers-install-pack-version-mutation";
@@ -95,9 +98,24 @@ export type ProviderPackVersionManagerPanelProps = {
   readonly packDisplayName: string;
   /** Per-pack manager state from the provider row. */
   readonly managedVersions: ProviderManagedVersions;
+  readonly refusedVersions: readonly ProviderMacosRequirement["refusedVersions"][number][];
+  readonly runningMacos: string | null;
 };
 
+type ScopedPinNotice = {
+  readonly panel: VersionManagerPanelToken;
+  readonly notice: BannerNotice;
+};
+
+function pinNoticeWithin(
+  value: ScopedPinNotice | null,
+  panel: VersionManagerPanelToken,
+): BannerNotice | null {
+  return value?.panel === panel ? value.notice : null;
+}
+
 type RowNotice = {
+  readonly panel: VersionManagerPanelToken;
   readonly version: string;
   readonly kind: "info" | "error";
   readonly message: string;
@@ -252,11 +270,11 @@ export function ProviderPackVersionManagerPanel(
   // be mounted when the response lands. Re-minted when the pack changes: an
   // RPC still in flight for the old pack then holds a token this panel no
   // longer registers, and the hook toasts it instead of trusting a panel that
-  // has no row for it. A recomputation for any other reason degrades the same
+  // has no row for it. The same applies when Settings follows another host. A recomputation for any other reason degrades the same
   // way - toward a toast, never toward silence.
   const panelToken = useMemo(
-    () => createVersionManagerPanelToken(packId),
-    [packId],
+    () => ({ ...createVersionManagerPanelToken(packId), hostId }),
+    [hostId, packId],
   );
 
   const install = useProvidersInstallPackVersion(panelToken);
@@ -272,7 +290,7 @@ export function ProviderPackVersionManagerPanel(
   // - so routing a clear-pin refusal there still dropped it whenever no update
   // was pending, which is most of the time. The pinned banner below renders on
   // exactly the condition that makes a clear-pin refusal possible.
-  const [pinNotice, setPinNotice] = useState<BannerNotice | null>(null);
+  const [pinNotice, setPinNotice] = useState<ScopedPinNotice | null>(null);
   // Footer-scoped, and the only notice on this surface that can be GOOD news:
   // a check answers neutrally as often as not, so unlike the row and banner
   // notices it carries a tone rather than being error-only.
@@ -336,9 +354,16 @@ export function ProviderPackVersionManagerPanel(
   const bannerDownload =
     updateAvailable === null
       ? null
-      : updateBannerDownloadEligibility(
-          managedVersions.available,
-          updateAvailable.version,
+      : downloadEligibilityWithMacosRefusal(
+          updateBannerDownloadEligibility(
+            managedVersions.available,
+            updateAvailable.version,
+          ),
+          macosVersionRefusalMessage(
+            props.refusedVersions,
+            props.runningMacos,
+            updateAvailable.version,
+          ),
         );
 
   // Runs at the top of every action. Disarming the delete here is what keeps
@@ -430,7 +455,12 @@ export function ProviderPackVersionManagerPanel(
                 response.result.code,
               );
               if (hasRow) {
-                setRowNotice({ version, kind: "error", message });
+                setRowNotice({
+                  panel: panelToken,
+                  version,
+                  kind: "error",
+                  message,
+                });
               } else {
                 // Durable banner may name a version with no row — surface on
                 // the banner, not a phantom row notice.
@@ -441,7 +471,7 @@ export function ProviderPackVersionManagerPanel(
         },
       );
     },
-    [clearNotice, install, managedVersions.available, packId],
+    [clearNotice, install, managedVersions.available, packId, panelToken],
   );
 
   const onUse = useCallback(
@@ -455,17 +485,19 @@ export function ProviderPackVersionManagerPanel(
           // Refusal only. The success confirmation is owned by the hook, so it
           // still reaches the user when this popover closes mid-flight.
           onSuccess: (response) => {
-            if (response.result.ok) return;
+            if (response.result.ok || !versionManagerPanelIsMounted(panelToken))
+              return;
             setRowNotice({
+              panel: panelToken,
               version,
               kind: "error",
-              message: packVersionUseRefusalMessage(response.result.code),
+              message: packVersionUseRefusalMessage(response.result),
             });
           },
         },
       );
     },
-    [clearNotice, packId, useVersion],
+    [clearNotice, packId, panelToken, useVersion],
   );
 
   const onClearPin = useCallback(() => {
@@ -477,20 +509,24 @@ export function ProviderPackVersionManagerPanel(
         onSettled: () => setPendingVersion(null),
         // Refusal only; the hook owns the success confirmation.
         onSuccess: (response) => {
-          if (response.result.ok) return;
+          if (response.result.ok || !versionManagerPanelIsMounted(panelToken))
+            return;
           // The PIN banner. Not a row notice: those render inside `VersionRow`
           // keyed by version, and the pinned version has no row exactly when a
           // user is most likely to be clearing the pin (a pin on a build the
           // channel no longer lists). Not the update banner either: that one
           // only mounts when an update is pending.
           setPinNotice({
-            kind: "error",
-            message: packVersionUseRefusalMessage(response.result.code),
+            panel: panelToken,
+            notice: {
+              kind: "error",
+              message: packVersionUseRefusalMessage(response.result),
+            },
           });
         },
       },
     );
-  }, [clearNotice, packId, useVersion]);
+  }, [clearNotice, packId, panelToken, useVersion]);
 
   // First click on the trash: arm this row and clear whatever else was showing.
   // `clearNotice` disarms, so the set has to follow it rather than precede it.
@@ -514,6 +550,7 @@ export function ProviderPackVersionManagerPanel(
             if (!response.result.ok) {
               const message = removeResultUserMessage(response.result);
               setRowNotice({
+                panel: panelToken,
                 version,
                 kind:
                   response.result.code === "deferred-locked" ? "info" : "error",
@@ -524,7 +561,7 @@ export function ProviderPackVersionManagerPanel(
         },
       );
     },
-    [clearNotice, packId, remove],
+    [clearNotice, packId, panelToken, remove],
   );
 
   // hostId null OR support null: absence of knowledge, not evidence of absence.
@@ -609,7 +646,7 @@ export function ProviderPackVersionManagerPanel(
       <VersionManagerBanners
         sharedLine={sharedLine}
         pinnedVersion={managedVersions.pinnedVersion}
-        pinNotice={pinNotice}
+        pinNotice={pinNoticeWithin(pinNotice, panelToken)}
         clearPinPending={
           pendingVersion === CLEAR_PIN_PENDING_KEY && useVersion.isPending
         }
@@ -649,8 +686,15 @@ export function ProviderPackVersionManagerPanel(
           <VersionRow
             key={row.version}
             row={row}
+            macosRefusal={macosVersionRefusalMessage(
+              props.refusedVersions,
+              props.runningMacos,
+              row.version,
+            )}
             notice={
-              rowNotice !== null && rowNotice.version === row.version
+              rowNotice !== null &&
+              rowNotice.panel === panelToken &&
+              rowNotice.version === row.version
                 ? rowNotice
                 : null
             }
@@ -941,8 +985,36 @@ function UpdateAvailableBanner(props: {
   );
 }
 
+/** Both download controls honor the executing host's exact-version refusal. */
+function downloadEligibilityWithMacosRefusal(
+  eligibility: VersionDownloadEligibility,
+  macosRefusal: string | null,
+): VersionDownloadEligibility {
+  return macosRefusal === null
+    ? eligibility
+    : { allowed: false, reason: macosRefusal };
+}
+
+function macosVersionRefusalMessage(
+  refusedVersions: readonly ProviderMacosRequirement["refusedVersions"][number][],
+  runningMacos: string | null,
+  version: string,
+): string | null {
+  const refused = refusedVersions.find((entry) => entry.version === version);
+  if (refused === undefined) return null;
+  return runningMacos === null
+    ? `Needs macOS ${refused.requiredMacos} or later.`
+    : packVersionUseRefusalMessage({
+        ok: false,
+        code: "macos-ineligible",
+        requiredMacos: refused.requiredMacos,
+        runningMacos,
+      });
+}
+
 type VersionRowProps = {
   readonly row: ProviderPackVersion;
+  readonly macosRefusal: string | null;
   readonly notice: RowNotice | null;
   readonly deleteArmed: boolean;
   readonly downloadPending: boolean;
@@ -988,6 +1060,7 @@ type VersionRowProps = {
 function VersionRow(props: VersionRowProps): JSX.Element {
   const {
     row,
+    macosRefusal,
     notice,
     deleteArmed,
     downloadPending,
@@ -1000,12 +1073,19 @@ function VersionRow(props: VersionRowProps): JSX.Element {
     onDelete,
   } = props;
 
-  const download = versionDownloadEligibility(row);
-  const useElig = versionUseEligibility(row);
+  const download = downloadEligibilityWithMacosRefusal(
+    versionDownloadEligibility(row),
+    macosRefusal,
+  );
+  const useElig: VersionUseEligibility =
+    macosRefusal === null
+      ? versionUseEligibility(row)
+      : { allowed: false, reason: macosRefusal };
   const del = versionDeleteEligibility(row);
   const chip = versionRowChip(row);
-  const trouble = versionTroubleLine(row);
-  const greyed = isBlockingCertification(row.certification);
+  const trouble = macosRefusal ?? versionTroubleLine(row);
+  const greyed =
+    macosRefusal !== null || isBlockingCertification(row.certification);
 
   const showFetch = versionShowsInstallFetchAction(row);
   const fetchLabel = versionInstallFetchLabel(row);

@@ -34,6 +34,7 @@ import {
   type UnifiedPickerWorktreeRow,
 } from "@/components/home/worktree/worktree-unified-picker-model";
 import { useCoarsePointer } from "@/hooks/ui/use-coarse-pointer";
+import { listNavigationKey } from "@/lib/keybindings/list-navigation-key";
 import { workspaceFolderName } from "@/lib/worktree/workspace-folder-name";
 import { cn } from "@/lib/utils";
 import {
@@ -356,11 +357,15 @@ export function ExistingWorktreeList(props: {
               aria-label="Search worktrees"
               onChange={(event) => setQuery(event.target.value)}
               onKeyDown={(event) => {
-                if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+                const navigationKey = listNavigationKey(event);
+                if (
+                  navigationKey === "ArrowDown" ||
+                  navigationKey === "ArrowUp"
+                ) {
                   event.preventDefault();
                   event.stopPropagation();
                   focusFilteredRow(
-                    event.key === "ArrowDown" ? "first" : "last",
+                    navigationKey === "ArrowDown" ? "first" : "last",
                   );
                   return;
                 }

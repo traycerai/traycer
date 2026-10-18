@@ -1020,6 +1020,8 @@ const SHARED_TOOL: ToolSegment = {
   durationMs: null,
   parentId: null,
   imageResults: [],
+  page: null,
+  mcpApp: null,
 };
 
 const SHARED_APPROVAL: ApprovalSegment = {

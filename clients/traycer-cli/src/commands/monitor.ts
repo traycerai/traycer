@@ -43,6 +43,7 @@ import { createCliHostCredentialMintFlow } from "../auth/host-credential-mint";
 import { resolveHostAuth } from "../internal/host-auth";
 import { callHostRpc } from "../internal/host-rpc";
 import {
+  stdoutReaderClosed,
   writeStderr,
   writeStdout,
   writeStdoutForAck,
@@ -309,7 +310,13 @@ export async function runMonitor(args: MonitorArgs): Promise<void> {
       revalidator,
       { agentId, epicId },
       logger,
+      stdoutReaderClosed(),
     );
+    // Reached only when stdout's reader went away: there is nobody left to
+    // print a message to, so stop holding the inbox open. Nothing was acked
+    // for a message that did not confirm onto stdout, so the at-least-once
+    // inbox redelivers it to the next monitor.
+    client.close("stdout-reader-closed");
   } finally {
     refreshScheduler.stop();
     clearInterval(poll);
@@ -329,9 +336,11 @@ type InboxRevalidator = {
 };
 
 /**
- * Drives the inbox subscription until a terminal failure. Resolves never on a
- * healthy stream (the command runs forever); rejects on a non-recoverable close
- * so `traycer monitor` exits non-zero.
+ * Drives the inbox subscription until a terminal failure or until stdout's
+ * reader goes away. Resolves only on `readerClosed` (an orphaned monitor whose
+ * reader has closed the pipe; `traycer monitor` then exits 0); rejects on a
+ * non-recoverable close so `traycer monitor` exits non-zero. A healthy stream
+ * with a live reader runs forever.
  *
  * Recovery on a host `UNAUTHORIZED` fatal switches on the refresh OUTCOME:
  *   - `rotated`       → re-subscribe immediately (bounded by the spin guard);
@@ -345,8 +354,9 @@ function runInboxSubscription(
   revalidator: InboxRevalidator,
   target: InboxTarget,
   logger: ILogger,
-): Promise<never> {
-  return new Promise<never>((_resolve, reject) => {
+  readerClosed: AbortSignal,
+): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
     let session: IStreamSession | null = null;
     let authRefreshCount = 0;
     let healthTimer: NodeJS.Timeout | null = null;
@@ -385,7 +395,25 @@ function runInboxSubscription(
       clearRetryTimer();
       acknowledgements.dispose();
       session?.close();
+      readerClosed.removeEventListener("abort", stopForClosedReader);
       reject(error);
+    };
+
+    const stopForClosedReader = (): void => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      logger.info("Monitor stopping: stdout reader closed", {
+        environment: config.environment,
+        agentId: target.agentId,
+        epicId: target.epicId,
+      });
+      clearHealthTimer();
+      clearRetryTimer();
+      acknowledgements.dispose();
+      session?.close();
+      resolve();
     };
 
     // The subscription is demonstrably accepted — reset the auth-spin guard.
@@ -514,6 +542,13 @@ function runInboxSubscription(
       fail(new Error("traycer monitor: session expired — re-authenticate."));
     };
 
+    if (readerClosed.aborted) {
+      stopForClosedReader();
+      return;
+    }
+    readerClosed.addEventListener("abort", stopForClosedReader, {
+      once: true,
+    });
     subscribe();
   });
 }

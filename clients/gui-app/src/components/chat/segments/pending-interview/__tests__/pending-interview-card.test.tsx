@@ -2752,6 +2752,80 @@ describe("PendingInterviewCard keyboard navigation", () => {
   });
 });
 
+describe("PendingInterviewCard long option labels", () => {
+  afterEach(() => {
+    cleanup();
+    useInterviewDraftStore.setState({ draftsByChat: {} });
+    window.localStorage.clear();
+  });
+
+  // jsdom has no layout, so "readable in a narrow pane" is asserted on its
+  // cause: a single-line `truncate` (white-space: nowrap + ellipsis) leaves
+  // two characters in a narrow chat column, and the row has no other place
+  // the full text is visible.
+  it("lets a long option label wrap instead of truncating it to one line", () => {
+    const longLabel =
+      "Inside the agent harness as a thin proxy layer between the model and the tools";
+    renderCard(
+      [singleSelect("q", "Where does it live?", [longLabel, "Short"])],
+      vi.fn(),
+      null,
+    );
+
+    const labelEl = screen.getByText(longLabel);
+    expect(labelEl.textContent).toBe(longLabel);
+    expect(labelEl.classList.contains("truncate")).toBe(false);
+    expect(labelEl.classList.contains("whitespace-nowrap")).toBe(false);
+    expect(labelEl.classList.contains("break-words")).toBe(true);
+    // `min-w-0` is what lets the label shrink and wrap; overflow-wrap alone
+    // does not lower min-content. A clamp or ellipsis variant would hide text
+    // the same way `truncate` did.
+    expect(labelEl.classList.contains("min-w-0")).toBe(true);
+    expect(labelEl.className).not.toMatch(/text-ellipsis|line-clamp/);
+  });
+
+  // jsdom evaluates no container queries either, so the narrow-pane rule is
+  // pinned on its two halves: the option list is the named query container,
+  // and the number badge is `display: none` until that container is wide
+  // enough. The `1. ...` aria-label is untouched, so keyboard numbering and
+  // screen readers lose nothing.
+  it("hides the number badge and its spacer below a narrow container width", () => {
+    renderCard(
+      [singleSelect("q", "Where does it live?", ["First option", "Short"])],
+      vi.fn(),
+      null,
+    );
+
+    const rowButton = screen.getByRole("button", { name: "1. First option" });
+    const row = rowButton.parentElement;
+    expect(row).not.toBeNull();
+    const badge = Array.from(row?.querySelectorAll("span[aria-hidden]") ?? [])
+      .filter((el) => el.textContent === "1")
+      .at(0);
+    expect(badge).toBeDefined();
+    expect(badge?.classList.contains("hidden")).toBe(true);
+    expect(badge?.className).toMatch(
+      /@\[[\d.]+rem\]\/interview-options:inline-flex/,
+    );
+    // The badge itself carries the right-edge push, so no empty flex-1 spacer
+    // is left behind to hold a gap once the badge is gone.
+    expect(badge?.classList.contains("ml-auto")).toBe(true);
+    expect(row?.querySelector("span.flex-1")).toBeNull();
+    expect(
+      rowButton.closest('[class~="@container/interview-options"]'),
+    ).not.toBeNull();
+
+    // The custom-answer row has no number badge; its pencil badge is the
+    // right-edge element, so it needs the same `ml-auto` the spacer provided.
+    const otherRow = screen.getByRole("button", {
+      name: "Other",
+    }).parentElement;
+    const pencilBadge = otherRow?.querySelector("span[aria-hidden].size-5");
+    expect(pencilBadge).not.toBeNull();
+    expect(pencilBadge?.classList.contains("ml-auto")).toBe(true);
+  });
+});
+
 describe("PendingInterviewCard choice mode chrome", () => {
   afterEach(() => {
     cleanup();

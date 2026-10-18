@@ -13,8 +13,10 @@ import { Placeholder } from "@tiptap/extensions";
 import Mention from "@tiptap/extension-mention";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
+import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import type { HostRpcRegistry } from "@/lib/host";
 import { useEpicDraftGuard } from "@/lib/epics/use-epic-draft-guard";
 import { useMentionCollaboratorsForClient } from "@/hooks/comments/use-mention-collaborators";
@@ -64,10 +66,11 @@ export interface CommentComposerProps {
    *  by inline reply composers. */
   readonly focusOnMount: boolean;
   readonly submitLabel: string;
+  readonly isPending: boolean;
   /** Called with the parsed JSONContent on submit. The composer leaves
    *  network state to the caller - it does not clear itself, so the caller
    *  should `reset()` via the imperative handle on success. */
-  readonly onSubmit: (content: JsonContent) => void;
+  readonly onSubmit: (content: JsonContent) => Promise<void>;
   /** Optional cancel hook. Receives `isDirty` so callers can decide whether
    *  to confirm before discarding. */
   readonly onCancel: ((isDirty: boolean) => void) | null;
@@ -116,6 +119,7 @@ export function CommentComposer(props: CommentComposerProps) {
     placeholder,
     focusOnMount,
     submitLabel,
+    isPending,
     onSubmit,
     onCancel,
     className,
@@ -158,6 +162,10 @@ export function CommentComposer(props: CommentComposerProps) {
   // Stable refs so closures inside `useEditor`'s deps-`[]` capture do not
   // see a stale callback once the parent re-renders with new handlers.
   const onSubmitRef = useRef(onSubmit);
+  // Close the gap before Query's pending state renders, for both clicks and
+  // keyboard shortcuts. Keep the latch until the caller finishes saving.
+  const submittingRef = useRef(false);
+  const isPendingRef = useRef(isPending);
   const onCancelRef = useRef(onCancel);
   // Editor's `handleKeyDown` is captured under `useEditor`'s `[]` deps so it
   // would see a stale `suggestionState`. Mirror it in a ref so Escape can
@@ -167,6 +175,10 @@ export function CommentComposer(props: CommentComposerProps) {
   useEffect(() => {
     onSubmitRef.current = onSubmit;
   }, [onSubmit]);
+
+  useEffect(() => {
+    isPendingRef.current = isPending;
+  }, [isPending]);
 
   useEffect(() => {
     onCancelRef.current = onCancel;
@@ -199,6 +211,7 @@ export function CommentComposer(props: CommentComposerProps) {
             }).slice(),
           render: () => ({
             onStart(p) {
+              if (submittingRef.current) return;
               setSuggestionState({
                 items: p.items,
                 command: p.command,
@@ -206,6 +219,7 @@ export function CommentComposer(props: CommentComposerProps) {
               });
             },
             onUpdate(p) {
+              if (submittingRef.current) return;
               setSuggestionState({
                 items: p.items,
                 command: p.command,
@@ -213,6 +227,7 @@ export function CommentComposer(props: CommentComposerProps) {
               });
             },
             onKeyDown(p) {
+              if (submittingRef.current) return false;
               if (p.event.key === "Escape") {
                 setSuggestionState(null);
                 return false;
@@ -263,7 +278,7 @@ export function CommentComposer(props: CommentComposerProps) {
         handleKeyDown(_view, event) {
           if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
             event.preventDefault();
-            submitFromEditor();
+            void submitFromEditor();
             return true;
           }
           if (event.key === "Escape" && !suggestionActiveRef.current) {
@@ -285,11 +300,35 @@ export function CommentComposer(props: CommentComposerProps) {
     [],
   );
 
-  const submitFromEditor = useCallback(() => {
+  const submitFromEditor = useCallback(async () => {
     const e = editor;
-    if (e === null || e.isEmpty) return;
-    onSubmitRef.current(e.getJSON());
-  }, [editor]);
+    if (
+      e === null ||
+      e.isEmpty ||
+      submittingRef.current ||
+      isPendingRef.current
+    )
+      return;
+    submittingRef.current = true;
+    setSuggestionState(null);
+    // Freeze only the editor whose content was submitted. Otherwise typing
+    // during a slow save produces unsent text that success would discard.
+    e.setEditable(false, false);
+    const releaseSubmission = () => {
+      submittingRef.current = false;
+      if (!e.isDestroyed) e.setEditable(true, false);
+    };
+    try {
+      await onSubmitRef.current(e.getJSON());
+    } catch (error) {
+      releaseSubmission();
+      // Mutation hooks report RPC failures. Unexpected completion errors must
+      // still reach the application's error reporting.
+      if (!(error instanceof HostRpcError)) throw error;
+      return;
+    }
+    releaseSubmission();
+  }, [editor, setSuggestionState]);
 
   const cancelFromEditor = useCallback(() => {
     const handler = onCancelRef.current;
@@ -342,9 +381,16 @@ export function CommentComposer(props: CommentComposerProps) {
         <Button
           type="button"
           size="sm"
-          disabled={isEmpty}
-          onClick={submitFromEditor}
+          disabled={isEmpty || isPending}
+          onClick={() => void submitFromEditor()}
         >
+          {isPending ? (
+            <AgentSpinningDots
+              className={undefined}
+              testId={undefined}
+              variant={undefined}
+            />
+          ) : null}
           {submitLabel}
         </Button>
       </div>
@@ -352,7 +398,9 @@ export function CommentComposer(props: CommentComposerProps) {
         <MentionSuggestionList
           ref={suggestionHandleRef}
           items={suggestionState.items}
-          command={suggestionState.command}
+          command={(attrs) => {
+            if (!submittingRef.current) suggestionState.command(attrs);
+          }}
           getReferenceClientRect={suggestionState.clientRect}
         />
       )}

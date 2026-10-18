@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   computeDescendantCounts,
   computeDescendantCountsFromTree,
+  countDirectAgentChildren,
+  formatAgentDeleteNesting,
   formatCascadeSummary,
   type DescendantCounts,
 } from "@/lib/epic-tree-cascade";
@@ -294,5 +296,57 @@ describe("formatCascadeSummary", () => {
       "terminal-agent": 0,
     };
     expect(formatCascadeSummary(counts)).toBe("2 stories");
+  });
+});
+
+describe("countDirectAgentChildren", () => {
+  it("counts the agents directly under a node", () => {
+    const tree = treeFromRecords([
+      makeRecord("a", "chat", null),
+      makeRecord("b", "chat", "a"),
+      makeRecord("c", "terminal-agent", "a"),
+    ]);
+    expect(countDirectAgentChildren(tree, "a")).toBe(2);
+  });
+
+  it("does not count grandchildren: they stay under their own parent", () => {
+    const tree = treeFromRecords([
+      makeRecord("a", "chat", null),
+      makeRecord("b", "chat", "a"),
+      makeRecord("c", "chat", "b"),
+      makeRecord("d", "terminal-agent", "c"),
+    ]);
+    expect(countDirectAgentChildren(tree, "a")).toBe(1);
+    expect(countDirectAgentChildren(tree, "b")).toBe(1);
+  });
+
+  it("counts the agents nested under a terminal agent", () => {
+    const tree = treeFromRecords([
+      makeRecord("t", "terminal-agent", null),
+      makeRecord("u", "terminal-agent", "t"),
+      makeRecord("v", "chat", "t"),
+    ]);
+    expect(countDirectAgentChildren(tree, "t")).toBe(2);
+  });
+
+  it("is zero for a leaf and for an unknown id", () => {
+    const tree = treeFromRecords([makeRecord("a", "chat", null)]);
+    expect(countDirectAgentChildren(tree, "a")).toBe(0);
+    expect(countDirectAgentChildren(tree, "missing")).toBe(0);
+  });
+});
+
+describe("formatAgentDeleteNesting", () => {
+  it("returns null when the agent has no nested agents", () => {
+    expect(formatAgentDeleteNesting(0)).toBeNull();
+  });
+
+  it("says nested agents are kept and moved to the top level", () => {
+    expect(formatAgentDeleteNesting(1)).toBe(
+      "1 agent nested under it will be kept and moved to the top level.",
+    );
+    expect(formatAgentDeleteNesting(3)).toBe(
+      "3 agents nested under it will be kept and moved to the top level.",
+    );
   });
 });

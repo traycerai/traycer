@@ -167,6 +167,7 @@ const compatibleHostStatus: HostStatusResponse = {
   updateTransaction: null,
   storeFormats: null,
   install: null,
+  processMemory: null,
 };
 
 let restoreFetch: () => void = () => undefined;
@@ -723,6 +724,7 @@ describe("HostCompatibilityProvider startup consumers", () => {
           message: "request aborted by host rebind",
           requestId: "req-status",
           method: "host.status",
+          mayHaveDispatched: false,
         });
       },
       getTaskContexts,

@@ -17,6 +17,16 @@ export const CLI_ERROR_CODES = {
   // required permission for task"). Distinct from NOT_FOUND ("doesn't
   // exist") and AUTH_REJECTED ("not signed in / bad token").
   FORBIDDEN: "E_FORBIDDEN",
+  // The data-migration startup gate refused this invocation: a migration is
+  // in progress, or the data location record and its migration journal
+  // disagree. Nothing was written; the message says what to run.
+  DATA_MIGRATION_BLOCKED: "E_DATA_MIGRATION_BLOCKED",
+  // `traycer data init` / `data migrate` is not offered by this build on this
+  // platform yet (`data-availability.ts`). Nothing was written.
+  DATA_OPERATION_UNAVAILABLE: "E_DATA_OPERATION_UNAVAILABLE",
+  // A data migration stopped to show its session impact report; re-run with
+  // `--accept-session-impact <digest>` naming exactly the reported digest.
+  DATA_ACCEPTANCE_REQUIRED: "E_DATA_ACCEPTANCE_REQUIRED",
 
   // --- Agent roles (mirror the host's typed role-surface wire codes 1:1) ---
   // Absent and foreign-account agents share ONE code and template - no
@@ -37,6 +47,28 @@ export const CLI_ERROR_CODES = {
   // switch on `code` instead of parsing message text.
   AGENT_ARCHIVE_BUSY: "E_AGENT_ARCHIVE_BUSY",
   AGENT_RECORD_NOT_FOUND: "E_AGENT_RECORD_NOT_FOUND",
+
+  // --- Host refusals of the caller's own environment (mirror the host's
+  // typed wire codes 1:1) ---
+  // Each is the host answering, with a typed code, that something about the
+  // machine or the workspace the person set up stops the request: a bound
+  // folder deleted from disk, an agent with no workspace chosen, a full disk
+  // on the host machine. The message names the remedy. None is a CLI defect,
+  // and before these codes each one fell through to UNEXPECTED and was
+  // captured.
+  WORKTREE_MISSING: "E_WORKTREE_MISSING",
+  // The host refused a `worktree delete` because an agent session or the
+  // background work it owns still holds the worktree (the typed
+  // `WORKTREE_BUSY` code on the delete frames). The person's own worktree is in
+  // use; stopping that work, or re-running with the owners stopped, is the
+  // remedy.
+  WORKTREE_BUSY: "E_WORKTREE_BUSY",
+  WORKSPACE_BINDING_REQUIRED: "E_WORKSPACE_BINDING_REQUIRED",
+  HOST_STORAGE_FULL: "E_HOST_STORAGE_FULL",
+  // The host refused a run or launch on a provider the person turned off in
+  // Settings -> Providers (HTTP 403, typed `PROVIDER_DISABLED`). Their own
+  // setting stops the request and the message names the remedy.
+  PROVIDER_DISABLED: "E_PROVIDER_DISABLED",
 
   // --- Auth ---
   AUTH_NO_CREDENTIALS: "E_AUTH_NO_CREDENTIALS",
@@ -250,6 +282,11 @@ export const EXPECTED_CLI_ERROR_CODES: ReadonlySet<CliErrorCode> =
     CLI_ERROR_CODES.ROLE_FORBIDDEN,
     CLI_ERROR_CODES.AGENT_ARCHIVE_BUSY,
     CLI_ERROR_CODES.AGENT_RECORD_NOT_FOUND,
+    CLI_ERROR_CODES.WORKTREE_MISSING,
+    CLI_ERROR_CODES.WORKTREE_BUSY,
+    CLI_ERROR_CODES.WORKSPACE_BINDING_REQUIRED,
+    CLI_ERROR_CODES.HOST_STORAGE_FULL,
+    CLI_ERROR_CODES.PROVIDER_DISABLED,
     CLI_ERROR_CODES.CONFIG_INVALID,
     CLI_ERROR_CODES.CONFIG_INVALID_VALUE,
     CLI_ERROR_CODES.CONFIG_MISSING_KEY,

@@ -931,3 +931,88 @@ describe("the abortable auth calls on a WebView without AbortSignal.timeout or A
     });
   });
 });
+
+describe("caller signal composition without AbortSignal.any", () => {
+  // `AbortSignal.any` is Chromium 116 / iOS 17.4. Older WebViews throw a
+  // TypeError out of the call, which for these async helpers is a rejected
+  // promise instead of the `network-error` they document (#2308).
+  const nativeAny = Object.getOwnPropertyDescriptor(AbortSignal, "any");
+
+  beforeEach(() => {
+    Object.defineProperty(AbortSignal, "any", {
+      value: undefined,
+      writable: true,
+      configurable: true,
+    });
+  });
+
+  afterEach(() => {
+    if (nativeAny === undefined) {
+      Reflect.deleteProperty(AbortSignal, "any");
+    } else {
+      Object.defineProperty(AbortSignal, "any", nativeAny);
+    }
+  });
+
+  function installHangingFetch(): { readonly signals: AbortSignal[] } {
+    const signals: AbortSignal[] = [];
+    globalThis.fetch = (async (
+      _input: RequestInfo | URL,
+      init: RequestInit | undefined,
+    ): Promise<Response> => {
+      const signal = init?.signal;
+      if (signal === undefined || signal === null) {
+        throw new Error("fetch was called without a signal");
+      }
+      signals.push(signal);
+      return new Promise<Response>((_resolve, reject) => {
+        signal.addEventListener("abort", () => {
+          reject(signal.reason);
+        });
+      });
+    }) as typeof fetch;
+    return { signals };
+  }
+
+  it("refreshOnceAbortable still sends the request and aborts it with the caller", async () => {
+    const { signals } = installHangingFetch();
+    const caller = new AbortController();
+
+    const pending = refreshOnceAbortable({
+      authnBaseUrl: AUTHN_BASE_URL,
+      token: "access",
+      refreshToken: "refresh",
+      clientKind: null,
+      signal: caller.signal,
+    });
+    await vi.waitFor(() => {
+      expect(signals).toHaveLength(1);
+    });
+    expect(signals[0].aborted).toBe(false);
+
+    caller.abort();
+
+    expect(signals[0].aborted).toBe(true);
+    await expect(pending).resolves.toEqual({ kind: "network-error" });
+  });
+
+  it("validateAuthTokenIdentityAccessOnceAbortable still sends the request and aborts it with the caller", async () => {
+    const { signals } = installHangingFetch();
+    const caller = new AbortController();
+
+    const pending = validateAuthTokenIdentityAccessOnceAbortable({
+      authnBaseUrl: AUTHN_BASE_URL,
+      token: "access",
+      signal: caller.signal,
+    });
+    await vi.waitFor(() => {
+      expect(signals).toHaveLength(1);
+    });
+    expect(signals[0].aborted).toBe(false);
+
+    caller.abort();
+
+    expect(signals[0].aborted).toBe(true);
+    expect((await pending).kind).toBe("network-error");
+  });
+});

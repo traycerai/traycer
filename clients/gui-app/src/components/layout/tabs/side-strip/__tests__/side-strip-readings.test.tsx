@@ -156,6 +156,7 @@ function makeMessengerFactory(): (args: {
             updateTransaction: null,
             storeFormats: null,
             install: null,
+            processMemory: null,
           }),
       },
     });

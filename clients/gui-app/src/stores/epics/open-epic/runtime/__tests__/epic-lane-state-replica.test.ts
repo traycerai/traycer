@@ -20,6 +20,7 @@ import {
   ARTIFACT_TOMBSTONE_REMOVE_REASON,
   EPIC_META_ROW_ID,
   EPIC_STATE_LANE_ID,
+  FILES_ROW_ID,
   ROLE_CLAIMS_ROW_ID,
   artifactRowId,
   artifactTombstoneRowId,
@@ -34,6 +35,8 @@ import {
   type EpicLaneStateReplica,
 } from "../epic-lane-state-replica";
 import { selectLaneCommentThreads } from "@/hooks/comments/use-lane-comment-threads";
+import type { EpicStateFileRecord } from "@traycer/protocol/host/epic/files";
+import { fileRecord } from "@/lib/files/__tests__/epic-file-record-fixture";
 
 const EPOCH = "epoch-1";
 
@@ -812,5 +815,147 @@ describe("epic.state.subscribe read model - epoch and trust", () => {
       }),
     );
     expect(replica.slices().artifacts.allIds).toEqual(["a"]);
+  });
+});
+
+function filesRow(
+  revision: number,
+  files: readonly EpicStateFileRecord[],
+): RecordRow<EpicStateRow> {
+  return { rowId: FILES_ROW_ID, revision, row: { kind: "files", files } };
+}
+
+function filesTransaction(
+  position: number,
+  row: RecordRow<EpicStateRow>,
+): EpicStateLaneEvent {
+  return {
+    kind: "record-transaction",
+    cursor: cursorAt(position, EPOCH),
+    changes: [{ kind: "upsert", row }],
+    barrier: null,
+  };
+}
+
+function snapshotWithFiles(
+  files: RecordRow<EpicStateRow> | null,
+): EpicStateLaneEvent {
+  return snapshotEvent({
+    rows: [
+      ...metaRows({ title: "Epic", updatedAt: 10, revision: 1 }),
+      ...(files === null ? [] : [files]),
+    ],
+    position: 1,
+    epoch: EPOCH,
+    trust: "reconciled-with-cloud",
+    cause: "initial",
+  });
+}
+
+describe("epic.state.subscribe read model - files", () => {
+  const downloading = (received: number): EpicStateFileRecord =>
+    fileRecord({
+      path: "files/big.mov",
+      localState: { kind: "downloading", received, total: 100 },
+    });
+
+  it("is served once the lane has stated a files set, and not before", () => {
+    const { replica } = newReplica();
+    expect(replica.slices().files.served).toBe(false);
+
+    replica.apply(snapshotWithFiles(null));
+    expect(replica.slices().files.served).toBe(false);
+
+    replica.apply(
+      snapshotEvent({
+        rows: [
+          ...metaRows({ title: "Epic", updatedAt: 10, revision: 1 }),
+          filesRow(1, []),
+        ],
+        position: 2,
+        epoch: EPOCH,
+        trust: "reconciled-with-cloud",
+        cause: "reseed",
+      }),
+    );
+    expect(replica.slices().files).toEqual({ served: true, records: [] });
+  });
+
+  it("replaces the set only on a strictly greater revision", () => {
+    const { replica } = newReplica();
+    replica.apply(
+      snapshotWithFiles(filesRow(5, [fileRecord({ path: "files/a.txt" })])),
+    );
+
+    replica.apply(
+      filesTransaction(
+        2,
+        filesRow(4, [fileRecord({ path: "files/stale.txt" })]),
+      ),
+    );
+    replica.apply(
+      filesTransaction(
+        3,
+        filesRow(5, [fileRecord({ path: "files/same.txt" })]),
+      ),
+    );
+    expect(replica.slices().files.records.map((record) => record.path)).toEqual(
+      ["files/a.txt"],
+    );
+
+    replica.apply(
+      filesTransaction(4, filesRow(6, [fileRecord({ path: "files/b.txt" })])),
+    );
+    expect(replica.slices().files.records.map((record) => record.path)).toEqual(
+      ["files/b.txt"],
+    );
+  });
+
+  it("publishes download progress, and stays quiet when a replacement restates the same set", () => {
+    const { replica, changes } = newReplica();
+    replica.apply(snapshotWithFiles(filesRow(1, [downloading(10)])));
+    const afterSnapshot = changes();
+
+    replica.apply(filesTransaction(2, filesRow(2, [downloading(40)])));
+    expect(replica.slices().files.records[0].localState).toEqual({
+      kind: "downloading",
+      received: 40,
+      total: 100,
+    });
+    expect(changes()).toBe(afterSnapshot + 1);
+
+    replica.apply(filesTransaction(3, filesRow(3, [downloading(40)])));
+    expect(changes()).toBe(afterSnapshot + 1);
+  });
+
+  describe("publishes a replacement that changes only one manifest field", () => {
+    const base = fileRecord({ path: "files/a.txt", title: "Report" });
+    const changed: ReadonlyArray<readonly [string, EpicStateFileRecord]> = [
+      ["title", fileRecord({ path: "files/a.txt", title: "Renamed" })],
+      [
+        "derivedFrom",
+        fileRecord({
+          path: "files/a.txt",
+          title: "Report",
+          replaces: "files/o",
+        }),
+      ],
+      ["kind", { ...base, entry: { ...base.entry, kind: "page" } }],
+      [
+        "mediaType",
+        { ...base, entry: { ...base.entry, mediaType: "application/pdf" } },
+      ],
+    ];
+
+    it.each(changed)("%s", (_field, record) => {
+      const { replica, changes } = newReplica();
+      replica.apply(snapshotWithFiles(filesRow(1, [base])));
+      const afterSnapshot = changes();
+
+      replica.apply(filesTransaction(2, filesRow(2, [record])));
+
+      expect(replica.slices().files.records).toEqual([record]);
+      expect(changes()).toBe(afterSnapshot + 1);
+    });
   });
 });

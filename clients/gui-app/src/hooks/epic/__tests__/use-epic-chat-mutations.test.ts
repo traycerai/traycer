@@ -11,7 +11,11 @@ import type { ReactNode } from "react";
 import { createElement } from "react";
 
 vi.mock("sonner", () => ({
-  toast: { error: vi.fn(), success: vi.fn() },
+  toast: Object.assign(vi.fn(), {
+    message: vi.fn(),
+    error: vi.fn(),
+    success: vi.fn(),
+  }),
 }));
 
 vi.mock("@/lib/host/runtime", async () => {
@@ -158,8 +162,14 @@ import {
   useEpicCreateChatForHostClient,
   useEpicRenameChat,
   useEpicDeleteChat,
+  useEpicDeleteChatInBatch,
 } from "@/hooks/epic/use-epic-chat-mutations";
-import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import {
+  HostRequestAbortedError,
+  HostRpcError,
+  HostTransportFailureError,
+  RetryableTransportError,
+} from "@traycer-clients/shared/host-transport/host-messenger";
 import { hostQueryKeys } from "@/lib/query-keys";
 import type { RpcErrorCode } from "@traycer/protocol/framework/index";
 import type {
@@ -184,6 +194,48 @@ function makeError(code: RpcErrorCode): HostRpcError {
     method: "test",
     fatalDetails: null,
   });
+}
+
+const UNREACHABLE_NOTICE =
+  "Traycer can't reach that host right now, so nothing on it was changed. Try again once it is reachable.";
+const BATCH_ONE_HOST_NOTICE =
+  "Traycer can't reach the host these agents run on, so nothing on it was changed. Try again once it is reachable.";
+const BATCH_HOSTS_NOTICE =
+  "Traycer can't reach the hosts these agents run on, so nothing on them was changed. Try again once they are reachable.";
+
+function hostUnreachable(method: string): RetryableTransportError {
+  return new RetryableTransportError({
+    replaySafetyFromKey: false,
+    code: "RPC_ERROR",
+    message: "Remote session is not ready",
+    requestId: "req-offline",
+    method,
+    fatalDetails: null,
+  });
+}
+
+const UNKNOWN_OUTCOME_NOTICE =
+  "No reply came back from the Traycer host, so this may or may not have gone through.";
+
+function aborted(
+  method: string,
+  mayHaveDispatched: boolean,
+): HostRequestAbortedError {
+  return new HostRequestAbortedError({
+    message: "aborted",
+    requestId: "req-aborted",
+    method,
+    mayHaveDispatched,
+  });
+}
+
+/** The ids every notice the test raised was given, in order. */
+function noticeIds(): unknown[] {
+  return vi
+    .mocked(toast)
+    .mock.calls.map((call) =>
+      typeof call[1] === "object" ? call[1].id : undefined,
+    );
 }
 
 function makeWrapperWithClient(): {
@@ -216,6 +268,7 @@ interface ArchiveChatContext {
   readonly hostId: string | null;
   readonly viewerHostId: string | null;
   readonly viewerUserId: string | null;
+  readonly servingHostId: string | null;
 }
 
 type ChatMutationClientResolver = (variables: {
@@ -537,7 +590,7 @@ describe("useEpicDeleteChat", () => {
     };
 
     opts.onSuccess(
-      { deleted: true, publicationChatId: null },
+      { deleted: true, publicationChatId: null, outcome: "applied" },
       { epicId: "epic-1", chatId: "chat-1", hostId: "host-test" },
       // The host captured at mutate time - `epic.deleteChat` carries no host
       // on the wire, so the teardown is told which machine's session to close.
@@ -545,6 +598,7 @@ describe("useEpicDeleteChat", () => {
         hostId: "host-test",
         viewerHostId: "host-test",
         viewerUserId: null,
+        servingHostId: "host-test",
         cloudDeletionToken: null,
       },
       mutationContext,
@@ -586,12 +640,13 @@ describe("useEpicDeleteChat", () => {
     }
 
     opts.onSuccess(
-      { deleted: true, publicationChatId: null },
+      { deleted: true, publicationChatId: null, outcome: "applied" },
       { epicId: "epic-1", chatId: "chat-1", hostId: null },
       {
         hostId: null,
         viewerHostId: "host-test",
         viewerUserId: null,
+        servingHostId: null,
         cloudDeletionToken: null,
       },
       { client: new QueryClient(), meta: undefined },
@@ -623,6 +678,82 @@ describe("useEpicDeleteChat", () => {
       useEpicCanvasStore.getState().selfDeletedArtifactIds.has("chat-1"),
     ).toBe(false);
     expect(toast.error).toHaveBeenCalledWith("Couldn't delete agent.");
+  });
+
+  it("says the owning host is unreachable when the delete never reached it", () => {
+    renderHook(() => useEpicDeleteChat(), { wrapper: makeWrapper() });
+    const opts = getCapturedMutation("epic.deleteChat").options as {
+      onError: (e: HostRpcError, variables: DeleteChatMutationInput) => void;
+    };
+    opts.onError(hostUnreachable("epic.deleteChat"), {
+      epicId: "epic-1",
+      chatId: "chat-1",
+      hostId: "host-test",
+    });
+    expect(toast.message).toHaveBeenCalledWith(
+      UNREACHABLE_NOTICE,
+      expect.anything(),
+    );
+    expect(toast.error).not.toHaveBeenCalled();
+  });
+
+  // traycerai/traycer#2546 row 3, on the individual path: an abort after the
+  // send may have deleted the agent, so it is not silent.
+  it("says no reply came back when an individual delete was aborted after its send", () => {
+    renderHook(() => useEpicDeleteChat(), { wrapper: makeWrapper() });
+    const opts = getCapturedMutation("epic.deleteChat").options as {
+      onError: (e: HostRpcError, variables: DeleteChatMutationInput) => void;
+    };
+    const variables = {
+      epicId: "epic-1",
+      chatId: "chat-1",
+      hostId: "host-test",
+    };
+    opts.onError(aborted("epic.deleteChat", true), variables);
+    opts.onError(aborted("epic.deleteChat", true), variables);
+    expect(vi.mocked(toast).mock.calls.map((call) => call[0])).toEqual([
+      UNKNOWN_OUTCOME_NOTICE,
+      UNKNOWN_OUTCOME_NOTICE,
+    ]);
+    // One id per action: the second delete's notice does not replace the
+    // first's.
+    const ids = noticeIds();
+    expect(new Set(ids).size).toBe(2);
+    expect(toast.error).not.toHaveBeenCalled();
+    expect(toast.message).not.toHaveBeenCalled();
+  });
+
+  it("stays silent when an individual delete was cancelled before its send", () => {
+    renderHook(() => useEpicDeleteChat(), { wrapper: makeWrapper() });
+    const opts = getCapturedMutation("epic.deleteChat").options as {
+      onError: (e: HostRpcError, variables: DeleteChatMutationInput) => void;
+    };
+    opts.onError(aborted("epic.deleteChat", false), {
+      epicId: "epic-1",
+      chatId: "chat-1",
+      hostId: "host-test",
+    });
+    expect(toast).not.toHaveBeenCalled();
+    expect(toast.error).not.toHaveBeenCalled();
+    expect(toast.message).not.toHaveBeenCalled();
+  });
+
+  it("leaves a batch member's failure to its caller and still rolls back the row", () => {
+    renderHook(() => useEpicDeleteChatInBatch(), { wrapper: makeWrapper() });
+    useEpicCanvasStore.getState().markArtifactSelfDeleted("chat-1");
+    const opts = getCapturedMutation("epic.deleteChat").options as {
+      onError: (e: HostRpcError, variables: DeleteChatMutationInput) => void;
+    };
+    opts.onError(hostUnreachable("epic.deleteChat"), {
+      epicId: "epic-1",
+      chatId: "chat-1",
+      hostId: "host-test",
+    });
+    expect(toast.message).not.toHaveBeenCalled();
+    expect(toast.error).not.toHaveBeenCalled();
+    expect(
+      useEpicCanvasStore.getState().selfDeletedArtifactIds.has("chat-1"),
+    ).toBe(false);
   });
 
   it("uses the session client when the named host is the session host", () => {
@@ -755,8 +886,9 @@ describe("useEpicArchiveChat", () => {
       hostId: "host-test",
       viewerHostId: "host-test",
       viewerUserId: null,
+      servingHostId: "host-test",
     });
-    opts.onSuccess({ updated: false }, variables, ctx, {
+    opts.onSuccess({ updated: false, outcome: "applied" }, variables, ctx, {
       client: queryClient,
       meta: undefined,
     });
@@ -795,8 +927,9 @@ describe("useEpicArchiveChat", () => {
       hostId: "remote-host",
       viewerHostId: "host-test",
       viewerUserId: null,
+      servingHostId: "remote-host",
     });
-    opts.onSuccess({ updated: true }, variables, ctx, {
+    opts.onSuccess({ updated: true, outcome: "applied" }, variables, ctx, {
       client: queryClient,
       meta: undefined,
     });
@@ -810,6 +943,47 @@ describe("useEpicArchiveChat", () => {
     expect(invalidateQueries).toHaveBeenCalledWith({
       queryKey: hostQueryKeys.methodScope("host-test", "epic.listChatRecords"),
     });
+  });
+
+  it("says the owning host is unreachable, not a generic transport toast, when archive never reached it", () => {
+    renderHook(() => useEpicArchiveChat(), { wrapper: makeWrapper() });
+    const opts = getCapturedMutation("epic.setChatArchived").options as {
+      onError: (e: HostRpcError) => void;
+    };
+    opts.onError(hostUnreachable("epic.setChatArchived"));
+    expect(toast.message).toHaveBeenCalledWith(
+      UNREACHABLE_NOTICE,
+      expect.anything(),
+    );
+    expect(toast.error).not.toHaveBeenCalled();
+  });
+
+  // traycerai/traycer#2546 row 3, on the individual path.
+  it("says no reply came back when an individual archive was aborted after its send", () => {
+    renderHook(() => useEpicArchiveChat(), { wrapper: makeWrapper() });
+    const opts = getCapturedMutation("epic.setChatArchived").options as {
+      onError: (e: HostRpcError) => void;
+    };
+    opts.onError(aborted("epic.setChatArchived", true));
+    expect(toast).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(toast).mock.calls.map((call) => call[0])).toEqual([
+      UNKNOWN_OUTCOME_NOTICE,
+    ]);
+    expect(vi.mocked(toast).mock.calls[0][1]?.id).toMatch(
+      /^owner-host-batch-result:/,
+    );
+    expect(toast.error).not.toHaveBeenCalled();
+  });
+
+  it("stays silent when an individual archive was cancelled before its send", () => {
+    renderHook(() => useEpicArchiveChat(), { wrapper: makeWrapper() });
+    const opts = getCapturedMutation("epic.setChatArchived").options as {
+      onError: (e: HostRpcError) => void;
+    };
+    opts.onError(aborted("epic.setChatArchived", false));
+    expect(toast).not.toHaveBeenCalled();
+    expect(toast.error).not.toHaveBeenCalled();
+    expect(toast.message).not.toHaveBeenCalled();
   });
 
   it("toasts a generic fallback on a real failure (B9)", () => {
@@ -860,8 +1034,18 @@ describe("useEpicArchiveChats", () => {
       result.current.mutate({
         epicId: "epic-1",
         chats: [
-          { chatId: "chat-1", hostId: "host-test" },
-          { chatId: "chat-2", hostId: "remote-host" },
+          {
+            chatId: "chat-1",
+            hostId: "host-test",
+            selectedRows: 1,
+            coveredRows: () => 1,
+          },
+          {
+            chatId: "chat-2",
+            hostId: "remote-host",
+            selectedRows: 1,
+            coveredRows: () => 1,
+          },
         ],
         archived: true,
       });
@@ -884,7 +1068,7 @@ describe("useEpicArchiveChats", () => {
       archived: true,
     });
 
-    resolveArchive({ updated: true });
+    resolveArchive({ updated: true, outcome: "applied" });
 
     await waitFor(() => {
       expect(result.current.isPending).toBe(false);
@@ -907,14 +1091,27 @@ describe("useEpicArchiveChats", () => {
     });
     const childOptions = getCapturedMutation("epic.setChatArchived")
       .options as { readonly onError: unknown };
-    expect(childOptions.onError).toBeUndefined();
+    // The per-row callback only refreshes the lists a failed write could
+    // have changed; the batch reports the failure once (asserted below, and
+    // with a real per-row mutation in the archive-routing stand-in suite).
+    expect(typeof childOptions.onError).toBe("function");
 
     act(() => {
       result.current.mutate({
         epicId: "epic-1",
         chats: [
-          { chatId: "chat-1", hostId: "host-test" },
-          { chatId: "chat-2", hostId: "remote-host" },
+          {
+            chatId: "chat-1",
+            hostId: "host-test",
+            selectedRows: 1,
+            coveredRows: () => 1,
+          },
+          {
+            chatId: "chat-2",
+            hostId: "remote-host",
+            selectedRows: 1,
+            coveredRows: () => 1,
+          },
         ],
         archived: true,
       });
@@ -927,8 +1124,502 @@ describe("useEpicArchiveChats", () => {
       ]);
     });
     expect(toast.error).toHaveBeenCalledWith(
-      "Couldn't archive some selected agents.",
+      "Archived 1 of 2 selected agents. 1 couldn't be archived.",
+      expect.anything(),
     );
     expect(toast.error).toHaveBeenCalledTimes(1);
+  });
+
+  // Codex thread 4302962544. A record whose owner is gone is archived by a
+  // stand-in host, which writes the cloud row and answers `requested`. When
+  // the row already had that state it answers `updated: false` as well. The
+  // per-record mutation reports it as accepted, so the batch must count it
+  // as accepted too, never as unconfirmed.
+  describe("a requested no-op from a stand-in host", () => {
+    function allNotices(): string[] {
+      return [
+        ...vi.mocked(toast).mock.calls,
+        ...vi.mocked(toast.error).mock.calls,
+        ...vi.mocked(toast.message).mock.calls,
+      ].map((call) => {
+        const [message] = call;
+        return typeof message === "string" ? message : JSON.stringify(message);
+      });
+    }
+
+    async function settleBatch(
+      answers: Readonly<Record<string, () => Promise<SetChatArchivedResponse>>>,
+      archived: boolean,
+    ): Promise<void> {
+      vi.mocked(toast).mockClear();
+      vi.mocked(toast.error).mockClear();
+      vi.mocked(toast.message).mockClear();
+      const answerByChat = new Map(Object.entries(answers));
+      archiveChatMutateAsync.mockImplementation(
+        (input: ArchiveChatMutationInput) => {
+          const answer = answerByChat.get(input.chatId);
+          if (answer === undefined)
+            throw new Error(`unexpected ${input.chatId}`);
+          return answer();
+        },
+      );
+      const { result, unmount } = renderHook(() => useEpicArchiveChats(), {
+        wrapper: makeWrapper(),
+      });
+      act(() => {
+        result.current.mutate({
+          epicId: "epic-1",
+          chats: Object.keys(answers).map((chatId) => ({
+            chatId,
+            hostId: "remote-host",
+            selectedRows: 2,
+            coveredRows: () => 2,
+          })),
+          archived,
+        });
+      });
+      await waitFor(() => {
+        expect(result.current.isSuccess).toBe(true);
+      });
+      unmount();
+    }
+
+    it.each([true, false])(
+      "says nothing about confirmation when every row was accepted (archived=%s)",
+      async (archived) => {
+        await settleBatch(
+          {
+            "chat-1": () =>
+              Promise.resolve({ updated: false, outcome: "requested" }),
+            "chat-2": () =>
+              Promise.resolve({ updated: true, outcome: "applied" }),
+          },
+          archived,
+        );
+
+        expect(allNotices()).toEqual([]);
+      },
+    );
+
+    it("counts the requested no-op's rows as applied beside a failure", async () => {
+      await settleBatch(
+        {
+          "chat-1": () =>
+            Promise.resolve({ updated: false, outcome: "requested" }),
+          "chat-2": () => Promise.reject(makeError("RPC_ERROR")),
+        },
+        true,
+      );
+
+      expect(allNotices()).toEqual([
+        "Archived 2 of 4 selected agents. 2 couldn't be archived.",
+      ]);
+    });
+  });
+
+  // traycerai/traycer thread taE7F. `updated: false` is an already-satisfied
+  // no-op, or a chat deleted while its archive write waited its turn: neither
+  // applied nor failed as far as the batch can tell. Every mix of two and
+  // three rows, for archive and unarchive, holds four invariants:
+  //  1. a count names the whole selection;
+  //  2. a not-updated row is never counted as applied or as failed;
+  //  3. every guidance sentence the same mix shows without its not-updated
+  //     rows is still shown with them;
+  //  4. a mix of only updated and not-updated rows says nothing.
+  type ArchiveRow =
+    | "updated"
+    | "not-updated"
+    | "refused"
+    | "unreachable"
+    | "dropped";
+
+  const ARCHIVE_ROWS: readonly ArchiveRow[] = [
+    "updated",
+    "not-updated",
+    "refused",
+    "unreachable",
+    "dropped",
+  ];
+
+  function archiveMixesOf(size: number, from: number): ArchiveRow[][] {
+    if (size === 0) return [[]];
+    return ARCHIVE_ROWS.slice(from).flatMap((row, offset) =>
+      archiveMixesOf(size - 1, from + offset).map((rest) => [row, ...rest]),
+    );
+  }
+
+  const ARCHIVE_MIXES = [
+    ...archiveMixesOf(2, 0),
+    ...archiveMixesOf(3, 0),
+  ].flatMap((mix) =>
+    [true, false].map((archived) => ({
+      name: `${archived ? "archive" : "unarchive"} [${mix.join(", ")}]`,
+      mix,
+      archived,
+    })),
+  );
+
+  const GUIDANCE_SENTENCES = [
+    UNREACHABLE_NOTICE,
+    BATCH_ONE_HOST_NOTICE,
+    BATCH_HOSTS_NOTICE,
+    "You don't have permission to do that.",
+  ];
+
+  interface SelectedArchiveRow {
+    readonly row: ArchiveRow;
+    readonly chatId: string;
+    readonly hostId: string;
+  }
+
+  function archiveRowAnswer(row: ArchiveRow): Promise<{ updated: boolean }> {
+    switch (row) {
+      case "updated":
+        return Promise.resolve({ updated: true });
+      case "not-updated":
+        return Promise.resolve({ updated: false });
+      case "refused":
+        return Promise.reject(makeError("FORBIDDEN"));
+      case "unreachable":
+        return Promise.reject(hostUnreachable("epic.setChatArchived"));
+      case "dropped":
+        return Promise.reject(
+          new HostTransportFailureError({
+            code: "RPC_ERROR",
+            message: "socket closed after the request was sent",
+            requestId: "req-dropped",
+            method: "epic.setChatArchived",
+            fatalDetails: null,
+          }),
+        );
+    }
+  }
+
+  function noticeText(call: readonly unknown[]): string {
+    const [message] = call;
+    return typeof message === "string" ? message : JSON.stringify(message);
+  }
+
+  /** Every notice the batch raised, as text. */
+  async function archiveBatchNotices(
+    rows: readonly SelectedArchiveRow[],
+    archived: boolean,
+  ): Promise<string[]> {
+    vi.mocked(toast).mockClear();
+    vi.mocked(toast.error).mockClear();
+    vi.mocked(toast.message).mockClear();
+    const rowByChat = new Map(rows.map((entry) => [entry.chatId, entry.row]));
+    archiveChatMutateAsync.mockImplementation(
+      (input: ArchiveChatMutationInput) => {
+        const row = rowByChat.get(input.chatId);
+        if (row === undefined) throw new Error(`unexpected ${input.chatId}`);
+        return archiveRowAnswer(row);
+      },
+    );
+    const { result, unmount } = renderHook(() => useEpicArchiveChats(), {
+      wrapper: makeWrapper(),
+    });
+    act(() => {
+      result.current.mutate({
+        epicId: "epic-1",
+        chats: rows.map(({ chatId, hostId }) => ({
+          chatId,
+          hostId,
+          selectedRows: 1,
+          coveredRows: () => 1,
+        })),
+        archived,
+      });
+    });
+    await waitFor(() => {
+      expect(result.current.isSuccess).toBe(true);
+    });
+    unmount();
+    return [
+      ...vi.mocked(toast).mock.calls,
+      ...vi.mocked(toast.error).mock.calls,
+      ...vi.mocked(toast.message).mock.calls,
+    ].map(noticeText);
+  }
+
+  it.each(ARCHIVE_MIXES)("$name", async ({ mix, archived }) => {
+    const rows = mix.map((row, index) => ({
+      row,
+      chatId: `chat-${String(index)}`,
+      hostId: `host-${String(index)}`,
+    }));
+    const notices = await archiveBatchNotices(rows, archived);
+    const said = notices.join(" | ");
+
+    // 4. Only applied and not-updated rows: nothing to report.
+    if (mix.every((row) => row === "updated" || row === "not-updated")) {
+      expect(notices).toEqual([]);
+      return;
+    }
+    // 1. Any count names the whole selection.
+    for (const [, count] of said.matchAll(/(\d+) selected/g)) {
+      expect(count).toBe(String(mix.length));
+    }
+    if (!mix.includes("not-updated")) return;
+    // 2. Never counted as applied, and never as failed.
+    expect(said).not.toMatch(/(?:Archived|Unarchived) \d+ of/);
+    expect(said).not.toContain("any of the");
+    expect(said).not.toMatch(/couldn't be (?:un)?archived/);
+    expect(said).not.toMatch(/Couldn't (?:un)?archive agent\./);
+    // 3. The guidance the mix gives without its not-updated rows survives.
+    const withoutNotUpdated = rows.filter(
+      (entry) => entry.row !== "not-updated",
+    );
+    if (withoutNotUpdated.length === 0) return;
+    const saidWithout = (
+      await archiveBatchNotices(withoutNotUpdated, archived)
+    ).join(" | ");
+    for (const sentence of GUIDANCE_SENTENCES) {
+      if (saidWithout.includes(sentence)) expect(said).toContain(sentence);
+    }
+  });
+
+  it("reports one plural notice when the unreachable batch spans several hosts", async () => {
+    archiveChatMutateAsync.mockImplementation(() =>
+      Promise.reject(hostUnreachable("epic.setChatArchived")),
+    );
+    const { result } = renderHook(() => useEpicArchiveChats(), {
+      wrapper: makeWrapper(),
+    });
+
+    act(() => {
+      result.current.mutate({
+        epicId: "epic-1",
+        chats: [
+          {
+            chatId: "chat-1",
+            hostId: "host-test",
+            selectedRows: 1,
+            coveredRows: () => 1,
+          },
+          {
+            chatId: "chat-2",
+            hostId: "remote-host",
+            selectedRows: 1,
+            coveredRows: () => 1,
+          },
+        ],
+        archived: true,
+      });
+    });
+
+    await waitFor(() => {
+      expect(toast.message).toHaveBeenCalledWith(
+        BATCH_HOSTS_NOTICE,
+        expect.anything(),
+      );
+    });
+    expect(toast.message).toHaveBeenCalledTimes(1);
+    expect(toast.error).not.toHaveBeenCalled();
+  });
+
+  it("names one host when every agent in the unreachable batch runs on it", async () => {
+    archiveChatMutateAsync.mockImplementation(() =>
+      Promise.reject(hostUnreachable("epic.setChatArchived")),
+    );
+    const { result } = renderHook(() => useEpicArchiveChats(), {
+      wrapper: makeWrapper(),
+    });
+
+    act(() => {
+      result.current.mutate({
+        epicId: "epic-1",
+        chats: [
+          {
+            chatId: "chat-1",
+            hostId: "remote-host",
+            selectedRows: 1,
+            coveredRows: () => 1,
+          },
+          {
+            chatId: "chat-2",
+            hostId: "remote-host",
+            selectedRows: 1,
+            coveredRows: () => 1,
+          },
+        ],
+        archived: true,
+      });
+    });
+
+    await waitFor(() => {
+      expect(toast.message).toHaveBeenCalledWith(
+        BATCH_ONE_HOST_NOTICE,
+        expect.anything(),
+      );
+    });
+    expect(toast.message).toHaveBeenCalledTimes(1);
+    expect(toast.error).not.toHaveBeenCalled();
+  });
+
+  it("does not call a partly archived batch unreachable", async () => {
+    // One agent archived and one host unreachable is a partial failure: the
+    // offline notice says nothing was changed, which is false here.
+    archiveChatMutateAsync.mockImplementation(
+      (input: ArchiveChatMutationInput) =>
+        input.chatId === "chat-1"
+          ? Promise.resolve({ updated: true })
+          : Promise.reject(hostUnreachable("epic.setChatArchived")),
+    );
+    const { result } = renderHook(() => useEpicArchiveChats(), {
+      wrapper: makeWrapper(),
+    });
+
+    act(() => {
+      result.current.mutate({
+        epicId: "epic-1",
+        chats: [
+          {
+            chatId: "chat-1",
+            hostId: "host-test",
+            selectedRows: 1,
+            coveredRows: () => 1,
+          },
+          {
+            chatId: "chat-2",
+            hostId: "remote-host",
+            selectedRows: 1,
+            coveredRows: () => 1,
+          },
+        ],
+        archived: true,
+      });
+    });
+
+    await waitFor(() => {
+      expect(toast.error).toHaveBeenCalledWith(
+        "Archived 1 of 2 selected agents. 1 couldn't be archived.",
+        expect.anything(),
+      );
+    });
+    expect(toast.error).toHaveBeenCalledTimes(1);
+    expect(toast).not.toHaveBeenCalled();
+    expect(toast.message).not.toHaveBeenCalled();
+  });
+  // traycerai/traycer thread taOw7: archiving a parent hides its subtree, so
+  // the sidebar sends only the topmost selected rows. Each carries the
+  // selected rows it covers, and the notice counts those, not the requests.
+  type WeightedArchiveRow =
+    | "updated"
+    | "not-updated"
+    | "refused"
+    | "unreachable";
+
+  async function weightedArchiveNotice(
+    rows: readonly {
+      readonly row: WeightedArchiveRow;
+      readonly selectedRows: number;
+      readonly coveredRows: number;
+    }[],
+    archived: boolean,
+  ): Promise<unknown> {
+    archiveChatMutateAsync.mockImplementation(
+      (input: ArchiveChatMutationInput) => {
+        const row = rows[Number(input.chatId.slice("root-".length))]?.row;
+        if (row === "refused") return Promise.reject(makeError("FORBIDDEN"));
+        if (row === "unreachable") {
+          return Promise.reject(hostUnreachable("epic.setChatArchived"));
+        }
+        return Promise.resolve({ updated: row === "updated" });
+      },
+    );
+    const { result } = renderHook(() => useEpicArchiveChats(), {
+      wrapper: makeWrapper(),
+    });
+
+    act(() => {
+      result.current.mutate({
+        epicId: "epic-1",
+        chats: rows.map((entry, index) => ({
+          chatId: `root-${String(index)}`,
+          hostId: `host-${String(index)}`,
+          selectedRows: entry.selectedRows,
+          coveredRows: () => entry.coveredRows,
+        })),
+        archived,
+      });
+    });
+
+    await waitFor(() => {
+      expect(toast.error).toHaveBeenCalledTimes(1);
+    });
+    return vi.mocked(toast.error).mock.calls[0]?.[0];
+  }
+
+  it("counts an unreachable parent with its selected child as two of three selected", async () => {
+    await expect(
+      weightedArchiveNotice(
+        [
+          { row: "unreachable", selectedRows: 2, coveredRows: 2 },
+          { row: "updated", selectedRows: 1, coveredRows: 1 },
+        ],
+        true,
+      ),
+    ).resolves.toBe("Archived 1 of 3 selected agents. 2 couldn't be archived.");
+  });
+
+  it("counts an archived parent with its selected child as two of three selected", async () => {
+    await expect(
+      weightedArchiveNotice(
+        [
+          { row: "updated", selectedRows: 2, coveredRows: 2 },
+          { row: "refused", selectedRows: 1, coveredRows: 1 },
+        ],
+        true,
+      ),
+    ).resolves.toBe(
+      "Archived 2 of 3 selected agents. 1 couldn't be archived. You don't have permission to do that.",
+    );
+  });
+
+  it("keeps a not-updated parent's selected child in the selection's count", async () => {
+    await expect(
+      weightedArchiveNotice(
+        [
+          { row: "not-updated", selectedRows: 2, coveredRows: 2 },
+          { row: "refused", selectedRows: 1, coveredRows: 1 },
+        ],
+        true,
+      ),
+    ).resolves.toBe(
+      "Couldn't confirm all 3 selected agents were archived. Check them and archive any that weren't. You don't have permission to do that.",
+    );
+  });
+
+  // Thread round 9: a selected child moved out of the parent while the
+  // archive was in flight is not archived with it. The request stands for
+  // fewer rows at settlement than at the gesture, and the rows it no longer
+  // covers are unconfirmed - never archived, never failed.
+  it("counts a selected child moved out of an archived parent as unconfirmed", async () => {
+    await expect(
+      weightedArchiveNotice(
+        [
+          { row: "updated", selectedRows: 2, coveredRows: 1 },
+          { row: "refused", selectedRows: 1, coveredRows: 1 },
+        ],
+        true,
+      ),
+    ).resolves.toBe(
+      "Couldn't confirm all 3 selected agents were archived. Check them and archive any that weren't. You don't have permission to do that.",
+    );
+  });
+
+  it("counts an unarchive the same way", async () => {
+    await expect(
+      weightedArchiveNotice(
+        [
+          { row: "unreachable", selectedRows: 2, coveredRows: 2 },
+          { row: "updated", selectedRows: 1, coveredRows: 1 },
+        ],
+        false,
+      ),
+    ).resolves.toBe(
+      "Unarchived 1 of 3 selected agents. 2 couldn't be unarchived.",
+    );
   });
 });

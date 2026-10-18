@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
 import { createReportIssueContext } from "@/lib/report-issue-context";
 import { cn } from "@/lib/utils";
+import { worktreeDeleteDeclineMessage } from "@traycer-clients/shared/worktree/worktree-delete-decline-copy";
 import type {
   LogSegment,
   WorktreeDeleteRunState,
@@ -305,7 +306,7 @@ function errorMessageFor(run: WorktreeDeleteRunState): string | null {
     return run.error;
   }
   if (run.status === "complete" && !run.deleted) {
-    return "Couldn't remove the worktree. It may still be in use - refresh and try again.";
+    return worktreeDeleteDeclineMessage(run.declined, 1);
   }
   return null;
 }

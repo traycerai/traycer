@@ -8,6 +8,11 @@ import {
   within,
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { toast } from "sonner";
+import {
+  HostRpcError,
+  RetryableTransportError,
+} from "@traycer-clients/shared/host-transport/host-messenger";
 import { domMax, LazyMotion } from "motion/react";
 import { forwardRef, type ReactNode } from "react";
 import { userEvent } from "@testing-library/user-event";
@@ -193,6 +198,14 @@ interface TestState {
    * through that one.
    */
   archiveRowPending: boolean;
+  /** The targets the last bulk archive was given, with their row weights. */
+  archiveBatchChats: ReadonlyArray<{
+    readonly chatId: string;
+    readonly hostId: string | null;
+    readonly selectedRows: number;
+  }>;
+  /** Each bulk-archive target's covered rows, read when the batch settled. */
+  archiveCoveredRowsAtSettlement: readonly number[];
   archiveMutateAsync: Mock<
     (input: {
       readonly epicId: string;
@@ -265,6 +278,8 @@ const testState = vi.hoisted<TestState>(() => ({
   archiveMutate: vi.fn(),
   archiveBatchPending: false,
   archiveRowPending: false,
+  archiveBatchChats: [],
+  archiveCoveredRowsAtSettlement: [],
   archiveMutateAsync: vi.fn(),
   rowHostId: "host-1",
   rowHostReachability: "reachable",
@@ -601,6 +616,8 @@ vi.mock("@/hooks/epic/use-epic-chat-mutations", () => ({
         readonly chats: ReadonlyArray<{
           readonly chatId: string;
           readonly hostId: string | null;
+          readonly selectedRows: number;
+          readonly coveredRows: () => number;
         }>;
         readonly archived: boolean;
       },
@@ -611,6 +628,7 @@ vi.mock("@/hooks/epic/use-epic-chat-mutations", () => ({
       },
     ) => {
       testState.archiveBatchPending = true;
+      testState.archiveBatchChats = variables.chats;
       void Promise.allSettled(
         variables.chats.map((chat) =>
           testState.archiveMutateAsync({
@@ -622,6 +640,9 @@ vi.mock("@/hooks/epic/use-epic-chat-mutations", () => ({
         ),
       ).then((results) => {
         testState.archiveBatchPending = false;
+        testState.archiveCoveredRowsAtSettlement = variables.chats.map((chat) =>
+          chat.coveredRows(),
+        );
         options.onSuccess(results);
       });
     },
@@ -636,6 +657,11 @@ vi.mock("@/hooks/epic/use-epic-chat-mutations", () => ({
     isPending: false,
   }),
   useEpicDeleteChat: () => ({
+    mutate: vi.fn(),
+    mutateAsync: testState.deleteChatMutateAsync,
+    isPending: false,
+  }),
+  useEpicDeleteChatInBatch: () => ({
     mutate: vi.fn(),
     mutateAsync: testState.deleteChatMutateAsync,
     isPending: false,
@@ -759,6 +785,11 @@ vi.mock("@/hooks/epic/use-epic-node-mutations", () => ({
     mutateAsync: testState.deleteArtifactMutateAsync,
     isPending: false,
   }),
+  useEpicDeleteArtifactInBatch: () => ({
+    mutate: vi.fn(),
+    mutateAsync: testState.deleteArtifactMutateAsync,
+    isPending: false,
+  }),
   useEpicRenameArtifact: () => ({ mutate: vi.fn(), isPending: false }),
 }));
 
@@ -783,11 +814,16 @@ vi.mock("@/lib/tab-recovery/history", async (importOriginal) => ({
 }));
 
 // Tile-close and closed-payload cleanup for a TUI delete are owned by
-// `useEpicDeleteTuiAgent` itself (`discardDeletedTuiAgentPayloads` is a
+// `useEpicDeleteTuiAgentInBatch` itself (`discardDeletedTuiAgentPayloads` is a
 // private, unexported detail of that module) - this suite only pins that the
 // SIDEBAR never does that work itself, so the hook is a plain mock.
 vi.mock("@/hooks/epic/use-epic-tui-agent-mutations", () => ({
   useEpicDeleteTuiAgent: () => ({
+    mutate: vi.fn(),
+    mutateAsync: testState.deleteTuiAgentMutateAsync,
+    isPending: false,
+  }),
+  useEpicDeleteTuiAgentInBatch: () => ({
     mutate: vi.fn(),
     mutateAsync: testState.deleteTuiAgentMutateAsync,
     isPending: false,
@@ -1392,6 +1428,8 @@ describe("epic sidebar selection mode", () => {
     testState.archivedIds = [];
     testState.archiveMutate = vi.fn();
     testState.archiveBatchPending = false;
+    testState.archiveBatchChats = [];
+    testState.archiveCoveredRowsAtSettlement = [];
     testState.archiveRowPending = false;
     testState.archiveMutateAsync = vi.fn();
     testState.openArtifactById = {};
@@ -1502,7 +1540,7 @@ describe("epic sidebar selection mode", () => {
     });
   });
 
-  it("selects chat rows explicitly and bulk-deletes topmost selected chat roots", async () => {
+  it("selects chat rows explicitly and bulk-deletes every selected agent, nested ones included", async () => {
     seedChatTree();
 
     render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
@@ -1547,16 +1585,161 @@ describe("epic sidebar selection mode", () => {
         hostId: null,
       });
     });
-    expect(testState.deleteChatMutateAsync).not.toHaveBeenCalledWith({
-      epicId: EPIC_ID,
-      chatId: "chat-child",
-      hostId: null,
+    // Deleting an agent keeps the agents nested under it, so a selected
+    // child is a row the user asked for and nothing else would delete.
+    await waitFor(() => {
+      expect(testState.deleteChatMutateAsync).toHaveBeenCalledWith({
+        epicId: EPIC_ID,
+        chatId: "chat-child",
+        hostId: null,
+      });
     });
+    expect(testState.deleteChatMutateAsync).toHaveBeenCalledTimes(2);
     expect(testState.deleteTuiAgentMutateAsync).toHaveBeenCalledWith({
       epicId: EPIC_ID,
       tuiAgentId: "agent-root",
       hostId: "host-1",
     });
+  });
+
+  it("keeps deleting the other selected agents when one delete fails", async () => {
+    seedChatTree();
+    testState.deleteChatMutateAsync.mockImplementation(
+      (input: { readonly chatId: string }) =>
+        input.chatId === "chat-child"
+          ? Promise.reject(new Error("host refused"))
+          : Promise.resolve({}),
+    );
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+    fireEvent.click(screen.getByRole("menuitem", { name: "Select agents" }));
+    fireEvent.click(screen.getByRole("button", { name: "Select all" }));
+    fireEvent.click(screen.getByTestId("epic-sidebar-delete-selected-chats"));
+    fireEvent.click(screen.getByTestId("confirm-action"));
+
+    await waitFor(() => {
+      expect(testState.deleteTuiAgentMutateAsync).toHaveBeenCalledWith({
+        epicId: EPIC_ID,
+        tuiAgentId: "agent-root",
+        hostId: "host-1",
+      });
+    });
+    expect(testState.deleteChatMutateAsync).toHaveBeenCalledWith({
+      epicId: EPIC_ID,
+      chatId: "chat-root",
+      hostId: null,
+    });
+    expect(testState.deleteChatMutateAsync).toHaveBeenCalledWith({
+      epicId: EPIC_ID,
+      chatId: "chat-child",
+      hostId: null,
+    });
+  });
+
+  it("reports one notice naming several hosts when a GUI and terminal agent bulk delete spans two unreachable hosts", async () => {
+    // The chats resolve to the (null) session host and the terminal agent to
+    // host-1: two owner hosts, neither reachable.
+    seedChatTree();
+    const toastMessage = vi.spyOn(toast, "message");
+    testState.deleteChatMutateAsync.mockImplementation(() =>
+      Promise.reject(unreachableOwnerHost("epic.deleteChat")),
+    );
+    testState.deleteTuiAgentMutateAsync.mockImplementation(() =>
+      Promise.reject(unreachableOwnerHost("epic.deleteTuiAgent")),
+    );
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+    fireEvent.click(screen.getByRole("menuitem", { name: "Select agents" }));
+    fireEvent.click(screen.getByRole("button", { name: "Select all" }));
+    fireEvent.click(screen.getByTestId("epic-sidebar-delete-selected-chats"));
+    fireEvent.click(screen.getByTestId("confirm-action"));
+
+    await waitFor(() => {
+      expect(toastMessage).toHaveBeenCalledWith(
+        "Traycer can't reach the hosts these agents run on, so nothing on them was changed. Try again once they are reachable.",
+        expect.anything(),
+      );
+    });
+    expect(toastMessage).toHaveBeenCalledTimes(1);
+    toastMessage.mockRestore();
+  });
+
+  // Deletes go out deepest agent first; the notice's advice follows the
+  // selection (traycerai/traycer#2546, round 11, rows 5 and 7).
+  it("lists refusal advice in selection order, not the order the deletes were sent", async () => {
+    seedGuiChatTree();
+    const toastError = vi.spyOn(toast, "error");
+    testState.deleteChatMutateAsync.mockImplementation(
+      (input: { readonly chatId: string }) =>
+        Promise.reject(
+          new HostRpcError({
+            code:
+              input.chatId === "chat-root"
+                ? "FORBIDDEN"
+                : "E_HOST_STORAGE_FULL",
+            message: "refused",
+            requestId: `req-${input.chatId}`,
+            method: "epic.deleteChat",
+            fatalDetails: null,
+          }),
+        ),
+    );
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+    fireEvent.click(screen.getByRole("menuitem", { name: "Select agents" }));
+    fireEvent.click(screen.getByTestId("epic-sidebar-select-chat-root"));
+    fireEvent.click(screen.getByTestId("epic-sidebar-select-chat-child"));
+    fireEvent.click(screen.getByTestId("epic-sidebar-delete-selected-chats"));
+    fireEvent.click(screen.getByTestId("confirm-action"));
+
+    await waitFor(() => {
+      expect(toastError).toHaveBeenCalledTimes(1);
+    });
+    // Sent child first, root second: the child is the deeper agent.
+    expect(testState.deleteChatMutateAsync).toHaveBeenNthCalledWith(1, {
+      epicId: EPIC_ID,
+      chatId: "chat-child",
+      hostId: null,
+    });
+    expect(testState.deleteChatMutateAsync).toHaveBeenNthCalledWith(2, {
+      epicId: EPIC_ID,
+      chatId: "chat-root",
+      hostId: null,
+    });
+    const title = toastError.mock.calls[0][0];
+    const notice = typeof title === "string" ? title : "";
+    const permission = notice.indexOf("You don't have permission to do that.");
+    const diskFull = notice.indexOf("out of disk space");
+    expect(permission).toBeGreaterThan(-1);
+    expect(diskFull).toBeGreaterThan(permission);
+    toastError.mockRestore();
+  });
+
+  it("reports one notice naming one host when every agent in an unreachable bulk delete runs on it", async () => {
+    seedGuiChatTree();
+    const toastMessage = vi.spyOn(toast, "message");
+    testState.deleteChatMutateAsync.mockImplementation(() =>
+      Promise.reject(unreachableOwnerHost("epic.deleteChat")),
+    );
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+    fireEvent.click(screen.getByRole("menuitem", { name: "Select agents" }));
+    fireEvent.click(screen.getByRole("button", { name: "Select all" }));
+    fireEvent.click(screen.getByTestId("epic-sidebar-delete-selected-chats"));
+    fireEvent.click(screen.getByTestId("confirm-action"));
+
+    await waitFor(() => {
+      expect(toastMessage).toHaveBeenCalledWith(
+        "Traycer can't reach the host these agents run on, so nothing on it was changed. Try again once it is reachable.",
+        expect.anything(),
+      );
+    });
+    expect(toastMessage).toHaveBeenCalledTimes(1);
+    toastMessage.mockRestore();
   });
 
   it("bulk-deletes a terminal agent on its owning host, targeting a same-id row correctly and leaving tile/payload teardown to the mutation hook", async () => {
@@ -1649,6 +1832,24 @@ describe("epic sidebar selection mode", () => {
       chatId: "chat-child",
       hostId: "host-1",
       archived: true,
+    });
+    // Thread taOw7: the root's request stands for the selected child its
+    // archive hides, so the batch notice counts both.
+    expect(testState.archiveBatchChats).toEqual([
+      expect.objectContaining({
+        chatId: "chat-root",
+        hostId: "host-1",
+        selectedRows: 2,
+      }),
+      expect.objectContaining({
+        chatId: "agent-root",
+        hostId: "host-1",
+        selectedRows: 1,
+      }),
+    ]);
+    // Nothing moved, so each request still covers every row it stood for.
+    await waitFor(() => {
+      expect(testState.archiveCoveredRowsAtSettlement).toEqual([2, 1]);
     });
     expect(
       screen.queryByRole("button", { name: "Cancel selection" }),
@@ -1889,6 +2090,109 @@ describe("epic sidebar selection mode", () => {
     expect(
       screen.getByTestId("epic-sidebar-select-chat-child").matches(":checked"),
     ).toBe(true);
+  });
+
+  // A selected child moved out of the selected parent while the archive is
+  // in flight is not archived with it: at settlement the parent's request
+  // covers itself alone, and the child stays selected.
+  it("recounts an archive request's selected rows against the tree it settles in", async () => {
+    let resolveRootArchive: (value: {
+      readonly updated: boolean;
+    }) => void = () => {
+      throw new Error("Archive resolver is unavailable");
+    };
+    testState.archiveMutateAsync.mockImplementation((input) =>
+      input.chatId === "chat-root"
+        ? new Promise<{ readonly updated: boolean }>((resolve) => {
+            resolveRootArchive = resolve;
+          })
+        : Promise.reject(new Error("refused")),
+    );
+    seedChatTree();
+
+    const view = render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+    fireEvent.click(screen.getByRole("menuitem", { name: "Select agents" }));
+    fireEvent.click(screen.getByRole("button", { name: "Select all" }));
+    fireEvent.click(screen.getByTestId("epic-sidebar-archive-selected-chats"));
+    expect(
+      testState.archiveBatchChats.map((chat) => chat.selectedRows),
+    ).toEqual([2, 1]);
+
+    const reparentedChild = treeNode("chat-child", null, "Child chat", "chat");
+    testState.tree = {
+      rootIds: ["chat-root", reparentedChild.id, "agent-root"],
+      childrenByParent: { "chat-root": [] },
+      nodeById: {
+        ...testState.tree.nodeById,
+        [reparentedChild.id]: reparentedChild,
+      },
+    };
+    testState.records = testState.records.map((record) =>
+      record.id === reparentedChild.id
+        ? recordFromNode(reparentedChild)
+        : record,
+    );
+    view.rerender(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+    resolveRootArchive({ updated: true });
+
+    await waitFor(() => {
+      expect(testState.archiveCoveredRowsAtSettlement).toEqual([1, 1]);
+    });
+    await waitFor(() => {
+      expect(
+        screen
+          .getByTestId("epic-sidebar-select-chat-child")
+          .matches(":checked"),
+      ).toBe(true);
+    });
+  });
+
+  // Archiving a root removes nothing from the tree - archived records stay in
+  // it - so a selected child missing at settlement was deleted, not hidden:
+  // the root's request no longer covers it.
+  it("does not credit an archive request with a selected child deleted before it settles", async () => {
+    let resolveRootArchive: (value: {
+      readonly updated: boolean;
+    }) => void = () => {
+      throw new Error("Archive resolver is unavailable");
+    };
+    testState.archiveMutateAsync.mockImplementation((input) =>
+      input.chatId === "chat-root"
+        ? new Promise<{ readonly updated: boolean }>((resolve) => {
+            resolveRootArchive = resolve;
+          })
+        : Promise.reject(new Error("refused")),
+    );
+    seedChatTree();
+
+    const view = render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+    fireEvent.click(screen.getByRole("menuitem", { name: "Select agents" }));
+    fireEvent.click(screen.getByRole("button", { name: "Select all" }));
+    fireEvent.click(screen.getByTestId("epic-sidebar-archive-selected-chats"));
+    expect(
+      testState.archiveBatchChats.map((chat) => chat.selectedRows),
+    ).toEqual([2, 1]);
+
+    const { "chat-child": _deletedChild, ...remainingNodes } =
+      testState.tree.nodeById;
+    testState.tree = {
+      rootIds: ["chat-root", "agent-root"],
+      childrenByParent: { "chat-root": [] },
+      nodeById: remainingNodes,
+    };
+    testState.records = testState.records.filter(
+      (record) => record.id !== "chat-child",
+    );
+    view.rerender(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+    resolveRootArchive({ updated: true });
+
+    await waitFor(() => {
+      expect(testState.archiveCoveredRowsAtSettlement).toEqual([1, 1]);
+    });
   });
 
   it("hides the bulk archive action when the host lacks archive support", () => {
@@ -2247,6 +2551,141 @@ describe("epic sidebar selection mode", () => {
     });
   });
 
+  it("does not say deleting an agent deletes the agents nested under it", async () => {
+    // Deleting an agent removes that one record; its nested agents are kept
+    // and drawn at the top level (orphan promotion in `projectTreeSlice`), so
+    // the confirm dialog must not claim otherwise.
+    seedChatTree();
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+    fireEvent.click(dropdownItem("delete-chat-root"));
+    const dialog = await screen.findByTestId("confirm-destructive-dialog");
+
+    expect(within(dialog).queryByTestId("confirm-cascade-meta")).toBeNull();
+    expect(dialog.textContent).not.toContain("also delete");
+    expect(dialog.textContent).toContain(
+      "1 agent nested under it will be kept and moved to the top level.",
+    );
+  });
+
+  it("counts only the agents directly under a deleted agent", async () => {
+    // A grandchild stays under its own (kept) parent, so it does not move to
+    // the top level and is not part of the sentence.
+    seedChatTree();
+    const grandchild = treeNode(
+      "chat-grandchild",
+      "chat-child",
+      "Grandchild chat",
+      "chat",
+    );
+    testState.tree = {
+      ...testState.tree,
+      childrenByParent: {
+        ...testState.tree.childrenByParent,
+        "chat-child": ["chat-grandchild"],
+      },
+      nodeById: { ...testState.tree.nodeById, "chat-grandchild": grandchild },
+    };
+    testState.records = [...testState.records, recordFromNode(grandchild)];
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+    fireEvent.click(dropdownItem("delete-chat-root"));
+    const dialog = await screen.findByTestId("confirm-destructive-dialog");
+
+    expect(dialog.textContent).toContain(
+      "1 agent nested under it will be kept and moved to the top level.",
+    );
+    expect(dialog.textContent).not.toContain("2 agents");
+  });
+
+  it("says a deleted terminal agent's nested agents are kept and moved to the top level", async () => {
+    seedChatTree();
+    const agentChild = treeNode(
+      "agent-child",
+      "agent-root",
+      "Nested terminal agent",
+      "terminal-agent",
+    );
+    testState.tree = {
+      ...testState.tree,
+      childrenByParent: {
+        ...testState.tree.childrenByParent,
+        "agent-root": ["agent-child"],
+      },
+      nodeById: { ...testState.tree.nodeById, "agent-child": agentChild },
+    };
+    testState.records = [...testState.records, recordFromNode(agentChild)];
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+    fireEvent.click(dropdownItem("delete-agent-root"));
+    const dialog = await screen.findByTestId("confirm-destructive-dialog");
+
+    expect(within(dialog).queryByTestId("confirm-cascade-meta")).toBeNull();
+    expect(dialog.textContent).toContain(
+      "1 agent nested under it will be kept and moved to the top level.",
+    );
+  });
+
+  it("does not warn that nested items may also be deleted when bulk-deleting agents", async () => {
+    seedChatTree();
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+    fireEvent.click(screen.getByRole("menuitem", { name: "Select agents" }));
+    fireEvent.click(screen.getByRole("button", { name: "Select all" }));
+    fireEvent.click(screen.getByTestId("epic-sidebar-delete-selected-chats"));
+    const dialog = await screen.findByTestId("confirm-destructive-dialog");
+
+    expect(dialog.textContent).not.toContain("may also be deleted");
+  });
+
+  it("still warns that nested items may also be deleted when bulk-deleting artifacts", async () => {
+    seedArtifactTree();
+    testState.activePanelId = "artifacts";
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+    fireEvent.click(screen.getByRole("menuitem", { name: "Select artifacts" }));
+    fireEvent.click(screen.getByRole("button", { name: "Select all" }));
+    fireEvent.click(
+      screen.getByTestId("epic-sidebar-delete-selected-artifacts"),
+    );
+    const dialog = await screen.findByTestId("confirm-destructive-dialog");
+
+    expect(dialog.textContent).toContain(
+      "Nested items under selected rows may also be deleted.",
+    );
+  });
+
+  it("says nothing about nested agents when a deleted agent has none", async () => {
+    seedChatTree();
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+    fireEvent.click(dropdownItem("delete-agent-root"));
+    const dialog = await screen.findByTestId("confirm-destructive-dialog");
+
+    expect(within(dialog).queryByTestId("confirm-cascade-meta")).toBeNull();
+    expect(dialog.textContent).not.toContain("nested under it");
+  });
+
+  it("still says deleting an artifact deletes the artifacts nested under it", async () => {
+    seedArtifactTree();
+    testState.activePanelId = "artifacts";
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+    fireEvent.click(dropdownItem("delete-spec-root"));
+    const dialog = await screen.findByTestId("confirm-destructive-dialog");
+
+    expect(within(dialog).getByTestId("confirm-cascade-meta").textContent).toBe(
+      "This will also delete 1 ticket nested under it.",
+    );
+  });
+
   it("keeps artifact add inline and exposes ellipsis actions on right-click", async () => {
     seedArtifactTree();
     testState.activePanelId = "artifacts";
@@ -2534,6 +2973,159 @@ describe("epic sidebar selection mode", () => {
       epicId: EPIC_ID,
       artifactId: "ticket-child",
     });
+  });
+
+  it("reports one notice for a bulk artifact delete in which every delete failed", async () => {
+    const specA = treeNode("spec-a", null, "Spec A", "spec");
+    const specB = treeNode("spec-b", null, "Spec B", "spec");
+    testState.expandedIds = new Set();
+    testState.tree = {
+      rootIds: ["spec-a", "spec-b"],
+      childrenByParent: {},
+      nodeById: { "spec-a": specA, "spec-b": specB },
+    };
+    testState.records = [specA, specB].map(recordFromNode);
+    testState.activePanelId = "artifacts";
+    const toastError = vi.spyOn(toast, "error");
+    testState.deleteArtifactMutateAsync.mockImplementation(() =>
+      Promise.reject(new Error("write rejected")),
+    );
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+    fireEvent.click(screen.getByRole("menuitem", { name: "Select artifacts" }));
+    fireEvent.click(screen.getByRole("button", { name: "Select all" }));
+    fireEvent.click(
+      screen.getByTestId("epic-sidebar-delete-selected-artifacts"),
+    );
+    fireEvent.click(screen.getByTestId("confirm-action"));
+
+    await waitFor(() => {
+      expect(toastError).toHaveBeenCalledWith(
+        "Couldn't delete any of the 2 selected artifacts.",
+        expect.anything(),
+      );
+    });
+    expect(toastError).toHaveBeenCalledTimes(1);
+    toastError.mockRestore();
+  });
+
+  // Thread taF0r: a row confirmed in the dialog can vanish before the delete
+  // is sent, and no request then stands for it. It stays in the count the
+  // dialog showed, never as deleted and never as failed: unconfirmed.
+  function vanishRecord(id: string): void {
+    const { [id]: _vanished, ...remainingNodes } = testState.tree.nodeById;
+    testState.tree = {
+      rootIds: testState.tree.rootIds.filter((rootId) => rootId !== id),
+      childrenByParent: Object.fromEntries(
+        Object.entries(testState.tree.childrenByParent).map(
+          ([parentId, childIds]) => [
+            parentId,
+            childIds.filter((childId) => childId !== id),
+          ],
+        ),
+      ),
+      nodeById: remainingNodes,
+    };
+    testState.records = testState.records.filter((record) => record.id !== id);
+  }
+
+  function forbidden(method: string): HostRpcError {
+    return new HostRpcError({
+      code: "FORBIDDEN",
+      message: "refused",
+      requestId: "req-forbidden",
+      method,
+      fatalDetails: null,
+    });
+  }
+
+  it("keeps an agent that vanished before the delete was sent in the dialog's count, unconfirmed", async () => {
+    seedChatTree();
+    const toastError = vi.spyOn(toast, "error");
+    testState.deleteChatMutateAsync.mockImplementation(
+      (input: { readonly chatId: string }) =>
+        input.chatId === "chat-child"
+          ? Promise.reject(forbidden("epic.deleteChat"))
+          : Promise.resolve({ outcome: "applied" }),
+    );
+
+    const view = render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+    fireEvent.click(screen.getByRole("menuitem", { name: "Select agents" }));
+    fireEvent.click(screen.getByRole("button", { name: "Select all" }));
+    fireEvent.click(screen.getByTestId("epic-sidebar-delete-selected-chats"));
+    expect(screen.getByText("Delete 3 selected agents?")).toBeTruthy();
+    vanishRecord("agent-root");
+    view.rerender(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+    fireEvent.click(screen.getByTestId("confirm-action"));
+
+    await waitFor(() => {
+      expect(toastError).toHaveBeenCalledTimes(1);
+    });
+    expect(toastError.mock.calls[0]?.[0]).toBe(
+      "Couldn't confirm all 3 selected agents were deleted. Check them and delete any that weren't. You don't have permission to do that.",
+    );
+    expect(testState.deleteTuiAgentMutateAsync).not.toHaveBeenCalled();
+    toastError.mockRestore();
+  });
+
+  it("stays quiet when a row vanished before the delete was sent and every sent delete applied", async () => {
+    seedChatTree();
+    const toastError = vi.spyOn(toast, "error");
+    const toastMessage = vi.spyOn(toast, "message");
+    testState.deleteChatMutateAsync.mockResolvedValue({ outcome: "applied" });
+
+    const view = render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+    fireEvent.click(screen.getByRole("menuitem", { name: "Select agents" }));
+    fireEvent.click(screen.getByRole("button", { name: "Select all" }));
+    fireEvent.click(screen.getByTestId("epic-sidebar-delete-selected-chats"));
+    vanishRecord("agent-root");
+    view.rerender(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+    fireEvent.click(screen.getByTestId("confirm-action"));
+
+    await waitFor(() => {
+      expect(testState.deleteChatMutateAsync).toHaveBeenCalledTimes(2);
+    });
+    await waitFor(() => {
+      expect(
+        screen.queryByRole("button", { name: "Cancel selection" }),
+      ).toBeNull();
+    });
+    expect(toastError).not.toHaveBeenCalled();
+    expect(toastMessage).not.toHaveBeenCalled();
+    toastError.mockRestore();
+    toastMessage.mockRestore();
+  });
+
+  it("keeps a selected descendant that vanished under a selected artifact in the dialog's count, unconfirmed", async () => {
+    seedArtifactTree();
+    testState.activePanelId = "artifacts";
+    const toastError = vi.spyOn(toast, "error");
+    testState.deleteArtifactMutateAsync.mockImplementation(() =>
+      Promise.reject(forbidden("epic.deleteArtifact")),
+    );
+
+    const view = render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+    fireEvent.click(screen.getByRole("menuitem", { name: "Select artifacts" }));
+    fireEvent.click(screen.getByRole("button", { name: "Select all" }));
+    fireEvent.click(
+      screen.getByTestId("epic-sidebar-delete-selected-artifacts"),
+    );
+    expect(screen.getByText("Delete 2 selected artifacts?")).toBeTruthy();
+    vanishRecord("ticket-child");
+    view.rerender(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+    fireEvent.click(screen.getByTestId("confirm-action"));
+
+    await waitFor(() => {
+      expect(toastError).toHaveBeenCalledTimes(1);
+    });
+    expect(toastError.mock.calls[0]?.[0]).toBe(
+      "Couldn't confirm all 2 selected artifacts were deleted. Check them and delete any that weren't. You don't have permission to do that.",
+    );
+    toastError.mockRestore();
   });
 
   it("enters artifact selection mode from cmd-click on a row", () => {
@@ -5436,6 +6028,18 @@ describe("chat row archive", () => {
  */
 function isMenuItemUnavailable(el: HTMLElement): boolean {
   return el.matches(":disabled") || el.getAttribute("aria-disabled") === "true";
+}
+
+/** A pre-send failure: the owning host's session was not ready. */
+function unreachableOwnerHost(method: string): RetryableTransportError {
+  return new RetryableTransportError({
+    replaySafetyFromKey: false,
+    code: "RPC_ERROR",
+    message: "Remote session is not ready",
+    requestId: "req-1",
+    method,
+    fatalDetails: null,
+  });
 }
 
 function seedChatTree(): void {

@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import type { CommandFn, CommandResult } from "../runner/runner";
 import { hostLogPath } from "../store/paths";
-import { writeStdoutBytes } from "../runner/std-write";
+import { stdoutReaderClosed, writeStdoutBytes } from "../runner/std-write";
 import {
   LOG_TAIL_MAX_MISSING_RETRIES,
   LOG_TAIL_POLL_INTERVAL_MS,
@@ -17,7 +17,9 @@ import {
 // `--follow` delegates the offset/rotation bookkeeping to `host/log-tail.ts` -
 // see that module for why it polls rather than watches, and for the identity
 // and continuity rules that stop a rotation swallowing the new file's prefix.
-// This file owns only the signal handling that ends an interactive follow.
+// This file owns only what ends an interactive follow: SIGINT/SIGTERM, and a
+// stdout reader that closed the pipe (`traycer host logs --follow | head`),
+// which takes the same cleanup path and exits 0.
 
 export interface HostLogsArgs {
   readonly follow: boolean;
@@ -74,7 +76,7 @@ export function buildHostLogsCommand(args: HostLogsArgs): CommandFn {
     // keeps the follower alive (offset tracking, rotation handling) but
     // suppresses every streamed line, since the raw `writeStdoutBytes`
     // below bypasses `ctx.output.human`'s quiet gate.
-    await followLog(path, ctx.runtime.quiet);
+    await followLog(path, ctx.runtime.quiet, stdoutReaderClosed());
     return {
       data: { path, tail: tailContent, follow: true },
       human: null,
@@ -95,9 +97,14 @@ async function readTail(path: string, lines: number): Promise<string> {
   return slice.join("\n");
 }
 
-// Runs the shared tail until the user interrupts it (or the file stays gone
-// long enough that the tail gives up on its own).
-function followLog(path: string, quiet: boolean): Promise<void> {
+// Runs the shared tail until the user interrupts it, stdout's reader goes away
+// (`readerClosed`), or the file stays gone long enough that the tail gives up
+// on its own.
+function followLog(
+  path: string,
+  quiet: boolean,
+  readerClosed: AbortSignal,
+): Promise<void> {
   return new Promise<void>((resolve) => {
     let stopped = false;
     // Keep a reference to the bound handler so we can deregister it on
@@ -117,6 +124,7 @@ function followLog(path: string, quiet: boolean): Promise<void> {
       stopped = true;
       process.off("SIGINT", cleanup);
       process.off("SIGTERM", cleanup);
+      readerClosed.removeEventListener("abort", cleanup);
       tail?.stop();
       resolve();
     };
@@ -134,5 +142,12 @@ function followLog(path: string, quiet: boolean): Promise<void> {
     });
     process.once("SIGINT", cleanup);
     process.once("SIGTERM", cleanup);
+    // Nothing is left to stream to. Without this the follow would poll and
+    // write into a closed pipe until someone signalled it.
+    if (readerClosed.aborted) {
+      cleanup();
+      return;
+    }
+    readerClosed.addEventListener("abort", cleanup, { once: true });
   });
 }

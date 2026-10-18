@@ -75,6 +75,7 @@ function status(
     updateTransaction: TRANSACTION,
     storeFormats: null,
     install: null,
+    processMemory: null,
   };
 }
 

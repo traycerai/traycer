@@ -293,10 +293,10 @@ describe("the cron background item", () => {
     expect(backgroundItemKindSchema.options).toContain("cron");
   });
 
-  it("parses without scheduledFor, and does not carry one", () => {
+  it("parses without scheduledFor and defaults it to null (1.24)", () => {
     const parsed = backgroundItemSchema.parse(CRON_ITEM);
     expect(parsed.kind).toBe("cron");
-    expect(Object.hasOwn(parsed, "scheduledFor")).toBe(false);
+    expect(parsed).toMatchObject({ scheduledFor: null });
   });
 
   it.each(["schedule", "humanSchedule", "prompt", "recurring"] as const)(

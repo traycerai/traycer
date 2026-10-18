@@ -112,6 +112,7 @@ function buildMessengerFactory(): MessengerFactory<HostRpcRegistry> {
           updateTransaction: null,
           storeFormats: null,
           install: null,
+          processMemory: null,
         }),
         "host.notifications.indicatorState": () => ({
           epics: {},

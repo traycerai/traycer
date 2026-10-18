@@ -52,6 +52,7 @@ import {
 import {
   assistantMessageSchema,
   userMessageSchema,
+  userMessageSchemaPreConversation,
 } from "@traycer/protocol/persistence/epic/messages";
 import {
   agentSenderSchema,
@@ -187,6 +188,26 @@ export const openUserMessageSchema = lazySchema(() =>
 );
 export type OpenUserMessage = z.infer<typeof openUserMessageSchema>;
 
+// The open user row as `chat.subscribe@1.22` through `@1.24` ship it: the
+// pre-conversation field set (`messages.ts`) with the sender reopened. Spread
+// off the FROZEN copy, not the live one, so the `1.25` `conversationRequest`
+// key cannot reach those lines through it.
+export const openUserMessageSchemaPreConversation = lazySchema(() =>
+  z
+    .object({
+      ...userMessageSchemaPreConversation.shape,
+      sender: openUserMessageSenderSchema,
+    })
+    .superRefine((message, ctx) => {
+      if (message.sender.type === message.message.kind) return;
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["message", "kind"],
+        message: "User message sender.type must match message.kind.",
+      });
+    }),
+);
+
 export const openAssistantMessageSchema = lazySchema(() =>
   assistantMessageSchema.extend({
     sender: openAgentSenderSchema,
@@ -202,6 +223,14 @@ export const openMessageSchema = lazySchema(() =>
   ]),
 );
 export type OpenMessage = z.infer<typeof openMessageSchema>;
+
+/** The open message union `chat.subscribe@1.23` and `@1.24` ship. */
+export const openMessageSchemaPreConversation = lazySchema(() =>
+  z.discriminatedUnion("role", [
+    openUserMessageSchemaPreConversation,
+    openAssistantMessageSchema,
+  ]),
+);
 
 export const openChatEventSchema = lazySchema(() =>
   chatEventSchema.extend({

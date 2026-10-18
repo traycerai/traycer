@@ -145,6 +145,7 @@ function editorHandle(): ComposerPromptEditorHandle {
     removeImageAttachmentById: () => undefined,
     insertDictatedText: () => undefined,
     dismissActiveSuggestion: () => false,
+    draftGeneration: () => 0,
   };
 }
 

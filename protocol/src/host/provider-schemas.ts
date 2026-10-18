@@ -35,11 +35,15 @@ import {
   nativeAuthResultSchema,
   nativeListQuerySchema,
   nativeListResultSchema,
+  nativeListResultSchemaBeforeMcpRemedies,
   nativeListResultSchemaV70Preimage,
   nativeMutationResultSchema,
+  nativeMutationResultSchemaV10Preimage,
   nativeMutationSchema,
-  nativeMutationSchemaV11,
+  nativeMutationSchemaV12,
+  nativeMutationSchemaV10Preimage,
   providerNativeCapabilitiesSchema,
+  providerNativeCapabilitiesSchemaBeforeMcpRemedies,
   providerNativeCapabilitiesSchemaV70,
   providerNativeCapabilitiesSchemaV70Preimage,
   type ModelProviderAuthAction,
@@ -1705,6 +1709,34 @@ export const providerProfileActionSchema = lazySchema(() =>
 );
 export type ProviderProfileAction = z.infer<typeof providerProfileActionSchema>;
 
+/** macOS versions are display-only facts supplied by the executing host. */
+export const providerMacosVersionSchema = lazySchema(() =>
+  z
+    .string()
+    .max(32)
+    .regex(/^\d+\.\d+(?:\.\d+)?$/),
+);
+
+/** Managed, settled launch and per-version floors are independent verdicts. */
+export const providerMacosRequirementSchema = lazySchema(() =>
+  z.object({
+    runningMacos: providerMacosVersionSchema,
+    managed: z.object({ requiredMacos: providerMacosVersionSchema }).nullable(),
+    launch: z.object({ requiredMacos: providerMacosVersionSchema }).nullable(),
+    refusedVersions: z
+      .array(
+        z.object({
+          version: z.string(),
+          requiredMacos: providerMacosVersionSchema,
+        }),
+      )
+      .catch([]),
+  }),
+);
+export type ProviderMacosRequirement = z.infer<
+  typeof providerMacosRequirementSchema
+>;
+
 /**
  * Enablement is a plain STICKY BOOLEAN on every wire: `enabled` below is the
  * whole story, and the only thing that changes it is the user's toggle
@@ -1719,6 +1751,11 @@ export type ProviderProfileAction = z.infer<typeof providerProfileActionSchema>;
  */
 
 const providerCliStateBaseShape = {
+  // List-only, first published by providers.list@10.2. Older hosts omit it;
+  // malformed future values degrade quietly without dropping the provider.
+  macosRequirement: lazySchema(() =>
+    providerMacosRequirementSchema.nullable().catch(null).optional(),
+  ),
   enabled: lazySchema(() => z.boolean()),
   disabledBy: lazySchema(() => providerDisabledBySchema.nullable()),
   selected: providerSelectionSchema,
@@ -1909,8 +1946,8 @@ const providerCliStateBaseShapeV20 = {
 };
 
 /**
- * Latest provider CLI state (providers.list@3.1 and state-returning
- * providers.*@2.1). Adds `nativeCapabilities` — per-capability facts the UI
+ * Latest provider CLI state (providers.list@10.2). Mutation echoes use their
+ * own frozen shape. Includes `nativeCapabilities` — per-capability facts the UI
  * renders MCP/plugins/skills tabs from. `.catch(DEFAULT)` tolerates old host
  * builds that omit the field when an old-host response is parsed on a new
  * client.
@@ -2124,7 +2161,7 @@ const providerManagedVersionsSchemaV91 = lazySchema(() =>
  * whole comment exists to prevent.
  */
 export const providerCliStateSchemaV91 = lazySchema(() =>
-  providerCliStateSchema.extend({
+  providerCliStateSchema.omit({ macosRequirement: true }).extend({
     providerId: providerIdSchemaV91,
     profiles: z.array(providerProfileSchemaV91).catch([]),
     managedVersions: providerManagedVersionsSchemaV91
@@ -2148,7 +2185,7 @@ export type ProviderCliStateV91 = z.infer<typeof providerCliStateSchemaV91>;
 export const providersListResponseSchemaV91 = lazySchema(() =>
   z.object({
     providers: z.array(providerCliStateSchemaV91),
-    native: nativeListResultSchema.nullable().default(null),
+    native: nativeListResultSchemaBeforeMcpRemedies.nullable().default(null),
   }),
 );
 export type ProvidersListResponseV91 = z.infer<
@@ -2201,7 +2238,7 @@ export type ProviderCliStateV92 = z.infer<typeof providerCliStateSchemaV92>;
 export const providersListResponseSchemaV92 = lazySchema(() =>
   z.object({
     providers: z.array(providerCliStateSchemaV92),
-    native: nativeListResultSchema.nullable().default(null),
+    native: nativeListResultSchemaBeforeMcpRemedies.nullable().default(null),
   }),
 );
 export type ProvidersListResponseV92 = z.infer<
@@ -2288,8 +2325,8 @@ export type ProvidersListRequestV70 = z.infer<
  * the list/discover result (or a typed native error). Classic callers receive
  * `native: null`.
  *
- * v1.0 through v7.0 each have a hand-frozen response. v8.0 binds this live
- * schema, so new fields do not widen a released line.
+ * Earlier lines each bind a frozen response; only the head (10.3) binds this
+ * live schema, so new fields do not widen a released line.
  */
 export const providersListResponseSchema = lazySchema(() =>
   z.object({
@@ -2302,14 +2339,14 @@ export const providersListResponseSchema = lazySchema(() =>
     // with one line pointing there. Absent means false, which is every host
     // that is not a sandbox and every host that predates the flag.
     //
-    // A new KEY on `providers.list@10.1`. The frozen 10.0 response strips it
-    // on the within-major re-parse, so no emission gate is needed.
+    // A new KEY on `providers.list@10.3`. The frozen 10.0-10.2 responses strip
+    // it on the within-major re-parse, so no emission gate is needed.
     // `.optional()` rather than defaulted, so it is not required on OUTPUT at
     // the response's construction sites.
     credentialsManagedInAccount: z.boolean().optional(),
     // `"personal"` when this host serves its provider configuration from the
     // person's Personal environment (ticket E7); `null` or absent on a host
-    // without environments. Another 10.1 KEY, stripped for a 10.0 peer the
+    // without environments. Another 10.3 KEY, stripped for an older peer the
     // same way; `.optional()` for the same construction-site reason.
     scope: z.literal("personal").nullable().optional(),
     // The profiles that live on this host only, one entry each: "On <host>
@@ -2329,31 +2366,49 @@ export const providersListResponseSchema = lazySchema(() =>
 );
 export type ProvidersListResponse = z.infer<typeof providersListResponseSchema>;
 
+/** The list@10.0 response before MCP remedies and notices were introduced. */
+export const providersListResponseSchemaV100Preimage = lazySchema(() =>
+  z.object({
+    providers: z.array(
+      providerCliStateSchema.omit({ macosRequirement: true }).extend({
+        nativeCapabilities:
+          providerNativeCapabilitiesSchemaBeforeMcpRemedies.catch(
+            DEFAULT_PROVIDER_NATIVE_CAPABILITIES,
+          ),
+      }),
+    ),
+    native: nativeListResultSchemaBeforeMcpRemedies.nullable().default(null),
+  }),
+);
+
+/** The released list@10.1 shape before the list-only macOS verdict. */
+export const providersListResponseSchemaV101Preimage = lazySchema(() =>
+  z.object({
+    providers: z.array(providerCliStateSchema.omit({ macosRequirement: true })),
+    native: nativeListResultSchema.nullable().default(null),
+  }),
+);
+
 /**
- * Frozen `providers.list@10.0` response: the envelope before
- * `credentialsManagedInAccount`.
+ * Frozen `providers.list@10.2` response: the envelope before
+ * `credentialsManagedInAccount`, `scope` and `onHostOnly` (ticket E7) opened
+ * 10.3 above it.
  *
- * 10.0 bound the live response while it was the head line. `host-v1.5.1`
- * shipped it, so 10.1 opens above it for the flag and this line keeps the two
- * keys that release negotiated. A hand copy of the envelope rather than an
- * `.omit()` of the live one, so the next envelope key cannot reach it.
- *
- * The provider row is still the live `providerCliStateSchema`, by reference:
- * 10.1 adds nothing to the row, the two minors must share its id enums (no
- * minor of a major may grow a response enum over its predecessor), and
- * `frozen-catalog-lines.test.ts` pins this line's whole serialized shape, so a
- * key added to the row reddens it rather than widening this line unseen. When
- * that happens, hand-freeze the row here; do not regenerate the fixture.
+ * A hand copy of the envelope rather than an `.omit()` of the live one, so the
+ * next envelope key cannot reach it. The provider row is still the live
+ * `providerCliStateSchema`, by reference: 10.3 adds nothing to the row, the
+ * two minors must share its id enums (no minor of a major may grow a response
+ * enum over its predecessor), and `frozen-catalog-lines.test.ts` pins this
+ * line's whole serialized shape, so a key added to the row reddens it rather
+ * than widening this line unseen. When that happens, hand-freeze the row here;
+ * do not regenerate the fixture.
  */
-export const providersListResponseSchemaV100 = lazySchema(() =>
+export const providersListResponseSchemaV102Preimage = lazySchema(() =>
   z.object({
     providers: z.array(providerCliStateSchema),
     native: nativeListResultSchema.nullable().default(null),
   }),
 );
-export type ProvidersListResponseV100 = z.infer<
-  typeof providersListResponseSchemaV100
->;
 
 /**
  * Frozen `providers.list@9.0` response - the pre-`autoJudge` provider state.
@@ -2368,7 +2423,7 @@ export type ProvidersListResponseV100 = z.infer<
 export const providersListResponseSchemaV90 = lazySchema(() =>
   z.object({
     providers: z.array(providerCliStateSchemaV90),
-    native: nativeListResultSchema.nullable().default(null),
+    native: nativeListResultSchemaBeforeMcpRemedies.nullable().default(null),
   }),
 );
 export type ProvidersListResponseV90 = z.infer<
@@ -2758,7 +2813,7 @@ export type ProviderCliStateV70 = z.infer<typeof providerCliStateSchemaV70>;
 export const providersListResponseSchemaV70 = lazySchema(() =>
   z.object({
     providers: z.array(providerCliStateSchemaV70),
-    native: nativeListResultSchema.nullable().default(null),
+    native: nativeListResultSchemaBeforeMcpRemedies.nullable().default(null),
   }),
 );
 export type ProvidersListResponseV70 = z.infer<
@@ -2878,7 +2933,7 @@ export type ProviderCliStateV80 = z.infer<typeof providerCliStateSchemaV80>;
 export const providersListResponseSchemaV80 = lazySchema(() =>
   z.object({
     providers: z.array(providerCliStateSchemaV80),
-    native: nativeListResultSchema.nullable().default(null),
+    native: nativeListResultSchemaBeforeMcpRemedies.nullable().default(null),
   }),
 );
 export type ProvidersListResponseV80 = z.infer<
@@ -3920,33 +3975,40 @@ export type ProvidersCancelMcpAuthResponse = z.infer<
 >;
 
 /**
- * `providers.nativeMutate@1.0` request - MCP/plugins/skills mutations. The
- * scope tuple and its `scope`/`workspaceRoot` invariant live inside
- * `nativeMutationSchema`, so no XOR refinement is needed on this envelope.
+ * `providers.nativeMutate@1.1` request - MCP/plugins/skills mutations, with
+ * the MCP remedies. The scope tuple and its `scope`/`workspaceRoot` invariant
+ * live inside `nativeMutationSchema`, so no XOR refinement is needed on this
+ * envelope.
  *
- * FROZEN as released (`host-v1.5.1`); v1.1 below is the live request.
+ * Frozen when 1.2 opened above it; 1.2 below is the live request.
  */
-export const providersNativeMutateRequestSchemaV10 = lazySchema(() =>
+export const providersNativeMutateRequestSchemaV11 = lazySchema(() =>
   z.object({
     providerId: providerIdSchema,
     mutation: nativeMutationSchema,
   }),
 );
-export type ProvidersNativeMutateRequestV10 = z.infer<
-  typeof providersNativeMutateRequestSchemaV10
+export type ProvidersNativeMutateRequestV11 = z.infer<
+  typeof providersNativeMutateRequestSchemaV11
 >;
 
 /**
- * `providers.nativeMutate@1.1` request (ticket E7): the `promoteToPersonal`
+ * `providers.nativeMutate@1.2` request (ticket E7): the `promoteToPersonal`
  * arm, and the executable-write grant, since an MCP add or update installs a
  * command and a skill import or update installs content an agent runs. A
- * v1.0 caller's request is upgraded with a `null` grant.
+ * v1.1 caller's request is upgraded with a `null` grant.
  */
 export const providersNativeMutateRequestSchema = lazySchema(() =>
   z.object({
     providerId: providerIdSchema,
-    mutation: nativeMutationSchemaV11,
+    mutation: nativeMutationSchemaV12,
     executableWriteGrant: executableWriteGrantSchema,
+  }),
+);
+export const providersNativeMutateRequestSchemaV10Preimage = lazySchema(() =>
+  z.object({
+    providerId: providerIdSchema,
+    mutation: nativeMutationSchemaV10Preimage,
   }),
 );
 export type ProvidersNativeMutateRequest = z.infer<
@@ -3963,6 +4025,9 @@ export const providersNativeMutateResponseSchema = lazySchema(() =>
   z.object({
     result: nativeMutationResultSchema,
   }),
+);
+export const providersNativeMutateResponseSchemaV10Preimage = lazySchema(() =>
+  z.object({ result: nativeMutationResultSchemaV10Preimage }),
 );
 export type ProvidersNativeMutateResponse = z.infer<
   typeof providersNativeMutateResponseSchema
@@ -4556,7 +4621,7 @@ export type ProvidersUsePackVersionRequest = z.infer<
   typeof providersUsePackVersionRequestSchema
 >;
 
-export const providersUsePackVersionResultSchema = lazySchema(() =>
+export const providersUsePackVersionResultSchemaV10 = lazySchema(() =>
   z.union([
     z.object({
       ok: z.literal(true),
@@ -4576,6 +4641,27 @@ export const providersUsePackVersionResultSchema = lazySchema(() =>
     }),
   ]),
 );
+export type ProvidersUsePackVersionResultV10 = z.infer<
+  typeof providersUsePackVersionResultSchemaV10
+>;
+
+/** Frozen 1.0 response; never let a new refusal arm widen it in place. */
+export const providersUsePackVersionResponseSchemaV10 = lazySchema(() =>
+  z.object({ result: providersUsePackVersionResultSchemaV10 }),
+);
+
+export const providersUsePackVersionResultSchema = lazySchema(() =>
+  z.union([
+    ...providersUsePackVersionResultSchemaV10.options,
+    z.object({
+      ok: z.literal(false),
+      code: z.literal("macos-ineligible"),
+      requiredMacos: providerMacosVersionSchema,
+      runningMacos: providerMacosVersionSchema,
+    }),
+  ]),
+);
+
 export type ProvidersUsePackVersionResult = z.infer<
   typeof providersUsePackVersionResultSchema
 >;
@@ -4588,6 +4674,15 @@ export const providersUsePackVersionResponseSchema = lazySchema(() =>
 export type ProvidersUsePackVersionResponse = z.infer<
   typeof providersUsePackVersionResponseSchema
 >;
+
+/** 1.0 peers can truthfully say only that the requested pin was not kept. */
+export function projectUsePackVersionResultToV10(
+  result: ProvidersUsePackVersionResult,
+): ProvidersUsePackVersionResultV10 {
+  return !result.ok && result.code === "macos-ineligible"
+    ? { ok: false, code: "verification-failed", detail: null }
+    : result;
+}
 
 /**
  * Set the per-pack auto-download policy. Default on, which is today's
@@ -4830,6 +4925,8 @@ export type DowngradableToV10ProviderState = (
   // (v9.1) the auto-mode judge. Optional here for the same reason as the rest:
   // a caller may hold a row from any released line, and only a 9.1 row has it.
   autoJudge?: ProviderCliState["autoJudge"];
+  // (v10.2) list-only host facts, absent from every earlier released carrier.
+  macosRequirement?: ProviderCliState["macosRequirement"];
   // `V70` is named explicitly rather than left to ride the `V10` arm on the
   // strength of structural width: the v7.0 and v8.0 list lines are pinned to
   // `providerLoginCapabilitySchemaV70`, so that is the concrete shape those
@@ -4860,6 +4957,7 @@ export function downgradeProviderCliStateToV10(
   // - `managedInstallState` / `versionVisibility` / `advisory` — the
   //   provider-pack-registry fields.
   // - `cliBinaryResolved` — the binary-absent explanation field.
+  // - `macosRequirement` (v10.2) — list-only host macOS requirements.
   // - `packId` / `managedVersions` / `managedVersionsUnavailable` /
   //   `nextRunBinary` (v7.0) — the version manager. Same trap, and it is worth
   //   restating rather than assuming the list above covers it: this parse is
@@ -4897,6 +4995,7 @@ export function downgradeProviderCliStateToV10(
     // the obligation out of the two schemas' key sets instead of a list a human
     // maintains. ADD THE FIELD HERE; do not weaken that test.
     autoJudge: _autoJudge,
+    macosRequirement: _macosRequirement,
     ...rest
   } = state;
   const parsed = providerCliStateSchemaV10.safeParse({

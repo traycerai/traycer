@@ -52,9 +52,15 @@ export const MAX_REPORT_LOG_ATTACHMENTS = 4;
  * Total attachment budget (Critique G5): 3 images x 5 MiB (15 MiB) + 4 log
  * tails x ~512 KB (~2 MiB) = ~17 MiB of real payload. 20 MiB total leaves
  * ~3 MiB of headroom for Sentry envelope framing/JSON overhead around that
- * payload, comfortably under Sentry's server-side envelope ceiling. This is
- * enforced at attach time in the UI (never silently at flush, see the ticket
- * 08 guardrail) and re-enforced by Electron main's IPC parser.
+ * payload, comfortably under Sentry's server-side envelope ceiling (Relay's
+ * defaults: 200 MiB per envelope, per attachment and for all attachments).
+ * This is enforced at attach time in the UI (never silently at flush, see
+ * the ticket 08 guardrail) and re-enforced by Electron main's IPC parser.
+ *
+ * One attachment sits outside this budget by design: `report-text.txt`,
+ * which Electron main's `support-report-size-guard.ts` adds at send time
+ * when the report text is too long to ride inline in the feedback event. It
+ * is capped at 4 MiB there, so the envelope stays under 24 MiB in all.
  */
 export const TOTAL_ATTACHMENT_BUDGET_BYTES = 20 * 1024 * 1024;
 

@@ -16,6 +16,7 @@ import {
   type ChatComposerSubmitResult,
 } from "../use-chat-composer-submit";
 import { createComposerToolbarStore } from "@/stores/composer/composer-toolbar-store";
+import { appLogger } from "@/lib/logger";
 import type { Attachment } from "@/lib/composer/types";
 
 /**
@@ -64,6 +65,7 @@ function acceptSubmit(_input: ChatComposerSubmitInput): boolean {
 
 afterEach(() => {
   cleanup();
+  vi.restoreAllMocks();
 });
 
 describe("useChatComposerSubmit steer drift gate", () => {
@@ -533,6 +535,48 @@ describe("useChatComposerSubmit steer drift gate", () => {
     expect(mount.result.current.steerConflict.open).toBe(false);
   });
 
+  it("logs the refusal when the confirm is dismissed because sending became disabled", () => {
+    const info = vi.spyOn(appLogger, "info");
+    const onSubmitMessage = vi.fn(acceptSubmit);
+    const base: MountSubmitInput = {
+      activeTurn: MATCHING_TURN,
+      onSubmitMessage,
+      modelSlug: "claude-opus",
+      permission: null,
+      editorRef: null,
+      steerCapable: true,
+      steerProtocolSupported: true,
+      activeTurnStatus: null,
+      hasPendingApprovals: false,
+      sendDisabled: false,
+      workspaceBlocked: false,
+    };
+    const mount = mountSubmit(base);
+    act(() => {
+      mount.result.current.submitDraft("mod-enter");
+    });
+    expect(mount.result.current.steerConflict.open).toBe(true);
+    act(() => {
+      mount.rerender({ ...base, sendDisabled: true });
+    });
+
+    act(() => {
+      mount.result.current.steerConflict.onRestart();
+    });
+
+    expect(onSubmitMessage).not.toHaveBeenCalled();
+    expect(info).toHaveBeenCalledWith(
+      "[composer] submit refused: send disabled",
+      {
+        chatId: "task-steer-1",
+        hostId: null,
+        connectionStatus: null,
+        reason: "stream-not-open",
+        stage: "after-confirmation",
+      },
+    );
+  });
+
   it("keeps after_safe_point onRestart when sameTurn and steerProtocolSupported stay true (positive control)", () => {
     // Same origin turn + protocol still live → re-resolved steer policy.
     const onSubmitMessage = vi.fn(acceptSubmit);
@@ -672,6 +716,7 @@ function mountSubmit(input: MountSubmitInput): {
         getActiveTurnForSteer: () => props.activeTurn,
         hasPendingApprovals: props.hasPendingApprovals,
         sendDisabled: props.sendDisabled,
+        sendDisabledHint: null,
         workspaceBlocked: props.workspaceBlocked,
         imagesUnsupported: false,
         attachmentPreparationPending: false,
@@ -715,6 +760,7 @@ function editorHandle(content: JsonContent): ComposerPromptEditorHandle {
     removeImageAttachmentById: () => undefined,
     rewriteImageAttachmentHashById: () => false,
     insertDictatedText: () => undefined,
+    draftGeneration: () => 0,
     dismissActiveSuggestion: () => false,
   };
 }

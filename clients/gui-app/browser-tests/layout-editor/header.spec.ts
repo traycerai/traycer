@@ -50,11 +50,14 @@ import { nextFrames } from "../support/fixtures.ts";
 // chromes (a macOS or Windows title band, the panel on the right) change is
 // the header's clearance, which `sides.spec.ts` measures on its own loads.
 //
-// In both themes the active tab, the split pair's focused member and both
-// drag overlays are one 32px box - `TAB_BOX_CLASS` (`inset-0.5` in the 36px
-// `h-9` frame), a 1px border, the same corners all round (a joined tab opens
-// its bottom two square) - centred in the 40px header, with ground under every
-// unjoined box (an inactive tab's hover) and the surface frame flush against the header's bottom edge.
+// In both themes the active tab and the lone tab's drag overlay are one 32px
+// box - `TAB_BOX_CLASS` (`inset-0.5` in the 36px `h-9` frame), a 1px border,
+// the same corners all round (a joined tab opens its bottom two square) -
+// centred in the 40px header, with ground under every unjoined box (an
+// inactive tab's hover) and the surface frame flush against the header's
+// bottom edge. A selected split pair's focused member rises where that box
+// stands, out of an underline that runs under the split control and the other
+// member (`SplitMemberChrome`), in the strip and in its drag overlay.
 // Nothing of the strip reaches below the header but a tab's colour line on the
 // sheets' top border, no folder-tab cap or baseline cover is drawn, and no rule
 // spans the strip: a tab's colour line (`TabColorEdgeLine`) is exactly its own
@@ -388,6 +391,102 @@ async function boxProblems(
   };
 }
 
+interface SplitPiece {
+  readonly x: number;
+  readonly y: number;
+  readonly width: number;
+  readonly height: number;
+  readonly right: number;
+  readonly bottom: number;
+}
+
+interface SplitContourRead {
+  readonly raised: SplitPiece | null;
+  readonly runs: readonly SplitPiece[];
+  readonly oldBoxes: number;
+}
+
+/**
+ * A selected split pair's contour, in the strip item or in its drag overlay:
+ * the focused member's raised tab and the underline runs (under the split
+ * control and the other member) that its feet turn out into.
+ */
+function readSplitContour(
+  page: Page,
+  scope: HeaderScope,
+): Promise<SplitContourRead> {
+  const root =
+    scope === "strip"
+      ? `document.querySelector('[data-testid="tab-strip"] [data-strip-item-id="${SPLIT.itemId}"]')`
+      : `document.querySelector('[data-testid="header-tab-drag-overlay"]')`;
+  return page.evaluate<SplitContourRead>(`(() => {
+    const root = ${root};
+    if (root === null) return { raised: null, runs: [], oldBoxes: 0 };
+    const box = (node) => {
+      const r = node.getBoundingClientRect();
+      return { x: r.x, y: r.y, width: r.width, height: r.height, right: r.right, bottom: r.bottom };
+    };
+    const raised = root.querySelector('[data-testid="split-member-raised-tab"]');
+    const runs = [...root.querySelectorAll('[data-testid^="split-underline-control-"], [data-testid="split-underline-segment"]')];
+    return {
+      raised: raised === null ? null : box(raised),
+      runs: runs.map(box),
+      oldBoxes: root.querySelectorAll('[data-testid="tab-chrome-box"]').length,
+    };
+  })()`);
+}
+
+/**
+ * The raised member stands where a lone active tab's box stands (its height
+ * always, its top in the strip), and the underline runs and the raised tab
+ * meet end to end on one bottom line, so they read as one contour.
+ */
+async function splitContourProblems(
+  page: Page,
+  scope: HeaderScope,
+  reference: BoxReference,
+): Promise<string[]> {
+  const { raised, runs, oldBoxes } = await readSplitContour(page, scope);
+  if (raised === null) return ["no raised member"];
+  const problems: string[] = [];
+  if (oldBoxes > 0) {
+    problems.push(`${String(oldBoxes)} closed tab box(es) still drawn`);
+  }
+  if (Math.abs(raised.height - reference.height) > 0.5) {
+    problems.push(
+      `the raised member is ${raised.height.toFixed(1)}px tall, a lone tab's box ${reference.height.toFixed(1)}px`,
+    );
+  }
+  if (scope === "strip" && Math.abs(raised.y - reference.y) > 0.5) {
+    problems.push(
+      `the raised member's top is at ${raised.y.toFixed(1)}, a lone tab's box at ${reference.y.toFixed(1)}`,
+    );
+  }
+  if (runs.length !== 2) {
+    problems.push(`${String(runs.length)} underline runs, expected 2`);
+  }
+  for (const run of runs) {
+    if (Math.abs(run.bottom - raised.bottom) > 0.5) {
+      problems.push(
+        `an underline run ends at ${run.bottom.toFixed(1)}, the raised member's feet at ${raised.bottom.toFixed(1)}`,
+      );
+    }
+  }
+  const pieces = [...runs, raised].sort((a, b) => a.x - b.x);
+  for (let i = 1; i < pieces.length; i += 1) {
+    const gap = pieces[i].x - pieces[i - 1].right;
+    if (Math.abs(gap) > 0.5) {
+      problems.push(
+        `a ${gap.toFixed(1)}px break in the contour at x ${pieces[i - 1].right.toFixed(1)}`,
+      );
+    }
+  }
+  note(
+    `${scope}: raised ${boxText(raised)}, runs ${runs.map(boxText).join(" ")}`,
+  );
+  return problems;
+}
+
 /**
  * A coloured tab's own edge-to-edge mark, resolved from its rendered pixel:
  * `null` where the tab carries none. Read at the DOM element the tab draws
@@ -566,19 +665,21 @@ test("an inactive tab's real hover is the same box as the active one, with groun
   }
 });
 
-test("the split pair's focused member is the same box as a lone active tab, in both themes", async () => {
+test("the split pair's focused member rises where a lone active tab's box stands, out of one underline, and nothing of it reaches below the header, in both themes", async () => {
   const page = getPage();
   for (const theme of THEMES) {
     const lone = await loneBox(page, theme);
     await activateAndWait(page, SPLIT.call, SPLIT.itemId);
-    await eventuallyNoProblems(
-      `split pair, ${theme}`,
-      async () => (await boxProblems(page, "strip", lone)).problems,
+    await eventuallyNoProblems(`split pair, ${theme}`, () =>
+      splitContourProblems(page, "strip", lone),
+    );
+    await eventuallyNoProblems(`split pair strip, ${theme}`, async () =>
+      stripProblems(await readHeader(page, "strip")),
     );
   }
 });
 
-test("the drag overlays wear the same box: a lone tab, then the split pair", async () => {
+test("the drag overlays wear the active item's own chrome: a lone tab's box, then the split pair's contour", async () => {
   const page = getPage();
   await setThemeAndWait(page, "dark");
   await activateAndWait(page, EPSILON.call, EPSILON.itemId);
@@ -621,7 +722,10 @@ test("the drag overlays wear the same box: a lone tab, then the split pair", asy
       ['[data-testid="header-tab-drag-overlay"]'],
       3,
     );
-    const { problems } = await boxProblems(page, "overlay", reference);
+    const problems =
+      active === SPLIT
+        ? await splitContourProblems(page, "overlay", reference)
+        : (await boxProblems(page, "overlay", reference)).problems;
     for (const problem of problems)
       violations.add(`${what} drag overlay: ${problem}`);
     // Back to where the drag began, and released there, so nothing reorders.

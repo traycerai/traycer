@@ -50,6 +50,7 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { useCoarsePointerOpenAutoFocus } from "@/hooks/ui/use-coarse-pointer-open-autofocus";
+import { listNavigationKey } from "@/lib/keybindings/list-navigation-key";
 import { cn } from "@/lib/utils";
 
 export interface FallbackModelPatternComboboxProps {
@@ -629,12 +630,13 @@ function PatternPickerBody(props: {
   const onKeyDown = (event: KeyboardEvent<HTMLInputElement>): void => {
     // `stopPropagation` keeps each of these from ALSO reaching cmdk's root
     // handler, which would move its own highlight past refused options.
-    switch (event.key) {
+    const navigationKey = listNavigationKey(event);
+    switch (navigationKey) {
       case "ArrowDown":
       case "ArrowUp": {
         event.preventDefault();
         event.stopPropagation();
-        move(event.key === "ArrowDown" ? 1 : -1);
+        move(navigationKey === "ArrowDown" ? 1 : -1);
         return;
       }
       case "Enter": {

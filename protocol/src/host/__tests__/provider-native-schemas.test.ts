@@ -818,7 +818,7 @@ describe("carrier envelopes (object-preserving, no unions)", () => {
       providersNativeMutateResponseSchema.parse({
         result: { ok: true, kind: "mcp", servers: [] },
       }).result,
-    ).toEqual({ ok: true, kind: "mcp", servers: [] });
+    ).toEqual({ ok: true, kind: "mcp", servers: [], notices: [] });
   });
 
   // `result` is deliberately REQUIRED on these methods: they exist only to

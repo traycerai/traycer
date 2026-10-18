@@ -23,6 +23,20 @@ export interface ConfirmDestructiveDialogProps {
   actionLabel: string;
   isPending: boolean;
   /**
+   * Keep Cancel, Escape and the overlay live while `isPending`, with Cancel
+   * relabelled "Close". Only the confirm button stays inert.
+   *
+   * Opt-in, and off by default, because the lock is load-bearing for many
+   * callers: their `onOpenChange(false)` clears the target the running
+   * mutation was armed against, or resets a retry key, and some do not
+   * disable their opener while pending. Turn it on only for a caller whose
+   * action runs to completion on its own once dispatched, whose close handler
+   * clears nothing the mutation still needs, and whose opener is disabled
+   * while pending - typically a long-running host call that would otherwise
+   * hold a modal over the app until it settles.
+   */
+  dismissableWhilePending?: boolean;
+  /**
    * Why this action cannot be performed at all, or `null` when it can.
    *
    * Disables confirm and renders the reason. Deliberately not optional: a
@@ -53,6 +67,7 @@ export function ConfirmDestructiveDialog(props: ConfirmDestructiveDialogProps) {
     blockedReason,
     onConfirm,
   } = props;
+  const closeLocked = isPending && props.dismissableWhilePending !== true;
 
   /**
    * The control the dialog was opened FROM, so Escape and Cancel have somewhere
@@ -77,7 +92,7 @@ export function ConfirmDestructiveDialog(props: ConfirmDestructiveDialogProps) {
   const openerRef = useRef<HTMLElement | null>(null);
 
   return (
-    <Dialog open={open} onOpenChange={isPending ? undefined : onOpenChange}>
+    <Dialog open={open} onOpenChange={closeLocked ? undefined : onOpenChange}>
       <DialogContent
         layout="banded"
         showCloseButton={false}
@@ -116,11 +131,23 @@ export function ConfirmDestructiveDialog(props: ConfirmDestructiveDialogProps) {
           // `document.body`. What is returned here is the DECISION, not the
           // outcome.
           if (opener === null || !opener.isConnected) return;
+          // A caller that keeps this dialog dismissable while its action
+          // runs disables the opener for that window, and `.focus()` on a
+          // disabled control is a silent no-op that would drop the keyboard
+          // on `document.body`. Return it to the nearest enclosing focus
+          // surface instead (the Settings dialog's own content, which Radix
+          // gives `tabindex="-1"`), so Tab resumes from there rather than
+          // from the top of the document. With no such surface, fall through
+          // to the default, which lands on the body either way.
+          const target = opener.matches(":disabled")
+            ? (opener.parentElement?.closest<HTMLElement>("[tabindex]") ?? null)
+            : opener;
+          if (target === null) return;
           // Radix's own handler runs only while the default is not prevented,
           // so preventing it here is what stops the null-trigger focus from
           // undoing this.
           event.preventDefault();
-          opener.focus();
+          target.focus();
         }}
       >
         <div className="flex min-w-0 items-start gap-3 p-5">
@@ -162,13 +189,15 @@ export function ConfirmDestructiveDialog(props: ConfirmDestructiveDialogProps) {
             type="button"
             variant="ghost"
             size="sm"
-            disabled={isPending}
+            disabled={closeLocked}
             onClick={() => {
               onOpenChange(false);
             }}
             data-testid="confirm-cancel"
           >
-            Cancel
+            {/* Once dispatched there is nothing left to cancel: the action
+                runs regardless and this button only closes the dialog. */}
+            {isPending && !closeLocked ? "Close" : "Cancel"}
           </Button>
           <Button
             type="button"

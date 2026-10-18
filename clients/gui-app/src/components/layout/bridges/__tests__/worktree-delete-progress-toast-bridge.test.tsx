@@ -22,6 +22,7 @@ const mocked = vi.hoisted<{
     failed: 0,
     active: 0,
     scopeKeys: [],
+    declinedKind: null,
   },
 }));
 
@@ -46,7 +47,7 @@ function progressSummary(input: {
   readonly failed: number;
   readonly active: number;
 }): WorktreeDeleteProgressSummary {
-  return input;
+  return { ...input, declinedKind: null };
 }
 
 function renderBridge(): RenderResult {
@@ -172,6 +173,40 @@ describe("<WorktreeDeleteProgressToastBridge />", () => {
         document.querySelector("[data-sonner-toast] [data-icon] svg"),
       ).not.toBeNull();
     });
+  });
+
+  it("carries the shared decline sentence in the failure toast, and refreshes it when the reason changes", async () => {
+    const view = renderBridge();
+    await screen.findByText("0/6 deleted");
+
+    rerenderWithSummary(view, {
+      ...progressSummary({
+        scopeKeys: ["batch-a"],
+        total: 3,
+        deleted: 0,
+        failed: 3,
+        active: 0,
+      }),
+      declinedKind: "teardown_failed",
+    });
+    await screen.findByText(
+      "0/3 deleted, 3 failed. The teardown script didn't finish successfully, so the worktrees were left in place - check the script and try again.",
+    );
+
+    // Same counts, different reason: the toast must not stay on the old text.
+    rerenderWithSummary(view, {
+      ...progressSummary({
+        scopeKeys: ["batch-a"],
+        total: 3,
+        deleted: 0,
+        failed: 3,
+        active: 0,
+      }),
+      declinedKind: "removal_failed",
+    });
+    await screen.findByText(
+      "0/3 deleted, 3 failed. The worktrees couldn't be fully removed and parts of them may still be on disk - refresh the list and try again, or check the folders.",
+    );
   });
 
   it("shows progress again when a new batch joins the active scope", async () => {

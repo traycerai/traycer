@@ -898,7 +898,18 @@ export type RotatedTokensOutcome =
       readonly token: string;
       readonly refreshToken: string;
     }
-  | { readonly kind: "invalid" }
+  | {
+      readonly kind: "invalid";
+      /**
+       * Boxed when the body READ threw something other than a parse failure:
+       * the connection ended or stalled mid-body (undici's `terminated` with
+       * `cause.code = UND_ERR_SOCKET`, `UND_ERR_BODY_TIMEOUT`), so no complete
+       * body ever arrived. `null` for a body that arrived and is not a token
+       * pair. The outcome is `invalid` either way, as it always was; the box
+       * only lets a caller that logs say WHY.
+       */
+      readonly readFailure: { readonly error: unknown } | null;
+    }
   | { readonly kind: "transient" };
 
 /**
@@ -916,13 +927,15 @@ export async function readRotatedTokens(
   try {
     body = await response.json();
   } catch (error) {
-    return isAbortOrTimeout(error)
-      ? { kind: "transient" }
-      : { kind: "invalid" };
+    if (isAbortOrTimeout(error)) return { kind: "transient" };
+    return {
+      kind: "invalid",
+      readFailure: error instanceof SyntaxError ? null : { error },
+    };
   }
 
   if (body === null || typeof body !== "object") {
-    return { kind: "invalid" };
+    return { kind: "invalid", readFailure: null };
   }
 
   const record = body as Record<string, unknown>;
@@ -934,7 +947,7 @@ export async function readRotatedTokens(
     typeof refreshToken !== "string" ||
     refreshToken.length === 0
   ) {
-    return { kind: "invalid" };
+    return { kind: "invalid", readFailure: null };
   }
 
   return { kind: "ok", token, refreshToken };

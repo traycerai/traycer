@@ -308,6 +308,10 @@ vi.mock("@/hooks/providers/use-providers-mcp-mutate-mutation", () => ({
     mutateAsync: vi.fn(),
     isPending: false,
   }),
+  useProvidersMcpApplyRemedy: () => ({
+    mutateAsync: vi.fn(),
+    isPending: false,
+  }),
 }));
 
 vi.mock("@/hooks/providers/use-providers-mcp-discover-mutation", () => ({

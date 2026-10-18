@@ -130,7 +130,9 @@ export function QuestionPage(props: QuestionPageProps) {
   }
 
   return (
-    <div className="flex flex-col gap-1.5">
+    // Named query container: the option row spends its pixels on the label,
+    // so its number badge only shows once there is room for it.
+    <div className="@container/interview-options flex flex-col gap-1.5">
       <ul className="m-0 flex list-none flex-col gap-1.5 pl-0">
         {question.options.map((option, index) => {
           const selected = draft.selected.has(index);
@@ -220,7 +222,7 @@ function OtherIconBadge(props: { selected: boolean }) {
     <span
       aria-hidden
       className={cn(
-        "pointer-events-none relative z-10 inline-flex size-5 shrink-0 items-center justify-center rounded-full border transition-colors",
+        "pointer-events-none relative z-10 ml-auto inline-flex size-5 shrink-0 items-center justify-center rounded-full border transition-colors",
         props.selected
           ? "border-primary/70 bg-primary/90 text-primary-foreground"
           : "border-border/70 bg-background/60 text-muted-foreground/70",
@@ -301,7 +303,7 @@ function OptionRow(props: OptionRowProps) {
             selected={selected}
           />
         )}
-        <span className="pointer-events-none relative z-10 min-w-0 truncate font-medium text-foreground/90">
+        <span className="pointer-events-none relative z-10 min-w-0 break-words font-medium text-foreground/90">
           {label}
         </span>
         {option === null ? null : (
@@ -313,7 +315,6 @@ function OptionRow(props: OptionRowProps) {
             disclosure={disclosure}
           />
         )}
-        <span aria-hidden className="pointer-events-none min-w-0 flex-1" />
         {badge}
       </div>
       {option === null ? null : (
@@ -329,7 +330,7 @@ function OptionNumberBadge(props: { index: number }) {
   return (
     <span
       aria-hidden
-      className="pointer-events-none relative z-10 inline-flex size-5 shrink-0 items-center justify-center rounded-full border border-border/70 bg-background/60 text-[0.625rem] font-semibold tabular-nums text-muted-foreground/70"
+      className="pointer-events-none relative z-10 ml-auto hidden size-5 shrink-0 items-center justify-center rounded-full border border-border/70 bg-background/60 text-[0.625rem] font-semibold tabular-nums text-muted-foreground/70 @[15rem]/interview-options:inline-flex"
     >
       {props.index}
     </span>

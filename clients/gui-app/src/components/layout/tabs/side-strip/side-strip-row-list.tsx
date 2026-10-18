@@ -3,6 +3,7 @@ import type { HostNotificationsEntityRef } from "@traycer/protocol/host/notifica
 import { useEpicDndStore } from "@/components/epic-canvas/dnd/dnd-store";
 import { VERTICAL_STRIP_AXIS } from "@/components/epic-canvas/dnd/strip-axis";
 import { resolveMinimapRailMaskClassName } from "@/components/minimap/minimap-rail-mask";
+import { listNavigationKey } from "@/lib/keybindings/list-navigation-key";
 import type { EdgeSide } from "@/lib/layout/layout-arrangement";
 import { cn } from "@/lib/utils";
 import {
@@ -232,7 +233,11 @@ function moveFocusByArrow(event: KeyboardEvent<HTMLDivElement>): void {
   if (!(target instanceof HTMLElement)) return;
   if (target.getAttribute("role") !== "tab") return;
   if (useEpicDndStore.getState().activeHeaderTab !== null) return;
-  const next = stripArrowTarget(event.currentTarget, target, event.key);
+  const next = stripArrowTarget(
+    event.currentTarget,
+    target,
+    listNavigationKey(event),
+  );
   if (next === null) return;
   event.preventDefault();
   next.focus();

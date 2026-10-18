@@ -81,6 +81,7 @@ const compatibleHostStatus: HostStatusResponse = {
   updateTransaction: null,
   storeFormats: null,
   install: null,
+  processMemory: null,
 };
 
 vi.mock("@tanstack/react-router", async (importOriginal) => {

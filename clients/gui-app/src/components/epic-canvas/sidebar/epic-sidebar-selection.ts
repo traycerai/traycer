@@ -581,6 +581,66 @@ export function rootmostSelectedSidebarIds(args: {
   );
 }
 
+/**
+ * The rows a confirmed bulk delete dispatches, deepest agents first.
+ *
+ * An artifact's delete cascades to its subtree, so a selected descendant of a
+ * selected artifact is dropped: deleting it too would be a second delete of a
+ * row the first already removes. An agent's delete removes only that record -
+ * its nested agents survive and move to the top level - so every selected
+ * agent is its own delete, whatever else is selected above it.
+ */
+export function sidebarBulkDeleteIds(args: {
+  readonly ids: readonly string[];
+  readonly tree: EpicTreeIndex;
+  readonly isAgentId: (id: string) => boolean;
+}): readonly string[] {
+  const agentIds = args.ids.filter((id) => args.isAgentId(id));
+  const artifactIds = rootmostSelectedSidebarIds({
+    ids: args.ids.filter((id) => !args.isAgentId(id)),
+    tree: args.tree,
+  });
+  const depthOf = (id: string): number => {
+    let depth = 0;
+    let parentId = Object.hasOwn(args.tree.nodeById, id)
+      ? args.tree.nodeById[id].parentId
+      : null;
+    while (parentId !== null && Object.hasOwn(args.tree.nodeById, parentId)) {
+      depth += 1;
+      parentId = args.tree.nodeById[parentId].parentId;
+    }
+    return depth;
+  };
+  const deepestFirst = agentIds
+    .map((id, index) => ({ id, index, depth: depthOf(id) }))
+    .sort((a, b) => b.depth - a.depth || a.index - b.index)
+    .map((entry) => entry.id);
+  return [...deepestFirst, ...artifactIds];
+}
+
+/**
+ * Of `ids`, each beneath `rootId` when it was captured, the ones `tree` still
+ * places beneath it: `rootId` itself, and every row that is present with an
+ * ancestor chain passing `rootId`. A row missing from the tree, or beneath a
+ * missing row, is not counted - archived records stay in the tree, so a
+ * missing row was deleted, not hidden by the root's archive.
+ */
+export function sidebarIdsStillWithinRoot(args: {
+  readonly ids: readonly string[];
+  readonly rootId: string;
+  readonly tree: EpicTreeIndex;
+}): readonly string[] {
+  return args.ids.filter((id) => {
+    let currentId: string | null = id;
+    while (currentId !== null) {
+      if (currentId === args.rootId) return true;
+      if (!Object.hasOwn(args.tree.nodeById, currentId)) return false;
+      currentId = args.tree.nodeById[currentId].parentId;
+    }
+    return false;
+  });
+}
+
 export function sidebarIdsWithinRoots(args: {
   readonly ids: readonly string[];
   readonly rootIds: readonly string[];
@@ -766,6 +826,74 @@ function idsVisibleIn(
     if (selectableIdSet.has(id)) next.add(id);
     return next;
   }, new Set());
+}
+
+/**
+ * How many SELECTED rows each dispatched delete of
+ * {@link sidebarBulkDeleteIds} stands for: 1 for an agent, and for an
+ * artifact itself plus every selected artifact under it, whose rows its
+ * cascade removes with it. A batch notice counts selected rows, so a
+ * cascaded child counts as selected and as deleted (or not) with its root.
+ */
+export function sidebarBulkDeleteSelectedRows(args: {
+  readonly ids: readonly string[];
+  readonly tree: EpicTreeIndex;
+  readonly isAgentId: (id: string) => boolean;
+}): ReadonlyMap<string, number> {
+  const artifactIds = args.ids.filter((id) => !args.isAgentId(id));
+  const selectedArtifacts = new Set(artifactIds);
+  const rows = new Map<string, number>();
+  for (const id of args.ids) {
+    if (args.isAgentId(id)) rows.set(id, 1);
+  }
+  for (const id of artifactIds) {
+    const root = topmostSelectedAncestor(id, selectedArtifacts, args.tree);
+    const target = root ?? id;
+    rows.set(target, (rows.get(target) ?? 0) + 1);
+  }
+  return rows;
+}
+
+/**
+ * Where each dispatched delete of {@link sidebarBulkDeleteIds} first appears
+ * in the selection: its earliest selected row, which for an artifact can be a
+ * selected descendant its cascade removes. Dispatch order puts agents deepest
+ * first and artifacts last, which the deletes need; a batch notice lists
+ * refusal advice in selection order, so it sorts its outcomes by this.
+ */
+export function sidebarBulkDeleteSelectionOrder(args: {
+  readonly ids: readonly string[];
+  readonly tree: EpicTreeIndex;
+  readonly isAgentId: (id: string) => boolean;
+}): ReadonlyMap<string, number> {
+  const selectedArtifacts = new Set(
+    args.ids.filter((id) => !args.isAgentId(id)),
+  );
+  const order = new Map<string, number>();
+  args.ids.forEach((id, index) => {
+    const target = args.isAgentId(id)
+      ? id
+      : (topmostSelectedAncestor(id, selectedArtifacts, args.tree) ?? id);
+    if (!order.has(target)) order.set(target, index);
+  });
+  return order;
+}
+
+/** The highest ancestor of `id` that is in `selectedIds`, or `null`. */
+function topmostSelectedAncestor(
+  id: string,
+  selectedIds: ReadonlySet<string>,
+  tree: EpicTreeIndex,
+): string | null {
+  let topmost: string | null = null;
+  if (!Object.hasOwn(tree.nodeById, id)) return null;
+  let parentId = tree.nodeById[id].parentId;
+  while (parentId !== null) {
+    if (selectedIds.has(parentId)) topmost = parentId;
+    if (!Object.hasOwn(tree.nodeById, parentId)) break;
+    parentId = tree.nodeById[parentId].parentId;
+  }
+  return topmost;
 }
 
 function hasSelectedAncestor(

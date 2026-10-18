@@ -49,6 +49,7 @@ import {
   type DraftInventoryRow,
   type DraftInventoryScope,
 } from "@/lib/drafts/draft-inventory";
+import { listNavigationKey } from "@/lib/keybindings/list-navigation-key";
 import { useBareKeyClaimer } from "@/lib/keybindings/use-bare-key-claimer";
 
 export interface ComposerDraftsControlProps {
@@ -228,14 +229,15 @@ function ComposerDraftsControlImpl(props: ComposerDraftsControlProps) {
         setOpen(false, "button");
         return;
       }
-      if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      const navigationKey = listNavigationKey(event);
+      if (navigationKey === "ArrowDown" || navigationKey === "ArrowUp") {
         if (rows.length === 0) return;
         event.preventDefault();
         event.stopPropagation();
         const nextRow = rows.at(
           nextRowIndex(
             rows.findIndex((row) => row.id === selectedId),
-            event.key === "ArrowDown" ? "down" : "up",
+            navigationKey === "ArrowDown" ? "down" : "up",
             rows.length,
           ),
         );

@@ -4,6 +4,7 @@ import {
   contentBlockSchema,
   contentBlockSchemaPreFallback,
   contentBlockSchemaPreBrowser,
+  contentBlockSchemaPrePage,
   contentBlockSchemaPreReceipt,
   contentBlockSchemaV18,
   contentBlockSchemaPreImage,
@@ -243,9 +244,56 @@ export const userMessageSchemaV18 = lazySchema(() =>
 // unsubmitted prompt must never become fake provider context in a new chat.
 // Absence retains legacy semantics. Only the host's atomic execution claim
 // removes this marker; a client edit cannot decide that a message was sent.
-export const userMessageSchema = lazySchema(() =>
+//
+// Wire-freeze copy of the user row as `chat.subscribe@1.15` through `@1.24`
+// ship it: the `1.7`/`1.8` field set plus `providerHistory`, without the
+// `conversationRequest` that `1.25` added. Bound by `messageSchemaPreReceipt`
+// (`1.15`-`1.17`), `messageSchemaPrePage` (`1.18`-`1.21`), the `1.15`-`1.21`
+// common frames, and - through `openUserMessageSchemaPreConversation` - the
+// `1.22`-`1.24` open-harness lines. A later key must not reach them through it.
+export const userMessageSchemaPreConversation = lazySchema(() =>
   userMessageSchemaV18.safeExtend({
     providerHistory: z.literal("excluded").optional(),
+  }),
+);
+
+/**
+ * The request a human's message in a bot conversation opened (Tracy Bots,
+ * `chat.subscribe@1.25`). Present on EVERY user row of a conversation record
+ * and on no other row: the host mints `requestId` when it writes the row, and
+ * the bot's trunk resolves it through its `traycer_reply` /
+ * `traycer_resolve_request` tools, which set `resolvedAt` (and, for a reply,
+ * the `messageId` of the bot's reply row). `resolvedAt: null` is an OPEN
+ * request: what the trunk's per-turn digest counts and what Home shows.
+ *
+ * Carried on the row rather than as an event so a claim's cloud rebuild keeps
+ * the request state with the message that opened it, and so a reader with the
+ * conversation's user rows alone can list what is still open.
+ */
+export const conversationRequestSchema = lazySchema(() =>
+  z.object({
+    requestId: z.string().min(1),
+    resolvedAt: z.number().nullable(),
+    resolvedByMessageId: z.string().nullable(),
+  }),
+);
+export type ConversationRequest = z.infer<typeof conversationRequestSchema>;
+
+/**
+ * The live user row (`chat.subscribe@1.25`): the frozen pre-conversation
+ * shape with the bot-conversation request. ABSENT means "not a conversation
+ * request" - every row outside a bot conversation, and every row written
+ * before the key - so it is `.optional()` for the reason `turnProfile` is: a
+ * defaulted key would be required on the type at the hundreds of sites that
+ * build a user row with no request to state.
+ *
+ * Tolerance, not projection: every line below `1.25` binds the frozen copy
+ * above and strips the key on decode, and such a peer renders the row as the
+ * plain user message it is.
+ */
+export const userMessageSchema = lazySchema(() =>
+  userMessageSchemaPreConversation.safeExtend({
+    conversationRequest: conversationRequestSchema.optional(),
   }),
 );
 export type UserMessage = z.infer<typeof userMessageSchema>;
@@ -830,8 +878,41 @@ export const assistantMessageSchemaPreReceipt = lazySchema(() =>
 /** The message union shipped on chat.subscribe `1.15` through `1.17`. */
 export const messageSchemaPreReceipt = lazySchema(() =>
   z.discriminatedUnion("role", [
-    userMessageSchema,
+    userMessageSchemaPreConversation,
     assistantMessageSchemaPreReceipt,
+  ]),
+);
+
+// ── Wire-freeze variant (pre-page, `chat.subscribe@1.18`-`@1.21`) ──────────
+// Hand-frozen copy of `assistantMessageSchema` as those lines ship it: the
+// complete live shape with `blocks` swapped for `contentBlockSchemaPrePage`, so
+// a tool call's `page` / `mcpApp` stamps (`1.23`) cannot reach them. Same key
+// order as the live `.extend()` result, because the order is part of the
+// captured digest.
+export const assistantMessageSchemaPrePage = lazySchema(() =>
+  z.object({
+    role: z.literal("assistant"),
+    messageId: z.string().min(1),
+    sender: agentSenderSchema,
+    blocks: z.array(contentBlockSchemaPrePage),
+    startedAt: z.number().nullable().default(null),
+    blocksVersion: z.number().int().nonnegative().optional(),
+    timestamp: z.number(),
+    turnId: z.string().nullable(),
+    usage: tokenUsageSchema.nullable(),
+    reasoningEffort: z.string().nullable().default(null),
+    serviceTier: z.string().nullable().default(null),
+    envCredentialVar: z.string().nullable().default(null),
+    imageResolutions: z.array(imageResolutionEntrySchema).default([]),
+    turnProfile: assistantTurnProfileSchema.optional(),
+  }),
+);
+
+/** The message union shipped on chat.subscribe `1.18` through `1.21`. */
+export const messageSchemaPrePage = lazySchema(() =>
+  z.discriminatedUnion("role", [
+    userMessageSchemaPreConversation,
+    assistantMessageSchemaPrePage,
   ]),
 );
 

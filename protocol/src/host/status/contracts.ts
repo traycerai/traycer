@@ -737,3 +737,52 @@ export const hostStatusUpgradeV15ToV16 = defineUpgradePath<
         : upgradeUpdateOperationV1ToV2(response.updateOperation),
   }),
 });
+
+/**
+ * The host process's own memory, in bytes: the V8 heap limit it was started
+ * with, the heap in use, and the resident set. Read when the reply is built,
+ * so it is the host as it is now.
+ */
+export const hostStatusProcessMemorySchema = lazySchema(() =>
+  z.object({
+    heapLimitBytes: z.number().int().nonnegative(),
+    heapUsedBytes: z.number().int().nonnegative(),
+    rssBytes: z.number().int().nonnegative(),
+  }),
+);
+export type HostStatusProcessMemory = z.infer<
+  typeof hostStatusProcessMemorySchema
+>;
+
+/**
+ * v1.7 adds `processMemory`. `null` means the host did not report: a peer
+ * below this minor, or a reading that could not be taken. Every other field
+ * is v1.6's, unchanged.
+ *
+ * A caller on 1.6 or older is served by the host re-parsing this response
+ * through that minor's schema; zod strips the key, so an older caller receives
+ * exactly the bytes it did before 1.7 existed.
+ */
+export const hostStatusV17 = defineRpcContract({
+  method: "host.status",
+  schemaVersion: { major: 1, minor: 7 } as const,
+  requestSchema: hostStatusV16.requestSchema,
+  responseSchema: lazySchema(() =>
+    hostStatusV16.responseSchema.extend({
+      processMemory: hostStatusProcessMemorySchema.nullable(),
+    }),
+  ),
+});
+
+// A pre-1.7 peer never reported its memory. `null` - "did not report" -
+// never a zeroed reading: a heap of 0 bytes is a claim about a host that was
+// never asked, the same fabrication `busyBreakdown: null` refuses above.
+export const hostStatusUpgradeV16ToV17 = defineUpgradePath<
+  typeof hostStatusV16,
+  typeof hostStatusV17
+>({
+  from: hostStatusV16.schemaVersion,
+  to: hostStatusV17.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => ({ ...response, processMemory: null }),
+});

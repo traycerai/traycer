@@ -151,6 +151,10 @@ export interface RenderedMessagesDisplayContext {
     sender: OpenAgentSender,
     reasoningEffort: string | null,
   ) => string | null;
+  readonly resolveAgentServiceTierLabel: (
+    sender: OpenAgentSender,
+    serviceTier: string | null,
+  ) => string | null;
   readonly contentBlocksPreview: (
     blocks: ReadonlyArray<OpenContentBlock>,
   ) => string;
@@ -2140,6 +2144,10 @@ function pendingTurnMeta(
       turn.reasoningEffort,
     ),
     serviceTier: turn.serviceTier,
+    serviceTierLabel: ctx.resolveAgentServiceTierLabel(
+      sender,
+      turn.serviceTier,
+    ),
     // Every field above is settings-derived - what the user PICKED - which is
     // all that exists pre-turn. The credential a spawn actually used is not
     // knowable yet (this indicator renders during setup, before the provider
@@ -3573,6 +3581,10 @@ function renderAssistantTurnSlice(
       input.acc.reasoningEffort,
     ),
     serviceTier: input.acc.serviceTier,
+    serviceTierLabel: input.ctx.resolveAgentServiceTierLabel(
+      input.acc.sender,
+      input.acc.serviceTier,
+    ),
     envCredentialVar: input.acc.envCredentialVar,
     costUsd: input.acc.costUsd,
   };
@@ -3877,6 +3889,11 @@ function renderUserMessage(
     runState: null,
     sessionAnchor: message.sessionAnchor,
     steerBadge,
+    // Only a bot conversation's user rows carry one; the key stays absent
+    // everywhere else so no row outside a conversation grows a request state.
+    ...(message.conversationRequest === undefined
+      ? {}
+      : { conversationRequest: message.conversationRequest }),
   };
 }
 
@@ -4933,6 +4950,30 @@ function parentIdField(parentBlockId: string | null | undefined): {
     : { parentId: parentBlockId };
 }
 
+/**
+ * A tool call's page stamp, or `null` for a record that never carried the
+ * field. Same hazard as `assistantImageResolutions`: a snapshot taken on a
+ * SHALLOW parse path (`ChatStreamClient`, live and `1.6` lines alike) runs no
+ * zod defaults, so a block a pre-pages host stored arrives typed as carrying
+ * `page: null` and genuinely `undefined` - and every `page !== null` check
+ * downstream would promote it to a page row with no page.
+ */
+function toolCallPageStamp(
+  block: Extract<OpenContentBlock, { type: "tool_call" }>,
+): Extract<OpenContentBlock, { type: "tool_call" }>["page"] {
+  // Read through `unknown` for the reason `assistantImageResolutions` gives.
+  const page: unknown = block.page;
+  return page === undefined ? null : block.page;
+}
+
+/** A tool call's app stamp, or `null`, for the reason {@link toolCallPageStamp} gives. */
+function toolCallMcpAppStamp(
+  block: Extract<OpenContentBlock, { type: "tool_call" }>,
+): Extract<OpenContentBlock, { type: "tool_call" }>["mcpApp"] {
+  const mcpApp: unknown = block.mcpApp;
+  return mcpApp === undefined ? null : block.mcpApp;
+}
+
 const BLOCK_HANDLERS: {
   [K in OpenContentBlock["type"]]: (
     block: Extract<OpenContentBlock, { type: K }>,
@@ -5007,6 +5048,8 @@ const BLOCK_HANDLERS: {
     durationMs: backgroundToolDurationMs(block),
     parentId: block.parentBlockId ?? null,
     imageResults: block.imageResults,
+    page: toolCallPageStamp(block),
+    mcpApp: toolCallMcpAppStamp(block),
   }),
   file_change: (block) => ({
     kind: "file_change",

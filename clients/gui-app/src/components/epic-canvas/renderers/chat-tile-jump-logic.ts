@@ -70,6 +70,42 @@ function segmentContainsBackgroundBlock(
   );
 }
 
+/**
+ * The block of the loaded row that showed the page `pageRef` (`path@sha`, the
+ * form a stamp's `derivedFrom` takes), or `null` when no loaded row did.
+ */
+export function pageBlockIdForRef(
+  messages: ReadonlyArray<ChatMessageModel>,
+  pageRef: string,
+): string | null {
+  for (const message of messages) {
+    for (const segment of message.segments) {
+      const blockId = pageBlockIdIn(segment, pageRef);
+      if (blockId !== null) return blockId;
+    }
+  }
+  return null;
+}
+
+function pageBlockIdIn(
+  node: BackgroundBlockSearchNode,
+  pageRef: string,
+): string | null {
+  if (
+    "kind" in node &&
+    node.kind === "tool" &&
+    node.page !== null &&
+    `${node.page.path}@${node.page.sha256}` === pageRef
+  ) {
+    return node.id;
+  }
+  for (const child of backgroundBlockSearchChildren(node)) {
+    const blockId = pageBlockIdIn(child, pageRef);
+    if (blockId !== null) return blockId;
+  }
+  return null;
+}
+
 function backgroundBlockSearchChildren(
   segment: BackgroundBlockSearchNode,
 ): ReadonlyArray<BackgroundBlockSearchNode> {

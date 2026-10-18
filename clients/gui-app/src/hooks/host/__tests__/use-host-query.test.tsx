@@ -415,6 +415,7 @@ describe("useHostQuery auth readiness", () => {
             updateTransaction: null,
             storeFormats: null,
             install: null,
+            processMemory: null,
           };
         },
       },
@@ -1000,6 +1001,7 @@ function createHostQueryFixture(): {
           updateTransaction: null,
           storeFormats: null,
           install: null,
+          processMemory: null,
         };
       },
     },
@@ -1063,6 +1065,7 @@ function createEndpointGatedHostQueryFixture(): {
             updateTransaction: null,
             storeFormats: null,
             install: null,
+            processMemory: null,
           };
         },
       },
@@ -1221,6 +1224,7 @@ const STATUS_RESPONSE = {
   updateTransaction: null,
   storeFormats: null,
   install: null,
+  processMemory: null,
 } as const;
 
 /**

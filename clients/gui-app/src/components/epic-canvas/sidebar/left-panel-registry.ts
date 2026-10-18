@@ -1,5 +1,6 @@
 import {
   Files,
+  FolderOpen,
   FolderTree,
   GitBranch,
   GitPullRequest,
@@ -100,6 +101,17 @@ export const LEFT_PANEL_DEFINITIONS: ReadonlyArray<LeftPanelMetadataDefinition> 
       isAutoVisible: () => true,
       forcedOnHint: null,
       supportsHeaderSearch: true,
+    },
+    {
+      // `FolderOpen`: `Files` is Artifacts' icon and `FolderTree` is File
+      // Tree's. These are the files the task's agents produced and the user
+      // dropped in, shared with everyone in the task (D40).
+      id: "files",
+      title: "Files",
+      icon: FolderOpen,
+      isAutoVisible: () => true,
+      forcedOnHint: null,
+      supportsHeaderSearch: false,
     },
     {
       id: "git-diff",

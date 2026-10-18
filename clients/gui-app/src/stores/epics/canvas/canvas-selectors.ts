@@ -261,6 +261,24 @@ function activeTileRef(
   return canvas.tilesByInstanceId[pane.activeTabId] ?? null;
 }
 
+/**
+ * The active tile as the pane holds it, with NO record-backed filtering - for
+ * a reader that needs to know what the user is looking at whatever its kind
+ * (a terminal, browser, diff or PR tile included). Navigation and persistence
+ * must keep using {@link makeSelectActiveEpicArtifactRef}.
+ */
+export function makeSelectActiveTileRef(tabId: string | undefined) {
+  return (state: EpicCanvasStore): EpicCanvasTileRef | null =>
+    activeTileRef(state, tabId);
+}
+
+export function useActiveTileRef(
+  tabId: string | undefined,
+): EpicCanvasTileRef | null {
+  const selector = useMemo(() => makeSelectActiveTileRef(tabId), [tabId]);
+  return useEpicCanvasStore(selector);
+}
+
 export function makeSelectActiveEpicArtifactRef(tabId: string | undefined) {
   return (state: EpicCanvasStore): EpicCanvasTileRef | null => {
     const active = activeTileRef(state, tabId);

@@ -24,6 +24,14 @@ import {
   resolveAgentCliSurface,
 } from "./agent-surface";
 import { resolveCliVersion } from "./cli-version";
+import {
+  admitCliInvocation,
+  unexpectedDefaultDataRootWarning,
+} from "./data-migration-admission";
+import {
+  runDataControlEntry,
+  selectsDataControlCommand,
+} from "./data-migration/commands/data-control-entry";
 import { cliFinalizeUpgradeCommand } from "./commands/cli-finalize-upgrade";
 import { buildCliMarkSourceCommand } from "./commands/cli-mark-source";
 import { buildCliReAnchorCommand } from "./commands/cli-re-anchor";
@@ -46,6 +54,9 @@ import {
 } from "./commands/agent-role";
 import { buildAgentSelectionGuideCommand } from "./commands/agent-selection-guide";
 import { buildAgentSendCommand } from "./commands/agent-send";
+import { buildBotCheckinsCommand } from "./commands/bot-checkins";
+import { buildBotListCommand } from "./commands/bot-list";
+import { buildBotSendCommand } from "./commands/bot-send";
 import { buildAgentTitleFromHookCommand } from "./commands/agent-title-from-hook";
 import { buildAgentTurnEndedFromHookCommand } from "./commands/agent-turn-ended-from-hook";
 import { buildAgentSessionObservedFromHookCommand } from "./commands/agent-session-observed-from-hook";
@@ -168,7 +179,11 @@ import {
   assertAgentWorktreeCreateAllowed,
   readAgentWorktreeCreatePolicy,
 } from "./agent-worktree-create";
-import { writeStderr, writeStdout } from "./runner/std-write";
+import {
+  installStdioErrorGuards,
+  writeStderr,
+  writeStdout,
+} from "./runner/std-write";
 
 // Helper: register a runner-aware action handler. The runner owns
 // process termination, so anything composed via `withRunner` participates in
@@ -660,7 +675,15 @@ export function buildProgramWithAgentRoles(
     .description(
       "Traycer CLI - sign in, run the Traycer host on this machine, and work with the agents in a Task",
     )
-    .version(cliVersion);
+    .version(cliVersion)
+    // `traycer data ...` runs in its own control entry
+    // (`data-migration/commands/data-control-entry.ts`) and is deliberately
+    // not registered here, so nothing under `data` can fall through to this
+    // program. Listed as static text so it is still discoverable.
+    .addHelpText(
+      "after",
+      "\nData folder:\n  traycer data --help   where Traycer keeps its data: status, init, migrate, recover, cleanup\n",
+    );
 
   // Global runner flags so `traycer --json <subcommand>` works even when
   // the subcommand declares its own copy. Commander merges globals via
@@ -852,6 +875,7 @@ function registerCommands(program: Command, agentRolesEnabled: boolean): void {
   registerWorkspaceCommands(program);
   registerWorktreeCommands(program);
   registerAgentCommands(program, agentRolesEnabled);
+  registerBotCommands(program);
   registerMonitorCommand(program);
 }
 
@@ -1999,7 +2023,7 @@ function registerHostCommands(program: Command): void {
           "           host is still up. Runtime state is never purged here - removing it is",
           "           only safe once the supervisor is confirmed stopped, which needs a",
           "           backend completion contract that does not exist yet.",
-          "Neither mode touches your data or credentials under ~/.traycer.",
+          "Neither mode touches your data or credentials.",
           "",
         ].join("\n"),
       )
@@ -3605,6 +3629,67 @@ function registerAgentCommands(
   );
 }
 
+function registerBotCommands(program: Command): void {
+  const bot = program
+    .command("bot")
+    .description("List your bots, message them, and see what they follow");
+  const botArgument = "Bot id, or its title";
+
+  withRunner(
+    bot
+      .command("list")
+      .description(
+        "List your bots in every environment you belong to, with the host each runs on and its open requests",
+      ),
+    () => buildBotListCommand(),
+  );
+
+  // Sending is hidden and refused on the readonly surface (see
+  // `READONLY_REFUSED_COMMANDS`); the two reads stay offered.
+  withRunner(
+    bot
+      .command("send", {
+        hidden: resolveAgentCliSurface(readonlyEnv()) === "readonly",
+      })
+      .description(
+        "Message a bot and print the request it opens. The bot answers in a turn of its own, which counts toward your usage like any other agent turn.",
+      )
+      .argument("<bot>", botArgument)
+      .argument("<text>", "The message")
+      .option(
+        "--conversation <id>",
+        "Conversation to write to (defaults to the bot's first conversation, the one the app shows)",
+      )
+      .option(
+        "--wait <duration>",
+        "Wait up to this long for the bot to answer, e.g. 30s, 5m or 2h. Works only on the host the bot runs on.",
+      ),
+    (opts, args) =>
+      buildBotSendCommand({
+        bot: expectRequiredPositional(args[0], "bot"),
+        text: expectRequiredPositional(args[1], "text"),
+        conversationId:
+          typeof opts.conversation === "string" ? opts.conversation : null,
+        wait: typeof opts.wait === "string" ? opts.wait : null,
+      }),
+  );
+
+  withRunner(
+    bot
+      .command("checkins")
+      .description(
+        "List the tasks a bot follows, how often it checks in on each, and when it last did",
+      )
+      .argument("<bot>", botArgument)
+      .option("--task <id>", "Show only this task"),
+    (opts, args) =>
+      buildBotCheckinsCommand({
+        bot: expectRequiredPositional(args[0], "bot"),
+        taskId: typeof opts.task === "string" ? opts.task : null,
+      }),
+  );
+}
+
 // `monitor` is the long-running inbox subscriber the Claude Code plugin
 // spawns. Like `host start` it owns its own lifecycle and does NOT go
 // through the shared NDJSON runner - `addRunnerFlags` is applied only so
@@ -3662,7 +3747,11 @@ function registerMonitorCommand(program: Command): void {
         }\n`,
       );
       await finishAndExit(1);
+      return;
     }
+    // `runMonitor` returns only once stdout's reader has closed the pipe (an
+    // orphaned monitor): that is a normal end, not a failure.
+    await finishAndExit(0);
   });
 }
 
@@ -3674,14 +3763,25 @@ function registerMonitorCommand(program: Command): void {
 // the CLI invocation itself - including the Windows `traycer.exe`
 // suffix.
 const entryArgv = typeof process !== "undefined" ? process.argv[1] : undefined;
-if (isTraycerCliEntrypoint(entryArgv)) {
+// `traycer data ...` takes its own control entry INSTEAD of everything below:
+// no CLI log, no migration admission, no slot refresh, no ordinary program.
+// It must answer while a migration holds the startup barrier or the location
+// record is unusable, and the migration coordinator must be neither an
+// admitted participant nor a writer of the folder it moves. Only argv whose
+// command is `data` goes there; see `data-control-entry.ts`.
+const dataControl =
+  isTraycerCliEntrypoint(entryArgv) && selectsDataControlCommand(process.argv);
+if (dataControl) {
+  void runDataControlEntry(process.argv);
+}
+if (isTraycerCliEntrypoint(entryArgv) && !dataControl) {
   const entryLogger = createCliLogger(config.environment);
   installProcessFailureHandlers(entryLogger);
+  // Before any command runs, so every writer is covered - including the ones
+  // that bypass std-write (bare `process.stdout.write`, `console.error`). A
+  // reader that closed the pipe is not a CLI fault; see std-write.ts.
+  installStdioErrorGuards();
   const program = buildProgram();
-  entryLogger.debug("CLI entrypoint parsing argv", {
-    environment: config.environment,
-    argvLength: process.argv.length,
-  });
   // Keep the well-known CLI slot pointing at the anchored binary, BEFORE
   // commander parses anything.
   //
@@ -3720,6 +3820,45 @@ if (isTraycerCliEntrypoint(entryArgv)) {
   const supervisedStart = argvSelectsSupervisedHostStart(process.argv);
   const runEntry = async (): Promise<void> => {
     try {
+      // Before the slot refresh and before Commander: the slot, the CLI log and
+      // every command write under the data root, and none of that may happen
+      // while a data migration holds its startup barrier. A refusal writes
+      // nothing - not even the CLI log.
+      const admission = await admitCliInvocation();
+      if (admission.kind === "refused") {
+        if (argvRequestsJson(program)) {
+          const event = {
+            type: "result",
+            status: "error",
+            error: {
+              code: CLI_ERROR_CODES.DATA_MIGRATION_BLOCKED,
+              message: admission.message,
+              details: null,
+            },
+            timestamp: new Date().toISOString(),
+          };
+          writeStdout(`${JSON.stringify(event)}\n`);
+        } else {
+          writeStderr(
+            `traycer: ${admission.message} [code=${CLI_ERROR_CODES.DATA_MIGRATION_BLOCKED}]\n`,
+          );
+        }
+        await finishAndExit(1);
+        return;
+      }
+      // A person at a terminal hears about a populated default data folder
+      // that is not a known migration backup (Desktop shows its own notice);
+      // a service or Desktop-spawned invocation does not repeat it.
+      if (process.stderr.isTTY === true) {
+        const warning = unexpectedDefaultDataRootWarning();
+        if (warning !== null) writeStderr(`traycer: warning: ${warning}\n`);
+      }
+      // After admission: at debug level this appends to the CLI log under the
+      // data root.
+      entryLogger.debug("CLI entrypoint parsing argv", {
+        environment: config.environment,
+        argvLength: process.argv.length,
+      });
       const replacedRunningBinary =
         await refreshCliSlotBeforeCommand(supervisedStart);
       // The refresh repaired the slot for everything that launches from it

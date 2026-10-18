@@ -1,9 +1,24 @@
 import { useMemo } from "react";
-import { EDITORS, type EditorEntry } from "@traycer/protocol/host";
-import { useEditorOpenPathsSupportsV11 } from "@/hooks/editor/use-editor-open-paths-version";
+import {
+  EDITORS,
+  type EditorEntry,
+  type EditorId,
+} from "@traycer/protocol/host";
+import { useEditorOpenPathsVersion } from "@/hooks/editor/use-editor-open-paths-version";
 
-/** Editor ids outside the frozen 1.0 enum; a 1.0 host rejects them at parse. */
-const POST_V10_EDITOR_IDS: ReadonlySet<string> = new Set(["vscodium"]);
+/**
+ * The `editor.openPaths` minor that first accepts each editor id. Keyed by id,
+ * so an editor added to `EDITORS` without a floor fails to compile. 1.0 carries
+ * the original four; a 1.0 - 1.2 host rejects a later id at parse.
+ */
+const EDITOR_MINIMUM_MINOR: Readonly<Record<EditorId, number>> = {
+  vscode: 0,
+  cursor: 0,
+  windsurf: 0,
+  zed: 0,
+  vscodium: 1,
+  "code-oss": 3,
+};
 
 /**
  * The editors a menu may OFFER for `hostId` - `EDITORS` narrowed to the ids
@@ -14,17 +29,23 @@ const POST_V10_EDITOR_IDS: ReadonlySet<string> = new Set(["vscodium"]);
  *
  * Offering is the enforcement point: an id absent from every menu is never
  * emitted, and a stored default that falls out of this catalog is handled by
- * `resolveEditorState` / `resolveEffectiveDefaultEditor`.
+ * `resolveEditorState` / `resolveEffectiveDefaultEditor`. No handshake yet
+ * (`null`) offers only the ids every minor carries.
  */
 export function useOfferableEditors(
   hostId: string | null,
 ): ReadonlyArray<EditorEntry> {
-  const supportsV11 = useEditorOpenPathsSupportsV11(hostId);
+  const version = useEditorOpenPathsVersion(hostId);
+  const negotiatedMinor =
+    version !== null && version.major === 1 ? version.minor : null;
   return useMemo(
     () =>
-      supportsV11
-        ? EDITORS
-        : EDITORS.filter((editor) => !POST_V10_EDITOR_IDS.has(editor.id)),
-    [supportsV11],
+      EDITORS.filter(
+        (editor) =>
+          EDITOR_MINIMUM_MINOR[editor.id] === 0 ||
+          (negotiatedMinor !== null &&
+            negotiatedMinor >= EDITOR_MINIMUM_MINOR[editor.id]),
+      ),
+    [negotiatedMinor],
   );
 }

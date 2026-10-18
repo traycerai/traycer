@@ -412,6 +412,8 @@ function renderPreview(compact: boolean): void {
       onTransformChange={null}
       doubleClickOverride={null}
       onDecodeError={null}
+      toolbarActions={null}
+      toolbarLabel={null}
     />,
   );
 }
@@ -548,6 +550,8 @@ describe("image preview interactions", () => {
         onTransformChange={null}
         doubleClickOverride={null}
         onDecodeError={null}
+        toolbarActions={null}
+        toolbarLabel={null}
       />,
     );
 
@@ -653,6 +657,8 @@ describe("image preview interactions", () => {
         }}
         doubleClickOverride={null}
         onDecodeError={null}
+        toolbarActions={null}
+        toolbarLabel={null}
       />,
     );
 
@@ -682,6 +688,8 @@ describe("image preview interactions", () => {
         }}
         doubleClickOverride={null}
         onDecodeError={null}
+        toolbarActions={null}
+        toolbarLabel={null}
       />,
     );
     rerender(
@@ -704,6 +712,8 @@ describe("image preview interactions", () => {
         }}
         doubleClickOverride={null}
         onDecodeError={null}
+        toolbarActions={null}
+        toolbarLabel={null}
       />,
     );
 
@@ -738,6 +748,8 @@ describe("image preview interactions", () => {
         onTransformChange={null}
         doubleClickOverride={null}
         onDecodeError={null}
+        toolbarActions={null}
+        toolbarLabel={null}
       />,
     );
 
@@ -762,6 +774,8 @@ describe("image preview interactions", () => {
         onTransformChange={null}
         doubleClickOverride={null}
         onDecodeError={null}
+        toolbarActions={null}
+        toolbarLabel={null}
       />,
     );
     rerender(
@@ -778,6 +792,8 @@ describe("image preview interactions", () => {
         onTransformChange={null}
         doubleClickOverride={null}
         onDecodeError={null}
+        toolbarActions={null}
+        toolbarLabel={null}
       />,
     );
 

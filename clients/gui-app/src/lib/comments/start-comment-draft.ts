@@ -39,6 +39,7 @@ export function startCommentDraft(
   if (from >= to) return { started: false, draft: null };
   const quotedText = editor.state.doc.textBetween(from, to, " ");
   const draft: DraftRange = {
+    draftId: crypto.randomUUID(),
     tileId: target.tileId,
     artifactId: target.artifactId,
     from,

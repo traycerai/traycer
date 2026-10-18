@@ -29,6 +29,14 @@ function readCoarsePointerServerSnapshot(): boolean {
   return false;
 }
 
+/**
+ * Imperative read of the same query for command-time call sites (key
+ * handlers) that must not re-render when the pointer changes.
+ */
+export function isCoarsePointer(): boolean {
+  return readCoarsePointerSnapshot();
+}
+
 export function useCoarsePointer(): boolean {
   return useSyncExternalStore(
     subscribeToCoarsePointerQuery,

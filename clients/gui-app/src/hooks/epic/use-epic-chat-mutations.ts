@@ -28,9 +28,16 @@ import { useHostMutation } from "@/hooks/host/use-host-query";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import { useEpicSessionHostClient } from "@/hooks/epic/use-epic-session-host-client";
 import {
+  enactedOwnerHostId,
+  useEpicRecordLifecycleMutationClient,
   useEpicRecordMutationClient,
   type EpicRecordMutationContext,
 } from "@/hooks/epic/use-epic-record-mutation-client";
+import { useHostBinding } from "@/lib/host";
+import {
+  recordOwnerHostLabel,
+  toastRequestedRecordWrite,
+} from "@/lib/epics/record-write-outcome-toast";
 import { getOpenEpicRegistry } from "@/lib/registries/epic-session-registry";
 import type { OpenEpicStoreHandle } from "@/stores/epics/open-epic/store";
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
@@ -39,6 +46,12 @@ import {
   toastFromHostError,
   toastFromHostErrorWithDetail,
 } from "@/lib/host-error-toast";
+import {
+  toastFromOwnerHostBatchWriteFailuresWithUnconfirmed,
+  toastFromOwnerHostWriteError,
+  type OwnerHostBatchWriteCopy,
+  type OwnerHostBatchWriteOutcome,
+} from "@/lib/owner-host-write-error-toast";
 import { invalidateEpicChatRecords } from "@/hooks/chats/use-epic-chat-records";
 import { invalidateChatRunSettings } from "@/hooks/chats/use-chat-run-settings-query";
 import { invalidateEpicTuiAgentRecords } from "@/hooks/chats/use-epic-tui-agent-records";
@@ -126,6 +139,8 @@ interface ChatRecordMutationContext {
   readonly hostId: string | null;
   readonly viewerHostId: string | null;
   readonly viewerUserId: string | null;
+  /** Where the call went: the owner, or a live host standing in for it. */
+  readonly servingHostId: string | null;
 }
 
 interface DeleteChatMutationContext extends ChatRecordMutationContext {
@@ -142,11 +157,19 @@ export type DeleteChatMutationOptions = Omit<
   "mutationFn"
 >;
 
-/** Resolve viewer state independently of the mutation's fixed destination. */
+/**
+ * Resolve viewer state independently of the mutation's fixed destination.
+ *
+ * The viewer's row must still be the record the write was about: the row the
+ * mutation was routed from (`ctx.hostId`), or the same chat as the host that
+ * enacted the write holds it (`enactedOwnerHostId`) once a refresh has shown
+ * the moved owner.
+ */
 function getChatMutationViewer(
   epicId: string,
   chatId: string,
   ctx: ChatRecordMutationContext,
+  ownerHostId: string | null,
 ): OpenEpicStoreHandle | null {
   if (
     ctx.viewerUserId === null ||
@@ -157,12 +180,13 @@ function getChatMutationViewer(
   const handle = getOpenEpicRegistry().peek(epicId);
   if (handle === null) return null;
   const chats = handle.store.getState().chats.byId;
-  const row = chats[chatId];
   // A replacement session can mount before its first record list.
+  if (!Object.hasOwn(chats, chatId)) return handle;
+  const row = chats[chatId];
+  const rowHostId = row.hostId ?? handle.hostId;
   if (
-    Object.hasOwn(chats, chatId) &&
-    (row.userId !== ctx.viewerUserId ||
-      (row.hostId ?? handle.hostId) !== ctx.hostId)
+    row.userId !== ctx.viewerUserId ||
+    (rowHostId !== ctx.hostId && rowHostId !== ownerHostId)
   )
     return null;
   return handle;
@@ -594,8 +618,14 @@ export function useEpicRenameChat() {
         hostId,
         viewerHostId: sessionClient?.getActiveHostId() ?? null,
       }),
-      onSuccess: (_data, _variables, ctx) => {
-        for (const hostId of new Set([ctx.hostId, ctx.viewerHostId])) {
+      onSuccess: (_data, variables, ctx) => {
+        // The visible session too: it may have been replaced while the
+        // rename travelled, and its list fetched before it landed.
+        for (const hostId of new Set([
+          ctx.hostId,
+          ctx.viewerHostId,
+          getOpenEpicRegistry().peek(variables.epicId)?.hostId ?? null,
+        ])) {
           invalidateEpicChatRecords(queryClient, hostId);
         }
       },
@@ -608,7 +638,10 @@ export function useEpicRenameChat() {
 
 /**
  * Chats and terminal agents share the archive RPC. The caller names the
- * record's owning host; the viewing epic may only hold a replica.
+ * record's owning host; the viewing epic may only hold a replica. When that
+ * host is down the call goes to a live host instead (see
+ * `useEpicRecordLifecycleMutationClient`), and an `outcome: "requested"`
+ * answer is told to the person: the owner finishes the archive when it is back.
  * `updated: false` is an idempotent success, not a missing record.
  */
 export function useEpicArchiveChat(): UseMutationResult<
@@ -626,8 +659,9 @@ function useEpicArchiveChatMutation(
   HostRpcError,
   ArchiveChatMutationInput
 > {
-  const client = useEpicRecordMutationClient();
+  const route = useEpicRecordLifecycleMutationClient("epic.setChatArchived");
   const sessionClient = useEpicSessionHostClient();
+  const binding = useHostBinding();
   const queryClient = useQueryClient();
   // An imperative post-write read: the viewer's cloud replica can lag the
   // owner's response. Reuse the record revision instead of inventing an overlay.
@@ -637,7 +671,7 @@ function useEpicArchiveChatMutation(
     unknown,
     ArchiveChatMutationInput
   >({
-    client,
+    client: route.client,
     method: "epic.listChatRecords",
     // `knownRevision: null` - this read holds no list stamp and wants the
     // whole list, which is what a one-shot post-write read means. The host
@@ -655,35 +689,58 @@ function useEpicArchiveChatMutation(
     ChatRecordMutationContext,
     ArchiveChatMutationInput
   >({
-    client,
+    client: route.client,
     method: "epic.setChatArchived",
     mapVariables: ({ epicId, chatId, archived }) => ({
       epicId,
       chatId,
       archived,
     }),
+    requiredHostMethodVersion: route.requiredHostMethodVersion,
     options: {
       mutationKey: epicMutationKeys.setChatArchived(),
-      onMutate: ({ hostId }) => ({
-        hostId,
+      onMutate: (variables) => ({
+        hostId: variables.hostId,
         viewerHostId: sessionClient?.getActiveHostId() ?? null,
         viewerUserId: currentProfileUserId(),
+        servingHostId: route.servingHostId(variables),
       }),
-      onSuccess: async (_data, variables, ctx) => {
+      onSuccess: async (data, variables, ctx) => {
+        // Every follow-up below is keyed to the host whose record changed.
+        const ownerHostId = enactedOwnerHostId(data, ctx);
         const handle = getOpenEpicRegistry().peek(variables.epicId);
         // The visible session may have been replaced while the write travelled.
         for (const hostId of new Set([
           ctx.hostId,
+          ownerHostId,
           ctx.viewerHostId,
+          ctx.servingHostId,
           handle?.hostId ?? null,
         ])) {
           invalidateEpicChatRecords(queryClient, hostId);
           invalidateEpicTuiAgentRecords(queryClient, hostId);
         }
+        if (data.outcome === "requested") {
+          // The owner did not enact it: there is no owner record to read back,
+          // and viewers already see the cloud's value.
+          if (ownerHostId !== null) {
+            toastRequestedRecordWrite({
+              write: variables.archived ? "archive" : "unarchive",
+              ownerHostId,
+              hostLabel: recordOwnerHostLabel(binding, ownerHostId),
+            });
+          }
+          return;
+        }
         if (
-          (ctx.hostId === ctx.viewerHostId && handle?.hostId === ctx.hostId) ||
-          getChatMutationViewer(variables.epicId, variables.chatId, ctx) ===
-            null
+          (ownerHostId === ctx.viewerHostId &&
+            handle?.hostId === ownerHostId) ||
+          getChatMutationViewer(
+            variables.epicId,
+            variables.chatId,
+            ctx,
+            ownerHostId,
+          ) === null
         )
           return;
         try {
@@ -698,6 +755,7 @@ function useEpicArchiveChatMutation(
             variables.epicId,
             variables.chatId,
             ctx,
+            ownerHostId,
           );
           if (currentHandle === null) return;
           invalidateEpicChatRecords(queryClient, currentHandle.hostId);
@@ -705,14 +763,14 @@ function useEpicArchiveChatMutation(
             (row) =>
               row.chatId === variables.chatId &&
               row.ownerUserId === ctx.viewerUserId &&
-              row.originHostId === ctx.hostId &&
+              row.originHostId === ownerHostId &&
               row.origin === "own",
           );
           if (record === undefined) return;
           currentHandle.store.getState().applyConfirmedChatMutation({
             kind: "upsert",
             record:
-              currentHandle.hostId === ctx.hostId
+              currentHandle.hostId === ownerHostId
                 ? record
                 : {
                     ...record,
@@ -729,19 +787,73 @@ function useEpicArchiveChatMutation(
           );
         }
       },
-      onError:
-        failurePresentation === "individual"
-          ? (error) => toastFromHostError(error, "Couldn't archive agent.")
-          : undefined,
+      onError: (error, variables, ctx) => {
+        // The host may have committed the write before its answer was lost,
+        // so refresh every list it could have changed - the routed owner's,
+        // the viewer's, the host the call went to and the visible session's -
+        // whichever way the failure is presented.
+        if (ctx !== undefined) {
+          const handle = getOpenEpicRegistry().peek(variables.epicId);
+          for (const hostId of new Set([
+            ctx.hostId,
+            ctx.viewerHostId,
+            ctx.servingHostId,
+            handle?.hostId ?? null,
+          ])) {
+            invalidateEpicChatRecords(queryClient, hostId);
+            invalidateEpicTuiAgentRecords(queryClient, hostId);
+          }
+        }
+        if (failurePresentation === "individual") {
+          toastFromOwnerHostWriteError(error, "Couldn't archive agent.");
+        }
+      },
     },
   });
 }
 
+/**
+ * One request of an archive batch, and how many SELECTED rows it stands for:
+ * archiving a record hides its subtree, so the sidebar sends only the topmost
+ * selected rows, each covering itself and its selected descendants. 1 for an
+ * independent target.
+ *
+ * `selectedRows` is fixed at the gesture. `coveredRows` is read when the batch
+ * settles: how many of those rows are still beneath the record then. A
+ * selected descendant moved out while the request was in flight was not
+ * archived with it, so it gets neither the request's applied nor its failed
+ * count - it is unconfirmed.
+ */
+export interface ArchiveChatsTarget extends ChatMutationTarget {
+  readonly selectedRows: number;
+  readonly coveredRows: () => number;
+}
+
 export interface ArchiveChatsMutationInput {
   readonly epicId: string;
-  readonly chats: readonly ChatMutationTarget[];
+  readonly chats: readonly ArchiveChatsTarget[];
   readonly archived: boolean;
 }
+
+const ARCHIVE_BATCH_COPY: OwnerHostBatchWriteCopy = {
+  single: "Couldn't archive agent.",
+  partial: (applied, failed) =>
+    `Archived ${applied} of ${applied + failed} selected agents. ${failed} couldn't be archived.`,
+  none: (attempted) =>
+    `Couldn't archive any of the ${attempted} selected agents.`,
+  unconfirmed: (attempted) =>
+    `Couldn't confirm all ${attempted} selected agents were archived. Check them and archive any that weren't.`,
+};
+
+const UNARCHIVE_BATCH_COPY: OwnerHostBatchWriteCopy = {
+  single: "Couldn't unarchive agent.",
+  partial: (applied, failed) =>
+    `Unarchived ${applied} of ${applied + failed} selected agents. ${failed} couldn't be unarchived.`,
+  none: (attempted) =>
+    `Couldn't unarchive any of the ${attempted} selected agents.`,
+  unconfirmed: (attempted) =>
+    `Couldn't confirm all ${attempted} selected agents were unarchived. Check them and unarchive any that weren't.`,
+};
 
 export type ArchiveChatsMutationResult =
   readonly PromiseSettledResult<SetChatArchivedResponse>[];
@@ -771,35 +883,135 @@ export function useEpicArchiveChats(): UseMutationResult<
         variables.chats.map((chat) =>
           archiveChat.mutateAsync({
             epicId: variables.epicId,
-            ...chat,
+            chatId: chat.chatId,
+            hostId: chat.hostId,
             archived: variables.archived,
           }),
         ),
       ),
-    onSuccess: (results) => {
-      const firstFailure = results.find(
-        (result): result is PromiseRejectedResult =>
-          result.status === "rejected",
+    onSuccess: (results, variables) => {
+      // `updated: false` from the owner is an already-satisfied no-op, or a
+      // chat deleted while its write waited its turn on the host: neither
+      // applied nor failed as far as this batch can tell. Such rows stay in
+      // the selection's count, unconfirmed.
+      //
+      // A `requested` answer is accepted whatever `updated` says: a stand-in
+      // host wrote the cloud row for a gone owner, and `updated: false` there
+      // means the row already had that state. The per-record mutation reports
+      // it as accepted, so the batch counts it as applied.
+      let unconfirmedRows = 0;
+      const outcomes = results.flatMap(
+        (result, index): OwnerHostBatchWriteOutcome[] => {
+          const chat = variables.chats[index];
+          const selectedRows = chat.selectedRows;
+          if (
+            result.status === "fulfilled" &&
+            result.value.outcome !== "requested" &&
+            !result.value.updated
+          ) {
+            unconfirmedRows += selectedRows;
+            return [];
+          }
+          const coveredRows = Math.min(selectedRows, chat.coveredRows());
+          unconfirmedRows += selectedRows - coveredRows;
+          return [
+            {
+              kind: "agent",
+              hostId: chat.hostId,
+              selectedRows: coveredRows,
+              error:
+                result.status === "rejected"
+                  ? toHostRpcError(result.reason, "epic.setChatArchived")
+                  : null,
+            },
+          ];
+        },
       );
-      if (firstFailure === undefined) return;
-      const reason: unknown = firstFailure.reason;
-      toastFromHostError(
-        toHostRpcError(reason, "epic.setChatArchived"),
-        "Couldn't archive some selected agents.",
+      toastFromOwnerHostBatchWriteFailuresWithUnconfirmed(
+        outcomes,
+        unconfirmedRows,
+        variables.archived ? ARCHIVE_BATCH_COPY : UNARCHIVE_BATCH_COPY,
       );
     },
   });
 }
 
-/** Deletes on the owning host and retires the viewer's confirmed replica. */
+/**
+ * Deletes on the owning host and retires the viewer's confirmed replica. When
+ * the owner is down the call goes to a live host, which deletes the cloud row
+ * (`outcome: "requested"`): the agent leaves every list at once and the files
+ * on the owner are untouched.
+ */
 export function useEpicDeleteChat(): UseMutationResult<
   DeleteChatResponse,
   HostRpcError,
   DeleteChatMutationInput,
   DeleteChatMutationContext
 > {
-  const client = useEpicRecordMutationClient();
+  return useEpicDeleteChatMutation("individual");
+}
+
+/**
+ * `useEpicDeleteChat` for one delete among several in a batch: the caller
+ * reports the batch's failures once (`toastFromOwnerHostBatchWriteFailures`),
+ * so a failure here raises no notice of its own.
+ */
+export function useEpicDeleteChatInBatch(): UseMutationResult<
+  DeleteChatResponse,
+  HostRpcError,
+  DeleteChatMutationInput,
+  DeleteChatMutationContext
+> {
+  return useEpicDeleteChatMutation("aggregate");
+}
+
+/**
+ * Settle a chat delete's provisional cloud-row suppression from the fields
+ * the answer actually has. With a publication identity, confirm it under the
+ * enacted owner: the host's identity replaces an incorrect provisional
+ * mapping rather than confirming both rows. Without one, keep the
+ * provisional key only when the owner is the row's own host, which that key
+ * already names (a v1.0 peer, or a host without a composed publisher). When
+ * the owner is another host (authority moved, or a stand-in named another
+ * owner), the key names the row's host, whose same-id chat may survive, and
+ * it cannot be re-keyed without the identity: drop it.
+ */
+function settleChatDeletionSuppression(
+  data: Pick<DeleteChatResponse, "publicationChatId">,
+  ownerHostId: string | null,
+  ctx: Pick<
+    DeleteChatMutationContext,
+    "cloudDeletionToken" | "hostId" | "viewerUserId"
+  >,
+  epicId: string,
+): void {
+  if (
+    data.publicationChatId !== null &&
+    ownerHostId !== null &&
+    ctx.viewerUserId !== null
+  ) {
+    confirmCloudChatDeletion(ctx.cloudDeletionToken, {
+      taskId: epicId,
+      ownerUserId: ctx.viewerUserId,
+      ownerHostId,
+      chatId: data.publicationChatId,
+    });
+    return;
+  }
+  settleCloudChatDeletion(ctx.cloudDeletionToken, ownerHostId === ctx.hostId);
+}
+
+function useEpicDeleteChatMutation(
+  failurePresentation: "individual" | "aggregate",
+): UseMutationResult<
+  DeleteChatResponse,
+  HostRpcError,
+  DeleteChatMutationInput,
+  DeleteChatMutationContext
+> {
+  const route = useEpicRecordLifecycleMutationClient("epic.deleteChat");
   const sessionClient = useEpicSessionHostClient();
+  const binding = useHostBinding();
   const queryClient = useQueryClient();
   return useHostMutation<
     HostRpcRegistry,
@@ -807,9 +1019,10 @@ export function useEpicDeleteChat(): UseMutationResult<
     DeleteChatMutationContext,
     DeleteChatMutationInput
   >({
-    client,
+    client: route.client,
     method: "epic.deleteChat",
     mapVariables: ({ epicId, chatId }) => ({ epicId, chatId }),
+    requiredHostMethodVersion: route.requiredHostMethodVersion,
     options: {
       // `epic.deleteChat` names no host on the wire - the host it is SENT to
       // is the one that owns the chat being deleted - so the teardown below
@@ -817,7 +1030,8 @@ export function useEpicDeleteChat(): UseMutationResult<
       // repo's host-swap convention) rather than re-read in `onSuccess`, so a
       // host swap while the delete is in flight cannot make us dispose a
       // same-id chat session belonging to a different machine.
-      onMutate: ({ hostId, epicId, chatId }) => {
+      onMutate: (variables) => {
+        const { hostId, epicId, chatId } = variables;
         const viewerHostId = sessionClient?.getActiveHostId() ?? null;
         const viewerUserId = currentProfileUserId();
         const cachedPublicationChatId =
@@ -835,6 +1049,7 @@ export function useEpicDeleteChat(): UseMutationResult<
           hostId,
           viewerHostId,
           viewerUserId,
+          servingHostId: route.servingHostId(variables),
           cloudDeletionToken:
             hostId === null || viewerUserId === null
               ? null
@@ -847,34 +1062,27 @@ export function useEpicDeleteChat(): UseMutationResult<
         };
       },
       onSuccess: (data, variables, ctx) => {
+        // The host that owns the deleted chat, and the one key every follow-up
+        // below takes. An `applied` answer from a stand-in means the record
+        // was its own (authority moved after this row was read), so it is the
+        // stand-in's chat that is gone: its cloud row, session and tiles carry
+        // the stand-in's id, not the stale one. A `requested` answer names the
+        // owner it filed for, or, from a host that predates that field, the
+        // owner the row names. `onMutate`'s provisional suppression is keyed
+        // to the row (no answer exists yet); the confirm below re-keys it.
+        const ownerHostId = enactedOwnerHostId(data, ctx);
         // Confirm BEFORE removing local records: otherwise their stale cloud
-        // copy becomes an unfolded row. The host's identity also replaces an
-        // incorrect provisional mapping, rather than confirming both rows.
-        if (
-          data.publicationChatId !== null &&
-          ctx.hostId !== null &&
-          ctx.viewerUserId !== null
-        ) {
-          confirmCloudChatDeletion(ctx.cloudDeletionToken, {
-            taskId: variables.epicId,
-            ownerUserId: ctx.viewerUserId,
-            ownerHostId: ctx.hostId,
-            chatId: data.publicationChatId,
-          });
-        } else {
-          // A v1.0 peer, or a host without a composed publisher, cannot
-          // report its publication identity.
-          settleCloudChatDeletion(ctx.cloudDeletionToken, true);
-        }
+        // copy becomes an unfolded row.
+        settleChatDeletionSuppression(data, ownerHostId, ctx, variables.epicId);
         // No active host at mutate time means nothing could have acquired a
         // session under this chat's identity either, so there is nothing to
         // force-release - and guessing a host here is exactly the
         // cross-host dispose this teardown must not perform.
-        if (ctx.hostId !== null) {
+        if (ownerHostId !== null) {
           getChatSessionRegistry().forceRelease(
             variables.epicId,
             variables.chatId,
-            ctx.hostId,
+            ownerHostId,
           );
           // This mutation-level callback survives the optimistic sidebar row
           // unmounting. Per-call callbacks owned by that row do not, which can
@@ -885,7 +1093,7 @@ export function useEpicDeleteChat(): UseMutationResult<
             .closeConfirmedDeletedAgentTiles(
               variables.epicId,
               variables.chatId,
-              ctx.hostId,
+              ownerHostId,
               "chat",
             );
         }
@@ -915,7 +1123,7 @@ export function useEpicDeleteChat(): UseMutationResult<
         const handle = getOpenEpicRegistry().peek(variables.epicId);
         if (
           handle !== null &&
-          ctx.hostId !== null &&
+          ownerHostId !== null &&
           ctx.viewerUserId !== null &&
           ctx.viewerUserId === currentProfileUserId()
         ) {
@@ -923,12 +1131,14 @@ export function useEpicDeleteChat(): UseMutationResult<
             kind: "remove",
             chatId: variables.chatId,
             ownerUserId: ctx.viewerUserId,
-            originHostId: ctx.hostId,
+            originHostId: ownerHostId,
           });
         }
         for (const hostId of new Set([
           ctx.hostId,
+          ownerHostId,
           ctx.viewerHostId,
+          ctx.servingHostId,
           handle?.hostId ?? null,
         ])) {
           invalidateEpicChatRecords(queryClient, hostId);
@@ -942,24 +1152,37 @@ export function useEpicDeleteChat(): UseMutationResult<
             });
           }
         }
+        if (data.outcome === "requested" && ownerHostId !== null) {
+          toastRequestedRecordWrite({
+            write: "remove",
+            ownerHostId,
+            hostLabel: recordOwnerHostLabel(binding, ownerHostId),
+          });
+        }
       },
       onError: (error, variables, ctx) => {
         settleCloudChatDeletion(ctx?.cloudDeletionToken ?? null, false);
         // Cleanup can reject after the host committed the tombstone. Release
         // the provisional hide for genuine refusals, but also refresh so a
         // committed deletion does not leave the old cloud answer visible.
-        if (ctx !== undefined && ctx.viewerUserId !== null) {
+        if (ctx !== undefined) {
           const handle = getOpenEpicRegistry().peek(variables.epicId);
+          const viewerUserId = ctx.viewerUserId;
+          // The stand-in too: it may have committed the delete before the
+          // response or the cleanup failed, exactly as the owner may. The
+          // record lists and the cloud chat lists, as success refreshes both.
           for (const hostId of new Set([
             ctx.hostId,
             ctx.viewerHostId,
+            ctx.servingHostId,
             handle?.hostId ?? null,
           ])) {
-            if (hostId === null) continue;
+            invalidateEpicChatRecords(queryClient, hostId);
+            if (hostId === null || viewerUserId === null) continue;
             void queryClient.invalidateQueries({
               queryKey: cloudChatListQueryKey({
                 hostId,
-                viewerUserId: ctx.viewerUserId,
+                viewerUserId,
                 taskId: variables.epicId,
               }),
             });
@@ -970,7 +1193,9 @@ export function useEpicDeleteChat(): UseMutationResult<
         useEpicCanvasStore
           .getState()
           .unmarkArtifactSelfDeleted(variables.chatId);
-        toastFromHostError(error, "Couldn't delete agent.");
+        if (failurePresentation === "individual") {
+          toastFromOwnerHostWriteError(error, "Couldn't delete agent.");
+        }
       },
     },
   });

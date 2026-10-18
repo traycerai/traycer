@@ -85,6 +85,7 @@ function fakeEditor(content: JsonContent): ComposerPromptEditorHandle {
     removeImageAttachmentById: () => undefined,
     rewriteImageAttachmentHashById: () => false,
     insertDictatedText: () => undefined,
+    draftGeneration: () => 0,
     dismissActiveSuggestion: () => false,
   };
 }
@@ -126,6 +127,7 @@ function mountSubmit(args: {
       getActiveTurnForSteer: () => null,
       hasPendingApprovals: false,
       sendDisabled: false,
+      sendDisabledHint: null,
       workspaceBlocked: false,
       imagesUnsupported: false,
       attachmentPreparationPending: false,

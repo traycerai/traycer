@@ -460,9 +460,7 @@ async function resolveCachedHostArchive(release) {
     const { config } = await import(
       path.join(REPO_ROOT, "clients", "traycer-cli", "src", "config.ts")
     );
-    const client = await registry.createDefaultRegistryClient(
-      config.environment,
-    );
+    const client = await createHostRegistryClient(registry, config.environment);
     const { entry, asset } = await client.resolveAsset(
       release ?? "latest",
       registry.currentHostPlatformKey(),
@@ -493,6 +491,18 @@ async function resolveCachedHostArchive(release) {
     );
     return null;
   }
+}
+
+/**
+ * The registry client the host archive cache resolves and downloads through.
+ *
+ * This script is plain JS, so nothing type-checks the call: the registry
+ * client's `onProgress` parameter is required and has no default, and an
+ * omitted one is `undefined`, which its heartbeat then calls. Progress is not
+ * shown here, so it is passed as an explicit `null`.
+ */
+function createHostRegistryClient(registry, environment) {
+  return registry.createDefaultRegistryClient(environment, null);
 }
 
 function buildHostUninstallArgs() {
@@ -735,6 +745,7 @@ if (require.main === module) {
 }
 
 module.exports = {
+  createHostRegistryClient,
   buildHostInstallArgs,
   buildHostInstallFromArgs,
   buildHostUninstallArgs,

@@ -101,6 +101,12 @@ interface BrowserViewManagerOptions {
   readonly isWindowShown: (windowId: string) => boolean;
   /** Fires on every edge `isWindowShown` can change on. */
   readonly onWindowShownChange: (listener: () => void) => () => void;
+  /**
+   * Whether the screen is locked. A locked screen draws no frames, so a guest
+   * cannot lay out a new viewport until it is unlocked. Unlike a hidden or
+   * minimized window (which this app keeps drawing), this is a reading.
+   */
+  readonly isScreenLocked: () => boolean;
   readonly createPopupWindowOptions: () => BrowserWindowConstructorOptions;
   readonly createPopupWindow: (input: {
     readonly windowOptions: BrowserWindowConstructorOptions;
@@ -244,6 +250,7 @@ export class BrowserViewManager {
       this.entries,
       this.annotations,
       options.send,
+      options.isScreenLocked,
     );
     this.find = new BrowserViewFind({
       entries: this.entries,

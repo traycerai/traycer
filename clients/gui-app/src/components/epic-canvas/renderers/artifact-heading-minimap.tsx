@@ -19,6 +19,7 @@ import {
   resolveMinimapTrackTopStyle,
   resolveMinimapWindow,
 } from "@/components/minimap/minimap-track-geometry";
+import { listNavigationKey } from "@/lib/keybindings/list-navigation-key";
 import { cn } from "@/lib/utils";
 import type { EdgeSide } from "@/lib/layout/layout-arrangement";
 import { useArtifactHeadingMetrics } from "./use-artifact-heading-metrics";
@@ -129,10 +130,11 @@ export function ArtifactHeadingMinimap(props: ArtifactHeadingMinimapProps) {
 
   const handleHitStripKeyDown = useCallback(
     (event: ReactKeyboardEvent<HTMLButtonElement>): void => {
-      if (event.key === "ArrowDown") {
+      const navigationKey = listNavigationKey(event);
+      if (navigationKey === "ArrowDown") {
         event.preventDefault();
         moveCursor((open ? resolvedCursorIndex : currentIndex) + 1);
-      } else if (event.key === "ArrowUp") {
+      } else if (navigationKey === "ArrowUp") {
         event.preventDefault();
         moveCursor((open ? resolvedCursorIndex : currentIndex) - 1);
       } else if (event.key === "Home") {

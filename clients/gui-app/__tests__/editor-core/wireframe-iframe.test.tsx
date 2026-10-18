@@ -2,17 +2,18 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { WireframeIframe } from "@/editor-core/nodes/wireframe/wireframe-iframe";
 
-const HEIGHT_MESSAGE_MARKER = "traycer:wireframe:height:v1";
-const MEASURE_REQUEST_MARKER = "traycer:wireframe:measure-request:v1";
+// The frame's link opener is a mutation hook; nothing here opens a link.
+vi.mock("@/lib/links/open-link", () => ({ useOpenLink: () => vi.fn() }));
+
 const ARTIFACT_HTML =
   '<!doctype html><html><body><button id="demo">Demo</button><script>window.artifactScript = true;</script></body></html>';
 const ORIGINAL_INNER_HEIGHT = window.innerHeight;
 
-interface MeasureRequestPayload {
-  readonly marker: string;
-  readonly documentGeneration: number;
-  readonly requestId: number;
-}
+const PROXY_READY = {
+  jsonrpc: "2.0",
+  method: "ui/notifications/sandbox-proxy-ready",
+  params: {},
+};
 
 function renderWireframeIframe(mode: "auto" | "fill"): HTMLIFrameElement {
   render(
@@ -23,6 +24,11 @@ function renderWireframeIframe(mode: "auto" | "fill"): HTMLIFrameElement {
       mode={mode}
     />,
   );
+  return currentIframe();
+}
+
+/** The frame as it is now: a new document is a new element. */
+function currentIframe(): HTMLIFrameElement {
   const iframe = screen.getByTitle("Wireframe preview");
   if (!(iframe instanceof HTMLIFrameElement)) {
     throw new Error("Wireframe preview did not render as an iframe");
@@ -30,66 +36,31 @@ function renderWireframeIframe(mode: "auto" | "fill"): HTMLIFrameElement {
   return iframe;
 }
 
-function dispatchHeightMessage(
-  source: MessageEventSource | null,
-  data: unknown,
-): void {
-  let payload = data;
-  if (
-    typeof data === "object" &&
-    data !== null &&
-    "marker" in data &&
-    data.marker === HEIGHT_MESSAGE_MARKER &&
-    !("documentGeneration" in data)
-  ) {
-    const iframe = Array.from(document.querySelectorAll("iframe")).find(
-      (candidate) => candidate.contentWindow === source,
-    );
-    if (iframe !== undefined) {
-      payload = {
-        ...data,
-        documentGeneration: readDocumentGeneration(iframe),
-        requestId: "requestId" in data ? data.requestId : null,
-      };
-    }
-  }
-  fireEvent(window, new MessageEvent("message", { data: payload, source }));
+function windowOf(iframe: HTMLIFrameElement): Window {
+  const win = iframe.contentWindow;
+  if (win === null) throw new Error("Expected iframe contentWindow");
+  return win;
 }
 
-function readDocumentGeneration(iframe: HTMLIFrameElement): number {
-  const srcDoc = iframe.getAttribute("srcdoc");
-  if (srcDoc === null) throw new Error("Expected iframe srcdoc content");
-  const match = /const documentGeneration = (\d+);/.exec(srcDoc);
-  if (match === null) throw new Error("Expected reporter document generation");
-  return Number(match[1]);
+function fromSource(source: MessageEventSource | null, data: unknown): void {
+  fireEvent(window, new MessageEvent("message", { data, source }));
 }
 
-function readLastMeasureRequest(
-  calls: ReadonlyArray<ReadonlyArray<unknown>>,
-): MeasureRequestPayload {
-  if (calls.length === 0) throw new Error("Expected measurement request call");
-  const lastCall = calls[calls.length - 1];
-  const payload = lastCall[0];
-  if (typeof payload !== "object" || payload === null) {
-    throw new Error("Expected measurement request payload");
+// A second proxy-ready from a frame disposes its bridge, so each frame says it
+// once, the way the loader does.
+const loaderAnnounced = new WeakSet<object>();
+
+/** The page's bootstrap reporting its document height, as it does on resize. */
+function reportHeight(source: Window, height: number): void {
+  if (!loaderAnnounced.has(source)) {
+    loaderAnnounced.add(source);
+    fromSource(source, PROXY_READY);
   }
-  if (!("marker" in payload) || payload.marker !== MEASURE_REQUEST_MARKER) {
-    throw new Error("Expected measurement request marker");
-  }
-  if (
-    !("documentGeneration" in payload) ||
-    typeof payload.documentGeneration !== "number"
-  ) {
-    throw new Error("Expected measurement request generation");
-  }
-  if (!("requestId" in payload) || typeof payload.requestId !== "number") {
-    throw new Error("Expected measurement request id");
-  }
-  return {
-    marker: payload.marker,
-    documentGeneration: payload.documentGeneration,
-    requestId: payload.requestId,
-  };
+  fromSource(source, {
+    jsonrpc: "2.0",
+    method: "ui/notifications/size-changed",
+    params: { height },
+  });
 }
 
 function setWindowInnerHeight(height: number): void {
@@ -127,68 +98,25 @@ afterEach(() => {
 });
 
 describe("WireframeIframe", () => {
-  it("allows scripts while preserving opaque-origin isolation", () => {
-    const iframe = renderWireframeIframe("auto");
+  it("renders on the sandbox loader, opaque, and never writes the document into the frame", () => {
+    for (const mode of ["auto", "fill"] as const) {
+      const iframe = renderWireframeIframe(mode);
 
-    expect(iframe.getAttribute("sandbox")).toBe("allow-scripts");
-    expect(iframe.getAttribute("sandbox")).not.toContain("allow-same-origin");
-  });
-
-  it("injects the reporter before artifact markup only in auto mode", () => {
-    const iframe = renderWireframeIframe("auto");
-    const srcDoc = iframe.getAttribute("srcdoc");
-    if (srcDoc === null) throw new Error("Expected iframe srcdoc content");
-
-    expect(srcDoc.startsWith("<!doctype html>")).toBe(true);
-    expect(srcDoc.endsWith(ARTIFACT_HTML.slice("<!doctype html>".length))).toBe(
-      true,
-    );
-    expect(srcDoc.indexOf(HEIGHT_MESSAGE_MARKER)).toBeLessThan(
-      srcDoc.indexOf('<html><body><button id="demo">'),
-    );
-    expect(srcDoc).toContain("<script>");
-    expect(srcDoc).toContain("ResizeObserver");
-    expect(srcDoc).toContain("getBoundingClientRect");
-    expect(srcDoc).toContain("documentElement.scrollHeight > viewportHeight");
-    expect(srcDoc).toContain(HEIGHT_MESSAGE_MARKER);
-    expect(srcDoc).toContain(MEASURE_REQUEST_MARKER);
-    expect(srcDoc).toContain("event.source !== window.parent");
-    expect(srcDoc).toContain("documentGeneration");
-    expect(srcDoc).toContain("requestId");
-    fireEvent.keyDown(screen.getByRole("slider", { name: "Resize preview" }), {
-      key: "ArrowDown",
-    });
-    expect(iframe.getAttribute("srcdoc")).toBe(srcDoc);
-
-    cleanup();
-    const fillIframe = renderWireframeIframe("fill");
-    expect(fillIframe.getAttribute("srcdoc")).toBe(ARTIFACT_HTML);
-  });
-
-  it("places the reporter before malformed raw-text artifact content", () => {
-    const malformedHtml =
-      "<html><body><textarea>unterminated<script>artifact text";
-    render(
-      <WireframeIframe
-        htmlContent={malformedHtml}
-        title="Malformed wireframe preview"
-        className="test-wireframe"
-        mode="auto"
-      />,
-    );
-    const iframe = screen.getByTitle("Malformed wireframe preview");
-    if (!(iframe instanceof HTMLIFrameElement)) {
-      throw new Error(
-        "Malformed wireframe preview did not render as an iframe",
-      );
+      expect(iframe.getAttribute("sandbox")).toBe("allow-scripts allow-forms");
+      expect(iframe.getAttribute("sandbox")).not.toContain("allow-same-origin");
+      expect(iframe.getAttribute("src")).toContain("/sandbox/index.html");
+      // The artifact (peer-editable text) travels over the bridge, not as
+      // `srcdoc`, which would run it on the app's own terms.
+      expect(iframe.getAttribute("srcdoc")).toBeNull();
+      cleanup();
     }
-    const srcDoc = iframe.getAttribute("srcdoc");
-    if (srcDoc === null) throw new Error("Expected iframe srcdoc content");
+  });
 
-    expect(srcDoc.endsWith(malformedHtml)).toBe(true);
-    expect(srcDoc.indexOf(HEIGHT_MESSAGE_MARKER)).toBeLessThan(
-      srcDoc.indexOf(malformedHtml),
-    );
+  it("sizes the frame only in auto mode", () => {
+    const iframe = renderWireframeIframe("auto");
+    expect(iframe.style.height).toBe("240px");
+    cleanup();
+    expect(renderWireframeIframe("fill").style.height).toBe("");
   });
 
   it("renders the accessible resize handle only for auto mode", () => {
@@ -211,16 +139,10 @@ describe("WireframeIframe", () => {
     const source = iframe.contentWindow;
     if (source === null) throw new Error("Expected iframe contentWindow");
 
-    dispatchHeightMessage(source, {
-      marker: HEIGHT_MESSAGE_MARKER,
-      height: 100,
-    });
+    reportHeight(source, 100);
     expect(iframe.style.height).toBe("240px");
 
-    dispatchHeightMessage(source, {
-      marker: HEIGHT_MESSAGE_MARKER,
-      height: Number.MAX_SAFE_INTEGER,
-    });
+    reportHeight(source, Number.MAX_SAFE_INTEGER);
     expect(iframe.style.height).toBe(`${window.innerHeight * 3}px`);
   });
 
@@ -229,52 +151,32 @@ describe("WireframeIframe", () => {
     const source = iframe.contentWindow;
     if (source === null) throw new Error("Expected iframe contentWindow");
 
-    dispatchHeightMessage(source, {
-      marker: HEIGHT_MESSAGE_MARKER,
-      height: 900,
-    });
+    reportHeight(source, 900);
     expect(iframe.style.height).toBe("900px");
 
-    dispatchHeightMessage(source, {
-      marker: HEIGHT_MESSAGE_MARKER,
-      height: 500,
-    });
+    reportHeight(source, 500);
     expect(iframe.style.height).toBe("500px");
   });
 
-  it("requests a measurement on load only while the current document has no baseline", () => {
+  it("ignores reports from another window and anything but a size report", () => {
     const iframe = renderWireframeIframe("auto");
-    const source = iframe.contentWindow;
-    if (source === null) throw new Error("Expected iframe contentWindow");
-    const postMessage = vi.spyOn(source, "postMessage");
+    const source = windowOf(iframe);
 
-    fireEvent.load(iframe);
-    const request = readLastMeasureRequest(postMessage.mock.calls);
-    expect(request.documentGeneration).toBe(readDocumentGeneration(iframe));
-
-    dispatchHeightMessage(source, {
-      marker: HEIGHT_MESSAGE_MARKER,
-      height: 500,
-      documentGeneration: request.documentGeneration,
-      requestId: request.requestId,
-    });
-    postMessage.mockClear();
-    fireEvent.load(iframe);
-    expect(postMessage).not.toHaveBeenCalled();
-  });
-
-  it("ignores messages with the wrong source or without the marker", () => {
-    const iframe = renderWireframeIframe("auto");
-    const source = iframe.contentWindow;
-    if (source === null) throw new Error("Expected iframe contentWindow");
-
-    dispatchHeightMessage(window, {
-      marker: HEIGHT_MESSAGE_MARKER,
-      height: 600,
-    });
+    reportHeight(window, 600);
     expect(iframe.style.height).toBe("240px");
 
-    dispatchHeightMessage(source, { height: 600 });
+    // Announce the loader so only the message shape is in question.
+    fromSource(source, PROXY_READY);
+    fromSource(source, { height: 600 });
+    fromSource(source, {
+      marker: "traycer:wireframe:height:v1",
+      height: 600,
+    });
+    fromSource(source, {
+      jsonrpc: "2.0",
+      method: "ui/notifications/size-changed",
+      params: { height: "600" },
+    });
     expect(iframe.style.height).toBe("240px");
   });
 
@@ -285,10 +187,7 @@ describe("WireframeIframe", () => {
     const handle = screen.getByRole("slider", { name: "Resize preview" });
     const setPointerCapture = vi.spyOn(handle, "setPointerCapture");
 
-    dispatchHeightMessage(source, {
-      marker: HEIGHT_MESSAGE_MARKER,
-      height: 500,
-    });
+    reportHeight(source, 500);
     fireEvent(handle, pointerEvent("pointerdown", 7, 500));
     expect(setPointerCapture).toHaveBeenCalledWith(7);
     expect(screen.getByTestId("wireframe-resize-shield")).toBeTruthy();
@@ -296,10 +195,7 @@ describe("WireframeIframe", () => {
     fireEvent(handle, pointerEvent("pointermove", 7, 800));
     expect(iframe.style.height).toBe("800px");
 
-    dispatchHeightMessage(source, {
-      marker: HEIGHT_MESSAGE_MARKER,
-      height: 650,
-    });
+    reportHeight(source, 650);
     expect(iframe.style.height).toBe("800px");
 
     fireEvent(handle, pointerEvent("pointerup", 7, 800));
@@ -307,23 +203,17 @@ describe("WireframeIframe", () => {
     expect(iframe.style.height).toBe("800px");
   });
 
-  it("resets to the true auto baseline after manual reporter feedback and native-like double-click events", () => {
+  it("resets to the content's auto height on double-click, whatever the manual drag did", () => {
     const iframe = renderWireframeIframe("auto");
-    const source = iframe.contentWindow;
-    if (source === null) throw new Error("Expected iframe contentWindow");
+    const source = windowOf(iframe);
     const handle = screen.getByRole("slider", { name: "Resize preview" });
 
-    dispatchHeightMessage(source, {
-      marker: HEIGHT_MESSAGE_MARKER,
-      height: 500,
-    });
+    reportHeight(source, 500);
     fireEvent(handle, pointerEvent("pointerdown", 7, 500));
     fireEvent(handle, pointerEvent("pointermove", 7, 800));
     fireEvent(handle, pointerEvent("pointerup", 7, 800));
-    dispatchHeightMessage(source, {
-      marker: HEIGHT_MESSAGE_MARKER,
-      height: 800,
-    });
+    // The bigger frame makes the page report again, with the same content.
+    reportHeight(source, 500);
     expect(iframe.style.height).toBe("800px");
 
     fireEvent(handle, pointerEvent("pointerdown", 8, 800));
@@ -334,127 +224,21 @@ describe("WireframeIframe", () => {
     expect(iframe.style.height).toBe("500px");
   });
 
-  it("ignores stale manual feedback while awaiting the correlated reset reply", () => {
-    const iframe = renderWireframeIframe("auto");
-    const source = iframe.contentWindow;
-    if (source === null) throw new Error("Expected iframe contentWindow");
-    const handle = screen.getByRole("slider", { name: "Resize preview" });
-
-    dispatchHeightMessage(source, {
-      marker: HEIGHT_MESSAGE_MARKER,
-      height: 773,
-    });
-    fireEvent(handle, pointerEvent("pointerdown", 7, 773));
-    fireEvent(handle, pointerEvent("pointermove", 7, 923));
-    fireEvent(handle, pointerEvent("pointerup", 7, 923));
-    const postMessage = vi.spyOn(source, "postMessage");
-
-    fireEvent.doubleClick(handle);
-    expect(iframe.style.height).toBe("773px");
-    const request = readLastMeasureRequest(postMessage.mock.calls);
-
-    dispatchHeightMessage(source, {
-      marker: HEIGHT_MESSAGE_MARKER,
-      height: 923,
-      documentGeneration: request.documentGeneration,
-      requestId: null,
-    });
-    expect(iframe.style.height).toBe("773px");
-
-    dispatchHeightMessage(source, {
-      marker: HEIGHT_MESSAGE_MARKER,
-      height: 829,
-      documentGeneration: request.documentGeneration,
-      requestId: request.requestId,
-    });
-    expect(iframe.style.height).toBe("829px");
-  });
-
-  it("accepts only a correlated current-generation reply during a pre-threshold drag", () => {
-    const iframe = renderWireframeIframe("auto");
-    const source = iframe.contentWindow;
-    if (source === null) throw new Error("Expected iframe contentWindow");
-    const handle = screen.getByRole("slider", { name: "Resize preview" });
-
-    dispatchHeightMessage(source, {
-      marker: HEIGHT_MESSAGE_MARKER,
-      height: 500,
-    });
-    const postMessage = vi.spyOn(source, "postMessage");
-    fireEvent.doubleClick(handle);
-    const request = readLastMeasureRequest(postMessage.mock.calls);
-    fireEvent(handle, pointerEvent("pointerdown", 7, 500));
-
-    dispatchHeightMessage(source, {
-      marker: HEIGHT_MESSAGE_MARKER,
-      height: 900,
-      documentGeneration: request.documentGeneration,
-      requestId: request.requestId + 1,
-    });
-    expect(iframe.style.height).toBe("500px");
-
-    dispatchHeightMessage(source, {
-      marker: HEIGHT_MESSAGE_MARKER,
-      height: 650,
-      documentGeneration: request.documentGeneration,
-      requestId: request.requestId,
-    });
-    expect(iframe.style.height).toBe("500px");
-    fireEvent(handle, pointerEvent("pointerup", 7, 500));
-    expect(iframe.style.height).toBe("650px");
-  });
-
-  it("accepts unsolicited current-generation reports after the request wait times out", () => {
-    vi.useFakeTimers();
-    const iframe = renderWireframeIframe("auto");
-    const source = iframe.contentWindow;
-    if (source === null) throw new Error("Expected iframe contentWindow");
-    const handle = screen.getByRole("slider", { name: "Resize preview" });
-
-    dispatchHeightMessage(source, {
-      marker: HEIGHT_MESSAGE_MARKER,
-      height: 500,
-    });
-    fireEvent.doubleClick(handle);
-
-    dispatchHeightMessage(source, {
-      marker: HEIGHT_MESSAGE_MARKER,
-      height: 700,
-    });
-    expect(iframe.style.height).toBe("500px");
-
-    vi.advanceTimersByTime(1_000);
-    dispatchHeightMessage(source, {
-      marker: HEIGHT_MESSAGE_MARKER,
-      height: 700,
-    });
-    expect(iframe.style.height).toBe("700px");
-  });
-
   it("applies an auto measurement retained during a no-movement click", () => {
     const iframe = renderWireframeIframe("auto");
     const source = iframe.contentWindow;
     if (source === null) throw new Error("Expected iframe contentWindow");
     const handle = screen.getByRole("slider", { name: "Resize preview" });
 
-    dispatchHeightMessage(source, {
-      marker: HEIGHT_MESSAGE_MARKER,
-      height: 500,
-    });
+    reportHeight(source, 500);
     fireEvent(handle, pointerEvent("pointerdown", 7, 500));
-    dispatchHeightMessage(source, {
-      marker: HEIGHT_MESSAGE_MARKER,
-      height: 650,
-    });
+    reportHeight(source, 650);
     expect(iframe.style.height).toBe("500px");
 
     fireEvent(handle, pointerEvent("pointerup", 7, 500));
     expect(iframe.style.height).toBe("650px");
 
-    dispatchHeightMessage(source, {
-      marker: HEIGHT_MESSAGE_MARKER,
-      height: 700,
-    });
+    reportHeight(source, 700);
     expect(iframe.style.height).toBe("700px");
   });
 
@@ -464,23 +248,14 @@ describe("WireframeIframe", () => {
     if (source === null) throw new Error("Expected iframe contentWindow");
     const handle = screen.getByRole("slider", { name: "Resize preview" });
 
-    dispatchHeightMessage(source, {
-      marker: HEIGHT_MESSAGE_MARKER,
-      height: 500,
-    });
+    reportHeight(source, 500);
     fireEvent(handle, pointerEvent("pointerdown", 7, 500));
     fireEvent(handle, pointerEvent("pointermove", 7, 503));
-    dispatchHeightMessage(source, {
-      marker: HEIGHT_MESSAGE_MARKER,
-      height: 650,
-    });
+    reportHeight(source, 650);
     fireEvent(handle, pointerEvent("pointerup", 7, 503));
     expect(iframe.style.height).toBe("650px");
 
-    dispatchHeightMessage(source, {
-      marker: HEIGHT_MESSAGE_MARKER,
-      height: 700,
-    });
+    reportHeight(source, 700);
     expect(iframe.style.height).toBe("700px");
   });
 
@@ -490,10 +265,7 @@ describe("WireframeIframe", () => {
     if (source === null) throw new Error("Expected iframe contentWindow");
     const handle = screen.getByRole("slider", { name: "Resize preview" });
 
-    dispatchHeightMessage(source, {
-      marker: HEIGHT_MESSAGE_MARKER,
-      height: 500,
-    });
+    reportHeight(source, 500);
     fireEvent(handle, pointerEvent("pointerdown", 7, 500));
     fireEvent(handle, pointerEvent("pointermove", 7, 800));
     expect(screen.getByTestId("wireframe-resize-shield")).toBeTruthy();
@@ -513,10 +285,7 @@ describe("WireframeIframe", () => {
     if (source === null) throw new Error("Expected iframe contentWindow");
     const handle = screen.getByRole("slider", { name: "Resize preview" });
 
-    dispatchHeightMessage(source, {
-      marker: HEIGHT_MESSAGE_MARKER,
-      height: 500,
-    });
+    reportHeight(source, 500);
     fireEvent(handle, pointerEvent("pointerdown", 7, 500));
     fireEvent(handle, pointerEvent("pointermove", 7, 800));
     expect(iframe.style.height).toBe("800px");
@@ -533,10 +302,7 @@ describe("WireframeIframe", () => {
     if (source === null) throw new Error("Expected iframe contentWindow");
     const handle = screen.getByRole("slider", { name: "Resize preview" });
 
-    dispatchHeightMessage(source, {
-      marker: HEIGHT_MESSAGE_MARKER,
-      height: 500,
-    });
+    reportHeight(source, 500);
     fireEvent(handle, pointerEvent("pointerdown", 7, 500));
     fireEvent(handle, pointerEvent("pointermove", 7, 10_000));
     expect(iframe.style.height).toBe("2000px");
@@ -553,10 +319,7 @@ describe("WireframeIframe", () => {
     if (source === null) throw new Error("Expected iframe contentWindow");
     const handle = screen.getByRole("slider", { name: "Resize preview" });
 
-    dispatchHeightMessage(source, {
-      marker: HEIGHT_MESSAGE_MARKER,
-      height: 10_000,
-    });
+    reportHeight(source, 10_000);
     expect(iframe.style.height).toBe("3000px");
 
     setWindowInnerHeight(500);
@@ -580,10 +343,7 @@ describe("WireframeIframe", () => {
     if (source === null) throw new Error("Expected iframe contentWindow");
     const handle = screen.getByRole("slider", { name: "Resize preview" });
 
-    dispatchHeightMessage(source, {
-      marker: HEIGHT_MESSAGE_MARKER,
-      height: 500,
-    });
+    reportHeight(source, 500);
     fireEvent(handle, pointerEvent("pointerdown", 7, 500));
 
     setWindowInnerHeight(1_000);
@@ -611,40 +371,30 @@ describe("WireframeIframe", () => {
         mode="auto"
       />,
     );
-    const iframe = screen.getByTitle("Wireframe preview");
-    if (!(iframe instanceof HTMLIFrameElement)) {
-      throw new Error("Wireframe preview did not render as an iframe");
-    }
-    const source = iframe.contentWindow;
-    if (source === null) throw new Error("Expected iframe contentWindow");
     const handle = screen.getByRole("slider", { name: "Resize preview" });
 
-    dispatchHeightMessage(source, {
-      marker: HEIGHT_MESSAGE_MARKER,
-      height: 700,
-    });
+    reportHeight(windowOf(currentIframe()), 700);
     fireEvent(handle, pointerEvent("pointerdown", 7, 700));
     fireEvent(handle, pointerEvent("pointermove", 7, 900));
     fireEvent(handle, pointerEvent("pointerup", 7, 900));
-    expect(iframe.style.height).toBe("900px");
+    expect(currentIframe().style.height).toBe("900px");
 
-    const replacementHtml = "<html><body><textarea>unterminated";
     view.rerender(
       <WireframeIframe
-        htmlContent={replacementHtml}
+        htmlContent={"<html><body><textarea>unterminated"}
         title="Wireframe preview"
         className="test-wireframe"
         mode="auto"
       />,
     );
-    expect(iframe.style.height).toBe("900px");
+    expect(currentIframe().style.height).toBe("900px");
 
+    // The old document's 700 is gone with its frame: nothing to go back to.
     fireEvent.doubleClick(handle);
-    expect(iframe.style.height).toBe("240px");
-    expect(iframe.getAttribute("srcdoc")?.endsWith(replacementHtml)).toBe(true);
+    expect(currentIframe().style.height).toBe("240px");
   });
 
-  it("recovers from a manual-floor document replacement through the measurement handshake", () => {
+  it("takes the new document's own report as the baseline while a manual height holds", () => {
     const view = render(
       <WireframeIframe
         htmlContent={ARTIFACT_HTML}
@@ -653,55 +403,27 @@ describe("WireframeIframe", () => {
         mode="auto"
       />,
     );
-    const iframe = screen.getByTitle("Wireframe preview");
-    if (!(iframe instanceof HTMLIFrameElement)) {
-      throw new Error("Wireframe preview did not render as an iframe");
-    }
-    const originalSource = iframe.contentWindow;
-    if (originalSource === null)
-      throw new Error("Expected iframe contentWindow");
     const handle = screen.getByRole("slider", { name: "Resize preview" });
 
-    dispatchHeightMessage(originalSource, {
-      marker: HEIGHT_MESSAGE_MARKER,
-      height: 700,
-    });
+    reportHeight(windowOf(currentIframe()), 700);
     fireEvent(handle, pointerEvent("pointerdown", 7, 700));
     fireEvent(handle, pointerEvent("pointermove", 7, 240));
     fireEvent(handle, pointerEvent("pointerup", 7, 240));
-    expect(iframe.style.height).toBe("240px");
+    expect(currentIframe().style.height).toBe("240px");
 
-    const replacementHtml = "<html><body style='height:700px'>B</body></html>";
     view.rerender(
       <WireframeIframe
-        htmlContent={replacementHtml}
+        htmlContent={"<html><body style='height:700px'>B</body></html>"}
         title="Wireframe preview"
         className="test-wireframe"
         mode="auto"
       />,
     );
-    const replacementSource = iframe.contentWindow;
-    if (replacementSource === null) {
-      throw new Error("Expected replacement iframe contentWindow");
-    }
-    dispatchHeightMessage(replacementSource, {
-      marker: HEIGHT_MESSAGE_MARKER,
-      height: 700,
-    });
-    expect(iframe.style.height).toBe("240px");
-    const postMessage = vi.spyOn(replacementSource, "postMessage");
+    reportHeight(windowOf(currentIframe()), 700);
+    expect(currentIframe().style.height).toBe("240px");
 
     fireEvent.doubleClick(handle);
-    expect(iframe.style.height).toBe("240px");
-    const request = readLastMeasureRequest(postMessage.mock.calls);
-
-    dispatchHeightMessage(replacementSource, {
-      marker: HEIGHT_MESSAGE_MARKER,
-      height: 700,
-      documentGeneration: request.documentGeneration,
-      requestId: request.requestId,
-    });
-    expect(iframe.style.height).toBe("700px");
+    expect(currentIframe().style.height).toBe("700px");
   });
 
   it("does not resurrect stale auto state when identical HTML returns", () => {
@@ -713,29 +435,18 @@ describe("WireframeIframe", () => {
         mode="auto"
       />,
     );
-    const iframe = screen.getByTitle("Wireframe preview");
-    if (!(iframe instanceof HTMLIFrameElement)) {
-      throw new Error("Wireframe preview did not render as an iframe");
-    }
-    const firstSource = iframe.contentWindow;
-    if (firstSource === null) throw new Error("Expected iframe contentWindow");
+    reportHeight(windowOf(currentIframe()), 900);
+    expect(currentIframe().style.height).toBe("900px");
 
-    dispatchHeightMessage(firstSource, {
-      marker: HEIGHT_MESSAGE_MARKER,
-      height: 900,
-    });
-    expect(iframe.style.height).toBe("900px");
-
-    const silentHtml = "<html><body><textarea>silent";
     view.rerender(
       <WireframeIframe
-        htmlContent={silentHtml}
+        htmlContent={"<html><body><textarea>silent"}
         title="Wireframe preview"
         className="test-wireframe"
         mode="auto"
       />,
     );
-    expect(iframe.style.height).toBe("240px");
+    expect(currentIframe().style.height).toBe("240px");
 
     view.rerender(
       <WireframeIframe
@@ -745,23 +456,16 @@ describe("WireframeIframe", () => {
         mode="auto"
       />,
     );
-    expect(iframe.style.height).toBe("240px");
+    expect(currentIframe().style.height).toBe("240px");
     const handle = screen.getByRole("slider", { name: "Resize preview" });
     fireEvent(handle, pointerEvent("pointerdown", 7, 240));
     fireEvent(handle, pointerEvent("pointermove", 7, 250));
-    expect(iframe.style.height).toBe("250px");
+    expect(currentIframe().style.height).toBe("250px");
     fireEvent(handle, pointerEvent("pointercancel", 7, 250));
-    expect(iframe.style.height).toBe("240px");
+    expect(currentIframe().style.height).toBe("240px");
 
-    const returningSource = iframe.contentWindow;
-    if (returningSource === null) {
-      throw new Error("Expected returning iframe contentWindow");
-    }
-    dispatchHeightMessage(returningSource, {
-      marker: HEIGHT_MESSAGE_MARKER,
-      height: 700,
-    });
-    expect(iframe.style.height).toBe("700px");
+    reportHeight(windowOf(currentIframe()), 700);
+    expect(currentIframe().style.height).toBe("700px");
   });
 
   it("rejects old-document reports after an htmlContent transition", () => {
@@ -773,81 +477,44 @@ describe("WireframeIframe", () => {
         mode="auto"
       />,
     );
-    const iframe = screen.getByTitle("Wireframe preview");
-    if (!(iframe instanceof HTMLIFrameElement)) {
-      throw new Error("Wireframe preview did not render as an iframe");
-    }
-    const source = iframe.contentWindow;
-    if (source === null) throw new Error("Expected iframe contentWindow");
-    const oldGeneration = readDocumentGeneration(iframe);
-    dispatchHeightMessage(source, {
-      marker: HEIGHT_MESSAGE_MARKER,
-      height: 900,
-      documentGeneration: oldGeneration,
-      requestId: null,
-    });
-    expect(iframe.style.height).toBe("900px");
+    const oldSource = windowOf(currentIframe());
+    reportHeight(oldSource, 900);
+    expect(currentIframe().style.height).toBe("900px");
 
-    const replacementHtml = "<html><body style='height:700px'>B</body></html>";
     view.rerender(
       <WireframeIframe
-        htmlContent={replacementHtml}
+        htmlContent={"<html><body style='height:700px'>B</body></html>"}
         title="Wireframe preview"
         className="test-wireframe"
         mode="auto"
       />,
     );
-    const newGeneration = readDocumentGeneration(iframe);
-    expect(newGeneration).not.toBe(oldGeneration);
-    expect(iframe.style.height).toBe("240px");
+    const next = currentIframe();
+    expect(windowOf(next)).not.toBe(oldSource);
+    expect(next.style.height).toBe("240px");
 
-    dispatchHeightMessage(source, {
-      marker: HEIGHT_MESSAGE_MARKER,
-      height: 900,
-      documentGeneration: oldGeneration,
-      requestId: null,
-    });
-    expect(iframe.style.height).toBe("240px");
+    // The old frame's bridge went with it.
+    reportHeight(oldSource, 900);
+    expect(next.style.height).toBe("240px");
 
-    dispatchHeightMessage(source, {
-      marker: HEIGHT_MESSAGE_MARKER,
-      height: 700,
-      documentGeneration: newGeneration,
-      requestId: null,
-    });
-    expect(iframe.style.height).toBe("700px");
+    reportHeight(windowOf(next), 700);
+    expect(next.style.height).toBe("700px");
   });
 
-  it("requests and applies a fresh measurement when content grows during manual mode", () => {
+  it("keeps the latest report while a manual height holds, and returns to it on double-click", () => {
     const iframe = renderWireframeIframe("auto");
-    const source = iframe.contentWindow;
-    if (source === null) throw new Error("Expected iframe contentWindow");
+    const source = windowOf(iframe);
     const handle = screen.getByRole("slider", { name: "Resize preview" });
 
-    dispatchHeightMessage(source, {
-      marker: HEIGHT_MESSAGE_MARKER,
-      height: 500,
-    });
+    reportHeight(source, 500);
     fireEvent(handle, pointerEvent("pointerdown", 7, 500));
     fireEvent(handle, pointerEvent("pointermove", 7, 800));
     fireEvent(handle, pointerEvent("pointerup", 7, 800));
-    dispatchHeightMessage(source, {
-      marker: HEIGHT_MESSAGE_MARKER,
-      height: 950,
-    });
+    // The content grows while the reader's height holds.
+    reportHeight(source, 950);
     expect(iframe.style.height).toBe("800px");
-    const postMessage = vi.spyOn(source, "postMessage");
 
     fireEvent.doubleClick(handle);
-    expect(iframe.style.height).toBe("500px");
-    const request = readLastMeasureRequest(postMessage.mock.calls);
-
-    dispatchHeightMessage(source, {
-      marker: HEIGHT_MESSAGE_MARKER,
-      height: 950,
-      documentGeneration: request.documentGeneration,
-      requestId: request.requestId,
-    });
     expect(iframe.style.height).toBe("950px");
   });
 

@@ -192,6 +192,7 @@ const TILE_CATEGORY_BY_KIND: Record<TileKindId, TileCategory> = {
   "pr-detail": "content",
   "pr-diff": "content",
   "deleted-artifacts": "content",
+  "epic-file": "content",
   blank: "content",
 };
 

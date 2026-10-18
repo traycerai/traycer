@@ -26,6 +26,7 @@ import type { HostDirectoryEntry } from "../host-directory";
 import type { RemoteHostDirectoryEntry } from "../remote-fetcher";
 import { WsRpcClient } from "../../host-transport/ws-rpc-client";
 import {
+  HostRequestAbortedError,
   HostRpcError,
   type RequiredHostMethodVersion,
 } from "../../host-transport/host-messenger";
@@ -810,6 +811,76 @@ describe("HostClient", () => {
     );
 
     expect(dialed).toHaveLength(0);
+  });
+
+  describe("request authority without AbortSignal.any", () => {
+    // `AbortSignal.any` landed in Chromium 116. An Android WebView 114 lacks
+    // it, and the unconditional call in `captureAuthority` threw a TypeError
+    // before the request coordinator ran, failing every host RPC (#2308).
+    const nativeAny = Object.getOwnPropertyDescriptor(AbortSignal, "any");
+
+    beforeEach(() => {
+      Object.defineProperty(AbortSignal, "any", {
+        value: undefined,
+        writable: true,
+        configurable: true,
+      });
+    });
+
+    afterEach(() => {
+      if (nativeAny === undefined) {
+        Reflect.deleteProperty(AbortSignal, "any");
+      } else {
+        Object.defineProperty(AbortSignal, "any", nativeAny);
+      }
+    });
+
+    it("dispatches a request to the messenger", async () => {
+      const { client, requester, messenger } = buildHostClientWithMock();
+      client.setRequestContext(makeContext("user-1", "tok-1"));
+
+      await expect(requester.request("host.ping", {})).resolves.toEqual({
+        pong: true,
+      });
+      expect(messenger.calls).toHaveLength(1);
+    });
+
+    it("aborts an in-flight request when its request context aborts", async () => {
+      const { client, requester, messenger } = buildHostClientWithMock();
+      messenger.setHandlers({
+        "host.ping": () => new Promise<never>(() => {}),
+      });
+      const context = makeContext("user-1", "tok-1");
+      client.setRequestContext(context);
+
+      const outcome = requester.request("host.ping", {}).then(
+        () => null,
+        (error: unknown) => error,
+      );
+      expect(messenger.calls).toHaveLength(1);
+
+      context.abort("identity-transition");
+
+      expect(await outcome).toBeInstanceOf(HostRequestAbortedError);
+    });
+
+    it("aborts an in-flight request when the binding generation ends", async () => {
+      const { client, requester, messenger } = buildHostClientWithMock();
+      messenger.setHandlers({
+        "host.ping": () => new Promise<never>(() => {}),
+      });
+      client.setRequestContext(makeContext("user-1", "tok-1"));
+
+      const outcome = requester.request("host.ping", {}).then(
+        () => null,
+        (error: unknown) => error,
+      );
+      expect(messenger.calls).toHaveLength(1);
+
+      client.getAuthorityRegistry().dispose();
+
+      expect(await outcome).toBeInstanceOf(HostRequestAbortedError);
+    });
   });
 
   describe("requestWithOptions", () => {
