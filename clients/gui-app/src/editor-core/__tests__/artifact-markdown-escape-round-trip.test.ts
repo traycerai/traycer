@@ -1817,13 +1817,9 @@ describe("a multiline unresolved image label is the reader's call (traycer#1563)
         expect(md1).toBe(md);
         // The stored document keeps the image, with its alt and source.
         expect(altsIn(read(md1))).toEqual([alt]);
-        // Raw is the very bytes the image itself is written with there. A
-        // paragraph after a sibling block is separated from it by a blank
-        // line, which an image block is not.
-        const sameBytes = where.includes("later block")
-          ? md1.replace("\n\n", "\n")
-          : md1;
-        expect(sameBytes).toBe(serializeJson(wraps[where](imageNode(alt))));
+        // Raw is the very bytes the image itself is written with there, the
+        // blank line before a later block included.
+        expect(md1).toBe(serializeJson(wraps[where](imageNode(alt))));
       },
     );
 

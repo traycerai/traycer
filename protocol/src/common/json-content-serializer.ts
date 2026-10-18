@@ -1626,8 +1626,15 @@ function serializeListItemWithMarker(
         // continuation, and on the next pass falls out of the item. Behind
         // a marker line with nothing on it the blank line would end the item
         // instead (an item opens with at most one blank line), so there the
-        // paragraph follows directly and reads back as the item's own.
-        if (child.type === "paragraph" && !markerOnly) lines.push("");
+        // paragraph follows directly and reads back as the item's own. An
+        // artifact image needs the blank line too: it cannot interrupt a
+        // paragraph, so directly under a line of text, a quote or a nested
+        // item it reads back inside that block's paragraph, where the schema
+        // drops it and the list with it.
+        const ownBlock =
+          child.type === "paragraph" ||
+          (ctx.escapeText && child.type === "image");
+        if (ownBlock && !markerOnly) lines.push("");
         const underMarkerOnly = markerOnly;
         markerOnly = false;
         // A nested list that opens with an empty bullet item starts with a

@@ -3,6 +3,7 @@ import type { JsonContent } from "@traycer/protocol/common/registry";
 import {
   decodeUnresolvedArtifactImageText,
   jsonContentToArtifactMarkdown,
+  jsonContentToMarkdown,
   unresolvedArtifactImageText,
 } from "@traycer/protocol/common/json-content-serializer";
 import {
@@ -788,5 +789,124 @@ describe("serializing a large body with a fallback in it is linear", () => {
     expect(serialize(paragraphs(256 * KIB)).endsWith(`\n\n${FALLBACK}`)).toBe(
       true,
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 7. An image node after another block of a list or task item
+// ---------------------------------------------------------------------------
+
+describe("an image node that follows a block in a list item is its own block", () => {
+  const SHOT = { alt: "shot", src: "images/0123abcd.png" };
+  const shot: JsonContent = {
+    type: "image",
+    attrs: { src: SHOT.src, alt: SHOT.alt },
+  };
+  const code: JsonContent = {
+    type: "codeBlock",
+    attrs: { language: null },
+    content: [{ type: "text", text: "c" }],
+  };
+  const t = P("t");
+
+  const rows: readonly (readonly [string, JsonContent, string, number])[] = [
+    ["a bullet item", doc(ul(li(t, shot))), `- t\n\n  ![shot](${SHOT.src})`, 1],
+    [
+      "an ordered item",
+      doc(ol(li(t, shot))),
+      `1. t\n\n   ![shot](${SHOT.src})`,
+      1,
+    ],
+    [
+      "a task item",
+      doc(tl(ti(t, shot))),
+      `- [ ] t\n\n  ![shot](${SHOT.src})`,
+      1,
+    ],
+    [
+      "a quote before the image, which must not take it in lazily",
+      doc(ul(li(t, bq(P("q")), shot))),
+      `- t\n  > q\n\n  ![shot](${SHOT.src})`,
+      1,
+    ],
+    [
+      "a nested item before the image, which must not take it in",
+      doc(ul(li(t, ul(li(P("s"))), shot))),
+      `- t\n  - s\n\n  ![shot](${SHOT.src})`,
+      1,
+    ],
+    [
+      "two images",
+      doc(ul(li(t, shot, shot))),
+      `- t\n\n  ![shot](${SHOT.src})\n\n  ![shot](${SHOT.src})`,
+      2,
+    ],
+    [
+      "a nested item",
+      doc(ul(li(t, ul(li(P("s"), shot))))),
+      `- t\n  - s\n\n    ![shot](${SHOT.src})`,
+      1,
+    ],
+    [
+      "an image after a paragraph inside a quote inside an item",
+      doc(ul(li(t, bq(P("q"), shot)))),
+      `- t\n  > q\n  >\n  > ![shot](${SHOT.src})`,
+      1,
+    ],
+    [
+      "an image alone in a quote inside an item",
+      doc(ul(li(t, bq(shot)))),
+      `- t\n  > ![shot](${SHOT.src})`,
+      1,
+    ],
+  ];
+
+  it.each(
+    rows.flatMap(([name, content, bytes, count]) =>
+      READERS.map((reader) => ({
+        name,
+        readerName: reader.name,
+        content,
+        bytes,
+        count,
+        reader,
+      })),
+    ),
+  )(
+    "$name: exact bytes and three passes through $readerName",
+    ({ name, content, bytes, count, reader }) => {
+      const expected = Array.from({ length: count }, () => SHOT);
+      const md1 = serialize(content);
+      expect(md1).toBe(bytes);
+      const stored1 = reader.stored(md1);
+      // `documentSchema`'s `taskItem` is `(paragraph|taskList)+`: it cannot
+      // hold an image at all, with a blank line before it or without, and the
+      // host's own converter reads the whole document back empty (checked on
+      // the converter for both spellings). A schema limit, not the spelling.
+      if (reader === HOST && name === "a task item") {
+        expect(stored1).toEqual({ type: "doc" });
+        return;
+      }
+      expect(imageAttrsOf(stored1)).toEqual(expected);
+      const md2 = serialize(stored1);
+      const stored2 = reader.stored(md2);
+      expect(imageAttrsOf(stored2)).toEqual(expected);
+      const md3 = serialize(stored2);
+      const stored3 = reader.stored(md3);
+      expect(imageAttrsOf(stored3)).toEqual(expected);
+      expect(md2).toBe(md1);
+      expect(md3).toBe(md2);
+    },
+  );
+
+  it("leaves the prompt serializer's bullet item with an image tight", () => {
+    expect(jsonContentToMarkdown(doc(ul(li(t, shot))), OPTIONS)).toBe(
+      `- t\n  ![shot](${SHOT.src})`,
+    );
+  });
+
+  it("gives a later code block no blank line, and a later quote none", () => {
+    expect(serialize(doc(ul(li(t, code))))).toBe("- t\n  ```\n  c\n  ```");
+    expect(serialize(doc(ul(li(t, bq(P("q"))))))).toBe("- t\n  > q");
   });
 });
