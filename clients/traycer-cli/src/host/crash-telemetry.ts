@@ -13,6 +13,7 @@ import { hostCrashThrottlePath } from "../store/paths";
 import {
   isWindowsExternalTerminationExit,
   type CrashReportMemory,
+  type StderrFatalKind,
 } from "./crash-diagnostics";
 import { readHostPidMetadata } from "./pid-metadata";
 
@@ -72,6 +73,11 @@ export interface HostCrashTelemetry {
   readonly stopRequested: boolean;
   /** Whether the child wrote nothing at all to stderr. Only the verdict. */
   readonly stderrEmpty: boolean;
+  /**
+   * Which kind of fatal the stderr capture holds. Only the closed-set verdict
+   * (`crash-diagnostics.ts`): never the text, which stays on the machine.
+   */
+  readonly stderrFatal: StderrFatalKind;
   /**
    * The memory numbers the diagnostic report states, in bytes; a field is
    * `null` when there was no report or the report did not carry it.
@@ -224,12 +230,16 @@ export function buildHostCrashEvent(
       ...(externallyTerminated
         ? { host_exit_kind: "external-termination" }
         : {}),
-      // The four tags below split one exit status into its causes: a stop
+      // The tags below split one exit status into its causes: a stop
       // that was asked for, a child that never got as far as publishing, one
       // that said nothing before dying, and how long it ran. Closed sets, so
       // none can carry a path, a message or an id.
       stop_requested: telemetry.stopRequested ? "yes" : "no",
       host_output: telemetry.stderrEmpty ? "silent" : "wrote",
+      // Which kind of fatal that output was (a heap OOM, another V8 fatal, a
+      // CHECK block, a native assertion, ...): the closed set that splits one
+      // exit status, 0xC0000409 above all, into its causes.
+      host_fatal: telemetry.stderrFatal,
       host_phase: hostCrashPhase(identity, telemetry.childPid),
       uptime_bucket: uptimeBucket(telemetry.uptimeMs),
     },

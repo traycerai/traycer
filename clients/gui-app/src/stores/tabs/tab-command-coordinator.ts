@@ -38,6 +38,8 @@ import {
 } from "@/stores/tabs/store";
 import { isHomeTabEnabled } from "@/stores/layout/layout-store";
 import { HOME_TAB_REF } from "@/stores/tabs/kinds/home";
+import { isOpenBotTab } from "@/stores/tabs/kinds/bot";
+import { useBotTabsStore } from "@/stores/bots/bot-tabs-store";
 import {
   createEmptySplit,
   createLayoutItem,
@@ -66,7 +68,10 @@ import {
   type SplitSideName,
   type StripItem,
 } from "@/stores/tabs/layout";
-import { tabSourceRefs } from "@/stores/tabs/source-refs";
+import {
+  isSourceBackedTabKind,
+  tabSourceRefs,
+} from "@/stores/tabs/source-refs";
 import {
   markClosingTabs,
   markOpenedTabs,
@@ -367,6 +372,7 @@ function sourceHasRef(ref: TabRef): boolean {
       .getState()
       .drafts.some((draft) => draft.id === ref.id && isOpenLandingDraft(draft));
   }
+  if (ref.kind === "bot") return isOpenBotTab(ref.id);
   // Home owns no source record and no strip item, so it is never a placement
   // this reconciles - `resolveHomeActivation` is its only entry point.
   if (ref.kind === "home") return false;
@@ -644,6 +650,10 @@ export class TabCommandCoordinator {
     });
     useLandingDraftStore.subscribe((next, previous) => {
       if (next.drafts === previous.drafts) return;
+      this.onSourceStoreChange();
+    });
+    useBotTabsStore.subscribe((next, previous) => {
+      if (next.tabs === previous.tabs) return;
       this.onSourceStoreChange();
     });
   }
@@ -1320,6 +1330,10 @@ export class TabCommandCoordinator {
         useLandingDraftStore.getState().setActiveDraft(ref.id);
       });
     }
+    if (ref.kind === "bot") {
+      if (!isOpenBotTab(ref.id)) return null;
+      return this.activationForRef(layout, ref, () => undefined);
+    }
     if (ref.kind === "sample-workspace")
       return this.activationForRef(layout, ref, () => undefined);
     if (ref.kind === "home") return this.resolveHomeActivation(layout);
@@ -1911,7 +1925,7 @@ export class TabCommandCoordinator {
     );
     const unexpectedRemovals = layoutRefs.some(
       (ref) =>
-        (ref.kind === "epic" || ref.kind === "draft") &&
+        isSourceBackedTabKind(ref.kind) &&
         !sourceKeys.has(tabRefKey(ref)) &&
         !this.ledger.pendingRemovals.has(tabRefKey(ref)),
     );
@@ -2010,6 +2024,12 @@ export class TabCommandCoordinator {
     if (ref.kind === "draft") {
       this.applyExpectedSourceMutation(() => {
         useLandingDraftStore.getState().closeDraft(ref.id);
+      });
+      return;
+    }
+    if (ref.kind === "bot") {
+      this.applyExpectedSourceMutation(() => {
+        useBotTabsStore.getState().closeBotTab(ref.id);
       });
     }
   }
@@ -2145,8 +2165,7 @@ export class TabCommandCoordinator {
     const knownKeys = new Set(knownSources.map(tabRefKey));
     const removals = flattenLayoutRefs(layout).filter(
       (ref) =>
-        (ref.kind === "epic" || ref.kind === "draft") &&
-        !knownKeys.has(tabRefKey(ref)),
+        isSourceBackedTabKind(ref.kind) && !knownKeys.has(tabRefKey(ref)),
     );
     const withoutMissing = removals.reduce(layoutWithRemovedRef, layout);
     const additions = knownSources.filter(

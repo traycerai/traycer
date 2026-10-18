@@ -488,6 +488,65 @@ describe("callHostRpc", () => {
     },
   );
 
+  // The host sends a request that names a managed profile it cannot use as a
+  // 400 `RPC_ERROR` with one of four fixed messages (the person's own
+  // selection, TRAYCER-CLI-4W). They end as the expected INVALID_ARGUMENT, with
+  // the same output the host's `E_INVALID_ARGUMENT` gets.
+  it.each([
+    'No profile "p-1" is registered for provider "claude-code".',
+    'Profile "p-1" for provider "claude-code" was removed and can no longer be used.',
+    'Profile "p-1" for provider "claude-code" is still completing setup and cannot be used yet.',
+    'Provider "cursor" does not support managed profiles.',
+  ])(
+    "maps an RPC_ERROR carrying the profile-selection refusal %s to an expected INVALID_ARGUMENT",
+    async (message) => {
+      const mapped = await toAgentCliError(
+        Promise.reject(
+          new HostRpcError({
+            code: "RPC_ERROR",
+            message,
+            requestId: "r1",
+            method: "agent.sendMessage",
+            fatalDetails: null,
+          }),
+        ),
+      ).catch((error: unknown) => error);
+      expect(mapped).toMatchObject({
+        code: CLI_ERROR_CODES.INVALID_ARGUMENT,
+        message: `traycer: ${message}`,
+        details: null,
+        exitCode: 1,
+      });
+      expect(
+        EXPECTED_CLI_ERROR_CODES.has(CLI_ERROR_CODES.INVALID_ARGUMENT),
+      ).toBe(true);
+    },
+  );
+
+  // Control: an RPC_ERROR whose message is not a profile-selection refusal
+  // stays UNEXPECTED and captured, so a host-side request-validation defect
+  // is still reported.
+  it("keeps an RPC_ERROR with a params-validation message as a captured UNEXPECTED", async () => {
+    const mapped = await toAgentCliError(
+      Promise.reject(
+        new HostRpcError({
+          code: "RPC_ERROR",
+          message: "Invalid params for agent.sendMessage: profile: Required",
+          requestId: "r1",
+          method: "agent.sendMessage",
+          fatalDetails: null,
+        }),
+      ),
+    ).catch((error: unknown) => error);
+    expect(mapped).toMatchObject({
+      code: CLI_ERROR_CODES.UNEXPECTED,
+      message: "Invalid params for agent.sendMessage: profile: Required",
+    });
+    expect(EXPECTED_CLI_ERROR_CODES.has(CLI_ERROR_CODES.UNEXPECTED)).toBe(
+      false,
+    );
+  });
+
   // TRAYCER-CLI-P: a provider the person turned off in Settings -> Providers.
   // The host refuses a run or launch on it with HTTP 403 and the typed
   // `PROVIDER_DISABLED` code. It is the person's own setting, so the mapped

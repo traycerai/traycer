@@ -33,7 +33,10 @@ import { homeRoutePath, isHomePath } from "@/stores/tabs/kinds/home";
 import { SETTINGS_PATHS } from "@/stores/tabs/settings-paths";
 import { setTabSplitCompatibility } from "@/stores/tabs/tab-split-compatibility";
 import { tabCommandCoordinator } from "@/stores/tabs/tab-command-coordinator";
-import { tabSourceRefs } from "@/stores/tabs/source-refs";
+import {
+  isSourceBackedTabKind,
+  tabSourceRefs,
+} from "@/stores/tabs/source-refs";
 import type { SystemTab, TabRef } from "@/stores/tabs/types";
 
 const DEBOUNCE_MS = 100;
@@ -387,9 +390,7 @@ function sanitizeDesktopLayout(
 ): PersistedTabStripLayout {
   const sourceKeys = new Set(tabSourceRefs().map(refKey));
   const missing = flattenLayoutRefs(persisted).filter(
-    (ref) =>
-      (ref.kind === "epic" || ref.kind === "draft") &&
-      !sourceKeys.has(refKey(ref)),
+    (ref) => isSourceBackedTabKind(ref.kind) && !sourceKeys.has(refKey(ref)),
   );
   const withoutMissing = missing.reduce(removeMissingRef, persisted);
   const repaired = repairLayout(withoutMissing, isRegisteredTabKind);
@@ -581,6 +582,7 @@ function routeForRef(layout: PersistedTabStripLayout, ref: TabRef): string {
       : `/epics/${encodeURIComponent(tab.epicId)}/${encodeURIComponent(tab.tabId)}`;
   }
   if (ref.kind === "draft") return `/draft/${encodeURIComponent(ref.id)}`;
+  if (ref.kind === "bot") return `/bot/${encodeURIComponent(ref.id)}`;
   // A `home` ref never reaches here: it is not a layout ref (`validRef` refuses
   // one) and not a source ref, so nothing this module walks can produce it.
   if (ref.kind === "home") return "/";
@@ -612,10 +614,22 @@ function routeRef(route: string | null): TabRef | null {
     const tabId = decodeRouteSegment(epicMatch[2]);
     return tabId === null ? null : { kind: "epic", id: tabId };
   }
-  const draftMatch = pathname?.match(/^\/draft\/([^/]+)\/?$/);
-  if (draftMatch === null || draftMatch === undefined) return null;
-  const draftId = decodeRouteSegment(draftMatch[1]);
-  return draftId === null ? null : { kind: "draft", id: draftId };
+  return (
+    singleSegmentRef(pathname, /^\/bot\/([^/]+)\/?$/, "bot") ??
+    singleSegmentRef(pathname, /^\/draft\/([^/]+)\/?$/, "draft")
+  );
+}
+
+/** A `/<kind>/:id` route as its ref, or `null` when it is not one. */
+function singleSegmentRef(
+  pathname: string | null,
+  pattern: RegExp,
+  kind: "bot" | "draft",
+): TabRef | null {
+  const match = pathname?.match(pattern);
+  if (match === null || match === undefined) return null;
+  const id = decodeRouteSegment(match[1]);
+  return id === null ? null : { kind, id };
 }
 
 function routeMatchesHydratedRef(route: string, ref: TabRef): boolean {
@@ -632,6 +646,8 @@ function routeMatchesHydratedRef(route: string, ref: TabRef): boolean {
   if (ref.kind === "sample-workspace") return pathname === "/sample-workspace";
   if (ref.kind === "draft")
     return pathname === `/draft/${encodeURIComponent(ref.id)}`;
+  if (ref.kind === "bot")
+    return pathname === `/bot/${encodeURIComponent(ref.id)}`;
   if (ref.kind === "history")
     return pathname === "/epics" || pathname === "/epics/";
   return isSettingsRoutePath(pathname);

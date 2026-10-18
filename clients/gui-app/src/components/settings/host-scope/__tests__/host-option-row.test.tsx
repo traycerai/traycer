@@ -58,6 +58,7 @@ describe("HostOptionRow — per-host update badge isolation (Ticket 06 subject F
           surfaceState={AVAILABLE_HOST_ROW_SURFACE_STATE}
           updateView={viewA}
           nameRef={null}
+          environmentLabel={null}
         />
         <HostOptionRow
           host={hostB}
@@ -67,6 +68,7 @@ describe("HostOptionRow — per-host update badge isolation (Ticket 06 subject F
           surfaceState={AVAILABLE_HOST_ROW_SURFACE_STATE}
           updateView={viewB}
           nameRef={null}
+          environmentLabel={null}
         />
       </>,
     );
@@ -93,6 +95,7 @@ describe("HostOptionRow — per-host update badge isolation (Ticket 06 subject F
           surfaceState={AVAILABLE_HOST_ROW_SURFACE_STATE}
           updateView={fleetView({ kind: "idle" })}
           nameRef={null}
+          environmentLabel={null}
         />
         <HostOptionRow
           host={hostB}
@@ -102,6 +105,7 @@ describe("HostOptionRow — per-host update badge isolation (Ticket 06 subject F
           surfaceState={AVAILABLE_HOST_ROW_SURFACE_STATE}
           updateView={fleetView({ kind: "failed" })}
           nameRef={null}
+          environmentLabel={null}
         />
       </>,
     );
@@ -120,6 +124,7 @@ describe("HostOptionRow — per-host update badge isolation (Ticket 06 subject F
           surfaceState={AVAILABLE_HOST_ROW_SURFACE_STATE}
           updateView={fleetView({ kind: "failed" })}
           nameRef={null}
+          environmentLabel={null}
         />
         <HostOptionRow
           host={hostB}
@@ -129,6 +134,7 @@ describe("HostOptionRow — per-host update badge isolation (Ticket 06 subject F
           surfaceState={AVAILABLE_HOST_ROW_SURFACE_STATE}
           updateView={fleetView({ kind: "idle" })}
           nameRef={null}
+          environmentLabel={null}
         />
       </>,
     );
@@ -149,6 +155,7 @@ describe("HostOptionRow — per-host update badge isolation (Ticket 06 subject F
         surfaceState={AVAILABLE_HOST_ROW_SURFACE_STATE}
         updateView={null}
         nameRef={null}
+        environmentLabel={null}
       />,
     );
     expect(queryByTestId("host-option-update-badge-host-a")).toBeNull();
@@ -168,6 +175,7 @@ describe("HostOptionRow — per-host update badge isolation (Ticket 06 subject F
           blockingSessionCount: 3,
         })}
         nameRef={null}
+        environmentLabel={null}
       />,
     );
     // Structural, not a checklist of specific attributes: NOTHING this row
@@ -179,5 +187,78 @@ describe("HostOptionRow — per-host update badge isolation (Ticket 06 subject F
     ).toHaveLength(0);
     expect(container.querySelectorAll("[disabled]")).toHaveLength(0);
     expect(container.querySelectorAll("[aria-disabled]")).toHaveLength(0);
+  });
+});
+
+describe("HostOptionRow — environment label (Tracy Bots)", () => {
+  afterEach(cleanup);
+
+  it("renders the environment label beside the name when one is passed", () => {
+    const host = hostScopeOptionFixture({ hostId: "host-a", name: "Host A" });
+    const { getByTestId } = render(
+      <HostOptionRow
+        host={host}
+        picked={false}
+        active={false}
+        intent="view"
+        surfaceState={AVAILABLE_HOST_ROW_SURFACE_STATE}
+        updateView={null}
+        nameRef={null}
+        environmentLabel="acme"
+      />,
+    );
+    expect(getByTestId("host-option-environment-host-a").textContent).toBe(
+      "acme",
+    );
+  });
+
+  it("renders no environment element for a null label (every picker but Settings)", () => {
+    const host = hostScopeOptionFixture({ hostId: "host-a", name: "Host A" });
+    const { queryByTestId } = render(
+      <HostOptionRow
+        host={host}
+        picked={false}
+        active={false}
+        intent="view"
+        surfaceState={AVAILABLE_HOST_ROW_SURFACE_STATE}
+        updateView={null}
+        nameRef={null}
+        environmentLabel={null}
+      />,
+    );
+    expect(queryByTestId("host-option-environment-host-a")).toBeNull();
+  });
+
+  it("keys the label by its own host, so sibling rows carry independent labels", () => {
+    const hostA = hostScopeOptionFixture({ hostId: "host-a", name: "Host A" });
+    const hostB = hostScopeOptionFixture({ hostId: "host-b", name: "Host B" });
+    const { getByTestId, queryByTestId } = render(
+      <>
+        <HostOptionRow
+          host={hostA}
+          picked={false}
+          active={false}
+          intent="view"
+          surfaceState={AVAILABLE_HOST_ROW_SURFACE_STATE}
+          updateView={null}
+          nameRef={null}
+          environmentLabel="acme"
+        />
+        <HostOptionRow
+          host={hostB}
+          picked={false}
+          active={false}
+          intent="view"
+          surfaceState={AVAILABLE_HOST_ROW_SURFACE_STATE}
+          updateView={null}
+          nameRef={null}
+          environmentLabel={null}
+        />
+      </>,
+    );
+    expect(getByTestId("host-option-environment-host-a").textContent).toBe(
+      "acme",
+    );
+    expect(queryByTestId("host-option-environment-host-b")).toBeNull();
   });
 });

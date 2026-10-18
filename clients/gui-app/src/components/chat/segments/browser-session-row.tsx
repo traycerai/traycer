@@ -11,7 +11,8 @@ import {
   useHostReachability,
   type HostReachabilityStatus,
 } from "@/hooks/agent/use-host-reachability";
-import { useOpenEpicId } from "@/lib/epic-selectors";
+import { useChatContainerId } from "@/components/chat/chat-container-context";
+import { useMaybeOpenEpicHandle } from "@/providers/use-open-epic-handle";
 import { resolveTabTitle } from "@/lib/browser-view/browser-tab-display";
 import type { BrowserSessionsState } from "@/lib/browser-view/sessions/browser-sessions-coordinator";
 import { tileIntent } from "@/lib/canvas/tile-open/intent";
@@ -99,10 +100,17 @@ export function BrowserSessionRow({
   session,
   findUnitId,
 }: BrowserSessionRowProps) {
-  const epicId = useOpenEpicId();
+  // The container the session belongs to - the Epic, or the bot whose trunk
+  // opened it. Opening the TILE needs the Epic canvas, so that action shows
+  // only inside an Epic session; elsewhere the row states the session.
+  const containerId = useChatContainerId();
+  const inEpicSession = useMaybeOpenEpicHandle() !== null;
   const inventory = useBrowserSessionsForHost({
-    hostId: session.hostId,
-    scope: { kind: "epic", epicId },
+    hostId: containerId === null ? null : session.hostId,
+    scope:
+      containerId === null
+        ? { kind: "independent" }
+        : { kind: "epic", epicId: containerId },
   });
   const host = useHostReachability(session.hostId);
   const { openTile } = useEpicTileNavigation();
@@ -131,29 +139,31 @@ export function BrowserSessionRow({
           {status === null ? null : ` · ${status}`}
         </div>
       </div>
-      <Button
-        type="button"
-        variant="ghost"
-        size="sm"
-        disabled={tab === undefined}
-        onClick={() => {
-          if (tab === undefined) return;
-          openTile(
-            tileIntent(
-              makeBrowserSessionTileRef({
-                hostId: session.hostId,
-                sessionId: session.sessionId,
-                tabId: tab.tabId,
-              }),
-              { epicId },
-              "explicit",
-              "direct_ui",
-            ),
-          );
-        }}
-      >
-        Open browser <ArrowUpRight aria-hidden className="size-3.5" />
-      </Button>
+      {inEpicSession && containerId !== null ? (
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          disabled={tab === undefined}
+          onClick={() => {
+            if (tab === undefined) return;
+            openTile(
+              tileIntent(
+                makeBrowserSessionTileRef({
+                  hostId: session.hostId,
+                  sessionId: session.sessionId,
+                  tabId: tab.tabId,
+                }),
+                { epicId: containerId },
+                "explicit",
+                "direct_ui",
+              ),
+            );
+          }}
+        >
+          Open browser <ArrowUpRight aria-hidden className="size-3.5" />
+        </Button>
+      ) : null}
     </div>
   );
 }

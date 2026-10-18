@@ -53,6 +53,12 @@ export type TabNavigationIntent =
       readonly nestedFocus: NestedFocusTarget | null;
     }
   | { readonly kind: "draft"; readonly draftId: string }
+  /**
+   * A bot tab (Tracy Bots). The host it is bound to is NOT on the intent: the
+   * bot-tabs store record carries it for the tab's life, and an intent that
+   * named one would be a second place for a binding that has exactly one.
+   */
+  | { readonly kind: "bot"; readonly botId: string }
   | { readonly kind: "history" }
   | { readonly kind: "settings"; readonly section: SettingsSectionId }
   | { readonly kind: "home" }
@@ -277,6 +283,12 @@ export function historyTabIntent(): Extract<
   { kind: "history" }
 > {
   return { kind: "history" };
+}
+
+export function botTabIntent(
+  botId: string,
+): Extract<TabNavigationIntent, { kind: "bot" }> {
+  return { kind: "bot", botId };
 }
 
 export function homeTabIntent(): Extract<
