@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { composeRequestAbort } from "../auth/request-abort";
-import { PATH_ID_PATTERN } from "./sandbox-secrets";
+import { PATH_ID_PATTERN } from "./path-id";
 
 /**
  * The executable-write grant a client mints before a write that can reach an

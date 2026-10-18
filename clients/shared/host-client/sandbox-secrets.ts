@@ -6,6 +6,7 @@ import {
 } from "@traycer/protocol/host/sandbox-secrets";
 import { z } from "zod";
 import { composeRequestAbort } from "../auth/request-abort";
+import { PATH_ID_PATTERN } from "./path-id";
 
 /**
  * The two calls a client makes to the secrets broker (authn) with the user's
@@ -87,15 +88,6 @@ export interface EnvironmentProviderCounts {
 export type EnvironmentProvidersFetchResult =
   | { readonly kind: "ok"; readonly counts: EnvironmentProviderCounts }
   | SandboxSecretsFailure;
-
-/**
- * An id as a URL may carry it: one plain path segment. `encodeURIComponent`
- * leaves `.` and `..` alone and `new URL` resolves them as dot segments, so
- * an id that is not this shape is refused before a URL is built (as
- * `sandbox-control.ts` refuses a sandbox id). An environment id is read as
- * opaque within it: the `env_` form and the older uuid form both fit.
- */
-export const PATH_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
 
 const INVALID_ID: SandboxSecretsFailure = {
   kind: "network-error",
