@@ -146,7 +146,10 @@ import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 // re-publication. No
 // reader floor: an older reader renders the call as the plain tool row it
 // always did, which is what that row was before these keys existed.
-export const CHAT_SYNC_SCHEMA_VERSION = { major: 1, minor: 7 } as const;
+// 1.8 reopens artifact_operation.kind to a checked string. An unknown kind
+// must not reject a whole shard; readers from this minor render no block for
+// a kind they do not know. No emission gate protects readers predating 1.8.
+export const CHAT_SYNC_SCHEMA_VERSION = { major: 1, minor: 8 } as const;
 
 export type ChatSyncSchemaVersion = typeof CHAT_SYNC_SCHEMA_VERSION;
 

@@ -7496,9 +7496,6 @@ export const epicSchemaSurfaceBaseline = {
                 "title": {
                   "type": "string"
                 },
-                "artifactRoomId": {
-                  "type": "string"
-                },
                 "createdAt": {
                   "type": "number"
                 },
@@ -7517,6 +7514,21 @@ export const epicSchemaSurfaceBaseline = {
                       "type": "null"
                     }
                   ]
+                },
+                "layout": {
+                  "default": "folder",
+                  "type": "string",
+                  "enum": [
+                    "folder",
+                    "file"
+                  ]
+                },
+                "relativePath": {
+                  "type": "string",
+                  "pattern": "^(?!\\.|__proto__(?:\\/|$))[^/\\\\\\p{Cc}]+(?:\\/(?!\\.|__proto__(?:\\/|$))[^/\\\\\\p{Cc}]+)*(?![\\s\\S])"
+                },
+                "artifactRoomId": {
+                  "type": "string"
                 }
               },
               "required": [
@@ -7524,11 +7536,11 @@ export const epicSchemaSurfaceBaseline = {
                 "id",
                 "folderName",
                 "title",
-                "artifactRoomId",
                 "createdAt",
                 "updatedAt",
                 "createdManually",
-                "parentId"
+                "parentId",
+                "artifactRoomId"
               ]
             },
             {
@@ -7547,9 +7559,6 @@ export const epicSchemaSurfaceBaseline = {
                 "title": {
                   "type": "string"
                 },
-                "artifactRoomId": {
-                  "type": "string"
-                },
                 "createdAt": {
                   "type": "number"
                 },
@@ -7568,6 +7577,21 @@ export const epicSchemaSurfaceBaseline = {
                       "type": "null"
                     }
                   ]
+                },
+                "layout": {
+                  "default": "folder",
+                  "type": "string",
+                  "enum": [
+                    "folder",
+                    "file"
+                  ]
+                },
+                "relativePath": {
+                  "type": "string",
+                  "pattern": "^(?!\\.|__proto__(?:\\/|$))[^/\\\\\\p{Cc}]+(?:\\/(?!\\.|__proto__(?:\\/|$))[^/\\\\\\p{Cc}]+)*(?![\\s\\S])"
+                },
+                "artifactRoomId": {
+                  "type": "string"
                 },
                 "assignee": {
                   "type": "string"
@@ -7594,11 +7618,11 @@ export const epicSchemaSurfaceBaseline = {
                 "id",
                 "folderName",
                 "title",
-                "artifactRoomId",
                 "createdAt",
                 "updatedAt",
                 "createdManually",
                 "parentId",
+                "artifactRoomId",
                 "assignee",
                 "status"
               ]
@@ -7619,9 +7643,6 @@ export const epicSchemaSurfaceBaseline = {
                 "title": {
                   "type": "string"
                 },
-                "artifactRoomId": {
-                  "type": "string"
-                },
                 "createdAt": {
                   "type": "number"
                 },
@@ -7640,6 +7661,21 @@ export const epicSchemaSurfaceBaseline = {
                       "type": "null"
                     }
                   ]
+                },
+                "layout": {
+                  "default": "folder",
+                  "type": "string",
+                  "enum": [
+                    "folder",
+                    "file"
+                  ]
+                },
+                "relativePath": {
+                  "type": "string",
+                  "pattern": "^(?!\\.|__proto__(?:\\/|$))[^/\\\\\\p{Cc}]+(?:\\/(?!\\.|__proto__(?:\\/|$))[^/\\\\\\p{Cc}]+)*(?![\\s\\S])"
+                },
+                "artifactRoomId": {
+                  "type": "string"
                 },
                 "assignee": {
                   "type": "string"
@@ -7666,11 +7702,11 @@ export const epicSchemaSurfaceBaseline = {
                 "id",
                 "folderName",
                 "title",
-                "artifactRoomId",
                 "createdAt",
                 "updatedAt",
                 "createdManually",
                 "parentId",
+                "artifactRoomId",
                 "assignee",
                 "status"
               ]
@@ -7691,7 +7727,67 @@ export const epicSchemaSurfaceBaseline = {
                 "title": {
                   "type": "string"
                 },
+                "createdAt": {
+                  "type": "number"
+                },
+                "updatedAt": {
+                  "type": "number"
+                },
+                "createdManually": {
+                  "type": "boolean"
+                },
+                "parentId": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "layout": {
+                  "default": "folder",
+                  "type": "string",
+                  "enum": [
+                    "folder",
+                    "file"
+                  ]
+                },
+                "relativePath": {
+                  "type": "string",
+                  "pattern": "^(?!\\.|__proto__(?:\\/|$))[^/\\\\\\p{Cc}]+(?:\\/(?!\\.|__proto__(?:\\/|$))[^/\\\\\\p{Cc}]+)*(?![\\s\\S])"
+                },
                 "artifactRoomId": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind",
+                "id",
+                "folderName",
+                "title",
+                "createdAt",
+                "updatedAt",
+                "createdManually",
+                "parentId",
+                "artifactRoomId"
+              ]
+            },
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "const": "html"
+                },
+                "id": {
+                  "type": "string"
+                },
+                "folderName": {
+                  "type": "string"
+                },
+                "title": {
                   "type": "string"
                 },
                 "createdAt": {
@@ -7712,6 +7808,72 @@ export const epicSchemaSurfaceBaseline = {
                       "type": "null"
                     }
                   ]
+                },
+                "layout": {
+                  "default": "folder",
+                  "type": "string",
+                  "enum": [
+                    "folder",
+                    "file"
+                  ]
+                },
+                "relativePath": {
+                  "type": "string",
+                  "pattern": "^(?!\\.|__proto__(?:\\/|$))[^/\\\\\\p{Cc}]+(?:\\/(?!\\.|__proto__(?:\\/|$))[^/\\\\\\p{Cc}]+)*(?![\\s\\S])"
+                },
+                "head": {
+                  "type": "object",
+                  "properties": {
+                    "files": {
+                      "type": "object",
+                      "propertyNames": {
+                        "type": "string",
+                        "pattern": "^(?!\\.|__proto__(?:\\/|$))[^/\\\\\\p{Cc}]+(?:\\/(?!\\.|__proto__(?:\\/|$))[^/\\\\\\p{Cc}]+)*(?![\\s\\S])"
+                      },
+                      "additionalProperties": {
+                        "type": "object",
+                        "properties": {
+                          "sha256": {
+                            "type": "string",
+                            "pattern": "^[0-9a-f]{64}$"
+                          },
+                          "byteLength": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "mediaType": {
+                            "type": "string",
+                            "maxLength": 127,
+                            "pattern": "^[a-z0-9][a-z0-9!#$&^_.+-]*\\/[a-z0-9][a-z0-9!#$&^_.+-]*$"
+                          },
+                          "status": {
+                            "type": "string",
+                            "enum": [
+                              "queued",
+                              "uploading",
+                              "published",
+                              "local-only",
+                              "failed"
+                            ]
+                          }
+                        },
+                        "required": [
+                          "sha256",
+                          "byteLength",
+                          "mediaType",
+                          "status"
+                        ]
+                      }
+                    },
+                    "capturedAt": {
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "files",
+                    "capturedAt"
+                  ]
                 }
               },
               "required": [
@@ -7719,11 +7881,213 @@ export const epicSchemaSurfaceBaseline = {
                 "id",
                 "folderName",
                 "title",
-                "artifactRoomId",
                 "createdAt",
                 "updatedAt",
                 "createdManually",
-                "parentId"
+                "parentId",
+                "head"
+              ]
+            },
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "const": "canvas"
+                },
+                "id": {
+                  "type": "string"
+                },
+                "folderName": {
+                  "type": "string"
+                },
+                "title": {
+                  "type": "string"
+                },
+                "createdAt": {
+                  "type": "number"
+                },
+                "updatedAt": {
+                  "type": "number"
+                },
+                "createdManually": {
+                  "type": "boolean"
+                },
+                "parentId": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "layout": {
+                  "default": "folder",
+                  "type": "string",
+                  "enum": [
+                    "folder",
+                    "file"
+                  ]
+                },
+                "relativePath": {
+                  "type": "string",
+                  "pattern": "^(?!\\.|__proto__(?:\\/|$))[^/\\\\\\p{Cc}]+(?:\\/(?!\\.|__proto__(?:\\/|$))[^/\\\\\\p{Cc}]+)*(?![\\s\\S])"
+                },
+                "artifactRoomId": {
+                  "type": "string"
+                },
+                "head": {
+                  "type": "object",
+                  "properties": {
+                    "files": {
+                      "type": "object",
+                      "propertyNames": {
+                        "type": "string",
+                        "pattern": "^(?!\\.|__proto__(?:\\/|$))[^/\\\\\\p{Cc}]+(?:\\/(?!\\.|__proto__(?:\\/|$))[^/\\\\\\p{Cc}]+)*(?![\\s\\S])"
+                      },
+                      "additionalProperties": {
+                        "type": "object",
+                        "properties": {
+                          "sha256": {
+                            "type": "string",
+                            "pattern": "^[0-9a-f]{64}$"
+                          },
+                          "byteLength": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "mediaType": {
+                            "type": "string",
+                            "maxLength": 127,
+                            "pattern": "^[a-z0-9][a-z0-9!#$&^_.+-]*\\/[a-z0-9][a-z0-9!#$&^_.+-]*$"
+                          },
+                          "status": {
+                            "type": "string",
+                            "enum": [
+                              "queued",
+                              "uploading",
+                              "published",
+                              "local-only",
+                              "failed"
+                            ]
+                          }
+                        },
+                        "required": [
+                          "sha256",
+                          "byteLength",
+                          "mediaType",
+                          "status"
+                        ]
+                      }
+                    },
+                    "capturedAt": {
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "files",
+                    "capturedAt"
+                  ]
+                }
+              },
+              "required": [
+                "kind",
+                "id",
+                "folderName",
+                "title",
+                "createdAt",
+                "updatedAt",
+                "createdManually",
+                "parentId",
+                "artifactRoomId",
+                "head"
+              ]
+            },
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "const": "file"
+                },
+                "id": {
+                  "type": "string"
+                },
+                "folderName": {
+                  "type": "string"
+                },
+                "title": {
+                  "type": "string"
+                },
+                "createdAt": {
+                  "type": "number"
+                },
+                "updatedAt": {
+                  "type": "number"
+                },
+                "createdManually": {
+                  "type": "boolean"
+                },
+                "parentId": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "layout": {
+                  "default": "file",
+                  "type": "string",
+                  "const": "file"
+                },
+                "relativePath": {
+                  "type": "string",
+                  "pattern": "^(?!\\.|__proto__(?:\\/|$))[^/\\\\\\p{Cc}]+(?:\\/(?!\\.|__proto__(?:\\/|$))[^/\\\\\\p{Cc}]+)*(?![\\s\\S])"
+                },
+                "sha256": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                },
+                "byteLength": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "mediaType": {
+                  "type": "string",
+                  "maxLength": 127,
+                  "pattern": "^[a-z0-9][a-z0-9!#$&^_.+-]*\\/[a-z0-9][a-z0-9!#$&^_.+-]*$"
+                },
+                "status": {
+                  "type": "string",
+                  "enum": [
+                    "queued",
+                    "uploading",
+                    "published",
+                    "local-only",
+                    "failed"
+                  ]
+                }
+              },
+              "required": [
+                "kind",
+                "id",
+                "folderName",
+                "title",
+                "createdAt",
+                "updatedAt",
+                "createdManually",
+                "parentId",
+                "sha256",
+                "byteLength",
+                "mediaType",
+                "status"
               ]
             }
           ]
@@ -8066,6 +8430,330 @@ export const epicSchemaSurfaceBaseline = {
                 "kind": {
                   "type": "string",
                   "const": "review"
+                },
+                "id": {
+                  "type": "string"
+                },
+                "title": {
+                  "type": "string"
+                },
+                "artifactRoomId": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "deletedAt": {
+                  "type": "string"
+                },
+                "folderName": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "parentId": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "createdAt": {
+                  "anyOf": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "createdManually": {
+                  "anyOf": [
+                    {
+                      "type": "boolean"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "assignee": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "status": {
+                  "anyOf": [
+                    {
+                      "anyOf": [
+                        {
+                          "type": "number",
+                          "const": 0
+                        },
+                        {
+                          "type": "number",
+                          "const": 1
+                        },
+                        {
+                          "type": "number",
+                          "const": 2
+                        }
+                      ]
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "kind",
+                "id",
+                "title",
+                "artifactRoomId",
+                "deletedAt"
+              ]
+            },
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "const": "html"
+                },
+                "id": {
+                  "type": "string"
+                },
+                "title": {
+                  "type": "string"
+                },
+                "artifactRoomId": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "deletedAt": {
+                  "type": "string"
+                },
+                "folderName": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "parentId": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "createdAt": {
+                  "anyOf": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "createdManually": {
+                  "anyOf": [
+                    {
+                      "type": "boolean"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "assignee": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "status": {
+                  "anyOf": [
+                    {
+                      "anyOf": [
+                        {
+                          "type": "number",
+                          "const": 0
+                        },
+                        {
+                          "type": "number",
+                          "const": 1
+                        },
+                        {
+                          "type": "number",
+                          "const": 2
+                        }
+                      ]
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "kind",
+                "id",
+                "title",
+                "artifactRoomId",
+                "deletedAt"
+              ]
+            },
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "const": "canvas"
+                },
+                "id": {
+                  "type": "string"
+                },
+                "title": {
+                  "type": "string"
+                },
+                "artifactRoomId": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "deletedAt": {
+                  "type": "string"
+                },
+                "folderName": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "parentId": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "createdAt": {
+                  "anyOf": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "createdManually": {
+                  "anyOf": [
+                    {
+                      "type": "boolean"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "assignee": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "status": {
+                  "anyOf": [
+                    {
+                      "anyOf": [
+                        {
+                          "type": "number",
+                          "const": 0
+                        },
+                        {
+                          "type": "number",
+                          "const": 1
+                        },
+                        {
+                          "type": "number",
+                          "const": 2
+                        }
+                      ]
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "kind",
+                "id",
+                "title",
+                "artifactRoomId",
+                "deletedAt"
+              ]
+            },
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "const": "file"
                 },
                 "id": {
                   "type": "string"
@@ -16898,9 +17586,6 @@ export const epicSchemaSurfaceBaseline = {
                 "title": {
                   "type": "string"
                 },
-                "artifactRoomId": {
-                  "type": "string"
-                },
                 "createdAt": {
                   "type": "number"
                 },
@@ -16919,6 +17604,21 @@ export const epicSchemaSurfaceBaseline = {
                       "type": "null"
                     }
                   ]
+                },
+                "layout": {
+                  "default": "folder",
+                  "type": "string",
+                  "enum": [
+                    "folder",
+                    "file"
+                  ]
+                },
+                "relativePath": {
+                  "type": "string",
+                  "pattern": "^(?!\\.|__proto__(?:\\/|$))[^/\\\\\\p{Cc}]+(?:\\/(?!\\.|__proto__(?:\\/|$))[^/\\\\\\p{Cc}]+)*(?![\\s\\S])"
+                },
+                "artifactRoomId": {
+                  "type": "string"
                 }
               },
               "required": [
@@ -16926,11 +17626,12 @@ export const epicSchemaSurfaceBaseline = {
                 "id",
                 "folderName",
                 "title",
-                "artifactRoomId",
                 "createdAt",
                 "updatedAt",
                 "createdManually",
-                "parentId"
+                "parentId",
+                "layout",
+                "artifactRoomId"
               ],
               "additionalProperties": false
             },
@@ -16950,9 +17651,6 @@ export const epicSchemaSurfaceBaseline = {
                 "title": {
                   "type": "string"
                 },
-                "artifactRoomId": {
-                  "type": "string"
-                },
                 "createdAt": {
                   "type": "number"
                 },
@@ -16971,6 +17669,21 @@ export const epicSchemaSurfaceBaseline = {
                       "type": "null"
                     }
                   ]
+                },
+                "layout": {
+                  "default": "folder",
+                  "type": "string",
+                  "enum": [
+                    "folder",
+                    "file"
+                  ]
+                },
+                "relativePath": {
+                  "type": "string",
+                  "pattern": "^(?!\\.|__proto__(?:\\/|$))[^/\\\\\\p{Cc}]+(?:\\/(?!\\.|__proto__(?:\\/|$))[^/\\\\\\p{Cc}]+)*(?![\\s\\S])"
+                },
+                "artifactRoomId": {
+                  "type": "string"
                 },
                 "assignee": {
                   "type": "string"
@@ -16997,11 +17710,12 @@ export const epicSchemaSurfaceBaseline = {
                 "id",
                 "folderName",
                 "title",
-                "artifactRoomId",
                 "createdAt",
                 "updatedAt",
                 "createdManually",
                 "parentId",
+                "layout",
+                "artifactRoomId",
                 "assignee",
                 "status"
               ],
@@ -17023,9 +17737,6 @@ export const epicSchemaSurfaceBaseline = {
                 "title": {
                   "type": "string"
                 },
-                "artifactRoomId": {
-                  "type": "string"
-                },
                 "createdAt": {
                   "type": "number"
                 },
@@ -17044,6 +17755,21 @@ export const epicSchemaSurfaceBaseline = {
                       "type": "null"
                     }
                   ]
+                },
+                "layout": {
+                  "default": "folder",
+                  "type": "string",
+                  "enum": [
+                    "folder",
+                    "file"
+                  ]
+                },
+                "relativePath": {
+                  "type": "string",
+                  "pattern": "^(?!\\.|__proto__(?:\\/|$))[^/\\\\\\p{Cc}]+(?:\\/(?!\\.|__proto__(?:\\/|$))[^/\\\\\\p{Cc}]+)*(?![\\s\\S])"
+                },
+                "artifactRoomId": {
+                  "type": "string"
                 },
                 "assignee": {
                   "type": "string"
@@ -17070,11 +17796,12 @@ export const epicSchemaSurfaceBaseline = {
                 "id",
                 "folderName",
                 "title",
-                "artifactRoomId",
                 "createdAt",
                 "updatedAt",
                 "createdManually",
                 "parentId",
+                "layout",
+                "artifactRoomId",
                 "assignee",
                 "status"
               ],
@@ -17096,7 +17823,69 @@ export const epicSchemaSurfaceBaseline = {
                 "title": {
                   "type": "string"
                 },
+                "createdAt": {
+                  "type": "number"
+                },
+                "updatedAt": {
+                  "type": "number"
+                },
+                "createdManually": {
+                  "type": "boolean"
+                },
+                "parentId": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "layout": {
+                  "default": "folder",
+                  "type": "string",
+                  "enum": [
+                    "folder",
+                    "file"
+                  ]
+                },
+                "relativePath": {
+                  "type": "string",
+                  "pattern": "^(?!\\.|__proto__(?:\\/|$))[^/\\\\\\p{Cc}]+(?:\\/(?!\\.|__proto__(?:\\/|$))[^/\\\\\\p{Cc}]+)*(?![\\s\\S])"
+                },
                 "artifactRoomId": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind",
+                "id",
+                "folderName",
+                "title",
+                "createdAt",
+                "updatedAt",
+                "createdManually",
+                "parentId",
+                "layout",
+                "artifactRoomId"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "const": "html"
+                },
+                "id": {
+                  "type": "string"
+                },
+                "folderName": {
+                  "type": "string"
+                },
+                "title": {
                   "type": "string"
                 },
                 "createdAt": {
@@ -17117,6 +17906,74 @@ export const epicSchemaSurfaceBaseline = {
                       "type": "null"
                     }
                   ]
+                },
+                "layout": {
+                  "default": "folder",
+                  "type": "string",
+                  "enum": [
+                    "folder",
+                    "file"
+                  ]
+                },
+                "relativePath": {
+                  "type": "string",
+                  "pattern": "^(?!\\.|__proto__(?:\\/|$))[^/\\\\\\p{Cc}]+(?:\\/(?!\\.|__proto__(?:\\/|$))[^/\\\\\\p{Cc}]+)*(?![\\s\\S])"
+                },
+                "head": {
+                  "type": "object",
+                  "properties": {
+                    "files": {
+                      "type": "object",
+                      "propertyNames": {
+                        "type": "string",
+                        "pattern": "^(?!\\.|__proto__(?:\\/|$))[^/\\\\\\p{Cc}]+(?:\\/(?!\\.|__proto__(?:\\/|$))[^/\\\\\\p{Cc}]+)*(?![\\s\\S])"
+                      },
+                      "additionalProperties": {
+                        "type": "object",
+                        "properties": {
+                          "sha256": {
+                            "type": "string",
+                            "pattern": "^[0-9a-f]{64}$"
+                          },
+                          "byteLength": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "mediaType": {
+                            "type": "string",
+                            "maxLength": 127,
+                            "pattern": "^[a-z0-9][a-z0-9!#$&^_.+-]*\\/[a-z0-9][a-z0-9!#$&^_.+-]*$"
+                          },
+                          "status": {
+                            "type": "string",
+                            "enum": [
+                              "queued",
+                              "uploading",
+                              "published",
+                              "local-only",
+                              "failed"
+                            ]
+                          }
+                        },
+                        "required": [
+                          "sha256",
+                          "byteLength",
+                          "mediaType",
+                          "status"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "capturedAt": {
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "files",
+                    "capturedAt"
+                  ],
+                  "additionalProperties": false
                 }
               },
               "required": [
@@ -17124,11 +17981,220 @@ export const epicSchemaSurfaceBaseline = {
                 "id",
                 "folderName",
                 "title",
-                "artifactRoomId",
                 "createdAt",
                 "updatedAt",
                 "createdManually",
-                "parentId"
+                "parentId",
+                "layout",
+                "head"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "const": "canvas"
+                },
+                "id": {
+                  "type": "string"
+                },
+                "folderName": {
+                  "type": "string"
+                },
+                "title": {
+                  "type": "string"
+                },
+                "createdAt": {
+                  "type": "number"
+                },
+                "updatedAt": {
+                  "type": "number"
+                },
+                "createdManually": {
+                  "type": "boolean"
+                },
+                "parentId": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "layout": {
+                  "default": "folder",
+                  "type": "string",
+                  "enum": [
+                    "folder",
+                    "file"
+                  ]
+                },
+                "relativePath": {
+                  "type": "string",
+                  "pattern": "^(?!\\.|__proto__(?:\\/|$))[^/\\\\\\p{Cc}]+(?:\\/(?!\\.|__proto__(?:\\/|$))[^/\\\\\\p{Cc}]+)*(?![\\s\\S])"
+                },
+                "artifactRoomId": {
+                  "type": "string"
+                },
+                "head": {
+                  "type": "object",
+                  "properties": {
+                    "files": {
+                      "type": "object",
+                      "propertyNames": {
+                        "type": "string",
+                        "pattern": "^(?!\\.|__proto__(?:\\/|$))[^/\\\\\\p{Cc}]+(?:\\/(?!\\.|__proto__(?:\\/|$))[^/\\\\\\p{Cc}]+)*(?![\\s\\S])"
+                      },
+                      "additionalProperties": {
+                        "type": "object",
+                        "properties": {
+                          "sha256": {
+                            "type": "string",
+                            "pattern": "^[0-9a-f]{64}$"
+                          },
+                          "byteLength": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "mediaType": {
+                            "type": "string",
+                            "maxLength": 127,
+                            "pattern": "^[a-z0-9][a-z0-9!#$&^_.+-]*\\/[a-z0-9][a-z0-9!#$&^_.+-]*$"
+                          },
+                          "status": {
+                            "type": "string",
+                            "enum": [
+                              "queued",
+                              "uploading",
+                              "published",
+                              "local-only",
+                              "failed"
+                            ]
+                          }
+                        },
+                        "required": [
+                          "sha256",
+                          "byteLength",
+                          "mediaType",
+                          "status"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "capturedAt": {
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "files",
+                    "capturedAt"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "required": [
+                "kind",
+                "id",
+                "folderName",
+                "title",
+                "createdAt",
+                "updatedAt",
+                "createdManually",
+                "parentId",
+                "layout",
+                "artifactRoomId",
+                "head"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "const": "file"
+                },
+                "id": {
+                  "type": "string"
+                },
+                "folderName": {
+                  "type": "string"
+                },
+                "title": {
+                  "type": "string"
+                },
+                "createdAt": {
+                  "type": "number"
+                },
+                "updatedAt": {
+                  "type": "number"
+                },
+                "createdManually": {
+                  "type": "boolean"
+                },
+                "parentId": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "layout": {
+                  "default": "file",
+                  "type": "string",
+                  "const": "file"
+                },
+                "relativePath": {
+                  "type": "string",
+                  "pattern": "^(?!\\.|__proto__(?:\\/|$))[^/\\\\\\p{Cc}]+(?:\\/(?!\\.|__proto__(?:\\/|$))[^/\\\\\\p{Cc}]+)*(?![\\s\\S])"
+                },
+                "sha256": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                },
+                "byteLength": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "mediaType": {
+                  "type": "string",
+                  "maxLength": 127,
+                  "pattern": "^[a-z0-9][a-z0-9!#$&^_.+-]*\\/[a-z0-9][a-z0-9!#$&^_.+-]*$"
+                },
+                "status": {
+                  "type": "string",
+                  "enum": [
+                    "queued",
+                    "uploading",
+                    "published",
+                    "local-only",
+                    "failed"
+                  ]
+                }
+              },
+              "required": [
+                "kind",
+                "id",
+                "folderName",
+                "title",
+                "createdAt",
+                "updatedAt",
+                "createdManually",
+                "parentId",
+                "layout",
+                "sha256",
+                "byteLength",
+                "mediaType",
+                "status"
               ],
               "additionalProperties": false
             }
@@ -17475,6 +18541,333 @@ export const epicSchemaSurfaceBaseline = {
                 "kind": {
                   "type": "string",
                   "const": "review"
+                },
+                "id": {
+                  "type": "string"
+                },
+                "title": {
+                  "type": "string"
+                },
+                "artifactRoomId": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "deletedAt": {
+                  "type": "string"
+                },
+                "folderName": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "parentId": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "createdAt": {
+                  "anyOf": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "createdManually": {
+                  "anyOf": [
+                    {
+                      "type": "boolean"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "assignee": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "status": {
+                  "anyOf": [
+                    {
+                      "anyOf": [
+                        {
+                          "type": "number",
+                          "const": 0
+                        },
+                        {
+                          "type": "number",
+                          "const": 1
+                        },
+                        {
+                          "type": "number",
+                          "const": 2
+                        }
+                      ]
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "kind",
+                "id",
+                "title",
+                "artifactRoomId",
+                "deletedAt"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "const": "html"
+                },
+                "id": {
+                  "type": "string"
+                },
+                "title": {
+                  "type": "string"
+                },
+                "artifactRoomId": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "deletedAt": {
+                  "type": "string"
+                },
+                "folderName": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "parentId": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "createdAt": {
+                  "anyOf": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "createdManually": {
+                  "anyOf": [
+                    {
+                      "type": "boolean"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "assignee": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "status": {
+                  "anyOf": [
+                    {
+                      "anyOf": [
+                        {
+                          "type": "number",
+                          "const": 0
+                        },
+                        {
+                          "type": "number",
+                          "const": 1
+                        },
+                        {
+                          "type": "number",
+                          "const": 2
+                        }
+                      ]
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "kind",
+                "id",
+                "title",
+                "artifactRoomId",
+                "deletedAt"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "const": "canvas"
+                },
+                "id": {
+                  "type": "string"
+                },
+                "title": {
+                  "type": "string"
+                },
+                "artifactRoomId": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "deletedAt": {
+                  "type": "string"
+                },
+                "folderName": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "parentId": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "createdAt": {
+                  "anyOf": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "createdManually": {
+                  "anyOf": [
+                    {
+                      "type": "boolean"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "assignee": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "status": {
+                  "anyOf": [
+                    {
+                      "anyOf": [
+                        {
+                          "type": "number",
+                          "const": 0
+                        },
+                        {
+                          "type": "number",
+                          "const": 1
+                        },
+                        {
+                          "type": "number",
+                          "const": 2
+                        }
+                      ]
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "kind",
+                "id",
+                "title",
+                "artifactRoomId",
+                "deletedAt"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "const": "file"
                 },
                 "id": {
                   "type": "string"

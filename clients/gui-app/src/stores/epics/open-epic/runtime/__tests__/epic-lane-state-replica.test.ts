@@ -12,10 +12,17 @@
 import { describe, expect, it } from "vitest";
 import { epicStateSubscribeServerFrameSchemaV11 } from "@traycer/protocol/host/epic/state-subscribe";
 import type { EpicStateSubscribeServerFrameV11 } from "@traycer/protocol/host/epic/state-subscribe";
+import { epicStateSubscribeServerFrameSchemaV13 } from "@traycer/protocol/host/epic/state-subscribe";
+import type {
+  EpicArtifactRecord,
+  EpicDeletedArtifactRecord,
+  EpicStateSubscribeServerFrameV13,
+} from "@traycer/protocol/host/epic/state-subscribe";
 import type {
   EpicStateLaneEvent,
   EpicStateRow,
 } from "@traycer-clients/shared/epic-lanes";
+import type { RecordChange } from "@traycer-clients/shared/replica-runtime";
 import {
   ARTIFACT_TOMBSTONE_REMOVE_REASON,
   EPIC_META_ROW_ID,
@@ -106,7 +113,7 @@ function artifactRow(overrides: {
   return {
     rowId: artifactRowId(record.id),
     revision: record.revision,
-    row: { kind: "artifact", record },
+    row: { kind: "artifact", record: { ...record, layout: "folder" } },
   };
 }
 
@@ -957,5 +964,402 @@ describe("epic.state.subscribe read model - files", () => {
       expect(replica.slices().files.records).toEqual([record]);
       expect(changes()).toBe(afterSnapshot + 1);
     });
+  });
+});
+
+/**
+ * `epic.state.subscribe@1.3` carries html, canvas and file artifacts beside the
+ * four markdown kinds. The GUI has no presentation for the new kinds yet, so the
+ * lane replica must keep them out of every population it projects - a stray
+ * entry would reach the artifact tree and the id sets as a row nothing can draw.
+ *
+ * Frames go through the REAL `@1.3` schema, same standard as above: a wire
+ * shape that drifts fails construction here instead of passing for the wrong
+ * reason.
+ */
+describe("epic.state.subscribe read model - artifact kinds without a presentation", () => {
+  const SHA256 = "a".repeat(64);
+  const MARKDOWN_IDS = ["spec-1", "ticket-1"];
+  const NEW_KIND_IDS = ["html-1", "canvas-1", "file-1"];
+
+  function parseSnapshotFrameV13(
+    raw: unknown,
+  ): Extract<EpicStateSubscribeServerFrameV13, { kind: "snapshot" }> {
+    const frame = epicStateSubscribeServerFrameSchemaV13.parse(raw);
+    if (frame.kind !== "snapshot") {
+      throw new Error(`expected a snapshot frame, got ${frame.kind}`);
+    }
+    return frame;
+  }
+
+  function parseDeltaFrameV13(
+    raw: unknown,
+  ): Extract<EpicStateSubscribeServerFrameV13, { kind: "delta" }> {
+    const frame = epicStateSubscribeServerFrameSchemaV13.parse(raw);
+    if (frame.kind !== "delta") {
+      throw new Error(`expected a delta frame, got ${frame.kind}`);
+    }
+    return frame;
+  }
+
+  function baseWire(id: string, revision: number) {
+    return {
+      id,
+      folderName: `${id}-folder`,
+      title: `Title ${id}`,
+      createdAt: 1,
+      updatedAt: 2,
+      createdManually: true,
+      parentId: null,
+      revision,
+    };
+  }
+
+  const manifestHead = {
+    files: {
+      "index.html": {
+        sha256: SHA256,
+        byteLength: 12,
+        mediaType: "text/html",
+        status: "published",
+      },
+    },
+    capturedAt: 3,
+  };
+
+  function specWire(id: string, revision: number, title: string) {
+    return { kind: "spec", ...baseWire(id, revision), title };
+  }
+
+  function ticketWire(id: string, revision: number) {
+    return {
+      kind: "ticket",
+      ...baseWire(id, revision),
+      assignee: "",
+      status: 0,
+    };
+  }
+
+  /** The three kinds the replica must skip; none of them has an `artifactRoomId` on the lane. */
+  function newKindWires(revision: number) {
+    return [
+      { kind: "html", ...baseWire("html-1", revision), head: manifestHead },
+      { kind: "canvas", ...baseWire("canvas-1", revision), head: manifestHead },
+      {
+        kind: "file",
+        ...baseWire("file-1", revision),
+        layout: "file",
+        sha256: SHA256,
+        byteLength: 12,
+        mediaType: "application/pdf",
+        status: "published",
+      },
+    ];
+  }
+
+  function deletedWire(kind: string, id: string, revision: number) {
+    return {
+      kind,
+      id,
+      title: `Deleted ${id}`,
+      deletedAt: "2026-01-01T00:00:00.000Z",
+      revision,
+    };
+  }
+
+  function newKindTombstoneWires(revision: number) {
+    return [
+      deletedWire("html", "html-1", revision),
+      deletedWire("canvas", "canvas-1", revision),
+      deletedWire("file", "file-1", revision),
+    ];
+  }
+
+  function snapshotWith(args: {
+    readonly artifactRecords: readonly unknown[];
+    readonly deletedArtifacts: readonly unknown[];
+    readonly position: number;
+    readonly cause: "initial" | "reseed";
+  }): EpicStateLaneEvent {
+    const frame = parseSnapshotFrameV13({
+      kind: "snapshot",
+      hasBinaryPayload: false,
+      authorityEpoch: EPOCH,
+      basis: "cold",
+      position: args.position,
+      reconciledWithCloud: true,
+      artifactRecords: args.artifactRecords,
+      deletedArtifacts: args.deletedArtifacts,
+      commentThreads: [],
+      roleClaims: { revision: 1, claims: [] },
+      epicMeta: { revision: 1, meta: { title: "Epic", updatedAt: 10 } },
+    });
+    const rows: RecordRow<EpicStateRow>[] = [
+      ...frame.artifactRecords.map(
+        (record: EpicArtifactRecord): RecordRow<EpicStateRow> => ({
+          rowId: artifactRowId(record.id),
+          revision: record.revision,
+          row: { kind: "artifact", record },
+        }),
+      ),
+      ...frame.deletedArtifacts.map(
+        (record: EpicDeletedArtifactRecord): RecordRow<EpicStateRow> => ({
+          rowId: artifactTombstoneRowId(record.id),
+          revision: record.revision,
+          row: { kind: "artifact-tombstone", record },
+        }),
+      ),
+      ...metaRows({ title: "Epic", updatedAt: 10, revision: 1 }),
+    ];
+    return snapshotEvent({
+      rows,
+      position: args.position,
+      epoch: EPOCH,
+      trust: "reconciled-with-cloud",
+      cause: args.cause,
+    });
+  }
+
+  /** The adapter's own delta mapping, so a tombstone is both halves in one envelope. */
+  function deltaWith(args: {
+    readonly artifactUpserts: readonly unknown[];
+    readonly artifactTombstones: readonly unknown[];
+    readonly position: number;
+  }): EpicStateLaneEvent {
+    const frame = parseDeltaFrameV13({
+      kind: "delta",
+      hasBinaryPayload: false,
+      authorityEpoch: EPOCH,
+      seq: args.position,
+      artifactUpserts: args.artifactUpserts,
+      artifactTombstones: args.artifactTombstones,
+      commentThreadUpserts: [],
+      commentThreadRemovals: [],
+      roleClaims: null,
+      epicMeta: null,
+    });
+    const changes: RecordChange<EpicStateRow>[] = [];
+    for (const record of frame.artifactUpserts) {
+      changes.push({
+        kind: "upsert",
+        row: {
+          rowId: artifactRowId(record.id),
+          revision: record.revision,
+          row: { kind: "artifact", record },
+        },
+      });
+    }
+    for (const record of frame.artifactTombstones) {
+      changes.push({
+        kind: "remove",
+        rowId: artifactRowId(record.id),
+        revision: record.revision,
+        reason: ARTIFACT_TOMBSTONE_REMOVE_REASON,
+      });
+      changes.push({
+        kind: "upsert",
+        row: {
+          rowId: artifactTombstoneRowId(record.id),
+          revision: record.revision,
+          row: { kind: "artifact-tombstone", record },
+        },
+      });
+    }
+    return {
+      kind: "record-transaction",
+      cursor: cursorAt(args.position, EPOCH),
+      changes,
+      barrier: null,
+    };
+  }
+
+  function expectNoEntryFor(
+    replica: EpicLaneStateReplica,
+    ids: readonly string[],
+  ): void {
+    const slices = replica.slices();
+    for (const id of ids) {
+      expect(slices.artifacts.allIds).not.toContain(id);
+      expect(slices.deletedArtifacts.allIds).not.toContain(id);
+      expect(Object.hasOwn(slices.artifacts.byId, id)).toBe(false);
+      expect(Object.hasOwn(slices.deletedArtifacts.byId, id)).toBe(false);
+      expect(Object.hasOwn(slices.commentThreads.byArtifactId, id)).toBe(false);
+    }
+  }
+
+  it("projects only the markdown rows of a snapshot that also carries html, canvas and file", () => {
+    const { replica } = newReplica();
+    replica.apply(
+      snapshotWith({
+        artifactRecords: [
+          specWire("spec-1", 1, "Spec"),
+          ...newKindWires(1),
+          ticketWire("ticket-1", 1),
+        ],
+        deletedArtifacts: [],
+        position: 1,
+        cause: "initial",
+      }),
+    );
+
+    expect(replica.slices().artifacts.allIds.slice().sort()).toEqual(
+      MARKDOWN_IDS,
+    );
+    expect(Object.keys(replica.slices().artifacts.byId).sort()).toEqual(
+      MARKDOWN_IDS,
+    );
+    expect(replica.slices().artifacts.byId["spec-1"].kind).toBe("spec");
+    expect(replica.slices().artifacts.byId["ticket-1"].kind).toBe("ticket");
+    expectNoEntryFor(replica, NEW_KIND_IDS);
+  });
+
+  it("projects only the markdown rows of a delta that also upserts html, canvas and file", () => {
+    const { replica } = newReplica();
+    replica.apply(
+      snapshotWith({
+        artifactRecords: [specWire("spec-1", 1, "Spec")],
+        deletedArtifacts: [],
+        position: 1,
+        cause: "initial",
+      }),
+    );
+
+    replica.apply(
+      deltaWith({
+        artifactUpserts: [
+          ...newKindWires(1),
+          specWire("spec-1", 2, "Renamed spec"),
+          ticketWire("ticket-1", 1),
+        ],
+        artifactTombstones: [],
+        position: 2,
+      }),
+    );
+
+    expect(replica.slices().artifacts.allIds.slice().sort()).toEqual(
+      MARKDOWN_IDS,
+    );
+    // The markdown rows in the same envelope are not collateral of the skip.
+    expect(replica.slices().artifacts.byId["spec-1"].title).toBe(
+      "Renamed spec",
+    );
+    expectNoEntryFor(replica, NEW_KIND_IDS);
+  });
+
+  it("does not project the tombstones of html, canvas and file from a snapshot, and still projects a markdown one", () => {
+    const { replica } = newReplica();
+    replica.apply(
+      snapshotWith({
+        artifactRecords: [],
+        deletedArtifacts: [
+          deletedWire("spec", "spec-gone", 4),
+          ...newKindTombstoneWires(4),
+        ],
+        position: 1,
+        cause: "initial",
+      }),
+    );
+
+    expect(replica.slices().deletedArtifacts.allIds).toEqual(["spec-gone"]);
+    expect(Object.keys(replica.slices().deletedArtifacts.byId)).toEqual([
+      "spec-gone",
+    ]);
+    expect(replica.slices().deletedArtifacts.byId["spec-gone"].title).toBe(
+      "Deleted spec-gone",
+    );
+    expectNoEntryFor(replica, NEW_KIND_IDS);
+  });
+
+  it("does not project the tombstones of html, canvas and file from a delta, and still projects a markdown one", () => {
+    const { replica } = newReplica();
+    replica.apply(
+      snapshotWith({
+        artifactRecords: [specWire("spec-1", 1, "Spec")],
+        deletedArtifacts: [],
+        position: 1,
+        cause: "initial",
+      }),
+    );
+
+    replica.apply(
+      deltaWith({
+        artifactUpserts: [],
+        artifactTombstones: [
+          ...newKindTombstoneWires(5),
+          deletedWire("spec", "spec-1", 5),
+        ],
+        position: 2,
+      }),
+    );
+
+    expect(replica.slices().deletedArtifacts.allIds).toEqual(["spec-1"]);
+    expect(Object.keys(replica.slices().deletedArtifacts.byId)).toEqual([
+      "spec-1",
+    ]);
+    // The neighbouring markdown tombstone did its other half as well.
+    expect(replica.slices().artifacts.allIds).toEqual([]);
+    expectNoEntryFor(replica, NEW_KIND_IDS);
+  });
+
+  it("leaves the projection and the change signal alone for a delta that only upserts a new kind", () => {
+    const { replica, changes } = newReplica();
+    replica.apply(
+      snapshotWith({
+        artifactRecords: [specWire("spec-1", 1, "Spec")],
+        deletedArtifacts: [],
+        position: 1,
+        cause: "initial",
+      }),
+    );
+    const slicesBefore = replica.slices();
+    const changesBefore = changes();
+
+    const outcome = replica.apply(
+      deltaWith({
+        artifactUpserts: newKindWires(1),
+        artifactTombstones: [],
+        position: 2,
+      }),
+    );
+
+    // Applied, not ignored: the cursor must move past work the replica did
+    // see, even when none of it is renderable.
+    expect(outcome.kind).toBe("applied");
+    expect(replica.appliedCursor()).toEqual(cursorAt(2, EPOCH));
+    // The same object, not an equal one: a rebuilt slice would re-render every
+    // subscriber for a commit nothing on screen can show.
+    expect(replica.slices()).toBe(slicesBefore);
+    expect(changes()).toBe(changesBefore);
+  });
+
+  it("leaves the projected artifact and deleted-artifact populations alone for a delta that only tombstones a new kind", () => {
+    const { replica, changes } = newReplica();
+    replica.apply(
+      snapshotWith({
+        artifactRecords: [specWire("spec-1", 1, "Spec")],
+        deletedArtifacts: [],
+        position: 1,
+        cause: "initial",
+      }),
+    );
+    const slicesBefore = replica.slices();
+    const changesBefore = changes();
+
+    const outcome = replica.apply(
+      deltaWith({
+        artifactUpserts: [],
+        artifactTombstones: newKindTombstoneWires(5),
+        position: 2,
+      }),
+    );
+
+    expect(outcome.kind).toBe("applied");
+    expect(replica.appliedCursor()).toEqual(cursorAt(2, EPOCH));
+    expect(replica.slices().artifacts).toEqual(slicesBefore.artifacts);
+    expect(replica.slices().deletedArtifacts).toEqual(
+      slicesBefore.deletedArtifacts,
+    );
+    expect(replica.slices()).toBe(slicesBefore);
+    expect(changes()).toBe(changesBefore);
   });
 });

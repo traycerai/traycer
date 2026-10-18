@@ -1,3 +1,5 @@
+import type { MarkdownArtifactKind } from "@traycer/protocol/common/registry";
+import type { CreateArtifactRequest } from "@traycer/protocol/host/epic/unary-schemas";
 import { pruneRecoveryTiles } from "@/lib/tab-recovery/history";
 import { useQueryClient } from "@tanstack/react-query";
 
@@ -117,7 +119,9 @@ export function useEpicCreateArtifact() {
   return useHostMutation({
     client,
     method: "epic.createArtifact",
-    mapVariables: (variables) => variables,
+    mapVariables: (
+      variables: CreateArtifactRequest & { artifactType: MarkdownArtifactKind },
+    ) => variables,
     options: {
       onSuccess: (_data, variables) => {
         Analytics.getInstance().track(AnalyticsEvent.ArtifactCreated, {

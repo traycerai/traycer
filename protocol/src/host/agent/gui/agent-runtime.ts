@@ -1246,7 +1246,7 @@ export type FileChangeCompletedEvent = z.infer<
  * `artifactOperationBlockId(actionId, index)` - indexed so one bash action
  * deleting N artifacts yields N distinct keys.
  */
-export const artifactOperationEventSchema = lazySchema(() =>
+export const artifactOperationEventSchemaPreHtml = lazySchema(() =>
   z.object({
     ...baseRuntimeEventFields,
     type: z.literal("artifact_operation"),
@@ -1258,6 +1258,12 @@ export const artifactOperationEventSchema = lazySchema(() =>
     // is available immediately, without waiting for the turn-end checkpoint.
     beforeHash: z.string().nullable().optional(),
     afterHash: z.string().nullable().optional(),
+  }),
+);
+/** New artifact kinds require chat.subscribe 1.28. */
+export const artifactOperationEventSchema = lazySchema(() =>
+  artifactOperationEventSchemaPreHtml.extend({
+    kind: getRecordSchema(commonRecordRegistry, "epic-artifact-kind", "latest"),
   }),
 );
 export type ArtifactOperationEvent = z.infer<
@@ -2005,7 +2011,7 @@ export const runtimeEventSchemaV12 = lazySchema(() =>
     subAgentCompletedEventSchema,
     fileChangeStartedEventSchema,
     fileChangeCompletedEventSchema,
-    artifactOperationEventSchema,
+    artifactOperationEventSchemaPreHtml,
     commandStartedEventSchema,
     commandCompletedEventSchema,
     sessionCreatedEventSchema,
@@ -2023,7 +2029,10 @@ export const runtimeEventSchemaV12 = lazySchema(() =>
 
 export const runtimeEventSchema = lazySchema(() =>
   z.discriminatedUnion("type", [
-    ...runtimeEventSchemaV12.def.options,
+    artifactOperationEventSchema,
+    ...runtimeEventSchemaV12.def.options.filter(
+      (schema) => schema !== artifactOperationEventSchemaPreHtml,
+    ),
     workflowStartedEventSchema,
     workflowProgressEventSchema,
     workflowCompletedEventSchema,
@@ -2068,7 +2077,7 @@ export const runtimeEventSchemaPreDisplayFacts = lazySchema(() =>
     subAgentCompletedEventSchema,
     fileChangeStartedEventSchema,
     fileChangeCompletedEventSchema,
-    artifactOperationEventSchema,
+    artifactOperationEventSchemaPreHtml,
     commandStartedEventSchema,
     commandCompletedEventSchema,
     sessionCreatedEventSchema,
@@ -2122,7 +2131,7 @@ export const runtimeEventSchemaPrePage = lazySchema(() =>
     subAgentCompletedEventSchema,
     fileChangeStartedEventSchema,
     fileChangeCompletedEventSchema,
-    artifactOperationEventSchema,
+    artifactOperationEventSchemaPreHtml,
     commandStartedEventSchema,
     commandCompletedEventSchema,
     sessionCreatedEventSchema,
@@ -2175,7 +2184,7 @@ export const runtimeEventSchemaPreBrowser = lazySchema(() =>
     subAgentCompletedEventSchema,
     fileChangeStartedEventSchema,
     fileChangeCompletedEventSchema,
-    artifactOperationEventSchema,
+    artifactOperationEventSchemaPreHtml,
     commandStartedEventSchema,
     commandCompletedEventSchema,
     sessionCreatedEventSchema,
@@ -2237,7 +2246,7 @@ export const runtimeEventSchemaPreImage = lazySchema(() =>
     subAgentCompletedEventSchema,
     fileChangeStartedEventSchema,
     fileChangeCompletedEventSchema,
-    artifactOperationEventSchema,
+    artifactOperationEventSchemaPreHtml,
     commandStartedEventSchema,
     commandCompletedEventSchema,
     sessionCreatedEventSchemaPreReasonix,
@@ -2290,7 +2299,7 @@ export const runtimeEventSchemaV12PreInReplyTo = lazySchema(() =>
     subAgentCompletedEventSchema,
     fileChangeStartedEventSchema,
     fileChangeCompletedEventSchema,
-    artifactOperationEventSchema,
+    artifactOperationEventSchemaPreHtml,
     commandStartedEventSchemaPreBackgroundTask,
     commandCompletedEventSchemaPreBackgroundTask,
     sessionCreatedEventSchemaPreReasonix,
@@ -2354,7 +2363,7 @@ export const runtimeEventSchemaPreSettlement = lazySchema(() =>
     subAgentCompletedEventSchema,
     fileChangeStartedEventSchema,
     fileChangeCompletedEventSchema,
-    artifactOperationEventSchema,
+    artifactOperationEventSchemaPreHtml,
     commandStartedEventSchema,
     commandCompletedEventSchema,
     sessionCreatedEventSchemaPreReasonix,
@@ -2412,7 +2421,7 @@ export const runtimeEventSchemaPreFallback = lazySchema(() =>
     subAgentCompletedEventSchema,
     fileChangeStartedEventSchema,
     fileChangeCompletedEventSchema,
-    artifactOperationEventSchema,
+    artifactOperationEventSchemaPreHtml,
     commandStartedEventSchema,
     commandCompletedEventSchema,
     sessionCreatedEventSchema,

@@ -6,6 +6,7 @@ import { chatEventSchema } from "@traycer/protocol/persistence/epic/chat-events"
 import {
   openChatEventSchema,
   openMessageSchema,
+  openMessageSchemaPreHtml,
   openMessageSchemaPreConversation,
   openMessageSchemaPrePage,
 } from "@traycer/protocol/host/agent/gui/open-harness-wire";
@@ -793,6 +794,13 @@ export type ChatTranscriptWindow = z.infer<typeof chatTranscriptWindowSchema>;
  * union: an anchor is a per-harness payload, so the host withholds one the
  * peer cannot decode rather than this schema widening it.
  */
+export const openChatTranscriptWindowSchemaPreHtml = lazySchema(() =>
+  chatTranscriptWindowSchema.extend({
+    messages: z.array(openMessageSchemaPreHtml),
+    events: z.array(openChatEventSchema),
+  }),
+);
+
 export const openChatTranscriptWindowSchema = lazySchema(() =>
   chatTranscriptWindowSchema.extend({
     messages: z.array(openMessageSchema),
@@ -1159,6 +1167,13 @@ export const chatRangeResponseSchemaPrePage = lazySchema(() =>
  * its rows reopened, for the reason {@link openChatTranscriptWindowSchema}
  * gives.
  */
+export const openChatRangeResponseSchemaPreHtml = lazySchema(() =>
+  chatRangeResponseSchema.extend({
+    messages: z.array(openMessageSchemaPreHtml),
+    events: z.array(openChatEventSchema),
+  }),
+);
+
 export const openChatRangeResponseSchema = lazySchema(() =>
   chatRangeResponseSchema.extend({
     messages: z.array(openMessageSchema),

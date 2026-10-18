@@ -54,6 +54,7 @@ export type {
 } from "@traycer/protocol/persistence/epic/content-blocks";
 import type { Attachment } from "@/lib/composer/types";
 import type {
+  EpicArtifactKind,
   MarkdownArtifactKind,
   JsonContent,
 } from "@traycer/protocol/common/registry";
@@ -403,7 +404,7 @@ export interface ArtifactOperationSegment {
   id: string;
   kind: "artifact_operation";
   operation: ArtifactOperationAction;
-  artifactKind: MarkdownArtifactKind;
+  artifactKind: EpicArtifactKind;
   artifactId: string;
   title: string | null;
   change: ArtifactSegmentChange | null;

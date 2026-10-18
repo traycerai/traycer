@@ -33,6 +33,7 @@ import { chatSchema } from "@traycer/protocol/persistence/epic/chat";
 import {
   approvalBlockSchema,
   artifactOperationBlockSchema,
+  artifactOperationBlockSchemaPreHtml,
   autonomousResumeBlockSchema,
   commandBlockSchema,
   compactionBlockSchema,
@@ -145,6 +146,26 @@ export type OpenSteerBlock = z.infer<typeof openSteerBlockSchema>;
  * Every other member is the live schema; a NEW member has to be added here,
  * which `open-harness-wire.test.ts` enforces by comparing member sets.
  */
+export const openContentBlockSchemaPreHtml = lazySchema(() =>
+  z.discriminatedUnion("type", [
+    openTextBlockSchema,
+    reasoningBlockSchema,
+    toolCallBlockSchema,
+    fileChangeBlockSchema,
+    commandBlockSchema,
+    subAgentBlockSchema,
+    approvalBlockSchema,
+    todoBlockSchema,
+    openPlanBlockSchema,
+    errorBlockSchema,
+    compactionBlockSchema,
+    autonomousResumeBlockSchema,
+    openSteerBlockSchema,
+    interviewBlockSchema,
+    artifactOperationBlockSchemaPreHtml,
+  ]),
+);
+
 export const openContentBlockSchema = lazySchema(() =>
   z.discriminatedUnion("type", [
     openTextBlockSchema,
@@ -224,11 +245,23 @@ export const openMessageSchema = lazySchema(() =>
 );
 export type OpenMessage = z.infer<typeof openMessageSchema>;
 
+export const openAssistantMessageSchemaPreHtml = lazySchema(() =>
+  openAssistantMessageSchema.extend({
+    blocks: z.array(openContentBlockSchemaPreHtml),
+  }),
+);
+export const openMessageSchemaPreHtml = lazySchema(() =>
+  z.discriminatedUnion("role", [
+    openUserMessageSchema,
+    openAssistantMessageSchemaPreHtml,
+  ]),
+);
+
 /** The open message union `chat.subscribe@1.23` and `@1.24` ship. */
 export const openMessageSchemaPreConversation = lazySchema(() =>
   z.discriminatedUnion("role", [
     openUserMessageSchemaPreConversation,
-    openAssistantMessageSchema,
+    openAssistantMessageSchemaPreHtml,
   ]),
 );
 

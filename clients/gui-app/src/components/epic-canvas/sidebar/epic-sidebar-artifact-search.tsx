@@ -34,6 +34,7 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import { FileText, Search, SearchX } from "lucide-react";
+import type { MarkdownArtifactKind } from "@traycer/protocol/common/registry";
 import type {
   SearchArtifactHit,
   SearchArtifactsResponse,
@@ -86,6 +87,10 @@ import { cn } from "@/lib/utils";
 
 /** The panel whose header this search takes over while it is active. */
 const ARTIFACTS_PANEL_ID = "artifacts";
+
+type MarkdownSearchArtifactHit = SearchArtifactHit & {
+  kind: MarkdownArtifactKind;
+};
 
 interface ArtifactPanelSearchShellProps {
   readonly epicId: string;
@@ -241,7 +246,7 @@ export function ArtifactSearchBox(props: ArtifactSearchBoxProps) {
 
   const {
     searchActive,
-    results,
+    results: allResults,
     response,
     isUnsupported,
     isError,
@@ -249,13 +254,22 @@ export function ArtifactSearchBox(props: ArtifactSearchBoxProps) {
     refetch,
   } = useArtifactSearchResults({ epicId, debouncedQuery });
 
+  const results = useMemo(
+    // The presentation track widens this gate when it supports more kinds.
+    () =>
+      allResults.filter((hit): hit is MarkdownSearchArtifactHit =>
+        isEpicArtifactKind(hit.kind),
+      ),
+    [allResults],
+  );
+
   // ── Opening a hit (authoritative selection route) ─────────────────────────
   const handle = useOpenEpicHandle();
   const { openTile } = useEpicTileNavigation();
   const [staleArtifactId, setStaleArtifactId] = useState<string | null>(null);
 
   const openHit = useCallback(
-    (hit: SearchArtifactHit, gesture: TileOpenGesture) => {
+    (hit: MarkdownSearchArtifactHit, gesture: TileOpenGesture) => {
       // Re-resolve the hit against the authoritative Y.Doc projection rather
       // than the disk mirror it was found in: a stale / deleted hit resolves to
       // `null` and is reported in place instead of opening anything.
@@ -439,10 +453,10 @@ interface ArtifactSearchResultsRegionProps {
   readonly isFetching: boolean;
   readonly onRetry: () => void;
   readonly response: SearchArtifactsResponse | null;
-  readonly results: ReadonlyArray<SearchArtifactHit>;
+  readonly results: ReadonlyArray<MarkdownSearchArtifactHit>;
   readonly activeIndex: number;
   readonly onActivate: (
-    hit: SearchArtifactHit,
+    hit: MarkdownSearchArtifactHit,
     gesture: TileOpenGesture,
   ) => void;
   readonly onHoverIndex: (index: number) => void;
@@ -566,11 +580,11 @@ function ArtifactSearchResultsRegion(props: ArtifactSearchResultsRegionProps) {
 
 interface ArtifactSearchResultRowProps {
   readonly optionId: string;
-  readonly hit: SearchArtifactHit;
+  readonly hit: MarkdownSearchArtifactHit;
   readonly active: boolean;
   readonly stale: boolean;
   readonly onActivate: (
-    hit: SearchArtifactHit,
+    hit: MarkdownSearchArtifactHit,
     gesture: TileOpenGesture,
   ) => void;
   readonly onHover: () => void;
@@ -580,9 +594,7 @@ const ArtifactSearchResultRow = memo(function ArtifactSearchResultRow(
   props: ArtifactSearchResultRowProps,
 ) {
   const { hit, active, stale, onActivate, onHover } = props;
-  const Icon = isEpicArtifactKind(hit.kind)
-    ? EPIC_NODE_ICONS[hit.kind]
-    : FileText;
+  const Icon = EPIC_NODE_ICONS[hit.kind];
   const title = displayTitle(hit.title, hit.kind);
   // The RPC breadcrumb includes the artifact's own folder slug last; drop it so
   // only the ancestor trail shows (the title already names the artifact) -
@@ -649,7 +661,9 @@ const ArtifactSearchResultRow = memo(function ArtifactSearchResultRow(
   );
 });
 
-function ArtifactSnippetList(props: { readonly hit: SearchArtifactHit }) {
+function ArtifactSnippetList(props: {
+  readonly hit: MarkdownSearchArtifactHit;
+}) {
   if (props.hit.snippets.length === 0) return null;
   return (
     <div className="space-y-0.5 pl-5 pt-0.5">

@@ -18,6 +18,14 @@ Production code can read and write those Yjs subtrees independently, but that
 runtime access pattern does not make them separate versioned contracts. A
 change anywhere under the registered epic schema is a persistence change.
 
+### Epic 3 to 4: HTML, canvas and file artifacts
+
+Epic 4.0 adds three artifact and tombstone variants, plus layout metadata on
+live entries. The new union members need a major because 3.0 readers reject
+unknown kinds. The 3-to-4 arm parses the existing record; the 4-to-3 arm refuses
+kinds 3.0 cannot represent with `DOWNGRADE_UNSUPPORTED`. The direct 4-to-2 arm
+also checks that older line's harness vocabulary. No data moves between maps.
+
 ## Same-major changes
 
 Readers treat newer records in the same persistence major as compatible. A
@@ -315,7 +323,7 @@ which §1 puts in the opaque `hostPrivate` section. An anchor a writer leaves on
 the message anyway is just an unmodeled key: it rides the message's preserved
 `raw` and never reaches a schema that could reject it.
 
-**Two non-harness leaves are reopened on the same reasoning.**
+**Three non-harness leaves are reopened on the same reasoning.**
 
 `core.settings.permissionMode` is a plain non-empty string here. The mode
 roster grows too — `auto` is its third member added after v1 — and this leaf is
@@ -355,6 +363,12 @@ which fails on the enum and takes the whole shard with it. Renderers read
 `tone` / `title` / `message` / `details` and none switches on the kind, so the
 enum bought type precision this record cannot afford. Adding a kind therefore
 needs nothing here — like adding a harness id.
+
+`blocks[].artifact_operation.kind` is a non-empty string from 1.8. A new
+artifact kind must not reject an entire shard containing the known operation
+block. A reader that does not know the kind renders no block and preserves its
+raw value. Earlier readers retain their closed enum; there is no host emission
+gate for them, as with the other reopened leaves above.
 
 **Logged decision — remaining nested unions stay closed.**
 `userMessagePayload.kind`, `toolInputDetail.kind` and the provider-notice
@@ -511,6 +525,7 @@ coupled surface moves with it. Work the list top to bottom:
 | Add a content-block type / message role / chat-event type                                  | add it to `KNOWN_CONTENT_BLOCK_TYPES` / `KNOWN_CHAT_MESSAGE_ROLES` / the event enum, or every entry of that variant silently degrades to unknown; record minor bump; regenerate **both** the chat-sync and epic fixtures (the leaves are shared); confirm the passthrough round-trip test still re-emits the new variant losslessly                                                                                                                                                                                                                                         |
 | Change a shared epic leaf (`contentBlockSchema`, `chatEventSchema`, senders, run settings) | both fixtures; both contracts' compatibility arguments — the change really is a change to both. The chat-sync copies derive from the live shape, so a field addition flows through; only a change to one of the two RE-APPLIED refinements in `open-harness.ts` needs mirroring by hand                                                                                                                                                                                                                                                                                     |
 | Add a provider-notice `noticeKind`                                                         | nothing here — chat-sync notice kinds are open strings (§5). In the epic tree it is an ordinary enum growth: freeze it out of every RELEASED line's copy (`providerNoticeKindSchemaPreHarnessMessage`, and the `chat.subscribe` frozen event), regenerate the epic fixture, and gate host EMISSION on the negotiated minor — a frozen schema stops an old peer decoding the value, not the host sending it. Give the kind a `providerNoticeNormalizedMetadataSchema` variant only if it has structured facts; a metadata-less kind stays readable to a reader that lacks it |
+| Add an artifact kind carried by `artifact_operation`                                       | no chat-sync bump after 1.8: the kind is open. Keep the epic record and RPC/stream frozen lines versioned separately                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | Add a harness id                                                                           | nothing here — chat-sync harness ids are open strings. Add it to the epic enums as usual                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | Add a field carrying a harness id to `core`                                                | reopen it in `open-harness.ts`, or the sweep test fails                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | Add a `chat-shard` `section`                                                               | breaking: the enum is closed and shipped readers fail on an unlisted section, by design. New major, plus the assembly branch and the head's own part list for it                                                                                                                                                                                                                                                                                                                                                                                                            |

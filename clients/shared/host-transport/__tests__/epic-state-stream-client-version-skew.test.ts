@@ -121,4 +121,82 @@ describe("the epic state stream client across the @1.1 / @1.2 skew", () => {
       delta !== undefined && "files" in delta ? delta.files : null,
     ).toEqual(FILES);
   });
+
+  it("delivers a @1.3 frame whose rows are the new html and file kinds, rather than dropping it", () => {
+    const client = open();
+    const specRow = {
+      kind: "spec",
+      id: "spec-1",
+      folderName: "spec-1",
+      title: "A spec",
+      createdAt: 1,
+      updatedAt: 1,
+      createdManually: false,
+      parentId: null,
+      layout: "folder",
+      revision: 1,
+    };
+    const htmlRow = {
+      kind: "html",
+      id: "html-1",
+      folderName: "html-1",
+      title: "A page",
+      createdAt: 1,
+      updatedAt: 1,
+      createdManually: false,
+      parentId: null,
+      layout: "folder",
+      head: {
+        files: {
+          "index.html": {
+            sha256: SHA,
+            byteLength: 12,
+            mediaType: "text/html",
+            status: "published",
+          },
+        },
+        capturedAt: 1,
+      },
+      revision: 2,
+    };
+    const fileTombstone = {
+      kind: "file",
+      id: "file-1",
+      title: "A file",
+      artifactRoomId: null,
+      deletedAt: "2026-10-18T00:00:00.000Z",
+      revision: 3,
+    };
+
+    client.emit({
+      ...SNAPSHOT_V11,
+      artifactRecords: [specRow, htmlRow],
+      deletedArtifacts: [fileTombstone],
+    });
+    client.emit({
+      ...DELTA_V11,
+      roleClaims: null,
+      artifactUpserts: [specRow, htmlRow],
+      artifactTombstones: [fileTombstone],
+    });
+
+    // A schema that did not know the new discriminants would drop the whole
+    // frame, so a missing frame here is the failure this guards against.
+    expect(client.snapshots).toHaveLength(1);
+    expect(client.deltas).toHaveLength(1);
+    const snapshot = client.snapshots[0];
+    const delta = client.deltas[0];
+    expect(snapshot?.artifactRecords.map((row) => row.kind)).toEqual([
+      "spec",
+      "html",
+    ]);
+    expect(snapshot?.deletedArtifacts.map((row) => row.kind)).toEqual(["file"]);
+    expect(delta?.artifactUpserts.map((row) => row.kind)).toEqual([
+      "spec",
+      "html",
+    ]);
+    expect(delta?.artifactTombstones.map((row) => row.kind)).toEqual(["file"]);
+    const html = delta?.artifactUpserts.find((row) => row.kind === "html");
+    expect(html?.kind === "html" ? html.head : null).toEqual(htmlRow.head);
+  });
 });

@@ -133,12 +133,13 @@ describe("validateVersionedStreamRpcRegistry", () => {
     // @1.21 (the released minors froze the row context without it). The
     // open-harness-id line, which reopens every heard-from harness leaf to a
     // string, took @1.22. A tool call's `page` / `mcpApp` stamps (agent pages
-    // and MCP Apps) took @1.23.
+    // and MCP Apps) took @1.23. The html / canvas / file artifact operation
+    // kinds took @1.28.
     //
     // RESTATED rather than derived, deliberately: this file is the
     // change-detector for the line set, so deriving it from the registry would
     // assert the registry against itself.
-    expect(hostStreamRpcRegistry["chat.subscribe"][1].latestMinor).toBe(27);
+    expect(hostStreamRpcRegistry["chat.subscribe"][1].latestMinor).toBe(28);
     // @1.6 added the `viewer` intent on the open request; @1.7 added the
     // `viewer` client frame that restates it on a live stream.
     expect(hostStreamRpcRegistry["terminal.subscribe"][1].latestMinor).toBe(7);

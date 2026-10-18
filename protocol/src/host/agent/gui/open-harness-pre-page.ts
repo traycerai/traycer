@@ -3,7 +3,7 @@ import { z } from "zod";
 import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 import {
   approvalBlockSchema,
-  artifactOperationBlockSchema,
+  artifactOperationBlockSchemaPreHtml,
   autonomousResumeBlockSchema,
   commandBlockSchema,
   compactionBlockSchema,
@@ -40,7 +40,7 @@ const openContentBlockSchemaPrePage = lazySchema(() =>
     autonomousResumeBlockSchema,
     openSteerBlockSchema,
     interviewBlockSchema,
-    artifactOperationBlockSchema,
+    artifactOperationBlockSchemaPreHtml,
   ]),
 );
 const openAssistantMessageSchemaPrePage = lazySchema(() =>

@@ -109,6 +109,7 @@ import {
   openChatEventSchema,
   openChatSchema,
   openRuntimeEventSchema,
+  openRuntimeEventSchemaPreHtml,
   openRuntimeEventSchemaPrePage,
   openUserMessageSchema,
   openUserMessageSchemaPreConversation,
@@ -147,11 +148,13 @@ import {
   chatTranscriptWindowSchema,
   chatTranscriptWindowSchemaPreMessageDelivery,
   openChatRangeResponseSchema,
+  openChatRangeResponseSchemaPreHtml,
   openChatRangeResponseSchemaPreConversation,
   openChatRangeResponseSchemaPrePage,
   openChatTranscriptWindowSchemaPreConversation,
   openChatTranscriptWindowSchemaPrePage,
   openChatTranscriptWindowSchema,
+  openChatTranscriptWindowSchemaPreHtml,
   chatTranscriptWindowSchemaPreBrowser,
   chatTranscriptWindowSchemaPreCommandCode,
   chatTranscriptWindowSchemaPreFallback,
@@ -3662,23 +3665,23 @@ const chatSubscribeSharedServerFrameSchemas = [
 const chatSubscribeSharedServerFrameSchemasOpenHarnessPreConversation = [
   messageDeliveryChangedServerFrameSchema,
   ...chatSubscribeCommonServerFrameSchemasOpenHarnessPreConversation,
-  blockDeltaServerFrameSchema(openRuntimeEventSchema),
+  blockDeltaServerFrameSchema(openRuntimeEventSchemaPreHtml),
 ];
 // The shared frames `chat.subscribe@1.25` ships: the open-harness common set
 // with the pre-task-checkin queue, over the same `blockDelta`.
 const chatSubscribeSharedServerFrameSchemasOpenHarnessPreTaskCheckin = [
   messageDeliveryChangedServerFrameSchema,
   ...chatSubscribeCommonServerFrameSchemasOpenHarnessPreTaskCheckin,
-  blockDeltaServerFrameSchema(openRuntimeEventSchema),
+  blockDeltaServerFrameSchema(openRuntimeEventSchemaPreHtml),
 ];
 // The shared frames `chat.subscribe@1.26` ships: the open-harness common set
 // with the pre-task-overdue queue, over the same `blockDelta`.
 const chatSubscribeSharedServerFrameSchemasOpenHarnessPreTaskOverdue = [
   messageDeliveryChangedServerFrameSchema,
   ...chatSubscribeCommonServerFrameSchemasOpenHarnessPreTaskOverdue,
-  blockDeltaServerFrameSchema(openRuntimeEventSchema),
+  blockDeltaServerFrameSchema(openRuntimeEventSchemaPreHtml),
 ];
-// The live shared frames (`chat.subscribe@1.27`): the live open-harness common
+// The live shared frames (`chat.subscribe@1.28`): the live open-harness common
 // set over the same `blockDelta`.
 const chatSubscribeSharedServerFrameSchemasOpenHarness = [
   messageDeliveryChangedServerFrameSchema,
@@ -6409,13 +6412,15 @@ const chatSubscribeServerFrameSchemaV125 = lazySchema(() =>
     chatSubscribeWindowedSnapshotServerFrameSchemaOpenHarness.extend({
       snapshot: chatWindowedSnapshotSchemaV124.extend({
         queue: openChatQueueStateSchemaPreTaskCheckin,
-        tail: openChatTranscriptWindowSchema,
+        tail: openChatTranscriptWindowSchemaPreHtml,
       }),
     }),
     chatSubscribeSkeletonChunkServerFrameSchemaV119,
     chatSubscribeAccumulatedChangesServerFrameSchema,
     chatSubscribeIndexChangedServerFrameSchema,
-    chatSubscribeRangeServerFrameSchemaOpenHarness,
+    chatSubscribeRangeServerFrameSchemaOpenHarness.extend({
+      range: openChatRangeResponseSchemaPreHtml,
+    }),
     chatSubscribeTurnStateChangedServerFrameSchema,
     chatSubscribeManagedCommandsChangedServerFrameSchema,
     chatSubscribePortForwardsChangedServerFrameSchema,
@@ -6436,13 +6441,15 @@ const chatSubscribeServerFrameSchemaV126 = lazySchema(() =>
     chatSubscribeWindowedSnapshotServerFrameSchemaOpenHarness.extend({
       snapshot: chatWindowedSnapshotSchemaV124.extend({
         queue: openChatQueueStateSchemaPreTaskOverdue,
-        tail: openChatTranscriptWindowSchema,
+        tail: openChatTranscriptWindowSchemaPreHtml,
       }),
     }),
     chatSubscribeSkeletonChunkServerFrameSchemaV119,
     chatSubscribeAccumulatedChangesServerFrameSchema,
     chatSubscribeIndexChangedServerFrameSchema,
-    chatSubscribeRangeServerFrameSchemaOpenHarness,
+    chatSubscribeRangeServerFrameSchemaOpenHarness.extend({
+      range: openChatRangeResponseSchemaPreHtml,
+    }),
     chatSubscribeTurnStateChangedServerFrameSchema,
     chatSubscribeManagedCommandsChangedServerFrameSchema,
     chatSubscribePortForwardsChangedServerFrameSchema,
@@ -6452,8 +6459,34 @@ const chatSubscribeServerFrameSchemaV126 = lazySchema(() =>
   ]),
 );
 
+/** Frozen 1.27: operation blocks and events keep the four markdown kinds. */
+const chatSubscribeServerFrameSchemaV127 = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    chatSubscribeWindowedSnapshotServerFrameSchemaOpenHarness.extend({
+      snapshot: chatWindowedSnapshotSchemaV124.extend({
+        queue: openChatQueueStateSchema,
+        tail: openChatTranscriptWindowSchemaPreHtml,
+      }),
+    }),
+    chatSubscribeSkeletonChunkServerFrameSchemaV119,
+    chatSubscribeAccumulatedChangesServerFrameSchema,
+    chatSubscribeIndexChangedServerFrameSchema,
+    chatSubscribeRangeServerFrameSchemaOpenHarness.extend({
+      range: openChatRangeResponseSchemaPreHtml,
+    }),
+    chatSubscribeTurnStateChangedServerFrameSchema,
+    chatSubscribeManagedCommandsChangedServerFrameSchema,
+    chatSubscribePortForwardsChangedServerFrameSchema,
+    chatSubscribeHeldUpdatesChangedServerFrameSchema,
+    chatSubscribeThinkingTokensServerFrameSchema,
+    messageDeliveryChangedServerFrameSchema,
+    ...chatSubscribeCommonServerFrameSchemasOpenHarness,
+    blockDeltaServerFrameSchema(openRuntimeEventSchemaPreHtml),
+  ]),
+);
+
 /**
- * The live windowed union as a READER decodes it (`chat.subscribe@1.27`): the
+ * The live windowed union as a READER decodes it (`chat.subscribe@1.28`): the
  * union above with the snapshot, the `range` response, the three
  * sender-bearing common frames and the `blockDelta` bound to their
  * open-harness copies. The frames a peer DRIVES through - `turnStateChanged`
@@ -7440,6 +7473,15 @@ export const chatSubscribeV126 = defineStreamRpcContract({
 export const chatSubscribeV127 = defineStreamRpcContract({
   method: "chat.subscribe",
   schemaVersion: { major: 1, minor: 27 } as const,
+  openRequestSchema: chatSubscribeOpenRequestSchemaV119,
+  serverFrameSchema: chatSubscribeServerFrameSchemaV127,
+  clientFrameSchema: chatSubscribeWindowedClientFrameSchema,
+});
+
+/** 1.28 carries HTML, canvas and file operation kinds; 1.27 stays frozen. */
+export const chatSubscribeV128 = defineStreamRpcContract({
+  method: "chat.subscribe",
+  schemaVersion: { major: 1, minor: 28 } as const,
   openRequestSchema: chatSubscribeOpenRequestSchemaV119,
   serverFrameSchema: openChatSubscribeWindowedServerFrameSchema,
   clientFrameSchema: chatSubscribeWindowedClientFrameSchema,

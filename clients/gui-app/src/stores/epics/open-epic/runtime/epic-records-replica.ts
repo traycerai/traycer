@@ -1018,6 +1018,11 @@ export function createEpicRecordsReplica(
     // is lost on restore rather than merely absent from the list.
     const base = {
       id: artifactId,
+      layout:
+        entry.get("layout") === "file"
+          ? ("file" as const)
+          : ("folder" as const),
+      relativePath: readMaybeString(entry, "relativePath"),
       folderName: readMaybeString(entry, "folderName"),
       title: readMaybeString(entry, "title"),
       artifactRoomId: readMaybeString(entry, "artifactRoomId"),

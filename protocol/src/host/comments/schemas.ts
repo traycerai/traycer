@@ -1,5 +1,9 @@
+import { getRecordSchema } from "@traycer/protocol/framework/index";
 import { z } from "zod";
-import { EpicArtifactKindSchemaPreHtml } from "@traycer/protocol/common/registry";
+import {
+  commonRecordRegistry,
+  EpicArtifactKindSchemaPreHtml,
+} from "@traycer/protocol/common/registry";
 import { commentThreadWireSchema } from "../epic/unary-schemas";
 import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 
@@ -36,7 +40,7 @@ export const commentsListThreadSchema = lazySchema(() =>
 );
 export type CommentsListThread = z.infer<typeof commentsListThreadSchema>;
 
-export const commentsListArtifactSchema = lazySchema(() =>
+export const commentsListArtifactSchemaPreHtml = lazySchema(() =>
   z.object({
     artifactPath: z.string(),
     kind: EpicArtifactKindSchemaPreHtml,
@@ -45,10 +49,22 @@ export const commentsListArtifactSchema = lazySchema(() =>
     threads: z.array(commentsListThreadSchema),
   }),
 );
+/** 1.1 adds new-kind artifacts; 1.0 stays frozen. */
+export const commentsListArtifactSchema = lazySchema(() =>
+  commentsListArtifactSchemaPreHtml.extend({
+    kind: getRecordSchema(commonRecordRegistry, "epic-artifact-kind", "latest"),
+  }),
+);
 export type CommentsListArtifact = z.infer<typeof commentsListArtifactSchema>;
 
-export const commentsListThreadsResponseSchema = lazySchema(() =>
+export const commentsListThreadsResponseSchemaPreHtml = lazySchema(() =>
   z.object({
+    artifacts: z.array(commentsListArtifactSchemaPreHtml),
+  }),
+);
+/** 1.1 adds new-kind artifacts; 1.0 stays frozen. */
+export const commentsListThreadsResponseSchema = lazySchema(() =>
+  commentsListThreadsResponseSchemaPreHtml.extend({
     artifacts: z.array(commentsListArtifactSchema),
   }),
 );

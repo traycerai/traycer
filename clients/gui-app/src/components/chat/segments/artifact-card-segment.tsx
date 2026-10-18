@@ -2,14 +2,20 @@ import { useState, type MouseEvent, type ReactNode } from "react";
 import { FileDiff, GripVertical } from "lucide-react";
 import type { DraggableSyntheticListeners } from "@dnd-kit/core";
 import { v4 as uuidv4 } from "uuid";
-import type { MarkdownArtifactKind } from "@traycer/protocol/common/registry";
+import type {
+  EpicArtifactKind,
+  MarkdownArtifactKind,
+} from "@traycer/protocol/common/registry";
 import type { ArtifactOperationAction } from "@traycer/protocol/persistence/epic/content-blocks";
 import { StaticEpicNodeIcon } from "@/components/epic-canvas/epic-node-tab-icon";
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
 import { STATUS_LABELS } from "@/components/epic-canvas/sidebar/epic-sidebar-tree-shared";
 import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
 import { modifiersFromMouseEvent } from "@/lib/canvas/tile-open/intent";
-import { EPIC_NODE_LABELS } from "@/lib/artifacts/node-display";
+import {
+  EPIC_NODE_LABELS,
+  isEpicArtifactKind,
+} from "@/lib/artifacts/node-display";
 import {
   useArtifactById,
   useEpicDeletedArtifact,
@@ -29,7 +35,7 @@ import { onMiddleClick } from "@/lib/dom/on-middle-click";
 import { EpicSessionGate } from "@/providers/epic-session-gate";
 interface ArtifactCardSegmentProps {
   readonly operation: ArtifactOperationAction;
-  readonly artifactKind: MarkdownArtifactKind;
+  readonly artifactKind: EpicArtifactKind;
   readonly artifactId: string;
   readonly title: string | null;
   // The turn's merged change for this artifact, or null while streaming / when
@@ -38,6 +44,11 @@ interface ArtifactCardSegmentProps {
   readonly change: ArtifactSegmentChange | null;
   readonly findUnitId: string | null;
 }
+
+type MarkdownArtifactCardSegmentProps = Omit<
+  ArtifactCardSegmentProps,
+  "artifactKind"
+> & { readonly artifactKind: MarkdownArtifactKind };
 
 /**
  * File-diff toggle shown in the header, just left of the operation badge. A
@@ -476,20 +487,26 @@ function canOpenArtifactCard(input: {
  * no body, so a deleted card is not openable).
  */
 export function ArtifactCardSegment(props: ArtifactCardSegmentProps) {
+  const { artifactKind } = props;
+  // The presentation track adds cards for non-Markdown kinds.
+  if (!isEpicArtifactKind(artifactKind)) return null;
   // The card's projection, drag source and open action are the Epic's. A
   // transcript outside an Epic session (a bot's, Tracy Bots) gets the inert
   // form: the operation and the title the row recorded, nothing to act on.
   return (
-    <EpicSessionGate fallback={<ArtifactCardInert {...props} />}>
+    <EpicSessionGate
+      fallback={<ArtifactCardInert {...props} artifactKind={artifactKind} />}
+    >
       <ArtifactCardSegmentContent
         key={artifactCardDiffStateKey(props)}
         {...props}
+        artifactKind={artifactKind}
       />
     </EpicSessionGate>
   );
 }
 
-function ArtifactCardInert(props: ArtifactCardSegmentProps) {
+function ArtifactCardInert(props: MarkdownArtifactCardSegmentProps) {
   const title = resolveArtifactTitle(null, props.title);
   return (
     <div
@@ -519,7 +536,7 @@ function artifactCardDiffStateKey(props: ArtifactCardSegmentProps): string {
   return `${props.change.beforeHash ?? "null"}:${props.change.afterHash ?? "null"}`;
 }
 
-function ArtifactCardSegmentContent(props: ArtifactCardSegmentProps) {
+function ArtifactCardSegmentContent(props: MarkdownArtifactCardSegmentProps) {
   const { operation, artifactKind, artifactId } = props;
   const live = useArtifactById(artifactId);
   const tombstone = useEpicDeletedArtifact(artifactId);

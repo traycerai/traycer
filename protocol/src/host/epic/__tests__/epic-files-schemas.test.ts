@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { hostStreamRpcRegistry } from "@traycer/protocol/host/index";
+import {
+  hostRpcRegistry,
+  hostStreamRpcRegistry,
+} from "@traycer/protocol/host/index";
+import { RELEASED_FLOOR_METHOD_NAMES } from "@traycer/protocol/host/released-floor";
 
 import {
   EPIC_READ_FILE_RANGE_MAX_BYTES,
@@ -8,6 +12,7 @@ import {
   epicCancelFetchFileV10,
   epicDeleteFileV10,
   epicFetchFileV10,
+  epicReadArtifactObjectV10,
   epicReadFileV10,
   epicRestoreFileV10,
 } from "@traycer/protocol/host/epic/files";
@@ -181,6 +186,151 @@ describe("epic.readFile", () => {
       expect(
         response.safeParse({ kind: "unavailable", reason: "timeout" }).success,
       ).toBe(false);
+    });
+  });
+});
+
+describe("epic.readArtifactObject", () => {
+  const request = epicReadArtifactObjectV10.requestSchema;
+  const body = { epicId: "epic-1", sha256: SHA, want: { kind: "text" } };
+
+  it("is an optional method: registered at 1.0, degrading as unsupported, and off the released floor", () => {
+    // A name on the released floor is handshake-fatal against every released
+    // peer, so a method added later has to degrade instead.
+    const entry = hostRpcRegistry["epic.readArtifactObject"];
+    expect(entry.degrade).toEqual({ kind: "unsupported" });
+    expect(entry[1].latestMinor).toBe(0);
+    expect(entry[1].versions[0].contract).toBe(epicReadArtifactObjectV10);
+    expect(RELEASED_FLOOR_METHOD_NAMES).not.toContain(
+      "epic.readArtifactObject",
+    );
+  });
+
+  it("addresses the object by epic and sha alone, with no path and no via hint", () => {
+    expect(request.safeParse(body).success).toBe(true);
+    const parsed = request.parse({
+      ...body,
+      path: "files/pages/report-1.html",
+      via: null,
+    });
+    expect(parsed).toEqual(body);
+  });
+
+  it("takes the same read shapes as epic.readFile and rejects the same bad ones", () => {
+    expect(
+      request.safeParse({
+        ...body,
+        want: { kind: "range", offset: 0, length: 8 },
+      }).success,
+    ).toBe(true);
+    expect(
+      request.safeParse({ ...body, want: { kind: "stream" } }).success,
+    ).toBe(false);
+    expect(
+      request.safeParse({
+        ...body,
+        want: {
+          kind: "range",
+          offset: 0,
+          length: EPIC_READ_FILE_RANGE_MAX_BYTES + 1,
+        },
+      }).success,
+    ).toBe(false);
+    expect(request.safeParse({ ...body, sha256: "A".repeat(64) }).success).toBe(
+      false,
+    );
+    expect(request.safeParse({ ...body, epicId: "" }).success).toBe(false);
+  });
+
+  describe("answer", () => {
+    const response = epicReadArtifactObjectV10.responseSchema;
+
+    it("carries the text, bytes and url arms epic.readFile does", () => {
+      expect(
+        response.safeParse({
+          kind: "text",
+          text: "<html></html>",
+          mediaType: "text/html",
+          networkPolicy: "https-only",
+        }).success,
+      ).toBe(true);
+      expect(
+        response.safeParse({
+          kind: "bytes",
+          bytesBase64: "AAAA",
+          offset: 0,
+          totalBytes: 3,
+          mediaType: "image/png",
+        }).success,
+      ).toBe(true);
+      expect(
+        response.safeParse({
+          kind: "url",
+          url: "https://files.example.com/x?sig=1",
+          expiresAt: 1,
+        }).success,
+      ).toBe(true);
+    });
+
+    it("answers unavailable for the three reasons a sha-addressed read can hit, and no others", () => {
+      for (const reason of ["missing", "not-downloaded", "failed"]) {
+        expect(
+          response.safeParse({ kind: "unavailable", reason }).success,
+        ).toBe(true);
+      }
+      // These two belong to a path-addressed read: there is no upload queue or
+      // local-only copy to name when the caller holds only a sha.
+      for (const reason of ["upload-pending", "local-only"]) {
+        expect(
+          response.safeParse({ kind: "unavailable", reason }).success,
+        ).toBe(false);
+      }
+    });
+
+    it("reports download progress, and refuses progress that exceeds its total", () => {
+      expect(
+        response.safeParse({
+          kind: "downloading",
+          receivedBytes: 5,
+          totalBytes: 10,
+        }).success,
+      ).toBe(true);
+      expect(
+        response.safeParse({
+          kind: "downloading",
+          receivedBytes: 11,
+          totalBytes: 10,
+        }).success,
+      ).toBe(false);
+      expect(
+        epicReadFileV10.responseSchema.safeParse({
+          kind: "downloading",
+          receivedBytes: 5,
+          totalBytes: 10,
+        }).success,
+      ).toBe(false);
+    });
+
+    it.each([
+      ["negative receivedBytes", { receivedBytes: -1, totalBytes: 10 }],
+      ["negative totalBytes", { receivedBytes: 0, totalBytes: -1 }],
+      ["fractional receivedBytes", { receivedBytes: 1.5, totalBytes: 10 }],
+      ["fractional totalBytes", { receivedBytes: 1, totalBytes: 10.5 }],
+    ])("refuses downloading progress with %s", (_label, progress) => {
+      expect(
+        response.safeParse({ kind: "downloading", ...progress }).success,
+      ).toBe(false);
+    });
+
+    it("accepts zero progress and progress equal to its total", () => {
+      for (const progress of [
+        { receivedBytes: 0, totalBytes: 0 },
+        { receivedBytes: 10, totalBytes: 10 },
+      ]) {
+        expect(
+          response.safeParse({ kind: "downloading", ...progress }).success,
+        ).toBe(true);
+      }
     });
   });
 });
@@ -421,13 +571,13 @@ describe("epic.state.subscribe@1.2 files arm", () => {
     expect(withState({ kind: "uploading" })).toBe(false);
   });
 
-  it("is the @1.2 contract and the registered top of the line", () => {
+  it("is the @1.2 contract and stays installed below the @1.3 head", () => {
     expect(epicStateSubscribeV12.schemaVersion).toEqual({ major: 1, minor: 2 });
     expect(epicStateSubscribeV12.serverFrameSchema).toBe(
       epicStateSubscribeServerFrameSchemaV12,
     );
     const line = hostStreamRpcRegistry["epic.state.subscribe"][1];
-    expect(line.latestMinor).toBe(2);
+    expect(line.latestMinor).toBe(3);
     expect(line.versions[2].contract).toBe(epicStateSubscribeV12);
   });
 });

@@ -90,9 +90,14 @@ const CLAUDE_PARITY_MINOR = 20;
 // adds the bot-conversation request on a user row and the
 // `conversation-message` queue item (pinned below). `1.26` adds the
 // `task-checkin` queue item (pinned below). `1.27` adds the `task-overdue`
-// queue item (pinned below). Every threshold above still reads `>=` against
-// the live line.
-const LIVE_MINOR = 27;
+// queue item (pinned below). `1.28` lets an `artifact_operation` block and
+// event name the html, canvas and file artifact kinds (pinned below). Every
+// threshold above still reads `>=` against the live line.
+const LIVE_MINOR = 28;
+// `1.28`: the html-artifacts surface. `"canvas"` appears in no other shape the
+// line carries, so it is the one needle for the grown kind enum.
+const HTML_ARTIFACTS_MINOR = 28;
+const HTML_ARTIFACTS_NEEDLES = ['"canvas"'];
 // `1.27`: the task-overdue surface - the queue item's discriminant, its one
 // needle for the same reason as the check-in's.
 const TASK_OVERDUE_MINOR = 27;
@@ -257,13 +262,13 @@ function actionAckPropertyNames(serverFrameSchema: z.ZodType): string[] {
 }
 
 describe("chat.subscribe line surfaces", () => {
-  it("covers chat.subscribe@1.0 through @1.27 (a line added later cannot drop out)", () => {
+  it("covers chat.subscribe@1.0 through @1.28 (a line added later cannot drop out)", () => {
     // RESTATED on purpose: this is the change-detector for the line SET, so a
     // derived list would assert the registry against itself. When a new minor
     // lands, extending this by hand is the acknowledgement.
     expect(MINORS).toEqual([
       0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20,
-      21, 22, 23, 24, 25, 26, 27,
+      21, 22, 23, 24, 25, 26, 27, 28,
     ]);
     expect(chatSubscribeLine.latestMinor).toBe(LIVE_MINOR);
   });
@@ -303,6 +308,25 @@ describe("chat.subscribe line surfaces", () => {
         const text = schemaText(contract.clientFrameSchema);
         expect(
           CONVERSATION_NEEDLES.filter((needle) => text.includes(needle)),
+        ).toEqual([]);
+      });
+
+      const carriesHtmlArtifacts = minor >= HTML_ARTIFACTS_MINOR;
+
+      it(`server frames ${carriesHtmlArtifacts ? "carry" : "hold back"} the html, canvas and file artifact kinds`, () => {
+        const text = schemaText(contract.serverFrameSchema);
+        const found = HTML_ARTIFACTS_NEEDLES.filter((needle) =>
+          text.includes(needle),
+        );
+        expect(found).toEqual(
+          carriesHtmlArtifacts ? HTML_ARTIFACTS_NEEDLES : [],
+        );
+      });
+
+      it("client frames hold back the html, canvas and file artifact kinds on every line", () => {
+        const text = schemaText(contract.clientFrameSchema);
+        expect(
+          HTML_ARTIFACTS_NEEDLES.filter((needle) => text.includes(needle)),
         ).toEqual([]);
       });
 

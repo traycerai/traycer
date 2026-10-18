@@ -6,13 +6,14 @@ import {
   type RecordValue,
 } from "@traycer/protocol/framework/index";
 import {
-  chatHeadRecordV170,
-  chatShardRecordV170,
+  chatHeadRecordV180,
+  chatShardRecordV180,
 } from "@traycer/protocol/persistence/chat-sync-registry";
 import { draftHeadRecordSchema } from "@traycer/protocol/persistence/_internal/draft-schemas";
 import { DRAFT_HEAD_SCHEMA_VERSION } from "@traycer/protocol/persistence/draft/version";
 import {
   epicSchema,
+  epicSchemaPreHtml,
   epicSchemaPreReasonix,
 } from "@traycer/protocol/persistence/_internal/epic-schemas";
 import { roomMetadataSchema } from "@traycer/protocol/persistence/_internal/room-metadata-schemas";
@@ -59,7 +60,7 @@ export const epicRecordV200 = defineRecordContract({
 export const epicRecordV300 = defineRecordContract({
   name: "epic",
   schemaVersion: { major: 3, minor: 0 } as const,
-  schema: epicSchema,
+  schema: epicSchemaPreHtml,
 });
 
 const epicUpgradeV200ToV300 = defineRecordUpgradePath<
@@ -94,6 +95,62 @@ const epicDowngradeV300ToV200 = defineRecordDowngradePath<
   },
 });
 
+export const epicRecordV400 = defineRecordContract({
+  name: "epic",
+  schemaVersion: { major: 4, minor: 0 } as const,
+  schema: epicSchema,
+});
+
+const epicUpgradeV300ToV400 = defineRecordUpgradePath<
+  typeof epicRecordV300,
+  typeof epicRecordV400
+>({
+  from: epicRecordV300.schemaVersion,
+  to: epicRecordV400.schemaVersion,
+  upgradeRecord: (record) => epicRecordV400.schema.parse(record),
+});
+
+const epicDowngradeV400ToV300 = defineRecordDowngradePath<
+  typeof epicRecordV400,
+  typeof epicRecordV300
+>({
+  from: epicRecordV400.schemaVersion,
+  to: epicRecordV300.schemaVersion,
+  downgradeRecord: (record) => {
+    const parsed = epicRecordV300.schema.safeParse(record);
+    if (parsed.success) return { ok: true as const, value: parsed.data };
+    return {
+      ok: false as const,
+      error: {
+        code: "DOWNGRADE_UNSUPPORTED" as const,
+        message:
+          "Epic contains artifact kinds the 3.0 record contract cannot represent",
+      },
+    };
+  },
+});
+
+// The framework uses direct bridges, so latest must also reach the 2.0 line.
+const epicDowngradeV400ToV200 = defineRecordDowngradePath<
+  typeof epicRecordV400,
+  typeof epicRecordV200
+>({
+  from: epicRecordV400.schemaVersion,
+  to: epicRecordV200.schemaVersion,
+  downgradeRecord: (record) => {
+    const parsed = epicRecordV200.schema.safeParse(record);
+    if (parsed.success) return { ok: true as const, value: parsed.data };
+    return {
+      ok: false as const,
+      error: {
+        code: "DOWNGRADE_UNSUPPORTED" as const,
+        message:
+          "Epic contains artifact kinds or harness state the 2.0 record contract cannot represent",
+      },
+    };
+  },
+});
+
 export const roomMetadataRecordV100 = defineRecordContract({
   name: "room-metadata",
   schemaVersion: { major: 1, minor: 0 } as const,
@@ -103,7 +160,7 @@ export const roomMetadataRecordV100 = defineRecordContract({
 // The chat-sync contracts are owned by `chat-sync-registry.ts`, which registers
 // them on their own for consumers that encode nothing else; re-exported here so
 // this registry keeps offering every contract it registers.
-export { chatHeadRecordV170, chatShardRecordV170 };
+export { chatHeadRecordV180, chatShardRecordV180 };
 
 export const draftHeadRecordV100 = defineRecordContract({
   name: "draft-head",
@@ -130,6 +187,19 @@ export const persistenceRecordRegistry = defineVersionedRecordRegistry({
       },
       downgradePathsFromLatest: { 2: epicDowngradeV300ToV200 },
     },
+    4: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: epicRecordV400,
+          upgradeFromPreviousVersion: epicUpgradeV300ToV400,
+        },
+      },
+      downgradePathsFromLatest: {
+        3: epicDowngradeV400ToV300,
+        2: epicDowngradeV400ToV200,
+      },
+    },
   },
   "room-metadata": {
     1: {
@@ -145,18 +215,18 @@ export const persistenceRecordRegistry = defineVersionedRecordRegistry({
   },
   "chat-head": {
     1: {
-      latestMinor: 7,
+      latestMinor: 8,
       versions: {
-        7: { contract: chatHeadRecordV170, upgradeFromPreviousVersion: null },
+        8: { contract: chatHeadRecordV180, upgradeFromPreviousVersion: null },
       },
       downgradePathsFromLatest: {},
     },
   },
   "chat-shard": {
     1: {
-      latestMinor: 7,
+      latestMinor: 8,
       versions: {
-        7: { contract: chatShardRecordV170, upgradeFromPreviousVersion: null },
+        8: { contract: chatShardRecordV180, upgradeFromPreviousVersion: null },
       },
       downgradePathsFromLatest: {},
     },

@@ -1364,3 +1364,6 @@ function projectChatEvents(value: unknown): unknown {
   });
   return changed ? projected : value;
 }
+
+/** Below 1.28 the host omits operation blocks/events for non-markdown kinds. */
+export const CHAT_SUBSCRIBE_HTML_ARTIFACTS_MINOR = 28;
