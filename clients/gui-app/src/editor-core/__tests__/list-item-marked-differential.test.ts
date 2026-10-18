@@ -66,6 +66,8 @@ interface MarkedToken {
   readonly tokens?: ReadonlyArray<MarkedToken>;
   readonly items?: ReadonlyArray<MarkedToken>;
   readonly task?: boolean;
+  readonly raw?: string;
+  readonly loose?: boolean;
 }
 
 function isMarkedToken(value: unknown): value is MarkedToken {
@@ -174,6 +176,7 @@ const D1 = "D1 unicode-whitespace-only line is text";
 const D2 = "D2 ordered legacy band at marker indent + 2";
 const D3 = "D3 task list holds only task items";
 const MIXED_D1_COUNT = 36;
+const CORPUS_SIZE = 7395;
 
 function classes(mismatch: Mismatch): string[] {
   const lines = mismatch.source.split("\n");
@@ -493,6 +496,37 @@ describe("a task item reads the same in a mixed list as in a list of tasks", () 
     }
   }
 
+  // Top-level token boundaries: the sequence of types (a taskList counts as
+  // a list), the raw of each token and the space tokens between lists.
+  function boundaries(tokens: ReadonlyArray<MarkedToken>): string[][] {
+    return tokens.map((token) => [
+      token.type === "taskList" ? "list" : token.type,
+      placeholderOf(token.raw ?? ""),
+    ]);
+  }
+
+  const TOKEN_ROWS: ReadonlyArray<readonly [string, string]> = [
+    ["a task list after a task list ends at its marker", "- [ ] a\n+ [ ] b"],
+    ["a space token before a task list stays a space token", "- a\n\n+ [ ] b"],
+    [
+      "a plain list keeps its trailing newline before a task list",
+      "- a\n  - [ ] n\n* [x] t",
+    ],
+  ];
+
+  for (const [name, source] of TOKEN_ROWS) {
+    it(`reads ${name} as marked does`, () => {
+      expect(boundaries(oursLexer(source))).toEqual(
+        boundaries(referenceLex(placeholderOf(source))),
+      );
+    });
+  }
+
+  it("keeps the space token between a plain list and a task list", () => {
+    const types = oursLexer("- a\n\n+ [ ] b").map((token) => token.type);
+    expect(types).toEqual(["list", "space", "taskList"]);
+  });
+
   function items(source: string): JsonContent[] {
     return parseMarkdown(source).content ?? [];
   }
@@ -745,4 +779,373 @@ describe("a continuation line's tabs read as marked reads them", () => {
       expect(marked).toEqual([1, [[["p", expected]]]]);
     });
   }
+});
+
+// ---- whole documents: lists of mixed markers, tasks and blank lines
+
+// The reference is the same document with each checkbox swapped for a
+// same-width placeholder, which marked reads as a plain list with no task.
+
+type ItemKind = "plain" | "task" | "done";
+type Variant = "none" | "para" | "nested" | "nestedBlank" | "nestedTask";
+
+interface ItemSpec {
+  readonly kind: ItemKind;
+  readonly variant: Variant;
+}
+
+interface ListSpec {
+  readonly marker: string;
+  readonly items: ReadonlyArray<ItemSpec>;
+  readonly separators: ReadonlyArray<string>;
+}
+
+const ITEM_KINDS: ReadonlyArray<ItemKind> = ["plain", "task", "done"];
+const VARIANTS: ReadonlyArray<Variant> = [
+  "none",
+  "para",
+  "nested",
+  "nestedBlank",
+  "nestedTask",
+];
+const LIST_MARKERS = ["-", "+", "*"];
+const ITEM_SEPARATORS = ["\n", "\n\n"];
+
+function itemSource(marker: string, spec: ItemSpec): string {
+  const head: Record<ItemKind, string> = {
+    plain: `${marker} a`,
+    task: `${marker} [ ] t`,
+    done: `${marker} [x] t`,
+  };
+  const tail: Record<Variant, string> = {
+    none: "",
+    para: "\n\n  b",
+    nested: "\n  - x",
+    nestedBlank: "\n\n  - x",
+    nestedTask: "\n  - [ ] n",
+  };
+  return `${head[spec.kind]}${tail[spec.variant]}`;
+}
+
+function listSource(list: ListSpec): string {
+  return list.items
+    .map((item, index) => {
+      const before = index === 0 ? "" : list.separators[index - 1];
+      return `${before}${itemSource(list.marker, item)}`;
+    })
+    .join("");
+}
+
+function placeholderOf(source: string): string {
+  return source.replace(/\[([ x])\]/g, "{$1}");
+}
+
+// A small seeded generator keeps the corpus fixed from run to run.
+function seeded(seed: number): () => number {
+  let state = seed;
+  return () => {
+    state = (state + 0x6d2b79f5) | 0;
+    let t = Math.imul(state ^ (state >>> 15), 1 | state);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+function exhaustiveLists(): ListSpec[] {
+  const items: ItemSpec[] = ITEM_KINDS.flatMap((kind) =>
+    VARIANTS.map((variant): ItemSpec => ({ kind, variant })),
+  );
+  const lists: ListSpec[] = [];
+  for (const marker of LIST_MARKERS) {
+    for (const one of items) {
+      lists.push({ marker, items: [one], separators: [] });
+      for (const two of items) {
+        for (const separator of ITEM_SEPARATORS) {
+          lists.push({ marker, items: [one, two], separators: [separator] });
+        }
+      }
+    }
+  }
+  return lists;
+}
+
+function pick<T>(random: () => number, values: ReadonlyArray<T>): T {
+  return values[Math.floor(random() * values.length)];
+}
+
+function randomList(random: () => number): ListSpec {
+  const count = 1 + Math.floor(random() * 3);
+  const items: ItemSpec[] = [];
+  const separators: string[] = [];
+  for (let index = 0; index < count; index++) {
+    items.push({
+      kind: pick(random, ITEM_KINDS),
+      variant: pick(random, VARIANTS),
+    });
+    if (index > 0) separators.push(pick(random, ITEM_SEPARATORS));
+  }
+  return { marker: pick(random, LIST_MARKERS), items, separators };
+}
+
+function wholeDocuments(): string[] {
+  const documents = exhaustiveLists().map(listSource);
+  const random = seeded(2357);
+  for (let index = 0; index < 6000; index++) {
+    const lists = 1 + Math.floor(random() * 3);
+    const parts: string[] = [];
+    for (let part = 0; part < lists; part++) {
+      parts.push(listSource(randomList(random)));
+    }
+    documents.push(parts.join(pick(random, ["\n", "\n\n"])));
+  }
+  return documents;
+}
+
+const CHECKBOX = /\[[ x]\]/;
+const PLACEHOLDER_TASK = /^[ \t]*[-+*][ \t]+\{[ x]\}/;
+
+function referenceLex(source: string): MarkedToken[] {
+  const tokens: unknown[] = new Lexer().lex(source);
+  return tokens.filter(isMarkedToken);
+}
+
+function oursLexer(source: string): MarkedToken[] {
+  // The lexer `MarkdownManager.parse` uses, with our tokenizers registered.
+  const instance = artifactDocumentBundle.markdownManager.instance;
+  const tokens: unknown[] = new instance.Lexer(instance.defaults).lex(source);
+  return tokens.filter(isMarkedToken);
+}
+
+// True when `mine` holds every key marked's token holds, to any depth, with
+// the same value. Our list items carry extra keys of their own.
+function covers(mine: unknown, marked: unknown): boolean {
+  if (Array.isArray(marked)) {
+    return (
+      Array.isArray(mine) &&
+      mine.length === marked.length &&
+      marked.every((entry, index) => covers(mine.at(index), entry))
+    );
+  }
+  if (typeof marked === "object" && marked !== null) {
+    if (typeof mine !== "object" || mine === null) return false;
+    const own = new Map(Object.entries(mine));
+    return Object.entries(marked).every(([key, value]) =>
+      covers(own.get(key), value),
+    );
+  }
+  return Object.is(mine, marked);
+}
+
+function isListToken(token: MarkedToken): boolean {
+  return token.type === "list" || token.type === "taskList";
+}
+
+function compareTokens(source: string): string[] {
+  const reference = referenceLex(placeholderOf(source));
+  const ours = oursLexer(source);
+  const problems: string[] = [];
+  if (ours.length !== reference.length)
+    return [`token count: ${JSON.stringify(source)}`];
+  reference.forEach((marked, index) => {
+    const mine = ours.at(index);
+    if (mine === undefined) return;
+    if (placeholderOf(mine.raw ?? "") !== marked.raw) {
+      problems.push(`raw: ${JSON.stringify(source)}`);
+      return;
+    }
+    if (marked.type === "list")
+      problems.push(...compareListToken(source, mine, marked));
+  });
+  return problems;
+}
+
+function compareListToken(
+  source: string,
+  mine: MarkedToken,
+  marked: MarkedToken,
+): string[] {
+  const label = JSON.stringify(source);
+  const mineItems = mine.items ?? [];
+  const markedItems = marked.items ?? [];
+  if (!isListToken(mine)) return [`list type: ${label}`];
+  if (mine.loose !== marked.loose) return [`loose: ${label}`];
+  if (mineItems.length !== markedItems.length) return [`item count: ${label}`];
+  const problems: string[] = [];
+  markedItems.forEach((markedItem, index) => {
+    const item = mineItems.at(index);
+    if (item === undefined) return;
+    // A task item's own token keeps no raw text, so it is checked by type:
+    // the reference item opens with a placeholder checkbox.
+    if (PLACEHOLDER_TASK.test(markedItem.raw ?? "")) {
+      if (item.type !== "taskItem") problems.push(`task type: ${label}`);
+      return;
+    }
+    if (item.type !== "list_item") {
+      problems.push(`plain type: ${label}`);
+    } else if (placeholderOf(item.raw ?? "") !== markedItem.raw) {
+      problems.push(`item raw: ${label}`);
+    } else if (!CHECKBOX.test(item.raw ?? "") && !covers(item, markedItem)) {
+      problems.push(`plain item: ${label}`);
+    }
+  });
+  return problems;
+}
+
+function topBlocks(doc: JsonContent): JsonContent[] {
+  return (doc.content ?? []).filter((node) =>
+    (node.type ?? "").endsWith("List"),
+  );
+}
+
+const TASK_PREFIX = /^\{([ x])\} /;
+
+// A task inside a plain item reads back as the placeholder list it replaced.
+function asPlaceholder(node: JsonContent): JsonContent {
+  const content = (node.content ?? []).map(asPlaceholder);
+  if (node.type === "taskList") return { type: "bulletList", content };
+  if (node.type !== "taskItem") {
+    return node.content === undefined ? node : { ...node, content };
+  }
+  const box = node.attrs?.checked === true ? "{x} " : "{ } ";
+  const [first, ...rest] = content;
+  const text = { type: "text", text: `${box}${textOf(first)}` };
+  return {
+    type: "listItem",
+    content: [{ type: "paragraph", content: [text] }, ...rest],
+  };
+}
+
+function compareItem(
+  label: string,
+  mine: JsonContent,
+  marked: JsonContent,
+  itemRaw: string,
+): string[] {
+  const markedText = textOf((marked.content ?? [])[0]);
+  const box = TASK_PREFIX.exec(markedText);
+  if (mine.type !== "taskItem") {
+    const same = JSON.stringify(asPlaceholder(mine)) === JSON.stringify(marked);
+    return box === null && same ? [] : [`plain item node: ${label}`];
+  }
+  if (box === null) return [`task for a plain item: ${label}`];
+  const problems: string[] = [];
+  if (mine.attrs?.checked !== (box[1] === "x"))
+    problems.push(`checked: ${label}`);
+  if (textOf((mine.content ?? [])[0]) !== markedText.replace(TASK_PREFIX, "")) {
+    problems.push(`task text: ${label}`);
+  }
+  const alone = (parseMarkdown(itemRaw).content ?? []).at(0);
+  const standalone = (alone?.content ?? []).at(0);
+  if (JSON.stringify(standalone) !== JSON.stringify(mine)) {
+    problems.push(`standalone reader: ${label}`);
+  }
+  return problems;
+}
+
+function compareDocument(source: string): string[] {
+  const label = JSON.stringify(source);
+  const referenceTokens = referenceLex(placeholderOf(source));
+  const lists = referenceTokens.filter((token) => token.type === "list");
+  const blocks = topBlocks(parseMarkdown(source));
+  const referenceBlocks = topBlocks(parseMarkdown(placeholderOf(source)));
+  const problems: string[] = [];
+  let cursor = 0;
+  lists.forEach((marked, listIndex) => {
+    const expected = (marked.items ?? []).length;
+    const reference = referenceBlocks.at(listIndex);
+    const items: JsonContent[] = [];
+    let previousType = "";
+    while (items.length < expected) {
+      const block = blocks.at(cursor);
+      if (block === undefined || block.type === previousType) {
+        problems.push(`run: ${label}`);
+        return;
+      }
+      previousType = block.type ?? "";
+      items.push(...(block.content ?? []));
+      cursor++;
+    }
+    if (items.length !== expected) {
+      problems.push(`run size: ${label}`);
+      return;
+    }
+    const raws = (marked.items ?? []).map((item) =>
+      (item.raw ?? "").replace(/\{([ x])\}/g, "[$1]"),
+    );
+    items.forEach((item, index) => {
+      const markedItem = (reference?.content ?? []).at(index);
+      if (markedItem === undefined) return;
+      problems.push(
+        ...compareItem(label, item, markedItem, raws.at(index) ?? ""),
+      );
+    });
+  });
+  if (cursor !== blocks.length) problems.push(`extra blocks: ${label}`);
+  return problems;
+}
+
+describe("a whole document of lists reads as marked reads it", () => {
+  const documents = wholeDocuments();
+
+  it("has no extensions on the reference lexer", () => {
+    expect(referenceLex("- [ ] a").at(0)?.type).toBe("list");
+    expect(oursLexer("- [ ] a").at(0)?.type).toBe("taskList");
+    const mixed = oursLexer("- a\n- [ ] b").at(0);
+    expect(mixed?.type).toBe("list");
+    expect(mixed?.items?.at(1)?.type).toBe("taskItem");
+    expect(mixed?.items?.at(0)?.type).toBe("list_item");
+  });
+
+  it("splits the tokens where marked does and reads every plain item as marked does", () => {
+    const problems = documents.flatMap(compareTokens);
+    expect(documents.length).toBe(CORPUS_SIZE);
+    expect({ count: problems.length, first: problems.slice(0, 5) }).toEqual({
+      count: 0,
+      first: [],
+    });
+  }, 120000);
+
+  it("maps each marked list to a run of our lists and each task item to the standalone reader", () => {
+    const problems = documents.flatMap(compareDocument);
+    expect(problems.slice(0, 5)).toEqual([]);
+  }, 120000);
+
+  function items(source: string): JsonContent[] {
+    return parseMarkdown(source).content ?? [];
+  }
+
+  it("holds a plain item's second paragraph with no empty paragraph before it", () => {
+    const top = items("- a\n\n  b\n- [ ] task");
+    expect(top.map((node) => node.type)).toEqual(["bulletList", "taskList"]);
+    const plain = (top[0].content ?? [])[0];
+    expect((plain.content ?? []).map((child) => child.type)).toEqual([
+      "paragraph",
+      "paragraph",
+    ]);
+    expect((plain.content ?? []).map(textOf)).toEqual(["a", "b"]);
+    const task = (top[1].content ?? [])[0];
+    expect(task.attrs?.checked).toBe(false);
+    expect((task.content ?? []).map(textOf)).toEqual(["task"]);
+  });
+
+  it("holds a nested list directly after a plain item's text in a loose list", () => {
+    const top = items("- a\n\n  - x\n- [ ] task");
+    expect(top.map((node) => node.type)).toEqual(["bulletList", "taskList"]);
+    const plain = (top[0].content ?? [])[0];
+    expect((plain.content ?? []).map((child) => child.type)).toEqual([
+      "paragraph",
+      "bulletList",
+    ]);
+    expect(textOf((plain.content ?? [])[0])).toBe("a");
+  });
+
+  it("ends a list at a different bullet character", () => {
+    const top = items("- a\n+ b\n- [ ] c");
+    expect(top.map((node) => node.type)).toEqual([
+      "bulletList",
+      "bulletList",
+      "taskList",
+    ]);
+    expect(top.map(textOf)).toEqual(["a", "b", "c"]);
+  });
 });
