@@ -9,26 +9,37 @@ export const DELETED_EPIC_NOTIFICATION_STORAGE_KEY =
 
 const SEEN_NOTIFICATION_TTL_MS = 5 * 60 * 1000;
 
+// Fields every version carries.
+const deletedEpicNotificationFields = {
+  id: z.string().min(1).optional(),
+  type: z.literal("epic-deleted"),
+  originId: z.string().min(1),
+  sequence: z.number(),
+  createdAt: z.number(),
+  hostId: z.string().min(1),
+  userId: z.string().min(1),
+  epicIds: z.array(z.string().min(1)),
+  epicTitlesById: z.record(z.string(), z.string()).default({}),
+};
+
+/**
+ * Two versions on one channel, because a deletion's scope changes what a
+ * receiver may tear down and a window that predates scopes reads only `1`:
+ *
+ * - `1`: every `epicIds` entry was deleted from the account. What every
+ *   window has always read.
+ * - `2`: every `epicIds` entry was deleted on `hostId` alone (a local-homed
+ *   Task), whose id another host may still serve. A window that predates it
+ *   rejects the version and ignores the message, rather than reading the
+ *   ids as account-wide and closing a same-id Task that still exists.
+ *
+ * A deletion with both scopes is published as one message of each.
+ */
 const deletedEpicNotificationSchema = z
-  .object({
-    id: z.string().min(1).optional(),
-    type: z.literal("epic-deleted"),
-    version: z.literal(1),
-    originId: z.string().min(1),
-    sequence: z.number(),
-    createdAt: z.number(),
-    hostId: z.string().min(1),
-    userId: z.string().min(1),
-    epicIds: z.array(z.string().min(1)),
-    /**
-     * The `epicIds` whose deletion was scoped to `hostId` (a local-homed
-     * Task), which a receiver tombstones under that host; the rest were
-     * deleted from the account. Absent from a publisher that predates it,
-     * which leaves every id account-wide, as before.
-     */
-    hostScopedEpicIds: z.array(z.string().min(1)).default([]),
-    epicTitlesById: z.record(z.string(), z.string()).default({}),
-  })
+  .discriminatedUnion("version", [
+    z.object({ ...deletedEpicNotificationFields, version: z.literal(1) }),
+    z.object({ ...deletedEpicNotificationFields, version: z.literal(2) }),
+  ])
   .transform((notification) => ({
     ...notification,
     id:
@@ -37,9 +48,16 @@ const deletedEpicNotificationSchema = z
         notification.originId,
         notification.sequence,
       ),
+    /** The `epicIds` deleted on `hostId` only: all of them on `2`. */
+    hostScopedEpicIds: notification.version === 2 ? notification.epicIds : [],
   }));
 
 export type DeletedEpicNotification = z.infer<
+  typeof deletedEpicNotificationSchema
+>;
+
+/** A notification as it travels: the scope is the version, not a field. */
+type DeletedEpicNotificationWire = z.input<
   typeof deletedEpicNotificationSchema
 >;
 
@@ -69,27 +87,42 @@ export function publishDeletedEpicNotification(
 ): void {
   const epicIds = uniqueStrings(input.epicIds);
   if (epicIds.length === 0) return;
+  const hostScoped = new Set(subsetOf(epicIds, input.hostScopedEpicIds));
+  publishVersion(
+    input,
+    1,
+    epicIds.filter((id) => !hostScoped.has(id)),
+  );
+  publishVersion(input, 2, [...hostScoped]);
+}
+
+function publishVersion(
+  input: PublishDeletedEpicNotificationInput,
+  version: 1 | 2,
+  epicIds: ReadonlyArray<string>,
+): void {
+  if (epicIds.length === 0) return;
   sequence += 1;
-  const notification: DeletedEpicNotification = {
+  const wire: DeletedEpicNotificationWire = {
     id: createDeletedEpicNotificationId(sequence),
     type: "epic-deleted",
-    version: 1,
+    version,
     originId,
     sequence,
     createdAt: Date.now(),
     hostId: input.hostId,
     userId: input.userId,
-    epicIds,
-    hostScopedEpicIds: subsetOf(epicIds, input.hostScopedEpicIds),
+    epicIds: [...epicIds],
     epicTitlesById: titlesForEpicIds(epicIds, input.epicTitlesById),
   };
   appLogger.debug("[deleted-epic-events] publishing notification", {
     hostId: input.hostId,
     epicCount: epicIds.length,
+    version,
     sequence,
   });
-  postBroadcastNotification(notification);
-  writeStorageNotification(notification);
+  postBroadcastNotification(wire);
+  writeStorageNotification(wire);
 }
 
 export function subscribeDeletedEpicNotifications(
@@ -189,7 +222,7 @@ function pruneSeenNotifications(now: number): void {
 }
 
 function postBroadcastNotification(
-  notification: DeletedEpicNotification,
+  notification: DeletedEpicNotificationWire,
 ): void {
   if (typeof BroadcastChannel === "undefined") return;
   const channel =
@@ -200,7 +233,9 @@ function postBroadcastNotification(
   }
 }
 
-function writeStorageNotification(notification: DeletedEpicNotification): void {
+function writeStorageNotification(
+  notification: DeletedEpicNotificationWire,
+): void {
   if (typeof window === "undefined") return;
   try {
     window.localStorage.setItem(

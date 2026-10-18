@@ -412,6 +412,111 @@ describe("composer run settings store", () => {
       expect(state.legacyEpicRunSettingsByEpicId).toEqual({});
     });
 
+    // A Task deletion clears each tier in its own scope. Account-wide: every
+    // host bucket and the legacy entry (above). Host-scoped (a local-homed
+    // Task deleted on one host, whose id another host may still serve): that
+    // host's bucket, after the host adopts the transitional legacy tier and
+    // retires it, so the cleared entry cannot fall back to a legacy choice the
+    // host had superseded (gui-app AGENTS.md, the legacy tier).
+    describe("a host-scoped deletion", () => {
+      function seedEveryTier(): void {
+        useComposerRunSettingsStore.setState({
+          legacyGlobalLastRunSettings: EPIC_RUN_SETTINGS,
+          legacyEpicRunSettingsByEpicId: {
+            "epic-1": { settings: EPIC_RUN_SETTINGS, updatedAt: 1 },
+            "epic-3": { settings: EPIC_RUN_SETTINGS, updatedAt: 2 },
+          },
+        });
+        useComposerRunSettingsStore
+          .getState()
+          .setEpicRunSettings("epic-1", HOST_A, REGULAR_RUN_SETTINGS, 10);
+        useComposerRunSettingsStore
+          .getState()
+          .setEpicRunSettings("epic-1", HOST_B, REGULAR_RUN_SETTINGS, 20);
+      }
+
+      function clearOnHostA(): void {
+        useComposerRunSettingsStore
+          .getState()
+          .clearEpicRunSettingsForHost(["epic-1"], HOST_A);
+      }
+
+      it("clears the deleting host's entry without falling back to the legacy one it superseded", () => {
+        seedEveryTier();
+
+        clearOnHostA();
+
+        expect(
+          useComposerRunSettingsStore
+            .getState()
+            .getEpicRunSettings("epic-1", HOST_A),
+        ).toBeNull();
+      });
+
+      it("retires the legacy tier, so no host reads the deleted Task's legacy entry", () => {
+        seedEveryTier();
+
+        clearOnHostA();
+
+        const state = useComposerRunSettingsStore.getState();
+        expect(state.legacyEpicRunSettingsByEpicId).toEqual({});
+        expect(state.legacyGlobalLastRunSettings).toBeNull();
+        expect(state.getEpicRunSettings("epic-1", "host-never")).toBeNull();
+      });
+
+      it("adopts the rest of the legacy tier into the deleting host's bucket", () => {
+        seedEveryTier();
+
+        clearOnHostA();
+
+        const state = useComposerRunSettingsStore.getState();
+        expect(state.getEpicRunSettings("epic-3", HOST_A)).toEqual(
+          EPIC_RUN_SETTINGS,
+        );
+        expect(state.getGlobalRunSettings(HOST_A)).toEqual(EPIC_RUN_SETTINGS);
+      });
+
+      it("keeps the deleting host's own global settings over the legacy ones", () => {
+        seedEveryTier();
+        useComposerRunSettingsStore
+          .getState()
+          .setGlobalRunSettings(HOST_A, REGULAR_RUN_SETTINGS, 5);
+
+        clearOnHostA();
+
+        expect(
+          useComposerRunSettingsStore.getState().getGlobalRunSettings(HOST_A),
+        ).toEqual(REGULAR_RUN_SETTINGS);
+      });
+
+      it("keeps another host's bucket, which that host still reads", () => {
+        seedEveryTier();
+
+        clearOnHostA();
+
+        expect(
+          useComposerRunSettingsStore
+            .getState()
+            .getEpicRunSettings("epic-1", HOST_B),
+        ).toEqual(REGULAR_RUN_SETTINGS);
+      });
+
+      it("leaves other epics on the deleting host alone", () => {
+        seedEveryTier();
+        useComposerRunSettingsStore
+          .getState()
+          .setEpicRunSettings("epic-2", HOST_A, EPIC_RUN_SETTINGS, 30);
+
+        clearOnHostA();
+
+        expect(
+          useComposerRunSettingsStore
+            .getState()
+            .getEpicRunSettings("epic-2", HOST_A),
+        ).toEqual(EPIC_RUN_SETTINGS);
+      });
+    });
+
     it("setGlobalRunSettings / setEpicRunSettings are no-ops when hostId is null", () => {
       useComposerRunSettingsStore
         .getState()

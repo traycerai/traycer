@@ -93,7 +93,8 @@ interface ComposerRunSettingsStore {
   /**
    * Clear these epics' settings on one host only: for a Task deleted on that
    * host alone (a local-homed Task), whose id another host may still serve.
-   * The host-less legacy entries are left, since they name no host.
+   * The host acting adopts the transitional legacy tier into its own bucket
+   * and retires it first, so the cleared entry cannot fall back to it.
    */
   clearEpicRunSettingsForHost: (
     epicIds: ReadonlyArray<string>,
@@ -319,8 +320,12 @@ export const useComposerRunSettingsStore = create<ComposerRunSettingsStore>()(
         if (epicIds.length === 0) return;
         const epicIdSet = new Set(epicIds);
         set((state) => {
-          let changed = false;
-          const nextByEpicHost = { ...state.epicRunSettingsByEpicHost };
+          // This sweep is the host acting, so it adopts the transitional
+          // legacy tier first (gui-app AGENTS.md): otherwise the cleared
+          // bucket falls back to the legacy entry it had superseded.
+          const adopted = adoptLegacyInto(state, hostId);
+          let changed = adopted.changed;
+          const nextByEpicHost = { ...adopted.epicRunSettingsByEpicHost };
           for (const key of Object.keys(nextByEpicHost)) {
             if (!epicIdSet.has(epicIdOfKey(key))) continue;
             if (hostIdOfKey(key) !== hostId) continue;
@@ -328,7 +333,13 @@ export const useComposerRunSettingsStore = create<ComposerRunSettingsStore>()(
             changed = true;
           }
           return changed
-            ? { epicRunSettingsByEpicHost: nextByEpicHost }
+            ? {
+                globalLastRunSettingsByHostId:
+                  adopted.globalLastRunSettingsByHostId,
+                epicRunSettingsByEpicHost: nextByEpicHost,
+                legacyGlobalLastRunSettings: null,
+                legacyEpicRunSettingsByEpicId: {},
+              }
             : state;
         });
       },
@@ -356,6 +367,56 @@ export const useComposerRunSettingsStore = create<ComposerRunSettingsStore>()(
     },
   ),
 );
+
+interface AdoptedLegacy {
+  readonly globalLastRunSettingsByHostId: Record<string, ChatRunSettings>;
+  readonly epicRunSettingsByEpicHost: Record<string, ComposerRunSettingsEntry>;
+  /** False when there was no legacy tier to adopt. */
+  readonly changed: boolean;
+}
+
+/**
+ * Adopt the whole legacy tier into `hostId`'s bucket, the host's own entries
+ * winning, for a caller that then retires it. Once retired no host falls back
+ * to it, so a choice this host superseded cannot resurface after its own
+ * entry is cleared.
+ */
+function adoptLegacyInto(
+  state: Pick<
+    ComposerRunSettingsStore,
+    | "globalLastRunSettingsByHostId"
+    | "epicRunSettingsByEpicHost"
+    | "legacyGlobalLastRunSettings"
+    | "legacyEpicRunSettingsByEpicId"
+  >,
+  hostId: string,
+): AdoptedLegacy {
+  const legacyGlobal = state.legacyGlobalLastRunSettings;
+  const legacyEpics = Object.entries(state.legacyEpicRunSettingsByEpicId);
+  if (legacyGlobal === null && legacyEpics.length === 0) {
+    return {
+      globalLastRunSettingsByHostId: state.globalLastRunSettingsByHostId,
+      epicRunSettingsByEpicHost: state.epicRunSettingsByEpicHost,
+      changed: false,
+    };
+  }
+  const adoptedGlobal =
+    legacyGlobal !== null &&
+    !Object.hasOwn(state.globalLastRunSettingsByHostId, hostId)
+      ? { ...state.globalLastRunSettingsByHostId, [hostId]: legacyGlobal }
+      : state.globalLastRunSettingsByHostId;
+  const adoptedEpics = Object.fromEntries(
+    legacyEpics.map(([epicId, entry]) => [epicHostKey(epicId, hostId), entry]),
+  );
+  return {
+    globalLastRunSettingsByHostId: adoptedGlobal,
+    epicRunSettingsByEpicHost: cappedForHost(
+      { ...adoptedEpics, ...state.epicRunSettingsByEpicHost },
+      hostId,
+    ),
+    changed: true,
+  };
+}
 
 function chatRunSettingsModelResolved(settings: ChatRunSettings): boolean {
   return settings.model.length > 0;

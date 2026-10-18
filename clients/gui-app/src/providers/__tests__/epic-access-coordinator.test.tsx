@@ -1026,23 +1026,36 @@ function dispatchScopedDeletedEpicStorageEvent(notice: {
   readonly hostScopedEpicIds: ReadonlyArray<string>;
   readonly sequence: number;
 }): void {
-  window.dispatchEvent(
-    new StorageEvent("storage", {
-      key: DELETED_EPIC_NOTIFICATION_STORAGE_KEY,
-      newValue: JSON.stringify({
-        type: "epic-deleted",
-        version: 1,
-        originId: "other-window",
-        sequence: notice.sequence,
-        createdAt: Date.now(),
-        hostId: notice.hostId,
-        userId: "user-1",
-        epicIds: notice.epicIds,
-        hostScopedEpicIds: notice.hostScopedEpicIds,
-        epicTitlesById: {},
+  // As the deleting window publishes it: the account-wide ids as version 1,
+  // the host-scoped ones as version 2, each its own message.
+  const hostScoped = new Set(notice.hostScopedEpicIds);
+  const messages = [
+    {
+      version: 1,
+      sequence: notice.sequence,
+      epicIds: notice.epicIds.filter((id) => !hostScoped.has(id)),
+    },
+    { version: 2, sequence: notice.sequence + 1000, epicIds: [...hostScoped] },
+  ];
+  for (const message of messages) {
+    if (message.epicIds.length === 0) continue;
+    window.dispatchEvent(
+      new StorageEvent("storage", {
+        key: DELETED_EPIC_NOTIFICATION_STORAGE_KEY,
+        newValue: JSON.stringify({
+          type: "epic-deleted",
+          version: message.version,
+          originId: "other-window",
+          sequence: message.sequence,
+          createdAt: Date.now(),
+          hostId: notice.hostId,
+          userId: "user-1",
+          epicIds: message.epicIds,
+          epicTitlesById: {},
+        }),
       }),
-    }),
-  );
+    );
+  }
 }
 
 function taskLight(id: string, title: string, repo: string): TaskLight {
