@@ -21,6 +21,8 @@ const h = vi.hoisted(() => ({
   home: "",
   platform: process.platform as NodeJS.Platform,
   park: null as ParkSeam | null,
+  // Like `park`, but for the next read of the settings lock file.
+  lockReadPark: null as ParkSeam | null,
   configRenames: 0,
   // Counts links whose target is the settings lock, failed or not.
   lockLinks: 0,
@@ -57,6 +59,14 @@ vi.mock("node:fs/promises", async (importActual) => {
   return {
     ...actual,
     readFile: async (...args: Parameters<typeof actual.readFile>) => {
+      const lockSeam = h.lockReadPark;
+      if (lockSeam !== null && args[0] === `${cliConfigPath()}.lock`) {
+        h.lockReadPark = null;
+        const content = await actual.readFile(...args);
+        lockSeam.markParked();
+        await lockSeam.gate;
+        return content;
+      }
       const seam = h.park;
       if (seam !== null && args[0] === cliConfigPath()) {
         h.park = null;
@@ -170,7 +180,7 @@ function delay(ms: number): Promise<void> {
   });
 }
 
-function armPark(): ParkSeam {
+function newSeam(): ParkSeam {
   let open: () => void = () => {};
   let markParked: () => void = () => {};
   const gate = new Promise<void>((resolve) => {
@@ -180,8 +190,19 @@ function armPark(): ParkSeam {
     markParked = resolve;
   });
   const seam: ParkSeam = { gate, open, parked, markParked };
-  h.park = seam;
   lastSeam = seam;
+  return seam;
+}
+
+function armPark(): ParkSeam {
+  const seam = newSeam();
+  h.park = seam;
+  return seam;
+}
+
+function armLockReadPark(): ParkSeam {
+  const seam = newSeam();
+  h.lockReadPark = seam;
   return seam;
 }
 
@@ -238,6 +259,7 @@ beforeEach(async () => {
   h.home = await mkdtemp(join(tmpdir(), "traycer-config-concurrent-"));
   h.platform = process.platform;
   h.park = null;
+  h.lockReadPark = null;
   h.configRenames = 0;
   h.lockLinks = 0;
   h.renameFailure = null;
@@ -254,6 +276,7 @@ afterEach(async () => {
   lastSeam?.open();
   lastSeam = null;
   h.park = null;
+  h.lockReadPark = null;
   h.renameFailure = null;
   h.linkFailure = null;
   h.lockLinkFailures = [];
@@ -625,6 +648,35 @@ describe("concurrent config writers", () => {
       });
     });
 
+    it("retries a win32 sharing violation while removing a dead lock", async () => {
+      h.platform = "win32";
+      setCliConfigLockTimingForTests({
+        waitMs: 3000,
+        pollMs: 10,
+        staleAgeMs: 300,
+      });
+      await mkdir(dirname(lockPath()), { recursive: true });
+      await writeFile(
+        lockPath(),
+        JSON.stringify({
+          pid: await deadPid(),
+          pidStartTime: null,
+          nonce: "dead-holder",
+          acquiredAt: 0,
+        }),
+      );
+      const anHourAgo = new Date(Date.now() - 60 * 60 * 1000);
+      await utimes(lockPath(), anHourAgo, anHourAgo);
+      h.unlinkFailures = ["EBUSY"];
+
+      await setEnvOverride("K", "v");
+
+      expect((await readCliConfig()).envOverrides).toEqual({ K: "v" });
+      // The refused removal, then the one that landed (and the release).
+      expect(h.lockUnlinks).toBeGreaterThanOrEqual(2);
+      expect(existsSync(lockPath())).toBe(false);
+    });
+
     it("never drops a failed release silently", async () => {
       const secret = "s3cr3t-value-123";
       await seed({ envOverrides: { SECRET_KEY: secret } });
@@ -652,6 +704,39 @@ describe("concurrent config writers", () => {
 
       expect((await readCliConfig()).envOverrides).toEqual({
         SECRET_KEY: secret,
+        FIRST: "1",
+        SECOND: "2",
+      });
+      expect(existsSync(lockPath())).toBe(false);
+    });
+
+    it("never lets two release retries race for one record", async () => {
+      setCliConfigLockTimingForTests({
+        waitMs: 3000,
+        pollMs: 10,
+        staleAgeMs: 300,
+        backgroundReleaseDelaysMs: [100],
+      });
+      vi.spyOn(console, "warn").mockImplementation(() => {});
+      h.unlinkFailures = ["EBUSY", "EBUSY", "EBUSY"];
+
+      // The release is pending now, with its background retry due shortly.
+      await setEnvOverride("FIRST", "1");
+      const seam = armLockReadPark();
+      const second = setEnvOverride("SECOND", "2");
+      // The acquire path's retry has read the record and is about to unlink it.
+      await Promise.race([seam.parked, second]);
+
+      // The background retry fires meanwhile. It must wait for the one in
+      // flight: were it to unlink first, the in-flight one would then remove
+      // whatever replaced the record.
+      await delay(300);
+      expect(existsSync(lockPath())).toBe(true);
+
+      seam.open();
+      await second;
+
+      expect((await readCliConfig()).envOverrides).toEqual({
         FIRST: "1",
         SECOND: "2",
       });

@@ -139,6 +139,46 @@ interface LockRecord {
 // This process's own locks whose release has not landed yet, by lock path.
 const unreleased = new Map<string, LockRecord[]>();
 
+// Retries of those releases, chained per lock path. The ownership check and
+// the unlink are two steps, so two retries of one record running at once
+// could both pass the check, and the second would unlink the fresh lock that
+// replaced the record after the first removed it.
+const removalChains = new Map<string, Promise<void>>();
+
+function serializeRemoval(
+  lockPath: string,
+  removal: () => Promise<void>,
+): Promise<void> {
+  const run = (removalChains.get(lockPath) ?? Promise.resolve()).then(removal);
+  const settled = run.catch(() => undefined);
+  removalChains.set(lockPath, settled);
+  void settled.then(() => {
+    if (removalChains.get(lockPath) === settled) removalChains.delete(lockPath);
+  });
+  return run;
+}
+
+function isUnreleased(lockPath: string, record: LockRecord): boolean {
+  return (unreleased.get(lockPath) ?? []).some(
+    (entry) => entry.nonce === record.nonce,
+  );
+}
+
+/** Retries one pending release, unless another retry already landed it. */
+function retryRelease(lockPath: string, record: LockRecord): Promise<boolean> {
+  let landed = false;
+  return serializeRemoval(lockPath, async () => {
+    if (!isUnreleased(lockPath, record)) {
+      landed = true;
+      return;
+    }
+    if (await removeIfOurs(lockPath, record)) {
+      forget(lockPath, record);
+      landed = true;
+    }
+  }).then(() => landed);
+}
+
 /**
  * Acquires the lock at `lockPath`, waiting up to the configured `waitMs`.
  * Throws when the wait runs out, naming only the lock path, so the caller
@@ -230,9 +270,14 @@ async function breakDeadLock(
         // breaker of this record needs this token.
         const current = await readHolder(lockPath);
         if (current === null || current.raw !== deadRaw) return true;
-        await unlink(lockPath).catch((err: unknown) => {
-          if (errorCode(err) !== "ENOENT") throw err;
-        });
+        try {
+          await unlink(lockPath);
+        } catch (err) {
+          const code = errorCode(err);
+          // A Windows sharing violation is contention: wait and try again.
+          if (isTransientWindowsError(code)) return false;
+          if (code !== "ENOENT") throw err;
+        }
         return true;
       } finally {
         // Best effort, like the temp file: the record it guarded is gone or
@@ -440,9 +485,7 @@ async function removeIfOurs(
 async function releaseUnreleased(lockPath: string): Promise<void> {
   const pending = unreleased.get(lockPath);
   if (pending === undefined) return;
-  for (const record of [...pending]) {
-    if (await removeIfOurs(lockPath, record)) forget(lockPath, record);
-  }
+  for (const record of [...pending]) await retryRelease(lockPath, record);
 }
 
 function forget(lockPath: string, record: LockRecord): void {
@@ -466,12 +509,8 @@ function retryReleaseInBackground(
   const delays = currentTiming().backgroundReleaseDelaysMs;
   const delay = delays[Math.min(attempt, delays.length - 1)] ?? 5_000;
   const timer = setTimeout(() => {
-    const pending = unreleased.get(lockPath);
-    if (pending === undefined || !pending.some((e) => e.nonce === record.nonce))
-      return;
-    void removeIfOurs(lockPath, record).then((removed) => {
-      if (removed) forget(lockPath, record);
-      else retryReleaseInBackground(lockPath, record, attempt + 1);
+    void retryRelease(lockPath, record).then((landed) => {
+      if (!landed) retryReleaseInBackground(lockPath, record, attempt + 1);
     });
   }, delay);
   timer.unref();
