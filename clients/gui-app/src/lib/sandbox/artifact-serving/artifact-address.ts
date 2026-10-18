@@ -1,0 +1,72 @@
+export interface ArtifactAddress {
+  readonly mountId: string;
+  readonly artifactId: string;
+  readonly path: string;
+}
+
+const ARTIFACT_ID = /^[a-z0-9_-]+$/;
+const MOUNT_ID = /^[a-z0-9]+$/;
+const SCHEME = /^[A-Za-z][A-Za-z0-9+.-]*$/;
+
+/** Manifest paths are decoded once, at the URL boundary, never at lookup. */
+export function isArtifactPath(path: string): boolean {
+  return (
+    path.length > 0 &&
+    path.length <= 1024 &&
+    !path.includes("\\") &&
+    !Array.from(path).some((character) => {
+      const code = character.charCodeAt(0);
+      return code < 32 || code === 127;
+    }) &&
+    path
+      .split("/")
+      .every((segment) => segment !== "" && !segment.startsWith("."))
+  );
+}
+
+export function parseArtifactAddress(url: string): ArtifactAddress | null {
+  // URL() removes literal and encoded dot segments before callers can reject
+  // them. Inspect the original path and authority instead.
+  const match =
+    /^([A-Za-z][A-Za-z0-9+.-]*):\/\/artifact-([^/?#]+)(\/[^?#]*)?(?:[?#].*)?$/.exec(url);
+  if (match === null) return null;
+  const authority = match[2];
+  const delimiter = authority.lastIndexOf("--");
+  if (delimiter < 1) return null;
+  const artifactId = authority.slice(0, delimiter);
+  const mountId = authority.slice(delimiter + 2);
+  if (!ARTIFACT_ID.test(artifactId) || !MOUNT_ID.test(mountId)) return null;
+  let path: string;
+  try {
+    path = decodeURIComponent(
+      (typeof match[3] === "string" ? match[3] : "/").slice(1),
+    );
+  } catch {
+    return null;
+  }
+  if (path === "") path = "index.html";
+  return isArtifactPath(path) ? { artifactId, mountId, path } : null;
+}
+
+export function buildArtifactAddress(
+  scheme: string,
+  artifactId: string,
+  mountId: string,
+  path: string,
+): string {
+  const protocol = scheme.endsWith(":") ? scheme.slice(0, -1) : scheme;
+  const relativePath = path === "" ? "index.html" : path;
+  if (
+    !SCHEME.test(protocol) ||
+    !ARTIFACT_ID.test(artifactId) ||
+    !MOUNT_ID.test(mountId) ||
+    !isArtifactPath(relativePath)
+  ) {
+    throw new Error("Invalid artifact address");
+  }
+  return `${protocol}://artifact-${artifactId}--${mountId}/${relativePath.split("/").map(encodeURIComponent).join("/")}`;
+}
+
+export function newMountId(): string {
+  return crypto.randomUUID().replace(/-/g, "");
+}
