@@ -606,6 +606,7 @@ function shouldPromoteToolSegment(
   // stands where the page will land while the agent is still writing it. A
   // preview call is the agent checking its work, and stays in the group.
   if (isPageToolCall(segment)) return true;
+  if (segment.artifact !== null) return true;
   // An app is the call's result, rendered where the call was made.
   if (isMcpAppToolCall(segment)) return true;
   if (segment.agentMessageSend !== null) return true;

@@ -455,6 +455,7 @@ describe("chat find projection", () => {
         backgroundTask: false,
         imageResults: [],
         page: null,
+        artifact: null,
         mcpApp: null,
         durationMs: null,
         startedAt: 0,
@@ -523,6 +524,7 @@ describe("chat find projection", () => {
         derivedFrom: null,
         originChatId: "chat-1",
       },
+      artifact: null,
       mcpApp: null,
       durationMs: null,
       startedAt: 0,
@@ -541,6 +543,55 @@ describe("chat find projection", () => {
     const joined = rows.map((row) => rowSearchText(row)).join("\n");
     expect(joined).not.toContain("some_other_page_tool");
     expect(joined).not.toContain("quarterly-report");
+  });
+
+  it("indexes nothing for a stamped inline artifact whatever its tool is called", () => {
+    // The artifact row renders off the stamp, like the page row, and carries
+    // no distinguished tool-name spelling to key a classifier on.
+    const artifact: MessageSegment = {
+      id: "artifact-1",
+      kind: "tool",
+      toolName: "some_other_artifact_tool",
+      inputSummary: "quarterly-report",
+      inputDetail: null,
+      taskTodoItems: null,
+      error: null,
+      agentMessageSend: null,
+      managedCommand: null,
+      agentMessageReceipt: null,
+      isStreaming: false,
+      endState: null,
+      stopped: false,
+      progress: null,
+      backgroundOutput: null,
+      backgroundTask: false,
+      imageResults: [],
+      page: null,
+      artifact: {
+        artifactId: "art-1",
+        title: "Quarterly Report",
+        manifest: { files: {}, capturedAt: 0 },
+        originChatId: "chat-1",
+      },
+      mcpApp: null,
+      durationMs: null,
+      startedAt: 0,
+      parentId: null,
+    };
+    const assistant: ChatMessageModel = {
+      ...makeMessage(3, "assistant"),
+      segments: [artifact],
+    };
+
+    const rows = buildChatFindRows([assistant], TILE_INSTANCE_ID, new Set(), {
+      hideReasoning: false,
+      queuePauseReasonProtocolSupported: null,
+    });
+
+    const joined = rows.map((row) => rowSearchText(row)).join("\n");
+    expect(joined).not.toContain("some_other_artifact_tool");
+    expect(joined).not.toContain("quarterly-report");
+    expect(joined).not.toContain("Quarterly Report");
   });
 
   it("does not index completed reasoning body text hidden behind the collapsed summary", () => {
@@ -652,6 +703,7 @@ describe("chat find projection", () => {
           backgroundTask: false,
           imageResults: [],
           page: null,
+          artifact: null,
           mcpApp: null,
           durationMs: null,
           startedAt: 0,
@@ -2138,6 +2190,7 @@ describe("buildSubagentChatFindRows", () => {
       backgroundTask: false,
       imageResults: [],
       page: null,
+      artifact: null,
       mcpApp: null,
       startedAt: 0,
       durationMs: null,

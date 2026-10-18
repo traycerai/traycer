@@ -13,11 +13,12 @@ import {
 } from "@/stores/chats/rendered-messages";
 
 /**
- * A host older than agent pages stores tool calls without `page` / `mcpApp`.
- * Its snapshot reaches the GUI through a SHALLOW parse that runs no zod
- * defaults, so the field arrives `undefined` while typed `ToolCallPageStamp |
- * null` - and a `page !== null` classifier promoted every such tool to a page
- * row that threw on `page.path`.
+ * A host older than agent pages (and older still than inline artifacts)
+ * stores tool calls without `page` / `mcpApp` / `artifact`. Its snapshot
+ * reaches the GUI through a SHALLOW parse that runs no zod defaults, so each
+ * field arrives `undefined` while typed `... | null` - and a `!== null`
+ * classifier promoted every such tool to a page/artifact row that threw on
+ * its missing stamp fields.
  */
 
 const displayContext: RenderedMessagesDisplayContext = {
@@ -129,7 +130,7 @@ function receiveV16SnapshotMessages(): ReadonlyArray<Message> {
 }
 
 describe("useRenderedMessages tool calls from a pre-pages host", () => {
-  it("projects a tool call without a page stamp as an ordinary tool", () => {
+  it("projects a tool call without a page or artifact stamp as an ordinary tool", () => {
     const input: RenderedMessagesInput = {
       messages: [...receiveV16SnapshotMessages()],
       events: [],
@@ -149,10 +150,17 @@ describe("useRenderedMessages tool calls from a pre-pages host", () => {
       useRenderedMessages(input, displayContext),
     );
 
-    // `null`, not `undefined`: every page classifier tests `page !== null`.
+    // `null`, not `undefined`: every page/artifact classifier tests
+    // `!== null`, and the artifact minor postdates this host just as much as
+    // the page one does, so the same shallow-parsed block normalizes both.
     const tool = result.current[0]?.segments.find(
       (segment) => segment.kind === "tool",
     );
-    expect(tool).toMatchObject({ kind: "tool", toolName: "Bash", page: null });
+    expect(tool).toMatchObject({
+      kind: "tool",
+      toolName: "Bash",
+      page: null,
+      artifact: null,
+    });
   });
 });

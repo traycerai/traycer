@@ -6,11 +6,15 @@ import type {
   ReadChatAttachmentResponse,
 } from "@traycer/protocol/host/epic/chat-attachment";
 
+import type {
+  EpicReadArtifactObjectRequest,
+  EpicReadArtifactObjectResponse,
+} from "@traycer/protocol/host/epic/files";
+
 /**
- * Exactly the slice of the host client a chat attachment read needs: the two
- * signal-bound dispatches. Narrower than `HostClient` on purpose - the provider
+ * The signal-bound dispatches for chat attachments and inline artifact objects. Narrower than `HostClient` on purpose - the provider
  * hands its real client straight in (the generic methods instantiate to these),
- * and a test can supply just these instead of faking a whole client class
+ * and a test can supply these instead of faking a whole client class
  * through an `as unknown` cast.
  *
  * BOTH are required, and the second is not optional convenience. A read that
@@ -22,6 +26,11 @@ import type {
  * for this change, because vitest does not type-check.
  */
 export interface ChatAttachmentReadClient {
+  requestWithSignal(
+    method: "epic.readArtifactObject",
+    params: EpicReadArtifactObjectRequest,
+    signal: AbortSignal | undefined,
+  ): Promise<EpicReadArtifactObjectResponse>;
   requestWithSignal(
     method: "epic.readChatAttachment",
     params: ReadChatAttachmentRequest,
@@ -36,7 +45,7 @@ export interface ChatAttachmentReadClient {
 }
 
 /**
- * Everything a chat image byte read is scoped by, resolved ONCE per chat tile.
+ * The byte-read scope for chat images and inline artifacts, resolved once per tile.
  *
  * Chat image bytes live on the chat plane now, and `epic.readChatAttachment`
  * takes the owning chat id so the serving host can apply that chat's visibility

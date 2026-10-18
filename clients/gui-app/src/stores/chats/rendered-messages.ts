@@ -4954,6 +4954,14 @@ function toolCallPageStamp(
   return page === undefined ? null : block.page;
 }
 
+/** An artifact stamp, or `null`, for the reason {@link toolCallPageStamp} gives. */
+function toolCallArtifactStamp(
+  block: Extract<OpenContentBlock, { type: "tool_call" }>,
+): Extract<OpenContentBlock, { type: "tool_call" }>["artifact"] {
+  const artifact: unknown = block.artifact;
+  return artifact === undefined ? null : block.artifact;
+}
+
 /** A tool call's app stamp, or `null`, for the reason {@link toolCallPageStamp} gives. */
 function toolCallMcpAppStamp(
   block: Extract<OpenContentBlock, { type: "tool_call" }>,
@@ -5037,6 +5045,7 @@ const BLOCK_HANDLERS: {
     parentId: block.parentBlockId ?? null,
     imageResults: block.imageResults,
     page: toolCallPageStamp(block),
+    artifact: toolCallArtifactStamp(block),
     mcpApp: toolCallMcpAppStamp(block),
   }),
   file_change: (block) => ({

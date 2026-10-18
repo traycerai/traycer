@@ -10,6 +10,7 @@ import type {
   ToolCallManagedCommand,
   ToolCallMcpAppStamp,
   ToolCallPageStamp,
+  ToolCallArtifactStamp,
 } from "@traycer/protocol/persistence/epic/content-blocks";
 import { useChatTranscriptJumpStore } from "@/stores/chats/chat-transcript-jump-store";
 import type { SegmentEndState } from "@/stores/composer/chat-store";
@@ -57,6 +58,7 @@ import { isTraycerBrowserReplToolName } from "@traycer/protocol/host/agent/gui/b
 import { isPageToolCall } from "@/components/chat/chat-activity-groups";
 import { McpAppRow } from "./mcp-app-row";
 import { PageRow } from "./page-row";
+import { ArtifactRow } from "./artifact-row";
 
 interface ToolSegmentProps {
   id: string;
@@ -94,6 +96,7 @@ interface ToolSegmentProps {
   // The page a `traycer_show_page` call showed (null otherwise). With the tool
   // name, routes the call to the page row.
   page: ToolCallPageStamp | null;
+  artifact: ToolCallArtifactStamp | null;
   // The MCP App the call rendered (null otherwise). Routes the call to the
   // app row.
   mcpApp: ToolCallMcpAppStamp | null;
@@ -283,6 +286,14 @@ export function ToolSegment(props: ToolSegmentProps) {
         // What a reader with no app to run sees, and what "Show original tool call"
         // reveals: the ordinary row. Find skips the app row (see the page
         // row below), so this copy carries no find anchor.
+        fallback={<GenericToolSegment {...props} headerFindUnitId={null} />}
+      />
+    );
+  }
+  if (props.artifact !== null) {
+    return (
+      <ArtifactRow
+        artifact={props.artifact}
         fallback={<GenericToolSegment {...props} headerFindUnitId={null} />}
       />
     );

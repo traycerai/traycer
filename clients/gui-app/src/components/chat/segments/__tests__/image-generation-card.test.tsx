@@ -378,6 +378,7 @@ describe("<ToolSegment /> image_generation promotion routing", () => {
           durationMs={null}
           imageResults={[]}
           page={null}
+          artifact={null}
           mcpApp={null}
           variant="card"
         />
@@ -417,6 +418,7 @@ describe("<ToolSegment /> image_generation promotion routing", () => {
           durationMs={100}
           imageResults={[]}
           page={null}
+          artifact={null}
           mcpApp={null}
           variant="card"
         />

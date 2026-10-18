@@ -706,6 +706,7 @@ function toolSegmentSearchText(segment: ToolSegment): ReadonlyArray<string> {
   // A page row paints nothing find can reach: its document is inside a
   // sandboxed frame, and the row's own chrome is `data-find-skip`.
   if (isPageToolCall(segment)) return [];
+  if (segment.artifact !== null) return [];
   // The same for an app row: the app is a sandboxed document too.
   if (isMcpAppToolCall(segment)) return [];
   if (segment.agentMessageSend !== null) {

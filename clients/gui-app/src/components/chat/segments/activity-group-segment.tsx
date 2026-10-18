@@ -447,6 +447,7 @@ function ActivityChildRow(props: ActivityChildRowProps) {
           durationMs={segment.durationMs}
           imageResults={segment.imageResults}
           page={segment.page}
+          artifact={segment.artifact}
           mcpApp={segment.mcpApp}
           variant="row"
           headerFindUnitId={

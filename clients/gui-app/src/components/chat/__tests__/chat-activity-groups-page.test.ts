@@ -5,7 +5,10 @@ import {
 } from "@/components/chat/chat-activity-groups";
 import type { ChatActivityTimelineItem } from "@/components/chat/chat-activity-groups";
 import type { MessageSegment } from "@/stores/composer/chat-store";
-import type { ToolCallPageStamp } from "@traycer/protocol/persistence/epic/content-blocks";
+import type {
+  ToolCallArtifactStamp,
+  ToolCallPageStamp,
+} from "@traycer/protocol/persistence/epic/content-blocks";
 
 type ToolMessageSegment = Extract<MessageSegment, { kind: "tool" }>;
 
@@ -18,6 +21,13 @@ const PAGE_STAMP: ToolCallPageStamp = {
   height: 400,
   heights: [],
   derivedFrom: null,
+  originChatId: "chat-1",
+};
+
+const ARTIFACT_STAMP: ToolCallArtifactStamp = {
+  artifactId: "art-1",
+  title: "My Artifact",
+  manifest: { files: {}, capturedAt: 0 },
   originChatId: "chat-1",
 };
 
@@ -46,6 +56,7 @@ function toolSegment(
     backgroundTask: false,
     imageResults: [],
     page,
+    artifact: null,
     mcpApp: null,
     startedAt: 0,
     durationMs: null,
@@ -136,6 +147,45 @@ describe("show-page calls in the activity timeline", () => {
       expect(standsAlone(timeline, "impostor")).toBe(false);
     },
   );
+});
+
+describe("inline artifact calls in the activity timeline", () => {
+  function artifactToolSegment(
+    id: string,
+    toolName: string,
+    artifact: ToolCallArtifactStamp | null,
+  ): ToolMessageSegment {
+    return { ...toolSegment(id, toolName, null, false), artifact };
+  }
+
+  it("promotes a stamped artifact out of the group, whatever its tool is called", () => {
+    // Unlike a page, an inline artifact carries no distinguished tool-name
+    // spelling: the stamp alone decides promotion.
+    const timeline = build([
+      textSegment("intro"),
+      artifactToolSegment("read", "read_file", null),
+      artifactToolSegment("artifact", "some_other_tool_name", ARTIFACT_STAMP),
+      artifactToolSegment("grep", "grep", null),
+    ]);
+
+    expect(timeline.map((item) => item.kind)).toEqual([
+      "segment",
+      "activity_group",
+      "segment",
+      "activity_group",
+    ]);
+    expect(standsAlone(timeline, "artifact")).toBe(true);
+  });
+
+  it("folds an unstamped call into the group, same as any other tool", () => {
+    const timeline = build([
+      artifactToolSegment("read", "read_file", null),
+      artifactToolSegment("other", "some_other_tool_name", null),
+    ]);
+
+    expect(timeline).toHaveLength(1);
+    expect(standsAlone(timeline, "other")).toBe(false);
+  });
 });
 
 describe("isShowPageToolName", () => {
