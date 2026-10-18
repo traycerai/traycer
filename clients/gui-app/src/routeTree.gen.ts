@@ -28,6 +28,7 @@ import { Route as SettingsAppearanceRouteImport } from "./routes/settings.appear
 import { Route as SettingsBrowserRouteImport } from "./routes/settings.browser";
 import { Route as SettingsDeleteAccountRouteImport } from "./routes/settings.delete-account";
 import { Route as SettingsDevArtifactProofRouteImport } from "./routes/settings.dev-artifact-proof";
+import { Route as SettingsDevCanvasProofRouteImport } from "./routes/settings.dev-canvas-proof";
 import { Route as SettingsDevicesRouteImport } from "./routes/settings.devices";
 import { Route as SettingsDiagnosticsRouteImport } from "./routes/settings.diagnostics";
 import { Route as SettingsFallbackRouteImport } from "./routes/settings.fallback";
@@ -144,6 +145,11 @@ const SettingsDevArtifactProofRoute =
     path: "/dev-artifact-proof",
     getParentRoute: () => SettingsRoute,
   } as any);
+const SettingsDevCanvasProofRoute = SettingsDevCanvasProofRouteImport.update({
+  id: "/dev-canvas-proof",
+  path: "/dev-canvas-proof",
+  getParentRoute: () => SettingsRoute,
+} as any);
 const SettingsDevicesRoute = SettingsDevicesRouteImport.update({
   id: "/devices",
   path: "/devices",
@@ -253,6 +259,7 @@ export interface FileRoutesByFullPath {
   "/settings/browser": typeof SettingsBrowserRoute;
   "/settings/delete-account": typeof SettingsDeleteAccountRoute;
   "/settings/dev-artifact-proof": typeof SettingsDevArtifactProofRoute;
+  "/settings/dev-canvas-proof": typeof SettingsDevCanvasProofRoute;
   "/settings/devices": typeof SettingsDevicesRoute;
   "/settings/diagnostics": typeof SettingsDiagnosticsRoute;
   "/settings/fallback": typeof SettingsFallbackRoute;
@@ -290,6 +297,7 @@ export interface FileRoutesByTo {
   "/settings/browser": typeof SettingsBrowserRoute;
   "/settings/delete-account": typeof SettingsDeleteAccountRoute;
   "/settings/dev-artifact-proof": typeof SettingsDevArtifactProofRoute;
+  "/settings/dev-canvas-proof": typeof SettingsDevCanvasProofRoute;
   "/settings/devices": typeof SettingsDevicesRoute;
   "/settings/diagnostics": typeof SettingsDiagnosticsRoute;
   "/settings/fallback": typeof SettingsFallbackRoute;
@@ -330,6 +338,7 @@ export interface FileRoutesById {
   "/settings/browser": typeof SettingsBrowserRoute;
   "/settings/delete-account": typeof SettingsDeleteAccountRoute;
   "/settings/dev-artifact-proof": typeof SettingsDevArtifactProofRoute;
+  "/settings/dev-canvas-proof": typeof SettingsDevCanvasProofRoute;
   "/settings/devices": typeof SettingsDevicesRoute;
   "/settings/diagnostics": typeof SettingsDiagnosticsRoute;
   "/settings/fallback": typeof SettingsFallbackRoute;
@@ -371,6 +380,7 @@ export interface FileRouteTypes {
     | "/settings/browser"
     | "/settings/delete-account"
     | "/settings/dev-artifact-proof"
+    | "/settings/dev-canvas-proof"
     | "/settings/devices"
     | "/settings/diagnostics"
     | "/settings/fallback"
@@ -408,6 +418,7 @@ export interface FileRouteTypes {
     | "/settings/browser"
     | "/settings/delete-account"
     | "/settings/dev-artifact-proof"
+    | "/settings/dev-canvas-proof"
     | "/settings/devices"
     | "/settings/diagnostics"
     | "/settings/fallback"
@@ -447,6 +458,7 @@ export interface FileRouteTypes {
     | "/settings/browser"
     | "/settings/delete-account"
     | "/settings/dev-artifact-proof"
+    | "/settings/dev-canvas-proof"
     | "/settings/devices"
     | "/settings/diagnostics"
     | "/settings/fallback"
@@ -617,6 +629,13 @@ declare module "@tanstack/react-router" {
       preLoaderRoute: typeof SettingsDevArtifactProofRouteImport;
       parentRoute: typeof SettingsRoute;
     };
+    "/settings/dev-canvas-proof": {
+      id: "/settings/dev-canvas-proof";
+      path: "/dev-canvas-proof";
+      fullPath: "/settings/dev-canvas-proof";
+      preLoaderRoute: typeof SettingsDevCanvasProofRouteImport;
+      parentRoute: typeof SettingsRoute;
+    };
     "/settings/devices": {
       id: "/settings/devices";
       path: "/devices";
@@ -766,6 +785,7 @@ interface SettingsRouteChildren {
   SettingsBrowserRoute: typeof SettingsBrowserRoute;
   SettingsDeleteAccountRoute: typeof SettingsDeleteAccountRoute;
   SettingsDevArtifactProofRoute: typeof SettingsDevArtifactProofRoute;
+  SettingsDevCanvasProofRoute: typeof SettingsDevCanvasProofRoute;
   SettingsDevicesRoute: typeof SettingsDevicesRoute;
   SettingsDiagnosticsRoute: typeof SettingsDiagnosticsRoute;
   SettingsFallbackRoute: typeof SettingsFallbackRoute;
@@ -794,6 +814,7 @@ const SettingsRouteChildren: SettingsRouteChildren = {
   SettingsBrowserRoute: SettingsBrowserRoute,
   SettingsDeleteAccountRoute: SettingsDeleteAccountRoute,
   SettingsDevArtifactProofRoute: SettingsDevArtifactProofRoute,
+  SettingsDevCanvasProofRoute: SettingsDevCanvasProofRoute,
   SettingsDevicesRoute: SettingsDevicesRoute,
   SettingsDiagnosticsRoute: SettingsDiagnosticsRoute,
   SettingsFallbackRoute: SettingsFallbackRoute,

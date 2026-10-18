@@ -163,6 +163,7 @@
         "pathe": "catalog:",
         "pdfjs-dist": "catalog:",
         "pdfmake": "catalog:",
+        "perfect-freehand": "catalog:",
         "posthog-js": "catalog:",
         "qrcode": "catalog:",
         "radix-ui": "catalog:",

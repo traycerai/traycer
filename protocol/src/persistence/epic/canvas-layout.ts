@@ -551,6 +551,23 @@ export function setBoardFrame(
   patchFields(entry, { ...frame }, null, ["x", "y", "w", "h"]);
   reconcileOrder(boards, undefined, undefined, false);
 }
+/** Patch metadata without replacing geometry, ordering, or creating a board. */
+export function setBoardMetadata(
+  layout: CanvasLayoutHandle,
+  path: string,
+  patch: {
+    readonly title: string | undefined;
+    readonly is_interactive: boolean | undefined;
+    readonly radius: number | undefined;
+  },
+): void {
+  const entry = existingChild(layout.boards, path);
+  if (entry === null) return;
+  for (const [key, value] of Object.entries(patch)) {
+    if (value !== undefined && entry.get(key) !== value) entry.set(key, value);
+  }
+}
+
 export function moveBoardOrder(
   layout: CanvasLayoutHandle,
   path: string,

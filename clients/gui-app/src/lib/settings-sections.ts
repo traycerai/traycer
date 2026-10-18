@@ -26,6 +26,7 @@ import { isMobileApp } from "@/lib/mobile-app";
 
 export type SettingsSectionId =
   | "dev-artifact-proof"
+  | "dev-canvas-proof"
   | "getting-started"
   | "general"
   | "browser"
@@ -236,6 +237,12 @@ export const SETTINGS_SECTIONS: ReadonlyArray<SettingsSection> = [
     group: "app",
   },
   {
+    id: "dev-canvas-proof",
+    label: "Dev: canvas proof",
+    icon: Activity,
+    group: "app",
+  },
+  {
     id: "devices",
     label: "Sessions",
     icon: ShieldCheck,
@@ -419,7 +426,9 @@ const MOBILE_APP_ONLY_SECTION_IDS: ReadonlySet<SettingsSectionId> = new Set([
 // Keep the path resolvable so a production deep link reaches its 404 panel,
 // while only dev builds offer the proof in navigation.
 const OFFERED_SECTIONS = SETTINGS_SECTIONS.filter(
-  (section) => import.meta.env.DEV || section.id !== "dev-artifact-proof",
+  (section) =>
+    import.meta.env.DEV ||
+    (section.id !== "dev-artifact-proof" && section.id !== "dev-canvas-proof"),
 );
 
 const DESKTOP_SECTIONS: ReadonlyArray<SettingsSection> =
