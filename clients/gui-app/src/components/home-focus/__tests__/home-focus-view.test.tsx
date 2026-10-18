@@ -47,6 +47,10 @@ vi.mock("@/hooks/home-focus/use-focus-actions", () => ({
   useFocusActions: () => actionsMock,
 }));
 
+vi.mock("@/components/home/bots/home-bots-section", () => ({
+  HomeBotsSection: () => null,
+}));
+
 const navigateMock = vi.hoisted(() => vi.fn());
 vi.mock("@tanstack/react-router", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@tanstack/react-router")>()),

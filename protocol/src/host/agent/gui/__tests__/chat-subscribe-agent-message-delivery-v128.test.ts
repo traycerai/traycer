@@ -6,13 +6,14 @@ import {
   chatSubscribeV125,
   chatSubscribeV126,
   chatSubscribeV127,
+  chatSubscribeV128,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 
 /**
- * `chat.subscribe@1.27`: `agentMessageDelivery` on a `tool_call` block and on
+ * `chat.subscribe@1.28`: `agentMessageDelivery` on a `tool_call` block and on
  * its `tool_call.completed` event.
  *
- * PROJECTION, not tolerance: `1.23`-`1.26` bind hand-frozen copies without the
+ * PROJECTION, not tolerance: `1.23`-`1.27` bind hand-frozen copies without the
  * key, so a frame carrying it parses there with the key gone and everything
  * else intact - on the tail, a `range` response and `blockDelta`.
  */
@@ -23,7 +24,7 @@ const DELIVERY = {
   state: "queued",
 };
 
-/** A cross-host send exactly as a 1.27 host persists it. */
+/** A cross-host send exactly as a 1.28 host persists it. */
 function sendToolCall(): Record<string, unknown> {
   return {
     type: "tool_call",
@@ -193,6 +194,7 @@ const FROZEN_LINES = [
   { label: "1.24", contract: chatSubscribeV124 },
   { label: "1.25", contract: chatSubscribeV125 },
   { label: "1.26", contract: chatSubscribeV126 },
+  { label: "1.27", contract: chatSubscribeV127 },
 ] as const;
 
 describe.each(FROZEN_LINES)(
@@ -234,8 +236,8 @@ describe.each(FROZEN_LINES)(
   },
 );
 
-describe("chat.subscribe@1.27 carries the delivery state", () => {
-  const frames = chatSubscribeV127.serverFrameSchema;
+describe("chat.subscribe@1.28 carries the delivery state", () => {
+  const frames = chatSubscribeV128.serverFrameSchema;
 
   it("round-trips it on the snapshot tail and on a range response", () => {
     const row = assistantRow([sendToolCall()]);
@@ -260,5 +262,55 @@ describe("chat.subscribe@1.27 carries the delivery state", () => {
       tailMessage(frames.parse(snapshotFrame(assistantRow([block])))),
     );
     expect(tail).toMatchObject({ agentMessageDelivery: null });
+  });
+});
+
+describe("chat.subscribe@1.27 is main's task-overdue line, minus the delivery state", () => {
+  const OVERDUE_ITEM = {
+    kind: "task-overdue",
+    queueItemId: "q-1",
+    description: "Report is overdue",
+    createdAt: 1,
+    updatedAt: 1,
+  };
+
+  function overdueSnapshot(): Record<string, unknown> {
+    const frame = snapshotFrame(assistantRow([sendToolCall()]));
+    const snapshot = frame.snapshot as Record<string, unknown>;
+    return {
+      ...frame,
+      snapshot: {
+        ...snapshot,
+        queue: { status: "idle", items: [OVERDUE_ITEM] },
+      },
+    };
+  }
+
+  it("still parses a task-overdue queue item while stripping the key", () => {
+    const parsed = chatSubscribeV127.serverFrameSchema.parse(overdueSnapshot());
+    if (parsed.kind !== "snapshot") throw new Error("wrong kind");
+    expect(parsed.snapshot.queue.items[0]).toMatchObject({
+      kind: "task-overdue",
+      queueItemId: "q-1",
+    });
+    const block = firstToolCall(tailMessage(parsed));
+    expect(has(block, "agentMessageDelivery")).toBe(false);
+  });
+
+  it("1.26 does not know the task-overdue item", () => {
+    expect(
+      chatSubscribeV126.serverFrameSchema.safeParse(overdueSnapshot()).success,
+    ).toBe(false);
+  });
+
+  it("1.28 carries both the task-overdue item and the key", () => {
+    const parsed = chatSubscribeV128.serverFrameSchema.parse(overdueSnapshot());
+    if (parsed.kind !== "snapshot") throw new Error("wrong kind");
+    expect(parsed.snapshot.queue.items[0]).toMatchObject({
+      kind: "task-overdue",
+    });
+    expect(firstToolCall(tailMessage(parsed))).toMatchObject({
+      agentMessageDelivery: DELIVERY,
+    });
   });
 });

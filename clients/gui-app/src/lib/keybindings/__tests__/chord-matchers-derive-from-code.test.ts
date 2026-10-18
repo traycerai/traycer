@@ -103,6 +103,9 @@ const CODE_DERIVED_MATCHERS: ReadonlyArray<{
 const KEYBOARD_KEY_READS: Readonly<Record<string, number>> = {
   "desktop/src/electron-main/browser-view/annotation/browser-annotation-overlay-guest.ts": 3,
   "desktop/src/electron-main/browser-view/manager/browser-view-chords.ts": 2,
+  // Enter submits the bot message; Shift+Enter inserts a newline. This is a
+  // named editor key, not a registered shortcut.
+  "gui-app/src/components/bots/bot-conversation-view.tsx": 1,
   // These reads drive viewport editing and resize-handle navigation. They do
   // not resolve registered shortcut identity, which remains code-derived.
   "gui-app/src/components/browser-tile/browser-viewport-handles.tsx": 6,

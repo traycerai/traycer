@@ -44,7 +44,7 @@ export function botRecord(overrides: Partial<BotRecord>): BotRecord {
   return {
     botId: BOT_ID_A,
     environmentId: "env-personal",
-    ownerUserId: "user-1",
+    createdByUserId: "user-1",
     title: "Tracy",
     harness: "claude",
     model: "opus",
@@ -77,6 +77,7 @@ export function taskEntry(overrides: Partial<BotTaskEntry>): BotTaskEntry {
     taskId: "task-1",
     cadence: { kind: "every", seconds: 3600 },
     lastCheckinAt: null,
+    lastCheckin: null,
     nextAt: null,
     state: "tracking",
     endedReason: null,
@@ -218,7 +219,7 @@ function readStringField(value: unknown, key: string): string | null {
 export function botSnapshotFrame(
   bot: BotRecord,
   tasks: readonly BotTaskEntry[],
-  openRequestCount: number,
+  openRequestCount: number | null,
 ): StreamFrameEnvelope {
   return {
     kind: "snapshot",

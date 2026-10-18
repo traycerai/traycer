@@ -137,6 +137,10 @@ const CHAT_MESSAGE_FIELD_UNCHANGED: {
   // identity check would re-render that turn's rows on every token.
   turnMessageIds: (a, b) => sameMessageIds(a.turnMessageIds, b.turnMessageIds),
   senderLabel: (a, b) => a.senderLabel === b.senderLabel,
+  // The row-level request state is carried by reference from the open
+  // message, so a resolve arrives as a new object and identity is enough.
+  conversationRequest: (a, b) =>
+    a.conversationRequest === b.conversationRequest,
   assistantMeta: (a, b) => a.assistantMeta === b.assistantMeta,
   statusLabel: (a, b) => a.statusLabel === b.statusLabel,
   agentSenderInfo: (a, b) => a.agentSenderInfo === b.agentSenderInfo,

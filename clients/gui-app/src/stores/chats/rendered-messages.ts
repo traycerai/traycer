@@ -3877,6 +3877,11 @@ function renderUserMessage(
     runState: null,
     sessionAnchor: message.sessionAnchor,
     steerBadge,
+    // Only a bot conversation's user rows carry one; the key stays absent
+    // everywhere else so no row outside a conversation grows a request state.
+    ...(message.conversationRequest === undefined
+      ? {}
+      : { conversationRequest: message.conversationRequest }),
   };
 }
 

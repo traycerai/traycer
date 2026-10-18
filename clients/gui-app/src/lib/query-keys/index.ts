@@ -76,6 +76,11 @@ export { speechMutationKeys } from "@/lib/query-keys/speech-mutation-keys";
 export { notificationsMutationKeys } from "@/lib/query-keys/notifications-mutation-keys";
 export { notificationsQueryKeys } from "@/lib/query-keys/notifications-query-keys";
 export { prQueryKeys } from "@/lib/query-keys/pr-query-keys";
+export { botQueryKeys } from "@/lib/query-keys/bot-query-keys";
+export {
+  botMutationKeys,
+  environmentMutationKeys,
+} from "@/lib/query-keys/bot-mutation-keys";
 export { mentionQueryKeys } from "@/lib/query-keys/mention-query-keys";
 export { imageMutationKeys } from "@/lib/query-keys/image-mutation-keys";
 export { appearanceQueryKeys } from "@/lib/query-keys/appearance-query-keys";

@@ -82,6 +82,12 @@ const DESKTOP_ONLY_WARMERS: ReadonlyArray<RouteChunkWarmer> = [
     module: "@/components/settings/settings-surface",
     load: () => import("@/components/settings/settings-surface"),
   },
+  // The bot tab (Tracy Bots): a conversation transcript plus the trunk view,
+  // mounted lazily by its kind module like every other tab surface.
+  {
+    module: "@/components/bots/bot-tab-surface",
+    load: () => import("@/components/bots/bot-tab-surface"),
+  },
   // The experimental layout editor's sample workspace (Settings >
   // Appearance). Off by default, and never a phone boot path.
   {

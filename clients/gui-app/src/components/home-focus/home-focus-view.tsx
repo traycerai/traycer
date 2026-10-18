@@ -56,6 +56,7 @@ import {
 } from "@/hooks/home-focus/use-home-host-groups";
 import { HomeHostGroupedContext } from "@/components/home-focus/home-host-grouped-context";
 import { HomeGettingStartedSection } from "@/components/home-focus/home-getting-started-section";
+import { HomeBotsSection } from "@/components/home/bots/home-bots-section";
 import { navigateToTabIntent } from "@/lib/tab-navigation";
 import {
   useAuthStore,
@@ -427,6 +428,11 @@ export function HomeFocusView(): ReactNode {
           )}
         />
         <HomeGettingStartedSection />
+        {/* Bots sit above the task sections and outside the empty branch: a
+            page with nothing running still lists the bots and lets one be
+            created, and a host without bots hides the band with a notice of
+            its own rather than emptying the page. */}
+        <HomeBotsSection />
         {empty ? (
           <HomeFocusEmptyState />
         ) : (

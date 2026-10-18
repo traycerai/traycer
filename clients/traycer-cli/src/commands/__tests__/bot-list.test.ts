@@ -196,6 +196,7 @@ describe("bot list", () => {
               boundHostId: OTHER_HOST_ID,
               boundToThisHost: false,
               openRequestCount: 3,
+              readFailed: false,
             },
           ],
         },
@@ -209,6 +210,7 @@ describe("bot list", () => {
               boundHostId: THIS_HOST_ID,
               boundToThisHost: true,
               openRequestCount: 1,
+              readFailed: false,
             },
           ],
         },
@@ -485,6 +487,7 @@ describe("bot list", () => {
               boundHostId: THIS_HOST_ID,
               boundToThisHost: true,
               openRequestCount: null,
+              readFailed: true,
             },
           ],
         },
@@ -521,6 +524,49 @@ describe("bot list", () => {
       ].join("\n"),
     );
     expect(result.exitCode).toBe(1);
+  });
+
+  it("says 'open requests unknown' for a count the host does not know, apart from a failed read, and exits 0", async () => {
+    const unknown = botRecord({ botId: BOT_ID_A, title: "Elsewhere" });
+    const known = botRecord({ botId: BOT_ID_B, title: "Here" });
+    const client = new FakeStreamClient((session) => {
+      // A host that is not the bot's bound host, or has not read the bot's
+      // conversations yet, sends no count.
+      session.pushFrame(
+        botSnapshotFrame(
+          botIdOf(session) === BOT_ID_A ? unknown : known,
+          [],
+          botIdOf(session) === BOT_ID_A ? null : 2,
+        ),
+      );
+    });
+    stage({
+      environments: [environmentDescriptor("env-personal", "Personal")],
+      bots: [unknown, known],
+      client,
+    });
+
+    const result = await runList();
+
+    expect(result.human).toBe(
+      [
+        "Personal",
+        `  Elsewhere  ${BOT_ID_A}  host ${THIS_HOST_ID} (this host)  open requests unknown`,
+        `  Here  ${BOT_ID_B}  host ${THIS_HOST_ID} (this host)  2 open requests`,
+      ].join("\n"),
+    );
+    expect(result.human).not.toContain("could not read");
+    expect(result.data).toMatchObject({
+      environments: [
+        {
+          bots: [
+            { botId: BOT_ID_A, openRequestCount: null, readFailed: false },
+            { botId: BOT_ID_B, openRequestCount: 2, readFailed: false },
+          ],
+        },
+      ],
+    });
+    expect(result.exitCode).toBe(0);
   });
 
   it("exits 0 when every bot is read", async () => {
@@ -582,9 +628,9 @@ describe("bot list", () => {
         environments: [
           {
             bots: [
-              { botId: BOT_ID_A, openRequestCount: 1 },
-              { botId: BOT_ID_B, openRequestCount: null },
-              { botId: BOT_ID_C, openRequestCount: 4 },
+              { botId: BOT_ID_A, openRequestCount: 1, readFailed: false },
+              { botId: BOT_ID_B, openRequestCount: null, readFailed: true },
+              { botId: BOT_ID_C, openRequestCount: 4, readFailed: false },
             ],
           },
         ],
@@ -751,6 +797,7 @@ describe("groupByEnvironment", () => {
       boundHostId: bot.boundHostId,
       boundToThisHost: true,
       openRequestCount: 0,
+      readFailed: false,
     }));
 
     const groups = groupByEnvironment(

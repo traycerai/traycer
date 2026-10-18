@@ -607,6 +607,8 @@ function TabSurface(props: { readonly tab: HeaderTab }): ReactNode {
       return tabSurfaceDescriptor("sample-workspace").render(props.tab);
     case "draft":
       return tabSurfaceDescriptor("draft").render(props.tab);
+    case "bot":
+      return tabSurfaceDescriptor("bot").render(props.tab);
     case "history":
       return tabSurfaceDescriptor("history").render(props.tab);
     case "settings":

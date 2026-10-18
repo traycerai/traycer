@@ -15,6 +15,7 @@ const DESKTOP_MODULES = [
   "@/providers/draft-surface-provider",
   "@/components/epics/history-surface",
   "@/components/settings/settings-surface",
+  "@/components/bots/bot-tab-surface",
   "@/components/sample-workspace/sample-workspace-surface",
 ];
 
@@ -135,6 +136,7 @@ describe("routeChunkWarmers", () => {
       "@/providers/draft-surface-provider",
       "@/components/epics/history-surface",
       "@/components/settings/settings-surface",
+      "@/components/bots/bot-tab-surface",
       "@/components/sample-workspace/sample-workspace-surface",
     ]);
   });

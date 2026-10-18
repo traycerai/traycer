@@ -31,6 +31,7 @@ function sampleTelemetry(
     uptimeMs: 1500,
     stopRequested: false,
     stderrEmpty: false,
+    stderrFatal: "other",
     reportMemory: { heapLimitBytes: null, heapUsedBytes: null, rssBytes: null },
     ...overrides,
   };

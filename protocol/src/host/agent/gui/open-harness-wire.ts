@@ -277,8 +277,8 @@ export const openRuntimeEventSchema = lazySchema(() =>
 export type OpenRuntimeEvent = z.infer<typeof openRuntimeEventSchema>;
 
 /**
- * The open runtime-event union as `chat.subscribe@1.23` through `@1.26` ship
- * it: `tool_call.completed` without `1.27`'s `agentMessageDelivery` stamp.
+ * The open runtime-event union as `chat.subscribe@1.23` through `@1.27` ship
+ * it: `tool_call.completed` without `1.28`'s `agentMessageDelivery` stamp.
  * Listed explicitly, like every frozen copy.
  */
 export const openRuntimeEventSchemaPreDelivery = lazySchema(() =>

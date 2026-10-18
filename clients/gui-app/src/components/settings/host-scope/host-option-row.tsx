@@ -62,9 +62,23 @@ export function HostOptionRow(props: {
    * name (the account menu's tooltip, G4), or `null`.
    */
   readonly nameRef: Ref<HTMLSpanElement>;
+  /**
+   * The environment this host runs (Tracy Bots), or `null` for a picker that
+   * does not say - which is every picker but Settings' host list, the one
+   * place the person changes it.
+   */
+  readonly environmentLabel: string | null;
 }): ReactNode {
-  const { host, picked, active, intent, surfaceState, updateView, nameRef } =
-    props;
+  const {
+    host,
+    picked,
+    active,
+    intent,
+    surfaceState,
+    updateView,
+    nameRef,
+    environmentLabel,
+  } = props;
   // Includes "setting up" (M5): host-scope narration for a local host being
   // installed. When another host can serve the window that setup is NOT a
   // window-wide event — the global modal deliberately stays away, and this row
@@ -104,6 +118,14 @@ export function HostOptionRow(props: {
         <span className="sr-only">Currently viewing</span>
       ) : null}
       {showActiveTag ? <ActiveTag /> : null}
+      {environmentLabel === null ? null : (
+        <span
+          className="min-w-0 max-w-[14ch] truncate text-ui-xs text-muted-foreground"
+          data-testid={`host-option-environment-${host.hostId}`}
+        >
+          {environmentLabel}
+        </span>
+      )}
       {updateBadge === null ? null : (
         <span
           className="shrink-0 text-ui-xs text-muted-foreground"

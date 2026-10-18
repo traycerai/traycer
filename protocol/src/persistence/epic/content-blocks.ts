@@ -878,10 +878,10 @@ export const toolCallBlockSchema = lazySchema(() =>
     // `toolCallBlockSchemaPreImage` below, so released `chat.subscribe` lines
     // never observe it.
     agentMessageReceipt: agentMessageReceiptSchema.nullable().default(null),
-    // Where a cross-host send stands (`chat.subscribe@1.27`) - see
+    // Where a cross-host send stands (`chat.subscribe@1.28`) - see
     // `agentMessageDeliverySchema`. Null for every other tool call, for a
     // same-host send and for blocks persisted before this field. Not on the
-    // hand-frozen `toolCallBlockSchemaPreDelivery` below, so `1.26` and older
+    // hand-frozen `toolCallBlockSchemaPreDelivery` below, so `1.27` and older
     // never see it.
     agentMessageDelivery: agentMessageDeliverySchema.nullable().default(null),
     // The shell a `traycer_run_shell` call created - see
@@ -941,8 +941,8 @@ export const toolCallBlockSchema = lazySchema(() =>
 export type ToolCallBlock = z.infer<typeof toolCallBlockSchema>;
 
 // Wire-freeze copy of `toolCallBlockSchema` as `chat.subscribe@1.23` through
-// `@1.26` ship it: the live block without the `agentMessageDelivery` stamp
-// `1.27` added. Bound by the content-block unions those lines decode.
+// `@1.27` ship it: the live block without the `agentMessageDelivery` stamp
+// `1.28` added. Bound by the content-block unions those lines decode.
 // Hand-frozen, NOT `.omit()`-derived, so a later key cannot reach them.
 export const toolCallBlockSchemaPreDelivery = lazySchema(() =>
   z.object({

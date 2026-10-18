@@ -1620,6 +1620,289 @@ describe("runHostStart - signal/exit propagation", () => {
     expect(elapsed).toBeGreaterThanOrEqual(STDERR_END_WAIT_TIMEOUT_MS - 200);
   }, 10_000);
 
+  describe("crash event: which kind of fatal the stderr capture holds", () => {
+    // Real headline shapes. Each is written as the chunks the pipe delivers.
+    const kb = (text: string, bytes: number): string =>
+      text.repeat(Math.ceil(bytes / text.length));
+    const oomBlock =
+      "<--- Last few GCs --->\n\n[4121:0x5a3c0b0]   482113 ms: Mark-Compact 4039.6 (4082.3) -> 4038.9 (4081.8) MB, pooled: 0 MB, 1203.40 / 0.00 ms  (average mu = 0.081, current mu = 0.012) allocation failure; scavenge might not succeed\n\n\n<--- JS stacktrace --->\n\nFATAL ERROR: Ineffective mark-compacts near heap limit Allocation failed - JavaScript heap out of memory\n----- Native stack trace -----\n\n" +
+      kb(" 1: 0x7ff6a4d1b2c3 node::SetCppgcFlags+4129\n", 6_000);
+    const priorWarnings = kb(
+      "(node:4121) MaxListenersExceededWarning: Possible EventEmitter memory leak detected.\n",
+      3_000,
+    );
+
+    const cases: ReadonlyArray<{
+      readonly name: string;
+      readonly chunks: readonly string[];
+      readonly expected: string;
+    }> = [
+      {
+        name: "heap exhaustion (Reached heap limit)",
+        chunks: [
+          "FATAL ERROR: Reached heap limit Allocation failed - JavaScript heap out of memory\n----- Native stack trace -----\n",
+        ],
+        expected: "v8-heap-oom",
+      },
+      {
+        name: "heap exhaustion whose block arrives after about 3 KB of earlier stderr",
+        chunks: [priorWarnings, oomBlock],
+        expected: "v8-heap-oom",
+      },
+      {
+        name: "another V8 fatal",
+        chunks: [
+          "FATAL ERROR: v8::ToLocalChecked Empty MaybeLocal\n----- Native stack trace -----\n",
+        ],
+        expected: "v8-fatal",
+      },
+      {
+        name: "process (not heap) out of memory",
+        chunks: [
+          "FATAL ERROR: Failed to reserve virtual memory for CodeRange Allocation failed - process out of memory\n",
+        ],
+        expected: "v8-fatal",
+      },
+      {
+        name: "a V8 CHECK block, after earlier stderr",
+        chunks: [
+          priorWarnings,
+          "\n\n#\n# Fatal error in , line 0\n# Check failed: !IsInstructionStart(pc).\n#\n#\n#\n#FailureMessage Object: 0000007AFDFFD3E0\n",
+        ],
+        expected: "check-failed",
+      },
+      {
+        name: "a libuv assertion on Windows",
+        chunks: [
+          "Assertion failed: !(handle->flags & UV_HANDLE_CLOSING), file src\\win\\async.c, line 76\n",
+        ],
+        expected: "assertion",
+      },
+      {
+        name: "a glibc assertion",
+        chunks: [
+          "node: ../deps/uv/src/unix/core.c:1066: uv__io_poll: Assertion `loop->watchers[w->fd] == w' failed.\n",
+        ],
+        expected: "assertion",
+      },
+      {
+        name: "a console.assert line (the bare phrase, no native location)",
+        chunks: ["Assertion failed: config ok\nError: boom\n"],
+        expected: "other",
+      },
+      { name: "no stderr at all", chunks: [], expected: "none" },
+      {
+        name: "output that matches nothing",
+        chunks: ["Error: spawn EBUSY\n    at ChildProcess.spawn\n"],
+        expected: "other",
+      },
+    ];
+
+    it.each(cases)("tags $name as $expected", async ({ chunks, expected }) => {
+      const exec = "/opt/traycer/host/install/traycer-host";
+      const { child, recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+      const stderr = new PassThrough();
+      Object.assign(child, { stderr });
+      const originalSpawn = deps.spawn;
+      if (originalSpawn === undefined) {
+        throw new Error("test spawn dependency missing");
+      }
+      await runUntilExit(
+        () =>
+          runHostStart(
+            { environment: "production", cwd: null },
+            {
+              ...deps,
+              spawn: (command, args, options) => {
+                const spawned = originalSpawn(command, args, options);
+                setImmediate(() => {
+                  for (const chunk of chunks) {
+                    stderr.write(Buffer.from(chunk));
+                  }
+                  stderr.end();
+                  child.emit("exit", 3221226505, null);
+                });
+                return spawned;
+              },
+            },
+          ),
+        recorded,
+      );
+      expect(recorded.crashReports).toHaveLength(1);
+      expect(recorded.crashReports[0]?.stderrFatal).toBe(expected);
+    });
+
+    it("tags a SIGABRT death the same way", async () => {
+      const exec = "/opt/traycer/host/install/traycer-host";
+      const { child, recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+      const stderr = new PassThrough();
+      Object.assign(child, { stderr });
+      const originalSpawn = deps.spawn;
+      if (originalSpawn === undefined) {
+        throw new Error("test spawn dependency missing");
+      }
+      await runUntilExit(
+        () =>
+          runHostStart(
+            { environment: "production", cwd: null },
+            {
+              ...deps,
+              spawn: (command, args, options) => {
+                const spawned = originalSpawn(command, args, options);
+                setImmediate(() => {
+                  stderr.write(Buffer.from(oomBlock));
+                  stderr.end();
+                  child.emit("exit", null, "SIGABRT");
+                });
+                return spawned;
+              },
+            },
+          ),
+        recorded,
+      );
+      expect(recorded.crashReports).toHaveLength(1);
+      expect(recorded.crashReports[0]?.signal).toBe("SIGABRT");
+      expect(recorded.crashReports[0]?.stderrFatal).toBe("v8-heap-oom");
+    });
+
+    it("tags nothing-recognised as incomplete when the stderr pipe errored before it ended", async () => {
+      const exec = "/opt/traycer/host/install/traycer-host";
+      const { child, recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+      const stderr = new PassThrough();
+      Object.assign(child, { stderr });
+      const originalSpawn = deps.spawn;
+      if (originalSpawn === undefined) {
+        throw new Error("test spawn dependency missing");
+      }
+      await runUntilExit(
+        () =>
+          runHostStart(
+            { environment: "production", cwd: null },
+            {
+              ...deps,
+              spawn: (command, args, options) => {
+                const spawned = originalSpawn(command, args, options);
+                setImmediate(() => {
+                  stderr.write(Buffer.from("partial\n"));
+                  // EIO / EPIPE after an abnormal death: bytes may be lost.
+                  stderr.emit("error", new Error("EIO on host stderr"));
+                  child.emit("exit", 7, null);
+                });
+                return spawned;
+              },
+            },
+          ),
+        recorded,
+      );
+      expect(recorded.crashReports[0]?.stderrFatal).toBe("incomplete");
+    });
+
+    // The wait for the pipe to end is bounded, but classification runs later,
+    // after the tee flush and the report scan, while the capture is still fed.
+    // A pipe a grandchild held past the deadline and then released in that
+    // window leaves a whole capture, so it must read as whole.
+    it.each([
+      {
+        name: "a silent capture whose pipe ends during the scan is none",
+        chunks: [] as string[],
+        settle: "end" as const,
+        expected: "none",
+      },
+      {
+        name: "an unrecognised capture whose pipe ends during the scan is other",
+        chunks: ["Error: spawn EBUSY\n"],
+        settle: "end" as const,
+        expected: "other",
+      },
+      {
+        name: "a pipe that errors during the scan stays incomplete",
+        chunks: ["partial\n"],
+        settle: "error" as const,
+        expected: "incomplete",
+      },
+    ])(
+      "$name, after the end-of-stream wait timed out",
+      async ({ chunks, settle, expected }) => {
+        const exec = "/opt/traycer/host/install/traycer-host";
+        const { child, recorded, deps } = makeRunStubs(
+          sampleRecord(exec),
+          null,
+        );
+        const stderr = new PassThrough();
+        Object.assign(child, { stderr });
+        const originalSpawn = deps.spawn;
+        const originalScan = deps.findCrashReport;
+        if (originalSpawn === undefined || originalScan === undefined) {
+          throw new Error("test dependency missing");
+        }
+        await runUntilExit(
+          () =>
+            runHostStart(
+              { environment: "production", cwd: null },
+              {
+                ...deps,
+                spawn: (command, args, options) => {
+                  const spawned = originalSpawn(command, args, options);
+                  setImmediate(() => {
+                    for (const chunk of chunks) {
+                      stderr.write(Buffer.from(chunk));
+                    }
+                    // Not ended: the supervisor waits out the deadline.
+                    child.emit("exit", 7, null);
+                  });
+                  return spawned;
+                },
+                findCrashReport: async (dir, sinceMs, excludeNames) => {
+                  // The scan runs after the deadline and the flush.
+                  if (settle === "end") {
+                    stderr.end();
+                  } else {
+                    stderr.emit("error", new Error("EIO on host stderr"));
+                  }
+                  await new Promise<void>((resolve) => setImmediate(resolve));
+                  return originalScan(dir, sinceMs, excludeNames);
+                },
+              },
+            ),
+          recorded,
+        );
+        expect(recorded.crashReports[0]?.stderrFatal).toBe(expected);
+      },
+      15_000,
+    );
+
+    it("tags nothing-recognised as incomplete when the stream had not ended at the deadline", async () => {
+      const exec = "/opt/traycer/host/install/traycer-host";
+      const { child, recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+      const stderr = new PassThrough();
+      Object.assign(child, { stderr });
+      const originalSpawn = deps.spawn;
+      if (originalSpawn === undefined) {
+        throw new Error("test spawn dependency missing");
+      }
+      await runUntilExit(
+        () =>
+          runHostStart(
+            { environment: "production", cwd: null },
+            {
+              ...deps,
+              spawn: (command, args, options) => {
+                const spawned = originalSpawn(command, args, options);
+                setImmediate(() => {
+                  stderr.write(Buffer.from("partial\n"));
+                  // Never end: a grandchild holds the inherited descriptor.
+                  child.emit("exit", 7, null);
+                });
+                return spawned;
+              },
+            },
+          ),
+        recorded,
+      );
+      expect(recorded.crashReports[0]?.stderrFatal).toBe("incomplete");
+    }, 10_000);
+  });
+
   it("holds the supervisor exit for a reportHostCrash that never resolves until the report bound, and no longer", async () => {
     // Two contracts. The supervisor's EXIT waits for a report still in flight,
     // because the report writes the throttle state the next supervisor starts
