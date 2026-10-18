@@ -45,6 +45,8 @@ const h = vi.hoisted(() => ({
   alivePids: new Set<number>(),
   // The pid whose liveness probe answers alive once, then dead.
   aliveOncePid: null as number | null,
+  // The next reads of the lock file that fail EBUSY (Infinity: all of them).
+  lockReadFailuresLeft: 0,
   // While set, every even-numbered read of the lock file fails EBUSY.
   lockReadAlternates: false,
   lockReads: 0,
@@ -64,6 +66,12 @@ vi.mock("node:fs/promises", async (importActual) => {
   return {
     ...actual,
     readFile: async (...args: Parameters<typeof actual.readFile>) => {
+      if (h.lockReadFailuresLeft > 0 && args[0] === `${cliConfigPath()}.lock`) {
+        h.lockReadFailuresLeft -= 1;
+        throw Object.assign(new Error("EBUSY: simulated failure"), {
+          code: "EBUSY",
+        });
+      }
       if (h.lockReadAlternates && args[0] === `${cliConfigPath()}.lock`) {
         h.lockReads += 1;
         if (h.lockReads % 2 === 0) {
@@ -188,6 +196,7 @@ beforeEach(async () => {
   h.lockLinkFailures = [];
   h.alivePids.clear();
   h.aliveOncePid = null;
+  h.lockReadFailuresLeft = 0;
 });
 
 afterEach(async () => {
@@ -202,7 +211,10 @@ afterEach(async () => {
   h.lockLinkFailures = [];
   h.alivePids.clear();
   h.aliveOncePid = null;
+  h.lockReadFailuresLeft = 0;
+  vi.restoreAllMocks();
   setCliConfigLockTimingForTests(null);
+  await rm(lockPath(), { force: true });
   await rm(h.home, { recursive: true, force: true });
 });
 
@@ -411,6 +423,47 @@ describe("the settings lock wait while breaking a dead lock", () => {
     expect(elapsed).toBeGreaterThanOrEqual(900);
     expect(elapsed).toBeLessThan(2500);
   });
+
+  it("keeps the lock when a Windows filter blocks one owner check before the rename", async () => {
+    h.platform = "win32";
+    setCliConfigLockTimingForTests({
+      waitMs: 2000,
+      pollMs: 10,
+      staleAgeMs: 100,
+    });
+    // The first lock read is the still-held check after the temp write.
+    h.lockReadFailuresLeft = 1;
+
+    await setEnvOverride("K", "v");
+
+    expect(JSON.parse(await readFile(cliConfigPath(), "utf8"))).toMatchObject({
+      envOverrides: { K: "v" },
+    });
+    expect(existsSync(lockPath())).toBe(false);
+    // One create: the blocked check was retried, not read as "not ours" and
+    // answered with a release and a second acquire.
+    expect(h.lockLinks).toBe(1);
+  });
+
+  it("never renames while every owner check is blocked", async () => {
+    h.platform = "win32";
+    setCliConfigLockTimingForTests({
+      waitMs: 300,
+      pollMs: 10,
+      staleAgeMs: 100,
+      backgroundReleaseDelaysMs: [],
+    });
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    h.lockReadFailuresLeft = Infinity;
+
+    const started = Date.now();
+    await expect(setEnvOverride("K", "v")).rejects.toThrow();
+
+    // Owner unknown: nothing may be written over config.json.
+    expect(existsSync(cliConfigPath())).toBe(false);
+    expect(Date.now() - started).toBeLessThan(3000);
+    // `afterEach` stops the failing reads and removes the leftover lock.
+  }, 10_000);
 
   it("probes each dead break-token creator once per acquire", async () => {
     h.platform = "win32";

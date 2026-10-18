@@ -675,7 +675,19 @@ async function removeRetainedTokens(): Promise<void> {
 function makeHandle(lockPath: string, record: LockRecord): CliConfigLockHandle {
   let released = false;
   return {
-    stillHeld: async () => isOurs(await readHolder(lockPath), record),
+    stillHeld: async () => {
+      for (let attempt = 0; attempt < RELEASE_ATTEMPTS; attempt += 1) {
+        const holder = await readHolder(lockPath);
+        if (holder === null || !holder.unreadable) {
+          return isOurs(holder, record);
+        }
+        // A read a Windows filter blocked has not shown the lock is not ours:
+        // retry it like a blocked release.
+        if (attempt < RELEASE_ATTEMPTS - 1) await sleep(RELEASE_RETRY_MS);
+      }
+      // Still unreadable: the owner is unknown, so the write must not rename.
+      return false;
+    },
     release: async () => {
       if (released) return;
       released = true;
