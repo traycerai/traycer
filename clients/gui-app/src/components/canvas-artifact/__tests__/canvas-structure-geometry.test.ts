@@ -43,6 +43,8 @@ function layoutNode(overrides: Partial<CanvasLayoutNode>): CanvasLayoutNode {
     cssWidth: 0,
     cssHeight: 0,
     transformed: false,
+    order: 0,
+    gridPlacement: false,
     ...overrides,
   };
 }
@@ -186,7 +188,7 @@ describe("arrangementRefusal", () => {
       layoutNode({ ...placed("b", { left: 0, top: 0, width: 1, height: 1 }), position }),
     ];
     expect(arrangementRefusal(nodes, 2)).toBe(
-      "Alignment needs elements positioned absolute or relative.",
+      "Ask the agent to arrange these elements in this layout.",
     );
   });
 
@@ -898,6 +900,44 @@ describe("reorderRefusal", () => {
     );
   });
 
+  describe("CSS that fixes the visual order", () => {
+    // `order` and explicit grid placement decide where a box is drawn, so
+    // moving it in the source would change nothing the person can see.
+    function withOrder(orders: readonly number[]): CanvasSiblingLayout {
+      return row(
+        inFlow.map((node, index) => layoutNode({ ...node, order: orders[index] })),
+        {},
+      );
+    }
+
+    it("refuses boxes whose order values differ, though they match the source order", () => {
+      expectRefused(withOrder([1, 2, 3]), SINGLE_LANE);
+    });
+
+    it("refuses a single box with its own order", () => {
+      expectRefused(withOrder([0, 0, 1]), SINGLE_LANE);
+      expectRefused(withOrder([0, -1, 0]), SINGLE_LANE);
+    });
+
+    it("accepts boxes that share one order, zero or not", () => {
+      expect(reorderRefusal(withOrder([0, 0, 0]))).toBeNull();
+      expect(reorderRefusal(withOrder([2, 2, 2]))).toBeNull();
+      expect(reorderTarget(withOrder([2, 2, 2]), selectedB, point)).not.toBeNull();
+    });
+
+    it("refuses a box that names its own grid row or column", () => {
+      const placed = inFlow.map((node, index) =>
+        layoutNode({ ...node, gridPlacement: index === 1 }),
+      );
+      expectRefused(row(placed, {}), SINGLE_LANE);
+    });
+
+    it("accepts boxes with no grid placement", () => {
+      const auto = inFlow.map((node) => layoutNode({ ...node, gridPlacement: false }));
+      expect(reorderRefusal(row(auto, {}))).toBeNull();
+    });
+  });
+
   it("refuses a wrapped container with more than one row", () => {
     expectRefused(
       row([inFlow[0], inFlow[1], flow("c", { x: 0, y: 60, width: 100, height: 50 })], {}),
@@ -1234,4 +1274,168 @@ describe("structureFacts", () => {
       expect(facts(document, [ul], root).unwrapRefusal).toBe(message);
     });
   });
+
+  describe("the file's own markup decides what can be rearranged", () => {
+    function pickIn(
+      html: string,
+      containerTag: string,
+      pickTag: string,
+    ) {
+      const document = boardDocument(html);
+      const container = elementsOf(document, containerTag)[0];
+      const picked = childrenOf(container).find((child) => child.tagName === pickTag);
+      if (picked === undefined) throw new Error(`no ${pickTag} in ${containerTag}`);
+      return facts(document, [picked], container);
+    }
+
+    it("lets an ordinary sibling move, group and ungroup", () => {
+      const result = pickIn(
+        "<div><section><p>a</p></section><p>b</p></div>",
+        "div",
+        "section",
+      );
+      expect(result.refusal).toBeNull();
+      expect(result.moveRefusal).toBeNull();
+      expect(result.wrapRefusal).toBeNull();
+      expect(result.unwrapRefusal).toBeNull();
+    });
+
+    describe("foreign content", () => {
+      it.each([
+        ["an svg shape", "<div><svg><rect width=\"1\" height=\"1\"></rect><circle r=\"1\"></circle></svg></div>", "svg", "rect"],
+        ["a math symbol", "<div><math><mi>x</mi><mo>+</mo></math></div>", "math", "mi"],
+      ])("refuses to move, group or ungroup %s, but still lets it be sized", (_label, html, container, picked) => {
+        const result = pickIn(html, container, picked);
+        expect(result.refusal).toBeNull();
+        expect(result.nodes).toHaveLength(1);
+        expect(result.moveRefusal).not.toBeNull();
+        expect(result.wrapRefusal).not.toBeNull();
+        expect(result.unwrapRefusal).not.toBeNull();
+      });
+
+      it.each([
+        ["an svg root", "<div><svg><rect></rect></svg><p>b</p></div>", "svg"],
+        ["a math root", "<div><math><mi>x</mi></math><p>b</p></div>", "math"],
+      ])("lets %s under HTML be moved and grouped, but not ungrouped", (_label, html, picked) => {
+        const result = pickIn(html, "div", picked);
+        expect(result.refusal).toBeNull();
+        expect(result.moveRefusal).toBeNull();
+        expect(result.wrapRefusal).toBeNull();
+        expect(result.unwrapRefusal).not.toBeNull();
+      });
+
+      it("refuses to group or move a shape nested deeper in an svg", () => {
+        const result = pickIn(
+          "<div><svg><g><rect></rect><circle></circle></g></svg></div>",
+          "g",
+          "rect",
+        );
+        expect(result.moveRefusal).not.toBeNull();
+        expect(result.wrapRefusal).not.toBeNull();
+      });
+    });
+
+    describe("tags the file leaves open", () => {
+      const IMPLICIT = "<main><p>A<p>B</main>";
+
+      it.each([0, 1])("blocks moving, grouping and ungrouping paragraph %s, which has no closing tag", (index) => {
+        const document = boardDocument(IMPLICIT);
+        const [main] = elementsOf(document, "main");
+        const paragraph = childrenOf(main)[index];
+        const result = facts(document, [paragraph], main);
+        expect(result.refusal).toBeNull();
+        expect(result.moveRefusal).not.toBeNull();
+        expect(result.wrapRefusal).not.toBeNull();
+        expect(result.unwrapRefusal).not.toBeNull();
+      });
+
+      it("blocks moving a sibling whose neighbour has no closing tag", () => {
+        const mixed = boardDocument("<div><span>a</span><p>b<p>c</div>");
+        const [div] = elementsOf(mixed, "div");
+        const [span] = childrenOf(div);
+        expect(facts(mixed, [span], div).moveRefusal).not.toBeNull();
+      });
+
+      it("blocks moving when the container has no closing tag to drop before", () => {
+        const document = boardDocument("<div><span>a</span><span>b</span>");
+        const [div] = elementsOf(document, "div");
+        const [span] = childrenOf(div);
+        const result = facts(document, [span], div);
+        expect(result.refusal).toBeNull();
+        expect(result.moveRefusal).not.toBeNull();
+      });
+
+      it("blocks grouping an element that holds an unclosed paragraph", () => {
+        const document = boardDocument("<div><section><p>A<p>B</section><span>c</span></div>");
+        const [div] = elementsOf(document, "div");
+        const [section] = childrenOf(div);
+        const result = facts(document, [section], div);
+        expect(result.wrapRefusal).not.toBeNull();
+        expect(result.moveRefusal).not.toBeNull();
+      });
+    });
+
+    describe("table rows", () => {
+      const TABLE =
+        "<table><tbody><tr><td>a</td></tr><tr><td>b</td></tr></tbody></table>";
+
+      it("blocks moving a row but keeps it sizeable and alignable", () => {
+        const result = pickIn(TABLE, "tbody", "tr");
+        expect(result.refusal).toBeNull();
+        expect(result.nodes).toHaveLength(1);
+        expect(result.moveRefusal).not.toBeNull();
+        expect(result.wrapRefusal).not.toBeNull();
+        expect(result.unwrapRefusal).not.toBeNull();
+      });
+
+      it("blocks moving a cell", () => {
+        const result = pickIn(TABLE, "tr", "td");
+        expect(result.refusal).toBeNull();
+        expect(result.moveRefusal).not.toBeNull();
+      });
+
+      it("lets a whole table be moved inside an ordinary container", () => {
+        const result = pickIn(`<div>${TABLE}<p>x</p></div>`, "div", "table");
+        expect(result.moveRefusal).toBeNull();
+      });
+    });
+
+    describe("grouping needs a container the host accepts", () => {
+      it.each<[string, string, string, string]>([
+        ["menu", "<menu><li>a</li><li>b</li></menu>", "menu", "li"],
+        ["optgroup", "<select><optgroup><option>a</option><option>b</option></optgroup></select>", "optgroup", "option"],
+        ["datalist", "<datalist><option>a</option><option>b</option></datalist>", "datalist", "option"],
+        ["tbody", "<table><tbody><tr><td>a</td></tr><tr><td>b</td></tr></tbody></table>", "tbody", "tr"],
+        ["tr", "<table><tbody><tr><td>a</td><td>b</td></tr></tbody></table>", "tr", "td"],
+        ["colgroup", "<table><colgroup><col><col></colgroup></table>", "colgroup", "col"],
+        ["caption", "<table><caption><b>a</b><i>b</i></caption></table>", "caption", "b"],
+      ])("refuses to group the children of a %s", (_label, html, container, picked) => {
+        const result = pickIn(html, container, picked);
+        expect(result.wrapRefusal).not.toBeNull();
+      });
+    });
+
+    describe("ungrouping needs a wrapper the host accepts", () => {
+      it.each<[string, string, string, string]>([
+        ["menu", "<div><menu><li>a</li></menu></div>", "div", "menu"],
+        ["ol", "<div><ol><li>a</li></ol></div>", "div", "ol"],
+        ["select", "<div><select><option>a</option></select></div>", "div", "select"],
+        ["dl", "<div><dl><dt>a</dt><dd>b</dd></dl></div>", "div", "dl"],
+        ["table", "<div><table><tbody><tr><td>a</td></tr></tbody></table></div>", "div", "table"],
+        ["optgroup", "<select><optgroup><option>a</option></optgroup></select>", "select", "optgroup"],
+        ["thead", "<table><thead><tr><td>h</td></tr></thead><tbody><tr><td>a</td></tr></tbody></table>", "table", "thead"],
+        ["tbody", "<table><thead><tr><td>h</td></tr></thead><tbody><tr><td>a</td></tr></tbody></table>", "table", "tbody"],
+        ["tfoot", "<table><tbody><tr><td>a</td></tr></tbody><tfoot><tr><td>f</td></tr></tfoot></table>", "table", "tfoot"],
+        ["tr", "<table><tbody><tr><td>a</td></tr></tbody></table>", "tbody", "tr"],
+      ])("refuses to ungroup a %s", (_label, html, container, picked) => {
+        expect(pickIn(html, container, picked).unwrapRefusal).not.toBeNull();
+      });
+
+      it("still lets a list item be ungrouped", () => {
+        const result = pickIn("<ul><li>a</li><li>b</li></ul>", "ul", "li");
+        expect(result.unwrapRefusal).toBeNull();
+      });
+    });
+  });
+
 });

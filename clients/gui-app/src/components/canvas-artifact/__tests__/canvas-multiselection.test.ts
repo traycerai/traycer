@@ -67,6 +67,8 @@ function layoutNodeOf(item: CanvasElement): CanvasLayoutNode {
     cssWidth: null,
     cssHeight: null,
     transformed: false,
+    order: 0,
+    gridPlacement: false,
   };
 }
 

@@ -7,11 +7,15 @@ export interface CanvasLayoutNode {
   readonly tagName: string;
   readonly box: CanvasBox;
   readonly position: string;
+  /** Null when editing this inset would not translate the box by the same delta. */
   readonly left: number | null;
   readonly top: number | null;
   readonly cssWidth: number | null;
   readonly cssHeight: number | null;
   readonly transformed: boolean;
+  readonly order: number;
+  /** Explicit grid lines override the DOM order after a source move. */
+  readonly gridPlacement: boolean;
 }
 export interface CanvasSiblingLayout {
   readonly parent: CanvasLayoutNode;
@@ -55,7 +59,7 @@ function layoutIdentity(
 function parseLayoutNode(value: unknown): CanvasLayoutNode | null {
   if (!canvasRecord(value)) return null;
   const identity = layoutIdentity(value);
-  const { left, top, cssWidth, cssHeight } = value;
+  const { left, top, cssWidth, cssHeight, order, gridPlacement } = value;
   const box = parseCanvasBox(value.box);
   if (
     identity === null ||
@@ -63,7 +67,10 @@ function parseLayoutNode(value: unknown): CanvasLayoutNode | null {
     !nullableCoordinate(left) ||
     !nullableCoordinate(top) ||
     !nullableCoordinate(cssWidth) ||
-    !nullableCoordinate(cssHeight)
+    !nullableCoordinate(cssHeight) ||
+    typeof order !== "number" ||
+    !Number.isSafeInteger(order) ||
+    typeof gridPlacement !== "boolean"
   )
     return null;
   if (
@@ -71,7 +78,7 @@ function parseLayoutNode(value: unknown): CanvasLayoutNode | null {
     (cssHeight !== null && cssHeight < 0)
   )
     return null;
-  return { ...identity, left, top, cssWidth, cssHeight, box };
+  return { ...identity, left, top, cssWidth, cssHeight, box, order, gridPlacement };
 }
 export function parseCanvasSiblingLayout(
   value: unknown,

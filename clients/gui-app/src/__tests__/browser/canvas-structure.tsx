@@ -5,7 +5,10 @@ import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import { createRendererContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
 import { parseHtmlSource } from "@traycer/html-source";
-import type { EpicEditArtboardRequest } from "@traycer/protocol/host/epic/artboard-edit";
+import type {
+  ArtboardEdit,
+  EpicEditArtboardRequest,
+} from "@traycer/protocol/host/epic/artboard-edit";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { TabHostContext } from "@/components/epic-canvas/hooks/use-tab-host-id";
 import type { CanvasBoardDocument } from "@/components/canvas-artifact/canvas-board-document";
@@ -14,6 +17,7 @@ import { useCanvasSelectionStore } from "@/components/canvas-artifact/canvas-sel
 import { CanvasStructureOverlay } from "@/components/canvas-artifact/canvas-structure-overlay";
 import {
   alignElements,
+  distributeElements,
   type CanvasAlignMode,
 } from "@/components/canvas-artifact/canvas-structure-geometry";
 import {
@@ -27,6 +31,7 @@ import { createAppQueryClient } from "@/lib/query-client";
 import { EpicSessionContext } from "@/lib/registries/epic-session-registry";
 import { buildArtifactDocument } from "@/lib/sandbox/artifact-serving/artifact-document";
 import { SandboxBridgeHost } from "@/lib/sandbox/bridge-host";
+import type { CanvasLayoutNode } from "@/lib/sandbox/canvas-layout-bridge";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import type { EpicStreamClientFactory } from "@/stores/epics/open-epic/store";
@@ -46,9 +51,11 @@ import "@/index.css";
  * records the request, so a spec reads exactly what a gesture would have saved.
  * `browser-tests/canvas-structure.spec.ts` drives it with trusted mouse input.
  *
- * Query: `zoom` scales the board (default 1); `board=align` swaps the row of
- * cards for absolutely positioned boxes anchored in different ways, and
- * `board=rtl` for relative boxes in a right-to-left container.
+ * Query: `zoom` scales the board (default 1). `board` picks what the page
+ * holds: a row of cards (default), `order` / `order-equal` / `grid` rows whose
+ * CSS decides the visual order, and `align`, `rtl-absolute`, `rtl-mixed`,
+ * `margins` and `rtl` boxes whose insets, direction and margins decide where
+ * a `left` or `top` write puts them.
  */
 const NONCE = "browser-fixture-nonce";
 const ARTIFACT_ID = "structure-artifact";
@@ -64,19 +71,50 @@ const STAGE_TOP = 40;
 const params = new URLSearchParams(window.location.search);
 const zoom = Number(params.get("zoom") ?? "1");
 const boardKind = params.get("board");
-const alignBoard = boardKind === "align" || boardKind === "rtl";
 
-/** Three static cards in a flex row: what a reorder can address. */
-const ROW_BODY = `<div id="row" data-tid="row"><div class="card" data-tid="a">A</div><div class="card" data-tid="b">B</div><div class="card" data-tid="c">C</div></div>`;
-const ROW_CSS = `#row{display:flex;gap:20px;position:absolute;left:40px;top:60px;width:480px}.card{width:100px;height:60px;box-sizing:border-box;background:#cde;border:1px solid #567}`;
+interface BoardSource {
+  readonly css: string;
+  readonly body: string;
+}
+
+/** Three cards in a row container; `cardStyles` is each card's own inline style. */
+function rowBody(cardStyles: readonly [string, string, string]): string {
+  const [a, b, c] = cardStyles;
+  return `<div id="row" data-tid="row"><div class="card" data-tid="a" style="${a}">A</div><div class="card" data-tid="b" style="${b}">B</div><div class="card" data-tid="c" style="${c}">C</div></div>`;
+}
+const CARD_CSS = `.card{width:100px;height:60px;box-sizing:border-box;background:#cde;border:1px solid #567}`;
+const FLEX_ROW_CSS = `#row{display:flex;gap:20px;position:absolute;left:40px;top:60px;width:480px}${CARD_CSS}`;
+const GRID_ROW_CSS = `#row{display:grid;grid-template-columns:repeat(3,100px);gap:20px;position:absolute;left:40px;top:60px;width:380px}${CARD_CSS}`;
 
 /**
  * Absolutely positioned boxes under one stage, each anchored differently. The
  * page reports their computed left/top/width as used pixels whichever side
  * they are anchored to, so what alignment writes must not change a size.
+ * `plain-*` are ordinary left/top boxes: the control that must keep working.
  */
-const ALIGN_BODY = `<div id="stage" data-tid="stage"><div class="box" data-tid="free" style="left:20px;top:20px;width:60px;height:24px">free</div><div class="box" data-tid="fixed-right" style="right:30px;top:70px;width:90px;height:24px">fixed right</div><div class="box" data-tid="auto-right" style="right:30px;top:120px">auto right</div><div class="box" data-tid="stretch" style="left:10px;right:10px;top:170px;height:24px">stretch</div><div class="box" data-tid="auto-bottom" style="left:300px;bottom:20px;width:60px">auto bottom</div></div>`;
+const ALIGN_BODY = `<div id="stage" data-tid="stage"><div class="box" data-tid="free" style="left:20px;top:20px;width:60px;height:24px">free</div><div class="box" data-tid="fixed-right" style="right:30px;top:70px;width:90px;height:24px">fixed right</div><div class="box" data-tid="auto-right" style="right:30px;top:120px">auto right</div><div class="box" data-tid="stretch" style="left:10px;right:10px;top:170px;height:24px">stretch</div><div class="box" data-tid="auto-bottom" style="left:300px;bottom:20px;width:60px">auto bottom</div><div class="box" data-tid="plain-a" style="left:20px;top:210px;width:60px;height:24px">a</div><div class="box" data-tid="plain-b" style="left:150px;top:240px;width:80px;height:24px">b</div><div class="box" data-tid="plain-c" style="left:290px;top:268px;width:40px;height:24px">c</div></div>`;
 const ALIGN_CSS = `#stage{position:absolute;left:0;top:0;width:400px;height:300px}.box{position:absolute;box-sizing:border-box;background:#fdc;border:1px solid #765}`;
+
+/**
+ * Fixed-size absolute boxes in a right-to-left container, each with `left:0`
+ * and its own `right`. Over-constrained, `right` wins there, so writing `left`
+ * moves nothing.
+ */
+const RTL_ABSOLUTE_BODY = `<div id="stage" data-tid="stage" style="direction:rtl"><div class="box" data-tid="rtl-a" style="left:0;right:30px;top:20px;width:60px;height:24px">a</div><div class="box" data-tid="rtl-b" style="left:0;right:140px;top:70px;width:80px;height:24px">b</div><div class="box" data-tid="rtl-c" style="left:0;right:300px;top:120px;width:50px;height:24px">c</div></div>`;
+
+/**
+ * The same boxes under a right-to-left container whose own children are
+ * `direction:ltr`: the containing block's direction decides, not the box's.
+ */
+const RTL_CONTAINER_LTR_CHILD_BODY = `<div id="stage" data-tid="stage" style="direction:rtl"><div class="box" data-tid="mix-a" style="direction:ltr;left:0;right:30px;top:20px;width:60px;height:24px">a</div><div class="box" data-tid="mix-b" style="direction:ltr;left:0;right:140px;top:70px;width:80px;height:24px">b</div></div>`;
+
+/**
+ * Fixed-size boxes pinned by both insets with automatic margins: they sit in
+ * the middle of the span the insets leave, so a change to `left` moves them by
+ * half of it, and a change to `top` likewise.
+ */
+const MARGIN_BODY = `<div id="stage" data-tid="stage"><div class="box" data-tid="m-a" style="left:0;right:500px;top:0;bottom:250px;width:60px;height:24px;margin:auto">a</div><div class="box" data-tid="m-b" style="left:0;right:300px;top:40px;bottom:150px;width:60px;height:24px;margin:auto">b</div><div class="box" data-tid="m-c" style="left:0;right:60px;top:120px;bottom:60px;width:60px;height:24px;margin:auto">c</div></div>`;
+const WIDE_STAGE_CSS = `#stage{position:absolute;left:0;top:0;width:600px;height:300px}.box{position:absolute;box-sizing:border-box;background:#fdc;border:1px solid #765}`;
 
 /**
  * Relative boxes in a right-to-left container. A relative box with an explicit
@@ -85,15 +123,40 @@ const ALIGN_CSS = `#stage{position:absolute;left:0;top:0;width:400px;height:300p
 const RTL_BODY = `<div id="stage" data-tid="stage" style="direction:rtl"><div class="rel" data-tid="rel-left" style="left:10px">left</div><div class="rel" data-tid="rel-right" style="right:30px">right</div></div>`;
 const RTL_CSS = `#stage{position:absolute;left:0;top:0;width:400px;height:300px}.rel{position:relative;box-sizing:border-box;width:60px;height:24px;background:#dfc;border:1px solid #567}`;
 
-interface BoardSource {
-  readonly css: string;
-  readonly body: string;
-}
+const BOARDS: Readonly<Record<string, BoardSource>> = {
+  row: { css: FLEX_ROW_CSS, body: rowBody(["", "", ""]) },
+  // CSS `order` that matches the source order but fixes the visual order.
+  order: {
+    css: FLEX_ROW_CSS,
+    body: rowBody(["order:1", "order:2", "order:3"]),
+  },
+  // One shared nonzero order: the visual order still follows the source.
+  "order-equal": {
+    css: FLEX_ROW_CSS,
+    body: rowBody(["order:2", "order:2", "order:2"]),
+  },
+  grid: {
+    css: GRID_ROW_CSS,
+    body: rowBody([
+      "grid-column:1;grid-row:1",
+      "grid-column:2;grid-row:1",
+      "grid-column:3;grid-row:1",
+    ]),
+  },
+  align: { css: ALIGN_CSS, body: ALIGN_BODY },
+  "rtl-absolute": {
+    css: ALIGN_CSS,
+    body: RTL_ABSOLUTE_BODY,
+  },
+  "rtl-mixed": { css: ALIGN_CSS, body: RTL_CONTAINER_LTR_CHILD_BODY },
+  margins: { css: WIDE_STAGE_CSS, body: MARGIN_BODY },
+  rtl: { css: RTL_CSS, body: RTL_BODY },
+};
 
 function boardSource(): BoardSource {
-  if (boardKind === "rtl") return { css: RTL_CSS, body: RTL_BODY };
-  if (alignBoard) return { css: ALIGN_CSS, body: ALIGN_BODY };
-  return { css: ROW_CSS, body: ROW_BODY };
+  if (boardKind !== null && Object.hasOwn(BOARDS, boardKind))
+    return BOARDS[boardKind];
+  return BOARDS.row;
 }
 
 const board = boardSource();
@@ -141,6 +204,11 @@ interface StructureProbe {
   readonly alignAndMeasure: (
     tids: readonly string[],
     mode: CanvasAlignMode,
+  ) => Promise<AlignMeasurement>;
+  /** Distributes the elements through the production arithmetic and measures. */
+  readonly distributeAndMeasure: (
+    tids: readonly string[],
+    axis: "x" | "y",
   ) => Promise<AlignMeasurement>;
 }
 interface ProbeWindow extends Window {
@@ -328,6 +396,60 @@ function sizesOf(
   return sizes;
 }
 
+/**
+ * Asks the page for the siblings' layout, lets `arrange` (the production
+ * arithmetic) turn it into an edit, writes the edit's declarations into the
+ * board the way the saved source would carry them, and measures what Chrome
+ * lays out afterwards.
+ */
+async function arrangeAndMeasure(
+  iframe: HTMLIFrameElement,
+  bridge: SandboxBridgeHost,
+  tids: readonly string[],
+  arrange: (nodes: readonly CanvasLayoutNode[]) => ArtboardEdit | null,
+): Promise<AlignMeasurement> {
+  const frameDocument = iframe.contentDocument;
+  const first = tids.at(0);
+  if (frameDocument === null || first === undefined)
+    throw new Error("nothing to arrange");
+  const before = sizesOf(frameDocument, tids);
+  const layout = await bridge.siblingLayout({ tid: first });
+  if (layout === null) throw new Error("the page gave no layout");
+  const nodes = layout.siblings.filter(
+    (node) => node.tid !== null && tids.includes(node.tid),
+  );
+  const edit = arrange(nodes);
+  if (
+    edit === null ||
+    (edit.kind !== "align-elements" && edit.kind !== "distribute-elements")
+  )
+    return { applied: false, before, after: before, edges: {} };
+  for (const placement of edit.elements) {
+    const selector =
+      placement.locator.kind === "tid"
+        ? `[data-tid="${placement.locator.tid}"]`
+        : `[data-traycer-pos="${String(placement.locator.startTagOffset)}"]`;
+    // Not `instanceof HTMLElement`: the board is another realm's document.
+    const target = frameDocument.querySelector<HTMLElement>(selector);
+    if (target === null) throw new Error(`no ${selector}`);
+    for (const declaration of placement.declarations)
+      target.style.setProperty(declaration.property, declaration.value);
+  }
+  const edges: Record<string, { x: number; y: number }> = {};
+  for (const tid of tids) {
+    const rect = frameDocument
+      .querySelector(`[data-tid="${tid}"]`)
+      ?.getBoundingClientRect();
+    if (rect !== undefined) edges[tid] = { x: rect.x, y: rect.y };
+  }
+  return {
+    applied: true,
+    before,
+    after: sizesOf(frameDocument, tids),
+    edges,
+  };
+}
+
 function installProbe(
   iframe: HTMLIFrameElement,
   bridge: SandboxBridgeHost,
@@ -347,40 +469,14 @@ function installProbe(
       });
     },
     edits: () => edits.map(recordOf),
-    alignAndMeasure: async (tids, mode) => {
-      const frameDocument = iframe.contentDocument;
-      const first = tids.at(0);
-      if (frameDocument === null || first === undefined)
-        throw new Error("nothing to align");
-      const before = sizesOf(frameDocument, tids);
-      const layout = await bridge.siblingLayout({ tid: first });
-      if (layout === null) throw new Error("the page gave no layout");
-      const nodes = layout.siblings.filter(
-        (node) => node.tid !== null && tids.includes(node.tid),
-      );
-      const edit = alignElements(nodes, mode);
-      if (edit === null || edit.kind !== "align-elements")
-        return { applied: false, before, after: before, edges: {} };
-      for (const placement of edit.elements) {
-        const selector =
-          placement.locator.kind === "tid"
-            ? `[data-tid="${placement.locator.tid}"]`
-            : `[data-traycer-pos="${String(placement.locator.startTagOffset)}"]`;
-        // Not `instanceof HTMLElement`: the board is another realm's document.
-        const target = frameDocument.querySelector<HTMLElement>(selector);
-        if (target === null) throw new Error(`no ${selector}`);
-        for (const declaration of placement.declarations)
-          target.style.setProperty(declaration.property, declaration.value);
-      }
-      const edges: Record<string, { x: number; y: number }> = {};
-      for (const tid of tids) {
-        const rect = frameDocument
-          .querySelector(`[data-tid="${tid}"]`)
-          ?.getBoundingClientRect();
-        if (rect !== undefined) edges[tid] = { x: rect.x, y: rect.y };
-      }
-      return { applied: true, before, after: sizesOf(frameDocument, tids), edges };
-    },
+    alignAndMeasure: (tids, mode) =>
+      arrangeAndMeasure(iframe, bridge, tids, (nodes) =>
+        alignElements(nodes, mode),
+      ),
+    distributeAndMeasure: (tids, axis) =>
+      arrangeAndMeasure(iframe, bridge, tids, (nodes) =>
+        distributeElements(nodes, axis),
+      ),
   };
 }
 

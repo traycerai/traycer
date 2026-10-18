@@ -40,7 +40,7 @@ export function arrangementRefusal(
       (node) => node.position !== "absolute" && node.position !== "relative",
     )
   )
-    return "Alignment needs elements positioned absolute or relative.";
+    return "Ask the agent to arrange these elements in this layout.";
   if (
     nodes.some(
       (node) => node.transformed || node.left === null || node.top === null,
@@ -230,6 +230,8 @@ export function reorderRefusal(layout: CanvasSiblingLayout): string | null {
     siblings.some((node, index) => {
       if (
         node.transformed ||
+        node.order !== siblings[0].order ||
+        node.gridPlacement ||
         !["static", "relative"].includes(node.position) ||
         node.marker === null ||
         node.box[dimension] <= 0

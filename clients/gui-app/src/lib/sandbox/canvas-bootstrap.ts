@@ -168,8 +168,19 @@ export function canvasBootstrap(config: CanvasBootstrapConfig): void {
       const value = computed?.get(property)?.toString();
       return value !== undefined && value !== "auto" && value !== "stretch" && !value.startsWith("fit-content");
     };
-    const horizontal = (style.position !== "absolute" || fixedSize("width")) && !(style.position === "relative" && style.direction === "rtl" && computed?.get("right")?.toString() !== "auto");
-    const vertical = style.position !== "absolute" || fixedSize("height");
+    const absolute = style.position === "absolute";
+    const containingBlock = element instanceof HTMLElement ? element.offsetParent : null;
+    const direction = absolute ? getComputedStyle(containingBlock ?? document.documentElement).direction : style.direction;
+    // An RTL containing block can make right win when writing left. Auto
+    // margins redistribute the free space instead of moving by the inset delta.
+    const rightControls = direction === "rtl" && computed?.get("right")?.toString() !== "auto";
+    const fixedMargins = (start: string, end: string): boolean =>
+      [start, end].every((property) => {
+        const value = computed?.get(property)?.toString();
+        return value !== undefined && value !== "auto";
+      });
+    const horizontal = !rightControls && (!absolute || (fixedSize("width") && fixedMargins("margin-left", "margin-right")));
+    const vertical = !absolute || (fixedSize("height") && fixedMargins("margin-top", "margin-bottom"));
     return { left: horizontal ? insetOffset(style, "left", "right") : null, top: vertical ? insetOffset(style, "top", "bottom") : null };
   };
   const layoutNode = (element: Element): CanvasLayoutNode => {
@@ -186,6 +197,8 @@ export function canvasBootstrap(config: CanvasBootstrapConfig): void {
       cssWidth: px(style.width),
       cssHeight: px(style.height),
       transformed: transformed(element),
+      order: Number(style.order),
+      gridPlacement: [style.gridRowStart, style.gridRowEnd, style.gridColumnStart, style.gridColumnEnd].some((value) => value !== "auto"),
     };
   };
   const siblingLayout = (

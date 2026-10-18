@@ -71,6 +71,10 @@ export interface NodeFacts {
   readonly transformed: boolean;
   /** `false` for an element whose CSS size is not a plain length. */
   readonly sized: boolean;
+  /** The CSS `order` the page reports; equal values keep the source order. */
+  readonly order: number;
+  /** `true` when the element names its own grid row or column. */
+  readonly gridPlacement: boolean;
 }
 
 /** An absolutely positioned child at its own `left` / `top`. */
@@ -88,6 +92,8 @@ export function placedAt(
     position: "absolute",
     transformed: false,
     sized: true,
+    order: 0,
+    gridPlacement: false,
   };
 }
 
@@ -106,6 +112,8 @@ export function flowAt(
     position: "static",
     transformed: false,
     sized: true,
+    order: 0,
+    gridPlacement: false,
   };
 }
 
@@ -126,6 +134,8 @@ function layoutNodeFor(
     cssWidth: facts.sized ? facts.width : null,
     cssHeight: facts.sized ? facts.height : null,
     transformed: facts.transformed,
+    order: facts.order,
+    gridPlacement: facts.gridPlacement,
   };
 }
 
@@ -144,6 +154,8 @@ export function layoutOf(
       position: "relative",
       transformed: false,
       sized: true,
+      order: 0,
+      gridPlacement: false,
     }),
     siblings: Object.entries(children).map(([tid, facts]) =>
       layoutNodeFor(document, tid, facts),

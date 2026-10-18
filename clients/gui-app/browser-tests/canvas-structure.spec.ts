@@ -60,6 +60,10 @@ interface StructureProbe {
     tids: readonly string[],
     mode: string,
   ) => Promise<AlignMeasurement>;
+  readonly distributeAndMeasure: (
+    tids: readonly string[],
+    axis: "x" | "y",
+  ) => Promise<AlignMeasurement>;
 }
 
 interface ProbeWindow extends Window {
@@ -313,6 +317,139 @@ test.describe("the board changes under a gesture", () => {
   });
 });
 
+/** The reorder handles a drag can start from; a refused layout leaves none. */
+function enabledReorderHandles(page: Page): Locator {
+  return page.locator('button[aria-label^="Reorder element"]:not([disabled])');
+}
+
+async function openBoardWithSelected(
+  page: Page,
+  board: string,
+  tid: string,
+): Promise<void> {
+  await open(page, `?board=${board}`);
+  await select(page, tid);
+  // The page has reported the layout once the overlay offers a resize handle.
+  await expect(resizeHandle(page, "bottom right")).toBeVisible();
+  await nextFrames(page, 2);
+}
+
+test.describe("CSS that fixes the visual order", () => {
+  // `order` and an explicit grid placement decide where a card is drawn. A row
+  // whose `order` values match its source order still looks the same after a
+  // move in the source, so a drop would be saved and show nothing.
+  for (const [name, board] of [
+    ["flex order 1, 2 and 3", "order"],
+    ["explicit grid columns", "grid"],
+  ] as const) {
+    test(`a row with ${name} offers no reorder`, async ({ page }) => {
+      await openBoardWithSelected(page, board, "a");
+
+      await expect(enabledReorderHandles(page)).toHaveCount(0);
+    });
+  }
+
+  test("a row whose cards share one nonzero order still reorders", async ({
+    page,
+  }) => {
+    await openBoardWithSelected(page, "order-equal", "a");
+    await expect(enabledReorderHandles(page)).toHaveCount(4);
+
+    const drop = await screenPoint(page, 400, 90);
+    await pressAt(page, await centreOf(reorderHandle(page, 1)));
+    await page.mouse.move(drop.x, drop.y, { steps: 8 });
+    await expect(insertionBar(page)).toBeVisible();
+    await page.mouse.up();
+
+    await expect.poll(async () => (await recordedEdits(page)).length).toBe(1);
+    const [edit] = await recordedEdits(page);
+    expect(edit.kind).toBe("move-element");
+    expect(edit.before).toBeNull();
+  });
+});
+
+async function align(
+  page: Page,
+  tids: readonly string[],
+  mode: string,
+): Promise<AlignMeasurement> {
+  const result = await page.evaluate(
+    ([targets, how]) =>
+      (window as ProbeWindow).__structureProbe?.alignAndMeasure(targets, how),
+    [tids, mode] as const,
+  );
+  if (result === undefined) throw new Error("the probe is missing");
+  return result;
+}
+
+async function distribute(
+  page: Page,
+  tids: readonly string[],
+  axis: "x" | "y",
+): Promise<AlignMeasurement> {
+  const result = await page.evaluate(
+    ([targets, direction]) =>
+      (window as ProbeWindow).__structureProbe?.distributeAndMeasure(
+        targets,
+        direction,
+      ),
+    [tids, axis] as const,
+  );
+  if (result === undefined) throw new Error("the probe is missing");
+  return result;
+}
+
+function expectSizesKept(result: AlignMeasurement): void {
+  for (const [tid, before] of Object.entries(result.before)) {
+    expect(result.after[tid].width).toBeCloseTo(before.width, 0);
+    expect(result.after[tid].height).toBeCloseTo(before.height, 0);
+  }
+}
+
+/** Every element's `axis` edge is where the first one's is. */
+function expectEqualEdges(
+  result: AlignMeasurement,
+  tids: readonly string[],
+  axis: "x" | "y",
+): void {
+  const [first, ...rest] = tids;
+  for (const tid of rest)
+    expect(result.edges[tid][axis]).toBeCloseTo(result.edges[first][axis], 0);
+}
+
+/** The gaps between neighbours along `axis`, in order of position, are all alike. */
+function expectEqualGaps(
+  result: AlignMeasurement,
+  tids: readonly string[],
+  axis: "x" | "y",
+): void {
+  const size = axis === "x" ? "width" : "height";
+  const ordered = [...tids].sort(
+    (a, b) => result.edges[a][axis] - result.edges[b][axis],
+  );
+  const gaps = ordered.slice(1).map((tid, index) => {
+    const previous = ordered[index];
+    return (
+      result.edges[tid][axis] -
+      (result.edges[previous][axis] + result.after[previous][size])
+    );
+  });
+  for (const gap of gaps) expect(gap).toBeCloseTo(gaps[0], 0);
+}
+
+/**
+ * Alignment and distribution are judged on what Chrome lays out after the
+ * declarations are written, not on the arithmetic: either the edit is refused,
+ * or every size is kept and the edges or gaps really are equal.
+ */
+function expectRefusedOrReached(
+  result: AlignMeasurement,
+  reached: () => void,
+): void {
+  expectSizesKept(result);
+  if (result.applied) reached();
+}
+
 test.describe("alignment never changes a size", () => {
   // Chrome reports computed `left`, `right` and `width` of an absolutely
   // positioned box as used pixels whichever way it is anchored, so an auto-width
@@ -320,27 +457,6 @@ test.describe("alignment never changes a size", () => {
   // `left` on the first stretches it. The claim holds for the arithmetic the
   // toolbar uses, on the page's own layout: it either refuses or leaves every
   // size as it was.
-  async function align(
-    page: Page,
-    tids: readonly string[],
-    mode: string,
-  ): Promise<AlignMeasurement> {
-    const result = await page.evaluate(
-      ([targets, how]) =>
-        (window as ProbeWindow).__structureProbe?.alignAndMeasure(targets, how),
-      [tids, mode] as const,
-    );
-    if (result === undefined) throw new Error("the probe is missing");
-    return result;
-  }
-
-  function expectSizesKept(result: AlignMeasurement): void {
-    for (const [tid, before] of Object.entries(result.before)) {
-      expect(result.after[tid].width).toBeCloseTo(before.width, 0);
-      expect(result.after[tid].height).toBeCloseTo(before.height, 0);
-    }
-  }
-
   test("a fixed-width box anchored by right aligns with a left-anchored one", async ({
     page,
   }) => {
@@ -371,11 +487,11 @@ test.describe("alignment never changes a size", () => {
     await open(page, "?board=rtl");
     const result = await align(page, ["rel-left", "rel-right"], "left");
 
-    expectSizesKept(result);
-    // Writing `left` there moves nothing, so an applied edit would leave the
-    // edges apart: it has to be refused instead.
-    if (result.applied)
-      expect(result.edges["rel-right"].x).toBeCloseTo(result.edges["rel-left"].x, 0);
+    expectRefusedOrReached(result, () => {
+      // Writing `left` there moves nothing, so an applied edit would leave the
+      // edges apart: it has to be refused instead.
+      expectEqualEdges(result, ["rel-left", "rel-right"], "x");
+    });
   });
 
   test("an alignment that is applied lines the edges up", async ({ page }) => {
@@ -384,5 +500,102 @@ test.describe("alignment never changes a size", () => {
 
     expect(result.applied).toBe(true);
     expect(result.edges["fixed-right"].y).toBeCloseTo(result.edges.free.y, 0);
+  });
+});
+
+test.describe("alignment and distribution reach what they promise", () => {
+  const PLAIN = ["plain-a", "plain-b", "plain-c"] as const;
+
+  test.describe("ordinary left and top boxes (the control)", () => {
+    for (const mode of ["left", "top"] as const) {
+      test(`aligning ${mode} is applied and lines the boxes up`, async ({
+        page,
+      }) => {
+        await open(page, "?board=align");
+        const result = await align(page, PLAIN, mode);
+
+        expect(result.applied).toBe(true);
+        expectSizesKept(result);
+        expectEqualEdges(result, PLAIN, mode === "left" ? "x" : "y");
+      });
+    }
+
+    for (const axis of ["x", "y"] as const) {
+      test(`distributing along ${axis} is applied and evens the gaps`, async ({
+        page,
+      }) => {
+        await open(page, "?board=align");
+        const result = await distribute(page, PLAIN, axis);
+
+        expect(result.applied).toBe(true);
+        expectSizesKept(result);
+        expectEqualGaps(result, PLAIN, axis);
+      });
+    }
+  });
+
+  test.describe("fixed-size absolute boxes in a right-to-left container", () => {
+    // Over-constrained by `left:0` and `right`, the right inset wins there, so
+    // writing `left` moves nothing.
+    for (const [board, tids] of [
+      ["rtl-absolute", ["rtl-a", "rtl-b", "rtl-c"]],
+      // Only the containing block's direction counts, not the box's own.
+      ["rtl-mixed", ["mix-a", "mix-b"]],
+    ] as const) {
+      test(`${board}: aligning left is refused or lines the boxes up`, async ({
+        page,
+      }) => {
+        await open(page, `?board=${board}`);
+        const result = await align(page, tids, "left");
+
+        expectRefusedOrReached(result, () => {
+          expectEqualEdges(result, tids, "x");
+        });
+      });
+    }
+
+    test("distributing along x is refused or evens the gaps", async ({
+      page,
+    }) => {
+      const tids = ["rtl-a", "rtl-b", "rtl-c"] as const;
+      await open(page, "?board=rtl-absolute");
+      const result = await distribute(page, tids, "x");
+
+      expectRefusedOrReached(result, () => {
+        expectEqualGaps(result, tids, "x");
+      });
+    });
+  });
+
+  test.describe("fixed-size boxes between two insets with automatic margins", () => {
+    // They sit midway in the span the insets leave, so a change to `left` or
+    // `top` moves them by only half of it.
+    const MARGINED = ["m-a", "m-b", "m-c"] as const;
+
+    for (const mode of ["left", "top"] as const) {
+      test(`aligning ${mode} is refused or lines the boxes up`, async ({
+        page,
+      }) => {
+        await open(page, "?board=margins");
+        const result = await align(page, MARGINED, mode);
+
+        expectRefusedOrReached(result, () => {
+          expectEqualEdges(result, MARGINED, mode === "left" ? "x" : "y");
+        });
+      });
+    }
+
+    for (const axis of ["x", "y"] as const) {
+      test(`distributing along ${axis} is refused or evens the gaps`, async ({
+        page,
+      }) => {
+        await open(page, "?board=margins");
+        const result = await distribute(page, MARGINED, axis);
+
+        expectRefusedOrReached(result, () => {
+          expectEqualGaps(result, MARGINED, axis);
+        });
+      });
+    }
   });
 });
