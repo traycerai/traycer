@@ -43,7 +43,8 @@ export interface ShellConfigSnapshot {
  */
 export interface ShellCommandCallbacks {
   readonly onSuccess: () => void;
-  readonly onError: () => void;
+  /** Called with the save's error. */
+  readonly onError: (error: unknown) => void;
 }
 
 export interface ShellConfigController {

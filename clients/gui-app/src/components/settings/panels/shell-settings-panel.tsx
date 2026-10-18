@@ -42,7 +42,11 @@ import {
   type HostScope,
 } from "@/components/settings/host-scope/use-host-scope";
 import { EffectiveCommandPreview } from "@/components/settings/panels/shell/effective-command-preview";
-import { EnvOverrideEditor } from "@/components/settings/panels/env-override-editor";
+import {
+  EnvOverrideEditor,
+  type EnvStaleRefusal,
+} from "@/components/settings/panels/env-override-editor";
+import { staleWriteOf } from "@/lib/environment/stale-write";
 import { ShellFlagChips } from "@/components/settings/panels/shell/shell-flag-chips";
 import { ShellProgramCombobox } from "@/components/settings/panels/shell/shell-program-combobox";
 import type {
@@ -392,10 +396,21 @@ function ShellSettingsPanelBody(props: {
     onSuccess: () => finishShellSave(target),
     onError: cancelShellSave,
   });
-  const envSaveCallbacks = {
+  // A save of the row named `rowKey` refused because the setting changed
+  // elsewhere first: the row drops its draft for the setting as re-read.
+  const [envStaleRefusal, setEnvStaleRefusal] =
+    useState<EnvStaleRefusal | null>(null);
+  const envSaveCallbacks = (rowKey: string) => ({
     onSuccess: finishEnvSave,
-    onError: cancelEnvSave,
-  };
+    onError: (error: unknown) => {
+      cancelEnvSave();
+      if (staleWriteOf(error) === null) return;
+      setEnvStaleRefusal((current) => ({
+        key: rowKey,
+        seq: current === null ? 1 : current.seq + 1,
+      }));
+    },
+  });
 
   const onSavePath = (path: string): void => {
     if (shellPending) return;
@@ -484,7 +499,7 @@ function ShellSettingsPanelBody(props: {
   ): void => {
     beginEnvSave();
     if (oldKey === newKey) {
-      controller.setEnv({ key: newKey, value }, envSaveCallbacks);
+      controller.setEnv({ key: newKey, value }, envSaveCallbacks(oldKey));
       return;
     }
     // ONE call, not a set whose per-`mutate` `onSuccess` fires the delete.
@@ -494,12 +509,12 @@ function ShellSettingsPanelBody(props: {
     // the rename left two live variables. The controller owns the sequencing
     // now - create first, then drop, so a failed delete still leaves a
     // harmless duplicate rather than a lost value.
-    controller.renameEnv({ oldKey, newKey, value }, envSaveCallbacks);
+    controller.renameEnv({ oldKey, newKey, value }, envSaveCallbacks(oldKey));
   };
   const onEnvDelete = (key: string): void => {
     if (envPending) return;
     beginEnvSave();
-    controller.deleteEnv(key, envSaveCallbacks);
+    controller.deleteEnv(key, envSaveCallbacks(key));
   };
 
   return (
@@ -533,6 +548,7 @@ function ShellSettingsPanelBody(props: {
         saveActive={envSaveActive}
         justSaved={envJustSaved}
         credentialRefusal={credentialRefusal}
+        staleRefusal={envStaleRefusal}
         onCommit={onEnvCommit}
         onDelete={onEnvDelete}
       />
@@ -934,6 +950,7 @@ function HostEnvironmentGroup(props: {
   readonly saveActive: boolean;
   readonly justSaved: boolean;
   readonly credentialRefusal: string | null;
+  readonly staleRefusal: EnvStaleRefusal | null;
   readonly onCommit: (
     oldKey: string,
     newKey: string,
@@ -997,6 +1014,7 @@ function HostEnvironmentGroup(props: {
               props.credentialRefusal === null ? "OPENAI_API_KEY" : "NODE_ENV"
             }
             emptyLabel="Variables are plain values every host gets. Add a variable."
+            staleRefusal={props.staleRefusal}
             onCommit={props.onCommit}
             onDelete={props.onDelete}
           />

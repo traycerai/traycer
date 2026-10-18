@@ -88,6 +88,7 @@ export function ProviderEnvOverridesSection({
         disabled={disabled}
         namePlaceholder={envNamePlaceholder(providerId)}
         emptyLabel={`No variables for ${providerName}.`}
+        staleRefusal={null}
         onCommit={onCommit}
         onDelete={(key) => deleteOverride.mutate({ providerId, key })}
       />

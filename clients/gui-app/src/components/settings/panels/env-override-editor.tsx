@@ -56,6 +56,34 @@ function modeForValue(value: string | null): EnvMode {
   return value === null ? "unset" : "set";
 }
 
+function draftOf(entry: EnvOverrideValue): Draft {
+  return {
+    key: entry.key,
+    value: entry.value ?? "",
+    mode: modeForValue(entry.value),
+    error: null,
+  };
+}
+
+function draftShowsEntry(draft: Draft, entry: EnvOverrideValue): boolean {
+  return (
+    draft.key === entry.key &&
+    draft.value === (entry.value ?? "") &&
+    draft.mode === modeForValue(entry.value) &&
+    draft.error === null
+  );
+}
+
+/**
+ * The latest save of the row named `key` that was refused because the
+ * setting changed elsewhere first; `seq` counts refusals so a second one
+ * for the same row is seen too.
+ */
+export interface EnvStaleRefusal {
+  readonly key: string;
+  readonly seq: number;
+}
+
 function isEnvMode(value: string): value is EnvMode {
   return value === "set" || value === "unset";
 }
@@ -166,6 +194,8 @@ export function EnvOverrideEditor(props: {
    * dev-box"). An empty map for a list with nothing to say.
    */
   readonly rowNotes: ReadonlyMap<string, string>;
+  /** The latest stale refusal of a row's save, or `null` for none. */
+  readonly staleRefusal: EnvStaleRefusal | null;
   readonly onCommit: (
     oldKey: string,
     newKey: string,
@@ -219,6 +249,7 @@ export function EnvOverrideEditor(props: {
               disabled={disabled}
               credentialRefusal={credentialRefusal}
               note={props.rowNotes.get(entry.key) ?? null}
+              staleRefusal={props.staleRefusal}
               onCommit={onCommit}
               onDelete={onDelete}
             />
@@ -261,6 +292,7 @@ function EnvOverrideRow(props: {
   readonly disabled: boolean;
   readonly credentialRefusal: string | null;
   readonly note: string | null;
+  readonly staleRefusal: EnvStaleRefusal | null;
   readonly onCommit: (
     oldKey: string,
     newKey: string,
@@ -270,12 +302,27 @@ function EnvOverrideRow(props: {
 }) {
   const { entry, otherKeys, disabled, credentialRefusal, onCommit, onDelete } =
     props;
-  const [draft, setDraft] = useState<Draft>(() => ({
-    key: entry.key,
-    value: entry.value ?? "",
-    mode: modeForValue(entry.value),
-    error: null,
-  }));
+  const [draft, setDraft] = useState<Draft>(() => draftOf(entry));
+  // After this row's save was refused as stale, the draft follows the
+  // setting as it is re-read, so the refused value is never shown again nor
+  // sent on blur or when the row goes away; the person's next edit ends it.
+  const [following, setFollowing] = useState(false);
+  const [seenRefusal, setSeenRefusal] = useState(
+    props.staleRefusal === null ? 0 : props.staleRefusal.seq,
+  );
+  if (props.staleRefusal !== null && props.staleRefusal.seq !== seenRefusal) {
+    setSeenRefusal(props.staleRefusal.seq);
+    if (props.staleRefusal.key === entry.key) {
+      setFollowing(true);
+      setDraft(draftOf(entry));
+    }
+  } else if (following && !draftShowsEntry(draft, entry)) {
+    setDraft(draftOf(entry));
+  }
+  const editDraft = (update: (current: Draft) => Draft): void => {
+    setFollowing(false);
+    setDraft(update);
+  };
   const draftRef = useRef(draft);
   useEffect(() => {
     draftRef.current = draft;
@@ -320,7 +367,7 @@ function EnvOverrideRow(props: {
 
   const trimValue = (): void => {
     const nextValue = draft.value.trim();
-    setDraft((current) => ({ ...current, value: nextValue }));
+    editDraft((current) => ({ ...current, value: nextValue }));
     commitValue(nextValue);
   };
 
@@ -354,7 +401,7 @@ function EnvOverrideRow(props: {
           aria-label={`Name for ${entry.key}`}
           className="h-8"
           onChange={(event) =>
-            setDraft((current) => ({ ...current, key: event.target.value }))
+            editDraft((current) => ({ ...current, key: event.target.value }))
           }
           onKeyDown={(event) => {
             if (event.key === "Enter") event.currentTarget.blur();
@@ -369,9 +416,11 @@ function EnvOverrideRow(props: {
           disabled={disabled}
           ariaLabel={`Value for ${entry.key}`}
           className={VALUE_FIELD_PLACEMENT}
-          onModeChange={(mode) => setDraft((current) => ({ ...current, mode }))}
+          onModeChange={(mode) =>
+            editDraft((current) => ({ ...current, mode }))
+          }
           onValueChange={(value) =>
-            setDraft((current) => ({ ...current, value }))
+            editDraft((current) => ({ ...current, value }))
           }
           onBlur={commit}
         />

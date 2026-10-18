@@ -65,6 +65,9 @@ import {
 import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { ShellSettingsPanel } from "@/components/settings/panels/shell-settings-panel";
+import { useRereadOnStaleWrite } from "@/hooks/environment/use-reread-on-stale-write";
+import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import type { EnvironmentStaleWrite } from "@traycer/protocol/framework/environment-stale-write";
 import {
   ALL_CONFIG_RPC_METHODS,
   CONFIG_SHELL_METHODS,
@@ -162,11 +165,21 @@ function renderShellPanelOverRpc(options: {
   render(
     <QueryClientProvider client={queryClient}>
       <RunnerHostProvider runnerHost={runnerHost}>
+        <StaleRereader hostId={hostId} />
         <ShellSettingsPanel />
       </RunnerHostProvider>
     </QueryClientProvider>,
   );
   return fixture;
+}
+
+/**
+ * What `PersonalPageFrame` mounts once for every save on its page; it acts
+ * only on a save refused as stale.
+ */
+function StaleRereader(props: { readonly hostId: string }) {
+  useRereadOnStaleWrite(props.hostId);
+  return null;
 }
 
 /**
@@ -1428,5 +1441,80 @@ describe("<ShellSettingsPanel /> host environment names that look like credentia
       value: "sk-x",
       executableWriteGrant: null,
     });
+  });
+});
+
+function inputValue(element: HTMLElement): string {
+  if (!(element instanceof HTMLInputElement)) {
+    throw new Error("expected an input");
+  }
+  return element.value;
+}
+
+const STALE_DETAIL: EnvironmentStaleWrite = {
+  changedBy: { kind: "dashboard" },
+  currentRevision: 43,
+};
+
+function staleRefusal(requestId: string, method: string): HostRpcError {
+  return HostRpcError.fromWireEnvelope(
+    {
+      code: "ENVIRONMENT_WRITE_STALE",
+      message: "The setting changed since it was read.",
+      staleWrite: STALE_DETAIL,
+    },
+    requestId,
+    method,
+  );
+}
+
+describe("<ShellSettingsPanel /> a save refused as stale", () => {
+  it("after a save refused as stale, the field shows the latest value and leaving sends nothing more", async () => {
+    const cli = new MockTraycerCli();
+    cli.shellConfig = {
+      path: "/bin/zsh",
+      args: ["-i", "-l"],
+      synthesised: true,
+    };
+    let listedValue = "one";
+    let listsAfterRefusal = 0;
+    let setCalls = 0;
+    renderShellPanelOverRpc({
+      cli,
+      overrideHandlers: {
+        "config.env.list": () => {
+          if (listedValue === "two") listsAfterRefusal += 1;
+          return { entries: [{ key: "STALE_PROBE", value: listedValue }] };
+        },
+        "config.env.set": (request) => {
+          setCalls += 1;
+          if (setCalls === 1) {
+            listedValue = "two";
+            throw staleRefusal("req-stale", "config.env.set");
+          }
+          return { key: request.key, value: request.value };
+        },
+      },
+    });
+
+    const field = await screen.findByLabelText("Value for STALE_PROBE");
+    expect(inputValue(field)).toBe("one");
+    fireEvent.change(field, { target: { value: "three" } });
+    fireEvent.blur(field);
+
+    await waitFor(() => expect(setCalls).toBe(1));
+    await waitFor(() => expect(listsAfterRefusal).toBeGreaterThan(0));
+
+    expect(inputValue(screen.getByLabelText("Value for STALE_PROBE"))).toBe(
+      "two",
+    );
+
+    cleanup();
+    // A write sent on the way out is dispatched asynchronously; give it
+    // room to reach the host before counting.
+    await act(async () => {
+      await new Promise<void>((resolve) => setTimeout(resolve, 100));
+    });
+    expect(setCalls).toBe(1);
   });
 });
