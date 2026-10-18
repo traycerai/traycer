@@ -31,6 +31,7 @@ function fakeMinter(
       mintedFor.push(hostId);
       return Promise.resolve(result);
     },
+    getCredentialGeneration: () => 0,
   };
 }
 
@@ -177,6 +178,33 @@ describe("resolveExecutableWriteGrant", () => {
       expect(minter.mintedFor).toHaveLength(2);
     },
   );
+
+  it("a grant whose mint resolves after the credential changed is neither sent nor kept", async () => {
+    const { client } = boundHost(HOST_ID);
+    let generation = 0;
+    let rotateDuringMint = true;
+    const mintedFor: string[] = [];
+    const minter: ExecutableWriteGrantMinter = {
+      mintExecutableWriteGrant: (hostId) => {
+        mintedFor.push(hostId);
+        if (rotateDuringMint) generation += 1;
+        return Promise.resolve({
+          kind: "ok",
+          grant: `grant-${mintedFor.length}`,
+          expiresInSeconds: 600,
+        });
+      },
+      getCredentialGeneration: () => generation,
+    };
+    await expect(
+      resolveExecutableWriteGrant(minter, client, () => 0),
+    ).resolves.toBeNull();
+    rotateDuringMint = false;
+    await expect(
+      resolveExecutableWriteGrant(minter, client, () => 0),
+    ).resolves.toBe("grant-2");
+    expect(mintedFor).toEqual([HOST_ID, HOST_ID]);
+  });
 
   it("keeps one cache entry per host", async () => {
     const hostA = boundHost("host-a");

@@ -87,6 +87,7 @@ function okMinter(grant: string) {
       mintedFor.push(hostId);
       return Promise.resolve({ kind: "ok", grant, expiresInSeconds: 600 });
     },
+    getCredentialGeneration: () => 0,
   };
 }
 

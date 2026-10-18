@@ -464,8 +464,11 @@ function ShellSettingsPanelBody(props: {
     }
     // Before anything is stored: a value that looks like a credential, on a
     // host that hands variables to every host the person uses, asks first.
+    // While the host's status is not known yet it may be such a host, so it
+    // asks then too rather than storing first.
     if (
-      personalHostState?.kind === "ready" &&
+      (personalHostState?.kind === "ready" ||
+        personalHostState?.kind === "unknown") &&
       value !== null &&
       classifyCredential({ name: newKey, value }).credentialLike
     ) {

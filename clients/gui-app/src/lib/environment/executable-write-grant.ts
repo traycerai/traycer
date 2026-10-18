@@ -25,11 +25,18 @@ export interface ExecutableWriteGrantMinter {
   mintExecutableWriteGrant(
     hostId: string,
   ): Promise<ExecutableWriteGrantFetchResult>;
+  /**
+   * Advances on every change of the session's credential, including a sign-in
+   * on the same minter after a sign-out.
+   */
+  getCredentialGeneration(): number;
 }
 
 interface CachedGrant {
   readonly grant: string;
   readonly reuseUntil: number;
+  /** The credential generation the grant was minted under. */
+  readonly generation: number;
 }
 
 /**
@@ -39,8 +46,9 @@ interface CachedGrant {
 const GRANT_REUSE_MARGIN_MS = 60_000;
 
 /**
- * One cache per minter (one per signed-in session): a grant is the session's,
- * and a new session never sends the last one's.
+ * One cache per minter. A minter outlives a sign-out and the next sign-in, so
+ * each grant also records the credential it was minted under, and a grant from
+ * an earlier credential is never sent: the account may have revoked it.
  */
 const grantCaches = new WeakMap<
   ExecutableWriteGrantMinter,
@@ -86,10 +94,20 @@ export async function resolveExecutableWriteGrant(
   if (hostId === null) return null;
   if (!(await hostHasEnvironment(client))) return null;
   const cache = cacheFor(minter);
+  const generation = minter.getCredentialGeneration();
   const cached = cache.get(hostId);
-  if (cached !== undefined && cached.reuseUntil > now()) return cached.grant;
+  if (
+    cached !== undefined &&
+    cached.generation === generation &&
+    cached.reuseUntil > now()
+  ) {
+    return cached.grant;
+  }
   cache.delete(hostId);
   const result = await minter.mintExecutableWriteGrant(hostId);
+  // The credential changed while the mint was in flight: the grant is the
+  // earlier credential's, so it is neither kept nor sent.
+  if (minter.getCredentialGeneration() !== generation) return null;
   if (result.kind !== "ok") {
     // The outcome only; the write goes on without a grant.
     appLogger.debug("executable-write grant not minted", {
@@ -100,6 +118,7 @@ export async function resolveExecutableWriteGrant(
   cache.set(hostId, {
     grant: result.grant,
     reuseUntil: now() + result.expiresInSeconds * 1_000 - GRANT_REUSE_MARGIN_MS,
+    generation,
   });
   return result.grant;
 }

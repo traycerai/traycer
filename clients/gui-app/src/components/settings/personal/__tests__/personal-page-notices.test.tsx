@@ -111,6 +111,7 @@ function renderPage(host: AccessHost, options: FrameOptions): void {
               grant: "grant-1",
               expiresInSeconds: 600,
             }),
+          getCredentialGeneration: () => 0,
         },
       }
     : null;

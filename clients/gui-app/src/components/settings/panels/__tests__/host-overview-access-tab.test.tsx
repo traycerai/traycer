@@ -614,6 +614,7 @@ describe("<HostOverviewAccessTab /> this host's own values", () => {
             grant: "grant-1",
             expiresInSeconds: 600,
           }),
+        getCredentialGeneration: () => 0,
       },
     };
     const host = hostWith(

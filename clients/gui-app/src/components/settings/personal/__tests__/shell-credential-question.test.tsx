@@ -88,7 +88,8 @@ interface Rendered {
 }
 
 function renderShellPage(options: {
-  readonly status: EnvironmentStatusResponse;
+  /** `null`: the host's `environment.status` read never resolves. */
+  readonly status: EnvironmentStatusResponse | null;
   /** The methods the host advertises; the config family is always there. */
   readonly environmentMethods: readonly string[];
   readonly existingVariables: readonly { key: string; value: string }[];
@@ -109,6 +110,7 @@ function renderShellPage(options: {
       "config.env.set": set,
       "environment.status": () => {
         statusCalls += 1;
+        if (options.status === null) return new Promise<never>(() => {});
         return options.status;
       },
       "environment.localOverrides": () => ({ overrides: [] }),
@@ -306,6 +308,24 @@ describe("the credential question when the page is not on a ready Personal host"
 
     await waitFor(() => expect(set).toHaveBeenCalledTimes(1));
     expect(screen.queryByTestId("credential-choice-dialog")).toBeNull();
+  });
+});
+
+describe("the credential question while the Personal host's status is not known yet", () => {
+  it("asks before storing a credential-looking variable while the status read is still pending", async () => {
+    const { set, statusCalls } = renderShellPage({
+      ...READY_HOST,
+      status: null,
+    });
+    await waitFor(() => expect(statusCalls()).toBeGreaterThan(0));
+    await addVariable("API_TOKEN", API_KEY_VALUE);
+    // Give a (wrong) store call time to land before judging.
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    });
+
+    expect(set).not.toHaveBeenCalled();
+    expect(screen.queryByTestId("credential-choice-dialog")).not.toBeNull();
   });
 });
 

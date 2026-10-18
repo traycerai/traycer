@@ -356,6 +356,7 @@ function renderPage(
           expiresInSeconds: 600,
         });
       },
+      getCredentialGeneration: () => 0,
     },
   };
   scopeOverrides.current = {

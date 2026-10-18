@@ -173,6 +173,7 @@ function renderPage(options: RigOptions): Rig {
           grant: "grant-1",
           expiresInSeconds: 600,
         }),
+      getCredentialGeneration: () => 0,
     },
   };
   const queryClient = new QueryClient({
