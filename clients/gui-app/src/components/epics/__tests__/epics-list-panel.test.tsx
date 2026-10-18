@@ -4421,6 +4421,8 @@ describe("<EpicsListPanel />", () => {
       ids: ["epic-local"],
       worktreeCleanup: null,
     });
+    // Its row says local-homed when the request is built.
+    expect(variables.isLocalHomedNow("epic-local")).toBe(true);
   });
 
   it("checks only PROVEN-removable rows by default (unproven and dirty stay unchecked)", async () => {

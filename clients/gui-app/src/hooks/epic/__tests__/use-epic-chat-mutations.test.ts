@@ -268,6 +268,7 @@ interface ArchiveChatContext {
   readonly hostId: string | null;
   readonly viewerHostId: string | null;
   readonly viewerUserId: string | null;
+  readonly servingHostId: string | null;
 }
 
 type ChatMutationClientResolver = (variables: {
@@ -589,7 +590,7 @@ describe("useEpicDeleteChat", () => {
     };
 
     opts.onSuccess(
-      { deleted: true, publicationChatId: null },
+      { deleted: true, publicationChatId: null, outcome: "applied" },
       { epicId: "epic-1", chatId: "chat-1", hostId: "host-test" },
       // The host captured at mutate time - `epic.deleteChat` carries no host
       // on the wire, so the teardown is told which machine's session to close.
@@ -597,6 +598,7 @@ describe("useEpicDeleteChat", () => {
         hostId: "host-test",
         viewerHostId: "host-test",
         viewerUserId: null,
+        servingHostId: "host-test",
         cloudDeletionToken: null,
       },
       mutationContext,
@@ -638,12 +640,13 @@ describe("useEpicDeleteChat", () => {
     }
 
     opts.onSuccess(
-      { deleted: true, publicationChatId: null },
+      { deleted: true, publicationChatId: null, outcome: "applied" },
       { epicId: "epic-1", chatId: "chat-1", hostId: null },
       {
         hostId: null,
         viewerHostId: "host-test",
         viewerUserId: null,
+        servingHostId: null,
         cloudDeletionToken: null,
       },
       { client: new QueryClient(), meta: undefined },
@@ -883,8 +886,9 @@ describe("useEpicArchiveChat", () => {
       hostId: "host-test",
       viewerHostId: "host-test",
       viewerUserId: null,
+      servingHostId: "host-test",
     });
-    opts.onSuccess({ updated: false }, variables, ctx, {
+    opts.onSuccess({ updated: false, outcome: "applied" }, variables, ctx, {
       client: queryClient,
       meta: undefined,
     });
@@ -923,8 +927,9 @@ describe("useEpicArchiveChat", () => {
       hostId: "remote-host",
       viewerHostId: "host-test",
       viewerUserId: null,
+      servingHostId: "remote-host",
     });
-    opts.onSuccess({ updated: true }, variables, ctx, {
+    opts.onSuccess({ updated: true, outcome: "applied" }, variables, ctx, {
       client: queryClient,
       meta: undefined,
     });
@@ -1063,7 +1068,7 @@ describe("useEpicArchiveChats", () => {
       archived: true,
     });
 
-    resolveArchive({ updated: true });
+    resolveArchive({ updated: true, outcome: "applied" });
 
     await waitFor(() => {
       expect(result.current.isPending).toBe(false);
@@ -1086,7 +1091,10 @@ describe("useEpicArchiveChats", () => {
     });
     const childOptions = getCapturedMutation("epic.setChatArchived")
       .options as { readonly onError: unknown };
-    expect(childOptions.onError).toBeUndefined();
+    // The per-row callback only refreshes the lists a failed write could
+    // have changed; the batch reports the failure once (asserted below, and
+    // with a real per-row mutation in the archive-routing stand-in suite).
+    expect(typeof childOptions.onError).toBe("function");
 
     act(() => {
       result.current.mutate({
@@ -1120,6 +1128,93 @@ describe("useEpicArchiveChats", () => {
       expect.anything(),
     );
     expect(toast.error).toHaveBeenCalledTimes(1);
+  });
+
+  // Codex thread 4302962544. A record whose owner is gone is archived by a
+  // stand-in host, which writes the cloud row and answers `requested`. When
+  // the row already had that state it answers `updated: false` as well. The
+  // per-record mutation reports it as accepted, so the batch must count it
+  // as accepted too, never as unconfirmed.
+  describe("a requested no-op from a stand-in host", () => {
+    function allNotices(): string[] {
+      return [
+        ...vi.mocked(toast).mock.calls,
+        ...vi.mocked(toast.error).mock.calls,
+        ...vi.mocked(toast.message).mock.calls,
+      ].map((call) => {
+        const [message] = call;
+        return typeof message === "string" ? message : JSON.stringify(message);
+      });
+    }
+
+    async function settleBatch(
+      answers: Readonly<Record<string, () => Promise<SetChatArchivedResponse>>>,
+      archived: boolean,
+    ): Promise<void> {
+      vi.mocked(toast).mockClear();
+      vi.mocked(toast.error).mockClear();
+      vi.mocked(toast.message).mockClear();
+      const answerByChat = new Map(Object.entries(answers));
+      archiveChatMutateAsync.mockImplementation(
+        (input: ArchiveChatMutationInput) => {
+          const answer = answerByChat.get(input.chatId);
+          if (answer === undefined)
+            throw new Error(`unexpected ${input.chatId}`);
+          return answer();
+        },
+      );
+      const { result, unmount } = renderHook(() => useEpicArchiveChats(), {
+        wrapper: makeWrapper(),
+      });
+      act(() => {
+        result.current.mutate({
+          epicId: "epic-1",
+          chats: Object.keys(answers).map((chatId) => ({
+            chatId,
+            hostId: "remote-host",
+            selectedRows: 2,
+            coveredRows: () => 2,
+          })),
+          archived,
+        });
+      });
+      await waitFor(() => {
+        expect(result.current.isSuccess).toBe(true);
+      });
+      unmount();
+    }
+
+    it.each([true, false])(
+      "says nothing about confirmation when every row was accepted (archived=%s)",
+      async (archived) => {
+        await settleBatch(
+          {
+            "chat-1": () =>
+              Promise.resolve({ updated: false, outcome: "requested" }),
+            "chat-2": () =>
+              Promise.resolve({ updated: true, outcome: "applied" }),
+          },
+          archived,
+        );
+
+        expect(allNotices()).toEqual([]);
+      },
+    );
+
+    it("counts the requested no-op's rows as applied beside a failure", async () => {
+      await settleBatch(
+        {
+          "chat-1": () =>
+            Promise.resolve({ updated: false, outcome: "requested" }),
+          "chat-2": () => Promise.reject(makeError("RPC_ERROR")),
+        },
+        true,
+      );
+
+      expect(allNotices()).toEqual([
+        "Archived 2 of 4 selected agents. 2 couldn't be archived.",
+      ]);
+    });
   });
 
   // traycerai/traycer thread taE7F. `updated: false` is an already-satisfied

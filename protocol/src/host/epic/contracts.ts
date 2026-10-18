@@ -33,12 +33,14 @@ import {
   deleteChatRequestSchema,
   deleteChatResponseSchema,
   deleteChatResponseSchemaV10,
+  deleteChatResponseSchemaV11,
   deleteCommentRequestSchema,
   deleteCommentResponseSchema,
   deleteCommentThreadRequestSchema,
   deleteCommentThreadResponseSchema,
   deleteTuiAgentRequestSchema,
   deleteTuiAgentResponseSchema,
+  deleteTuiAgentResponseSchemaV10,
   editCommentRequestSchema,
   editCommentResponseSchema,
   epicMentionArtifactsRequestSchema,
@@ -102,6 +104,7 @@ import {
   chatPublicationStateResponseSchema,
   setChatArchivedRequestSchema,
   setChatArchivedResponseSchema,
+  setChatArchivedResponseSchemaV10,
   setCommentThreadResolvedRequestSchema,
   setCommentThreadResolvedResponseSchema,
   setEpicPinnedRequestSchema,
@@ -982,6 +985,16 @@ export const epicDeleteChatV11 = defineRpcContract({
   method: "epic.deleteChat",
   schemaVersion: { major: 1, minor: 1 } as const,
   requestSchema: deleteChatRequestSchema,
+  responseSchema: deleteChatResponseSchemaV11,
+});
+
+// v1.2 adds `outcome`: whether the receiving host enacted the delete on its own
+// record (`applied`) or, not being the owner, wrote it to the cloud row for the
+// owner to finish (`requested`). See `agentRecordWriteOutcomeSchema`.
+export const epicDeleteChatV12 = defineRpcContract({
+  method: "epic.deleteChat",
+  schemaVersion: { major: 1, minor: 2 } as const,
+  requestSchema: deleteChatRequestSchema,
   responseSchema: deleteChatResponseSchema,
 });
 
@@ -993,6 +1006,18 @@ export const epicDeleteChatUpgradeV10ToV11 = defineUpgradePath<
   to: epicDeleteChatV11.schemaVersion,
   upgradeRequest: (request) => request,
   upgradeResponse: (response) => ({ ...response, publicationChatId: null }),
+});
+
+// A peer on 1.1 or earlier has no non-owner branch: it only ever enacts the
+// delete on its own record, so its answer is `applied`.
+export const epicDeleteChatUpgradeV11ToV12 = defineUpgradePath<
+  typeof epicDeleteChatV11,
+  typeof epicDeleteChatV12
+>({
+  from: epicDeleteChatV11.schemaVersion,
+  to: epicDeleteChatV12.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => ({ ...response, outcome: "applied" }),
 });
 
 export const epicReparentChatV10 = defineRpcContract({
@@ -1011,7 +1036,27 @@ export const epicSetChatArchivedV10 = defineRpcContract({
   method: "epic.setChatArchived",
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: setChatArchivedRequestSchema,
+  responseSchema: setChatArchivedResponseSchemaV10,
+});
+
+// v1.1 adds `outcome` (see `agentRecordWriteOutcomeSchema`). Still optional:
+// the method keeps its `degrade: unsupported` registration.
+export const epicSetChatArchivedV11 = defineRpcContract({
+  method: "epic.setChatArchived",
+  schemaVersion: { major: 1, minor: 1 } as const,
+  requestSchema: setChatArchivedRequestSchema,
   responseSchema: setChatArchivedResponseSchema,
+});
+
+// A 1.0 peer only ever enacts the archive on its own record.
+export const epicSetChatArchivedUpgradeV10ToV11 = defineUpgradePath<
+  typeof epicSetChatArchivedV10,
+  typeof epicSetChatArchivedV11
+>({
+  from: epicSetChatArchivedV10.schemaVersion,
+  to: epicSetChatArchivedV11.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => ({ ...response, outcome: "applied" }),
 });
 
 /**
@@ -1068,7 +1113,26 @@ export const epicDeleteTuiAgentV10 = defineRpcContract({
   method: "epic.deleteTuiAgent",
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: deleteTuiAgentRequestSchema,
+  responseSchema: deleteTuiAgentResponseSchemaV10,
+});
+
+// v1.1 adds `outcome` (see `agentRecordWriteOutcomeSchema`).
+export const epicDeleteTuiAgentV11 = defineRpcContract({
+  method: "epic.deleteTuiAgent",
+  schemaVersion: { major: 1, minor: 1 } as const,
+  requestSchema: deleteTuiAgentRequestSchema,
   responseSchema: deleteTuiAgentResponseSchema,
+});
+
+// A 1.0 peer only ever enacts the delete on its own record.
+export const epicDeleteTuiAgentUpgradeV10ToV11 = defineUpgradePath<
+  typeof epicDeleteTuiAgentV10,
+  typeof epicDeleteTuiAgentV11
+>({
+  from: epicDeleteTuiAgentV10.schemaVersion,
+  to: epicDeleteTuiAgentV11.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => ({ ...response, outcome: "applied" }),
 });
 
 export const epicRenameTuiAgentV10 = defineRpcContract({

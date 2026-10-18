@@ -319,10 +319,13 @@ function createRoutingFixture(): RoutingFixture {
         const index = pool.findIndex(
           (row) => row.tuiAgentId === request.tuiAgentId,
         );
-        const respond = (): { deleted: boolean } => {
-          if (index < 0) return { deleted: false };
+        const respond = (): {
+          deleted: boolean;
+          outcome: "applied";
+        } => {
+          if (index < 0) return { deleted: false, outcome: "applied" };
           pool.splice(index, 1);
-          return { deleted: true };
+          return { deleted: true, outcome: "applied" };
         };
         if (mutable.failDeleteTuiAgent !== null) {
           throw mutable.failDeleteTuiAgent;
