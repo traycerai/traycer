@@ -350,7 +350,7 @@ function CommentEntry(props: CommentEntryProps) {
         >
           {formatRelativeTime(comment.createdAt)}
         </time>
-        {comment.updatedAt !== null ? (
+        {comment.updatedAt !== null && comment.updatedAt > comment.createdAt ? (
           <span className="text-ui-xs text-muted-foreground">(edited)</span>
         ) : null}
         {isCommentAuthor ? (
