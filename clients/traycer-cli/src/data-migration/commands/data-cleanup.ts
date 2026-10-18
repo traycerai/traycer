@@ -1,3 +1,4 @@
+import { lstat } from "node:fs/promises";
 import { readMigrationJournalSync } from "@traycer/protocol/config/data-bootstrap-records";
 import {
   migrationIdSchema,
@@ -5,7 +6,7 @@ import {
   type MigrationJournal,
 } from "@traycer/protocol/config/data-migration-contracts";
 import { dataBootstrapDir } from "@traycer/protocol/config/data-root";
-import { CLI_ERROR_CODES } from "../../runner/errors";
+import { CLI_ERROR_CODES, isErrnoException } from "../../runner/errors";
 import {
   cleanupSource,
   discardRolledBackDestination,
@@ -71,6 +72,25 @@ export async function dataCleanup(
     );
   }
   const journal = read.record;
+  const gone = await alreadyDeletedSide(journal);
+  if (gone !== null) {
+    const path =
+      gone === "source" ? journal.source.path : journal.destination.path;
+    return ok(
+      {
+        migrationId: id,
+        deleted: gone,
+        path,
+        phase: journal.phase,
+        alreadyDeleted: true,
+      },
+      [
+        gone === "source"
+          ? `The old folder ${path} was already deleted.`
+          : `The unused copy ${path} was already deleted. Traycer keeps using ${journal.source.path}.`,
+      ],
+    );
+  }
   const plan = cleanupPlan(journal);
   if (plan === null) {
     return failed(
@@ -119,6 +139,7 @@ export async function dataCleanup(
     deleted: plan.side,
     path: plan.path,
     phase: result.journal.phase,
+    alreadyDeleted: false,
   };
   return ok(
     data,
@@ -139,6 +160,27 @@ const DISCARD_REFUSALS: ReadonlySet<string> = new Set([
   "discard-destination-in-use",
 ]);
 
+/** The side an earlier cleanup already deleted, so a re-run has nothing left to do. */
+async function alreadyDeletedSide(
+  journal: MigrationJournal,
+): Promise<"source" | "destination" | null> {
+  if (
+    journal.phase === "complete" &&
+    journal.cleanupProgress?.finished === true
+  )
+    return "source";
+  if (journal.phase === "rolled-back") {
+    try {
+      await lstat(journal.destination.path);
+    } catch (error) {
+      if (isErrnoException(error) && error.code === "ENOENT")
+        return "destination";
+      throw error;
+    }
+  }
+  return null;
+}
+
 type CleanupPlan = {
   readonly side: "source" | "destination";
   readonly path: string;
@@ -148,11 +190,6 @@ type CleanupPlan = {
 
 function cleanupPlan(journal: MigrationJournal): CleanupPlan | null {
   if (phaseIsPostActivation(journal.phase)) {
-    if (
-      journal.phase === "complete" &&
-      journal.cleanupProgress?.finished === true
-    )
-      return null;
     const bytes =
       journal.copyManifest === null
         ? ""

@@ -298,6 +298,34 @@ describe.skipIf(process.platform === "win32")(
         expect(await pathExists(harness.sourceRoot)).toBe(false);
       });
 
+      it("a second cleanup after the old folder was deleted reports it already deleted and succeeds", async () => {
+        const harness = await scope.create();
+        const journal = await runToCompletion(harness);
+
+        const first = okOf(
+          await dataCleanup(
+            cleanupDeps(harness, new ScriptedIo(false, []), true),
+            { migrationId: journal.id, yes: true },
+          ),
+        );
+
+        const second = okOf(
+          await dataCleanup(
+            cleanupDeps(harness, new ScriptedIo(false, []), true),
+            { migrationId: journal.id, yes: true },
+          ),
+        );
+        expect(second.data).toMatchObject({
+          migrationId: journal.id,
+          deleted: "source",
+          path: harness.sourceRoot,
+          phase: "complete",
+          alreadyDeleted: true,
+        });
+        expect(second.text.join("\n")).toContain("was already deleted");
+        expect(first.data).toMatchObject({ alreadyDeleted: false });
+      });
+
       it("after a rollback from copying discards the unused destination and says the source is untouched", async () => {
         const harness = await haltedAfter("copying");
         assertDone(await rollbackMigration(harness.makeDeps({})));
@@ -325,6 +353,36 @@ describe.skipIf(process.platform === "win32")(
         expect(await factTree(harness.sourceRoot)).toEqual(
           harness.initial.facts,
         );
+      });
+
+      it("a second cleanup after a rollback reports the unused copy already deleted and asks nothing", async () => {
+        const harness = await haltedAfter("copying");
+        assertDone(await rollbackMigration(harness.makeDeps({})));
+        const journal = readActiveJournal(harness.bootstrapDir);
+        okOf(
+          await dataCleanup(
+            cleanupDeps(harness, new ScriptedIo(false, []), false),
+            { migrationId: journal.id, yes: true },
+          ),
+        );
+        const io = new ScriptedIo(true, []);
+
+        const again = okOf(
+          await dataCleanup(cleanupDeps(harness, io, false), {
+            migrationId: journal.id,
+            yes: false,
+          }),
+        );
+
+        expect(again.data).toMatchObject({
+          migrationId: journal.id,
+          deleted: "destination",
+          path: harness.destinationRoot,
+          phase: "rolled-back",
+          alreadyDeleted: true,
+        });
+        expect(again.text.join("\n")).toContain("was already deleted");
+        expect(io.questions).toEqual([]);
       });
 
       // After repair the engine keeps repaired stores (no exact byte record

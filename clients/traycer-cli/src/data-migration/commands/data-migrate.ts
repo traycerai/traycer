@@ -74,8 +74,11 @@ export function engineProgressReporter(
   return (event) => {
     switch (event.kind) {
       case "phase":
-        io.note(`${PHASE_LABEL[event.phase]}...`);
-        io.progress(event.phase, PHASE_LABEL[event.phase]);
+        io.progress(
+          event.phase,
+          PHASE_LABEL[event.phase],
+          `${PHASE_LABEL[event.phase]}...`,
+        );
         return;
       case "copy": {
         const step =
@@ -85,8 +88,7 @@ export function engineProgressReporter(
         if (step === lastCopyStep) return;
         lastCopyStep = step;
         const message = `Copied ${String(event.files)} of ${String(event.totalFiles)} files (${formatBytes(event.bytes)} of ${formatBytes(event.totalBytes)})`;
-        io.note(`  ${message}`);
-        io.progress("copying", message);
+        io.progress("copying", message, `  ${message}`);
         return;
       }
       case "waiting-for-participants":
@@ -106,10 +108,17 @@ export function engineProgressReporter(
   };
 }
 
+/** No data folder to move: nothing about the move itself applies. */
+function sourceAbsent(advisory: MigrationAdvisory): boolean {
+  return advisory.blockers.some((blocker) => blocker.code === "source-absent");
+}
+
 function advisoryLines(advisory: MigrationAdvisory): string[] {
-  const lines = [
-    `Space: the copy needs about ${formatBytes(advisory.requiredBytes)}; ${advisory.destinationFreeBytes === null ? "free space on the destination is unknown" : `${formatBytes(advisory.destinationFreeBytes)} free on the destination`}.`,
-  ];
+  const lines = sourceAbsent(advisory)
+    ? []
+    : [
+        `Space: the copy needs about ${formatBytes(advisory.requiredBytes)}; ${advisory.destinationFreeBytes === null ? "free space on the destination is unknown" : `${formatBytes(advisory.destinationFreeBytes)} free on the destination`}.`,
+      ];
   if (advisory.blockers.length > 0)
     lines.push("Blockers:", ...blockerLines(advisory.blockers));
   return lines;
@@ -196,12 +205,15 @@ export async function dataMigrate(
   });
   const summary = [...header, ...advisoryLines(advisory)];
   if (input.dryRun) {
-    const text = [
-      ...summary,
-      ...whatMovesLines(advisory.sourceRoot, advisory.sourceBytes),
-      "This dry run changed nothing. It cannot check Traycer's stores and sessions; that happens when the move starts, and the move can still stop then.",
-    ];
-    if (!available) text.push(unavailableMessage("migrate"));
+    const text = sourceAbsent(advisory)
+      ? [...summary, "This dry run changed nothing."]
+      : [
+          ...summary,
+          ...whatMovesLines(advisory.sourceRoot, advisory.sourceBytes),
+          "This dry run changed nothing. It cannot check Traycer's stores and sessions; that happens when the move starts, and the move can still stop then.",
+        ];
+    if (!available && !sourceAbsent(advisory))
+      text.push(unavailableMessage("migrate"));
     const data = { advisory, available };
     return advisory.blockers.length === 0
       ? ok(data, text)

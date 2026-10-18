@@ -333,6 +333,28 @@ function requiredBytes(sourceBytes: number): number {
   return sourceBytes + Math.ceil(sourceBytes * 0.05) + 64 * 1024 * 1024;
 }
 
+/** A refusal when there is no data folder to move: absent, or not a folder. */
+async function absentSourceBlocker(
+  sourceRoot: string,
+): Promise<EngineBlocker | null> {
+  try {
+    const stats = await lstat(sourceRoot);
+    // A symlinked root is refused later as not a plain folder.
+    if (stats.isDirectory() || stats.isSymbolicLink()) return null;
+  } catch (error) {
+    if (
+      !isErrnoException(error) ||
+      (error.code !== "ENOENT" && error.code !== "ENOTDIR")
+    )
+      throw error;
+  }
+  return engineBlocker(
+    "source-absent",
+    sourceRoot,
+    "there is no Traycer data folder here to move; to set up a new installation in another folder, run `traycer data init --to <folder>`",
+  );
+}
+
 async function nearestExistingAncestor(path: string): Promise<string> {
   let current = path;
   for (;;) {
@@ -362,6 +384,18 @@ export async function inspectMigrationReadonly(
       sourceRoot: deps.processDataRoot(),
       destinationRoot: null,
       blockers: error.blockers,
+      sourceBytes: 0,
+      requiredBytes: 0,
+      destinationFreeBytes: null,
+      storeInspection: "runs-at-start",
+    };
+  }
+  const absent = await absentSourceBlocker(sourceRoot);
+  if (absent !== null) {
+    return {
+      sourceRoot,
+      destinationRoot: null,
+      blockers: [absent],
       sourceBytes: 0,
       requiredBytes: 0,
       destinationFreeBytes: null,
@@ -505,6 +539,8 @@ export async function startMigration(
 ): Promise<EngineResult> {
   return withCoordinatorLock(deps, async ({ lock, bootstrapDir }) => {
     const { root: sourceRoot, location } = currentSourceRoot(deps);
+    const absent = await absentSourceBlocker(sourceRoot);
+    if (absent !== null) throw new EngineStop("blocked", [absent], null);
     const selector = readMigrationSelectorSync(bootstrapDir);
     if (selector.kind === "damaged")
       throw stopWith("damaged", "selector-damaged", null, selector.reason);

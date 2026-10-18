@@ -186,7 +186,7 @@ export async function dataInit(
           [
             ...text,
             `Traycer will keep its data in ${prepared.root}. Start Traycer to finish setting up.`,
-            "The Traycer app itself, its caches, the updater cache, system temp files and provider folders outside Traycer (such as ~/.claude) stay where they are.",
+            "The Traycer app itself, Desktop caches, the updater cache, system temp files and provider folders outside Traycer (such as ~/.claude) stay where they are.",
           ],
         );
       },

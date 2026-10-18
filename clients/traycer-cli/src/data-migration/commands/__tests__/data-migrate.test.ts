@@ -1,4 +1,4 @@
-import { chmod, rename, writeFile } from "node:fs/promises";
+import { chmod, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
@@ -152,6 +152,25 @@ describe.skipIf(process.platform === "win32")(
         await snapshotIfPresent(harness.destinationParent),
       ]).toEqual(before);
       expect(await pathExists(harness.bootstrapDir)).toBe(false);
+      expect(await pathExists(harness.destinationRoot)).toBe(false);
+    });
+
+    it("on a machine with no data folder, refuses with source-absent and describes no move", async () => {
+      const harness = await scope.create();
+      await rm(harness.sourceRoot, { recursive: true, force: true });
+
+      for (const dryRun of [true, false]) {
+        const outcome = errorOf(
+          await dataMigrate(
+            depsFor(harness, ENABLED, new ScriptedIo(false, [])),
+            { ...START, to: harness.destinationRoot, dryRun, yes: true },
+          ),
+        );
+        expect(outcome.code).toBe(CLI_ERROR_CODES.DATA_MIGRATION_BLOCKED);
+        const text = outcome.text.join("\n");
+        expect(text).toContain("[source-absent]");
+        expect(text).not.toMatch(/Moves:|Space:|backup/u);
+      }
       expect(await pathExists(harness.destinationRoot)).toBe(false);
     });
 

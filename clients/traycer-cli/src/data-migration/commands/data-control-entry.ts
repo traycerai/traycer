@@ -83,6 +83,7 @@ function envFlag(value: string | undefined): boolean {
 
 export function processDataCommandIo(argv: readonly string[]): DataCommandIo {
   const json = argvHas(argv, "--json");
+  const noProgress = argvHas(argv, "--no-progress");
   const nonInteractive =
     envFlag(process.env.CI) || envFlag(process.env.TRAYCER_NONINTERACTIVE);
   return {
@@ -91,8 +92,12 @@ export function processDataCommandIo(argv: readonly string[]): DataCommandIo {
     note: (text) => {
       if (!json) writeStderr(`${text}\n`);
     },
-    progress: (stage, message) => {
-      if (!json) return;
+    progress: (stage, message, line) => {
+      if (noProgress) return;
+      if (!json) {
+        writeStderr(`${line}\n`);
+        return;
+      }
       const event: ProgressEvent = {
         type: "progress",
         stage,
@@ -162,7 +167,7 @@ export function buildDataProgram(
       "--quiet",
       "Accepted for consistency; data commands print only what matters",
     )
-    .option("--no-progress", "Accepted for consistency")
+    .option("--no-progress", "Suppress progress events / progress lines")
     .exitOverride()
     .configureOutput({
       writeOut: (text) => {

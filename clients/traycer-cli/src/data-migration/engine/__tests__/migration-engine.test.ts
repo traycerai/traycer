@@ -6,6 +6,7 @@ import {
   mkdir,
   readdir,
   readFile,
+  rm,
   stat,
   symlink,
   writeFile,
@@ -663,6 +664,29 @@ describe.skipIf(process.platform === "win32")(
     });
 
     describe("readonly advisory (inspectMigrationReadonly)", () => {
+      it("refuses a missing data folder with source-absent and points at data init, writing nothing", async () => {
+        const h = await scope.create();
+        await rm(h.sourceRoot, { recursive: true, force: true });
+
+        const advisory = await inspectMigrationReadonly(h.makeDeps({}), {
+          destination: h.destinationRoot,
+        });
+
+        expect(advisory.blockers.map((blocker) => blocker.code)).toEqual([
+          "source-absent",
+        ]);
+        expect(advisory.blockers[0]?.message).toContain(
+          "traycer data init --to",
+        );
+        expect(advisory.sourceBytes).toBe(0);
+        expect(existsSync(h.destinationRoot)).toBe(false);
+        expect(existsSync(h.bootstrapDir)).toBe(false);
+
+        const stopped = assertStopped(await start(h, {}));
+        expect(blockerCodes(stopped)).toContain("source-absent");
+        expect(existsSync(h.destinationRoot)).toBe(false);
+      });
+
       it("reports sizes and no blockers for a clean source, and writes NOTHING anywhere", async () => {
         const h = await scope.create();
         const homeBefore = await snapshotIfPresent(h.home);

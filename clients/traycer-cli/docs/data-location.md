@@ -128,7 +128,7 @@ the old folder.
 
 - The Traycer app itself. On Windows the installer already lets you choose
   where it is installed.
-- Desktop browser profiles and caches, and the updater cache.
+- Desktop caches and the updater cache.
 - System temp files.
 - Provider folders outside Traycer, such as `~/.claude`.
 - `~/.traycer-bootstrap`, which records the location.

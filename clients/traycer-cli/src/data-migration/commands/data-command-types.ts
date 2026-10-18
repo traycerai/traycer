@@ -32,8 +32,11 @@ export interface DataCommandIo {
   readonly interactive: boolean;
   /** Human progress and report text (stderr, so stdout stays the result). */
   note(text: string): void;
-  /** `--json` progress events (ignored in human mode). */
-  progress(stage: string, message: string): void;
+  /**
+   * Progress: a `--json` progress event, or `line` on stderr in human mode.
+   * Nothing at all under `--no-progress`.
+   */
+  progress(stage: string, message: string, line: string): void;
   /** A yes/no question; false on anything but yes, Ctrl+C or a closed stdin. */
   confirm(question: string): Promise<boolean>;
 }
