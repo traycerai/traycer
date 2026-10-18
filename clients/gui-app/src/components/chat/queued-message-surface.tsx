@@ -1345,13 +1345,6 @@ function ConversationMessageBadge() {
 }
 
 /**
- * The only affordance a host-authored row offers. For a shell, cancelling is
- * not destructive to the underlying output: the host leaves the delivery
- * cursor where it is, so the next output from that command re-queues a fresh
- * digest. For a forward it IS final - the notice is raised once, so dismissing
- * it means the agent is not told - and the copy says which.
- */
-/**
  * A check-in on the tasks a bot tracks, waiting for the bot's next turn (a
  * `task-checkin` item on the bot's trunk). Content-free like the two chips
  * above it: the report is composed when the item is delivered, from whatever
@@ -1428,6 +1421,13 @@ const CANCEL_COPY: Record<
   },
 };
 
+/**
+ * The only affordance a host-authored row offers. For a shell, cancelling is
+ * not destructive to the underlying output: the host leaves the delivery
+ * cursor where it is, so the next output from that command re-queues a fresh
+ * digest. For a forward it IS final - the notice is raised once, so dismissing
+ * it means the agent is not told - and the copy says which.
+ */
 function ManagedCommandCancelButton(props: {
   readonly kind:
     | "shell"

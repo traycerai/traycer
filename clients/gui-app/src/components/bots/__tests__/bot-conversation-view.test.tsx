@@ -1,8 +1,9 @@
 /**
- * A bot's conversation view (Tracy Bots): the transcript when the bound host
- * serves it, a placeholder naming the host when it is offline, and a composer
- * that writes through `bot.conversation.send` either way - the host answers
- * `queued` when the bound host is away, and the view says so once.
+ * A bot's conversation view (Tracy Bots): the transcript when the bot can be
+ * served to this tab, a placeholder that names no machine while it is paused,
+ * and a composer that writes through `bot.conversation.send` either way - the
+ * host answers `queued` when the bot's host is away, and the view says so
+ * once.
  */
 import { StrictMode } from "react";
 import { cleanup, render, screen } from "@testing-library/react";
@@ -84,14 +85,14 @@ import { BotConversationView } from "@/components/bots/bot-conversation-view";
 
 const BOT_ID = "bot_01ARZ3NDEKTSV4RRFFQ69G5FAV";
 
-function mountView(offlineHostLabel: string | null): void {
+function mountView(paused: boolean): void {
   render(
     <StrictMode>
       <BotConversationView
         botId={BOT_ID}
         hostId="host-tab"
         botTitle="Release Bot"
-        offlineHostLabel={offlineHostLabel}
+        paused={paused}
       />
     </StrictMode>,
   );
@@ -112,31 +113,32 @@ afterEach(() => {
 });
 
 describe("<BotConversationView /> transcript", () => {
-  it("renders the transcript of the app conversation (the earliest) when the host is reachable", () => {
-    mountView(null);
+  it("renders the transcript of the app conversation (the earliest) when the bot is not paused", () => {
+    mountView(false);
 
     const transcript = screen.getByTestId("stub-transcript");
     expect(transcript.getAttribute("data-chat-id")).toBe("conversation-app");
     expect(transcript.getAttribute("data-host-id")).toBe("host-tab");
-    expect(screen.queryByTestId("bot-transcript-offline")).toBeNull();
+    expect(screen.queryByTestId("bot-transcript-paused")).toBeNull();
   });
 
-  it("stands a placeholder naming the bound host in for the transcript when it is offline", () => {
-    mountView("Studio Mac");
+  it("stands a placeholder that names no machine in for the transcript while the bot is paused", () => {
+    mountView(true);
 
-    const placeholder = screen.getByTestId("bot-transcript-offline");
+    const placeholder = screen.getByTestId("bot-transcript-paused");
     expect(placeholder.textContent).toContain(
-      "available when Studio Mac is back",
+      "shows here once the bot can be reached",
     );
+    expect(placeholder.textContent).not.toMatch(/host|Studio Mac|offline/i);
     expect(screen.queryByTestId("stub-transcript")).toBeNull();
     expect(screen.getByTestId("bot-conversation-composer")).toBeTruthy();
   });
 });
 
 describe("<BotConversationView /> composer", () => {
-  it("still sends through bot.conversation.send while the transcript is offline", async () => {
+  it("still sends through bot.conversation.send while the bot is paused", async () => {
     const user = userEvent.setup();
-    mountView("Studio Mac");
+    mountView(true);
 
     await user.type(
       screen.getByTestId("bot-conversation-input"),
@@ -160,21 +162,21 @@ describe("<BotConversationView /> composer", () => {
   it("says the message was saved when the host answers queued", async () => {
     const user = userEvent.setup();
     mocks.state.delivery = "queued";
-    mountView("Studio Mac");
+    mountView(true);
     expect(screen.queryByTestId("bot-conversation-queued")).toBeNull();
 
     await user.type(screen.getByTestId("bot-conversation-input"), "Hello");
     await user.click(screen.getByTestId("bot-conversation-send"));
 
-    expect(screen.getByTestId("bot-conversation-queued").textContent).toContain(
-      "Saved",
-    );
+    const queued = screen.getByTestId("bot-conversation-queued");
+    expect(queued.textContent).toBe("Saved. The bot will read it.");
+    expect(queued.textContent).not.toMatch(/host|offline/i);
   });
 
   it("shows no queued line when the host wrote the message in line", async () => {
     const user = userEvent.setup();
     mocks.state.delivery = "written";
-    mountView(null);
+    mountView(false);
 
     await user.type(screen.getByTestId("bot-conversation-input"), "Hello");
     await user.click(screen.getByTestId("bot-conversation-send"));
@@ -186,7 +188,7 @@ describe("<BotConversationView /> composer", () => {
   it("clears the queued line once the person starts another message", async () => {
     const user = userEvent.setup();
     mocks.state.delivery = "queued";
-    mountView("Studio Mac");
+    mountView(true);
 
     await user.type(screen.getByTestId("bot-conversation-input"), "One");
     await user.click(screen.getByTestId("bot-conversation-send"));
@@ -200,7 +202,7 @@ describe("<BotConversationView /> composer", () => {
 describe("<BotConversationView /> states", () => {
   it("shows the loading state while the conversation list has not answered", () => {
     mocks.state.conversations = null;
-    mountView(null);
+    mountView(false);
 
     expect(screen.getByTestId("bot-conversation-loading")).toBeTruthy();
     expect(screen.queryByTestId("bot-conversation-empty")).toBeNull();
@@ -209,7 +211,7 @@ describe("<BotConversationView /> states", () => {
 
   it("tells an answered, empty list apart from a pending one", () => {
     mocks.state.conversations = [];
-    mountView(null);
+    mountView(false);
 
     expect(screen.getByTestId("bot-conversation-empty")).toBeTruthy();
     expect(screen.queryByTestId("bot-conversation-loading")).toBeNull();
@@ -218,7 +220,7 @@ describe("<BotConversationView /> states", () => {
 
   it("shows a retryable error when the conversation list fails", () => {
     mocks.state.isError = true;
-    mountView(null);
+    mountView(false);
 
     expect(screen.getByTestId("bot-conversation-error")).toBeTruthy();
     expect(screen.queryByTestId("bot-conversation-composer")).toBeNull();

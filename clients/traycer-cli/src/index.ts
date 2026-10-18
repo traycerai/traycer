@@ -24,6 +24,14 @@ import {
   resolveAgentCliSurface,
 } from "./agent-surface";
 import { resolveCliVersion } from "./cli-version";
+import {
+  admitCliInvocation,
+  unexpectedDefaultDataRootWarning,
+} from "./data-migration-admission";
+import {
+  runDataControlEntry,
+  selectsDataControlCommand,
+} from "./data-migration/commands/data-control-entry";
 import { cliFinalizeUpgradeCommand } from "./commands/cli-finalize-upgrade";
 import { buildCliMarkSourceCommand } from "./commands/cli-mark-source";
 import { buildCliReAnchorCommand } from "./commands/cli-re-anchor";
@@ -667,7 +675,15 @@ export function buildProgramWithAgentRoles(
     .description(
       "Traycer CLI - sign in, run the Traycer host on this machine, and work with the agents in a Task",
     )
-    .version(cliVersion);
+    .version(cliVersion)
+    // `traycer data ...` runs in its own control entry
+    // (`data-migration/commands/data-control-entry.ts`) and is deliberately
+    // not registered here, so nothing under `data` can fall through to this
+    // program. Listed as static text so it is still discoverable.
+    .addHelpText(
+      "after",
+      "\nData folder:\n  traycer data --help   where Traycer keeps its data: status, init, migrate, recover, cleanup\n",
+    );
 
   // Global runner flags so `traycer --json <subcommand>` works even when
   // the subcommand declares its own copy. Commander merges globals via
@@ -2007,7 +2023,7 @@ function registerHostCommands(program: Command): void {
           "           host is still up. Runtime state is never purged here - removing it is",
           "           only safe once the supervisor is confirmed stopped, which needs a",
           "           backend completion contract that does not exist yet.",
-          "Neither mode touches your data or credentials under ~/.traycer.",
+          "Neither mode touches your data or credentials.",
           "",
         ].join("\n"),
       )
@@ -3613,25 +3629,6 @@ function registerAgentCommands(
   );
 }
 
-// `monitor` is the long-running inbox subscriber the Claude Code plugin
-// spawns. Like `host start` it owns its own lifecycle and does NOT go
-// through the shared NDJSON runner - `addRunnerFlags` is applied only so
-// the shared globals still parse if present.
-//
-// Because it bypasses the runner, it also bypasses the readonly capability
-// check `withRunner` applies - and it is absent from
-// `READONLY_REFUSED_COMMANDS` as an EXPLICIT EXCEPTION, for the reason
-// recorded in `MONITOR_SURFACE_NOTE` (CLI-021). Not because it is out of
-// reach: this is a registered command an agent can type, with its own
-// `--agent-id`, so leaving it open does leave a mutation reachable. It is
-// granted because refusing it would break inbox delivery for any session the
-// host spawns a monitor for, and would buy little against a caller who can
-// clear the surface variable anyway. It stays hidden on the readonly surface,
-// as before.
-//
-// It is not read-only, and the description now says so: printing a message
-// durably acknowledges it, and the process maintains this machine's stored
-// credentials for as long as it runs.
 function registerBotCommands(program: Command): void {
   const bot = program
     .command("bot")
@@ -3693,6 +3690,25 @@ function registerBotCommands(program: Command): void {
   );
 }
 
+// `monitor` is the long-running inbox subscriber the Claude Code plugin
+// spawns. Like `host start` it owns its own lifecycle and does NOT go
+// through the shared NDJSON runner - `addRunnerFlags` is applied only so
+// the shared globals still parse if present.
+//
+// Because it bypasses the runner, it also bypasses the readonly capability
+// check `withRunner` applies - and it is absent from
+// `READONLY_REFUSED_COMMANDS` as an EXPLICIT EXCEPTION, for the reason
+// recorded in `MONITOR_SURFACE_NOTE` (CLI-021). Not because it is out of
+// reach: this is a registered command an agent can type, with its own
+// `--agent-id`, so leaving it open does leave a mutation reachable. It is
+// granted because refusing it would break inbox delivery for any session the
+// host spawns a monitor for, and would buy little against a caller who can
+// clear the surface variable anyway. It stays hidden on the readonly surface,
+// as before.
+//
+// It is not read-only, and the description now says so: printing a message
+// durably acknowledges it, and the process maintains this machine's stored
+// credentials for as long as it runs.
 function registerMonitorCommand(program: Command): void {
   addRunnerFlags(
     program
@@ -3747,7 +3763,18 @@ function registerMonitorCommand(program: Command): void {
 // the CLI invocation itself - including the Windows `traycer.exe`
 // suffix.
 const entryArgv = typeof process !== "undefined" ? process.argv[1] : undefined;
-if (isTraycerCliEntrypoint(entryArgv)) {
+// `traycer data ...` takes its own control entry INSTEAD of everything below:
+// no CLI log, no migration admission, no slot refresh, no ordinary program.
+// It must answer while a migration holds the startup barrier or the location
+// record is unusable, and the migration coordinator must be neither an
+// admitted participant nor a writer of the folder it moves. Only argv whose
+// command is `data` goes there; see `data-control-entry.ts`.
+const dataControl =
+  isTraycerCliEntrypoint(entryArgv) && selectsDataControlCommand(process.argv);
+if (dataControl) {
+  void runDataControlEntry(process.argv);
+}
+if (isTraycerCliEntrypoint(entryArgv) && !dataControl) {
   const entryLogger = createCliLogger(config.environment);
   installProcessFailureHandlers(entryLogger);
   // Before any command runs, so every writer is covered - including the ones
@@ -3755,10 +3782,6 @@ if (isTraycerCliEntrypoint(entryArgv)) {
   // reader that closed the pipe is not a CLI fault; see std-write.ts.
   installStdioErrorGuards();
   const program = buildProgram();
-  entryLogger.debug("CLI entrypoint parsing argv", {
-    environment: config.environment,
-    argvLength: process.argv.length,
-  });
   // Keep the well-known CLI slot pointing at the anchored binary, BEFORE
   // commander parses anything.
   //
@@ -3797,6 +3820,45 @@ if (isTraycerCliEntrypoint(entryArgv)) {
   const supervisedStart = argvSelectsSupervisedHostStart(process.argv);
   const runEntry = async (): Promise<void> => {
     try {
+      // Before the slot refresh and before Commander: the slot, the CLI log and
+      // every command write under the data root, and none of that may happen
+      // while a data migration holds its startup barrier. A refusal writes
+      // nothing - not even the CLI log.
+      const admission = await admitCliInvocation();
+      if (admission.kind === "refused") {
+        if (argvRequestsJson(program)) {
+          const event = {
+            type: "result",
+            status: "error",
+            error: {
+              code: CLI_ERROR_CODES.DATA_MIGRATION_BLOCKED,
+              message: admission.message,
+              details: null,
+            },
+            timestamp: new Date().toISOString(),
+          };
+          writeStdout(`${JSON.stringify(event)}\n`);
+        } else {
+          writeStderr(
+            `traycer: ${admission.message} [code=${CLI_ERROR_CODES.DATA_MIGRATION_BLOCKED}]\n`,
+          );
+        }
+        await finishAndExit(1);
+        return;
+      }
+      // A person at a terminal hears about a populated default data folder
+      // that is not a known migration backup (Desktop shows its own notice);
+      // a service or Desktop-spawned invocation does not repeat it.
+      if (process.stderr.isTTY === true) {
+        const warning = unexpectedDefaultDataRootWarning();
+        if (warning !== null) writeStderr(`traycer: warning: ${warning}\n`);
+      }
+      // After admission: at debug level this appends to the CLI log under the
+      // data root.
+      entryLogger.debug("CLI entrypoint parsing argv", {
+        environment: config.environment,
+        argvLength: process.argv.length,
+      });
       const replacedRunningBinary =
         await refreshCliSlotBeforeCommand(supervisedStart);
       // The refresh repaired the slot for everything that launches from it

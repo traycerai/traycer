@@ -17,6 +17,9 @@ import {
   currentHostPlatformKey,
   releaseDownloadSlot,
   releaseDownloadSlotOwnership,
+  type HostPlatformAsset,
+  type HostVersionEntry,
+  type RegistryClient,
 } from "../registry";
 import type { ProgressInfo } from "../runner/output";
 import type { Environment } from "../runner/environment";
@@ -28,6 +31,7 @@ import { extractHostSource, resolveHostExecutable } from "./extract";
 import { preserveLegacyProviders } from "./legacy-providers";
 import { createExtractHeartbeat } from "./extract-heartbeat";
 import { hashFileSha256 } from "./sha256";
+import { refuseOlderHostWhileDataMoved } from "./moved-data-root-guard";
 import type { HostStartAdoptionPublisher } from "../host/host-start-adoption";
 import type { HostStoreFormats } from "@traycer/protocol/host/store-formats";
 import {
@@ -324,23 +328,46 @@ export async function stageHostInstallSource(
 ): Promise<StagedHostInstallSource> {
   const logger = createCliLogger(opts.environment);
   await opts.verifyMutationCapability();
+  const plan: StagePlan =
+    opts.source.kind === "local-file"
+      ? { kind: "local-file", path: opts.source.path }
+      : {
+          kind: "registry",
+          resolved: await resolveRegistryAsset({
+            environment: opts.environment,
+            versionRequest: opts.source.versionRequest,
+            onProgress: opts.onProgress,
+          }),
+        };
+  if (plan.kind === "registry") {
+    // Every registry install (`host install`, `host ensure`, the `host
+    // update` downgrade arm) stages here, a fresh one included: with nothing
+    // installed only the supported-host floor applies.
+    const installed = await readHostInstallRecord(opts.environment);
+    refuseOlderHostWhileDataMoved({
+      command: "host install",
+      environment: opts.environment,
+      installedVersion: installed?.version ?? null,
+      targetVersion: plan.resolved.entry.version,
+    });
+  }
   await ensureHostHomeDir(opts.environment);
   await opts.verifyMutationCapability();
   const owned = await createOwnedTempDir(opts.environment, "install-");
   const stagingDir = owned.path;
 
   const staging =
-    opts.source.kind === "local-file"
+    plan.kind === "local-file"
       ? await stageLocalFile({
           environment: opts.environment,
-          sourcePath: opts.source.path,
+          sourcePath: plan.path,
           stagingDir,
           onProgress: opts.onProgress,
           recordVersion: opts.recordVersionOverride,
         })
       : await stageRegistry({
           environment: opts.environment,
-          versionRequest: opts.source.versionRequest,
+          resolved: plan.resolved,
           stagingDir,
           onProgress: opts.onProgress,
         });
@@ -1303,14 +1330,23 @@ async function stageLocalFile(opts: StageLocalOptions): Promise<StageResult> {
   };
 }
 
-interface StageRegistryOptions {
-  readonly environment: Environment;
-  readonly versionRequest: string;
-  readonly stagingDir: string;
-  readonly onProgress: (info: ProgressInfo) => void;
+interface ResolvedRegistryAsset {
+  readonly client: RegistryClient;
+  readonly entry: HostVersionEntry;
+  readonly asset: HostPlatformAsset;
 }
 
-async function stageRegistry(opts: StageRegistryOptions): Promise<StageResult> {
+type StagePlan =
+  | { readonly kind: "local-file"; readonly path: string }
+  | { readonly kind: "registry"; readonly resolved: ResolvedRegistryAsset };
+
+// Resolution only, before any temp dir exists: the moved-data-root refusal
+// below it must leave nothing behind.
+async function resolveRegistryAsset(opts: {
+  readonly environment: Environment;
+  readonly versionRequest: string;
+  readonly onProgress: (info: ProgressInfo) => void;
+}): Promise<ResolvedRegistryAsset> {
   const logger = createCliLogger(opts.environment);
   const client = await createDefaultRegistryClient(
     opts.environment,
@@ -1340,6 +1376,19 @@ async function stageRegistry(opts: StageRegistryOptions): Promise<StageResult> {
     platformKey,
     sizeBytes: asset.sizeBytes,
   });
+  return { client, entry, asset };
+}
+
+interface StageRegistryOptions {
+  readonly environment: Environment;
+  readonly resolved: ResolvedRegistryAsset;
+  readonly stagingDir: string;
+  readonly onProgress: (info: ProgressInfo) => void;
+}
+
+async function stageRegistry(opts: StageRegistryOptions): Promise<StageResult> {
+  const logger = createCliLogger(opts.environment);
+  const { client, entry, asset } = opts.resolved;
   opts.onProgress({
     stage: "download",
     message: `downloading host ${entry.version}`,

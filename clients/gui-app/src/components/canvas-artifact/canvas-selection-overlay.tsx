@@ -38,6 +38,37 @@ function actionPosition(
   };
 }
 
+function SelectionOutline(props: { readonly box: CanvasBox; readonly generated: boolean; readonly hideHandles: boolean | undefined }) {
+  return (
+          <div
+            className="absolute border border-primary"
+            style={{
+              left: props.box.x,
+              top: props.box.y,
+              width: props.box.width,
+              height: props.box.height,
+            }}
+          >
+            {!props.generated && !props.hideHandles
+              ? [
+                  "-left-1 -top-1",
+                  "-right-1 -top-1",
+                  "-left-1 -bottom-1",
+                  "-right-1 -bottom-1",
+                ].map((position) => (
+                  <span
+                    key={position}
+                    className={cn(
+                      "absolute size-2 border border-primary bg-background",
+                      position,
+                    )}
+                  />
+                ))
+              : null}
+          </div>
+  );
+}
+
 export function CanvasSelectionOverlay(props: {
   readonly controls?: ReactNode;
   readonly actionControls?: ReactNode;
@@ -46,7 +77,10 @@ export function CanvasSelectionOverlay(props: {
   readonly scope: CanvasAnnotationScope;
   readonly boardPath: string;
   readonly registry: CanvasFrameRegistry;
-  readonly onPick: (path: string, point: { x: number; y: number; additive?: boolean }) => void;
+  readonly onPick: (
+    path: string,
+    point: { x: number; y: number; additive?: boolean },
+  ) => void;
   readonly onRetire: (path: string) => void;
 }) {
   useSyncExternalStore(props.registry.subscribe, props.registry.getSnapshot);
@@ -58,9 +92,13 @@ export function CanvasSelectionOverlay(props: {
       : null,
   );
   const [dimensions, setDimensions] = useState({ width: 0, height: 0 });
-  const additional = useCanvasSelectionStore((state) => state.additionalElements);
+  const additional = useCanvasSelectionStore(
+    (state) => state.additionalElements,
+  );
   const multiple = selection !== null && additional.length > 0;
-  const gesture = useRef<{ x: number; y: number; additive: boolean } | null>(null);
+  const gesture = useRef<{ x: number; y: number; additive: boolean } | null>(
+    null,
+  );
   const frame = entry.frame;
   const bridge = entry.bridge;
   const { onRetire, boardPath } = props;
@@ -205,7 +243,11 @@ export function CanvasSelectionOverlay(props: {
             if (event.shiftKey) event.stopPropagation();
             gesture.current =
               event.button === 0
-                ? { x: event.clientX, y: event.clientY, additive: event.shiftKey }
+                ? {
+                    x: event.clientX,
+                    y: event.clientY,
+                    additive: event.shiftKey,
+                  }
                 : null;
           }}
           onPointerUp={(event) => {
@@ -245,32 +287,7 @@ export function CanvasSelectionOverlay(props: {
               }}
             />
           ))}
-          <div
-            className="absolute border border-primary"
-            style={{
-              left: box.x,
-              top: box.y,
-              width: box.width,
-              height: box.height,
-            }}
-          >
-            {!selection.element.generated && !props.hideHandles
-              ? [
-                  "-left-1 -top-1",
-                  "-right-1 -top-1",
-                  "-left-1 -bottom-1",
-                  "-right-1 -bottom-1",
-                ].map((position) => (
-                  <span
-                    key={position}
-                    className={cn(
-                      "absolute size-2 border border-primary bg-background",
-                      position,
-                    )}
-                  />
-                ))
-              : null}
-          </div>
+          <SelectionOutline box={box} generated={selection.element.generated} hideHandles={props.hideHandles} />
           {props.hideAction ? null : (
             <div
               className="absolute z-20 flex max-w-full items-start gap-1 [&]:pointer-events-auto"

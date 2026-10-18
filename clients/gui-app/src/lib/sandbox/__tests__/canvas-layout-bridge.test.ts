@@ -46,7 +46,13 @@ describe("parseCanvasSiblingLayout", () => {
     const parsed = parseCanvasSiblingLayout(
       layout({
         siblings: [
-          node({ position: "static", left: null, top: null, cssWidth: null, cssHeight: null }),
+          node({
+            position: "static",
+            left: null,
+            top: null,
+            cssWidth: null,
+            cssHeight: null,
+          }),
         ],
       }),
     );
@@ -61,7 +67,9 @@ describe("parseCanvasSiblingLayout", () => {
 
   it("accepts an element with a tid and no marker", () => {
     expect(
-      parseCanvasSiblingLayout(layout({ siblings: [node({ marker: null, tid: "hero" })] })),
+      parseCanvasSiblingLayout(
+        layout({ siblings: [node({ marker: null, tid: "hero" })] }),
+      ),
     ).not.toBeNull();
   });
 
@@ -69,8 +77,14 @@ describe("parseCanvasSiblingLayout", () => {
     const parsed = parseCanvasSiblingLayout(
       layout({
         html: "<script>x</script>",
-        parent: node({ marker: 1, innerHTML: "<b>x</b>", textContent: "hello" }),
-        siblings: [node({ outerHTML: "<p>hi</p>", text: "hi", style: "color:red" })],
+        parent: node({
+          marker: 1,
+          innerHTML: "<b>x</b>",
+          textContent: "hello",
+        }),
+        siblings: [
+          node({ outerHTML: "<p>hi</p>", text: "hi", style: "color:red" }),
+        ],
       }),
     );
     expect(parsed).not.toBeNull();
@@ -97,7 +111,9 @@ describe("parseCanvasSiblingLayout", () => {
     for (const axis of ["x", "y"] as const)
       for (const flag of [true, false])
         expect(
-          parseCanvasSiblingLayout(layout({ axis, reverse: flag, truncated: flag })),
+          parseCanvasSiblingLayout(
+            layout({ axis, reverse: flag, truncated: flag }),
+          ),
         ).toMatchObject({ axis, reverse: flag, truncated: flag });
   });
 
@@ -106,16 +122,21 @@ describe("parseCanvasSiblingLayout", () => {
 
     it("takes 256 siblings and refuses 257", () => {
       expect(
-        parseCanvasSiblingLayout(layout({ siblings: Array.from({ length: 256 }, () => sibling) }))
-          ?.siblings,
+        parseCanvasSiblingLayout(
+          layout({ siblings: Array.from({ length: 256 }, () => sibling) }),
+        )?.siblings,
       ).toHaveLength(256);
       expect(
-        parseCanvasSiblingLayout(layout({ siblings: Array.from({ length: 257 }, () => sibling) })),
+        parseCanvasSiblingLayout(
+          layout({ siblings: Array.from({ length: 257 }, () => sibling) }),
+        ),
       ).toBeNull();
     });
 
     it("takes an empty sibling list", () => {
-      expect(parseCanvasSiblingLayout(layout({ siblings: [] }))?.siblings).toEqual([]);
+      expect(
+        parseCanvasSiblingLayout(layout({ siblings: [] }))?.siblings,
+      ).toEqual([]);
     });
 
     it("takes text at its limits and refuses one past", () => {
@@ -123,7 +144,11 @@ describe("parseCanvasSiblingLayout", () => {
         parseCanvasSiblingLayout(
           layout({
             siblings: [
-              node({ tid: "t".repeat(300), tagName: "x".repeat(40), position: "p".repeat(40) }),
+              node({
+                tid: "t".repeat(300),
+                tagName: "x".repeat(40),
+                position: "p".repeat(40),
+              }),
             ],
           }),
         ),
@@ -133,18 +158,31 @@ describe("parseCanvasSiblingLayout", () => {
         { tagName: "x".repeat(41) },
         { position: "p".repeat(41) },
       ])
-        expect(parseCanvasSiblingLayout(layout({ siblings: [node(overrides)] }))).toBeNull();
+        expect(
+          parseCanvasSiblingLayout(layout({ siblings: [node(overrides)] })),
+        ).toBeNull();
     });
 
     it("takes coordinates at 10 million and refuses past it", () => {
       expect(
         parseCanvasSiblingLayout(
-          layout({ siblings: [node({ left: 10_000_000, top: -10_000_000, cssWidth: 10_000_000, cssHeight: 0 })] }),
+          layout({
+            siblings: [
+              node({
+                left: 10_000_000,
+                top: -10_000_000,
+                cssWidth: 10_000_000,
+                cssHeight: 0,
+              }),
+            ],
+          }),
         ),
       ).not.toBeNull();
       for (const field of ["left", "top", "cssWidth", "cssHeight"])
         expect(
-          parseCanvasSiblingLayout(layout({ siblings: [node({ [field]: 10_000_001 })] })),
+          parseCanvasSiblingLayout(
+            layout({ siblings: [node({ [field]: 10_000_001 })] }),
+          ),
         ).toBeNull();
     });
   });
@@ -156,7 +194,10 @@ describe("parseCanvasSiblingLayout", () => {
       ["a string", "layout"],
       ["siblings that are not an array", layout({ siblings: {} })],
       ["a missing parent", layout({ parent: undefined })],
-      ["a malformed parent", layout({ parent: node({ box: { ...BOX, width: -1 } }) })],
+      [
+        "a malformed parent",
+        layout({ parent: node({ box: { ...BOX, width: -1 } }) }),
+      ],
       ["an unknown axis", layout({ axis: "z" })],
       ["a missing axis", layout({ axis: undefined })],
       ["a non-boolean reverse", layout({ reverse: "yes" })],
@@ -185,9 +226,13 @@ describe("parseCanvasSiblingLayout", () => {
       ["a missing cssHeight", { cssHeight: undefined }],
     ])("a sibling with %s", (_label, overrides) => {
       expect(
-        parseCanvasSiblingLayout(layout({ siblings: [node({}), node(overrides)] })),
+        parseCanvasSiblingLayout(
+          layout({ siblings: [node({}), node(overrides)] }),
+        ),
       ).toBeNull();
-      expect(parseCanvasSiblingLayout(layout({ parent: node(overrides) }))).toBeNull();
+      expect(
+        parseCanvasSiblingLayout(layout({ parent: node(overrides) })),
+      ).toBeNull();
     });
   });
 });
@@ -206,10 +251,18 @@ describe("SandboxBridgeHost.siblingLayout", () => {
   function isSent(value: unknown): value is Sent {
     return typeof value === "object" && value !== null;
   }
-  function createHost(options: { readonly canvas: boolean; readonly ready: boolean }) {
+  function createHost(options: {
+    readonly canvas: boolean;
+    readonly ready: boolean;
+  }) {
     const sent: Sent[] = [];
     const host = new SandboxBridgeHost({
-      document: { kind: "served", canvas: options.canvas, nonce: NONCE, forwardedShortcuts: [] },
+      document: {
+        kind: "served",
+        canvas: options.canvas,
+        nonce: NONCE,
+        forwardedShortcuts: [],
+      },
       hostContext: HOST_CONTEXT,
       hostVersion: "9.9.9",
       post: (message) => {
@@ -235,10 +288,13 @@ describe("SandboxBridgeHost.siblingLayout", () => {
       });
     }
     const requests = (): Sent[] =>
-      sent.filter((message) => message.method === "traycer/canvas/sibling-layout");
+      sent.filter(
+        (message) => message.method === "traycer/canvas/sibling-layout",
+      );
     const lastRequest = (): Sent => {
       const found = requests().at(-1);
-      if (found === undefined) throw new Error("no sibling-layout request was posted");
+      if (found === undefined)
+        throw new Error("no sibling-layout request was posted");
       return found;
     };
     return { host, requests, lastRequest };
@@ -275,7 +331,9 @@ describe("SandboxBridgeHost.siblingLayout", () => {
 
     const byTid = host.siblingLayout({ tid: "hero" });
     expect(lastRequest().params).toEqual({ tid: "hero", nonce: NONCE });
-    host.receive(answer(lastRequest(), { layout: layout({ axis: "y" }), nonce: NONCE }));
+    host.receive(
+      answer(lastRequest(), { layout: layout({ axis: "y" }), nonce: NONCE }),
+    );
     await expect(byTid).resolves.toMatchObject({ axis: "y" });
   });
 
@@ -287,9 +345,15 @@ describe("SandboxBridgeHost.siblingLayout", () => {
   });
 
   it.each([
-    ["too many siblings", layout({ siblings: Array.from({ length: 257 }, () => node({})) })],
+    [
+      "too many siblings",
+      layout({ siblings: Array.from({ length: 257 }, () => node({})) }),
+    ],
     ["an unknown axis", layout({ axis: "z" })],
-    ["a sibling with a bad box", layout({ siblings: [node({ box: { ...BOX, width: -1 } })] })],
+    [
+      "a sibling with a bad box",
+      layout({ siblings: [node({ box: { ...BOX, width: -1 } })] }),
+    ],
     ["a bare string", "layout"],
   ])("resolves null for %s", async (_label, malformed) => {
     const { host, lastRequest } = createHost({ canvas: true, ready: true });

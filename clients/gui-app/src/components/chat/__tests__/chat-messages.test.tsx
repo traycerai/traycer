@@ -513,6 +513,26 @@ async function fireScrollTopAndFlush(scrollTop: number): Promise<void> {
 }
 
 /**
+ * Hides the surface the way a `display:none` top-level tab does: the browser
+ * resets the scroll container's `scrollTop` in the SAME commit `visible`
+ * flips false, with no `scroll` event (see the "visibility handoff" block
+ * comment). That silent reset is what the show-time handoff reads as "the
+ * box collapsed while concealed"; a box that kept its position (a retained
+ * in-pane chat, concealed with `visibility:hidden`) is deliberately left
+ * alone on show - see "a retained chat whose box survived concealment is not
+ * re-scrolled".
+ */
+async function hideWithCollapsedScrollBox(
+  rerenderWith: (patch: Partial<ChatMessagesRenderState>) => void,
+): Promise<void> {
+  act(() => {
+    getScrollNode().scrollTop = 0;
+  });
+  rerenderWith({ visible: false });
+  await settleLegendList();
+}
+
+/**
  * Ticket 15 review (live pass S5 round 3): sets `scrollTop` and fires the
  * scroll event WITHOUT yielding an animation frame afterward - deliberately
  * leaves `scheduleActiveViewportUpdate`'s rAF-throttled reading-line mirror
@@ -6646,12 +6666,9 @@ describe("ChatMessages scroll policy", () => {
 
       // The pane hides: force the same terminal symptom the real
       // display:none/geometry-coordinator chain produces (see block comment
-      // above) - the browser zeroes scrollTop in the same commit.
-      act(() => {
-        getScrollNode().scrollTop = 0;
-      });
-      rerenderWith({ visible: false });
-      await settleLegendList();
+      // above) - the browser collapses the box and zeroes scrollTop in the
+      // same commit.
+      await hideWithCollapsedScrollBox(rerenderWith);
       expect(getScrollNode().scrollTop).toBe(0);
 
       // The pane shows again - the visibility-handoff effect replays the
@@ -6661,6 +6678,129 @@ describe("ChatMessages scroll policy", () => {
 
       expect(getScrollNode().scrollTop).toBe(beforeHide);
       expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
+    });
+
+    it("a retained chat whose box survived concealment is not re-scrolled on show (free-reading)", async () => {
+      // A same-pane tab switch conceals the chat with `visibility:hidden`
+      // (`use-mounted-pane-tabs.ts`) and its hosted record keeps its rect, so
+      // the list keeps its box and its `scrollTop` the whole time. Replaying
+      // the saved anchor over that undisturbed list is what made every inner
+      // tab switch visibly jump: LegendList re-resolves unmeasured rows from
+      // an average-size snapshot while a scroll is in flight, lands on an
+      // estimated layout, and converges back over several frames. The show
+      // handoff must recognise the intact box and issue nothing.
+      const messages = makeCompletedTranscript(200);
+      const anchorIndex = 20;
+      const savedViewOffset = 24;
+      const anchorId = messages[anchorIndex]?.id ?? null;
+      expect(anchorId).toBeTruthy();
+      const key = `t-visibility-retained-box-free-${Math.random().toString(36).slice(2)}`;
+      setLegendListScrollContainerScrollHeightOverride(
+        LEGEND_LIST_HEADER_PX + messages.length * 90 + 40,
+      );
+      saveChatTabState({
+        identity: makeDefaultTestIdentity(key),
+        mode: "free-scrolling",
+        anchorMessageId: anchorId,
+        anchorIndex,
+        offset: savedViewOffset,
+      });
+      const { rerenderWith } = renderChatMessages({
+        messages,
+        scrollStateKey: key,
+      });
+      await settleLegendList();
+      expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
+      const beforeHide = getScrollNode().scrollTop;
+      expect(beforeHide).toBeGreaterThan(0);
+      const list = legendListRefHolder.current;
+      if (list === null) throw new Error("LegendList ref is not mounted");
+      // A real browser reports the restore's landing as a `scroll` event; the
+      // harness only dispatches on request. The handoff keys "did the box
+      // collapse" off the last reported position, so report it.
+      await fireScrollTopAndFlush(beforeHide);
+
+      // Conceal WITHOUT collapsing: no scrollTop reset, no zero box.
+      rerenderWith({ visible: false });
+      await settleLegendList();
+      expect(getScrollNode().scrollTop).toBe(beforeHide);
+
+      const scrollToOffsetSpy = vi.spyOn(list, "scrollToOffset");
+      const scrollToIndexSpy = vi.spyOn(list, "scrollToIndex");
+      const scrollToEndSpy = vi.spyOn(list, "scrollToEnd");
+      try {
+        rerenderWith({ visible: true });
+        await settleLegendList();
+        await settleLegendList();
+        expect(scrollToOffsetSpy).not.toHaveBeenCalled();
+        expect(scrollToIndexSpy).not.toHaveBeenCalled();
+        expect(scrollToEndSpy).not.toHaveBeenCalled();
+      } finally {
+        scrollToOffsetSpy.mockRestore();
+        scrollToIndexSpy.mockRestore();
+        scrollToEndSpy.mockRestore();
+      }
+      expect(getScrollNode().scrollTop).toBe(beforeHide);
+      expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
+
+      // The guard is about the box, not about the mode: a later scroll is
+      // still mirrored and the next hide still publishes it (the persistence
+      // gate was never armed, so nothing suppresses the capture).
+      const movedIndex = 100;
+      const movedScrollTop =
+        movedIndex * TICKET_13_ROW_HEIGHT_PX + LEGEND_LIST_HEADER_PX;
+      await fireScrollTopAndFlush(movedScrollTop);
+      await settleLegendList();
+      rerenderWith({ visible: false });
+      await settleLegendList();
+      const persisted = restoreChatTabState(
+        makeDefaultTestIdentity(key),
+        messages.map((message) => message.id),
+      );
+      expect(persisted.mode).toBe("free-scrolling");
+      expect(persisted.anchorIndex).toBeGreaterThan(anchorIndex);
+    });
+
+    it("a retained chat whose box survived concealment is not re-scrolled on show (bottom-following)", async () => {
+      // Same guard for a reader parked at the tail: `scrollToEnd` over a list
+      // that is already at its strict bottom is the jump the recording showed
+      // (the chat was following its end). The live edge decides, not the
+      // hide-time `scrollTop`, so growth while concealed still re-follows -
+      // covered by "a bottom-following reader returns to the newest true
+      // bottom after hidden growth" below.
+      const messages = makeCompletedTranscript(24);
+      const key = `t-visibility-retained-box-end-${Math.random().toString(36).slice(2)}`;
+      setLegendListScrollContainerScrollHeightOverride(
+        LEGEND_LIST_HEADER_PX + messages.length * 90 + 40,
+      );
+      const { rerenderWith } = renderChatMessages({
+        messages,
+        scrollStateKey: key,
+      });
+      await settleLegendList();
+      assertTrueBottomGeometry();
+      const beforeHide = getScrollNode().scrollTop;
+      const list = legendListRefHolder.current;
+      if (list === null) throw new Error("LegendList ref is not mounted");
+
+      rerenderWith({ visible: false });
+      await settleLegendList();
+      expect(getScrollNode().scrollTop).toBe(beforeHide);
+
+      const scrollToEndSpy = vi.spyOn(list, "scrollToEnd");
+      const scrollToOffsetSpy = vi.spyOn(list, "scrollToOffset");
+      try {
+        rerenderWith({ visible: true });
+        await settleLegendList();
+        await settleLegendList();
+        expect(scrollToEndSpy).not.toHaveBeenCalled();
+        expect(scrollToOffsetSpy).not.toHaveBeenCalled();
+      } finally {
+        scrollToEndSpy.mockRestore();
+        scrollToOffsetSpy.mockRestore();
+      }
+      expect(getScrollNode().scrollTop).toBe(beforeHide);
+      assertTrueBottomGeometry();
     });
 
     it("repeated hide/show cycles do not accumulate drift", async () => {
@@ -6689,11 +6829,7 @@ describe("ChatMessages scroll policy", () => {
       expect(original).toBeGreaterThan(0);
 
       for (let cycle = 0; cycle < 3; cycle += 1) {
-        act(() => {
-          getScrollNode().scrollTop = 0;
-        });
-        rerenderWith({ visible: false });
-        await settleLegendList();
+        await hideWithCollapsedScrollBox(rerenderWith);
         rerenderWith({ visible: true });
         await settleLegendList();
         expect(getScrollNode().scrollTop).toBe(original);
@@ -6731,11 +6867,7 @@ describe("ChatMessages scroll policy", () => {
       await settleLegendList();
       expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
 
-      act(() => {
-        getScrollNode().scrollTop = 0;
-      });
-      rerenderWith({ visible: false });
-      await settleLegendList();
+      await hideWithCollapsedScrollBox(rerenderWith);
 
       const list = legendListRefHolder.current;
       if (list === null) {
@@ -6783,6 +6915,95 @@ describe("ChatMessages scroll policy", () => {
       expect(persisted.mode).toBe("free-scrolling");
       // With the gate stuck, the capture no-ops and the second hide republishes
       // the stale anchor-20 snapshot; a released gate persists the real move.
+      expect(persisted.anchorIndex).toBeGreaterThan(anchorIndex);
+    });
+
+    it("regression: the undisturbed-list shortcut is not taken while a saved restore is still converging", async () => {
+      // The show handoff cancels an in-flight restore's settle loop before it
+      // decides whether to replay. That loop is the only thing that releases
+      // the persistence gate it armed, so skipping the replay for an intact
+      // box while the gate is still up would strand it: every later scroll
+      // capture no-ops until a publishing reader gesture, and the next hide
+      // republishes the stale position (CodeRabbit on OSS #2591).
+      const messages = makeCompletedTranscript(200);
+      const anchorIndex = 20;
+      const savedViewOffset = 24;
+      const anchorId = messages[anchorIndex]?.id ?? null;
+      expect(anchorId).toBeTruthy();
+      const key = `t-visibility-shortcut-pending-restore-${Math.random().toString(36).slice(2)}`;
+      const identity = makeDefaultTestIdentity(key);
+      setLegendListScrollContainerScrollHeightOverride(
+        LEGEND_LIST_HEADER_PX + messages.length * 90 + 40,
+      );
+      saveChatTabState({
+        identity,
+        mode: "free-scrolling",
+        anchorMessageId: anchorId,
+        anchorIndex,
+        offset: savedViewOffset,
+      });
+      const { rerenderWith } = renderChatMessages({
+        messages,
+        scrollStateKey: key,
+      });
+      await settleLegendList();
+      expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
+      const list = legendListRefHolder.current;
+      if (list === null) throw new Error("LegendList ref is not mounted");
+
+      // A collapse, then a show whose replay never lands: the restore keeps
+      // re-issuing (gate armed) while the box reads intact at scrollTop 0.
+      await hideWithCollapsedScrollBox(rerenderWith);
+      const scrollToOffsetSpy = vi
+        .spyOn(list, "scrollToOffset")
+        .mockImplementation(() => Promise.resolve());
+      try {
+        rerenderWith({ visible: true });
+        await act(async () => {
+          for (let frame = 0; frame < 3; frame += 1) {
+            await new Promise<void>((resolve) => {
+              requestAnimationFrame(() => resolve());
+            });
+          }
+        });
+        // The browser reports the (unchanged) position; the restore is still
+        // converging. A rapid hide/show now finds an intact box - and must
+        // still replay rather than shortcut, because the gate is up. Both
+        // rerenders land in one synchronous flush: a settle between them
+        // would let the bounded restore exhaust and release the gate itself,
+        // which is the other, already-covered outcome.
+        await fireScrollTopAndFlush(getScrollNode().scrollTop);
+        rerenderWith({ visible: false });
+        rerenderWith({ visible: true });
+        await act(async () => {
+          for (let frame = 0; frame < 40; frame += 1) {
+            await new Promise<void>((resolve) => {
+              requestAnimationFrame(() => resolve());
+            });
+          }
+          await new Promise<void>((resolve) => {
+            setTimeout(resolve, 80);
+          });
+        });
+      } finally {
+        scrollToOffsetSpy.mockRestore();
+      }
+
+      // Same probe as the exhausted-replay regression: a bare scroll report,
+      // then a hide. Only a released gate lets the move be mirrored.
+      const movedIndex = 100;
+      const movedScrollTop =
+        movedIndex * TICKET_13_ROW_HEIGHT_PX + LEGEND_LIST_HEADER_PX;
+      await fireScrollTopAndFlush(movedScrollTop);
+      await settleLegendList();
+      rerenderWith({ visible: false });
+      await settleLegendList();
+
+      const persisted = restoreChatTabState(
+        identity,
+        messages.map((message) => message.id),
+      );
+      expect(persisted.mode).toBe("free-scrolling");
       expect(persisted.anchorIndex).toBeGreaterThan(anchorIndex);
     });
 
@@ -6860,11 +7081,7 @@ describe("ChatMessages scroll policy", () => {
       const beforeHide = getScrollNode().scrollTop;
       expect(beforeHide).toBeGreaterThan(0);
 
-      act(() => {
-        getScrollNode().scrollTop = 0;
-      });
-      rerenderWith({ visible: false });
-      await settleLegendList();
+      await hideWithCollapsedScrollBox(rerenderWith);
       expect(getScrollNode().scrollTop).toBe(0);
 
       // Growth arrives while the free-reading surface is hidden.
@@ -6958,11 +7175,7 @@ describe("ChatMessages scroll policy", () => {
 
       // Hide immediately - zero additional settle between the scroll
       // landing and the visibility transition.
-      act(() => {
-        getScrollNode().scrollTop = 0;
-      });
-      rerenderWith({ visible: false });
-      await settleLegendList();
+      await hideWithCollapsedScrollBox(rerenderWith);
       expect(getScrollNode().scrollTop).toBe(0);
 
       // Hide must have published the post-scroll coordinate into the shared
@@ -7013,11 +7226,7 @@ describe("ChatMessages scroll policy", () => {
       expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
       expect(getScrollNode().scrollTop).toBeGreaterThan(0);
 
-      act(() => {
-        getScrollNode().scrollTop = 0;
-      });
-      rerenderWith({ visible: false });
-      await settleLegendList();
+      await hideWithCollapsedScrollBox(rerenderWith);
       expect(getScrollNode().scrollTop).toBe(0);
 
       // Exact saved row disappears while hidden (branch edit / suffix removal).

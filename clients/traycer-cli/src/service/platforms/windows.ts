@@ -286,7 +286,7 @@ async function installService(
   // owns refuses the install before anything - the grant, the launcher, the
   // task - is touched, and the read runs on no grant's clock. The same read
   // answers the carry-over below, so ownership and `<Enabled>` come from one
-  // `/Query /XML`. It is not the read the write is decided by: the gate's
+  // definition read. It is not the read the write is decided by: the gate's
   // `/Create` reads again once the definition is staged, immediately before
   // the verb (`createGatedTask`), and the definition follows that read.
   //
@@ -1919,7 +1919,7 @@ async function runTaskAndVerifyStart(
     // Marked committed, the lease waited its whole acknowledgement window for
     // that child and the start was retried into the same refusal - about
     // 100 s on a real host before the disabled-task refusal reached anyone.
-    // Answered from the gate's own `/Query /XML` - one read for this verb -
+    // Answered from the gate's own definition read - one for this verb -
     // and carried as `registrationDisabled`, so the caller deciding what to
     // do about the refusal does not query again either. A setting that
     // cannot be read keeps the committed answer.
@@ -3339,7 +3339,17 @@ function windowsSystemExecutable(filename: string): string {
 }
 
 function buildTaskAction(label: ServiceLabel): TaskExecAction {
-  const argv = ["//B", "//Nologo", hiddenHostLauncherPath(label)];
+  return buildTaskActionForLauncher(hiddenHostLauncherPath(label));
+}
+
+/**
+ * The task action that runs the launcher at `launcherPath` - the one form
+ * every registration writes. Split from `buildTaskAction` for the data-root
+ * migration, which writes the action for the DESTINATION root's launcher
+ * while this process still resolves the source root.
+ */
+function buildTaskActionForLauncher(launcherPath: string): TaskExecAction {
+  const argv = ["//B", "//Nologo", launcherPath];
   return {
     command: windowsSystemExecutable("wscript.exe"),
     argumentsLine: argv.map(quoteWindowsArg).join(" "),
@@ -3734,16 +3744,35 @@ async function scheduledTaskProvedAbsent(taskName: string): Promise<boolean> {
   }
 }
 
-async function queryScheduledTaskXml(
+// The task's stored definition, read from Task Scheduler's COM API rather
+// than `schtasks /Query /XML`. Through a pipe, schtasks writes its XML in
+// whatever encoding that Windows build picks: UTF-16LE on Server 2022, the
+// OEM code page on Server 2025 (26100), where `Tráycer` arrives as 0xA0 and a
+// character outside the code page as `?`. Nothing in the bytes says which,
+// and a guessed decode is a path the task never named. So the XML leaves
+// PowerShell as Base64 of its UTF-8 bytes: ASCII on the wire in every code
+// page.
+//
+// Exits 0 with that payload; 2 when the task or its folder does not exist
+// (HRESULT 0x80070002 / 0x80070003, the same codes as
+// `SCHEDULED_TASK_ABSENCE_PROBE`, so absence reads the same in every
+// language); 4 for every other failure, access denied included, writing only
+// the HRESULT to stderr. Read-only. The task name travels in the environment.
+const SCHEDULED_TASK_XML_READ =
+  "try{$s=New-Object -ComObject Schedule.Service;$s.Connect()}catch{[Console]::Error.Write('0x{0:X8}' -f $_.Exception.HResult);exit 4};try{$x=[string]$s.GetFolder('\\').GetTask($env:TRAYCER_TASK_NAME).Xml}catch{$e=$_.Exception;if($e.InnerException){$e=$e.InnerException};if(($e.HResult -eq -2147024894) -or ($e.HResult -eq -2147024893)){exit 2};[Console]::Error.Write('0x{0:X8}' -f $e.HResult);exit 4};[Console]::Out.Write([Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($x)));exit 0";
+
+// Exported for its unit test; every caller reaches it through
+// `windowsDefinitionDeps.queryTaskXml`.
+export async function queryScheduledTaskXml(
   taskName: string,
 ): Promise<ScheduledTaskXmlQuery> {
   let result: RunBytesResult;
   try {
     result = await runCommandForBytes(
-      "schtasks",
-      ["/Query", "/TN", taskName, "/XML"],
+      "powershell",
+      ["-NoProfile", "-NonInteractive", "-Command", SCHEDULED_TASK_XML_READ],
       {
-        env: undefined,
+        env: { ...process.env, TRAYCER_TASK_NAME: taskName },
         cwd: undefined,
         timeoutMs: WINDOWS_SCHTASKS_QUERY_TIMEOUT_MS,
       },
@@ -3751,56 +3780,48 @@ async function queryScheduledTaskXml(
   } catch (cause) {
     return {
       kind: "failed",
-      reason: `schtasks /Query could not run (${describeCause(cause)})`,
+      reason: `the task definition read could not run (${describeCause(cause)})`,
     };
   }
+  if (result.exitCode === 2) return { kind: "absent" };
   if (result.exitCode !== 0) {
-    // A non-zero exit is "no such task" only when schtasks SAYS so. Access
-    // denied, a Task Scheduler that is not running, a timeout inside the
-    // service - each is a query that failed, and reading those as absence
-    // turned a refresh into "nothing to refresh" and left the stale task
-    // standing. A failure the text does not name is reported as one, which
-    // on a non-English Windows includes a genuinely missing task: a refresh
-    // that fails loudly there asks for a re-registration, which is right for
-    // a service that is not registered.
-    const stderr = result.stderr.trim();
-    if (schtasksNamesMissingTask(stderr)) return { kind: "absent" };
-    // schtasks words "no such task" in the system's language, so on a
-    // non-English Windows the text check above cannot recognise one - and the
-    // ownership gate reads every failed query as a task it cannot confirm,
-    // which would refuse a first registration outright. Task Scheduler's own
-    // answer is a code: the task (0x80070002) or its folder (0x80070003) not
-    // found is absence in every language. Asked only here, for a failure the
-    // text did not name, so an English query pays nothing for it.
-    if (await scheduledTaskProvedAbsent(taskName)) return { kind: "absent" };
+    // Only the script's own HRESULT is carried into the reason: anything
+    // else on stderr is PowerShell's text, unbounded and in the system's
+    // language.
+    const hresult = /^0x[0-9A-F]{8}$/u.exec(result.stderr.trim());
     return {
       kind: "failed",
-      reason: `schtasks /Query failed (exit ${String(result.exitCode)}${stderr.length > 0 ? `: ${stderr.split(/\r?\n/)[0] ?? ""}` : ""})`,
+      reason: `the task definition read failed (exit ${String(result.exitCode)}${hresult === null ? "" : `, ${hresult[0]}`})`,
     };
   }
-  const xml = decodeSchtasksXml(result.stdout);
+  const xml = decodeScheduledTaskXmlPayload(result.stdout);
   return xml === null
-    ? { kind: "failed", reason: "schtasks /Query /XML output is not text" }
+    ? { kind: "failed", reason: "the task definition read returned no XML" }
     : { kind: "xml", xml };
 }
 
 /**
- * `schtasks /XML` writes UTF-16LE, with a BOM or without depending on how
- * stdout is redirected; decide from the bytes. Strict decoders: a repaired
- * sequence would be a path the task never named.
+ * The read's stdout: Base64 of the XML's UTF-8 bytes, or `null` when it is
+ * not exactly that. Strict at both layers - Node's Base64 decoder skips
+ * characters it does not know and a lenient UTF-8 decode repairs bad
+ * sequences, and either would be a path the task never named.
  */
-function decodeSchtasksXml(bytes: Buffer): string | null {
+function decodeScheduledTaskXmlPayload(stdout: Buffer): string | null {
+  // ASCII whitespace only: `trim()` would also strip a latin1 0xA0, the very
+  // byte a code-page answer carries.
+  const payload = stdout
+    .toString("latin1")
+    .replace(/^[\t\n\r ]+|[\t\n\r ]+$/gu, "");
+  if (
+    payload.length === 0 ||
+    payload.length % 4 !== 0 ||
+    !/^[A-Za-z0-9+/]+={0,2}$/u.test(payload)
+  ) {
+    return null;
+  }
   try {
-    if (bytes.length >= 2 && bytes[0] === 0xff && bytes[1] === 0xfe) {
-      return new TextDecoder("utf-16le", { fatal: true }).decode(
-        bytes.subarray(2),
-      );
-    }
-    if (bytes.length >= 2 && bytes[1] === 0x00) {
-      return new TextDecoder("utf-16le", { fatal: true }).decode(bytes);
-    }
-    return new TextDecoder("utf-8", { fatal: true, ignoreBOM: false }).decode(
-      bytes,
+    return new TextDecoder("utf-8", { fatal: true }).decode(
+      Buffer.from(payload, "base64"),
     );
   } catch {
     return null;
@@ -3837,7 +3858,7 @@ export async function readWindowsTaskEnabledState(
  * The task-level `<Settings><Enabled>` of a task's own XML - the parse
  * `readWindowsTaskEnabledState` makes of its read, for a caller that already
  * holds the XML from the ownership gate's read (an install carrying the
- * setting over), so the two questions are answered from one `/Query /XML`.
+ * setting over), so the two questions are answered from one definition read.
  */
 function taskXmlEnabledState(xml: string): WindowsTaskEnabledState {
   const settings = xml.match(/<Settings>([\s\S]*?)<\/Settings>/)?.[1];
@@ -3940,7 +3961,7 @@ type WindowsRegisteredDefinition =
   | { readonly kind: "unrecognized"; readonly reason: string }
   | {
       readonly kind: "registered";
-      /** The task's own XML, as `schtasks /Query /XML` returned it. */
+      /** The task's own XML, as Task Scheduler returned it. */
       readonly xml: string;
       readonly action: TaskExecAction;
       /** The action is exactly today's launcher action. */
@@ -4253,7 +4274,24 @@ export async function refreshWindowsServiceDefinition(
   return { kind: "refreshed", form: plan.form, appliesAt: plan.appliesAt };
 }
 
+/** Read-time seams of the data-root migration's task actions (`data-migration/external-actions`). */
+export function windowsTaskRelocationDeps(): {
+  readonly queryTaskXml: WindowsDefinitionDeps["queryTaskXml"];
+  readonly predictCli: WindowsDefinitionDeps["predictCli"];
+  readonly ownership: WindowsTaskOwnershipDeps;
+} {
+  return {
+    queryTaskXml: windowsDefinitionDeps.queryTaskXml,
+    predictCli: windowsDefinitionDeps.predictCli,
+    ownership: taskOwnershipDeps(),
+  };
+}
+
 export {
+  hiddenHostLauncherPath as windowsHiddenHostLauncherPath,
+  buildTaskActionForLauncher as buildWindowsTaskActionForLauncher,
+  parseTaskExecAction as parseWindowsTaskExecAction,
+  redefinedTaskXml as windowsRedefinedTaskXml,
   taskXmlEnabledState as windowsTaskXmlEnabledState,
   buildTaskXmlForUser as buildScheduledTaskXml,
   resolveTaskUserId as resolveScheduledTaskUserId,

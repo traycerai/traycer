@@ -23,7 +23,10 @@ export function CanvasClipboardBoundary(props: {
   return (
     <div
       className="relative h-full w-full"
-      onPaste={clipboard.onPaste}
+      onPaste={(event) => {
+        if (useCanvasSelectionStore.getState().additionalElements.length === 0)
+          clipboard.onPaste(event);
+      }}
       onCopy={(event) => {
         const target = event.target;
         if (
@@ -34,7 +37,8 @@ export function CanvasClipboardBoundary(props: {
         const selection = useCanvasSelectionStore.getState().selection;
         if (
           selection?.artifactId !== props.artifactId ||
-          selection.textRange !== null
+          selection.textRange !== null ||
+          useCanvasSelectionStore.getState().additionalElements.length > 0
         )
           return;
         event.preventDefault();

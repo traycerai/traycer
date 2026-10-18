@@ -12,6 +12,7 @@ import {
   EPIC_COLLABORATORS_OPEN_REFRESH_MS,
   useEpicCollaboratorsQuery,
   type EpicCollaboratorView,
+  type EpicCollaboratorsView,
   type EpicTeamCollaboratorView,
 } from "@/hooks/epics/use-epic-collaborators-query";
 import { useEpicSendQueuedInvites } from "@/hooks/epic/use-epic-send-queued-invites-mutation";
@@ -20,6 +21,7 @@ import { useEpicSessionHostClient } from "@/hooks/epic/use-epic-session-host-cli
 import type { InviteCardProps } from "./invite-card";
 import type { TeamsAccessProps, PeopleWithAccessProps } from "./access-lists";
 import type {
+  OwnerTeamRow,
   TeamPendingState,
   TeamRow,
   RevokeDialogProps,
@@ -191,10 +193,10 @@ export function useEpicSharingPanelController(
 
   const collaborators = collaboratorsQuery.data;
   const directUsers = collaborators?.directUsers ?? EMPTY_DIRECT_USERS;
-  const teams = collaborators?.teams ?? EMPTY_TEAMS;
-  const teamRows = useMemo(
-    () => buildTeamRows(teams, shareableTeams, isOwner),
-    [isOwner, teams, shareableTeams],
+  const { ownerTeam, teamRows, sharedTeamCount } = useTeamAccessRows(
+    collaborators,
+    shareableTeams,
+    isOwner,
   );
   const isLoading = computeIsLoading(collaboratorsQuery);
   const loadState = buildSharingAccessLoadState(
@@ -466,6 +468,7 @@ export function useEpicSharingPanelController(
     ),
     peopleProps: {
       loadState,
+      ownerTeam,
       collaborators: directUsers,
       accessPermission: isOwner ? "owner" : "read_only",
       directOwnerCount,
@@ -483,8 +486,10 @@ export function useEpicSharingPanelController(
     teamHint: buildTeamHint({
       isLoading,
       isError: collaboratorsQuery.isError,
-      sharedCount: teams.length,
-      availableCount: isOwner ? shareableTeams.length : 0,
+      sharedCount: sharedTeamCount,
+      // The rows the Teams section offers: the unshared teams for an owner
+      // (never the owning team), none for anyone else.
+      availableCount: teamRows.length,
       cloudAuthorized,
     }),
     teamsProps: {
@@ -580,13 +585,64 @@ function sharingPanelReducer(
   }
 }
 
+function useTeamAccessRows(
+  collaborators: EpicCollaboratorsView | undefined,
+  shareableTeams: ReadonlyArray<EpicShareableTeam>,
+  isOwner: boolean,
+): {
+  readonly ownerTeam: OwnerTeamRow | null;
+  readonly teamRows: ReadonlyArray<TeamRow>;
+  readonly sharedTeamCount: number;
+} {
+  const teams = collaborators?.teams ?? EMPTY_TEAMS;
+  const ownerTeamView = collaborators?.ownerTeam ?? null;
+  const ownerTeam = useMemo(
+    () => buildOwnerTeamRow(ownerTeamView, shareableTeams),
+    [ownerTeamView, shareableTeams],
+  );
+  const teamRows = useMemo(
+    () =>
+      buildTeamRows(
+        teams,
+        shareableTeams,
+        isOwner,
+        ownerTeamView?.teamId ?? null,
+      ),
+    [isOwner, ownerTeamView, teams, shareableTeams],
+  );
+  return { ownerTeam, teamRows, sharedTeamCount: teams.length };
+}
+
+function buildOwnerTeamRow(
+  team: EpicTeamCollaboratorView | null,
+  shareableTeams: ReadonlyArray<EpicShareableTeam>,
+): OwnerTeamRow | null {
+  if (team === null) return null;
+  const shareable = shareableTeams.find(
+    (candidate) => candidate.teamId === team.teamId,
+  );
+  return {
+    teamId: team.teamId,
+    name: team.teamName,
+    avatarUrl: shareable?.avatarUrl ?? null,
+    memberCount: team.members.length,
+  };
+}
+
+/**
+ * The "Teams" section's rows. The team that OWNS the task (`ownerTeamId`) is
+ * not among them: it is the Owner row of "People with access", and offering
+ * to share the task with its owner would be a control that cannot apply.
+ */
 function buildTeamRows(
   teams: ReadonlyArray<EpicTeamCollaboratorView>,
   shareableTeams: ReadonlyArray<EpicShareableTeam>,
   includeUnsharedTeams: boolean,
+  ownerTeamId: string | null,
 ): ReadonlyArray<TeamRow> {
   const teamsById = new Map(shareableTeams.map((team) => [team.teamId, team]));
   const sharedIds = new Set(teams.map((team) => team.teamId));
+  if (ownerTeamId !== null) sharedIds.add(ownerTeamId);
   return [
     ...teams.map((team): TeamRow => {
       const shareable = teamsById.get(team.teamId);

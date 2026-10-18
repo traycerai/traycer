@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { HOST_START_LAUNCHER_BASENAME } from "@traycer-clients/shared/host-lifecycle";
 import type { Environment } from "../runner/environment";
 import { devDesktopSlotForEnvironment } from "../store/dev-desktop-slot";
+import { traycerHomeDir } from "../store/paths";
 
 // A `ServiceLabel` namespaces an OS-service registration (LaunchAgent /
 // systemd unit / Scheduled Task) so hosts for different environments can
@@ -132,7 +133,8 @@ export function serviceManifestPath(label: ServiceLabel): string {
 }
 
 // On-disk home of the macOS launcher file the LaunchAgent executes
-// (`~/.traycer/service/<label-id>/traycer-host-start`). The label id is the
+// (`<data root>/service/<label-id>/traycer-host-start`, `~/.traycer/...` by
+// default). The label id is the
 // parent directory - load-bearing, not tidiness: the shared recognizer
 // (`attestTraycerRegistration`) matches a launcher-form plist to a label by
 // finding `/<label-id>/` in `ProgramArguments[0]`, and the basename is the
@@ -140,8 +142,7 @@ export function serviceManifestPath(label: ServiceLabel): string {
 // the plist and removed by `service uninstall`.
 export function serviceLauncherScriptPath(label: ServiceLabel): string {
   return join(
-    homedir(),
-    ".traycer",
+    traycerHomeDir(),
     "service",
     label.id,
     HOST_START_LAUNCHER_BASENAME,

@@ -1,7 +1,7 @@
 import { constants as fsConstants } from "node:fs";
 import { chmod, lstat, mkdir, open, stat } from "node:fs/promises";
-import { homedir } from "node:os";
 import { join } from "node:path";
+import { traycerDataRoot } from "@traycer/protocol/config/data-root";
 import { hostStopIntentPath as sharedHostStopIntentPath } from "@traycer/protocol/config/host-stop-intent";
 import {
   cliInvocationLifecyclePath as sharedCliInvocationLifecyclePath,
@@ -22,7 +22,9 @@ import {
 import type { Environment } from "../runner/environment";
 import { devDesktopSlotForEnvironment } from "./dev-desktop-slot";
 
-// ~/.traycer/ is the single Traycer root. Per the Native Packaging
+// The data root (`~/.traycer/` unless `~/.traycer-bootstrap/location.json`
+// selects another, see `@traycer/protocol/config/data-root`) is the single
+// Traycer root. Per the Native Packaging
 // tech plan, prod and dev *components* are siblings inside it rather
 // than under sibling root dirs like ~/.traycer-dev - that way a user
 // sees the full install surface in one tree.
@@ -52,9 +54,12 @@ import { devDesktopSlotForEnvironment } from "./dev-desktop-slot";
 //   ~/.traycer/host/dev-runs/<slot>/         - multi-run dev host runtime root
 //   ~/.traycer/host/dev-runs/<slot>/install/install.json - multi-run dev install record
 //   ~/.traycer/host/dev-runs/<slot>/install-staging/     - multi-run dev staging root
-const TRAYCER_HOME = join(homedir(), ".traycer");
-const CLI_HOME = join(TRAYCER_HOME, "cli");
-const HOST_HOME = join(TRAYCER_HOME, "host");
+//
+// Resolved at every call, never captured at module load: the location record
+// must be read before any path is derived, and an import alone must never
+// throw on an unreadable record (recovery commands still have to load).
+const cliHome = (): string => join(traycerDataRoot(), "cli");
+const hostHome = (): string => join(traycerDataRoot(), "host");
 // The host install temp/extract area (verify-before-replace), kept distinct
 // from the host root. Named "install-staging" for clarity. Also the root
 // under which `host download`'s owner-tokened download/extract temp dirs
@@ -134,14 +139,14 @@ function devRunSubdir(base: string, slot: string): string {
   return join(base, DEV_RUNS_SUBDIR, slot);
 }
 
-export const traycerHomeDir = (): string => TRAYCER_HOME;
+export const traycerHomeDir = (): string => traycerDataRoot();
 // Shared (non-environment) config surface. `cliConfigPath`
 // (~/.traycer/cli/config.json) holds machine-local shell/env config that is
 // genuinely environment-agnostic, so it stays at the shared root and is owned
 // by `@traycer/protocol/config` (the CLI and the host resolve the exact same
 // file); re-exported here for the CLI's existing callers.
 export { cliConfigPath } from "@traycer/protocol/config/paths";
-export const cliSharedHomeDir = (): string => CLI_HOME;
+export const cliSharedHomeDir = (): string => cliHome();
 
 // Credentials are environment-scoped (production → shared root, dev/staging →
 // the slot subdir, matching `cliHomeDir`). The path now lives in
@@ -156,8 +161,8 @@ export function cliHomeDir(environment: Environment | undefined): string {
   // CLI home as a shared root. Environment-aware callers (manifest, lock,
   // log, post-finalize marker) use `cliInstallHomeDir` below so multi-run dev
   // can isolate install surfaces without moving shared auth/config state.
-  if (environment === undefined) return CLI_HOME;
-  return environmentSubdir(CLI_HOME, environment);
+  if (environment === undefined) return cliHome();
+  return environmentSubdir(cliHome(), environment);
 }
 
 export function cliInstallHomeDir(environment: Environment): string {
@@ -178,7 +183,7 @@ export function cliInstallHomeDir(environment: Environment): string {
  * read. See `chat-part-cache.ts` for why deleting it is always safe.
  */
 export function cliChatPartCacheDir(): string {
-  return join(CLI_HOME, "chat-parts");
+  return join(cliHome(), "chat-parts");
 }
 
 export function cliManifestPath(environment: Environment): string {
@@ -211,10 +216,10 @@ export function cliPostFinalizeMarkerPath(environment: Environment): string {
 // `undefined` and resolve to the production root - host bootstrap is
 // production-only, so environment is not threaded through that flow.
 export function hostHomeDir(environment: Environment | undefined): string {
-  if (environment === undefined) return HOST_HOME;
+  if (environment === undefined) return hostHome();
   const devSlot = devDesktopSlotForEnvironment(environment, process.env);
-  if (devSlot !== null) return devRunSubdir(HOST_HOME, devSlot);
-  return environmentSubdir(HOST_HOME, environment);
+  if (devSlot !== null) return devRunSubdir(hostHome(), devSlot);
+  return environmentSubdir(hostHome(), environment);
 }
 
 // On-disk contracts written by the host and read here by string path -
@@ -318,16 +323,18 @@ export function hostCredentialPath(
  *
  * So the verdict rests on the guard being unreachable from here, not on the
  * value surviving untouched, and it is unreachable for a reason worth stating
- * as two constants. `HOST_HOME = join(TRAYCER_HOME, "host")` above is not
- * env-configurable, and every arm of this module's `hostHomeDir` roots there -
+ * as one resolver. `hostHome()` above is `<data root>/host`, the data root is
+ * `traycerDataRoot()` (the persisted location record, never an environment
+ * variable), and every arm of this module's `hostHomeDir` roots there -
  * `dev-runs/<slot>` included. The host computes its `hostRoot` as
- * `hostHomeDir("production")` over its own `traycerHomeDir()`. Both sides
- * therefore root at the same constant, and a path this module produced cannot
- * fail the host's lexical containment check.
+ * `hostHomeDir("production")` over its own `traycerHomeDir()`, which is the
+ * same `traycerDataRoot()`. Both sides therefore root at the same record, and
+ * a path this module produced cannot fail the host's lexical containment
+ * check.
  *
  * WHAT WOULD BREAK IT, named so the dependency is visible to whoever makes the
- * change: giving `HOST_HOME` an environment override, or moving the host's
- * root off `traycerHomeDir()`. Either makes the two roots independently
+ * change: giving `hostHome()` an environment override, or moving either side's
+ * root off `traycerDataRoot()`. Either makes the two roots independently
  * configurable, at which point the silent-fallback branch becomes reachable
  * and this row's absence stops being evidence of anything.
  *
@@ -418,7 +425,7 @@ export function hostIdentityNeedsReauthPath(
  * knowledge that exists only inside that process.
  */
 export function hostDevIdentityPoolRoot(): string {
-  return join(HOST_HOME, HOST_DEV_SUBDIR, HOST_DEV_IDENTITIES_SUBDIR);
+  return join(hostHome(), HOST_DEV_SUBDIR, HOST_DEV_IDENTITIES_SUBDIR);
 }
 /**
  * The UNSLOTTED dev home (`~/.traycer/host/dev`).
@@ -430,7 +437,7 @@ export function hostDevIdentityPoolRoot(): string {
  * survey covers both because a slot's emptiness says nothing about it.
  */
 export function hostDevHomeDir(): string {
-  return join(HOST_HOME, HOST_DEV_SUBDIR);
+  return join(hostHome(), HOST_DEV_SUBDIR);
 }
 /**
  * Root of the dev run slots (`~/.traycer/host/dev-runs`), one `<slot>`
@@ -442,7 +449,7 @@ export function hostDevHomeDir(): string {
  * identity is never derived from here - see {@link hostDevIdentityPoolRoot}.
  */
 export function hostDevRunsRoot(): string {
-  return join(HOST_HOME, DEV_RUNS_SUBDIR);
+  return join(hostHome(), DEV_RUNS_SUBDIR);
 }
 /** Durable lifecycle-layer substrate selection (v1, temp+rename writes). */
 export function hostSubstratePath(
@@ -575,7 +582,7 @@ export function hostStagedRecordPath(environment: Environment): string {
 }
 
 export async function ensureTraycerHomeDir(): Promise<void> {
-  await mkdir(TRAYCER_HOME, { recursive: true });
+  await mkdir(traycerDataRoot(), { recursive: true });
 }
 
 // Environment-aware host home mkdir. Non-environment callers pass undefined to

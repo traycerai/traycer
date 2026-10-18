@@ -1,5 +1,8 @@
 import { CANVAS_STYLE_PROPERTIES } from "./canvas-bridge";
-import type { CanvasLayoutNode, CanvasSiblingLayout } from "./canvas-layout-bridge";
+import type {
+  CanvasLayoutNode,
+  CanvasSiblingLayout,
+} from "./canvas-layout-bridge";
 import type {
   CanvasBox,
   CanvasElement,
@@ -134,47 +137,87 @@ export function canvasBootstrap(config: CanvasBootstrapConfig): void {
     const elements = document.querySelectorAll(selector);
     return elements.length === 1 ? elements.item(0) : null;
   };
-  const px = (value: string): number | null => /^-?(?:\d+\.?\d*|\.\d+)px$/.test(value) ? Number.parseFloat(value) : null;
+  const px = (value: string): number | null =>
+    /^-?(?:\d+\.?\d*|\.\d+)px$/.test(value) ? Number.parseFloat(value) : null;
   const transformed = (element: Element): boolean => {
-    for (let node: Element | null = element; node !== null; node = node.parentElement) {
+    for (
+      let node: Element | null = element;
+      node !== null;
+      node = node.parentElement
+    ) {
       const style = getComputedStyle(node);
       if (style.transform !== "none" && style.transform !== "") return true;
-      if (style.zoom !== "1" && style.zoom !== "normal" && style.zoom !== "") return true;
+      if (
+        [style.translate, style.rotate, style.scale].some(
+          (value) => value !== "none" && value !== "",
+        )
+      )
+        return true;
+      if (style.zoom !== "1" && style.zoom !== "normal" && style.zoom !== "")
+        return true;
     }
     return false;
+  };
+  const insetOffset = (style: CSSStyleDeclaration, start: string, end: string): number | null =>
+    px(style.getPropertyValue(start)) ?? (style.position === "relative" ? -(px(style.getPropertyValue(end)) ?? 0) : null);
+  const layoutOffsets = (element: Element, style: CSSStyleDeclaration): { left: number | null; top: number | null } => {
+    // Resolved pixel sizes hide auto sizing: changing an inset can stretch the
+    // box. Typed computed values retain that distinction before layout.
+    const computed = typeof element.computedStyleMap === "function" ? element.computedStyleMap() : null;
+    const fixedSize = (property: string): boolean => {
+      const value = computed?.get(property)?.toString();
+      return value !== undefined && value !== "auto" && value !== "stretch" && !value.startsWith("fit-content");
+    };
+    const horizontal = (style.position !== "absolute" || fixedSize("width")) && !(style.position === "relative" && style.direction === "rtl" && computed?.get("right")?.toString() !== "auto");
+    const vertical = style.position !== "absolute" || fixedSize("height");
+    return { left: horizontal ? insetOffset(style, "left", "right") : null, top: vertical ? insetOffset(style, "top", "bottom") : null };
   };
   const layoutNode = (element: Element): CanvasLayoutNode => {
     const raw = element.getAttribute("data-traycer-pos");
     const marker = raw !== null && /^\d+$/.test(raw) ? Number(raw) : NaN;
     const style = getComputedStyle(element);
-    const relative = style.position === "relative";
     return {
       marker: Number.isSafeInteger(marker) ? marker : null,
       tid: element.getAttribute("data-tid")?.slice(0, 300) ?? null,
       tagName: element.tagName.toLowerCase().slice(0, 40),
       box: boxOf(element.getBoundingClientRect()),
       position: style.position,
-      left: px(style.left) ?? (relative ? -(px(style.right) ?? 0) : null),
-      top: px(style.top) ?? (relative ? -(px(style.bottom) ?? 0) : null),
-      cssWidth: px(style.width), cssHeight: px(style.height),
+      ...layoutOffsets(element, style),
+      cssWidth: px(style.width),
+      cssHeight: px(style.height),
       transformed: transformed(element),
     };
   };
-  const siblingLayout = (params: Record<string, unknown>): CanvasSiblingLayout | null => {
+  const siblingLayout = (
+    params: Record<string, unknown>,
+  ): CanvasSiblingLayout | null => {
     const element = locate(params);
     const parent = element?.parentElement;
     if (parent === null || parent === undefined) return null;
     const style = getComputedStyle(parent);
-    const row = style.display.includes("flex") && style.flexDirection.startsWith("row");
-    const horizontal = row || (style.display.includes("grid") && !style.gridAutoFlow.startsWith("column"));
+    const row =
+      style.display.includes("flex") && style.flexDirection.startsWith("row");
+    const nodes = Array.from(parent.children).slice(0, 256).map(layoutNode);
+    const first = nodes.at(0)?.box;
+    const second = nodes.at(1)?.box;
+    const gridRow =
+      style.display.includes("grid") &&
+      first !== undefined &&
+      second !== undefined &&
+      Math.abs(second.x - first.x) > Math.abs(second.y - first.y);
+    const horizontal = row || gridRow;
     const layout: CanvasSiblingLayout = {
       parent: layoutNode(parent),
-      siblings: Array.from(parent.children).slice(0, 256).map(layoutNode),
+      siblings: nodes,
       axis: horizontal ? "x" : "y",
-      reverse: style.flexDirection.endsWith("reverse") !== (horizontal && style.direction === "rtl"),
+      reverse:
+        style.flexDirection.endsWith("reverse") !==
+        (horizontal && style.direction === "rtl"),
       truncated: parent.children.length > 256,
     };
-    return new TextEncoder().encode(JSON.stringify(layout)).length <= 240_000 ? layout : null;
+    return new TextEncoder().encode(JSON.stringify(layout)).length <= 240_000
+      ? layout
+      : null;
   };
   const textSnapshot = (element: Element): CanvasTextSnapshot | null => {
     const content = element.textContent;

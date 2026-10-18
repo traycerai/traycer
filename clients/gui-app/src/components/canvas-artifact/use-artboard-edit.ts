@@ -1,3 +1,4 @@
+import { isCanvasStructureEdit } from "./canvas-structure-identity";
 import type { HostRpcRegistry } from "@traycer/protocol/host";
 import type {
   ArtboardEdit,
@@ -16,9 +17,36 @@ import {
 export interface CanvasEditVariables {
   readonly selection: CanvasSelection;
   readonly edit: ArtboardEdit;
+  readonly structureGeneration?: number;
 }
 interface CanvasEditContext {
   readonly hostId: string | null;
+}
+function canReuseSelection(
+  current: CanvasSelection | null,
+  selection: CanvasSelection,
+): current is CanvasSelection {
+  return (
+    current !== null &&
+    current.artifactId === selection.artifactId &&
+    current.boardPath === selection.boardPath &&
+    sameCanvasElement(current.element, selection.element) &&
+    (current.servedSha256 === selection.servedSha256 ||
+      (selection.element.tid !== null &&
+        current.element.tid === selection.element.tid))
+  );
+}
+function structureSelectionIsCurrent(
+  selection: CanvasSelection,
+  generation: number | undefined,
+): boolean {
+  const state = useCanvasSelectionStore.getState();
+  return (
+    state.pendingPick === null &&
+    state.generation === generation &&
+    canReuseSelection(state.selection, selection) &&
+    state.selection.servedSha256 === selection.servedSha256
+  );
 }
 
 export function useArtboardEdit(artifactId: string) {
@@ -32,23 +60,28 @@ export function useArtboardEdit(artifactId: string) {
   >({
     client,
     method: "epic.editArtboard",
-    mapVariables: ({ selection, edit }): EpicEditArtboardRequest => {
+    mapVariables: ({
+      selection,
+      edit,
+      structureGeneration,
+    }): EpicEditArtboardRequest => {
       if (selection.artifactId !== artifactId)
         throw new Error("Select an element to edit.");
       const current = useCanvasSelectionStore.getState().selection;
+      const structural = isCanvasStructureEdit(edit);
+      if (
+        structural &&
+        !structureSelectionIsCurrent(selection, structureGeneration)
+      )
+        throw new Error("The selection changed. Select the elements again.");
       // A previous queued edit may have inserted its tid. Reuse that identity,
       // but never borrow a new selection's offset or its served revision.
-      const element =
-        current?.artifactId === artifactId &&
-        current.boardPath === selection.boardPath &&
-        sameCanvasElement(current.element, selection.element) &&
-        (current.servedSha256 === selection.servedSha256 ||
-          (selection.element.tid !== null &&
-            current.element.tid === selection.element.tid))
-          ? current.element
-          : selection.element;
+      const element = canReuseSelection(current, selection)
+        ? current.element
+        : selection.element;
       let locator: ArtboardElementLocator | null = null;
-      if (element.tid !== null) locator = { kind: "tid", tid: element.tid };
+      if (element.tid !== null && !structural)
+        locator = { kind: "tid", tid: element.tid };
       else if (selection.element.marker !== null)
         locator = {
           kind: "position",
@@ -75,24 +108,30 @@ export function useArtboardEdit(artifactId: string) {
       },
       retry: false,
       onMutate: () => ({ hostId: client?.getActiveHostId() ?? null }),
-      onSuccess: (result, { selection, edit }, context) => {
+      onSuccess: (
+        result,
+        { selection, edit, structureGeneration },
+        context,
+      ) => {
         if (!result.ok || context.hostId !== client?.getActiveHostId()) return;
         const state = useCanvasSelectionStore.getState();
-        const current = state.selection;
         if (
-          current?.artifactId !== artifactId ||
-          current.boardPath !== selection.boardPath ||
-          !sameCanvasElement(current.element, selection.element) ||
-          (current.servedSha256 !== selection.servedSha256 &&
-            (selection.element.tid === null ||
-              current.element.tid !== selection.element.tid))
+          isCanvasStructureEdit(edit) &&
+          state.generation !== structureGeneration
         )
           return;
-        if (edit.kind === "delete-element" || edit.kind === "unwrap-element") state.clear();
+        const current = state.selection;
+        if (!canReuseSelection(current, selection)) return;
+        if (edit.kind === "delete-element" || edit.kind === "unwrap-element")
+          state.clear();
         else if (edit.kind === "wrap-elements" && result.tid !== null)
           // Adopt the new wrapper's identity; the next served frame supplies
           // its description and geometry. Added children stop being selected.
-          state.select({ ...current, element: { ...current.element, tid: result.tid }, textRange: null });
+          state.select({
+            ...current,
+            element: { ...current.element, marker: null, tid: result.tid },
+            textRange: null,
+          });
         else if (result.tid !== null)
           state.updateTid(
             artifactId,

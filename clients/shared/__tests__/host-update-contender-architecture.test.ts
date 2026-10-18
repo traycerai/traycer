@@ -55,6 +55,14 @@ const RAW_ACTUATOR_ALLOWLIST = new Set([
   "src/electron-main/host/update-mutation.ts",
   "src/electron-main/app/host-login-item.ts",
   "src/store/well-known-cli.ts",
+  // The data-folder migration's facade for the host's Scheduled Task. It
+  // rewrites a task definition only while the migration coordinator lock and
+  // startup barrier keep every host and updater off. Each write goes through
+  // the windows-task-gate ownership gate as a compare-and-set on the whole
+  // definition. It cannot take the host-update contender: that contender's
+  // records live in the frozen source folder, which the migration re-verifies
+  // byte for byte after these writes.
+  "src/data-migration/external-actions/windows-task-actions.ts",
   // Packaging/dev scripts invoke platform tools for bundle production, not
   // host update mutations.
   "scripts/dev/electron-binary.cjs",

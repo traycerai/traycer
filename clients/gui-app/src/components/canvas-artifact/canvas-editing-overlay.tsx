@@ -126,7 +126,10 @@ export function CanvasEditingOverlay(props: {
   readonly scope: CanvasAnnotationScope;
   readonly boardPath: string;
   readonly registry: CanvasFrameRegistry;
-  readonly onPick: (path: string, point: { x: number; y: number; additive?: boolean }) => void;
+  readonly onPick: (
+    path: string,
+    point: { x: number; y: number; additive?: boolean },
+  ) => void;
   readonly onRetire: (path: string) => void;
 }) {
   useSyncExternalStore(props.registry.subscribe, props.registry.getSnapshot);
@@ -137,7 +140,9 @@ export function CanvasEditingOverlay(props: {
       : null,
   );
   const generation = useCanvasSelectionStore((state) => state.generation);
-  const additional = useCanvasSelectionStore((state) => state.additionalElements);
+  const additional = useCanvasSelectionStore(
+    (state) => state.additionalElements,
+  );
   const document = useCanvasBoardDocument(
     props.scope.artifactId,
     props.boardPath,
@@ -166,7 +171,18 @@ export function CanvasEditingOverlay(props: {
   return (
     <CanvasSelectionOverlay
       {...props}
-      controls={<>{controls}{selection !== null && request === null ? <CanvasStructureOverlay selection={selection} registry={props.registry} document={document.data ?? null} /> : null}</>}
+      controls={
+        <>
+          {controls}
+          {selection !== null && request === null ? (
+            <CanvasStructureOverlay
+              selection={selection}
+              registry={props.registry}
+              document={document.data ?? null}
+            />
+          ) : null}
+        </>
+      }
       actionControls={
         request === null && selection !== null && additional.length === 0 ? (
           <CanvasTextToolbar
@@ -176,7 +192,7 @@ export function CanvasEditingOverlay(props: {
           />
         ) : null
       }
-      hideAction={request !== null}
+      hideAction={request !== null || additional.length > 0}
       hideHandles
     />
   );

@@ -16,6 +16,7 @@ import {
   RoleOrBadge,
 } from "./role-control";
 import type {
+  OwnerTeamRow,
   TeamPendingState,
   TeamRow,
   SharingAccessLoadState,
@@ -29,6 +30,9 @@ import { formatGithubHandle } from "@/lib/epic-invites";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 export interface PeopleWithAccessProps {
   readonly loadState: SharingAccessLoadState;
+  /** The team that owns the task through its environment, or `null` when a
+   * person owns it (their row is among `collaborators`). */
+  readonly ownerTeam: OwnerTeamRow | null;
   readonly collaborators: ReadonlyArray<EpicCollaboratorView>;
   readonly accessPermission: SharingAccessPermission;
   readonly directOwnerCount: number;
@@ -95,7 +99,7 @@ export function PeopleWithAccess(props: PeopleWithAccessProps) {
       />
     );
   }
-  if (props.collaborators.length === 0) {
+  if (props.ownerTeam === null && props.collaborators.length === 0) {
     return (
       <SharingEmpty
         icon={<UserPlus className="size-3.5" />}
@@ -108,6 +112,9 @@ export function PeopleWithAccess(props: PeopleWithAccessProps) {
       className="flex flex-col divide-y divide-border/50"
       data-testid="epic-sharing-people-list"
     >
+      {props.ownerTeam === null ? null : (
+        <OwnerTeamAccessRow row={props.ownerTeam} />
+      )}
       {props.collaborators.map((collaborator) => (
         <CollaboratorRow
           key={collaborator.key}
@@ -241,6 +248,43 @@ function SharingEmpty(props: { icon: ReactNode; label: string }) {
       {props.icon}
       {props.label}
     </p>
+  );
+}
+
+/**
+ * The team that owns the task (Tracy Bots): the Owner row, named for the team.
+ * Its members are owners through it, so the row carries no role control and
+ * no remove - nobody is removed from or demoted on a task the team owns.
+ */
+function OwnerTeamAccessRow(props: { readonly row: OwnerTeamRow }) {
+  const { row } = props;
+  return (
+    <li
+      className="flex items-center gap-3 py-2.5 first:pt-0 last:pb-0"
+      data-testid="epic-sharing-owner-team-row"
+      data-team-id={row.teamId}
+    >
+      <Avatar size="sm">
+        {row.avatarUrl !== null ? (
+          <AvatarImage src={row.avatarUrl} alt="" />
+        ) : null}
+        <AvatarFallback>{row.name.slice(0, 1).toUpperCase()}</AvatarFallback>
+      </Avatar>
+      <div className="min-w-0 flex-1">
+        <p className="truncate text-ui-sm font-medium text-foreground">
+          {row.name}
+        </p>
+        <p className="truncate text-ui-xs text-muted-foreground">
+          Owner · {buildMemberLabel(row.memberCount)}
+        </p>
+      </div>
+      <span
+        className={ROLE_PILL_CLASS}
+        data-testid="epic-sharing-owner-team-role"
+      >
+        Team
+      </span>
+    </li>
   );
 }
 

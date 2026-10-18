@@ -197,7 +197,12 @@ export function HarnessModelPickerPanel(props: HarnessModelPickerPanelProps) {
       // Both halves have to move together or the gate is a no-op.
       onOpenAutoFocus={coarseOpenAutoFocus}
       onKeyDown={(event) => {
-        if (isInsideEmbeddingFooter(event.target)) return;
+        if (
+          isInsideEmbeddingFooter(event.target) ||
+          isInsideSpeedMenu(event.target)
+        ) {
+          return;
+        }
         onKeyDown(event);
       }}
       onEscapeKeyDown={(event) => {
@@ -416,5 +421,13 @@ function isInsideEmbeddingFooter(target: EventTarget): boolean {
   return (
     target instanceof Element &&
     target.closest(EMBEDDING_FOOTER_SELECTOR) !== null
+  );
+}
+
+/** Radix owns keyboard input inside the Speed trigger and its portalled menu. */
+function isInsideSpeedMenu(target: EventTarget): boolean {
+  return (
+    target instanceof Element &&
+    target.closest("[data-picker-speed-menu]") !== null
   );
 }
