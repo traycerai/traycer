@@ -640,6 +640,13 @@ function buildFakeBridge(
       reportGuestViewportResult: async () => undefined,
       reportAnnotationAttachResult: async () => undefined,
     },
+    sandboxArtifacts: {
+      register: async () => undefined,
+      unregister: async () => undefined,
+      onRequest: (_handler) => ({ dispose: () => undefined }),
+      onCancel: (_handler) => ({ dispose: () => undefined }),
+      respond: async () => undefined,
+    },
     hostManagement: {
       getHostControllerStatus: async () => {
         throw new Error("getHostControllerStatus not used in test");

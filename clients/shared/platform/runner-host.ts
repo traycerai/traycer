@@ -1,3 +1,4 @@
+import type { SandboxArtifactBridge } from "./sandbox-artifacts";
 import type {
   NotificationFeedDeliveryResult,
   NotificationFeedOccurrence,
@@ -125,6 +126,9 @@ export interface IRunnerHost {
 
   /** Complete native browser capability, or null on shells without one. */
   readonly browserView: BrowserViewBridge | null;
+
+  /** Serves mounted artifact files to sandbox frames, or null without a native scheme. */
+  readonly sandboxArtifacts: SandboxArtifactBridge | null;
 
   /**
    * Browser-safe sign-in URL the shell wants `gui-app` to open when the

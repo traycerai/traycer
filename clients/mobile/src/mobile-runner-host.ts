@@ -265,6 +265,7 @@ export class MobileRunnerHost implements IRunnerHost {
   // No local host, so no lifecycle policy to configure.
   readonly hostLifecycle = null;
   readonly browserView = null;
+  readonly sandboxArtifacts = null;
   readonly linkCodeScanner: ILinkCodeScanner | null;
   readonly deviceDescriber: IDeviceDescriber | null;
   readonly linkLoginDeepLinks: ILinkLoginDeepLinkSource | null;

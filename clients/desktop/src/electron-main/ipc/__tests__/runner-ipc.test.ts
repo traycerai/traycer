@@ -436,11 +436,17 @@ async function replyFreshSnapshot(
 }
 
 function sender(webContentsId: number): {
-  readonly sender: { readonly id: number };
+  // A real `WebContents` is an `EventEmitter` - `sandbox-artifact-ipc.ts`
+  // attaches `render-process-gone` / `did-start-navigation` / `destroyed`
+  // listeners directly to `event.sender` on first mount registration, so
+  // this double has to support `.on`/`.removeListener` too, not just carry
+  // an `id`. Every existing call site still gets exactly the `{id}` shape
+  // it type-checked against before - this only adds capability.
+  readonly sender: EventEmitter & { readonly id: number };
   readonly senderFrame: { readonly parent: null };
 } {
   return {
-    sender: { id: webContentsId },
+    sender: Object.assign(new EventEmitter(), { id: webContentsId }),
     // The bridge's IPC trust check rejects requests without a top-frame
     // `senderFrame`. Real Electron events always populate this; tests
     // must too so the same code path runs unmodified across dev / prod
@@ -579,6 +585,9 @@ describe("RunnerIpcBridge", () => {
       const channels = Array.from(ipcMainState.handlers.keys()).sort();
       expect(channels).toEqual(
         [
+          RunnerHostInvoke.sandboxArtifactRegister,
+          RunnerHostInvoke.sandboxArtifactUnregister,
+          RunnerHostInvoke.sandboxArtifactRespond,
           RunnerHostInvoke.workspaceFoldersPick,
           RunnerHostInvoke.validateAuthTokenIdentity,
           RunnerHostInvoke.deviceFlowStart,
@@ -5594,3 +5603,503 @@ class DeferredPerWindowState implements IpcPerWindowState {
     this.events.off(event, listener);
   }
 }
+
+/**
+ * Finds the sandbox artifact IPC handlers `registerSandboxArtifactIpc`
+ * installed via `bridge.install()`, reusing the same real `RunnerIpcBridge`
+ * and mocked `ipcMain` this whole suite already builds - no second set of
+ * fixtures, so the sender-trust check in `handleInvoke` is the REAL one, not
+ * a double that skips it.
+ */
+function sandboxArtifactHandlers(): {
+  readonly register: InvokeHandler;
+  readonly unregister: InvokeHandler;
+  readonly respond: InvokeHandler;
+} {
+  const register = ipcMainState.handlers.get(
+    RunnerHostInvoke.sandboxArtifactRegister,
+  );
+  const unregister = ipcMainState.handlers.get(
+    RunnerHostInvoke.sandboxArtifactUnregister,
+  );
+  const respond = ipcMainState.handlers.get(
+    RunnerHostInvoke.sandboxArtifactRespond,
+  );
+  if (
+    register === undefined ||
+    unregister === undefined ||
+    respond === undefined
+  ) {
+    throw new Error("sandbox artifact IPC handlers missing");
+  }
+  return { register, unregister, respond };
+}
+
+function sandboxArtifactRequestIdSentTo(window: CapturingWindow): string {
+  const sent = window.sentMessages.find(
+    (m) => m.channel === RunnerHostEvent.sandboxArtifactRequest,
+  );
+  if (sent === undefined) {
+    throw new Error("no sandboxArtifactRequest was sent to this window");
+  }
+  return (sent.payload as { readonly requestId: string }).requestId;
+}
+
+describe("RunnerIpcBridge: sandbox artifact IPC", () => {
+  it("register/respond: a trusted sender registers a mount and its reply settles the pending fetch", async () => {
+    const mod = await import("../register-runner-ipc");
+    const registry = new FakeWindowRegistry();
+    const windowA = buildWindow();
+    registry.add("window-a", 101, windowA);
+    const bridge = new mod.RunnerIpcBridge({
+      host: new FakeHost(),
+      hostController: new FakeHostController(),
+      authnBaseUrl: "http://localhost:5005",
+      authRedirectUri: null,
+      tray: null,
+      zoomController: undefined,
+      authTokenStore: undefined,
+      windowRegistry: registry,
+      ownership: new EpicWindowOwnership(null),
+      perWindowState: new PerWindowState(null),
+      authSession: new DesktopAuthSession(),
+      quitState: undefined,
+    });
+    bridge.install();
+    const { register, respond } = sandboxArtifactHandlers();
+
+    await Promise.resolve(register(sender(101), "mount1"));
+    expect(bridge.sandboxArtifacts.ownsMount("mount1", "window-a")).toBe(true);
+
+    const pending = bridge.sandboxArtifacts.fetch(
+      new Request("traycer-sandbox://artifact-report--mount1/index.html"),
+    );
+    const requestId = sandboxArtifactRequestIdSentTo(windowA);
+
+    await Promise.resolve(
+      respond(sender(101), {
+        requestId,
+        kind: "bytes",
+        bytes: new Uint8Array(10),
+        offset: 0,
+        totalBytes: 10,
+        mediaType: "text/html",
+      }),
+    );
+
+    const response = await pending;
+    expect(response.status).toBe(200);
+    bridge.dispose();
+  });
+
+  it("unregister no-ops for a sender that does not own the mount, removes it for the owner", async () => {
+    const mod = await import("../register-runner-ipc");
+    const registry = new FakeWindowRegistry();
+    const windowA = buildWindow();
+    const windowB = buildWindow();
+    registry.add("window-a", 101, windowA);
+    registry.add("window-b", 202, windowB);
+    const bridge = new mod.RunnerIpcBridge({
+      host: new FakeHost(),
+      hostController: new FakeHostController(),
+      authnBaseUrl: "http://localhost:5005",
+      authRedirectUri: null,
+      tray: null,
+      zoomController: undefined,
+      authTokenStore: undefined,
+      windowRegistry: registry,
+      ownership: new EpicWindowOwnership(null),
+      perWindowState: new PerWindowState(null),
+      authSession: new DesktopAuthSession(),
+      quitState: undefined,
+    });
+    bridge.install();
+    const { register, unregister } = sandboxArtifactHandlers();
+    await Promise.resolve(register(sender(101), "mount1"));
+
+    await Promise.resolve(unregister(sender(202), "mount1"));
+    expect(bridge.sandboxArtifacts.ownsMount("mount1", "window-a")).toBe(true);
+
+    await Promise.resolve(unregister(sender(101), "mount1"));
+    expect(bridge.sandboxArtifacts.ownsMount("mount1", "window-a")).toBe(false);
+    bridge.dispose();
+  });
+
+  it("respond: a reply attributed to the wrong window is dropped; the owning window's reply settles the fetch", async () => {
+    const mod = await import("../register-runner-ipc");
+    const registry = new FakeWindowRegistry();
+    const windowA = buildWindow();
+    registry.add("window-a", 101, windowA);
+    const bridge = new mod.RunnerIpcBridge({
+      host: new FakeHost(),
+      hostController: new FakeHostController(),
+      authnBaseUrl: "http://localhost:5005",
+      authRedirectUri: null,
+      tray: null,
+      zoomController: undefined,
+      authTokenStore: undefined,
+      windowRegistry: registry,
+      ownership: new EpicWindowOwnership(null),
+      perWindowState: new PerWindowState(null),
+      authSession: new DesktopAuthSession(),
+      quitState: undefined,
+    });
+    bridge.install();
+    const { register, respond } = sandboxArtifactHandlers();
+    await Promise.resolve(register(sender(101), "mount1"));
+
+    const pending = bridge.sandboxArtifacts.fetch(
+      new Request("traycer-sandbox://artifact-report--mount1/index.html"),
+    );
+    const requestId = sandboxArtifactRequestIdSentTo(windowA);
+
+    // A registered window still cannot answer another window's request.
+    registry.add("window-b", 202, buildWindow());
+    await Promise.resolve(
+      respond(sender(202), {
+        requestId,
+        kind: "bytes",
+        bytes: new Uint8Array(999),
+        offset: 0,
+        totalBytes: 999,
+        mediaType: "text/html",
+      }),
+    );
+
+    await Promise.resolve(
+      respond(sender(101), {
+        requestId,
+        kind: "bytes",
+        bytes: new Uint8Array(10),
+        offset: 0,
+        totalBytes: 10,
+        mediaType: "text/html",
+      }),
+    );
+
+    const response = await pending;
+    expect(response.status).toBe(200);
+    // Proves the wrong-window reply (totalBytes 999) never took effect.
+    expect(response.headers.get("Content-Length")).toBe("10");
+    bridge.dispose();
+  });
+
+  it("respond: a malformed payload is ignored rather than thrown", async () => {
+    const mod = await import("../register-runner-ipc");
+    const registry = new FakeWindowRegistry();
+    registry.add("window-a", 101, buildWindow());
+    const bridge = new mod.RunnerIpcBridge({
+      host: new FakeHost(),
+      hostController: new FakeHostController(),
+      authnBaseUrl: "http://localhost:5005",
+      authRedirectUri: null,
+      tray: null,
+      zoomController: undefined,
+      authTokenStore: undefined,
+      windowRegistry: registry,
+      ownership: new EpicWindowOwnership(null),
+      perWindowState: new PerWindowState(null),
+      authSession: new DesktopAuthSession(),
+      quitState: undefined,
+    });
+    bridge.install();
+    const { respond } = sandboxArtifactHandlers();
+
+    await expect(
+      Promise.resolve(respond(sender(101), { nonsense: true })),
+    ).resolves.toBeUndefined();
+    bridge.dispose();
+  });
+
+  it("refuses a reply from an untrusted (subframe) sender", async () => {
+    const mod = await import("../register-runner-ipc");
+    const registry = new FakeWindowRegistry();
+    registry.add("window-a", 101, buildWindow());
+    const bridge = new mod.RunnerIpcBridge({
+      host: new FakeHost(),
+      hostController: new FakeHostController(),
+      authnBaseUrl: "http://localhost:5005",
+      authRedirectUri: null,
+      tray: null,
+      zoomController: undefined,
+      authTokenStore: undefined,
+      windowRegistry: registry,
+      ownership: new EpicWindowOwnership(null),
+      perWindowState: new PerWindowState(null),
+      authSession: new DesktopAuthSession(),
+      quitState: undefined,
+    });
+    bridge.install();
+    const { register, respond } = sandboxArtifactHandlers();
+
+    const subframeEvent = {
+      sender: { id: 101 },
+      // A non-null frame parent means the call came from a subframe, never
+      // the top frame `isTrustedIpcSender` requires.
+      senderFrame: { parent: {} },
+    };
+    expect(() => register(subframeEvent, "mount1")).toThrow(
+      "IPC sender not trusted for channel " +
+        RunnerHostInvoke.sandboxArtifactRegister,
+    );
+    expect(() => respond(subframeEvent, { requestId: "x" })).toThrow(
+      "IPC sender not trusted for channel " +
+        RunnerHostInvoke.sandboxArtifactRespond,
+    );
+    bridge.dispose();
+  });
+
+  it("markRendererUnavailable fails that window's pending sandbox artifact request", async () => {
+    const mod = await import("../register-runner-ipc");
+    const registry = new FakeWindowRegistry();
+    registry.add("window-a", 101, buildWindow());
+    const bridge = new mod.RunnerIpcBridge({
+      host: new FakeHost(),
+      hostController: new FakeHostController(),
+      authnBaseUrl: "http://localhost:5005",
+      authRedirectUri: null,
+      tray: null,
+      zoomController: undefined,
+      authTokenStore: undefined,
+      windowRegistry: registry,
+      ownership: new EpicWindowOwnership(null),
+      perWindowState: new PerWindowState(null),
+      authSession: new DesktopAuthSession(),
+      quitState: undefined,
+    });
+    bridge.install();
+    const { register } = sandboxArtifactHandlers();
+    await Promise.resolve(register(sender(101), "mount1"));
+
+    const pending = bridge.sandboxArtifacts.fetch(
+      new Request("traycer-sandbox://artifact-report--mount1/index.html"),
+    );
+
+    bridge.markRendererUnavailable("window-a");
+
+    const response = await pending;
+    expect(response.status).toBe(503);
+    bridge.dispose();
+  });
+
+  it("closing a window prunes its sandbox artifact mounts and fails its pending request, leaving another window's untouched", async () => {
+    const mod = await import("../register-runner-ipc");
+    const registry = new FakeWindowRegistry();
+    const windowA = buildWindow();
+    const windowB = buildWindow();
+    registry.add("window-a", 101, windowA);
+    registry.add("window-b", 202, windowB);
+    const bridge = new mod.RunnerIpcBridge({
+      host: new FakeHost(),
+      hostController: new FakeHostController(),
+      authnBaseUrl: "http://localhost:5005",
+      authRedirectUri: null,
+      tray: null,
+      zoomController: undefined,
+      authTokenStore: undefined,
+      windowRegistry: registry,
+      ownership: new EpicWindowOwnership(null),
+      perWindowState: new PerWindowState(null),
+      authSession: new DesktopAuthSession(),
+      quitState: undefined,
+    });
+    bridge.install();
+    const { register } = sandboxArtifactHandlers();
+    await Promise.resolve(register(sender(101), "mounta"));
+    await Promise.resolve(register(sender(202), "mountb"));
+
+    const pendingA = bridge.sandboxArtifacts.fetch(
+      new Request("traycer-sandbox://artifact-report--mounta/index.html"),
+    );
+
+    // The real registry-change wiring (`windows-ipc.ts`), not a direct call -
+    // this is what proves `pruneClosedWindowState` is actually reached when a
+    // window closes, not only that the method does the right thing in
+    // isolation.
+    await registry.closeById("window-a");
+
+    const response = await pendingA;
+    expect(response.status).toBe(503);
+    expect(bridge.sandboxArtifacts.ownsMount("mountb", "window-b")).toBe(true);
+    bridge.dispose();
+  });
+
+  /**
+   * The artifact-only-window lifecycle: on the FIRST mount registration for a
+   * window, `registerSandboxArtifactIpc` attaches `render-process-gone` /
+   * `did-start-navigation` / `destroyed` listeners directly to that window's
+   * `event.sender` (a real `WebContents` is an `EventEmitter`), because an
+   * artifact-only window may hold no browser session and so has no other
+   * lifecycle observer that would otherwise clean up its mounts. These tests
+   * drive that `EventEmitter` directly - no browser-sessions machinery
+   * involved - matching "artifact-only window, no browser sessions".
+   */
+  describe("direct window-lifecycle observation (artifact-only window)", () => {
+    async function setUp() {
+      const mod = await import("../register-runner-ipc");
+      const registry = new FakeWindowRegistry();
+      const windowA = buildWindow();
+      registry.add("window-a", 101, windowA);
+      const bridge = new mod.RunnerIpcBridge({
+        host: new FakeHost(),
+        hostController: new FakeHostController(),
+        authnBaseUrl: "http://localhost:5005",
+        authRedirectUri: null,
+        tray: null,
+        zoomController: undefined,
+        authTokenStore: undefined,
+        windowRegistry: registry,
+        ownership: new EpicWindowOwnership(null),
+        perWindowState: new PerWindowState(null),
+        authSession: new DesktopAuthSession(),
+        quitState: undefined,
+      });
+      bridge.install();
+      const { register } = sandboxArtifactHandlers();
+      const event = sender(101);
+      await Promise.resolve(register(event, "mount1"));
+      return { bridge, registry, windowA, event };
+    }
+
+    it("a crashed renderer (render-process-gone) drops its pending request", async () => {
+      const { bridge, event } = await setUp();
+      const pending = bridge.sandboxArtifacts.fetch(
+        new Request("traycer-sandbox://artifact-report--mount1/index.html"),
+      );
+      event.sender.emit("render-process-gone");
+      const response = await pending;
+      expect(response.status).toBe(503);
+      expect(bridge.sandboxArtifacts.ownsMount("mount1", "window-a")).toBe(
+        false,
+      );
+      bridge.dispose();
+    });
+
+    it("a real top-level navigation (did-start-navigation, not in-place) drops the pending request", async () => {
+      const { bridge, event } = await setUp();
+      const pending = bridge.sandboxArtifacts.fetch(
+        new Request("traycer-sandbox://artifact-report--mount1/index.html"),
+      );
+      // (_event, url, isInPlace, isMainFrame)
+      event.sender.emit(
+        "did-start-navigation",
+        {},
+        "https://example.com/",
+        false,
+        true,
+      );
+      const response = await pending;
+      expect(response.status).toBe(503);
+      expect(bridge.sandboxArtifacts.ownsMount("mount1", "window-a")).toBe(
+        false,
+      );
+      bridge.dispose();
+    });
+
+    it("ignores a subframe navigation - the mount and pending request survive", async () => {
+      const { bridge, windowA, event } = await setUp();
+      const pending = bridge.sandboxArtifacts.fetch(
+        new Request("traycer-sandbox://artifact-report--mount1/index.html"),
+      );
+      event.sender.emit(
+        "did-start-navigation",
+        {},
+        "https://example.com/",
+        false,
+        false, // isMainFrame: false
+      );
+      expect(bridge.sandboxArtifacts.ownsMount("mount1", "window-a")).toBe(
+        true,
+      );
+      const requestId = sandboxArtifactRequestIdSentTo(windowA);
+      await Promise.resolve(
+        bridge.sandboxArtifacts.respond(
+          {
+            requestId,
+            kind: "bytes",
+            bytes: new Uint8Array(10),
+            offset: 0,
+            totalBytes: 10,
+            mediaType: "text/html",
+          },
+          "window-a",
+        ),
+      );
+      const response = await pending;
+      expect(response.status).toBe(200);
+      bridge.dispose();
+    });
+
+    it("ignores an in-page (same-document) navigation - the mount and pending request survive", async () => {
+      const { bridge, windowA, event } = await setUp();
+      const pending = bridge.sandboxArtifacts.fetch(
+        new Request("traycer-sandbox://artifact-report--mount1/index.html"),
+      );
+      event.sender.emit(
+        "did-start-navigation",
+        {},
+        "https://example.com/#anchor",
+        true, // isInPlace: true
+        true,
+      );
+      expect(bridge.sandboxArtifacts.ownsMount("mount1", "window-a")).toBe(
+        true,
+      );
+      const requestId = sandboxArtifactRequestIdSentTo(windowA);
+      await Promise.resolve(
+        bridge.sandboxArtifacts.respond(
+          {
+            requestId,
+            kind: "bytes",
+            bytes: new Uint8Array(10),
+            offset: 0,
+            totalBytes: 10,
+            mediaType: "text/html",
+          },
+          "window-a",
+        ),
+      );
+      const response = await pending;
+      expect(response.status).toBe(200);
+      bridge.dispose();
+    });
+
+    it("destroyed drops the pending request and detaches the listeners", async () => {
+      const { bridge, event } = await setUp();
+      const pending = bridge.sandboxArtifacts.fetch(
+        new Request("traycer-sandbox://artifact-report--mount1/index.html"),
+      );
+      event.sender.emit("destroyed");
+      const response = await pending;
+      expect(response.status).toBe(503);
+      expect(bridge.sandboxArtifacts.ownsMount("mount1", "window-a")).toBe(
+        false,
+      );
+
+      // The listeners were removed on "destroyed" - a later crash emit on
+      // the SAME sender must not reach a mount re-registered after it, since
+      // nothing is listening on it any more.
+      bridge.sandboxArtifacts.register("mount1", "window-a");
+      event.sender.emit("render-process-gone");
+      expect(bridge.sandboxArtifacts.ownsMount("mount1", "window-a")).toBe(
+        true,
+      );
+      bridge.dispose();
+    });
+
+    it("bridge.dispose() detaches the listeners - a later crash emit does not reach a mount registered after dispose", async () => {
+      const { bridge, event } = await setUp();
+      bridge.dispose();
+
+      // Started fresh after dispose, as `registerSandboxArtifactIpc`'s own
+      // teardown left it: the same `SandboxArtifactServer` is reused here
+      // only to prove the OLD listeners are gone, not to exercise a second
+      // `install()`.
+      bridge.sandboxArtifacts.register("mount1", "window-a");
+      event.sender.emit("render-process-gone");
+      expect(bridge.sandboxArtifacts.ownsMount("mount1", "window-a")).toBe(
+        true,
+      );
+    });
+  });
+});

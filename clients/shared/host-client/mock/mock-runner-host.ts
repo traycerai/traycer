@@ -154,6 +154,7 @@ function sameFlags(a: readonly string[], b: readonly string[]): boolean {
  */
 export class MockRunnerHost implements IRunnerHost {
   readonly browserView = null;
+  readonly sandboxArtifacts = null;
   readonly signInUrl: string;
   readonly authnBaseUrl: string;
   // Fixed test-only value: no test constructs a real remote transport against

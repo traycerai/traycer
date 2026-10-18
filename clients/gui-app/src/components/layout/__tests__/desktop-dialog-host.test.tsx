@@ -304,6 +304,7 @@ function createRunnerHostWithoutPrivateDelivery(
 function createBaseRunnerHost(): IRunnerHost {
   return {
     browserView: null,
+    sandboxArtifacts: null,
     selectionAuthority: createInertSelectionAuthorityClient(),
     refreshHostFleet: () => Promise.resolve(),
     onRegisteredHostsChange: () => null,

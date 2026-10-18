@@ -15,6 +15,9 @@ import type {
 } from "./selection-authority-ipc";
 
 export const RunnerHostInvoke = {
+  sandboxArtifactRegister: "runnerHost:sandboxArtifact:register",
+  sandboxArtifactUnregister: "runnerHost:sandboxArtifact:unregister",
+  sandboxArtifactRespond: "runnerHost:sandboxArtifact:respond",
   validateAuthTokenIdentity: "runnerHost:auth:validateTokenIdentity",
   // Device Authorization Grant (RFC 8628) - the only interactive login. `start`
   // runs `/device/authorize` + the `/device/token` poll loop in main (CORS-safe,
@@ -422,6 +425,8 @@ export const RunnerHostInvoke = {
 } as const;
 
 export const RunnerHostEvent = {
+  sandboxArtifactCancel: "runnerHost:event:sandboxArtifact:cancel",
+  sandboxArtifactRequest: "runnerHost:event:sandboxArtifact:request",
   authCallback: "runnerHost:event:authCallback",
   // Credentials-file change broadcast (tech plan §3/§4). Fired by the main
   // `FileTokenStore`'s owned watcher on every observed change (external writes
