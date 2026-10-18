@@ -392,18 +392,22 @@ function escapeParagraphLineStarts(
     if ((i === 0 || rendered[i - 1] === "\n") && codeRun === 0) {
       const firstLine = i === 0;
       // Up to three leading spaces read back as the line's own text, and the
-      // marker behind them is escaped below. Four or more (or a tab) cannot
-      // be kept: on a paragraph's first line they would open an indented code
-      // block, and on a later line of a list item's paragraph the item's
-      // parser drops them. So that whitespace is dropped here, once, and the
-      // markdown reads back as what it says. A later line of a top-level
-      // paragraph keeps its spaces as text.
-      if (
-        (firstLine || inListItem) &&
-        INDENTED_CODE_START.test(rendered.slice(i, i + 4))
-      ) {
-        while (rendered[i] === " " || rendered[i] === "\t") i++;
-        if (i >= rendered.length) break;
+      // marker behind them is escaped below. Four or more (or a tab):
+      // - on a paragraph's first line would open an indented code block
+      //   (CommonMark 4.4), and no escape or entity this parser reads can
+      //   carry a leading space, so that whitespace is dropped, once;
+      // - on a later line of a list item's paragraph, the item's parser
+      //   takes four columns off a line indented four or more past its
+      //   content column, so four more are written in front and the line
+      //   reads back with exactly its own;
+      // - on a later line of a top-level paragraph, read back as written.
+      if (INDENTED_CODE_START.test(rendered.slice(i, i + 4))) {
+        if (firstLine) {
+          while (rendered[i] === " " || rendered[i] === "\t") i++;
+          if (i >= rendered.length) break;
+        } else if (inListItem) {
+          out += LIST_CONTINUATION_DEDENT;
+        }
       }
       const newline = rendered.indexOf("\n", i);
       const line = rendered.slice(
@@ -439,6 +443,7 @@ function escapeParagraphLineStarts(
 }
 
 const INDENTED_CODE_START = /^(?: {4}| {0,3}\t)/;
+const LIST_CONTINUATION_DEDENT = "    ";
 const ATX_HEADING_START = /^#{1,6}(?=[ \t]|$)/;
 const BULLET_START = /^[-+](?=[ \t]|$)/;
 const DASH_BREAK_OR_UNDERLINE = /^-(?:[ \t]*-)*[ \t]*$/;
@@ -1059,12 +1064,14 @@ function serializeHeading(node: JsonContent, ctx: SerializerContext): string {
 // whitespace or parentheses (`rawArtifactImageText` in the host's
 // epic-file-sync). Written back verbatim, the next read parses it as an image
 // again, which is how a later write retries it. Escaped, it would stay text
-// for good, so exactly that shape - and nothing looser - is left raw. The alt
-// text may hold balanced brackets, as an image's alt can, but no other `]`:
-// one would end the alt early, so `![x](a) [y](b)` is an image followed by a
-// link, not one image, and stays escaped text.
+// for good, so exactly the text the parser reads back as one image - and
+// nothing looser - is left raw. The alt is marked's link label: brackets
+// nested one level deep, backslash escapes, and code spans, inside which a
+// `]` closes nothing. A deeper bracket, or any other `]`, ends the label
+// where marked ends it, so `![a [b [c]]](x)` and `![x](a) [y](b)` are not one
+// image to the parser; raw or escaped, they read back as the same text.
 const UNRESOLVED_IMAGE_SOURCE_TEXT =
-  /^!\[(?:[^[\]\n]|\[[^[\]\n]*\])*\]\((?:<[^<>\n]*>|[^\s()<>]*)\)$/;
+  /^!\[(?:\[(?:\\.|[^[\]\\\n])*\]|\\.|`[^`\n]*`|[^[\]\\`\n])*\]\((?:<[^<>\n]*>|[^\s()<>]*)\)$/;
 
 function unresolvedImageSourceText(node: JsonContent): string | null {
   const only = node.content?.length === 1 ? node.content[0] : undefined;
@@ -1078,12 +1085,30 @@ function unresolvedImageSourceText(node: JsonContent): string | null {
   return UNRESOLVED_IMAGE_SOURCE_TEXT.test(only.text) ? only.text : null;
 }
 
+// A hard break that ends a paragraph breaks no line, and CommonMark has no
+// way to write one: `\` before the paragraph's end reads back as a literal
+// backslash the person never typed. So the artifact form leaves it out, and
+// the paragraph reads back without it.
+function withoutTrailingHardBreaks(
+  content: JsonContent[] | undefined,
+): JsonContent[] | undefined {
+  if (content === undefined) return undefined;
+  let end = content.length;
+  while (end > 0 && content[end - 1]?.type === "hardBreak") end--;
+  return end === content.length ? content : content.slice(0, end);
+}
+
 function serializeParagraph(node: JsonContent, ctx: SerializerContext): string {
   const indent = ctx.inListItem ? "" : getIndent(ctx);
   const unresolvedImage =
     ctx.escapeText && !ctx.inTableCell ? unresolvedImageSourceText(node) : null;
   if (unresolvedImage !== null) return `${indent}${unresolvedImage}`;
-  const children = serializeChildren(node.content, ctx);
+  const children = serializeChildren(
+    ctx.escapeText && !ctx.inTableCell
+      ? withoutTrailingHardBreaks(node.content)
+      : node.content,
+    ctx,
+  );
   const content =
     ctx.escapeText && !ctx.inTableCell
       ? escapeParagraphLineStarts(children, ctx.inListItem)
@@ -1323,9 +1348,14 @@ function* keptMarkerSpaceCandidates(): Generator<number> {
   }
 }
 
+// The marker may sit behind containers on its own line: an artifact quote
+// writes its lines behind `> ` (`serializeArtifactBlockquote`), and a quote or
+// list that is a list item's first block starts on the item's marker line
+// (`- > - [ ]`). The placeholder is absent from everything else the rendering
+// wrote, so a line ending in it is always one of these.
 function keptMarkerSpaceLine(keptMarkerSpace: string): RegExp {
   return new RegExp(
-    `^([ \\t]*(?:[-*+] \\[[ xX]\\]|\\d{1,9}[.)]))${keptMarkerSpace}$`,
+    `^((?:[ \\t]*(?:>|(?:[-*+]|\\d{1,9}[.)])(?: \\[[ xX]\\])? ))*[ \\t]*(?:[-*+] \\[[ xX]\\]|\\d{1,9}[.)]))${keptMarkerSpace}$`,
     "gmu",
   );
 }
@@ -1691,12 +1721,20 @@ function serializeDocument(node: JsonContent, ctx: SerializerContext): string {
 }
 
 // Only spaces, tabs and line breaks are trimmed: a no-break space or any other
-// whitespace the user wrote at the start or end of the document is text.
-function normalizeMarkdown(md: string, keptMarkerSpace: string): string {
+// whitespace the user wrote at the start or end of the document is text. An
+// artifact keeps the leading spaces too: the parser reads up to three of them
+// back as the first paragraph's own text (more never reach here, see
+// `escapeParagraphLineStarts`), and nothing else an artifact writes starts
+// with a space.
+function normalizeMarkdown(
+  md: string,
+  keptMarkerSpace: string,
+  escapeText: boolean,
+): string {
   const trimmed = md
     .replace(/\n{3,}/g, "\n\n")
     .replace(/[ \t]+$/gm, "")
-    .replace(/^[ \t\n]+|[ \t\n]+$/g, "");
+    .replace(escapeText ? /^\n+|[ \t\n]+$/g : /^[ \t\n]+|[ \t\n]+$/g, "");
   return keptMarkerSpace === ""
     ? trimmed
     : trimmed.replace(keptMarkerSpaceLine(keptMarkerSpace), "$1 ");
@@ -1717,10 +1755,10 @@ function renderMarkdown(
   const draft = createContext(options, escapeText, "");
   const drafted = render(draft);
   if (draft.keptMarkerSpaceUses.count === 0) {
-    return normalizeMarkdown(drafted, "");
+    return normalizeMarkdown(drafted, "", escapeText);
   }
   const ctx = createContext(options, escapeText, keptMarkerSpaceFor(drafted));
-  return normalizeMarkdown(render(ctx), ctx.keptMarkerSpace);
+  return normalizeMarkdown(render(ctx), ctx.keptMarkerSpace, escapeText);
 }
 
 export function jsonContentToMarkdown(

@@ -526,15 +526,36 @@ describe("artifact block markers behind leading spaces", () => {
     expect(second("  plain")).toBe("first\n\n  plain");
   });
 
-  // `normalizeMarkdown` trims the start of the whole document, so a paragraph
-  // that opens the document loses its leading spaces whatever they are.
-  it("trims the leading spaces of a paragraph that opens the document", () => {
-    expect(artifactOf("  # h")).toBe("\\# h");
+  // The artifact form trims only the line breaks at the start of the document:
+  // one to three leading spaces of the first paragraph are its own text, and
+  // the parser reads them back at the document start.
+  it("keeps one to three leading spaces of a paragraph that opens the document", () => {
+    expect(artifactOf(" code")).toBe(" code");
+    expect(artifactOf("  code")).toBe("  code");
+    expect(artifactOf("   code")).toBe("   code");
   });
 
-  // The whole document's start is trimmed by `normalizeMarkdown`, so a first
-  // paragraph cannot show this: the indented paragraph has to come second.
-  it("drops the leading whitespace of a later paragraph that would make an indented code block", () => {
+  it("keeps one to three leading spaces before a heading marker that opens the document, and escapes the marker", () => {
+    expect(artifactOf(" # h")).toBe(" \\# h");
+    expect(artifactOf("  # h")).toBe("  \\# h");
+    expect(artifactOf("   # h")).toBe("   \\# h");
+  });
+
+  it("still trims leading line breaks at the start of the document", () => {
+    expect(artifact(doc([paragraph([plain("\n\n  code")])]))).toBe("  code");
+  });
+
+  it("leaves the prompt serializer trimming the leading spaces of the document", () => {
+    expect(prompt(paragraphDoc([plain("  code")]))).toBe("code");
+    expect(prompt(paragraphDoc([plain("   # h")]))).toBe("# h");
+  });
+
+  // Four or more spaces (or a tab) open an indented code block, which nothing
+  // can escape, so a paragraph's first line drops them once. The same goes for
+  // the paragraph that opens the document.
+  it("drops the leading whitespace of a paragraph that would make an indented code block", () => {
+    expect(artifactOf("    code-looking")).toBe("code-looking");
+    expect(artifactOf("\tcode-looking")).toBe("code-looking");
     const second = (value: string): string =>
       artifact(doc([paragraph([plain("first")]), paragraph([plain(value)])]));
     expect(second("    code-looking")).toBe("first\n\ncode-looking");
@@ -584,7 +605,8 @@ describe("artifact hard breaks in a quote inside a task item", () => {
 });
 
 describe("artifact line after a hard break in a list item with four or more leading columns", () => {
-  const item = (kind: "bullet" | "ordered", next: string): string => {
+  type Kind = "bullet" | "ordered" | "task";
+  const item = (kind: Kind, next: string): string => {
     const content = paragraph([
       plain("First"),
       { type: "hardBreak" },
@@ -594,23 +616,64 @@ describe("artifact line after a hard break in a list item with four or more lead
       doc([
         kind === "bullet"
           ? bulletList([listItem([content])])
-          : {
-              type: "orderedList",
-              attrs: { start: 10, type: null },
-              content: [listItem([content])],
-            },
+          : kind === "ordered"
+            ? {
+                type: "orderedList",
+                attrs: { start: 10, type: null },
+                content: [listItem([content])],
+              }
+            : {
+                type: "taskList",
+                content: [
+                  {
+                    type: "taskItem",
+                    attrs: { checked: false },
+                    content: [content],
+                  },
+                ],
+              },
       ]),
     );
   };
 
-  it("drops the whitespace, since the item's parser would drop it and the next pass would move it", () => {
-    expect(item("bullet", "    code")).toBe("- First\\\n  code");
-    expect(item("ordered", "    code")).toBe("10. First\\\n    code");
-    expect(item("bullet", "     x")).toBe("- First\\\n  x");
+  // The item's parser takes exactly four columns off a line indented four or
+  // more past the item's content column, so four more are written in front
+  // and the line reads back with exactly the spaces it had.
+  it("writes four extra spaces in front of a line indented four or more, so the spaces are kept", () => {
+    // bullet: 2 (content column) + 4 (extra) + 4 (the text's own)
+    expect(item("bullet", "    code")).toBe(
+      "- First\\\n" + " ".repeat(10) + "code",
+    );
+    // ordered 10: 4 + 4 + 4
+    expect(item("ordered", "    code")).toBe(
+      "10. First\\\n" + " ".repeat(12) + "code",
+    );
+    // task: the content column is the bullet's, 2, as for a bullet
+    expect(item("task", "    code")).toBe(
+      "- [ ] First\\\n" + " ".repeat(10) + "code",
+    );
   });
 
-  it("escapes a marker that the dropped whitespace exposes", () => {
-    expect(item("bullet", "    # h")).toBe("- First\\\n  \\# h");
+  it("keeps five spaces", () => {
+    expect(item("bullet", "     x")).toBe("- First\\\n" + " ".repeat(11) + "x");
+    expect(item("ordered", "     x")).toBe(
+      "10. First\\\n" + " ".repeat(13) + "x",
+    );
+  });
+
+  it("keeps four spaces before a heading marker as text, which is not a heading at that depth", () => {
+    expect(item("bullet", "    # h")).toBe(
+      "- First\\\n" + " ".repeat(10) + "# h",
+    );
+  });
+
+  it("writes a tab as it is, behind the item's indent and the four extra spaces", () => {
+    expect(item("bullet", "\tcode")).toBe(
+      "- First\\\n" + " ".repeat(6) + "\tcode",
+    );
+    expect(item("bullet", "  \tcode")).toBe(
+      "- First\\\n" + " ".repeat(8) + "\tcode",
+    );
   });
 
   it("keeps one to three leading spaces as text there, escaping the marker behind them", () => {
@@ -625,5 +688,159 @@ describe("artifact line after a hard break in a list item with four or more lead
         ]),
       ),
     ).toBe("First\\\n    code");
+  });
+
+  it("leaves the prompt serializer's output for the same item unchanged", () => {
+    const content = doc([
+      bulletList([
+        listItem([
+          paragraph([plain("First"), { type: "hardBreak" }, plain("    code")]),
+        ]),
+      ]),
+    ]);
+    expect(prompt(content)).toBe("- First\n      code");
+  });
+});
+
+describe("artifact paragraph ends", () => {
+  const hardBreak: JsonContent = { type: "hardBreak" };
+
+  // CommonMark has no way to write a hard break that ends a paragraph: the
+  // backslash would read back as a literal one the person never typed.
+  it("drops a trailing hard break", () => {
+    expect(artifact(paragraphDoc([plain("First"), hardBreak]))).toBe("First");
+    expect(artifact(paragraphDoc([plain("First"), hardBreak, hardBreak]))).toBe(
+      "First",
+    );
+  });
+
+  it("keeps a hard break in the middle and drops the trailing one", () => {
+    expect(
+      artifact(paragraphDoc([plain("a"), hardBreak, plain("b"), hardBreak])),
+    ).toBe("a\\\nb");
+  });
+
+  it("drops a trailing hard break in a list item too", () => {
+    expect(
+      artifact(
+        doc([bulletList([listItem([paragraph([plain("First"), hardBreak])])])]),
+      ),
+    ).toBe("- First");
+  });
+
+  it("leaves the prompt serializer's trailing hard break to its own trim", () => {
+    expect(prompt(paragraphDoc([plain("First"), hardBreak]))).toBe("First");
+  });
+
+  // CommonMark drops the spaces and tabs that end a line, and two or more
+  // before a line break would read as a hard break.
+  it("drops spaces and tabs that end a paragraph", () => {
+    expect(artifactOf("code  ")).toBe("code");
+    expect(artifactOf("code ")).toBe("code");
+    expect(artifactOf("code\t")).toBe("code");
+  });
+
+  it("keeps the spaces before a hard break, which the backslash holds in place", () => {
+    expect(
+      artifact(paragraphDoc([plain("First  "), hardBreak, plain("x")])),
+    ).toBe("First  \\\nx");
+  });
+
+  it("writes a paragraph of only whitespace as an empty one", () => {
+    expect(artifactOf("    ")).toBe("");
+    expect(artifactOf("  ")).toBe("");
+  });
+});
+
+describe("artifact unresolved image alt: nesting depth", () => {
+  // `a` followed by `depth` levels of `[b…]`.
+  const alt = (depth: number): string => {
+    let value = "a";
+    for (let level = 0; level < depth; level++) {
+      value = `a[b${value.slice(1)}]`;
+    }
+    return value;
+  };
+
+  it("writes an alt nested up to one level deep verbatim", () => {
+    expect(artifactOf(`![${alt(0)}](x)`)).toBe(`![${alt(0)}](x)`);
+    expect(artifactOf(`![${alt(1)}](x)`)).toBe(`![${alt(1)}](x)`);
+  });
+
+  it("escapes the opening brackets of an alt nested two or more levels deep", () => {
+    expect(artifactOf(`![${alt(2)}](x)`)).toBe("!\\[a\\[b\\[b]]](x)");
+    expect(artifactOf(`![${alt(3)}](x)`)).toBe("!\\[a\\[b\\[b\\[b]]]](x)");
+    expect(artifactOf(`![${alt(5)}](x)`)).toBe(
+      "!\\[a\\[b\\[b\\[b\\[b\\[b]]]]]](x)",
+    );
+  });
+
+  it("writes a backslash-escaped bracket and a bracket inside a code span verbatim", () => {
+    expect(artifactOf("![a \\] b](x)")).toBe("![a \\] b](x)");
+    expect(artifactOf("![a `]` b](x)")).toBe("![a `]` b](x)");
+  });
+
+  it("still escapes an image followed by a link", () => {
+    expect(artifactOf("![x](a) [y](b)")).toBe("!\\[x](a) \\[y](b)");
+  });
+});
+
+describe("artifact empty list markers inside a block quote", () => {
+  const emptyTask: JsonContent = {
+    type: "taskList",
+    content: [
+      { type: "taskItem", attrs: { checked: false }, content: [paragraph([])] },
+    ],
+  };
+  const emptyOrdered: JsonContent = {
+    type: "orderedList",
+    attrs: { start: 10, type: null },
+    content: [listItem([paragraph([])])],
+  };
+  const quote = (inner: JsonContent): JsonContent => ({
+    type: "blockquote",
+    content: [inner],
+  });
+  // Private-use and noncharacter code points the serializer could use to hold
+  // a marker's trailing space through its trim.
+  const PLACEHOLDER = /[﷐-﷯-]/u;
+
+  it("keeps the space after an empty task marker in a quote", () => {
+    const md = artifact(doc([quote(emptyTask)]));
+    expect(md).toBe("> - [ ] ");
+    expect(md).not.toMatch(PLACEHOLDER);
+  });
+
+  it("keeps the space after an empty ordered marker in a quote", () => {
+    const md = artifact(doc([quote(emptyOrdered)]));
+    expect(md).toBe("> 10. ");
+    expect(md).not.toMatch(PLACEHOLDER);
+  });
+
+  it("keeps the space after the marker in a nested quote", () => {
+    const md = artifact(doc([quote(quote(emptyTask))]));
+    expect(md).toBe("> > - [ ] ");
+    expect(md).not.toMatch(PLACEHOLDER);
+  });
+
+  it("keeps the space when the quote follows a paragraph inside a list item", () => {
+    const md = artifact(
+      doc([
+        bulletList([listItem([paragraph([plain("a")]), quote(emptyTask)])]),
+      ]),
+    );
+    expect(md).toBe("- a\n  > - [ ] ");
+    expect(md).not.toMatch(PLACEHOLDER);
+  });
+
+  it("keeps the space when the quote is a list item's first block", () => {
+    const task = artifact(doc([bulletList([listItem([quote(emptyTask)])])]));
+    expect(task).toBe("- > - [ ] ");
+    expect(task).not.toMatch(PLACEHOLDER);
+    const ordered = artifact(
+      doc([bulletList([listItem([quote(emptyOrdered)])])]),
+    );
+    expect(ordered).toBe("- > 10. ");
+    expect(ordered).not.toMatch(PLACEHOLDER);
   });
 });

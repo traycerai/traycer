@@ -296,10 +296,12 @@ export function startHostHealthMonitor(
   // any reachable observation, so only a continuously unreachable host reaches
   // the demote window.
   let unreachableSince: number | null = null;
-  // The pid of the host the current outage is about. Another published pid
-  // is another host: the outage clock, the once-per-stall latches and any
-  // force-restart offer describe the old one, so they start over.
-  let outageHostPid: number | null = null;
+  // The host the current outage is about, as the published snapshot names it:
+  // its pid and its endpoint, the same two `isCurrentPublishedSnapshot`
+  // compares. Another published host, even one that reuses the pid, gets its
+  // own outage: the clock, the once-per-stall latches and any force-restart
+  // offer describe the old one, so they start over.
+  let outageHostKey: string | null = null;
   // Earliest tick that may ask the governor again after an `alive` denial. See
   // ALIVE_RECHECK_INTERVAL_MS: this throttles the ONE path that would otherwise
   // re-probe a demoted-but-living host forever.
@@ -496,7 +498,7 @@ export function startHostHealthMonitor(
         // nothing - whatever took the snapshot away (a stop, an uninstall, a
         // respawn in progress). The next published host starts a new outage,
         // even one that comes back under the same pid.
-        outageHostPid = null;
+        outageHostKey = null;
         clearUnresponsive();
         // A deferred recovery intentionally demotes the snapshot before the
         // foreign lock holder finishes. Keep ownership across that null
@@ -545,8 +547,9 @@ export function startHostHealthMonitor(
         await attemptRecovery(metadata);
         return;
       }
-      if (outageHostPid !== snapshot.pid) {
-        outageHostPid = snapshot.pid;
+      const hostKey = `${String(snapshot.pid)} ${snapshot.websocketUrl}`;
+      if (outageHostKey !== hostKey) {
+        outageHostKey = hostKey;
         consecutiveFailures = 0;
         unreachableSince = null;
         busyLogged = false;
@@ -720,24 +723,42 @@ export function startHostHealthMonitor(
       clearInterval(timer);
     },
     stillUnresponsive: async (pid) => {
-      if (isDisposed() || !unresponsiveReported) return false;
-      const snapshot = deps.host.getSnapshot();
-      if (snapshot === null || snapshot.pid !== pid) return false;
-      const published = await readPublishedMetadata(deps.host.pidMetadataFile);
-      if (
-        isDisposed() ||
-        published === null ||
-        !isCurrentPublishedSnapshot(snapshot, published.snapshot)
-      ) {
-        return false;
-      }
+      // Whether the host with `pid` is the one published right now, in the
+      // snapshot and on disk alike. Asked on both sides of the probe: a
+      // host swapped in while the probe was out must not inherit the
+      // verdict the probe reached about the one before it.
+      const publishedIsStill =
+        async (): Promise<PublishedHealthMetadata | null> => {
+          if (isDisposed() || !unresponsiveReported) return null;
+          const snapshot = deps.host.getSnapshot();
+          if (snapshot === null || snapshot.pid !== pid) return null;
+          const published = await readPublishedMetadata(
+            deps.host.pidMetadataFile,
+          );
+          if (
+            isDisposed() ||
+            published === null ||
+            !isCurrentPublishedSnapshot(snapshot, published.snapshot)
+          ) {
+            return null;
+          }
+          return published;
+        };
+      const before = await publishedIsStill();
+      if (before === null) return false;
       const answered = await isPublishedHostEndpointReachable(
-        published.snapshot.websocketUrl,
-        published.snapshot.pid,
-        published.startIdentity,
+        before.snapshot.websocketUrl,
+        before.snapshot.pid,
+        before.startIdentity,
         probe,
       );
-      return !answered && !isDisposed();
+      if (answered) return false;
+      const after = await publishedIsStill();
+      return (
+        after !== null &&
+        after.snapshot.websocketUrl === before.snapshot.websocketUrl &&
+        after.startIdentity === before.startIdentity
+      );
     },
   };
 }

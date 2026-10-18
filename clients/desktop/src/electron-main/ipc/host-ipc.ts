@@ -10,7 +10,10 @@ import type {
   HostRestartRequestResult,
   HostServiceRestartResult,
 } from "../../ipc-contracts/host-management-types";
-import type { GuardedMutationOutcome } from "../host/host-controller-types";
+import type {
+  GuardedMutationOutcome,
+  LocalHostMutationIntent,
+} from "../host/host-controller-types";
 import { readLastKnownLocalHostId } from "../host/local-host-identity";
 import { appliedLocalHostCapability } from "../host/local-host-capability";
 import {
@@ -58,6 +61,31 @@ export function serviceRestartResultFromOutcome<TOk>(
   return restartRequestResultFromOutcome(outcome);
 }
 
+const HOST_NOT_RESTARTED_MESSAGE =
+  "The host started responding again or was replaced, so it was not restarted.";
+
+/**
+ * The restart behind an unresponsive host's offer, guarded at the head of the
+ * controller's lane rather than before it. The restart can queue behind
+ * another mutation, and the host it was offered for can answer again, or be
+ * replaced, while it waits; so the check that it is still that host and still
+ * silent runs once the job owns the lane, right before it acts, and the job is
+ * abandoned otherwise. Keyed by the pid, so a restart offered for another host
+ * never joins this one and inherits its answer.
+ */
+export function unresponsiveHostRestartIntent(
+  pid: number,
+): LocalHostMutationIntent {
+  return {
+    kind: "user-repair",
+    targetHostId: `unresponsive-pid:${pid}`,
+    guard: async () =>
+      (await confirmLocalHostStillUnresponsive(pid))
+        ? { kind: "proceed" }
+        : { kind: "abandon", message: HOST_NOT_RESTARTED_MESSAGE },
+  };
+}
+
 export function registerHostIpc(bridge: RunnerIpcBridge): void {
   // Renderer-driven host respawn.
   //
@@ -99,8 +127,6 @@ export function registerHostIpc(bridge: RunnerIpcBridge): void {
   // The force restart offered for an unresponsive host. Unlike the channel
   // above, it is about ONE host: the offer was made for this pid, and a host
   // that answered again or replaced it since must not be killed in its place.
-  // The check is a fresh probe, so it closes the window between the offer and
-  // the monitor's next tick; the forced respawn still restarts the role.
   bridge.handleInvoke(
     RunnerHostInvoke.forceRestartUnresponsiveHost,
     async (_event, rawPid: unknown): Promise<HostRestartRequestResult> => {
@@ -108,15 +134,11 @@ export function registerHostIpc(bridge: RunnerIpcBridge): void {
         typeof rawPid === "number" && Number.isSafeInteger(rawPid) && rawPid > 0
           ? rawPid
           : null;
-      if (pid === null || !(await confirmLocalHostStillUnresponsive(pid))) {
-        return {
-          kind: "declined",
-          message:
-            "The host started responding again or was replaced, so it was not restarted.",
-        };
+      if (pid === null) {
+        return { kind: "declined", message: HOST_NOT_RESTARTED_MESSAGE };
       }
       const outcome = await bridge.options.hostController.respawn(
-        { kind: "background" },
+        unresponsiveHostRestartIntent(pid),
         "force",
       );
       return restartRequestResultFromOutcome(outcome);

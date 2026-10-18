@@ -1975,7 +1975,7 @@ function registerHostCommands(program: Command): void {
       )
       .option(
         "--all",
-        "Deregister the OS service first, then ask the running host to stop, then remove the bytes - so nothing is left registered. The stop is cooperative: if the host does not stop, its install is kept and the command fails, naming --force.",
+        "Deregister the OS service first, then ask the running host to stop, then remove the bytes - so nothing is left registered. On macOS and Linux the stop is cooperative: if the host does not stop, its install is kept and the command fails, naming --force. On Windows the stop ends the host's process tree, so running terminal sessions and in-flight agent work are lost.",
       )
       .option(
         "--force",

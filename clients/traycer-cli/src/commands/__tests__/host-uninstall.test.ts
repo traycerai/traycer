@@ -724,7 +724,7 @@ describe("runHostUninstall", () => {
       publishedPid: -5,
     });
     const result = await runHostUninstall(
-      { all: true, force: false },
+      { all: true, force: true },
       COMMAND_CONTEXT,
       deps,
       testActuators(deps),
@@ -746,7 +746,7 @@ describe("runHostUninstall", () => {
       publishedPid: null,
     });
     const result = await runHostUninstall(
-      { all: true, force: false },
+      { all: true, force: true },
       COMMAND_CONTEXT,
       deps,
       testActuators(deps),
@@ -948,4 +948,166 @@ describe("runHostUninstall", () => {
       serviceRegistrationRetained: null,
     });
   });
+});
+
+describe("runHostUninstall - a published process that is not proven gone (traycer#1563)", () => {
+  interface PublishedRecord {
+    readonly pid: number;
+    readonly startIdentity: string | null;
+  }
+  interface Scenario {
+    readonly name: string;
+    // What each successive read of the published record answers; the last
+    // answer repeats.
+    readonly reads: ReadonlyArray<PublishedRecord | null>;
+    // What the identity probe answers per pid.
+    readonly probe: (pid: number) => Promise<PublishedProcessIdentityVerdict>;
+  }
+
+  function scenarioDeps(
+    scenario: Scenario,
+    receivedOptions: UninstallHostOptions[],
+  ): RunHostUninstallDeps {
+    const base = commandDeps({
+      stop: async () => undefined,
+      receivedOptions,
+      status: async () => NOT_INSTALLED_STATUS,
+      liveness: "dead",
+      successorAfterTeardown: null,
+      publishedPid: null,
+    });
+    let reads = 0;
+    return {
+      ...base,
+      readPublishedHost: async () => {
+        const index = Math.min(reads, scenario.reads.length - 1);
+        reads += 1;
+        return scenario.reads[index] ?? null;
+      },
+      probeProcessExited: (pid) => scenario.probe(pid),
+    };
+  }
+
+  const KEEPS_THE_INSTALL: readonly Scenario[] = [
+    {
+      name: "a published successor whose identity probe is indeterminate",
+      reads: [
+        { pid: 4242, startIdentity: "first" },
+        { pid: 5151, startIdentity: "second" },
+      ],
+      probe: async (pid) => (pid === 4242 ? "dead" : "indeterminate"),
+    },
+    {
+      name: "a published successor whose identity probe throws",
+      reads: [
+        { pid: 4242, startIdentity: "first" },
+        { pid: 5151, startIdentity: "second" },
+      ],
+      probe: async (pid) => {
+        if (pid === 4242) return "dead";
+        throw new Error("ps: operation not permitted");
+      },
+    },
+    {
+      name: "the captured host unknown, with nothing published at the boundary",
+      reads: [{ pid: 4242, startIdentity: "first" }, null],
+      probe: async () => "indeterminate",
+    },
+    {
+      name: "the captured host's probe throwing, with nothing published at the boundary",
+      reads: [{ pid: 4242, startIdentity: "first" }, null],
+      probe: async () => {
+        throw new Error("ps: operation not permitted");
+      },
+    },
+    {
+      name: "a legacy record with no start identity that cannot be told apart",
+      reads: [{ pid: 4242, startIdentity: null }, null],
+      probe: async () => "indeterminate",
+    },
+    {
+      name: "an unusable published pid, which names no process",
+      reads: [{ pid: -5, startIdentity: "first" }, null],
+      probe: async () => "dead",
+    },
+  ];
+
+  for (const scenario of KEEPS_THE_INSTALL) {
+    it(`keeps the install with E_HOST_UNINSTALL_HOST_RUNNING for ${scenario.name}, without --force`, async () => {
+      const receivedOptions: UninstallHostOptions[] = [];
+      const deps = scenarioDeps(scenario, receivedOptions);
+
+      await expect(
+        runHostUninstall(
+          { all: true, force: false },
+          COMMAND_CONTEXT,
+          deps,
+          testActuators(deps),
+        ),
+      ).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.HOST_UNINSTALL_HOST_RUNNING,
+        exitCode: 1,
+        details: { removedInstallDir: false },
+      });
+      expect(receivedOptions).toEqual([]);
+    });
+
+    it(`with --force, removes the install for ${scenario.name}`, async () => {
+      const receivedOptions: UninstallHostOptions[] = [];
+      const deps = scenarioDeps(scenario, receivedOptions);
+
+      const result = await runHostUninstall(
+        { all: true, force: true },
+        COMMAND_CONTEXT,
+        deps,
+        testActuators(deps),
+      );
+
+      expect(receivedOptions).toHaveLength(1);
+      expect(result.data).toMatchObject({ removedInstallDir: true });
+    });
+  }
+
+  const STILL_UNINSTALLS: readonly Scenario[] = [
+    {
+      name: "nothing published at entry or at the boundary",
+      reads: [null, null],
+      probe: async () => "indeterminate",
+    },
+    {
+      name: "a published process proven gone",
+      reads: [{ pid: 4242, startIdentity: "first" }, null],
+      probe: async () => "dead",
+    },
+    {
+      name: "a published pid that now belongs to another process",
+      reads: [{ pid: 4242, startIdentity: "first" }, null],
+      probe: async () => "mismatch",
+    },
+    {
+      name: "a published successor proven gone",
+      reads: [
+        { pid: 4242, startIdentity: "first" },
+        { pid: 5151, startIdentity: "second" },
+      ],
+      probe: async () => "dead",
+    },
+  ];
+
+  for (const scenario of STILL_UNINSTALLS) {
+    it(`still uninstalls without --force for ${scenario.name}`, async () => {
+      const receivedOptions: UninstallHostOptions[] = [];
+      const deps = scenarioDeps(scenario, receivedOptions);
+
+      const result = await runHostUninstall(
+        { all: true, force: false },
+        COMMAND_CONTEXT,
+        deps,
+        testActuators(deps),
+      );
+
+      expect(receivedOptions).toHaveLength(1);
+      expect(result.data).toMatchObject({ removedInstallDir: true });
+    });
+  }
 });

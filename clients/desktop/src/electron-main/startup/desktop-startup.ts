@@ -1172,7 +1172,10 @@ function localHostLaneStarters(
           healthMonitor.stillUnresponsive(pid),
         );
         state.bridge?.disposeFns.push(() => {
+          // No monitor, no verdict: an offer left standing would be one whose
+          // action can only be declined.
           setLocalHostStillUnresponsiveCheck(null);
+          publishLocalHostUnresponsive(null);
           healthMonitor.dispose();
         });
       });

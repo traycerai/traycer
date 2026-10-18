@@ -133,3 +133,29 @@ describe("host uninstall --force", () => {
     expect(stdout).not.toContain("E_INVALID_ARGUMENT");
   });
 });
+
+describe("host uninstall --all help", () => {
+  function allOptionDescription(): string {
+    const program = buildProgramWithAgentRoles(false);
+    const host = findSubcommand(program, "host");
+    const uninstall = host === null ? null : findSubcommand(host, "uninstall");
+    if (uninstall === null) throw new Error("command 'host uninstall' missing");
+    const option = uninstall.options.find(
+      (candidate) => candidate.long === "--all",
+    );
+    if (option === undefined) throw new Error("option '--all' missing");
+    return option.description;
+  }
+
+  it("says the stop is cooperative on macOS and Linux", () => {
+    expect(allOptionDescription()).toContain(
+      "On macOS and Linux the stop is cooperative: if the host does not stop, its install is kept and the command fails, naming --force.",
+    );
+  });
+
+  it("says that on Windows the stop ends the host's process tree", () => {
+    expect(allOptionDescription()).toContain(
+      "On Windows the stop ends the host's process tree, so running terminal sessions and in-flight agent work are lost.",
+    );
+  });
+});

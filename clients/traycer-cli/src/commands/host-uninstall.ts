@@ -459,11 +459,17 @@ async function runHostUninstallWithActuators(
     // it. The deregistration above stands; the bytes go once the host is
     // stopped, or now with `--force`.
     // An unreadable record at the boundary is no evidence the host is gone
-    // (it may be mid-write by a live one), so it keeps the install as well.
-    // "Nothing published" is that evidence, and a stopped host uninstalls.
+    // (it may be mid-write by a live one), so it keeps the install as well,
+    // and so does a published process whose exit could not be established:
+    // a probe that threw or could not tell is not a dead host. Only a
+    // published process proven gone, or nothing published at all, lets a
+    // stopped host uninstall.
     if (
       !args.force &&
-      (!stopResolved || liveness === "live" || !successorRead.answered)
+      (!stopResolved ||
+        liveness === "live" ||
+        !successorRead.answered ||
+        ((published !== null || successor !== null) && liveness !== "gone"))
     ) {
       ctx.logger.warn(
         "Host uninstall kept the install because the host did not stop",

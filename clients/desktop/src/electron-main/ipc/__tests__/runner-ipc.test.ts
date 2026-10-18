@@ -35,6 +35,12 @@ import type {
 } from "../../../ipc-contracts/window-types";
 import { createAuthenticatedUserFixture } from "@traycer-clients/shared/test-fixtures/authenticated-user";
 import { FakeHostController } from "./fake-host-controller";
+import type {
+  ActivateInstalledOk,
+  GuardedMutationOutcome,
+  HostRespawnMode,
+  LocalHostMutationIntent,
+} from "../../host/host-controller-types";
 import { setAppliedLocalHostCapability } from "../../host/local-host-capability";
 import {
   createSigningKey,
@@ -4137,13 +4143,54 @@ describe("RunnerIpcBridge", () => {
     bridge.dispose();
   });
 
-  // The force restart offered for an unresponsive host is about ONE host: the
-  // handler restarts only while the same host is still the reported one and a
-  // fresh look agrees it does not answer (traycer#1563 D3a).
+  // The force restart offered for an unresponsive host is about ONE host. The
+  // restart can queue behind another mutation, so the question "is it still
+  // that host, and still silent?" is the intent's guard, asked by the lane once
+  // the job owns it - never by this handler beforehand (traycer#1563 D3a).
   describe("forceRestartUnresponsiveHost", () => {
     const UNRESPONSIVE = { pid: 4242, unreachableForMs: 12 * 60_000 };
     const STILL_RUNNING_MESSAGE =
       "The host started responding again or was replaced, so it was not restarted.";
+
+    /**
+     * A controller whose `respawn` queues the job instead of running it, as a
+     * lane busy with another mutation would. `runQueued` is the lane reaching
+     * the head: it asks the intent's guard then, and only a `proceed` acts.
+     */
+    class QueueingHostController extends FakeHostController {
+      readonly queued: Array<{
+        readonly intent: LocalHostMutationIntent;
+        readonly settle: (
+          outcome: GuardedMutationOutcome<ActivateInstalledOk>,
+        ) => void;
+      }> = [];
+      killed = 0;
+
+      override respawn(
+        intent: LocalHostMutationIntent,
+        mode: HostRespawnMode,
+      ): Promise<GuardedMutationOutcome<ActivateInstalledOk>> {
+        this.respawnCalls += 1;
+        this.respawnCallArgs.push({ intent, mode });
+        return new Promise((resolve) => {
+          this.queued.push({ intent, settle: resolve });
+        });
+      }
+
+      async runQueued(): Promise<void> {
+        for (const job of this.queued.splice(0)) {
+          if (job.intent.kind === "user-repair") {
+            const verdict = await job.intent.guard();
+            if (verdict.kind === "abandon") {
+              job.settle({ kind: "abandoned", message: verdict.message });
+              continue;
+            }
+          }
+          this.killed += 1;
+          job.settle({ kind: "ok", value: { activated: true } });
+        }
+      }
+    }
 
     async function installBridge(
       confirm: ((pid: number) => Promise<boolean>) | null,
@@ -4153,7 +4200,7 @@ describe("RunnerIpcBridge", () => {
       const unresponsive = await import("../../host/local-host-unresponsive");
       unresponsive.setLocalHostStillUnresponsiveCheck(confirm);
       unresponsive.publishLocalHostUnresponsive(verdict);
-      const hostController = new FakeHostController();
+      const hostController = new QueueingHostController();
       const bridge = new mod.RunnerIpcBridge({
         host: new FakeHost(),
         hostController,
@@ -4182,28 +4229,68 @@ describe("RunnerIpcBridge", () => {
       };
     }
 
-    it("force-respawns in the background when the same host is still unresponsive", async () => {
+    it("hands the lane a forced user-repair intent keyed by the pid, and asks nothing itself", async () => {
       const confirm = vi.fn(async () => true);
       const harness = await installBridge(confirm, UNRESPONSIVE);
 
-      await expect(harness.invoke(4242)).resolves.toEqual({
-        kind: "restarted",
+      const result = harness.invoke(4242);
+      await vi.waitFor(() => {
+        expect(harness.hostController.respawnCalls).toBe(1);
       });
+
+      const call = harness.hostController.respawnCallArgs[0];
+      expect(call?.mode).toBe("force");
+      expect(call?.intent).toMatchObject({
+        kind: "user-repair",
+        targetHostId: "unresponsive-pid:4242",
+      });
+      // The handler is not the one who asks: the lane does, at its head.
+      expect(confirm).not.toHaveBeenCalled();
+
+      await harness.hostController.runQueued();
+      await expect(result).resolves.toEqual({ kind: "restarted" });
       expect(confirm).toHaveBeenCalledWith(4242);
-      expect(harness.hostController.respawnCallArgs).toEqual([
-        { intent: { kind: "background" }, mode: "force" },
-      ]);
+      expect(harness.hostController.killed).toBe(1);
       harness.dispose();
     });
 
-    it("declines without a respawn when the fresh check says the host answers again", async () => {
-      const harness = await installBridge(async () => false, UNRESPONSIVE);
+    it("declines, and kills nothing, when the host recovers while the restart waits for the lane", async () => {
+      let stillUnresponsive = true;
+      const harness = await installBridge(
+        async () => stillUnresponsive,
+        UNRESPONSIVE,
+      );
 
-      await expect(harness.invoke(4242)).resolves.toEqual({
+      const result = harness.invoke(4242);
+      await vi.waitFor(() => {
+        expect(harness.hostController.queued).toHaveLength(1);
+      });
+      // Queued behind another mutation; the host answers again meanwhile.
+      stillUnresponsive = false;
+      await harness.hostController.runQueued();
+
+      await expect(result).resolves.toEqual({
         kind: "declined",
         message: STILL_RUNNING_MESSAGE,
       });
-      expect(harness.hostController.respawnCalls).toBe(0);
+      expect(harness.hostController.killed).toBe(0);
+      harness.dispose();
+    });
+
+    it("keys two pids apart, so one restart never joins the other's", async () => {
+      const harness = await installBridge(async () => true, UNRESPONSIVE);
+
+      void harness.invoke(1);
+      void harness.invoke(2);
+      await vi.waitFor(() => {
+        expect(harness.hostController.respawnCalls).toBe(2);
+      });
+
+      expect(
+        harness.hostController.respawnCallArgs.map((call) =>
+          call.intent.kind === "user-repair" ? call.intent.targetHostId : null,
+        ),
+      ).toEqual(["unresponsive-pid:1", "unresponsive-pid:2"]);
       harness.dispose();
     });
 
@@ -4215,7 +4302,7 @@ describe("RunnerIpcBridge", () => {
       ["undefined", undefined],
       ["null", null],
     ])(
-      "declines %s as the pid, without asking the monitor or respawning",
+      "declines %s as the pid without calling respawn",
       async (_name, rawPid) => {
         const confirm = vi.fn(async () => true);
         const harness = await installBridge(confirm, UNRESPONSIVE);
@@ -4224,24 +4311,11 @@ describe("RunnerIpcBridge", () => {
           kind: "declined",
           message: STILL_RUNNING_MESSAGE,
         });
-        expect(confirm).not.toHaveBeenCalled();
         expect(harness.hostController.respawnCalls).toBe(0);
+        expect(confirm).not.toHaveBeenCalled();
         harness.dispose();
       },
     );
-
-    it("declines a pid other than the reported host's, without asking the monitor", async () => {
-      const confirm = vi.fn(async () => true);
-      const harness = await installBridge(confirm, UNRESPONSIVE);
-
-      await expect(harness.invoke(9999)).resolves.toEqual({
-        kind: "declined",
-        message: STILL_RUNNING_MESSAGE,
-      });
-      expect(confirm).not.toHaveBeenCalled();
-      expect(harness.hostController.respawnCalls).toBe(0);
-      harness.dispose();
-    });
   });
 
   // The renderer's host directory seeds "which id is THIS machine" from this

@@ -877,6 +877,66 @@ describe("linux service stop --force", () => {
     expect(MOCKS.forceStopHostProcess).not.toHaveBeenCalled();
   });
 
+  // An unreadable pid record is no evidence either way: it may belong to a
+  // live host mid-write. The plain stop gives it the same grace a live record
+  // gets, looks again, and reports success only for "nothing published" or a
+  // process proven gone.
+  describe("without --force, a pid record that cannot be read", () => {
+    afterEach(() => {
+      setRestartStopGracesForTests(null);
+      PID.goneFn = null;
+      PID.evidenceReads = [];
+    });
+
+    it("unreadable before the stop and still unreadable after it: fails saying it could not confirm the stop", async () => {
+      PID.evidenceReads = [
+        { kind: "unreadable", cause: "EACCES" },
+        { kind: "unreadable", cause: "EACCES" },
+      ];
+      setRestartStopGracesForTests({ sigtermMs: 5, sigkillMs: 5 });
+      const { runner } = recordingRunner(() => false);
+
+      await expect(
+        createLinuxController(runner).stop(label, { force: false }),
+      ).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+        message: expect.stringContaining("could not confirm the host stopped"),
+      });
+      expect(MOCKS.forceStopHostProcess).not.toHaveBeenCalled();
+    });
+
+    it("unreadable before the stop and absent after it: the stop is confirmed", async () => {
+      PID.evidenceReads = [
+        { kind: "unreadable", cause: "EACCES" },
+        { kind: "absent" },
+      ];
+      setRestartStopGracesForTests({ sigtermMs: 5, sigkillMs: 5 });
+      const { runner } = recordingRunner(() => false);
+
+      await expect(
+        createLinuxController(runner).stop(label, { force: false }),
+      ).resolves.toBeUndefined();
+    });
+
+    it("live before the stop, the process exits, then unreadable after it: fails saying it could not confirm the stop", async () => {
+      PID.evidenceReads = [
+        { kind: "read", metadata: { pid: 4242 } },
+        { kind: "unreadable", cause: "EACCES" },
+      ];
+      PID.goneFn = (pid, call) => pid === 4242 && call > 2;
+      setRestartStopGracesForTests({ sigtermMs: 5, sigkillMs: 5 });
+      const { runner } = recordingRunner(() => false);
+
+      await expect(
+        createLinuxController(runner).stop(label, { force: false }),
+      ).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+        message: expect.stringContaining("could not confirm the host stopped"),
+      });
+      expect(MOCKS.forceStopHostProcess).not.toHaveBeenCalled();
+    });
+  });
+
   // Branch-1 re-confirmation: the FIRST settle (right after the plain stop)
   // can itself be a crash - `failed` - whose Restart=on-failure replacement
   // is already coming back up by the time the cancel runs. The cancel's own

@@ -208,9 +208,10 @@ describe("artifact markdown escaping round trip (traycer#1563)", () => {
 /**
  * The parser keeps one to three spaces in front of a marker as paragraph text,
  * and the serializer keeps them, escaping the marker behind them. Four spaces
- * (or a tab) cannot be kept - written back they would be an indented code
- * block - so they are dropped once. A paragraph that opens the document loses
- * its spaces too, because `normalizeMarkdown` trims the whole document's start.
+ * (or a tab) cannot be kept at a paragraph's start - written back they would
+ * be an indented code block - so they are dropped once there. A paragraph that
+ * opens the document keeps its one to three spaces: only line breaks are
+ * trimmed at the document's start.
  */
 describe("leading spaces before an escaped block marker", () => {
   it("keeps a later line's indent in front of the escaped marker, as a paragraph", () => {
@@ -232,20 +233,49 @@ describe("leading spaces before an escaped block marker", () => {
     expect(serialize(fragmentOf(json1))).toBe("first\n\n  \\# h");
   });
 
-  it("drops the indent of a paragraph that opens the document, once, and is stable after", () => {
+  it("keeps the indent of a paragraph that opens the document, and is stable", () => {
     const json1 = parseJson("  \\# h");
     expect(textOf(json1)).toBe("  # h");
 
     const md1 = serialize(fragmentOf(json1));
-    expect(md1).toBe("\\# h");
+    expect(md1).toBe("  \\# h");
 
     const json2 = parseJson(md1);
     expect((json2.content ?? []).map((node) => node.type)).toEqual([
       "paragraph",
     ]);
-    expect(textOf(json2)).toBe("# h");
+    expect(textOf(json2)).toBe("  # h");
     expect(serialize(fragmentOf(json2))).toBe(md1);
   });
+
+  it.each([
+    [" code", " code"],
+    ["  code", "  code"],
+    ["   code", "   code"],
+    [" # h", " \\# h"],
+    ["  # h", "  \\# h"],
+    ["   # h", "   \\# h"],
+  ] as const)(
+    "reads %j at the start of the document back as exactly that, from exactly %j",
+    (value, expectedMd) => {
+      const doc: JsonContent = {
+        type: "doc",
+        content: [textParagraph([plainText(value)])],
+      };
+      const fragment0 = fragmentOf(doc);
+      const md1 = serialize(fragment0);
+      expect(md1).toBe(expectedMd);
+
+      const json1 = parseJson(md1);
+      expect(textOf(json1)).toBe(value);
+      const fragment1 = fragmentOf(json1);
+      expect(proseMirrorJsonOf(fragment1)).toEqual(
+        proseMirrorJsonOf(fragment0),
+      );
+      expect(fragment1.toJSON()).toBe(fragment0.toJSON());
+      expect(serialize(fragment1)).toBe(md1);
+    },
+  );
 
   it("drops the four-space indent of a later paragraph once, as a paragraph, and is stable after", () => {
     const paragraphOf = (value: string): JsonContent => ({
@@ -622,11 +652,11 @@ describe("an indented code block after an empty task item line (traycer#2574)", 
  *
  * One normalization is by design: four or more leading spaces cannot be kept
  * at a paragraph's start (written back they would open an indented code
- * block, and the parser does not decode entities to protect them), nor on the
- * line after a hard break inside a list item (the item's parser drops them).
- * That whitespace is dropped once; the text keeps everything else, stays a
- * paragraph, and the markdown is stable from the first pass. The line after a
- * hard break in a top-level paragraph keeps its spaces as text.
+ * block, and the parser does not decode entities to protect them). That
+ * whitespace is dropped once; the text keeps everything else, stays a
+ * paragraph, and the markdown is stable from the first pass. A later line of a
+ * paragraph keeps its spaces, after a hard break in a top-level paragraph and
+ * in a list item alike.
  */
 const BLOCK_OPENING_TEXTS: ReadonlyArray<string> = [
   "# h",
@@ -643,7 +673,8 @@ interface ClassCase {
   readonly name: string;
   readonly text: string;
   readonly doc: JsonContent;
-  // True when leading whitespace of four or more columns cannot be kept here.
+  // True when leading whitespace of four or more columns cannot be kept here:
+  // at a paragraph's start, where it would open an indented code block.
   readonly dropsIndentedCodeStart: boolean;
 }
 
@@ -724,7 +755,7 @@ const CLASS_CASES: ReadonlyArray<ClassCase> = BLOCK_OPENING_TEXTS.flatMap(
         make(
           `${kind} item, line after a hard break`,
           { type: "doc", content: [listOf(kind, [brokenParagraph(text)])] },
-          true,
+          false,
         ),
       ]),
       make("mixed plain and task items", mixedListDoc(text), true),
@@ -761,11 +792,13 @@ describe("paragraph text that would open a block stays text (traycer#1563)", () 
     expect(md2).toBe(md1);
 
     // Where four or more leading spaces cannot be kept, the text is read back
-    // without them, in the same structure: no code block, no new block.
-    const expected =
-      dropsIndentedCodeStart && /^[ \t]{4}/.test(text)
-        ? fragmentOf(withText(doc, text, text.trimStart()))
-        : fragment0;
+    // as the literal `code`, in the same structure: no code block, no new
+    // block. The only text with such spaces in the list is `    code`.
+    const dropped = dropsIndentedCodeStart && /^[ \t]{4}/.test(text);
+    if (dropped) expect(text).toBe("    code");
+    const expected = dropped
+      ? fragmentOf(withText(doc, text, "code"))
+      : fragment0;
     expect(proseMirrorJsonOf(fragment1)).toEqual(proseMirrorJsonOf(expected));
     expect(fragment1.toJSON()).toBe(expected.toJSON());
     expect(textOf(json1)).toBe(textOf(proseMirrorJsonOf(expected)));
@@ -773,16 +806,18 @@ describe("paragraph text that would open a block stays text (traycer#1563)", () 
 });
 
 /**
- * Whitespace dropped on the line after a hard break inside a list item: the
- * item's parser drops four or more columns there, so the serializer writes
- * none, and the first pass is already the fixed point.
+ * The line after a hard break inside a list item keeps every leading column:
+ * the item's parser takes exactly four columns off a line indented four or
+ * more past its content column, so the serializer writes four extra spaces in
+ * front and the text reads back exactly as it was, in the same paragraph.
  */
-describe("the line after a hard break in a list item drops four or more leading columns (traycer#1563)", () => {
+describe("the line after a hard break in a list item keeps four or more leading columns (traycer#1563)", () => {
   const cases = [
-    ["bullet", "    code", "- First\\\n  code"],
-    ["ordered-10", "    code", "10. First\\\n    code"],
-    ["bullet", "     x", "- First\\\n  x"],
-    ["bullet", "    # h", "- First\\\n  \\# h"],
+    ["bullet", "    code", "- First\\\n" + " ".repeat(10) + "code"],
+    ["ordered-10", "    code", "10. First\\\n" + " ".repeat(12) + "code"],
+    ["task", "    code", "- [ ] First\\\n" + " ".repeat(10) + "code"],
+    ["bullet", "     x", "- First\\\n" + " ".repeat(11) + "x"],
+    ["bullet", "    # h", "- First\\\n" + " ".repeat(10) + "# h"],
   ] as const;
 
   it.each(cases)("%s item, %j", (kind, line, expected) => {
@@ -790,15 +825,390 @@ describe("the line after a hard break in a list item drops four or more leading 
       type: "doc",
       content: [listOf(kind, [brokenParagraph(line)])],
     };
-    const md1 = serialize(fragmentOf(doc));
+    const fragment0 = fragmentOf(doc);
+    const md1 = serialize(fragment0);
     expect(md1).toBe(expected);
 
     const json1 = parseJson(md1);
-    expect(serialize(fragmentOf(json1))).toBe(md1);
-    // Read back as text, after the hard break, in the same paragraph.
-    const trimmed = withText(doc, line, line.trimStart());
-    expect(proseMirrorJsonOf(fragmentOf(json1))).toEqual(
-      proseMirrorJsonOf(fragmentOf(trimmed)),
+    const fragment1 = fragmentOf(json1);
+    expect(serialize(fragment1)).toBe(md1);
+    // Read back as the same text, after the hard break, in the same paragraph.
+    expect(proseMirrorJsonOf(fragment1)).toEqual(proseMirrorJsonOf(fragment0));
+    expect(fragment1.toJSON()).toBe(fragment0.toJSON());
+    // `textOf` joins the paragraph's inline nodes with a line break, and the
+    // hard break node is one of them.
+    expect(textOf(json1)).toBe(`First\n\n${line}`);
+  });
+
+  // A tab is the one thing here that is not kept: the item's parser expands it
+  // to the four columns it spans, so the text reads back as four spaces. That
+  // is one pass; the markdown it then writes is the four-space form above.
+  it("reads a tab after a hard break in a bullet item back as four spaces, once", () => {
+    const doc: JsonContent = {
+      type: "doc",
+      content: [listOf("bullet", [brokenParagraph("\tcode")])],
+    };
+    const md1 = serialize(fragmentOf(doc));
+    expect(md1).toBe("- First\\\n" + " ".repeat(6) + "\tcode");
+
+    const json1 = parseJson(md1);
+    expect(textOf(json1)).toBe("First\n\n    code");
+    const md2 = serialize(fragmentOf(json1));
+    expect(md2).toBe("- First\\\n" + " ".repeat(10) + "code");
+
+    const json2 = parseJson(md2);
+    expect(textOf(json2)).toBe("First\n\n    code");
+    expect(serialize(fragmentOf(json2))).toBe(md2);
+  });
+});
+
+/**
+ * Four spaces (or a tab) at a paragraph's start are dropped once, and the
+ * expectations here are literals: the markdown as written, and the text as
+ * read back. Written raw, the same spaces are an indented code block, and an
+ * entity for the first space is not decoded by the parser, so there is no
+ * escape that keeps them.
+ */
+describe("four leading spaces at a paragraph's start are dropped once (traycer#1563)", () => {
+  const rows = [
+    ["a document's first paragraph", "    code", [], "code"],
+    ["a document's first paragraph, a tab", "\tcode", [], "code"],
+    ["a later paragraph", "    code", ["first"], "first\n\ncode"],
+  ] as const;
+
+  it.each(rows)("%s, %j", (_name, value, before, expectedMd) => {
+    const paragraphs = [...before, value].map((text) =>
+      textParagraph([plainText(text)]),
     );
+    const md1 = serialize(fragmentOf({ type: "doc", content: paragraphs }));
+    expect(md1).toBe(expectedMd);
+
+    const json1 = parseJson(md1);
+    expect(json1.content?.at(-1)?.type).toBe("paragraph");
+    expect(textOf(json1.content?.at(-1) ?? {})).toBe("code");
+    expect(serialize(fragmentOf(json1))).toBe(md1);
+  });
+
+  it("drops them in a bullet item's first paragraph, with the literal bytes", () => {
+    const md1 = serialize(
+      fragmentOf({
+        type: "doc",
+        content: [listOf("bullet", [textParagraph([plainText("    code")])])],
+      }),
+    );
+    expect(md1).toBe("- code");
+    expect(textOf(parseJson(md1))).toBe("code");
+  });
+
+  it("drops them in a bullet item's later paragraph, with the literal bytes", () => {
+    const md1 = serialize(
+      fragmentOf({
+        type: "doc",
+        content: [
+          listOf("bullet", [
+            textParagraph([plainText("a")]),
+            textParagraph([plainText("    code")]),
+          ]),
+        ],
+      }),
+    );
+    expect(md1).toBe("- a\n\n  code");
+    expect(
+      textOf(parseJson(md1).content?.[0]?.content?.[0]?.content?.[1] ?? {}),
+    ).toBe("code");
+  });
+
+  const typesOf = (node: JsonContent): string[] =>
+    (node.type === undefined ? [] : [node.type]).concat(
+      (node.content ?? []).flatMap(typesOf),
+    );
+
+  it("shows why: written raw, they open a code block", () => {
+    const json = parseJson("    code");
+    expect(typesOf(json)).toContain("codeBlock");
+    expect(typesOf(json)).not.toContain("paragraph");
+    expect(textOf(json)).toBe("code");
+  });
+
+  it("shows why: an entity for the first space is not decoded, it stays literal text", () => {
+    const json = parseJson("&#32;   code");
+    expect(typesOf(json)).not.toContain("codeBlock");
+    expect(textOf(json)).toBe("&#32;   code");
+  });
+});
+
+/**
+ * A hard break that ends a paragraph cannot be written in CommonMark: the
+ * artifact form leaves it out, so the paragraph reads back without it. Before,
+ * the trailing backslash read back as a literal one.
+ */
+describe("a trailing hard break is dropped (traycer#1563)", () => {
+  it("drops the one that ends a paragraph", () => {
+    const doc: JsonContent = {
+      type: "doc",
+      content: [textParagraph([plainText("First"), { type: "hardBreak" }])],
+    };
+    const md1 = serialize(fragmentOf(doc));
+    expect(md1).toBe("First");
+
+    const json1 = parseJson(md1);
+    expect(hardBreakCount(json1)).toBe(0);
+    expect(textOf(json1)).toBe("First");
+    expect(serialize(fragmentOf(json1))).toBe(md1);
+  });
+
+  it("keeps the one in the middle and drops the trailing one", () => {
+    const doc: JsonContent = {
+      type: "doc",
+      content: [
+        textParagraph([
+          plainText("a"),
+          { type: "hardBreak" },
+          plainText("b"),
+          { type: "hardBreak" },
+        ]),
+      ],
+    };
+    const md1 = serialize(fragmentOf(doc));
+    expect(md1).toBe("a\\\nb");
+
+    const json1 = parseJson(md1);
+    expect(hardBreakCount(json1)).toBe(1);
+    expect(textOf(json1)).toBe("a\n\nb");
+    expect(serialize(fragmentOf(json1))).toBe(md1);
+  });
+});
+
+/**
+ * An empty task item and an empty ordered item are written as a bare marker
+ * line whose trailing space is kept through the trim. Inside a quote the line
+ * sits behind `> `, and the kept space must still be written.
+ */
+describe("an empty list item marker inside a quote keeps its space (traycer#1563)", () => {
+  const PLACEHOLDER = /[\uFDD0-\uFDEF\uE000-\uF8FF]/u;
+  const emptyTask: JsonContent = {
+    type: "taskList",
+    content: [
+      {
+        type: "taskItem",
+        attrs: { checked: false },
+        content: [{ type: "paragraph" }],
+      },
+    ],
+  };
+  const emptyOrdered: JsonContent = {
+    type: "orderedList",
+    attrs: { start: 10, type: null },
+    content: [{ type: "listItem", content: [{ type: "paragraph" }] }],
+  };
+  const quote = (inner: JsonContent): JsonContent => ({
+    type: "blockquote",
+    content: [inner],
+  });
+  const typesOf = (node: JsonContent): string[] =>
+    (node.type === undefined ? [] : [node.type]).concat(
+      (node.content ?? []).flatMap(typesOf),
+    );
+
+  const rows: ReadonlyArray<readonly [string, JsonContent, string]> = [
+    ["a task item in a quote", quote(emptyTask), "> - [ ] "],
+    ["an ordered item in a quote", quote(emptyOrdered), "> 10. "],
+    [
+      "a task item in a quote after a paragraph in a list item",
+      {
+        type: "bulletList",
+        content: [
+          {
+            type: "listItem",
+            content: [textParagraph([plainText("a")]), quote(emptyTask)],
+          },
+        ],
+      },
+      "- a\n  > - [ ] ",
+    ],
+    [
+      "an ordered item in a quote after a paragraph in a list item",
+      {
+        type: "bulletList",
+        content: [
+          {
+            type: "listItem",
+            content: [textParagraph([plainText("a")]), quote(emptyOrdered)],
+          },
+        ],
+      },
+      "- a\n  > 10. ",
+    ],
+  ];
+
+  it.each(rows)("%s", (_name, block, expectedMd) => {
+    const md1 = serialize(fragmentOf({ type: "doc", content: [block] }));
+    expect(md1).toBe(expectedMd);
+    expect(md1).not.toMatch(PLACEHOLDER);
+
+    const json1 = parseJson(md1);
+    expect(typesOf(json1)).toContain("blockquote");
+    const fragment1 = fragmentOf(json1);
+    const md2 = serialize(fragment1);
+    expect(md2).toBe(md1);
+    expect(md2).not.toMatch(PLACEHOLDER);
+    const fragment2 = fragmentOf(parseJson(md2));
+    expect(proseMirrorJsonOf(fragment2)).toEqual(proseMirrorJsonOf(fragment1));
+  });
+});
+
+/**
+ * A line that starts with `#` and no space is not a heading to marked's own
+ * lexer, so after a list item it is a paragraph, not the item's text.
+ */
+describe("a hashtag line after a list item is a paragraph (traycer#1563)", () => {
+  const md0 = "- a\n#not-a-heading";
+
+  it("parses to a list holding a and then a paragraph", () => {
+    const json = parseJson(md0);
+    expect((json.content ?? []).map((node) => node.type)).toEqual([
+      "bulletList",
+      "paragraph",
+    ]);
+    expect(textOf(json.content?.[0] ?? {})).toBe("a");
+    expect(textOf(json.content?.[1] ?? {})).toBe("#not-a-heading");
+  });
+
+  it("round-trips through the JSON serializer as the same text", () => {
+    const json1 = parseJson(md0);
+    const fragment1 = fragmentOf(json1);
+    const md1 = serialize(fragment1);
+    const json2 = parseJson(md1);
+    expect((json2.content ?? []).map((node) => node.type)).toEqual([
+      "bulletList",
+      "paragraph",
+    ]);
+    expect(textOf(json2.content?.[1] ?? {})).toBe("#not-a-heading");
+    const fragment2 = fragmentOf(json2);
+    expect(serialize(fragment2)).toBe(md1);
+    expect(proseMirrorJsonOf(fragment2)).toEqual(proseMirrorJsonOf(fragment1));
+  });
+});
+
+/**
+ * An unresolved image's source text stays raw only where the parser reads it
+ * back as one image. Deeper nesting is read as plain text whether it is raw or
+ * escaped, so escaping it costs no retry.
+ */
+describe("raw image alt nesting (traycer#1563)", () => {
+  // `a` followed by `depth` levels of `[b...]`.
+  const alt = (depth: number): string => {
+    let value = "a";
+    for (let level = 0; level < depth; level++) {
+      value = `a[b${value.slice(1)}]`;
+    }
+    return value;
+  };
+  const typesOf = (node: JsonContent): string[] =>
+    (node.type === undefined ? [] : [node.type]).concat(
+      (node.content ?? []).flatMap(typesOf),
+    );
+
+  it.each([0, 1])("reads an alt nested %i levels deep as an image", (depth) => {
+    expect(typesOf(parseJson(`![${alt(depth)}](x)`))).toContain("image");
+  });
+
+  it.each([2, 3, 4, 5])(
+    "reads an alt nested %i levels deep, written raw, as a paragraph of text",
+    (depth) => {
+      const md = `![${alt(depth)}](x)`;
+      const json = parseJson(md);
+      expect(typesOf(json)).not.toContain("image");
+      expect((json.content ?? []).map((node) => node.type)).toEqual([
+        "paragraph",
+      ]);
+      expect(textOf(json)).toBe(md);
+    },
+  );
+
+  it.each([2, 3, 4, 5])(
+    "escapes the text at depth %i and reads the escaped form back as the same text",
+    (depth) => {
+      const md = `![${alt(depth)}](x)`;
+      const doc: JsonContent = {
+        type: "doc",
+        content: [textParagraph([plainText(md)])],
+      };
+      const md1 = serialize(fragmentOf(doc));
+      expect(md1).not.toBe(md);
+      const json1 = parseJson(md1);
+      expect(typesOf(json1)).not.toContain("image");
+      expect(textOf(json1)).toBe(md);
+      expect(serialize(fragmentOf(json1))).toBe(md1);
+    },
+  );
+
+  it.each(["![a \\] b](x)", "![a `]` b](x)"])(
+    "reads %s back as an image",
+    (md) => {
+      expect(typesOf(parseJson(md))).toContain("image");
+    },
+  );
+
+  it("escapes an image followed by a link, and reads the text back unchanged", () => {
+    const md = "![x](a) [y](b)";
+    const doc: JsonContent = {
+      type: "doc",
+      content: [textParagraph([plainText(md)])],
+    };
+    const md1 = serialize(fragmentOf(doc));
+    expect(md1).toBe("!\\[x](a) \\[y](b)");
+    expect(textOf(parseJson(md1))).toBe(md);
+  });
+});
+
+/**
+ * Spaces and tabs that end a paragraph line are dropped by CommonMark, and two
+ * or more before a line break would read as a hard break, so the artifact form
+ * drops them once. Before a written hard break the backslash holds them.
+ */
+describe("trailing spaces at the end of a paragraph (traycer#1563)", () => {
+  it("drops them from the end of a paragraph, once", () => {
+    const doc: JsonContent = {
+      type: "doc",
+      content: [textParagraph([plainText("code  ")])],
+    };
+    const md1 = serialize(fragmentOf(doc));
+    expect(md1).toBe("code");
+
+    const json1 = parseJson(md1);
+    expect(textOf(json1)).toBe("code");
+    expect(serialize(fragmentOf(json1))).toBe(md1);
+  });
+
+  it("keeps the spaces in front of a hard break", () => {
+    const doc: JsonContent = {
+      type: "doc",
+      content: [
+        textParagraph([
+          plainText("First  "),
+          { type: "hardBreak" },
+          plainText("x"),
+        ]),
+      ],
+    };
+    const fragment0 = fragmentOf(doc);
+    const md1 = serialize(fragment0);
+    expect(md1).toBe("First  \\\nx");
+
+    const json1 = parseJson(md1);
+    expect(hardBreakCount(json1)).toBe(1);
+    const fragment1 = fragmentOf(json1);
+    expect(serialize(fragment1)).toBe(md1);
+    expect(proseMirrorJsonOf(fragment1)).toEqual(proseMirrorJsonOf(fragment0));
+    expect(textOf(json1)).toBe("First  \n\nx");
+  });
+
+  it("writes a paragraph of only whitespace as an empty document", () => {
+    const doc: JsonContent = {
+      type: "doc",
+      content: [textParagraph([plainText("    ")])],
+    };
+    expect(serialize(fragmentOf(doc))).toBe("");
   });
 });

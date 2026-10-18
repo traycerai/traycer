@@ -568,6 +568,42 @@ async function waitForSignalledHostGone(
   }
 }
 
+type PlainStopConfirmation =
+  | { readonly kind: "stopped" }
+  | { readonly kind: "running"; readonly pid: number }
+  | { readonly kind: "unconfirmed" };
+
+// Whether a plain stop took effect. Fails closed: only "nothing published"
+// or a published process proven gone counts as stopped. An unreadable record
+// may belong to a live host mid-write, so it is not evidence either way.
+async function confirmPlainStop(
+  before: HostPidMetadataEvidence,
+  environment: ServiceLabel["environment"],
+): Promise<PlainStopConfirmation> {
+  if (before.kind === "absent") return { kind: "stopped" };
+  if (before.kind === "read") {
+    if (publishedHostProcessGone(before.metadata)) return { kind: "stopped" };
+    if (
+      !(await waitForSignalledHostGone(before, restartStopGraces().sigtermMs))
+    ) {
+      return { kind: "running", pid: before.metadata.pid };
+    }
+  } else {
+    // No identity to wait on: give it the same grace a live record gets,
+    // then look again.
+    await waitForSignalledHostGone(before, restartStopGraces().sigtermMs);
+  }
+  // The old process being gone is not the host being gone: a stop job that
+  // timed out leaves the unit failed, and `Restart=on-failure` starts a
+  // replacement. Ask what is published now.
+  const after = await readHostPidMetadataEvidence(environment);
+  if (after.kind === "absent") return { kind: "stopped" };
+  if (after.kind === "unreadable") return { kind: "unconfirmed" };
+  return publishedHostProcessGone(after.metadata)
+    ? { kind: "stopped" }
+    : { kind: "running", pid: after.metadata.pid };
+}
+
 async function stopService(
   label: ServiceLabel,
   run: ProcessRunner,
@@ -599,32 +635,22 @@ async function stopService(
     // same grace `--force` gives it before escalating (by then systemd's own
     // `TimeoutStopSec` kill has landed on a unit-managed host), and if it is
     // still there, say so and name the one stop that ends it.
-    if (before.kind === "read" && !publishedHostProcessGone(before.metadata)) {
-      let runningPid: number | null = null;
-      if (
-        !(await waitForSignalledHostGone(before, restartStopGraces().sigtermMs))
-      ) {
-        runningPid = before.metadata.pid;
-      } else {
-        // The old process being gone is not the host being gone: a stop job
-        // that timed out leaves the unit failed, and `Restart=on-failure`
-        // starts a replacement. Ask what is published now.
-        const after = await readHostPidMetadataEvidence(label.environment);
-        if (
-          after.kind === "read" &&
-          !publishedHostProcessGone(after.metadata)
-        ) {
-          runningPid = after.metadata.pid;
-        }
-      }
-      if (runningPid !== null) {
-        throw cliError({
-          code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
-          message: `host ${operation}: the host (pid=${runningPid}) is still running after the stop request; stop did not take effect. Re-run with --force to stop it anyway (running terminal sessions and in-flight agent work will be killed).`,
-          details: { unit: unitName(label), pid: runningPid },
-          exitCode: 1,
-        });
-      }
+    const confirmed = await confirmPlainStop(before, label.environment);
+    if (confirmed.kind === "running") {
+      throw cliError({
+        code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+        message: `host ${operation}: the host (pid=${confirmed.pid}) is still running after the stop request; stop did not take effect. Re-run with --force to stop it anyway (running terminal sessions and in-flight agent work will be killed).`,
+        details: { unit: unitName(label), pid: confirmed.pid },
+        exitCode: 1,
+      });
+    }
+    if (confirmed.kind === "unconfirmed") {
+      throw cliError({
+        code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+        message: `host ${operation}: could not confirm the host stopped, because its pid record is unreadable. Run 'traycer host status' to check, or re-run with --force to stop it anyway (running terminal sessions and in-flight agent work will be killed).`,
+        details: { unit: unitName(label), pid: null },
+        exitCode: 1,
+      });
     }
     return;
   }

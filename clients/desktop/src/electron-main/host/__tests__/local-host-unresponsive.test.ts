@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   confirmLocalHostStillUnresponsive,
   publishLocalHostUnresponsive,
+  readLocalHostUnresponsive,
   setLocalHostStillUnresponsiveCheck,
 } from "../local-host-unresponsive";
 
@@ -52,5 +53,23 @@ describe("confirmLocalHostStillUnresponsive", () => {
     publishLocalHostUnresponsive({ pid: 4242, unreachableForMs: 600_000 });
 
     await expect(confirmLocalHostStillUnresponsive(4242)).resolves.toBe(false);
+  });
+
+  it("leaves no standing offer once the monitor is torn down: the verdict reads null and the stale pid is declined without a look", async () => {
+    // The sequence desktop-startup runs when it disposes the monitor.
+    const check = vi.fn(async () => true);
+    setLocalHostStillUnresponsiveCheck(check);
+    publishLocalHostUnresponsive({ pid: 4242, unreachableForMs: 600_000 });
+    expect(readLocalHostUnresponsive()).toEqual({
+      pid: 4242,
+      unreachableForMs: 600_000,
+    });
+
+    setLocalHostStillUnresponsiveCheck(null);
+    publishLocalHostUnresponsive(null);
+
+    expect(readLocalHostUnresponsive()).toBeNull();
+    await expect(confirmLocalHostStillUnresponsive(4242)).resolves.toBe(false);
+    expect(check).not.toHaveBeenCalled();
   });
 });

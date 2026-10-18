@@ -295,6 +295,11 @@ import {
 } from "../../app/host-login-item";
 import { resolveBundledCliPath } from "../../cli/cli-discovery";
 import { waitForHostReady } from "../host-readiness";
+import {
+  publishLocalHostUnresponsive,
+  setLocalHostStillUnresponsiveCheck,
+} from "../local-host-unresponsive";
+import { unresponsiveHostRestartIntent } from "../../ipc/host-ipc";
 import { probeHostActivityBusy } from "@traycer-clients/shared/host-client/host-activity-probe";
 import { encodeInstallGeneration } from "@traycer-clients/shared/host-version/install-generation";
 import {
@@ -5358,6 +5363,63 @@ describe("platform matrix", () => {
       .mocked(streamBundledTraycerCliJson)
       .mock.calls.filter((call) => call[0].args.includes("restart"));
     expect(restartCalls).toEqual([]);
+  });
+
+  it("an unresponsive-host restart queued behind a mutation is abandoned, with no restart, when the host answers again before the job owns the lane (traycer#1563 D3a)", async () => {
+    const controller = newController("production");
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    const installGate = deferred<void>();
+    vi.mocked(streamBundledTraycerCliJson).mockImplementation(async () => {
+      await installGate.promise;
+      return { data: { action: "noop", version: "1.7.0" } };
+    });
+    const occupy = controller.convergeReady(
+      false,
+      { kind: "background" },
+      "keep-installed",
+    );
+
+    // The verdict names pid 4242 when the restart is submitted; the monitor's
+    // fresh look is asked only once the job owns the lane.
+    const asked: number[] = [];
+    let answers = false;
+    setLocalHostStillUnresponsiveCheck(async (pid) => {
+      asked.push(pid);
+      return !answers;
+    });
+    publishLocalHostUnresponsive({ pid: 4242, unreachableForMs: 600_000 });
+    try {
+      const restart = controller.respawn(
+        unresponsiveHostRestartIntent(4242),
+        "force",
+      );
+      await vi.waitFor(() => {
+        expect(streamBundledTraycerCliJson).toHaveBeenCalled();
+      });
+      expect(asked).toEqual([]);
+
+      // The host answers again while the restart waits behind the install.
+      answers = true;
+      installGate.resolve();
+      await occupy;
+
+      await expect(restart).resolves.toEqual({
+        kind: "abandoned",
+        message:
+          "The host started responding again or was replaced, so it was not restarted.",
+      });
+      expect(asked).toEqual([4242]);
+      const restartCalls = vi
+        .mocked(streamBundledTraycerCliJson)
+        .mock.calls.filter((call) => call[0].args.includes("restart"));
+      expect(restartCalls).toEqual([]);
+    } finally {
+      setLocalHostStillUnresponsiveCheck(null);
+      publishLocalHostUnresponsive(null);
+    }
   });
 
   it("a respawn admitted after another respawn already restarted answers restarted without a second cycle", async () => {

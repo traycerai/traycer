@@ -953,6 +953,56 @@ describe("startHostHealthMonitor", () => {
     monitor.dispose();
   });
 
+  it("treats the same pid at another endpoint as a new outage: the old offer is withdrawn and the clock restarts, with no null snapshot in between (traycer#1563 D3a)", async () => {
+    const replacement: DesktopPublishedHostSnapshot = {
+      ...SNAPSHOT,
+      websocketUrl: "ws://127.0.0.1:55557/rpc",
+    };
+    let current: DesktopPublishedHostSnapshot = SNAPSHOT;
+    const onHostUnresponsive = vi.fn();
+    const monitor = startHostHealthMonitor({
+      host: fakeHost({ getSnapshot: () => current }),
+      intervalMs: INTERVAL_MS,
+      probe: vi.fn(async () => false),
+      readMetadata: vi.fn(async () => current),
+      respawn: vi.fn(async () => {}),
+      automaticRecoverySuspended: () => false,
+      governor: createHostRecoveryGovernor({
+        readLiveness: ALIVE,
+        now: undefined,
+      }),
+      readLiveness: ALIVE,
+      readLiveSupervisorPid: () => Promise.resolve(null),
+      onHostUnresponsive,
+    });
+
+    await ticks(700);
+    expect(onHostUnresponsive).toHaveBeenCalledTimes(1);
+    expect(onHostUnresponsive).toHaveBeenLastCalledWith(
+      expect.objectContaining({ pid: SNAPSHOT.pid }),
+    );
+
+    // Same pid, another endpoint, published straight over the first.
+    current = replacement;
+    await ticks(3);
+    expect(onHostUnresponsive).toHaveBeenCalledTimes(2);
+    expect(onHostUnresponsive).toHaveBeenLastCalledWith(null);
+
+    // The new outage serves its own window before it is offered.
+    await ticks(300);
+    expect(onHostUnresponsive).toHaveBeenCalledTimes(2);
+    await ticks(320);
+    expect(onHostUnresponsive).toHaveBeenCalledTimes(3);
+    const offered = onHostUnresponsive.mock.calls[2]?.[0];
+    expect(offered).toEqual({
+      pid: SNAPSHOT.pid,
+      unreachableForMs: expect.any(Number),
+    });
+    expect(offered?.unreachableForMs).toBeGreaterThanOrEqual(600_000);
+    expect(offered?.unreachableForMs).toBeLessThan(615_000);
+    monitor.dispose();
+  });
+
   describe("stillUnresponsive (traycer#1563 D3a)", () => {
     // The offer's action asks this before restarting: only the host the offer
     // was made for, still published, and still not answering a fresh probe.
@@ -966,10 +1016,20 @@ describe("startHostHealthMonitor", () => {
       published: DesktopPublishedHostSnapshot;
       reachable: boolean;
     }): HostHealthMonitor {
+      return startWithProbe(state, async () => state.reachable);
+    }
+
+    function startWithProbe(
+      state: {
+        snapshot: DesktopPublishedHostSnapshot;
+        published: DesktopPublishedHostSnapshot;
+      },
+      probe: () => Promise<boolean>,
+    ): HostHealthMonitor {
       return startHostHealthMonitor({
         host: fakeHost({ getSnapshot: () => state.snapshot }),
         intervalMs: INTERVAL_MS,
-        probe: vi.fn(async () => state.reachable),
+        probe,
         readMetadata: vi.fn(async () => state.published),
         respawn: vi.fn(async () => {}),
         automaticRecoverySuspended: () => false,
@@ -1067,6 +1127,52 @@ describe("startHostHealthMonitor", () => {
       await ticks(700);
 
       state.published = hostB;
+      await expect(monitor.stillUnresponsive(SNAPSHOT.pid)).resolves.toBe(
+        false,
+      );
+      monitor.dispose();
+    });
+
+    it("is false when another host is published while the fresh probe is out, even though the probe got no answer", async () => {
+      // The probe was aimed at the host the offer was for. By the time it
+      // fails, the lifecycle and pid.json name a replacement that reuses the
+      // pid: the failure says nothing about it.
+      const replacement: DesktopPublishedHostSnapshot = {
+        ...SNAPSHOT,
+        websocketUrl: "ws://127.0.0.1:55558/rpc",
+      };
+      const state = { snapshot: SNAPSHOT, published: SNAPSHOT };
+      let armed = false;
+      const monitor = startWithProbe(state, async () => {
+        if (armed) {
+          state.snapshot = replacement;
+          state.published = replacement;
+        }
+        return false;
+      });
+      await ticks(700);
+
+      armed = true;
+      await expect(monitor.stillUnresponsive(SNAPSHOT.pid)).resolves.toBe(
+        false,
+      );
+      monitor.dispose();
+    });
+
+    it("is false when only pid.json is swapped to another endpoint of the same pid while the probe is out", async () => {
+      const replacement: DesktopPublishedHostSnapshot = {
+        ...SNAPSHOT,
+        websocketUrl: "ws://127.0.0.1:55559/rpc",
+      };
+      const state = { snapshot: SNAPSHOT, published: SNAPSHOT };
+      let armed = false;
+      const monitor = startWithProbe(state, async () => {
+        if (armed) state.published = replacement;
+        return false;
+      });
+      await ticks(700);
+
+      armed = true;
       await expect(monitor.stillUnresponsive(SNAPSHOT.pid)).resolves.toBe(
         false,
       );
