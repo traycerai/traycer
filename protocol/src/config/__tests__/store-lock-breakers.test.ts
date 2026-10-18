@@ -184,6 +184,19 @@ async function liveChildPid(): Promise<number> {
   return pid;
 }
 
+/** Tokens for generations `0..count-1` of the dead record, each left by `pid`. */
+async function writeDeadTokens(pid: number, count: number): Promise<void> {
+  for (let generation = 0; generation < count; generation += 1) {
+    await writeAged(
+      breakTokenPath("dead-holder", generation),
+      pid,
+      null,
+      `dead-breaker-${generation}`,
+      ONE_HOUR_MS,
+    );
+  }
+}
+
 async function breakTokensLeft(): Promise<string[]> {
   return (await readdir(dirname(cliConfigPath()))).filter((name) =>
     name.includes(".break-"),
@@ -423,6 +436,37 @@ describe("breaking a dead settings lock", () => {
     expect(existsSync(cliConfigPath())).toBe(false);
   });
 
+  it("waits on a young break token even when its creator is dead", async () => {
+    setCliConfigLockTimingForTests({
+      waitMs: 600,
+      pollMs: 10,
+      staleAgeMs: 10_000,
+    });
+    const dead = await deadPid();
+    // The lock is an hour old, so it qualifies for breaking; only the token is
+    // young, which could be a breaker that has not finished writing it.
+    await writeAged(lockPath(), dead, null, "dead-holder", ONE_HOUR_MS);
+    await writeAged(
+      breakTokenPath("dead-holder", 0),
+      dead,
+      null,
+      "dead-breaker",
+      0,
+    );
+    const lockBefore = await readFile(lockPath());
+    const tokenBefore = await readFile(breakTokenPath("dead-holder", 0));
+
+    await expect(setEnvOverride("K", "v")).rejects.toThrow(
+      /Timed out after 600ms/,
+    );
+
+    expect(await readFile(lockPath())).toEqual(lockBefore);
+    expect(await readFile(breakTokenPath("dead-holder", 0))).toEqual(
+      tokenBefore,
+    );
+    expect(existsSync(cliConfigPath())).toBe(false);
+  });
+
   it("sweeps break tokens left for records that are gone", async () => {
     const dead = await deadPid();
     await writeAged(
@@ -444,5 +488,95 @@ describe("breaking a dead settings lock", () => {
 
     expect((await readCliConfig()).envOverrides).toEqual({ K: "v" });
     expect(await breakTokensLeft()).toEqual([]);
+  });
+
+  // No fixed number of generations: however many breakers died mid-break, the
+  // next one can still break.
+  it.each([8, 9, 50])(
+    "recovers a dead lock behind %i dead break-token generations",
+    async (generations) => {
+      const dead = await deadPid();
+      await writeAged(lockPath(), dead, null, "dead-holder", ONE_HOUR_MS);
+      await writeDeadTokens(dead, generations);
+
+      await setEnvOverride("K", "v");
+
+      expect((await readCliConfig()).envOverrides).toEqual({ K: "v" });
+      expect(existsSync(lockPath())).toBe(false);
+      expect(await breakTokensLeft()).toEqual([]);
+    },
+  );
+
+  it("lets one of two breakers remove the lock at a high generation", async () => {
+    await seed({ envOverrides: { SEED_KEY: "s" } });
+    const dead = await deadPid();
+    await writeAged(lockPath(), dead, null, "dead-holder", ONE_HOUR_MS);
+    await writeDeadTokens(dead, 20);
+    const state: HolderState = { active: 0, failures: [] };
+    const readSeam = makeSeam();
+    const aAcquired = makeSeam();
+    h.readPark = readSeam;
+    h.lockReads = 0;
+    let aHasLock = false;
+    void aAcquired.parked.then(() => {
+      aHasLock = true;
+    });
+
+    // B claims generation 20 and stops at its re-read of the lock.
+    const b = holder("B", state, NO_HOOKS);
+    await Promise.race([readSeam.parked, b]);
+    // B's token is young and its creator alive, so A has to wait for it.
+    const a = holder("A", state, {
+      onAcquired: aAcquired.markParked,
+      beforeRename: null,
+    });
+    await Promise.race([aAcquired.parked, delay(300)]);
+    expect(aHasLock).toBe(false);
+
+    readSeam.open();
+    await Promise.all([a, b]);
+
+    expect(state.failures).toEqual([]);
+    expect((await readCliConfig()).envOverrides).toEqual({
+      SEED_KEY: "s",
+      A: "A",
+      B: "B",
+    });
+    expect(existsSync(lockPath())).toBe(false);
+    expect(await breakTokensLeft()).toEqual([]);
+  });
+
+  it("still times out behind a live breaker at a high generation", async () => {
+    setCliConfigLockTimingForTests({ waitMs: 800 });
+    const dead = await deadPid();
+    const live = await liveChildPid();
+    await writeAged(lockPath(), dead, null, "dead-holder", ONE_HOUR_MS);
+    await writeDeadTokens(dead, 10);
+    await writeAged(
+      breakTokenPath("dead-holder", 10),
+      live,
+      await queryPidStartFingerprintAsync(live),
+      "live-breaker",
+      ONE_HOUR_MS,
+    );
+    const lockBefore = await readFile(lockPath());
+    const tokenBefore = await readFile(breakTokenPath("dead-holder", 10));
+
+    const error = await setEnvOverride("K", "v").then(
+      () => null,
+      (rejection: unknown) => rejection,
+    );
+
+    expect(error).toBeInstanceOf(Error);
+    const message = error instanceof Error ? error.message : "";
+    expect(message).toMatch(
+      /Timed out after 800ms waiting for the settings lock/,
+    );
+    expect(message).toContain(lockPath());
+    expect(await readFile(lockPath())).toEqual(lockBefore);
+    expect(await readFile(breakTokenPath("dead-holder", 10))).toEqual(
+      tokenBefore,
+    );
+    expect(existsSync(cliConfigPath())).toBe(false);
   });
 });

@@ -48,9 +48,9 @@ import {
  * unlink the lock, and only after re-reading it and finding that same record.
  * Every other breaker of the record loses the token race and waits, so no
  * breaker can remove a lock that replaced the dead one. A token whose creator
- * died is never removed by another breaker; the next one takes the next
- * generation instead. Tokens of records that are gone are swept by the next
- * holder.
+ * died is never removed by another breaker; the next one claims the
+ * generation after the highest that exists instead. Tokens of records that
+ * are gone are swept by the next holder.
  */
 
 export interface CliConfigLockTiming {
@@ -76,10 +76,6 @@ const DEFAULT_TIMING: CliConfigLockTiming = {
 // so a contender polling behind a live holder does not spawn `tasklist` (the
 // Windows liveness probe) on every poll.
 const LIVE_VERDICT_REUSE_MS = 1_000;
-
-// Break-token generations tried for one dead record before waiting. Each
-// further generation needs the previous token's creator to have died too.
-const BREAK_GENERATIONS = 8;
 
 // Windows reports a create or link over a file that is being deleted (a
 // peer's release still has a handle open) as access denied rather than
@@ -226,6 +222,7 @@ export async function acquireCliConfigLock(
               holder.record.nonce,
               serialized,
               timing,
+              deadline,
             )
           ) {
             continue;
@@ -252,6 +249,12 @@ export async function acquireCliConfigLock(
  * break token for its nonce. Resolves `true` when the caller should retry its
  * create at once (the lock is gone, by this breaker or another), `false` to
  * keep waiting.
+ *
+ * The generation to claim is the one after the highest that exists, read from
+ * the directory each attempt, and is taken only when every existing token's
+ * creator died holding it. There is no fixed number of generations: however
+ * many breakers died mid-break, the next one can still break, and the acquire
+ * deadline is the only bound.
  */
 async function breakDeadLock(
   lockPath: string,
@@ -259,10 +262,29 @@ async function breakDeadLock(
   deadNonce: string,
   serialized: string,
   timing: CliConfigLockTiming,
+  deadline: number,
 ): Promise<boolean> {
   const tokenBase = breakTokenBase(lockPath, deadNonce);
-  for (let generation = 0; generation < BREAK_GENERATIONS; generation += 1) {
-    const tokenPath = `${tokenBase}.${generation}`;
+  // Creators already proven dead in this call, so a long chain of dead tokens
+  // is probed once per creator, not once per generation per attempt.
+  const deadCreators = new Set<string>();
+  while (Date.now() < deadline) {
+    const generations = await tokenGenerations(tokenBase);
+    // Any token whose creator is not provably dead is a breaker at work (or
+    // one nothing proves dead): it alone may remove this record, so we wait.
+    for (const generation of generations) {
+      if (
+        !(await tokenCreatorDead(
+          `${tokenBase}.${generation}`,
+          timing,
+          deadCreators,
+        ))
+      ) {
+        return false;
+      }
+    }
+    const next = generations.reduce((max, g) => Math.max(max, g + 1), 0);
+    const tokenPath = `${tokenBase}.${next}`;
     if (await tryCreate(tokenPath, serialized)) {
       try {
         // Only this token's creator may remove the record, and the lock cannot
@@ -285,21 +307,51 @@ async function breakDeadLock(
         await rm(tokenPath, { force: true }).catch(() => undefined);
       }
     }
-    // Another breaker holds this generation. Move past it only when its
-    // creator died holding it; otherwise it is breaking, and we wait.
-    const token = await readHolder(tokenPath);
-    if (token === null) return false;
-    const tokenAgeMs = await lockAgeMs(tokenPath);
-    if (
-      token.record === null ||
-      tokenAgeMs === null ||
-      tokenAgeMs < timing.staleAgeMs ||
-      !(await recordHolderDead(token.record))
-    ) {
-      return false;
-    }
+    // Another breaker claimed that generation first: look again.
   }
   return false;
+}
+
+/** The generations of the break tokens that exist under `tokenBase`. */
+async function tokenGenerations(tokenBase: string): Promise<number[]> {
+  const prefix = `${basename(tokenBase)}.`;
+  let entries: string[];
+  try {
+    entries = await readdir(dirname(tokenBase));
+  } catch {
+    return [];
+  }
+  const generations: number[] = [];
+  for (const entry of entries) {
+    if (!entry.startsWith(prefix)) continue;
+    const suffix = entry.slice(prefix.length);
+    if (!/^\d+$/.test(suffix)) continue; // a breaker's temp file
+    const generation = Number(suffix);
+    if (Number.isSafeInteger(generation)) generations.push(generation);
+  }
+  return generations;
+}
+
+/**
+ * Whether the token at `tokenPath` was left by a creator that died holding it:
+ * a complete record, older than the stale age, whose holder is provably dead.
+ * A token that vanished, is young, names no holder, or whose holder may be
+ * alive is not.
+ */
+async function tokenCreatorDead(
+  tokenPath: string,
+  timing: CliConfigLockTiming,
+  deadCreators: Set<string>,
+): Promise<boolean> {
+  const token = await readHolder(tokenPath);
+  if (token === null || token.record === null) return false;
+  const ageMs = await lockAgeMs(tokenPath);
+  if (ageMs === null || ageMs < timing.staleAgeMs) return false;
+  const creator = `${token.record.pid}:${token.record.pidStartTime ?? ""}`;
+  if (deadCreators.has(creator)) return true;
+  if (!(await recordHolderDead(token.record))) return false;
+  deadCreators.add(creator);
+  return true;
 }
 
 function breakTokenPrefix(lockPath: string): string {
