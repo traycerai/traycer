@@ -223,8 +223,10 @@ export type BotOpenClaimReason = z.infer<typeof botOpenClaimReasonSchema>;
  *   never claimed away from, and the sandbox is not reachable from here;
  * - `bound-host-not-observable`: the bot runs on another member's machine,
  *   whose reachability this account cannot see;
- * - `reachability-unknown`: whether the bound host is reachable could not be
- *   read now.
+ * - `reachability-unknown`: whether the bound host is reachable, or what kind
+ *   of host it is, could not be read now;
+ * - `trunk-busy`: this host still runs a turn of the bot's trunk from an
+ *   earlier binding, and the bot is not claimed under it until it settles.
  */
 export const botOpenPausedReasonSchema = lazySchema(() =>
   z.enum([
@@ -232,6 +234,7 @@ export const botOpenPausedReasonSchema = lazySchema(() =>
     "bound-to-sandbox",
     "bound-host-not-observable",
     "reachability-unknown",
+    "trunk-busy",
   ]),
 );
 export type BotOpenPausedReason = z.infer<typeof botOpenPausedReasonSchema>;
