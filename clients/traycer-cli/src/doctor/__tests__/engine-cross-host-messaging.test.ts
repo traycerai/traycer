@@ -78,6 +78,31 @@ describe("crossHostMessagingIssue", () => {
     expect(issue?.terminalCommand).toBeNull();
   });
 
+  // The schema bounds the instants below only, and `toISOString()` throws
+  // `RangeError` past 8.64e15. That must not turn a healthy, answering host
+  // into a failed RPC probe.
+  it("still raises, without throwing, when an instant is beyond what Date can hold", () => {
+    const issue = crossHostMessagingIssue({
+      state: "paused",
+      pausedSince: 9e15,
+      nextRetryAt: Number.MAX_SAFE_INTEGER,
+      cause: "breaker-open",
+    });
+
+    expect(issue?.code).toBe(
+      DOCTOR_ISSUE_CODES.HOST_CROSS_HOST_MESSAGES_PAUSED,
+    );
+    expect(issue?.severity).toBe("warning");
+    expect(issue?.message).not.toContain("Paused since");
+    expect(issue?.message).not.toContain("next attempt at");
+    expect(issue?.message).toContain("It retries on its own.");
+    expect(issue?.details).toEqual({
+      pausedSince: 9e15,
+      nextRetryAt: Number.MAX_SAFE_INTEGER,
+      cause: "breaker-open",
+    });
+  });
+
   it("still raises when the times and cause are unknown", () => {
     const issue = crossHostMessagingIssue({
       state: "paused",

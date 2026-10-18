@@ -866,6 +866,25 @@ describe("<ToolSegment /> cross-host send delivery", () => {
     expect(screen.queryByText("Sent message")).toBeNull();
   });
 
+  // The note is status copy, not the message: chat find indexes the message
+  // body, so a search for "queued" must not land on the card's note.
+  it("marks the delivery note as skipped by chat find, collapsed and open", () => {
+    renderDelivery("queued");
+    const collapsed = screen.getAllByText(/Queued for Work Laptop/);
+    expect(collapsed.length).toBeGreaterThan(0);
+    for (const note of collapsed) {
+      expect(note.hasAttribute("data-find-skip")).toBe(true);
+    }
+
+    fireEvent.click(screen.getByRole("button", { name: /Queued message/ }));
+
+    const open = screen.getAllByText(/Queued for Work Laptop/);
+    expect(open.length).toBeGreaterThan(0);
+    for (const note of open) {
+      expect(note.hasAttribute("data-find-skip")).toBe(true);
+    }
+  });
+
   it("renders a delivered send as delivered on the host", () => {
     renderDelivery("delivered");
     expect(screen.getByText(/Delivered on Work Laptop/)).toBeTruthy();

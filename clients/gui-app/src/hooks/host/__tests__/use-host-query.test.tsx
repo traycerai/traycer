@@ -925,6 +925,51 @@ describe("useHostQuery fixed cadence wiring", () => {
   });
 });
 
+describe("host.status pollers", () => {
+  afterEach(() => {
+    focusManager.setFocused(undefined);
+    cleanup();
+    vi.useRealTimers();
+  });
+
+  // Two surfaces poll `host.status` (the side strip's indicator and the
+  // Overview). Each observer asks for the 10 s cadence, but they share one
+  // query, and the query realigns every observer's interval on each update,
+  // so a second poller does not double the traffic.
+  it("two host.status pollers mounted 3 s apart share one 10 s cadence", async () => {
+    vi.useFakeTimers();
+    focusManager.setFocused(true);
+    const fixture = createFixedHostQueryFixture("host.status");
+    const useStatusPoller = () =>
+      useHostQuery({
+        cacheKeyIdentity: undefined,
+        client: fixture.client,
+        method: "host.status",
+        params: {},
+        options: { poll: true, staleTime: 30_000 },
+      });
+
+    renderHook(useStatusPoller, { wrapper: fixture.Wrapper });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(fixture.requestCount.value).toBe(1);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(3_000);
+    });
+    renderHook(useStatusPoller, { wrapper: fixture.Wrapper });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+
+    // One poller alone makes 1 + 6 requests over these 63 s; two staggered
+    // timers that did not realign would make about 12.
+    expect(fixture.requestCount.value).toBeGreaterThanOrEqual(6);
+    expect(fixture.requestCount.value).toBeLessThanOrEqual(8);
+  });
+});
+
 function speechQuery(queryClient: QueryClient): Query {
   return queryForMethod(queryClient, "speech.getModelStatus");
 }
@@ -1160,7 +1205,7 @@ function createConditionHostQueryFixture(): {
 }
 
 function createFixedHostQueryFixture(
-  method: "epic.listCollaborators" | "host.getRateLimitUsage",
+  method: "epic.listCollaborators" | "host.getRateLimitUsage" | "host.status",
 ): {
   readonly client: HostClient<HostRpcRegistry>;
   readonly queryClient: QueryClient;
@@ -1186,6 +1231,12 @@ function createFixedHostQueryFixture(
             collaborators: [],
             collaboratorsAvailable: true,
           };
+        },
+        "host.status": () => {
+          if (method === "host.status") {
+            requestCount.value += 1;
+          }
+          return STATUS_RESPONSE;
         },
         "host.getRateLimitUsage": () => {
           if (method === "host.getRateLimitUsage") {

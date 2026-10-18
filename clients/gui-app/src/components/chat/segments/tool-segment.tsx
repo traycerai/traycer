@@ -929,9 +929,16 @@ function A2ADeliveryBadge(props: {
   );
 }
 
+// `data-find-skip`: the note names the receiving device from the host
+// directory at paint time, which the find projection (a pure read of the
+// segment) cannot reproduce. Indexed without it, a query would count matches
+// the row cannot highlight; painted inside the row's anchor unindexed, a
+// query on its words would highlight text that counted no match. So find
+// reaches the message, as it always did, and not this status line.
 function A2ADeliveryNote(props: { readonly view: A2ASendDeliveryView }) {
   return (
     <p
+      data-find-skip
       className={cn(
         "m-0 text-ui-xs leading-5",
         props.view.tone === "undelivered"

@@ -1645,14 +1645,13 @@ export function crossHostMessagingIssue(
   messaging: HostStatusCrossHostMessaging | null,
 ): DoctorIssue | null {
   if (messaging === null || messaging.state === "ok") return null;
-  const since =
-    messaging.pausedSince === null
-      ? ""
-      : ` Paused since ${new Date(messaging.pausedSince).toISOString()}.`;
+  const pausedSince = hostInstantText(messaging.pausedSince);
+  const nextRetryAt = hostInstantText(messaging.nextRetryAt);
+  const since = pausedSince === null ? "" : ` Paused since ${pausedSince}.`;
   const retry =
-    messaging.nextRetryAt === null
+    nextRetryAt === null
       ? " It retries on its own."
-      : ` It retries on its own; next attempt at ${new Date(messaging.nextRetryAt).toISOString()}.`;
+      : ` It retries on its own; next attempt at ${nextRetryAt}.`;
   return {
     code: DOCTOR_ISSUE_CODES.HOST_CROSS_HOST_MESSAGES_PAUSED,
     severity: "warning",
@@ -1666,6 +1665,17 @@ export function crossHostMessagingIssue(
       cause: messaging.cause,
     },
   };
+}
+
+// A host-reported epoch-ms instant as ISO text, or `null` when there is none
+// or it lies outside what `Date` can hold. The schema bounds it below only, and
+// `toISOString()` throws `RangeError` past 8.64e15 - inside the RPC probe's
+// `try`, which would then report this healthy, answering host as a failed RPC
+// handshake. The raw value still travels in `details`.
+function hostInstantText(epochMs: number | null): string | null {
+  if (epochMs === null) return null;
+  const instant = new Date(epochMs);
+  return Number.isNaN(instant.getTime()) ? null : instant.toISOString();
 }
 
 // Route a handshake `INCOMPATIBLE` (or cross-major `DOWNGRADE_UNSUPPORTED`) to
