@@ -51,6 +51,9 @@ export function HomeBotsSection(): ReactNode {
   const headingId = useId();
 
   const registeredHosts = useRegisteredHosts();
+  // `undefined` while loading or failed with nothing kept, `null` with no
+  // signed-in registry: neither is an answer.
+  const registry = registeredHosts.data ?? null;
   const hostReach = useMemo(
     () => ({
       directoryHostIds: new Set(
@@ -58,18 +61,18 @@ export function HomeBotsSection(): ReactNode {
       ),
       connectableHostIds: new Set(connectable.hostIds),
       connectableResolved: connectable.resolved,
-      personalHostIds: new Set(
-        (registeredHosts.data?.hosts ?? [])
-          .filter((host) => host.kind === "personal")
-          .map((host) => host.hostId),
-      ),
+      // An unanswered registry is not "no personal hosts": the rows read
+      // it as not known yet.
+      personalHostIds:
+        registry === null
+          ? null
+          : new Set(
+              registry.hosts
+                .filter((host) => host.kind === "personal")
+                .map((host) => host.hostId),
+            ),
     }),
-    [
-      connectable.hostIds,
-      connectable.resolved,
-      directory.data,
-      registeredHosts.data,
-    ],
+    [connectable.hostIds, connectable.resolved, directory.data, registry],
   );
   const environmentList = environments.data?.environments ?? EMPTY_ENVIRONMENTS;
   // A team environment's machines the reader may see beyond their own (its

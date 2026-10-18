@@ -503,6 +503,29 @@ describe("homeBotState", () => {
       ).toBe("idle");
     });
 
+    it.each([false, true])(
+      "is idle for a team bot, never working or paused, while the registry has not answered (working: %s)",
+      (working) => {
+        expect(
+          state({
+            working,
+            environmentOwnerKind: "organization",
+            personalHostIds: null,
+          }),
+        ).toBe("idle");
+      },
+    );
+
+    it("keeps a personal environment's working bot working while the registry has not answered", () => {
+      expect(
+        state({
+          working: true,
+          environmentOwnerKind: "user",
+          personalHostIds: null,
+        }),
+      ).toBe("working");
+    });
+
     it("is idle for a team bot on a dialable sandbox, which is not a personal host", () => {
       expect(
         state({

@@ -187,7 +187,6 @@ function HostEnvironmentPicker(props: {
           environment.ownerKind === "user" ||
           environment.environmentId === currentEnvironmentId,
       );
-  const hidesTeams = offered.length < environments.length;
   // Another member added this host to a team: it is listed, never moved from
   // here. Only the member who added it can change its environment.
   const locked = binding.explicit && !binding.canUnbind;
@@ -245,7 +244,7 @@ function HostEnvironmentPicker(props: {
           );
         })}
       </ul>
-      {hidesTeams ? (
+      {!offersTeams ? (
         <p
           className="text-ui-xs text-muted-foreground"
           data-testid="host-environment-team-hosts-only"

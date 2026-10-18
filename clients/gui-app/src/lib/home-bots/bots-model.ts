@@ -163,16 +163,17 @@ export function homeBotState(input: {
   /** The bot's environment's owner kind; `null` when the environment is not
    * listed (the reader left it). */
   readonly environmentOwnerKind: EnvironmentDescriptor["ownerKind"] | null;
-  /** The reader's own hosts the registry calls `personal`. */
-  readonly personalHostIds: ReadonlySet<string>;
+  /** The reader's own hosts the registry calls `personal`, or null while
+   * the registry has not answered. */
+  readonly personalHostIds: ReadonlySet<string> | null;
 }): HomeBotState {
   const { boundHostId } = input;
   if (boundHostId === null) return "paused";
-  if (
-    input.environmentOwnerKind === "organization" &&
-    input.personalHostIds.has(boundHostId)
-  ) {
-    return "paused";
+  if (input.environmentOwnerKind === "organization") {
+    // Until the registry answers, a team bot's host may be a personal
+    // machine, which runs no team bot: neither working nor paused is known.
+    if (input.personalHostIds === null) return "idle";
+    if (input.personalHostIds.has(boundHostId)) return "paused";
   }
   if (input.working) return "working";
   if (!input.connectableResolved) return "idle";

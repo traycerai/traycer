@@ -26,8 +26,9 @@ export interface HomeBotHostReach {
   readonly directoryHostIds: ReadonlySet<string>;
   readonly connectableHostIds: ReadonlySet<string>;
   readonly connectableResolved: boolean;
-  /** The reader's own hosts the registry calls `personal`. */
-  readonly personalHostIds: ReadonlySet<string>;
+  /** The reader's own hosts the registry calls `personal`; `null` until the
+   * registry has answered. */
+  readonly personalHostIds: ReadonlySet<string> | null;
 }
 
 const STATE_LABELS: Readonly<Record<HomeBotState, string>> = {

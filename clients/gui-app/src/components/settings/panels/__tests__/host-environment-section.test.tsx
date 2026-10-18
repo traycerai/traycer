@@ -51,6 +51,7 @@ const mocks = vi.hoisted(() => ({
   state: {
     hostKind: null as HostRegistryKind | null,
     binding: null as EnvironmentHostBinding | null,
+    environments: [] as ReadonlyArray<EnvironmentDescriptor>,
   },
 }));
 
@@ -73,7 +74,7 @@ vi.mock("@/hooks/auth/use-registered-hosts-query", () => ({
 vi.mock("@/hooks/bots/use-environment-list-query", () => ({
   useEnvironmentListQuery: () => ({
     isError: false,
-    data: { environments: [PERSONAL, TEAM, OTHER_TEAM] },
+    data: { environments: mocks.state.environments },
   }),
 }));
 vi.mock("@/hooks/bots/use-environment-host-read-query", () => ({
@@ -158,6 +159,7 @@ function teamBinding(canUnbind: boolean): EnvironmentHostBinding {
 beforeEach(() => {
   mocks.bindMutate.mockReset();
   mocks.state.hostKind = null;
+  mocks.state.environments = [PERSONAL, TEAM, OTHER_TEAM];
   mocks.state.binding = {
     hostId: "host-a",
     environment: PERSONAL,
@@ -221,6 +223,25 @@ describe("HostEnvironmentSection team hosts only", () => {
       OTHER_TEAM.environmentId,
     ]);
     expect(screen.queryByTestId("host-environment-team-hosts-only")).toBeNull();
+  });
+
+  it("says where a team's bots run on a personal host though the reader belongs to no team, so nothing is hidden", () => {
+    mocks.state.hostKind = "personal";
+    mocks.state.environments = [PERSONAL];
+    renderSection();
+
+    expect(optionIds()).toEqual([PERSONAL.environmentId]);
+    expect(screen.getByTestId("host-environment-team-hosts-only")).toBeTruthy();
+  });
+
+  it("says where a team's bots run on a personal host bound to the reader's only team, so nothing is hidden", () => {
+    mocks.state.hostKind = "personal";
+    mocks.state.environments = [PERSONAL, TEAM];
+    mocks.state.binding = teamBinding(true);
+    renderSection();
+
+    expect(optionIds()).toEqual([PERSONAL.environmentId, TEAM.environmentId]);
+    expect(screen.getByTestId("host-environment-team-hosts-only")).toBeTruthy();
   });
 
   it("keeps the team a personal host currently reports, marked, and hides the other teams", () => {

@@ -56,7 +56,7 @@ const mocks = vi.hoisted(() => {
       directoryHostIds: ReadonlySet<string>;
       connectableHostIds: ReadonlySet<string>;
       connectableResolved: boolean;
-      personalHostIds: ReadonlySet<string>;
+      personalHostIds: ReadonlySet<string> | null;
       environmentHostIds: ReadonlySet<string> | null;
     }>,
     useEnvironmentHostLists:
@@ -127,7 +127,7 @@ vi.mock("@/components/home/bots/home-bots-group", () => ({
       directoryHostIds: ReadonlySet<string>;
       connectableHostIds: ReadonlySet<string>;
       connectableResolved: boolean;
-      personalHostIds: ReadonlySet<string>;
+      personalHostIds: ReadonlySet<string> | null;
     };
     environmentHostIds: ReadonlySet<string> | null;
   }) => {
@@ -423,20 +423,18 @@ describe("HomeBotsSection what each group is told", () => {
     mountSection();
 
     for (const environmentId of ["env-personal", "env-team"]) {
-      expect([...latestGroupProps(environmentId).personalHostIds]).toEqual([
-        "host-1",
-      ]);
+      expect(latestGroupProps(environmentId).personalHostIds).toEqual(
+        new Set(["host-1"]),
+      );
     }
   });
 
-  it("hands every group no personal host while the registry has not answered", () => {
+  it("hands every group an unanswered registry as not known, never as no personal host", () => {
     resolveBothQueries();
     mountSection();
 
     for (const environmentId of ["env-personal", "env-team"]) {
-      expect(latestGroupProps(environmentId).personalHostIds).toEqual(
-        new Set(),
-      );
+      expect(latestGroupProps(environmentId).personalHostIds).toBeNull();
     }
   });
 
