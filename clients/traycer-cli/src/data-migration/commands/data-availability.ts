@@ -8,7 +8,8 @@ import type { DataRootPlatform } from "@traycer/protocol/config/data-root";
  * platform qualification (issue 718, ticket 8: packaged two-volume Windows runs
  * of the native process census, the private-folder ACLs and the full engine)
  * has passed for this build. Until then `data init` and starting `data migrate`
- * refuse before writing anything.
+ * refuse before writing anything. Windows passed it (Server 2025, a fixed
+ * local NTFS second volume); macOS and Linux have not been qualified.
  *
  * Read-only and recovery operations are never gated: `data status` and
  * `data migrate --dry-run` change nothing, and `data recover` / `data cleanup`
@@ -27,7 +28,7 @@ export type DataRootAvailability = {
 };
 
 export const DATA_ROOT_AVAILABILITY: DataRootAvailability = {
-  win32: { init: false, migrate: false },
+  win32: { init: true, migrate: true },
   posix: { init: false, migrate: false },
 };
 

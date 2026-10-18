@@ -5,13 +5,11 @@ credentials, chat and agent history, Traycer-managed provider accounts,
 managed worktrees, downloaded hosts, models and runtimes. By default that is
 `~/.traycer` (`C:\Users\<you>\.traycer` on Windows).
 
-> **Availability.** Choosing another folder (`traycer data init`) and moving
-> an existing installation (`traycer data migrate`) are not available in this
-> version yet; both refuse without changing anything. `traycer data status`,
+> **Availability.** On Windows, `traycer data init` and `traycer data migrate`
+> can put the data folder on a different fixed local NTFS drive. On macOS and
+> Linux both refuse without changing anything. `traycer data status`,
 > `traycer data migrate --dry-run`, `traycer data recover` and
-> `traycer data cleanup` work in every version that has them. The first
-> supported setup will be a different fixed local NTFS drive on Windows. macOS
-> and Linux are not supported targets.
+> `traycer data cleanup` work on every platform.
 
 ## Commands
 
