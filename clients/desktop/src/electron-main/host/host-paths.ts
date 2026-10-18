@@ -1,5 +1,6 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { traycerDataRoot } from "@traycer/protocol/config/data-root";
 import type { Environment } from "../../config";
 import { devDesktopSlotForEnvironment } from "./dev-desktop-slot";
 // Re-export so the desktop's host consumers can import the deploy-slot type
@@ -224,7 +225,7 @@ function hostSlotRoot(base: string, environment: Environment): string {
 }
 
 export function getHostFsLayout(environment: Environment): HostFsLayout {
-  const base = join(homedir(), ".traycer", "host");
+  const base = join(traycerDataRoot(), "host");
   const rootDir = hostSlotRoot(base, environment);
   const installDir = join(rootDir, "install");
   const stagedDir = join(rootDir, "staged");
@@ -259,7 +260,7 @@ export function getHostFsLayout(environment: Environment): HostFsLayout {
  * imported here; same duplication precedent as `environmentSubdir`).
  */
 export function cliSlotRootForEnvironment(environment: Environment): string {
-  const cliRoot = join(homedir(), ".traycer", "cli");
+  const cliRoot = join(traycerDataRoot(), "cli");
   return hostSlotRoot(cliRoot, environment);
 }
 

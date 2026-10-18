@@ -76,7 +76,7 @@ const PARK_MARKERS: Readonly<Record<UnstartableService, string>> = {
  * THE refusal: an update whose stop and restart go through a service this
  * account cannot start again is refused before it claims an attempt,
  * downloads, stops, swaps or writes anything. Windows only - the host's
- * Scheduled Task - from ONE read-only `/Query /XML`, the ownership read every
+ * Scheduled Task - from ONE read-only definition read, the ownership read every
  * task verb goes through:
  *
  * - The caller's task, disabled by its owner in Task Scheduler. It refuses

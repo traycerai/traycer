@@ -885,6 +885,7 @@ describe("chat find projection", () => {
           spawnToolCallId: null,
           parentId: null,
           workflowMeta: null,
+          toolImageResults: [],
           children: [],
         },
       ],
@@ -951,6 +952,7 @@ describe("chat find projection", () => {
             agentsFinished: 1,
             totalTokens: 500,
           },
+          toolImageResults: [],
           children: [],
         },
       ],
@@ -1000,6 +1002,7 @@ describe("chat find projection", () => {
           spawnToolCallId: null,
           parentId: null,
           workflowMeta: null,
+          toolImageResults: [],
           children: [],
         },
       ],
@@ -1312,6 +1315,7 @@ describe("chat find projection", () => {
           spawnToolCallId: null,
           parentId: null,
           workflowMeta: null,
+          toolImageResults: [],
           children: [
             {
               id: "notice-nested",
@@ -1375,6 +1379,7 @@ describe("chat find projection", () => {
         spawnToolCallId: null,
         parentId: null,
         workflowMeta: null,
+        toolImageResults: [],
         children: [],
         ...patch,
       };
@@ -2096,6 +2101,7 @@ describe("buildSubagentChatFindRows", () => {
       spawnToolCallId: null,
       parentId: null,
       workflowMeta: null,
+      toolImageResults: [],
       children: [],
       ...patch,
     };

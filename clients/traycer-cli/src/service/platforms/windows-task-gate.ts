@@ -216,7 +216,7 @@ export function parseTaskPrincipalUserId(xml: string): string | null {
 
 /**
  * THE decision: is the task named `taskName` the caller's, right now? One
- * read-only `/Query /XML`; an account-name principal (a task written from a
+ * read-only definition read; an account-name principal (a task written from a
  * name rather than a SID) costs one OS name lookup. Never cached.
  */
 export async function readWindowsTaskOwnership(

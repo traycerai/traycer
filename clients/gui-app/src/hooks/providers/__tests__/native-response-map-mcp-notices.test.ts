@@ -44,7 +44,12 @@ describe("MCP list/mutate mappers keep host notices", () => {
           native: { ok: true, kind: "mcp", servers: [], notices: [BLOCKING] },
         },
       }),
-    ).toEqual({ servers: [], notices: [BLOCKING], refreshError: null });
+    ).toEqual({
+      servers: [],
+      notices: [BLOCKING],
+      coverage: null,
+      refreshError: null,
+    });
   });
 
   it("defaults notices to none for an old host's list", () => {
@@ -55,7 +60,12 @@ describe("MCP list/mutate mappers keep host notices", () => {
           native: { ok: true, kind: "mcp", servers: [ROW] },
         },
       }),
-    ).toEqual({ servers: [ROW], notices: [], refreshError: null });
+    ).toEqual({
+      servers: [ROW],
+      notices: [],
+      coverage: null,
+      refreshError: null,
+    });
   });
 
   it("yields no notices when the host answered another kind or null", () => {
@@ -63,7 +73,7 @@ describe("MCP list/mutate mappers keep host notices", () => {
       mapProvidersListToMcpServers({
         response: { providers: [], native: null },
       }),
-    ).toEqual({ servers: [], notices: [], refreshError: null });
+    ).toEqual({ servers: [], notices: [], coverage: null, refreshError: null });
   });
 
   it("retains mutation notices and defaults them for an old host", () => {
@@ -78,12 +88,60 @@ describe("MCP list/mutate mappers keep host notices", () => {
           },
         },
       }),
-    ).toEqual({ servers: [ROW], notices: [BLOCKING], refreshError: null });
+    ).toEqual({
+      servers: [ROW],
+      notices: [BLOCKING],
+      coverage: null,
+      refreshError: null,
+    });
     expect(
       mapNativeMutateToMcpMutate({
         response: { result: { ok: true, kind: "mcp", servers: [ROW] } },
       }),
-    ).toEqual({ servers: [ROW], notices: [], refreshError: null });
+    ).toEqual({
+      servers: [ROW],
+      notices: [],
+      coverage: null,
+      refreshError: null,
+    });
+  });
+
+  it("carries host coverage through list and mutation, and defaults it to null", () => {
+    const coverage = {
+      complete: false,
+      sources: [
+        {
+          label: "Global settings",
+          path: null,
+          scope: "global" as const,
+          outcome: "unrefreshed" as const,
+          reason: null,
+        },
+      ],
+    };
+    expect(
+      mapProvidersListToMcpServers({
+        response: {
+          providers: [],
+          native: { ok: true, kind: "mcp", servers: [ROW], coverage },
+        },
+      }).coverage,
+    ).toEqual(coverage);
+    expect(
+      mapNativeMutateToMcpMutate({
+        response: {
+          result: { ok: true, kind: "mcp", servers: [ROW], coverage },
+        },
+      }).coverage,
+    ).toEqual(coverage);
+    expect(
+      mapProvidersListToMcpServers({
+        response: {
+          providers: [],
+          native: { ok: true, kind: "mcp", servers: [ROW], coverage: null },
+        },
+      }).coverage,
+    ).toBeNull();
   });
 
   it("still throws on a native error result", () => {

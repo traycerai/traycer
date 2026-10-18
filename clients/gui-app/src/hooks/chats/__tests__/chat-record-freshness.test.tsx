@@ -287,14 +287,18 @@ function createFixture(listFailureCode: "E_HOST_UNSUPPORTED" | null): Fixture {
               revision: records[index].revision + 1,
             };
           }
-          return Promise.resolve({ updated: true });
+          return Promise.resolve({ updated: true, outcome: "applied" });
         },
         "epic.deleteChat": (params) => {
           const index = records.findIndex(
             (entry) => entry.chatId === params.chatId,
           );
           if (index >= 0) records.splice(index, 1);
-          return Promise.resolve({ deleted: true, publicationChatId: null });
+          return Promise.resolve({
+            deleted: true,
+            publicationChatId: null,
+            outcome: "applied",
+          });
         },
       },
     }),

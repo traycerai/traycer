@@ -36,9 +36,11 @@ import {
   nativeListQuerySchema,
   nativeListResultSchema,
   nativeListResultSchemaBeforeMcpRemedies,
+  nativeListResultSchemaV101Preimage,
   nativeListResultSchemaV70Preimage,
   nativeMutationResultSchema,
   nativeMutationResultSchemaV10Preimage,
+  nativeMutationResultSchemaV11Preimage,
   nativeMutationSchema,
   nativeMutationSchemaV10Preimage,
   providerNativeCapabilitiesSchema,
@@ -2325,7 +2327,7 @@ export type ProvidersListRequestV70 = z.infer<
  * the list/discover result (or a typed native error). Classic callers receive
  * `native: null`.
  *
- * Earlier lines each bind a frozen response; only the head (10.3) binds this
+ * Earlier lines each bind a frozen response; only the head binds this
  * live schema, so new fields do not widen a released line.
  */
 export const providersListResponseSchema = lazySchema(() =>
@@ -2351,7 +2353,22 @@ export const providersListResponseSchemaV100Preimage = lazySchema(() =>
   }),
 );
 
-/** The released list@10.2 shape before the open-chat plugin capability. */
+/** The released list@10.1 shape before the list-only macOS verdict. */
+export const providersListResponseSchemaV101Preimage = lazySchema(() =>
+  z.object({
+    providers: z.array(
+      providerCliStateSchema.omit({ macosRequirement: true }).extend({
+        nativeCapabilities:
+          providerNativeCapabilitiesSchemaBeforeOpenChatPlugins.catch(
+            DEFAULT_PROVIDER_NATIVE_CAPABILITIES,
+          ),
+      }),
+    ),
+    native: nativeListResultSchemaV101Preimage.nullable().default(null),
+  }),
+);
+
+/** The published list@10.2 shape, before MCP origin and coverage. */
 export const providersListResponseSchemaV102Preimage = lazySchema(() =>
   z.object({
     providers: z.array(
@@ -2362,15 +2379,15 @@ export const providersListResponseSchemaV102Preimage = lazySchema(() =>
           ),
       }),
     ),
-    native: nativeListResultSchema.nullable().default(null),
+    native: nativeListResultSchemaV101Preimage.nullable().default(null),
   }),
 );
 
-/** The released list@10.1 shape before the list-only macOS verdict. */
-export const providersListResponseSchemaV101Preimage = lazySchema(() =>
+/** Kilo's published list@10.3 before the open-chat plugin capability. */
+export const providersListResponseSchemaV103Preimage = lazySchema(() =>
   z.object({
     providers: z.array(
-      providerCliStateSchema.omit({ macosRequirement: true }).extend({
+      providerCliStateSchema.extend({
         nativeCapabilities:
           providerNativeCapabilitiesSchemaBeforeOpenChatPlugins.catch(
             DEFAULT_PROVIDER_NATIVE_CAPABILITIES,
@@ -3955,6 +3972,9 @@ export const providersNativeMutateResponseSchema = lazySchema(() =>
 );
 export const providersNativeMutateResponseSchemaV10Preimage = lazySchema(() =>
   z.object({ result: nativeMutationResultSchemaV10Preimage }),
+);
+export const providersNativeMutateResponseSchemaV11Preimage = lazySchema(() =>
+  z.object({ result: nativeMutationResultSchemaV11Preimage }),
 );
 export type ProvidersNativeMutateResponse = z.infer<
   typeof providersNativeMutateResponseSchema

@@ -411,6 +411,43 @@ describe("<ProviderPluginsTab /> scope (F5)", () => {
     expect(screen.getByText(/Restart the provider agent/)).toBeDefined();
   });
 
+  it("shows the restart notice after a successful mutation when an older host omits the next-message field", () => {
+    pluginMocks.mutate.mockImplementation(
+      (_variables: unknown, callbacks: { onSuccess: () => void }) => {
+        callbacks.onSuccess();
+      },
+    );
+    const base = defaultMultiScopeCaps();
+    const plugins = base.nativeCapabilities.plugins;
+    if (plugins === null) throw new Error("plugin fixture missing");
+    // The key is ABSENT (not false): the wire value an older host sends.
+    const state = {
+      ...base,
+      nativeCapabilities: {
+        ...base.nativeCapabilities,
+        plugins: {
+          addModes: plugins.addModes,
+          marketplaceBrowse: plugins.marketplaceBrowse,
+          traycerSessionToolsNotice: plugins.traycerSessionToolsNotice,
+          actionScopes: plugins.actionScopes,
+        },
+      },
+    };
+    expect(
+      "openChatsApplyNextMessage" in state.nativeCapabilities.plugins,
+    ).toBe(false);
+    render(<ProviderPluginsTab state={state} />);
+    fireEvent.click(screen.getByRole("button", { name: /Add from source/ }));
+    fireEvent.change(screen.getByLabelText(/Source/), {
+      target: { value: "demo@marketplace" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /^Install$/ }));
+    expect(screen.getByText(/Restart the provider agent/)).toBeDefined();
+    expect(
+      screen.queryByText(/Open chats that use this plugin setup/),
+    ).toBeNull();
+  });
+
   it("shows project-needs-workspace empty state when project has no root", () => {
     // Zero host workspaces + project selected (via locked project-only caps)
     // is the empty state; multi-scope with no selection falls back carefully.

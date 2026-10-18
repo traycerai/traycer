@@ -64,7 +64,7 @@ jobs:
       && github.event.workflow_run.conclusion != 'success'
       && github.event.workflow_run.conclusion != 'skipped'
       && github.event.workflow_run.conclusion != 'cancelled'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # The longest retried leg is the macOS packaging job; the poll below gives
     # up, and reports, before this does.
     timeout-minutes: 60

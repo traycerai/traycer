@@ -9,6 +9,8 @@ import {
   botDeleteResponseSchema,
   botListRequestSchema,
   botListResponseSchema,
+  botOpenRequestSchema,
+  botOpenResponseSchema,
   botReadRequestSchema,
   botReadResponseSchema,
   botSubscribeClientFrameSchema,
@@ -85,6 +87,18 @@ export const botClaimAuthorityV10 = defineRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: botClaimAuthorityRequestSchema,
   responseSchema: botClaimAuthorityResponseSchema,
+});
+
+/**
+ * `bot.open@1.0` (T18): open a bot on the serving host, claiming it there
+ * when its bound host is unreachable. Same optional posture as the rest of
+ * the namespace.
+ */
+export const botOpenV10 = defineRpcContract({
+  method: "bot.open",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: botOpenRequestSchema,
+  responseSchema: botOpenResponseSchema,
 });
 
 /**

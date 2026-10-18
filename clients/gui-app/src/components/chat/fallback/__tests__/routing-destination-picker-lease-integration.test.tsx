@@ -783,9 +783,10 @@ describe("B-RECONNECT: the reacquire effect re-asks per frame, not per lease-nul
     );
     expect(spy.calls()).toBe(1);
     // In the footer's live region, and in its visible line beside Switch.
-    expect(screen.getByRole("status").textContent).toBe(
-      "Couldn't pause the countdown.",
-    );
+    expect(
+      document.querySelector('[role="status"][aria-live="polite"]')
+        ?.textContent,
+    ).toBe("Couldn't pause the countdown.");
     expect(screen.getAllByText("Couldn't pause the countdown.")).toHaveLength(
       2,
     );

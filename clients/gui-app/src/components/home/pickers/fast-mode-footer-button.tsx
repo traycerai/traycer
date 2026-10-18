@@ -3,7 +3,7 @@ import type { ServiceTierOption } from "@/components/home/data/landing-options";
 import type { ServiceTierFooterConfig } from "@/components/home/pickers/harness-model-picker-footers";
 import { PickerLeaderBadge } from "@/components/home/pickers/harness-model-picker-leader-badge";
 import { pickerLeaderControlLabel } from "@/components/home/pickers/harness-model-picker-shortcut-hint";
-import { toggleServiceTier } from "@/components/home/pickers/model-service-tier";
+import { stepServiceTier } from "@/components/home/pickers/model-service-tier";
 import { usePickerFastModeLeader } from "@/providers/keybinding-context";
 import { cn } from "@/lib/utils";
 
@@ -32,7 +32,7 @@ export function FastModeFooterButton(props: FastModeFooterButtonProps) {
         "relative flex min-w-0 max-w-[min(34vw,8rem)] items-center gap-1.5 rounded-md px-2 py-1 text-ui-xs text-muted-foreground transition-colors aria-[pressed=false]:hover:bg-accent/30 aria-[pressed=false]:hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60",
         active && "bg-accent/70 text-foreground",
       )}
-      onClick={() => toggleServiceTier(config)}
+      onClick={() => stepServiceTier(config)}
     >
       <span className="relative size-3.5 shrink-0">
         <Zap

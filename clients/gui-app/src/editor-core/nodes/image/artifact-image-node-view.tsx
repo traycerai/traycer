@@ -19,7 +19,14 @@ export function ArtifactImageNodeView(props: NodeViewProps): ReactNode {
   );
   let body: ReactNode;
   if (image.status === "loading") {
-    body = <AttachmentImageLoading label="Waiting for image sync" fullWidth />;
+    body = (
+      <AttachmentImageLoading
+        label="Waiting for image sync"
+        fullWidth
+        width={null}
+        height={null}
+      />
+    );
   } else if (image.status === "unavailable") {
     body = <AttachmentImageFailure alt={alt} reason="Image is unavailable" />;
   } else {
@@ -30,6 +37,8 @@ export function ArtifactImageNodeView(props: NodeViewProps): ReactNode {
         mediaType={mediaType}
         suggestedName={src.split("/").at(-1) ?? null}
         fullWidth
+        width={null}
+        height={null}
       />
     );
   }

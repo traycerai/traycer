@@ -4381,6 +4381,22 @@ min`): "The judge didn't finish in time, so it's asking you instead."
     scoped host, a remote host with a borrowable session); any other row says
     nothing. Every other host picker passes `environmentLabelForHost={null}`
     and shows no label.
+    Binding to a TEAM asks first (a dialog): on a host the registry
+    (`useRegisteredHosts`) calls `personal` the copy says it will run the
+    team's bots and skills and stays the person's own; on a `sandbox` it says
+    the host becomes the team's; with no registry answer only the first
+    clause. Binding to the personal environment needs no confirmation. A host
+    another member added to a team (`explicit && !canUnbind`) is shown with
+    every option disabled and one sentence saying only that member can
+    change it. Below the picker, `panels/environment-machines-list.tsx` lists
+    each team's machines from `environment.host.list` (gated on that
+    method): a sandbox reads "Team machine" and names no operator, the
+    reader's own machine reads "Yours"; another member's machine is never
+    listed (the host answers only what the reader may see). A team whose
+    list could not be read says so with a Retry, rather than showing the
+    empty state. A bind or unbind refreshes the lists of the team the host
+    leaves and the team it joins. This list is admin surface only; the bot
+    flow never asks for a machine.
 - `Fallback` (section id `fallback`, route `/settings/fallback`,
   `panels/fallback-settings-panel.tsx` plus `panels/fallback/`) The whole
   configuration surface for **automatic provider fallback**: what the host does

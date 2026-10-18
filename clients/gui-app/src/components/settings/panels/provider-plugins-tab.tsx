@@ -312,7 +312,7 @@ function ProviderPluginsTabBody({
       <PluginsNotices
         sessionNotice={sessionNotice}
         reloadHint={reloadHint}
-        openChatsApplyNextMessage={caps.openChatsApplyNextMessage}
+        openChatsApplyNextMessage={caps.openChatsApplyNextMessage === true}
         localError={localError}
       />
 
