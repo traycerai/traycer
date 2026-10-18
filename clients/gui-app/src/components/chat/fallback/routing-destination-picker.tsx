@@ -32,6 +32,7 @@ import {
   type ReasoningFallback,
   type ReasoningLevel,
 } from "@/components/home/data/landing-options";
+import type { MaxModeContext } from "@/components/home/data/model-max-mode";
 import {
   HarnessModelPicker,
   type HarnessModelPickerEmbedding,
@@ -385,10 +386,24 @@ function RoutingModelPicker(props: {
     props.data,
     props.failedTuple,
   );
+  const targetKnown = target !== null;
+  const targetEffort = target?.reasoningEffort ?? null;
+  const targetTier = target?.serviceTier ?? null;
+  // The Max matcher reads only these two tuple fields. Keep the context stable
+  // across countdown frames so the memoized picker can skip unchanged props.
+  const maxModeContext = useMemo<MaxModeContext>(
+    () => ({
+      kind: "chat",
+      tuple: targetKnown
+        ? { reasoningEffort: targetEffort, serviceTier: targetTier }
+        : null,
+    }),
+    [targetKnown, targetEffort, targetTier],
+  );
   return (
     <HarnessModelPicker
       store={props.store}
-      maxModeContext={{ kind: "chat", tuple: target }}
+      maxModeContext={maxModeContext}
       withServiceTier={false}
       withReasoning
       tuiOnly={false}
