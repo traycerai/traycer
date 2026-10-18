@@ -4,7 +4,8 @@ import { mintExecutableWriteGrantViaHttp } from "../executable-write-grant";
 const AUTHN = "https://authn.example.invalid";
 const TOKEN = "bearer-token-1";
 const HOST_ID = "11111111-1111-4111-8111-111111111111";
-const ENVIRONMENT_ID = "22222222-2222-4222-8222-222222222222";
+const ENVIRONMENT_ID = "env_01JABCDEFGHJKMNPQRSTVWXYZ0";
+const LEGACY_UUID_ENVIRONMENT_ID = "22222222-2222-4222-8222-222222222222";
 const RAW_BODY_MARKER = "RAW-SERVER-BODY-MARKER";
 
 interface RecordedCall {
@@ -159,17 +160,49 @@ describe("mintExecutableWriteGrantViaHttp", () => {
     expect(calls).toHaveLength(1);
   });
 
-  it("answers network-error for an environment body that is not the contract, without echoing it", async () => {
-    stubFetch([
-      json(200, { environmentId: "not-a-uuid", note: RAW_BODY_MARKER }),
+  it("still reads a uuid environment id from an authn that predates env_ ids", async () => {
+    const calls = stubFetch([
+      json(200, { environmentId: LEGACY_UUID_ENVIRONMENT_ID }),
+      GRANT_OK,
     ]);
     const result = await mintExecutableWriteGrantViaHttp(AUTHN, TOKEN, HOST_ID);
     expect(result).toEqual({
-      kind: "network-error",
-      detail: "the environment answer did not match the contract",
+      kind: "ok",
+      grant: "grant-token-1",
+      expiresInSeconds: 600,
     });
-    expect(JSON.stringify(result)).not.toContain(RAW_BODY_MARKER);
+    expect(calls[1]?.url).toBe(
+      `${AUTHN}/api/v3/environments/${LEGACY_UUID_ENVIRONMENT_ID}/executable-write-grants`,
+    );
   });
+
+  it.each([
+    ["an empty id", ""],
+    ["a dot segment", ".."],
+    ["a slash", "env_01/../x"],
+    ["a percent", "env%2F01"],
+    ["a space", "env 01"],
+    ["an over-long id", "a".repeat(129)],
+    ["a non-string id", 42],
+  ])(
+    "answers network-error for %s as the environment id, without echoing the body and without minting",
+    async (_label, environmentId) => {
+      const calls = stubFetch([
+        json(200, { environmentId, note: RAW_BODY_MARKER }),
+      ]);
+      const result = await mintExecutableWriteGrantViaHttp(
+        AUTHN,
+        TOKEN,
+        HOST_ID,
+      );
+      expect(result).toEqual({
+        kind: "network-error",
+        detail: "the environment answer did not match the contract",
+      });
+      expect(JSON.stringify(result)).not.toContain(RAW_BODY_MARKER);
+      expect(calls).toHaveLength(1);
+    },
+  );
 
   it.each([
     ["an empty grant", { grant: "", expiresInSeconds: 600 }],

@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { composeRequestAbort } from "../auth/request-abort";
+import { PATH_ID_PATTERN } from "./sandbox-secrets";
 
 /**
  * The executable-write grant a client mints before a write that can reach an
@@ -38,7 +39,14 @@ export type ExecutableWriteGrantFetchResult =
   | { readonly kind: "not-bound" }
   | { readonly kind: "network-error"; readonly detail: string };
 
-const environmentMeSchema = z.object({ environmentId: z.uuid() });
+/**
+ * The id is opaque here, read only as a path segment: the `env_` form belongs
+ * to the services that mint and key on it, and an older authn's uuid stays
+ * readable.
+ */
+const environmentMeSchema = z.object({
+  environmentId: z.string().regex(PATH_ID_PATTERN),
+});
 
 const grantResponseSchema = z.object({
   grant: z.string().min(1),
