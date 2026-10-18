@@ -1,0 +1,318 @@
+import { useCallback, useMemo } from "react";
+import { queryOptions, useQuery, useQueryClient } from "@tanstack/react-query";
+import type { QueryClient } from "@tanstack/react-query";
+import type { IHostStreamClient } from "@traycer-clients/shared/host-transport/host-stream-client";
+import type { StreamCloseReason } from "@traycer-clients/shared/host-transport/i-stream-session";
+import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
+import {
+  botSubscribeServerFrameSchema,
+  type BotRecord,
+  type BotSubscribeServerFrame,
+  type BotTaskEntry,
+} from "@traycer/protocol/host/bot/schemas";
+import { botQueryKeys } from "@/lib/query-keys/bot-query-keys";
+import { useWsStreamClient } from "@/lib/host/stream-runtime-context";
+import { useStreamAuthRevalidator } from "@/lib/host/stream-auth-revalidator";
+import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
+import { useHostStreamClientFor } from "@/hooks/host/use-host-stream-client-for";
+import {
+  resetSharedStreamSubscriptions,
+  useSharedStreamSubscription,
+  type SharedStreamSubscription,
+  type SharedStreamSubscriptionRegistry,
+} from "@/hooks/pr/shared-stream-subscription";
+
+/**
+ * The `bot.subscribe` snapshot as this client caches it: the bot row, its task
+ * list, the open-request HINT and the bound host.
+ *
+ * `openRequestCount` is rendered as it arrives and read as a hint, as the
+ * contract says: the conversation's user rows (`conversationRequest`) are
+ * authoritative for what is open, and the host that ships today always sends
+ * `0` here. A surface that needs the real number reads the conversation.
+ */
+export interface BotSubscriptionSnapshot {
+  readonly bot: BotRecord;
+  readonly tasks: ReadonlyArray<BotTaskEntry>;
+  /** `null` is unknown: the host fixup (T9b) sends it when the bound host's
+   * view has not published yet; the pin shipping today always sends a number. */
+  readonly openRequestCount: number | null;
+  readonly boundHost: {
+    /** `null` when no host runs the bot. */
+    readonly hostId: string | null;
+    readonly epoch: number;
+    readonly isThisHost: boolean;
+  };
+}
+
+/**
+ * The stream as one consumer reads it. `deleted` is terminal: the bot was
+ * archived, or the caller lost it. `error` is the wording of an unexpected
+ * close; the transport's own retryable reconnects never surface here.
+ */
+export interface BotSubscriptionResult {
+  readonly snapshot: BotSubscriptionSnapshot | null;
+  readonly deleted: boolean;
+  readonly error: string | null;
+  readonly isPending: boolean;
+  /**
+   * Closes this key's session and opens a fresh one. The host re-sends the
+   * snapshot only for changes IT made; a bot rebound or edited from another
+   * host reaches this client on the next subscribe, so a surface that comes
+   * back into view asks again.
+   */
+  readonly resubscribe: () => void;
+}
+
+/**
+ * The per-key event: the last data-bearing frame, or a synthesized terminal
+ * close with its wording. `pong` frames are not events - they answer a ping
+ * and change nothing a consumer reads.
+ */
+type BotStreamEvent =
+  | Extract<BotSubscribeServerFrame, { kind: "snapshot" | "deleted" }>
+  | { readonly kind: "closed"; readonly message: string };
+
+type SharedSubscription = SharedStreamSubscription<BotStreamEvent>;
+
+interface ActiveSubscriptionArgs {
+  readonly hostId: string;
+  readonly botId: string;
+}
+
+/**
+ * Module-level ref-counted sessions, keyed by the owning client instance +
+ * host + bot: Home's row and an open bot tab on the same host share one
+ * session, while the same bot subscribed through two hosts (a tab on its
+ * bound host, Home on the app-wide one) keeps two.
+ */
+const subscriptions: SharedStreamSubscriptionRegistry<BotStreamEvent> =
+  new Map();
+
+function subscriptionKeyFor(
+  client: IHostStreamClient<HostStreamRpcRegistry>,
+  args: ActiveSubscriptionArgs,
+): string {
+  return `${client.instanceId}|${args.hostId}|${args.botId}`;
+}
+
+/** Test helper: tear every session down and empty the registry. */
+export function __resetBotSubscriptionsForTesting(): void {
+  resetSharedStreamSubscriptions(subscriptions);
+}
+
+/**
+ * Subscribes on the APP-WIDE stream client - the Home section's reading,
+ * where the hosts of many bots are a detail and the serving host's
+ * `boundHost.isThisHost` says which ones are bound here.
+ */
+export function useBotSubscription(args: {
+  readonly hostId: string | null;
+  readonly botId: string;
+  readonly enabled: boolean;
+}): BotSubscriptionResult {
+  const client = useWsStreamClient();
+  return useBotSubscriptionForClient({ ...args, client });
+}
+
+/**
+ * Subscribes through an explicit host's own stream client - the bot tab's
+ * reading, bound to its host for life. The client is dialed for `hostId` the
+ * way every per-tab stream is (`useHostStreamClientFor` with auth
+ * revalidation), never read off the app-wide context.
+ */
+export function useBotSubscriptionForHost(args: {
+  readonly hostId: string;
+  readonly botId: string;
+  readonly enabled: boolean;
+}): BotSubscriptionResult {
+  const target = useHostDirectoryEntry(args.hostId);
+  const auth = useStreamAuthRevalidator();
+  const client = useHostStreamClientFor(target, auth);
+  return useBotSubscriptionForClient({ ...args, client });
+}
+
+export function useBotSubscriptionForClient(args: {
+  readonly hostId: string | null;
+  readonly botId: string;
+  readonly enabled: boolean;
+  readonly client: IHostStreamClient<HostStreamRpcRegistry> | null;
+}): BotSubscriptionResult {
+  const queryClient = useQueryClient();
+  const { hostId, botId, enabled, client } = args;
+
+  const activeArgs: ActiveSubscriptionArgs | null = useMemo(
+    () => (hostId === null ? null : { hostId, botId }),
+    [hostId, botId],
+  );
+  const sessionKey =
+    client === null || activeArgs === null
+      ? null
+      : subscriptionKeyFor(client, activeArgs);
+
+  const createSession = useCallback((): SharedSubscription => {
+    if (client === null || activeArgs === null) {
+      throw new Error("A bot subscription needs a client and a host.");
+    }
+    return createSharedSubscription(client, queryClient, activeArgs);
+  }, [client, queryClient, activeArgs]);
+
+  const onConsumerJoined = useCallback(
+    (shared: SharedSubscription): void => {
+      if (activeArgs === null) return;
+      if (shared.lastEvent?.kind !== "snapshot") return;
+      replayLastEventIntoCache(queryClient, activeArgs, shared.lastEvent);
+    },
+    [queryClient, activeArgs],
+  );
+
+  const { lastEvent, sendRefresh } = useSharedStreamSubscription({
+    registry: subscriptions,
+    sessionKey,
+    enabled,
+    consumerLabel: "bot-subscription-consumer",
+    createSession,
+    onConsumerJoined,
+  });
+
+  const { data: queryData } = useQuery({
+    ...queryOptions({
+      queryKey: botQueryKeys.subscription({
+        hostId: hostId ?? "",
+        botId,
+      }),
+      queryFn: (): Promise<BotSubscriptionSnapshot | null> =>
+        Promise.resolve(null),
+      staleTime: Infinity,
+    }),
+    enabled: false,
+  });
+
+  const resubscribe = useCallback(() => {
+    // Marks the live session terminal first, so the shared machinery's retry
+    // path REPLACES it with a fresh one (and migrates every other consumer
+    // onto it) instead of treating the refresh as a frame to send - this
+    // stream has no refresh frame.
+    const current =
+      sessionKey === null ? undefined : subscriptions.get(sessionKey);
+    if (current !== undefined && !current.isTerminal) {
+      current.isTerminal = true;
+      current.unsubscribeFromStream();
+    }
+    sendRefresh();
+  }, [sessionKey, sendRefresh]);
+
+  const snapshot = queryData ?? null;
+  const deleted = lastEvent?.kind === "deleted";
+  const error = lastEvent?.kind === "closed" ? lastEvent.message : null;
+  return {
+    snapshot,
+    deleted,
+    error,
+    isPending: snapshot === null && !deleted && error === null,
+    resubscribe,
+  };
+}
+
+function toSnapshot(
+  frame: Extract<BotSubscribeServerFrame, { kind: "snapshot" }>,
+): BotSubscriptionSnapshot {
+  return {
+    bot: frame.bot,
+    tasks: frame.tasks,
+    openRequestCount: frame.openRequestCount,
+    boundHost: frame.boundHost,
+  };
+}
+
+function createSharedSubscription(
+  wsStreamClient: IHostStreamClient<HostStreamRpcRegistry>,
+  queryClient: QueryClient,
+  args: ActiveSubscriptionArgs,
+): SharedSubscription {
+  const session = wsStreamClient.subscribe("bot.subscribe", {
+    botId: args.botId,
+  });
+
+  let sessionClosed = false;
+  const shared: SharedSubscription = {
+    refCount: 0,
+    unsubscribeFromStream: () => {
+      sessionClosed = true;
+      session.close();
+    },
+    // No refresh frame on this stream; `resubscribe` above replaces the
+    // session instead. Kept a no-op rather than a ping so a caller that
+    // reaches it never mistakes a pong for fresh data.
+    sendRefresh: () => undefined,
+    lastEvent: null,
+    isTerminal: false,
+    consumers: new Map(),
+  };
+
+  const notifyConsumers = (): void => {
+    for (const consumer of shared.consumers.values()) consumer();
+  };
+
+  const markTerminal = (event: BotStreamEvent): void => {
+    sessionClosed = true;
+    shared.isTerminal = true;
+    session.close();
+    shared.lastEvent = event;
+    notifyConsumers();
+  };
+
+  session.onServerFrame((envelope) => {
+    if (sessionClosed) return;
+    const parsed = botSubscribeServerFrameSchema.safeParse(envelope);
+    if (!parsed.success) return;
+    const frame = parsed.data;
+    if (frame.kind === "pong") return;
+    if (frame.kind === "deleted") {
+      markTerminal(frame);
+      return;
+    }
+    shared.lastEvent = frame;
+    notifyConsumers();
+    queryClient.setQueryData(
+      botQueryKeys.subscription(args),
+      toSnapshot(frame),
+    );
+  });
+
+  session.onStatusChange((status, reason) => {
+    if (sessionClosed) return;
+    if (status !== "closed") return;
+    const message = describeStreamClose(reason);
+    // A retryable close is the transport reconnecting; the next snapshot
+    // repopulates the slot and nothing here should say otherwise.
+    if (message === null) return;
+    markTerminal({ kind: "closed", message });
+  });
+
+  return shared;
+}
+
+function describeStreamClose(reason: StreamCloseReason | null): string | null {
+  if (
+    reason !== null &&
+    reason.kind === "fatalError" &&
+    reason.details.retryable === true
+  ) {
+    return null;
+  }
+  if (reason === null || reason.kind === "caller") {
+    return "The bot's live view closed unexpectedly.";
+  }
+  return `The bot's live view failed (${reason.details.code}): ${reason.details.reason}`;
+}
+
+function replayLastEventIntoCache(
+  queryClient: QueryClient,
+  args: ActiveSubscriptionArgs,
+  frame: Extract<BotSubscribeServerFrame, { kind: "snapshot" }>,
+): void {
+  const key = botQueryKeys.subscription(args);
+  if (queryClient.getQueryData(key) !== undefined) return;
+  queryClient.setQueryData(key, toSnapshot(frame));
+}

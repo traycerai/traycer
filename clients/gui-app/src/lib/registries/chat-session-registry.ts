@@ -296,6 +296,26 @@ export function useChatSessionHandle(
   enabled: boolean,
 ): ChatSessionStoreHandle | null {
   const epicId = useOpenEpicId();
+  return useChatSessionHandleForContainer(epicId, chatId, hostId, enabled);
+}
+
+/**
+ * {@link useChatSessionHandle} with the chat's CONTAINER named by the caller
+ * instead of read from the open epic.
+ *
+ * The session, its scope key and its `chat.subscribe` all key on
+ * `(epicId, chatId, hostId)`, and nothing below this line reads anything else
+ * off the epic: `epicId` is the string the stream opens with and the registry
+ * files the session under. A bot's chats live under `task_id = botId` with no
+ * epic open anywhere, so the bot tab passes the bot id here and gets the same
+ * durable session every chat tile gets.
+ */
+export function useChatSessionHandleForContainer(
+  epicId: string,
+  chatId: string,
+  hostId: string,
+  enabled: boolean,
+): ChatSessionStoreHandle | null {
   const hostEntry = useHostDirectoryEntry(hostId);
   const lease = useHostLease(hostId);
   // Chat is a DURABLE per-tab stream: its `WsStreamClient` is OWNED by the

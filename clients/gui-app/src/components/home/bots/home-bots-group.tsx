@@ -1,0 +1,98 @@
+import { useMemo, useState, type ReactNode } from "react";
+import { Plus } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import type { HomeBotsGroup } from "@/lib/home-bots/bots-model";
+import type { HostEnvironmentBindings } from "@/hooks/bots/use-host-environment-bindings-query";
+import { HomeBotRow } from "@/components/home/bots/home-bot-row";
+import { CreateBotForm } from "@/components/home/bots/create-bot-form";
+
+/**
+ * One environment's card on Home: its label and kind, its bots, and the
+ * create form that makes a bot INTO it - the environment is the card's, named
+ * explicitly on the create, never a page-wide default.
+ */
+export function HomeBotsGroupCard(props: {
+  readonly group: HomeBotsGroup;
+  readonly hostLabels: ReadonlyMap<string, string>;
+  readonly connectableHostIds: ReadonlySet<string>;
+  readonly environmentBindings: HostEnvironmentBindings;
+}): ReactNode {
+  const { group, hostLabels, connectableHostIds, environmentBindings } = props;
+  const [creating, setCreating] = useState(false);
+  const boundHostIds = useMemo(() => {
+    const ids: string[] = [];
+    for (const [hostId, binding] of environmentBindings.byHostId) {
+      if (binding.environment.environmentId === group.environmentId) {
+        ids.push(hostId);
+      }
+    }
+    return ids.sort((a, b) =>
+      (hostLabels.get(a) ?? a).localeCompare(hostLabels.get(b) ?? b),
+    );
+  }, [environmentBindings.byHostId, group.environmentId, hostLabels]);
+
+  return (
+    <section
+      data-testid="home-bots-group"
+      data-environment-id={group.environmentId}
+      aria-label={group.label}
+      className="flex min-w-0 flex-col gap-2 rounded-lg border border-border/60 bg-card/40 p-3"
+    >
+      <header className="flex items-center justify-between gap-2">
+        <div className="flex min-w-0 items-center gap-2">
+          <h3 className="truncate font-medium text-ui-sm text-foreground">
+            {group.label}
+          </h3>
+          {group.ownerKind === null ? null : (
+            <Badge variant="muted" size="xs">
+              {group.ownerKind === "organization" ? "Team" : "Personal"}
+            </Badge>
+          )}
+        </div>
+        {group.canCreate ? (
+          <Button
+            type="button"
+            variant="ghost"
+            size="xs"
+            aria-expanded={creating}
+            data-testid="home-bots-create-toggle"
+            onClick={() => setCreating((open) => !open)}
+          >
+            <Plus className="size-3.5" aria-hidden="true" />
+            New bot
+          </Button>
+        ) : null}
+      </header>
+      {creating && group.canCreate ? (
+        <CreateBotForm
+          environmentId={group.environmentId}
+          environmentLabel={group.label}
+          boundHostIds={boundHostIds}
+          bindingsResolved={environmentBindings.resolved}
+          failedHostIds={environmentBindings.failedHostIds}
+          onRetryFailedHosts={environmentBindings.retryFailed}
+          hostLabels={hostLabels}
+          onDone={() => setCreating(false)}
+        />
+      ) : null}
+      {group.bots.length === 0 ? (
+        <p className="px-1 py-2 text-ui-xs text-muted-foreground">
+          No bots here yet.
+        </p>
+      ) : (
+        <ul className="flex flex-col gap-1">
+          {group.bots.map((bot) => (
+            <li key={bot.botId}>
+              <HomeBotRow
+                bot={bot}
+                hostLabels={hostLabels}
+                connectableHostIds={connectableHostIds}
+              />
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+}

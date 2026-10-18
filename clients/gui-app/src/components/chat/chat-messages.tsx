@@ -307,6 +307,8 @@ export type ChatMessageScrollRequest =
   | {
       readonly kind: "end";
       readonly requestId: number;
+      /** History edits should follow the replacement without animating through deleted rows. */
+      readonly animated?: boolean;
     };
 
 const EMPTY_BACKGROUND_TOOL_BLOCK_IDS: ReadonlySet<string> = new Set();
@@ -4005,7 +4007,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     // view covering it would hide where the jump lands.
     closeSubagentDrillIn();
     if (request.kind === "end") {
-      scrollToEnd(true);
+      scrollToEnd(request.animated ?? true);
       scrollRequestRef.current = null;
       return;
     }

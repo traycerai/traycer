@@ -2991,6 +2991,28 @@ describe("ChatMessages scroll policy", () => {
       }
     });
 
+    it("follows an edited transcript tail without animating through removed history", async () => {
+      const { rerenderWith } = renderChatMessages({
+        messages: makeCompletedTranscript(30),
+        scrollStateKey: "scroll-req-edit-end",
+      });
+      await settleLegendList();
+
+      const list = legendListRefHolder.current;
+      if (list === null) throw new Error("LegendList ref is not mounted");
+      const scrollToEnd = vi.spyOn(list, "scrollToEnd");
+      try {
+        rerenderWith({
+          scrollRequest: { kind: "end", requestId: 41, animated: false },
+        });
+
+        expect(scrollToEnd).toHaveBeenCalledWith({ animated: false });
+        expect(getScrollNode().dataset.scrollMode).toBe("following-end");
+      } finally {
+        scrollToEnd.mockRestore();
+      }
+    });
+
     it("routes row-only external jumps through navigation and highlights for three seconds", async () => {
       const messages = makeCompletedTranscript(6);
       const target = messages[2];

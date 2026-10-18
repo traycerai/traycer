@@ -879,6 +879,71 @@ export type ChatQueuedConversationMessageItem = z.infer<
   typeof chatQueuedConversationMessageItemSchema
 >;
 
+/**
+ * A check-in on the tasks a bot tracks, waiting to reach the bot's trunk
+ * (Tracy Bots, `chat.subscribe@1.26`). Queued on the TRUNK chat, like the
+ * conversation-message item above it.
+ *
+ * CONTENT-FREE like every other host-authored arm, and more so: the item
+ * carries no task ids. The host composes the report at dispatch from its own
+ * records - which tasks are due, what changed in each since its last
+ * check-in - so a check-in that queues while the trunk is mid-turn, and the
+ * check-ins that fall due while it waits, all coalesce into THIS item and
+ * one turn. The item is one per trunk at a time; `description` is the chip's
+ * label and nothing more.
+ *
+ * Same narrowed status enum and `delivery` / `targetTurnId` pair as the other
+ * host-authored arms. A peer below `1.26` is never sent one: the host's
+ * per-minor frame projection OMITS it, from the queue and from the queue
+ * events alike, as it omits the conversation-message item below `1.25`.
+ */
+export const chatQueuedTaskCheckinItemSchema = lazySchema(() =>
+  z.object({
+    kind: z.literal("task-checkin"),
+    queueItemId: z.string(),
+    description: z.string(),
+    delivery: chatQueueItemDeliverySchema.default("next_turn"),
+    targetTurnId: z.string().nullable().default(null),
+    status: z.enum(["pending", "steering", "paused"]).default("pending"),
+    createdAt: z.number(),
+    updatedAt: z.number(),
+  }),
+);
+export type ChatQueuedTaskCheckinItem = z.infer<
+  typeof chatQueuedTaskCheckinItemSchema
+>;
+
+/**
+ * The nudge that a tracked task's periodic check-in is overdue (Tracy Bots,
+ * `chat.subscribe@1.27`): the task's host has not composed one for a whole
+ * period past its due time, so that machine is off, has not opened the task,
+ * or cannot reach the cloud. Queued on the TRUNK chat, like the task-checkin
+ * item above it, and CONTENT-FREE the same way: the overdue set is read from
+ * the bot's cloud row at dispatch, one item per trunk at a time, every task
+ * found overdue while it waits riding it. `description` is the chip's label
+ * and nothing more.
+ *
+ * Same narrowed status enum and `delivery` / `targetTurnId` pair as the other
+ * host-authored arms. A peer below `1.27` is never sent one: the host's
+ * per-minor frame projection OMITS it, from the queue and from the queue
+ * events alike, as it omits the task-checkin item below `1.26`.
+ */
+export const chatQueuedTaskOverdueItemSchema = lazySchema(() =>
+  z.object({
+    kind: z.literal("task-overdue"),
+    queueItemId: z.string(),
+    description: z.string(),
+    delivery: chatQueueItemDeliverySchema.default("next_turn"),
+    targetTurnId: z.string().nullable().default(null),
+    status: z.enum(["pending", "steering", "paused"]).default("pending"),
+    createdAt: z.number(),
+    updatedAt: z.number(),
+  }),
+);
+export type ChatQueuedTaskOverdueItem = z.infer<
+  typeof chatQueuedTaskOverdueItemSchema
+>;
+
 // A plain `z.union` with the REQUIRED-`kind` arms FIRST - deliberately not
 // a `z.discriminatedUnion`, which rejects a payload missing the discriminant
 // even when the literal is defaulted (verified against this repo's zod). Legacy
@@ -892,6 +957,8 @@ export const chatQueuedItemSchema = lazySchema(() =>
     chatQueuedManagedCommandItemSchema,
     chatQueuedPortForwardItemSchema,
     chatQueuedConversationMessageItemSchema,
+    chatQueuedTaskCheckinItemSchema,
+    chatQueuedTaskOverdueItemSchema,
     chatQueuedPromptItemSchema,
   ]),
 );
@@ -953,7 +1020,6 @@ const chatQueueStateSchemaPreConversation = lazySchema(() =>
     pausedReason: z.string().nullable().optional(),
   }),
 );
-
 // ─── Open-harness-id queue (`chat.subscribe@1.22`) ──────────────────────────
 //
 // The live queue with the prompt item's `sender` reopened: an A2A prompt
@@ -978,6 +1044,8 @@ export const openChatQueuedItemSchema = lazySchema(() =>
     chatQueuedManagedCommandItemSchema,
     chatQueuedPortForwardItemSchema,
     chatQueuedConversationMessageItemSchema,
+    chatQueuedTaskCheckinItemSchema,
+    chatQueuedTaskOverdueItemSchema,
     openChatQueuedPromptItemSchema,
   ]),
 );
@@ -988,6 +1056,49 @@ export const openChatQueueStateSchema = lazySchema(() =>
   }),
 );
 export type OpenChatQueueState = z.infer<typeof openChatQueueStateSchema>;
+
+// Wire-freeze of the open queue as `chat.subscribe@1.25` ships it: the four
+// arms that existed before `1.26` added the task-checkin item, with the
+// prompt item's sender reopened. Its own union, NOT derived from the live open
+// one, so a later arm cannot reach that line through it. Bound to `1.25`'s
+// snapshot and `queueChanged` frames.
+const openChatQueuedItemSchemaPreTaskCheckin = lazySchema(() =>
+  z.union([
+    chatQueuedManagedCommandItemSchema,
+    chatQueuedPortForwardItemSchema,
+    chatQueuedConversationMessageItemSchema,
+    openChatQueuedPromptItemSchema,
+  ]),
+);
+const openChatQueueStateSchemaPreTaskCheckin = lazySchema(() =>
+  z.object({
+    status: z.enum(["idle", "running", "paused"]),
+    items: z.array(openChatQueuedItemSchemaPreTaskCheckin),
+    pausedReason: z.string().nullable().optional(),
+  }),
+);
+
+// Wire-freeze of the open queue as `chat.subscribe@1.26` ships it: the five
+// arms that existed before `1.27` added the task-overdue item, with the
+// prompt item's sender reopened. Its own union, NOT derived from the live open
+// one, so a later arm cannot reach that line through it. Bound to `1.26`'s
+// snapshot and `queueChanged` frames.
+const openChatQueuedItemSchemaPreTaskOverdue = lazySchema(() =>
+  z.union([
+    chatQueuedManagedCommandItemSchema,
+    chatQueuedPortForwardItemSchema,
+    chatQueuedConversationMessageItemSchema,
+    chatQueuedTaskCheckinItemSchema,
+    openChatQueuedPromptItemSchema,
+  ]),
+);
+const openChatQueueStateSchemaPreTaskOverdue = lazySchema(() =>
+  z.object({
+    status: z.enum(["idle", "running", "paused"]),
+    items: z.array(openChatQueuedItemSchemaPreTaskOverdue),
+    pausedReason: z.string().nullable().optional(),
+  }),
+);
 
 // Wire-freeze of the open queue as `chat.subscribe@1.22` through `@1.24` ship
 // it: the three pre-`1.25` arms with the prompt item's sender reopened. Its own
@@ -3355,9 +3466,47 @@ const chatSubscribeCommonServerFrameSchemasOpenHarnessPreConversation =
     },
   });
 
-// The live common frames (`chat.subscribe@1.25`): the open-harness set over
+// The common frames as `chat.subscribe@1.25` ships them: the open-harness set
+// over the user row that may carry a bot-conversation request and the queue
+// frozen at its four pre-task-checkin arms.
+const chatSubscribeCommonServerFrameSchemasOpenHarnessPreTaskCheckin =
+  buildChatSubscribeCommonServerFrameSchemas({
+    message: openUserMessageSchema,
+    queue: openChatQueueStateSchemaPreTaskCheckin,
+    event: openChatEventSchema,
+    action: chatActionSchema,
+    approval: chatApprovalStateSchema,
+    fileEditApproval: chatFileEditApprovalStateSchema,
+    interviewAnswered: interviewAnsweredServerFrameSchema,
+    interviewErrored: interviewErroredServerFrameSchema,
+    extraActionAckFields: {
+      ...fallbackGraceHoldLeaseFields,
+      ...draftImageAckCauseFields,
+    },
+  });
+
+// The common frames as `chat.subscribe@1.26` ships them: the open-harness set
+// over the user row that may carry a bot-conversation request and the queue
+// frozen at its five pre-task-overdue arms.
+const chatSubscribeCommonServerFrameSchemasOpenHarnessPreTaskOverdue =
+  buildChatSubscribeCommonServerFrameSchemas({
+    message: openUserMessageSchema,
+    queue: openChatQueueStateSchemaPreTaskOverdue,
+    event: openChatEventSchema,
+    action: chatActionSchema,
+    approval: chatApprovalStateSchema,
+    fileEditApproval: chatFileEditApprovalStateSchema,
+    interviewAnswered: interviewAnsweredServerFrameSchema,
+    interviewErrored: interviewErroredServerFrameSchema,
+    extraActionAckFields: {
+      ...fallbackGraceHoldLeaseFields,
+      ...draftImageAckCauseFields,
+    },
+  });
+
+// The live common frames (`chat.subscribe@1.27`): the open-harness set over
 // the user row that may carry a bot-conversation request and the queue that
-// may carry a conversation-message item.
+// may carry a conversation-message, a task-checkin or a task-overdue item.
 const chatSubscribeCommonServerFrameSchemasOpenHarness =
   buildChatSubscribeCommonServerFrameSchemas({
     message: openUserMessageSchema,
@@ -3515,7 +3664,21 @@ const chatSubscribeSharedServerFrameSchemasOpenHarnessPreConversation = [
   ...chatSubscribeCommonServerFrameSchemasOpenHarnessPreConversation,
   blockDeltaServerFrameSchema(openRuntimeEventSchema),
 ];
-// The live shared frames (`chat.subscribe@1.25`): the live open-harness common
+// The shared frames `chat.subscribe@1.25` ships: the open-harness common set
+// with the pre-task-checkin queue, over the same `blockDelta`.
+const chatSubscribeSharedServerFrameSchemasOpenHarnessPreTaskCheckin = [
+  messageDeliveryChangedServerFrameSchema,
+  ...chatSubscribeCommonServerFrameSchemasOpenHarnessPreTaskCheckin,
+  blockDeltaServerFrameSchema(openRuntimeEventSchema),
+];
+// The shared frames `chat.subscribe@1.26` ships: the open-harness common set
+// with the pre-task-overdue queue, over the same `blockDelta`.
+const chatSubscribeSharedServerFrameSchemasOpenHarnessPreTaskOverdue = [
+  messageDeliveryChangedServerFrameSchema,
+  ...chatSubscribeCommonServerFrameSchemasOpenHarnessPreTaskOverdue,
+  blockDeltaServerFrameSchema(openRuntimeEventSchema),
+];
+// The live shared frames (`chat.subscribe@1.27`): the live open-harness common
 // set over the same `blockDelta`.
 const chatSubscribeSharedServerFrameSchemasOpenHarness = [
   messageDeliveryChangedServerFrameSchema,
@@ -6236,7 +6399,61 @@ const chatSubscribeServerFrameSchemaV124 = lazySchema(() =>
 );
 
 /**
- * The live windowed union as a READER decodes it (`chat.subscribe@1.25`): the
+ * Frozen 1.25: the bot-conversation line - the user row carries its request
+ * and the queue its conversation-message item - with no task-checkin item
+ * (`1.26`). Frozen byte for byte since `1.26` opened above it: the snapshot
+ * and `queueChanged` bind the four-arm open queue, the rest is `1.26`'s.
+ */
+const chatSubscribeServerFrameSchemaV125 = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    chatSubscribeWindowedSnapshotServerFrameSchemaOpenHarness.extend({
+      snapshot: chatWindowedSnapshotSchemaV124.extend({
+        queue: openChatQueueStateSchemaPreTaskCheckin,
+        tail: openChatTranscriptWindowSchema,
+      }),
+    }),
+    chatSubscribeSkeletonChunkServerFrameSchemaV119,
+    chatSubscribeAccumulatedChangesServerFrameSchema,
+    chatSubscribeIndexChangedServerFrameSchema,
+    chatSubscribeRangeServerFrameSchemaOpenHarness,
+    chatSubscribeTurnStateChangedServerFrameSchema,
+    chatSubscribeManagedCommandsChangedServerFrameSchema,
+    chatSubscribePortForwardsChangedServerFrameSchema,
+    chatSubscribeHeldUpdatesChangedServerFrameSchema,
+    chatSubscribeThinkingTokensServerFrameSchema,
+    ...chatSubscribeSharedServerFrameSchemasOpenHarnessPreTaskCheckin,
+  ]),
+);
+
+/**
+ * Frozen 1.26: the task check-in line - the queue carries its task-checkin
+ * item - with no task-overdue item (`1.27`). Frozen byte for byte since
+ * `1.27` opened above it: the snapshot and `queueChanged` bind the five-arm
+ * open queue, the rest is `1.27`'s.
+ */
+const chatSubscribeServerFrameSchemaV126 = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    chatSubscribeWindowedSnapshotServerFrameSchemaOpenHarness.extend({
+      snapshot: chatWindowedSnapshotSchemaV124.extend({
+        queue: openChatQueueStateSchemaPreTaskOverdue,
+        tail: openChatTranscriptWindowSchema,
+      }),
+    }),
+    chatSubscribeSkeletonChunkServerFrameSchemaV119,
+    chatSubscribeAccumulatedChangesServerFrameSchema,
+    chatSubscribeIndexChangedServerFrameSchema,
+    chatSubscribeRangeServerFrameSchemaOpenHarness,
+    chatSubscribeTurnStateChangedServerFrameSchema,
+    chatSubscribeManagedCommandsChangedServerFrameSchema,
+    chatSubscribePortForwardsChangedServerFrameSchema,
+    chatSubscribeHeldUpdatesChangedServerFrameSchema,
+    chatSubscribeThinkingTokensServerFrameSchema,
+    ...chatSubscribeSharedServerFrameSchemasOpenHarnessPreTaskOverdue,
+  ]),
+);
+
+/**
+ * The live windowed union as a READER decodes it (`chat.subscribe@1.27`): the
  * union above with the snapshot, the `range` response, the three
  * sender-bearing common frames and the `blockDelta` bound to their
  * open-harness copies. The frames a peer DRIVES through - `turnStateChanged`
@@ -7163,11 +7380,66 @@ export const chatSubscribeV124 = defineStreamRpcContract({
  *   peer below `1.25` (`chat-frame-projection.ts`), since there is no sibling
  *   shape to degrade it into.
  *
- * The open request and the client frames are `1.24`'s, unchanged.
+ * The open request and the client frames are `1.24`'s, unchanged. Frozen at
+ * the four-arm queue since `1.26` opened above it.
  */
 export const chatSubscribeV125 = defineStreamRpcContract({
   method: "chat.subscribe",
   schemaVersion: { major: 1, minor: 25 } as const,
+  openRequestSchema: chatSubscribeOpenRequestSchemaV119,
+  serverFrameSchema: chatSubscribeServerFrameSchemaV125,
+  clientFrameSchema: chatSubscribeWindowedClientFrameSchema,
+});
+
+/**
+ * The task check-in line (Tracy Bots).
+ *
+ * `1.26` adds one union member and no key, frame or enum value: the
+ * `task-checkin` queue item (`chatQueuedTaskCheckinItemSchema`), a report on
+ * the tasks a bot tracks waiting on the TRUNK chat's queue to reach the bot.
+ * The host composes it at dispatch from its own records, so the item carries
+ * no task ids and several due check-ins coalesce into the one item.
+ *
+ * PROJECTION, like `1.25`'s conversation-message item and `1.14`'s
+ * port-forward item: `1.25` binds the hand-frozen four-arm open queue
+ * (`openChatQueueStateSchemaPreTaskCheckin`), every older line its own
+ * freeze, and the host OMITS the item - from the queue and from the queue
+ * events alike - for every peer below `1.26` (`chat-frame-projection.ts`),
+ * since there is no sibling shape to degrade it into.
+ *
+ * The open request and the client frames are `1.25`'s, unchanged. Frozen at
+ * the five-arm queue since `1.27` opened above it.
+ */
+export const chatSubscribeV126 = defineStreamRpcContract({
+  method: "chat.subscribe",
+  schemaVersion: { major: 1, minor: 26 } as const,
+  openRequestSchema: chatSubscribeOpenRequestSchemaV119,
+  serverFrameSchema: chatSubscribeServerFrameSchemaV126,
+  clientFrameSchema: chatSubscribeWindowedClientFrameSchema,
+});
+
+/**
+ * The task-overdue line (Tracy Bots T14).
+ *
+ * `1.27` adds one union member and no key, frame or enum value: the
+ * `task-overdue` queue item (`chatQueuedTaskOverdueItemSchema`), the nudge
+ * that a tracked task's periodic check-in is a whole period late, waiting on
+ * the TRUNK chat's queue to reach the bot. The host reads the overdue set
+ * from the bot's cloud row at dispatch, so the item carries no task ids and
+ * every task found overdue while it waits rides the one item.
+ *
+ * PROJECTION, like `1.26`'s task-checkin item: `1.26` binds the hand-frozen
+ * five-arm open queue (`openChatQueueStateSchemaPreTaskOverdue`), every older
+ * line its own freeze, and the host OMITS the item - from the queue and from
+ * the queue events alike - for every peer below `1.27`
+ * (`chat-frame-projection.ts`), since there is no sibling shape to degrade
+ * it into.
+ *
+ * The open request and the client frames are `1.26`'s, unchanged.
+ */
+export const chatSubscribeV127 = defineStreamRpcContract({
+  method: "chat.subscribe",
+  schemaVersion: { major: 1, minor: 27 } as const,
   openRequestSchema: chatSubscribeOpenRequestSchemaV119,
   serverFrameSchema: openChatSubscribeWindowedServerFrameSchema,
   clientFrameSchema: chatSubscribeWindowedClientFrameSchema,

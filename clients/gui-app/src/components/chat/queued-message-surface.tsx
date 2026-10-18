@@ -10,7 +10,9 @@ import {
   verticalListSortingStrategy,
 } from "@dnd-kit/sortable";
 import {
+  AlarmClock,
   Cable,
+  ClipboardList,
   GripVertical,
   ChevronDown,
   Inbox,
@@ -971,7 +973,9 @@ function QueuedMessageRowContent(props: {
               <ManagedCommandCancelButton
                 kind={
                   item.kind === "port-forward" ||
-                  item.kind === "conversation-message"
+                  item.kind === "conversation-message" ||
+                  item.kind === "task-checkin" ||
+                  item.kind === "task-overdue"
                     ? item.kind
                     : "shell"
                 }
@@ -1215,6 +1219,8 @@ function queuedMessageProvenanceBadge(item: OpenChatQueuedItem): ReactNode {
     );
   if (item.kind === "port-forward") return <PortForwardBadge />;
   if (item.kind === "conversation-message") return <ConversationMessageBadge />;
+  if (item.kind === "task-checkin") return <TaskCheckinBadge />;
+  if (item.kind === "task-overdue") return <TaskOverdueBadge />;
   return null;
 }
 
@@ -1345,8 +1351,56 @@ function ConversationMessageBadge() {
  * digest. For a forward it IS final - the notice is raised once, so dismissing
  * it means the agent is not told - and the copy says which.
  */
+/**
+ * A check-in on the tasks a bot tracks, waiting for the bot's next turn (a
+ * `task-checkin` item on the bot's trunk). Content-free like the two chips
+ * above it: the report is composed when the item is delivered, from whatever
+ * has changed by then.
+ */
+function TaskCheckinBadge() {
+  return (
+    <TooltipWrapper
+      label="A check-in on the bot's tasks is waiting for its next turn."
+      side="top"
+      sideOffset={6}
+      align={undefined}
+    >
+      <Badge variant="muted" data-testid="queued-task-checkin-badge">
+        <ClipboardList aria-hidden />
+        Check-in
+      </Badge>
+    </TooltipWrapper>
+  );
+}
+
+/**
+ * A notice that one of the bot's tasks is overdue for its check-in, waiting
+ * for the bot's next turn (a `task-overdue` item on the bot's trunk).
+ * Content-free like the check-in chip: which tasks are overdue is read when
+ * the item is delivered.
+ */
+function TaskOverdueBadge() {
+  return (
+    <TooltipWrapper
+      label="A task's check-in is overdue; the bot is told on its next turn."
+      side="top"
+      sideOffset={6}
+      align={undefined}
+    >
+      <Badge variant="muted" data-testid="queued-task-overdue-badge">
+        <AlarmClock aria-hidden />
+        Overdue
+      </Badge>
+    </TooltipWrapper>
+  );
+}
+
 const CANCEL_COPY: Record<
-  "shell" | "port-forward" | "conversation-message",
+  | "shell"
+  | "port-forward"
+  | "conversation-message"
+  | "task-checkin"
+  | "task-overdue",
   { readonly ariaLabel: string; readonly tooltip: string }
 > = {
   shell: {
@@ -1363,10 +1417,24 @@ const CANCEL_COPY: Record<
     tooltip:
       "Dismiss this message — the bot won't see it, and its request stays open",
   },
+  "task-checkin": {
+    ariaLabel: "Dismiss task check-in",
+    tooltip:
+      "Dismiss this check-in — the bot won't see it; the next one covers what it would have",
+  },
+  "task-overdue": {
+    ariaLabel: "Dismiss overdue notice",
+    tooltip: "Dismiss this notice — the bot won't see it",
+  },
 };
 
 function ManagedCommandCancelButton(props: {
-  readonly kind: "shell" | "port-forward" | "conversation-message";
+  readonly kind:
+    | "shell"
+    | "port-forward"
+    | "conversation-message"
+    | "task-checkin"
+    | "task-overdue";
   readonly onCancel: () => void;
 }) {
   const { ariaLabel, tooltip } = CANCEL_COPY[props.kind];

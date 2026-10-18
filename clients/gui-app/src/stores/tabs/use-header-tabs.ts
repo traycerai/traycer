@@ -7,6 +7,11 @@ import {
   useLandingDraftStore,
   type LandingDraftTab,
 } from "@/stores/home/landing-draft-store";
+import {
+  lookupBotTab,
+  useBotTabsStore,
+  type BotTabRecord,
+} from "@/stores/bots/bot-tabs-store";
 import { useTabsStore } from "@/stores/tabs/store";
 import {
   makeSelectHeaderItem,
@@ -102,6 +107,7 @@ export function useHeaderTabs(): ReadonlyArray<HeaderTab> {
     () => new Map<string, LandingDraftTab>(draftTabs.map((t) => [t.id, t])),
     [draftTabs],
   );
+  const botTabsById = useBotTabsStore((s) => s.tabs);
 
   return useMemo<ReadonlyArray<HeaderTab>>(
     () =>
@@ -109,12 +115,14 @@ export function useHeaderTabs(): ReadonlyArray<HeaderTab> {
         resolveRef(ref, {
           epicTabsById,
           draftTabsById,
+          botTabsById,
           systemTabs,
           structuralLockRevision,
           epicSessionHostRevision: epicSessionHostRevisionValue,
         }),
       ),
     [
+      botTabsById,
       draftTabsById,
       epicSessionHostRevisionValue,
       epicTabsById,
@@ -185,6 +193,7 @@ export function useHeaderStripItems(): ReadonlyArray<HeaderStripItem> {
       new Map<string, LandingDraftTab>(draftTabs.map((tab) => [tab.id, tab])),
     [draftTabs],
   );
+  const botTabsById = useBotTabsStore((s) => s.tabs);
 
   return useMemo(
     () =>
@@ -192,12 +201,14 @@ export function useHeaderStripItems(): ReadonlyArray<HeaderStripItem> {
         projectHeaderStripItem(item, {
           epicTabsById,
           draftTabsById,
+          botTabsById,
           systemTabs,
           structuralLockRevision,
           epicSessionHostRevision: epicSessionHostRevisionValue,
         }),
       ),
     [
+      botTabsById,
       draftTabsById,
       epicSessionHostRevisionValue,
       epicTabsById,
@@ -328,6 +339,9 @@ export function useHeaderTabForRef(ref: TabRef | null): HeaderTab | null {
     if (ref?.kind === "settings") return state.systemTabs.settings;
     return null;
   });
+  const bot = useBotTabsStore((state) =>
+    ref?.kind === "bot" ? lookupBotTab(state.tabs, ref.id) : null,
+  );
   // Subscribe to the value itself so compiler caching sees registry-only moves.
   const hostId = useSyncExternalStore(
     subscribeEpicSessionHosts,
@@ -346,6 +360,11 @@ export function useHeaderTabForRef(ref: TabRef | null): HeaderTab | null {
     return draft === null
       ? null
       : memoizedHeaderTab(draftHeaderTabCache, draft, TAB_KINDS.draft.build);
+  }
+  if (ref.kind === "bot") {
+    return bot === null
+      ? null
+      : memoizedHeaderTab(botHeaderTabCache, bot, TAB_KINDS.bot.build);
   }
   if (ref.kind === "history") {
     return system === null
@@ -418,6 +437,7 @@ const epicHeaderTabCache = new WeakMap<
   Map<EpicHeaderTabCacheKey, HeaderTab>
 >();
 const draftHeaderTabCache = new WeakMap<LandingDraftTab, HeaderTab>();
+const botHeaderTabCache = new WeakMap<BotTabRecord, HeaderTab>();
 const historyHeaderTabCache = new WeakMap<SystemTab, HeaderTab>();
 const settingsHeaderTabCache = new WeakMap<SystemTab, HeaderTab>();
 
@@ -436,6 +456,7 @@ function memoizedHeaderTab<S extends object>(
 interface HeaderTabSources {
   readonly epicTabsById: ReadonlyMap<string, EpicViewTab>;
   readonly draftTabsById: ReadonlyMap<string, LandingDraftTab>;
+  readonly botTabsById: Readonly<Record<string, BotTabRecord>>;
   readonly systemTabs: {
     readonly history: SystemTab | null;
     readonly settings: SystemTab | null;
@@ -484,7 +505,12 @@ function resolveRef(
   ref: TabRef,
   sources: HeaderTabSources,
 ): ReadonlyArray<HeaderTab> {
-  const { epicTabsById, draftTabsById, systemTabs } = sources;
+  const { epicTabsById, draftTabsById, botTabsById, systemTabs } = sources;
+  if (ref.kind === "bot") {
+    if (!Object.hasOwn(botTabsById, ref.id)) return [];
+    const source = botTabsById[ref.id];
+    return [memoizedHeaderTab(botHeaderTabCache, source, TAB_KINDS.bot.build)];
+  }
   if (ref.kind === "sample-workspace")
     return [TAB_KINDS["sample-workspace"].build(null)];
   if (ref.kind === "epic") {
@@ -538,10 +564,12 @@ export function getHeaderTabs(): ReadonlyArray<HeaderTab> {
   const draftTabsById = new Map<string, LandingDraftTab>(
     draftTabs.map((t) => [t.id, t]),
   );
+  const botTabsById = useBotTabsStore.getState().tabs;
   return stripOrder.flatMap((ref) =>
     resolveRef(ref, {
       epicTabsById,
       draftTabsById,
+      botTabsById,
       systemTabs,
       structuralLockRevision: getTabStructuralLockRevision(),
       epicSessionHostRevision: getEpicSessionHostRevision(),

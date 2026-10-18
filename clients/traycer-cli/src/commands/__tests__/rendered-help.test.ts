@@ -1094,6 +1094,40 @@ const EXPECTED_PUBLIC_SURFACE: readonly ExpectedSurfaceEntry[] = [
     ],
     args: [],
   },
+  { path: "bot", options: [], args: [] },
+  {
+    path: "bot list",
+    options: [
+      { flags: "--json", mandatory: false },
+      { flags: "--no-progress", mandatory: false },
+      { flags: "--quiet", mandatory: false },
+    ],
+    args: [],
+  },
+  {
+    path: "bot send",
+    options: [
+      { flags: "--conversation <id>", mandatory: false },
+      { flags: "--json", mandatory: false },
+      { flags: "--no-progress", mandatory: false },
+      { flags: "--quiet", mandatory: false },
+      { flags: "--wait <duration>", mandatory: false },
+    ],
+    args: [
+      { name: "bot", required: true, variadic: false },
+      { name: "text", required: true, variadic: false },
+    ],
+  },
+  {
+    path: "bot checkins",
+    options: [
+      { flags: "--json", mandatory: false },
+      { flags: "--no-progress", mandatory: false },
+      { flags: "--quiet", mandatory: false },
+      { flags: "--task <id>", mandatory: false },
+    ],
+    args: [{ name: "bot", required: true, variadic: false }],
+  },
   {
     path: "monitor",
     options: [

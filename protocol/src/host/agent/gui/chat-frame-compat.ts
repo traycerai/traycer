@@ -143,6 +143,26 @@ export const CHAT_SUBSCRIBE_OPEN_HARNESS_MINOR = 22;
 export const CHAT_SUBSCRIBE_CONVERSATION_MESSAGE_MINOR = 25;
 
 /**
+ * The first minor whose queue may carry a `task-checkin` item (a bot's
+ * check-in on the tasks it tracks, waiting on its trunk, Tracy Bots). Same
+ * posture as the constant above: the host omits the item, and the queue
+ * events that name it, from every peer below this minor
+ * (`chat-frame-projection.ts`); a `1.26` peer parses with the union its line
+ * binds and needs no predicate.
+ */
+export const CHAT_SUBSCRIBE_TASK_CHECKIN_MINOR = 26;
+
+/**
+ * The first minor whose queue may carry a `task-overdue` item (the nudge that
+ * a tracked task's periodic check-in is a whole period late, waiting on its
+ * trunk, Tracy Bots T14). Same posture as the two constants above: the host
+ * omits the item, and the queue events that name it, from every peer below
+ * this minor (`chat-frame-projection.ts`); a `1.27` peer parses with the
+ * union its line binds and needs no predicate.
+ */
+export const CHAT_SUBSCRIBE_TASK_OVERDUE_MINOR = 27;
+
+/**
  * Typed against the live enum on purpose: a rename of the mode breaks this
  * compile rather than leaving a string literal that silently matches nothing.
  *

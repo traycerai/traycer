@@ -352,6 +352,8 @@ import {
   chatSubscribeV123,
   chatSubscribeV124,
   chatSubscribeV125,
+  chatSubscribeV126,
+  chatSubscribeV127,
 } from "@traycer/protocol/host/agent/gui/contracts";
 import {
   agentTuiGenerateTitleV10,
@@ -1015,6 +1017,7 @@ import {
 } from "@traycer/protocol/host/chat-auto-archive/contracts";
 import {
   environmentHostBindV10,
+  environmentHostListV10,
   environmentHostReadV10,
   environmentListV10,
 } from "@traycer/protocol/host/environment/contracts";
@@ -5794,6 +5797,21 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
       versions: {
         0: {
           contract: environmentHostBindV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  // Every host bound to a team environment, as any member sees it. Optional
+  // like its siblings.
+  "environment.host.list": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: environmentHostListV10,
           upgradeFromPreviousVersion: null,
         },
       },
@@ -13723,7 +13741,7 @@ const HOST_STREAM_RPC_REGISTRY_DEFINITION = {
   ...HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION,
   "chat.subscribe": {
     1: {
-      latestMinor: 25,
+      latestMinor: 27,
       versions: {
         0: {
           contract: chatSubscribeV10,
@@ -13882,6 +13900,20 @@ const HOST_STREAM_RPC_REGISTRY_DEFINITION = {
         // the host omits it below @1.25, as it omits port-forward below @1.14).
         25: {
           contract: chatSubscribeV125,
+        },
+        // @1.26 is the task check-in line: the `task-checkin` queue item on a
+        // bot's trunk (projection: the host omits it below @1.26, as it omits
+        // the conversation-message item below @1.25). @1.25 is frozen at its
+        // four-arm queue.
+        26: {
+          contract: chatSubscribeV126,
+        },
+        // @1.27 is the task-overdue line: the `task-overdue` queue item on a
+        // bot's trunk (projection: the host omits it below @1.27, as it omits
+        // the task-checkin item below @1.26). @1.26 is frozen at its five-arm
+        // queue.
+        27: {
+          contract: chatSubscribeV127,
         },
       },
     },
