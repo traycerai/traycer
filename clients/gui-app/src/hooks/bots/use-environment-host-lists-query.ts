@@ -14,13 +14,26 @@ import {
 
 const METHOD = "environment.host.list";
 
+export interface EnvironmentHostLists {
+  /**
+   * Each answered environment's machines, keyed by environment id. An
+   * environment whose list has not answered (pending, failed, or not asked)
+   * is absent, so a reader can tell "no such machine" from "not known".
+   */
+  readonly hostsByEnvironmentId: ReadonlyMap<
+    string,
+    ReadonlyArray<EnvironmentHostRecord>
+  >;
+  /** Environments whose list FAILED (refused, timed out); not in the map. */
+  readonly failedEnvironmentIds: ReadonlySet<string>;
+  /** Asks the failed environments again. A no-op when none failed. */
+  readonly retryFailed: () => void;
+}
+
 /**
  * `environment.host.list` for several team environments at once, on one
  * client (Tracy Bots): the machines each environment's members may see -
- * its sandboxes, whoever added them, plus the caller's own bound hosts. Keyed
- * by environment id; an environment whose list has not answered (pending,
- * refused, or not asked) is absent, so a reader can tell "no such machine"
- * from "not known".
+ * its sandboxes, whoever added them, plus the caller's own bound hosts.
  *
  * `enabled` is the capability gate the caller resolved with
  * `useHostMethodSupport` on the same client's host.
@@ -29,7 +42,7 @@ export function useEnvironmentHostLists(
   client: HostClient<HostRpcRegistry> | null,
   environmentIds: ReadonlyArray<string>,
   enabled: boolean,
-): ReadonlyMap<string, ReadonlyArray<EnvironmentHostRecord>> {
+): EnvironmentHostLists {
   const idsKey = environmentIds.join("\n");
   const ids = useMemo(
     () => idsKey.split("\n").filter((id) => id.length > 0),
@@ -43,30 +56,39 @@ export function useEnvironmentHostLists(
       })),
     [ids],
   );
-  // Stable per id list, so `useQueries` hands back the same map until an
-  // answer moves rather than a new one every render.
+  // Stable per id list, so `useQueries` hands back the same lists until an
+  // answer moves rather than new ones every render.
   const combine = useCallback(
     (
       results: Array<UseQueryResult<EnvironmentHostListResponse, HostRpcError>>,
-    ): ReadonlyMap<string, ReadonlyArray<EnvironmentHostRecord>> => {
-      const byEnvironmentId = new Map<
+    ): EnvironmentHostLists => {
+      const hostsByEnvironmentId = new Map<
         string,
         ReadonlyArray<EnvironmentHostRecord>
       >();
+      const failedEnvironmentIds = new Set<string>();
+      const failedRefetches: Array<() => Promise<unknown>> = [];
       // Positional: `useQueries` answers in request order.
       results.forEach((result, index) => {
-        if (index >= ids.length || result.data === undefined) return;
-        byEnvironmentId.set(ids[index], result.data.hosts);
+        if (index >= ids.length) return;
+        if (result.data !== undefined) {
+          hostsByEnvironmentId.set(ids[index], result.data.hosts);
+        } else if (result.status === "error") {
+          failedEnvironmentIds.add(ids[index]);
+          failedRefetches.push(result.refetch);
+        }
       });
-      return byEnvironmentId;
+      return {
+        hostsByEnvironmentId,
+        failedEnvironmentIds,
+        retryFailed: () => {
+          for (const refetch of failedRefetches) void refetch();
+        },
+      };
     },
     [ids],
   );
-  return useHostQueries<
-    HostRpcRegistry,
-    typeof METHOD,
-    ReadonlyMap<string, ReadonlyArray<EnvironmentHostRecord>>
-  >({
+  return useHostQueries<HostRpcRegistry, typeof METHOD, EnvironmentHostLists>({
     client,
     requests,
     cacheKeyIdentity: undefined,

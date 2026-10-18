@@ -4388,8 +4388,11 @@ min`): "The judge didn't finish in time, so it's asking you instead."
     each team's machines from `environment.host.list` (gated on that
     method): a sandbox reads "Team machine" and names no operator, the
     reader's own machine reads "Yours"; another member's machine is never
-    listed (the host answers only what the reader may see). This list is
-    admin surface only; the bot flow never asks for a machine.
+    listed (the host answers only what the reader may see). A team whose
+    list could not be read says so with a Retry, rather than showing the
+    empty state. A bind or unbind refreshes the lists of the team the host
+    leaves and the team it joins. This list is admin surface only; the bot
+    flow never asks for a machine.
 - `Fallback` (section id `fallback`, route `/settings/fallback`,
   `panels/fallback-settings-panel.tsx` plus `panels/fallback/`) The whole
   configuration surface for **automatic provider fallback**: what the host does

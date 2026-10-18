@@ -369,6 +369,7 @@ describe("homeBotState", () => {
       boundHostId: OWN,
       directoryHostIds: new Set([OWN]),
       connectableHostIds: new Set([OWN]),
+      connectableResolved: true,
       environmentHostIds: PERSONAL_ENV,
       ...overrides,
     });
@@ -439,5 +440,42 @@ describe("homeBotState", () => {
     expect(
       state({ connectableHostIds: new Set(), environmentHostIds: null }),
     ).toBe("paused");
+  });
+
+  it("is idle for an own-host bot while the host directory has not answered", () => {
+    // The directory and connectable sets are empty for want of an answer.
+    const unanswered = {
+      directoryHostIds: new Set<string>(),
+      connectableHostIds: new Set<string>(),
+    };
+    expect(state({ ...unanswered, connectableResolved: false })).toBe("idle");
+    expect(state({ ...unanswered, connectableResolved: true })).toBe("paused");
+    // The directory said the host exists but is not dialable: resolved, paused.
+    expect(
+      state({ connectableHostIds: new Set(), connectableResolved: true }),
+    ).toBe("paused");
+    expect(
+      state({ connectableHostIds: new Set(), connectableResolved: false }),
+    ).toBe("idle");
+  });
+
+  it("is idle for a personal-environment bot outside the directory while the directory has not answered", () => {
+    const unanswered = {
+      boundHostId: TEAMMATE,
+      environmentHostIds: PERSONAL_ENV,
+      directoryHostIds: new Set<string>(),
+      connectableHostIds: new Set<string>(),
+    };
+    expect(state({ ...unanswered, connectableResolved: false })).toBe("idle");
+    expect(state({ ...unanswered, connectableResolved: true })).toBe("paused");
+  });
+
+  it("keeps an unbound bot paused and a working bot working before the directory answers", () => {
+    expect(state({ boundHostId: null, connectableResolved: false })).toBe(
+      "paused",
+    );
+    expect(state({ working: true, connectableResolved: false })).toBe(
+      "working",
+    );
   });
 });

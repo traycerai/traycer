@@ -46,6 +46,7 @@ const mocks = vi.hoisted(() => {
       connectableResolved: true,
       hostListSupport: true,
       hostLists: new Map<string, ReadonlyArray<EnvironmentHostRecord>>(),
+      failedHostListIds: new Set<string>(),
     },
     groupProps: [] as Array<{
       environmentId: string;
@@ -206,13 +207,18 @@ beforeEach(() => {
   mocks.state.connectableResolved = true;
   mocks.state.hostListSupport = true;
   mocks.state.hostLists = new Map();
+  mocks.state.failedHostListIds = new Set();
   mocks.groupProps.length = 0;
   mocks.useHostMethodSupport.mockImplementation((_hostId, method) =>
     method === "environment.host.list"
       ? mocks.state.hostListSupport
       : mocks.state.support,
   );
-  mocks.useEnvironmentHostLists.mockImplementation(() => mocks.state.hostLists);
+  mocks.useEnvironmentHostLists.mockImplementation(() => ({
+    hostsByEnvironmentId: mocks.state.hostLists,
+    failedEnvironmentIds: mocks.state.failedHostListIds,
+    retryFailed: () => undefined,
+  }));
   mocks.useEnvironmentListQuery.mockImplementation(
     () => mocks.state.environments,
   );
@@ -434,6 +440,19 @@ describe("HomeBotsSection what each group is told", () => {
 
     expect(latestGroupProps("env-team").environmentHostIds).toBeNull();
     // A personal environment is never waiting on a list it does not have.
+    expect(latestGroupProps("env-personal").environmentHostIds).toEqual(
+      new Set(),
+    );
+  });
+
+  it("gives a team environment null, never an empty set, when its machine list failed", () => {
+    mocks.state.failedHostListIds = new Set(["env-team"]);
+    resolveBothQueries();
+    mountSection();
+
+    // Absent from the answered lists and named failed: unanswered, not "no
+    // machine", so its rows read idle rather than paused.
+    expect(latestGroupProps("env-team").environmentHostIds).toBeNull();
     expect(latestGroupProps("env-personal").environmentHostIds).toEqual(
       new Set(),
     );

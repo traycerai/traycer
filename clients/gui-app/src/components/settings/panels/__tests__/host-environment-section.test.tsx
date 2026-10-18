@@ -82,7 +82,11 @@ vi.mock("@/hooks/bots/use-environment-host-bind-mutation", () => ({
   }),
 }));
 vi.mock("@/hooks/bots/use-environment-host-lists-query", () => ({
-  useEnvironmentHostLists: () => new Map(),
+  useEnvironmentHostLists: () => ({
+    hostsByEnvironmentId: new Map(),
+    failedEnvironmentIds: new Set<string>(),
+    retryFailed: () => undefined,
+  }),
 }));
 
 import { HostEnvironmentSection } from "@/components/settings/panels/host-environment-section";

@@ -183,7 +183,9 @@ async function mountBindScenario(scenario: BindScenario): Promise<{
     { wrapper },
   );
   await waitFor(() => {
-    expect(result.current.lists.size).toBe(OBSERVED.length);
+    expect(result.current.lists.hostsByEnvironmentId.size).toBe(
+      OBSERVED.length,
+    );
   });
   if (scenario.readCached) {
     await waitFor(() => {
@@ -200,7 +202,7 @@ async function mountBindScenario(scenario: BindScenario): Promise<{
     },
     listReads: () => ({ ...reads }),
     hostIdsListed: (environmentId) =>
-      (result.current.lists.get(environmentId) ?? []).map(
+      (result.current.lists.hostsByEnvironmentId.get(environmentId) ?? []).map(
         (record) => record.hostId,
       ),
   };

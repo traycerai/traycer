@@ -76,14 +76,19 @@ export function HomeBotsSection(): ReactNode {
   );
   const environmentHostIds = useMemo(() => {
     const byEnvironmentId = new Map<string, ReadonlySet<string>>();
-    for (const [environmentId, hosts] of environmentHosts) {
+    // A failed list stays out of the map, read as unanswered: the rows say
+    // idle rather than claim a machine is away.
+    for (const [
+      environmentId,
+      hosts,
+    ] of environmentHosts.hostsByEnvironmentId) {
       byEnvironmentId.set(
         environmentId,
         new Set(hosts.map((host) => host.hostId)),
       );
     }
     return byEnvironmentId;
-  }, [environmentHosts]);
+  }, [environmentHosts.hostsByEnvironmentId]);
   const botList = bots.data?.bots ?? EMPTY_BOTS;
   const model = useMemo(
     () =>

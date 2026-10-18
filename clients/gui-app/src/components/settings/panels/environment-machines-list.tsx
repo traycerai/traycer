@@ -9,6 +9,7 @@ import type {
   EnvironmentHostRecord,
 } from "@traycer/protocol/host/environment/contracts";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { useEnvironmentHostLists } from "@/hooks/bots/use-environment-host-lists-query";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import type { HostRpcRegistry } from "@/lib/host";
@@ -31,7 +32,7 @@ export function EnvironmentMachinesList(props: {
   const teams = environments.filter(
     (environment) => environment.ownerKind === "organization",
   );
-  const hostsByEnvironment = useEnvironmentHostLists(
+  const lists = useEnvironmentHostLists(
     client,
     teams.map((environment) => environment.environmentId),
     enabled,
@@ -44,7 +45,11 @@ export function EnvironmentMachinesList(props: {
         <EnvironmentMachines
           key={environment.environmentId}
           environment={environment}
-          hosts={hostsByEnvironment.get(environment.environmentId) ?? null}
+          hosts={
+            lists.hostsByEnvironmentId.get(environment.environmentId) ?? null
+          }
+          failed={lists.failedEnvironmentIds.has(environment.environmentId)}
+          onRetry={lists.retryFailed}
           viewerUserId={viewerUserId}
         />
       ))}
@@ -56,9 +61,12 @@ function EnvironmentMachines(props: {
   readonly environment: EnvironmentDescriptor;
   /** `null` while the list has not answered. */
   readonly hosts: ReadonlyArray<EnvironmentHostRecord> | null;
+  /** The list was asked for and could not be read. */
+  readonly failed: boolean;
+  readonly onRetry: () => void;
   readonly viewerUserId: string | null;
 }): ReactNode {
-  const { environment, hosts, viewerUserId } = props;
+  const { environment, hosts, failed, onRetry, viewerUserId } = props;
   return (
     <section
       className="flex flex-col gap-1"
@@ -69,11 +77,23 @@ function EnvironmentMachines(props: {
       <h3 className="text-ui-xs font-medium text-foreground">
         Machines in {environment.label}
       </h3>
-      <EnvironmentMachineRows
-        environmentLabel={environment.label}
-        hosts={hosts}
-        viewerUserId={viewerUserId}
-      />
+      {failed ? (
+        <p
+          className="text-ui-xs text-muted-foreground"
+          data-testid="environment-machines-failed"
+        >
+          Couldn&apos;t load {environment.label}&apos;s machines.{" "}
+          <Button type="button" variant="link" size="xs" onClick={onRetry}>
+            Retry
+          </Button>
+        </p>
+      ) : (
+        <EnvironmentMachineRows
+          environmentLabel={environment.label}
+          hosts={hosts}
+          viewerUserId={viewerUserId}
+        />
+      )}
     </section>
   );
 }

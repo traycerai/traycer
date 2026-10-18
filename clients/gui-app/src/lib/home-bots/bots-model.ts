@@ -136,7 +136,9 @@ export function buildHomeBotRow(
  * A machine of the environment the reader cannot dial (a team machine
  * another member added) has unknown reachability here; the row says idle
  * and opening the tab decides. So does an environment whose machine list
- * has not answered (`environmentHostIds` null).
+ * has not answered (`environmentHostIds` null), and a host directory that
+ * has not answered (`connectableResolved` false): until then the reader's
+ * own machines are not known, so nothing about them is evidence.
  */
 export type HomeBotState = "working" | "idle" | "paused";
 
@@ -147,6 +149,9 @@ export function homeBotState(input: {
   readonly directoryHostIds: ReadonlySet<string>;
   /** Of those, the ones this client can dial now. */
   readonly connectableHostIds: ReadonlySet<string>;
+  /** Whether the directory has answered; until it has, the two sets above
+   * are empty for want of an answer, not because there are no hosts. */
+  readonly connectableResolved: boolean;
   /** The machines of the bot's environment the reader may see beyond their
    * own (empty for a personal environment, which has none), or null while a
    * team environment's list has not answered. */
@@ -155,6 +160,7 @@ export function homeBotState(input: {
   const { boundHostId } = input;
   if (boundHostId === null) return "paused";
   if (input.working) return "working";
+  if (!input.connectableResolved) return "idle";
   if (input.directoryHostIds.has(boundHostId)) {
     return input.connectableHostIds.has(boundHostId) ? "idle" : "paused";
   }

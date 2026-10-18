@@ -78,6 +78,7 @@ export function HomeBotRow(props: {
     boundHostId: row.boundHostId,
     directoryHostIds: hostReach.directoryHostIds,
     connectableHostIds: hostReach.connectableHostIds,
+    connectableResolved: hostReach.connectableResolved,
     environmentHostIds,
   });
   const openRequests = row.openRequestCount ?? 0;

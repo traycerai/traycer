@@ -4,6 +4,7 @@
  * read "Yours", and another member's machine carries neither.
  */
 import { cleanup, render, screen, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   EnvironmentDescriptor,
@@ -29,10 +30,16 @@ const PERSONAL: EnvironmentDescriptor = {
 
 const mocks = vi.hoisted(() => ({
   hostLists: new Map<string, ReadonlyArray<EnvironmentHostRecord>>(),
+  failedIds: new Set<string>(),
+  retryFailed: vi.fn<() => void>(),
 }));
 
 vi.mock("@/hooks/bots/use-environment-host-lists-query", () => ({
-  useEnvironmentHostLists: () => mocks.hostLists,
+  useEnvironmentHostLists: () => ({
+    hostsByEnvironmentId: mocks.hostLists,
+    failedEnvironmentIds: mocks.failedIds,
+    retryFailed: mocks.retryFailed,
+  }),
 }));
 
 import { EnvironmentMachinesList } from "@/components/settings/panels/environment-machines-list";
@@ -69,7 +76,9 @@ function row(hostId: string): HTMLElement {
 }
 
 beforeEach(() => {
+  vi.clearAllMocks();
   mocks.hostLists = new Map();
+  mocks.failedIds = new Set();
   useAuthStore
     .getState()
     .setSignedIn(
@@ -115,6 +124,34 @@ describe("EnvironmentMachinesList", () => {
     renderList();
 
     expect(screen.getByText("No machines run Acme's bots yet.")).toBeTruthy();
+    expect(screen.queryAllByTestId("environment-machine")).toEqual([]);
+  });
+
+  it("says the team's machines could not be loaded when the list failed, and Retry asks again", async () => {
+    const user = userEvent.setup();
+    mocks.failedIds = new Set([TEAM.environmentId]);
+
+    renderList();
+
+    const notice = screen.getByTestId("environment-machines-failed");
+    expect(notice.textContent).toContain("Couldn't load Acme's machines.");
+    // A failure is not the same fact as an empty team.
+    expect(screen.queryByText("No machines run Acme's bots yet.")).toBeNull();
+    expect(screen.queryAllByTestId("environment-machine")).toEqual([]);
+
+    expect(mocks.retryFailed).not.toHaveBeenCalled();
+    await user.click(within(notice).getByRole("button", { name: "Retry" }));
+    expect(mocks.retryFailed).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows neither the failure notice nor the empty-state copy while the list has not answered", () => {
+    renderList();
+
+    expect(
+      screen.getByRole("region", { name: "Machines in Acme" }),
+    ).toBeTruthy();
+    expect(screen.queryByTestId("environment-machines-failed")).toBeNull();
+    expect(screen.queryByText("No machines run Acme's bots yet.")).toBeNull();
     expect(screen.queryAllByTestId("environment-machine")).toEqual([]);
   });
 });

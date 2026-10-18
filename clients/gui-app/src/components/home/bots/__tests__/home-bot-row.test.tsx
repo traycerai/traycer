@@ -159,6 +159,17 @@ describe("<HomeBotRow /> state", () => {
     expect(stateBadge()).toEqual({ text: "Paused", state: "paused" });
   });
 
+  it("says Idle, not Paused, for a bot on the reader's own host while the host directory has not answered", () => {
+    mountRow({
+      ...OWN_AND_DIALABLE,
+      directory: [],
+      connectable: [],
+      connectableResolved: false,
+    });
+
+    expect(stateBadge()).toEqual({ text: "Idle", state: "idle" });
+  });
+
   it("says Paused for a bot no host runs", () => {
     mountRow({ ...OWN_AND_DIALABLE, bot: { ...BOT, boundHostId: null } });
 
