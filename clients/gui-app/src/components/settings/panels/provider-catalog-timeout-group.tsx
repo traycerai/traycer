@@ -32,7 +32,7 @@ const CATALOG_GET = "config.catalog.get";
 const CATALOG_SET = "config.catalog.set";
 
 const READ_ERROR_STATUS =
-  "Couldn't read this host's setting. Repair ~/.traycer/cli/config.json on that machine, or back it up before resetting it, then reopen Settings.";
+  "Couldn't read this host's setting. Repair Traycer's config.json on that machine, or back it up before resetting it, then reopen Settings.";
 
 /**
  * Settings ▸ Providers ▸ <provider> ▸ CLI & Args ▸ Model list: how long the

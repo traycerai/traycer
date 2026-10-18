@@ -41,6 +41,11 @@ export interface TrustedKeySet {
   readonly sources: readonly string[];
 }
 
+/** The operator overlay file of extra trusted keys, under the data root. */
+export function trustedKeysOverlayPath(): string {
+  return join(cliSharedHomeDir(), "host-trusted-pubkeys");
+}
+
 export async function loadTrustedKeys(): Promise<TrustedKeySet> {
   const raws: { value: string; source: string }[] = [];
   // Baked keys (config.hostTrustedPubkeys) are the trust root and the
@@ -53,7 +58,7 @@ export async function loadTrustedKeys(): Promise<TrustedKeySet> {
   }
   // Disk overlay: operator escape hatch for pinning extra keys without
   // rebuilding. ADDS to the trust set; cannot replace baked.
-  const overlayPath = join(cliSharedHomeDir(), "host-trusted-pubkeys");
+  const overlayPath = trustedKeysOverlayPath();
   try {
     const contents = await readFile(overlayPath, "utf8");
     for (const line of contents.split(/\r?\n/)) {

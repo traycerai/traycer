@@ -2023,7 +2023,7 @@ function registerHostCommands(program: Command): void {
           "           host is still up. Runtime state is never purged here - removing it is",
           "           only safe once the supervisor is confirmed stopped, which needs a",
           "           backend completion contract that does not exist yet.",
-          "Neither mode touches your data or credentials under ~/.traycer.",
+          "Neither mode touches your data or credentials.",
           "",
         ].join("\n"),
       )
