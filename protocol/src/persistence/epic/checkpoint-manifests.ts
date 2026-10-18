@@ -1,5 +1,9 @@
-import { EpicArtifactKindSchemaPreHtml } from "@traycer/protocol/common/registry";
+import {
+  commonRecordRegistry,
+  EpicArtifactKindSchemaPreHtml,
+} from "@traycer/protocol/common/registry";
 import { z } from "zod";
+import { getRecordSchema } from "@traycer/protocol/framework/index";
 import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 
 export const checkpointFileOperationSchema = lazySchema(() =>
@@ -21,11 +25,22 @@ export type CheckpointFileOperation = z.infer<
  * resolves. The GUI re-resolves the live title from the open-epic projection by
  * `artifactId`; `title` here is only the fallback.
  */
-export const checkpointArtifactTagSchema = lazySchema(() =>
+export const checkpointArtifactTagSchemaPreHtml = lazySchema(() =>
   z.object({
     artifactId: z.string().nullable(),
     kind: EpicArtifactKindSchemaPreHtml.nullable(),
     title: z.string().nullable(),
+  }),
+);
+// Manifest events carry this tag in opaque metadata. Typed stream frames bind
+// the frozen copy through 1.30 and the live copy from 1.31.
+export const checkpointArtifactTagSchema = lazySchema(() =>
+  checkpointArtifactTagSchemaPreHtml.extend({
+    kind: getRecordSchema(
+      commonRecordRegistry,
+      "epic-artifact-kind",
+      "latest",
+    ).nullable(),
   }),
 );
 export type CheckpointArtifactTag = z.infer<typeof checkpointArtifactTagSchema>;

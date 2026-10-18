@@ -24,6 +24,7 @@ import {
 import { tokenUsageSchema } from "@traycer/protocol/persistence/epic/foundation";
 import {
   checkpointArtifactTagSchema,
+  checkpointArtifactTagSchemaPreHtml,
   checkpointFileOperationSchema,
 } from "@traycer/protocol/persistence/epic/checkpoint-manifests";
 import {
@@ -1581,6 +1582,15 @@ export const chatAccumulatedChangeChunkSchema = lazySchema(() =>
     fromIndex: z.number().int().nonnegative(),
     summaries: z.array(chatAccumulatedFileChangeSummarySchema),
     isFinal: z.boolean(),
+  }),
+);
+export const chatAccumulatedChangeChunkSchemaPreHtml = lazySchema(() =>
+  chatAccumulatedChangeChunkSchema.extend({
+    summaries: z.array(
+      chatAccumulatedFileChangeSummarySchema.extend({
+        artifact: checkpointArtifactTagSchemaPreHtml.nullish(),
+      }),
+    ),
   }),
 );
 export type ChatAccumulatedChangeChunk = z.infer<

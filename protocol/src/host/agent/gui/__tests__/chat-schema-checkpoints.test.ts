@@ -36,6 +36,7 @@ import {
   chatSubscribeV127,
   chatSubscribeV128,
   chatSubscribeV129,
+  chatSubscribeV130,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 
 function canonical(value: unknown): unknown {
@@ -316,6 +317,11 @@ const SERVER_FRAME_DIGESTS = {
     "1d3b534a2619caad181d1401e52f7065f6264794f5c5f99bf8f45cb612768aeb",
     "6e8d92246352639bc8d1a3c560ce3851f473c8d033b4b283e8a5e2d0c907738a",
   ],
+  // Captured at 7bc0e2e9f before 1.31 widened checkpoint artifact tags.
+  30: [
+    "d013d992fccdd46c5b000cdf5ae5da57e9fc798d9fd1e2e203025b931d34cd5a",
+    "17258a62bb64e1f636a5457b9be882b688c5547f75fd12a2a11236c31e57a92b",
+  ],
 } as const;
 
 const contracts = [
@@ -349,10 +355,11 @@ const contracts = [
   chatSubscribeV127,
   chatSubscribeV128,
   chatSubscribeV129,
+  chatSubscribeV130,
 ] as const;
 
 describe("chat.subscribe placement freeze", () => {
-  it("keeps every 1.0–1.29 server schema input/output surface byte-stable", () => {
+  it("keeps every 1.0–1.30 server schema input/output surface byte-stable", () => {
     for (const contract of contracts) {
       const minor = contract.schemaVersion.minor;
       expect([

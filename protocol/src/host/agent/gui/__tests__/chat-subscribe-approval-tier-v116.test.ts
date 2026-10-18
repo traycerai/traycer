@@ -23,6 +23,7 @@ import {
   chatSubscribeV128,
   chatSubscribeV129,
   chatSubscribeV130,
+  chatSubscribeV131,
   chatSubscribeWindowedServerFrameSchema,
   openChatSubscribeWindowedServerFrameSchema,
 } from "@traycer/protocol/host/agent/gui/subscribe";
@@ -55,9 +56,9 @@ function approvalRequestedFrame(
 }
 
 describe("chat.subscribe registry: 1.16 installed below the 1.17 through 1.22 lines, 1.15 still installed", () => {
-  it("binds 1.16 and 1.15 to their own contracts - the head has since moved to 1.30", () => {
+  it("binds 1.16 and 1.15 to their own contracts - the head has since moved to 1.31", () => {
     const line = hostStreamRpcRegistry["chat.subscribe"][1];
-    expect(line.latestMinor).toBe(30);
+    expect(line.latestMinor).toBe(31);
     expect(line.versions[23].contract).toBe(chatSubscribeV123);
     expect(line.versions[22].contract).toBe(chatSubscribeV122);
     expect(line.versions[21].contract).toBe(chatSubscribeV121);
@@ -69,7 +70,7 @@ describe("chat.subscribe registry: 1.16 installed below the 1.17 through 1.22 li
     expect(line.versions[15].contract).toBe(chatSubscribeV115);
   });
 
-  it("1.30's server frame is the open windowed schema; older lines are frozen", () => {
+  it("1.31's server frame is the open windowed schema; older lines are frozen", () => {
     expect(chatSubscribeV126.serverFrameSchema).not.toBe(
       openChatSubscribeWindowedServerFrameSchema,
     );
@@ -80,12 +81,16 @@ describe("chat.subscribe registry: 1.16 installed below the 1.17 through 1.22 li
     expect(chatSubscribeV128.serverFrameSchema).not.toBe(
       openChatSubscribeWindowedServerFrameSchema,
     );
-    // 1.29 froze when 1.30 grew the browser annotation record above it;
-    // 1.30 binds the live windowed schema.
+    // 1.29 froze when 1.30 grew the browser annotation record above it.
     expect(chatSubscribeV129.serverFrameSchema).not.toBe(
       openChatSubscribeWindowedServerFrameSchema,
     );
-    expect(chatSubscribeV130.serverFrameSchema).toBe(
+    // 1.30 froze when 1.31 widened the accumulated-change `artifact` tag's
+    // kind above it; 1.31 binds the live windowed schema.
+    expect(chatSubscribeV130.serverFrameSchema).not.toBe(
+      openChatSubscribeWindowedServerFrameSchema,
+    );
+    expect(chatSubscribeV131.serverFrameSchema).toBe(
       openChatSubscribeWindowedServerFrameSchema,
     );
     expect(chatSubscribeV125.serverFrameSchema).not.toBe(

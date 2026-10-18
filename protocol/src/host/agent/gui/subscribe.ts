@@ -68,6 +68,7 @@ import {
 } from "@traycer/protocol/common/schemas";
 import {
   checkpointArtifactTagSchema,
+  checkpointArtifactTagSchemaPreHtml,
   checkpointFileOperationSchema,
   restoreResultEntrySchema,
   restoreStartedManifestSchema,
@@ -135,6 +136,7 @@ import {
 // and splitting the unions across files would hide that.
 import {
   chatAccumulatedChangeChunkSchema,
+  chatAccumulatedChangeChunkSchemaPreHtml,
   chatIndexChangeSchema,
   chatLoadRangeRequestSchema,
   chatRangeResponseSchema,
@@ -338,6 +340,11 @@ export const chatAccumulatedFileChangeSchema = lazySchema(() =>
     // per-row undo) rather than a raw file path. Carried through from the manifest
     // entry's tag. Optional for the same reasons as the manifest entry's tag.
     artifact: checkpointArtifactTagSchema.nullish(),
+  }),
+);
+const chatAccumulatedFileChangeSchemaPreHtml = lazySchema(() =>
+  chatAccumulatedFileChangeSchema.extend({
+    artifact: checkpointArtifactTagSchemaPreHtml.nullish(),
   }),
 );
 export type ChatAccumulatedFileChange = z.infer<
@@ -2566,7 +2573,7 @@ const chatSnapshotSchemaV17 = lazySchema(() =>
     // Cumulative file changes for the whole chat (first-snapshot → current),
     // computed host-side from checkpoint manifests + current disk content.
     // Drives the pinned accumulated-changes panel above the composer.
-    accumulatedFileChanges: z.array(chatAccumulatedFileChangeSchema),
+    accumulatedFileChanges: z.array(chatAccumulatedFileChangeSchemaPreHtml),
     // In-flight background work (backgrounded subagents, run_in_background
     // commands, Monitors). OPTIONAL on purpose: `undefined` means this host/session
     // does not expose background-item controls, so the renderer hides the
@@ -2624,6 +2631,7 @@ const chatSnapshotSchemaV17 = lazySchema(() =>
 );
 export const chatSnapshotSchema = lazySchema(() =>
   chatSnapshotSchemaV17.extend({
+    accumulatedFileChanges: z.array(chatAccumulatedFileChangeSchema),
     messageDelivery: chatMessageDeliverySchema.nullable().optional(),
     chat: chatSchema,
     // Re-widened for the same reason `chatSchema` re-widens `settings`: the V17
@@ -4608,7 +4616,7 @@ const chatSnapshotSchemaV10 = lazySchema(() =>
     pendingFileEditApprovals: z.array(
       chatFileEditApprovalStateSchemaPreCautious,
     ),
-    accumulatedFileChanges: z.array(chatAccumulatedFileChangeSchema),
+    accumulatedFileChanges: z.array(chatAccumulatedFileChangeSchemaPreHtml),
   }),
 );
 
@@ -4930,7 +4938,7 @@ const chatSnapshotSchemaV11 = lazySchema(() =>
     pendingFileEditApprovals: z.array(
       chatFileEditApprovalStateSchemaPreCautious,
     ),
-    accumulatedFileChanges: z.array(chatAccumulatedFileChangeSchema),
+    accumulatedFileChanges: z.array(chatAccumulatedFileChangeSchemaPreHtml),
     backgroundItems: z.array(backgroundItemSchemaV11).optional(),
     turnInProgress: z.boolean().optional(),
   }),
@@ -4999,7 +5007,7 @@ const chatSnapshotSchemaV12 = lazySchema(() =>
     pendingFileEditApprovals: z.array(
       chatFileEditApprovalStateSchemaPreCautious,
     ),
-    accumulatedFileChanges: z.array(chatAccumulatedFileChangeSchema),
+    accumulatedFileChanges: z.array(chatAccumulatedFileChangeSchemaPreHtml),
     backgroundItems: z.array(backgroundItemSchemaV12).optional(),
     turnInProgress: z.boolean().optional(),
   }),
@@ -5066,7 +5074,7 @@ const chatSnapshotSchemaV13 = lazySchema(() =>
     pendingFileEditApprovals: z.array(
       chatFileEditApprovalStateSchemaPreCautious,
     ),
-    accumulatedFileChanges: z.array(chatAccumulatedFileChangeSchema),
+    accumulatedFileChanges: z.array(chatAccumulatedFileChangeSchemaPreHtml),
     backgroundItems: z.array(backgroundItemSchemaV13).optional(),
     turnInProgress: z.boolean().optional(),
   }),
@@ -5138,7 +5146,7 @@ const chatSnapshotSchemaV14 = lazySchema(() =>
     pendingFileEditApprovals: z.array(
       chatFileEditApprovalStateSchemaPreCautious,
     ),
-    accumulatedFileChanges: z.array(chatAccumulatedFileChangeSchema),
+    accumulatedFileChanges: z.array(chatAccumulatedFileChangeSchemaPreHtml),
     backgroundItems: z.array(backgroundItemSchemaV14ToV15).optional(),
     turnInProgress: z.boolean().optional(),
   }),
@@ -5212,7 +5220,7 @@ const chatSnapshotSchemaV15 = lazySchema(() =>
     pendingFileEditApprovals: z.array(
       chatFileEditApprovalStateSchemaPreCautious,
     ),
-    accumulatedFileChanges: z.array(chatAccumulatedFileChangeSchema),
+    accumulatedFileChanges: z.array(chatAccumulatedFileChangeSchemaPreHtml),
     backgroundItems: z.array(backgroundItemSchemaV14ToV15).optional(),
     turnInProgress: z.boolean().optional(),
   }),
@@ -5376,7 +5384,7 @@ const chatSnapshotSchemaV16 = lazySchema(() =>
     pendingFileEditApprovals: z.array(
       chatFileEditApprovalStateSchemaPreCautious,
     ),
-    accumulatedFileChanges: z.array(chatAccumulatedFileChangeSchema),
+    accumulatedFileChanges: z.array(chatAccumulatedFileChangeSchemaPreHtml),
     backgroundItems: z.array(backgroundItemSchemaPreFallbackWait).optional(),
     // The shipped command shape - see the `V16` managedCommandsChanged frame.
     managedCommands: z.array(managedCommandSchemaPreRelaunch).default([]),
@@ -5998,6 +6006,12 @@ const chatSubscribeAccumulatedChangesServerFrameSchema = lazySchema(() =>
   }),
 );
 
+const chatSubscribeAccumulatedChangesServerFrameSchemaPreHtml = lazySchema(() =>
+  chatSubscribeAccumulatedChangesServerFrameSchema.extend({
+    chunk: chatAccumulatedChangeChunkSchemaPreHtml,
+  }),
+);
+
 const chatSubscribeSkeletonChunkServerFrameSchema = lazySchema(() =>
   z.object({
     kind: z.literal("skeletonChunk"),
@@ -6198,7 +6212,7 @@ const chatSubscribeServerFrameSchemaV114 = lazySchema(() =>
       snapshot: chatWindowedSnapshotSchemaV114,
     }),
     chatSubscribeSkeletonChunkServerFrameSchema,
-    chatSubscribeAccumulatedChangesServerFrameSchema,
+    chatSubscribeAccumulatedChangesServerFrameSchemaPreHtml,
     chatSubscribeIndexChangedServerFrameSchema,
     chatSubscribeRangeServerFrameSchemaPreMessageDelivery,
     chatSubscribeTurnStateChangedServerFrameSchemaV113ToV117,
@@ -6218,7 +6232,7 @@ const chatSubscribeServerFrameSchemaV115 = lazySchema(() =>
       snapshot: chatWindowedSnapshotSchemaV115,
     }),
     chatSubscribeSkeletonChunkServerFrameSchema,
-    chatSubscribeAccumulatedChangesServerFrameSchema,
+    chatSubscribeAccumulatedChangesServerFrameSchemaPreHtml,
     chatSubscribeIndexChangedServerFrameSchema,
     chatSubscribeRangeServerFrameSchemaPreReceipt,
     chatSubscribeTurnStateChangedServerFrameSchemaV113ToV117,
@@ -6251,7 +6265,7 @@ const chatSubscribeServerFrameSchemaV116 = lazySchema(() =>
       snapshot: chatWindowedSnapshotSchemaV116,
     }),
     chatSubscribeSkeletonChunkServerFrameSchema,
-    chatSubscribeAccumulatedChangesServerFrameSchema,
+    chatSubscribeAccumulatedChangesServerFrameSchemaPreHtml,
     chatSubscribeIndexChangedServerFrameSchema,
     chatSubscribeRangeServerFrameSchemaPreReceipt,
     chatSubscribeTurnStateChangedServerFrameSchemaV113ToV117,
@@ -6279,7 +6293,7 @@ const chatSubscribeServerFrameSchemaV117 = lazySchema(() =>
       snapshot: chatWindowedSnapshotSchemaV117,
     }),
     chatSubscribeSkeletonChunkServerFrameSchema,
-    chatSubscribeAccumulatedChangesServerFrameSchema,
+    chatSubscribeAccumulatedChangesServerFrameSchemaPreHtml,
     chatSubscribeIndexChangedServerFrameSchema,
     chatSubscribeRangeServerFrameSchemaPreReceipt,
     chatSubscribeTurnStateChangedServerFrameSchemaV113ToV117,
@@ -6302,7 +6316,7 @@ const chatSubscribeServerFrameSchemaV118 = lazySchema(() =>
       snapshot: chatWindowedSnapshotSchemaV118,
     }),
     chatSubscribeSkeletonChunkServerFrameSchema,
-    chatSubscribeAccumulatedChangesServerFrameSchema,
+    chatSubscribeAccumulatedChangesServerFrameSchemaPreHtml,
     chatSubscribeIndexChangedServerFrameSchema,
     chatSubscribeRangeServerFrameSchemaPreCommandCode,
     chatSubscribeTurnStateChangedServerFrameSchemaV118,
@@ -6325,7 +6339,7 @@ const chatSubscribeServerFrameSchemaV119 = lazySchema(() =>
       snapshot: chatWindowedSnapshotSchemaV118,
     }),
     chatSubscribeSkeletonChunkServerFrameSchemaV119,
-    chatSubscribeAccumulatedChangesServerFrameSchema,
+    chatSubscribeAccumulatedChangesServerFrameSchemaPreHtml,
     chatSubscribeIndexChangedServerFrameSchema,
     chatSubscribeRangeServerFrameSchemaPreCommandCode,
     chatSubscribeTurnStateChangedServerFrameSchemaV118,
@@ -6349,7 +6363,7 @@ const chatSubscribeServerFrameSchemaV120 = lazySchema(() =>
       snapshot: chatWindowedSnapshotSchemaV120,
     }),
     chatSubscribeSkeletonChunkServerFrameSchemaV119,
-    chatSubscribeAccumulatedChangesServerFrameSchema,
+    chatSubscribeAccumulatedChangesServerFrameSchemaPreHtml,
     chatSubscribeIndexChangedServerFrameSchema,
     chatSubscribeRangeServerFrameSchemaPreCommandCode,
     chatSubscribeTurnStateChangedServerFrameSchemaPreCronNextRun,
@@ -6373,7 +6387,7 @@ const chatSubscribeServerFrameSchemaV121 = lazySchema(() =>
       snapshot: chatWindowedSnapshotSchemaV121,
     }),
     chatSubscribeSkeletonChunkServerFrameSchemaV119,
-    chatSubscribeAccumulatedChangesServerFrameSchema,
+    chatSubscribeAccumulatedChangesServerFrameSchemaPreHtml,
     chatSubscribeIndexChangedServerFrameSchema,
     chatSubscribeRangeServerFrameSchemaPreMcpApp,
     chatSubscribeTurnStateChangedServerFrameSchemaPreCronNextRun,
@@ -6421,7 +6435,7 @@ const chatSubscribeServerFrameSchemaV122 = lazySchema(() =>
       }),
     }),
     chatSubscribeSkeletonChunkServerFrameSchemaV119,
-    chatSubscribeAccumulatedChangesServerFrameSchema,
+    chatSubscribeAccumulatedChangesServerFrameSchemaPreHtml,
     chatSubscribeIndexChangedServerFrameSchema,
     chatSubscribeRangeServerFrameSchemaOpenHarness.extend({
       range: openChatRangeResponseSchemaPreMcpApp,
@@ -6447,7 +6461,7 @@ const chatSubscribeServerFrameSchemaV123 = lazySchema(() =>
       }),
     }),
     chatSubscribeSkeletonChunkServerFrameSchemaV119,
-    chatSubscribeAccumulatedChangesServerFrameSchema,
+    chatSubscribeAccumulatedChangesServerFrameSchemaPreHtml,
     chatSubscribeIndexChangedServerFrameSchema,
     chatSubscribeRangeServerFrameSchemaOpenHarnessPreConversation,
     chatSubscribeTurnStateChangedServerFrameSchemaPreCronNextRun,
@@ -6473,7 +6487,7 @@ const chatSubscribeServerFrameSchemaV124 = lazySchema(() =>
       }),
     }),
     chatSubscribeSkeletonChunkServerFrameSchemaV119,
-    chatSubscribeAccumulatedChangesServerFrameSchema,
+    chatSubscribeAccumulatedChangesServerFrameSchemaPreHtml,
     chatSubscribeIndexChangedServerFrameSchema,
     chatSubscribeRangeServerFrameSchemaOpenHarnessPreConversation,
     chatSubscribeTurnStateChangedServerFrameSchema,
@@ -6500,7 +6514,7 @@ const chatSubscribeServerFrameSchemaV125 = lazySchema(() =>
       }),
     }),
     chatSubscribeSkeletonChunkServerFrameSchemaV119,
-    chatSubscribeAccumulatedChangesServerFrameSchema,
+    chatSubscribeAccumulatedChangesServerFrameSchemaPreHtml,
     chatSubscribeIndexChangedServerFrameSchema,
     chatSubscribeRangeServerFrameSchemaOpenHarness.extend({
       range: openChatRangeResponseSchemaPreHtml,
@@ -6529,7 +6543,7 @@ const chatSubscribeServerFrameSchemaV126 = lazySchema(() =>
       }),
     }),
     chatSubscribeSkeletonChunkServerFrameSchemaV119,
-    chatSubscribeAccumulatedChangesServerFrameSchema,
+    chatSubscribeAccumulatedChangesServerFrameSchemaPreHtml,
     chatSubscribeIndexChangedServerFrameSchema,
     chatSubscribeRangeServerFrameSchemaOpenHarness.extend({
       range: openChatRangeResponseSchemaPreHtml,
@@ -6553,7 +6567,7 @@ const chatSubscribeServerFrameSchemaV127 = lazySchema(() =>
       }),
     }),
     chatSubscribeSkeletonChunkServerFrameSchemaV119,
-    chatSubscribeAccumulatedChangesServerFrameSchema,
+    chatSubscribeAccumulatedChangesServerFrameSchemaPreHtml,
     chatSubscribeIndexChangedServerFrameSchema,
     chatSubscribeRangeServerFrameSchemaOpenHarness.extend({
       range: openChatRangeResponseSchemaPreHtml,
@@ -6579,7 +6593,7 @@ const chatSubscribeServerFrameSchemaV128 = lazySchema(() =>
       }),
     }),
     chatSubscribeSkeletonChunkServerFrameSchemaV119,
-    chatSubscribeAccumulatedChangesServerFrameSchema,
+    chatSubscribeAccumulatedChangesServerFrameSchemaPreHtml,
     chatSubscribeIndexChangedServerFrameSchema,
     chatSubscribeRangeServerFrameSchemaOpenHarness.extend({
       range: openChatRangeResponseSchemaPreArtifact,
@@ -6595,15 +6609,7 @@ const chatSubscribeServerFrameSchemaV128 = lazySchema(() =>
   ]),
 );
 
-/**
- * The live windowed union as a READER decodes it (`chat.subscribe@1.30`): the
- * union above with the snapshot, the `range` response, the three
- * sender-bearing common frames and the `blockDelta` bound to their
- * open-harness copies. The frames a peer DRIVES through - `turnStateChanged`
- * (the active turn, the fallback tuples) and the snapshot's record head - keep
- * the closed enum; see `open-harness-wire.ts`. Every frame the writer builds
- * is assignable to this type; the client parses with this schema.
- */
+/** Frozen 1.29: no canvas annotations or new-kind checkpoint tags. */
 const chatSubscribeServerFrameSchemaV129 = lazySchema(() =>
   z.discriminatedUnion("kind", [
     chatSubscribeWindowedSnapshotServerFrameSchemaOpenHarness.extend({
@@ -6613,7 +6619,7 @@ const chatSubscribeServerFrameSchemaV129 = lazySchema(() =>
       }),
     }),
     chatSubscribeSkeletonChunkServerFrameSchemaV119,
-    chatSubscribeAccumulatedChangesServerFrameSchema,
+    chatSubscribeAccumulatedChangesServerFrameSchemaPreHtml,
     chatSubscribeIndexChangedServerFrameSchema,
     chatSubscribeRangeServerFrameSchemaOpenHarness.extend({
       range: openChatRangeResponseSchemaPreCanvas,
@@ -6629,6 +6635,31 @@ const chatSubscribeServerFrameSchemaV129 = lazySchema(() =>
   ]),
 );
 
+const chatSubscribeServerFrameSchemaV130 = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    chatSubscribeWindowedSnapshotServerFrameSchemaOpenHarness,
+    chatSubscribeSkeletonChunkServerFrameSchemaV119,
+    chatSubscribeAccumulatedChangesServerFrameSchemaPreHtml,
+    chatSubscribeIndexChangedServerFrameSchema,
+    chatSubscribeRangeServerFrameSchemaOpenHarness,
+    chatSubscribeTurnStateChangedServerFrameSchema,
+    chatSubscribeManagedCommandsChangedServerFrameSchema,
+    chatSubscribePortForwardsChangedServerFrameSchema,
+    chatSubscribeHeldUpdatesChangedServerFrameSchema,
+    chatSubscribeThinkingTokensServerFrameSchema,
+    ...chatSubscribeSharedServerFrameSchemasOpenHarness,
+  ]),
+);
+
+/**
+ * The live windowed union as a READER decodes it (`chat.subscribe@1.31`): the
+ * union above with the snapshot, the `range` response, the three
+ * sender-bearing common frames and the `blockDelta` bound to their
+ * open-harness copies. The frames a peer DRIVES through - `turnStateChanged`
+ * (the active turn, the fallback tuples) and the snapshot's record head - keep
+ * the closed enum; see `open-harness-wire.ts`. Every frame the writer builds
+ * is assignable to this type; the client parses with this schema.
+ */
 export const openChatSubscribeWindowedServerFrameSchema = lazySchema(() =>
   z.discriminatedUnion("kind", [
     chatSubscribeWindowedSnapshotServerFrameSchemaOpenHarness,
@@ -6707,7 +6738,7 @@ const chatSubscribeServerFrameSchemaV19 = lazySchema(() =>
       snapshot: chatWindowedSnapshotSchemaV19,
     }),
     chatSubscribeSkeletonChunkServerFrameSchema,
-    chatSubscribeAccumulatedChangesServerFrameSchema,
+    chatSubscribeAccumulatedChangesServerFrameSchemaPreHtml,
     chatSubscribeIndexChangedServerFrameSchema,
     z.object({
       kind: z.literal("range"),
@@ -6737,7 +6768,7 @@ const chatSubscribeServerFrameSchemaV110 = lazySchema(() =>
       snapshot: chatWindowedSnapshotSchemaV110,
     }),
     chatSubscribeSkeletonChunkServerFrameSchema,
-    chatSubscribeAccumulatedChangesServerFrameSchema,
+    chatSubscribeAccumulatedChangesServerFrameSchemaPreHtml,
     chatSubscribeIndexChangedServerFrameSchema,
     // Pre-shell-host, same reason as `tail` on the snapshot above.
     chatSubscribeRangeServerFrameSchemaPreShellHost,
@@ -6757,7 +6788,7 @@ const chatSubscribeServerFrameSchemaV111 = lazySchema(() =>
       snapshot: chatWindowedSnapshotSchemaV111,
     }),
     chatSubscribeSkeletonChunkServerFrameSchema,
-    chatSubscribeAccumulatedChangesServerFrameSchema,
+    chatSubscribeAccumulatedChangesServerFrameSchemaPreHtml,
     chatSubscribeIndexChangedServerFrameSchema,
     chatSubscribeRangeServerFrameSchemaPreBrowser,
     chatSubscribeTurnStateChangedServerFrameSchemaPreAuto,
@@ -6776,7 +6807,7 @@ const chatSubscribeServerFrameSchemaV112 = lazySchema(() =>
       snapshot: chatWindowedSnapshotSchemaV111,
     }),
     chatSubscribeSkeletonChunkServerFrameSchema,
-    chatSubscribeAccumulatedChangesServerFrameSchema,
+    chatSubscribeAccumulatedChangesServerFrameSchemaPreHtml,
     chatSubscribeIndexChangedServerFrameSchema,
     chatSubscribeRangeServerFrameSchemaPreBrowser,
     chatSubscribeTurnStateChangedServerFrameSchemaPreAuto,
@@ -6796,7 +6827,7 @@ const chatSubscribeServerFrameSchemaV113 = lazySchema(() =>
       snapshot: chatWindowedSnapshotSchemaV113,
     }),
     chatSubscribeSkeletonChunkServerFrameSchema,
-    chatSubscribeAccumulatedChangesServerFrameSchema,
+    chatSubscribeAccumulatedChangesServerFrameSchemaPreHtml,
     chatSubscribeIndexChangedServerFrameSchema,
     chatSubscribeRangeServerFrameSchemaPreMessageDelivery,
     chatSubscribeTurnStateChangedServerFrameSchemaV113ToV117,
@@ -6834,7 +6865,7 @@ export const chatSubscribeWindowedServerFrameSchemaPreAntigravity = lazySchema(
         }),
       }),
       chatSubscribeSkeletonChunkServerFrameSchema,
-      chatSubscribeAccumulatedChangesServerFrameSchema,
+      chatSubscribeAccumulatedChangesServerFrameSchemaPreHtml,
       chatSubscribeIndexChangedServerFrameSchema,
       chatSubscribeRangeServerFrameSchema.extend({
         range: chatRangeResponseSchemaV18.extend({
@@ -7633,6 +7664,15 @@ export const chatSubscribeV129 = defineStreamRpcContract({
 export const chatSubscribeV130 = defineStreamRpcContract({
   method: "chat.subscribe",
   schemaVersion: { major: 1, minor: 30 } as const,
+  openRequestSchema: chatSubscribeOpenRequestSchemaV119,
+  serverFrameSchema: chatSubscribeServerFrameSchemaV130,
+  clientFrameSchema: chatSubscribeWindowedClientFrameSchema,
+});
+
+/** 1.31 carries all seven artifact kinds in accumulated-change tags. */
+export const chatSubscribeV131 = defineStreamRpcContract({
+  method: "chat.subscribe",
+  schemaVersion: { major: 1, minor: 31 } as const,
   openRequestSchema: chatSubscribeOpenRequestSchemaV119,
   serverFrameSchema: openChatSubscribeWindowedServerFrameSchema,
   clientFrameSchema: chatSubscribeWindowedClientFrameSchema,
