@@ -3,7 +3,10 @@ import { cn } from "@/lib/utils";
 import { useChatAttachmentBlobSrc } from "@/lib/attachments/use-attachment-blob-src";
 import { CHAT_IMAGE_MAX_EDGE } from "./chat-image-size";
 import { ImageLightbox } from "./image-lightbox";
-import { recordedImageAspectRatio } from "./image-result-presentation";
+import {
+  recordedImageFrame,
+  type RecordedImageFrame,
+} from "./image-result-presentation";
 import { useSanitizedSvg } from "./use-sanitized-svg";
 
 export function AttachmentImageLoading(props: {
@@ -12,17 +15,18 @@ export function AttachmentImageLoading(props: {
   readonly width: number | null;
   readonly height: number | null;
 }): ReactNode {
-  const aspectRatio = recordedImageAspectRatio(props);
+  const frame = recordedImageFrame(props);
   return (
     <span
       className={cn(
         "flex w-[var(--image-width)] aspect-[var(--image-aspect)] animate-pulse items-center justify-center bg-foreground/10 text-ui-sm text-muted-foreground",
         !props.fullWidth && "max-w-[var(--image-max-edge)]",
+        frame !== null && "my-3 rounded-lg border border-border/70",
       )}
       style={
         {
-          "--image-width": loadingFrameWidth(props.fullWidth, aspectRatio),
-          "--image-aspect": aspectRatio ?? 16 / 9,
+          "--image-width": imageFrameWidth(props.fullWidth, frame),
+          "--image-aspect": frame?.aspectRatio ?? 16 / 9,
           "--image-max-edge": CHAT_IMAGE_MAX_EDGE,
         } as CSSProperties
       }
@@ -33,25 +37,30 @@ export function AttachmentImageLoading(props: {
   );
 }
 
-function loadingFrameWidth(
+function imageFrameWidth(
   fullWidth: boolean,
-  aspectRatio: number | null,
+  frame: RecordedImageFrame | null,
 ): string {
-  if (fullWidth || aspectRatio === null) return "100%";
-  return `min(100%, ${CHAT_IMAGE_MAX_EDGE}, calc(${CHAT_IMAGE_MAX_EDGE} * ${aspectRatio}))`;
+  if (fullWidth || frame === null) return "100%";
+  return `min(100%, ${frame.width}px, ${CHAT_IMAGE_MAX_EDGE}, calc(${CHAT_IMAGE_MAX_EDGE} * ${frame.aspectRatio}))`;
 }
 
-function recordedAspectClass(aspectRatio: number | null): string {
-  return aspectRatio === null ? "" : "aspect-[var(--image-aspect)]";
+function readyFrameWidthClass(
+  fullWidth: boolean,
+  frame: RecordedImageFrame | null,
+): string {
+  if (fullWidth) return "w-full";
+  if (frame !== null)
+    return "w-[var(--image-width)] max-w-[var(--image-max-edge)]";
+  return "w-fit max-w-[min(100%,var(--image-max-edge))]";
 }
 
-function imageIntrinsicSize(
-  width: number | null,
-  height: number | null,
-  aspectRatio: number | null,
-): { readonly width: number | undefined; readonly height: number | undefined } {
-  if (aspectRatio === null) return { width: undefined, height: undefined };
-  return { width: width ?? undefined, height: height ?? undefined };
+function imageIntrinsicSize(frame: RecordedImageFrame | null): {
+  readonly width: number | undefined;
+  readonly height: number | undefined;
+} {
+  if (frame === null) return { width: undefined, height: undefined };
+  return { width: frame.width, height: frame.height };
 }
 
 export function AttachmentImageFailure(props: {
@@ -88,12 +97,8 @@ export function AttachmentImage(props: {
     props.mediaType === "image/svg+xml" && !props.src.startsWith("data:");
   const sanitizedSvg = useSanitizedSvg(props.src, shouldSanitizeSvg);
   const effectiveStatus = shouldSanitizeSvg ? sanitizedSvg.status : status;
-  const recordedAspectRatio = recordedImageAspectRatio(props);
-  const intrinsicSize = imageIntrinsicSize(
-    props.width,
-    props.height,
-    recordedAspectRatio,
-  );
+  const frame = recordedImageFrame(props);
+  const intrinsicSize = imageIntrinsicSize(frame);
 
   if (effectiveStatus === "error") {
     return (
@@ -113,14 +118,13 @@ export function AttachmentImage(props: {
     <span
       className={cn(
         "group relative my-3 block overflow-hidden rounded-lg border border-border/70 bg-foreground/6",
-        props.fullWidth
-          ? "w-full"
-          : "w-fit max-w-[min(100%,var(--image-max-edge))]",
-        recordedAspectClass(recordedAspectRatio),
+        readyFrameWidthClass(props.fullWidth, frame),
+        frame !== null && "aspect-[var(--image-aspect)]",
       )}
       style={
         {
-          "--image-aspect": recordedAspectRatio ?? undefined,
+          "--image-width": imageFrameWidth(props.fullWidth, frame),
+          "--image-aspect": frame?.aspectRatio,
           "--image-max-edge": CHAT_IMAGE_MAX_EDGE,
         } as CSSProperties
       }

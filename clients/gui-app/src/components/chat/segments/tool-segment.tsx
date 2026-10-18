@@ -14,10 +14,7 @@ import type {
 import { useChatTranscriptJumpStore } from "@/stores/chats/chat-transcript-jump-store";
 import type { SegmentEndState } from "@/stores/composer/chat-store";
 import { deriveA2ASendCollapsibleKey } from "@/components/chat/chat-collapsible-key";
-import {
-  chatFindA2ASendBodyUnitId,
-  chatFindToolImageGalleryUnitId,
-} from "@/components/chat/chat-find";
+import { chatFindA2ASendBodyUnitId } from "@/components/chat/chat-find";
 import { ChatMessageTimestamp } from "@/components/chat/chat-message-timestamp";
 import { SegmentEndStateBadge } from "./segment-end-state-badge";
 import { LivePulse } from "@/components/ui/live-pulse";
@@ -60,11 +57,7 @@ import { isTraycerBrowserReplToolName } from "@traycer/protocol/host/agent/gui/b
 import { isPageToolCall } from "@/components/chat/chat-activity-groups";
 import { McpAppRow } from "./mcp-app-row";
 import { PageRow } from "./page-row";
-import { ResolvedImage } from "./attachment-image";
-import {
-  genericToolImageCaption,
-  imageResultFileName,
-} from "./image-result-presentation";
+import { ToolImageGallery } from "./tool-image-gallery";
 
 interface ToolSegmentProps {
   id: string;
@@ -408,7 +401,7 @@ function GenericToolSegment(props: ToolSegmentProps) {
     progress,
     stackedHeader,
   });
-  const imageGallery = renderToolImageGallery(
+  const imageGallery = genericToolImageGallery(
     props.id,
     toolName,
     props.imageResults,
@@ -485,18 +478,13 @@ function GenericToolSegment(props: ToolSegmentProps) {
   );
 }
 
-function renderToolImageGallery(
+function genericToolImageGallery(
   id: string,
   toolName: string,
   imageResults: ReadonlyArray<ImageGenerationResult>,
 ): ReactNode {
   if (toolName === "image_generation" || imageResults.length === 0) return null;
-  return (
-    <ToolImageGallery
-      imageResults={imageResults}
-      findUnitId={chatFindToolImageGalleryUnitId(id)}
-    />
-  );
+  return <ToolImageGallery id={id} imageResults={imageResults} />;
 }
 
 function renderToolFooter(
@@ -521,43 +509,6 @@ function renderToolCardBody(
     <div className="flex flex-col gap-2">
       {body}
       {imageGallery}
-    </div>
-  );
-}
-
-function ToolImageGallery(props: {
-  readonly imageResults: ReadonlyArray<ImageGenerationResult>;
-  readonly findUnitId: string;
-}) {
-  const keyCounts = new Map<string, number>();
-  return (
-    <div
-      data-chat-find-unit={props.findUnitId}
-      className="flex w-full min-w-0 flex-col gap-2"
-    >
-      {props.imageResults.map((result, index) => {
-        const caption = genericToolImageCaption(result, index);
-        const occurrence = keyCounts.get(result.attachmentHash) ?? 0;
-        keyCounts.set(result.attachmentHash, occurrence + 1);
-        return (
-          <figure
-            key={`${result.attachmentHash}-${occurrence}`}
-            className="min-w-0"
-          >
-            <ResolvedImage
-              alt={caption}
-              hash={result.attachmentHash}
-              mediaType={result.mediaType}
-              suggestedName={imageResultFileName(result)}
-              width={result.width}
-              height={result.height}
-            />
-            <figcaption className="text-ui-xs text-muted-foreground">
-              {caption}
-            </figcaption>
-          </figure>
-        );
-      })}
     </div>
   );
 }

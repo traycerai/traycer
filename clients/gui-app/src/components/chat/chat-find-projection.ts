@@ -25,6 +25,7 @@ import {
 import { importedChatMarkerLabel } from "@/components/chat/segments/imported-chat-marker-display";
 import { autoJudgeUnattendedDenialText } from "@/components/chat/segments/auto-judge-unattended-denial-display";
 import { genericToolImageCaption } from "@/components/chat/segments/image-result-presentation";
+import type { ImageGenerationResult } from "@traycer/protocol/persistence/epic/content-blocks";
 import { singleSpecialSegment } from "@/components/chat/chat-special-segment";
 import { parseTraycerNextStepsMarkdown } from "@/markdown/traycer-next-steps";
 import { composerDisplayPlainText } from "@/lib/composer/composer-clipboard";
@@ -547,9 +548,22 @@ function genericToolImageGallerySearchUnit(
   ) {
     return null;
   }
+  return toolImageGallerySearchUnit(
+    segment.id,
+    segment.imageResults,
+    owningChain,
+  );
+}
+
+function toolImageGallerySearchUnit(
+  segmentId: string,
+  imageResults: ReadonlyArray<ImageGenerationResult>,
+  owningChain: ReadonlyArray<ChatCollapsibleKey>,
+): ChatFindUnit | null {
+  if (imageResults.length === 0) return null;
   return chatFindUnit({
-    unitId: chatFindToolImageGalleryUnitId(segment.id),
-    text: segment.imageResults
+    unitId: chatFindToolImageGalleryUnitId(segmentId),
+    text: imageResults
       .map((result, index) => genericToolImageCaption(result, index))
       .join("\n"),
     owningChain,
@@ -896,6 +910,11 @@ function subagentSegmentSearchUnits(
             text: markdownToChatSearchText(shownResult),
             owningChain: bodyChain,
           }),
+      toolImageGallerySearchUnit(
+        segment.id,
+        segment.toolImageResults,
+        parentChain,
+      ),
     ]),
   ];
 }

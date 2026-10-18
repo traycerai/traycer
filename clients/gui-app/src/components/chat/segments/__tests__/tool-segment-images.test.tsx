@@ -167,7 +167,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  useToolOpenStore.getState().reset("default");
+  useToolOpenStore.getState().reset("tool-segment-images-tile");
   cleanup();
 });
 
