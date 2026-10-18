@@ -57,7 +57,9 @@ function CanvasProof({ hostId }: { readonly hostId: string }) {
   );
 }
 export function CanvasProofRoute() {
-  const { resolvedHostId: hostId } = useSurfaceHostPin(CANVAS_PROOF_VIEW_TAB_ID);
+  const { resolvedHostId: hostId } = useSurfaceHostPin(
+    CANVAS_PROOF_VIEW_TAB_ID,
+  );
   if (!import.meta.env.DEV) return <p>404 — Not found</p>;
   return hostId === null ? (
     <p role="status">Connect a device to open the canvas proof.</p>

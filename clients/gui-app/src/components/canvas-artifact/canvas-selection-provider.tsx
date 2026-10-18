@@ -30,6 +30,7 @@ import {
 } from "./canvas-annotation-action";
 import { CanvasBoardPanel } from "./canvas-board-panel";
 import type { CanvasLayoutStore } from "./canvas-layout-store";
+import { frameLocator } from "./canvas-structure-identity";
 
 export function CanvasSelectionProvider(
   props: CanvasAnnotationScope & { readonly children: ReactNode },
@@ -63,7 +64,18 @@ export function CanvasSelectionProvider(
       registry.selectBoard(path);
       void bridge
         .hitTest({ x: point.x, y: point.y })
-        .then((element) => {
+        .then(async (element) => {
+          const primary = useCanvasSelectionStore.getState().selection;
+          const locator =
+            primary === null ? null : frameLocator(primary.element);
+          const layout =
+            point.additive === true &&
+            locator !== null &&
+            primary?.artifactId === artifactId &&
+            primary.boardPath === path &&
+            primary.servedSha256 === servedSha256
+              ? await bridge.siblingLayout(locator)
+              : null;
           if (
             sequence !== requestSequence.current ||
             registry.get(path).bridge !== bridge ||
@@ -71,13 +83,7 @@ export function CanvasSelectionProvider(
           )
             return;
           const store = useCanvasSelectionStore.getState();
-          const complete =
-            point.additive === true
-              ? store.completeAdditivePick
-              : store.completePick;
-          complete(
-            selectionOwner,
-            generation,
+          const selection =
             element === null
               ? null
               : {
@@ -87,11 +93,19 @@ export function CanvasSelectionProvider(
                   servedSha256,
                   element,
                   textRange: null,
-                },
-          );
+                };
+          if (point.additive === true)
+            store.completeAdditivePick(
+              selectionOwner,
+              generation,
+              selection,
+              layout,
+            );
+          else store.completePick(selectionOwner, generation, selection);
         })
         .catch(() => {
           /* The next click can retry a frame replaced while answering. */
+          useCanvasSelectionStore.getState().completeAdditivePick(selectionOwner, generation, null, null);
         });
     },
     [artifactId, registry, selectionOwner],
@@ -111,7 +125,8 @@ export function CanvasSelectionProvider(
         parent?.onSource?.(path, source);
       },
       onDoubleClick: (path, element) => {
-        if (useCanvasSelectionStore.getState().additionalElements.length > 0) return;
+        if (useCanvasSelectionStore.getState().additionalElements.length > 0)
+          return;
         const entry = registry.get(path);
         if (entry.bridge === null) return;
         registry.update(path, {
@@ -149,7 +164,9 @@ export function CanvasSelectionProvider(
           current.boardPath !== path
         )
           return;
-        if (current.element.tid !== null)
+        if (useCanvasSelectionStore.getState().additionalElements.length > 0)
+          void bridge.setTextSelectionTarget(null);
+        else if (current.element.tid !== null)
           void bridge.setTextSelectionTarget({ tid: current.element.tid });
         else if (current.element.marker !== null)
           void bridge.setTextSelectionTarget({
@@ -215,7 +232,8 @@ export function CanvasSelectionProvider(
       },
       onEditPointer: pick,
       onTextSelection: (path, range) => {
-        if (useCanvasSelectionStore.getState().additionalElements.length > 0) return;
+        if (useCanvasSelectionStore.getState().additionalElements.length > 0)
+          return;
         useCanvasSelectionStore
           .getState()
           .setTextRange(artifactId, path, range);
@@ -269,8 +287,10 @@ export function CanvasSelectionProvider(
       previousKey = key;
       let target: CanvasElementLocator | null = null;
       if (!multiple) {
-        if (selected.element.tid !== null) target = { tid: selected.element.tid };
-        else if (selected.element.marker !== null) target = { marker: selected.element.marker };
+        if (selected.element.tid !== null)
+          target = { tid: selected.element.tid };
+        else if (selected.element.marker !== null)
+          target = { marker: selected.element.marker };
       }
       void mounted.bridge
         ?.setTextSelectionTarget(target)

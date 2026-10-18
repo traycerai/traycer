@@ -1,4 +1,9 @@
 import { create } from "zustand";
+import type { CanvasSiblingLayout } from "@/lib/sandbox/canvas-layout-bridge";
+import {
+  CANVAS_SIBLING_NOTE,
+  sameLayoutElement,
+} from "./canvas-structure-identity";
 import type {
   CanvasElement,
   CanvasTextSelection,
@@ -24,6 +29,7 @@ interface CanvasSelectionState {
   readonly selection: CanvasSelection | null;
   /** The primary selection owns board/revision metadata for all added elements. */
   readonly additionalElements: readonly CanvasElement[];
+  readonly selectionMessage: string | null;
   readonly selectionOwner: symbol | null;
   readonly generation: number;
   readonly pendingPick: {
@@ -45,6 +51,7 @@ interface CanvasSelectionState {
     owner: symbol,
     generation: number,
     selection: CanvasSelection | null,
+    layout: CanvasSiblingLayout | null,
   ) => void;
   readonly retire: (owner: symbol, boardPath: string | null) => void;
   readonly select: (selection: CanvasSelection) => void;
@@ -73,12 +80,17 @@ export const useCanvasSelectionStore = create<CanvasSelectionState>(
   (set, get) => ({
     selection: null,
     additionalElements: [],
+    selectionMessage: null,
     selectionOwner: null,
     generation: 0,
     pendingPick: null,
     beginPick: (owner, artifactId, boardPath) => {
       const generation = get().generation + 1;
-      set({ generation, pendingPick: { owner, artifactId, boardPath } });
+      set({
+        generation,
+        pendingPick: { owner, artifactId, boardPath },
+        selectionMessage: null,
+      });
       return generation;
     },
     completePick: (owner, generation, selection) =>
@@ -95,7 +107,7 @@ export const useCanvasSelectionStore = create<CanvasSelectionState>(
           pendingPick: null,
         };
       }),
-    completeAdditivePick: (owner, generation, selection) =>
+    completeAdditivePick: (owner, generation, selection, layout) =>
       set((state) => {
         if (
           state.generation !== generation ||
@@ -119,6 +131,21 @@ export const useCanvasSelectionStore = create<CanvasSelectionState>(
           };
         if (sameCanvasElement(current.element, selection.element))
           return { pendingPick: null };
+        if (
+          layout === null ||
+          layout.truncated ||
+          [
+            current.element,
+            ...state.additionalElements,
+            selection.element,
+          ].some(
+            (element) =>
+              element.generated ||
+              layout.siblings.filter((node) => sameLayoutElement(node, element))
+                .length !== 1,
+          )
+        )
+          return { pendingPick: null, selectionMessage: CANVAS_SIBLING_NOTE };
         if (
           state.additionalElements.some((element) =>
             sameCanvasElement(element, selection.element),
@@ -153,6 +180,7 @@ export const useCanvasSelectionStore = create<CanvasSelectionState>(
       set((state) => ({
         selection,
         additionalElements: [],
+        selectionMessage: null,
         selectionOwner:
           state.selection?.artifactId === selection.artifactId &&
           state.selection.boardPath === selection.boardPath
@@ -165,6 +193,7 @@ export const useCanvasSelectionStore = create<CanvasSelectionState>(
       set((state) => ({
         selection: null,
         additionalElements: [],
+        selectionMessage: null,
         selectionOwner: null,
         pendingPick: null,
         generation: state.generation + 1,
@@ -176,6 +205,7 @@ export const useCanvasSelectionStore = create<CanvasSelectionState>(
           current === null ||
           current.artifactId !== artifactId ||
           current.boardPath !== boardPath ||
+          state.additionalElements.length > 0 ||
           (range !== null && !sameCanvasElement(current.element, range.element))
         )
           return state;

@@ -1,4 +1,7 @@
-import { parseCanvasSiblingLayout, type CanvasSiblingLayout } from "./canvas-layout-bridge";
+import {
+  parseCanvasSiblingLayout,
+  type CanvasSiblingLayout,
+} from "./canvas-layout-bridge";
 import {
   canvasRecord,
   parseCanvasBox,
@@ -416,7 +419,9 @@ export class SandboxBridgeHost {
     );
   }
 
-  siblingLayout(locator: CanvasElementLocator): Promise<CanvasSiblingLayout | null> {
+  siblingLayout(
+    locator: CanvasElementLocator,
+  ): Promise<CanvasSiblingLayout | null> {
     return this.canvasRequest("sibling-layout", locator).then((result) =>
       parseCanvasSiblingLayout(result?.layout),
     );

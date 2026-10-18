@@ -29,10 +29,7 @@ export function structureDocument(html: string): CanvasBoardDocument {
   return boardDocument(html);
 }
 
-function sourceOf(
-  document: CanvasBoardDocument,
-  tid: string,
-): HtmlElement {
+function sourceOf(document: CanvasBoardDocument, tid: string): HtmlElement {
   const found = document.parsed.elements.find(
     (element) => element.effectiveTid === tid && element.startTag !== null,
   );
@@ -89,6 +86,24 @@ export function placedAt(
     width,
     height,
     position: "absolute",
+    transformed: false,
+    sized: true,
+  };
+}
+
+/** A static child of a row, the kind of box a reorder can address. */
+export function flowAt(
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+): NodeFacts {
+  return {
+    x,
+    y,
+    width,
+    height,
+    position: "static",
     transformed: false,
     sized: true,
   };
@@ -246,10 +261,14 @@ export function selectOnly(selection: CanvasSelection): void {
   });
 }
 
-/** Makes `primary` the selection and adds `others` to it, as shift-clicks would. */
+/**
+ * Makes `primary` the selection and adds `others` to it, as shift-clicks would,
+ * each one checked against `layout`, the live container the page reports.
+ */
 export function selectSet(
   primary: CanvasSelection,
   others: readonly CanvasSelection[],
+  layout: CanvasSiblingLayout | null,
 ): void {
   const owner = Symbol("structure test");
   act(() => {
@@ -265,7 +284,7 @@ export function selectSet(
         .beginPick(owner, other.artifactId, other.boardPath);
       useCanvasSelectionStore
         .getState()
-        .completeAdditivePick(owner, generation, other);
+        .completeAdditivePick(owner, generation, other, layout);
     }
   });
 }

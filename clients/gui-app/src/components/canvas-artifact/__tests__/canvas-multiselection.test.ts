@@ -1,9 +1,14 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import type { CanvasElement } from "@/lib/sandbox/canvas-bridge";
+import type {
+  CanvasLayoutNode,
+  CanvasSiblingLayout,
+} from "@/lib/sandbox/canvas-layout-bridge";
 import {
   useCanvasSelectionStore,
   type CanvasSelection,
 } from "../canvas-selection-store";
+import { CANVAS_SIBLING_NOTE } from "../canvas-structure-geometry";
 
 const ARTIFACT = "art";
 const BOARD = "boards/home.html";
@@ -50,10 +55,57 @@ function pick(owner: symbol, selection: CanvasSelection | null): void {
   state().completePick(owner, generation, selection);
 }
 
-/** A shift-click: begins a pick and completes it as an addition. */
-function addPick(owner: symbol, selection: CanvasSelection | null): void {
+function layoutNodeOf(item: CanvasElement): CanvasLayoutNode {
+  return {
+    marker: item.marker,
+    tid: item.tid,
+    tagName: item.tagName,
+    box: item.box,
+    position: "static",
+    left: null,
+    top: null,
+    cssWidth: null,
+    cssHeight: null,
+    transformed: false,
+  };
+}
+
+/** A container that shows exactly the given elements, once each. */
+function layoutHolding(
+  elements: readonly CanvasElement[],
+  overrides: Partial<CanvasSiblingLayout>,
+): CanvasSiblingLayout {
+  return {
+    parent: layoutNodeOf(element(0)),
+    siblings: elements.map(layoutNodeOf),
+    axis: "x",
+    reverse: false,
+    truncated: false,
+    ...overrides,
+  };
+}
+
+/** A shift-click that the page answers with `layout`, the container it reports. */
+function addPickIn(
+  owner: symbol,
+  selection: CanvasSelection | null,
+  layout: CanvasSiblingLayout | null,
+): void {
   const generation = state().beginPick(owner, ARTIFACT, BOARD);
-  state().completeAdditivePick(owner, generation, selection);
+  state().completeAdditivePick(owner, generation, selection, layout);
+}
+
+/** A shift-click on a page that shows the whole set plus the new pick. */
+function addPick(owner: symbol, selection: CanvasSelection | null): void {
+  const shown = new Map<number | null, CanvasElement>();
+  const primary = state().selection;
+  for (const item of [
+    ...(primary === null ? [] : [primary.element]),
+    ...state().additionalElements,
+    ...(selection === null ? [] : [selection.element]),
+  ])
+    shown.set(item.marker, item);
+  addPickIn(owner, selection, layoutHolding([...shown.values()], {}));
 }
 
 const markers = () => state().additionalElements.map((item) => item.marker);
@@ -62,6 +114,7 @@ beforeEach(() => {
   useCanvasSelectionStore.setState({
     selection: null,
     additionalElements: [],
+    selectionMessage: null,
     selectionOwner: null,
     generation: 0,
     pendingPick: null,
@@ -140,7 +193,8 @@ describe("completeAdditivePick", () => {
     it("holds the primary plus 255 additions", () => {
       const owner = Symbol("tile");
       pick(owner, pickOf(0, {}));
-      for (let marker = 1; marker <= 300; marker += 1) addPick(owner, pickOf(marker, {}));
+      for (let marker = 1; marker <= 300; marker += 1)
+        addPick(owner, pickOf(marker, {}));
       expect(state().additionalElements).toHaveLength(255);
       expect(state().selection?.element.marker).toBe(0);
       expect(markers().at(0)).toBe(1);
@@ -151,7 +205,8 @@ describe("completeAdditivePick", () => {
     it("still accepts the 256th element and refuses the 257th", () => {
       const owner = Symbol("tile");
       pick(owner, pickOf(0, {}));
-      for (let marker = 1; marker <= 254; marker += 1) addPick(owner, pickOf(marker, {}));
+      for (let marker = 1; marker <= 254; marker += 1)
+        addPick(owner, pickOf(marker, {}));
       expect(state().additionalElements).toHaveLength(254);
       addPick(owner, pickOf(254 + 1, {}));
       expect(state().additionalElements).toHaveLength(255);
@@ -171,7 +226,9 @@ describe("completeAdditivePick", () => {
       const owner = Symbol("tile");
       withSet(owner);
       addPick(owner, pickOf(5, { boardPath: "boards/other.html" }));
-      expect(state().selection).toMatchObject({ boardPath: "boards/other.html" });
+      expect(state().selection).toMatchObject({
+        boardPath: "boards/other.html",
+      });
       expect(state().selection?.element.marker).toBe(5);
       expect(state().additionalElements).toEqual([]);
       expect(state().selectionOwner).toBe(owner);
@@ -211,7 +268,7 @@ describe("completeAdditivePick", () => {
       pick(owner, pickOf(1, {}));
       const stale = state().beginPick(owner, ARTIFACT, BOARD);
       state().beginPick(owner, ARTIFACT, BOARD);
-      state().completeAdditivePick(owner, stale, pickOf(2, {}));
+      state().completeAdditivePick(owner, stale, pickOf(2, {}), null);
       expect(markers()).toEqual([]);
       expect(state().pendingPick).not.toBeNull();
     });
@@ -221,7 +278,7 @@ describe("completeAdditivePick", () => {
       const intruder = Symbol("other tile");
       pick(owner, pickOf(1, {}));
       const generation = state().beginPick(owner, ARTIFACT, BOARD);
-      state().completeAdditivePick(intruder, generation, pickOf(2, {}));
+      state().completeAdditivePick(intruder, generation, pickOf(2, {}), null);
       expect(markers()).toEqual([]);
       expect(state().selectionOwner).toBe(owner);
     });
@@ -231,7 +288,7 @@ describe("completeAdditivePick", () => {
       pick(owner, pickOf(1, {}));
       const generation = state().beginPick(owner, ARTIFACT, BOARD);
       state().retire(owner, BOARD);
-      state().completeAdditivePick(owner, generation, pickOf(2, {}));
+      state().completeAdditivePick(owner, generation, pickOf(2, {}), null);
       expect(state().selection).toBeNull();
       expect(markers()).toEqual([]);
     });
@@ -240,8 +297,9 @@ describe("completeAdditivePick", () => {
       const owner = Symbol("tile");
       pick(owner, pickOf(1, {}));
       const generation = state().beginPick(owner, ARTIFACT, BOARD);
-      state().completeAdditivePick(owner, generation, pickOf(2, {}));
-      state().completeAdditivePick(owner, generation, pickOf(3, {}));
+      const shown = layoutHolding([element(1), element(2), element(3)], {});
+      state().completeAdditivePick(owner, generation, pickOf(2, {}), shown);
+      state().completeAdditivePick(owner, generation, pickOf(3, {}), shown);
       expect(markers()).toEqual([2]);
     });
   });
@@ -254,6 +312,113 @@ describe("completeAdditivePick", () => {
     expect(state().selection?.element.marker).toBe(1);
     expect(markers()).toEqual([2]);
     expect(state().pendingPick).toBeNull();
+  });
+});
+
+describe("completeAdditivePick checks the set against the live container", () => {
+  function withPrimary(owner: symbol): void {
+    pick(owner, pickOf(1, {}));
+  }
+
+  it("adds a pick the page shows as a sibling of the whole set", () => {
+    const owner = Symbol("tile");
+    withPrimary(owner);
+    addPick(owner, pickOf(2, {}));
+    expect(markers()).toEqual([2]);
+    expect(state().selectionMessage).toBeNull();
+  });
+
+  it("refuses with the sibling note when the page has no layout", () => {
+    const owner = Symbol("tile");
+    withPrimary(owner);
+    addPickIn(owner, pickOf(2, {}), null);
+    expect(markers()).toEqual([]);
+    expect(state().selectionMessage).toBe(CANVAS_SIBLING_NOTE);
+    expect(state().pendingPick).toBeNull();
+  });
+
+  it("refuses a pick that is in another container", () => {
+    const owner = Symbol("tile");
+    withPrimary(owner);
+    addPickIn(owner, pickOf(2, {}), layoutHolding([element(1)], {}));
+    expect(markers()).toEqual([]);
+    expect(state().selectionMessage).toBe(CANVAS_SIBLING_NOTE);
+  });
+
+  it("refuses when the primary is not in the container the page reported", () => {
+    const owner = Symbol("tile");
+    withPrimary(owner);
+    addPickIn(owner, pickOf(2, {}), layoutHolding([element(2)], {}));
+    expect(markers()).toEqual([]);
+    expect(state().selectionMessage).toBe(CANVAS_SIBLING_NOTE);
+  });
+
+  it("refuses when an earlier addition is no longer in the container", () => {
+    const owner = Symbol("tile");
+    withPrimary(owner);
+    addPick(owner, pickOf(2, {}));
+    addPickIn(owner, pickOf(3, {}), layoutHolding([element(1), element(3)], {}));
+    expect(markers()).toEqual([2]);
+    expect(state().selectionMessage).toBe(CANVAS_SIBLING_NOTE);
+  });
+
+  it("refuses a container that was cut short", () => {
+    const owner = Symbol("tile");
+    withPrimary(owner);
+    addPickIn(
+      owner,
+      pickOf(2, {}),
+      layoutHolding([element(1), element(2)], { truncated: true }),
+    );
+    expect(markers()).toEqual([]);
+    expect(state().selectionMessage).toBe(CANVAS_SIBLING_NOTE);
+  });
+
+  it("refuses an element the page generated", () => {
+    const owner = Symbol("tile");
+    withPrimary(owner);
+    const generated = { ...element(2), generated: true };
+    addPick(owner, pickOf(2, { element: generated }));
+    expect(markers()).toEqual([]);
+    expect(state().selectionMessage).toBe(CANVAS_SIBLING_NOTE);
+  });
+
+  it("refuses a pick the container shows twice", () => {
+    const owner = Symbol("tile");
+    withPrimary(owner);
+    addPickIn(
+      owner,
+      pickOf(2, {}),
+      layoutHolding([element(1), element(2), element(2)], {}),
+    );
+    expect(markers()).toEqual([]);
+    expect(state().selectionMessage).toBe(CANVAS_SIBLING_NOTE);
+  });
+
+  it("refuses a replaced element that keeps the picked tid at another position", () => {
+    const owner = Symbol("tile");
+    pick(owner, pickOf(1, { element: { ...element(1), tid: "hero" } }));
+    const replaced = { ...element(7), tid: "hero" };
+    addPickIn(owner, pickOf(2, {}), layoutHolding([replaced, element(2)], {}));
+    expect(markers()).toEqual([]);
+    expect(state().selectionMessage).toBe(CANVAS_SIBLING_NOTE);
+  });
+
+  it("starts the next pick without the old note", () => {
+    const owner = Symbol("tile");
+    withPrimary(owner);
+    addPickIn(owner, pickOf(2, {}), null);
+    expect(state().selectionMessage).toBe(CANVAS_SIBLING_NOTE);
+    state().beginPick(owner, ARTIFACT, BOARD);
+    expect(state().selectionMessage).toBeNull();
+  });
+
+  it("does not check a pick that starts a new set", () => {
+    const owner = Symbol("tile");
+    withPrimary(owner);
+    addPickIn(owner, pickOf(5, { boardPath: "boards/other.html" }), null);
+    expect(state().selection?.element.marker).toBe(5);
+    expect(state().selectionMessage).toBeNull();
   });
 });
 

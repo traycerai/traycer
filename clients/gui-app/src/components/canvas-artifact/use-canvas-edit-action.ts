@@ -1,6 +1,7 @@
 import { useState, useRef, useLayoutEffect } from "react";
 import type { ArtboardEdit } from "@traycer/protocol/host/epic/artboard-edit";
 import { useArtboardEdit } from "./use-artboard-edit";
+import { isCanvasStructureEdit } from "./canvas-structure-identity";
 import {
   sameCanvasElement,
   useCanvasSelectionStore,
@@ -8,8 +9,10 @@ import {
 } from "./canvas-selection-store";
 
 export function canvasSelectionIsCurrent(target: CanvasSelection): boolean {
-  const current = useCanvasSelectionStore.getState().selection;
+  const state = useCanvasSelectionStore.getState();
+  const current = state.selection;
   return (
+    state.pendingPick === null &&
     current !== null &&
     current.artifactId === target.artifactId &&
     current.boardPath === target.boardPath &&
@@ -38,7 +41,16 @@ export function useCanvasEditAction(artifactId: string) {
     }
     try {
       setMessage(null);
-      const result = await mutation.mutateAsync({ selection, edit });
+      const result = await mutation.mutateAsync({
+        selection,
+        edit,
+        ...(isCanvasStructureEdit(edit)
+          ? {
+              structureGeneration:
+                useCanvasSelectionStore.getState().generation,
+            }
+          : {}),
+      });
       if (!result.ok) setMessage(result.detail);
       return result.ok;
     } catch {

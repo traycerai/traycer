@@ -9,7 +9,10 @@ import { CanvasLayersTree } from "./canvas-layers-tree";
 import { CanvasTweaksPanel } from "./canvas-tweaks-panel";
 import { useCanvasBoardDocument } from "./use-canvas-board-document";
 import type { CanvasFrameRegistry } from "./canvas-frame-registry";
-import type { CanvasSelection } from "./canvas-selection-store";
+import {
+  useCanvasSelectionStore,
+  type CanvasSelection,
+} from "./canvas-selection-store";
 import { CanvasStructureToolbar } from "./canvas-structure-toolbar";
 
 export function CanvasEditingPanel(props: {
@@ -64,6 +67,9 @@ export function CanvasElementEditingPanel(props: {
   readonly selection: CanvasSelection;
   readonly registry: CanvasFrameRegistry;
 }) {
+  const multiple = useCanvasSelectionStore(
+    (state) => state.additionalElements.length > 0,
+  );
   const document = useCanvasBoardDocument(
     props.selection.artifactId,
     props.selection.boardPath,
@@ -72,21 +78,33 @@ export function CanvasElementEditingPanel(props: {
   );
   return (
     <>
-      <CanvasStructureToolbar selection={props.selection} registry={props.registry} document={document.data ?? null} />
-      <CanvasPropertiesPanel
-        artifactId={props.selection.artifactId}
-        menuContent={
-          <CanvasClipboardMenuItems
-            selection={props.selection}
-            registry={props.registry}
-            document={document.data ?? null}
-          />
-        }
-      />
-      <CanvasImageControls
+      <CanvasStructureToolbar
         selection={props.selection}
         registry={props.registry}
+        document={document.data ?? null}
       />
+      {multiple ? (
+        <p className="p-3 text-ui-xs text-muted-foreground">
+          Select one element to edit its properties or text.
+        </p>
+      ) : (
+        <>
+          <CanvasPropertiesPanel
+            artifactId={props.selection.artifactId}
+            menuContent={
+              <CanvasClipboardMenuItems
+                selection={props.selection}
+                registry={props.registry}
+                document={document.data ?? null}
+              />
+            }
+          />
+          <CanvasImageControls
+            selection={props.selection}
+            registry={props.registry}
+          />
+        </>
+      )}
     </>
   );
 }
