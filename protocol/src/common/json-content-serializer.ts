@@ -82,9 +82,11 @@ interface SerializerContext {
   // (`jsonContentToMarkdown`), because a model or a person reads those
   // directly and gains nothing from a backslash.
   escapeText: boolean;
-  // The artifact reader's own verdict on whether a paragraph's text is one
-  // image (see `unresolvedImageSourceText`); `null` off the artifact path.
-  readImage: ArtifactImageReader | null;
+  // The artifact path's view of the ingest (see `ArtifactRendering`); `null`
+  // off the artifact path.
+  artifact: ArtifactRendering | null;
+  // True while rendering a heading's content, which is one line.
+  inHeading: boolean;
   // The placeholder for the space after an empty ordered or task marker; see
   // `keptMarkerSpaceFor`. Empty in the first rendering, which chooses it.
   keptMarkerSpace: string;
@@ -96,7 +98,7 @@ interface SerializerContext {
 function createContext(
   options: SerializerOptions,
   escapeText: boolean,
-  readImage: ArtifactImageReader | null,
+  artifact: ArtifactRendering | null,
   keptMarkerSpace: string,
 ): SerializerContext {
   return {
@@ -111,7 +113,8 @@ function createContext(
     inListItem: false,
     inTableCell: false,
     escapeText,
-    readImage,
+    artifact,
+    inHeading: false,
     keptMarkerSpace,
     keptMarkerSpaceUses: { count: 0 },
   };
@@ -1009,7 +1012,11 @@ function serializeText(node: JsonContent): string {
 // text. A backslash before the newline is CommonMark's hard break, and reads
 // back as one. A table cell keeps the bare newline: it cannot hold a line
 // break at all.
+// A heading is one line, so on the artifact path its hard break is written
+// as `<br>`, which the reader reads back as one (a typed `<br>` is escaped
+// by the inline rules, so it reads back as text).
 function serializeHardBreak(ctx: SerializerContext): string {
+  if (ctx.escapeText && ctx.inHeading) return "<br>";
   return ctx.escapeText && !ctx.inTableCell ? "\\\n" : "\n";
 }
 
@@ -1059,7 +1066,7 @@ function serializeUIPreviewBlock(
 function serializeHeading(node: JsonContent, ctx: SerializerContext): string {
   const level = readNumberAttr(node.attrs, "level", 1);
   const prefix = "#".repeat(level);
-  const content = serializeChildren(node.content, ctx);
+  const content = serializeChildren(node.content, { ...ctx, inHeading: true });
   return `${prefix} ${content}`;
 }
 
@@ -1070,12 +1077,40 @@ export interface ArtifactImage {
 }
 
 /**
- * The artifact reader's own parse of `markdown` as a whole artifact body: the
- * image, when the body is exactly one image and nothing else, and `null`
- * otherwise. Supplied by whoever parses artifact bodies back, from that same
- * parser, so the serializer never carries a copy of its grammar.
+ * The artifact ingest's own outcome for `markdown`: the document it parses
+ * the body into and stores, after its schema conversion - so a node the
+ * schema drops is absent. Supplied by whoever reads artifact bodies back,
+ * from that same parser and conversion, so the serializer never carries a
+ * copy of either.
  */
-export type ArtifactImageReader = (markdown: string) => ArtifactImage | null;
+export type ArtifactReader = (markdown: string) => JsonContent;
+
+type ArtifactImageReader = (markdown: string) => ArtifactImage | null;
+
+interface ArtifactRendering {
+  // The ingest's verdict on whether a body is exactly one image.
+  readonly readImage: ArtifactImageReader;
+  // Fallback texts to write as text this rendering (see
+  // `jsonContentToArtifactMarkdown`).
+  readonly escapedFallbacks: ReadonlySet<string>;
+  // Fallback texts this rendering wrote raw, one entry per paragraph.
+  readonly writtenFallbacks: string[];
+}
+
+/** The image `doc` holds as its only block, as the ingest stored it. */
+function onlyImageOf(doc: JsonContent): ArtifactImage | null {
+  const blocks = doc.content ?? [];
+  const only = blocks.length === 1 ? blocks[0] : undefined;
+  const image =
+    only?.type === "paragraph" && only.content?.length === 1
+      ? only.content[0]
+      : only;
+  if (image?.type !== "image") return null;
+  return {
+    alt: readStringAttr(image.attrs, "alt"),
+    src: readStringAttr(image.attrs, "src"),
+  };
+}
 
 /**
  * The paragraph text the host keeps in place of an artifact image it cannot
@@ -1084,7 +1119,11 @@ export type ArtifactImageReader = (markdown: string) => ArtifactImage | null;
  * whitespace or parentheses.
  */
 export function unresolvedArtifactImageText(alt: string, src: string): string {
-  const destination = /[\s()]/.test(src) ? `<${src}>` : src;
+  // Bracketed, with `<`, `>` and `\` escaped, whenever the source holds
+  // anything a bare destination cannot carry as written.
+  const destination = /[\s()<>\\]/.test(src)
+    ? `<${src.replace(/[<>\\]/g, "\\$&")}>`
+    : src;
   return `![${alt}](${destination})`;
 }
 
@@ -1146,22 +1185,42 @@ function rendersAsParagraphEnd(node: JsonContent | undefined): boolean {
   );
 }
 
+// A table cell is one line: a line break cannot be in it at all (the cell
+// writer turns one into `<br>`, which the reader keeps in a label as text).
+// And marked's table splitter reads a `|` as part of the cell only after an
+// odd run of backslashes, then removes one backslash from it - so a run of
+// k backslashes before a pipe is written as k + 1 when k is even, and with
+// k odd no spelling keeps both the cell and the label. `null` when the text
+// cannot be a cell's image.
+function tableCellImageText(text: string): string | null {
+  if (text.includes("\n")) return null;
+  let carried = true;
+  const written = text.replace(/(\\*)\|/g, (_match, run: string) => {
+    if (run.length % 2 === 1) carried = false;
+    return `${run}\\|`;
+  });
+  return carried ? written : null;
+}
+
 function serializeParagraph(node: JsonContent, ctx: SerializerContext): string {
   const indent = ctx.inListItem ? "" : getIndent(ctx);
-  const unresolvedImage =
-    ctx.readImage !== null
-      ? unresolvedImageSourceText(node, ctx.readImage)
+  const artifact = ctx.artifact;
+  const fallback =
+    artifact !== null
+      ? unresolvedImageSourceText(node, artifact.readImage)
       : null;
-  if (unresolvedImage !== null && !ctx.inTableCell) {
-    return `${indent}${unresolvedImage}`;
-  }
-  // A table cell is one line, and the reader reads a cell's text with `\|`
-  // as a `|` that does not end the cell, so the image's text is written with
-  // its pipes escaped. A line break cannot be in a cell at all - the cell
-  // writer turns it into `<br>`, which the reader keeps in the label as
-  // text - so a multiline image's text is escaped as text there.
-  if (unresolvedImage !== null && !unresolvedImage.includes("\n")) {
-    return unresolvedImage.replace(/\|/g, "\\|");
+  if (
+    artifact !== null &&
+    fallback !== null &&
+    !artifact.escapedFallbacks.has(fallback)
+  ) {
+    const written = ctx.inTableCell
+      ? tableCellImageText(fallback)
+      : `${indent}${fallback}`;
+    if (written !== null) {
+      artifact.writtenFallbacks.push(fallback);
+      return written;
+    }
   }
   const children = serializeChildren(
     ctx.escapeText && !ctx.inTableCell
@@ -1712,10 +1771,10 @@ function serializeImage(node: JsonContent, ctx: SerializerContext): string {
   const destination = /[\s()<>]/.test(src)
     ? `<${src.replace(/[<>\\]/g, "\\$&")}>`
     : src;
-  if (ctx.readImage === null) {
+  if (ctx.artifact === null) {
     return `![${alt.replace(/[\\[\]]/g, "\\$&")}](${destination})`;
   }
-  return artifactImageSpelling(alt, src, destination, ctx.readImage);
+  return artifactImageSpelling(alt, src, destination, ctx.artifact.readImage);
 }
 
 // The characters each spelling of an image escapes in its alt (`null`: the
@@ -1859,31 +1918,62 @@ function normalizeMarkdown(
  * document is rendered again with it. Rendering is otherwise the same both
  * times, so the placeholder occurs in the second only where it was written.
  */
+interface RenderedMarkdown {
+  readonly markdown: string;
+  readonly writtenFallbacks: readonly string[];
+}
+
 function renderMarkdown(
   options: SerializerOptions,
-  readImage: ArtifactImageReader | null,
+  artifact: ArtifactRendering | null,
   render: (ctx: SerializerContext) => string,
-): string {
-  const escapeText = readImage !== null;
-  const draft = createContext(options, escapeText, readImage, "");
+): RenderedMarkdown {
+  const escapeText = artifact !== null;
+  const draft = createContext(options, escapeText, artifact, "");
   const drafted = render(draft);
   if (draft.keptMarkerSpaceUses.count === 0) {
-    return normalizeMarkdown(drafted, "", escapeText);
+    return {
+      markdown: normalizeMarkdown(drafted, "", escapeText),
+      writtenFallbacks: artifact?.writtenFallbacks ?? [],
+    };
   }
+  // The second rendering replaces the first, so only its fallbacks count.
+  if (artifact !== null) artifact.writtenFallbacks.length = 0;
   const ctx = createContext(
     options,
     escapeText,
-    readImage,
+    artifact,
     keptMarkerSpaceFor(drafted),
   );
-  return normalizeMarkdown(render(ctx), ctx.keptMarkerSpace, escapeText);
+  return {
+    markdown: normalizeMarkdown(render(ctx), ctx.keptMarkerSpace, escapeText),
+    writtenFallbacks: artifact?.writtenFallbacks ?? [],
+  };
 }
 
 export function jsonContentToMarkdown(
   content: JsonContent,
   options: SerializerOptions,
 ): string {
-  return renderMarkdown(options, null, (ctx) => serializeNode(content, ctx));
+  return renderMarkdown(options, null, (ctx) => serializeNode(content, ctx))
+    .markdown;
+}
+
+/** How many images `doc` holds, by the fallback text each would have. */
+function storedImageTexts(doc: JsonContent): Map<string, number> {
+  const counts = new Map<string, number>();
+  const visit = (node: JsonContent): void => {
+    if (node.type === "image") {
+      const text = unresolvedArtifactImageText(
+        readStringAttr(node.attrs, "alt"),
+        readStringAttr(node.attrs, "src"),
+      );
+      counts.set(text, (counts.get(text) ?? 0) + 1);
+    }
+    for (const child of node.content ?? []) visit(child);
+  };
+  visit(doc);
+  return counts;
 }
 
 /**
@@ -1893,13 +1983,49 @@ export function jsonContentToMarkdown(
  * markdown is parsed back into the same document - the disk mirror and its
  * ingest normalization. Prompts, comments and the composer stay on
  * `jsonContentToMarkdown`.
+ *
+ * A paragraph holding an unresolved image's fallback text is written raw only
+ * where the ingest keeps an image for it, which is decided by the ingest
+ * itself: the body is read back once with every fallback written as text and
+ * once with them raw, and a fallback whose image does not come back - the
+ * schema dropping an image where the reader puts it inside a paragraph, a
+ * table that stops parsing - is written as text, as it was before.
  */
 export function jsonContentToArtifactMarkdown(
   content: JsonContent,
   options: SerializerOptions,
-  readImage: ArtifactImageReader,
+  read: ArtifactReader,
 ): string {
-  return renderMarkdown(options, readImage, (ctx) =>
-    serializeNode(content, ctx),
-  );
+  const readImage: ArtifactImageReader = (markdown) =>
+    onlyImageOf(read(markdown));
+  const renderWith = (
+    escapedFallbacks: ReadonlySet<string>,
+  ): RenderedMarkdown =>
+    renderMarkdown(
+      options,
+      { readImage, escapedFallbacks, writtenFallbacks: [] },
+      (ctx) => serializeNode(content, ctx),
+    );
+  const raw = renderWith(new Set());
+  if (raw.writtenFallbacks.length === 0) return raw.markdown;
+  const asText = renderWith(new Set(raw.writtenFallbacks));
+  const baseline = storedImageTexts(read(asText.markdown));
+  // The fallbacks a rendering wrote raw whose images the ingest did not keep.
+  const lost = (attempt: RenderedMarkdown): Set<string> => {
+    const stored = storedImageTexts(read(attempt.markdown));
+    const written = new Map<string, number>();
+    for (const text of attempt.writtenFallbacks) {
+      written.set(text, (written.get(text) ?? 0) + 1);
+    }
+    const out = new Set<string>();
+    for (const [text, count] of written) {
+      const kept = (stored.get(text) ?? 0) - (baseline.get(text) ?? 0);
+      if (kept < count) out.add(text);
+    }
+    return out;
+  };
+  const lostRaw = lost(raw);
+  if (lostRaw.size === 0) return raw.markdown;
+  const retry = renderWith(lostRaw);
+  return lost(retry).size === 0 ? retry.markdown : asText.markdown;
 }

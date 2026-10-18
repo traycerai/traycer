@@ -184,12 +184,22 @@ function readImage(md: string): ArtifactImage | null {
   };
 }
 
+/**
+ * The ingest's stored document for `md`: the parse and then the Yjs
+ * conversion, which is where the schema drops a node it does not allow. This
+ * is the reader handed to the serializer, so what it keeps is what the
+ * ingest keeps.
+ */
+function read(md: string): JsonContent {
+  return proseMirrorJsonOf(fragmentOf(parseJson(md)));
+}
+
+function serializeJson(content: JsonContent): string {
+  return jsonContentToArtifactMarkdown(content, OPTIONS, read);
+}
+
 function serialize(fragment: Y.XmlFragment): string {
-  return jsonContentToArtifactMarkdown(
-    proseMirrorJsonOf(fragment),
-    OPTIONS,
-    readImage,
-  );
+  return serializeJson(proseMirrorJsonOf(fragment));
 }
 
 function containsHardBreak(node: JsonContent): boolean {
@@ -1666,92 +1676,112 @@ describe("a multiline unresolved image label is the reader's call (traycer#1563)
     expect(bytes("a\n- b")).toBe("!\\[a\n\\- b](images/missing.png)");
   });
 
-  // The same label inside other blocks. The expectations are what the writer
-  // writes (the continuation lines carry the block's prefix) and that the
-  // parser reads one image back.
+  // The same fallback inside other blocks. It is written raw only where the
+  // ingest keeps the image it reads there: the artifact image is a block
+  // node, so where the parser puts it inside a paragraph (a bullet item) the
+  // schema drops it, and the fallback is written as text instead. The ingest
+  // is asked, not assumed: the stored document is what decides.
   describe("inside other blocks", () => {
-    const text = unresolvedArtifactImageText("a\nb", "images/missing.png");
-    const paragraphOfText = textParagraph([plainText(text)]);
-    const imageNode: JsonContent = {
+    const fallback = (alt: string): string =>
+      unresolvedArtifactImageText(alt, "images/missing.png");
+    const imageNode = (alt: string): JsonContent => ({
       type: "image",
-      attrs: { src: "images/missing.png", alt: "a\nb" },
+      attrs: { src: "images/missing.png", alt },
+    });
+    const wrap = {
+      "the top level": (block: JsonContent): JsonContent => ({
+        type: "doc",
+        content: [block],
+      }),
+      "a bullet item": (block: JsonContent): JsonContent => ({
+        type: "doc",
+        content: [
+          {
+            type: "bulletList",
+            content: [{ type: "listItem", content: [block] }],
+          },
+        ],
+      }),
+      "an ordered item": (block: JsonContent): JsonContent => ({
+        type: "doc",
+        content: [
+          {
+            type: "orderedList",
+            attrs: { start: 1, type: null },
+            content: [{ type: "listItem", content: [block] }],
+          },
+        ],
+      }),
+      "a block quote": (block: JsonContent): JsonContent => ({
+        type: "doc",
+        content: [{ type: "blockquote", content: [block] }],
+      }),
     };
-    const bulletItem = (block: JsonContent): JsonContent => ({
-      type: "doc",
-      content: [
-        {
-          type: "bulletList",
-          content: [{ type: "listItem", content: [block] }],
-        },
-      ],
-    });
-    const orderedItem = (block: JsonContent): JsonContent => ({
-      type: "doc",
-      content: [
-        {
-          type: "orderedList",
-          attrs: { start: 1, type: null },
-          content: [{ type: "listItem", content: [block] }],
-        },
-      ],
-    });
-    const blockQuote = (block: JsonContent): JsonContent => ({
-      type: "doc",
-      content: [{ type: "blockquote", content: [block] }],
-    });
-    const contexts = [
-      {
-        name: "a bullet item",
-        doc: bulletItem(paragraphOfText),
-        imageDoc: bulletItem(imageNode),
-        md: "- ![a\n  b](images/missing.png)",
-      },
-      {
-        name: "an ordered item",
-        doc: orderedItem(paragraphOfText),
-        imageDoc: orderedItem(imageNode),
-        md: "1. ![a\n   b](images/missing.png)",
-      },
-      {
-        name: "a block quote",
-        doc: blockQuote(paragraphOfText),
-        imageDoc: blockQuote(imageNode),
-        md: "> ![a\n> b](images/missing.png)",
-      },
-    ] as const satisfies ReadonlyArray<{
-      readonly name: string;
-      readonly doc: JsonContent;
-      readonly imageDoc: JsonContent;
-      readonly md: string;
-    }>;
 
-    it.each(contexts)(
-      "$name: kept raw, and the parser reads the image",
-      ({ doc, md }) => {
+    const raw = [
+      ["the top level", "a", "![a](images/missing.png)"],
+      ["the top level", "a\nb", "![a\nb](images/missing.png)"],
+      ["an ordered item", "a", "1. ![a](images/missing.png)"],
+      ["an ordered item", "a\nb", "1. ![a\n   b](images/missing.png)"],
+      ["a block quote", "a", "> ![a](images/missing.png)"],
+      ["a block quote", "a\nb", "> ![a\n> b](images/missing.png)"],
+    ] as const;
+
+    it.each(raw)(
+      "%s, alt %j: the ingest keeps the image, so the fallback is written raw",
+      (where, alt, md) => {
+        const doc = wrap[where](textParagraph([plainText(fallback(alt))]));
         const md1 = serialize(fragmentOf(doc));
         expect(md1).toBe(md);
-        const json1 = parseJson(md1);
-        expect(imagesIn(json1).map((image) => image.attrs)).toEqual([
-          expect.objectContaining({ alt: "a\nb", src: "images/missing.png" }),
-        ]);
+        // The stored document keeps the image, with its alt and source.
+        expect(altsIn(read(md1))).toEqual([alt]);
+        // Raw is the very bytes the image itself is written with there.
+        expect(md1).toBe(serializeJson(wrap[where](imageNode(alt))));
       },
     );
 
-    // The retry is the parser reading the image back (above): the host
-    // resolves images on that parsed document. Whatever happens after that
-    // happens to the fallback exactly as to the image itself, because the
-    // fallback is written with the very bytes the image is written with in
-    // the same place. (The artifact image is a block node, so where the
-    // reader puts it inside a paragraph - a bullet item - re-ingesting into
-    // Yjs keeps neither; that is the schema's, for every image there.)
-    it.each(contexts)(
-      "$name: written with the bytes the image itself is written with",
-      ({ doc, imageDoc }) => {
-        expect(serialize(fragmentOf(doc))).toBe(
-          jsonContentToArtifactMarkdown(imageDoc, OPTIONS, readImage),
-        );
+    const asText = [
+      ["a bullet item", "a", "- !\\[a](images/missing.png)"],
+      ["a bullet item", "a\nb", "- !\\[a\n  b](images/missing.png)"],
+    ] as const;
+
+    it.each(asText)(
+      "%s, alt %j: the ingest drops the image, so the fallback is written as text and kept as text",
+      (where, alt, md) => {
+        const text = fallback(alt);
+        const doc = wrap[where](textParagraph([plainText(text)]));
+        const md1 = serialize(fragmentOf(doc));
+        expect(md1).toBe(md);
+
+        // The stored document keeps the fallback, as its text, and no image.
+        const stored = read(md1);
+        expect(imagesIn(stored)).toEqual([]);
+        expect(textOf(stored)).toBe(text);
+        // And it is stable.
+        expect(serializeJson(stored)).toBe(md1);
       },
     );
+
+    it("writes the fallback in a bullet item as text while the same document's top-level one stays raw", () => {
+      const doc: JsonContent = {
+        type: "doc",
+        content: [
+          textParagraph([plainText(fallback("a"))]),
+          {
+            type: "bulletList",
+            content: [
+              {
+                type: "listItem",
+                content: [textParagraph([plainText(fallback("b"))])],
+              },
+            ],
+          },
+        ],
+      };
+      expect(serialize(fragmentOf(doc))).toBe(
+        "![a](images/missing.png)\n\n- !\\[b](images/missing.png)",
+      );
+    });
   });
 
   describe("with a carriage return", () => {
@@ -1827,78 +1857,220 @@ describe("a multiline unresolved image label is the reader's call (traycer#1563)
         },
       ],
     });
+    const cellsOf = (node: JsonContent): JsonContent[] =>
+      (node.type === "tableHeader" || node.type === "tableCell"
+        ? [node]
+        : []
+      ).concat((node.content ?? []).flatMap(cellsOf));
 
+    // The reader puts a cell's image inside a paragraph, which the schema
+    // does not allow, so the ingest drops it: the fallback is written as text.
     it.each([
-      ["a", "| ![a](images/x.png) |\n| --- |\n| ![a](images/x.png) |"],
+      ["a", "| !\\[a](images/x.png) |\n| --- |\n| !\\[a](images/x.png) |"],
       [
         "a|b",
-        "| ![a\\|b](images/x.png) |\n| --- |\n| ![a\\|b](images/x.png) |",
+        "| !\\[a\\|b](images/x.png) |\n| --- |\n| !\\[a\\|b](images/x.png) |",
+      ],
+      [
+        "a\nb",
+        "| !\\[a<br>b](images/x.png) |\n| --- |\n| !\\[a<br>b](images/x.png) |",
       ],
     ])(
-      "keeps the fallback text of alt %j raw, with its pipes escaped",
+      "writes the fallback of alt %j as text, because the ingest drops a cell's image",
       (alt, md) => {
         const md1 = serialize(
           fragmentOf(table(unresolvedArtifactImageText(alt, "images/x.png"))),
         );
         expect(md1).toBe(md);
-        // The parser reads the cell's image with the alt the pipe was part of.
-        expect(altsIn(parseJson(md1))).toEqual([alt, alt]);
+        const stored = read(md1);
+        expect(imagesIn(stored)).toEqual([]);
+        // Both cells are still there, and the text is still in them.
+        expect(cellsOf(stored)).toHaveLength(2);
+        expect(serializeJson(stored)).toBe(md1);
       },
     );
 
-    // As inside other blocks: the fallback is written with the bytes the
-    // cell's image itself is written with (the reader puts a cell's image
-    // inside a paragraph, and the Yjs document, whose image is a block node,
-    // keeps neither).
     it.each(["a", "a|b"])(
-      "writes the fallback of alt %j with the bytes the cell's image is written with",
+      "keeps the cell's text for alt %j equal to the fallback text",
       (alt) => {
-        const imageTable: JsonContent = {
-          type: "doc",
-          content: [
-            {
-              type: "table",
-              content: ["tableHeader", "tableCell"].map((cellType) => ({
+        const text = unresolvedArtifactImageText(alt, "images/x.png");
+        const stored = read(serialize(fragmentOf(table(text))));
+        expect(cellsOf(stored).map(textOf)).toEqual([text, text]);
+      },
+    );
+  });
+});
+
+/**
+ * The same cell, with `k` backslashes in front of a pipe in the alt, in the
+ * header and in the body. The ingest drops a cell's image, so the fallback is
+ * written as text; what must hold is that the table keeps its one column and
+ * the cells read back as the text they had.
+ */
+describe("pipes after backslashes in a table cell's fallback text (traycer#1563)", () => {
+  const bs = (count: number): string => "\\".repeat(count);
+  const cellsOf = (node: JsonContent): JsonContent[] =>
+    (node.type === "tableHeader" || node.type === "tableCell"
+      ? [node]
+      : []
+    ).concat((node.content ?? []).flatMap(cellsOf));
+  const rowsOf = (node: JsonContent): JsonContent[] =>
+    (node.type === "tableRow" ? [node] : []).concat(
+      (node.content ?? []).flatMap(rowsOf),
+    );
+
+  it.each([0, 1, 2, 3, 4])(
+    "keeps the column and the text with %i backslashes before the pipe",
+    (k) => {
+      const text = unresolvedArtifactImageText(`a${bs(k)}|b`, "images/x.png");
+      const doc: JsonContent = {
+        type: "doc",
+        content: [
+          {
+            type: "table",
+            content: [
+              {
                 type: "tableRow",
                 content: [
                   {
-                    type: cellType,
-                    content: [
-                      {
-                        type: "paragraph",
-                        content: [
-                          {
-                            type: "image",
-                            attrs: { src: "images/x.png", alt },
-                          },
-                        ],
-                      },
-                    ],
+                    type: "tableHeader",
+                    content: [textParagraph([plainText(text)])],
                   },
                 ],
-              })),
-            },
-          ],
-        };
-        const md1 = serialize(
-          fragmentOf(table(unresolvedArtifactImageText(alt, "images/x.png"))),
-        );
-        expect(md1).toBe(
-          jsonContentToArtifactMarkdown(imageTable, OPTIONS, readImage),
-        );
-      },
-    );
+              },
+              {
+                type: "tableRow",
+                content: [
+                  {
+                    type: "tableCell",
+                    content: [textParagraph([plainText(text)])],
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      };
+      const fragment0 = fragmentOf(doc);
+      const md1 = serialize(fragment0);
+      const stored = read(md1);
+      // One column in each of the two rows.
+      expect(rowsOf(stored).map((row) => (row.content ?? []).length)).toEqual([
+        1, 1,
+      ]);
+      // The text each cell held.
+      expect(cellsOf(stored).map(textOf)).toEqual([text, text]);
+      // And the document is the one that was written.
+      const fragment1 = fragmentOf(parseJson(md1));
+      expect(proseMirrorJsonOf(fragment1)).toEqual(
+        proseMirrorJsonOf(fragment0),
+      );
+      expect(serialize(fragment1)).toBe(md1);
+    },
+  );
+});
 
-    it("escapes a multiline label as text in a cell, and reads it back as text", () => {
-      const md1 = serialize(
-        fragmentOf(table(unresolvedArtifactImageText("a\nb", "images/x.png"))),
-      );
-      expect(md1).toBe(
-        "| !\\[a<br>b](images/x.png) |\n| --- |\n| !\\[a<br>b](images/x.png) |",
-      );
-      const json1 = parseJson(md1);
-      expect(imagesIn(json1)).toEqual([]);
-      expect(serialize(fragmentOf(json1))).toBe(md1);
-    });
+/**
+ * An artifact heading is one line, so a hard break in it is written as `<br>`,
+ * which the reader reads back as a hard break; a typed `<br>` is escaped and
+ * reads back as text.
+ */
+describe("a hard break in a heading (traycer#1563)", () => {
+  const hb: JsonContent = { type: "hardBreak" };
+  const heading = (level: number, content: JsonContent[]): JsonContent => ({
+    type: "doc",
+    content: [{ type: "heading", attrs: { level }, content }],
   });
+  const rows = [
+    {
+      name: "one break",
+      doc: heading(1, [plainText("First"), hb, plainText("Second")]),
+      md: "# First<br>Second",
+    },
+    {
+      name: "two breaks",
+      doc: heading(1, [plainText("a"), hb, plainText("b"), hb, plainText("c")]),
+      md: "# a<br>b<br>c",
+    },
+    {
+      name: "level 2",
+      doc: heading(2, [plainText("First"), hb, plainText("Second")]),
+      md: "## First<br>Second",
+    },
+    {
+      name: "level 6",
+      doc: heading(6, [plainText("First"), hb, plainText("Second")]),
+      md: "###### First<br>Second",
+    },
+    {
+      name: "a typed <br> in the text",
+      doc: heading(1, [plainText("a<br>b")]),
+      md: "# a\\<br>b",
+    },
+    {
+      name: "a break followed by text starting with a heading marker",
+      doc: heading(1, [plainText("First"), hb, plainText("# x")]),
+      md: "# First<br># x",
+    },
+    {
+      name: "a break followed by text starting with a bullet marker",
+      doc: heading(1, [plainText("First"), hb, plainText("- x")]),
+      md: "# First<br>- x",
+    },
+  ] as const;
+
+  it.each(rows)("$name", ({ doc, md }) => {
+    const fragment0 = fragmentOf(doc);
+    const md1 = serialize(fragment0);
+    expect(md1).toBe(md);
+
+    const fragment1 = fragmentOf(parseJson(md1));
+    expect(proseMirrorJsonOf(fragment1)).toEqual(proseMirrorJsonOf(fragment0));
+    expect(fragment1.toJSON()).toBe(fragment0.toJSON());
+    expect(serialize(fragment1)).toBe(md1);
+  });
+
+  it("reads a break at the end of a heading, and settles", () => {
+    const fragment0 = fragmentOf(heading(1, [plainText("First"), hb]));
+    const md1 = serialize(fragment0);
+    const fragment1 = fragmentOf(parseJson(md1));
+    const md2 = serialize(fragment1);
+    expect(md1).toBe("# First<br>");
+    expect(md2).toBe(md1);
+    expect(proseMirrorJsonOf(fragment1)).toEqual(proseMirrorJsonOf(fragment0));
+  });
+});
+
+/**
+ * A source holding `<`, `>` or a backslash is written in the bracketed
+ * destination form with those escaped, and the reader reads the same source
+ * back, so the retry works for it too.
+ */
+describe("an unresolved image whose source holds angle brackets or backslashes (traycer#1563)", () => {
+  const rows = [
+    ["images/a<b.png", "![a](<images/a\\<b.png>)"],
+    ["images/a b>.png", "![a](<images/a b\\>.png>)"],
+    ["images/a\\b.png", "![a](<images/a\\\\b.png>)"],
+    ["images/a\\\\b c.png", "![a](<images/a\\\\\\\\b c.png>)"],
+  ] as const;
+
+  it.each(rows)("%j", (src, expectedText) => {
+    const text = unresolvedArtifactImageText("a", src);
+    expect(text).toBe(expectedText);
+    expect(readImage(text)).toEqual({ alt: "a", src });
+
+    const md1 = serialize(
+      fragmentOf({ type: "doc", content: [textParagraph([plainText(text)])] }),
+    );
+    // Kept raw at the top level, and read back as the image with that source.
+    expect(md1).toBe(text);
+    expect(readImage(md1)).toEqual({ alt: "a", src });
+    expect(imageSrcsIn(read(md1))).toEqual([src]);
+  });
+
+  function imageSrcsIn(node: JsonContent): unknown[] {
+    return (node.type === "image" ? [node.attrs?.src] : []).concat(
+      (node.content ?? []).flatMap(imageSrcsIn),
+    );
+  }
 });
