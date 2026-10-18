@@ -201,14 +201,18 @@ export async function acquireCliConfigLock(
   while (true) {
     await releaseUnreleased(lockPath);
     await removeRetainedTokens();
-    if (await tryCreate(lockPath, serialized)) {
+    const created = await tryCreate(lockPath, serialized);
+    if (created === "created") {
       await sweepBreakTokens(lockPath, record.nonce);
       return makeHandle(lockPath, record);
     }
     const holder = await readHolder(lockPath);
     if (holder === null) {
       // Released between our create and read: retry at once, within the wait.
+      // A create a Windows filter blocked means the released entry is still
+      // delete-pending, which can last as long as a handle on it: poll.
       if (Date.now() >= deadline) throw lockTimeoutError(timing, lockPath);
+      if (created === "blocked") await sleep(timing.pollMs);
       continue;
     }
     const ageMs = await lockAgeMs(lockPath);
@@ -304,7 +308,7 @@ async function breakDeadLock(
   const tokenPath = `${tokenBase}.${next}`;
   // Another breaker claimed that generation first, or a Windows filter held
   // the link: back to the polled wait, which lists the tokens again.
-  if (!(await tryCreate(tokenPath, serialized))) return false;
+  if ((await tryCreate(tokenPath, serialized)) !== "created") return false;
   try {
     // Only this token's creator may remove the record, and the lock cannot
     // change under it: the dead holder will not release, and every other
@@ -433,16 +437,24 @@ function recordHolderDead(record: LockRecord): Promise<boolean> {
  * exists without its record; where the filesystem has no hard links, an
  * exclusive create writes it instead.
  */
-async function tryCreate(path: string, serialized: string): Promise<boolean> {
+// `taken`: the path exists. `blocked`: a Windows filter refused the create,
+// whether or not anything is at the path.
+type CreateOutcome = "created" | "taken" | "blocked";
+
+async function tryCreate(
+  path: string,
+  serialized: string,
+): Promise<CreateOutcome> {
   const tmp = `${path}.${randomUUID()}.tmp`;
   try {
     await writeFile(tmp, serialized, { encoding: "utf8", mode: 0o600 });
     try {
       await link(tmp, path);
-      return true;
+      return "created";
     } catch (err) {
       const code = errorCode(err);
-      if (code === "EEXIST" || isTransientWindowsError(code)) return false;
+      if (code === "EEXIST") return "taken";
+      if (isTransientWindowsError(code)) return "blocked";
       if (code === null || !LINK_UNSUPPORTED_ERROR_CODES.has(code)) throw err;
     }
     return await tryExclusiveCreate(path, serialized);
@@ -457,17 +469,18 @@ async function tryCreate(path: string, serialized: string): Promise<boolean> {
 async function tryExclusiveCreate(
   path: string,
   serialized: string,
-): Promise<boolean> {
+): Promise<CreateOutcome> {
   try {
     await writeFile(path, serialized, {
       encoding: "utf8",
       flag: "wx",
       mode: 0o600,
     });
-    return true;
+    return "created";
   } catch (err) {
     const code = errorCode(err);
-    if (code === "EEXIST" || isTransientWindowsError(code)) return false;
+    if (code === "EEXIST") return "taken";
+    if (isTransientWindowsError(code)) return "blocked";
     throw err;
   }
 }

@@ -35,6 +35,12 @@ const h = vi.hoisted(() => ({
   tokenLinkHook: null as (() => Promise<void>) | null,
   // The pid whose liveness probe answers dead once, then alive (a recycled pid).
   recycledPid: null as number | null,
+  // Links into the lock file itself (not tokens or temp files), failed or not.
+  lockLinks: 0,
+  // Fails every link into the lock with this code while set.
+  lockLinkAlways: null as string | null,
+  // Fails the next links into the lock, one code per call, then passes.
+  lockLinkFailures: [] as string[],
   // While set, every even-numbered read of the lock file fails EBUSY.
   lockReadAlternates: false,
   lockReads: 0,
@@ -65,6 +71,15 @@ vi.mock("node:fs/promises", async (importActual) => {
       return actual.readFile(...args);
     },
     link: async (existing: string, linkPath: string) => {
+      if (linkPath === `${cliConfigPath()}.lock`) {
+        h.lockLinks += 1;
+        const code = h.lockLinkAlways ?? h.lockLinkFailures.shift();
+        if (code !== undefined) {
+          throw Object.assign(new Error(`${code}: simulated failure`), {
+            code,
+          });
+        }
+      }
       if (linkPath.includes(".break-")) {
         h.tokenLinks += 1;
         const hook = h.tokenLinkHook;
@@ -162,6 +177,9 @@ beforeEach(async () => {
   h.recycledPid = null;
   h.lockReadAlternates = false;
   h.lockReads = 0;
+  h.lockLinks = 0;
+  h.lockLinkAlways = null;
+  h.lockLinkFailures = [];
 });
 
 afterEach(async () => {
@@ -172,6 +190,8 @@ afterEach(async () => {
   h.tokenLinkHook = null;
   h.recycledPid = null;
   h.lockReadAlternates = false;
+  h.lockLinkAlways = null;
+  h.lockLinkFailures = [];
   setCliConfigLockTimingForTests(null);
   await rm(h.home, { recursive: true, force: true });
 });
@@ -264,6 +284,62 @@ describe("the settings lock wait while breaking a dead lock", () => {
       }),
     );
     expect(existsSync(lockPath())).toBe(true);
+  });
+
+  it("polls while a Windows filter holds a released lock entry", async () => {
+    h.platform = "win32";
+    setCliConfigLockTimingForTests({
+      waitMs: 300,
+      pollMs: 10,
+      staleAgeMs: 100,
+    });
+    // No lock file exists, but the create is refused: the filter still holds
+    // the entry a peer's release just deleted.
+    h.lockLinkAlways = "EBUSY";
+
+    await expect(setEnvOverride("K", "v")).rejects.toThrow(
+      /Timed out after 300ms/,
+    );
+
+    // One attempt per poll: about thirty, not a hot loop.
+    expect(h.lockLinks).toBeLessThanOrEqual(40);
+    expect(existsSync(cliConfigPath())).toBe(false);
+  }, 5000);
+
+  it("takes the lock once the filter lets go of the released entry", async () => {
+    h.platform = "win32";
+    setCliConfigLockTimingForTests({
+      waitMs: 2000,
+      pollMs: 10,
+      staleAgeMs: 100,
+    });
+    h.lockLinkFailures = ["EBUSY", "EBUSY", "EBUSY"];
+
+    await setEnvOverride("K", "v");
+
+    expect(JSON.parse(await readFile(cliConfigPath(), "utf8"))).toMatchObject({
+      envOverrides: { K: "v" },
+    });
+    expect(existsSync(lockPath())).toBe(false);
+    expect(h.lockLinks).toBe(4);
+  });
+
+  it("retries at once when the holder released between the create and the read", async () => {
+    h.platform = "linux";
+    // A poll would take a second; the retry must not wait for one.
+    setCliConfigLockTimingForTests({
+      waitMs: 5000,
+      pollMs: 1000,
+      staleAgeMs: 100,
+    });
+    // EEXIST with no file behind it: the holder released right after.
+    h.lockLinkFailures = ["EEXIST"];
+
+    const started = Date.now();
+    await setEnvOverride("K", "v");
+
+    expect(Date.now() - started).toBeLessThan(500);
+    expect(h.lockLinks).toBe(2);
   });
 
   it("probes each dead break-token creator once per acquire", async () => {
