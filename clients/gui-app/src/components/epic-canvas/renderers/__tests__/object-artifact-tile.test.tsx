@@ -24,6 +24,8 @@ const mocks = vi.hoisted(() => ({
     readonly artifactId: string;
     readonly viewOnly?: boolean;
   }>,
+  // Every argument the tile handed the body-lease hook, null arms included.
+  bodyLeases: [] as Array<string | null>,
 }));
 
 vi.mock("@/lib/mobile-app", async (importOriginal) => ({
@@ -48,6 +50,9 @@ vi.mock("@/lib/epic-selectors", () => ({
     id !== null && Object.hasOwn(mocks.artifacts.byId, id)
       ? mocks.artifacts.byId[id]
       : null,
+  useEpicArtifactBodyLease: (id: string | null) => {
+    mocks.bodyLeases.push(id);
+  },
 }));
 
 vi.mock("@/hooks/use-epic-store", () => ({
@@ -116,6 +121,7 @@ afterEach(() => {
   mocks.sandboxProps = [];
   mocks.mobile = false;
   mocks.surfaceProps = [];
+  mocks.bodyLeases = [];
 });
 
 describe("<ObjectArtifactTile />", () => {
@@ -252,6 +258,43 @@ describe("<ObjectArtifactTile />", () => {
         viewOnly: true,
       });
     });
+  });
+
+  // The lease is what makes the host run the epic's file work while the
+  // artifact is on screen (capture of the folder, materialisation of a
+  // collaborator's head); a chat-only task runs none of it.
+  it("holds the artifact body lease for an html artifact and none for a file artifact", () => {
+    setArtifacts([
+      artifact({
+        id: "page",
+        kind: "html",
+        folderName: "page",
+        title: "Page",
+        head: { files: {}, capturedAt: 0 },
+      }),
+      artifact({
+        id: "logo",
+        kind: "file",
+        folderName: "",
+        layout: "file",
+        relativePath: "logo.png",
+        title: "Logo",
+        object: {
+          sha256: SHA,
+          byteLength: 2048,
+          mediaType: "image/png",
+          status: "published",
+        },
+      }),
+    ]);
+
+    render(tile("page"));
+    expect(mocks.bodyLeases).toContain("page");
+    cleanup();
+
+    mocks.bodyLeases = [];
+    render(tile("logo"));
+    expect(mocks.bodyLeases).toEqual([null]);
   });
 
   it("shows the plain summary card with the byte count for a file artifact", () => {

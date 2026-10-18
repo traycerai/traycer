@@ -13,7 +13,10 @@ import {
 } from "@/components/sandbox/sandbox-frame";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import { useEpicStore } from "@/hooks/use-epic-store";
-import { useArtifactById } from "@/lib/epic-selectors";
+import {
+  useArtifactById,
+  useEpicArtifactBodyLease,
+} from "@/lib/epic-selectors";
 import { EPIC_NODE_LABELS } from "@/lib/artifacts/node-display";
 import { artifactSourcePathsFor } from "@/lib/artifacts/artifact-object-paths";
 import { useStableOutsideReferenceResolver } from "@/lib/artifacts/use-stable-outside-reference-resolver";
@@ -29,6 +32,13 @@ export function ObjectArtifactTile(props: {
 }) {
   const runnerHost = useRunnerHostOrNull();
   const artifact = useArtifactById(props.node.id);
+  // An open html tile holds the same body lease a markdown tile holds, even
+  // though it reads no body document: on the host that lease is the demand
+  // that runs the epic's file work, so the folder on disk is captured and a
+  // collaborator's head is materialised while the artifact is being looked
+  // at. Without it a chat-only task never captures a hand-written folder. A
+  // canvas tile leases through its surface; a file artifact has no room.
+  useEpicArtifactBodyLease(artifact?.kind === "html" ? artifact.id : null);
   const artifacts = useEpicStore((state) => state.artifacts);
   const client = useTabHostClient();
   const readSpan = useMemo(
