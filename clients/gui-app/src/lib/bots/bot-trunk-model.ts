@@ -12,10 +12,7 @@ import type { BotTaskEntry } from "@traycer/protocol/host/bot/schemas";
  * A delivered check-in is not stored as a section: the trunk keeps only an
  * `autonomous_resume` block whose trigger is titled {@link
  * TASK_CHECKIN_TRIGGER_TITLE} and carries a one-line summary, and a check-in
- * the trunk has not consumed yet is a `task-checkin` item on its queue. These
- * two folds are the panel's whole reading of them; a richer per-task record
- * of the last delivered check-in arrives with the host fixup (T9b) as an
- * additive snapshot field, and is rendered the day it lands.
+ * the trunk has not consumed yet is a `task-checkin` item on its queue.
  */
 export const TASK_CHECKIN_TRIGGER_TITLE = "Task check-in";
 

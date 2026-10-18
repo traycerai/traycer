@@ -581,8 +581,6 @@ export const botTaskEntrySchema = lazySchema(() =>
         .nullable(),
     })
     .superRefine((entry, ctx) => {
-      // The two invariants the fields document, enforced: an entry with a
-      // reason it ended is ended, and only a periodic cadence has a due time.
       if ((entry.state === "ended") !== (entry.endedReason !== null)) {
         ctx.addIssue({
           code: "custom",

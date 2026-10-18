@@ -29,9 +29,8 @@ export interface HomeBotRowModel {
   readonly harness: string;
   readonly model: string;
   /**
-   * The stream's open-request HINT, `null` until a snapshot arrives. The host
-   * shipping today always sends `0`; the conversation's own rows decide what
-   * is open, so the row shows this number and never claims it is the count.
+   * The stream's open-request hint, `null` when unknown. The conversation's
+   * own rows are authoritative for what is open.
    */
   readonly openRequestCount: number | null;
   /** Tasks the bot is still tracking, `null` until a snapshot arrives. */
