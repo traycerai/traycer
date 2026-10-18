@@ -315,19 +315,23 @@ export function useChatTimelineFollowLatch(
         geometry === null ||
         !isChatTimelineGeometryMeasurable(geometry) ||
         canReaderGestureMove(geometry, intent.direction);
-      if (intent.publishesReaderPosition) {
-        armedReaderDepartureRef.current = {
-          source: "gesture",
-          direction: intent.direction,
-          // Unknown/hidden geometry cannot safely prove a no-op. When it is
-          // measurable, an edge-directed gesture that cannot move must not
-          // strand follow if no native scroll event is emitted.
-          blocksAutomaticCorrection,
-        };
-      } else if (armedReaderDepartureRef.current?.source !== "touch") {
-        // A pointer preflight (a content tap's `pointerdown`) does not end a
-        // touch contact; only the lift does.
-        armedReaderDepartureRef.current = null;
+      // A touch contact outlives every intent during it: a `touchmove` only
+      // refines it with a direction (the candidate below), and a pointer
+      // preflight (a content tap's `pointerdown`) does not end it. Replacing
+      // it with a gesture arm would let a strict-bottom report release that
+      // arm, leaving the rest of the contact - which iOS may deliver as bare
+      // scroll reports - unprotected. Only the lift ends the contact.
+      if (armedReaderDepartureRef.current?.source !== "touch") {
+        armedReaderDepartureRef.current = intent.publishesReaderPosition
+          ? {
+              source: "gesture",
+              direction: intent.direction,
+              // Unknown/hidden geometry cannot safely prove a no-op. When it
+              // is measurable, an edge-directed gesture that cannot move must
+              // not strand follow if no native scroll event is emitted.
+              blocksAutomaticCorrection,
+            }
+          : null;
       }
       readerEndCandidateRef.current =
         intent.direction === "toward-end" &&

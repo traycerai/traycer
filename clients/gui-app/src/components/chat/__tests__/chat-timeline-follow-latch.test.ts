@@ -921,6 +921,39 @@ describe("useChatTimelineFollowLatch", () => {
     expect(onFollowIntentChange).toHaveBeenLastCalledWith(false);
   });
 
+  // iOS may deliver the first `touchmove`s and then hand the touch to its
+  // native pan: the rest of the contact arrives as bare scroll reports.
+  it("keeps a touch contact armed after a delivered touchmove and a strict-bottom report", () => {
+    const node = shim.makeNode({
+      scrollTop: 1000,
+      scrollHeight: 1500,
+      clientHeight: 500,
+    });
+    const listRef = makeFakeListRef(node);
+    const onFollowIntentChange = vi.fn();
+    const { result } = renderHook(() =>
+      useChatTimelineFollowLatch(listRef, true, true, {
+        onFollowIntentChange,
+        onReaderGesture: undefined,
+        isCorrectionSuppressed: undefined,
+        resolveSuppressedEndLanding: undefined,
+      }),
+    );
+
+    fireTouch(node, "touchstart", 100);
+    fireTouch(node, "touchmove", 140);
+    // The pan's first report (a rubber-band frame) is still at the edge.
+    fireNativeScroll(node);
+    expect(onFollowIntentChange).not.toHaveBeenCalled();
+
+    shim.setGeometry(node, { scrollTop: 850 });
+    fireNativeScroll(node);
+    expect(onFollowIntentChange).toHaveBeenLastCalledWith(false);
+    shim.setGeometry(node, { scrollHeight: 1700 });
+    result.current.followEndIfPermitted();
+    expect(listRef.scrollToEnd).not.toHaveBeenCalled();
+  });
+
   it("does not block follow for an upward wheel that cannot move from the top edge", () => {
     const node = shim.makeNode({
       scrollTop: 0,
