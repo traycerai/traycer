@@ -1,5 +1,12 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, render, renderHook, screen } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  renderHook,
+  screen,
+} from "@testing-library/react";
+import { useRef, useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
 import type {
@@ -12,7 +19,13 @@ import { deriveToolInputDetail } from "@traycer/protocol/host/agent/gui/tool-inp
 import { deriveToolInputSummary } from "@traycer/protocol/host/agent/gui/tool-input-summary";
 import { ChatExpansionTestProviders } from "@/components/chat/__tests__/chat-expansion-test-providers";
 import { deriveSubagentCollapsibleKey } from "@/components/chat/chat-collapsible-key";
-import { buildChatFindRows } from "@/components/chat/chat-find";
+import {
+  buildChatFindRows,
+  buildSubagentChatFindRows,
+} from "@/components/chat/chat-find";
+import { SubagentChatView } from "@/components/chat/subagent-chat-view";
+import { subagentCardPath } from "@/components/chat/segments/subagent-display";
+import { OpenSubagentAsChatContext } from "@/components/chat/segments/subagent-open-as-chat";
 import { AssistantSegment } from "@/components/chat/chat-message-assistant-body";
 import {
   useRenderedMessages,
@@ -400,5 +413,142 @@ describe.each([
     expect(anchors).toHaveLength(1);
     expect(anchors[0].textContent).toContain("first plot");
     expect(anchors[0].textContent).toContain("Image 2");
+  });
+});
+
+// Open as chat over cards the real import produced: a Skill that owns a nested
+// Skill and a sibling Skill, each returning its own images. The view is driven
+// through the same stateful handlers the tile uses, so selecting a card and
+// stepping back are real navigation.
+function skillBlocks(): ReadonlyArray<ContentBlock> {
+  const prose = (id: string, parent: string): ContentBlock => ({
+    type: "text",
+    blockId: id,
+    status: "completed",
+    timestamp: 2002,
+    text: `${id} prose`,
+    providerNotice: null,
+    parentBlockId: parent,
+  });
+  return [
+    toolBlock(SKILL_ID, "Skill", null, [image("root plot")]),
+    prose("root-prose", SKILL_ID),
+    toolBlock("inner-skill", "Skill", SKILL_ID, [image("inner plot")]),
+    prose("inner-prose", "inner-skill"),
+    toolBlock("sib-skill", "Skill", SKILL_ID, [image("sibling plot")]),
+    prose("sib-prose", "sib-skill"),
+  ];
+}
+
+function StatefulChatView(props: {
+  readonly messages: ReadonlyArray<ChatMessageModel>;
+  readonly initialOpenId: string;
+}) {
+  const [openId, setOpenId] = useState<string | null>(props.initialOpenId);
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const transcriptRef = useRef<HTMLElement | null>(null);
+  return (
+    <Providers>
+      <OpenSubagentAsChatContext.Provider value={setOpenId}>
+        <SubagentChatView
+          drillIn={{
+            openId,
+            open: setOpenId,
+            close: () => setOpenId(null),
+          }}
+          messages={props.messages}
+          bottomInset={0}
+          scrollRef={scrollRef}
+          transcriptRef={transcriptRef}
+        />
+      </OpenSubagentAsChatContext.Provider>
+    </Providers>
+  );
+}
+
+function openCard(
+  messages: ReadonlyArray<ChatMessageModel>,
+  id: string,
+): SubagentSegment {
+  const card = subagentCardPath(messages, id)?.at(-1);
+  if (card === undefined) throw new Error(`Expected card ${id}`);
+  return card;
+}
+
+function viewCaptions(): ReadonlyArray<string> {
+  return Array.from(
+    screen.getByTestId("subagent-chat-view").querySelectorAll("figcaption"),
+  ).map((node) => node.textContent);
+}
+
+function galleryUnits(card: SubagentSegment, caption: string) {
+  return buildSubagentChatFindRows(card, TILE_INSTANCE_ID)[0].units.filter(
+    (unit) => unit.text.includes(caption),
+  );
+}
+
+describe.each([
+  ["a replayed turn", persisted],
+  ["a live turn", live],
+])("Open as chat over a real Skill import, in %s", (_label, input) => {
+  it("selects, nests and steps back with each card's own gallery and Find rows", () => {
+    const row = renderedRow(input(skillBlocks()));
+    const messages = [row];
+    expect(openCard(messages, SKILL_ID).children.map((c) => c.id)).toEqual([
+      "root-prose",
+      "inner-skill",
+      "sib-skill",
+    ]);
+
+    render(
+      <StatefulChatView messages={messages} initialOpenId="inner-skill" />,
+    );
+
+    // The nested card, selected: its own gallery only, and one Find unit.
+    expect(viewCaptions()).toEqual(["inner plot"]);
+    expect(galleryUnits(openCard(messages, "inner-skill"), "plot")).toEqual([
+      expect.objectContaining({ text: "inner plot", owningChain: [] }),
+    ]);
+
+    // Back one level, through the breadcrumb: the Skill's own gallery leads.
+    // Both crumbs are named "Skill"; the first is the ancestor.
+    fireEvent.click(screen.getAllByRole("button", { name: "Skill" })[0]);
+    expect(viewCaptions()).toContain("root plot");
+    const rootUnits = galleryUnits(openCard(messages, SKILL_ID), "plot");
+    const unitFor = (caption: string) => {
+      const matches = rootUnits.filter((unit) => unit.text === caption);
+      expect(matches).toHaveLength(1);
+      return matches[0];
+    };
+    // Each card's gallery is its own unit, and each is mounted exactly once in
+    // the root view (a nested gallery is an always-visible footer there).
+    const galleryUnitIds = ["root plot", "inner plot", "sibling plot"].map(
+      (caption) => {
+        const unit = unitFor(caption);
+        const anchors = screen
+          .getByTestId("subagent-chat-view")
+          .querySelectorAll(`[data-chat-find-unit="${unit.unitId}"]`);
+        expect(anchors).toHaveLength(1);
+        expect(anchors[0].textContent).toContain(caption);
+        return unit.unitId;
+      },
+    );
+    expect(new Set(galleryUnitIds).size).toBe(3);
+    expect(unitFor("root plot").owningChain).toEqual([]);
+
+    // Down into the sibling from the parent's view: only its gallery shows.
+    const sibling = document.querySelector<HTMLElement>(
+      '[data-subagent-open-as-chat="sib-skill"]',
+    );
+    if (sibling === null) throw new Error("Expected the sibling's control");
+    fireEvent.click(sibling);
+    expect(viewCaptions()).toEqual(["sibling plot"]);
+    expect(galleryUnits(openCard(messages, "sib-skill"), "plot")).toEqual([
+      expect.objectContaining({ text: "sibling plot", owningChain: [] }),
+    ]);
+
+    // Back to the transcript: the view is gone.
+    fireEvent.click(screen.getByTestId("subagent-chat-back"));
+    expect(screen.queryByTestId("subagent-chat-view")).toBeNull();
   });
 });

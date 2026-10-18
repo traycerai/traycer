@@ -1,13 +1,18 @@
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { createRef, type RefObject } from "react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ImageGenerationResult } from "@traycer/protocol/persistence/epic/content-blocks";
 import { ChatExpansionTestProviders } from "@/components/chat/__tests__/chat-expansion-test-providers";
 import { makeMessage } from "@/components/chat/__tests__/chat-message-fixtures";
 import { subagentCardPath } from "@/components/chat/segments/subagent-display";
 import {
+  buildSubagentChatFindRows,
   chatFindSubagentChatResultUnitId,
   chatFindSubagentChatTaskUnitId,
 } from "@/components/chat/chat-find";
+import { ChatFindHighlighter } from "@/components/chat/chat-find-highlighter";
+import { findTextMatches } from "@/lib/find-engine/find-text";
 import {
   OpenSubagentAsChatContext,
   type SubagentDrillIn,
@@ -19,6 +24,32 @@ import type {
   SubagentChildSegment,
   SubagentSegment,
 } from "@/stores/composer/chat-store";
+
+const blobStates = vi.hoisted(() => ({
+  byHash: {} as Record<
+    string,
+    {
+      status: "loading" | "ready" | "unavailable";
+      src: string | null;
+      mediaType: string;
+    }
+  >,
+}));
+
+vi.mock(
+  "@/lib/attachments/use-attachment-blob-src",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@/lib/attachments/use-attachment-blob-src")
+    >()),
+    useChatAttachmentBlobSrc: (hash: string) =>
+      blobStates.byHash[hash] ?? {
+        status: "ready",
+        src: "blob:http://localhost/a",
+        mediaType: "image/png",
+      },
+  }),
+);
 
 function card(
   id: string,
@@ -392,5 +423,191 @@ describe("<SubagentChatView />", () => {
       expect(wrapper).not.toBeNull();
       expect(wrapper?.textContent).toContain("Final answer");
     });
+  });
+});
+
+const TILE_INSTANCE_ID = "subagent-chat-view-tile";
+
+function toolImage(
+  alt: string | null,
+  attachmentHash: string,
+): ImageGenerationResult {
+  return {
+    attachmentHash,
+    mediaType: "image/png",
+    byteLength: 256,
+    width: null,
+    height: null,
+    alt,
+    revisedPrompt: null,
+    filePath: null,
+  };
+}
+
+function withImages(
+  base: SubagentSegment,
+  toolImageResults: ReadonlyArray<ImageGenerationResult>,
+): SubagentSegment {
+  return { ...base, toolImageResults };
+}
+
+function renderImageView(
+  openId: string,
+  messages: ReadonlyArray<ChatMessageModel>,
+) {
+  return render(
+    <QueryClientProvider client={new QueryClient()}>
+      <ChatExpansionTestProviders tileInstanceId={TILE_INSTANCE_ID}>
+        <SubagentChatView
+          drillIn={{ openId, open: vi.fn(), close: vi.fn() }}
+          messages={messages}
+          bottomInset={0}
+          scrollRef={createRef<HTMLDivElement>()}
+          transcriptRef={createRef<HTMLElement>()}
+        />
+      </ChatExpansionTestProviders>
+    </QueryClientProvider>,
+  );
+}
+
+function captionsIn(root: ParentNode): ReadonlyArray<string> {
+  return Array.from(root.querySelectorAll("figcaption")).map(
+    (node) => node.textContent,
+  );
+}
+
+function rowsFor(openCard: SubagentSegment) {
+  return buildSubagentChatFindRows(openCard, TILE_INSTANCE_ID)[0].units;
+}
+
+const NO_CONVERSATION = "No conversation recorded for this subagent.";
+
+describe("<SubagentChatView /> on a parent tool that returned images", () => {
+  beforeEach(() => {
+    blobStates.byHash = {};
+  });
+
+  let highlighter: ChatFindHighlighter | null = null;
+
+  afterEach(() => {
+    highlighter?.dispose();
+    highlighter = null;
+    cleanup();
+    vi.unstubAllGlobals();
+  });
+
+  it("shows the ordered captioned images with the task and the result", () => {
+    const parent = withImages(
+      { ...card("skill", "Skill", []), result: "Skill finished" },
+      [toolImage("first plot", "hash-a"), toolImage(null, "hash-a")],
+    );
+    const view = renderImageView("skill", [
+      { ...makeMessage(1, "assistant"), segments: [parent] },
+    ]);
+
+    expect(captionsIn(view.container)).toEqual(["first plot", "Image 2"]);
+    expect(screen.getAllByRole("img")).toHaveLength(2);
+    expect(screen.getByText("Skill task")).toBeTruthy();
+    expect(screen.getByText("Skill finished")).toBeTruthy();
+  });
+
+  it("projects the caption unit that the mounted view anchors, owned by no collapsible", () => {
+    const parent = withImages(card("skill", "Skill", []), [
+      toolImage("first plot", "hash-a"),
+      toolImage(null, "hash-a"),
+    ]);
+    const view = renderImageView("skill", [
+      { ...makeMessage(1, "assistant"), segments: [parent] },
+    ]);
+
+    const unit = rowsFor(parent).find(
+      (candidate) =>
+        candidate.text.includes("first plot") &&
+        candidate.text.includes("Image 2"),
+    );
+    if (unit === undefined) throw new Error("Expected a caption unit");
+    expect(unit.owningChain).toEqual([]);
+    const anchors = view.container.querySelectorAll(
+      `[data-chat-find-unit="${unit.unitId}"]`,
+    );
+    expect(anchors).toHaveLength(1);
+    expect(captionsIn(anchors[0])).toEqual(["first plot", "Image 2"]);
+  });
+
+  it("paints Find ranges on the captions only, never on a loading, missing or undecoded image", () => {
+    const painted = new Map<string, { readonly ranges: readonly Range[] }>();
+    vi.stubGlobal("CSS", {
+      highlights: {
+        set: (name: string, highlight: { readonly ranges: readonly Range[] }) =>
+          painted.set(name, highlight),
+        delete: (name: string) => painted.delete(name),
+      },
+    });
+    vi.stubGlobal(
+      "Highlight",
+      class {
+        readonly ranges: readonly Range[];
+        constructor(...ranges: readonly Range[]) {
+          this.ranges = ranges;
+        }
+      },
+    );
+    blobStates.byHash = {
+      "hash-waiting": { status: "loading", src: null, mediaType: "image/png" },
+      "hash-gone": { status: "unavailable", src: null, mediaType: "image/png" },
+    };
+    const parent = withImages(card("skill", "Skill", []), [
+      toolImage(null, "hash-ready"),
+      toolImage(null, "hash-waiting"),
+      toolImage(null, "hash-gone"),
+      toolImage(null, "hash-ready"),
+    ]);
+    const view = renderImageView("skill", [
+      { ...makeMessage(1, "assistant"), segments: [parent] },
+    ]);
+    const unit = rowsFor(parent).find((candidate) =>
+      candidate.text.includes("Image 4"),
+    );
+    if (unit === undefined) throw new Error("Expected a caption unit");
+    const expected = findTextMatches(unit.text, "image", false).length;
+
+    highlighter = new ChatFindHighlighter();
+    expect(
+      highlighter.paint({
+        root: view.container,
+        query: "image",
+        matchCase: false,
+        activeMatchIndex: 2,
+        scrollActiveIntoView: false,
+      }),
+    ).toBe(true);
+
+    const ranges = [...painted.entries()]
+      .filter(([name]) => name.startsWith("traycer-find-"))
+      .flatMap(([, highlight]) => [...highlight.ranges]);
+    expect(ranges).toHaveLength(expected);
+    for (const range of ranges) {
+      expect(
+        range.startContainer.parentElement?.closest("figcaption"),
+      ).not.toBeNull();
+    }
+  });
+
+  it("drops the empty-conversation placeholder for an image-only card and keeps it for an empty one", () => {
+    const imageOnly = withImages(card("skill", "Skill", []), [
+      toolImage("first plot", "hash-a"),
+    ]);
+    const empty = card("blank", "blank-agent", []);
+    const messages = [
+      { ...makeMessage(1, "assistant"), segments: [imageOnly, empty] },
+    ];
+
+    renderImageView("skill", messages);
+    expect(screen.queryByText(NO_CONVERSATION)).toBeNull();
+    expect(screen.getByText("Skill task")).toBeTruthy();
+    cleanup();
+
+    renderImageView("blank", messages);
+    expect(screen.getByText(NO_CONVERSATION)).toBeTruthy();
   });
 });

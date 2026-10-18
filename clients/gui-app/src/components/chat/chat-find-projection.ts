@@ -231,6 +231,7 @@ export function buildSubagentChatFindRows(
                 text: markdownToChatSearchText(shownResult),
                 owningChain: [],
               }),
+          toolImageGallerySearchUnit(card.id, card.toolImageResults, []),
         ]),
       ],
     },
