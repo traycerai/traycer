@@ -607,6 +607,62 @@ describe("EpicAccessCoordinator", () => {
     ]);
   });
 
+  it("removes a split whole when its sides fall in different deletion scopes of one batch", async () => {
+    // This window holds its epics on "test-host" (`openStoreForTest`'s).
+    useSelectionAuthorityStore.setState({ effectiveHostId: "test-host" });
+    useAuthStore.getState().setSignedIn(
+      {
+        userId: "user-1",
+        userName: "Test User",
+        email: "test@example.com",
+        avatarUrl: null,
+      },
+      { userId: "user-1", username: "test-user" },
+      [],
+    );
+    registerSession("epic-left");
+    registerSession("epic-right");
+    seedTabs(
+      [
+        { tabId: "tab-left", epicId: "epic-left", name: "Left" },
+        { tabId: "tab-right", epicId: "epic-right", name: "Right" },
+      ],
+      "tab-left",
+    );
+    const left: TabRef = { kind: "epic", id: "tab-left" };
+    const right: TabRef = { kind: "epic", id: "tab-right" };
+    seedSplitOfEpics(left, right, left);
+
+    const { router } = renderCoordinatorAt("/");
+    await waitFor(() => expect(router.state.location.pathname).toBe("/"));
+    const handleEpicAccessLossSpy = vi.spyOn(
+      tabCommandCoordinator,
+      "handleEpicAccessLoss",
+    );
+
+    // One batch, deleted on this window's host: the left Task from the
+    // account, the right one on this host alone. Published as the deleting
+    // window does, a version 2 for this window and a version 1 copy.
+    dispatchScopedDeletedEpicStorageEvent({
+      hostId: "test-host",
+      epicIds: ["epic-left", "epic-right"],
+      hostScopedEpicIds: ["epic-right"],
+      sequence: 51,
+    });
+
+    await waitFor(() =>
+      expect(useEpicCanvasStore.getState().openTabOrder).toEqual([]),
+    );
+    // One transaction over both sides, so the split goes, not two
+    // placeholders.
+    expect(useTabsStore.getState().items).toEqual([]);
+    expect(handleEpicAccessLossSpy).toHaveBeenCalledTimes(1);
+    expect(handleEpicAccessLossSpy).toHaveBeenCalledWith([
+      "epic-left",
+      "epic-right",
+    ]);
+  });
+
   it("T10: clears composer run settings for every batch epicId, including one without a resident tab", async () => {
     useAuthStore.getState().setSignedIn(
       {
@@ -1026,33 +1082,45 @@ function dispatchScopedDeletedEpicStorageEvent(notice: {
   readonly hostScopedEpicIds: ReadonlyArray<string>;
   readonly sequence: number;
 }): void {
-  // As the deleting window publishes it: the account-wide ids as version 1,
-  // the host-scoped ones as version 2, each its own message.
+  // As the deleting window publishes it: the whole batch as version 2, then
+  // the account-wide ids as a version 1 tagged with the same batch, for
+  // windows that predate version 2 (this window skips it).
   const hostScoped = new Set(notice.hostScopedEpicIds);
+  const batchId = `other-window:batch:${String(notice.sequence)}`;
+  const common = {
+    type: "epic-deleted",
+    originId: "other-window",
+    createdAt: Date.now(),
+    hostId: notice.hostId,
+    userId: "user-1",
+    batchId,
+    epicTitlesById: {},
+  };
+  const accountWideIds = notice.epicIds.filter((id) => !hostScoped.has(id));
   const messages = [
     {
-      version: 1,
+      ...common,
+      version: 2,
       sequence: notice.sequence,
-      epicIds: notice.epicIds.filter((id) => !hostScoped.has(id)),
+      epicIds: notice.epicIds,
+      hostScopedEpicIds: [...hostScoped],
     },
-    { version: 2, sequence: notice.sequence + 1000, epicIds: [...hostScoped] },
+    ...(accountWideIds.length > 0
+      ? [
+          {
+            ...common,
+            version: 1,
+            sequence: notice.sequence + 1000,
+            epicIds: accountWideIds,
+          },
+        ]
+      : []),
   ];
   for (const message of messages) {
-    if (message.epicIds.length === 0) continue;
     window.dispatchEvent(
       new StorageEvent("storage", {
         key: DELETED_EPIC_NOTIFICATION_STORAGE_KEY,
-        newValue: JSON.stringify({
-          type: "epic-deleted",
-          version: message.version,
-          originId: "other-window",
-          sequence: message.sequence,
-          createdAt: Date.now(),
-          hostId: notice.hostId,
-          userId: "user-1",
-          epicIds: message.epicIds,
-          epicTitlesById: {},
-        }),
+        newValue: JSON.stringify(message),
       }),
     );
   }

@@ -965,6 +965,42 @@ export function useEpicDeleteChatInBatch(): UseMutationResult<
   return useEpicDeleteChatMutation("aggregate");
 }
 
+/**
+ * Settle a chat delete's provisional cloud-row suppression from the fields
+ * the answer actually has. With a publication identity, confirm it under the
+ * enacted owner: the host's identity replaces an incorrect provisional
+ * mapping rather than confirming both rows. Without one, keep the
+ * provisional key only when the owner is the row's own host, which that key
+ * already names (a v1.0 peer, or a host without a composed publisher). When
+ * the owner is another host (authority moved, or a stand-in named another
+ * owner), the key names the row's host, whose same-id chat may survive, and
+ * it cannot be re-keyed without the identity: drop it.
+ */
+function settleChatDeletionSuppression(
+  data: Pick<DeleteChatResponse, "publicationChatId">,
+  ownerHostId: string | null,
+  ctx: Pick<
+    DeleteChatMutationContext,
+    "cloudDeletionToken" | "hostId" | "viewerUserId"
+  >,
+  epicId: string,
+): void {
+  if (
+    data.publicationChatId !== null &&
+    ownerHostId !== null &&
+    ctx.viewerUserId !== null
+  ) {
+    confirmCloudChatDeletion(ctx.cloudDeletionToken, {
+      taskId: epicId,
+      ownerUserId: ctx.viewerUserId,
+      ownerHostId,
+      chatId: data.publicationChatId,
+    });
+    return;
+  }
+  settleCloudChatDeletion(ctx.cloudDeletionToken, ownerHostId === ctx.hostId);
+}
+
 function useEpicDeleteChatMutation(
   failurePresentation: "individual" | "aggregate",
 ): UseMutationResult<
@@ -1036,24 +1072,8 @@ function useEpicDeleteChatMutation(
         // to the row (no answer exists yet); the confirm below re-keys it.
         const ownerHostId = enactedOwnerHostId(data, ctx);
         // Confirm BEFORE removing local records: otherwise their stale cloud
-        // copy becomes an unfolded row. The host's identity also replaces an
-        // incorrect provisional mapping, rather than confirming both rows.
-        if (
-          data.publicationChatId !== null &&
-          ownerHostId !== null &&
-          ctx.viewerUserId !== null
-        ) {
-          confirmCloudChatDeletion(ctx.cloudDeletionToken, {
-            taskId: variables.epicId,
-            ownerUserId: ctx.viewerUserId,
-            ownerHostId,
-            chatId: data.publicationChatId,
-          });
-        } else {
-          // A v1.0 peer, or a host without a composed publisher, cannot
-          // report its publication identity.
-          settleCloudChatDeletion(ctx.cloudDeletionToken, true);
-        }
+        // copy becomes an unfolded row.
+        settleChatDeletionSuppression(data, ownerHostId, ctx, variables.epicId);
         // No active host at mutate time means nothing could have acquired a
         // session under this chat's identity either, so there is nothing to
         // force-release - and guessing a host here is exactly the

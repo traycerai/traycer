@@ -95,7 +95,10 @@ describe("deleted epic events", () => {
       epicTitlesById: { "epic-1": "Planning" },
     });
 
-    const broadcastMessage = firstBroadcastChannel().postedMessages[0];
+    // Storage keeps the last message written; the last one broadcast is it.
+    const broadcastMessage = MockBroadcastChannel.instances
+      .flatMap((channel) => channel.postedMessages)
+      .at(-1);
     const storedValue = window.localStorage.getItem(
       DELETED_EPIC_NOTIFICATION_STORAGE_KEY,
     );
@@ -127,6 +130,7 @@ describe("deleted epic events", () => {
       userId: "user-1",
       epicIds: ["epic-1"],
       hostScopedEpicIds: [],
+      carriedByBatch: false,
       epicTitlesById: { "epic-1": "Planning" },
     } satisfies DeletedEpicNotification;
 
@@ -166,7 +170,7 @@ describe("deleted epic events", () => {
       expect(readAsAccountWide).toEqual(["epic-cloud"]);
     });
 
-    it("reaches a current window with each id in its own scope", () => {
+    it("reaches a current window as ONE notification carrying both scopes", () => {
       const listener = vi.fn<(notification: DeletedEpicNotification) => void>();
       currentUnsubscribe = subscribeDeletedEpicNotifications(listener);
       // Posted on this window's own channel, which never echoes to itself;
@@ -180,43 +184,60 @@ describe("deleted epic events", () => {
         });
       }
 
-      const received = listener.mock.calls.map(([notification]) => ({
-        epicIds: notification.epicIds,
-        hostScopedEpicIds: notification.hostScopedEpicIds,
-        epicTitlesById: notification.epicTitlesById,
-      }));
-      expect(received).toEqual([
-        {
-          epicIds: ["epic-cloud"],
-          hostScopedEpicIds: [],
-          epicTitlesById: { "epic-cloud": "Cloud" },
-        },
-        {
-          epicIds: ["epic-local"],
-          hostScopedEpicIds: ["epic-local"],
-          epicTitlesById: { "epic-local": "Local" },
-        },
-      ]);
+      // One teardown transaction for the batch: the version-1 copy for
+      // scopeless windows is skipped, so the split it might straddle is
+      // removed whole.
+      expect(listener).toHaveBeenCalledTimes(1);
+      const [notification] = listener.mock.calls[0];
+      expect(notification.epicIds).toEqual(["epic-cloud", "epic-local"]);
+      expect(notification.hostScopedEpicIds).toEqual(["epic-local"]);
+      expect(notification.epicTitlesById).toEqual({
+        "epic-cloud": "Cloud",
+        "epic-local": "Local",
+      });
     });
   });
 
-  it("sends an account-wide deletion as the one message every window reads", () => {
-    publishDeletedEpicNotification({
-      hostId: "host-1",
-      userId: "user-1",
-      epicIds: ["epic-1", "epic-2"],
-      hostScopedEpicIds: [],
-      epicTitlesById: {},
+  describe("an account-wide deletion", () => {
+    function publishAccountWide(): unknown[] {
+      publishDeletedEpicNotification({
+        hostId: "host-1",
+        userId: "user-1",
+        epicIds: ["epic-1", "epic-2"],
+        hostScopedEpicIds: [],
+        epicTitlesById: {},
+      });
+      return MockBroadcastChannel.instances.flatMap(
+        (channel) => channel.postedMessages,
+      );
+    }
+
+    it("reaches a scopeless window whole", () => {
+      const readAsAccountWide = publishAccountWide().flatMap((message) => {
+        const parsed = scopelessReaderSchema.safeParse(message);
+        return parsed.success ? parsed.data.epicIds : [];
+      });
+
+      expect(readAsAccountWide).toEqual(["epic-1", "epic-2"]);
     });
 
-    const messages = MockBroadcastChannel.instances.flatMap(
-      (channel) => channel.postedMessages,
-    );
-    expect(messages).toHaveLength(1);
-    expect(scopelessReaderSchema.parse(messages[0]).epicIds).toEqual([
-      "epic-1",
-      "epic-2",
-    ]);
+    it("reaches a current window once, every id account-wide", () => {
+      const listener = vi.fn<(notification: DeletedEpicNotification) => void>();
+      currentUnsubscribe = subscribeDeletedEpicNotifications(listener);
+      const messages = publishAccountWide();
+
+      for (const message of messages) {
+        firstBroadcastChannel().dispatchMessage({
+          ...readObject(message),
+          originId: "other-window",
+        });
+      }
+
+      expect(listener).toHaveBeenCalledTimes(1);
+      const [notification] = listener.mock.calls[0];
+      expect(notification.epicIds).toEqual(["epic-1", "epic-2"]);
+      expect(notification.hostScopedEpicIds).toEqual([]);
+    });
   });
 });
 

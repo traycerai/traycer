@@ -26,19 +26,33 @@ const deletedEpicNotificationFields = {
  * Two versions on one channel, because a deletion's scope changes what a
  * receiver may tear down and a window that predates scopes reads only `1`:
  *
- * - `1`: every `epicIds` entry was deleted from the account. What every
- *   window has always read.
- * - `2`: every `epicIds` entry was deleted on `hostId` alone (a local-homed
- *   Task), whose id another host may still serve. A window that predates it
+ * - `2`: the whole deletion batch in one message, `hostScopedEpicIds` naming
+ *   the ids deleted on `hostId` alone (a local-homed Task, whose id another
+ *   host may still serve) and the rest deleted from the account. A current
+ *   window applies it as one teardown transaction. A window that predates it
  *   rejects the version and ignores the message, rather than reading the
- *   ids as account-wide and closing a same-id Task that still exists.
- *
- * A deletion with both scopes is published as one message of each.
+ *   host-scoped ids as account-wide and closing a same-id Task.
+ * - `1`: account-wide ids only, what every window has always read. A current
+ *   publisher sends one beside each `2` for the windows that predate it,
+ *   tagged with the same `batchId`, and a current window ignores a tagged
+ *   one: its `2` already carried the batch, and applying the batch as two
+ *   transactions would leave a split whose sides fell in different halves
+ *   with two placeholders instead of removing it. An untagged `1` comes from
+ *   a publisher that predates `2`, and is applied.
  */
 const deletedEpicNotificationSchema = z
   .discriminatedUnion("version", [
-    z.object({ ...deletedEpicNotificationFields, version: z.literal(1) }),
-    z.object({ ...deletedEpicNotificationFields, version: z.literal(2) }),
+    z.object({
+      ...deletedEpicNotificationFields,
+      version: z.literal(1),
+      batchId: z.string().min(1).optional(),
+    }),
+    z.object({
+      ...deletedEpicNotificationFields,
+      version: z.literal(2),
+      batchId: z.string().min(1),
+      hostScopedEpicIds: z.array(z.string().min(1)),
+    }),
   ])
   .transform((notification) => ({
     ...notification,
@@ -48,15 +62,19 @@ const deletedEpicNotificationSchema = z
         notification.originId,
         notification.sequence,
       ),
-    /** The `epicIds` deleted on `hostId` only: all of them on `2`. */
-    hostScopedEpicIds: notification.version === 2 ? notification.epicIds : [],
+    /** The `epicIds` deleted on `hostId` only; none on `1`. */
+    hostScopedEpicIds:
+      notification.version === 2 ? notification.hostScopedEpicIds : [],
+    /** A `1` whose batch a `2` carries: a current window skips it. */
+    carriedByBatch:
+      notification.version === 1 && notification.batchId !== undefined,
   }));
 
 export type DeletedEpicNotification = z.infer<
   typeof deletedEpicNotificationSchema
 >;
 
-/** A notification as it travels: the scope is the version, not a field. */
+/** A notification as it travels. */
 type DeletedEpicNotificationWire = z.input<
   typeof deletedEpicNotificationSchema
 >;
@@ -87,38 +105,62 @@ export function publishDeletedEpicNotification(
 ): void {
   const epicIds = uniqueStrings(input.epicIds);
   if (epicIds.length === 0) return;
-  const hostScoped = new Set(subsetOf(epicIds, input.hostScopedEpicIds));
-  publishVersion(
-    input,
-    1,
-    epicIds.filter((id) => !hostScoped.has(id)),
-  );
-  publishVersion(input, 2, [...hostScoped]);
+  const hostScopedEpicIds = subsetOf(epicIds, input.hostScopedEpicIds);
+  const hostScoped = new Set(hostScopedEpicIds);
+  const accountWideIds = epicIds.filter((id) => !hostScoped.has(id));
+  sequence += 1;
+  const batchId = `${originId}:batch:${String(sequence)}`;
+  publishWire(input, {
+    version: 2,
+    batchId,
+    epicIds,
+    hostScopedEpicIds,
+  });
+  if (accountWideIds.length > 0) {
+    publishWire(input, { version: 1, batchId, epicIds: accountWideIds });
+  }
 }
 
-function publishVersion(
+function publishWire(
   input: PublishDeletedEpicNotificationInput,
-  version: 1 | 2,
-  epicIds: ReadonlyArray<string>,
+  body:
+    | {
+        readonly version: 2;
+        readonly batchId: string;
+        readonly epicIds: ReadonlyArray<string>;
+        readonly hostScopedEpicIds: ReadonlyArray<string>;
+      }
+    | {
+        readonly version: 1;
+        readonly batchId: string;
+        readonly epicIds: ReadonlyArray<string>;
+      },
 ): void {
-  if (epicIds.length === 0) return;
   sequence += 1;
-  const wire: DeletedEpicNotificationWire = {
+  const common = {
     id: createDeletedEpicNotificationId(sequence),
-    type: "epic-deleted",
-    version,
+    type: "epic-deleted" as const,
     originId,
     sequence,
     createdAt: Date.now(),
     hostId: input.hostId,
     userId: input.userId,
-    epicIds: [...epicIds],
-    epicTitlesById: titlesForEpicIds(epicIds, input.epicTitlesById),
+    batchId: body.batchId,
+    epicIds: [...body.epicIds],
+    epicTitlesById: titlesForEpicIds(body.epicIds, input.epicTitlesById),
   };
+  const wire: DeletedEpicNotificationWire =
+    body.version === 2
+      ? {
+          ...common,
+          version: 2,
+          hostScopedEpicIds: [...body.hostScopedEpicIds],
+        }
+      : { ...common, version: 1 };
   appLogger.debug("[deleted-epic-events] publishing notification", {
     hostId: input.hostId,
-    epicCount: epicIds.length,
-    version,
+    epicCount: body.epicIds.length,
+    version: body.version,
     sequence,
   });
   postBroadcastNotification(wire);
@@ -189,6 +231,7 @@ function handleStorageEvent(event: StorageEvent): void {
 
 function emitIncomingNotification(notification: DeletedEpicNotification): void {
   if (notification.originId === originId) return;
+  if (notification.carriedByBatch) return;
   if (markDuplicateNotificationSeen(notification.id)) return;
   const epicIds = uniqueStrings(notification.epicIds);
   if (epicIds.length === 0) return;
