@@ -530,8 +530,18 @@ describe("a task item reads the same in a mixed list as in a list of tasks", () 
       ["an unchecked task of one extra space", "- x\n- [ ]  ", false, ""],
       // The cold reviewer's input (29162a99): marked trims the last item's
       // no-break space away, the one reader keeps it.
-      ["a checked task of a no-break space", "- x\n- [x]  ", true, " "],
-      ["an unchecked task of a no-break space", "- x\n- [ ]  ", false, " "],
+      [
+        "a checked task of a no-break space",
+        "- x\n- [x] \u00a0",
+        true,
+        "\u00a0",
+      ],
+      [
+        "an unchecked task of a no-break space",
+        "- x\n- [ ] \u00a0",
+        false,
+        "\u00a0",
+      ],
       ["a checked task of an em space", "- x\n- [x] \u2003", true, "\u2003"],
       [
         "a checked task of an ideographic space",
