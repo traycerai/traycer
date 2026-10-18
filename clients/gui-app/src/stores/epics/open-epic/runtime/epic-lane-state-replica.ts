@@ -357,6 +357,7 @@ function filesSliceEq(a: FilesSlice, b: FilesSlice): boolean {
  * written before it stay valid, so a ticket row can arrive with the key absent
  * rather than merely null.
  */
+// The lane schema gates kinds to Markdown until their presentation is supported.
 function projectTombstone(
   record: EpicDeletedArtifactRecord,
 ): DeletedArtifactProjection {
@@ -396,6 +397,7 @@ function buildLaneSlices(rows: readonly HeldLaneRow[]): EpicLaneStateSlices {
     switch (row.kind) {
       case "artifact": {
         const record = row.record;
+        // The lane schema gates kinds to Markdown until their presentation is supported.
         artifactsById[record.id] = {
           id: record.id,
           kind: record.kind,

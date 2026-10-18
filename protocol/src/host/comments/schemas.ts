@@ -1,8 +1,6 @@
 import { z } from "zod";
-import {
-  LatestEpicArtifactKindSchema,
-  commentThreadWireSchema,
-} from "../epic/unary-schemas";
+import { EpicArtifactKindSchemaPreHtml } from "@traycer/protocol/common/registry";
+import { commentThreadWireSchema } from "../epic/unary-schemas";
 import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 
 export const commentThreadStatusFilterSchema = lazySchema(() =>
@@ -41,7 +39,7 @@ export type CommentsListThread = z.infer<typeof commentsListThreadSchema>;
 export const commentsListArtifactSchema = lazySchema(() =>
   z.object({
     artifactPath: z.string(),
-    kind: LatestEpicArtifactKindSchema,
+    kind: EpicArtifactKindSchemaPreHtml,
     title: z.string(),
     warning: z.string().nullable(),
     threads: z.array(commentsListThreadSchema),

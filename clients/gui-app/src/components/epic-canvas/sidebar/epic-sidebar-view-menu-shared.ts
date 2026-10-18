@@ -8,7 +8,7 @@
  * facet values in a different order - would be describing a different view than
  * the one the shared store actually holds.
  */
-import type { EpicArtifactKind } from "@traycer/protocol/common/registry";
+import type { MarkdownArtifactKind } from "@traycer/protocol/common/registry";
 import {
   SORT_DIRECTION,
   SORT_FIELD_LABELS,
@@ -95,7 +95,7 @@ export const ARTIFACT_STATUS_OPTIONS: ReadonlyArray<ArtifactStatusFilter> = [
   ARTIFACT_STATUS.Done,
 ];
 
-export const ARTIFACT_KIND_OPTIONS: ReadonlyArray<EpicArtifactKind> = [
+export const ARTIFACT_KIND_OPTIONS: ReadonlyArray<MarkdownArtifactKind> = [
   "spec",
   "ticket",
   "story",

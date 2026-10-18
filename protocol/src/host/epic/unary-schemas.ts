@@ -15,8 +15,11 @@
  * Allowed dependencies: `zod` and other protocol modules only - this file
  * must stay browser-safe.
  */
-import type { EpicArtifactKind } from "@traycer/protocol/common/registry";
-import { commonRecordRegistry } from "@traycer/protocol/common/registry";
+import type { MarkdownArtifactKind } from "@traycer/protocol/common/registry";
+import {
+  commonRecordRegistry,
+  EpicArtifactKindSchemaPreHtml,
+} from "@traycer/protocol/common/registry";
 import { accountContextSchema } from "@traycer/protocol/common/schemas";
 import {
   agentModeSchema,
@@ -43,11 +46,6 @@ import {
 } from "@traycer/protocol/persistence/epic/images";
 import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 
-export const LatestEpicArtifactKindSchema = getRecordSchema(
-  commonRecordRegistry,
-  "epic-artifact-kind",
-  "latest",
-);
 export const LatestJsonContentSchema = getRecordSchema(
   commonRecordRegistry,
   "json-content",
@@ -1559,7 +1557,7 @@ export type EpicMentionEpicSuggestion = z.infer<
 >;
 
 function epicMentionArtifactSuggestionSchemaFor<
-  const Kind extends EpicArtifactKind,
+  const Kind extends MarkdownArtifactKind,
 >(kind: Kind) {
   return z.object({
     kind: z.literal("epic-artifact"),
@@ -1628,7 +1626,7 @@ export type EpicMentionArtifactSuggestion = z.infer<
  * here rather than hand-rolling the template strings at each call site.
  */
 export function epicArtifactMentionId(
-  kind: EpicArtifactKind,
+  kind: MarkdownArtifactKind,
   epicId: string,
   artifactId: string,
 ): string {
@@ -1636,7 +1634,7 @@ export function epicArtifactMentionId(
 }
 
 export function epicArtifactMentionToken(
-  kind: EpicArtifactKind,
+  kind: MarkdownArtifactKind,
   epicId: string,
   artifactId: string,
 ): string {
@@ -1758,7 +1756,7 @@ export type TeamShareGrant = z.infer<typeof teamShareGrantSchema>;
 
 export const epicArtifactLightSchema = lazySchema(() =>
   z.object({
-    kind: LatestEpicArtifactKindSchema,
+    kind: EpicArtifactKindSchemaPreHtml,
     id: z.string(),
     epicId: z.string(),
     title: z.string(),
@@ -1773,7 +1771,7 @@ export type EpicArtifactLight = z.infer<typeof epicArtifactLightSchema>;
 
 export const epicArtifactLightDeltaSchema = lazySchema(() =>
   z.object({
-    kind: LatestEpicArtifactKindSchema,
+    kind: EpicArtifactKindSchemaPreHtml,
     id: z.string(),
     epicId: z.string(),
     title: z.string().optional(),
@@ -1792,7 +1790,7 @@ export const createArtifactRequestSchema = lazySchema(() =>
   z.object({
     epicId: z.string(),
     parentId: z.string().nullable(),
-    artifactType: LatestEpicArtifactKindSchema,
+    artifactType: EpicArtifactKindSchemaPreHtml,
     title: z.string(),
   }),
 );
@@ -2743,7 +2741,7 @@ export type RevokeEpicCollaboratorResponse = z.infer<
 export const createCommentThreadRequestSchema = lazySchema(() =>
   z.object({
     epicId: z.string(),
-    artifactType: LatestEpicArtifactKindSchema,
+    artifactType: EpicArtifactKindSchemaPreHtml,
     artifactId: z.string(),
     content: LatestJsonContentSchema,
     quotedText: z.string(),
@@ -2765,7 +2763,7 @@ export type CreateCommentThreadResponse = z.infer<
 export const replyToCommentThreadRequestSchema = lazySchema(() =>
   z.object({
     epicId: z.string(),
-    artifactType: LatestEpicArtifactKindSchema,
+    artifactType: EpicArtifactKindSchemaPreHtml,
     artifactId: z.string(),
     threadId: z.string(),
     content: LatestJsonContentSchema,
@@ -2787,7 +2785,7 @@ export type ReplyToCommentThreadResponse = z.infer<
 export const editCommentRequestSchema = lazySchema(() =>
   z.object({
     epicId: z.string(),
-    artifactType: LatestEpicArtifactKindSchema,
+    artifactType: EpicArtifactKindSchemaPreHtml,
     artifactId: z.string(),
     threadId: z.string(),
     commentId: z.string(),
@@ -2804,7 +2802,7 @@ export type EditCommentResponse = z.infer<typeof editCommentResponseSchema>;
 export const deleteCommentRequestSchema = lazySchema(() =>
   z.object({
     epicId: z.string(),
-    artifactType: LatestEpicArtifactKindSchema,
+    artifactType: EpicArtifactKindSchemaPreHtml,
     artifactId: z.string(),
     threadId: z.string(),
     commentId: z.string(),
@@ -2820,7 +2818,7 @@ export type DeleteCommentResponse = z.infer<typeof deleteCommentResponseSchema>;
 export const setCommentThreadResolvedRequestSchema = lazySchema(() =>
   z.object({
     epicId: z.string(),
-    artifactType: LatestEpicArtifactKindSchema,
+    artifactType: EpicArtifactKindSchemaPreHtml,
     artifactId: z.string(),
     threadId: z.string(),
     resolved: z.boolean(),
@@ -2842,7 +2840,7 @@ export type SetCommentThreadResolvedResponse = z.infer<
 export const deleteCommentThreadRequestSchema = lazySchema(() =>
   z.object({
     epicId: z.string(),
-    artifactType: LatestEpicArtifactKindSchema,
+    artifactType: EpicArtifactKindSchemaPreHtml,
     artifactId: z.string(),
     threadId: z.string(),
   }),
@@ -2904,7 +2902,7 @@ export type CommentThreadWire = z.infer<typeof commentThreadWireSchema>;
 export const listCommentThreadsRequestSchema = lazySchema(() =>
   z.object({
     epicId: z.string(),
-    artifactType: LatestEpicArtifactKindSchema,
+    artifactType: EpicArtifactKindSchemaPreHtml,
     artifactId: z.string(),
   }),
 );
@@ -2943,7 +2941,7 @@ export type ResolveArtifactByPathRequest = z.infer<
 export const resolveArtifactByPathResultSchema = lazySchema(() =>
   z.object({
     artifactId: z.string(),
-    kind: LatestEpicArtifactKindSchema,
+    kind: EpicArtifactKindSchemaPreHtml,
   }),
 );
 export type ResolveArtifactByPathResult = z.infer<
@@ -2992,7 +2990,7 @@ export type SearchArtifactsFields = z.infer<typeof searchArtifactsFieldsSchema>;
  */
 export const searchArtifactsFiltersSchema = lazySchema(() =>
   z.object({
-    kinds: z.array(LatestEpicArtifactKindSchema).nullable(),
+    kinds: z.array(EpicArtifactKindSchemaPreHtml).nullable(),
     statuses: z.array(z.number().int()).nullable(),
     subtreePath: z
       .string()
@@ -3073,7 +3071,7 @@ export type SearchArtifactSnippet = z.infer<typeof searchArtifactSnippetSchema>;
 export const searchArtifactHitSchema = lazySchema(() =>
   z.object({
     artifactId: z.string(),
-    kind: LatestEpicArtifactKindSchema,
+    kind: EpicArtifactKindSchemaPreHtml,
     title: z.string(),
     status: z.number().int().nullable(),
     relativePath: z.string(),

@@ -1,7 +1,7 @@
 import { useCallback, useRef, useState, type Ref } from "react";
 import { MoreHorizontal, CheckCircle2, RotateCcw, Trash2 } from "lucide-react";
 import {
-  type EpicArtifactKind,
+  type MarkdownArtifactKind,
   type JsonContent,
 } from "@traycer/protocol/common/registry";
 import type { CommentThreadWire } from "@traycer/protocol/host/epic/unary-schemas";
@@ -38,7 +38,7 @@ export interface CommentThreadCardProps {
    *  session's client under the sidebar. Passed rather than read here so the
    *  card stays mountable from a tile too (D15). */
   readonly hostClient: HostClient<HostRpcRegistry> | null;
-  readonly artifactType: EpicArtifactKind;
+  readonly artifactType: MarkdownArtifactKind;
   readonly artifactId: string;
   readonly thread: CommentThreadWire;
   /** Logged-in user id; resolved upstream from the auth profile against the

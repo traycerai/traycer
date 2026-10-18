@@ -1,4 +1,7 @@
-import { commonRecordRegistry } from "@traycer/protocol/common/registry";
+import {
+  commonRecordRegistry,
+  EpicArtifactKindSchemaPreHtml,
+} from "@traycer/protocol/common/registry";
 import { providerWorkspaceSchema } from "@traycer/protocol/common/workspace-association";
 import {
   DEFAULT_ACCOUNT_CONTEXT,
@@ -83,15 +86,6 @@ const attachmentMentionAttrsSchema = getRecordSchema(
 const jsonContentSchema = getRecordSchema(
   commonRecordRegistry,
   "json-content",
-  "latest",
-);
-
-// Canonical artifact-kind vocabulary, reused for the `artifact_operation` event
-// so the wire kind matches the persisted block kind (both resolve from the same
-// `epic-artifact-kind` registry record).
-const artifactOperationKindSchema = getRecordSchema(
-  commonRecordRegistry,
-  "epic-artifact-kind",
   "latest",
 );
 
@@ -1257,7 +1251,7 @@ export const artifactOperationEventSchema = lazySchema(() =>
     ...baseRuntimeEventFields,
     type: z.literal("artifact_operation"),
     operation: artifactOperationActionSchema,
-    kind: artifactOperationKindSchema,
+    kind: EpicArtifactKindSchemaPreHtml,
     artifactId: z.string(),
     title: z.string().nullable().optional(),
     // Merged-change snapshot refs (first-before → last-after) so the card's diff

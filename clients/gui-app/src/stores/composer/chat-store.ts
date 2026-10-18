@@ -54,7 +54,7 @@ export type {
 } from "@traycer/protocol/persistence/epic/content-blocks";
 import type { Attachment } from "@/lib/composer/types";
 import type {
-  EpicArtifactKind,
+  MarkdownArtifactKind,
   JsonContent,
 } from "@traycer/protocol/common/registry";
 import type {
@@ -403,7 +403,7 @@ export interface ArtifactOperationSegment {
   id: string;
   kind: "artifact_operation";
   operation: ArtifactOperationAction;
-  artifactKind: EpicArtifactKind;
+  artifactKind: MarkdownArtifactKind;
   artifactId: string;
   title: string | null;
   change: ArtifactSegmentChange | null;
@@ -417,7 +417,7 @@ export interface ArtifactOperationSegment {
  */
 export interface ArtifactChangeRow {
   artifactId: string | null;
-  artifactKind: EpicArtifactKind | null;
+  artifactKind: MarkdownArtifactKind | null;
   title: string | null;
   operation: CheckpointFileOperation;
   filePath: string;

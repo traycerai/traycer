@@ -1,4 +1,7 @@
-import { commonRecordRegistry } from "@traycer/protocol/common/registry";
+import {
+  commonRecordRegistry,
+  EpicArtifactKindSchemaPreHtml,
+} from "@traycer/protocol/common/registry";
 import { getRecordSchema } from "@traycer/protocol/framework/index";
 import { managedCommandStatusSchema } from "@traycer/protocol/host/managed-command/unary-schemas";
 import {
@@ -84,16 +87,6 @@ const harnessIdSchemaPreReasonix = lazySchema(() =>
     "omp",
     "huggingface",
   ]),
-);
-
-// Canonical artifact-kind vocabulary (spec / ticket / story / review), shared
-// with the artifact metadata + tombstone schemas and the GUI node registries.
-// Reused here (not re-spelled) so the `artifact_operation` block can never drift
-// from the kinds the rest of the system recognizes.
-const artifactKindSchema = getRecordSchema(
-  commonRecordRegistry,
-  "epic-artifact-kind",
-  "latest",
 );
 
 // Durable provider-generated notice (Codex model reroute / safety
@@ -2333,7 +2326,7 @@ export const artifactOperationBlockSchema = lazySchema(() =>
     ...baseBlockFields,
     type: z.literal("artifact_operation"),
     operation: artifactOperationActionSchema,
-    kind: artifactKindSchema,
+    kind: EpicArtifactKindSchemaPreHtml,
     artifactId: z.string(),
     title: z.string().nullable().default(null),
     // Content-addressed snapshot refs for the artifact's merged change this turn

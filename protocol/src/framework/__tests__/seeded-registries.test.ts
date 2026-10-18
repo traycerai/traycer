@@ -109,6 +109,69 @@ describe("seeded protocol registries", () => {
     });
   });
 
+  it("versions the shared artifact kind as a new record major", () => {
+    expect(
+      Object.keys(commonRecordRegistry["epic-artifact-kind"]).sort(),
+    ).toEqual(["1", "2"]);
+    expect(
+      commonRecordRegistry["epic-artifact-kind"][2].versions[
+        commonRecordRegistry["epic-artifact-kind"][2].latestMinor
+      ].contract.schemaVersion,
+    ).toEqual({ major: 2, minor: 0 });
+
+    for (const kind of ["spec", "ticket", "story", "review"] as const) {
+      expect(
+        loadRecord(commonRecordRegistry, "epic-artifact-kind", kind, {
+          major: 1,
+          minor: 0,
+        }),
+      ).toBe(kind);
+      expect(
+        downgradeRecordAcrossMajors(
+          commonRecordRegistry["epic-artifact-kind"],
+          2,
+          1,
+          kind,
+        ),
+      ).toEqual({ ok: true, value: kind });
+    }
+
+    // Every kind added after 1.0 takes the same refusal. The message stays
+    // kind-neutral because naming the first new kind would misreport every
+    // kind added after it. The schema checks keep the refusal honest: it only
+    // means something while 2.0 accepts the kind and 1.0 rejects it.
+    for (const kind of ["html", "canvas", "file"] as const) {
+      expect(
+        getRecordSchema(
+          commonRecordRegistry,
+          "epic-artifact-kind",
+          "latest",
+        ).safeParse(kind).success,
+      ).toBe(true);
+      expect(
+        getRecordSchema(commonRecordRegistry, "epic-artifact-kind", {
+          major: 1,
+          minor: 0,
+        }).safeParse(kind).success,
+      ).toBe(false);
+      expect(
+        downgradeRecordAcrossMajors(
+          commonRecordRegistry["epic-artifact-kind"],
+          2,
+          1,
+          kind,
+        ),
+      ).toEqual({
+        ok: false,
+        error: {
+          code: "DOWNGRADE_UNSUPPORTED",
+          message:
+            "This artifact kind cannot be represented by epic-artifact-kind record 1.0",
+        },
+      });
+    }
+  });
+
   it("persistence owns the epic, room-metadata, chat-sync and draft-head records", () => {
     expect(Object.keys(persistenceRecordRegistry).sort()).toEqual([
       "chat-head",

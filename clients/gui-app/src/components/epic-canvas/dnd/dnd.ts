@@ -13,7 +13,7 @@ import {
   isManagedCommandOutputTileRef,
   isWorkspaceFileRef,
 } from "@/stores/epics/canvas/types";
-import type { EpicArtifactKind } from "@traycer/protocol/common/registry";
+import type { MarkdownArtifactKind } from "@traycer/protocol/common/registry";
 import { tuiHarnessIdSchema } from "@traycer/protocol/host/index";
 import type { TuiHarnessId } from "@traycer/protocol/persistence/epic/schemas";
 import { isEpicArtifactKind } from "@/lib/artifacts/node-display";
@@ -189,7 +189,7 @@ export interface EpicCanvasChatArtifactDragData {
   readonly viewTabId: string;
   readonly artifact: {
     readonly id: string;
-    readonly type: EpicArtifactKind;
+    readonly type: MarkdownArtifactKind;
     readonly name: string;
     readonly hostId: string;
   };

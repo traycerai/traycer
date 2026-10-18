@@ -1,5 +1,5 @@
 import type { UseQueryResult } from "@tanstack/react-query";
-import { type EpicArtifactKind } from "@traycer/protocol/common/registry";
+import { type MarkdownArtifactKind } from "@traycer/protocol/common/registry";
 import type {
   ListCommentThreadsRequest,
   ListCommentThreadsResponse,
@@ -140,7 +140,7 @@ function commentThreadReadPreflight(
 export function useEpicCommentThreadsForClient(args: {
   readonly client: HostClient<HostRpcRegistry> | null;
   readonly epicId: string;
-  readonly artifactType: EpicArtifactKind;
+  readonly artifactType: MarkdownArtifactKind;
   readonly artifactId: string;
   readonly options: UseEpicCommentThreadsOptions;
 }): UseQueryResult<ListCommentThreadsResponse, HostRpcError> {

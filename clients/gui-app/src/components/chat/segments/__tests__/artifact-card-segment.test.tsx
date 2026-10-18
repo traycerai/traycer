@@ -1,5 +1,5 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import type { EpicArtifactKind } from "@traycer/protocol/common/registry";
+import type { MarkdownArtifactKind } from "@traycer/protocol/common/registry";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ArtifactCardSegment } from "@/components/chat/segments/artifact-card-segment";
 import { readEpicCanvasDragSourceData } from "@/components/epic-canvas/dnd/dnd";
@@ -11,7 +11,7 @@ import type { NavigateNestedFocus } from "@/lib/epic-nested-focus-navigation";
 import { tooltipTextNear } from "@/components/ui/__tests__/tooltip-probe";
 type TestArtifactProjection = {
   readonly id: string;
-  readonly kind: EpicArtifactKind;
+  readonly kind: MarkdownArtifactKind;
   readonly title: string;
   readonly status: number | null;
 };

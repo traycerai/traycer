@@ -8,7 +8,7 @@
  */
 import { ChevronLeft, ChevronRight, ListFilter, RotateCcw } from "lucide-react";
 import { useCallback, useState, type ReactNode } from "react";
-import type { EpicArtifactKind } from "@traycer/protocol/common/registry";
+import type { MarkdownArtifactKind } from "@traycer/protocol/common/registry";
 import { EPIC_NODE_LABELS } from "@/lib/artifacts/node-display";
 import { Button } from "@/components/ui/button";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
@@ -418,7 +418,8 @@ export function ArtifactFilterMenu(props: {
     sort,
     toggleStatus: (status: ArtifactStatusFilter) =>
       toggleArtifactStatus(epicId, status),
-    toggleKind: (kind: EpicArtifactKind) => toggleArtifactKind(epicId, kind),
+    toggleKind: (kind: MarkdownArtifactKind) =>
+      toggleArtifactKind(epicId, kind),
     setRead: (read: ArtifactReadFilter) => setArtifactRead(epicId, read),
     setSortField: (field: SortField) => setArtifactSortField(epicId, field),
     toggleSortDirection: () => toggleArtifactSortDirection(epicId),

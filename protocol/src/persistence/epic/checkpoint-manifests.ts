@@ -1,5 +1,4 @@
-import { commonRecordRegistry } from "@traycer/protocol/common/registry";
-import { getRecordSchema } from "@traycer/protocol/framework/index";
+import { EpicArtifactKindSchemaPreHtml } from "@traycer/protocol/common/registry";
 import { z } from "zod";
 import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 
@@ -9,12 +8,6 @@ export const checkpointFileOperationSchema = lazySchema(() =>
 export type CheckpointFileOperation = z.infer<
   typeof checkpointFileOperationSchema
 >;
-
-const checkpointArtifactKindSchema = getRecordSchema(
-  commonRecordRegistry,
-  "epic-artifact-kind",
-  "latest",
-);
 
 /**
  * Tags a manifest entry whose `filePath` is a Traycer artifact `index.md`. The
@@ -31,7 +24,7 @@ const checkpointArtifactKindSchema = getRecordSchema(
 export const checkpointArtifactTagSchema = lazySchema(() =>
   z.object({
     artifactId: z.string().nullable(),
-    kind: checkpointArtifactKindSchema.nullable(),
+    kind: EpicArtifactKindSchemaPreHtml.nullable(),
     title: z.string().nullable(),
   }),
 );
