@@ -13,6 +13,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { DataRootResolution } from "@traycer/protocol/config/data-root";
 
 type Environment = "dev" | "production";
 
@@ -47,6 +48,40 @@ const osHome = vi.hoisted(() => ({ current: "" }));
 vi.mock("node:os", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:os")>();
   return { ...actual, homedir: () => osHome.current || actual.tmpdir() };
+});
+
+// The moved-data-root guard reads the process's data-root resolution. A test
+// moves the data folder by setting `movedRoot`; null is the default folder.
+const dataRootMock = vi.hoisted(() => ({ movedRoot: null as string | null }));
+vi.mock("@traycer/protocol/config/data-root", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@traycer/protocol/config/data-root")>();
+  const { homedir } = await import("node:os");
+  return {
+    ...actual,
+    currentDataRootResolution: (): DataRootResolution => {
+      const bootstrapDir = actual.dataBootstrapDir(homedir());
+      const movedRoot = dataRootMock.movedRoot;
+      if (movedRoot === null) {
+        return {
+          kind: "default",
+          root: actual.defaultDataRoot(homedir()),
+          bootstrapDir,
+        };
+      }
+      return {
+        kind: "configured",
+        root: movedRoot,
+        bootstrapDir,
+        record: {
+          version: 1,
+          generation: 1,
+          root: movedRoot,
+          migrationId: null,
+        },
+      };
+    },
+  };
 });
 
 vi.mock("../../store/paths", async () => {
@@ -99,6 +134,7 @@ import type {
   HostVersionsManifest,
   RegistryClient,
 } from "../../registry";
+import { config } from "../../config";
 import { CLI_ERROR_CODES, CliError } from "../../runner/errors";
 import { acquireCliLock } from "../../store/cli-lock";
 import {
@@ -2513,6 +2549,210 @@ describe("downloadAndStageHost", () => {
       // Falsification: drop the `request.versionRequest !== null` clause
       // from the downgrade branch and `noOpPlan` reddens to `kind:
       // "downgrade"`.
+    });
+  });
+
+  describe("resolveUpdatePlan while the data folder is moved", () => {
+    const VERSIONS = [
+      { version: "1.0.0", yanked: false },
+      { version: "1.5.0", yanked: false },
+      { version: "2.0.0", yanked: false },
+    ];
+    function registry(latest: string): RegistryClient {
+      return fakeRegistryClient({
+        latest,
+        versions: VERSIONS,
+        downloadGate: null,
+        onDownloadStart: null,
+      });
+    }
+    function listStagingRoot(): string[] {
+      return existsSync(stagingRootFor(ENV))
+        ? readdirSync(stagingRootFor(ENV))
+        : [];
+    }
+
+    afterEach(() => {
+      dataRootMock.movedRoot = null;
+      config.supportedHostVersion = null;
+    });
+
+    it("refuses --allow-downgrade to an explicit older target and stages nothing", async () => {
+      await writeInstall("2.0.0", {});
+      dataRootMock.movedRoot = join(sandboxRoot, "moved-data");
+      const before = snapshotTree(hostHomeFor(ENV));
+
+      await expect(
+        resolveUpdatePlan({
+          environment: ENV,
+          request: {
+            intent: "install",
+            versionRequest: "1.0.0",
+            allowDowngrade: true,
+          },
+          onProgress: noopProgress,
+          registryClient: registry("2.0.0"),
+        }),
+      ).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.HOST_UPDATE_NOT_NEWER,
+      });
+
+      expect(await readHostStagedRecord(ENV)).toBeNull();
+      expect(listStagingRoot()).toEqual([]);
+      expect(snapshotTree(hostHomeFor(ENV))).toEqual(before);
+    });
+
+    it("refuses a registry target over a local-* install", async () => {
+      await writeInstall("local-host-20261017", {});
+      dataRootMock.movedRoot = join(sandboxRoot, "moved-data");
+
+      await expect(
+        resolveUpdatePlan({
+          environment: ENV,
+          request: {
+            intent: "install",
+            versionRequest: null,
+            allowDowngrade: false,
+          },
+          onProgress: noopProgress,
+          registryClient: registry("1.5.0"),
+        }),
+      ).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.HOST_UPDATE_NOT_NEWER,
+      });
+      expect(await readHostStagedRecord(ENV)).toBeNull();
+    });
+
+    it("still plans an upgrade to a comparable newer target", async () => {
+      await writeInstall("1.0.0", {});
+      dataRootMock.movedRoot = join(sandboxRoot, "moved-data");
+
+      const plan = await resolveUpdatePlan({
+        environment: ENV,
+        request: {
+          intent: "install",
+          versionRequest: null,
+          allowDowngrade: false,
+        },
+        onProgress: noopProgress,
+        registryClient: registry("1.5.0"),
+      });
+
+      expect(plan).toMatchObject({ kind: "upgrade", targetVersion: "1.5.0" });
+    });
+
+    it("refuses an upgrade that is above the install but below the stamped supported host", async () => {
+      await writeInstall("1.0.0", {});
+      dataRootMock.movedRoot = join(sandboxRoot, "moved-data");
+      config.supportedHostVersion = "3.0.0";
+
+      await expect(
+        resolveUpdatePlan({
+          environment: ENV,
+          request: {
+            intent: "install",
+            versionRequest: "2.0.0",
+            allowDowngrade: false,
+          },
+          onProgress: noopProgress,
+          registryClient: registry("2.0.0"),
+        }),
+      ).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.HOST_UPDATE_NOT_NEWER,
+        message: expect.stringContaining("needs host 3.0.0"),
+      });
+      expect(await readHostStagedRecord(ENV)).toBeNull();
+    });
+
+    it("control: the same upgrade is planned when the supported host is the target", async () => {
+      await writeInstall("1.0.0", {});
+      dataRootMock.movedRoot = join(sandboxRoot, "moved-data");
+      config.supportedHostVersion = "2.0.0";
+
+      const plan = await resolveUpdatePlan({
+        environment: ENV,
+        request: {
+          intent: "install",
+          versionRequest: "2.0.0",
+          allowDowngrade: false,
+        },
+        onProgress: noopProgress,
+        registryClient: registry("2.0.0"),
+      });
+
+      expect(plan).toMatchObject({ kind: "upgrade", targetVersion: "2.0.0" });
+    });
+
+    it("control: a default data folder still plans the explicit downgrade", async () => {
+      await writeInstall("2.0.0", {});
+
+      const plan = await resolveUpdatePlan({
+        environment: ENV,
+        request: {
+          intent: "install",
+          versionRequest: "1.0.0",
+          allowDowngrade: true,
+        },
+        onProgress: noopProgress,
+        registryClient: registry("2.0.0"),
+      });
+
+      expect(plan).toMatchObject({ kind: "downgrade", targetVersion: "1.0.0" });
+    });
+
+    it("control: a moved folder with nothing installed is still not-installed", async () => {
+      dataRootMock.movedRoot = join(sandboxRoot, "moved-data");
+
+      const plan = await resolveUpdatePlan({
+        environment: ENV,
+        request: {
+          intent: "install",
+          versionRequest: null,
+          allowDowngrade: false,
+        },
+        onProgress: noopProgress,
+        registryClient: unreachableRegistryClient(),
+      });
+
+      expect(plan).toEqual({ kind: "not-installed" });
+    });
+
+    it("continue: refuses a park whose target is below the install, before any registry call", async () => {
+      await writeInstall("2.0.0", {});
+      dataRootMock.movedRoot = join(sandboxRoot, "moved-data");
+
+      await expect(
+        resolveUpdatePlan({
+          environment: ENV,
+          request: {
+            intent: "continue",
+            targetVersion: "1.0.0",
+            needsTransfer: false,
+          },
+          onProgress: noopProgress,
+          registryClient: unreachableRegistryClient(),
+        }),
+      ).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.HOST_UPDATE_NOT_NEWER,
+      });
+    });
+
+    it("continue: a park already at the installed version resumes unchanged", async () => {
+      await writeInstall("1.2.0", {});
+      dataRootMock.movedRoot = join(sandboxRoot, "moved-data");
+
+      const plan = await resolveUpdatePlan({
+        environment: ENV,
+        request: {
+          intent: "continue",
+          targetVersion: "1.2.0",
+          needsTransfer: false,
+        },
+        onProgress: noopProgress,
+        registryClient: unreachableRegistryClient(),
+      });
+
+      expect(plan).toMatchObject({ kind: "resume", targetVersion: "1.2.0" });
     });
   });
 

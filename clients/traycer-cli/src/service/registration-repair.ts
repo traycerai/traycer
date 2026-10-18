@@ -34,7 +34,7 @@ export function isExplicitRegistrationRepair(): boolean {
  * that reports on it: whether it carried a registration its owner disabled
  * over (Windows: re-registered the task disabled and started nothing). Carried
  * out of the install rather than read again afterwards, so the report is the
- * fact the install acted on and costs no second `/Query /XML`.
+ * fact the install acted on and costs no second definition read.
  */
 export interface ServiceInstallReport {
   readonly keptDisabled: boolean;

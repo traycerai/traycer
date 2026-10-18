@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
-import { homedir } from "node:os";
 import { isAbsolute, join, relative } from "node:path";
 import { z } from "zod";
+import { traycerDataRoot } from "./data-root";
 import type { Environment } from "./paths";
 
 /**
@@ -13,7 +13,6 @@ import type { Environment } from "./paths";
  * remains the sole writer and lifecycle owner.
  */
 
-const TRAYCER_HOME_DIRNAME = ".traycer";
 const CLI_DIRNAME = "cli";
 const HOST_DIRNAME = "host";
 const HOST_INSTALL_DIRNAME = "install";
@@ -72,7 +71,7 @@ export function devDesktopSlotForEnvironment(
 }
 
 function traycerHomeDir(): string {
-  return join(homedir(), TRAYCER_HOME_DIRNAME);
+  return traycerDataRoot();
 }
 
 function slotInstallDir(base: string, environment: Environment): string {
