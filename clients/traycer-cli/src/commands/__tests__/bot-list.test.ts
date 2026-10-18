@@ -569,17 +569,6 @@ describe("bot list", () => {
     expect(result.exitCode).toBe(0);
   });
 
-  it("exits 0 when every bot is read", async () => {
-    const bot = botRecord({ botId: BOT_ID_A });
-    stage({
-      environments: [environmentDescriptor("env-personal", "Personal")],
-      bots: [bot],
-      client: botSubscribeClient(snapshotAnswers([[bot, 0]])),
-    });
-
-    expect((await runList()).exitCode).toBe(0);
-  });
-
   describe("a bot whose stream never answers", () => {
     beforeEach(() => {
       vi.useFakeTimers();

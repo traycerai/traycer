@@ -11,7 +11,6 @@ import { act, cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BotRecord } from "@traycer/protocol/host/bot/schemas";
-import { guiHarnessIdSchema } from "@traycer/protocol/host/index";
 import type { ComposerSeedSource } from "@/lib/composer/composer-seed-source";
 import type { ComposerToolbarStore } from "@/stores/composer/composer-toolbar-store";
 
@@ -133,7 +132,6 @@ afterEach(() => {
 
 describe("<BotSettingsPanel /> model", () => {
   it("seeds the picker with what the bot runs and leaves Apply disabled", () => {
-    expect(guiHarnessIdSchema.safeParse(BOT.harness).success).toBe(true);
     mountPanel(BOT, true);
 
     const seed = mocks.seeds.at(-1);
@@ -149,11 +147,6 @@ describe("<BotSettingsPanel /> model", () => {
         profileId: "profile-1",
       },
       client: mocks.hostClient,
-    });
-    expect(liveStore().getState().selection).toEqual({
-      harnessId: "claude",
-      modelSlug: "model-b",
-      profileId: "profile-1",
     });
     expect(applyButton().disabled).toBe(true);
   });

@@ -3629,25 +3629,6 @@ function registerAgentCommands(
   );
 }
 
-// `monitor` is the long-running inbox subscriber the Claude Code plugin
-// spawns. Like `host start` it owns its own lifecycle and does NOT go
-// through the shared NDJSON runner - `addRunnerFlags` is applied only so
-// the shared globals still parse if present.
-//
-// Because it bypasses the runner, it also bypasses the readonly capability
-// check `withRunner` applies - and it is absent from
-// `READONLY_REFUSED_COMMANDS` as an EXPLICIT EXCEPTION, for the reason
-// recorded in `MONITOR_SURFACE_NOTE` (CLI-021). Not because it is out of
-// reach: this is a registered command an agent can type, with its own
-// `--agent-id`, so leaving it open does leave a mutation reachable. It is
-// granted because refusing it would break inbox delivery for any session the
-// host spawns a monitor for, and would buy little against a caller who can
-// clear the surface variable anyway. It stays hidden on the readonly surface,
-// as before.
-//
-// It is not read-only, and the description now says so: printing a message
-// durably acknowledges it, and the process maintains this machine's stored
-// credentials for as long as it runs.
 function registerBotCommands(program: Command): void {
   const bot = program
     .command("bot")
@@ -3709,6 +3690,25 @@ function registerBotCommands(program: Command): void {
   );
 }
 
+// `monitor` is the long-running inbox subscriber the Claude Code plugin
+// spawns. Like `host start` it owns its own lifecycle and does NOT go
+// through the shared NDJSON runner - `addRunnerFlags` is applied only so
+// the shared globals still parse if present.
+//
+// Because it bypasses the runner, it also bypasses the readonly capability
+// check `withRunner` applies - and it is absent from
+// `READONLY_REFUSED_COMMANDS` as an EXPLICIT EXCEPTION, for the reason
+// recorded in `MONITOR_SURFACE_NOTE` (CLI-021). Not because it is out of
+// reach: this is a registered command an agent can type, with its own
+// `--agent-id`, so leaving it open does leave a mutation reachable. It is
+// granted because refusing it would break inbox delivery for any session the
+// host spawns a monitor for, and would buy little against a caller who can
+// clear the surface variable anyway. It stays hidden on the readonly surface,
+// as before.
+//
+// It is not read-only, and the description now says so: printing a message
+// durably acknowledges it, and the process maintains this machine's stored
+// credentials for as long as it runs.
 function registerMonitorCommand(program: Command): void {
   addRunnerFlags(
     program

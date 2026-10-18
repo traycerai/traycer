@@ -36,8 +36,6 @@ import { toastFromHostError } from "@/lib/host-error-toast";
  * the list is cloud-backed and identical everywhere, so a create on host B
  * makes host A's cached list stale too.
  */
-type BotMutationContext = { readonly hostId: string | null };
-
 function invalidateBotLists(queryClient: QueryClient): void {
   void queryClient.invalidateQueries({
     predicate: (query) =>
@@ -47,20 +45,14 @@ function invalidateBotLists(queryClient: QueryClient): void {
 
 export function useBotCreateMutation(
   client: HostClient<HostRpcRegistry> | null,
-): UseMutationResult<
-  BotCreateResponse,
-  HostRpcError,
-  BotCreateRequest,
-  BotMutationContext
-> {
+): UseMutationResult<BotCreateResponse, HostRpcError, BotCreateRequest> {
   const queryClient = useQueryClient();
-  return useHostMutation<HostRpcRegistry, "bot.create", BotMutationContext>({
+  return useHostMutation<HostRpcRegistry, "bot.create">({
     client,
     method: "bot.create",
     mapVariables: (variables) => variables,
     options: {
       mutationKey: botMutationKeys.create(),
-      onMutate: () => ({ hostId: client?.getActiveHostId() ?? null }),
       onSuccess: () => {
         invalidateBotLists(queryClient);
       },
@@ -71,20 +63,14 @@ export function useBotCreateMutation(
 
 export function useBotDeleteMutation(
   client: HostClient<HostRpcRegistry> | null,
-): UseMutationResult<
-  BotDeleteResponse,
-  HostRpcError,
-  BotDeleteRequest,
-  BotMutationContext
-> {
+): UseMutationResult<BotDeleteResponse, HostRpcError, BotDeleteRequest> {
   const queryClient = useQueryClient();
-  return useHostMutation<HostRpcRegistry, "bot.delete", BotMutationContext>({
+  return useHostMutation<HostRpcRegistry, "bot.delete">({
     client,
     method: "bot.delete",
     mapVariables: (variables) => variables,
     options: {
       mutationKey: botMutationKeys.delete(),
-      onMutate: () => ({ hostId: client?.getActiveHostId() ?? null }),
       onSuccess: () => {
         invalidateBotLists(queryClient);
       },
@@ -95,24 +81,14 @@ export function useBotDeleteMutation(
 
 export function useBotUpdateTitleMutation(
   client: HostClient<HostRpcRegistry> | null,
-): UseMutationResult<
-  BotUpdateResponse,
-  HostRpcError,
-  BotUpdateTitleRequest,
-  BotMutationContext
-> {
+): UseMutationResult<BotUpdateResponse, HostRpcError, BotUpdateTitleRequest> {
   const queryClient = useQueryClient();
-  return useHostMutation<
-    HostRpcRegistry,
-    "bot.updateTitle",
-    BotMutationContext
-  >({
+  return useHostMutation<HostRpcRegistry, "bot.updateTitle">({
     client,
     method: "bot.updateTitle",
     mapVariables: (variables) => variables,
     options: {
       mutationKey: botMutationKeys.updateTitle(),
-      onMutate: () => ({ hostId: client?.getActiveHostId() ?? null }),
       onSuccess: () => {
         invalidateBotLists(queryClient);
       },
@@ -126,21 +102,15 @@ export function useBotUpdateRunSettingsMutation(
 ): UseMutationResult<
   BotUpdateResponse,
   HostRpcError,
-  BotUpdateRunSettingsRequest,
-  BotMutationContext
+  BotUpdateRunSettingsRequest
 > {
   const queryClient = useQueryClient();
-  return useHostMutation<
-    HostRpcRegistry,
-    "bot.updateRunSettings",
-    BotMutationContext
-  >({
+  return useHostMutation<HostRpcRegistry, "bot.updateRunSettings">({
     client,
     method: "bot.updateRunSettings",
     mapVariables: (variables) => variables,
     options: {
       mutationKey: botMutationKeys.updateRunSettings(),
-      onMutate: () => ({ hostId: client?.getActiveHostId() ?? null }),
       onSuccess: () => {
         invalidateBotLists(queryClient);
       },
@@ -160,21 +130,15 @@ export function useBotClaimAuthorityMutation(
 ): UseMutationResult<
   BotClaimAuthorityResponse,
   HostRpcError,
-  BotClaimAuthorityRequest,
-  BotMutationContext
+  BotClaimAuthorityRequest
 > {
   const queryClient = useQueryClient();
-  return useHostMutation<
-    HostRpcRegistry,
-    "bot.claimAuthority",
-    BotMutationContext
-  >({
+  return useHostMutation<HostRpcRegistry, "bot.claimAuthority">({
     client,
     method: "bot.claimAuthority",
     mapVariables: (variables) => variables,
     options: {
       mutationKey: botMutationKeys.claimAuthority(),
-      onMutate: () => ({ hostId: client?.getActiveHostId() ?? null }),
       onSuccess: () => {
         invalidateBotLists(queryClient);
       },
@@ -195,20 +159,14 @@ export function useBotConversationSendMutation(
 ): UseMutationResult<
   BotConversationSendResponse,
   HostRpcError,
-  BotConversationSendRequest,
-  BotMutationContext
+  BotConversationSendRequest
 > {
-  return useHostMutation<
-    HostRpcRegistry,
-    "bot.conversation.send",
-    BotMutationContext
-  >({
+  return useHostMutation<HostRpcRegistry, "bot.conversation.send">({
     client,
     method: "bot.conversation.send",
     mapVariables: (variables) => variables,
     options: {
       mutationKey: botMutationKeys.conversationSend(),
-      onMutate: () => ({ hostId: client?.getActiveHostId() ?? null }),
     },
   });
 }

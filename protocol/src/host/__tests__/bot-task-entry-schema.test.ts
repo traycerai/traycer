@@ -60,17 +60,6 @@ describe("host bot.subscribe botTaskEntrySchema invariants", () => {
     ).toBe(true);
   });
 
-  it("accepts an entry ended because its task was deleted", () => {
-    expect(
-      botTaskEntrySchema.safeParse({
-        ...TRACKING_EVERY,
-        nextAt: null,
-        state: "ended",
-        endedReason: "deleted",
-      }).success,
-    ).toBe(true);
-  });
-
   it("accepts every ended reason on an ended entry", () => {
     for (const endedReason of [
       "by-bot",

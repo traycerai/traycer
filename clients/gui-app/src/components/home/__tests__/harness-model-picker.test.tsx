@@ -93,6 +93,8 @@ vi.mock("@/components/ui/dropdown-menu", () => {
       </button>
     ),
     DropdownMenuSeparator: (): ReactNode => <div role="separator" />,
+    DropdownMenuRadioGroup: passthrough,
+    DropdownMenuRadioItem: passthrough,
     DropdownMenuShortcut: (props: {
       readonly children: ReactNode;
       readonly "data-testid": string | undefined;
@@ -4531,6 +4533,39 @@ describe("<HarnessModelPicker />", () => {
     expect(screen.getByRole("textbox", { name: /^Search/ })).toBe(input);
   });
 
+  it("steps Standard, Fast, Ultrafast, Standard with the sub-leader digit 0 on a dual-tier model", async () => {
+    const dual = model({
+      slug: "gpt-5.5",
+      label: "GPT-5.5",
+      supportedServiceTiers: [
+        { id: "priority", label: "Fast", description: null },
+        { id: "ultrafast", label: "Ultrafast", description: null },
+      ],
+      defaultServiceTier: null,
+    });
+    const seen: ServiceTier[] = [];
+    for (const start of ["", "priority", "ultrafast"] as const) {
+      const { serviceTierChanges } = renderPicker({
+        selection: {
+          harnessId: "codex",
+          modelSlug: "gpt-5.5",
+          profileId: null,
+        },
+        withServiceTier: true,
+        serviceTier: start,
+        storeModels: [dual],
+      });
+      await openPicker();
+      act(() => {
+        fireLeaderDigit(0, "alt", false);
+      });
+      seen.push(...serviceTierChanges);
+      cleanup();
+    }
+
+    expect(seen).toEqual(["priority", "ultrafast", ""]);
+  });
+
   it("toggles fast mode off with a second sub-leader digit 0", async () => {
     const { serviceTierChanges } = renderPicker({
       withServiceTier: true,
@@ -4603,7 +4638,7 @@ describe("<HarnessModelPicker />", () => {
 
     // The footer config is present (`withServiceTier: true`) - this is the
     // per-model conditional case, not a caller that disabled Fast outright:
-    // `findUpgradeServiceTierForModel` has nothing to offer, so no Fast
+    // `nonDefaultServiceTiersForModel` has nothing to offer, so no Fast
     // button renders at all.
     expect(screen.queryByRole("button", { name: "Fast mode" })).toBeNull();
 
@@ -4611,7 +4646,7 @@ describe("<HarnessModelPicker />", () => {
       fireLeaderDigit(0, "alt", false);
     });
 
-    // `toggleServiceTier` bails out on the missing upgrade tier rather than
+    // `stepServiceTier` bails out on the missing upgrade tier rather than
     // throwing.
     expect(serviceTierChanges).toEqual([]);
   });
