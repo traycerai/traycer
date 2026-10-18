@@ -20,6 +20,7 @@ export { locateElement, replaceRange, stampPositions } from "./source";
 export { insertTid, setAttribute, setTextContent, setTextNode } from "./edits";
 export { setStyleDeclaration } from "./style";
 export { findLiteralText, textInSourceRange } from "./text";
+export { commentAnchorStatus, type CommentAnchorQuery } from "./comment-anchor";
 export { hasSafeStyleUrls } from "./style-urls";
 export {
   readRootCustomProperties,

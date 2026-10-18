@@ -9,7 +9,7 @@ import {
 
 const SHA = "b".repeat(64);
 
-/** A `@1.1` snapshot: what a host that predates the files arm sends. */
+/** A `@1.1` snapshot, the base the frames in this file build on. */
 const SNAPSHOT_V11 = {
   kind: "snapshot",
   authorityEpoch: "epoch-1",
@@ -84,8 +84,8 @@ function open(): {
   return { emit: (frame) => session.emit(frame, null), snapshots, deltas };
 }
 
-describe("the epic state stream client across the @1.1 / @1.2 skew", () => {
-  it("decodes a @1.1 host's snapshot and delta, which carry no files arm", () => {
+describe("the epic state stream client across host minors", () => {
+  it("decodes a @1.1 host's snapshot and delta", () => {
     const client = open();
 
     client.emit(SNAPSHOT_V11);
@@ -93,33 +93,30 @@ describe("the epic state stream client across the @1.1 / @1.2 skew", () => {
 
     expect(client.snapshots).toHaveLength(1);
     expect(client.deltas).toHaveLength(1);
-    // A host that predates the arm sends no `files`; the lenient arm decodes
-    // that as `null`, never as a files set.
-    const snapshot = client.snapshots[0];
-    expect(
-      snapshot !== undefined && "files" in snapshot ? snapshot.files : null,
-    ).toBeNull();
-    const delta = client.deltas[0];
-    expect(
-      delta !== undefined && "files" in delta ? delta.files : null,
-    ).toBeNull();
-    expect(delta?.seq).toBe(1);
+    expect(client.deltas[0]?.seq).toBe(1);
   });
 
-  it("keeps the files arm a @1.2 host sends, rather than letting the @1.1 schema strip it", () => {
+  it("delivers a snapshot that still carries a files arm, without surfacing the arm", () => {
+    // The files arm was removed before any release shipped it, so no minor
+    // carries one. A frame that has it anyway is read without it.
     const client = open();
 
     client.emit({ ...SNAPSHOT_V11, files: FILES });
-    client.emit({ ...DELTA_V11, roleClaims: null, files: FILES });
 
-    const snapshot = client.snapshots[0];
-    const delta = client.deltas[0];
-    expect(
-      snapshot !== undefined && "files" in snapshot ? snapshot.files : null,
-    ).toEqual(FILES);
-    expect(
-      delta !== undefined && "files" in delta ? delta.files : null,
-    ).toEqual(FILES);
+    expect(client.snapshots).toHaveLength(1);
+    expect(client.snapshots[0]).not.toHaveProperty("files");
+  });
+
+  it("discards a delta whose only change was the files arm, and keeps one that changes something else", () => {
+    const client = open();
+
+    client.emit({ ...DELTA_V11, roleClaims: null, files: FILES });
+    expect(client.deltas).toEqual([]);
+
+    client.emit({ ...DELTA_V11, files: FILES });
+    expect(client.deltas).toHaveLength(1);
+    expect(client.deltas[0]?.roleClaims).toEqual(DELTA_V11.roleClaims);
+    expect(client.deltas[0]).not.toHaveProperty("files");
   });
 
   it("delivers a @1.3 frame whose rows are the new html and file kinds, rather than dropping it", () => {
@@ -198,5 +195,40 @@ describe("the epic state stream client across the @1.1 / @1.2 skew", () => {
     expect(delta?.artifactTombstones.map((row) => row.kind)).toEqual(["file"]);
     const html = delta?.artifactUpserts.find((row) => row.kind === "html");
     expect(html?.kind === "html" ? html.head : null).toEqual(htmlRow.head);
+  });
+
+  it("keeps the anchor fields a @1.4 host sends on a comment thread, rather than letting an older schema strip them", () => {
+    const client = open();
+    const anchoredThread = {
+      threadId: "thread-1",
+      resolved: false,
+      createdAt: 1,
+      comments: [],
+      data: {
+        createdByUserId: "user-1",
+        anchorKind: "text",
+        artboard: "board-1",
+        elementId: "tid-1",
+        startOffset: 2,
+        endOffset: 9,
+        label: "Hero heading",
+      },
+      artifactId: "html-1",
+      revision: 1,
+    };
+
+    client.emit({ ...SNAPSHOT_V11, commentThreads: [anchoredThread] });
+    client.emit({
+      ...DELTA_V11,
+      roleClaims: null,
+      commentThreadUpserts: [anchoredThread],
+    });
+
+    expect(client.snapshots[0]?.commentThreads[0]?.data).toEqual(
+      anchoredThread.data,
+    );
+    expect(client.deltas[0]?.commentThreadUpserts[0]?.data).toEqual(
+      anchoredThread.data,
+    );
   });
 });

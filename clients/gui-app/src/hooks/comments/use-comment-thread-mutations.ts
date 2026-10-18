@@ -1,5 +1,5 @@
 import { useQueryClient } from "@tanstack/react-query";
-import type { MarkdownArtifactKind } from "@traycer/protocol/common/registry";
+import type { CommentArtifactKind } from "@/lib/comments/artifact-comment-kind";
 import type {
   CreateCommentThreadRequest,
   ReplyToCommentThreadRequest,
@@ -100,7 +100,7 @@ interface MutationContext {
 function useThreadInvalidator(): (
   hostId: string | null,
   epicId: string,
-  artifactType: MarkdownArtifactKind,
+  artifactType: CommentArtifactKind,
   artifactId: string,
 ) => void {
   const queryClient = useQueryClient();
@@ -124,9 +124,16 @@ export function useCreateCommentThreadForClient(
   return useHostMutation({
     client,
     method: "epic.createCommentThread",
+    requiredHostMethodVersion: (variables) =>
+      variables.anchor === undefined
+        ? null
+        : {
+            method: "epic.createCommentThread",
+            version: { major: 1, minor: 2 },
+          },
     mapVariables: (
       variables: CreateCommentThreadRequest & {
-        artifactType: MarkdownArtifactKind;
+        artifactType: CommentArtifactKind;
       },
     ) => variables,
     options: {
@@ -162,7 +169,7 @@ export function useReplyToCommentThreadForClient(
     method: "epic.replyToCommentThread",
     mapVariables: (
       variables: ReplyToCommentThreadRequest & {
-        artifactType: MarkdownArtifactKind;
+        artifactType: CommentArtifactKind;
       },
     ) => variables,
     options: {
@@ -197,7 +204,7 @@ export function useEditCommentForClient(
     client,
     method: "epic.editComment",
     mapVariables: (
-      variables: EditCommentRequest & { artifactType: MarkdownArtifactKind },
+      variables: EditCommentRequest & { artifactType: CommentArtifactKind },
     ) => variables,
     options: {
       onMutate: (variables) => {
@@ -229,7 +236,7 @@ export function useDeleteCommentForClient(
     client,
     method: "epic.deleteComment",
     mapVariables: (
-      variables: DeleteCommentRequest & { artifactType: MarkdownArtifactKind },
+      variables: DeleteCommentRequest & { artifactType: CommentArtifactKind },
     ) => variables,
     options: {
       onMutate: (variables) => {
@@ -262,7 +269,7 @@ export function useSetCommentThreadResolvedForClient(
     method: "epic.setCommentThreadResolved",
     mapVariables: (
       variables: SetCommentThreadResolvedRequest & {
-        artifactType: MarkdownArtifactKind;
+        artifactType: CommentArtifactKind;
       },
     ) => variables,
     options: {
@@ -302,7 +309,7 @@ export function useDeleteCommentThreadForClient(
     method: "epic.deleteCommentThread",
     mapVariables: (
       variables: DeleteCommentThreadRequest & {
-        artifactType: MarkdownArtifactKind;
+        artifactType: CommentArtifactKind;
       },
     ) => variables,
     options: {

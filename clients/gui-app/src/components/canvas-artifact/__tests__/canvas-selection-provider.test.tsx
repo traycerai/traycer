@@ -1,4 +1,5 @@
 import { act, cleanup, render } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { useContext, useEffect, useState, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SandboxBridgeHost } from "@/lib/sandbox/bridge-host";
@@ -40,6 +41,21 @@ vi.mock("../canvas-properties-panel", () => ({
   CanvasPropertiesPanel: () => null,
 }));
 vi.mock("../canvas-board-panel", () => ({ CanvasBoardPanel: () => null }));
+// Comments are a separate surface; these tests exercise ownership of frame picks.
+vi.mock("@/hooks/host/use-tab-host-client", () => ({
+  useTabHostClient: () => null,
+}));
+vi.mock("@/hooks/comments/use-frame-comments-enabled", () => ({
+  useFrameCommentsEnabled: () => false,
+}));
+vi.mock("../canvas-comments", () => ({
+  CanvasCommentIndex: () => null,
+  CanvasCommentPins: () => null,
+  CanvasWholeCommentPin: () => null,
+}));
+vi.mock("@/components/comments/anchored-draft-popover", () => ({
+  AnchoredDraftPopover: () => null,
+}));
 
 const BOARD = "boards/home.html";
 const SHA = "sha-1";
@@ -131,13 +147,15 @@ function mountProvider(artifactId: string): MountedProvider {
     captured = events;
     const [shown, setShown] = useState(true);
     showOverlay = setShown;
-    return shown ? (events?.renderOverlay?.(BOARD) ?? null) : null;
+    return shown ? (events?.renderOverlay?.(BOARD, true) ?? null) : null;
   }
 
   render(
-    <CanvasSelectionProvider {...scope(artifactId)}>
-      <Probe />
-    </CanvasSelectionProvider>,
+    <QueryClientProvider client={new QueryClient()}>
+      <CanvasSelectionProvider {...scope(artifactId)}>
+        <Probe />
+      </CanvasSelectionProvider>
+    </QueryClientProvider>,
   );
   const events = (): CanvasFrameEvents => {
     if (captured === null) throw new Error("provider events not captured");

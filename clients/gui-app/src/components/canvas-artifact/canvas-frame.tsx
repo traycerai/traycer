@@ -1,3 +1,4 @@
+import type { CanvasCommentView } from "./canvas-frame-registry";
 import type { CanvasLayoutStore } from "./canvas-layout-store";
 import { useCallback, useEffect, useRef, type ReactNode } from "react";
 import {
@@ -18,6 +19,13 @@ import type {
 
 /** Selection and editing compose through these seams outside the opaque frame. */
 export interface CanvasFrameEvents {
+  readonly commentsEnabled?: boolean;
+  readonly onCanvasView?: (view: CanvasCommentView | null) => void;
+  readonly onPaneComment?: (point: {
+    readonly x: number;
+    readonly y: number;
+  }) => void;
+  readonly renderPaneOverlay?: () => ReactNode;
   readonly onSource?: (path: string, source: SandboxSource | null) => void;
   readonly onDoubleClick?: (path: string, element: CanvasElement) => void;
   readonly onBridge: (path: string, bridge: SandboxBridgeHost | null) => void;
@@ -39,7 +47,7 @@ export interface CanvasFrameEvents {
   readonly onRelativeLink?: (path: string, href: string) => void;
   readonly onAddError?: (path: string, error: CanvasPageError) => void;
   /** Replaces the edit shield; must shield everything except the selected text. */
-  readonly renderOverlay?: (path: string) => ReactNode;
+  readonly renderOverlay?: (path: string, editing: boolean) => ReactNode;
   readonly renderPanel?: (store: CanvasLayoutStore) => ReactNode;
 }
 const NO_PERMISSIONS = [] as const;

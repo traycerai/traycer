@@ -36,7 +36,6 @@ import {
   isMarkdownArtifactKind,
 } from "@/lib/artifacts/node-display";
 import { consumeArtifactEditorFocus } from "@/lib/artifacts/pending-editor-focus";
-import { commentArtifactKindFor } from "@/lib/comments/artifact-comment-kind";
 import { registerCommentEditor } from "@/lib/comments/comment-editor-registry";
 import { startCommentDraft } from "@/lib/comments/start-comment-draft";
 import {
@@ -63,7 +62,6 @@ import {
   type DraftRange,
 } from "@/stores/comments/comment-threads-store";
 import type { EpicNodeRef } from "@/stores/epics/canvas/types";
-import { WORKSPACE_FILE_TAB_KIND } from "@/stores/epics/canvas/types";
 import { cn } from "@/lib/utils";
 import {
   useArrangementValue,
@@ -417,10 +415,9 @@ function CollabTileBodyEditor(props: CollabTileBodyEditorProps) {
     artifactId: node.id,
     viewTabId,
   });
-  const commentArtifactKind =
-    node.type === WORKSPACE_FILE_TAB_KIND
-      ? null
-      : commentArtifactKindFor(node.type);
+  const commentArtifactKind = isMarkdownArtifactKind(node.type)
+    ? node.type
+    : null;
 
   const user = useMemo<CollabUser>(
     () => (profile === null ? GUEST_COLLAB_USER : deriveCollabUser(profile)),

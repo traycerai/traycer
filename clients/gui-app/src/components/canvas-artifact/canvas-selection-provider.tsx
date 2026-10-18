@@ -1,3 +1,17 @@
+import { usePaneFocused } from "@/components/epic-tabs/pane-visibility-context";
+import { useQueryClient } from "@tanstack/react-query";
+import { AnchoredDraftPopover } from "@/components/comments/anchored-draft-popover";
+import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
+import { useActivateCommentThread } from "@/hooks/comments/use-activate-comment-thread";
+import { useFrameCommentsEnabled } from "@/hooks/comments/use-frame-comments-enabled";
+import { useAnchoredDraftStore } from "@/stores/comments/anchored-draft-store";
+import { openFrameCommentDraft } from "@/lib/comments/open-frame-comment-draft";
+import {
+  CanvasCommentIndex,
+  CanvasCommentPins,
+  CanvasWholeCommentPin,
+} from "./canvas-comments";
+import type { CanvasSelection } from "./canvas-selection-store";
 import {
   useCallback,
   useContext,
@@ -33,7 +47,10 @@ import type { CanvasLayoutStore } from "./canvas-layout-store";
 import { frameLocator } from "./canvas-structure-identity";
 
 export function CanvasSelectionProvider(
-  props: CanvasAnnotationScope & { readonly children: ReactNode },
+  props: CanvasAnnotationScope & {
+    readonly children: ReactNode;
+    readonly viewOnly?: boolean;
+  },
 ) {
   const { epicId, artifactId, artifactTitle, hostId, viewTabId } = props;
   const scope = useMemo(
@@ -42,6 +59,40 @@ export function CanvasSelectionProvider(
   );
   const parent = useContext(CanvasFrameEventsContext);
   const [registry] = useState(() => new CanvasFrameRegistry());
+  const hostClient = useTabHostClient();
+  const queryClient = useQueryClient();
+  const paneFocused = usePaneFocused();
+  const commentsEnabled = useFrameCommentsEnabled() && props.viewOnly !== true;
+  const activateThread = useActivateCommentThread(scope);
+  const [draftOwner] = useState(() => crypto.randomUUID());
+  const [commentMessage, setCommentMessage] = useState<string | null>(null);
+  const openComment = useCallback(
+    (selection: CanvasSelection): void => {
+      if (!commentsEnabled) return;
+      const entry = registry.get(selection.boardPath);
+      if (entry.bridge === null || entry.frame === null) return;
+      const generation = useCanvasSelectionStore.getState().generation;
+      void openFrameCommentDraft({
+        epicId,
+        tileId: draftOwner,
+        artifactType: "canvas",
+        selection,
+        bridge: entry.bridge,
+        frame: entry.frame,
+        source: entry.source,
+        queryClient,
+        isCurrent: () =>
+          registry.get(selection.boardPath).bridge === entry.bridge &&
+          registry.get(selection.boardPath).sha256 === selection.servedSha256 &&
+          useCanvasSelectionStore.getState().generation === generation,
+      })
+        .then(setCommentMessage)
+        .catch(() =>
+          setCommentMessage("The page changed. Select the element again."),
+        );
+    },
+    [commentsEnabled, registry, epicId, draftOwner, queryClient],
+  );
   const [selectionOwner] = useState(() => Symbol("canvas-selection"));
   const [errorAttachment, setErrorAttachment] = useState<{
     path: string;
@@ -102,6 +153,8 @@ export function CanvasSelectionProvider(
               layout,
             );
           else store.completePick(selectionOwner, generation, selection);
+          if (selection !== null && registry.view?.tool === "comment")
+            openComment(selection);
         })
         .catch(() => {
           /* The next click can retry a frame replaced while answering. */
@@ -110,7 +163,7 @@ export function CanvasSelectionProvider(
             .completeAdditivePick(selectionOwner, generation, null, null);
         });
     },
-    [artifactId, registry, selectionOwner],
+    [artifactId, registry, selectionOwner, openComment],
   );
   const retire = useCallback(
     (path: string): void => {
@@ -122,11 +175,33 @@ export function CanvasSelectionProvider(
   const events = useMemo<CanvasFrameEvents>(
     () => ({
       ...parent,
+      commentsEnabled,
+      onCanvasView: (view) => {
+        registry.setView(view);
+        parent?.onCanvasView?.(view);
+      },
+      onPaneComment: (point) => {
+        if (!commentsEnabled) return;
+        useAnchoredDraftStore.getState().setDraft(epicId, {
+          draftId: crypto.randomUUID(),
+          tileId: draftOwner,
+          artifactId,
+          artifactType: "canvas",
+          anchor: { kind: "artifact" },
+          quotedText: "",
+          selection: null,
+          retargeted: false,
+          rect: { ...point, width: 0, height: 0 },
+        });
+      },
+      renderPaneOverlay: () => <CanvasWholeCommentPin scope={scope} />,
       onSource: (path, source) => {
         registry.update(path, { source });
         parent?.onSource?.(path, source);
       },
       onDoubleClick: (path, element) => {
+        if (props.viewOnly === true || registry.view?.tool === "comment")
+          return;
         if (useCanvasSelectionStore.getState().additionalElements.length > 0)
           return;
         const entry = registry.get(path);
@@ -239,20 +314,38 @@ export function CanvasSelectionProvider(
         useCanvasSelectionStore
           .getState()
           .setTextRange(artifactId, path, range);
+        const selection = useCanvasSelectionStore.getState().selection;
+        const draft = useAnchoredDraftStore.getState().byEpicId[epicId];
+        if (
+          range !== null &&
+          selection?.artifactId === artifactId &&
+          (registry.view?.tool === "comment" || draft?.tileId === draftOwner)
+        )
+          openComment(selection);
         parent?.onTextSelection?.(path, range);
       },
       onAddError: (path, error) => {
         setErrorAttachment({ path, error });
         parent?.onAddError?.(path, error);
       },
-      renderOverlay: (path) => (
-        <CanvasEditingOverlay
-          scope={scope}
-          boardPath={path}
-          registry={registry}
-          onPick={pick}
-          onRetire={retire}
-        />
+      renderOverlay: (path, editing) => (
+        <>
+          {editing && props.viewOnly !== true ? (
+            <CanvasEditingOverlay
+              scope={scope}
+              tileId={draftOwner}
+              boardPath={path}
+              registry={registry}
+              onPick={pick}
+              onRetire={retire}
+            />
+          ) : null}
+          <CanvasCommentPins
+            scope={scope}
+            boardPath={path}
+            registry={registry}
+          />
+        </>
       ),
       renderPanel: (store) => (
         <CanvasSelectionPanel
@@ -263,7 +356,20 @@ export function CanvasSelectionProvider(
         />
       ),
     }),
-    [artifactId, parent, pick, registry, retire, scope, selectionOwner],
+    [
+      artifactId,
+      parent,
+      pick,
+      registry,
+      retire,
+      scope,
+      selectionOwner,
+      commentsEnabled,
+      epicId,
+      draftOwner,
+      openComment,
+      props.viewOnly,
+    ],
   );
   useEffect(() => {
     let previousPath: string | null = null;
@@ -315,7 +421,9 @@ export function CanvasSelectionProvider(
   }, [artifactId, registry]);
   useEffect(() => {
     const escape = (event: KeyboardEvent): void => {
-      if (event.key !== "Escape") return;
+      if (event.key !== "Escape" || event.defaultPrevented || !paneFocused)
+        return;
+      registry.view?.setTool("select");
       requestSequence.current += 1;
       useCanvasSelectionStore.getState().retire(selectionOwner, null);
       if (
@@ -330,13 +438,40 @@ export function CanvasSelectionProvider(
       window.removeEventListener("keydown", escape);
       useCanvasSelectionStore.getState().retire(selectionOwner, null);
     };
-  }, [artifactId, selectionOwner]);
+  }, [artifactId, selectionOwner, paneFocused, registry]);
   return (
     <CanvasFrameEventsContext value={events}>
       <div className="relative h-full w-full">
-        <CanvasClipboardBoundary artifactId={artifactId} registry={registry}>
-          {props.children}
-        </CanvasClipboardBoundary>
+        {props.viewOnly === true ? (
+          props.children
+        ) : (
+          <CanvasClipboardBoundary artifactId={artifactId} registry={registry}>
+            {props.children}
+          </CanvasClipboardBoundary>
+        )}
+        <CanvasCommentIndex
+          scope={scope}
+          tileId={draftOwner}
+          registry={registry}
+        />
+        {props.viewOnly === true ? null : (
+          <AnchoredDraftPopover
+            epicId={epicId}
+            artifactId={artifactId}
+            tileId={draftOwner}
+            hostClient={hostClient}
+            onCreated={activateThread}
+            onClosed={() => registry.view?.setTool("select")}
+          />
+        )}
+        {commentMessage === null ? null : (
+          <div
+            role="status"
+            className="absolute bottom-2 left-2 z-30 rounded-md border bg-popover p-2 text-ui-xs text-popover-foreground"
+          >
+            {commentMessage}
+          </div>
+        )}
         {errorAttachment === null ? null : (
           <div className="absolute right-2 top-2 z-30 flex max-w-full items-start gap-1 rounded-md border bg-popover p-2 text-popover-foreground shadow-sm">
             <div className="flex min-w-0 flex-col gap-2">

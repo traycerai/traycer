@@ -41,7 +41,7 @@ export function penOutline(
   };
 }
 export function noteFromStroke(
-  tool: Exclude<CanvasTool, "select" | "hand">,
+  tool: Exclude<CanvasTool, "select" | "hand" | "comment">,
   stroke: CanvasStroke,
 ): CanvasNote {
   if (tool === "pen") return penFromStroke(stroke);

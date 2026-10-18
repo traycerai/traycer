@@ -54,21 +54,31 @@ function CanvasEditShield({
     actions.selectionEnabled &&
     actions.frameEvents?.renderOverlay !== undefined
   )
-    return actions.frameEvents.renderOverlay(path);
+    return actions.frameEvents.renderOverlay(path, true);
   return (
-    <div
-      data-canvas-frame-overlay=""
-      className="absolute inset-0 [&]:pointer-events-auto"
-      onPointerDown={(event) => {
-        if (!actions.selectionEnabled) return;
-        const bounds = event.currentTarget.getBoundingClientRect();
-        actions.frameEvents?.onEditPointer(path, {
-          x: ((event.clientX - bounds.left) * width) / bounds.width,
-          y: ((event.clientY - bounds.top) * height) / bounds.height,
-        });
-      }}
-    />
+    <>
+      {actions.frameEvents?.renderOverlay?.(path, false)}
+      <div
+        data-canvas-frame-overlay=""
+        className="absolute inset-0 [&]:pointer-events-auto"
+        onPointerDown={(event) => {
+          if (!actions.selectionEnabled) return;
+          const bounds = event.currentTarget.getBoundingClientRect();
+          actions.frameEvents?.onEditPointer(path, {
+            x: ((event.clientX - bounds.left) * width) / bounds.width,
+            y: ((event.clientY - bounds.top) * height) / bounds.height,
+          });
+        }}
+      />
+    </>
   );
+}
+
+function CanvasPlayPins(props: {
+  readonly path: string;
+  readonly actions: CanvasNodeActions;
+}) {
+  return props.actions.frameEvents?.renderOverlay?.(props.path, false);
 }
 
 function CanvasBoardButtons({
@@ -208,6 +218,9 @@ export const CanvasBoardNode = memo(function CanvasBoardNode({
             />
           </div>
         )}
+        {interactive ? (
+          <CanvasPlayPins actions={actions} path={data.path} />
+        ) : null}
         {/* The self variant enables hits without adding xyflow's no-pan marker. */}
         {!interactive && (
           <CanvasEditShield

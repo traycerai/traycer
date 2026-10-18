@@ -20,6 +20,7 @@ import {
   continueSubagentRequestSchema,
   continueSubagentResponseSchema,
   createCommentThreadRequestSchema,
+  createCommentThreadRequestSchemaPreAnchor,
   createCommentThreadRequestSchemaPreHtml,
   createCommentThreadResponseSchema,
   createEpicRequestSchema,
@@ -62,6 +63,7 @@ import {
   listCommentThreadsRequestSchema,
   listCommentThreadsRequestSchemaPreHtml,
   listCommentThreadsResponseSchema,
+  listCommentThreadsResponseSchemaPreAnchor,
   listEpicCollaboratorsRequestSchema,
   listEpicCollaboratorsResponseSchema,
   listEpicCollaboratorsResponseSchemaPre11,
@@ -1308,7 +1310,7 @@ export const epicCreateCommentThreadV10 = defineRpcContract({
 export const epicCreateCommentThreadV11 = defineRpcContract({
   method: "epic.createCommentThread",
   schemaVersion: { major: 1, minor: 1 } as const,
-  requestSchema: createCommentThreadRequestSchema,
+  requestSchema: createCommentThreadRequestSchemaPreAnchor,
   responseSchema: createCommentThreadResponseSchema,
 });
 export const epicCreateCommentThreadUpgradeV10ToV11 = defineUpgradePath<
@@ -1317,6 +1319,22 @@ export const epicCreateCommentThreadUpgradeV10ToV11 = defineUpgradePath<
 >({
   from: epicCreateCommentThreadV10.schemaVersion,
   to: epicCreateCommentThreadV11.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
+});
+
+export const epicCreateCommentThreadV12 = defineRpcContract({
+  method: "epic.createCommentThread",
+  schemaVersion: { major: 1, minor: 2 } as const,
+  requestSchema: createCommentThreadRequestSchema,
+  responseSchema: createCommentThreadResponseSchema,
+});
+export const epicCreateCommentThreadUpgradeV11ToV12 = defineUpgradePath<
+  typeof epicCreateCommentThreadV11,
+  typeof epicCreateCommentThreadV12
+>({
+  from: epicCreateCommentThreadV11.schemaVersion,
+  to: epicCreateCommentThreadV12.schemaVersion,
   upgradeRequest: (request) => request,
   upgradeResponse: (response) => response,
 });
@@ -1445,7 +1463,7 @@ export const epicListCommentThreadsV10 = defineRpcContract({
   method: "epic.listCommentThreads",
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: listCommentThreadsRequestSchemaPreHtml,
-  responseSchema: listCommentThreadsResponseSchema,
+  responseSchema: listCommentThreadsResponseSchemaPreAnchor,
 });
 
 /** 1.1 adds the new artifact kinds; 1.0 keeps its frozen schemas. */
@@ -1453,7 +1471,7 @@ export const epicListCommentThreadsV11 = defineRpcContract({
   method: "epic.listCommentThreads",
   schemaVersion: { major: 1, minor: 1 } as const,
   requestSchema: listCommentThreadsRequestSchema,
-  responseSchema: listCommentThreadsResponseSchema,
+  responseSchema: listCommentThreadsResponseSchemaPreAnchor,
 });
 export const epicListCommentThreadsUpgradeV10ToV11 = defineUpgradePath<
   typeof epicListCommentThreadsV10,
@@ -1461,6 +1479,22 @@ export const epicListCommentThreadsUpgradeV10ToV11 = defineUpgradePath<
 >({
   from: epicListCommentThreadsV10.schemaVersion,
   to: epicListCommentThreadsV11.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
+});
+
+export const epicListCommentThreadsV12 = defineRpcContract({
+  method: "epic.listCommentThreads",
+  schemaVersion: { major: 1, minor: 2 } as const,
+  requestSchema: listCommentThreadsRequestSchema,
+  responseSchema: listCommentThreadsResponseSchema,
+});
+export const epicListCommentThreadsUpgradeV11ToV12 = defineUpgradePath<
+  typeof epicListCommentThreadsV11,
+  typeof epicListCommentThreadsV12
+>({
+  from: epicListCommentThreadsV11.schemaVersion,
+  to: epicListCommentThreadsV12.schemaVersion,
   upgradeRequest: (request) => request,
   upgradeResponse: (response) => response,
 });

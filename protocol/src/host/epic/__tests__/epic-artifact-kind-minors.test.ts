@@ -3,12 +3,14 @@ import { hostRpcRegistry } from "@traycer/protocol/host/index";
 import {
   commentsListThreadsV10,
   commentsListThreadsV11,
+  commentsListThreadsV12,
 } from "@traycer/protocol/host/comments/contracts";
 import {
   epicCreateArtifactV10,
   epicCreateArtifactV11,
   epicCreateCommentThreadV10,
   epicCreateCommentThreadV11,
+  epicCreateCommentThreadV12,
   epicDeleteCommentThreadV10,
   epicDeleteCommentThreadV11,
   epicDeleteCommentV10,
@@ -17,6 +19,7 @@ import {
   epicEditCommentV11,
   epicListCommentThreadsV10,
   epicListCommentThreadsV11,
+  epicListCommentThreadsV12,
   epicReplyToCommentThreadV10,
   epicReplyToCommentThreadV11,
   epicResolveArtifactByPathV10,
@@ -59,12 +62,22 @@ const RESPONSE_GROWTH_METHODS = [
 
 const NEW_KINDS = ["html", "canvas", "file"] as const;
 
+// Comment anchors took a second minor (1.2) on the methods whose request
+// carries one or whose response lists threads.
+const ANCHOR_MINOR_METHODS: readonly string[] = [
+  "epic.createCommentThread",
+  "epic.listCommentThreads",
+  "comments.listThreads",
+];
+
 describe("artifact-kind unary minors: registry shape", () => {
   it.each(MINOR_BUMPED_METHODS)(
     "%s keeps 1.0 installed and takes 1.1 above it",
     (method) => {
       const line = hostRpcRegistry[method][1];
-      expect(line.latestMinor).toBe(1);
+      expect(line.latestMinor).toBe(
+        ANCHOR_MINOR_METHODS.includes(method) ? 2 : 1,
+      );
       expect(line.versions[0].contract.schemaVersion).toEqual({
         major: 1,
         minor: 0,
@@ -169,6 +182,206 @@ describe("epic.createCommentThread@1.1", () => {
   );
 });
 
+describe("anchor fields on listed threads", () => {
+  const thread = {
+    threadId: "thread-1",
+    resolved: false,
+    createdAt: 1,
+    comments: [],
+    data: { createdByUserId: "user-1" },
+  };
+  const anchoredData = {
+    anchorKind: "text" as const,
+    artboard: "board-1",
+    elementId: "tid-1",
+    startOffset: 2,
+    endOffset: 9,
+    label: "Hero heading",
+  };
+  const anchoredThread = {
+    ...thread,
+    data: { ...thread.data, ...anchoredData },
+  };
+
+  it("1.2 returns the anchor fields on a thread of epic.listCommentThreads", () => {
+    const parsed = epicListCommentThreadsV12.responseSchema.parse({
+      threads: [anchoredThread],
+    });
+    expect(parsed.threads[0]?.data).toMatchObject(anchoredData);
+  });
+
+  it("1.1 of epic.listCommentThreads stays frozen and drops the anchor fields", () => {
+    const parsed = epicListCommentThreadsV11.responseSchema.parse({
+      threads: [anchoredThread],
+    });
+    expect(parsed.threads[0]?.data).toEqual(thread.data);
+  });
+
+  it("1.2 still reads a thread that carries no anchor", () => {
+    const parsed = epicListCommentThreadsV12.responseSchema.parse({
+      threads: [thread],
+    });
+    expect(parsed.threads[0]?.data).toEqual(thread.data);
+  });
+
+  it("1.2 refuses a negative anchor offset or an unknown anchor kind", () => {
+    for (const data of [
+      { ...anchoredThread.data, startOffset: -1 },
+      { ...anchoredThread.data, anchorKind: "page" },
+    ]) {
+      expect(
+        epicListCommentThreadsV12.responseSchema.safeParse({
+          threads: [{ ...thread, data }],
+        }).success,
+      ).toBe(false);
+    }
+  });
+
+  describe("comments.listThreads", () => {
+    const response = {
+      artifacts: [
+        {
+          artifactPath: "pages/a-page",
+          kind: "html",
+          title: "A page",
+          warning: null,
+          threads: [
+            {
+              thread: anchoredThread,
+              anchorStatus: "missing",
+              anchorOrder: null,
+              anchorWarning: null,
+            },
+          ],
+        },
+      ],
+    };
+
+    it("1.2 returns the anchor fields next to the computed anchor status", () => {
+      const parsed = commentsListThreadsV12.responseSchema.parse(response);
+      const listed = parsed.artifacts[0]?.threads[0];
+      expect(listed?.anchorStatus).toBe("missing");
+      expect(listed?.thread.data).toMatchObject(anchoredData);
+    });
+
+    it("1.1 stays frozen and drops the anchor fields but keeps the status", () => {
+      const parsed = commentsListThreadsV11.responseSchema.parse(response);
+      const listed = parsed.artifacts[0]?.threads[0];
+      expect(listed?.anchorStatus).toBe("missing");
+      expect(listed?.thread.data).toEqual(thread.data);
+    });
+  });
+});
+
+describe("epic.createCommentThread@1.2", () => {
+  const request = {
+    epicId: "epic-1",
+    artifactType: "html" as const,
+    artifactId: "artifact-1",
+    content: { type: "doc" as const, content: [] },
+    quotedText: "quoted",
+  };
+  const element = {
+    kind: "element" as const,
+    artboard: "board-1",
+    elementId: "tid-1",
+    label: "Hero heading",
+  };
+  const text = {
+    kind: "text" as const,
+    artboard: "board-1",
+    elementId: "tid-1",
+    label: "Hero heading",
+    startOffset: 2,
+    endOffset: 9,
+  };
+
+  it("takes 1.2 above 1.1 in the registry", () => {
+    const line = hostRpcRegistry["epic.createCommentThread"][1];
+    expect(line.latestMinor).toBe(2);
+    expect(line.versions[2].contract.schemaVersion).toEqual({
+      major: 1,
+      minor: 2,
+    });
+  });
+
+  it("makes the anchor optional, so a request without one still parses", () => {
+    expect(
+      epicCreateCommentThreadV12.requestSchema.safeParse(request).success,
+    ).toBe(true);
+  });
+
+  it.each([
+    ["artifact", { kind: "artifact" as const }],
+    ["element", element],
+    ["text", text],
+  ])("1.2 accepts a %s anchor and keeps it", (_name, anchor) => {
+    const parsed = epicCreateCommentThreadV12.requestSchema.parse({
+      ...request,
+      anchor,
+    });
+    expect(parsed.anchor).toEqual(anchor);
+  });
+
+  it.each([
+    ["an unknown kind", { kind: "page" }],
+    ["an element anchor without a label", { ...element, label: undefined }],
+    [
+      "an element anchor without an artboard",
+      { ...element, artboard: undefined },
+    ],
+    [
+      "an element anchor without an element id",
+      { ...element, elementId: undefined },
+    ],
+    ["a text anchor without offsets", { ...text, startOffset: undefined }],
+    ["a negative start offset", { ...text, startOffset: -1 }],
+    ["a fractional start offset", { ...text, startOffset: 1.5 }],
+    [
+      "an end offset before the start",
+      { ...text, startOffset: 5, endOffset: 4 },
+    ],
+  ])("1.2 refuses %s", (_name, anchor) => {
+    expect(
+      epicCreateCommentThreadV12.requestSchema.safeParse({
+        ...request,
+        anchor,
+      }).success,
+    ).toBe(false);
+  });
+
+  it("accepts a collapsed text range, where the end equals the start", () => {
+    expect(
+      epicCreateCommentThreadV12.requestSchema.safeParse({
+        ...request,
+        anchor: { ...text, startOffset: 4, endOffset: 4 },
+      }).success,
+    ).toBe(true);
+  });
+
+  it("1.1 stays frozen: it strips the anchor instead of carrying it", () => {
+    const parsed = epicCreateCommentThreadV11.requestSchema.parse({
+      ...request,
+      anchor: element,
+    });
+    expect(parsed).toEqual(request);
+    expect("anchor" in parsed).toBe(false);
+  });
+
+  it("upgrades a 1.1 request as the identity", () => {
+    const upgrade =
+      hostRpcRegistry["epic.createCommentThread"][1].versions[2]
+        .upgradeFromPreviousVersion;
+    if (upgrade === null) throw new Error("expected a 1.1 to 1.2 upgrade path");
+    const parsed = epicCreateCommentThreadV11.requestSchema.parse(request);
+    const upgraded = upgrade.upgradeRequest(parsed);
+    expect(upgraded).toBe(parsed);
+    expect(
+      epicCreateCommentThreadV12.requestSchema.safeParse(upgraded).success,
+    ).toBe(true);
+  });
+});
+
 interface RequestParser {
   safeParse(input: unknown): { success: boolean };
 }
@@ -192,7 +405,7 @@ const COMMENT_THREAD_METHOD_CASES: readonly CommentThreadMethodCase[] = [
   {
     method: "epic.createCommentThread",
     frozenRequest: epicCreateCommentThreadV10.requestSchema,
-    latestRequest: epicCreateCommentThreadV11.requestSchema,
+    latestRequest: epicCreateCommentThreadV12.requestSchema,
     request: {
       ...COMMENT_THREAD_ADDRESS,
       content: COMMENT_CONTENT,
@@ -249,7 +462,7 @@ const COMMENT_THREAD_METHOD_CASES: readonly CommentThreadMethodCase[] = [
   {
     method: "epic.listCommentThreads",
     frozenRequest: epicListCommentThreadsV10.requestSchema,
-    latestRequest: epicListCommentThreadsV11.requestSchema,
+    latestRequest: epicListCommentThreadsV12.requestSchema,
     request: { ...COMMENT_THREAD_ADDRESS },
   },
 ];

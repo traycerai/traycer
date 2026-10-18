@@ -3,6 +3,7 @@ import {
   Circle,
   Hand,
   MousePointer2,
+  MessageSquarePlus,
   Pen,
   Play,
   Redo2,
@@ -23,6 +24,7 @@ import { CanvasZoomPresets } from "./canvas-zoom-presets";
 import type { CanvasTool } from "./canvas-model";
 const TOOLS = [
   { tool: "select", label: "Select", key: "V", icon: MousePointer2 },
+  { tool: "comment", label: "Comment", key: "C", icon: MessageSquarePlus },
   { tool: "hand", label: "Hand", key: "H", icon: Hand },
   { tool: "sticky", label: "Sticky note", key: "N", icon: StickyNote },
   { tool: "rect", label: "Rectangle", key: "R", icon: Square },
@@ -34,6 +36,7 @@ const TOOLS = [
 ] as const;
 export function CanvasToolbar(props: {
   readonly viewOnly?: boolean;
+  readonly commentsEnabled?: boolean;
   readonly tool: CanvasTool;
   readonly setTool: (tool: CanvasTool) => void;
   readonly play: boolean;
@@ -67,7 +70,9 @@ export function CanvasToolbar(props: {
       <div className="mx-1 h-4 w-px bg-border" />
       {props.viewOnly ? null : (
         <>
-          {TOOLS.map(({ tool, label, key, icon: Icon }) => (
+          {TOOLS.filter(
+            ({ tool }) => tool !== "comment" || props.commentsEnabled === true,
+          ).map(({ tool, label, key, icon: Icon }) => (
             <TooltipWrapper
               key={tool}
               label={`${label} (${key})`}

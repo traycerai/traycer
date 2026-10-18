@@ -14,13 +14,14 @@ import type {
 export interface CanvasBootstrapConfig {
   readonly nonce: string;
   readonly styleProperties: readonly string[];
+  readonly canvasLinks?: "native";
 }
 /** Serialized into canvas documents only. Keep every runtime helper inside. */
 export function canvasBootstrap(config: CanvasBootstrapConfig): void {
   document.currentScript?.remove();
   const host = window.parent;
   let ready = false;
-  let mode: CanvasMode = "edit";
+  let mode: CanvasMode = config.canvasLinks === "native" ? "play" : "edit";
   let textTarget: Element | null = null;
   let hasTextTarget = false;
   const record = (value: unknown): value is Record<string, unknown> =>
@@ -299,6 +300,127 @@ export function canvasBootstrap(config: CanvasBootstrapConfig): void {
     const element = document.elementFromPoint(params.x, params.y);
     return { element: element === null ? null : capture(element) };
   };
+  const literalAncestor = (
+    params: Record<string, unknown>,
+  ): { element: CanvasElement | null } => {
+    let element = locate(params);
+    if (
+      element === null &&
+      typeof params.selector === "string" &&
+      params.selector.length <= 1000
+    ) {
+      try {
+        const matches = document.querySelectorAll(params.selector);
+        if (matches.length === 1) element = matches.item(0);
+      } catch {
+        return { element: null };
+      }
+    }
+    element = element?.parentElement ?? null;
+    while (element !== null) {
+      const captured = capture(element);
+      if (captured.marker !== null || captured.tid !== null)
+        return { element: captured };
+      element = element.parentElement;
+    }
+    return { element: null };
+  };
+  const commentRangeOffsets = (
+    element: Element,
+    params: Record<string, unknown>,
+  ): { start: number; end: number } | null => {
+    const { start, end } = params;
+    if (
+      typeof start !== "number" ||
+      typeof end !== "number" ||
+      !Number.isSafeInteger(start) ||
+      !Number.isSafeInteger(end) ||
+      start < 0 ||
+      end <= start
+    )
+      return null;
+    if (
+      typeof params.quotedText !== "string" ||
+      params.quotedText.length > 16_000
+    )
+      return { start, end };
+    const quote = normalize(params.quotedText);
+    const text = normalize(element.textContent);
+    if (quote.length === 0) return null;
+    const found =
+      text.slice(start, end) === quote ? start : text.indexOf(quote);
+    return found < 0 ? null : { start: found, end: found + quote.length };
+  };
+  const commentTextRange = (
+    element: Element,
+    start: number,
+    end: number,
+  ): Range | null => {
+    const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+    let index = 0;
+    let seenText = false;
+    let whitespace = false;
+    let first: { node: Node; offset: number } | null = null;
+    let last: { node: Node; offset: number } | null = null;
+    let node = walker.nextNode();
+    while (node !== null && index < end) {
+      const text = node.textContent ?? "";
+      for (let i = 0; i < text.length && index < end; i++) {
+        if (/\s/.test(text[i])) {
+          whitespace = seenText;
+          continue;
+        }
+        if (whitespace) {
+          index++;
+          whitespace = false;
+        }
+        if (index === start) first = { node, offset: i };
+        index++;
+        if (index === end) last = { node, offset: i + 1 };
+        seenText = true;
+      }
+      node = walker.nextNode();
+    }
+    if (first === null || last === null) return null;
+    const range = document.createRange();
+    range.setStart(first.node, first.offset);
+    range.setEnd(last.node, last.offset);
+    return range;
+  };
+  const textRangeRect = (
+    params: Record<string, unknown>,
+  ): { box: CanvasBox | null } => {
+    const element = locate(params);
+    if (element === null) return { box: null };
+    const offsets = commentRangeOffsets(element, params);
+    const range =
+      offsets === null
+        ? null
+        : commentTextRange(element, offsets.start, offsets.end);
+    return {
+      box: boxOf(
+        range?.getBoundingClientRect() ?? element.getBoundingClientRect(),
+      ),
+    };
+  };
+  const describeElement = (
+    params: Record<string, unknown>,
+  ): { element: CanvasElement | null } => {
+    const element = locate(params);
+    if (element === null) return { element: null };
+    const html = element.outerHTML;
+    return {
+      element: {
+        ...capture(element),
+        textSnapshot: textSnapshot(element),
+        outerHtml:
+          html.length <= 65_536 &&
+          new TextEncoder().encode(html).length <= 65_536
+            ? html
+            : null,
+      },
+    };
+  };
   const answer = (
     method: unknown,
     params: Record<string, unknown>,
@@ -315,22 +437,12 @@ export function canvasBootstrap(config: CanvasBootstrapConfig): void {
         reportSelection();
         return {};
       }
-      case "traycer/canvas/describe-element": {
-        const element = locate(params);
-        if (element === null) return { element: null };
-        const html = element.outerHTML;
-        return {
-          element: {
-            ...capture(element),
-            textSnapshot: textSnapshot(element),
-            outerHtml:
-              html.length <= 65_536 &&
-              new TextEncoder().encode(html).length <= 65_536
-                ? html
-                : null,
-          },
-        };
-      }
+      case "traycer/canvas/describe-element":
+        return describeElement(params);
+      case "traycer/canvas/literal-ancestor":
+        return literalAncestor(params);
+      case "traycer/canvas/text-range-rect":
+        return textRangeRect(params);
       case "traycer/canvas/element-box": {
         const element = locate(params);
         return {
@@ -427,6 +539,7 @@ export function canvasBootstrap(config: CanvasBootstrapConfig): void {
   // Before the ordinary bootstrap's window-bubble link handler drops custom
   // schemes. Page target handlers still get their normal turn in Play.
   document.addEventListener("click", (event) => {
+    if (config.canvasLinks === "native") return;
     if (mode !== "play" || event.defaultPrevented || event.button !== 0) return;
     const anchor =
       event.target instanceof Element ? event.target.closest("a[href]") : null;
@@ -551,10 +664,21 @@ export function canvasBootstrap(config: CanvasBootstrapConfig): void {
 
 /** Only the artifact composer imports this; the ordinary loader stays small. */
 export function buildCanvasPrelude(nonce: string): string {
-  const config: CanvasBootstrapConfig = {
+  return renderCanvasPrelude({
     nonce,
     styleProperties: CANVAS_STYLE_PROPERTIES,
-  };
+  });
+}
+
+export function buildHtmlSelectionPrelude(nonce: string): string {
+  return renderCanvasPrelude({
+    nonce,
+    styleProperties: CANVAS_STYLE_PROPERTIES,
+    canvasLinks: "native",
+  });
+}
+
+function renderCanvasPrelude(config: CanvasBootstrapConfig): string {
   const json = JSON.stringify(config)
     .replace(/</g, "\\u003c")
     .replace(/\u2028/g, "\\u2028")

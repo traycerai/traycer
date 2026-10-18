@@ -73,6 +73,8 @@ export type SandboxSource =
   | {
       readonly kind: "artifact";
       readonly canvas?: boolean;
+      /** Plain HTML keeps ordinary page links and starts with selection off. */
+      readonly canvasLinks?: "native";
       readonly artifactId: string;
       /** POSIX path from the artifacts tree root; empty for a top-level artifact. */
       readonly treePath: string;
@@ -92,6 +94,7 @@ function sameSource(previous: SandboxSource, next: SandboxSource): boolean {
     previous.treePath === next.treePath &&
     previous.entryPath === next.entryPath &&
     previous.canvas === next.canvas &&
+    previous.canvasLinks === next.canvasLinks &&
     previous.manifest === next.manifest &&
     previous.readSpan === next.readSpan &&
     previous.resolveOutsideReference === next.resolveOutsideReference
@@ -455,6 +458,7 @@ export function SandboxFrame(props: SandboxFrameProps) {
       resolveOutsideReference: inputs.source.resolveOutsideReference,
       document: {
         canvas: inputs.source.canvas,
+        canvasLinks: inputs.source.canvasLinks,
         policySource: inputs.runnerHost.sandboxArtifacts.policySource,
         csp: inputs.policy.csp,
         theme: inputs.theme,

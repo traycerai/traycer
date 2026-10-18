@@ -146,7 +146,10 @@ import {
   epicLaneRowRevisionFields,
   epicLaneTextFrameFields,
 } from "@traycer/protocol/host/epic/lane-cursor";
-import { commentThreadWireSchema } from "@traycer/protocol/host/epic/unary-schemas";
+import {
+  commentThreadWireSchema,
+  commentThreadWireSchemaPreAnchor,
+} from "@traycer/protocol/host/epic/unary-schemas";
 import {
   deletedHtmlArtifactSchema,
   deletedCanvasArtifactSchema,
@@ -493,13 +496,9 @@ export type EpicStateRoleClaimsProjection = z.infer<
 /**
  * One comment thread, as a ROW on the records lane.
  *
- * The thread body reuses `commentThreadWireSchema` verbatim - the same shape
- * `epic.listCommentThreads` returns - so the cold read and the push cannot
- * disagree about what a thread is. That shape is FROZEN by the released
- * `epic.listCommentThreads@1.0` line: a field added to it grows a released
- * response, so the next field forks a versioned copy for THIS lane (the
- * `chatRecordSummarySchema` / `hostNotificationEntrySchemaV21` pattern) rather
- * than being edited in place.
+ * Older minors retain the pre-anchor thread shape shared with the released
+ * unary responses. The current record adds optional HTML/canvas anchor data;
+ * only state.subscribe@1.4 and later carry it.
  *
  * Two fields are added around it:
  *
@@ -514,6 +513,12 @@ export type EpicStateRoleClaimsProjection = z.infer<
  *   can genuinely land after a newer push. Apply an upsert only when its
  *   revision strictly EXCEEDS the one held.
  */
+export const epicCommentThreadRecordSchemaPreAnchor = lazySchema(() =>
+  commentThreadWireSchemaPreAnchor.extend({
+    artifactId: z.string().min(1),
+    ...epicLaneRowRevisionFields,
+  }),
+);
 export const epicCommentThreadRecordSchema = lazySchema(() =>
   commentThreadWireSchema.extend({
     artifactId: z.string().min(1),
@@ -670,7 +675,7 @@ const epicStateSubscribeSnapshotFrameSchemaV10 = lazySchema(() =>
     deletedArtifacts: z.array(epicDeletedArtifactRecordSchemaV10),
     roleClaims: epicStateRoleClaimsProjectionSchema,
     /** Every LIVE thread on this epic. Removed threads are simply absent. */
-    commentThreads: z.array(epicCommentThreadRecordSchema),
+    commentThreads: z.array(epicCommentThreadRecordSchemaPreAnchor),
     ...epicLaneTextFrameFields,
   }),
 );
@@ -794,7 +799,7 @@ const epicStateSubscribeDeltaFrameSchemaV10 = lazySchema(() =>
      * envelope or from a stale row it holds elsewhere.
      */
     artifactTombstones: z.array(epicDeletedArtifactRecordSchemaV10),
-    commentThreadUpserts: z.array(epicCommentThreadRecordSchema),
+    commentThreadUpserts: z.array(epicCommentThreadRecordSchemaPreAnchor),
     commentThreadRemovals: z.array(epicCommentThreadRemovalSchema),
     /**
      * The epic metadata this commit changed, at the revision the record reached,
@@ -1013,5 +1018,38 @@ export const epicStateSubscribeV13 = defineStreamRpcContract({
   schemaVersion: { major: 1, minor: 3 } as const,
   openRequestSchema: epicStateSubscribeOpenRequestSchemaV10,
   serverFrameSchema: epicStateSubscribeServerFrameSchemaV13,
+  clientFrameSchema: epicStateSubscribeClientFrameSchemaV10,
+});
+
+/** 1.4 carries HTML/canvas comment anchors; older minors strip these keys. */
+const epicStateSubscribeSnapshotFrameSchemaV14 = lazySchema(() =>
+  epicStateSubscribeSnapshotFrameSchemaV13.extend({
+    commentThreads: z.array(epicCommentThreadRecordSchema),
+  }),
+);
+const epicStateSubscribeDeltaFrameSchemaV14 = lazySchema(() =>
+  epicStateSubscribeDeltaFrameSchemaV13.extend({
+    commentThreadUpserts: z.array(epicCommentThreadRecordSchema),
+  }),
+);
+export const epicStateSubscribeServerFrameSchemaV14 = lazySchema(() =>
+  z
+    .discriminatedUnion("kind", [
+      epicStateSubscribeSnapshotFrameSchemaV14,
+      epicStateSubscribeResumedFrameSchemaV10,
+      epicStateSubscribeDeltaFrameSchemaV14,
+      epicStateSubscribeTrustChangedFrameSchemaV10,
+      z.object({ kind: z.literal("pong"), ...epicLaneTextFrameFields }),
+    ])
+    .superRefine(refineDeltaCarriesChange),
+);
+export type EpicStateSubscribeServerFrameV14 = z.infer<
+  typeof epicStateSubscribeServerFrameSchemaV14
+>;
+export const epicStateSubscribeV14 = defineStreamRpcContract({
+  method: "epic.state.subscribe",
+  schemaVersion: { major: 1, minor: 4 } as const,
+  openRequestSchema: epicStateSubscribeOpenRequestSchemaV10,
+  serverFrameSchema: epicStateSubscribeServerFrameSchemaV14,
   clientFrameSchema: epicStateSubscribeClientFrameSchemaV10,
 });

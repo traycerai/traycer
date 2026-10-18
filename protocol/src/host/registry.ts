@@ -378,6 +378,8 @@ import {
 import {
   commentsListThreadsV10,
   commentsListThreadsV11,
+  commentsListThreadsV12,
+  commentsListThreadsUpgradeV11ToV12,
   commentsListThreadsUpgradeV10ToV11,
   commentsSetThreadStatusV10,
 } from "@traycer/protocol/host/comments/contracts";
@@ -670,6 +672,8 @@ import {
   epicContinueSubagentV10,
   epicCreateCommentThreadV10,
   epicCreateCommentThreadV11,
+  epicCreateCommentThreadV12,
+  epicCreateCommentThreadUpgradeV11ToV12,
   epicCreateCommentThreadUpgradeV10ToV11,
   epicCreateTuiAgentV10,
   epicCreateTuiAgentV11,
@@ -744,6 +748,8 @@ import {
   epicListCollaboratorsUpgradeV10ToV11,
   epicListCommentThreadsV10,
   epicListCommentThreadsV11,
+  epicListCommentThreadsV12,
+  epicListCommentThreadsUpgradeV11ToV12,
   epicListCommentThreadsUpgradeV10ToV11,
   epicReadChatAttachmentUpgradeV10ToV11,
   epicReadChatAttachmentV10,
@@ -842,6 +848,7 @@ import {
   epicStateSubscribeV11,
   epicStateSubscribeV12,
   epicStateSubscribeV13,
+  epicStateSubscribeV14,
 } from "@traycer/protocol/host/epic/state-subscribe";
 import {
   epicStatusSubscribeV10,
@@ -6913,7 +6920,7 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
 
   "comments.listThreads": {
     1: {
-      latestMinor: 1,
+      latestMinor: 2,
       versions: {
         0: {
           contract: commentsListThreadsV10,
@@ -6925,6 +6932,10 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
           upgradeFromPreviousVersion: commentsListThreadsUpgradeV10ToV11,
           // The host filters new-kind entries for 1.0 (resolve-by-path answers not-found).
           responseGrowthProjectionGated: true,
+        },
+        2: {
+          contract: commentsListThreadsV12,
+          upgradeFromPreviousVersion: commentsListThreadsUpgradeV11ToV12,
         },
       },
       downgradePathsFromLatest: {},
@@ -8626,7 +8637,7 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
   },
   "epic.createCommentThread": {
     1: {
-      latestMinor: 1,
+      latestMinor: 2,
       versions: {
         0: {
           contract: epicCreateCommentThreadV10,
@@ -8636,6 +8647,10 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
         1: {
           contract: epicCreateCommentThreadV11,
           upgradeFromPreviousVersion: epicCreateCommentThreadUpgradeV10ToV11,
+        },
+        2: {
+          contract: epicCreateCommentThreadV12,
+          upgradeFromPreviousVersion: epicCreateCommentThreadUpgradeV11ToV12,
         },
       },
       downgradePathsFromLatest: {},
@@ -8729,7 +8744,7 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
   },
   "epic.listCommentThreads": {
     1: {
-      latestMinor: 1,
+      latestMinor: 2,
       versions: {
         0: {
           contract: epicListCommentThreadsV10,
@@ -8739,6 +8754,10 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
         1: {
           contract: epicListCommentThreadsV11,
           upgradeFromPreviousVersion: epicListCommentThreadsUpgradeV10ToV11,
+        },
+        2: {
+          contract: epicListCommentThreadsV12,
+          upgradeFromPreviousVersion: epicListCommentThreadsUpgradeV11ToV12,
         },
       },
       downgradePathsFromLatest: {},
@@ -13069,7 +13088,7 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
   // released floor (`released-floor.ts`), which is fail-closed on the name set.
   "epic.state.subscribe": {
     1: {
-      latestMinor: 3,
+      latestMinor: 4,
       versions: {
         0: {
           contract: epicStateSubscribeV10,
@@ -13087,6 +13106,7 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
         },
         // The host drops new-kind rows for peers below 1.3.
         3: { contract: epicStateSubscribeV13 },
+        4: { contract: epicStateSubscribeV14 },
       },
     },
   },

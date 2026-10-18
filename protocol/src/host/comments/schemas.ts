@@ -4,7 +4,10 @@ import {
   commonRecordRegistry,
   EpicArtifactKindSchemaPreHtml,
 } from "@traycer/protocol/common/registry";
-import { commentThreadWireSchema } from "../epic/unary-schemas";
+import {
+  commentThreadWireSchema,
+  commentThreadWireSchemaPreAnchor,
+} from "../epic/unary-schemas";
 import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 
 export const commentThreadStatusFilterSchema = lazySchema(() =>
@@ -30,13 +33,16 @@ export type CommentsListThreadsRequest = z.infer<
   typeof commentsListThreadsRequestSchema
 >;
 
-export const commentsListThreadSchema = lazySchema(() =>
+export const commentsListThreadSchemaPreAnchor = lazySchema(() =>
   z.object({
-    thread: commentThreadWireSchema,
+    thread: commentThreadWireSchemaPreAnchor,
     anchorStatus: z.enum(["present", "missing", "unavailable"]),
     anchorOrder: z.number().nullable(),
     anchorWarning: z.string().nullable(),
   }),
+);
+export const commentsListThreadSchema = lazySchema(() =>
+  commentsListThreadSchemaPreAnchor.extend({ thread: commentThreadWireSchema }),
 );
 export type CommentsListThread = z.infer<typeof commentsListThreadSchema>;
 
@@ -46,13 +52,18 @@ export const commentsListArtifactSchemaPreHtml = lazySchema(() =>
     kind: EpicArtifactKindSchemaPreHtml,
     title: z.string(),
     warning: z.string().nullable(),
-    threads: z.array(commentsListThreadSchema),
+    threads: z.array(commentsListThreadSchemaPreAnchor),
   }),
 );
 /** 1.1 adds new-kind artifacts; 1.0 stays frozen. */
-export const commentsListArtifactSchema = lazySchema(() =>
+export const commentsListArtifactSchemaPreAnchor = lazySchema(() =>
   commentsListArtifactSchemaPreHtml.extend({
     kind: getRecordSchema(commonRecordRegistry, "epic-artifact-kind", "latest"),
+  }),
+);
+export const commentsListArtifactSchema = lazySchema(() =>
+  commentsListArtifactSchemaPreAnchor.extend({
+    threads: z.array(commentsListThreadSchema),
   }),
 );
 export type CommentsListArtifact = z.infer<typeof commentsListArtifactSchema>;
@@ -63,8 +74,13 @@ export const commentsListThreadsResponseSchemaPreHtml = lazySchema(() =>
   }),
 );
 /** 1.1 adds new-kind artifacts; 1.0 stays frozen. */
-export const commentsListThreadsResponseSchema = lazySchema(() =>
+export const commentsListThreadsResponseSchemaPreAnchor = lazySchema(() =>
   commentsListThreadsResponseSchemaPreHtml.extend({
+    artifacts: z.array(commentsListArtifactSchemaPreAnchor),
+  }),
+);
+export const commentsListThreadsResponseSchema = lazySchema(() =>
+  commentsListThreadsResponseSchemaPreAnchor.extend({
     artifacts: z.array(commentsListArtifactSchema),
   }),
 );

@@ -92,7 +92,7 @@ export function CanvasFullscreen({
         <div className="min-h-0 overflow-auto bg-canvas p-4">
           {/* Board pixels are the authored viewport, not a fixed layout surface. */}
           <div
-            className="mx-auto bg-background shadow-sm"
+            className="relative mx-auto bg-background shadow-sm"
             style={{ width: frame.w, height: frame.h }}
           >
             {source === null ? (
@@ -111,6 +111,7 @@ export function CanvasFullscreen({
                 fullscreen
               />
             )}
+            {events?.renderOverlay?.(path, false)}
           </div>
         </div>
       </DialogContent>

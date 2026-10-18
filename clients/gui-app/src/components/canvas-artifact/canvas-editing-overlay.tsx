@@ -1,3 +1,4 @@
+import { CanvasCommentAction } from "./canvas-comments";
 import { useState, useSyncExternalStore } from "react";
 import type { CanvasAnnotationScope } from "./canvas-annotation-action";
 import type {
@@ -124,6 +125,7 @@ function EditingControls(props: {
 }
 export function CanvasEditingOverlay(props: {
   readonly scope: CanvasAnnotationScope;
+  readonly tileId: string;
   readonly boardPath: string;
   readonly registry: CanvasFrameRegistry;
   readonly onPick: (
@@ -185,11 +187,19 @@ export function CanvasEditingOverlay(props: {
       }
       actionControls={
         request === null && selection !== null && additional.length === 0 ? (
-          <CanvasTextToolbar
-            inline
-            selection={selection}
-            document={document.data ?? null}
-          />
+          <>
+            <CanvasTextToolbar
+              inline
+              selection={selection}
+              document={document.data ?? null}
+            />
+            <CanvasCommentAction
+              scope={props.scope}
+              tileId={props.tileId}
+              selection={selection}
+              registry={props.registry}
+            />
+          </>
         ) : null
       }
       hideAction={request !== null || additional.length > 0}

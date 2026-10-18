@@ -1,3 +1,4 @@
+import type { CanvasTool } from "./canvas-model";
 import type { CanvasElement } from "@/lib/sandbox/canvas-bridge";
 import type { SandboxSource } from "@/components/sandbox/sandbox-frame";
 import type { SandboxBridgeHost, SandboxSize } from "@/lib/sandbox/bridge-host";
@@ -27,12 +28,27 @@ const EMPTY_FRAME: CanvasSelectionFrame = {
   size: null,
 };
 
+export interface CanvasCommentView {
+  readonly tool: CanvasTool;
+  readonly play: boolean;
+  readonly viewOnly: boolean;
+  readonly order: readonly string[];
+  readonly sourceForBoard: (path: string) => SandboxSource | null;
+  readonly revealBoard: (path: string) => void;
+  readonly setTool: (tool: CanvasTool) => void;
+}
+
 /** The mounted frame's immutable source identity and current DOM geometry. */
 export class CanvasFrameRegistry {
   private readonly frames = new Map<string, CanvasSelectionFrame>();
   private readonly listeners = new Set<() => void>();
   private version = 0;
   boardPath: string | null = null;
+  view: CanvasCommentView | null = null;
+  setView(view: CanvasCommentView | null): void {
+    this.view = view;
+    this.changed();
+  }
   readonly subscribe = (listener: () => void): (() => void) => {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);

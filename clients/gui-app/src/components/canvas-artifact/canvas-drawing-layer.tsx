@@ -53,7 +53,7 @@ export function CanvasDrawingLayer({
         if (stroke === null) return;
         update(null);
         const end = toCanvas({ x: event.clientX, y: event.clientY });
-        if (tool === "select" || tool === "hand") return;
+        if (tool === "select" || tool === "hand" || tool === "comment") return;
         const points: readonly [number, number, number][] = [
           ...stroke.points.slice(0, 19999),
           [end.x, end.y, event.pressure || 0.5],

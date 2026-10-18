@@ -36,7 +36,7 @@
 import type { SchemaVersion } from "@traycer/protocol/framework/versioned-stream-rpc";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import { epicSubscribeV13 } from "@traycer/protocol/host/epic/contracts";
-import { epicStateSubscribeV13 } from "@traycer/protocol/host/epic/state-subscribe";
+import { epicStateSubscribeV14 } from "@traycer/protocol/host/epic/state-subscribe";
 import { epicStatusSubscribeV10 } from "@traycer/protocol/host/epic/status-subscribe";
 import { artifactSubscribeV10 } from "@traycer/protocol/host/epic/artifact-subscribe";
 import type {
@@ -114,7 +114,7 @@ export const OPEN_PARAMS_PARSERS: {
 } = {
   "epic.subscribe": (value) => epicSubscribeV13.openRequestSchema.parse(value),
   "epic.state.subscribe": (value) =>
-    epicStateSubscribeV13.openRequestSchema.parse(value),
+    epicStateSubscribeV14.openRequestSchema.parse(value),
   "epic.status.subscribe": (value) =>
     epicStatusSubscribeV10.openRequestSchema.parse(value),
   "artifact.subscribe": (value) =>
@@ -128,7 +128,7 @@ export const OPEN_PARAMS_SCHEMA_SOURCES: {
   };
 } = {
   "epic.subscribe": epicSubscribeV13,
-  "epic.state.subscribe": epicStateSubscribeV13,
+  "epic.state.subscribe": epicStateSubscribeV14,
   "epic.status.subscribe": epicStatusSubscribeV10,
   "artifact.subscribe": artifactSubscribeV10,
 };

@@ -413,6 +413,25 @@ export class SandboxBridgeHost {
     );
   }
 
+  literalAncestor(
+    locator: CanvasElementLocator | { readonly selector: string },
+  ): Promise<CanvasElement | null> {
+    return this.canvasRequest("literal-ancestor", locator).then((result) =>
+      canvasRecord(result) ? parseCanvasElement(result.element) : null,
+    );
+  }
+
+  textRangeRect(params: {
+    readonly tid: string;
+    readonly start: number;
+    readonly end: number;
+    readonly quotedText?: string;
+  }): Promise<CanvasBox | null> {
+    return this.canvasRequest("text-range-rect", params).then((result) =>
+      canvasRecord(result) ? parseCanvasBox(result.box) : null,
+    );
+  }
+
   elementBox(locator: CanvasElementLocator): Promise<CanvasBox | null> {
     return this.canvasRequest("element-box", locator).then((result) =>
       parseCanvasBox(result?.box),

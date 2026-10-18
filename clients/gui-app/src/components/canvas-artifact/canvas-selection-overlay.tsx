@@ -38,7 +38,7 @@ function actionPosition(
   };
 }
 
-function SelectionOutline(props: {
+export function SelectionOutline(props: {
   readonly box: CanvasBox;
   readonly generated: boolean;
   readonly hideHandles: boolean | undefined;

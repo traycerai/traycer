@@ -1,7 +1,7 @@
 import type { Editor } from "@tiptap/core";
 
 interface RegisteredCommentEditor {
-  readonly editor: Editor;
+  readonly reveal: (threadId: string) => boolean;
   readonly isActive: boolean;
 }
 
@@ -33,28 +33,46 @@ function findThreadAnchorRange(
   return range;
 }
 
-export interface RegisterCommentEditorArgs {
+interface CommentEditorScope {
   readonly epicId: string;
   readonly artifactId: string;
   readonly tileId: string;
-  readonly editor: Editor;
   readonly isActive: boolean;
 }
+
+export type RegisterCommentEditorArgs = CommentEditorScope &
+  (
+    | { readonly editor: Editor; readonly reveal?: never }
+    | {
+        readonly reveal: (threadId: string) => boolean;
+        readonly editor?: never;
+      }
+  );
 
 export function registerCommentEditor(
   args: RegisterCommentEditorArgs,
 ): () => void {
-  const { epicId, artifactId, tileId, editor, isActive } = args;
+  const { epicId, artifactId, tileId, isActive } = args;
+  const reveal =
+    args.reveal ??
+    ((threadId: string): boolean => {
+      const editor = args.editor;
+      if (editor.isDestroyed) return false;
+      const range = findThreadAnchorRange(editor, threadId);
+      if (range === null) return false;
+      scrollRangeIntoView(editor, range);
+      return true;
+    });
   const key = registryKey(epicId, artifactId);
   const editors =
     editorsByArtifact.get(key) ?? new Map<string, RegisteredCommentEditor>();
-  editors.set(tileId, { editor, isActive });
+  editors.set(tileId, { reveal, isActive });
   editorsByArtifact.set(key, editors);
 
   return () => {
     const currentEditors = editorsByArtifact.get(key);
     if (currentEditors === undefined) return;
-    if (currentEditors.get(tileId)?.editor !== editor) return;
+    if (currentEditors.get(tileId)?.reveal !== reveal) return;
     currentEditors.delete(tileId);
     if (currentEditors.size === 0) {
       editorsByArtifact.delete(key);
@@ -92,15 +110,7 @@ export function revealCommentThreadAnchor(
     ...registeredEditors.filter((entry) => entry.isActive),
     ...registeredEditors.filter((entry) => !entry.isActive),
   ];
-  const match = preferredEditors
-    .map((entry) => ({
-      editor: entry.editor,
-      range: findThreadAnchorRange(entry.editor, threadId),
-    }))
-    .find((entry) => entry.range !== null);
-  if (match === undefined || match.range === null) return false;
-  scrollRangeIntoView(match.editor, match.range);
-  return true;
+  return preferredEditors.some((entry) => entry.reveal(threadId));
 }
 
 export function clearCommentEditorRegistryForTests(): void {

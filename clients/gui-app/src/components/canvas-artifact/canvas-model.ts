@@ -11,6 +11,7 @@ export const BOARD_HEADER_HEIGHT = 36;
 export type CanvasTool =
   | "select"
   | "hand"
+  | "comment"
   | "sticky"
   | "rect"
   | "oval"
@@ -29,6 +30,7 @@ export interface CanvasPageItems {
 const TOOL_KEYS: Readonly<Record<string, CanvasTool>> = {
   v: "select",
   h: "hand",
+  c: "comment",
   n: "sticky",
   r: "rect",
   o: "oval",

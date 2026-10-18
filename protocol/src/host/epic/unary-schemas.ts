@@ -2918,9 +2918,42 @@ export const createCommentThreadRequestSchemaPreHtml = lazySchema(() =>
   }),
 );
 /** 1.1 adds the new artifact kinds; 1.0 stays frozen. */
-export const createCommentThreadRequestSchema = lazySchema(() =>
+export const createCommentThreadRequestSchemaPreAnchor = lazySchema(() =>
   createCommentThreadRequestSchemaPreHtml.extend({
     artifactType: latestEpicArtifactKindSchema,
+  }),
+);
+/** Durable HTML/canvas anchors; offsets refer to normalized element text. */
+export const commentAnchorSchema = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    z.object({ kind: z.literal("artifact") }),
+    z.object({
+      kind: z.literal("element"),
+      artboard: z.string(),
+      elementId: z.string(),
+      label: z.string(),
+    }),
+    z
+      .object({
+        kind: z.literal("text"),
+        artboard: z.string(),
+        elementId: z.string(),
+        startOffset: z.number().int().nonnegative(),
+        endOffset: z.number().int().nonnegative(),
+        label: z.string(),
+      })
+      .refine((anchor) => anchor.endOffset >= anchor.startOffset, {
+        message: "Text anchor end must not precede its start",
+        path: ["endOffset"],
+      }),
+  ]),
+);
+export type CommentAnchor = z.infer<typeof commentAnchorSchema>;
+
+/** 1.2 adds anchors; negotiation keeps anchored writes off older hosts. */
+export const createCommentThreadRequestSchema = lazySchema(() =>
+  createCommentThreadRequestSchemaPreAnchor.extend({
+    anchor: commentAnchorSchema.optional(),
   }),
 );
 export type CreateCommentThreadRequest = z.infer<
@@ -3086,7 +3119,7 @@ export const commentEntrySchema = lazySchema(() =>
   }),
 );
 
-export const commentThreadDataSchema = lazySchema(() =>
+export const commentThreadDataSchemaPreAnchor = lazySchema(() =>
   z.object({
     createdByUserId: z.string(),
     createdByHandle: z.string().nullable().optional(),
@@ -3094,14 +3127,28 @@ export const commentThreadDataSchema = lazySchema(() =>
   }),
 );
 
-export const commentThreadWireSchema = lazySchema(() =>
+export const commentThreadDataSchema = lazySchema(() =>
+  commentThreadDataSchemaPreAnchor.extend({
+    anchorKind: z.enum(["artifact", "element", "text"]).optional(),
+    artboard: z.string().optional(),
+    elementId: z.string().optional(),
+    startOffset: z.number().int().nonnegative().optional(),
+    endOffset: z.number().int().nonnegative().optional(),
+    label: z.string().optional(),
+  }),
+);
+
+export const commentThreadWireSchemaPreAnchor = lazySchema(() =>
   z.object({
     threadId: z.string(),
     resolved: z.boolean(),
     createdAt: z.number(),
     comments: z.array(commentEntrySchema),
-    data: commentThreadDataSchema,
+    data: commentThreadDataSchemaPreAnchor,
   }),
+);
+export const commentThreadWireSchema = lazySchema(() =>
+  commentThreadWireSchemaPreAnchor.extend({ data: commentThreadDataSchema }),
 );
 export type CommentThreadWire = z.infer<typeof commentThreadWireSchema>;
 
@@ -3122,8 +3169,13 @@ export type ListCommentThreadsRequest = z.infer<
   typeof listCommentThreadsRequestSchema
 >;
 
-export const listCommentThreadsResponseSchema = lazySchema(() =>
+export const listCommentThreadsResponseSchemaPreAnchor = lazySchema(() =>
   z.object({
+    threads: z.array(commentThreadWireSchemaPreAnchor),
+  }),
+);
+export const listCommentThreadsResponseSchema = lazySchema(() =>
+  listCommentThreadsResponseSchemaPreAnchor.extend({
     threads: z.array(commentThreadWireSchema),
   }),
 );

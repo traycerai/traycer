@@ -1,17 +1,25 @@
+import type { HtmlSelection } from "@/components/html-artifact/html-selection-store";
+import {
+  HtmlArtifactCommentAction,
+  HtmlArtifactComments,
+} from "@/components/comments/html-artifact-comments";
 import { CanvasSelectionProvider } from "@/components/canvas-artifact/canvas-selection-provider";
 import { useEpicViewTabId } from "@/components/epic-canvas/view-tab-context";
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
 import type { ArtifactProjection } from "@/stores/epics/open-epic/types";
 import { CanvasArtifactSurface } from "@/components/canvas-artifact/canvas-artifact-surface";
+import {
+  HtmlArtifactFrame,
+  type HtmlArtifactFrameContext,
+} from "@/components/html-artifact/html-artifact-frame";
 import { isMobileApp } from "@/lib/mobile-app";
 import { resolveDesktopPlatform } from "@/lib/windows/desktop-capabilities";
 import { useRunnerHostOrNull } from "@/providers/use-runner-host";
-import { useMemo } from "react";
-import {
-  SandboxFrame,
-  type SandboxSource,
-} from "@/components/sandbox/sandbox-frame";
+import { useCallback, useMemo, useState } from "react";
+import type { SandboxSource } from "@/components/sandbox/sandbox-frame";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
+import { useFrameCommentsEnabled } from "@/hooks/comments/use-frame-comments-enabled";
+import { htmlCommentRootArtboard } from "@/lib/comments/frame-comment-anchor";
 import { useEpicStore } from "@/hooks/use-epic-store";
 import {
   useArtifactById,
@@ -23,14 +31,21 @@ import { useStableOutsideReferenceResolver } from "@/lib/artifacts/use-stable-ou
 import { createHostObjectReader } from "@/lib/sandbox/artifact-serving/host-object-reader";
 import type { EpicArtifactRef } from "@/stores/epics/canvas/types";
 
-const noop = (): void => undefined;
-const NO_PERMISSIONS = [] as const;
+function canCommentOnHtml(enabled: boolean, viewTabId: string | null): boolean {
+  return enabled && viewTabId !== null;
+}
 
 export function ObjectArtifactTile(props: {
   readonly node: EpicArtifactRef;
   readonly epicId: string;
 }) {
   const runnerHost = useRunnerHostOrNull();
+  const commentsEnabled = useFrameCommentsEnabled();
+  const hostId = useTabHostId();
+  const viewTabId = useEpicViewTabId();
+  const [commentTileId] = useState(() => crypto.randomUUID());
+  const desktop =
+    runnerHost !== null && resolveDesktopPlatform(runnerHost) !== null;
   const artifact = useArtifactById(props.node.id);
   // An open html tile holds the same body lease a markdown tile holds, even
   // though it reads no body document: on the host that lease is the demand
@@ -59,6 +74,8 @@ export function ObjectArtifactTile(props: {
     if (paths === null) return null;
     return {
       kind: "artifact",
+      canvas: true,
+      canvasLinks: "native",
       artifactId: artifact.id,
       manifest: artifact.head,
       readSpan,
@@ -66,16 +83,52 @@ export function ObjectArtifactTile(props: {
       ...paths,
     };
   }, [artifact, artifacts, readSpan, resolveOutsideReference]);
+  const commentScope = useMemo(
+    () =>
+      artifact === null || source?.kind !== "artifact" || viewTabId === null
+        ? null
+        : {
+            epicId: props.epicId,
+            artifactId: artifact.id,
+            viewTabId,
+            tileId: commentTileId,
+            hostId,
+            rootPath: source.entryPath,
+            rootArtboard: htmlCommentRootArtboard(artifact),
+            source,
+          },
+    [artifact, source, viewTabId, props.epicId, commentTileId, hostId],
+  );
+  const commentActions = useCallback(
+    (selection: HtmlSelection, context: HtmlArtifactFrameContext) =>
+      commentScope === null ? null : (
+        <HtmlArtifactCommentAction
+          scope={commentScope}
+          context={context}
+          selection={selection}
+        />
+      ),
+    [commentScope],
+  );
+  const renderComments = useCallback(
+    (context: HtmlArtifactFrameContext) =>
+      commentScope === null || artifact === null ? null : (
+        <HtmlArtifactComments
+          scope={commentScope}
+          artifact={artifact}
+          context={context}
+          viewOnly={isMobileApp() || !desktop}
+        />
+      ),
+    [commentScope, artifact, desktop],
+  );
   if (artifact === null)
     return (
       <div className="p-4 text-muted-foreground">Artifact unavailable.</div>
     );
   if (artifact.kind === "canvas") {
     const mobile = isMobileApp();
-    if (
-      !mobile &&
-      (runnerHost === null || resolveDesktopPlatform(runnerHost) === null)
-    )
+    if (!mobile && !desktop)
       return (
         <div className="p-4 text-muted-foreground">
           Open this canvas in the desktop or mobile app.
@@ -89,25 +142,16 @@ export function ObjectArtifactTile(props: {
       />
     );
   }
-  if (source !== null) {
+  if (source?.kind === "artifact") {
     return (
-      <SandboxFrame
+      <HtmlArtifactFrame
+        key={artifact.id}
         source={source}
-        kind="page"
         title={artifact.title}
-        appName={null}
-        networkPolicy="https-only"
-        appCsp={null}
-        permissions={NO_PERMISSIONS}
-        appRequests={null}
-        className="h-full w-full"
-        height={null}
-        onSize={noop}
-        onStatus={noop}
-        onRequestTeardown={noop}
-        displayMode="inline"
-        onBridge={null}
-        ref={null}
+        selectable={!isMobileApp() && desktop}
+        commentsEnabled={canCommentOnHtml(commentsEnabled, viewTabId)}
+        actionControls={commentActions}
+        renderComments={renderComments}
       />
     );
   }
@@ -151,7 +195,7 @@ function CanvasTileSurface({
       viewOnly={viewOnly}
     />
   );
-  if (viewOnly || viewTabId === null) return surface;
+  if (viewTabId === null) return surface;
   return (
     <CanvasSelectionProvider
       epicId={epicId}
@@ -159,6 +203,7 @@ function CanvasTileSurface({
       artifactTitle={artifact.title}
       hostId={hostId}
       viewTabId={viewTabId}
+      viewOnly={viewOnly}
     >
       {surface}
     </CanvasSelectionProvider>

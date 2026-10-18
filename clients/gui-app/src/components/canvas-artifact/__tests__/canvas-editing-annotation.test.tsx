@@ -45,6 +45,9 @@ vi.mock("../use-artboard-edit", async () =>
 vi.mock("@/components/ui/agent-spinning-dots", () => ({
   AgentSpinningDots: () => null,
 }));
+vi.mock("@/hooks/comments/use-frame-comments-enabled", () => ({
+  useFrameCommentsEnabled: () => false,
+}));
 
 interface AttachInput {
   readonly chatId: string;
@@ -180,6 +183,7 @@ function mountOverlay() {
     >
       <CanvasEditingOverlay
         scope={SCOPE}
+        tileId="canvas-tile-1"
         boardPath={BOARD_PATH}
         registry={registry}
         onPick={() => undefined}

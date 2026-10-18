@@ -98,12 +98,33 @@ export interface CanvasArtifactEditorProps {
   readonly frameEvents: CanvasFrameEvents | null;
   readonly liveFrameLimit: number;
 }
+function CanvasPaneComments({
+  events,
+}: {
+  readonly events: CanvasFrameEvents | null;
+}) {
+  return events?.renderPaneOverlay?.();
+}
+function canvasToolAllowed(
+  tool: CanvasTool | null,
+  events: CanvasFrameEvents | null,
+): tool is CanvasTool {
+  return (
+    tool !== null && (tool !== "comment" || events?.commentsEnabled === true)
+  );
+}
 function canvasDrawingEnabled(
   readOnly: boolean,
   play: boolean,
   tool: CanvasTool,
-): tool is Exclude<CanvasTool, "select" | "hand"> {
-  return !readOnly && !play && tool !== "select" && tool !== "hand";
+): tool is Exclude<CanvasTool, "select" | "hand" | "comment"> {
+  return (
+    !readOnly &&
+    !play &&
+    tool !== "select" &&
+    tool !== "hand" &&
+    tool !== "comment"
+  );
 }
 function canvasSelectionEnabled(
   readOnly: boolean,
@@ -313,6 +334,39 @@ export function CanvasArtifactEditor({
     },
     [snapshot, flow, viewport.zoom],
   );
+  const revealCommentBoard = useCallback(
+    (path: string): void => {
+      if (!Object.hasOwn(snapshot.boards, path)) return;
+      const board = snapshot.boards[path];
+      setChosenPage(board.page ?? snapshot.pages.at(0)?.id ?? "");
+      const frame = boardFrame(board);
+      void flow?.fitBounds(
+        { x: frame.x, y: frame.y, width: frame.w, height: frame.h },
+        { padding: 0.15, duration: 200 },
+      );
+    },
+    [snapshot.boards, snapshot.pages, flow],
+  );
+  useEffect(() => {
+    frameEvents?.onCanvasView?.({
+      tool,
+      play,
+      viewOnly: readOnly,
+      order: snapshot.order,
+      sourceForBoard,
+      revealBoard: revealCommentBoard,
+      setTool,
+    });
+    return () => frameEvents?.onCanvasView?.(null);
+  }, [
+    frameEvents,
+    tool,
+    play,
+    readOnly,
+    snapshot.order,
+    sourceForBoard,
+    revealCommentBoard,
+  ]);
   const boardEvents = useMemo<CanvasFrameEvents>(
     () => ({
       ...frameEvents,
@@ -360,7 +414,12 @@ export function CanvasArtifactEditor({
     () => ({
       sourceForBoard,
       viewOnly: readOnly,
-      selectionEnabled: selectEnabled,
+      selectionEnabled:
+        selectEnabled ||
+        (!readOnly &&
+          !play &&
+          tool === "comment" &&
+          frameEvents?.commentsEnabled === true),
       onAddError: (path, error) => {
         if (readOnly) return;
         onAddError?.(path, error);
@@ -423,6 +482,8 @@ export function CanvasArtifactEditor({
     [
       sourceForBoard,
       selectEnabled,
+      tool,
+      play,
       frameEvents,
       boardEvents,
       readOnly,
@@ -473,7 +534,7 @@ export function CanvasArtifactEditor({
           const next = canvasToolForKey(
             event.code.startsWith("Key") ? event.code.slice(3) : event.code,
           );
-          if (next !== null) {
+          if (canvasToolAllowed(next, frameEvents)) {
             event.preventDefault();
             event.stopPropagation();
             setTool(next);
@@ -499,6 +560,7 @@ export function CanvasArtifactEditor({
           onRemove={(id) => store.transact((layout) => removePage(layout, id))}
         />
         <CanvasToolbar
+          commentsEnabled={frameEvents?.commentsEnabled}
           viewOnly={readOnly}
           onZoom={(zoom) => {
             void flow?.zoomTo(zoom);
@@ -560,6 +622,18 @@ export function CanvasArtifactEditor({
               onNodeClick={(_event, node) => {
                 if (!readOnly && node.data.board !== null)
                   frameEvents?.onBoardSelect?.(node.data.path);
+              }}
+              onPaneClick={(event) => {
+                if (
+                  !readOnly &&
+                  !play &&
+                  tool === "comment" &&
+                  frameEvents?.commentsEnabled === true
+                )
+                  frameEvents.onPaneComment?.({
+                    x: event.clientX,
+                    y: event.clientY,
+                  });
               }}
               onInit={setFlow}
               defaultViewport={INITIAL_VIEW}
@@ -646,6 +720,7 @@ export function CanvasArtifactEditor({
                 }}
               />
             ) : null}
+            <CanvasPaneComments events={frameEvents} />
             <CanvasCursors
               awareness={awareness}
               artifactId={artifactId}
