@@ -3788,7 +3788,9 @@ dialog.tsx` / `notification-hook-draft.ts`, unchanged by this pass).
       safety order in `PERMISSION_OPTIONS` stays separate and unchanged, as do
       compatibility fallbacks. The Auto row has the same label-and-description
       shape as its peers; reviewer/model/billing metadata is shown in Judge
-      settings, not the picker. Availability reasons and mid-turn notices stay.
+      settings, not the picker. For a provider judge whose effective choice is
+      listed as Max Mode only, the Auto row adds only `· Max Mode`, on desktop
+      and mobile. Availability reasons and mid-turn notices stay.
   - **Judge** (`judge-tab.tsx`, with `judge-tile-state.ts`,
     `use-judge-toolbar-store.ts`, `judge-model-face.tsx` and
     `judge-status-lines.tsx`) - **Auto mode judge**: which model checks each
@@ -3847,6 +3849,12 @@ dialog.tsx` / `notification-hook-draft.ts`, unchanged by this pass).
       Fast footer (`withServiceTier` off). It is the composer's picker in
       behaviour: a click on a provider, an account or a model saves at once
       and keeps the panel open, and only an outside click or Esc closes it.
+      Its Max Mode badge reads the judge choice without a Fast parameter;
+      the same model can have a different badge in the chat picker. It uses
+      the store's effective effort (stored when offered, otherwise the lowest)
+      when `autoJudge.get` can run one,
+      even if the independent `autoJudge.set` line cannot save an effort and
+      hides the footer. Below the `get` effort line it makes no effort claim.
       The rail commits only a provider that can run here. One that cannot
       shows its sign-in or install steps and saves nothing.
       - **Its effort footer is the judge's Effort control** (`withReasoning`

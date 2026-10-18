@@ -1,4 +1,8 @@
 import { useStore } from "zustand";
+import {
+  maxModeTooltipCopy,
+  type MaxModeContext,
+} from "@/components/home/data/model-max-mode";
 
 import { Popover, PopoverTrigger } from "@/components/ui/popover";
 import { HarnessModelPickerTriggerTooltip } from "@/components/home/pickers/harness-model-picker-trigger-tooltip";
@@ -215,6 +219,7 @@ export interface HarnessModelPickerEmbedding {
 
 interface HarnessModelPickerProps {
   readonly presentation?: boolean;
+  readonly maxModeContext: MaxModeContext;
   /** Per-composer toolbar store; the picker subscribes to the selection /
    *  reasoning / service-tier slices and dispatches through its actions. */
   store: ComposerToolbarStore;
@@ -346,9 +351,21 @@ function isModelHotspotInteractive(
   return registerActivation && activityEnabled;
 }
 
+function maxModeRowContextKind(
+  context: MaxModeContext,
+): MaxModeContext["kind"] {
+  if (context.kind === "chat" && context.tuple === null) return "none";
+  return context.kind;
+}
+
+function maxModeLabel(required: boolean): string | null {
+  return required ? maxModeTooltipCopy() : null;
+}
+
 function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
   const {
     store,
+    maxModeContext,
     withServiceTier,
     withReasoning,
     tuiOnly,
@@ -706,8 +723,10 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
       deriveHarnessModelPickerPresentation({
         selection,
         models: selectedModels,
+        selectedModel,
         reasoningFooter,
         serviceTierFooter,
+        maxModeContext,
         harnessesPending,
         modelsPending,
         selectedHarnessAvailable,
@@ -721,8 +740,10 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
       reasoningFooter,
       selectedHarnessAvailable,
       selectedModels,
+      selectedModel,
       selection,
       serviceTierFooter,
+      maxModeContext,
     ],
   );
   const trimmedQuery = query.trim();
@@ -1143,6 +1164,7 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
         presentation.reasoningStep,
       )}
       serviceTierTooltip={serviceTierTooltip(serviceTierFooter, selectedModel)}
+      maxModeLabel={maxModeLabel(presentation.maxModeRequired)}
       profileLabel={profileTooltipLabel(
         profilesByHarnessId.get(selection.harnessId) ?? [],
         selection.profileId,
@@ -1170,6 +1192,7 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
         reasoningIndicator={reasoningIndicator}
         serviceTierLabel={presentation.activeServiceTierLabel}
         serviceTierActive={presentation.serviceTierActive}
+        maxModeRequired={presentation.maxModeRequired}
         profileLabel={presentation.profileLabel}
         profileAccentDot={presentation.profileAccentDot}
         isLoading={presentation.isLoading}
@@ -1230,6 +1253,8 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
         reasoningFooter={reasoningFooter}
         reasoningPickerOpen={visibleOpen}
         serviceTierFooter={serviceTierFooter}
+        maxModeContextKind={maxModeRowContextKind(maxModeContext)}
+        maxModeRequired={presentation.maxModeRequired}
         createProfileHostId={createProfileHostId}
         runTargetHostId={runTargetHostId}
         terminalLoginSurface={terminalLoginSurface}
@@ -1423,6 +1448,7 @@ function PresentationHarnessModelPicker(props: HarnessModelPickerProps) {
       reasoningIndicator={reasoningIndicator}
       serviceTierLabel={null}
       serviceTierActive={false}
+      maxModeRequired={false}
       profileLabel={null}
       profileAccentDot={null}
       isLoading={false}
@@ -1437,6 +1463,7 @@ function HarnessModelPickerTooltip({
   modelLabel,
   reasoningLabel,
   serviceTierTooltip,
+  maxModeLabel,
   profileLabel,
   shortcutLabel,
 }: {
@@ -1447,6 +1474,7 @@ function HarnessModelPickerTooltip({
     readonly label: string;
     readonly value: string;
   } | null;
+  readonly maxModeLabel: string | null;
   readonly profileLabel: string | null;
   readonly shortcutLabel: string | null;
 }): ReactNode {
@@ -1462,6 +1490,12 @@ function HarnessModelPickerTooltip({
           label={serviceTierTooltip.label}
           value={serviceTierTooltip.value}
         />
+      )}
+      {maxModeLabel === null ? null : (
+        <div className="flex min-w-0 flex-col gap-0.5">
+          <span className="text-background/70">Max Mode</span>
+          <p className="whitespace-normal font-medium">{maxModeLabel}</p>
+        </div>
       )}
       {profileLabel === null ? null : (
         <TooltipSummaryRow label="Profile" value={profileLabel} />

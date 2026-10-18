@@ -187,6 +187,7 @@ const PROVIDER_BILLING: AutoJudgeBilling = {
   harnessLabel: "Claude Code",
   modelLabel: CLAUDE_MODEL_SLUG,
   effortLabel: null,
+  maxModeListed: false,
 };
 
 /**
@@ -438,6 +439,7 @@ describe("useAutoJudgeBilling against the real query cache", () => {
           harnessLabel: "Claude Code",
           modelLabel: CLAUDE_MODEL_SLUG,
           effortLabel: null,
+          maxModeListed: false,
         });
       },
       { timeout: WAIT_TIMEOUT_MS },
@@ -550,6 +552,7 @@ describe("useAutoJudgeBilling against the real query cache", () => {
           harnessLabel: "Claude Code",
           modelLabel: CLAUDE_MODEL_SLUG,
           effortLabel: null,
+          maxModeListed: false,
         });
       },
       { timeout: WAIT_TIMEOUT_MS },
@@ -652,6 +655,7 @@ describe("useAutoJudgeBilling against the real query cache", () => {
       harnessLabel: "Claude Code",
       modelLabel: CLAUDE_MODEL_SLUG,
       effortLabel: null,
+      maxModeListed: false,
     });
   });
 
@@ -712,6 +716,7 @@ describe("useAutoJudgeBilling against the real query cache", () => {
           harnessLabel: "Claude Code",
           modelLabel: CLAUDE_MODEL_SLUG,
           effortLabel: null,
+          maxModeListed: false,
         });
       },
       { timeout: WAIT_TIMEOUT_MS },

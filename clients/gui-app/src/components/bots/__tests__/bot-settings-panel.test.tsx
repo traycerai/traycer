@@ -17,11 +17,18 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BotRecord } from "@traycer/protocol/host/bot/schemas";
 import type { ComposerSeedSource } from "@/lib/composer/composer-seed-source";
 import type { ComposerToolbarStore } from "@/stores/composer/composer-toolbar-store";
+import type { ModelOption } from "@/components/home/data/landing-options";
+import {
+  maxModeListedFor,
+  type MaxModeContext,
+} from "@/components/home/data/model-max-mode";
 
 const mocks = vi.hoisted(() => ({
   hostClient: { stub: "tab-host-client" },
   seeds: [] as ComposerSeedSource[],
   stores: [] as ComposerToolbarStore[],
+  // Every `maxModeContext` the (stubbed) picker was rendered with, one per render.
+  pickerContexts: [] as MaxModeContext[],
   updateRunSettings: vi.fn<(variables: object) => void>(),
   updateTitle: vi.fn<(variables: object) => void>(),
   deleteBot: vi.fn<(variables: object) => void>(),
@@ -44,7 +51,10 @@ vi.mock("@/components/epic-canvas/hooks/use-tab-host-id", () => ({
   useTabHostId: () => "host-1",
 }));
 vi.mock("@/components/home/pickers/harness-model-picker", () => ({
-  HarnessModelPicker: () => <div data-testid="stub-harness-model-picker" />,
+  HarnessModelPicker: (props: { maxModeContext: MaxModeContext }) => {
+    mocks.pickerContexts.push(props.maxModeContext);
+    return <div data-testid="stub-harness-model-picker" />;
+  },
 }));
 vi.mock("@/hooks/bots/use-bot-mutations", () => ({
   useBotUpdateTitleMutation: () => ({
@@ -149,6 +159,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   mocks.seeds.length = 0;
   mocks.stores.length = 0;
+  mocks.pickerContexts.length = 0;
   mocks.refusal.title = null;
   mocks.refusal.runSettings = null;
   mocks.refusal.remove = null;
@@ -337,5 +348,116 @@ describe("<BotSettingsPanel /> refusals", () => {
 
     expect(mocks.deleteBot).toHaveBeenCalledTimes(1);
     expect(mocks.deleteBot.mock.calls[0][0]).toEqual({ botId: BOT.botId });
+  });
+});
+
+// The bot's next turn runs its stored harness/model/effort/profile with NO
+// service tier (`serviceTier: null`), so the pre-send Max Mode label must be
+// keyed on that exact tuple: the bot's effort, Fast off.
+describe("<BotSettingsPanel /> Max Mode label", () => {
+  const CURSOR_BOT: BotRecord = {
+    ...BOT,
+    harness: "cursor",
+    model: "cursor-max",
+    effort: "high",
+  };
+
+  function cursorRow(
+    chat: ReadonlyArray<{ reasoningEffort: string | null; fast: boolean }>,
+  ): ModelOption {
+    return {
+      harnessId: "cursor",
+      slug: "cursor-max",
+      label: "Cursor Max",
+      description: null,
+      contextWindow: null,
+      maxOutputTokens: null,
+      defaultReasoningEffort: null,
+      supportedReasoningEfforts: ["low", "high"].map((id) => ({
+        id,
+        label: id,
+        description: null,
+      })),
+      defaultServiceTier: null,
+      supportedServiceTiers: [],
+      deprecationNotice: null,
+      metadata: {
+        maxMode: { chat, judge: [], fastServiceTierId: "fast" },
+      },
+    };
+  }
+
+  function lastContext(): MaxModeContext {
+    const context = mocks.pickerContexts.at(-1);
+    if (context === undefined) throw new Error("the picker never rendered");
+    return context;
+  }
+
+  it("hands the picker the bot's own tuple: its effort and Fast off, never the none context", () => {
+    mountPanel(CURSOR_BOT);
+
+    expect(lastContext()).toEqual({
+      kind: "chat",
+      tuple: { reasoningEffort: "high", serviceTier: null },
+    });
+  });
+
+  it("lists Max at the bot's selected effort with Fast off", () => {
+    mountPanel(CURSOR_BOT);
+
+    expect(
+      maxModeListedFor(
+        cursorRow([{ reasoningEffort: "high", fast: false }]),
+        lastContext(),
+      ),
+    ).toBe(true);
+  });
+
+  it("does not list Max when only another effort is Max-only", () => {
+    mountPanel(CURSOR_BOT);
+
+    expect(
+      maxModeListedFor(
+        cursorRow([{ reasoningEffort: "low", fast: false }]),
+        lastContext(),
+      ),
+    ).toBe(false);
+  });
+
+  it("does not list Max when only the Fast-on selection is Max-only", () => {
+    mountPanel(CURSOR_BOT);
+
+    expect(
+      maxModeListedFor(
+        cursorRow([{ reasoningEffort: "high", fast: true }]),
+        lastContext(),
+      ),
+    ).toBe(false);
+  });
+
+  it("does not re-render the owner (and so the picker) when only the catalog moves", () => {
+    mountPanel(CURSOR_BOT);
+    const apply = () =>
+      act(() => {
+        liveStore().getState().setCatalog({
+          hostId: "host-1",
+          chatLineCarriesAutoMode: null,
+          harnesses: undefined,
+          modelsHarnessId: "cursor",
+          models: [],
+          modelsLoaded: false,
+          tuiOnly: false,
+        });
+      });
+    // The first write may settle derived state; a second write with fresh
+    // arrays and the same values must not render the owner again. A broad
+    // `useStore(toolbarStore)` there feeds the catalog effect that owns the
+    // write, which is the update-depth loop.
+    apply();
+    const settled = mocks.pickerContexts.length;
+    apply();
+    apply();
+
+    expect(mocks.pickerContexts.length).toBe(settled);
   });
 });

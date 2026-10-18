@@ -424,6 +424,7 @@ function renderPickerWithFixture(
           <HarnessModelPicker
             labelDisplay="responsive"
             store={store}
+            maxModeContext={{ kind: "none" }}
             withServiceTier={false}
             withReasoning
             tuiOnly={false}

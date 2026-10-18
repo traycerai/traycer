@@ -1729,6 +1729,135 @@ describe("RoutingDestinationPicker", () => {
     });
   });
 
+  describe("a catalog read that is fresh on every render", () => {
+    // Stress the real RoutingCatalogSync effect beside RoutingModelPicker.
+    // Production queries keep cached data stable between updates; this mock
+    // deliberately changes array identity on every render. If a whole-store
+    // subscription moves into their shared parent, setCatalog feeds that
+    // parent's render and the next fresh catalog back into the effect.
+    it("opens and settles with the sync's inputs changing identity on every render", async () => {
+      kit.unstableCatalog = true;
+      kit.lease = heldLease("held", "tok-1");
+      mount(countdown());
+      await open();
+
+      expect(screen.getByRole("tab", { name: "Codex" })).not.toBeNull();
+      fireEvent.click(screen.getByRole("tab", { name: "Codex" }));
+      expect(option(/GPT-5/)).not.toBeNull();
+    });
+  });
+
+  describe("the Max Mode label follows the tuple Switch sends", () => {
+    // Max Mode is a Cursor fact: the kit adds a Cursor harness and model for
+    // this block only.
+    beforeEach(() => {
+      kit.withCursor = true;
+    });
+
+    function pickCursorMax(): void {
+      fireEvent.click(screen.getByRole("tab", { name: "Cursor" }));
+      fireEvent.click(option(/Cursor Max/));
+    }
+
+    async function openFailedTurn(serviceTier: string | null): Promise<void> {
+      kit.lease = heldLease("held", "tok-1");
+      // The host listing, when present, owns the failed tuple read by Switch.
+      kit.listData = {
+        ...(kit.listData ?? listing({ recommendedWork: false })),
+        failedTuple: { ...FAILED, serviceTier },
+      };
+      mount({
+        kind: "failed-turn",
+        attempt: failedAttempt(["switch"]),
+        seedTuple: { ...FAILED, serviceTier },
+      });
+      await open();
+    }
+
+    it("shows the footer badge when the failed tuple's Fast tier, inherited by the pick, is the Max-only key", async () => {
+      await openFailedTurn("fast");
+      pickCursorMax();
+
+      expect(screen.getByTestId("model-max-mode-badge")).not.toBeNull();
+    });
+
+    it("shows nothing when the inherited tier is off, whatever the model's other keys say", async () => {
+      await openFailedTurn(null);
+      pickCursorMax();
+
+      expect(screen.queryByTestId("model-max-mode-badge")).toBeNull();
+      expect(screen.queryByText("Max Mode")).toBeNull();
+    });
+
+    it("never badges the row itself: it is only listed with Fast on, so it is not Max-only everywhere", async () => {
+      await openFailedTurn("fast");
+      fireEvent.click(screen.getByRole("tab", { name: "Cursor" }));
+
+      expect(within(option(/Cursor Max/)).queryByText("Max Mode")).toBeNull();
+    });
+
+    // A listed host-built target is Switch's target, but its tier is clamped to
+    // the failed tuple's own advertised tier: the label follows the clamped
+    // tuple Switch submits, never the listed target's own tier.
+    function listCursorMaxTarget(failedTier: string | null): void {
+      const hostTarget: ChatRunSettings = {
+        ...TARGET,
+        harnessId: "cursor",
+        model: "cursor-max",
+        profileId: null,
+        reasoningEffort: null,
+        serviceTier: "fast",
+      };
+      kit.listData = listingOf({
+        failedTuple: { ...FAILED, serviceTier: failedTier },
+        profileTargets: [],
+        modelTargets: [modelTargetOf({ groupId: "grp-a", target: hostTarget })],
+      });
+    }
+
+    it("shows nothing for a listed target whose own tier is fast when the failed tuple ran no tier, and Switch submits no tier", async () => {
+      listCursorMaxTarget(null);
+      await openFailedTurn(null);
+      pickCursorMax();
+
+      expect(screen.queryByTestId("model-max-mode-badge")).toBeNull();
+      fireEvent.click(footerConfirm());
+
+      expect(kit.mutations).toHaveLength(1);
+      expect(kit.mutations[0]).toMatchObject({
+        method: "chat.fallback.runManualRung",
+        variables: {
+          target: {
+            harnessId: "cursor",
+            model: "cursor-max",
+            serviceTier: null,
+          },
+        },
+      });
+    });
+
+    it("shows the badge for a listed target when the failed tuple ran Fast, and Switch submits fast", async () => {
+      listCursorMaxTarget("fast");
+      await openFailedTurn("fast");
+      pickCursorMax();
+
+      expect(screen.getByTestId("model-max-mode-badge")).not.toBeNull();
+      fireEvent.click(footerConfirm());
+
+      expect(kit.mutations).toHaveLength(1);
+      expect(kit.mutations[0]).toMatchObject({
+        method: "chat.fallback.runManualRung",
+        variables: {
+          target: {
+            harnessId: "cursor",
+            model: "cursor-max",
+            serviceTier: "fast",
+          },
+        },
+      });
+    });
+  });
+
   describe("the trigger", () => {
     it("renders a ReactNode label inside the trigger button", () => {
       mountTrigger(failedTurn(["switch"]), {
@@ -2133,6 +2262,7 @@ describe("RoutingDestinationPicker", () => {
           <TabHostProvider hostId={TAB_HOST_ID}>
             <HarnessModelPicker
               store={store}
+              maxModeContext={{ kind: "none" }}
               withServiceTier={false}
               withReasoning
               tuiOnly={false}
