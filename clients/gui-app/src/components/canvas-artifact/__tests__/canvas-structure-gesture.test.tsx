@@ -411,6 +411,43 @@ describe("a pointer that loses its capture", () => {
   });
 });
 
+describe("source the host cannot reorder", () => {
+  // The page reports ordinary geometry for table rows, so only the file's own
+  // markup can say a row may not move. A resize writes a style on the row and
+  // stays possible.
+  const TABLE = structureDocument(
+    `<table><tbody data-tid="body"><tr data-tid="r1"><td>a</td></tr><tr data-tid="r2"><td>b</td></tr></tbody></table>`,
+  );
+
+  it("disables the reorder handles of a table row but keeps its resize handles", async () => {
+    const layout = layoutOf(TABLE, "body", {
+      r1: flowAt(0, 0, 100, 50),
+      r2: flowAt(0, 50, 100, 50),
+    });
+    const harness = structureHarness({ ...layout, axis: "y" }, FRAME_ACTUAL);
+    const selection = selectionFor(elementFor(TABLE, "r1"));
+    selectOnly(selection);
+    render(
+      <TooltipProvider>
+        <CanvasStructureOverlay
+          selection={selection}
+          registry={harness.registry}
+          document={TABLE}
+        />
+      </TooltipProvider>,
+    );
+    await settleLayout();
+
+    expect(handle("Resize element bottom right").hasAttribute("disabled")).toBe(
+      false,
+    );
+    for (const index of [1, 2, 3, 4])
+      expect(
+        handle(`Reorder element (${index})`).hasAttribute("disabled"),
+      ).toBe(true);
+  });
+});
+
 describe("a set of several elements", () => {
   it("offers no reorder or resize handles, only outlines", async () => {
     const layout = rowLayout();

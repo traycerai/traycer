@@ -166,7 +166,7 @@ export function CanvasStructureOverlay(props: {
     node.cssWidth !== null &&
     node.cssHeight !== null;
   const moveNote =
-    layout === null ? "Opening element layout…" : reorderRefusal(layout);
+    facts.moveRefusal ?? (layout === null ? "Opening element layout…" : reorderRefusal(layout));
   return (
     <>
       {additional.map((element) => {

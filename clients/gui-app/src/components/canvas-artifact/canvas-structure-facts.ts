@@ -13,47 +13,12 @@ import {
   CANVAS_SIBLING_NOTE,
   sameLayoutElement,
 } from "./canvas-structure-identity";
-
-const WRAP_PARENTS = new Set([
-  "ul",
-  "ol",
-  "menu",
-  "select",
-  "optgroup",
-  "datalist",
-  "dl",
-  "table",
-  "thead",
-  "tbody",
-  "tfoot",
-  "tr",
-  "td",
-  "th",
-  "col",
-  "colgroup",
-  "caption",
-  "p",
-]);
-const UNWRAP_TAGS = new Set([
-  "html",
-  "head",
-  "body",
-  "ul",
-  "ol",
-  "menu",
-  "select",
-  "optgroup",
-  "dl",
-  "table",
-  "thead",
-  "tbody",
-  "tfoot",
-  "tr",
-]);
+import { canvasSourceStructureRefusals } from "./canvas-structure-source";
 
 export interface CanvasStructureFacts {
   readonly nodes: readonly CanvasLayoutNode[];
   readonly refusal: string | null;
+  readonly moveRefusal: string | null;
   readonly wrapRefusal: string | null;
   readonly unwrapRefusal: string | null;
 }
@@ -80,34 +45,6 @@ function sameSourceLayout(
     )
   );
 }
-function wrapperRefusals(
-  parent: HtmlElement,
-  sources: readonly HtmlElement[],
-): Pick<CanvasStructureFacts, "wrapRefusal" | "unwrapRefusal"> {
-  const siblings = parent.children.filter((node) => node.kind === "element");
-  const indices = sources
-    .map((source) => siblings.indexOf(source))
-    .sort((a, b) => a - b);
-  const contiguous = indices.every(
-    (value, index) => index === 0 || value === indices[index - 1] + 1,
-  );
-  let wrapRefusal: string | null = null;
-  if (WRAP_PARENTS.has(parent.tagName))
-    wrapRefusal =
-      "This container cannot hold a group. Ask the agent to change it.";
-  else if (!contiguous)
-    wrapRefusal = "Select consecutive elements to group or wrap.";
-  const first = sources[0];
-  const unwrapRefusal =
-    sources.length !== 1 ||
-    UNWRAP_TAGS.has(first.tagName) ||
-    first.isVoid ||
-    first.isRawText ||
-    first.endTag === null
-      ? "Select a wrapper that can be ungrouped."
-      : null;
-  return { wrapRefusal, unwrapRefusal };
-}
 export function structureFacts(
   document: CanvasBoardDocument | null,
   elements: readonly CanvasElement[],
@@ -116,6 +53,7 @@ export function structureFacts(
   const refuse = (message: string): CanvasStructureFacts => ({
     nodes: [],
     refusal: message,
+    moveRefusal: message,
     wrapRefusal: message,
     unwrapRefusal: message,
   });
@@ -155,7 +93,8 @@ export function structureFacts(
   return {
     nodes,
     refusal: null,
-    ...wrapperRefusals(
+    ...canvasSourceStructureRefusals(
+      document,
       parent,
       sources.filter((source) => source !== null),
     ),

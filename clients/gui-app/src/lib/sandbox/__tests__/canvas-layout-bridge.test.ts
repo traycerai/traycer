@@ -21,6 +21,8 @@ function node(overrides: Record<string, unknown>): Record<string, unknown> {
     cssWidth: 60,
     cssHeight: 20,
     transformed: false,
+    order: 0,
+    gridPlacement: false,
     ...overrides,
   };
 }
@@ -95,8 +97,10 @@ describe("parseCanvasSiblingLayout", () => {
           "box",
           "cssHeight",
           "cssWidth",
+          "gridPlacement",
           "left",
           "marker",
+          "order",
           "position",
           "tagName",
           "tid",
@@ -105,6 +109,21 @@ describe("parseCanvasSiblingLayout", () => {
         ].sort(),
       );
     }
+  });
+
+  it("carries the CSS order and explicit grid placement the page reports", () => {
+    const parsed = parseCanvasSiblingLayout(
+      layout({
+        siblings: [
+          node({ order: 3, gridPlacement: true }),
+          node({ marker: 40, order: -2, gridPlacement: false }),
+        ],
+      }),
+    );
+    expect(parsed?.siblings).toMatchObject([
+      { order: 3, gridPlacement: true },
+      { order: -2, gridPlacement: false },
+    ]);
   });
 
   it("accepts both axes and reverse and truncated flags", () => {
@@ -224,6 +243,15 @@ describe("parseCanvasSiblingLayout", () => {
       ["an infinite top", { top: Number.POSITIVE_INFINITY }],
       ["a string cssWidth", { cssWidth: "60px" }],
       ["a missing cssHeight", { cssHeight: undefined }],
+      ["a negative cssWidth", { cssWidth: -1 }],
+      ["a missing order", { order: undefined }],
+      ["a string order", { order: "1" }],
+      ["a fractional order", { order: 1.5 }],
+      ["an order past the safe integers", { order: 2 ** 53 }],
+      ["a NaN order", { order: Number.NaN }],
+      ["a missing gridPlacement", { gridPlacement: undefined }],
+      ["a string gridPlacement", { gridPlacement: "true" }],
+      ["a numeric gridPlacement", { gridPlacement: 1 }],
     ])("a sibling with %s", (_label, overrides) => {
       expect(
         parseCanvasSiblingLayout(
