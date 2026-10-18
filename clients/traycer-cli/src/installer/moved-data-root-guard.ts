@@ -49,7 +49,7 @@ export function refuseOlderHostWhileDataMoved(input: {
   if (root === null) return;
   throw cliError({
     code: CLI_ERROR_CODES.HOST_UPDATE_NOT_NEWER,
-    message: `${input.command}: Traycer's data folder was moved to ${root}; installing a host that is not newer than the installed ${input.installedVersion} is not supported there. Nothing was transferred.`,
+    message: `${input.command}: Traycer's data folder was moved to ${root}, so host ${input.targetVersion} cannot replace the installed ${input.installedVersion}. Nothing was transferred.`,
     details: {
       environment: input.environment,
       targetVersion: input.targetVersion,
