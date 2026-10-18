@@ -1,7 +1,14 @@
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, rm, utimes, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  utimes,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -24,6 +31,13 @@ const h = vi.hoisted(() => ({
   forceTokenLinkCode: null as string | null,
   // Fails the next links into a break token, one code per call, then passes.
   tokenLinkFailures: [] as string[],
+  // Runs once, at the first link into a break token, before it fails or links.
+  tokenLinkHook: null as (() => Promise<void>) | null,
+  // The pid whose liveness probe answers dead once, then alive (a recycled pid).
+  recycledPid: null as number | null,
+  // While set, every even-numbered read of the lock file fails EBUSY.
+  lockReadAlternates: false,
+  lockReads: 0,
 }));
 
 vi.mock("node:os", async (importActual) => {
@@ -39,9 +53,25 @@ vi.mock("node:fs/promises", async (importActual) => {
   const actual = await importActual<typeof import("node:fs/promises")>();
   return {
     ...actual,
+    readFile: async (...args: Parameters<typeof actual.readFile>) => {
+      if (h.lockReadAlternates && args[0] === `${cliConfigPath()}.lock`) {
+        h.lockReads += 1;
+        if (h.lockReads % 2 === 0) {
+          throw Object.assign(new Error("EBUSY: simulated failure"), {
+            code: "EBUSY",
+          });
+        }
+      }
+      return actual.readFile(...args);
+    },
     link: async (existing: string, linkPath: string) => {
       if (linkPath.includes(".break-")) {
         h.tokenLinks += 1;
+        const hook = h.tokenLinkHook;
+        if (hook !== null) {
+          h.tokenLinkHook = null;
+          await hook();
+        }
         const code = h.forceTokenLinkCode ?? h.tokenLinkFailures.shift();
         if (code !== undefined) {
           throw Object.assign(new Error(`${code}: simulated failure`), {
@@ -63,6 +93,7 @@ vi.mock("../credentials-lock", async (importActual) => {
       recordedFingerprint: string | null,
     ) => {
       h.probeCalls.set(pid, (h.probeCalls.get(pid) ?? 0) + 1);
+      if (pid === h.recycledPid) return h.probeCalls.get(pid) === 1;
       if (h.slowPids.has(pid)) {
         await new Promise<void>((resolve) => {
           setTimeout(resolve, h.probeDelayMs);
@@ -127,6 +158,10 @@ beforeEach(async () => {
   h.probeCalls.clear();
   h.forceTokenLinkCode = null;
   h.tokenLinkFailures = [];
+  h.tokenLinkHook = null;
+  h.recycledPid = null;
+  h.lockReadAlternates = false;
+  h.lockReads = 0;
 });
 
 afterEach(async () => {
@@ -134,11 +169,103 @@ afterEach(async () => {
   h.probeDelayMs = 0;
   h.forceTokenLinkCode = null;
   h.tokenLinkFailures = [];
+  h.tokenLinkHook = null;
+  h.recycledPid = null;
+  h.lockReadAlternates = false;
   setCliConfigLockTimingForTests(null);
   await rm(h.home, { recursive: true, force: true });
 });
 
 describe("the settings lock wait while breaking a dead lock", () => {
+  it("does not break after the holder's own probe outlasts the wait", async () => {
+    setCliConfigLockTimingForTests({
+      waitMs: 300,
+      pollMs: 10,
+      staleAgeMs: 100,
+    });
+    const holderPid = 4_200_000;
+    h.slowPids.add(holderPid);
+    h.probeDelayMs = 600;
+    await writeAged(lockPath(), holderPid, "dead-holder", ONE_HOUR_MS);
+    const lockBefore = await readFile(lockPath());
+
+    await expect(setEnvOverride("K", "v")).rejects.toThrow(
+      /Timed out after 300ms/,
+    );
+
+    // The probe said dead, but too late: a write that timed out must not go on
+    // to break the lock and mutate.
+    expect(await readFile(lockPath())).toEqual(lockBefore);
+    expect(existsSync(cliConfigPath())).toBe(false);
+  });
+
+  it("waits when a Windows filter blocks the breaker's re-read of the lock", async () => {
+    h.platform = "win32";
+    setCliConfigLockTimingForTests({
+      waitMs: 300,
+      pollMs: 10,
+      staleAgeMs: 100,
+    });
+    await writeAged(lockPath(), await deadPid(), "dead-holder", ONE_HOUR_MS);
+    // Per poll the lock is read twice: the acquire's holder read, which
+    // passes, then the token winner's re-read, which a filter blocks.
+    h.lockReadAlternates = true;
+
+    await expect(setEnvOverride("K", "v")).rejects.toThrow(
+      /Timed out after 300ms/,
+    );
+
+    expect(existsSync(lockPath())).toBe(true);
+    // Waiting means sleeping a poll between attempts: at most two reads per
+    // 10 ms poll over 300 ms, never a busy loop of immediate retries.
+    expect(h.lockReads).toBeLessThanOrEqual(70);
+  }, 5000);
+
+  it("probes a new token afresh even when its creator's pid was proven dead", async () => {
+    h.platform = "win32";
+    setCliConfigLockTimingForTests({
+      waitMs: 500,
+      pollMs: 10,
+      staleAgeMs: 100,
+    });
+    const recycled = 4_300_000;
+    h.recycledPid = recycled;
+    await writeAged(lockPath(), await deadPid(), "dead-holder", ONE_HOUR_MS);
+    await writeAged(
+      breakTokenPath("dead-holder", 0),
+      recycled,
+      "first-breaker",
+      ONE_HOUR_MS,
+    );
+    // The first claim of generation 1 is refused by a filter, and in that
+    // moment a live breaker that reused the pid writes generation 1 itself.
+    h.tokenLinkFailures = ["EBUSY"];
+    h.tokenLinkHook = async () => {
+      await writeAged(
+        breakTokenPath("dead-holder", 1),
+        recycled,
+        "recycled-breaker",
+        ONE_HOUR_MS,
+      );
+    };
+
+    await expect(setEnvOverride("K", "v")).rejects.toThrow(
+      /Timed out after 500ms/,
+    );
+
+    // A Windows record has no start time, so only a fresh probe tells the new
+    // token's creator apart from the dead one that held the pid before.
+    expect(await readFile(breakTokenPath("dead-holder", 1), "utf8")).toBe(
+      JSON.stringify({
+        pid: recycled,
+        pidStartTime: null,
+        nonce: "recycled-breaker",
+        acquiredAt: 0,
+      }),
+    );
+    expect(existsSync(lockPath())).toBe(true);
+  });
+
   it("probes each dead break-token creator once per acquire", async () => {
     h.platform = "win32";
     setCliConfigLockTimingForTests({

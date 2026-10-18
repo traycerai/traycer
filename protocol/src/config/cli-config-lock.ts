@@ -195,9 +195,9 @@ export async function acquireCliConfigLock(
   const deadline = Date.now() + timing.waitMs;
   let liveVerdict: { readonly raw: string; readonly until: number } | null =
     null;
-  // Break-token creators proven dead during this acquire, so a long chain of
-  // dead tokens is probed once per creator, not on every poll.
-  const deadCreators = new Set<string>();
+  // Break tokens whose creators were proven dead during this acquire, so a
+  // long chain of dead tokens is probed once, not on every poll.
+  const deadTokens = new Set<string>();
   while (true) {
     await releaseUnreleased(lockPath);
     await removeRetainedTokens();
@@ -231,7 +231,7 @@ export async function acquireCliConfigLock(
               serialized,
               timing,
               deadline,
-              deadCreators,
+              deadTokens,
             )
           ) {
             continue;
@@ -277,7 +277,7 @@ async function breakDeadLock(
   serialized: string,
   timing: CliConfigLockTiming,
   deadline: number,
-  deadCreators: Set<string>,
+  deadTokens: Set<string>,
 ): Promise<boolean> {
   const tokenBase = breakTokenBase(lockPath, deadNonce);
   const generations = await tokenGenerations(tokenBase);
@@ -291,12 +291,15 @@ async function breakDeadLock(
       !(await tokenCreatorDead(
         `${tokenBase}.${generation}`,
         timing,
-        deadCreators,
+        deadTokens,
       ))
     ) {
       return false;
     }
   }
+  // The probes above, the holder's included, can outlast the wait: a write
+  // that timed out must not break and go on to mutate.
+  if (Date.now() >= deadline) return false;
   const next = generations.reduce((max, g) => Math.max(max, g + 1), 0);
   const tokenPath = `${tokenBase}.${next}`;
   // Another breaker claimed that generation first, or a Windows filter held
@@ -307,6 +310,8 @@ async function breakDeadLock(
     // change under it: the dead holder will not release, and every other
     // breaker of this record needs this token.
     const current = await readHolder(lockPath);
+    // A re-read a Windows filter blocked proves nothing: wait and try again.
+    if (current !== null && current.unreadable) return false;
     if (current === null || current.raw !== deadRaw) return true;
     try {
       await unlink(lockPath);
@@ -356,16 +361,19 @@ async function tokenGenerations(tokenBase: string): Promise<number[]> {
 async function tokenCreatorDead(
   tokenPath: string,
   timing: CliConfigLockTiming,
-  deadCreators: Set<string>,
+  deadTokens: Set<string>,
 ): Promise<boolean> {
   const token = await readHolder(tokenPath);
   if (token === null || token.record === null) return false;
   const ageMs = await lockAgeMs(tokenPath);
   if (ageMs === null || ageMs < timing.staleAgeMs) return false;
-  const creator = `${token.record.pid}:${token.record.pidStartTime ?? ""}`;
-  if (deadCreators.has(creator)) return true;
+  // Keyed by the token's own bytes (its creator's nonce included), never by
+  // pid: on Windows a record has no start time, so a pid proven dead can be
+  // reused by a live breaker whose new token must be probed afresh.
+  const key = `${tokenPath}\n${token.raw}`;
+  if (deadTokens.has(key)) return true;
   if (!(await recordHolderDead(token.record))) return false;
-  deadCreators.add(creator);
+  deadTokens.add(key);
   return true;
 }
 
