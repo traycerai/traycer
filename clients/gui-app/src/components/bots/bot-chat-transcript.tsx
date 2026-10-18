@@ -30,6 +30,7 @@ import {
   resolveAgentSenderDisplay,
   resolveSenderLabel,
   type SenderDisplayContext,
+  resolveAgentServiceTierLabel,
 } from "@/lib/chat/sender-display";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import {
@@ -153,7 +154,7 @@ function BotChatTranscriptBody(props: {
     subscribed: true,
     modelsFetch: "cached-only",
   });
-  const { modelLabels, modelReasoningLabels } = useMemo(
+  const { modelLabels, modelReasoningLabels, modelServiceTierLabels } = useMemo(
     () => getModelLabelIndex(catalog.harnesses),
     [catalog.harnesses],
   );
@@ -163,8 +164,9 @@ function BotChatTranscriptBody(props: {
       collaborators: NO_COLLABORATORS,
       modelLabels,
       modelReasoningLabels,
+      modelServiceTierLabels,
     }),
-    [modelLabels, modelReasoningLabels, profile],
+    [modelLabels, modelReasoningLabels, modelServiceTierLabels, profile],
   );
   const renderedDisplayContext = useMemo<RenderedMessagesDisplayContext>(
     () => ({
@@ -174,6 +176,8 @@ function BotChatTranscriptBody(props: {
         resolveAgentSenderDisplay(sender, displayContext),
       resolveAgentReasoningLabel: (sender, reasoningEffort) =>
         resolveAgentReasoningLabel(sender, reasoningEffort, displayContext),
+      resolveAgentServiceTierLabel: (sender, serviceTier) =>
+        resolveAgentServiceTierLabel(sender, serviceTier, displayContext),
       contentBlocksPreview,
     }),
     [displayContext],
