@@ -110,7 +110,7 @@ describe("decodeUnresolvedArtifactImageText: rejects", () => {
     ["an unescaped opening bracket", "![a [b] c](x)"],
     ["a later line that opens a heading", "![a\n# b](x)"],
     ["a later line that opens a list", "![a\n- b](x)"],
-    ["a later line that starts with a digit", "![a\n1 b](x)"],
+    ["a later line that opens an ordered list", "![a\n1. b](x)"],
     ["a blank later line", "![a\n\nb](x)"],
     ["a later line that starts with spaces", "![a\n  b](x)"],
     ["a later line after a line ending in a space", "![a \nb](x)"],
@@ -146,6 +146,97 @@ describe("decodeUnresolvedArtifactImageText: an alt the producer's text cannot c
   ])("%s", (_name, alt) => {
     expect(
       decodeUnresolvedArtifactImageText(unresolvedArtifactImageText(alt, "x")),
+    ).toBeNull();
+  });
+});
+
+/**
+ * The label lines after the first. The decoder accepts a later line unless it
+ * would end the paragraph, turn it into another block, or be changed by the
+ * paragraph (blank, leading whitespace, a previous line ending in whitespace).
+ * The gui-app differential test pins, for each row below, what both artifact
+ * readers do with the producer's text: every accept row is read back as that
+ * exact image, and every reject row is one a reader does not read as one image
+ * (or is listed there as conservative).
+ */
+const LATER_LINE_ACCEPTED: readonly string[] = [
+  "[b]",
+  `${BS}# b`,
+  "*b*",
+  "_b_",
+  "+b",
+  "-b",
+  "=b",
+  "|b|",
+  "~b",
+  "!b",
+  "(b)",
+  "&b",
+  ":b",
+  "`b`",
+  "1.b",
+  "#b",
+  "####### b",
+];
+
+describe("decodeUnresolvedArtifactImageText: a later label line", () => {
+  it.each(LATER_LINE_ACCEPTED.map((line) => [line] as const))(
+    "accepts a later line %j",
+    (line) => {
+      const alt = `a\n${line}`;
+      const text = unresolvedArtifactImageText(alt, "x");
+      expect(decodeUnresolvedArtifactImageText(text)).toEqual({
+        alt,
+        src: "x",
+      });
+    },
+  );
+
+  it.each([
+    ["an ATX heading", "# b"],
+    ["a six-hash heading", "###### b"],
+    ["a dash bullet", "- b"],
+    ["a plus bullet", "+ b"],
+    ["an asterisk bullet", "* b"],
+    ["a lone dash", "-"],
+    ["an ordered item at 1 with a dot", "1. b"],
+    ["an ordered item at 1 with a parenthesis", "1) b"],
+    ["an ordered item at 01", "01. b"],
+    ["an ordered item at 2", "2. b"],
+    ["an ordered item at 10 with a parenthesis", "10) b"],
+    ["a quote", "> b"],
+    ["a dash rule or setext underline", "---"],
+    ["an equals setext underline", "==="],
+    ["an asterisk rule", "***"],
+    ["an underscore rule", "___"],
+    ["a spaced rule", "- - -"],
+    ["a table delimiter row of one column", "|-|"],
+    ["an aligned delimiter cell", ":-:"],
+    ["a spaced table delimiter row", "| --- |"],
+    ["an HTML block", "<div>"],
+    ["an HTML tag", "<b>"],
+    ["a backtick fence", "```"],
+    ["a tilde fence", "~~~"],
+    ["a blank line", ""],
+    ["a leading space", " b"],
+  ])("rejects a later line that is %s", (_name, line) => {
+    const text = unresolvedArtifactImageText(`a\n${line}`, "x");
+    expect(decodeUnresolvedArtifactImageText(text)).toBeNull();
+  });
+
+  it("rejects a later line after a line ending in a space", () => {
+    expect(
+      decodeUnresolvedArtifactImageText(
+        unresolvedArtifactImageText("a \nb", "x"),
+      ),
+    ).toBeNull();
+  });
+
+  it("rejects a blank line between two label lines", () => {
+    expect(
+      decodeUnresolvedArtifactImageText(
+        unresolvedArtifactImageText("a\n\nb", "x"),
+      ),
     ).toBeNull();
   });
 });

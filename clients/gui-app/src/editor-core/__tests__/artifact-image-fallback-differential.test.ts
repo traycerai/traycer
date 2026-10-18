@@ -910,3 +910,141 @@ describe("an image node that follows a block in a list item is its own block", (
     expect(serialize(doc(ul(li(t, bq(P("q"))))))).toBe("- t\n  > q");
   });
 });
+
+// ---------------------------------------------------------------------------
+// 8. Later label lines, and entities
+// ---------------------------------------------------------------------------
+
+describe("a later label line: the decoder against both readers", () => {
+  // Later lines the decoder accepts: each, written raw as the producer's text,
+  // must be read back by both readers as exactly one image with that alt.
+  const accepted: readonly string[] = [
+    "[b]",
+    `${BS}# b`,
+    "*b*",
+    "_b_",
+    "+b",
+    "-b",
+    "=b",
+    "|b|",
+    "~b",
+    "!b",
+    "(b)",
+    "&b",
+    ":b",
+    "`b`",
+    "1.b",
+    "#b",
+    "####### b",
+  ];
+
+  it.each(
+    accepted.flatMap((line) =>
+      READERS.map((reader) => [line, reader.name, reader] as const),
+    ),
+  )(
+    "accepted later line %j: read as one image by %s",
+    (line, _name, reader) => {
+      const alt = `a\n${line}`;
+      const text = unresolvedArtifactImageText(alt, "images/x.png");
+      expect(decodeUnresolvedArtifactImageText(text)).toEqual({
+        alt,
+        src: "images/x.png",
+      });
+      expect(onlyImageOf(reader.stored(text))).toEqual({
+        alt,
+        src: "images/x.png",
+      });
+    },
+  );
+
+  // Later lines the decoder rejects. `conservative` marks the rows where both
+  // readers would still read exactly the one image: the rejection costs the
+  // retry there and nothing else. Every other row is one where at least one
+  // reader does not read the producer's text as that image.
+  const rejected: readonly (readonly [string, string, boolean])[] = [
+    ["# b", "an ATX heading", false],
+    ["###### b", "a six-hash heading", false],
+    ["- b", "a dash bullet", false],
+    ["+ b", "a plus bullet", false],
+    ["* b", "an asterisk bullet", false],
+    ["-", "a lone dash", true],
+    ["1. b", "an ordered item at 1", false],
+    ["1) b", "an ordered item at 1 with a parenthesis", false],
+    ["01. b", "an ordered item at 01", true],
+    ["2. b", "an ordered item at 2", true],
+    ["10) b", "an ordered item at 10", true],
+    ["> b", "a quote", false],
+    ["---", "a rule or setext underline", true],
+    ["===", "a setext underline", true],
+    ["***", "an asterisk rule", true],
+    ["___", "an underscore rule", true],
+    ["- - -", "a spaced rule", false],
+    ["|-|", "a table delimiter row", true],
+    [":-:", "an aligned delimiter cell", true],
+    ["| --- |", "a spaced table delimiter row", true],
+    ["<div>", "an HTML block", false],
+    ["<b>", "an HTML tag", true],
+    ["```", "a backtick fence", true],
+    ["~~~", "a tilde fence", true],
+    [" b", "a leading space", true],
+  ];
+
+  it.each(rejected)(
+    "rejected later line %j (%s)",
+    (line, _name, conservative) => {
+      const alt = `a\n${line}`;
+      const text = unresolvedArtifactImageText(alt, "images/x.png");
+      expect(decodeUnresolvedArtifactImageText(text)).toBeNull();
+      const reads = READERS.map(
+        (reader) =>
+          JSON.stringify(onlyImageOf(reader.stored(text))) ===
+          JSON.stringify({ alt, src: "images/x.png" }),
+      );
+      expect({ line, bothRead: reads.every(Boolean) }).toEqual({
+        line,
+        bothRead: conservative,
+      });
+    },
+  );
+
+  it.each([
+    ["a blank line between label lines", "a\n\nb", false],
+    ["a previous line ending in a space", "a \nb", true],
+    ["a previous line ending in a tab", "a\t\nb", true],
+  ])("rejected: %s", (_name, alt, conservative) => {
+    const text = unresolvedArtifactImageText(alt, "images/x.png");
+    expect(decodeUnresolvedArtifactImageText(text)).toBeNull();
+    const bothRead = READERS.every(
+      (reader) =>
+        JSON.stringify(onlyImageOf(reader.stored(text))) ===
+        JSON.stringify({ alt, src: "images/x.png" }),
+    );
+    expect(bothRead).toBe(conservative);
+  });
+});
+
+describe("entities in an alt or a source", () => {
+  const rows: readonly (readonly [string, string])[] = [
+    ["&amp;", "images/x.png"],
+    ["a\n&amp;", "images/x.png"],
+    ["&#35;", "images/x.png"],
+    ["&lt;b&gt;", "images/x.png"],
+    ["a", "images/a&amp;b.png"],
+  ];
+
+  it.each(
+    rows.flatMap(([alt, src]) =>
+      READERS.map((reader) => [alt, src, reader.name, reader] as const),
+    ),
+  )(
+    "alt %j, src %j: decode accepts and %s reads exactly that, or decode rejects",
+    (alt, src, _name, reader) => {
+      const text = unresolvedArtifactImageText(alt, src);
+      const decoded = decodeUnresolvedArtifactImageText(text);
+      if (decoded === null) return;
+      expect(decoded).toEqual({ alt, src });
+      expect(onlyImageOf(reader.stored(text))).toEqual({ alt, src });
+    },
+  );
+});

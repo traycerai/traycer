@@ -11,6 +11,7 @@ import {
   type ArtifactImage,
 } from "@traycer/protocol/common/json-content-serializer";
 import { artifactDocumentBundle } from "../artifact-document-bundle";
+import { READERS, imageAttrsOf } from "./artifact-ingest-readers";
 
 /**
  * The artifact serializer's markdown must be a fixed point of
@@ -1655,26 +1656,28 @@ describe("a multiline unresolved image label is the reader's call (traycer#1563)
     },
   );
 
-  // The reader reads this label as one image, but the decoder does not accept
-  // it: a later line that starts with a backslash is not a line the decoder
-  // proves a paragraph carries as written. The fallback stays text - the
-  // retry is lost for this one alt, and the text round-trips exactly.
-  it("writes a later line that starts with an escaped bracket as text, stable from the first pass", () => {
+  // A later line that starts with an escaped bracket is a line a paragraph
+  // carries as written, so the decoder accepts it: the fallback stays raw and
+  // the retry is not lost. Both readers read it as the image, and the image is
+  // written with the same bytes on every pass.
+  it("writes a later line that starts with an escaped bracket raw, and both readers read it back as the image over two passes", () => {
     const text = unresolvedArtifactImageText("a\n[b]", "images/missing.png");
     expect(text).toBe("![a\n\\[b\\]](images/missing.png)");
-    const fragment0 = fragmentOf({
-      type: "doc",
-      content: [textParagraph([plainText(text)])],
-    });
-    const md1 = serialize(fragment0);
-    expect(md1).toBe("!\\[a\n\\\\\\[b\\\\]](images/missing.png)");
-    const json1 = parseJson(md1);
-    expect(imagesIn(json1)).toEqual([]);
-    expect(textOf(json1)).toBe(text);
-    const fragment1 = fragmentOf(json1);
-    expect(proseMirrorJsonOf(fragment1)).toEqual(proseMirrorJsonOf(fragment0));
-    expect(fragment1.toJSON()).toBe(fragment0.toJSON());
-    expect(serialize(fragment1)).toBe(md1);
+    const md1 = serialize(
+      fragmentOf({
+        type: "doc",
+        content: [textParagraph([plainText(text)])],
+      }),
+    );
+    expect(md1).toBe(text);
+    for (const reader of READERS) {
+      const expected = [{ alt: "a\n[b]", src: "images/missing.png" }];
+      const stored1 = reader.stored(md1);
+      expect(imageAttrsOf(stored1)).toEqual(expected);
+      const md2 = serializeJson(stored1);
+      expect(md2).toBe(md1);
+      expect(imageAttrsOf(reader.stored(md2))).toEqual(expected);
+    }
   });
 
   it("pins the escaped bytes of the two unreadable labels", () => {

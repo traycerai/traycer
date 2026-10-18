@@ -970,9 +970,9 @@ describe("artifact unresolved image text: raw by the decoder and the container",
     expect(artifactOf(value)).toBe(expected);
   });
 
-  it("escapes a multiline alt whose later line starts with an escaped bracket", () => {
+  it("writes a multiline alt whose later line starts with an escaped bracket raw", () => {
     expect(artifactOf(unresolvedArtifactImageText("a\n[b]", "x"))).toBe(
-      "!\\[a\n\\\\\\[b\\\\]](x)",
+      "![a\n\\[b\\]](x)",
     );
   });
 
@@ -1157,11 +1157,11 @@ describe("artifact image node: written as the fallback text", () => {
     ["a lone carriage return, normalized", "a\rb", "![a\nb](x)"],
     ["a later line that opens a heading, joined", "a\n# b", "![a # b](x)"],
     ["a later line that opens a list, joined", "a\n- b", "![a - b](x)"],
-    ["a later line that starts a digit, joined", "a\n1 b", "![a 1 b](x)"],
+    ["a later line that starts with a digit, kept", "a\n1 b", "![a\n1 b](x)"],
     [
-      "a later line that starts with a bracket, joined",
+      "a later line that starts with a bracket, kept",
       "a\n[b]",
-      "![a \\[b\\]](x)",
+      "![a\n\\[b\\]](x)",
     ],
     ["a blank later line, joined", "a\n\nb", "![a  b](x)"],
     ["a later line that starts with spaces, joined", "a\n  b", "![a b](x)"],

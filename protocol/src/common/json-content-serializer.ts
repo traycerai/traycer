@@ -1177,18 +1177,27 @@ export function decodeUnresolvedArtifactImageText(
   return unresolvedArtifactImageText(alt, src) === text ? { alt, src } : null;
 }
 
+// What ends a paragraph, or turns it into something else, at the start of a
+// continuation line: an ATX heading, a fence, a quote, a bullet or an ordered
+// item (a list starting at any number: inside a list item the host's parser
+// opens one there), an HTML block, and a line of only rule, setext or table
+// delimiter characters (a thematic break, a setext underline, a GFM delimiter
+// row that makes the line above a table header).
+const PARAGRAPH_ENDING_LINE =
+  /^(?:#{1,6}(?:[ \t]|$)|`{3,}|~{3,}|>|[*+-](?:[ \t]|$)|[0-9]{1,9}[.)](?:[ \t]|$)|<|[-=*_|: \t]*[-=*_][-=*_|: \t]*$)/;
+
 // Every line of a label after its first is a paragraph continuation line, so
 // it must not be blank, must not start with whitespace (the paragraph strips
-// it) or with what could open another block (ASCII punctuation or a digit),
-// and the line before it must not end in whitespace.
+// it) or with what ends the paragraph, and the line before it must not end in
+// whitespace.
 function labelLinesStayInParagraph(label: string): boolean {
   const lines = label.split("\n");
   for (let index = 1; index < lines.length; index++) {
-    const first = lines[index][0];
+    const line = lines[index];
     if (
-      first === undefined ||
-      /[\s0-9]/.test(first) ||
-      ASCII_PUNCTUATION.test(first) ||
+      line === "" ||
+      /^\s/.test(line) ||
+      PARAGRAPH_ENDING_LINE.test(line) ||
       /[ \t]$/.test(lines[index - 1])
     ) {
       return false;
