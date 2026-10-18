@@ -315,6 +315,8 @@ function AssistantMarkdownImage(props: AssistantMarkdownImageProps): ReactNode {
         mediaType={null}
         suggestedName={null}
         fullWidth={false}
+        width={null}
+        height={null}
       />
     );
   }
@@ -327,6 +329,8 @@ function AssistantMarkdownImage(props: AssistantMarkdownImageProps): ReactNode {
         mediaType={dataMediaType(source.src)}
         suggestedName={null}
         fullWidth={false}
+        width={null}
+        height={null}
       />
     );
   }
@@ -339,6 +343,8 @@ function AssistantMarkdownImage(props: AssistantMarkdownImageProps): ReactNode {
         mediaType="image/svg+xml"
         suggestedName={null}
         fullWidth={false}
+        width={null}
+        height={null}
       />
     );
   }
@@ -388,6 +394,9 @@ function renderImageResolution(
         alt={alt}
         hash={resolution.entry.attachmentHash}
         mediaType={resolution.entry.mediaType}
+        suggestedName={null}
+        width={null}
+        height={null}
       />
     );
   }

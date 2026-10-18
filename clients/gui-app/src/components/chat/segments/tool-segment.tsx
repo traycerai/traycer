@@ -14,7 +14,10 @@ import type {
 import { useChatTranscriptJumpStore } from "@/stores/chats/chat-transcript-jump-store";
 import type { SegmentEndState } from "@/stores/composer/chat-store";
 import { deriveA2ASendCollapsibleKey } from "@/components/chat/chat-collapsible-key";
-import { chatFindA2ASendBodyUnitId } from "@/components/chat/chat-find";
+import {
+  chatFindA2ASendBodyUnitId,
+  chatFindToolImageGalleryUnitId,
+} from "@/components/chat/chat-find";
 import { ChatMessageTimestamp } from "@/components/chat/chat-message-timestamp";
 import { SegmentEndStateBadge } from "./segment-end-state-badge";
 import { LivePulse } from "@/components/ui/live-pulse";
@@ -58,6 +61,10 @@ import { isPageToolCall } from "@/components/chat/chat-activity-groups";
 import { McpAppRow } from "./mcp-app-row";
 import { PageRow } from "./page-row";
 import { ResolvedImage } from "./attachment-image";
+import {
+  genericToolImageCaption,
+  imageResultFileName,
+} from "./image-result-presentation";
 
 interface ToolSegmentProps {
   id: string;
@@ -401,7 +408,11 @@ function GenericToolSegment(props: ToolSegmentProps) {
     progress,
     stackedHeader,
   });
-  const imageGallery = renderToolImageGallery(toolName, props.imageResults);
+  const imageGallery = renderToolImageGallery(
+    props.id,
+    toolName,
+    props.imageResults,
+  );
 
   const header = (
     <GenericToolHeader
@@ -475,11 +486,17 @@ function GenericToolSegment(props: ToolSegmentProps) {
 }
 
 function renderToolImageGallery(
+  id: string,
   toolName: string,
   imageResults: ReadonlyArray<ImageGenerationResult>,
 ): ReactNode {
   if (toolName === "image_generation" || imageResults.length === 0) return null;
-  return <ToolImageGallery imageResults={imageResults} />;
+  return (
+    <ToolImageGallery
+      imageResults={imageResults}
+      findUnitId={chatFindToolImageGalleryUnitId(id)}
+    />
+  );
 }
 
 function renderToolFooter(
@@ -510,15 +527,16 @@ function renderToolCardBody(
 
 function ToolImageGallery(props: {
   readonly imageResults: ReadonlyArray<ImageGenerationResult>;
+  readonly findUnitId: string;
 }) {
   const keyCounts = new Map<string, number>();
   return (
-    <div className="flex w-full min-w-0 flex-col gap-2">
+    <div
+      data-chat-find-unit={props.findUnitId}
+      className="flex w-full min-w-0 flex-col gap-2"
+    >
       {props.imageResults.map((result, index) => {
-        const caption =
-          result.alt !== null && result.alt.trim().length > 0
-            ? result.alt
-            : `Image ${index + 1}`;
+        const caption = genericToolImageCaption(result, index);
         const occurrence = keyCounts.get(result.attachmentHash) ?? 0;
         keyCounts.set(result.attachmentHash, occurrence + 1);
         return (
@@ -530,6 +548,9 @@ function ToolImageGallery(props: {
               alt={caption}
               hash={result.attachmentHash}
               mediaType={result.mediaType}
+              suggestedName={imageResultFileName(result)}
+              width={result.width}
+              height={result.height}
             />
             <figcaption className="text-ui-xs text-muted-foreground">
               {caption}

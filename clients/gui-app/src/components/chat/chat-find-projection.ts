@@ -24,6 +24,7 @@ import {
 } from "@/components/chat/segments/subagent-display";
 import { importedChatMarkerLabel } from "@/components/chat/segments/imported-chat-marker-display";
 import { autoJudgeUnattendedDenialText } from "@/components/chat/segments/auto-judge-unattended-denial-display";
+import { genericToolImageCaption } from "@/components/chat/segments/image-result-presentation";
 import { singleSpecialSegment } from "@/components/chat/chat-special-segment";
 import { parseTraycerNextStepsMarkdown } from "@/markdown/traycer-next-steps";
 import { composerDisplayPlainText } from "@/lib/composer/composer-clipboard";
@@ -147,6 +148,10 @@ export function chatFindMessageContentUnitId(messageId: string): string {
 
 export function chatFindSegmentUnitId(segmentId: string): string {
   return `segment:${segmentId}`;
+}
+
+export function chatFindToolImageGalleryUnitId(segmentId: string): string {
+  return `tool:${segmentId}:image-gallery`;
 }
 
 export function chatFindActivityGroupSummaryUnitId(groupId: string): string {
@@ -451,6 +456,9 @@ function activityGroupChildSearchUnits(
       text: activityGroupChildHeaderSearchText(segment).join("\n"),
       owningChain: groupChain,
     }),
+    segment.kind === "tool"
+      ? genericToolImageGallerySearchUnit(segment, groupChain)
+      : null,
   ]);
 }
 
@@ -505,6 +513,16 @@ function segmentSearchUnits(
       }),
     ]);
   }
+  if (segment.kind === "tool") {
+    return compactUnits([
+      chatFindUnit({
+        unitId: chatFindSegmentUnitId(segment.id),
+        text: toolSegmentSearchText(segment).join("\n"),
+        owningChain: parentChain,
+      }),
+      genericToolImageGallerySearchUnit(segment, parentChain),
+    ]);
+  }
 
   return compactUnits([
     chatFindUnit({
@@ -513,6 +531,29 @@ function segmentSearchUnits(
       owningChain: parentChain,
     }),
   ]);
+}
+
+function genericToolImageGallerySearchUnit(
+  segment: ToolSegment,
+  owningChain: ReadonlyArray<ChatCollapsibleKey>,
+): ChatFindUnit | null {
+  if (
+    segment.imageResults.length === 0 ||
+    segment.toolName === "image_generation" ||
+    segment.agentMessageSend !== null ||
+    segment.managedCommand !== null ||
+    isPageToolCall(segment) ||
+    isMcpAppToolCall(segment)
+  ) {
+    return null;
+  }
+  return chatFindUnit({
+    unitId: chatFindToolImageGalleryUnitId(segment.id),
+    text: segment.imageResults
+      .map((result, index) => genericToolImageCaption(result, index))
+      .join("\n"),
+    owningChain,
+  });
 }
 
 function interviewSearchUnits(
