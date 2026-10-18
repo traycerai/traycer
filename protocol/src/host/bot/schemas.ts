@@ -190,6 +190,93 @@ export type BotClaimAuthorityResponse = z.infer<
   typeof botClaimAuthorityResponseSchema
 >;
 
+// ---- bot.open ---------------------------------------------------------- //
+
+/**
+ * Open a bot on THIS host (the host serving the tab), claiming it here when
+ * its bound host cannot be reached (T18). The person never picks the host:
+ * the app opens the bot through whichever host serves the tab and follows
+ * the answer. A caller the bot is not visible to - not a member of its
+ * environment, or the bot deleted - gets the same not-found error
+ * `bot.read` answers; every other answer is an `outcome`.
+ */
+export const botOpenRequestSchema = lazySchema(() =>
+  z.object({ botId: botIdSchema }),
+);
+export type BotOpenRequest = z.infer<typeof botOpenRequestSchema>;
+
+/**
+ * Why this host claimed the bot: its bound host is not reachable now, or no
+ * host was bound at all.
+ */
+export const botOpenClaimReasonSchema = lazySchema(() =>
+  z.enum(["bound-host-unreachable", "no-bound-host"]),
+);
+export type BotOpenClaimReason = z.infer<typeof botOpenClaimReasonSchema>;
+
+/**
+ * Why the bot cannot be served right now, with no claim made:
+ *
+ * - `host-not-in-environment`: this host is not a host of the bot's
+ *   environment, so it may not run the bot;
+ * - `bound-to-sandbox`: the bot runs on its environment's sandbox, which is
+ *   never claimed away from, and the sandbox is not reachable from here;
+ * - `bound-host-not-observable`: the bot runs on another member's machine,
+ *   whose reachability this account cannot see;
+ * - `reachability-unknown`: whether the bound host is reachable, or what kind
+ *   of host it is, could not be read now;
+ * - `trunk-busy`: this host still runs a turn of the bot's trunk from an
+ *   earlier binding, and the bot is not claimed under it until it settles.
+ */
+export const botOpenPausedReasonSchema = lazySchema(() =>
+  z.enum([
+    "host-not-in-environment",
+    "bound-to-sandbox",
+    "bound-host-not-observable",
+    "reachability-unknown",
+    "trunk-busy",
+  ]),
+);
+export type BotOpenPausedReason = z.infer<typeof botOpenPausedReasonSchema>;
+
+export const botOpenOutcomeSchema = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    /**
+     * This host runs the bot: it was bound here already (`claimed: null`),
+     * or this call claimed it here for `claimed`.
+     */
+    z.object({
+      kind: z.literal("serve-here"),
+      claimed: botOpenClaimReasonSchema.nullable(),
+    }),
+    /**
+     * Another host runs the bot and serves it: it is reachable
+     * (`reachable`), or another host claimed it while this call was
+     * deciding (`claimed-concurrently`) and this host made no second claim.
+     */
+    z.object({
+      kind: z.literal("serve-on-bound-host"),
+      hostId: hostIdSchema,
+      why: z.enum(["reachable", "claimed-concurrently"]),
+    }),
+    /** No host can serve the bot from here now; nothing was claimed. */
+    z.object({
+      kind: z.literal("paused"),
+      reason: botOpenPausedReasonSchema,
+    }),
+  ]),
+);
+export type BotOpenOutcome = z.infer<typeof botOpenOutcomeSchema>;
+
+export const botOpenResponseSchema = lazySchema(() =>
+  z.object({
+    /** The bot row after the decision (after the claim, when one was made). */
+    bot: botRecordSchema,
+    outcome: botOpenOutcomeSchema,
+  }),
+);
+export type BotOpenResponse = z.infer<typeof botOpenResponseSchema>;
+
 // ---- bot.subscribe ----------------------------------------------------- //
 
 /**

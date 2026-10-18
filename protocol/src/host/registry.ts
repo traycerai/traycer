@@ -563,6 +563,7 @@ import {
   botCreateV10,
   botDeleteV10,
   botListV10,
+  botOpenV10,
   botReadV10,
   botSubscribeV10,
   botUpdateRunSettingsV10,
@@ -8259,6 +8260,21 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
       versions: {
         0: {
           contract: botClaimAuthorityV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  // Open a bot on the serving host, claiming it there when its bound host is
+  // unreachable (T18). Same optional posture as the rest of the namespace.
+  "bot.open": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: botOpenV10,
           upgradeFromPreviousVersion: null,
         },
       },
