@@ -102,7 +102,10 @@ import {
 import { createLifecycleTeardownPlatform } from "../host/update-mutation";
 import { SUPERVISOR_CAPABILITY_LIFECYCLE_POLICY_V1 } from "@traycer/protocol/config/supervisor-record";
 import type { ProcessStartIdentity } from "@traycer/protocol/host/lifecycle";
-import { ownProcessStartIdentityAsync } from "../store/process-identity";
+import {
+  isProcessAlive,
+  ownProcessStartIdentityAsync,
+} from "../store/process-identity";
 import { resolveCliVersion } from "../cli-version";
 import {
   actionableStopIntentReason,
@@ -274,6 +277,48 @@ export const MAX_IMMEDIATE_RESTARTS = 5;
  */
 export const RACED_STOP_KILL_GRACE_MS =
   SHUTDOWN_FORCE_EXIT_MS + STOP_EXIT_GRACE_MARGIN_MS;
+
+/**
+ * How long the supervisor waits for an incumbent its child YIELDED to before
+ * concluding that incumbent is a serving host rather than a dying one.
+ *
+ * The case: a restart recycles the job while the previous host is still in
+ * its graceful teardown. The replacement's Layer 0 attempt finds the lock
+ * held by that live pid, declines after its own short retry window and exits
+ * 0 - a correct verdict about the lock, and a wrong one about the machine,
+ * because the pid it lost to is seconds from gone. Treating that 0 as "stood
+ * down on purpose" is what left a machine hostless on 2026-10-18.
+ *
+ * The same derivation as `RACED_STOP_KILL_GRACE_MS`, for the same reason: a
+ * host in teardown is bounded by its own force-exit watchdog, so a dying
+ * incumbent that has not exited by then is not going to, and a host still
+ * alive past this bound is the serving host the never-evict policy protects.
+ */
+export const YIELDED_INCUMBENT_EXIT_WAIT_MS =
+  SHUTDOWN_FORCE_EXIT_MS + STOP_EXIT_GRACE_MARGIN_MS;
+
+/** Liveness poll interval during `YIELDED_INCUMBENT_EXIT_WAIT_MS`. */
+export const YIELDED_INCUMBENT_EXIT_POLL_MS = 250;
+
+/**
+ * Upper bound on the per-attempt Layer 0 frame read.
+ *
+ * The read settles on its own when the frame arrives or when the pipe closes
+ * with the child, so this only bounds a child that lives on without ever
+ * writing one (a host older than the status transport). Sixty seconds is the
+ * longest any caller waits for a host to come up (Desktop's readiness bound),
+ * and Layer 0 is the host's first startup I/O, so a frame later than that
+ * reports on a start nobody is still waiting for.
+ */
+const LAYER0_FRAME_WAIT_MS = 60_000;
+
+/**
+ * How long a consumer waits on the shared frame read before answering
+ * without it: the transition probe's marker has to be published promptly,
+ * and the clean-exit branch consults a frame that - if it exists at all - was
+ * written long before the child exited.
+ */
+const LAYER0_FRAME_CONSUMER_DEADLINE_MS = 3_000;
 
 /**
  * The signals a deliberate stop reaches this supervisor as, and which it
@@ -660,6 +705,9 @@ export interface RunHostStartDeps extends ResolveHostStartTargetDeps {
   readonly readStopIntentIdentity: (
     environment: Environment,
   ) => Promise<StopIntentIdentity | null>;
+  // Liveness of the pid a child's Layer 0 decline named. Injected so the
+  // yielded-incumbent wait can be scripted without a real process to watch.
+  readonly isProcessAlive: (pid: number) => boolean;
   // Consecutive relaunches allowed before the supervisor gives up and hands
   // the machine back to launchd / systemd / the next logon. A dependency
   // rather than a bare constant so a test can state which behaviour it is
@@ -834,6 +882,7 @@ const defaultRunDeps: RunHostStartDeps = {
   },
   hasStopIntent: actionableStopIntentReason,
   readStopIntentIdentity,
+  isProcessAlive,
   maxRelaunches: MAX_CONSECUTIVE_RELAUNCHES,
   reportHostCrash: reportHostCrashToSentry,
   resumeCrashReports: resumeHostCrashReports,
@@ -1166,6 +1215,13 @@ export async function runHostStart(
     return shutdownReason;
   };
   let currentChild: ChildProcess | null = null;
+  // The current attempt's Layer 0 status pipe, destroyed at the top of the
+  // next attempt. Nothing else closes it: `readLayer0Frame` only detaches its
+  // listeners, the host never closes its end after the write, and a provider
+  // CLI the host spawned inherits that end - so a grandchild outliving a dead
+  // host would hold one socket per attempt open in this process for as long
+  // as it lives. Same argument, same remedy, as the stderr pipe.
+  let attemptStatusPipe: Readable | null = null;
   // Resolves the first time a shutdown signal arrives, so a backoff can be
   // ABANDONED rather than merely re-checked once it finishes.
   //
@@ -1521,6 +1577,10 @@ export async function runHostStart(
   for (;;) {
     attemptNumber += 1;
     const isFirstAttempt = attemptNumber === 1;
+    // The previous attempt's frame has been consumed by now (every reader of
+    // it runs before the loop comes back here), so the pipe can go.
+    attemptStatusPipe?.destroy();
+    attemptStatusPipe = null;
     // Only once the gate's own proof is spent: an unspent one is still this
     // attempt's to use, and consuming again would strand it.
     if (parkRuleOwed && !isFirstAttempt && pendingAdoption === null) {
@@ -1897,12 +1957,15 @@ export async function runHostStart(
     // transport, not a hint about it: the host writes a status frame only when
     // this supervisor names the descriptor, and is a hard no-op otherwise. It
     // is therefore passed if and only if the `stdio` vector below actually
-    // opens the pipe (probe mode). Passing it speculatively would re-create the
-    // defect it exists to close - the host used to sniff fd 3's type, and
-    // Node's own IPC channel is a Unix-domain socket on fd 3, so unrelated IPC
-    // received raw frames. Version skew is safe both ways: an N-1 host scans
-    // argv and ignores the unknown flag, and a current host that is not given
-    // the flag simply writes nothing.
+    // opens the pipe - which every attempt now does, probed or not, because
+    // the clean-exit branch needs the child's own verdict to tell a host that
+    // stood down from one that yielded to a dying incumbent. Naming a
+    // descriptor that is not opened would re-create the defect the flag
+    // exists to close - the host used to sniff fd 3's type, and Node's own
+    // IPC channel is a Unix-domain socket on fd 3, so unrelated IPC received
+    // raw frames. Version skew is safe both ways: an N-1 host scans argv and
+    // ignores the unknown flag, and the read then settles when the pipe
+    // closes with the child.
     // The install record is re-read and the OS invocation is derived inside
     // the attempt-admission callback below. A check outside that callback
     // would let an active/parked attempt swap `install.json` between this
@@ -2005,7 +2068,7 @@ export async function runHostStart(
       // POSIX signal is how the record's own writer delivers a restart, so a
       // signal with no record standing is the only case that asks for nothing.
       return exitSupervisor(
-        stopAnnounced === "restart" ? RESTART_OWED_EXIT_CODE : 0,
+        exitCodeForRequestedStop(stopAnnounced),
       );
     }
 
@@ -2064,6 +2127,14 @@ export async function runHostStart(
     // Spent by this admission whatever its outcome; later attempts consume
     // their own.
     pendingAdoption = null;
+    // This attempt's Layer 0 frame, read once at the spawn (below) and shared
+    // by the transition probe and the clean-exit branch. "No frame" until a
+    // readable status pipe exists - a spawn that never happens, or an
+    // injected child without one, answers every consumer with this.
+    let layer0FrameRead: Promise<Layer0FrameRead> = Promise.resolve({
+      kind: "indeterminate",
+      reason: "status-absent",
+    });
     try {
       const admission = await deps.admitHostStartSpawn(
         opts,
@@ -2076,11 +2147,17 @@ export async function runHostStart(
           preexistingReportNames = new Set(
             await deps.prepareCrashReportsDir(crashReportsDirPath),
           );
+          // The status fd is named only for a DIRECT child. The `.cmd`
+          // wrapper path below goes through `cmd.exe`, which does not forward
+          // the CRT descriptor table that makes `stdio[3]` fd 3 in the host,
+          // so a host started that way would write its frame to whatever its
+          // own fd 3 happens to be. The pipe is still opened (one `stdio`
+          // shape for every spawn); unnamed, it simply closes with the child.
           const hostArgs = [
             ...target.args,
             "--layer0-attempt-id",
             attemptId,
-            ...(attemptProbeContext === null
+            ...(spawnsThroughCommandWrapper(target.executable)
               ? []
               : ["--layer0-status-fd", String(LAYER0_STATUS_FD)]),
           ] as const;
@@ -2122,10 +2199,10 @@ export async function runHostStart(
             {
               cwd: target.cwd,
               env,
-              stdio:
-                attemptProbeContext === null
-                  ? ["ignore", logFd, "pipe"]
-                  : ["ignore", logFd, "pipe", "pipe"],
+              // stdout on the log fd, stderr piped for the crash tail, and
+              // the Layer 0 status pipe at `LAYER0_STATUS_FD` on EVERY
+              // attempt (see `hostArgs` above).
+              stdio: ["ignore", logFd, "pipe", "pipe"],
               windowsHide: process.platform === "win32",
               ...(launch.windowsVerbatimArguments
                 ? { windowsVerbatimArguments: true }
@@ -2147,13 +2224,20 @@ export async function runHostStart(
           spawnedWhileAdmitting.child.stderr?.on("error", () => {
             stderrErroredEarly = true;
           });
-          // The layer0 probe pipe (fd 3, present when this attempt runs
-          // probed) is one more separate emitter with the same unhandled-
-          // `error`-is-a-crash semantics, and its consumer
-          // (`observeProbeStatus`) also attaches only after admission. Inert
-          // rather than recorded: an errored pipe simply never yields a frame,
-          // and `readLayer0Frame` is already bounded, so the observation
-          // degrades to `{ marker: null }` on its own.
+          // The Layer 0 status pipe (fd 3) is one more separate emitter with
+          // the same unhandled-`error`-is-a-crash semantics. Inert rather than
+          // recorded: an errored pipe simply never yields a frame, and the
+          // read below is bounded, so every consumer degrades to "no frame"
+          // on its own.
+          //
+          // Read ONCE, here, at the spawn. The frame is a single
+          // length-prefixed record and the pipe buffers nothing a second
+          // reader could re-read, so the transition probe and the clean-exit
+          // branch share this one promise rather than each attaching a
+          // reader. Started synchronously with the spawn so that a child
+          // which writes and exits before admission's remaining awaits
+          // return still has its frame collected rather than lost to a
+          // listener attached after the pipe closed.
           // `Array.isArray` first: injected test doubles are partial
           // `ChildProcess` shapes without a `stdio` array, and the type cannot
           // see that.
@@ -2162,7 +2246,18 @@ export async function runHostStart(
             ? stdioStreams[LAYER0_STATUS_FD]
             : undefined;
           if (isReadable(layer0Status)) {
+            attemptStatusPipe = layer0Status;
             layer0Status.on("error", () => undefined);
+            layer0FrameRead = deps.readLayer0Frame(
+              layer0Status,
+              LAYER0_FRAME_WAIT_MS,
+            );
+            // Marked handled for the same reason `probeObservation` is below:
+            // a consumer awaits this inside its own guard, but only once it
+            // runs, and a rejection before then must not take the supervisor
+            // down. `.catch()` returns a new promise, so the consumers still
+            // observe the failure.
+            void layer0FrameRead.catch(() => undefined);
           }
           return spawnedWhileAdmitting.child;
         },
@@ -2352,7 +2447,7 @@ export async function runHostStart(
         );
         await deps.closeLogFd(logFd);
         return exitSupervisor(
-          cause.reason === "restart" ? RESTART_OWED_EXIT_CODE : 0,
+          exitCodeForRequestedStop(cause.reason),
         );
       }
       // The fresh record resolution happens inside admission. Preserve the
@@ -2540,7 +2635,7 @@ export async function runHostStart(
       attemptProbeContext === null
         ? null
         : observeProbeStatus({
-            child,
+            frameRead: layer0FrameRead,
             context: attemptProbeContext,
             attemptId,
             supervisorPid,
@@ -2866,7 +2961,7 @@ export async function runHostStart(
           stopReason: latchedBy,
         });
         return exitSupervisor(
-          latchedBy === "restart" ? RESTART_OWED_EXIT_CODE : 0,
+          exitCodeForRequestedStop(latchedBy),
         );
       }
       logger.info("Host child requested an intentional restart", {
@@ -2964,6 +3059,49 @@ export async function runHostStart(
         });
         return exitSupervisor(RESTART_OWED_EXIT_CODE);
       }
+
+      // ...and ONE more reading of "on purpose" that was wrong, from the
+      // other side of the lock. A child whose Layer 0 attempt found the data
+      // dir held by a LIVE pid declines and exits 0 - and when that pid is
+      // the previous host still in its graceful teardown (a restart recycled
+      // the job before it had finished exiting; the incumbent probe above saw
+      // no SERVING host and spawned), the 0 is not a host standing down, it
+      // is a host that arrived early. Exiting 0 here then leaves the machine
+      // hostless: the manager does not relaunch a clean exit, and the dying
+      // incumbent takes nothing's place when it goes.
+      //
+      // The frame names the pid, so the question is answerable: wait for it,
+      // bounded by the host's own force-exit watchdog, and relaunch once it is
+      // gone. A pid that outlives the bound is a serving host, and the answer
+      // for that is unchanged - leave it alone, exit 0. The wait is a window
+      // like the admission wait and the backoff: a stop that lands inside it
+      // is a newer instruction than the relaunch and is honoured the same way
+      // `decideRelaunch` honours one.
+      //
+      // Not for a PROBED attempt. A probe skips the incumbent gate on purpose
+      // and is expected to decline against the live host it is reclaiming
+      // from; its answer is the marker, and the desktop owns what happens
+      // next. Waiting here would hold that supervisor for the whole bound and
+      // could relaunch the host from under the desktop's own kickstart.
+      const yieldedTo =
+        attemptProbeContext === null
+          ? await yieldedIncumbentPid(layer0FrameRead, attemptId)
+          : null;
+      if (yieldedTo !== null) {
+        const settlement = await settleYieldedIncumbent({
+          pid: yieldedTo,
+          attemptId,
+          deps,
+          logger,
+          environment: opts.environment,
+          isShuttingDown: () => shuttingDown,
+          shutdownRequested,
+          resolveShutdownReason,
+          servedStopIntentAtStartup,
+        });
+        if (settlement.kind === "relaunch") continue;
+        if (settlement.kind === "exit") return exitSupervisor(settlement.code);
+      }
       return exitSupervisor(outcome.exitCode);
     }
 
@@ -3012,6 +3150,167 @@ export async function runHostStart(
     }
     consecutiveRelaunches = decision.consecutiveRelaunches;
   }
+}
+
+/**
+ * The shared per-attempt frame read, bounded for ONE consumer without
+ * disturbing the read itself: the promise keeps settling for the next
+ * consumer whether or not this one waited for it.
+ */
+function withFrameDeadline(
+  frameRead: Promise<Layer0FrameRead>,
+  deadlineMs: number,
+): Promise<Layer0FrameRead> {
+  let timer: NodeJS.Timeout | null = null;
+  const deadline = new Promise<Layer0FrameRead>((resolve) => {
+    timer = setTimeout(() => {
+      resolve({ kind: "indeterminate", reason: "status-timeout" });
+    }, deadlineMs);
+  });
+  return Promise.race([frameRead, deadline]).finally(() => {
+    if (timer !== null) clearTimeout(timer);
+  });
+}
+
+/**
+ * The pid a child's Layer 0 decline named, or `null` when the child did not
+ * decline, named no pid (`held-retry-window`: a held flock nothing attests,
+ * so there is no process to wait on), or left no readable frame. Total: a
+ * rejected read answers `null`, which is today's behaviour.
+ */
+async function yieldedIncumbentPid(
+  frameRead: Promise<Layer0FrameRead>,
+  attemptId: string,
+): Promise<number | null> {
+  let read: Layer0FrameRead;
+  try {
+    read = await withFrameDeadline(frameRead, LAYER0_FRAME_CONSUMER_DEADLINE_MS);
+  } catch {
+    return null;
+  }
+  if (read.kind !== "frame" || read.frame.attemptId !== attemptId) return null;
+  if (read.frame.layer0 !== "declined") return null;
+  const evidence = read.frame.incumbentEvidence;
+  return evidence.kind === "pid-metadata" ? evidence.pid : null;
+}
+
+type YieldedIncumbentSettlement =
+  | { readonly kind: "relaunch" }
+  | { readonly kind: "exit"; readonly code: number }
+  // The incumbent outlived the wait: a serving host, left alone as today.
+  | { readonly kind: "leave-incumbent" };
+
+/**
+ * What a clean exit that yielded to `pid` turns into: a relaunch once that pid
+ * is gone, an exit when a stop landed meanwhile (with `restart` owing its
+ * comeback, as everywhere else), or nothing when the pid outlived the wait.
+ */
+async function settleYieldedIncumbent(input: {
+  readonly pid: number;
+  readonly attemptId: string;
+  readonly deps: RunHostStartDeps;
+  readonly logger: ILogger;
+  readonly environment: Environment;
+  readonly isShuttingDown: () => boolean;
+  readonly shutdownRequested: Promise<void>;
+  readonly resolveShutdownReason: () => Promise<StopIntentReason | null>;
+  readonly servedStopIntentAtStartup: StopIntentIdentity | null;
+}): Promise<YieldedIncumbentSettlement> {
+  const { logger, environment, attemptId, pid } = input;
+  logger.info(
+    "Host child yielded to an incumbent that still holds the data dir; waiting for it to exit",
+    {
+      environment,
+      attemptId,
+      incumbentPid: pid,
+      waitMs: YIELDED_INCUMBENT_EXIT_WAIT_MS,
+    },
+  );
+  const waited = await awaitYieldedIncumbentExit({
+    pid,
+    deps: input.deps,
+    isShuttingDown: input.isShuttingDown,
+    shutdownRequested: input.shutdownRequested,
+  });
+  if (waited === "shutdown") {
+    const latchedBy = await input.resolveShutdownReason();
+    logger.info("Host supervisor not relaunching - shutting down", {
+      environment,
+      reason: "yielded-to-incumbent",
+      observed: "during-wait",
+      stopReason: latchedBy,
+    });
+    return { kind: "exit", code: exitCodeForRequestedStop(latchedBy) };
+  }
+  if (waited === "still-alive") {
+    logger.warn(
+      "Host supervisor leaving a live incumbent in place - it did not exit within the wait",
+      {
+        environment,
+        attemptId,
+        incumbentPid: pid,
+        waitMs: YIELDED_INCUMBENT_EXIT_WAIT_MS,
+      },
+    );
+    return { kind: "leave-incumbent" };
+  }
+  const announced = await input.deps.hasStopIntent(
+    environment,
+    Date.now(),
+    input.servedStopIntentAtStartup,
+  );
+  if (announced !== null) {
+    logger.info("Host supervisor not relaunching - a stop was requested", {
+      environment,
+      reason: "yielded-to-incumbent",
+      observed: "after-wait",
+      stopReason: announced,
+    });
+    return { kind: "exit", code: exitCodeForRequestedStop(announced) };
+  }
+  logger.info(
+    "Host supervisor relaunching after the incumbent it yielded to exited",
+    { environment, attemptId, incumbentPid: pid },
+  );
+  return { kind: "relaunch" };
+}
+
+/**
+ * `restart` is the one stop reason that owes a comeback, so it alone re-arms
+ * the service manager (`RESTART_OWED_EXIT_CODE`); every other stop, and a
+ * teardown with no record standing, exits 0 and stays down.
+ */
+function exitCodeForRequestedStop(reason: StopIntentReason | null): number {
+  return reason === "restart" ? RESTART_OWED_EXIT_CODE : 0;
+}
+
+/**
+ * Wait for the pid a child yielded to, polling liveness, for at most
+ * `YIELDED_INCUMBENT_EXIT_WAIT_MS`. Counted in polls rather than wall clock
+ * so an injected no-op `sleep` runs the whole wait deterministically; in
+ * production each poll is a real `YIELDED_INCUMBENT_EXIT_POLL_MS` sleep.
+ * Abandoned, not merely re-checked, when a shutdown signal latches - the same
+ * reason the backoff races `shutdownRequested`.
+ */
+async function awaitYieldedIncumbentExit(input: {
+  readonly pid: number;
+  readonly deps: RunHostStartDeps;
+  readonly isShuttingDown: () => boolean;
+  readonly shutdownRequested: Promise<void>;
+}): Promise<"exited" | "still-alive" | "shutdown"> {
+  const polls = Math.ceil(
+    YIELDED_INCUMBENT_EXIT_WAIT_MS / YIELDED_INCUMBENT_EXIT_POLL_MS,
+  );
+  for (let poll = 0; poll < polls; poll += 1) {
+    if (input.isShuttingDown()) return "shutdown";
+    if (!input.deps.isProcessAlive(input.pid)) return "exited";
+    await Promise.race([
+      input.deps.sleep(YIELDED_INCUMBENT_EXIT_POLL_MS),
+      input.shutdownRequested,
+    ]);
+  }
+  if (input.isShuttingDown()) return "shutdown";
+  return input.deps.isProcessAlive(input.pid) ? "still-alive" : "exited";
 }
 
 /**
@@ -4016,16 +4315,17 @@ async function writeProbeTerminalIfAttested(input: {
 type ProbeObservation = { readonly marker: ProbeMarker | null };
 
 async function observeProbeStatus(input: {
-  readonly child: ChildProcess;
+  readonly frameRead: Promise<Layer0FrameRead>;
   readonly context: LiveProbeContext;
   readonly attemptId: string;
   readonly supervisorPid: number;
   readonly deps: RunHostStartDeps;
   readonly environment: Environment;
 }): Promise<ProbeObservation> {
-  const status = input.child.stdio[LAYER0_STATUS_FD];
-  if (!isReadable(status)) return { marker: null };
-  const read = await input.deps.readLayer0Frame(status, 3_000);
+  const read = await withFrameDeadline(
+    input.frameRead,
+    LAYER0_FRAME_CONSUMER_DEADLINE_MS,
+  );
   if (read.kind !== "frame" || read.frame.attemptId !== input.attemptId) {
     return { marker: null };
   }
@@ -4176,7 +4476,7 @@ export function resolveSpawnInvocation(
   executable: string,
   args: readonly string[],
 ): SpawnInvocation {
-  if (process.platform === "win32" && /\.(cmd|bat)$/i.test(executable)) {
+  if (spawnsThroughCommandWrapper(executable)) {
     const line = [executable, ...args].map((token) => `"${token}"`).join(" ");
     return {
       command: process.env.COMSPEC ?? "cmd.exe",
@@ -4185,4 +4485,9 @@ export function resolveSpawnInvocation(
     };
   }
   return { command: executable, args, windowsVerbatimArguments: false };
+}
+
+/** Whether `resolveSpawnInvocation` routes this executable through `cmd.exe`. */
+function spawnsThroughCommandWrapper(executable: string): boolean {
+  return process.platform === "win32" && /\.(cmd|bat)$/i.test(executable);
 }
