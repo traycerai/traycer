@@ -370,6 +370,13 @@ jobs:
       - name: Update-recovery reader, real Windows open flags
         working-directory: clients/traycer-cli
         run: bunx vitest run src/host/__tests__/update-recovery-evidence-flag-fallback-real-platform.test.ts
+      # The only Windows run of the settings lock (`config.json.lock`) against
+      # the real filesystem: the lock's create, a peer's release and the
+      # rename over `config.json`, with several processes changing settings
+      # in one home at once. No write may be lost.
+      - name: Settings lock, concurrent writers on real Windows
+        working-directory: protocol
+        run: bunx vitest run src/config/__tests__/store-lock-multiprocess.test.ts
       # The only real run of the CLI finalize helper's Windows launch. A
       # detached spawn there exits 0 having run no line of the script, and no
       # stubbed test can see that: this starts a marker-only helper through
