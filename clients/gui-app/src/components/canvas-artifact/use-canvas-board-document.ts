@@ -10,8 +10,12 @@ export function useCanvasBoardDocument(
   registry: CanvasFrameRegistry,
   active: boolean,
 ) {
-  useSyncExternalStore(registry.subscribe, registry.getSnapshot);
-  const source = registry.get(path).source;
+  // Consume the source snapshot itself: a discarded revision lets React
+  // Compiler memoize the registry read and retain a previous file's bytes.
+  const source = useSyncExternalStore(
+    registry.subscribe,
+    () => registry.get(path).source,
+  );
   const hash =
     source?.kind === "artifact" &&
     Object.hasOwn(source.manifest.files, source.entryPath)

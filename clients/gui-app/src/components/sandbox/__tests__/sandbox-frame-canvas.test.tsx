@@ -335,7 +335,9 @@ describe("<SandboxFrame /> forwarded ref", () => {
     rerender(ref, "");
 
     expect(held.onBridge.mock.calls).toHaveLength(calls);
-    expect(held.onBridge.mock.calls.some(([bridge]) => bridge === null)).toBe(false);
+    expect(held.onBridge.mock.calls.some(([bridge]) => bridge === null)).toBe(
+      false,
+    );
   });
 
   it("leaves a ref object pointing at the frame through rerenders", async () => {

@@ -299,12 +299,10 @@ describe("CanvasLayersTree", () => {
   it("does not mark a row for a selection in another board or artifact", () => {
     mount(PAGE, answersWith);
     act(() => {
-      useCanvasSelectionStore
-        .getState()
-        .select({
-          ...textSelection(null, { marker: markerOf("<h1") }),
-          boardPath: "boards/other.html",
-        });
+      useCanvasSelectionStore.getState().select({
+        ...textSelection(null, { marker: markerOf("<h1") }),
+        boardPath: "boards/other.html",
+      });
     });
     expect(
       screen
