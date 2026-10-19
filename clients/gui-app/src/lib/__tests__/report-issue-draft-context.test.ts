@@ -2,9 +2,16 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   createReportIssueDraftContext,
   isReportIssueDraftContext,
+  serializeReportIssuePrivateDiagnostics,
 } from "@/lib/report-issue-draft-context";
 import { captureReportIssueError } from "@/lib/report-issue-error-capture";
-import { __resetSupportContextRegistryForTests } from "@/lib/support-context-registry";
+import {
+  __resetSupportContextRegistryForTests,
+  knownField,
+  setSupportEnvironmentSection,
+  staleField,
+} from "@/lib/support-context-registry";
+import type { SupportEnvironmentSection } from "@/lib/support-environment-section";
 
 afterEach(() => {
   __resetSupportContextRegistryForTests();
@@ -16,6 +23,52 @@ const NO_CAPTURE_INPUT = {
   code: null,
   source: null,
   capture: null,
+};
+
+const ENVIRONMENT_SECTION: SupportEnvironmentSection = {
+  hostId: "host-1",
+  principal: "team",
+  reachability: "connected",
+  bindingGeneration: 3,
+  desiredRevision: 7,
+  receivedRevision: 7,
+  appliedRevision: 6,
+  receiptAgeMs: 1200,
+  items: [
+    {
+      kind: "variable",
+      key: "DATABASE_URL",
+      os: "all",
+      status: "applied",
+      code: "ok",
+      args: { exitStatus: null, stage: null, durationMs: null, kind: null },
+    },
+  ],
+  setupAttempts: null,
+  policy: {
+    source: "account",
+    readState: "ready",
+    teamState: null,
+    teamPolicyVersion: null,
+  },
+  rotations: [
+    {
+      secretName: "STRIPE_KEY",
+      state: "enforcing",
+      producers: [
+        {
+          producer: "host",
+          workerClass: null,
+          hostId: "host-2",
+          hostName: null,
+          status: "missing",
+          evidence: null,
+        },
+      ],
+    },
+  ],
+  reachDenials: null,
+  servedTask: null,
 };
 
 describe("createReportIssueDraftContext", () => {
@@ -112,6 +165,78 @@ describe("createReportIssueDraftContext", () => {
 
     expect(draft.privateDiagnostics.registry.hostId).toEqual({
       status: "unavailable",
+    });
+  });
+
+  describe("environment section", () => {
+    it("is unavailable until a section has been written to the registry", () => {
+      const draft = createReportIssueDraftContext(NO_CAPTURE_INPUT);
+
+      expect(draft.privateDiagnostics.environment).toEqual({
+        status: "unavailable",
+      });
+    });
+
+    it("carries the registry's environment field, read when the report opens", () => {
+      setSupportEnvironmentSection(knownField(ENVIRONMENT_SECTION));
+
+      const draft = createReportIssueDraftContext(NO_CAPTURE_INPUT);
+
+      expect(draft.privateDiagnostics.environment).toEqual({
+        status: "known",
+        value: ENVIRONMENT_SECTION,
+      });
+    });
+
+    it("carries a stale section as stale, and an error-triggered report carries it too", () => {
+      setSupportEnvironmentSection(staleField(ENVIRONMENT_SECTION));
+      const capture = captureReportIssueError({
+        error: new Error("boom"),
+        componentStack: null,
+        errorCode: "E_CODE",
+        sourceAction: "op",
+      });
+
+      const draft = createReportIssueDraftContext({
+        ...NO_CAPTURE_INPUT,
+        capture,
+      });
+
+      expect(draft.privateDiagnostics.environment).toEqual({
+        status: "stale",
+        value: ENVIRONMENT_SECTION,
+      });
+    });
+
+    it("sees a section written after an earlier draft, not a copy taken at import", () => {
+      const before = createReportIssueDraftContext(NO_CAPTURE_INPUT);
+      setSupportEnvironmentSection(knownField(ENVIRONMENT_SECTION));
+      const after = createReportIssueDraftContext(NO_CAPTURE_INPUT);
+
+      expect(before.privateDiagnostics.environment.status).toBe("unavailable");
+      expect(after.privateDiagnostics.environment.status).toBe("known");
+    });
+
+    it("is copied by the serializer, beside the other five keys", () => {
+      setSupportEnvironmentSection(knownField(ENVIRONMENT_SECTION));
+      const draft = createReportIssueDraftContext(NO_CAPTURE_INPUT);
+
+      const serialized = serializeReportIssuePrivateDiagnostics(
+        draft.privateDiagnostics,
+      );
+
+      expect(serialized.environment).toEqual({
+        status: "known",
+        value: ENVIRONMENT_SECTION,
+      });
+      expect(Object.keys(serialized).sort()).toEqual([
+        "cause",
+        "correlationId",
+        "environment",
+        "fingerprint",
+        "registry",
+        "stackFamily",
+      ]);
     });
   });
 });

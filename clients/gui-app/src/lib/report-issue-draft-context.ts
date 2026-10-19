@@ -5,8 +5,11 @@ import {
 import type { ReportIssueErrorCapture } from "@/lib/report-issue-error-capture";
 import {
   getSupportContextSnapshot,
+  getSupportEnvironmentSection,
+  type CapturedField,
   type SupportContextSnapshot,
 } from "@/lib/support-context-registry";
+import type { SupportEnvironmentSection } from "@/lib/support-environment-section";
 
 /**
  * Structured private cause for an error-triggered report. Real error text
@@ -48,6 +51,11 @@ export interface ReportIssuePrivateDiagnostics {
    */
   readonly stackFamily: string | null;
   readonly correlationId: string;
+  /**
+   * The selected host's environment section, `unavailable` when that host
+   * serves no `environment.status`.
+   */
+  readonly environment: CapturedField<SupportEnvironmentSection>;
 }
 
 /**
@@ -83,6 +91,7 @@ export function buildReportIssueDraftContext(
   capture: ReportIssueErrorCapture | null,
 ): ReportIssueDraftContext {
   const registry = getSupportContextSnapshot();
+  const environment = getSupportEnvironmentSection();
   if (capture === null) {
     return {
       publicPrefill,
@@ -92,6 +101,7 @@ export function buildReportIssueDraftContext(
         fingerprint: null,
         stackFamily: null,
         correlationId: crypto.randomUUID(),
+        environment,
       },
     };
   }
@@ -103,6 +113,7 @@ export function buildReportIssueDraftContext(
       fingerprint: capture.fingerprint,
       stackFamily: capture.stackFamily,
       correlationId: capture.correlationId,
+      environment,
     },
   };
 }
@@ -134,7 +145,7 @@ export function createReportIssueDraftContext(input: {
  * hoc) so the exact field list is a single, testable contract for ticket 04's
  * IPC wire shape to match: `cause` (type/message/stack/componentStack/
  * errorCode/sourceAction/timestamp), `registry`, `fingerprint`, `stackFamily`,
- * `correlationId`.
+ * `correlationId`, `environment`.
  */
 export type SerializedReportIssuePrivateDiagnostics =
   ReportIssuePrivateDiagnostics;
@@ -148,5 +159,6 @@ export function serializeReportIssuePrivateDiagnostics(
     fingerprint: diagnostics.fingerprint,
     stackFamily: diagnostics.stackFamily,
     correlationId: diagnostics.correlationId,
+    environment: diagnostics.environment,
   };
 }

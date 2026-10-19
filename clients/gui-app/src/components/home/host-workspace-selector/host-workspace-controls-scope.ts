@@ -1,5 +1,6 @@
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { NO_HOST_OPTION_REFUSALS } from "@/components/settings/host-scope/host-option-model";
+import type { HostScopeOption } from "@/components/settings/host-scope/host-scope-model";
 import type { HostRpcRegistry } from "@/lib/host";
 
 /**
@@ -52,6 +53,12 @@ export type HostWorkspaceControlsHostScope =
        * nothing.
        */
       readonly unselectableExceptHostId: string | null;
+      /**
+       * The only hosts the picker lists, or `null` for every host: "Continue on
+       * a <team> host" shows that team's hosts and no other. The selected host
+       * is listed whatever this says, so the picker never hides its own value.
+       */
+      readonly onlyHostIds: ReadonlySet<string> | null;
     };
 
 export const ACTIVE_HOST_WORKSPACE_CONTROLS_SCOPE: HostWorkspaceControlsHostScope =
@@ -92,4 +99,32 @@ export function hostWorkspaceControlsScopeRefusals(
   return scope.kind === "selected"
     ? scope.refusalByHostId
     : NO_HOST_OPTION_REFUSALS;
+}
+
+/**
+ * The host rows a scope lists. `fixed` lists its one host; otherwise every
+ * listed host, with the selected one first when the lists do not carry it,
+ * narrowed to a `selected` scope's `onlyHostIds`.
+ */
+export function hostPickerOptionsForScope(
+  scope: HostWorkspaceControlsHostScope,
+  selectedHostOption: HostScopeOption | null,
+  listedHostOption: HostScopeOption | null,
+  hosts: readonly HostScopeOption[],
+): readonly HostScopeOption[] {
+  if (scope.kind === "fixed") {
+    if (selectedHostOption === null) return [];
+    return [selectedHostOption];
+  }
+  const listed =
+    selectedHostOption !== null && listedHostOption === null
+      ? [selectedHostOption, ...hosts]
+      : hosts;
+  const onlyHostIds = scope.kind === "selected" ? scope.onlyHostIds : null;
+  if (onlyHostIds === null) return listed;
+  return listed.filter(
+    (host) =>
+      onlyHostIds.has(host.hostId) ||
+      host.hostId === selectedHostOption?.hostId,
+  );
 }

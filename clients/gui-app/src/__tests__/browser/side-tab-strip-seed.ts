@@ -1,4 +1,4 @@
-import type { HostNotificationsCloudFeedRowV11 } from "@traycer/protocol/host/notifications/contracts";
+import type { HostNotificationsCloudFeedRowV13 } from "@traycer/protocol/host/notifications/contracts";
 import {
   getOpenEpicRegistry,
   handleHostIds,
@@ -144,7 +144,7 @@ function feedRow(input: {
   readonly kind:
     | { readonly prompt: "approval" | "interview"; readonly agentTitle: string }
     | { readonly stopped: "done" | "failed" };
-}): HostNotificationsCloudFeedRowV11 {
+}): HostNotificationsCloudFeedRowV13 {
   const { epicId, kind } = input;
   const entryId = `${epicId}-row`;
   const chatId = `${epicId}-chat`;
@@ -594,7 +594,7 @@ let longListVersion = 0;
 /** Writes the stores so every task of the long list is in the section it is assigned. */
 function writeLongList(): void {
   const working: Record<string, { working: string[]; turn: string[] }> = {};
-  const rows: HostNotificationsCloudFeedRowV11[] = [];
+  const rows: HostNotificationsCloudFeedRowV13[] = [];
   let minutesAgo = 0;
   for (const [epicId, section] of longListSections) {
     minutesAgo += 3;

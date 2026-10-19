@@ -21,7 +21,7 @@ export function useProvidersDeleteEnvOverride(): UseMutationResult<
   return useHostScopedMutation({
     method: "providers.deleteEnvOverride",
     mutationKey: providersMutationKeys.deleteEnvOverride(),
-    errorMessage: "Couldn't remove environment variable.",
+    errorMessage: "Couldn't remove the variable.",
     invalidateMethods: PROVIDER_INVALIDATIONS,
   });
 }

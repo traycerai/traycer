@@ -15,6 +15,24 @@ import { validateAuthTokenIdentityAccessOnly } from "@traycer-clients/shared/aut
 import { fetchRegisteredHostsViaHttp } from "@traycer-clients/shared/host-client/remote-fetcher";
 import { updateHostVersionPolicyViaHttp } from "@traycer-clients/shared/host-client/host-version-policy-fetcher";
 import { deregisterHostViaHttp } from "@traycer-clients/shared/host-client/host-deregister-fetcher";
+import {
+  createSandboxViaHttp,
+  destroySandboxViaHttp,
+  fetchSandboxCatalogueViaHttp,
+  fetchSandboxCostsViaHttp,
+  getSandboxAutomationViaHttp,
+  listSandboxesViaHttp,
+  openSandboxAutomationViaHttp,
+  runSandboxVerbViaHttp,
+} from "@traycer-clients/shared/host-client/sandbox-control";
+import {
+  decideSecretRequestViaHttp,
+  fetchEnvironmentProvidersViaHttp,
+  fetchSandboxGrantsViaHttp,
+  fetchTeamEnvironmentViaHttp,
+} from "@traycer-clients/shared/host-client/sandbox-secrets";
+import { mintExecutableWriteGrantViaHttp } from "@traycer-clients/shared/host-client/executable-write-grant";
+import { config } from "../../config";
 import type {
   DesktopAuthSessionSetResult,
   DesktopAuthSessionSnapshot,
@@ -23,9 +41,17 @@ import type {
 import { createDesktopBearerVerifier } from "../auth/bearer-verifier";
 import { log } from "../app/logger";
 import {
+  assertNumber,
+  assertNullableString,
   assertString,
   parseDesktopAuthSession,
   parseMintHostCredentialRequest,
+  parseRequiredId,
+  parseSandboxAutomationEnvironmentId,
+  parseSandboxAutomationOpenTarget,
+  parseSandboxCreateRequest,
+  parseSandboxLifecycleVerb,
+  parseSecretRequestDecision,
   parseStoredAuthTokens,
   parseStoredCredentialsIdentity,
   parseTokenRotateExpected,
@@ -198,6 +224,184 @@ export function registerAuthIpc(bridge: RunnerIpcBridge): void {
         bridge.options.authnBaseUrl,
         bearerToken,
         hostId,
+      );
+    },
+  );
+
+  // The sandbox control plane. traycer-server's base URL is read from the
+  // baked config rather than the bridge options: it is a build constant (with
+  // the same dev-only loopback override as `authnBaseUrl`), and nothing in main
+  // needs to vary it per window.
+  bridge.handleInvoke(
+    RunnerHostInvoke.listSandboxes,
+    async (_event, bearerToken: unknown) => {
+      assertString(bearerToken, "listSandboxes.bearerToken");
+      return listSandboxesViaHttp(config.serverBaseUrl, bearerToken);
+    },
+  );
+
+  bridge.handleInvoke(
+    RunnerHostInvoke.getSandboxCosts,
+    async (_event, bearerToken: unknown) => {
+      assertString(bearerToken, "getSandboxCosts.bearerToken");
+      return fetchSandboxCostsViaHttp(config.serverBaseUrl, bearerToken);
+    },
+  );
+
+  bridge.handleInvoke(
+    RunnerHostInvoke.getSandboxCatalogue,
+    async (_event, bearerToken: unknown) => {
+      assertString(bearerToken, "getSandboxCatalogue.bearerToken");
+      return fetchSandboxCatalogueViaHttp(config.serverBaseUrl, bearerToken);
+    },
+  );
+
+  bridge.handleInvoke(
+    RunnerHostInvoke.createSandbox,
+    async (_event, bearerToken: unknown, request: unknown) => {
+      assertString(bearerToken, "createSandbox.bearerToken");
+      return createSandboxViaHttp(
+        config.serverBaseUrl,
+        bearerToken,
+        parseSandboxCreateRequest(request),
+      );
+    },
+  );
+
+  bridge.handleInvoke(
+    RunnerHostInvoke.destroySandbox,
+    async (_event, bearerToken: unknown, sandboxId: unknown) => {
+      assertString(bearerToken, "destroySandbox.bearerToken");
+      assertString(sandboxId, "destroySandbox.sandboxId");
+      return destroySandboxViaHttp(
+        config.serverBaseUrl,
+        bearerToken,
+        sandboxId,
+      );
+    },
+  );
+
+  bridge.handleInvoke(
+    RunnerHostInvoke.runSandboxVerb,
+    async (
+      _event,
+      bearerToken: unknown,
+      sandboxId: unknown,
+      verb: unknown,
+      timeoutMs: unknown,
+    ) => {
+      assertString(bearerToken, "runSandboxVerb.bearerToken");
+      assertString(sandboxId, "runSandboxVerb.sandboxId");
+      assertNumber(timeoutMs, "runSandboxVerb.timeoutMs");
+      return runSandboxVerbViaHttp(
+        config.serverBaseUrl,
+        bearerToken,
+        sandboxId,
+        parseSandboxLifecycleVerb(verb),
+        timeoutMs,
+      );
+    },
+  );
+
+  bridge.handleInvoke(
+    RunnerHostInvoke.getSandboxAutomation,
+    async (_event, bearerToken: unknown, environmentId: unknown) => {
+      assertString(bearerToken, "getSandboxAutomation.bearerToken");
+      return getSandboxAutomationViaHttp(
+        config.serverBaseUrl,
+        bearerToken,
+        parseSandboxAutomationEnvironmentId(environmentId),
+      );
+    },
+  );
+
+  bridge.handleInvoke(
+    RunnerHostInvoke.openSandboxAutomation,
+    async (_event, bearerToken: unknown, target: unknown) => {
+      assertString(bearerToken, "openSandboxAutomation.bearerToken");
+      return openSandboxAutomationViaHttp(
+        config.serverBaseUrl,
+        bearerToken,
+        parseSandboxAutomationOpenTarget(target),
+      );
+    },
+  );
+
+  bridge.handleInvoke(
+    RunnerHostInvoke.getSandboxGrants,
+    async (
+      _event,
+      bearerToken: unknown,
+      environmentId: unknown,
+      hostId: unknown,
+    ) => {
+      assertString(bearerToken, "getSandboxGrants.bearerToken");
+      assertNullableString(environmentId, "getSandboxGrants.environmentId");
+      assertString(hostId, "getSandboxGrants.hostId");
+      return fetchSandboxGrantsViaHttp(
+        bridge.options.authnBaseUrl,
+        bearerToken,
+        environmentId,
+        hostId,
+      );
+    },
+  );
+
+  bridge.handleInvoke(
+    RunnerHostInvoke.getTeamEnvironment,
+    async (_event, bearerToken: unknown, teamId: unknown) => {
+      assertString(bearerToken, "getTeamEnvironment.bearerToken");
+      return fetchTeamEnvironmentViaHttp(
+        bridge.options.authnBaseUrl,
+        bearerToken,
+        parseRequiredId(teamId, "getTeamEnvironment.teamId"),
+      );
+    },
+  );
+
+  bridge.handleInvoke(
+    RunnerHostInvoke.getEnvironmentProviders,
+    async (_event, bearerToken: unknown, environmentId: unknown) => {
+      assertString(bearerToken, "getEnvironmentProviders.bearerToken");
+      return fetchEnvironmentProvidersViaHttp(
+        bridge.options.authnBaseUrl,
+        bearerToken,
+        parseRequiredId(environmentId, "getEnvironmentProviders.environmentId"),
+      );
+    },
+  );
+
+  bridge.handleInvoke(
+    RunnerHostInvoke.mintExecutableWriteGrant,
+    async (_event, bearerToken: unknown, hostId: unknown) => {
+      assertString(bearerToken, "mintExecutableWriteGrant.bearerToken");
+      assertString(hostId, "mintExecutableWriteGrant.hostId");
+      return mintExecutableWriteGrantViaHttp(
+        bridge.options.authnBaseUrl,
+        bearerToken,
+        hostId,
+      );
+    },
+  );
+
+  bridge.handleInvoke(
+    RunnerHostInvoke.decideSecretRequest,
+    async (
+      _event,
+      bearerToken: unknown,
+      environmentId: unknown,
+      requestId: unknown,
+      decision: unknown,
+    ) => {
+      assertString(bearerToken, "decideSecretRequest.bearerToken");
+      assertNullableString(environmentId, "decideSecretRequest.environmentId");
+      assertString(requestId, "decideSecretRequest.requestId");
+      return decideSecretRequestViaHttp(
+        bridge.options.authnBaseUrl,
+        bearerToken,
+        environmentId,
+        requestId,
+        parseSecretRequestDecision(decision),
       );
     },
   );

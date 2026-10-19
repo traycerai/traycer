@@ -229,6 +229,9 @@ vi.mock("../profile-disabled-banner", () => ({
 vi.mock("../provider-reauth-banner", () => ({
   ProviderReauthBanner: () => null,
 }));
+vi.mock("../chat-secret-export-notices", () => ({
+  ChatSecretExportNotices: () => null,
+}));
 vi.mock("@/components/onboarding/first-task-guide", () => ({
   FirstTaskChatGuide: () => null,
 }));

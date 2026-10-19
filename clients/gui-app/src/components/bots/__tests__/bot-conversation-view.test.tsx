@@ -82,6 +82,7 @@ vi.mock("@/components/bots/bot-chat-transcript", () => ({
 }));
 
 import { BotConversationView } from "@/components/bots/bot-conversation-view";
+import { UNRESOLVED_BOT_MEMBERS } from "@/lib/bots/bot-member-names";
 
 const BOT_ID = "bot_01ARZ3NDEKTSV4RRFFQ69G5FAV";
 
@@ -93,6 +94,7 @@ function mountView(paused: boolean): void {
         hostId="host-tab"
         botTitle="Release Bot"
         paused={paused}
+        resolveMember={UNRESOLVED_BOT_MEMBERS}
       />
     </StrictMode>,
   );

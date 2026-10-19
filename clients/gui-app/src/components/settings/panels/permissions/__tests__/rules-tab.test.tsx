@@ -23,10 +23,14 @@ import {
 
 // ---- host boundary --------------------------------------------------------
 
-vi.mock("@/components/settings/host-scope/use-host-scope", () => ({
-  useHostScope: () =>
-    hostScopeFixture({ status: "following", hostId: "host-a" }),
-}));
+vi.mock("@/components/settings/host-scope/use-host-scope", () => {
+  const useHostScope = () =>
+    hostScopeFixture({ status: "following", hostId: "host-a" });
+  return {
+    useHostScope,
+    usePersonalHostScope: useHostScope,
+  };
+});
 vi.mock(
   "@/components/settings/host-scope/use-scoped-host-binding",
   async () => {
@@ -246,6 +250,19 @@ describe("RulesTab", () => {
       expect(screen.getByLabelText("Always allow")).toBe(input("allow"));
       expect(screen.getByLabelText("Ask first")).toBe(input("softDeny"));
       expect(screen.getByLabelText("Never allow")).toBe(input("hardDeny"));
+    });
+
+    it("labels the environment section 'Trusted context', while its stored heading stays 'Environment'", () => {
+      policy.current = record({
+        body: "## Allow\n\n- a\n\n## Environment\n\nenv\n",
+      });
+      render(tab({}));
+
+      expect(screen.getByLabelText("Trusted context")).toBe(
+        input("environment"),
+      );
+      expect(screen.queryByLabelText("Environment")).toBeNull();
+      expect(input("environment").value).toBe("env");
     });
 
     it("renders nothing until the record has answered", () => {

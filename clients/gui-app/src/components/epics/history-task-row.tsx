@@ -34,6 +34,7 @@ import {
 } from "@/components/epics/history-row-provenance";
 import { ImportedUnseenDot } from "@/components/session-import/imported-unseen-dot";
 import { Badge } from "@/components/ui/badge";
+import { TeamTaskChip } from "@/components/epics/team-task-chip";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -187,6 +188,7 @@ export function HistoryTaskRow(props: HistoryTaskRowProps): ReactNode {
                   <HistoryImportedStatus item={props.item} />
                 )}
               </HistoryRowStatusSlot>
+              <HistoryTeamChip teamId={props.item.teamId} />
               {props.showOpenBadge ? (
                 <HistoryOpenBadge
                   epicId={props.item.epicId}
@@ -521,4 +523,12 @@ function historyRowCardClassName(args: {
     args.selectedForDelete && "bg-accent/40 ring-1 ring-inset ring-primary/40",
     args.isDeleting && "opacity-60 hover:bg-transparent",
   );
+}
+
+/** The owning team's chip on a team's task, nothing otherwise. */
+function HistoryTeamChip(props: {
+  readonly teamId: string | null | undefined;
+}): ReactNode {
+  if (props.teamId === null || props.teamId === undefined) return null;
+  return <TeamTaskChip teamId={props.teamId} />;
 }

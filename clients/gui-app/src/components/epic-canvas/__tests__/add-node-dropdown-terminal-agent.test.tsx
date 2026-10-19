@@ -32,6 +32,12 @@ const harnessModelPickerMock = vi.hoisted(() => ({
   }>,
 }));
 
+// Off a team sandbox the gate blocks nothing; its own suite is
+// `add-node-terminal-team-sandbox.test.tsx`.
+vi.mock("@/hooks/sandboxes/use-team-sandbox-harness-blocked", () => ({
+  useTeamSandboxHarnessBlocked: (): boolean => false,
+  useTeamSandboxHarnessGate: () => (): boolean => false,
+}));
 vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
   useHostClientForHostId: (hostId: string | null) => {
     hostClientForHostIdMock.calls.push(hostId);

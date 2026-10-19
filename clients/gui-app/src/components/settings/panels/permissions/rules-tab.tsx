@@ -77,7 +77,7 @@ interface RulesSectionCopy {
 const RULES_SECTION_COPY: Readonly<Record<RulesSectionKey, RulesSectionCopy>> =
   {
     environment: {
-      label: "Environment",
+      label: "Trusted context",
       tagline: "What the judge should trust",
       description:
         "Your repos, hosts, buckets and internal services, in plain words.",

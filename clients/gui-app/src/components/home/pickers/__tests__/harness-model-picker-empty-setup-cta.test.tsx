@@ -41,6 +41,9 @@ vi.mock("@/hooks/providers/use-landing-provider-terminal-login", () => ({
   useLandingProviderStartTerminalLogin: () => ({
     start: mocks.start,
     isPending: false,
+    // The sandbox refusal has its own suite
+    // (`provider-setup-terminal-action.test.tsx`).
+    credentialRefusal: null,
   }),
 }));
 
@@ -434,7 +437,7 @@ describe("<ModelRowsState /> provider setup CTA (reasonix)", () => {
     expect(screen.getByText("Set up Reasonix")).toBeDefined();
     expect(
       screen.getByText(
-        "Reasonix keeps provider API keys in its own store, not in your shell environment.",
+        "Reasonix keeps provider API keys in its own store, not in your shell.",
       ),
     ).toBeDefined();
     const code = screen.getByText("reasonix setup", { selector: "code" });
@@ -552,7 +555,7 @@ describe("<ModelRowsState /> provider setup CTA (reasonix)", () => {
     expect(screen.getByText("Set up Reasonix")).toBeDefined();
     expect(
       screen.getByText(
-        "Reasonix keeps provider API keys in its own store, not in your shell environment.",
+        "Reasonix keeps provider API keys in its own store, not in your shell.",
       ),
     ).toBeDefined();
     const code = screen.getByText("reasonix setup", { selector: "code" });

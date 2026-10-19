@@ -6,7 +6,7 @@ import { Fragment, useState, type ReactNode } from "react";
 import type { HostRpcRegistry } from "@/lib/host";
 import { HostRuntimeContext, useHostBinding } from "@/lib/host/runtime";
 import type { HostRuntimeBinding } from "@/providers/host-runtime-provider";
-import { useHostScope } from "@/components/settings/host-scope/use-host-scope";
+import { usePersonalHostScope } from "@/components/settings/host-scope/use-host-scope";
 import { useScopedHostBinding } from "@/components/settings/host-scope/use-scoped-host-binding";
 import { isHostScopeUsable } from "@/components/settings/host-scope/host-scope-status";
 import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
@@ -72,7 +72,7 @@ export function AutoModeHostGate(props: {
   readonly unsupported: ReactNode;
   readonly children: (hostId: string | null) => ReactNode;
 }): ReactNode {
-  const scope = useHostScope();
+  const scope = usePersonalHostScope();
   const realBinding = useHostBinding();
   const scopedBinding = useScopedHostBinding(scope);
   const support = useHostMethodSupport(scope.hostId, props.method);

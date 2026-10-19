@@ -10,6 +10,12 @@ import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope
 import { useWatchHostStore } from "@/stores/host-scope/watch-host-store";
 import { useAddHostDialogStore } from "@/stores/settings/add-host-dialog-store";
 import { useProvidersFocusStore } from "@/stores/settings/providers-focus-store";
+import { useProviderLinkDialogStore } from "@/stores/providers/provider-link-dialog-store";
+import {
+  NO_DRAFT_OWNER_KEY,
+  useLandingOwnerStore,
+} from "@/stores/home/landing-owner-store";
+import { useSandboxCreateDialogStore } from "@/stores/settings/sandbox-create-dialog-store";
 import {
   createChatSessionStore,
   type ChatSessionStoreHandle,
@@ -144,8 +150,17 @@ describe("<EpicSessionLifecycleBridge />", () => {
     useWatchHostStore.setState({ scopedHostId: null });
     window.localStorage.clear();
     useAddHostDialogStore.getState().closeDialog();
+    useSandboxCreateDialogStore.setState({
+      open: false,
+      preselect: null,
+      workingHostTeamId: null,
+      draft: null,
+      failure: null,
+    });
     useProvidersFocusStore.getState().clearFocusHarnessId();
     useProvidersFocusStore.getState().clearFocusTab();
+    useProviderLinkDialogStore.getState().close();
+    useLandingOwnerStore.setState({ byDraftId: {} });
   });
 
   it("clears every live Epic and chat session on sign-out", () => {
@@ -357,6 +372,40 @@ describe("<EpicSessionLifecycleBridge />", () => {
     expect(useAddHostDialogStore.getState().open).toBe(false);
   });
 
+  it("closes the New-sandbox dialog and drops its draft and failure on user-switch", () => {
+    // Module-level like the Add-host dialog, and it carries what account A
+    // typed and the failure A's last create got: left standing, account B
+    // opens Settings into A's open dialog, A's sandbox name and A's failure.
+    useSandboxCreateDialogStore.getState().openDialog(null, null);
+    useSandboxCreateDialogStore.getState().setDraft({
+      name: "alice-box",
+      os: "linux",
+      cpus: "2",
+      memoryGb: "4",
+      region: "us-east",
+      idleMinutes: 30,
+      belongsTo: { kind: "personal" },
+    });
+    useSandboxCreateDialogStore
+      .getState()
+      .setFailure({ message: "x", code: null });
+
+    render(
+      <EpicSessionLifecycleBridge>
+        <div />
+      </EpicSessionLifecycleBridge>,
+    );
+
+    act(() => {
+      resetAuth("signed-in", "bob@example.com", "user-bob");
+    });
+
+    const dialog = useSandboxCreateDialogStore.getState();
+    expect(dialog.open).toBe(false);
+    expect(dialog.draft).toBeNull();
+    expect(dialog.failure).toBeNull();
+  });
+
   it("drops a pending Providers deep-link intent on user-switch", () => {
     // The most dangerous of the three module-level stores on this boundary:
     // `focusHostId` names account A's machine and `startSignIn` asks Providers
@@ -406,6 +455,72 @@ describe("<EpicSessionLifecycleBridge />", () => {
 
     expect(useProvidersFocusStore.getState().focusHostId).toBe("host-a");
     expect(useProvidersFocusStore.getState().startSignIn).toBe(true);
+  });
+
+  it("drops the landing Belongs to pick on user-switch", () => {
+    // The pick names account A's team id, and a draft not created yet keys it
+    // under the shared no-draft key. Left standing, account B's landing
+    // composer opens with A's team chosen as the owner of B's next task.
+    useLandingOwnerStore
+      .getState()
+      .setChoice(NO_DRAFT_OWNER_KEY, { kind: "team", teamId: "team-of-alice" });
+
+    render(
+      <EpicSessionLifecycleBridge>
+        <div />
+      </EpicSessionLifecycleBridge>,
+    );
+
+    act(() => {
+      resetAuth("signed-in", "bob@example.com", "user-bob");
+    });
+
+    expect(useLandingOwnerStore.getState().byDraftId).toEqual({});
+  });
+
+  it("closes the provider Link dialog on user-switch", () => {
+    // The target names a provider profile of account A's; left open, account B
+    // would see A's Link dialog and could run its sign-in under B's session.
+    useProviderLinkDialogStore
+      .getState()
+      .open({ providerId: "claude", profileId: "profile-alice" });
+
+    render(
+      <EpicSessionLifecycleBridge>
+        <div />
+      </EpicSessionLifecycleBridge>,
+    );
+
+    act(() => {
+      resetAuth("signed-in", "bob@example.com", "user-bob");
+    });
+
+    expect(useProviderLinkDialogStore.getState().target).toBeNull();
+  });
+
+  it("leaves the landing pick and an open provider Link dialog alone when the identity has not changed", () => {
+    // The counterweight: a bridge that cleared them on every render would
+    // satisfy both cases above while making neither survive a normal render.
+    useLandingOwnerStore
+      .getState()
+      .setChoice(NO_DRAFT_OWNER_KEY, { kind: "team", teamId: "team-a" });
+    useProviderLinkDialogStore
+      .getState()
+      .open({ providerId: "claude", profileId: "profile-a" });
+
+    render(
+      <EpicSessionLifecycleBridge>
+        <div />
+      </EpicSessionLifecycleBridge>,
+    );
+
+    expect(useLandingOwnerStore.getState().byDraftId).toEqual({
+      [NO_DRAFT_OWNER_KEY]: { kind: "team", teamId: "team-a" },
+    });
+    expect(useProviderLinkDialogStore.getState().target).toEqual({
+      providerId: "claude",
+      profileId: "profile-a",
+    });
   });
 
   it("leaves an open Add-host dialog alone when the identity has not changed", () => {

@@ -13,8 +13,20 @@ import type {
   HostTreeResourceUsage,
 } from "@/stores/resources/resources-store";
 import type { ResourceMetric } from "@/lib/layout/layout-values";
+import type { DesktopAppResourceUsage } from "@/lib/resources/desktop-app-resource-usage";
 
 const GIB = 1024 * 1024 * 1024;
+
+/** This computer's Electron shell, as the diagnostics bridge samples it. */
+const DESKTOP_APP: DesktopAppResourceUsage = {
+  sampledAt: 1,
+  cpuPercent: 3,
+  rssBytes: GIB / 2,
+  processCount: 6,
+  main: { cpuPercent: 1, rssBytes: GIB / 8, processCount: 1 },
+  renderer: { cpuPercent: 2, rssBytes: GIB / 4, processCount: 2 },
+  other: { cpuPercent: 0, rssBytes: GIB / 8, processCount: 3 },
+};
 
 function appSnapshot(overrides: Partial<AppResourceUsage>): AppResourceUsage {
   return {
@@ -62,6 +74,7 @@ function views(input: {
   readonly projection?: GlobalResourceProjection;
   readonly watchedHostId?: string | null;
   readonly hasExplicitPick?: boolean;
+  readonly desktopApp?: DesktopAppResourceUsage | null;
   readonly globalStreamUnsupported?: boolean;
 }) {
   return statusBarResourceMetricViews({
@@ -69,6 +82,7 @@ function views(input: {
     projection: input.projection ?? EMPTY_GLOBAL_RESOURCE_PROJECTION,
     watchedHostId: input.watchedHostId ?? null,
     hasExplicitPick: input.hasExplicitPick ?? false,
+    desktopApp: input.desktopApp ?? null,
     globalStreamUnsupported: input.globalStreamUnsupported ?? false,
     hostLabel: "Office Linux",
   });
@@ -100,6 +114,7 @@ describe("statusBarResourceReading", () => {
         hostTree: hostTreeSnapshot({}),
         app: appSnapshot({}),
       }),
+      null,
     );
 
     expect(reading.cpuPercent).toBe(12);
@@ -108,9 +123,43 @@ describe("statusBarResourceReading", () => {
     expect(reading.ramSharePercent).toBeCloseTo(6.25, 5);
   });
 
+  it("counts the desktop shell on top of the host tree, as the panel's headline does", () => {
+    // The strip and the resource monitor print one machine's load; the panel
+    // adds the Electron app whenever the watched host is this computer, and
+    // the two disagreed by exactly its working set until the strip did too.
+    // The share moves with it: the shell's memory is part of what the machine
+    // has committed.
+    const reading = statusBarResourceReading(
+      projection({
+        hostTree: hostTreeSnapshot({}),
+        app: appSnapshot({}),
+      }),
+      DESKTOP_APP,
+    );
+
+    expect(reading.cpuPercent).toBe(15);
+    expect(reading.memoryBytes).toBe(GIB + GIB / 2);
+    expect(reading.processCount).toBe(20);
+    expect(reading.ramSharePercent).toBeCloseTo(9.375, 5);
+  });
+
+  it("is no reading at all when only the shell was sampled", () => {
+    // The shell is an addition to a host reading, not a stand-in for one: a
+    // figure that is only the Electron app would print under the host's name.
+    const reading = statusBarResourceReading(
+      EMPTY_GLOBAL_RESOURCE_PROJECTION,
+      DESKTOP_APP,
+    );
+
+    expect(reading.cpuPercent).toBeNull();
+    expect(reading.memoryBytes).toBeNull();
+    expect(reading.processCount).toBeNull();
+  });
+
   it("falls back to the host app process when a pre-@1.2 host sends no tree", () => {
     const reading = statusBarResourceReading(
       projection({ hostTree: null, app: appSnapshot({}) }),
+      null,
     );
 
     expect(reading.cpuPercent).toBe(4);
@@ -124,15 +173,18 @@ describe("statusBarResourceReading", () => {
   it("keeps CPU and process count when the host could not read memory", () => {
     // `rssBytes` is nullable from @1.5 on. One missing field must not throw
     // away the two that arrived.
+    // ... and a shell sample cannot fill the hole: a memory figure that is
+    // only the Electron app's would read as the host's.
     const reading = statusBarResourceReading(
       projection({
         hostTree: hostTreeSnapshot({ rssBytes: null }),
         app: appSnapshot({}),
       }),
+      DESKTOP_APP,
     );
 
-    expect(reading.cpuPercent).toBe(12);
-    expect(reading.processCount).toBe(14);
+    expect(reading.cpuPercent).toBe(15);
+    expect(reading.processCount).toBe(20);
     expect(reading.memoryBytes).toBeNull();
     expect(reading.ramSharePercent).toBeNull();
   });
@@ -143,6 +195,7 @@ describe("statusBarResourceReading", () => {
         hostTree: hostTreeSnapshot({}),
         app: appSnapshot({ hostTotalMemoryBytes: 0 }),
       }),
+      null,
     );
 
     expect(reading.ramSharePercent).toBeNull();

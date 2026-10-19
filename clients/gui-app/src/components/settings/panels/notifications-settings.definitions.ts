@@ -8,7 +8,8 @@ export const HOST_NOTIFICATIONS = defineSettingsSection("notifications", {
   page: {
     availableWhen: alwaysAvailable,
     label: "Notifications",
-    description: "What this host surfaces, and what its automation receives.",
+    description:
+      "What gets surfaced to you, and what your automation receives.",
     keywords: [
       "alerts",
       "inbox",

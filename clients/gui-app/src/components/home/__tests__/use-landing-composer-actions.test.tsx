@@ -529,6 +529,8 @@ describe("useLandingComposerActions", () => {
         draftId: null,
         editor: editorHandleForPrompt(SUBMITTED_PROMPT),
         slashCatalog: null,
+        owner: null,
+        teamSandboxHarnessBlocked: false,
         toolbar: defaultToolbar(),
       });
     });
@@ -573,6 +575,8 @@ describe("useLandingComposerActions", () => {
         draftId: null,
         editor: editorHandleForPrompt(SUBMITTED_PROMPT),
         slashCatalog: null,
+        owner: null,
+        teamSandboxHarnessBlocked: false,
         toolbar: defaultToolbar(),
       });
     });
@@ -626,6 +630,8 @@ describe("useLandingComposerActions", () => {
         draftId: null,
         editor: editorHandleForPrompt(SUBMITTED_PROMPT),
         slashCatalog: null,
+        owner: null,
+        teamSandboxHarnessBlocked: false,
         toolbar: defaultToolbar(),
       });
     });
@@ -669,6 +675,8 @@ describe("useLandingComposerActions", () => {
         draftId: null,
         editor: editorHandleForPrompt(SUBMITTED_PROMPT),
         slashCatalog: null,
+        owner: null,
+        teamSandboxHarnessBlocked: false,
         toolbar: defaultToolbar(),
       });
     });
@@ -712,6 +720,8 @@ describe("useLandingComposerActions", () => {
         draftId: null,
         editor: editorHandleForPrompt(SUBMITTED_PROMPT),
         slashCatalog: null,
+        owner: null,
+        teamSandboxHarnessBlocked: false,
         toolbar: defaultToolbar(),
       });
     });
@@ -748,6 +758,8 @@ describe("useLandingComposerActions", () => {
         draftId: null,
         editor: editorHandleForPrompt(SUBMITTED_PROMPT),
         slashCatalog: null,
+        owner: null,
+        teamSandboxHarnessBlocked: false,
         toolbar: defaultToolbar(),
       });
     });
@@ -819,6 +831,8 @@ describe("useLandingComposerActions", () => {
         draftId: null,
         editor: editorHandleForPrompt(SUBMITTED_PROMPT),
         slashCatalog: null,
+        owner: null,
+        teamSandboxHarnessBlocked: false,
         toolbar: defaultToolbar(),
       });
     });
@@ -864,6 +878,8 @@ describe("useLandingComposerActions", () => {
         draftId: null,
         editor: editorHandleForPrompt(SUBMITTED_PROMPT),
         slashCatalog: null,
+        owner: null,
+        teamSandboxHarnessBlocked: false,
         toolbar: defaultToolbar(),
       });
     });
@@ -880,6 +896,8 @@ describe("useLandingComposerActions", () => {
         draftId: null,
         editor: editorHandleForPrompt(SUBMITTED_PROMPT),
         slashCatalog: null,
+        owner: null,
+        teamSandboxHarnessBlocked: false,
         toolbar: defaultToolbar(),
       });
     });
@@ -914,6 +932,8 @@ describe("useLandingComposerActions", () => {
         draftId: null,
         editor: editorHandleForPrompt(SUBMITTED_PROMPT),
         slashCatalog: null,
+        owner: null,
+        teamSandboxHarnessBlocked: false,
         toolbar: {
           ...defaultToolbar(),
           selection: {
@@ -962,6 +982,8 @@ describe("useLandingComposerActions", () => {
           profileId: null,
         },
         null,
+        null,
+        false,
       );
     });
 
@@ -1015,6 +1037,8 @@ describe("useLandingComposerActions", () => {
           profileId: "work-profile",
         },
         null,
+        null,
+        false,
       );
     });
 
@@ -1055,6 +1079,8 @@ describe("useLandingComposerActions", () => {
         draftId: null,
         editor: editorHandleForPrompt(SUBMITTED_PROMPT),
         slashCatalog: null,
+        owner: null,
+        teamSandboxHarnessBlocked: false,
         toolbar: {
           ...defaultToolbar(),
           selection: { harnessId: "codex", modelSlug: "", profileId: null },
@@ -1099,6 +1125,8 @@ describe("useLandingComposerActions", () => {
         draftId: null,
         editor: editorHandleForPrompt(SUBMITTED_PROMPT),
         slashCatalog: null,
+        owner: null,
+        teamSandboxHarnessBlocked: false,
         toolbar: defaultToolbar(),
       });
     });
@@ -1178,6 +1206,8 @@ describe("useLandingComposerActions", () => {
         draftId: null,
         editor: editorHandleForHashImage("hash-same-session", "look here"),
         slashCatalog: null,
+        owner: null,
+        teamSandboxHarnessBlocked: false,
         toolbar: defaultToolbar(),
       });
     });
@@ -1242,6 +1272,8 @@ describe("useLandingComposerActions", () => {
         draftId: null,
         editor: editorHandleForHashImage("hash-restored", "restored draft"),
         slashCatalog: null,
+        owner: null,
+        teamSandboxHarnessBlocked: false,
         toolbar: defaultToolbar(),
       });
     });
@@ -1292,6 +1324,8 @@ describe("useLandingComposerActions", () => {
         draftId: null,
         editor: editorHandleForHashImage("hash-restored", "restored draft"),
         slashCatalog: null,
+        owner: null,
+        teamSandboxHarnessBlocked: false,
         toolbar: defaultToolbar(),
       });
     });
@@ -1343,6 +1377,8 @@ describe("useLandingComposerActions", () => {
         draftId: null,
         editor: editorHandleForHashImage("hash-missing", "wiped image"),
         slashCatalog: null,
+        owner: null,
+        teamSandboxHarnessBlocked: false,
         toolbar: defaultToolbar(),
       });
     });
@@ -1418,6 +1454,8 @@ describe("useLandingComposerActions", () => {
         draftId: null,
         editor: editorHandleForHashImage(HELLO_HASH, "full budget"),
         slashCatalog: null,
+        owner: null,
+        teamSandboxHarnessBlocked: false,
         toolbar: defaultToolbar(),
       });
     });
@@ -1459,6 +1497,8 @@ describe("useLandingComposerActions", () => {
         draftId: null,
         editor: editorHandleForHashImage("hash-error", "unreadable image"),
         slashCatalog: null,
+        owner: null,
+        teamSandboxHarnessBlocked: false,
         toolbar: defaultToolbar(),
       });
     });
@@ -1514,12 +1554,16 @@ describe("useLandingComposerActions", () => {
         draftId: null,
         editor,
         slashCatalog: null,
+        owner: null,
+        teamSandboxHarnessBlocked: false,
         toolbar: defaultToolbar(),
       });
       result.current.submit({
         draftId: null,
         editor,
         slashCatalog: null,
+        owner: null,
+        teamSandboxHarnessBlocked: false,
         toolbar: defaultToolbar(),
       });
     });
@@ -1580,6 +1624,8 @@ describe("useLandingComposerActions", () => {
         draftId: null,
         editor: editorHandleForPrompt(SUBMITTED_PROMPT),
         slashCatalog: null,
+        owner: null,
+        teamSandboxHarnessBlocked: false,
         toolbar: defaultToolbar(),
       });
     });
@@ -1670,6 +1716,8 @@ describe("useLandingComposerActions", () => {
         draftId: null,
         editor: editorHandleForPrompt(SUBMITTED_PROMPT),
         slashCatalog: null,
+        owner: null,
+        teamSandboxHarnessBlocked: false,
         toolbar: defaultToolbar(),
       });
     });
@@ -1775,6 +1823,8 @@ describe("useLandingComposerActions", () => {
         draftId: null,
         editor: editorHandleForPrompt(SUBMITTED_PROMPT),
         slashCatalog: null,
+        owner: null,
+        teamSandboxHarnessBlocked: false,
         toolbar: defaultToolbar(),
       });
     });
@@ -1870,6 +1920,8 @@ describe("useLandingComposerActions", () => {
         draftId: null,
         editor: editorHandleForPrompt(SUBMITTED_PROMPT),
         slashCatalog: null,
+        owner: null,
+        teamSandboxHarnessBlocked: false,
         toolbar: defaultToolbar(),
       });
     });
@@ -1951,6 +2003,8 @@ describe("useLandingComposerActions", () => {
         draftId: null,
         editor: editorHandleForPrompt(SUBMITTED_PROMPT),
         slashCatalog: null,
+        owner: null,
+        teamSandboxHarnessBlocked: false,
         toolbar: defaultToolbar(),
       });
     });
@@ -2008,6 +2062,8 @@ describe("useLandingComposerActions", () => {
         draftId,
         editor: editorHandleForPrompt(SUBMITTED_PROMPT),
         slashCatalog: null,
+        owner: null,
+        teamSandboxHarnessBlocked: false,
         toolbar: defaultToolbar(),
       });
     });
@@ -2059,6 +2115,8 @@ describe("useLandingComposerActions", () => {
         draftId,
         editor: editorHandleForPrompt(SUBMITTED_PROMPT),
         slashCatalog: null,
+        owner: null,
+        teamSandboxHarnessBlocked: false,
         toolbar: defaultToolbar(),
       });
     });
@@ -2117,6 +2175,8 @@ describe("useLandingComposerActions", () => {
         draftId,
         editor: editorHandleForPrompt(SUBMITTED_PROMPT),
         slashCatalog: null,
+        owner: null,
+        teamSandboxHarnessBlocked: false,
         toolbar: defaultToolbar(),
       });
     });
@@ -2198,6 +2258,8 @@ describe("useLandingComposerActions", () => {
         draftId,
         editor: editorHandleForPrompt(SUBMITTED_PROMPT),
         slashCatalog: null,
+        owner: null,
+        teamSandboxHarnessBlocked: false,
         toolbar: defaultToolbar(),
       });
     });
@@ -2252,6 +2314,8 @@ describe("useLandingComposerActions", () => {
         draftId,
         editor: editorHandleForPrompt(SUBMITTED_PROMPT),
         slashCatalog: null,
+        owner: null,
+        teamSandboxHarnessBlocked: false,
         toolbar: defaultToolbar(),
       });
     });
@@ -2320,6 +2384,8 @@ describe("useLandingComposerActions", () => {
         draftId,
         editor: editorHandleForPrompt(SUBMITTED_PROMPT),
         slashCatalog: null,
+        owner: null,
+        teamSandboxHarnessBlocked: false,
         toolbar: defaultToolbar(),
       });
     });
@@ -2379,6 +2445,8 @@ describe("useLandingComposerActions", () => {
         draftId,
         editor: editorHandleForPrompt("first request"),
         slashCatalog: null,
+        owner: null,
+        teamSandboxHarnessBlocked: false,
         toolbar: defaultToolbar(),
       });
     });
@@ -2450,6 +2518,8 @@ describe("useLandingComposerActions", () => {
           getJSON: () => jsonContentForPrompt(SUBMITTED_PROMPT),
         },
         slashCatalog: null,
+        owner: null,
+        teamSandboxHarnessBlocked: false,
         toolbar: defaultToolbar(),
       });
     });
@@ -2516,6 +2586,8 @@ describe("useLandingComposerActions", () => {
         draftId: draftA,
         editor: editorHandleForPrompt(SUBMITTED_PROMPT),
         slashCatalog: null,
+        owner: null,
+        teamSandboxHarnessBlocked: false,
         toolbar: defaultToolbar(),
       });
     });
@@ -2593,6 +2665,8 @@ describe("useLandingComposerActions", () => {
         draftId: draftA,
         editor: editorHandleForPrompt(SUBMITTED_PROMPT),
         slashCatalog: null,
+        owner: null,
+        teamSandboxHarnessBlocked: false,
         toolbar: defaultToolbar(),
       });
     });
@@ -2667,6 +2741,8 @@ describe("useLandingComposerActions", () => {
         draftId: draftA,
         editor: editorHandleForPrompt("submit A"),
         slashCatalog: null,
+        owner: null,
+        teamSandboxHarnessBlocked: false,
         toolbar: defaultToolbar(),
       });
     });
@@ -2682,6 +2758,8 @@ describe("useLandingComposerActions", () => {
         draftId: draftB,
         editor: editorHandleForPrompt("submit B"),
         slashCatalog: null,
+        owner: null,
+        teamSandboxHarnessBlocked: false,
         toolbar: defaultToolbar(),
       });
     });
@@ -2739,6 +2817,8 @@ describe("useLandingComposerActions", () => {
           profileId: null,
         },
         draftA,
+        null,
+        false,
       );
     });
     await waitFor(() => {
@@ -2788,6 +2868,8 @@ describe("useLandingComposerActions", () => {
         draftId: null,
         editor: editorHandleForHashImage("retry-image", "retry"),
         slashCatalog: null,
+        owner: null,
+        teamSandboxHarnessBlocked: false,
         toolbar: defaultToolbar(),
       });
     });
@@ -2841,6 +2923,8 @@ describe("useLandingComposerActions", () => {
         draftId: null,
         editor: editorHandleForPrompt("retry create"),
         slashCatalog: null,
+        owner: null,
+        teamSandboxHarnessBlocked: false,
         toolbar: defaultToolbar(),
       });
     });
@@ -2914,6 +2998,8 @@ describe("useLandingComposerActions", () => {
         draftId: null,
         editor: editorHandleForPrompt("refused create"),
         slashCatalog: null,
+        owner: null,
+        teamSandboxHarnessBlocked: false,
         toolbar: defaultToolbar(),
       });
     });
@@ -3007,6 +3093,8 @@ describe("useLandingComposerActions", () => {
         draftId: null,
         editor: editorHandleForPrompt("accepted create"),
         slashCatalog: null,
+        owner: null,
+        teamSandboxHarnessBlocked: false,
         toolbar: defaultToolbar(),
       });
     });
@@ -3074,6 +3162,8 @@ describe("useLandingComposerActions", () => {
           profileId: null,
         },
         null,
+        null,
+        false,
       );
     });
     await waitFor(() => {
@@ -3147,6 +3237,8 @@ describe("useLandingComposerActions", () => {
           draftId: null,
           editor: editorHandleForPrompt(SUBMITTED_PROMPT),
           slashCatalog: null,
+          owner: null,
+          teamSandboxHarnessBlocked: false,
           toolbar: defaultToolbar(),
         });
       });
@@ -3188,6 +3280,8 @@ describe("useLandingComposerActions", () => {
           draftId: null,
           editor: editorHandleForPrompt(SUBMITTED_PROMPT),
           slashCatalog: null,
+          owner: null,
+          teamSandboxHarnessBlocked: false,
           toolbar: defaultToolbar(),
         });
       });
@@ -3240,6 +3334,8 @@ describe("useLandingComposerActions", () => {
           draftId: null,
           editor: editorHandleForPrompt(SUBMITTED_PROMPT),
           slashCatalog: null,
+          owner: null,
+          teamSandboxHarnessBlocked: false,
           toolbar: defaultToolbar(),
         });
       });
@@ -3301,6 +3397,8 @@ describe("useLandingComposerActions", () => {
             profileId: null,
           },
           null,
+          null,
+          false,
         );
       });
 
@@ -3369,6 +3467,8 @@ describe("useLandingComposerActions", () => {
             profileId: null,
           },
           null,
+          null,
+          false,
         );
       });
 
@@ -3439,6 +3539,8 @@ describe("useLandingComposerActions", () => {
           draftId: null,
           editor: editorHandleForPrompt(SUBMITTED_PROMPT),
           slashCatalog: null,
+          owner: null,
+          teamSandboxHarnessBlocked: false,
           toolbar: defaultToolbar(),
         });
       });
@@ -3510,6 +3612,8 @@ describe("useLandingComposerActions", () => {
           draftId: null,
           editor: editorHandleForPrompt(SUBMITTED_PROMPT),
           slashCatalog: null,
+          owner: null,
+          teamSandboxHarnessBlocked: false,
           toolbar: defaultToolbar(),
         });
       });
@@ -3578,6 +3682,8 @@ describe("useLandingComposerActions", () => {
           draftId: null,
           editor: editorHandleForPrompt(SUBMITTED_PROMPT),
           slashCatalog: null,
+          owner: null,
+          teamSandboxHarnessBlocked: false,
           toolbar: defaultToolbar(),
         });
       });
@@ -3663,6 +3769,8 @@ describe("useLandingComposerActions", () => {
           draftId: null,
           editor: editorHandleForPrompt("recovered success"),
           slashCatalog: null,
+          owner: null,
+          teamSandboxHarnessBlocked: false,
           toolbar: defaultToolbar(),
         });
       });
@@ -3803,6 +3911,8 @@ describe("useLandingComposerActions", () => {
           draftId: null,
           editor: editorHandleForByHashImage(hash, "retry past a refusal"),
           slashCatalog: null,
+          owner: null,
+          teamSandboxHarnessBlocked: false,
           toolbar: defaultToolbar(),
         });
       });
@@ -3886,6 +3996,8 @@ describe("useLandingComposerActions", () => {
           draftId: null,
           editor: editorHandleForByHashImage("hash-eligible-1", "by hash"),
           slashCatalog: null,
+          owner: null,
+          teamSandboxHarnessBlocked: false,
           toolbar: defaultToolbar(),
         });
       });
@@ -3934,6 +4046,8 @@ describe("useLandingComposerActions", () => {
           draftId: null,
           editor: editorHandleForByHashImage("hash-old-host", "inline please"),
           slashCatalog: null,
+          owner: null,
+          teamSandboxHarnessBlocked: false,
           toolbar: defaultToolbar(),
         });
       });
@@ -3977,6 +4091,8 @@ describe("useLandingComposerActions", () => {
             "not eligible",
           ),
           slashCatalog: null,
+          owner: null,
+          teamSandboxHarnessBlocked: false,
           toolbar: defaultToolbar(),
         });
       });
@@ -4030,6 +4146,8 @@ describe("useLandingComposerActions", () => {
             "mixed",
           ),
           slashCatalog: null,
+          owner: null,
+          teamSandboxHarnessBlocked: false,
           toolbar: defaultToolbar(),
         });
       });
@@ -4081,6 +4199,8 @@ describe("useLandingComposerActions", () => {
           draftId: null,
           editor: editorHandleForManyByHashImages(33),
           slashCatalog: null,
+          owner: null,
+          teamSandboxHarnessBlocked: false,
           toolbar: defaultToolbar(),
         });
       });
@@ -4127,6 +4247,8 @@ describe("useLandingComposerActions", () => {
           draftId: null,
           editor: editorHandleForByHashImage("hash-pending", "pending"),
           slashCatalog: null,
+          owner: null,
+          teamSandboxHarnessBlocked: false,
           toolbar: defaultToolbar(),
         });
       });

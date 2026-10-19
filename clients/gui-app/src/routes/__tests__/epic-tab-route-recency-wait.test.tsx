@@ -141,6 +141,11 @@ vi.mock("@/components/layout/bridges/tray-open-epic-bridge", () => ({
 vi.mock("@/components/layout/bridges/host-lifecycle-analytics-bridge", () => ({
   HostLifecycleAnalyticsBridge: () => null,
 }));
+// The team-removal tile closer reads the host registry query; this harness
+// has no QueryClientProvider, so stub it like the shell bridges above.
+vi.mock("@/providers/team-removal-tile-closer", () => ({
+  TeamRemovalTileCloser: () => null,
+}));
 
 vi.mock("@/hooks/epics/use-cloud-epic-tasks-query", () => ({
   useCloudEpicTasksQuery: () => ({ tasks: [] }),

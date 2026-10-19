@@ -40,6 +40,7 @@ function renderSwitcher(refusalByHostId: ReadonlyMap<string, string>): void {
       listsFailed={false}
       onRetryLists={() => undefined}
       updateViewForHost={null}
+      offersAutomations={false}
       environmentLabelForHost={null}
     />,
   );
@@ -108,6 +109,7 @@ describe("<HostSwitcher /> surface refusals for a fork target", () => {
         listsFailed={false}
         onRetryLists={() => undefined}
         updateViewForHost={null}
+        offersAutomations={false}
         environmentLabelForHost={null}
       />,
     );
@@ -149,6 +151,7 @@ describe("<HostSwitcher /> surface refusals for a fork target", () => {
         listsFailed={false}
         onRetryLists={() => undefined}
         updateViewForHost={null}
+        offersAutomations={false}
         environmentLabelForHost={null}
       />,
     );
@@ -209,6 +212,7 @@ describe("<HostSwitcher /> surface refusals for a fork target", () => {
         listsFailed={false}
         onRetryLists={() => undefined}
         updateViewForHost={null}
+        offersAutomations={false}
         environmentLabelForHost={null}
       />,
     );

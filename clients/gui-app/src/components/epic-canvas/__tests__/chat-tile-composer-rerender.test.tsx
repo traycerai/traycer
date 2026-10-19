@@ -233,6 +233,7 @@ const COMPOSER: ChatLowerComposerState = {
     </>
   ),
   workspaceAvailability: WORKSPACE_COMPOSER_READY,
+  onContinueOnTeamHosts: () => undefined,
   suggestedPrompt: undefined,
 };
 

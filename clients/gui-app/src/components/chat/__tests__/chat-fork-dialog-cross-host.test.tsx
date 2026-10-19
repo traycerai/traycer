@@ -512,6 +512,7 @@ function forkTarget(
     carriedInterviews: "settled",
     forkMode: "plain",
     initialHostId: null,
+    onlyHostIds: null,
     ...overrides,
   };
 }
@@ -1620,6 +1621,7 @@ describe("ChatForkDialog cross-host routing", () => {
     const remoteLatestTarget = forkTarget({
       assistantMessageId: null,
       initialHostId: OTHER_HOST_ID,
+      onlyHostIds: null,
     });
     // Same mount-closed-then-open pattern as the initialHostId tests above:
     // the seeding branch only runs on an open TRANSITION.

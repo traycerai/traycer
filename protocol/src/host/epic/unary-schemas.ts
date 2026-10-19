@@ -767,6 +767,37 @@ export const createEpicRequestSchemaV12 = lazySchema(() =>
 export type CreateEpicRequestV12 = z.infer<typeof createEpicRequestSchemaV12>;
 
 /**
+ * Who owns a new epic: the person creating it, or a team the person belongs
+ * to. The same two arms as the cloud create body's `owner` (common's
+ * `createEpicRequestSchema`), which refuses a team the caller is not in.
+ */
+export const epicCreateOwnerSchema = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    z.strictObject({ kind: z.literal("person") }),
+    z.strictObject({
+      kind: z.literal("team"),
+      teamId: z.string().min(1).max(64),
+    }),
+  ]),
+);
+export type EpicCreateOwner = z.infer<typeof epicCreateOwnerSchema>;
+
+/**
+ * `@1.3`'s request: `@1.2`'s plus `owner`. `null` (and an absent key, which
+ * parses to `null`) is the person, exactly what every older caller meant.
+ *
+ * A `@1.2` host's frozen request STRIPS the key, so a team create sent to it
+ * would land as a personal epic: a caller that sends a team owner requires
+ * `epic.create@1.3` of the host before any frame (`requiredHostMethodVersion`).
+ */
+export const createEpicRequestSchemaV13 = lazySchema(() =>
+  createEpicRequestSchemaV12.extend({
+    owner: epicCreateOwnerSchema.nullable().default(null),
+  }),
+);
+export type CreateEpicRequestV13 = z.infer<typeof createEpicRequestSchemaV13>;
+
+/**
  * `@1.2`'s refusal kinds - a NEW enum instance, never a value added to
  * `epicCreateRefusalKindSchema`.
  *

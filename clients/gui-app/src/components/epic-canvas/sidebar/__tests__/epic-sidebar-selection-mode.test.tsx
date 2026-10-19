@@ -755,6 +755,12 @@ vi.mock("@/hooks/chats/use-chat-search-message-hits", () => ({
   }),
 }));
 
+// The Agents panel's Hosts section, asked for on every render for the same
+// reason and left out for the same one: its real hook issues a host query.
+vi.mock("@/hooks/epic/use-task-hosts-view", () => ({
+  useTaskHostsView: () => ({ kind: "none" }),
+}));
+
 vi.mock("@/lib/host/runtime", () => ({
   useHostClient: () => testState.activeHostClient,
   // The SPINE, a separate export since redesign P2.1.

@@ -91,6 +91,7 @@ function freshIdentity(): RemoteSessionIdentity {
     relayAttachUrl: `wss://relay.test/attach-${nextHostId}`,
     authRecovery: "revalidate",
     authEpoch: "lease-1",
+    openAuth: "user-bearer",
   };
 }
 

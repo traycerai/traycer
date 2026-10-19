@@ -37,8 +37,8 @@ vi.mock("@/hooks/runner/use-desktop-zoom-bridge", () => ({
   useDesktopZoomBridge: () => null,
 }));
 
-vi.mock("@/components/settings/host-scope/use-host-scope", () => ({
-  useHostScope: () => ({
+vi.mock("@/components/settings/host-scope/use-host-scope", () => {
+  const useHostScope = () => ({
     hosts: [],
     host: null,
     hostId: null,
@@ -58,8 +58,12 @@ vi.mock("@/components/settings/host-scope/use-host-scope", () => ({
     listsFailed: false,
     retryLists: () => {},
     nowMs: 0,
-  }),
-}));
+  });
+  return {
+    useHostScope,
+    usePersonalHostScope: useHostScope,
+  };
+});
 
 // History content is outside this regression's modal-lock boundary and needs
 // the full host runtime. Keep the actual system modal shell while isolating

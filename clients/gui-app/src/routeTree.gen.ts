@@ -21,11 +21,13 @@ import { Route as DraftDraftIdRouteImport } from "./routes/draft.$draftId";
 import { Route as DraftNewRouteImport } from "./routes/draft.new";
 import { Route as EpicsIndexRouteImport } from "./routes/epics/index";
 import { Route as SettingsIndexRouteImport } from "./routes/settings.index";
+import { Route as SettingsAgentDefinitionsRouteImport } from "./routes/settings.agent-definitions";
 import { Route as SettingsAgentsRouteImport } from "./routes/settings.agents";
 import { Route as SettingsAppDiagnosticsRouteImport } from "./routes/settings.app-diagnostics";
 import { Route as SettingsAppNotificationsRouteImport } from "./routes/settings.app-notifications";
 import { Route as SettingsAppearanceRouteImport } from "./routes/settings.appearance";
 import { Route as SettingsBrowserRouteImport } from "./routes/settings.browser";
+import { Route as SettingsBrowserAgentAccessRouteImport } from "./routes/settings.browser-agent-access";
 import { Route as SettingsDeleteAccountRouteImport } from "./routes/settings.delete-account";
 import { Route as SettingsDevicesRouteImport } from "./routes/settings.devices";
 import { Route as SettingsDiagnosticsRouteImport } from "./routes/settings.diagnostics";
@@ -36,12 +38,16 @@ import { Route as SettingsHostRouteImport } from "./routes/settings.host";
 import { Route as SettingsKeybindingsRouteImport } from "./routes/settings.keybindings";
 import { Route as SettingsLayoutRouteImport } from "./routes/settings.layout";
 import { Route as SettingsLinkPhoneRouteImport } from "./routes/settings.link-phone";
+import { Route as SettingsMachineSetupRouteImport } from "./routes/settings.machine-setup";
+import { Route as SettingsMcpServersRouteImport } from "./routes/settings.mcp-servers";
 import { Route as SettingsNotificationsRouteImport } from "./routes/settings.notifications";
 import { Route as SettingsOpeningBehaviorRouteImport } from "./routes/settings.opening-behavior";
 import { Route as SettingsPermissionsRouteImport } from "./routes/settings.permissions";
 import { Route as SettingsProvidersRouteImport } from "./routes/settings.providers";
+import { Route as SettingsSecretsRouteImport } from "./routes/settings.secrets";
 import { Route as SettingsServiceRouteImport } from "./routes/settings.service";
 import { Route as SettingsShellRouteImport } from "./routes/settings.shell";
+import { Route as SettingsSkillsRouteImport } from "./routes/settings.skills";
 import { Route as SettingsUsageRouteImport } from "./routes/settings.usage";
 import { Route as SettingsWorktreesRouteImport } from "./routes/settings.worktrees";
 import { Route as EpicsEpicIdTabIdRouteImport } from "./routes/epics.$epicId.$tabId";
@@ -106,6 +112,12 @@ const SettingsIndexRoute = SettingsIndexRouteImport.update({
   path: "/",
   getParentRoute: () => SettingsRoute,
 } as any);
+const SettingsAgentDefinitionsRoute =
+  SettingsAgentDefinitionsRouteImport.update({
+    id: "/agent-definitions",
+    path: "/agent-definitions",
+    getParentRoute: () => SettingsRoute,
+  } as any);
 const SettingsAgentsRoute = SettingsAgentsRouteImport.update({
   id: "/agents",
   path: "/agents",
@@ -132,6 +144,12 @@ const SettingsBrowserRoute = SettingsBrowserRouteImport.update({
   path: "/browser",
   getParentRoute: () => SettingsRoute,
 } as any);
+const SettingsBrowserAgentAccessRoute =
+  SettingsBrowserAgentAccessRouteImport.update({
+    id: "/browser-agent-access",
+    path: "/browser-agent-access",
+    getParentRoute: () => SettingsRoute,
+  } as any);
 const SettingsDeleteAccountRoute = SettingsDeleteAccountRouteImport.update({
   id: "/delete-account",
   path: "/delete-account",
@@ -182,6 +200,16 @@ const SettingsLinkPhoneRoute = SettingsLinkPhoneRouteImport.update({
   path: "/link-phone",
   getParentRoute: () => SettingsRoute,
 } as any);
+const SettingsMachineSetupRoute = SettingsMachineSetupRouteImport.update({
+  id: "/machine-setup",
+  path: "/machine-setup",
+  getParentRoute: () => SettingsRoute,
+} as any);
+const SettingsMcpServersRoute = SettingsMcpServersRouteImport.update({
+  id: "/mcp-servers",
+  path: "/mcp-servers",
+  getParentRoute: () => SettingsRoute,
+} as any);
 const SettingsNotificationsRoute = SettingsNotificationsRouteImport.update({
   id: "/notifications",
   path: "/notifications",
@@ -202,6 +230,11 @@ const SettingsProvidersRoute = SettingsProvidersRouteImport.update({
   path: "/providers",
   getParentRoute: () => SettingsRoute,
 } as any);
+const SettingsSecretsRoute = SettingsSecretsRouteImport.update({
+  id: "/secrets",
+  path: "/secrets",
+  getParentRoute: () => SettingsRoute,
+} as any);
 const SettingsServiceRoute = SettingsServiceRouteImport.update({
   id: "/service",
   path: "/service",
@@ -210,6 +243,11 @@ const SettingsServiceRoute = SettingsServiceRouteImport.update({
 const SettingsShellRoute = SettingsShellRouteImport.update({
   id: "/shell",
   path: "/shell",
+  getParentRoute: () => SettingsRoute,
+} as any);
+const SettingsSkillsRoute = SettingsSkillsRouteImport.update({
+  id: "/skills",
+  path: "/skills",
   getParentRoute: () => SettingsRoute,
 } as any);
 const SettingsUsageRoute = SettingsUsageRouteImport.update({
@@ -239,11 +277,13 @@ export interface FileRoutesByFullPath {
   "/bot/$botId": typeof BotBotIdRoute;
   "/draft/$draftId": typeof DraftDraftIdRoute;
   "/draft/new": typeof DraftNewRoute;
+  "/settings/agent-definitions": typeof SettingsAgentDefinitionsRoute;
   "/settings/agents": typeof SettingsAgentsRoute;
   "/settings/app-diagnostics": typeof SettingsAppDiagnosticsRoute;
   "/settings/app-notifications": typeof SettingsAppNotificationsRoute;
   "/settings/appearance": typeof SettingsAppearanceRoute;
   "/settings/browser": typeof SettingsBrowserRoute;
+  "/settings/browser-agent-access": typeof SettingsBrowserAgentAccessRoute;
   "/settings/delete-account": typeof SettingsDeleteAccountRoute;
   "/settings/devices": typeof SettingsDevicesRoute;
   "/settings/diagnostics": typeof SettingsDiagnosticsRoute;
@@ -254,12 +294,16 @@ export interface FileRoutesByFullPath {
   "/settings/keybindings": typeof SettingsKeybindingsRoute;
   "/settings/layout": typeof SettingsLayoutRoute;
   "/settings/link-phone": typeof SettingsLinkPhoneRoute;
+  "/settings/machine-setup": typeof SettingsMachineSetupRoute;
+  "/settings/mcp-servers": typeof SettingsMcpServersRoute;
   "/settings/notifications": typeof SettingsNotificationsRoute;
   "/settings/opening-behavior": typeof SettingsOpeningBehaviorRoute;
   "/settings/permissions": typeof SettingsPermissionsRoute;
   "/settings/providers": typeof SettingsProvidersRoute;
+  "/settings/secrets": typeof SettingsSecretsRoute;
   "/settings/service": typeof SettingsServiceRoute;
   "/settings/shell": typeof SettingsShellRoute;
+  "/settings/skills": typeof SettingsSkillsRoute;
   "/settings/usage": typeof SettingsUsageRoute;
   "/settings/worktrees": typeof SettingsWorktreesRoute;
   "/epics/": typeof EpicsIndexRoute;
@@ -275,11 +319,13 @@ export interface FileRoutesByTo {
   "/bot/$botId": typeof BotBotIdRoute;
   "/draft/$draftId": typeof DraftDraftIdRoute;
   "/draft/new": typeof DraftNewRoute;
+  "/settings/agent-definitions": typeof SettingsAgentDefinitionsRoute;
   "/settings/agents": typeof SettingsAgentsRoute;
   "/settings/app-diagnostics": typeof SettingsAppDiagnosticsRoute;
   "/settings/app-notifications": typeof SettingsAppNotificationsRoute;
   "/settings/appearance": typeof SettingsAppearanceRoute;
   "/settings/browser": typeof SettingsBrowserRoute;
+  "/settings/browser-agent-access": typeof SettingsBrowserAgentAccessRoute;
   "/settings/delete-account": typeof SettingsDeleteAccountRoute;
   "/settings/devices": typeof SettingsDevicesRoute;
   "/settings/diagnostics": typeof SettingsDiagnosticsRoute;
@@ -290,12 +336,16 @@ export interface FileRoutesByTo {
   "/settings/keybindings": typeof SettingsKeybindingsRoute;
   "/settings/layout": typeof SettingsLayoutRoute;
   "/settings/link-phone": typeof SettingsLinkPhoneRoute;
+  "/settings/machine-setup": typeof SettingsMachineSetupRoute;
+  "/settings/mcp-servers": typeof SettingsMcpServersRoute;
   "/settings/notifications": typeof SettingsNotificationsRoute;
   "/settings/opening-behavior": typeof SettingsOpeningBehaviorRoute;
   "/settings/permissions": typeof SettingsPermissionsRoute;
   "/settings/providers": typeof SettingsProvidersRoute;
+  "/settings/secrets": typeof SettingsSecretsRoute;
   "/settings/service": typeof SettingsServiceRoute;
   "/settings/shell": typeof SettingsShellRoute;
+  "/settings/skills": typeof SettingsSkillsRoute;
   "/settings/usage": typeof SettingsUsageRoute;
   "/settings/worktrees": typeof SettingsWorktreesRoute;
   "/epics": typeof EpicsIndexRoute;
@@ -314,11 +364,13 @@ export interface FileRoutesById {
   "/bot/$botId": typeof BotBotIdRoute;
   "/draft/$draftId": typeof DraftDraftIdRoute;
   "/draft/new": typeof DraftNewRoute;
+  "/settings/agent-definitions": typeof SettingsAgentDefinitionsRoute;
   "/settings/agents": typeof SettingsAgentsRoute;
   "/settings/app-diagnostics": typeof SettingsAppDiagnosticsRoute;
   "/settings/app-notifications": typeof SettingsAppNotificationsRoute;
   "/settings/appearance": typeof SettingsAppearanceRoute;
   "/settings/browser": typeof SettingsBrowserRoute;
+  "/settings/browser-agent-access": typeof SettingsBrowserAgentAccessRoute;
   "/settings/delete-account": typeof SettingsDeleteAccountRoute;
   "/settings/devices": typeof SettingsDevicesRoute;
   "/settings/diagnostics": typeof SettingsDiagnosticsRoute;
@@ -329,12 +381,16 @@ export interface FileRoutesById {
   "/settings/keybindings": typeof SettingsKeybindingsRoute;
   "/settings/layout": typeof SettingsLayoutRoute;
   "/settings/link-phone": typeof SettingsLinkPhoneRoute;
+  "/settings/machine-setup": typeof SettingsMachineSetupRoute;
+  "/settings/mcp-servers": typeof SettingsMcpServersRoute;
   "/settings/notifications": typeof SettingsNotificationsRoute;
   "/settings/opening-behavior": typeof SettingsOpeningBehaviorRoute;
   "/settings/permissions": typeof SettingsPermissionsRoute;
   "/settings/providers": typeof SettingsProvidersRoute;
+  "/settings/secrets": typeof SettingsSecretsRoute;
   "/settings/service": typeof SettingsServiceRoute;
   "/settings/shell": typeof SettingsShellRoute;
+  "/settings/skills": typeof SettingsSkillsRoute;
   "/settings/usage": typeof SettingsUsageRoute;
   "/settings/worktrees": typeof SettingsWorktreesRoute;
   "/epics/": typeof EpicsIndexRoute;
@@ -354,11 +410,13 @@ export interface FileRouteTypes {
     | "/bot/$botId"
     | "/draft/$draftId"
     | "/draft/new"
+    | "/settings/agent-definitions"
     | "/settings/agents"
     | "/settings/app-diagnostics"
     | "/settings/app-notifications"
     | "/settings/appearance"
     | "/settings/browser"
+    | "/settings/browser-agent-access"
     | "/settings/delete-account"
     | "/settings/devices"
     | "/settings/diagnostics"
@@ -369,12 +427,16 @@ export interface FileRouteTypes {
     | "/settings/keybindings"
     | "/settings/layout"
     | "/settings/link-phone"
+    | "/settings/machine-setup"
+    | "/settings/mcp-servers"
     | "/settings/notifications"
     | "/settings/opening-behavior"
     | "/settings/permissions"
     | "/settings/providers"
+    | "/settings/secrets"
     | "/settings/service"
     | "/settings/shell"
+    | "/settings/skills"
     | "/settings/usage"
     | "/settings/worktrees"
     | "/epics/"
@@ -390,11 +452,13 @@ export interface FileRouteTypes {
     | "/bot/$botId"
     | "/draft/$draftId"
     | "/draft/new"
+    | "/settings/agent-definitions"
     | "/settings/agents"
     | "/settings/app-diagnostics"
     | "/settings/app-notifications"
     | "/settings/appearance"
     | "/settings/browser"
+    | "/settings/browser-agent-access"
     | "/settings/delete-account"
     | "/settings/devices"
     | "/settings/diagnostics"
@@ -405,12 +469,16 @@ export interface FileRouteTypes {
     | "/settings/keybindings"
     | "/settings/layout"
     | "/settings/link-phone"
+    | "/settings/machine-setup"
+    | "/settings/mcp-servers"
     | "/settings/notifications"
     | "/settings/opening-behavior"
     | "/settings/permissions"
     | "/settings/providers"
+    | "/settings/secrets"
     | "/settings/service"
     | "/settings/shell"
+    | "/settings/skills"
     | "/settings/usage"
     | "/settings/worktrees"
     | "/epics"
@@ -428,11 +496,13 @@ export interface FileRouteTypes {
     | "/bot/$botId"
     | "/draft/$draftId"
     | "/draft/new"
+    | "/settings/agent-definitions"
     | "/settings/agents"
     | "/settings/app-diagnostics"
     | "/settings/app-notifications"
     | "/settings/appearance"
     | "/settings/browser"
+    | "/settings/browser-agent-access"
     | "/settings/delete-account"
     | "/settings/devices"
     | "/settings/diagnostics"
@@ -443,12 +513,16 @@ export interface FileRouteTypes {
     | "/settings/keybindings"
     | "/settings/layout"
     | "/settings/link-phone"
+    | "/settings/machine-setup"
+    | "/settings/mcp-servers"
     | "/settings/notifications"
     | "/settings/opening-behavior"
     | "/settings/permissions"
     | "/settings/providers"
+    | "/settings/secrets"
     | "/settings/service"
     | "/settings/shell"
+    | "/settings/skills"
     | "/settings/usage"
     | "/settings/worktrees"
     | "/epics/"
@@ -555,6 +629,13 @@ declare module "@tanstack/react-router" {
       preLoaderRoute: typeof SettingsIndexRouteImport;
       parentRoute: typeof SettingsRoute;
     };
+    "/settings/agent-definitions": {
+      id: "/settings/agent-definitions";
+      path: "/agent-definitions";
+      fullPath: "/settings/agent-definitions";
+      preLoaderRoute: typeof SettingsAgentDefinitionsRouteImport;
+      parentRoute: typeof SettingsRoute;
+    };
     "/settings/agents": {
       id: "/settings/agents";
       path: "/agents";
@@ -588,6 +669,13 @@ declare module "@tanstack/react-router" {
       path: "/browser";
       fullPath: "/settings/browser";
       preLoaderRoute: typeof SettingsBrowserRouteImport;
+      parentRoute: typeof SettingsRoute;
+    };
+    "/settings/browser-agent-access": {
+      id: "/settings/browser-agent-access";
+      path: "/browser-agent-access";
+      fullPath: "/settings/browser-agent-access";
+      preLoaderRoute: typeof SettingsBrowserAgentAccessRouteImport;
       parentRoute: typeof SettingsRoute;
     };
     "/settings/delete-account": {
@@ -660,6 +748,20 @@ declare module "@tanstack/react-router" {
       preLoaderRoute: typeof SettingsLinkPhoneRouteImport;
       parentRoute: typeof SettingsRoute;
     };
+    "/settings/machine-setup": {
+      id: "/settings/machine-setup";
+      path: "/machine-setup";
+      fullPath: "/settings/machine-setup";
+      preLoaderRoute: typeof SettingsMachineSetupRouteImport;
+      parentRoute: typeof SettingsRoute;
+    };
+    "/settings/mcp-servers": {
+      id: "/settings/mcp-servers";
+      path: "/mcp-servers";
+      fullPath: "/settings/mcp-servers";
+      preLoaderRoute: typeof SettingsMcpServersRouteImport;
+      parentRoute: typeof SettingsRoute;
+    };
     "/settings/notifications": {
       id: "/settings/notifications";
       path: "/notifications";
@@ -688,6 +790,13 @@ declare module "@tanstack/react-router" {
       preLoaderRoute: typeof SettingsProvidersRouteImport;
       parentRoute: typeof SettingsRoute;
     };
+    "/settings/secrets": {
+      id: "/settings/secrets";
+      path: "/secrets";
+      fullPath: "/settings/secrets";
+      preLoaderRoute: typeof SettingsSecretsRouteImport;
+      parentRoute: typeof SettingsRoute;
+    };
     "/settings/service": {
       id: "/settings/service";
       path: "/service";
@@ -700,6 +809,13 @@ declare module "@tanstack/react-router" {
       path: "/shell";
       fullPath: "/settings/shell";
       preLoaderRoute: typeof SettingsShellRouteImport;
+      parentRoute: typeof SettingsRoute;
+    };
+    "/settings/skills": {
+      id: "/settings/skills";
+      path: "/skills";
+      fullPath: "/settings/skills";
+      preLoaderRoute: typeof SettingsSkillsRouteImport;
       parentRoute: typeof SettingsRoute;
     };
     "/settings/usage": {
@@ -739,11 +855,13 @@ const EpicsRouteChildren: EpicsRouteChildren = {
 const EpicsRouteWithChildren = EpicsRoute._addFileChildren(EpicsRouteChildren);
 
 interface SettingsRouteChildren {
+  SettingsAgentDefinitionsRoute: typeof SettingsAgentDefinitionsRoute;
   SettingsAgentsRoute: typeof SettingsAgentsRoute;
   SettingsAppDiagnosticsRoute: typeof SettingsAppDiagnosticsRoute;
   SettingsAppNotificationsRoute: typeof SettingsAppNotificationsRoute;
   SettingsAppearanceRoute: typeof SettingsAppearanceRoute;
   SettingsBrowserRoute: typeof SettingsBrowserRoute;
+  SettingsBrowserAgentAccessRoute: typeof SettingsBrowserAgentAccessRoute;
   SettingsDeleteAccountRoute: typeof SettingsDeleteAccountRoute;
   SettingsDevicesRoute: typeof SettingsDevicesRoute;
   SettingsDiagnosticsRoute: typeof SettingsDiagnosticsRoute;
@@ -754,23 +872,29 @@ interface SettingsRouteChildren {
   SettingsKeybindingsRoute: typeof SettingsKeybindingsRoute;
   SettingsLayoutRoute: typeof SettingsLayoutRoute;
   SettingsLinkPhoneRoute: typeof SettingsLinkPhoneRoute;
+  SettingsMachineSetupRoute: typeof SettingsMachineSetupRoute;
+  SettingsMcpServersRoute: typeof SettingsMcpServersRoute;
   SettingsNotificationsRoute: typeof SettingsNotificationsRoute;
   SettingsOpeningBehaviorRoute: typeof SettingsOpeningBehaviorRoute;
   SettingsPermissionsRoute: typeof SettingsPermissionsRoute;
   SettingsProvidersRoute: typeof SettingsProvidersRoute;
+  SettingsSecretsRoute: typeof SettingsSecretsRoute;
   SettingsServiceRoute: typeof SettingsServiceRoute;
   SettingsShellRoute: typeof SettingsShellRoute;
+  SettingsSkillsRoute: typeof SettingsSkillsRoute;
   SettingsUsageRoute: typeof SettingsUsageRoute;
   SettingsWorktreesRoute: typeof SettingsWorktreesRoute;
   SettingsIndexRoute: typeof SettingsIndexRoute;
 }
 
 const SettingsRouteChildren: SettingsRouteChildren = {
+  SettingsAgentDefinitionsRoute: SettingsAgentDefinitionsRoute,
   SettingsAgentsRoute: SettingsAgentsRoute,
   SettingsAppDiagnosticsRoute: SettingsAppDiagnosticsRoute,
   SettingsAppNotificationsRoute: SettingsAppNotificationsRoute,
   SettingsAppearanceRoute: SettingsAppearanceRoute,
   SettingsBrowserRoute: SettingsBrowserRoute,
+  SettingsBrowserAgentAccessRoute: SettingsBrowserAgentAccessRoute,
   SettingsDeleteAccountRoute: SettingsDeleteAccountRoute,
   SettingsDevicesRoute: SettingsDevicesRoute,
   SettingsDiagnosticsRoute: SettingsDiagnosticsRoute,
@@ -781,12 +905,16 @@ const SettingsRouteChildren: SettingsRouteChildren = {
   SettingsKeybindingsRoute: SettingsKeybindingsRoute,
   SettingsLayoutRoute: SettingsLayoutRoute,
   SettingsLinkPhoneRoute: SettingsLinkPhoneRoute,
+  SettingsMachineSetupRoute: SettingsMachineSetupRoute,
+  SettingsMcpServersRoute: SettingsMcpServersRoute,
   SettingsNotificationsRoute: SettingsNotificationsRoute,
   SettingsOpeningBehaviorRoute: SettingsOpeningBehaviorRoute,
   SettingsPermissionsRoute: SettingsPermissionsRoute,
   SettingsProvidersRoute: SettingsProvidersRoute,
+  SettingsSecretsRoute: SettingsSecretsRoute,
   SettingsServiceRoute: SettingsServiceRoute,
   SettingsShellRoute: SettingsShellRoute,
+  SettingsSkillsRoute: SettingsSkillsRoute,
   SettingsUsageRoute: SettingsUsageRoute,
   SettingsWorktreesRoute: SettingsWorktreesRoute,
   SettingsIndexRoute: SettingsIndexRoute,

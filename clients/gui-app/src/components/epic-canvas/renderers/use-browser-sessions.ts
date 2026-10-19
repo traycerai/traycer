@@ -8,6 +8,7 @@ import {
 } from "react";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
+import { isSandboxHostDirectoryEntry } from "@traycer-clients/shared/host-client/remote-fetcher";
 import type { BrowserViewBridge } from "@traycer-clients/shared/platform/browser-view";
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
 import type { HostResourceScope } from "@traycer/protocol/host/resource-scope";
@@ -90,7 +91,7 @@ interface BrowserSessionsHookResult {
 export function useBrowserSessions(
   args: UseBrowserSessionsArgs,
 ): BrowserSessionsHookResult {
-  const { hostId, scope, browserView, localHostId } = args;
+  const { hostId, scope, localHostId } = args;
   const navigateNested = useEpicNestedFocusNavigation();
   const viewTabId = useEpicViewTabId();
   const surfaceVisible = usePaneVisible();
@@ -107,6 +108,7 @@ export function useBrowserSessions(
     [surfaceFocused, surfaceVisible, viewTabId],
   );
   const hostEntry = useHostDirectoryEntry(hostId ?? UNKNOWN_HOST_PLACEHOLDER);
+  const browserView = jarBridgeForHost(args.browserView, hostEntry);
   const transportReady =
     args.hostClient !== null &&
     authenticatedHostStreamKey(args.hostClient, hostEntry) !== null;
@@ -198,6 +200,28 @@ export function useBrowserSessions(
     [hostId],
   );
   return { state: state ?? unavailableState, coordinatorKey };
+}
+
+/**
+ * The desktop bridge this host's `browser.sessions` stream may go through, or
+ * `null` for the jar-free stream the renderer opens itself.
+ *
+ * The bridge routes the stream through main, which carries the desktop's whole
+ * cookie jar on it (snapshots, deltas, host-requested captures). A sandbox
+ * must never receive that, so its stream takes the jar-free path every
+ * non-desktop shell already uses, and main refuses to build a jar transport
+ * for one as well (`openBrowserSessionsTransport`). A sandbox is never this
+ * machine's host, so it loses no native tab: a GUI on a remote host is a
+ * viewer either way.
+ */
+export function jarBridgeForHost(
+  browserView: BrowserViewBridge | null,
+  hostEntry: HostDirectoryEntry | null,
+): BrowserViewBridge | null {
+  if (hostEntry !== null && isSandboxHostDirectoryEntry(hostEntry)) {
+    return null;
+  }
+  return browserView;
 }
 
 function unavailableBrowserSessionsState(

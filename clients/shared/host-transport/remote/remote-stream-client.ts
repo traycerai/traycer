@@ -79,6 +79,16 @@ export class RemoteStreamClient<
   }
 
   /**
+   * The session's terminal fatal code (e.g. `SANDBOX_FROZEN`), or `null`
+   * while it has none. Its own accessor, apart from `getClosedReason`, which
+   * stays `null`: the code is what lets a stream owner tell a refusal no
+   * rebuild can change from a close worth rebuilding after.
+   */
+  getTerminalFatalCode(): string | null {
+    return this.session.terminalFatal()?.code ?? null;
+  }
+
+  /**
    * Fires when the shared session reaches terminal close - a session-level
    * fatal (e.g. `INCOMPATIBLE`, or a bounded/rejected `UNAUTHORIZED`
    * recovery), or the keep-warm linger expiring after the last consumer's

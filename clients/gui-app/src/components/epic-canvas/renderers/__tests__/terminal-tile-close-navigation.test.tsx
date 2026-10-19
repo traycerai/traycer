@@ -38,6 +38,13 @@ const testState = vi.hoisted(() => ({
     attached: true,
     hostSessionExited: false,
   },
+  // What `useHostCredentialRefusal` answers for the tab's host; `null` is a
+  // host that takes sign-ins.
+  credentialRefusal: null as string | null,
+}));
+
+vi.mock("@/hooks/host/use-host-credential-refusal", () => ({
+  useHostCredentialRefusal: () => testState.credentialRefusal,
 }));
 
 const exitedHandle = {
@@ -237,6 +244,7 @@ describe("<TerminalTile /> close navigation", () => {
       unavailability: null,
     };
     testState.bootstrap = { attached: true, hostSessionExited: false };
+    testState.credentialRefusal = null;
     resetNavigationSpy();
   });
 
@@ -472,6 +480,64 @@ describe("<TerminalTile /> close navigation", () => {
     // with no explanation and no way back.
     expect(await screen.findByText("Sign-in terminal ended.")).toBeDefined();
     expect(screen.getByRole("button", { name: /Start again/ })).toBeDefined();
+  });
+
+  // A sign-in terminal that ended on a host that takes no credentials (a
+  // sandbox) must not offer to start another: the button is the only way back
+  // into a credential flow from this tile.
+  it("disables Start again on an ended sign-in terminal while the host takes no credentials", async () => {
+    testState.credentialRefusal = "Sandboxes don't take sign-ins";
+    const store = useEpicCanvasStore.getState();
+    const viewTabId = store.openEpicTab(EPIC_ID, "Epic");
+    const signInNode = signInTerminalNode("term-signin", "inst-term-signin");
+    store.openTileInTab(viewTabId, signInNode);
+    const canvasBefore = useEpicCanvasStore.getState().canvasByTabId[viewTabId];
+    if (canvasBefore === undefined) throw new Error("expected view tab canvas");
+    const paneId = collectPanes(canvasBefore.root)[0].id;
+
+    render(
+      withTabHost(
+        <TerminalTile
+          viewTabId={viewTabId}
+          node={signInNode}
+          tileId={paneId}
+          isActive
+        />,
+      ),
+    );
+
+    expect(await screen.findByText("Sign-in terminal ended.")).toBeDefined();
+    const restart = screen.getByRole<HTMLButtonElement>("button", {
+      name: /Start again/,
+    });
+    expect(restart.disabled).toBe(true);
+  });
+
+  it("control: the same ended sign-in terminal offers an enabled Start again on a host that takes sign-ins", async () => {
+    const store = useEpicCanvasStore.getState();
+    const viewTabId = store.openEpicTab(EPIC_ID, "Epic");
+    const signInNode = signInTerminalNode("term-signin", "inst-term-signin");
+    store.openTileInTab(viewTabId, signInNode);
+    const canvasBefore = useEpicCanvasStore.getState().canvasByTabId[viewTabId];
+    if (canvasBefore === undefined) throw new Error("expected view tab canvas");
+    const paneId = collectPanes(canvasBefore.root)[0].id;
+
+    render(
+      withTabHost(
+        <TerminalTile
+          viewTabId={viewTabId}
+          node={signInNode}
+          tileId={paneId}
+          isActive
+        />,
+      ),
+    );
+
+    expect(await screen.findByText("Sign-in terminal ended.")).toBeDefined();
+    expect(
+      screen.getByRole<HTMLButtonElement>("button", { name: /Start again/ })
+        .disabled,
+    ).toBe(false);
   });
 
   it("dismisses a capable-host sign-in ended panel through the legacy close branch", async () => {

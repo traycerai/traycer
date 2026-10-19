@@ -35,6 +35,15 @@ export {
 } from "../../ipc-contracts/window-state-parsers";
 import { normalizeDesktopAuthSession } from "../auth/desktop-auth-session";
 import type { UpdateHostVersionPolicyInput } from "@traycer-clients/shared/host-client/host-version-policy-fetcher";
+import type {
+  SandboxAutomationOpenTarget,
+  SandboxCreateRequest,
+  SandboxLifecycleVerb,
+} from "@traycer/protocol/host/sandbox-control";
+import {
+  SECRET_REQUEST_DECISIONS,
+  type SecretRequestDecision,
+} from "@traycer/protocol/host/sandbox-secrets";
 
 export function assertString(
   value: unknown,
@@ -42,6 +51,15 @@ export function assertString(
 ): asserts value is string {
   if (typeof value !== "string") {
     throw new Error(`${context} requires a string argument`);
+  }
+}
+
+export function assertNullableString(
+  value: unknown,
+  context: string,
+): asserts value is string | null {
+  if (value !== null && typeof value !== "string") {
+    throw new Error(`${context} requires a string or null argument`);
   }
 }
 
@@ -494,6 +512,162 @@ export function parseUpdateHostVersionPolicyInput(
         : undefined;
   const force = typeof obj.force === "boolean" ? obj.force : undefined;
   return { updatePolicy, desiredVersion, force };
+}
+
+/**
+ * Parses the renderer-supplied `POST /api/sandboxes` body. Unlike the version
+ * policy above there is no safe degrade for a malformed create - a guessed
+ * shape would provision a machine nobody asked for - so a bad value throws,
+ * which the invoke surfaces to the renderer as a rejected call.
+ */
+export function parseSandboxCreateRequest(
+  value: unknown,
+): SandboxCreateRequest {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("createSandbox.request must be an object");
+  }
+  const obj = value as Record<string, unknown>;
+  const os = obj.os;
+  if (os !== "linux" && os !== "windows") {
+    throw new Error('createSandbox.request.os must be "linux" or "windows"');
+  }
+  const burst = obj.burst;
+  if (typeof burst !== "boolean") {
+    throw new Error("createSandbox.request.burst must be a boolean");
+  }
+  const cpus = obj.cpus;
+  if (typeof cpus !== "number" || !(cpus > 0)) {
+    throw new Error("createSandbox.request.cpus must be a positive number");
+  }
+  return {
+    os,
+    cpus,
+    memoryMb: requirePositiveInteger(
+      obj.memoryMb,
+      "createSandbox.request.memoryMb",
+    ),
+    diskMb: nullOr(obj.diskMb, (v) =>
+      requirePositiveInteger(v, "createSandbox.request.diskMb"),
+    ),
+    region: nullOr(obj.region, (v) =>
+      requireNonEmptyString(v, "createSandbox.request.region"),
+    ),
+    displayName: requireNonEmptyString(
+      obj.displayName,
+      "createSandbox.request.displayName",
+    ),
+    idleMinutes: nullOr(obj.idleMinutes, (v) =>
+      requirePositiveInteger(v, "createSandbox.request.idleMinutes"),
+    ),
+    burst,
+    createdByHostId: nullOr(obj.createdByHostId, (v) =>
+      requireNonEmptyString(v, "createSandbox.request.createdByHostId"),
+    ),
+    createdByAgentId: nullOr(obj.createdByAgentId, (v) =>
+      requireNonEmptyString(v, "createSandbox.request.createdByAgentId"),
+    ),
+    environmentId: nullOr(obj.environmentId, (v) =>
+      requireNonEmptyString(v, "createSandbox.request.environmentId"),
+    ),
+  };
+}
+
+/**
+ * A required id argument (a team id, an environment id): a non-empty
+ * string, or the call is refused.
+ */
+export function parseRequiredId(value: unknown, name: string): string {
+  return requireNonEmptyString(value, name);
+}
+
+/**
+ * The environment a `getSandboxAutomation` reads: `null` for the person's own
+ * Automations host, otherwise a non-empty id (an empty one would send
+ * `?environmentId=` and read no environment at all).
+ */
+export function parseSandboxAutomationEnvironmentId(
+  value: unknown,
+): string | null {
+  return nullOr(value, (v) =>
+    requireNonEmptyString(v, "getSandboxAutomation.environmentId"),
+  );
+}
+
+/**
+ * Parses the renderer-supplied Automations open target: `null` (the
+ * caller's own host, no body) or a team environment and the pod's slot. A
+ * malformed target throws, like a malformed create: a guessed one would open
+ * another pod than the one picked.
+ */
+export function parseSandboxAutomationOpenTarget(
+  value: unknown,
+): SandboxAutomationOpenTarget | null {
+  if (value === null) return null;
+  if (typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("openSandboxAutomation.target must be an object or null");
+  }
+  const obj = value as Record<string, unknown>;
+  return {
+    environmentId: requireNonEmptyString(
+      obj.environmentId,
+      "openSandboxAutomation.target.environmentId",
+    ),
+    ordinal: nullOr(obj.ordinal, (v) => {
+      if (typeof v !== "number" || !Number.isInteger(v) || v < 0) {
+        throw new Error(
+          "openSandboxAutomation.target.ordinal must be a non-negative integer",
+        );
+      }
+      return v;
+    }),
+  };
+}
+
+/** `null` stays `null` (the server's default); anything else must parse. */
+function nullOr<T>(value: unknown, parse: (value: unknown) => T): T | null {
+  return value === null ? null : parse(value);
+}
+
+function requireNonEmptyString(value: unknown, name: string): string {
+  if (typeof value !== "string" || value.length === 0) {
+    throw new Error(`${name} must be a non-empty string`);
+  }
+  return value;
+}
+
+function requirePositiveInteger(value: unknown, name: string): number {
+  if (typeof value !== "number" || !Number.isInteger(value) || value <= 0) {
+    throw new Error(`${name} must be a positive integer`);
+  }
+  return value;
+}
+
+export function parseSecretRequestDecision(
+  value: unknown,
+): SecretRequestDecision {
+  const decision = SECRET_REQUEST_DECISIONS.find((known) => known === value);
+  if (decision === undefined) {
+    throw new Error(
+      'decideSecretRequest.decision must be "approve", "approve_default" or "decline"',
+    );
+  }
+  return decision;
+}
+
+export function parseSandboxLifecycleVerb(
+  value: unknown,
+): SandboxLifecycleVerb {
+  if (
+    value === "suspend" ||
+    value === "resume" ||
+    value === "stop" ||
+    value === "start"
+  ) {
+    return value;
+  }
+  throw new Error(
+    'runSandboxVerb.verb must be "suspend", "resume", "stop" or "start"',
+  );
 }
 
 export function readSenderWebContentsId(

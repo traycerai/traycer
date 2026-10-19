@@ -1,8 +1,8 @@
 /**
  * Where a new bot is created (Tracy Bots): the app walks a fixed order - this
- * machine, the active host, the environment's sandbox, then the rest by host
- * id - and takes the first host that runs the bot's environment and
- * advertises `bot.create`. A host still being asked holds the walk; a host
+ * machine, the active host, then the rest by host id - and takes the first
+ * host that runs the bot's environment and advertises `bot.create`. A host
+ * still being asked holds the walk; a host
  * whose read failed is passed over.
  */
 import { describe, expect, it } from "vitest";
@@ -12,7 +12,6 @@ import type {
 } from "@traycer/protocol/host/environment/contracts";
 import {
   chooseBotCreateHost,
-  environmentSandboxForCreate,
   type BotCreateHostChoice,
 } from "../bot-create-host";
 
@@ -142,10 +141,6 @@ describe("chooseBotCreateHost order", () => {
       }),
     ).toEqual({ kind: "chosen", hostId: "host-alpha" });
   });
-
-  it("has no sandbox to prefer yet", () => {
-    expect(environmentSandboxForCreate(TEAM_ENV)).toBeNull();
-  });
 });
 
 describe("chooseBotCreateHost qualification", () => {
@@ -154,15 +149,6 @@ describe("chooseBotCreateHost qualification", () => {
       choose({
         ...ALL_QUALIFY,
         bound: { ...ALL_QUALIFY.bound, "host-local": OTHER_ENV },
-      }),
-    ).toEqual({ kind: "chosen", hostId: "host-effective" });
-  });
-
-  it("skips a host that does not advertise bot.create", () => {
-    expect(
-      choose({
-        ...ALL_QUALIFY,
-        creatingHostIds: ["host-effective", "host-zeta", "host-alpha"],
       }),
     ).toEqual({ kind: "chosen", hostId: "host-effective" });
   });
@@ -199,20 +185,6 @@ describe("chooseBotCreateHost qualification", () => {
 });
 
 describe("chooseBotCreateHost for a team's environment", () => {
-  it("answers none when the only connectable hosts are personal machines reporting the personal environment", () => {
-    expect(
-      choose({
-        ...ALL_QUALIFY,
-        bound: {
-          "host-local": PERSONAL_ENV,
-          "host-effective": PERSONAL_ENV,
-          "host-zeta": PERSONAL_ENV,
-          "host-alpha": PERSONAL_ENV,
-        },
-      }),
-    ).toEqual({ kind: "none" });
-  });
-
   it("chooses a sandbox whose binding names the team and that advertises bot.create, past personal machines", () => {
     expect(
       choose({

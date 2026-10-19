@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   HostControllerStatus,
   HostLifecycleSetRequest,
@@ -17,6 +17,7 @@ import type {
   TrayEpic,
   TrayIndicatorState,
 } from "@traycer-clients/shared/platform/runner-host";
+import { SANDBOXES_UNAVAILABLE_IN_STAGING } from "@traycer-clients/shared/host-client/sandbox-control";
 import { createInertSelectionAuthorityClient } from "@traycer-clients/shared/test-fixtures/selection-authority";
 import {
   DesktopRunnerHost,
@@ -33,6 +34,24 @@ function desktopQuit(host: DesktopRunnerHost): IHostQuitDecisionHost {
   if (quit === null) throw new Error("desktop must wire hostLifecycle.quit");
   return quit;
 }
+
+// The deployment config is baked per build; a test picks the environment the
+// runner host reads, defaulting to the dev slot every other test here ran in.
+const deployment = vi.hoisted(() => ({
+  environment: "dev" as "dev" | "staging" | "production",
+}));
+vi.mock("../../config", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../config")>();
+  return {
+    ...actual,
+    config: {
+      ...actual.config,
+      get environment() {
+        return deployment.environment;
+      },
+    },
+  };
+});
 
 // In vitest's jsdom env the `encrypt-storage` UMD wrapper fails to pick up
 // `window.localStorage` correctly; we don't need to exercise the AES path
@@ -112,6 +131,58 @@ function buildFakeBridge(
     listRegisteredHosts: async () => ({ kind: "network-error" as const }),
     updateHostVersionPolicy: async () => ({ kind: "network-error" as const }),
     deregisterHostFromAccount: async () => ({ kind: "network-error" as const }),
+    listSandboxes: async () => ({
+      kind: "network-error" as const,
+      detail: "test",
+    }),
+    getSandboxCosts: async () => ({
+      kind: "network-error" as const,
+      detail: "test",
+    }),
+    getSandboxCatalogue: async () => ({
+      kind: "network-error" as const,
+      detail: "test",
+    }),
+    createSandbox: async () => ({
+      kind: "network-error" as const,
+      detail: "test",
+    }),
+    destroySandbox: async () => ({
+      kind: "network-error" as const,
+      detail: "test",
+    }),
+    runSandboxVerb: async () => ({
+      kind: "network-error" as const,
+      detail: "test",
+    }),
+    getSandboxAutomation: async () => ({
+      kind: "network-error" as const,
+      detail: "test",
+    }),
+    openSandboxAutomation: async () => ({
+      kind: "network-error" as const,
+      detail: "test",
+    }),
+    getSandboxGrants: async () => ({
+      kind: "network-error" as const,
+      detail: "test",
+    }),
+    getTeamEnvironment: async () => ({
+      kind: "network-error" as const,
+      detail: "test",
+    }),
+    getEnvironmentProviders: async () => ({
+      kind: "network-error" as const,
+      detail: "test",
+    }),
+    decideSecretRequest: async () => ({
+      kind: "network-error" as const,
+      detail: "test",
+    }),
+    mintExecutableWriteGrant: async () => ({
+      kind: "network-error" as const,
+      detail: "test",
+    }),
     tokenStore: ((): ITokenStore => {
       let stored: StoredCredentials | null = null;
       return {
@@ -810,6 +881,274 @@ function buildDroppedFile(name: string, type: string, content: string): File {
   });
   return file;
 }
+
+describe("DesktopRunnerHost.sandboxControlUnavailableReason", () => {
+  function hostFor(environment: "dev" | "staging" | "production") {
+    deployment.environment = environment;
+    return new DesktopRunnerHost({
+      bridge: buildFakeBridge(null).bridge,
+      signInUrl: "https://auth.example.invalid/sign-in",
+    });
+  }
+
+  afterEach(() => {
+    deployment.environment = "dev";
+  });
+
+  it("is the staging line on a staging build, because staging's server only accepts calls from hosts", () => {
+    expect(hostFor("staging").sandboxControlUnavailableReason).toBe(
+      SANDBOXES_UNAVAILABLE_IN_STAGING,
+    );
+  });
+
+  it("is null on a production build and on the dev slot", () => {
+    expect(hostFor("production").sandboxControlUnavailableReason).toBeNull();
+    expect(hostFor("dev").sandboxControlUnavailableReason).toBeNull();
+  });
+});
+
+describe("DesktopRunnerHost.runSandboxVerb", () => {
+  it("hands the preload bridge the bearer, the sandbox, the verb and the timeout, and returns its answer", async () => {
+    const runSandboxVerb = vi.fn<DesktopPreloadBridge["runSandboxVerb"]>(
+      async () => ({ kind: "ok", settled: false }),
+    );
+    const host = new DesktopRunnerHost({
+      bridge: { ...buildFakeBridge(null).bridge, runSandboxVerb },
+      signInUrl: "https://auth.example.invalid/sign-in",
+    });
+
+    await expect(
+      host.runSandboxVerb("bearer-1", "sbx_1", "start", 87_000),
+    ).resolves.toEqual({ kind: "ok", settled: false });
+
+    expect(runSandboxVerb).toHaveBeenCalledTimes(1);
+    expect(runSandboxVerb).toHaveBeenCalledWith(
+      "bearer-1",
+      "sbx_1",
+      "start",
+      87_000,
+    );
+  });
+});
+
+describe("DesktopRunnerHost Automations calls", () => {
+  it("hands the preload bridge the bearer for the read and for the open, and returns each answer", async () => {
+    const getSandboxAutomation = vi.fn<
+      DesktopPreloadBridge["getSandboxAutomation"]
+    >(async () => ({
+      kind: "ok",
+      automation: { available: true, sandbox: null, pods: [] },
+    }));
+    const openSandboxAutomation = vi.fn<
+      DesktopPreloadBridge["openSandboxAutomation"]
+    >(async () => ({ kind: "unauthorized" }));
+    const host = new DesktopRunnerHost({
+      bridge: {
+        ...buildFakeBridge(null).bridge,
+        getSandboxAutomation,
+        openSandboxAutomation,
+      },
+      signInUrl: "https://auth.example.invalid/sign-in",
+    });
+
+    await expect(
+      host.getSandboxAutomation("bearer-1", "env-1"),
+    ).resolves.toEqual({
+      kind: "ok",
+      automation: { available: true, sandbox: null, pods: [] },
+    });
+    await expect(
+      host.openSandboxAutomation("bearer-2", {
+        environmentId: "env-1",
+        ordinal: 2,
+      }),
+    ).resolves.toEqual({
+      kind: "unauthorized",
+    });
+
+    expect(getSandboxAutomation).toHaveBeenCalledWith("bearer-1", "env-1");
+    expect(openSandboxAutomation).toHaveBeenCalledWith("bearer-2", {
+      environmentId: "env-1",
+      ordinal: 2,
+    });
+    expect(getSandboxAutomation).toHaveBeenCalledTimes(1);
+    expect(openSandboxAutomation).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("DesktopRunnerHost.getSandboxGrants", () => {
+  it("hands the preload bridge the bearer and the host, and returns its answer", async () => {
+    const summary = { version: 2, grants: [], github: null };
+    const getSandboxGrants = vi.fn<DesktopPreloadBridge["getSandboxGrants"]>(
+      async () => ({ kind: "ok", summary }),
+    );
+    const host = new DesktopRunnerHost({
+      bridge: { ...buildFakeBridge(null).bridge, getSandboxGrants },
+      signInUrl: "https://auth.example.invalid/sign-in",
+    });
+
+    await expect(
+      host.getSandboxGrants("bearer-1", "env-1", "host-1"),
+    ).resolves.toEqual({
+      kind: "ok",
+      summary,
+    });
+
+    expect(getSandboxGrants).toHaveBeenCalledTimes(1);
+    expect(getSandboxGrants).toHaveBeenCalledWith(
+      "bearer-1",
+      "env-1",
+      "host-1",
+    );
+  });
+
+  it("passes a null environment through to the bridge", async () => {
+    const getSandboxGrants = vi.fn<DesktopPreloadBridge["getSandboxGrants"]>(
+      async () => ({ kind: "not-found" }),
+    );
+    const host = new DesktopRunnerHost({
+      bridge: { ...buildFakeBridge(null).bridge, getSandboxGrants },
+      signInUrl: "https://auth.example.invalid/sign-in",
+    });
+
+    await host.getSandboxGrants("bearer-1", null, "host-1");
+
+    expect(getSandboxGrants).toHaveBeenCalledWith("bearer-1", null, "host-1");
+  });
+
+  it("returns a failure the bridge reports unchanged", async () => {
+    const getSandboxGrants = vi.fn<DesktopPreloadBridge["getSandboxGrants"]>(
+      async () => ({ kind: "not-found" }),
+    );
+    const host = new DesktopRunnerHost({
+      bridge: { ...buildFakeBridge(null).bridge, getSandboxGrants },
+      signInUrl: "https://auth.example.invalid/sign-in",
+    });
+
+    await expect(
+      host.getSandboxGrants("bearer-1", "env-1", "host-1"),
+    ).resolves.toEqual({
+      kind: "not-found",
+    });
+  });
+});
+
+describe("DesktopRunnerHost.getTeamEnvironment", () => {
+  it("hands the preload bridge the bearer and the team, and returns its answer", async () => {
+    const getTeamEnvironment = vi.fn<
+      DesktopPreloadBridge["getTeamEnvironment"]
+    >(async () => ({ kind: "ok", environmentId: "env-acme" }));
+    const host = new DesktopRunnerHost({
+      bridge: { ...buildFakeBridge(null).bridge, getTeamEnvironment },
+      signInUrl: "https://auth.example.invalid/sign-in",
+    });
+
+    await expect(
+      host.getTeamEnvironment("bearer-1", "team-acme"),
+    ).resolves.toEqual({ kind: "ok", environmentId: "env-acme" });
+
+    expect(getTeamEnvironment).toHaveBeenCalledTimes(1);
+    expect(getTeamEnvironment).toHaveBeenCalledWith("bearer-1", "team-acme");
+  });
+});
+
+describe("DesktopRunnerHost.getEnvironmentProviders", () => {
+  it("hands the preload bridge the bearer and the environment, and returns its answer", async () => {
+    const counts = { providerSecretCount: 2, connectedPlanCount: 1 };
+    const getEnvironmentProviders = vi.fn<
+      DesktopPreloadBridge["getEnvironmentProviders"]
+    >(async () => ({ kind: "ok", counts }));
+    const host = new DesktopRunnerHost({
+      bridge: { ...buildFakeBridge(null).bridge, getEnvironmentProviders },
+      signInUrl: "https://auth.example.invalid/sign-in",
+    });
+
+    await expect(
+      host.getEnvironmentProviders("bearer-1", "env-acme"),
+    ).resolves.toEqual({ kind: "ok", counts });
+
+    expect(getEnvironmentProviders).toHaveBeenCalledTimes(1);
+    expect(getEnvironmentProviders).toHaveBeenCalledWith(
+      "bearer-1",
+      "env-acme",
+    );
+  });
+});
+
+describe("DesktopRunnerHost.decideSecretRequest", () => {
+  it("hands the preload bridge the bearer, the request and the decision, and returns its answer", async () => {
+    const decideSecretRequest = vi.fn<
+      DesktopPreloadBridge["decideSecretRequest"]
+    >(async () => ({
+      kind: "ok",
+      status: "approved_default",
+      decidedBy: "Ana",
+    }));
+    const host = new DesktopRunnerHost({
+      bridge: { ...buildFakeBridge(null).bridge, decideSecretRequest },
+      signInUrl: "https://auth.example.invalid/sign-in",
+    });
+
+    await expect(
+      host.decideSecretRequest("bearer-1", "env-1", "req-1", "approve_default"),
+    ).resolves.toEqual({
+      kind: "ok",
+      status: "approved_default",
+      decidedBy: "Ana",
+    });
+
+    expect(decideSecretRequest).toHaveBeenCalledTimes(1);
+    expect(decideSecretRequest).toHaveBeenCalledWith(
+      "bearer-1",
+      "env-1",
+      "req-1",
+      "approve_default",
+    );
+  });
+
+  it("passes a null environment through to the bridge", async () => {
+    const decideSecretRequest = vi.fn<
+      DesktopPreloadBridge["decideSecretRequest"]
+    >(async () => ({ kind: "not-found" }));
+    const host = new DesktopRunnerHost({
+      bridge: { ...buildFakeBridge(null).bridge, decideSecretRequest },
+      signInUrl: "https://auth.example.invalid/sign-in",
+    });
+
+    await host.decideSecretRequest("bearer-1", null, "req-1", "approve");
+
+    expect(decideSecretRequest).toHaveBeenCalledWith(
+      "bearer-1",
+      null,
+      "req-1",
+      "approve",
+    );
+  });
+
+  it("returns a conflict the bridge reports unchanged", async () => {
+    const decideSecretRequest = vi.fn<
+      DesktopPreloadBridge["decideSecretRequest"]
+    >(async () => ({
+      kind: "conflict",
+      status: "pending",
+      code: "secret_required",
+      decidedBy: null,
+    }));
+    const host = new DesktopRunnerHost({
+      bridge: { ...buildFakeBridge(null).bridge, decideSecretRequest },
+      signInUrl: "https://auth.example.invalid/sign-in",
+    });
+
+    await expect(
+      host.decideSecretRequest("bearer-1", "env-1", "req-1", "approve"),
+    ).resolves.toEqual({
+      kind: "conflict",
+      status: "pending",
+      code: "secret_required",
+      decidedBy: null,
+    });
+  });
+});
 
 describe("DesktopRunnerHost.onLocalHostChange", () => {
   it("replays the initial snapshot synchronously to the first subscriber", () => {

@@ -1,4 +1,5 @@
 import { useReadingWidthStyle } from "@/lib/layout-overrides";
+import { TeamEpicPersonalLine } from "@/components/chat/composer/team-epic-personal-line";
 import { memo, useCallback, useMemo, useState, type ReactNode } from "react";
 import { Lock } from "lucide-react";
 import type {
@@ -272,6 +273,11 @@ export interface ChatLowerComposerState {
   /** The Location / Mode+branch / Environment chip cluster (+ context usage). */
   readonly workspaceControls: ReactNode;
   readonly workspaceAvailability: WorkspaceComposerAvailability;
+  /**
+   * Opens the fork dialog on these hosts only, from the Personal-settings line
+   * in a team's task.
+   */
+  readonly onContinueOnTeamHosts: (teamHostIds: ReadonlySet<string>) => void;
   /**
    * The host's `suggestedPrompt` (`chat.subscribe@1.20`), offered as the
    * composer's placeholder.
@@ -899,6 +905,7 @@ function LiveChatComposer(props: {
   readonly hasPendingApprovals: boolean;
 }) {
   const { model } = props;
+  const tabHostId = useTabHostId();
   return (
     <ChatComposer
       key={model.queue.editingItem?.queueItemId}
@@ -936,7 +943,16 @@ function LiveChatComposer(props: {
       topSpacing={props.topSpacing}
       // This chat's own stream and delivery state, held beside the composer
       // for as long as it is true rather than behind a tooltip.
-      topSlot={<ChatComposerDeliveryStatus />}
+      topSlot={
+        <>
+          <TeamEpicPersonalLine
+            epicId={model.composer.currentEpicId}
+            tabHostId={tabHostId}
+            onContinue={model.composer.onContinueOnTeamHosts}
+          />
+          <ChatComposerDeliveryStatus />
+        </>
+      }
       suggestedPrompt={model.composer.suggestedPrompt}
     />
   );

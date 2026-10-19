@@ -14,7 +14,7 @@ import {
   type AvailabilityRecoveryKind,
 } from "../host-transport/availability-recovery-kind";
 import type { HostDirectoryEntry } from "./host-directory";
-import { anyAbortSignal } from "./any-abort-signal";
+import { anyAbortSignal } from "../auth/request-abort";
 import { StaleHostBindingAuthorityError } from "./host-binding-authority-error";
 import { HostBindingAuthorityRegistry } from "./host-binding-authority-registry";
 import {
@@ -1104,7 +1104,8 @@ export class HostClient<Registry extends VersionedRpcRegistry> {
       authority: {
         endpoint: binding.endpoint,
         bearer: context.credentials,
-        abortSignal: anyAbortSignal(binding.abortSignal, context.abortSignal),
+        // Not `AbortSignal.any`, which the iOS WebView floor lacks.
+        abortSignal: anyAbortSignal([binding.abortSignal, context.abortSignal]),
         // A READER over this exact context, not its value at capture. The
         // earlier version snapshotted here and argued that pairing it with the
         // bearer made them "one snapshot"; that was wrong in the one direction

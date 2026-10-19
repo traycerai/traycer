@@ -1062,7 +1062,9 @@ function SignInRestartButton(props: {
       type="button"
       variant="outline"
       size="sm"
-      disabled={terminalLogin.isPending}
+      disabled={
+        terminalLogin.isPending || terminalLogin.credentialRefusal !== null
+      }
       onClick={terminalLogin.start}
     >
       Start again

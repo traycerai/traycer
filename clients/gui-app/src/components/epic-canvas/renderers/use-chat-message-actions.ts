@@ -154,6 +154,22 @@ function unstartedDeliveryPhase(
   return phase === "pending" || phase === "preparing" ? phase : null;
 }
 
+/**
+ * Where the fork dialog's host picker starts and what it lists: `initialHostId`
+ * preselects (`null` is the source chat's own host) and `onlyHostIds` narrows
+ * the list (a team's hosts; `null` is every host).
+ */
+export interface ForkDialogHosts {
+  readonly initialHostId: string | null;
+  readonly onlyHostIds: ReadonlySet<string> | null;
+}
+
+/** Every per-message fork: the source chat's host, every host listed. */
+export const FORK_ON_SOURCE_HOST: ForkDialogHosts = {
+  initialHostId: null,
+  onlyHostIds: null,
+};
+
 export interface ChatMessageActionsInput {
   readonly dispatchUi: (action: ChatTileUiAction) => void;
   readonly activeInlineEdit: InlineEditState | null;
@@ -254,7 +270,7 @@ export interface ChatMessageActionsResult {
     assistantMessageId: string | null,
     mode: ChatForkMode,
     interviewBlockId: string | null,
-    initialHostId: string | null,
+    hosts: ForkDialogHosts,
   ) => void;
   readonly revertOnEdit: {
     readonly open: boolean;
@@ -889,7 +905,7 @@ export function useChatMessageActions(
       assistantMessageId: string | null,
       mode: ChatForkMode,
       interviewBlockId: string | null,
-      initialHostId: string | null,
+      hosts: ForkDialogHosts,
     ) => {
       const sourceStagingKey: WorktreeStagingKey = {
         surface: "owner",
@@ -935,7 +951,8 @@ export function useChatMessageActions(
         // plain fork of a completed message — no streaming interview to carry.
         carriedInterviews: mode === "ab-worktree" ? "pending" : "settled",
         forkMode: mode,
-        initialHostId,
+        initialHostId: hosts.initialHostId,
+        onlyHostIds: hosts.onlyHostIds,
       });
     },
     [
@@ -1001,7 +1018,7 @@ export function useChatMessageActions(
                 assistantMessageId,
                 mode,
                 interviewBlockId,
-                null,
+                FORK_ON_SOURCE_HOST,
               ),
           },
           interviewDeliveryRetry,

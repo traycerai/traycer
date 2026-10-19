@@ -1,0 +1,213 @@
+import { useContext, type ReactNode } from "react";
+import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import type {
+  EnvironmentNotice,
+  EnvironmentReviewEntry,
+  LocalOverride,
+} from "@traycer/protocol/host/environment-schemas";
+import {
+  NO_NOTICES,
+  NO_OVERRIDES,
+  NO_REVIEW,
+  PersonalPageContext,
+} from "@/components/settings/personal/personal-page-context";
+import { PersonalPageNotices } from "@/components/settings/personal/personal-page-notices";
+import { TeamOwnedLine } from "@/components/settings/host-scope/team-owned-line";
+import { usePersonalHostScope } from "@/components/settings/host-scope/use-host-scope";
+import {
+  personalPageItemKinds,
+  personalPageStatusLine,
+  type PersonalHostState,
+  type PersonalPageStatusLine,
+} from "@/components/settings/personal/personal-page-status";
+import {
+  useEnvironmentLocalOverridesRead,
+  useEnvironmentNoticesRead,
+  useEnvironmentReviewRead,
+  useEnvironmentStatusRead,
+} from "@/hooks/environment/use-environment-reads";
+import { useRereadOnStaleWrite } from "@/hooks/environment/use-reread-on-stale-write";
+import type { HostRpcRegistry } from "@/lib/host";
+import type { SettingsSectionId } from "@/lib/settings-sections";
+import { cn } from "@/lib/utils";
+
+interface WindowHostEnvironment {
+  readonly state: PersonalHostState;
+  readonly hostId: string | null;
+  readonly client: HostClient<HostRpcRegistry> | null;
+  readonly hostName: string;
+  readonly localOverrides: readonly LocalOverride[];
+  readonly notices: readonly EnvironmentNotice[];
+  readonly review: readonly EnvironmentReviewEntry[];
+}
+
+/** Read through the window's own host, like every Personal page. */
+function useWindowHostEnvironmentState(
+  kinds: ReadonlySet<string>,
+): WindowHostEnvironment {
+  const scope = usePersonalHostScope();
+  const status = useEnvironmentStatusRead(scope.client, scope.hostId, true);
+  const overrides = useEnvironmentLocalOverridesRead(
+    scope.client,
+    scope.hostId,
+    true,
+  );
+  let state: PersonalHostState = { kind: "unknown" };
+  if (status.supported === false) state = { kind: "unsupported" };
+  else if (status.data !== null) {
+    state =
+      status.data.principal === null
+        ? { kind: "not-set-up" }
+        : { kind: "ready", status: status.data };
+  }
+  // Notices and "needs you" rows are the person's own settings' facts: none
+  // on a host without them, or on a team's host.
+  const personal =
+    state.kind === "ready" && state.status.principal?.kind === "personal";
+  const notices = useEnvironmentNoticesRead(
+    scope.client,
+    scope.hostId,
+    personal,
+  );
+  const review = useEnvironmentReviewRead(scope.client, scope.hostId, personal);
+  return {
+    state,
+    hostId: scope.hostId,
+    client: scope.client,
+    hostName: scope.hostLabel,
+    localOverrides: overrides.data?.overrides ?? NO_OVERRIDES,
+    notices: personal
+      ? ofKinds(notices.data?.notices ?? NO_NOTICES, kinds)
+      : NO_NOTICES,
+    review: personal
+      ? ofKinds(review.data?.entries ?? NO_REVIEW, kinds)
+      : NO_REVIEW,
+  };
+}
+
+function ofKinds<Entry extends { readonly kind: string }>(
+  entries: readonly Entry[],
+  kinds: ReadonlySet<string>,
+): readonly Entry[] {
+  return entries.some((entry) => !kinds.has(entry.kind))
+    ? entries.filter((entry) => kinds.has(entry.kind))
+    : entries;
+}
+
+/** The team a host's settings belong to, or `null` for the person's own. */
+function teamNameOf(state: PersonalHostState): string | null {
+  if (state.kind !== "ready") return null;
+  const { principal } = state.status;
+  return principal?.kind === "team" ? principal.teamName : null;
+}
+
+/**
+ * Wraps a Personal page: its status line (rendered by `SettingsPanelShell`
+ * under the page's description) and, on a host whose version predates these
+ * settings, the read-only rendering the flows give it: the page shows the
+ * host's own values and takes no edits until the host is updated.
+ *
+ * Mounted once per page by `SettingsPanelForSection`, which both settings
+ * surfaces render through, so neither can show a Personal page without it.
+ */
+export function PersonalPageFrame(props: {
+  readonly section: SettingsSectionId;
+  readonly children: ReactNode;
+}): ReactNode {
+  const kinds = personalPageItemKinds(props.section);
+  if (kinds === null) return props.children;
+  return (
+    <PersonalPageFrameForKinds kinds={kinds}>
+      {props.children}
+    </PersonalPageFrameForKinds>
+  );
+}
+
+function PersonalPageFrameForKinds(props: {
+  readonly kinds: ReadonlySet<string>;
+  readonly children: ReactNode;
+}): ReactNode {
+  const environment = useWindowHostEnvironmentState(props.kinds);
+  const { state, hostName } = environment;
+  // A save on this page that lost to a change made elsewhere re-reads it.
+  useRereadOnStaleWrite(environment.hostId);
+  const line = personalPageStatusLine(state, props.kinds, hostName);
+  // Read-only on a host whose version predates these settings, and on a
+  // team's host, whose settings are the team's.
+  const readOnly = state.kind === "unsupported" || teamNameOf(state) !== null;
+  return (
+    <PersonalPageContext.Provider value={{ ...environment, line }}>
+      {readOnly ? (
+        <div className="contents">
+          <PersonalPageReadOnlyLine />
+          <div inert className="opacity-60">
+            {props.children}
+          </div>
+        </div>
+      ) : (
+        props.children
+      )}
+    </PersonalPageContext.Provider>
+  );
+}
+
+/**
+ * The read-only page's note, outside the inert region so it stays readable
+ * by assistive technology; the shell skips its own line in that state.
+ */
+function PersonalPageReadOnlyLine(): ReactNode {
+  const value = useContext(PersonalPageContext);
+  if (value === null) return null;
+  const teamName = teamNameOf(value.state);
+  let content: ReactNode = null;
+  if (teamName !== null) content = <TeamOwnedLine teamName={teamName} />;
+  else if (value.line !== null) {
+    content = <PersonalPageStatusBanner line={value.line} />;
+  }
+  if (content === null) return null;
+  return <div className="mx-auto w-full max-w-5xl px-5 pt-5">{content}</div>;
+}
+
+const TONE_CLASSES: Readonly<Record<PersonalPageStatusLine["tone"], string>> = {
+  info: "border-info/30 bg-info/10 text-info-foreground",
+  warning: "border-warning/30 bg-warning/10 text-warning-foreground",
+  success: "border-success/30 bg-success/10 text-success-foreground",
+};
+
+function PersonalPageStatusBanner(props: {
+  readonly line: PersonalPageStatusLine;
+}): ReactNode {
+  return (
+    <p
+      data-testid="personal-page-status"
+      role="status"
+      className={cn(
+        "max-w-[72ch] rounded-md border px-3 py-1.5 text-ui-sm",
+        TONE_CLASSES[props.line.tone],
+      )}
+    >
+      {props.line.text}
+    </p>
+  );
+}
+
+/**
+ * The status line inside a Personal page's header, for `SettingsPanelShell`.
+ * Nothing outside a Personal page, and nothing on a read-only one, whose line
+ * the frame draws above the inert page instead.
+ */
+export function PersonalPageHeaderStatus(): ReactNode {
+  const value = useContext(PersonalPageContext);
+  if (value === null) return null;
+  if (value.state.kind === "unsupported" || teamNameOf(value.state) !== null) {
+    return null;
+  }
+  return (
+    <>
+      {value.line === null ? null : (
+        <PersonalPageStatusBanner line={value.line} />
+      )}
+      <PersonalPageNotices />
+    </>
+  );
+}

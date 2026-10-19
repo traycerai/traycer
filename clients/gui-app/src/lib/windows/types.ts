@@ -10,6 +10,7 @@ export type {
   GlobalShortcutStatus,
 } from "@traycer-clients/shared/keybindings/global-shortcuts";
 import type { HostControllerStatus } from "@traycer-clients/shared/platform/runner-host";
+import type { SupportEnvironmentSection } from "@/lib/support-environment-section";
 
 export type DesktopJsonPrimitive = string | number | boolean | null;
 export type DesktopJsonValue =
@@ -419,8 +420,10 @@ export interface DesktopContextRegistrySnapshot {
 /**
  * Wire mirror of ticket 05's `SerializedReportIssuePrivateDiagnostics`
  * (`serializeReportIssuePrivateDiagnostics` in
- * `@/lib/report-issue-draft-context`) - same five keys, always all present:
- * `registry` is never itself absent, `correlationId` is always a fresh id.
+ * `@/lib/report-issue-draft-context`) - same six keys, always all present:
+ * `registry` is never itself absent, `correlationId` is always a fresh id,
+ * `environment` is the renderer's own closed section, which Electron main
+ * parses record by record.
  */
 export interface DesktopPrivateDiagnostics {
   readonly cause: DesktopPrivateDiagnosticsCause | null;
@@ -432,6 +435,7 @@ export interface DesktopPrivateDiagnostics {
    */
   readonly stackFamily: string | null;
   readonly correlationId: string;
+  readonly environment: DesktopCapturedField<SupportEnvironmentSection>;
 }
 
 export interface DesktopMenuBridge {

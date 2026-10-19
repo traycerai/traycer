@@ -23,6 +23,21 @@ import { navigateToTabIntent } from "@/lib/tab-navigation";
 const BOT_TITLE_MAX = 500;
 
 /**
+ * The form's line for every failed create. It makes no claim about whether
+ * the create reached the host, because no error the form receives can prove
+ * it: the auth-aware messenger can hide an earlier dispatch across both of its
+ * recovery exits. When the authority is aborted during credential recovery it
+ * rethrows a `mayHaveDispatched: false` abort; when it rotates the bearer and
+ * retries, only the retry's failure comes back. Either can follow a session
+ * fatal that rejected a create already sent. Until that messenger preserves
+ * dispatch provenance across recovery, the line tells the person to check
+ * before trying again. The error's own text is never shown; the mutation
+ * cache logs it.
+ */
+const CREATE_FAILED =
+  "Couldn't confirm the bot was created. Check your bots, and try again if it isn't there.";
+
+/**
  * Creates a bot INTO one environment (Tracy Bots). The environment is the
  * card's and is sent explicitly; what the reader chooses here is the title
  * and the model. Never the machine: the app picks the host the bot starts on
@@ -189,7 +204,7 @@ export function CreateBotForm(props: {
       </div>
       {create.error === null ? null : (
         <p role="alert" className="text-ui-xs text-destructive">
-          {create.error.message}
+          {CREATE_FAILED}
         </p>
       )}
       <div className="flex items-center justify-end gap-2">
@@ -254,7 +269,7 @@ function CreateBotNoHost(props: {
         variant="link"
         size="xs"
         onClick={() =>
-          navigateToTabIntent(navigate, settingsTabIntent("agents"), undefined)
+          navigateToTabIntent(navigate, settingsTabIntent("host"), undefined)
         }
       >
         Settings
