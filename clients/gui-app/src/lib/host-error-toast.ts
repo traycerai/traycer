@@ -6,10 +6,8 @@ import {
   type HostRpcError,
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import { toast } from "sonner";
-import {
-  staleWriteMessage,
-  staleWriteOfHostError,
-} from "@/lib/environment/stale-write";
+import { staleWriteOfHostError } from "@/lib/environment/stale-write";
+import { showStaleWriteNotice } from "@/lib/environment/write-outcome";
 import { emitHostErrorNotification } from "@/stores/notifications/app-local-notifications-store";
 import { useAuthStore, type CloudVerdictLoss } from "@/stores/auth/auth-store";
 import { createReportIssueContext } from "@/lib/report-issue-context";
@@ -273,7 +271,7 @@ export function toastFromHostError(
   if (isSilentHostError(error)) return;
   const staleWrite = staleWriteOfHostError(error);
   if (staleWrite !== null) {
-    staleWriteToast(staleWrite);
+    showStaleWriteNotice(staleWrite);
     return;
   }
   if (isTransportClassFailure(error)) {
@@ -293,14 +291,6 @@ export function toastFromHostError(
       source: "Host",
     }),
   );
-}
-
-/**
- * A save that lost to a newer change is not a failure to report: the page has
- * re-read, and the person only needs to know where the change came from.
- */
-function staleWriteToast(staleWrite: NonNullable<HostRpcError["staleWrite"]>) {
-  toast.info(staleWriteMessage(staleWrite), { id: "environment-write-stale" });
 }
 
 /**
@@ -423,7 +413,7 @@ export function toastFromHostErrorWithDetail(
   if (shouldSuppressRecoverableUnauthorized(error)) return;
   const staleWrite = staleWriteOfHostError(error);
   if (staleWrite !== null) {
-    staleWriteToast(staleWrite);
+    showStaleWriteNotice(staleWrite);
     return;
   }
   if (error instanceof HostRequestAbortedError) return;

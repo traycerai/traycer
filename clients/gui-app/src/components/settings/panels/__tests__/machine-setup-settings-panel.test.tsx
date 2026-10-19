@@ -25,6 +25,13 @@ vi.mock("@/lib/host", async (importOriginal) => {
   };
 });
 
+// The stale notice is a toast; the rest of sonner stays real.
+const toastInfo = vi.hoisted(() => vi.fn());
+vi.mock("sonner", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("sonner")>();
+  return { ...actual, toast: { ...actual.toast, info: toastInfo } };
+});
+
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   act,
@@ -67,6 +74,7 @@ const ALL_METHODS = [
 
 afterEach(() => {
   cleanup();
+  toastInfo.mockClear();
   resetNegotiatedManifests();
   hostMock.client = null;
   hostMock.binding = null;
@@ -86,6 +94,8 @@ interface RigOptions {
   readonly attempts: readonly SetupAttempt[];
   readonly failScripts: boolean;
   readonly failAttempts: boolean;
+  /** When set, a save loses to this dashboard change, which the host then holds. */
+  readonly dashboardWins: SetupScript | null;
 }
 
 const DEFAULT_RIG: RigOptions = {
@@ -94,6 +104,7 @@ const DEFAULT_RIG: RigOptions = {
   attempts: [],
   failScripts: false,
   failAttempts: false,
+  dashboardWins: null,
 };
 
 function attempt(
@@ -129,6 +140,16 @@ function renderPage(options: RigOptions): Rig {
     "environment.setup.put": (request) => {
       puts.push(request);
       const index = scripts.findIndex((s) => s.os === request.os);
+      if (options.dashboardWins !== null) {
+        const winner = options.dashboardWins;
+        if (index === -1) scripts.push(winner);
+        else scripts[index] = winner;
+        return Promise.resolve({
+          outcome: "stale" as const,
+          currentRevision: winner.revision,
+          changedBy: { kind: "dashboard" as const },
+        });
+      }
       const revision = (scripts[index]?.revision ?? 0) + 1;
       const next = { os: request.os, text: request.text, revision };
       if (index === -1) scripts.push(next);
@@ -318,6 +339,34 @@ describe("<MachineSetupSettingsPanel /> scripts", () => {
       expectedRevision: null,
       executableWriteGrant: "grant-1",
     });
+  });
+
+  it("a save that lost to a dashboard change shows the stale notice and the latest script", async () => {
+    const rig = renderPage({
+      ...DEFAULT_RIG,
+      scripts: [MAC],
+      dashboardWins: { os: "macos", text: "from the dashboard", revision: 5 },
+    });
+    await screen.findByRole("tab", { name: "macOS" });
+
+    fireEvent.change(scriptField("macOS"), { target: { value: "mine" } });
+    fireEvent.click(saveButton());
+    await waitFor(() => {
+      expect(rig.puts).toHaveLength(1);
+    });
+
+    // The page re-reads and shows what the dashboard saved.
+    await waitFor(() => {
+      expect(scriptField("macOS").value).toBe("from the dashboard");
+    });
+    await settle();
+    // And the person is told where the change came from.
+    expect(toastInfo.mock.calls).toEqual([
+      [
+        "This setting was changed in the dashboard just now.",
+        { id: "environment-write-stale" },
+      ],
+    ]);
   });
 
   it("says the read failed instead of showing empty editors", async () => {

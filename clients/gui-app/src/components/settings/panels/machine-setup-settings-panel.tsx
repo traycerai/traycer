@@ -15,6 +15,7 @@ import { useAddressableHostId } from "@/hooks/host/use-addressable-host-id";
 import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
 import { useHostQuery } from "@/hooks/host/use-host-query";
 import { useHostScopedMutationForClient } from "@/hooks/host/use-host-scoped-mutation";
+import { noticeWriteOutcome } from "@/lib/environment/write-outcome";
 import { useHostClient, type HostRpcRegistry } from "@/lib/host";
 import { environmentMutationKeys } from "@/lib/query-keys";
 
@@ -135,7 +136,9 @@ function SetupScriptEditor(props: {
       "environment.setup.get",
       "environment.setup.attempts",
       "environment.status",
+      "environment.review",
     ],
+    onSuccess: noticeWriteOutcome,
   });
   return (
     <div className="flex flex-col gap-2 pt-2">

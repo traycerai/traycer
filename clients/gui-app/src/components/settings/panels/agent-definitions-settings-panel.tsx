@@ -12,6 +12,7 @@ import { useAddressableHostId } from "@/hooks/host/use-addressable-host-id";
 import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
 import { useHostQuery } from "@/hooks/host/use-host-query";
 import { useHostScopedMutationForClient } from "@/hooks/host/use-host-scoped-mutation";
+import { noticeWriteOutcome } from "@/lib/environment/write-outcome";
 import { useHostClient, type HostRpcRegistry } from "@/lib/host";
 import { environmentMutationKeys } from "@/lib/query-keys";
 
@@ -52,13 +53,15 @@ function useAgentDefinitionWrites() {
     prepareRequest: grant,
     mutationKey: environmentMutationKeys.agentDefinitionsPut(),
     errorMessage: "Couldn't save the agent definition.",
-    invalidateMethods: [LIST, "environment.status"],
+    invalidateMethods: [LIST, "environment.status", "environment.review"],
+    onSuccess: noticeWriteOutcome,
   });
   const remove = useHostScopedMutationForClient(client, {
     method: "environment.agentDefinitions.delete",
     mutationKey: environmentMutationKeys.agentDefinitionsDelete(),
     errorMessage: "Couldn't delete the agent definition.",
-    invalidateMethods: [LIST, "environment.status"],
+    invalidateMethods: [LIST, "environment.status", "environment.review"],
+    onSuccess: noticeWriteOutcome,
   });
   return { put, remove };
 }

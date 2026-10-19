@@ -24,6 +24,13 @@ vi.mock("@/lib/host", async (importOriginal) => {
   };
 });
 
+// The stale notice is a toast; the rest of sonner stays real.
+const toastInfo = vi.hoisted(() => vi.fn());
+vi.mock("sonner", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("sonner")>();
+  return { ...actual, toast: { ...actual.toast, info: toastInfo } };
+});
+
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   act,
@@ -67,6 +74,7 @@ const METHODS = [
 
 afterEach(() => {
   cleanup();
+  toastInfo.mockClear();
   resetNegotiatedManifests();
   hostMock.client = null;
   hostMock.binding = null;
@@ -84,9 +92,15 @@ interface RigOptions {
   /** `null` records nothing: no handshake has completed yet. */
   readonly methods: readonly string[] | null;
   readonly failList: boolean;
+  /** When set, a save loses to this dashboard change, which the host then holds. */
+  readonly dashboardWins: AgentDefinition | null;
 }
 
-const DEFAULT_RIG: RigOptions = { methods: METHODS, failList: false };
+const DEFAULT_RIG: RigOptions = {
+  methods: METHODS,
+  failList: false,
+  dashboardWins: null,
+};
 
 function renderPage(
   initial: readonly AgentDefinition[],
@@ -106,6 +120,16 @@ function renderPage(
     "environment.agentDefinitions.put": (request) => {
       puts.push(request);
       const index = definitions.findIndex((d) => d.name === request.name);
+      if (options.dashboardWins !== null) {
+        const winner = options.dashboardWins;
+        if (index === -1) definitions.push(winner);
+        else definitions[index] = winner;
+        return Promise.resolve({
+          outcome: "stale" as const,
+          currentRevision: winner.revision,
+          changedBy: { kind: "dashboard" as const },
+        });
+      }
       const revision = (definitions[index]?.revision ?? 0) + 1;
       const next = { name: request.name, text: request.text, revision };
       if (index === -1) definitions.push(next);
@@ -376,6 +400,44 @@ describe("<AgentDefinitionsSettingsPanel />", () => {
     await settle();
     expect(rig.deletes).toEqual([]);
     expect(screen.getByRole("heading", { name: "reviewer.md" })).toBeTruthy();
+  });
+
+  it("a save that lost to a dashboard change shows the stale notice and the latest text", async () => {
+    const probe: AgentDefinition = {
+      name: "probe.md",
+      text: "old",
+      revision: 55,
+    };
+    const rig = renderPage([probe], {
+      ...DEFAULT_RIG,
+      dashboardWins: {
+        name: "probe.md",
+        text: "from the dashboard",
+        revision: 56,
+      },
+    });
+    await screen.findAllByTestId("agent-definition");
+
+    fireEvent.change(editorFor("probe.md"), { target: { value: "mine" } });
+    fireEvent.click(
+      within(sectionFor("probe.md")).getByRole("button", { name: "Save" }),
+    );
+    await waitFor(() => {
+      expect(rig.puts).toHaveLength(1);
+    });
+
+    // The page re-reads and shows what the dashboard saved.
+    await waitFor(() => {
+      expect(editorFor("probe.md").value).toBe("from the dashboard");
+    });
+    await settle();
+    // And the person is told where the change came from.
+    expect(toastInfo.mock.calls).toEqual([
+      [
+        "This setting was changed in the dashboard just now.",
+        { id: "environment-write-stale" },
+      ],
+    ]);
   });
 
   it("asks the person to update a host that does not serve the list, and reads nothing", async () => {
