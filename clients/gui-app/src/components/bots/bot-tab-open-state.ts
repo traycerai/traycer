@@ -6,7 +6,7 @@ import type { ConnectableHosts } from "@/hooks/host/use-connectable-host-ids";
 
 /**
  * Why a bot tab shows the paused state instead of the bot's live
- * conversation: one of `bot.open`'s paused reasons (T18), or
+ * conversation: one of `bot.open`'s paused reasons, or
  * `bound-host-not-dialable` - another host serves the bot, but this client
  * holds no route to it (a team machine another member added), so the tab
  * stays on the opening host.

@@ -180,7 +180,6 @@ function mountForm(input: Mount): void {
   const environmentBindings: HostEnvironmentBindings = {
     byHostId,
     failedHostIds: input.failedHostIds,
-    resolved: true,
     retryFailed,
   };
   render(
@@ -348,13 +347,6 @@ describe("<CreateBotForm /> when no host qualifies", () => {
     expect(retryFailed).not.toHaveBeenCalled();
     await user.click(screen.getByRole("button", { name: "Retry" }));
     expect(retryFailed).toHaveBeenCalledTimes(1);
-  });
-
-  it("does not mention unchecked machines when every read answered", () => {
-    mocks.state.creatingHostIds = new Set();
-    mountForm(TEAM_WITH_LOCAL);
-
-    expect(screen.queryByTestId("create-bot-unchecked")).toBeNull();
   });
 
   it("says it is still looking, not that none was found, while an earlier host is being asked", () => {

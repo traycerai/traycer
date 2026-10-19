@@ -284,7 +284,7 @@ function HostEnvironmentPicker(props: {
             <DialogDescription data-testid="host-environment-confirm-copy">
               {confirming === null
                 ? null
-                : bindConfirmationCopy(hostLabel, confirming.label)}
+                : `${hostLabel} becomes ${confirming.label}'s: every member sees it, and the team's bots and tasks can run on it.`}
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
@@ -306,12 +306,4 @@ function HostEnvironmentPicker(props: {
       </Dialog>
     </>
   );
-}
-
-/**
- * What binding a host to a team does to it: only a sandbox is offered a team,
- * and it becomes the team's.
- */
-function bindConfirmationCopy(hostLabel: string, teamLabel: string): string {
-  return `${hostLabel} becomes ${teamLabel}'s: every member sees it, and the team's bots and tasks can run on it.`;
 }

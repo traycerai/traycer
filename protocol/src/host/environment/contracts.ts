@@ -178,7 +178,7 @@ export type EnvironmentHostListResponse = z.infer<
 >;
 
 /**
- * Lists every host bound to a team environment to any member of it. Refused
+ * Lists the hosts of a team environment the caller may see. Refused
  * for an environment the caller does not belong to, and for one that does
  * not exist.
  */

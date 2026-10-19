@@ -194,7 +194,7 @@ export type BotClaimAuthorityResponse = z.infer<
 
 /**
  * Open a bot on THIS host (the host serving the tab), claiming it here when
- * its bound host cannot be reached (T18). The person never picks the host:
+ * its bound host cannot be reached. The person never picks the host:
  * the app opens the bot through whichever host serves the tab and follows
  * the answer. A caller the bot is not visible to - not a member of its
  * environment, or the bot deleted - gets the same not-found error

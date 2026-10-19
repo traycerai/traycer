@@ -233,8 +233,8 @@ function canReaderGestureMove(
  *   or, with permission still held, on the next message. So a finger on the
  *   transcript blocks automatic correction for as long as it is down; a
  *   report that moved past the contact offset detaches, and a lift that
- *   never moved releases the arm as a tap. `touchmove`, when it is delivered,
- *   still refines the arm with a direction (the toward-end reattach).
+ *   never moved releases the arm as a tap. A delivered `touchmove` publishes
+ *   its direction without ending the contact.
  * - `followEndIfPermitted` is the one automatic path that turns permission
  *   into an actual scroll. Explicit go-live navigation declares its own
  *   ownership through the same latch and uses the same fresh-DOM authority.
@@ -340,10 +340,9 @@ export function useChatTimelineFollowLatch(
         geometry === null ||
         !isChatTimelineGeometryMeasurable(geometry) ||
         canReaderGestureMove(geometry, intent.direction);
-      // A touch contact outlives every intent during it: a `touchmove` only
-      // refines it with a direction (the candidate below), and a pointer
-      // preflight (a content tap's `pointerdown`) does not end it. Replacing
-      // it with a gesture arm would let a strict-bottom report release that
+      // A touch contact outlives every intent during it: neither a delivered
+      // `touchmove` nor a pointer preflight ends it. Replacing it with a
+      // gesture arm would let a strict-bottom report release that
       // arm, leaving the rest of the contact - which iOS may deliver as bare
       // scroll reports - unprotected. Only the lift ends the contact.
       if (armedReaderDepartureRef.current?.source !== "touch") {

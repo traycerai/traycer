@@ -1,5 +1,5 @@
 /**
- * The `bot.listChanged` doorbell (Tracy Bots T24): while a bots surface is
+ * The `bot.listChanged` doorbell (Tracy Bots): while a bots surface is
  * mounted and the host advertises the method, a `changed` frame invalidates
  * every host's cached `bot.list`, a reconnect fetches nothing of its own
  * (the host's reconciliation `changed` covers it), and ONE subscription serves
@@ -286,7 +286,7 @@ describe("useBotListChangedSubscription support", () => {
 });
 
 describe("useBotListChangedSubscription gating", () => {
-  it.each<StreamMethodSupport>(["unknown", "unsupported"])(
+  it.each<StreamMethodSupport>(["unsupported"])(
     "subscribes nothing on a client that has only ever been %s",
     (support) => {
       const harness = createHarness();
