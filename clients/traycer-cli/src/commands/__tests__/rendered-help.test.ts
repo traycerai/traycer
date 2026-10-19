@@ -1574,6 +1574,14 @@ describe("rendered root/parent/leaf --help (CLI command audit regression suite)"
         // a host a person started in a terminal, so it carries the flag too.
         "traycer host uninstall --lifecycle-origin",
         "traycer host free-port-and-restart --lifecycle-origin",
+        // The host process a Desktop force restart was confirmed for: the
+        // restart, and the takeover its re-register fallback reaches, refuse
+        // when pid.json names another one. Desktop passes them from its own
+        // check; a person never does.
+        "traycer host restart --expect-host-pid",
+        "traycer host restart --expect-host-start-identity",
+        "traycer host service install --expect-host-pid",
+        "traycer host service install --expect-host-start-identity",
       ].sort(),
     );
   });
