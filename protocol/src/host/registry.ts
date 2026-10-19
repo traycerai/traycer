@@ -1041,6 +1041,7 @@ import {
   environmentHostListV10,
   environmentHostReadV10,
   environmentListV10,
+  environmentMembersV10,
 } from "@traycer/protocol/host/environment/contracts";
 import {
   sessionImportRunV10,
@@ -5919,6 +5920,21 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
       versions: {
         0: {
           contract: environmentHostListV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  // The people in an environment, by name and avatar. Optional like its
+  // siblings.
+  "environment.members": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: environmentMembersV10,
           upgradeFromPreviousVersion: null,
         },
       },

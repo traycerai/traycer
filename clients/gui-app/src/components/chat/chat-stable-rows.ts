@@ -137,6 +137,8 @@ const CHAT_MESSAGE_FIELD_UNCHANGED: {
   // identity check would re-render that turn's rows on every token.
   turnMessageIds: (a, b) => sameMessageIds(a.turnMessageIds, b.turnMessageIds),
   senderLabel: (a, b) => a.senderLabel === b.senderLabel,
+  // A member's picture can resolve after the row first painted.
+  senderAvatarUrl: (a, b) => a.senderAvatarUrl === b.senderAvatarUrl,
   // The row-level request state is carried by reference from the open
   // message, so a resolve arrives as a new object and identity is enough.
   conversationRequest: (a, b) =>

@@ -4,6 +4,8 @@
  * this host is bound to, and rebinding it.
  * `environment.host.list` - every host bound to a team environment, as any
  * member of the team sees it.
+ * `environment.members` - the people in an environment, by name and avatar,
+ * so a client can name the member who wrote a message.
  *
  * An environment is the cloud container a team shares: skills, the shared
  * notes block, the agent selection guide and the bot list, all held in one
@@ -187,4 +189,57 @@ export const environmentHostListV10 = defineRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: environmentHostListRequestSchema,
   responseSchema: environmentHostListResponseSchema,
+});
+
+export const environmentMembersRequestSchema = lazySchema(() =>
+  z.object({
+    environmentId: z.string().min(1),
+    /** `nextCursor` of the previous page; null for the first page. */
+    cursor: z.string().min(1).nullable(),
+  }),
+);
+export type EnvironmentMembersRequest = z.infer<
+  typeof environmentMembersRequestSchema
+>;
+
+/**
+ * One person in an environment: a member of the owning team, or the person
+ * a personal environment belongs to. `displayName` is what to call them,
+ * null when they have set neither a name nor a handle; `avatarUrl` is null
+ * when they have no picture. Never an email.
+ */
+export const environmentMemberSchema = lazySchema(() =>
+  z.object({
+    userId: z.string().min(1),
+    displayName: z.string().min(1).nullable(),
+    avatarUrl: z.string().nullable(),
+  }),
+);
+export type EnvironmentMember = z.infer<typeof environmentMemberSchema>;
+
+/**
+ * One page of an environment's members, ordered by user id. `nextCursor` is
+ * the cursor of the next page, null on the last one. A member of an object
+ * root so the response can grow additively.
+ */
+export const environmentMembersResponseSchema = lazySchema(() =>
+  z.object({
+    members: z.array(environmentMemberSchema),
+    nextCursor: z.string().min(1).nullable(),
+  }),
+);
+export type EnvironmentMembersResponse = z.infer<
+  typeof environmentMembersResponseSchema
+>;
+
+/**
+ * Lists an environment's members to a member of it. Refused for an
+ * environment the caller does not belong to exactly as for one that does not
+ * exist.
+ */
+export const environmentMembersV10 = defineRpcContract({
+  method: "environment.members",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: environmentMembersRequestSchema,
+  responseSchema: environmentMembersResponseSchema,
 });

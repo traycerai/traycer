@@ -29,6 +29,7 @@ import {
 import { useBotListQuery } from "@/hooks/bots/use-bot-list-query";
 import { useBotListChangedSubscriptionForHost } from "@/hooks/bots/use-bot-list-changed-subscription";
 import { useEnvironmentListQuery } from "@/hooks/bots/use-environment-list-query";
+import { useEnvironmentMembers } from "@/hooks/bots/use-environment-members-query";
 import { useBotOpenMutation } from "@/hooks/bots/use-bot-mutations";
 import { useBotTabsStore } from "@/stores/bots/bot-tabs-store";
 import { BotConversationView } from "@/components/bots/bot-conversation-view";
@@ -298,6 +299,15 @@ function BotTabContent(props: {
     return match?.label ?? snapshot.bot.environmentId;
   }, [environments.data, snapshot.bot.environmentId]);
   const paused = pausedReason !== null;
+  // Who wrote each conversation row. A host without the method shows the
+  // other members by id.
+  const membersSupported =
+    useHostMethodSupport(hostId, "environment.members") === true;
+  const resolveMember = useEnvironmentMembers(
+    client,
+    snapshot.bot.environmentId,
+    membersSupported,
+  );
 
   return (
     <div className="flex h-full min-h-0 flex-col" data-testid="bot-tab">
@@ -358,6 +368,7 @@ function BotTabContent(props: {
             hostId={hostId}
             botTitle={snapshot.bot.title}
             paused={paused}
+            resolveMember={resolveMember}
           />
         </TabsContent>
         <TabsContent

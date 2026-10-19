@@ -92,6 +92,8 @@ interface Mount {
   /** The reader's own hosts the registry calls personal; `null` while the
    * registry has not answered. */
   readonly personal: ReadonlyArray<string> | null;
+  /** The row's "Created by …" line; null for none. */
+  readonly createdBy: string | null;
 }
 
 function reach(input: Mount): HomeBotHostReach {
@@ -111,6 +113,7 @@ const OWN_AND_DIALABLE: Mount = {
   environmentHostIds: new Set(),
   environmentOwnerKind: "organization",
   personal: [],
+  createdBy: null,
 };
 
 function mountRow(input: Mount): void {
@@ -121,6 +124,7 @@ function mountRow(input: Mount): void {
         hostReach={reach(input)}
         environmentHostIds={input.environmentHostIds}
         environmentOwnerKind={input.environmentOwnerKind}
+        createdBy={input.createdBy}
       />
     </StrictMode>,
   );
@@ -146,6 +150,19 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+});
+
+describe("<HomeBotRow /> attribution", () => {
+  it("shows who made the bot when told, and no line otherwise", () => {
+    mountRow({ ...OWN_AND_DIALABLE, createdBy: "Created by Tess Teammate" });
+    expect(screen.getByTestId("home-bot-created-by").textContent).toBe(
+      "Created by Tess Teammate",
+    );
+    cleanup();
+
+    mountRow(OWN_AND_DIALABLE);
+    expect(screen.queryByTestId("home-bot-created-by")).toBeNull();
+  });
 });
 
 describe("<HomeBotRow /> state", () => {
