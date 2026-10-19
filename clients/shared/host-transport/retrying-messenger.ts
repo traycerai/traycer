@@ -183,6 +183,19 @@ export class RetryEpisodeOutcomeUnknownError extends HostTransportFailureError {
 }
 
 /**
+ * The error whose CODE says what went wrong: a retry episode's final refusal
+ * when a refusal ended it, otherwise the error itself. For classifying a
+ * failure by code (sign in again, update the host) only; whether the request
+ * may have run is read off the error itself (`mayHaveReachedHost`), which the
+ * refusal alone no longer carries.
+ */
+export function finalRefusalOf(error: unknown): unknown {
+  return error instanceof RetryEpisodeOutcomeUnknownError
+    ? error.finalRefusal
+    : error;
+}
+
+/**
  * The failure that ends a call, when an earlier attempt of it may have reached
  * the host and this one is the last. A PRE-send failure must not erase the
  * earlier send: handed on as it is, it reads as "the host never saw it", and a

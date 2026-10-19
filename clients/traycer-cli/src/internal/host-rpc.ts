@@ -11,6 +11,7 @@ import { createAuthAwareMessenger } from "../../../shared/host-transport/auth-aw
 import {
   createRetryingMessenger,
   DEFAULT_TRANSPORT_RETRY_POLICY,
+  finalRefusalOf,
   NO_RETRY_TRANSPORT_POLICY,
   type TransportRetryPolicy,
 } from "../../../shared/host-transport/retrying-messenger";
@@ -490,10 +491,11 @@ const REQUEST_PROJECTION_FAILURE_PREFIX =
  * so genuine host `RPC_ERROR`s and auth failures still surface.
  */
 export function isRequestVersionProjectionError(err: unknown): boolean {
+  const refusal = finalRefusalOf(err);
   return (
-    err instanceof HostRpcError &&
-    err.code === "RPC_ERROR" &&
-    err.message.startsWith(REQUEST_PROJECTION_FAILURE_PREFIX)
+    refusal instanceof HostRpcError &&
+    refusal.code === "RPC_ERROR" &&
+    refusal.message.startsWith(REQUEST_PROJECTION_FAILURE_PREFIX)
   );
 }
 
@@ -633,15 +635,19 @@ function assertCanonicalResponseSchema(
 }
 
 function hostRpcToCliError(err: unknown): unknown {
-  if (!(err instanceof HostRpcError)) return err;
+  // Classified by the refusal that ended a retry episode, not by its
+  // unknown-outcome wrapper: "sign in again" stays true about the retry
+  // whatever an earlier attempt did.
+  const refusal = finalRefusalOf(err);
+  if (!(refusal instanceof HostRpcError)) return err;
   createCliLogger(config.environment).warn(
     "Mapping host RPC wire error to CLI error",
     {
       environment: config.environment,
-      hostRpcCode: err.code,
+      hostRpcCode: refusal.code,
     },
   );
-  return mapHostRpcError(err);
+  return mapHostRpcError(refusal);
 }
 
 /**

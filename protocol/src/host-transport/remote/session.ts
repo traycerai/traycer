@@ -5297,9 +5297,9 @@ export class RemoteSession<
 
   /**
    * Every pending entry was enqueued for the wire, so the host may have run
-   * it whatever ended the wait (a timeout, a corrupt inbound frame, the host's
-   * per-stream FATAL, which can follow the method's own run): the rejection is
-   * marked for `mayHaveReachedHost`.
+   * it whatever ended the wait - a timeout, a corrupt inbound frame, or the
+   * host's per-stream FATAL, which carries no attestation that the request was
+   * never dispatched - and the rejection is marked for `mayHaveReachedHost`.
    */
   private rejectUnary(streamId: number, error: HostRpcError): void {
     const entry = this.pendingUnary.get(streamId);

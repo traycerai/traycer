@@ -21,10 +21,10 @@ import {
 } from "./retrying-messenger";
 
 /**
- * Reads the current bearer string for the retry gate, tolerating every "no
- * bearer" shape (no retry policy, no source, or a released/empty lease whose
- * `getBearerToken()` throws) by returning `null`. The gate then compares
- * before/after: equal-or-null means "no rotation happened", so don't retry.
+ * Reads the current bearer string for the retry gate, tolerating a released
+ * or empty lease (whose `getBearerToken()` throws) by returning `null`. The
+ * gate then compares before/after: equal-or-null means "no rotation
+ * happened", so don't retry.
  */
 function readBearer(source: OpenFrameBearerSource): string | null {
   try {
@@ -36,10 +36,18 @@ function readBearer(source: OpenFrameBearerSource): string | null {
 
 /**
  * Wraps an `IHostMessenger` so a `HostRpcError` with `code ===
- * "UNAUTHORIZED"` triggers `auth.revalidateCurrentContext()` before the error
- * propagates. The host never refreshes tokens itself - it only signals
- * `UNAUTHORIZED` - so this wrapper is the single client-side place that closes
- * the refresh loop for unary RPC, shared by the renderer and the CLI.
+ * "UNAUTHORIZED"` triggers `auth.revalidateExpectedBearer(authority.bearer)`
+ * before the error propagates. The host never refreshes tokens itself - it
+ * only signals `UNAUTHORIZED` - so this wrapper is the single client-side
+ * place that closes the refresh loop for unary RPC, shared by the renderer and
+ * the CLI.
+ *
+ * Recovery is bound to the request's own authority, the bearer object that
+ * produced the rejected `open`, not to whatever context is current: by the
+ * time the refusal arrives the person may have switched account or signed
+ * out, and refreshing or signing out that newer context on an old request's
+ * say-so would act on a session the refusal says nothing about. A recovery
+ * whose bearer is no longer current comes back `"superseded"`.
  *
  * A revalidation that rotated the bearer is followed by one more `request`
  * attempt, whose failure propagates. One that did not rotate rethrows the

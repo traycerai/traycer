@@ -334,9 +334,16 @@ export function markMayHaveReachedHost(error: HostRpcError): void {
  * includes some requests that provably never left: a `sendUnary` on a session
  * already closed by its caller, or one closed while the call awaited
  * readiness, fails with a `HostTransportFailureError` without `fatalDetails`
- * before anything is enqueued, and reads true. False means the request did not
- * run: a host refusal, a failure the host attested, a pre-send abort or
- * unkeyed retryable failure, and any value that is not a `HostRpcError`.
+ * before anything is enqueued, and reads true.
+ *
+ * False means one of two things, and the second is not "did not run": the
+ * transport attests the request never reached the host (a pre-send abort, an
+ * unkeyed retryable failure, a failure the host attested), or the host
+ * answered with its own error envelope. A host error can follow the method's
+ * run (a partial failure, a result rejected after the resolver completed, a
+ * response too large to send), and whether one did is the method's contract,
+ * judged by the caller from the error's code; the transport cannot know. Any
+ * value that is not a `HostRpcError` reads false too.
  */
 export function mayHaveReachedHost(error: unknown): boolean {
   if (!(error instanceof HostRpcError)) return false;
