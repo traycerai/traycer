@@ -4935,6 +4935,43 @@ describe("ResourceMonitorPopover · host picker", () => {
     expect(screen.queryByText("Traycer Desktop")).toBeNull();
   });
 
+  it("does not sample the shell for a closed bare-icon trigger on the local machine", () => {
+    // A glyph draws nothing from the readings while closed, and the shell
+    // sampler is an IPC round trip a second for the life of the header - the
+    // same reason the host stream stays shut for these forms. Open, the panel
+    // samples the shell itself.
+    const getMetrics = vi.fn(() =>
+      Promise.resolve({ appMetrics: [desktopMetric({})] }),
+    );
+    installDesktopMetricsBridge(getMetrics);
+    hostScopeMock.scope = SINGLE_HOST_SCOPE;
+    renderPopover();
+
+    expect(getMetrics).not.toHaveBeenCalled();
+  });
+
+  it("samples the shell for a closed trigger that prints a reading on the local machine", () => {
+    // The readout counts Traycer Desktop in its figure, as the panel's
+    // headline does, so a form that draws it has to keep the sample live.
+    const getMetrics = vi.fn(() =>
+      Promise.resolve({ appMetrics: [desktopMetric({})] }),
+    );
+    installDesktopMetricsBridge(getMetrics);
+    hostScopeMock.scope = SINGLE_HOST_SCOPE;
+    render(
+      <TooltipProvider>
+        <EpicLease epicId="epic-1" />
+        <ResourceMonitorPopover
+          trigger="header-button"
+          form="readout"
+          claimsOpenAction
+        />
+      </TooltipProvider>,
+    );
+
+    expect(getMetrics).toHaveBeenCalled();
+  });
+
   // `isViewingActive` is `isFollowing`, which REQUIRES a resolved host, so
   // `host === null` always travels with `isViewingActive: false`. A fixture
   // pairing a null host with `isViewingActive: true` describes a state the

@@ -25,6 +25,7 @@ import {
 } from "@/hooks/rate-limits/use-rate-limit-profile-selection";
 import { useStatusBarWindowedProviders } from "@/hooks/rate-limits/use-status-bar-rate-limit-segments";
 import { HostRuntimeContext, useHostBinding } from "@/lib/host";
+import { readingShowsLocalDesktop } from "@/lib/resources/headline-resource-summary";
 import { StreamRuntimeContext } from "@/lib/host/stream-runtime-context";
 import { registerDynamicActionHandler } from "@/lib/keybindings/dispatch";
 import { providerDisplayName } from "@/lib/provider-ordering";
@@ -225,6 +226,7 @@ function ScopedAppStatusBar(props: {
             hostId={scope.hostId}
             hostLabel={scope.hostLabel}
             hasExplicitPick={props.hasExplicitPick}
+            watchesThisMachine={readingShowsLocalDesktop(scope)}
             interactive
           />
         }
