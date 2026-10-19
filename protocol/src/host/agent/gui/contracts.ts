@@ -7,6 +7,7 @@ import {
   getGuiAgentPlanRequestSchema,
   getGuiAgentPlanResponseSchema,
   listGuiAgentCommandsRequestSchema,
+  listGuiAgentCommandsRequestSchemaV11,
   listGuiAgentCommandsResponseSchema,
   listGuiAgentModelsRequestSchema,
   listGuiAgentModelsResponseSchema,
@@ -1353,6 +1354,23 @@ export const agentGuiListCommandsV10 = defineRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: listGuiAgentCommandsRequestSchema,
   responseSchema: listGuiAgentCommandsResponseSchema,
+});
+
+export const agentGuiListCommandsV11 = defineRpcContract({
+  method: "agent.gui.listCommands",
+  schemaVersion: { major: 1, minor: 1 } as const,
+  requestSchema: listGuiAgentCommandsRequestSchemaV11,
+  responseSchema: listGuiAgentCommandsResponseSchema,
+});
+
+export const agentGuiListCommandsUpgradeV10ToV11 = defineUpgradePath<
+  typeof agentGuiListCommandsV10,
+  typeof agentGuiListCommandsV11
+>({
+  from: { major: 1, minor: 0 },
+  to: { major: 1, minor: 1 },
+  upgradeRequest: (request) => ({ ...request, profileId: null }),
+  upgradeResponse: (response) => response,
 });
 
 export const agentGuiGetPlanV10 = defineRpcContract({

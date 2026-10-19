@@ -12,6 +12,8 @@ import { HOST_STARTING_BUDGET_MS } from "@/lib/host/bounded-load-budgets";
 import { TestEpicSessionWrapper } from "./test-epic-session";
 import { createEpicSessionTestHarness } from "./test-epic-session-harness";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
+import type { HostLeaseSnapshot } from "@traycer-clients/shared/host-selection/selection-authority-contract";
 import { __getOpenEpicRegistryForTests } from "@/lib/registries/epic-session-registry";
 
 /**
@@ -48,6 +50,21 @@ vi.mock(
   () => ({
     HostWorkspaceSelector: () => null,
     ActiveHostWorkspaceControls: () => null,
+  }),
+);
+
+// Hosts whose live session reads as ready. Empty by default, so every case
+// starts with no session to any host; a case adds its host and `afterEach`
+// clears it.
+const readySessionHostIds = vi.hoisted(() => new Set<string>());
+
+vi.mock(
+  "@traycer-clients/shared/host-transport/remote/index",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@traycer-clients/shared/host-transport/remote/index")
+    >()),
+    hasReadyRemoteSession: (hostId: string) => readySessionHostIds.has(hostId),
   }),
 );
 
@@ -203,8 +220,10 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  readySessionHostIds.clear();
   cleanup();
   epicHarness.teardown();
+  useSelectionAuthorityStore.getState().reset();
   __getOpenEpicRegistryForTests().disposeAll();
   vi.useRealTimers();
 });
@@ -308,11 +327,14 @@ describe("S2 — the body under the strip", () => {
 
     const starting = screen.getByTestId(testId);
     expect(starting.getAttribute("data-arm")).toBe("waiting-for-host");
+    // The directory has no entry yet, so the only name it has is the host id,
+    // and a host id is not a name: the body says "the host".
     expect(
       within(starting).getByText(
-        `This agent will open once "${CHAT_ARTIFACT.hostId}" is ready.`,
+        "This agent will open once the host is ready.",
       ),
     ).not.toBeNull();
+    expect(starting.textContent).not.toContain(CHAT_ARTIFACT.hostId);
     expect(starting.textContent).not.toContain("Waiting for the host to start");
 
     act(() => {
@@ -323,12 +345,173 @@ describe("S2 — the body under the strip", () => {
     expect(offline.getAttribute("data-arm")).toBe("waiting-for-host");
     expect(
       within(offline).getByText(
-        `This agent will open once "${CHAT_ARTIFACT.hostId}" is available.`,
+        "This agent will open once the host is available.",
       ),
     ).not.toBeNull();
+    expect(offline.textContent).not.toContain(CHAT_ARTIFACT.hostId);
     expect(offline.textContent).not.toMatch(/Waiting|Loading/);
     expect(within(offline).queryByRole("button")).toBeNull();
     // Nothing is running under an offline strip with no handle.
     expect(screen.queryByTestId(`${testId}-spinner`)).toBeNull();
+  });
+});
+
+/**
+ * The offline strip follows the lease as well as the directory (the user
+ * report: a remote host that went off sat behind a body saying it was offline
+ * while nothing above it offered a way to continue). A dead-offline lease
+ * mounts the Clone banner while the directory still says the host is
+ * reachable, or has not answered yet; any other lease leaves the live tile
+ * alone. The real reachability hook, lease hook and tile run; only the
+ * directory list and the lease store are driven.
+ */
+describe("a dead-offline lease draws the Clone banner over a directory that has not caught up", () => {
+  const bannerTestId = `chat-dead-tile-${CHAT_ARTIFACT.id}`;
+
+  const remoteEntry: HostDirectoryEntry = {
+    hostId: CHAT_ARTIFACT.hostId,
+    label: "Office Mac",
+    kind: "remote",
+    websocketUrl: "wss://office.example.com/rpc",
+    version: "1.0.0",
+    transportDialability: "dialable",
+  };
+
+  const hostId = CHAT_ARTIFACT.hostId;
+  const DEAD_OFFLINE: HostLeaseSnapshot = {
+    hostId,
+    status: "dead",
+    dead: { reason: "offline" },
+  };
+  const DEAD_REMOVED: HostLeaseSnapshot = {
+    hostId,
+    status: "dead",
+    dead: { reason: "removed" },
+  };
+  const READY: HostLeaseSnapshot = { hostId, status: "ready", dead: null };
+
+  function publishLease(lease: HostLeaseSnapshot): void {
+    useSelectionAuthorityStore.setState({ attached: true, leases: [lease] });
+  }
+
+  it("mounts the banner and its Clone button while the directory says reachable", async () => {
+    directoryState.data = [remoteEntry];
+    publishLease(DEAD_OFFLINE);
+    renderChatTile();
+    await settleEpicSession();
+
+    const banner = screen.getByTestId(bannerTestId);
+    expect(banner.textContent).toContain(
+      'Clone this agent to continue while "Office Mac" is offline; the original stays there.',
+    );
+    expect(screen.getByRole("button", { name: "Clone agent" })).not.toBeNull();
+    // The body above the strip points at the button the strip draws.
+    expect(
+      screen.getByTestId(`chat-tile-pre-content-${CHAT_ARTIFACT.id}`)
+        .textContent,
+    ).toContain(
+      'Open Traycer on "Office Mac", or continue here as a new agent.',
+    );
+    expect(
+      screen.getByTestId(`chat-tile-pre-content-${CHAT_ARTIFACT.id}`)
+        .textContent,
+    ).not.toContain("Turn on");
+  });
+
+  it("names the host as the host, not a raw id, while the directory is still checking", async () => {
+    directoryState.data = undefined;
+    directoryState.fetchStatus = "fetching";
+    publishLease(DEAD_OFFLINE);
+    renderChatTile();
+    await settleEpicSession();
+
+    const banner = screen.getByTestId(bannerTestId);
+    expect(banner.textContent).toContain(
+      "while the host is offline; the original stays there.",
+    );
+    expect(banner.textContent).not.toContain(CHAT_ARTIFACT.hostId);
+    expect(screen.getByRole("button", { name: "Clone agent" })).not.toBeNull();
+  });
+
+  it("names the host as the host, not its id, when the directory entry has no label", async () => {
+    directoryState.data = [{ ...remoteEntry, label: "" }];
+    publishLease(DEAD_OFFLINE);
+    renderChatTile();
+    await settleEpicSession();
+
+    const banner = screen.getByTestId(bannerTestId);
+    expect(banner.textContent).toContain(
+      "while the host is offline; the original stays there.",
+    );
+    expect(banner.textContent).not.toContain(CHAT_ARTIFACT.hostId);
+    const body = screen.getByTestId(
+      `chat-tile-pre-content-${CHAT_ARTIFACT.id}`,
+    );
+    expect(body.textContent).toContain("Open Traycer on the host");
+    expect(body.textContent).not.toContain(CHAT_ARTIFACT.hostId);
+  });
+
+  it("offers Clone in the banner and the body for an editor", async () => {
+    epicHarness.install(null, "editor");
+    directoryState.data = [remoteEntry];
+    publishLease(DEAD_OFFLINE);
+    renderChatTile();
+    await settleEpicSession();
+
+    expect(screen.getByTestId(bannerTestId)).not.toBeNull();
+    expect(screen.getByRole("button", { name: "Clone agent" })).not.toBeNull();
+    expect(
+      screen.getByTestId(`chat-tile-pre-content-${CHAT_ARTIFACT.id}`)
+        .textContent,
+    ).toContain("or continue here as a new agent.");
+  });
+
+  it("withholds Clone in the banner and the body for a viewer, and says why", async () => {
+    epicHarness.install(null, "viewer");
+    directoryState.data = [remoteEntry];
+    publishLease(DEAD_OFFLINE);
+    renderChatTile();
+    await settleEpicSession();
+
+    expect(screen.getByTestId(bannerTestId).textContent).toContain(
+      "You have view-only access to this task, so it can't be cloned.",
+    );
+    expect(screen.queryByRole("button", { name: "Clone agent" })).toBeNull();
+    const body = screen.getByTestId(
+      `chat-tile-pre-content-${CHAT_ARTIFACT.id}`,
+    );
+    expect(body.textContent).toContain('Open Traycer on "Office Mac".');
+    expect(body.textContent).not.toContain("continue here");
+  });
+
+  it("draws no banner for a ready lease on a reachable host", async () => {
+    directoryState.data = [remoteEntry];
+    publishLease(READY);
+    renderChatTile();
+    await settleEpicSession();
+
+    expect(screen.queryByTestId(bannerTestId)).toBeNull();
+    expect(screen.queryByRole("button", { name: "Clone agent" })).toBeNull();
+  });
+
+  it("draws no banner for a removed host the directory still lists", async () => {
+    directoryState.data = [remoteEntry];
+    publishLease(DEAD_REMOVED);
+    renderChatTile();
+    await settleEpicSession();
+
+    expect(screen.queryByTestId(bannerTestId)).toBeNull();
+    expect(screen.queryByRole("button", { name: "Clone agent" })).toBeNull();
+  });
+
+  it("draws no banner while a live session to the host is ready, whatever the lease says", async () => {
+    directoryState.data = [remoteEntry];
+    readySessionHostIds.add(hostId);
+    publishLease(DEAD_OFFLINE);
+    renderChatTile();
+    await settleEpicSession();
+
+    expect(screen.queryByTestId(bannerTestId)).toBeNull();
+    expect(screen.queryByRole("button", { name: "Clone agent" })).toBeNull();
   });
 });

@@ -88,6 +88,7 @@ export type AutoJudgeBilling =
       readonly harnessLabel: string;
       readonly modelLabel: string;
       readonly effortLabel: string | null;
+      readonly maxModeListed: boolean;
     }
   /**
    * The run's OWN provider reviews its own commands, and Traycer's judge never
@@ -117,6 +118,22 @@ export type AutoJudgeBilling =
    * the composer's description explains that approvals will ask the user.
    */
   | { readonly kind: "blocked" };
+
+/** The generic Auto row adds only the listed Max Mode fact for a runnable judge. */
+export function autoJudgeMaxModeListedForRow(input: {
+  readonly isAuto: boolean;
+  readonly supported: boolean;
+  readonly lockedMidTurn: boolean;
+  readonly billing: AutoJudgeBilling | null;
+}): boolean {
+  return (
+    input.isAuto &&
+    input.supported &&
+    !input.lockedMidTurn &&
+    input.billing?.kind === "provider" &&
+    input.billing.maxModeListed
+  );
+}
 
 const TRAYCER_BILLING: AutoJudgeSelectionBilling = { kind: "traycer" };
 const BLOCKED_BILLING: AutoJudgeBilling = { kind: "blocked" };
@@ -318,6 +335,7 @@ export function autoJudgeBillingForRun(input: {
    * {@link autoJudgeEffortLabel}; `null` when there is none to name.
    */
   readonly judgeEffortLabel: string | null;
+  readonly judgeMaxModeListed: boolean;
   /**
    * A CLIENT-DETECTED reason the stored judge cannot run - today an explicit
    * profile its provider no longer offers, or a model its harness no longer
@@ -368,7 +386,12 @@ export function autoJudgeBillingForRun(input: {
   const pocket = autoJudgeBillingFor(target.harnessId);
   return pocket.kind === "traycer"
     ? { kind: "traycer", modelLabel, effortLabel }
-    : { ...pocket, modelLabel, effortLabel };
+    : {
+        ...pocket,
+        modelLabel,
+        effortLabel,
+        maxModeListed: input.judgeMaxModeListed,
+      };
 }
 
 /**

@@ -2,6 +2,7 @@ import { useMemo, type ReactNode } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { Bot } from "lucide-react";
 import type { BotRecord } from "@traycer/protocol/host/bot/schemas";
+import type { EnvironmentDescriptor } from "@traycer/protocol/host/environment/contracts";
 import { Badge } from "@/components/ui/badge";
 import { useEffectiveHostId } from "@/hooks/host/use-effective-host-id";
 import { useBotSubscription } from "@/hooks/bots/use-bot-subscription";
@@ -25,6 +26,9 @@ export interface HomeBotHostReach {
   readonly directoryHostIds: ReadonlySet<string>;
   readonly connectableHostIds: ReadonlySet<string>;
   readonly connectableResolved: boolean;
+  /** The reader's own hosts the registry calls `personal`; `null` until the
+   * registry has answered. */
+  readonly personalHostIds: ReadonlySet<string> | null;
 }
 
 const STATE_LABELS: Readonly<Record<HomeBotState, string>> = {
@@ -56,8 +60,10 @@ export function HomeBotRow(props: {
   /** The machines of the bot's environment the reader may see beyond their
    * own; `null` while a team environment's list has not answered. */
   readonly environmentHostIds: ReadonlySet<string> | null;
+  /** The bot's environment's owner kind; `null` when it is not listed. */
+  readonly environmentOwnerKind: EnvironmentDescriptor["ownerKind"] | null;
 }): ReactNode {
-  const { bot, hostReach, environmentHostIds } = props;
+  const { bot, hostReach, environmentHostIds, environmentOwnerKind } = props;
   const hostId = useEffectiveHostId();
   const subscription = useBotSubscription({
     hostId,
@@ -80,6 +86,8 @@ export function HomeBotRow(props: {
     connectableHostIds: hostReach.connectableHostIds,
     connectableResolved: hostReach.connectableResolved,
     environmentHostIds,
+    environmentOwnerKind,
+    personalHostIds: hostReach.personalHostIds,
   });
   const openRequests = row.openRequestCount ?? 0;
 

@@ -375,6 +375,7 @@ export function AssistantMessageBody({
               <SubagentSegment
                 id={item.id}
                 cardId={item.segment.id}
+                toolImageResults={item.segment.toolImageResults}
                 name={item.segment.name}
                 agentType={item.segment.agentType}
                 task={item.segment.task}
@@ -1345,6 +1346,7 @@ export function AssistantSegment({
         <SubagentSegment
           id={id}
           cardId={segment.id}
+          toolImageResults={segment.toolImageResults}
           name={segment.name}
           agentType={segment.agentType}
           task={segment.task}

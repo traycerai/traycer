@@ -23,6 +23,8 @@ import {
 } from "@/components/chat/segments/subagent-display";
 import { importedChatMarkerLabel } from "@/components/chat/segments/imported-chat-marker-display";
 import { autoJudgeUnattendedDenialText } from "@/components/chat/segments/auto-judge-unattended-denial-display";
+import { genericToolImageCaption } from "@/components/chat/segments/image-result-presentation";
+import type { ImageGenerationResult } from "@traycer/protocol/persistence/epic/content-blocks";
 import { singleSpecialSegment } from "@/components/chat/chat-special-segment";
 import { parseTraycerNextStepsMarkdown } from "@/markdown/traycer-next-steps";
 import { composerDisplayPlainText } from "@/lib/composer/composer-clipboard";
@@ -148,6 +150,10 @@ export function chatFindSegmentUnitId(segmentId: string): string {
   return `segment:${segmentId}`;
 }
 
+export function chatFindToolImageGalleryUnitId(segmentId: string): string {
+  return `tool:${segmentId}:image-gallery`;
+}
+
 export function chatFindActivityGroupSummaryUnitId(groupId: string): string {
   return `activity-group:${groupId}:summary`;
 }
@@ -224,6 +230,7 @@ export function buildSubagentChatFindRows(
                 text: markdownToChatSearchText(shownResult),
                 owningChain: [],
               }),
+          toolImageGallerySearchUnit(card.id, card.toolImageResults, []),
         ]),
       ],
     },
@@ -450,6 +457,9 @@ function activityGroupChildSearchUnits(
       text: activityGroupChildHeaderSearchText(segment).join("\n"),
       owningChain: groupChain,
     }),
+    segment.kind === "tool"
+      ? genericToolImageGallerySearchUnit(segment, groupChain)
+      : null,
   ]);
 }
 
@@ -504,6 +514,16 @@ function segmentSearchUnits(
       }),
     ]);
   }
+  if (segment.kind === "tool") {
+    return compactUnits([
+      chatFindUnit({
+        unitId: chatFindSegmentUnitId(segment.id),
+        text: toolSegmentSearchText(segment).join("\n"),
+        owningChain: parentChain,
+      }),
+      genericToolImageGallerySearchUnit(segment, parentChain),
+    ]);
+  }
 
   return compactUnits([
     chatFindUnit({
@@ -512,6 +532,42 @@ function segmentSearchUnits(
       owningChain: parentChain,
     }),
   ]);
+}
+
+function genericToolImageGallerySearchUnit(
+  segment: ToolSegment,
+  owningChain: ReadonlyArray<ChatCollapsibleKey>,
+): ChatFindUnit | null {
+  if (
+    segment.imageResults.length === 0 ||
+    segment.toolName === "image_generation" ||
+    segment.agentMessageSend !== null ||
+    segment.managedCommand !== null ||
+    segment.artifact !== null ||
+    isMcpAppToolCall(segment)
+  ) {
+    return null;
+  }
+  return toolImageGallerySearchUnit(
+    segment.id,
+    segment.imageResults,
+    owningChain,
+  );
+}
+
+function toolImageGallerySearchUnit(
+  segmentId: string,
+  imageResults: ReadonlyArray<ImageGenerationResult>,
+  owningChain: ReadonlyArray<ChatCollapsibleKey>,
+): ChatFindUnit | null {
+  if (imageResults.length === 0) return null;
+  return chatFindUnit({
+    unitId: chatFindToolImageGalleryUnitId(segmentId),
+    text: imageResults
+      .map((result, index) => genericToolImageCaption(result, index))
+      .join("\n"),
+    owningChain,
+  });
 }
 
 function interviewSearchUnits(
@@ -854,6 +910,11 @@ function subagentSegmentSearchUnits(
             text: markdownToChatSearchText(shownResult),
             owningChain: bodyChain,
           }),
+      toolImageGallerySearchUnit(
+        segment.id,
+        segment.toolImageResults,
+        parentChain,
+      ),
     ]),
   ];
 }

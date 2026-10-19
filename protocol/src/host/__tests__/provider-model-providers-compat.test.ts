@@ -1757,10 +1757,10 @@ describe("attempt lifecycle is encodable end to end", () => {
   });
 
   it("keeps every other code out of the shared native vocabulary", () => {
-    // Not a style preference: `providerNativeErrorCodeSchema` rides RELEASED
-    // carriers, so it cannot be widened, and its other members describe
-    // config-file EDITS. A model-provider code leaking into it (or vice versa)
-    // would mean one of the two enums grew where it must not.
+    // Not a style preference: the live native vocabulary is distinct from
+    // model-provider failures, and released native carriers bind their frozen
+    // preimage. A model-provider code leaking into this enum (or vice versa)
+    // would widen the wrong surface.
     const ours = [
       ...modelProviderListErrorCodeSchema.options,
       ...modelProviderAuthErrorCodeSchema.options,
@@ -1850,7 +1850,9 @@ describe("the v7.0 capability freeze around the model-provider surface", () => {
   const PAIRS = [
     [
       "plugins capabilities",
-      providerPluginsCapabilitiesSchema,
+      providerPluginsCapabilitiesSchema.omit({
+        openChatsApplyNextMessage: true,
+      }),
       providerPluginsCapabilitiesSchemaV70,
     ],
     [

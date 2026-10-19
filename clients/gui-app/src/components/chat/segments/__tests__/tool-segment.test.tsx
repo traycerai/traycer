@@ -412,6 +412,57 @@ describe("<ToolSegment /> A2A send-message rendering", () => {
     expect(screen.queryByText("Sent message")).toBeNull();
   });
 
+  it("keeps an A2A send on its own card even when the call carries image results", () => {
+    const { container } = render(
+      <ToolSegment
+        headerFindUnitId={null}
+        id="a2a-send-images"
+        toolName="traycer_a2a/traycer_send_message"
+        {...inputProps("traycer_a2a/traycer_send_message", {
+          toAgentId: "agent-receiver-1",
+          message: "Please inspect the failing test.",
+          responseId: "response-1",
+          expectReply: false,
+        })}
+        imageResults={[
+          {
+            attachmentHash: "hash-a2a",
+            mediaType: "image/png",
+            byteLength: 256,
+            width: null,
+            height: null,
+            alt: "stray image",
+            revisedPrompt: null,
+            filePath: null,
+          },
+        ]}
+        error={null}
+        agentMessageSend={{
+          receiverAgentId: "agent-receiver-1",
+          message: "Please inspect the failing test.",
+          responseId: "response-1",
+          expectReply: false,
+        }}
+        managedCommand={null}
+        agentMessageReceipt={null}
+        isStreaming={false}
+        endState={null}
+        stopped={false}
+        progress={null}
+        backgroundOutput={null}
+        backgroundTask={false}
+        startedAt={0}
+        durationMs={null}
+        variant="card"
+      />,
+    );
+
+    expect(screen.getByText("Sent message")).toBeTruthy();
+    expect(screen.getByText("Receiver Agent")).toBeTruthy();
+    expect(container.querySelector("figure")).toBeNull();
+    expect(screen.queryByText("stray image")).toBeNull();
+  });
+
   it("opens optimistic chat receivers with the active host fallback", () => {
     render(
       <ToolSegment

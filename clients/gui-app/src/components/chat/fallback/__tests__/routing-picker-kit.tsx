@@ -226,6 +226,38 @@ const CODEX_MODELS: ReadonlyArray<ModelOption> = [
   }),
 ];
 
+export const CURSOR_HARNESS: HarnessOption = {
+  ...CLAUDE_HARNESS,
+  id: "cursor",
+  label: "Cursor",
+  modes: ["gui"],
+};
+
+// The Max Mode fixture, Cursor only (the label is gated on the harness). It
+// offers Fast and the catalog lists it Max-only ONLY with Fast on, so the
+// routing chooser's pre-send label is decided by the tuple Switch would send
+// (the inherited Fast tier). Surfaced only when `kit.withCursor` is set, so no
+// other suite's rail, tabs or rows change.
+const CURSOR_MODELS: ReadonlyArray<ModelOption> = [
+  model({
+    harnessId: "cursor",
+    slug: "cursor-max",
+    label: "Cursor Max",
+    defaultServiceTier: "standard",
+    supportedServiceTiers: [
+      { id: "standard", label: "Standard", description: null },
+      { id: "fast", label: "Fast", description: null },
+    ],
+    metadata: {
+      maxMode: {
+        chat: [{ reasoningEffort: null, fast: true }],
+        judge: [],
+        fastServiceTierId: "fast",
+      },
+    },
+  }),
+];
+
 interface CatalogCall {
   readonly hook: "harnesses" | "models" | "catalog";
   readonly clientId: string | null;
@@ -233,6 +265,10 @@ interface CatalogCall {
 }
 
 export const kit = {
+  // Adds the Cursor harness and its Max Mode model to the catalog.
+  withCursor: false,
+  // Every read returns fresh arrays (and fresh catalog entries) each call.
+  unstableCatalog: false,
   // Every `client` a host-backed read was handed, and whether it was enabled.
   catalogCalls: [] as CatalogCall[],
   fallbackCatalogueCalls: [] as Array<{
@@ -288,6 +324,8 @@ export const kit = {
 };
 
 export function resetKit(): void {
+  kit.withCursor = false;
+  kit.unstableCatalog = false;
   kit.catalogCalls = [];
   kit.fallbackCatalogueCalls = [];
   kit.modelRequests = [];
@@ -433,19 +471,36 @@ export function hostClientModule() {
 
 /** `@/hooks/harnesses/use-gui-harness-catalog`. */
 function modelsOf(harnessId: string): ReadonlyArray<ModelOption> {
-  return harnessId === "claude" ? CLAUDE_MODELS : CODEX_MODELS;
+  if (harnessId === "claude") return CLAUDE_MODELS;
+  if (harnessId === "cursor") return CURSOR_MODELS;
+  return CODEX_MODELS;
 }
 
 export function catalogModule() {
-  const catalog = [
-    { ...CLAUDE_HARNESS, models: CLAUDE_MODELS },
-    { ...CODEX_HARNESS, models: CODEX_MODELS },
-  ].map((entry) => ({
-    ...entry,
-    modelsLoading: false,
-    modelsError: null,
-  }));
-  const harnesses = [CLAUDE_HARNESS, CODEX_HARNESS];
+  const build = (withCursor: boolean) => {
+    const harnesses = withCursor
+      ? [CLAUDE_HARNESS, CODEX_HARNESS, CURSOR_HARNESS]
+      : [CLAUDE_HARNESS, CODEX_HARNESS];
+    return {
+      harnesses,
+      catalog: harnesses.map((entry) => ({
+        ...entry,
+        models: modelsOf(entry.id),
+        modelsLoading: false,
+        modelsError: null,
+      })),
+    };
+  };
+  // Referentially stable per variant, like react-query's structural sharing:
+  // a fresh array per render would feed the catalog sync effect a new input on
+  // every render. `kit.unstableCatalog` opts into exactly that, on purpose.
+  const STABLE = { plain: build(false), cursor: build(true) };
+  const current = () => {
+    if (kit.unstableCatalog) return build(kit.withCursor);
+    return kit.withCursor ? STABLE.cursor : STABLE.plain;
+  };
+  const harnessesNow = () => current().harnesses;
+  const catalogNow = () => current().catalog;
   return {
     harnessCatalogEntryNeedsRefresh: () => true,
     useGuiHarnessesQueryForClient: (
@@ -458,7 +513,10 @@ export function catalogModule() {
         enabled: activity.enabled,
       });
       return {
-        data: activity.enabled && client !== null ? { harnesses } : undefined,
+        data:
+          activity.enabled && client !== null
+            ? { harnesses: harnessesNow() }
+            : undefined,
         isPending: false,
         isError: false,
         error: null,
@@ -510,7 +568,7 @@ export function catalogModule() {
         enabled: activity.enabled,
       });
       return {
-        harnesses: activity.enabled && client !== null ? catalog : [],
+        harnesses: activity.enabled && client !== null ? catalogNow() : [],
         harnessesLoading: false,
         harnessesError: null,
         modelsLoading: false,

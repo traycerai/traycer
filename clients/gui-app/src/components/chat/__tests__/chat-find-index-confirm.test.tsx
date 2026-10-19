@@ -2218,6 +2218,7 @@ const SUBAGENT_NESTED_TOOL_MODEL: ChatMessageModel = assistantSegmentsRow({
       spawnToolCallId: null,
       parentId: null,
       workflowMeta: null,
+      toolImageResults: [],
       children: [
         {
           id: "nested-tool-1",

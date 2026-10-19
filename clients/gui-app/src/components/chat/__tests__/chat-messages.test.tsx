@@ -2868,6 +2868,7 @@ describe("ChatMessages scroll policy", () => {
             spawnToolCallId: null,
             parentId: null,
             workflowMeta: null,
+            toolImageResults: [],
             children: [
               {
                 id: "drill-text",

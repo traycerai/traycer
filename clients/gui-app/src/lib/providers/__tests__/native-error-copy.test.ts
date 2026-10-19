@@ -17,6 +17,21 @@ describe("nativeErrorMessage", () => {
       "This action is not supported for the selected scope.",
     );
   });
+
+  it("has fallback copy for the Kilo row-refusal codes", () => {
+    expect(nativeErrorMessage("server_not_found", null)).toBe(
+      "This server is no longer in this provider's configuration. Refresh the list.",
+    );
+    expect(nativeErrorMessage("change_shadowed", null)).toBe(
+      "Not changed: another settings file decides this.",
+    );
+  });
+
+  it("shows a host detail naming the deciding file verbatim", () => {
+    const detail =
+      "Not changed: opencode.jsonc decides this with the rule docs_*.";
+    expect(nativeErrorMessage("change_shadowed", `  ${detail} `)).toBe(detail);
+  });
 });
 
 // The MCP/plugins/skills panels render `error.message` directly, so the copy

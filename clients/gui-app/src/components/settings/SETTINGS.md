@@ -3051,6 +3051,10 @@ window`, recorded in the type as `coverage.browsersAreMountedOnly` -
     - **They cannot ride the list.** Icons are ~900 KB (~1.2 MB base64) for a
       typical Codex install - one 1024x1024 PNG is 451 KB - and
       `useProvidersPluginsList` runs `staleTime: 30_000`.
+      The plugins capability `openChatsApplyNextMessage` changes the post-write
+      hint only when the host advertises it. The hint says that open chats on
+      the changed plugin setup pick changes up with their next message and that
+      a restart ends background work. Other providers keep the restart hint.
     - **`poll: false` on the icon query is load-bearing.** `providers.list` is
       condition-polled and condition queries join the table-owned poll BY
       DEFAULT; `refetchInterval` also fires regardless of `staleTime`, so the
@@ -3788,7 +3792,9 @@ dialog.tsx` / `notification-hook-draft.ts`, unchanged by this pass).
       safety order in `PERMISSION_OPTIONS` stays separate and unchanged, as do
       compatibility fallbacks. The Auto row has the same label-and-description
       shape as its peers; reviewer/model/billing metadata is shown in Judge
-      settings, not the picker. Availability reasons and mid-turn notices stay.
+      settings, not the picker. For a provider judge whose effective choice is
+      listed as Max Mode only, the Auto row adds only `· Max Mode`, on desktop
+      and mobile. Availability reasons and mid-turn notices stay.
   - **Judge** (`judge-tab.tsx`, with `judge-tile-state.ts`,
     `use-judge-toolbar-store.ts`, `judge-model-face.tsx` and
     `judge-status-lines.tsx`) - **Auto mode judge**: which model checks each
@@ -3847,6 +3853,12 @@ dialog.tsx` / `notification-hook-draft.ts`, unchanged by this pass).
       Fast footer (`withServiceTier` off). It is the composer's picker in
       behaviour: a click on a provider, an account or a model saves at once
       and keeps the panel open, and only an outside click or Esc closes it.
+      Its Max Mode badge reads the judge choice without a Fast parameter;
+      the same model can have a different badge in the chat picker. It uses
+      the store's effective effort (stored when offered, otherwise the lowest)
+      when `autoJudge.get` can run one,
+      even if the independent `autoJudge.set` line cannot save an effort and
+      hides the footer. Below the `get` effort line it makes no effort claim.
       The rail commits only a provider that can run here. One that cannot
       shows its sign-in or install steps and saves nothing.
       - **Its effort footer is the judge's Effort control** (`withReasoning`
@@ -4377,11 +4389,14 @@ min`): "The judge didn't finish in time, so it's asking you instead."
     scoped host, a remote host with a borrowable session); any other row says
     nothing. Every other host picker passes `environmentLabelForHost={null}`
     and shows no label.
-    Binding to a TEAM asks first (a dialog): on a host the registry
-    (`useRegisteredHosts`) calls `personal` the copy says it will run the
-    team's bots and skills and stays the person's own; on a `sandbox` it says
-    the host becomes the team's; with no registry answer only the first
-    clause. Binding to the personal environment needs no confirmation. A host
+    A team's bots run only on the team's machines: only a host the registry
+    (`useRegisteredHosts`) calls `sandbox` is offered the team environments,
+    and binding it to one asks first (a dialog saying the host becomes the
+    team's). Any other host - a person's own machine, or one the registry has
+    not described - is offered only the personal environment (plus the one it
+    reports now, so the marked row is never hidden), with one line saying a
+    team's bots run on the team's machines. Binding to the personal
+    environment needs no confirmation. A host
     another member added to a team (`explicit && !canUnbind`) is shown with
     every option disabled and one sentence saying only that member can
     change it. Below the picker, `panels/environment-machines-list.tsx` lists

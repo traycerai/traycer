@@ -67,7 +67,8 @@ function listChangedDuringMutation(
 ): boolean {
   return (
     currentData?.servers !== snapshot.listData?.servers ||
-    currentData?.notices !== snapshot.listData?.notices
+    currentData?.notices !== snapshot.listData?.notices ||
+    currentData?.coverage !== snapshot.listData?.coverage
   );
 }
 
@@ -171,6 +172,9 @@ export function useProvidersMcpMutate(): UseMutationResult<
       }
       if (
         fetchStatus === "fetching" ||
+        data.coverage?.sources.some(
+          (source) => source.outcome === "unrefreshed",
+        ) === true ||
         listChangedDuringMutation(currentData, snapshot) ||
         listQuery !== snapshot.listQuery ||
         mutationCompletionRevision !== snapshot.mutationCompletionRevision
@@ -181,7 +185,22 @@ export function useProvidersMcpMutate(): UseMutationResult<
         void queryClient.invalidateQueries({ queryKey: listKey, exact: true });
       }
     },
-    onError: (error, variables) => {
+    onError: (error, variables, ctx) => {
+      if (
+        isProviderNativeRpcError(error) &&
+        error.nativeCode === "server_not_found" &&
+        ctx !== undefined &&
+        ctx.hostId !== null
+      ) {
+        void queryClient.invalidateQueries({
+          queryKey: providersNativeQueryKeys.mcpList(ctx.hostId, {
+            providerId: variables.providerId,
+            scope: variables.scope,
+            workspaceRoot: variables.workspaceRoot,
+          }),
+          exact: true,
+        });
+      }
       if (variables.suppressToast === true && isProviderNativeRpcError(error)) {
         return;
       }

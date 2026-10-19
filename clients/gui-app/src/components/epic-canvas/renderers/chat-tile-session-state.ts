@@ -630,6 +630,7 @@ export function chatMessageEditingForInlineEdit(input: {
       input.editSettings !== null &&
       inlineEditHasDraftContent(editing),
     slashProviderId: input.editSettings?.harnessId ?? DEFAULT_SLASH_PROVIDER_ID,
+    slashProfileId: input.editSettings?.profileId ?? null,
     mentionRoots: input.mentionRoots,
     fallbackToGlobalMentionRoots: input.fallbackToGlobalMentionRoots,
     currentEpicId: input.currentEpicId,

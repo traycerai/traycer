@@ -42,6 +42,8 @@ const mocks = vi.hoisted(() => ({
     },
   },
   supportQueries: [] as Array<{ hostId: string | null; method: string }>,
+  useBotListChangedSubscriptionForHost:
+    vi.fn<(hostId: string, enabled: boolean) => void>(),
   state: {
     snapshot: null as BotSubscriptionSnapshot | null,
     deleted: false,
@@ -102,6 +104,10 @@ vi.mock("@/hooks/bots/use-bot-list-query", () => ({
         ? undefined
         : { bots: mocks.state.listedBotIds.map((botId) => ({ botId })) },
   }),
+}));
+vi.mock("@/hooks/bots/use-bot-list-changed-subscription", () => ({
+  useBotListChangedSubscriptionForHost: (hostId: string, enabled: boolean) =>
+    mocks.useBotListChangedSubscriptionForHost(hostId, enabled),
 }));
 vi.mock("@/hooks/bots/use-environment-list-query", () => ({
   useEnvironmentListQuery: () => ({
@@ -607,6 +613,15 @@ describe("<BotTabSurface /> tab lifetime", () => {
     render(surface());
 
     expect(lookupBotTab(useBotTabsStore.getState().tabs, BOT_ID)).toBeNull();
+  });
+
+  it("keeps bot.list current through the change stream on the tab's own host", () => {
+    render(surface());
+
+    expect(mocks.useBotListChangedSubscriptionForHost).toHaveBeenLastCalledWith(
+      TAB_HOST,
+      true,
+    );
   });
 });
 

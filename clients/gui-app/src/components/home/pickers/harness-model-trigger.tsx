@@ -33,6 +33,7 @@ interface HarnessModelTriggerProps extends Omit<
   reasoningIndicator: ModelStyle;
   serviceTierLabel: string | null;
   serviceTierActive: boolean;
+  maxModeRequired?: boolean;
   profileLabel: string | null;
   /** Bottom-right corner dot on the harness icon (`AccentDot`).
    *  `null` unless the provider has multiple profiles and the selection's
@@ -52,6 +53,29 @@ interface HarnessModelTriggerProps extends Omit<
   ref?: Ref<HTMLButtonElement>;
 }
 
+function triggerSummary(input: {
+  readonly label: string;
+  readonly reasoningLabel: string | null;
+  readonly serviceTierLabel: string | null;
+  readonly serviceTierActive: boolean;
+  readonly maxModeRequired: boolean | undefined;
+  readonly profileLabel: string | null;
+}): string {
+  const serviceTierSummary =
+    input.serviceTierLabel === null || !input.serviceTierActive
+      ? null
+      : `${input.serviceTierLabel} on`;
+  return [
+    input.label,
+    input.reasoningLabel === null ? null : `Thinking ${input.reasoningLabel}`,
+    serviceTierSummary,
+    input.maxModeRequired ? "Max Mode" : null,
+    input.profileLabel,
+  ]
+    .filter((part): part is string => part !== null)
+    .join(", ");
+}
+
 export function HarnessModelTrigger(props: HarnessModelTriggerProps) {
   const {
     selection,
@@ -61,6 +85,7 @@ export function HarnessModelTrigger(props: HarnessModelTriggerProps) {
     reasoningIndicator,
     serviceTierLabel,
     serviceTierActive,
+    maxModeRequired,
     profileLabel,
     profileAccentDot,
     isLoading,
@@ -80,18 +105,14 @@ export function HarnessModelTrigger(props: HarnessModelTriggerProps) {
     reasoningLabel,
     reasoningStep,
   );
-  const serviceTierSummary =
-    serviceTierLabel === null || !serviceTierActive
-      ? null
-      : `${serviceTierLabel} on`;
-  const summary = [
+  const summary = triggerSummary({
     label,
-    reasoningLabel === null ? null : `Thinking ${reasoningLabel}`,
-    serviceTierSummary,
+    reasoningLabel,
+    serviceTierLabel,
+    serviceTierActive,
+    maxModeRequired,
     profileLabel,
-  ]
-    .filter((part): part is string => part !== null)
-    .join(", ");
+  });
 
   return (
     <ToolbarPillButton
@@ -119,6 +140,16 @@ export function HarnessModelTrigger(props: HarnessModelTriggerProps) {
           strokeWidth={2}
         />
       )}
+      {maxModeRequired ? (
+        <span
+          className={cn(
+            "shrink-0 rounded border border-foreground/30 px-1 text-ui-xs",
+            narrowHidden,
+          )}
+        >
+          Max
+        </span>
+      ) : null}
       <span className="relative shrink-0">
         {isLoading ? (
           <MutedAgentSpinner />

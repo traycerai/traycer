@@ -133,6 +133,10 @@ export function buildHomeBotRow(
  *   machine of the bot's environment (another member's machine, whose
  *   reachability this account cannot observe - the tab's `bot.open` answers
  *   the same).
+ * - a TEAM bot whose bound host is one of the reader's own personal
+ *   machines: a team's bots run only on the team's machines, so a binding to
+ *   a laptop (made before that rule) runs nothing - the tab's `bot.open` on
+ *   a team machine takes the bot back, and on a personal one pauses it.
  * A machine of the environment the reader cannot dial (a team machine
  * another member added) has unknown reachability here; the row says idle
  * and opening the tab decides. So does an environment whose machine list
@@ -156,10 +160,38 @@ export function homeBotState(input: {
    * own (empty for a personal environment, which has none), or null while a
    * team environment's list has not answered. */
   readonly environmentHostIds: ReadonlySet<string> | null;
+  /** The bot's environment's owner kind; `null` when the environment is not
+   * listed (the reader left it). */
+  readonly environmentOwnerKind: EnvironmentDescriptor["ownerKind"] | null;
+  /** The reader's own hosts the registry calls `personal`, or null while
+   * the registry has not answered. */
+  readonly personalHostIds: ReadonlySet<string> | null;
 }): HomeBotState {
   const { boundHostId } = input;
   if (boundHostId === null) return "paused";
+  const team = input.environmentOwnerKind === "organization";
+  if (team && input.personalHostIds?.has(boundHostId) === true) {
+    return "paused";
+  }
+  const reach = reachabilityState(input, boundHostId);
+  // Until the registry answers, a team bot's host may be a personal machine,
+  // which runs no team bot: working is not known, though a host proven
+  // unreachable is paused whatever its kind.
+  if (team && input.personalHostIds === null) return reach;
   if (input.working) return "working";
+  return reach;
+}
+
+/** Paused when the answered lists prove the bound host away; idle otherwise. */
+function reachabilityState(
+  input: {
+    readonly directoryHostIds: ReadonlySet<string>;
+    readonly connectableHostIds: ReadonlySet<string>;
+    readonly connectableResolved: boolean;
+    readonly environmentHostIds: ReadonlySet<string> | null;
+  },
+  boundHostId: string,
+): "idle" | "paused" {
   if (!input.connectableResolved) return "idle";
   if (input.directoryHostIds.has(boundHostId)) {
     return input.connectableHostIds.has(boundHostId) ? "idle" : "paused";

@@ -54,6 +54,7 @@ export interface ChatMessageEditing {
   readonly pending: boolean;
   readonly canSubmit: boolean;
   readonly slashProviderId: GuiHarnessId;
+  readonly slashProfileId: string | null;
   readonly mentionRoots: ReadonlyArray<string>;
   readonly fallbackToGlobalMentionRoots: boolean;
   readonly currentEpicId: string | null;

@@ -190,6 +190,7 @@ function TerminalLaunchPanelImpl(props: TerminalLaunchPanelProps) {
           aria-hidden
         />
         <HarnessModelPicker
+          maxModeContext={{ kind: "none" }}
           labelDisplay="responsive"
           store={store}
           withServiceTier={false}

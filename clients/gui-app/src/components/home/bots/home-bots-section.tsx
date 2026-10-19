@@ -8,8 +8,10 @@ import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
 import { BotsUnavailableNotice } from "@/components/bots/bots-unavailable-notice";
 import { useHostDirectoryList } from "@/hooks/host/use-host-directory-list-query";
 import { useConnectableHostIds } from "@/hooks/host/use-connectable-host-ids";
+import { useRegisteredHosts } from "@/hooks/auth/use-registered-hosts-query";
 import { useEnvironmentListQuery } from "@/hooks/bots/use-environment-list-query";
 import { useBotListQuery } from "@/hooks/bots/use-bot-list-query";
+import { useBotListChangedSubscriptionForApp } from "@/hooks/bots/use-bot-list-changed-subscription";
 import { useHostEnvironmentBindings } from "@/hooks/bots/use-host-environment-bindings-query";
 import { useEnvironmentHostLists } from "@/hooks/bots/use-environment-host-lists-query";
 import {
@@ -43,12 +45,18 @@ export function HomeBotsSection(): ReactNode {
   const enabled = support === true;
   const environments = useEnvironmentListQuery(client, enabled);
   const bots = useBotListQuery(client, enabled);
+  // A teammate's change to the list refetches it without waiting for focus.
+  useBotListChangedSubscriptionForApp(enabled);
   const directory = useHostDirectoryList();
   const connectable = useConnectableHostIds();
   const bindings = useHostEnvironmentBindings(connectable.hostIds, enabled);
   const hostListSupport = useHostMethodSupport(hostId, "environment.host.list");
   const headingId = useId();
 
+  const registeredHosts = useRegisteredHosts();
+  // `undefined` while loading or failed with nothing kept, `null` with no
+  // signed-in registry: neither is an answer.
+  const registry = registeredHosts.data ?? null;
   const hostReach = useMemo(
     () => ({
       directoryHostIds: new Set(
@@ -56,8 +64,18 @@ export function HomeBotsSection(): ReactNode {
       ),
       connectableHostIds: new Set(connectable.hostIds),
       connectableResolved: connectable.resolved,
+      // An unanswered registry is not "no personal hosts": the rows read
+      // it as not known yet.
+      personalHostIds:
+        registry === null
+          ? null
+          : new Set(
+              registry.hosts
+                .filter((host) => host.kind === "personal")
+                .map((host) => host.hostId),
+            ),
     }),
-    [connectable.hostIds, connectable.resolved, directory.data],
+    [connectable.hostIds, connectable.resolved, directory.data, registry],
   );
   const environmentList = environments.data?.environments ?? EMPTY_ENVIRONMENTS;
   // A team environment's machines the reader may see beyond their own (its

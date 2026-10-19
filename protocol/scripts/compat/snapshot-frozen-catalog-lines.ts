@@ -56,6 +56,8 @@ import {
   providersListResponseSchema,
   providersListResponseSchemaV100Preimage,
   providersListResponseSchemaV101Preimage,
+  providersListResponseSchemaV102Preimage,
+  providersListResponseSchemaV103Preimage,
   providersUsePackVersionResponseSchemaV10,
   providersUsePackVersionResponseSchema,
   providersListResponseSchemaV70,
@@ -211,7 +213,10 @@ const FIXTURES = {
   // head, open the next one.
   "providers.list@10.0": dump(providersListResponseSchemaV100Preimage),
   "providers.list@10.1": dump(providersListResponseSchemaV101Preimage),
-  "providers.list@10.2": dump(providersListResponseSchema),
+  "providers.list@10.2": dump(providersListResponseSchemaV102Preimage),
+  // Kilo's published 10.3 remains frozen at its original MCP result/error shape.
+  "providers.list@10.3": dump(providersListResponseSchemaV103Preimage),
+  "providers.list@10.4": dump(providersListResponseSchema),
   "providers.usePackVersion@1.0": dump(providersUsePackVersionResponseSchemaV10),
   "providers.usePackVersion@1.1": dump(providersUsePackVersionResponseSchema),
   // The REQUEST lines carry their own freeze history (`native` grew the

@@ -35,6 +35,8 @@ import {
   providersListResponseSchema,
   providersListResponseSchemaV100Preimage,
   providersListResponseSchemaV101Preimage,
+  providersListResponseSchemaV102Preimage,
+  providersListResponseSchemaV103Preimage,
   providersUsePackVersionResponseSchema,
   providersUsePackVersionResponseSchemaV10,
   providersListResponseSchemaV70,
@@ -265,9 +267,13 @@ const LIVE_FROZEN_EXPORTS = {
   // shape, so a released 10.1 reader never sees a key it cannot spell. Its dump
   // did not change by the freeze.
   "providers.list@10.1": providersListResponseSchemaV101Preimage,
-  // The head line: it names the LIVE schema, so the next growth of the provider
-  // state fails here first.
-  "providers.list@10.2": providersListResponseSchema,
+  // 10.2 froze when MCP origin, coverage and decidedBy opened 10.3: its MCP rows
+  // are the pre-field shape. Its dump did not change by the freeze.
+  "providers.list@10.2": providersListResponseSchemaV102Preimage,
+  // Kilo's published 10.3 retains its MCP result and error values.
+  "providers.list@10.3": providersListResponseSchemaV103Preimage,
+  // Claude's optional open-chat capability opens the live 10.4 line.
+  "providers.list@10.4": providersListResponseSchema,
   // 1.0 is hand-frozen at the three-code failure arm when `macos-ineligible`
   // opened 1.1; its dump did not change by the freeze.
   "providers.usePackVersion@1.0": providersUsePackVersionResponseSchemaV10,

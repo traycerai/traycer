@@ -1085,6 +1085,7 @@ const FULL_TABS: ProviderNativeCapabilities = {
       setEnabled: [...BOTH_SCOPES],
     },
     traycerSessionToolsNotice: false,
+    openChatsApplyNextMessage: false,
   },
   skills: {
     actionScopes: {
@@ -1115,6 +1116,7 @@ const CURSOR_TABS: ProviderNativeCapabilities = {
       setEnabled: [],
     },
     traycerSessionToolsNotice: false,
+    openChatsApplyNextMessage: false,
   },
   skills: {
     actionScopes: {
@@ -2093,6 +2095,7 @@ describe("<ProvidersSettingsPanel />", () => {
                 setEnabled: [],
               },
               traycerSessionToolsNotice: true,
+              openChatsApplyNextMessage: false,
             },
             skills: null,
             modelProviders: null,

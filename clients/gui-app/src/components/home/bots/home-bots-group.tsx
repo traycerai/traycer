@@ -86,6 +86,7 @@ export function HomeBotsGroupCard(props: {
                 bot={bot}
                 hostReach={hostReach}
                 environmentHostIds={environmentHostIds}
+                environmentOwnerKind={group.ownerKind}
               />
             </li>
           ))}

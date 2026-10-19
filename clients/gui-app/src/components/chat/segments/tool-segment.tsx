@@ -56,6 +56,7 @@ import { ManagedCommandStartSegment } from "./managed-command-start-segment";
 import { isTraycerBrowserReplToolName } from "@traycer/protocol/host/agent/gui/browser-tools";
 import { McpAppRow } from "./mcp-app-row";
 import { ArtifactRow } from "./artifact-row";
+import { ToolImageGallery } from "./tool-image-gallery";
 
 interface ToolSegmentProps {
   id: string;
@@ -387,6 +388,11 @@ function GenericToolSegment(props: ToolSegmentProps) {
     progress,
     stackedHeader,
   });
+  const imageGallery = genericToolImageGallery(
+    props.id,
+    toolName,
+    props.imageResults,
+  );
 
   const header = (
     <GenericToolHeader
@@ -436,7 +442,7 @@ function GenericToolSegment(props: ToolSegmentProps) {
         headerFindUnitId={props.headerFindUnitId}
         bodyFindUnitId={null}
         className={undefined}
-        footer={streamingFooter}
+        footer={renderToolFooter(streamingFooter, imageGallery)}
       />
     );
   }
@@ -446,8 +452,8 @@ function GenericToolSegment(props: ToolSegmentProps) {
       onOpenChange={setOpen}
       header={header}
       headerAction={null}
-      collapsedPreview={null}
-      body={body}
+      collapsedPreview={imageGallery}
+      body={renderToolCardBody(body, imageGallery)}
       tone={toolCardTone(hasError, isStreaming)}
       headerPosition="normal"
       bodyOverflow="hidden"
@@ -456,6 +462,41 @@ function GenericToolSegment(props: ToolSegmentProps) {
       bodyFindUnitId={null}
       className={undefined}
     />
+  );
+}
+
+function genericToolImageGallery(
+  id: string,
+  toolName: string,
+  imageResults: ReadonlyArray<ImageGenerationResult>,
+): ReactNode {
+  if (toolName === "image_generation" || imageResults.length === 0) return null;
+  return <ToolImageGallery id={id} imageResults={imageResults} />;
+}
+
+function renderToolFooter(
+  streamingFooter: ReactNode,
+  imageGallery: ReactNode,
+): ReactNode {
+  if (streamingFooter === null && imageGallery === null) return null;
+  return (
+    <div className="flex flex-col gap-2">
+      {streamingFooter}
+      {imageGallery}
+    </div>
+  );
+}
+
+function renderToolCardBody(
+  body: ReactNode,
+  imageGallery: ReactNode,
+): ReactNode {
+  if (imageGallery === null) return body;
+  return (
+    <div className="flex flex-col gap-2">
+      {body}
+      {imageGallery}
+    </div>
   );
 }
 

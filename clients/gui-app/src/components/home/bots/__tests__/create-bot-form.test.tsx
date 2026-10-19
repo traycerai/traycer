@@ -7,7 +7,7 @@
  * toolbar store, so the model the form submits is the production store's.
  */
 import { StrictMode, useState } from "react";
-import { cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, render, screen } from "@testing-library/react";
 import userEvent, { type UserEvent } from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BotCreateResponse } from "@traycer/protocol/host/bot/schemas";
@@ -17,6 +17,11 @@ import type {
 } from "@traycer/protocol/host/environment/contracts";
 import type { ComposerToolbarStore } from "@/stores/composer/composer-toolbar-store";
 import type { HostEnvironmentBindings } from "@/hooks/bots/use-host-environment-bindings-query";
+import type { ModelOption } from "@/components/home/data/landing-options";
+import {
+  maxModeListedFor,
+  type MaxModeContext,
+} from "@/components/home/data/model-max-mode";
 
 const mocks = vi.hoisted(() => ({
   navigate: vi.fn(),
@@ -31,6 +36,11 @@ const mocks = vi.hoisted(() => ({
     method: string;
   }>,
   pickerDisabled: [] as boolean[],
+  pickerContexts: [] as MaxModeContext[],
+  stores: [] as ComposerToolbarStore[],
+  initialModelSlug: "model-a" as string,
+  initialHarnessId: "claude" as "claude" | "cursor",
+  initialReasoning: "" as string,
   state: {
     localHostId: null as string | null,
     effectiveHostId: null as string | null,
@@ -76,8 +86,12 @@ vi.mock("@/hooks/bots/use-bot-mutations", () => ({
   },
 }));
 vi.mock("@/components/home/pickers/harness-model-picker", () => ({
-  HarnessModelPicker: (props: { disabled: boolean }) => {
+  HarnessModelPicker: (props: {
+    disabled: boolean;
+    maxModeContext: MaxModeContext;
+  }) => {
     mocks.pickerDisabled.push(props.disabled);
+    mocks.pickerContexts.push(props.maxModeContext);
     return <div data-testid="stub-harness-model-picker" />;
   },
 }));
@@ -94,11 +108,11 @@ vi.mock("@/components/home/hooks/use-composer-toolbar-store", async () => {
           values: {
             permission: "supervised",
             selection: {
-              harnessId: "claude",
-              modelSlug: "model-a",
+              harnessId: mocks.initialHarnessId,
+              modelSlug: mocks.initialModelSlug,
               profileId: null,
             },
-            reasoning: "",
+            reasoning: mocks.initialReasoning,
             serviceTier: "",
           },
           onSettingsChange: null,
@@ -107,6 +121,7 @@ vi.mock("@/components/home/hooks/use-composer-toolbar-store", async () => {
           hostId: "host-1",
         }),
       );
+      mocks.stores.push(store);
       return store;
     },
   };
@@ -203,6 +218,11 @@ beforeEach(() => {
   mocks.clientRequests.length = 0;
   mocks.advertisingQueries.length = 0;
   mocks.pickerDisabled.length = 0;
+  mocks.pickerContexts.length = 0;
+  mocks.stores.length = 0;
+  mocks.initialHarnessId = "claude";
+  mocks.initialModelSlug = "model-a";
+  mocks.initialReasoning = "";
   mocks.state.localHostId = LOCAL;
   mocks.state.effectiveHostId = EFFECTIVE;
   mocks.state.creatingHostIds = new Set([LOCAL, EFFECTIVE, OTHER]);
@@ -420,5 +440,96 @@ describe("<CreateBotForm /> create goes to the chosen host", () => {
     await user.type(screen.getByTestId("create-bot-title"), "   ");
 
     expect(submitButton().disabled).toBe(true);
+  });
+});
+
+function cursorMaxRow(
+  chat: ReadonlyArray<{ reasoningEffort: string | null; fast: boolean }>,
+): ModelOption {
+  return {
+    harnessId: "cursor",
+    slug: "cursor-max",
+    label: "Cursor Max",
+    description: null,
+    contextWindow: null,
+    maxOutputTokens: null,
+    defaultReasoningEffort: null,
+    supportedReasoningEfforts: ["low", "high"].map((id) => ({
+      id,
+      label: id,
+      description: null,
+    })),
+    defaultServiceTier: null,
+    supportedServiceTiers: [],
+    deprecationNotice: null,
+    metadata: { maxMode: { chat, judge: [], fastServiceTierId: "fast" } },
+  };
+}
+
+function lastMaxModeContext(): MaxModeContext {
+  const context = mocks.pickerContexts.at(-1);
+  if (context === undefined) throw new Error("the picker never rendered");
+  return context;
+}
+
+describe("<CreateBotForm /> Max Mode label", () => {
+  beforeEach(() => {
+    mocks.initialHarnessId = "cursor";
+    mocks.initialModelSlug = "cursor-max";
+    mocks.initialReasoning = "high";
+  });
+
+  it("uses the effort the bot sends with Fast off", () => {
+    mountForm(TEAM_WITH_LOCAL);
+    expect(lastMaxModeContext()).toEqual({
+      kind: "chat",
+      tuple: { reasoningEffort: "high", serviceTier: null },
+    });
+  });
+
+  it("lists Max only for the selected effort with Fast off", () => {
+    mountForm(TEAM_WITH_LOCAL);
+    const context = lastMaxModeContext();
+    expect(
+      maxModeListedFor(
+        cursorMaxRow([{ reasoningEffort: "high", fast: false }]),
+        context,
+      ),
+    ).toBe(true);
+    expect(
+      maxModeListedFor(
+        cursorMaxRow([{ reasoningEffort: "low", fast: false }]),
+        context,
+      ),
+    ).toBe(false);
+    expect(
+      maxModeListedFor(
+        cursorMaxRow([{ reasoningEffort: "high", fast: true }]),
+        context,
+      ),
+    ).toBe(false);
+  });
+
+  it("does not re-render the form when only the catalog changes", () => {
+    mountForm(TEAM_WITH_LOCAL);
+    const apply = () =>
+      act(() => {
+        const store = mocks.stores.at(-1);
+        if (store === undefined) throw new Error("no toolbar store");
+        store.getState().setCatalog({
+          hostId: LOCAL,
+          chatLineCarriesAutoMode: null,
+          harnesses: undefined,
+          modelsHarnessId: "cursor",
+          models: [],
+          modelsLoaded: false,
+          tuiOnly: false,
+        });
+      });
+    apply();
+    const settled = mocks.pickerContexts.length;
+    apply();
+    apply();
+    expect(mocks.pickerContexts.length).toBe(settled);
   });
 });

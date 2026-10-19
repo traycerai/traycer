@@ -21,7 +21,7 @@ concurrency:
 
 jobs:
   sync-released-baseline:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       # Push the bot/sync-released-baseline branch.
       contents: write

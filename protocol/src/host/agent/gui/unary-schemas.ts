@@ -210,6 +210,20 @@ export type GuiAgentModelCapabilities = z.infer<
   typeof guiAgentModelCapabilitiesSchema
 >;
 
+// Narrow Cursor's Max Mode catalog metadata without changing the open
+// `guiAgentModelOptionSchema.metadata` wire field. Unknown fields are stripped
+// so an older GUI can still read the known selection keys from a newer host.
+export const guiAgentModelMaxModeSchema = lazySchema(() =>
+  z.object({
+    chat: z.array(
+      z.object({ reasoningEffort: z.string().nullable(), fast: z.boolean() }),
+    ),
+    judge: z.array(z.object({ reasoningEffort: z.string().nullable() })),
+    fastServiceTierId: z.string().nullable(),
+  }),
+);
+export type GuiAgentModelMaxMode = z.infer<typeof guiAgentModelMaxModeSchema>;
+
 export const guiAgentModelOptionSchema = lazySchema(() =>
   z.object({
     harnessId: guiHarnessIdSchema,
@@ -720,6 +734,13 @@ export const listGuiAgentCommandsRequestSchema = lazySchema(() =>
 export type ListGuiAgentCommandsRequest = z.infer<
   typeof listGuiAgentCommandsRequestSchema
 >;
+
+/** 1.1 carries the account whose environment the command catalog describes. */
+export const listGuiAgentCommandsRequestSchemaV11 = lazySchema(() =>
+  listGuiAgentCommandsRequestSchema.extend({
+    profileId: z.string().nullable().default(null),
+  }),
+);
 
 export const listGuiAgentCommandsResponseSchema = lazySchema(() =>
   z.object({

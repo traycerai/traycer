@@ -4360,6 +4360,7 @@ function toolCardParent(tool: ToolSegment): SubagentSegment {
   return {
     id: tool.id,
     kind: "subagent",
+    toolImageResults: tool.imageResults,
     name: tool.toolName,
     agentType: null,
     task: tool.inputSummary,
@@ -5076,6 +5077,7 @@ const BLOCK_HANDLERS: {
     isRenderableSubAgentBlock(block)
       ? {
           kind: "subagent",
+          toolImageResults: [],
           name: block.name,
           agentType: block.agentType,
           task: block.task,
