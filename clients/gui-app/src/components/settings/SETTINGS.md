@@ -949,7 +949,11 @@ provider-variable notice came from, "Keep dev-box's value on dev-box" writes
 the value that host has now as its own (`config.env.localOverride.set`, the
 value read as the page reads it: `config.env.list` or `providers.list`) and
 then undoes the change everywhere; an undo that is refused leaves the kept
-value, equal to the current one, and the row says why. A team's host shows no
+value, equal to the current one, and the row says why. A Variables or
+provider-variable row this host keeps its own value for ("Overridden on
+<host>" on Variables) shows the shared value, and its Set and Remove change
+the shared value only; the host's own value is changed under Access and setup
+▸ This host's own values. A team's host shows no
 notices: its Personal pages are read-only (`inert`) under the team line and
 its dashboard link, like a host whose version predates these settings.
 

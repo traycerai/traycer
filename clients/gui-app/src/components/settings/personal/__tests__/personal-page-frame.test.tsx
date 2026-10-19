@@ -12,9 +12,10 @@ vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
 });
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, render, screen, within } from "@testing-library/react";
+import { act, cleanup, render, screen, within } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { MockHandlerMap } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import {
   recordNegotiatedHostMethods,
@@ -29,6 +30,7 @@ import { usePersonalRowNotes } from "@/components/settings/personal/personal-pag
 import { PersonalPageFrame } from "@/components/settings/personal/personal-page-frame";
 import { UPDATE_HOST_TEXT } from "@/components/settings/personal/personal-page-status";
 import { SettingsPanelShell } from "@/components/settings/settings-panel-shell";
+import { useHostQuery } from "@/hooks/host/use-host-query";
 import type { HostRpcRegistry } from "@/lib/host";
 import type { SettingsSectionId } from "@/lib/settings-sections";
 import {
@@ -350,5 +352,94 @@ describe("usePersonalRowNotes (fixture-only until ticket E5 serves localOverride
         "OTHER: Overridden on dev-box",
       ]);
     });
+  });
+});
+
+/** Reads `config.env.list` the way the Shell panel's variables table does. */
+function VariablesProbe(props: {
+  readonly client: HostClient<HostRpcRegistry>;
+}): ReactNode {
+  useHostQuery<HostRpcRegistry, "config.env.list">({
+    cacheKeyIdentity: undefined,
+    client: props.client,
+    method: "config.env.list",
+    params: {},
+    options: { enabled: true },
+  });
+  return null;
+}
+
+// A variable's value can change under a mounted page without the page writing
+// it: the dashboard edits the shared value, and the host (which answers the
+// shared value while it holds its own) reports a new revision of the person's
+// settings. The variables read is one of the reads that revision re-reads.
+describe("<PersonalPageFrame /> around a page that reads the variables", () => {
+  it("requests config.env.list again when the host's received revision moves", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const facts: { status: EnvironmentStatusResponse } = {
+        status: environmentStatusFixture({
+          receivedRevision: 1,
+          appliedRevision: 1,
+        }),
+      };
+      const reads = { status: 0, variables: 0 };
+      const handlers: MockHandlerMap<HostRpcRegistry> = {
+        "environment.status": () => {
+          reads.status += 1;
+          return facts.status;
+        },
+        "environment.localOverrides": () => ({ overrides: [] }),
+        "config.env.list": () => {
+          reads.variables += 1;
+          return { entries: [{ key: "LOG_LEVEL", value: "error" }] };
+        },
+      };
+      const { client } = buildEnvironmentClient({ hostId: HOST_ID, handlers });
+      recordNegotiatedHostMethods(HOST_ID, [
+        ...STATUS_METHODS,
+        "config.env.list",
+      ]);
+      scopeOverrides.current = {
+        host: hostScopeOptionFixture({ hostId: HOST_ID, name: HOST_NAME }),
+        hostId: HOST_ID,
+        status: "ready",
+        client,
+      };
+      const queryClient = new QueryClient({
+        defaultOptions: { queries: { retry: false } },
+      });
+      render(
+        <QueryClientProvider client={queryClient}>
+          <PersonalPageFrame section="shell">
+            <VariablesProbe client={client} />
+          </PersonalPageFrame>
+        </QueryClientProvider>,
+      );
+      await vi.waitFor(() => {
+        expect(reads.status).toBeGreaterThan(0);
+        expect(reads.variables).toBeGreaterThan(0);
+      });
+      const statusReadsBefore = reads.status;
+      const variableReadsBefore = reads.variables;
+
+      // The dashboard changes the shared value: the host's received revision
+      // moves from 1 to 2 (nothing else about the status does).
+      facts.status = environmentStatusFixture({
+        receivedRevision: 2,
+        appliedRevision: 1,
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5_100);
+      });
+
+      // The 5 s status poll fired again and saw the new revision.
+      expect(reads.status).toBeGreaterThan(statusReadsBefore);
+      await vi.waitFor(() => {
+        expect(reads.variables).toBeGreaterThan(variableReadsBefore);
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
