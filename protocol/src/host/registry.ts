@@ -569,6 +569,7 @@ import {
   botConversationSendV10,
   botCreateV10,
   botDeleteV10,
+  botListChangedV10,
   botListV10,
   botOpenV10,
   botReadV10,
@@ -13879,6 +13880,18 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
       versions: {
         0: {
           contract: botSubscribeV10,
+        },
+      },
+    },
+  },
+  // `bot.listChanged` (Tracy Bots T24): additive on `/stream` like
+  // `bot.subscribe` above, so no baseline moves.
+  "bot.listChanged": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: botListChangedV10,
         },
       },
     },

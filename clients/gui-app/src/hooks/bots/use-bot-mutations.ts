@@ -39,7 +39,7 @@ import { toastFromHostError } from "@/lib/host-error-toast";
  * the list is cloud-backed and identical everywhere, so a create on host B
  * makes host A's cached list stale too.
  */
-function invalidateBotLists(queryClient: QueryClient): void {
+export function invalidateBotLists(queryClient: QueryClient): void {
   void queryClient.invalidateQueries({
     predicate: (query) =>
       hostQueryKeys.matchesMethodOnAnyHost(query.queryKey, "bot.list"),

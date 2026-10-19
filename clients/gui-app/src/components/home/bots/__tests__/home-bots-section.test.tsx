@@ -70,6 +70,7 @@ const mocks = vi.hoisted(() => {
     useEnvironmentListQuery:
       vi.fn<(client: object, enabled: boolean) => unknown>(),
     useBotListQuery: vi.fn<(client: object, enabled: boolean) => unknown>(),
+    useBotListChangedSubscriptionForApp: vi.fn<(enabled: boolean) => void>(),
     useHostMethodSupport:
       vi.fn<(hostId: string | null, method: string) => boolean | null>(),
   };
@@ -104,6 +105,10 @@ vi.mock("@/hooks/bots/use-environment-list-query", () => ({
 vi.mock("@/hooks/bots/use-bot-list-query", () => ({
   useBotListQuery: (client: object, enabled: boolean) =>
     mocks.useBotListQuery(client, enabled),
+}));
+vi.mock("@/hooks/bots/use-bot-list-changed-subscription", () => ({
+  useBotListChangedSubscriptionForApp: (enabled: boolean) =>
+    mocks.useBotListChangedSubscriptionForApp(enabled),
 }));
 vi.mock("@/hooks/bots/use-host-environment-bindings-query", () => ({
   useHostEnvironmentBindings: () => ({
@@ -310,6 +315,26 @@ describe("HomeBotsSection capability gate", () => {
       mocks.hostClient,
       true,
     );
+  });
+});
+
+describe("HomeBotsSection live list", () => {
+  it("keeps bot.list current through the change stream on a supported host", () => {
+    mountSection();
+
+    expect(mocks.useBotListChangedSubscriptionForApp).toHaveBeenLastCalledWith(
+      true,
+    );
+  });
+
+  it("holds the change stream off until the host supports bot.list", () => {
+    mocks.state.support = false;
+    mountSection();
+
+    expect(mocks.useBotListChangedSubscriptionForApp).toHaveBeenCalled();
+    for (const call of mocks.useBotListChangedSubscriptionForApp.mock.calls) {
+      expect(call[0]).toBe(false);
+    }
   });
 });
 
