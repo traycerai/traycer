@@ -46,6 +46,15 @@ describe("providers cache invalidation", () => {
     expect(PROVIDER_INVALIDATIONS).toContain("autoJudge.get");
   });
 
+  it("PROVIDER_INVALIDATIONS names providers.settingsFile.status", () => {
+    // The settings file goes bad outside the app, so nothing the panel does
+    // announces it. Without this entry the Providers refresh, the providers-
+    // changed stream and every provider mutation leave a first status read
+    // (or a failed one) cached while mounted, and "Reset provider settings"
+    // never appears for a file that turned unreadable afterwards.
+    expect(PROVIDER_INVALIDATIONS).toContain("providers.settingsFile.status");
+  });
+
   it("commitAuthoritativeProvidersList invalidates autoJudge.get for the written host only", async () => {
     const queryClient = new QueryClient();
     const autoJudgeKey = hostQueryKeys.method<HostRpcRegistry, "autoJudge.get">(
@@ -73,6 +82,33 @@ describe("providers cache invalidation", () => {
     expect(
       queryClient.getQueryState(otherHostAutoJudgeKey)?.isInvalidated,
     ).toBe(false);
+  });
+
+  it("commitAuthoritativeProvidersList invalidates the settings-file status for the written host only", async () => {
+    const queryClient = new QueryClient();
+    const statusKey = hostQueryKeys.method<
+      HostRpcRegistry,
+      "providers.settingsFile.status"
+    >("host-1", "providers.settingsFile.status", {});
+    const otherHostStatusKey = hostQueryKeys.method<
+      HostRpcRegistry,
+      "providers.settingsFile.status"
+    >("host-2", "providers.settingsFile.status", {});
+    queryClient.setQueryData(statusKey, { unreadable: false });
+    queryClient.setQueryData(otherHostStatusKey, { unreadable: false });
+
+    await commitAuthoritativeProvidersList({
+      queryClient,
+      hostId: "host-1",
+      update: () => ({ providers: [], native: null }),
+    });
+
+    expect(queryClient.getQueryState(statusKey)?.isInvalidated).toBe(true);
+    // Each host's settings file is its own: a refresh of host-1 says nothing
+    // about whether host-2's file is readable.
+    expect(queryClient.getQueryState(otherHostStatusKey)?.isInvalidated).toBe(
+      false,
+    );
   });
 
   it("commitAuthoritativeProvidersList invalidates both harness catalogs for the written host", async () => {
