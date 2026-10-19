@@ -34,8 +34,10 @@ export interface CanvasCommentView {
   readonly viewOnly: boolean;
   readonly order: readonly string[];
   readonly sourceForBoard: (path: string) => SandboxSource | null;
-  readonly revealBoard: (path: string) => void;
+  readonly revealBoard: (path: string) => boolean;
   readonly setTool: (tool: CanvasTool) => void;
+  /** Deselects boards and notes; the editor owns those node flags. */
+  readonly clearNodeSelection: () => void;
 }
 
 /** The mounted frame's immutable source identity and current DOM geometry. */

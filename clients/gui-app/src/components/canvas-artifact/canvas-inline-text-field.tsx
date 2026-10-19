@@ -26,7 +26,7 @@ export function CanvasInlineTextField({
   return (
     <div
       data-canvas-inline-text-editor=""
-      className="absolute z-30 pointer-events-auto"
+      className="canvas-nopan touch-auto absolute z-30 pointer-events-auto"
       style={
         {
           "--text-x": geometry["--text-x"],

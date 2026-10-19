@@ -421,6 +421,100 @@ export function canvasBootstrap(config: CanvasBootstrapConfig): void {
       },
     };
   };
+  const retypeTarget = (target: Element | null): Element | null => {
+    let element = target;
+    while (
+      element !== null &&
+      element !== document.body &&
+      element !== document.documentElement
+    ) {
+      const literal = element.hasAttribute("data-traycer-pos");
+      const block =
+        /^(P|H[1-6]|LI|TD|TH|LABEL|BUTTON|PRE|BLOCKQUOTE)$/.test(
+          element.tagName,
+        ) ||
+        (element.tagName === "DIV" &&
+          getComputedStyle(element).display !== "inline");
+      if (literal && block && element.textContent.trim().length > 0)
+        return element;
+      element = element.parentElement;
+    }
+    return target;
+  };
+  const beginRetype = (target: Element | null): void => {
+    if (mode !== "edit") return;
+    const element = retypeTarget(target);
+    if (
+      element === null ||
+      element === document.body ||
+      element === document.documentElement
+    )
+      return;
+    notify("traycer/canvas/double-click", {
+      element: { ...capture(element), textSnapshot: textSnapshot(element) },
+    });
+  };
+  const point = (value: unknown): value is { x: number; y: number } =>
+    record(value) &&
+    typeof value.x === "number" &&
+    Number.isFinite(value.x) &&
+    typeof value.y === "number" &&
+    Number.isFinite(value.y);
+  const caretAt = (value: {
+    x: number;
+    y: number;
+  }): { node: Node; offset: number } | null => {
+    if (typeof document.caretPositionFromPoint !== "function") return null;
+    const caret = document.caretPositionFromPoint(value.x, value.y);
+    return caret === null
+      ? null
+      : { node: caret.offsetNode, offset: caret.offset };
+  };
+  const selectTextRange = (params: Record<string, unknown>): void => {
+    if (
+      mode !== "edit" ||
+      textTarget === null ||
+      !textTarget.isConnected ||
+      !point(params.start) ||
+      !point(params.end)
+    )
+      return;
+    const start = caretAt(params.start);
+    const end = caretAt(params.end);
+    if (
+      start === null ||
+      end === null ||
+      !textTarget.contains(start.node) ||
+      !textTarget.contains(end.node)
+    )
+      return;
+    window
+      .getSelection()
+      ?.setBaseAndExtent(start.node, start.offset, end.node, end.offset);
+    reportSelection();
+  };
+  const setTextSelectionTarget = (
+    params: Record<string, unknown>,
+  ): Record<string, unknown> | null => {
+    if (params.target !== null && !record(params.target)) return null;
+    hasTextTarget = params.target !== null;
+    textTarget = params.target === null ? null : locate(params.target);
+    if (params.target === null) window.getSelection()?.removeAllRanges();
+    reportSelection();
+    return {};
+  };
+  const retypeAt = (
+    params: Record<string, unknown>,
+  ): Record<string, unknown> => {
+    if (point(params))
+      beginRetype(document.elementFromPoint(params.x, params.y));
+    return {};
+  };
+  const revealElement = (params: Record<string, unknown>) => {
+    const element = locate(params);
+    element?.scrollIntoView({ block: "center", inline: "nearest" });
+    return { revealed: element !== null };
+  };
   const answer = (
     method: unknown,
     params: Record<string, unknown>,
@@ -430,13 +524,13 @@ export function canvasBootstrap(config: CanvasBootstrapConfig): void {
         return { layout: siblingLayout(params) };
       case "traycer/canvas/hit-test":
         return hitTest(params);
-      case "traycer/canvas/set-text-selection-target": {
-        if (params.target !== null && !record(params.target)) return null;
-        hasTextTarget = params.target !== null;
-        textTarget = params.target === null ? null : locate(params.target);
-        reportSelection();
+      case "traycer/canvas/select-text-range":
+        selectTextRange(params);
         return {};
-      }
+      case "traycer/canvas/retype-at":
+        return retypeAt(params);
+      case "traycer/canvas/set-text-selection-target":
+        return setTextSelectionTarget(params);
       case "traycer/canvas/describe-element":
         return describeElement(params);
       case "traycer/canvas/literal-ancestor":
@@ -449,6 +543,8 @@ export function canvasBootstrap(config: CanvasBootstrapConfig): void {
           box: element === null ? null : boxOf(element.getBoundingClientRect()),
         };
       }
+      case "traycer/canvas/reveal-element":
+        return revealElement(params);
       case "traycer/canvas/set-mode":
         if (params.mode !== "edit" && params.mode !== "play") return null;
         mode = params.mode;
@@ -479,8 +575,7 @@ export function canvasBootstrap(config: CanvasBootstrapConfig): void {
         "*",
       );
   });
-  // Native text selection stays available through the editor's selected-element
-  // hole. Click/submit activation never reaches authored handlers in Edit.
+  // Click/submit activation never reaches authored handlers in Edit.
   const blockEdit = (event: Event): void => {
     if (mode !== "edit") return;
     event.preventDefault();
@@ -493,18 +588,13 @@ export function canvasBootstrap(config: CanvasBootstrapConfig): void {
         mode !== "edit" ||
         textTarget === null ||
         !textTarget.isConnected ||
-        !(event.target instanceof Node) ||
+        !(event.target instanceof Element) ||
         !textTarget.contains(event.target)
       )
         return;
       event.preventDefault();
       event.stopImmediatePropagation();
-      notify("traycer/canvas/double-click", {
-        element: {
-          ...capture(textTarget),
-          textSnapshot: textSnapshot(textTarget),
-        },
-      });
+      beginRetype(event.target);
     },
     true,
   );

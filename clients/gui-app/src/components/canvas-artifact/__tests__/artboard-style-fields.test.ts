@@ -7,16 +7,18 @@ import {
 import { validateArtboardCss } from "../artboard-css-validation";
 
 describe("ARTBOARD_STYLE_FIELDS", () => {
-  it("offers the twelve properties the properties panel edits, in panel order", () => {
+  it("offers the fourteen properties the properties panel edits, in panel order", () => {
     expect(ARTBOARD_STYLE_FIELDS.map((field) => field.property)).toEqual([
       "width",
       "height",
       "padding",
       "margin",
-      "color",
-      "background-color",
       "font-family",
       "font-size",
+      "font-weight",
+      "color",
+      "text-align",
+      "background-color",
       "border-width",
       "border-style",
       "border-color",
@@ -75,6 +77,34 @@ describe("styleFieldEdit", () => {
   it("keeps an !important the person typed, for the host to preserve", () => {
     expect(styleFieldEdit("color", "red !important")).toMatchObject({
       value: "red !important",
+    });
+  });
+
+  it.each([
+    ["Regular 400", "400"],
+    ["Bold 700", "700"],
+    ["  Bold 700 ", "700"],
+  ])(
+    "turns the font weight name %j back into the number %s",
+    (shown, value) => {
+      expect(styleFieldEdit("font-weight", shown)).toEqual({
+        kind: "set-style",
+        property: "font-weight",
+        value,
+      });
+    },
+  );
+
+  it.each(["600", "bold", "bolder", "var(--weight)", "700 !important"])(
+    "keeps the font weight %j as the person wrote it",
+    (value) => {
+      expect(styleFieldEdit("font-weight", value)).toMatchObject({ value });
+    },
+  );
+
+  it("only reads a weight name on the font-weight property", () => {
+    expect(styleFieldEdit("font-family", "Bold 700")).toMatchObject({
+      value: "Bold 700",
     });
   });
 

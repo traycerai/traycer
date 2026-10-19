@@ -41,19 +41,34 @@ describe("canvasLayerRows", () => {
     ]);
   });
 
-  it("labels a row with its tag, id and classes", () => {
-    expect(rowsOf(PAGE)[0].label).toBe("main#app.a.b");
-    expect(rowsOf(PAGE)[1].label).toBe("h1");
+  it("labels a row by what the element is, never by its id or classes", () => {
+    const labels = rowsOf(PAGE).map((row) => row.label);
+    expect(labels).toEqual(["Section", "Heading", "Paragraph", "Text"]);
+    expect(labels.join(" ")).not.toMatch(/app|#|\./);
   });
 
-  it("previews only an element's own text, tidied", () => {
+  it("previews all the text inside an element in source order, tidied", () => {
     const rows = rowsOf(`<p>  one \n  <b>two</b>   three </p>`);
-    expect(rows[0].preview).toBe("one three");
+    expect(rows[0].preview).toBe("one two three");
     expect(rows[1].preview).toBe("two");
+    expect(rowsOf(PAGE)[0].preview).toBe("Titleone two");
   });
 
-  it("caps a preview at 80 characters", () => {
+  it("reads inline markup as running text, without spaces the page does not have", () => {
+    const rows = rowsOf(
+      `<p>Read the <a href="#">second <em>board</em></a> soon.</p><p>un<b>believ</b><i>able</i></p>`,
+    );
+    expect(
+      rows.filter((row) => row.tagName === "p").map((row) => row.preview),
+    ).toEqual(["Read the second board soon.", "unbelievable"]);
+  });
+
+  it("caps a preview at 80 characters, however the text is split up", () => {
     expect(rowsOf(`<p>${"a".repeat(200)}</p>`)[0].preview).toHaveLength(80);
+    const split = rowsOf(
+      `<div><p>${"a".repeat(60)}</p><p>${"b".repeat(60)}</p></div>`,
+    )[0].preview;
+    expect(split).toBe(`${"a".repeat(60)}${"b".repeat(20)}`);
   });
 
   it("names a literal element by the offset of its start tag", () => {
@@ -77,19 +92,26 @@ describe("canvasLayerRows", () => {
     ]);
   });
 
-  it("shows a document's own html, head and body as ordinary rows", () => {
-    const rows = rowsOf(
-      `<!doctype html><html><head><title>T</title></head><body><p>x</p></body></html>`,
-    );
-    expect(rows.map((row) => [row.tagName, row.depth])).toEqual([
-      ["html", 0],
-      ["head", 1],
-      ["title", 2],
-      ["body", 1],
-      ["p", 2],
+  it("lists a document's content as the board, without its html and body wrappers", () => {
+    const text = `<!doctype html><html><body><main><p>x</p></main></body></html>`;
+    const rows = rowsOf(text);
+    expect(rows.map((row) => [row.tagName, row.depth, row.marker])).toEqual([
+      ["main", 0, text.indexOf("<main")],
+      ["p", 1, text.indexOf("<p>")],
     ]);
+    expect(rows.every((row) => !row.generated)).toBe(true);
   });
 
+  it("skips a document's metadata and script elements with everything inside them", () => {
+    const text = `<!doctype html><html><head><title>T</title><meta charset="utf-8"><link rel="stylesheet" href="a.css"><style>p{color:red}</style><script>1</script></head><body><script>2</script><div><style>b{}</style><span>s</span></div><p>x</p></body></html>`;
+    expect(
+      rowsOf(text).map((row) => [row.tagName, row.depth, row.marker]),
+    ).toEqual([
+      ["div", 0, text.indexOf("<div")],
+      ["span", 1, text.indexOf("<span")],
+      ["p", 0, text.indexOf("<p>")],
+    ]);
+  });
   it("marks elements the browser created without a source tag as generated", () => {
     const rows = rowsOf(`<b>x<p>y</b>z</p>`);
     const bolds = rows.filter((row) => row.tagName === "b");
@@ -243,20 +265,21 @@ describe("CanvasLayersTree", () => {
       .getAllByRole("treeitem")
       .map((item) => Number(item.getAttribute("aria-level")));
     expect(levels).toEqual([1, 2, 2]);
-    expect(rowButton(/main#app\.a\.b/)).toBeDefined();
-    expect(rowButton(/^h1 Title$/)).toBeDefined();
+    expect(rowButton(/^Section Titleone$/)).toBeDefined();
+    expect(rowButton(/^Heading Title$/)).toBeDefined();
+    expect(screen.queryByText(/app|\.a\.b/)).toBeNull();
   });
 
   it("indents a row by its depth", () => {
     mount(PAGE, answersWith);
-    expect(rowButton(/main#app/).style.paddingLeft).toBe("8px");
-    expect(rowButton(/^h1/).style.paddingLeft).toBe("20px");
+    expect(rowButton(/^Section/).style.paddingLeft).toBe("8px");
+    expect(rowButton(/^Heading/).style.paddingLeft).toBe("20px");
   });
 
   it("selects the element through the page when a row is chosen", async () => {
     const { describe, registry } = mount(PAGE, answersWith);
     await act(async () => {
-      fireEvent.click(rowButton(/^p one$/));
+      fireEvent.click(rowButton(/^Paragraph one$/));
       await Promise.resolve();
     });
 
@@ -271,13 +294,13 @@ describe("CanvasLayersTree", () => {
     });
     expect(registry.boardPath).toBe(BOARD_PATH);
     expect(
-      within(screen.getByRole("treeitem", { name: /^p one$/ })).getByRole(
-        "button",
-      ),
+      within(
+        screen.getByRole("treeitem", { name: /^Paragraph one$/ }),
+      ).getByRole("button"),
     ).toBeDefined();
     expect(
       screen
-        .getByRole("treeitem", { name: /^p one$/ })
+        .getByRole("treeitem", { name: /^Paragraph one$/ })
         .getAttribute("aria-selected"),
     ).toBe("true");
     expect(screen.queryByRole("status")).toBeNull();
@@ -286,14 +309,14 @@ describe("CanvasLayersTree", () => {
   it("marks only the row of the current selection", async () => {
     mount(PAGE, answersWith);
     await act(async () => {
-      fireEvent.click(rowButton(/^h1/));
+      fireEvent.click(rowButton(/^Heading/));
       await Promise.resolve();
     });
     const selected = screen
       .getAllByRole("treeitem")
       .filter((item) => item.getAttribute("aria-selected") === "true");
     expect(selected).toHaveLength(1);
-    expect(selected[0].textContent).toContain("h1");
+    expect(selected[0].textContent).toContain("Heading");
   });
 
   it("does not mark a row for a selection in another board or artifact", () => {
@@ -314,7 +337,7 @@ describe("CanvasLayersTree", () => {
   it("says so when the element is not on the page right now", async () => {
     mount(PAGE, () => Promise.resolve(null));
     await act(async () => {
-      fireEvent.click(rowButton(/^h1/));
+      fireEvent.click(rowButton(/^Heading/));
       await Promise.resolve();
     });
     expect(screen.getByRole("status").textContent).toBe(
@@ -326,7 +349,7 @@ describe("CanvasLayersTree", () => {
   it("says so when the page cannot be asked", async () => {
     mount(PAGE, () => Promise.reject(new Error("gone")));
     await act(async () => {
-      fireEvent.click(rowButton(/^h1/));
+      fireEvent.click(rowButton(/^Heading/));
       await Promise.resolve();
     });
     expect(screen.getByRole("status").textContent).toBe(
@@ -340,14 +363,14 @@ describe("CanvasLayersTree", () => {
       answers ? answersWith(marker) : Promise.resolve(null),
     );
     await act(async () => {
-      fireEvent.click(rowButton(/^h1/));
+      fireEvent.click(rowButton(/^Heading/));
       await Promise.resolve();
     });
     expect(screen.getByRole("status")).toBeDefined();
 
     answers = true;
     await act(async () => {
-      fireEvent.click(rowButton(/^h1/));
+      fireEvent.click(rowButton(/^Heading/));
       await Promise.resolve();
     });
     expect(screen.queryByRole("status")).toBeNull();
@@ -363,8 +386,8 @@ describe("CanvasLayersTree", () => {
         }),
     );
     await act(async () => {
-      fireEvent.click(rowButton(/^h1/));
-      fireEvent.click(rowButton(/^p one$/));
+      fireEvent.click(rowButton(/^Heading/));
+      fireEvent.click(rowButton(/^Paragraph one$/));
       await Promise.resolve();
     });
     await act(async () => {
@@ -392,7 +415,7 @@ describe("CanvasLayersTree", () => {
         }),
     );
     await act(async () => {
-      fireEvent.click(rowButton(/^h1/));
+      fireEvent.click(rowButton(/^Heading/));
       await Promise.resolve();
     });
     act(() => {
@@ -415,7 +438,7 @@ describe("CanvasLayersTree", () => {
         }),
     );
     await act(async () => {
-      fireEvent.click(rowButton(/^h1/));
+      fireEvent.click(rowButton(/^Heading/));
       await Promise.resolve();
     });
     unmount();
@@ -465,6 +488,8 @@ describe("CanvasLayersTree", () => {
     expect(rendered).toBeGreaterThan(0);
     expect(rendered).toBeLessThan(60);
     expect(screen.queryByRole("button", { name: /item 299/ })).toBeNull();
-    expect(screen.getByRole("button", { name: /^ul/ })).toBeDefined();
+    expect(
+      screen.getByRole("button", { name: /^List item 0item 1/ }),
+    ).toBeDefined();
   });
 });

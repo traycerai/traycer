@@ -1,18 +1,21 @@
 import { useLayoutEffect, useRef } from "react";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import type { CanvasSelection } from "./canvas-selection-store";
-import type { CanvasTextDraftTarget } from "./canvas-board-document";
 import { useCanvasEditDraft } from "./use-canvas-edit-draft";
 import {
   canvasSelectionIsCurrent,
   useCanvasEditAction,
 } from "./use-canvas-edit-action";
+import {
+  canvasRetypeEdit,
+  type CanvasRetypeTarget,
+} from "./canvas-inline-text-edit";
 import { CanvasInlineTextField } from "./canvas-inline-text-field";
 import { CANVAS_SCRIPT_TEXT_NOTE } from "./canvas-text-validation";
 
 export function CanvasInlineTextEditor(props: {
   readonly selection: CanvasSelection;
-  readonly target: CanvasTextDraftTarget;
+  readonly target: CanvasRetypeTarget;
   readonly readText: () => Promise<string | null>;
   readonly onClose: () => void;
 }) {
@@ -23,10 +26,11 @@ export function CanvasInlineTextEditor(props: {
   const cancelled = useRef(false);
   const active = useRef(true);
   const isActive = (): boolean => active.current && !cancelled.current;
-  const isCurrent = (): boolean =>
-    isActive() && canvasSelectionIsCurrent(props.selection);
   const focusInput = (): void => input.current?.focus();
-  const hasNewerDraft = (): boolean => input.current?.value !== draft.value;
+  // A click away unmounts the field; only a still-mounted field can hold a
+  // newer draft than the one being committed.
+  const hasNewerDraft = (): boolean =>
+    input.current !== null && input.current.value !== draft.value;
   useLayoutEffect(() => {
     active.current = true;
     input.current?.focus();
@@ -55,7 +59,9 @@ export function CanvasInlineTextEditor(props: {
       liveText = null;
     }
     committing.current = false;
-    if (!isCurrent()) return;
+    // Clicking empty canvas or another element ends editing and clears this
+    // selection while the text is read; that is a commit, not a cancel.
+    if (cancelled.current) return;
     if (hasNewerDraft()) {
       draft.reject(id);
       return;
@@ -66,17 +72,17 @@ export function CanvasInlineTextEditor(props: {
       focusInput();
       return;
     }
+    const change = canvasRetypeEdit(props.target, draft.value, props.selection);
+    if (change === null) {
+      draft.reject(id);
+      action.setMessage(
+        "This change crosses formatted text. Ask the agent to change it.",
+      );
+      focusInput();
+      return;
+    }
     committing.current = true;
-    const edit =
-      props.target.textNodeIndex === null
-        ? { kind: "set-text-content" as const, text: draft.value }
-        : {
-            kind: "set-text-node" as const,
-            index: props.target.textNodeIndex,
-            text: draft.value,
-            expectedText: liveText,
-          };
-    const saved = await action.apply(props.selection, edit);
+    const saved = await action.apply(change.selection, change.edit);
     committing.current = false;
     if (!isActive()) return;
     if (saved) props.onClose();

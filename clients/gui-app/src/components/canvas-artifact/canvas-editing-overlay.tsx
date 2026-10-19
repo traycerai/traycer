@@ -14,18 +14,14 @@ import {
 import { useCanvasBoardDocument } from "./use-canvas-board-document";
 import {
   canvasSourceElement,
-  canvasTextDraftTarget,
   type CanvasBoardDocument,
-  type CanvasTextDraftTarget,
 } from "./canvas-board-document";
 import { CanvasInlineTextEditor } from "./canvas-inline-text-editor";
-import { CanvasTextToolbar } from "./canvas-text-toolbar";
-import {
-  canvasLiveText,
-  CANVAS_SCRIPT_TEXT_NOTE,
-} from "./canvas-text-validation";
+import { canvasRetypeTarget } from "./canvas-inline-text-edit";
+import { CANVAS_SCRIPT_TEXT_NOTE } from "./canvas-text-validation";
 import type { CanvasElementLocator } from "@/lib/sandbox/canvas-bridge";
 import { CanvasStructureOverlay } from "./canvas-structure-overlay";
+import { CanvasSelectionMenu } from "./canvas-element-menu";
 
 function currentRetype(
   selection: CanvasSelection | null,
@@ -52,9 +48,8 @@ async function readRetypeText(context: {
   readonly registry: CanvasFrameRegistry;
   readonly selection: CanvasSelection;
   readonly request: NonNullable<CanvasSelectionFrame["retype"]>;
-  readonly target: CanvasTextDraftTarget;
 }): Promise<string | null> {
-  const { registry, selection, request, target } = context;
+  const { registry, selection, request } = context;
   const isCurrent = (): boolean => {
     const entry = registry.get(selection.boardPath);
     return (
@@ -73,7 +68,7 @@ async function readRetypeText(context: {
   return element !== null &&
     isCurrent() &&
     sameCanvasElement(request.element, element)
-    ? canvasLiveText(target, element)
+    ? (element.textSnapshot?.content ?? null)
     : null;
 }
 function EditingControls(props: {
@@ -90,9 +85,9 @@ function EditingControls(props: {
     props.document?.sha256 === props.selection.servedSha256
       ? canvasSourceElement(props.document, props.selection.element)
       : null;
-  const target = source === null ? null : canvasTextDraftTarget(source);
+  const target = source === null ? null : canvasRetypeTarget(source);
   const liveText =
-    target === null ? null : canvasLiveText(target, request.element);
+    target === null ? null : (request.element.textSnapshot?.content ?? null);
   if (target !== null && liveText === target.text)
     return (
       <CanvasInlineTextEditor
@@ -104,7 +99,6 @@ function EditingControls(props: {
             registry: props.registry,
             selection: props.selection,
             request,
-            target,
           })
         }
         onClose={props.onClose}
@@ -116,7 +110,7 @@ function EditingControls(props: {
   return (
     <div
       role="status"
-      className="absolute left-2 top-2 z-30 rounded border bg-popover p-2 text-ui-xs pointer-events-auto"
+      className="canvas-nopan touch-auto absolute left-2 top-2 z-30 rounded border bg-popover p-2 text-ui-xs pointer-events-auto"
       onPointerDown={(event) => event.stopPropagation()}
     >
       {message}
@@ -133,6 +127,7 @@ export function CanvasEditingOverlay(props: {
     point: { x: number; y: number; additive?: boolean },
   ) => void;
   readonly onRetire: (path: string) => void;
+  readonly onEscape: () => void;
 }) {
   useSyncExternalStore(props.registry.subscribe, props.registry.getSnapshot);
   const selection = useCanvasSelectionStore((state) =>
@@ -187,19 +182,21 @@ export function CanvasEditingOverlay(props: {
       }
       actionControls={
         request === null && selection !== null && additional.length === 0 ? (
-          <>
-            <CanvasTextToolbar
-              inline
-              selection={selection}
-              document={document.data ?? null}
-            />
-            <CanvasCommentAction
-              scope={props.scope}
-              tileId={props.tileId}
-              selection={selection}
-              registry={props.registry}
-            />
-          </>
+          <CanvasCommentAction
+            scope={props.scope}
+            tileId={props.tileId}
+            selection={selection}
+            registry={props.registry}
+          />
+        ) : null
+      }
+      menuControls={
+        selection !== null && request === null ? (
+          <CanvasSelectionMenu
+            selection={selection}
+            registry={props.registry}
+            document={document.data ?? null}
+          />
         ) : null
       }
       hideAction={request !== null || additional.length > 0}

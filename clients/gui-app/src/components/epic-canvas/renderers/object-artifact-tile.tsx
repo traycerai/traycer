@@ -1,6 +1,8 @@
 import type { HtmlSelection } from "@/components/html-artifact/html-selection-store";
+
 import {
   HtmlArtifactCommentAction,
+  HtmlArtifactCommentsToolbar,
   HtmlArtifactComments,
 } from "@/components/comments/html-artifact-comments";
 import { CanvasSelectionProvider } from "@/components/canvas-artifact/canvas-selection-provider";
@@ -152,6 +154,7 @@ export function ObjectArtifactTile(props: {
         commentsEnabled={canCommentOnHtml(commentsEnabled, viewTabId)}
         actionControls={commentActions}
         renderComments={renderComments}
+        toolbarControls={<HtmlArtifactCommentsToolbar scope={commentScope} />}
       />
     );
   }

@@ -14,10 +14,8 @@ import { registerCommentEditor } from "@/lib/comments/comment-editor-registry";
 import { deriveFrameCommentPositions } from "@/lib/comments/frame-comment-positions";
 import { openFrameCommentDraft } from "@/lib/comments/open-frame-comment-draft";
 import { canvasQueryKeys } from "@/lib/query-keys/canvas-query-keys";
-import {
-  FrameCommentPins,
-  WholeArtifactCommentPin,
-} from "@/components/comments/frame-comment-pins";
+import { FrameCommentPins } from "@/components/comments/frame-comment-pins";
+import { useOrderedFrameThreads } from "@/components/comments/use-ordered-frame-threads";
 import { Button } from "@/components/ui/button";
 import type { CanvasAnnotationScope } from "./canvas-annotation-action";
 import type { CanvasFrameRegistry } from "./canvas-frame-registry";
@@ -111,36 +109,27 @@ export function CanvasCommentPins(props: {
     props.registry,
     threads.length > 0,
   );
-  const activate = useActivateCommentThread(props.scope);
+  const ordered = useOrderedFrameThreads(
+    props.scope.epicId,
+    props.scope.artifactId,
+    "canvas",
+  );
+  const activate = useActivateCommentThread({
+    ...props.scope,
+    artifactType: "canvas",
+  });
   return (
     <FrameCommentPins
       epicId={props.scope.epicId}
+      artifactId={props.scope.artifactId}
+      artifactType="canvas"
+      ordered={ordered ?? []}
       threads={threads}
       source={
         document.data?.sha256 === entry.sha256 ? document.data.text : null
       }
       bridge={entry.bridge}
       frame={entry.frame}
-      onActivate={activate}
-    />
-  );
-}
-
-export function CanvasWholeCommentPin({
-  scope,
-}: {
-  readonly scope: CanvasAnnotationScope;
-}) {
-  const threads = useFrameCommentThreads(
-    scope.epicId,
-    scope.artifactId,
-    "canvas",
-  );
-  const activate = useActivateCommentThread(scope);
-  return (
-    <WholeArtifactCommentPin
-      epicId={scope.epicId}
-      threads={threads ?? []}
       onActivate={activate}
     />
   );
@@ -204,16 +193,16 @@ export function CanvasCommentIndex(props: {
         tileId,
         isActive: focused,
         reveal: (threadId) => {
+          if (!focused) return false;
           const thread = threads?.find(
             (candidate) => candidate.threadId === threadId,
           );
           if (thread === undefined) return false;
-          if (thread.data.artboard !== undefined)
-            registry.view?.revealBoard(thread.data.artboard);
-          return true;
+          if (thread.data.artboard === undefined) return true;
+          return view?.revealBoard(thread.data.artboard) ?? false;
         },
       }),
-    [scope.epicId, scope.artifactId, tileId, focused, threads, registry],
+    [scope.epicId, scope.artifactId, tileId, focused, threads, view],
   );
   return null;
 }

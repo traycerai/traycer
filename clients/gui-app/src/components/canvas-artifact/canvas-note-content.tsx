@@ -1,7 +1,7 @@
-import { useId, useState, type CSSProperties } from "react";
+import { useId, useLayoutEffect, useRef, type CSSProperties } from "react";
+import { parse, wcagContrast } from "culori";
 import type { CanvasNote } from "@traycer/protocol/persistence/epic/canvas-layout";
 import type { SandboxSource } from "@/components/sandbox/sandbox-frame";
-import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 import { CanvasImage } from "./canvas-image";
 import { penOutline } from "./canvas-geometry";
@@ -106,40 +106,69 @@ function CanvasShape({ note }: { readonly note: CanvasNote }) {
 function CanvasTextNote({
   note,
   viewOnly,
+  editing,
+  onEdit,
   onCommit,
+  onGrow,
 }: {
   readonly note: CanvasNote;
   readonly viewOnly: boolean | undefined;
+  readonly editing: boolean | undefined;
+  readonly onEdit: (() => void) | undefined;
   readonly onCommit: (text: string) => void;
+  readonly onGrow: ((height: number) => void) | undefined;
 }) {
-  const [editing, setEditing] = useState(false);
-  const text = note.text ?? "";
-  if (editing && !viewOnly)
-    return (
-      <div className="touch-auto overscroll-contain h-full">
-        <Textarea
-          variant="bare"
-          size="sm"
-          aria-label={note.type === "title" ? "Title text" : "Sticky note text"}
-          defaultValue={text}
-          ref={(node) => node?.focus()}
-          onBlur={(event) => {
-            onCommit(event.currentTarget.value);
-            setEditing(false);
-          }}
-          onKeyDown={(event) => {
-            event.stopPropagation();
-            if (event.code === "Escape") event.currentTarget.blur();
-          }}
-        />
-      </div>
-    );
+  const title = note.type === "title";
+  const content = useRef<HTMLDivElement>(null);
+  const measured = useRef<{
+    element: HTMLElement;
+    height: number;
+  } | null>(null);
+  useLayoutEffect(() => {
+    const element = content.current?.querySelector("[data-canvas-note-text]");
+    if (!(element instanceof HTMLElement) || onGrow === undefined || viewOnly)
+      return;
+    const measure = (): void => {
+      const height = element.scrollHeight;
+      if (
+        measured.current?.element === element &&
+        measured.current.height === height
+      )
+        return;
+      measured.current = { element, height };
+      onGrow(height);
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [onGrow, editing, viewOnly]);
   return (
-    <CanvasTextNoteDisplay
-      note={note}
-      viewOnly={viewOnly}
-      onEdit={() => setEditing(true)}
-    />
+    <div
+      ref={content}
+      className={cn(
+        "h-full w-full text-(--canvas-note-color) text-(length:--canvas-note-size) leading-normal",
+        title && "font-heading font-semibold",
+      )}
+      style={
+        {
+          "--canvas-note-color": title
+            ? (note.color ?? "var(--foreground)")
+            : stickyTextColor(note.color),
+          "--canvas-note-size": `${note.size ?? (title ? 30 : 14)}px`,
+        } as CSSProperties
+      }
+    >
+      {editing && !viewOnly ? (
+        <CanvasTextNoteEditor note={note} onCommit={onCommit} onGrow={onGrow} />
+      ) : (
+        <CanvasTextNoteDisplay
+          note={note}
+          viewOnly={viewOnly}
+          onEdit={onEdit}
+        />
+      )}
+    </div>
   );
 }
 function CanvasTextNoteDisplay({
@@ -149,48 +178,93 @@ function CanvasTextNoteDisplay({
 }: {
   readonly note: CanvasNote;
   readonly viewOnly: boolean | undefined;
-  readonly onEdit: () => void;
+  readonly onEdit: (() => void) | undefined;
 }) {
-  const title = note.type === "title";
+  const label = note.type === "title" ? "Edit title" : "Edit sticky note";
   return (
     <div
       role={viewOnly ? undefined : "button"}
       tabIndex={viewOnly ? undefined : 0}
-      aria-label={
-        viewOnly ? undefined : `Edit ${title ? "title" : "sticky note"}`
-      }
-      className={cn(
-        "h-full w-full whitespace-pre-wrap break-words text-(--canvas-note-color) text-(length:--canvas-note-size)",
-        title && "font-heading font-semibold",
-      )}
-      style={
-        {
-          "--canvas-note-color": note.color ?? "var(--foreground)",
-          "--canvas-note-size": `${note.size ?? (title ? 30 : 14)}px`,
-        } as CSSProperties
-      }
+      aria-label={viewOnly ? undefined : label}
+      className="min-h-full w-full whitespace-pre-wrap break-words"
       onDoubleClick={() => {
-        if (!viewOnly) onEdit();
+        if (!viewOnly) onEdit?.();
       }}
       onKeyDown={(event) => {
         if (!viewOnly && event.code === "Enter") {
+          event.preventDefault();
           event.stopPropagation();
-          onEdit();
+          onEdit?.();
         }
       }}
     >
-      {note.text || (title ? "Title" : "Write a note")}
+      {/* Measure intrinsic text, never the minimum height inherited from the note. */}
+      <div data-canvas-note-text="">
+        {note.text || <span className="opacity-50">Type something</span>}
+      </div>
     </div>
+  );
+}
+function stickyTextColor(color: string | undefined): string {
+  const parsed = color === undefined ? undefined : parse(color);
+  if (parsed === undefined) return "var(--card-foreground)";
+  return wcagContrast(parsed, "#202020") >= wcagContrast(parsed, "#ffffff")
+    ? "#202020"
+    : "#ffffff";
+}
+function CanvasTextNoteEditor({
+  note,
+  onCommit,
+  onGrow,
+}: {
+  readonly note: CanvasNote;
+  readonly onCommit: (text: string) => void;
+  readonly onGrow: ((height: number) => void) | undefined;
+}) {
+  const input = useRef<HTMLTextAreaElement>(null);
+  useLayoutEffect(() => {
+    const element = input.current;
+    if (element === null) return;
+    element.focus({ preventScroll: true });
+    element.setSelectionRange(element.value.length, element.value.length);
+  }, []);
+  return (
+    <textarea
+      ref={input}
+      data-canvas-note-text=""
+      aria-label={note.type === "title" ? "Title text" : "Sticky note text"}
+      placeholder="Type something"
+      defaultValue={note.text ?? ""}
+      rows={1}
+      // Canvas typography is document content, not the app's form-control scale.
+      className="touch-auto canvas-nopan canvas-nowheel field-sizing-content block w-full resize-none overflow-hidden border-0 bg-transparent p-0 whitespace-pre-wrap break-words outline-none placeholder:text-current placeholder:opacity-50"
+      onInput={(event) => onGrow?.(event.currentTarget.scrollHeight)}
+      onBlur={(event) => onCommit(event.currentTarget.value)}
+      onKeyDown={(event) => {
+        event.stopPropagation();
+        if (event.code === "Escape" && !event.nativeEvent.isComposing) {
+          event.preventDefault();
+          event.currentTarget.blur();
+        }
+      }}
+      onKeyUp={(event) => event.stopPropagation()}
+    />
   );
 }
 export function CanvasNoteContent({
   note,
   imageSource,
   viewOnly,
+  editing,
+  onEdit,
   onCommit,
+  onGrow,
 }: {
   readonly note: CanvasNote;
   readonly viewOnly?: boolean;
+  readonly editing?: boolean;
+  readonly onEdit?: () => void;
+  readonly onGrow?: (height: number) => void;
   readonly imageSource: SandboxSource | null;
   readonly onCommit: (text: string) => void;
 }) {
@@ -204,7 +278,14 @@ export function CanvasNoteContent({
     note.type === "title"
   )
     return (
-      <CanvasTextNote viewOnly={viewOnly} note={note} onCommit={onCommit} />
+      <CanvasTextNote
+        viewOnly={viewOnly}
+        editing={editing}
+        onEdit={onEdit}
+        note={note}
+        onCommit={onCommit}
+        onGrow={onGrow}
+      />
     );
   return <CanvasShape note={note} />;
 }

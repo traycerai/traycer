@@ -2,6 +2,43 @@ import type { HtmlChild, HtmlElement } from "@traycer/html-source";
 import type { CanvasBoardDocument } from "./canvas-board-document";
 import type { CanvasFrameRegistry } from "./canvas-frame-registry";
 import type { CanvasSelection } from "./canvas-selection-store";
+
+const LAYER_NAMES = new Map([
+  ["p", "Paragraph"],
+  ["a", "Link"],
+  ["button", "Button"],
+  ["img", "Image"],
+  ["picture", "Image"],
+  ["ul", "List"],
+  ["ol", "List"],
+  ["li", "List item"],
+  ["input", "Input"],
+  ["textarea", "Input"],
+  ["select", "Input"],
+  ["section", "Section"],
+  ["article", "Section"],
+  ["main", "Section"],
+  ["nav", "Section"],
+  ["header", "Section"],
+  ["footer", "Section"],
+  ["aside", "Section"],
+  ["div", "Container"],
+  ["span", "Text"],
+  ["b", "Text"],
+  ["strong", "Text"],
+  ["em", "Text"],
+  ["i", "Text"],
+  ["small", "Text"],
+]);
+
+export function canvasLayerName(tagName: string): string {
+  if (/^h[1-6]$/.test(tagName)) return "Heading";
+  return (
+    LAYER_NAMES.get(tagName) ??
+    tagName.charAt(0).toUpperCase() + tagName.slice(1)
+  );
+}
+
 export interface CanvasLayerRow {
   readonly key: string;
   readonly marker: number | null;
@@ -12,6 +49,23 @@ export interface CanvasLayerRow {
   readonly generated: boolean;
   readonly element: HtmlElement;
 }
+
+function layerTextPreview(element: HtmlElement): string {
+  const pending: HtmlChild[] = [...element.children].reverse();
+  let text = "";
+  while (pending.length > 0 && text.length <= 80) {
+    const child = pending.pop();
+    if (child?.kind === "element") {
+      for (const descendant of [...child.children].reverse())
+        pending.push(descendant);
+    } else if (child?.kind === "text") {
+      // Inline boundaries add no spaces; keep the whitespace from the text nodes.
+      text = (text + child.value).replace(/\s+/g, " ").trimStart();
+    }
+  }
+  return text.trim().slice(0, 80);
+}
+
 export function canvasLayerRows(
   document: CanvasBoardDocument,
 ): CanvasLayerRow[] {
@@ -25,38 +79,32 @@ export function canvasLayerRows(
     const entry = pending.pop();
     if (!entry || entry.child.kind !== "element") continue;
     const node = entry.child;
+    if (
+      ["head", "meta", "style", "script", "link", "title"].includes(
+        node.tagName,
+      )
+    )
+      continue;
     const marker = node.isUniqueSource ? (node.startTag?.start ?? null) : null;
-    // Implied document containers have no source but do not represent script output.
-    const implicit =
-      marker === null &&
-      ["html", "head", "body", "tbody"].includes(node.tagName);
-    if (!implicit) {
-      const id = node.attrs.find((attr) => attr.name === "id")?.value;
-      const classes =
-        node.attrs
-          .find((attr) => attr.name === "class")
-          ?.value.trim()
-          .split(/\s+/)
-          .filter(Boolean) ?? [];
-      const label = `${node.tagName}${id ? `#${id}` : ""}${classes.length ? `.${classes.join(".")}` : ""}`;
+    // The board already represents the document; retain only content layers.
+    const container =
+      node.tagName === "html" ||
+      node.tagName === "body" ||
+      (marker === null && node.tagName === "tbody");
+    if (!container) {
       rows.push({
         key: `${marker}:${rows.length}`,
         marker,
         depth: entry.depth,
         tagName: node.tagName,
-        label,
-        preview: node.children
-          .flatMap((child) => (child.kind === "text" ? [child.value] : []))
-          .join("")
-          .replace(/\s+/g, " ")
-          .trim()
-          .slice(0, 80),
+        label: canvasLayerName(node.tagName),
+        preview: layerTextPreview(node),
         generated: marker === null,
         element: node,
       });
     }
     for (const child of [...node.children].reverse())
-      pending.push({ child, depth: entry.depth + (implicit ? 0 : 1) });
+      pending.push({ child, depth: entry.depth + (container ? 0 : 1) });
   }
   return rows;
 }

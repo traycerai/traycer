@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { CanvasLayoutSnapshot } from "@traycer/protocol/persistence/epic/canvas-layout";
 import {
   boardFrame,
   canvasPageItems,
@@ -150,6 +151,36 @@ describe("boardFrame", () => {
       w: 80,
       h: 60,
     });
+  });
+
+  it("gives a board with no size the 1280 by 800 frame and keeps a size it has", () => {
+    expect(boardFrame({ x: 3, y: 4 })).toEqual({
+      x: 3,
+      y: 4,
+      w: 1280,
+      h: 800,
+    });
+    expect(boardFrame({ h: 333 })).toEqual({ x: 0, y: 0, w: 1280, h: 333 });
+  });
+
+  it("measures a board with no size as a 1280 by 800 frame when picking live boards", () => {
+    const snapshot: CanvasLayoutSnapshot = {
+      v: 1,
+      title: "Flow",
+      pages: [{ id: "page-1", name: "Flow", pos: "a0" }],
+      boards: {
+        [NEAR]: { x: 0, y: 0, pos: "a0" },
+        [FAR]: { x: 500, y: 350, w: 100, h: 100, pos: "a1" },
+      },
+      notes: {},
+      order: [FAR, NEAR],
+      extra: {},
+    };
+    // The unsized board's centre is (640, 400), 60 from the point; an 800 by 600
+    // fallback would put it at (400, 300) and lose to the sized board at (550, 400).
+    expect(selectLiveBoards(snapshot, "page-1", { x: 700, y: 400 }, 1)).toEqual(
+      new Set([NEAR]),
+    );
   });
 });
 

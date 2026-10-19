@@ -12,7 +12,6 @@ import {
 } from "react";
 import {
   Background,
-  MiniMap,
   ReactFlow,
   type NodeChange,
   type ReactFlowInstance,
@@ -52,22 +51,19 @@ import {
   type CanvasNodeActions,
 } from "./canvas-node-context";
 import { CanvasBoardNode, CanvasNoteNode } from "./canvas-nodes";
-import { CanvasPages } from "./canvas-pages";
-import { CanvasToolbar } from "./canvas-toolbar";
-import { CanvasReadingOrder } from "./canvas-reading-order";
+import { CanvasPageMenu } from "./canvas-pages";
+import { CanvasToolbar, CanvasViewControls } from "./canvas-toolbar";
 import { CanvasFullscreen } from "./canvas-fullscreen";
 import { CanvasCursors } from "./canvas-presence";
 import { useCanvasPointer } from "./use-canvas-pointer";
 import { resizedNote } from "./canvas-geometry";
 import { CanvasDrawingLayer } from "./canvas-drawing-layer";
+import { CanvasNoteProperties } from "./canvas-note-toolbar";
 import type { CanvasFrameEvents } from "./canvas-frame";
 import "@xyflow/react/dist/style.css";
+import { X } from "lucide-react";
+import { Button } from "@/components/ui/button";
 
-const MINIMAP_COLORS: Readonly<Record<string, string>> = {
-  board: "var(--primary)",
-  sticky: "var(--warning)",
-  title: "var(--info)",
-};
 const NODE_TYPES = {
   board: CanvasBoardNode,
   sticky: CanvasNoteNode,
@@ -80,6 +76,16 @@ const NODE_TYPES = {
   image: CanvasNoteNode,
 };
 const INITIAL_VIEW: Viewport = { x: 60, y: 100, zoom: 0.6 };
+/** Shapes and placed text come back selected; the pen keeps drawing until Esc. */
+const SELECT_AFTER_CREATE: ReadonlySet<string> = new Set([
+  "sticky",
+  "title",
+  "rect",
+  "oval",
+  "line",
+  "arrow",
+]);
+const TYPE_AFTER_CREATE: ReadonlySet<string> = new Set(["sticky", "title"]);
 const PRO_OPTIONS = { hideAttribution: true };
 interface NodeInteraction {
   readonly position?: CanvasPoint;
@@ -156,6 +162,71 @@ function notePosition(note: CanvasNote): CanvasPoint {
     y: Math.min(note.y ?? 0, note.y2 ?? note.y ?? 0),
   };
 }
+function noteKind(note: CanvasNote): string {
+  if (note.type === "sticky" || note.type === undefined) return "Note";
+  if (note.type === "title") return "Text";
+  return "Shape";
+}
+/** The inspector for a free note or shape; boards and elements use renderPanel. */
+function CanvasNoteInspector({
+  id,
+  note,
+  onClose,
+}: {
+  readonly id: string;
+  readonly note: CanvasNote;
+  readonly onClose: () => void;
+}) {
+  const kind = noteKind(note);
+  return (
+    <aside
+      aria-label={`${kind} inspector`}
+      className="flex h-full w-full min-w-0 flex-col overflow-y-auto border-l bg-card shadow-sm"
+    >
+      <div className="flex items-center justify-between border-b px-3 py-1.5">
+        <h2 className="text-ui-sm font-medium">{kind}</h2>
+        <Button
+          variant="ghost"
+          size="icon-xs"
+          aria-label="Close inspector"
+          onClick={onClose}
+        >
+          <X />
+        </Button>
+      </div>
+      <div className="p-3">
+        <CanvasNoteProperties id={id} note={note} />
+      </div>
+    </aside>
+  );
+}
+/** The inspector beside the canvas: note properties for one note, else renderPanel. */
+function CanvasInspectorOverlay({
+  store,
+  frameEvents,
+  selectedNotes,
+  onClose,
+}: {
+  readonly store: CanvasLayoutStore;
+  readonly frameEvents: CanvasFrameEvents | null;
+  readonly selectedNotes: readonly CanvasFlowNode[];
+  readonly onClose: () => void;
+}) {
+  const note = selectedNotes.length === 1 ? selectedNotes[0].data : null;
+  return (
+    <div className="flex h-full w-80 max-w-[45%] shrink-0 [&]:pointer-events-auto">
+      {note !== null && note.note !== null ? (
+        <CanvasNoteInspector
+          id={note.path}
+          note={note.note}
+          onClose={onClose}
+        />
+      ) : (
+        frameEvents?.renderPanel?.(store, { onClose })
+      )}
+    </div>
+  );
+}
 export function CanvasArtifactEditor({
   artifactId,
   store,
@@ -184,7 +255,10 @@ export function CanvasArtifactEditor({
     "";
   const [tool, setTool] = useState<CanvasTool>("select");
   const [play, setPlay] = useState(false);
-  const [orderOpen, setOrderOpen] = useState(false);
+  const [inspectorOpen, setInspectorOpen] = useState(false);
+  // Holding Space pans from any tool, as in design tools, without changing it.
+  const [spaceHeld, setSpaceHeld] = useState(false);
+  const [editingNote, setEditingNote] = useState<string | null>(null);
   const [fullscreen, setFullscreen] = useState<string | null>(null);
   const [flow, setFlow] = useState<ReactFlowInstance<CanvasFlowNode> | null>(
     null,
@@ -230,7 +304,8 @@ export function CanvasArtifactEditor({
       ),
     [snapshot, page, size, settledViewport, liveFrameLimit, activeFullscreen],
   );
-  const selectEnabled = canvasSelectionEnabled(readOnly, play, tool);
+  const activeTool: CanvasTool = spaceHeld ? "hand" : tool;
+  const selectEnabled = canvasSelectionEnabled(readOnly, play, activeTool);
   const nodes = useMemo<CanvasFlowNode[]>(
     () => [
       ...items.boards.map(([path, board], index): CanvasFlowNode => {
@@ -335,18 +410,28 @@ export function CanvasArtifactEditor({
     [snapshot, flow, viewport.zoom],
   );
   const revealCommentBoard = useCallback(
-    (path: string): void => {
-      if (!Object.hasOwn(snapshot.boards, path)) return;
+    (path: string): boolean => {
+      if (flow === null || !Object.hasOwn(snapshot.boards, path)) return false;
       const board = snapshot.boards[path];
       setChosenPage(board.page ?? snapshot.pages.at(0)?.id ?? "");
       const frame = boardFrame(board);
-      void flow?.fitBounds(
+      void flow.fitBounds(
         { x: frame.x, y: frame.y, width: frame.w, height: frame.h },
         { padding: 0.15, duration: 200 },
       );
+      return true;
     },
     [snapshot.boards, snapshot.pages, flow],
   );
+  const clearNodeSelection = useCallback((): void => {
+    setEditingNote(null);
+    setInteractions((previous) => {
+      const next: Record<string, NodeInteraction | undefined> = {};
+      for (const [key, value] of Object.entries(previous))
+        next[key] = value === undefined ? value : { ...value, selected: false };
+      return next;
+    });
+  }, []);
   useEffect(() => {
     frameEvents?.onCanvasView?.({
       tool,
@@ -356,6 +441,7 @@ export function CanvasArtifactEditor({
       sourceForBoard,
       revealBoard: revealCommentBoard,
       setTool,
+      clearNodeSelection,
     });
     return () => frameEvents?.onCanvasView?.(null);
   }, [
@@ -366,6 +452,7 @@ export function CanvasArtifactEditor({
     snapshot.order,
     sourceForBoard,
     revealCommentBoard,
+    clearNodeSelection,
   ]);
   const boardEvents = useMemo<CanvasFrameEvents>(
     () => ({
@@ -418,8 +505,9 @@ export function CanvasArtifactEditor({
         selectEnabled ||
         (!readOnly &&
           !play &&
-          tool === "comment" &&
+          activeTool === "comment" &&
           frameEvents?.commentsEnabled === true),
+      panMode: activeTool === "hand" && !play && !readOnly,
       onAddError: (path, error) => {
         if (readOnly) return;
         onAddError?.(path, error);
@@ -449,6 +537,30 @@ export function CanvasArtifactEditor({
           snapshot.notes[id].text !== text
         )
           store.transact((layout) => upsertNote(layout, id, { text }));
+      },
+      updateNote: (id, patch) => {
+        if (Object.hasOwn(snapshot.notes, id))
+          store.transact((layout) => upsertNote(layout, id, patch));
+      },
+      editingNote,
+      setEditingNote,
+      fitBoardHeight: (path, height) => {
+        // Only a board the agent left without a height is fitted, once: the
+        // write gives it one, so later content changes never resize it.
+        // Read the live document, not this render's snapshot: a resize or a
+        // peer's edit may already have given the board a height.
+        if (readOnly || activeStore.current !== store || store.doc.isDestroyed)
+          return;
+        const current = readCanvasLayout(store.handle);
+        if (
+          !Object.hasOwn(current.boards, path) ||
+          current.boards[path].h !== undefined
+        )
+          return;
+        const frame = boardFrame(current.boards[path]);
+        store.transact((layout) =>
+          setBoardFrame(layout, path, { ...frame, h: Math.round(height) }),
+        );
       },
       resize: (id, frame) => {
         // XYResizer may deliver the gesture-start callback after a replacement
@@ -482,7 +594,7 @@ export function CanvasArtifactEditor({
     [
       sourceForBoard,
       selectEnabled,
-      tool,
+      activeTool,
       play,
       frameEvents,
       boardEvents,
@@ -490,6 +602,7 @@ export function CanvasArtifactEditor({
       onAddError,
       store,
       snapshot,
+      editingNote,
     ],
   );
   const setPage = (id: string): void => {
@@ -499,6 +612,51 @@ export function CanvasArtifactEditor({
   };
   const moveOrder = (path: string, before: string | null): void =>
     store.transact((layout) => moveBoardOrder(layout, path, before));
+  const chooseTool = (next: CanvasTool): void => {
+    setPlay(false);
+    setTool(next);
+  };
+  const createNote = (note: CanvasNote): void => {
+    const id = crypto.randomUUID();
+    store.transact((layout) => upsertNote(layout, id, { ...note, page }));
+    if (!SELECT_AFTER_CREATE.has(note.type ?? "sticky")) return;
+    // The new item replaces whatever was selected, so the inspector and the
+    // note bar describe it rather than the board picked before.
+    frameEvents?.onBoardSelect?.(null);
+    clearNodeSelection();
+    setInteractions((previous) => ({
+      ...previous,
+      [`note:${id}`]: { selected: true },
+    }));
+    if (TYPE_AFTER_CREATE.has(note.type ?? "sticky")) setEditingNote(id);
+    setTool("select");
+  };
+  const selectedNotes = nodes.filter(
+    (node) => node.selected && node.data.note !== null,
+  );
+  const deleteSelectedNotes = (event: KeyboardEvent): void => {
+    if (selectedNotes.length === 0) return;
+    event.preventDefault();
+    event.stopPropagation();
+    store.transact((layout) => {
+      for (const node of selectedNotes) removeNote(layout, node.data.path);
+    });
+  };
+  const chooseToolForKey = (event: KeyboardEvent): void => {
+    // Escape also steps the selection out (element, then board), which the
+    // selection provider handles further along, so it is let through.
+    if (event.code === "Escape") {
+      chooseTool("select");
+      return;
+    }
+    const next = canvasToolForKey(
+      event.code.startsWith("Key") ? event.code.slice(3) : event.code,
+    );
+    if (!canvasToolAllowed(next, frameEvents)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    chooseTool(next);
+  };
   return (
     <CanvasNodeContext.Provider value={actions}>
       <div
@@ -510,102 +668,31 @@ export function CanvasArtifactEditor({
           if (!isCanvasTextInput(event.target, event.currentTarget))
             event.currentTarget.focus({ preventScroll: true });
         }}
+        onKeyUpCapture={(event) => {
+          if (event.code === "Space") setSpaceHeld(false);
+        }}
+        onBlur={(event) => {
+          if (!event.currentTarget.contains(event.relatedTarget))
+            setSpaceHeld(false);
+        }}
         onKeyDownCapture={(event) => {
           if (readOnly || activeFullscreen !== null) return;
           if (isCanvasTextInput(event.target, event.currentTarget)) return;
-          if (handleCanvasUndo(event, store)) return;
-          if (event.metaKey || event.ctrlKey || event.altKey) return;
-          if (
-            !play &&
-            (event.code === "Delete" || event.code === "Backspace")
-          ) {
-            const selected = nodes.filter(
-              (node) => node.selected && node.data.note !== null,
-            );
-            if (selected.length > 0) {
-              event.preventDefault();
-              event.stopPropagation();
-              store.transact((layout) => {
-                for (const node of selected) removeNote(layout, node.data.path);
-              });
-            }
+          if (event.code === "Space") {
+            event.preventDefault();
+            if (!play) setSpaceHeld(true);
             return;
           }
-          const next = canvasToolForKey(
-            event.code.startsWith("Key") ? event.code.slice(3) : event.code,
-          );
-          if (canvasToolAllowed(next, frameEvents)) {
-            event.preventDefault();
-            event.stopPropagation();
-            setTool(next);
-            setPlay(false);
+          if (handleCanvasUndo(event, store)) return;
+          if (event.metaKey || event.ctrlKey || event.altKey) return;
+          if (event.code === "Delete" || event.code === "Backspace") {
+            if (!play) deleteSelectedNotes(event);
+            return;
           }
+          chooseToolForKey(event);
         }}
       >
-        <CanvasPages
-          viewOnly={readOnly}
-          pages={snapshot.pages}
-          page={page}
-          onSelect={setPage}
-          onRename={(id, name) =>
-            store.transact((layout) => setPageName(layout, id, name))
-          }
-          onAdd={() => {
-            const id = crypto.randomUUID();
-            store.transact((layout) =>
-              addPage(layout, id, `Page ${snapshot.pages.length + 1}`, null),
-            );
-            setPage(id);
-          }}
-          onRemove={(id) => store.transact((layout) => removePage(layout, id))}
-        />
-        <CanvasToolbar
-          commentsEnabled={frameEvents?.commentsEnabled}
-          viewOnly={readOnly}
-          onZoom={(zoom) => {
-            void flow?.zoomTo(zoom);
-          }}
-          tool={tool}
-          setTool={setTool}
-          play={play}
-          setPlay={setPlay}
-          orderOpen={orderOpen}
-          toggleOrder={() => setOrderOpen((open) => !open)}
-          undo={store.undo}
-          redo={store.redo}
-          canUndo={state.canUndo}
-          canRedo={state.canRedo}
-          zoom={{
-            ready: flow !== null,
-            scalePercent: Math.round(viewport.zoom * 100),
-            canZoomIn: viewport.zoom < 4,
-            canZoomOut: viewport.zoom > 0.05,
-            onZoomIn: () => {
-              void flow?.zoomIn();
-            },
-            onZoomOut: () => {
-              void flow?.zoomOut();
-            },
-            fitKind: "screen",
-            fitActive: false,
-            onFit: () => {
-              void flow?.fitView({ padding: 0.15, duration: 200 });
-            },
-            actualSizeActive: Math.abs(viewport.zoom - 1) < 0.001,
-            onActualSize: () => {
-              void flow?.zoomTo(1);
-            },
-          }}
-        />
         <div className="flex min-h-0 flex-1">
-          {orderOpen ? (
-            <CanvasReadingOrder
-              viewOnly={readOnly}
-              boards={items.boards}
-              onCenter={centerBoard}
-              onMove={moveOrder}
-            />
-          ) : null}
           <div
             ref={stageRef}
             className="relative min-h-0 min-w-0 flex-1"
@@ -624,16 +711,19 @@ export function CanvasArtifactEditor({
                   frameEvents?.onBoardSelect?.(node.data.path);
               }}
               onPaneClick={(event) => {
+                if (readOnly || play) return;
                 if (
-                  !readOnly &&
-                  !play &&
-                  tool === "comment" &&
+                  activeTool === "comment" &&
                   frameEvents?.commentsEnabled === true
                 )
                   frameEvents.onPaneComment?.({
                     x: event.clientX,
                     y: event.clientY,
                   });
+                else if (activeTool === "select") {
+                  frameEvents?.onBoardSelect?.(null);
+                  clearNodeSelection();
+                }
               }}
               onInit={setFlow}
               defaultViewport={INITIAL_VIEW}
@@ -642,15 +732,19 @@ export function CanvasArtifactEditor({
               colorMode={theme}
               proOptions={PRO_OPTIONS}
               noDragClassName="touch-auto"
-              noPanClassName="pointer-events-auto"
-              noWheelClassName="overscroll-contain"
+              noPanClassName="canvas-nopan"
+              noWheelClassName="canvas-nowheel"
               nodesConnectable={false}
               nodesDraggable={selectEnabled}
               elementsSelectable={selectEnabled}
               selectionOnDrag={selectEnabled}
-              panOnDrag={readOnly || play || tool === "hand" ? true : [1, 2]}
+              panOnDrag={
+                readOnly || play || activeTool === "hand" ? true : [1, 2]
+              }
               panOnScroll
+              panOnScrollSpeed={1}
               zoomOnScroll={false}
+              zoomOnDoubleClick={false}
               deleteKeyCode={null}
               onMove={(_event, value) => setViewport(value)}
               onMoveEnd={(_event, value) => {
@@ -694,30 +788,14 @@ export function CanvasArtifactEditor({
               aria-label="Canvas workspace"
             >
               <Background color="var(--border)" />
-              <MiniMap
-                pannable
-                zoomable
-                nodeColor={(node) =>
-                  Object.hasOwn(MINIMAP_COLORS, node.type ?? "")
-                    ? MINIMAP_COLORS[node.type ?? ""]
-                    : "var(--muted-foreground)"
-                }
-                maskColor="color-mix(in oklab, var(--background) 65%, transparent)"
-                maskStrokeColor="var(--border)"
-              />
             </ReactFlow>
-            {canvasDrawingEnabled(readOnly, play, tool) ? (
+            {canvasDrawingEnabled(readOnly, play, activeTool) ? (
               <CanvasDrawingLayer
-                key={tool}
-                tool={tool}
+                key={activeTool}
+                tool={activeTool}
                 viewport={viewport}
                 toCanvas={toCanvas}
-                onCreate={(note) => {
-                  store.transact((layout) =>
-                    upsertNote(layout, crypto.randomUUID(), { ...note, page }),
-                  );
-                  setTool("select");
-                }}
+                onCreate={createNote}
               />
             ) : null}
             <CanvasPaneComments events={frameEvents} />
@@ -727,8 +805,91 @@ export function CanvasArtifactEditor({
               page={page}
               viewport={viewport}
             />
+            <div className="pointer-events-none absolute inset-0 flex">
+              <div className="flex min-w-0 flex-1 items-start justify-between gap-2 p-2">
+                <div className="min-w-0 [&]:pointer-events-auto">
+                  <CanvasToolbar
+                    viewOnly={readOnly}
+                    commentsEnabled={frameEvents?.commentsEnabled === true}
+                    tool={tool}
+                    play={play}
+                    onTool={chooseTool}
+                    pages={
+                      <CanvasPageMenu
+                        viewOnly={readOnly}
+                        pages={snapshot.pages}
+                        page={page}
+                        boards={items.boards}
+                        onSelect={setPage}
+                        onRename={(id, name) =>
+                          store.transact((layout) =>
+                            setPageName(layout, id, name),
+                          )
+                        }
+                        onAdd={() => {
+                          const id = crypto.randomUUID();
+                          store.transact((layout) =>
+                            addPage(
+                              layout,
+                              id,
+                              `Page ${snapshot.pages.length + 1}`,
+                              null,
+                            ),
+                          );
+                          setPage(id);
+                        }}
+                        onRemove={(id) =>
+                          store.transact((layout) => removePage(layout, id))
+                        }
+                        onCenterBoard={centerBoard}
+                        onMoveBoard={moveOrder}
+                      />
+                    }
+                  />
+                </div>
+                <div className="shrink-0 [&]:pointer-events-auto">
+                  <CanvasViewControls
+                    viewOnly={readOnly}
+                    play={play}
+                    setPlay={setPlay}
+                    inspectorOpen={inspectorOpen}
+                    toggleInspector={() => setInspectorOpen((open) => !open)}
+                    trailing={frameEvents?.renderToolbarControls?.()}
+                    undo={store.undo}
+                    redo={store.redo}
+                    canUndo={state.canUndo}
+                    canRedo={state.canRedo}
+                    zoom={{
+                      ready: flow !== null,
+                      percent: Math.round(viewport.zoom * 100),
+                      canZoomIn: viewport.zoom < 4,
+                      canZoomOut: viewport.zoom > 0.05,
+                      onZoomIn: () => {
+                        void flow?.zoomIn();
+                      },
+                      onZoomOut: () => {
+                        void flow?.zoomOut();
+                      },
+                      onFit: () => {
+                        void flow?.fitView({ padding: 0.15, duration: 200 });
+                      },
+                      onZoom: (zoom) => {
+                        void flow?.zoomTo(zoom);
+                      },
+                    }}
+                  />
+                </div>
+              </div>
+              {readOnly || !inspectorOpen ? null : (
+                <CanvasInspectorOverlay
+                  store={store}
+                  frameEvents={frameEvents}
+                  selectedNotes={selectedNotes}
+                  onClose={() => setInspectorOpen(false)}
+                />
+              )}
+            </div>
           </div>
-          {readOnly ? null : frameEvents?.renderPanel?.(store)}
         </div>
         {activeFullscreen === null ? null : (
           <CanvasFullscreen

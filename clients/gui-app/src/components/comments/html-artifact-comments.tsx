@@ -22,10 +22,9 @@ import { resolveHtmlCommentArtboard } from "@/lib/comments/frame-comment-anchor"
 import { deriveFrameCommentPositions } from "@/lib/comments/frame-comment-positions";
 import { registerCommentEditor } from "@/lib/comments/comment-editor-registry";
 import { AnchoredDraftPopover } from "./anchored-draft-popover";
-import {
-  FrameCommentPins,
-  WholeArtifactCommentPin,
-} from "./frame-comment-pins";
+import { FrameCommentPins } from "./frame-comment-pins";
+import { FrameCommentsToolbar } from "./frame-comments";
+import { useOrderedFrameThreads } from "./use-ordered-frame-threads";
 
 export interface HtmlCommentScope {
   readonly epicId: string;
@@ -37,6 +36,13 @@ export interface HtmlCommentScope {
   readonly rootArtboard: string;
   readonly source: SandboxSource;
 }
+export function HtmlArtifactCommentsToolbar(props: {
+  readonly scope: HtmlCommentScope | null;
+}) {
+  if (props.scope === null) return null;
+  return <FrameCommentsToolbar {...props.scope} artifactType="html" />;
+}
+
 export function HtmlArtifactCommentAction(props: {
   readonly scope: HtmlCommentScope;
   readonly context: HtmlArtifactFrameContext;
@@ -117,7 +123,10 @@ export function HtmlArtifactComments(props: {
   readonly viewOnly: boolean;
 }) {
   const client = useTabHostClient();
-  const activate = useActivateCommentThread(props.scope);
+  const activate = useActivateCommentThread({
+    ...props.scope,
+    artifactType: "html",
+  });
   return (
     <>
       {props.context.servedSha256 === null ? null : (
@@ -183,7 +192,12 @@ function HtmlCommentDocument(props: {
     [threads, scope.rootPath, source],
   );
   const focused = usePaneFocused();
-  const activate = useActivateCommentThread(scope);
+  const ordered = useOrderedFrameThreads(
+    scope.epicId,
+    scope.artifactId,
+    "html",
+  );
+  const activate = useActivateCommentThread({ ...scope, artifactType: "html" });
   useEffect(() => {
     if (focused)
       useAnchorPositionsStore
@@ -197,26 +211,43 @@ function HtmlCommentDocument(props: {
         artifactId: scope.artifactId,
         tileId: scope.tileId,
         isActive: focused,
-        reveal: (threadId) =>
-          threads.some((thread) => thread.threadId === threadId),
+        reveal: (threadId) => {
+          if (!focused) return false;
+          const thread = threads.find(
+            (candidate) => candidate.threadId === threadId,
+          );
+          if (thread === undefined) return false;
+          if (
+            thread.data.artboard === scope.rootPath &&
+            thread.data.elementId !== undefined
+          ) {
+            if (context.bridge === null) return false;
+            void context.bridge.revealElement({ tid: thread.data.elementId });
+          }
+          return true;
+        },
       }),
-    [scope.epicId, scope.artifactId, scope.tileId, focused, threads],
+    [
+      scope.epicId,
+      scope.artifactId,
+      scope.tileId,
+      scope.rootPath,
+      focused,
+      threads,
+      context.bridge,
+    ],
   );
   return (
-    <>
-      <FrameCommentPins
-        epicId={scope.epicId}
-        threads={rootThreads}
-        source={source}
-        bridge={context.bridge}
-        frame={context.frame}
-        onActivate={activate}
-      />
-      <WholeArtifactCommentPin
-        epicId={scope.epicId}
-        threads={threads}
-        onActivate={activate}
-      />
-    </>
+    <FrameCommentPins
+      epicId={scope.epicId}
+      artifactId={scope.artifactId}
+      artifactType="html"
+      ordered={ordered ?? []}
+      threads={rootThreads}
+      source={source}
+      bridge={context.bridge}
+      frame={context.frame}
+      onActivate={activate}
+    />
   );
 }

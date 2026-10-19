@@ -388,3 +388,192 @@ describe("CanvasPropertiesPanel while a save is pending", () => {
     });
   });
 });
+
+// The inspector shows computed styles the way a design tool would, but only
+// what the person types is ever written back.
+describe("CanvasPropertiesPanel field display", () => {
+  function selectComputed(
+    computedStyles: readonly { property: string; value: string }[],
+  ): void {
+    act(() => {
+      useCanvasSelectionStore
+        .getState()
+        .select(
+          selectionOf({ computedStyles: [...computedStyles] }, "sha-old"),
+        );
+    });
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    pendingSaves.length = 0;
+  });
+
+  afterEach(() => {
+    cleanup();
+    act(() => {
+      useCanvasSelectionStore.getState().clear();
+    });
+    vi.useRealTimers();
+  });
+
+  it("shows colours as hex, font families and weights by name, and lengths in whole pixels", () => {
+    selectComputed([
+      { property: "color", value: "rgb(255, 136, 0)" },
+      { property: "background-color", value: "rgba(0, 0, 0, 0.2)" },
+      { property: "border-color", value: "rgba(0, 0, 0, 0)" },
+      { property: "font-family", value: '"Helvetica Neue", Arial, sans-serif' },
+      { property: "font-weight", value: "700" },
+      { property: "font-size", value: "15.4px" },
+      { property: "width", value: "100.6px" },
+    ]);
+    render(<CanvasPropertiesPanel artifactId={ARTIFACT_ID} />);
+
+    expect(inputLabelled("Text colour").value).toBe("#ff8800");
+    expect(inputLabelled("Background colour").value).toBe("#00000033");
+    expect(inputLabelled("Border colour").value).toBe("transparent");
+    expect(inputLabelled("Font family").value).toBe("Helvetica Neue");
+    expect(inputLabelled("Font weight").value).toBe("Bold 700");
+    expect(inputLabelled("Font size").value).toBe("15px");
+    expect(inputLabelled("Width").value).toBe("101px");
+  });
+
+  it("writes nothing when a field that shows a simplified value is focused and left untouched", () => {
+    selectComputed([
+      { property: "width", value: "100.6px" },
+      { property: "color", value: "rgb(255, 136, 0)" },
+      { property: "font-weight", value: "400" },
+    ]);
+    render(<CanvasPropertiesPanel artifactId={ARTIFACT_ID} />);
+
+    for (const label of ["Width", "Text colour", "Font weight"]) {
+      const field = inputLabelled(label);
+      field.focus();
+      fireEvent.blur(field);
+    }
+    advance(DEBOUNCE_MS * 2);
+
+    expect(pendingSaves).toHaveLength(0);
+  });
+
+  it("writes the weight number when a weight name is shown and the person edits it", () => {
+    selectComputed([{ property: "font-weight", value: "400" }]);
+    render(<CanvasPropertiesPanel artifactId={ARTIFACT_ID} />);
+    const weight = inputLabelled("Font weight");
+    expect(weight.value).toBe("Regular 400");
+
+    fireEvent.change(weight, { target: { value: "Bold 700" } });
+    fireEvent.blur(weight);
+
+    expect(pendingSaves).toHaveLength(1);
+    expect(pendingSaves[0].variables.edit).toEqual({
+      kind: "set-style",
+      property: "font-weight",
+      value: "700",
+    });
+  });
+
+  it("writes what the person typed over a shown hex colour as typed", () => {
+    selectComputed([{ property: "color", value: "rgb(255, 136, 0)" }]);
+    render(<CanvasPropertiesPanel artifactId={ARTIFACT_ID} />);
+    const colour = inputLabelled("Text colour");
+
+    fireEvent.change(colour, { target: { value: "#112233" } });
+    fireEvent.blur(colour);
+
+    expect(pendingSaves[0].variables.edit).toEqual({
+      kind: "set-style",
+      property: "color",
+      value: "#112233",
+    });
+  });
+
+  it("returns an abandoned edit to the shown value, not the raw computed one", () => {
+    selectComputed([{ property: "width", value: "100.6px" }]);
+    render(<CanvasPropertiesPanel artifactId={ARTIFACT_ID} />);
+    const width = inputLabelled("Width");
+
+    fireEvent.change(width, { target: { value: "5" } });
+    fireEvent.keyDown(width, { key: "Escape" });
+    fireEvent.blur(width);
+    advance(DEBOUNCE_MS * 2);
+
+    expect(width.value).toBe("101px");
+    expect(pendingSaves).toHaveLength(0);
+  });
+});
+
+describe("CanvasPropertiesPanel layout", () => {
+  beforeEach(() => {
+    pendingSaves.length = 0;
+    act(() => {
+      useCanvasSelectionStore.getState().select(selectionOf({}, "sha-old"));
+    });
+  });
+
+  afterEach(() => {
+    cleanup();
+    act(() => {
+      useCanvasSelectionStore.getState().clear();
+    });
+  });
+
+  it("opens with every section expanded and no nested tabs", () => {
+    render(<CanvasPropertiesPanel artifactId={ARTIFACT_ID} />);
+
+    for (const name of [
+      "Size",
+      "Spacing",
+      "Text",
+      "Fill & border",
+      "Visibility",
+    ])
+      expect(
+        screen.getByRole("button", { name }).getAttribute("aria-expanded"),
+      ).toBe("true");
+    expect(screen.queryAllByRole("tab")).toHaveLength(0);
+    expect(screen.queryByLabelText("Element styles")).toBeNull();
+    expect(screen.getByRole("switch", { name: "Hide element" })).toBeDefined();
+    for (const label of ["Width", "Padding", "Font weight", "Alignment"])
+      expect(inputLabelled(label)).toBeDefined();
+  });
+
+  it("collapses a section on its heading", () => {
+    render(<CanvasPropertiesPanel artifactId={ARTIFACT_ID} />);
+    const size = screen.getByRole("button", { name: "Size" });
+
+    fireEvent.click(size);
+
+    expect(size.getAttribute("aria-expanded")).toBe("false");
+    expect(
+      screen
+        .getByRole("button", { name: "Spacing" })
+        .getAttribute("aria-expanded"),
+    ).toBe("true");
+  });
+
+  it("shows the editable CSS instead of the fields on the code tab, and saves it as the style attribute", async () => {
+    act(() => {
+      useCanvasSelectionStore
+        .getState()
+        .select(selectionOf({ inlineStyle: "color: red" }, "sha-old"));
+    });
+    render(<CanvasPropertiesPanel artifactId={ARTIFACT_ID} tab="code" />);
+
+    expect(screen.queryByLabelText("Width")).toBeNull();
+    expect(screen.queryAllByRole("tab")).toHaveLength(0);
+    const css = screen.getByLabelText("Element styles");
+    expect(css).toHaveProperty("value", "color: red");
+
+    fireEvent.change(css, { target: { value: "color: blue" } });
+    fireEvent.click(screen.getByRole("button", { name: "Apply styles" }));
+
+    expect(pendingSaves).toHaveLength(1);
+    expect(pendingSaves[0].variables.edit).toEqual({
+      kind: "set-attribute",
+      name: "style",
+      value: "color: blue",
+    });
+    await settleSave(0, SAVED);
+  });
+});

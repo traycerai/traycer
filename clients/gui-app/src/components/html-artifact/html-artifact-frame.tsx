@@ -14,6 +14,7 @@ import type {
   SandboxStatus,
 } from "@/lib/sandbox/bridge-host";
 import { HtmlSelectionLayer } from "./html-selection-layer";
+import { FrameCommentSurfaceProvider } from "@/components/comments/frame-comment-surface";
 import {
   useHtmlSelectionStore,
   type HtmlSelection,
@@ -43,6 +44,7 @@ export function HtmlArtifactFrame(props: {
     context: HtmlArtifactFrameContext,
   ) => ReactNode;
   readonly renderComments?: (context: HtmlArtifactFrameContext) => ReactNode;
+  readonly toolbarControls?: ReactNode;
   readonly overlay?: ReactNode;
 }) {
   const { source } = props;
@@ -99,42 +101,50 @@ export function HtmlArtifactFrame(props: {
     servedSha256: document?.servedSha256 ?? null,
   };
   return (
-    <div className="relative h-full w-full">
-      <SandboxFrame
-        source={source}
-        kind="page"
-        title={props.title}
-        appName={null}
-        networkPolicy="https-only"
-        appCsp={null}
-        permissions={NO_PERMISSIONS}
-        appRequests={null}
-        className="h-full w-full"
-        height={null}
-        onSize={noop}
-        onStatus={onStatus}
-        onRequestTeardown={noop}
-        displayMode="inline"
-        onBridge={onBridge}
-        onTextSelection={(range) => {
-          if (selectable && ready)
-            useHtmlSelectionStore.getState().setTextRange(artifactId, range);
-        }}
-        ref={setFrame}
-      />
-      {selectable ? (
-        <HtmlSelectionLayer
-          artifactId={artifactId}
-          servedSha256={context.servedSha256}
-          bridge={context.bridge}
-          frame={frame}
-          actionControls={(selection) =>
-            props.actionControls?.(selection, context)
-          }
-          overlay={props.overlay}
+    <FrameCommentSurfaceProvider>
+      <div className="relative h-full w-full">
+        <SandboxFrame
+          source={source}
+          kind="page"
+          title={props.title}
+          appName={null}
+          networkPolicy="https-only"
+          appCsp={null}
+          permissions={NO_PERMISSIONS}
+          appRequests={null}
+          className="h-full w-full"
+          height={null}
+          onSize={noop}
+          onStatus={onStatus}
+          onRequestTeardown={noop}
+          displayMode="inline"
+          onBridge={onBridge}
+          onTextSelection={(range) => {
+            if (selectable && ready)
+              useHtmlSelectionStore.getState().setTextRange(artifactId, range);
+          }}
+          ref={setFrame}
         />
-      ) : null}
-      {props.renderComments?.(context)}
-    </div>
+        {selectable ? (
+          <HtmlSelectionLayer
+            artifactId={artifactId}
+            servedSha256={context.servedSha256}
+            bridge={context.bridge}
+            frame={frame}
+            actionControls={(selection) =>
+              props.actionControls?.(selection, context)
+            }
+            overlay={props.overlay}
+            toolbarControls={props.toolbarControls}
+          />
+        ) : null}
+        {props.renderComments?.(context)}
+        {!selectable ? (
+          <div className="absolute right-2 top-2 z-30 rounded-md bg-popover">
+            {props.toolbarControls}
+          </div>
+        ) : null}
+      </div>
+    </FrameCommentSurfaceProvider>
   );
 }

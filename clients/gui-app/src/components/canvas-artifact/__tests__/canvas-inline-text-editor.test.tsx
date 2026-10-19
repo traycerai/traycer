@@ -6,7 +6,12 @@ import {
   screen,
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { parseHtmlSource } from "@traycer/html-source";
 import { CanvasInlineTextEditor } from "../canvas-inline-text-editor";
+import {
+  canvasRetypeTarget,
+  type CanvasRetypeTarget,
+} from "../canvas-inline-text-edit";
 import { canvasTextEditorStyle } from "../canvas-inline-text-geometry";
 import { useCanvasSelectionStore } from "../canvas-selection-store";
 import {
@@ -47,6 +52,10 @@ function mountReading(
   textNodeIndex: number | null,
   readText: ReadText,
 ): Mounted {
+  return mountTarget({ text: "Hello", textNodeIndex }, readText);
+}
+
+function mountTarget(target: CanvasRetypeTarget, readText: ReadText): Mounted {
   const onClose = vi.fn();
   const outerKeyDown = vi.fn();
   const outerPointerDown = vi.fn();
@@ -58,7 +67,7 @@ function mountReading(
     >
       <CanvasInlineTextEditor
         selection={SELECTION}
-        target={{ text: "Hello", textNodeIndex }}
+        target={target}
         readText={readText}
         onClose={onClose}
       />
@@ -412,11 +421,12 @@ describe("CanvasInlineTextEditor when the page's text may have changed", () => {
     });
   });
 
-  it("saves nothing if the selection moved while the page was being read", async () => {
+  it("still saves what was typed when the selection moved on while the page was being read", async () => {
     const read = deferred<string | null>();
     mountReading(2, () => read.promise);
     type("Mine");
     await enter();
+    // Clicking another element commits the editor and moves the selection.
     act(() => {
       useCanvasSelectionStore
         .getState()
@@ -427,7 +437,12 @@ describe("CanvasInlineTextEditor when the page's text may have changed", () => {
       await new Promise<void>((resolve) => setTimeout(resolve, 0));
     });
 
-    expect(pendingSaves).toHaveLength(0);
+    expect(pendingSaves).toHaveLength(1);
+    expect(pendingSaves[0].variables.edit).toMatchObject({
+      kind: "set-text-node",
+      text: "Mine",
+      expectedText: "Hello",
+    });
     expect(screen.queryByRole("status")).toBeNull();
   });
 
@@ -476,7 +491,7 @@ describe("CanvasInlineTextEditor when the page's text may have changed", () => {
     expect(pendingSaves).toHaveLength(0);
   });
 
-  it("saves nothing if the editor left the screen while the page was being read", async () => {
+  it("still saves when the editor left the screen while the page was being read", async () => {
     const read = deferred<string | null>();
     mountReading(2, () => read.promise);
     type("Mine");
@@ -486,7 +501,8 @@ describe("CanvasInlineTextEditor when the page's text may have changed", () => {
       read.resolve("Hello");
       await new Promise<void>((resolve) => setTimeout(resolve, 0));
     });
-    expect(pendingSaves).toHaveLength(0);
+    expect(pendingSaves).toHaveLength(1);
+    expect(pendingSaves[0].variables.edit).toMatchObject({ text: "Mine" });
   });
 
   it("does not read the page twice for one Enter pressed again while it waits", async () => {
@@ -507,6 +523,129 @@ describe("CanvasInlineTextEditor when the page's text may have changed", () => {
       await new Promise<void>((resolve) => setTimeout(resolve, 0));
     });
     expect(pendingSaves).toHaveLength(1);
+  });
+});
+
+describe("CanvasInlineTextEditor retyping a whole block", () => {
+  const BLOCK = `<p data-tid="lead">Hello <b>big</b> world</p>`;
+  const BLOCK_TEXT = "Hello big world";
+
+  function blockTarget(): CanvasRetypeTarget {
+    const paragraph = parseHtmlSource(BLOCK).elements.find(
+      (candidate) => candidate.tagName === "p",
+    );
+    if (paragraph === undefined) throw new Error("no paragraph in the block");
+    const target = canvasRetypeTarget(paragraph);
+    if (target === null) throw new Error("block is not retypable");
+    return target;
+  }
+  const readsBlock: ReadText = () => Promise.resolve(BLOCK_TEXT);
+
+  it("opens with the whole block's text, selected", () => {
+    mountTarget(blockTarget(), readsBlock);
+
+    expect(textarea().value).toBe(BLOCK_TEXT);
+    expect(textarea().selectionStart).toBe(0);
+    expect(textarea().selectionEnd).toBe(BLOCK_TEXT.length);
+  });
+
+  it("saves a change inside the block's own text as one text-node edit on the block", async () => {
+    const { onClose } = mountTarget(blockTarget(), readsBlock);
+    type("Howdy big world");
+    await enter();
+
+    expect(pendingSaves).toHaveLength(1);
+    expect(pendingSaves[0].variables.edit).toEqual({
+      kind: "set-text-node",
+      index: 0,
+      expectedText: "Hello ",
+      text: "Howdy ",
+    });
+    expect(pendingSaves[0].variables.selection.element.tagName).toBe("p");
+    await settleSave(0, SAVED);
+    expect(onClose).toHaveBeenCalledOnce();
+  });
+
+  it("saves a change inside formatted text against the inline element that owns it", async () => {
+    mountTarget(blockTarget(), readsBlock);
+    type("Hello bag world");
+    await enter();
+
+    expect(pendingSaves[0].variables.edit).toEqual({
+      kind: "set-text-node",
+      index: 0,
+      expectedText: "big",
+      text: "bag",
+    });
+    expect(pendingSaves[0].variables.selection.element).toMatchObject({
+      tagName: "b",
+      tid: null,
+    });
+  });
+
+  it("saves when focus leaves the editor too", async () => {
+    mountTarget(blockTarget(), readsBlock);
+    type("Hello bag world");
+    await leave();
+
+    expect(pendingSaves).toHaveLength(1);
+  });
+
+  it("closes without saving when nothing changed", async () => {
+    const { onClose } = mountTarget(blockTarget(), readsBlock);
+    await enter();
+
+    expect(pendingSaves).toHaveLength(0);
+    expect(onClose).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    ["spans formatted text", "Hello world"],
+    ["adds text at the edge of formatted text", "Hello bigger world"],
+    ["replaces everything", "Bye"],
+  ])(
+    "keeps a change that %s open with its draft instead of saving",
+    async (_label, value) => {
+      const { onClose } = mountTarget(blockTarget(), readsBlock);
+      type(value);
+      await enter();
+
+      expect(pendingSaves).toHaveLength(0);
+      expect(onClose).not.toHaveBeenCalled();
+      expect(screen.getByRole("status").textContent).toBe(
+        "This change crosses formatted text. Ask the agent to change it.",
+      );
+      expect(textarea().value).toBe(value);
+      expect(textarea().disabled).toBe(false);
+      expect(document.activeElement).toBe(textarea());
+    },
+  );
+
+  it("lets the person fix a refused change and save it", async () => {
+    mountTarget(blockTarget(), readsBlock);
+    type("Bye");
+    await enter();
+    expect(pendingSaves).toHaveLength(0);
+
+    type("Hello bag world");
+    await enter();
+
+    expect(pendingSaves).toHaveLength(1);
+    expect(screen.queryByRole("status")).toBeNull();
+  });
+
+  it("refuses to save over block text a script changed after the editor opened", async () => {
+    const { onClose } = mountTarget(blockTarget(), () =>
+      Promise.resolve("Hello big world, changed"),
+    );
+    type("Hello bag world");
+    await enter();
+
+    expect(pendingSaves).toHaveLength(0);
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.getByRole("status").textContent).toBe(
+      "This text was changed by a script. Ask the agent to change it.",
+    );
   });
 });
 

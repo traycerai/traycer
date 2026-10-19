@@ -2875,6 +2875,11 @@ export default tseslint.config(
             "toaster", // sonner's own root class
             "cn-toast", // the hook sonner's toastOptions.classNames targets
             "nokey", // XYFlow's capture-phase Shift selection opt-out
+            // The canvas's XYFlow noPanClassName / noWheelClassName: a
+            // dedicated name, because a utility class there would veto pans
+            // on any ancestor that happens to carry it.
+            "canvas-nopan",
+            "canvas-nowheel",
 
             // Markers with no CSS at all: a name a test's querySelector or a
             // sibling selector reaches for. Removing them would break the

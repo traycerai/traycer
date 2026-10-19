@@ -108,7 +108,12 @@ export function CanvasTweaksPanel(props: {
     () => readRootCustomProperties(props.document.text),
     [props.document],
   );
-  if (!result.ok || result.properties.length === 0) return null;
+  if (!result.ok || result.properties.length === 0)
+    return (
+      <p className="p-3 text-ui-xs text-muted-foreground">
+        No tweaks in this artboard.
+      </p>
+    );
   const commit = async (name: string, value: string): Promise<boolean> => {
     const root = props.document.parsed.elements.find(
       (element) => element.isUniqueSource && element.startTag !== null,
@@ -151,7 +156,7 @@ export function CanvasTweaksSection(props: {
     <section
       aria-label="Tweaks"
       aria-busy={props.pending}
-      className="grid gap-3 border-t p-3"
+      className="grid gap-3 p-3"
     >
       <h3 className="text-ui-sm font-medium">Tweaks</h3>
       {props.properties.map((property) => (

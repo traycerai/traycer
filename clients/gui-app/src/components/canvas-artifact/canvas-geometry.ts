@@ -68,8 +68,7 @@ export function noteFromStroke(
       w: Math.max(12, width),
       h: Math.max(12, height),
     };
-  if (tool === "sticky" || tool === "title")
-    note.text = tool === "title" ? "Title" : "";
+  if (tool === "sticky" || tool === "title") note.text = "";
   return note;
 }
 function penFromStroke(stroke: CanvasStroke): CanvasNote {

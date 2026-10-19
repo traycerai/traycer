@@ -5,7 +5,15 @@ import {
   render,
   screen,
 } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+  type Mock,
+} from "vitest";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -30,6 +38,7 @@ import {
   canvasElement,
   disposeBridges,
   pendingSaves,
+  quotedSelection,
   realBridge,
   REFUSED,
   registryServing,
@@ -469,6 +478,43 @@ describe("CanvasClipboardBoundary pasting", () => {
     paste(board(), { html: "<p>copied</p>" });
     fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
     expect(screen.queryByRole("status")).toBeNull();
+  });
+});
+
+describe("CanvasClipboardBoundary copying a selected range", () => {
+  function copyFromBoard(): {
+    readonly setData: Mock;
+    readonly proceeded: boolean;
+  } {
+    const setData = vi.fn();
+    render(
+      <CanvasClipboardBoundary
+        artifactId={ARTIFACT_ID}
+        registry={registryServing(null, SERVED)}
+      >
+        <button type="button">board</button>
+      </CanvasClipboardBoundary>,
+    );
+    const proceeded = fireEvent.copy(
+      screen.getByRole("button", { name: "board" }),
+      { clipboardData: { setData } },
+    );
+    return { setData, proceeded };
+  }
+
+  // The overlay keeps the parent document's focus, so the page never sees the
+  // copy; the boundary has to put the quoted text on the clipboard itself.
+  it("puts the quoted text on the clipboard and keeps the browser from copying", () => {
+    act(() => {
+      useCanvasSelectionStore
+        .getState()
+        .select(quotedSelection("Hello big", 6, 9, {}));
+    });
+    const { setData, proceeded } = copyFromBoard();
+
+    expect(setData).toHaveBeenCalledExactlyOnceWith("text/plain", "big");
+    expect(proceeded).toBe(false);
+    expect(pendingSaves).toHaveLength(0);
   });
 });
 

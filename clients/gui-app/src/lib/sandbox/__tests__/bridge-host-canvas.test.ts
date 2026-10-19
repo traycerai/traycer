@@ -232,6 +232,27 @@ describe("canvas requests", () => {
     await expect(byTid).resolves.toBeNull();
   });
 
+  it("asks the page to reveal an element and resolves with whether it found one", async () => {
+    const harness = createHarness({ canvas: true, ready: true });
+
+    const found = harness.host.revealElement({ tid: "hero" });
+    const foundRequest = harness.requestOf("traycer/canvas/reveal-element");
+    expect(foundRequest.params).toEqual({ tid: "hero", nonce: NONCE });
+    harness.host.receive(
+      respond(foundRequest, { revealed: true, nonce: NONCE }),
+    );
+    await expect(found).resolves.toBe(true);
+
+    const missing = harness.host.revealElement({ tid: "gone" });
+    harness.host.receive(
+      respond(harness.requestOf("traycer/canvas/reveal-element"), {
+        revealed: false,
+        nonce: NONCE,
+      }),
+    );
+    await expect(missing).resolves.toBe(false);
+  });
+
   it("resolves null for a malformed box", async () => {
     const harness = createHarness({ canvas: true, ready: true });
     const answer = harness.host.elementBox({ marker: 1 });
@@ -539,6 +560,61 @@ describe("canvas requests", () => {
       false,
     );
     await expect(harness.host.setMode("play")).resolves.toBe(false);
+    expect(canvasRequests(harness)).toEqual([]);
+  });
+});
+
+describe("canvas text gestures", () => {
+  const START = { x: 10, y: 12 };
+  const END = { x: 80, y: 14 };
+
+  it("posts a text-range drag between two points and resolves true on the page's answer", async () => {
+    const harness = createHarness({ canvas: true, ready: true });
+
+    const selected = harness.host.selectTextRange({ start: START, end: END });
+    const request = harness.requestOf("traycer/canvas/select-text-range");
+    expect(request.params).toEqual({ start: START, end: END, nonce: NONCE });
+    harness.host.receive(respond(request, { nonce: NONCE }));
+
+    await expect(selected).resolves.toBe(true);
+  });
+
+  it("posts a retype at a point and resolves true on the page's answer", async () => {
+    const harness = createHarness({ canvas: true, ready: true });
+
+    const retyped = harness.host.retypeAt(START);
+    const request = harness.requestOf("traycer/canvas/retype-at");
+    expect(request.params).toEqual({ ...START, nonce: NONCE });
+    harness.host.receive(respond(request, { nonce: NONCE }));
+
+    await expect(retyped).resolves.toBe(true);
+  });
+
+  it("resolves false when the page never answers or answers with the wrong nonce", async () => {
+    const harness = createHarness({ canvas: true, ready: true });
+    const selected = harness.host.selectTextRange({ start: START, end: END });
+    const retyped = harness.host.retypeAt(START);
+    harness.host.receive(
+      respond(harness.requestOf("traycer/canvas/select-text-range"), {
+        nonce: "other",
+      }),
+    );
+    await vi.advanceTimersByTimeAsync(PING_TIMEOUT_MS);
+
+    await expect(selected).resolves.toBe(false);
+    await expect(retyped).resolves.toBe(false);
+  });
+
+  it.each([
+    ["before the page proves its nonce", { canvas: true, ready: false }],
+    ["from a served page that is not a canvas", { canvas: false, ready: true }],
+  ])("sends nothing %s", async (_label, options) => {
+    const harness = createHarness(options);
+
+    await expect(
+      harness.host.selectTextRange({ start: START, end: END }),
+    ).resolves.toBe(false);
+    await expect(harness.host.retypeAt(START)).resolves.toBe(false);
     expect(canvasRequests(harness)).toEqual([]);
   });
 });

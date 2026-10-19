@@ -1,4 +1,4 @@
-import { isCommentArtifactKind } from "@/lib/comments/artifact-comment-kind";
+import { isMarkdownArtifactKind } from "@/lib/artifacts/node-display";
 import { useEpicSessionHostClient } from "@/hooks/epic/use-epic-session-host-client";
 import {
   useEpicLaneCommentThreads,
@@ -54,8 +54,8 @@ export function CommentSidebarPanel(props: CommentSidebarPanelProps) {
       ? artifactRecord.kind
       : null;
 
-  // Files have no comment room.
-  if (artifactRecord === null || !isCommentArtifactKind(artifactKind)) {
+  // HTML and canvas comments live beside their document.
+  if (artifactRecord === null || !isMarkdownArtifactKind(artifactKind)) {
     return null;
   }
 

@@ -8,19 +8,25 @@ import {
   useState,
   type CSSProperties,
 } from "react";
-import { NodeResizer, type NodeProps, type OnResizeEnd } from "@xyflow/react";
-import { Expand, GripHorizontal, MousePointer2, Play } from "lucide-react";
+import {
+  NodeResizer,
+  useStore,
+  type NodeProps,
+  type OnResizeEnd,
+} from "@xyflow/react";
+import { Expand, MousePointer2, Play } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { CanvasBoardFrame } from "./canvas-frame";
 import { CanvasNoteContent } from "./canvas-note-content";
-import { CanvasInlineName } from "./canvas-inline-name";
+import { CanvasNoteToolbar } from "./canvas-note-toolbar";
 import {
   useCanvasNodeActions,
   type CanvasFlowNode,
   type CanvasNodeActions,
 } from "./canvas-node-context";
-import { BOARD_HEADER_HEIGHT, boardFrame } from "./canvas-model";
+import { BOARD_HEADER_HEIGHT, boardFrame, boardName } from "./canvas-model";
 
 function useResizeEnd(
   id: string,
@@ -74,6 +80,41 @@ function CanvasEditShield({
   );
 }
 
+/** What lies over a board's frame: play pins, a pan pass-through, or the edit shield. */
+function CanvasBoardOverlay({
+  path,
+  width,
+  height,
+  interactive,
+  actions,
+}: {
+  readonly path: string;
+  readonly width: number;
+  readonly height: number;
+  readonly interactive: boolean;
+  readonly actions: CanvasNodeActions;
+}) {
+  if (interactive) return <CanvasPlayPins actions={actions} path={path} />;
+  // The self variant enables hits without adding xyflow's no-pan marker, so
+  // a hand drag that starts here pans the canvas instead of reaching the page.
+  // Comment pins and an open thread stay above it and keep their own markers.
+  if (actions.panMode)
+    return (
+      <>
+        <div aria-hidden className="absolute inset-0 [&]:pointer-events-auto" />
+        {actions.frameEvents?.renderOverlay?.(path, false)}
+      </>
+    );
+  return (
+    <CanvasEditShield
+      path={path}
+      width={width}
+      height={height}
+      actions={actions}
+    />
+  );
+}
+
 function CanvasPlayPins(props: {
   readonly path: string;
   readonly actions: CanvasNodeActions;
@@ -119,6 +160,112 @@ function CanvasBoardButtons({
   );
 }
 
+/**
+ * The name strip above a board. It is counter-scaled against the viewport zoom
+ * so it reads at the same size at every zoom, while staying inside the node so
+ * it remains the board's drag handle.
+ */
+function CanvasBoardHeader({
+  path,
+  title,
+  error,
+  interactive,
+  actions,
+}: {
+  readonly path: string;
+  readonly title: string;
+  readonly error: CanvasPageError | null;
+  readonly interactive: boolean;
+  readonly actions: CanvasNodeActions;
+}) {
+  const zoom = useStore((state) => state.transform[2]);
+  const [renaming, setRenaming] = useState(false);
+  return (
+    <div
+      data-canvas-board-handle=""
+      className="absolute bottom-full left-0 flex origin-bottom-left cursor-grab items-center gap-1 pb-0.5 text-muted-foreground"
+      style={{
+        height: BOARD_HEADER_HEIGHT,
+        width: `${zoom * 100}%`,
+        transform: `scale(${1 / zoom})`,
+      }}
+    >
+      <div className="min-w-10 flex-1">
+        {renaming ? (
+          <CanvasBoardNameInput
+            value={title}
+            onDone={(name) => {
+              if (name !== null) actions.renameBoard(path, name);
+              setRenaming(false);
+            }}
+          />
+        ) : (
+          <span
+            className="block truncate text-ui-sm"
+            onDoubleClick={() => {
+              if (!actions.viewOnly) setRenaming(true);
+            }}
+          >
+            {title}
+          </span>
+        )}
+      </div>
+      <CanvasErrorPill
+        error={error}
+        onAdd={
+          actions.viewOnly
+            ? null
+            : () => {
+                if (error !== null) actions.onAddError(path, error);
+              }
+        }
+      />
+      <CanvasBoardButtons
+        path={path}
+        title={title}
+        interactive={interactive}
+        actions={actions}
+      />
+    </div>
+  );
+}
+
+function CanvasBoardNameInput({
+  value,
+  onDone,
+}: {
+  readonly value: string;
+  readonly onDone: (name: string | null) => void;
+}) {
+  const cancelled = useRef(false);
+  return (
+    <Input
+      className="touch-auto"
+      aria-label="Board name"
+      size="xs"
+      defaultValue={value}
+      ref={(node) => {
+        node?.focus();
+        node?.select();
+      }}
+      onBlur={(event) => {
+        const name = event.currentTarget.value.trim();
+        onDone(
+          !cancelled.current && name.length > 0 && name !== value ? name : null,
+        );
+      }}
+      onKeyDown={(event) => {
+        event.stopPropagation();
+        if (event.code === "Escape") {
+          cancelled.current = true;
+          event.currentTarget.blur();
+        }
+        if (event.code === "Enter") event.currentTarget.blur();
+      }}
+    />
+  );
+}
+
 export const CanvasBoardNode = memo(function CanvasBoardNode({
   id,
   data,
@@ -135,7 +282,7 @@ export const CanvasBoardNode = memo(function CanvasBoardNode({
   );
   if (board === null) return null;
   const frame = boardFrame(board);
-  const title = board.title || data.path;
+  const title = board.title || boardName(data.path);
   const interactive = data.play && board.is_interactive === true;
   return (
     <div
@@ -157,42 +304,13 @@ export const CanvasBoardNode = memo(function CanvasBoardNode({
         minHeight={60}
         onResizeEnd={onResizeEnd}
       />
-      <div
-        data-canvas-board-handle=""
-        className="absolute inset-x-0 bottom-full flex cursor-grab items-center gap-1 rounded-t-md border border-b-0 bg-card px-2 text-card-foreground"
-        style={{ height: BOARD_HEADER_HEIGHT }}
-      >
-        {actions.viewOnly ? null : (
-          <GripHorizontal className="size-3.5 shrink-0 text-muted-foreground" />
-        )}
-        <div className="min-w-0 flex-1">
-          {actions.viewOnly ? (
-            <span className="block truncate text-ui-xs">{title}</span>
-          ) : (
-            <CanvasInlineName
-              value={title}
-              label={`Rename ${title}`}
-              onCommit={(name) => actions.renameBoard(data.path, name)}
-            />
-          )}
-        </div>
-        <CanvasErrorPill
-          error={error}
-          onAdd={
-            actions.viewOnly
-              ? null
-              : () => {
-                  if (error !== null) actions.onAddError(data.path, error);
-                }
-          }
-        />
-        <CanvasBoardButtons
-          path={data.path}
-          title={title}
-          interactive={board.is_interactive === true}
-          actions={actions}
-        />
-      </div>
+      <CanvasBoardHeader
+        path={data.path}
+        title={title}
+        error={error}
+        interactive={board.is_interactive === true}
+        actions={actions}
+      />
       <div className="relative h-full w-full overflow-hidden rounded-(--canvas-radius)">
         {source === null ? (
           <div
@@ -206,7 +324,14 @@ export const CanvasBoardNode = memo(function CanvasBoardNode({
             </span>
           </div>
         ) : (
-          <div className="touch-auto overscroll-contain pointer-events-auto h-full w-full">
+          <div
+            className={cn(
+              "touch-auto h-full w-full [&]:pointer-events-auto",
+              // Only a board in play takes drags and wheels for itself; every
+              // other board lets the canvas pan across it.
+              interactive && "canvas-nopan canvas-nowheel",
+            )}
+          >
             <CanvasBoardFrame
               path={data.path}
               title={title}
@@ -218,18 +343,13 @@ export const CanvasBoardNode = memo(function CanvasBoardNode({
             />
           </div>
         )}
-        {interactive ? (
-          <CanvasPlayPins actions={actions} path={data.path} />
-        ) : null}
-        {/* The self variant enables hits without adding xyflow's no-pan marker. */}
-        {!interactive && (
-          <CanvasEditShield
-            path={data.path}
-            width={frame.w}
-            height={frame.h}
-            actions={actions}
-          />
-        )}
+        <CanvasBoardOverlay
+          path={data.path}
+          width={frame.w}
+          height={frame.h}
+          interactive={interactive}
+          actions={actions}
+        />
       </div>
     </div>
   );
@@ -251,16 +371,27 @@ export const CanvasNoteNode = memo(function CanvasNoteNode({
   );
   if (note === null) return null;
   const type = note.type ?? "sticky";
+  const editing = !actions.viewOnly && actions.editingNote === data.path;
   return (
     <div
       className={cn(
         "relative h-full w-full",
         selected && "outline outline-1 outline-ring",
         type === "sticky" &&
-          "rounded-sm border border-border bg-card p-3 shadow-sm",
+          "rounded-sm border border-border bg-(--canvas-note-fill) p-3 shadow-sm",
         type === "title" && "p-1",
       )}
+      style={
+        {
+          "--canvas-note-fill": note.color ?? "var(--card)",
+        } as CSSProperties
+      }
     >
+      <CanvasNoteToolbar
+        id={data.path}
+        note={note}
+        visible={!actions.viewOnly && !data.play && (selected || editing)}
+      />
       <NodeResizer
         handleClassName="z-10"
         lineClassName="z-10"
@@ -273,7 +404,18 @@ export const CanvasNoteNode = memo(function CanvasNoteNode({
         note={note}
         imageSource={imageSource}
         viewOnly={actions.viewOnly}
-        onCommit={(text) => actions.setNoteText(data.path, text)}
+        editing={editing}
+        onEdit={() => actions.setEditingNote(data.path)}
+        onCommit={(text) => {
+          actions.setNoteText(data.path, text);
+          actions.setEditingNote(null);
+        }}
+        onGrow={(height) => {
+          const next = Math.ceil(height + (type === "title" ? 8 : 26));
+          // Grow around new text without undoing a manually enlarged note.
+          if (height > 0 && next > (note.h ?? (type === "title" ? 64 : 160)))
+            actions.updateNote(data.path, { h: next });
+        }}
       />
     </div>
   );

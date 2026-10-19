@@ -41,7 +41,13 @@ export function CanvasLayersTree(props: {
     );
     try {
       const selection = await describeCanvasLayer(props, marker);
-      if (!active.current) return;
+      const current = useCanvasSelectionStore.getState();
+      if (
+        !active.current ||
+        current.generation !== generation ||
+        current.pendingPick?.owner !== props.owner
+      )
+        return;
       if (selection === null) {
         setMessage("This element is not visible in the current artboard.");
         return;
@@ -56,12 +62,13 @@ export function CanvasLayersTree(props: {
     }
   };
   return (
-    <div className="flex h-full min-h-0 flex-col gap-2">
+    <div className="flex min-h-0 flex-col gap-2">
       <div
         ref={parent}
         role="tree"
         aria-label="Artboard layers"
-        className="min-h-0 flex-1 overflow-auto"
+        className="min-h-0 overflow-auto"
+        style={{ height: rows.length * 36 }}
       >
         <div
           className="relative w-full"
@@ -98,7 +105,7 @@ export function CanvasLayersTree(props: {
                     if (row.marker !== null) void choose(row.marker);
                   }}
                 >
-                  <span className="shrink-0 font-mono">{row.label}</span>{" "}
+                  <span className="shrink-0">{row.label}</span>{" "}
                   <span className="truncate text-muted-foreground">
                     {row.generated ? "Generated" : row.preview}
                   </span>

@@ -18,6 +18,8 @@ export type CanvasFlowNode = Node<CanvasNodeData>;
 export interface CanvasNodeActions {
   readonly viewOnly: boolean;
   readonly selectionEnabled: boolean;
+  /** Hand tool or Space held: boards pass drags to the canvas so it pans. */
+  readonly panMode: boolean;
   readonly onAddError: (path: string, error: CanvasPageError) => void;
   readonly sourceForBoard: (path: string) => SandboxSource | null;
   readonly frameEvents: CanvasFrameEvents | null;
@@ -28,6 +30,13 @@ export interface CanvasNodeActions {
     frame: { x: number; y: number; width: number; height: number },
   ) => void;
   readonly setNoteText: (id: string, text: string) => void;
+  /** Patches note fields (text, size, colour) through one layout transaction. */
+  readonly updateNote: (id: string, patch: CanvasNote) => void;
+  /** The note whose text is being edited in place; a placed note starts here. */
+  readonly editingNote: string | null;
+  readonly setEditingNote: (id: string | null) => void;
+  /** Writes a measured height for a board whose layout entry has none yet. */
+  readonly fitBoardHeight: (path: string, height: number) => void;
   readonly fullscreen: (path: string) => void;
 }
 export const CanvasNodeContext = createContext<CanvasNodeActions | null>(null);

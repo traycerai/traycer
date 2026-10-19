@@ -1,6 +1,13 @@
 import type { CanvasCommentView } from "./canvas-frame-registry";
 import type { CanvasLayoutStore } from "./canvas-layout-store";
-import { useCallback, useEffect, useRef, type ReactNode } from "react";
+import { CanvasNodeContext } from "./canvas-node-context";
+import {
+  useCallback,
+  useContext,
+  useEffect,
+  useRef,
+  type ReactNode,
+} from "react";
 import {
   SandboxFrame,
   type SandboxSource,
@@ -17,6 +24,9 @@ import type {
   CanvasTextSelection,
 } from "@/lib/sandbox/canvas-bridge";
 
+export interface CanvasPanelControls {
+  readonly onClose: () => void;
+}
 /** Selection and editing compose through these seams outside the opaque frame. */
 export interface CanvasFrameEvents {
   readonly commentsEnabled?: boolean;
@@ -48,7 +58,13 @@ export interface CanvasFrameEvents {
   readonly onAddError?: (path: string, error: CanvasPageError) => void;
   /** Replaces the edit shield; must shield everything except the selected text. */
   readonly renderOverlay?: (path: string, editing: boolean) => ReactNode;
-  readonly renderPanel?: (store: CanvasLayoutStore) => ReactNode;
+  /** The inspector; the editor shows it only while the person has it open. */
+  readonly renderPanel?: (
+    store: CanvasLayoutStore,
+    panel: CanvasPanelControls,
+  ) => ReactNode;
+  /** Controls placed in the canvas's top-right toolbar pill (the comments list). */
+  readonly renderToolbarControls?: () => ReactNode;
 }
 const NO_PERMISSIONS = [] as const;
 const noop = (): void => undefined;
@@ -69,7 +85,10 @@ export function CanvasBoardFrame({
   readonly mode: CanvasMode;
   readonly onError?: (error: CanvasPageError | null) => void;
 }) {
+  const actions = useContext(CanvasNodeContext);
   const bridgeRef = useRef<SandboxBridgeHost | null>(null);
+  const frameRef = useRef<HTMLIFrameElement | null>(null);
+  const fittedPathRef = useRef<string | null>(null);
   useEffect(() => {
     events?.onSource?.(path, source);
     return () => events?.onSource?.(path, null);
@@ -98,8 +117,35 @@ export function CanvasBoardFrame({
     [events, path, mode],
   );
   const onFrame = useCallback(
-    (iframe: HTMLIFrameElement | null) => events?.onFrame?.(path, iframe),
+    (iframe: HTMLIFrameElement | null) => {
+      frameRef.current = iframe;
+      events?.onFrame?.(path, iframe);
+    },
     [events, path],
+  );
+  const onSize = useCallback(
+    (size: SandboxSize) => {
+      events?.onSize?.(path, size);
+      if (
+        fullscreen ||
+        actions === null ||
+        actions.viewOnly ||
+        fittedPathRef.current === path ||
+        size.height === null ||
+        !Number.isFinite(size.height)
+      )
+        return;
+      const viewportHeight = frameRef.current?.clientHeight ?? 0;
+      if (viewportHeight <= 0) return;
+      // A page sized to the viewport (100vh) reports exactly the frame's
+      // height and has no intrinsic one, so it keeps the nominal 800. A taller
+      // report is real overflowing content and is kept.
+      const height =
+        Math.abs(size.height - viewportHeight) <= 1 ? 800 : size.height;
+      fittedPathRef.current = path;
+      actions.fitBoardHeight(path, Math.max(60, height));
+    },
+    [actions, events, fullscreen, path],
   );
   useEffect(() => {
     void bridgeRef.current?.setMode(mode);
@@ -116,7 +162,7 @@ export function CanvasBoardFrame({
       appRequests={null}
       className="h-full w-full"
       height={null}
-      onSize={(size) => events?.onSize?.(path, size)}
+      onSize={onSize}
       onStatus={onStatus}
       onRequestTeardown={noop}
       displayMode={fullscreen ? "fullscreen" : "inline"}

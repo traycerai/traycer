@@ -405,6 +405,24 @@ export class SandboxBridgeHost {
     }).then((result) => result !== null);
   }
 
+  selectTextRange(points: {
+    readonly start: { readonly x: number; readonly y: number };
+    readonly end: { readonly x: number; readonly y: number };
+  }): Promise<boolean> {
+    return this.canvasRequest("select-text-range", points).then(
+      (result) => result !== null,
+    );
+  }
+
+  retypeAt(point: {
+    readonly x: number;
+    readonly y: number;
+  }): Promise<boolean> {
+    return this.canvasRequest("retype-at", point).then(
+      (result) => result !== null,
+    );
+  }
+
   describeElement(
     locator: CanvasElementLocator,
   ): Promise<CanvasElement | null> {
@@ -435,6 +453,12 @@ export class SandboxBridgeHost {
   elementBox(locator: CanvasElementLocator): Promise<CanvasBox | null> {
     return this.canvasRequest("element-box", locator).then((result) =>
       parseCanvasBox(result?.box),
+    );
+  }
+
+  revealElement(locator: CanvasElementLocator): Promise<boolean> {
+    return this.canvasRequest("reveal-element", locator).then(
+      (result) => result?.revealed === true,
     );
   }
 

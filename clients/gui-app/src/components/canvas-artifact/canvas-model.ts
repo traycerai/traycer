@@ -49,8 +49,8 @@ export function boardFrame(board: CanvasBoard): CanvasBoardFrame {
   return {
     x: board.x ?? 0,
     y: board.y ?? 0,
-    w: Math.max(80, board.w ?? 800),
-    h: Math.max(60, board.h ?? 600),
+    w: Math.max(80, board.w ?? 1280),
+    h: Math.max(60, board.h ?? 800),
   };
 }
 export function canvasPageItems(
@@ -135,7 +135,7 @@ export function isCanvasTextInput(
   // React portals bubble through the surface, but their controls own focus.
   if (!surface.contains(target)) return true;
   const control = target.closest(
-    "input,textarea,select,[contenteditable=true],[role=textbox],[role=menu],[role=dialog]",
+    "input,textarea,select,[contenteditable=true],[role=textbox],[role=menu],[role=dialog],[data-canvas-note-controls]",
   );
   // A settings dialog containing the whole canvas is not a canvas input.
   return control !== null && surface.contains(control);
@@ -162,4 +162,8 @@ export function noteDimensions(note: CanvasNote): {
     ),
     height: Math.max(12, note.h ?? (note.type === "title" ? 64 : 160)),
   };
+}
+/** "boards/sign-in.html" reads as "sign-in" when the agent gave no title. */
+export function boardName(path: string): string {
+  return (path.split("/").at(-1) ?? path).replace(/\.html?$/i, "");
 }

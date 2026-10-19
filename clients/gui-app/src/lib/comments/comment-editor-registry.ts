@@ -1,4 +1,5 @@
 import type { Editor } from "@tiptap/core";
+import { useCommentThreadsStore } from "@/stores/comments/comment-threads-store";
 
 interface RegisteredCommentEditor {
   readonly reveal: (threadId: string) => boolean;
@@ -9,6 +10,53 @@ const editorsByArtifact = new Map<
   string,
   Map<string, RegisteredCommentEditor>
 >();
+
+const pendingReveals = new Map<
+  string,
+  { readonly artifactId: string; readonly threadId: string }
+>();
+let unsubscribePending: (() => void) | null = null;
+
+function retirePending(epicId: string): void {
+  pendingReveals.delete(epicId);
+  if (pendingReveals.size === 0) {
+    unsubscribePending?.();
+    unsubscribePending = null;
+  }
+}
+
+function retryPendingReveal(epicId: string): void {
+  const pending = pendingReveals.get(epicId);
+  if (pending === undefined) return;
+  if (
+    useCommentThreadsStore.getState().activeByEpicId[epicId] !==
+    pending.threadId
+  ) {
+    retirePending(epicId);
+    return;
+  }
+  if (
+    revealCommentThreadAnchor(epicId, pending.artifactId, pending.threadId) &&
+    pendingReveals.get(epicId) === pending
+  )
+    retirePending(epicId);
+}
+
+/** Frame deep links can precede their tile, thread data, or ready bridge. */
+export function requestCommentThreadAnchorReveal(
+  epicId: string,
+  artifactId: string,
+  threadId: string,
+): void {
+  pendingReveals.set(epicId, { artifactId, threadId });
+  unsubscribePending ??= useCommentThreadsStore.subscribe((state) => {
+    for (const [pendingEpicId, pending] of pendingReveals) {
+      if (state.activeByEpicId[pendingEpicId] !== pending.threadId)
+        retirePending(pendingEpicId);
+    }
+  });
+  retryPendingReveal(epicId);
+}
 
 function registryKey(epicId: string, artifactId: string): string {
   return `${epicId}::${artifactId}`;
@@ -68,6 +116,7 @@ export function registerCommentEditor(
     editorsByArtifact.get(key) ?? new Map<string, RegisteredCommentEditor>();
   editors.set(tileId, { reveal, isActive });
   editorsByArtifact.set(key, editors);
+  retryPendingReveal(epicId);
 
   return () => {
     const currentEditors = editorsByArtifact.get(key);
@@ -115,4 +164,7 @@ export function revealCommentThreadAnchor(
 
 export function clearCommentEditorRegistryForTests(): void {
   editorsByArtifact.clear();
+  pendingReveals.clear();
+  unsubscribePending?.();
+  unsubscribePending = null;
 }

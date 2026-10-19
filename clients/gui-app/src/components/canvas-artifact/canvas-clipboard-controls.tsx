@@ -37,11 +37,14 @@ export function CanvasClipboardBoundary(props: {
         const selection = useCanvasSelectionStore.getState().selection;
         if (
           selection?.artifactId !== props.artifactId ||
-          selection.textRange !== null ||
           useCanvasSelectionStore.getState().additionalElements.length > 0
         )
           return;
         event.preventDefault();
+        if (selection.textRange !== null) {
+          event.clipboardData.setData("text/plain", selection.textRange.quote);
+          return;
+        }
         void clipboard.copy(null);
       }}
     >

@@ -34,8 +34,7 @@ import {
   registryServing,
 } from "./canvas-edit-test-support";
 
-// The overlay, the text toolbar and the annotation action run for real. What
-// is mocked is what lies outside them: which chats exist and which is open,
+// The overlay and the annotation action run for real. What is mocked is what lies outside them: which chats exist and which is open,
 // revealing a chat, the host's copy of the source, the window's screenshot
 // bridge, and the composer draft the record is finally attached to.
 
@@ -100,7 +99,41 @@ vi.mock(
 vi.mock(
   "@/components/epic-canvas/renderers/chat-target-menu/chat-target-menu",
   () => ({
-    ChatTargetMenu: (props: { readonly trigger: ReactNode }) => props.trigger,
+    // The roster is Radix's; what matters here is that it lists the chats only
+    // once the trigger has opened it.
+    ChatTargetMenu: (props: {
+      readonly trigger: ReactNode;
+      readonly targets: readonly QuoteChatTarget[];
+      readonly open: boolean;
+      readonly onOpenChange: (open: boolean) => void;
+      readonly onSelectChat: (chatId: string) => void;
+    }) => (
+      <div>
+        <div
+          role="presentation"
+          onClick={() => props.onOpenChange(!props.open)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") props.onOpenChange(!props.open);
+          }}
+        >
+          {props.trigger}
+        </div>
+        {props.open ? (
+          <div role="menu">
+            {props.targets.map((target) => (
+              <button
+                key={target.chatId}
+                type="button"
+                role="menuitem"
+                onClick={() => props.onSelectChat(target.chatId)}
+              >
+                {target.title}
+              </button>
+            ))}
+          </div>
+        ) : null}
+      </div>
+    ),
   }),
 );
 vi.mock("@/hooks/files/use-artifact-object-text-query", () => ({
@@ -132,6 +165,9 @@ const readSpan: ArtifactReadSpan = (_hash, offset, length, signal) => {
   });
 };
 
+/** The stage the action bar portals into: the pane the frame sits in. */
+let stage: HTMLElement | null = null;
+
 function mountOverlay() {
   const bridge = realBridge();
   vi.spyOn(bridge, "elementBox").mockResolvedValue({
@@ -150,8 +186,13 @@ function mountOverlay() {
     ),
   );
   const registry = registryServing(bridge, SHA);
-  // The overlay measures the frame it sits over.
+  // The overlay measures the frame it sits over, and the action bar portals
+  // into the pane around it, so the frame must live in one.
+  stage = document.createElement("div");
+  stage.className = "react-flow";
+  document.body.append(stage);
   const frame = document.createElement("iframe");
+  stage.append(frame);
   Object.defineProperty(frame, "clientWidth", { value: 640 });
   Object.defineProperty(frame, "clientHeight", { value: 360 });
   registry.update(BOARD_PATH, {
@@ -188,6 +229,7 @@ function mountOverlay() {
         registry={registry}
         onPick={() => undefined}
         onRetire={() => undefined}
+        onEscape={() => undefined}
       />
     </QueryClientProvider>,
   );
@@ -211,6 +253,8 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  stage?.remove();
+  stage = null;
   disposeBridges();
   vi.restoreAllMocks();
   useCanvasSelectionStore.getState().clear();
@@ -228,14 +272,20 @@ const GENERATED = quotedSelection("Hello big world", 6, 9, {
   tagName: "b",
 });
 
-describe("a selected range beside its formatting", () => {
-  it("offers formatting and Add to chat together for a range of source text", async () => {
+describe("a selected range's action bar", () => {
+  const formatting = (): HTMLElement | null =>
+    screen.queryByRole("toolbar", { name: "Text formatting" });
+  const chatOne = (): HTMLElement | null =>
+    screen.queryByRole("menuitem", { name: "Chat one" });
+
+  it("offers Add to chat for a range of source text, with no formatting controls", async () => {
     mountOverlay();
     select(LITERAL);
     expect(
-      await screen.findByRole("toolbar", { name: "Text formatting" }),
+      await screen.findByRole("button", { name: "Add to chat" }),
     ).toBeDefined();
-    expect(screen.getByRole("button", { name: "Add to chat" })).toBeDefined();
+    expect(formatting()).toBeNull();
+    expect(screen.queryByRole("button", { name: "Bold" })).toBeNull();
   });
 
   it("offers Add to chat, and no formatting, for a range the page generated", async () => {
@@ -244,33 +294,46 @@ describe("a selected range beside its formatting", () => {
     expect(
       await screen.findByRole("button", { name: "Add to chat" }),
     ).toBeDefined();
-    expect(
-      screen.queryByRole("toolbar", { name: "Text formatting" }),
-    ).toBeNull();
+    expect(formatting()).toBeNull();
   });
 
-  it("still formats from the toolbar next to the action", async () => {
+  it("sits in the pane around the frame", async () => {
     mountOverlay();
     select(LITERAL);
-    const bold = await screen.findByRole("button", { name: "Bold" });
-    await vi.waitFor(() => expect(bold).toHaveProperty("disabled", false));
-    fireEvent.click(bold);
+    const button = await screen.findByRole("button", { name: "Add to chat" });
+    expect(stage?.contains(button)).toBe(true);
+  });
 
-    expect(pendingSaves[0].variables.edit).toEqual({
-      kind: "wrap-text-range",
-      tag: "b",
-      start: 6,
-      end: 9,
-      href: null,
-      expectedText: "big",
+  it("lists the chats only in the popover that Add to chat opens", async () => {
+    mountOverlay();
+    select(LITERAL);
+    const button = await screen.findByRole("button", { name: "Add to chat" });
+    expect(chatOne()).toBeNull();
+
+    fireEvent.click(button);
+    expect(chatOne()).not.toBeNull();
+
+    fireEvent.click(button);
+    expect(chatOne()).toBeNull();
+  });
+
+  it("attaches nothing until a chat is chosen from the popover", async () => {
+    mountOverlay();
+    select(LITERAL);
+    fireEvent.click(await screen.findByRole("button", { name: "Add to chat" }));
+    await act(async () => {
+      await new Promise<void>((resolve) => setTimeout(resolve, 20));
     });
+
+    expect(outside.attach).not.toHaveBeenCalled();
   });
 });
 
 describe("attaching a selected range to a chat", () => {
   async function addToChat(): Promise<void> {
+    fireEvent.click(screen.getByRole("button", { name: "Add to chat" }));
     await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: "Add to chat" }));
+      fireEvent.click(screen.getByRole("menuitem", { name: "Chat one" }));
       await new Promise<void>((resolve) => setTimeout(resolve, 20));
     });
   }
@@ -310,12 +373,13 @@ describe("attaching a selected range to a chat", () => {
     });
   });
 
-  it("reveals the chat it attached to", async () => {
+  it("reveals the chat it attached to and closes the popover", async () => {
     mountOverlay();
     select(LITERAL);
     await screen.findByRole("button", { name: "Add to chat" });
     await addToChat();
     expect(outside.reveal).toHaveBeenCalledWith("chat-1");
+    expect(screen.queryByRole("menuitem", { name: "Chat one" })).toBeNull();
   });
 
   it("waits for the source of a range in source text rather than attaching a guess", async () => {
@@ -362,18 +426,5 @@ describe("attaching a selected range to a chat", () => {
     expect(attachedRecord().elements[0]).toMatchObject({
       textRange: { quote: "BIG" },
     });
-  });
-
-  it("keeps the action when the formatting toolbar is refused for a mismatched quote", async () => {
-    mountOverlay();
-    select(
-      quotedSelection("Hello BIG world", 6, 9, {
-        tid: "t",
-        tagName: "p",
-        marker: 0,
-      }),
-    );
-    expect(await screen.findByText(/changed by a script/)).toBeDefined();
-    expect(screen.getByRole("button", { name: "Add to chat" })).toBeDefined();
   });
 });

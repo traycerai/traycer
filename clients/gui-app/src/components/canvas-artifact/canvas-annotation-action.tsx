@@ -1,7 +1,6 @@
 import { useMemo, useState } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { useStore } from "zustand";
-import { ChevronDown } from "lucide-react";
 import type { CanvasAnnotationRecord } from "@traycer/protocol/persistence/epic/messages";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
@@ -21,7 +20,6 @@ import {
   canvasAnnotationElement,
   canvasWindowCaptureBridge,
 } from "./canvas-annotation-attach";
-import { canvasAnnotationTarget } from "./canvas-annotation-target";
 import type { CanvasSelection } from "./canvas-selection-store";
 
 export interface CanvasAnnotationScope {
@@ -134,9 +132,6 @@ export function CanvasAnnotationAction(props: {
       revealChat(result.chatId);
     },
   });
-  const target =
-    targets.find((item) => item.chatId === attached?.chatId) ??
-    canvasAnnotationTarget(targets);
   const selectTarget = (chatId: string): void => {
     if (attached !== null) {
       const store = useComposerDraftStore.getState();
@@ -160,24 +155,7 @@ export function CanvasAnnotationAction(props: {
   };
   return (
     <div className="flex max-w-full flex-col gap-1">
-      <div className="flex min-w-0 items-center gap-1 rounded-md border bg-popover p-1 text-popover-foreground shadow-sm">
-        <Button
-          size="xs"
-          variant="secondary"
-          disabled={mutation.isPending || targets.length === 0}
-          onClick={() =>
-            target === null ? setMenuOpen(true) : selectTarget(target.chatId)
-          }
-        >
-          {mutation.isPending ? (
-            <AgentSpinningDots
-              className={undefined}
-              testId={undefined}
-              variant={undefined}
-            />
-          ) : null}
-          {attached === null ? "Add to chat" : "Added to chat"}
-        </Button>
+      <div className="flex min-w-0 items-center gap-1">
         <ChatTargetMenu
           targets={targets}
           onSelectChat={selectTarget}
@@ -189,12 +167,16 @@ export function CanvasAnnotationAction(props: {
               size="xs"
               variant="ghost"
               disabled={mutation.isPending || targets.length === 0}
-              aria-label="Choose target chat"
+              aria-label="Add to chat"
             >
-              <span className="max-w-48 truncate">
-                {target?.title ?? "Choose chat"}
-              </span>
-              <ChevronDown />
+              {mutation.isPending ? (
+                <AgentSpinningDots
+                  className={undefined}
+                  testId={undefined}
+                  variant={undefined}
+                />
+              ) : null}
+              {attached === null ? "+ Chat" : "Added to chat"}
             </Button>
           }
         />

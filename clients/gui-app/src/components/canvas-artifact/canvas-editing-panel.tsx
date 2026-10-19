@@ -28,35 +28,69 @@ export function CanvasEditingPanel(props: {
     props.registry,
     true,
   );
+  const selection = useCanvasSelectionStore((state) =>
+    state.selection?.artifactId === props.artifactId &&
+    state.selection.boardPath === props.boardPath
+      ? state.selection
+      : null,
+  );
+  const multiple = useCanvasSelectionStore(
+    (state) => state.additionalElements.length > 0,
+  );
   return (
-    <Tabs defaultValue="inspector" className="min-w-0">
-      <TabsList variant="line" className="w-full">
-        <TabsTrigger value="inspector">Inspector</TabsTrigger>
-        <TabsTrigger value="layers">Layers</TabsTrigger>
+    <Tabs defaultValue="design" className="min-h-0 min-w-0 flex-1">
+      <TabsList variant="line" size="sm" className="w-full shrink-0">
+        <TabsTrigger value="design">Design</TabsTrigger>
+        <TabsTrigger value="code">Code</TabsTrigger>
+        <TabsTrigger value="tweaks">Tweaks</TabsTrigger>
       </TabsList>
-      <TabsContent value="inspector">
-        {props.children}
-        {document.data === undefined ? null : (
+      <TabsContent
+        value="design"
+        className="flex min-h-0 flex-col overflow-hidden"
+      >
+        <section
+          aria-label="Layers"
+          className="flex min-h-0 max-h-[40%] shrink-0 flex-col border-b"
+        >
+          <h3 className="px-3 pb-2 text-ui-xs font-medium">Layers</h3>
+          {document.data === undefined ? (
+            <p role="status" className="p-3 text-ui-xs text-muted-foreground">
+              {document.error?.message ?? "Opening layers…"}
+            </p>
+          ) : (
+            <CanvasLayersTree
+              artifactId={props.artifactId}
+              boardPath={props.boardPath}
+              document={document.data}
+              registry={props.registry}
+              owner={props.owner}
+            />
+          )}
+        </section>
+        <div className="min-h-0 flex-1 overflow-y-auto">{props.children}</div>
+      </TabsContent>
+      <TabsContent value="code" className="min-h-0 overflow-y-auto">
+        {selection === null || multiple ? (
+          <p className="p-3 text-ui-xs text-muted-foreground">
+            {selection === null
+              ? "Select an element to edit its CSS."
+              : "Select one element to edit its CSS."}
+          </p>
+        ) : (
+          <CanvasPropertiesPanel artifactId={props.artifactId} tab="code" />
+        )}
+      </TabsContent>
+      <TabsContent value="tweaks" className="min-h-0 overflow-y-auto">
+        {document.data === undefined ? (
+          <p role="status" className="p-3 text-ui-xs text-muted-foreground">
+            {document.error?.message ?? "Opening tweaks…"}
+          </p>
+        ) : (
           <CanvasTweaksPanel
             artifactId={props.artifactId}
             boardPath={props.boardPath}
             registry={props.registry}
             document={document.data}
-          />
-        )}
-      </TabsContent>
-      <TabsContent value="layers" className="h-[50vh] min-h-0">
-        {document.data === undefined ? (
-          <p role="status" className="p-3 text-ui-xs text-muted-foreground">
-            {document.error?.message ?? "Opening layers…"}
-          </p>
-        ) : (
-          <CanvasLayersTree
-            artifactId={props.artifactId}
-            boardPath={props.boardPath}
-            document={document.data}
-            registry={props.registry}
-            owner={props.owner}
           />
         )}
       </TabsContent>

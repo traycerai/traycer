@@ -149,13 +149,6 @@ function GroupingControls(
           pending={pending}
           onClick={() => setWrapOpen(!wrapOpen)}
         />
-        <StructureButton
-          name="Ungroup"
-          label="Ungroup"
-          note={facts.unwrapRefusal}
-          pending={pending}
-          onClick={() => apply({ kind: "unwrap-element" })}
-        />
       </div>
       {facts.wrapRefusal === null ? null : (
         <p className="text-ui-xs text-muted-foreground">{facts.wrapRefusal}</p>
@@ -217,14 +210,27 @@ export function CanvasStructureToolbar(props: {
       void action.apply(edit);
     },
   };
+  if (
+    layout === null ||
+    props.document === null ||
+    props.document.sha256 !== selection.servedSha256 ||
+    (additional.length === 0 && facts.unwrapRefusal !== null)
+  )
+    return action.message === null ? null : (
+      <p role="status" className="p-3 text-ui-xs text-destructive">
+        {action.message}
+      </p>
+    );
   return (
     <div
       className="grid gap-2 border-b p-3"
       onPointerDown={(event) => event.stopPropagation()}
     >
-      <p className="text-ui-xs font-medium">
-        Arrange · {additional.length + 1} selected
-      </p>
+      {additional.length > 0 ? (
+        <p className="text-ui-xs font-medium">
+          Arrange · {additional.length + 1} selected
+        </p>
+      ) : null}
       {action.pending ? (
         <AgentSpinningDots
           className={undefined}
@@ -232,16 +238,30 @@ export function CanvasStructureToolbar(props: {
           variant={undefined}
         />
       ) : null}
-      <ArrangementButtons {...controls} />
-      <GroupingControls
-        key={`${selection.servedSha256}:${selection.element.marker}:${selection.element.tid}`}
-        {...controls}
-        setMessage={action.setMessage}
-      />
-      <p className="text-ui-xs text-muted-foreground">
-        Shift-click to add elements. Drag an outline to reorder within its
-        container.
-      </p>
+      {additional.length > 0 ? (
+        <>
+          <ArrangementButtons {...controls} />
+          <GroupingControls
+            key={`${selection.servedSha256}:${selection.element.marker}:${selection.element.tid}`}
+            {...controls}
+            setMessage={action.setMessage}
+          />
+          <p className="text-ui-xs text-muted-foreground">
+            Shift-click to add elements. Drag an outline to reorder within its
+            container.
+          </p>
+        </>
+      ) : (
+        <div className="flex">
+          <StructureButton
+            name="Ungroup"
+            label="Ungroup"
+            note={facts.unwrapRefusal}
+            pending={action.pending}
+            onClick={() => controls.apply({ kind: "unwrap-element" })}
+          />
+        </div>
+      )}
       {action.message === null ? null : (
         <p role="status" className="text-ui-xs text-destructive">
           {action.message}

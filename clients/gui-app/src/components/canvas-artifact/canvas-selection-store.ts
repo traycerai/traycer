@@ -25,6 +25,12 @@ export function sameCanvasElement(a: CanvasElement, b: CanvasElement): boolean {
   return a.selector === b.selector;
 }
 
+export function isCanvasBoardRoot(element: CanvasElement | null): boolean {
+  return (
+    element === null || element.tagName === "html" || element.tagName === "body"
+  );
+}
+
 interface CanvasSelectionState {
   readonly selection: CanvasSelection | null;
   /** The primary selection owns board/revision metadata for all added elements. */

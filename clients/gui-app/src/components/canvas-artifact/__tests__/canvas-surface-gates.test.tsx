@@ -6,6 +6,7 @@ import {
   screen,
   within,
 } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import type { ComponentType, ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { NodeChange, NodeProps } from "@xyflow/react";
@@ -54,7 +55,17 @@ interface MockFlowProps {
   readonly elementsSelectable: boolean;
   readonly selectionOnDrag: boolean;
   readonly panOnDrag: boolean | number[];
+  readonly onInit: (flow: FakeFlowInstance) => void;
   readonly children: ReactNode;
+}
+
+// The instance methods the editor calls on xyflow's handle; the zoom menu is
+// disabled until the pane reports one.
+interface FakeFlowInstance {
+  readonly screenToFlowPosition: (point: { x: number; y: number }) => {
+    x: number;
+    y: number;
+  };
 }
 
 // The same stand-in the editor's own test uses: xyflow measures real layout
@@ -96,10 +107,13 @@ vi.mock("@/components/sandbox/sandbox-frame", () => ({
 }));
 
 vi.mock("@xyflow/react", async () => {
-  const { createContext, useContext } = await import("react");
+  const { createContext, useContext, useEffect } = await import("react");
   const NodeIdContext = createContext<string | null>(null);
+  const fakeFlow: FakeFlowInstance = { screenToFlowPosition: (point) => point };
   return {
     ReactFlow: (props: MockFlowProps) => {
+      const { onInit } = props;
+      useEffect(() => onInit(fakeFlow), [onInit]);
       flow.nodes = props.nodes;
       flow.dragStop = props.onNodeDragStop;
       flow.onNodeClick = props.onNodeClick;
@@ -140,7 +154,12 @@ vi.mock("@xyflow/react", async () => {
       );
     },
     Background: () => null,
-    MiniMap: () => null,
+    // Board headers counter-scale by the viewport zoom; jsdom has no
+    // viewport, so every read sees the identity transform.
+    useStore: (selector: (state: { transform: number[] }) => number) =>
+      selector({ transform: [0, 0, 1] }),
+    NodeToolbar: (props: { children: ReactNode }) => props.children,
+    Position: { Top: "top" },
     NodeResizer: (props: { isVisible?: boolean }) => {
       const nodeId = useContext(NodeIdContext);
       if (nodeId !== null)
@@ -308,44 +327,56 @@ describe("a view-only canvas (the phone)", () => {
   const TOOL_LABELS = [
     "Select (V)",
     "Hand (H)",
-    "Sticky note (N)",
-    "Rectangle (R)",
-    "Oval (O)",
-    "Line (L)",
-    "Arrow (A)",
+    "Note (N)",
+    "Text (T)",
     "Pen (P)",
-    "Title (T)",
-    "Undo",
-    "Redo",
+    "Rectangle (R)",
+    "More shapes",
   ];
 
-  it("keeps the editing tools and history off the toolbar", () => {
+  it("keeps the editing tools and history off the toolbar", async () => {
+    const user = userEvent.setup();
     mount({ viewOnly: true });
     for (const label of TOOL_LABELS)
       expect(screen.queryByRole("button", { name: label })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Inspector" })).toBeNull();
     // The reading aids stay.
-    expect(screen.getByRole("button", { name: "Reading order" })).toBeDefined();
+    expect(screen.getByRole("button", { name: "Pages" })).toBeDefined();
     expect(screen.getByRole("button", { name: "Play canvas" })).toBeDefined();
+    await user.click(screen.getByRole("button", { name: /, zoom$/ }));
+    expect(
+      screen.getByRole("menuitem", { name: "Fit to screen" }),
+    ).toBeDefined();
+    for (const label of [/^Undo/, /^Redo/])
+      expect(screen.queryByRole("menuitem", { name: label })).toBeNull();
   });
 
-  it("shows the same toolbar the desktop does when editing is allowed", () => {
+  it("shows the same toolbar the desktop does when editing is allowed", async () => {
+    const user = userEvent.setup();
     mount({ viewOnly: false });
     for (const label of TOOL_LABELS)
       expect(screen.getByRole("button", { name: label })).toBeDefined();
+    expect(screen.getByRole("button", { name: "Inspector" })).toBeDefined();
+    await user.click(screen.getByRole("button", { name: /, zoom$/ }));
+    // The items carry their shortcut in the accessible name.
+    for (const label of [/^Undo/, /^Redo/])
+      expect(screen.getByRole("menuitem", { name: label })).toBeDefined();
   });
 
   it("calls the play toggle's way back Pan, not Edit", () => {
     mount({ viewOnly: true });
     fireEvent.click(screen.getByRole("button", { name: "Play canvas" }));
-    const back = screen.getByRole("button", { name: "Pan canvas" });
-    expect(back.textContent).toBe("Pan");
+    expect(screen.getByRole("button", { name: "Pan canvas" })).toBeDefined();
     expect(screen.queryByRole("button", { name: "Edit canvas" })).toBeNull();
   });
 
   it("still lets the reader move between pages but not change them", () => {
     mount({ viewOnly: true });
-    expect(screen.getByRole("tab", { name: "Flow" })).toBeDefined();
-    for (const label of ["Add page", "Remove page", "Rename page"])
+    fireEvent.click(screen.getByRole("button", { name: "Pages" }));
+    expect(
+      screen.getByRole("button", { name: "Flow" }).getAttribute("aria-current"),
+    ).toBe("page");
+    for (const label of ["New page", "Actions for Flow"])
       expect(screen.queryByRole("button", { name: label })).toBeNull();
   });
 
@@ -376,9 +407,9 @@ describe("a view-only canvas (the phone)", () => {
 
   it("opens the reading order without reordering controls", () => {
     mount({ viewOnly: true });
-    fireEvent.click(screen.getByRole("button", { name: "Reading order" }));
-    const panel = screen.getByLabelText("Board reading order");
-    expect(within(panel).getByRole("button", { name: "Home" })).toBeDefined();
+    fireEvent.click(screen.getByRole("button", { name: "Pages" }));
+    const panel = screen.getByRole("list", { name: "Board reading order" });
+    expect(within(panel).getByRole("button", { name: /Home/ })).toBeDefined();
     expect(
       within(panel).queryAllByRole("button", {
         name: /Move .* (earlier|later)/,
@@ -481,6 +512,9 @@ describe("a view-only canvas (the phone)", () => {
     const shield = document.querySelector("[data-canvas-frame-overlay]");
     if (shield !== null) fireEvent.pointerDown(shield);
     expect(onEditPointer).toHaveBeenCalledOnce();
+    // The panel stays out of the way until the inspector is asked for.
+    expect(screen.queryByLabelText("Annotations")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Inspector" }));
     expect(screen.getByLabelText("Annotations")).toBeDefined();
   });
 });

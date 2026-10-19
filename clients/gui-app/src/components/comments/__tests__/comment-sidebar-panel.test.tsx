@@ -1,9 +1,9 @@
 /**
- * Comment anchors require a Markdown body (`CommentSidebarPanel`'s own
- * comment): html, canvas and file artifacts have no comment room, so the
- * panel must render nothing for them, and in particular must never mount
+ * The sidebar lists threads for Markdown artifacts only: html and canvas
+ * threads are pins on their frame, and file artifacts have no comment room.
+ * The panel must render nothing for those, and in particular must never mount
  * `<CommentSidebar>` - which is what would start the room's poll/subscribe
- * work for a body that does not exist.
+ * work for a body the sidebar does not list.
  */
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -63,14 +63,17 @@ afterEach(() => {
 });
 
 describe("<CommentSidebarPanel />", () => {
-  it("renders CommentSidebar for a markdown artifact", () => {
-    mocks.artifact = { kind: "spec" };
+  it.each(["spec", "ticket", "story", "review"] as const)(
+    "renders CommentSidebar for a %s artifact",
+    (kind) => {
+      mocks.artifact = { kind };
 
-    render(<CommentSidebarPanel epicId="epic-1" activeArtifactId="a1" />);
+      render(<CommentSidebarPanel epicId="epic-1" activeArtifactId="a1" />);
 
-    expect(screen.getByTestId("comment-sidebar")).toBeTruthy();
-    expect(mocks.commentSidebarMounts).toBe(1);
-  });
+      expect(screen.getByTestId("comment-sidebar")).toBeTruthy();
+      expect(mocks.commentSidebarMounts).toBe(1);
+    },
+  );
 
   it.each(["html", "canvas", "file"] as const)(
     "renders nothing and never mounts CommentSidebar for a %s artifact",

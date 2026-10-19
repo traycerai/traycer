@@ -6,7 +6,7 @@ import {
   screen,
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import type { ComponentType, ReactNode } from "react";
+import { Fragment, type ComponentType, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { NodeProps } from "@xyflow/react";
 import { parseHtmlSource } from "@traycer/html-source";
@@ -53,6 +53,24 @@ vi.mock("../canvas-annotation-action", () => ({
   CanvasAnnotationAction: () => null,
   CanvasSelectionAction: () => null,
 }));
+// Comments are a separate surface; this test exercises the editing stack.
+vi.mock("@/hooks/host/use-tab-host-client", () => ({
+  useTabHostClient: () => null,
+}));
+vi.mock("@/hooks/comments/use-frame-comments-enabled", () => ({
+  useFrameCommentsEnabled: () => false,
+}));
+vi.mock("../canvas-comments", () => ({
+  CanvasCommentAction: () => null,
+  CanvasCommentIndex: () => null,
+  CanvasCommentPins: () => null,
+}));
+vi.mock("@/components/comments/frame-comments", () => ({
+  FrameCommentsToolbar: () => null,
+}));
+vi.mock("@/components/comments/anchored-draft-popover", () => ({
+  AnchoredDraftPopover: () => null,
+}));
 vi.mock("@/components/ui/agent-spinning-dots", () => ({
   AgentSpinningDots: () => null,
 }));
@@ -62,6 +80,7 @@ interface MockFlowProps {
   readonly nodeTypes: Readonly<
     Record<string, ComponentType<NodeProps<CanvasFlowNode>>>
   >;
+  readonly onNodeClick?: (event: MouseEvent, node: CanvasFlowNode) => void;
   readonly children: ReactNode;
 }
 vi.mock("@xyflow/react", () => ({
@@ -71,21 +90,27 @@ vi.mock("@xyflow/react", () => ({
         const type = node.type ?? "board";
         const NodeRenderer = props.nodeTypes[type];
         return (
-          <NodeRenderer
-            key={node.id}
-            id={node.id}
-            data={node.data}
-            type={type}
-            selected={node.selected ?? false}
-            dragging={false}
-            zIndex={node.zIndex ?? 0}
-            selectable
-            deletable={false}
-            draggable
-            isConnectable={false}
-            positionAbsoluteX={node.position.x}
-            positionAbsoluteY={node.position.y}
-          />
+          <Fragment key={node.id}>
+            <button
+              type="button"
+              aria-label={`Pick ${node.id}`}
+              onClick={(event) => props.onNodeClick?.(event.nativeEvent, node)}
+            />
+            <NodeRenderer
+              id={node.id}
+              data={node.data}
+              type={type}
+              selected={node.selected ?? false}
+              dragging={false}
+              zIndex={node.zIndex ?? 0}
+              selectable
+              deletable={false}
+              draggable
+              isConnectable={false}
+              positionAbsoluteX={node.position.x}
+              positionAbsoluteY={node.position.y}
+            />
+          </Fragment>
         );
       })}
       {props.children}
@@ -94,6 +119,9 @@ vi.mock("@xyflow/react", () => ({
   Background: () => null,
   MiniMap: () => null,
   NodeResizer: () => null,
+  // The node chrome scales with the canvas zoom; the test canvas is unzoomed.
+  useStore: (select: (state: { transform: number[] }) => unknown) =>
+    select({ transform: [0, 0, 1] }),
 }));
 
 const frames = vi.hoisted(() => new Map<string, SandboxFrameProps>());
@@ -111,6 +139,7 @@ const BYTES = new TextEncoder().encode(HTML);
 const PARSED = parseHtmlSource(HTML);
 const H1_MARKER = HTML.indexOf("<h1");
 const P_MARKER = HTML.indexOf("<p>");
+const B_MARKER = HTML.indexOf("<b>");
 const HTML_MARKER = HTML.indexOf("<html");
 
 /** What the page would report for the element whose start tag is at `marker`. */
@@ -386,7 +415,9 @@ describe("the editing stack over a real canvas document", () => {
 
       expect(pendingSaves).toHaveLength(1);
       expect(pendingSaves[0].variables.edit).toEqual({
-        kind: "set-text-content",
+        kind: "set-text-node",
+        index: 0,
+        expectedText: "Welcome home",
         text: "Hello there",
       });
       expect(pendingSaves[0].variables.selection).toMatchObject({
@@ -396,29 +427,82 @@ describe("the editing stack over a real canvas document", () => {
       });
     });
 
-    it("does not open for an element that is not the selected one", async () => {
+    it("adopts a double-clicked element that is not the selected one and opens its editor", async () => {
       await selectedAndLoaded();
       await doubleClick(paragraph());
-      expect(
-        screen.queryByRole("textbox", { name: "Edit element text" }),
-      ).toBeNull();
+
+      expect(useCanvasSelectionStore.getState().selection?.element.marker).toBe(
+        P_MARKER,
+      );
+      const field = await screen.findByRole("textbox", {
+        name: "Edit element text",
+      });
+      expect(field).toHaveProperty("value", "Plain mixed text");
     });
 
-    it("says to ask the agent when the element has mixed content", async () => {
+    it("opens the whole block, formatting included, when the element has mixed content", async () => {
       const view = mountEditing();
       select(selectionOf(paragraph()));
       await loadPage(view.bridge);
       await doubleClick(paragraph());
 
-      // The surface's zoom readout is also a status, so look for the text.
-      await vi.waitFor(() =>
-        expect(
-          screen.getByText("Ask the agent to change this element."),
-        ).toBeDefined(),
-      );
+      const field = await screen.findByRole("textbox", {
+        name: "Edit element text",
+      });
+      expect(field).toHaveProperty("value", "Plain mixed text");
       expect(
-        screen.queryByRole("textbox", { name: "Edit element text" }),
+        screen.queryByText("Ask the agent to change this element."),
       ).toBeNull();
+    });
+
+    it("saves a change inside formatted text against the inline element that owns it", async () => {
+      const view = mountEditing();
+      select(selectionOf(paragraph()));
+      await loadPage(view.bridge);
+      await doubleClick(paragraph());
+      const field = await screen.findByRole("textbox", {
+        name: "Edit element text",
+      });
+      fireEvent.change(field, { target: { value: "Plain MIXED text" } });
+      await act(async () => {
+        fireEvent.keyDown(field, { code: "Enter" });
+        await new Promise<void>((resolve) => setTimeout(resolve, 20));
+      });
+
+      expect(pendingSaves).toHaveLength(1);
+      expect(pendingSaves[0].variables.edit).toEqual({
+        kind: "set-text-node",
+        index: 0,
+        expectedText: "mixed",
+        text: "MIXED",
+      });
+      expect(pendingSaves[0].variables.selection).toMatchObject({
+        servedSha256: SHA,
+        element: { marker: B_MARKER, tagName: "b", tid: null },
+      });
+    });
+
+    it("keeps a change that crosses formatted text open instead of saving it", async () => {
+      const view = mountEditing();
+      select(selectionOf(paragraph()));
+      await loadPage(view.bridge);
+      await doubleClick(paragraph());
+      const field = await screen.findByRole("textbox", {
+        name: "Edit element text",
+      });
+      fireEvent.change(field, { target: { value: "Plain text" } });
+      await act(async () => {
+        fireEvent.keyDown(field, { code: "Enter" });
+        await new Promise<void>((resolve) => setTimeout(resolve, 20));
+      });
+
+      expect(pendingSaves).toHaveLength(0);
+      expect(
+        screen.getByText(
+          "This change crosses formatted text. Ask the agent to change it.",
+        ),
+      ).toBeDefined();
+      expect(field).toHaveProperty("value", "Plain text");
     });
 
     it("does not open once the selection has moved on", async () => {
@@ -435,15 +519,19 @@ describe("the editing stack over a real canvas document", () => {
   });
 
   describe("the panels beside the canvas", () => {
+    // The inspector is opened from the toolbar, and shows the picked board.
     async function openPanels() {
       const view = mountEditing();
       select(selectionOf(headline()));
       await loadPage(view.bridge);
+      fireEvent.click(screen.getByRole("button", { name: "Inspector" }));
+      fireEvent.click(screen.getByRole("button", { name: /^Pick / }));
       return view;
     }
 
     it("lists the page's tweaks once its source is read, and saves one against the root", async () => {
       await openPanels();
+      fireEvent.mouseDown(screen.getByRole("tab", { name: "Tweaks" }));
       const tweaks = await screen.findByRole("region", { name: "Tweaks" });
       expect(tweaks).toBeDefined();
 
@@ -463,13 +551,14 @@ describe("the editing stack over a real canvas document", () => {
       });
     });
 
-    it("lists the page's elements on the Layers tab and selects one through the page", async () => {
+    it("lists the page's elements beside the properties on Design and selects one through the page", async () => {
       const { describeElement } = await openPanels();
-      fireEvent.mouseDown(screen.getByRole("tab", { name: "Layers" }));
 
       const tree = await screen.findByRole("tree", { name: "Artboard layers" });
       expect(tree).toBeDefined();
-      const row = await screen.findByRole("button", { name: /^p Plain/ });
+      const row = await screen.findByRole("button", {
+        name: /^Paragraph Plain/,
+      });
       await act(async () => {
         fireEvent.click(row);
         await Promise.resolve();
@@ -484,20 +573,19 @@ describe("the editing stack over a real canvas document", () => {
       });
     });
 
-    it("lists the Layers of every element the document literally contains", async () => {
+    it("lists the layers of the document's content, not its html, head or body", async () => {
       await openPanels();
-      fireEvent.mouseDown(screen.getByRole("tab", { name: "Layers" }));
       await screen.findByRole("tree", { name: "Artboard layers" });
       for (const name of [
-        /^html/,
-        /^head/,
-        /^style/,
-        /^body/,
-        /^h1 Welcome home/,
-        /^p Plain/,
-        /^b mixed/,
+        /^Heading Welcome home/,
+        /^Paragraph Plain/,
+        /^Text mixed/,
       ])
         expect(await screen.findByRole("button", { name })).toBeDefined();
+      expect(
+        screen.queryByRole("button", { name: /^(html|head|style|body)\b/i }),
+      ).toBeNull();
+      expect(screen.getAllByRole("treeitem")).toHaveLength(3);
     });
   });
 

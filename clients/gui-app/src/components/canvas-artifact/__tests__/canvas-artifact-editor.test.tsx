@@ -4,9 +4,19 @@ import {
   fireEvent,
   render,
   screen,
+  within,
 } from "@testing-library/react";
+import userEvent, { type UserEvent } from "@testing-library/user-event";
 import type { ComponentType, ReactNode } from "react";
-import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+  type Mock,
+} from "vitest";
 import type { NodeChange, NodeProps } from "@xyflow/react";
 import type { SandboxSource } from "@/components/sandbox/sandbox-frame";
 import {
@@ -17,6 +27,7 @@ import {
 } from "@traycer/protocol/persistence/epic/canvas-layout";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { CanvasArtifactEditor } from "../canvas-artifact-editor";
+import type { CanvasFrameEvents } from "../canvas-frame";
 import type { CanvasFlowNode } from "../canvas-node-context";
 import type { CanvasLayoutStore } from "../canvas-layout-store";
 import {
@@ -47,7 +58,19 @@ interface MockFlowProps {
   readonly onNodeDragStop: DragStop;
   readonly onNodesChange: (changes: NodeChange<CanvasFlowNode>[]) => void;
   readonly noPanClassName?: string;
+  readonly onInit: (flow: FakeFlowInstance) => void;
   readonly children: ReactNode;
+}
+
+// The instance methods the editor calls on xyflow's handle. The pane reports
+// one on mount; the zoom menu stays disabled until it does.
+interface FakeFlowInstance {
+  readonly screenToFlowPosition: (point: { x: number; y: number }) => {
+    x: number;
+    y: number;
+  };
+  readonly zoomTo: (zoom: number) => void;
+  readonly setCenter: (x: number, y: number, options: object) => void;
 }
 
 // xyflow measures a real layout and owns pointer dragging and resizing,
@@ -63,6 +86,8 @@ interface FlowCapture {
   onNodesChange: MockFlowProps["onNodesChange"] | null;
   noPanClassName: string | undefined;
   resizeEnds: Map<string, ResizeEnd>;
+  zoomTo: Mock<(zoom: number) => void>;
+  setCenter: Mock<(x: number, y: number, options: object) => void>;
 }
 const flow: FlowCapture = vi.hoisted(() => ({
   nodes: [],
@@ -70,6 +95,8 @@ const flow: FlowCapture = vi.hoisted(() => ({
   onNodesChange: null,
   noPanClassName: undefined,
   resizeEnds: new Map<string, ResizeEnd>(),
+  zoomTo: vi.fn<(zoom: number) => void>(),
+  setCenter: vi.fn<(x: number, y: number, options: object) => void>(),
 }));
 
 vi.mock("@xyflow/react", async () => {
@@ -77,6 +104,16 @@ vi.mock("@xyflow/react", async () => {
   const NodeIdContext = createContext<string | null>(null);
   return {
     ReactFlow: (props: MockFlowProps) => {
+      const { onInit } = props;
+      useEffect(
+        () =>
+          onInit({
+            screenToFlowPosition: (point) => point,
+            zoomTo: flow.zoomTo,
+            setCenter: flow.setCenter,
+          }),
+        [onInit],
+      );
       flow.nodes = props.nodes;
       flow.dragStop = props.onNodeDragStop;
       flow.onNodesChange = props.onNodesChange;
@@ -112,7 +149,12 @@ vi.mock("@xyflow/react", async () => {
       );
     },
     Background: () => null,
-    MiniMap: () => null,
+    // Board headers counter-scale by the viewport zoom; jsdom has no
+    // viewport, so every read sees the identity transform.
+    useStore: (selector: (state: { transform: number[] }) => number) =>
+      selector({ transform: [0, 0, 1] }),
+    NodeToolbar: (props: { children: ReactNode }) => props.children,
+    Position: { Top: "top" },
     NodeResizer: (props: { onResizeEnd?: ResizeEnd }) => {
       const nodeId = useContext(NodeIdContext);
       const { onResizeEnd } = props;
@@ -153,6 +195,7 @@ interface Mounted {
 function editorElement(
   store: CanvasLayoutStore,
   sourceForBoard: Mounted["sourceForBoard"],
+  frameEvents: CanvasFrameEvents | null,
 ): ReactNode {
   return (
     <CanvasArtifactEditor
@@ -161,37 +204,58 @@ function editorElement(
       awareness={null}
       user={{ name: "Ada", color: "#112233" }}
       sourceForBoard={sourceForBoard}
-      frameEvents={null}
+      frameEvents={frameEvents}
       liveFrameLimit={0}
     />
   );
 }
 
-function mountEditorWrapped(wrap: (editor: ReactNode) => ReactNode): Mounted {
+function mountEditorWrapped(
+  wrap: (editor: ReactNode) => ReactNode,
+  frameEvents: CanvasFrameEvents | null,
+): Mounted {
   const store = storeFromFixture(file);
   const sourceForBoard = vi.fn<(path: string) => SandboxSource | null>(
     () => null,
   );
   render(
     <TooltipProvider>
-      {wrap(editorElement(store, sourceForBoard))}
+      {wrap(editorElement(store, sourceForBoard, frameEvents))}
     </TooltipProvider>,
   );
   return { store, sourceForBoard };
 }
 
 function mountEditor(): Mounted {
-  return mountEditorWrapped((editor) => editor);
+  return mountEditorWrapped((editor) => editor, null);
+}
+
+function mountEditorWithEvents(frameEvents: CanvasFrameEvents): Mounted {
+  return mountEditorWrapped((editor) => editor, frameEvents);
+}
+
+function canvasFrameEvents(
+  overrides: Partial<CanvasFrameEvents>,
+): CanvasFrameEvents {
+  return {
+    onBridge: vi.fn(),
+    onStatus: vi.fn(),
+    onEditPointer: vi.fn(),
+    ...overrides,
+  };
 }
 
 // The canvas is opened from inside dialogs (settings, the proof harness), so
 // an ancestor with role=dialog must not make the canvas think it is a dialog.
 function mountEditorInDialog(): Mounted {
-  return mountEditorWrapped((editor) => (
-    <div role="dialog" aria-label="Settings">
-      {editor}
-    </div>
-  ));
+  return mountEditorWrapped(
+    (editor) => (
+      <div role="dialog" aria-label="Settings">
+        {editor}
+      </div>
+    ),
+    null,
+  );
 }
 
 function nodeNamed(id: string): CanvasFlowNode {
@@ -253,21 +317,54 @@ afterEach(() => {
   flow.onNodesChange = null;
   flow.noPanClassName = undefined;
   flow.resizeEnds.clear();
+  flow.zoomTo.mockClear();
+  flow.setCenter.mockClear();
 });
 
+async function openZoomMenu(user: UserEvent) {
+  await user.click(screen.getByRole("button", { name: /, zoom$/ }));
+}
+
+// The zoom menu items carry their shortcut in the accessible name.
+async function chooseFromZoomMenu(user: UserEvent, name: RegExp) {
+  await openZoomMenu(user);
+  await user.click(screen.getByRole("menuitem", { name }));
+}
+
+function openPageMenu(): void {
+  fireEvent.click(screen.getByRole("button", { name: "Pages" }));
+}
+
+// The board's name strip, not the preview that repeats the title.
+function boardNameText(title: string): HTMLElement {
+  const header = screen
+    .getAllByText(title)
+    .find((element) => element.closest("[data-canvas-board-handle]") !== null);
+  if (header === undefined) throw new Error(`no board header for ${title}`);
+  return header;
+}
+
+function startRenamingBoard(title: string): HTMLElement {
+  fireEvent.doubleClick(boardNameText(title));
+  return screen.getByRole("textbox", { name: "Board name" });
+}
+
 describe("CanvasArtifactEditor pages and boards", () => {
-  it("shows a tab per page with the first page selected", () => {
+  it("names the current page on the menu button and marks it in the list", () => {
     mountEditor();
-    const tabs = screen.getAllByRole("tab");
-    expect(tabs.map((tab) => tab.textContent)).toEqual(["Flow", "Details"]);
+    expect(screen.getByRole("button", { name: "Pages" }).textContent).toBe(
+      "Flow",
+    );
+    openPageMenu();
+    const pages = within(screen.getByRole("list", { name: "Canvas pages" }));
     expect(
-      screen.getByRole("tab", { name: "Flow" }).getAttribute("aria-selected"),
-    ).toBe("true");
+      pages.getByRole("button", { name: "Flow" }).getAttribute("aria-current"),
+    ).toBe("page");
     expect(
-      screen
-        .getByRole("tab", { name: "Details" })
-        .getAttribute("aria-selected"),
-    ).toBe("false");
+      pages
+        .getByRole("button", { name: "Details" })
+        .hasAttribute("aria-current"),
+    ).toBe(false);
   });
 
   it("shows placeholders for the current page's boards only", () => {
@@ -279,33 +376,9 @@ describe("CanvasArtifactEditor pages and boards", () => {
     expect(sourceForBoard).not.toHaveBeenCalled();
   });
 
-  it("switches the boards when another page is chosen", () => {
-    mountEditor();
-    fireEvent.click(screen.getByRole("tab", { name: "Details" }));
-    expect(screen.getByRole("img", { name: "Specs preview" })).toBeDefined();
-    expect(screen.queryByRole("img", { name: "Home preview" })).toBeNull();
-    expect(
-      screen
-        .getByRole("tab", { name: "Details" })
-        .getAttribute("aria-selected"),
-    ).toBe("true");
-  });
-
-  it("adds a page and removes it again", () => {
+  it("renames a board by double-clicking its name", () => {
     const { store } = mountEditor();
-    fireEvent.click(screen.getByRole("button", { name: "Add page" }));
-    expect(screen.getByRole("tab", { name: "Page 3" })).toBeDefined();
-    expect(store.getSnapshot().layout.pages).toHaveLength(3);
-
-    fireEvent.click(screen.getByRole("button", { name: "Remove page" }));
-    expect(screen.queryByRole("tab", { name: "Page 3" })).toBeNull();
-    expect(store.getSnapshot().layout.pages).toHaveLength(2);
-  });
-
-  it("renames a board through its title", () => {
-    const { store } = mountEditor();
-    fireEvent.click(screen.getByRole("button", { name: "Rename Home" }));
-    const input = screen.getByRole("textbox", { name: "Rename Home" });
+    const input = startRenamingBoard("Home");
     fireEvent.change(input, { target: { value: "Landing" } });
     fireEvent.blur(input);
 
@@ -327,19 +400,109 @@ describe("CanvasArtifactEditor pages and boards", () => {
     ).toBe("true");
   });
 
-  it("reorders boards from the reading order panel", () => {
+  it("reorders boards from the reading order under the current page", () => {
     const { store } = mountEditor();
-    fireEvent.click(screen.getByRole("button", { name: "Reading order" }));
+    openPageMenu();
     expect(
-      screen.getByRole("complementary", { name: "Board reading order" }),
+      screen.getByRole("list", { name: "Board reading order" }),
     ).toBeDefined();
 
     fireEvent.click(screen.getByRole("button", { name: "Move Home later" }));
     // "Later" is relative to the boards on this page; the other page's board
-    // is not part of the panel.
+    // is not in the list.
     expect(
       store.getSnapshot().layout.order.filter((path) => path !== DETAILS),
     ).toEqual([CHECKOUT, HOME]);
+  });
+});
+
+describe("CanvasArtifactEditor page menu", () => {
+  it("switches the boards and closes when another page is chosen", () => {
+    mountEditor();
+    openPageMenu();
+    fireEvent.click(screen.getByRole("button", { name: "Details" }));
+
+    expect(screen.getByRole("img", { name: "Specs preview" })).toBeDefined();
+    expect(screen.queryByRole("img", { name: "Home preview" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Pages" }).textContent).toBe(
+      "Details",
+    );
+    expect(screen.queryByRole("list", { name: "Canvas pages" })).toBeNull();
+  });
+
+  it("adds a page, switches to it and closes", () => {
+    const { store } = mountEditor();
+    openPageMenu();
+    fireEvent.click(screen.getByRole("button", { name: "New page" }));
+
+    expect(store.getSnapshot().layout.pages).toHaveLength(3);
+    expect(screen.getByRole("button", { name: "Pages" }).textContent).toBe(
+      "Page 3",
+    );
+    expect(screen.queryByRole("img", { name: "Home preview" })).toBeNull();
+    expect(screen.queryByRole("list", { name: "Canvas pages" })).toBeNull();
+  });
+
+  it("renames a page inline from its actions menu", async () => {
+    const user = userEvent.setup();
+    const { store } = mountEditor();
+    openPageMenu();
+    await user.click(
+      screen.getByRole("button", { name: "Actions for Details" }),
+    );
+    await user.click(screen.getByRole("menuitem", { name: "Rename" }));
+
+    const input = screen.getByRole("textbox", { name: "Page name" });
+    fireEvent.change(input, { target: { value: "Specs" } });
+    fireEvent.keyDown(input, { code: "Enter" });
+    // Enter blurs the field, which is what commits.
+    fireEvent.blur(input);
+
+    expect(store.getSnapshot().layout.pages.map((item) => item.name)).toEqual([
+      "Flow",
+      "Specs",
+    ]);
+    expect(screen.queryByRole("textbox", { name: "Page name" })).toBeNull();
+  });
+
+  it("keeps the old name when the rename is cancelled", async () => {
+    const user = userEvent.setup();
+    const { store } = mountEditor();
+    openPageMenu();
+    await user.click(
+      screen.getByRole("button", { name: "Actions for Details" }),
+    );
+    await user.click(screen.getByRole("menuitem", { name: "Rename" }));
+
+    const input = screen.getByRole("textbox", { name: "Page name" });
+    fireEvent.change(input, { target: { value: "Specs" } });
+    fireEvent.keyDown(input, { code: "Escape" });
+    fireEvent.blur(input);
+
+    expect(store.getSnapshot().layout.pages.map((item) => item.name)).toEqual([
+      "Flow",
+      "Details",
+    ]);
+  });
+
+  it("deletes a page from its actions menu, and not the last one", async () => {
+    const user = userEvent.setup();
+    const { store } = mountEditor();
+    openPageMenu();
+    await user.click(
+      screen.getByRole("button", { name: "Actions for Details" }),
+    );
+    await user.click(screen.getByRole("menuitem", { name: "Delete" }));
+    expect(store.getSnapshot().layout.pages.map((item) => item.name)).toEqual([
+      "Flow",
+    ]);
+
+    await user.click(screen.getByRole("button", { name: "Actions for Flow" }));
+    expect(
+      screen
+        .getByRole("menuitem", { name: "Delete" })
+        .getAttribute("aria-disabled"),
+    ).toBe("true");
   });
 });
 
@@ -378,17 +541,26 @@ describe("CanvasArtifactEditor drag end", () => {
     expect(store.getSnapshot().layout.boards).toEqual(before.boards);
   });
 
-  it("makes a drag undoable from the toolbar", () => {
+  it("makes a drag undoable from the zoom menu", async () => {
+    const user = userEvent.setup();
     const { store } = mountEditor();
+    await openZoomMenu(user);
     expect(
-      screen.getByRole("button", { name: "Undo" }).hasAttribute("disabled"),
-    ).toBe(true);
+      screen
+        .getByRole("menuitem", { name: /^Undo/ })
+        .getAttribute("aria-disabled"),
+    ).toBe("true");
+    await user.keyboard("{Escape}");
 
     finishDrag(nodeNamed(`board:${HOME}`), 300, 40);
-    const undo = screen.getByRole("button", { name: "Undo" });
-    expect(undo.hasAttribute("disabled")).toBe(false);
+    await openZoomMenu(user);
+    expect(
+      screen
+        .getByRole("menuitem", { name: /^Undo/ })
+        .hasAttribute("aria-disabled"),
+    ).toBe(false);
 
-    fireEvent.click(undo);
+    await user.click(screen.getByRole("menuitem", { name: /^Undo/ }));
     expect(store.getSnapshot().layout.boards[HOME]).toMatchObject({
       x: 0,
       y: 0,
@@ -429,12 +601,29 @@ describe("CanvasArtifactEditor tool shortcuts", () => {
     ).toBe("true");
   });
 
+  it("returns to Select on Escape without stopping the key", () => {
+    mountEditor();
+    fireEvent.keyDown(screen.getByLabelText("Canvas"), { code: "KeyR" });
+    // The selection provider steps the selection out on this same key, so it
+    // has to reach whatever sits under the canvas root.
+    const reached = vi.fn<(event: Event) => void>();
+    const pane = screen.getByRole("group", { name: "Canvas pane" });
+    pane.addEventListener("keydown", reached);
+
+    const notPrevented = fireEvent.keyDown(pane, { code: "Escape" });
+
+    expect(reached).toHaveBeenCalledOnce();
+    expect(notPrevented).toBe(true);
+    expect(
+      screen
+        .getByRole("button", { name: "Select (V)" })
+        .getAttribute("aria-pressed"),
+    ).toBe("true");
+  });
+
   it("leaves the keys alone while a name is being typed", () => {
     mountEditor();
-    fireEvent.click(screen.getByRole("button", { name: "Rename Home" }));
-    fireEvent.keyDown(screen.getByRole("textbox", { name: "Rename Home" }), {
-      code: "KeyR",
-    });
+    fireEvent.keyDown(startRenamingBoard("Home"), { code: "KeyR" });
     expect(
       screen
         .getByRole("button", { name: "Rectangle (R)" })
@@ -647,10 +836,10 @@ describe("CanvasArtifactEditor resize", () => {
     });
   });
 
-  it("makes a finished resize one undo step", () => {
+  it("makes a finished resize one undo step", async () => {
     const { store } = mountEditor();
     finishResize(boardId, { x: 80, y: 50, width: 1000, height: 700 });
-    fireEvent.click(screen.getByRole("button", { name: "Undo" }));
+    await chooseFromZoomMenu(userEvent.setup(), /^Undo/);
     expect(store.getSnapshot().layout.boards[HOME]).toMatchObject({
       x: 0,
       y: 0,
@@ -779,9 +968,10 @@ describe.each([
 
   it("leaves focus in a text field that is pressed", () => {
     mount();
-    fireEvent.click(screen.getByRole("button", { name: "Rename Home" }));
-    const input = screen.getByRole("textbox", { name: "Rename Home" });
-    expect(document.activeElement).toBe(input);
+    const input = startRenamingBoard("Home");
+    // The field selects its text on mount; jsdom's select() does not move
+    // focus the way a browser's does.
+    act(() => input.focus());
 
     fireEvent.pointerDown(input);
     expect(document.activeElement).toBe(input);
@@ -808,8 +998,7 @@ describe.each([
   it("does not undo or switch tools while typing in a text field", () => {
     const { store } = mount();
     finishDrag(nodeNamed(`board:${HOME}`), 300, 40);
-    fireEvent.click(screen.getByRole("button", { name: "Rename Home" }));
-    const input = screen.getByRole("textbox", { name: "Rename Home" });
+    const input = startRenamingBoard("Home");
 
     fireEvent.keyDown(input, { code: "KeyZ", ctrlKey: true });
     fireEvent.keyDown(input, { code: "KeyR" });
@@ -844,7 +1033,49 @@ describe("CanvasArtifactEditor board shield and panning", () => {
   it("lets a drag over an unmarked board pan in Hand mode", () => {
     mountEditor();
     fireEvent.click(screen.getByRole("button", { name: "Hand (H)" }));
-    expectShieldsPanThrough();
+    // The edit shield gives way to a layer that passes drags to the canvas.
+    expect(
+      document.querySelectorAll("[data-canvas-frame-overlay]"),
+    ).toHaveLength(0);
+    const noPan = flow.noPanClassName ?? "nopan";
+    expect(
+      screen.getByRole("img", { name: "Home preview" }).closest(`.${noPan}`),
+    ).toBeNull();
+  });
+
+  it("keeps comment pins mounted over a board in Hand mode", () => {
+    mountEditorWithEvents(
+      canvasFrameEvents({
+        renderOverlay: (path, editing) => (
+          <div data-testid={`pins-${path}`} data-editing={String(editing)} />
+        ),
+      }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Hand (H)" }));
+
+    expect(
+      document.querySelectorAll("[data-canvas-frame-overlay]"),
+    ).toHaveLength(0);
+    for (const path of [HOME, CHECKOUT])
+      expect(
+        screen.getByTestId(`pins-${path}`).getAttribute("data-editing"),
+      ).toBe("false");
+  });
+
+  it("pans while Space is held, whatever the tool", () => {
+    mountEditor();
+    const canvas = screen.getByLabelText("Canvas");
+    expect(
+      document.querySelectorAll("[data-canvas-frame-overlay]"),
+    ).toHaveLength(2);
+    fireEvent.keyDown(canvas, { code: "Space" });
+    expect(
+      document.querySelectorAll("[data-canvas-frame-overlay]"),
+    ).toHaveLength(0);
+    fireEvent.keyUp(canvas, { code: "Space" });
+    expect(
+      document.querySelectorAll("[data-canvas-frame-overlay]"),
+    ).toHaveLength(2);
   });
 
   it("lets a drag over an unmarked board pan in play mode", () => {
@@ -937,12 +1168,14 @@ describe("CanvasArtifactEditor late resize commits", () => {
       () => null,
     );
     const { rerender } = render(
-      <TooltipProvider>{editorElement(first, sourceForBoard)}</TooltipProvider>,
+      <TooltipProvider>
+        {editorElement(first, sourceForBoard, null)}
+      </TooltipProvider>,
     );
     const gestureStart = resizeEndAtGestureStart(`board:${HOME}`);
     rerender(
       <TooltipProvider>
-        {editorElement(second, sourceForBoard)}
+        {editorElement(second, sourceForBoard, null)}
       </TooltipProvider>,
     );
 
@@ -961,7 +1194,8 @@ describe("CanvasArtifactEditor late resize commits", () => {
   it("writes nothing for a node that left the canvas with its page", () => {
     const { store } = mountEditor();
     const gestureStart = resizeEndAtGestureStart(`board:${HOME}`);
-    fireEvent.click(screen.getByRole("tab", { name: "Details" }));
+    openPageMenu();
+    fireEvent.click(screen.getByRole("button", { name: "Details" }));
 
     callResizeEnd(gestureStart, { x: 80, y: 50, width: 1000, height: 700 });
 
@@ -972,5 +1206,147 @@ describe("CanvasArtifactEditor late resize commits", () => {
       h: 800,
     });
     expect(store.getSnapshot().canUndo).toBe(false);
+  });
+});
+
+describe("CanvasArtifactEditor placing items", () => {
+  const FROM = { x: 10, y: 10 };
+  const TO = { x: 110, y: 90 };
+
+  // jsdom has no pointer capture, which the drawing layer asks for.
+  beforeEach(() => {
+    HTMLElement.prototype.setPointerCapture = vi.fn();
+  });
+
+  function drawWith(tool: string): void {
+    const layer = screen.getByLabelText(`Draw ${tool}`);
+    fireEvent.pointerDown(layer, {
+      button: 0,
+      pointerId: 1,
+      clientX: FROM.x,
+      clientY: FROM.y,
+    });
+    fireEvent.pointerUp(layer, { pointerId: 1, clientX: TO.x, clientY: TO.y });
+  }
+
+  function pressed(name: string): string | null {
+    return screen.getByRole("button", { name }).getAttribute("aria-pressed");
+  }
+
+  function noteTypes(store: CanvasLayoutStore): (string | undefined)[] {
+    return Object.values(store.getSnapshot().layout.notes).map(
+      (note) => note.type,
+    );
+  }
+
+  it("goes back to Select once a shape is placed, and selects it", () => {
+    const onBoardSelect = vi.fn();
+    const { store } = mountEditorWithEvents(
+      canvasFrameEvents({ onBoardSelect }),
+    );
+    fireEvent.keyDown(screen.getByLabelText("Canvas"), { code: "KeyR" });
+    expect(pressed("Rectangle (R)")).toBe("true");
+
+    drawWith("rect");
+
+    expect(noteTypes(store)).toContain("rect");
+    expect(pressed("Select (V)")).toBe("true");
+    expect(pressed("Rectangle (R)")).toBe("false");
+    expect(screen.queryByLabelText("Draw rect")).toBeNull();
+    // The new shape replaces any board that was selected for the inspector.
+    expect(onBoardSelect).toHaveBeenCalledWith(null);
+  });
+
+  it("keeps the pen active after a stroke", () => {
+    const onBoardSelect = vi.fn();
+    const { store } = mountEditorWithEvents(
+      canvasFrameEvents({ onBoardSelect }),
+    );
+    fireEvent.keyDown(screen.getByLabelText("Canvas"), { code: "KeyP" });
+
+    drawWith("pen");
+    drawWith("pen");
+
+    expect(noteTypes(store).filter((type) => type === "pen")).toHaveLength(2);
+    expect(pressed("Pen (P)")).toBe("true");
+    expect(screen.getByLabelText("Draw pen")).toBeDefined();
+    expect(onBoardSelect).not.toHaveBeenCalled();
+  });
+
+  it("opens a placed sticky note for typing", () => {
+    mountEditor();
+    fireEvent.keyDown(screen.getByLabelText("Canvas"), { code: "KeyN" });
+
+    drawWith("sticky");
+
+    expect(pressed("Select (V)")).toBe("true");
+    expect(screen.getByRole("textbox", { name: "Sticky note text" })).toBe(
+      document.activeElement,
+    );
+  });
+});
+
+describe("CanvasArtifactEditor inspector", () => {
+  function annotations(): HTMLElement | null {
+    return screen.queryByLabelText("Annotations");
+  }
+
+  function mountWithPanel(): void {
+    mountEditorWithEvents(
+      canvasFrameEvents({
+        renderPanel: () => <aside aria-label="Annotations" />,
+      }),
+    );
+  }
+
+  it("stays hidden until the Inspector toggle is pressed", () => {
+    mountWithPanel();
+    const toggle = screen.getByRole("button", { name: "Inspector" });
+    expect(toggle.getAttribute("aria-pressed")).toBe("false");
+    expect(annotations()).toBeNull();
+
+    fireEvent.click(toggle);
+    expect(toggle.getAttribute("aria-pressed")).toBe("true");
+    expect(annotations()).not.toBeNull();
+
+    fireEvent.click(toggle);
+    expect(annotations()).toBeNull();
+  });
+
+  it("shows the note's own inspector when one note is selected", () => {
+    mountWithPanel();
+    fireEvent.click(screen.getByRole("button", { name: "Inspector" }));
+    streamChanges([{ type: "select", id: "note:note-1", selected: true }]);
+
+    expect(
+      screen.getByRole("complementary", { name: "Note inspector" }),
+    ).toBeDefined();
+    expect(annotations()).toBeNull();
+  });
+});
+
+describe("CanvasArtifactEditor zoom menu", () => {
+  it("reads the viewport zoom and zooms to a preset", async () => {
+    const user = userEvent.setup();
+    mountEditor();
+    expect(screen.getByRole("button", { name: "60%, zoom" })).toBeDefined();
+
+    await chooseFromZoomMenu(user, /^200%$/);
+    expect(flow.zoomTo).toHaveBeenCalledWith(2);
+  });
+});
+
+describe("CanvasArtifactEditor reading order jump", () => {
+  it("centres the board that is clicked and closes the menu", () => {
+    mountEditor();
+    openPageMenu();
+    const order = screen.getByRole("list", { name: "Board reading order" });
+    fireEvent.click(
+      within(order).getByRole("button", { name: /^2\s*Checkout$/ }),
+    );
+
+    // Checkout is 640 x 480 at (1400, 0).
+    expect(flow.setCenter).toHaveBeenCalledWith(1720, 240, expect.anything());
+    expect(screen.queryByRole("list", { name: "Canvas pages" })).toBeNull();
   });
 });

@@ -400,6 +400,38 @@ describe("the canvas bootstrap in a running page", () => {
     expect(page.canvasPosts()[2].result).toEqual({ box: null, nonce: NONCE });
   });
 
+  it("scrolls the located element to the centre and answers whether it found one", () => {
+    const page = runCanvasPage(`<p data-tid="hero">hello</p><p>other</p>`);
+    loaded(page);
+    // jsdom has no scrollIntoView; record which element the page asked to scroll.
+    const scrolled: Array<{ element: Element; options: unknown }> = [];
+    page.window.Element.prototype.scrollIntoView = function (
+      this: Element,
+      options: boolean | ScrollIntoViewOptions | undefined,
+    ) {
+      scrolled.push({ element: this, options });
+    };
+
+    page.deliver(request(8, "reveal-element", { tid: "hero" }));
+    expect(page.canvasPosts().at(-1)?.result).toEqual({
+      revealed: true,
+      nonce: NONCE,
+    });
+    expect(scrolled).toEqual([
+      {
+        element: page.window.document.querySelector('[data-tid="hero"]'),
+        options: { block: "center", inline: "nearest" },
+      },
+    ]);
+
+    page.deliver(request(9, "reveal-element", { tid: "gone" }));
+    expect(page.canvasPosts().at(-1)?.result).toEqual({
+      revealed: false,
+      nonce: NONCE,
+    });
+    expect(scrolled).toHaveLength(1);
+  });
+
   describe("describing an element by locator", () => {
     const TAGGED = `<p data-tid="hero" style="color: red">hello</p><p>other</p>`;
     const describeElement = (
@@ -1245,6 +1277,160 @@ describe("the canvas bootstrap in a running page", () => {
       doubleClick(page, "[data-tid=para]");
       doubleClick(page, "span");
       expect(doubleClickPosts(page)).toHaveLength(2);
+    });
+  });
+
+  describe("retype and text-range requests from the editing overlay", () => {
+    const TEXT = `<p data-tid="para">one <span>two</span> three</p><p data-tid="other">other</p>`;
+    const doubleClickPosts = (page: Page) =>
+      page.posted.filter(
+        (message) => message.method === "traycer/canvas/double-click",
+      );
+    const selectionPosts = (page: Page) =>
+      page.posted.filter(
+        (message) => message.method === "traycer/canvas/text-selection",
+      );
+    function elementOf(page: Page, selector: string): Element {
+      const found = page.window.document.querySelector(selector);
+      if (found === null) throw new Error(`no ${selector}`);
+      return found;
+    }
+    /** jsdom has no layout, so the test says what is under the point. */
+    function stubElementFromPoint(page: Page, under: Element | null): void {
+      Object.defineProperty(page.window.document, "elementFromPoint", {
+        configurable: true,
+        value: () => under,
+      });
+    }
+
+    describe("retype-at", () => {
+      it("reports the nearest literal block with its full text when the point is over a nested inline", () => {
+        const page = runCanvasPage(TEXT);
+        loaded(page);
+        stubElementFromPoint(page, elementOf(page, "span"));
+        page.deliver(request(1, "retype-at", { x: 5, y: 5 }));
+
+        expect(page.posted.find((message) => message.id === 1)?.result).toEqual(
+          { nonce: NONCE },
+        );
+        expect(doubleClickPosts(page)).toHaveLength(1);
+        expect(
+          parseCanvasElement(doubleClickPosts(page)[0].params?.element),
+        ).toMatchObject({
+          tid: "para",
+          tagName: "p",
+          textSnapshot: {
+            content: "one two three",
+            nodes: ["one ", " three"],
+            textOnly: false,
+          },
+        });
+      });
+
+      it("says nothing in play mode", () => {
+        const page = runCanvasPage(TEXT);
+        loaded(page);
+        page.deliver(request(1, "set-mode", { mode: "play" }));
+        stubElementFromPoint(page, elementOf(page, "span"));
+        page.deliver(request(2, "retype-at", { x: 5, y: 5 }));
+
+        expect(page.posted.find((message) => message.id === 2)?.result).toEqual(
+          { nonce: NONCE },
+        );
+        expect(doubleClickPosts(page)).toEqual([]);
+      });
+
+      it("says nothing for a point over the page background or nothing at all", () => {
+        const page = runCanvasPage(TEXT);
+        loaded(page);
+        stubElementFromPoint(page, page.window.document.body);
+        page.deliver(request(1, "retype-at", { x: 5, y: 5 }));
+        stubElementFromPoint(page, null);
+        page.deliver(request(2, "retype-at", { x: 5, y: 5 }));
+
+        expect(doubleClickPosts(page)).toEqual([]);
+      });
+    });
+
+    describe("select-text-range", () => {
+      /** Maps a point's x to the text node and offset the caret would land on. */
+      function stubCaret(
+        page: Page,
+        carets: Record<number, { selector: string; offset: number }>,
+      ): void {
+        Object.defineProperty(page.window.document, "caretPositionFromPoint", {
+          configurable: true,
+          value: (x: number) => {
+            const caret = carets[x];
+            return {
+              offsetNode: elementOf(page, caret.selector).firstChild,
+              offset: caret.offset,
+            };
+          },
+        });
+      }
+      function targeted() {
+        const page = runCanvasPage(TEXT);
+        loaded(page);
+        page.deliver(
+          request(1, "set-text-selection-target", { target: { tid: "para" } }),
+        );
+        page.flushFrames();
+        return page;
+      }
+      const range = {
+        start: { x: 1, y: 0 },
+        end: { x: 2, y: 0 },
+      };
+
+      it("selects the real text between two points inside the target and reports its quote", () => {
+        const page = targeted();
+        stubCaret(page, {
+          1: { selector: "[data-tid=para]", offset: 1 },
+          2: { selector: "span", offset: 2 },
+        });
+        page.deliver(request(2, "select-text-range", range));
+        page.flushFrames();
+
+        expect(page.posted.find((message) => message.id === 2)?.result).toEqual(
+          { nonce: NONCE },
+        );
+        const selection = page.window.getSelection();
+        expect(selection?.rangeCount).toBe(1);
+        expect(selection?.getRangeAt(0).toString()).toBe("ne tw");
+        expect(selectionPosts(page).at(-1)?.params).toMatchObject({
+          quote: "ne tw",
+          start: 1,
+          end: 6,
+          nonce: NONCE,
+        });
+      });
+
+      it("selects nothing when either end lands outside the target", () => {
+        const page = targeted();
+        const before = selectionPosts(page).length;
+        stubCaret(page, {
+          1: { selector: "[data-tid=para]", offset: 1 },
+          2: { selector: "[data-tid=other]", offset: 3 },
+        });
+        page.deliver(request(2, "select-text-range", range));
+        page.flushFrames();
+
+        expect(page.window.getSelection()?.rangeCount).toBe(0);
+        expect(selectionPosts(page)).toHaveLength(before);
+      });
+
+      it("selects nothing in play mode", () => {
+        const page = targeted();
+        page.deliver(request(3, "set-mode", { mode: "play" }));
+        stubCaret(page, {
+          1: { selector: "[data-tid=para]", offset: 1 },
+          2: { selector: "span", offset: 2 },
+        });
+        page.deliver(request(4, "select-text-range", range));
+
+        expect(page.window.getSelection()?.rangeCount).toBe(0);
+      });
     });
   });
 

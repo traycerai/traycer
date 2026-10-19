@@ -1,4 +1,4 @@
-import { useState, useRef, useLayoutEffect } from "react";
+import { useState } from "react";
 import type { ArtboardEdit } from "@traycer/protocol/host/epic/artboard-edit";
 import { useArtboardEdit } from "./use-artboard-edit";
 import { isCanvasStructureEdit } from "./canvas-structure-identity";
@@ -21,20 +21,14 @@ export function canvasSelectionIsCurrent(target: CanvasSelection): boolean {
   );
 }
 export function useCanvasEditAction(artifactId: string) {
-  const active = useRef(true);
-  useLayoutEffect(() => {
-    active.current = true;
-    return () => {
-      active.current = false;
-    };
-  }, []);
+  // An edit committed on blur often outlives its field (clicking away closes
+  // it), so the save runs even after unmount; only its message is then moot.
   const mutation = useArtboardEdit(artifactId);
   const [message, setMessage] = useState<string | null>(null);
   const apply = async (
     selection: CanvasSelection,
     edit: ArtboardEdit,
   ): Promise<boolean> => {
-    if (!active.current) return false;
     if (selection.element.generated) {
       setMessage("Ask the agent to change this element.");
       return false;

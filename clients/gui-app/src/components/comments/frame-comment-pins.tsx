@@ -5,9 +5,12 @@ import type { CanvasBox } from "@/lib/sandbox/canvas-bridge";
 import { frameCommentStatus } from "@/lib/comments/frame-comment-positions";
 import {
   useCommentThreadsStore,
+  useActiveThreadId,
   useFlashThread,
 } from "@/stores/comments/comment-threads-store";
 import { cn } from "@/lib/utils";
+import { FrameCommentThreadPopover } from "./frame-comments";
+import type { OrderedFrameThread } from "./use-ordered-frame-threads";
 
 function usePinFlash(epicId: string) {
   const flash = useFlashThread(epicId);
@@ -91,6 +94,9 @@ function pinPosition(
 
 export function FrameCommentPins(props: {
   readonly epicId: string;
+  readonly artifactId: string;
+  readonly artifactType: "canvas" | "html";
+  readonly ordered: readonly OrderedFrameThread[];
   readonly threads: readonly CommentThreadWire[];
   readonly source: string | null;
   readonly bridge: SandboxBridgeHost | null;
@@ -103,17 +109,18 @@ export function FrameCommentPins(props: {
     readonly { threadId: string; box: CanvasBox }[]
   >([]);
   const flash = usePinFlash(epicId);
-  // The sidebar filter is local to that surface, so resolved pins stay hidden.
+  const activeThreadId = useActiveThreadId(epicId);
+  // A resolved thread selected in the list still needs its pin and popover.
   const present = useMemo(
     () =>
       source === null
         ? []
         : threads.filter(
             (thread) =>
-              !thread.resolved &&
+              (!thread.resolved || thread.threadId === activeThreadId) &&
               frameCommentStatus(source, thread) === "present",
           ),
-    [threads, source],
+    [threads, source, activeThreadId],
   );
   useEffect(() => {
     if (bridge === null || frame === null || source === null) return;
@@ -160,65 +167,46 @@ export function FrameCommentPins(props: {
       className="pointer-events-none absolute inset-0 z-30"
       data-slot="frame-comment-pins"
     >
-      {bridge === null || source === null
+      {bridge === null || frame === null || source === null
         ? null
         : pins
             .filter((pin) =>
               present.some((thread) => thread.threadId === pin.threadId),
             )
-            .map((pin, index) => (
-              <button
-                key={pin.threadId}
-                type="button"
-                data-comment-pin={pin.threadId}
-                aria-label={`Open comment ${index + 1}`}
-                className={cn(
-                  "pointer-events-auto absolute flex size-6 -translate-x-full items-center justify-center rounded-full border border-primary bg-primary text-xs font-medium text-primary-foreground shadow-sm",
-                  flash?.threadId === pin.threadId &&
-                    "animate-pulse ring-2 ring-ring ring-offset-2",
-                )}
-                style={{ left: pin.box.x, top: pin.box.y }}
-                onPointerDown={(event) => event.stopPropagation()}
-                onClick={(event) => {
-                  event.stopPropagation();
-                  onActivate(pin.threadId);
-                }}
-              >
-                {index + 1}
-              </button>
-            ))}
+            .map((pin) => {
+              const entry = props.ordered.find(
+                ({ thread }) => thread.threadId === pin.threadId,
+              );
+              if (entry === undefined) return null;
+              return (
+                <FrameCommentThreadPopover
+                  key={pin.threadId}
+                  epicId={epicId}
+                  artifactId={props.artifactId}
+                  artifactType={props.artifactType}
+                  entry={entry}
+                >
+                  <button
+                    type="button"
+                    data-comment-pin={pin.threadId}
+                    aria-label={`Open comment ${entry.number}`}
+                    className={cn(
+                      "canvas-nopan touch-auto pointer-events-auto absolute flex size-6 -translate-x-full items-center justify-center rounded-full border border-primary bg-primary text-xs font-medium text-primary-foreground shadow-sm",
+                      flash?.threadId === pin.threadId &&
+                        "animate-pulse ring-2 ring-ring ring-offset-2",
+                    )}
+                    style={{ left: pin.box.x, top: pin.box.y }}
+                    onPointerDown={(event) => event.stopPropagation()}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      onActivate(pin.threadId);
+                    }}
+                  >
+                    {entry.number}
+                  </button>
+                </FrameCommentThreadPopover>
+              );
+            })}
     </div>
-  );
-}
-
-export function WholeArtifactCommentPin(props: {
-  readonly epicId: string;
-  readonly threads: readonly CommentThreadWire[];
-  readonly onActivate: (threadId: string) => void;
-}) {
-  const threads = props.threads.filter(
-    (thread) => thread.data.anchorKind === "artifact" && !thread.resolved,
-  );
-  const flash = usePinFlash(props.epicId);
-  const first = threads.at(0);
-  if (first === undefined) return null;
-  return (
-    <button
-      type="button"
-      data-comment-pin="canvas"
-      aria-label={`Open ${threads.length} whole-artifact comments`}
-      className={cn(
-        "pointer-events-auto absolute left-2 top-2 z-30 flex min-h-7 min-w-7 items-center justify-center rounded-full border border-primary bg-primary px-2 text-ui-xs font-medium text-primary-foreground shadow-sm",
-        threads.some((thread) => thread.threadId === flash?.threadId) &&
-          "animate-pulse ring-2 ring-ring",
-      )}
-      onPointerDown={(event) => event.stopPropagation()}
-      onClick={(event) => {
-        event.stopPropagation();
-        props.onActivate(first.threadId);
-      }}
-    >
-      {threads.length}
-    </button>
   );
 }

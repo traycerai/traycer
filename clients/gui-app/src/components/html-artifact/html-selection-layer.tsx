@@ -32,6 +32,7 @@ export interface HtmlSelectionLayerProps {
   readonly bridge: SandboxBridgeHost | null;
   readonly actionControls?: (selection: HtmlSelection) => ReactNode;
   readonly overlay?: ReactNode;
+  readonly toolbarControls?: ReactNode;
 }
 
 const EMPTY_ENTRY = { enabled: false, selection: null, generation: 0 };
@@ -128,6 +129,7 @@ export function HtmlSelectionLayer({
   bridge,
   actionControls,
   overlay,
+  toolbarControls,
 }: HtmlSelectionLayerProps) {
   const { enabled, selection, generation } =
     useHtmlSelectionStore((state) => state.byArtifact.get(artifactId)) ??
@@ -350,7 +352,7 @@ export function HtmlSelectionLayer({
           actionControls={actionControls}
         />
       ) : null}
-      <div className="absolute right-2 top-2 z-30 rounded-md bg-popover [&]:pointer-events-auto">
+      <div className="absolute right-2 top-2 z-30 flex items-center gap-1 rounded-md bg-popover [&]:pointer-events-auto">
         <Button
           type="button"
           size="sm"
@@ -363,6 +365,7 @@ export function HtmlSelectionLayer({
         >
           Comment
         </Button>
+        {toolbarControls}
       </div>
     </div>
   );

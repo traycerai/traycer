@@ -122,7 +122,9 @@ describe("noteFromStroke boxes and text", () => {
     expect(sticky.text).toBe("");
     const title = noteFromStroke("title", tap);
     expect(title.w ?? 0).toBeGreaterThan(sticky.w ?? 0);
-    expect(title.text).toBe("Title");
+    // A new title starts empty so the editor can show its placeholder instead
+    // of a literal "Title" the person has to select and delete.
+    expect(title.text).toBe("");
   });
 });
 
