@@ -62,8 +62,16 @@ export function HomeBotRow(props: {
   readonly environmentHostIds: ReadonlySet<string> | null;
   /** The bot's environment's owner kind; `null` when it is not listed. */
   readonly environmentOwnerKind: EnvironmentDescriptor["ownerKind"] | null;
+  /** Who made the bot ("Created by …"), or null to say nothing. */
+  readonly createdBy: string | null;
 }): ReactNode {
-  const { bot, hostReach, environmentHostIds, environmentOwnerKind } = props;
+  const {
+    bot,
+    hostReach,
+    environmentHostIds,
+    environmentOwnerKind,
+    createdBy,
+  } = props;
   const hostId = useEffectiveHostId();
   const subscription = useBotSubscription({
     hostId,
@@ -144,6 +152,11 @@ export function HomeBotRow(props: {
           {row.nextCheckinAt === null ? null : (
             <span data-testid="home-bot-next-checkin">
               next check-in {formatWaitTime(row.nextCheckinAt, now)}
+            </span>
+          )}
+          {createdBy === null ? null : (
+            <span data-testid="home-bot-created-by" className="truncate">
+              {createdBy}
             </span>
           )}
         </span>

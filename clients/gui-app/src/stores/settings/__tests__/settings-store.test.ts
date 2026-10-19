@@ -1,5 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { DEFAULT_PERMISSION } from "@/components/home/data/landing-options";
+import {
+  DEFAULT_PERMISSION,
+  DEFAULT_SELECTION,
+} from "@/components/home/data/landing-options";
 import { DEFAULT_EPIC_NODE_ICON_COLORS } from "@/lib/artifacts/node-display";
 import { DEFAULT_DIFF_VIEWER_PREFERENCES } from "@/lib/diff/diff-viewer-preferences";
 import { DEFAULT_NOTIFICATION_CHIME_SOUNDS } from "@/lib/notifications/notification-chime";
@@ -29,6 +32,7 @@ function resetSettingsStore(): void {
     artifactIconColorMode: "byType",
     artifactIconColors: DEFAULT_EPIC_NODE_ICON_COLORS,
     defaultPermission: DEFAULT_PERMISSION,
+    defaultSelection: DEFAULT_SELECTION,
     defaultEditor: "vscode",
     agentOfficeDefaultView: DEFAULT_AGENT_OFFICE_VIEW,
     quoteReplyEnabled: true,
@@ -928,6 +932,46 @@ describe("useSettingsStore", () => {
 
     expect(useSettingsStore.getState().worktreeBranchPrefix).toBe(
       DEFAULT_WORKTREE_BRANCH_PREFIX,
+    );
+  });
+
+  it("gives a default selection saved before profiles existed a null profileId", async () => {
+    // The exact blob a real install holds: nothing writes `defaultSelection`
+    // after first launch, so it never gained the `profileId` key.
+    await rehydrateFrom({
+      defaultSelection: { harnessId: "codex", modelSlug: "" },
+    });
+
+    expect(useSettingsStore.getState().defaultSelection).toEqual({
+      harnessId: "codex",
+      modelSlug: "",
+      profileId: null,
+    });
+  });
+
+  it("keeps the profile a persisted default selection names", async () => {
+    await rehydrateFrom({
+      defaultSelection: {
+        harnessId: "claude",
+        modelSlug: "model-a",
+        profileId: "profile-1",
+      },
+    });
+
+    expect(useSettingsStore.getState().defaultSelection).toEqual({
+      harnessId: "claude",
+      modelSlug: "model-a",
+      profileId: "profile-1",
+    });
+  });
+
+  it("falls back to the default selection when the persisted one names no known harness", async () => {
+    await rehydrateFrom({
+      defaultSelection: { harnessId: "not-a-harness", modelSlug: "x" },
+    });
+
+    expect(useSettingsStore.getState().defaultSelection).toEqual(
+      DEFAULT_SELECTION,
     );
   });
 

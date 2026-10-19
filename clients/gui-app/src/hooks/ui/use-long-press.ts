@@ -10,15 +10,19 @@ import {
  * shorter drag-arm one: this opens a mode, and a mode that appears while
  * someone is still deciding whether to scroll is worse than one that takes a
  * beat.
+ *
+ * Exported for the terminal's touch recognizer, which owns its own hold (it
+ * also arms a selection drag on the way) and must open its menu at the tier
+ * every other long press in the app uses.
  */
-const LONG_PRESS_MS = 450;
+export const LONG_PRESS_MS = 450;
 
 /**
  * Movement that abandons the hold. Fingers are never still, so a zero budget
  * would make the gesture unreachable; 6px is under the swipe recognizer's own
  * activation distance, so the two never both claim one drag.
  */
-const LONG_PRESS_SLOP_PX = 6;
+export const LONG_PRESS_SLOP_PX = 6;
 
 interface LongPressTracking {
   readonly pointerId: number;

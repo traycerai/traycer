@@ -2199,6 +2199,7 @@ function useChatTileSessionViewModel(
     () => ({
       resolveUserSenderLabel: (sender) =>
         resolveSenderLabel(sender, displayContext),
+      resolveUserSenderAvatarUrl: () => null,
       resolveAgentSenderDisplay: (sender) =>
         resolveAgentSenderDisplay(sender, displayContext),
       resolveAgentReasoningLabel: (sender, reasoningEffort) =>

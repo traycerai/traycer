@@ -10,14 +10,30 @@ import { StrictMode, useState } from "react";
 import { act, cleanup, render, screen } from "@testing-library/react";
 import userEvent, { type UserEvent } from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { BotCreateResponse } from "@traycer/protocol/host/bot/schemas";
+import {
+  botCreateRequestSchema,
+  type BotCreateResponse,
+} from "@traycer/protocol/host/bot/schemas";
+import {
+  HostRequestAbortedError,
+  HostRpcError,
+  HostTransportFailureError,
+  RetryableTransportError,
+  type IHostMessenger,
+} from "@traycer-clients/shared/host-transport/host-messenger";
+import { createAuthAwareMessenger } from "@traycer-clients/shared/host-transport/auth-aware-messenger";
+import { MutableBearerLease } from "@traycer-clients/shared/auth/bearer-source";
+import type { HostRpcRegistry } from "@/lib/host";
 import type {
   EnvironmentDescriptor,
   EnvironmentHostBinding,
 } from "@traycer/protocol/host/environment/contracts";
 import type { ComposerToolbarStore } from "@/stores/composer/composer-toolbar-store";
 import type { HostEnvironmentBindings } from "@/hooks/bots/use-host-environment-bindings-query";
-import type { ModelOption } from "@/components/home/data/landing-options";
+import {
+  DEFAULT_SELECTION,
+  type ModelOption,
+} from "@/components/home/data/landing-options";
 import {
   maxModeListedFor,
   type MaxModeContext,
@@ -41,6 +57,14 @@ const mocks = vi.hoisted(() => ({
   initialModelSlug: "model-a" as string,
   initialHarnessId: "claude" as "claude" | "cursor",
   initialReasoning: "" as string,
+  /**
+   * Seed the toolbar store from the settings store's default selection, as the
+   * real hook does when it is given no seed. Off keeps the fixed selection
+   * above, which the other tests rely on.
+   */
+  seedFromSettings: false,
+  /** The error `useBotCreateMutation` reports. */
+  createError: null as Error | null,
   state: {
     localHostId: null as string | null,
     effectiveHostId: null as string | null,
@@ -80,7 +104,7 @@ vi.mock("@/hooks/bots/use-bot-mutations", () => ({
     mocks.createClients.push(client);
     return {
       isPending: false,
-      error: null,
+      error: mocks.createError,
       mutateAsync: mocks.createAsync,
     };
   },
@@ -107,11 +131,13 @@ vi.mock("@/components/home/hooks/use-composer-toolbar-store", async () => {
           seedKey: "create-bot-form-test",
           values: {
             permission: "supervised",
-            selection: {
-              harnessId: mocks.initialHarnessId,
-              modelSlug: mocks.initialModelSlug,
-              profileId: null,
-            },
+            selection: mocks.seedFromSettings
+              ? useSettingsStore.getState().defaultSelection
+              : {
+                  harnessId: mocks.initialHarnessId,
+                  modelSlug: mocks.initialModelSlug,
+                  profileId: null,
+                },
             reasoning: mocks.initialReasoning,
             serviceTier: "",
           },
@@ -128,6 +154,7 @@ vi.mock("@/components/home/hooks/use-composer-toolbar-store", async () => {
 });
 
 import { CreateBotForm } from "@/components/home/bots/create-bot-form";
+import { useSettingsStore } from "@/stores/settings/settings-store";
 import { lookupBotTab, useBotTabsStore } from "@/stores/bots/bot-tabs-store";
 
 const TEAM_ENV = "env-team";
@@ -167,6 +194,27 @@ interface Mount {
   /** hostId -> environment id; absent = still being asked. */
   readonly bound: Readonly<Record<string, string>>;
   readonly failedHostIds: ReadonlyArray<string>;
+}
+
+function botCreateResponse(): BotCreateResponse {
+  return {
+    bot: {
+      botId: BOT_ID,
+      environmentId: TEAM_ENV,
+      createdByUserId: "user-1",
+      title: "Release Bot",
+      harness: "claude",
+      model: "model-a",
+      effort: null,
+      profile: null,
+      trunkChatId: "trunk-1",
+      boundHostId: LOCAL,
+      hostEpoch: 1,
+      createdAt: 1_000,
+      archivedAt: null,
+    },
+    appConversationChatId: "conversation-1",
+  };
 }
 
 const retryFailed = vi.fn<() => void>();
@@ -222,28 +270,13 @@ beforeEach(() => {
   mocks.initialHarnessId = "claude";
   mocks.initialModelSlug = "model-a";
   mocks.initialReasoning = "";
+  mocks.seedFromSettings = false;
+  mocks.createError = null;
   mocks.state.localHostId = LOCAL;
   mocks.state.effectiveHostId = EFFECTIVE;
   mocks.state.creatingHostIds = new Set([LOCAL, EFFECTIVE, OTHER]);
   mocks.createAsync.mockImplementation(() =>
-    Promise.resolve({
-      bot: {
-        botId: BOT_ID,
-        environmentId: TEAM_ENV,
-        createdByUserId: "user-1",
-        title: "Release Bot",
-        harness: "claude",
-        model: "model-a",
-        effort: null,
-        profile: null,
-        trunkChatId: "trunk-1",
-        boundHostId: LOCAL,
-        hostEpoch: 1,
-        createdAt: 1_000,
-        archivedAt: null,
-      },
-      appConversationChatId: "conversation-1",
-    }),
+    Promise.resolve(botCreateResponse()),
   );
   useBotTabsStore.setState({ tabs: {} });
 });
@@ -425,6 +458,50 @@ describe("<CreateBotForm /> create goes to the chosen host", () => {
     );
   });
 
+  it("creates with a null profile when the toolbar is seeded from a default selection saved before profiles existed", async () => {
+    const user = userEvent.setup();
+    // The request the host parses: a missing `profile` fails here exactly as
+    // it did in production, before the host ran anything.
+    mocks.createAsync.mockImplementation((variables) =>
+      Promise.resolve().then(() => {
+        botCreateRequestSchema.parse(variables);
+        return botCreateResponse();
+      }),
+    );
+    window.localStorage.setItem(
+      "traycer-gui-app:settings",
+      JSON.stringify({
+        state: {
+          defaultSelection: { harnessId: "claude", modelSlug: "model-a" },
+        },
+        version: 1,
+      }),
+    );
+    try {
+      await useSettingsStore.persist.rehydrate();
+      mocks.seedFromSettings = true;
+      mountForm(TEAM_WITH_LOCAL);
+      await createBot(user);
+    } finally {
+      cleanup();
+      window.localStorage.clear();
+      useSettingsStore.setState({ defaultSelection: DEFAULT_SELECTION });
+    }
+
+    expect(mocks.createAsync).toHaveBeenCalledWith({
+      environmentId: TEAM_ENV,
+      title: "Release Bot",
+      harness: "claude",
+      model: "model-a",
+      effort: null,
+      profile: null,
+    });
+    expect(lookupBotTab(useBotTabsStore.getState().tabs, BOT_ID)?.hostId).toBe(
+      LOCAL,
+    );
+    expect(onDone).toHaveBeenCalledTimes(1);
+  });
+
   it("does not create for a blank name", async () => {
     const user = userEvent.setup();
     mountForm(TEAM_WITH_LOCAL);
@@ -433,6 +510,231 @@ describe("<CreateBotForm /> create goes to the chosen host", () => {
 
     expect(submitButton().disabled).toBe(true);
   });
+});
+
+describe("<CreateBotForm /> failed create", () => {
+  const CREATE_FAILED =
+    "Couldn't confirm the bot was created. Check your bots, and try again if it isn't there.";
+
+  const transport = {
+    requestId: "request-1",
+    method: "bot.create",
+  };
+
+  // A session-level fatal, as `RemoteSession` rejects pending requests with.
+  const sessionFatal = {
+    code: "UNAUTHORIZED",
+    reason: "credential revoked",
+    incompatibleMethods: null,
+    upgradeGuidance: null,
+  };
+
+  function sessionFatalError(): HostRpcError {
+    return new HostRpcError({
+      code: "UNAUTHORIZED",
+      message: "credential revoked",
+      requestId: "session-fatal",
+      method: "",
+      fatalDetails: sessionFatal,
+    });
+  }
+
+  /**
+   * The error the form receives when a create already sent is rejected by a
+   * session fatal and then passes through the real auth-aware messenger:
+   * `recover` plays the credential recovery, and `retry` answers the second
+   * attempt the messenger makes after a rotation.
+   */
+  async function throughAuthRecovery(
+    recover: (controller: AbortController, lease: MutableBearerLease) => void,
+    retry: () => Error,
+  ): Promise<Error> {
+    const controller = new AbortController();
+    const lease = new MutableBearerLease("token", "user-1");
+    let attempts = 0;
+    const inner: IHostMessenger<HostRpcRegistry> = {
+      request: () => {
+        attempts += 1;
+        return Promise.reject(attempts === 1 ? sessionFatalError() : retry());
+      },
+      requestWithResponseTimeout: () =>
+        Promise.reject(new Error("the create is a plain request")),
+    };
+    const messenger = createAuthAwareMessenger(inner, {
+      revalidateExpectedBearer: () => {
+        recover(controller, lease);
+        return Promise.resolve("rotated");
+      },
+    });
+    const failure = await messenger
+      .request(
+        "bot.create",
+        {
+          environmentId: TEAM_ENV,
+          title: "Release Bot",
+          harness: "claude",
+          model: "model-a",
+          effort: null,
+          profile: null,
+        },
+        {
+          replayMustBeKeyed: false,
+          requiredHostMethodVersion: null,
+          idempotencyKey: null,
+          authority: {
+            endpoint: { hostId: LOCAL, websocketUrl: "ws://host-local/rpc" },
+            bearer: lease,
+            abortSignal: controller.signal,
+          },
+        },
+      )
+      .then(
+        () => null,
+        (error: unknown) => error,
+      );
+    if (!(failure instanceof Error)) {
+      throw new Error("the create did not fail through the messenger");
+    }
+    return failure;
+  }
+
+  it.each([
+    [
+      "a validation error",
+      () => {
+        const parsed = botCreateRequestSchema.safeParse({
+          environmentId: TEAM_ENV,
+          title: "Release Bot",
+          harness: "claude",
+          model: "model-a",
+          effort: null,
+        });
+        if (parsed.success) {
+          throw new Error("the request without a profile parsed");
+        }
+        return Promise.resolve<Error>(parsed.error);
+      },
+    ],
+    [
+      "a request that never left",
+      () =>
+        Promise.resolve<Error>(
+          new RetryableTransportError({
+            ...transport,
+            code: "RPC_ERROR",
+            message: "socket closed",
+            fatalDetails: null,
+            replaySafetyFromKey: false,
+          }),
+        ),
+    ],
+    [
+      "a keyed request dropped after it was sent",
+      () =>
+        Promise.resolve<Error>(
+          new RetryableTransportError({
+            ...transport,
+            code: "RPC_ERROR",
+            message: "socket closed",
+            fatalDetails: null,
+            replaySafetyFromKey: true,
+          }),
+        ),
+    ],
+    [
+      "an abort",
+      () =>
+        Promise.resolve<Error>(
+          new HostRequestAbortedError({
+            ...transport,
+            message: "aborted",
+            mayHaveDispatched: false,
+          }),
+        ),
+    ],
+    [
+      "the host refusing the request with a specific code",
+      () =>
+        Promise.resolve<Error>(
+          new HostRpcError({
+            ...transport,
+            code: "FORBIDDEN",
+            message: "not allowed",
+            fatalDetails: null,
+          }),
+        ),
+    ],
+    [
+      // `RemoteSession.close()` rejects every pending unary with this error.
+      "a session closed while the create was pending",
+      () =>
+        Promise.resolve<Error>(
+          new HostRpcError({
+            code: "RPC_ERROR",
+            message: "Remote session closed",
+            requestId: "session-close",
+            method: "",
+            fatalDetails: null,
+          }),
+        ),
+    ],
+    [
+      // `notReadyRejection` on a closed session.
+      "a create waiting on a session that closed before it was ready",
+      () =>
+        Promise.resolve<Error>(
+          new HostTransportFailureError({
+            ...transport,
+            code: "RPC_ERROR",
+            message: "Remote session is closed",
+            fatalDetails: sessionFatal,
+          }),
+        ),
+    ],
+    [
+      "a session fatal rewritten into an abort during credential recovery",
+      async () => {
+        const failure = await throughAuthRecovery(
+          (controller) => controller.abort(),
+          () => new Error("no second attempt after an abort"),
+        );
+        if (!(failure instanceof HostRequestAbortedError)) {
+          throw new Error("recovery did not take the abort exit");
+        }
+        return failure;
+      },
+    ],
+    [
+      "a session fatal followed by a refused retry after the bearer rotated",
+      async () => {
+        const failure = await throughAuthRecovery(
+          (_controller, lease) => lease.rotate("rotated-token"),
+          () =>
+            new HostRpcError({
+              ...transport,
+              code: "FORBIDDEN",
+              message: "not allowed",
+              fatalDetails: null,
+            }),
+        );
+        if (
+          !(failure instanceof HostRpcError) ||
+          failure.code !== "FORBIDDEN"
+        ) {
+          throw new Error("recovery did not take the retry exit");
+        }
+        return failure;
+      },
+    ],
+  ])(
+    "says it could not confirm the create for %s, never the error's text",
+    async (_label, makeError) => {
+      mocks.createError = await makeError();
+      mountForm(TEAM_WITH_LOCAL);
+
+      expect(screen.getByRole("alert").textContent).toBe(CREATE_FAILED);
+    },
+  );
 });
 
 function cursorMaxRow(

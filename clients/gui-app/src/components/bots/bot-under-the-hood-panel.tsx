@@ -6,7 +6,7 @@ import type { BotTaskEntry } from "@traycer/protocol/host/bot/schemas";
 import { Badge } from "@/components/ui/badge";
 import { BackgroundItemsPanel } from "@/components/chat/chat-background-items-panel";
 import { BotChatTranscript } from "@/components/bots/bot-chat-transcript";
-import { UNRESOLVED_BOT_MEMBER_NAMES } from "@/lib/bots/bot-member-names";
+import { UNRESOLVED_BOT_MEMBERS } from "@/lib/bots/bot-member-names";
 import { BotTranscriptPaused } from "@/components/bots/bot-transcript-paused";
 import { useEpicGetTaskContexts } from "@/hooks/epic/use-epic-get-task-contexts-query";
 import { useChatSessionHandleForContainer } from "@/lib/registries/chat-session-registry";
@@ -91,7 +91,7 @@ export function BotUnderTheHoodPanel(props: {
               title={botTitle}
               instanceId={`bot-trunk:${botId}`}
               linkRequests={false}
-              resolveMemberName={UNRESOLVED_BOT_MEMBER_NAMES}
+              resolveMember={UNRESOLVED_BOT_MEMBERS}
             />
           )}
         </div>
