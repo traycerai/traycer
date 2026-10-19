@@ -31,9 +31,9 @@ import {
 const BOT_TITLE_MAX = 500;
 
 const CREATE_UNREACHED =
-  "Couldn't reach the machine this bot would run on, so nothing was created. Check that it's online, then try again.";
+  "Couldn't create the bot right now. Check your connection, then try again.";
 const CREATE_OUTCOME_UNKNOWN =
-  "The machine this bot would run on stopped answering, so the bot may have been created. Check your bots before you try again.";
+  "The bot may have been created. Check your bots before you try again.";
 const CREATE_FAILED =
   "Couldn't create the bot. Try again, and report the problem if it keeps happening.";
 
