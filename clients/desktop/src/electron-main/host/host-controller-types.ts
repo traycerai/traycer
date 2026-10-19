@@ -239,6 +239,12 @@ export const HOST_NOT_SERVICE_RUN_MESSAGE =
 export const HOST_UNINSTALL_HOST_RUNNING_MESSAGE =
   "Traycer was not fully removed. Its automatic start was turned off, but the host could not be confirmed as stopped, so its files were kept. Try again in a moment.";
 
+// `host uninstall --all` refused to stop a host with work in progress, after
+// it had deregistered the service. No route offers a forced uninstall, so
+// this says what happened and when to try again, not a restart refusal.
+export const HOST_UNINSTALL_HOST_BUSY_MESSAGE =
+  "Traycer was not fully removed. Its automatic start was turned off, but the host has work in progress, so it was not stopped and its files were kept. Try again when it is idle.";
+
 // Put in front of any other refusal of an uninstall that had already turned
 // off the host's automatic start (the CLI deregisters the service before a
 // busy stop refuses; packaged macOS removes the login item before the CLI

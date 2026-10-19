@@ -109,6 +109,7 @@ import {
   HOST_NOT_SERVICE_RUN_MESSAGE,
   HOST_REMOVED_BY_USER_MESSAGE,
   HOST_STARTUP_TURNED_OFF_NOTE,
+  HOST_UNINSTALL_HOST_BUSY_MESSAGE,
   HOST_UNINSTALL_HOST_RUNNING_MESSAGE,
   HOST_UPDATE_SERVICE_DISABLED_MESSAGE,
   SERVICE_REGISTRATION_DISABLED_CODE,
@@ -6282,8 +6283,12 @@ export class HostController {
             all ? ["host", "uninstall", "--all"] : ["host", "uninstall"],
           );
         } catch (err) {
+          const refused = this.classifyMutationSubprocessError<UninstallOk>(
+            err,
+            "retry-with-force",
+          );
           return withStartupTurnedOff(
-            this.classifyMutationSubprocessError(err, "retry-with-force"),
+            all ? uninstallBusyAsDeferred(refused) : refused,
             removedLoginItem || (all && cliTurnedOffStartup(err)),
           );
         }
@@ -6348,7 +6353,9 @@ export class HostController {
       } catch (err) {
         startupTurnedOff = removedLoginItem || cliTurnedOffStartup(err);
         return withStartupTurnedOff(
-          this.classifyMutationSubprocessError(err, "retry-with-force"),
+          uninstallBusyAsDeferred(
+            this.classifyMutationSubprocessError(err, "retry-with-force"),
+          ),
           startupTurnedOff,
         );
       }
@@ -6403,8 +6410,22 @@ function cliTurnedOffStartup(err: unknown): boolean {
 }
 
 /**
+ * `host uninstall --all` refuses a host with work in progress only after it
+ * has deregistered the service, and neither uninstall route can be forced: the
+ * busy outcome's Force continuation and its restart wording fit neither. It is
+ * a deferral that says what happened instead.
+ */
+function uninstallBusyAsDeferred<T>(
+  outcome: MutationOutcome<T>,
+): MutationOutcome<T> {
+  return outcome.kind === "busy"
+    ? { kind: "deferred", message: HOST_UNINSTALL_HOST_BUSY_MESSAGE }
+    : outcome;
+}
+
+/**
  * A refused uninstall that had already turned off the host's automatic start
- * says so. The host-running refusal's own message already does.
+ * says so. The host-running and host-busy refusals' own messages already do.
  */
 function withStartupTurnedOff<T>(
   outcome: MutationOutcome<T>,
@@ -6414,7 +6435,8 @@ function withStartupTurnedOff<T>(
     !turnedOff ||
     outcome.kind === "ok" ||
     !("message" in outcome) ||
-    outcome.message === HOST_UNINSTALL_HOST_RUNNING_MESSAGE
+    outcome.message === HOST_UNINSTALL_HOST_RUNNING_MESSAGE ||
+    outcome.message === HOST_UNINSTALL_HOST_BUSY_MESSAGE
   ) {
     return outcome;
   }

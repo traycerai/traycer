@@ -312,6 +312,7 @@ import {
   HOST_NOT_SERVICE_RUN_MESSAGE,
   HOST_REMOVED_BY_USER_MESSAGE,
   HOST_STARTUP_TURNED_OFF_NOTE,
+  HOST_UNINSTALL_HOST_BUSY_MESSAGE,
   HOST_UNINSTALL_HOST_RUNNING_MESSAGE,
   HOST_UPDATE_SERVICE_DISABLED_MESSAGE,
   HOST_UPDATED_SERVICE_DISABLED_MESSAGE,
@@ -5987,10 +5988,11 @@ describe("RM: Remove Traycer and uninstall --all refuse first over a terminal-st
 
   // traycer#1563 R5: the uninstall's stop was declined because the host has
   // work in progress, and the CLI rethrows the host's own `E_HOST_BUSY`. The
-  // CLI had deregistered the service by then, so it is the busy outcome with a
-  // Force to offer, its message says the automatic start is off, and the
+  // CLI had deregistered the service by then and no uninstall route offers a
+  // Force, so it is a deferral that says the automatic start is off and the
+  // host was left running, not the busy outcome with a restart refusal. The
   // sentinel stays.
-  it("removeTraycer reports busy with a Force to offer and the automatic-start note when the CLI rethrows the host's E_HOST_BUSY, and keeps the sentinel", async () => {
+  it("removeTraycer defers with the host-busy message, never a busy Force or restart wording, when the CLI rethrows the host's E_HOST_BUSY, and keeps the sentinel", async () => {
     readSupervisorRunMock.mockResolvedValue({
       state: "not-running",
       supervisorPid: null,
@@ -6004,16 +6006,25 @@ describe("RM: Remove Traycer and uninstall --all refuse first over a terminal-st
 
     const outcome = await controller.removeTraycer();
 
-    expect(outcome).toMatchObject({
-      kind: "busy",
-      continuation: "retry-with-force",
+    expect(outcome).toEqual({
+      kind: "deferred",
+      message: HOST_UNINSTALL_HOST_BUSY_MESSAGE,
     });
-    if (outcome.kind !== "busy") throw new Error("expected busy");
-    expect(outcome.message).toBe(
-      `${HOST_STARTUP_TURNED_OFF_NOTE} The host has work in progress; refusing to restart it and lose that work.`,
-    );
-    expect(outcome.message).not.toContain("Nothing was removed");
     expect(await isHostRemovedByUser()).toBe(true);
+  });
+
+  // The message says what happened and when to try again: the automatic start
+  // is off, the host was not stopped, the files were kept. It offers no
+  // restart and is not prefixed with the generic note, which it makes
+  // redundant.
+  it("words the uninstall-host-busy message without restart wording and without the generic startup-turned-off prefix (traycer#1563)", () => {
+    expect(HOST_UNINSTALL_HOST_BUSY_MESSAGE).toBe(
+      "Traycer was not fully removed. Its automatic start was turned off, but the host has work in progress, so it was not stopped and its files were kept. Try again when it is idle.",
+    );
+    expect(HOST_UNINSTALL_HOST_BUSY_MESSAGE).not.toContain("restart");
+    expect(
+      HOST_UNINSTALL_HOST_BUSY_MESSAGE.startsWith(HOST_STARTUP_TURNED_OFF_NOTE),
+    ).toBe(false);
   });
 
   // Packaged macOS removes the login item before the CLI runs, so any refusal
@@ -6103,7 +6114,7 @@ describe("RM: Remove Traycer and uninstall --all refuse first over a terminal-st
     );
   });
 
-  it("uninstallHost(true) prefixes the note on the busy refusal", async () => {
+  it("uninstallHost(true) defers with the host-busy message on the busy refusal, not a busy outcome and not prefixed", async () => {
     vi.mocked(streamBundledTraycerCliJson).mockRejectedValueOnce(
       new TraycerCliError("E_HOST_BUSY", "host busy"),
     );
@@ -6111,14 +6122,59 @@ describe("RM: Remove Traycer and uninstall --all refuse first over a terminal-st
 
     const outcome = await controller.uninstallHost(true);
 
-    expect(outcome).toMatchObject({
-      kind: "busy",
-      continuation: "retry-with-force",
+    expect(outcome).toEqual({
+      kind: "deferred",
+      message: HOST_UNINSTALL_HOST_BUSY_MESSAGE,
     });
-    if (outcome.kind !== "busy") throw new Error("expected busy");
-    expect(outcome.message).toBe(
-      `${HOST_STARTUP_TURNED_OFF_NOTE} The host has work in progress; refusing to restart it and lose that work.`,
+    expect(outcome.kind === "deferred" ? outcome.message : "").not.toContain(
+      "restart",
     );
+  });
+
+  // Packaged macOS removes the login item before the CLI runs; a busy-host
+  // refusal after that is the same deferral, with its own message and no
+  // second note in front of it.
+  it("removeTraycer defers with the host-busy message and keeps the sentinel when a packaged-macOS login item was unregistered and the CLI then rethrows E_HOST_BUSY", async () => {
+    vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
+    readSupervisorRunMock.mockResolvedValue({
+      state: "enforcing",
+      supervisorPid: 9001,
+      admittedAs: "service",
+    });
+    vi.mocked(streamBundledTraycerCliJson).mockRejectedValueOnce(
+      new TraycerCliError("E_HOST_BUSY", "host busy"),
+    );
+    const controller = newController("production");
+
+    const outcome = await controller.removeTraycer();
+
+    expect(unregisterHostLoginItemGuarded).toHaveBeenCalledTimes(1);
+    expect(outcome).toEqual({
+      kind: "deferred",
+      message: HOST_UNINSTALL_HOST_BUSY_MESSAGE,
+    });
+    expect(await isHostRemovedByUser()).toBe(true);
+  });
+
+  it("uninstallHost(true) defers with the host-busy message when a packaged-macOS login item was unregistered and the CLI then rethrows E_HOST_BUSY", async () => {
+    vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
+    readSupervisorRunMock.mockResolvedValue({
+      state: "enforcing",
+      supervisorPid: 9001,
+      admittedAs: "service",
+    });
+    vi.mocked(streamBundledTraycerCliJson).mockRejectedValueOnce(
+      new TraycerCliError("E_HOST_BUSY", "host busy"),
+    );
+    const controller = newController("production");
+
+    const outcome = await controller.uninstallHost(true);
+
+    expect(unregisterHostLoginItemGuarded).toHaveBeenCalledTimes(1);
+    expect(outcome).toEqual({
+      kind: "deferred",
+      message: HOST_UNINSTALL_HOST_BUSY_MESSAGE,
+    });
   });
 
   // Without `--all` the CLI leaves the service and a running host alone, so

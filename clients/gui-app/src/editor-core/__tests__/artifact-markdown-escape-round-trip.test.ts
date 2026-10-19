@@ -2170,3 +2170,59 @@ describe("an unresolved image whose source holds angle brackets or backslashes (
     );
   }
 });
+
+/**
+ * marked reads a later line of only `:`, `-` and `|` as a GFM delimiter row,
+ * pipe or no pipe: unescaped, `a\n:-:` ingests as a one-column table.
+ */
+describe("a later line that is a delimiter row without a pipe stays paragraph text (traycer#1563)", () => {
+  const rows = [
+    { name: "a centred cell", text: "a\n:-:", md: "a\n:\\-:" },
+    { name: "a right-aligned cell", text: "a\n-:", md: "a\n\\-:" },
+    { name: "a left-aligned cell", text: "a\n:-", md: "a\n:\\-" },
+    { name: "a longer centred cell", text: "a\n:--:", md: "a\n:\\--:" },
+    { name: "the third line", text: "x\na\n:-:", md: "x\na\n:\\-:" },
+    { name: "leading space", text: "a\n :-:", md: "a\n :\\-:" },
+    {
+      name: "a header line holding a pipe",
+      text: "a | b\n:-:",
+      md: "a | b\n:\\-:",
+    },
+    { name: "a space inside (control)", text: "a\n: -", md: "a\n: -" },
+    { name: "a lone colon (control)", text: "a\n:", md: "a\n:" },
+    { name: "text after the row (control)", text: "a\n:-:x", md: "a\n:-:x" },
+  ];
+
+  const blockTypes = (node: JsonContent): (string | undefined)[] =>
+    (node.content ?? []).map((child) => child.type);
+  // The paragraph's inline text as one string. The host schema reads with
+  // marked's `breaks`, as the host does, so its line break is a hard break.
+  const inlineText = (node: JsonContent): string =>
+    node.type === "hardBreak"
+      ? "\n"
+      : (node.text ?? "") + (node.content ?? []).map(inlineText).join("");
+
+  it.each(rows.flatMap((row) => READERS.map((reader) => ({ ...row, reader }))))(
+    "$name through $reader.name",
+    ({ text, md, reader }) => {
+      const md1 = serializeJson({
+        type: "doc",
+        content: [textParagraph([plainText(text)])],
+      });
+      expect(md1).toBe(md);
+
+      const stored1 = reader.stored(md1);
+      expect(blockTypes(stored1)).toEqual(["paragraph"]);
+      expect(inlineText(stored1)).toBe(text);
+
+      // The GUI reader keeps the line break as text, so its bytes are a fixed
+      // point at once; the host's hard break is written as one from pass 2.
+      const md2 = serializeJson(stored1);
+      if (reader.name === "gui") expect(md2).toBe(md1);
+      const stored2 = reader.stored(md2);
+      expect(blockTypes(stored2)).toEqual(["paragraph"]);
+      expect(inlineText(stored2)).toBe(text);
+      expect(serializeJson(stored2)).toBe(md2);
+    },
+  );
+});

@@ -541,7 +541,13 @@ function lineStartEscapeOffset(line: string, firstLine: boolean): number {
     return indent + ordered[1].length;
   }
   if (!firstLine && EQUALS_UNDERLINE.test(rest)) return indent;
-  if (!firstLine && rest.includes("|") && isTableDelimiterRow(rest)) {
+  // A delimiter row needs a pipe or a colon (`:-:` alone is one); a line of
+  // only dashes is a setext underline, escaped above.
+  if (
+    !firstLine &&
+    (rest.includes("|") || rest.includes(":")) &&
+    isTableDelimiterRow(rest)
+  ) {
     return indent + rest.indexOf("-");
   }
   return -1;

@@ -230,6 +230,43 @@ describe("artifact text escaping: later lines of a paragraph", () => {
     expect(artifactOf("a\n===")).toBe("a\n\\===");
   });
 
+  // marked reads a later line of only `:`, `-` and `|` as a GFM delimiter row
+  // that turns the line above into a table header, with or without a pipe:
+  // `a\n:-:` is a one-column table. The first dash is escaped.
+  it.each([
+    { name: "a centred cell", input: "a\n:-:", expected: "a\n:\\-:" },
+    { name: "a right-aligned cell", input: "a\n-:", expected: "a\n\\-:" },
+    { name: "a left-aligned cell", input: "a\n:-", expected: "a\n:\\-" },
+    { name: "a longer centred cell", input: "a\n:--:", expected: "a\n:\\--:" },
+    {
+      name: "the third line",
+      input: "x\na\n:-:",
+      expected: "x\na\n:\\-:",
+    },
+    { name: "leading space", input: "a\n :-:", expected: "a\n :\\-:" },
+    {
+      name: "a header line holding a pipe",
+      input: "a | b\n:-:",
+      expected: "a | b\n:\\-:",
+    },
+    { name: "a space inside (control)", input: "a\n: -", expected: "a\n: -" },
+    { name: "a lone colon (control)", input: "a\n:", expected: "a\n:" },
+    {
+      name: "text after the row (control)",
+      input: "a\n:-:x",
+      expected: "a\n:-:x",
+    },
+  ])(
+    "writes a later line that is a delimiter row without a pipe: $name",
+    ({ input, expected }) => {
+      expect(artifactOf(input)).toBe(expected);
+    },
+  );
+
+  it("leaves a colon delimiter row raw in the prompt serializer", () => {
+    expect(prompt(paragraphDoc([plain("a\n:-:")]))).toBe("a\n:-:");
+  });
+
   it("does not escape a line start inside an inline code span", () => {
     const content = paragraphDoc([
       plain("a "),
