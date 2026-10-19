@@ -80,18 +80,6 @@ export const BROWSER = defineSettingsSection("browser", {
     availableWhen: alwaysAvailable,
     keywords: ["agent", "browser", "playwright", "mcp"],
   },
-  // Gated on the HOST like agent access, beside it because both decide which
-  // tools an agent is launched with.
-  agentPages: {
-    kind: "row",
-    group: "agents",
-    search: { contributesTo: "page" },
-    label: "Let agents show artifacts in chat",
-    description:
-      "Show charts, tables and mockups in the reply. Applies to agents started after you change it.",
-    availableWhen: alwaysAvailable,
-    keywords: ["agent", "artifact", "chart", "visualization", "html"],
-  },
   // Beside agent access, not beside "Open browser tabs": the answer is whether
   // the tile appears at all, not where it lands, and next to the placement row
   // it read as an override of it.

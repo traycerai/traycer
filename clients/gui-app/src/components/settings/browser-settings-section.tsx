@@ -87,17 +87,6 @@ export function BrowserSettingsSection(props: {
   const getSupported = useHostMethodSupport(hostId, AGENT_BROWSER_ACCESS_GET);
   const setSupported = useHostMethodSupport(hostId, AGENT_BROWSER_ACCESS_SET);
   const agentAccessSupported = getSupported === true && setSupported === true;
-  const inlineArtifactsGetSupported = useHostMethodSupport(
-    hostId,
-    INLINE_ARTIFACTS_GET,
-  );
-  const inlineArtifactsSetSupported = useHostMethodSupport(
-    hostId,
-    INLINE_ARTIFACTS_SET,
-  );
-  const inlineArtifactsSupported =
-    inlineArtifactsGetSupported === true &&
-    inlineArtifactsSetSupported === true;
 
   return (
     <>
@@ -110,9 +99,6 @@ export function BrowserSettingsSection(props: {
       >
         {agentAccessSupported ? (
           <AgentBrowserAccessRow hostId={hostId} />
-        ) : null}
-        {inlineArtifactsSupported ? (
-          <InlineArtifactsRow hostId={hostId} />
         ) : null}
         {props.agentOpenedTabsRow}
         {browserDevOrigins.length > 0 ? (
@@ -199,56 +185,6 @@ function AgentBrowserAccessRow(props: {
           onCheckedChange={(next) => {
             trackSettingChanged("browser", "agentBrowserAccess");
             setAccess.mutate({ agentAccess: next });
-          }}
-        />
-      }
-    />
-  );
-}
-
-const INLINE_ARTIFACTS_GET = "config.visualization.get";
-const INLINE_ARTIFACTS_SET = "config.visualization.set";
-
-function InlineArtifactsRow(props: {
-  readonly hostId: string | null;
-}): ReactNode {
-  const client = useHostClient();
-  const hostName = hostNameOf(
-    useHostDirectoryEntry(props.hostId),
-    props.hostId,
-  );
-  const query = useHostQuery<HostRpcRegistry, "config.visualization.get">({
-    cacheKeyIdentity: undefined,
-    client,
-    method: INLINE_ARTIFACTS_GET,
-    params: {},
-    options: { enabled: true },
-  });
-  const setInlineArtifacts = useHostScopedMutationForClient(client, {
-    method: INLINE_ARTIFACTS_SET,
-    mutationKey: configMutationKeys.visualizationSet(),
-    errorMessage: "Couldn't update inline artifacts",
-    invalidateMethods: [INLINE_ARTIFACTS_GET],
-  });
-
-  return (
-    <SettingsRow
-      row={BROWSER.definitions.agentPages}
-      status={
-        query.isError
-          ? "Couldn't read this host's inline artifact setting. Repair Traycer's config.json on that machine, or back it up before resetting it, then reopen Settings."
-          : `On ${hostName ?? "this host"}. ${BROWSER.definitions.agentPages.description}`
-      }
-      control={
-        <Switch
-          checked={query.data?.agentPages === true}
-          disabled={
-            query.isPending || query.isError || setInlineArtifacts.isPending
-          }
-          aria-label="Let agents show artifacts in chat"
-          onCheckedChange={(next) => {
-            trackSettingChanged("browser", "agentPages");
-            setInlineArtifacts.mutate({ agentPages: next });
           }}
         />
       }

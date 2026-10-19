@@ -320,7 +320,6 @@ export type AnalyticsRole = "editor" | "owner" | "viewer";
 export type AnalyticsSetting =
   | "allowPrereleaseUpdates"
   | "agentBrowserAccess"
-  | "agentPages"
   | "agentOfficeDefaultView"
   | "agentTabSurfacing"
   | "agentWorktreeCreate"
@@ -1420,7 +1419,6 @@ const ANALYTICS_SETTINGS_SECTIONS = new Set<string>(
 const ANALYTICS_SETTINGS = new Set<string>(
   Object.keys({
     agentBrowserAccess: true,
-    agentPages: true,
     agentOfficeDefaultView: true,
     agentTabSurfacing: true,
     agentWorktreeCreate: true,
