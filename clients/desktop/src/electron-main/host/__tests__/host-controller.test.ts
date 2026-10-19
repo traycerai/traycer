@@ -9878,6 +9878,95 @@ describe("F3: routeForceRestartContinuation via respawn", () => {
       );
     });
 
+    // The span check above is not the last word: the continuation then waits
+    // for the actuator lock and registers, and a host admitted before that
+    // can publish in the gap. The registration asks again immediately before
+    // its bootout, so the check below passes at the span and the bootout is
+    // what refuses.
+    it("a continuation confirmed for one host that passes its span check stops nothing when pid.json comes to name a different live host before the registration's bootout", async () => {
+      eligibleDesktopCohort();
+      // The terminalized record does not end the request: the plain CLI
+      // restart is tried next, bound to the same host, and it refuses as the
+      // real command does against a pid.json naming another live host.
+      vi.mocked(streamBundledTraycerCliJson).mockImplementation(
+        async (options) => {
+          if (options.args.includes("update-verify")) {
+            return { data: { outcome: "complete" } };
+          }
+          throw new TraycerCliError(
+            "E_HOST_RESTART_TARGET_CHANGED",
+            "the confirmed host is no longer the published one",
+          );
+        },
+      );
+      const controller = stagePackagedMacRestartWorld(undefined);
+      writeOwnedSmAppServiceSubstrate();
+      await seedParkedActivationAttempt("2.0.0");
+      const confirmedIdentity = "linux:boot-a 4242";
+      writePidMetadata("production", {
+        version: "2.0.0",
+        pid: process.pid,
+        processStartIdentity: confirmedIdentity,
+      });
+      // The same pid under another start identity is a different process; it
+      // is live (this one), so it reads as a replacement.
+      const replacementIdentity = ownProcessStartIdentity();
+      let bootoutReached = false;
+      let bootoutRan = false;
+      vi.mocked(registerHostLoginItem).mockImplementationOnce(
+        async (_revalidate, confirmTarget) => {
+          bootoutReached = true;
+          writePidMetadata("production", {
+            version: "2.0.0",
+            pid: process.pid,
+            ...(replacementIdentity === null
+              ? {}
+              : { processStartIdentity: replacementIdentity }),
+          });
+          // The real registration asks before its bootout and stops on false.
+          if (confirmTarget !== null && !(await confirmTarget())) {
+            return "deferred-busy";
+          }
+          bootoutRan = true;
+          return "enabled";
+        },
+      );
+
+      const outcome = await controller.respawn(
+        {
+          kind: "user-repair",
+          targetHostId: "local-host",
+          guard: async () => ({
+            kind: "proceed-for-host",
+            host: { pid: process.pid, startIdentity: confirmedIdentity },
+          }),
+        },
+        "force",
+      );
+
+      expect(bootoutReached).toBe(true);
+      expect(bootoutRan).toBe(false);
+      expect(registerHostLoginItem).toHaveBeenCalledTimes(1);
+      expect(outcome).toEqual({
+        kind: "deferred",
+        message: HOST_RESTART_TARGET_CHANGED_MESSAGE,
+      });
+      expect(await currentAttemptPhase()).toBe("failed");
+      // The only restart left carries the confirmed host to the CLI, whose
+      // own check is the refusal reported above.
+      expect(streamBundledTraycerCliJson).toHaveBeenCalledWith(
+        expect.objectContaining({
+          args: expect.arrayContaining([
+            "restart",
+            "--expect-host-pid",
+            String(process.pid),
+            "--expect-host-start-identity",
+            confirmedIdentity,
+          ]),
+        }),
+      );
+    });
+
     it("a continuation confirmed for one host proceeds while pid.json still names that host", async () => {
       eligibleDesktopCohort();
       stageCliWithVerification({ outcome: "complete" });
@@ -10358,6 +10447,43 @@ describe("F3: routeForceRestartContinuation via respawn", () => {
       // spawned argv no longer contained `--attempt-adoption` at all
       // (`flagIndex` was `-1`). Reverted before committing anything;
       // `host-controller.ts` was never touched.
+    });
+
+    it("a takeover-recoverable registration failure on a restart confirmed for one host shells --takeover holding it to that host", async () => {
+      eligibleDesktopCohort();
+      stageCliWithVerification({ outcome: "complete" });
+      const controller = stagePackagedMacRestartWorld(undefined);
+      writeOwnedSmAppServiceSubstrate();
+      await seedParkedActivationAttempt("2.0.0");
+      writePidMetadata("production", {
+        version: "2.0.0",
+        pid: process.pid,
+        processStartIdentity: "linux:boot-a 4242",
+      });
+      vi.mocked(registerHostLoginItem).mockResolvedValueOnce("not-registered");
+
+      const outcome = await controller.respawn(
+        {
+          kind: "user-repair",
+          targetHostId: "local-host",
+          guard: async () => ({
+            kind: "proceed-for-host",
+            host: { pid: process.pid, startIdentity: "linux:boot-a 4242" },
+          }),
+        },
+        "force",
+      );
+
+      expect(outcome).toEqual({ kind: "ok", value: { activated: true } });
+      const argv = takeoverCallArgv();
+      const at = argv?.indexOf("--expect-host-pid") ?? -1;
+      expect(at).toBeGreaterThanOrEqual(0);
+      expect(argv?.slice(at, at + 4)).toEqual([
+        "--expect-host-pid",
+        String(process.pid),
+        "--expect-host-start-identity",
+        "linux:boot-a 4242",
+      ]);
     });
 
     // Sibling of the test above, for the OTHER `needs-takeover` producer:
@@ -11612,6 +11738,264 @@ describe("restart with no launchd job to restart (packaged macOS, neither host l
       });
       expect(registerHostLoginItem).not.toHaveBeenCalled();
       expect(spawnedRestarts()).toEqual([]);
+    });
+  });
+
+  // The register cycle waits for the desktop lock before it boots anything
+  // out, after the guard that confirmed the restart for one host process. A
+  // host another actor starts in that wait is not the one the person chose.
+  describe("respawn confirmed for one host process", () => {
+    const CONFIRMED_HOST = { pid: 4242, startIdentity: "linux:boot-a 4242" };
+    const HOST_FLAGS = [
+      "--expect-host-pid",
+      "4242",
+      "--expect-host-start-identity",
+      "linux:boot-a 4242",
+    ];
+
+    function confirmedIntent(): LocalHostMutationIntent {
+      return {
+        kind: "user-repair",
+        targetHostId: "local-host",
+        guard: async () => ({ kind: "proceed-for-host", host: CONFIRMED_HOST }),
+      };
+    }
+
+    function flagsOf(argv: readonly string[] | undefined): readonly string[] {
+      const at = argv?.indexOf("--expect-host-pid") ?? -1;
+      return at < 0 ? [] : (argv?.slice(at, at + 4) ?? []);
+    }
+
+    it("defers, registering and booting out nothing, when a different live host is published while the cycle waits for its lock", async () => {
+      const { controller } = stageNoLaunchdJobWorld();
+      writePidMetadata("production", {
+        version: "1.7.0",
+        pid: CONFIRMED_HOST.pid,
+        processStartIdentity: CONFIRMED_HOST.startIdentity,
+      });
+      const held = await acquireDesktopCliLock({
+        lockPath: cliLockPath("production"),
+        reason: "test-held-elsewhere",
+        waitMs: 0,
+        pollIntervalMs: 25,
+      });
+      if (held.kind !== "acquired") {
+        throw new Error("failed to seed a held lock for this test");
+      }
+
+      let released = false;
+      try {
+        const outcome = controller.respawn(confirmedIntent(), "force");
+        // The cycle is about to wait for the lock the test holds.
+        await vi.waitFor(() => {
+          expect(readHostLoginItemStatus).toHaveBeenCalled();
+        });
+        await new Promise((resolve) => setTimeout(resolve, 150));
+        // A healthy replacement is published while it waits: this test
+        // process stands in for it, a live process under its own identity.
+        const replacementIdentity = ownProcessStartIdentity();
+        writePidMetadata("production", {
+          version: "1.7.0",
+          pid: process.pid,
+          ...(replacementIdentity === null
+            ? {}
+            : { processStartIdentity: replacementIdentity }),
+        });
+        released = true;
+        await held.handle.release();
+
+        await expect(outcome).resolves.toEqual({
+          kind: "deferred",
+          message: HOST_RESTART_TARGET_CHANGED_MESSAGE,
+        });
+      } finally {
+        if (!released) await held.handle.release();
+      }
+      expect(registerHostLoginItem).not.toHaveBeenCalled();
+      expect(spawnedRestarts()).toEqual([]);
+    });
+
+    it("registers as before when no host is published", async () => {
+      const { controller } = stageNoLaunchdJobWorld();
+
+      const outcome = await controller.respawn(confirmedIntent(), "force");
+
+      expect(outcome).toEqual({ kind: "ok", value: { activated: true } });
+      expect(registerHostLoginItem).toHaveBeenCalledTimes(1);
+    });
+
+    it("registers as before when pid.json still names the confirmed host, whose process is gone", async () => {
+      const { controller } = stageNoLaunchdJobWorld();
+      writePidMetadata("production", {
+        version: "1.7.0",
+        pid: CONFIRMED_HOST.pid,
+        processStartIdentity: CONFIRMED_HOST.startIdentity,
+      });
+
+      const outcome = await controller.respawn(confirmedIntent(), "force");
+
+      expect(outcome).toEqual({ kind: "ok", value: { activated: true } });
+      expect(registerHostLoginItem).toHaveBeenCalledTimes(1);
+    });
+
+    // The first register cycle starts a host that never becomes ready, and
+    // nothing reachable appears afterwards, so the wrapper runs the whole
+    // cycle once more. That second cycle boots out first, after waiting for
+    // the lock again, so it is held to the confirmed host the same way.
+    const NOT_READY = {
+      ready: false,
+      version: null,
+      pid: null,
+      startedAt: null,
+      reason: "pid metadata never appeared",
+    } as const;
+
+    it("refuses the readiness-timeout retry, registering only once, when a different live host is published while the retry waits for its lock", async () => {
+      const { controller } = stageNoLaunchdJobWorld();
+      writePidMetadata("production", {
+        version: "1.7.0",
+        pid: CONFIRMED_HOST.pid,
+        processStartIdentity: CONFIRMED_HOST.startIdentity,
+      });
+      vi.mocked(waitForHostReady).mockImplementationOnce(async () => {
+        // The first cycle's lock is released by now. Another actor takes the
+        // lock the retry will need and publishes a healthy replacement: this
+        // test process stands in for it, a live process under its own
+        // identity.
+        const other = await acquireDesktopCliLock({
+          lockPath: cliLockPath("production"),
+          reason: "test-held-elsewhere",
+          waitMs: 0,
+          pollIntervalMs: 25,
+        });
+        if (other.kind !== "acquired") {
+          throw new Error("failed to seed a held lock for this test");
+        }
+        const replacementIdentity = ownProcessStartIdentity();
+        writePidMetadata("production", {
+          version: "1.7.0",
+          pid: process.pid,
+          ...(replacementIdentity === null
+            ? {}
+            : { processStartIdentity: replacementIdentity }),
+        });
+        setTimeout(() => {
+          void other.handle.release();
+        }, 300);
+        return NOT_READY;
+      });
+
+      const outcome = await controller.respawn(confirmedIntent(), "force");
+
+      expect(outcome).toEqual({
+        kind: "deferred",
+        message: HOST_RESTART_TARGET_CHANGED_MESSAGE,
+      });
+      expect(registerHostLoginItem).toHaveBeenCalledTimes(1);
+      expect(waitForHostReady).toHaveBeenCalledTimes(1);
+    });
+
+    it.each([
+      ["no host is published", false],
+      ["pid.json still names the confirmed host, whose process is gone", true],
+    ] as const)(
+      "runs the readiness-timeout retry, registering twice, when %s",
+      async (_name, publishConfirmed) => {
+        const { controller } = stageNoLaunchdJobWorld();
+        if (publishConfirmed) {
+          writePidMetadata("production", {
+            version: "1.7.0",
+            pid: CONFIRMED_HOST.pid,
+            processStartIdentity: CONFIRMED_HOST.startIdentity,
+          });
+        }
+        vi.mocked(waitForHostReady).mockResolvedValueOnce(NOT_READY);
+
+        const outcome = await controller.respawn(confirmedIntent(), "force");
+
+        expect(outcome).toEqual({ kind: "ok", value: { activated: true } });
+        expect(registerHostLoginItem).toHaveBeenCalledTimes(2);
+        expect(waitForHostReady).toHaveBeenCalledTimes(2);
+      },
+    );
+
+    it("carries the confirmed host to the post-lock CLI restart after a parked registration", async () => {
+      const { controller } = stageNoLaunchdJobWorld();
+      vi.mocked(registerHostLoginItem).mockResolvedValueOnce("parked");
+      vi.mocked(streamBundledTraycerCliJson).mockResolvedValue({
+        data: { restarted: true, version: "1.7.0" },
+      });
+
+      await controller.respawn(confirmedIntent(), "force");
+
+      expect(spawnedRestarts()).toEqual([
+        [
+          "host",
+          "restart",
+          "--force",
+          "--defer-if-parked",
+          ...HOST_FLAGS,
+          "--lifecycle-origin",
+          "desktop",
+        ],
+      ]);
+    });
+
+    it("carries the confirmed host to the CLI takeover after a registration failure", async () => {
+      const { controller } = stageNoLaunchdJobWorld();
+      vi.mocked(registerHostLoginItem).mockResolvedValueOnce("not-registered");
+      vi.mocked(streamBundledTraycerCliJson).mockResolvedValue({
+        data: { restarted: true, version: "1.7.0" },
+      });
+
+      await controller.respawn(confirmedIntent(), "force");
+
+      const takeover = spawnedCliCommands().find((args) =>
+        args.includes("--takeover"),
+      );
+      expect(takeover?.slice(0, 4)).toEqual([
+        "host",
+        "service",
+        "install",
+        "--takeover",
+      ]);
+      expect(flagsOf(takeover)).toEqual(HOST_FLAGS);
+    });
+
+    it("carries the confirmed host to the CLI takeover after a parked registration with no host running", async () => {
+      const { controller } = stageNoLaunchdJobWorld();
+      vi.mocked(registerHostLoginItem).mockResolvedValueOnce("parked");
+      vi.mocked(readHostLoginItemStatus).mockReturnValue("not-found");
+      vi.mocked(readParkedRegistrationTakeover).mockResolvedValue({
+        kind: "takeover",
+        status: "not-found",
+      });
+      vi.mocked(streamBundledTraycerCliJson).mockResolvedValue({
+        data: { restarted: true, version: "1.7.0" },
+      });
+
+      await controller.respawn(confirmedIntent(), "force");
+
+      const takeover = spawnedCliCommands().find((args) =>
+        args.includes("--takeover"),
+      );
+      expect(flagsOf(takeover)).toEqual(HOST_FLAGS);
+    });
+
+    it("adds no host flags to the same fallbacks when the guard confirmed none", async () => {
+      const { controller } = stageNoLaunchdJobWorld();
+      vi.mocked(registerHostLoginItem).mockResolvedValueOnce("not-registered");
+      vi.mocked(streamBundledTraycerCliJson).mockResolvedValue({
+        data: { restarted: true, version: "1.7.0" },
+      });
+
+      await controller.respawn({ kind: "background" }, "force");
+
+      const takeover = spawnedCliCommands().find((args) =>
+        args.includes("--takeover"),
+      );
+      expect(takeover).toBeDefined();
+      expect(flagsOf(takeover)).toEqual([]);
     });
   });
 

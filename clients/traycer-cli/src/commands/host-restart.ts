@@ -7,7 +7,8 @@ import { writePostFinalizeMarkerFile } from "./cli-finalize-upgrade";
 import { assertHostNotBusy } from "../host/busy-check";
 import { attestInstallRuntime } from "../host/attested-install-runtime";
 import { refuseForegroundHostRun } from "../host/foreground-host-run";
-import { readHostPidMetadataEvidence } from "../host/pid-metadata";
+import { refuseUnlessRestartTarget } from "../host/restart-target-guard";
+import { withStopTarget } from "../service/stop-target";
 import type { HostStartOrigin } from "../host/lifecycle-origin";
 import { CLI_ERROR_CODES, cliError } from "../runner/errors";
 import type { CommandFn, CommandResult } from "../runner/runner";
@@ -24,10 +25,7 @@ import {
   stopHostForRestartWithAttempt,
 } from "../host/update-mutation";
 import type { UpdateMutationCapability } from "@traycer-clients/shared/host-update";
-import {
-  restartTargetStillCurrent,
-  type RestartTargetHost,
-} from "@traycer-clients/shared/host-lock/restart-target";
+import type { RestartTargetHost } from "@traycer-clients/shared/host-lock/restart-target";
 import {
   describeNonterminalRecordRecovery,
   parkedActivationRelaunchable,
@@ -137,8 +135,10 @@ import {
 // before this command is spawned - which is before this command waits up to
 // 30s for the lock. Another actor can publish a healthy replacement in that
 // wait, so the binding is checked again here, inside the lock and before
-// anything else, and the command refuses `E_HOST_RESTART_TARGET_CHANGED`
-// when `pid.json` names a different live process (`restartTargetStillCurrent`).
+// anything else (`refuseUnlessRestartTarget`), and once more at every
+// actuator edge of the stop itself (`withStopTarget`): a host the supervisor
+// admitted before this command took the lock can publish after that first
+// check, and the stop's unit-scoped signals would reach it.
 export interface HostRestartArgs {
   readonly ifIdle: boolean;
   readonly force: boolean;
@@ -182,6 +182,7 @@ export function buildHostRestartCommand(args: HostRestartArgs): CommandFn {
         }
         if (args.expectedHost !== null) {
           await refuseUnlessRestartTarget(
+            "host restart",
             ctx.runtime.environment,
             args.expectedHost,
           );
@@ -239,19 +240,25 @@ export function buildHostRestartCommand(args: HostRestartArgs): CommandFn {
           // does NOT match the installed bytes lands here too: the supervisor
           // would refuse that relaunch at spawn anyway, and a stop that says
           // so beats a "restart" that exits 0 having started nothing.
-          await stopHostServiceWithAttempt(
-            capability,
-            {
-              environment: ctx.runtime.environment,
-              reason: "host-restart",
-              waitMs: 30_000,
-              pollIntervalMs: 100,
-              admission: "recovery-maintenance",
-            },
-            controller,
-            label,
-            { force: args.force },
-            "unconditional",
+          await withStopTarget(
+            "host restart",
+            ctx.runtime.environment,
+            args.expectedHost,
+            () =>
+              stopHostServiceWithAttempt(
+                capability,
+                {
+                  environment: ctx.runtime.environment,
+                  reason: "host-restart",
+                  waitMs: 30_000,
+                  pollIntervalMs: 100,
+                  admission: "recovery-maintenance",
+                },
+                controller,
+                label,
+                { force: args.force },
+                "unconditional",
+              ),
           );
           return {
             kind: "stopped-for-parked-activation" as const,
@@ -280,6 +287,7 @@ export function buildHostRestartCommand(args: HostRestartArgs): CommandFn {
             pollIntervalMs: 100,
             admission: "recovery-maintenance",
           },
+          args.expectedHost,
         );
         return {
           kind: "restarted" as const,
@@ -329,30 +337,6 @@ export function buildHostRestartCommand(args: HostRestartArgs): CommandFn {
   };
 }
 
-async function refuseUnlessRestartTarget(
-  environment: import("../runner/environment").Environment,
-  target: RestartTargetHost,
-): Promise<void> {
-  const evidence = await readHostPidMetadataEvidence(environment);
-  const stillCurrent = await restartTargetStillCurrent(
-    target,
-    evidence.kind === "read"
-      ? {
-          kind: "published",
-          pid: evidence.metadata.pid,
-          startIdentity: evidence.metadata.processStartIdentity,
-        }
-      : evidence,
-  );
-  if (stillCurrent) return;
-  throw cliError({
-    code: CLI_ERROR_CODES.HOST_RESTART_TARGET_CHANGED,
-    message: `host restart: the host this restart was confirmed for (pid ${String(target.pid)}) is no longer the one published, so nothing was restarted`,
-    details: null,
-    exitCode: 1,
-  });
-}
-
 interface RestartFinalizeArgs {
   readonly environment: import("../runner/environment").Environment;
   readonly controller: ServiceController;
@@ -392,16 +376,21 @@ async function restartWithPendingCliUpgradeFinalizeWithAttempt(
   args: RestartFinalizeArgs,
   capability: UpdateMutationCapability,
   contenderOptions: WithCliUpdateContenderOptions,
+  // Bound to the stop alone (`service/stop-target.ts`): the relaunch's own
+  // host must not read as a replacement.
+  expectedHost: RestartTargetHost | null,
 ): Promise<RestartFinalizeResult> {
   return restartWithActuators(args, {
     stop: () =>
-      stopHostForRestartWithAttempt(
-        capability,
-        contenderOptions,
-        args.controller,
-        args.label,
-        { force: args.force },
-        null,
+      withStopTarget("host restart", args.environment, expectedHost, () =>
+        stopHostForRestartWithAttempt(
+          capability,
+          contenderOptions,
+          args.controller,
+          args.label,
+          { force: args.force },
+          null,
+        ),
       ),
     relaunch: (stopped) =>
       relaunchHostAfterRestartWithAttempt(

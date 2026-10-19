@@ -23,6 +23,7 @@ import { callHostRpcAtEndpoint } from "../../internal/host-rpc";
 import { createCliLogger, type ILogger } from "../../logger";
 import { reportBoundedWait } from "../../runner/bounded-wait-progress";
 import type { Environment } from "../../runner/environment";
+import { assertStopTarget } from "../stop-target";
 import {
   isServiceMutationAuthorityError,
   verifyServiceMutationAuthority,
@@ -448,6 +449,9 @@ async function signalHostForForcedStop(
     hostId: metadata.hostId,
     pid: metadata.pid,
   });
+  // A direct signal takes no service authority, so the stop's confirmed
+  // host is asked for here, against the record this signal is aimed by.
+  await assertStopTarget();
   if (!signalPid(metadata.pid, "SIGTERM")) {
     return { outcome: { kind: "stopped" }, actedOn: metadata };
   }
@@ -480,6 +484,7 @@ async function signalHostForForcedStop(
       };
     }
   }
+  await assertStopTarget();
   if (!signalPid(metadata.pid, "SIGKILL")) {
     return { outcome: { kind: "stopped" }, actedOn: metadata };
   }

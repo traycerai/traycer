@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { assertStopTarget } from "./stop-target";
 
 /**
  * A service controller has many platform-specific actuator edges. Command
@@ -50,6 +51,9 @@ export async function withServiceMutationAuthority<T>(
 }
 
 export async function verifyServiceMutationAuthority(): Promise<void> {
+  // Every actuator edge that asks for authority also asks whether the stop
+  // it belongs to is still aimed at the host it was confirmed for.
+  await assertStopTarget();
   const verify = mutationAuthority.getStore();
   if (verify === undefined) return;
   try {

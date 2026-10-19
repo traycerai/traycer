@@ -1504,3 +1504,104 @@ describe("artifact inline code delimiters fit the text", () => {
     expect(prompt(around("plain", []))).toBe("x `plain` y");
   });
 });
+
+describe("artifact text escaping: text a GFM reader would autolink", () => {
+  it.each([
+    ["an https URL", "https://example.com", "https\\://example.com"],
+    ["an http URL", "http://example.com", "http\\://example.com"],
+    ["an ftp URL", "ftp://example.com", "ftp\\://example.com"],
+    ["a scheme in capitals", "HTTPS://A", "HTTPS\\://A"],
+    ["a scheme in the middle of a word", "xhttps://a", "xhttps\\://a"],
+    [
+      "a URL inside a sentence",
+      "see https://a.com now",
+      "see https\\://a.com now",
+    ],
+    ["a www host", "www.example.com", "www\\.example.com"],
+    ["a www host in capitals", "WWW.A.COM", "WWW\\.A.COM"],
+    ["an email address", "a@example.com", "a\\@example.com"],
+    ["an email local part with a plus", "a+b@c.dev", "a+b\\@c.dev"],
+    [
+      "the text of an email autolink",
+      "<123@example.com>",
+      "<123\\@example.com>",
+    ],
+    [
+      "the text of an email autolink with a plus",
+      "<+user@example.com>",
+      "<+user\\@example.com>",
+    ],
+  ])("escapes %s", (_name, value, expected) => {
+    expect(artifactOf(value)).toBe(expected);
+  });
+
+  it.each([
+    ["spaces around an at sign", "a @ b"],
+    ["a colon before two slashes without a scheme", "x:y//z"],
+    ["a scheme with no slashes", "https:"],
+    ["a scheme with one slash", "http:/a"],
+    ["www without a dot", "www"],
+    ["a colon after another word", "foo:bar"],
+    ["an at sign that ends the text", "a@"],
+    ["an at sign that starts the text", "@a"],
+    ["an at sign before a dot", "a@.b"],
+  ])("leaves %s alone", (_name, value) => {
+    expect(artifactOf(value)).toBe(value);
+  });
+
+  it("escapes the same characters in a table cell", () => {
+    expect(artifact(tableDoc([plain("https://a.com www.a.com a@b.com")]))).toBe(
+      "| h |\n| --- |\n| https\\://a.com www\\.a.com a\\@b.com |",
+    );
+  });
+
+  it("keeps the prompt serializer's text raw", () => {
+    for (const value of [
+      "https://example.com",
+      "www.example.com",
+      "a@example.com",
+      "<123@example.com>",
+    ]) {
+      expect(prompt(paragraphDoc([plain(value)]))).toBe(value);
+    }
+  });
+});
+
+describe("artifact link whose text is its URL", () => {
+  const link = (value: string, href: string): JsonContent =>
+    paragraphDoc([text(value, [{ type: "link", attrs: { href } }])]);
+
+  it("writes a plain URL as an autolink", () => {
+    expect(artifact(link("https://a.com", "https://a.com"))).toBe(
+      "<https://a.com>",
+    );
+  });
+
+  it.each([
+    [
+      "an entity-looking ampersand (the review case)",
+      "https://example.com/?a=&amp;",
+      "[https\\://example.com/?a=\\&amp;](https://example.com/?a=&amp;)",
+    ],
+    [
+      "a bare ampersand",
+      "https://a.com/?a=&b=1",
+      "[https\\://a.com/?a=&b=1](https://a.com/?a=&b=1)",
+    ],
+    [
+      "a backslash",
+      "https://a.com/a\\b",
+      "[https\\://a.com/a\\b](<https://a.com/a\\\\b>)",
+    ],
+  ])("writes a URL with %s as an ordinary link", (_name, value, expected) => {
+    expect(artifact(link(value, value))).toBe(expected);
+  });
+
+  it("writes the same link in the prompt serializer as it did before", () => {
+    expect(
+      prompt(
+        link("https://example.com/?a=&amp;", "https://example.com/?a=&amp;"),
+      ),
+    ).toBe("[https://example.com/?a=&amp;](https://example.com/?a=&amp;)");
+  });
+});

@@ -22,6 +22,9 @@ import {
   refuseForegroundHostRun,
 } from "../host/foreground-host-run";
 import type { HostStartOrigin } from "../host/lifecycle-origin";
+import { refuseUnlessRestartTarget } from "../host/restart-target-guard";
+import { withStopTarget } from "../service/stop-target";
+import type { RestartTargetHost } from "@traycer-clients/shared/host-lock/restart-target";
 import {
   formatCredentialProvisionNote,
   maybeProvisionCredential,
@@ -45,6 +48,12 @@ export interface ServiceInstallArgs {
   readonly enableLinger: boolean;
   readonly allowSelfInvocation: boolean;
   readonly takeover: boolean;
+  /**
+   * The one host process this command may stop or boot out, or null for
+   * whichever runs (`host/restart-target-guard.ts`). Desktop passes it on the
+   * takeover its force restart's re-register fallback can reach.
+   */
+  readonly expectedHost: RestartTargetHost | null;
   /** See `HostApplyArgs.attemptAdoption`. `null` for an ordinary invocation. */
   readonly attemptAdoption: string | null;
   /**
@@ -115,6 +124,13 @@ export function buildServiceInstallCommand(
             args.lifecycleOrigin,
           );
         }
+        if (args.expectedHost !== null) {
+          await refuseUnlessRestartTarget(
+            "host service install",
+            ctx.runtime.environment,
+            args.expectedHost,
+          );
+        }
         const label = serviceLabelFor(ctx.runtime.environment);
         const cli = await resolveServiceCliInvocation({
           environment: ctx.runtime.environment,
@@ -137,11 +153,19 @@ export function buildServiceInstallCommand(
             totalBytes: null,
             workUnits: null,
           });
-          takeover = await takeoverDesktopRegistrationWithAttempt(
-            capability,
-            contenderOptions,
-            controller,
-            label,
+          // The takeover stops and boots out the host it finds; held to the
+          // confirmed host at each of those edges (`service/stop-target.ts`).
+          takeover = await withStopTarget(
+            "host service install",
+            ctx.runtime.environment,
+            args.expectedHost,
+            () =>
+              takeoverDesktopRegistrationWithAttempt(
+                capability,
+                contenderOptions,
+                controller,
+                label,
+              ),
           );
           ctx.runtime.logger.info("Service install takeover step completed", {
             environment: ctx.runtime.environment,

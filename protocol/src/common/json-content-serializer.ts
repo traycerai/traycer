@@ -289,6 +289,14 @@ const tableCellEscaping: TextRunEscaping = {
 const ASCII_PUNCTUATION = /[!-/:-@[-`{-~]/;
 const WORD_CHARACTER = /[\p{L}\p{N}]/u;
 const HTML_OR_AUTOLINK_START = /[A-Za-z/!?]/;
+// The schemes a GFM reader links without angle brackets, matched against the
+// five characters before a `:`. Not only at a word start: marked ends a text
+// token before `https://` wherever it stands.
+const EXTENDED_AUTOLINK_SCHEME = /(?:https?|ftp)$/i;
+// An email's local part as CommonMark's angle autolink allows it (a superset
+// of the GFM bare form), and the first character of its domain.
+const EMAIL_LOCAL_CHARACTER = /[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]/;
+const EMAIL_DOMAIN_START = /[A-Za-z0-9_-]/;
 const ENTITY_REFERENCE =
   /^&(?:#[0-9]{1,7}|#[xX][0-9a-fA-F]{1,6}|[A-Za-z][A-Za-z0-9]*);/;
 
@@ -309,6 +317,11 @@ const ENTITY_REFERENCE =
  *   close emphasis, so `foo_bar_baz` stays as written;
  * - `[` always, and `]` inside link text, where it would close the text;
  * - `<` only before what opens HTML or an autolink;
+ * - the punctuation a GFM reader links bare text by, which plain text must
+ *   not gain on the next read: the `:` of `http://`, `https://` or
+ *   `ftp://`, the `.` of `www.`, and an `@` between what can be an email's
+ *   local part and its domain (this also keeps `<123@example.com>` from
+ *   reading as an email autolink);
  * - `&` only before a complete entity reference;
  * - `|` inside a table cell, where it would end the cell. The `\` rule above
  *   already doubles a backslash in front of it, so the parser's pipe-parity
@@ -365,6 +378,22 @@ function escapesArtifactChar(
   }
   if (char === "<") {
     return next !== undefined && HTML_OR_AUTOLINK_START.test(next);
+  }
+  if (char === ":") {
+    return (
+      text.startsWith("//", i + 1) &&
+      EXTENDED_AUTOLINK_SCHEME.test(text.slice(Math.max(0, i - 5), i))
+    );
+  }
+  if (char === ".") return text.slice(i - 3, i).toLowerCase() === "www";
+  if (char === "@") {
+    const previous = text[i - 1];
+    return (
+      previous !== undefined &&
+      next !== undefined &&
+      EMAIL_LOCAL_CHARACTER.test(previous) &&
+      EMAIL_DOMAIN_START.test(next)
+    );
   }
   if (char === "&") return ENTITY_REFERENCE.test(text.slice(i));
   return false;
@@ -1928,13 +1957,17 @@ function serializeChildren(
 const AUTOLINK_URI = /^[A-Za-z][A-Za-z0-9+.-]{1,31}:[^\s<>]*$/;
 
 // A link whose text is its own absolute URL (what an autolinked URL parses
-// to) is written back as `<url>`. Autolink content is literal, so the URL
-// needs no escapes - `https://x.dev/_a_` as link text would need `\_` to stay
-// out of emphasis - and the parser returns the same link.
+// to) is written back as `<url>`. Autolink content takes no escapes, so the
+// URL needs none - `https://x.dev/_a_` as link text would need `\_` to stay
+// out of emphasis - and the parser returns the same link. Not when the URL
+// holds an `&` or a `\`: the readers decode an entity in an autolink's text
+// (`&amp;` reads back as `&`) and may drop a backslash, while the href keeps
+// both, so that link is written as an ordinary one, whose text is escaped.
 function asAutolink(node: JsonContent): JsonContent {
   if (node.text === undefined || node.marks === undefined) return node;
   const text = node.text;
   if (node.marks.some((mark) => mark.type === "code")) return node;
+  if (text.includes("&") || text.includes("\\")) return node;
   const link = node.marks.find(
     (mark) =>
       mark.type === "link" &&

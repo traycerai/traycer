@@ -2226,3 +2226,185 @@ describe("a later line that is a delimiter row without a pipe stays paragraph te
     },
   );
 });
+
+/**
+ * A GFM reader links bare `https://`, `www.` and email text, and reads
+ * `<123@example.com>` as an email autolink whose brackets it drops. Plain text
+ * the serializer wrote raw would gain a link on the next read, so the
+ * serializer escapes the punctuation the link starts at.
+ */
+describe("text a GFM reader would autolink (traycer#1563)", () => {
+  const hasLink = (node: JsonContent): boolean =>
+    (node.marks ?? []).some((mark) => mark.type === "link") ||
+    (node.content ?? []).some((child) => hasLink(child));
+  const inlineNodesOf = (stored: JsonContent): JsonContent[] =>
+    stored.content?.[0]?.content ?? [];
+  const rowsFor = <T>(rows: ReadonlyArray<T>) =>
+    rows.flatMap((row) => READERS.map((reader) => ({ row, reader })));
+
+  // Markdown that reads as plain text: the escape is what keeps it plain.
+  const PLAIN_TEXT_INPUTS: ReadonlyArray<readonly [string, string]> = [
+    ["https\\://example.com", "https://example.com"],
+    ["www\\.example.com", "www.example.com"],
+    ["a\\@example.com", "a@example.com"],
+    ["\\<123\\@example.com>", "<123@example.com>"],
+    ["\\<+user\\@example.com>", "<+user@example.com>"],
+  ];
+  const OTHER_INPUTS: ReadonlyArray<string> = [
+    "<https://example.com/a*b>",
+    "<https://example.com/a~b>",
+    "[a](<a b>)",
+    "**a\\*b**",
+    "\\# text",
+    "[https://example.com/?a=\\&amp;](https://example.com/?a=&amp;)",
+  ];
+
+  it.each(rowsFor([...PLAIN_TEXT_INPUTS.map(([md]) => md), ...OTHER_INPUTS]))(
+    "is a fixed point: $row through $reader.name",
+    ({ row: md, reader }) => {
+      const stored1 = reader.stored(md);
+      const md1 = serializeJson(stored1);
+      const stored2 = reader.stored(md1);
+      expect(stored2).toEqual(stored1);
+      expect(serializeJson(stored2)).toBe(md1);
+    },
+  );
+
+  it.each(rowsFor(PLAIN_TEXT_INPUTS))(
+    "keeps $row.0 as unmarked text through $reader.name",
+    ({ row: [md, value], reader }) => {
+      const stored = reader.stored(serializeJson(reader.stored(md)));
+      expect(stored.content?.length).toBe(1);
+      expect(inlineNodesOf(stored)).toEqual([plainText(value)]);
+    },
+  );
+
+  it.each(rowsFor(["<123@example.com>", "<+user@example.com>"]))(
+    "keeps the text $row of an email autolink unmarked through $reader.name",
+    ({ row: value, reader }) => {
+      const md = serializeJson({
+        type: "doc",
+        content: [textParagraph([plainText(value)])],
+      });
+      expect(inlineNodesOf(reader.stored(md))).toEqual([plainText(value)]);
+    },
+  );
+
+  it.each(READERS)(
+    "keeps the text and href of a link whose text is a URL holding an entity through $name",
+    (reader) => {
+      const value = "https://example.com/?a=&amp;";
+      const linked: JsonContent = {
+        ...plainText(value),
+        marks: [{ type: "link", attrs: { href: value } }],
+      };
+      const md = serializeJson({
+        type: "doc",
+        content: [textParagraph([linked])],
+      });
+      const stored = reader.stored(md);
+      expect(inlineNodesOf(stored).map((node) => node.text)).toEqual([value]);
+      expect(
+        inlineNodesOf(stored).every((node) =>
+          node.marks?.some(
+            (mark) => mark.type === "link" && mark.attrs?.href === value,
+          ),
+        ),
+      ).toBe(true);
+      expect(serializeJson(stored)).toBe(md);
+    },
+  );
+
+  const PLAIN_SENTENCES: ReadonlyArray<string> = [
+    "xhttps://a.com",
+    "HTTPS://A.COM",
+    "ftp://a.com",
+    "see www.a.com.",
+    "a!@example.com",
+    "<a!@example.com>",
+    "user+tag@sub.example.co.uk",
+    "foo@bar",
+    "a @ b",
+    "x:y//z",
+    "http:/a",
+    "https:",
+    "www",
+    "wwwx.com",
+    "1.5 www",
+    "mailto:a@b.com",
+    "<https://a.com>",
+    "a@b.c.",
+  ];
+
+  it.each(rowsFor(PLAIN_SENTENCES))(
+    "keeps plain text $row plain through $reader.name",
+    ({ row: value, reader }) => {
+      const md = serializeJson({
+        type: "doc",
+        content: [textParagraph([plainText(value)])],
+      });
+      const stored = reader.stored(md);
+      expect(inlineNodesOf(stored)).toEqual([plainText(value)]);
+      expect(serializeJson(stored)).toBe(md);
+    },
+  );
+
+  it.each(rowsFor(["https://a.com", "a@b.com", "www.a.com"]))(
+    "keeps plain text $row in a table cell plain through $reader.name",
+    ({ row: value, reader }) => {
+      const cell = (type: string, body: string): JsonContent => ({
+        type,
+        content: [textParagraph([plainText(body)])],
+      });
+      const md = serializeJson({
+        type: "doc",
+        content: [
+          {
+            type: "table",
+            content: [
+              { type: "tableRow", content: [cell("tableHeader", "h")] },
+              { type: "tableRow", content: [cell("tableCell", value)] },
+            ],
+          },
+        ],
+      });
+      const stored = reader.stored(md);
+      expect(hasLink(stored)).toBe(false);
+      expect(serializeJson(stored)).toBe(md);
+    },
+  );
+
+  const LINKS: ReadonlyArray<readonly [string, string]> = [
+    ["https://a.com/a\\_b", "https://a.com/a\\_b"],
+    ["https://a.com/?a=&amp;", "https://a.com/?a=&amp;"],
+    ["https://a.com/?a=&b=1", "https://a.com/?a=&b=1"],
+    ["https://a.com", "https://a.com"],
+    ["www.a.com", "https://www.a.com"],
+    ["a@b.com", "mailto:a@b.com"],
+  ];
+
+  it.each(rowsFor(LINKS))(
+    "keeps the text and href of the link $row.0 through $reader.name",
+    ({ row: [value, href], reader }) => {
+      const linked: JsonContent = {
+        ...plainText(value),
+        marks: [{ type: "link", attrs: { href } }],
+      };
+      const md = serializeJson({
+        type: "doc",
+        content: [textParagraph([linked])],
+      });
+      const stored = reader.stored(md);
+      const nodes = inlineNodesOf(stored);
+      expect(nodes.map((node) => node.text).join("")).toBe(value);
+      expect(
+        nodes.every((node) =>
+          node.marks?.some(
+            (mark) => mark.type === "link" && mark.attrs?.href === href,
+          ),
+        ),
+      ).toBe(true);
+      expect(serializeJson(stored)).toBe(md);
+    },
+  );
+});

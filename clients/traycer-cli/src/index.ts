@@ -344,11 +344,30 @@ function attemptAdoptionNonce(opts: Record<string, unknown>): string | null {
   return typeof value === "string" && value.length > 0 ? value : null;
 }
 
+// Hidden: Desktop's force restart of a host that stopped answering, which may
+// stop only the process the person confirmed - see host/restart-target-guard.ts.
+// On `host restart`, and on `host service install` for the takeover its
+// packaged-macOS re-register fallback can reach.
+function expectHostPidOption(): Option {
+  return new Option(
+    "--expect-host-pid <pid>",
+    "Internal: refuse with E_HOST_RESTART_TARGET_CHANGED unless the published host is still this pid (or no live host is published)",
+  ).hideHelp();
+}
+
+function expectHostStartIdentityOption(): Option {
+  return new Option(
+    "--expect-host-start-identity <identity>",
+    "Internal: the start identity the expected host published; required with --expect-host-pid",
+  ).hideHelp();
+}
+
 /**
- * `host restart`'s binding to one host process: both flags or neither. Thrown
- * from inside the command so the refusal reaches the runner as a typed error.
+ * The binding to one host process: both flags or neither. Thrown from inside
+ * the command so the refusal reaches the runner as a typed error.
  */
 function expectedRestartHostArg(
+  verb: string,
   opts: Record<string, unknown>,
 ): RestartTargetHost | null {
   const rawPid = opts.expectHostPid;
@@ -359,8 +378,7 @@ function expectedRestartHostArg(
   if (pid === null || !isProcessStartIdentity(rawIdentity)) {
     throw cliError({
       code: CLI_ERROR_CODES.INVALID_ARGUMENT,
-      message:
-        "host restart: --expect-host-pid takes a positive whole number and must be passed with a valid --expect-host-start-identity",
+      message: `${verb}: --expect-host-pid takes a positive whole number and must be passed with a valid --expect-host-start-identity`,
       details: null,
       exitCode: 1,
     });
@@ -1419,28 +1437,15 @@ function registerHostCommands(program: Command): void {
           "Internal: when a parked packaged activation makes a generic restart unsafe, refuse without stopping the service instead of stopping it",
         ).hideHelp(),
       )
-      // Hidden: Desktop's force restart of a host that stopped answering,
-      // which may stop only the process the person confirmed - see
-      // commands/host-restart.ts.
-      .addOption(
-        new Option(
-          "--expect-host-pid <pid>",
-          "Internal: refuse with E_HOST_RESTART_TARGET_CHANGED unless the published host is still this pid (or no live host is published)",
-        ).hideHelp(),
-      )
-      .addOption(
-        new Option(
-          "--expect-host-start-identity <identity>",
-          "Internal: the start identity the expected host published; required with --expect-host-pid",
-        ).hideHelp(),
-      )
+      .addOption(expectHostPidOption())
+      .addOption(expectHostStartIdentityOption())
       .addOption(lifecycleOriginOption()),
     (opts) => (ctx) =>
       buildHostRestartCommand({
         ifIdle: opts.ifIdle === true,
         force: opts.force === true,
         deferIfParked: opts.deferIfParked === true,
-        expectedHost: expectedRestartHostArg(opts),
+        expectedHost: expectedRestartHostArg("host restart", opts),
         lifecycleOrigin: hostStartOriginFromOption(opts.lifecycleOrigin),
       })(ctx),
   );
@@ -2375,15 +2380,18 @@ function registerServiceCommands(host: Command): void {
         "macOS only: move host management from the Traycer Desktop app to the CLI (stops the Desktop-managed host cooperatively, deregisters its agent, then registers the CLI-owned service)",
       )
       .addOption(attemptAdoptionOption())
+      .addOption(expectHostPidOption())
+      .addOption(expectHostStartIdentityOption())
       .addOption(lifecycleOriginOption()),
-    (opts) =>
+    (opts) => (ctx) =>
       buildServiceInstallCommand({
         attemptAdoption: attemptAdoptionNonce(opts),
         lifecycleOrigin: hostStartOriginFromOption(opts.lifecycleOrigin),
         enableLinger: opts.linger !== false,
         allowSelfInvocation: opts.allowSelfInvocation === true,
         takeover: opts.takeover === true,
-      }),
+        expectedHost: expectedRestartHostArg("host service install", opts),
+      })(ctx),
   );
 
   // The public background start, and the answer to "why does `host start`

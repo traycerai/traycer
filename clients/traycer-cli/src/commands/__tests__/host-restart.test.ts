@@ -18,6 +18,11 @@ import type { HostInstallRecord } from "../../manifest/host-install";
 
 const mocks = vi.hoisted(() => ({
   controllerCalls: [] as string[],
+  // Runs at the marker-reconciliation step - after the admission checks and
+  // before the stop - so a test can publish a host in that window.
+  afterAdmission: null as (() => Promise<void>) | null,
+  // Runs once the stub's stop has completed, before the relaunch.
+  afterStop: null as (() => Promise<void>) | null,
   busyOverride: null as "busy" | null,
   busyCalls: [] as Array<string | undefined>,
   lockCalls: [] as Array<{ reason: string }>,
@@ -58,6 +63,7 @@ vi.mock("../../service", async (importOriginal) => {
       ) => {
         mocks.controllerCalls.push("stopForRestart");
         mocks.stopForRestartForceValues.push(options.force);
+        if (mocks.afterStop !== null) await mocks.afterStop();
         return { forcedRecycle: false };
       },
       relaunchAfterRestart: async () => {
@@ -112,6 +118,20 @@ vi.mock("../../store/cli-lock", async (importOriginal) => {
     ): Promise<T> => {
       mocks.lockCalls.push({ reason: opts.reason });
       return fn();
+    },
+  };
+});
+
+vi.mock("../../upgrade/finalize-helper", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../upgrade/finalize-helper")>();
+  return {
+    ...actual,
+    reconcilePostFinalizeMarker: async (
+      ...callArgs: Parameters<typeof actual.reconcilePostFinalizeMarker>
+    ) => {
+      if (mocks.afterAdmission !== null) await mocks.afterAdmission();
+      return actual.reconcilePostFinalizeMarker(...callArgs);
     },
   };
 });
@@ -200,6 +220,8 @@ describe("buildHostRestartCommand", () => {
     const { hostHomeDir } = await import("../../store/paths");
     expect(hostHomeDir("production").startsWith(workHome)).toBe(true);
     mocks.controllerCalls = [];
+    mocks.afterAdmission = null;
+    mocks.afterStop = null;
     mocks.busyOverride = null;
     mocks.busyCalls = [];
     mocks.lockCalls = [];
@@ -970,6 +992,55 @@ describe("buildHostRestartCommand", () => {
         code: "E_HOST_RESTART_TARGET_CHANGED",
       });
       expect(mocks.controllerCalls).toEqual([]);
+    });
+
+    // The admission check above runs once the command holds the lock, but a
+    // host the supervisor admitted earlier can publish after it and before
+    // the stop. The stop re-reads pid.json at each of its own edges.
+    it("refuses a host published after the admission check and before the stop, stopping and relaunching nothing", async () => {
+      const { ownProcessStartIdentity } =
+        await import("../../store/process-identity");
+      await writePidMetadata({
+        pid: EXPECTED_HOST.pid,
+        identity: EXPECTED_HOST.startIdentity,
+      });
+      mocks.afterAdmission = async () => {
+        await writePidMetadata({
+          pid: process.pid,
+          identity: ownProcessStartIdentity(),
+        });
+      };
+
+      const command = await buildBoundForceRestart();
+
+      await expect(command(fakeCtx())).rejects.toMatchObject({
+        code: "E_HOST_RESTART_TARGET_CHANGED",
+      });
+      expect(mocks.controllerCalls).toEqual([]);
+    });
+
+    it("does not hold the relaunch to the confirmed host: a host published once the stop is done is the restart's own", async () => {
+      const { ownProcessStartIdentity } =
+        await import("../../store/process-identity");
+      await writePidMetadata({
+        pid: EXPECTED_HOST.pid,
+        identity: EXPECTED_HOST.startIdentity,
+      });
+      mocks.afterStop = async () => {
+        await writePidMetadata({
+          pid: process.pid,
+          identity: ownProcessStartIdentity(),
+        });
+      };
+
+      const command = await buildBoundForceRestart();
+      const result = await command(fakeCtx());
+
+      expect(result.data).toMatchObject({ restarted: true });
+      expect(mocks.controllerCalls).toEqual([
+        "stopForRestart",
+        "relaunchAfterRestart",
+      ]);
     });
 
     it("an --if-idle restart refuses a replaced host before its busy probe", async () => {

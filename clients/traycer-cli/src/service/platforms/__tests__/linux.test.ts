@@ -28,6 +28,9 @@ const pidMetadata = vi.hoisted(() => ({
   // reader keeps its exact behaviour; `"unreadable"` is the torn record that
   // used to arrive as `null` and collapse the ladder.
   evidenceKind: "read" as "read" | "unreadable",
+  // The start identity `pid.json` carries per pid, for the stop-target
+  // scope's comparison. A pid without one publishes none.
+  identities: new Map<number, string>(),
 }));
 const currentPidMetadata = (): { pid: number } | null =>
   pidMetadata.signalled && pidMetadata.replacement !== null
@@ -39,7 +42,16 @@ vi.mock("../../../host/pid-metadata", () => ({
     if (pidMetadata.evidenceKind === "unreadable")
       return { kind: "unreadable", cause: "not valid JSON" };
     const metadata = currentPidMetadata();
-    return metadata === null ? { kind: "absent" } : { kind: "read", metadata };
+    return metadata === null
+      ? { kind: "absent" }
+      : {
+          kind: "read",
+          metadata: {
+            ...metadata,
+            processStartIdentity:
+              pidMetadata.identities.get(metadata.pid) ?? null,
+          },
+        };
   },
   publishedHostProcessGone: (m: { pid: number }) => {
     pidMetadata.goneCalls += 1;
@@ -90,6 +102,8 @@ import {
   STOP_EXIT_GRACE_MARGIN_MS,
 } from "@traycer/protocol/host/lifecycle-constants";
 import { runWithLeaseAtServiceSpawnEdge } from "../../spawn-edge";
+import { withStopTarget } from "../../stop-target";
+import { ownProcessStartIdentity } from "@traycer-clients/shared/host-lock/process-identity";
 import {
   CRASH_REPORT_SCAN_TIMEOUT_MS,
   STDERR_END_WAIT_TIMEOUT_MS,
@@ -455,6 +469,7 @@ describe("Q13: stopForRestart signals the unit instead of stopping it", () => {
     pidMetadata.signalled = false;
     pidMetadata.goneFor = null;
     pidMetadata.evidenceKind = "read";
+    pidMetadata.identities.clear();
     // Production graces are the host's own force-exit watchdog plus a 10s
     // kill window; letting them elapse is what makes the exhausted-ladder
     // case untestable at real timing.
@@ -623,6 +638,78 @@ describe("Q13: stopForRestart signals the unit instead of stopping it", () => {
     expect(stopped.forcedRecycle).toBe(false);
     const flat = commands.map((c) => c.join(" "));
     expect(flat.some((c) => c.includes("kill --signal=SIGKILL"))).toBe(false);
+  });
+
+  // A stop confirmed for one host process (`withStopTarget`) asks again at
+  // each unit-scoped signal. The unit's cgroup is wider than the host the
+  // person confirmed: a host the armed manager starts after the SIGTERM is
+  // in it, and the SIGKILL would reach that one.
+  describe("inside a scope for one confirmed host", () => {
+    const CONFIRMED_HOST = { pid: 4242, startIdentity: "linux:boot-a 4242" };
+
+    function stageConfirmedHostSurvivingSigterm(): void {
+      pidMetadata.metadata = { pid: CONFIRMED_HOST.pid };
+      pidMetadata.identities.set(
+        CONFIRMED_HOST.pid,
+        CONFIRMED_HOST.startIdentity,
+      );
+      pidMetadata.gone = false;
+    }
+
+    function stopInScope(controller: ServiceController): Promise<unknown> {
+      return withStopTarget("host restart", "dev", CONFIRMED_HOST, () =>
+        controller.stopForRestart(labelFor("ai.traycer.host.dev"), {
+          force: false,
+        }),
+      );
+    }
+
+    it("never issues the SIGKILL, and refuses E_HOST_RESTART_TARGET_CHANGED, when a live host is published as the SIGTERM lands", async () => {
+      stageConfirmedHostSurvivingSigterm();
+      // The manager's replacement host, published once the unit is signalled:
+      // this test process stands in for it, a live process under its own
+      // identity.
+      pidMetadata.replacement = { pid: process.pid };
+      const replacementIdentity = ownProcessStartIdentity();
+      if (replacementIdentity !== null) {
+        pidMetadata.identities.set(process.pid, replacementIdentity);
+      }
+      const { controller, commands } = recordingController();
+
+      await expect(stopInScope(controller)).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.HOST_RESTART_TARGET_CHANGED,
+      });
+
+      const flat = commands.map((c) => c.join(" "));
+      expect(flat.some((c) => c.includes("kill --signal=SIGTERM"))).toBe(true);
+      expect(flat.some((c) => c.includes("kill --signal=SIGKILL"))).toBe(false);
+    });
+
+    it("still escalates to the SIGKILL while the published host is the confirmed one", async () => {
+      stageConfirmedHostSurvivingSigterm();
+      const { controller, commands } = recordingController();
+
+      const stopped = await stopInScope(controller);
+
+      const flat = commands.map((c) => c.join(" "));
+      expect(flat.some((c) => c.includes("kill --signal=SIGKILL"))).toBe(true);
+      expect(stopped).toEqual({ forcedRecycle: true });
+    });
+
+    it("leaves the same stop unscoped, with a host published as the SIGTERM lands, to escalate as before", async () => {
+      stageConfirmedHostSurvivingSigterm();
+      pidMetadata.replacement = { pid: process.pid };
+      const { controller, commands } = recordingController();
+
+      const stopped = await controller.stopForRestart(
+        labelFor("ai.traycer.host.dev"),
+        { force: false },
+      );
+
+      const flat = commands.map((c) => c.join(" "));
+      expect(flat.some((c) => c.includes("kill --signal=SIGKILL"))).toBe(true);
+      expect(stopped).toEqual({ forcedRecycle: true });
+    });
   });
 
   it("the user-facing `host stop` still uses the manager's stop verb - this round does not change that path", async () => {
