@@ -62,15 +62,16 @@ describe("registry lines", () => {
 
   it("opens providers.list@10.1 and nativeMutate@1.1 with upgrade paths from the released minors", () => {
     // The released 10.1 minor stays registered with its bridge; later minors
-    // (10.2 opened for `macosRequirement`) may sit above it.
+    // (10.2 opened for `macosRequirement`, then 10.3 for MCP origin) may sit above it.
     expect(listMajor10.versions[1].contract.schemaVersion).toEqual({
       major: 10,
       minor: 1,
     });
     expect(listMajor10.versions[1].upgradeFromPreviousVersion).not.toBeNull();
-    // 1.2 opened above 1.1 for `promoteToPersonal` and the executable-write
-    // grant (ticket E7); the released 1.1 minor keeps its bridge.
-    expect(mutateMajor1.latestMinor).toBe(2);
+    expect(mutateMajor1.versions[1].contract.schemaVersion).toEqual({
+      major: 1,
+      minor: 1,
+    });
     expect(mutateMajor1.versions[1].upgradeFromPreviousVersion).not.toBeNull();
   });
 

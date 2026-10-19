@@ -21,6 +21,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { HarnessModelPicker } from "@/components/home/pickers/harness-model-picker";
+import { chatMaxModeContextForToolbar } from "@/components/home/data/model-max-mode";
 import { ActiveHostWorkspaceControls } from "@/components/home/host-workspace-selector/host-workspace-selector";
 import type { HostWorkspaceControlsHostScope } from "@/components/home/host-workspace-selector/host-workspace-controls-scope";
 import { isHostSwitcherListInteraction } from "@/components/settings/host-scope/host-switcher-portal";
@@ -55,6 +56,7 @@ import {
 import { clearChatForkWorkspace } from "@/lib/worktree/chat-fork-workspace-staging";
 import { useSeededWorkspaceSnapshotStore } from "@/stores/worktree/seeded-workspace-snapshot-store";
 import { useWorktreeIntentMemoryStore } from "@/stores/worktree/worktree-intent-memory-store";
+import type { ComposerToolbarStore } from "@/stores/composer/composer-toolbar-store";
 import type { ChatForkMode } from "@/components/chat/chat-message";
 import {
   chatForkHostRefusals,
@@ -175,6 +177,42 @@ export function ChatForkDialog(props: ChatForkDialogProps) {
     <SurfaceActivityProvider active={presentedOpen}>
       <ChatForkDialogBody {...props} />
     </SurfaceActivityProvider>
+  );
+}
+
+function ChatForkModelPicker(props: {
+  readonly store: ComposerToolbarStore;
+  readonly selectedHostId: string;
+  readonly disabled: boolean;
+}) {
+  // Catalog updates replace toolbar state. Keep these subscriptions below the
+  // dialog's useComposerToolbarStore hook so they cannot re-run its catalog
+  // effect when a query returns a new but equivalent array.
+  const reasoning = useStore(props.store, (state) => state.reasoning);
+  const serviceTier = useStore(props.store, (state) => state.serviceTier);
+  const maxModeContext = useMemo(
+    () => chatMaxModeContextForToolbar(reasoning, serviceTier),
+    [reasoning, serviceTier],
+  );
+  return (
+    <HarnessModelPicker
+      labelDisplay="responsive"
+      store={props.store}
+      maxModeContext={maxModeContext}
+      withServiceTier
+      withReasoning
+      tuiOnly={false}
+      lockedHarnessId={null}
+      disabled={props.disabled}
+      registerActivation={false}
+      createProfileHostId={props.selectedHostId}
+      runTargetHostId={props.selectedHostId}
+      // A dialog has no terminal surface to open a setup terminal into, and
+      // its selected host may not be the tab's.
+      terminalLoginSurface={null}
+      profileAdmission={null}
+      embedding={null}
+    />
   );
 }
 
@@ -917,24 +955,11 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
               Harness
             </div>
             <div className="flex min-w-0 items-center gap-2">
-              <HarnessModelPicker
-                labelDisplay="responsive"
+              <ChatForkModelPicker
                 key={modelPickerKey}
                 store={toolbarStore}
-                withServiceTier
-                withReasoning
-                tuiOnly={false}
-                lockedHarnessId={null}
                 disabled={createChat.isPending}
-                registerActivation={false}
-                createProfileHostId={selectedHostId}
-                runTargetHostId={selectedHostId}
-                // A dialog has no terminal surface to open a setup terminal
-                // into, and its selected host may not be the tab's; the CTA
-                // shows its steps without the button.
-                terminalLoginSurface={null}
-                profileAdmission={null}
-                embedding={null}
+                selectedHostId={selectedHostId}
               />
             </div>
           </section>

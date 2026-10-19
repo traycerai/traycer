@@ -7,6 +7,9 @@ import {
   botCreateResponseSchema,
   botDeleteRequestSchema,
   botDeleteResponseSchema,
+  botListChangedClientFrameSchema,
+  botListChangedOpenRequestSchema,
+  botListChangedServerFrameSchema,
   botListRequestSchema,
   botListResponseSchema,
   botOpenRequestSchema,
@@ -90,7 +93,7 @@ export const botClaimAuthorityV10 = defineRpcContract({
 });
 
 /**
- * `bot.open@1.0` (T18): open a bot on the serving host, claiming it there
+ * `bot.open@1.0`: open a bot on the serving host, claiming it there
  * when its bound host is unreachable. Same optional posture as the rest of
  * the namespace.
  */
@@ -133,4 +136,19 @@ export const botSubscribeV10 = defineStreamRpcContract({
   openRequestSchema: botSubscribeOpenRequestSchema,
   serverFrameSchema: botSubscribeServerFrameSchema,
   clientFrameSchema: botSubscribeClientFrameSchema,
+});
+
+/**
+ * `bot.listChanged@1.0` - a payload-free `changed` frame each time the bot
+ * list of one of the subscriber's environments moves elsewhere (a teammate's
+ * create, rename, run-settings change, claim or delete), so Home and the bot
+ * tab refetch `bot.list` without waiting for focus. The host learns of it
+ * from the environment room's bots doorbell; focus stays the backup.
+ */
+export const botListChangedV10 = defineStreamRpcContract({
+  method: "bot.listChanged",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  openRequestSchema: botListChangedOpenRequestSchema,
+  serverFrameSchema: botListChangedServerFrameSchema,
+  clientFrameSchema: botListChangedClientFrameSchema,
 });

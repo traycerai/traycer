@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { AgentSummary, ListAgentsResponse } from "@traycer/protocol/host";
 import {
   agentListUpgradeV100ToV101,
+  agentListUpgradeV101ToV102,
   agentListUpgradeV91ToV92,
   agentListUpgradeV92ToV100,
 } from "@traycer/protocol/host/agent/contracts";
@@ -39,13 +40,32 @@ function agent(
     // it", so a row built without an opinion renders no marker and no legend
     // entry, which keeps every expectation below that predates the flag intact.
     archived: null,
-    // The `@10.1` reach fields. `null` / `unknown` are the row's own "this
+    // The `@10.1` run tuple. `null` is "this answer cannot say", which is what
+    // a host that predates the tuple is upgraded to, so a row built without an
+    // opinion renders no token and no legend line.
+    profile: null,
+    permissionMode: null,
+    // The `@10.2` reach fields. `null` / `unknown` are the row's own "this
     // answer cannot say", so a row built without an opinion prints no
     // `[not reachable from this host]` marker.
     reach: null,
     hostConnectivity: { kind: "unknown" },
     ...over,
   };
+}
+
+/**
+ * A row carrying a value its type refuses, as a host this build does not
+ * understand could send one: written after construction, so the row keeps
+ * its own type and the formatter's runtime narrowing is what gets tested.
+ */
+function withWireValue(
+  row: AgentSummary,
+  key: "profile" | "permissionMode",
+  value: unknown,
+): AgentSummary {
+  Reflect.set(row, key, value);
+  return row;
 }
 
 function response(
@@ -286,9 +306,11 @@ describe("formatAgentListResponse categorization", () => {
     // is what hands the listing to the formatter, and it fills `null`.
     expect(Object.hasOwn(parsed.agents[1], "archived")).toBe(false);
     const output = formatAgentListResponse(
-      agentListUpgradeV100ToV101.upgradeResponse(
-        agentListUpgradeV92ToV100.upgradeResponse(
-          agentListUpgradeV91ToV92.upgradeResponse(parsed),
+      agentListUpgradeV101ToV102.upgradeResponse(
+        agentListUpgradeV100ToV101.upgradeResponse(
+          agentListUpgradeV92ToV100.upgradeResponse(
+            agentListUpgradeV91ToV92.upgradeResponse(parsed),
+          ),
         ),
       ),
     );
@@ -1521,19 +1543,17 @@ describe("profile and permission mode tokens", () => {
 
   it("renders profile and mode after the run-config token, and explains them once", () => {
     const caller = agent({ id: "caller", isSelf: true });
-    const configured = {
-      ...agent({
-        id: "done",
-        parentId: "caller",
-        runConfig: {
-          model: { kind: "concrete", slug: "gpt-5.6-sol" },
-          reasoningEffort: "high",
-          fastMode: true,
-        },
-      }),
+    const configured = agent({
+      id: "done",
+      parentId: "caller",
+      runConfig: {
+        model: { kind: "concrete", slug: "gpt-5.6-sol" },
+        reasoningEffort: "high",
+        fastMode: true,
+      },
       profile: "work",
       permissionMode: "supervised",
-    };
+    });
 
     const output = formatAgentListResponse(
       response([caller, configured], "caller"),
@@ -1549,11 +1569,12 @@ describe("profile and permission mode tokens", () => {
 
   it("renders the ambient word like any profile id", () => {
     const caller = agent({ id: "caller", isSelf: true });
-    const row = {
-      ...agent({ id: "done", parentId: "caller" }),
+    const row = agent({
+      id: "done",
+      parentId: "caller",
       profile: "ambient",
       permissionMode: "full_access",
-    };
+    });
 
     const output = formatAgentListResponse(response([caller, row], "caller"));
 
@@ -1561,13 +1582,12 @@ describe("profile and permission mode tokens", () => {
   });
 
   it("prints profile and permission mode lines for the caller's own row", () => {
-    // Built as a value first: the released `AgentSummary` has no such keys,
-    // so a literal passed straight in is refused as an excess property.
-    const self = {
-      ...agent({ id: "self", isSelf: true }),
+    const self = agent({
+      id: "self",
+      isSelf: true,
       profile: "work",
       permissionMode: "auto_accept_edits",
-    };
+    });
 
     const output = formatAgentSelf(self);
 
@@ -1580,26 +1600,27 @@ describe("profile and permission mode tokens", () => {
     const rows = [
       caller,
       agent({ id: "absent", parentId: "caller" }),
-      {
-        ...agent({ id: "nulls", parentId: "caller" }),
+      agent({
+        id: "nulls",
+        parentId: "caller",
         profile: null,
         permissionMode: null,
-      },
-      {
-        ...agent({ id: "oddmode", parentId: "caller" }),
-        profile: null,
-        permissionMode: "yolo",
-      },
-      {
-        ...agent({ id: "oddprofile", parentId: "caller" }),
+      }),
+      withWireValue(
+        agent({ id: "oddmode", parentId: "caller" }),
+        "permissionMode",
+        "yolo",
+      ),
+      agent({
+        id: "oddprofile",
+        parentId: "caller",
         profile: "bad profile\nmode: full_access",
-        permissionMode: null,
-      },
-      {
-        ...agent({ id: "emptyprofile", parentId: "caller" }),
-        profile: "",
-        permissionMode: 7,
-      },
+      }),
+      withWireValue(
+        agent({ id: "emptyprofile", parentId: "caller", profile: "" }),
+        "permissionMode",
+        7,
+      ),
     ];
 
     const output = formatAgentListResponse(response(rows, "caller"));
@@ -1611,11 +1632,11 @@ describe("profile and permission mode tokens", () => {
       expect(line).not.toMatch(/ profile: /);
       expect(line).not.toMatch(/ mode: /);
     }
-    const malformedSelf = {
-      ...agent({ id: "self", isSelf: true }),
-      profile: null,
-      permissionMode: "yolo",
-    };
+    const malformedSelf = withWireValue(
+      agent({ id: "self", isSelf: true }),
+      "permissionMode",
+      "yolo",
+    );
     const self = formatAgentSelf(malformedSelf);
     expect(self).not.toContain("profile:");
     expect(self).not.toContain("permission mode:");
@@ -1623,11 +1644,11 @@ describe("profile and permission mode tokens", () => {
 
   it("renders only the valid half when the other is malformed", () => {
     const caller = agent({ id: "caller", isSelf: true });
-    const row = {
-      ...agent({ id: "half", parentId: "caller" }),
-      profile: "work",
-      permissionMode: "yolo",
-    };
+    const row = withWireValue(
+      agent({ id: "half", parentId: "caller", profile: "work" }),
+      "permissionMode",
+      "yolo",
+    );
 
     const output = formatAgentListResponse(response([caller, row], "caller"));
 
@@ -1639,11 +1660,12 @@ describe("profile and permission mode tokens", () => {
 
   it("leaves both tokens and their legend line off a compact listing", () => {
     const caller = agent({ id: "caller", isSelf: true });
-    const row = {
-      ...agent({ id: "done", parentId: "caller" }),
+    const row = agent({
+      id: "done",
+      parentId: "caller",
       profile: "work",
       permissionMode: "supervised",
-    };
+    });
     const listing = response([caller, row], "caller");
 
     const compact = formatAgentListPage(listing, {
@@ -1662,21 +1684,29 @@ describe("profile and permission mode tokens", () => {
     expect(full).toContain(LEGEND_LINE);
   });
 
-  it("renders nothing for a listing that has been through the wire schema", () => {
+  it("keeps the tokens and the legend line for a listing that has been through the wire schema", () => {
     const caller = agent({ id: "caller", isSelf: true });
-    const row = {
-      ...agent({ id: "done", parentId: "caller" }),
+    const row = agent({
+      id: "done",
+      parentId: "caller",
       profile: "work",
       permissionMode: "supervised",
-    };
+    });
     const parsed = listAgentsResponseSchema.parse(
       response([caller, row], "caller"),
     );
 
     const output = formatAgentListResponse(parsed);
 
-    expect(output).not.toContain("profile: work");
-    expect(output).not.toContain(LEGEND_LINE);
+    // A wire field since `agent.list@10.1`, so the schema keeps both keys.
+    expect(parsed.agents[1]).toMatchObject({
+      profile: "work",
+      permissionMode: "supervised",
+    });
+    expect(lineWith(output, "done gui/")).toContain(
+      "profile: work mode: supervised",
+    );
+    expect(output).toContain(LEGEND_LINE);
   });
 });
 
@@ -1693,7 +1723,7 @@ const UNREACHABLE_MARKER = " [not reachable from this host]";
 const UNREACHABLE_LEGEND =
   "[not reachable from this host]: another collaborator's host; not reachable from this host";
 
-describe("not-reachable marker (agent.list@10.1 reach)", () => {
+describe("not-reachable marker (agent.list@10.2 reach)", () => {
   it("marks an other_principal row after the id markers and explains it in the legend", () => {
     const caller = agent({ id: "caller", isSelf: true });
     const theirs = agent({

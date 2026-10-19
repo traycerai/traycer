@@ -4,12 +4,12 @@ import {
   type UseMutationResult,
 } from "@tanstack/react-query";
 import type {
-  BotClaimAuthorityRequest,
-  BotClaimAuthorityResponse,
   BotCreateRequest,
   BotCreateResponse,
   BotDeleteRequest,
   BotDeleteResponse,
+  BotOpenRequest,
+  BotOpenResponse,
   BotUpdateResponse,
   BotUpdateRunSettingsRequest,
   BotUpdateTitleRequest,
@@ -28,15 +28,18 @@ import { toastFromHostError } from "@/lib/host-error-toast";
 /**
  * The `bot.*` writes (Tracy Bots). Every hook takes the client that carries the
  * request as an ARGUMENT: a create goes to the host the bot will be bound to,
- * a claim goes to the host that is claiming, a conversation send goes to the
- * tab's bound host. None of them may fall back to the app-wide host on their
+ * an open goes to the host serving the tab, which may claim the bot, and a
+ * conversation send or a settings write goes through the tab's host. None of them may fall back to the app-wide host on their
  * own - that is the substitution the tab-host rule exists to prevent.
+ *
+ * The bot tab's Settings writes (rename, model, delete) carry no toast: the
+ * panel states a refusal inline, under the control that made the call.
  *
  * Each write invalidates `bot.list` on EVERY host scope rather than on one:
  * the list is cloud-backed and identical everywhere, so a create on host B
  * makes host A's cached list stale too.
  */
-function invalidateBotLists(queryClient: QueryClient): void {
+export function invalidateBotLists(queryClient: QueryClient): void {
   void queryClient.invalidateQueries({
     predicate: (query) =>
       hostQueryKeys.matchesMethodOnAnyHost(query.queryKey, "bot.list"),
@@ -74,7 +77,6 @@ export function useBotDeleteMutation(
       onSuccess: () => {
         invalidateBotLists(queryClient);
       },
-      onError: (error) => toastFromHostError(error, "Couldn't delete the bot."),
     },
   });
 }
@@ -92,7 +94,6 @@ export function useBotUpdateTitleMutation(
       onSuccess: () => {
         invalidateBotLists(queryClient);
       },
-      onError: (error) => toastFromHostError(error, "Couldn't rename the bot."),
     },
   });
 }
@@ -114,36 +115,32 @@ export function useBotUpdateRunSettingsMutation(
       onSuccess: () => {
         invalidateBotLists(queryClient);
       },
-      onError: (error) =>
-        toastFromHostError(error, "Couldn't change the bot's model."),
     },
   });
 }
 
 /**
- * Rebinds the bot to the host behind `client` - the serving host supplies its
- * own id. The bot row and every chat under it move together, so the caller's
- * bot tab (bound to the previous host) is replaced by one bound here.
+ * Opens the bot on the host behind `client`: that host answers whether
+ * it serves the bot, whether another host does, or why none can now, and
+ * claims the bot onto itself when its bound host cannot be reached. The tab
+ * follows the answer; the person never picks the host. No toast: the tab
+ * states every outcome, a failure included, in place.
  */
-export function useBotClaimAuthorityMutation(
+export function useBotOpenMutation(
   client: HostClient<HostRpcRegistry> | null,
-): UseMutationResult<
-  BotClaimAuthorityResponse,
-  HostRpcError,
-  BotClaimAuthorityRequest
-> {
+): UseMutationResult<BotOpenResponse, HostRpcError, BotOpenRequest> {
   const queryClient = useQueryClient();
-  return useHostMutation<HostRpcRegistry, "bot.claimAuthority">({
+  return useHostMutation<HostRpcRegistry, "bot.open">({
     client,
-    method: "bot.claimAuthority",
+    method: "bot.open",
     mapVariables: (variables) => variables,
     options: {
-      mutationKey: botMutationKeys.claimAuthority(),
-      onSuccess: () => {
+      mutationKey: botMutationKeys.open(),
+      // A claim moves the bot's bound host, and a not-found answer means the
+      // bot is gone: either way every cached list is stale.
+      onSettled: () => {
         invalidateBotLists(queryClient);
       },
-      onError: (error) =>
-        toastFromHostError(error, "Couldn't move the bot to this host."),
     },
   });
 }

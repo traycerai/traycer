@@ -35,6 +35,8 @@ import {
   SliderTrack,
 } from "@/components/ui/slider";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
+import { Badge } from "@/components/ui/badge";
+import { maxModeTooltipCopy } from "@/components/home/data/model-max-mode";
 import { useRegionValue } from "@/lib/layout-overrides";
 
 /**
@@ -74,6 +76,7 @@ export interface ServiceTierFooterConfig {
 interface HarnessModelPickerModelSettingsFooterProps {
   readonly reasoning: ReasoningFooterConfig | null;
   readonly serviceTier: ServiceTierFooterConfig | null;
+  readonly maxMode?: boolean;
   /**
    * The picker's `visibleOpen` - false while the popover plays its exit, so a
    * writer never ticks against a surface on its way out. A footer mounted
@@ -85,12 +88,13 @@ interface HarnessModelPickerModelSettingsFooterProps {
 export function HarnessModelPickerModelSettingsFooter(
   props: HarnessModelPickerModelSettingsFooterProps,
 ) {
-  const { reasoning, serviceTier, pickerOpen } = props;
-  if (reasoning === null && serviceTier === null) return null;
+  const { reasoning, serviceTier, maxMode, pickerOpen } = props;
+  if (reasoning === null && serviceTier === null && !maxMode) return null;
   return (
     <ModelSettingsFooter
       reasoning={reasoning}
       serviceTier={serviceTier}
+      maxMode={maxMode === true}
       pickerOpen={pickerOpen}
     />
   );
@@ -99,11 +103,12 @@ export function HarnessModelPickerModelSettingsFooter(
 interface ModelSettingsFooterProps {
   readonly reasoning: ReasoningFooterConfig | null;
   readonly serviceTier: ServiceTierFooterConfig | null;
+  readonly maxMode: boolean;
   readonly pickerOpen: boolean;
 }
 
 function ModelSettingsFooter(props: ModelSettingsFooterProps) {
-  const { reasoning, serviceTier, pickerOpen } = props;
+  const { reasoning, serviceTier, maxMode, pickerOpen } = props;
   const sliderControl =
     useRegionValue("model", "reasoningControl") === "slider";
   const sliderLayout = sliderControl && (reasoning?.options.length ?? 0) > 1;
@@ -113,7 +118,8 @@ function ModelSettingsFooter(props: ModelSettingsFooterProps) {
       : nonDefaultServiceTiersForModel(serviceTier.selectedModel);
   const hasReasoningOptions =
     reasoning !== null && reasoning.options.length > 0;
-  if (serviceTiers.length === 0 && !hasReasoningOptions) return null;
+  if (serviceTiers.length === 0 && !hasReasoningOptions && !maxMode)
+    return null;
   const showGroupSeparator = serviceTiers.length > 0 && hasReasoningOptions;
   const tierControl =
     serviceTier === null ? null : (
@@ -141,6 +147,18 @@ function ModelSettingsFooter(props: ModelSettingsFooterProps) {
           stepped={sliderLayout}
         />
       )}
+      {maxMode ? (
+        <TooltipWrapper
+          label={maxModeTooltipCopy()}
+          side="top"
+          sideOffset={6}
+          align="center"
+        >
+          <Badge variant="outline" data-testid="model-max-mode-badge">
+            Max Mode
+          </Badge>
+        </TooltipWrapper>
+      ) : null}
     </div>
   );
 }

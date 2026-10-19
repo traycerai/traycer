@@ -483,6 +483,7 @@ describe("autoJudgeTarget", () => {
       judgeModelLabel: null,
       judgeEffortLabel: null,
       judgeRecordUnrunnable: false,
+      judgeMaxModeListed: false,
     });
     expect(billing).toEqual({ kind: "blocked" });
   });
@@ -498,6 +499,7 @@ describe("autoJudgeTarget", () => {
       judgeModelLabel: null,
       judgeEffortLabel: null,
       judgeRecordUnrunnable: false,
+      judgeMaxModeListed: false,
     });
     expect(billing).toEqual({
       kind: "provider-native",
@@ -523,6 +525,7 @@ describe("autoJudgeBillingForRun", () => {
         judgeModelLabel: null,
         judgeEffortLabel: null,
         judgeRecordUnrunnable: false,
+        judgeMaxModeListed: false,
       }),
     ).toEqual({
       kind: "provider-native",
@@ -540,6 +543,7 @@ describe("autoJudgeBillingForRun", () => {
         judgeModelLabel: null,
         judgeEffortLabel: null,
         judgeRecordUnrunnable: false,
+        judgeMaxModeListed: false,
       }),
     ).toEqual({ kind: "blocked" });
   });
@@ -553,6 +557,7 @@ describe("autoJudgeBillingForRun", () => {
         judgeModelLabel: null,
         judgeEffortLabel: null,
         judgeRecordUnrunnable: false,
+        judgeMaxModeListed: false,
       }),
     ).toEqual({
       kind: "provider-native",
@@ -570,6 +575,7 @@ describe("autoJudgeBillingForRun", () => {
         judgeModelLabel: "Sonnet",
         judgeEffortLabel: null,
         judgeRecordUnrunnable: true,
+        judgeMaxModeListed: false,
       }),
     ).toEqual({ kind: "blocked" });
   });
@@ -583,6 +589,7 @@ describe("autoJudgeBillingForRun", () => {
         judgeModelLabel: "Sonnet",
         judgeEffortLabel: null,
         judgeRecordUnrunnable: true,
+        judgeMaxModeListed: false,
       }),
     ).toEqual({
       kind: "provider-native",
@@ -600,6 +607,7 @@ describe("autoJudgeBillingForRun", () => {
         judgeModelLabel: null,
         judgeEffortLabel: null,
         judgeRecordUnrunnable: false,
+        judgeMaxModeListed: false,
       }),
     ).toBeNull();
   });
@@ -613,6 +621,7 @@ describe("autoJudgeBillingForRun", () => {
         judgeModelLabel: "Sonnet 5",
         judgeEffortLabel: null,
         judgeRecordUnrunnable: false,
+        judgeMaxModeListed: false,
       }),
     ).toEqual({ kind: "traycer", modelLabel: "Sonnet 5", effortLabel: null });
   });
@@ -626,6 +635,7 @@ describe("autoJudgeBillingForRun", () => {
         judgeModelLabel: "Sonnet",
         judgeEffortLabel: null,
         judgeRecordUnrunnable: false,
+        judgeMaxModeListed: false,
       }),
     ).toEqual({
       kind: "provider",
@@ -633,6 +643,7 @@ describe("autoJudgeBillingForRun", () => {
       harnessLabel: "Claude Code",
       modelLabel: "Sonnet",
       effortLabel: null,
+      maxModeListed: false,
     });
   });
 
@@ -645,6 +656,7 @@ describe("autoJudgeBillingForRun", () => {
         judgeModelLabel: null,
         judgeEffortLabel: null,
         judgeRecordUnrunnable: false,
+        judgeMaxModeListed: false,
       }),
     ).toEqual({
       kind: "provider",
@@ -652,6 +664,7 @@ describe("autoJudgeBillingForRun", () => {
       harnessLabel: "Claude Code",
       modelLabel: "sonnet",
       effortLabel: null,
+      maxModeListed: false,
     });
   });
 
@@ -664,6 +677,7 @@ describe("autoJudgeBillingForRun", () => {
         judgeModelLabel: "Sonnet 5",
         judgeEffortLabel: "Low",
         judgeRecordUnrunnable: false,
+        judgeMaxModeListed: false,
       }),
     ).toEqual({ kind: "traycer", modelLabel: "Sonnet 5", effortLabel: "Low" });
   });
@@ -677,6 +691,7 @@ describe("autoJudgeBillingForRun", () => {
         judgeModelLabel: "Sonnet",
         judgeEffortLabel: "Low",
         judgeRecordUnrunnable: false,
+        judgeMaxModeListed: false,
       }),
     ).toEqual({
       kind: "provider",
@@ -684,7 +699,112 @@ describe("autoJudgeBillingForRun", () => {
       harnessLabel: "Claude Code",
       modelLabel: "Sonnet",
       effortLabel: "Low",
+      maxModeListed: false,
     });
+  });
+});
+
+describe("autoJudgeBillingForRun - Max Mode", () => {
+  const JUDGE_TARGET: AutoJudgeTarget = {
+    kind: "judge",
+    harnessId: "cursor",
+    modelSlug: "example",
+  };
+  const base = {
+    runHarnessId: "codex",
+    isProviderNative: false,
+    judgeModelLabel: "Example",
+    judgeEffortLabel: "High",
+    judgeRecordUnrunnable: false,
+  } as const;
+
+  it("carries maxModeListed true on the provider arm for a picked judge", () => {
+    expect(
+      autoJudgeBillingForRun({
+        ...base,
+        target: JUDGE_TARGET,
+        judgeMaxModeListed: true,
+      }),
+    ).toMatchObject({
+      kind: "provider",
+      harnessId: "cursor",
+      maxModeListed: true,
+    });
+  });
+
+  it("carries maxModeListed true for Automatic's conversation-model fallback", () => {
+    const target = autoJudgeTarget({
+      selection: null,
+      effective: { source: "fallback" },
+      blocked: null,
+      runHarnessId: "cursor",
+      runModelSlug: "example",
+      runJudgeDefaultModel: null,
+    });
+    expect(
+      autoJudgeBillingForRun({
+        ...base,
+        runHarnessId: "cursor",
+        target,
+        judgeMaxModeListed: true,
+      }),
+    ).toMatchObject({
+      kind: "provider",
+      harnessId: "cursor",
+      maxModeListed: true,
+    });
+  });
+
+  it("keeps maxModeListed false when the judge key does not list the selection", () => {
+    expect(
+      autoJudgeBillingForRun({
+        ...base,
+        target: JUDGE_TARGET,
+        judgeMaxModeListed: false,
+      }),
+    ).toMatchObject({ kind: "provider", maxModeListed: false });
+  });
+
+  it("has no maxModeListed on the traycer arm, even when the input says true", () => {
+    const billing = autoJudgeBillingForRun({
+      ...base,
+      target: { kind: "judge", harnessId: "traycer", modelSlug: "sonnet-5" },
+      judgeMaxModeListed: true,
+    });
+    expect(billing).toEqual({
+      kind: "traycer",
+      modelLabel: "Example",
+      effortLabel: "High",
+    });
+  });
+
+  it.each([
+    [
+      "provider-native",
+      { isProviderNative: true, runHarnessId: "claude" },
+      JUDGE_TARGET,
+    ],
+    ["blocked (none target)", {}, { kind: "none" } satisfies AutoJudgeTarget],
+    ["unknown target", {}, { kind: "unknown" } satisfies AutoJudgeTarget],
+  ])("never reports Max Mode for %s", (_name, overrides, target) => {
+    const billing = autoJudgeBillingForRun({
+      ...base,
+      ...overrides,
+      target,
+      judgeMaxModeListed: true,
+    });
+    expect(billing === null || !("maxModeListed" in billing)).toBe(true);
+  });
+
+  it("never reports Max Mode when the judge record is unrunnable", () => {
+    expect(
+      autoJudgeBillingForRun({
+        ...base,
+        target: JUDGE_TARGET,
+        judgeRecordUnrunnable: true,
+        judgeMaxModeListed: true,
+      }),
+    ).toEqual({ kind: "blocked" });
   });
 });
 
@@ -752,6 +872,7 @@ describe("autoModeMidTurnLock", () => {
           harnessLabel: "Claude Code",
           modelLabel: "Sonnet",
           effortLabel: null,
+          maxModeListed: false,
         },
       }),
     ).toBeNull();

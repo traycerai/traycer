@@ -2,12 +2,12 @@ import { describe, expect, it } from "vitest";
 import { hostRpcRegistry } from "@traycer/protocol/host/registry";
 
 /**
- * `providers.list@10.3` added `onHostOnly` (and `scope`) to the ENVELOPE, and
+ * `providers.list@10.5` added `onHostOnly` (and `scope`) to the ENVELOPE, and
  * a 10.0 peer must receive a response with neither, on every row it carries.
  *
  * The key sits on the envelope rather than on the profile row because the
  * profile row (`providerProfileSchema`) is shared BY REFERENCE by the 10.0 and
- * 10.3 provider rows: a profile-level key would widen the released 10.0 line
+ * 10.5 provider rows: a profile-level key would widen the released 10.0 line
  * too, and the within-major re-parse would no longer strip it. The existing
  * projection test in `environment-wire.test.ts` runs on an empty `providers`
  * array, so it cannot see that class of regression; this one carries a provider
@@ -20,7 +20,7 @@ const providersListLine = hostRpcRegistry["providers.list"][10];
 const project100 = (response: unknown) =>
   providersListLine.versions[0].contract.responseSchema.parse(response);
 const parse103 = (response: unknown) =>
-  providersListLine.versions[3].contract.responseSchema.parse(response);
+  providersListLine.versions[5].contract.responseSchema.parse(response);
 
 const profileBase = {
   enabled: true,
@@ -36,7 +36,7 @@ const profileBase = {
 };
 
 /**
- * A realistic 10.3 response: one provider with an ambient and a managed
+ * A realistic 10.5 response: one provider with an ambient and a managed
  * profile, the envelope's `scope` and `onHostOnly`, and (the regression
  * guard) an `onHostOnly` key on the managed profile ROW, which is where the
  * schema comments rule the key out. Both places must not survive a 10.0
@@ -172,8 +172,8 @@ const EXPECTED_TEN_ZERO = {
   native: null,
 };
 
-describe("providers.list@10.3 projected to 10.0, with a provider row that has profiles", () => {
-  it("keeps the envelope's onHostOnly and scope for a 10.3 peer", () => {
+describe("providers.list@10.5 projected to 10.0, with a provider row that has profiles", () => {
+  it("keeps the envelope's onHostOnly and scope for a 10.5 peer", () => {
     const live = parse103(tenOneResponse());
     expect(live).toHaveProperty("scope", "personal");
     expect(live).toHaveProperty("onHostOnly", [
@@ -181,7 +181,7 @@ describe("providers.list@10.3 projected to 10.0, with a provider row that has pr
     ]);
   });
 
-  it("does not model onHostOnly on the profile row, even for a 10.3 peer", () => {
+  it("does not model onHostOnly on the profile row, even for a 10.5 peer", () => {
     const live = parse103(tenOneResponse());
     expect(keysAtAnyDepth(live.providers)).not.toContain("onHostOnly");
   });

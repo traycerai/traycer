@@ -64,9 +64,12 @@ const LEGACY_LIST_RESPONSE = {
       // `null` for an older host ("never asked"), and this mock stands in for
       // the transport that has already run that chain.
       archived: null,
-      // `agent.list@10.1`'s reach pair. The `@10.0 -> @10.1` upgrade fills
-      // `null` and `unknown` for an older host ("never asked", not
-      // "unreachable" or "offline").
+      // `agent.list@10.1`'s run tuple and `@10.2`'s reach pair. The upgrades
+      // fill `null` (run tuple, reach) and `unknown` (connectivity) for an
+      // older host ("never asked", not "unreachable" or "offline"), and this
+      // mock stands in for the transport that has already run that chain.
+      profile: null,
+      permissionMode: null,
       reach: null,
       hostConnectivity: { kind: "unknown" as const },
     },
@@ -101,6 +104,8 @@ const EXPECTED_DEFAULT_FILLED_DATA = {
       sessionState: null,
       lastExit: null,
       archived: null,
+      profile: null,
+      permissionMode: null,
       reach: null,
       hostConnectivity: { kind: "unknown" as const },
     },
@@ -331,6 +336,121 @@ describe("agent list archived flag in --json", () => {
         { id: "unknown", archived: null },
       ],
     });
+  });
+});
+
+describe("agent list run tuple", () => {
+  const TUPLE_LEGEND = "profile: <id> / mode: <word>:";
+
+  function tupleListing(
+    extra: ReadonlyArray<{
+      id: string;
+      profile: string | null;
+      permissionMode:
+        | "supervised"
+        | "auto_accept_edits"
+        | "auto"
+        | "full_access"
+        | null;
+    }>,
+  ) {
+    return {
+      ...LEGACY_LIST_RESPONSE,
+      agents: [
+        LEGACY_LIST_RESPONSE.agents[0],
+        ...extra.map((row) => ({
+          ...LEGACY_LIST_RESPONSE.agents[0],
+          id: row.id,
+          isSelf: false,
+          parentId: "agent-parent",
+          title: row.id,
+          profile: row.profile,
+          permissionMode: row.permissionMode,
+        })),
+      ],
+    };
+  }
+
+  it("carries profile and permissionMode in --json exactly as sent", async () => {
+    rpcMock.mockResolvedValue(
+      tupleListing([
+        { id: "known", profile: "ambient", permissionMode: "supervised" },
+        { id: "unknown", profile: null, permissionMode: null },
+      ]),
+    );
+
+    const result = await buildCommand()(makeCtx(true));
+
+    const base = EXPECTED_DEFAULT_FILLED_DATA.agents[0];
+    const child = {
+      ...base,
+      isSelf: false,
+      parentId: "agent-parent",
+    };
+    expect(result.data).toEqual({
+      ...EXPECTED_DEFAULT_FILLED_DATA,
+      agents: [
+        base,
+        {
+          ...child,
+          id: "known",
+          title: "known",
+          profile: "ambient",
+          permissionMode: "supervised",
+        },
+        { ...child, id: "unknown", title: "unknown" },
+      ],
+    });
+  });
+
+  it("renders the tuple on the row and explains it in the legend", async () => {
+    rpcMock.mockResolvedValue(
+      tupleListing([
+        { id: "known", profile: "ambient", permissionMode: "supervised" },
+        { id: "unknown", profile: null, permissionMode: null },
+      ]),
+    );
+
+    const result = await buildCommand()(makeCtx(false));
+
+    const lines = (result.human ?? "").split("\n");
+    expect(lines.find((line) => line.startsWith("known "))).toContain(
+      "profile: ambient mode: supervised",
+    );
+    expect(lines.filter((line) => line.startsWith(TUPLE_LEGEND))).toHaveLength(
+      1,
+    );
+  });
+
+  it("renders no token on a null row", async () => {
+    rpcMock.mockResolvedValue(
+      tupleListing([
+        { id: "known", profile: "ambient", permissionMode: "supervised" },
+        { id: "unknown", profile: null, permissionMode: null },
+      ]),
+    );
+
+    const result = await buildCommand()(makeCtx(false));
+
+    const lines = (result.human ?? "").split("\n");
+    const unknown = lines.find((line) => line.startsWith("unknown "));
+    expect(unknown).toBeDefined();
+    expect(unknown).not.toMatch(/ profile: /);
+    expect(unknown).not.toMatch(/ mode: /);
+  });
+
+  it("prints no token and no legend line when no row carries a tuple", async () => {
+    rpcMock.mockResolvedValue(
+      tupleListing([{ id: "unknown", profile: null, permissionMode: null }]),
+    );
+
+    const result = await buildCommand()(makeCtx(false));
+
+    expect(result.human).not.toContain(TUPLE_LEGEND);
+    for (const line of (result.human ?? "").split("\n")) {
+      expect(line).not.toMatch(/ profile: /);
+      expect(line).not.toMatch(/ mode: /);
+    }
   });
 });
 

@@ -5,6 +5,7 @@ import {
   agentListUpgradeV91ToV92,
   agentListUpgradeV92ToV100,
   agentListUpgradeV100ToV101,
+  agentListUpgradeV101ToV102,
 } from "@traycer/protocol/host/agent/contracts";
 import {
   agentSummarySchemaV90,
@@ -60,17 +61,26 @@ describe("agent.list v9.0 -> v9.1 upgrade path", () => {
     // The upgrade is typed `@9.1`, so the row carries no archive flag yet.
     expect(Object.hasOwn(upgraded.agents[0], "archived")).toBe(false);
 
-    // The next hop in the chain supplies it, and only then is the row a
-    // canonical one.
-    const chained = agentListUpgradeV91ToV92.upgradeResponse(upgraded);
-    expect(chained.agents).toEqual([
-      { ...V90_AGENT, sessionState: null, lastExit: null, archived: null },
-    ]);
-    // Two more hops reach the head: `@10.0` is a pass-through and `@10.1`
-    // fills the reach pair, so only then is the row a canonical one.
-    const head = agentListUpgradeV100ToV101.upgradeResponse(
-      agentListUpgradeV92ToV100.upgradeResponse(chained),
+    // The next hops in the chain supply the archive flag and then the run
+    // tuple.
+    const chained = agentListUpgradeV100ToV101.upgradeResponse(
+      agentListUpgradeV92ToV100.upgradeResponse(
+        agentListUpgradeV91ToV92.upgradeResponse(upgraded),
+      ),
     );
+    expect(chained.agents).toEqual([
+      {
+        ...V90_AGENT,
+        sessionState: null,
+        lastExit: null,
+        archived: null,
+        profile: null,
+        permissionMode: null,
+      },
+    ]);
+    // One more hop reaches the head: `@10.2` fills the reach pair, so only
+    // then is the row a canonical one.
+    const head = agentListUpgradeV101ToV102.upgradeResponse(chained);
     const parsed = listAgentsResponseSchema.parse(head);
     expect(parsed.agents).toEqual(head.agents);
   });

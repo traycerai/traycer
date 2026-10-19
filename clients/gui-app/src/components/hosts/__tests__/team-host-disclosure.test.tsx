@@ -197,13 +197,19 @@ function team(
 
 function view(input: {
   readonly direct: readonly string[];
+  readonly ownerTeam: EpicTeamCollaboratorView | null;
   readonly teams: readonly EpicTeamCollaboratorView[];
 }): EpicCollaboratorsView {
   const directUsers = input.direct.map((id) => person(id, "direct-user"));
+  const owner = input.ownerTeam === null ? [] : [input.ownerTeam];
   return {
     directUsers,
     teams: input.teams,
-    flatRows: [...directUsers, ...input.teams.flatMap((t) => t.members)],
+    ownerTeam: input.ownerTeam,
+    flatRows: [
+      ...directUsers,
+      ...[...owner, ...input.teams].flatMap((t) => t.members),
+    ],
   };
 }
 
@@ -224,6 +230,7 @@ describe("taskHasReadersOutsideTeam", () => {
     expect(
       outside(
         view({
+          ownerTeam: null,
           direct: [VIEWER, "user-ada", "user-bea"],
           teams: [team(TEAM_ID, [VIEWER, "user-ada", "user-bea"])],
         }),
@@ -235,6 +242,7 @@ describe("taskHasReadersOutsideTeam", () => {
     expect(
       outside(
         view({
+          ownerTeam: null,
           direct: ["user-ada", "user-stranger"],
           teams: [team(TEAM_ID, [VIEWER, "user-ada"])],
         }),
@@ -243,20 +251,27 @@ describe("taskHasReadersOutsideTeam", () => {
   });
 
   it("is true when the owning team's members are unknown and a direct user other than the viewer holds access", () => {
-    expect(outside(view({ direct: [VIEWER, "user-ada"], teams: [] }))).toBe(
-      true,
-    );
+    expect(
+      outside(
+        view({ ownerTeam: null, direct: [VIEWER, "user-ada"], teams: [] }),
+      ),
+    ).toBe(true);
   });
 
   it("is false when the owning team's members are unknown and only the viewer holds direct access", () => {
-    expect(outside(view({ direct: [VIEWER], teams: [] }))).toBe(false);
-    expect(outside(view({ direct: [], teams: [] }))).toBe(false);
+    expect(
+      outside(view({ ownerTeam: null, direct: [VIEWER], teams: [] })),
+    ).toBe(false);
+    expect(outside(view({ ownerTeam: null, direct: [], teams: [] }))).toBe(
+      false,
+    );
   });
 
   it("is true when another team holds access to the task", () => {
     expect(
       outside(
         view({
+          ownerTeam: null,
           direct: [],
           teams: [team(TEAM_ID, [VIEWER]), team("team-other", ["user-zed"])],
         }),
@@ -264,9 +279,35 @@ describe("taskHasReadersOutsideTeam", () => {
     ).toBe(true);
   });
 
+  it("is true when another team owns the task", () => {
+    expect(
+      outside(
+        view({
+          ownerTeam: team("team-other", ["user-zed"]),
+          direct: [],
+          teams: [team(TEAM_ID, [VIEWER])],
+        }),
+      ),
+    ).toBe(true);
+  });
+
+  it("reads the owning team's members when it is the task's Owner team", () => {
+    expect(
+      outside(
+        view({
+          ownerTeam: team(TEAM_ID, [VIEWER, "user-ada"]),
+          direct: ["user-ada"],
+          teams: [],
+        }),
+      ),
+    ).toBe(false);
+  });
+
   it("is false when only the owning team holds access", () => {
     expect(
-      outside(view({ direct: [], teams: [team(TEAM_ID, [VIEWER])] })),
+      outside(
+        view({ ownerTeam: null, direct: [], teams: [team(TEAM_ID, [VIEWER])] }),
+      ),
     ).toBe(false);
   });
 });
@@ -422,6 +463,7 @@ describe("<TeamHostDisclosure />", () => {
 
   it("omits the outside-readers line when no one outside the team reads the task", () => {
     mocks.collaborators.current = view({
+      ownerTeam: null,
       direct: [VIEWER],
       teams: [team(TEAM_ID, [VIEWER])],
     });
@@ -432,6 +474,7 @@ describe("<TeamHostDisclosure />", () => {
 
   it("shows the outside-readers line when someone outside the team can read the task", () => {
     mocks.collaborators.current = view({
+      ownerTeam: null,
       direct: [VIEWER, "user-stranger"],
       teams: [team(TEAM_ID, [VIEWER])],
     });
@@ -445,6 +488,7 @@ describe("<TeamHostDisclosure />", () => {
   it("treats collaborators as null without an open task", () => {
     mocks.openEpicId.current = null;
     mocks.collaborators.current = view({
+      ownerTeam: null,
       direct: ["user-stranger"],
       teams: [],
     });
@@ -460,6 +504,7 @@ describe("<TeamHostDisclosure />", () => {
     // the card names the outside readers rather than claiming there are none.
     mocks.cloudAuthorized.current = false;
     mocks.collaborators.current = view({
+      ownerTeam: null,
       direct: ["user-stranger"],
       teams: [],
     });
@@ -583,6 +628,7 @@ describe("<TeamHostDisclosure /> unknown readers", () => {
 
   it("renders without the outside-readers line once the query answered with no one outside", () => {
     mocks.collaborators.current = view({
+      ownerTeam: null,
       direct: [VIEWER],
       teams: [team(TEAM_ID, [VIEWER])],
     });

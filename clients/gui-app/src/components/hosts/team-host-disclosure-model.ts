@@ -21,10 +21,12 @@ export function teamHostOutsideReadersLine(teamName: string): string {
 
 /**
  * Whether the task has readers outside the owning team. Any other team is
- * outside. A direct reader is outside unless the owning team's members are
- * known and include them; when they are unknown (the team is not a reader of
- * this task), every direct reader but the viewer counts, so the disclosure
- * says too much rather than claiming nobody outside can read.
+ * outside, the task's Owner team included (the collaborators view carries
+ * it apart from the shared teams). A direct reader is outside unless the
+ * owning team's members are known and include them; when they are unknown
+ * (the team is not a reader of this task), every direct reader but the
+ * viewer counts, so the disclosure says too much rather than claiming nobody
+ * outside can read.
  */
 export function taskHasReadersOutsideTeam(input: {
   readonly viewerUserId: string;
@@ -33,12 +35,14 @@ export function taskHasReadersOutsideTeam(input: {
 }): boolean {
   const { collaborators } = input;
   if (collaborators === null) return false;
-  if (collaborators.teams.some((team) => team.teamId !== input.teamId)) {
+  const teams =
+    collaborators.ownerTeam === null
+      ? collaborators.teams
+      : [collaborators.ownerTeam, ...collaborators.teams];
+  if (teams.some((team) => team.teamId !== input.teamId)) {
     return true;
   }
-  const owning = collaborators.teams.find(
-    (team) => team.teamId === input.teamId,
-  );
+  const owning = teams.find((team) => team.teamId === input.teamId);
   const members =
     owning === undefined
       ? null

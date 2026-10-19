@@ -194,7 +194,7 @@ export type BotClaimAuthorityResponse = z.infer<
 
 /**
  * Open a bot on THIS host (the host serving the tab), claiming it here when
- * its bound host cannot be reached (T18). The person never picks the host:
+ * its bound host cannot be reached. The person never picks the host:
  * the app opens the bot through whichever host serves the tab and follows
  * the answer. A caller the bot is not visible to - not a member of its
  * environment, or the bot deleted - gets the same not-found error
@@ -661,4 +661,47 @@ export const botSubscribeClientFrameSchema = lazySchema(() =>
 );
 export type BotSubscribeClientFrame = z.infer<
   typeof botSubscribeClientFrameSchema
+>;
+
+// ---- bot.listChanged --------------------------------------------------- //
+
+export const botListChangedOpenRequestSchema = lazySchema(() => z.object({}));
+export type BotListChangedOpenRequest = z.infer<
+  typeof botListChangedOpenRequestSchema
+>;
+
+/**
+ * `changed`: the bot list of an environment the subscriber belongs to moved
+ * on another host or for another member. It carries NOTHING: the client
+ * refetches `bot.list`, so a late or repeated frame can only cost a
+ * refetch, never replay an older list. A change made through this host for
+ * the same subscriber is not reported (the client that made it already
+ * refetched).
+ */
+export const botListChangedServerFrameSchema = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    z.object({
+      kind: z.literal("changed"),
+      hasBinaryPayload: z.literal(false),
+    }),
+    z.object({
+      kind: z.literal("pong"),
+      hasBinaryPayload: z.literal(false),
+    }),
+  ]),
+);
+export type BotListChangedServerFrame = z.infer<
+  typeof botListChangedServerFrameSchema
+>;
+
+export const botListChangedClientFrameSchema = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    z.object({
+      kind: z.literal("ping"),
+      hasBinaryPayload: z.literal(false),
+    }),
+  ]),
+);
+export type BotListChangedClientFrame = z.infer<
+  typeof botListChangedClientFrameSchema
 >;

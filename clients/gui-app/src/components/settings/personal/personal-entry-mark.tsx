@@ -74,8 +74,8 @@ export function PersonalEntryMark(props: {
 
 /**
  * Shown only where the host takes `promoteToPersonal`
- * (`PROMOTE_TO_PERSONAL_REQUIRED_HOST_VERSION`, nativeMutate 1.2). A 1.1 host
- * is main's released line, which refuses it.
+ * (`PROMOTE_TO_PERSONAL_REQUIRED_HOST_VERSION`, nativeMutate 1.3). A host on
+ * 1.2 or older refuses it.
  */
 function AddToPersonalButton(props: {
   readonly entryKind: "mcp" | "skills";

@@ -44,7 +44,7 @@ jobs:
       || github.base_ref != 'main'
       || github.event.pull_request.head.repo.full_name != github.repository
       || github.event.pull_request.user.type == 'Bot'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     # `actions: read` lets the push step below list this workflow's earlier runs.
     permissions:
@@ -134,7 +134,7 @@ jobs:
         || github.event.pull_request.user.type == 'Bot'
       )
       && needs.changes.outputs.run == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # A shard runs a few minutes. Playwright bounds each test on its own
     # (`timeout` in playwright.config.ts); this bounds the job, so a hung
     # server or browser cannot hold the runner until GitHub's six-hour default.
@@ -196,7 +196,7 @@ jobs:
         || github.event.pull_request.user.type == 'Bot'
       )
       && needs.changes.outputs.run == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -226,7 +226,7 @@ jobs:
         || github.event.pull_request.head.repo.full_name != github.repository
         || github.event.pull_request.user.type == 'Bot'
       )
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
       - name: Every job that ran passed

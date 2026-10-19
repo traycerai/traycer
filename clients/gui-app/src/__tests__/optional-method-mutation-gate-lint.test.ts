@@ -160,13 +160,11 @@ const VERIFIED_ALTERNATE_GATE: Readonly<Record<string, string>> = {
   "bot.create":
     "sibling-method proxy gate: CreateBotForm renders only inside HomeBotsSection (home-bots-group.tsx), which gates on bot.list (home-bots-section.tsx); onError toasts an E_HOST_UNSUPPORTED like any other refusal (use-bot-mutations.ts)",
   "bot.delete":
-    "same bot.list proxy as bot.create: a bot tab is created only from HomeBotRow and CreateBotForm under that gate (home-bot-row.tsx, create-bot-form.tsx), and BotTabSurface re-checks bot.list on its own host before drawing any control (bot-tab-surface.tsx), so a tab restored from bot-tabs-store onto a host without bots shows the update notice; the hook's onError toasts the refusal",
+    "same bot.list proxy as bot.create: a bot tab is created only from HomeBotRow and CreateBotForm under that gate (home-bot-row.tsx, create-bot-form.tsx), and BotTabSurface re-checks bot.open - the newest method of the same block - on its own host before drawing any control (bot-tab-surface.tsx), so a tab restored from bot-tabs-store onto a host without bots shows the update notice; documented no-toast: the Settings panel states the refusal inline (use-bot-mutations.ts, bot-settings-panel.tsx)",
   "bot.updateTitle":
-    "same bot.list proxy and onError toast as bot.delete (bot-settings-panel.tsx)",
+    "same proxy and inline refusal as bot.delete (bot-settings-panel.tsx)",
   "bot.updateRunSettings":
-    "same bot.list proxy and onError toast as bot.delete (bot-settings-panel.tsx)",
-  "bot.claimAuthority":
-    "same bot.list proxy and onError toast as bot.delete (bot-tab-surface.tsx)",
+    "same proxy and inline refusal as bot.delete (bot-settings-panel.tsx)",
   "bot.conversation.send":
     "same bot.list proxy as bot.delete; documented no-toast: the composer states the refusal inline under the field (use-bot-mutations.ts, bot-conversation-view.tsx)",
   "environment.host.bind":

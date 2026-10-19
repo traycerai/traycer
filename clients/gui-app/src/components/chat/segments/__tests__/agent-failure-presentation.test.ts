@@ -23,6 +23,15 @@ describe("presentationForUntypedCode", () => {
     });
   });
 
+  it("presents an unanswered predecessor fence as an interruption", () => {
+    expect(
+      presentationForUntypedCode("CLAUDE_PREVIOUS_SESSION_STOPPING"),
+    ).toEqual({
+      presentation: "interrupted",
+      headline: "Previous session still stopping",
+    });
+  });
+
   it("returns null with no code, which keeps the red row", () => {
     expect(presentationForUntypedCode(null)).toBeNull();
   });

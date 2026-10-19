@@ -617,6 +617,7 @@ function shouldPromoteToolSegment(
   // in the group that keeps going after the turn ends. Keyed on the durable
   // block marker, so it holds after reload and for legacy-free stamped blocks.
   if (segment.managedCommand !== null) return true;
+  if (segment.imageResults.length > 0) return true;
   // A backgrounded command/Monitor stays a standalone card for its whole life -
   // running, completed, stopped, errored, and after reload - keyed on the
   // persistent block marker. This is the durable signal: it is stamped at birth

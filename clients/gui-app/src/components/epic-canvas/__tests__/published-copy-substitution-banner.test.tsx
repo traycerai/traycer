@@ -259,7 +259,9 @@ describe("published-copy substitution renders exactly one dead-tile banner", () 
       screen.getByTestId(`published-chat-dead-tile-${CHAT.id}`),
     ).not.toBeNull();
     expect(screen.queryByTestId(`chat-dead-tile-${CHAT.id}`)).toBeNull();
-    expect(screen.getByText(/Bound host "host-A" is offline/)).not.toBeNull();
+    expect(
+      screen.getByText(/while "host-A" is offline; the original stays there/),
+    ).not.toBeNull();
   });
 
   it("for a same-host offline owner with a cloud copy: still one banner", async () => {

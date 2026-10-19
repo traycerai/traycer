@@ -1607,7 +1607,7 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
-  // Opening a bot may claim it onto this host (T18): `fifo`, like the claim
+  // Opening a bot may claim it onto this host: `fifo`, like the claim
   // itself, so two opens are never coalesced into one answer that was decided
   // before the other's claim.
   "bot.open": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
@@ -2022,6 +2022,16 @@ export const HOST_METHOD_POLL_TABLE = {
   // `providerAutoJudgeWriteScope`, keyed by host AND harness, on
   // `useProvidersSetAutoJudge`.
   "providers.setAutoJudge": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // Whether the provider settings document is unusable as a whole: a plain
+  // read, latest wins.
+  "providers.settingsFile.status": { ...LATEST_SCHEDULING, poll: null },
+  // Sets that document aside and starts a fresh one. Persisted and not
+  // idempotent across a later corruption, so it is queued, never merged.
+  "providers.settingsFile.reset": {
     mode: "fifo",
     joinResponseTimeoutMs: null,
     poll: null,

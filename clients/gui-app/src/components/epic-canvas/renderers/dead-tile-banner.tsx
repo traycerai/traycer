@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
 import { createReportIssueContext } from "@/lib/report-issue-context";
 import { cn } from "@/lib/utils";
+import { tileHostName } from "./tile-host-load-copy";
 
 /**
  * Dead-tile banners surface the per-tile host binding (CLAUDE.md):
@@ -350,7 +351,11 @@ export type ChatDeadTileBannerReason =
   | "chat-no-longer-shared";
 
 export interface ChatDeadTileBannerProps {
-  readonly hostLabel: string;
+  /**
+   * The bound host's label, or `null` while the directory has not resolved
+   * one - the copy then says "the host" rather than printing a raw id.
+   */
+  readonly hostLabel: string | null;
   readonly reason: ChatDeadTileBannerReason;
   /**
    * Whether the source chat belongs to the signed-in viewer. `false` is a
@@ -399,23 +404,26 @@ export interface ChatDeadTileBannerProps {
  * reasoning `ChatHostStartingBanner` withholds it under.
  *
  * A clone-offering reason must supply `messageWithoutClone` as well, and the
- * union is what forces it: every one of those four sentences ENDS in the clone
- * promise ("continuing here creates a new agent", "cloning creates a new agent
- * from it"), so a viewer who cannot clone must be told the fact WITHOUT that
+ * union is what forces it: every one of those sentences carries the clone
+ * promise ("clone this agent to continue", "cloning creates a new agent from
+ * it"), so a viewer who cannot clone must be told the fact WITHOUT that
  * promise rather than be handed it and have it taken back a sentence later.
  * Adding a fifth clone-offering reason cannot silently skip the variant.
+ *
+ * Each sentence takes the host as `tileHostName` names it: quoted, or "the
+ * host" while no label has resolved.
  */
 type ChatDeadTileBannerCopy =
   | {
-      readonly message: (hostLabel: string) => ReactNode;
+      readonly message: (host: string) => ReactNode;
       readonly reportTitle: string;
       readonly reportMessage: string;
       readonly offersClone: false;
     }
   | {
-      readonly message: (hostLabel: string) => ReactNode;
+      readonly message: (host: string) => ReactNode;
       /** The same fact, stated without the clone promise. */
-      readonly messageWithoutClone: (hostLabel: string) => ReactNode;
+      readonly messageWithoutClone: (host: string) => ReactNode;
       readonly reportTitle: string;
       readonly reportMessage: string;
       readonly offersClone: true;
@@ -425,19 +433,22 @@ const CHAT_DEAD_TILE_BANNER_COPY: Record<
   ChatDeadTileBannerReason,
   ChatDeadTileBannerCopy
 > = {
+  // Leads with what the reader can do, beside the button that does it, and
+  // keeps the cause: over a loaded transcript there is no body below to say
+  // the host is offline, so this sentence is the only one that does.
   "host-offline": {
-    message: (hostLabel) => (
+    message: (host) => (
       <>
-        Bound host &quot;{hostLabel}&quot; is offline. Continuing here creates a
-        new agent on the active host; this one stays bound to &quot;
-        {hostLabel}&quot;.
+        Clone this agent to continue while {host} is offline; the original stays
+        there.
       </>
     ),
-    messageWithoutClone: (hostLabel) => (
+    // No button for this reader, so no action to lead with: what is true for
+    // them, and why there is nothing to press.
+    messageWithoutClone: (host) => (
       <>
-        Bound host &quot;{hostLabel}&quot; is offline, so this agent isn&apos;t
-        available right now. You have view-only access to this task, so it
-        can&apos;t be cloned onto another host.
+        This agent can&apos;t continue here while {host} is offline. You have
+        view-only access to this task, so it can&apos;t be cloned.
       </>
     ),
     reportTitle: "Agent host is offline",
@@ -445,18 +456,18 @@ const CHAT_DEAD_TILE_BANNER_COPY: Record<
     offersClone: true,
   },
   "chat-not-visible": {
-    message: (hostLabel) => (
+    message: (host) => (
       <>
-        This agent&apos;s history isn&apos;t available on &quot;{hostLabel}
-        &quot;. Continuing here creates a new agent on the active host; this one
-        stays bound to &quot;{hostLabel}&quot;.
+        This agent&apos;s history isn&apos;t available on {host}. Continuing
+        here creates a new agent on the active host; this one stays bound to{" "}
+        {host}.
       </>
     ),
-    messageWithoutClone: (hostLabel) => (
+    messageWithoutClone: (host) => (
       <>
-        This agent&apos;s history isn&apos;t available on &quot;{hostLabel}
-        &quot;. You have view-only access to this task, so it can&apos;t be
-        cloned onto another host.
+        This agent&apos;s history isn&apos;t available on {host}. You have
+        view-only access to this task, so it can&apos;t be cloned onto another
+        host.
       </>
     ),
     reportTitle: "Agent history unavailable",
@@ -588,13 +599,14 @@ function foreignOwnerReport(reason: ChatDeadTileBannerReason): {
  */
 function ownChatMessage(
   copy: ChatDeadTileBannerCopy,
-  hostLabel: string,
+  hostLabel: string | null,
   cloneAllowed: boolean,
 ): ReactNode {
+  const host = tileHostName(hostLabel);
   if (copy.offersClone && !cloneAllowed) {
-    return copy.messageWithoutClone(hostLabel);
+    return copy.messageWithoutClone(host);
   }
-  return copy.message(hostLabel);
+  return copy.message(host);
 }
 
 export function ChatDeadTileBanner(props: ChatDeadTileBannerProps): ReactNode {

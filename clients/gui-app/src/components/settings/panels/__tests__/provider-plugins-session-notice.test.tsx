@@ -108,6 +108,7 @@ function pluginsState(
         addModes: ["read-only"],
         marketplaceBrowse: false,
         traycerSessionToolsNotice,
+        openChatsApplyNextMessage: false,
         actionScopes: {
           list: ["global"],
           add: [],

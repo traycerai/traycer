@@ -561,6 +561,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
     pickerStore,
     hostClient,
     harnessId,
+    profileId,
     mentionRoots: resolvedMentionRoots,
     currentEpicId,
     isActive: focused,

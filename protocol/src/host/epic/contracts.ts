@@ -59,6 +59,7 @@ import {
   listCommentThreadsResponseSchema,
   listEpicCollaboratorsRequestSchema,
   listEpicCollaboratorsResponseSchema,
+  listEpicCollaboratorsResponseSchemaPre11,
   getTaskContextsRequestSchema,
   getTaskContextsResponseSchema,
   getTaskContextsResponseSchemaPre14,
@@ -124,6 +125,8 @@ import {
 import type {
   GetTaskContextsResponse,
   GetTaskContextsResponseV10,
+  ListEpicCollaboratorsResponse,
+  ListEpicCollaboratorsResponsePre11,
 } from "@traycer/protocol/host/epic/unary-schemas";
 import {
   epicSubscribeV10,
@@ -800,10 +803,6 @@ export const epicMentionReviewsV10 = defineRpcContract({
   responseSchema: epicMentionReviewsResponseSchema,
 });
 
-// `epic.listCollaborators@1.0` - host-side entry point for the
-// CloudData epic-collaborators query. Schemas are imported from
-// `./unary-schemas` and are the same zod instances CloudDataClient resolves
-// (enforced by epic-list-collaborators-instance-identity.test.ts).
 /**
  * The task's hosts, each with its owner principal and whether the reading
  * host's principal reaches it (ticket E17 checkpoint 4): a pass-through of
@@ -818,11 +817,48 @@ export const epicListTaskHostsV10 = defineRpcContract({
   responseSchema: listTaskHostsResponseSchema,
 });
 
+// `epic.listCollaborators@1.0` - host-side entry point for the
+// CloudData epic-collaborators query, on the hand-frozen released row.
 export const epicListCollaboratorsV10 = defineRpcContract({
   method: "epic.listCollaborators",
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: listEpicCollaboratorsRequestSchema,
+  responseSchema: listEpicCollaboratorsResponseSchemaPre11,
+});
+
+// `epic.listCollaborators@1.1` adds `environmentId` to each row (Tracy Bots):
+// the environment whose principal owns the task, on that Owner row only.
+export const epicListCollaboratorsV11 = defineRpcContract({
+  method: "epic.listCollaborators",
+  schemaVersion: { major: 1, minor: 1 } as const,
+  requestSchema: listEpicCollaboratorsRequestSchema,
   responseSchema: listEpicCollaboratorsResponseSchema,
+});
+
+/**
+ * A 1.0 host knows no environment owner: each of its rows upgrades with
+ * `environmentId: null`, which renders as today's plain team share.
+ */
+function upgradeCollaboratorListV10ToV11(
+  response: ListEpicCollaboratorsResponsePre11,
+): ListEpicCollaboratorsResponse {
+  return {
+    ...response,
+    collaborators: response.collaborators.map((entry) => ({
+      ...entry,
+      environmentId: null,
+    })),
+  };
+}
+
+export const epicListCollaboratorsUpgradeV10ToV11 = defineUpgradePath<
+  typeof epicListCollaboratorsV10,
+  typeof epicListCollaboratorsV11
+>({
+  from: epicListCollaboratorsV10.schemaVersion,
+  to: epicListCollaboratorsV11.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: upgradeCollaboratorListV10ToV11,
 });
 
 // Artifact mutations - resolver bodies added in subsequent tickets.
@@ -1196,26 +1232,80 @@ export const epicUpdateTitleV10 = defineRpcContract({
   responseSchema: updateEpicResponseSchema,
 });
 
-// Collaborator mutations - resolver bodies added in subsequent tickets.
+// Collaborator mutations. Each answers the collaborator list after the
+// write; 1.1 carries the same `environmentId` row as
+// `epic.listCollaborators@1.1`, so a client that writes the answer into its
+// list cache keeps the Owner row. 1.0 answers the hand-frozen released row.
 export const epicGrantAccessV10 = defineRpcContract({
   method: "epic.grantAccess",
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: grantEpicAccessRequestSchema,
+  responseSchema: listEpicCollaboratorsResponseSchemaPre11,
+});
+
+export const epicGrantAccessV11 = defineRpcContract({
+  method: "epic.grantAccess",
+  schemaVersion: { major: 1, minor: 1 } as const,
+  requestSchema: grantEpicAccessRequestSchema,
   responseSchema: grantEpicAccessResponseSchema,
+});
+
+export const epicGrantAccessUpgradeV10ToV11 = defineUpgradePath<
+  typeof epicGrantAccessV10,
+  typeof epicGrantAccessV11
+>({
+  from: epicGrantAccessV10.schemaVersion,
+  to: epicGrantAccessV11.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: upgradeCollaboratorListV10ToV11,
 });
 
 export const epicBatchUpdateRolesV10 = defineRpcContract({
   method: "epic.batchUpdateRoles",
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: batchUpdateEpicRolesRequestSchema,
+  responseSchema: listEpicCollaboratorsResponseSchemaPre11,
+});
+
+export const epicBatchUpdateRolesV11 = defineRpcContract({
+  method: "epic.batchUpdateRoles",
+  schemaVersion: { major: 1, minor: 1 } as const,
+  requestSchema: batchUpdateEpicRolesRequestSchema,
   responseSchema: batchUpdateEpicRolesResponseSchema,
+});
+
+export const epicBatchUpdateRolesUpgradeV10ToV11 = defineUpgradePath<
+  typeof epicBatchUpdateRolesV10,
+  typeof epicBatchUpdateRolesV11
+>({
+  from: epicBatchUpdateRolesV10.schemaVersion,
+  to: epicBatchUpdateRolesV11.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: upgradeCollaboratorListV10ToV11,
 });
 
 export const epicRevokeCollaboratorV10 = defineRpcContract({
   method: "epic.revokeCollaborator",
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: revokeEpicCollaboratorRequestSchema,
+  responseSchema: listEpicCollaboratorsResponseSchemaPre11,
+});
+
+export const epicRevokeCollaboratorV11 = defineRpcContract({
+  method: "epic.revokeCollaborator",
+  schemaVersion: { major: 1, minor: 1 } as const,
+  requestSchema: revokeEpicCollaboratorRequestSchema,
   responseSchema: revokeEpicCollaboratorResponseSchema,
+});
+
+export const epicRevokeCollaboratorUpgradeV10ToV11 = defineUpgradePath<
+  typeof epicRevokeCollaboratorV10,
+  typeof epicRevokeCollaboratorV11
+>({
+  from: epicRevokeCollaboratorV10.schemaVersion,
+  to: epicRevokeCollaboratorV11.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: upgradeCollaboratorListV10ToV11,
 });
 
 // Comment-thread mutations - gui-app authors threads against the same Y.Doc

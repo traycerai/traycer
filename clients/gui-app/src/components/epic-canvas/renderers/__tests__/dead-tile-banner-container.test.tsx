@@ -278,8 +278,9 @@ describe("ChatDeadTileBannerContainer - ownership + role resolution", () => {
     await settleEpicSession();
 
     const text = screen.getByTestId("banner-under-test").textContent;
-    expect(text).toContain("is offline");
-    expect(text).toContain("stays bound to");
+    expect(text).toContain(
+      'Clone this agent to continue while "owner-host-1" is offline; the original stays there.',
+    );
     expect(text).not.toContain("belongs to another collaborator");
   });
 

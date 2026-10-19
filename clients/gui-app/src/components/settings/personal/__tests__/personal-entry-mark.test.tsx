@@ -289,7 +289,7 @@ interface Rig {
 }
 
 const READY_HOST: HostOptions = {
-  nativeMutate: { major: 1, minor: 2 },
+  nativeMutate: { major: 1, minor: 3 },
   principalReady: true,
   applied: [],
 };
@@ -525,12 +525,12 @@ describe("A `claude mcp add` entry on the MCP servers page", () => {
     expect(rig.sent).toEqual([]);
   });
 
-  // 1.1 is main's released line, which refuses `promoteToPersonal`.
-  it("says where the entry is, with no button, on a host at nativeMutate 1.1", async () => {
+  // 1.2 is the line below `promoteToPersonal`, which refuses it.
+  it("says where the entry is, with no button, on a host at nativeMutate 1.2", async () => {
     listMock.servers = [mcpServer("github")];
     const rig = renderPage("mcp-servers", mcpPage(), {
       ...READY_HOST,
-      nativeMutate: { major: 1, minor: 1 },
+      nativeMutate: { major: 1, minor: 2 },
     });
 
     const mark = await within(mcpRow("github")).findByTestId(MARK);

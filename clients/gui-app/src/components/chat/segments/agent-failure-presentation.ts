@@ -112,6 +112,7 @@ const INTERRUPTED_UNTYPED_CODES: ReadonlyMap<string, string> = new Map([
   // its team's member set for a moment. The host's message says which.
   ["TEAM_MEMBER_REMOVED", "Member left the team"],
   ["TEAM_HOST_RECONNECTING", "Waiting for the team's host"],
+  ["CLAUDE_PREVIOUS_SESSION_STOPPING", "Previous session still stopping"],
 ]);
 
 export interface UntypedCodePresentation {

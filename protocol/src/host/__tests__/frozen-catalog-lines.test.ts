@@ -12,6 +12,7 @@ import {
   listAgentsResponseSchemaV91,
   listAgentsResponseSchemaV92,
   listAgentsResponseSchemaV100,
+  listAgentsResponseSchemaV101,
   listAgentsResponseSchema,
 } from "@traycer/protocol/host/agent/shared";
 import {
@@ -37,13 +38,15 @@ import {
   providersListResponseSchema,
   providersListResponseSchemaV100Preimage,
   providersListResponseSchemaV101Preimage,
+  providersListResponseSchemaV102Preimage,
+  providersListResponseSchemaV103Preimage,
+  providersListResponseSchemaV104Preimage,
   providersUsePackVersionResponseSchema,
   providersUsePackVersionResponseSchemaV10,
   providersListResponseSchemaV70,
   providersListResponseSchemaV90,
   providersListResponseSchemaV91,
   providersListResponseSchemaV92,
-  providersListResponseSchemaV102Preimage,
   providersListResponseSchemaV80,
   providersListResponseSchemaV10,
   providersListResponseSchemaV20,
@@ -144,13 +147,16 @@ const LIVE_FROZEN_EXPORTS = {
   // 9.2 froze when `commandcode` opened 10.0 (`1.5.0` shipped 9.1); its dump
   // did not change by the freeze.
   "agent.list@9.2": listAgentsResponseSchemaV92,
-  // 10.0 froze when 10.1 opened to put `reach` and `hostConnectivity` on the
-  // row (ticket E17); `1.5.1` shipped 10.0, and its dump did not change by the
-  // freeze.
+  // 10.0 froze when 10.1 opened to put the run tuple on the row. It is
+  // RELEASED (`host-v1.5.1` registers `agent.list@10.0`), so it names its own
+  // frozen schema and must not regenerate.
   "agent.list@10.0": listAgentsResponseSchemaV100,
-  // The head line, holding 10.0's old job: it names the LIVE schema, so the
+  // 10.1 froze when 10.2 opened to put `reach` and `hostConnectivity` on the
+  // row. Its dump did not change by the freeze.
+  "agent.list@10.1": listAgentsResponseSchemaV101,
+  // The head line, holding 10.1's old job: it names the LIVE schema, so the
   // next attempt to grow the agent summary fails here first.
-  "agent.list@10.1": listAgentsResponseSchema,
+  "agent.list@10.2": listAgentsResponseSchema,
   "providers.list@1.0": providersListResponseSchemaV10,
   "providers.list@2.0": providersListResponseSchemaV20,
   "providers.list@3.0": providersListResponseSchemaV30,
@@ -275,13 +281,18 @@ const LIVE_FROZEN_EXPORTS = {
   // shape, so a released 10.1 reader never sees a key it cannot spell. Its dump
   // did not change by the freeze.
   "providers.list@10.1": providersListResponseSchemaV101Preimage,
-  // 10.2 froze when `credentialsManagedInAccount`, `scope` and `onHostOnly`
-  // opened 10.3 (ticket E7): its envelope is the two-key shape. Its dump did
-  // not change by the freeze.
+  // 10.2 froze when MCP origin, coverage and decidedBy opened 10.3: its MCP rows
+  // are the pre-field shape. Its dump did not change by the freeze.
   "providers.list@10.2": providersListResponseSchemaV102Preimage,
+  // Kilo's published 10.3 retains its MCP result and error values.
+  "providers.list@10.3": providersListResponseSchemaV103Preimage,
+  // 10.4 froze when `credentialsManagedInAccount`, `scope` and `onHostOnly`
+  // opened 10.5: its envelope is the two-key shape. Its dump did not change by
+  // the freeze.
+  "providers.list@10.4": providersListResponseSchemaV104Preimage,
   // The head line: it names the LIVE schema, so the next growth of the provider
   // state fails here first.
-  "providers.list@10.3": providersListResponseSchema,
+  "providers.list@10.5": providersListResponseSchema,
   // 1.0 is hand-frozen at the three-code failure arm when `macos-ineligible`
   // opened 1.1; its dump did not change by the freeze.
   "providers.usePackVersion@1.0": providersUsePackVersionResponseSchemaV10,

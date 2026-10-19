@@ -24,6 +24,7 @@ import {
   tryReserveLandingImageBudget,
 } from "@/lib/composer/landing-image-budget";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
+import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import {
   BrowserSessionsContext,
   type BrowserSessionsState,
@@ -136,6 +137,29 @@ const MOCK_HOST_DIRECTORY = {
   findById: (hostId: string) =>
     hostId === MOCK_HOST_ENTRY.hostId ? MOCK_HOST_ENTRY : null,
 };
+
+// The directory list the reachability hook reads. `null` leaves the real hook
+// in charge (this file mounts no host binding, so it answers nothing); a case
+// that needs the directory to name a host sets it and `afterEach` clears it.
+const directoryListTestState = vi.hoisted(() => ({
+  entries: null as readonly HostDirectoryEntry[] | null,
+}));
+
+vi.mock("@/hooks/host/use-host-directory-list-query", async (importActual) => {
+  const actual =
+    await importActual<
+      typeof import("@/hooks/host/use-host-directory-list-query")
+    >();
+  return {
+    ...actual,
+    useHostDirectoryList: () => {
+      const real = actual.useHostDirectoryList();
+      const entries = directoryListTestState.entries;
+      if (entries === null) return real;
+      return { ...real, data: entries, fetchStatus: "idle" as const };
+    },
+  };
+});
 
 // ENUMERATES deliberately - do NOT convert to an `importOriginal` spread.
 // `@/lib/host` is a barrel of provider-coupled hooks, so the un-overridden
@@ -1583,6 +1607,7 @@ describe("<ChatTile />", () => {
     chatHarness.teardown();
     resetNegotiatedManifests();
     useSelectionAuthorityStore.getState().reset();
+    directoryListTestState.entries = null;
     useInitialChatHandoffStore.getState().resetForTests();
     useComposerDraftStore.setState({
       drafts: {},
@@ -1769,6 +1794,36 @@ describe("<ChatTile />", () => {
           .getAttribute("data-wait-began-at"),
       ),
     ).toBe(began + 5_000);
+  });
+
+  it("names the offline host in the Clone banner over a transcript that has already loaded", async () => {
+    directoryListTestState.entries = [
+      {
+        hostId: HOST_ID,
+        label: "Office Mac",
+        kind: "remote",
+        websocketUrl: "wss://office.example.com/rpc",
+        version: "1.0.0",
+        transportDialability: "dialable",
+      },
+    ];
+    useSelectionAuthorityStore.setState({
+      attached: true,
+      leases: [
+        { hostId: HOST_ID, status: "dead", dead: { reason: "offline" } },
+      ],
+    });
+    renderChatTile();
+    await advanceLegendListTime(0);
+    await waitFor(() => {
+      expect(screen.queryByTestId("chat-tile-pre-content-chat-1")).toBeNull();
+    });
+
+    // The snapshot has landed, so the pre-content body is gone and the banner
+    // is the only sentence left that says why the host cannot be reached.
+    expect(screen.queryByTestId("chat-tile-pre-content-chat-1")).toBeNull();
+    const banner = screen.getByTestId("chat-dead-tile-chat-1");
+    expect(banner.textContent).toContain('while "Office Mac" is offline');
   });
 
   it("escalates at once when Try again's redial cannot start, because nothing retries a closed store (G2)", async () => {

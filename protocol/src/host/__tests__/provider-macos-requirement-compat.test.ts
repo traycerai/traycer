@@ -9,6 +9,9 @@ import {
   providerCliStateSchema,
   providerMutationCliStateSchemaV21,
   providersListResponseSchema,
+  providersListResponseSchemaV102Preimage,
+  providersListResponseSchemaV103Preimage,
+  providersListResponseSchemaV104Preimage,
   providersUsePackVersionResponseSchema,
 } from "@traycer/protocol/host/provider-schemas";
 
@@ -60,10 +63,11 @@ const MACOS_INELIGIBLE = {
 } as const;
 
 describe("providers.list@10.2 carries macosRequirement", () => {
-  it("opens 10.2 on major 10", () => {
+  it("keeps list@10.2 registered after the next minor opens", () => {
     const entry = hostRpcRegistry["providers.list"][10];
-    // 10.3 opened above it for the ticket E7 envelope keys.
-    expect(entry.latestMinor).toBe(3);
+    // 10.3 (MCP origin), 10.4 (open-chat plugins) and 10.5 (the envelope
+    // keys) opened above it.
+    expect(entry.latestMinor).toBe(5);
     expect(entry.versions[2].contract.schemaVersion).toEqual({
       major: 10,
       minor: 2,
@@ -148,7 +152,7 @@ describe("providers.list@10.2 carries macosRequirement", () => {
     expect(echo).not.toHaveProperty("macosRequirement");
   });
 
-  it("binds 10.1 to its own preimage instead of the live response", () => {
+  it("binds 10.1 and 10.2 to preimages instead of the live response", () => {
     const preimage = Reflect.get(
       providerSchemas,
       "providersListResponseSchemaV101Preimage",
@@ -157,18 +161,25 @@ describe("providers.list@10.2 carries macosRequirement", () => {
     expect(
       hostRpcRegistry["providers.list"][10].versions[1].contract,
     ).toMatchObject({ responseSchema: preimage });
-    // 10.2 froze at its own preimage when 10.3 opened (ticket E7); the head
-    // names the live response.
+    // Each earlier line binds its own preimage; the head names the live
+    // response.
     expect(
       hostRpcRegistry["providers.list"][10].versions[2].contract,
     ).toMatchObject({
-      responseSchema: Reflect.get(
-        providerSchemas,
-        "providersListResponseSchemaV102Preimage",
-      ),
+      responseSchema: providersListResponseSchemaV102Preimage,
     });
     expect(
       hostRpcRegistry["providers.list"][10].versions[3].contract,
+    ).toMatchObject({
+      responseSchema: providersListResponseSchemaV103Preimage,
+    });
+    expect(
+      hostRpcRegistry["providers.list"][10].versions[4].contract,
+    ).toMatchObject({
+      responseSchema: providersListResponseSchemaV104Preimage,
+    });
+    expect(
+      hostRpcRegistry["providers.list"][10].versions[5].contract,
     ).toMatchObject({ responseSchema: providersListResponseSchema });
   });
 

@@ -6,14 +6,16 @@ import {
 } from "@traycer/protocol/framework/index";
 import {
   agentListDowngradeV10ToV9,
-  agentListUpgradeV100ToV101,
+  agentListUpgradeV101ToV102,
   agentListV100,
   agentListV101,
+  agentListV102,
 } from "@traycer/protocol/host/agent/contracts";
 import {
   agentSummarySchema,
   listAgentsResponseSchema,
   listAgentsResponseSchemaV100,
+  listAgentsResponseSchemaV101,
 } from "@traycer/protocol/host/agent/shared";
 import { epicListTaskHostsV10 } from "@traycer/protocol/host/epic/contracts";
 import { hostRpcRegistry } from "@traycer/protocol/host/registry";
@@ -38,7 +40,7 @@ import {
 
 /**
  * Wire shapes ticket E17 checkpoint 1 adds: the `principal_mismatch` error
- * code, `agent.list@10.1`, the host list `owner`, the sandbox card's member
+ * code, `agent.list@10.2`, the host list `owner`, the sandbox card's member
  * names, the task host row and `epic.listTaskHosts`, and the member-credential handoff on the
  * `CREDENTIAL_UPDATE` frame. Each case reads the shape through the schema a
  * peer would, so a missing key, a loosened arm or a wrong default fails here
@@ -57,7 +59,7 @@ describe("principal_mismatch error code", () => {
   });
 });
 
-describe("agent.list@10.1", () => {
+describe("agent.list@10.2", () => {
   const BASE_ROW = {
     id: "agent-1",
     parentId: null,
@@ -75,10 +77,12 @@ describe("agent.list@10.1", () => {
     sessionState: null,
     lastExit: null,
     archived: false,
+    profile: null,
+    permissionMode: null,
   };
   const CALLER = { agentId: "agent-1", canSendMessages: true };
 
-  const V101_RESPONSE = listAgentsResponseSchema.parse({
+  const V102_RESPONSE = listAgentsResponseSchema.parse({
     caller: CALLER,
     scope: "user",
     agents: [
@@ -108,26 +112,26 @@ describe("agent.list@10.1", () => {
     ],
   });
 
-  const V100_RESPONSE = listAgentsResponseSchemaV100.parse({
+  const V101_RESPONSE = listAgentsResponseSchemaV101.parse({
     caller: CALLER,
     scope: "user",
     agents: [BASE_ROW, { ...BASE_ROW, id: "agent-2", isSelf: false }],
   });
 
   it("keeps reach and hostConnectivity on the head schema", () => {
-    expect(V101_RESPONSE.agents.map((row) => row.reach)).toEqual([
+    expect(V102_RESPONSE.agents.map((row) => row.reach)).toEqual([
       "same_principal",
       "other_principal",
       null,
     ]);
-    expect(V101_RESPONSE.agents[1].hostConnectivity).toEqual({
+    expect(V102_RESPONSE.agents[1].hostConnectivity).toEqual({
       kind: "known",
       connectivity: "offline",
       observedAt: 1_791_000_000_000,
     });
   });
 
-  it("requires both keys on the head row, so a 10.0 row cannot ride as a 10.1 one", () => {
+  it("requires both keys on the head row, so a 10.1 row cannot ride as a 10.2 one", () => {
     expect(agentSummarySchema.safeParse(BASE_ROW).success).toBe(false);
     expect(
       agentSummarySchema.safeParse({ ...BASE_ROW, reach: null }).success,
@@ -157,30 +161,31 @@ describe("agent.list@10.1", () => {
     ).toBe(false);
   });
 
-  it("strips both keys from every row when a 10.0 caller's contract parses a 10.1 answer", () => {
-    const asTenZero = listAgentsResponseSchemaV100.parse(V101_RESPONSE);
+  it("strips both keys from every row when a 10.1 caller's contract parses a 10.2 answer", () => {
+    const asTenOne = listAgentsResponseSchemaV101.parse(V102_RESPONSE);
 
-    expect(asTenZero.agents).toHaveLength(3);
-    for (const row of asTenZero.agents) {
+    expect(asTenOne.agents).toHaveLength(3);
+    for (const row of asTenOne.agents) {
       expect(Object.hasOwn(row, "reach")).toBe(false);
       expect(Object.hasOwn(row, "hostConnectivity")).toBe(false);
     }
     // Nothing else about the row moved.
-    expect(asTenZero.agents[1]).toMatchObject({
+    expect(asTenOne.agents[1]).toMatchObject({
       id: "agent-2",
       archived: false,
       harnessId: "codex",
     });
   });
 
-  it("names the frozen 10.0 schema on the @10.0 contract and the canonical one on the head", () => {
+  it("names the frozen schemas on the @10.0 and @10.1 contracts and the canonical one on the head", () => {
     expect(agentListV100.responseSchema).toBe(listAgentsResponseSchemaV100);
-    expect(agentListV101.responseSchema).toBe(listAgentsResponseSchema);
-    expect(agentListV101.schemaVersion).toEqual({ major: 10, minor: 1 });
+    expect(agentListV101.responseSchema).toBe(listAgentsResponseSchemaV101);
+    expect(agentListV102.responseSchema).toBe(listAgentsResponseSchema);
+    expect(agentListV102.schemaVersion).toEqual({ major: 10, minor: 2 });
   });
 
-  it("upgrades a 10.0 response by stamping reach: null and hostConnectivity: unknown on every row", () => {
-    const upgraded = agentListUpgradeV100ToV101.upgradeResponse(V100_RESPONSE);
+  it("upgrades a 10.1 response by stamping reach: null and hostConnectivity: unknown on every row", () => {
+    const upgraded = agentListUpgradeV101ToV102.upgradeResponse(V101_RESPONSE);
 
     expect(upgraded.agents).toHaveLength(2);
     for (const row of upgraded.agents) {
@@ -189,8 +194,8 @@ describe("agent.list@10.1", () => {
       // `unknown`, never `offline`: an older host was never asked.
       expect(row.hostConnectivity.kind).not.toBe("known");
     }
-    expect(upgraded.caller).toEqual(V100_RESPONSE.caller);
-    expect(upgraded.scope).toBe(V100_RESPONSE.scope);
+    expect(upgraded.caller).toEqual(V101_RESPONSE.caller);
+    expect(upgraded.scope).toBe(V101_RESPONSE.scope);
     expect(upgraded.agents.map((row) => row.id)).toEqual([
       "agent-1",
       "agent-2",
@@ -198,31 +203,32 @@ describe("agent.list@10.1", () => {
     expect(() => listAgentsResponseSchema.parse(upgraded)).not.toThrow();
   });
 
-  it("leaves the request untouched on the 10.0 -> 10.1 upgrade", () => {
+  it("leaves the request untouched on the 10.1 -> 10.2 upgrade", () => {
     const request = {
       epicId: "epic-1",
       senderAgentId: "agent-1",
       scope: "all" as const,
     };
-    expect(agentListUpgradeV100ToV101.from).toEqual({ major: 10, minor: 0 });
-    expect(agentListUpgradeV100ToV101.to).toEqual({ major: 10, minor: 1 });
-    expect(agentListUpgradeV100ToV101.upgradeRequest(request)).toEqual(request);
+    expect(agentListUpgradeV101ToV102.from).toEqual({ major: 10, minor: 1 });
+    expect(agentListUpgradeV101ToV102.to).toEqual({ major: 10, minor: 2 });
+    expect(agentListUpgradeV101ToV102.upgradeRequest(request)).toEqual(request);
   });
 
-  it("registers 10.1 as the latest minor of major 10, over the 10.0 contract", () => {
+  it("registers 10.2 as the latest minor of major 10, over the 10.0 and 10.1 contracts", () => {
     const line = hostRpcRegistry["agent.list"][10];
 
-    expect(line.latestMinor).toBe(1);
+    expect(line.latestMinor).toBe(2);
     expect(line.versions[0].contract).toBe(agentListV100);
     expect(line.versions[1].contract).toBe(agentListV101);
+    expect(line.versions[2].contract).toBe(agentListV102);
   });
 
-  it("starts the 10 -> 9 bridge at 10.1 and drops both keys on the way out", () => {
-    expect(agentListDowngradeV10ToV9.from).toEqual({ major: 10, minor: 1 });
+  it("starts the 10 -> 9 bridge at 10.2 and drops both keys on the way out", () => {
+    expect(agentListDowngradeV10ToV9.from).toEqual({ major: 10, minor: 2 });
     expect(agentListDowngradeV10ToV9.to).toEqual({ major: 9, minor: 2 });
 
     const downgraded =
-      agentListDowngradeV10ToV9.downgradeResponse(V101_RESPONSE);
+      agentListDowngradeV10ToV9.downgradeResponse(V102_RESPONSE);
 
     expect(downgraded.ok).toBe(true);
     if (!downgraded.ok) throw new Error("expected the downgrade to succeed");
@@ -234,12 +240,12 @@ describe("agent.list@10.1", () => {
     }
   });
 
-  it("carries a 10.1 answer down to a major-9 caller through the registry without either key", () => {
+  it("carries a 10.2 answer down to a major-9 caller through the registry without either key", () => {
     const result = downgradeResponseAcrossMajors(
       hostRpcRegistry["agent.list"],
       10,
       9,
-      V101_RESPONSE,
+      V102_RESPONSE,
     );
 
     expect(result.ok).toBe(true);

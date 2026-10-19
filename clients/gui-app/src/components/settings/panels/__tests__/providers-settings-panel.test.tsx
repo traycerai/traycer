@@ -159,7 +159,7 @@ type CancelLoginVariables = RequestOfMethod<
 >;
 
 // The `providers.list` envelope as this harness serves it. The flag is the
-// `providers.list@10.3` key a sandbox host sets; every other host omits it.
+// `providers.list@10.5` key a sandbox host sets; every other host omits it.
 interface ProvidersListEnvelope {
   providers: ProviderCliState[];
   credentialsManagedInAccount?: boolean;
@@ -222,6 +222,39 @@ const providerMocks = vi.hoisted(() => {
     credentialRefusal: null as string | null,
   };
 });
+
+// The optional "Reset provider settings" capability. `unsupportedMethods` is
+// what a host that predates `providers.settingsFile.*` would not advertise;
+// the status hook and the reset mutation are stubbed at their module seams
+// (this suite renders without a `QueryClientProvider`, like every other data
+// hook it uses). The hooks' own behavior - the request, the toast, the refetch
+// - is held by `provider-settings-reset-action.test.tsx`.
+type ResetSettingsFileMutate = (
+  variables: Record<string, never>,
+  options: { readonly onSettled: () => void },
+) => void;
+
+const settingsFileMocks = vi.hoisted(() => ({
+  unsupportedMethods: new Set<string>(),
+  statusData: undefined as { readonly unreadable: boolean } | undefined,
+  /** The `enabled` argument of every `useProvidersSettingsFileStatus` call. */
+  statusEnabledArgs: [] as boolean[],
+  resetMutate: vi.fn<ResetSettingsFileMutate>(),
+}));
+
+vi.mock("@/hooks/providers/use-providers-settings-file-status-query", () => ({
+  useProvidersSettingsFileStatus: (enabled: boolean) => {
+    settingsFileMocks.statusEnabledArgs.push(enabled);
+    return { data: enabled ? settingsFileMocks.statusData : undefined };
+  },
+}));
+
+vi.mock("@/hooks/providers/use-providers-settings-file-reset-mutation", () => ({
+  useProvidersSettingsFileReset: () => ({
+    mutate: settingsFileMocks.resetMutate,
+    isPending: false,
+  }),
+}));
 
 // The auto-judge row the panel now renders reaches TanStack Query for the
 // harness catalog and the set-judge mutation. This suite renders the panel
@@ -577,7 +610,11 @@ vi.mock("@/hooks/host/use-host-supports-method", async (importOriginal) => {
     await importOriginal<
       typeof import("@/hooks/host/use-host-supports-method")
     >();
-  return { ...actual, useHostSupportsMethod: () => true };
+  return {
+    ...actual,
+    useHostSupportsMethod: (_hostId: string | null, method: string) =>
+      !settingsFileMocks.unsupportedMethods.has(method),
+  };
 });
 
 vi.mock("@/hooks/providers/use-providers-detect-version-query", () => ({
@@ -982,6 +1019,12 @@ import {
   ProvidersSettingsPanel,
   SkillsSettingsPanel,
 } from "@/components/settings/panels/providers-settings-panel";
+import {
+  PROVIDER_SETTINGS_RESET_CONSENT,
+  PROVIDER_SETTINGS_RESET_LABEL,
+  PROVIDER_SETTINGS_RESET_TITLE,
+  PROVIDER_SETTINGS_UNUSABLE_COPY,
+} from "@/components/settings/panels/provider-settings-reset-action";
 import { ProviderProfileScopedSection } from "@/components/settings/panels/provider-profile-scoped-section";
 import {
   AMBIENT_AUTH_PENDING_REPOLL_CAP,
@@ -1112,6 +1155,7 @@ const FULL_TABS: ProviderNativeCapabilities = {
       setEnabled: [...BOTH_SCOPES],
     },
     traycerSessionToolsNotice: false,
+    openChatsApplyNextMessage: false,
   },
   skills: {
     actionScopes: {
@@ -1142,6 +1186,7 @@ const CURSOR_TABS: ProviderNativeCapabilities = {
       setEnabled: [],
     },
     traycerSessionToolsNotice: false,
+    openChatsApplyNextMessage: false,
   },
   skills: {
     actionScopes: {
@@ -1642,6 +1687,10 @@ describe("<ProvidersSettingsPanel />", () => {
     providerMocks.removeProfileMutate.mockReset();
     providerMocks.refreshProviders.mockClear();
     providerMocks.refreshUsageLimits.mockClear();
+    settingsFileMocks.unsupportedMethods.clear();
+    settingsFileMocks.statusData = undefined;
+    settingsFileMocks.statusEnabledArgs.length = 0;
+    settingsFileMocks.resetMutate.mockReset();
     vi.mocked(toast.success).mockClear();
     hostScopeMocks.setHostId.mockClear();
     hostScopeMocks.hostId = "host-a";
@@ -2009,6 +2058,177 @@ describe("<ProvidersSettingsPanel />", () => {
     expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
   });
 
+  describe("Reset provider settings", () => {
+    const READ_FAULT_MESSAGE = `${PROVIDER_SETTINGS_UNREADABLE_MESSAGE_PREFIX}: EIO reading config/provider-overrides.json`;
+
+    function renderPanel(): void {
+      render(
+        <TooltipProvider>
+          <ProvidersSettingsPanel />
+        </TooltipProvider>,
+      );
+    }
+
+    function failListWithReadFault(): void {
+      providerMocks.listResult.isError = true;
+      providerMocks.listResult.error = {
+        message: READ_FAULT_MESSAGE,
+        code: "RPC_ERROR",
+      };
+    }
+
+    function openResetDialog(): HTMLElement {
+      fireEvent.click(
+        screen.getByRole("button", { name: PROVIDER_SETTINGS_RESET_LABEL }),
+      );
+      return screen.getByRole("dialog", {
+        name: PROVIDER_SETTINGS_RESET_TITLE,
+      });
+    }
+
+    it("offers the reset above the providers when the host reports the whole settings file unreadable", () => {
+      settingsFileMocks.statusData = { unreadable: true };
+
+      renderPanel();
+
+      const alert = screen.getByRole("alert");
+      expect(
+        within(alert).getByText(PROVIDER_SETTINGS_UNUSABLE_COPY),
+      ).toBeDefined();
+      expect(
+        within(alert).getByRole("button", {
+          name: PROVIDER_SETTINGS_RESET_LABEL,
+        }),
+      ).toBeDefined();
+      const providers = screen.getByRole("navigation", { name: "Providers" });
+      expect(
+        alert.compareDocumentPosition(providers) &
+          Node.DOCUMENT_POSITION_FOLLOWING,
+      ).toBeTruthy();
+    });
+
+    it("offers no reset when the status answer is not unreadable (one malformed row, or a healthy file)", () => {
+      settingsFileMocks.statusData = { unreadable: false };
+
+      renderPanel();
+
+      expect(screen.queryByRole("alert")).toBeNull();
+      expect(screen.queryByText(PROVIDER_SETTINGS_UNUSABLE_COPY)).toBeNull();
+      expect(
+        screen.queryByRole("button", { name: PROVIDER_SETTINGS_RESET_LABEL }),
+      ).toBeNull();
+    });
+
+    it("offers the reset beside Retry on the read-fault card", () => {
+      failListWithReadFault();
+
+      renderPanel();
+
+      expect(screen.getByText(PROVIDER_SETTINGS_UNREADABLE_COPY)).toBeDefined();
+      expect(screen.getByRole("button", { name: "Retry" })).toBeDefined();
+      expect(
+        screen.getByRole("button", { name: PROVIDER_SETTINGS_RESET_LABEL }),
+      ).toBeDefined();
+    });
+
+    it.each([
+      ["providers.settingsFile.status"],
+      ["providers.settingsFile.reset"],
+    ])(
+      "offers no reset and never asks for the status when the host does not advertise %s",
+      (missing) => {
+        settingsFileMocks.unsupportedMethods.add(missing);
+        settingsFileMocks.statusData = { unreadable: true };
+
+        renderPanel();
+
+        expect(screen.queryByRole("alert")).toBeNull();
+        expect(
+          screen.queryByRole("button", { name: PROVIDER_SETTINGS_RESET_LABEL }),
+        ).toBeNull();
+        expect(settingsFileMocks.statusEnabledArgs).not.toContain(true);
+      },
+    );
+
+    it("offers no reset on the read-fault card when the host does not advertise the methods", () => {
+      settingsFileMocks.unsupportedMethods.add("providers.settingsFile.status");
+      settingsFileMocks.unsupportedMethods.add("providers.settingsFile.reset");
+      failListWithReadFault();
+
+      renderPanel();
+
+      expect(screen.getByText(PROVIDER_SETTINGS_UNREADABLE_COPY)).toBeDefined();
+      expect(screen.getByRole("button", { name: "Retry" })).toBeDefined();
+      expect(
+        screen.queryByRole("button", { name: PROVIDER_SETTINGS_RESET_LABEL }),
+      ).toBeNull();
+      expect(settingsFileMocks.statusEnabledArgs).not.toContain(true);
+    });
+
+    it("asks for consent in a dialog and sends nothing until it is confirmed", () => {
+      settingsFileMocks.statusData = { unreadable: true };
+      renderPanel();
+
+      const dialog = openResetDialog();
+
+      expect(
+        within(dialog).getByText(PROVIDER_SETTINGS_RESET_CONSENT),
+      ).toBeDefined();
+      expect(settingsFileMocks.resetMutate).not.toHaveBeenCalled();
+    });
+
+    it("sends nothing when the dialog is cancelled", () => {
+      settingsFileMocks.statusData = { unreadable: true };
+      renderPanel();
+
+      const dialog = openResetDialog();
+      fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+
+      expect(settingsFileMocks.resetMutate).not.toHaveBeenCalled();
+      expect(
+        screen.queryByRole("dialog", { name: PROVIDER_SETTINGS_RESET_TITLE }),
+      ).toBeNull();
+    });
+
+    it("sends exactly one reset with empty params on confirm, and closes the dialog once it settles", () => {
+      settingsFileMocks.statusData = { unreadable: true };
+      renderPanel();
+
+      const dialog = openResetDialog();
+      fireEvent.click(
+        within(dialog).getByRole("button", {
+          name: PROVIDER_SETTINGS_RESET_LABEL,
+        }),
+      );
+
+      expect(settingsFileMocks.resetMutate).toHaveBeenCalledTimes(1);
+      const call = settingsFileMocks.resetMutate.mock.calls.at(0);
+      if (call === undefined) throw new Error("Expected a reset request.");
+      expect(call[0]).toEqual({});
+      act(() => {
+        call[1].onSettled();
+      });
+      expect(
+        screen.queryByRole("dialog", { name: PROVIDER_SETTINGS_RESET_TITLE }),
+      ).toBeNull();
+    });
+
+    it("sends the reset from the read-fault card too", () => {
+      failListWithReadFault();
+      renderPanel();
+
+      const dialog = openResetDialog();
+      fireEvent.click(
+        within(dialog).getByRole("button", {
+          name: PROVIDER_SETTINGS_RESET_LABEL,
+        }),
+      );
+
+      expect(settingsFileMocks.resetMutate).toHaveBeenCalledTimes(1);
+      expect(settingsFileMocks.resetMutate.mock.calls.at(0)?.[0]).toEqual({});
+    });
+  });
+
   it("lists OpenCode CLI candidates for Traycer and mutates Traycer selection", () => {
     render(
       <TooltipProvider>
@@ -2121,6 +2341,7 @@ describe("<ProvidersSettingsPanel />", () => {
                 setEnabled: [],
               },
               traycerSessionToolsNotice: true,
+              openChatsApplyNextMessage: false,
             },
             skills: null,
             modelProviders: null,

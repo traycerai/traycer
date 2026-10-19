@@ -2868,6 +2868,7 @@ describe("ChatMessages scroll policy", () => {
             spawnToolCallId: null,
             parentId: null,
             workflowMeta: null,
+            toolImageResults: [],
             children: [
               {
                 id: "drill-text",
@@ -6924,7 +6925,7 @@ describe("ChatMessages scroll policy", () => {
       // the persistence gate it armed, so skipping the replay for an intact
       // box while the gate is still up would strand it: every later scroll
       // capture no-ops until a publishing reader gesture, and the next hide
-      // republishes the stale position (CodeRabbit on OSS #2591).
+      // republishes the stale position.
       const messages = makeCompletedTranscript(200);
       const anchorIndex = 20;
       const savedViewOffset = 24;

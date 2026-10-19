@@ -406,6 +406,7 @@ describe("providers.list@7.0 upgrade/downgrade bridges", () => {
                 setEnabled: [],
               },
               traycerSessionToolsNotice: true,
+              openChatsApplyNextMessage: false,
             },
             skills: null,
             modelProviders: null,
@@ -818,7 +819,13 @@ describe("carrier envelopes (object-preserving, no unions)", () => {
       providersNativeMutateResponseSchema.parse({
         result: { ok: true, kind: "mcp", servers: [] },
       }).result,
-    ).toEqual({ ok: true, kind: "mcp", servers: [], notices: [] });
+    ).toEqual({
+      ok: true,
+      kind: "mcp",
+      servers: [],
+      notices: [],
+      coverage: null,
+    });
   });
 
   // `result` is deliberately REQUIRED on these methods: they exist only to
@@ -1044,6 +1051,8 @@ describe("carrier envelopes (object-preserving, no unions)", () => {
       "store_version_unsupported",
       "rollback_failed",
       "config_unreadable",
+      "server_not_found",
+      "change_shadowed",
     ] as const) {
       expect(providerNativeErrorCodeSchema.parse(code)).toBe(code);
     }
