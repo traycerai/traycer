@@ -10,14 +10,25 @@ import { StrictMode, useState } from "react";
 import { act, cleanup, render, screen } from "@testing-library/react";
 import userEvent, { type UserEvent } from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { BotCreateResponse } from "@traycer/protocol/host/bot/schemas";
+import {
+  botCreateRequestSchema,
+  type BotCreateResponse,
+} from "@traycer/protocol/host/bot/schemas";
+import {
+  HostRequestAbortedError,
+  HostTransportFailureError,
+  RetryableTransportError,
+} from "@traycer-clients/shared/host-transport/host-messenger";
 import type {
   EnvironmentDescriptor,
   EnvironmentHostBinding,
 } from "@traycer/protocol/host/environment/contracts";
 import type { ComposerToolbarStore } from "@/stores/composer/composer-toolbar-store";
 import type { HostEnvironmentBindings } from "@/hooks/bots/use-host-environment-bindings-query";
-import type { ModelOption } from "@/components/home/data/landing-options";
+import {
+  DEFAULT_SELECTION,
+  type ModelOption,
+} from "@/components/home/data/landing-options";
 import {
   maxModeListedFor,
   type MaxModeContext,
@@ -41,6 +52,14 @@ const mocks = vi.hoisted(() => ({
   initialModelSlug: "model-a" as string,
   initialHarnessId: "claude" as "claude" | "cursor",
   initialReasoning: "" as string,
+  /**
+   * Seed the toolbar store from the settings store's default selection, as the
+   * real hook does when it is given no seed. Off keeps the fixed selection
+   * above, which the other tests rely on.
+   */
+  seedFromSettings: false,
+  /** The error `useBotCreateMutation` reports. */
+  createError: null as Error | null,
   state: {
     localHostId: null as string | null,
     effectiveHostId: null as string | null,
@@ -80,7 +99,7 @@ vi.mock("@/hooks/bots/use-bot-mutations", () => ({
     mocks.createClients.push(client);
     return {
       isPending: false,
-      error: null,
+      error: mocks.createError,
       mutateAsync: mocks.createAsync,
     };
   },
@@ -107,11 +126,13 @@ vi.mock("@/components/home/hooks/use-composer-toolbar-store", async () => {
           seedKey: "create-bot-form-test",
           values: {
             permission: "supervised",
-            selection: {
-              harnessId: mocks.initialHarnessId,
-              modelSlug: mocks.initialModelSlug,
-              profileId: null,
-            },
+            selection: mocks.seedFromSettings
+              ? useSettingsStore.getState().defaultSelection
+              : {
+                  harnessId: mocks.initialHarnessId,
+                  modelSlug: mocks.initialModelSlug,
+                  profileId: null,
+                },
             reasoning: mocks.initialReasoning,
             serviceTier: "",
           },
@@ -128,6 +149,7 @@ vi.mock("@/components/home/hooks/use-composer-toolbar-store", async () => {
 });
 
 import { CreateBotForm } from "@/components/home/bots/create-bot-form";
+import { useSettingsStore } from "@/stores/settings/settings-store";
 import { lookupBotTab, useBotTabsStore } from "@/stores/bots/bot-tabs-store";
 
 const TEAM_ENV = "env-team";
@@ -167,6 +189,27 @@ interface Mount {
   /** hostId -> environment id; absent = still being asked. */
   readonly bound: Readonly<Record<string, string>>;
   readonly failedHostIds: ReadonlyArray<string>;
+}
+
+function botCreateResponse(): BotCreateResponse {
+  return {
+    bot: {
+      botId: BOT_ID,
+      environmentId: TEAM_ENV,
+      createdByUserId: "user-1",
+      title: "Release Bot",
+      harness: "claude",
+      model: "model-a",
+      effort: null,
+      profile: null,
+      trunkChatId: "trunk-1",
+      boundHostId: LOCAL,
+      hostEpoch: 1,
+      createdAt: 1_000,
+      archivedAt: null,
+    },
+    appConversationChatId: "conversation-1",
+  };
 }
 
 const retryFailed = vi.fn<() => void>();
@@ -222,28 +265,13 @@ beforeEach(() => {
   mocks.initialHarnessId = "claude";
   mocks.initialModelSlug = "model-a";
   mocks.initialReasoning = "";
+  mocks.seedFromSettings = false;
+  mocks.createError = null;
   mocks.state.localHostId = LOCAL;
   mocks.state.effectiveHostId = EFFECTIVE;
   mocks.state.creatingHostIds = new Set([LOCAL, EFFECTIVE, OTHER]);
   mocks.createAsync.mockImplementation(() =>
-    Promise.resolve({
-      bot: {
-        botId: BOT_ID,
-        environmentId: TEAM_ENV,
-        createdByUserId: "user-1",
-        title: "Release Bot",
-        harness: "claude",
-        model: "model-a",
-        effort: null,
-        profile: null,
-        trunkChatId: "trunk-1",
-        boundHostId: LOCAL,
-        hostEpoch: 1,
-        createdAt: 1_000,
-        archivedAt: null,
-      },
-      appConversationChatId: "conversation-1",
-    }),
+    Promise.resolve(botCreateResponse()),
   );
   useBotTabsStore.setState({ tabs: {} });
 });
@@ -425,6 +453,50 @@ describe("<CreateBotForm /> create goes to the chosen host", () => {
     );
   });
 
+  it("creates with a null profile when the toolbar is seeded from a default selection saved before profiles existed", async () => {
+    const user = userEvent.setup();
+    // The request the host parses: a missing `profile` fails here exactly as
+    // it did in production, before the host ran anything.
+    mocks.createAsync.mockImplementation((variables) =>
+      Promise.resolve().then(() => {
+        botCreateRequestSchema.parse(variables);
+        return botCreateResponse();
+      }),
+    );
+    window.localStorage.setItem(
+      "traycer-gui-app:settings",
+      JSON.stringify({
+        state: {
+          defaultSelection: { harnessId: "claude", modelSlug: "model-a" },
+        },
+        version: 1,
+      }),
+    );
+    try {
+      await useSettingsStore.persist.rehydrate();
+      mocks.seedFromSettings = true;
+      mountForm(TEAM_WITH_LOCAL);
+      await createBot(user);
+    } finally {
+      cleanup();
+      window.localStorage.clear();
+      useSettingsStore.setState({ defaultSelection: DEFAULT_SELECTION });
+    }
+
+    expect(mocks.createAsync).toHaveBeenCalledWith({
+      environmentId: TEAM_ENV,
+      title: "Release Bot",
+      harness: "claude",
+      model: "model-a",
+      effort: null,
+      profile: null,
+    });
+    expect(lookupBotTab(useBotTabsStore.getState().tabs, BOT_ID)?.hostId).toBe(
+      LOCAL,
+    );
+    expect(onDone).toHaveBeenCalledTimes(1);
+  });
+
   it("does not create for a blank name", async () => {
     const user = userEvent.setup();
     mountForm(TEAM_WITH_LOCAL);
@@ -432,6 +504,79 @@ describe("<CreateBotForm /> create goes to the chosen host", () => {
     await user.type(screen.getByTestId("create-bot-title"), "   ");
 
     expect(submitButton().disabled).toBe(true);
+  });
+});
+
+describe("<CreateBotForm /> failed create", () => {
+  const CREATE_UNREACHED =
+    "Couldn't reach the machine this bot would run on, so nothing was created. Check that it's online, then try again.";
+  const CREATE_OUTCOME_UNKNOWN =
+    "The machine this bot would run on stopped answering, so the bot may have been created. Check your bots before you try again.";
+  const CREATE_FAILED =
+    "Couldn't create the bot. Try again, and report the problem if it keeps happening.";
+
+  const transport = {
+    requestId: "request-1",
+    method: "bot.create",
+  };
+
+  it("says the create failed, not what the validation said, when the host refuses the request", () => {
+    const parsed = botCreateRequestSchema.safeParse({
+      environmentId: TEAM_ENV,
+      title: "Release Bot",
+      harness: "claude",
+      model: "model-a",
+      effort: null,
+    });
+    if (parsed.success) throw new Error("the request without a profile parsed");
+    mocks.createError = parsed.error;
+    mountForm(TEAM_WITH_LOCAL);
+
+    const text = screen.getByRole("alert").textContent;
+    expect(text).toBe(CREATE_FAILED);
+    expect(text).not.toContain("invalid_type");
+    expect(text).not.toContain("[");
+  });
+
+  it.each([
+    [
+      "a request that never left for the machine",
+      () =>
+        new RetryableTransportError({
+          ...transport,
+          code: "RPC_ERROR",
+          message: "socket closed",
+          fatalDetails: null,
+          replaySafetyFromKey: false,
+        }),
+      CREATE_UNREACHED,
+    ],
+    [
+      "a machine that stopped answering",
+      () =>
+        new HostTransportFailureError({
+          ...transport,
+          code: "RPC_ERROR",
+          message: "no answer",
+          fatalDetails: null,
+        }),
+      CREATE_OUTCOME_UNKNOWN,
+    ],
+    [
+      "a create abandoned after it was sent",
+      () =>
+        new HostRequestAbortedError({
+          ...transport,
+          message: "aborted",
+          mayHaveDispatched: true,
+        }),
+      CREATE_OUTCOME_UNKNOWN,
+    ],
+  ])("says the right thing for %s", (_label, makeError, sentence) => {
+    mocks.createError = makeError();
+    mountForm(TEAM_WITH_LOCAL);
+
+    expect(screen.getByRole("alert").textContent).toBe(sentence);
   });
 });
 

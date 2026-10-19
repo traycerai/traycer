@@ -19,8 +19,38 @@ import { chooseBotCreateHost } from "@/lib/home-bots/bot-create-host";
 import { useBotTabsStore } from "@/stores/bots/bot-tabs-store";
 import { botTabIntent, settingsTabIntent } from "@/lib/tab-navigation/intents";
 import { navigateToTabIntent } from "@/lib/tab-navigation";
+import {
+  HostRequestAbortedError,
+  type HostRpcError,
+} from "@traycer-clients/shared/host-transport/host-messenger";
+import {
+  isHostTransportFailure,
+  isUnknownOutcomeTransportFailure,
+} from "@/lib/host-error-toast";
 
 const BOT_TITLE_MAX = 500;
+
+const CREATE_UNREACHED =
+  "Couldn't reach the machine this bot would run on, so nothing was created. Check that it's online, then try again.";
+const CREATE_OUTCOME_UNKNOWN =
+  "The machine this bot would run on stopped answering, so the bot may have been created. Check your bots before you try again.";
+const CREATE_FAILED =
+  "Couldn't create the bot. Try again, and report the problem if it keeps happening.";
+
+/**
+ * The form's own line for a failed create: what happened and what to do,
+ * never the error's text, which can be a raw validation dump. A host that was
+ * never reached and one whose answer was lost read differently, because only
+ * the second may have created the bot.
+ */
+function createBotFailureSentence(error: HostRpcError): string {
+  if (error instanceof HostRequestAbortedError) {
+    return error.mayHaveDispatched ? CREATE_OUTCOME_UNKNOWN : CREATE_FAILED;
+  }
+  if (isUnknownOutcomeTransportFailure(error)) return CREATE_OUTCOME_UNKNOWN;
+  if (isHostTransportFailure(error)) return CREATE_UNREACHED;
+  return CREATE_FAILED;
+}
 
 /**
  * Creates a bot INTO one environment (Tracy Bots). The environment is the
@@ -189,7 +219,7 @@ export function CreateBotForm(props: {
       </div>
       {create.error === null ? null : (
         <p role="alert" className="text-ui-xs text-destructive">
-          {create.error.message}
+          {createBotFailureSentence(create.error)}
         </p>
       )}
       <div className="flex items-center justify-end gap-2">
