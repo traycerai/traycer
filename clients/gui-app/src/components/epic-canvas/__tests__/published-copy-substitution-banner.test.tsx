@@ -16,6 +16,7 @@
  * screen is one banner MOUNT - exactly the count under test.
  */
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
 import type { CloudChatSummary } from "@traycer/protocol/host/epic/cloud-chat";
@@ -218,15 +219,19 @@ vi.mock("@/components/epic-canvas/renderers/chat-tile", async () => {
 });
 
 function activeTabBody(): ReactNode {
+  // The copy's owner-recovery read is a real `useHostQuery`; with no host
+  // client in this render it stays disabled, but it still needs a cache.
   return (
-    <ActiveTabBody
-      activeTab={CHAT}
-      epicId="epic-1"
-      groupId="group-1"
-      tabId="view-tab-1"
-      selected
-      globallyActive
-    />
+    <QueryClientProvider client={new QueryClient()}>
+      <ActiveTabBody
+        activeTab={CHAT}
+        epicId="epic-1"
+        groupId="group-1"
+        tabId="view-tab-1"
+        selected
+        globallyActive
+      />
+    </QueryClientProvider>
   );
 }
 
