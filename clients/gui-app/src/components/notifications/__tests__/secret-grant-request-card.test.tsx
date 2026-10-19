@@ -391,11 +391,7 @@ describe("A team grant request decided by one admin reads 'approved by <admin>' 
   });
 
   it.each([
-    [
-      "approved",
-      null,
-      "Approved for this sandbox, for as long as it exists.",
-    ],
+    ["approved", null, "Approved for this sandbox, for as long as it exists."],
     [
       "declined",
       null,
