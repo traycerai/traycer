@@ -162,14 +162,33 @@ export function useTerminalQuoteSelection(
     // pointer that made it instead, with the same pane-scoped arming. The
     // recognizer handles its own tap first (React dispatches at the root,
     // below the document), so a tap that clears the selection publishes
-    // nothing here.
-    const handleTouchPointerUp = (): void => {
+    // nothing here. Only the finger that armed the listener may publish: a
+    // second finger or a mouse lifting mid-drag is not the end of the
+    // selection, and a cancelled touch (the browser took the gesture) ends
+    // without a pointerup, so it disarms rather than leaving a stale listener
+    // for the next unrelated release to fire.
+    let armedTouchPointerId: number | null = null;
+    const disarmTouch = (): void => {
+      armedTouchPointerId = null;
       document.removeEventListener("pointerup", handleTouchPointerUp);
+      document.removeEventListener("pointercancel", handleTouchPointerCancel);
+    };
+    const handleTouchPointerUp = (event: PointerEvent): void => {
+      if (event.pointerId !== armedTouchPointerId) return;
+      disarmTouch();
       publish();
+    };
+    const handleTouchPointerCancel = (event: PointerEvent): void => {
+      if (event.pointerId !== armedTouchPointerId) return;
+      disarmTouch();
     };
     const handlePointerDown = (event: PointerEvent): void => {
       if (event.pointerType !== "touch") return;
+      if (!event.isPrimary) return;
+      disarmTouch();
+      armedTouchPointerId = event.pointerId;
       document.addEventListener("pointerup", handleTouchPointerUp);
+      document.addEventListener("pointercancel", handleTouchPointerCancel);
     };
     element.addEventListener("mousedown", handleMouseDown);
     element.addEventListener("pointerdown", handlePointerDown);
@@ -178,7 +197,7 @@ export function useTerminalQuoteSelection(
       element.removeEventListener("pointerdown", handlePointerDown);
       // A drag in flight when the tile unmounts never gets its mouseup.
       document.removeEventListener("mouseup", handleMouseUp);
-      document.removeEventListener("pointerup", handleTouchPointerUp);
+      disarmTouch();
       selectionCleared.dispose();
       scrolled.dispose();
     };

@@ -110,11 +110,69 @@ describe("useTerminalQuoteSelection", () => {
     expect(result.current.selection).toBeNull();
 
     act(() => {
-      fireEvent.pointerDown(source.element, { pointerType: "touch" });
+      fireEvent.pointerDown(source.element, {
+        pointerType: "touch",
+        isPrimary: true,
+        pointerId: 1,
+      });
       source.setSelection("held and dragged");
-      fireEvent.pointerUp(document.body, { pointerType: "touch" });
+      fireEvent.pointerUp(document.body, {
+        pointerType: "touch",
+        pointerId: 1,
+      });
     });
     expect(result.current.selection?.text).toBe("held and dragged");
+  });
+
+  it("ignores a pointerup from a different pointer than the one that armed", () => {
+    const source = createSource();
+    const { result } = renderSelection(source);
+
+    act(() => {
+      fireEvent.pointerDown(source.element, {
+        pointerType: "touch",
+        isPrimary: true,
+        pointerId: 1,
+      });
+      source.setSelection("two fingers");
+      fireEvent.pointerUp(document.body, {
+        pointerType: "touch",
+        pointerId: 2,
+      });
+    });
+    expect(result.current.selection).toBeNull();
+
+    act(() => {
+      fireEvent.pointerUp(document.body, {
+        pointerType: "touch",
+        pointerId: 1,
+      });
+    });
+    expect(result.current.selection?.text).toBe("two fingers");
+  });
+
+  it("does not publish after the arming touch is cancelled", () => {
+    const source = createSource();
+    const { result } = renderSelection(source);
+
+    act(() => {
+      fireEvent.pointerDown(source.element, {
+        pointerType: "touch",
+        isPrimary: true,
+        pointerId: 1,
+      });
+      source.setSelection("taken by the browser");
+      fireEvent.pointerCancel(document.body, {
+        pointerType: "touch",
+        pointerId: 1,
+      });
+      fireEvent.pointerUp(document.body, {
+        pointerType: "touch",
+        pointerId: 1,
+      });
+    });
+
+    expect(result.current.selection).toBeNull();
   });
 
   it("ignores a mouseup from a drag that never started in this pane", () => {
