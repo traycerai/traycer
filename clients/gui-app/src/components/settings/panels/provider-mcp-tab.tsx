@@ -34,6 +34,7 @@ import {
 } from "@/components/settings/personal/personal-entry-mark";
 import {
   PERSONAL_ENTRY_LOCKED_TEXT,
+  personalRemoveText,
   usePersonalEntryApplied,
 } from "@/components/settings/personal/personal-page-context";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
@@ -522,6 +523,13 @@ export function ProviderMcpTab(props: {
   // logical `&&` inside a JSX attribute into `cond ? value : null`, which makes
   // this `boolean | null` and fails the dialog's `isPending: boolean` prop.
   const deleteDialogPending = mutate.isPending && deleteTarget !== null;
+  // One of the person's settings: the host forwards Remove as the item's
+  // delete, so the confirmation names where it really goes.
+  const deleteTargetPersonal = usePersonalEntryApplied(
+    "mcp",
+    deleteTarget,
+    effectiveScope,
+  );
 
   // `handleAuth` refuses a sign-in on a sandbox as the floor under every
   // caller; the flags hide its controls (`canSignIn`).
@@ -1084,11 +1092,11 @@ export function ProviderMcpTab(props: {
           if (!open) setDeleteTarget(null);
         }}
         title="Remove MCP server"
-        description={
-          deleteTarget === null
-            ? ""
-            : `Remove “${deleteTarget}” from this provider's ${effectiveScope} config?`
-        }
+        description={removeDescription(
+          deleteTarget,
+          deleteTargetPersonal,
+          effectiveScope,
+        )}
         cascadeSummary={null}
         actionLabel="Remove"
         isPending={deleteDialogPending}
@@ -1107,6 +1115,20 @@ export function ProviderMcpTab(props: {
       />
     </div>
   );
+}
+
+/**
+ * The Remove confirmation's question: a Personal server leaves every provider
+ * on every host, a local one only this provider's config at `scope`.
+ */
+function removeDescription(
+  name: string | null,
+  personal: boolean,
+  scope: ProviderNativeScope,
+): string {
+  if (name === null) return "";
+  if (personal) return personalRemoveText(name);
+  return `Remove “${name}” from this provider's ${scope} config?`;
 }
 
 function McpConfirmationDialog(props: {

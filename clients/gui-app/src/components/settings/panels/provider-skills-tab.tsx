@@ -5,6 +5,7 @@ import {
 } from "@/components/settings/personal/personal-entry-mark";
 import {
   PERSONAL_ENTRY_LOCKED_TEXT,
+  personalRemoveText,
   usePersonalEntryApplied,
 } from "@/components/settings/personal/personal-page-context";
 import {
@@ -153,6 +154,11 @@ function ProviderSkillsTabBody({
   // frontmatter the row already has rather than re-deriving it.
   const [openSkill, setOpenSkill] = useState<ProviderSkill | null>(null);
   const [removeTarget, setRemoveTarget] = useState<ProviderSkill | null>(null);
+  const removeTargetPersonal = usePersonalEntryApplied(
+    "skills",
+    removeTarget?.name ?? null,
+    effectiveScope,
+  );
   const [updateConfirm, setUpdateConfirm] = useState<ProviderSkill | null>(
     null,
   );
@@ -462,6 +468,7 @@ function ProviderSkillsTabBody({
 
         <SkillRemoveConfirm
           target={removeTarget}
+          personal={removeTargetPersonal}
           pending={removePending}
           onCancel={() => {
             setRemoveTarget(null);
@@ -721,11 +728,14 @@ function SkillSourceFilterMenu({
 
 function SkillRemoveConfirm({
   target,
+  personal,
   pending,
   onCancel,
   onConfirm,
 }: {
   readonly target: ProviderSkill | null;
+  /** One of the person's settings: Remove is forwarded as the item's delete. */
+  readonly personal: boolean;
   readonly pending: boolean;
   readonly onCancel: () => void;
   readonly onConfirm: (skill: ProviderSkill) => void;
@@ -740,8 +750,12 @@ function SkillRemoveConfirm({
       title="Remove skill"
       // Names the PATH, not just the skill: removal deletes a directory, and
       // which of the four skill roots it sits in is the part the name alone
-      // cannot tell you.
-      description={removeDescription(target)}
+      // cannot tell you. A Personal skill leaves every host instead.
+      description={
+        target !== null && personal
+          ? personalRemoveText(target.name)
+          : removeDescription(target)
+      }
       cascadeSummary={null}
       actionLabel="Remove"
       isPending={pending}

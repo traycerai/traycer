@@ -483,6 +483,21 @@ describe("A Personal MCP server row", () => {
       },
     });
   });
+
+  it("the remove confirmation names every provider on every host (finding 31)", async () => {
+    listMock.servers = [mcpServer("github")];
+    renderPage("mcp-servers", mcpPage(), [appliedMcp("github")]);
+
+    const row = mcpRow("github");
+    await within(row).findByTestId(LOCKED_TESTID);
+    fireEvent.click(within(row).getByRole("button", { name: "Delete github" }));
+
+    const dialog = await screen.findByTestId("confirm-destructive-dialog");
+    expect(dialog.textContent).toContain(
+      "Remove “github” from every provider on every host?",
+    );
+    expect(dialog.textContent).not.toContain("this provider's");
+  });
 });
 
 describe("A local MCP server row", () => {
@@ -510,6 +525,20 @@ describe("A local MCP server row", () => {
         mutation: { action: "toggleServer", name: "linear", enabled: false },
       },
     });
+  });
+
+  it("the remove confirmation keeps this provider's config (finding 31)", async () => {
+    listMock.servers = [mcpServer("linear")];
+    renderPage("mcp-servers", mcpPage(), [appliedMcp("github")]);
+
+    const row = mcpRow("linear");
+    await within(row).findByRole("switch", { name: "Disable linear" });
+    fireEvent.click(within(row).getByRole("button", { name: "Delete linear" }));
+
+    const dialog = await screen.findByTestId("confirm-destructive-dialog");
+    expect(dialog.textContent).toContain(
+      "Remove “linear” from this provider's global config?",
+    );
   });
 
   it("is not held off by a skill of the same name", async () => {
@@ -620,6 +649,26 @@ describe("A Personal skill", () => {
       },
     });
   });
+
+  it("the remove confirmation names every provider on every host (finding 31)", async () => {
+    listMock.skills = [skill("deploy")];
+    listMock.skillFile = skillMarkdown("deploy");
+    renderPage("skills", skillsPage(), [appliedSkill("deploy")]);
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: /^Open deploy / }),
+    );
+    const skillDialog = await screen.findByRole("dialog");
+    fireEvent.click(
+      within(skillDialog).getByRole("button", { name: "Remove" }),
+    );
+
+    const confirm = await screen.findByTestId("confirm-destructive-dialog");
+    expect(confirm.textContent).toContain(
+      "Remove “deploy” from every provider on every host?",
+    );
+    expect(confirm.textContent).not.toContain("from disk");
+  });
 });
 
 describe("A local skill", () => {
@@ -658,5 +707,22 @@ describe("A local skill", () => {
       await within(dialog).findByRole("button", { name: "Edit" }),
     ).toBeTruthy();
     expect(within(dialog).queryByTestId(SKILL_NOTE)).toBeNull();
+  });
+
+  it("the remove confirmation keeps the disk text (finding 31)", async () => {
+    listMock.skills = [skill("deploy")];
+    listMock.skillFile = skillMarkdown("deploy");
+    renderPage("skills", skillsPage(), [appliedSkill("other")]);
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: /^Open deploy / }),
+    );
+    const skillDialog = await screen.findByRole("dialog");
+    fireEvent.click(
+      within(skillDialog).getByRole("button", { name: "Remove" }),
+    );
+
+    const confirm = await screen.findByTestId("confirm-destructive-dialog");
+    expect(confirm.textContent).toContain("Delete “deploy” from disk?");
   });
 });

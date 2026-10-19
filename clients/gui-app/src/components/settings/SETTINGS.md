@@ -880,7 +880,10 @@ only"); an MCP server until "Add to Personal".
 On a Personal entry the host passes on only Remove and an MCP server's tool
 switches; everything else is changed in the dashboard, so the MCP server switch
 and a skill's edit and update are held off with "Change this in the dashboard."
-(`usePersonalEntryApplied`, `PERSONAL_ENTRY_LOCKED_TEXT`).
+(`usePersonalEntryApplied`, `PERSONAL_ENTRY_LOCKED_TEXT`). Remove there is the
+item's delete, so its confirmation asks "Remove “<name>” from every provider on
+every host?" (`personalRemoveText`); a local entry's keeps its own config or disk
+text (finding 31).
 
 **Personal ▸ Empty states and words.** Each page opens empty to what it
 holds and one action: Variables and shells "Variables are plain values every

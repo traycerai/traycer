@@ -82,6 +82,14 @@ const EMPTY_NOTES: ReadonlyMap<string, string> = new Map();
 export const PERSONAL_ENTRY_LOCKED_TEXT = "Change this in the dashboard.";
 
 /**
+ * What Remove on a Personal MCP server or skill asks: the host forwards it as
+ * the item's delete, so it leaves every provider on every host (finding 31).
+ */
+export function personalRemoveText(name: string): string {
+  return `Remove “${name}” from every provider on every host?`;
+}
+
+/**
  * Whether the global MCP server or skill `name` is one of the person's
  * settings on the window's host: the host applied one of their items as it
  * (`environment.status` `appliedAs`). `false` outside a Personal page, for a
