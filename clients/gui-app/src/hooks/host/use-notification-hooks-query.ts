@@ -7,6 +7,7 @@ import type {
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { useHostClient, type HostRpcRegistry } from "@/lib/host";
 import { useHostQuery } from "@/hooks/host/use-host-query";
+import { useExecutableWriteGrant } from "@/hooks/environment/use-executable-write-grant";
 import { useHostScopedMutationForClient } from "@/hooks/host/use-host-scoped-mutation";
 import { notificationsMutationKeys } from "@/lib/query-keys";
 
@@ -65,8 +66,15 @@ export function useNotificationHooksSave(): NotificationHooksSaveMutation {
 export function useNotificationHooksSaveForClient(
   client: HostClient<HostRpcRegistry> | null,
 ): NotificationHooksSaveMutation {
+  const grant = useExecutableWriteGrant();
   return useHostScopedMutationForClient(client, {
     method: "host.notificationHooks.save",
+    // The list is saved whole; only a list holding a command hook can run
+    // anything, so only that one asks for a grant.
+    prepareRequest: (request, requester) =>
+      request.hooks.some((hook) => hook.action.type === "command")
+        ? grant(request, requester)
+        : Promise.resolve(request),
     mutationKey: notificationsMutationKeys.saveHooks(),
     errorMessage: "Couldn't save notification hooks.",
     invalidateMethods: ["host.notificationHooks.status"],

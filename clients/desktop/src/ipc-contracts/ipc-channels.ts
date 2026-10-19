@@ -65,6 +65,24 @@ export const RunnerHostInvoke = {
   // no route to the machine, which is why it does not live on the host-
   // management bridge next to the OS-service verbs it must not be confused with.
   deregisterHostFromAccount: "runnerHost:hosts:deregisterFromAccount",
+  // The sandbox control plane (traycer-server `/api/sandboxes`). Same CORS
+  // reason as the registry calls above: traycer-server's allow-list is the web
+  // dashboard origin, so the renderer cannot reach it directly.
+  listSandboxes: "runnerHost:sandboxes:list",
+  getSandboxCosts: "runnerHost:sandboxes:costs",
+  getSandboxCatalogue: "runnerHost:sandboxes:catalogue",
+  createSandbox: "runnerHost:sandboxes:create",
+  destroySandbox: "runnerHost:sandboxes:destroy",
+  runSandboxVerb: "runnerHost:sandboxes:verb",
+  getSandboxAutomation: "runnerHost:sandboxes:automation:get",
+  openSandboxAutomation: "runnerHost:sandboxes:automation:open",
+  // The secrets broker (authn), from Electron main for the same reason.
+  getSandboxGrants: "runnerHost:sandboxSecrets:grants",
+  getTeamEnvironment: "runnerHost:environments:team",
+  getEnvironmentProviders: "runnerHost:environments:providers",
+  decideSecretRequest: "runnerHost:sandboxSecrets:decide",
+  // The executable-write grant (authn), from Electron main for the same reason.
+  mintExecutableWriteGrant: "runnerHost:environment:mintExecutableWriteGrant",
   openExternalLink: "runnerHost:openExternalLink",
   getRegisteredUrlSchemes: "runnerHost:getRegisteredUrlSchemes",
   requestMicrophoneAccess: "runnerHost:requestMicrophoneAccess",

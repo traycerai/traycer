@@ -3,6 +3,8 @@ export const providersMutationKeys = {
   addCustomPath: () => ["providers.addCustomPath"] as const,
   removeCustomPath: () => ["providers.removeCustomPath"] as const,
   setEnabled: () => ["providers.setEnabled"] as const,
+  promoteToPersonal: () =>
+    ["providers.nativeMutate", "promoteToPersonal"] as const,
   setProfileEnabled: (hostId: string | null, providerId: string | null) =>
     ["providers.setProfileEnabled", hostId, providerId] as const,
   setApiKey: () => ["providers.setApiKey"] as const,

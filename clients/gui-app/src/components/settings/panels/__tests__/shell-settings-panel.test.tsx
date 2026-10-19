@@ -8,8 +8,10 @@ const scopeOverrides = vi.hoisted((): { current: Record<string, unknown> } => ({
 vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
   const { hostScopeFixture } =
     await import("@/components/settings/host-scope/host-scope-fixture");
+  const useHostScope = () => hostScopeFixture(scopeOverrides.current);
   return {
-    useHostScope: () => hostScopeFixture(scopeOverrides.current),
+    useHostScope,
+    usePersonalHostScope: useHostScope,
   };
 });
 
@@ -26,6 +28,16 @@ vi.mock("@/lib/host", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/host")>();
   return { ...actual, useHostBinding: () => hostBindingMock.current };
 });
+
+// What `useHostCredentialRefusal` answers for the scoped host: `null` is a
+// host that takes credentials, a string is a sandbox's refusal line. Mocked
+// because the bare binding above carries no host directory to read it from.
+const credentialRefusal = vi.hoisted(() => ({
+  current: null as string | null,
+}));
+vi.mock("@/hooks/host/use-host-credential-refusal", () => ({
+  useHostCredentialRefusal: () => credentialRefusal.current,
+}));
 
 import {
   act,
@@ -53,6 +65,9 @@ import {
 import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { ShellSettingsPanel } from "@/components/settings/panels/shell-settings-panel";
+import { useRereadOnStaleWrite } from "@/hooks/environment/use-reread-on-stale-write";
+import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import type { EnvironmentStaleWrite } from "@traycer/protocol/framework/environment-stale-write";
 import {
   ALL_CONFIG_RPC_METHODS,
   CONFIG_SHELL_METHODS,
@@ -67,6 +82,7 @@ afterEach(() => {
   resetNegotiatedManifests();
   scopeOverrides.current = {};
   hostBindingMock.current = null;
+  credentialRefusal.current = null;
 });
 
 // A non-login program: its family default is no flags, so switching to it must
@@ -149,11 +165,21 @@ function renderShellPanelOverRpc(options: {
   render(
     <QueryClientProvider client={queryClient}>
       <RunnerHostProvider runnerHost={runnerHost}>
+        <StaleRereader hostId={hostId} />
         <ShellSettingsPanel />
       </RunnerHostProvider>
     </QueryClientProvider>,
   );
   return fixture;
+}
+
+/**
+ * What `PersonalPageFrame` mounts once for every save on its page; it acts
+ * only on a save refused as stale.
+ */
+function StaleRereader(props: { readonly hostId: string }) {
+  useRereadOnStaleWrite(props.hostId);
+  return null;
 }
 
 /**
@@ -238,7 +264,7 @@ describe("<ShellSettingsPanel /> hierarchy", () => {
     ).toBeTruthy();
     expect(
       within(envCard).getByRole("heading", {
-        name: "Host environment · After restart",
+        name: "Variables · After restart",
       }),
     ).toBeTruthy();
 
@@ -1159,4 +1185,336 @@ describe("<ShellSettingsPanel /> partially failed rename refreshes the editor", 
   // settlement, for symmetry with the RPC twin above and because the failure
   // mode is identical; it is simply not pinned here rather than pinned by a
   // test that cannot fail. Do not re-add one in this shape.
+});
+
+describe("<ShellSettingsPanel /> host environment on a host that takes no credentials", () => {
+  const REFUSAL = "Sandboxes don't take sign-ins";
+  const SIGN_IN_URL = "https://ghp_x@github.com/o/r";
+
+  function envCli(): MockTraycerCli {
+    const cli = new MockTraycerCli();
+    cli.shellConfig = {
+      path: "/bin/zsh",
+      args: ["-i", "-l"],
+      synthesised: true,
+    };
+    return cli;
+  }
+
+  function envSetSpy(cli: MockTraycerCli) {
+    return vi.fn(async (request: { key: string; value: string | null }) => {
+      await cli.envOverrideSet(request);
+      return { key: request.key, value: request.value };
+    });
+  }
+
+  async function addVariable(
+    placeholder: string,
+    name: string,
+    value: string,
+  ): Promise<void> {
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Add variable" }),
+    );
+    fireEvent.change(screen.getByPlaceholderText(placeholder), {
+      target: { value: name },
+    });
+    fireEvent.change(screen.getByLabelText("New variable value"), {
+      target: { value },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Apply variable" }));
+  }
+
+  it("refuses a value that is a URL with a sign-in: the line shows, the value stays, and config.env.set is never sent", async () => {
+    credentialRefusal.current = REFUSAL;
+    const cli = envCli();
+    const set = envSetSpy(cli);
+    renderShellPanelOverRpc({
+      cli,
+      overrideHandlers: { "config.env.set": set },
+    });
+
+    await addVariable("NODE_ENV", "REPO_URL", SIGN_IN_URL);
+
+    expect(
+      await screen.findByText(`${REFUSAL}: remove the sign-in from this URL.`),
+    ).toBeTruthy();
+    const valueField = screen.getByLabelText("New variable value");
+    expect((valueField as HTMLInputElement).value).toBe(SIGN_IN_URL);
+    expect(set).not.toHaveBeenCalled();
+    expect(cli.envOverrides).toEqual([]);
+  });
+
+  it("still saves a plain value", async () => {
+    credentialRefusal.current = REFUSAL;
+    const cli = envCli();
+    const set = envSetSpy(cli);
+    renderShellPanelOverRpc({
+      cli,
+      overrideHandlers: { "config.env.set": set },
+    });
+
+    await addVariable("NODE_ENV", "NODE_ENV", "production");
+
+    await waitFor(() => expect(set).toHaveBeenCalledTimes(1));
+    expect(set).toHaveBeenCalledWith({
+      key: "NODE_ENV",
+      value: "production",
+      executableWriteGrant: null,
+    });
+  });
+
+  it("refuses a sign-in URL typed into an existing variable on blur, and sends nothing", async () => {
+    credentialRefusal.current = REFUSAL;
+    const cli = envCli();
+    cli.envOverrides = [{ key: "REPO_URL", value: "https://github.com/o/r" }];
+    const set = envSetSpy(cli);
+    renderShellPanelOverRpc({
+      cli,
+      overrideHandlers: { "config.env.set": set },
+    });
+
+    const field = await screen.findByLabelText("Value for REPO_URL");
+    fireEvent.change(field, { target: { value: SIGN_IN_URL } });
+    fireEvent.blur(field);
+
+    expect(
+      await screen.findByText(`${REFUSAL}: remove the sign-in from this URL.`),
+    ).toBeTruthy();
+    expect(set).not.toHaveBeenCalled();
+  });
+
+  it("hints NODE_ENV on the add row, not a key-shaped name", async () => {
+    credentialRefusal.current = REFUSAL;
+    renderShellPanelOverRpc({ cli: envCli() });
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Add variable" }),
+    );
+
+    expect(screen.getByPlaceholderText("NODE_ENV")).toBeTruthy();
+    expect(screen.queryByPlaceholderText("OPENAI_API_KEY")).toBeNull();
+  });
+
+  it("control: on a host that takes credentials the sign-in URL is saved and the hint is OPENAI_API_KEY", async () => {
+    credentialRefusal.current = null;
+    const cli = envCli();
+    const set = envSetSpy(cli);
+    renderShellPanelOverRpc({
+      cli,
+      overrideHandlers: { "config.env.set": set },
+    });
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Add variable" }),
+    );
+    expect(screen.getByPlaceholderText("OPENAI_API_KEY")).toBeTruthy();
+    fireEvent.change(screen.getByPlaceholderText("OPENAI_API_KEY"), {
+      target: { value: "REPO_URL" },
+    });
+    fireEvent.change(screen.getByLabelText("New variable value"), {
+      target: { value: SIGN_IN_URL },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Apply variable" }));
+
+    await waitFor(() => expect(set).toHaveBeenCalledTimes(1));
+    expect(set).toHaveBeenCalledWith({
+      key: "REPO_URL",
+      value: SIGN_IN_URL,
+      executableWriteGrant: null,
+    });
+  });
+});
+
+describe("<ShellSettingsPanel /> host environment names that look like credentials", () => {
+  const REFUSAL = "Sandboxes don't take sign-ins";
+  const NAME_LINE = `${REFUSAL}: a variable whose name looks like a credential is not stored here.`;
+
+  function envCli(): MockTraycerCli {
+    const cli = new MockTraycerCli();
+    cli.shellConfig = {
+      path: "/bin/zsh",
+      args: ["-i", "-l"],
+      synthesised: true,
+    };
+    return cli;
+  }
+
+  function envHandlers(cli: MockTraycerCli) {
+    const set = vi.fn(
+      async (request: { key: string; value: string | null }) => {
+        await cli.envOverrideSet(request);
+        return { key: request.key, value: request.value };
+      },
+    );
+    const remove = vi.fn(async (request: { key: string }) => {
+      await cli.envOverrideDelete(request);
+      return { key: request.key, deleted: true as const };
+    });
+    return { set, remove };
+  }
+
+  async function addVariable(name: string, value: string): Promise<void> {
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Add variable" }),
+    );
+    fireEvent.change(screen.getByLabelText("New variable name"), {
+      target: { value: name },
+    });
+    fireEvent.change(screen.getByLabelText("New variable value"), {
+      target: { value },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Apply variable" }));
+  }
+
+  it("never sends config.env.set for OPENAI_API_KEY=sk-x on a sandbox scope, and shows the line", async () => {
+    credentialRefusal.current = REFUSAL;
+    const cli = envCli();
+    const { set, remove } = envHandlers(cli);
+    renderShellPanelOverRpc({
+      cli,
+      overrideHandlers: { "config.env.set": set, "config.env.delete": remove },
+    });
+
+    await addVariable("OPENAI_API_KEY", "sk-x");
+
+    expect(await screen.findByText(NAME_LINE)).toBeTruthy();
+    expect(set).not.toHaveBeenCalled();
+    expect(remove).not.toHaveBeenCalled();
+    expect(cli.envOverrides).toEqual([]);
+  });
+
+  it("never sends set or delete when a row is renamed to a credential-shaped name", async () => {
+    credentialRefusal.current = REFUSAL;
+    const cli = envCli();
+    cli.envOverrides = [{ key: "EDITOR", value: "vim" }];
+    const { set, remove } = envHandlers(cli);
+    renderShellPanelOverRpc({
+      cli,
+      overrideHandlers: { "config.env.set": set, "config.env.delete": remove },
+    });
+
+    const name = await screen.findByLabelText("Name for EDITOR");
+    fireEvent.change(name, { target: { value: "GITHUB_TOKEN" } });
+    fireEvent.blur(name);
+
+    expect(await screen.findByText(NAME_LINE)).toBeTruthy();
+    expect(set).not.toHaveBeenCalled();
+    expect(remove).not.toHaveBeenCalled();
+    expect(cli.envOverrides.map((row) => row.key)).toEqual(["EDITOR"]);
+  });
+
+  it("still saves EDITOR=vim on a sandbox scope", async () => {
+    credentialRefusal.current = REFUSAL;
+    const cli = envCli();
+    const { set } = envHandlers(cli);
+    renderShellPanelOverRpc({
+      cli,
+      overrideHandlers: { "config.env.set": set },
+    });
+
+    await addVariable("EDITOR", "vim");
+
+    await waitFor(() => expect(set).toHaveBeenCalledTimes(1));
+    expect(set).toHaveBeenCalledWith({
+      key: "EDITOR",
+      value: "vim",
+      executableWriteGrant: null,
+    });
+    expect(screen.queryByText(NAME_LINE)).toBeNull();
+  });
+
+  it("control: on a personal host OPENAI_API_KEY=sk-x saves", async () => {
+    credentialRefusal.current = null;
+    const cli = envCli();
+    const { set } = envHandlers(cli);
+    renderShellPanelOverRpc({
+      cli,
+      overrideHandlers: { "config.env.set": set },
+    });
+
+    await addVariable("OPENAI_API_KEY", "sk-x");
+
+    await waitFor(() => expect(set).toHaveBeenCalledTimes(1));
+    expect(set).toHaveBeenCalledWith({
+      key: "OPENAI_API_KEY",
+      value: "sk-x",
+      executableWriteGrant: null,
+    });
+  });
+});
+
+function inputValue(element: HTMLElement): string {
+  if (!(element instanceof HTMLInputElement)) {
+    throw new Error("expected an input");
+  }
+  return element.value;
+}
+
+const STALE_DETAIL: EnvironmentStaleWrite = {
+  changedBy: { kind: "dashboard" },
+  currentRevision: 43,
+};
+
+function staleRefusal(requestId: string, method: string): HostRpcError {
+  return HostRpcError.fromWireEnvelope(
+    {
+      code: "ENVIRONMENT_WRITE_STALE",
+      message: "The setting changed since it was read.",
+      staleWrite: STALE_DETAIL,
+    },
+    requestId,
+    method,
+  );
+}
+
+describe("<ShellSettingsPanel /> a save refused as stale", () => {
+  it("after a save refused as stale, the field shows the latest value and leaving sends nothing more", async () => {
+    const cli = new MockTraycerCli();
+    cli.shellConfig = {
+      path: "/bin/zsh",
+      args: ["-i", "-l"],
+      synthesised: true,
+    };
+    let listedValue = "one";
+    let listsAfterRefusal = 0;
+    let setCalls = 0;
+    renderShellPanelOverRpc({
+      cli,
+      overrideHandlers: {
+        "config.env.list": () => {
+          if (listedValue === "two") listsAfterRefusal += 1;
+          return { entries: [{ key: "STALE_PROBE", value: listedValue }] };
+        },
+        "config.env.set": (request) => {
+          setCalls += 1;
+          if (setCalls === 1) {
+            listedValue = "two";
+            throw staleRefusal("req-stale", "config.env.set");
+          }
+          return { key: request.key, value: request.value };
+        },
+      },
+    });
+
+    const field = await screen.findByLabelText("Value for STALE_PROBE");
+    expect(inputValue(field)).toBe("one");
+    fireEvent.change(field, { target: { value: "three" } });
+    fireEvent.blur(field);
+
+    await waitFor(() => expect(setCalls).toBe(1));
+    await waitFor(() => expect(listsAfterRefusal).toBeGreaterThan(0));
+
+    expect(inputValue(screen.getByLabelText("Value for STALE_PROBE"))).toBe(
+      "two",
+    );
+
+    cleanup();
+    // A write sent on the way out is dispatched asynchronously; give it
+    // room to reach the host before counting.
+    await act(async () => {
+      await new Promise<void>((resolve) => setTimeout(resolve, 100));
+    });
+    expect(setCalls).toBe(1);
+  });
 });

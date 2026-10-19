@@ -1,6 +1,7 @@
 import { useCallback } from "react";
 import type { ProviderId } from "@traycer/protocol/host/provider-schemas";
 import { PROVIDER_DISPLAY_NAMES } from "@traycer/protocol/host/provider-schemas";
+import { useHostCredentialRefusal } from "@/hooks/host/use-host-credential-refusal";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
 import {
@@ -33,6 +34,12 @@ const SIGN_IN_TERMINAL_CWD = "~";
 export type ProviderTerminalLoginStarter =
   StartTerminalLoginMutationResult<undefined> & {
     readonly start: () => void;
+    /**
+     * Why no sign-in may start on this host (a sandbox), or `null`. `start`
+     * sends nothing while it is set; a caller disables its control and shows
+     * it.
+     */
+    readonly credentialRefusal: string | null;
   };
 
 /**
@@ -84,6 +91,7 @@ export function useProviderTerminalLogin(args: {
   const { providerId, epicId, viewTabId, launchedFromTile } = args;
   const tabClient = useTabHostClient();
   const hostId = useTabHostId();
+  const credentialRefusal = useHostCredentialRefusal(hostId);
   // The hook needs a tab id at call time; outside an epic view there is no
   // terminal surface to open into, and `start` below refuses before using it.
   const focusTerminal = useFocusEpicTerminalSession(viewTabId ?? "");
@@ -161,7 +169,9 @@ export function useProviderTerminalLogin(args: {
   );
 
   const start = useCallback((): void => {
-    if (epicId === null || viewTabId === null) return;
+    if (epicId === null || viewTabId === null || credentialRefusal !== null) {
+      return;
+    }
     startTerminalLogin.mutate({
       providerId,
       scope: { kind: "epic", epicId },
@@ -171,7 +181,7 @@ export function useProviderTerminalLogin(args: {
       cols: 80,
       rows: 24,
     });
-  }, [epicId, providerId, startTerminalLogin, viewTabId]);
+  }, [credentialRefusal, epicId, providerId, startTerminalLogin, viewTabId]);
 
-  return { ...startTerminalLogin, start };
+  return { ...startTerminalLogin, start, credentialRefusal };
 }

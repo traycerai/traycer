@@ -5,8 +5,8 @@
  * There the native call is a `TypeError` thrown out of the request helper, and
  * the helper's own `catch` folds it into `network-error`: an iOS 15.5 shell
  * (the Xcode deployment target) could never sign in or list its hosts, and
- * nothing would say why. `auth/request-abort.ts` and `any-abort-signal.ts` are
- * the same lesson for the caller-signal paths.
+ * nothing would say why. `auth/request-abort.ts` is the same lesson for the
+ * caller-signal paths.
  *
  * The fallback aborts with a `DOMException` named `TimeoutError`, which is
  * what the native signal's `reason` is and what callers map

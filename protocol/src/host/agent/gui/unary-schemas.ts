@@ -52,6 +52,27 @@ export type GuiHarnessUnavailableReason = z.infer<
   typeof guiHarnessUnavailableReasonSchema
 >;
 
+// How a harness reaches its provider on a SANDBOX host, where no user
+// credential is ever stored (`SANDBOX_HOST_REFUSES_CREDENTIALS`). The host
+// reads it off its launch-state table, one row per adapter:
+//
+//  - `placeholder`: the harness is launched with a placeholder in place of the
+//    key, and the egress gateway swaps the real credential in on the wire.
+//  - `process-scoped`: the harness is handed a short-lived token file scoped
+//    to its own process, rewritten before it expires.
+//  - `unsupported`: the way this harness authenticates cannot be brokered. The
+//    row stays in the catalog so the picker can say why; the mechanism is in
+//    `sandboxCredentialNote`.
+//
+// A harness the host does not offer on a sandbox at all is absent from the
+// catalog, so it has no member here.
+export const guiHarnessSandboxCredentialModeSchema = lazySchema(() =>
+  z.enum(["placeholder", "process-scoped", "unsupported"]),
+);
+export type GuiHarnessSandboxCredentialMode = z.infer<
+  typeof guiHarnessSandboxCredentialModeSchema
+>;
+
 export const guiHarnessOptionSchema = lazySchema(() =>
   z.object({
     id: guiHarnessIdSchema,
@@ -156,6 +177,27 @@ export const guiHarnessOptionSchema = lazySchema(() =>
     // the old-host path it already supports. See the fuller note on the same pair
     // in `provider-schemas.ts`.
     authStatus: PROVIDER_AUTH_STATUS_SCHEMA.optional().catch(undefined),
+    // How this harness reaches its provider on a sandbox host; see
+    // `guiHarnessSandboxCredentialModeSchema`. `null` or absent on every host
+    // that is not a sandbox, and on a host that predates the field: the picker
+    // then says nothing, which is the pre-feature rendering.
+    //
+    // Two new KEYS on `agent.gui.listHarnesses@10.1`. The frozen 10.0 row
+    // strips them on the within-major re-parse, so no emission gate is needed
+    // (the 9.2 `judgeDefaultModel` precedent). `.optional()` rather than
+    // defaulted, for the reason that one is: absent must stay absent so the
+    // keys are not required on OUTPUT at every row construction site.
+    //
+    // `.catch(null)` is the guard `unavailableReason` and `authStatus` carry: a
+    // mode from a newer host's wider enum reads as "told nothing" instead of
+    // failing the whole catalog.
+    sandboxCredentialMode: guiHarnessSandboxCredentialModeSchema
+      .nullable()
+      .optional()
+      .catch(null),
+    // For `unsupported`, the mechanism that cannot be brokered, as the host's
+    // launch-state row words it; `null` otherwise. Shown verbatim.
+    sandboxCredentialNote: z.string().nullable().optional(),
   }),
 );
 export type GuiHarnessOption = z.infer<typeof guiHarnessOptionSchema>;
@@ -592,7 +634,7 @@ export type ListGuiHarnessesResponseV80 = z.infer<
 // major 10 carries the ids added since.
 //
 // Do NOT add fields, modes or ids here; add them to `guiHarnessOptionSchema`
-// above, which only the head line (10.0 today) binds.
+// above, which only the head line (10.1 today) binds.
 export const guiHarnessOptionSchemaV90 = lazySchema(() =>
   z.object({
     id: guiHarnessIdSchemaV90,
@@ -624,7 +666,7 @@ export type ListGuiHarnessesResponseV90 = z.infer<
 // pinned to `guiHarnessIdSchemaV90` since `1.5.0` shipped major 9.
 //
 // Do NOT add fields or ids here; add them to `guiHarnessOptionSchema` above,
-// which only the head line (10.0 today) binds.
+// which only the head line (10.1 today) binds.
 export const guiHarnessOptionSchemaV91 = lazySchema(() =>
   z.object({
     id: guiHarnessIdSchemaV90,
@@ -667,7 +709,7 @@ export type ListGuiHarnessesResponseV91 = z.infer<
 // no minor of a major may grow a response enum over its predecessor.
 //
 // Do NOT add fields or ids here; add them to `guiHarnessOptionSchema` above,
-// which only 10.0 (the head line) binds.
+// which only 10.1 (the head line) binds.
 export const guiHarnessOptionSchemaV92 = lazySchema(() =>
   z.object({
     id: guiHarnessIdSchemaV90,
@@ -698,6 +740,52 @@ export const listGuiHarnessesResponseSchemaV92 = lazySchema(() =>
 );
 export type ListGuiHarnessesResponseV92 = z.infer<
   typeof listGuiHarnessesResponseSchemaV92
+>;
+
+// ── Frozen protocol-v10.0 catalog row + response (pre-sandbox-credentials) ──
+// 10.0 is the Command Code line. `host-v1.5.1` shipped it, so it stops binding
+// the live row here and 10.1 opens above it for `sandboxCredentialMode` and
+// `sandboxCredentialNote`.
+//
+// A field-for-field hand copy of the live row at the cut, in the live key
+// order, for the reason 9.1's and 9.2's copies are: a derived row keeps
+// reading every live leaf. The id is the live `guiHarnessIdSchema`, shared
+// with 10.1 - no minor of a major may grow a response enum over its
+// predecessor, so the next id opens major 11 and freezes this one's id then,
+// as `guiHarnessIdSchemaV90` was frozen for major 9.
+//
+// Do NOT add fields here; add them to `guiHarnessOptionSchema` above, which
+// only 10.1 (the head line) binds.
+export const guiHarnessOptionSchemaV100 = lazySchema(() =>
+  z.object({
+    id: guiHarnessIdSchema,
+    label: z.string(),
+    enabled: z.boolean().default(true),
+    available: z.boolean(),
+    error: z.string().nullable(),
+    unavailableReason: guiHarnessUnavailableReasonSchema
+      .nullable()
+      .optional()
+      .catch("other"),
+    modes: z.array(harnessSurfaceSchema),
+    requiresApiKey: z.boolean(),
+    supportedPermissionModes: z
+      .array(permissionModeSchema)
+      .default([...ALL_PERMISSION_MODES]),
+    nativeAutoJudge: z.boolean().default(false),
+    judgeDefaultModel: z.string().nullable().optional(),
+    availabilityPending: z.boolean().catch(false),
+    authStatus: PROVIDER_AUTH_STATUS_SCHEMA.optional().catch(undefined),
+  }),
+);
+export type GuiHarnessOptionV100 = z.infer<typeof guiHarnessOptionSchemaV100>;
+export const listGuiHarnessesResponseSchemaV100 = lazySchema(() =>
+  z.object({
+    harnesses: z.array(guiHarnessOptionSchemaV100),
+  }),
+);
+export type ListGuiHarnessesResponseV100 = z.infer<
+  typeof listGuiHarnessesResponseSchemaV100
 >;
 
 export type ListGuiHarnessesResponse = z.infer<

@@ -21,11 +21,13 @@
  * set is a superset by construction and equality would fail on it.
  */
 export const SETTINGS_PATHS = new Set([
+  "agent-definitions",
   "agents",
   "app-diagnostics",
   "app-notifications",
   "appearance",
   "browser",
+  "browser-agent-access",
   "delete-account",
   "devices",
   "diagnostics",
@@ -36,12 +38,16 @@ export const SETTINGS_PATHS = new Set([
   "keybindings",
   "layout",
   "link-phone",
+  "machine-setup",
+  "mcp-servers",
   "notifications",
   "opening-behavior",
   "permissions",
   "providers",
+  "secrets",
   "service",
   "shell",
+  "skills",
   "usage",
   "worktrees",
 ]);

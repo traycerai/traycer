@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { composeRequestAbort } from "@traycer-clients/shared/auth/request-abort";
 import { readCappedResponse } from "@/lib/themes/open-vsx";
 
 /**
@@ -78,22 +79,42 @@ function parseManifest(text: string): ReadonlyArray<CuratedWallpaper> {
 
 function requestInit(
   signal: AbortSignal,
-  timeoutMs: number,
 ): RequestInit & { readonly signal: AbortSignal } {
   return {
-    signal: AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]),
+    signal,
     credentials: "omit",
     referrerPolicy: "no-referrer",
   };
 }
 
-export async function fetchCuratedWallpaperManifest(
+/**
+ * Runs `request` under the caller's signal plus a timeout, cleared once it
+ * settles. Not `AbortSignal.any`/`timeout`, which the iOS WebView floor lacks;
+ * see `request-abort.ts`. The timeout bounds the body read too.
+ */
+async function withTimeout<T>(
+  signal: AbortSignal,
+  timeoutMs: number,
+  request: (requestSignal: AbortSignal) => Promise<T>,
+): Promise<T> {
+  const abort = composeRequestAbort(signal, timeoutMs);
+  try {
+    return await request(abort.signal);
+  } finally {
+    abort.clear();
+  }
+}
+
+export function fetchCuratedWallpaperManifest(
   signal: AbortSignal,
 ): Promise<ReadonlyArray<CuratedWallpaper>> {
-  const response = await fetch(
-    MANIFEST_URL,
-    requestInit(signal, MANIFEST_TIMEOUT_MS),
-  );
+  return withTimeout(signal, MANIFEST_TIMEOUT_MS, fetchManifestWithin);
+}
+
+async function fetchManifestWithin(
+  signal: AbortSignal,
+): Promise<ReadonlyArray<CuratedWallpaper>> {
+  const response = await fetch(MANIFEST_URL, requestInit(signal));
   if (!response.ok) {
     await response.body?.cancel();
     throw new Error(
@@ -120,14 +141,20 @@ function hex(digest: ArrayBuffer): string {
   ).join("");
 }
 
-export async function downloadCuratedWallpaper(
+export function downloadCuratedWallpaper(
   entry: CuratedWallpaper,
   signal: AbortSignal,
 ): Promise<Blob> {
-  const response = await fetch(
-    entry.fullUrl,
-    requestInit(signal, IMAGE_TIMEOUT_MS),
+  return withTimeout(signal, IMAGE_TIMEOUT_MS, (requestSignal) =>
+    downloadWallpaperWithin(entry, requestSignal),
   );
+}
+
+async function downloadWallpaperWithin(
+  entry: CuratedWallpaper,
+  signal: AbortSignal,
+): Promise<Blob> {
+  const response = await fetch(entry.fullUrl, requestInit(signal));
   if (!response.ok) {
     await response.body?.cancel();
     throw new Error(

@@ -268,7 +268,7 @@ describe("<PickerProviderAuthLine />", () => {
     expect(screen.getByText("Not authenticated")).toBeDefined();
     expect(
       screen.getByText(
-        "Reasonix keeps provider API keys in its own store, not in your shell environment.",
+        "Reasonix keeps provider API keys in its own store, not in your shell.",
       ),
     ).toBeDefined();
 
@@ -311,7 +311,7 @@ describe("<PickerProviderAuthLine />", () => {
     const note = screen.getByRole("note", { name: "Setup required" });
     expect(
       screen.getByText(
-        "Reasonix keeps provider API keys in its own store, not in your shell environment.",
+        "Reasonix keeps provider API keys in its own store, not in your shell.",
       ),
     ).toBeDefined();
 
@@ -539,7 +539,7 @@ describe("<PickerProviderAuthLine />", () => {
     expect(screen.queryByText("some badge")).toBeNull();
     expect(
       screen.queryByText(
-        "Reasonix keeps provider API keys in its own store, not in your shell environment.",
+        "Reasonix keeps provider API keys in its own store, not in your shell.",
       ),
     ).toBeNull();
   });
@@ -563,7 +563,7 @@ describe("<PickerProviderAuthLine />", () => {
     expect(screen.getByRole("note", { name: "Setup required" })).toBeDefined();
     expect(
       screen.getByText(
-        "Reasonix keeps provider API keys in its own store, not in your shell environment.",
+        "Reasonix keeps provider API keys in its own store, not in your shell.",
       ),
     ).toBeDefined();
   });

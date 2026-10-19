@@ -1,5 +1,7 @@
 import { SettingsPanelShell } from "@/components/settings/settings-panel-shell";
 import { GettingStartedCards } from "@/components/onboarding/getting-started-cards";
+import { SetUpPersonalGroup } from "@/components/onboarding/set-up-personal-group";
+import { SetUpTeamGroup } from "@/components/onboarding/set-up-team-group";
 import {
   isPermanentlyUnavailable,
   UNAVAILABLE_ON_THIS_SHELL_NOTE,
@@ -32,6 +34,8 @@ export function GettingStartedSettingsPanel() {
       }
     >
       <GettingStartedCards entries={visible} surface="settings" />
+      <SetUpPersonalGroup surface="settings" />
+      <SetUpTeamGroup surface="settings" />
       {/* One line, not a card each: these guides cannot run on this shell at
           all, and a phone has room for the guides it CAN offer. Named rather
           than counted, so the user can tell which one they are missing, and

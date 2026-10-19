@@ -6,6 +6,7 @@ import { HostTrayCommandListener } from "@/components/layout/bridges/host-tray-c
 import { HostLifecycleAnalyticsBridge } from "@/components/layout/bridges/host-lifecycle-analytics-bridge";
 import { HostQuitDecisionBridge } from "@/components/layout/bridges/host-quit-decision-bridge";
 import { DesktopDialogHost } from "@/components/layout/dialogs/desktop-dialog-host";
+import { TeamWakeConfirmDialogHost } from "@/components/hosts/team-wake-confirm-dialog";
 import { HostReadyGate } from "@/components/layout/host-ready-gate";
 import { GATE_BYPASS_PATH_PREFIX } from "@/lib/host/gate-bypass-path";
 import { HostScopeReady } from "@/components/layout/host-readiness-controller";
@@ -29,6 +30,7 @@ import { TabNavigationRouteBridge } from "@/components/layout/bridges/tab-naviga
 import { TrayOpenEpicBridge } from "@/components/layout/bridges/tray-open-epic-bridge";
 import { ProviderProfileAddFlowHost } from "@/components/providers/provider-profile-add-flow-host";
 import { EpicAccessCoordinator } from "@/providers/epic-access-coordinator";
+import { TeamRemovalTileCloser } from "@/providers/team-removal-tile-closer";
 import { OnboardingPage } from "@/components/onboarding/onboarding-page";
 import { FirstTaskImportBridge } from "@/components/onboarding/first-task-guide";
 import { TabDetachOwner } from "@/components/layout/tabs/tab-detach-owner";
@@ -98,6 +100,9 @@ export function RootComponent() {
       <MenuCommandListener />
       <HostTrayCommandListener />
       <DesktopDialogHost />
+      {/* The question in front of a team sandbox's wake, from any wake path:
+          a picker that closes on pick has no surface left to ask it from. */}
+      <TeamWakeConfirmDialogHost />
       {/* The host quit modal: on every route, signed in or not, so a quit is
           always answered in-window rather than by main's native prompt. */}
       <HostQuitDecisionBridge />
@@ -152,6 +157,7 @@ export function RootComponent() {
             <TrayOpenEpicBridge />
             <NotificationFocusBridge />
             <EpicAccessCoordinator />
+            <TeamRemovalTileCloser />
             <ProviderProfileAddFlowHost />
           </HostScopeReady>
           <RootSurface

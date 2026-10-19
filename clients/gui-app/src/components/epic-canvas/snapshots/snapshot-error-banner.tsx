@@ -1,3 +1,4 @@
+import { REMOTE_ACCESS_OFF_FATAL_CODE } from "@traycer-clients/shared/host-client/host-connection-reconnect-engine";
 import { useState } from "react";
 import { AlertTriangle } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -78,15 +79,19 @@ export function SnapshotErrorBanner(props: SnapshotErrorBannerProps) {
           <LocalStoreRepair error={props.error} />
         ) : null}
         <div className="flex flex-wrap justify-center gap-2">
-          <Button
-            type="button"
-            size="sm"
-            variant="outline"
-            data-testid="snapshot-error-retry"
-            onClick={() => requestFreshSnapshot()}
-          >
-            Retry
-          </Button>
+          {/* Remote access to that computer is off: a retry is refused
+              until it is turned back on there, so none is offered. */}
+          {props.error.code === REMOTE_ACCESS_OFF_FATAL_CODE ? null : (
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              data-testid="snapshot-error-retry"
+              onClick={() => requestFreshSnapshot()}
+            >
+              Retry
+            </Button>
+          )}
           <ReportIssueAction
             context={createReportIssueContext({
               title: "Failed to load epic",

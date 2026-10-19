@@ -1,4 +1,9 @@
 import {
+  ENVIRONMENT_WRITE_STALE_CODE,
+  staleWriteForCode,
+  type EnvironmentStaleWrite,
+} from "../../framework/environment-stale-write";
+import {
   holdersRevisionWireFieldSchema,
   isRpcErrorCode,
   worktreeBusyHoldersSchema,
@@ -82,6 +87,12 @@ export class HostRpcError extends Error {
    * it, carried a different code, or was not a non-empty string.
    */
   readonly holdersRevision: string | null;
+  /**
+   * Who changed the item and its current revision, on
+   * `ENVIRONMENT_WRITE_STALE`. `null` on every other code, when the envelope
+   * omitted it, or when it failed schema parse.
+   */
+  readonly staleWrite: EnvironmentStaleWrite | null;
 
   constructor(details: {
     code: RpcErrorCode;
@@ -91,6 +102,7 @@ export class HostRpcError extends Error {
     fatalDetails: FatalErrorDetails | null;
     holders?: readonly WorktreeBusyHolder[] | null;
     holdersRevision?: string | null;
+    staleWrite?: EnvironmentStaleWrite | null;
   }) {
     super(details.message);
     this.name = "HostRpcError";
@@ -104,6 +116,10 @@ export class HostRpcError extends Error {
     this.holdersRevision = isHolderCarryingCode(details.code)
       ? (details.holdersRevision ?? null)
       : null;
+    this.staleWrite =
+      details.code === ENVIRONMENT_WRITE_STALE_CODE
+        ? (details.staleWrite ?? null)
+        : null;
   }
 
   static fromErrorDetails(
@@ -122,6 +138,7 @@ export class HostRpcError extends Error {
         error.code,
         error.holdersRevision,
       ),
+      staleWrite: staleWriteForCode(error.code, error.staleWrite),
     });
   }
 
@@ -131,6 +148,7 @@ export class HostRpcError extends Error {
       readonly message: string;
       readonly holders?: unknown;
       readonly holdersRevision?: unknown;
+      readonly staleWrite?: unknown;
     },
     requestId: string,
     method: string,
@@ -146,6 +164,7 @@ export class HostRpcError extends Error {
         error.code,
         error.holdersRevision,
       ),
+      staleWrite: staleWriteForCode(error.code, error.staleWrite),
     });
   }
 }

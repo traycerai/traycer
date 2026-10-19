@@ -34,6 +34,8 @@ import { ColumnEdgeContext } from "@/components/layout/column-edge-context";
 import { SnapshotLoadingProvider } from "@/components/epic-canvas/snapshots/snapshot-loading-context";
 import { useHeaderTabTitle } from "@/components/layout/tabs/header-tab-presentation";
 import { PanelTaskHeaderBody } from "@/components/epic-canvas/sidebar/panel-task-header-body";
+import { TeamTaskChip } from "@/components/epics/team-task-chip";
+import { useEpicOwningTeamId } from "@/hooks/epics/use-epic-owning-team";
 import { MonogramChip } from "@/components/layout/tabs/monogram-chip";
 import {
   sideTabTileOf,
@@ -262,6 +264,7 @@ function PanelTaskHeaderRow(props: {
   const { resolvedTabName, displayName } = useHeaderTabTitle(props.tab);
   const rename = usePanelTaskTitleRename(props.epicId, resolvedTabName);
   const titleGenerating = useRegisteredEpicTitleGenerating(props.epicId);
+  const teamId = useEpicOwningTeamId(props.epicId);
   const appearance = tabAppearance(props.tab);
   const Icon = props.tab.icon;
   const tile = sideTabTileOf({
@@ -272,6 +275,7 @@ function PanelTaskHeaderRow(props: {
   });
   return (
     <PanelTaskHeaderBody
+      teamChip={teamId === null ? null : <TeamTaskChip teamId={teamId} />}
       testId="epic-sidebar-task-header"
       chip={
         <MonogramChip

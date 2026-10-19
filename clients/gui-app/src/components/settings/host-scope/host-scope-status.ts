@@ -98,6 +98,55 @@ export function hostListReadiness(
 }
 
 /**
+ * Whether a FAILED sandbox list (`GET /api/sandboxes`) is hiding rows from the
+ * pickers, which is a failed host list by another name.
+ *
+ * A picker fails closed on a sandbox whose control-plane row is unread
+ * (`hostOptionPickerGroup`), so a first read that rejects leaves every sandbox
+ * out while the directory and registry both look loaded. Counted as a failure
+ * only while it hides something: before the first answer it is still loading,
+ * a later failure keeps the last good rows, and an answer without a host's
+ * row is the list saying it is not a sandbox to offer.
+ */
+/** The sandbox list's outcome, plus whether its first read is in flight. */
+export interface SandboxListOutcome extends HostListOutcome {
+  /** The first read is in flight: no answer yet, and one is coming. */
+  readonly isPending: boolean;
+}
+
+/**
+ * Whether the sandbox list's FIRST read, still in flight, is withholding rows
+ * from the pickers: the loading twin of {@link sandboxSummariesUnread}.
+ *
+ * The directory and registry can answer first, or come from cache, and the
+ * pickers fail closed on an unread sandbox row, so for that window they would
+ * look complete without the sandboxes (or say "No hosts yet") and a pick could
+ * land before the sandboxes appear. Counted as loading only while it withholds
+ * a sandbox row: an account with no sandbox rows never waits on this list.
+ */
+export function sandboxSummariesPending(
+  hosts: readonly HostScopeOption[],
+  sandboxList: SandboxListOutcome,
+): boolean {
+  if (sandboxList.hasData || sandboxList.isError || !sandboxList.isPending) {
+    return false;
+  }
+  return hosts.some(
+    (host) => host.sandbox !== null && host.sandbox.summary === null,
+  );
+}
+
+export function sandboxSummariesUnread(
+  hosts: readonly HostScopeOption[],
+  sandboxList: HostListOutcome,
+): boolean {
+  if (sandboxList.hasData || !sandboxList.isError) return false;
+  return hosts.some(
+    (host) => host.sandbox !== null && host.sandbox.summary === null,
+  );
+}
+
+/**
  * The status derivation. Exported for its own tests: every "which client may
  * this panel use" decision reduces to this return value, and panel suites mock
  * the whole scope, so nothing else exercises it.

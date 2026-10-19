@@ -395,7 +395,7 @@ function presentOwnedForward(
       };
     case "binding":
       return {
-        stateLabel: "Binding",
+        stateLabel: "Starting",
         stateVariant: "info",
         portLabel: `requested :${forward.listen.requestedPort}`,
         detail: `Asking ${machine(forward.listen.hostId)} for port ${forward.listen.requestedPort} to reach ${machine(forward.target.hostId)}:${forward.target.port}. Nothing is listening yet.`,

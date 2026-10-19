@@ -6,6 +6,7 @@ import {
   HOOK_SEVERITIES,
   type HookDraft,
 } from "@/components/settings/panels/notification-hook-draft";
+import { useHostCredentialRefusal } from "@/hooks/host/use-host-credential-refusal";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import {
@@ -36,7 +37,10 @@ export function NotificationHookEditorDialog(props: {
   readonly onSave: (hook: NotificationHookConfig) => void;
 }) {
   const [draft, setDraft] = useState(props.initialDraft);
-  const problem = draftProblem(draft);
+  // The Settings scope's host: a sandbox is sent no header value and no URL
+  // sign-in.
+  const credentialRefusal = useHostCredentialRefusal(null);
+  const problem = draftProblem(draft, credentialRefusal);
   return (
     <Dialog
       open
@@ -119,7 +123,7 @@ export function NotificationHookEditorDialog(props: {
                 />
                 <p className="text-ui-xs text-muted-foreground">
                   One <code>name: value</code> per line. <code>$VAR</code> and{" "}
-                  <code>{"${VAR}"}</code> read the host&apos;s shell environment
+                  <code>{"${VAR}"}</code> read the host&apos;s shell variables
                   at send time — the value is never stored or shown here.
                 </p>
               </div>

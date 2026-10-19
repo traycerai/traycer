@@ -7,7 +7,7 @@
  * available hosts are nested sub-pages backed by transient clients, so cross-host creation remains
  * possible without changing the app-wide active host or opening a modal.
  */
-import { useMemo } from "react";
+import { useEffect, useMemo } from "react";
 import { v4 as uuidv4 } from "uuid";
 import { toast } from "sonner";
 import type { WorktreeBindingSelectorRowV12 } from "@traycer/protocol/host";
@@ -18,6 +18,21 @@ import { useActiveEpicSurfaceHostPin } from "@/lib/commands/sources/open/use-act
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import { useActiveEpicHostId } from "@/lib/commands/sources/open/use-active-epic-projection";
 import { useHostDirectoryList } from "@/hooks/host/use-host-directory-list-query";
+import { useHostOptions } from "@/components/settings/host-scope/use-host-options";
+import {
+  AVAILABLE_HOST_ROW_SURFACE_STATE,
+  groupHostOptions,
+  isHostOptionSelectable,
+} from "@/components/settings/host-scope/host-option-model";
+import type { HostScopeOption } from "@/components/settings/host-scope/host-scope-model";
+import { wakeSandboxOnPick } from "@/lib/sandboxes/sandbox-wake";
+import { useSandboxTeamPods } from "@/hooks/sandboxes/use-sandbox-automation-query";
+import { useSandboxAutomationOpen } from "@/hooks/sandboxes/use-sandbox-automation-open-mutation";
+import {
+  teamPodEnvironmentIds,
+  teamPodOpenHostIds,
+  teamPodOpenRows,
+} from "@/lib/commands/sources/open/team-pod-open";
 import { useRefreshHostDirectoryOnOpen } from "@/hooks/host/use-refresh-host-directory-on-open";
 import { useRemoteSessionsPollReadiness } from "@/hooks/host/use-remote-sessions-poll-readiness";
 import {
@@ -334,14 +349,25 @@ function useHostTerminalWorkspaceItems(
   );
 }
 
-function makeHostWorkspaceSubpage(
-  hostId: string,
-  hostLabel: string,
-): CommandSubpage {
+/**
+ * Opening a host's sub-page is the pick, as in the new-terminal picker: a
+ * sleeping sandbox is woken, and its workspaces list once it answers.
+ */
+function useHostWorkspaceSubpageItems(
+  ctx: CommandContext,
+  host: HostScopeOption,
+): ReadonlyArray<CommandItem> {
+  useEffect(() => {
+    wakeSandboxOnPick(host);
+  }, [host]);
+  return useHostTerminalWorkspaceItems(ctx, host.hostId);
+}
+
+function makeHostWorkspaceSubpage(host: HostScopeOption): CommandSubpage {
   return {
-    id: `open:terminals:new:host:${hostId}`,
-    title: `Create terminal on ${hostLabel}`,
-    useItems: (ctx) => useHostTerminalWorkspaceItems(ctx, hostId),
+    id: `open:terminals:new:host:${host.hostId}`,
+    title: `Create terminal on ${host.name}`,
+    useItems: (ctx) => useHostWorkspaceSubpageItems(ctx, host),
   };
 }
 
@@ -365,6 +391,34 @@ function useNewTerminalWorkspaceItems(
   // workspace chooser the same freshly-reachable host list as the old dialog.
   useRefreshHostDirectoryOnOpen(true, binding?.directory ?? null);
   const directory = useHostDirectoryList();
+  // The new terminal picker's own host rule (`hostOptionPickerGroup` with
+  // `offersAutomations`): personal hosts, the user's sandboxes and the
+  // Automations host, and each team's sandboxes and pods; never an agent's
+  // burst sandbox or a sandbox whose control-plane row has not answered.
+  const hostOptions = useHostOptions().hosts;
+  const groups = useMemo(
+    () => groupHostOptions(hostOptions, false, true, null),
+    [hostOptions],
+  );
+  const offeredHosts = useMemo(
+    () =>
+      new Map(
+        [
+          ...groups.personal,
+          ...groups.sandboxes,
+          ...groups.teams.flatMap((team) => team.sandboxes),
+        ].map((host) => [host.hostId, host]),
+      ),
+    [groups],
+  );
+  // A team pod that cannot be dialed yet is opened by its environment and
+  // ordinal: one pod-list read per team, however many pods.
+  const podEnvironmentIds = useMemo(
+    () => teamPodEnvironmentIds(groups),
+    [groups],
+  );
+  const podsByEnvironment = useSandboxTeamPods(podEnvironmentIds);
+  const openPod = useSandboxAutomationOpen().mutate;
   // Dialability depends on the pull-only session cache, so a memo keyed on
   // directory state alone freezes the row list while the palette is open: a
   // session dying under an `offline` host would keep offering a
@@ -397,28 +451,69 @@ function useNewTerminalWorkspaceItems(
             },
             hostClient,
           );
-    const otherHosts = (directory.data ?? [])
-      // Coarse, through the canonical rule: a palette row here leads to a
-      // launch, so it is offered exactly when the launch gate above would
-      // accept it. That deliberately keeps an `indeterminate` host listed —
-      // the picker's stated rule — rather than hiding a machine because one
-      // liveness read came back blind.
-      .filter(
-        (entry) =>
-          entry.hostId !== resolvedHostId &&
-          dialableHostEndpointFor(entry, hasReadySessionFor(entry.hostId)) !==
-            null,
-      )
-      .map((entry) => {
-        const label = entry.label.length > 0 ? entry.label : entry.hostId;
-        return openerSubpageLeaf({
-          id: `open:terminals:new:host:${entry.hostId}`,
-          label,
-          keywords: [entry.hostId, label, "host", "computer", "machine"],
-          subpage: makeHostWorkspaceSubpage(entry.hostId, label),
+    const dialable = (hostId: string): boolean => {
+      const entry =
+        (directory.data ?? []).find((e) => e.hostId === hostId) ?? null;
+      return (
+        entry !== null &&
+        dialableHostEndpointFor(entry, hasReadySessionFor(hostId)) !== null
+      );
+    };
+    // A team pod that cannot be dialed yet has its Open row below, and that
+    // is its one row.
+    const openedAsPods = teamPodOpenHostIds(groups, dialable);
+    // The new-terminal picker's own row rule, `isHostOptionSelectable`: a
+    // sleeping sandbox is offered and woken when its sub-page opens. Each
+    // workspace row's launch gate still dials before it opens a tile.
+    const otherHosts = (directory.data ?? []).flatMap((entry) => {
+      const host = offeredHosts.get(entry.hostId);
+      if (
+        entry.hostId === resolvedHostId ||
+        host === undefined ||
+        openedAsPods.has(host.hostId) ||
+        !isHostOptionSelectable(host, "pin", AVAILABLE_HOST_ROW_SURFACE_STATE)
+      ) {
+        return [];
+      }
+      return [
+        openerSubpageLeaf({
+          id: `open:terminals:new:host:${host.hostId}`,
+          label: host.name,
+          keywords: [host.hostId, host.name, "host", "computer", "machine"],
+          subpage: makeHostWorkspaceSubpage(host),
+        }),
+      ];
+    });
+    const podOpens = teamPodOpenRows(groups, podsByEnvironment, dialable).map(
+      (row) => {
+        // The same per-leaf latch as a workspace row: cmdk can invoke a
+        // selected row twice before its view rerenders, and one selection
+        // opens one pod (a generic row would otherwise start two).
+        let hasLaunched = false;
+        return openerActionLeaf({
+          id:
+            row.hostId === null
+              ? `open:terminals:new:team-pod:${row.target.environmentId}`
+              : `open:terminals:new:pod:${row.hostId}`,
+          label: `Open ${row.label}`,
+          keywords: [
+            ...(row.hostId === null ? [] : [row.hostId]),
+            row.label,
+            "pod",
+            "team",
+            "host",
+          ],
+          run: () => {
+            if (hasLaunched) return;
+            hasLaunched = true;
+            // A full team's refusal toasts its server message verbatim
+            // (`sandboxFailureMessage`, `team_pods_full`).
+            openPod(row.target);
+          },
         });
-      });
-    return [...selectedHostLeaves, ...otherHosts];
+      },
+    );
+    return [...selectedHostLeaves, ...otherHosts, ...podOpens];
   }, [
     resolvedHostId,
     bindings.data,
@@ -430,6 +525,10 @@ function useNewTerminalWorkspaceItems(
     directory.data,
     hasReadySessionFor,
     hostClient,
+    offeredHosts,
+    groups,
+    podsByEnvironment,
+    openPod,
   ]);
 }
 

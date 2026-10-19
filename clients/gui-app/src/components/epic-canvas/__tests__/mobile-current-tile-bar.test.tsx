@@ -56,8 +56,62 @@ vi.mock("@/lib/epic-selectors", async (importOriginal) => ({
   useEpicPermissionRole: () => holder.role,
 }));
 
+/**
+ * The host client the bar resolves for a terminal's bound host, and what the
+ * legacy title read (`terminal.list`) was handed: `null` means no legacy read
+ * was made at all.
+ */
+const terminalLegacy = vi.hoisted(() => ({
+  client: { tag: "terminal-host-client" },
+  titleReadClients: [] as Array<unknown>,
+}));
+
 vi.mock("@/hooks/terminal/use-terminal-display-title", () => ({
-  useTerminalDisplayTitle: () => null,
+  useTerminalDisplayTitle: (input: { readonly client: unknown }) => {
+    terminalLegacy.titleReadClients.push(input.client);
+    return null;
+  },
+}));
+
+interface TerminalAuthorityTestState {
+  capability: "unknown" | "legacy" | "capable";
+  canMutate: boolean;
+  displayTitle: string | null;
+  rename: (request: {
+    readonly hostId: string | null;
+    readonly terminalId: string;
+    readonly manualTitle: string;
+  }) => void;
+}
+
+const terminalAuthority = vi.hoisted((): TerminalAuthorityTestState => ({
+  capability: "legacy",
+  canMutate: false,
+  displayTitle: null,
+  rename: () => undefined,
+}));
+
+vi.mock("@/hooks/terminal/use-epic-terminal-authority", () => ({
+  useEpicTerminalAuthority: () => ({
+    capability: terminalAuthority.capability,
+    projection: terminalAuthority.capability === "capable" ? {} : undefined,
+    viewModel:
+      terminalAuthority.displayTitle === null
+        ? null
+        : {
+            displayTitle: terminalAuthority.displayTitle,
+            manualTitle: null,
+            activeProcessName: null,
+            liveCwd: null,
+          },
+    canMutate: terminalAuthority.canMutate,
+    migrationPending: false,
+    migrationError: null,
+    retryMigration: () => undefined,
+    ensureRunning: {},
+    rename: { mutate: terminalAuthority.rename },
+    close: { isPending: false, mutateAsync: () => Promise.resolve() },
+  }),
 }));
 
 vi.mock("@/stores/managed-commands/managed-commands-for-chat", () => ({
@@ -65,7 +119,8 @@ vi.mock("@/stores/managed-commands/managed-commands-for-chat", () => ({
 }));
 
 vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
-  useHostClientForHostId: () => null,
+  useHostClientForHostId: (hostId: string | null) =>
+    hostId === null ? null : terminalLegacy.client,
 }));
 
 const mocks = vi.hoisted(() => ({
@@ -184,6 +239,16 @@ const CHAT_TILE: EpicCanvasTileRef = {
   type: "chat",
   name: "Chat title",
   hostId: "host-A",
+};
+
+const TERMINAL_TILE: EpicCanvasTileRef = {
+  id: "terminal-1",
+  instanceId: "inst-4",
+  type: "terminal",
+  name: "Local presentation",
+  titleSource: "manual",
+  hostId: "host-A",
+  cwd: "/ws",
 };
 
 const FILE_TILE: EpicCanvasTileRef = {
@@ -368,6 +433,124 @@ describe("<MobileCurrentTileBar />", () => {
     expect(mutateSpies.renameTuiAgent).not.toHaveBeenCalled();
     expect(mutateSpies.renameArtifact).not.toHaveBeenCalled();
     expect(mutateSpies.renameTerminal).not.toHaveBeenCalled();
+  });
+
+  describe("a terminal tile", () => {
+    const authorityRename = vi.fn<TerminalAuthorityTestState["rename"]>();
+
+    beforeEach(() => {
+      authorityRename.mockReset();
+      terminalAuthority.capability = "legacy";
+      terminalAuthority.canMutate = false;
+      terminalAuthority.displayTitle = null;
+      terminalAuthority.rename = authorityRename;
+      terminalLegacy.titleReadClients.length = 0;
+    });
+
+    function commitTitle(next: string): void {
+      const input = openEdit();
+      fireEvent.change(input, { target: { value: next } });
+      fireEvent.blur(input);
+    }
+
+    it("on a capable host shows the authority's title and renames through the plain verb, never terminal.rename", () => {
+      terminalAuthority.capability = "capable";
+      terminalAuthority.canMutate = true;
+      terminalAuthority.displayTitle = "Authority title";
+      render(
+        <MobileCurrentTileBar
+          epicId="epic-1"
+          tabId={tabId}
+          tile={TERMINAL_TILE}
+        />,
+      );
+      expect(screen.getByTestId("mobile-current-tile-title").textContent).toBe(
+        "Authority title",
+      );
+
+      commitTitle("Renamed");
+
+      expect(authorityRename).toHaveBeenCalledTimes(1);
+      expect(authorityRename).toHaveBeenCalledWith({
+        hostId: "host-A",
+        terminalId: "terminal-1",
+        manualTitle: "Renamed",
+      });
+      expect(mutateSpies.renameTerminal).not.toHaveBeenCalled();
+      // No terminal.list read is made for it either.
+      expect(terminalLegacy.titleReadClients.length).toBeGreaterThan(0);
+      expect(
+        terminalLegacy.titleReadClients.every((client) => client === null),
+      ).toBe(true);
+    });
+
+    it("on a capable host offers no edit when the authority cannot mutate", () => {
+      terminalAuthority.capability = "capable";
+      terminalAuthority.canMutate = false;
+      terminalAuthority.displayTitle = "Authority title";
+      render(
+        <MobileCurrentTileBar
+          epicId="epic-1"
+          tabId={tabId}
+          tile={TERMINAL_TILE}
+        />,
+      );
+      expect(screen.getByTestId("mobile-current-tile-title").tagName).toBe(
+        "SPAN",
+      );
+    });
+
+    it("on a legacy host keeps terminal.rename and the legacy title read", () => {
+      terminalAuthority.capability = "legacy";
+      render(
+        <MobileCurrentTileBar
+          epicId="epic-1"
+          tabId={tabId}
+          tile={TERMINAL_TILE}
+        />,
+      );
+      expect(screen.getByTestId("mobile-current-tile-title").textContent).toBe(
+        "Local presentation",
+      );
+
+      commitTitle("Legacy name");
+
+      expect(mutateSpies.renameTerminal).toHaveBeenCalledTimes(1);
+      expect(mutateSpies.renameTerminal).toHaveBeenCalledWith({
+        sessionId: "terminal-1",
+        title: "Legacy name",
+      });
+      expect(authorityRename).not.toHaveBeenCalled();
+      expect(terminalLegacy.titleReadClients).toContain(terminalLegacy.client);
+    });
+
+    it("sends nothing while the capability is still unknown", () => {
+      terminalAuthority.capability = "unknown";
+      terminalAuthority.displayTitle = "Deciding";
+      render(
+        <MobileCurrentTileBar
+          epicId="epic-1"
+          tabId={tabId}
+          tile={TERMINAL_TILE}
+        />,
+      );
+      // The bar is not offered as editable while the mode is unknown, and a
+      // commit that does reach it sends neither verb.
+      expect(screen.getByTestId("mobile-current-tile-title").tagName).toBe(
+        "SPAN",
+      );
+      expect(mutateSpies.renameTerminal).not.toHaveBeenCalled();
+      expect(authorityRename).not.toHaveBeenCalled();
+      // No terminal.list either: the legacy title read gets no client, and the
+      // title shown is the authority's.
+      expect(terminalLegacy.titleReadClients.length).toBeGreaterThan(0);
+      expect(
+        terminalLegacy.titleReadClients.every((client) => client === null),
+      ).toBe(true);
+      expect(screen.getByTestId("mobile-current-tile-title").textContent).toBe(
+        "Deciding",
+      );
+    });
   });
 
   it("Escape restores the previous title and does not commit", () => {

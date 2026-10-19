@@ -34,6 +34,18 @@ import type {
   WindowSummary,
 } from "../../../ipc-contracts/window-types";
 import { createAuthenticatedUserFixture } from "@traycer-clients/shared/test-fixtures/authenticated-user";
+import type {
+  getSandboxAutomationViaHttp,
+  openSandboxAutomationViaHttp,
+  runSandboxVerbViaHttp,
+} from "@traycer-clients/shared/host-client/sandbox-control";
+import type {
+  decideSecretRequestViaHttp,
+  fetchEnvironmentProvidersViaHttp,
+  fetchSandboxGrantsViaHttp,
+  fetchTeamEnvironmentViaHttp,
+} from "@traycer-clients/shared/host-client/sandbox-secrets";
+import { config } from "../../../config";
 import { FakeHostController } from "./fake-host-controller";
 import { setAppliedLocalHostCapability } from "../../host/local-host-capability";
 import {
@@ -43,6 +55,70 @@ import {
 } from "../../auth/__tests__/jws-fixture";
 
 const featureSettings = vi.hoisted(() => ({ agentRoles: false }));
+/** The control-plane call the `runSandboxVerb` handler makes, observed. */
+const runSandboxVerbViaHttpMock = vi.hoisted(() =>
+  vi.fn<typeof runSandboxVerbViaHttp>(async () => ({
+    kind: "ok",
+    settled: true,
+  })),
+);
+/** The Automations read and open the two new handlers make, observed. */
+const getSandboxAutomationViaHttpMock = vi.hoisted(() =>
+  vi.fn<typeof getSandboxAutomationViaHttp>(async () => ({
+    kind: "ok",
+    automation: { available: true, sandbox: null, pods: [] },
+  })),
+);
+const openSandboxAutomationViaHttpMock = vi.hoisted(() =>
+  vi.fn<typeof openSandboxAutomationViaHttp>(async () => ({
+    kind: "network-error",
+    detail: "unscripted",
+  })),
+);
+/** The secrets broker's grants read and decide the two handlers make, observed. */
+const fetchSandboxGrantsViaHttpMock = vi.hoisted(() =>
+  vi.fn<typeof fetchSandboxGrantsViaHttp>(async () => ({
+    kind: "ok",
+    summary: { version: 3, grants: [], github: null },
+  })),
+);
+const decideSecretRequestViaHttpMock = vi.hoisted(() =>
+  vi.fn<typeof decideSecretRequestViaHttp>(async () => ({
+    kind: "ok",
+    status: "approved",
+    decidedBy: null,
+  })),
+);
+/** The team environment and provider counts the two handlers read, observed. */
+const fetchTeamEnvironmentViaHttpMock = vi.hoisted(() =>
+  vi.fn<typeof fetchTeamEnvironmentViaHttp>(async () => ({
+    kind: "ok",
+    environmentId: "env-acme",
+  })),
+);
+const fetchEnvironmentProvidersViaHttpMock = vi.hoisted(() =>
+  vi.fn<typeof fetchEnvironmentProvidersViaHttp>(async () => ({
+    kind: "ok",
+    counts: { providerSecretCount: 2, connectedPlanCount: 1 },
+  })),
+);
+vi.mock(
+  "@traycer-clients/shared/host-client/sandbox-control",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@traycer-clients/shared/host-client/sandbox-control")
+    >()),
+    runSandboxVerbViaHttp: runSandboxVerbViaHttpMock,
+    getSandboxAutomationViaHttp: getSandboxAutomationViaHttpMock,
+    openSandboxAutomationViaHttp: openSandboxAutomationViaHttpMock,
+  }),
+);
+vi.mock("@traycer-clients/shared/host-client/sandbox-secrets", () => ({
+  fetchSandboxGrantsViaHttp: fetchSandboxGrantsViaHttpMock,
+  fetchTeamEnvironmentViaHttp: fetchTeamEnvironmentViaHttpMock,
+  fetchEnvironmentProvidersViaHttp: fetchEnvironmentProvidersViaHttpMock,
+  decideSecretRequestViaHttp: decideSecretRequestViaHttpMock,
+}));
 /**
  * `app`-level event listeners, recorded rather than discarded so a test can
  * drive them. `epic-visibility-ipc.ts` registers a `render-process-gone`
@@ -598,6 +674,21 @@ describe("RunnerIpcBridge", () => {
           RunnerHostInvoke.deregisterHostFromAccount,
           RunnerHostInvoke.listRegisteredHosts,
           RunnerHostInvoke.updateHostVersionPolicy,
+          // The sandbox control plane, for traycer-server's CORS reason.
+          RunnerHostInvoke.listSandboxes,
+          RunnerHostInvoke.getSandboxCosts,
+          RunnerHostInvoke.getSandboxCatalogue,
+          RunnerHostInvoke.createSandbox,
+          RunnerHostInvoke.destroySandbox,
+          RunnerHostInvoke.runSandboxVerb,
+          RunnerHostInvoke.getSandboxAutomation,
+          RunnerHostInvoke.openSandboxAutomation,
+          // The secrets broker, on authn.
+          RunnerHostInvoke.getSandboxGrants,
+          RunnerHostInvoke.getTeamEnvironment,
+          RunnerHostInvoke.getEnvironmentProviders,
+          RunnerHostInvoke.decideSecretRequest,
+          RunnerHostInvoke.mintExecutableWriteGrant,
           RunnerHostInvoke.listUserSessions,
           RunnerHostInvoke.revokeUserSession,
           RunnerHostInvoke.revokeAllSessions,
@@ -884,6 +975,297 @@ describe("RunnerIpcBridge", () => {
       "featureSettings:agentRoles:set requires a boolean",
     );
     expect(setAgentRolesEnabledMock).toHaveBeenCalledTimes(1);
+    bridge.dispose();
+  });
+
+  it("forwards the runSandboxVerb timeout to the control-plane call, and rejects a timeout that is not a number before any request", async () => {
+    const mod = await import("../register-runner-ipc");
+    const bridge = new mod.RunnerIpcBridge({
+      host: new FakeHost(),
+      hostController: new FakeHostController(),
+      authnBaseUrl: "http://localhost:5005",
+      authRedirectUri: null,
+      tray: null,
+      zoomController: undefined,
+      authTokenStore: undefined,
+      window: buildWindow(),
+    });
+    bridge.install();
+    const handler = ipcMainState.handlers.get(RunnerHostInvoke.runSandboxVerb);
+    if (handler === undefined) {
+      throw new Error("runSandboxVerb handler missing");
+    }
+
+    await expect(
+      handler(bareEvent(), "bearer-1", "sbx_1", "resume", 119_000),
+    ).resolves.toEqual({ kind: "ok", settled: true });
+    expect(runSandboxVerbViaHttpMock).toHaveBeenCalledTimes(1);
+    expect(runSandboxVerbViaHttpMock).toHaveBeenCalledWith(
+      config.serverBaseUrl,
+      "bearer-1",
+      "sbx_1",
+      "resume",
+      119_000,
+    );
+
+    for (const bad of ["119000", null, undefined, {}]) {
+      await expect(
+        handler(bareEvent(), "bearer-1", "sbx_1", "resume", bad),
+      ).rejects.toThrow("runSandboxVerb.timeoutMs");
+    }
+    // The old four-argument call, from a renderer that predates the field.
+    await expect(
+      handler(bareEvent(), "bearer-1", "sbx_1", "resume"),
+    ).rejects.toThrow("runSandboxVerb.timeoutMs");
+    expect(runSandboxVerbViaHttpMock).toHaveBeenCalledTimes(1);
+    bridge.dispose();
+  });
+
+  it("routes the Automations read and open to the control plane with the bearer, and rejects a bearer that is not a string before any request", async () => {
+    const mod = await import("../register-runner-ipc");
+    const bridge = new mod.RunnerIpcBridge({
+      host: new FakeHost(),
+      hostController: new FakeHostController(),
+      authnBaseUrl: "http://localhost:5005",
+      authRedirectUri: null,
+      tray: null,
+      zoomController: undefined,
+      authTokenStore: undefined,
+      window: buildWindow(),
+    });
+    bridge.install();
+    const read = ipcMainState.handlers.get(
+      RunnerHostInvoke.getSandboxAutomation,
+    );
+    const open = ipcMainState.handlers.get(
+      RunnerHostInvoke.openSandboxAutomation,
+    );
+    if (read === undefined || open === undefined) {
+      throw new Error("an Automations handler is missing");
+    }
+
+    await expect(read(bareEvent(), "bearer-1", null)).resolves.toEqual({
+      kind: "ok",
+      automation: { available: true, sandbox: null, pods: [] },
+    });
+    expect(getSandboxAutomationViaHttpMock).toHaveBeenLastCalledWith(
+      config.serverBaseUrl,
+      "bearer-1",
+      null,
+    );
+    expect(openSandboxAutomationViaHttpMock).not.toHaveBeenCalled();
+
+    await read(bareEvent(), "bearer-1", "env-team");
+    expect(getSandboxAutomationViaHttpMock).toHaveBeenLastCalledWith(
+      config.serverBaseUrl,
+      "bearer-1",
+      "env-team",
+    );
+
+    await expect(open(bareEvent(), "bearer-2", null)).resolves.toEqual({
+      kind: "network-error",
+      detail: "unscripted",
+    });
+    expect(openSandboxAutomationViaHttpMock).toHaveBeenLastCalledWith(
+      config.serverBaseUrl,
+      "bearer-2",
+      null,
+    );
+
+    await open(bareEvent(), "bearer-2", {
+      environmentId: "env-team",
+      ordinal: 1,
+    });
+    expect(openSandboxAutomationViaHttpMock).toHaveBeenLastCalledWith(
+      config.serverBaseUrl,
+      "bearer-2",
+      { environmentId: "env-team", ordinal: 1 },
+    );
+
+    for (const bad of [null, undefined, 7, {}]) {
+      await expect(read(bareEvent(), bad, null)).rejects.toThrow(
+        "getSandboxAutomation.bearerToken",
+      );
+      await expect(open(bareEvent(), bad, null)).rejects.toThrow(
+        "openSandboxAutomation.bearerToken",
+      );
+    }
+    for (const bad of ["", undefined, 7, {}]) {
+      await expect(read(bareEvent(), "bearer-1", bad)).rejects.toThrow(
+        "getSandboxAutomation.environmentId",
+      );
+    }
+    for (const bad of [undefined, 7, "env-team", { ordinal: 1 }]) {
+      await expect(open(bareEvent(), "bearer-2", bad)).rejects.toThrow(
+        "openSandboxAutomation.target",
+      );
+    }
+    expect(getSandboxAutomationViaHttpMock).toHaveBeenCalledTimes(2);
+    expect(openSandboxAutomationViaHttpMock).toHaveBeenCalledTimes(2);
+    bridge.dispose();
+  });
+
+  it("routes the grants read and the grant decision to the secrets broker on authn with the bearer, and rejects a malformed argument before any request", async () => {
+    const mod = await import("../register-runner-ipc");
+    const bridge = new mod.RunnerIpcBridge({
+      host: new FakeHost(),
+      hostController: new FakeHostController(),
+      authnBaseUrl: "http://localhost:5005",
+      authRedirectUri: null,
+      tray: null,
+      zoomController: undefined,
+      authTokenStore: undefined,
+      window: buildWindow(),
+    });
+    bridge.install();
+    const grants = ipcMainState.handlers.get(RunnerHostInvoke.getSandboxGrants);
+    const decide = ipcMainState.handlers.get(
+      RunnerHostInvoke.decideSecretRequest,
+    );
+    if (grants === undefined || decide === undefined) {
+      throw new Error("a secrets handler is missing");
+    }
+
+    await expect(
+      grants(bareEvent(), "bearer-1", "env-1", "host-1"),
+    ).resolves.toEqual({
+      kind: "ok",
+      summary: { version: 3, grants: [], github: null },
+    });
+    expect(fetchSandboxGrantsViaHttpMock).toHaveBeenLastCalledWith(
+      "http://localhost:5005",
+      "bearer-1",
+      "env-1",
+      "host-1",
+    );
+
+    await expect(
+      decide(bareEvent(), "bearer-2", "env-1", "request-1", "approve_default"),
+    ).resolves.toEqual({ kind: "ok", status: "approved", decidedBy: null });
+    expect(decideSecretRequestViaHttpMock).toHaveBeenLastCalledWith(
+      "http://localhost:5005",
+      "bearer-2",
+      "env-1",
+      "request-1",
+      "approve_default",
+    );
+
+    // A null environment (a server that predates environments) crosses as null.
+    await grants(bareEvent(), "bearer-1", null, "host-1");
+    expect(fetchSandboxGrantsViaHttpMock).toHaveBeenLastCalledWith(
+      "http://localhost:5005",
+      "bearer-1",
+      null,
+      "host-1",
+    );
+    await decide(bareEvent(), "bearer-2", null, "request-1", "approve");
+    expect(decideSecretRequestViaHttpMock).toHaveBeenLastCalledWith(
+      "http://localhost:5005",
+      "bearer-2",
+      null,
+      "request-1",
+      "approve",
+    );
+
+    for (const bad of [null, undefined, 7, {}]) {
+      await expect(grants(bareEvent(), bad, "env-1", "host-1")).rejects.toThrow(
+        "getSandboxGrants.bearerToken",
+      );
+      await expect(
+        grants(bareEvent(), "bearer-1", "env-1", bad),
+      ).rejects.toThrow("getSandboxGrants.hostId");
+      await expect(
+        decide(bareEvent(), bad, "env-1", "request-1", "approve"),
+      ).rejects.toThrow("decideSecretRequest.bearerToken");
+      await expect(
+        decide(bareEvent(), "bearer-2", "env-1", bad, "approve"),
+      ).rejects.toThrow("decideSecretRequest.requestId");
+    }
+    // An environment that is neither a string nor null is refused in the
+    // main process, before any request.
+    for (const bad of [undefined, 7, {}, true]) {
+      await expect(
+        grants(bareEvent(), "bearer-1", bad, "host-1"),
+      ).rejects.toThrow("getSandboxGrants.environmentId");
+      await expect(
+        decide(bareEvent(), "bearer-2", bad, "request-1", "approve"),
+      ).rejects.toThrow("decideSecretRequest.environmentId");
+    }
+    // A decision outside the three is refused in the main process.
+    await expect(
+      decide(bareEvent(), "bearer-2", "env-1", "request-1", "approve_once"),
+    ).rejects.toThrow();
+    expect(fetchSandboxGrantsViaHttpMock).toHaveBeenCalledTimes(2);
+    expect(decideSecretRequestViaHttpMock).toHaveBeenCalledTimes(2);
+    bridge.dispose();
+  });
+
+  it("routes the team environment and provider reads to authn with the bearer, and rejects a malformed argument before any request", async () => {
+    const mod = await import("../register-runner-ipc");
+    const bridge = new mod.RunnerIpcBridge({
+      host: new FakeHost(),
+      hostController: new FakeHostController(),
+      authnBaseUrl: "http://localhost:5005",
+      authRedirectUri: null,
+      tray: null,
+      zoomController: undefined,
+      authTokenStore: undefined,
+      window: buildWindow(),
+    });
+    bridge.install();
+    const teamEnvironment = ipcMainState.handlers.get(
+      RunnerHostInvoke.getTeamEnvironment,
+    );
+    const providers = ipcMainState.handlers.get(
+      RunnerHostInvoke.getEnvironmentProviders,
+    );
+    if (teamEnvironment === undefined || providers === undefined) {
+      throw new Error("an environment handler is missing");
+    }
+    fetchTeamEnvironmentViaHttpMock.mockClear();
+    fetchEnvironmentProvidersViaHttpMock.mockClear();
+
+    await expect(
+      teamEnvironment(bareEvent(), "bearer-1", "team-acme"),
+    ).resolves.toEqual({ kind: "ok", environmentId: "env-acme" });
+    expect(fetchTeamEnvironmentViaHttpMock).toHaveBeenCalledTimes(1);
+    expect(fetchTeamEnvironmentViaHttpMock).toHaveBeenLastCalledWith(
+      "http://localhost:5005",
+      "bearer-1",
+      "team-acme",
+    );
+
+    await expect(
+      providers(bareEvent(), "bearer-2", "env-acme"),
+    ).resolves.toEqual({
+      kind: "ok",
+      counts: { providerSecretCount: 2, connectedPlanCount: 1 },
+    });
+    expect(fetchEnvironmentProvidersViaHttpMock).toHaveBeenCalledTimes(1);
+    expect(fetchEnvironmentProvidersViaHttpMock).toHaveBeenLastCalledWith(
+      "http://localhost:5005",
+      "bearer-2",
+      "env-acme",
+    );
+
+    for (const bad of [null, undefined, 7, {}]) {
+      await expect(
+        teamEnvironment(bareEvent(), bad, "team-acme"),
+      ).rejects.toThrow("getTeamEnvironment.bearerToken");
+      await expect(providers(bareEvent(), bad, "env-acme")).rejects.toThrow(
+        "getEnvironmentProviders.bearerToken",
+      );
+    }
+    for (const bad of ["", null, undefined, 7, {}]) {
+      await expect(
+        teamEnvironment(bareEvent(), "bearer-1", bad),
+      ).rejects.toThrow("getTeamEnvironment.teamId");
+      await expect(providers(bareEvent(), "bearer-1", bad)).rejects.toThrow(
+        "getEnvironmentProviders.environmentId",
+      );
+    }
+    expect(fetchTeamEnvironmentViaHttpMock).toHaveBeenCalledTimes(1);
+    expect(fetchEnvironmentProvidersViaHttpMock).toHaveBeenCalledTimes(1);
     bridge.dispose();
   });
 

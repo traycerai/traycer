@@ -2,13 +2,16 @@ import {
   hostListResponseSchema,
   type HostListItem,
   type HostListResponse,
+  type HostProfile,
+  type HostSandboxState,
   type HostStatusDTO,
 } from "@traycer/protocol/host/host-status";
 import type { CloudBearerSource } from "../auth/bearer-source";
+import { composeRequestAbort } from "../auth/request-abort";
 import type { AuthEra } from "../auth/request-context-provider";
 import { applyHostKeyPins } from "./host-key-pin";
+import { isSandboxFrozenInEffect } from "./sandbox-control";
 import type { HostDirectoryEntry } from "./host-directory";
-import { timeoutSignal } from "./timeout-signal";
 
 /**
  * Remote-host discovery for Remote Host Support S1 (Architecture §7, §9).
@@ -46,11 +49,24 @@ export type HostListFetchResult =
   | { readonly kind: "unauthorized" }
   | { readonly kind: "network-error" };
 
+/**
+ * Every OSS reader of the registry opts into `include=sandboxState`: without
+ * it authn returns no `kind: sandbox` rows at all, and with it every row
+ * carries `sandboxState`, `sandboxFrozen` and `profile` (nullable). A released
+ * client never sends it, so it keeps the row set and shape it parses.
+ *
+ * And into `owner`: the row's owner principal, a team named, so the host list
+ * groups a team's hosts under it. An authn that does not know the token ignores
+ * it (`parseHostListIncludes` reads only the tokens it knows) and the rows
+ * carry no `owner`, which the list reads as the person's own.
+ */
 function hostsApiUrl(authnBaseUrl: string): string {
-  return new URL(
+  const url = new URL(
     "api/v3/hosts",
     authnBaseUrl.endsWith("/") ? authnBaseUrl : `${authnBaseUrl}/`,
-  ).toString();
+  );
+  url.searchParams.set("include", "sandboxState,owner");
+  return url.toString();
 }
 
 /**
@@ -62,6 +78,26 @@ export async function fetchRegisteredHostsViaHttp(
   authnBaseUrl: string,
   bearerToken: string,
 ): Promise<HostListFetchResult> {
+  // Not `AbortSignal.timeout`, which the iOS WebView floor lacks; see
+  // `request-abort.ts`. Cleared once the body is read, which the timeout also
+  // bounds.
+  const abort = composeRequestAbort(null, HOST_LIST_FETCH_TIMEOUT_MS);
+  try {
+    return await fetchRegisteredHostsWithSignal(
+      authnBaseUrl,
+      bearerToken,
+      abort.signal,
+    );
+  } finally {
+    abort.clear();
+  }
+}
+
+async function fetchRegisteredHostsWithSignal(
+  authnBaseUrl: string,
+  bearerToken: string,
+  signal: AbortSignal,
+): Promise<HostListFetchResult> {
   let response: Response;
   try {
     response = await fetch(hostsApiUrl(authnBaseUrl), {
@@ -70,7 +106,7 @@ export async function fetchRegisteredHostsViaHttp(
         Authorization: `Bearer ${bearerToken}`,
         Accept: "application/json",
       },
-      signal: timeoutSignal(HOST_LIST_FETCH_TIMEOUT_MS),
+      signal,
     });
   } catch {
     // A thrown `fetch` — transport failure or the per-attempt timeout — is
@@ -140,7 +176,40 @@ export type RemoteHostDirectoryEntry = HostDirectoryEntry & {
    * Always `false` for any connectivity other than `offline`.
    */
   readonly relayFuseGrace: boolean;
+  /**
+   * The registry's sandbox facts for a `kind: sandbox` host, `null` for a
+   * personal one. Decides what the session's `OPEN` presents (a session
+   * grant, never the user bearer: `remoteOpenAuthFor`) and whether a tab open
+   * must wake the sandbox before it can be dialed.
+   */
+  readonly sandbox: RemoteHostSandboxFacts | null;
 };
+
+/** A sandbox host's lifecycle facts, as `GET /api/v3/hosts` reported them. */
+export interface RemoteHostSandboxFacts {
+  /** `null` before the control plane's first state post. */
+  readonly state: HostSandboxState | null;
+  /**
+   * Frozen for lack of credits, in effect: the registry's stored flag, which
+   * a destroyed row keeps, folded with `state` at fetch time
+   * (`isSandboxFrozenInEffect`), so a terminal row never reads frozen.
+   */
+  readonly frozen: boolean;
+  readonly profile: HostProfile | null;
+  /**
+   * The owning team's name when a team owns this sandbox, from the row's
+   * `owner`; `null` for the caller's own sandbox and for a row the registry
+   * sent without `owner`. A team sandbox that is not a pod asks before a wake,
+   * because the wake is billed to the person who opens it.
+   */
+  readonly ownerTeamName: string | null;
+  /**
+   * The owning team's id, beside its name and on the same rule: what the
+   * team-host surfaces key on (the first-tab disclosure's readers, a removed
+   * member's tiles), since a team's name is not unique.
+   */
+  readonly ownerTeamId: string | null;
+}
 
 /**
  * Narrows a directory entry to a remote one carrying its status DTO + public
@@ -153,6 +222,20 @@ export function isRemoteHostDirectoryEntry(
   return (
     entry.kind === "remote" && "remoteStatus" in entry && "publicKey" in entry
   );
+}
+
+/**
+ * Whether a directory entry names a sandbox host. A sandbox runs code the
+ * user did not write on a machine they do not hold, so nothing that speaks
+ * for the user is ever sent to it: not the desktop's cookie jar, not a
+ * provider key, not a sign-in. Every such send checks this first and is
+ * never built for a sandbox, rather than relying on the sandbox to refuse
+ * a secret it has already received.
+ */
+export function isSandboxHostDirectoryEntry(
+  entry: HostDirectoryEntry,
+): boolean {
+  return isRemoteHostDirectoryEntry(entry) && entry.sandbox !== null;
 }
 
 /**
@@ -452,6 +535,19 @@ export function hostListItemToDirectoryEntry(
     // Reconciled once here (fetch time, not render) so the render-time
     // dialability/death gates stay pure - see isWithinRelayFuseGrace.
     relayFuseGrace: isWithinRelayFuseGrace(item.status, nowMs),
+    sandbox:
+      item.kind === "sandbox"
+        ? {
+            state: item.sandboxState ?? null,
+            frozen: isSandboxFrozenInEffect(
+              item.sandboxState ?? null,
+              item.sandboxFrozen === true,
+            ),
+            profile: item.profile ?? null,
+            ownerTeamName: item.owner?.kind === "team" ? item.owner.name : null,
+            ownerTeamId: item.owner?.kind === "team" ? item.owner.id : null,
+          }
+        : null,
   };
 }
 

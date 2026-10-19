@@ -19,12 +19,14 @@ import {
   configEnvListRequestSchema,
   configEnvListResponseSchema,
   configEnvSetRequestSchema,
+  configEnvSetRequestSchemaV10,
   configEnvSetResponseSchema,
   configLogLevelsGetRequestSchema,
   configLogLevelsResponseSchema,
   configLogLevelsSetRequestSchema,
   configLogLevelsSetResponseSchema,
   configShellAddRequestSchema,
+  configShellAddRequestSchemaV10,
   configWorktreesGetRequestSchema,
   configWorktreesResponseSchema,
   configWorktreesSetRequestSchema,
@@ -42,12 +44,16 @@ import {
   configShellProbeRequestSchema,
   configShellProbeResponseSchema,
   configShellRemoveRequestSchema,
+  configShellRemoveRequestSchemaV10,
   configShellRemoveResponseSchema,
   configShellResetRequestSchema,
+  configShellResetRequestSchemaV10,
   configShellResetResponseSchema,
   configShellRevertArgsRequestSchema,
+  configShellRevertArgsRequestSchemaV10,
   configShellRevertArgsResponseSchema,
   configShellSetRequestSchema,
+  configShellSetRequestSchemaV10,
   configShellSetResponseSchema,
 } from "./schemas";
 
@@ -62,35 +68,35 @@ export const configShellGetV10 = defineRpcContract({
 export const configShellSetV10 = defineRpcContract({
   method: "config.shell.set",
   schemaVersion: { major: 1, minor: 0 } as const,
-  requestSchema: configShellSetRequestSchema,
+  requestSchema: configShellSetRequestSchemaV10,
   responseSchema: configShellSetResponseSchema,
 });
 
 export const configShellResetV10 = defineRpcContract({
   method: "config.shell.reset",
   schemaVersion: { major: 1, minor: 0 } as const,
-  requestSchema: configShellResetRequestSchema,
+  requestSchema: configShellResetRequestSchemaV10,
   responseSchema: configShellResetResponseSchema,
 });
 
 export const configShellAddV10 = defineRpcContract({
   method: "config.shell.add",
   schemaVersion: { major: 1, minor: 0 } as const,
-  requestSchema: configShellAddRequestSchema,
+  requestSchema: configShellAddRequestSchemaV10,
   responseSchema: configShellAddResponseSchema,
 });
 
 export const configShellRemoveV10 = defineRpcContract({
   method: "config.shell.remove",
   schemaVersion: { major: 1, minor: 0 } as const,
-  requestSchema: configShellRemoveRequestSchema,
+  requestSchema: configShellRemoveRequestSchemaV10,
   responseSchema: configShellRemoveResponseSchema,
 });
 
 export const configShellRevertArgsV10 = defineRpcContract({
   method: "config.shell.revertArgs",
   schemaVersion: { major: 1, minor: 0 } as const,
-  requestSchema: configShellRevertArgsRequestSchema,
+  requestSchema: configShellRevertArgsRequestSchemaV10,
   responseSchema: configShellRevertArgsResponseSchema,
 });
 
@@ -150,7 +156,7 @@ export const configEnvListV10 = defineRpcContract({
 export const configEnvSetV10 = defineRpcContract({
   method: "config.env.set",
   schemaVersion: { major: 1, minor: 0 } as const,
-  requestSchema: configEnvSetRequestSchema,
+  requestSchema: configEnvSetRequestSchemaV10,
   responseSchema: configEnvSetResponseSchema,
 });
 
@@ -287,4 +293,116 @@ export const configCatalogSetUpgradeV10ToV11 = defineUpgradePath<
     probeTimeoutSeconds: request.probeTimeoutSeconds,
   }),
   upgradeResponse: (response) => ({ ...response, overrides: {} }),
+});
+
+// ── v1.1: the executable-write grant ────────────────────────────────────────
+//
+// Each of these writes can change what a host starts (the shell path and
+// args, a launch-sensitive host-process variable), so it reaches an execution
+// sink and carries `executableWriteGrant`. Every v1.0 line is released
+// (`host-v1.5.1`), so the field opens a minor: a v1.0 caller's request is
+// upgraded with `null`, and a v1.1 request to a v1.0 host is re-parsed onto
+// the v1.0 request, whose non-strict object strips the key. The response is
+// unchanged.
+
+export const configShellSetV11 = defineRpcContract({
+  method: "config.shell.set",
+  schemaVersion: { major: 1, minor: 1 } as const,
+  requestSchema: configShellSetRequestSchema,
+  responseSchema: configShellSetResponseSchema,
+});
+
+export const configShellSetUpgradeV10ToV11 = defineUpgradePath<
+  typeof configShellSetV10,
+  typeof configShellSetV11
+>({
+  from: configShellSetV10.schemaVersion,
+  to: configShellSetV11.schemaVersion,
+  upgradeRequest: (request) => ({ ...request, executableWriteGrant: null }),
+  upgradeResponse: (response) => response,
+});
+
+export const configShellResetV11 = defineRpcContract({
+  method: "config.shell.reset",
+  schemaVersion: { major: 1, minor: 1 } as const,
+  requestSchema: configShellResetRequestSchema,
+  responseSchema: configShellResetResponseSchema,
+});
+
+export const configShellResetUpgradeV10ToV11 = defineUpgradePath<
+  typeof configShellResetV10,
+  typeof configShellResetV11
+>({
+  from: configShellResetV10.schemaVersion,
+  to: configShellResetV11.schemaVersion,
+  upgradeRequest: (request) => ({ ...request, executableWriteGrant: null }),
+  upgradeResponse: (response) => response,
+});
+
+export const configShellAddV11 = defineRpcContract({
+  method: "config.shell.add",
+  schemaVersion: { major: 1, minor: 1 } as const,
+  requestSchema: configShellAddRequestSchema,
+  responseSchema: configShellAddResponseSchema,
+});
+
+export const configShellAddUpgradeV10ToV11 = defineUpgradePath<
+  typeof configShellAddV10,
+  typeof configShellAddV11
+>({
+  from: configShellAddV10.schemaVersion,
+  to: configShellAddV11.schemaVersion,
+  upgradeRequest: (request) => ({ ...request, executableWriteGrant: null }),
+  upgradeResponse: (response) => response,
+});
+
+export const configShellRemoveV11 = defineRpcContract({
+  method: "config.shell.remove",
+  schemaVersion: { major: 1, minor: 1 } as const,
+  requestSchema: configShellRemoveRequestSchema,
+  responseSchema: configShellRemoveResponseSchema,
+});
+
+export const configShellRemoveUpgradeV10ToV11 = defineUpgradePath<
+  typeof configShellRemoveV10,
+  typeof configShellRemoveV11
+>({
+  from: configShellRemoveV10.schemaVersion,
+  to: configShellRemoveV11.schemaVersion,
+  upgradeRequest: (request) => ({ ...request, executableWriteGrant: null }),
+  upgradeResponse: (response) => response,
+});
+
+export const configShellRevertArgsV11 = defineRpcContract({
+  method: "config.shell.revertArgs",
+  schemaVersion: { major: 1, minor: 1 } as const,
+  requestSchema: configShellRevertArgsRequestSchema,
+  responseSchema: configShellRevertArgsResponseSchema,
+});
+
+export const configShellRevertArgsUpgradeV10ToV11 = defineUpgradePath<
+  typeof configShellRevertArgsV10,
+  typeof configShellRevertArgsV11
+>({
+  from: configShellRevertArgsV10.schemaVersion,
+  to: configShellRevertArgsV11.schemaVersion,
+  upgradeRequest: (request) => ({ ...request, executableWriteGrant: null }),
+  upgradeResponse: (response) => response,
+});
+
+export const configEnvSetV11 = defineRpcContract({
+  method: "config.env.set",
+  schemaVersion: { major: 1, minor: 1 } as const,
+  requestSchema: configEnvSetRequestSchema,
+  responseSchema: configEnvSetResponseSchema,
+});
+
+export const configEnvSetUpgradeV10ToV11 = defineUpgradePath<
+  typeof configEnvSetV10,
+  typeof configEnvSetV11
+>({
+  from: configEnvSetV10.schemaVersion,
+  to: configEnvSetV11.schemaVersion,
+  upgradeRequest: (request) => ({ ...request, executableWriteGrant: null }),
+  upgradeResponse: (response) => response,
 });

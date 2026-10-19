@@ -616,7 +616,7 @@ describe("<HostPortForwardsCard />", () => {
       });
       const row = screen.getByTestId("host-port-forward-owned-owned-1");
       expect(row.textContent).toContain("requested :9090");
-      expect(row.textContent).toContain("Binding");
+      expect(row.textContent).toContain("Starting");
       expect(row.textContent).toContain("Nothing is listening yet");
       expect(row.textContent).not.toContain("open connection");
       expect(row.textContent).not.toContain(" in · ");

@@ -81,6 +81,8 @@ export function formatAgentListPage(
   // Gated on the flag being REPORTED rather than on any row being archived -
   // see `hasArchiveEnrichment`.
   const showArchived = rendered.some(hasArchiveEnrichment);
+  // Gated on a row printing the marker: only an `other_principal` row does.
+  const showUnreachable = rendered.some(isOtherPrincipalAgent);
   const showRunConfig = full && rendered.some(hasRunConfigEnrichment);
   const showOwnerHostConnectivity =
     full && rendered.some(hasConnectivityEnrichment);
@@ -119,6 +121,7 @@ ${formatAgentListLegend(
   options.detail,
   showSend,
   showArchived,
+  showUnreachable,
   showRunConfig,
   showOwnerHostConnectivity,
   showSessionState,
@@ -511,8 +514,12 @@ function formatAgentListLine(
 ): string {
   const self = agent.isSelf ? " [self]" : "";
   const archived = isArchivedAgent(agent) ? " [archived]" : "";
+  // The marker names no owner: a collaborator's host label is theirs to show.
+  const unreachable = isOtherPrincipalAgent(agent)
+    ? " [not reachable from this host]"
+    : "";
   const parts = [
-    `${agent.id}${self}${archived}${formatTitleToken(agent)}`,
+    `${agent.id}${self}${archived}${unreachable}${formatTitleToken(agent)}`,
     `${agent.surface}/${agent.harnessId ?? "-"}`,
   ];
   const full = detail === "full";
@@ -723,6 +730,7 @@ function formatAgentListLegend(
   detail: AgentListDetail,
   showSend: boolean,
   showArchived: boolean,
+  showUnreachable: boolean,
   showRunConfig: boolean,
   showOwnerHostConnectivity: boolean,
   showSessionState: boolean,
@@ -731,6 +739,9 @@ function formatAgentListLegend(
 ): string {
   const archived = showArchived
     ? "\n[archived]: the agent/chat is archived and treated as inactive until its next user or A2A message"
+    : "";
+  const unreachable = showUnreachable
+    ? "\n[not reachable from this host]: another collaborator's host; not reachable from this host"
     : "";
   const runConfig = showRunConfig
     ? "\nmodel: <slug>: the configured model (provider default means the TUI provider resolves it)\neffort: <level>: the configured reasoning effort; omitted when absent\nfast: fast mode is enabled"
@@ -788,14 +799,14 @@ function formatAgentListLegend(
       : "";
   if (!showSend) {
     return `Legend:
-[self]: this agent, i.e. the caller of agent.list${archived}
+[self]: this agent, i.e. the caller of agent.list${archived}${unreachable}
 "<title>": the agent's chat/session title (omitted when untitled)
 R: the agent has a readable transcript
 -: the agent has no readable transcript${location}${runConfig}${runTuple}${activity}${sessionState}${ownerHost}
 Sending is unavailable in this session`;
   }
   return `Legend:
-[self]: this agent, i.e. the caller of agent.list${archived}
+[self]: this agent, i.e. the caller of agent.list${archived}${unreachable}
 "<title>": the agent's chat/session title (omitted when untitled)
 R: the agent has a readable transcript
 S: the agent can be sent messages to
@@ -912,6 +923,14 @@ function formatRunTupleSelfLines(agent: AgentSummary): string[] {
  * keep explaining the marker, while a listing from an older host must never
  * advertise a marker none of its rows can show.
  */
+/**
+ * Only an affirmative `other_principal` marks a row. `null` (a host that
+ * predates `agent.list@10.2`) is "not reported" and prints nothing.
+ */
+function isOtherPrincipalAgent(agent: AgentSummary): boolean {
+  return agent.reach === "other_principal";
+}
+
 function hasArchiveEnrichment(agent: AgentSummary): boolean {
   return typeof agent.archived === "boolean";
 }

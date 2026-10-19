@@ -1,6 +1,13 @@
 import { useCallback } from "react";
 import { TabIcon } from "@/components/epic-canvas/canvas/tab-strip";
 import {
+  terminalTabDisplayTitle,
+  terminalTabRenamable,
+  terminalTabUsesLegacyReads,
+  useTerminalTabControl,
+  type TerminalTabControl,
+} from "@/components/epic-canvas/canvas/use-terminal-tab-control";
+import {
   useBrowserTabPresentation,
   type BrowserTabPresentation,
 } from "@/components/epic-canvas/canvas/browser-tab-presentation";
@@ -27,6 +34,7 @@ import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id
 import type {
   BrowserSessionTileRef,
   EpicCanvasTileRef,
+  EpicTerminalRef,
 } from "@/stores/epics/canvas/types";
 
 interface MobileCurrentTileBarProps {
@@ -54,7 +62,37 @@ export function MobileCurrentTileBar(props: MobileCurrentTileBarProps) {
   if (props.tile.type === "browser-session") {
     return <MobileBrowserCurrentTileBar {...props} tile={props.tile} />;
   }
-  return <MobileCurrentTileBarBody {...props} browserPresentation={null} />;
+  if (props.tile.type === "terminal") {
+    return <MobileTerminalCurrentTileBar {...props} tile={props.tile} />;
+  }
+  return (
+    <MobileCurrentTileBarBody
+      {...props}
+      browserPresentation={null}
+      terminalControl={null}
+    />
+  );
+}
+
+/**
+ * A terminal's title and rename go through its host authority, as the tab
+ * strip's do: the plain verbs on a capable host, the legacy `terminal.list` /
+ * `terminal.rename` only on a host without them (the Automations host serves
+ * the plain verbs alone).
+ */
+function MobileTerminalCurrentTileBar(
+  props: Omit<MobileCurrentTileBarProps, "tile"> & {
+    readonly tile: EpicTerminalRef;
+  },
+) {
+  const terminalControl = useTerminalTabControl(props.epicId, props.tile);
+  return (
+    <MobileCurrentTileBarBody
+      {...props}
+      browserPresentation={null}
+      terminalControl={terminalControl}
+    />
+  );
 }
 
 function MobileBrowserCurrentTileBar(
@@ -70,6 +108,7 @@ function MobileBrowserCurrentTileBar(
     <MobileCurrentTileBarBody
       {...props}
       browserPresentation={browserPresentation}
+      terminalControl={null}
     />
   );
 }
@@ -77,9 +116,10 @@ function MobileBrowserCurrentTileBar(
 function MobileCurrentTileBarBody(
   props: MobileCurrentTileBarProps & {
     readonly browserPresentation: BrowserTabPresentation | null;
+    readonly terminalControl: TerminalTabControl | null;
   },
 ) {
-  const { epicId, tabId, tile, browserPresentation } = props;
+  const { epicId, tabId, tile, browserPresentation, terminalControl } = props;
   const isTerminal = tile.type === "terminal";
   // Terminal titles resolve against the tab's bound host; `null` for every
   // other kind (mirrors the tab strip). `useHostClientForHostId(null)` returns
@@ -87,7 +127,11 @@ function MobileCurrentTileBarBody(
   const resolvedHostClient = useHostClientForHostId(
     isTerminal ? tile.hostId : null,
   );
-  const terminalHostClient = isTerminal ? resolvedHostClient : null;
+  // The legacy reads only for a host without the plain verbs, as the tab strip.
+  const terminalHostClient =
+    isTerminal && terminalTabUsesLegacyReads(terminalControl)
+      ? resolvedHostClient
+      : null;
   const fallbackDisplayTitle = useEpicTabDisplayTitle(
     {
       id: tile.id,
@@ -101,7 +145,9 @@ function MobileCurrentTileBarBody(
   const titleGenerationPending = useEpicLiveArtifactTitleGenerating(
     tile.type === "chat" ? tile.id : null,
   );
-  const displayTitle = browserPresentation?.title ?? fallbackDisplayTitle;
+  const displayTitle =
+    browserPresentation?.title ??
+    terminalTabDisplayTitle(terminalControl, fallbackDisplayTitle);
 
   const renameKind = tileRenameKind(tile);
   const canMutate = isEditableRole(useEpicPermissionRole());
@@ -119,7 +165,10 @@ function MobileCurrentTileBarBody(
     tile.id,
   );
   const editable =
-    renameKind !== null && canMutate && chatWriteRoute !== "unavailable";
+    renameKind !== null &&
+    canMutate &&
+    chatWriteRoute !== "unavailable" &&
+    terminalTabRenamable(terminalControl);
   const rename = useRenameCanvasTab(epicId, tabId);
   const renameTerminal = useTerminalRenameFor(terminalHostClient);
   const handleCommit = useCallback(
@@ -128,12 +177,14 @@ function MobileCurrentTileBarBody(
       const trimmed = next.trim();
       if (trimmed.length === 0) return;
       if (tile.type === "terminal") {
-        renameTerminal.mutate({ sessionId: tile.id, title: trimmed });
+        commitTerminalTitle(terminalControl, trimmed, () =>
+          renameTerminal.mutate({ sessionId: tile.id, title: trimmed }),
+        );
         return;
       }
       rename(tile, trimmed);
     },
-    [rename, renameKind, renameTerminal, tile],
+    [rename, renameKind, renameTerminal, terminalControl, tile],
   );
   // A chat is the one tile kind whose own stream can be away while its content
   // stays on screen with nothing said about it. Terminals already overlay
@@ -204,4 +255,21 @@ function MobileCurrentTileBarBody(
       </div>
     </div>
   );
+}
+
+/**
+ * A terminal rename: through the authority on a capable host, nothing while it
+ * is still deciding, the legacy `terminal.rename` only off a capable host.
+ */
+function commitTerminalTitle(
+  control: TerminalTabControl | null,
+  title: string,
+  renameLegacy: () => void,
+): void {
+  if (control?.mode === "capable") {
+    control.rename(title);
+    return;
+  }
+  if (control?.mode === "unknown") return;
+  renameLegacy();
 }

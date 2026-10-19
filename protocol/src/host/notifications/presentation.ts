@@ -1,5 +1,5 @@
 import {
-  type HostNotificationEntryV22,
+  type HostNotificationEntryV23,
   type HostNotificationOutcome,
 } from "@traycer/protocol/host/notifications/host-notifications";
 import {
@@ -7,6 +7,7 @@ import {
   parseHostOperationCommonPayload,
   parseKnownHostNotificationPayloadForKind,
   type HostNotificationKnownPayload,
+  type HostNotificationRotationProducer,
   type HostNotificationStoppedReason,
 } from "@traycer/protocol/host/notifications/payloads";
 import type { AgentFailureReason } from "@traycer/protocol/persistence/epic/content-blocks";
@@ -32,7 +33,7 @@ export interface HostNotificationPresentation {
  * generic copy instead of throwing or exposing untrusted raw error text.
  */
 export function formatHostNotificationPresentation(
-  entry: HostNotificationEntryV22,
+  entry: HostNotificationEntryV23,
 ): HostNotificationPresentation {
   const known = parseKnownHostNotificationPayloadForKind(
     entry.kind,
@@ -91,7 +92,243 @@ export function formatHostNotificationPresentation(
         title: "Browser needs you",
         body: `${browserHumanNeededReason(known) ?? "Browser"} • ${resolvableRequestStatus(entry.resolvedAt, "Waiting for you", "Resumed")}`,
       };
+    // Host-composed titles. The subject is the secret's NAME (or, for a
+    // request that names only a destination, the destination); the agent's
+    // reason stays in the payload for the approval card and is not put into
+    // copy that also reaches email and hooks.
+    case "secret.grant.requested":
+      return {
+        title: "Secret requested",
+        body: `${secretGrantRequestSubject(known) ?? "A sandbox agent"} • ${resolvableRequestStatus(entry.resolvedAt, "Waiting for your decision", secretGrantDecidedBy(known) ?? "Decided")}`,
+      };
+    case "secret.export.minted":
+      return {
+        title: "Secret exported",
+        body: `${secretExportMintedSubject(known) ?? "A secret"} • Short-lived export created`,
+      };
+    case "secret.rotated":
+      return secretRotatedPresentation(known);
+    case "team.member.removed":
+    case "team.member.joined":
+    case "team.policy.unapplied":
+    case "team.policy.authority_expired":
+    case "team.installing_admin.gone":
+    case "team.plan.unlinked":
+    case "team.pods.full":
+      return teamNotificationPresentation(entry.kind, known);
   }
+}
+
+/**
+ * A replaced secret's row. The state is read from the payload as a string:
+ * a state newer than this build reads "Value replaced". "Enforced" is said
+ * only when the payload's state is `enforced`; the per-class proof beside it
+ * is counted from the evidence kinds this build knows, never from a fence or
+ * a deadline.
+ */
+function secretRotatedPresentation(
+  known: HostNotificationKnownPayload | null,
+): HostNotificationPresentation {
+  const title = "Secret value replaced";
+  if (known?.kind !== "secret_rotated") {
+    return { title, body: "A secret • Value replaced" };
+  }
+  const subject = known.secretName;
+  switch (known.state) {
+    case "accepted":
+    case "enforcing":
+      return {
+        title,
+        body: `${subject} • New value accepted, closing old sessions`,
+      };
+    case "stalled":
+      return {
+        title,
+        body: `${subject} • Not confirmed after a minute; you can stop the sandbox`,
+      };
+    case "enforced": {
+      const proof = rotationProofSummary(known.evidence);
+      return {
+        title,
+        body:
+          proof === null
+            ? `${subject} • Enforced`
+            : `${subject} • Enforced: ${proof}`,
+      };
+    }
+    case "failed":
+      return { title, body: `${subject} • Replacing the value failed` };
+    default:
+      return { title, body: `${subject} • Value replaced` };
+  }
+}
+
+/**
+ * "3 sessions closed, cached keys dropped": the known evidence summed over
+ * every producer. A kind this build does not know adds nothing; a producer
+ * contained by expiry supplies no count.
+ */
+function rotationProofSummary(
+  producers: readonly HostNotificationRotationProducer[],
+): string | null {
+  let sessions = 0;
+  let sawSessions = false;
+  let cachesDropped = false;
+  let probed = false;
+  for (const producer of producers) {
+    for (const entry of producer.evidence ?? []) {
+      if (entry.kind === "session_closed") {
+        sawSessions = true;
+        sessions += entry.count ?? 0;
+      } else if (entry.kind === "cache_cleared") {
+        cachesDropped = true;
+      } else if (entry.kind === "probe_refused") {
+        probed = true;
+      }
+    }
+  }
+  const parts: string[] = [];
+  if (sawSessions && sessions > 0) {
+    parts.push(
+      sessions === 1 ? "1 session closed" : `${sessions} sessions closed`,
+    );
+  }
+  if (cachesDropped) parts.push("cached keys dropped");
+  if (probed) parts.push("old value refused");
+  return parts.length === 0 ? null : parts.join(", ");
+}
+
+/** The team rows: what changed in the team, by name. */
+function teamNotificationPresentation(
+  kind:
+    | "team.member.removed"
+    | "team.member.joined"
+    | "team.policy.unapplied"
+    | "team.policy.authority_expired"
+    | "team.installing_admin.gone"
+    | "team.plan.unlinked"
+    | "team.pods.full",
+  known: HostNotificationKnownPayload | null,
+): HostNotificationPresentation {
+  switch (kind) {
+    case "team.member.removed": {
+      if (known?.kind !== "team_member_removed") {
+        return { title: "Member removed", body: "A team member was removed" };
+      }
+      const done = known.hosts.filter(
+        (host) =>
+          host.stopped === "done" &&
+          host.credentialClosed === "done" &&
+          host.replacementDelivered === "done",
+      ).length;
+      const progress =
+        known.hosts.length === 0
+          ? "Removal complete"
+          : `${done} of ${known.hosts.length} hosts done`;
+      return {
+        title: "Member removed",
+        body: `${known.memberName} • ${known.teamName} • ${progress}`,
+      };
+    }
+    case "team.member.joined":
+      if (known?.kind !== "team_member_joined") {
+        return { title: "Member joined", body: "Someone joined your team" };
+      }
+      return known.toNewcomer
+        ? {
+            title: `Welcome to ${known.teamName}`,
+            body: `Open a tab on one of ${known.teamName}'s sandboxes, or create one`,
+          }
+        : {
+            title: "Member joined",
+            body: `${known.memberName} • Joined ${known.teamName}`,
+          };
+    case "team.policy.unapplied":
+      return {
+        title: "Policy not applied yet",
+        body:
+          known?.kind === "team_policy_unapplied"
+            ? `${known.teamName} • No host has applied the latest policy yet`
+            : "No host has applied the latest policy yet",
+      };
+    case "team.policy.authority_expired":
+      return {
+        title: "Policy lapsed on a host",
+        body:
+          known?.kind === "team_policy_authority_expired"
+            ? `${known.hostName} • Its ${known.teamName} policy has lapsed`
+            : "A host's team policy has lapsed",
+      };
+    case "team.installing_admin.gone":
+      return {
+        title: "GitHub needs an installing admin",
+        body:
+          known?.kind === "team_installing_admin_gone"
+            ? `${installingAdminGoneLine(known.adminName, known.teamName, known.reason)} • Git fails on every ${known.teamName} sandbox until another admin connects GitHub`
+            : "Git fails on every team sandbox until another admin connects GitHub",
+      };
+    case "team.plan.unlinked":
+      return {
+        title: "Team plan unlinked",
+        body:
+          known?.kind === "team_plan_unlinked"
+            ? `${known.teamName} • Its plan was unlinked`
+            : "A team's plan was unlinked",
+      };
+    case "team.pods.full":
+      return {
+        title: "Every pod is full",
+        body:
+          known?.kind === "team_pods_full"
+            ? `${known.teamName} • All ${known.podCount} pods are full; add a pod`
+            : "Every team pod is full; add a pod",
+      };
+  }
+}
+
+function installingAdminGoneLine(
+  adminName: string,
+  teamName: string,
+  reason: string,
+): string {
+  switch (reason) {
+    case "left":
+      return `${adminName} left ${teamName}`;
+    case "demoted":
+      return `${adminName} is no longer an admin of ${teamName}`;
+    case "unlinked":
+      return `${adminName} unlinked GitHub`;
+    default:
+      return `${adminName} can no longer install GitHub for ${teamName}`;
+  }
+}
+
+function secretGrantRequestSubject(
+  known: HostNotificationKnownPayload | null,
+): string | null {
+  if (known?.kind !== "secret_grant_request") return null;
+  return known.secretName ?? known.destination;
+}
+
+/**
+ * "Approved by Ana" or "Declined by Ana" for a resolved request whose payload
+ * names who answered (a team's other admins read it), else `null`.
+ */
+function secretGrantDecidedBy(
+  known: HostNotificationKnownPayload | null,
+): string | null {
+  if (known?.kind !== "secret_grant_request") return null;
+  const decidedBy = known.decidedBy ?? null;
+  if (decidedBy === null) return null;
+  if (known.decision === "approved") return `Approved by ${decidedBy}`;
+  if (known.decision === "declined") return `Declined by ${decidedBy}`;
+  return null;
+}
+
+function secretExportMintedSubject(
+  known: HostNotificationKnownPayload | null,
+): string | null {
+  return known?.kind === "secret_export_minted" ? known.secretName : null;
 }
 
 function browserHumanNeededReason(
@@ -163,6 +400,16 @@ export function hostOperationKnownCopy(
     // The browser park row's copy is composed above from the entry itself, not
     // from the payload arm: `reason` is the body's context, never a title.
     case "browser_human_needed":
+    case "secret_grant_request":
+    case "secret_export_minted":
+    case "secret_rotated":
+    case "team_member_removed":
+    case "team_member_joined":
+    case "team_policy_unapplied":
+    case "team_policy_authority_expired":
+    case "team_installing_admin_gone":
+    case "team_plan_unlinked":
+    case "team_pods_full":
       return null;
     case "worktree_deletion": {
       const taskTitle = nonEmptyTitle(payload.taskTitle ?? null);
@@ -248,6 +495,16 @@ function knownTaskTitle(payload: HostNotificationKnownPayload): string | null {
     case "worktree_auto_cleanup":
     case "managed_command_delivery_parked":
     case "browser_human_needed":
+    case "secret_grant_request":
+    case "secret_export_minted":
+    case "secret_rotated":
+    case "team_member_removed":
+    case "team_member_joined":
+    case "team_policy_unapplied":
+    case "team_policy_authority_expired":
+    case "team_installing_admin_gone":
+    case "team_plan_unlinked":
+    case "team_pods_full":
       return null;
   }
 }
@@ -265,6 +522,16 @@ function knownAgentName(payload: HostNotificationKnownPayload): string | null {
     case "worktree_auto_cleanup":
     case "managed_command_delivery_parked":
     case "browser_human_needed":
+    case "secret_grant_request":
+    case "secret_export_minted":
+    case "secret_rotated":
+    case "team_member_removed":
+    case "team_member_joined":
+    case "team_policy_unapplied":
+    case "team_policy_authority_expired":
+    case "team_installing_admin_gone":
+    case "team_plan_unlinked":
+    case "team_pods_full":
       return null;
   }
 }
@@ -282,6 +549,16 @@ function knownChatTitle(payload: HostNotificationKnownPayload): string | null {
     case "worktree_auto_cleanup":
     case "managed_command_delivery_parked":
     case "browser_human_needed":
+    case "secret_grant_request":
+    case "secret_export_minted":
+    case "secret_rotated":
+    case "team_member_removed":
+    case "team_member_joined":
+    case "team_policy_unapplied":
+    case "team_policy_authority_expired":
+    case "team_installing_admin_gone":
+    case "team_plan_unlinked":
+    case "team_pods_full":
       return null;
   }
 }
@@ -304,6 +581,16 @@ function knownStoppedReason(
     case "worktree_auto_cleanup":
     case "managed_command_delivery_parked":
     case "browser_human_needed":
+    case "secret_grant_request":
+    case "secret_export_minted":
+    case "secret_rotated":
+    case "team_member_removed":
+    case "team_member_joined":
+    case "team_policy_unapplied":
+    case "team_policy_authority_expired":
+    case "team_installing_admin_gone":
+    case "team_plan_unlinked":
+    case "team_pods_full":
       return null;
   }
 }
@@ -325,6 +612,16 @@ function knownProviderId(
     case "worktree_auto_cleanup":
     case "managed_command_delivery_parked":
     case "browser_human_needed":
+    case "secret_grant_request":
+    case "secret_export_minted":
+    case "secret_rotated":
+    case "team_member_removed":
+    case "team_member_joined":
+    case "team_policy_unapplied":
+    case "team_policy_authority_expired":
+    case "team_installing_admin_gone":
+    case "team_plan_unlinked":
+    case "team_pods_full":
       return null;
   }
 }
@@ -358,6 +655,16 @@ function knownBackgroundWorkRunning(
     case "worktree_auto_cleanup":
     case "managed_command_delivery_parked":
     case "browser_human_needed":
+    case "secret_grant_request":
+    case "secret_export_minted":
+    case "secret_rotated":
+    case "team_member_removed":
+    case "team_member_joined":
+    case "team_policy_unapplied":
+    case "team_policy_authority_expired":
+    case "team_installing_admin_gone":
+    case "team_plan_unlinked":
+    case "team_pods_full":
       return false;
   }
 }

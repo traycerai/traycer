@@ -107,8 +107,9 @@ export function registerRegisteredHostsBroadcast(
     // cadence has one owner and one lifetime. A flag that got stuck `true`
     // would be the only way this could silence the fallback, and the
     // subscription sets it `false` for every way its stream can be less than
-    // healthy - a drop, a host restart, a method the host does not serve, or
-    // rows the host itself marked stale.
+    // healthy - a drop, a host restart, a method the host does not serve,
+    // rows the host itself marked stale, or a host on @1.0 whose rows leave
+    // out every sandbox.
     if (fleet.isPushActive()) return;
     void fleet.refresh();
   }, REGISTERED_HOSTS_POLL_MS);

@@ -26,6 +26,8 @@ const AGENT_ROW = {
   archived: true,
   profile: "ambient",
   permissionMode: "supervised",
+  reach: null,
+  hostConnectivity: { kind: "unknown" as const },
 };
 
 describe("agent.list row: the run tuple a configure must restate", () => {

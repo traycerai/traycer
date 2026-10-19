@@ -37,6 +37,7 @@ import {
   DEV_AUTHN_BASE_URL_ENV,
   DEV_CLOUD_UI_BASE_URL_ENV,
   DEV_RELAY_BASE_URL_ENV,
+  DEV_SERVER_BASE_URL_ENV,
   devBackendUrlFromEnv,
   devRelayBaseUrlFromEnv,
 } from "../../shared/platform/dev-backend-urls";
@@ -52,6 +53,11 @@ const bakedConfig = {
   // CLI; the CLI subprocess owns host install/update/restart decisions.
   version: "0.0.0-dev",
   authnBaseUrl: "https://authn.traycer.ai",
+  // traycer-server, which serves the sandbox control plane (`/api/sandboxes`).
+  // Mirrors the host build's own `traycerServerBaseUrl`; the deploy script
+  // stamps the target's value from the client target stamp's
+  // `cloud.traycerServerBaseUrl`.
+  serverBaseUrl: "https://server.traycer.ai",
   cloudUiBaseUrl: "https://traycer.ai",
   // Remote Host Support (ticket T14): the relay worker's WebSocket attach
   // endpoint (`workers/relay-do`, ticket T10) — mirrors the host build's own
@@ -95,6 +101,12 @@ export const config = {
     bakedConfig.environment,
     DEV_AUTHN_BASE_URL_ENV,
     bakedConfig.authnBaseUrl,
+    process.env,
+  ),
+  serverBaseUrl: devBackendUrlFromEnv(
+    bakedConfig.environment,
+    DEV_SERVER_BASE_URL_ENV,
+    bakedConfig.serverBaseUrl,
     process.env,
   ),
   cloudUiBaseUrl: devBackendUrlFromEnv(

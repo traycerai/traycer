@@ -1,10 +1,20 @@
 import { useCallback, useMemo, useState, type ReactNode } from "react";
 import {
+  PersonalEntryMark,
+  type PersonalMarkTarget,
+} from "@/components/settings/personal/personal-entry-mark";
+import {
+  PERSONAL_ENTRY_LOCKED_TEXT,
+  personalRemoveText,
+  usePersonalEntryApplied,
+} from "@/components/settings/personal/personal-page-context";
+import {
   PROVIDER_DISPLAY_NAMES,
   type ProviderCliState,
   type ProviderId,
 } from "@traycer/protocol/host/provider-schemas";
 import type {
+  ProviderNativeScope,
   ProviderSkill,
   ProviderSkillsCapabilities,
   ProviderSkillSourceBadge,
@@ -27,6 +37,8 @@ import type { SkillsMutateData } from "@/hooks/providers/native-response-map";
 import { useProvidersSkillsList } from "@/hooks/providers/use-providers-skills-list-query";
 import { useProvidersSkillsMutate } from "@/hooks/providers/use-providers-skills-mutate-mutation";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
+import { useHostCredentialRefusal } from "@/hooks/host/use-host-credential-refusal";
+import { urlCarriesCredentials } from "@/components/providers/credential-bearing-values";
 import { SETTINGS_ROW_STACK } from "@/components/settings/settings-row-layout";
 import { cn } from "@/lib/utils";
 import { fileContentRevision } from "@/lib/workspace/file-content-revision";
@@ -130,6 +142,9 @@ function ProviderSkillsTabBody({
     enabled: canList,
   });
   const mutate = useProvidersSkillsMutate();
+  // A git or tree URL with a token in it is a credential: a sandbox is not
+  // sent one.
+  const credentialRefusal = useHostCredentialRefusal(null);
 
   // Conditional mount: false unmounts the composer and discards the draft.
   const [composerOpen, setComposerOpen] = useState(false);
@@ -139,6 +154,11 @@ function ProviderSkillsTabBody({
   // frontmatter the row already has rather than re-deriving it.
   const [openSkill, setOpenSkill] = useState<ProviderSkill | null>(null);
   const [removeTarget, setRemoveTarget] = useState<ProviderSkill | null>(null);
+  const removeTargetPersonal = usePersonalEntryApplied(
+    "skills",
+    removeTarget?.name ?? null,
+    effectiveScope,
+  );
   const [updateConfirm, setUpdateConfirm] = useState<ProviderSkill | null>(
     null,
   );
@@ -190,12 +210,16 @@ function ProviderSkillsTabBody({
     effectiveScope,
   );
   // Hoisted: eslint rewrites `a && b` in JSX attrs to `a ? b : null`.
-  const openSkillEditable =
-    openSkill !== null && canEditHere && skillIsEditable(openSkill);
-  const openSkillUpdatable =
-    openSkill !== null &&
-    canUpdateHere &&
-    skillOriginDisplay(openSkill) !== null;
+  const {
+    personal: openSkillPersonal,
+    editable: openSkillEditable,
+    updatable: openSkillUpdatable,
+  } = useOpenSkillActions(
+    openSkill,
+    canEditHere,
+    canUpdateHere,
+    effectiveScope,
+  );
   const globalOnly = !multiScope && effectiveScope === "global";
   // Hoisted: eslint rewrites `a && b` in JSX attrs to `a ? b : null`, widening
   // boolean props to `boolean | null`.
@@ -276,6 +300,15 @@ function ProviderSkillsTabBody({
   async function onComposerMutate(
     mutation: ProvidersSkillsMutateAction,
   ): Promise<SkillsMutateData> {
+    if (
+      credentialRefusal !== null &&
+      (mutation.action === "inspect" || mutation.action === "import") &&
+      urlCarriesCredentials(mutation.source)
+    ) {
+      throw new Error(
+        `${credentialRefusal}: remove the sign-in from the source URL to import it here.`,
+      );
+    }
     setPendingKey(`composer:${mutation.action}`);
     try {
       return await mutate.mutateAsync({
@@ -409,6 +442,7 @@ function ProviderSkillsTabBody({
             removePending={removePending}
             removeDisabled={isMutating}
             actionError={detailError}
+            lockedNote={openSkillPersonal ? PERSONAL_ENTRY_LOCKED_TEXT : null}
             canEdit={openSkillEditable}
             canUpdate={openSkillUpdatable}
             origin={skillOriginDisplay(openSkill)}
@@ -434,6 +468,7 @@ function ProviderSkillsTabBody({
 
         <SkillRemoveConfirm
           target={removeTarget}
+          personal={removeTargetPersonal}
           pending={removePending}
           onCancel={() => {
             setRemoveTarget(null);
@@ -516,6 +551,7 @@ function ProviderSkillsTabBody({
       ) : null}
 
       <SkillsListBody
+        markTarget={{ entryKind: "skills", providerId, scope: effectiveScope }}
         projectNeedsWorkspace={projectNeedsWorkspace}
         workspacesLoading={workspacesLoading}
         listLoading={listLoading}
@@ -692,11 +728,14 @@ function SkillSourceFilterMenu({
 
 function SkillRemoveConfirm({
   target,
+  personal,
   pending,
   onCancel,
   onConfirm,
 }: {
   readonly target: ProviderSkill | null;
+  /** One of the person's settings: Remove is forwarded as the item's delete. */
+  readonly personal: boolean;
   readonly pending: boolean;
   readonly onCancel: () => void;
   readonly onConfirm: (skill: ProviderSkill) => void;
@@ -711,8 +750,12 @@ function SkillRemoveConfirm({
       title="Remove skill"
       // Names the PATH, not just the skill: removal deletes a directory, and
       // which of the four skill roots it sits in is the part the name alone
-      // cannot tell you.
-      description={removeDescription(target)}
+      // cannot tell you. A Personal skill leaves every host instead.
+      description={
+        target !== null && personal
+          ? personalRemoveText(target.name)
+          : removeDescription(target)
+      }
       cascadeSummary={null}
       actionLabel="Remove"
       isPending={pending}
@@ -768,6 +811,7 @@ function SkillUpdateConfirm({
 }
 
 function SkillsListBody({
+  markTarget,
   projectNeedsWorkspace,
   workspacesLoading,
   listLoading,
@@ -783,6 +827,7 @@ function SkillsListBody({
   onOpenComposer,
   onOpenSkill,
 }: {
+  readonly markTarget: PersonalMarkTarget;
   readonly projectNeedsWorkspace: boolean;
   readonly workspacesLoading: boolean;
   readonly listLoading: boolean;
@@ -864,6 +909,7 @@ function SkillsListBody({
         <SkillRow
           key={`${skill.source}:${skill.path}`}
           skill={skill}
+          markTarget={markTarget}
           onOpen={() => {
             onOpenSkill(skill);
           }}
@@ -895,7 +941,9 @@ function SkillsEmptyState({
     <div className="flex flex-col items-center gap-3 rounded-lg border border-dashed border-border/60 px-4 py-8 text-center">
       <Sparkles className="size-5 text-muted-foreground" />
       <div className="flex max-w-prose flex-col gap-1">
-        <p className="text-ui-sm font-medium text-foreground">No skills yet</p>
+        <p className="text-ui-sm font-medium text-foreground">
+          Skills give agents instructions for a kind of task.
+        </p>
         <p className="text-ui-xs text-muted-foreground">
           A skill is a folder with a <code>SKILL.md</code> in it: a short
           description that tells the agent when to reach for it, then the
@@ -914,7 +962,7 @@ function SkillsEmptyState({
           onClick={onOpenComposer}
         >
           <Plus className="size-3.5" />
-          Add skill
+          Add a skill
         </Button>
       ) : (
         <p className="max-w-prose text-ui-xs text-muted-foreground">
@@ -942,6 +990,37 @@ description: Reviews a   # what the agent matches on
 ## When to use this
 ...instructions the agent follows...`;
 
+/**
+ * What the open skill's dialog offers. A skill that is one of the person's
+ * settings is changed in the dashboard: the host forwards only Remove for it,
+ * so edit and update are held off.
+ */
+function useOpenSkillActions(
+  openSkill: ProviderSkill | null,
+  canEditHere: boolean,
+  canUpdateHere: boolean,
+  scope: ProviderNativeScope,
+): {
+  readonly personal: boolean;
+  readonly editable: boolean;
+  readonly updatable: boolean;
+} {
+  const personal = usePersonalEntryApplied(
+    "skills",
+    openSkill?.name ?? null,
+    scope,
+  );
+  if (openSkill === null) {
+    return { personal, editable: false, updatable: false };
+  }
+  return {
+    personal,
+    editable: canEditHere && !personal && skillIsEditable(openSkill),
+    updatable:
+      canUpdateHere && !personal && skillOriginDisplay(openSkill) !== null,
+  };
+}
+
 function skillOpenLabel(skill: ProviderSkill): string {
   const badge = SKILL_SOURCE_LABEL[skill.source];
   if (skill.conflict === true) {
@@ -952,13 +1031,16 @@ function skillOpenLabel(skill: ProviderSkill): string {
 
 function SkillRow({
   skill,
+  markTarget,
   onOpen,
 }: {
   readonly skill: ProviderSkill;
+  /** Where the row's Personal mark reads from (`PersonalEntryMark`). */
+  readonly markTarget: PersonalMarkTarget;
   readonly onOpen: () => void;
 }): ReactNode {
   return (
-    <li>
+    <li className="flex items-center gap-2">
       <button
         type="button"
         onClick={onOpen}
@@ -969,7 +1051,7 @@ function SkillRow({
         // (rows are keyed `source:path`), which would leave a screen reader
         // with several buttons all reading "Open deploy".
         aria-label={skillOpenLabel(skill)}
-        className="flex w-full items-center gap-3 rounded-lg border border-border/60 px-3 py-2 text-left transition-colors hover:bg-foreground/5 focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+        className="flex min-w-0 flex-1 items-center gap-3 rounded-lg border border-border/60 px-3 py-2 text-left transition-colors hover:bg-foreground/5 focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
       >
         {/* No leading tile. A skill is a markdown directory; no provider's
             format carries artwork for one, so anything here would be a glyph
@@ -1017,6 +1099,8 @@ function SkillRow({
         </span>
         <ChevronRight className="size-3.5 shrink-0 text-muted-foreground" />
       </button>
+      {/* Beside the row, not inside it: the mark can hold its own button. */}
+      <PersonalEntryMark target={markTarget} name={skill.name} />
     </li>
   );
 }

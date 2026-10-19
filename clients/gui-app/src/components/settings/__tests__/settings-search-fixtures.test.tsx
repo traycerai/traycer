@@ -62,7 +62,9 @@ vi.mock("@/hooks/rate-limits/use-rate-limit-host-scope", () => ({
 // the Overview's header and tab bar render in every host state, so the
 // contract mounts both under a `connecting` scope - the state where every
 // host-backed body is withheld - and the fixture's `hostScope` says which
-// state to serve. The ref is set per test.
+// state to serve. Permissions reads `usePersonalHostScope` (it is an Account
+// page now) and the Overview reads `useHostScope`, so BOTH hooks answer with
+// the same connecting-aware factory. The ref is set per test.
 const hostScopeState = vi.hoisted((): { current: "connecting" | null } => ({
   current: null,
 }));
@@ -71,16 +73,16 @@ vi.mock(
   async (importOriginal) => {
     const { hostScopeFixture: fixture } =
       await import("@/components/settings/host-scope/host-scope-fixture");
+    const useScope = () =>
+      fixture(
+        hostScopeState.current === "connecting" ? { status: "connecting" } : {},
+      );
     return {
       ...(await importOriginal<
         typeof import("@/components/settings/host-scope/use-host-scope")
       >()),
-      useHostScope: () =>
-        fixture(
-          hostScopeState.current === "connecting"
-            ? { status: "connecting" }
-            : {},
-        ),
+      useHostScope: useScope,
+      usePersonalHostScope: useScope,
     };
   },
 );

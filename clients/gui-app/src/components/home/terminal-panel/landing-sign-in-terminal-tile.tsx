@@ -218,7 +218,7 @@ function LandingSignInRestartButton(props: {
       type="button"
       variant="outline"
       size="sm"
-      disabled={login.isPending}
+      disabled={login.isPending || login.credentialRefusal !== null}
       onClick={() => login.start(landingPageId)}
     >
       Start again

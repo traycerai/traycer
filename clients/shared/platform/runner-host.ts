@@ -26,6 +26,28 @@ import type {
   UpdateHostVersionPolicyInput,
 } from "../host-client/host-version-policy-fetcher";
 import type { DeregisterHostFetchResult } from "../host-client/host-deregister-fetcher";
+import type {
+  SandboxAutomationFetchResult,
+  SandboxAutomationOpenFetchResult,
+  SandboxCatalogueFetchResult,
+  SandboxCostsFetchResult,
+  SandboxCreateFetchResult,
+  SandboxListFetchResult,
+  SandboxVerbFetchResult,
+} from "../host-client/sandbox-control";
+import type {
+  EnvironmentProvidersFetchResult,
+  SandboxGrantsFetchResult,
+  TeamEnvironmentFetchResult,
+  SecretRequestDecideFetchResult,
+} from "../host-client/sandbox-secrets";
+import type { SecretRequestDecision } from "@traycer/protocol/host/sandbox-secrets";
+import type { ExecutableWriteGrantFetchResult } from "../host-client/executable-write-grant";
+import type {
+  SandboxAutomationOpenTarget,
+  SandboxCreateRequest,
+  SandboxLifecycleVerb,
+} from "@traycer/protocol/host/sandbox-control";
 import type { SelectionAuthorityClient } from "../host-selection/selection-authority-contract";
 import type { StoredCredentials } from "@traycer/protocol/config/credentials";
 import type {
@@ -343,6 +365,84 @@ export interface IRunnerHost {
     hostId: string,
   ): Promise<DeregisterHostFetchResult>;
 
+  /**
+   * The sandbox control plane (traycer-server `/api/sandboxes`) with the user
+   * bearer: the user's sandboxes, their cost and the user's awake burn, the
+   * catalogue the create form prices from, create, destroy, the lifecycle
+   * verbs (the card's suspend / resume / stop / start, and the wake a tab open
+   * calls before dialing a suspended or stopped sandbox), and the user's
+   * Automations host (its read, and the open that creates or wakes it). Each shell owns its traycer-server base URL
+   * the way it owns `authnBaseUrl`. Desktop runs these in Electron main
+   * (traycer-server's CORS allow-list is the web dashboard origin); mobile
+   * goes through the native HTTP layer; browser/dev shells call the shared
+   * helpers in `host-client/sandbox-control.ts` directly. Never throw:
+   * failures collapse into the discriminated results.
+   */
+  listSandboxes(bearerToken: string): Promise<SandboxListFetchResult>;
+  getSandboxCosts(bearerToken: string): Promise<SandboxCostsFetchResult>;
+  getSandboxCatalogue(
+    bearerToken: string,
+  ): Promise<SandboxCatalogueFetchResult>;
+  createSandbox(
+    bearerToken: string,
+    request: SandboxCreateRequest,
+  ): Promise<SandboxCreateFetchResult>;
+  destroySandbox(
+    bearerToken: string,
+    sandboxId: string,
+  ): Promise<SandboxVerbFetchResult>;
+  runSandboxVerb(
+    bearerToken: string,
+    sandboxId: string,
+    verb: SandboxLifecycleVerb,
+    timeoutMs: number,
+  ): Promise<SandboxVerbFetchResult>;
+  getSandboxAutomation(
+    bearerToken: string,
+    environmentId: string | null,
+  ): Promise<SandboxAutomationFetchResult>;
+  openSandboxAutomation(
+    bearerToken: string,
+    target: SandboxAutomationOpenTarget | null,
+  ): Promise<SandboxAutomationOpenFetchResult>;
+  /**
+   * The secrets broker (authn), with the user's bearer: the grants one
+   * sandbox host holds, and the answer to an agent's grant request. See
+   * `host-client/sandbox-secrets.ts`.
+   */
+  getSandboxGrants(
+    bearerToken: string,
+    environmentId: string | null,
+    hostId: string,
+  ): Promise<SandboxGrantsFetchResult>;
+  /**
+   * A team's environment id and an environment's provider counts, both from
+   * authn with the user's bearer. See `host-client/sandbox-secrets.ts`.
+   */
+  getTeamEnvironment(
+    bearerToken: string,
+    teamId: string,
+  ): Promise<TeamEnvironmentFetchResult>;
+  getEnvironmentProviders(
+    bearerToken: string,
+    environmentId: string,
+  ): Promise<EnvironmentProvidersFetchResult>;
+  decideSecretRequest(
+    bearerToken: string,
+    environmentId: string | null,
+    requestId: string,
+    decision: SecretRequestDecision,
+  ): Promise<SecretRequestDecideFetchResult>;
+  /**
+   * An executable-write grant for one host, minted by authn on the user's
+   * session (`host-client/executable-write-grant.ts`). Sent with a write that
+   * can reach an execution sink on that host.
+   */
+  mintExecutableWriteGrant(
+    bearerToken: string,
+    hostId: string,
+  ): Promise<ExecutableWriteGrantFetchResult>;
+
   openExternalLink(url: string): Promise<void>;
 
   /**
@@ -466,6 +566,14 @@ export interface IRunnerHost {
    * stream are not exposed to a branch on capability.
    */
   readonly hasLocalHost: boolean;
+
+  /**
+   * Why this build cannot reach the sandbox control plane at all, or `null`
+   * when it can. Set on a staging build (`SANDBOXES_UNAVAILABLE_IN_STAGING`):
+   * every sandbox call is refused there before it is sent, and the sandbox
+   * surfaces show this line instead of failing one request at a time.
+   */
+  readonly sandboxControlUnavailableReason: string | null;
 
   /**
    * Whether an image written through the web clipboard API on this shell

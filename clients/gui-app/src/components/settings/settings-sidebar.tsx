@@ -6,7 +6,7 @@ import {
 import { SidebarArtwork } from "@/components/layout/sidebar-artwork";
 import { Fragment, useEffect, useMemo, type ReactNode } from "react";
 import { Link, useRouterState } from "@tanstack/react-router";
-import { ChevronRight } from "lucide-react";
+import { ChevronRight, Plus } from "lucide-react";
 import { AnimatePresence } from "motion/react";
 import { cn } from "@/lib/utils";
 import {
@@ -29,14 +29,26 @@ import {
 } from "@/components/settings/host-scope/use-host-scope";
 import { useAddHostDialogStore } from "@/stores/settings/add-host-dialog-store";
 import { AddHostDialog } from "@/components/settings/host-scope/add-host-dialog";
+import { SandboxCreateDialog } from "@/components/hosts/sandbox-create-dialog";
+import { SandboxBalanceBanner } from "@/components/hosts/sandbox-balance-banner";
+import { AutomationsHostEntry } from "@/components/hosts/automations-host-entry";
+import { SecretsDashboardLink } from "@/components/providers/secrets-dashboard-link";
+import { useSandboxCreateDialogStore } from "@/stores/settings/sandbox-create-dialog-store";
+import { useAuthStore } from "@/stores/auth/auth-store";
+import { Button } from "@/components/ui/button";
 import { useRegisteredHostsPollLiveness } from "@/hooks/auth/use-registered-hosts-query";
-import { NO_HOST_OPTION_REFUSALS } from "@/components/settings/host-scope/host-option-model";
+import {
+  hostOptionTeamOwner,
+  NO_HOST_OPTION_REFUSALS,
+} from "@/components/settings/host-scope/host-option-model";
+import type { HostScopeOption } from "@/components/settings/host-scope/host-scope-model";
 import { useFleetUpdateViews } from "@/hooks/host/use-fleet-update-views";
 import { useHostEnvironmentLabelResolver } from "@/hooks/bots/use-host-environment-labels";
 import { SettingsSearch } from "@/components/settings/settings-search-box";
 import { isSettingsSearchActive } from "@/lib/settings-search/settings-search";
 import { useSettingsSearchStore } from "@/stores/settings/settings-search-store";
 import { useRunnerHostOrNull } from "@/providers/use-runner-host";
+import { useSandboxControlUnavailableReason } from "@/hooks/sandboxes/use-sandbox-control-unavailable-reason";
 
 export type SettingsSidebarMode =
   | { readonly kind: "route" }
@@ -90,7 +102,7 @@ export function SettingsSidebar(props: SettingsSidebarProps) {
   // place in Settings that has to: the picker is mounted for as long as any
   // settings panel is, so a per-panel opt-in would poll on exactly the same
   // schedule while being fifteen times easier to get wrong. Panels that merely
-  // read `useHostScope` for names — Shell, Worktrees, Providers — do not, which
+  // read a host scope for names — Worktrees, and the Personal pages — do not, which
   // is the point: reading the list no longer implies polling it.
   useRegisteredHostsPollLiveness();
   // No row is dimmed by host kind any more. Shell and Diagnostics used to be,
@@ -153,6 +165,7 @@ export function SettingsSidebar(props: SettingsSidebarProps) {
           race its open state, and unmounting it while a search runs would tear
           down a dialog that is open. */}
       <AddHostDialog />
+      <SandboxCreateDialog />
     </aside>
   );
 }
@@ -169,6 +182,9 @@ function SettingsSidebarHostPicker(props: {
 }): ReactNode {
   const { scope } = props;
   const openAddHost = useAddHostDialogStore((s) => s.openDialog);
+  const openCreateSandbox = useSandboxCreateDialogStore((s) => s.openDialog);
+  const signedIn = useAuthStore((s) => s.status === "signed-in");
+  const sandboxesUnavailable = useSandboxControlUnavailableReason();
   // THE one surface that badges update state (settled product decision: fleet
   // update state lives in Settings). The resolver reads only hosts that already
   // have a borrowable session, so opening this list causes no connection and
@@ -209,8 +225,59 @@ function SettingsSidebarHostPicker(props: {
         listsFailed={scope.listsFailed}
         onRetryLists={scope.retryLists}
         updateViewForHost={updateViewForHost}
+        offersAutomations={false}
         environmentLabelForHost={environmentLabelForHost}
       />
+      {/* A sandbox is an account's machine: nothing to create signed out,
+          and nothing at all from a build that cannot reach the control
+          plane (staging), which says so instead. */}
+      {signedIn && sandboxesUnavailable !== null ? (
+        <p
+          data-testid="settings-sandboxes-unavailable"
+          className="px-2 py-1 text-ui-xs text-muted-foreground"
+        >
+          {sandboxesUnavailable}
+        </p>
+      ) : null}
+      {signedIn && sandboxesUnavailable === null ? (
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          className="justify-start"
+          data-testid="settings-new-sandbox"
+          onClick={() =>
+            openCreateSandbox(
+              null,
+              // The host the person is working from: its team, if a team
+              // owns it, is where Belongs to starts.
+              workingHostTeamId(scope.hosts, scope.activeHostId),
+            )
+          }
+        >
+          <Plus className="size-3.5 shrink-0" aria-hidden />
+          New sandbox…
+        </Button>
+      ) : null}
+      {/* The Automations host before its row exists; the real row joins the
+          list above once it does. */}
+      {signedIn && sandboxesUnavailable === null ? (
+        <AutomationsHostEntry />
+      ) : null}
+      {/* Where a sandbox's secrets, coding-CLI connections and GitHub access
+          are managed: the account's dashboard page, since a sandbox never
+          takes a credential from this app. Offered wherever a sandbox can be
+          created. */}
+      {signedIn && sandboxesUnavailable === null ? (
+        <SecretsDashboardLink
+          testId="settings-secrets-and-github"
+          className="justify-start"
+        />
+      ) : null}
+      {/* The host list's balance banner: the two-hour and thirty-minute
+          warnings for the account's awake sandboxes. Nothing for a user with
+          none. */}
+      <SandboxBalanceBanner />
       {/* Said at rest, not on discovery: sections describing a host that is
           NOT the app's active one is the single most confusing state this
           surface can be in, so it never waits to be noticed.
@@ -440,4 +507,13 @@ function GettingStartedProgress() {
       />
     </svg>
   );
+}
+
+/** The team owning the active host, or `null` for a personal one. */
+function workingHostTeamId(
+  hosts: readonly HostScopeOption[],
+  activeHostId: string | null,
+): string | null {
+  const active = hosts.find((host) => host.hostId === activeHostId) ?? null;
+  return active === null ? null : (hostOptionTeamOwner(active)?.teamId ?? null);
 }

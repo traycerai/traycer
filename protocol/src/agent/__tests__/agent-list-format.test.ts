@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { AgentSummary, ListAgentsResponse } from "@traycer/protocol/host";
 import {
   agentListUpgradeV100ToV101,
+  agentListUpgradeV101ToV102,
   agentListUpgradeV91ToV92,
   agentListUpgradeV92ToV100,
 } from "@traycer/protocol/host/agent/contracts";
@@ -44,6 +45,11 @@ function agent(
     // opinion renders no token and no legend line.
     profile: null,
     permissionMode: null,
+    // The `@10.2` reach fields. `null` / `unknown` are the row's own "this
+    // answer cannot say", so a row built without an opinion prints no
+    // `[not reachable from this host]` marker.
+    reach: null,
+    hostConnectivity: { kind: "unknown" },
     ...over,
   };
 }
@@ -300,9 +306,11 @@ describe("formatAgentListResponse categorization", () => {
     // is what hands the listing to the formatter, and it fills `null`.
     expect(Object.hasOwn(parsed.agents[1], "archived")).toBe(false);
     const output = formatAgentListResponse(
-      agentListUpgradeV100ToV101.upgradeResponse(
-        agentListUpgradeV92ToV100.upgradeResponse(
-          agentListUpgradeV91ToV92.upgradeResponse(parsed),
+      agentListUpgradeV101ToV102.upgradeResponse(
+        agentListUpgradeV100ToV101.upgradeResponse(
+          agentListUpgradeV92ToV100.upgradeResponse(
+            agentListUpgradeV91ToV92.upgradeResponse(parsed),
+          ),
         ),
       ),
     );
@@ -1699,5 +1707,156 @@ describe("profile and permission mode tokens", () => {
       "profile: work mode: supervised",
     );
     expect(output).toContain(LEGEND_LINE);
+  });
+});
+
+/** One row's line with its tree connector stripped, found by the id it starts with. */
+function markedRow(output: string, idPrefix: string): string {
+  const line = output
+    .split("\n")
+    .map((candidate) => candidate.replace(/^(?:\s{3}|│ {2}|├─ |└─ )*/, ""))
+    .find((candidate) => candidate.startsWith(idPrefix));
+  return line ?? "";
+}
+
+const UNREACHABLE_MARKER = " [not reachable from this host]";
+const UNREACHABLE_LEGEND =
+  "[not reachable from this host]: another collaborator's host; not reachable from this host";
+
+describe("not-reachable marker (agent.list@10.2 reach)", () => {
+  it("marks an other_principal row after the id markers and explains it in the legend", () => {
+    const caller = agent({ id: "caller", isSelf: true });
+    const theirs = agent({
+      id: "theirs",
+      parentId: "caller",
+      reach: "other_principal",
+    });
+    const output = formatAgentListResponse(
+      response([caller, theirs], "caller"),
+    );
+
+    expect(markedRow(output, "theirs ")).toContain(
+      `theirs${UNREACHABLE_MARKER} gui/claude`,
+    );
+    expect(output).toContain(`\n${UNREACHABLE_LEGEND}`);
+  });
+
+  it("puts the marker after [self] and [archived] and before the quoted title", () => {
+    const caller = agent({ id: "caller", isSelf: true });
+    const theirs = agent({
+      id: "theirs",
+      parentId: "caller",
+      title: "Their chat",
+      archived: true,
+      reach: "other_principal",
+    });
+    const output = formatAgentListResponse(
+      response([caller, theirs], "caller"),
+    );
+
+    expect(markedRow(output, "theirs ")).toContain(
+      `theirs [archived]${UNREACHABLE_MARKER} "Their chat" gui/claude`,
+    );
+  });
+
+  it("marks only the other_principal rows and keeps the legend line to one", () => {
+    const caller = agent({ id: "caller", isSelf: true });
+    const output = formatAgentListResponse(
+      response(
+        [
+          caller,
+          agent({ id: "mine", parentId: "caller", reach: "same_principal" }),
+          agent({ id: "unsaid", parentId: "caller", reach: null }),
+          agent({
+            id: "theirs-a",
+            parentId: "caller",
+            reach: "other_principal",
+          }),
+          agent({
+            id: "theirs-b",
+            parentId: "caller",
+            reach: "other_principal",
+          }),
+        ],
+        "caller",
+      ),
+    );
+
+    expect(markedRow(output, "mine ")).not.toContain("not reachable");
+    expect(markedRow(output, "unsaid ")).not.toContain("not reachable");
+    expect(markedRow(output, "theirs-a")).toContain(UNREACHABLE_MARKER);
+    expect(markedRow(output, "theirs-b")).toContain(UNREACHABLE_MARKER);
+    expect(output.split(UNREACHABLE_LEGEND)).toHaveLength(2);
+  });
+
+  it("prints neither the marker nor the legend line for same_principal and null rows", () => {
+    const output = formatAgentListResponse(
+      response(
+        [
+          agent({ id: "caller", isSelf: true }),
+          agent({ id: "mine", parentId: "caller", reach: "same_principal" }),
+          agent({ id: "unsaid", parentId: "caller", reach: null }),
+        ],
+        "caller",
+      ),
+    );
+
+    expect(output).not.toContain("not reachable");
+    expect(output).not.toContain(UNREACHABLE_LEGEND);
+  });
+
+  it("never prints the collaborator's host: the row differs from its null-reach twin by the marker alone", () => {
+    const caller = agent({ id: "caller", isSelf: true });
+    const base = {
+      id: "theirs",
+      parentId: "caller",
+      hostId: "collab-host-8431",
+      isLocal: false,
+    };
+    const unmarked = formatAgentListResponse(
+      response([caller, agent({ ...base, reach: null })], "caller"),
+    );
+    const marked = formatAgentListResponse(
+      response(
+        [caller, agent({ ...base, reach: "other_principal" })],
+        "caller",
+      ),
+    );
+
+    expect(markedRow(marked, "theirs ").replace(UNREACHABLE_MARKER, "")).toBe(
+      markedRow(unmarked, "theirs "),
+    );
+    expect(marked).not.toContain("collab-host-8431");
+    // The legend line is the only other addition to the listing.
+    expect(
+      marked
+        .replace(UNREACHABLE_MARKER, "")
+        .replace(`\n${UNREACHABLE_LEGEND}`, ""),
+    ).toBe(unmarked);
+  });
+
+  it("explains the marker only on a page that prints a marked row", () => {
+    const listing = response(
+      [
+        agent({ id: "caller", isSelf: true }),
+        agent({ id: "first", parentId: "caller" }),
+        agent({ id: "theirs", parentId: "caller", reach: "other_principal" }),
+      ],
+      "caller",
+    );
+
+    const firstPage = formatAgentListPage(listing, {
+      detail: "full",
+      page: { offset: 0, limit: 2 },
+    });
+    const secondPage = formatAgentListPage(listing, {
+      detail: "full",
+      page: { offset: 2, limit: 2 },
+    });
+
+    expect(firstPage).not.toContain(UNREACHABLE_LEGEND);
+    expect(firstPage).not.toContain(UNREACHABLE_MARKER);
+    expect(secondPage).toContain(UNREACHABLE_MARKER);
+    expect(secondPage).toContain(UNREACHABLE_LEGEND);
   });
 });
