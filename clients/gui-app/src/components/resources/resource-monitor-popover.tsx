@@ -578,7 +578,14 @@ function ScopedResourceMonitorPopover(props: {
     hostId: scope.hostId,
     hostLabel: scope.hostLabel,
     hasExplicitPick: props.hasExplicitPick,
-    watchesThisMachine: readingShowsLocalDesktop(scope),
+    // The shell is counted only where a reading is drawn. A bare icon form
+    // (glyph, tile) prints nothing from these views while closed, and the
+    // shell sampler is an IPC round trip a second for the life of the mount,
+    // so those forms must not start it - the same reason `streamWhileClosed`
+    // below keeps the host stream shut for them. Open, the panel samples the
+    // shell itself.
+    watchesThisMachine:
+      readingShowsLocalDesktop(scope) && triggerPrintsReadings(props.trigger),
     compact:
       props.trigger.trigger === "header-button" &&
       isCompactForm(props.trigger.form),
@@ -602,8 +609,7 @@ function ScopedResourceMonitorPopover(props: {
   // ticking in the background for numbers nobody sees. The registry is
   // lease-counted, so one trigger letting go leaves another's lease alone.
   const streamWhileClosed =
-    views.length > 0 &&
-    (props.trigger.trigger === "custom" || printsReadings(props.trigger.form));
+    views.length > 0 && triggerPrintsReadings(props.trigger);
 
   return (
     <>
@@ -5239,6 +5245,17 @@ function isCompactForm(form: BarReadingForm): boolean {
 /** Every form but the bare icons prints numbers the stream feeds. */
 function printsReadings(form: BarReadingForm): boolean {
   return form !== "glyph" && form !== "tile";
+}
+
+/**
+ * Whether a closed trigger draws the readings at all: a custom trigger is a
+ * readout (the status bar's segment), and a header button is one in every
+ * form but the bare icons.
+ */
+function triggerPrintsReadings(
+  trigger: ResourceMonitorPopoverTrigger,
+): boolean {
+  return trigger.trigger === "custom" || printsReadings(trigger.form);
 }
 
 /**
