@@ -21,12 +21,10 @@ import { botTabIntent, settingsTabIntent } from "@/lib/tab-navigation/intents";
 import { navigateToTabIntent } from "@/lib/tab-navigation";
 import {
   HostRequestAbortedError,
-  type HostRpcError,
+  HostRpcError,
+  HostTransportFailureError,
+  RetryableTransportError,
 } from "@traycer-clients/shared/host-transport/host-messenger";
-import {
-  isHostTransportFailure,
-  isUnknownOutcomeTransportFailure,
-} from "@/lib/host-error-toast";
 
 const BOT_TITLE_MAX = 500;
 
@@ -39,17 +37,42 @@ const CREATE_FAILED =
 
 /**
  * The form's own line for a failed create: what happened and what to do,
- * never the error's text, which can be a raw validation dump. A host that was
- * never reached and one whose answer was lost read differently, because only
- * the second may have created the bot.
+ * never the error's text, which can be a raw validation dump.
+ *
+ * Each sentence claims only what the error proves, and anything unproven reads
+ * as "may have been created", because a create believed to have failed invites
+ * a duplicate:
+ * - Not reached: a retryable transport failure on its pre-send ground, or an
+ *   abort that never dispatched. Both are minted only before the request left.
+ * - Refused: an answer about THIS request (the base error class, no session
+ *   fatal) with a specific code. A specific code is the host's refusal or the
+ *   client's own pre-send version check; neither creates anything.
+ * - Everything else is unproven and reads cautious. That includes a generic
+ *   `RPC_ERROR` (a session closed with the request pending carries it, as does
+ *   a host answer with no specific code, and a response that came back
+ *   unreadable), any session fatal, any other transport failure, and a
+ *   non-host error. A request waiting on a session that closed before it was
+ *   ready was never sent, but its error is the same class a post-send drop
+ *   uses, so it reads cautious too.
  */
-function createBotFailureSentence(error: HostRpcError): string {
+function createBotFailureSentence(error: Error): string {
   if (error instanceof HostRequestAbortedError) {
-    return error.mayHaveDispatched ? CREATE_OUTCOME_UNKNOWN : CREATE_FAILED;
+    return error.mayHaveDispatched ? CREATE_OUTCOME_UNKNOWN : CREATE_UNREACHED;
   }
-  if (isUnknownOutcomeTransportFailure(error)) return CREATE_OUTCOME_UNKNOWN;
-  if (isHostTransportFailure(error)) return CREATE_UNREACHED;
-  return CREATE_FAILED;
+  if (error instanceof RetryableTransportError) {
+    return error.replaySafetyFromKey
+      ? CREATE_OUTCOME_UNKNOWN
+      : CREATE_UNREACHED;
+  }
+  if (
+    error instanceof HostRpcError &&
+    !(error instanceof HostTransportFailureError) &&
+    error.fatalDetails === null &&
+    error.code !== "RPC_ERROR"
+  ) {
+    return CREATE_FAILED;
+  }
+  return CREATE_OUTCOME_UNKNOWN;
 }
 
 /**

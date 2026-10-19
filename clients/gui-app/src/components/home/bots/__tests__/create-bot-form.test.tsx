@@ -16,6 +16,7 @@ import {
 } from "@traycer/protocol/host/bot/schemas";
 import {
   HostRequestAbortedError,
+  HostRpcError,
   HostTransportFailureError,
   RetryableTransportError,
 } from "@traycer-clients/shared/host-transport/host-messenger";
@@ -520,7 +521,15 @@ describe("<CreateBotForm /> failed create", () => {
     method: "bot.create",
   };
 
-  it("says the create failed, not what the validation said, when the host refuses the request", () => {
+  // A session-level fatal, as `RemoteSession` rejects pending requests with.
+  const sessionFatal = {
+    code: "UNAUTHORIZED",
+    reason: "credential revoked",
+    incompatibleMethods: null,
+    upgradeGuidance: null,
+  };
+
+  it("shows a sentence, not the validation text, for a non-host error", () => {
     const parsed = botCreateRequestSchema.safeParse({
       environmentId: TEAM_ENV,
       title: "Release Bot",
@@ -532,15 +541,12 @@ describe("<CreateBotForm /> failed create", () => {
     mocks.createError = parsed.error;
     mountForm(TEAM_WITH_LOCAL);
 
-    const text = screen.getByRole("alert").textContent;
-    expect(text).toBe(CREATE_FAILED);
-    expect(text).not.toContain("invalid_type");
-    expect(text).not.toContain("[");
+    expect(screen.getByRole("alert").textContent).toBe(CREATE_OUTCOME_UNKNOWN);
   });
 
   it.each([
     [
-      "a request that never left for the machine",
+      "a request that never left",
       () =>
         new RetryableTransportError({
           ...transport,
@@ -552,13 +558,89 @@ describe("<CreateBotForm /> failed create", () => {
       CREATE_UNREACHED,
     ],
     [
-      "a machine that stopped answering",
+      "an abort before the request was sent",
+      () =>
+        new HostRequestAbortedError({
+          ...transport,
+          message: "aborted",
+          mayHaveDispatched: false,
+        }),
+      CREATE_UNREACHED,
+    ],
+    [
+      "the host refusing the request with a specific code",
+      () =>
+        new HostRpcError({
+          ...transport,
+          code: "FORBIDDEN",
+          message: "not allowed",
+          fatalDetails: null,
+        }),
+      CREATE_FAILED,
+    ],
+    [
+      // `RemoteSession.close()` rejects every pending unary with this error,
+      // whether or not the request had already reached the host.
+      "a session closed while the create was pending",
+      () =>
+        new HostRpcError({
+          code: "RPC_ERROR",
+          message: "Remote session closed",
+          requestId: "session-close",
+          method: "",
+          fatalDetails: null,
+        }),
+      CREATE_OUTCOME_UNKNOWN,
+    ],
+    [
+      // A session fatal carries a specific code too, but it is about the
+      // session, not this request.
+      "a session fatal while the create was pending",
+      () =>
+        new HostRpcError({
+          code: "UNAUTHORIZED",
+          message: "credential revoked",
+          requestId: "session-fatal",
+          method: "",
+          fatalDetails: sessionFatal,
+        }),
+      CREATE_OUTCOME_UNKNOWN,
+    ],
+    [
+      // `notReadyRejection` on a closed session: nothing was sent, but the
+      // class is the one a post-send drop uses, so it cannot prove that.
+      "a create waiting on a session that closed before it was ready",
       () =>
         new HostTransportFailureError({
           ...transport,
           code: "RPC_ERROR",
-          message: "no answer",
+          message: "Remote session is closed",
+          fatalDetails: sessionFatal,
+        }),
+      CREATE_OUTCOME_UNKNOWN,
+    ],
+    [
+      // The transport class alone leaves the outcome unknown, whatever code
+      // it carries.
+      "a transport failure carrying a specific code",
+      () =>
+        new HostTransportFailureError({
+          ...transport,
+          code: "FORBIDDEN",
+          message: "dropped",
           fatalDetails: null,
+        }),
+      CREATE_OUTCOME_UNKNOWN,
+    ],
+    [
+      "a keyed request dropped after it was sent",
+      () =>
+        new RetryableTransportError({
+          ...transport,
+          code: "RPC_ERROR",
+          message: "socket closed",
+          fatalDetails: null,
+          replaySafetyFromKey: true,
         }),
       CREATE_OUTCOME_UNKNOWN,
     ],
