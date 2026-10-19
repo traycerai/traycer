@@ -133,6 +133,12 @@ export const CLI_ERROR_CODES = {
   // still holding the lock every reinstall waits on. `--force` stops it anyway
   // and removes the install.
   HOST_UNINSTALL_HOST_RUNNING: "E_HOST_UNINSTALL_HOST_RUNNING",
+  // A `host restart` bound to one host process (`--expect-host-pid` with
+  // `--expect-host-start-identity`, Desktop's force restart of a host that
+  // stopped answering) found, once it held the lifecycle lock, that `pid.json`
+  // names another process that is or may be running, or cannot be read. The
+  // restart was confirmed for the first host, so nothing was stopped.
+  HOST_RESTART_TARGET_CHANGED: "E_HOST_RESTART_TARGET_CHANGED",
 
   // --- Port-conflict repair (`host free-port`, `host free-port-and-restart`)
   // All three replace what used to be an `exitCode: 0` result carrying a
@@ -277,6 +283,7 @@ export const EXPECTED_CLI_ERROR_CODES: ReadonlySet<CliErrorCode> =
     CLI_ERROR_CODES.HOST_UPDATE_ATTEMPT_ACTIVE,
     CLI_ERROR_CODES.HOST_NOT_SERVICE_RUN,
     CLI_ERROR_CODES.HOST_UNINSTALL_HOST_RUNNING,
+    CLI_ERROR_CODES.HOST_RESTART_TARGET_CHANGED,
     CLI_ERROR_CODES.HOST_ALREADY_RUNNING,
     CLI_ERROR_CODES.HOST_NOT_INSTALLED,
     CLI_ERROR_CODES.HOST_INCOMPATIBLE,

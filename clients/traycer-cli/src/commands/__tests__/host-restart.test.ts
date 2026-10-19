@@ -1,6 +1,6 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { writeAttemptRecordForEnvironment } from "./attempt-record-test-support";
 import { encodeInstallGeneration } from "@traycer-clients/shared/host-version/install-generation";
@@ -116,7 +116,7 @@ vi.mock("../../store/cli-lock", async (importOriginal) => {
   };
 });
 
-import type { CommandContext } from "../../runner/runner";
+import type { CommandContext, CommandFn } from "../../runner/runner";
 
 // `store/paths` binds its home root from `os.homedir()` at module load.
 // Keep the environment mutation below, but redirect `homedir()` too.
@@ -228,6 +228,7 @@ describe("buildHostRestartCommand", () => {
       ifIdle: false,
       force: false,
       deferIfParked: false,
+      expectedHost: null,
       lifecycleOrigin: "terminal",
     });
     await command(fakeCtx());
@@ -250,6 +251,7 @@ describe("buildHostRestartCommand", () => {
       ifIdle: false,
       force: false,
       deferIfParked: false,
+      expectedHost: null,
       lifecycleOrigin: "terminal",
     });
     await command(fakeCtx());
@@ -268,6 +270,7 @@ describe("buildHostRestartCommand", () => {
       ifIdle: false,
       force: false,
       deferIfParked: false,
+      expectedHost: null,
       lifecycleOrigin: "terminal",
     });
     const result = await command(fakeCtx());
@@ -287,6 +290,7 @@ describe("buildHostRestartCommand", () => {
       ifIdle: false,
       force: false,
       deferIfParked: false,
+      expectedHost: null,
       lifecycleOrigin: "terminal",
     });
 
@@ -305,6 +309,7 @@ describe("buildHostRestartCommand", () => {
       ifIdle: true,
       force: false,
       deferIfParked: false,
+      expectedHost: null,
       lifecycleOrigin: "terminal",
     });
     await command(fakeCtx());
@@ -323,6 +328,7 @@ describe("buildHostRestartCommand", () => {
       ifIdle: true,
       force: false,
       deferIfParked: false,
+      expectedHost: null,
       lifecycleOrigin: "terminal",
     });
 
@@ -342,6 +348,7 @@ describe("buildHostRestartCommand", () => {
       ifIdle: true,
       force: true,
       deferIfParked: false,
+      expectedHost: null,
       lifecycleOrigin: "terminal",
     });
 
@@ -359,6 +366,7 @@ describe("buildHostRestartCommand", () => {
       ifIdle: false,
       force: true,
       deferIfParked: false,
+      expectedHost: null,
       lifecycleOrigin: "terminal",
     });
     await command(fakeCtx());
@@ -376,6 +384,7 @@ describe("buildHostRestartCommand", () => {
       ifIdle: false,
       force: false,
       deferIfParked: false,
+      expectedHost: null,
       lifecycleOrigin: "terminal",
     });
     await command(fakeCtx());
@@ -402,6 +411,7 @@ describe("buildHostRestartCommand", () => {
         ifIdle: false,
         force: false,
         deferIfParked: true,
+        expectedHost: null,
         lifecycleOrigin: "terminal",
       });
       const result = await command(fakeCtx());
@@ -427,6 +437,7 @@ describe("buildHostRestartCommand", () => {
         ifIdle: false,
         force: false,
         deferIfParked: false,
+        expectedHost: null,
         lifecycleOrigin: "terminal",
       });
       const result = await command(fakeCtx());
@@ -453,6 +464,7 @@ describe("buildHostRestartCommand", () => {
         ifIdle: false,
         force: false,
         deferIfParked: true,
+        expectedHost: null,
         lifecycleOrigin: "terminal",
       });
       const result = await command(fakeCtx());
@@ -479,6 +491,7 @@ describe("buildHostRestartCommand", () => {
         ifIdle: false,
         force: false,
         deferIfParked: true,
+        expectedHost: null,
         lifecycleOrigin: "terminal",
       });
       const result = await command(fakeCtx());
@@ -521,6 +534,7 @@ describe("buildHostRestartCommand", () => {
         ifIdle: false,
         force: false,
         deferIfParked: false,
+        expectedHost: null,
         lifecycleOrigin: "terminal",
       });
       const result = await command(fakeCtx());
@@ -555,6 +569,7 @@ describe("buildHostRestartCommand", () => {
         ifIdle: false,
         force: false,
         deferIfParked: true,
+        expectedHost: null,
         lifecycleOrigin: "terminal",
       });
       const result = await command(fakeCtx());
@@ -598,6 +613,7 @@ describe("buildHostRestartCommand", () => {
         ifIdle: false,
         force: false,
         deferIfParked: true,
+        expectedHost: null,
         lifecycleOrigin: "terminal",
       });
       const result = await command(fakeCtx());
@@ -634,6 +650,7 @@ describe("buildHostRestartCommand", () => {
         ifIdle: false,
         force: false,
         deferIfParked: false,
+        expectedHost: null,
         lifecycleOrigin: "terminal",
       });
       const result = await command(fakeCtx());
@@ -674,6 +691,7 @@ describe("buildHostRestartCommand", () => {
         ifIdle: false,
         force: false,
         deferIfParked: false,
+        expectedHost: null,
         lifecycleOrigin: "terminal",
       });
       const result = await command(fakeCtx());
@@ -707,6 +725,7 @@ describe("buildHostRestartCommand", () => {
         ifIdle: false,
         force: false,
         deferIfParked: false,
+        expectedHost: null,
         lifecycleOrigin: "terminal",
       });
       const result = await command(fakeCtx());
@@ -751,6 +770,7 @@ describe("buildHostRestartCommand", () => {
           ifIdle: false,
           force: false,
           deferIfParked: false,
+          expectedHost: null,
           lifecycleOrigin: "terminal",
         });
         const result = await command(fakeCtx());
@@ -827,6 +847,7 @@ describe("buildHostRestartCommand", () => {
       ifIdle: false,
       force: false,
       deferIfParked: false,
+      expectedHost: null,
       lifecycleOrigin: "terminal",
     });
     const result = await command(fakeCtx());
@@ -844,11 +865,134 @@ describe("buildHostRestartCommand", () => {
       ifIdle: false,
       force: false,
       deferIfParked: false,
+      expectedHost: null,
       lifecycleOrigin: "terminal",
     });
     const result = await command(fakeCtx());
 
     expect(result.human).toContain("prior helper swap failed");
     expect(result.human).not.toContain("could not restart the service");
+  });
+
+  // Desktop's force restart of a host that stopped answering is bound to the
+  // process the person confirmed (`--expect-host-pid`): pid.json is read
+  // inside the lock, before the busy probe or any stop, and a different live
+  // host published in its place refuses the restart.
+  describe("a restart bound to one host process", () => {
+    const EXPECTED_HOST = {
+      pid: 4242,
+      startIdentity: "linux:boot-a 4242",
+    } as const;
+
+    async function writePidMetadata(published: {
+      readonly pid: number;
+      readonly identity: string | null;
+    }): Promise<void> {
+      const { hostPidMetadataPath } = await import("../../store/paths");
+      const path = hostPidMetadataPath("production");
+      mkdirSync(dirname(path), { recursive: true });
+      writeFileSync(
+        path,
+        JSON.stringify({
+          pid: published.pid,
+          hostId: "host-b",
+          version: "1.9.0",
+          websocketUrl: `ws://127.0.0.1:${String(published.pid)}/rpc`,
+          startedAt: "2026-09-01T00:00:00.000Z",
+          processStartIdentity: published.identity,
+        }),
+        "utf8",
+      );
+    }
+
+    async function buildBoundForceRestart(): Promise<CommandFn> {
+      const { buildHostRestartCommand } = await import("../host-restart");
+      return buildHostRestartCommand({
+        ifIdle: false,
+        force: true,
+        deferIfParked: true,
+        expectedHost: EXPECTED_HOST,
+        lifecycleOrigin: "desktop",
+      });
+    }
+
+    it("refuses E_HOST_RESTART_TARGET_CHANGED when pid.json names a different live host, stopping nothing", async () => {
+      const { ownProcessStartIdentity } =
+        await import("../../store/process-identity");
+      await writePidMetadata({
+        pid: process.pid,
+        identity: ownProcessStartIdentity(),
+      });
+
+      const command = await buildBoundForceRestart();
+
+      await expect(command(fakeCtx())).rejects.toMatchObject({
+        code: "E_HOST_RESTART_TARGET_CHANGED",
+      });
+      expect(mocks.controllerCalls).toEqual([]);
+    });
+
+    it("restarts when pid.json still names the confirmed host", async () => {
+      await writePidMetadata({
+        pid: EXPECTED_HOST.pid,
+        identity: EXPECTED_HOST.startIdentity,
+      });
+
+      const command = await buildBoundForceRestart();
+      await command(fakeCtx());
+
+      expect(mocks.stopForRestartForceValues).toEqual([true]);
+      expect(mocks.controllerCalls).toEqual([
+        "stopForRestart",
+        "relaunchAfterRestart",
+      ]);
+    });
+
+    it("restarts when no host is published", async () => {
+      const command = await buildBoundForceRestart();
+      await command(fakeCtx());
+
+      expect(mocks.controllerCalls).toEqual([
+        "stopForRestart",
+        "relaunchAfterRestart",
+      ]);
+    });
+
+    it("refuses when pid.json cannot be read, stopping nothing", async () => {
+      const { hostPidMetadataPath } = await import("../../store/paths");
+      const path = hostPidMetadataPath("production");
+      mkdirSync(dirname(path), { recursive: true });
+      writeFileSync(path, "{ not json", "utf8");
+
+      const command = await buildBoundForceRestart();
+
+      await expect(command(fakeCtx())).rejects.toMatchObject({
+        code: "E_HOST_RESTART_TARGET_CHANGED",
+      });
+      expect(mocks.controllerCalls).toEqual([]);
+    });
+
+    it("an --if-idle restart refuses a replaced host before its busy probe", async () => {
+      const { ownProcessStartIdentity } =
+        await import("../../store/process-identity");
+      await writePidMetadata({
+        pid: process.pid,
+        identity: ownProcessStartIdentity(),
+      });
+      const { buildHostRestartCommand } = await import("../host-restart");
+      const command = buildHostRestartCommand({
+        ifIdle: true,
+        force: false,
+        deferIfParked: true,
+        expectedHost: EXPECTED_HOST,
+        lifecycleOrigin: "desktop",
+      });
+
+      await expect(command(fakeCtx())).rejects.toMatchObject({
+        code: "E_HOST_RESTART_TARGET_CHANGED",
+      });
+      expect(mocks.busyCalls).toEqual([]);
+      expect(mocks.controllerCalls).toEqual([]);
+    });
   });
 });

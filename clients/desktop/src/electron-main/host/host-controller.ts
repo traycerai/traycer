@@ -103,11 +103,17 @@ import {
   type DesktopHostInstallRecord,
   type HostEndpointReachabilityProbe,
 } from "./host-state";
+import { readPidMetadataState } from "./host-lifecycle";
+import {
+  restartTargetStillCurrent,
+  type RestartTargetHost,
+} from "@traycer-clients/shared/host-lock/restart-target";
 import {
   AUTOMATIC_INTENTS_HELD_MESSAGE,
   AUTOMATIC_INTENTS_QUIESCED_MESSAGE,
   HOST_NOT_SERVICE_RUN_MESSAGE,
   HOST_REMOVED_BY_USER_MESSAGE,
+  HOST_RESTART_TARGET_CHANGED_MESSAGE,
   HOST_STARTUP_TURNED_OFF_NOTE,
   HOST_UNINSTALL_HOST_BUSY_MESSAGE,
   HOST_UNINSTALL_HOST_RUNNING_MESSAGE,
@@ -205,6 +211,7 @@ const HOST_BUSY_CODE = "E_HOST_BUSY";
 const HOST_UPDATE_ATTEMPT_ACTIVE_CODE = "E_HOST_UPDATE_ATTEMPT_ACTIVE";
 const HOST_NOT_SERVICE_RUN_CODE = "E_HOST_NOT_SERVICE_RUN";
 const HOST_UNINSTALL_HOST_RUNNING_CODE = "E_HOST_UNINSTALL_HOST_RUNNING";
+const HOST_RESTART_TARGET_CHANGED_CODE = "E_HOST_RESTART_TARGET_CHANGED";
 // `host service start` could not start the service: on a packaged Mac whose
 // job launchd no longer has loaded, the start that is left is a register.
 const SERVICE_CONTROL_FAILED_CODE = "E_SERVICE_CONTROL_FAILED";
@@ -3810,11 +3817,54 @@ export class HostController {
   private async runLaneHeadGuard(
     intent: LocalHostMutationIntent,
   ): Promise<AbandonedByGuard | null> {
-    if (intent.kind === "background") return null;
+    const admission = await this.admitAtLaneHead(intent);
+    return admission.kind === "abandoned" ? admission : null;
+  }
+
+  /**
+   * `runLaneHeadGuard` that also keeps the host process a guard confirmed the
+   * job for (`proceed-for-host`), for the one job that carries it to the step
+   * that stops a host: `respawn`.
+   */
+  private async admitAtLaneHead(
+    intent: LocalHostMutationIntent,
+  ): Promise<
+    | AbandonedByGuard
+    | { readonly kind: "admitted"; readonly target: RestartTargetHost | null }
+  > {
+    if (intent.kind === "background") return { kind: "admitted", target: null };
     const verdict = await intent.guard();
-    return verdict.kind === "abandon"
-      ? { kind: "abandoned", message: verdict.message }
-      : null;
+    switch (verdict.kind) {
+      case "abandon":
+        return { kind: "abandoned", message: verdict.message };
+      case "proceed":
+        return { kind: "admitted", target: null };
+      case "proceed-for-host":
+        return { kind: "admitted", target: verdict.host };
+    }
+  }
+
+  /**
+   * Whether `target` is still the host `pid.json` publishes, or no live host
+   * is published at all (`restartTargetStillCurrent`). The packaged-macOS
+   * continuation's check; the CLI makes the same one for every other route.
+   */
+  private async restartTargetIsCurrent(
+    target: RestartTargetHost,
+  ): Promise<boolean> {
+    const read = await readPidMetadataState(this.layout.pidMetadataFile);
+    return restartTargetStillCurrent(
+      target,
+      read.kind === "parsed"
+        ? {
+            kind: "published",
+            pid: read.snapshot.pid,
+            startIdentity: read.startIdentity,
+          }
+        : read.kind === "absent"
+          ? read
+          : { kind: "unreadable" },
+    );
   }
 
   private async convergeReadyCliOwned(
@@ -3981,6 +4031,19 @@ export class HostController {
           code: err.code,
         });
         return { kind: "deferred", message: HOST_NOT_SERVICE_RUN_MESSAGE };
+      }
+      if (err.code === HOST_RESTART_TARGET_CHANGED_CODE) {
+        // A restart bound to one host process found another published in its
+        // place once the CLI held the lock, and stopped nothing.
+        log.info("[host-controller] host mutation refused", {
+          kind: this.mutationStatus?.kind ?? null,
+          reason: "restart-target-changed",
+          code: err.code,
+        });
+        return {
+          kind: "deferred",
+          message: HOST_RESTART_TARGET_CHANGED_MESSAGE,
+        };
       }
       if (err.code === HOST_UNINSTALL_HOST_RUNNING_CODE) {
         // `host uninstall --all` asked the host to stop, could not confirm it
@@ -5502,6 +5565,8 @@ export class HostController {
      * still unclaimable must surface, not spin.
      */
     allowRecoveryDispatch: boolean,
+    /** The host process the restart was confirmed for, or null for any. */
+    target: RestartTargetHost | null,
   ): Promise<GuardedMutationOutcome<ActivateInstalledOk> | null> {
     const read = await readUpdateAttemptRecord(this.layout.rootDir);
     // Absent, or unreadable: nothing to continue. An unreadable record must
@@ -5567,6 +5632,10 @@ export class HostController {
         },
         nowIso: () => new Date().toISOString(),
         drain: () => probeHostBusyVerdict(this.layout),
+        confirmTarget: () =>
+          target === null
+            ? Promise.resolve(true)
+            : this.restartTargetIsCurrent(target),
         commit: (capability: UpdateMutationCapability, intent) =>
           commitAttemptMutationWithCapability(
             capability,
@@ -5763,6 +5832,12 @@ export class HostController {
           return null;
       }
     }
+    if (segment.kind === "parked" && segment.reason === "target-changed") {
+      // Another host was published in place of the confirmed one, and the
+      // record is re-parked with nothing stopped. Not a fall-through: the
+      // generic restart would refuse for the same reason.
+      return { kind: "deferred", message: HOST_RESTART_TARGET_CHANGED_MESSAGE };
+    }
     if (segment.kind === "parked" && segment.reason === "actuator-lock-busy") {
       // The INNER cli-lock was held elsewhere. Because acquisition now happens
       // before the `restarting` commit, nothing was promised and the record is
@@ -5776,7 +5851,11 @@ export class HostController {
       segment.reason === "requires-recovery" &&
       allowRecoveryDispatch
     ) {
-      return this.recoverOrphanedContinuationThenResume(identity, record);
+      return this.recoverOrphanedContinuationThenResume(
+        identity,
+        record,
+        target,
+      );
     }
     if (segment.kind === "refused" && segment.outcome.kind === "busy") {
       // A live executor owns this attempt. Stopping its host mid-flight is the
@@ -5825,6 +5904,7 @@ export class HostController {
   private async recoverOrphanedContinuationThenResume(
     identity: HostUpdateAttemptIdentity,
     record: HostUpdateAttemptRecord,
+    target: RestartTargetHost | null,
   ): Promise<GuardedMutationOutcome<ActivateInstalledOk> | null> {
     const report = await this.dispatchUpdateVerification(
       identity,
@@ -5866,7 +5946,7 @@ export class HostController {
       );
       return null;
     }
-    return this.routeForceRestartContinuation(false);
+    return this.routeForceRestartContinuation(false, target);
   }
 
   private async dispatchUpdateVerification(
@@ -5927,8 +6007,22 @@ export class HostController {
         // nobody asked about, killing its active sessions. Runs before
         // `notifyRespawning`, which clears the renderer-facing snapshot - an
         // abandoned job must leave no trace it was ever admitted.
-        const abandoned = await this.runLaneHeadGuard(intent);
-        if (abandoned !== null) return abandoned;
+        const admission = await this.admitAtLaneHead(intent);
+        if (admission.kind === "abandoned") return admission;
+        // The host process the guard confirmed this restart for, if it named
+        // one. Checked again by whichever step stops the host, under that
+        // step's lock: the continuation and the CLI's lock wait below both
+        // sit between this guard and the stop.
+        const target = admission.target;
+        const targetArgs =
+          target === null
+            ? []
+            : [
+                "--expect-host-pid",
+                String(target.pid),
+                "--expect-host-start-identity",
+                target.startIdentity,
+              ];
         // After the guard, before any effect: identity decides whether this
         // job may act at all; the generation only decides whether there is
         // anything left to do. A restart that completed since submission is
@@ -5957,7 +6051,13 @@ export class HostController {
           const prePid =
             (await readRunningHostIdentity(this.layout))?.pid ?? null;
           const recovery = await this.runCliRecoveryServiceCycle(
-            ["host", "restart", "--if-idle", "--defer-if-parked"],
+            [
+              "host",
+              "restart",
+              "--if-idle",
+              "--defer-if-parked",
+              ...targetArgs,
+            ],
             prePid,
           );
           if (recovery.kind === "ok" && recovery.value.activated) {
@@ -5972,7 +6072,10 @@ export class HostController {
         // continuation makes that announcement itself at its own claim point.
         // Returns null for every state that is not a pending packaged-macOS
         // activation, so the sequence below stays byte-identical.
-        const continuation = await this.routeForceRestartContinuation(true);
+        const continuation = await this.routeForceRestartContinuation(
+          true,
+          target,
+        );
         if (continuation !== null) {
           // A completed continuation IS a relaunch — verification reported
           // `complete`, so the host restarted onto the new bytes. It must
@@ -5995,7 +6098,13 @@ export class HostController {
         const recovery = (await this.hasNoLaunchdJobToRestart())
           ? await this.registerAgentInsteadOfRestart()
           : await this.runCliRecoveryServiceCycle(
-              ["host", "restart", "--force", "--defer-if-parked"],
+              [
+                "host",
+                "restart",
+                "--force",
+                "--defer-if-parked",
+                ...targetArgs,
+              ],
               prePid,
             );
         // Only a completed relaunch satisfies later-submitted respawns. A

@@ -14,6 +14,7 @@ import type {
   LocalHostUnresponsive,
   LocalHostUnresponsiveOffer,
 } from "../../../ipc-contracts/host-types";
+import type { RestartTargetHost } from "@traycer-clients/shared/host-lock/restart-target";
 import type { UnsyncedEditsSnapshotEntry } from "../../../ipc-contracts/app-lifecycle-types";
 import type {
   IpcHostLifecycle,
@@ -4158,6 +4159,8 @@ describe("RunnerIpcBridge", () => {
       unreachableForMs: 12 * 60_000,
     };
     const OFFER = { pid: 4242, offerId: 1 };
+    // What the monitor's check answers for the offer: the host it confirmed.
+    const OFFERED_HOST = { pid: 4242, startIdentity: "linux:boot-a 4242" };
     const STILL_RUNNING_MESSAGE =
       "The host started responding again or was replaced, so it was not restarted.";
 
@@ -4174,6 +4177,8 @@ describe("RunnerIpcBridge", () => {
         ) => void;
       }> = [];
       killed = 0;
+      /** The host each restart that proceeded was confirmed for, if any. */
+      readonly stoppedHosts: Array<RestartTargetHost | null> = [];
 
       override respawn(
         intent: LocalHostMutationIntent,
@@ -4194,6 +4199,9 @@ describe("RunnerIpcBridge", () => {
               job.settle({ kind: "abandoned", message: verdict.message });
               continue;
             }
+            this.stoppedHosts.push(
+              verdict.kind === "proceed-for-host" ? verdict.host : null,
+            );
           }
           this.killed += 1;
           job.settle({ kind: "ok", value: { activated: true } });
@@ -4202,7 +4210,11 @@ describe("RunnerIpcBridge", () => {
     }
 
     async function installBridge(
-      confirm: ((offer: LocalHostUnresponsiveOffer) => Promise<boolean>) | null,
+      confirm:
+        | ((
+            offer: LocalHostUnresponsiveOffer,
+          ) => Promise<RestartTargetHost | null>)
+        | null,
       verdict: LocalHostUnresponsive | null,
     ) {
       const mod = await import("../register-runner-ipc");
@@ -4239,7 +4251,7 @@ describe("RunnerIpcBridge", () => {
     }
 
     it("hands the lane a forced user-repair intent keyed by the offer, and asks nothing itself", async () => {
-      const confirm = vi.fn(async () => true);
+      const confirm = vi.fn(async () => OFFERED_HOST);
       const harness = await installBridge(confirm, UNRESPONSIVE);
 
       const result = harness.invoke(OFFER);
@@ -4263,10 +4275,27 @@ describe("RunnerIpcBridge", () => {
       harness.dispose();
     });
 
+    it("carries the host the check confirmed to the step that stops it", async () => {
+      const harness = await installBridge(
+        async () => OFFERED_HOST,
+        UNRESPONSIVE,
+      );
+
+      const result = harness.invoke(OFFER);
+      await vi.waitFor(() => {
+        expect(harness.hostController.queued).toHaveLength(1);
+      });
+      await harness.hostController.runQueued();
+
+      await expect(result).resolves.toEqual({ kind: "restarted" });
+      expect(harness.hostController.stoppedHosts).toEqual([OFFERED_HOST]);
+      harness.dispose();
+    });
+
     it("declines, and kills nothing, when the host recovers while the restart waits for the lane", async () => {
       let stillUnresponsive = true;
       const harness = await installBridge(
-        async () => stillUnresponsive,
+        async () => (stillUnresponsive ? OFFERED_HOST : null),
         UNRESPONSIVE,
       );
 
@@ -4287,7 +4316,10 @@ describe("RunnerIpcBridge", () => {
     });
 
     it("keys two pids apart, so one restart never joins the other's", async () => {
-      const harness = await installBridge(async () => true, UNRESPONSIVE);
+      const harness = await installBridge(
+        async () => OFFERED_HOST,
+        UNRESPONSIVE,
+      );
 
       void harness.invoke({ pid: 1, offerId: 1 });
       void harness.invoke({ pid: 2, offerId: 1 });
@@ -4304,7 +4336,10 @@ describe("RunnerIpcBridge", () => {
     });
 
     it("keys two offers for the same pid apart, so a restart for a later host never joins the earlier one's", async () => {
-      const harness = await installBridge(async () => true, UNRESPONSIVE);
+      const harness = await installBridge(
+        async () => OFFERED_HOST,
+        UNRESPONSIVE,
+      );
 
       void harness.invoke({ pid: 7, offerId: 1 });
       void harness.invoke({ pid: 7, offerId: 2 });
@@ -4335,7 +4370,9 @@ describe("RunnerIpcBridge", () => {
           offer.offerId === offered.offerId &&
           offer.pid === offered.pid &&
           published.pid === offered.pid &&
-          published.websocketUrl === offered.websocketUrl,
+          published.websocketUrl === offered.websocketUrl
+            ? OFFERED_HOST
+            : null,
         UNRESPONSIVE,
       );
 
@@ -4357,7 +4394,7 @@ describe("RunnerIpcBridge", () => {
     });
 
     it("abandons an offer id other than the verdict's without asking the monitor's check", async () => {
-      const confirm = vi.fn(async () => true);
+      const confirm = vi.fn(async () => OFFERED_HOST);
       const harness = await installBridge(confirm, UNRESPONSIVE);
 
       const result = harness.invoke({ pid: 4242, offerId: 2 });
@@ -4393,7 +4430,7 @@ describe("RunnerIpcBridge", () => {
       ["a fractional pid", { pid: 1.5, offerId: 1 }],
       ["a string pid", { pid: "4242", offerId: 1 }],
     ])("declines %s without calling respawn", async (_name, rawOffer) => {
-      const confirm = vi.fn(async () => true);
+      const confirm = vi.fn(async () => OFFERED_HOST);
       const harness = await installBridge(confirm, UNRESPONSIVE);
 
       await expect(harness.invoke(rawOffer)).resolves.toEqual({

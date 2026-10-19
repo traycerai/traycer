@@ -159,6 +159,7 @@ describe("--defer-if-parked reaches the builder through the Commander bridge", (
         ifIdle: false,
         force: true,
         deferIfParked: true,
+        expectedHost: null,
         lifecycleOrigin: "terminal",
       },
     ]);
@@ -177,6 +178,7 @@ describe("--defer-if-parked reaches the builder through the Commander bridge", (
         ifIdle: false,
         force: true,
         deferIfParked: false,
+        expectedHost: null,
         lifecycleOrigin: "terminal",
       },
     ]);
@@ -235,5 +237,65 @@ describe("--defer-if-parked reaches the builder through the Commander bridge", (
     expect(captured.restart).toEqual([
       expect.objectContaining({ deferIfParked: true, force: true }),
     ]);
+  });
+
+  // The two hidden flags that bind a restart to the host process Desktop's
+  // offer was made for. They build the builder's `expectedHost` inside the
+  // command, so a malformed pair is refused by the runner as a typed error.
+  describe("--expect-host-pid and --expect-host-start-identity", () => {
+    const IDENTITY = "linux:boot-a 4242";
+
+    it("host restart forwards both as expectedHost", async () => {
+      await buildProgram().parseAsync(
+        [
+          "host",
+          "restart",
+          "--force",
+          "--defer-if-parked",
+          "--expect-host-pid",
+          "4242",
+          "--expect-host-start-identity",
+          IDENTITY,
+        ],
+        { from: "user" },
+      );
+
+      expect(captured.restart).toEqual([
+        {
+          ifIdle: false,
+          force: true,
+          deferIfParked: true,
+          expectedHost: { pid: 4242, startIdentity: IDENTITY },
+          lifecycleOrigin: "terminal",
+        },
+      ]);
+    });
+
+    it.each([
+      ["the pid alone", ["--expect-host-pid", "4242"]],
+      ["the identity alone", ["--expect-host-start-identity", IDENTITY]],
+      [
+        "a zero pid",
+        ["--expect-host-pid", "0", "--expect-host-start-identity", IDENTITY],
+      ],
+      [
+        "a pid that is not a whole number",
+        ["--expect-host-pid", "42x", "--expect-host-start-identity", IDENTITY],
+      ],
+      [
+        "an identity that is not a start identity",
+        ["--expect-host-pid", "4242", "--expect-host-start-identity", "nope"],
+      ],
+    ])(
+      "host restart refuses %s with E_INVALID_ARGUMENT",
+      async (_name, flags) => {
+        await expect(
+          buildProgram().parseAsync(["host", "restart", "--force", ...flags], {
+            from: "user",
+          }),
+        ).rejects.toMatchObject({ code: "E_INVALID_ARGUMENT" });
+        expect(captured.restart).toEqual([]);
+      },
+    );
   });
 });

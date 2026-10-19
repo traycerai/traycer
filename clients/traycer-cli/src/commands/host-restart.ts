@@ -7,6 +7,7 @@ import { writePostFinalizeMarkerFile } from "./cli-finalize-upgrade";
 import { assertHostNotBusy } from "../host/busy-check";
 import { attestInstallRuntime } from "../host/attested-install-runtime";
 import { refuseForegroundHostRun } from "../host/foreground-host-run";
+import { readHostPidMetadataEvidence } from "../host/pid-metadata";
 import type { HostStartOrigin } from "../host/lifecycle-origin";
 import { CLI_ERROR_CODES, cliError } from "../runner/errors";
 import type { CommandFn, CommandResult } from "../runner/runner";
@@ -23,6 +24,10 @@ import {
   stopHostForRestartWithAttempt,
 } from "../host/update-mutation";
 import type { UpdateMutationCapability } from "@traycer-clients/shared/host-update";
+import {
+  restartTargetStillCurrent,
+  type RestartTargetHost,
+} from "@traycer-clients/shared/host-lock/restart-target";
 import {
   describeNonterminalRecordRecovery,
   parkedActivationRelaunchable,
@@ -123,10 +128,23 @@ import {
 // before the busy probe, the stop, the finalize or the relaunch
 // (`refuseForegroundHostRun`, shared with `host stop` and
 // `host free-port-and-restart`). A terminal restart is unchanged.
+//
+// ## A restart bound to one host process
+//
+// `--expect-host-pid` with `--expect-host-start-identity` (hidden, internal -
+// Desktop's force restart of a host that stopped answering): the person
+// confirmed killing THAT process, and the confirmation is checked in Desktop
+// before this command is spawned - which is before this command waits up to
+// 30s for the lock. Another actor can publish a healthy replacement in that
+// wait, so the binding is checked again here, inside the lock and before
+// anything else, and the command refuses `E_HOST_RESTART_TARGET_CHANGED`
+// when `pid.json` names a different live process (`restartTargetStillCurrent`).
 export interface HostRestartArgs {
   readonly ifIdle: boolean;
   readonly force: boolean;
   readonly deferIfParked: boolean;
+  /** The one host process this restart may stop, or null for whichever runs. */
+  readonly expectedHost: RestartTargetHost | null;
   /** Who asked: `desktop` for every restart the app issues. */
   readonly lifecycleOrigin: HostStartOrigin;
 }
@@ -160,6 +178,12 @@ export function buildHostRestartCommand(args: HostRestartArgs): CommandFn {
             "host restart",
             ctx.runtime.environment,
             args.lifecycleOrigin,
+          );
+        }
+        if (args.expectedHost !== null) {
+          await refuseUnlessRestartTarget(
+            ctx.runtime.environment,
+            args.expectedHost,
           );
         }
         if (args.ifIdle) {
@@ -303,6 +327,30 @@ export function buildHostRestartCommand(args: HostRestartArgs): CommandFn {
       exitCode: 0,
     };
   };
+}
+
+async function refuseUnlessRestartTarget(
+  environment: import("../runner/environment").Environment,
+  target: RestartTargetHost,
+): Promise<void> {
+  const evidence = await readHostPidMetadataEvidence(environment);
+  const stillCurrent = await restartTargetStillCurrent(
+    target,
+    evidence.kind === "read"
+      ? {
+          kind: "published",
+          pid: evidence.metadata.pid,
+          startIdentity: evidence.metadata.processStartIdentity,
+        }
+      : evidence,
+  );
+  if (stillCurrent) return;
+  throw cliError({
+    code: CLI_ERROR_CODES.HOST_RESTART_TARGET_CHANGED,
+    message: `host restart: the host this restart was confirmed for (pid ${String(target.pid)}) is no longer the one published, so nothing was restarted`,
+    details: null,
+    exitCode: 1,
+  });
 }
 
 interface RestartFinalizeArgs {

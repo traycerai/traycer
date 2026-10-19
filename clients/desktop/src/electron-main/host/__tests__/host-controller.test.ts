@@ -301,6 +301,7 @@ import {
 } from "../local-host-unresponsive";
 import { unresponsiveHostRestartIntent } from "../../ipc/host-ipc";
 import { probeHostActivityBusy } from "@traycer-clients/shared/host-client/host-activity-probe";
+import { ownProcessStartIdentity } from "@traycer-clients/shared/host-lock/process-identity";
 import { encodeInstallGeneration } from "@traycer-clients/shared/host-version/install-generation";
 import {
   DESKTOP_LOCK_POLL_INTERVAL_MS,
@@ -311,6 +312,7 @@ import {
 import {
   HOST_NOT_SERVICE_RUN_MESSAGE,
   HOST_REMOVED_BY_USER_MESSAGE,
+  HOST_RESTART_TARGET_CHANGED_MESSAGE,
   HOST_STARTUP_TURNED_OFF_NOTE,
   HOST_UNINSTALL_HOST_BUSY_MESSAGE,
   HOST_UNINSTALL_HOST_RUNNING_MESSAGE,
@@ -321,6 +323,7 @@ import {
   SERVICE_TASK_NOT_OWNED_MESSAGE,
   type LifecycleAdmissionBlock,
   type LocalAttemptFacts,
+  type LocalHostMutationIntent,
   type MutationLaneStatus,
   type MutationProgress,
   type ReprovisionGuardVerdict,
@@ -5390,7 +5393,7 @@ describe("platform matrix", () => {
     let answers = false;
     setLocalHostStillUnresponsiveCheck(async (offer) => {
       asked.push(offer);
-      return !answers;
+      return answers ? null : { pid: 4242, startIdentity: "linux:boot-a 4242" };
     });
     publishLocalHostUnresponsive({
       pid: 4242,
@@ -5426,6 +5429,172 @@ describe("platform matrix", () => {
       setLocalHostStillUnresponsiveCheck(null);
       publishLocalHostUnresponsive(null);
     }
+  });
+
+  // The guard above runs at the head of the lane, but the host is stopped a
+  // few steps later: past the continuation lookup and, for the CLI route,
+  // past the command's wait for its lifecycle lock (up to 30s). A restart
+  // confirmed for one host process carries that process to the CLI, which
+  // checks it again once it holds the lock.
+  describe("a restart confirmed for one host process", () => {
+    const CONFIRMED_HOST = { pid: 4242, startIdentity: "linux:boot-a 4242" };
+    const BOUND_ARGS = [
+      "--expect-host-pid",
+      "4242",
+      "--expect-host-start-identity",
+      "linux:boot-a 4242",
+      "--lifecycle-origin",
+      "desktop",
+    ];
+
+    function confirmedFor(
+      host: typeof CONFIRMED_HOST,
+    ): LocalHostMutationIntent {
+      return {
+        kind: "user-repair",
+        targetHostId: "local-host",
+        guard: async () => ({ kind: "proceed-for-host", host }),
+      };
+    }
+
+    function stageInstalledHost(): HostController {
+      const controller = newController("production");
+      writeInstallRecord("production", {
+        version: "1.7.0",
+        runtimeVersion: "1.7.0",
+      });
+      return controller;
+    }
+
+    it("passes the confirmed host to the forced CLI restart", async () => {
+      const controller = stageInstalledHost();
+      vi.mocked(streamBundledTraycerCliJson).mockResolvedValue({
+        data: { activated: true },
+      });
+
+      const outcome = await controller.respawn(
+        confirmedFor(CONFIRMED_HOST),
+        "force",
+      );
+
+      expect(outcome).toEqual({ kind: "ok", value: { activated: true } });
+      expect(streamBundledTraycerCliJson).toHaveBeenCalledTimes(1);
+      expect(streamBundledTraycerCliJson).toHaveBeenCalledWith(
+        expect.objectContaining({
+          args: [
+            "host",
+            "restart",
+            "--force",
+            "--defer-if-parked",
+            ...BOUND_ARGS,
+          ],
+        }),
+      );
+    });
+
+    it("passes the confirmed host to the idle-only CLI restart", async () => {
+      const controller = stageInstalledHost();
+      vi.mocked(streamBundledTraycerCliJson).mockResolvedValue({
+        data: { activated: true },
+      });
+
+      await controller.respawn(confirmedFor(CONFIRMED_HOST), "if-idle");
+
+      expect(streamBundledTraycerCliJson).toHaveBeenCalledWith(
+        expect.objectContaining({
+          args: [
+            "host",
+            "restart",
+            "--if-idle",
+            "--defer-if-parked",
+            ...BOUND_ARGS,
+          ],
+        }),
+      );
+    });
+
+    it("carries the host an unresponsive-host offer was confirmed for, from the monitor's check to the CLI", async () => {
+      const controller = stageInstalledHost();
+      vi.mocked(streamBundledTraycerCliJson).mockResolvedValue({
+        data: { activated: true },
+      });
+      setLocalHostStillUnresponsiveCheck(async () => CONFIRMED_HOST);
+      publishLocalHostUnresponsive({
+        pid: 4242,
+        offerId: 3,
+        unreachableForMs: 600_000,
+      });
+      try {
+        await controller.respawn(
+          unresponsiveHostRestartIntent({ pid: 4242, offerId: 3 }),
+          "force",
+        );
+      } finally {
+        setLocalHostStillUnresponsiveCheck(null);
+        publishLocalHostUnresponsive(null);
+      }
+
+      expect(streamBundledTraycerCliJson).toHaveBeenCalledWith(
+        expect.objectContaining({
+          args: [
+            "host",
+            "restart",
+            "--force",
+            "--defer-if-parked",
+            ...BOUND_ARGS,
+          ],
+        }),
+      );
+    });
+
+    it("defers, with the host-changed message, when the CLI found another host published once it held the lock", async () => {
+      const controller = stageInstalledHost();
+      vi.mocked(streamBundledTraycerCliJson).mockRejectedValue(
+        new TraycerCliError(
+          "E_HOST_RESTART_TARGET_CHANGED",
+          "the confirmed host is no longer the published one",
+        ),
+      );
+
+      const outcome = await controller.respawn(
+        confirmedFor(CONFIRMED_HOST),
+        "force",
+      );
+
+      expect(outcome).toEqual({
+        kind: "deferred",
+        message: HOST_RESTART_TARGET_CHANGED_MESSAGE,
+      });
+    });
+
+    it("adds no host to a restart whose guard confirmed none", async () => {
+      const controller = stageInstalledHost();
+      vi.mocked(streamBundledTraycerCliJson).mockResolvedValue({
+        data: { activated: true },
+      });
+
+      await controller.respawn(
+        {
+          kind: "user-repair",
+          targetHostId: "local-host",
+          guard: async () => ({ kind: "proceed" }),
+        },
+        "force",
+      );
+
+      expect(streamBundledTraycerCliJson).toHaveBeenCalledWith(
+        expect.objectContaining({
+          args: [
+            "host",
+            "restart",
+            "--force",
+            "--defer-if-parked",
+            "--lifecycle-origin",
+            "desktop",
+          ],
+        }),
+      );
+    });
   });
 
   it("a respawn admitted after another respawn already restarted answers restarted without a second cycle", async () => {
@@ -9660,6 +9829,81 @@ describe("F3: routeForceRestartContinuation via respawn", () => {
       if (committed.kind === "valid") {
         expect(committed.value.phase).not.toBe("waiting-to-activate");
       }
+    });
+
+    // The macOS continuation sits between the guard and the stop, and its
+    // drain and actuator-lock wait are windows in which another host can be
+    // published. A restart confirmed for one host process must not boot out a
+    // different live one: the record goes back to its park and the plain CLI
+    // restart is not tried either, since it would refuse for the same reason.
+    it("a continuation confirmed for one host stops nothing when pid.json now names a different live host", async () => {
+      eligibleDesktopCohort();
+      stageCliWithVerification({ outcome: "complete" });
+      const controller = stagePackagedMacRestartWorld(undefined);
+      writeOwnedSmAppServiceSubstrate();
+      await seedParkedActivationAttempt("2.0.0");
+      // The confirmed host was pid 4242; this test process now stands in for
+      // the healthy replacement published in its place.
+      const replacementIdentity = ownProcessStartIdentity();
+      writePidMetadata("production", {
+        version: "2.0.0",
+        pid: process.pid,
+        ...(replacementIdentity === null
+          ? {}
+          : { processStartIdentity: replacementIdentity }),
+      });
+
+      const outcome = await controller.respawn(
+        {
+          kind: "user-repair",
+          targetHostId: "local-host",
+          guard: async () => ({
+            kind: "proceed-for-host",
+            host: { pid: 4242, startIdentity: "linux:boot-a 4242" },
+          }),
+        },
+        "force",
+      );
+
+      expect(outcome).toEqual({
+        kind: "deferred",
+        message: HOST_RESTART_TARGET_CHANGED_MESSAGE,
+      });
+      expect(await currentAttemptPhase()).toBe("waiting-to-activate");
+      expect(registerHostLoginItem).not.toHaveBeenCalled();
+      expect(streamBundledTraycerCliJson).not.toHaveBeenCalledWith(
+        expect.objectContaining({
+          args: expect.arrayContaining(["restart"]),
+        }),
+      );
+    });
+
+    it("a continuation confirmed for one host proceeds while pid.json still names that host", async () => {
+      eligibleDesktopCohort();
+      stageCliWithVerification({ outcome: "complete" });
+      const controller = stagePackagedMacRestartWorld(undefined);
+      writeOwnedSmAppServiceSubstrate();
+      await seedParkedActivationAttempt("2.0.0");
+      writePidMetadata("production", {
+        version: "2.0.0",
+        pid: process.pid,
+        processStartIdentity: "linux:boot-a 4242",
+      });
+
+      const outcome = await controller.respawn(
+        {
+          kind: "user-repair",
+          targetHostId: "local-host",
+          guard: async () => ({
+            kind: "proceed-for-host",
+            host: { pid: process.pid, startIdentity: "linux:boot-a 4242" },
+          }),
+        },
+        "force",
+      );
+
+      expect(outcome).toEqual({ kind: "ok", value: { activated: true } });
+      expect(registerHostLoginItem).toHaveBeenCalled();
     });
 
     // NOTE on what this test actually proves right now: the assertion below

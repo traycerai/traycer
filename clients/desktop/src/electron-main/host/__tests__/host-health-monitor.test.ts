@@ -1263,6 +1263,13 @@ describe("startHostHealthMonitor", () => {
       websocketUrl: "ws://127.0.0.1:55558/rpc",
     };
 
+    // What a confirmed offer answers: the offered host's pid and the start
+    // identity pid.json published for it.
+    const OFFERED_HOST = {
+      pid: SNAPSHOT.pid,
+      startIdentity: PUBLISHED_IDENTITY,
+    };
+
     interface PublishedState {
       snapshot: DesktopPublishedHostSnapshot;
       published: DesktopPublishedHostSnapshot;
@@ -1317,94 +1324,100 @@ describe("startHostHealthMonitor", () => {
       return { snapshot: SNAPSHOT, published: SNAPSHOT, reachable: false };
     }
 
-    it("is false before any offer has been made", async () => {
+    it("is null before any offer has been made", async () => {
       const told: Told = [];
       const monitor = startWithOffer(silent(), told);
       await ticks(10);
 
       await expect(
         monitor.stillUnresponsive({ pid: SNAPSHOT.pid, offerId: 1 }),
-      ).resolves.toBe(false);
+      ).resolves.toBeNull();
       monitor.dispose();
     });
 
-    it("is true for the offer that is out while a fresh probe gets no answer", async () => {
+    it("answers the offered host for the offer that is out while a fresh probe gets no answer", async () => {
       const told: Told = [];
       const monitor = startWithOffer(silent(), told);
       await ticks(700);
 
-      await expect(monitor.stillUnresponsive(offerOut(told))).resolves.toBe(
-        true,
+      await expect(monitor.stillUnresponsive(offerOut(told))).resolves.toEqual(
+        OFFERED_HOST,
       );
       monitor.dispose();
     });
 
-    it("is false as soon as a fresh probe answers, before the next tick", async () => {
+    it("is null as soon as a fresh probe answers, before the next tick", async () => {
       const told: Told = [];
       const state = silent();
       const monitor = startWithOffer(state, told);
       await ticks(700);
 
       state.reachable = true;
-      await expect(monitor.stillUnresponsive(offerOut(told))).resolves.toBe(
-        false,
-      );
+      await expect(
+        monitor.stillUnresponsive(offerOut(told)),
+      ).resolves.toBeNull();
       monitor.dispose();
     });
 
-    it("is false for a pid other than the offered one, and for an offer id other than the one out", async () => {
+    it("is null for a pid other than the offered one, and for an offer id other than the one out", async () => {
       const told: Told = [];
       const monitor = startWithOffer(silent(), told);
       await ticks(700);
       const offer = offerOut(told);
 
-      await expect(monitor.stillUnresponsive(offer)).resolves.toBe(true);
+      await expect(monitor.stillUnresponsive(offer)).resolves.toEqual(
+        OFFERED_HOST,
+      );
       await expect(
         monitor.stillUnresponsive({ pid: hostB.pid, offerId: offer.offerId }),
-      ).resolves.toBe(false);
+      ).resolves.toBeNull();
       await expect(
         monitor.stillUnresponsive({
           pid: offer.pid,
           offerId: offer.offerId + 1,
         }),
-      ).resolves.toBe(false);
+      ).resolves.toBeNull();
       await expect(
         monitor.stillUnresponsive({
           pid: offer.pid,
           offerId: offer.offerId - 1,
         }),
-      ).resolves.toBe(false);
+      ).resolves.toBeNull();
       monitor.dispose();
     });
 
-    it("is false when the lifecycle snapshot now names another host", async () => {
+    it("is null when the lifecycle snapshot now names another host", async () => {
       const told: Told = [];
       const state = silent();
       const monitor = startWithOffer(state, told);
       await ticks(700);
       const offer = offerOut(told);
-      await expect(monitor.stillUnresponsive(offer)).resolves.toBe(true);
+      await expect(monitor.stillUnresponsive(offer)).resolves.toEqual(
+        OFFERED_HOST,
+      );
 
       state.snapshot = hostB;
       state.published = hostB;
-      await expect(monitor.stillUnresponsive(offer)).resolves.toBe(false);
+      await expect(monitor.stillUnresponsive(offer)).resolves.toBeNull();
       monitor.dispose();
     });
 
-    it("is false when pid.json no longer names the offered host", async () => {
+    it("is null when pid.json no longer names the offered host", async () => {
       const told: Told = [];
       const state = silent();
       const monitor = startWithOffer(state, told);
       await ticks(700);
       const offer = offerOut(told);
-      await expect(monitor.stillUnresponsive(offer)).resolves.toBe(true);
+      await expect(monitor.stillUnresponsive(offer)).resolves.toEqual(
+        OFFERED_HOST,
+      );
 
       state.published = hostB;
-      await expect(monitor.stillUnresponsive(offer)).resolves.toBe(false);
+      await expect(monitor.stillUnresponsive(offer)).resolves.toBeNull();
       monitor.dispose();
     });
 
-    it("is false when another host is published while the fresh probe is out, even though the probe got no answer", async () => {
+    it("is null when another host is published while the fresh probe is out, even though the probe got no answer", async () => {
       // The probe was aimed at the host the offer was for. By the time it
       // fails, the lifecycle and pid.json name a replacement that reuses the
       // pid: the failure says nothing about it.
@@ -1425,13 +1438,13 @@ describe("startHostHealthMonitor", () => {
       await ticks(700);
 
       armed = true;
-      await expect(monitor.stillUnresponsive(offerOut(told))).resolves.toBe(
-        false,
-      );
+      await expect(
+        monitor.stillUnresponsive(offerOut(told)),
+      ).resolves.toBeNull();
       monitor.dispose();
     });
 
-    it("is false when only pid.json is swapped to another endpoint of the same pid while the probe is out", async () => {
+    it("is null when only pid.json is swapped to another endpoint of the same pid while the probe is out", async () => {
       const told: Told = [];
       const state: PublishedState = { snapshot: SNAPSHOT, published: SNAPSHOT };
       let armed = false;
@@ -1446,9 +1459,9 @@ describe("startHostHealthMonitor", () => {
       await ticks(700);
 
       armed = true;
-      await expect(monitor.stillUnresponsive(offerOut(told))).resolves.toBe(
-        false,
-      );
+      await expect(
+        monitor.stillUnresponsive(offerOut(told)),
+      ).resolves.toBeNull();
       monitor.dispose();
     });
 
@@ -1456,17 +1469,19 @@ describe("startHostHealthMonitor", () => {
     // the snapshot AND pid.json publish B under the same pid at another
     // endpoint, and B does not answer either. B has had no busy window of its
     // own, so the offer made for A must not reach it.
-    it("is false when a host that reuses the pid replaces the offered one with no tick in between, and does not answer", async () => {
+    it("is null when a host that reuses the pid replaces the offered one with no tick in between, and does not answer", async () => {
       const told: Told = [];
       const state = silent();
       const monitor = startWithOffer(state, told);
       await ticks(700);
       const offer = offerOut(told);
-      await expect(monitor.stillUnresponsive(offer)).resolves.toBe(true);
+      await expect(monitor.stillUnresponsive(offer)).resolves.toEqual(
+        OFFERED_HOST,
+      );
 
       state.snapshot = sameImpostorPid;
       state.published = sameImpostorPid;
-      await expect(monitor.stillUnresponsive(offer)).resolves.toBe(false);
+      await expect(monitor.stillUnresponsive(offer)).resolves.toBeNull();
       monitor.dispose();
     });
 
@@ -1476,13 +1491,15 @@ describe("startHostHealthMonitor", () => {
       const monitor = startWithOffer(state, told);
       await ticks(700);
       const first = offerOut(told);
-      await expect(monitor.stillUnresponsive(first)).resolves.toBe(true);
+      await expect(monitor.stillUnresponsive(first)).resolves.toEqual(
+        OFFERED_HOST,
+      );
 
       // The host answers: the offer is withdrawn.
       state.reachable = true;
       await ticks(3);
       expect(told.at(-1)).toBeNull();
-      await expect(monitor.stillUnresponsive(first)).resolves.toBe(false);
+      await expect(monitor.stillUnresponsive(first)).resolves.toBeNull();
 
       // It goes silent again: a second offer for the same host and endpoint.
       state.reachable = false;
@@ -1492,8 +1509,10 @@ describe("startHostHealthMonitor", () => {
       expect(second.offerId).not.toBe(first.offerId);
       expect(second.offerId).toBeGreaterThan(first.offerId);
 
-      await expect(monitor.stillUnresponsive(first)).resolves.toBe(false);
-      await expect(monitor.stillUnresponsive(second)).resolves.toBe(true);
+      await expect(monitor.stillUnresponsive(first)).resolves.toBeNull();
+      await expect(monitor.stillUnresponsive(second)).resolves.toEqual(
+        OFFERED_HOST,
+      );
       monitor.dispose();
     });
 
@@ -1545,7 +1564,7 @@ describe("startHostHealthMonitor", () => {
         for (const offerId of [0, 1, 2, 7]) {
           await expect(
             monitor.stillUnresponsive({ pid: SNAPSHOT.pid, offerId }),
-          ).resolves.toBe(false);
+          ).resolves.toBeNull();
         }
         expect(respawn).not.toHaveBeenCalled();
         monitor.dispose();
@@ -1565,7 +1584,7 @@ describe("startHostHealthMonitor", () => {
         for (const offerId of [0, 1, 2, 7]) {
           await expect(
             monitor.stillUnresponsive({ pid: SNAPSHOT.pid, offerId }),
-          ).resolves.toBe(false);
+          ).resolves.toBeNull();
         }
         expect(respawn).not.toHaveBeenCalled();
         monitor.dispose();
@@ -1608,10 +1627,12 @@ describe("startHostHealthMonitor", () => {
         });
         await ticks(700);
         const offer = offerOut(told);
-        await expect(monitor.stillUnresponsive(offer)).resolves.toBe(true);
+        await expect(monitor.stillUnresponsive(offer)).resolves.toEqual(
+          OFFERED_HOST,
+        );
 
         identity.current = null;
-        await expect(monitor.stillUnresponsive(offer)).resolves.toBe(false);
+        await expect(monitor.stillUnresponsive(offer)).resolves.toBeNull();
         expect(respawn).not.toHaveBeenCalled();
         monitor.dispose();
       });
@@ -1623,6 +1644,7 @@ describe("startHostHealthMonitor", () => {
       // the structural `readMetadata` seam, which carries none.
       const IDENTITY_A = "linux:boot-a 1";
       const IDENTITY_B = "linux:boot-a 2";
+      const OFFERED_HOST_A = { pid: SNAPSHOT.pid, startIdentity: IDENTITY_A };
 
       function startWithIdentity(
         state: { identity: string },
@@ -1663,20 +1685,22 @@ describe("startHostHealthMonitor", () => {
         __setAsyncProcessLivenessReaderForTest(null);
       });
 
-      it("is false when the same pid at the same endpoint is another process, told apart only by its start identity", async () => {
+      it("is null when the same pid at the same endpoint is another process, told apart only by its start identity", async () => {
         const told: Told = [];
         const state = { identity: IDENTITY_A };
         const monitor = startWithIdentity(state, told);
         await ticks(700);
         const offer = offerOut(told);
-        await expect(monitor.stillUnresponsive(offer)).resolves.toBe(true);
+        await expect(monitor.stillUnresponsive(offer)).resolves.toEqual(
+          OFFERED_HOST_A,
+        );
 
         state.identity = IDENTITY_B;
-        await expect(monitor.stillUnresponsive(offer)).resolves.toBe(false);
+        await expect(monitor.stillUnresponsive(offer)).resolves.toBeNull();
         monitor.dispose();
       });
 
-      it("is false when the identity changes while the fresh probe is out", async () => {
+      it("is null when the identity changes while the fresh probe is out", async () => {
         const told: Told = [];
         const state = { identity: IDENTITY_A };
         const monitor = startWithIdentity(state, told);
@@ -1697,7 +1721,7 @@ describe("startHostHealthMonitor", () => {
             };
           },
         );
-        await expect(monitor.stillUnresponsive(offer)).resolves.toBe(false);
+        await expect(monitor.stillUnresponsive(offer)).resolves.toBeNull();
         monitor.dispose();
       });
     });

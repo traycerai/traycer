@@ -11,9 +11,10 @@ import type {
   HostRestartRequestResult,
   HostServiceRestartResult,
 } from "../../ipc-contracts/host-management-types";
-import type {
-  GuardedMutationOutcome,
-  LocalHostMutationIntent,
+import {
+  HOST_RESTART_TARGET_CHANGED_MESSAGE,
+  type GuardedMutationOutcome,
+  type LocalHostMutationIntent,
 } from "../host/host-controller-types";
 import { readLastKnownLocalHostId } from "../host/local-host-identity";
 import { appliedLocalHostCapability } from "../host/local-host-capability";
@@ -62,9 +63,6 @@ export function serviceRestartResultFromOutcome<TOk>(
   return restartRequestResultFromOutcome(outcome);
 }
 
-const HOST_NOT_RESTARTED_MESSAGE =
-  "The host started responding again or was replaced, so it was not restarted.";
-
 /**
  * The restart behind an unresponsive host's offer, guarded at the head of the
  * controller's lane rather than before it. The restart can queue behind
@@ -72,8 +70,10 @@ const HOST_NOT_RESTARTED_MESSAGE =
  * replaced, while it waits; so the check that the offer is still out, that
  * the host the monitor recorded when it made the offer is still the one
  * published, and that it is still silent, runs once the job owns the lane,
- * right before it acts, and the job is abandoned otherwise. Keyed by the
- * offer, so a restart from any other offer - another host's, or a later one
+ * right before it acts, and the job is abandoned otherwise. The host it
+ * confirmed travels on with the job (`proceed-for-host`), because the lane
+ * head is not where the host is stopped: the step that stops it checks it
+ * again under its own lock. Keyed by the offer, so a restart from any other offer - another host's, or a later one
  * for a host that reused this pid - never joins this one and inherits its
  * answer.
  */
@@ -83,10 +83,12 @@ export function unresponsiveHostRestartIntent(
   return {
     kind: "user-repair",
     targetHostId: `unresponsive-offer:${offer.offerId}:${offer.pid}`,
-    guard: async () =>
-      (await confirmLocalHostStillUnresponsive(offer))
-        ? { kind: "proceed" }
-        : { kind: "abandon", message: HOST_NOT_RESTARTED_MESSAGE },
+    guard: async () => {
+      const host = await confirmLocalHostStillUnresponsive(offer);
+      return host === null
+        ? { kind: "abandon", message: HOST_RESTART_TARGET_CHANGED_MESSAGE }
+        : { kind: "proceed-for-host", host };
+    },
   };
 }
 
@@ -153,7 +155,10 @@ export function registerHostIpc(bridge: RunnerIpcBridge): void {
     async (_event, rawOffer: unknown): Promise<HostRestartRequestResult> => {
       const offer = parseUnresponsiveHostOffer(rawOffer);
       if (offer === null) {
-        return { kind: "declined", message: HOST_NOT_RESTARTED_MESSAGE };
+        return {
+          kind: "declined",
+          message: HOST_RESTART_TARGET_CHANGED_MESSAGE,
+        };
       }
       const outcome = await bridge.options.hostController.respawn(
         unresponsiveHostRestartIntent(offer),

@@ -17,6 +17,8 @@ import {
 } from "commander";
 import { A2A_PERMISSION_MODE_INSTRUCTION } from "@traycer/protocol/agent/agent-selection-guide-format";
 import { AGENT_FACING_HARNESS_ID_LIST } from "@traycer/protocol/host/agent/shared";
+import { isProcessStartIdentity } from "@traycer/protocol/host/lifecycle";
+import type { RestartTargetHost } from "@traycer-clients/shared/host-lock/restart-target";
 import { readFeatureSettingsSync } from "@traycer/protocol/config/store";
 import { config } from "./config";
 import {
@@ -340,6 +342,30 @@ const ACCEPT_STORE_FORMAT_LOSS_HELP =
 function attemptAdoptionNonce(opts: Record<string, unknown>): string | null {
   const value = opts.attemptAdoption;
   return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+/**
+ * `host restart`'s binding to one host process: both flags or neither. Thrown
+ * from inside the command so the refusal reaches the runner as a typed error.
+ */
+function expectedRestartHostArg(
+  opts: Record<string, unknown>,
+): RestartTargetHost | null {
+  const rawPid = opts.expectHostPid;
+  const rawIdentity = opts.expectHostStartIdentity;
+  if (rawPid === undefined && rawIdentity === undefined) return null;
+  const pid =
+    typeof rawPid === "string" ? parsePositiveIntegerArg(rawPid) : null;
+  if (pid === null || !isProcessStartIdentity(rawIdentity)) {
+    throw cliError({
+      code: CLI_ERROR_CODES.INVALID_ARGUMENT,
+      message:
+        "host restart: --expect-host-pid takes a positive whole number and must be passed with a valid --expect-host-start-identity",
+      details: null,
+      exitCode: 1,
+    });
+  }
+  return { pid, startIdentity: rawIdentity };
 }
 
 function parsePortArg(value: string): number | null {
@@ -1393,14 +1419,30 @@ function registerHostCommands(program: Command): void {
           "Internal: when a parked packaged activation makes a generic restart unsafe, refuse without stopping the service instead of stopping it",
         ).hideHelp(),
       )
+      // Hidden: Desktop's force restart of a host that stopped answering,
+      // which may stop only the process the person confirmed - see
+      // commands/host-restart.ts.
+      .addOption(
+        new Option(
+          "--expect-host-pid <pid>",
+          "Internal: refuse with E_HOST_RESTART_TARGET_CHANGED unless the published host is still this pid (or no live host is published)",
+        ).hideHelp(),
+      )
+      .addOption(
+        new Option(
+          "--expect-host-start-identity <identity>",
+          "Internal: the start identity the expected host published; required with --expect-host-pid",
+        ).hideHelp(),
+      )
       .addOption(lifecycleOriginOption()),
-    (opts) =>
+    (opts) => (ctx) =>
       buildHostRestartCommand({
         ifIdle: opts.ifIdle === true,
         force: opts.force === true,
         deferIfParked: opts.deferIfParked === true,
+        expectedHost: expectedRestartHostArg(opts),
         lifecycleOrigin: hostStartOriginFromOption(opts.lifecycleOrigin),
-      }),
+      })(ctx),
   );
 
   withRunner(

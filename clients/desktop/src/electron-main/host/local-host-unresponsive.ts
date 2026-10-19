@@ -1,3 +1,4 @@
+import type { RestartTargetHost } from "@traycer-clients/shared/host-lock/restart-target";
 import type {
   LocalHostUnresponsive,
   LocalHostUnresponsiveOffer,
@@ -28,12 +29,13 @@ export function readLocalHostUnresponsive(): LocalHostUnresponsive | null {
 
 /**
  * Asks the health monitor, now, whether this offer is still out and the host
- * it was made for is still the published one and still not answering.
- * Registered by whoever started the monitor; `null` while none runs.
+ * it was made for is still the published one and still not answering: that
+ * host when so, `null` otherwise. Registered by whoever started the monitor;
+ * `null` while none runs.
  */
 type StillUnresponsiveCheck = (
   offer: LocalHostUnresponsiveOffer,
-) => Promise<boolean>;
+) => Promise<RestartTargetHost | null>;
 
 let stillUnresponsiveCheck: StillUnresponsiveCheck | null = null;
 
@@ -44,20 +46,20 @@ export function setLocalHostStillUnresponsiveCheck(
 }
 
 /**
- * Whether the force restart this offer made may still go ahead: the verdict
- * still is that offer, and a fresh look agrees the host it was made for is
- * still published and does not answer. False when no monitor runs, since
- * nothing then vouches for the verdict.
+ * The host the force restart this offer made may still stop, or `null` when
+ * it may not: the verdict still is that offer, and a fresh look agrees the
+ * host it was made for is still published and does not answer. `null` when no
+ * monitor runs, since nothing then vouches for the verdict.
  */
 export async function confirmLocalHostStillUnresponsive(
   offer: LocalHostUnresponsiveOffer,
-): Promise<boolean> {
+): Promise<RestartTargetHost | null> {
   if (
     current?.pid !== offer.pid ||
     current.offerId !== offer.offerId ||
     stillUnresponsiveCheck === null
   ) {
-    return false;
+    return null;
   }
   return stillUnresponsiveCheck(offer);
 }

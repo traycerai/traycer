@@ -17,6 +17,7 @@ import type {
   HostRecoveryGovernor,
 } from "./host-recovery-governor";
 import type { ProcessStartIdentity } from "@traycer/protocol/host/lifecycle";
+import type { RestartTargetHost } from "@traycer-clients/shared/host-lock/restart-target";
 import type { IpcHostLifecycle } from "../ipc/runner-ipc-bridge";
 import type {
   DesktopLocalHostSnapshot,
@@ -233,11 +234,15 @@ export interface HostHealthMonitor {
    * Whether this offer is still the one out, and the host it was made for -
    * the pid, endpoint and start identity recorded when the offer was made,
    * never whatever is published now - is still the published one and still
-   * unanswered on a fresh probe. The offer's action asks this before
-   * restarting, so a host that answered, or replaced the offered one (even
-   * under the same pid), is not restarted from under its work.
+   * unanswered on a fresh probe: that host's pid and start identity when so,
+   * `null` otherwise. The offer's action asks this before restarting, so a
+   * host that answered, or replaced the offered one (even under the same
+   * pid), is not restarted from under its work, and the restart carries the
+   * answer to the step that stops the host.
    */
-  stillUnresponsive(offer: LocalHostUnresponsiveOffer): Promise<boolean>;
+  stillUnresponsive(
+    offer: LocalHostUnresponsiveOffer,
+  ): Promise<RestartTargetHost | null>;
 }
 
 /**
@@ -791,7 +796,7 @@ export function startHostHealthMonitor(
         offered.offerId !== offer.offerId ||
         offered.pid !== offer.pid
       ) {
-        return false;
+        return null;
       }
       // Whether the offer is still out and the offered host is the one
       // published right now, in the snapshot and on disk alike. Asked on both
@@ -821,15 +826,15 @@ export function startHostHealthMonitor(
           published.startIdentity === offered.startIdentity
         );
       };
-      if (!(await offeredIsStillPublished())) return false;
+      if (!(await offeredIsStillPublished())) return null;
       const answered = await isPublishedHostEndpointReachable(
         offered.websocketUrl,
         offered.pid,
         offered.startIdentity,
         probe,
       );
-      if (answered) return false;
-      return offeredIsStillPublished();
+      if (answered || !(await offeredIsStillPublished())) return null;
+      return { pid: offered.pid, startIdentity: offered.startIdentity };
     },
   };
 }
