@@ -45,6 +45,7 @@ import {
 } from "@/components/providers/provider-signin-availability";
 import { providerDisplayName } from "@/lib/provider-ordering";
 import { appLogger } from "@/lib/logger";
+import { hostControlFlowReasonOf } from "@/lib/query/host-query-error-boundary";
 
 type LoginMutationContext = { readonly hostId: string | null };
 
@@ -1111,8 +1112,17 @@ export function useProviderProfileLoginFlow(
             awaitOutcomeRef.current = "notAuthenticated";
             settleAttempt(thisAttemptId);
           };
-          const handleAwaitError = (): void => {
+          const handleAwaitError = (error: unknown): void => {
             if (attemptAbandoned()) return;
+            // The await rejected without a host verdict, so the attempt ends
+            // on the "did not finish" copy; the reason is the only record of
+            // why. A closed word set: the coordinator's control-flow reason,
+            // or `rpc-error` for any other rejection.
+            appLogger.warn("[provider-login] await ended without a verdict", {
+              provider: providerId,
+              mode,
+              reason: hostControlFlowReasonOf(error) ?? "rpc-error",
+            });
             awaitOutcomeRef.current = "notAuthenticated";
             settleAttempt(thisAttemptId);
           };
