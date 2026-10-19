@@ -355,6 +355,7 @@ import {
   chatSubscribeV126,
   chatSubscribeV127,
   chatSubscribeV128,
+  chatSubscribeV129,
 } from "@traycer/protocol/host/agent/gui/contracts";
 import {
   agentTuiGenerateTitleV10,
@@ -13745,7 +13746,7 @@ const HOST_STREAM_RPC_REGISTRY_DEFINITION = {
   ...HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION,
   "chat.subscribe": {
     1: {
-      latestMinor: 28,
+      latestMinor: 29,
       versions: {
         0: {
           contract: chatSubscribeV10,
@@ -13926,8 +13927,15 @@ const HOST_STREAM_RPC_REGISTRY_DEFINITION = {
         // @1.28 adds `agentMessageDelivery` to the `tool_call` block and its
         // completed event: where a cross-host send stands (queued, delivered,
         // expired, failed). Projection: the host deletes the key below @1.28.
+        // Frozen at the pre-sign-in-park queue since @1.29 opened above it.
         28: {
           contract: chatSubscribeV128,
+        },
+        // @1.29 adds `signInParked` to the queued prompt item: the host holds
+        // an agent's prompt for a provider sign-in, and a person may cancel
+        // it. Tolerance: optional, dropped as an unknown key below @1.29.
+        29: {
+          contract: chatSubscribeV129,
         },
       },
     },
