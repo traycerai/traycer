@@ -11962,6 +11962,32 @@ describe("restart with no launchd job to restart (packaged macOS, neither host l
       expect(flagsOf(takeover)).toEqual(HOST_FLAGS);
     });
 
+    // The takeover reaches the same CLI refusal as the plain restart: it
+    // boots out and installs behind the confirmed host. A different host
+    // published in its place is a deferral, never a failed registration.
+    it("defers, with the host-changed message, when the CLI takeover found another host published in place of the confirmed one", async () => {
+      const { controller } = stageNoLaunchdJobWorld();
+      vi.mocked(registerHostLoginItem).mockResolvedValueOnce("not-registered");
+      vi.mocked(streamBundledTraycerCliJson).mockImplementation(
+        async (options) => {
+          if (options.args.includes("--takeover")) {
+            throw new TraycerCliError(
+              "E_HOST_RESTART_TARGET_CHANGED",
+              "the confirmed host is no longer the published one",
+            );
+          }
+          return { data: { restarted: true, version: "1.7.0" } };
+        },
+      );
+
+      const outcome = await controller.respawn(confirmedIntent(), "force");
+
+      expect(outcome.kind).toBe("deferred");
+      if (outcome.kind === "deferred") {
+        expect(outcome.message).toContain(HOST_RESTART_TARGET_CHANGED_MESSAGE);
+      }
+    });
+
     it("carries the confirmed host to the CLI takeover after a parked registration with no host running", async () => {
       const { controller } = stageNoLaunchdJobWorld();
       vi.mocked(registerHostLoginItem).mockResolvedValueOnce("parked");

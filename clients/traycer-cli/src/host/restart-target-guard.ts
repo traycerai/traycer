@@ -1,6 +1,7 @@
 import {
   restartTargetStillCurrent,
   type RestartTargetHost,
+  type RestartTargetPublished,
 } from "@traycer-clients/shared/host-lock/restart-target";
 import type { Environment } from "../runner/environment";
 import { CLI_ERROR_CODES, cliError } from "../runner/errors";
@@ -28,22 +29,75 @@ export async function refuseUnlessRestartTarget(
   target: RestartTargetHost,
   alreadyDone: string | null,
 ): Promise<void> {
-  const evidence = await readHostPidMetadataEvidence(environment);
-  const stillCurrent = await restartTargetStillCurrent(
-    target,
-    evidence.kind === "read"
-      ? {
-          kind: "published",
-          pid: evidence.metadata.pid,
-          startIdentity: evidence.metadata.processStartIdentity,
-        }
-      : evidence,
-  );
-  if (stillCurrent) return;
+  if (await targetStillPublished(environment, target)) return;
   throw cliError({
     code: CLI_ERROR_CODES.HOST_RESTART_TARGET_CHANGED,
     message: `${verb}: the host this restart was confirmed for (pid ${String(target.pid)}) is no longer the one published, so ${alreadyDone === null ? "nothing was stopped" : `it went no further: ${alreadyDone}`}`,
     details: null,
     exitCode: 1,
   });
+}
+
+/** How many times a record that changes under its own liveness probe is read. */
+const TARGET_READ_ATTEMPTS = 3;
+
+// The record read is the last await before the caller acts. A record naming
+// another instance is classified by a liveness probe, which awaits (a
+// `tasklist` spawn on Windows), and a host can publish while it runs: the
+// probe would call a stale record dead and the edge would act on the new
+// host. So after a probe the record is read again, and the verdict stands
+// only when that read is the record the probe classified. A record that keeps
+// changing is refused.
+async function targetStillPublished(
+  environment: Environment,
+  target: RestartTargetHost,
+): Promise<boolean> {
+  let published = await readPublished(environment);
+  for (let attempt = 0; attempt < TARGET_READ_ATTEMPTS; attempt += 1) {
+    const stillCurrent = await restartTargetStillCurrent(target, published);
+    if (!needsLivenessProbe(target, published)) return stillCurrent;
+    const reread = await readPublished(environment);
+    if (samePublished(published, reread)) return stillCurrent;
+    published = reread;
+  }
+  return false;
+}
+
+async function readPublished(
+  environment: Environment,
+): Promise<RestartTargetPublished> {
+  const evidence = await readHostPidMetadataEvidence(environment);
+  return evidence.kind === "read"
+    ? {
+        kind: "published",
+        pid: evidence.metadata.pid,
+        startIdentity: evidence.metadata.processStartIdentity,
+      }
+    : evidence.kind === "absent"
+      ? { kind: "absent" }
+      : { kind: "unreadable" };
+}
+
+// Whether `restartTargetStillCurrent` awaits a liveness probe for this record:
+// only for a record naming an instance other than the target.
+function needsLivenessProbe(
+  target: RestartTargetHost,
+  published: RestartTargetPublished,
+): boolean {
+  return (
+    published.kind === "published" &&
+    !(
+      published.pid === target.pid &&
+      published.startIdentity === target.startIdentity
+    )
+  );
+}
+
+function samePublished(
+  a: RestartTargetPublished,
+  b: RestartTargetPublished,
+): boolean {
+  if (a.kind !== "published" || b.kind !== "published")
+    return a.kind === b.kind;
+  return a.pid === b.pid && a.startIdentity === b.startIdentity;
 }

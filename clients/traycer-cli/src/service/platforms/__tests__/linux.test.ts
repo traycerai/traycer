@@ -36,6 +36,34 @@ const currentPidMetadata = (): { pid: number } | null =>
   pidMetadata.signalled && pidMetadata.replacement !== null
     ? pidMetadata.replacement
     : pidMetadata.metadata;
+// The liveness probe a record naming another instance is classified by
+// (`restartTargetStillCurrent`). A test that needs a host to publish while it
+// runs answers the probe itself; every other call reaches the real one.
+const livenessProbe = vi.hoisted(() => ({
+  answer: null as
+    | ((
+        pid: number,
+      ) => "dead" | "current" | "mismatch" | "indeterminate" | null)
+    | null,
+}));
+vi.mock(
+  "@traycer-clients/shared/host-lock/process-identity",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@traycer-clients/shared/host-lock/process-identity")
+      >();
+    return {
+      ...actual,
+      getPublishedProcessIdentityVerdict: async (
+        pid: number,
+        identity: string | null,
+      ) =>
+        livenessProbe.answer?.(pid) ??
+        actual.getPublishedProcessIdentityVerdict(pid, identity),
+    };
+  },
+);
 vi.mock("../../../host/pid-metadata", () => ({
   readHostPidMetadata: async () => currentPidMetadata(),
   readHostPidMetadataEvidence: async () => {
@@ -704,7 +732,26 @@ describe("Q13: stopForRestart signals the unit instead of stopping it", () => {
         }
       }
 
-      async function stopAndObserve(publishAt: number | null): Promise<{
+      // A record naming an instance that is neither the confirmed host nor
+      // running. Classifying it takes a liveness probe, and the replacement
+      // publishes while that probe runs.
+      const STALE_INSTANCE = {
+        pid: 31337,
+        startIdentity: "linux:boot-z 31337",
+      };
+
+      function publishStaleInstance(): void {
+        pidMetadata.metadata = { pid: STALE_INSTANCE.pid };
+        pidMetadata.identities.set(
+          STALE_INSTANCE.pid,
+          STALE_INSTANCE.startIdentity,
+        );
+      }
+
+      async function stopAndObserve(
+        publishAt: number | null,
+        publishAtLastCheck: () => void,
+      ): Promise<{
         readonly commands: string[][];
         readonly verifiesAtCall: number[];
         readonly settled: { readonly error: unknown };
@@ -717,7 +764,7 @@ describe("Q13: stopForRestart signals the unit instead of stopping it", () => {
         );
         pidMetadata.gone = true;
         pidMetadata.signalled = false;
-        const race = createVerifyRace(publishAt, publishReplacement);
+        const race = createVerifyRace(publishAt, publishAtLastCheck);
         const commands: string[][] = [];
         const verifiesAtCall: number[] = [];
         const controller = createLinuxController(async (command, args) => {
@@ -738,7 +785,7 @@ describe("Q13: stopForRestart signals the unit instead of stopping it", () => {
       it("never issues the unit's SIGTERM, and refuses as a mutation-authority failure", async () => {
         // The unscoped-by-publication dry run finds which authority check is
         // the last one before the SIGTERM.
-        const dry = await stopAndObserve(null);
+        const dry = await stopAndObserve(null, publishReplacement);
         const sigtermAt = dry.commands.findIndex((command) =>
           command.includes("--signal=SIGTERM"),
         );
@@ -747,6 +794,7 @@ describe("Q13: stopForRestart signals the unit instead of stopping it", () => {
 
         const raced = await stopAndObserve(
           dry.verifiesAtCall[sigtermAt] ?? null,
+          publishReplacement,
         );
 
         expect(raced.settled.error).toMatchObject({
@@ -754,6 +802,52 @@ describe("Q13: stopForRestart signals the unit instead of stopping it", () => {
         });
         expect(isServiceMutationAuthorityError(raced.settled.error)).toBe(true);
         expect(raced.commands.some((c) => c.includes("kill"))).toBe(false);
+      });
+
+      // The last check finds a stale record, not the confirmed host, and the
+      // probe that classifies it as dead is when the replacement publishes.
+      afterEach(() => {
+        livenessProbe.answer = null;
+      });
+
+      it("never issues the unit's SIGTERM when a host is published while a stale record's liveness probe runs", async () => {
+        livenessProbe.answer = (pid) => {
+          if (pid !== STALE_INSTANCE.pid) return null;
+          publishReplacement();
+          return "dead";
+        };
+        const dry = await stopAndObserve(null, publishStaleInstance);
+        const sigtermAt = dry.commands.findIndex((command) =>
+          command.includes("--signal=SIGTERM"),
+        );
+        expect(dry.settled.error).toBeNull();
+
+        const raced = await stopAndObserve(
+          dry.verifiesAtCall[sigtermAt] ?? null,
+          publishStaleInstance,
+        );
+
+        expect(raced.settled.error).toMatchObject({
+          code: CLI_ERROR_CODES.HOST_RESTART_TARGET_CHANGED,
+        });
+        expect(raced.commands.some((c) => c.includes("kill"))).toBe(false);
+      });
+
+      it("still issues the unit's SIGTERM when the stale record stays the stale record across its probe", async () => {
+        livenessProbe.answer = (pid) =>
+          pid === STALE_INSTANCE.pid ? "dead" : null;
+        const dry = await stopAndObserve(null, publishStaleInstance);
+        const sigtermAt = dry.commands.findIndex((command) =>
+          command.includes("--signal=SIGTERM"),
+        );
+
+        const raced = await stopAndObserve(
+          dry.verifiesAtCall[sigtermAt] ?? null,
+          publishStaleInstance,
+        );
+
+        expect(raced.settled.error).toBeNull();
+        expect(raced.commands.some((c) => c.includes("kill"))).toBe(true);
       });
     });
 

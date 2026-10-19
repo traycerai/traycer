@@ -16,6 +16,9 @@ import type { ServiceInstallArgs } from "../service-install";
 
 const mocks = vi.hoisted(() => ({
   takeoverMock: vi.fn(),
+  // Runs after each capability check the command makes, so a test can publish
+  // a host at one chosen check.
+  afterCapabilityCheck: null as (() => void) | null,
   realController: null as import("../../service").ServiceController | null,
 }));
 
@@ -27,6 +30,20 @@ vi.mock("../../host/update-mutation", async (importOriginal) => {
     takeoverDesktopRegistrationWithAttempt: (
       ...callArgs: Parameters<typeof mocks.takeoverMock>
     ) => mocks.takeoverMock(...callArgs),
+  };
+});
+
+vi.mock("../../host/update-contender", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../host/update-contender")>();
+  return {
+    ...actual,
+    requireCliUpdateMutationCapability: async (
+      ...callArgs: Parameters<typeof actual.requireCliUpdateMutationCapability>
+    ) => {
+      await actual.requireCliUpdateMutationCapability(...callArgs);
+      mocks.afterCapabilityCheck?.();
+    },
   };
 });
 
@@ -155,6 +172,7 @@ describe.skipIf(process.platform === "win32")(
         cooperativeStop: "stopped",
       });
       mocks.realController = null;
+      mocks.afterCapabilityCheck = null;
     });
 
     async function writePidMetadata(published: {
@@ -257,6 +275,78 @@ describe.skipIf(process.platform === "win32")(
       expect(calls.filter((call) => call.includes("bootstrap"))).toHaveLength(
         1,
       );
+    });
+
+    // The initial bootout of a loaded job is the first service call that can
+    // stop the host. A host published at the check in front of it is a
+    // target-change refusal, not a failed bootout.
+    it("refuses with the target-change code, not an install failure, when a different host is published at the check before the initial bootout", async () => {
+      const { createMacosController } =
+        await import("../../service/platforms/macos");
+      const { buildServiceInstallCommand } = await import("../service-install");
+      const args = { ...boundTakeoverArgs(), takeover: false };
+      const { hostPidMetadataPath } = await import("../../store/paths");
+      const { ownProcessStartIdentity } =
+        await import("../../store/process-identity");
+      // Synchronous: the check that publishes it is followed at once by the
+      // read that has to see it.
+      const publishNow = (): void => {
+        writeFileSync(
+          hostPidMetadataPath("production"),
+          JSON.stringify({
+            pid: process.pid,
+            hostId: "host-b",
+            version: "1.9.0",
+            websocketUrl: `ws://127.0.0.1:${String(process.pid)}/rpc`,
+            startedAt: "2026-09-01T00:00:00.000Z",
+            processStartIdentity: ownProcessStartIdentity(),
+          }),
+          "utf8",
+        );
+      };
+
+      // `checks` counts the capability checks the command makes; each runner
+      // call records how many had run before it, so the last check in front
+      // of the bootout can be found with a run that publishes nothing.
+      async function install(publishAt: number | null): Promise<{
+        readonly calls: string[];
+        readonly checksAtCall: number[];
+        readonly error: unknown;
+      }> {
+        await writePidMetadata({
+          pid: CONFIRMED_HOST.pid,
+          identity: CONFIRMED_HOST.startIdentity,
+        });
+        let checks = 0;
+        mocks.afterCapabilityCheck = () => {
+          checks += 1;
+          if (checks === publishAt) publishNow();
+        };
+        const calls: string[] = [];
+        const checksAtCall: number[] = [];
+        mocks.realController = createMacosController(async (command, argv) => {
+          calls.push([command, ...argv].join(" "));
+          checksAtCall.push(checks);
+          return { stdout: "", stderr: "", exitCode: 0 };
+        });
+        const error = await buildServiceInstallCommand(args)(fakeCtx()).then(
+          () => null,
+          (cause: unknown) => cause,
+        );
+        return { calls, checksAtCall, error };
+      }
+
+      const dry = await install(null);
+      const bootoutAt = dry.calls.findIndex((call) => call.includes("bootout"));
+      expect(bootoutAt).toBeGreaterThanOrEqual(0);
+      expect(dry.error).toBeNull();
+
+      const raced = await install(dry.checksAtCall[bootoutAt] ?? null);
+
+      expect(raced.error).toMatchObject({
+        code: "E_HOST_RESTART_TARGET_CHANGED",
+      });
+      expect(raced.calls.some((call) => call.includes("bootout"))).toBe(false);
     });
   },
 );

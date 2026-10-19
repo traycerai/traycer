@@ -1217,6 +1217,9 @@ async function installService(
       timeoutMs: LAUNCHCTL_CALL_TIMEOUT_MS,
       tolerateNonZeroExit: false,
     }).catch((cause: unknown) => {
+      // An authority loss - a stop's confirmed host replaced included - is
+      // not a bootout failure, and keeps its identity and code.
+      if (isServiceMutationAuthorityError(cause)) throw cause;
       throw cliError({
         code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
         message: `launchctl bootout failed for ${options.label.id}: ${describeCause(cause)}`,

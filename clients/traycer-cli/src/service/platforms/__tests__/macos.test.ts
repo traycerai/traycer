@@ -126,6 +126,35 @@ const HOST_PID_METADATA = {
   startedAt: "2026-07-12T00:00:00.000Z",
 };
 
+// The liveness probe a record naming another instance is classified by
+// (`restartTargetStillCurrent`). A test that needs a host to publish while it
+// runs answers the probe itself; every other call reaches the real one.
+const livenessProbe = vi.hoisted(() => ({
+  answer: null as
+    | ((
+        pid: number,
+      ) => "dead" | "current" | "mismatch" | "indeterminate" | null)
+    | null,
+}));
+vi.mock(
+  "@traycer-clients/shared/host-lock/process-identity",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@traycer-clients/shared/host-lock/process-identity")
+      >();
+    return {
+      ...actual,
+      getPublishedProcessIdentityVerdict: async (
+        pid: number,
+        identity: string | null,
+      ) =>
+        livenessProbe.answer?.(pid) ??
+        actual.getPublishedProcessIdentityVerdict(pid, identity),
+    };
+  },
+);
+
 vi.mock("../../../host/pid-metadata", () => ({
   readHostPidMetadata: MOCKS.readHostPidMetadata,
   readHostPidMetadataEvidence: MOCKS.readHostPidMetadataEvidence,
@@ -1572,17 +1601,32 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
   describe("a CLI-owned restart's stop confirmed for one host process", () => {
     const CONFIRMED_HOST = { pid: 4242, startIdentity: "linux:boot-a 4242" };
 
-    async function stopAndObserve(publishAt: number | null): Promise<{
+    // A record naming an instance that is neither the confirmed host nor
+    // running. Classifying it takes a liveness probe, and a replacement can
+    // publish while that probe runs.
+    const STALE_INSTANCE = { pid: 31337, startIdentity: "linux:boot-z 31337" };
+
+    type Published = {
+      readonly kind: "read";
+      readonly metadata: typeof HOST_PID_METADATA & {
+        readonly processStartIdentity: string | null;
+      };
+    };
+
+    // What the last authority check finds: the replacement itself, a stale
+    // record whose probe is when the replacement publishes, or a stale record
+    // that stays what it is.
+    type LastCheck = "replacement" | "stale-then-replacement" | "stale-only";
+
+    async function stopAndObserve(
+      publishAt: number | null,
+      lastCheck: LastCheck,
+    ): Promise<{
       readonly calls: RecordedCall[];
       readonly verifiesAtCall: number[];
       readonly error: unknown;
     }> {
-      let published: {
-        readonly kind: "read";
-        readonly metadata: typeof HOST_PID_METADATA & {
-          readonly processStartIdentity: string | null;
-        };
-      } = {
+      let published: Published = {
         kind: "read",
         metadata: {
           ...HOST_PID_METADATA,
@@ -1593,7 +1637,7 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
       MOCKS.readHostPidMetadataEvidence.mockImplementation(
         async () => published,
       );
-      const race = createVerifyRace(publishAt, () => {
+      const publishReplacement = (): void => {
         published = {
           kind: "read",
           metadata: {
@@ -1602,7 +1646,29 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
             processStartIdentity: ownProcessStartIdentity(),
           },
         };
-      });
+      };
+      const publishStale = (): void => {
+        published = {
+          kind: "read",
+          metadata: {
+            ...HOST_PID_METADATA,
+            pid: STALE_INSTANCE.pid,
+            processStartIdentity: STALE_INSTANCE.startIdentity,
+          },
+        };
+      };
+      livenessProbe.answer =
+        lastCheck === "replacement"
+          ? null
+          : (pid) => {
+              if (pid !== STALE_INSTANCE.pid) return null;
+              if (lastCheck === "stale-then-replacement") publishReplacement();
+              return "dead";
+            };
+      const race = createVerifyRace(
+        publishAt,
+        lastCheck === "replacement" ? publishReplacement : publishStale,
+      );
       const calls: RecordedCall[] = [];
       const verifiesAtCall: number[] = [];
       const controller = createMacosController(async (command, args) => {
@@ -1621,21 +1687,57 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
       return { calls, verifiesAtCall, error: settled };
     }
 
+    afterEach(() => {
+      livenessProbe.answer = null;
+    });
+
     it("never issues the job's launchctl kill when a live host is published while the last authority check is awaited, and refuses as a mutation-authority failure", async () => {
       // The dry run finds which authority check is the last one before the
       // kill.
-      const dry = await stopAndObserve(null);
+      const dry = await stopAndObserve(null, "replacement");
       const killAt = dry.calls.findIndex((call) => call.args[0] === "kill");
       expect(killAt).toBeGreaterThanOrEqual(0);
       expect(dry.error).toBeNull();
 
-      const raced = await stopAndObserve(dry.verifiesAtCall[killAt] ?? null);
+      const raced = await stopAndObserve(
+        dry.verifiesAtCall[killAt] ?? null,
+        "replacement",
+      );
 
       expect(raced.error).toMatchObject({
         code: CLI_ERROR_CODES.HOST_RESTART_TARGET_CHANGED,
       });
       expect(isServiceMutationAuthorityError(raced.error)).toBe(true);
       expect(raced.calls.some((call) => call.args[0] === "kill")).toBe(false);
+    });
+
+    it("never issues the job's launchctl kill when a host is published while a stale record's liveness probe runs", async () => {
+      const dry = await stopAndObserve(null, "stale-then-replacement");
+      const killAt = dry.calls.findIndex((call) => call.args[0] === "kill");
+      expect(dry.error).toBeNull();
+
+      const raced = await stopAndObserve(
+        dry.verifiesAtCall[killAt] ?? null,
+        "stale-then-replacement",
+      );
+
+      expect(raced.error).toMatchObject({
+        code: CLI_ERROR_CODES.HOST_RESTART_TARGET_CHANGED,
+      });
+      expect(raced.calls.some((call) => call.args[0] === "kill")).toBe(false);
+    });
+
+    it("still issues the job's launchctl kill when the stale record stays the stale record across its probe", async () => {
+      const dry = await stopAndObserve(null, "stale-only");
+      const killAt = dry.calls.findIndex((call) => call.args[0] === "kill");
+
+      const raced = await stopAndObserve(
+        dry.verifiesAtCall[killAt] ?? null,
+        "stale-only",
+      );
+
+      expect(raced.error).toBeNull();
+      expect(raced.calls.some((call) => call.args[0] === "kill")).toBe(true);
     });
   });
 

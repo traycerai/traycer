@@ -17,13 +17,18 @@ import type { Environment } from "../runner/environment";
  * CLI-owned macOS stop always asks for `kickstart -k`, a forced Linux one for
  * `systemctl restart`.
  *
- * The binding ends once the command's own launch has been issued: the first
- * spawn-edge call (`atServiceSpawnEdge`) that returns. Every host published
- * before that call returned is one this command did not launch, so it is held
- * to the confirmed host; a host published after it may be the command's own,
- * which the binding would read as a replacement. A launch call that failed
- * launched nothing, so the binding stays armed through the recovery after it
- * (the macOS bootstrap race's bootout).
+ * The binding is a rule about timing, not proof of who published a host:
+ * `pid.json` does not say which launch produced its host. Each launch call is
+ * checked before it is issued, so a host published by then is not this
+ * command's. The binding ends once the first call after a spawn edge
+ * (`atServiceSpawnEdge`) has returned, since the command's own host may
+ * publish during that call or after it. A launch call that throws keeps the
+ * binding armed. The one such failure a command continues past is the macOS
+ * bootstrap race's "already loaded", which launched nothing, so the recovery
+ * bootout after it is still held. Every other failed launch - a recycle that
+ * timed out and may still have launched among them - ends the command, or
+ * reaches the unacknowledged-start retry, which runs only after a read that
+ * nothing is running (`rearmStopTarget`).
  */
 interface StopTarget {
   readonly verb: string;
