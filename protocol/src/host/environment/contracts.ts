@@ -2,8 +2,7 @@
  * `environment.list` - every team environment the signed-in user belongs to.
  * `environment.host.read` / `environment.host.bind` - the one environment
  * this host is bound to, and rebinding it.
- * `environment.host.list` - every host bound to a team environment, as any
- * member of the team sees it.
+ * `environment.host.list` - the hosts of a team environment the caller may see.
  * `environment.members` - the people in an environment, by name and avatar,
  * so a client can name the member who wrote a message.
  *
@@ -81,10 +80,9 @@ export const environmentListV10 = defineRpcContract({
  * it is then in their personal environment, which is the only default and
  * never a team.
  *
- * A host bound to a team environment is the team's: every member sees it
- * (`environment.host.list`), and only the account that bound it can unbind
- * it. `enrolledByUserId` is that account, null when the binding is not
- * explicit; `canUnbind` is whether the caller is it.
+ * Only the account that bound a host can unbind it. `enrolledByUserId` is
+ * that account, null when the binding is not explicit; `canUnbind` is whether
+ * the caller is it.
  */
 export const environmentHostBindingSchema = lazySchema(() =>
   z.object({
@@ -180,7 +178,7 @@ export type EnvironmentHostListResponse = z.infer<
 >;
 
 /**
- * Lists every host bound to a team environment to any member of it. Refused
+ * Lists the hosts of a team environment the caller may see. Refused
  * for an environment the caller does not belong to, and for one that does
  * not exist.
  */

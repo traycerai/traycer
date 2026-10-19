@@ -1,7 +1,7 @@
 import "../../../../../../__tests__/test-browser-apis";
 import { createRef } from "react";
 import { afterEach, describe, expect, it } from "vitest";
-import { act, cleanup, renderHook } from "@testing-library/react";
+import { act, cleanup, fireEvent, renderHook } from "@testing-library/react";
 
 import {
   useTerminalQuoteSelection,
@@ -94,6 +94,85 @@ describe("useTerminalQuoteSelection", () => {
     });
 
     expect(result.current.selection?.text).toBe("2 tests failed");
+  });
+
+  it("publishes a touch selection on pointerup but not a mouse one", () => {
+    const source = createSource();
+    const { result } = renderSelection(source);
+
+    // A finger never produces the compatibility mouseup, so the pointer that
+    // made the selection publishes it; a mouse pointer is left to mousedown.
+    act(() => {
+      fireEvent.pointerDown(source.element, { pointerType: "mouse" });
+      source.setSelection("typed by a mouse");
+      fireEvent.pointerUp(document.body, { pointerType: "mouse" });
+    });
+    expect(result.current.selection).toBeNull();
+
+    act(() => {
+      fireEvent.pointerDown(source.element, {
+        pointerType: "touch",
+        isPrimary: true,
+        pointerId: 1,
+      });
+      source.setSelection("held and dragged");
+      fireEvent.pointerUp(document.body, {
+        pointerType: "touch",
+        pointerId: 1,
+      });
+    });
+    expect(result.current.selection?.text).toBe("held and dragged");
+  });
+
+  it("ignores a pointerup from a different pointer than the one that armed", () => {
+    const source = createSource();
+    const { result } = renderSelection(source);
+
+    act(() => {
+      fireEvent.pointerDown(source.element, {
+        pointerType: "touch",
+        isPrimary: true,
+        pointerId: 1,
+      });
+      source.setSelection("two fingers");
+      fireEvent.pointerUp(document.body, {
+        pointerType: "touch",
+        pointerId: 2,
+      });
+    });
+    expect(result.current.selection).toBeNull();
+
+    act(() => {
+      fireEvent.pointerUp(document.body, {
+        pointerType: "touch",
+        pointerId: 1,
+      });
+    });
+    expect(result.current.selection?.text).toBe("two fingers");
+  });
+
+  it("does not publish after the arming touch is cancelled", () => {
+    const source = createSource();
+    const { result } = renderSelection(source);
+
+    act(() => {
+      fireEvent.pointerDown(source.element, {
+        pointerType: "touch",
+        isPrimary: true,
+        pointerId: 1,
+      });
+      source.setSelection("taken by the browser");
+      fireEvent.pointerCancel(document.body, {
+        pointerType: "touch",
+        pointerId: 1,
+      });
+      fireEvent.pointerUp(document.body, {
+        pointerType: "touch",
+        pointerId: 1,
+      });
+    });
+
+    expect(result.current.selection).toBeNull();
   });
 
   it("ignores a mouseup from a drag that never started in this pane", () => {

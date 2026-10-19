@@ -107,7 +107,6 @@ function mountCard(ownerKind: HomeBotsGroup["ownerKind"]): void {
         environmentBindings={{
           byHostId: new Map(),
           failedHostIds: [],
-          resolved: true,
           retryFailed: () => undefined,
         }}
         client={null}

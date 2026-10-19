@@ -245,30 +245,6 @@ describe("<BotSettingsPanel /> model", () => {
 });
 
 describe("<BotSettingsPanel /> controls", () => {
-  it("leaves every control live: nothing is gated on which host serves the tab", async () => {
-    const user = userEvent.setup();
-    mountPanel(BOT);
-
-    const name = screen.getByRole("textbox", { name: "Name" });
-    await user.clear(name);
-    await user.type(name, "Renamed Bot");
-    const rename = screen.getByRole("button", { name: "Rename" });
-    expect(rename).toHaveProperty("disabled", false);
-
-    act(() => {
-      liveStore().getState().setSelection({
-        harnessId: "claude",
-        modelSlug: "model-c",
-        profileId: "profile-1",
-      });
-    });
-    expect(applyButton().disabled).toBe(false);
-    expect(screen.getByRole("button", { name: "Delete bot" })).toHaveProperty(
-      "disabled",
-      false,
-    );
-  });
-
   it("renames through the tab host with the trimmed name", async () => {
     const user = userEvent.setup();
     mountPanel(BOT);

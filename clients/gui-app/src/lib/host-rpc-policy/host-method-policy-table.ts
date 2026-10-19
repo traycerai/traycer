@@ -1596,7 +1596,7 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
-  // Opening a bot may claim it onto this host (T18): `fifo`, like the claim
+  // Opening a bot may claim it onto this host: `fifo`, like the claim
   // itself, so two opens are never coalesced into one answer that was decided
   // before the other's claim.
   "bot.open": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
