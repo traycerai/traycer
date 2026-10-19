@@ -34,6 +34,7 @@ import {
   type SimulatorDecoderRuntime,
   type SimulatorFrameSink,
 } from "@/lib/simulator-view/simulator-decoder";
+import { getMobileAppPlatform } from "@/lib/mobile-app";
 
 /**
  * One viewer's `simulator.stream`: open, keep open, paint, and carry input.
@@ -106,19 +107,35 @@ export interface SimulatorStreamControllerArgs {
   readonly sink: SimulatorFrameSink;
   /**
    * Ask for MJPEG before the first byte rather than after a failed probe - the
-   * mobile GUI on iOS WebKit, which has no WebCodecs. Honoured only on iOS;
-   * an Android stream has no MJPEG to fall back to.
+   * mobile GUI on iOS WebKit ({@link prefersMjpegFirst}). Honoured only on an
+   * iOS simulator; an Android stream has no MJPEG, so it still probes and
+   * reports "cannot decode" when the probe fails - or, on this viewer, after
+   * repeated decode errors rather than resetting for another keyframe.
    */
   readonly preferMjpeg: boolean;
   /** Injectable for tests; production passes {@link defaultSimulatorDecoderRuntime}. */
   readonly decoderRuntime: SimulatorDecoderRuntime | null;
 }
 
+/**
+ * Whether this viewer opens iOS streams on MJPEG: the installed app on iOS,
+ * whose WebKit cannot be relied on to decode the simulators' H.264 profile,
+ * so probing first would only add a failed decode before every stream.
+ * Android's WebView keeps the probe, and so does the mobile bundle's dev
+ * browser tab, whose platform is `null`.
+ */
+export function prefersMjpegFirst(): boolean {
+  return getMobileAppPlatform() === "ios";
+}
+
 export const SIMULATOR_STREAM_RETRY_DELAY_MS = 1_000;
 export const SIMULATOR_FIRST_FRAME_TIMEOUT_MS = 15_000;
 /** Floor between two keyframe requests, so a stalled decoder cannot flood the hub. */
 const KEYFRAME_REQUEST_FLOOR_MS = 1_000;
-/** Decode errors inside this window before an iOS viewer gives up on H.264. */
+/**
+ * Decode errors inside this window before an iOS stream gives up on H.264, or
+ * an Android stream on the iOS app gives up altogether.
+ */
 const DECODE_ERROR_WINDOW_MS = 10_000;
 const DECODE_ERRORS_BEFORE_FALLBACK = 3;
 
@@ -310,13 +327,19 @@ export function createSimulatorStreamController(
             (at) => now - at < DECODE_ERROR_WINDOW_MS,
           );
           decodeErrorTimes.push(now);
-          if (
-            platform === "ios" &&
-            decodeErrorTimes.length >= DECODE_ERRORS_BEFORE_FALLBACK
-          ) {
-            closeDecoder();
-            requestMjpeg();
-            return;
+          if (decodeErrorTimes.length >= DECODE_ERRORS_BEFORE_FALLBACK) {
+            if (platform === "ios") {
+              closeDecoder();
+              requestMjpeg();
+              return;
+            }
+            // Android has no MJPEG. On the iOS app, whose WebKit decoder is
+            // the likely cause, the reset loop would only hold a spinner up
+            // until the first-frame watchdog; say so now instead.
+            if (args.preferMjpeg) {
+              fail(SIMULATOR_CANNOT_DECODE_MESSAGE, true);
+              return;
+            }
           }
           decoder?.reset();
           requestKeyframe();
@@ -330,7 +353,9 @@ export function createSimulatorStreamController(
       // The host switched its upstream; whatever the decoder held is from the
       // stream that ended.
       closeDecoder();
-    } else if (decoder === null) {
+    } else if (decoder === null && !wantMjpeg) {
+      // While MJPEG is asked for, the H.264 config the host opened with is
+      // not probed: its units are dropped until the MJPEG config arrives.
       decoder = makeDecoder();
     }
     publish({ config, plane });
@@ -393,6 +418,9 @@ export function createSimulatorStreamController(
         // then starts over with a config and a keyframe. Keep the last frame
         // on screen, drop what the decoder queued for the socket that died.
         streamOpen = false;
+        // The re-declared subscription is a new one on the host and opens on
+        // H.264 again, so MJPEG is asked for again on the next `open`.
+        mjpegRequested = false;
         decoder?.reset();
         publish({
           lifecycle: "reconnecting",

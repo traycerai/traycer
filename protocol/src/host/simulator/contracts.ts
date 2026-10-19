@@ -14,6 +14,8 @@ import {
   simulatorScreenshotResponseSchema,
   simulatorShutdownRequestSchema,
   simulatorShutdownResponseSchema,
+  simulatorStatusRequestSchema,
+  simulatorStatusResponseSchema,
 } from "./schemas";
 
 /**
@@ -66,6 +68,17 @@ export const simulatorScreenshotV10 = defineRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: simulatorScreenshotRequestSchema,
   responseSchema: simulatorScreenshotResponseSchema,
+});
+
+/**
+ * Platform availability and the pack's install on this machine, with no
+ * epic: the Settings page's read. Never starts the hub or an install.
+ */
+export const simulatorStatusV10 = defineRpcContract({
+  method: "simulator.status",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: simulatorStatusRequestSchema,
+  responseSchema: simulatorStatusResponseSchema,
 });
 
 /** Reads the machine-user-global simulator switches. */

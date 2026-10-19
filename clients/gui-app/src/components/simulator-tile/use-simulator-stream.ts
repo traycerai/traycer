@@ -4,6 +4,7 @@ import type { SimulatorPlatform } from "@traycer/protocol/host/simulator/schemas
 import type { IHostStreamClient } from "@traycer-clients/shared/host-transport/host-stream-client";
 import {
   createSimulatorStreamController,
+  prefersMjpegFirst,
   type SimulatorStreamController,
   type SimulatorStreamState,
 } from "@/lib/simulator-view/simulator-stream-controller";
@@ -60,7 +61,7 @@ export function useSimulatorStream(args: {
             platform,
             client,
             sink,
-            preferMjpeg: false,
+            preferMjpeg: prefersMjpegFirst(),
             decoderRuntime: null,
           }),
     [client, epicId, platform, simulatorId, sink],

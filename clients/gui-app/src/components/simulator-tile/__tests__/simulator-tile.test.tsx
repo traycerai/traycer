@@ -70,6 +70,22 @@ vi.mock("@/hooks/simulator/use-simulator-mutations", () => {
     useSimulatorShutdownMutation: () => gated(fakes.shutdown),
     useSimulatorActionMutation: () => gated(fakes.action),
     useSimulatorScreenshotMutation: () => gated(vi.fn()),
+    useSimulatorDetailQuery: () => ({
+      data: undefined,
+      isError: false,
+      isFetching: false,
+    }),
+    useSimulatorDrawerActionMutation: () => ({
+      mutation: {
+        mutate: fakes.action,
+        isPending: false,
+        isError: false,
+        error: null,
+        variables: undefined,
+      },
+      supported: true,
+    }),
+    simulatorActionErrorText: () => "",
   };
 });
 vi.mock(
@@ -370,6 +386,32 @@ describe("SimulatorTile", () => {
       simulatorId: UDID,
       shutdown: false,
     });
+  });
+
+  it("opens the settings drawer from the toolbar and closes it again", () => {
+    fakes.sessions = sessions({
+      state: {
+        ...READY_STATE,
+        sessions: [
+          {
+            epicId: EPIC,
+            ownerUserId: "user-1",
+            hostId: HOST,
+            simulatorId: UDID,
+            platform: "ios",
+            openedAt: "2026-10-18T00:00:00.000Z",
+          },
+        ],
+      },
+    });
+    renderTile();
+    const toggle = screen.getByTestId("simulator-settings-toggle");
+    expect(screen.queryByTestId("simulator-settings-drawer")).toBeNull();
+    fireEvent.click(toggle);
+    expect(toggle.getAttribute("aria-pressed")).toBe("true");
+    expect(screen.getByTestId("simulator-settings-drawer")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Close settings" }));
+    expect(screen.queryByTestId("simulator-settings-drawer")).toBeNull();
   });
 
   it("offers Reconnect when the video stopped, and nothing when the session is gone", () => {

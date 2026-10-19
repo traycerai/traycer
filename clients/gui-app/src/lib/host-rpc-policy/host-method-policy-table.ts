@@ -263,6 +263,24 @@ export const SPEECH_MODEL_STALE_ERROR_POLL_LANE: ConditionPollLane = {
   ...SPEECH_MODEL_DOWNLOADING_POLL_LANE,
   id: "speech-model.stale-error",
 };
+/**
+ * The simulator tools are downloading. `simulator.status` is Settings' only
+ * source of that progress, so its cadence is the progress bar's frame rate,
+ * as with the speech model above.
+ */
+export const SIMULATOR_PACK_INSTALLING_POLL_LANE: ConditionPollLane = {
+  id: "simulator-pack.installing",
+  initialDelayMs: 1_500,
+  maxDelayMs: 5 * SECOND_MS,
+};
+export const SIMULATOR_PACK_INITIAL_ERROR_POLL_LANE: ConditionPollLane = {
+  ...SIMULATOR_PACK_INSTALLING_POLL_LANE,
+  id: "simulator-pack.initial-error",
+};
+export const SIMULATOR_PACK_STALE_ERROR_POLL_LANE: ConditionPollLane = {
+  ...SIMULATOR_PACK_INSTALLING_POLL_LANE,
+  id: "simulator-pack.stale-error",
+};
 export const WORKTREE_SETUP_IN_FLIGHT_POLL_LANE: ConditionPollLane = {
   id: "worktree-binding.setup-in-flight",
   initialDelayMs: 2 * SECOND_MS,
@@ -2322,6 +2340,19 @@ export const HOST_METHOD_POLL_TABLE = {
   // ordered. `open` waits on a boot (up to three minutes on the host side),
   // so it carries no join timeout of its own.
   "simulator.list": { ...LATEST_SCHEDULING, poll: null },
+  // Settings' machine-wide read; polled only while the tools download.
+  "simulator.status": {
+    ...LATEST_SCHEDULING,
+    poll: defineConditionPolicy("simulator.status", {
+      classify: (data) =>
+        data?.packState.kind === "installing"
+          ? SIMULATOR_PACK_INSTALLING_POLL_LANE
+          : false,
+      initialErrorLane: SIMULATOR_PACK_INITIAL_ERROR_POLL_LANE,
+      staleDataErrorLane: SIMULATOR_PACK_STALE_ERROR_POLL_LANE,
+      resetLaneIds: NO_RESET_LANES,
+    }),
+  },
   "simulator.open": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
   "simulator.close": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
   "simulator.shutdown": {

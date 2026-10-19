@@ -1,4 +1,8 @@
-import type { UseMutationResult, UseQueryResult } from "@tanstack/react-query";
+import {
+  useQueryClient,
+  type UseMutationResult,
+  type UseQueryResult,
+} from "@tanstack/react-query";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type {
   HostRpcError,
@@ -6,10 +10,10 @@ import type {
   ResponseOfMethod,
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostRpcRegistry } from "@/lib/host";
-import { useHostQuery } from "@/hooks/host/use-host-query";
+import { useHostMutation, useHostQuery } from "@/hooks/host/use-host-query";
 import { useHostScopedMutationForClient } from "@/hooks/host/use-host-scoped-mutation";
 import { useHostSupportsMethod } from "@/hooks/host/use-host-supports-method";
-import { simulatorMutationKeys } from "@/lib/query-keys";
+import { queryKeys, simulatorMutationKeys } from "@/lib/query-keys";
 
 /**
  * The simulator domain's unary verbs, each bound to an EXPLICIT client (the
@@ -37,8 +41,11 @@ export interface GatedSimulatorMutation<
   readonly supported: boolean;
 }
 
+// A switch flip moves the pack too (off, installing), so Settings' status
+// read is asked again with it.
 const CONFIG_INVALIDATIONS: ReadonlyArray<keyof HostRpcRegistry & string> = [
   "config.simulator.get",
+  "simulator.status",
 ];
 
 const NO_INVALIDATIONS: ReadonlyArray<keyof HostRpcRegistry & string> = [];
@@ -153,4 +160,104 @@ export function useSimulatorActionMutation(
     invalidateMethods: NO_INVALIDATIONS,
   });
   return { mutation, supported };
+}
+
+/**
+ * Platform availability and the tools' install on `hostId`, with no task:
+ * what Settings shows. The policy table polls it while the tools download.
+ */
+export function useSimulatorStatusQuery(
+  client: HostClient<HostRpcRegistry> | null,
+  hostId: string | null,
+): UseQueryResult<
+  ResponseOfMethod<HostRpcRegistry, "simulator.status">,
+  HostRpcError
+> {
+  const supported = useHostSupportsMethod(hostId, "simulator.status");
+  return useHostQuery<HostRpcRegistry, "simulator.status">({
+    cacheKeyIdentity: undefined,
+    client: supported ? client : null,
+    method: "simulator.status",
+    params: {},
+    options: null,
+  });
+}
+
+/** One simulator's settings as last read; the drawer's source of truth. */
+export function useSimulatorDetailQuery(
+  client: HostClient<HostRpcRegistry> | null,
+  hostId: string | null,
+  epicId: string,
+  simulatorId: string,
+): UseQueryResult<
+  ResponseOfMethod<HostRpcRegistry, "simulator.detail">,
+  HostRpcError
+> {
+  const supported = useHostSupportsMethod(hostId, "simulator.detail");
+  return useHostQuery<HostRpcRegistry, "simulator.detail">({
+    cacheKeyIdentity: undefined,
+    client: supported ? client : null,
+    method: "simulator.detail",
+    params: { epicId, simulatorId },
+    options: null,
+  });
+}
+
+/**
+ * The drawer's actions. Unlike {@link useSimulatorActionMutation} a failure
+ * is not toasted: the drawer prints it beside the control that sent it. The
+ * answer IS the fresh read, so it replaces the detail query's data rather
+ * than asking again.
+ */
+export function useSimulatorDrawerActionMutation(
+  client: HostClient<HostRpcRegistry> | null,
+  hostId: string | null,
+  simulatorId: string,
+): GatedSimulatorMutation<"simulator.action"> {
+  const supported = useHostSupportsMethod(hostId, "simulator.action");
+  const queryClient = useQueryClient();
+  const mutation = useHostMutation<
+    HostRpcRegistry,
+    "simulator.action",
+    { readonly hostId: string | null; readonly captured: undefined }
+  >({
+    client,
+    method: "simulator.action",
+    mapVariables: (variables) => variables,
+    options: {
+      mutationKey: simulatorMutationKeys.action(hostId ?? "", simulatorId),
+      onMutate: () => ({
+        hostId: client?.getActiveHostId() ?? null,
+        captured: undefined,
+      }),
+      onSuccess: (detail, variables, ctx) => {
+        if (ctx.hostId === null) return;
+        queryClient.setQueryData(
+          queryKeys.hostMethod<HostRpcRegistry, "simulator.detail">(
+            ctx.hostId,
+            "simulator.detail",
+            { epicId: variables.epicId, simulatorId: variables.simulatorId },
+          ),
+          detail,
+        );
+      },
+    },
+  });
+  return { mutation, supported };
+}
+
+const UNAVAILABLE_PREFIX = /^simulator action unavailable \([^)]*\): /;
+const OPERATION_FAILED_PREFIX = /^simulator [A-Za-z]+ failed: /;
+
+/**
+ * The sentence a drawer row prints for a refused action. The host's message
+ * leads with a machine-readable bracket (`operation=`, `platform=`,
+ * `reason=`) that is for logs, not for the person.
+ */
+export function simulatorActionErrorText(error: HostRpcError): string {
+  const text = error.message
+    .replace(UNAVAILABLE_PREFIX, "")
+    .replace(OPERATION_FAILED_PREFIX, "");
+  if (text.length === 0) return "The simulator didn't take that.";
+  return text.charAt(0).toUpperCase() + text.slice(1);
 }

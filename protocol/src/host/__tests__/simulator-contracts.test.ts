@@ -9,6 +9,7 @@ import {
   simulatorOpenV10,
   simulatorScreenshotV10,
   simulatorShutdownV10,
+  simulatorStatusV10,
 } from "@traycer/protocol/host/simulator/contracts";
 import {
   simulatorActionV10,
@@ -21,6 +22,7 @@ const SIMULATOR_METHODS = {
   "simulator.close": simulatorCloseV10,
   "simulator.shutdown": simulatorShutdownV10,
   "simulator.screenshot": simulatorScreenshotV10,
+  "simulator.status": simulatorStatusV10,
   "simulator.detail": simulatorDetailV10,
   "simulator.action": simulatorActionV10,
   "config.simulator.get": configSimulatorGetV10,

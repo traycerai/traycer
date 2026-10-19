@@ -6,6 +6,7 @@ import {
   LayoutGrid,
   Power,
   RotateCw,
+  SlidersHorizontal,
   Square,
   X,
   type LucideIcon,
@@ -41,6 +42,9 @@ export interface SimulatorToolbarProps {
   /** `null` when the host offers no screenshot. */
   readonly onScreenshot: (() => void) | null;
   readonly screenshotPending: boolean;
+  /** `null` when the host offers no typed settings for this simulator. */
+  readonly onToggleSettings: (() => void) | null;
+  readonly settingsOpen: boolean;
   readonly onPowerOff: (() => void) | null;
   readonly powerOffPending: boolean;
   readonly onClose: () => void;
@@ -48,8 +52,9 @@ export interface SimulatorToolbarProps {
 
 /**
  * The tile's chrome: the device's name, its hardware buttons for the
- * platform it is, rotate, a screenshot, power off (confirmed, because it
- * shuts the simulator down for every viewer) and close (this tile only).
+ * platform it is, rotate, a screenshot, the settings drawer, power off
+ * (confirmed, because it shuts the simulator down for every viewer) and close
+ * (this tile only).
  */
 export function SimulatorToolbar(props: SimulatorToolbarProps) {
   const [confirmPowerOff, setConfirmPowerOff] = useState(false);
@@ -145,6 +150,25 @@ export function SimulatorToolbar(props: SimulatorToolbarProps) {
             ) : (
               <Camera className="size-3.5" aria-hidden />
             )}
+          </Button>
+        </TooltipWrapper>
+        <TooltipWrapper
+          label="Simulator settings"
+          side="bottom"
+          sideOffset={undefined}
+          align={undefined}
+        >
+          <Button
+            type="button"
+            variant="muted"
+            size="icon-xs"
+            aria-label="Simulator settings"
+            aria-pressed={props.settingsOpen}
+            disabled={props.onToggleSettings === null}
+            data-testid="simulator-settings-toggle"
+            onClick={() => props.onToggleSettings?.()}
+          >
+            <SlidersHorizontal className="size-3.5" aria-hidden />
           </Button>
         </TooltipWrapper>
         <TooltipWrapper

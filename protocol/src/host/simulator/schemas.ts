@@ -220,6 +220,27 @@ export type SimulatorScreenshotResponse = z.infer<
 >;
 
 /**
+ * `simulator.status`: the machine-wide half of {@link simulatorStateSchema},
+ * with no epic. It is what Settings reads, where there is no task to scope
+ * sessions to: whether each platform can run here, and the pack's install.
+ */
+export const simulatorStatusRequestSchema = lazySchema(() => z.object({}));
+export type SimulatorStatusRequest = z.infer<
+  typeof simulatorStatusRequestSchema
+>;
+export const simulatorStatusResponseSchema = lazySchema(() =>
+  z.object({
+    platforms: z.array(simulatorPlatformAvailabilitySchema),
+    packState: simulatorPackStateSchema,
+    /** The installed pack's version while `ready`; null otherwise. */
+    packVersion: z.string().min(1).nullable(),
+  }),
+);
+export type SimulatorStatusResponse = z.infer<
+  typeof simulatorStatusResponseSchema
+>;
+
+/**
  * `config.simulator.*`: the two machine-user-global switches. Both are stated
  * on every write - no implicit default on the wire, so a missing key is a
  * malformed peer rather than "leave that one alone".

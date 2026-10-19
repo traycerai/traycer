@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type {
   SimulatorSession,
   SimulatorState,
@@ -35,6 +35,7 @@ import {
   SimulatorSetupView,
   SimulatorUnavailableView,
 } from "./simulator-state-views";
+import { SimulatorSettingsDrawer } from "./simulator-settings-drawer";
 import { SimulatorSurface } from "./simulator-surface";
 import { SimulatorToolbar } from "./simulator-toolbar";
 import { useOpenSimulatorTile } from "./use-open-simulator-tile";
@@ -373,6 +374,13 @@ function LiveSimulatorTile(props: {
   const onReconnect = useCallback(() => {
     controller?.restart();
   }, [controller]);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const onToggleSettings = useCallback(() => {
+    setSettingsOpen((open) => !open);
+  }, []);
+  const onCloseSettings = useCallback(() => {
+    setSettingsOpen(false);
+  }, []);
 
   return (
     <div
@@ -388,18 +396,35 @@ function LiveSimulatorTile(props: {
         rotatePending={platform === "android" && action.mutation.isPending}
         onScreenshot={screenshot.take}
         screenshotPending={screenshot.isPending}
+        onToggleSettings={action.supported ? onToggleSettings : null}
+        settingsOpen={settingsOpen}
         onPowerOff={shutdown.supported ? onPowerOff : null}
         powerOffPending={shutdown.mutation.isPending}
         onClose={onClose}
       />
-      <SimulatorSurface
-        platform={platform}
-        simulatorName={simulatorName}
-        controller={controller}
-        state={streamState}
-        sink={stream.sink}
-        onReconnect={onReconnect}
-      />
+      {/* The drawer floats over the surface rather than beside it, so a
+          narrow tile keeps its full-width phone while settings are open. */}
+      <div className="relative flex min-h-0 w-full flex-1 flex-col">
+        <SimulatorSurface
+          platform={platform}
+          simulatorName={simulatorName}
+          controller={controller}
+          state={streamState}
+          sink={stream.sink}
+          onReconnect={onReconnect}
+        />
+        {/* Only reachable through the toggle, which is null without the verb. */}
+        {settingsOpen ? (
+          <SimulatorSettingsDrawer
+            client={hostClient}
+            hostId={hostId}
+            epicId={epicId}
+            simulatorId={node.simulatorId}
+            platform={platform}
+            onClose={onCloseSettings}
+          />
+        ) : null}
+      </div>
     </div>
   );
 }

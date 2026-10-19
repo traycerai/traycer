@@ -12,9 +12,11 @@ import {
   SIMULATOR_HOST_TOO_OLD_MESSAGE,
   SIMULATOR_NO_VIDEO_MESSAGE,
   SIMULATOR_STREAM_RETRY_DELAY_MS,
+  prefersMjpegFirst,
   type SimulatorStreamController,
   type SimulatorStreamState,
 } from "../simulator-stream-controller";
+import { setMobileAppPlatform } from "@/lib/mobile-app";
 import { SOFT_DECODE_QUEUE } from "../simulator-decoder";
 import {
   ANNEX_B_DELTA,
@@ -285,10 +287,114 @@ describe("simulator stream controller", () => {
     expect(h.controller.getState().lifecycle).toBe("streaming");
   });
 
-  it("asks for MJPEG up front when told to prefer it", () => {
-    const h = harness("ios", true, true);
-    h.controller.start();
-    expect(h.session().framesOfKind("preferMjpeg")).toHaveLength(1);
+  describe("on the installed iOS app", () => {
+    afterEach(() => {
+      setMobileAppPlatform(null);
+    });
+
+    it("asks for MJPEG before anything else and never probes the H.264 config the host opens with", async () => {
+      setMobileAppPlatform("ios");
+      const h = harness("ios", true, prefersMjpegFirst());
+      h.controller.start();
+      expect(h.session().sentFrames[0]?.kind).toBe("preferMjpeg");
+      expect(h.session().framesOfKind("preferMjpeg")).toHaveLength(1);
+
+      emitConfig(h.session(), IOS_CONFIG);
+      emitVideo(h.session(), "description", AVCC_DESCRIPTION);
+      emitVideo(h.session(), "keyframe", ANNEX_B_KEYFRAME);
+      await flushAsync();
+      expect(h.codec.probes).toEqual([]);
+      expect(h.codec.decoders).toEqual([]);
+
+      emitConfig(h.session(), { ...IOS_CONFIG, codec: "mjpeg" });
+      const jpeg = new Uint8Array([0xff, 0xd8, 0xff, 0xd9]);
+      emitVideo(h.session(), "jpeg", jpeg);
+      expect(h.controller.getState()).toMatchObject({
+        plane: "image",
+        lifecycle: "streaming",
+      });
+      expect(h.sink.jpegs).toEqual([jpeg]);
+    });
+
+    it.each<{ readonly platform: "android" | null }>([
+      { platform: "android" },
+      { platform: null },
+    ])(
+      "probes the profile first when the app platform is $platform",
+      async ({ platform }) => {
+        setMobileAppPlatform(platform);
+        expect(prefersMjpegFirst()).toBe(false);
+        const h = harness("ios", true, prefersMjpegFirst());
+        h.controller.start();
+        emitConfig(h.session(), IOS_CONFIG);
+        emitVideo(h.session(), "description", AVCC_DESCRIPTION);
+        await flushAsync();
+        expect(h.session().framesOfKind("preferMjpeg")).toHaveLength(0);
+        expect(h.codec.probes).toHaveLength(1);
+      },
+    );
+
+    it("asks for MJPEG again after a transport drop, because the re-declared subscription opens on H.264", () => {
+      setMobileAppPlatform("ios");
+      const h = harness("ios", true, prefersMjpegFirst());
+      h.controller.start();
+      expect(h.session().framesOfKind("preferMjpeg")).toHaveLength(1);
+
+      h.session().emitStatus("reconnecting");
+      h.session().emitStatus("open");
+      expect(h.session().framesOfKind("preferMjpeg")).toHaveLength(2);
+    });
+
+    it("gives up on an Android emulator after three decode errors in ten seconds instead of looping on keyframes", async () => {
+      setMobileAppPlatform("ios");
+      const h = harness("android", true, prefersMjpegFirst());
+      h.controller.start();
+      emitConfig(h.session(), {
+        ...IOS_CONFIG,
+        platform: "android",
+        codec: "semu",
+        width: null,
+        height: null,
+      });
+      emitVideo(h.session(), "packet", semuPacket(ANNEX_B_KEYFRAME, true, 0));
+      await flushAsync();
+      expect(h.codec.decoders).toHaveLength(1);
+
+      // Each error resets the decoder, so the next one lands on its successor.
+      h.codec.decoders.at(-1)?.emitError("EncodingError");
+      vi.advanceTimersByTime(2_000);
+      h.codec.decoders.at(-1)?.emitError("EncodingError");
+      expect(h.controller.getState().lifecycle).not.toBe("error");
+      expect(h.codec.decoders).toHaveLength(3);
+
+      vi.advanceTimersByTime(2_000);
+      h.codec.decoders.at(-1)?.emitError("EncodingError");
+      expect(h.controller.getState()).toMatchObject({
+        lifecycle: "error",
+        terminal: true,
+        detail: SIMULATOR_CANNOT_DECODE_MESSAGE,
+      });
+      expect(h.session().closed).toBe(true);
+      expect(h.session().framesOfKind("preferMjpeg")).toHaveLength(0);
+    });
+
+    it("shows 'cannot decode' without opening a stream for an Android emulator when WebCodecs is missing", () => {
+      setMobileAppPlatform("ios");
+      // `isWebCodecsSupported` looks for the keys, and jsdom defines neither.
+      vi.unstubAllGlobals();
+      const h = harness("android", true, prefersMjpegFirst());
+      h.controller.start();
+      expect(h.controller.getState()).toMatchObject({
+        lifecycle: "error",
+        terminal: true,
+        detail: SIMULATOR_CANNOT_DECODE_MESSAGE,
+      });
+      expect(h.states.length).toBeGreaterThan(0);
+      expect(h.states.map((state) => state.lifecycle)).not.toContain(
+        "connecting",
+      );
+      expect(h.client.subscribes).toEqual([]);
+    });
   });
 
   it("stops with a terminal error on Android when the profile is rejected", async () => {

@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { defineRpcContract } from "@traycer/protocol/framework/index";
 import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
-import { simulatorPlatformSchema } from "./schemas";
+import { simulatorPlatformSchema, type SimulatorPlatform } from "./schemas";
 
 /**
  * Typed settings and app actions on one simulator: `simulator.detail` reads
@@ -207,6 +207,71 @@ export const simulatorActionSchema = lazySchema(() =>
 );
 export type SimulatorAction = z.infer<typeof simulatorActionSchema>;
 export type SimulatorActionType = SimulatorAction["type"];
+
+/**
+ * Which actions each platform can run at all. The host refuses anything
+ * outside these before a command runs; a client reads the same table to hide
+ * a control the simulator's platform does not have. A listed action can still
+ * be refused at run time when a helper it needs is missing.
+ */
+export const SIMULATOR_IOS_ACTIONS: ReadonlySet<SimulatorActionType> = new Set([
+  "setAppearance",
+  "setTextSize",
+  "setToggle",
+  "setLiquidGlass",
+  "setColorFilter",
+  "setLocation",
+  "clearLocation",
+  "setPermission",
+  "openUrl",
+  "launchApp",
+  "terminateApp",
+  "sendPush",
+]);
+
+export const SIMULATOR_ANDROID_ACTIONS: ReadonlySet<SimulatorActionType> =
+  new Set([
+    "setAppearance",
+    "setTextSize",
+    "setToggle",
+    "setOrientation",
+    "setLocation",
+    "clearLocation",
+    "setPermission",
+    "openUrl",
+    "launchApp",
+    "terminateApp",
+  ]);
+
+export const SIMULATOR_IOS_TOGGLES: ReadonlySet<SimulatorToggleSetting> =
+  new Set([
+    "reduceMotion",
+    "increaseContrast",
+    "reduceTransparency",
+    "showBorders",
+    "voiceOver",
+  ]);
+
+export const SIMULATOR_ANDROID_TOGGLES: ReadonlySet<SimulatorToggleSetting> =
+  new Set(["reduceMotion", "networkEnabled"]);
+
+/** Whether `platform` can run an action of `type` (and, for a toggle, `setting`). */
+export function simulatorSupportsAction(
+  platform: SimulatorPlatform,
+  action:
+    | { readonly type: "setToggle"; readonly setting: SimulatorToggleSetting }
+    | { readonly type: Exclude<SimulatorActionType, "setToggle"> },
+): boolean {
+  const actions =
+    platform === "ios" ? SIMULATOR_IOS_ACTIONS : SIMULATOR_ANDROID_ACTIONS;
+  if (!actions.has(action.type)) return false;
+  if (action.type === "setToggle") {
+    return (
+      platform === "ios" ? SIMULATOR_IOS_TOGGLES : SIMULATOR_ANDROID_TOGGLES
+    ).has(action.setting);
+  }
+  return true;
+}
 
 export const simulatorDetailRequestSchema = lazySchema(() =>
   z.object({

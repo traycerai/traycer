@@ -915,6 +915,7 @@ import {
   simulatorOpenV10,
   simulatorScreenshotV10,
   simulatorShutdownV10,
+  simulatorStatusV10,
 } from "@traycer/protocol/host/simulator/contracts";
 import {
   simulatorActionV10,
@@ -6255,6 +6256,19 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
       versions: {
         0: {
           contract: simulatorScreenshotV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "simulator.status": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: simulatorStatusV10,
           upgradeFromPreviousVersion: null,
         },
       },

@@ -26,6 +26,7 @@ import { ImportLoginsDialog } from "@/components/settings/import-logins-dialog";
 import { BROWSER } from "@/components/settings/panels/browser-settings.definitions";
 import { SettingsGroup } from "@/components/settings/settings-group";
 import { SettingsRow } from "@/components/settings/settings-row";
+import { SimulatorSettingsGroup } from "@/components/settings/simulator-settings-section";
 import {
   useBrowserSaveLogins,
   type BrowserSaveLoginsController,
@@ -56,8 +57,8 @@ import { useOnboardingStore } from "@/stores/onboarding/onboarding-store";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 
 /**
- * The Browser page's host-dependent half: the Agents group and Website
- * sessions.
+ * The Browser page's host-dependent half: the Agents group, Simulators and
+ * Website sessions.
  *
  * The Agents group holds one row that is drawn in every shell - Agent-opened
  * tabs, which the panel owns and hands in - between two that are not: agent
@@ -118,6 +119,7 @@ export function BrowserSettingsSection(props: {
           />
         ) : null}
       </SettingsGroup>
+      <SimulatorSettingsGroup hostId={hostId} />
       <BrowserSavedLoginsGroup />
     </>
   );
