@@ -1,7 +1,4 @@
 /**
- * Ticket E17 checkpoint 6, fix-review fix
- * (src/components/epic-canvas/__tests__/add-node-terminal-team-sandbox.test.tsx).
- *
  * The canvas add-node terminal-agent launcher must not launch a harness a
  * team's sandbox does not offer: with the selected TUI harness blocked, Start
  * is disabled, neither a click nor Enter in the args field launches, and the

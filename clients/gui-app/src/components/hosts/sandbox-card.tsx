@@ -98,7 +98,7 @@ import {
  * date and the balance, and offers only destroy, behind a typed
  * confirmation.
  *
- * A team sandbox (ticket E17) says who created it and whose bundle the
+ * A team sandbox says who created it and whose bundle the
  * running wake is on, asks before its Resume or Start bills the person, and
  * always asks for its name before a destroy. It has no personal cost view:
  * the cost read lists only the person's own sandboxes. A team pod says how
@@ -875,10 +875,10 @@ const VERB_MOVING_TOAST: Record<SandboxLifecycleVerb, string> = {
 };
 
 /**
- * The card's actions, then "New sandbox like this" (ticket E17 checkpoint 3),
- * which opens the create form with this sandbox's owner preselected (its
- * environment only, not its shape). A pod offers no "like this": a pod is
- * the team's Automations host, not a sandbox a person creates.
+ * The card's actions, then "New sandbox like this", which opens the create
+ * form with this sandbox's owner preselected (its environment only, not its
+ * shape). A pod offers no "like this": a pod is the team's Automations host,
+ * not a sandbox a person creates.
  */
 function SandboxCardFooter(props: {
   readonly summary: SandboxSummary;
@@ -996,7 +996,7 @@ function SandboxDestroyAction(props: {
   readonly name: string;
   /**
    * A frozen sandbox asks for its name to be typed (core flows, flow 5), and
-   * so does every team sandbox (ticket E17).
+   * so does every team sandbox.
    */
   readonly typedConfirmation: boolean;
   readonly teamOwned: boolean;

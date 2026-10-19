@@ -1,10 +1,10 @@
-// E12 checkpoint 6 (cold review F1): a team host's policy state moves while a
-// report is open. The lease that makes a team policy `applied` lapses after 60
-// seconds without a renewal and a renewal makes it `applied` again, so the
-// section a crash report carries has to follow the host's answer, not freeze
-// at the first read. `autoPolicy.get` has no poll of its own (the method
-// policy table says `poll: null`, deliberately, for the Permissions page), and
-// the bridge used to read it once, on mount.
+// A team host's policy state moves while a report is open. The lease that makes
+// a team policy `applied` lapses after 60 seconds without a renewal and a
+// renewal makes it `applied` again, so the section a crash report carries has
+// to follow the host's answer, not freeze at the first read. `autoPolicy.get`
+// has no poll of its own (the method policy table says `poll: null`,
+// deliberately, for the Permissions page), and the bridge used to read it once,
+// on mount.
 //
 // This suite runs the REAL `autoPolicy.get` query against a real `HostClient`
 // over the in-memory messenger, with the host's answer a value the test
@@ -196,7 +196,7 @@ afterEach(() => {
   __resetSupportContextRegistryForTests();
 });
 
-describe("SupportEnvironmentBridge follows a team host's policy state while the report is open (E12 cp6 F1)", () => {
+describe("SupportEnvironmentBridge follows a team host's policy state while the report is open", () => {
   it("reads the first answer on mount", async () => {
     supportAll();
     const host = policyHost({ state: "lapsed", policyVersion: "3" });

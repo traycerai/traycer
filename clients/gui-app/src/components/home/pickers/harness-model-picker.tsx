@@ -981,7 +981,7 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
         return;
       }
       // The keyboard path to a row a team sandbox does not offer: the row is
-      // listed but not selectable (ticket E17 checkpoint 6).
+      // listed but not selectable.
       const entry = catalogHarnesses.find(
         (harness) => harness.id === row.harnessId,
       );
@@ -1025,8 +1025,7 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
       // remembered model/effort/tier, or landing on an embedding's own
       // model). A degraded / unavailable entry just browses the rail - the
       // panel shows its reauth / setup CTA, no commit. Nor does a provider a
-      // team sandbox does not offer: the panel says so (ticket E17
-      // checkpoint 6).
+      // team sandbox does not offer: the panel says so.
       const entry = railEntries.find(
         (candidate) => candidate.harness.id === providerId,
       );
@@ -1068,7 +1067,7 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
       // active the strip stays interactive for the locked provider only.
       if (lockedHarnessId !== null && providerId !== lockedHarnessId) return;
       // A provider a team sandbox does not offer is only browsed, never
-      // committed (ticket E17 checkpoint 6).
+      // committed.
       const entry = catalogHarnesses.find(
         (harness) => harness.id === providerId,
       );

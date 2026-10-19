@@ -436,15 +436,14 @@ export interface SupportContextRegistrySnapshot {
 }
 
 /**
- * The selected host's environment section (ticket E11, checkpoint 5): the
- * renderer's `SupportEnvironmentSection`
+ * The selected host's environment section: the renderer's
+ * `SupportEnvironmentSection`
  * (`clients/gui-app/src/lib/support-environment-section.ts`), record for
  * record. Closed: `support-ipc.ts` holds a `contractKeySet` per record and
- * refuses any other key, and `SUPPORT_ENVIRONMENT_TEXT_MAX` bounds every
- * text field. Never a key: pending uploads, local overrides, setup script or
- * output, any value, `snapshot.json`, the policy body, profile, cost,
- * routes, private agents, the team name or any owner's label, connector
- * detail.
+ * refuses any other key, and `SUPPORT_ENVIRONMENT_TEXT_MAX` bounds every text
+ * field. Never a key: pending uploads, local overrides, setup script or output,
+ * any value, `snapshot.json`, the policy body, profile, cost, routes, private
+ * agents, the team name or any owner's label, connector detail.
  */
 export interface SupportEnvironmentSection {
   readonly hostId: string;
@@ -464,8 +463,8 @@ export interface SupportEnvironmentSection {
 }
 
 /**
- * One same-principal refusal (ticket E13 checkpoint 4): opaque host and task
- * references and principal categories, never a label or an owner's id.
+ * One same-principal refusal: opaque host and task references and principal
+ * categories, never a label or an owner's id.
  */
 export interface SupportEnvironmentReachDenial {
   readonly denialId: string;

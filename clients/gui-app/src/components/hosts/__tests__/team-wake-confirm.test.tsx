@@ -65,7 +65,7 @@ import {
 } from "@/stores/hosts/team-wake-confirm-store";
 
 /**
- * Ticket E17, F: waking a team sandbox bills the person who opens it, so
+ * Waking a team sandbox bills the person who opens it, so
  * every wake path asks "Opening this resumes it on your bundle" first. A team
  * pod, a personal sandbox and a frozen one do not ask.
  */

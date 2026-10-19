@@ -295,7 +295,7 @@ export const configCatalogSetUpgradeV10ToV11 = defineUpgradePath<
   upgradeResponse: (response) => ({ ...response, overrides: {} }),
 });
 
-// ── v1.1: the executable-write grant (ticket E7) ────────────────────────────
+// ── v1.1: the executable-write grant ────────────────────────────────────────
 //
 // Each of these writes can change what a host starts (the shell path and
 // args, a launch-sensitive host-process variable), so it reaches an execution

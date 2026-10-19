@@ -418,7 +418,7 @@ describe("<SandboxCreateDialog />", () => {
   });
 });
 
-describe("a failed create (F46)", () => {
+describe("a failed create", () => {
   it("keeps the entered values and shows the failure in the form", async () => {
     mocks.binding?.auth.createSandbox.mockResolvedValue(
       refusal(502, "provider_failed"),
@@ -505,7 +505,7 @@ describe("a failed create (F46)", () => {
   });
 });
 
-describe("a create's outcome goes to the open that sent it (F46 cold review)", () => {
+describe("a create's outcome goes to the open that sent it", () => {
   const CREATED: SandboxCreateFetchResult = {
     kind: "ok",
     accepted: {
@@ -541,7 +541,7 @@ describe("a create's outcome goes to the open that sent it (F46 cold review)", (
     );
   }
 
-  it("R1: toasts a failure that settles after the dialog was closed and reopened, and keeps it out of the new open", async () => {
+  it("toasts a failure that settles after the dialog was closed and reopened, and keeps it out of the new open", async () => {
     const settle = deferCreate();
     renderDialog();
     await screen.findByTestId("sandbox-create-dialog");
@@ -572,7 +572,7 @@ describe("a create's outcome goes to the open that sent it (F46 cold review)", (
     expect(screen.queryByTestId("sandbox-create-failure")).toBeNull();
   });
 
-  it("R2: closes the dialog for a create that succeeds after the form remounted, rather than leaving Create enabled over the sent values", async () => {
+  it("closes the dialog for a create that succeeds after the form remounted, rather than leaving Create enabled over the sent values", async () => {
     const settle = deferCreate();
     const queryClient = new QueryClient({
       defaultOptions: { mutations: { retry: false } },
@@ -608,7 +608,7 @@ describe("a create's outcome goes to the open that sent it (F46 cold review)", (
     expect(useSandboxCreateDialogStore.getState().open).toBe(false);
   });
 
-  it("R3: a close and a new open brings back empty values and no failure line", async () => {
+  it("a close and a new open brings back empty values and no failure line", async () => {
     mocks.binding?.auth.createSandbox.mockResolvedValue(
       refusal(503, "provider_unavailable"),
     );
@@ -636,7 +636,7 @@ describe("a create's outcome goes to the open that sent it (F46 cold review)", (
     expect(screen.queryByTestId("sandbox-create-failure")).toBeNull();
   });
 
-  it("R3: a new open while the dialog is still open brings back empty values and no failure line", async () => {
+  it("a new open while the dialog is still open brings back empty values and no failure line", async () => {
     mocks.binding?.auth.createSandbox.mockResolvedValue(
       refusal(503, "provider_unavailable"),
     );
@@ -657,7 +657,7 @@ describe("a create's outcome goes to the open that sent it (F46 cold review)", (
     );
   });
 
-  it("R5: still says a failure on screen when the catalogue read failed while the create ran", async () => {
+  it("still says a failure on screen when the catalogue read failed while the create ran", async () => {
     const settle = deferCreate();
     const queryClient = new QueryClient({
       defaultOptions: { mutations: { retry: false } },
@@ -696,7 +696,7 @@ describe("a create's outcome goes to the open that sent it (F46 cold review)", (
   });
 });
 
-describe("a provider the account's plan cannot create (F45)", () => {
+describe("a provider the account's plan cannot create", () => {
   const REGION = {
     id: "us-east",
     label: "US East",

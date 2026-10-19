@@ -6,7 +6,7 @@ import {
 import { z } from "zod";
 
 /**
- * Whose host a task host is (ticket E17): the `{ kind, id }` owner principal
+ * Whose host a task host is: the `{ kind, id }` owner principal
  * traycer-server's task host list carries. It names nobody: the GUI names a
  * team from the person's own teams and a collaborator from the task's
  * collaborator list, and tells the caller's own hosts by its own id.
@@ -24,9 +24,8 @@ export const taskHostPrincipalSchema: z.ZodType<TaskHostPrincipal> = lazySchema(
 );
 
 /**
- * One host a task shows in its host list (ticket E17 checkpoint 4; served by
- * `POST /api/tasks/hosts`, E19 checkpoint 5): the task-authorized summary, and
- * nothing of the owner's sandbox record.
+ * One host a task shows in its host list (served by `POST /api/tasks/hosts`):
+ * the task-authorized summary, and nothing of the owner's sandbox record.
  *
  * - `label` is a sandbox's display name, `null` for a person's host.
  * - `reach` is whether the principal of the host that read the list reaches

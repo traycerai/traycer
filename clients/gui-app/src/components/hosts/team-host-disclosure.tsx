@@ -22,11 +22,11 @@ import {
 } from "./team-host-disclosure-model";
 
 /**
- * The first tab a person opens on a team host (ticket E17 checkpoint 6):
- * what running there means, once per person per host, until they dismiss it.
- * When the task has readers outside the team it says so too. Laid over the
- * top of the tile rather than above it, so showing or dismissing it never
- * resizes or remounts the tile's body.
+ * The first tab a person opens on a team host: what running there means, once
+ * per person per host, until they dismiss it. When the task has readers
+ * outside the team it says so too. Laid over the top of the tile rather than
+ * above it, so showing or dismissing it never resizes or remounts the tile's
+ * body.
  */
 export function TeamHostDisclosure(props: {
   readonly hostId: string;

@@ -1,4 +1,4 @@
-/** A harness a team sandbox does not offer (ticket E17 checkpoint 6). */
+/** A harness a team sandbox does not offer. */
 export const TEAM_SANDBOX_HARNESS_UNAVAILABLE =
   "Not available on team sandboxes.";
 

@@ -2308,22 +2308,21 @@ export const HOST_METHOD_POLL_TABLE = {
   },
   "config.shell.listDetected": { ...LATEST_SCHEDULING, poll: null },
   "config.shell.probe": { ...LATEST_SCHEDULING, poll: null },
-  // The environment methods (ticket E7): reads take the latest answer;
-  // writes, Verify and the link steps are ordered and never joined.
+  // The environment methods: reads take the latest answer; writes, Verify and
+  // the link steps are ordered and never joined.
   "environment.localOverrides": { ...LATEST_SCHEDULING, poll: null },
   "environment.secrets.list": { ...LATEST_SCHEDULING, poll: null },
   "environment.secrets.versions": { ...LATEST_SCHEDULING, poll: null },
   // A replaced value's status moves within seconds of the replacement; the
-  // Secrets page re-reads it only while it is still moving (ticket E11,
-  // checkpoint 4).
+  // Secrets page re-reads it only while it is still moving.
   "environment.secrets.rotation": {
     ...LATEST_SCHEDULING,
     poll: { kind: "fixed", intervalMs: 3_000 },
   },
   "environment.agentDefinitions.list": { ...LATEST_SCHEDULING, poll: null },
   "environment.setup.get": { ...LATEST_SCHEDULING, poll: null },
-  // The support report's reach section (ticket E13 checkpoint 4): read with
-  // the rest of the environment section, never polled on its own.
+  // The support report's reach section: read with the rest of the environment
+  // section, never polled on its own.
   "environment.reachDiagnostics": { ...LATEST_SCHEDULING, poll: null },
   // Machine setup re-reads it while open: a run started by a save, a retry or
   // a restart ends on its own, and nothing else tells the page it did.

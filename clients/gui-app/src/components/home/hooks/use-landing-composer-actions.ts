@@ -181,13 +181,13 @@ export interface LandingComposerSubmitArgs {
     readonly permission: PermissionMode;
   };
   /**
-   * Who the new task belongs to (ticket E17 checkpoint 6, A1): the draft's
-   * Belongs to owner, read by the caller at submit; `null` is Personal.
+   * Who the new task belongs to: the draft's Belongs to owner, read by the
+   * caller at submit; `null` is Personal.
    */
   readonly owner: LandingOwnerTeam | null;
   /**
    * Whether the selected harness is one a team sandbox does not offer, on a
-   * team sandbox (ticket E17 checkpoint 6, B5), read by the caller at submit.
+   * team sandbox, read by the caller at submit.
    */
   readonly teamSandboxHarnessBlocked: boolean;
 }
@@ -1596,7 +1596,7 @@ export function useLandingComposerActions(
 /**
  * Forgets the Belongs to pick once its create is sent, under the draft's key
  * and the not-yet-a-draft key, so the next task starts from the host's team
- * again (ticket E17 checkpoint 6).
+ * again.
  */
 function clearLandingOwnerChoice(draftId: string | null): void {
   const store = useLandingOwnerStore.getState();
@@ -2172,9 +2172,9 @@ function buildRepoIdentifiers(
 }
 
 /**
- * A2's refusals for a team owner, before any frame and with the draft left as
- * it is (ticket E17 checkpoint 6): a host below `epic.create@1.3`, or no cloud
- * authorization. Personal is never refused here.
+ * The refusals for a team owner, before any frame and with the draft left as it
+ * is: a host below `epic.create@1.3`, or no cloud authorization. Personal is
+ * never refused here.
  */
 function refuseTeamOwner(
   owner: LandingOwnerTeam | null,

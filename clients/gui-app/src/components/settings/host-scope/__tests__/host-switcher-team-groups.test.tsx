@@ -36,7 +36,7 @@ vi.mock("@/lib/sandboxes/sandbox-wake", () => ({
 }));
 
 /**
- * Ticket E17, checkpoint 2: the host switcher draws one group per team the
+ * The host switcher draws one group per team the
  * person is in, titled with the team's name, with its own collapsed "Agent
  * sandboxes" sub-group; a sandbox whose registry row carries no `owner` stays
  * in the person's own "Sandboxes" group.

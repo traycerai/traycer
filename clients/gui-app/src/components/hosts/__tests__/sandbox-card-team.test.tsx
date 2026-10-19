@@ -99,7 +99,7 @@ import { TeamWakeConfirmDialogHost } from "@/components/hosts/team-wake-confirm-
 import type { HostScopeSandbox } from "@/components/settings/host-scope/host-scope-model";
 
 /**
- * Ticket E17, checkpoint 2: a TEAM sandbox's card names who created it and
+ * A TEAM sandbox's card names who created it and
  * whose bundle the running wake is on, has no personal cost view, says its
  * pod's room for shells, always asks for its name before a destroy, and asks
  * before a Resume or Start bills the person pressing it.

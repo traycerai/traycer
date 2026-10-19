@@ -4,7 +4,7 @@ import { teamTaskLabel } from "@/lib/epics/team-task-owner";
 import { useAuthStore } from "@/stores/auth/auth-store";
 
 /**
- * A3: the chip naming the team that owns a task, on History rows and the
+ * The chip naming the team that owns a task, on History rows and the
  * panel's task header. Named by the team's slug, or "A team".
  */
 export function TeamTaskChip(props: { readonly teamId: string }): ReactNode {

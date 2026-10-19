@@ -12,9 +12,9 @@ import {
 } from "../host-workspace-controls-scope";
 
 /**
- * Ticket E17 checkpoint 6 (part B1): "Continue on a <team> host" narrows the
- * host picker to that team's hosts. The selected host is listed whatever the
- * narrowing says, so the picker never hides its own value.
+ * "Continue on a <team> host" narrows the host picker to that team's hosts. The
+ * selected host is listed whatever the narrowing says, so the picker never
+ * hides its own value.
  */
 
 const H1 = unavailableHostOption("h1", "Host one");

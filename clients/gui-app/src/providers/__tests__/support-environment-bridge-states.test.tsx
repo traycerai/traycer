@@ -1,9 +1,9 @@
-// E18 stage 4, checkpoint 5 (B.1): what the bridge writes while the selected
-// host answers, stops answering, goes away or is swapped for another. The
-// sibling suite pins one happy path and the unsupported one; this one pins the
-// states a report is actually opened in: `unavailable` until the SELECTED host
-// has answered, `stale` on a failed read, never another host's section, and the
-// reads it makes (and does not make) of a host that lacks them.
+// What the bridge writes while the selected host answers, stops answering, goes
+// away or is swapped for another. The sibling suite pins one happy path and the
+// unsupported one; this one pins the states a report is actually opened in:
+// `unavailable` until the SELECTED host has answered, `stale` on a failed read,
+// never another host's section, and the reads it makes (and does not make) of a
+// host that lacks them.
 //
 // The same three process-wide hooks are pinned here as there; the account
 // policy's own hook is stood in so its answer, body included, is a value the
@@ -165,7 +165,7 @@ afterEach(() => {
   __resetSupportContextRegistryForTests();
 });
 
-describe("SupportEnvironmentBridge's states (E18 stage 4)", () => {
+describe("SupportEnvironmentBridge's states", () => {
   it("is unavailable, not the last host's section, until the selected host has answered", async () => {
     supportAll();
     setSupportEnvironmentSection(knownField(EARLIER_HOST_SECTION));
@@ -487,7 +487,7 @@ describe("SupportEnvironmentBridge's states (E18 stage 4)", () => {
   });
 });
 
-describe("SupportEnvironmentBridge's rotation reads (E18 stage 4)", () => {
+describe("SupportEnvironmentBridge's rotation reads", () => {
   function rotationHost(settled: boolean): {
     readonly client: HostClient<HostRpcRegistry>;
     readonly reads: () => number;

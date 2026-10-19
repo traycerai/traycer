@@ -138,7 +138,7 @@ export function sandboxFrozenLine(frozenAt: number | null): string {
 }
 
 /**
- * Who made a team sandbox (ticket E17), or `null` when the server does not
+ * Who made a team sandbox, or `null` when the server does not
  * say (a personal sandbox, or a server before the field).
  */
 export function sandboxCreatorLine(

@@ -1,6 +1,5 @@
 /**
- * Ticket E17 checkpoint 6, cold-review fix (a team sandbox's rail never
- * commits a harness the sandbox does not offer).
+ * A team sandbox's rail never commits a harness the sandbox does not offer.
  *
  * The model rows of a blocked harness are already unselectable
  * (`team-sandbox-harness.test.tsx` drives the panel body). The provider RAIL

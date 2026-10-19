@@ -11,9 +11,8 @@ import {
 } from "@/stores/home/landing-owner-store";
 
 /**
- * The owner a landing draft's create sends (ticket E17 checkpoint 6, A1): the
- * draft's Belongs to pick, else the resolved host's team, else Personal
- * (`null`).
+ * The owner a landing draft's create sends: the draft's Belongs to pick, else
+ * the resolved host's team, else Personal (`null`).
  */
 export function useLandingOwner(
   draftId: string | null,

@@ -1,6 +1,6 @@
 /**
- * Ticket E17 checkpoint 6, cold-review fix (the chat fork dialog holds Fork
- * shut on a harness a team sandbox does not offer).
+ * The chat fork dialog holds Fork shut on a harness a team sandbox does not
+ * offer.
  *
  * A fork seeds its harness from the source chat and runs on the selected host.
  * When that host is a team sandbox and the harness is one it does not offer,

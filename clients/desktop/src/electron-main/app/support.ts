@@ -481,10 +481,10 @@ export class DesktopSupportService {
             : { registry: { ...privateDiagnostics.registry } }),
         })
       : {};
-    // Ticket E11, checkpoint 5: the selected host's environment section,
-    // under the same consent gate as everything above, and never in the
-    // public draft or the saved bundle. Scrubbed leaf by leaf inside
-    // `environmentContextForSentry`, not by the deep scrub above.
+    // The selected host's environment section, under the same consent gate as
+    // everything above, and never in the public draft or the saved bundle.
+    // Scrubbed leaf by leaf inside `environmentContextForSentry`, not by the
+    // deep scrub above.
     if (includeDiagnostics && privateDiagnostics !== undefined) {
       contexts.environment = environmentContextForSentry(
         privateDiagnostics.environment,

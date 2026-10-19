@@ -453,7 +453,7 @@ describe("personalPageItemKinds", () => {
     ).toBe(true);
   });
 
-  it("lists the item kinds the four checkpoint-4 pages edit", () => {
+  it("lists the item kinds the MCP servers, Skills, Agent definitions and Machine setup pages edit", () => {
     expect([...(personalPageItemKinds("mcp-servers") ?? [])]).toEqual([
       "mcp_server",
     ]);

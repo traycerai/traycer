@@ -7,10 +7,9 @@ import ts from "typescript";
 import { describe, expect, it } from "vitest";
 
 /**
- * E7 checkpoint 6's proof: no desktop string a person reads carries the words
- * the product does not use for the person's settings - "environment",
- * "binding" and "placeholder". The glossary pass removed them from about 30
- * strings; this keeps them out.
+ * No desktop string a person reads carries the words the product does not use
+ * for the person's settings - "environment", "binding" and "placeholder". The
+ * glossary pass removed them from about 30 strings; this keeps them out.
  *
  * WHAT COUNTS AS A STRING A PERSON READS is decided by its AST POSITION, never
  * by its text, so an RPC id, a query key, a search keyword or a code
@@ -30,8 +29,8 @@ import { describe, expect, it } from "vitest";
  * `.request(...)` are not display positions, so they are not scanned.
  *
  * The allowlist below is by file AND exact string, and each entry names the
- * E7 ledger row that closed it by verification. An entry nothing matches fails
- * the suite, so the list cannot outlive the string it excuses.
+ * ledger row that closed it by verification. An entry nothing matches fails the
+ * suite, so the list cannot outlive the string it excuses.
  */
 const GUI_SRC = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 const DESKTOP_SRC = path.join(GUI_SRC, "..", "..", "desktop", "src");
@@ -75,7 +74,7 @@ const DISPLAY_PROPERTIES: ReadonlySet<string> = new Set([
 interface Allowed {
   readonly file: string;
   readonly text: string;
-  /** The E7 ledger row that closed it by verification. */
+  /** The ledger row that closed it by verification. */
   readonly closedBy: string;
 }
 

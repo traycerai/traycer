@@ -300,8 +300,7 @@ const READY_HOST: HostOptions = {
  * `promoteToPersonal` by applying the entry as the person's item, which is
  * what the real host does once the environment accepts the upload.
  *
- * `appliedAs` is filled by ticket E5 (the host's apply path); until E5 lands
- * it is FIXTURE-ONLY: this suite is the only thing that ever sets it.
+ * `appliedAs` is filled by the host's apply path; here the fake host sets it.
  */
 function renderPage(
   section: SettingsSectionId,

@@ -459,7 +459,7 @@ describe("remoteOpenAuthFor", () => {
   });
 });
 
-// ── Ticket E17 checkpoint 7, removal close ──
+// ── Removal close ──
 //
 // A team host ends a removed member's sessions with a terminal SESSION fatal
 // whose code is `TEAM_MEMBER_REMOVED`. Team hosts are reached over the relay,
@@ -613,7 +613,7 @@ class E17RemovalRelayHost {
   };
 }
 
-describe("Ticket E17 checkpoint 7, removal close: createRemoteHostTransport reports a TEAM_MEMBER_REMOVED session close", () => {
+describe("createRemoteHostTransport reports a TEAM_MEMBER_REMOVED session close", () => {
   let reported: Mock<(hostId: string) => void>;
   let unsubscribe: (() => void) | null = null;
 

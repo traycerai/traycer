@@ -1,11 +1,11 @@
 /**
  * THE SECRET INTAKE CATALOGUE: the data a secret's add form reads, in one
- * place for every reader (ticket E11, checkpoint 3). The broker's intake, the
- * dashboard's add dialog and the desktop's Secrets page all read these
- * tables, so a kind, a protocol or a not-brokered line cannot mean one thing
- * in one of them and another in the next. The internal broker's modules
- * re-export the names from here; the zod policy schemas, the verifier
- * derivation and the cloud tables stay with the broker.
+ * place for every reader. The broker's intake, the dashboard's add dialog and
+ * the desktop's Secrets page all read these tables, so a kind, a protocol or
+ * a not-brokered line cannot mean one thing in one of them and another in the
+ * next. The internal broker's modules re-export the names from here; the zod
+ * policy schemas, the verifier derivation and the cloud tables stay with the
+ * broker.
  *
  * Data only: no schema, no I/O.
  */
@@ -168,11 +168,11 @@ export type SandboxSecretSwapSite = (typeof SANDBOX_SECRET_SWAP_SITES)[number];
 // ---------------------------------------------------------------------------
 
 /**
- * THE PROTOCOL FAMILIES NOT BROKERED IN V1 (ticket 27; user decisions
- * 2026-10-12 for RDP and 2026-10-13 for the message brokers, mail, Oracle
- * and Cassandra). The broker's intake refuses a secret on any of these
- * protocols, in either mode, with `protocol_not_brokered` and the row's
- * line, and every add form greys them with the same line.
+ * THE PROTOCOL FAMILIES NOT BROKERED IN V1 (user decisions
+ * 2026-10-12 for RDP and 2026-10-13 for the message brokers, mail, Oracle and
+ * Cassandra). The broker's intake refuses a secret on any of these protocols,
+ * in either mode, with `protocol_not_brokered` and the row's line, and every
+ * add form greys them with the same line.
  *
  * `oracle` and `cassandra` are protocols of the `database` kind that are not
  * database engines: the kind stays live, these two protocols inside it are

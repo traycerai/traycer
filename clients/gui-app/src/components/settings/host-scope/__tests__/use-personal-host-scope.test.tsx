@@ -8,7 +8,7 @@ import { hostRpcRegistry } from "@traycer/protocol/host/index";
 import type { HostRpcRegistry } from "@/lib/host";
 import type { HostScopeOption } from "@/components/settings/host-scope/host-scope-model";
 
-// E7 checkpoint 2's proof: a Personal page in a window bound to one host reads
+// A Personal page in a window bound to one host reads
 // THAT host, and a pick made under the Host group moves only the Host group.
 // Every panel suite mocks the scope hook, so none of them can see this; here
 // the REAL `useHostScope` and `usePersonalHostScope` run over the REAL

@@ -410,12 +410,11 @@ export interface CredentialUpdatePayload {
    */
   readonly bearer: string | null;
   /**
-   * A team host's member credential for the session's member (ticket E17,
-   * consumed by E13): the four fields of the member mint response from
-   * `POST /api/v3/hosts/token`. Sent only to a host that offered
-   * {@link SESSION_CAPABILITY_MEMBER_CREDENTIAL}, which a released host never
-   * does; `null` on every other frame, and read as `null` from a client that
-   * predates it.
+   * A team host's member credential for the session's member: the four fields
+   * of the member mint response from `POST /api/v3/hosts/token`. Sent only to
+   * a host that offered {@link SESSION_CAPABILITY_MEMBER_CREDENTIAL}, which a
+   * released host never does; `null` on every other frame, and read as `null`
+   * from a client that predates it.
    */
   readonly memberCredential: MemberCredentialHandoff | null;
 }
@@ -590,12 +589,11 @@ export const SESSION_CAPABILITY_CREDENTIAL_UPDATE = "credentialUpdate";
 
 /**
  * Offered in `openAck.capabilities` by a TEAM host, and only to a
- * session-grant session (ticket E17; E13 offers it): the host takes the
- * session member's credential from a {@link MuxFrameType.CREDENTIAL_UPDATE}
- * carrying `memberCredential` and `bearer: null`. A client sends that frame
- * only after seeing this tag. A personal host never offers it and ignores the
- * field, and a released host never offers it, so a released client never
- * sends it.
+ * session-grant session: the host takes the session member's credential from
+ * a {@link MuxFrameType.CREDENTIAL_UPDATE} carrying `memberCredential` and
+ * `bearer: null`. A client sends that frame only after seeing this tag. A
+ * personal host never offers it and ignores the field, and a released host
+ * never offers it, so a released client never sends it.
  *
  * Never offered beside {@link SESSION_CAPABILITY_CREDENTIAL_UPDATE}, which
  * invites the client's USER bearer and stays unoffered to a sandbox. No

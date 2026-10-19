@@ -9,13 +9,11 @@ import {
 import { secretProtocolLabel } from "@/lib/sandboxes/secret-intake-copy";
 
 /**
- * What Verify reports (ticket E11, checkpoint 3; corrected at E8 checkpoint
- * 6). One probe answers with the hop that refused it: host, port or
- * protocol, and for a database the login too, never for HTTPS. A refusal
- * names the setting that is the likely cause, so a wrong port reads as the
- * port this secret is set to. An accepted HTTPS probe reached the
- * destination only: the key itself is checked the first time an agent uses
- * it.
+ * What Verify reports. One probe answers with the hop that refused it: host,
+ * port or protocol, and for a database the login too, never for HTTPS. A
+ * refusal names the setting that is the likely cause, so a wrong port reads as
+ * the port this secret is set to. An accepted HTTPS probe reached the
+ * destination only: the key itself is checked the first time an agent uses it.
  *
  * `where` is where that setting is: "above" in the add dialog, the secret's
  * own settings on a row.

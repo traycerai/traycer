@@ -1,6 +1,6 @@
 /**
- * Ticket E17 checkpoint 6, cold-review fix (A4: a team sandbox's create ends
- * on "Start a <team> task" for a person with no task in that team yet).
+ * A team sandbox's create ends on "Start a <team> task" for a person with no
+ * task in that team yet.
  *
  * This drives the REAL create mutation (`auth.createSandbox` resolving an
  * accepted create) so the offer is decided where it is in production: after

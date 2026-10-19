@@ -96,7 +96,7 @@ Fixed 15-byte header, big-endian:
 | 8     | `FATAL`             | 0 or ≥1  | `{details}` (`FatalErrorDetails`; streamId 0 = whole session)                                                                           |
 | 9     | `CREDIT`            | 0        | `{credits}` (bulk send-window replenish)                                                                                                |
 | 10    | `REAUTH_NOTICE`     | 0        | `{standingUntil}` — host-standing evidence (R4-D2)                                                                                      |
-| 11    | `RESUME`            | 0        | **RESERVED** (R4-E3 resume ticket) — not sent in v1                                                                                     |
+| 11    | `RESUME`            | 0        | **RESERVED** (for resume) — not sent in v1                                                                                              |
 | 12    | `CREDENTIAL_UPDATE` | 0        | `{bearer, memberCredential}` — in-place bearer rotation, or a team host's member credential with `bearer: null` (each capability-gated) |
 
 `streamId` allocation: the client allocates monotonically from 1. A **subscribe

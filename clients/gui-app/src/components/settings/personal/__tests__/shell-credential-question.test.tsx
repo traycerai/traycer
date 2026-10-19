@@ -339,7 +339,7 @@ describe("the host environment group on a Personal page", () => {
     );
   });
 
-  // `pendingUploads` is FIXTURE-ONLY until ticket E5 serves it.
+  // `pendingUploads` comes from the fake host.
   it("marks a row whose edit still waits for its receipt as Pending", async () => {
     renderShellPage({
       ...READY_HOST,

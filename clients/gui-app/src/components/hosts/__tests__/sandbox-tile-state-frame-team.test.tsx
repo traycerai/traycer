@@ -65,9 +65,9 @@ import { SandboxTileStateFrame } from "@/components/hosts/sandbox-tile-state-fra
 import { TeamWakeConfirmDialogHost } from "@/components/hosts/team-wake-confirm-dialog";
 
 /**
- * Ticket E17: the tile overlay's Resume or Start on a TEAM sandbox asks
- * before it bills the opener; a team pod and a personal sandbox do not ask. A
- * frozen team sandbox's overlay names whose bundle is out.
+ * The tile overlay's Resume or Start on a TEAM sandbox asks before it bills
+ * the opener; a team pod and a personal sandbox do not ask. A frozen team
+ * sandbox's overlay names whose bundle is out.
  */
 
 /** The registry row as the host list reports it, `owner` included. */

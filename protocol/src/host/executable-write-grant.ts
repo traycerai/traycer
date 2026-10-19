@@ -3,8 +3,8 @@ import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 
 /**
  * The scoped executable-write grant a host RPC that can reach an execution
- * sink carries (environments plan, model page, "Executable writes"; ticket
- * E7). The GUI mints it on its own user session from authn's
+ * sink carries (environments plan, model page, "Executable writes"). The GUI
+ * mints it on its own user session from authn's
  * `POST /api/v3/environments/:environmentId/executable-write-grants
  * { hostId }` (ten minutes, one host) and passes it here; the host's
  * forwarder attaches it to the environment write and never mints one. `null`

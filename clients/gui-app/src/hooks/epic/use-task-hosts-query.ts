@@ -16,7 +16,7 @@ import { cloudChatListCacheKeyIdentity } from "@/lib/chats/cloud-chat-list-cache
 import { cloudVerdictPreflight } from "@/lib/host/cloud-verdict-preflight";
 
 /**
- * `epic.listTaskHosts` (ticket E17 checkpoint 4): the task's hosts with their
+ * `epic.listTaskHosts`: the task's hosts with their
  * owner principal and reach, through the epic session's host, as the cloud
  * chat list is read. ACL-filtered per viewer, so the key carries the viewer;
  * the reach is the server's, from the credential the serving host sends.

@@ -54,7 +54,7 @@ interface HostSectionProps {
   readonly onRetryLists: () => void;
   /**
    * Whether this picker offers the Automations host: only the new terminal
-   * picker (correction 5). See `hostOptionPickerGroup`.
+   * picker. See `hostOptionPickerGroup`.
    */
   readonly offersAutomations: boolean;
 }

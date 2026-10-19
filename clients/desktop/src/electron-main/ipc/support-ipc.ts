@@ -533,7 +533,7 @@ function parseSupportPrivateOutcome(
 }
 
 // Exactly ticket 05's five `SerializedReportIssuePrivateDiagnostics` keys,
-// plus ticket E11's `environment` (checkpoint 5),
+// plus `environment`,
 // all required whenever `privateDiagnostics` is sent at all - the serializer
 // never omits one (an "empty" cause/registry is `null`/all-`unavailable`,
 // not a missing key), so a missing key here is a real contract violation,
@@ -574,10 +574,10 @@ const CONTEXT_REGISTRY_KEYS = contractKeySet<SupportContextRegistrySnapshot>({
   providerVersion: true,
 });
 
-// The environment section (ticket E11, checkpoint 5): one closed key set per
-// record of the renderer's `SupportEnvironmentSection`, every key required.
-// Anything else, a pending upload, an override, a value, the policy body, a
-// team or owner label, connector detail among them, is refused by name.
+// The environment section: one closed key set per record of the renderer's
+// `SupportEnvironmentSection`, every key required. Anything else, a pending
+// upload, an override, a value, the policy body, a team or owner label,
+// connector detail among them, is refused by name.
 const ENVIRONMENT_SECTION_KEYS = contractKeySet<SupportEnvironmentSection>({
   hostId: true,
   principal: true,
@@ -595,8 +595,8 @@ const ENVIRONMENT_SECTION_KEYS = contractKeySet<SupportEnvironmentSection>({
   servedTask: true,
 });
 
-// A refusal is references and categories only (ticket E13 checkpoint 4): a
-// host's label, a display name or an owner's id inside one is refused by name.
+// A refusal is references and categories only: a host's label, a display name
+// or an owner's id inside one is refused by name.
 const ENVIRONMENT_REACH_DENIAL_KEYS =
   contractKeySet<SupportEnvironmentReachDenial>({
     denialId: true,

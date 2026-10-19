@@ -83,7 +83,7 @@ export const PERSONAL_ENTRY_LOCKED_TEXT = "Change this in the dashboard.";
 
 /**
  * What Remove on a Personal MCP server or skill asks: the host forwards it as
- * the item's delete, so it leaves every provider on every host (finding 31).
+ * the item's delete, so it leaves every provider on every host.
  */
 export function personalRemoveText(name: string): string {
   return `Remove “${name}” from every provider on every host?`;

@@ -12,11 +12,10 @@ import {
 } from "./task-host-groups-model";
 
 /**
- * The task's hosts grouped by owner (ticket E17 checkpoint 4), at the foot of
- * the Agents panel. Rows are the task-authorized summary from
- * `epic.listTaskHosts`; a host the person cannot open shows its name, owner
- * and reach, and nothing else. An older host without the method shows no
- * section.
+ * The task's hosts grouped by owner, at the foot of the Agents panel. Rows are
+ * the task-authorized summary from `epic.listTaskHosts`; a host the person
+ * cannot open shows its name, owner and reach, and nothing else. An older host
+ * without the method shows no section.
  */
 export function TaskHostGroupsSection(props: {
   readonly epicId: string;

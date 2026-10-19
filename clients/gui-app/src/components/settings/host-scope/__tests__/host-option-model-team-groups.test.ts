@@ -13,7 +13,7 @@ import type { HostScopeOption } from "@/components/settings/host-scope/host-scop
 import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
 
 /**
- * Ticket E17, checkpoint 2: the host list groups a team's sandboxes and pods
+ * The host list groups a team's sandboxes and pods
  * under the team's name, from the registry row's `?include=owner` principal.
  *
  * A team row follows the SAME picker rules as an own row - burst hidden from a

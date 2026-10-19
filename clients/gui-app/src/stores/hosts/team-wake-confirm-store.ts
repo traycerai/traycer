@@ -3,12 +3,12 @@ import type { HostProfile } from "@traycer/protocol/host/host-status";
 import { signedInUserId } from "@/lib/sandboxes/sandbox-account-fence";
 
 /**
- * Whether waking this sandbox asks first (ticket E17, F): a team sandbox's
- * wake is billed to the person who opens it, so a pick, a tile open, the
- * card's Resume or Start and the tile overlay's button all ask "Opening this
- * resumes it on your bundle" before they wake it. A team pod (`automation`)
- * runs on the team's free pod pool and never asks; nor does a personal
- * sandbox, nor a frozen one, whose wake is refused before it bills.
+ * Whether waking this sandbox asks first: a team sandbox's wake is billed to
+ * the person who opens it, so a pick, a tile open, the card's Resume or Start
+ * and the tile overlay's button all ask "Opening this resumes it on your
+ * bundle" before they wake it. A team pod (`automation`) runs on the team's
+ * free pod pool and never asks; nor does a personal sandbox, nor a frozen one,
+ * whose wake is refused before it bills.
  */
 export function teamWakeAsks(
   teamOwned: boolean,

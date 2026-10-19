@@ -12,8 +12,8 @@ import {
 } from "@/lib/epic-create-admission";
 
 /**
- * Ticket E17 checkpoint 6 (part A, team create admission): the floor a team
- * create pays before any frame, and what a rejected team create says.
+ * Team create admission: the floor a team create pays before any frame, and
+ * what a rejected team create says.
  */
 
 const HOST_TOO_OLD =

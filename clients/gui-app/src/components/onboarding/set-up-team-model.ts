@@ -1,7 +1,7 @@
 import type { SeenRecord } from "@/lib/persist/keyed-seen-store";
 import { teamHostDisclosureSeen } from "@/stores/hosts/team-host-disclosure-seen-store";
 
-/** The newcomer's line (ticket E17 checkpoint 6), naming the next step. */
+/** The newcomer's line, naming the next step. */
 export function teamNewcomerLine(teamName: string): string {
   return `To work in ${teamName}, open a tab on one of its sandboxes, in your host list under ${teamName}, or create one from there.`;
 }

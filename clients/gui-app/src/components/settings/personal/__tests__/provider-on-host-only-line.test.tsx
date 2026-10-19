@@ -47,7 +47,7 @@ interface OnHostOnlyEntry {
 /**
  * Renders one line per `(providerId, profileId)` over a host whose
  * `providers.list` answers `onHostOnly` (omitted when `null`: a 10.0 host).
- * `providers.link` is FIXTURE-ONLY until ticket E10 serves it.
+ * `providers.link` is advertised by the fake host's method list.
  */
 function renderLines(options: {
   readonly onHostOnly: readonly OnHostOnlyEntry[] | null;

@@ -16,12 +16,12 @@ import { CHAT_A } from "@/stores/epics/canvas/__tests__/canvas-test-fixtures";
 import { reportTeamMemberRemovedClose } from "@traycer-clients/shared/host-transport/team-member-removed-close";
 
 /**
- * Ticket E17 checkpoint 7, removal close: a team host ending the person's
- * session with `TEAM_MEMBER_REMOVED` is a second signal for the same removal
- * the team list's own loss reports. Whichever signal comes first closes the
- * team's tiles on its hosts and toasts once; the other finds the team already
- * closed, so one removal is one close and one toast, never two. The signal is
- * driven here with the real `reportTeamMemberRemovedClose` seam.
+ * Removal close: a team host ending the person's session with
+ * `TEAM_MEMBER_REMOVED` is a second signal for the same removal the team list's
+ * own loss reports. Whichever signal comes first closes the team's tiles on its
+ * hosts and toasts once; the other finds the team already closed, so one
+ * removal is one close and one toast, never two. The signal is driven here with
+ * the real `reportTeamMemberRemovedClose` seam.
  */
 
 interface MockHolders {
@@ -163,7 +163,7 @@ function toastedMessages(): readonly string[] {
   return mocks.toastInfo.mock.calls.map((call) => call[0]);
 }
 
-describe("useCloseTilesOnTeamRemoval: the TEAM_MEMBER_REMOVED close report (Ticket E17 checkpoint 7, removal close)", () => {
+describe("useCloseTilesOnTeamRemoval: the TEAM_MEMBER_REMOVED close report", () => {
   beforeEach(() => {
     window.localStorage.clear();
     useEpicCanvasStore.persist.setOptions({ name: epicCanvasKey(null) });

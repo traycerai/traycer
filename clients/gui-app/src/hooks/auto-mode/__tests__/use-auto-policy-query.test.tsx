@@ -376,7 +376,7 @@ describe("useAutoPolicyQuery - per-viewer cache partition", () => {
     expect(aEntry?.body).toBe("A's policy");
   });
 
-  // E12 checkpoint 6: `autoPolicy.get@1.1` carries a team host's policy
+  // `autoPolicy.get@1.1` carries a team host's policy
   // state in `team`. The save writes the cache through (`setQueriesData`),
   // and a write-through that rebuilds the record from its own fields would
   // drop `team` until the next read - the support report would then call a

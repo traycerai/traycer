@@ -5,9 +5,8 @@ import { creditBreakdown } from "@/lib/auth/traycer-subscription-content";
 const MC_PER_CREDIT = 1000;
 
 /**
- * Whom a new sandbox belongs to: the person (Personal) or one of their teams
- * (ticket E17 checkpoint 3). The form's **Belongs to** and an entry's
- * preselection both carry it.
+ * Whom a new sandbox belongs to: the person (Personal) or one of their teams.
+ * The form's **Belongs to** and an entry's preselection both carry it.
  */
 export type SandboxCreateBelongsTo =
   | { readonly kind: "personal" }

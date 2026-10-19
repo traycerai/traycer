@@ -301,7 +301,7 @@ export function HarnessModelPickerPanelBody(
     profileAdmission,
   } = props;
   // On a team sandbox only a harness whose credential stays a placeholder is
-  // offered (ticket E17 checkpoint 6); any other is listed, not selectable.
+  // offered; any other is listed, not selectable.
   const onTeamSandbox = useOnTeamSandbox(runTargetHostId);
   const teamBlocked =
     activeProvider !== null &&

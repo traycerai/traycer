@@ -656,8 +656,8 @@ export function ActiveHostWorkspaceControls(
       seedIntentOverride={props.seedIntentOverride}
       restingMode="summary"
       hostSlot={
-        // A new-task landing draft also says who the task belongs to (ticket
-        // E17 checkpoint 6, A1), beside the host it will run on.
+        // A new-task landing draft also says who the task belongs to, beside
+        // the host it will run on.
         props.stagingKey.surface === "landing" ? (
           <>
             {deviceSelect}

@@ -104,7 +104,7 @@ export interface RemoteSessionIdentity {
   readonly authEpoch: string;
   /**
    * What `OPEN` presents: the user bearer (a personal host) or a host-bound
-   * session grant (a `kind: sandbox` host, seam C1). Part of the identity
+   * session grant (a `kind: sandbox` host). Part of the identity
    * because the factory wires the grant provider and a cache hit never re-runs
    * it: a sandbox row that briefly projects as a personal host (a stale
    * directory read) would otherwise build a user-bearer session that every

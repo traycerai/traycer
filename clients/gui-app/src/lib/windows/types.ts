@@ -422,8 +422,8 @@ export interface DesktopContextRegistrySnapshot {
  * (`serializeReportIssuePrivateDiagnostics` in
  * `@/lib/report-issue-draft-context`) - same six keys, always all present:
  * `registry` is never itself absent, `correlationId` is always a fresh id,
- * `environment` is the renderer's own closed section (ticket E11,
- * checkpoint 5), which Electron main parses record by record.
+ * `environment` is the renderer's own closed section, which Electron main
+ * parses record by record.
  */
 export interface DesktopPrivateDiagnostics {
   readonly cause: DesktopPrivateDiagnosticsCause | null;

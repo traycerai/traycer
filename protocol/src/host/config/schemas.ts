@@ -50,7 +50,7 @@ export const configShellSetRequestSchemaV10 = lazySchema(() =>
 
 /**
  * v1.1: the shell path and args select what starts, so the write reaches an
- * execution sink and carries the executable-write grant (ticket E7). Each arm
+ * execution sink and carries the executable-write grant. Each arm
  * carries it; a v1.0 caller's request is upgraded with `null`.
  */
 export const configShellSetRequestSchema = lazySchema(() =>

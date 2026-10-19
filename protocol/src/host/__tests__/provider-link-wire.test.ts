@@ -6,7 +6,7 @@ import {
 import * as env from "@traycer/protocol/host/environment-schemas";
 
 /**
- * The wire of ticket E10, checkpoint 5: `providers.link`'s three prompt arms,
+ * The wire of `providers.link`: its three prompt arms,
  * `providers.linkComplete`'s answer (the account the profile is linked as, and
  * the account it was expected to be on a mismatch), and the two error codes
  * the Link dialog turns into its states.

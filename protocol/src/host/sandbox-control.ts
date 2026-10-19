@@ -198,8 +198,8 @@ export interface SandboxSummary {
    */
   readonly environmentId: string | null;
   /**
-   * The member who created a team sandbox (ticket E17, served by E14);
-   * `null` on a personal sandbox, a pod, and from a server before it.
+   * The member who created a team sandbox; `null` on a personal sandbox, a
+   * pod, and from a server that predates the field.
    */
   readonly createdBy: SandboxMember | null;
   /**
@@ -269,7 +269,7 @@ export const sandboxSummarySchema: z.ZodType<SandboxSummary> = lazySchema(() =>
       .catch(null),
     priceMcPerHour: sandboxHourlyPriceSchema.nullable(),
     environmentId: z.string().min(1).nullable().default(null),
-    // Read as `null` when absent, so a server before E14 fills them parses.
+    // Read as `null` when absent, so a server that predates them parses.
     createdBy: sandboxMemberSchema.nullable().default(null),
     wakePayer: sandboxMemberSchema.nullable().default(null),
   }),
@@ -287,9 +287,9 @@ export const sandboxListResponseSchema: z.ZodType<SandboxListResponse> =
   );
 
 /**
- * One Automations pod as `GET /api/sandboxes/automation` lists it (E14
- * checkpoint 5): its row, its slot, the shells its host last reported (0 once
- * that report is stale) and the shells it can still take.
+ * One Automations pod as `GET /api/sandboxes/automation` lists it: its row,
+ * its slot, the shells its host last reported (0 once that report is stale)
+ * and the shells it can still take.
  */
 export interface SandboxPod {
   readonly sandbox: SandboxSummary;
@@ -312,7 +312,7 @@ export const sandboxPodSchema: z.ZodType<SandboxPod> = lazySchema(() =>
  * `available` is false on a deployment with no Automations cluster;
  * `sandbox` is `null` until the row first exists (the first open creates
  * it). `pods` lists every live pod (a team's may hold several); `[]` from a
- * server before the pod list (ticket E17 reads it).
+ * server before the pod list.
  */
 export interface SandboxAutomationResponse {
   readonly available: boolean;
@@ -330,10 +330,10 @@ export const sandboxAutomationResponseSchema: z.ZodType<SandboxAutomationRespons
   );
 
 /**
- * `POST /api/sandboxes/automation`'s body for a named environment (E14
- * checkpoint 5): a team's pods are opened by environment, and `ordinal`
- * names the pod (the shell picker's choice) or is `null` for the one with
- * headroom. The personal open sends no body.
+ * `POST /api/sandboxes/automation`'s body for a named environment: a
+ * team's pods are opened by environment, and `ordinal` names the pod (the
+ * shell picker's choice) or is `null` for the one with headroom. The personal
+ * open sends no body.
  */
 export interface SandboxAutomationOpenTarget {
   readonly environmentId: string;
@@ -489,8 +489,8 @@ export interface SandboxCreateRequest {
   readonly createdByHostId: string | null;
   readonly createdByAgentId: string | null;
   /**
-   * The environment to create into (ticket E17): a team's, from the form's
-   * Belongs to; `null` for the caller's own principal's environment, which is
+   * The environment to create into: a team's, from the form's Belongs to;
+   * `null` for the caller's own principal's environment, which is
    * what a server before environments always did.
    */
   readonly environmentId: string | null;

@@ -13,17 +13,16 @@ interface RememberedTeam {
 }
 
 /**
- * A removed team member's tiles on the team's hosts close (ticket E17
- * checkpoint 6), with "You are no longer a member of <team>." Two triggers
- * report the same removal (checkpoint 7): a team host ending one of this
- * person's sessions with `TEAM_MEMBER_REMOVED`, and the person's own team
- * list (the auth projection) losing the team while the same person stays
- * signed in (the admins' `team.member.removed` never reaches the member
- * removed). Whichever comes first closes and says so; the other finds the
- * team already closed, so there is one toast and one close, never two. The
+ * A removed team member's tiles on the team's hosts close, with "You are no
+ * longer a member of <team>." Two triggers report the same removal: a team host
+ * ending one of this person's sessions with `TEAM_MEMBER_REMOVED`, and the
+ * person's own team list (the auth projection) losing the team while the same
+ * person stays signed in (the admins' `team.member.removed` never reaches the
+ * member removed). Whichever comes first closes and says so; the other finds
+ * the team already closed, so there is one toast and one close, never two. The
  * team's hosts and name are remembered while the person is in it, because by
- * the time either trigger fires the registry may already have stopped
- * listing them.
+ * the time either trigger fires the registry may already have stopped listing
+ * them.
  */
 export function useCloseTilesOnTeamRemoval(): void {
   const teams = useAuthStore((s) => s.shareableTeams);

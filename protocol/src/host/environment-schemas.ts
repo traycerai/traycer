@@ -8,19 +8,19 @@ import { executableWriteGrantSchema } from "@traycer/protocol/host/executable-wr
 import { providerIdSchema } from "@traycer/protocol/host/provider-ids";
 
 /**
- * Wire shapes of the environment methods (ticket E7, checkpoint 1): the
- * desktop Settings pages a person's Personal environment drives, and the
- * secrets, agent definitions, machine setup, status, notices and review the
- * host proxies to the environment routes. Every method is new at `@1.0`, off
- * the released floor with `degrade: unsupported` (`environment-contracts.ts`).
+ * Wire shapes of the environment methods: the desktop Settings pages a
+ * person's Personal environment drives, and the secrets, agent definitions,
+ * machine setup, status, notices and review the host proxies to the
+ * environment routes. Every method is new at `@1.0`, off the released floor
+ * with `degrade: unsupported` (`environment-contracts.ts`).
  *
  * Governing pages: the environments plan's surfaces page (the desktop RPC
  * table), its model page (item kinds, the per-item status, the closed codes,
  * "Convergence, history and Undo", "Executable writes"), and for the secret
  * versions, Undo, Destroy, rotation status and consent, the secrets plan's
  * gateway page ("The rotation wire") and broker page (Human routes), with
- * ticket E8's route rows. `environment-wire.test.ts` cites the plan sentence
- * each of those five shapes follows.
+ * the rotation controller plan's route rows. `environment-wire.test.ts` cites
+ * the plan sentence each of those five shapes follows.
  *
  * Timestamps are epoch milliseconds, as elsewhere on this wire. A code or a
  * state the plan says may grow is an open string with its known values
@@ -130,7 +130,7 @@ export const remoteAccessStateSchema = lazySchema(() =>
 );
 export type RemoteAccessState = z.infer<typeof remoteAccessStateSchema>;
 
-/** Setup stages a host shows (E7, Host section). Open: stages may grow. */
+/** Setup stages a host shows (environments plan, Host section). Open: stages may grow. */
 export const ENVIRONMENT_SETUP_STAGES = [
   "registering",
   "moving_settings",
@@ -153,10 +153,10 @@ export const environmentItemStatusSchema = lazySchema(() =>
       durationMs: z.number().int().nonnegative().nullable(),
       /**
        * Which case of the code, when one code covers several the client
-       * words differently (ticket E11, checkpoint 4). Known: on
-       * `unsupported_kind`, `headers_in_sandbox` (an MCP server whose
-       * credential is custom headers, on a sandbox). Open, so a newer case
-       * never fails the parse; absent from a host that predates it.
+       * words differently. Known: on `unsupported_kind`,
+       * `headers_in_sandbox` (an MCP server whose credential is custom
+       * headers, on a sandbox). Open, so a newer case never fails the parse;
+       * absent from a host that predates it.
        */
       kind: z.string().min(1).max(64).nullable().default(null),
     }),
@@ -176,10 +176,9 @@ export const environmentItemStatusSchema = lazySchema(() =>
     minimumHostVersion: z.string().max(64).nullable(),
     /**
      * The native entry this host wrote an `mcp_server` or `skill` item as, by
-     * name in the provider's global config (ticket E7 checkpoint 4 ruling).
-     * The desktop marks a native row Personal by it, since a skill's item key
-     * is not something a client can compose. `null` for every other kind and
-     * until the item is applied.
+     * name in the provider's global config. The desktop marks a native row
+     * Personal by it, since a skill's item key is not something a client can
+     * compose. `null` for every other kind and until the item is applied.
      */
     appliedAs: z
       .object({
@@ -446,7 +445,7 @@ export type HostRemoteAccessSetResponse = z.infer<
 /**
  * `providers.link@1.0`: starts the server-side link of a plan (surfaces page:
  * "returns the sign-in URL and a code prompt"), for a profile that is on this
- * host only or for a new one. The dialog's lines and states are E10's.
+ * host only or for a new one. The dialog's lines and states are its own.
  */
 export const providersLinkRequestSchema = lazySchema(() =>
   z.object({
@@ -475,7 +474,7 @@ export const providersLinkResponseSchema = lazySchema(() =>
       /**
        * No prompt: the harness's server-side sign-in is unavailable, so the
        * host hands this profile's local sign-in to the account (the
-       * link-and-rewrite fallback, ticket E10). The dialog shows "linking"
+       * link-and-rewrite fallback). The dialog shows "linking"
        * and polls `providers.linkComplete` until it answers `linked`.
        */
       z.object({ kind: z.literal("local_handoff") }),
@@ -503,7 +502,7 @@ export type ProvidersLinkCompleteRequest = z.infer<
  * `account` is the account the profile is linked as on `linked`, and the
  * account the person signed in as on `mismatch`; `expectedAccount` is the
  * profile's own account, non-null only on `mismatch`. Both are account
- * identifiers: shown in the person's own window, never logged (ticket E10).
+ * identifiers: shown in the person's own window, never logged.
  */
 export const providersLinkCompleteResponseSchema = lazySchema(() =>
   z.object({
@@ -606,10 +605,10 @@ export type EnvironmentSetupPutRequest = z.infer<
 >;
 
 /**
- * The typed setup-attempt record (E7's protocol row): attempt id, script
- * content hash, item revision, trigger, started, ended, exit status, stage
- * reached, result. Closed codes and typed arguments only, never script
- * output (model page).
+ * The typed setup-attempt record (the environments plan's protocol row):
+ * attempt id, script content hash, item revision, trigger, started, ended,
+ * exit status, stage reached, result. Closed codes and typed arguments only,
+ * never script output (model page).
  */
 export const setupAttemptSchema = lazySchema(() =>
   z.object({
@@ -692,12 +691,12 @@ export type EnvironmentSecretsListResponse = z.infer<
 
 /**
  * A binding as the add dialog has it: the fields authn's create and
- * candidate routes take (E8 checkpoint 6), so a database, SSH or connector
- * secret can be created and verified from the desktop. The host forwards
- * them as they are and authn validates them; `kind` and `protocol` are read
- * as strings and `policy`, `tlsPolicy` and each pinned host key as opaque
- * records for that reason. `value` is null for SSH, whose credential is the
- * person's own SSH key.
+ * candidate routes take, so a database, SSH or connector secret can be
+ * created and verified from the desktop. The host forwards them as they are
+ * and authn validates them; `kind` and `protocol` are read as strings and
+ * `policy`, `tlsPolicy` and each pinned host key as opaque records for that
+ * reason. `value` is null for SSH, whose credential is the person's own SSH
+ * key.
  */
 const secretBindingCandidateFields = {
   kind: lazySchema(() => z.string().min(1).max(32)),
@@ -782,8 +781,7 @@ export type EnvironmentSecretsCreateResponse = z.infer<
  * gateway half"): a stored secret by id, or the add dialog's candidate before
  * the secret exists. One probe, one evidence receipt: `probe_accepted`, or
  * `probe_refused` with the closed hop code, or `unreachable` when the probed
- * incarnation is silent (E8, checkpoint 6). Never the value or the upstream's
- * body.
+ * incarnation is silent. Never the value or the upstream's body.
  */
 export const environmentSecretsVerifyRequestSchema = lazySchema(() =>
   z.discriminatedUnion("target", [
@@ -827,10 +825,11 @@ export const secretRotationStateSchema = lazySchema(() =>
 export type SecretRotationState = z.infer<typeof secretRotationStateSchema>;
 
 /**
- * `environment.secrets.replaceValue@1.0` (broker page, the `PATCH` row; E8,
- * "Intent and commit"): a value replacement is a rotation, compare-and-set
- * on the version the editor read. `accepted` means committed and nothing
- * more; a stale intent is refused with the current version and who moved it.
+ * `environment.secrets.replaceValue@1.0` (broker page, the `PATCH` row;
+ * rotation controller plan, "Intent and commit"): a value replacement is a
+ * rotation, compare-and-set on the version the editor read. `accepted` means
+ * committed and nothing more; a stale intent is refused with the current
+ * version and who moved it.
  */
 export const environmentSecretsReplaceValueRequestSchema = lazySchema(() =>
   z.object({
@@ -1096,9 +1095,9 @@ export type EnvironmentSecretsConsentResponse = z.infer<
 // ── environment.reachDiagnostics ────────────────────────────────────────────
 
 /**
- * A host's owner as a category only (ticket E13 checkpoint 4): never an id,
- * never a team's name. `unknown` is a directory row with no owner, or a host
- * the account's directory does not list.
+ * A host's owner as a category only: never an id, never a team's name.
+ * `unknown` is a directory row with no owner, or a host the account's
+ * directory does not list.
  */
 export const reachPrincipalCategorySchema = lazySchema(() =>
   z.enum(["personal", "team", "unknown"]),
@@ -1129,8 +1128,8 @@ export const reachDenialSchema = lazySchema(() =>
 export type ReachDenial = z.infer<typeof reachDenialSchema>;
 
 /**
- * `environment.reachDiagnostics@1.0`, the support bundle's read (ticket E13
- * checkpoint 4). `epicId` is the task the person has selected, or `null`.
+ * `environment.reachDiagnostics@1.0`, the support bundle's read.
+ * `epicId` is the task the person has selected, or `null`.
  */
 export const environmentReachDiagnosticsRequestSchema = lazySchema(() =>
   z.object({ epicId: z.string().min(1).nullable() }),

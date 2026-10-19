@@ -293,7 +293,7 @@ describe("HostInventoryStreamClient", () => {
   });
 });
 
-describe("D3: the 1.1 arm carries sandbox rows, the 1.0 arm refuses them", () => {
+describe("the 1.1 arm carries sandbox rows, the 1.0 arm refuses them", () => {
   function sandboxRow(hostId: string): HostListItem {
     return {
       ...buildRow(hostId),
@@ -360,7 +360,7 @@ describe("D3: the 1.1 arm carries sandbox rows, the 1.0 arm refuses them", () =>
   });
 });
 
-describe("D4: includesSandboxRows says whether the rows can be the whole registry", () => {
+describe("includesSandboxRows says whether the rows can be the whole registry", () => {
   function snapshotAt(negotiated: SchemaVersion | null): HostInventorySnapshot {
     const h = harness();
     h.session.negotiatedSchemaVersion = negotiated;

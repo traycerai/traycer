@@ -48,8 +48,8 @@ function teamPods(groups: HostPickerGroups): readonly TeamPod[] {
 }
 
 /**
- * The environments whose pod lists the picker reads: one per team with a
- * pod, however many pods it has (ticket E17, D and E).
+ * The environments whose pod lists the picker reads: one per team with a pod,
+ * however many pods it has.
  */
 export function teamPodEnvironmentIds(
   groups: HostPickerGroups,

@@ -26,7 +26,7 @@ import {
   SECRET_SAVED_OFFLINE,
 } from "@/lib/sandboxes/secrets-page-copy";
 
-// E18 stage 4, checkpoint 4: the edges of Replace value and of the versions
+// The edges of Replace value and of the versions
 // list that `secret-row-rotation.test.tsx` reaches only through the whole
 // Secrets page. Each case here is a claim a mutation of the dialog or the
 // list survived: the disabled gate, a queued save leaving the list alone, the

@@ -19,7 +19,7 @@ import {
 const PERSONAL_VALUE = "personal";
 
 /**
- * A1: the Belongs to chip on a new-task landing draft, listing Personal and
+ * The Belongs to chip on a new-task landing draft, listing Personal and
  * each of the person's teams by slug. Hidden for someone in no team.
  */
 export function LandingOwnerChip(props: {
@@ -82,7 +82,7 @@ export function LandingOwnerChip(props: {
   );
 }
 
-/** A3: the first-chat line under a team pick. */
+/** The first-chat line under a team pick. */
 export function LandingTeamChatLine(props: {
   readonly draftId: string | null;
   readonly resolvedHostId: string | null;

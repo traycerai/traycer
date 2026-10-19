@@ -79,9 +79,9 @@ interface SupportContextRegistryState {
   readonly snapshot: SupportContextSnapshot;
   readonly setSnapshot: (patch: Partial<SupportContextSnapshot>) => void;
   /**
-   * The selected host's environment section (ticket E11, checkpoint 5),
-   * written by `SupportEnvironmentBridge`. Kept beside the snapshot, not in
-   * it: the snapshot is the registry's own closed key set.
+   * The selected host's environment section, written by
+   * `SupportEnvironmentBridge`. Kept beside the snapshot, not in it: the
+   * snapshot is the registry's own closed key set.
    */
   readonly environment: CapturedField<SupportEnvironmentSection>;
   readonly setEnvironment: (

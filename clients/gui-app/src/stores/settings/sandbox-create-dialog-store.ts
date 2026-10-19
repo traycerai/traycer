@@ -6,7 +6,7 @@ import type { SandboxCreateBelongsTo } from "@/components/hosts/sandbox-create-m
  * What the person has entered, kept here rather than in the form: the form
  * remounts while the dialog stays open (two dialog copies share this store's
  * `open`, and the body's loading gates), and a remount must not bring the
- * defaults back over what was typed (F46).
+ * defaults back over what was typed.
  */
 export interface SandboxCreateDraft {
   readonly name: string;
@@ -38,7 +38,7 @@ interface SandboxCreateDialogState {
   /**
    * Which open this is. A create remembers the open that sent it, and its
    * outcome is said in that open only: a later open is a new sandbox, and a
-   * create that outlived its open toasts instead (F46).
+   * create that outlived its open toasts instead.
    */
   readonly openId: number;
   /** The entry's preselection (a team group's New sandbox, "like this"). */

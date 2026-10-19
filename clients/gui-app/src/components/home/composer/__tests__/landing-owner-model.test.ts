@@ -9,9 +9,8 @@ import {
 } from "@/components/home/composer/landing-owner-model";
 
 /**
- * Ticket E17 checkpoint 6 (part A, landing owner model): who a new task
- * belongs to, why a team create is refused before any frame, and the verbatim
- * lines the landing draft says.
+ * Landing owner model: who a new task belongs to, why a team create is refused
+ * before any frame, and the verbatim lines the landing draft says.
  */
 
 const ACME: EpicShareableTeam = {

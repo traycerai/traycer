@@ -7,9 +7,8 @@ export const TASK_HOST_UNNAMED_LABEL = "Unnamed host";
 export type TaskHostState = "online" | "offline";
 
 /**
- * The task's hosts that this host's principal does not reach, from the
- * server's `reach` alone (ticket E17 checkpoint 5): the Agents tree marks the
- * agents on them.
+ * The task's hosts that this host's principal does not reach, from the server's
+ * `reach` alone: the Agents tree marks the agents on them.
  */
 export function otherPrincipalHostIds(
   hosts: readonly TaskHostRow[],
@@ -152,10 +151,10 @@ function compareText(a: string, b: string): number {
 }
 
 /**
- * The task's hosts grouped by owner (ticket E17 checkpoint 4): Personal
- * first, then each team, then each collaborator, each by name; rows by label.
- * A foreign row carries only the task-authorized summary: state and opening
- * come from the person's own directory and nowhere else.
+ * The task's hosts grouped by owner: Personal first, then each team, then each
+ * collaborator, each by name; rows by label. A foreign row carries only the
+ * task-authorized summary: state and opening come from the person's own
+ * directory and nowhere else.
  */
 export function taskHostGroups(
   input: TaskHostGroupsInput,

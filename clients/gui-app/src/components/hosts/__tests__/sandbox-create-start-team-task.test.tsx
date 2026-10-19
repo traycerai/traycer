@@ -9,9 +9,9 @@ import {
 } from "@/stores/host/surface-host-selection-store";
 
 /**
- * Ticket E17 checkpoint 6 (part A4): a team sandbox's create success offers
- * the person with no task owned by the team yet a way to start one on the new
- * host, and starting one pins this window's landing composer to that host.
+ * A team sandbox's create success offers the person with no task owned by the
+ * team yet a way to start one on the new host, and starting one pins this
+ * window's landing composer to that host.
  */
 
 function renderOffer(handlers: {

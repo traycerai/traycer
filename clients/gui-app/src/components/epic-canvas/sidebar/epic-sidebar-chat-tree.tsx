@@ -1005,14 +1005,13 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
   const isDisconnected = connectionStatus === "closed";
   const canEdit = isEditableRole(permissionRole);
   const canMutate = canEdit && !isDisconnected;
-  // The task's hosts, below the rows (ticket E17 checkpoint 4). Read here as
-  // well as in the section, which shares the query, because the tree's own
-  // layout depends on whether the section follows it.
+  // The task's hosts, below the rows. Read here as well as in the section,
+  // which shares the query, because the tree's own layout depends on whether
+  // the section follows it.
   const taskHostsView = useTaskHostsView(epicId);
   const hostsSectionShown = taskHostsView.kind !== "none";
-  // The hosts whose agents get the reach mark (checkpoint 5), computed once
-  // here and read by each row from context. From `reach` alone; no rows, no
-  // marks.
+  // The hosts whose agents get the reach mark, computed once here and read by
+  // each row from context. From `reach` alone; no rows, no marks.
   const taskHosts = taskHostsView.kind === "hosts" ? taskHostsView.hosts : null;
   const unreachableHostIds = useMemo(
     () => otherPrincipalHostIds(taskHosts ?? []),
@@ -3183,8 +3182,8 @@ function ChatRowButton(props: ChatRowButtonProps) {
   );
   const rowOwnerUserId = useEpicNodeOwnerUserId(nodeId);
   const ownerIsUnreachable = ownerReachability.status === "unreachable";
-  // Reach, not connectivity (ticket E17 checkpoint 5): the owner host is
-  // another principal's. Independent of the lock above, which is liveness.
+  // Reach, not connectivity: the owner host is another principal's. Independent
+  // of the lock above, which is liveness.
   const ownerNotReachable = useOwnerHostNotReachable(ownerHostId);
   // The reachable-but-too-old owner (`HOST_OLDER_THAN_DATA`), read from the
   // same registry `ChatNode` builds the click's ref from.

@@ -168,7 +168,6 @@ describe("createReportIssueDraftContext", () => {
     });
   });
 
-  // Ticket E11, checkpoint 5.
   describe("environment section", () => {
     it("is unavailable until a section has been written to the registry", () => {
       const draft = createReportIssueDraftContext(NO_CAPTURE_INPUT);

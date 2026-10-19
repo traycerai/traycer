@@ -697,10 +697,10 @@ export const epicCreateUpgradeV11ToV12 = defineUpgradePath<
 });
 
 /**
- * `epic.create@1.3` - the epic's owner (ticket E13 checkpoint 5): `owner`
- * names the person or one of their teams, `null` the person. The request is a
- * stripping object, so the field is additive and rides a minor; the response
- * is `@1.2`'s, unchanged.
+ * `epic.create@1.3` - the epic's owner: `owner` names the person
+ * or one of their teams, `null` the person. The request is a stripping object,
+ * so the field is additive and rides a minor; the response is `@1.2`'s,
+ * unchanged.
  */
 export const epicCreateV13 = defineRpcContract({
   method: "epic.create",
@@ -805,10 +805,9 @@ export const epicMentionReviewsV10 = defineRpcContract({
 
 /**
  * The task's hosts, each with its owner principal and whether the reading
- * host's principal reaches it (ticket E17 checkpoint 4): a pass-through of
- * traycer-server's task host list with the request's own credential. Optional
- * (non-floor): a host without it degrades `unsupported`, and the client shows
- * no host list.
+ * host's principal reaches it: a pass-through of traycer-server's task host
+ * list with the request's own credential. Optional (non-floor): a host without
+ * it degrades `unsupported`, and the client shows no host list.
  */
 export const epicListTaskHostsV10 = defineRpcContract({
   method: "epic.listTaskHosts",

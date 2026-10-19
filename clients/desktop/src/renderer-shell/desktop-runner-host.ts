@@ -257,9 +257,8 @@ export interface DesktopPreloadBridge {
     hostId: string,
   ): Promise<SandboxGrantsFetchResult>;
   /**
-   * A team's environment id and an environment's provider counts (ticket E17
-   * checkpoint 3), both from authn with the user's bearer. See
-   * `host-client/sandbox-secrets.ts`.
+   * A team's environment id and an environment's provider counts, both from
+   * authn with the user's bearer. See `host-client/sandbox-secrets.ts`.
    */
   getTeamEnvironment(
     bearerToken: string,

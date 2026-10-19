@@ -106,7 +106,7 @@ const OS_LABEL: Record<SandboxOs, string> = {
  * once beside the add-host dialog and opened through its store, with the
  * entry's preselection.
  *
- * A team pick (ticket E17 checkpoint 3) always shows its four lines, warns
+ * A team pick always shows its four lines, warns
  * when the team has no provider, names the team on a refusal the server
  * leaves unnamed, and asks the person to go to a team admin when their
  * bundle under the team cannot cover an hour.
@@ -274,7 +274,7 @@ function draftFormState(
 
 /**
  * The form's values, kept in the dialog store as they change so a remount
- * while the dialog is open starts from them rather than the defaults (F46).
+ * while the dialog is open starts from them rather than the defaults.
  * The draft is read once, at mount.
  */
 function useSandboxCreateDraft(
@@ -318,7 +318,7 @@ function SandboxCreateFailure(props: { readonly shown: boolean }): ReactNode {
 
 /**
  * A body state other than the form, with the last create's failure under it:
- * a create can settle while the body waits on a read (F46).
+ * a create can settle while the body waits on a read.
  */
 function withFailure(node: ReactNode): ReactNode {
   return (
@@ -375,8 +375,8 @@ function SandboxOsSelect(props: SandboxOsSelectProps): ReactNode {
 }
 
 /**
- * What the form shows instead of itself: the A4 team-task offer once a
- * create landed, or, for a provider the account's plan cannot create (F45),
+ * What the form shows instead of itself: the team-task offer once a
+ * create landed, or, for a provider the account's plan cannot create,
  * the OS pick and why, with no size, price or Create. Its shape bounds are
  * not a shape (max below min), so nothing is computed from them.
  */
@@ -1035,7 +1035,7 @@ function providerFor(
 }
 
 /**
- * A4's success state. Mounted only after a team create succeeds, so the
+ * The team-task offer's success state. Mounted only after a team create succeeds, so the
  * router it navigates with is read only there.
  */
 function StartTeamTaskSuccess(props: {
@@ -1063,10 +1063,10 @@ interface FirstTeamTaskOffer {
 }
 
 /**
- * A4: a team sandbox created by someone with no task in that team yet ends on
+ * A team sandbox created by someone with no task in that team yet ends on
  * "Start a <team> task" instead of closing; any other create closes. Read
  * from the store's `created`, so a form that remounted while the create ran
- * ends the same way (F46).
+ * ends the same way.
  */
 function useFirstTeamTaskOffer(
   created: SandboxCreatedLine | null,

@@ -148,9 +148,9 @@ export function readEpicTitlesFromCloudTaskCaches(
 }
 
 /**
- * The team that owns `epicId` as the cached task lists read it (ticket E17
- * checkpoint 6, A3): the first cached row's `taskOwningTeamId`. `null` when no
- * cached row names the epic, or the row names no team.
+ * The team that owns `epicId` as the cached task lists read it: the first
+ * cached row's `taskOwningTeamId`. `null` when no cached row names the epic, or
+ * the row names no team.
  */
 export function readEpicOwningTeamIdFromCloudTaskCaches(
   queryClient: QueryClient,
@@ -173,8 +173,8 @@ export function readEpicOwningTeamIdFromCloudTaskCaches(
 }
 
 /**
- * Whether any cached task row for the person is owned by `teamId` (ticket E17
- * checkpoint 6, A4). `false` when nothing cached says so.
+ * Whether any cached task row for the person is owned by `teamId`. `false` when
+ * nothing cached says so.
  */
 export function cloudTaskCachesIncludeTeamTask(
   queryClient: QueryClient,

@@ -3,11 +3,11 @@ import { create } from "zustand";
 /**
  * Which profile the Link dialog is linking, or `null` while it is closed.
  *
- * The dialog itself (its lines, the sign-in and the profile's link states) is
- * ticket E10's and mounts against this store; the Providers page's "On <host>
- * only, link to use everywhere" line is the opener, shown only on a host that
- * serves `providers.link`. One store rather than a prop so the dialog can be
- * mounted once, outside the page that opens it.
+ * The dialog itself (its lines, the sign-in and the profile's link states)
+ * mounts against this store; the Providers page's "On <host> only, link to use
+ * everywhere" line is the opener, shown only on a host that serves
+ * `providers.link`. One store rather than a prop so the dialog can be mounted
+ * once, outside the page that opens it.
  */
 export interface ProviderLinkTarget {
   readonly providerId: string;

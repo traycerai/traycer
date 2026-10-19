@@ -241,11 +241,11 @@ export type HostListItem = {
    */
   profile?: HostProfile | null;
   /**
-   * With `?include=owner` (ticket E12, the team arm's `name` from E17): the
-   * principal that owns the host, a person or a team. The host list groups a
-   * team's sandboxes and pods under the team's name from it, and a host's
-   * sending-side gate compares it to its own owner (E13). Absent unless asked
-   * for, so a client that does not ask parses the row it always did.
+   * With `?include=owner`: the principal that owns the host, a person or a
+   * team (the team arm carries its `name`). The host list groups a team's
+   * sandboxes and pods under the team's name from it, and a host's
+   * sending-side gate compares it to its own owner. Absent unless asked for,
+   * so a client that does not ask parses the row it always did.
    */
   owner?: HostOwnerPrincipal;
   /**

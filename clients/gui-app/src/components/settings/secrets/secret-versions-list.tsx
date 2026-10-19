@@ -15,7 +15,7 @@ import { secretChangeRefusalLine } from "@/lib/sandboxes/secret-change-refusal-c
 import { SECRET_SCOPE_LINE } from "@/lib/sandboxes/secrets-page-copy";
 
 /**
- * A secret's versions (ticket E11, checkpoint 4): each with when it was made,
+ * A secret's versions: each with when it was made,
  * whether it is current, superseded or destroyed, and Undo (a rotation back
  * to it) and Destroy (its value erased). Never a value. Undo on a revoked
  * secret restores it with the grants a new secret gets (`regrant: true`),

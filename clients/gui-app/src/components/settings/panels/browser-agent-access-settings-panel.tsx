@@ -18,7 +18,7 @@ const AGENT_BROWSER_ACCESS_SET = "config.browser.set";
 
 /**
  * Settings > Personal > Browser agent access: whether agents get the in-app
- * browser as a tool (plan B08). Its own page rather than a row on Browser,
+ * browser as a tool. Its own page rather than a row on Browser,
  * because Browser is this app's own browsing and stays with the window, while
  * this follows the person.
  *

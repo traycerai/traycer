@@ -16,7 +16,7 @@ import {
  * What Settings ▸ Personal ▸ Secrets says about each kind, protocol and mode.
  * The kinds, their protocols and the not-brokered lines come from the secret
  * intake catalogue in `@traycer/protocol`, the table the broker's intake and
- * the dashboard read too, never from here (ticket E11, checkpoint 3).
+ * the dashboard read too, never from here.
  */
 
 export const SECRET_KIND_LABEL: Readonly<Record<SandboxSecretKind, string>> = {

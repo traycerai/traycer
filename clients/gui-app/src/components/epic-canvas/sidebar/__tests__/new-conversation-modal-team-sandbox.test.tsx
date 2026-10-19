@@ -1,7 +1,4 @@
 /**
- * Ticket E17 checkpoint 6, fix-review fix
- * (src/components/epic-canvas/sidebar/__tests__/new-conversation-modal-team-sandbox.test.tsx).
- *
  * On a team's sandbox host only a harness whose credential stays a
  * placeholder may run. The in-task New conversation modal must hold both of
  * its creates to that rule: a Send with the selected chat harness blocked, and

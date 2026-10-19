@@ -39,12 +39,12 @@ import {
 } from "../task-host-summary";
 
 /**
- * Wire shapes ticket E17 checkpoint 1 adds: the `principal_mismatch` error
- * code, `agent.list@10.2`, the host list `owner`, the sandbox card's member
- * names, the task host row and `epic.listTaskHosts`, and the member-credential handoff on the
- * `CREDENTIAL_UPDATE` frame. Each case reads the shape through the schema a
- * peer would, so a missing key, a loosened arm or a wrong default fails here
- * rather than on a released client.
+ * Wire shapes for the team host: the `principal_mismatch` error code,
+ * `agent.list@10.2`, the host list `owner`, the sandbox card's member names,
+ * the task host row and `epic.listTaskHosts`, and the member-credential
+ * handoff on the `CREDENTIAL_UPDATE` frame. Each case reads the shape through
+ * the schema a peer would, so a missing key, a loosened arm or a wrong default
+ * fails here rather than on a released client.
  */
 
 describe("principal_mismatch error code", () => {

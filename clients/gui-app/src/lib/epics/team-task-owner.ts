@@ -4,14 +4,14 @@ import type {
 } from "@traycer/protocol/host/epic/unary-schemas";
 import type { EpicShareableTeam } from "@/stores/auth/auth-store";
 
-/** A3, verbatim: a team the person cannot name. */
+/** Verbatim: a team the person cannot name. */
 export const UNKNOWN_TEAM_LABEL = "A team";
 
 /**
- * The team that owns a task (ticket E17 checkpoint 6, A3), from the viewer's
- * permission row: `accessType: "organization"` with `role: "owner"` and its
- * `organizationId`. An organization row with any other role is a task shared
- * with the team, not one it owns. `null` for any other row, or none.
+ * The team that owns a task, from the viewer's permission row:
+ * `accessType: "organization"` with `role: "owner"` and its `organizationId`.
+ * An organization row with any other role is a task shared with the team, not
+ * one it owns. `null` for any other row, or none.
  */
 export function taskOwningTeamId(
   permission: PermissionDto | null | undefined,
@@ -32,7 +32,7 @@ export function teamTaskLabel(
   );
 }
 
-/** Whether any listed task is owned by `teamId` (A4). */
+/** Whether any listed task is owned by `teamId`. */
 export function tasksIncludeTeamTask(
   tasks: ReadonlyArray<ListTaskLight>,
   teamId: string,

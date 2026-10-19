@@ -6,10 +6,9 @@ import {
 } from "@/lib/persist/keyed-seen-store";
 
 /**
- * The team hosts whose first-tab disclosure each person has seen (ticket E17
- * checkpoint 6), keyed by viewer and host. Also the newcomer signal: a team
- * none of whose hosts has a seen disclosure is one the person has never
- * opened a tab in.
+ * The team hosts whose first-tab disclosure each person has seen, keyed by
+ * viewer and host. Also the newcomer signal: a team none of whose hosts has a
+ * seen disclosure is one the person has never opened a tab in.
  */
 export const TEAM_HOST_DISCLOSURE_SEEN_CAP = 500;
 

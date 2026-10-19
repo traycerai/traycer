@@ -1,6 +1,6 @@
 /**
- * Ticket E17 checkpoint 6, cold-review fix (the owning-team readers follow the
- * cached task lists when a list is REMOVED, not only when one is written).
+ * The owning-team readers follow the cached task lists when a list is
+ * REMOVED, not only when one is written.
  *
  * The hooks read the person's cached task lists through a cache subscription.
  * A removed query is no longer in the cache by the time its event arrives, so

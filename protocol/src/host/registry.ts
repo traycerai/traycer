@@ -5437,7 +5437,7 @@ export const providersSetEnvOverrideDowngradeV21ToV20 = defineDowngradePath<
 });
 
 /**
- * `providers.setEnvOverride@2.2` (ticket E7): the executable-write grant. 2.1
+ * `providers.setEnvOverride@2.2`: the executable-write grant. 2.1
  * is released, so the field opens a minor; a 2.2 request to a 2.x host below
  * it is re-parsed onto that line's non-strict request, which strips the key.
  */
@@ -5967,7 +5967,7 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
           contract: autoPolicyGetV10,
           upgradeFromPreviousVersion: null,
         },
-        // E12 checkpoint 6: the team policy's state and version.
+        // The team policy's state and version.
         1: {
           contract: autoPolicyGetV11,
           upgradeFromPreviousVersion: autoPolicyGetUpgradeV10ToV11,
@@ -8017,7 +8017,7 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
           // for every older peer.
           responseGrowthProjectionGated: true,
         },
-        // `owner` (ticket E13 checkpoint 5): an additive request key a `@1.2`
+        // `owner`: an additive request key a `@1.2`
         // host strips, so a caller sending a team owner requires `@1.3`.
         3: {
           contract: epicCreateV13,
@@ -9123,7 +9123,7 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
     },
     degrade: { kind: "unsupported" },
   },
-  // The task's host list (ticket E17 checkpoint 4). Optional (non-floor):
+  // The task's host list. Optional (non-floor):
   // an older host answers `unsupported` and the client shows no host list.
   "epic.listTaskHosts": {
     1: {
@@ -13194,7 +13194,7 @@ type AssertNever<T extends never> = T;
 // its versioned schemas do not push its declaration emission over TS7056.
 type HostRpcProfileMethods = typeof PROFILE_SYNC_LINK_RPC_METHODS;
 
-// The environment family (ticket E7), its own slot for the same reason.
+// The environment family, its own slot for the same reason.
 type HostRpcEnvironmentMethods = typeof ENVIRONMENT_RPC_METHODS;
 
 type DuplicateHostRpcMethodNames =

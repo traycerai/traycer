@@ -85,7 +85,7 @@ describe("Layout section placement and digit reassignment", () => {
     }
   });
 
-  it("lists the Personal pages in their order, with the four checkpoint-4 pages in place", () => {
+  it("lists the Personal pages in their order, with MCP servers, Skills, Agent definitions and Machine setup in place", () => {
     setMobileApp(false);
     const personal = visibleSettingsSections().filter(
       (section) => section.group === "personal",

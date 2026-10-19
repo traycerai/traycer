@@ -117,7 +117,7 @@ const config = __TRAYCER_MOBILE_CONFIG__;
 // registry list (`GET /api/v3/hosts` through
 // `MobileRunnerHost.listRegisteredHosts`) projected into relay-backed `remote`
 // entries. The same production path the desktop shell is on. The dev entry
-// adds its loopback host to that same list (`buildDevHostDiscovery`, F25).
+// adds its loopback host to that same list (`buildDevHostDiscovery`).
 const devHostFetch: (() => Promise<RemoteHostFetchOutcome>) | null =
   config.devHost === null ? null : buildDevHostFetcher(config.devHost);
 // One memory for the directory's and the fleet's registry reads, so a failed

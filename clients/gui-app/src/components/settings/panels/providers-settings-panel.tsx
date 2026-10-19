@@ -553,7 +553,7 @@ function ProvidersSettingsPanelInner({
           hostId={hostId}
           isSelectedHostLocal={isSelectedHostLocal}
         />
-        {/* The Link dialog (ticket E10): mounted once, inside the scoped
+        {/* The Link dialog: mounted once, inside the scoped
             host, so its calls go to the host this page shows. */}
         <ProviderLinkDialog />
       </HostScopeGate>

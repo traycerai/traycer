@@ -7,10 +7,10 @@ import { useTeamHostDisclosureSeenStore } from "@/stores/hosts/team-host-disclos
 import { newcomerTeams, teamNewcomerLine } from "./set-up-team-model";
 
 /**
- * The newcomer's line per team (ticket E17 checkpoint 6), beside the
- * checklist on Home and Settings: for each team the person has never opened
- * a tab in, where to go to start working there. Outside the checklist's fold
- * on Home, so a finished checklist does not hide it.
+ * The newcomer's line per team, beside the checklist on Home and Settings: for
+ * each team the person has never opened a tab in, where to go to start working
+ * there. Outside the checklist's fold on Home, so a finished checklist does
+ * not hide it.
  */
 export function SetUpTeamGroup(props: {
   readonly surface: "settings" | "home";

@@ -2834,8 +2834,8 @@ function useChatTileSessionViewModel(
     },
     [forkAtAssistantMessage],
   );
-  // B1 (ticket E17 checkpoint 6): a chat on a host no team owns, in a team's
-  // task, continues on that team's hosts - the fork dialog lists them only.
+  // A chat on a host no team owns, in a team's task, continues on that team's
+  // hosts - the fork dialog lists them only.
   const continueOnTeamHosts = useCallback(
     (teamHostIds: ReadonlySet<string>): void => {
       const first = teamHostIds.values().next();

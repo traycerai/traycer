@@ -6,10 +6,10 @@ import type { HostRpcRegistry } from "@/lib/host";
 import { teamSandboxHarnessBlocked } from "@/lib/sandboxes/team-sandbox-harness";
 
 /**
- * Which harnesses `hostId` does not offer when it is a team's sandbox
- * (ticket E17 checkpoint 6, B5), as a predicate over a harness id. Fails
- * closed while the host's harness list has not answered, and for a harness
- * the list does not carry. Blocks nothing on any other host.
+ * Which harnesses `hostId` does not offer when it is a team's sandbox, as a
+ * predicate over a harness id. Fails closed while the host's harness list has
+ * not answered, and for a harness the list does not carry. Blocks nothing on
+ * any other host.
  */
 export function useTeamSandboxHarnessGate(input: {
   readonly hostId: string | null;

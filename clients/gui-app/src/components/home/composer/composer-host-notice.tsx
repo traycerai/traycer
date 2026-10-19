@@ -10,9 +10,9 @@ import { AlertTriangle, Info, X } from "lucide-react";
  * toast: a toast that scrolls away leaves the user pressing send again on a
  * composer that still looks fine.
  *
- * `mirror` is the mirror line (ticket E17 checkpoint 5): the host this agent
- * starts on has a different owner from a host already working in the task.
- * It is information, not a blocker, so it is a status rather than an alert.
+ * `mirror` is the mirror line: the host this agent starts on has a different
+ * owner from a host already working in the task. It is information, not a
+ * blocker, so it is a status rather than an alert.
  *
  * The G4 `repointed` kind used to share this slot. It is a toast now
  * (`toastRepointedStagingReset`), and only when the move actually reset

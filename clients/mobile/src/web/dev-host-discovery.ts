@@ -94,9 +94,9 @@ export interface DevHostRegistrySource {
 
 /**
  * The dev entry's directory discovery: the loopback dev host ADDED to the
- * account's registry hosts, never in place of them (finding F25). Replacing
- * them left every account host - a connectable sandbox included - without a
- * directory entry, so no picker could select it.
+ * account's registry hosts, never in place of them. Replacing them left every
+ * account host - a connectable sandbox included - without a directory entry, so
+ * no picker could select it.
  *
  * Signed out (or no stored sign-in) it is the dev host alone, as before. The
  * dev host's own registry twin is dropped: the loopback entry is the one the
@@ -117,8 +117,8 @@ export function buildDevHostDiscovery(
  * the selection fleet (whose caller fences the account itself).
  *
  * Never `failed`: a registry read that does not answer (authn down, a 401)
- * keeps the freshly read dev host and this account's last good registry rows
- * (F25-1). `failed` carried no dev host, so an authn outage took the dev
+ * keeps the freshly read dev host and this account's last good registry rows.
+ * `failed` carried no dev host, so an authn outage took the dev
  * GUI's own loopback host out of the directory and the fleet.
  */
 export async function readDevHostDiscovery(
@@ -146,7 +146,7 @@ export async function readDevHostDiscovery(
 
 /**
  * The selection fleet for the same discovery, so Activate accepts every host
- * the directory lists (F14 refuses one outside the fleet). A remote entry
+ * the directory lists (it refuses one outside the fleet). A remote entry
  * carrying sandbox facts is a sandbox; the loopback dev host is not.
  */
 export function fleetRowsOf(

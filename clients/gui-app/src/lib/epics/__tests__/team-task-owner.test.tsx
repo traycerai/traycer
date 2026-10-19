@@ -26,9 +26,8 @@ import type { EpicShareableTeam } from "@/stores/auth/auth-store";
 import { useAuthStore } from "@/stores/auth/auth-store";
 
 /**
- * Ticket E17 checkpoint 6 (part A, the team that owns a task): read off the
- * viewer's permission row, carried onto History rows, found again in the
- * cached task lists, and named by a chip.
+ * The team that owns a task: read off the viewer's permission row, carried onto
+ * History rows, found again in the cached task lists, and named by a chip.
  */
 
 const ACME: EpicShareableTeam = {

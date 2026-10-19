@@ -19,10 +19,10 @@ import type { ProviderPackPreparing } from "@/components/providers/provider-pack
 import type { GuiHarnessCatalogEntry } from "@/hooks/harnesses/use-gui-harness-catalog";
 
 /**
- * Ticket E17 (B5): a harness whose credential a team sandbox cannot keep from
- * the agents sharing it stays in the picker but cannot be chosen there, and
- * says why. Only a `placeholder` credential (agents use it, never read it) is
- * safe to share; every other mode is blocked on a team host and nowhere else.
+ * A harness whose credential a team sandbox cannot keep from the agents
+ * sharing it stays in the picker but cannot be chosen there, and says why.
+ * Only a `placeholder` credential (agents use it, never read it) is safe to
+ * share; every other mode is blocked on a team host and nowhere else.
  */
 
 const mocks = vi.hoisted(() => {

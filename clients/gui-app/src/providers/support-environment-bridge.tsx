@@ -25,9 +25,8 @@ import {
 
 /**
  * Writes the selected host's environment section into the support-context
- * registry (ticket E11, checkpoint 5), so a report opened after a crash
- * still carries it: the store is module-level, like the snapshot the
- * registry bridge writes beside it.
+ * registry, so a report opened after a crash still carries it: the store is
+ * module-level, like the snapshot the registry bridge writes beside it.
  *
  * Built from the reads the Settings pages already make, without a poll of
  * its own: `environment.status`, the setup attempts and the secrets list are

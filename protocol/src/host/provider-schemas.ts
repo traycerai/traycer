@@ -2349,9 +2349,9 @@ export const providersListResponseSchema = lazySchema(() =>
     // the response's construction sites.
     credentialsManagedInAccount: z.boolean().optional(),
     // `"personal"` when this host serves its provider configuration from the
-    // person's Personal environment (ticket E7); `null` or absent on a host
-    // without environments. Another 10.5 KEY, stripped for an older peer the
-    // same way; `.optional()` for the same construction-site reason.
+    // person's Personal environment; `null` or absent on a host without
+    // environments. Another 10.5 KEY, stripped for an older peer the same way;
+    // `.optional()` for the same construction-site reason.
     scope: z.literal("personal").nullable().optional(),
     // The profiles that live on this host only, one entry each: "On <host>
     // only, link to use everywhere". On the envelope rather than on the
@@ -3379,7 +3379,7 @@ export type ProvidersSetEnvOverrideRequestV21 = z.infer<
 >;
 
 /**
- * `providers.setEnvOverride@2.2` request (ticket E7): a launch-sensitive
+ * `providers.setEnvOverride@2.2` request: a launch-sensitive
  * override selects what a harness starts, so the write carries the
  * executable-write grant; whether a given key reaches a sink is the host's
  * decision. Older callers are upgraded with `null`.

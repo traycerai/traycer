@@ -35,7 +35,7 @@ import {
 } from "@/stores/providers/provider-link-dialog-store";
 
 /**
- * The Link dialog (ticket E10, checkpoint 5): links a profile that is on
+ * The Link dialog: links a profile that is on
  * this host only, or a new one, to the person's plan. Opened from the
  * Providers page's "On <host> only, link to use everywhere" line through
  * `provider-link-dialog-store`, and mounted once inside the page's host

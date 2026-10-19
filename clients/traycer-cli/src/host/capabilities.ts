@@ -47,7 +47,7 @@ export const HOST_CAPABILITY_LIFECYCLE_POLICY_V1 =
  * This CLI's host build has the sandbox mode (`--host-kind sandbox`: boot-token
  * enrollment, no refresh token, the session grant in `OPEN.authz` v2), so a
  * control plane provisioning a sandbox image can refuse one whose host is too
- * old to enroll as a sandbox (seam C2).
+ * old to enroll as a sandbox.
  */
 export const HOST_CAPABILITY_SANDBOX_MODE = "sandbox-mode";
 

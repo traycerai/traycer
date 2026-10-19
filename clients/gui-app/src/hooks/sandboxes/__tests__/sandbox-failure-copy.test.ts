@@ -136,7 +136,7 @@ describe("sandboxFailureMessage", () => {
     ).toBe("That size is outside what's offered.");
   });
 
-  it("words a plan too small to run a sandbox (F45)", () => {
+  it("words a plan too small to run a sandbox", () => {
     expect(
       sandboxFailureMessage(
         refused("shape_not_offered", {

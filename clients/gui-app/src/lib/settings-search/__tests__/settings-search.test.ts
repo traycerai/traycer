@@ -251,7 +251,7 @@ describe("settings search", () => {
     expect(landingFor("secrets", DESKTOP)).toBe("secrets#<top>");
   });
 
-  it("opens the four checkpoint-4 pages on their own words", () => {
+  it("opens MCP servers, Agent definitions and Machine setup on their own words", () => {
     expect(landingFor("mcp servers", DESKTOP)).toBe("mcp-servers#<top>");
     expect(landingFor("agent definitions", DESKTOP)).toBe(
       "agent-definitions#<top>",

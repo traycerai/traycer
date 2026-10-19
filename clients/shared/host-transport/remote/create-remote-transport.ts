@@ -65,7 +65,7 @@ export interface CreateRemoteTransportOptions<
   readonly bearer: BearerSourceProvider;
   /**
    * What `OPEN` presents. `user-bearer` for a personal host. `session-grant`
-   * for a `kind: sandbox` host (seam C1): the attach-grant mint must also
+   * for a `kind: sandbox` host: the attach-grant mint must also
    * return a host-bound session grant, `OPEN` carries it in `authz` v2 with an
    * empty bearer, and the user bearer never leaves this client - it only
    * authorizes the mint at authn. Read it off the directory entry with
@@ -319,8 +319,8 @@ export function createRemoteHostTransport<
       });
       // A team host ends a removed member's session with this fatal; the app
       // turns the first report for a team into its one toast and one close of
-      // the team's tiles (ticket E17 checkpoint 7). Once per session: the
-      // session is shared by every consumer of this host, and closes once.
+      // the team's tiles. Once per session: the session is shared by every
+      // consumer of this host, and closes once.
       created.onClosed(() => {
         if (created.terminalFatal()?.code === TEAM_MEMBER_REMOVED_FATAL_CODE) {
           reportTeamMemberRemovedClose(options.hostId);

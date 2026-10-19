@@ -1,9 +1,8 @@
 import type { EpicCollaboratorsView } from "@/hooks/epics/use-epic-collaborators-query";
 
 /**
- * The first tab a member opens on a team host (ticket E17 checkpoint 6;
- * core flows, "Using a team host"): what running there means, then the two
- * residual sentences the plan requires the disclosure to carry.
+ * The first tab a member opens on a team host: what running there means, then
+ * the two residual sentences the disclosure must carry.
  */
 export function teamHostDisclosureSentences(
   teamName: string,

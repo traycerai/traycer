@@ -525,7 +525,7 @@ function historyRowCardClassName(args: {
   );
 }
 
-/** A3: the owning team's chip on a team's task, nothing otherwise. */
+/** The owning team's chip on a team's task, nothing otherwise. */
 function HistoryTeamChip(props: {
   readonly teamId: string | null | undefined;
 }): ReactNode {

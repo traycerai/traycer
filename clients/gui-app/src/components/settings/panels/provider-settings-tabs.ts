@@ -203,7 +203,7 @@ export function providerTabLabel(
 
 /**
  * Which page the provider rail and tabs are drawn for. MCP servers and Skills
- * are Personal pages of their own (ticket E7, checkpoint 4): the same rail and
+ * are Personal pages of their own: the same rail and
  * the same tab bodies, narrowed to that one tab, while Providers keeps every
  * other tab. The `supportedTabs` wire is unchanged; the narrowing is here.
  */

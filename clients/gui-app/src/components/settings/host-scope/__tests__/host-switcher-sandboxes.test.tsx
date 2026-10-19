@@ -443,7 +443,7 @@ describe("<HostSwitcher /> the Automations pod", () => {
 });
 
 /**
- * Ticket E17, finding F15 (a sandbox with no host row is listed): the rows come
+ * A sandbox with no host row is listed: the rows come
  * from the real builder, fed a control-plane list whose `failed` sandbox has no
  * directory entry and no registry row (its guest never enrolled), because that
  * join is where the row went missing.

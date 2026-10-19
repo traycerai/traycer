@@ -215,9 +215,9 @@ vi.mock("@/hooks/host/use-composer-placement", () => ({
 // The Epic session's host, the modal's DEFAULT placement tier - handed to the
 // (mocked) placement above, so this suite pins that the modal asks for the
 // session's host and not the app-wide one.
-// The mirror line (E17 checkpoint 5) reads the task's hosts and the host
-// registry, which this suite's `@/lib/host` mock does not carry; it has its own
-// suite (`composer-mirror-line.test.tsx`), so here it shows nothing.
+// The mirror line reads the task's hosts and the host registry, which this
+// suite's `@/lib/host` mock does not carry; it has its own suite
+// (`composer-mirror-line.test.tsx`), so here it shows nothing.
 const NO_MIRROR_LINE = vi.hoisted(() =>
   Object.freeze({ notice: null, markSeen: (): void => undefined }),
 );

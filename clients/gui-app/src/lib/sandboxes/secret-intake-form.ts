@@ -22,11 +22,10 @@ import {
 } from "@/lib/sandboxes/secret-intake-copy";
 
 /**
- * The desktop add dialog's state and the requests it becomes (ticket E11,
- * checkpoint 3): an API key, a model provider key or a database login, with
- * the plain field set authn's create takes. One flat state, so switching
- * protocol keeps what still applies; every field the request lists is sent,
- * null where the kind has none.
+ * The desktop add dialog's state and the requests it becomes: an API key, a
+ * model provider key or a database login, with the plain field set authn's
+ * create takes. One flat state, so switching protocol keeps what still applies;
+ * every field the request lists is sent, null where the kind has none.
  *
  * The typed value lives in this state only: it is sent by a direct request
  * and never handed to a query or mutation cache.

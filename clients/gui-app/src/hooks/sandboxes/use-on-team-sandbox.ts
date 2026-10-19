@@ -28,7 +28,7 @@ export function useHostOwnerTeamId(hostId: string | null): string | null {
   return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
 }
 
-/** Whether a host is a team's sandbox (ticket E17 checkpoint 6, B5). */
+/** Whether a host is a team's sandbox. */
 export function useOnTeamSandbox(hostId: string | null): boolean {
   return useHostOwnerTeamId(hostId) !== null;
 }

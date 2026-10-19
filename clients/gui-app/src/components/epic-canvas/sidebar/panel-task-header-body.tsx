@@ -9,8 +9,7 @@ import { cn } from "@/lib/utils";
  *
  * `titleEditor` replaces the title while it is being renamed; `titleAction`
  * sits after the title and shows only while the row is hovered or the action
- * holds focus. `teamChip` names the team that owns the task (ticket E17
- * checkpoint 6, A3), after the title.
+ * holds focus. `teamChip` names the team that owns the task, after the title.
  */
 export function PanelTaskHeaderBody(props: {
   readonly testId: string | null;

@@ -9,8 +9,8 @@ import { persistKey, STORE_KEYS } from "@/lib/persist/keys";
 export const TEAM_CONTINUE_CAUTION_SEEN_CAP = 500;
 
 /**
- * Which (person, team) pairs have confirmed B1's caution (ticket E17
- * checkpoint 6): asked once per person per team, then not again.
+ * Which (person, team) pairs have confirmed the team-continue caution: asked
+ * once per person per team, then not again.
  */
 export const useTeamContinueCautionSeenStore = createKeyedSeenStore(
   persistKey(STORE_KEYS.teamContinueCautionSeen),

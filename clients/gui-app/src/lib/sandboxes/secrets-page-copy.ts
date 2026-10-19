@@ -1,9 +1,9 @@
 import type { SandboxSecretMode } from "@traycer/protocol/host/secret-intake-catalogue";
 
 /**
- * The words of Settings ▸ Personal ▸ Secrets (ticket E11, checkpoint 3). Four
- * words carry Personal pages: Personal, secret, variable and host; nothing
- * here names the mechanism a value travels by.
+ * The words of Settings ▸ Personal ▸ Secrets. Four words carry Personal pages:
+ * Personal, secret, variable and host; nothing here names the mechanism a value
+ * travels by.
  */
 
 export const SECRETS_EMPTY_TEXT =

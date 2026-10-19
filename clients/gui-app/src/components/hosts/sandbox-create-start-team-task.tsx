@@ -2,7 +2,7 @@ import type { ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 
 /**
- * A4: the team sandbox create's success state for someone with no task owned
+ * The team sandbox create's success state for someone with no task owned
  * by the team yet, offering "Start a <team> task". It opens a landing draft on
  * the new sandbox; no task is created until the person sends.
  */

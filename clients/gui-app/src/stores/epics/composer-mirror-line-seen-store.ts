@@ -4,11 +4,11 @@ import { basePersistOptions, persistKey, STORE_KEYS } from "@/lib/persist";
 import { installCrossWindowRehydrate } from "@/lib/persist/cross-window-rehydrate";
 
 /**
- * The tasks whose mirror line each person has seen (ticket E17 checkpoint 5:
- * "once per task"), keyed by viewer and epic, valued by when it was seen.
- * Machine-local, like the feature announcements: one more showing on another
- * device is the cost of not syncing a hint. Capped, oldest out, so a person
- * who works in many tasks does not grow it without bound.
+ * The tasks whose mirror line each person has seen ("once per task"), keyed by
+ * viewer and epic, valued by when it was seen. Machine-local, like the feature
+ * announcements: one more showing on another device is the cost of not syncing
+ * a hint. Capped, oldest out, so a person who works in many tasks does not grow
+ * it without bound.
  */
 export const COMPOSER_MIRROR_LINE_SEEN_CAP = 500;
 

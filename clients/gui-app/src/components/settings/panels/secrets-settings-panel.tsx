@@ -12,8 +12,7 @@ import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
 import { TEAM_SECRETS_LINE } from "@/lib/sandboxes/secrets-page-copy";
 
 /**
- * Settings > Personal > Secrets, read through the window's own host
- * (ticket E11, checkpoint 3):
+ * Settings > Personal > Secrets, read through the window's own host:
  *
  * - on a host that serves `environment.secrets.list`, the page itself: the
  *   list, Add a secret, Verify (`SecretsPage`);

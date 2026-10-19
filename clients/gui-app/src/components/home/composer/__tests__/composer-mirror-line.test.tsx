@@ -1,5 +1,5 @@
 /**
- * The mirror line on the composer (ticket E17 checkpoint 5).
+ * The mirror line on the composer.
  *
  * A task can hold hosts of more than one principal: the viewer's laptop beside
  * a team's sandbox. Agents on one cannot work with agents on the other, and the

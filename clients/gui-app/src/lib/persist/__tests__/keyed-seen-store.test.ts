@@ -1,6 +1,6 @@
 /**
- * Ticket E17 checkpoint 6, cold-review fix (the keyed seen store's write keeps
- * both what this window remembers and what another window marked).
+ * The keyed seen store's write keeps both what this window remembers and what
+ * another window marked.
  *
  * A mark re-reads storage before it writes. Storage that has been emptied
  * (cleared by something else, or a quota drop) must not erase this window's

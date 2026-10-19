@@ -447,7 +447,7 @@ export interface SandboxAttachGrantSource {
 }
 
 /**
- * The attach-grant provider for a `kind: sandbox` target (seam C1).
+ * The attach-grant provider for a `kind: sandbox` target.
  *
  * Differs from {@link createAttachGrantProvider} in two ways, both about
  * keeping the user's credential off a machine whose kernel the user does not

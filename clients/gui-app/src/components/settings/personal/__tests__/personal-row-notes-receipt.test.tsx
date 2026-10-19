@@ -1,4 +1,4 @@
-// E7 checkpoint 3's proof: an edit made while the host cannot reach the
+// An edit made while the host cannot reach the
 // environment shows "Pending" and clears on its receipt after the host
 // reconnects. `personal-page-frame.test.tsx` reads one status snapshot; this
 // suite follows ONE mounted page across the host's answer changing, which is

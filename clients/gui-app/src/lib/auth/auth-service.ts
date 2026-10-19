@@ -3132,10 +3132,9 @@ export class AuthService {
   }
 
   /**
-   * A team's environment id (ticket E17 checkpoint 3), read for a team the
-   * person picked in the create form. The route creates the environment and
-   * syncs the member's items on its first call, so it is never read for
-   * every team.
+   * A team's environment id, read for a team the person picked in the create
+   * form. The route creates the environment and syncs the member's items on its
+   * first call, so it is never read for every team.
    */
   async getTeamEnvironment(
     teamId: string,

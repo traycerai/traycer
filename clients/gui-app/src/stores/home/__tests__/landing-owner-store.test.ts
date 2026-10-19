@@ -1,6 +1,5 @@
 /**
- * Ticket E17 checkpoint 6, cold-review fix (the landing owner store forgets a
- * draft's pick once its create is sent).
+ * The landing owner store forgets a draft's pick once its create is sent.
  *
  * `clearChoice` must remove the draft's key, leave every other draft's pick
  * alone, and tolerate an absent key; `migrateChoice` carries the pre-draft

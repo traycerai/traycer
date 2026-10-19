@@ -274,8 +274,8 @@ export interface ChatLowerComposerState {
   readonly workspaceControls: ReactNode;
   readonly workspaceAvailability: WorkspaceComposerAvailability;
   /**
-   * B1 (ticket E17 checkpoint 6): opens the fork dialog on these hosts only,
-   * from the Personal-settings line in a team's task.
+   * Opens the fork dialog on these hosts only, from the Personal-settings line
+   * in a team's task.
    */
   readonly onContinueOnTeamHosts: (teamHostIds: ReadonlySet<string>) => void;
   /**

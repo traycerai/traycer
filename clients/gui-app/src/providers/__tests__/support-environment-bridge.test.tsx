@@ -132,7 +132,7 @@ afterEach(() => {
   __resetSupportContextRegistryForTests();
 });
 
-describe("SupportEnvironmentBridge (ticket E11, checkpoint 5)", () => {
+describe("SupportEnvironmentBridge", () => {
   it("leaves the section unavailable when the host does not serve environment.status", async () => {
     // A section an earlier host left behind: the bridge must overwrite it,
     // not merely fail to add one.

@@ -1,7 +1,4 @@
 /**
- * Ticket E17 checkpoint 6, fix-review fix
- * (src/components/home/hooks/__tests__/composer-toolbar-palette-team-sandbox.test.tsx).
- *
  * The command palette commits the composer's harness and model through the
  * controls `useComposerToolbarStore` registers. Those controls are held to the
  * same team-sandbox rule as the picker: a blocked harness is a no-op, an

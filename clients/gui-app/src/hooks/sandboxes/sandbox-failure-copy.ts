@@ -108,7 +108,7 @@ export function sandboxFailureMessage(failure: SandboxControlFailure): string {
 }
 
 /**
- * A create's failure in words (ticket E17 checkpoint 3). A team create the
+ * A create's failure in words. A team create the
  * server refuses as `environment_not_found` names the team the person picked
  * (`teamName`), since the server names none; `environment_unavailable` says
  * where the check failed. Everything else is {@link sandboxFailureMessage}.

@@ -119,7 +119,7 @@ describe("auto-mode protocol change", () => {
       { method: "providers.setAutoJudge", latestMinor: 0 },
       { method: "autoJudge.get", latestMinor: 3 },
       { method: "autoJudge.set", latestMinor: 3 },
-      // `1.1` (E12 checkpoint 6) adds `team`.
+      // `1.1` adds `team`.
       { method: "autoPolicy.get", latestMinor: 1 },
       { method: "autoPolicy.set", latestMinor: 0 },
       { method: "autoJudge.listRecent", latestMinor: 0 },
@@ -392,7 +392,7 @@ describe("auto-mode protocol change", () => {
   });
 });
 
-describe("autoPolicy.get 1.1: the team policy state (ticket E12 checkpoint 6)", () => {
+describe("autoPolicy.get 1.1: the team policy state", () => {
   const ACCOUNT = { body: null, updatedAt: null, source: "account" };
 
   it("registers latestMinor 1 with 1.0 and 1.1 bound to their own contracts and the upgrade between them", () => {

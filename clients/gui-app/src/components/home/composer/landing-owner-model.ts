@@ -8,8 +8,8 @@ import type { EpicShareableTeam } from "@/stores/auth/auth-store";
 
 /**
  * Who a new task belongs to, as the person picked it on the landing draft's
- * Belongs to chip (ticket E17 checkpoint 6, A1). No pick yet is `null` in the
- * store, and the owner then follows the resolved host.
+ * Belongs to chip. No pick yet is `null` in the store, and the owner then
+ * follows the resolved host.
  */
 export type LandingOwnerChoice =
   | { readonly kind: "personal" }
@@ -40,10 +40,10 @@ export function resolveLandingOwner(input: {
 }
 
 /**
- * A2: why a team create cannot be sent, decided before any frame, or `null`.
- * The host first (a known version below `1.3`, or the method absent), then
- * the cloud authorization. An unknown version is not refused here: the
- * transport's `epic.create@1.3` floor refuses it before the frame.
+ * Why a team create cannot be sent, decided before any frame, or `null`. The
+ * host first (a known version below `1.3`, or the method absent), then the
+ * cloud authorization. An unknown version is not refused here: the transport's
+ * `epic.create@1.3` floor refuses it before the frame.
  */
 export function landingOwnerRefusal(input: {
   readonly owner: LandingOwnerTeam;
@@ -63,12 +63,12 @@ export function landingOwnerRefusal(input: {
   return null;
 }
 
-/** A2, verbatim: the person is signed out of the cloud. */
+/** The person is signed out of the cloud, verbatim. */
 export function teamCreateSignInLine(slug: string): string {
   return `Sign in to create a task for ${slug}.`;
 }
 
-/** A3, verbatim: the first-chat line under a team pick. */
+/** The first-chat line under a team pick, verbatim. */
 export function teamFirstChatLine(slug: string): string {
   return `Chats here are visible to everyone in ${slug}`;
 }

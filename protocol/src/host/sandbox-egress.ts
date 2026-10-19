@@ -82,7 +82,7 @@ export type SandboxEgressEmitter = z.infer<typeof sandboxEgressEmitterSchema>;
 /**
  * Why an established route was torn down. `secret_rotated`: the secret behind
  * the route was given a new value, and connections opened with the old one
- * were closed (ticket E8).
+ * were closed.
  */
 export const sandboxEgressTeardownReasonSchema = lazySchema(() =>
   z.enum(["revoke", "stale", "resume", "drain", "secret_rotated"]),

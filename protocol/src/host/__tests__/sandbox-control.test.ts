@@ -281,7 +281,7 @@ describe("sandbox control plane mirror", () => {
   });
 });
 
-describe("Automations pods (ticket E17)", () => {
+describe("Automations pods", () => {
   const POD = { sandbox: SANDBOX_VIEW, ordinal: 0, liveShells: 2, headroom: 6 };
 
   it("defaults pods to an empty list when a server from before the pod list sends none", () => {
@@ -338,7 +338,7 @@ describe("Automations pods (ticket E17)", () => {
   });
 });
 
-describe("refusal body message (ticket E17)", () => {
+describe("refusal body message", () => {
   it("reads a refusal that carries a server-composed message", () => {
     const parsed = sandboxRefusalBodySchema.parse({
       code: SANDBOX_REFUSAL_CODE_TEAM_PODS_FULL,

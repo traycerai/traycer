@@ -48,7 +48,7 @@ import {
 } from "@/stores/hosts/team-wake-confirm-store";
 
 /**
- * Ticket E17: a tab opened on a TEAM sandbox waits for the confirm before it
+ * A tab opened on a TEAM sandbox waits for the confirm before it
  * wakes the sandbox on the opener's bundle; a team pod and a personal sandbox
  * wake at once. A frozen team sandbox's refusal blames the payer's bundle.
  */

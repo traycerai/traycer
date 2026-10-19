@@ -695,7 +695,7 @@ export interface EpicCanvasStore {
   /**
    * Closes every open tile bound to one of these hosts, in every tab, and
    * retires their reopen and Back/Forward entries; returns how many closed.
-   * A removed team member's tiles on the team's hosts (ticket E17).
+   * A removed team member's tiles on the team's hosts.
    */
   closeTilesOnHosts: (hostIds: ReadonlySet<string>) => number;
   prepareCloseCanvasTabFocusTarget: (

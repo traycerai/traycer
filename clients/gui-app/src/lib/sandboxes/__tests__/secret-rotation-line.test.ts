@@ -276,8 +276,8 @@ describe("grantRotationLine", () => {
     });
   });
 
-  // The checkpoint's proof: "A replacement during an open session reads
-  // accepted, then enforced with the class."
+  // A replacement during an open session reads accepted, then enforced with
+  // the class.
   it("reads accepted, then enforced with the class, as a replacement during an open session settles", () => {
     expect(
       grantRotationLine(

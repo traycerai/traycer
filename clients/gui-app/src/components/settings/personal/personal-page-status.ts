@@ -75,8 +75,8 @@ const FAILURE_REASONS: Readonly<Partial<Record<string, string>>> = {
 
 /**
  * Why an item did not apply, for a code whose `args.kind` names the case: a
- * whole sentence, since the case carries what to do (ticket E11, checkpoint
- * 4). Read before the code's own reason.
+ * whole sentence, since the case carries what to do. Read before the code's
+ * own reason.
  */
 const FAILURE_CASES: Readonly<
   Partial<Record<string, Partial<Record<string, string>>>>

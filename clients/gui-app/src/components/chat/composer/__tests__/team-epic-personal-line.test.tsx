@@ -14,11 +14,11 @@ import type { EpicShareableTeam } from "@/stores/auth/auth-store";
 import { useAuthStore } from "@/stores/auth/auth-store";
 
 /**
- * Ticket E17 checkpoint 6 (part B1): a chat on a host no team owns, in a
- * team's task, says it runs on the person's Personal settings and offers to
- * continue on one of that team's hosts. The first use per person per team asks
- * first. Everything the line reads (the task's team, the tab host's team, the
- * host registry) is mocked at the hook boundary.
+ * A chat on a host no team owns, in a team's task, says it runs on the person's
+ * Personal settings and offers to continue on one of that team's hosts. The
+ * first use per person per team asks first. Everything the line reads (the
+ * task's team, the tab host's team, the host registry) is mocked at the hook
+ * boundary.
  */
 
 const mocks = vi.hoisted(() => {

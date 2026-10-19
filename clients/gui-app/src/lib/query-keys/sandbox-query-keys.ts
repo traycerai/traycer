@@ -81,8 +81,8 @@ export const sandboxQueryKeys = {
     hostId,
   ],
   grantsAll: (): readonly unknown[] => ["auth", "sandbox-grants"],
-  // A team's environment id (ticket E17 checkpoint 3): fixed once created, so
-  // read once per team per session, and only for a team the person picked.
+  // A team's environment id: fixed once created, so read once per team per
+  // session, and only for a team the person picked.
   teamEnvironment: (
     authService: object,
     userId: string | null,

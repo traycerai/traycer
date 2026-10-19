@@ -2571,7 +2571,7 @@ export type NotificationHooksSaveRequestV10 = z.infer<
 >;
 
 /**
- * v2.0 (ticket E7): the saved list can hold a `command` action, which the
+ * v2.0: the saved list can hold a `command` action, which the
  * host runs, so the save carries the executable-write grant. A whole-list
  * save with no per-hook write, so the grant matters when the list holds a
  * command; `null` otherwise.
@@ -2655,7 +2655,7 @@ export const hostNotificationHooksSave = defineRpcContract({
 });
 
 /**
- * `host.notificationHooks.save@2.0` (ticket E7): the executable-write grant.
+ * `host.notificationHooks.save@2.0`: the executable-write grant.
  * A MAJOR, not a minor: within a major the client re-parses a newer request
  * with the host's own minor schema, and v1.0's request is `.strict()`, so a
  * v1.1 request carrying the grant would fail `DOWNGRADE_UNSUPPORTED` against

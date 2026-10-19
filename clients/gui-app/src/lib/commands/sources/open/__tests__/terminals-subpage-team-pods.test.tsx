@@ -43,9 +43,9 @@ import {
 } from "@/lib/commands/sources/open/team-pod-open";
 
 /**
- * Ticket E17: the new terminal picker lists a team's pods and opens one that
- * cannot be dialed yet by its environment and ordinal. The pod lists are one
- * read per team environment, however many pods the team has.
+ * The new terminal picker lists a team's pods and opens one that cannot be
+ * dialed yet by its environment and ordinal. The pod lists are one read per
+ * team environment, however many pods the team has.
  */
 
 const TEAM_A: HostOwnerPrincipal = {

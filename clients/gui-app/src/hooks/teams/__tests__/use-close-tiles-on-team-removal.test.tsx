@@ -14,10 +14,10 @@ import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { CHAT_A } from "@/stores/epics/canvas/__tests__/canvas-test-fixtures";
 
 /**
- * Ticket E17 (B3): leaving a team closes the person's open tiles on that
- * team's hosts and says so once. The hook remembers a team's host ids and
- * name while the person is in it, because by the time the team has left the
- * list the registry may no longer name them.
+ * Leaving a team closes the person's open tiles on that team's hosts and says
+ * so once. The hook remembers a team's host ids and name while the person is in
+ * it, because by the time the team has left the list the registry may no longer
+ * name them.
  */
 
 const mocks = vi.hoisted(() => {

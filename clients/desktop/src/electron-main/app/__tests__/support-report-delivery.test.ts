@@ -269,8 +269,8 @@ const DELIVERY_FORM: SupportSubmitReportRequest = {
   },
 };
 
-// Ticket E11, checkpoint 5: a populated environment section with distinctive
-// item and secret names, so a leak is a plain substring check.
+// A populated environment section with distinctive item and secret names, so a
+// leak is a plain substring check.
 const ENV_ITEM_KEY = "ZZ_SUPPORT_ENV_KEY";
 const ENV_SECRET_NAME = "ZZ_SUPPORT_SECRET";
 
@@ -1067,8 +1067,8 @@ describe("DesktopSupportService.submitReport - includeDiagnostics gate", () => {
     expect(contexts?.registry).toBeDefined();
   });
 
-  // Ticket E11, checkpoint 5: the selected host's environment section rides
-  // as one Sentry context, under the same consent gate as `registry`.
+  // The selected host's environment section rides as one Sentry context, under
+  // the same consent gate as `registry`.
   it("attaches the environment section as scalar fields plus JSON lists when on", async () => {
     const service = buildService(null);
     await service.freezeEvidence(KEY, null);
@@ -1124,8 +1124,8 @@ describe("DesktopSupportService.submitReport - includeDiagnostics gate", () => {
     );
   });
 
-  // Ticket E13 checkpoint 4: the same-principal refusals and the served task
-  // ride as JSON text too; a section without them delivers the text "null".
+  // The same-principal refusals and the served task ride as JSON text too; a
+  // section without them delivers the text "null".
   it("delivers reachDenials and servedTask as JSON text, and null as the text null", async () => {
     const reachDenials = [
       {
@@ -2395,7 +2395,7 @@ describe("DesktopSupportService.submitReport - image attachments (ticket 08)", (
 });
 
 describe("DesktopSupportService.saveDiagnosticBundle", () => {
-  it("never writes the environment section into the bundle (ticket E11, checkpoint 5)", async () => {
+  it("never writes the environment section into the bundle", async () => {
     const service = buildService(null);
     await service.freezeEvidence(KEY, null);
 
@@ -2637,14 +2637,13 @@ describe("DesktopSupportService.saveDiagnosticBundle", () => {
   });
 });
 
-// E18 stage 4, checkpoint 5 (B.1): the environment context is scrubbed LEAF BY
-// LEAF, so each text leaf is proved on its own. A host answers with whatever
-// it likes inside a field's length bound, so a closed code, an id or a name
-// can carry a path or a token; the context is the only road such a leaf has
-// to the report, and nothing downstream scrubs it again. The table plants one
-// local path in one leaf at a time and asserts it is gone from the whole
-// delivered context.
-describe("DesktopSupportService.submitReport - the environment context's leaves (E18 stage 4)", () => {
+// The environment context is scrubbed LEAF BY LEAF, so each text leaf is proved
+// on its own. A host answers with whatever it likes inside a field's length
+// bound, so a closed code, an id or a name can carry a path or a token; the
+// context is the only road such a leaf has to the report, and nothing
+// downstream scrubs it again. The table plants one local path in one leaf at a
+// time and asserts it is gone from the whole delivered context.
+describe("DesktopSupportService.submitReport - the environment context's leaves", () => {
   const LEAK = "/Users/anurag/leak.ts";
 
   const ITEM: SupportEnvironmentItem = {

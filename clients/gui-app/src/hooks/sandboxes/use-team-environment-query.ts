@@ -38,10 +38,10 @@ function teamEnvironmentQueryOptions(
 
 /**
  * `GET /api/v3/teams/:teamId/environment` for the team the create form's
- * Belongs to names (ticket E17 checkpoint 3). The route creates the team's
- * environment and syncs the member's items on its first call, so this reads
- * it only for a picked team (`null` reads nothing), once per session when
- * it answers with the environment.
+ * Belongs to names. The route creates the team's environment and syncs the
+ * member's items on its first call, so this reads it only for a picked team
+ * (`null` reads nothing), once per session when it answers with the
+ * environment.
  *
  * `data` is the fetch result itself: `not-a-member` and a failure are
  * answers the form renders, not errors.

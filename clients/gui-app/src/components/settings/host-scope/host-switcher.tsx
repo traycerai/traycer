@@ -283,7 +283,7 @@ export function HostSwitcher(props: {
    */
   readonly updateViewForHost: ((hostId: string) => FleetUpdateView) | null;
   /**
-   * Whether this picker offers the Automations host (correction 5): only a
+   * Whether this picker offers the Automations host: only a
    * surface every verb of which the slim host serves (the new terminal
    * picker). See `hostOptionPickerGroup`.
    */
@@ -624,7 +624,7 @@ function HostSwitcherGroups(props: {
 
 /**
  * The host list's own (Settings: the list that owns Add host) team groups
- * each end in New sandbox, preselecting the team (ticket E17 checkpoint 3).
+ * each end in New sandbox, preselecting the team.
  * Pickers, a signed-out window and a build without sandboxes offer none.
  */
 function useNewTeamSandbox(

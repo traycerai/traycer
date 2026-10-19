@@ -484,7 +484,7 @@ describe("A Personal MCP server row", () => {
     });
   });
 
-  it("the remove confirmation names every provider on every host (finding 31)", async () => {
+  it("the remove confirmation names every provider on every host", async () => {
     listMock.servers = [mcpServer("github")];
     renderPage("mcp-servers", mcpPage(), [appliedMcp("github")]);
 
@@ -527,7 +527,7 @@ describe("A local MCP server row", () => {
     });
   });
 
-  it("the remove confirmation keeps this provider's config (finding 31)", async () => {
+  it("the remove confirmation keeps this provider's config", async () => {
     listMock.servers = [mcpServer("linear")];
     renderPage("mcp-servers", mcpPage(), [appliedMcp("github")]);
 
@@ -650,7 +650,7 @@ describe("A Personal skill", () => {
     });
   });
 
-  it("the remove confirmation names every provider on every host (finding 31)", async () => {
+  it("the remove confirmation names every provider on every host", async () => {
     listMock.skills = [skill("deploy")];
     listMock.skillFile = skillMarkdown("deploy");
     renderPage("skills", skillsPage(), [appliedSkill("deploy")]);
@@ -709,7 +709,7 @@ describe("A local skill", () => {
     expect(within(dialog).queryByTestId(SKILL_NOTE)).toBeNull();
   });
 
-  it("the remove confirmation keeps the disk text (finding 31)", async () => {
+  it("the remove confirmation keeps the disk text", async () => {
     listMock.skills = [skill("deploy")];
     listMock.skillFile = skillMarkdown("deploy");
     renderPage("skills", skillsPage(), [appliedSkill("other")]);

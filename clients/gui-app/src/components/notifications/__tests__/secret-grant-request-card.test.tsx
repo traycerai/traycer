@@ -405,7 +405,7 @@ describe("A team grant request decided by one admin reads 'approved by <admin>' 
     ],
     ["expired", "Ana", "This request expired before it was answered."],
   ])(
-    "shows how a decided row ended when its payload names nobody (finding 27): %s decided by %s",
+    "shows how a decided row ended when its payload names nobody: %s decided by %s",
     (decision, decidedBy, statusLine) => {
       renderCard({ ...RESOLVED_BY_ANA, decision, decidedBy }, true);
 

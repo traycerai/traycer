@@ -20,11 +20,10 @@ import {
 import { useRunnerHostOrNull } from "@/providers/use-runner-host";
 
 /**
- * Settings ▸ Personal ▸ Secrets on a host that serves `environment.secrets.*`
- * (ticket E11, checkpoint 3): the person's secrets, read through the window's
- * own host, with Add a secret and each row's Verify. No value is ever read
- * back; a refusal (no session on this computer among them) shows the host's
- * own words.
+ * Settings ▸ Personal ▸ Secrets on a host that serves `environment.secrets.*`:
+ * the person's secrets, read through the window's own host, with Add a secret
+ * and each row's Verify. No value is ever read back; a refusal (no session on
+ * this computer among them) shows the host's own words.
  */
 export function SecretsPage(props: {
   readonly client: HostClient<HostRpcRegistry>;

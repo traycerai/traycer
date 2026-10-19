@@ -679,7 +679,7 @@ export function NewConversationModalBody(props: {
   const resolvedHostId = composerPlacement.target.resolvedHostId;
   const hostClient = composerPlacement.target.client;
   // A harness a team sandbox does not offer is refused at Send and at a
-  // terminal launch (ticket E17 checkpoint 6, B5).
+  // terminal launch.
   const teamSandboxHarnessBlocked = useTeamSandboxHarnessGate({
     hostId: resolvedHostId,
     client: hostClient,
@@ -988,9 +988,9 @@ export function NewConversationModalBody(props: {
     raise: raiseHostNotice,
     dismiss: dismissHostNotice,
   } = useComposerHostNotice(resolvedHostId);
-  // The mirror line (ticket E17 checkpoint 5), once per task: the start host
-  // has another owner than a host already working here. A refusal outranks it
-  // in the one slot; it is marked seen when dismissed or when the agent starts.
+  // The mirror line, once per task: the start host has another owner than a
+  // host already working here. A refusal outranks it in the one slot; it is
+  // marked seen when dismissed or when the agent starts.
   const mirrorLine = useComposerMirrorLine(epicId, resolvedHostId);
   const topNotice = composerTopNotice(
     hostNotice,

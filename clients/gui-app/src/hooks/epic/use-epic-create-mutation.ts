@@ -73,9 +73,9 @@ interface CreateEpicMutationContext {
   readonly hostId: string | null;
   readonly userId: string | null;
   /**
-   * The slug of the team a team create was sent for, captured at dispatch
-   * (ticket E17 checkpoint 6, A2): a refusal can arrive after the team left
-   * the person's list, and its line still names the team.
+   * The slug of the team a team create was sent for, captured at dispatch: a
+   * refusal can arrive after the team left the person's list, and its line
+   * still names the team.
    */
   readonly teamSlug: string | null;
 }
@@ -266,7 +266,7 @@ export function useEpicCreateForClient(
           mode: taskCreationMode(variables.chat),
           blocker: analyticsBlockerFromError(error),
         });
-        // A team create's own refusals say what they are (A2): the host below
+        // A team create's own refusals say what they are: the host below
         // `@1.3`, and the cloud's `FORBIDDEN`. Nothing was created for either.
         const teamRejection = teamCreateRejectionMessage(
           error,
@@ -908,7 +908,7 @@ function liveOpenEpicTitle(epicId: string): string | null {
  * `null` for a `signed-in` session: it may spend the capability whatever the
  * peer's minor is, and pays no floor.
  *
- * A team owner (ticket E17 checkpoint 6) requires `@1.3` whatever the session:
+ * A team owner requires `@1.3` whatever the session:
  * an older host's frozen request strips `owner` and would create the person's
  * own epic. `@1.3` is above the local-first floor, so it covers that one too.
  */
@@ -928,7 +928,7 @@ function createFloorFor(
  */
 function asCreateWithoutCloudVerdictError(cause: unknown): unknown {
   if (!(cause instanceof HostMethodVersionUnsatisfiedError)) return cause;
-  // The team-owner floor is not the cloud-verdict one: its line is A2's,
+  // The team-owner floor is not the cloud-verdict one: its line is the one
   // which `teamCreateRejectionMessage` reads off this same error.
   if (cause.requirement.version.minor >= EPIC_CREATE_TEAM_OWNER_MINOR) {
     return cause;

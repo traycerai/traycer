@@ -1,6 +1,6 @@
 /**
  * The refusal strings an agent-to-agent send ends with when the receiver's host
- * belongs to another principal (ticket E17 checkpoint 5).
+ * belongs to another principal.
  *
  * The host's refusal reaches the sender's transcript as the failed call's
  * error: `<tool> failed: not reachable from this host: <sentence>`. The sentence

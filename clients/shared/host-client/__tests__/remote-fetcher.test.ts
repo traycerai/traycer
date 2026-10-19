@@ -266,7 +266,7 @@ describe("hostListItemToDirectoryEntry", () => {
   });
 });
 
-describe("hostListItemToDirectoryEntry - ownerTeamName (ticket E17)", () => {
+describe("hostListItemToDirectoryEntry - ownerTeamName", () => {
   const sandboxItem = (owner: HostOwnerPrincipal | undefined): HostListItem => {
     const base: HostListItem = {
       ...onlineItem(),

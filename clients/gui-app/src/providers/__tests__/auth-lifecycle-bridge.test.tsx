@@ -372,7 +372,7 @@ describe("<EpicSessionLifecycleBridge />", () => {
     expect(useAddHostDialogStore.getState().open).toBe(false);
   });
 
-  it("closes the New-sandbox dialog and drops its draft and failure on user-switch (R4)", () => {
+  it("closes the New-sandbox dialog and drops its draft and failure on user-switch", () => {
     // Module-level like the Add-host dialog, and it carries what account A
     // typed and the failure A's last create got: left standing, account B
     // opens Settings into A's open dialog, A's sandbox name and A's failure.

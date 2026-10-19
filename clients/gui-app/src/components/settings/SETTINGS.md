@@ -165,7 +165,7 @@ Only the replay card owns a search ENTRY and an anchor - it inherited the remove
 The three guide cards contribute their words to the page instead: each one names a settings page that already has an entry of its own, and a second result under the same label would outrank the page the person typing it wants.
 
 **Set up Personal** (`components/onboarding/set-up-personal-group.tsx`, its
-rules in `set-up-personal.ts`; ticket E7 checkpoint 6, core flows flow 0) sits
+rules in `set-up-personal.ts`) sits
 under the guide cards on this page and on Home. It is not a guide and not part
 of the "n of m complete" count: three optional steps, each a sentence about
 what it does for the person and an Open button to its page - link a plan or
@@ -883,7 +883,7 @@ and a skill's edit and update are held off with "Change this in the dashboard."
 (`usePersonalEntryApplied`, `PERSONAL_ENTRY_LOCKED_TEXT`). Remove there is the
 item's delete, so its confirmation asks "Remove “<name>” from every provider on
 every host?" (`personalRemoveText`); a local entry's keeps its own config or disk
-text (finding 31).
+text.
 
 **Personal ▸ Empty states and words.** Each page opens empty to what it
 holds and one action: Variables and shells "Variables are plain values every
@@ -898,7 +898,7 @@ variable". The one exception is the auto-mode policy file's own
 "Environment" heading, which people type and the host parses.
 
 **Personal ▸ Secrets** (`panels/secrets-settings-panel.tsx`,
-`secrets/`, ticket E11 checkpoint 3). Read through the window's own host.
+`secrets/`). Read through the window's own host.
 On a host that serves `environment.secrets.list` the page is the list: each
 secret's name, kind, protocol and destinations, "Written as a plain value on
 every host you own; agents there can read it. Brokered on your sandboxes.",
@@ -940,8 +940,8 @@ confirmation, refusals read by `secretChangeRefusalLine`, beside the recovery
 order for a leaked secret and the line that a change reaches only the copy
 stored here.
 
-**Personal ▸ Notices and "needs you"** (`personal/personal-page-notices.tsx`,
-ticket E7 checkpoint 5). Under a Personal page's status line, for the item
+**Personal ▸ Notices and "needs you"** (`personal/personal-page-notices.tsx`).
+Under a Personal page's status line, for the item
 kinds the page edits: each convergence notice from `environment.notices`
 ("LOG_LEVEL from dev-box now applies everywhere.", or "from the dashboard")
 with Undo (`environment.undo`, with the grant) while `undoAvailable`, and each
@@ -5923,8 +5923,8 @@ set-state-in-effect` forbids the effect form, and an effect would also
     rule), so a half-typed retention limit survives a look at Updates; an
     unvisited one is never mounted, and visited tabs reset when the page
     closes or the host changes.
-  - **Access and setup** (`host-overview-access-tab.tsx`, tab id `access`;
-    ticket E7 checkpoint 5). The picked host's own access and setup, read
+  - **Access and setup** (`host-overview-access-tab.tsx`, tab id `access`).
+    The picked host's own access and setup, read
     through that host (`environment.status`, re-read every 5 s while open). A
     host without the method shows only "Update this host to use your
     settings."; an unreachable one says its values need a connection. Top to
@@ -6033,7 +6033,7 @@ set-state-in-effect` forbids the effect form, and an effect would also
        The list is admin surface only; the bot flow never asks for a machine.
        On a host whose handshake lacks `environment.host.read` the row says to
        update the host; while the capability is unknown it renders nothing.
-       The create-bot form's "Set one up in Host settings" link opens this
+       The create-bot form's "Set one up in Settings" link opens this
        page. The sidebar's host list shows each host's environment label
        beside its name (`HostOptionRow`'s `environmentLabel`, resolved by
        `useHostEnvironmentLabelResolver` in `settings-sidebar.tsx`), read under

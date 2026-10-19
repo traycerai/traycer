@@ -6,10 +6,10 @@ import { useOwnerHostNotReachable } from "@/hooks/epic/use-task-host-reach";
 import { TASK_HOST_UNREACHABLE_LINE } from "./task-host-groups-model";
 
 /**
- * The reach mark on an Agents-tree row (ticket E17 checkpoint 5): the agent's
- * host belongs to another owner, so agents here cannot work with it. Decorative
- * for assistive technology, like the offline lock beside it: the row button's
- * own `aria-label` carries the same words, since a labelled button replaces its
+ * The reach mark on an Agents-tree row: the agent's host belongs to another
+ * owner, so agents here cannot work with it. Decorative for assistive
+ * technology, like the offline lock beside it: the row button's own
+ * `aria-label` carries the same words, since a labelled button replaces its
  * subtree as the accessible name.
  */
 export function AgentReachMark(props: {

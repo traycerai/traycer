@@ -116,7 +116,7 @@ export function useSandboxCreate(): UseMutationResult<
     // itself is still there to say it finished.
     // The open that sent it closes, or offers the team task, from here rather
     // than from the form's own `mutate` callback: that callback is dropped
-    // when the form remounted while the create ran (F46).
+    // when the form remounted while the create ran.
     onSuccess: (accepted, { request, teamId }, context) => {
       if (!settledForStartingAccount(context)) return;
       toast.success(`Created ${request.displayName}`);
@@ -146,7 +146,7 @@ export function useSandboxCreate(): UseMutationResult<
         });
       }
     },
-    // The open that sent it says it, beside the values that were sent (F46);
+    // The open that sent it says it, beside the values that were sent;
     // a create that outlived its open, closed or replaced by a new one, toasts.
     onError: (error, _variables, context) => {
       if (!settledForStartingAccount(context)) return;

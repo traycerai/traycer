@@ -1,13 +1,13 @@
 /**
- * The reach mark on the Agents tree's rows (ticket E17 checkpoint 5).
+ * The reach mark on the Agents tree's rows.
  *
- * THE PLAN'S PROOF: the mark renders from `reach` alone, never from
- * connectivity. A host the viewer's principal cannot work with is a fact about
- * OWNERSHIP, served by the task's host list (`TaskHostRow.reach`); an offline
- * host is a fact about the MACHINE, and it already has its own lock. The two
- * are independent in both directions, and every row case below pins both
- * halves: a reachable-but-foreign owner shows the mark and no lock, an
- * offline-but-own owner shows the lock and no mark.
+ * THE PROOF: the mark renders from `reach` alone, never from connectivity. A
+ * host the viewer's principal cannot work with is a fact about OWNERSHIP,
+ * served by the task's host list (`TaskHostRow.reach`); an offline host is a
+ * fact about the MACHINE, and it already has its own lock. The two are
+ * independent in both directions, and every row case below pins both halves: a
+ * reachable-but-foreign owner shows the mark and no lock, an offline-but-own
+ * owner shows the lock and no mark.
  *
  * The local-row cases use the real `ChatTreePanelBody` over a real epic store
  * (`openStoreForTest`, the harness `sidebar-chat-row-node-churn.test.tsx`

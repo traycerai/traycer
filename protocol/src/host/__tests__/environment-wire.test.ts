@@ -52,7 +52,7 @@ import { releasedMethodNames } from "./__fixtures__/released-method-names";
 import { supportMatrix } from "./__fixtures__/support-matrix";
 
 /**
- * The wire of ticket E7, checkpoint 1: the 26 environment methods, the
+ * The wire of the environment family: the 26 environment methods, the
  * executable-write grant on every method that reaches an execution sink, the
  * `providers.list@10.5` envelope keys, `providers.nativeMutate@1.3`'s
  * `promoteToPersonal`, and the five secret shapes that follow the secrets
@@ -951,7 +951,6 @@ describe("promoteToPersonal toward a 1.2 host is refused, never dropped", () => 
 // Plan pages (under the epic's artifacts directory, 732222ed-...):
 //   broker  = sandbox-secrets-technical-plan/broker/index.md
 //   gateway = sandbox-secrets-technical-plan/gateway/index.md
-//   E8      = environments-replan/breakdown/secrets-versions-rotation-controller-and-status/index.md
 
 const SECRET_ROTATION_STATES = [
   "accepted",
@@ -966,7 +965,7 @@ describe("secret versions, Undo, Destroy, rotation and consent are the plan's sh
   // `POST .../versions/:versionId/undo`, `POST .../versions/:versionId/destroy`
   // (revision 6): "The versions list with ordinal, created, superseded and
   // destroyed times and the rotation state of each (never a value)".
-  // E8, row "Versions, Undo, Destroy, status": "`GET
+  // Rotation controller plan, row "Versions, Undo, Destroy, status": "`GET
   // .../secrets/:secretId/versions` (ordinal, created, superseded and destroyed
   // times, each version's rotation state, never a value)".
   // gateway, "### The rotation wire", States row: "`accepted` (committed),
@@ -1043,7 +1042,7 @@ describe("secret versions, Undo, Destroy, rotation and consent are the plan's sh
   // version's content under a fresh epoch, refused `version_destroyed` for a
   // tombstone and refused when the secret is revoked unless the caller
   // re-grants in the same action".
-  // E8, row "Versions, Undo, Destroy, status": "`POST
+  // Rotation controller plan, row "Versions, Undo, Destroy, status": "`POST
   // .../versions/:versionId/undo`: a new version opened from the superseded one
   // and re-sealed under its own row, then the same intent and commit under a
   // fresh epoch, refused `version_destroyed` on a tombstone (copy "that value
@@ -1095,7 +1094,7 @@ describe("secret versions, Undo, Destroy, rotation and consent are the plan's sh
   // broker, "### Human routes", same row: "Destroy nulls a superseded version's
   // ciphertext at once and records the event, and is refused `version_current`
   // for the live version until it is replaced or revoked".
-  // E8, row "Versions, Undo, Destroy, status": "`POST
+  // Rotation controller plan, row "Versions, Undo, Destroy, status": "`POST
   // .../versions/:versionId/destroy`: nulls a superseded version's five sealed
   // columns at once, sets `destroyedAt`, deletes any `HostSealedValue` naming
   // it, writes the event, refused `version_current` on the live version (copy
@@ -1414,7 +1413,7 @@ describe("secret versions, Undo, Destroy, rotation and consent are the plan's sh
   // `probe_accepted`, or `probe_refused` with a closed hop code (`host`, `port`,
   // `protocol` or `login`), never the value or the upstream's body." and "(the
   // Secrets page's action on a row, and on the add dialog before the secret
-  // exists ...)"; `unreachable` is E8 checkpoint 6's silent-incarnation answer
+  // exists ...)"; `unreachable` is the silent-incarnation answer
   // (see `environmentSecretsVerifyRequestSchema`'s comment).
   it("environment.secrets.verify: probe_accepted, probe_refused with a closed hop, unreachable; never the value or a body", () => {
     expect(
@@ -1521,7 +1520,7 @@ describe("secret versions, Undo, Destroy, rotation and consent are the plan's sh
     expect(sortedKeys(stripped)).toEqual(["evidence", "hop"]);
   });
 
-  // E11: the add dialog creates a database, SSH or connector secret, so the
+  // The add dialog creates a database, SSH or connector secret, so the
   // create request carries the same binding fields as the verify candidate.
   it("environment.secrets.create: the binding fields, hosts not destinations, authn validates kind and protocol", () => {
     const schema = env.environmentSecretsCreateRequestSchema;
@@ -1683,7 +1682,7 @@ describe("secret versions, Undo, Destroy, rotation and consent are the plan's sh
     ).toBe(true);
   });
 
-  // The two refusal codes added with E11 are accepted on the undo answer.
+  // The two additional refusal codes are accepted on the undo answer.
   it("environment.secrets.undo: version_current and secret_version_stale are refusal codes", () => {
     for (const code of ["version_current", "secret_version_stale"]) {
       expect(env.SECRET_UNDO_REFUSAL_CODES).toContain(code);

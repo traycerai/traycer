@@ -18,7 +18,7 @@ import { useHostBinding } from "@/lib/host";
 export interface WorktreePickerHostSectionProps {
   readonly surfaceKey: string;
   /**
-   * Only the terminal picker offers the Automations host (correction 5); the
+   * Only the terminal picker offers the Automations host; the
    * git diff panel and the file tree read worktrees it does not serve.
    */
   readonly offersAutomations: boolean;

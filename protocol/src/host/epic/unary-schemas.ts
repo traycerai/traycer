@@ -767,10 +767,9 @@ export const createEpicRequestSchemaV12 = lazySchema(() =>
 export type CreateEpicRequestV12 = z.infer<typeof createEpicRequestSchemaV12>;
 
 /**
- * Who owns a new epic (ticket E13 checkpoint 5): the person creating it, or a
- * team the person belongs to. The same two arms as the cloud create body's
- * `owner` (common's `createEpicRequestSchema`), which refuses a team the
- * caller is not in.
+ * Who owns a new epic: the person creating it, or a team the person belongs
+ * to. The same two arms as the cloud create body's `owner` (common's
+ * `createEpicRequestSchema`), which refuses a team the caller is not in.
  */
 export const epicCreateOwnerSchema = lazySchema(() =>
   z.discriminatedUnion("kind", [

@@ -23,7 +23,7 @@ import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 
 /**
- * The Personal > Browser agent access page (plan B08). It reads through the
+ * The Personal > Browser agent access page. It reads through the
  * window's own host - Personal pages have no picker - so what these tests drive
  * is the pair the row reads through: the addressable host's id and that host's
  * client.

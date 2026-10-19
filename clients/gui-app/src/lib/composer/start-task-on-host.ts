@@ -7,8 +7,7 @@ import {
 
 /**
  * Pins this window's landing composer to `hostId`, so the next new-task draft
- * opens on it (ticket E17 checkpoint 6, A4). The draft's owner then follows
- * the host's team.
+ * opens on it. The draft's owner then follows the host's team.
  */
 export function pinComposerHost(hostId: string): void {
   const windowId = getDesktopEpicOwnershipBridge()?.windowId ?? browserTabId();

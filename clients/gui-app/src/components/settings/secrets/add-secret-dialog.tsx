@@ -45,7 +45,7 @@ import {
 import { cn } from "@/lib/utils";
 
 /**
- * Settings ▸ Personal ▸ Secrets ▸ Add a secret (ticket E11, checkpoint 3):
+ * Settings ▸ Personal ▸ Secrets ▸ Add a secret:
  * kind first, then the kind's form with Verify, then the confirmation of
  * where the value becomes readable. API keys, model provider keys and
  * database logins are added here; every other kind is listed and opens its

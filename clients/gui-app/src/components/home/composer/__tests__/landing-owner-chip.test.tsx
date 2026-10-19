@@ -10,10 +10,9 @@ import type { EpicShareableTeam } from "@/stores/auth/auth-store";
 import { useAuthStore } from "@/stores/auth/auth-store";
 
 /**
- * Ticket E17 checkpoint 6 (part A, the Belongs to chip): a landing draft's
- * owner follows its resolved host's team until the person picks one, the chip
- * lists Personal and each of the person's teams, and a team pick says who will
- * read the first chat.
+ * The Belongs to chip: a landing draft's owner follows its resolved host's team
+ * until the person picks one, the chip lists Personal and each of the person's
+ * teams, and a team pick says who will read the first chat.
  */
 
 const mocks = vi.hoisted(() => {

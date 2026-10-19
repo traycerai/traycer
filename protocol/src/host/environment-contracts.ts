@@ -2,7 +2,7 @@ import { defineRpcContract } from "../framework/index";
 import * as schemas from "./environment-schemas";
 
 /**
- * The environment methods (ticket E7, checkpoint 1): every one a NEW name at
+ * The environment methods: every one a NEW name at
  * `@1.0`, off `RELEASED_FLOOR_METHOD_NAMES` and registered with
  * `degrade: { kind: "unsupported" }`, as `host.sandbox.repairGuestConfiguration`
  * was. A new method name is handshake-fatal against a released peer

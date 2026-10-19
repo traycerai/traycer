@@ -11,7 +11,7 @@ import {
 import { useAuthStore } from "@/stores/auth/auth-store";
 
 /**
- * The team that owns an epic (ticket E17 checkpoint 6, A3 and B1), read from
+ * The team that owns an epic, read from
  * the task lists already cached for the person (History and the pin readings
  * fill them; this reads, it never fetches). `null` while no cached row names
  * the epic, and for an epic no team owns. Outside a query client, `null`.
@@ -25,8 +25,8 @@ export function useEpicOwningTeamId(epicId: string): string | null {
 }
 
 /**
- * Whether the person has any cached task owned by `teamId` (ticket E17
- * checkpoint 6, A4). `false` for `null`, and while nothing cached says so.
+ * Whether the person has any cached task owned by `teamId`. `false` for
+ * `null`, and while nothing cached says so.
  */
 export function usePersonHasTeamTask(teamId: string | null): boolean {
   return useCloudTaskCacheRead<boolean>(false, (queryClient, scope) =>

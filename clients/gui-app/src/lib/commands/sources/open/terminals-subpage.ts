@@ -412,7 +412,7 @@ function useNewTerminalWorkspaceItems(
     [groups],
   );
   // A team pod that cannot be dialed yet is opened by its environment and
-  // ordinal (ticket E17, E): one pod-list read per team, however many pods.
+  // ordinal: one pod-list read per team, however many pods.
   const podEnvironmentIds = useMemo(
     () => teamPodEnvironmentIds(groups),
     [groups],

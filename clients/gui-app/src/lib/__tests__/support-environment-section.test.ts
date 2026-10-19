@@ -14,10 +14,10 @@ import {
 } from "@/lib/support-environment-section";
 
 /**
- * Ticket E11, checkpoint 5: the pure builder behind a support report's
- * environment section. The section is a CLOSED key set (Electron main
- * refuses any other key), so these tests hold the output to exactly what the
- * ruling lists and keep everything it rules out out of it.
+ * The pure builder behind a support report's environment section. The section
+ * is a CLOSED key set (Electron main refuses any other key), so these tests
+ * hold the output to exactly what the ruling lists and keep everything it rules
+ * out out of it.
  */
 
 const TEAM_NAME = "Acme Robotics ZZ_TEAM_NAME";

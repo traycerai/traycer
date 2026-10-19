@@ -5,8 +5,8 @@ import type {
 import type { SandboxGrantRotation } from "@traycer/protocol/host/sandbox-secrets";
 
 /**
- * What a replaced value has done, in words (ticket E11, checkpoint 4): on the
- * sandbox card per grant, and on Settings ▸ Personal ▸ Secrets per secret.
+ * What a replaced value has done, in words: on the sandbox card per grant, and
+ * on Settings ▸ Personal ▸ Secrets per secret.
  *
  * "Enforced" is said only on evidence: every worker class and every host that
  * owes an acknowledgement must carry a `rotation_ack` entry of a kind the

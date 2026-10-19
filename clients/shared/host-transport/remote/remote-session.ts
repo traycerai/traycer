@@ -162,7 +162,7 @@ export interface RemoteSessionOptions<
    * `kind: sandbox` host, the reader of the session grant minted with the
    * current attach grant: `OPEN` presents it in `authz` v2 with an EMPTY
    * bearer, and the session never sends a `CREDENTIAL_UPDATE` - no user
-   * credential reaches a sandbox (seams C1 and H3).
+   * credential reaches a sandbox.
    */
   readonly sessionGrant: (() => string | null) | null;
 }

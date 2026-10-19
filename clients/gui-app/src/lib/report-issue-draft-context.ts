@@ -52,8 +52,8 @@ export interface ReportIssuePrivateDiagnostics {
   readonly stackFamily: string | null;
   readonly correlationId: string;
   /**
-   * The selected host's environment section (ticket E11, checkpoint 5),
-   * `unavailable` when that host serves no `environment.status`.
+   * The selected host's environment section, `unavailable` when that host
+   * serves no `environment.status`.
    */
   readonly environment: CapturedField<SupportEnvironmentSection>;
 }

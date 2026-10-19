@@ -19,10 +19,10 @@ import {
 } from "@/hooks/sandboxes/__tests__/sandbox-binding-fixture";
 
 /**
- * Ticket E17 (B2): a team host's first tab says what a shared host means,
- * once per person per host. Everything the card reads (who is viewing, whether
- * the account may spend its cloud capability, the open task and its
- * collaborators) is mocked at the hook boundary.
+ * A team host's first tab says what a shared host means, once per person per
+ * host. Everything the card reads (who is viewing, whether the account may
+ * spend its cloud capability, the open task and its collaborators) is mocked
+ * at the hook boundary.
  */
 
 const mocks = vi.hoisted(() => {
@@ -499,9 +499,9 @@ describe("<TeamHostDisclosure />", () => {
   });
 
   it("withholds the collaborators without cloud authorization, and says readers may be outside the team", () => {
-    // Ticket E17 checkpoint 6, cold-review fix: an unknown reader list is
-    // not "nobody outside". With an open task and no authorization to ask,
-    // the card names the outside readers rather than claiming there are none.
+    // An unknown reader list is not "nobody outside". With an open task and
+    // no authorization to ask, the card names the outside readers rather than
+    // claiming there are none.
     mocks.cloudAuthorized.current = false;
     mocks.collaborators.current = view({
       ownerTeam: null,
@@ -567,11 +567,10 @@ describe("<TeamHostDisclosure />", () => {
 });
 
 /**
- * Ticket E17 checkpoint 6, cold-review fix (the disclosure never claims
- * "nobody outside" from a reader list it does not have): while the
- * collaborators query is pending the card waits; when it errored, or cannot be
- * asked (no cloud authorization), the card shows with the outside-readers
- * line; with no open task there are no readers to name.
+ * The disclosure never claims "nobody outside" from a reader list it does not
+ * have: while the collaborators query is pending the card waits; when it
+ * errored, or cannot be asked (no cloud authorization), the card shows with
+ * the outside-readers line; with no open task there are no readers to name.
  */
 describe("<TeamHostDisclosure /> unknown readers", () => {
   beforeEach(() => {

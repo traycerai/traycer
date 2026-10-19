@@ -286,8 +286,8 @@ export function useComposerToolbarStore(
     chatLineCarriesAutoMode,
   ]);
 
-  // The palette commits too, so it is held to the same team-sandbox rule as
-  // the picker (ticket E17 checkpoint 6, B5): a blocked harness is a no-op.
+  // The palette commits too, so it is held to the same team-sandbox rule as the
+  // picker: a blocked harness is a no-op.
   const teamSandboxHarnessBlocked = useTeamSandboxHarnessGate({
     hostId,
     client: hostClient,

@@ -370,7 +370,7 @@ function TerminalAgentSubMenuContent(props: TerminalAgentSubMenuContentProps) {
     [overrideStagingKey, memoryHostId, epicId],
   );
   // A harness a team sandbox does not offer never launches there, and the
-  // launcher says so (ticket E17 checkpoint 6, B5).
+  // launcher says so.
   const teamSandboxHarnessBlocked = useTeamSandboxHarnessBlocked({
     hostId: launchHostId,
     client: launchHostClient,

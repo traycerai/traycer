@@ -441,10 +441,10 @@ export function sandboxStateWord(sandbox: HostScopeSandbox): string | null {
  * - `hidden`: left out of this list.
  *
  * The Automations pod (`kind: "automation"`) is a slim host for scheduled
- * runs (correction 5): the host list shows it with the user's sandboxes, and
+ * runs: the host list shows it with the user's sandboxes, and
  * of the pickers only a surface that `offersAutomations` does: the new
- * terminal picker, whose verbs the slim host serves (the slim host plan's
- * V5). Every other picker targets full-host work (an agent, a worktree, an
+ * terminal picker, whose verbs the slim host serves (the slim host
+ * plan). Every other picker targets full-host work (an agent, a worktree, an
  * epic) and hides it.
  *
  * `listsAgentSandboxes` is the host list (Settings), every other surface is a
@@ -464,7 +464,7 @@ export function hostOptionPickerGroup(
   offersAutomations: boolean,
 ): HostPickerGroup {
   if (host.sandbox === null) return "personal";
-  // A sandbox no host row stands for yet (finding F15): never offered as a
+  // A sandbox no host row stands for yet: never offered as a
   // host. The host list groups it by the rules below, like any sandbox.
   if (!listsAgentSandboxes && isUnenrolledSandboxOption(host)) return "hidden";
   const summary = host.sandbox.summary;
@@ -490,7 +490,7 @@ export function hostOptionCanActivate(host: HostScopeOption): boolean {
 }
 
 /**
- * One team's hosts in a list (ticket E17): its sandboxes and pods, and the
+ * One team's hosts in a list: its sandboxes and pods, and the
  * burst ones an agent made, under the team's name.
  */
 export interface HostTeamGroup {

@@ -15,10 +15,10 @@ import type { SandboxSummary } from "@traycer/protocol/host/sandbox-control";
 import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
 
 /**
- * Ticket E17, finding F15 (a sandbox with no host row is listed): a sandbox row
- * with neither a directory entry nor a registry row is management-only. The
- * host list shows it, so the person can destroy it; no picker offers it and
- * Activate is never offered for it, because there is no host to start work on.
+ * A sandbox with no host row is listed: a sandbox row with neither a directory
+ * entry nor a registry row is management-only. The host list shows it, so the
+ * person can destroy it; no picker offers it and Activate is never offered for
+ * it, because there is no host to start work on.
  */
 
 const UNENROLLED_HOST_ID = "sbx-never-enrolled";

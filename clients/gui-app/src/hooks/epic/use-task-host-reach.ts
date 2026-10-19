@@ -4,7 +4,7 @@ const NO_HOSTS: ReadonlySet<string> = new Set();
 
 /**
  * The task's hosts this host's principal cannot reach (`reach ===
- * "other_principal"` in the task host rows, ticket E17 checkpoint 5), provided
+ * "other_principal"` in the task host rows), provided
  * once by the Agents panel so each row reads a set instead of subscribing to
  * the query. Empty when the rows are absent: an unknown reach is never shown
  * as unreachable.

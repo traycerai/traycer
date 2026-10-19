@@ -782,9 +782,9 @@ function A2ASendToolSegment(
     [collapsibleKey, id, setFindForcedOpen, setOpen],
   );
   const hasError = error !== null && error.length > 0;
-  // A same-principal refusal (ticket E17 checkpoint 5) is not a fault: it is
-  // the host's sentence, already chosen by whether the person may open the
-  // target, and it shows as written instead of as a raw error dump.
+  // A same-principal refusal is not a fault: it is the host's sentence, already
+  // chosen by whether the person may open the target, and it shows as written
+  // instead of as a raw error dump.
   const refusal = a2aSendRefusalSentence(error);
   const showsFault = hasError && refusal === null;
   // A refusal gets the ordinary end-state badge, not the error one: the send

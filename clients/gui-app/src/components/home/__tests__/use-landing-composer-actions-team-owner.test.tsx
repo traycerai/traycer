@@ -1,13 +1,13 @@
 /**
- * Ticket E17 checkpoint 6, cold-review fix (the landing submit's team-owner
- * and team-sandbox refusals, decided before any frame).
+ * The landing submit's team-owner and team-sandbox refusals, decided before any
+ * frame.
  *
- * A2: a team owner is refused, with no `epic.create` request and no
- * navigation, when the resolved host is below `epic.create@1.3` or the
- * session holds no cloud authorization; a signed-in create on a `@1.3` host
- * carries `owner: { kind: "team", teamId }`, and Personal carries
- * `owner: null`. B5: a harness a team sandbox does not offer is refused on
- * both the chat submit and the terminal-agent path.
+ * A team owner is refused, with no `epic.create` request and no navigation,
+ * when the resolved host is below `epic.create@1.3` or the session holds no
+ * cloud authorization; a signed-in create on a `@1.3` host carries
+ * `owner: { kind: "team", teamId }`, and Personal carries `owner: null`. A
+ * harness a team sandbox does not offer is refused on both the chat submit and
+ * the terminal-agent path.
  *
  * The negotiated `epic.create` version is recorded in the shared
  * negotiated-manifest registry, which both the placement admission and the

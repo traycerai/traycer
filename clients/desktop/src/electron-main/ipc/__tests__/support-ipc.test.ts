@@ -160,8 +160,8 @@ const VALID_PRIVATE_DIAGNOSTICS = {
   environment: UNAVAILABLE,
 };
 
-// Ticket E11, checkpoint 5: a fully populated environment section, every
-// record and every nullable arm present at least once.
+// A fully populated environment section, every record and every nullable arm
+// present at least once.
 const ENV_ITEM: SupportEnvironmentItem = {
   kind: "env_var",
   key: "DATABASE_URL",
@@ -236,9 +236,9 @@ const ENV_ROTATION: SupportEnvironmentRotation = {
   producers: [ENV_WORKER_PRODUCER, ENV_HOST_PRODUCER],
 };
 
-// Ticket E13, checkpoint 4: the reach section. A denial is opaque references
-// and principal categories; the same-principal refusal reads "personal" and
-// "team" so a mismatch is visible without naming anyone.
+// The reach section. A denial is opaque references and principal categories;
+// the same-principal refusal reads "personal" and "team" so a mismatch is
+// visible without naming anyone.
 const ENV_REACH_DENIAL: SupportEnvironmentReachDenial = {
   denialId: "denial-1",
   at: 1_700_000_000_000,
@@ -734,7 +734,7 @@ describe("parseSupportSubmitReportRequest", () => {
     ).toThrow();
   });
 
-  describe("privateDiagnostics.environment (ticket E11, checkpoint 5)", () => {
+  describe("privateDiagnostics.environment", () => {
     it("accepts a fully populated known section and returns it unchanged", () => {
       const result = submitWithEnvironment(KNOWN_ENVIRONMENT);
       expect(result.privateDiagnostics?.environment).toEqual(KNOWN_ENVIRONMENT);
@@ -974,9 +974,9 @@ describe("parseSupportSubmitReportRequest", () => {
       );
     });
 
-    // Ticket E13, checkpoint 4: a refusal is references and categories only.
-    // These three are the pins: a host's label, a person's display name or an
-    // owner's id inside a denial is refused by NAME, never passed through.
+    // A refusal is references and categories only. These three are the pins: a
+    // host's label, a person's display name or an owner's id inside a denial is
+    // refused by NAME, never passed through.
     it("refuses a reach denial carrying a host label", () => {
       expect(() =>
         submitWithSection(

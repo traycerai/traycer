@@ -65,10 +65,9 @@ export type SecretRequestDecideFetchResult =
   | SandboxSecretsFailure;
 
 /**
- * A team's environment (ticket E17 checkpoint 3): `ok` with its id, or
- * `not-a-member` for the route's `404 team_not_found`, which it answers the
- * same for a team the caller is not an accepted member of and one that does
- * not exist.
+ * A team's environment: `ok` with its id, or `not-a-member` for the route's
+ * `404 team_not_found`, which it answers the same for a team the caller is not
+ * an accepted member of and one that does not exist.
  */
 export type TeamEnvironmentFetchResult =
   | { readonly kind: "ok"; readonly environmentId: string }
@@ -76,9 +75,9 @@ export type TeamEnvironmentFetchResult =
   | SandboxSecretsFailure;
 
 /**
- * How many providers an environment has (ticket E17 checkpoint 3): its API
- * keys (`provider` secrets) and its linked plans (`connected` harness
- * connections). Counts only: no secret's name or value is kept.
+ * How many providers an environment has: its API keys (`provider` secrets) and
+ * its linked plans (`connected` harness connections). Counts only: no secret's
+ * name or value is kept.
  */
 export interface EnvironmentProviderCounts {
   readonly providerSecretCount: number;

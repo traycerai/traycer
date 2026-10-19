@@ -16,11 +16,10 @@ const TONE: Readonly<Record<SecretRotationLine["tone"], string>> = {
 };
 
 /**
- * A secret's current rotation on Settings ▸ Personal ▸ Secrets (ticket E11,
- * checkpoint 4): "New value accepted, closing old sessions." until every
- * class and host has proved the old value out of use, then "New value
- * enforced." with each one's proof. Re-read every few seconds only while it
- * is still moving.
+ * A secret's current rotation on Settings ▸ Personal ▸ Secrets: "New value
+ * accepted, closing old sessions." until every class and host has proved the
+ * old value out of use, then "New value enforced." with each one's proof.
+ * Re-read every few seconds only while it is still moving.
  */
 export function SecretRotationStatus(props: {
   readonly client: HostClient<HostRpcRegistry>;

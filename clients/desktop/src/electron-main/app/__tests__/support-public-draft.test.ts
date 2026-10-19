@@ -559,11 +559,10 @@ describe("buildPublicDraftFields", () => {
     });
   });
 
-  // Ticket E11, checkpoint 5: the environment section is private-report
-  // content only. These names are distinctive on purpose: the draft is a
-  // public GitHub issue, and a person's own item and secret names must
-  // not be in it.
-  describe("environment section (ticket E11, checkpoint 5)", () => {
+  // The environment section is private-report content only. These names are
+  // distinctive on purpose: the draft is a public GitHub issue, and a person's
+  // own item and secret names must not be in it.
+  describe("environment section", () => {
     const ITEM_KEY = "ZZ_SUPPORT_ENV_KEY";
     const SECRET_NAME = "ZZ_SUPPORT_SECRET";
     const SECTION: SupportEnvironmentSection = {

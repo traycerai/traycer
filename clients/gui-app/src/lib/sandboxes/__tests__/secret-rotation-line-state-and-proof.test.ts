@@ -9,11 +9,11 @@ import {
   secretRotationStatus,
 } from "@/lib/sandboxes/secret-rotation-line";
 
-// E18 stage 4, checkpoint 4. `secret-rotation-line.test.ts` pins the lines a
-// state and its proof produce together; this file pins the two halves ALONE:
-// the state without the proof ("enforced" is never said before the host says
-// so), and the proof without the state (a producer's line names a proof only
-// when the evidence proves something).
+// `secret-rotation-line.test.ts` pins the lines a state and its proof produce
+// together; this file pins the two halves ALONE: the state without the proof
+// ("enforced" is never said before the host says so), and the proof without the
+// state (a producer's line names a proof only when the evidence proves
+// something).
 
 const ACCEPTED = "New value accepted, closing old sessions.";
 

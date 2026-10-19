@@ -9,7 +9,7 @@ import {
 import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
 
 /**
- * Ticket E17, checkpoint 2: what a TEAM sandbox's card says about people.
+ * What a TEAM sandbox's card says about people.
  *
  * Every line names a member the way the viewer would: "you" for the viewer's
  * own user id, the member's display name otherwise, and a neutral phrase when

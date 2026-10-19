@@ -12,7 +12,7 @@ import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-sc
 import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
 
 /**
- * Ticket E17, finding F15 (a sandbox with no host row is listed): a sandbox
+ * A sandbox with no host row is listed: a sandbox
  * whose create failed at the provider (`failed`), or whose guest has not
  * enrolled yet (`creating`), is in `GET /api/sandboxes` but has no registry
  * row and no directory entry. The host list must still show it, as a

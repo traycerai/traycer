@@ -4,8 +4,8 @@ import { basePersistOptions, persistKey, STORE_KEYS } from "@/lib/persist";
 
 /**
  * Two one-time prompts on a host's Overview, remembered per host id on this
- * desktop (ticket E7 checkpoint 5 ruling: the wire carries no "asked" flag,
- * so another desktop, or this one after its storage is cleared, asks again):
+ * desktop (the wire carries no "asked" flag, so another desktop, or this one
+ * after its storage is cleared, asks again):
  *
  * - the Remote access question, answered by On or Not now;
  * - "Your settings moved to Personal. Review what changed.", dismissed.

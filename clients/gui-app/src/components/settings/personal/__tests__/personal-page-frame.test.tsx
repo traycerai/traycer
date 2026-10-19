@@ -266,10 +266,9 @@ describe("<PersonalPageFrame /> around a page that is not a Personal page", () =
   });
 });
 
-// `environment.localOverrides` and `pendingUploads` are FIXTURE-ONLY here: no
-// host serves either yet, so these rows are driven by the fake host above
-// until ticket E5 serves them.
-describe("usePersonalRowNotes (fixture-only until ticket E5 serves localOverrides and pendingUploads)", () => {
+// `environment.localOverrides` and `pendingUploads` come from the fake host
+// above, which drives these rows.
+describe("usePersonalRowNotes (localOverrides and pendingUploads from the fake host)", () => {
   function notes(): string[] {
     return within(screen.getByTestId("row-notes"))
       .queryAllByRole("listitem")

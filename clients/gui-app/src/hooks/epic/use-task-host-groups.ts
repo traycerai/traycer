@@ -45,10 +45,9 @@ function agentCounts(
 }
 
 /**
- * The task's hosts grouped by owner, as the Hosts section shows them (ticket
- * E17 checkpoint 4), each input from a source the person is authorized for.
- * Shared with the composer's mirror line (checkpoint 5) so the line names a
- * host the way the section does.
+ * The task's hosts grouped by owner, as the Hosts section shows them, each
+ * input from a source the person is authorized for. Shared with the
+ * composer's mirror line so the line names a host the way the section does.
  */
 export function useTaskHostGroups(
   epicId: string,

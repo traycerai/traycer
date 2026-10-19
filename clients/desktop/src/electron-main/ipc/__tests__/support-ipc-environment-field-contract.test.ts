@@ -1,13 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { parseSupportSubmitReportRequest } from "../support-ipc";
 
-// E18 stage 4, checkpoint 5 (B.1): the environment section's closed contract,
-// field by field. `support-ipc.test.ts` pins the key sets, the 15 refused
-// names, the bounds of nine fields and the shapes of the whole; this file pins
-// what a mutation of each remaining field's parser survived: the bound of every
-// other code field, a wrong TYPE where a number or a list belongs, and a
-// principal that is not one of the two categories. One valid section is built
-// here, then ONE field at a time is made wrong.
+// The environment section's closed contract, field by field.
+// `support-ipc.test.ts` pins the key sets, the 15 refused names, the bounds of
+// nine fields and the shapes of the whole; this file pins what a mutation of
+// each remaining field's parser survived: the bound of every other code field,
+// a wrong TYPE where a number or a list belongs, and a principal that is not
+// one of the two categories. One valid section is built here, then ONE field at
+// a time is made wrong.
 
 const CAUSE = {
   type: "RangeError",
@@ -374,9 +374,9 @@ describe("an environment section's lists and categories", () => {
   });
 });
 
-// Ticket E13, checkpoint 4: the reach section, field by field. Its ids are
-// opaque references bounded at 256 characters; its two principal fields are a
-// closed set of three categories; the reason is one literal.
+// The reach section, field by field. Its ids are opaque references bounded at
+// 256 characters; its two principal fields are a closed set of three
+// categories; the reason is one literal.
 const REACH_ID_SPOTS: readonly Spot[] = [
   { name: "a denial's denialId", put: (s, v) => (firstDenial(s).denialId = v) },
   {

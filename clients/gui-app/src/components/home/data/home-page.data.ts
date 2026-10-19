@@ -63,9 +63,8 @@ export interface HistoryItem {
    */
   chatHostIds: ReadonlyArray<string> | null;
   /**
-   * The team that owns the task (ticket E17 checkpoint 6, A3), from the
-   * viewer's permission row; `null` (or absent, in a hand-built item) for a
-   * task no team owns.
+   * The team that owns the task, from the viewer's permission row; `null` (or
+   * absent, in a hand-built item) for a task no team owns.
    */
   teamId?: string | null;
   pullRequestNumbers: ReadonlyArray<string>;

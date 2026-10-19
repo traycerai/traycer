@@ -5,9 +5,9 @@ import type {
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 
 /**
- * The Link dialog's states and lines (ticket E10, checkpoint 5): one place
- * for the copy, so each state's words are pinned by a test. The account
- * names in these lines are the person's own, shown in their own window.
+ * The Link dialog's states and lines: one place for the copy, so each state's
+ * words are pinned by a test. The account names in these lines are the person's
+ * own, shown in their own window.
  */
 
 export const LINK_INTRO =

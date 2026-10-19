@@ -95,7 +95,7 @@ export interface HostScopeSandbox {
   readonly frozen: boolean;
   readonly summary: SandboxSummary | null;
   /**
-   * A team owns it (ticket E17): the registry row's `owner`, or the
+   * A team owns it: the registry row's `owner`, or the
    * directory entry's copy of it for a row the registry has not answered
    * for yet. Decides the card's team lines and whether a wake asks first.
    */
@@ -196,7 +196,7 @@ export function buildHostScopeOptions(
 /**
  * A sandbox the control plane lists before any host row exists for it: its
  * guest has not enrolled yet (`creating`), or never will (`failed`, `lost`),
- * so authn has nothing to list (finding F15). The host list shows it so the
+ * so authn has nothing to list. The host list shows it so the
  * person can see it and destroy it; with no entry and no registry row it is
  * management-only (see `hostOptionPickerGroup`), and once the guest enrols the
  * registry row takes this `hostId` over.

@@ -4,7 +4,7 @@ import {
   hostNotificationEntrySchemaV23,
 } from "@traycer/protocol/host/notifications/contracts";
 
-// E18 stage 4, checkpoint 5: a removed member's row counts a host "done" only
+// A removed member's row counts a host "done" only
 // when ALL THREE of its facts have arrived (the machine stopped, the old
 // credential closed, the replacement delivered). `secret-rotated-and-team-
 // kinds.test.ts` pins the count for one host with two facts pending; this file

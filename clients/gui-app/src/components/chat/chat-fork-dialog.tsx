@@ -153,8 +153,8 @@ export interface ChatForkDialogTarget {
    */
   readonly initialHostId: string | null;
   /**
-   * The only hosts the picker lists (B1's "Continue on a <team> host", ticket
-   * E17 checkpoint 6), or `null` for every host.
+   * The only hosts the picker lists ("Continue on a <team> host"), or `null`
+   * for every host.
    */
   readonly onlyHostIds: ReadonlySet<string> | null;
 }
@@ -521,8 +521,8 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
     toolbarStore,
     (s) => s.selection.modelSlug.length > 0,
   );
-  // A harness a team sandbox does not offer holds Fork shut on that host,
-  // and the dialog says so (ticket E17 checkpoint 6, B5).
+  // A harness a team sandbox does not offer holds Fork shut on that host, and
+  // the dialog says so.
   const forkHarnessId = useStore(toolbarStore, (s) => s.selection.harnessId);
   const teamSandboxHarnessBlocked = useTeamSandboxHarnessBlocked({
     hostId: selectedHostId,

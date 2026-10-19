@@ -1033,7 +1033,7 @@ describe("<SandboxCard /> secrets section", () => {
   it("shows the section and no Docker note for an awake, ready sandbox", () => {
     renderCard(sandboxOf("awake", false, { phase: "ready" }));
 
-    // No sandbox image carries Docker (F60), so the card says nothing about
+    // No sandbox image carries Docker, so the card says nothing about
     // using secrets from a container.
     expect(screen.getByTestId("sandbox-card-secrets")).toBeTruthy();
     expect(screen.queryByTestId("sandbox-card-docker-note")).toBeNull();

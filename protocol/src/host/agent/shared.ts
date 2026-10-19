@@ -1095,8 +1095,8 @@ export const agentSummarySchemaV101 = lazySchema(() =>
 export type AgentSummaryV101 = z.infer<typeof agentSummarySchemaV101>;
 
 /**
- * Whether the answering host can reach the agent's host for the caller
- * (ticket E17): `same_principal` when both hosts belong to one principal,
+ * Whether the answering host can reach the agent's host for the caller:
+ * `same_principal` when both hosts belong to one principal,
  * `other_principal` when the agent's host is a collaborator's or another
  * team's, `null` when this host cannot say (a host that predates the field).
  */
@@ -1157,10 +1157,10 @@ export const agentSummarySchema = lazySchema(() =>
      */
     permissionMode: permissionModeSchema.nullable(),
     /**
-     * Whether a message from this host can reach the agent (ticket E17), or
-     * `null` when the answering host predates the field. An `other_principal`
-     * agent is listed and its transcript may be readable, but
-     * `agent.sendMessage` refuses it with `principal_mismatch`.
+     * Whether a message from this host can reach the agent, or `null` when the
+     * answering host predates the field. An `other_principal` agent is listed
+     * and its transcript may be readable, but `agent.sendMessage` refuses it
+     * with `principal_mismatch`.
      */
     reach: agentReachSchema.nullable(),
     /**

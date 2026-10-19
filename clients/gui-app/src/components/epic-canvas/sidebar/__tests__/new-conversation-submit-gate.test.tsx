@@ -885,10 +885,10 @@ describe("NewConversationModalBody submit generation guard", () => {
   });
 });
 
-// The mirror line (ticket E17 checkpoint 5) says once per task that the start
-// host has another owner than a host already working in it, and a conversation
-// that starts counts as having heard it. This drives the REAL hook through the
-// real modal body, so the seen mark is the one the modal's own submit writes.
+// The mirror line says once per task that the start host has another owner than
+// a host already working in it, and a conversation that starts counts as having
+// heard it. This drives the REAL hook through the real modal body, so the seen
+// mark is the one the modal's own submit writes.
 //
 // REGRESSION case, not a red one: the modal already marks the line seen on a
 // successful start today. It pins that behavior while the hook underneath is

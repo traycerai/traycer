@@ -157,7 +157,7 @@ function unstartedDeliveryPhase(
 /**
  * Where the fork dialog's host picker starts and what it lists: `initialHostId`
  * preselects (`null` is the source chat's own host) and `onlyHostIds` narrows
- * the list (B1's team hosts, ticket E17 checkpoint 6; `null` is every host).
+ * the list (a team's hosts; `null` is every host).
  */
 export interface ForkDialogHosts {
   readonly initialHostId: string | null;

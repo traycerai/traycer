@@ -9,8 +9,8 @@ import { useOnboardingStore } from "@/stores/onboarding/onboarding-store";
 import { setupGuideLength } from "@/stores/onboarding/setup-guides";
 
 /**
- * Ticket E17 (B4): a person who has joined a team but has not yet opened one
- * of its hosts is told where to start. "Newcomer" is read off the first-tab
+ * A person who has joined a team but has not yet opened one of its hosts is
+ * told where to start. "Newcomer" is read off the first-tab
  * disclosure record: a team none of whose hosts the person has opened.
  */
 

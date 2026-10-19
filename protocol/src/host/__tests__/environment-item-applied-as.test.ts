@@ -5,7 +5,7 @@ import {
 } from "@traycer/protocol/host/environment-schemas";
 
 /**
- * `EnvironmentItemStatus.appliedAs` (ticket E7, checkpoint 4): the native
+ * `EnvironmentItemStatus.appliedAs`: the native
  * entry the host wrote an `mcp_server` or `skill` item as. The field is
  * required and nullable, and its `entryKind` is a closed set.
  */
@@ -134,7 +134,7 @@ describe("environmentItemStatusSchema appliedAs", () => {
 });
 
 /**
- * `EnvironmentItemStatus.args.kind` (ticket E11, checkpoint 4): which case of
+ * `EnvironmentItemStatus.args.kind`: which case of
  * a code the client words differently. Open, and absent from a host that
  * predates it.
  */

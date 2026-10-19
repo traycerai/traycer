@@ -6,12 +6,11 @@ import type {
 } from "@traycer/protocol/host/environment-schemas";
 
 /**
- * The environment section of a support report (ticket E11, checkpoint 5):
- * what the selected host says about its environment, as closed codes, typed
- * numbers and the person's own item and secret names. A CLOSED key set:
- * Electron main mirrors every record below with a `contractKeySet` and
- * rejects any other key (`support-ipc.ts`), so a field added here fails
- * there until it is added on purpose.
+ * The environment section of a support report: what the selected host says
+ * about its environment, as closed codes, typed numbers and the person's own
+ * item and secret names. A CLOSED key set: Electron main mirrors every record
+ * below with a `contractKeySet` and rejects any other key (`support-ipc.ts`),
+ * so a field added here fails there until it is added on purpose.
  *
  * Never a key, by ruling: pending uploads, local overrides, setup script or
  * output, any value, `snapshot.json`, the policy body, profile, cost, routes,
@@ -36,8 +35,8 @@ export interface SupportEnvironmentSection {
   /** `null` until the host's secrets were listed. */
   readonly rotations: readonly SupportEnvironmentRotation[] | null;
   /**
-   * The host's recent same-principal refusals (ticket E13 checkpoint 4),
-   * newest first; `null` until read or on a host that serves none.
+   * The host's recent same-principal refusals, newest first; `null` until read
+   * or on a host that serves none.
    */
   readonly reachDenials: readonly SupportEnvironmentReachDenial[] | null;
   /**
@@ -101,8 +100,8 @@ export interface SupportEnvironmentPolicy {
   readonly source: string;
   readonly readState: string;
   /**
-   * A team host's policy state (`none`, `applied`, `lapsed`; E12 checkpoint
-   * 6); null on a personal host or a host older than `autoPolicy.get@1.1`.
+   * A team host's policy state (`none`, `applied`, `lapsed`); null on a
+   * personal host or a host older than `autoPolicy.get@1.1`.
    */
   readonly teamState: string | null;
   /** The applied team policy's version (its row revision), or null. */

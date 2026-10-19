@@ -155,11 +155,11 @@ export function LandingComposer(props: LandingComposerProps) {
   const composerFollowsEffective = placement.followsEffective;
   const hostLabelFromDirectory = placement.hostLabelFor;
   const resolvedHostId = placementTarget.resolvedHostId;
-  // Who the task belongs to (ticket E17 checkpoint 6, A1), read at submit.
+  // Who the task belongs to, read at submit.
   const owner = useLandingOwner(props.draftId, resolvedHostId);
   const hostClient = placementTarget.client;
   // A harness a team sandbox does not offer is refused at submit and at a
-  // terminal launch (ticket E17 checkpoint 6, B5).
+  // terminal launch.
   const teamSandboxHarnessBlockedFor = useTeamSandboxHarnessGate({
     hostId: resolvedHostId,
     client: hostClient,

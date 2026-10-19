@@ -54,10 +54,9 @@ export type HostWorkspaceControlsHostScope =
        */
       readonly unselectableExceptHostId: string | null;
       /**
-       * The only hosts the picker lists, or `null` for every host: B1's
-       * "Continue on a <team> host" shows that team's hosts and no other
-       * (ticket E17 checkpoint 6). The selected host is listed whatever this
-       * says, so the picker never hides its own value.
+       * The only hosts the picker lists, or `null` for every host: "Continue on
+       * a <team> host" shows that team's hosts and no other. The selected host
+       * is listed whatever this says, so the picker never hides its own value.
        */
       readonly onlyHostIds: ReadonlySet<string> | null;
     };

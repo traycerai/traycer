@@ -10,7 +10,7 @@ import {
 } from "@/components/settings/host-scope/host-scope-model";
 
 /**
- * Ticket E17: a sandbox option says whether a team owns it (`teamOwned`), the
+ * A sandbox option says whether a team owns it (`teamOwned`), the
  * fact the wake confirm reads. The registry row's `owner` answers first; a
  * row the registry has not answered for falls back to its directory entry's
  * copy (`ownerTeamName`).

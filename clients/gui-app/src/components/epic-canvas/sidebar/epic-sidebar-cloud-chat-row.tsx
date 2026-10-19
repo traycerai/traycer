@@ -139,9 +139,9 @@ export function EpicSidebarCloudChatRow(
   // as a tree row would. Only an unreachable owner produces a locked row and
   // the published-copy surface behind it.
   const ownerReachable = ownerReachability.status === "reachable";
-  // Reach, not connectivity (ticket E17 checkpoint 5): the owner host belongs
-  // to another principal, so agents here cannot work with it. Independent of
-  // the lock - a host can be online and out of reach, or offline and not.
+  // Reach, not connectivity: the owner host belongs to another principal, so
+  // agents here cannot work with it. Independent of the lock - a host can be
+  // online and out of reach, or offline and not.
   const ownerNotReachable = useOwnerHostNotReachable(chat.ownerHostId);
   // Openable-live = the owner answers. Host ids are unique (2026-08-07
   // ruling), so a reachable owner IS the machine that holds this chat, and

@@ -15,11 +15,11 @@ import {
 import { hostRpcRegistry } from "@traycer/protocol/host/registry";
 
 /**
- * `epic.create@1.3` (ticket E13 checkpoint 5): the request names who owns the
- * new epic. `owner` is `{kind: "person"} | {kind: "team", teamId} | null`; an
- * absent key is the person, which is exactly what every older caller meant. A
- * `@1.2` host's frozen request STRIPS the key, so a caller that sends a team
- * owner requires `@1.3` of the host.
+ * `epic.create@1.3`: the request names who owns the new epic. `owner` is
+ * `{kind: "person"} | {kind: "team", teamId} | null`; an absent key is the
+ * person, which is exactly what every older caller meant. A `@1.2` host's
+ * frozen request STRIPS the key, so a caller that sends a team owner requires
+ * `@1.3` of the host.
  */
 
 const epicLight = {

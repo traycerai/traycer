@@ -39,9 +39,9 @@ function environmentProvidersQueryOptions(
 }
 
 /**
- * Whether a team's environment has a provider (ticket E17 checkpoint 3): its
- * API keys and linked plans, counted. `null` reads nothing. `data` is the
- * fetch result itself; the form warns only on an `ok` answer of none.
+ * Whether a team's environment has a provider: its API keys and linked plans,
+ * counted. `null` reads nothing. `data` is the fetch result itself; the form
+ * warns only on an `ok` answer of none.
  */
 export function useEnvironmentProviders(
   environmentId: string | null,
