@@ -3912,7 +3912,12 @@ export class RemoteSession<
       );
       entry.resolve(decoded);
     } catch (cause) {
-      entry.reject(asHostRpcError(cause, entry.requestId, entry.method));
+      // The host answered success, so it ran the call; only this side could
+      // not read the answer. Unlike the error envelope above, which is the
+      // host's own refusal, this one is marked.
+      const unreadable = asHostRpcError(cause, entry.requestId, entry.method);
+      markMayHaveReachedHost(unreadable);
+      entry.reject(unreadable);
     }
   }
 
@@ -5290,11 +5295,18 @@ export class RemoteSession<
     // still has a CLOSE to send on it. Each caller retires the counter itself.
   }
 
+  /**
+   * Every pending entry was enqueued for the wire, so the host may have run
+   * it whatever ended the wait (a timeout, a corrupt inbound frame, the host's
+   * per-stream FATAL, which can follow the method's own run): the rejection is
+   * marked for `mayHaveReachedHost`.
+   */
   private rejectUnary(streamId: number, error: HostRpcError): void {
     const entry = this.pendingUnary.get(streamId);
     if (entry === undefined) {
       return;
     }
+    markMayHaveReachedHost(error);
     this.clearPendingUnary(streamId);
     this.traffic?.end(streamId, true);
     const nextSeq = this.retireOutboundSeq(streamId);

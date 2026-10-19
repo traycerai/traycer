@@ -311,8 +311,9 @@ const reachedHostFailures = new WeakSet<HostRpcError>();
 
 /**
  * Records that `error` ended a request that had already been sent, for the
- * failure shapes whose class alone cannot say so: a session that closes, or
- * goes terminally fatal, with the request pending answers it with a plain
+ * failure shapes whose class alone cannot say so: a session that closes or
+ * goes terminally fatal with the request pending, a corrupt or undecodable
+ * answer, a per-stream fatal after the request. Each arrives as a plain
  * `HostRpcError`, the same class a host refusal arrives as.
  */
 export function markMayHaveReachedHost(error: HostRpcError): void {
@@ -327,10 +328,15 @@ export function markMayHaveReachedHost(error: HostRpcError): void {
  * True for a failure marked by {@link markMayHaveReachedHost}, an abort after
  * dispatch, a keyed request dropped after it was sent, and a transport failure
  * the host did not attest (the ambiguous post-send drop, and every retry
- * episode whose earlier attempt was sent). It leans toward true where the
- * transport cannot attest either way. False for everything else: a host
- * refusal, a failure the host attested, a provably pre-send failure, and any
- * value that is not a `HostRpcError`.
+ * episode whose earlier attempt was sent).
+ *
+ * It leans true wherever the transport cannot attest either way, and that
+ * includes some requests that provably never left: a `sendUnary` on a session
+ * already closed by its caller, or one closed while the call awaited
+ * readiness, fails with a `HostTransportFailureError` without `fatalDetails`
+ * before anything is enqueued, and reads true. False means the request did not
+ * run: a host refusal, a failure the host attested, a pre-send abort or
+ * unkeyed retryable failure, and any value that is not a `HostRpcError`.
  */
 export function mayHaveReachedHost(error: unknown): boolean {
   if (!(error instanceof HostRpcError)) return false;

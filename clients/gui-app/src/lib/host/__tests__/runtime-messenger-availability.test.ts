@@ -801,41 +801,52 @@ describe("RuntimeHostMessenger availability forwarding", () => {
     }
   });
 
-  it("reports an unknown outcome when credential recovery's retry lands on the recorded verdict, and again after a redial is refused", async () => {
-    vi.useFakeTimers();
-    try {
+  describe("credential recovery after the session went terminally fatal", () => {
+    // One call: its request is pending when the session is revoked, the
+    // session closes (recording the verdict) and fails the request, and
+    // recovery's revalidation is held until the test releases it.
+    function recoveringCall(refusal: HostRpcError): {
+      readonly callRemote: () => Promise<unknown>;
+      readonly failFirstSession: () => void;
+      readonly revalidations: () => number;
+      readonly releaseRevalidation: () => void;
+      readonly firstCalls: () => number;
+      readonly secondCalls: () => number;
+      readonly revoked: FatalErrorDetails;
+      readonly dispose: () => void;
+    } {
       const revoked = revokedFatal();
       const lease = new MutableBearerLease("stale", "user-1");
-      let rotations = 0;
+      const gate: { open: () => void } = { open: () => undefined };
       const pendingFirst: { reject: (reason: unknown) => void } = {
         reject: () => undefined,
       };
-      const refusal = new HostRpcError({
-        code: "FORBIDDEN",
-        message: "not allowed",
-        requestId: "req-refused",
-        method: "host.status",
-        fatalDetails: null,
-      });
-      const firstRequest = vi.fn(
-        () =>
-          new Promise<never>((_, reject) => {
-            pendingFirst.reject = reject;
-          }),
-      );
-      const secondRequest = vi
-        .fn()
-        .mockRejectedValueOnce(markedSessionFatal(revoked))
-        .mockRejectedValueOnce(refusal);
+      let revalidations = 0;
+      let firstCalls = 0;
+      let secondCalls = 0;
       const firstSession = controllableSession();
       const transports = [
-        { session: firstSession, request: firstRequest },
-        { session: controllableSession(), request: secondRequest },
+        {
+          session: firstSession,
+          request: () => {
+            firstCalls += 1;
+            return new Promise<never>((_, reject) => {
+              pendingFirst.reject = reject;
+            });
+          },
+        },
+        {
+          session: controllableSession(),
+          request: () => {
+            secondCalls += 1;
+            return Promise.reject(refusal);
+          },
+        },
       ];
-      let built = 0;
       mocks.createRemoteHostTransport.mockImplementation(() => {
-        const transport = transports.at(built);
-        built += 1;
+        const transport = transports.at(
+          mocks.createRemoteHostTransport.mock.calls.length - 1,
+        );
         if (transport === undefined) {
           throw new Error("unexpected extra transport build");
         }
@@ -858,65 +869,116 @@ describe("RuntimeHostMessenger availability forwarding", () => {
       });
       const recovering = createAuthAwareMessenger(binding.messenger, {
         revalidateExpectedBearer: () => {
-          rotations += 1;
-          lease.rotate(`fresh-${rotations}`);
-          return Promise.resolve("rotated");
+          revalidations += 1;
+          return new Promise((resolve) => {
+            gate.open = () => {
+              lease.rotate("fresh");
+              resolve("rotated");
+            };
+          });
         },
       });
-      const callRemote = (): Promise<unknown> =>
-        recovering
-          .request(
-            "host.status",
-            {},
-            {
-              replayMustBeKeyed: false,
-              requiredHostMethodVersion: null,
-              idempotencyKey: null,
-              authority: {
-                endpoint: {
-                  hostId: REMOTE_HOST_ID,
-                  websocketUrl: remoteEntry.websocketUrl ?? "",
+      return {
+        callRemote: () =>
+          recovering
+            .request(
+              "host.status",
+              {},
+              {
+                replayMustBeKeyed: false,
+                requiredHostMethodVersion: null,
+                idempotencyKey: null,
+                authority: {
+                  endpoint: {
+                    hostId: REMOTE_HOST_ID,
+                    websocketUrl: remoteEntry.websocketUrl ?? "",
+                  },
+                  bearer: lease,
+                  abortSignal: new AbortController().signal,
                 },
-                bearer: lease,
-                abortSignal: new AbortController().signal,
               },
-            },
-          )
-          .then(
-            () => null,
-            (reason: unknown) => reason,
-          );
-
-      // The request is pending when the session goes terminally fatal; the
-      // session closes (recording the verdict) and fails the pending request.
-      const first = callRemote();
-      expect(firstRequest).toHaveBeenCalledTimes(1);
-      firstSession.fatal = revoked;
-      firstSession.emitClosed();
-      pendingFirst.reject(markedSessionFatal(revoked));
-      const firstError = await first;
-
-      // The rotated retry never dials: it lands on the fresh verdict, and the
-      // earlier send keeps the caller from reading that as "did not happen".
-      expect(firstError).toBeInstanceOf(RetryEpisodeOutcomeUnknownError);
-      expect(mayHaveReachedHost(firstError)).toBe(true);
-      expect(firstError).toHaveProperty("finalRefusal.fatalDetails", revoked);
-      expect(firstRequest).toHaveBeenCalledTimes(1);
-      expect(mocks.createRemoteHostTransport).toHaveBeenCalledTimes(1);
-
-      // Past the TTL the same flow redials; the retry is refused by the host.
-      vi.advanceTimersByTime(30_000);
-      const secondError = await callRemote();
-
-      expect(mocks.createRemoteHostTransport).toHaveBeenCalledTimes(2);
-      expect(secondRequest).toHaveBeenCalledTimes(2);
-      expect(secondError).toBeInstanceOf(RetryEpisodeOutcomeUnknownError);
-      expect(secondError).toHaveProperty("finalRefusal", refusal);
-
-      binding.dispose();
-    } finally {
-      vi.useRealTimers();
+            )
+            .then(
+              () => null,
+              (reason: unknown) => reason,
+            ),
+        failFirstSession: () => {
+          firstSession.fatal = revoked;
+          firstSession.emitClosed();
+          pendingFirst.reject(markedSessionFatal(revoked));
+        },
+        revalidations: () => revalidations,
+        releaseRevalidation: () => gate.open(),
+        firstCalls: () => firstCalls,
+        secondCalls: () => secondCalls,
+        revoked,
+        dispose: () => binding.dispose(),
+      };
     }
+
+    function refusalOfTheHost(): HostRpcError {
+      return new HostRpcError({
+        code: "FORBIDDEN",
+        message: "not allowed",
+        requestId: "req-refused",
+        method: "host.status",
+        fatalDetails: null,
+      });
+    }
+
+    it("a retry that lands on the fresh verdict reports an unknown outcome and never dials", async () => {
+      vi.useFakeTimers();
+      try {
+        const h = recoveringCall(refusalOfTheHost());
+        const outcome = h.callRemote();
+        expect(h.firstCalls()).toBe(1);
+        h.failFirstSession();
+        await vi.advanceTimersByTimeAsync(0);
+        expect(h.revalidations()).toBe(1);
+
+        h.releaseRevalidation();
+        const error = await outcome;
+
+        expect(error).toBeInstanceOf(RetryEpisodeOutcomeUnknownError);
+        expect(mayHaveReachedHost(error)).toBe(true);
+        expect(error).toHaveProperty("finalRefusal.fatalDetails", h.revoked);
+        expect(mocks.createRemoteHostTransport).toHaveBeenCalledTimes(1);
+        expect(h.secondCalls()).toBe(0);
+
+        h.dispose();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("recovery that outlasts the verdict's TTL redials, and a refused retry still reports an unknown outcome", async () => {
+      vi.useFakeTimers();
+      try {
+        const refusal = refusalOfTheHost();
+        const h = recoveringCall(refusal);
+        const outcome = h.callRemote();
+        expect(h.firstCalls()).toBe(1);
+        h.failFirstSession();
+        await vi.advanceTimersByTimeAsync(0);
+        expect(h.revalidations()).toBe(1);
+
+        // The verdict expires while this same call is still being recovered.
+        vi.advanceTimersByTime(30_000);
+        h.releaseRevalidation();
+        const error = await outcome;
+
+        expect(mocks.createRemoteHostTransport).toHaveBeenCalledTimes(2);
+        expect(h.firstCalls()).toBe(1);
+        expect(h.secondCalls()).toBe(1);
+        expect(error).toBeInstanceOf(RetryEpisodeOutcomeUnknownError);
+        expect(error).toHaveProperty("finalRefusal", refusal);
+        expect(mayHaveReachedHost(error)).toBe(true);
+
+        h.dispose();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
   });
 
   it("drops the verdict early when the host's transport identity changes - a host update must not wait out the TTL", async () => {

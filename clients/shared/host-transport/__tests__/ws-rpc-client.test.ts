@@ -23,6 +23,7 @@ import {
   HostRequestAbortedError,
   HostRpcError,
   HostTransportFailureError,
+  mayHaveReachedHost,
   RetryableTransportError,
   type HostRequestAuthority,
   type IHostMessenger,
@@ -4290,6 +4291,191 @@ describe("WsRpcClient", () => {
       });
     });
   });
+});
+
+describe("WsRpcClient dispatch provenance of a failure after the request was sent", () => {
+  // Client on 1.1 against a host on 1.0, so a response is parsed as 1.0
+  // before it is upgraded and a mistyped result fails decoding.
+  const echoV10Contract = defineRpcContract({
+    method: "host.echo",
+    schemaVersion: { major: 1, minor: 0 } as const,
+    requestSchema: z.object({ message: z.string() }),
+    responseSchema: z.object({ echoed: z.string() }),
+  });
+  const echoV11Contract = defineRpcContract({
+    method: "host.echo",
+    schemaVersion: { major: 1, minor: 1 } as const,
+    requestSchema: z.object({ message: z.string() }),
+    responseSchema: z.object({ echoed: z.string(), volume: z.number() }),
+  });
+  const upgradeEcho = defineUpgradePath<
+    typeof echoV10Contract,
+    typeof echoV11Contract
+  >({
+    from: echoV10Contract.schemaVersion,
+    to: echoV11Contract.schemaVersion,
+    upgradeRequest: (request) => request,
+    upgradeResponse: (response) => ({ echoed: response.echoed, volume: 0 }),
+  });
+  const registry = defineVersionedRpcRegistry({
+    "host.echo": {
+      1: {
+        latestMinor: 1,
+        versions: {
+          0: { contract: echoV10Contract, upgradeFromPreviousVersion: null },
+          1: {
+            contract: echoV11Contract,
+            upgradeFromPreviousVersion: upgradeEcho,
+          },
+        },
+        downgradePathsFromLatest: {},
+      },
+    },
+  });
+
+  const REQUEST_ID = "req-provenance";
+  const fatalWith = (code: string, retryable: boolean): HostFrame => ({
+    kind: "fatalError",
+    details: {
+      code,
+      reason: `host said ${code}`,
+      incompatibleMethods: null,
+      upgradeGuidance: null,
+      retryable,
+    },
+  });
+  const responseFrame = (overrides: {
+    readonly requestId: string;
+    readonly method: string;
+    readonly result: object | null;
+    readonly error: { readonly code: string; readonly message: string } | null;
+  }): HostFrame => ({
+    kind: "response",
+    schemaVersion: { major: 1, minor: 0 },
+    ...overrides,
+  });
+
+  const rows: ReadonlyArray<{
+    readonly name: string;
+    readonly deliver: (socket: StubWebSocket) => void;
+    readonly mayHaveReached: boolean;
+  }> = [
+    {
+      name: "a response payload that fails decoding",
+      deliver: (socket) =>
+        socket.fireMessage(
+          responseFrame({
+            requestId: REQUEST_ID,
+            method: "host.echo",
+            result: { echoed: 7 },
+            error: null,
+          }),
+        ),
+      mayHaveReached: true,
+    },
+    {
+      name: "the host's own error envelope",
+      deliver: (socket) =>
+        socket.fireMessage(
+          responseFrame({
+            requestId: REQUEST_ID,
+            method: "host.echo",
+            result: null,
+            error: { code: "FORBIDDEN", message: "not allowed" },
+          }),
+        ),
+      mayHaveReached: false,
+    },
+    {
+      name: "a host fatalError after the request",
+      deliver: (socket) => socket.fireMessage(fatalWith("INCOMPATIBLE", false)),
+      mayHaveReached: true,
+    },
+    {
+      name: "the host's post-open timeout attestation",
+      deliver: (socket) =>
+        socket.fireMessage(fatalWith("RPC_REQUEST_TIMEOUT", true)),
+      mayHaveReached: false,
+    },
+    {
+      name: "a malformed frame after the request",
+      deliver: (socket) => socket.fireRawMessage("{ not json"),
+      mayHaveReached: true,
+    },
+    {
+      name: "an unexpected frame kind",
+      deliver: (socket) =>
+        socket.fireMessage(
+          openAckWithOnlyOptionalHostEcho({ major: 1, minor: 0 }),
+        ),
+      mayHaveReached: true,
+    },
+    {
+      name: "a response for another request",
+      deliver: (socket) =>
+        socket.fireMessage(
+          responseFrame({
+            requestId: "someone-else",
+            method: "host.echo",
+            result: { echoed: "x" },
+            error: null,
+          }),
+        ),
+      mayHaveReached: true,
+    },
+    {
+      name: "a response for another method",
+      deliver: (socket) =>
+        socket.fireMessage(
+          responseFrame({
+            requestId: REQUEST_ID,
+            method: "host.other",
+            result: { echoed: "x" },
+            error: null,
+          }),
+        ),
+      mayHaveReached: true,
+    },
+  ];
+
+  it.each(rows)(
+    "$name reads mayHaveReachedHost=$mayHaveReached",
+    async (row) => {
+      const { factory, sockets } = makeFactory();
+      const client = new BoundWsRpcClient(
+        new WsRpcClient<typeof registry>({
+          clientIdentity: TEST_CLIENT_IDENTITY,
+          registry,
+          requestId: () => REQUEST_ID,
+          webSocketFactory: factory,
+          dialTimeoutMs: 1000,
+          frameTimeoutMs: 1000,
+          hostAttestationWindowMs: 0,
+          evidence: NO_TRANSPORT_EVIDENCE,
+        }),
+        authorityForToken("t"),
+      );
+
+      const pending = client.request("host.echo", { message: "hi" });
+      await flush();
+      sockets[0].socket.fireOpen();
+      await flush();
+      sockets[0].socket.fireMessage(
+        openAckWithOnlyOptionalHostEcho({ major: 1, minor: 0 }),
+      );
+      await flush();
+      expectRequestFrame(sockets[0].sent[1]);
+
+      row.deliver(sockets[0].socket);
+      const error: unknown = await pending.then(
+        () => null,
+        (reason: unknown) => reason,
+      );
+
+      expect(error).toBeInstanceOf(HostRpcError);
+      expect(mayHaveReachedHost(error)).toBe(row.mayHaveReached);
+    },
+  );
 });
 
 describe("WsRpcClient negotiated-manifest publication", () => {

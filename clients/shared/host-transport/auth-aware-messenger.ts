@@ -21,23 +21,6 @@ import {
 } from "./retrying-messenger";
 
 /**
- * Wraps an `IHostMessenger` so a `HostRpcError` with `code ===
- * "UNAUTHORIZED"` triggers `auth.revalidateCurrentContext()` before the error
- * propagates. The host never refreshes tokens itself - it only signals
- * `UNAUTHORIZED` - so this wrapper is the single client-side place that closes
- * the refresh loop for unary RPC, shared by the renderer and the CLI.
- *
- * With a `retry` policy, a revalidation that rotated the bearer is followed by
- * one more `request` attempt; otherwise (and always, on a second failure) the
- * original error propagates.
- *
- * Recovery never hides that the first attempt may have reached the host (a
- * session that went fatal with the request pending, see
- * `mayHaveReachedHost`): an abort during recovery says it may have dispatched,
- * and the retry's failure carries the earlier send the way a retry episode's
- * does. A first attempt that never left ends every exit exactly as before.
- */
-/**
  * Reads the current bearer string for the retry gate, tolerating every "no
  * bearer" shape (no retry policy, no source, or a released/empty lease whose
  * `getBearerToken()` throws) by returning `null`. The gate then compares
@@ -51,6 +34,27 @@ function readBearer(source: OpenFrameBearerSource): string | null {
   }
 }
 
+/**
+ * Wraps an `IHostMessenger` so a `HostRpcError` with `code ===
+ * "UNAUTHORIZED"` triggers `auth.revalidateCurrentContext()` before the error
+ * propagates. The host never refreshes tokens itself - it only signals
+ * `UNAUTHORIZED` - so this wrapper is the single client-side place that closes
+ * the refresh loop for unary RPC, shared by the renderer and the CLI.
+ *
+ * A revalidation that rotated the bearer is followed by one more `request`
+ * attempt, whose failure propagates. One that did not rotate rethrows the
+ * original error; an abort during recovery rejects with
+ * `HostRequestAbortedError`, and a superseded recovery with
+ * `HostAuthoritySupersededError`.
+ *
+ * Recovery never hides that the first attempt may have reached the host (see
+ * `mayHaveReachedHost`; a session that went fatal with the request pending is
+ * the case that brings one here). After such an attempt an abort during
+ * recovery says it may have dispatched, a superseded recovery is an unattested
+ * transport failure, and the retry's failure carries the earlier send the way
+ * a retry episode's does. A first attempt that never left ends every exit as
+ * the paragraph above says.
+ */
 export function createAuthAwareMessenger<Registry extends VersionedRpcRegistry>(
   inner: IHostMessenger<Registry>,
   auth: AuthorityBoundAuthRevalidator,
