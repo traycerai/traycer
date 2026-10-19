@@ -4,12 +4,12 @@
  * host answers `environment.members`, and hands each row the label built
  * from the signed-in viewer and that directory.
  *
- * The card and its rows are real, asserted through each row's accessible
- * name; the directory hook and the hooks a row reads its live state from are
- * stubs.
+ * The card and its rows are real: each row is found by its button's
+ * accessible name and its attribution read from what it renders; the
+ * directory hook and the hooks a row reads its live state from are stubs.
  */
 import { StrictMode } from "react";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BotRecord } from "@traycer/protocol/host/bot/schemas";
 import { HomeBotsGroupCard } from "@/components/home/bots/home-bots-group";
@@ -129,23 +129,20 @@ function mountCard(ownerKind: HomeBotsGroup["ownerKind"]): void {
 }
 
 const BOT_IDS = ["bot-mine", "bot-teammate", "bot-stranger"] as const;
-const ATTRIBUTIONS = ["Created by you", "Created by Tess Teammate"] as const;
 
 /**
- * Each row's attribution as its button's accessible name carries it: the
- * "Created by" line the row shows, or "none" when it shows none.
+ * Each row's attribution as the row renders it: the text of its "Created by"
+ * line, or "none" when it shows none. Rows are found by their button's
+ * accessible name.
  */
 function createdBy(): Record<string, string> {
   return Object.fromEntries(
     BOT_IDS.map((botId) => {
       const row = screen.getByRole("button", { name: new RegExp(`^${botId}`) });
-      const shown = ATTRIBUTIONS.find(
-        (label) =>
-          screen.queryByRole("button", {
-            name: new RegExp(`^${botId}.*${label}`),
-          }) === row,
-      );
-      return [botId, shown ?? "none"];
+      return [
+        botId,
+        within(row).queryByTestId("home-bot-created-by")?.textContent ?? "none",
+      ];
     }),
   );
 }
