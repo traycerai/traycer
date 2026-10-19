@@ -1,5 +1,6 @@
 import { memo, useContext, type ReactElement } from "react";
 import type { ConversationRequest } from "@traycer/protocol/persistence/epic/messages";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -264,7 +265,7 @@ function ChatMessageImpl(props: ChatMessageProps) {
   // Timestamps setting can hide it, and a lone separator after the label is
   // worse than no stamp at all.
   const sentAt = message.sentAt ?? message.createdAt;
-  const sender = (
+  const overline = (
     <ChatSenderOverline
       label={label}
       sentAt={sentAt}
@@ -272,6 +273,22 @@ function ChatMessageImpl(props: ChatMessageProps) {
       instanceId={message.id}
     />
   );
+  // Only a bot conversation's user rows carry a picture: several members
+  // write into one conversation, and the picture says which one this is.
+  const sender =
+    message.senderAvatarUrl === undefined ? (
+      overline
+    ) : (
+      <span className="flex items-center gap-1.5">
+        <Avatar size="sm" data-testid="chat-sender-avatar">
+          <AvatarImage src={message.senderAvatarUrl} alt="" />
+          <AvatarFallback>
+            {senderLabel.slice(0, 1).toUpperCase()}
+          </AvatarFallback>
+        </Avatar>
+        {overline}
+      </span>
+    );
 
   return (
     <div
