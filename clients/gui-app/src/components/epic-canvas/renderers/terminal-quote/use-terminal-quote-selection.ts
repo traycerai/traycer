@@ -156,11 +156,29 @@ export function useTerminalQuoteSelection(
     const handleMouseDown = (): void => {
       document.addEventListener("mouseup", handleMouseUp);
     };
+    // A finger never produces that mouseup: xterm's touch recognizer cancels
+    // the compatibility mouse events over its screen. A touch selection (the
+    // hold-then-drag in `useTerminalTouchGestures`) is published from the
+    // pointer that made it instead, with the same pane-scoped arming. The
+    // recognizer handles its own tap first (React dispatches at the root,
+    // below the document), so a tap that clears the selection publishes
+    // nothing here.
+    const handleTouchPointerUp = (): void => {
+      document.removeEventListener("pointerup", handleTouchPointerUp);
+      publish();
+    };
+    const handlePointerDown = (event: PointerEvent): void => {
+      if (event.pointerType !== "touch") return;
+      document.addEventListener("pointerup", handleTouchPointerUp);
+    };
     element.addEventListener("mousedown", handleMouseDown);
+    element.addEventListener("pointerdown", handlePointerDown);
     return () => {
       element.removeEventListener("mousedown", handleMouseDown);
+      element.removeEventListener("pointerdown", handlePointerDown);
       // A drag in flight when the tile unmounts never gets its mouseup.
       document.removeEventListener("mouseup", handleMouseUp);
+      document.removeEventListener("pointerup", handleTouchPointerUp);
       selectionCleared.dispose();
       scrolled.dispose();
     };

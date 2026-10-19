@@ -1,7 +1,7 @@
 import "../../../../../../__tests__/test-browser-apis";
 import { createRef } from "react";
 import { afterEach, describe, expect, it } from "vitest";
-import { act, cleanup, renderHook } from "@testing-library/react";
+import { act, cleanup, fireEvent, renderHook } from "@testing-library/react";
 
 import {
   useTerminalQuoteSelection,
@@ -94,6 +94,27 @@ describe("useTerminalQuoteSelection", () => {
     });
 
     expect(result.current.selection?.text).toBe("2 tests failed");
+  });
+
+  it("publishes a touch selection on pointerup but not a mouse one", () => {
+    const source = createSource();
+    const { result } = renderSelection(source);
+
+    // A finger never produces the compatibility mouseup, so the pointer that
+    // made the selection publishes it; a mouse pointer is left to mousedown.
+    act(() => {
+      fireEvent.pointerDown(source.element, { pointerType: "mouse" });
+      source.setSelection("typed by a mouse");
+      fireEvent.pointerUp(document.body, { pointerType: "mouse" });
+    });
+    expect(result.current.selection).toBeNull();
+
+    act(() => {
+      fireEvent.pointerDown(source.element, { pointerType: "touch" });
+      source.setSelection("held and dragged");
+      fireEvent.pointerUp(document.body, { pointerType: "touch" });
+    });
+    expect(result.current.selection?.text).toBe("held and dragged");
   });
 
   it("ignores a mouseup from a drag that never started in this pane", () => {
