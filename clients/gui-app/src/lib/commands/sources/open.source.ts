@@ -15,6 +15,7 @@ import { useAgentsOpenerItems } from "@/lib/commands/sources/open/agents-subpage
 import { useDiffOpenerItems } from "@/lib/commands/sources/open/diff-subpage";
 import { useFilesOpenerItems } from "@/lib/commands/sources/open/files-subpage";
 import { useSearchOpenerItems } from "@/lib/commands/sources/open/search-subpage";
+import { useSimulatorsOpenerItems } from "@/lib/commands/sources/open/simulators-subpage";
 import { useTerminalsOpenerItems } from "@/lib/commands/sources/open/terminals-subpage";
 import { commGraphOpenerItem } from "@/lib/commands/sources/open/comm-graph-leaf";
 import type {
@@ -53,6 +54,12 @@ const OPENER_CATEGORIES: ReadonlyArray<OpenerCategory> = [
     title: "Browser",
     keywords: ["browser", "web", "page"],
     useItems: useBrowserOpenerItems,
+  },
+  {
+    id: "simulators",
+    title: "Simulators",
+    keywords: ["simulator", "emulator", "ios", "android", "phone", "device"],
+    useItems: useSimulatorsOpenerItems,
   },
   {
     id: "artifacts",

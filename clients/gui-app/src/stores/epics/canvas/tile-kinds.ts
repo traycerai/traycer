@@ -43,6 +43,12 @@ export const TILE_KIND_PR_DIFF = "pr-diff";
  * viewer the file's kind picks (`lib/files/viewer-registry.ts`).
  */
 export const TILE_KIND_EPIC_FILE = "epic-file";
+/**
+ * One simulator (an iOS Simulator or an Android Emulator) on one host, viewed
+ * live over `simulator.stream`. Renderer-local like `browser-session`: the
+ * tile points at a simulator the host supervises, it does not carry one.
+ */
+export const TILE_KIND_SIMULATOR = "simulator";
 // A "blank" tab: a real strip tab whose body renders the inline opener until
 // content is picked (which replaces it in place).
 export const TILE_KIND_BLANK = "blank";
@@ -66,6 +72,7 @@ export type TileKindId =
   | typeof TILE_KIND_PR_DETAIL
   | typeof TILE_KIND_PR_DIFF
   | typeof TILE_KIND_EPIC_FILE
+  | typeof TILE_KIND_SIMULATOR
   | typeof TILE_KIND_BLANK;
 
 export const isTileKind = makeLiteralGuard<TileKindId>({
@@ -87,5 +94,6 @@ export const isTileKind = makeLiteralGuard<TileKindId>({
   [TILE_KIND_PR_DETAIL]: true,
   [TILE_KIND_PR_DIFF]: true,
   [TILE_KIND_EPIC_FILE]: true,
+  [TILE_KIND_SIMULATOR]: true,
   [TILE_KIND_BLANK]: true,
 });

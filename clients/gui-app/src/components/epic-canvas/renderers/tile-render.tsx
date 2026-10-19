@@ -36,6 +36,7 @@ import { PrDetailTile } from "./pr-detail-tile";
 import { PrDiffTile } from "./pr-diff-tile";
 import { PaneOpener } from "@/components/epic-canvas/canvas/pane-opener";
 import { EpicFileTile } from "@/components/files/epic-file-tile";
+import { SimulatorTile } from "@/components/simulator-tile/simulator-tile";
 
 export interface TileRenderArgs<R extends EpicCanvasTileRef> {
   readonly node: R;
@@ -179,6 +180,15 @@ const TILE_RENDERERS: TileRendererRegistry = {
   ),
   "epic-file": ({ node, epicId }) => (
     <EpicFileTile node={node} epicId={epicId} />
+  ),
+  simulator: ({ node, viewTabId, tileId, epicId, isActive }) => (
+    <SimulatorTile
+      node={node}
+      viewTabId={viewTabId}
+      tileId={tileId}
+      epicId={epicId}
+      isActive={isActive}
+    />
   ),
   // A blank tab's body IS the inline opener; picking content replaces it in
   // place (via openTileInPane). `tileId` is the group id; `isActive` drives

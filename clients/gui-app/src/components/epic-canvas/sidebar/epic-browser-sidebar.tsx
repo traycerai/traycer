@@ -18,6 +18,7 @@ import {
   BrowserSearchHeaderInput,
 } from "@/components/epic-canvas/sidebar/epic-browser-sidebar-header";
 import { BrowserTabRow } from "@/components/epic-canvas/sidebar/epic-browser-sidebar-row";
+import { SimulatorsSidebarGroup } from "@/components/epic-canvas/sidebar/epic-simulator-sidebar";
 import { useAddBrowserAction } from "@/components/epic-canvas/sidebar/use-browser-add-action";
 import {
   filterBrowserTabRows,
@@ -66,12 +67,23 @@ export function BrowsersPanelBody(props: LeftPanelSlotProps) {
       hostId={hostPin.resolvedHostId}
       scope={{ kind: "epic", epicId: props.epicId }}
     >
-      <BrowsersPanelBodyFrame epicId={props.epicId} tabId={props.tabId} />
+      <BrowsersPanelBodyFrame
+        epicId={props.epicId}
+        tabId={props.tabId}
+        hostId={hostPin.resolvedHostId}
+      />
     </BrowserSessionsHostBoundary>
   );
 }
 
-function BrowsersPanelBodyFrame(props: LeftPanelSlotProps) {
+/**
+ * The browser rows, then the Simulators group on the same pinned host: a
+ * simulator is the other kind of screen a task looks at, and it follows the
+ * panel's host pin so both lists describe one machine.
+ */
+function BrowsersPanelBodyFrame(
+  props: LeftPanelSlotProps & { readonly hostId: string | null },
+) {
   return (
     <SidebarContent className="min-h-0">
       <SidebarGroup className="min-h-0 flex-1">
@@ -79,6 +91,11 @@ function BrowsersPanelBodyFrame(props: LeftPanelSlotProps) {
           <BrowsersPanelBodyLive epicId={props.epicId} tabId={props.tabId} />
         </SidebarGroupContent>
       </SidebarGroup>
+      <SimulatorsSidebarGroup
+        epicId={props.epicId}
+        tabId={props.tabId}
+        hostId={props.hostId}
+      />
     </SidebarContent>
   );
 }

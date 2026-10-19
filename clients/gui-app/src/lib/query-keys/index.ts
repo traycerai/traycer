@@ -39,6 +39,7 @@ export {
   editorQueryKeys,
 } from "@/lib/query-keys/editor-mutation-keys";
 export { portForwardMutationKeys } from "@/lib/query-keys/port-forward-mutation-keys";
+export { simulatorMutationKeys } from "@/lib/query-keys/simulator-mutation-keys";
 export { terminalMutationKeys } from "@/lib/query-keys/terminal-mutation-keys";
 export {
   browserMutationKeys,
