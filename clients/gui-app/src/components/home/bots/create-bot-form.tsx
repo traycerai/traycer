@@ -20,7 +20,6 @@ import { useBotTabsStore } from "@/stores/bots/bot-tabs-store";
 import { botTabIntent, settingsTabIntent } from "@/lib/tab-navigation/intents";
 import { navigateToTabIntent } from "@/lib/tab-navigation";
 import {
-  HostRequestAbortedError,
   HostRpcError,
   HostTransportFailureError,
   RetryableTransportError,
@@ -42,23 +41,25 @@ const CREATE_FAILED =
  * Each sentence claims only what the error proves, and anything unproven reads
  * as "may have been created", because a create believed to have failed invites
  * a duplicate:
- * - Not reached: a retryable transport failure on its pre-send ground, or an
- *   abort that never dispatched. Both are minted only before the request left.
+ * - Not reached: only a retryable transport failure on its pre-send ground,
+ *   which is minted before the request leaves. An abort is NOT trusted here,
+ *   whatever its `mayHaveDispatched` says: the auth-aware messenger replaces
+ *   any `UNAUTHORIZED` (a session fatal included, which rejects requests
+ *   already sent) with a `mayHaveDispatched: false` abort when the authority
+ *   is aborted during credential recovery, so the flag no longer describes
+ *   the request.
  * - Refused: an answer about THIS request (the base error class, no session
  *   fatal) with a specific code. A specific code is the host's refusal or the
  *   client's own pre-send version check; neither creates anything.
  * - Everything else is unproven and reads cautious. That includes a generic
  *   `RPC_ERROR` (a session closed with the request pending carries it, as does
  *   a host answer with no specific code, and a response that came back
- *   unreadable), any session fatal, any other transport failure, and a
- *   non-host error. A request waiting on a session that closed before it was
- *   ready was never sent, but its error is the same class a post-send drop
- *   uses, so it reads cautious too.
+ *   unreadable), any session fatal, every abort, any other transport failure,
+ *   and a non-host error. A request waiting on a session that closed before
+ *   it was ready was never sent, but its error is the same class a post-send
+ *   drop uses, so it reads cautious too.
  */
 function createBotFailureSentence(error: Error): string {
-  if (error instanceof HostRequestAbortedError) {
-    return error.mayHaveDispatched ? CREATE_OUTCOME_UNKNOWN : CREATE_UNREACHED;
-  }
   if (error instanceof RetryableTransportError) {
     return error.replaySafetyFromKey
       ? CREATE_OUTCOME_UNKNOWN

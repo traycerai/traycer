@@ -19,7 +19,11 @@ import {
   HostRpcError,
   HostTransportFailureError,
   RetryableTransportError,
+  type IHostMessenger,
 } from "@traycer-clients/shared/host-transport/host-messenger";
+import { createAuthAwareMessenger } from "@traycer-clients/shared/host-transport/auth-aware-messenger";
+import { MutableBearerLease } from "@traycer-clients/shared/auth/bearer-source";
+import type { HostRpcRegistry } from "@/lib/host";
 import type {
   EnvironmentDescriptor,
   EnvironmentHostBinding,
@@ -558,14 +562,15 @@ describe("<CreateBotForm /> failed create", () => {
       CREATE_UNREACHED,
     ],
     [
-      "an abort before the request was sent",
+      // Its flag cannot be trusted: see the auth-recovery test below.
+      "an abort that says it never dispatched",
       () =>
         new HostRequestAbortedError({
           ...transport,
           message: "aborted",
           mayHaveDispatched: false,
         }),
-      CREATE_UNREACHED,
+      CREATE_OUTCOME_UNKNOWN,
     ],
     [
       "the host refusing the request with a specific code",
@@ -659,6 +664,68 @@ describe("<CreateBotForm /> failed create", () => {
     mountForm(TEAM_WITH_LOCAL);
 
     expect(screen.getByRole("alert").textContent).toBe(sentence);
+  });
+
+  it("reads cautious when a session fatal for a sent create is rewritten into an abort during credential recovery", async () => {
+    // The session fatal rejects the create after it was sent. The auth-aware
+    // messenger sees UNAUTHORIZED, starts recovery, and the authority is
+    // aborted meanwhile, so the error the form receives is a
+    // `mayHaveDispatched: false` abort.
+    const controller = new AbortController();
+    const inner: IHostMessenger<HostRpcRegistry> = {
+      request: () =>
+        Promise.reject(
+          new HostRpcError({
+            code: "UNAUTHORIZED",
+            message: "credential revoked",
+            requestId: "session-fatal",
+            method: "",
+            fatalDetails: sessionFatal,
+          }),
+        ),
+      requestWithResponseTimeout: () =>
+        Promise.reject(new Error("the create is a plain request")),
+    };
+    const messenger = createAuthAwareMessenger(inner, {
+      revalidateExpectedBearer: () => {
+        controller.abort();
+        return Promise.resolve("rotated");
+      },
+    });
+    const failure = await messenger
+      .request(
+        "bot.create",
+        {
+          environmentId: TEAM_ENV,
+          title: "Release Bot",
+          harness: "claude",
+          model: "model-a",
+          effort: null,
+          profile: null,
+        },
+        {
+          replayMustBeKeyed: false,
+          requiredHostMethodVersion: null,
+          idempotencyKey: null,
+          authority: {
+            endpoint: { hostId: LOCAL, websocketUrl: "ws://host-local/rpc" },
+            bearer: new MutableBearerLease("token", "user-1"),
+            abortSignal: controller.signal,
+          },
+        },
+      )
+      .then(
+        () => null,
+        (error: unknown) => error,
+      );
+    if (!(failure instanceof HostRequestAbortedError)) {
+      throw new Error("the recovery did not rewrite the failure into an abort");
+    }
+    expect(failure.mayHaveDispatched).toBe(false);
+    mocks.createError = failure;
+    mountForm(TEAM_WITH_LOCAL);
+
+    expect(screen.getByRole("alert").textContent).toBe(CREATE_OUTCOME_UNKNOWN);
   });
 });
 
