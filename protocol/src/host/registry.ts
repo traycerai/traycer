@@ -5910,8 +5910,8 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
       downgradePathsFromLatest: {},
     },
   },
-  // Every host bound to a team environment, as any member sees it. Optional
-  // like its siblings.
+  // The hosts of a team environment the caller may see. Optional like its
+  // siblings.
   "environment.host.list": {
     degrade: { kind: "unsupported" },
     1: {
