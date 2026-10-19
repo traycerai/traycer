@@ -204,6 +204,7 @@ ReturnType<typeof fn>          // name the concrete type
 | Ticket BEGIN/END or review-round markers in source.        | Remove workflow markers; retain durable invariants.                               |
 | Carry state that no consumer reads.                        | Remove unused fields and the work that populates them.                            |
 | Wrap one call or expression without a distinct contract.   | Keep the expression at its caller.                                                |
+| Describe access using a retired owner or cache policy.     | Match the current authorization boundary and freshness policy.                    |
 
 ## Skills
 
