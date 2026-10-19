@@ -134,6 +134,9 @@ describe("warmRouteChunks", () => {
     process.on("unhandledRejection", onUnhandled);
     try {
       const { warmRouteChunks } = await loadWarmer(false, missing);
+      // The warmer's own logger instance: `loadWarmer` resets the module graph.
+      const { appLogger } = await import("@/lib/logger");
+      const warn = vi.spyOn(appLogger, "warn");
 
       warmRouteChunks();
       await vi.runAllTimersAsync();
@@ -148,6 +151,14 @@ describe("warmRouteChunks", () => {
         DESKTOP_MODULES.filter(
           (module) => !missing.includes(module),
         ).toSorted(),
+      );
+      expect(
+        warn.mock.calls.map(([message, fields]) => [message, fields.module]),
+      ).toEqual(
+        missing.map((module) => [
+          "[warm-route-chunks] chunk warm-up failed",
+          module,
+        ]),
       );
     } finally {
       process.off("unhandledRejection", onUnhandled);

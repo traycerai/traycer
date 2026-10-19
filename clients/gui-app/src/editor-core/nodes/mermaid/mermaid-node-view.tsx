@@ -10,6 +10,7 @@ import {
 import { NodeViewWrapper, type NodeViewProps } from "@tiptap/react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
+import { appLogger, describeLogErrorSummary } from "@/lib/logger";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
 import { createReportIssueContext } from "@/lib/report-issue-context";
@@ -152,8 +153,14 @@ export function MermaidNodeView(props: NodeViewProps) {
   }, [activeCode, triggerRender]);
 
   // Prime mermaid load so the first render is snappier. Don't block on it.
+  // Nothing holds this promise until the debounced render, so a chunk that
+  // fails to load is logged here, and the render shows the failure in the block.
   useEffect(() => {
-    void ensureMermaidReady();
+    void ensureMermaidReady().catch((error: unknown) => {
+      appLogger.warn("[mermaid] preload failed", {
+        error: describeLogErrorSummary(error),
+      });
+    });
   }, []);
 
   const handleCopy = useCallback(() => {

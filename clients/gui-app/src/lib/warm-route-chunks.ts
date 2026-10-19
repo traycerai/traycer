@@ -1,4 +1,5 @@
 import { isMobileApp } from "@/lib/mobile-app";
+import { appLogger, describeLogErrorSummary } from "@/lib/logger";
 
 /**
  * Eagerly warm the heavy epic route component chunks shortly after startup so
@@ -115,11 +116,18 @@ export function warmRouteChunks(): void {
 }
 
 // Warming is best effort and nobody waits on it, so a chunk that fails to load
-// here is dropped. Left unhandled, the rejection became an error report for a
-// load the person never saw. If the surface itself later cannot load, its own
+// here is only logged. Left unhandled, the rejection became an error report for
+// a load the person never saw. If the surface itself later cannot load, its own
 // import fails into the route error screen, which offers a refresh.
 function warm(warmers: ReadonlyArray<RouteChunkWarmer>): void {
-  for (const warmer of warmers) void warmer.load().catch(() => undefined);
+  for (const warmer of warmers) {
+    void warmer.load().catch((error: unknown) => {
+      appLogger.warn("[warm-route-chunks] chunk warm-up failed", {
+        module: warmer.module,
+        error: describeLogErrorSummary(error),
+      });
+    });
+  }
 }
 
 function whenIdle(run: () => void): void {
