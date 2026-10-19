@@ -1517,7 +1517,7 @@ export type NativePromoteToPersonalMutation = z.infer<
   typeof nativePromoteToPersonalMutationSchema
 >;
 
-/** The v1.2 mutation: every v1.1 arm plus `promoteToPersonal`. */
+/** The v1.3 mutation: every v1.2 arm plus `promoteToPersonal`. */
 export const nativeMutationSchemaV12 = lazySchema(() =>
   z.union([nativeMutationSchema, nativePromoteToPersonalMutationSchema]),
 );

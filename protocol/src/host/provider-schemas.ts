@@ -4021,7 +4021,7 @@ export type ProvidersCancelMcpAuthResponse = z.infer<
  * live inside `nativeMutationSchema`, so no XOR refinement is needed on this
  * envelope.
  *
- * Frozen when 1.2 opened above it; 1.2 below is the live request.
+ * Frozen when 1.3 opened above it; 1.3 below is the live request.
  */
 export const providersNativeMutateRequestSchemaV11 = lazySchema(() =>
   z.object({
@@ -4034,10 +4034,10 @@ export type ProvidersNativeMutateRequestV11 = z.infer<
 >;
 
 /**
- * `providers.nativeMutate@1.2` request (ticket E7): the `promoteToPersonal`
- * arm, and the executable-write grant, since an MCP add or update installs a
- * command and a skill import or update installs content an agent runs. A
- * v1.1 caller's request is upgraded with a `null` grant.
+ * `providers.nativeMutate@1.3` request: the `promoteToPersonal` arm, and the
+ * executable-write grant, since an MCP add or update installs a command and a
+ * skill import or update installs content an agent runs. A v1.2 caller's
+ * request is upgraded with a `null` grant.
  */
 export const providersNativeMutateRequestSchema = lazySchema(() =>
   z.object({

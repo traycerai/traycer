@@ -816,7 +816,7 @@ describe("every sink-reaching method parses with and without executableWriteGran
 
 // ── (d) ─────────────────────────────────────────────────────────────────────
 
-describe("promoteToPersonal toward a 1.1 host is refused, never dropped", () => {
+describe("promoteToPersonal toward a 1.2 host is refused, never dropped", () => {
   const promote = {
     kind: "promoteToPersonal",
     entryKind: "mcp",

@@ -257,7 +257,7 @@ function CreateBotNoHost(props: {
           navigateToTabIntent(navigate, settingsTabIntent("host"), undefined)
         }
       >
-        Host settings
+        Settings
       </Button>
       .
       {someUnchecked ? (
