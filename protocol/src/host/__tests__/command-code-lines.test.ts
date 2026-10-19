@@ -179,6 +179,10 @@ function agentRow(id: string, harnessId: string | null) {
     lastExit: null,
     // `agent.list@9.2` put `archived` on the row; 10.0 carries it live.
     archived: null,
+    // `agent.list@10.1` put the run tuple on the row; `null` is "this answer
+    // cannot say".
+    profile: null,
+    permissionMode: null,
   };
 }
 

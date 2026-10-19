@@ -843,16 +843,14 @@ const RUN_TUPLE_PROFILE_PATTERN = /^[A-Za-z0-9_.-]+$/;
 /**
  * `profile` off a row, or `null` when the row does not carry a usable one.
  *
- * Narrowed at RUNTIME rather than typed, for the same reason
- * `ownerHostConnectivity` is: the released `AgentSummary` has no such
- * property, so a listing that has been through the wire schema has had it
- * stripped, and this formatter renders both shapes. The direct host-side A2A
- * listing sends it for the caller's own GUI agents on that host and `null` for
- * every row it cannot answer for.
+ * A wire field since `agent.list@10.1`: a host at or past it sends it for the
+ * caller's own GUI agents on that host and `null` for every row it cannot
+ * answer for, and a host that predates it is upgraded to `null`. Still
+ * narrowed at runtime, so a hand-built row that skipped the schema reads as
+ * absent and nothing but an id can reach the line.
  */
 function readRunTupleProfile(agent: AgentSummary): string | null {
-  if (!("profile" in agent)) return null;
-  const value = agent.profile;
+  const value: unknown = agent.profile;
   return typeof value === "string" && RUN_TUPLE_PROFILE_PATTERN.test(value)
     ? value
     : null;
@@ -866,8 +864,7 @@ function readRunTupleProfile(agent: AgentSummary): string | null {
 function readRunTuplePermissionMode(
   agent: AgentSummary,
 ): PermissionMode | null {
-  if (!("permissionMode" in agent)) return null;
-  const value = agent.permissionMode;
+  const value: unknown = agent.permissionMode;
   return ALL_PERMISSION_MODES.find((mode) => mode === value) ?? null;
 }
 
