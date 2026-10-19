@@ -485,8 +485,12 @@ function useNewTerminalWorkspaceItems(
       ];
     });
     const podOpens = teamPodOpenRows(groups, podsByEnvironment, dialable).map(
-      (row) =>
-        openerActionLeaf({
+      (row) => {
+        // The same per-leaf latch as a workspace row: cmdk can invoke a
+        // selected row twice before its view rerenders, and one selection
+        // opens one pod (a generic row would otherwise start two).
+        let hasLaunched = false;
+        return openerActionLeaf({
           id:
             row.hostId === null
               ? `open:terminals:new:team-pod:${row.target.environmentId}`
@@ -500,11 +504,14 @@ function useNewTerminalWorkspaceItems(
             "host",
           ],
           run: () => {
+            if (hasLaunched) return;
+            hasLaunched = true;
             // A full team's refusal toasts its server message verbatim
             // (`sandboxFailureMessage`, `team_pods_full`).
             openPod(row.target);
           },
-        }),
+        });
+      },
     );
     return [...selectedHostLeaves, ...otherHosts, ...podOpens];
   }, [

@@ -1145,6 +1145,36 @@ describe("Terminals opener sub-page", () => {
       });
     });
 
+    it("opens a named pod once when the same selected row is invoked twice before the view rerenders", () => {
+      // Cmdk can invoke a selected row twice before its view rerenders, as the
+      // workspace rows already guard against: one selection must start one
+      // pod open, not two.
+      extraHostsMock.options = [
+        ...extraHostsMock.options,
+        teamPodOption("env-team"),
+      ];
+      teamPodsMock.current = new Map([["env-team", [podRow(3)]]]);
+
+      const rows = newTerminalItems();
+      runById(rows, `open:terminals:new:pod:${POD_HOST}`);
+      runById(rows, `open:terminals:new:pod:${POD_HOST}`);
+
+      expect(spies.openTeamPod).toHaveBeenCalledTimes(1);
+    });
+
+    it("opens the team's generic pod row once when it is invoked twice before the view rerenders", () => {
+      extraHostsMock.options = [
+        ...extraHostsMock.options,
+        teamPodOption("env-team"),
+      ];
+
+      const rows = newTerminalItems();
+      runById(rows, "open:terminals:new:team-pod:env-team");
+      runById(rows, "open:terminals:new:team-pod:env-team");
+
+      expect(spies.openTeamPod).toHaveBeenCalledTimes(1);
+    });
+
     it("offers a sleeping team pod that cannot be dialed once, as its Open row, not also as a Create row", () => {
       extraHostsMock.directory = [
         {

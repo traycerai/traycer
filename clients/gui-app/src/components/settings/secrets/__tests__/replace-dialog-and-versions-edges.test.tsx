@@ -276,6 +276,130 @@ describe("the Replace value dialog across a close and a reopen", () => {
   });
 });
 
+interface RerenderableDialog {
+  readonly requests: EnvironmentSecretsReplaceValueRequest[];
+  /** What a re-read of the list does: the same open dialog gets a new secret. */
+  readonly showSecret: (secret: EnvironmentSecret) => void;
+}
+
+function mountRerenderableDialog(
+  secret: EnvironmentSecret,
+  answer: () => Promise<EnvironmentSecretsReplaceValueResponse>,
+): RerenderableDialog {
+  const requests: EnvironmentSecretsReplaceValueRequest[] = [];
+  const { client } = buildEnvironmentClient({
+    hostId: HOST_ID,
+    handlers: {
+      "environment.secrets.replaceValue": (request) => {
+        requests.push(request);
+        return answer();
+      },
+    },
+  });
+  const dialogFor = (shown: EnvironmentSecret): ReactNode => (
+    <ReplaceSecretValueDialog
+      open
+      secret={shown}
+      client={client}
+      onOpenChange={() => undefined}
+      onReplaced={() => undefined}
+      onStale={() => undefined}
+    />
+  );
+  const mounted = render(dialogFor(secret));
+  return {
+    requests,
+    showSecret: (shown) => mounted.rerender(dialogFor(shown)),
+  };
+}
+
+describe("the Replace value dialog's expected version", () => {
+  it("sends the version the list showed when the dialog opened, not one a re-read brought in underneath it", async () => {
+    // Another admin rotated the secret while the dialog was open and the list
+    // re-read: the person typed against ver-1, so a replace sent against
+    // ver-2 would overwrite the other admin's rotation unseen.
+    const mounted = mountRerenderableDialog(
+      secretFixture({ currentVersionId: "ver-1" }),
+      () => Promise.resolve({ outcome: "pending", uploadId: "u1" }),
+    );
+    mounted.showSecret(secretFixture({ currentVersionId: "ver-2" }));
+
+    typeValue(TYPED);
+    fireEvent.click(replaceButton());
+
+    await waitFor(() => {
+      expect(mounted.requests).toHaveLength(1);
+    });
+    expect(mounted.requests[0].expectedVersionId).toBe("ver-1");
+  });
+
+  it("sends the version the list shows now once the dialog is closed and opened again", async () => {
+    const requests: EnvironmentSecretsReplaceValueRequest[] = [];
+    const { client } = buildEnvironmentClient({
+      hostId: HOST_ID,
+      handlers: {
+        "environment.secrets.replaceValue": (request) => {
+          requests.push(request);
+          return Promise.resolve({ outcome: "pending", uploadId: "u1" });
+        },
+      },
+    });
+    const view = render(
+      <ReopenableReplaceDialog
+        secret={secretFixture({ currentVersionId: "ver-1" })}
+        client={client}
+      />,
+    );
+    view.rerender(
+      <ReopenableReplaceDialog
+        secret={secretFixture({ currentVersionId: "ver-2" })}
+        client={client}
+      />,
+    );
+    fireEvent.click(screen.getByText("Cancel"));
+    await waitFor(() => {
+      expect(screen.queryByTestId("replace-secret-dialog")).toBeNull();
+    });
+    fireEvent.click(screen.getByTestId("reopen-replace"));
+    await screen.findByTestId("replace-secret-dialog");
+
+    typeValue(TYPED);
+    fireEvent.click(replaceButton());
+
+    await waitFor(() => {
+      expect(requests).toHaveLength(1);
+    });
+    expect(requests[0].expectedVersionId).toBe("ver-2");
+  });
+
+  it("retries against the version the re-read list shows after a stale refusal", async () => {
+    const mounted = mountRerenderableDialog(
+      secretFixture({ currentVersionId: "ver-1" }),
+      () =>
+        Promise.resolve({
+          outcome: "stale",
+          currentVersionId: "ver-9",
+          changedBy: { kind: "dashboard" },
+        }),
+    );
+    typeValue(TYPED);
+    fireEvent.click(replaceButton());
+    expect((await screen.findByTestId("replace-secret-note")).textContent).toBe(
+      SECRET_REPLACE_STALE,
+    );
+    mounted.showSecret(secretFixture({ currentVersionId: "ver-9" }));
+
+    fireEvent.click(replaceButton());
+
+    await waitFor(() => {
+      expect(mounted.requests).toHaveLength(2);
+    });
+    expect(
+      mounted.requests.map((request) => request.expectedVersionId),
+    ).toEqual(["ver-1", "ver-9"]);
+  });
+});
+
 function mountVersions(
   secret: EnvironmentSecret,
   versions: SecretVersion[],

@@ -18,9 +18,9 @@ import { replaceOutcome } from "@/lib/sandboxes/secret-replace-outcome";
 import { SECRET_SCOPE_LINE } from "@/lib/sandboxes/secrets-page-copy";
 
 /**
- * Replace value (ticket E11, checkpoint 4): a rotation, compare-and-set on
- * the version the list showed. The typed value lives in this component only,
- * is sent by a direct request, and is dropped when the dialog closes.
+ * Replace value: a rotation, compare-and-set on the version the list showed
+ * when the dialog opened. The typed value lives in this component only, is
+ * sent by a direct request, and is dropped when the dialog closes.
  */
 export function ReplaceSecretValueDialog(props: {
   readonly open: boolean;
@@ -40,6 +40,34 @@ export function ReplaceSecretValueDialog(props: {
   // close (the person cancelled and opened it again) leaves the form now
   // showing alone.
   const openGeneration = useRef(0);
+  // The compare-and-set token: the version the list showed when this open
+  // began. A re-read under an open dialog (another admin's rotation) must not
+  // become the token, or Replace would overwrite that rotation instead of
+  // coming back stale. After a stale answer the next version the list shows
+  // is taken: the person has just been told the value changed.
+  const [held, setHeld] = useState<{
+    readonly open: boolean;
+    readonly versionId: string | null;
+    readonly adoptNext: boolean;
+  }>(() => ({
+    open: props.open,
+    versionId: secret.currentVersionId,
+    adoptNext: false,
+  }));
+  if (held.open !== props.open) {
+    setHeld({
+      open: props.open,
+      versionId: secret.currentVersionId,
+      adoptNext: false,
+    });
+  } else if (held.adoptNext && secret.currentVersionId !== held.versionId) {
+    setHeld({
+      open: held.open,
+      versionId: secret.currentVersionId,
+      adoptNext: false,
+    });
+  }
+  const expectedVersionId = held.versionId;
 
   const close = (open: boolean): void => {
     if (open) return;
@@ -51,7 +79,6 @@ export function ReplaceSecretValueDialog(props: {
   };
 
   const replace = async (): Promise<void> => {
-    const expectedVersionId = secret.currentVersionId;
     if (expectedVersionId === null) return;
     const sentFrom = openGeneration.current;
     setBusy(true);
@@ -69,6 +96,9 @@ export function ReplaceSecretValueDialog(props: {
       if (outcome.kind === "accepted") {
         close(false);
         return;
+      }
+      if (outcome.reread) {
+        setHeld((current) => ({ ...current, adoptNext: true }));
       }
       setNote(outcome.text);
     } catch (error) {
@@ -127,9 +157,7 @@ export function ReplaceSecretValueDialog(props: {
             type="button"
             size="sm"
             variant="secondary"
-            disabled={
-              busy || value.length === 0 || secret.currentVersionId === null
-            }
+            disabled={busy || value.length === 0 || expectedVersionId === null}
             onClick={() => void replace()}
             data-testid="replace-secret-confirm"
           >

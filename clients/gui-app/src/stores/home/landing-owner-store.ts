@@ -15,11 +15,13 @@ interface LandingOwnerState {
   readonly migrateChoice: (fromKey: string, toDraftId: string) => void;
   /** Forgets a draft's pick once its create is sent. */
   readonly clearChoice: (draftKey: string) => void;
+  /** Forgets every pick: they name the signed-in account's teams. */
+  readonly clearAll: () => void;
 }
 
 /**
- * The Belongs to pick per landing draft (ticket E17 checkpoint 6, A1). Kept in
- * memory: a draft with no pick follows its resolved host's team.
+ * The Belongs to pick per landing draft. Kept in memory: a draft with no pick
+ * follows its resolved host's team.
  */
 export const useLandingOwnerStore = create<LandingOwnerState>()((set) => ({
   byDraftId: {},
@@ -40,6 +42,9 @@ export const useLandingOwnerStore = create<LandingOwnerState>()((set) => ({
       const { [fromKey]: _moved, ...rest } = state.byDraftId;
       return { byDraftId: { ...rest, [toDraftId]: choice } };
     });
+  },
+  clearAll: () => {
+    set({ byDraftId: {} });
   },
 }));
 
