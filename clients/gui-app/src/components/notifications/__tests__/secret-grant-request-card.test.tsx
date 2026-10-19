@@ -391,11 +391,37 @@ describe("A team grant request decided by one admin reads 'approved by <admin>' 
   });
 
   it.each([
-    ["names nobody", { decision: "approved", decidedBy: null }],
-    ["expired", { decision: "expired", decidedBy: "Ana" }],
-    ["carries no decision", { decision: null, decidedBy: "Ana" }],
-  ])("shows no decided-by line when the row %s", (_name, fields) => {
-    renderCard({ ...RESOLVED_BY_ANA, ...fields }, true);
+    [
+      "approved",
+      null,
+      "Approved for this sandbox, for as long as it exists.",
+    ],
+    [
+      "declined",
+      null,
+      "Declined. Nothing was granted and the agent has been told.",
+    ],
+    ["expired", null, "This request expired before it was answered."],
+    [
+      "approved_default",
+      null,
+      "Approved for this sandbox, and every new sandbox gets it by default.",
+    ],
+    ["expired", "Ana", "This request expired before it was answered."],
+  ])(
+    "shows how a decided row ended when its payload names nobody (finding 27): %s decided by %s",
+    (decision, decidedBy, statusLine) => {
+      renderCard({ ...RESOLVED_BY_ANA, decision, decidedBy }, true);
+
+      expect(textOf("secret-grant-request-decided-by")).toBe(statusLine);
+      for (const testId of ANSWER_IDS) {
+        expect(isAbsent(testId)).toBe(true);
+      }
+    },
+  );
+
+  it("shows no decided-by line when the row carries no decision", () => {
+    renderCard({ ...RESOLVED_BY_ANA, decision: null, decidedBy: "Ana" }, true);
 
     expect(isAbsent("secret-grant-request-decided-by")).toBe(true);
     for (const testId of ANSWER_IDS) {

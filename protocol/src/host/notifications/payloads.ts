@@ -536,9 +536,8 @@ export type HostNotificationBrowserHumanNeededPayload = z.infer<
  * `environmentId` is the environment the request is decided in: null (or left
  * out by a host that predates it) resolves Personal. `teamName` names a team
  * environment's team (null or absent for Personal). Once the row resolves,
- * `decision` says how (known: approved, declined, expired) and `decidedBy`
- * names the person whose answer settled it (a display name, never an id), so
- * every other admin of a team reads who answered.
+ * `decision` carries the request's final status (known: approved,
+ * approved_default, declined, expired).
  */
 export const hostNotificationSecretGrantRequestPayloadSchema = lazySchema(() =>
   z

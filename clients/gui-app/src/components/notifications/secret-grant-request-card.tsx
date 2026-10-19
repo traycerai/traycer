@@ -221,13 +221,16 @@ function outcomeText(
   }
 }
 
-/** Who settled a resolved row, when its payload names them. */
+/** How a resolved row was settled, and by whom when its payload names them. */
 function ResolvedByLine(props: {
   readonly detail: GrantRequestDetail;
 }): ReactNode {
   const { decision, decidedBy } = props.detail;
   const line =
-    decision === null ? null : secretRequestDecidedByLine(decision, decidedBy);
+    decision === null
+      ? null
+      : (secretRequestDecidedByLine(decision, decidedBy) ??
+        secretRequestStatusLine(decision));
   if (line === null) return null;
   return (
     <p
