@@ -77,6 +77,7 @@ import {
   HostRequestAbortedError,
   HostRpcError,
   HostTransportFailureError,
+  mayHaveReachedHost,
   RetryableTransportError,
 } from "../../host-messenger";
 import {
@@ -2002,6 +2003,93 @@ describe("RemoteSession unary in flight at a connection drop", () => {
         expect(Date.now() - droppedAt).toBeLessThan(
           UNARY_RESPONSE_TIMEOUT_MS / 10,
         );
+      } finally {
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+});
+
+describe("RemoteSession pending unary dispatch provenance", () => {
+  async function readySession(
+    relay: FakeRelayHost,
+  ): Promise<RemoteSession<VersionedRpcRegistry, VersionedStreamRpcRegistry>> {
+    applySilenceFloor(relay, ["worktree.getBinding"]);
+    const lease = new MutableBearerLease("valid-token", "user-1");
+    const session = new RemoteSession({
+      ...buildSessionOptions(relay, lease, null),
+      rpcRegistry: bindingOnlyRegistry(),
+    });
+    session.start();
+    await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+    return session;
+  }
+
+  it(
+    "marks the UNAUTHORIZED rejection a revoked peer gives a pending unary",
+    async () => {
+      const relay = new FakeRelayHost();
+      relay.skipUnaryAutoRespond = true;
+      const session = await readySession(relay);
+      try {
+        const settled = sendBindingUnary(session);
+        await vi.waitFor(
+          () => expect(relay.unaryRequests).toHaveLength(1),
+          WAIT,
+        );
+
+        relay.sendRelayKill("peer_gone", "revoked");
+        const error = await settled;
+
+        expect(error).toBeInstanceOf(HostRpcError);
+        expect(error).not.toBeInstanceOf(HostTransportFailureError);
+        expect(error).toMatchObject({ code: "UNAUTHORIZED" });
+        expect(mayHaveReachedHost(error)).toBe(true);
+      } finally {
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+
+  it(
+    "marks the rejection a caller close gives a pending unary",
+    async () => {
+      const relay = new FakeRelayHost();
+      relay.skipUnaryAutoRespond = true;
+      const session = await readySession(relay);
+      try {
+        const settled = sendBindingUnary(session);
+        await vi.waitFor(
+          () => expect(relay.unaryRequests).toHaveLength(1),
+          WAIT,
+        );
+
+        session.close();
+        const error = await settled;
+
+        expect(error).toBeInstanceOf(HostRpcError);
+        expect(mayHaveReachedHost(error)).toBe(true);
+      } finally {
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+
+  it(
+    "leaves a host's own refusal unmarked",
+    async () => {
+      const relay = new FakeRelayHost();
+      relay.unaryError = { code: "FORBIDDEN", message: "not yours" };
+      const session = await readySession(relay);
+      try {
+        const error = await sendBindingUnary(session);
+
+        expect(error).toBeInstanceOf(HostRpcError);
+        expect(error).toMatchObject({ code: "FORBIDDEN" });
+        expect(mayHaveReachedHost(error)).toBe(false);
       } finally {
         session.close();
       }

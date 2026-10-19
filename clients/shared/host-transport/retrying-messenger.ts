@@ -115,31 +115,13 @@ export function createRetryingMessenger<Registry extends VersionedRpcRegistry>(
     }
     // Final attempt: out of the retry budget, so whatever it throws -
     // retryable or not - propagates to the caller, with the episode's earlier
-    // send restored below. Still carries the requirement: being the last
+    // send restored (`withEarlierAttemptDispatch`). Still carries the requirement: being the last
     // attempt does not make an unkeyed replay any safer.
     throwIfAuthorityAborted(authority, method, replayMustBeKeyed);
     try {
       return await attemptCall(replayMustBeKeyed);
     } catch (cause) {
-      // An earlier attempt was sent and its answer lost, so the host may have
-      // run the call. A final PRE-send failure must not erase that: handed on
-      // as it is, it reads as "the host never saw it". Same error, with the
-      // sent-and-dropped ground restored.
-      if (
-        replayMustBeKeyed &&
-        cause instanceof RetryableTransportError &&
-        !cause.replaySafetyFromKey
-      ) {
-        throw new RetryableTransportError({
-          code: cause.code,
-          message: cause.message,
-          requestId: cause.requestId,
-          method: cause.method,
-          fatalDetails: cause.fatalDetails,
-          replaySafetyFromKey: true,
-        });
-      }
-      throw withEpisodeDispatch(cause, method, replayMustBeKeyed);
+      throw withEarlierAttemptDispatch(cause, method, replayMustBeKeyed);
     }
   };
 
@@ -201,6 +183,39 @@ export class RetryEpisodeOutcomeUnknownError extends HostTransportFailureError {
 }
 
 /**
+ * The failure that ends a call, when an earlier attempt of it may have reached
+ * the host and this one is the last. A PRE-send failure must not erase the
+ * earlier send: handed on as it is, it reads as "the host never saw it", and a
+ * retrying layer above would replay the call unkeyed. It keeps its class with
+ * the sent-and-dropped ground restored, so that layer's next attempt has to be
+ * keyed. Every other failure goes through {@link withEpisodeDispatch}.
+ *
+ * Shared by this messenger's final attempt and the auth-aware messenger's
+ * retry after credential recovery.
+ */
+export function withEarlierAttemptDispatch(
+  cause: unknown,
+  method: string,
+  sentEarlier: boolean,
+): unknown {
+  if (
+    sentEarlier &&
+    cause instanceof RetryableTransportError &&
+    !cause.replaySafetyFromKey
+  ) {
+    return new RetryableTransportError({
+      code: cause.code,
+      message: cause.message,
+      requestId: cause.requestId,
+      method: cause.method,
+      fatalDetails: cause.fatalDetails,
+      replaySafetyFromKey: true,
+    });
+  }
+  return withEpisodeDispatch(cause, method, sentEarlier);
+}
+
+/**
  * A later attempt's failure, after an earlier one was sent and its answer
  * lost, carries the episode's possible dispatch: the host may be running the
  * earlier send whatever this attempt did. An abort says so on its own flag; a
@@ -214,7 +229,7 @@ export class RetryEpisodeOutcomeUnknownError extends HostTransportFailureError {
  * it reads as the unknown outcome it is. Nothing reads the superseded class
  * itself; with no earlier send it is passed on as it is.
  */
-function withEpisodeDispatch(
+export function withEpisodeDispatch(
   cause: unknown,
   method: string,
   sentEarlier: boolean,

@@ -8,12 +8,17 @@ import {
   HostRpcError,
   HostAuthoritySupersededError,
   HostRequestAbortedError,
+  mayHaveReachedHost,
   type HostRequestAuthority,
   type HostRequestOptions,
   type IHostMessenger,
   type RequestOfMethod,
   type ResponseOfMethod,
 } from "./host-messenger";
+import {
+  withEarlierAttemptDispatch,
+  withEpisodeDispatch,
+} from "./retrying-messenger";
 
 /**
  * Wraps an `IHostMessenger` so a `HostRpcError` with `code ===
@@ -25,6 +30,12 @@ import {
  * With a `retry` policy, a revalidation that rotated the bearer is followed by
  * one more `request` attempt; otherwise (and always, on a second failure) the
  * original error propagates.
+ *
+ * Recovery never hides that the first attempt may have reached the host (a
+ * session that went fatal with the request pending, see
+ * `mayHaveReachedHost`): an abort during recovery says it may have dispatched,
+ * and the retry's failure carries the earlier send the way a retry episode's
+ * does. A first attempt that never left ends every exit exactly as before.
  */
 /**
  * Reads the current bearer string for the retry gate, tolerating every "no
@@ -62,13 +73,17 @@ export function createAuthAwareMessenger<Registry extends VersionedRpcRegistry>(
       if (cause.fatalDetails?.retryable === true) {
         throw cause;
       }
+      // Every exit below that rethrows `cause` hands on this same object, so
+      // its own mark already says so; the exits that build a new error state
+      // it.
+      const sentEarlier = mayHaveReachedHost(cause);
       if (authority.abortSignal.aborted) {
         throw new HostRequestAbortedError({
           message:
             "Host request authority was aborted before authentication recovery",
           requestId: "authority-aborted",
           method,
-          mayHaveDispatched: false,
+          mayHaveDispatched: sentEarlier,
         });
       }
       const before = readBearer(authority.bearer);
@@ -79,7 +94,11 @@ export function createAuthAwareMessenger<Registry extends VersionedRpcRegistry>(
         throw cause;
       }
       if (outcome === "superseded") {
-        throw new HostAuthoritySupersededError();
+        throw withEpisodeDispatch(
+          new HostAuthoritySupersededError(),
+          method,
+          sentEarlier,
+        );
       }
       // Anything but a rotation rethrows, and that is the right answer for
       // `local-plane-retained` too: a unary call has no reconnect ladder to put
@@ -92,7 +111,7 @@ export function createAuthAwareMessenger<Registry extends VersionedRpcRegistry>(
               "Host request authority was aborted during authentication recovery",
             requestId: "authority-aborted",
             method,
-            mayHaveDispatched: false,
+            mayHaveDispatched: sentEarlier,
           });
         }
         throw cause;
@@ -101,7 +120,11 @@ export function createAuthAwareMessenger<Registry extends VersionedRpcRegistry>(
       if (after === null || after === before) {
         throw cause;
       }
-      return call();
+      try {
+        return await call();
+      } catch (retryCause) {
+        throw withEarlierAttemptDispatch(retryCause, method, sentEarlier);
+      }
     }
   };
 

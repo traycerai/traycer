@@ -51,6 +51,7 @@ import {
   HostRequestAbortedError,
   HostRpcError,
   HostTransportFailureError,
+  markMayHaveReachedHost,
   negotiatedVersionMeetsRequirement,
   RetryableTransportError,
   type RequestOfMethod,
@@ -5346,7 +5347,13 @@ export class RemoteSession<
     }
   }
 
+  /**
+   * Every pending entry was enqueued for the wire, so the host may have run
+   * it: the rejection is marked so callers can tell it from a host refusal,
+   * which arrives as the same class.
+   */
   private rejectAllPendingUnary(error: HostRpcError): void {
+    markMayHaveReachedHost(error);
     for (const [streamId, entry] of Array.from(this.pendingUnary)) {
       this.traffic?.end(streamId, true);
       if (entry.timer !== null) {

@@ -14,6 +14,7 @@ export {
   HostRpcError,
   HostTransportFailureError,
   RetryableTransportError,
+  mayHaveReachedHost,
   negotiatedVersionMeetsRequirement,
   type RequestOfMethod,
   type RequiredHostMethodVersion,

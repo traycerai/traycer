@@ -20,8 +20,14 @@ import type { RemoteHostDirectoryEntry } from "@traycer-clients/shared/host-clie
 import type { IRemoteSession } from "@traycer-clients/shared/host-transport/remote/index";
 import {
   HostRequestAbortedError,
+  HostRpcError,
   HostTransportFailureError,
+  mayHaveReachedHost,
 } from "@traycer-clients/shared/host-transport/host-messenger";
+import { createAuthAwareMessenger } from "@traycer-clients/shared/host-transport/auth-aware-messenger";
+import { RetryEpisodeOutcomeUnknownError } from "@traycer-clients/shared/host-transport/retrying-messenger";
+import { MutableBearerLease } from "@traycer-clients/shared/auth/bearer-source";
+import { markMayHaveReachedHost } from "@traycer/protocol/host-transport/remote/rpc-types";
 import type {
   FatalErrorDetails,
   SchemaVersion,
@@ -795,6 +801,124 @@ describe("RuntimeHostMessenger availability forwarding", () => {
     }
   });
 
+  it("reports an unknown outcome when credential recovery's retry lands on the recorded verdict, and again after a redial is refused", async () => {
+    vi.useFakeTimers();
+    try {
+      const revoked = revokedFatal();
+      const lease = new MutableBearerLease("stale", "user-1");
+      let rotations = 0;
+      const pendingFirst: { reject: (reason: unknown) => void } = {
+        reject: () => undefined,
+      };
+      const refusal = new HostRpcError({
+        code: "FORBIDDEN",
+        message: "not allowed",
+        requestId: "req-refused",
+        method: "host.status",
+        fatalDetails: null,
+      });
+      const firstRequest = vi.fn(
+        () =>
+          new Promise<never>((_, reject) => {
+            pendingFirst.reject = reject;
+          }),
+      );
+      const secondRequest = vi
+        .fn()
+        .mockRejectedValueOnce(markedSessionFatal(revoked))
+        .mockRejectedValueOnce(refusal);
+      const firstSession = controllableSession();
+      const transports = [
+        { session: firstSession, request: firstRequest },
+        { session: controllableSession(), request: secondRequest },
+      ];
+      let built = 0;
+      mocks.createRemoteHostTransport.mockImplementation(() => {
+        const transport = transports.at(built);
+        built += 1;
+        if (transport === undefined) {
+          throw new Error("unexpected extra transport build");
+        }
+        return {
+          session: transport.session,
+          messenger: {
+            request: transport.request,
+            requestWithResponseTimeout: transport.request,
+          },
+          streamClient: {},
+        };
+      });
+      const binding = buildRuntimeHostMessenger<HostRpcRegistry>({
+        registry: hostRpcRegistry,
+        resolveTarget: () => remoteEntry,
+        auth: null,
+        authnBaseUrl: "https://authn.invalid",
+        requestId: () => "req-1",
+        onRemoteAvailabilityRecovered: () => undefined,
+      });
+      const recovering = createAuthAwareMessenger(binding.messenger, {
+        revalidateExpectedBearer: () => {
+          rotations += 1;
+          lease.rotate(`fresh-${rotations}`);
+          return Promise.resolve("rotated");
+        },
+      });
+      const callRemote = (): Promise<unknown> =>
+        recovering
+          .request(
+            "host.status",
+            {},
+            {
+              replayMustBeKeyed: false,
+              requiredHostMethodVersion: null,
+              idempotencyKey: null,
+              authority: {
+                endpoint: {
+                  hostId: REMOTE_HOST_ID,
+                  websocketUrl: remoteEntry.websocketUrl ?? "",
+                },
+                bearer: lease,
+                abortSignal: new AbortController().signal,
+              },
+            },
+          )
+          .then(
+            () => null,
+            (reason: unknown) => reason,
+          );
+
+      // The request is pending when the session goes terminally fatal; the
+      // session closes (recording the verdict) and fails the pending request.
+      const first = callRemote();
+      expect(firstRequest).toHaveBeenCalledTimes(1);
+      firstSession.fatal = revoked;
+      firstSession.emitClosed();
+      pendingFirst.reject(markedSessionFatal(revoked));
+      const firstError = await first;
+
+      // The rotated retry never dials: it lands on the fresh verdict, and the
+      // earlier send keeps the caller from reading that as "did not happen".
+      expect(firstError).toBeInstanceOf(RetryEpisodeOutcomeUnknownError);
+      expect(mayHaveReachedHost(firstError)).toBe(true);
+      expect(firstError).toHaveProperty("finalRefusal.fatalDetails", revoked);
+      expect(firstRequest).toHaveBeenCalledTimes(1);
+      expect(mocks.createRemoteHostTransport).toHaveBeenCalledTimes(1);
+
+      // Past the TTL the same flow redials; the retry is refused by the host.
+      vi.advanceTimersByTime(30_000);
+      const secondError = await callRemote();
+
+      expect(mocks.createRemoteHostTransport).toHaveBeenCalledTimes(2);
+      expect(secondRequest).toHaveBeenCalledTimes(2);
+      expect(secondError).toBeInstanceOf(RetryEpisodeOutcomeUnknownError);
+      expect(secondError).toHaveProperty("finalRefusal", refusal);
+
+      binding.dispose();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("drops the verdict early when the host's transport identity changes - a host update must not wait out the TTL", async () => {
     // An INCOMPATIBLE fatal is resolved exactly by a version change, and the
     // directory publishes that as a new transport key. The verdict describes
@@ -880,4 +1004,27 @@ function incompatibleFatal(): FatalErrorDetails {
     incompatibleMethods: null,
     upgradeGuidance: null,
   };
+}
+
+function revokedFatal(): FatalErrorDetails {
+  return {
+    code: "UNAUTHORIZED",
+    reason: "Host access was revoked",
+    incompatibleMethods: null,
+    upgradeGuidance: null,
+  };
+}
+
+// What a session answers a pending request with when it goes terminally
+// fatal: a plain `HostRpcError`, marked because the request was already sent.
+function markedSessionFatal(fatal: FatalErrorDetails): HostRpcError {
+  const error = new HostRpcError({
+    code: "UNAUTHORIZED",
+    message: fatal.reason,
+    requestId: "session-fatal",
+    method: "",
+    fatalDetails: fatal,
+  });
+  markMayHaveReachedHost(error);
+  return error;
 }
