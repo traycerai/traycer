@@ -7,7 +7,7 @@
  * Real hook over a mock messenger whose handler answers (or refuses) a page.
  */
 import { describe, expect, it, vi } from "vitest";
-import { act, renderHook, waitFor } from "@testing-library/react";
+import { renderHook, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 import {
@@ -54,6 +54,11 @@ function mountMembers(
 ): {
   readonly resolver: () => BotMemberResolver;
   readonly cursorsAsked: () => ReadonlyArray<string | null>;
+  /** Every `environment.members` page query the hook holds, by status. */
+  readonly pageQueries: () => ReadonlyArray<{
+    readonly status: string;
+    readonly fetchStatus: string;
+  }>;
 } {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
@@ -93,15 +98,18 @@ function mountMembers(
   return {
     resolver: () => result.current,
     cursorsAsked: () => [...cursorsAsked],
+    pageQueries: () =>
+      queryClient
+        .getQueryCache()
+        .findAll()
+        .filter((query) =>
+          JSON.stringify(query.queryKey).includes("environment.members"),
+        )
+        .map((query) => ({
+          status: query.state.status,
+          fetchStatus: query.state.fetchStatus,
+        })),
   };
-}
-
-async function settle(): Promise<void> {
-  await act(async () => {
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, 50);
-    });
-  });
 }
 
 describe("useEnvironmentMembers", () => {
@@ -119,11 +127,13 @@ describe("useEnvironmentMembers", () => {
     expect(mounted.cursorsAsked()).toEqual([null, "user-a"]);
   });
 
-  it("sends no request while disabled and resolves nobody", async () => {
+  it("sends no request while disabled and resolves nobody", () => {
     const mounted = mountMembers(() => page("user-a", null), false);
 
-    await settle();
-
+    // The hook holds its first page's query, parked: disabled, never fetched.
+    expect(mounted.pageQueries()).toEqual([
+      { status: "pending", fetchStatus: "idle" },
+    ]);
     expect(mounted.cursorsAsked()).toEqual([]);
     expect(mounted.resolver()("user-a")).toBeNull();
   });
@@ -133,10 +143,13 @@ describe("useEnvironmentMembers", () => {
       throw new Error("refused");
     }, true);
 
+    // The refused first page is the hook's last state: an error, nothing in
+    // flight, and no cursor to follow.
     await waitFor(() => {
-      expect(mounted.cursorsAsked()).toEqual([null]);
+      expect(mounted.pageQueries()).toEqual([
+        { status: "error", fetchStatus: "idle" },
+      ]);
     });
-    await settle();
 
     expect(mounted.resolver()("user-a")).toBeNull();
     expect(mounted.cursorsAsked()).toEqual([null]);
@@ -149,10 +162,15 @@ describe("useEnvironmentMembers", () => {
       true,
     );
 
+    // The second page answered and its render followed it: both pages are
+    // settled and no third page query exists, so nothing more can be asked.
     await waitFor(() => {
       expect(mounted.resolver()("user-b")?.displayName).toBe("Name of user-b");
+      expect(mounted.pageQueries()).toEqual([
+        { status: "success", fetchStatus: "idle" },
+        { status: "success", fetchStatus: "idle" },
+      ]);
     });
-    await settle();
 
     expect(mounted.cursorsAsked()).toEqual([null, "user-a"]);
   });
