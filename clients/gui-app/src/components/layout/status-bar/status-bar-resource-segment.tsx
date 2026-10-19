@@ -33,6 +33,12 @@ interface StatusBarResourceSegmentProps extends ComponentPropsWithoutRef<"button
    */
   readonly hasExplicitPick: boolean;
   /**
+   * The watched host is this computer, so the desktop shell counts in its
+   * total, as it does in the resource monitor's headline
+   * (`readingShowsLocalDesktop`).
+   */
+  readonly watchesThisMachine: boolean;
+  /**
    * Radix injects this through `PopoverTrigger asChild`. Declared for the same
    * reason `EpicsFilterTrigger` declares it: the slot hands the trigger's ref
    * and handlers to this component, and they have to reach the real `<button>`.
@@ -61,6 +67,7 @@ export function StatusBarResourceSegment(props: StatusBarResourceSegmentProps) {
     hostId,
     hostLabel,
     hasExplicitPick,
+    watchesThisMachine,
     interactive,
     className,
     ref,
@@ -73,6 +80,7 @@ export function StatusBarResourceSegment(props: StatusBarResourceSegmentProps) {
     hostId,
     hostLabel,
     hasExplicitPick,
+    watchesThisMachine,
     compact,
   });
   const cpuWarning = isCpuWarning(cpuPercent);

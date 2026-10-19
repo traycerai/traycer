@@ -131,6 +131,7 @@ import {
 import {
   combineHeadlineResourceSummary,
   hostMemorySharePercent,
+  readingShowsLocalDesktop,
   resolveResourceMonitorHostReading,
   type HeadlineResourceSummary,
 } from "@/lib/resources/headline-resource-summary";
@@ -577,6 +578,7 @@ function ScopedResourceMonitorPopover(props: {
     hostId: scope.hostId,
     hostLabel: scope.hostLabel,
     hasExplicitPick: props.hasExplicitPick,
+    watchesThisMachine: readingShowsLocalDesktop(scope),
     compact:
       props.trigger.trigger === "header-button" &&
       isCompactForm(props.trigger.form),
