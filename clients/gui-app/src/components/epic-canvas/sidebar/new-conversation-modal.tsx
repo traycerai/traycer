@@ -811,6 +811,10 @@ export function NewConversationModalBody(props: {
     toolbarStore,
     (state) => state.selection.harnessId,
   );
+  const profileId = useStore(
+    toolbarStore,
+    (state) => state.selection.profileId,
+  );
   const mentionIntent = useMemo(
     () =>
       effectiveWorktreeIntent({
@@ -834,6 +838,7 @@ export function NewConversationModalBody(props: {
     pickerStore,
     hostClient,
     harnessId,
+    profileId,
     mentionRoots,
     currentEpicId: epicId,
     // Skip the eager catalog fetch when the modal is in Terminal mode: the chat

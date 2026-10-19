@@ -177,14 +177,15 @@ function fireNativeScroll(node: HTMLDivElement): void {
 
 function fireTouch(
   node: HTMLDivElement,
-  type: "touchstart" | "touchmove",
+  type: "touchstart" | "touchmove" | "touchend",
   clientY: number,
 ): void {
   const event = new Event(type, { bubbles: false });
   Object.defineProperty(event, "touches", {
     configurable: true,
     value: {
-      item: (index: number) => (index === 0 ? { clientY } : null),
+      item: (index: number) =>
+        index === 0 && type !== "touchend" ? { clientY } : null,
     },
   });
   node.dispatchEvent(event);
@@ -741,6 +742,245 @@ describe("useChatTimelineFollowLatch", () => {
     expect(listRef.scrollToEnd).not.toHaveBeenCalled();
 
     shim.setGeometry(node, { scrollTop: 850 });
+    fireNativeScroll(node);
+
+    expect(listRef.scrollToEnd).not.toHaveBeenCalled();
+    expect(onFollowIntentChange).toHaveBeenLastCalledWith(false);
+  });
+
+  // iOS WebKit stops delivering `touchmove` once its native pan owns the
+  // touch, so the list sees `touchstart`, scroll reports, and `touchend`.
+  it("detaches follow from a touch the list only sees as scroll reports", () => {
+    const node = shim.makeNode({
+      scrollTop: 1000,
+      scrollHeight: 1500,
+      clientHeight: 500,
+    });
+    const listRef = makeFakeListRef(node);
+    const onFollowIntentChange = vi.fn();
+    const onReaderGesture = vi.fn();
+    const { result } = renderHook(() =>
+      useChatTimelineFollowLatch(listRef, true, true, {
+        onFollowIntentChange,
+        onReaderGesture,
+        isCorrectionSuppressed: undefined,
+        resolveSuppressedEndLanding: undefined,
+      }),
+    );
+
+    fireTouch(node, "touchstart", 100);
+    // A streamed row grows under the finger: no correction while it is down.
+    shim.setGeometry(node, { scrollHeight: 1700 });
+    result.current.followEndIfPermitted();
+    expect(listRef.scrollToEnd).not.toHaveBeenCalled();
+    expect(onReaderGesture).not.toHaveBeenCalled();
+
+    shim.setGeometry(node, { scrollTop: 850 });
+    fireNativeScroll(node);
+
+    expect(onFollowIntentChange).toHaveBeenLastCalledWith(false);
+    expect(onReaderGesture).toHaveBeenCalledWith({
+      direction: "indeterminate",
+      freezeInFlightScroll: true,
+      publishesReaderPosition: true,
+    });
+    fireTouch(node, "touchend", 100);
+    shim.setGeometry(node, { scrollHeight: 1900 });
+    result.current.followEndIfPermitted();
+    expect(listRef.scrollToEnd).not.toHaveBeenCalled();
+  });
+
+  it("publishes a touch departure at the lift when its scroll report is still pending", () => {
+    const node = shim.makeNode({
+      scrollTop: 1000,
+      scrollHeight: 1500,
+      clientHeight: 500,
+    });
+    const listRef = makeFakeListRef(node);
+    const onFollowIntentChange = vi.fn();
+    const { result } = renderHook(() =>
+      useChatTimelineFollowLatch(listRef, true, true, {
+        onFollowIntentChange,
+        onReaderGesture: undefined,
+        isCorrectionSuppressed: undefined,
+        resolveSuppressedEndLanding: undefined,
+      }),
+    );
+
+    fireTouch(node, "touchstart", 100);
+    shim.setGeometry(node, { scrollTop: 850 });
+    fireTouch(node, "touchend", 100);
+
+    expect(onFollowIntentChange).toHaveBeenLastCalledWith(false);
+    shim.setGeometry(node, { scrollHeight: 1700 });
+    result.current.followEndIfPermitted();
+    expect(listRef.scrollToEnd).not.toHaveBeenCalled();
+  });
+
+  it("releases a tap at the end on the lift and catches up the growth it held back", () => {
+    const node = shim.makeNode({
+      scrollTop: 1000,
+      scrollHeight: 1500,
+      clientHeight: 500,
+    });
+    const listRef = makeFakeListRef(node);
+    const onFollowIntentChange = vi.fn();
+    const { result } = renderHook(() =>
+      useChatTimelineFollowLatch(listRef, true, true, {
+        onFollowIntentChange,
+        onReaderGesture: undefined,
+        isCorrectionSuppressed: undefined,
+        resolveSuppressedEndLanding: undefined,
+      }),
+    );
+
+    fireTouch(node, "touchstart", 100);
+    shim.setGeometry(node, { scrollHeight: 1700 });
+    result.current.followEndIfPermitted();
+    expect(listRef.scrollToEnd).not.toHaveBeenCalled();
+
+    fireTouch(node, "touchend", 100);
+
+    expect(listRef.scrollToEnd).toHaveBeenCalledTimes(1);
+    expect(onFollowIntentChange).not.toHaveBeenCalledWith(false);
+  });
+
+  it("keeps a touch contact armed across a pointer preflight and a strict-bottom pass", () => {
+    const node = shim.makeNode({
+      scrollTop: 1000,
+      scrollHeight: 1500,
+      clientHeight: 500,
+    });
+    const listRef = makeFakeListRef(node);
+    const onFollowIntentChange = vi.fn();
+    const { result } = renderHook(() =>
+      useChatTimelineFollowLatch(listRef, true, true, {
+        onFollowIntentChange,
+        onReaderGesture: undefined,
+        isCorrectionSuppressed: undefined,
+        resolveSuppressedEndLanding: undefined,
+      }),
+    );
+
+    fireTouch(node, "touchstart", 100);
+    // The host's content-tap `pointerdown` preflight arrives after
+    // `touchstart` on some engines; it must not end the contact.
+    result.current.noteReaderGesture({
+      direction: "indeterminate",
+      freezeInFlightScroll: true,
+      publishesReaderPosition: false,
+    });
+    shim.setGeometry(node, { scrollTop: 850 });
+    fireNativeScroll(node);
+    expect(onFollowIntentChange).toHaveBeenLastCalledWith(false);
+
+    // The finger drags back to the strict bottom and on past it: the
+    // reattach must not strand the rest of the drag as layout-owned.
+    shim.setGeometry(node, { scrollTop: 1000 });
+    fireNativeScroll(node);
+    expect(onFollowIntentChange).toHaveBeenLastCalledWith(true);
+    shim.setGeometry(node, { scrollTop: 900 });
+    fireNativeScroll(node);
+    expect(onFollowIntentChange).toHaveBeenLastCalledWith(false);
+    expect(listRef.scrollToEnd).not.toHaveBeenCalled();
+  });
+
+  it("measures a touch from the tail it re-reached, not the original contact offset", () => {
+    const node = shim.makeNode({
+      scrollTop: 1000,
+      scrollHeight: 1500,
+      clientHeight: 500,
+    });
+    const listRef = makeFakeListRef(node);
+    const onFollowIntentChange = vi.fn();
+    const { result } = renderHook(() =>
+      useChatTimelineFollowLatch(listRef, true, true, {
+        onFollowIntentChange,
+        onReaderGesture: undefined,
+        isCorrectionSuppressed: undefined,
+        resolveSuppressedEndLanding: undefined,
+      }),
+    );
+
+    // Contact at the end; streaming grows the tail past it under the finger.
+    fireTouch(node, "touchstart", 100);
+    shim.setGeometry(node, { scrollHeight: 1700 });
+    result.current.followEndIfPermitted();
+    // The finger drags to the new end, then back to the original contact
+    // offset, which is now 200px above the tail.
+    shim.setGeometry(node, { scrollTop: 1200 });
+    fireNativeScroll(node);
+    // Still following: reaching the tail is not a transition.
+    expect(onFollowIntentChange).not.toHaveBeenCalled();
+    shim.setGeometry(node, { scrollTop: 1000 });
+    fireNativeScroll(node);
+    expect(onFollowIntentChange).toHaveBeenLastCalledWith(false);
+
+    fireTouch(node, "touchend", 100);
+    expect(listRef.scrollToEnd).not.toHaveBeenCalled();
+    expect(onFollowIntentChange).toHaveBeenLastCalledWith(false);
+  });
+
+  // iOS may deliver the first `touchmove`s and then hand the touch to its
+  // native pan: the rest of the contact arrives as bare scroll reports.
+  it("keeps a touch contact armed after a delivered touchmove and a strict-bottom report", () => {
+    const node = shim.makeNode({
+      scrollTop: 1000,
+      scrollHeight: 1500,
+      clientHeight: 500,
+    });
+    const listRef = makeFakeListRef(node);
+    const onFollowIntentChange = vi.fn();
+    const { result } = renderHook(() =>
+      useChatTimelineFollowLatch(listRef, true, true, {
+        onFollowIntentChange,
+        onReaderGesture: undefined,
+        isCorrectionSuppressed: undefined,
+        resolveSuppressedEndLanding: undefined,
+      }),
+    );
+
+    fireTouch(node, "touchstart", 100);
+    fireTouch(node, "touchmove", 140);
+    // The pan's first report (a rubber-band frame) is still at the edge.
+    fireNativeScroll(node);
+    expect(onFollowIntentChange).not.toHaveBeenCalled();
+
+    shim.setGeometry(node, { scrollTop: 850 });
+    fireNativeScroll(node);
+    expect(onFollowIntentChange).toHaveBeenLastCalledWith(false);
+    shim.setGeometry(node, { scrollHeight: 1700 });
+    result.current.followEndIfPermitted();
+    expect(listRef.scrollToEnd).not.toHaveBeenCalled();
+  });
+
+  it("does not reattach a touch contact at an end that streaming has since moved", () => {
+    const node = shim.makeNode({
+      scrollTop: 1000,
+      scrollHeight: 1500,
+      clientHeight: 500,
+    });
+    const listRef = makeFakeListRef(node);
+    const onFollowIntentChange = vi.fn();
+    const { result } = renderHook(() =>
+      useChatTimelineFollowLatch(listRef, true, true, {
+        onFollowIntentChange,
+        onReaderGesture: undefined,
+        isCorrectionSuppressed: undefined,
+        resolveSuppressedEndLanding: undefined,
+      }),
+    );
+
+    fireTouch(node, "touchstart", 100);
+    // A toward-end touchmove while the end is still 1000; streaming then
+    // grows the tail to 1200 before the pan's first report.
+    fireTouch(node, "touchmove", 60);
+    shim.setGeometry(node, { scrollHeight: 1700 });
+    result.current.followEndIfPermitted();
+    expect(listRef.scrollToEnd).not.toHaveBeenCalled();
+
+    // The finger crosses the old end but is still 150px above the live one.
+    shim.setGeometry(node, { scrollTop: 1050 });
     fireNativeScroll(node);
 
     expect(listRef.scrollToEnd).not.toHaveBeenCalled();

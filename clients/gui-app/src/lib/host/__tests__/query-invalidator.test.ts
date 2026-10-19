@@ -84,6 +84,7 @@ const listCommandsKey = queryKeys.hostMethod<
   harnessId: "claude",
   workingDirectory: null,
   workingDirectories: [],
+  profileId: null,
 });
 
 /**

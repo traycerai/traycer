@@ -1,10 +1,13 @@
-import { useMemo, useState, type ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { Plus } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import type { HomeBotsGroup } from "@/lib/home-bots/bots-model";
 import type { HostEnvironmentBindings } from "@/hooks/bots/use-host-environment-bindings-query";
-import { HomeBotRow } from "@/components/home/bots/home-bot-row";
+import {
+  HomeBotRow,
+  type HomeBotHostReach,
+} from "@/components/home/bots/home-bot-row";
 import { CreateBotForm } from "@/components/home/bots/create-bot-form";
 
 /**
@@ -14,23 +17,21 @@ import { CreateBotForm } from "@/components/home/bots/create-bot-form";
  */
 export function HomeBotsGroupCard(props: {
   readonly group: HomeBotsGroup;
-  readonly hostLabels: ReadonlyMap<string, string>;
-  readonly connectableHostIds: ReadonlySet<string>;
+  readonly hostReach: HomeBotHostReach;
+  /** The machines of this environment the reader may see beyond their own;
+   * `null` while a team environment's list has not answered. */
+  readonly environmentHostIds: ReadonlySet<string> | null;
+  readonly connectableHostIds: ReadonlyArray<string>;
   readonly environmentBindings: HostEnvironmentBindings;
 }): ReactNode {
-  const { group, hostLabels, connectableHostIds, environmentBindings } = props;
+  const {
+    group,
+    hostReach,
+    environmentHostIds,
+    connectableHostIds,
+    environmentBindings,
+  } = props;
   const [creating, setCreating] = useState(false);
-  const boundHostIds = useMemo(() => {
-    const ids: string[] = [];
-    for (const [hostId, binding] of environmentBindings.byHostId) {
-      if (binding.environment.environmentId === group.environmentId) {
-        ids.push(hostId);
-      }
-    }
-    return ids.sort((a, b) =>
-      (hostLabels.get(a) ?? a).localeCompare(hostLabels.get(b) ?? b),
-    );
-  }, [environmentBindings.byHostId, group.environmentId, hostLabels]);
 
   return (
     <section
@@ -68,11 +69,8 @@ export function HomeBotsGroupCard(props: {
         <CreateBotForm
           environmentId={group.environmentId}
           environmentLabel={group.label}
-          boundHostIds={boundHostIds}
-          bindingsResolved={environmentBindings.resolved}
-          failedHostIds={environmentBindings.failedHostIds}
-          onRetryFailedHosts={environmentBindings.retryFailed}
-          hostLabels={hostLabels}
+          connectableHostIds={connectableHostIds}
+          environmentBindings={environmentBindings}
           onDone={() => setCreating(false)}
         />
       ) : null}
@@ -86,8 +84,9 @@ export function HomeBotsGroupCard(props: {
             <li key={bot.botId}>
               <HomeBotRow
                 bot={bot}
-                hostLabels={hostLabels}
-                connectableHostIds={connectableHostIds}
+                hostReach={hostReach}
+                environmentHostIds={environmentHostIds}
+                environmentOwnerKind={group.ownerKind}
               />
             </li>
           ))}

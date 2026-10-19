@@ -4,12 +4,12 @@ import {
   type UseMutationResult,
 } from "@tanstack/react-query";
 import type {
-  BotClaimAuthorityRequest,
-  BotClaimAuthorityResponse,
   BotCreateRequest,
   BotCreateResponse,
   BotDeleteRequest,
   BotDeleteResponse,
+  BotOpenRequest,
+  BotOpenResponse,
   BotUpdateResponse,
   BotUpdateRunSettingsRequest,
   BotUpdateTitleRequest,
@@ -28,17 +28,18 @@ import { toastFromHostError } from "@/lib/host-error-toast";
 /**
  * The `bot.*` writes (Tracy Bots). Every hook takes the client that carries the
  * request as an ARGUMENT: a create goes to the host the bot will be bound to,
- * a claim goes to the host that is claiming, a conversation send goes to the
- * tab's bound host. None of them may fall back to the app-wide host on their
+ * an open goes to the host serving the tab, which may claim the bot, and a
+ * conversation send or a settings write goes through the tab's host. None of them may fall back to the app-wide host on their
  * own - that is the substitution the tab-host rule exists to prevent.
+ *
+ * The bot tab's Settings writes (rename, model, delete) carry no toast: the
+ * panel states a refusal inline, under the control that made the call.
  *
  * Each write invalidates `bot.list` on EVERY host scope rather than on one:
  * the list is cloud-backed and identical everywhere, so a create on host B
  * makes host A's cached list stale too.
  */
-type BotMutationContext = { readonly hostId: string | null };
-
-function invalidateBotLists(queryClient: QueryClient): void {
+export function invalidateBotLists(queryClient: QueryClient): void {
   void queryClient.invalidateQueries({
     predicate: (query) =>
       hostQueryKeys.matchesMethodOnAnyHost(query.queryKey, "bot.list"),
@@ -47,20 +48,14 @@ function invalidateBotLists(queryClient: QueryClient): void {
 
 export function useBotCreateMutation(
   client: HostClient<HostRpcRegistry> | null,
-): UseMutationResult<
-  BotCreateResponse,
-  HostRpcError,
-  BotCreateRequest,
-  BotMutationContext
-> {
+): UseMutationResult<BotCreateResponse, HostRpcError, BotCreateRequest> {
   const queryClient = useQueryClient();
-  return useHostMutation<HostRpcRegistry, "bot.create", BotMutationContext>({
+  return useHostMutation<HostRpcRegistry, "bot.create">({
     client,
     method: "bot.create",
     mapVariables: (variables) => variables,
     options: {
       mutationKey: botMutationKeys.create(),
-      onMutate: () => ({ hostId: client?.getActiveHostId() ?? null }),
       onSuccess: () => {
         invalidateBotLists(queryClient);
       },
@@ -71,52 +66,34 @@ export function useBotCreateMutation(
 
 export function useBotDeleteMutation(
   client: HostClient<HostRpcRegistry> | null,
-): UseMutationResult<
-  BotDeleteResponse,
-  HostRpcError,
-  BotDeleteRequest,
-  BotMutationContext
-> {
+): UseMutationResult<BotDeleteResponse, HostRpcError, BotDeleteRequest> {
   const queryClient = useQueryClient();
-  return useHostMutation<HostRpcRegistry, "bot.delete", BotMutationContext>({
+  return useHostMutation<HostRpcRegistry, "bot.delete">({
     client,
     method: "bot.delete",
     mapVariables: (variables) => variables,
     options: {
       mutationKey: botMutationKeys.delete(),
-      onMutate: () => ({ hostId: client?.getActiveHostId() ?? null }),
       onSuccess: () => {
         invalidateBotLists(queryClient);
       },
-      onError: (error) => toastFromHostError(error, "Couldn't delete the bot."),
     },
   });
 }
 
 export function useBotUpdateTitleMutation(
   client: HostClient<HostRpcRegistry> | null,
-): UseMutationResult<
-  BotUpdateResponse,
-  HostRpcError,
-  BotUpdateTitleRequest,
-  BotMutationContext
-> {
+): UseMutationResult<BotUpdateResponse, HostRpcError, BotUpdateTitleRequest> {
   const queryClient = useQueryClient();
-  return useHostMutation<
-    HostRpcRegistry,
-    "bot.updateTitle",
-    BotMutationContext
-  >({
+  return useHostMutation<HostRpcRegistry, "bot.updateTitle">({
     client,
     method: "bot.updateTitle",
     mapVariables: (variables) => variables,
     options: {
       mutationKey: botMutationKeys.updateTitle(),
-      onMutate: () => ({ hostId: client?.getActiveHostId() ?? null }),
       onSuccess: () => {
         invalidateBotLists(queryClient);
       },
-      onError: (error) => toastFromHostError(error, "Couldn't rename the bot."),
     },
   });
 }
@@ -126,60 +103,44 @@ export function useBotUpdateRunSettingsMutation(
 ): UseMutationResult<
   BotUpdateResponse,
   HostRpcError,
-  BotUpdateRunSettingsRequest,
-  BotMutationContext
+  BotUpdateRunSettingsRequest
 > {
   const queryClient = useQueryClient();
-  return useHostMutation<
-    HostRpcRegistry,
-    "bot.updateRunSettings",
-    BotMutationContext
-  >({
+  return useHostMutation<HostRpcRegistry, "bot.updateRunSettings">({
     client,
     method: "bot.updateRunSettings",
     mapVariables: (variables) => variables,
     options: {
       mutationKey: botMutationKeys.updateRunSettings(),
-      onMutate: () => ({ hostId: client?.getActiveHostId() ?? null }),
       onSuccess: () => {
         invalidateBotLists(queryClient);
       },
-      onError: (error) =>
-        toastFromHostError(error, "Couldn't change the bot's model."),
     },
   });
 }
 
 /**
- * Rebinds the bot to the host behind `client` - the serving host supplies its
- * own id. The bot row and every chat under it move together, so the caller's
- * bot tab (bound to the previous host) is replaced by one bound here.
+ * Opens the bot on the host behind `client` (T18): that host answers whether
+ * it serves the bot, whether another host does, or why none can now, and
+ * claims the bot onto itself when its bound host cannot be reached. The tab
+ * follows the answer; the person never picks the host. No toast: the tab
+ * states every outcome, a failure included, in place.
  */
-export function useBotClaimAuthorityMutation(
+export function useBotOpenMutation(
   client: HostClient<HostRpcRegistry> | null,
-): UseMutationResult<
-  BotClaimAuthorityResponse,
-  HostRpcError,
-  BotClaimAuthorityRequest,
-  BotMutationContext
-> {
+): UseMutationResult<BotOpenResponse, HostRpcError, BotOpenRequest> {
   const queryClient = useQueryClient();
-  return useHostMutation<
-    HostRpcRegistry,
-    "bot.claimAuthority",
-    BotMutationContext
-  >({
+  return useHostMutation<HostRpcRegistry, "bot.open">({
     client,
-    method: "bot.claimAuthority",
+    method: "bot.open",
     mapVariables: (variables) => variables,
     options: {
-      mutationKey: botMutationKeys.claimAuthority(),
-      onMutate: () => ({ hostId: client?.getActiveHostId() ?? null }),
-      onSuccess: () => {
+      mutationKey: botMutationKeys.open(),
+      // A claim moves the bot's bound host, and a not-found answer means the
+      // bot is gone: either way every cached list is stale.
+      onSettled: () => {
         invalidateBotLists(queryClient);
       },
-      onError: (error) =>
-        toastFromHostError(error, "Couldn't move the bot to this host."),
     },
   });
 }
@@ -195,20 +156,14 @@ export function useBotConversationSendMutation(
 ): UseMutationResult<
   BotConversationSendResponse,
   HostRpcError,
-  BotConversationSendRequest,
-  BotMutationContext
+  BotConversationSendRequest
 > {
-  return useHostMutation<
-    HostRpcRegistry,
-    "bot.conversation.send",
-    BotMutationContext
-  >({
+  return useHostMutation<HostRpcRegistry, "bot.conversation.send">({
     client,
     method: "bot.conversation.send",
     mapVariables: (variables) => variables,
     options: {
       mutationKey: botMutationKeys.conversationSend(),
-      onMutate: () => ({ hostId: client?.getActiveHostId() ?? null }),
     },
   });
 }

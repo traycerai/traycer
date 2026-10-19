@@ -14,6 +14,10 @@ import { platform as osPlatform, userInfo } from "node:os";
 import * as nodePath from "node:path";
 import { cliConfigDir, cliConfigPath } from "./paths";
 import {
+  acquireCliConfigLock,
+  type CliConfigLockHandle,
+} from "./cli-config-lock";
+import {
   browserOnlyConfigSchema,
   cliConfigSchema,
   CLI_CONFIG_VERSION,
@@ -535,13 +539,13 @@ export async function readCliConfig(): Promise<CliConfig> {
     parsed = JSON.parse(raw);
   } catch {
     throw new Error(
-      "~/.traycer/cli/config.json is not valid JSON; refusing to overwrite. Fix or delete it.",
+      "Traycer's config.json is not valid JSON; refusing to overwrite. Fix or delete it.",
     );
   }
   const result = parseCliConfig(parsed);
   if (!result.success) {
     throw new Error(
-      `~/.traycer/cli/config.json does not match the expected schema: ${result.error.message}`,
+      `Traycer's config.json does not match the expected schema: ${result.error.message}`,
     );
   }
   return result.data;
@@ -591,11 +595,6 @@ async function renameCliConfig(
 }
 
 /**
- * Validates `next` against the schema, then writes it atomically (tmp +
- * rename) with owner-only permissions. Validating before the write is what
- * stops a buggy modifier from persisting a broken file.
- */
-/**
  * Wholesale entry normalization applied on every write: dedupe by path and
  * canonicalize args (deep-equal to the family default → null), so the stated
  * deviations-only invariant holds for the entire file even when a hand-edited
@@ -623,7 +622,96 @@ function normalizedShellEntries(
     }));
 }
 
+/**
+ * Replaces the whole config under the settings lock. Mutators change one block
+ * through {@link updateCliConfig} instead, so a concurrent writer's change to
+ * another block survives.
+ */
 export async function writeCliConfig(next: CliConfig): Promise<void> {
+  // No read: a whole replacement must still work over an unreadable file.
+  await runCliConfigUpdate(async () => ({ next, result: undefined }));
+}
+
+/** What an {@link updateCliConfig} merge produces: `next: null` writes nothing. */
+interface CliConfigUpdate<T> {
+  readonly next: CliConfig | null;
+  readonly result: T;
+}
+
+// Lock takeovers survived before an update gives up. Each one means another
+// writer took the lock mid-update and nothing was written.
+const CLI_CONFIG_LOCK_LOST_ATTEMPTS = 3;
+
+// Serializes this process's updates, so its writers queue here instead of
+// polling the lock file against each other.
+let cliConfigUpdateQueue: Promise<unknown> = Promise.resolve();
+
+function cliConfigLockPath(): string {
+  return `${cliConfigPath()}.lock`;
+}
+
+/**
+ * The one read-modify-write of `config.json`: every mutator goes through it,
+ * and nothing else writes the file. Updates queue in-process, then each takes
+ * the cross-process settings lock (`cli-config-lock.ts`) around exactly the
+ * read, the merge, the write and the rename. `apply` is a pure, synchronous
+ * function of the document read under the lock, so the lock is never held
+ * across a caller's own awaited work.
+ */
+async function updateCliConfig<T>(
+  apply: (current: CliConfig) => CliConfigUpdate<T>,
+): Promise<T> {
+  return runCliConfigUpdate(async () => apply(await readCliConfig()));
+}
+
+/**
+ * Runs `produce` and writes what it returns, queued in-process and under the
+ * settings lock. `produce` runs again from the start if the lock was lost
+ * before the rename, so it must only read the file and compute.
+ */
+async function runCliConfigUpdate<T>(
+  produce: () => Promise<CliConfigUpdate<T>>,
+): Promise<T> {
+  const run = cliConfigUpdateQueue.then(() =>
+    runCliConfigUpdateLocked(produce, 1),
+  );
+  cliConfigUpdateQueue = run.catch(() => undefined);
+  return run;
+}
+
+async function runCliConfigUpdateLocked<T>(
+  produce: () => Promise<CliConfigUpdate<T>>,
+  attempt: number,
+): Promise<T> {
+  const lockPath = cliConfigLockPath();
+  const handle = await acquireCliConfigLock(lockPath);
+  try {
+    const { next, result } = await produce();
+    if (next === null || (await writeCliConfigFile(next, handle))) {
+      return result;
+    }
+  } finally {
+    await handle.release();
+  }
+  if (attempt >= CLI_CONFIG_LOCK_LOST_ATTEMPTS) {
+    throw new Error(
+      `Lost the settings lock ${lockPath} before writing ${attempt} times; nothing was written.`,
+    );
+  }
+  return runCliConfigUpdateLocked(produce, attempt + 1);
+}
+
+/**
+ * Validates `next` against the schema, then writes it atomically (tmp +
+ * rename) with owner-only permissions, while `handle` holds the settings
+ * lock. Validating before the write is what stops a buggy modifier from
+ * persisting a broken file. Resolves `false`, having written nothing, when the
+ * lock is no longer ours at the rename.
+ */
+async function writeCliConfigFile(
+  next: CliConfig,
+  handle: CliConfigLockHandle,
+): Promise<boolean> {
   const validated = cliConfigSchema.parse({
     ...next,
     shell: {
@@ -636,18 +724,20 @@ export async function writeCliConfig(next: CliConfig): Promise<void> {
   });
   await mkdir(cliConfigDir(), { recursive: true, mode: 0o700 });
   const target = cliConfigPath();
-  // Per-write unique tmp name: two processes writing concurrently (e.g. two
-  // `traycer config …` invocations) must not share the same tmp file, or
-  // their bytes interleave and the rename yields a corrupt config.json. Each
-  // writer renames a fully-written file of its own, so the rename stays atomic
-  // (last writer wins - acceptable; partial corruption is not).
+  // Per-write unique tmp name, so no two writers ever share a tmp file even
+  // when one holds the lock past a takeover.
   const tmp = `${target}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`;
   try {
     await writeFile(tmp, JSON.stringify(validated, null, 2) + "\n", {
       encoding: "utf8",
       mode: 0o600,
     });
+    if (!(await handle.stillHeld())) {
+      await rm(tmp, { force: true });
+      return false;
+    }
     await renameCliConfig(tmp, target, 0);
+    return true;
   } catch (err) {
     // Don't leave an orphaned temp file behind if the write/rename failed.
     await rm(tmp, { force: true });
@@ -657,7 +747,7 @@ export async function writeCliConfig(next: CliConfig): Promise<void> {
 
 // The mutable on-disk entry shape (schema-inferred). Distinct from the readonly
 // `ShellEntry` surface type: these are built and handed straight to
-// `writeCliConfig`. `args` is nullable - `null` is "no flag deviation".
+// `updateCliConfig`. `args` is nullable - `null` is "no flag deviation".
 type StoredShellEntry = { path: string; args: string[] | null };
 
 /** The `shell.entries` launch spec matching `path`, or `undefined`. */
@@ -715,7 +805,7 @@ function upsertShellEntry(
 }
 
 /**
- * Reads the config and, for a pre-`entries` legacy file, seeds an entry for the
+ * For a pre-`entries` legacy config, seeds an entry for the
  * selected shell so the first mutation preserves the user's customised flags.
  * A legacy file is one where `shell.path`/`shell.args` are both set, no entry
  * exists for that path, AND the stored args differ from the program's family
@@ -724,8 +814,7 @@ function upsertShellEntry(
  * always stores exactly the family default when it creates no entry). Seeding a
  * picked shell would wrongly leave it in the remembered list, so we don't.
  */
-async function readConfigWithSeededEntries(): Promise<CliConfig> {
-  const config = await readCliConfig();
+function withSeededShellEntries(config: CliConfig): CliConfig {
   const { path, args, entries } = config.shell;
   if (path === null || args === null) return config;
   const isWindows = osPlatform() === "win32";
@@ -785,39 +874,43 @@ export async function setShell(
   readonly path: string | null;
   readonly args: readonly string[] | null;
 }> {
-  const current = await readConfigWithSeededEntries();
-  const isWindows = osPlatform() === "win32";
-  let nextPath: string | null;
-  let nextArgs: string[] | null;
-  let entries = current.shell.entries;
-  if (args !== null) {
-    // Flag customisation. The selection is the shell being set, else the one
-    // already stored; when neither exists the effective shell is the OS default,
-    // whose entry we write while leaving the mirror in pure-auto.
-    const selectionPath = path !== null ? path : current.shell.path;
-    const effectivePath = selectionPath ?? defaultShellPath();
-    entries = upsertShellEntry(entries, effectivePath, args, isWindows);
-    if (selectionPath === null) {
-      nextPath = null;
-      nextArgs = null;
+  return updateCliConfig((config) => {
+    const current = withSeededShellEntries(config);
+    const isWindows = osPlatform() === "win32";
+    let nextPath: string | null;
+    let nextArgs: string[] | null;
+    let entries = current.shell.entries;
+    if (args !== null) {
+      // Flag customisation. The selection is the shell being set, else the one
+      // already stored; when neither exists the effective shell is the OS default,
+      // whose entry we write while leaving the mirror in pure-auto.
+      const selectionPath = path !== null ? path : current.shell.path;
+      const effectivePath = selectionPath ?? defaultShellPath();
+      entries = upsertShellEntry(entries, effectivePath, args, isWindows);
+      if (selectionPath === null) {
+        nextPath = null;
+        nextArgs = null;
+      } else {
+        nextPath = selectionPath;
+        nextArgs = [...args];
+      }
+    } else if (path !== null) {
+      // Picking a shell: materialise its args, remember nothing new.
+      nextPath = path;
+      nextArgs = materialisedArgs(current, path, isWindows);
     } else {
-      nextPath = selectionPath;
-      nextArgs = [...args];
+      // Neither field given (guarded against upstream) - preserve the selection.
+      nextPath = current.shell.path;
+      nextArgs = current.shell.args;
     }
-  } else if (path !== null) {
-    // Picking a shell: materialise its args, remember nothing new.
-    nextPath = path;
-    nextArgs = materialisedArgs(current, path, isWindows);
-  } else {
-    // Neither field given (guarded against upstream) - preserve the selection.
-    nextPath = current.shell.path;
-    nextArgs = current.shell.args;
-  }
-  await writeCliConfig({
-    ...current,
-    shell: { path: nextPath, args: nextArgs, entries },
+    return {
+      next: {
+        ...current,
+        shell: { path: nextPath, args: nextArgs, entries },
+      },
+      result: { path: nextPath, args: nextArgs },
+    };
   });
-  return { path: nextPath, args: nextArgs };
 }
 
 /**
@@ -831,20 +924,26 @@ export async function setShell(
 export async function addShell(
   path: string,
 ): Promise<{ readonly path: string; readonly entries: readonly ShellEntry[] }> {
-  const current = await readConfigWithSeededEntries();
-  const isWindows = osPlatform() === "win32";
-  const args = [...defaultShellArgs(path)];
-  const entries = upsertShellEntry(
-    current.shell.entries,
-    path,
-    args,
-    isWindows,
-  );
-  await writeCliConfig({
-    ...current,
-    shell: { path, args, entries },
+  return updateCliConfig((config) => {
+    const current = withSeededShellEntries(config);
+    const isWindows = osPlatform() === "win32";
+    const args = [...defaultShellArgs(path)];
+    const entries = upsertShellEntry(
+      current.shell.entries,
+      path,
+      args,
+      isWindows,
+    );
+    return {
+      next: { ...current, shell: { path, args, entries } },
+      result: { path, entries },
+    };
   });
-  return { path, entries };
+}
+
+interface RevertShellArgsResult {
+  readonly path: string;
+  readonly reverted: boolean;
 }
 
 /**
@@ -857,32 +956,38 @@ export async function addShell(
  */
 export async function revertShellArgs(
   path: string,
-): Promise<{ readonly path: string; readonly reverted: boolean }> {
-  const current = await readConfigWithSeededEntries();
-  const isWindows = osPlatform() === "win32";
-  const entry = shellEntryFor(current.shell.entries, path, isWindows);
-  // No entry means no stored deviation - nothing to revert, and we must not
-  // create one (that would be remembering a shell the user never added).
-  if (entry === undefined) {
-    return { path, reverted: false };
-  }
-  const entries = current.shell.entries.map((e) =>
-    shellPathsEqual(e.path, path, isWindows) ? { path: e.path, args: null } : e,
-  );
-  // Re-materialise the mirror only when the reverted shell is the explicit
-  // selection; a pure-auto selection stays `null`/`null` (still synthesised),
-  // and reverting a non-selected shell leaves the mirror untouched.
-  const isSelected =
-    current.shell.path !== null &&
-    shellPathsEqual(current.shell.path, path, isWindows);
-  const nextArgs = isSelected
-    ? [...defaultShellArgs(path)]
-    : current.shell.args;
-  await writeCliConfig({
-    ...current,
-    shell: { path: current.shell.path, args: nextArgs, entries },
+): Promise<RevertShellArgsResult> {
+  return updateCliConfig<RevertShellArgsResult>((config) => {
+    const current = withSeededShellEntries(config);
+    const isWindows = osPlatform() === "win32";
+    const entry = shellEntryFor(current.shell.entries, path, isWindows);
+    // No entry means no stored deviation - nothing to revert, and we must not
+    // create one (that would be remembering a shell the user never added).
+    if (entry === undefined) {
+      return { next: null, result: { path, reverted: false } };
+    }
+    const entries = current.shell.entries.map((e) =>
+      shellPathsEqual(e.path, path, isWindows)
+        ? { path: e.path, args: null }
+        : e,
+    );
+    // Re-materialise the mirror only when the reverted shell is the explicit
+    // selection; a pure-auto selection stays `null`/`null` (still synthesised),
+    // and reverting a non-selected shell leaves the mirror untouched.
+    const isSelected =
+      current.shell.path !== null &&
+      shellPathsEqual(current.shell.path, path, isWindows);
+    const nextArgs = isSelected
+      ? [...defaultShellArgs(path)]
+      : current.shell.args;
+    return {
+      next: {
+        ...current,
+        shell: { path: current.shell.path, args: nextArgs, entries },
+      },
+      result: { path, reverted: true },
+    };
   });
-  return { path, reverted: true };
 }
 
 /**
@@ -895,26 +1000,33 @@ export async function revertShellArgs(
 export async function removeShell(
   path: string,
 ): Promise<{ readonly removed: boolean; readonly path: string | null }> {
-  const current = await readConfigWithSeededEntries();
-  const isWindows = osPlatform() === "win32";
-  const entries = current.shell.entries.filter(
-    (entry) => !shellPathsEqual(entry.path, path, isWindows),
-  );
-  const removed = entries.length !== current.shell.entries.length;
-  const wasSelected =
-    current.shell.path !== null &&
-    shellPathsEqual(current.shell.path, path, isWindows);
-  // Nothing to persist when the path was neither remembered nor selected.
-  if (!removed && !wasSelected) {
-    return { removed: false, path: current.shell.path };
-  }
-  const nextPath = wasSelected ? null : current.shell.path;
-  const nextArgs = wasSelected ? null : current.shell.args;
-  await writeCliConfig({
-    ...current,
-    shell: { path: nextPath, args: nextArgs, entries },
+  return updateCliConfig((config) => {
+    const current = withSeededShellEntries(config);
+    const isWindows = osPlatform() === "win32";
+    const entries = current.shell.entries.filter(
+      (entry) => !shellPathsEqual(entry.path, path, isWindows),
+    );
+    const removed = entries.length !== current.shell.entries.length;
+    const wasSelected =
+      current.shell.path !== null &&
+      shellPathsEqual(current.shell.path, path, isWindows);
+    // Nothing to persist when the path was neither remembered nor selected.
+    if (!removed && !wasSelected) {
+      return {
+        next: null,
+        result: { removed: false, path: current.shell.path },
+      };
+    }
+    const nextPath = wasSelected ? null : current.shell.path;
+    const nextArgs = wasSelected ? null : current.shell.args;
+    return {
+      next: {
+        ...current,
+        shell: { path: nextPath, args: nextArgs, entries },
+      },
+      result: { removed, path: nextPath },
+    };
   });
-  return { removed, path: nextPath };
 }
 
 /**
@@ -924,10 +1036,15 @@ export async function removeShell(
  * memory is the ✕'s job (`removeShell`), not reset's.
  */
 export async function resetShell(): Promise<void> {
-  const current = await readConfigWithSeededEntries();
-  await writeCliConfig({
-    ...current,
-    shell: { path: null, args: null, entries: current.shell.entries },
+  await updateCliConfig((config) => {
+    const current = withSeededShellEntries(config);
+    return {
+      next: {
+        ...current,
+        shell: { path: null, args: null, entries: current.shell.entries },
+      },
+      result: undefined,
+    };
   });
 }
 
@@ -940,11 +1057,35 @@ export async function setLogLevels(
   cliLogLevel: LogLevel,
   hostLogLevel: LogLevel,
 ): Promise<void> {
-  const current = await readCliConfig();
-  await writeCliConfig({
-    ...current,
-    logs: { cliLogLevel, hostLogLevel },
-  });
+  await updateCliConfig((current) => ({
+    next: { ...current, logs: { cliLogLevel, hostLogLevel } },
+    result: undefined,
+  }));
+}
+
+/** Which of the two thresholds in the `logs` block a scoped change sets. */
+export type CliConfigLogScope = "cli" | "host";
+
+/**
+ * Sets ONE log threshold and keeps the other as the file holds it at write
+ * time. A caller changing one scope must use this rather than reading both
+ * and passing the other back to {@link setLogLevels}: a value read before the
+ * lock reverts a concurrent change to the other scope.
+ */
+export async function setLogLevel(
+  scope: CliConfigLogScope,
+  level: LogLevel,
+): Promise<void> {
+  await updateCliConfig((current) => ({
+    next: {
+      ...current,
+      logs:
+        scope === "cli"
+          ? { ...current.logs, cliLogLevel: level }
+          : { ...current.logs, hostLogLevel: level },
+    },
+    result: undefined,
+  }));
 }
 
 /** The configured client + host log thresholds (defaults when unset). */
@@ -991,11 +1132,13 @@ export function readFeatureSettingsSync(): FeatureSettings {
 
 /** Enables or disables agent roles while preserving the rest of the config. */
 export async function setAgentRolesEnabled(enabled: boolean): Promise<void> {
-  const current = await readCliConfig();
-  await writeCliConfig({
-    ...current,
-    features: { ...current.features, agentRoles: enabled },
-  });
+  await updateCliConfig((current) => ({
+    next: {
+      ...current,
+      features: { ...current.features, agentRoles: enabled },
+    },
+    result: undefined,
+  }));
 }
 
 /** Whether agents may drive the in-app browser (default on when unset). */
@@ -1039,11 +1182,13 @@ export function readBrowserConfigSync(): BrowserConfig {
  * rest of the config.
  */
 export async function setAgentBrowserAccess(enabled: boolean): Promise<void> {
-  const current = await readCliConfig();
-  await writeCliConfig({
-    ...current,
-    browser: { ...current.browser, agentAccess: enabled },
-  });
+  await updateCliConfig((current) => ({
+    next: {
+      ...current,
+      browser: { ...current.browser, agentAccess: enabled },
+    },
+    result: undefined,
+  }));
 }
 
 /** The policy for worktrees agents create (`allow` when unset). */
@@ -1079,11 +1224,13 @@ export function readWorktreesConfigSync(): WorktreesConfig {
 export async function setAgentWorktreeCreatePolicy(
   policy: AgentWorktreeCreatePolicy,
 ): Promise<void> {
-  const current = await readCliConfig();
-  await writeCliConfig({
-    ...current,
-    worktrees: { ...current.worktrees, agentCreate: policy },
-  });
+  await updateCliConfig((current) => ({
+    next: {
+      ...current,
+      worktrees: { ...current.worktrees, agentCreate: policy },
+    },
+    result: undefined,
+  }));
 }
 
 /**
@@ -1114,11 +1261,15 @@ export function readVisualizationConfigSync(): VisualizationConfig {
 
 /** Turns the page tools on or off while preserving the rest of the config. */
 export async function setAgentPages(enabled: boolean): Promise<void> {
-  const current = await readCliConfig();
-  const { visualization } = visualizationOnlyConfigSchema.parse(current);
-  await writeCliConfig({
-    ...current,
-    visualization: { ...visualization, agentPages: enabled },
+  await updateCliConfig((current) => {
+    const { visualization } = visualizationOnlyConfigSchema.parse(current);
+    return {
+      next: {
+        ...current,
+        visualization: { ...visualization, agentPages: enabled },
+      },
+      result: undefined,
+    };
   });
 }
 
@@ -1169,11 +1320,13 @@ export function readCatalogConfigSync(): CatalogSettings {
 export async function setCatalogProbeTimeoutSeconds(
   seconds: number,
 ): Promise<void> {
-  const current = await readCliConfig();
-  await writeCliConfig({
-    ...current,
-    catalog: { ...current.catalog, probeTimeoutSeconds: seconds },
-  });
+  await updateCliConfig((current) => ({
+    next: {
+      ...current,
+      catalog: { ...current.catalog, probeTimeoutSeconds: seconds },
+    },
+    result: undefined,
+  }));
 }
 
 /**
@@ -1186,16 +1339,17 @@ export async function setCatalogProbeTimeoutOverride(
   harnessId: string,
   seconds: number | null,
 ): Promise<void> {
-  const current = await readCliConfig();
-  // `Object.fromEntries` defines own properties, so no key - `__proto__`
-  // included - reaches the prototype setter and is dropped from the copy.
-  const kept = Object.entries(current.catalogOverrides).filter(
-    ([key]) => key !== harnessId,
-  );
-  const catalogOverrides: Record<string, number> = Object.fromEntries(
-    seconds === null ? kept : [...kept, [harnessId, seconds]],
-  );
-  await writeCliConfig({ ...current, catalogOverrides });
+  await updateCliConfig((current) => {
+    // `Object.fromEntries` defines own properties, so no key - `__proto__`
+    // included - reaches the prototype setter and is dropped from the copy.
+    const kept = Object.entries(current.catalogOverrides).filter(
+      ([key]) => key !== harnessId,
+    );
+    const catalogOverrides: Record<string, number> = Object.fromEntries(
+      seconds === null ? kept : [...kept, [harnessId, seconds]],
+    );
+    return { next: { ...current, catalogOverrides }, result: undefined };
+  });
 }
 
 export async function listEnvOverrides(): Promise<
@@ -1214,25 +1368,27 @@ export async function setEnvOverride(
   key: string,
   value: EnvOverrideValue,
 ): Promise<void> {
-  const current = await readCliConfig();
-  await writeCliConfig({
-    ...current,
-    envOverrides: { ...current.envOverrides, [key]: value },
-  });
+  await updateCliConfig((current) => ({
+    next: {
+      ...current,
+      envOverrides: { ...current.envOverrides, [key]: value },
+    },
+    result: undefined,
+  }));
 }
 
 export async function deleteEnvOverride(key: string): Promise<boolean> {
-  const current = await readCliConfig();
-  if (!(key in current.envOverrides)) return false;
-  const nextOverrides: Record<string, EnvOverrideValue> = {
-    ...current.envOverrides,
-  };
-  delete nextOverrides[key];
-  await writeCliConfig({
-    ...current,
-    envOverrides: nextOverrides,
+  return updateCliConfig((current) => {
+    if (!(key in current.envOverrides)) return { next: null, result: false };
+    const nextOverrides: Record<string, EnvOverrideValue> = {
+      ...current.envOverrides,
+    };
+    delete nextOverrides[key];
+    return {
+      next: { ...current, envOverrides: nextOverrides },
+      result: true,
+    };
   });
-  return true;
 }
 
 export function applyEnvOverrides(

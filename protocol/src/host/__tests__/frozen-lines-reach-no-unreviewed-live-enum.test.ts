@@ -134,7 +134,6 @@ const ACCEPTED_LIVE_ENUM_PATHS: readonly string[] = [
   "native|0|3.server.status",
   "native|0|3.server.statusSource",
   "native|0|3.server.tools[].denySources[]",
-  "native|1.code",
   "nextRunBinary.kind",
   "profiles[].accentColor",
   "profiles[].auth.status",

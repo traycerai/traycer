@@ -135,6 +135,8 @@ const catalogHarnesses = vi.hoisted(() => () => [
         supportedReasoningEfforts: [
           { id: "high", label: "High", description: null },
         ],
+        defaultServiceTier: null,
+        supportedServiceTiers: [],
         metadata: {},
       },
       // A SECOND model, so a host tuple and a local tuple can disagree
@@ -146,6 +148,8 @@ const catalogHarnesses = vi.hoisted(() => () => [
         supportedReasoningEfforts: [
           { id: "high", label: "High", description: null },
         ],
+        defaultServiceTier: null,
+        supportedServiceTiers: [],
         metadata: {},
       },
     ],
@@ -504,7 +508,7 @@ describe("WorktreeOwnerSettingsHeader", () => {
     expect(accentDotText()).toBeNull();
   });
 
-  it("renders fast mode as an amber Zap with Fast mode a11y label, not the word Fast", () => {
+  it("renders the requested speed as an amber Zap labelled with its tier name, not visible text", () => {
     renderChatHeader({
       permissionMode: "full_access",
       profileId: null,
@@ -512,7 +516,8 @@ describe("WorktreeOwnerSettingsHeader", () => {
       serviceTier: "fast",
     });
 
-    const zap = screen.getByLabelText("Fast mode");
+    // The fixture catalog advertises no tiers, so the raw id is the name.
+    const zap = screen.getByLabelText("Speed: fast");
     expect(zap.getAttribute("class") ?? "").toMatch(/lucide-zap/);
     expect(zap.getAttribute("class") ?? "").toContain(
       "text-warning-foreground",
@@ -521,7 +526,7 @@ describe("WorktreeOwnerSettingsHeader", () => {
     expect(screen.queryByTestId("owner-settings-fast-mode")).toBeNull();
   });
 
-  it("renders no fast icon when serviceTier is off", () => {
+  it("renders no speed icon when serviceTier is off", () => {
     renderChatHeader({
       permissionMode: "full_access",
       profileId: null,
@@ -529,7 +534,7 @@ describe("WorktreeOwnerSettingsHeader", () => {
       serviceTier: null,
     });
 
-    expect(screen.queryByLabelText("Fast mode")).toBeNull();
+    expect(screen.queryByLabelText(/^Speed:/)).toBeNull();
     expect(screen.queryByText("Fast")).toBeNull();
   });
 
@@ -550,7 +555,7 @@ describe("WorktreeOwnerSettingsHeader", () => {
       "High",
     );
     expect(screen.queryByTestId("owner-settings-permissions")).toBeNull();
-    expect(screen.queryByLabelText("Fast mode")).toBeNull();
+    expect(screen.queryByLabelText(/^Speed:/)).toBeNull();
   });
 
   it("keeps ambient TUI harness bare (no profile badge)", () => {

@@ -32,6 +32,7 @@ import { ProviderList } from "@/components/providers/provider-list";
 import { HarnessIcon } from "@/components/home/pickers/harness-icon";
 import { useProvidersList } from "@/hooks/providers/use-providers-list-query";
 import { useProvidersSetEnabled } from "@/hooks/providers/use-providers-set-enabled-mutation";
+import { useProvidersSettingsFileStatus } from "@/hooks/providers/use-providers-settings-file-status-query";
 import {
   useHostMethodSchemaVersion,
   useHostSupportsMethod,
@@ -78,6 +79,10 @@ import {
 import { ProviderProfileScopedSection } from "./provider-profile-scoped-section";
 import { FallbackCrossLinkRow } from "./fallback/fallback-cross-link-row";
 import { ProviderUsageLimitsSection } from "./provider-usage-limits-section";
+import {
+  PROVIDER_SETTINGS_UNUSABLE_COPY,
+  ProviderSettingsResetAction,
+} from "./provider-settings-reset-action";
 import {
   defaultSelectedProfileId,
   profileCommitId,
@@ -558,6 +563,21 @@ function ProvidersPanelBody({
   readonly hostId: string | null;
   readonly isSelectedHostLocal: boolean;
 }): ReactNode {
+  // The reset is offered only by a host that has it, and only where that host
+  // says the WHOLE settings document is unusable: a read fault fails the list
+  // (below), while a document that does not parse is answered normally - every
+  // provider at its default - so only the status read can tell that apart from
+  // a user who switched them off.
+  const supportsReset = useHostSupportsMethod(
+    hostId,
+    "providers.settingsFile.reset",
+  );
+  const supportsStatus = useHostSupportsMethod(
+    hostId,
+    "providers.settingsFile.status",
+  );
+  const canReset = supportsReset && supportsStatus;
+  const settingsFileStatus = useProvidersSettingsFileStatus(canReset);
   if (query.isPending) {
     return (
       <div className="flex items-center gap-2 px-6 py-8 text-ui-sm text-muted-foreground">
@@ -640,6 +660,7 @@ function ProvidersPanelBody({
           >
             Retry
           </Button>
+          {canReset ? <ProviderSettingsResetAction /> : null}
         </div>
       );
     }
@@ -666,12 +687,27 @@ function ProvidersPanelBody({
       </div>
     );
   }
-  return (
+  const rail = (
     <ProvidersRailLayout
       providers={query.data.providers}
       hostId={hostId}
       isSelectedHostLocal={isSelectedHostLocal}
     />
+  );
+  if (!canReset || settingsFileStatus.data?.unreadable !== true) return rail;
+  return (
+    <div className="flex flex-col gap-3 md:h-full md:min-h-0">
+      <div
+        role="alert"
+        className="mx-6 mt-4 flex flex-wrap items-center gap-2 rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-ui-sm text-warning-foreground"
+      >
+        <span className="min-w-0 flex-1">
+          {PROVIDER_SETTINGS_UNUSABLE_COPY}
+        </span>
+        <ProviderSettingsResetAction />
+      </div>
+      <div className="flex-1 md:min-h-0">{rail}</div>
+    </div>
   );
 }
 

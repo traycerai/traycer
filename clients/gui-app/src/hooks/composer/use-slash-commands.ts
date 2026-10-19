@@ -24,6 +24,7 @@ export interface UseSlashCommandsResult {
 export interface UseSlashCommandsParams {
   readonly hostClient: HostClient<HostRpcRegistry> | null;
   readonly harnessId: GuiHarnessId;
+  readonly profileId: string | null;
   readonly workingDirectories: ReadonlyArray<string>;
   readonly enabled: boolean;
   /**
@@ -53,7 +54,11 @@ export function useSlashCommands(
     params.hostClient,
     params.harnessId,
     params.workingDirectories,
-    { enabled: params.enabled, subscribed: params.enabled },
+    {
+      profileId: params.profileId,
+      enabled: params.enabled,
+      subscribed: params.enabled,
+    },
   );
   const trimmed = query.trim();
   const localCommands = params.localCommands;

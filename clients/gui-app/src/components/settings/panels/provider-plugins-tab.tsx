@@ -101,6 +101,7 @@ function pluginCapabilityFlags(
 function PluginsNotices(props: {
   readonly sessionNotice: string | null;
   readonly reloadHint: boolean;
+  readonly openChatsApplyNextMessage: boolean;
   readonly localError: string | null;
 }): ReactNode {
   return (
@@ -112,8 +113,9 @@ function PluginsNotices(props: {
       ) : null}
       {props.reloadHint ? (
         <div className="rounded-lg border border-border/60 bg-muted/30 px-3 py-2 text-ui-xs text-muted-foreground">
-          Plugin changes applied. Restart the provider agent for them to take
-          effect in active sessions.
+          {props.openChatsApplyNextMessage
+            ? "Plugin changes applied. Open chats that use this plugin setup pick them up with their next message. A chat that has to restart for a change stops its background work."
+            : "Plugin changes applied. Restart the provider agent for them to take effect in active sessions."}
         </div>
       ) : null}
       {props.localError !== null ? (
@@ -310,6 +312,7 @@ function ProviderPluginsTabBody({
       <PluginsNotices
         sessionNotice={sessionNotice}
         reloadHint={reloadHint}
+        openChatsApplyNextMessage={caps.openChatsApplyNextMessage === true}
         localError={localError}
       />
 

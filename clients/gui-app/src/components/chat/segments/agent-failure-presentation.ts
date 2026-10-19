@@ -108,6 +108,7 @@ export function agentFailureHeadline(
  */
 const INTERRUPTED_UNTYPED_CODES: ReadonlyMap<string, string> = new Map([
   ["CLAUDE_RUNTIME_DISPOSED", "Session ended"],
+  ["CLAUDE_PREVIOUS_SESSION_STOPPING", "Previous session still stopping"],
 ]);
 
 export interface UntypedCodePresentation {

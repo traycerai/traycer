@@ -2578,6 +2578,38 @@ window`, recorded in the type as `coverage.browsersAreMountedOnly` -
   (no auto-refetch on remount/focus) to avoid re-running `--version` probes; a
   header refresh icon (`RefreshIconButton` → `useRefreshProviders`)
   force-refreshes the list and harness availability on demand.
+  - **"Reset provider settings" is the way out of an unusable
+    `provider-overrides.json`.** When the WHOLE document cannot be used, the
+    host falls back to defaults (only Claude Code and Codex on) and refuses
+    every write, so the toggles fail and nothing in the panel could fix it.
+    Two optional host methods, both `degrade: unsupported` and gated on
+    `useHostSupportsMethod` for each: `providers.settingsFile.status` (is the
+    document unusable) and `providers.settingsFile.reset`.
+    - Offered in exactly two places: beside Retry on the read-fault card
+      ("Provider settings could not be read on this host."), and as a warning
+      banner above the rail when the list answered but the status says
+      `unreadable` - a document that does not parse is answered with every
+      provider at its default, which the list alone cannot tell apart from a
+      user who switched them off. One malformed provider row is never
+      "unreadable": the host refuses only that row and everything else works.
+    - The button opens `ConfirmDestructiveDialog` with the consent text
+      (`PROVIDER_SETTINGS_RESET_CONSENT` in `provider-settings-reset-action.tsx`):
+      the file is set aside and a new one started, saved choices and any API
+      key saved in Traycer stop being used, nothing is deleted.
+    - The host renames the file aside unchanged
+      (`provider-overrides.json.unreadable-<UTC time>`, never over an earlier
+      one) and answers its name, which the success toast repeats. It refuses
+      with `outcome: "readable"` when the document is usable by the time it
+      acts, and the toast says nothing was reset. A reset whose providers
+      could not all be restarted (`providersNotRestarted` non-empty) is still
+      committed: the warning toast names the set-aside file and says to
+      restart this host - not the app, since the host can be remote. Success
+      invalidates `PROVIDER_INVALIDATIONS`, which includes the status.
+    - The status itself is re-read on mount, on window focus (`"always"`,
+      against the app-wide `false`) and whenever `PROVIDER_INVALIDATIONS` is
+      invalidated - the Providers refresh, the providers-changed stream and
+      every provider mutation - so a file that goes bad while the panel is
+      open, or a first status read that failed, still brings the reset back.
   - **The detail pane is tabbed, and the tab RAIL is the only thing between the
     provider header and its config.** Order is `account` · `usage` · `general` ·
     `env` · `modelProviders` · `mcp` · `plugins` · `skills`, filtered per provider through
@@ -3051,6 +3083,10 @@ window`, recorded in the type as `coverage.browsersAreMountedOnly` -
     - **They cannot ride the list.** Icons are ~900 KB (~1.2 MB base64) for a
       typical Codex install - one 1024x1024 PNG is 451 KB - and
       `useProvidersPluginsList` runs `staleTime: 30_000`.
+      The plugins capability `openChatsApplyNextMessage` changes the post-write
+      hint only when the host advertises it. The hint says that open chats on
+      the changed plugin setup pick changes up with their next message and that
+      a restart ends background work. Other providers keep the restart hint.
     - **`poll: false` on the icon query is load-bearing.** `providers.list` is
       condition-polled and condition queries join the table-owned poll BY
       DEFAULT; `refetchInterval` also fires regardless of `staleTime`, so the
@@ -3788,7 +3824,9 @@ dialog.tsx` / `notification-hook-draft.ts`, unchanged by this pass).
       safety order in `PERMISSION_OPTIONS` stays separate and unchanged, as do
       compatibility fallbacks. The Auto row has the same label-and-description
       shape as its peers; reviewer/model/billing metadata is shown in Judge
-      settings, not the picker. Availability reasons and mid-turn notices stay.
+      settings, not the picker. For a provider judge whose effective choice is
+      listed as Max Mode only, the Auto row adds only `· Max Mode`, on desktop
+      and mobile. Availability reasons and mid-turn notices stay.
   - **Judge** (`judge-tab.tsx`, with `judge-tile-state.ts`,
     `use-judge-toolbar-store.ts`, `judge-model-face.tsx` and
     `judge-status-lines.tsx`) - **Auto mode judge**: which model checks each
@@ -3847,6 +3885,12 @@ dialog.tsx` / `notification-hook-draft.ts`, unchanged by this pass).
       Fast footer (`withServiceTier` off). It is the composer's picker in
       behaviour: a click on a provider, an account or a model saves at once
       and keeps the panel open, and only an outside click or Esc closes it.
+      Its Max Mode badge reads the judge choice without a Fast parameter;
+      the same model can have a different badge in the chat picker. It uses
+      the store's effective effort (stored when offered, otherwise the lowest)
+      when `autoJudge.get` can run one,
+      even if the independent `autoJudge.set` line cannot save an effort and
+      hides the footer. Below the `get` effort line it makes no effort claim.
       The rail commits only a provider that can run here. One that cannot
       shows its sign-in or install steps and saves nothing.
       - **Its effort footer is the judge's Effort control** (`withReasoning`
@@ -4377,6 +4421,25 @@ min`): "The judge didn't finish in time, so it's asking you instead."
     scoped host, a remote host with a borrowable session); any other row says
     nothing. Every other host picker passes `environmentLabelForHost={null}`
     and shows no label.
+    A team's bots run only on the team's machines: only a host the registry
+    (`useRegisteredHosts`) calls `sandbox` is offered the team environments,
+    and binding it to one asks first (a dialog saying the host becomes the
+    team's). Any other host - a person's own machine, or one the registry has
+    not described - is offered only the personal environment (plus the one it
+    reports now, so the marked row is never hidden), with one line saying a
+    team's bots run on the team's machines. Binding to the personal
+    environment needs no confirmation. A host
+    another member added to a team (`explicit && !canUnbind`) is shown with
+    every option disabled and one sentence saying only that member can
+    change it. Below the picker, `panels/environment-machines-list.tsx` lists
+    each team's machines from `environment.host.list` (gated on that
+    method): a sandbox reads "Team machine" and names no operator, the
+    reader's own machine reads "Yours"; another member's machine is never
+    listed (the host answers only what the reader may see). A team whose
+    list could not be read says so with a Retry, rather than showing the
+    empty state. A bind or unbind refreshes the lists of the team the host
+    leaves and the team it joins. This list is admin surface only; the bot
+    flow never asks for a machine.
 - `Fallback` (section id `fallback`, route `/settings/fallback`,
   `panels/fallback-settings-panel.tsx` plus `panels/fallback/`) The whole
   configuration surface for **automatic provider fallback**: what the host does

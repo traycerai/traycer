@@ -24,6 +24,7 @@ import {
 import { SubagentAvatar } from "@/components/chat/segments/subagent-avatar";
 import { SubagentContinueAsChatButton } from "@/components/chat/segments/subagent-continue-as-chat-button";
 import { SubagentConversation } from "@/components/chat/segments/subagent-conversation";
+import { ToolImageGallery } from "@/components/chat/segments/tool-image-gallery";
 import {
   queryOpenAsChatControl,
   type SubagentDrillIn,
@@ -363,7 +364,10 @@ function SubagentChatBody(props: {
           />
         </div>
       ) : null}
-      {card.children.length === 0 && card.result === null ? (
+      <ToolImageGallery id={card.id} imageResults={card.toolImageResults} />
+      {card.children.length === 0 &&
+      card.result === null &&
+      card.toolImageResults.length === 0 ? (
         <p className="m-0 text-ui-sm text-muted-foreground">
           No conversation recorded for this subagent.
         </p>

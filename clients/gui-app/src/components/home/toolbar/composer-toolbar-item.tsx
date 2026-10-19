@@ -1,9 +1,9 @@
 import type { ReactNode } from "react";
 import { ComposerAttachImageButton } from "@/components/home/toolbar/composer-attach-image-button";
 import { ComposerMicSlot } from "@/components/home/toolbar/composer-mic-button";
+import { ComposerModelPicker } from "@/components/home/toolbar/composer-model-picker";
 import type { ComposerDictationControl } from "@/components/home/toolbar/composer-mic-button";
 import { PermissionsPicker } from "@/components/home/pickers/permissions-picker";
-import { HarnessModelPicker } from "@/components/home/pickers/harness-model-picker";
 import type { PermissionMode } from "@/components/home/data/landing-options";
 import type { AutoJudgeBilling } from "@/lib/auto-mode/auto-judge-billing";
 import type { DictationPreparingStatus } from "@/hooks/composer/use-dictation-availability";
@@ -77,24 +77,7 @@ export function renderToolbarItem(
         />
       );
     case "model":
-      return (
-        <HarnessModelPicker
-          labelDisplay="responsive"
-          store={props.store}
-          withServiceTier
-          withReasoning
-          tuiOnly={false}
-          lockedHarnessId={null}
-          disabled={props.settingsLocked}
-          registerActivation={!props.presentation}
-          presentation={props.presentation}
-          createProfileHostId={props.createProfileHostId}
-          runTargetHostId={props.runTargetHostId}
-          terminalLoginSurface={props.terminalLoginSurface}
-          profileAdmission={null}
-          embedding={null}
-        />
-      );
+      return <ComposerModelPicker {...props} />;
     case "mic":
       return (
         <ComposerMicSlot

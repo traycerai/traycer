@@ -38,6 +38,7 @@ import {
   type ReasoningFooterConfig,
   type ServiceTierFooterConfig,
 } from "@/components/home/pickers/harness-model-picker-footers";
+import type { MaxModeContext } from "@/components/home/data/model-max-mode";
 
 /**
  * What the picker's body draws from. Props only: the live picker feeds it from
@@ -108,6 +109,8 @@ export interface HarnessModelPickerPanelBodyProps {
   /** The picker's `visibleOpen`, for the footer's max treatment. */
   readonly reasoningPickerOpen: boolean;
   readonly serviceTierFooter: ServiceTierFooterConfig | null;
+  readonly maxModeContextKind?: MaxModeContext["kind"];
+  readonly maxModeRequired?: boolean;
   /** The host "Create new profile" creates on - see `HarnessModelPicker`'s
    *  prop of the same name. */
   readonly createProfileHostId: string | null;
@@ -197,7 +200,12 @@ export function HarnessModelPickerPanel(props: HarnessModelPickerPanelProps) {
       // Both halves have to move together or the gate is a no-op.
       onOpenAutoFocus={coarseOpenAutoFocus}
       onKeyDown={(event) => {
-        if (isInsideEmbeddingFooter(event.target)) return;
+        if (
+          isInsideEmbeddingFooter(event.target) ||
+          isInsideSpeedMenu(event.target)
+        ) {
+          return;
+        }
         onKeyDown(event);
       }}
       onEscapeKeyDown={(event) => {
@@ -276,6 +284,8 @@ export function HarnessModelPickerPanelBody(
     reasoningFooter,
     reasoningPickerOpen,
     serviceTierFooter,
+    maxModeContextKind,
+    maxModeRequired,
     createProfileHostId,
     runTargetHostId,
     terminalLoginSurface,
@@ -379,6 +389,7 @@ export function HarnessModelPickerPanelBody(
               listRef={listRef}
               listKey={listKey}
               rows={visibleRows}
+              maxModeContextKind={maxModeContextKind ?? "none"}
               selectedRowId={selectedRowId}
               activeRowId={effectiveActiveRowId}
               hoveredRowId={hoveredRowId}
@@ -402,6 +413,7 @@ export function HarnessModelPickerPanelBody(
             reasoning={reasoningFooter}
             pickerOpen={reasoningPickerOpen}
             serviceTier={serviceTierFooter}
+            maxMode={maxModeRequired === true}
           />
         </div>
       </div>
@@ -416,5 +428,13 @@ function isInsideEmbeddingFooter(target: EventTarget): boolean {
   return (
     target instanceof Element &&
     target.closest(EMBEDDING_FOOTER_SELECTOR) !== null
+  );
+}
+
+/** Radix owns keyboard input inside the Speed trigger and its portalled menu. */
+function isInsideSpeedMenu(target: EventTarget): boolean {
+  return (
+    target instanceof Element &&
+    target.closest("[data-picker-speed-menu]") !== null
   );
 }

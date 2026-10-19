@@ -10,6 +10,7 @@ import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-di
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { HarnessModelPicker } from "@/components/home/pickers/harness-model-picker";
+import { chatMaxModeContextForToolbar } from "@/components/home/data/model-max-mode";
 import { useComposerToolbarStore } from "@/components/home/hooks/use-composer-toolbar-store";
 import { fallbackSeedSource } from "@/lib/composer/composer-seed-source";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
@@ -25,31 +26,45 @@ const BOT_TITLE_MAX = 500;
 
 /**
  * A bot's own settings (Tracy Bots): its name, the model its trunk runs on,
- * and deletion. Every write goes through the tab host's client - the host the
- * bot is bound to - and the stream snapshot, not the mutation's answer, is
- * what the header re-renders from.
+ * and deletion. Every write goes through the tab host's client - the host
+ * `bot.open` chose to serve the tab - with nothing gated on which host that
+ * is: a host that cannot make the change refuses it, and the refusal is shown
+ * in place, under the control. The stream snapshot, not the mutation's
+ * answer, is what the header re-renders from.
  */
 export function BotSettingsPanel(props: {
   readonly bot: BotRecord;
-  readonly canEdit: boolean;
 }): ReactNode {
-  const { bot, canEdit } = props;
+  const { bot } = props;
   return (
     <div className="flex flex-col gap-6 overflow-y-auto p-4">
       {/* Keyed by the stream's title: a rename made elsewhere remounts the
           form on the new name instead of leaving the field on the old one. */}
-      <BotTitleForm key={bot.title} bot={bot} canEdit={canEdit} />
-      <BotRunSettingsForm bot={bot} canEdit={canEdit} />
-      <BotDeleteSection bot={bot} canEdit={canEdit} />
+      <BotTitleForm key={bot.title} bot={bot} />
+      <BotRunSettingsForm bot={bot} />
+      <BotDeleteSection bot={bot} />
     </div>
   );
 }
 
-function BotTitleForm(props: {
-  readonly bot: BotRecord;
-  readonly canEdit: boolean;
+/** A write's refusal, under the control that made it. */
+function BotSettingsRefusal(props: {
+  readonly message: string | null;
 }): ReactNode {
-  const { bot, canEdit } = props;
+  if (props.message === null) return null;
+  return (
+    <p
+      role="alert"
+      className="text-ui-xs text-destructive"
+      data-testid="bot-settings-refusal"
+    >
+      {props.message}
+    </p>
+  );
+}
+
+function BotTitleForm(props: { readonly bot: BotRecord }): ReactNode {
+  const { bot } = props;
   const client = useTabHostClient();
   const update = useBotUpdateTitleMutation(client);
   const setBotTabTitle = useBotTabsStore((s) => s.setBotTabTitle);
@@ -58,7 +73,6 @@ function BotTitleForm(props: {
   const trimmed = title.trim();
   const dirty = trimmed !== bot.title;
   const canSave =
-    canEdit &&
     dirty &&
     trimmed.length > 0 &&
     trimmed.length <= BOT_TITLE_MAX &&
@@ -85,7 +99,7 @@ function BotTitleForm(props: {
           id={inputId}
           value={title}
           maxLength={BOT_TITLE_MAX}
-          disabled={!canEdit || update.isPending}
+          disabled={update.isPending}
           className="max-w-md flex-1"
           onChange={(event) => setTitle(event.target.value)}
         />
@@ -100,15 +114,15 @@ function BotTitleForm(props: {
           ) : null}
         </Button>
       </div>
+      <BotSettingsRefusal
+        message={update.error === null ? null : update.error.message}
+      />
     </form>
   );
 }
 
-function BotRunSettingsForm(props: {
-  readonly bot: BotRecord;
-  readonly canEdit: boolean;
-}): ReactNode {
-  const { bot, canEdit } = props;
+function BotRunSettingsForm(props: { readonly bot: BotRecord }): ReactNode {
+  const { bot } = props;
   const client = useTabHostClient();
   const hostId = useTabHostId();
   const update = useBotUpdateRunSettingsMutation(client);
@@ -144,16 +158,18 @@ function BotRunSettingsForm(props: {
   const selection = useStore(toolbarStore, (s) => s.selection);
   const reasoning = useStore(toolbarStore, (s) => s.reasoning);
   const effort = reasoning.length === 0 ? null : reasoning;
+  // Bot run settings persist no service tier; the next chat turn uses Fast off.
+  const maxModeContext = useMemo(
+    () => chatMaxModeContextForToolbar(reasoning, ""),
+    [reasoning],
+  );
   const unchanged =
     selection.harnessId === bot.harness &&
     selection.modelSlug === bot.model &&
     effort === bot.effort &&
     selection.profileId === bot.profile;
   const canApply =
-    canEdit &&
-    !unchanged &&
-    selection.modelSlug.length > 0 &&
-    !update.isPending;
+    !unchanged && selection.modelSlug.length > 0 && !update.isPending;
   return (
     <section
       className="flex flex-col gap-2"
@@ -169,12 +185,13 @@ function BotRunSettingsForm(props: {
       <div className="flex flex-wrap items-center gap-2">
         <HarnessModelPicker
           labelDisplay="responsive"
+          maxModeContext={maxModeContext}
           store={toolbarStore}
           withServiceTier={false}
           withReasoning
           tuiOnly={false}
           lockedHarnessId={null}
-          disabled={!canEdit || update.isPending}
+          disabled={update.isPending}
           registerActivation={false}
           createProfileHostId={hostId}
           runTargetHostId={hostId}
@@ -207,15 +224,15 @@ function BotRunSettingsForm(props: {
           ) : null}
         </Button>
       </div>
+      <BotSettingsRefusal
+        message={update.error === null ? null : update.error.message}
+      />
     </section>
   );
 }
 
-function BotDeleteSection(props: {
-  readonly bot: BotRecord;
-  readonly canEdit: boolean;
-}): ReactNode {
-  const { bot, canEdit } = props;
+function BotDeleteSection(props: { readonly bot: BotRecord }): ReactNode {
+  const { bot } = props;
   const client = useTabHostClient();
   const remove = useBotDeleteMutation(client);
   const closeBotTab = useBotTabsStore((s) => s.closeBotTab);
@@ -228,15 +245,15 @@ function BotDeleteSection(props: {
     >
       <span className="text-ui-sm font-medium text-foreground">Delete</span>
       <p className="text-ui-xs text-muted-foreground">
-        Stops the bot and removes it from every host. Its conversations stay
-        readable in History.
+        Stops the bot and removes it. Its conversations stay readable in
+        History.
       </p>
       <div>
         <Button
           type="button"
           size="sm"
           variant="destructive"
-          disabled={!canEdit || remove.isPending}
+          disabled={remove.isPending}
           onClick={() => setOpen(true)}
         >
           Delete bot
@@ -246,7 +263,7 @@ function BotDeleteSection(props: {
         open={open}
         onOpenChange={setOpen}
         title={`Delete ${bot.title}?`}
-        description="The bot stops and is removed from every host. This cannot be undone."
+        description="The bot stops and is removed. This cannot be undone."
         cascadeSummary={null}
         actionLabel="Delete bot"
         isPending={remove.isPending}
@@ -262,7 +279,11 @@ function BotDeleteSection(props: {
             },
           )
         }
-      />
+      >
+        <BotSettingsRefusal
+          message={remove.error === null ? null : remove.error.message}
+        />
+      </ConfirmDestructiveDialog>
     </section>
   );
 }

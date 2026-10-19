@@ -858,9 +858,10 @@ describe("RoutingDestinationPicker", () => {
       kit.mutationResult = { outcome: "rung_unavailable", detail: null };
       fireEvent.click(footerConfirm());
 
-      expect(screen.getByRole("status").textContent).toBe(
-        "Couldn't switch just now.",
-      );
+      expect(
+        document.querySelector('[role="status"][aria-live="polite"]')
+          ?.textContent,
+      ).toBe("Couldn't switch just now.");
       expect(screen.queryByText(/^Replays on /)).toBeNull();
       expect(screen.getAllByText("Couldn't switch just now.")).toHaveLength(2);
     });
@@ -869,9 +870,11 @@ describe("RoutingDestinationPicker", () => {
       mount(failedTurn(["switch"]));
       await open();
 
-      const region = screen.getByRole("status");
-      expect(region.textContent).toBe("");
-      expect(region.className).toContain("sr-only");
+      const regions = screen.getAllByRole("status");
+      expect(regions).toHaveLength(2);
+      expect(regions[0].textContent).toBe("");
+      expect(regions[0].className).toContain("sr-only");
+      expect(regions[1].textContent).toBe("");
     });
 
     it("has exactly one button, Switch, and no Retry, Wait or Suggested anywhere in the popover", async () => {
@@ -1045,14 +1048,16 @@ describe("RoutingDestinationPicker", () => {
             chatId: CHAT_ID,
             traversalId: TRAVERSAL_ID,
             revision: 2,
-            target: hostTarget,
+            target: { ...hostTarget, serviceTier: null },
             leaseToken: "tok-1",
           },
         },
       ]);
+      // The host target's own paid tier is never trusted over the failed
+      // tuple's: the failed tuple ran Standard, so the target does too.
       expect(kit.mutations[0]).toMatchObject({
         variables: {
-          target: { permissionMode: "full_access", serviceTier: "fast" },
+          target: { permissionMode: "full_access", serviceTier: null },
         },
       });
     });
@@ -1083,7 +1088,7 @@ describe("RoutingDestinationPicker", () => {
 
       expect(kit.mutations).toHaveLength(1);
       expect(kit.mutations[0]).toMatchObject({
-        variables: { target: hostTarget },
+        variables: { target: { ...hostTarget, serviceTier: null } },
       });
     });
 
@@ -1111,7 +1116,7 @@ describe("RoutingDestinationPicker", () => {
 
       expect(kit.mutations).toHaveLength(1);
       expect(kit.mutations[0]).toMatchObject({
-        variables: { target: hostTarget },
+        variables: { target: { ...hostTarget, serviceTier: null } },
       });
     });
 
@@ -1191,6 +1196,241 @@ describe("RoutingDestinationPicker", () => {
             serviceTier: null,
           },
         },
+      });
+    });
+
+    describe("speed tier", () => {
+      const ULTRA_FAILED: ChatRunSettings = {
+        ...TARGET,
+        model: "gpt-6.1-sol",
+        profileId: null,
+        serviceTier: "ultrafast",
+      };
+
+      async function mountFailedAt(
+        seed: ChatRunSettings,
+        modelTargets: ReadonlyArray<FallbackModelTarget>,
+      ): Promise<void> {
+        kit.listData = listingOf({
+          failedTuple: seed,
+          profileTargets: [],
+          modelTargets,
+        });
+        mount({
+          kind: "failed-turn",
+          attempt: failedAttempt(["switch"]),
+          seedTuple: seed,
+        });
+        await open();
+        fireEvent.click(screen.getByRole("tab", { name: "Codex" }));
+      }
+
+      it("keeps ultrafast on a destination that advertises it, with no notice", async () => {
+        await mountFailedAt(ULTRA_FAILED, []);
+
+        fireEvent.click(option(/GPT-6-Astra/));
+        expect(screen.queryByText(/No Speed tier is selected/)).toBeNull();
+        fireEvent.click(footerConfirm());
+
+        expect(kit.mutations[0]).toMatchObject({
+          variables: {
+            target: { model: "gpt-6-astra", serviceTier: "ultrafast" },
+          },
+        });
+      });
+
+      it("clears ultrafast on a priority-only destination and says so before confirming", async () => {
+        await mountFailedAt(ULTRA_FAILED, []);
+
+        const statusRegions =
+          footerConfirm().parentElement?.querySelectorAll('[role="status"]');
+        if (statusRegions?.length !== 2) {
+          throw new Error("expected refusal and speed status regions");
+        }
+        const speedRegion = statusRegions[1];
+        expect(speedRegion.textContent).toContain("No Speed tier is selected.");
+
+        fireEvent.click(option(/GPT-6-Sol/));
+
+        const notice =
+          "Ultrafast isn't available on GPT-6-Sol. No Speed tier is selected.";
+        expect(screen.getByText(notice)).not.toBeNull();
+        expect(speedRegion.isConnected).toBe(true);
+        expect(speedRegion.textContent).toBe(notice);
+        fireEvent.click(footerConfirm());
+        expect(kit.mutations[0]).toMatchObject({
+          variables: { target: { model: "gpt-6-sol", serviceTier: null } },
+        });
+      });
+
+      it("says availability could not be confirmed when the target model read is unavailable", async () => {
+        kit.modelsQueryUnavailableFor = "codex";
+        await mountFailedAt(ULTRA_FAILED, []);
+
+        fireEvent.click(option(/GPT-6-Sol/));
+
+        expect(
+          screen.getByText(
+            "Couldn't confirm ultrafast on gpt-6-sol. No Speed tier is selected.",
+          ),
+        ).not.toBeNull();
+        fireEvent.click(footerConfirm());
+        expect(kit.mutations[0]).toMatchObject({
+          variables: { target: { model: "gpt-6-sol", serviceTier: null } },
+        });
+      });
+
+      it("does not promise a named default when the failed tier is unsupported", async () => {
+        await mountFailedAt(ULTRA_FAILED, []);
+
+        fireEvent.click(option(/GPT-6-Flex/));
+
+        expect(
+          screen.getByText(
+            "Ultrafast isn't available on GPT-6-Flex. No Speed tier is selected.",
+          ),
+        ).not.toBeNull();
+        fireEvent.click(footerConfirm());
+        expect(kit.mutations[0]).toMatchObject({
+          variables: { target: { model: "gpt-6-flex", serviceTier: null } },
+        });
+      });
+
+      it("keeps the advertised default tier id when the failed tier matches it", async () => {
+        const failedAtPriority = { ...ULTRA_FAILED, serviceTier: "priority" };
+        await mountFailedAt(failedAtPriority, []);
+
+        fireEvent.click(option(/GPT-6-Flex/));
+
+        expect(screen.queryByText(/isn't available/)).toBeNull();
+        fireEvent.click(footerConfirm());
+        expect(kit.mutations[0]).toMatchObject({
+          variables: {
+            target: { model: "gpt-6-flex", serviceTier: "priority" },
+          },
+        });
+      });
+
+      it("uses the advertised default label for a historical failed tier", async () => {
+        const failedAtFlexDefault: ChatRunSettings = {
+          ...ULTRA_FAILED,
+          model: "gpt-6-flex",
+          serviceTier: "priority",
+        };
+        await mountFailedAt(failedAtFlexDefault, []);
+
+        fireEvent.click(screen.getByRole("tab", { name: "Claude" }));
+        fireEvent.click(option(/Claude Opus 4/));
+
+        expect(
+          screen.getByText(/Flex isn't available on Claude Opus 4/),
+        ).not.toBeNull();
+        expect(screen.queryByText(/priority isn't available/)).toBeNull();
+      });
+
+      it("uses the directory catalog slot for a managed failed profile and keeps its tier label", async () => {
+        const failedManagedTuple = {
+          ...ULTRA_FAILED,
+          profileId: FAILED_PROFILE,
+        };
+        kit.listData = listingOf({
+          failedTuple: failedManagedTuple,
+          profileTargets: [],
+          modelTargets: [],
+        });
+        mount({
+          kind: "failed-turn",
+          attempt: failedAttempt(["switch"]),
+          seedTuple: failedManagedTuple,
+        });
+        await open();
+        fireEvent.click(screen.getByRole("tab", { name: "Codex" }));
+        fireEvent.click(option(/GPT-6-Sol/));
+
+        expect(
+          kit.fallbackCatalogueCalls.some(
+            (call) => call.enabled && call.harnessIds.includes("codex"),
+          ),
+        ).toBe(true);
+        expect(kit.modelRequests.length).toBeGreaterThan(0);
+        expect(
+          kit.modelRequests.every(
+            (request) => request.workingDirectory === null,
+          ),
+        ).toBe(true);
+        expect(
+          screen.getByText(
+            "Ultrafast isn't available on GPT-6-Sol. No Speed tier is selected.",
+          ),
+        ).not.toBeNull();
+      });
+
+      it("uses no profile id as a model-query directory when the failed tuple has no tier", async () => {
+        mount(failedTurn(["switch"]));
+        await open();
+
+        expect(kit.modelRequests.length).toBeGreaterThan(0);
+        expect(
+          kit.modelRequests.every(
+            (request) => request.workingDirectory === null,
+          ),
+        ).toBe(true);
+      });
+
+      it("never substitutes another paid tier for a Claude fast tuple on a Codex destination", async () => {
+        kit.listData = listingOf({
+          failedTuple: { ...FAILED, serviceTier: "fast" },
+          profileTargets: [],
+          modelTargets: [],
+        });
+        mount({
+          kind: "failed-turn",
+          attempt: failedAttempt(["switch"]),
+          seedTuple: { ...FAILED, serviceTier: "fast" },
+        });
+        await open();
+        fireEvent.click(screen.getByRole("tab", { name: "Codex" }));
+
+        fireEvent.click(option(/GPT-6-Sol/));
+        fireEvent.click(footerConfirm());
+
+        expect(kit.mutations[0]).toMatchObject({
+          variables: { target: { model: "gpt-6-sol", serviceTier: null } },
+        });
+        expect(kit.mutations[0]).not.toMatchObject({
+          variables: { target: { serviceTier: "priority" } },
+        });
+      });
+
+      it("clamps a listed destination's host-built tier the same way", async () => {
+        const hostTarget: ChatRunSettings = {
+          ...ULTRA_FAILED,
+          model: "gpt-6-sol",
+          serviceTier: "priority",
+        };
+        await mountFailedAt(ULTRA_FAILED, [
+          modelTargetOf({ groupId: "grp-s", target: hostTarget }),
+        ]);
+
+        fireEvent.click(option(/GPT-6-Sol/));
+        expect(
+          screen.getByText(
+            "Ultrafast isn't available on GPT-6-Sol. No Speed tier is selected.",
+          ),
+        ).not.toBeNull();
+        fireEvent.click(footerConfirm());
+
+        expect(kit.mutations[0]).toMatchObject({
+          variables: { target: { model: "gpt-6-sol", serviceTier: null } },
+        });
+      });
+
+      it("shows no speed notice when the failed tuple requested no tier", async () => {
+        await mountFailedAt({ ...ULTRA_FAILED, serviceTier: null }, []);
+
+        fireEvent.click(option(/GPT-6-Sol/));
+
+        expect(screen.queryByText(/No Speed tier is selected/)).toBeNull();
       });
     });
 
@@ -1486,6 +1726,135 @@ describe("RoutingDestinationPicker", () => {
         ]);
       });
       expect(kit.toast).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("a catalog read that is fresh on every render", () => {
+    // Stress the real RoutingCatalogSync effect beside RoutingModelPicker.
+    // Production queries keep cached data stable between updates; this mock
+    // deliberately changes array identity on every render. If a whole-store
+    // subscription moves into their shared parent, setCatalog feeds that
+    // parent's render and the next fresh catalog back into the effect.
+    it("opens and settles with the sync's inputs changing identity on every render", async () => {
+      kit.unstableCatalog = true;
+      kit.lease = heldLease("held", "tok-1");
+      mount(countdown());
+      await open();
+
+      expect(screen.getByRole("tab", { name: "Codex" })).not.toBeNull();
+      fireEvent.click(screen.getByRole("tab", { name: "Codex" }));
+      expect(option(/GPT-5/)).not.toBeNull();
+    });
+  });
+
+  describe("the Max Mode label follows the tuple Switch sends", () => {
+    // Max Mode is a Cursor fact: the kit adds a Cursor harness and model for
+    // this block only.
+    beforeEach(() => {
+      kit.withCursor = true;
+    });
+
+    function pickCursorMax(): void {
+      fireEvent.click(screen.getByRole("tab", { name: "Cursor" }));
+      fireEvent.click(option(/Cursor Max/));
+    }
+
+    async function openFailedTurn(serviceTier: string | null): Promise<void> {
+      kit.lease = heldLease("held", "tok-1");
+      // The host listing, when present, owns the failed tuple read by Switch.
+      kit.listData = {
+        ...(kit.listData ?? listing({ recommendedWork: false })),
+        failedTuple: { ...FAILED, serviceTier },
+      };
+      mount({
+        kind: "failed-turn",
+        attempt: failedAttempt(["switch"]),
+        seedTuple: { ...FAILED, serviceTier },
+      });
+      await open();
+    }
+
+    it("shows the footer badge when the failed tuple's Fast tier, inherited by the pick, is the Max-only key", async () => {
+      await openFailedTurn("fast");
+      pickCursorMax();
+
+      expect(screen.getByTestId("model-max-mode-badge")).not.toBeNull();
+    });
+
+    it("shows nothing when the inherited tier is off, whatever the model's other keys say", async () => {
+      await openFailedTurn(null);
+      pickCursorMax();
+
+      expect(screen.queryByTestId("model-max-mode-badge")).toBeNull();
+      expect(screen.queryByText("Max Mode")).toBeNull();
+    });
+
+    it("never badges the row itself: it is only listed with Fast on, so it is not Max-only everywhere", async () => {
+      await openFailedTurn("fast");
+      fireEvent.click(screen.getByRole("tab", { name: "Cursor" }));
+
+      expect(within(option(/Cursor Max/)).queryByText("Max Mode")).toBeNull();
+    });
+
+    // A listed host-built target is Switch's target, but its tier is clamped to
+    // the failed tuple's own advertised tier: the label follows the clamped
+    // tuple Switch submits, never the listed target's own tier.
+    function listCursorMaxTarget(failedTier: string | null): void {
+      const hostTarget: ChatRunSettings = {
+        ...TARGET,
+        harnessId: "cursor",
+        model: "cursor-max",
+        profileId: null,
+        reasoningEffort: null,
+        serviceTier: "fast",
+      };
+      kit.listData = listingOf({
+        failedTuple: { ...FAILED, serviceTier: failedTier },
+        profileTargets: [],
+        modelTargets: [modelTargetOf({ groupId: "grp-a", target: hostTarget })],
+      });
+    }
+
+    it("shows nothing for a listed target whose own tier is fast when the failed tuple ran no tier, and Switch submits no tier", async () => {
+      listCursorMaxTarget(null);
+      await openFailedTurn(null);
+      pickCursorMax();
+
+      expect(screen.queryByTestId("model-max-mode-badge")).toBeNull();
+      fireEvent.click(footerConfirm());
+
+      expect(kit.mutations).toHaveLength(1);
+      expect(kit.mutations[0]).toMatchObject({
+        method: "chat.fallback.runManualRung",
+        variables: {
+          target: {
+            harnessId: "cursor",
+            model: "cursor-max",
+            serviceTier: null,
+          },
+        },
+      });
+    });
+
+    it("shows the badge for a listed target when the failed tuple ran Fast, and Switch submits fast", async () => {
+      listCursorMaxTarget("fast");
+      await openFailedTurn("fast");
+      pickCursorMax();
+
+      expect(screen.getByTestId("model-max-mode-badge")).not.toBeNull();
+      fireEvent.click(footerConfirm());
+
+      expect(kit.mutations).toHaveLength(1);
+      expect(kit.mutations[0]).toMatchObject({
+        method: "chat.fallback.runManualRung",
+        variables: {
+          target: {
+            harnessId: "cursor",
+            model: "cursor-max",
+            serviceTier: "fast",
+          },
+        },
+      });
     });
   });
 
@@ -1893,6 +2262,7 @@ describe("RoutingDestinationPicker", () => {
           <TabHostProvider hostId={TAB_HOST_ID}>
             <HarnessModelPicker
               store={store}
+              maxModeContext={{ kind: "none" }}
               withServiceTier={false}
               withReasoning
               tuiOnly={false}

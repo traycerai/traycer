@@ -232,6 +232,10 @@ describe("providers.list: the Kimi row keeps the raw `configured` on every relea
       version: "10.2",
       schema: providersList[10].versions[2].contract.responseSchema,
     },
+    {
+      version: "10.3",
+      schema: providersList[10].versions[3].contract.responseSchema,
+    },
   ];
 
   for (const { version, schema } of lines) {

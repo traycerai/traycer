@@ -558,6 +558,14 @@ export interface EpicSessionController {
   ): () => void;
   retry(epicId: string): void;
   openOnOriginalHost(epicId: string): void;
+  /**
+   * The host this window holds the epic on: its live session's host, or,
+   * with none live, the host its entry targets (a create or original-host
+   * request, else the effective host). `null` when no tab of this window
+   * holds the epic. Every tab of an epic in a window shares this host, since
+   * the window has one entry per epic.
+   */
+  readEpicHostId(epicId: string): string | null;
   installEnvironment(
     environment: EpicSessionControllerEnvironment | null,
   ): void;
@@ -2238,6 +2246,11 @@ function createEpicSessionController(): EpicSessionController {
     },
     retry,
     openOnOriginalHost,
+    readEpicHostId: (epicId) => {
+      const entry = entries.get(epicId);
+      if (entry === undefined) return null;
+      return registry.peek(epicId)?.hostId ?? readTargetHostId(entry);
+    },
     installEnvironment: (next) => {
       environment = next;
       // Idempotent (one function, a Set underneath), and repeated here so the

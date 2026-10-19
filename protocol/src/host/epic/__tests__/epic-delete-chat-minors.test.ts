@@ -1,15 +1,16 @@
 import { describe, expect, it } from "vitest";
 import { hostRpcRegistry } from "@traycer/protocol/host/index";
 import {
-  deleteChatResponseSchema,
   deleteChatResponseSchemaV10,
+  deleteChatResponseSchemaV11,
 } from "@traycer/protocol/host/epic/unary-schemas";
 import { epicDeleteChatUpgradeV10ToV11 } from "@traycer/protocol/host/epic/contracts";
 
 describe("epic.deleteChat@1.1", () => {
   it("is registered alongside the frozen 1.0 contract", () => {
     const registry = hostRpcRegistry["epic.deleteChat"];
-    expect(registry[1].latestMinor).toBe(1);
+    // 1.2 (`outcome`) is pinned in `agent-record-write-outcome-minors.test.ts`.
+    expect(registry[1].latestMinor).toBe(2);
     expect(registry[1].versions[0].contract.schemaVersion).toEqual({
       major: 1,
       minor: 0,
@@ -31,13 +32,13 @@ describe("epic.deleteChat@1.1", () => {
 
   it("1.1 round-trips publicationChatId for both a resolved id and null", () => {
     expect(
-      deleteChatResponseSchema.parse({
+      deleteChatResponseSchemaV11.parse({
         deleted: true,
         publicationChatId: "clone-1",
       }),
     ).toEqual({ deleted: true, publicationChatId: "clone-1" });
     expect(
-      deleteChatResponseSchema.parse({
+      deleteChatResponseSchemaV11.parse({
         deleted: true,
         publicationChatId: null,
       }),
@@ -45,7 +46,7 @@ describe("epic.deleteChat@1.1", () => {
   });
 
   it("1.1 requires publicationChatId - a missing key is rejected, not defaulted", () => {
-    const result = deleteChatResponseSchema.safeParse({ deleted: true });
+    const result = deleteChatResponseSchemaV11.safeParse({ deleted: true });
     expect(result.success).toBe(false);
   });
 

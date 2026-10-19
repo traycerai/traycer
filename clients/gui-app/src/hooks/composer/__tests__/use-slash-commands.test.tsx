@@ -7,6 +7,7 @@ import type { LocalSlashCommand } from "@/lib/composer/types";
 const mockState = vi.hoisted(() => ({
   calls: [] as Array<{
     harnessId: string;
+    profileId: string | null;
     workingDirectories: ReadonlyArray<string>;
     enabled: boolean;
     subscribed: boolean;
@@ -22,12 +23,17 @@ vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
     hostClient: unknown,
     harnessId: string,
     workingDirectories: ReadonlyArray<string>,
-    activity: { enabled: boolean; subscribed: boolean },
+    activity: {
+      profileId: string | null;
+      enabled: boolean;
+      subscribed: boolean;
+    },
   ) => {
     void hostClient;
     mockState.calls.push({
       harnessId,
       workingDirectories,
+      profileId: activity.profileId,
       enabled: activity.enabled,
       subscribed: activity.subscribed,
     });
@@ -83,6 +89,7 @@ describe("useSlashCommands", () => {
       useSlashCommands("", {
         hostClient: null,
         harnessId: "codex",
+        profileId: "managed-a",
         workingDirectories: ["/repo", "/repo/packages/app"],
         enabled: true,
         localCommands: [],
@@ -91,6 +98,7 @@ describe("useSlashCommands", () => {
 
     expect(mockState.calls.at(-1)).toEqual({
       harnessId: "codex",
+      profileId: "managed-a",
       workingDirectories: ["/repo", "/repo/packages/app"],
       enabled: true,
       subscribed: true,
@@ -113,6 +121,7 @@ describe("useSlashCommands", () => {
       useSlashCommands("front", {
         hostClient: null,
         harnessId: "codex",
+        profileId: null,
         workingDirectories: ["/repo"],
         enabled: true,
         localCommands: [],
@@ -171,6 +180,7 @@ describe("useSlashCommands", () => {
       useSlashCommands("", {
         hostClient: null,
         harnessId: "claude",
+        profileId: null,
         workingDirectories: ["/repo"],
         enabled: true,
         localCommands: [localBtw],

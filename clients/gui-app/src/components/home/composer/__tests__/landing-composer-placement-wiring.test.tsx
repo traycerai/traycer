@@ -107,6 +107,22 @@ const testState = vi.hoisted(() => ({
    * reacts correctly to whatever `actions.submit` returns.
    */
   submitRefusal: null as { readonly message: string } | null,
+  /** Every argument object `LandingComposer` handed `useComposerPickerItems`. */
+  pickerCalls: [] as Array<{
+    readonly harnessId: string;
+    readonly profileId: string | null;
+    readonly isActive: boolean;
+  }>,
+  /** The real zustand store behind the mocked `useComposerToolbarStore`. */
+  toolbarStore: null as {
+    readonly setState: (patch: {
+      readonly selection: {
+        readonly harnessId: string;
+        readonly modelSlug: string;
+        readonly profileId: string | null;
+      };
+    }) => void;
+  } | null,
 }));
 
 // `.clear`/`.migrateKeyForAllHosts` are the only members the G4 effect and
@@ -247,7 +263,18 @@ vi.mock("@/stores/composer/composer-run-settings-store", () => {
 
 vi.mock("@/components/home/hooks/use-composer-toolbar-store", async () => {
   const { createStore } = await import("zustand/vanilla");
-  const toolbarStore = createStore(() => ({
+  interface ToolbarMockState {
+    readonly selection: {
+      readonly harnessId: string;
+      readonly modelSlug: string;
+      readonly profileId: string | null;
+    };
+    readonly permission: string;
+    readonly reasoning: string;
+    readonly serviceTier: string;
+    readonly agentMode: string;
+  }
+  const toolbarStore = createStore<ToolbarMockState>(() => ({
     selection: {
       harnessId: "claude",
       modelSlug: "claude-sonnet",
@@ -258,6 +285,7 @@ vi.mock("@/components/home/hooks/use-composer-toolbar-store", async () => {
     serviceTier: "",
     agentMode: "regular",
   }));
+  testState.toolbarStore = toolbarStore;
   return { useComposerToolbarStore: () => toolbarStore };
 });
 
@@ -324,7 +352,17 @@ vi.mock("@/components/home/composer/surface-activity-hooks", () => ({
   useSurfaceActivity: () => true,
 }));
 vi.mock("@/components/chat/composer/picker/use-composer-picker-items", () => ({
-  useComposerPickerItems: () => undefined,
+  useComposerPickerItems: (params: {
+    readonly harnessId: string;
+    readonly profileId: string | null;
+    readonly isActive: boolean;
+  }) => {
+    testState.pickerCalls.push({
+      harnessId: params.harnessId,
+      profileId: params.profileId,
+      isActive: params.isActive,
+    });
+  },
 }));
 vi.mock("@/hooks/composer/use-workspace-mention-roots", () => ({
   useLandingComposerMentionRoots: () => [],
@@ -410,6 +448,14 @@ afterEach(() => {
   testState.composerFollowsEffective = true;
   testState.composerIsPinned = true;
   testState.submitRefusal = null;
+  testState.pickerCalls = [];
+  testState.toolbarStore?.setState({
+    selection: {
+      harnessId: "claude",
+      modelSlug: "claude-sonnet",
+      profileId: null,
+    },
+  });
   landingTarget = READ_TARGET;
   stagingStoreMocks.clear.mockReset();
   stagingStoreMocks.migrateKeyForAllHosts.mockReset();
@@ -457,6 +503,51 @@ describe("landing composer placement wiring", () => {
     // equality check on fields would pass for either one.
     expect(testState.actionsTarget).toBe(SUBMIT_TARGET);
     expect(testState.actionsTarget).not.toBe(READ_TARGET);
+  });
+});
+
+describe("landing composer forwards the selected toolbar profile to the picker hooks", () => {
+  it("hands useComposerPickerItems the toolbar store's profile and follows an A -> B selection change", () => {
+    testState.toolbarStore?.setState({
+      selection: {
+        harnessId: "claude",
+        modelSlug: "claude-sonnet",
+        profileId: "profile-a",
+      },
+    });
+    render(
+      <LandingComposer
+        draftId={null}
+        pendingCreateId="pending-1"
+        initialSettings={null}
+        workspaceControls={() => null}
+      />,
+    );
+
+    const last = () => testState.pickerCalls.at(-1);
+    expect(last()).toMatchObject({
+      harnessId: "claude",
+      profileId: "profile-a",
+    });
+    // A render that forwarded no profile (or null) must not have happened.
+    expect(
+      testState.pickerCalls.every((call) => call.profileId === "profile-a"),
+    ).toBe(true);
+
+    act(() => {
+      testState.toolbarStore?.setState({
+        selection: {
+          harnessId: "claude",
+          modelSlug: "claude-sonnet",
+          profileId: "profile-b",
+        },
+      });
+    });
+
+    expect(last()).toMatchObject({
+      harnessId: "claude",
+      profileId: "profile-b",
+    });
   });
 });
 

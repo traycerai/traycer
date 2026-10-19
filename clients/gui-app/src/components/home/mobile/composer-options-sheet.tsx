@@ -11,6 +11,7 @@ import {
   type PermissionMode,
 } from "@/components/home/data/landing-options";
 import {
+  autoJudgeMaxModeListedForRow,
   autoModeMidTurnLock,
   type AutoJudgeBilling,
 } from "@/lib/auto-mode/auto-judge-billing";
@@ -137,6 +138,12 @@ export function ComposerOptionsSheet(props: ComposerOptionsSheetProps) {
                   label={option.label}
                   experimental={option.id === "auto"}
                   description={description}
+                  maxModeListed={autoJudgeMaxModeListedForRow({
+                    isAuto: option.id === "auto",
+                    supported: isSupported,
+                    lockedMidTurn,
+                    billing: props.judgeBilling,
+                  })}
                   notice={
                     isSupported &&
                     !lockedMidTurn &&
@@ -201,6 +208,7 @@ interface OptionRowProps {
   readonly label: string;
   readonly experimental: boolean;
   readonly description: string;
+  readonly maxModeListed: boolean;
   /** The `auto` row's mid-turn notice; `null` on every other row. */
   readonly notice: string | null;
   readonly selected: boolean;
@@ -237,6 +245,7 @@ function OptionRow(props: OptionRowProps) {
         </span>
         <span className="text-ui-xs text-muted-foreground">
           {props.description}
+          {props.maxModeListed ? " · Max Mode" : null}
         </span>
         {props.notice !== null ? (
           <span

@@ -7,6 +7,7 @@ import {
 } from "@tanstack/react-query";
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
+import { useStore } from "zustand";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import {
@@ -60,6 +61,16 @@ import {
   useRefreshHarnessCatalogForClient,
 } from "@/hooks/harnesses/use-gui-harness-catalog";
 import { hostRpcSchedulingPolicy } from "@/lib/host-rpc-policy/host-method-policy-table";
+import {
+  NO_LOCAL_SLASH_COMMANDS,
+  useSlashCommands,
+} from "@/hooks/composer/use-slash-commands";
+import { createComposerPickerStore } from "@/components/chat/composer/picker/composer-picker-store";
+import { useComposerPickerItems } from "@/components/chat/composer/picker/use-composer-picker-items";
+import {
+  createComposerToolbarStore,
+  type ComposerToolbarStore,
+} from "@/stores/composer/composer-toolbar-store";
 
 const hostBindingMock = vi.hoisted(() => ({
   current: null as { readonly hostClient: unknown } | null,
@@ -69,6 +80,14 @@ vi.mock("@/lib/host/runtime", () => ({
   useHostClient: () => hostBindingMock.current?.hostClient ?? null,
   // The spine, a separate export since redesign P2.1.
   useHostRuntimeClient: () => hostBindingMock.current?.hostClient ?? null,
+}));
+
+// The mention source pulls in epic/auth/workspace machinery that has nothing
+// to do with the slash catalog; the profile regression below drives the REAL
+// `useComposerPickerItems` slash path (popup + eager known-name map) and
+// stubs only this unrelated sibling.
+vi.mock("@/components/chat/composer/picker/use-mention-items", () => ({
+  useMentionItems: () => undefined,
 }));
 
 /**
@@ -952,6 +971,7 @@ describe("…ForClient catalog hooks are scoped to the client argument, not the 
           subscribed: true,
         });
         useGuiHarnessCommandsQuery(clientA, "opencode", [], {
+          profileId: null,
           enabled: true,
           subscribed: true,
         });
@@ -969,6 +989,7 @@ describe("…ForClient catalog hooks are scoped to the client argument, not the 
           subscribed: true,
         });
         useGuiHarnessCommandsQuery(clientB, "opencode", [], {
+          profileId: null,
           enabled: true,
           subscribed: true,
         });
@@ -1088,6 +1109,7 @@ describe("…ForClient catalog hooks are scoped to the client argument, not the 
           subscribed: true,
         });
         useGuiHarnessCommandsQuery(clientB, "opencode", [], {
+          profileId: null,
           enabled: true,
           subscribed: true,
         });
@@ -2098,5 +2120,261 @@ describe("useGuiHarnessCatalog pending-availability retention (resurrection guar
       cleanup();
       vi.useRealTimers();
     }
+  });
+});
+
+describe("agent.gui.listCommands is keyed by the selected profile (real hook -> host query, one host)", () => {
+  afterEach(() => {
+    cleanup();
+  });
+
+  function commandRow(
+    name: string,
+  ): ListGuiAgentCommandsResponse["commands"][number] {
+    return {
+      harnessId: "claude",
+      name,
+      description: name,
+      argumentHint: null,
+      kind: "skill",
+      metadata: {},
+    };
+  }
+
+  // Each profile answers with rows only it owns, so a read served from the
+  // wrong cache entry (or a request that dropped the profile) shows up as the
+  // wrong row names, not just a wrong call count.
+  function rowsFor(
+    params: RequestOfMethod<HostRpcRegistry, "agent.gui.listCommands">,
+  ): ListGuiAgentCommandsResponse {
+    return {
+      harnessId: "claude",
+      commands: [commandRow(`skill-of-${params.profileId ?? "ambient"}`)],
+    };
+  }
+
+  interface ProfileFixture {
+    readonly client: HostClient<HostRpcRegistry>;
+    readonly queryClient: QueryClient;
+    readonly Wrapper: (props: { readonly children: ReactNode }) => ReactNode;
+    readonly calls: Array<
+      RequestOfMethod<HostRpcRegistry, "agent.gui.listCommands">
+    >;
+  }
+
+  function buildProfileFixture(): ProfileFixture {
+    const queryClient = createAppQueryClient();
+    const calls: ProfileFixture["calls"] = [];
+    let requestCounter = 0;
+    const spine = new HostClient<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      schedulingPolicy: hostRpcSchedulingPolicy,
+      invalidator: createHostQueryInvalidator(queryClient),
+      findHostById: (hostId) =>
+        hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,
+      messenger: new MockHostMessenger<HostRpcRegistry>({
+        registry: hostRpcRegistry,
+        requestId: () => {
+          requestCounter += 1;
+          return `req-profile-${String(requestCounter)}`;
+        },
+        handlers: {
+          "agent.gui.listCommands": (params) => {
+            calls.push(params);
+            return rowsFor(params);
+          },
+        },
+      }),
+    });
+    spine.setRequestContext(
+      createRequestContextFixture({ origin: "renderer", bearerToken: "tok-1" }),
+    );
+    const Wrapper = (props: { readonly children: ReactNode }): ReactNode => (
+      <QueryClientProvider client={queryClient}>
+        {props.children}
+      </QueryClientProvider>
+    );
+    return {
+      client: spine.createRequester(mockLocalHostEntry),
+      queryClient,
+      Wrapper,
+      calls,
+    };
+  }
+
+  function commandQueries(queryClient: QueryClient): ReadonlyArray<Query> {
+    return queryClient
+      .getQueryCache()
+      .getAll()
+      .filter((entry) => entry.queryKey.includes("agent.gui.listCommands"));
+  }
+
+  function paramsFor(profileId: string | null) {
+    return {
+      harnessId: "claude",
+      workingDirectory: "/repo",
+      workingDirectories: ["/repo"],
+      profileId,
+    };
+  }
+
+  it("shares one request and cache entry between same-profile tile and composer consumers, keeps profiles apart on a switch, and serves a return to A from A's own entry", async () => {
+    const fixture = buildProfileFixture();
+    const names = (rows: ReadonlyArray<{ readonly name: string }>) =>
+      rows.map((row) => row.name);
+
+    const { result, rerender } = renderHook(
+      (profileId: string | null) => {
+        // Tile and composer: same harness, same directories (different array
+        // identities, one duplicated entry), same profile.
+        const tile = useSlashCommands("", {
+          hostClient: fixture.client,
+          harnessId: "claude",
+          profileId,
+          workingDirectories: ["/repo", "/repo"],
+          enabled: true,
+          localCommands: NO_LOCAL_SLASH_COMMANDS,
+        });
+        const composer = useSlashCommands("", {
+          hostClient: fixture.client,
+          harnessId: "claude",
+          profileId,
+          workingDirectories: ["/repo"],
+          enabled: true,
+          localCommands: NO_LOCAL_SLASH_COMMANDS,
+        });
+        return { tile, composer };
+      },
+      { wrapper: fixture.Wrapper, initialProps: "profile-a" },
+    );
+
+    await waitFor(() => {
+      expect(names(result.current.tile.data)).toEqual(["skill-of-profile-a"]);
+      expect(names(result.current.composer.data)).toEqual([
+        "skill-of-profile-a",
+      ]);
+    });
+    expect(fixture.calls).toEqual([paramsFor("profile-a")]);
+    expect(commandQueries(fixture.queryClient)).toHaveLength(1);
+
+    rerender("profile-b");
+    await waitFor(() => {
+      expect(names(result.current.tile.data)).toEqual(["skill-of-profile-b"]);
+      expect(names(result.current.composer.data)).toEqual([
+        "skill-of-profile-b",
+      ]);
+    });
+    expect(fixture.calls).toEqual([
+      paramsFor("profile-a"),
+      paramsFor("profile-b"),
+    ]);
+    expect(commandQueries(fixture.queryClient)).toHaveLength(2);
+
+    // Back to A inside the finite stale window: A's own entry, no new request,
+    // and nothing of B's.
+    rerender("profile-a");
+    await waitFor(() => {
+      expect(names(result.current.tile.data)).toEqual(["skill-of-profile-a"]);
+      expect(names(result.current.composer.data)).toEqual([
+        "skill-of-profile-a",
+      ]);
+    });
+    expect(fixture.calls).toHaveLength(2);
+    expect(commandQueries(fixture.queryClient)).toHaveLength(2);
+  });
+
+  it("forwards the toolbar store's selected profile through the production picker hook into every catalog consumer, and follows an A -> B selection change", async () => {
+    const fixture = buildProfileFixture();
+    const pickerStore = createComposerPickerStore();
+    const toolbarStore: ComposerToolbarStore = createComposerToolbarStore({
+      purpose: "run",
+      reasoningFallback: "model-default",
+      seedKey: "profile-seam-test",
+      values: {
+        permission: "supervised",
+        selection: {
+          harnessId: "claude",
+          modelSlug: "claude-sonnet",
+          profileId: "profile-a",
+        },
+        reasoning: "medium",
+        serviceTier: "",
+      },
+      onSettingsChange: null,
+      tuiOnly: false,
+      chatLineCarriesAutoMode: null,
+      hostId: null,
+    });
+
+    renderHook(
+      () => {
+        // The two reads `chat-composer.tsx` makes of its toolbar store before
+        // calling the picker hook.
+        const harnessId = useStore(toolbarStore, (s) => s.selection.harnessId);
+        const profileId = useStore(toolbarStore, (s) => s.selection.profileId);
+        useComposerPickerItems({
+          pickerStore,
+          hostClient: fixture.client,
+          harnessId,
+          profileId,
+          mentionRoots: ["/repo"],
+          currentEpicId: null,
+          isActive: true,
+          localSlashCommands: NO_LOCAL_SLASH_COMMANDS,
+        });
+      },
+      { wrapper: fixture.Wrapper },
+    );
+
+    const knownNames = (): ReadonlyArray<string> =>
+      Array.from(pickerStore.getState().knownSlashCommands?.keys() ?? []);
+
+    // Eager known-name map (active composer) ...
+    await waitFor(() => {
+      expect(knownNames()).toEqual(["skill-of-profile-a"]);
+    });
+    // ... and the popup consumer, which only fetches once a slash session opens.
+    act(() => {
+      pickerStore.getState().openPicker({
+        sessionId: 1,
+        kind: "slash",
+        slashScope: "all",
+        slashTrigger: "/",
+        range: { from: 1, to: 2 },
+        query: "",
+        commit: () => undefined,
+        dismiss: null,
+        focusEditor: null,
+        clientRect: null,
+      });
+    });
+    const popupNames = (): ReadonlyArray<string> =>
+      pickerStore
+        .getState()
+        .items.flatMap((item) =>
+          item.kind === "slash" ? [item.command.name] : [],
+        );
+    await waitFor(() => {
+      expect(popupNames()).toEqual(["skill-of-profile-a"]);
+    });
+    expect(fixture.calls).toEqual([paramsFor("profile-a")]);
+    expect(commandQueries(fixture.queryClient)).toHaveLength(1);
+
+    act(() => {
+      toolbarStore.getState().setSelection({
+        harnessId: "claude",
+        modelSlug: "claude-sonnet",
+        profileId: "profile-b",
+      });
+    });
+    await waitFor(() => {
+      expect(knownNames()).toEqual(["skill-of-profile-b"]);
+      expect(popupNames()).toEqual(["skill-of-profile-b"]);
+    });
+    expect(fixture.calls).toEqual([
+      paramsFor("profile-a"),
+      paramsFor("profile-b"),
+    ]);
+    expect(commandQueries(fixture.queryClient)).toHaveLength(2);
   });
 });

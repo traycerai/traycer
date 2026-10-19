@@ -6,7 +6,7 @@ import {
 
 export type ModelLabelIndex = Pick<
   SenderDisplayContext,
-  "modelLabels" | "modelReasoningLabels"
+  "modelLabels" | "modelReasoningLabels" | "modelServiceTierLabels"
 >;
 
 interface IndexNode {
@@ -24,6 +24,7 @@ const root: IndexNode = {
 const emptyIndex: ModelLabelIndex = {
   modelLabels: new Map(),
   modelReasoningLabels: new Map(),
+  modelServiceTierLabels: new Map(),
 };
 
 /**
@@ -67,6 +68,7 @@ function buildModelLabelIndex(
 ): ModelLabelIndex {
   const modelLabels = new Map<string, string>();
   const modelReasoningLabels = new Map<string, ReadonlyMap<string, string>>();
+  const modelServiceTierLabels = new Map<string, ReadonlyMap<string, string>>();
 
   for (const harness of harnesses) {
     for (const model of harness.models) {
@@ -81,8 +83,13 @@ function buildModelLabelIndex(
           ]),
         ),
       );
+      const tierLabels = new Map<string, string>();
+      for (const option of model.supportedServiceTiers) {
+        if (!tierLabels.has(option.id)) tierLabels.set(option.id, option.label);
+      }
+      modelServiceTierLabels.set(key, tierLabels);
     }
   }
 
-  return { modelLabels, modelReasoningLabels };
+  return { modelLabels, modelReasoningLabels, modelServiceTierLabels };
 }

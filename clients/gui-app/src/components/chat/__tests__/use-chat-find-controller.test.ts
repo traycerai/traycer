@@ -376,6 +376,7 @@ describe("useChatFindController - chain-open on reveal", () => {
             spawnToolCallId: null,
             parentId: null,
             workflowMeta: null,
+            toolImageResults: [],
             children: [
               {
                 id: "card-text",
@@ -471,6 +472,7 @@ function makeTranscriptWithSubagentBodyNeedle(): ReadonlyArray<ChatMessageModel>
         spawnToolCallId: null,
         parentId: null,
         workflowMeta: null,
+        toolImageResults: [],
         children: [],
       },
     ],

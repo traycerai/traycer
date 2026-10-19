@@ -353,3 +353,63 @@ describe("ComposerOptionsSheet - Auto's Experimental badge", () => {
     expect(within(supervised).queryByText("Experimental")).toBeNull();
   });
 });
+
+describe("ComposerOptionsSheet - Auto's Max Mode judge suffix", () => {
+  const providerBilling = (maxModeListed: boolean): AutoJudgeBilling => ({
+    kind: "provider",
+    harnessId: "cursor",
+    harnessLabel: "Cursor",
+    modelLabel: "Example",
+    effortLabel: "High",
+    maxModeListed,
+  });
+
+  it("appends '· Max Mode' to the Auto row only when the provider judge is listed", () => {
+    renderSheet({ ...defaults(), judgeBilling: providerBilling(true) });
+
+    const auto = screen.getByTestId("composer-options-permission-auto");
+    expect(within(auto).getByText(/·\s*Max Mode/)).toBeTruthy();
+    const supervised = screen.getByRole("radio", { name: /Supervised/ });
+    expect(within(supervised).queryByText(/Max Mode/)).toBeNull();
+  });
+
+  it("shows no suffix when the provider judge is not listed", () => {
+    renderSheet({ ...defaults(), judgeBilling: providerBilling(false) });
+
+    const auto = screen.getByTestId("composer-options-permission-auto");
+    expect(within(auto).queryByText(/Max Mode/)).toBeNull();
+  });
+
+  it.each<[string, AutoJudgeBilling | null]>([
+    ["traycer", { kind: "traycer", modelLabel: "Sonnet 5", effortLabel: null }],
+    ["blocked", { kind: "blocked" }],
+    ["unsettled (null)", null],
+  ])("shows no suffix for %s billing", (_name, judgeBilling) => {
+    renderSheet({ ...defaults(), judgeBilling });
+
+    const auto = screen.getByTestId("composer-options-permission-auto");
+    expect(within(auto).queryByText(/Max Mode/)).toBeNull();
+  });
+
+  it("shows no suffix when the host cannot spell auto, even for a listed judge", () => {
+    renderSheet({
+      ...defaults(),
+      judgeBilling: providerBilling(true),
+      hostKnowsAutoMode: false,
+    });
+
+    const auto = screen.getByTestId("composer-options-permission-auto");
+    expect(within(auto).queryByText(/Max Mode/)).toBeNull();
+  });
+
+  it("shows no suffix when the row does not honour Auto", () => {
+    renderSheet({
+      ...defaults(),
+      judgeBilling: providerBilling(true),
+      supportedPermissionModes: FULL_ACCESS_ONLY,
+    });
+
+    const auto = screen.getByTestId("composer-options-permission-auto");
+    expect(within(auto).queryByText(/Max Mode/)).toBeNull();
+  });
+});

@@ -200,8 +200,10 @@ import { useCanvasHostId } from "@/components/epic-canvas/hooks/use-canvas-host-
 import { useEpicSessionHostClient } from "@/hooks/epic/use-epic-session-host-client";
 import {
   useHostReachability,
+  useRemoteSessionPollReadiness,
   type HostReachability,
 } from "@/hooks/agent/use-host-reachability";
+import { useHostLease } from "@/hooks/host/use-host-lease";
 import {
   useEpicCreateChatForHost,
   useEpicUpdateChatRunSettings,
@@ -269,6 +271,7 @@ import {
 import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
 import {
   resolveAgentReasoningLabel,
+  resolveAgentServiceTierLabel,
   resolveAgentSenderDisplay,
   resolveSenderLabel,
   type SenderDisplayContext,
@@ -335,7 +338,12 @@ import { toast } from "sonner";
 import type { ChatSurfaceNode } from "./chat-tile-types";
 import { ChatTilePreContent } from "./chat-tile-runtime-gate";
 import { MobileDrawerVisibleTilePaintReporter } from "@/components/layout/shell/mobile-drawer-history-gate";
-import type { ChatLoadWait, ChatTilePreContentFrame } from "./chat-pre-content";
+import {
+  chatPreContentStrip,
+  chatTileHostLabel,
+  type ChatLoadWait,
+  type ChatTilePreContentFrame,
+} from "./chat-pre-content";
 import { SurfaceActivityProvider } from "@/components/home/composer/surface-activity-context";
 import { chatTileCatalogActivity } from "./chat-tile-surface-activity";
 import { tileIntent } from "@/lib/canvas/tile-open/intent";
@@ -437,9 +445,24 @@ export function ChatTile(props: ChatTileProps) {
  * needs from above the handle branch. See `ChatLoadWait` for why it lives
  * here and not in the body.
  */
+/**
+ * Whether this viewer's epic role can create agents - the gate the dead-tile
+ * banner draws Clone agent on. The live tile reads it once, into its
+ * pre-content frame, and hands that one value to both its banner and the
+ * body under it, so the two cannot disagree. `epic.createChat` is editor-gated host-side, and
+ * an unresolved role (`null`) keeps the offer: the host gate is the backstop,
+ * and withholding the way out of a dead tile needs evidence.
+ */
+function useChatCloneAllowed(): boolean {
+  const permissionRole = useEpicPermissionRole();
+  return permissionRole === null || isEditableRole(permissionRole);
+}
+
 function useChatTilePreContentFrame(
   reachability: HostReachability,
+  hasReadySession: boolean,
 ): ChatTilePreContentFrame {
+  const cloneAllowed = useChatCloneAllowed();
   const [wait, setWait] = useState<ChatLoadWait>(() => ({
     startedAt: Date.now(),
     attemptsBefore: 0,
@@ -453,8 +476,8 @@ function useChatTilePreContentFrame(
     });
   }, []);
   return useMemo(
-    () => ({ wait, restartWait, reachability }),
-    [wait, restartWait, reachability],
+    () => ({ wait, restartWait, reachability, cloneAllowed, hasReadySession }),
+    [wait, restartWait, reachability, cloneAllowed, hasReadySession],
   );
 }
 
@@ -577,6 +600,8 @@ function ChatTileForChat(props: ChatTileProps) {
     }
   }, [handle, epicId, tabHostId, node.id, node.instanceId]);
   const reachability = useHostReachability(tabHostId);
+  const lease = useHostLease(tabHostId);
+  const hasReadySession = useRemoteSessionPollReadiness(tabHostId);
   // The chat's own bounded load (invariant 6), for both halves of the wait:
   // while `handle === null`, and after it until the first snapshot. The
   // handle-pending half has THREE causes that look identical from here: the
@@ -586,7 +611,10 @@ function ChatTileForChat(props: ChatTileProps) {
   // on the difference, so all three get one sentence naming the host - and an
   // end. The wait is recorded here, above the branch, so the handle arriving
   // restarts none of its deadlines.
-  const preContentFrame = useChatTilePreContentFrame(reachability);
+  const preContentFrame = useChatTilePreContentFrame(
+    reachability,
+    hasReadySession,
+  );
   // Feeds `TombstonedProfileProvider` below - "ran on <label> (removed)" for
   // a message anchored to a since-tombstoned profile. Shares the same
   // tab-scoped query the reauth gate/rate-limit prompt already read, so this
@@ -603,24 +631,36 @@ function ChatTileForChat(props: ChatTileProps) {
   // the host runtime. Mount it only when the banner is actually
   // shown so the live render path does not pay the subscription cost
   // (and tests that omit the host runtime provider stay green).
+  //
+  // The strip is the one `chatPreContentStrip` names, so the body below it
+  // reads the same answer: a lease that reads dead and offline draws the
+  // offline strip and its Clone offer while the directory still says the
+  // host is reachable.
   const deadTileBanner = (() => {
-    if (reachability.status === "unreachable") {
+    const strip = chatPreContentStrip(
+      reachability.status,
+      lease,
+      hasReadySession,
+    );
+    if (strip === "offline") {
       return (
-        <ChatDeadTileBannerContainer
+        <ChatDeadTileBannerWithOffer
           epicId={epicId}
           tabId={viewTabId}
           chatId={node.id}
           sourceHostId={tabHostId}
-          hostLabel={reachability.hostLabel}
+          hostLabel={chatTileHostLabel(reachability, tabHostId)}
           reason="host-offline"
           // This mount's body is a load state or a cached live session -
           // never a published copy the banner could truthfully point at.
           showsPublishedCopy={false}
           testId={`chat-dead-tile-${node.id}`}
+          // The frame's value, which the body under this strip reads too.
+          cloneAllowed={preContentFrame.cloneAllowed}
         />
       );
     }
-    if (reachability.status === "host-starting") {
+    if (strip === "starting") {
       // The bound host is coming back: this machine's host hasn't published
       // yet (boot/ensure/wake), or the host's lease vouches for a restart it
       // announced (D4), remote hosts included. Never offer Clone here -
@@ -680,7 +720,8 @@ interface ChatDeadTileBannerContainerProps {
   readonly tabId: string;
   readonly chatId: string;
   readonly sourceHostId: string;
-  readonly hostLabel: string;
+  /** `null` while the directory has not resolved one; the banner says "the host". */
+  readonly hostLabel: string | null;
   readonly reason: ChatDeadTileBannerReason;
   readonly testId: string;
   /**
@@ -701,8 +742,26 @@ interface ChatDeadTileBannerContainerProps {
   readonly sourceOwnerUserId?: string;
 }
 
+/**
+ * The dead-tile banner for a surface with no role read of its own (the
+ * published tile, the canvas substitution): it reads the viewer's role here.
+ */
 export function ChatDeadTileBannerContainer(
   props: ChatDeadTileBannerContainerProps,
+): ReactNode {
+  const cloneAllowed = useChatCloneAllowed();
+  return <ChatDeadTileBannerWithOffer {...props} cloneAllowed={cloneAllowed} />;
+}
+
+/**
+ * The banner and its Clone offer, for a mounting surface that already holds
+ * the role gate - the live tile, whose body under the strip reads the same
+ * value.
+ */
+function ChatDeadTileBannerWithOffer(
+  props: ChatDeadTileBannerContainerProps & {
+    readonly cloneAllowed: boolean;
+  },
 ): ReactNode {
   const chatRecord = useChatById(props.chatId);
   // The EPIC SESSION's client, by intent: the cloud lookup below SHARES the
@@ -736,13 +795,8 @@ export function ChatDeadTileBannerContainer(
   // own-chat sentences, which were this banner's whole vocabulary before
   // collaborators existed. Role: `epic.createChat` is editor-gated host-side,
   // so a known viewer gets the reason in the banner instead of a Clone button
-  // that dies on a bare "You don't have permission" toast; an unresolved role
-  // (`null`) keeps the offer - the host gate is the backstop, and withholding
-  // the way out of a dead tile needs evidence.
-  const permissionRole = useEpicPermissionRole();
+  // that dies on a bare "You don't have permission" toast (`useChatCloneAllowed`).
   const ownedByViewer = useOwnedByViewer(sourceOwnerUserId);
-  const cloneAllowed =
-    permissionRole === null || isEditableRole(permissionRole);
   const offer = useChatCloneOnHostSwitch({
     epicId: props.epicId,
     tabId: props.tabId,
@@ -760,7 +814,7 @@ export function ChatDeadTileBannerContainer(
         hostLabel={props.hostLabel}
         reason={props.reason}
         ownedByViewer={ownedByViewer}
-        cloneAllowed={cloneAllowed}
+        cloneAllowed={props.cloneAllowed}
         showsPublishedCopy={props.showsPublishedCopy}
         onClone={offer.clone}
         cloning={offer.cloning}
@@ -1889,7 +1943,7 @@ function useChatTileSessionViewModel(
     { enabled: false, subscribed: surfaceVisible, modelsFetch: "cached-only" },
   );
   const displayCatalog = tabModelCatalog.harnesses;
-  const { modelLabels, modelReasoningLabels } = useMemo(
+  const { modelLabels, modelReasoningLabels, modelServiceTierLabels } = useMemo(
     () => getModelLabelIndex(displayCatalog),
     [displayCatalog],
   );
@@ -2123,8 +2177,20 @@ function useChatTileSessionViewModel(
   });
 
   const displayContext = useMemo<SenderDisplayContext>(
-    () => ({ profile, collaborators, modelLabels, modelReasoningLabels }),
-    [collaborators, modelLabels, modelReasoningLabels, profile],
+    () => ({
+      profile,
+      collaborators,
+      modelLabels,
+      modelReasoningLabels,
+      modelServiceTierLabels,
+    }),
+    [
+      collaborators,
+      modelLabels,
+      modelReasoningLabels,
+      modelServiceTierLabels,
+      profile,
+    ],
   );
   const renderedDisplayContext = useMemo<RenderedMessagesDisplayContext>(
     () => ({
@@ -2134,6 +2200,8 @@ function useChatTileSessionViewModel(
         resolveAgentSenderDisplay(sender, displayContext),
       resolveAgentReasoningLabel: (sender, reasoningEffort) =>
         resolveAgentReasoningLabel(sender, reasoningEffort, displayContext),
+      resolveAgentServiceTierLabel: (sender, serviceTier) =>
+        resolveAgentServiceTierLabel(sender, serviceTier, displayContext),
       contentBlocksPreview,
     }),
     [displayContext],
@@ -2499,6 +2567,7 @@ function useChatTileSessionViewModel(
   } = useSlashCommands("", {
     hostClient: tabHostClient,
     harnessId: currentComposerSettings.harnessId,
+    profileId: currentComposerSettings.profileId,
     // `resolvedComposerMentionRoots`, not the raw roots, for the same reason the
     // context-usage chip above uses it: on a folder-fallback chat the two differ,
     // and the raw set opens a SECOND, narrower cache entry - losing the dedupe
@@ -3375,6 +3444,7 @@ function useChatTileSessionViewModel(
       <ContextUsageChipForChat
         handle={handle}
         harnessId={currentComposerSettings.harnessId}
+        profileId={currentComposerSettings.profileId}
         workingDirectories={resolvedComposerMentionRoots}
         commandsEnabled={activationQueries.discoverCompactSlashCommands}
         onCompact={canSendNextStep ? compactConversation : null}
@@ -3385,6 +3455,7 @@ function useChatTileSessionViewModel(
       compactConversation,
       resolvedComposerMentionRoots,
       currentComposerSettings.harnessId,
+      currentComposerSettings.profileId,
       handle,
       activationQueries.discoverCompactSlashCommands,
     ],
@@ -3940,6 +4011,7 @@ interface ChatSessionMessagesSurfaceProps {
 function ContextUsageChipForChat(props: {
   readonly handle: ChatSessionStoreHandle;
   readonly harnessId: GuiHarnessId;
+  readonly profileId: string | null;
   readonly workingDirectories: ReadonlyArray<string>;
   readonly commandsEnabled: boolean;
   readonly onCompact: ((commandName: string) => void) | null;
@@ -3956,6 +4028,7 @@ function ContextUsageChipForChat(props: {
   const { data: commands } = useSlashCommands("", {
     hostClient: client,
     harnessId: props.harnessId,
+    profileId: props.profileId,
     workingDirectories: props.workingDirectories,
     enabled: props.commandsEnabled,
     localCommands: NO_LOCAL_SLASH_COMMANDS,

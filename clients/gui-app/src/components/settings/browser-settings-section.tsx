@@ -179,7 +179,7 @@ function AgentBrowserAccessRow(props: {
       row={BROWSER.definitions.agentBrowserAccess}
       status={
         query.isError
-          ? "Couldn't read this host's browser setting. Repair ~/.traycer/cli/config.json on that machine, or back it up before resetting it, then reopen Settings."
+          ? "Couldn't read this host's browser setting. Repair Traycer's config.json on that machine, or back it up before resetting it, then reopen Settings."
           : `On ${hostName ?? "this host"}. ${BROWSER.definitions.agentBrowserAccess.description} Running agents pick this up on their next turn.`
       }
       control={
@@ -231,7 +231,7 @@ function AgentPagesRow(props: { readonly hostId: string | null }): ReactNode {
       row={BROWSER.definitions.agentPages}
       status={
         query.isError
-          ? "Couldn't read this host's pages setting. Repair ~/.traycer/cli/config.json on that machine, or back it up before resetting it, then reopen Settings."
+          ? "Couldn't read this host's pages setting. Repair Traycer's config.json on that machine, or back it up before resetting it, then reopen Settings."
           : `On ${hostName ?? "this host"}. ${BROWSER.definitions.agentPages.description}`
       }
       control={

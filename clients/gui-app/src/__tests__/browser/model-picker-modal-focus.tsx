@@ -9,6 +9,7 @@ import { buildAllHarnessModelRows } from "@/components/home/data/harness-model-s
 import { ComposerPromptEditor } from "@/components/chat/composer/composer-prompt-editor";
 import { createComposerPickerStore } from "@/components/chat/composer/picker/composer-picker-store";
 import { HarnessModelPickerPanel } from "@/components/home/pickers/harness-model-picker-panel";
+import { handleHarnessModelPickerKeyDown } from "@/components/home/pickers/harness-model-picker-keyboard";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { Popover, PopoverTrigger } from "@/components/ui/popover";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -24,7 +25,8 @@ const TIERS = [
   { id: "standard", label: "Standard", description: null },
   { id: "fast", label: "Fast", description: null },
 ];
-function fixtureModel(label: string) {
+const ULTRA_TIER = { id: "ultrafast", label: "Ultrafast", description: null };
+function fixtureModel(label: string, tiers: typeof TIERS) {
   return guiAgentModelOptionSchema.parse({
     harnessId: "claude",
     slug: label.toLowerCase(),
@@ -35,12 +37,17 @@ function fixtureModel(label: string) {
     defaultReasoningEffort: "low",
     supportedReasoningEfforts: EFFORTS,
     defaultServiceTier: "standard",
-    supportedServiceTiers: TIERS,
+    supportedServiceTiers: tiers,
     metadata: {},
   });
 }
-const SONNET = fixtureModel("Sonnet");
-const MODELS = [SONNET, fixtureModel("Haiku")];
+const SONNET = fixtureModel(
+  "Sonnet",
+  new URLSearchParams(window.location.search).has("dual-tier")
+    ? [...TIERS, ULTRA_TIER]
+    : TIERS,
+);
+const MODELS = [SONNET, fixtureModel("Haiku", TIERS)];
 const HARNESS = {
   ...guiHarnessOptionSchema.parse({
     id: "claude",
@@ -130,7 +137,19 @@ export function ModalFixture() {
               onQueryChange={setQuery}
               activeProviderLabel="Claude"
               activeDescendant={undefined}
-              onKeyDown={() => undefined}
+              onKeyDown={(event) =>
+                handleHarnessModelPickerKeyDown(event, {
+                  visibleRows: ROWS,
+                  effectiveActiveRowId: ROWS[1]?.id ?? "",
+                  activeRow: ROWS[1] ?? null,
+                  trimmedQuery: "",
+                  listRef,
+                  onActiveRowId: () => undefined,
+                  onSelectRow: (row) => setSelected(row.value),
+                  onQueryChange: setQuery,
+                  onClose: () => setOpen(false),
+                })
+              }
               catalogHarnesses={[HARNESS]}
               fallbackHarnesses={[HARNESS]}
               profilesByHarnessId={new Map()}
@@ -157,7 +176,7 @@ export function ModalFixture() {
               selectedRowId={
                 ROWS.find((row) => row.value === selected)?.id ?? ""
               }
-              effectiveActiveRowId={ROWS[0]?.id ?? ""}
+              effectiveActiveRowId={ROWS[1]?.id ?? ""}
               hoveredRowId=""
               initialTopMostItemIndex={{
                 index: 0,

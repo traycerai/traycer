@@ -44,7 +44,7 @@ export function model(
   overrides: Partial<
     Pick<
       GuiAgentModelOption,
-      "defaultReasoningEffort" | "supportedReasoningEfforts"
+      "defaultReasoningEffort" | "supportedReasoningEfforts" | "metadata"
     >
   >,
 ): GuiAgentModelOption {

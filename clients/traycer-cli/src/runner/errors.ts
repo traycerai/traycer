@@ -17,6 +17,16 @@ export const CLI_ERROR_CODES = {
   // required permission for task"). Distinct from NOT_FOUND ("doesn't
   // exist") and AUTH_REJECTED ("not signed in / bad token").
   FORBIDDEN: "E_FORBIDDEN",
+  // The data-migration startup gate refused this invocation: a migration is
+  // in progress, or the data location record and its migration journal
+  // disagree. Nothing was written; the message says what to run.
+  DATA_MIGRATION_BLOCKED: "E_DATA_MIGRATION_BLOCKED",
+  // `traycer data init` / `data migrate` is not offered by this build on this
+  // platform yet (`data-availability.ts`). Nothing was written.
+  DATA_OPERATION_UNAVAILABLE: "E_DATA_OPERATION_UNAVAILABLE",
+  // A data migration stopped to show its session impact report; re-run with
+  // `--accept-session-impact <digest>` naming exactly the reported digest.
+  DATA_ACCEPTANCE_REQUIRED: "E_DATA_ACCEPTANCE_REQUIRED",
 
   // --- Agent roles (mirror the host's typed role-surface wire codes 1:1) ---
   // Absent and foreign-account agents share ONE code and template - no

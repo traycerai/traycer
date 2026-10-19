@@ -4,6 +4,7 @@ import type {
   NativeMutationResult,
   ProviderMcpServer,
   ProviderMcpNotice,
+  ProviderMcpCoverage,
   ProviderNativeErrorCode,
   ProviderNativeErrorResult,
   ProviderPlugin,
@@ -33,6 +34,7 @@ export type ProvidersMcpAuthWireResponse = ResponseOfMethod<
 export type McpListData = {
   readonly servers: readonly ProviderMcpServer[];
   readonly notices: readonly ProviderMcpNotice[];
+  readonly coverage: ProviderMcpCoverage | null;
   /** A failed full-list refresh retained when other responses update rows. */
   readonly refreshError: HostRpcError | null;
 };
@@ -120,18 +122,24 @@ export function mapProvidersListToMcpServers(args: {
   const native = args.response.native;
   throwIfNativeError(native, "providers.list");
   if (native === null || native.kind !== "mcp") {
-    return completeMcpList([], []);
+    return completeMcpList([], [], null);
   }
-  return completeMcpList(native.servers, native.notices ?? []);
+  return completeMcpList(
+    native.servers,
+    native.notices ?? [],
+    native.coverage ?? null,
+  );
 }
 
 function completeMcpList(
   servers: readonly ProviderMcpServer[],
   notices: readonly ProviderMcpNotice[],
+  coverage: ProviderMcpCoverage | null,
 ): McpListData {
   return {
     servers,
     notices,
+    coverage,
     refreshError: null,
   };
 }
@@ -207,7 +215,11 @@ export function mapNativeMutateToMcpMutate(args: {
       method: "providers.nativeMutate",
     });
   }
-  return completeMcpList(result.servers, result.notices ?? []);
+  return completeMcpList(
+    result.servers,
+    result.notices ?? [],
+    result.coverage ?? null,
+  );
 }
 
 export function mapNativeMutateToPluginsMutate(args: {

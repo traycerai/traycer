@@ -7,6 +7,7 @@ import {
   knownHarnessId,
   resolveAgentReasoningLabel,
   resolveAgentSenderDisplay,
+  resolveAgentServiceTierLabel,
   type SenderDisplayContext,
 } from "@/lib/chat/sender-display";
 
@@ -27,6 +28,7 @@ function displayContext(
     collaborators: [],
     modelLabels: new Map(),
     modelReasoningLabels,
+    modelServiceTierLabels: new Map(),
   };
 }
 
@@ -123,5 +125,59 @@ describe("resolveAgentReasoningLabel", () => {
     expect(
       resolveAgentReasoningLabel(SENDER, " xhigh ", displayContext(new Map())),
     ).toBe("xhigh");
+  });
+});
+
+describe("resolveAgentServiceTierLabel", () => {
+  const tierContext = (
+    labels: SenderDisplayContext["modelServiceTierLabels"],
+  ): SenderDisplayContext => ({
+    ...displayContext(new Map()),
+    modelServiceTierLabels: labels,
+  });
+
+  it("returns the advertised label for the selected model's tier", () => {
+    const context = tierContext(
+      new Map([
+        [
+          agentModelKey("codex", "gpt-5-codex"),
+          new Map([
+            ["priority", "Fast"],
+            ["ultrafast", "Ultrafast"],
+          ]),
+        ],
+      ]),
+    );
+
+    expect(resolveAgentServiceTierLabel(SENDER, "ultrafast", context)).toBe(
+      "Ultrafast",
+    );
+  });
+
+  it("falls back to the display name's catalog row when the agent id has none", () => {
+    const context = tierContext(
+      new Map([
+        [
+          agentModelKey("codex", "GPT-5 Codex"),
+          new Map([["ultrafast", "Ultrafast"]]),
+        ],
+      ]),
+    );
+
+    expect(resolveAgentServiceTierLabel(SENDER, "ultrafast", context)).toBe(
+      "Ultrafast",
+    );
+  });
+
+  it("returns the raw id when the catalog is cold", () => {
+    expect(
+      resolveAgentServiceTierLabel(SENDER, "ultrafast", tierContext(new Map())),
+    ).toBe("ultrafast");
+  });
+
+  it.each([null, "", "  "])("returns null for the empty tier %j", (tier) => {
+    expect(
+      resolveAgentServiceTierLabel(SENDER, tier, tierContext(new Map())),
+    ).toBeNull();
   });
 });

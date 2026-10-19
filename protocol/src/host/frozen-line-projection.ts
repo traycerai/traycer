@@ -47,15 +47,16 @@ import { z } from "zod";
  * accepts and this walk drops nothing. Only a leaf pinned STRICTLY NARROWER
  * than the head is ever acted on.
  *
- * Today that is two leaves, both on 7.0/8.0 and both the provider id enum:
- * `providerId` (a scalar, so the row drops exactly as it always did) and
- * `managedVersions.sharedWithProviders[]`. That second one is the only field
- * this changes in production right now, and it is a real change - a pack shared
- * with a provider the line predates currently costs a peer the ids it DID know.
- * Everything else here is a mechanism waiting on its pin: the four pins that
- * landed with it are byte-identical to live by design, so they arm the day the
- * live enum moves and not before. `__tests__/frozen-line-projection.test.ts`
- * asserts that set rather than leaving it to a reader to assume.
+ * Today the older major lines have two provider-id leaves: `providerId` (a
+ * scalar, so the row drops exactly as it always did) and
+ * `managedVersions.sharedWithProviders[]`. The latter is the array this walk
+ * repairs. Published list lines also have a narrower native refusal `code`
+ * enum now that the head admits `server_not_found` and `change_shadowed`.
+ * That scalar cannot be repaired by dropping array members; the direct
+ * v10-to-older-major bridges map those two refusals to the published
+ * `unsupported_action` code while preserving detail. Other pinned leaves
+ * remain dormant until their live enums move. The projection test asserts
+ * the exact narrower-path inventory.
  *
  * None of this is new knowledge. `provider-native-schemas.ts` carries the
  * finding verbatim - "FILTER `supportedTabs` before the parse; never reparse
@@ -86,10 +87,9 @@ import { z } from "zod";
  * WHAT IT DOES NOT DO. A scalar enum has no member to drop, so an unknown
  * scalar still fails its object and still hits the nearest `.catch()` - or, on
  * a provider row, still drops that row, which is exactly how a post-vN provider
- * id stays off an already-shipped wire. That is unchanged behaviour and
- * deliberately so: the alternative is inventing a substitute value, and a
- * downgrade bridge that fabricates wire content is worse than one that
- * degrades.
+ * id stays off an already-shipped wire. The two new native refusal codes have
+ * a separate, explicit bridge mapping to the published `unsupported_action`
+ * code; this generic array walk does not invent substitute scalar values.
  *
  * It also does not reach every caller. This runs inside the MAJOR-version
  * downgrade bridges, so it covers 7.0 and 8.0 callers. A caller on the
