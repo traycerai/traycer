@@ -11,6 +11,7 @@ import {
   listAgentsResponseSchemaV90,
   listAgentsResponseSchemaV91,
   listAgentsResponseSchemaV92,
+  listAgentsResponseSchemaV100,
   listAgentsResponseSchema,
 } from "@traycer/protocol/host/agent/shared";
 import {
@@ -140,9 +141,13 @@ const LIVE_FROZEN_EXPORTS = {
   // 9.2 froze when `commandcode` opened 10.0 (`1.5.0` shipped 9.1); its dump
   // did not change by the freeze.
   "agent.list@9.2": listAgentsResponseSchemaV92,
-  // The head line, holding 9.2's old job: it names the LIVE schema, so the next
-  // attempt to grow the agent summary fails here first.
-  "agent.list@10.0": listAgentsResponseSchema,
+  // 10.0 froze when 10.1 opened to put the run tuple on the row. It is
+  // RELEASED (`host-v1.5.1` registers `agent.list@10.0`), so it names its own
+  // frozen schema and must not regenerate.
+  "agent.list@10.0": listAgentsResponseSchemaV100,
+  // The head line, holding 10.0's old job: it names the LIVE schema, so the
+  // next attempt to grow the agent summary fails here first.
+  "agent.list@10.1": listAgentsResponseSchema,
   "providers.list@1.0": providersListResponseSchemaV10,
   "providers.list@2.0": providersListResponseSchemaV20,
   "providers.list@3.0": providersListResponseSchemaV30,

@@ -1,4 +1,4 @@
-import type { Extensions } from "@tiptap/core";
+import { Extension, type Extensions } from "@tiptap/core";
 import StarterKit from "@tiptap/starter-kit";
 import Blockquote from "@tiptap/extension-blockquote";
 import { Markdown } from "@tiptap/markdown";
@@ -62,6 +62,19 @@ const ComposerBlockquote = Blockquote.extend({
   },
 });
 
+// The composer has no horizontal rule node, and marked's `hr` token has no
+// children, so with no handler for it a pasted `---` was dropped whole. It is
+// kept as the line the user wrote, spaces included, without only the line
+// break that ends the token; the prompt serializer sends it as typed.
+const ComposerRuleAsText = Extension.create({
+  name: "composerRuleAsText",
+  markdownTokenName: "hr",
+  parseMarkdown: (token) => ({
+    type: "paragraph",
+    content: [{ type: "text", text: (token.raw ?? "---").replace(/\n+$/, "") }],
+  }),
+});
+
 export function buildComposerExtensions(
   args: BuildComposerExtensionsArgs,
 ): Extensions {
@@ -76,6 +89,7 @@ export function buildComposerExtensions(
     }),
     ComposerBlockquote,
     ComposerSourcedQuote,
+    ComposerRuleAsText,
     // One private `marked` per editor. Without it the extension registers
     // this editor's tokenizers into the module-level `marked` singleton and
     // never removes them, which pinned every composer ever mounted (and the

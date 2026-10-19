@@ -2015,6 +2015,16 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
+  // Whether the provider settings document is unusable as a whole: a plain
+  // read, latest wins.
+  "providers.settingsFile.status": { ...LATEST_SCHEDULING, poll: null },
+  // Sets that document aside and starts a fresh one. Persisted and not
+  // idempotent across a later corruption, so it is queued, never merged.
+  "providers.settingsFile.reset": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
   // Setting an environment override changes persisted provider configuration.
   "providers.setEnvOverride": {
     mode: "fifo",

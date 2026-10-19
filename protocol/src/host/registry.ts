@@ -96,6 +96,7 @@ import {
   agentListUpgradeV90ToV91,
   agentListUpgradeV91ToV92,
   agentListUpgradeV92ToV100,
+  agentListUpgradeV100ToV101,
   agentListV10,
   agentListV20,
   agentListV30,
@@ -108,6 +109,7 @@ import {
   agentListV91,
   agentListV92,
   agentListV100,
+  agentListV101,
   agentSelectionGuideV10,
   agentSelectionGuideGlobalGetV10,
   agentSelectionGuideGlobalOnboardingDraftGetV10,
@@ -1032,6 +1034,10 @@ import {
   autoPolicySetV10,
   providersSetAutoJudgeV10,
 } from "@traycer/protocol/host/auto-mode/contracts";
+import {
+  providersSettingsFileResetV10,
+  providersSettingsFileStatusV10,
+} from "@traycer/protocol/host/provider-settings-file/contracts";
 import {
   chatAutoArchiveGetV10,
   chatAutoArchiveSetV10,
@@ -11770,6 +11776,35 @@ const HOST_RPC_PROVIDERS_REGISTRY_DEFINITION = {
       downgradePathsFromLatest: {},
     },
   },
+  // Whether the whole provider settings document is unreadable, and the
+  // explicit reset that sets it aside unchanged. Optional capabilities: a host
+  // without them offers no reset (see `provider-settings-file/contracts.ts`).
+  "providers.settingsFile.status": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: providersSettingsFileStatusV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "providers.settingsFile.reset": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: providersSettingsFileResetV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
   "providers.setTerminalAgentArgs": {
     1: {
       latestMinor: 0,
@@ -12366,12 +12401,23 @@ const HOST_RPC_ID_CARRYING_REGISTRY_DEFINITION = {
     // Major 10 carries agents on the harness ids added since `1.5.0` shipped
     // major 9, whose three minors are frozen at the set that release
     // negotiated.
+    //
+    // @10.1 adds the run tuple (`profile` / `permissionMode`) to the row, the
+    // two halves `agent.configure` requires a caller to restate. Two plain
+    // added keys: a @10.0 peer's schema strips them, an older host is
+    // upgraded to `null` ("never asked", not "ambient" or `full_access`), and
+    // the nine bridges move their origin to 10.1 for the same LATEST-minor
+    // reason major 9's did.
     10: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: agentListV100,
           upgradeFromPreviousVersion: agentListUpgradeV92ToV100,
+        },
+        1: {
+          contract: agentListV101,
+          upgradeFromPreviousVersion: agentListUpgradeV100ToV101,
         },
       },
       downgradePathsFromLatest: {

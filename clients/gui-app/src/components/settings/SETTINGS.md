@@ -2578,6 +2578,38 @@ window`, recorded in the type as `coverage.browsersAreMountedOnly` -
   (no auto-refetch on remount/focus) to avoid re-running `--version` probes; a
   header refresh icon (`RefreshIconButton` → `useRefreshProviders`)
   force-refreshes the list and harness availability on demand.
+  - **"Reset provider settings" is the way out of an unusable
+    `provider-overrides.json`.** When the WHOLE document cannot be used, the
+    host falls back to defaults (only Claude Code and Codex on) and refuses
+    every write, so the toggles fail and nothing in the panel could fix it.
+    Two optional host methods, both `degrade: unsupported` and gated on
+    `useHostSupportsMethod` for each: `providers.settingsFile.status` (is the
+    document unusable) and `providers.settingsFile.reset`.
+    - Offered in exactly two places: beside Retry on the read-fault card
+      ("Provider settings could not be read on this host."), and as a warning
+      banner above the rail when the list answered but the status says
+      `unreadable` - a document that does not parse is answered with every
+      provider at its default, which the list alone cannot tell apart from a
+      user who switched them off. One malformed provider row is never
+      "unreadable": the host refuses only that row and everything else works.
+    - The button opens `ConfirmDestructiveDialog` with the consent text
+      (`PROVIDER_SETTINGS_RESET_CONSENT` in `provider-settings-reset-action.tsx`):
+      the file is set aside and a new one started, saved choices and any API
+      key saved in Traycer stop being used, nothing is deleted.
+    - The host renames the file aside unchanged
+      (`provider-overrides.json.unreadable-<UTC time>`, never over an earlier
+      one) and answers its name, which the success toast repeats. It refuses
+      with `outcome: "readable"` when the document is usable by the time it
+      acts, and the toast says nothing was reset. A reset whose providers
+      could not all be restarted (`providersNotRestarted` non-empty) is still
+      committed: the warning toast names the set-aside file and says to
+      restart this host - not the app, since the host can be remote. Success
+      invalidates `PROVIDER_INVALIDATIONS`, which includes the status.
+    - The status itself is re-read on mount, on window focus (`"always"`,
+      against the app-wide `false`) and whenever `PROVIDER_INVALIDATIONS` is
+      invalidated - the Providers refresh, the providers-changed stream and
+      every provider mutation - so a file that goes bad while the panel is
+      open, or a first status read that failed, still brings the reset back.
   - **The detail pane is tabbed, and the tab RAIL is the only thing between the
     provider header and its config.** Order is `account` · `usage` · `general` ·
     `env` · `modelProviders` · `mcp` · `plugins` · `skills`, filtered per provider through

@@ -73,6 +73,8 @@ const TEXT_COMPLETE_NODE_TYPES: ReadonlySet<string> = new Set([
   "codeBlock",
   "mermaidBlock",
   "uiPreviewBlock",
+  // The projection emits the `---` the serializer sends.
+  "horizontalRule",
   // Table PARTS are scaffolding for the grid their container emits.
   "tableRow",
   "tableHeader",
@@ -123,6 +125,13 @@ const LOSSY_NODE_TYPES: ReadonlyMap<string, ContentRecoveryLoss> = new Map([
   // table node and no paste can rebuild one from markdown table text. The
   // grid comes back as rows of prose.
   ["table", "table"],
+  // A checklist is ARTIFACT-only too: `buildComposerExtensions` has no task
+  // list extension, so the composer schema cannot hold either node and a
+  // paste cannot rebuild one. Classified so the serializer's arms are covered,
+  // and as `unknown` - the generic qualification such a node already earned
+  // unclassified - because no specific loss kind names it.
+  ["taskList", "unknown"],
+  ["taskItem", "unknown"],
 ]);
 
 /**
@@ -254,15 +263,15 @@ const BULLET_MARKER = "-";
 const LIST_INDENT = 2;
 
 /**
- * Blocks the serializer indents by DEPTH even inside a list item.
+ * Blocks the serializer places by the ITEM, not by depth, inside a list item.
  *
- * `getIndent` is `listDepth * listIndent`, and the three fence serializers
- * apply it to every line - the opening fence, the body, and the closing fence.
- * `serializeParagraph` deliberately does NOT (`inListItem` collapses its indent
- * to ""), so this is fence-specific rather than a property of block children in
- * general. Our seam emits fences at column zero, so the depth indent has to be
- * put back here or a continuation fence goes out two columns short of what the
- * agent received.
+ * The three fence serializers indent every line by `getIndent` (`listDepth *
+ * listIndent`) on their own, but `serializeListItemWithMarker` renders a fence
+ * child at depth zero and indents it itself: the first line goes behind the
+ * marker when the fence is the item's first child, and every other line takes
+ * the continuation indent. Our seam emits fences at column zero, which is
+ * exactly what the serializer starts from, so the item's indents are the only
+ * ones to add.
  */
 const FENCE_NODE_TYPES: ReadonlySet<string> = new Set([
   "codeBlock",
@@ -434,6 +443,15 @@ function prepareForProjection(
     if (node.type === "table") {
       return tableLines(node);
     }
+    // `serializeNode` sends a rule as `---`; it has no children to project.
+    if (node.type === "horizontalRule") {
+      return [
+        {
+          type: "paragraph",
+          content: [{ type: "text", text: THEMATIC_BREAK }],
+        },
+      ];
+    }
     const source = atomSource(node);
     if (source !== null) {
       return [
@@ -508,7 +526,20 @@ function prepareForProjection(
  * exactly what this module counts as a loss.
  */
 function numberedListItems(list: JsonContent): ReadonlyArray<JsonContent> {
-  return listItemLines(list, 1).map((line) => ({
+  // A blank line inside the list (the one before a later paragraph) rides on
+  // the line after it: a paragraph of its own would project to nothing and be
+  // dropped, closing up a gap the serializer sends.
+  const lines: string[] = [];
+  let pendingBlank = "";
+  for (const line of listItemLines(list, 0)) {
+    if (line === "") {
+      pendingBlank += "\n";
+      continue;
+    }
+    lines.push(`${pendingBlank}${line}`);
+    pendingBlank = "";
+  }
+  return lines.map((line) => ({
     type: "paragraph",
     content: [{ type: "text", text: line }],
   }));
@@ -529,22 +560,20 @@ function numberedListItems(list: JsonContent): ReadonlyArray<JsonContent> {
  * received, and a nested bullet followed by a continuation paragraph came back
  * as two identically-indented lines with no way to tell which was which.
  *
- * The two indents are DIFFERENT and both come from the serializer. A
- * continuation paragraph is indented past its own marker
- * (`baseIndent + marker + 1`), but a NESTED LIST is indented by DEPTH alone -
- * `serializeListItem` pushes a nested list's lines unchanged, and the nested
- * level computes its own `baseIndent` from `listDepth`. Accumulating marker
- * widths instead put a sub-list under `1. ` at three columns where the
- * serializer puts it at two.
+ * Both indents come from the serializer. A continuation paragraph is indented
+ * past its own marker (`baseIndent + marker + 1`), and a NESTED LIST starts at
+ * that same content column, never short of the list indent - so a sub-list
+ * under `1. ` is at three columns and under `- ` at two. `column` is where
+ * this level's markers start.
  */
 function listItemLines(
   list: JsonContent,
-  depth: number,
+  column: number,
 ): ReadonlyArray<string> {
   const rawStart = list.attrs?.start;
   const ordered = list.type === "orderedList";
   const start = typeof rawStart === "number" ? rawStart : 1;
-  const baseIndent = " ".repeat((depth - 1) * LIST_INDENT);
+  const baseIndent = " ".repeat(column);
   return (list.content ?? []).flatMap((item, index) => {
     const marker = ordered ? `${start + index}.` : BULLET_MARKER;
     const continuationIndent = " ".repeat(
@@ -556,46 +585,123 @@ function listItemLines(
     // paragraph, so the trailing prose jumped above the steps it was written
     // to follow. Child order is content, not layout.
     //
-    // The FIRST block goes in whole, behind the marker, with its own newlines
-    // untouched: a `hardBreak` in the first paragraph is a bare "\n" on the
-    // wire, so the serializer emits `- foo\nbar` with the second line at
-    // column zero. Indenting every line and then stripping the first gave
-    // `- foo\n  bar` - a continuation indent the agent never received.
-    // Continuation indent belongs to LATER blocks only, per line, and a nested
-    // list passes through unchanged because it already carries its own depth.
-    // Applied BEFORE the first-child/continuation split, because the
-    // serializer bakes it into the block's own text: a fence is already
-    // indented when `serializeListItem` sees it, and the continuation indent
-    // then goes on top of that.
-    const fenceIndent = " ".repeat(depth * LIST_INDENT);
+    // The serializer's normalization keeps the space after an empty ORDERED
+    // marker and drops it after a bullet, so this does the same.
+    const emptyMarkerLine = ordered
+      ? `${baseIndent}${marker} `
+      : `${baseIndent}${marker}`;
     const lines: string[] = [];
     let firstBlock = true;
+    let markerOnly = false;
     for (const block of item.content ?? []) {
       const nested = isListNode(block);
-      const projected = nested
-        ? listItemLines(block, depth + 1).join("\n")
+      const serialized = nested
+        ? listItemLines(
+            block,
+            baseIndent.length + Math.max(LIST_INDENT, marker.length + 1),
+          ).join("\n")
         : extractPlainTextFromComposerJSONContent({
             type: "doc",
             content: [...prepareForProjection([block])],
           });
-      const serialized = FENCE_NODE_TYPES.has(block.type ?? "")
-        ? projected
-            .split("\n")
-            .map((line) => `${fenceIndent}${line}`)
-            .join("\n")
-        : projected;
       if (firstBlock) {
-        lines.push(`${baseIndent}${marker} ${serialized}`);
+        lines.push(
+          ...firstBlockLines(block, serialized, {
+            markerLine: `${baseIndent}${marker} `,
+            emptyMarkerLine,
+            continuationIndent,
+          }),
+        );
+        markerOnly = serialized === "";
         firstBlock = false;
         continue;
+      }
+      // The serializer puts a blank line before every later paragraph, except
+      // straight after a marker line with nothing on it.
+      if (block.type === "paragraph" && !markerOnly) lines.push("");
+      const underMarkerOnly = markerOnly;
+      markerOnly = false;
+      // ...and before a block that would read back as part of the line of
+      // text above it (see `opensUnderText`). Not under a marker line with
+      // nothing on it: that is no text, and a blank line there would end the
+      // item.
+      if (!underMarkerOnly && opensUnderText(block, serialized, lines)) {
+        lines.push("");
       }
       for (const line of serialized.split("\n")) {
         lines.push(nested ? line : `${continuationIndent}${line}`);
       }
     }
-    if (lines.length === 0) return [`${baseIndent}${marker}`];
-    return lines;
+    return lines.length === 0 ? [emptyMarkerLine] : lines;
   });
+}
+
+interface ListItemPrefixes {
+  /** The marker and its space, which the first line of content follows. */
+  readonly markerLine: string;
+  /** The marker line with nothing on it, as the serializer leaves it. */
+  readonly emptyMarkerLine: string;
+  readonly continuationIndent: string;
+}
+
+/**
+ * An item's FIRST block, as `serializeListItemWithMarker` writes it. It starts
+ * behind the marker, and every line after that takes the continuation indent:
+ * a `hardBreak` in the first paragraph is a bare "\n" on the wire, and the
+ * serializer writes `- foo\n  bar`, because at column zero the line after the
+ * break falls out of a task item when it is parsed back. A nested list passes
+ * through unchanged because it already carries its own depth. A fence starts
+ * on the line after an empty marker line, every line at the continuation
+ * indent, and so does a nested list, at its own column.
+ */
+function firstBlockLines(
+  block: JsonContent,
+  serialized: string,
+  prefixes: ListItemPrefixes,
+): ReadonlyArray<string> {
+  const { markerLine, emptyMarkerLine, continuationIndent } = prefixes;
+  // A rule goes below the marker too: behind it, `- ---` reads as one rule.
+  if (
+    FENCE_NODE_TYPES.has(block.type ?? "") ||
+    block.type === "horizontalRule"
+  ) {
+    return [
+      emptyMarkerLine,
+      ...serialized.split("\n").map((line) => `${continuationIndent}${line}`),
+    ];
+  }
+  if (isListNode(block)) return [emptyMarkerLine, ...serialized.split("\n")];
+  if (serialized === "") return [emptyMarkerLine];
+  const [head, ...rest] = serialized.split("\n");
+  return [
+    `${markerLine}${head}`,
+    ...rest.map((line) => `${continuationIndent}${line}`),
+  ];
+}
+
+const BARE_BULLET_LINE = /^[ \t]*[-*+][ \t]*$/;
+const THEMATIC_BREAK = "---";
+const ORDERED_MARKER_LINE = /^[ \t]*(\d{1,9})[.)]/;
+
+/**
+ * Whether `block`, serialized as `serialized`, opens right under a line of
+ * text with a line that would read back as part of it: a rule (`---`, a
+ * setext heading underline there), or a nested list opening with a bare `-`
+ * or with an ordered marker other than 1.
+ */
+function opensUnderText(
+  block: JsonContent,
+  serialized: string,
+  lines: ReadonlyArray<string>,
+): boolean {
+  const previous = lines.length > 0 ? lines[lines.length - 1] : undefined;
+  if (previous === undefined || previous === "") return false;
+  if (block.type === "horizontalRule") return true;
+  if (!isListNode(block)) return false;
+  const firstLine = serialized.split("\n")[0] ?? "";
+  if (BARE_BULLET_LINE.test(firstLine)) return true;
+  const ordered = ORDERED_MARKER_LINE.exec(firstLine);
+  return ordered !== null && Number(ordered[1]) !== 1;
 }
 
 function isListNode(node: JsonContent): boolean {
@@ -640,7 +746,12 @@ function tableLines(table: JsonContent): ReadonlyArray<JsonContent> {
         // merge two cells - the serializer escapes in this order for the same
         // reason.
         .replace(/\\/g, "\\\\")
-        .replace(/\|/g, "\\|"),
+        .replace(/\|/g, "\\|")
+        // A typed `<br>` is text, as `escapeTableCellText` writes it...
+        .replace(/<(?=br\b)/gi, "\\<")
+        // ...and a line break would end the row: `tableCellLine` writes it
+        // `<br>`.
+        .replace(/\n/g, "<br>"),
     );
     const isHeader = (row.content ?? []).some(
       (cell) => cell.type === "tableHeader",
