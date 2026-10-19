@@ -1,2 +1,4 @@
 efe6696198400a6d6b1524a7ffe7889e4a096620:protocol/src/host/__tests__/environment-wire.test.ts:jwt:77
 b57b45ea2f27489bec709f1dd4a3ca08009a9adb:clients/gui-app/src/components/settings/personal/__tests__/shell-credential-question.test.tsx:generic-api-key:68
+98763c4007b8a93d266c460f93049acd21925b36:protocol/src/host/__tests__/environment-wire.test.ts:jwt:76
+98763c4007b8a93d266c460f93049acd21925b36:clients/gui-app/src/components/settings/personal/__tests__/shell-credential-question.test.tsx:generic-api-key:68
