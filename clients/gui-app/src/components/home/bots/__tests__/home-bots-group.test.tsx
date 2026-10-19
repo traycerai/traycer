@@ -4,7 +4,9 @@
  * host answers `environment.members`, and hands each row the label built
  * from the signed-in viewer and that directory.
  *
- * The rows and the directory hook are stubs; the card's own wiring is real.
+ * The card and its rows are real, asserted through each row's accessible
+ * name; the directory hook and the hooks a row reads its live state from are
+ * stubs.
  */
 import { StrictMode } from "react";
 import { cleanup, render, screen } from "@testing-library/react";
@@ -43,14 +45,24 @@ vi.mock("@/hooks/bots/use-environment-members-query", () => ({
         : null;
   },
 }));
-vi.mock("@/components/home/bots/home-bot-row", () => ({
-  HomeBotRow: (props: { bot: BotRecord; createdBy: string | null }) => (
-    <div
-      data-testid="stub-bot-row"
-      data-bot-id={props.bot.botId}
-      data-created-by={props.createdBy ?? "none"}
-    />
-  ),
+// What a row reads its live state through; nothing here shapes attribution.
+vi.mock("@tanstack/react-router", () => ({
+  useNavigate: () => vi.fn(),
+}));
+vi.mock("@/hooks/host/use-effective-host-id", () => ({
+  useEffectiveHostId: () => "host-band",
+}));
+vi.mock("@/hooks/bots/use-bot-subscription", () => ({
+  useBotSubscription: () => ({
+    snapshot: null,
+    deleted: false,
+    error: null,
+    isPending: false,
+    resubscribe: vi.fn(),
+  }),
+}));
+vi.mock("@/stores/agent-activity-store", () => ({
+  useEpicAgentActivity: () => ({ working: new Set<string>() }),
 }));
 vi.mock("@/components/home/bots/create-bot-form", () => ({
   CreateBotForm: () => null,
@@ -116,14 +128,25 @@ function mountCard(ownerKind: HomeBotsGroup["ownerKind"]): void {
   );
 }
 
-function createdBy(): Record<string, string | null> {
+const BOT_IDS = ["bot-mine", "bot-teammate", "bot-stranger"] as const;
+const ATTRIBUTIONS = ["Created by you", "Created by Tess Teammate"] as const;
+
+/**
+ * Each row's attribution as its button's accessible name carries it: the
+ * "Created by" line the row shows, or "none" when it shows none.
+ */
+function createdBy(): Record<string, string> {
   return Object.fromEntries(
-    screen
-      .getAllByTestId("stub-bot-row")
-      .map((row) => [
-        row.getAttribute("data-bot-id") ?? "",
-        row.getAttribute("data-created-by"),
-      ]),
+    BOT_IDS.map((botId) => {
+      const row = screen.getByRole("button", { name: new RegExp(`^${botId}`) });
+      const shown = ATTRIBUTIONS.find(
+        (label) =>
+          screen.queryByRole("button", {
+            name: new RegExp(`^${botId}.*${label}`),
+          }) === row,
+      );
+      return [botId, shown ?? "none"];
+    }),
   );
 }
 
