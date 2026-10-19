@@ -331,6 +331,31 @@ describe("computeStableChatTimelineRows", () => {
     expect(afterSameAnchor.result[0]).toBe(withAnchor);
     expect(afterSameAnchor).toBe(state);
   });
+
+  // A bot conversation member's picture resolves after the row first painted
+  // (the member directory answers late), so its arrival must re-render once.
+  it("treats a sender picture arriving as a real change, and an unchanged one as no change at all", () => {
+    const withoutPicture: ChatMessage = makeMessage(0, "user");
+    const state = computeStableChatTimelineRows(
+      [withoutPicture],
+      EMPTY_STABLE_CHAT_TIMELINE_ROWS_STATE,
+    );
+
+    const withPicture: ChatMessage = {
+      ...withoutPicture,
+      senderAvatarUrl: "https://avatars/tess.png",
+    };
+    const afterPicture = computeStableChatTimelineRows([withPicture], state);
+    expect(afterPicture.result[0]).toBe(withPicture);
+
+    const samePictureNewObject: ChatMessage = { ...withPicture };
+    const afterSame = computeStableChatTimelineRows(
+      [samePictureNewObject],
+      afterPicture,
+    );
+    expect(afterSame.result[0]).toBe(withPicture);
+    expect(afterSame).toBe(afterPicture);
+  });
 });
 
 describe("didChatTimelineKeySequenceChange", () => {

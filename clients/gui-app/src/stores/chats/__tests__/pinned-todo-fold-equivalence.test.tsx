@@ -176,6 +176,7 @@ function assistantMessage(input: {
 
 const displayContext: RenderedMessagesDisplayContext = {
   resolveUserSenderLabel: () => "You",
+  resolveUserSenderAvatarUrl: () => null,
   resolveAgentSenderDisplay: () => ({
     senderLabel: "Claude",
     providerLabel: "Claude Code",
