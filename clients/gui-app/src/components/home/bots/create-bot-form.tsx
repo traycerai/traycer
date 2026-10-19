@@ -19,62 +19,23 @@ import { chooseBotCreateHost } from "@/lib/home-bots/bot-create-host";
 import { useBotTabsStore } from "@/stores/bots/bot-tabs-store";
 import { botTabIntent, settingsTabIntent } from "@/lib/tab-navigation/intents";
 import { navigateToTabIntent } from "@/lib/tab-navigation";
-import {
-  HostRpcError,
-  HostTransportFailureError,
-  RetryableTransportError,
-} from "@traycer-clients/shared/host-transport/host-messenger";
 
 const BOT_TITLE_MAX = 500;
 
-const CREATE_UNREACHED =
-  "Couldn't create the bot right now. Check your connection, then try again.";
-const CREATE_OUTCOME_UNKNOWN =
-  "The bot may have been created. Check your bots before you try again.";
-const CREATE_FAILED =
-  "Couldn't create the bot. Try again, and report the problem if it keeps happening.";
-
 /**
- * The form's own line for a failed create: what happened and what to do,
- * never the error's text, which can be a raw validation dump.
- *
- * Each sentence claims only what the error proves, and anything unproven reads
- * as "may have been created", because a create believed to have failed invites
- * a duplicate:
- * - Not reached: only a retryable transport failure on its pre-send ground,
- *   which is minted before the request leaves. An abort is NOT trusted here,
- *   whatever its `mayHaveDispatched` says: the auth-aware messenger replaces
- *   any `UNAUTHORIZED` (a session fatal included, which rejects requests
- *   already sent) with a `mayHaveDispatched: false` abort when the authority
- *   is aborted during credential recovery, so the flag no longer describes
- *   the request.
- * - Refused: an answer about THIS request (the base error class, no session
- *   fatal) with a specific code. A specific code is the host's refusal or the
- *   client's own pre-send version check; neither creates anything.
- * - Everything else is unproven and reads cautious. That includes a generic
- *   `RPC_ERROR` (a session closed with the request pending carries it, as does
- *   a host answer with no specific code, and a response that came back
- *   unreadable), any session fatal, every abort, any other transport failure,
- *   and a non-host error. A request waiting on a session that closed before
- *   it was ready was never sent, but its error is the same class a post-send
- *   drop uses, so it reads cautious too.
+ * The form's line for every failed create. It makes no claim about whether
+ * the create reached the host, because no error the form receives can prove
+ * it: the auth-aware messenger can hide an earlier dispatch across both of its
+ * recovery exits. When the authority is aborted during credential recovery it
+ * rethrows a `mayHaveDispatched: false` abort; when it rotates the bearer and
+ * retries, only the retry's failure comes back. Either can follow a session
+ * fatal that rejected a create already sent. Until that messenger preserves
+ * dispatch provenance across recovery, the line tells the person to check
+ * before trying again. The error's own text is never shown; the mutation
+ * cache logs it.
  */
-function createBotFailureSentence(error: Error): string {
-  if (error instanceof RetryableTransportError) {
-    return error.replaySafetyFromKey
-      ? CREATE_OUTCOME_UNKNOWN
-      : CREATE_UNREACHED;
-  }
-  if (
-    error instanceof HostRpcError &&
-    !(error instanceof HostTransportFailureError) &&
-    error.fatalDetails === null &&
-    error.code !== "RPC_ERROR"
-  ) {
-    return CREATE_FAILED;
-  }
-  return CREATE_OUTCOME_UNKNOWN;
-}
+const CREATE_FAILED =
+  "Couldn't confirm the bot was created. Check your bots, and try again if it isn't there.";
 
 /**
  * Creates a bot INTO one environment (Tracy Bots). The environment is the
@@ -243,7 +204,7 @@ export function CreateBotForm(props: {
       </div>
       {create.error === null ? null : (
         <p role="alert" className="text-ui-xs text-destructive">
-          {createBotFailureSentence(create.error)}
+          {CREATE_FAILED}
         </p>
       )}
       <div className="flex items-center justify-end gap-2">

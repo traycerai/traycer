@@ -513,12 +513,8 @@ describe("<CreateBotForm /> create goes to the chosen host", () => {
 });
 
 describe("<CreateBotForm /> failed create", () => {
-  const CREATE_UNREACHED =
-    "Couldn't create the bot right now. Check your connection, then try again.";
-  const CREATE_OUTCOME_UNKNOWN =
-    "The bot may have been created. Check your bots before you try again.";
   const CREATE_FAILED =
-    "Couldn't create the bot. Try again, and report the problem if it keeps happening.";
+    "Couldn't confirm the bot was created. Check your bots, and try again if it isn't there.";
 
   const transport = {
     requestId: "request-1",
@@ -533,162 +529,40 @@ describe("<CreateBotForm /> failed create", () => {
     upgradeGuidance: null,
   };
 
-  it("shows a sentence, not the validation text, for a non-host error", () => {
-    const parsed = botCreateRequestSchema.safeParse({
-      environmentId: TEAM_ENV,
-      title: "Release Bot",
-      harness: "claude",
-      model: "model-a",
-      effort: null,
+  function sessionFatalError(): HostRpcError {
+    return new HostRpcError({
+      code: "UNAUTHORIZED",
+      message: "credential revoked",
+      requestId: "session-fatal",
+      method: "",
+      fatalDetails: sessionFatal,
     });
-    if (parsed.success) throw new Error("the request without a profile parsed");
-    mocks.createError = parsed.error;
-    mountForm(TEAM_WITH_LOCAL);
+  }
 
-    expect(screen.getByRole("alert").textContent).toBe(CREATE_OUTCOME_UNKNOWN);
-  });
-
-  it.each([
-    [
-      "a request that never left",
-      () =>
-        new RetryableTransportError({
-          ...transport,
-          code: "RPC_ERROR",
-          message: "socket closed",
-          fatalDetails: null,
-          replaySafetyFromKey: false,
-        }),
-      CREATE_UNREACHED,
-    ],
-    [
-      // Its flag cannot be trusted: see the auth-recovery test below.
-      "an abort that says it never dispatched",
-      () =>
-        new HostRequestAbortedError({
-          ...transport,
-          message: "aborted",
-          mayHaveDispatched: false,
-        }),
-      CREATE_OUTCOME_UNKNOWN,
-    ],
-    [
-      "the host refusing the request with a specific code",
-      () =>
-        new HostRpcError({
-          ...transport,
-          code: "FORBIDDEN",
-          message: "not allowed",
-          fatalDetails: null,
-        }),
-      CREATE_FAILED,
-    ],
-    [
-      // `RemoteSession.close()` rejects every pending unary with this error,
-      // whether or not the request had already reached the host.
-      "a session closed while the create was pending",
-      () =>
-        new HostRpcError({
-          code: "RPC_ERROR",
-          message: "Remote session closed",
-          requestId: "session-close",
-          method: "",
-          fatalDetails: null,
-        }),
-      CREATE_OUTCOME_UNKNOWN,
-    ],
-    [
-      // A session fatal carries a specific code too, but it is about the
-      // session, not this request.
-      "a session fatal while the create was pending",
-      () =>
-        new HostRpcError({
-          code: "UNAUTHORIZED",
-          message: "credential revoked",
-          requestId: "session-fatal",
-          method: "",
-          fatalDetails: sessionFatal,
-        }),
-      CREATE_OUTCOME_UNKNOWN,
-    ],
-    [
-      // `notReadyRejection` on a closed session: nothing was sent, but the
-      // class is the one a post-send drop uses, so it cannot prove that.
-      "a create waiting on a session that closed before it was ready",
-      () =>
-        new HostTransportFailureError({
-          ...transport,
-          code: "RPC_ERROR",
-          message: "Remote session is closed",
-          fatalDetails: sessionFatal,
-        }),
-      CREATE_OUTCOME_UNKNOWN,
-    ],
-    [
-      // The transport class alone leaves the outcome unknown, whatever code
-      // it carries.
-      "a transport failure carrying a specific code",
-      () =>
-        new HostTransportFailureError({
-          ...transport,
-          code: "FORBIDDEN",
-          message: "dropped",
-          fatalDetails: null,
-        }),
-      CREATE_OUTCOME_UNKNOWN,
-    ],
-    [
-      "a keyed request dropped after it was sent",
-      () =>
-        new RetryableTransportError({
-          ...transport,
-          code: "RPC_ERROR",
-          message: "socket closed",
-          fatalDetails: null,
-          replaySafetyFromKey: true,
-        }),
-      CREATE_OUTCOME_UNKNOWN,
-    ],
-    [
-      "a create abandoned after it was sent",
-      () =>
-        new HostRequestAbortedError({
-          ...transport,
-          message: "aborted",
-          mayHaveDispatched: true,
-        }),
-      CREATE_OUTCOME_UNKNOWN,
-    ],
-  ])("says the right thing for %s", (_label, makeError, sentence) => {
-    mocks.createError = makeError();
-    mountForm(TEAM_WITH_LOCAL);
-
-    expect(screen.getByRole("alert").textContent).toBe(sentence);
-  });
-
-  it("reads cautious when a session fatal for a sent create is rewritten into an abort during credential recovery", async () => {
-    // The session fatal rejects the create after it was sent. The auth-aware
-    // messenger sees UNAUTHORIZED, starts recovery, and the authority is
-    // aborted meanwhile, so the error the form receives is a
-    // `mayHaveDispatched: false` abort.
+  /**
+   * The error the form receives when a create already sent is rejected by a
+   * session fatal and then passes through the real auth-aware messenger:
+   * `recover` plays the credential recovery, and `retry` answers the second
+   * attempt the messenger makes after a rotation.
+   */
+  async function throughAuthRecovery(
+    recover: (controller: AbortController, lease: MutableBearerLease) => void,
+    retry: () => Error,
+  ): Promise<Error> {
     const controller = new AbortController();
+    const lease = new MutableBearerLease("token", "user-1");
+    let attempts = 0;
     const inner: IHostMessenger<HostRpcRegistry> = {
-      request: () =>
-        Promise.reject(
-          new HostRpcError({
-            code: "UNAUTHORIZED",
-            message: "credential revoked",
-            requestId: "session-fatal",
-            method: "",
-            fatalDetails: sessionFatal,
-          }),
-        ),
+      request: () => {
+        attempts += 1;
+        return Promise.reject(attempts === 1 ? sessionFatalError() : retry());
+      },
       requestWithResponseTimeout: () =>
         Promise.reject(new Error("the create is a plain request")),
     };
     const messenger = createAuthAwareMessenger(inner, {
       revalidateExpectedBearer: () => {
-        controller.abort();
+        recover(controller, lease);
         return Promise.resolve("rotated");
       },
     });
@@ -709,7 +583,7 @@ describe("<CreateBotForm /> failed create", () => {
           idempotencyKey: null,
           authority: {
             endpoint: { hostId: LOCAL, websocketUrl: "ws://host-local/rpc" },
-            bearer: new MutableBearerLease("token", "user-1"),
+            bearer: lease,
             abortSignal: controller.signal,
           },
         },
@@ -718,15 +592,149 @@ describe("<CreateBotForm /> failed create", () => {
         () => null,
         (error: unknown) => error,
       );
-    if (!(failure instanceof HostRequestAbortedError)) {
-      throw new Error("the recovery did not rewrite the failure into an abort");
+    if (!(failure instanceof Error)) {
+      throw new Error("the create did not fail through the messenger");
     }
-    expect(failure.mayHaveDispatched).toBe(false);
-    mocks.createError = failure;
-    mountForm(TEAM_WITH_LOCAL);
+    return failure;
+  }
 
-    expect(screen.getByRole("alert").textContent).toBe(CREATE_OUTCOME_UNKNOWN);
-  });
+  it.each([
+    [
+      "a validation error",
+      () => {
+        const parsed = botCreateRequestSchema.safeParse({
+          environmentId: TEAM_ENV,
+          title: "Release Bot",
+          harness: "claude",
+          model: "model-a",
+          effort: null,
+        });
+        if (parsed.success) {
+          throw new Error("the request without a profile parsed");
+        }
+        return Promise.resolve<Error>(parsed.error);
+      },
+    ],
+    [
+      "a request that never left",
+      () =>
+        Promise.resolve<Error>(
+          new RetryableTransportError({
+            ...transport,
+            code: "RPC_ERROR",
+            message: "socket closed",
+            fatalDetails: null,
+            replaySafetyFromKey: false,
+          }),
+        ),
+    ],
+    [
+      "a keyed request dropped after it was sent",
+      () =>
+        Promise.resolve<Error>(
+          new RetryableTransportError({
+            ...transport,
+            code: "RPC_ERROR",
+            message: "socket closed",
+            fatalDetails: null,
+            replaySafetyFromKey: true,
+          }),
+        ),
+    ],
+    [
+      "an abort",
+      () =>
+        Promise.resolve<Error>(
+          new HostRequestAbortedError({
+            ...transport,
+            message: "aborted",
+            mayHaveDispatched: false,
+          }),
+        ),
+    ],
+    [
+      "the host refusing the request with a specific code",
+      () =>
+        Promise.resolve<Error>(
+          new HostRpcError({
+            ...transport,
+            code: "FORBIDDEN",
+            message: "not allowed",
+            fatalDetails: null,
+          }),
+        ),
+    ],
+    [
+      // `RemoteSession.close()` rejects every pending unary with this error.
+      "a session closed while the create was pending",
+      () =>
+        Promise.resolve<Error>(
+          new HostRpcError({
+            code: "RPC_ERROR",
+            message: "Remote session closed",
+            requestId: "session-close",
+            method: "",
+            fatalDetails: null,
+          }),
+        ),
+    ],
+    [
+      // `notReadyRejection` on a closed session.
+      "a create waiting on a session that closed before it was ready",
+      () =>
+        Promise.resolve<Error>(
+          new HostTransportFailureError({
+            ...transport,
+            code: "RPC_ERROR",
+            message: "Remote session is closed",
+            fatalDetails: sessionFatal,
+          }),
+        ),
+    ],
+    [
+      "a session fatal rewritten into an abort during credential recovery",
+      async () => {
+        const failure = await throughAuthRecovery(
+          (controller) => controller.abort(),
+          () => new Error("no second attempt after an abort"),
+        );
+        if (!(failure instanceof HostRequestAbortedError)) {
+          throw new Error("recovery did not take the abort exit");
+        }
+        return failure;
+      },
+    ],
+    [
+      "a session fatal followed by a refused retry after the bearer rotated",
+      async () => {
+        const failure = await throughAuthRecovery(
+          (_controller, lease) => lease.rotate("rotated-token"),
+          () =>
+            new HostRpcError({
+              ...transport,
+              code: "FORBIDDEN",
+              message: "not allowed",
+              fatalDetails: null,
+            }),
+        );
+        if (
+          !(failure instanceof HostRpcError) ||
+          failure.code !== "FORBIDDEN"
+        ) {
+          throw new Error("recovery did not take the retry exit");
+        }
+        return failure;
+      },
+    ],
+  ])(
+    "says it could not confirm the create for %s, never the error's text",
+    async (_label, makeError) => {
+      mocks.createError = await makeError();
+      mountForm(TEAM_WITH_LOCAL);
+
+      expect(screen.getByRole("alert").textContent).toBe(CREATE_FAILED);
+    },
+  );
 });
 
 function cursorMaxRow(
