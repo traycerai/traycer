@@ -95,6 +95,7 @@ import {
   isServiceMutationAuthorityError,
   verifyServiceMutationAuthority,
 } from "../mutation-authority";
+import { runAtStopTargetEdge } from "../stop-target";
 import { markRegistrationCommitted } from "../cli-invocation-record";
 import { atServiceInstallEdge, atServiceSpawnEdge } from "../spawn-edge";
 import {
@@ -147,7 +148,7 @@ export function createMacosController(
   const unverifiedRun: ProcessRunner = runner ?? runCommand;
   const run: ProcessRunner = async (command, args, options) => {
     await verifyServiceMutationAuthority();
-    return unverifiedRun(command, args, options);
+    return runAtStopTargetEdge(() => unverifiedRun(command, args, options));
   };
   return {
     install: (options) => installService(options, run),

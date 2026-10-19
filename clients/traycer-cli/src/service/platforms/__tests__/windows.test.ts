@@ -91,6 +91,9 @@ import {
   ServiceMutationAuthorityError,
   withServiceMutationAuthority,
 } from "../../mutation-authority";
+import { withStopTarget } from "../../stop-target";
+import { createVerifyRace } from "../../__tests__/fixtures/verify-race";
+import { ownProcessStartIdentity } from "@traycer-clients/shared/host-lock/process-identity";
 import {
   isUnreportedSpawnEdgeRefusal,
   runWithLeaseAtServiceSpawnEdge,
@@ -6991,9 +6994,14 @@ describe("Windows cooperative stop", () => {
     const { controller, calls } = idleController();
 
     const stopping = controller.stop(label, { force: false });
-    for (let turn = 0; turn < 5; turn += 1) await Promise.resolve();
-
-    expect(mocks.requestCooperativeShutdownReporting).toHaveBeenCalledTimes(1);
+    // The ask follows the guard's scan, which is a service call behind its
+    // own authority and stop-target checks: wait for it rather than count the
+    // turns those checks take.
+    await vi.waitFor(() => {
+      expect(mocks.requestCooperativeShutdownReporting).toHaveBeenCalledTimes(
+        1,
+      );
+    });
     // Only the guard's read-only scan ran so far: no /End, no kill - `some
     // call is schtasks` would miss a kill script, which is a `powershell.exe`
     // call too, so every recorded call must still be that same read.
@@ -7048,6 +7056,76 @@ describe("Windows cooperative stop", () => {
     await controller.stop(label, { force: false, onHostAddressed });
 
     expect(onHostAddressed).toHaveBeenCalledTimes(1);
+  });
+
+  // A stop confirmed for one host process (`withStopTarget`) reads `pid.json`
+  // as the last thing before each service call. The authority check in front
+  // of the call awaits lock verification, and a host published during that
+  // await has to be read.
+  describe("a restart's stop confirmed for one host process", () => {
+    const CONFIRMED_HOST = { pid: 4242, startIdentity: "windows:boot-a 4242" };
+
+    async function stopAndObserve(publishAt: number | null): Promise<{
+      readonly calls: RecordedCall[];
+      readonly verifiesAtCall: number[];
+      readonly error: unknown;
+    }> {
+      let published = {
+        kind: "read" as const,
+        metadata: {
+          pid: CONFIRMED_HOST.pid,
+          processStartIdentity: CONFIRMED_HOST.startIdentity,
+        },
+      };
+      mocks.readHostPidMetadataEvidence.mockImplementation(
+        async () => published,
+      );
+      const race = createVerifyRace(publishAt, () => {
+        published = {
+          kind: "read",
+          metadata: {
+            pid: process.pid,
+            processStartIdentity: ownProcessStartIdentity() ?? "",
+          },
+        };
+      });
+      const { runner, calls } = convergingTableRunner([]);
+      const verifiesAtCall: number[] = [];
+      const controller = createWindowsController(async (...callArgs) => {
+        verifiesAtCall.push(race.verifyCount());
+        return runner(...callArgs);
+      }, noTimingDeps);
+      const error = await withServiceMutationAuthority(race.verify, () =>
+        withStopTarget("host restart", label.environment, CONFIRMED_HOST, () =>
+          controller.stopForRestart(label, { force: false }),
+        ),
+      ).then(
+        () => null,
+        (cause: unknown) => cause,
+      );
+      return { calls, verifiesAtCall, error };
+    }
+
+    it("never ends the task when a live host is published while the last authority check is awaited, and refuses as a mutation-authority failure", async () => {
+      // The dry run finds which authority check is the last one before the
+      // task is ended.
+      const dry = await stopAndObserve(null);
+      const endAt = dry.calls.findIndex(
+        (call) => call.command === "schtasks" && call.args[0] === "/End",
+      );
+      expect(endAt).toBeGreaterThanOrEqual(0);
+      expect(dry.error).toBeNull();
+
+      const raced = await stopAndObserve(dry.verifiesAtCall[endAt] ?? null);
+
+      expect(raced.error).toMatchObject({
+        code: CLI_ERROR_CODES.HOST_RESTART_TARGET_CHANGED,
+      });
+      expect(isServiceMutationAuthorityError(raced.error)).toBe(true);
+      expect(raced.calls.some((call) => call.command === "schtasks")).toBe(
+        false,
+      );
+    });
   });
 
   interface BusySite {

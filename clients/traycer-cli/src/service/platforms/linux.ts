@@ -4,6 +4,7 @@ import {
   isServiceMutationAuthorityError,
   verifyServiceMutationAuthority,
 } from "../mutation-authority";
+import { runAtStopTargetEdge } from "../stop-target";
 import { dirname, isAbsolute } from "node:path";
 import {
   publishedHostProcessGone,
@@ -78,7 +79,7 @@ export function createLinuxController(
   const unverifiedRun: ProcessRunner = runner ?? runCommand;
   const run: ProcessRunner = async (command, args, options) => {
     await verifyServiceMutationAuthority();
-    return unverifiedRun(command, args, options);
+    return runAtStopTargetEdge(() => unverifiedRun(command, args, options));
   };
   return {
     install: (options) => installService(options, run),

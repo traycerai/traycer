@@ -1030,8 +1030,34 @@ describe("forceStopHostProcess inside a scope for one confirmed host", () => {
 
     await expect(settled).resolves.toMatchObject({
       code: CLI_ERROR_CODES.HOST_RESTART_TARGET_CHANGED,
+      message: expect.stringContaining(
+        "SIGTERM had already been sent to the confirmed host",
+      ),
     });
     expect(deliveredSignals(killSpy)).toEqual(["4242 SIGTERM"]);
+  });
+
+  // A refusal addresses nothing: the host is reported addressed, and the
+  // force-stop logged, only for a signal that is then sent.
+  it("does not report the host addressed, and says nothing was stopped, when the refusal is at the SIGTERM", async () => {
+    MOCKS.readHostPidMetadata.mockResolvedValue(LIVE_METADATA);
+    MOCKS.readHostPidMetadataEvidence.mockResolvedValue(publishedReplacement());
+    MOCKS.isProcessAlive.mockReturnValue(true);
+    const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+    const onHostAddressed = vi.fn();
+
+    await expect(
+      withStopTarget("host restart", "production", CONFIRMED_HOST, () =>
+        forceStopHostProcessReporting("production", "stop", onHostAddressed),
+      ),
+    ).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.HOST_RESTART_TARGET_CHANGED,
+      message: expect.stringContaining("so nothing was stopped"),
+    });
+
+    expect(onHostAddressed).not.toHaveBeenCalled();
+    expect(MOCKS.loggerWarn).not.toHaveBeenCalled();
+    expect(deliveredSignals(killSpy)).toEqual([]);
   });
 
   it("signals as before while pid.json still names the confirmed host", async () => {
@@ -1055,6 +1081,60 @@ describe("forceStopHostProcess inside a scope for one confirmed host", () => {
 
     await expect(pending).resolves.toEqual({ kind: "stopped" });
     expect(deliveredSignals(killSpy)).toEqual(["4242 SIGTERM", "4242 SIGKILL"]);
+  });
+});
+
+// The cooperative request is also a stop confirmed for one host: it claims,
+// then commits, and the host a replacement can be published between the two.
+// The refusal has to leave as the mutation-authority failure it is - a
+// stand-down that answered `unreachable` instead would let a macOS restart
+// carry on to a forced recycle of the job.
+describe("requestCooperativeShutdown inside a scope for one confirmed host", () => {
+  const CONFIRMED_HOST = { pid: 4242, startIdentity: "linux:boot-a 4242" };
+
+  it("rejects, releasing the claim and never committing, when a different live host is published during the claim", async () => {
+    MOCKS.readHostPidMetadata.mockResolvedValue(LIVE_METADATA);
+    MOCKS.readHostPidMetadataEvidence.mockResolvedValue({
+      kind: "read",
+      metadata: {
+        ...LIVE_METADATA,
+        processStartIdentity: CONFIRMED_HOST.startIdentity,
+      },
+    });
+    MOCKS.verifyProcessIdentityAsync.mockResolvedValue("alive-same");
+    MOCKS.callHostRpcAtEndpoint.mockImplementation(async (method: string) => {
+      if (method === "lifecycle.claimShutdown") {
+        // The replacement appears while the claim is in flight.
+        MOCKS.readHostPidMetadataEvidence.mockResolvedValue({
+          kind: "read",
+          metadata: {
+            ...LIVE_METADATA,
+            pid: process.pid,
+            processStartIdentity: ownProcessStartIdentity(),
+          },
+        });
+        return { granted: { token: "tok-claim" } };
+      }
+      return { committed: true };
+    });
+
+    const error: unknown = await withStopTarget(
+      "host restart",
+      "production",
+      CONFIRMED_HOST,
+      () => requestCooperativeShutdown("production", "restart", "restart"),
+    ).then(
+      (outcome: unknown) => outcome,
+      (cause: unknown) => cause,
+    );
+
+    expect(error).toMatchObject({
+      code: CLI_ERROR_CODES.HOST_RESTART_TARGET_CHANGED,
+    });
+    expect(isServiceMutationAuthorityError(error)).toBe(true);
+    expect(
+      MOCKS.callHostRpcAtEndpoint.mock.calls.map(([method]) => method),
+    ).toEqual(["lifecycle.claimShutdown", "lifecycle.releaseShutdown"]);
   });
 });
 

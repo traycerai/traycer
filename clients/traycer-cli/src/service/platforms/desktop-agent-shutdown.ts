@@ -23,10 +23,11 @@ import { callHostRpcAtEndpoint } from "../../internal/host-rpc";
 import { createCliLogger, type ILogger } from "../../logger";
 import { reportBoundedWait } from "../../runner/bounded-wait-progress";
 import type { Environment } from "../../runner/environment";
-import { assertStopTarget } from "../stop-target";
+import { noteStopTargetProgress } from "../stop-target";
 import {
   isServiceMutationAuthorityError,
   verifyServiceMutationAuthority,
+  verifyServiceStopTarget,
 } from "../mutation-authority";
 
 // Cooperative shutdown of a Desktop-managed host, through the host's own
@@ -441,6 +442,10 @@ async function signalHostForForcedStop(
   } else if (!isProcessAlive(metadata.pid)) {
     return { outcome: { kind: "no-host" }, actedOn: metadata };
   }
+  // A direct signal takes no service authority, so the stop's confirmed
+  // host is asked for here, against the record this signal is aimed by -
+  // before the host is reported addressed, since a refusal addresses nothing.
+  await verifyServiceStopTarget();
   // Verified live and current: this signal addresses a running host.
   onHostAddressed?.();
   logger.warn("Force-stopping the running host", {
@@ -449,12 +454,10 @@ async function signalHostForForcedStop(
     hostId: metadata.hostId,
     pid: metadata.pid,
   });
-  // A direct signal takes no service authority, so the stop's confirmed
-  // host is asked for here, against the record this signal is aimed by.
-  await assertStopTarget();
   if (!signalPid(metadata.pid, "SIGTERM")) {
     return { outcome: { kind: "stopped" }, actedOn: metadata };
   }
+  noteStopTargetProgress("signalled");
   if (await waitForCooperativeExit(metadata.pid)) {
     return { outcome: { kind: "stopped" }, actedOn: metadata };
   }
@@ -484,7 +487,7 @@ async function signalHostForForcedStop(
       };
     }
   }
-  await assertStopTarget();
+  await verifyServiceStopTarget();
   if (!signalPid(metadata.pid, "SIGKILL")) {
     return { outcome: { kind: "stopped" }, actedOn: metadata };
   }

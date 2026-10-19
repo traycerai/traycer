@@ -103,6 +103,11 @@ import {
 } from "@traycer/protocol/host/lifecycle-constants";
 import { runWithLeaseAtServiceSpawnEdge } from "../../spawn-edge";
 import { withStopTarget } from "../../stop-target";
+import {
+  isServiceMutationAuthorityError,
+  withServiceMutationAuthority,
+} from "../../mutation-authority";
+import { createVerifyRace } from "../../__tests__/fixtures/verify-race";
 import { ownProcessStartIdentity } from "@traycer-clients/shared/host-lock/process-identity";
 import {
   CRASH_REPORT_SCAN_TIMEOUT_MS,
@@ -683,6 +688,112 @@ describe("Q13: stopForRestart signals the unit instead of stopping it", () => {
       const flat = commands.map((c) => c.join(" "));
       expect(flat.some((c) => c.includes("kill --signal=SIGTERM"))).toBe(true);
       expect(flat.some((c) => c.includes("kill --signal=SIGKILL"))).toBe(false);
+    });
+
+    // The authority check in front of every service call awaits lock
+    // verification, and a host the supervisor admitted earlier can publish
+    // during that await. The stop-target read therefore has to come after it:
+    // a read taken before leaves the destructive call to run against a host
+    // that was not the one confirmed.
+    describe("a host published while the last authority check is awaited", () => {
+      function publishReplacement(): void {
+        pidMetadata.metadata = { pid: process.pid };
+        const replacementIdentity = ownProcessStartIdentity();
+        if (replacementIdentity !== null) {
+          pidMetadata.identities.set(process.pid, replacementIdentity);
+        }
+      }
+
+      async function stopAndObserve(publishAt: number | null): Promise<{
+        readonly commands: string[][];
+        readonly verifiesAtCall: number[];
+        readonly settled: { readonly error: unknown };
+      }> {
+        pidMetadata.metadata = { pid: CONFIRMED_HOST.pid };
+        pidMetadata.identities.clear();
+        pidMetadata.identities.set(
+          CONFIRMED_HOST.pid,
+          CONFIRMED_HOST.startIdentity,
+        );
+        pidMetadata.gone = true;
+        pidMetadata.signalled = false;
+        const race = createVerifyRace(publishAt, publishReplacement);
+        const commands: string[][] = [];
+        const verifiesAtCall: number[] = [];
+        const controller = createLinuxController(async (command, args) => {
+          commands.push([command, ...args]);
+          verifiesAtCall.push(race.verifyCount());
+          if (args.includes("kill")) pidMetadata.signalled = true;
+          return { stdout: "", stderr: "", exitCode: 0 };
+        });
+        const settled = await withServiceMutationAuthority(race.verify, () =>
+          stopInScope(controller),
+        ).then(
+          () => ({ error: null }),
+          (error: unknown) => ({ error }),
+        );
+        return { commands, verifiesAtCall, settled };
+      }
+
+      it("never issues the unit's SIGTERM, and refuses as a mutation-authority failure", async () => {
+        // The unscoped-by-publication dry run finds which authority check is
+        // the last one before the SIGTERM.
+        const dry = await stopAndObserve(null);
+        const sigtermAt = dry.commands.findIndex((command) =>
+          command.includes("--signal=SIGTERM"),
+        );
+        expect(sigtermAt).toBeGreaterThanOrEqual(0);
+        expect(dry.settled.error).toBeNull();
+
+        const raced = await stopAndObserve(
+          dry.verifiesAtCall[sigtermAt] ?? null,
+        );
+
+        expect(raced.settled.error).toMatchObject({
+          code: CLI_ERROR_CODES.HOST_RESTART_TARGET_CHANGED,
+        });
+        expect(isServiceMutationAuthorityError(raced.settled.error)).toBe(true);
+        expect(raced.commands.some((c) => c.includes("kill"))).toBe(false);
+      });
+    });
+
+    // The relaunch is held to the confirmed host up to its own launch. The
+    // call that launches publishes a host of its own, which the scope would
+    // otherwise read as a replacement on the next call.
+    it("holds nothing once its own launch has returned: the host that launch publishes is not a replacement", async () => {
+      pidMetadata.metadata = { pid: CONFIRMED_HOST.pid };
+      pidMetadata.identities.set(
+        CONFIRMED_HOST.pid,
+        CONFIRMED_HOST.startIdentity,
+      );
+      const commands: string[][] = [];
+      const controller = createLinuxController(async (command, args) => {
+        commands.push([command, ...args]);
+        if (args.includes("start")) {
+          // The unit's supervisor comes up and publishes its host while the
+          // launch call is still returning.
+          pidMetadata.metadata = { pid: process.pid };
+          const launchedIdentity = ownProcessStartIdentity();
+          if (launchedIdentity !== null) {
+            pidMetadata.identities.set(process.pid, launchedIdentity);
+          }
+        }
+        return { stdout: "", stderr: "", exitCode: 0 };
+      });
+
+      await withStopTarget("host restart", "dev", CONFIRMED_HOST, async () => {
+        await controller.relaunchAfterRestart(labelFor("ai.traycer.host.dev"), {
+          forcedRecycle: false,
+        });
+        // A later service call in the same scope, against the host the launch
+        // brought up.
+        await controller.start(labelFor("ai.traycer.host.dev"));
+      });
+
+      const starts = commands.filter((c) =>
+        /systemctl --user start\b/.test(c.join(" ")),
+      );
+      expect(starts).toHaveLength(2);
     });
 
     it("still escalates to the SIGKILL while the published host is the confirmed one", async () => {

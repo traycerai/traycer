@@ -12,15 +12,21 @@ import { readHostPidMetadataEvidence } from "./pid-metadata";
  * restart`, and the `host service install --takeover` its packaged-macOS
  * re-register fallback can reach. The person confirmed stopping THAT process,
  * and the command waited for its lock after Desktop last checked it, so it is
- * checked again here - inside the lock, before anything is stopped - and the
- * command refuses `E_HOST_RESTART_TARGET_CHANGED` when `pid.json` names a
- * different process that is or may be running, or cannot be read
+ * checked again here - inside the lock, before anything is stopped, and at
+ * each actuator edge after that (`service/stop-target.ts`) - and the command
+ * refuses `E_HOST_RESTART_TARGET_CHANGED` when `pid.json` names a different
+ * process that is or may be running, or cannot be read
  * (`restartTargetStillCurrent`).
+ *
+ * `alreadyDone` is what the command had already done to the confirmed host
+ * when the change was seen, or `null` when nothing had been done; the refusal
+ * says which, so it is true at every edge.
  */
 export async function refuseUnlessRestartTarget(
   verb: string,
   environment: Environment,
   target: RestartTargetHost,
+  alreadyDone: string | null,
 ): Promise<void> {
   const evidence = await readHostPidMetadataEvidence(environment);
   const stillCurrent = await restartTargetStillCurrent(
@@ -36,7 +42,7 @@ export async function refuseUnlessRestartTarget(
   if (stillCurrent) return;
   throw cliError({
     code: CLI_ERROR_CODES.HOST_RESTART_TARGET_CHANGED,
-    message: `${verb}: the host this restart was confirmed for (pid ${String(target.pid)}) is no longer the one published, so nothing was stopped`,
+    message: `${verb}: the host this restart was confirmed for (pid ${String(target.pid)}) is no longer the one published, so ${alreadyDone === null ? "nothing was stopped" : `it went no further: ${alreadyDone}`}`,
     details: null,
     exitCode: 1,
   });

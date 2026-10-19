@@ -56,6 +56,9 @@ import {
 } from "../../mutation-authority";
 import { didServiceRegistrationCommit } from "../../cli-invocation-record";
 import { runWithLeaseAtServiceSpawnEdge } from "../../spawn-edge";
+import { withStopTarget } from "../../stop-target";
+import { createVerifyRace } from "../../__tests__/fixtures/verify-race";
+import { ownProcessStartIdentity } from "@traycer-clients/shared/host-lock/process-identity";
 
 const execFileAsync = promisify(execFile);
 
@@ -1560,6 +1563,80 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
           c.args[1] === "-k",
       ),
     ).toBe(true);
+  });
+
+  // A stop confirmed for one host process (`withStopTarget`) reads `pid.json`
+  // as the last thing before each service call. The authority check in front
+  // of the call awaits lock verification, and a host published during that
+  // await has to be read.
+  describe("a CLI-owned restart's stop confirmed for one host process", () => {
+    const CONFIRMED_HOST = { pid: 4242, startIdentity: "linux:boot-a 4242" };
+
+    async function stopAndObserve(publishAt: number | null): Promise<{
+      readonly calls: RecordedCall[];
+      readonly verifiesAtCall: number[];
+      readonly error: unknown;
+    }> {
+      let published: {
+        readonly kind: "read";
+        readonly metadata: typeof HOST_PID_METADATA & {
+          readonly processStartIdentity: string | null;
+        };
+      } = {
+        kind: "read",
+        metadata: {
+          ...HOST_PID_METADATA,
+          pid: CONFIRMED_HOST.pid,
+          processStartIdentity: CONFIRMED_HOST.startIdentity,
+        },
+      };
+      MOCKS.readHostPidMetadataEvidence.mockImplementation(
+        async () => published,
+      );
+      const race = createVerifyRace(publishAt, () => {
+        published = {
+          kind: "read",
+          metadata: {
+            ...HOST_PID_METADATA,
+            pid: process.pid,
+            processStartIdentity: ownProcessStartIdentity(),
+          },
+        };
+      });
+      const calls: RecordedCall[] = [];
+      const verifiesAtCall: number[] = [];
+      const controller = createMacosController(async (command, args) => {
+        calls.push({ command, args });
+        verifiesAtCall.push(race.verifyCount());
+        return buildSuccessResult();
+      });
+      const settled = await withServiceMutationAuthority(race.verify, () =>
+        withStopTarget("host restart", label.environment, CONFIRMED_HOST, () =>
+          controller.stopForRestart(label, { force: false }),
+        ),
+      ).then(
+        () => null,
+        (error: unknown) => error,
+      );
+      return { calls, verifiesAtCall, error: settled };
+    }
+
+    it("never issues the job's launchctl kill when a live host is published while the last authority check is awaited, and refuses as a mutation-authority failure", async () => {
+      // The dry run finds which authority check is the last one before the
+      // kill.
+      const dry = await stopAndObserve(null);
+      const killAt = dry.calls.findIndex((call) => call.args[0] === "kill");
+      expect(killAt).toBeGreaterThanOrEqual(0);
+      expect(dry.error).toBeNull();
+
+      const raced = await stopAndObserve(dry.verifiesAtCall[killAt] ?? null);
+
+      expect(raced.error).toMatchObject({
+        code: CLI_ERROR_CODES.HOST_RESTART_TARGET_CHANGED,
+      });
+      expect(isServiceMutationAuthorityError(raced.error)).toBe(true);
+      expect(raced.calls.some((call) => call.args[0] === "kill")).toBe(false);
+    });
   });
 
   it("detects SMAppService in-bundle LaunchAgent paths", () => {

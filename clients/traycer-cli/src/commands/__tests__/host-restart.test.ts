@@ -1,3 +1,4 @@
+import { spawn, type ChildProcess } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -23,6 +24,18 @@ const mocks = vi.hoisted(() => ({
   afterAdmission: null as (() => Promise<void>) | null,
   // Runs once the stub's stop has completed, before the relaunch.
   afterStop: null as (() => Promise<void>) | null,
+  // When set, the stub's relaunch issues a launch through the same edges a
+  // platform controller does (spawn edge, authority check, the stop-target's
+  // launch wrapper) and runs this inside the launching call.
+  launchCall: null as (() => Promise<void>) | null,
+  launches: 0,
+  // Replaces the stub with a real platform controller over a recording runner.
+  realController: null as import("../../service").ServiceController | null,
+  // Answers a publication of the host-start adoption proof with the spawn
+  // acknowledgement wait of that publication (counting from 1).
+  spawnWaitFor: null as
+    | ((publication: number) => Promise<() => Promise<void>>)
+    | null,
   busyOverride: null as "busy" | null,
   busyCalls: [] as Array<string | undefined>,
   lockCalls: [] as Array<{ reason: string }>,
@@ -39,43 +52,62 @@ vi.mock("../../service", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../service")>();
   return {
     ...actual,
-    createServiceController: () => ({
-      install: async () => undefined,
-      uninstall: async () => undefined,
-      status: async () => ({
-        state: "stopped" as const,
-        version: null,
-        listenUrl: null,
-        pid: null,
-      }),
-      stop: async () => {
-        mocks.controllerCalls.push("stop");
+    createServiceController: () =>
+      mocks.realController ?? {
+        install: async () => undefined,
+        uninstall: async () => undefined,
+        status: async () => ({
+          state: "stopped" as const,
+          version: null,
+          listenUrl: null,
+          pid: null,
+        }),
+        stop: async () => {
+          mocks.controllerCalls.push("stop");
+        },
+        start: async () => {
+          mocks.controllerCalls.push("start");
+        },
+        restart: async () => {
+          mocks.controllerCalls.push("restart");
+        },
+        stopForRestart: async (
+          _label: import("../../service").ServiceLabel,
+          options: import("../../service").StopServiceOptions,
+        ) => {
+          mocks.controllerCalls.push("stopForRestart");
+          mocks.stopForRestartForceValues.push(options.force);
+          if (mocks.afterStop !== null) await mocks.afterStop();
+          return { forcedRecycle: false };
+        },
+        relaunchAfterRestart: async () => {
+          mocks.controllerCalls.push("relaunchAfterRestart");
+          if (mocks.crossSpawnEdge) {
+            const { atServiceSpawnEdge } =
+              await import("../../service/spawn-edge");
+            await atServiceSpawnEdge();
+          }
+          const launchCall = mocks.launchCall;
+          if (launchCall !== null) {
+            const { atServiceSpawnEdge } =
+              await import("../../service/spawn-edge");
+            const { verifyServiceMutationAuthority } =
+              await import("../../service/mutation-authority");
+            const { runAtStopTargetEdge } =
+              await import("../../service/stop-target");
+            await atServiceSpawnEdge();
+            await verifyServiceMutationAuthority();
+            await runAtStopTargetEdge(async () => {
+              mocks.launches += 1;
+              await launchCall();
+            });
+            // A later service call of the same command, against the host the
+            // launch brought up.
+            await verifyServiceMutationAuthority();
+          }
+        },
+        hostStartAdoptionLabel: async (label: { id: string }) => label.id,
       },
-      start: async () => {
-        mocks.controllerCalls.push("start");
-      },
-      restart: async () => {
-        mocks.controllerCalls.push("restart");
-      },
-      stopForRestart: async (
-        _label: import("../../service").ServiceLabel,
-        options: import("../../service").StopServiceOptions,
-      ) => {
-        mocks.controllerCalls.push("stopForRestart");
-        mocks.stopForRestartForceValues.push(options.force);
-        if (mocks.afterStop !== null) await mocks.afterStop();
-        return { forcedRecycle: false };
-      },
-      relaunchAfterRestart: async () => {
-        mocks.controllerCalls.push("relaunchAfterRestart");
-        if (mocks.crossSpawnEdge) {
-          const { atServiceSpawnEdge } =
-            await import("../../service/spawn-edge");
-          await atServiceSpawnEdge();
-        }
-      },
-      hostStartAdoptionLabel: async (label: { id: string }) => label.id,
-    }),
   };
 });
 
@@ -93,7 +125,10 @@ vi.mock("../../host/host-start-adoption", () => ({
   ) => {
     mocks.publishedOrigins.push(origin);
     return {
-      waitForSpawn: async () => undefined,
+      waitForSpawn:
+        mocks.spawnWaitFor === null
+          ? async () => undefined
+          : await mocks.spawnWaitFor(mocks.publishedOrigins.length),
       cancel: async () => undefined,
     };
   },
@@ -228,6 +263,10 @@ describe("buildHostRestartCommand", () => {
     mocks.stopForRestartForceValues = [];
     mocks.crossSpawnEdge = false;
     mocks.publishedOrigins = [];
+    mocks.launchCall = null;
+    mocks.launches = 0;
+    mocks.realController = null;
+    mocks.spawnWaitFor = null;
   });
 
   afterEach(() => {
@@ -950,6 +989,7 @@ describe("buildHostRestartCommand", () => {
 
       await expect(command(fakeCtx())).rejects.toMatchObject({
         code: "E_HOST_RESTART_TARGET_CHANGED",
+        message: expect.stringContaining("so nothing was stopped"),
       });
       expect(mocks.controllerCalls).toEqual([]);
     });
@@ -1015,18 +1055,51 @@ describe("buildHostRestartCommand", () => {
 
       await expect(command(fakeCtx())).rejects.toMatchObject({
         code: "E_HOST_RESTART_TARGET_CHANGED",
+        message: expect.stringContaining("so nothing was stopped"),
       });
       expect(mocks.controllerCalls).toEqual([]);
     });
 
-    it("does not hold the relaunch to the confirmed host: a host published once the stop is done is the restart's own", async () => {
+    // The relaunch's `kickstart -k` / `systemctl restart` kills whatever the
+    // label runs, so it is as destructive as the stop and is held to the
+    // confirmed host up to its own launch.
+    it("refuses a host published after the stop and before the relaunch's launch, issuing no launch, and says the stop had already run", async () => {
       const { ownProcessStartIdentity } =
         await import("../../store/process-identity");
       await writePidMetadata({
         pid: EXPECTED_HOST.pid,
         identity: EXPECTED_HOST.startIdentity,
       });
+      mocks.launchCall = async () => undefined;
       mocks.afterStop = async () => {
+        await writePidMetadata({
+          pid: process.pid,
+          identity: ownProcessStartIdentity(),
+        });
+      };
+
+      const command = await buildBoundForceRestart();
+
+      await expect(command(fakeCtx())).rejects.toMatchObject({
+        code: "E_HOST_RESTART_TARGET_CHANGED",
+        message: expect.stringContaining(
+          "its stop had already run against the confirmed host",
+        ),
+      });
+      expect(mocks.launches).toBe(0);
+    });
+
+    it("accepts the host the relaunch's own launch publishes, and holds nothing after it", async () => {
+      const { ownProcessStartIdentity } =
+        await import("../../store/process-identity");
+      await writePidMetadata({
+        pid: EXPECTED_HOST.pid,
+        identity: EXPECTED_HOST.startIdentity,
+      });
+      // The supervisor the launch brings up publishes its host while the
+      // launching call is still running; the stub then makes one more service
+      // call of the same command.
+      mocks.launchCall = async () => {
         await writePidMetadata({
           pid: process.pid,
           identity: ownProcessStartIdentity(),
@@ -1037,10 +1110,7 @@ describe("buildHostRestartCommand", () => {
       const result = await command(fakeCtx());
 
       expect(result.data).toMatchObject({ restarted: true });
-      expect(mocks.controllerCalls).toEqual([
-        "stopForRestart",
-        "relaunchAfterRestart",
-      ]);
+      expect(mocks.launches).toBe(1);
     });
 
     it("an --if-idle restart refuses a replaced host before its busy probe", async () => {
@@ -1064,6 +1134,177 @@ describe("buildHostRestartCommand", () => {
       });
       expect(mocks.busyCalls).toEqual([]);
       expect(mocks.controllerCalls).toEqual([]);
+    });
+
+    // The same command over a real platform controller and a recording
+    // runner, so what is refused is the controller's own subprocess call.
+    describe("through a platform controller", () => {
+      const spawned: ChildProcess[] = [];
+
+      afterEach(() => {
+        for (const child of spawned.splice(0)) child.kill("SIGKILL");
+      });
+
+      async function startedChild(source: string): Promise<ChildProcess> {
+        const script = join(workHome, `child-${String(spawned.length)}.js`);
+        writeFileSync(script, source, "utf8");
+        const child = spawn(process.execPath, [script], { stdio: "ignore" });
+        spawned.push(child);
+        await new Promise<void>((resolve, reject) => {
+          child.once("spawn", () => resolve());
+          child.once("error", reject);
+        });
+        return child;
+      }
+
+      // A pid nothing holds any more: its record is "gone" without any
+      // process-table fixture.
+      async function exitedPid(): Promise<number> {
+        const child = await startedChild("");
+        await new Promise<void>((resolve) => {
+          child.once("exit", () => resolve());
+        });
+        if (child.pid === undefined) throw new Error("child had no pid");
+        return child.pid;
+      }
+
+      async function publishThisProcess(): Promise<void> {
+        const { ownProcessStartIdentity } =
+          await import("../../store/process-identity");
+        await writePidMetadata({
+          pid: process.pid,
+          identity: ownProcessStartIdentity(),
+        });
+      }
+
+      async function buildBoundRestart(host: {
+        readonly pid: number;
+        readonly startIdentity: string;
+      }): Promise<CommandFn> {
+        const { buildHostRestartCommand } = await import("../host-restart");
+        return buildHostRestartCommand({
+          ifIdle: false,
+          force: false,
+          deferIfParked: true,
+          expectedHost: host,
+          lifecycleOrigin: "desktop",
+        });
+      }
+
+      it("macOS: a stop that asks for a job recycle never reaches `kickstart -k` when a different host is published after it", async () => {
+        const { createMacosController } =
+          await import("../../service/platforms/macos");
+        const pid = await exitedPid();
+        const host = { pid, startIdentity: `linux:boot-a ${String(pid)}` };
+        await writePidMetadata({ pid, identity: host.startIdentity });
+        const calls: string[] = [];
+        mocks.realController = createMacosController(async (command, args) => {
+          calls.push([command, ...args].join(" "));
+          // The job's SIGTERM lands and the host exits; a different one comes
+          // up before the relaunch.
+          if (args[0] === "kill") await publishThisProcess();
+          return { stdout: "", stderr: "", exitCode: 0 };
+        });
+
+        const command = await buildBoundRestart(host);
+
+        await expect(command(fakeCtx())).rejects.toMatchObject({
+          code: "E_HOST_RESTART_TARGET_CHANGED",
+          message: expect.stringContaining(
+            "its stop had already run against the confirmed host",
+          ),
+        });
+        expect(calls.some((call) => / kill /.test(call))).toBe(true);
+        expect(calls.some((call) => call.includes("kickstart"))).toBe(false);
+      });
+
+      it("Linux: a forced-recycle stop never reaches `systemctl restart` when a different host is published after it", async () => {
+        const { createLinuxController, setRestartStopGracesForTests } =
+          await import("../../service/platforms/linux");
+        const { readProcessStartIdentity } =
+          await import("../../store/process-identity");
+        // The host survives both signals, so the stop can only report a
+        // recycle.
+        const live = await startedChild("setInterval(() => undefined, 1000);");
+        const pid = live.pid;
+        if (pid === undefined) throw new Error("child had no pid");
+        const startIdentity = readProcessStartIdentity(pid);
+        if (startIdentity === null) throw new Error("no start identity");
+        await writePidMetadata({ pid, identity: startIdentity });
+        setRestartStopGracesForTests({ sigtermMs: 20, sigkillMs: 20 });
+        try {
+          const calls: string[] = [];
+          mocks.realController = createLinuxController(
+            async (command, args) => {
+              calls.push([command, ...args].join(" "));
+              if (args.includes("--signal=SIGKILL")) {
+                await publishThisProcess();
+              }
+              return { stdout: "", stderr: "", exitCode: 0 };
+            },
+          );
+
+          const command = await buildBoundRestart({ pid, startIdentity });
+
+          await expect(command(fakeCtx())).rejects.toMatchObject({
+            code: "E_HOST_RESTART_TARGET_CHANGED",
+            message: expect.stringContaining(
+              "its stop had already run against the confirmed host",
+            ),
+          });
+          expect(calls.some((call) => call.includes("--signal=SIGKILL"))).toBe(
+            true,
+          );
+          expect(
+            calls.some((call) => /systemctl --user restart/.test(call)),
+          ).toBe(false);
+        } finally {
+          setRestartStopGracesForTests(null);
+        }
+      });
+
+      // A launch whose proof no supervisor acknowledged is retried on a read
+      // that nothing runs. A host published after that read is not the first
+      // launch's, so the retry is held to the confirmed host again.
+      it("Linux: a retried launch is refused when a different host is published after the first launch went unacknowledged", async () => {
+        const { createLinuxController } =
+          await import("../../service/platforms/linux");
+        const { serviceLabelFor, serviceManifestPath } =
+          await import("../../service/label");
+        const { SpawnAcknowledgementTimeoutError } =
+          await import("@traycer-clients/shared/host-start-adoption/spawn-acknowledgement-error");
+        const pid = await exitedPid();
+        const host = { pid, startIdentity: `linux:boot-a ${String(pid)}` };
+        await writePidMetadata({ pid, identity: host.startIdentity });
+        // The service is registered, which is what a status read needs to see.
+        const manifest = serviceManifestPath(serviceLabelFor("production"));
+        mkdirSync(dirname(manifest), { recursive: true });
+        writeFileSync(manifest, "[Unit]\n", "utf8");
+        mocks.spawnWaitFor = async (publication) => {
+          if (publication === 1) {
+            return async () => {
+              throw new SpawnAcknowledgementTimeoutError();
+            };
+          }
+          // The second proof is published as the retry reaches its edge.
+          await publishThisProcess();
+          return async () => undefined;
+        };
+        const calls: string[] = [];
+        mocks.realController = createLinuxController(async (command, args) => {
+          calls.push([command, ...args].join(" "));
+          return { stdout: "", stderr: "", exitCode: 0 };
+        });
+
+        const command = await buildBoundRestart(host);
+
+        await expect(command(fakeCtx())).rejects.toMatchObject({
+          code: "E_HOST_RESTART_TARGET_CHANGED",
+        });
+        expect(
+          calls.filter((call) => /systemctl --user start/.test(call)),
+        ).toHaveLength(1);
+      });
     });
   });
 });
