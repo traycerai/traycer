@@ -120,7 +120,7 @@ export function grantRotationLine(
 }
 
 export interface SecretRotationProducerLine {
-  /** The producer's own identity, unique within one rotation. */
+  /** A worker class, or one host producer; unique within one rotation. */
   readonly key: string;
   /** "postgres: 3 sessions closed", "3 sessions closed on dev-sandbox". */
   readonly text: string;
@@ -131,34 +131,80 @@ export interface SecretRotationStatus {
   readonly producers: readonly SecretRotationProducerLine[];
 }
 
-function producerKey(producer: RotationProducer): string {
-  return producer.producer === "worker"
-    ? `worker:${producer.workerClass}:${producer.incarnation}`
-    : `host:${producer.hostId}:${producer.incarnation ?? ""}`;
+type WorkerProducer = Extract<RotationProducer, { producer: "worker" }>;
+type HostProducer = Extract<RotationProducer, { producer: "host" }>;
+
+/**
+ * One line per worker class, however many incarnations (pods) it runs: any
+ * incarnation not yet proven leaves the class not confirmed, and a proven
+ * class reads its incarnations' evidence combined.
+ */
+function workerClassLine(
+  workerClass: string,
+  incarnations: readonly WorkerProducer[],
+): string {
+  if (!incarnations.every(rotationProven)) {
+    return `${workerClass}: not confirmed yet`;
+  }
+  const evidence = incarnations.flatMap((producer) =>
+    producer.status === "acknowledged" ? (producer.evidence ?? []) : [],
+  );
+  const proof = rotationProofPhrase(evidence);
+  return proof === null
+    ? `${workerClass}: contained by expiry`
+    : `${workerClass}: ${proof}`;
 }
 
-function producerLine(
-  producer: RotationProducer,
+function hostLine(
+  producer: HostProducer,
   hostName: (hostId: string) => string,
 ): string {
-  const proof = rotationProofPhrase(producer.evidence);
-  if (producer.producer === "worker") {
-    if (producer.status === "contained_by_expiry") {
-      return `${producer.workerClass}: contained by expiry`;
-    }
-    if (producer.status === "acknowledged" && proof !== null) {
-      return `${producer.workerClass}: ${proof}`;
-    }
-    return `${producer.workerClass}: not confirmed yet`;
-  }
   const name = hostName(producer.hostId);
   if (producer.status === "applies_on_resume") {
     return `applies when ${name} wakes`;
   }
+  const proof = rotationProofPhrase(producer.evidence);
   if (producer.status === "acknowledged" && proof !== null) {
     return `${proof} on ${name}`;
   }
   return `not confirmed yet on ${name}`;
+}
+
+/**
+ * The producers' lines in first-seen order: a worker class once, at its first
+ * incarnation, and each host producer on its own.
+ */
+function producerLines(
+  producers: readonly RotationProducer[],
+  hostName: (hostId: string) => string,
+): SecretRotationProducerLine[] {
+  const classes = new Map<string, WorkerProducer[]>();
+  for (const producer of producers) {
+    if (producer.producer !== "worker") continue;
+    const incarnations = classes.get(producer.workerClass) ?? [];
+    incarnations.push(producer);
+    classes.set(producer.workerClass, incarnations);
+  }
+  const lines: SecretRotationProducerLine[] = [];
+  const shown = new Set<string>();
+  for (const producer of producers) {
+    if (producer.producer === "host") {
+      lines.push({
+        key: `host:${producer.hostId}:${producer.incarnation ?? ""}`,
+        text: hostLine(producer, hostName),
+      });
+    } else if (!shown.has(producer.workerClass)) {
+      shown.add(producer.workerClass);
+      lines.push({
+        key: `worker:${producer.workerClass}`,
+        text: workerClassLine(
+          producer.workerClass,
+          classes.get(producer.workerClass) ?? [],
+        ),
+      });
+    }
+  }
+  return lines;
 }
 
 /**
@@ -171,10 +217,7 @@ export function secretRotationStatus(
   hostName: (hostId: string) => string,
 ): SecretRotationStatus | null {
   if (rotation === null) return null;
-  const producers = rotation.producers.map((producer) => ({
-    key: producerKey(producer),
-    text: producerLine(producer, hostName),
-  }));
+  const producers = producerLines(rotation.producers, hostName);
   switch (rotation.state) {
     case "failed":
       return { headline: FAILED, producers };

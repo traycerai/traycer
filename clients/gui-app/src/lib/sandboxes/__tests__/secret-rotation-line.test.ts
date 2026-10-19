@@ -456,7 +456,7 @@ describe("secretRotationStatus", () => {
     ]);
   });
 
-  it("gives every producer its own key, though classes and hosts repeat", () => {
+  it("gives each worker class and each host producer its own key", () => {
     const status = secretRotationStatus(
       rotationOf("enforcing", [
         worker({ incarnation: "inc-1" }),
@@ -470,8 +470,85 @@ describe("secretRotationStatus", () => {
       hostName,
     );
     const keys = status?.producers.map((line) => line.key) ?? [];
-    expect(keys).toHaveLength(7);
-    expect(new Set(keys).size).toBe(7);
+    expect(keys).toHaveLength(6);
+    expect(new Set(keys).size).toBe(6);
+  });
+});
+
+describe("secretRotationStatus, one line per worker class", () => {
+  it("shows one not-confirmed line for a class whose incarnations are all missing", () => {
+    const status = secretRotationStatus(
+      rotationOf("enforcing", [
+        worker({
+          workerClass: "https",
+          incarnation: "i-1",
+          status: "missing",
+          evidence: null,
+        }),
+        worker({
+          workerClass: "https",
+          incarnation: "i-2",
+          status: "missing",
+          evidence: null,
+        }),
+      ]),
+      hostName,
+    );
+    expect(status?.producers).toEqual([
+      { key: "worker:https", text: "https: not confirmed yet" },
+    ]);
+  });
+
+  it("sums the proof of every incarnation of a class into one line", () => {
+    const status = secretRotationStatus(
+      rotationOf("enforced", [
+        worker({
+          workerClass: "https",
+          incarnation: "i-1",
+          status: "acknowledged",
+          evidence: [{ kind: "session_closed", count: 2 }],
+        }),
+        worker({
+          workerClass: "https",
+          incarnation: "i-2",
+          status: "acknowledged",
+          evidence: [
+            { kind: "session_closed", count: 3 },
+            { kind: "cache_cleared", count: 4 },
+          ],
+        }),
+      ]),
+      hostName,
+    );
+    expect(status?.producers).toEqual([
+      {
+        key: "worker:https",
+        text: "https: 5 sessions closed, cached keys dropped",
+      },
+    ]);
+  });
+
+  it("reads not confirmed when one incarnation of a class is acknowledged and another is missing", () => {
+    const status = secretRotationStatus(
+      rotationOf("enforcing", [
+        worker({
+          workerClass: "https",
+          incarnation: "i-1",
+          status: "acknowledged",
+          evidence: [{ kind: "session_closed", count: 2 }],
+        }),
+        worker({
+          workerClass: "https",
+          incarnation: "i-2",
+          status: "missing",
+          evidence: null,
+        }),
+      ]),
+      hostName,
+    );
+    expect(status?.producers).toEqual([
+      { key: "worker:https", text: "https: not confirmed yet" },
+    ]);
   });
 });
 
