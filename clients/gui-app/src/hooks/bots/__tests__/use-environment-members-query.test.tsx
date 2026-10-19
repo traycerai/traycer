@@ -50,6 +50,25 @@ function page(
   };
 }
 
+const FORTY_USER_IDS = Array.from(
+  { length: 40 },
+  (_, index) => `user-${String(index).padStart(3, "0")}`,
+);
+
+/** Forty chained pages of one member each, by the cursor that asks for them. */
+function fortyPages(): Map<string | null, EnvironmentMembersResponse> {
+  return new Map(
+    FORTY_USER_IDS.map((userId, index) => [
+      index === 0 ? null : FORTY_USER_IDS[index - 1],
+      page(userId, index === FORTY_USER_IDS.length - 1 ? null : userId),
+    ]),
+  );
+}
+
+function lastFortyUserId(): string {
+  return FORTY_USER_IDS[FORTY_USER_IDS.length - 1];
+}
+
 function mountMembers(
   answerPage: (cursor: string | null) => EnvironmentMembersResponse,
   enabled: boolean,
@@ -60,9 +79,13 @@ function mountMembers(
   readonly cursorsAsked: () => ReadonlyArray<string | null>;
   /** Re-renders the hook with another capability gate. */
   readonly setEnabled: (next: boolean) => void;
+  /** Writes pages into the cache, as answers landing elsewhere would. */
+  readonly publish: (
+    pages: ReadonlyMap<string | null, EnvironmentMembersResponse>,
+  ) => Promise<void>;
   /** Refetches the first page, as an invalidation would. */
   readonly refetchFirstPage: () => Promise<void>;
-  /** Every `environment.members` page query the hook holds, by status. */
+  /** Every `environment.members` page query the hook observes, by status. */
   readonly pageQueries: () => ReadonlyArray<{
     readonly status: string;
     readonly fetchStatus: string;
@@ -71,16 +94,21 @@ function mountMembers(
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   });
-  for (const [cursor, cached] of warm) {
-    queryClient.setQueryData(
-      queryKeys.hostMethod<HostRpcRegistry, "environment.members">(
-        mockLocalHostEntry.hostId,
-        "environment.members",
-        { environmentId: ENVIRONMENT, cursor },
-      ),
-      cached,
-    );
-  }
+  const publish = (
+    pages: ReadonlyMap<string | null, EnvironmentMembersResponse>,
+  ): void => {
+    for (const [cursor, cached] of pages) {
+      queryClient.setQueryData(
+        queryKeys.hostMethod<HostRpcRegistry, "environment.members">(
+          mockLocalHostEntry.hostId,
+          "environment.members",
+          { environmentId: ENVIRONMENT, cursor },
+        ),
+        cached,
+      );
+    }
+  };
+  publish(warm);
   const cursorsAsked: Array<string | null> = [];
   let seq = 0;
   const messenger = new MockHostMessenger<HostRpcRegistry>({
@@ -120,12 +148,20 @@ function mountMembers(
     queryClient
       .getQueryCache()
       .findAll()
-      .filter((query) =>
-        JSON.stringify(query.queryKey).includes("environment.members"),
+      .filter(
+        (query) =>
+          query.getObserversCount() > 0 &&
+          JSON.stringify(query.queryKey).includes("environment.members"),
       );
   return {
     resolver: () => result.current,
     cursorsAsked: () => [...cursorsAsked],
+    publish: async (pages) => {
+      await act(async () => {
+        publish(pages);
+        await Promise.resolve();
+      });
+    },
     setEnabled: (next) => {
       rerender({ enabled: next });
     },
@@ -290,6 +326,87 @@ describe("useEnvironmentMembers", () => {
       `Name of ${userIds[pageCount - 1]}`,
     );
     expect(mounted.pageQueries()).toHaveLength(pageCount);
+  });
+
+  it("follows a cached tail a terminal first page later names, in one go", async () => {
+    const tail = fortyPages();
+    const terminalFirst = new Map(tail);
+    terminalFirst.set(null, page(FORTY_USER_IDS[0], null));
+    const mounted = mountMembers(
+      (cursor) => tail.get(cursor) ?? page("unknown", null),
+      true,
+      terminalFirst,
+    );
+    expect(mounted.pageQueries()).toHaveLength(1);
+
+    // The first page now names the second, whose tail is all cached.
+    await mounted.publish(new Map([[null, tail.get(null) ?? page("x", null)]]));
+
+    await waitFor(() => {
+      expect(mounted.resolver()(lastFortyUserId())?.displayName).toBe(
+        `Name of ${lastFortyUserId()}`,
+      );
+    });
+    expect(mounted.pageQueries()).toHaveLength(FORTY_USER_IDS.length);
+  });
+
+  it("follows a cached suffix a re-routed first page leads back to, in one go", async () => {
+    const pages = fortyPages();
+    let rerouted = false;
+    const mounted = mountMembers(
+      (cursor) => {
+        if (cursor === null && rerouted) return page("user-new", "user-new");
+        // The page after the new members ends where the old first page did.
+        if (cursor === "user-new") return page("user-new-2", FORTY_USER_IDS[0]);
+        return pages.get(cursor) ?? page("unknown", null);
+      },
+      true,
+      pages,
+    );
+    expect(mounted.resolver()(lastFortyUserId())?.displayName).toBe(
+      `Name of ${lastFortyUserId()}`,
+    );
+    // The mount's own refetch of the stale cached pages has settled, so the
+    // refetch below asks again rather than joining it.
+    await waitFor(() => {
+      expect(
+        mounted.pageQueries().every((query) => query.fetchStatus === "idle"),
+      ).toBe(true);
+    });
+
+    // Members joined ahead of everyone: the refetched first page now leads
+    // through one uncached page into the old pages, all still cached.
+    rerouted = true;
+    await mounted.refetchFirstPage();
+
+    await waitFor(() => {
+      expect(mounted.resolver()("user-new-2")?.displayName).toBe(
+        "Name of user-new-2",
+      );
+      expect(mounted.pageQueries()).toHaveLength(FORTY_USER_IDS.length + 1);
+    });
+    expect(mounted.resolver()(lastFortyUserId())?.displayName).toBe(
+      `Name of ${lastFortyUserId()}`,
+    );
+  });
+
+  it("follows pages that land in the cache after it mounted, in one go", async () => {
+    const pages = fortyPages();
+    const mounted = mountMembers(
+      (cursor) => pages.get(cursor) ?? page("unknown", null),
+      true,
+      new Map(),
+    );
+
+    // Every page lands at once, after the cache was first read.
+    await mounted.publish(pages);
+
+    await waitFor(() => {
+      expect(mounted.resolver()(lastFortyUserId())?.displayName).toBe(
+        `Name of ${lastFortyUserId()}`,
+      );
+    });
+    expect(mounted.pageQueries()).toHaveLength(FORTY_USER_IDS.length);
   });
 
   it("does not ask again for a cursor a later page repeats", async () => {

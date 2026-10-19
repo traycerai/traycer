@@ -22,6 +22,8 @@ import {
 
 const METHOD = "environment.members";
 
+const FIRST_PAGE: ReadonlyArray<string | null> = [null];
+
 /** The pages asked for, and whose list they were asked of. */
 type Requested = {
   readonly environmentId: string | null;
@@ -44,9 +46,10 @@ type Requested = {
  * page, a refetched page naming another cursor, a page turning terminal - the
  * asked-for list becomes the walk, once, for that render.
  *
- * The cache is read only to SEED that list, when the hook mounts or its
- * environment or host changes, so a warm cache of any number of pages is
- * asked for in one render rather than one page per render.
+ * The cache only EXTENDS a walk the observed answers drove: past the last
+ * page asked for, a page the cache already holds is followed in the same
+ * walk, so a warm cache of any number of pages - on mount, or exposed later
+ * by an answer - is asked for in one render rather than one per page.
  *
  * A member no answered page lists - the list still loading, a page refused
  * or failed - resolves to null, and the conversation shows their user id.
@@ -62,18 +65,18 @@ export function useEnvironmentMembers(
   const queryClient = useQueryClient();
   // The same host id the batch below keys its queries with.
   const hostId = useReactiveHostReadiness(client).hostId;
-  const [requested, setRequested] = useState<Requested>(() => ({
+  const [requested, setRequested] = useState<Requested>({
     environmentId,
     hostId,
-    cursors: cachedCursors(queryClient, hostId, environmentId),
-  }));
+    cursors: FIRST_PAGE,
+  });
   let cursors = requested.cursors;
   if (
     requested.environmentId !== environmentId ||
     requested.hostId !== hostId
   ) {
-    // Another list: seed it from what the cache already holds for it.
-    cursors = cachedCursors(queryClient, hostId, environmentId);
+    // Another list starts from its first page.
+    cursors = FIRST_PAGE;
     setRequested({ environmentId, hostId, cursors });
   }
   const requests = useMemo(
@@ -108,7 +111,9 @@ export function useEnvironmentMembers(
     combine,
   });
   if (environmentId !== null && pages.length === cursors.length) {
-    const walked = cursorsNamedByPages(cursors, pages);
+    const walked = cursorsNamedByPages(cursors, pages, (cursor) =>
+      cachedPage(queryClient, hostId, environmentId, cursor),
+    );
     if (!sameCursors(walked, cursors)) {
       setRequested({ environmentId, hostId, cursors: walked });
     }
@@ -133,39 +138,39 @@ export function useEnvironmentMembers(
 
 /**
  * The chain the observed pages name: the first page's null, then each
- * answered page's `nextCursor` in turn, ending at the first cursor whose page
- * has not answered (the next to ask for), at the last page (`nextCursor`
- * null), or at a cursor already on the chain, so a page that repeats one
- * cannot loop. `pages[i]` is the answer for `asked[i]`.
+ * answered page's `nextCursor` in turn. A cursor not asked for yet is read
+ * through `cached` and followed for as long as the cache holds its pages, so
+ * a cached tail an observed page exposes costs one render, not one per page.
+ * The walk ends at a page asked for and not answered (or not cached), at the
+ * last page (`nextCursor` null), or at a cursor already on the chain, so a
+ * page that repeats one cannot loop. `pages[i]` is the answer for `asked[i]`.
+ *
+ * Compiler-safe: the observed `pages` are an input, and they change on the
+ * render that needs the walk; the cache only extends a walk they drove.
  */
 function cursorsNamedByPages(
   asked: ReadonlyArray<string | null>,
   pages: ReadonlyArray<EnvironmentMembersResponse | undefined>,
+  cached: (cursor: string | null) => EnvironmentMembersResponse | undefined,
 ): ReadonlyArray<string | null> {
   return walkChain((cursor) => {
     const index = asked.indexOf(cursor);
-    return index === -1 ? undefined : pages[index];
+    return index === -1 ? cached(cursor) : pages[index];
   });
 }
 
-/**
- * The chain the cache already holds for one environment's list on one host,
- * read with the key `useHostQueries` gives each request. Only a seed: it is
- * read when the list changes, never to follow answers.
- */
-function cachedCursors(
+/** One page as the cache holds it, under the key `useHostQueries` uses. */
+function cachedPage(
   queryClient: QueryClient,
   hostId: string | null,
-  environmentId: string | null,
-): ReadonlyArray<string | null> {
-  if (environmentId === null) return [];
-  return walkChain((cursor) =>
-    queryClient.getQueryData<EnvironmentMembersResponse>(
-      queryKeys.hostMethod<HostRpcRegistry, typeof METHOD>(hostId, METHOD, {
-        environmentId,
-        cursor,
-      }),
-    ),
+  environmentId: string,
+  cursor: string | null,
+): EnvironmentMembersResponse | undefined {
+  return queryClient.getQueryData<EnvironmentMembersResponse>(
+    queryKeys.hostMethod<HostRpcRegistry, typeof METHOD>(hostId, METHOD, {
+      environmentId,
+      cursor,
+    }),
   );
 }
 
