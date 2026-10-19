@@ -55,7 +55,7 @@ function isBotTabView(value: string): value is BotTabView {
 /**
  * A bot's tab (Tracy Bots). The person never picks the machine a bot runs
  * on: the tab opens through the host it was created on (this host, from
- * Home), asks it `bot.open`, and follows the answer (T18) -
+ * Home), asks it `bot.open`, and follows the answer -
  * - another host serves the bot and this client can reach it: the tab is
  *   rebound there silently, and this surface remounts on it;
  * - this host serves it (bound here, or claimed here because its host was

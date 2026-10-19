@@ -5916,8 +5916,8 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
       downgradePathsFromLatest: {},
     },
   },
-  // Every host bound to a team environment, as any member sees it. Optional
-  // like its siblings.
+  // The hosts of a team environment the caller may see. Optional like its
+  // siblings.
   "environment.host.list": {
     degrade: { kind: "unsupported" },
     1: {
@@ -8393,7 +8393,7 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
     },
   },
   // Open a bot on the serving host, claiming it there when its bound host is
-  // unreachable (T18). Same optional posture as the rest of the namespace.
+  // unreachable. Same optional posture as the rest of the namespace.
   "bot.open": {
     degrade: { kind: "unsupported" },
     1: {
@@ -13930,7 +13930,7 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
       },
     },
   },
-  // `bot.listChanged` (Tracy Bots T24): additive on `/stream` like
+  // `bot.listChanged` (Tracy Bots): additive on `/stream` like
   // `bot.subscribe` above, so no baseline moves.
   "bot.listChanged": {
     1: {

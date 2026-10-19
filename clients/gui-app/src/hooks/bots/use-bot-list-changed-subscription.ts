@@ -42,7 +42,7 @@ export function useBotListChangedSubscriptionForHost(
 }
 
 /**
- * Keeps `bot.list` current while a bots surface is mounted (Tracy Bots T24):
+ * Keeps `bot.list` current while a bots surface is mounted (Tracy Bots):
  * holds a `bot.listChanged` subscription on `hostId` and invalidates every
  * host's `bot.list` on each `changed` frame, the way the app's own bot writes
  * do. The frame carries nothing; the list is refetched.
