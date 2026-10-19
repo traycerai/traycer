@@ -578,10 +578,10 @@ export type HostNotificationSecretExportKind =
  * secret. The export works until `expiresAt` (epoch milliseconds) wherever it
  * is copied, which is the one thing the notice has to say.
  *
- * `exportKind` rather than the plan's `kind`: `kind` is this union's
- * discriminator. Read as a string, not the closed list above, so an export
- * kind newer than this build still renders with generic wording instead of
- * dropping the row to the common-field tier.
+ * `exportKind` rather than `kind`: `kind` is this union's discriminator. Read
+ * as a string, not the closed list above, so an export kind newer than this
+ * build still renders with generic wording instead of dropping the row to the
+ * common-field tier.
  */
 export const hostNotificationSecretExportMintedPayloadSchema = lazySchema(() =>
   z

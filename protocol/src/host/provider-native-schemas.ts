@@ -1486,19 +1486,19 @@ export const nativeMutationSchema = lazySchema(() =>
 export type NativeMutation = z.infer<typeof nativeMutationSchema>;
 
 /**
- * `providers.nativeMutate@1.3`'s `promoteToPersonal` (ticket E7): an MCP
- * server or skill that a CLI or an agent added to this host's native config
- * shows as local, and the person's "Add to Personal" uploads it to their
- * Personal environment so every host gets it. Never uploaded without that
- * click. Named by the native entry's name at its scope, as the remove action
- * names it; the answer is the resulting collection of `entryKind`, the same
- * `mcp` or `skills` success arm the other actions answer.
+ * `providers.nativeMutate@1.3`'s `promoteToPersonal`: an MCP server or skill
+ * that a CLI or an agent added to this host's native config shows as local, and
+ * the person's "Add to Personal" uploads it to their Personal environment so
+ * every host gets it. Never uploaded without that click. Named by the native
+ * entry's name at its scope, as the remove action names it; the answer is the
+ * resulting collection of `entryKind`, the same `mcp` or `skills` success arm
+ * the other actions answer.
  *
- * Its own arm rather than an action inside the `mcp` and `skills` arms, so
- * the released v1.1 request (`nativeMutationSchema`) is not widened: a v1.1
- * host re-parses a v1.2 request onto v1.1 and this arm fails that parse
- * rather than being dropped. A client names that refusal with the floor
- * `PROMOTE_TO_PERSONAL_REQUIRED_HOST_VERSION`.
+ * Its own arm rather than an action inside the `mcp` and `skills` arms, so the
+ * released request (`nativeMutationSchema`, shared by v1.1 and v1.2) is not
+ * widened: a v1.2 host re-parses a v1.3 request onto v1.2 and this arm fails
+ * that parse rather than being dropped. A client names that refusal with the
+ * floor `PROMOTE_TO_PERSONAL_REQUIRED_HOST_VERSION`.
  */
 export const nativePromoteToPersonalMutationSchema = lazySchema(() =>
   z

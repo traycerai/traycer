@@ -55,12 +55,11 @@ import { supportMatrix } from "./__fixtures__/support-matrix";
  * The wire of the environment family: the 26 environment methods, the
  * executable-write grant on every method that reaches an execution sink, the
  * `providers.list@10.5` envelope keys, `providers.nativeMutate@1.3`'s
- * `promoteToPersonal`, and the five secret shapes that follow the secrets
- * plan field for field.
+ * `promoteToPersonal`, and the five secret shapes, field for field.
  *
  * Two kinds of negative control live here, each on a COPY (never on the
- * registry): a main assertion that can only pass is not evidence, so each
- * shows the assertion fails when the mechanism under test is removed.
+ * registry): a main assertion that can only pass is not evidence, so each shows
+ * the assertion fails when the mechanism under test is removed.
  */
 
 type EnvironmentMethodName = keyof typeof ENVIRONMENT_RPC_METHODS;
@@ -947,10 +946,6 @@ describe("promoteToPersonal toward a 1.2 host is refused, never dropped", () => 
 });
 
 // ── (e) ─────────────────────────────────────────────────────────────────────
-//
-// Plan pages (under the epic's artifacts directory, 732222ed-...):
-//   broker  = sandbox-secrets-technical-plan/broker/index.md
-//   gateway = sandbox-secrets-technical-plan/gateway/index.md
 
 const SECRET_ROTATION_STATES = [
   "accepted",
@@ -960,16 +955,11 @@ const SECRET_ROTATION_STATES = [
   "failed",
 ] as const;
 
-describe("secret versions, Undo, Destroy, rotation and consent are the plan's shapes, field for field", () => {
-  // broker, "### Human routes", row `GET .../secrets/:secretId/versions`,
-  // `POST .../versions/:versionId/undo`, `POST .../versions/:versionId/destroy`
-  // (revision 6): "The versions list with ordinal, created, superseded and
-  // destroyed times and the rotation state of each (never a value)".
-  // Rotation controller plan, row "Versions, Undo, Destroy, status": "`GET
-  // .../secrets/:secretId/versions` (ordinal, created, superseded and destroyed
-  // times, each version's rotation state, never a value)".
-  // gateway, "### The rotation wire", States row: "`accepted` (committed),
-  // `enforcing` (a receipt is missing), `stalled`, `enforced`, `failed`".
+describe("secret versions, Undo, Destroy, rotation and consent shapes, field for field", () => {
+  // `GET .../secrets/:secretId/versions`: the versions list with ordinal,
+  // created, superseded and destroyed times and the rotation state of each,
+  // never a value. A rotation's state is `accepted` (committed), `enforcing` (a
+  // receipt is missing), `stalled`, `enforced` or `failed`.
   it("environment.secrets.versions: ordinal, created, superseded, destroyed times and the rotation state of each, never a value", () => {
     const request = env.environmentSecretsVersionsRequestSchema.parse({
       secretId: "s1",
@@ -1038,16 +1028,10 @@ describe("secret versions, Undo, Destroy, rotation and consent are the plan's sh
     ).toBe(false);
   });
 
-  // broker, "### Human routes", same row: "Undo as a rotation back to that
-  // version's content under a fresh epoch, refused `version_destroyed` for a
-  // tombstone and refused when the secret is revoked unless the caller
-  // re-grants in the same action".
-  // Rotation controller plan, row "Versions, Undo, Destroy, status": "`POST
-  // .../versions/:versionId/undo`: a new version opened from the superseded one
-  // and re-sealed under its own row, then the same intent and commit under a
-  // fresh epoch, refused `version_destroyed` on a tombstone (copy "that value
-  // was destroyed") and refused on a revoked secret unless the same call
-  // re-grants".
+  // `POST .../versions/:versionId/undo`: a rotation back to that version's
+  // content under a fresh epoch, refused `version_destroyed` for a tombstone
+  // (copy "that value was destroyed") and refused on a revoked secret unless
+  // the same call re-grants.
   it("environment.secrets.undo: a rotation back to that version, `regrant` in the same action, refused version_destroyed", () => {
     expect(
       env.environmentSecretsUndoRequestSchema.parse({
@@ -1091,14 +1075,10 @@ describe("secret versions, Undo, Destroy, rotation and consent are the plan's sh
     ).toBe(false);
   });
 
-  // broker, "### Human routes", same row: "Destroy nulls a superseded version's
-  // ciphertext at once and records the event, and is refused `version_current`
-  // for the live version until it is replaced or revoked".
-  // Rotation controller plan, row "Versions, Undo, Destroy, status": "`POST
-  // .../versions/:versionId/destroy`: nulls a superseded version's five sealed
+  // `POST .../versions/:versionId/destroy`: nulls a superseded version's sealed
   // columns at once, sets `destroyedAt`, deletes any `HostSealedValue` naming
-  // it, writes the event, refused `version_current` on the live version (copy
-  // "replace or revoke it first")".
+  // it and records the event; refused `version_current` for the live version
+  // until it is replaced or revoked (copy "replace or revoke it first").
   it("environment.secrets.destroy: destroys a superseded version at once, refused version_current for the live one", () => {
     expect(
       env.environmentSecretsDestroyRequestSchema.parse({
@@ -1128,28 +1108,25 @@ describe("secret versions, Undo, Destroy, rotation and consent are the plan's sh
     ).toBe(false);
   });
 
-  // broker, "### Human routes", row `GET .../secrets/:secretId/rotation`
-  // (revision 6): "The current rotation's state (`accepted`, `enforcing`,
-  // `stalled`, `enforced`, `failed`) and, per host and class, the evidence
-  // entries of its `rotation_ack` receipt, or "contained by expiry" for an
-  // incarnation that is no longer live, all as [the rotation wire (gateway
-  // page)](../gateway) defines them; and the secret's last Verify result."
-  // gateway, "### The rotation wire", Evidence row: "`evidence` is a list of
-  // `{ kind, count }` entries, one per kind the producer can show, from a closed
-  // enum of three: `session_closed` (every native session admitted under the old
-  // value is closed; `count` is the number closed, nullable only for a class
-  // that holds no sessions), `cache_cleared` (the sealed or cached value is
-  // evicted; `count` is the number of cache entries dropped, never null, zero
-  // allowed), `probe_refused` (the old value was probed against the service and
-  // refused; `count` is null, one probe being one). A fence, a `fencedAt` and a
-  // deadline are never evidence".
-  // gateway, "### The rotation wire", Enforced row: "an incarnation whose
-  // authorization has provably ceased owes no receipt and is shown "contained by
-  // expiry"" and "a host not delivered (asleep, suspended, offline) owes none,
-  // shows the flows' "applies on resume"".
-  // gateway, "### The rotation wire", Control frame row: "`issuedAt` is the
-  // broker's clock at the controller's first send"; Stalled row: "Sixty seconds
-  // after `issuedAt` without `enforced`, the status turns `stalled`".
+  // `GET .../secrets/:secretId/rotation`: the current rotation's state
+  // (`accepted`, `enforcing`, `stalled`, `enforced`, `failed`) and, per host
+  // and class, the evidence entries of its `rotation_ack` receipt, or
+  // "contained by expiry" for an incarnation that is no longer live; and the
+  // secret's last Verify result.
+  // `evidence` is a list of `{ kind, count }` entries, one per kind the
+  // producer can show, from a closed enum of three: `session_closed` (every
+  // native session admitted under the old value is closed; `count` is the
+  // number closed, nullable only for a class that holds no sessions),
+  // `cache_cleared` (the sealed or cached value is evicted; `count` is the
+  // number of cache entries dropped, never null, zero allowed), `probe_refused`
+  // (the old value was probed against the service and refused; `count` is null,
+  // one probe being one). A fence, a `fencedAt` and a deadline are never
+  // evidence.
+  // An incarnation whose authorization has provably ceased owes no receipt and
+  // is shown "contained by expiry"; a host not delivered (asleep, suspended,
+  // offline) owes none and shows "applies on resume".
+  // `issuedAt` is the broker's clock at the controller's first send; sixty
+  // seconds after `issuedAt` without `enforced`, the status turns `stalled`.
   it("environment.secrets.rotation: the wire's five states, three evidence kinds, worker and host producers, last Verify", () => {
     expect(
       env.environmentSecretsRotationRequestSchema.parse({ secretId: "s1" }),
@@ -1329,17 +1306,13 @@ describe("secret versions, Undo, Destroy, rotation and consent are the plan's sh
     ).toBe(true);
   });
 
-  // broker, "### Human routes", row `POST .../secrets/:secretId/consent`
-  // (revision 6): "Appends a `SecretConsentAcceptance` row for the disclosure
-  // version shown, the scope and the authenticated actor; the create route
-  // calls it for the consent checkbox so no secret is created with a consent
-  // that has no evidence".
-  // broker, `model SecretConsentAcceptance`: "/// plaintext_gateway | ... (a
-  // closed enum)" (`disclosure`), "/// The version of the disclosure text that
-  // was shown." (`disclosureVersion Int`), "/// secret | environment (what the
-  // acceptance covers)." (`scope`), and above the model: "`actorRef` resolves
-  // through the environments plan's actor mapping." - the actor is a server
-  // column, never a request field.
+  // `POST .../secrets/:secretId/consent` appends a `SecretConsentAcceptance`
+  // row for the disclosure version shown, the scope and the authenticated
+  // actor; the create route calls it for the consent checkbox, so no secret is
+  // created with a consent that has no evidence. `disclosure` is a closed enum
+  // (`plaintext_gateway`), `disclosureVersion` is the version of the disclosure
+  // text that was shown, and `scope` is `secret` or `environment` (what the
+  // acceptance covers). The actor is a server column, never a request field.
   it("environment.secrets.consent: disclosure, version shown and scope, and no actor on the request", () => {
     const request = {
       secretId: "s1",
@@ -1407,14 +1380,13 @@ describe("secret versions, Undo, Destroy, rotation and consent are the plan's sh
     ).toEqual({ acceptanceId: "acc-1", acceptedAt: 1_791_000_000_000 });
   });
 
-  // gateway, "### Verify and notifications", row "Verify, the gateway half": "The
-  // worker makes one request or handshake to the bound destination through the
+  // Verify makes one request or handshake to the bound destination through the
   // path a sandbox would take and answers with one evidence receipt:
-  // `probe_accepted`, or `probe_refused` with a closed hop code (`host`, `port`,
-  // `protocol` or `login`), never the value or the upstream's body." and "(the
-  // Secrets page's action on a row, and on the add dialog before the secret
-  // exists ...)"; `unreachable` is the silent-incarnation answer
-  // (see `environmentSecretsVerifyRequestSchema`'s comment).
+  // `probe_accepted`, or `probe_refused` with a closed hop code (`host`,
+  // `port`, `protocol` or `login`), never the value or the upstream's body. It
+  // runs from the Secrets page's action on a row, and on the add dialog before
+  // the secret exists; `unreachable` is the silent-incarnation answer (see
+  // `environmentSecretsVerifyRequestSchema`'s comment).
   it("environment.secrets.verify: probe_accepted, probe_refused with a closed hop, unreachable; never the value or a body", () => {
     expect(
       env.environmentSecretsVerifyRequestSchema.parse({

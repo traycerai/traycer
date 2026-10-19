@@ -8,35 +8,27 @@ import { executableWriteGrantSchema } from "@traycer/protocol/host/executable-wr
 import { providerIdSchema } from "@traycer/protocol/host/provider-ids";
 
 /**
- * Wire shapes of the environment methods: the desktop Settings pages a
- * person's Personal environment drives, and the secrets, agent definitions,
- * machine setup, status, notices and review the host proxies to the
- * environment routes. Every method is new at `@1.0`, off the released floor
- * with `degrade: unsupported` (`environment-contracts.ts`).
- *
- * Governing pages: the environments plan's surfaces page (the desktop RPC
- * table), its model page (item kinds, the per-item status, the closed codes,
- * "Convergence, history and Undo", "Executable writes"), and for the secret
- * versions, Undo, Destroy, rotation status and consent, the secrets plan's
- * gateway page ("The rotation wire") and broker page (Human routes), with
- * the rotation controller plan's route rows. `environment-wire.test.ts` cites
- * the plan sentence each of those five shapes follows.
+ * Wire shapes of the environment methods: the desktop Settings pages a person's
+ * Personal environment drives, and the secrets, agent definitions, machine
+ * setup, status, notices and review the host proxies to the environment routes.
+ * Every method is new at `@1.0`, off the released floor with
+ * `degrade: unsupported` (`environment-contracts.ts`).
  *
  * Timestamps are epoch milliseconds, as elsewhere on this wire. A code or a
- * state the plan says may grow is an open string with its known values
- * exported beside it, so a value newer than the client never fails the
- * parse (the `SandboxSummary.routes` rule); a set the plan closes is an enum.
+ * state that may grow is an open string with its known values exported beside
+ * it, so a value newer than the client never fails the parse (the
+ * `SandboxSummary.routes` rule); a closed set is an enum.
  */
 
 // ── Shared ──────────────────────────────────────────────────────────────────
 
-/** The OS axis of an item (model page, `EnvironmentItem.os`). */
+/** The OS axis of an item (`EnvironmentItem.os`). */
 export const environmentOsSchema = lazySchema(() =>
   z.enum(["any", "linux", "macos", "windows"]),
 );
 export type EnvironmentOs = z.infer<typeof environmentOsSchema>;
 
-/** An item's kind (model page, the item kinds table). Open: kinds may grow. */
+/** An item's kind. Open: kinds may grow. */
 export const ENVIRONMENT_ITEM_KINDS = [
   "managed_profile",
   "env_override",
@@ -59,9 +51,9 @@ export const environmentItemKindSchema = lazySchema(() =>
 );
 
 /**
- * The applier's code for one item (model page, `HostEnvironmentReport`,
- * the starting list in `packages/common/src/environments/codes.ts`). Open on
- * this wire so a code newer than the client never fails the parse.
+ * The applier's code for one item (`HostEnvironmentReport`, the starting list
+ * in `packages/common/src/environments/codes.ts`). Open on this wire so a code
+ * newer than the client never fails the parse.
  */
 export const ENVIRONMENT_ITEM_STATUS_CODES = [
   "ok",
@@ -96,13 +88,12 @@ export { environmentChangedBySchema };
 export type { EnvironmentChangedBy };
 
 /**
- * The answer to an item write (model page, "Convergence, history and Undo").
- * A page edit is `live` and compare-and-set on the revision the editor read:
- * `saved` with the new revision, or `stale` with the current revision and
- * who changed it. `pending` is an edit the host queued while the environment
- * is unreachable (shown pending until its receipt). `needs_grant` is a write
- * that reaches an execution sink made without an executable-write grant,
- * which the host holds as "needs you".
+ * The answer to an item write. A page edit is `live` and compare-and-set on the
+ * revision the editor read: `saved` with the new revision, or `stale` with the
+ * current revision and who changed it. `pending` is an edit the host queued
+ * while the environment is unreachable (shown pending until its receipt).
+ * `needs_grant` is a write that reaches an execution sink made without an
+ * executable-write grant, which the host holds as "needs you".
  */
 export const environmentWriteOutcomeSchema = lazySchema(() =>
   z.discriminatedUnion("outcome", [
@@ -124,13 +115,13 @@ const emptyRequestSchema = lazySchema(() => z.object({}));
 
 // ── environment.status ──────────────────────────────────────────────────────
 
-/** Remote access on this host (surfaces page, Host section; closed). */
+/** Remote access on this host (closed). */
 export const remoteAccessStateSchema = lazySchema(() =>
   z.enum(["on", "off", "turning_off"]),
 );
 export type RemoteAccessState = z.infer<typeof remoteAccessStateSchema>;
 
-/** Setup stages a host shows (environments plan, Host section). Open: stages may grow. */
+/** Setup stages a host shows. Open: stages may grow. */
 export const ENVIRONMENT_SETUP_STAGES = [
   "registering",
   "moving_settings",
@@ -146,7 +137,7 @@ export const environmentItemStatusSchema = lazySchema(() =>
     desiredRevision: z.number().int(),
     status: z.string().min(1).max(32),
     code: environmentItemStatusCodeSchema,
-    /** Typed allowlisted arguments only, never free text (model page). */
+    /** Typed allowlisted arguments only, never free text. */
     args: z.object({
       exitStatus: z.number().int().nullable(),
       stage: z.string().max(64).nullable(),
@@ -212,9 +203,9 @@ export type EnvironmentStatusRequest = z.infer<
 >;
 
 /**
- * `environment.status@1.0`: the host's own view of its environment (surfaces
- * page, "Status and notices"). `principal` is `null` on a host that has no
- * environment yet (it renders its old per-host pages read-only).
+ * `environment.status@1.0`: the host's own view of its environment. `principal`
+ * is `null` on a host that has no environment yet (it renders its old per-host
+ * pages read-only).
  */
 export const environmentStatusResponseSchema = lazySchema(() =>
   z.object({
@@ -256,9 +247,9 @@ export type EnvironmentNoticesRequest = z.infer<
 >;
 
 /**
- * One convergence notice (model page: a change in the last 30 days with a
- * displaced value and no later change on its key; Undo is offered exactly
- * while that holds). A secret's notice names the secret only, never a value.
+ * One convergence notice: a change in the last 30 days with a displaced value
+ * and no later change on its key; Undo is offered exactly while that holds. A
+ * secret's notice names the secret only, never a value.
  */
 export const environmentNoticeSchema = lazySchema(() =>
   z.object({
@@ -308,10 +299,10 @@ export type EnvironmentReviewRequest = z.infer<
 >;
 
 /**
- * One "needs you" row (surfaces page, Review): a held credential-like value
- * ("Make it a secret" or "Keep as a variable"), a held executable entry, or
- * a sink-reaching write made without a grant. Apply goes through the
- * dashboard's Review page; this method only lists.
+ * One "needs you" row: a held credential-like value ("Make it a secret" or
+ * "Keep as a variable"), a held executable entry, or a sink-reaching write made
+ * without a grant. Apply goes through the dashboard's Review page; this method
+ * only lists.
  */
 export const ENVIRONMENT_REVIEW_REASONS = [
   "credential_like_value",
@@ -443,9 +434,9 @@ export type HostRemoteAccessSetResponse = z.infer<
 // ── providers.link / linkComplete ───────────────────────────────────────────
 
 /**
- * `providers.link@1.0`: starts the server-side link of a plan (surfaces page:
- * "returns the sign-in URL and a code prompt"), for a profile that is on this
- * host only or for a new one. The dialog's lines and states are its own.
+ * `providers.link@1.0`: starts the server-side link of a plan, which returns
+ * the sign-in URL and a code prompt, for a profile that is on this host only or
+ * for a new one.
  */
 export const providersLinkRequestSchema = lazySchema(() =>
   z.object({
@@ -518,7 +509,7 @@ export type ProvidersLinkCompleteResponse = z.infer<
 
 // ── environment.agentDefinitions.* ──────────────────────────────────────────
 
-/** An `agent_definition` item: file name and text (model page). */
+/** An `agent_definition` item: file name and text. */
 export const agentDefinitionSchema = lazySchema(() =>
   z.object({
     name: z.string().min(1),
@@ -569,7 +560,7 @@ export type EnvironmentAgentDefinitionsDeleteRequest = z.infer<
 
 // ── environment.setup.* ─────────────────────────────────────────────────────
 
-/** A `setup_script` item, one per OS (model page). */
+/** A `setup_script` item, one per OS. */
 export const setupScriptSchema = lazySchema(() =>
   z.object({
     os: environmentOsSchema,
@@ -605,10 +596,9 @@ export type EnvironmentSetupPutRequest = z.infer<
 >;
 
 /**
- * The typed setup-attempt record (the environments plan's protocol row):
- * attempt id, script content hash, item revision, trigger, started, ended,
- * exit status, stage reached, result. Closed codes and typed arguments only,
- * never script output (model page).
+ * The typed setup-attempt record: attempt id, script content hash, item
+ * revision, trigger, started, ended, exit status, stage reached, result. Closed
+ * codes and typed arguments only, never script output.
  */
 export const setupAttemptSchema = lazySchema(() =>
   z.object({
@@ -777,11 +767,11 @@ export type EnvironmentSecretsCreateResponse = z.infer<
 >;
 
 /**
- * `environment.secrets.verify@1.0` (secrets plan, gateway page, "Verify, the
- * gateway half"): a stored secret by id, or the add dialog's candidate before
- * the secret exists. One probe, one evidence receipt: `probe_accepted`, or
- * `probe_refused` with the closed hop code, or `unreachable` when the probed
- * incarnation is silent. Never the value or the upstream's body.
+ * `environment.secrets.verify@1.0`: a stored secret by id, or the add dialog's
+ * candidate before the secret exists. One probe, one evidence receipt:
+ * `probe_accepted`, or `probe_refused` with the closed hop code, or
+ * `unreachable` when the probed incarnation is silent. Never the value or the
+ * upstream's body.
  */
 export const environmentSecretsVerifyRequestSchema = lazySchema(() =>
   z.discriminatedUnion("target", [
@@ -818,18 +808,17 @@ export type EnvironmentSecretsVerifyResponse = z.infer<
   typeof environmentSecretsVerifyResponseSchema
 >;
 
-/** The rotation states (secrets plan, gateway page, the wire's States row). */
+/** The rotation states. */
 export const secretRotationStateSchema = lazySchema(() =>
   z.enum(["accepted", "enforcing", "stalled", "enforced", "failed"]),
 );
 export type SecretRotationState = z.infer<typeof secretRotationStateSchema>;
 
 /**
- * `environment.secrets.replaceValue@1.0` (broker page, the `PATCH` row;
- * rotation controller plan, "Intent and commit"): a value replacement is a
- * rotation, compare-and-set on the version the editor read. `accepted` means
- * committed and nothing more; a stale intent is refused with the current
- * version and who moved it.
+ * `environment.secrets.replaceValue@1.0`: a value replacement is a rotation,
+ * compare-and-set on the version the editor read. `accepted` means committed
+ * and nothing more; a stale intent is refused with the current version and who
+ * moved it.
  */
 export const environmentSecretsReplaceValueRequestSchema = lazySchema(() =>
   z.object({
@@ -862,12 +851,11 @@ export type EnvironmentSecretsReplaceValueResponse = z.infer<
 >;
 
 /**
- * `environment.secrets.versions@1.0` (broker page, Human routes, `GET
- * .../secrets/:secretId/versions`): "the versions list with ordinal,
- * created, superseded and destroyed times and the rotation state of each
- * (never a value)". `current` marks the live version (surfaces page: "which
- * is current"); `rotationState` is the state of the rotation that made the
- * version current, `null` for the first version.
+ * `environment.secrets.versions@1.0` (`GET .../secrets/:secretId/versions`):
+ * "the versions list with ordinal, created, superseded and destroyed times and
+ * the rotation state of each (never a value)". `current` marks the live
+ * version; `rotationState` is the state of the rotation that made the version
+ * current, `null` for the first version.
  */
 export const environmentSecretsVersionsRequestSchema = lazySchema(() =>
   z.object({ secretId: z.string().min(1) }),
@@ -897,10 +885,10 @@ export type EnvironmentSecretsVersionsResponse = z.infer<
 >;
 
 /**
- * `environment.secrets.undo@1.0` (broker page, `POST .../versions/:versionId/
- * undo`): "a rotation back to that version's content under a fresh epoch,
- * refused `version_destroyed` for a tombstone and refused when the secret is
- * revoked unless the caller re-grants in the same action". `regrant` is that
+ * `environment.secrets.undo@1.0` (`POST .../versions/:versionId/undo`): "a
+ * rotation back to that version's content under a fresh epoch, refused
+ * `version_destroyed` for a tombstone and refused when the secret is revoked
+ * unless the caller re-grants in the same action". `regrant` is that
  * same-action re-grant; the revoked refusal's code is `secret_revoked`.
  */
 export const environmentSecretsUndoRequestSchema = lazySchema(() =>
@@ -938,10 +926,10 @@ export type EnvironmentSecretsUndoResponse = z.infer<
 >;
 
 /**
- * `environment.secrets.destroy@1.0` (broker page, `POST .../versions/
- * :versionId/destroy`): "nulls a superseded version's ciphertext at once and
- * records the event, and is refused `version_current` for the live version
- * until it is replaced or revoked".
+ * `environment.secrets.destroy@1.0` (`POST .../versions/:versionId/destroy`):
+ * "nulls a superseded version's ciphertext at once and records the event, and
+ * is refused `version_current` for the live version until it is replaced or
+ * revoked".
  */
 export const environmentSecretsDestroyRequestSchema = lazySchema(() =>
   z.object({
@@ -971,12 +959,11 @@ export type EnvironmentSecretsDestroyResponse = z.infer<
 >;
 
 /**
- * One evidence entry of a `rotation_ack` receipt (gateway page, the wire's
- * Evidence row): `kind` from the closed three, and `count` exactly as that
- * row gives it per kind. `session_closed` counts the sessions closed,
- * nullable only for a class that holds no sessions; `cache_cleared` counts
- * the entries dropped, never null, zero allowed; `probe_refused` is null,
- * one probe being one.
+ * One evidence entry of a `rotation_ack` receipt: `kind` from the closed three,
+ * and `count` as given per kind. `session_closed` counts the sessions closed,
+ * nullable only for a class that holds no sessions; `cache_cleared` counts the
+ * entries dropped, never null, zero allowed; `probe_refused` is null, one probe
+ * being one.
  */
 export const rotationEvidenceSchema = lazySchema(() =>
   z.discriminatedUnion("kind", [
@@ -994,15 +981,13 @@ export const rotationEvidenceSchema = lazySchema(() =>
 export type RotationEvidence = z.infer<typeof rotationEvidenceSchema>;
 
 /**
- * One producer that owes, or wrote, a `rotation_ack` (gateway page, the
- * wire's Acknowledgement and Enforced rows; broker page, the rotation row:
- * "per host and class, the evidence entries of its `rotation_ack` receipt, or
- * 'contained by expiry' for an incarnation that is no longer live").
- * `acknowledged` carries the receipt's evidence; `missing` is what keeps the
- * rotation `enforcing`; `contained_by_expiry` is an incarnation whose
- * authorization provably ceased (it owes none, and supplies no count); a
- * host the gateway did not deliver to owes none and shows
- * `applies_on_resume`.
+ * One producer that owes, or wrote, a `rotation_ack`: "per host and class, the
+ * evidence entries of its `rotation_ack` receipt, or 'contained by expiry' for
+ * an incarnation that is no longer live". `acknowledged` carries the receipt's
+ * evidence; `missing` is what keeps the rotation `enforcing`;
+ * `contained_by_expiry` is an incarnation whose authorization provably ceased
+ * (it owes none, and supplies no count); a host the gateway did not deliver to
+ * owes none and shows `applies_on_resume`.
  */
 export const rotationProducerSchema = lazySchema(() =>
   z.discriminatedUnion("producer", [
@@ -1025,13 +1010,12 @@ export const rotationProducerSchema = lazySchema(() =>
 export type RotationProducer = z.infer<typeof rotationProducerSchema>;
 
 /**
- * `environment.secrets.rotation@1.0` (broker page, `GET .../secrets/
- * :secretId/rotation`): "the current rotation's state (`accepted`,
- * `enforcing`, `stalled`, `enforced`, `failed`) and, per host and class, the
- * evidence entries of its `rotation_ack` receipt ... and the secret's last
- * Verify result". `rotationId` is `SecretRotation.id`; `issuedAt` is the
- * rotate frame's (gateway page, the wire's Control frame row), `null` before
- * the controller's first send; `stalled` is sixty seconds after it.
+ * `environment.secrets.rotation@1.0` (`GET .../secrets/:secretId/rotation`):
+ * "the current rotation's state (`accepted`, `enforcing`, `stalled`,
+ * `enforced`, `failed`) and, per host and class, the evidence entries of its
+ * `rotation_ack` receipt ... and the secret's last Verify result". `rotationId`
+ * is `SecretRotation.id`; `issuedAt` is the rotate frame's, `null` before the
+ * controller's first send; `stalled` is sixty seconds after it.
  */
 export const environmentSecretsRotationRequestSchema = lazySchema(() =>
   z.object({ secretId: z.string().min(1) }),
@@ -1062,11 +1046,10 @@ export type EnvironmentSecretsRotationResponse = z.infer<
 >;
 
 /**
- * `environment.secrets.consent@1.0` (broker page, `POST .../secrets/
- * :secretId/consent`, and the `SecretConsentAcceptance` model): "appends a
- * `SecretConsentAcceptance` row for the disclosure version shown, the scope
- * and the authenticated actor". The actor is the caller, never a field.
- * `disclosure` is the model's closed enum, open on this wire with
+ * `environment.secrets.consent@1.0` (`POST .../secrets/:secretId/consent`):
+ * "appends a `SecretConsentAcceptance` row for the disclosure version shown,
+ * the scope and the authenticated actor". The actor is the caller, never a
+ * field. `disclosure` is that row's closed enum, open on this wire with
  * `plaintext_gateway` known.
  */
 export const SECRET_CONSENT_DISCLOSURES = ["plaintext_gateway"] as const;
@@ -1107,10 +1090,10 @@ export type ReachPrincipalCategory = z.infer<
 >;
 
 /**
- * One same-principal refusal this host made (identity page, the A2A row): the
- * opaque source and target host references, the task, the reason and the two
- * principal categories. Never message text, never a display label. `count`
- * folds the repeats of one (target, task, category pair) inside its window.
+ * One same-principal refusal this host made: the opaque source and target host
+ * references, the task, the reason and the two principal categories. Never
+ * message text, never a display label. `count` folds the repeats of one
+ * (target, task, category pair) inside its window.
  */
 export const reachDenialSchema = lazySchema(() =>
   z.object({

@@ -2,13 +2,13 @@ import { defineRpcContract } from "../framework/index";
 import * as schemas from "./environment-schemas";
 
 /**
- * The environment methods: every one a NEW name at
- * `@1.0`, off `RELEASED_FLOOR_METHOD_NAMES` and registered with
- * `degrade: { kind: "unsupported" }`, as `host.sandbox.repairGuestConfiguration`
- * was. A new method name is handshake-fatal against a released peer
- * otherwise; with the degrade, a host that predates a method (or composes no
- * resolver for it) leaves it out of its optional manifest and the GUI meets
- * `E_HOST_UNSUPPORTED`. Shapes and their plan sources:
+ * The environment methods: every one a NEW name at `@1.0`, off
+ * `RELEASED_FLOOR_METHOD_NAMES` and registered with
+ * `degrade: { kind: "unsupported" }`, as
+ * `host.sandbox.repairGuestConfiguration` was. A new method name is
+ * handshake-fatal against a released peer otherwise; with the degrade, a host
+ * that predates a method (or composes no resolver for it) leaves it out of its
+ * optional manifest and the GUI meets `E_HOST_UNSUPPORTED`. Shapes:
  * `environment-schemas.ts`.
  *
  * Which carry the executable-write grant: `config.env.localOverride.set`,

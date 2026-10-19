@@ -11,9 +11,8 @@ import { frozenDestroyAt } from "@/lib/sandboxes/sandbox-balance";
 
 /**
  * The sandbox card's per-state copy and actions, kept free of React so the
- * table is read (and tested) in one place. Copy follows the core flows'
- * "what each state means to the user" table; actions are the verbs the
- * control plane accepts from that state (adapter plan, state machine).
+ * table is read (and tested) in one place. Copy says what each state means to
+ * the user; actions are the verbs the control plane accepts from that state.
  */
 
 /** An action the card offers. `destroy` always asks for confirmation. */

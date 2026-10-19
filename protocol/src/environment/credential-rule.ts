@@ -9,14 +9,14 @@ import {
  * stored or distributed.
  *
  * ONE function, called by every surface that can put a value into the
- * environment: the host's migrator before anything leaves the host, the
- * host's Settings resolvers on a variable save, the dashboard's Variables page
- * before its PUT, and the desktop's Variables and shells page before its
- * write. A save and a migrated upload therefore never disagree about one value.
- * It lives here because `@traycer/protocol` is the one package all of them
- * import; it is pure and browser-safe (no Node imports), like the rest of it.
+ * environment: the host's migrator before anything leaves the host, the host's
+ * Settings resolvers on a variable save, the dashboard's Variables page before
+ * its PUT, and the desktop's Variables and shells page before its write. A save
+ * and a migrated upload therefore never disagree about one value. It lives here
+ * because `@traycer/protocol` is the one package all of them import; it is pure
+ * and browser-safe (no Node imports), like the rest of it.
  *
- * Two tests, in order (migration and uploads plan, "Held from distribution"):
+ * Two tests, in order:
  *
  * 1. The FIELD. A name the product knows carries a credential (an API key
  *    field, a token header, a password) is classified by the name alone and
