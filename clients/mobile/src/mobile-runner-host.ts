@@ -150,10 +150,14 @@ import type {
 import type { MobileAuthSheet } from "./auth-sheet";
 import type { MobilePushRegistration } from "./push-registration";
 
-/** One selection-fleet member: a host id, and whether it is a sandbox. */
+/**
+ * One selection-fleet member: a host id, whether it is a sandbox and whether
+ * a team owns it.
+ */
 export interface FleetHostRow {
   readonly hostId: string;
   readonly sandbox: boolean;
+  readonly teamOwned: boolean;
 }
 
 export interface MobileRunnerHostOptions {
@@ -472,6 +476,7 @@ export class MobileRunnerHost implements IRunnerHost {
       rows.map((row) => ({
         hostId: row.hostId,
         kind: row.sandbox ? ("sandbox" as const) : ("remote" as const),
+        teamOwned: row.teamOwned,
       })),
     );
   }
@@ -509,6 +514,7 @@ export class MobileRunnerHost implements IRunnerHost {
     return result.response.hosts.map((host) => ({
       hostId: host.hostId,
       sandbox: host.kind === "sandbox",
+      teamOwned: host.owner?.kind === "team",
     }));
   }
 

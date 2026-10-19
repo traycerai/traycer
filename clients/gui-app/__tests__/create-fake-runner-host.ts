@@ -24,7 +24,7 @@ function createDefaultLocalSelectionAuthority(localHostId: string) {
     revision: 0,
     identityGeneration: 0,
     localHostId,
-    hosts: [{ hostId: localHostId, kind: "local" as const }],
+    hosts: [{ hostId: localHostId, kind: "local" as const, teamOwned: false }],
   });
   const identity = new InMemoryAuthorityIdentitySource(null);
   const mount = createInProcessSelectionAuthority({
@@ -38,7 +38,7 @@ function createDefaultLocalSelectionAuthority(localHostId: string) {
     log: silentAuthorityLog,
   });
   fleet.publish(identity.current().generation, localHostId, [
-    { hostId: localHostId, kind: "local" as const },
+    { hostId: localHostId, kind: "local" as const, teamOwned: false },
   ]);
   return mount.client;
 }

@@ -785,13 +785,17 @@ export function parseSelectionChange(raw: unknown): SelectionChange | null {
  * version-refused. `persist-failed`: the preference could not be made
  * DURABLE (write/rename failure) - the host is fine, no state moved, no
  * event fired, and the SAME Activate may be retried (the store re-attempts
- * the write). `unrecognized` is the parser's mapping for future members.
+ * the write). `team-host`: a team owns this host; personal organisation
+ * state lives in the member's own environment, which a team host does not
+ * serve, so a team host is never the app-wide host. `unrecognized` is the
+ * parser's mapping for future members.
  * Deliberately NOT refused: a registered host that is currently offline -
  * preferred is intent, not liveness (D1/D5).
  */
 export type ActivateRefusalReason =
   | "unknown-host"
   | "incompatible"
+  | "team-host"
   | "not-attached"
   | "persist-failed"
   | "unrecognized";
@@ -812,6 +816,7 @@ export function parseActivateResult(raw: unknown): ActivateResult {
       reason:
         reason === "unknown-host" ||
         reason === "incompatible" ||
+        reason === "team-host" ||
         reason === "not-attached" ||
         reason === "persist-failed"
           ? reason
@@ -1155,6 +1160,13 @@ export interface SelectionAuthorityClient {
 export interface HostFleetEntry {
   hostId: string;
   kind: "local" | "remote" | "sandbox";
+  /**
+   * A team owns this host (the registry row's `owner`). A team host serves
+   * its team's environment, not the member's personal one, so it is never
+   * the app-wide host: `activate` refuses it and a stored preference for it
+   * is cleared. A tab can still be bound to it.
+   */
+  teamOwned: boolean;
 }
 
 /** An atomic fleet observation: identity and membership from one read. */

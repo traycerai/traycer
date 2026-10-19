@@ -122,6 +122,7 @@ import {
 } from "../../host-selection/selection-authority-engine";
 import {
   fetchRegisteredHostsViaHttp,
+  isRemoteHostDirectoryEntry,
   type HostListFetchResult,
 } from "../remote-fetcher";
 import {
@@ -1138,12 +1139,20 @@ export class MockRunnerHost implements IRunnerHost {
       hostId: entry.hostId,
       kind:
         entry.hostId === localHostId ? ("local" as const) : ("remote" as const),
+      teamOwned:
+        isRemoteHostDirectoryEntry(entry) &&
+        entry.sandbox !== null &&
+        entry.sandbox.ownerTeamId !== null,
     }));
     if (
       localHostId !== null &&
       !hosts.some((entry) => entry.hostId === localHostId)
     ) {
-      hosts.push({ hostId: localHostId, kind: "local" as const });
+      hosts.push({
+        hostId: localHostId,
+        kind: "local" as const,
+        teamOwned: false,
+      });
     }
     this.selectionFleet.publish(
       this.selectionIdentity.current().generation,

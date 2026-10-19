@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   SELECTION_AUTHORITY_CONTRACT_VERSION,
+  type HostFleetEntry,
   type SelectionAuthorityClient,
   type SelectionChange,
   type SelectionRevisioned,
@@ -76,7 +77,7 @@ interface TestAuthority {
 
 function buildAuthority(input: {
   readonly localHostId: string | null;
-  readonly hosts: readonly { hostId: string; kind: "local" | "remote" }[];
+  readonly hosts: readonly HostFleetEntry[];
   readonly identityKey: string;
   /** Pre-seed the preferred store BEFORE the engine reads it at construction. */
   readonly seedPreferred?: string | null;
@@ -208,7 +209,7 @@ describe("mountSelectionAuthorityBridge", () => {
   it("(a) pushes a kernel snapshot's effectiveHostId into the store", async () => {
     const authority = buildAuthority({
       localHostId: "L",
-      hosts: [{ hostId: "L", kind: "local" }],
+      hosts: [{ hostId: "L", kind: "local", teamOwned: false }],
       identityKey: "acct-1",
     });
     const kernel = await startKernel(authority.client);
@@ -244,8 +245,8 @@ describe("mountSelectionAuthorityBridge", () => {
     const authority = buildAuthority({
       localHostId: "L",
       hosts: [
-        { hostId: "L", kind: "local" },
-        { hostId: "P", kind: "remote" },
+        { hostId: "L", kind: "local", teamOwned: false },
+        { hostId: "P", kind: "remote", teamOwned: false },
       ],
       identityKey: "acct-1",
       seedPreferred: "P",
@@ -275,8 +276,8 @@ describe("mountSelectionAuthorityBridge", () => {
     const authority = buildAuthority({
       localHostId: "L",
       hosts: [
-        { hostId: "L", kind: "local" },
-        { hostId: "P", kind: "remote" },
+        { hostId: "L", kind: "local", teamOwned: false },
+        { hostId: "P", kind: "remote", teamOwned: false },
       ],
       identityKey: "acct-1",
     });
@@ -360,9 +361,9 @@ describe("mountSelectionAuthorityBridge", () => {
     trackSpy.mockClear();
     const g4CountBeforeFleetShift = g4Events.length;
     authority.fleet.publish(0, "L", [
-      { hostId: "L", kind: "local" },
-      { hostId: "P", kind: "remote" },
-      { hostId: "Q", kind: "remote" },
+      { hostId: "L", kind: "local", teamOwned: false },
+      { hostId: "P", kind: "remote", teamOwned: false },
+      { hostId: "Q", kind: "remote", teamOwned: false },
     ]);
     await flushMicrotasks();
     expect(useSelectionAuthorityStore.getState().effectiveHostId).toBe("P");
@@ -393,8 +394,8 @@ describe("mountSelectionAuthorityBridge", () => {
     const authority = buildAuthority({
       localHostId: "L",
       hosts: [
-        { hostId: "L", kind: "local" },
-        { hostId: "P", kind: "remote" },
+        { hostId: "L", kind: "local", teamOwned: false },
+        { hostId: "P", kind: "remote", teamOwned: false },
       ],
       identityKey: "acct-1",
     });
@@ -607,7 +608,7 @@ describe("mountSelectionAuthorityBridge", () => {
   it("(f) dispose unsubscribes and resets the store", async () => {
     const authority = buildAuthority({
       localHostId: "L",
-      hosts: [{ hostId: "L", kind: "local" }],
+      hosts: [{ hostId: "L", kind: "local", teamOwned: false }],
       identityKey: "acct-1",
     });
     const pushes = subscribeEffectiveHostIdPushes();
@@ -627,8 +628,8 @@ describe("mountSelectionAuthorityBridge", () => {
     // move the store again.
     const pushesAtDispose = pushes.calls.length;
     authority.fleet.publish(0, "L", [
-      { hostId: "L", kind: "local" },
-      { hostId: "M", kind: "remote" },
+      { hostId: "L", kind: "local", teamOwned: false },
+      { hostId: "M", kind: "remote", teamOwned: false },
     ]);
     await flushMicrotasks();
     expect(pushes.calls.length).toBe(pushesAtDispose);

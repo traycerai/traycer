@@ -3673,10 +3673,7 @@ describe("SelectionAuthorityEngineImpl - P1.3 F14 clear on identity adopt (H)", 
     readonly bPreference: string;
     readonly bFleet: {
       readonly localHostId: string | null;
-      readonly hosts: readonly {
-        hostId: string;
-        kind: "local" | "remote" | "sandbox";
-      }[];
+      readonly hosts: readonly HostFleetEntry[];
     };
   }): {
     engine: SelectionAuthorityEngineImpl;
@@ -5823,6 +5820,7 @@ describe("SelectionAuthorityEngineImpl - sandboxes are fleet members the engine 
   const sandboxHost = (hostId: string): HostFleetEntry => ({
     hostId,
     kind: "sandbox",
+    teamOwned: false,
   });
 
   it("failover skips a sandbox that precedes a healthy remote in fleet order", async () => {
@@ -5920,6 +5918,116 @@ describe("SelectionAuthorityEngineImpl - sandboxes are fleet members the engine 
     if (sandboxLease === undefined) throw new Error("expected a lease for S");
     expect(sandboxLease.status).not.toBe("dead");
     expect(engine.snapshot().effectiveHostId).toBeNull();
+    authority.dispose();
+  });
+});
+
+describe("SelectionAuthorityEngineImpl - team hosts", () => {
+  const remoteHost = (hostId: string, teamOwned: boolean): HostFleetEntry => ({
+    hostId,
+    kind: "remote",
+    teamOwned,
+  });
+
+  it("refuses to make a team-owned host the app-wide host and persists nothing", async () => {
+    const clock = createFakeAuthorityClock(0);
+    const authority = createTestAuthority({
+      initialFleet: {
+        identityGeneration: 0,
+        localHostId: "L",
+        hosts: [fleetHost("L", "local"), remoteHost("T", true)],
+      },
+      initialIdentityKey: "acct-1",
+      clock,
+    });
+    const { engine, preferredStore } = authority;
+    const incarnation = attachReporter(engine, "A");
+
+    expect(await engine.activate("A", incarnation, "T")).toEqual({
+      ok: false,
+      reason: "team-host",
+    });
+
+    expect(engine.snapshot().preferredHostId).toBeNull();
+    expect(engine.snapshot().targetHostId).toBe("L");
+    expect(preferredStore.load("acct-1")).toBeNull();
+    expect(
+      authority.events.some(
+        (event) =>
+          event.kind === "selection" && event.change.cause === "activate",
+      ),
+    ).toBe(false);
+
+    authority.dispose();
+  });
+
+  it("a personal remote host is still activated", async () => {
+    const clock = createFakeAuthorityClock(0);
+    const authority = createTestAuthority({
+      initialFleet: {
+        identityGeneration: 0,
+        localHostId: "L",
+        hosts: [fleetHost("L", "local"), remoteHost("P", false)],
+      },
+      initialIdentityKey: "acct-1",
+      clock,
+    });
+    const { engine, preferredStore } = authority;
+    const incarnation = attachReporter(engine, "A");
+
+    expect(await engine.activate("A", incarnation, "P")).toEqual({ ok: true });
+
+    expect(engine.snapshot().preferredHostId).toBe("P");
+    expect(preferredStore.load("acct-1")).toBe("P");
+
+    authority.dispose();
+  });
+
+  it("clears a stored preference for a team-owned host at construction and falls back to the local host", () => {
+    const clock = createFakeAuthorityClock(0);
+    const authority = createTestAuthority({
+      initialFleet: {
+        identityGeneration: 0,
+        localHostId: "L",
+        hosts: [fleetHost("L", "local"), remoteHost("T", true)],
+      },
+      initialIdentityKey: "acct-1",
+      clock,
+      seedPreferred: "T",
+    });
+
+    expect(authority.engine.snapshot().preferredHostId).toBeNull();
+    expect(authority.engine.snapshot().targetHostId).toBe("L");
+    expect(authority.preferredStore.load("acct-1")).toBeNull();
+
+    authority.dispose();
+  });
+
+  it("clears the preference when the preferred host turns out to be team-owned in a later fleet snapshot", async () => {
+    const clock = createFakeAuthorityClock(0);
+    const authority = createTestAuthority({
+      initialFleet: {
+        identityGeneration: 0,
+        localHostId: "L",
+        hosts: [fleetHost("L", "local"), remoteHost("P", false)],
+      },
+      initialIdentityKey: "acct-1",
+      clock,
+    });
+    const { engine, fleet, preferredStore } = authority;
+    const incarnation = attachReporter(engine, "A");
+    expect(await engine.activate("A", incarnation, "P")).toEqual({ ok: true });
+    expect(engine.snapshot().preferredHostId).toBe("P");
+
+    fleet.publish(0, "L", [fleetHost("L", "local"), remoteHost("P", true)]);
+
+    expect(engine.snapshot().preferredHostId).toBeNull();
+    expect(engine.snapshot().targetHostId).toBe("L");
+    expect(preferredStore.load("acct-1")).toBeNull();
+    expect(lastSelectionChange(authority.events).cause).toBe(
+      "deregister-clear",
+    );
+
     authority.dispose();
   });
 });

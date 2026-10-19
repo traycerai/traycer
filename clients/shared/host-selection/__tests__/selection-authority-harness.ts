@@ -240,7 +240,7 @@ export function fleetHost(
   hostId: string,
   kind: "local" | "remote",
 ): HostFleetEntry {
-  return { hostId, kind };
+  return { hostId, kind, teamOwned: false };
 }
 
 /** Finds a host's lease in a leases array the way tests want to assert on it. */

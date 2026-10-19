@@ -156,6 +156,10 @@ export function fleetRowsOf(
     ? outcome.entries.map((entry) => ({
         hostId: entry.hostId,
         sandbox: isRemoteHostDirectoryEntry(entry) && entry.sandbox !== null,
+        teamOwned:
+          isRemoteHostDirectoryEntry(entry) &&
+          entry.sandbox !== null &&
+          entry.sandbox.ownerTeamId !== null,
       }))
     : null;
 }

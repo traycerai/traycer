@@ -25,7 +25,10 @@ import {
   type HostScopeOption,
 } from "@/components/settings/host-scope/host-scope-model";
 import { wakeSandboxOnPick } from "@/lib/sandboxes/sandbox-wake";
-import { hostOptionCanActivate } from "@/components/settings/host-scope/host-option-model";
+import {
+  hostOptionCanActivate,
+  TEAM_HOST_ACTIVATE_REASON,
+} from "@/components/settings/host-scope/host-option-model";
 
 export interface HostScope {
   /** Every host this account owns or this client can dial, merged and sorted. */
@@ -395,7 +398,8 @@ export async function requestActivate(
  * trouble to distinguish. That is exactly how `persist-failed` arrived.
  *
  * Two families, and the split matters for the copy: `unknown-host` /
- * `incompatible` are statements ABOUT THE HOST and name it; `not-attached` /
+ * `incompatible` are statements ABOUT THE HOST and name it (`team-host` is
+ * one too, said once for every team host); `not-attached` /
  * `persist-failed` are failures of this window's own machinery, where naming
  * the host would misattribute the fault to a machine that is fine.
  */
@@ -407,6 +411,7 @@ const ACTIVATE_REFUSAL_COPY: Record<
     `${label} is no longer registered to this account.`,
   incompatible: (label) =>
     `${label} needs a host update before it can be activated.`,
+  "team-host": () => TEAM_HOST_ACTIVATE_REASON,
   "not-attached": () =>
     "This window lost its connection to the selection service - reload and try again.",
   // Nothing moved: the preference was refused BEFORE any state changed and no

@@ -333,8 +333,8 @@ describe("fleetRowsOf", () => {
     const rows = fleetRowsOf(await fetcher(SIGNED_IN_ERA));
 
     expect(rows).toEqual([
-      { hostId: DEV_HOST_ID, sandbox: false },
-      { hostId: SANDBOX_HOST_ID, sandbox: true },
+      { hostId: DEV_HOST_ID, sandbox: false, teamOwned: false },
+      { hostId: SANDBOX_HOST_ID, sandbox: true, teamOwned: false },
     ]);
   });
 

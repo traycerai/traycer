@@ -1630,6 +1630,7 @@ export function HostOverviewPanel(props: {
             ? () => scope.makeActive(host.hostId)
             : null
         }
+        teamOwned={host.sandbox?.teamOwned === true}
         activateBusy={scope.isActivating}
         onCopyHostId={() => hostIdCopy.copy(host.hostId)}
         // A phone's name row never wraps: Activate becomes the menu's first

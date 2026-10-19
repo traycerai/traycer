@@ -162,6 +162,25 @@ describe("requestActivate (Settings ▸ Activate, the only preferred-host write 
     );
   });
 
+  it("reason team-host: no analytics, toasts that team hosts can't be made active without naming the host", async () => {
+    const trackSpy = vi.spyOn(Analytics.getInstance(), "track");
+    const activate = vi.fn((): Promise<ActivateResult> =>
+      Promise.resolve({ ok: false, reason: "team-host" }),
+    );
+    const option = hostScopeOptionFixture({
+      hostId: "team-1",
+      name: "Platform Pod",
+    });
+
+    await requestActivate(fakeAuthority(activate), "team-1", option);
+
+    expect(trackSpy).not.toHaveBeenCalled();
+    expect(toast.error).toHaveBeenCalledTimes(1);
+    expect(toast.error).toHaveBeenCalledWith(
+      "Team hosts can't be made active.",
+    );
+  });
+
   it("reason not-attached: no analytics, toasts the reload-and-retry copy (option-independent)", async () => {
     const trackSpy = vi.spyOn(Analytics.getInstance(), "track");
     const activate = vi.fn((): Promise<ActivateResult> =>

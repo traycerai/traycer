@@ -596,7 +596,11 @@ describe("DesktopHostFleetSource", () => {
 
     expect(fleet.snapshot().hosts).toHaveLength(1);
     for (const entry of fleet.snapshot().hosts) {
-      expect(Object.keys(entry).sort()).toEqual(["hostId", "kind"]);
+      expect(Object.keys(entry).sort()).toEqual([
+        "hostId",
+        "kind",
+        "teamOwned",
+      ]);
     }
     fleet.dispose();
   });
@@ -627,8 +631,50 @@ describe("DesktopHostFleetSource", () => {
     await fleet.refresh();
 
     expect(fleet.snapshot().hosts).toEqual([
-      { hostId: "local-host", kind: "local" },
-      { hostId: "remote-host", kind: "remote" },
+      { hostId: "local-host", kind: "local", teamOwned: false },
+      { hostId: "remote-host", kind: "remote", teamOwned: false },
+    ]);
+    fleet.dispose();
+  });
+
+  it("publishes teamOwned only for a registry row a team owns", async () => {
+    const dir = await makeTempDir();
+    const enrollmentFile = await writeEnrollment(dir, "local-host");
+    const authSession = new DesktopAuthSession();
+    setVerifiedSession(authSession, signedInSnapshot("user-a", "token-1"));
+    const identity = new FakeIdentitySource("user-a", 0);
+    const host = new FakeHostLifecycle();
+    host.identityEnrollmentFile = enrollmentFile;
+    const fleet = buildFleetSource({
+      identity,
+      authSession,
+      host,
+      listRegisteredHosts: async () => ({
+        kind: "ok",
+        response: {
+          hosts: [
+            buildHostListItem("local-host"),
+            {
+              ...buildHostListItem("team-host"),
+              owner: { kind: "team", id: "team-1", name: "Platform" },
+            },
+            {
+              ...buildHostListItem("own-host"),
+              owner: { kind: "user", id: "user-a" },
+            },
+            buildHostListItem("remote-host"),
+          ],
+        },
+      }),
+    });
+
+    await fleet.refresh();
+
+    expect(fleet.snapshot().hosts).toEqual([
+      { hostId: "local-host", kind: "local", teamOwned: false },
+      { hostId: "own-host", kind: "remote", teamOwned: false },
+      { hostId: "remote-host", kind: "remote", teamOwned: false },
+      { hostId: "team-host", kind: "remote", teamOwned: true },
     ]);
     fleet.dispose();
   });
@@ -654,8 +700,8 @@ describe("DesktopHostFleetSource", () => {
     await fleet.refresh();
 
     expect(fleet.snapshot().hosts).toEqual([
-      { hostId: "local-host", kind: "local" },
-      { hostId: "remote-host", kind: "remote" },
+      { hostId: "local-host", kind: "local", teamOwned: false },
+      { hostId: "remote-host", kind: "remote", teamOwned: false },
     ]);
     fleet.dispose();
   });
@@ -868,6 +914,7 @@ describe("DesktopHostFleetSource", () => {
     expect(snapshots.at(-1)?.hosts).toContainEqual({
       hostId: "host-b",
       kind: "remote",
+      teamOwned: false,
     });
 
     // ...THEN resolve A's now-doubly-stale fetch LAST.
@@ -970,7 +1017,7 @@ describe("DesktopHostFleetSource", () => {
       expect(snapshots).toHaveLength(1);
       expect(snapshots[0]).toMatchObject({
         localHostId: "local-host",
-        hosts: [{ hostId: "local-host", kind: "local" }],
+        hosts: [{ hostId: "local-host", kind: "local", teamOwned: false }],
       });
       fleet.dispose();
     }
@@ -1016,8 +1063,8 @@ describe("DesktopHostFleetSource", () => {
     expect(snapshots[0]).toMatchObject({
       localHostId: "local-host",
       hosts: [
-        { hostId: "local-host", kind: "local" },
-        { hostId: "remote-1", kind: "remote" },
+        { hostId: "local-host", kind: "local", teamOwned: false },
+        { hostId: "remote-1", kind: "remote", teamOwned: false },
       ],
     });
     fleet.dispose();
@@ -1586,11 +1633,15 @@ describe("DesktopHostFleetSource publishRegistryResponse", () => {
 
     // The push carries the full row - status DTO and all.
     expect(published[0]?.response.hosts[0]).toHaveProperty("status");
-    // The snapshot the authority itself reads carries ONLY hostId/kind -
+    // The snapshot the authority itself reads carries ONLY hostId/kind/teamOwned -
     // unchanged by this port gaining a second consumer of the same fetch.
     expect(fleet.snapshot().hosts).toHaveLength(1);
     for (const entry of fleet.snapshot().hosts) {
-      expect(Object.keys(entry).sort()).toEqual(["hostId", "kind"]);
+      expect(Object.keys(entry).sort()).toEqual([
+        "hostId",
+        "kind",
+        "teamOwned",
+      ]);
     }
     fleet.dispose();
   });

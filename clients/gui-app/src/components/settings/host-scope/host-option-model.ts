@@ -490,6 +490,12 @@ export function hostOptionCanActivate(host: HostScopeOption): boolean {
 }
 
 /**
+ * Why a team's host is never this window's host. Shown on its disabled
+ * Activate and as the refusal when a switch to one is asked for anyway.
+ */
+export const TEAM_HOST_ACTIVATE_REASON = "Team hosts can't be made active.";
+
+/**
  * One team's hosts in a list: its sandboxes and pods, and the
  * burst ones an agent made, under the team's name.
  */

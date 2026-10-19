@@ -664,6 +664,7 @@ export class DesktopHostFleetSource implements HostFleetSource {
       response.hosts.map((row): FleetRow => ({
         hostId: row.hostId,
         sandbox: row.kind === "sandbox",
+        teamOwned: row.owner?.kind === "team",
       })),
       readAtMs,
     );
@@ -851,13 +852,14 @@ export class DesktopHostFleetSource implements HostFleetSource {
 }
 
 /**
- * One registry row as the fleet needs it: the id, and whether the registry
- * calls it a sandbox (a member the engine never auto-selects; see
- * `HostFleetEntry`).
+ * One registry row as the fleet needs it: the id, whether the registry calls
+ * it a sandbox (a member the engine never auto-selects) and whether a team
+ * owns it (never the app-wide host); see `HostFleetEntry`.
  */
 interface FleetRow {
   readonly hostId: string;
   readonly sandbox: boolean;
+  readonly teamOwned: boolean;
 }
 
 /**
@@ -878,9 +880,10 @@ function composeFleetEntries(
     hostId: row.hostId,
     kind:
       row.hostId === localHostId ? "local" : row.sandbox ? "sandbox" : "remote",
+    teamOwned: row.teamOwned,
   }));
   if (localHostId !== null && !rows.some((row) => row.hostId === localHostId)) {
-    entries.push({ hostId: localHostId, kind: "local" });
+    entries.push({ hostId: localHostId, kind: "local", teamOwned: false });
   }
   return entries.sort((left, right) =>
     left.hostId < right.hostId ? -1 : left.hostId > right.hostId ? 1 : 0,

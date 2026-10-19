@@ -60,6 +60,7 @@ function buildWorld() {
     hosts: registry.current.map((hostId) => ({
       hostId,
       kind: "remote" as const,
+      teamOwned: false,
     })),
   });
 
@@ -89,6 +90,7 @@ function buildWorld() {
         registry.current.map((hostId) => ({
           hostId,
           kind: "remote" as const,
+          teamOwned: false,
         })),
       );
       return Promise.resolve();
