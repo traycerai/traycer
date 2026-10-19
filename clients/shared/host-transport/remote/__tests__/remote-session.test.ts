@@ -61,8 +61,10 @@ import {
   encodeMuxFrame,
   SESSION_CAPABILITY_BODY_COMPRESSION,
   SESSION_CAPABILITY_CLOUD_VERDICT_UPDATE,
+  SESSION_CAPABILITY_MEMBER_CREDENTIAL,
   OPEN_AUTHZ_SESSION_GRANT_VERSION,
   type EncodeMuxFrameInput,
+  type MemberCredentialHandoff,
   type MuxFrame,
   type MuxFrameTypeValue,
   type QosClassValue,
@@ -456,6 +458,12 @@ class FakeRelayHost {
    * the way `subscribeParams` is for SUBSCRIBE).
    */
   readonly cloudVerdictUpdates: boolean[] = [];
+  /**
+   * The reassembled json of every CREDENTIAL_UPDATE control frame the client
+   * sent (raw, like `openAuthz`: the point is what the transport put on the
+   * wire). Post-reassembly for the reason `cloudVerdictUpdates` is.
+   */
+  readonly credentialUpdates: unknown[] = [];
   /** Unexpected harness-side failures; asserted empty by the tests. */
   readonly errors: unknown[] = [];
   decideOpen: (bearer: string, openIndex: number) => OpenDecision = () => ({
@@ -791,6 +799,10 @@ class FakeRelayHost {
       if (json !== null && typeof json.cloudAuthorized === "boolean") {
         this.cloudVerdictUpdates.push(json.cloudAuthorized);
       }
+      return;
+    }
+    if (message.type === MuxFrameType.CREDENTIAL_UPDATE) {
+      this.credentialUpdates.push(message.json);
       return;
     }
     if (message.type === MuxFrameType.CREDIT) {
@@ -1191,6 +1203,7 @@ function buildSessionOptions(
     // `HOST_STATUS_LIVENESS_PROBE`, a `host.status` registry and a matching
     // `relay.floorRpcManifest`.
     livenessProbe: null,
+    mintMemberCredential: null,
   };
 }
 
@@ -9855,6 +9868,8 @@ describe("RemoteSession host-dialer traffic accounting (protocol base class, tas
       unaryResponseMs: 330_000,
       clientIdentity: TEST_CLIENT_IDENTITY,
       livenessProbe: null,
+      // A host-to-host dialer holds no member credential to hand.
+      mintMemberCredential: null,
     });
   }
 
@@ -10995,6 +11010,220 @@ describe("RemoteSession refused attach grant", () => {
         expect(session.isClosed()).toBe(false);
         expect(session.terminalFatal()).toBeNull();
         expect(counts.dials).toBe(0);
+      } finally {
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+});
+
+const MEMBER_HANDOFF: MemberCredentialHandoff = {
+  token: "member-token",
+  refreshToken: "member-refresh-token",
+  familyId: "family-1",
+  provisionedAt: "2026-10-19T00:00:00.000Z",
+};
+
+function buildMemberCredentialSession(
+  relay: FakeRelayHost,
+  mint: ((hostId: string) => Promise<MemberCredentialHandoff | null>) | null,
+): RemoteSession<VersionedRpcRegistry, VersionedStreamRpcRegistry> {
+  applySilenceFloor(relay, SILENCE_FLOOR_METHODS);
+  const lease = new MutableBearerLease("token", "user-1");
+  return new RemoteSession({
+    ...buildSessionOptions(relay, lease, null),
+    rpcRegistry: silenceProbeRegistry(),
+    mintMemberCredential: mint,
+  });
+}
+
+function sendHostStatus(
+  session: RemoteSession<VersionedRpcRegistry, VersionedStreamRpcRegistry>,
+): Promise<unknown> {
+  return session.sendUnary(
+    "host.status",
+    {},
+    null,
+    null,
+    null,
+    undefined,
+    false,
+    null,
+  );
+}
+
+/**
+ * A team host spends only a member credential the client hands it after
+ * `OPEN_ACK`, so nothing may run on the session before that frame: the
+ * session holds its `ready` boundary (which is what releases parked callers
+ * and re-opens subscriptions) until the credential frame is enqueued.
+ */
+describe("RemoteSession member credential hand-off", () => {
+  it(
+    "enqueues the minted credential as the first client frame after OPEN_ACK, before any request parked ahead of the ack",
+    async () => {
+      const relay = new FakeRelayHost();
+      relay.openAckCapabilities = [SESSION_CAPABILITY_MEMBER_CREDENTIAL];
+      // Hold the ack so the unary below is issued strictly BEFORE it arrives.
+      relay.stallOpens = true;
+      let releaseMint: (handoff: MemberCredentialHandoff | null) => void = () =>
+        undefined;
+      const minted = new Promise<MemberCredentialHandoff | null>((resolve) => {
+        releaseMint = resolve;
+      });
+      const mint = vi.fn((_hostId: string) => minted);
+      const session = buildMemberCredentialSession(relay, mint);
+      try {
+        session.start();
+        const pending = sendHostStatus(session);
+        await vi.waitFor(() => expect(relay.openBearers).toHaveLength(1), WAIT);
+        await relay.releaseStalledOpens();
+
+        // The ack is in and the mint is outstanding: the session must NOT be
+        // ready, and nothing may have reached the wire behind the open.
+        await vi.waitFor(() => expect(mint).toHaveBeenCalledTimes(1), WAIT);
+        expect(mint).toHaveBeenCalledWith("host-1");
+        expect(session.isReady()).toBe(false);
+        expect(relay.credentialUpdates).toEqual([]);
+        expect(relay.unaryRequests).toEqual([]);
+
+        releaseMint(MEMBER_HANDOFF);
+        await expect(pending).resolves.toEqual({ ready: true });
+
+        const types = relay.clientFrames.map((frame) => frame.type);
+        const afterOpen = types.slice(types.indexOf(MuxFrameType.OPEN) + 1);
+        expect(afterOpen[0]).toBe(MuxFrameType.CREDENTIAL_UPDATE);
+        expect(relay.credentialUpdates).toEqual([
+          { bearer: null, memberCredential: MEMBER_HANDOFF },
+        ]);
+        expect(types.indexOf(MuxFrameType.CREDENTIAL_UPDATE)).toBeLessThan(
+          types.indexOf(MuxFrameType.REQUEST),
+        );
+        expect(relay.errors).toEqual([]);
+      } finally {
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+
+  it.each([
+    ["resolves null", "mint-unavailable", () => Promise.resolve(null)],
+    [
+      "throws",
+      "mint-failed",
+      () => Promise.reject(new Error("authn unreachable")),
+    ],
+  ])(
+    "a mint that %s sends no credential, warns once, and still opens the session",
+    async (_label, reason, mintBody) => {
+      const relay = new FakeRelayHost();
+      relay.openAckCapabilities = [SESSION_CAPABILITY_MEMBER_CREDENTIAL];
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const mint = vi.fn((_hostId: string) => mintBody());
+      const session = buildMemberCredentialSession(relay, mint);
+      try {
+        session.start();
+        // The parked unary going out and resolving is the proof the open
+        // completed without the credential.
+        await expect(sendHostStatus(session)).resolves.toEqual({ ready: true });
+
+        expect(session.isReady()).toBe(true);
+        expect(mint).toHaveBeenCalledTimes(1);
+        const handoffWarnings = warnSpy.mock.calls.filter(
+          (call) =>
+            typeof call[0] === "string" &&
+            call[0].includes("member credential not handed:"),
+        );
+        expect(handoffWarnings).toHaveLength(1);
+        expect(handoffWarnings[0]?.[0]).toContain(reason);
+        expect(relay.credentialUpdates).toEqual([]);
+        expect(relay.errors).toEqual([]);
+      } finally {
+        warnSpy.mockRestore();
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+
+  it(
+    "a credential that resolves after the host leg detached is carried by the redial's attach instead of minting again",
+    async () => {
+      const FIRST_HANDOFF: MemberCredentialHandoff = {
+        token: "first-member-token",
+        refreshToken: "first-member-refresh-token",
+        familyId: "family-first",
+        provisionedAt: "2026-10-19T01:00:00.000Z",
+      };
+      const relay = new FakeRelayHost();
+      relay.openAckCapabilities = [SESSION_CAPABILITY_MEMBER_CREDENTIAL];
+      let releaseFirstMint: (
+        handoff: MemberCredentialHandoff | null,
+      ) => void = () => undefined;
+      const firstMint = new Promise<MemberCredentialHandoff | null>(
+        (resolve) => {
+          releaseFirstMint = resolve;
+        },
+      );
+      const mint = vi
+        .fn((_hostId: string) =>
+          Promise.resolve<MemberCredentialHandoff | null>(null),
+        )
+        .mockImplementationOnce((_hostId: string) => firstMint);
+      const session = buildMemberCredentialSession(relay, mint);
+      try {
+        session.start();
+        await vi.waitFor(() => expect(mint).toHaveBeenCalledTimes(1), WAIT);
+        expect(session.isReady()).toBe(false);
+
+        // The host leg goes while the mint is outstanding, and the mint only
+        // settles afterwards: the credential has no live attach to ride.
+        relay.sendHostAttachment("host_detached");
+        releaseFirstMint(FIRST_HANDOFF);
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        expect(session.isReady()).toBe(false);
+        expect(relay.credentialUpdates).toEqual([]);
+
+        // The redial's own ack carries the held credential and does not mint.
+        relay.sendHostAttachment("host_attached");
+        await expect(sendHostStatus(session)).resolves.toEqual({ ready: true });
+
+        expect(session.isReady()).toBe(true);
+        expect(relay.credentialUpdates).toEqual([
+          { bearer: null, memberCredential: FIRST_HANDOFF },
+        ]);
+        expect(mint).toHaveBeenCalledTimes(1);
+        const types = relay.clientFrames.map((frame) => frame.type);
+        const afterRedialOpen = types.slice(
+          types.lastIndexOf(MuxFrameType.OPEN) + 1,
+        );
+        expect(afterRedialOpen[0]).toBe(MuxFrameType.CREDENTIAL_UPDATE);
+        expect(afterRedialOpen).toContain(MuxFrameType.REQUEST);
+        expect(relay.errors).toEqual([]);
+      } finally {
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+
+  it(
+    "a personal host's openAck without the member capability mints nothing and sends no credential frame",
+    async () => {
+      const relay = new FakeRelayHost();
+      relay.openAckCapabilities = [];
+      const mint = vi.fn((_hostId: string) => Promise.resolve(MEMBER_HANDOFF));
+      const session = buildMemberCredentialSession(relay, mint);
+      try {
+        session.start();
+        await expect(sendHostStatus(session)).resolves.toEqual({ ready: true });
+
+        expect(session.isReady()).toBe(true);
+        expect(mint).not.toHaveBeenCalled();
+        expect(relay.credentialUpdates).toEqual([]);
+        expect(relay.errors).toEqual([]);
       } finally {
         session.close();
       }

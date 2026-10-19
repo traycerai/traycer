@@ -94,6 +94,7 @@ function transportFor(bearerSource: OpenFrameBearerSource | null) {
     },
     requestId: () => "req-1",
     proactiveWakeEligible: true,
+    mintMemberCredential: null,
     evidence: NO_TRANSPORT_EVIDENCE,
   });
 }
@@ -252,6 +253,7 @@ describe("createRemoteHostTransport cloudAuthorized gate (Option D — mint-only
         webSocketFactory,
         requestId: () => "req-1",
         proactiveWakeEligible: true,
+        mintMemberCredential: null,
         evidence: NO_TRANSPORT_EVIDENCE,
       });
       expect(built).not.toBeNull();
@@ -365,6 +367,7 @@ describe("createRemoteHostTransport cloudAuthorized gate (Option D — mint-only
         webSocketFactory,
         requestId: () => "req-1",
         proactiveWakeEligible: true,
+        mintMemberCredential: null,
         evidence: NO_TRANSPORT_EVIDENCE,
       });
       expect(built).not.toBeNull();
@@ -673,6 +676,7 @@ describe("createRemoteHostTransport reports a TEAM_MEMBER_REMOVED session close"
       webSocketFactory: relay.factory,
       requestId: () => "req-e17",
       proactiveWakeEligible: true,
+      mintMemberCredential: null,
       evidence: NO_TRANSPORT_EVIDENCE,
     });
   }

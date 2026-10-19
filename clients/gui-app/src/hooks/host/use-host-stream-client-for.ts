@@ -33,6 +33,7 @@ import type { HostClient } from "@traycer-clients/shared/host-client/host-client
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
 import {
   appHostCredentialMintFlow,
+  mintAppMemberCredential,
   noteHostCredentialState,
 } from "@/lib/auth/host-credential-provisioning";
 import { acquireHostStreamClient } from "@/lib/host/host-stream-client-cache";
@@ -336,6 +337,7 @@ export function buildHostStreamClient(params: {
       evidence: transportEvidenceRelay,
       clientIdentity: getGuiClientIdentity(),
       proactiveWakeEligible: params.proactiveWakeEligible,
+      mintMemberCredential: mintAppMemberCredential,
     });
     if (remoteTransport === null) return null;
     if (params.autoStart) {

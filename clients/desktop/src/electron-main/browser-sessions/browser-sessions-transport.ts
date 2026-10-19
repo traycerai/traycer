@@ -303,6 +303,9 @@ export function openBrowserSessionsTransport(
       clientIdentity,
       // The jar stream re-snapshots on replay, so the wake sweep may probe it.
       proactiveWakeEligible: true,
+      // A personal host takes the user bearer on OPEN and offers no member
+      // credential capability.
+      mintMemberCredential: null,
     });
     if (remote === null) return null;
     remote.session.start();

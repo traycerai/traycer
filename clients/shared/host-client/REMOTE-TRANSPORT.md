@@ -145,6 +145,15 @@ every resume**:
 }
 ```
 
+A team host's session-grant session offers `memberCredential` in place of
+`credentialUpdate`. The host spends only a member credential the client hands
+it after `OPEN_ACK`, so the client mints the member's credential and sends
+`CREDENTIAL_UPDATE {bearer: null, memberCredential}` as the first frame after
+the ack; the session is not ready, and carries no request or subscription,
+until that frame is enqueued. It does the same on every re-attach. A mint that
+fails is logged and the session goes on, so the host's own refusal names the
+cause.
+
 ### Manifest shape (floor / optional split)
 
 `rpc`, `optionalRpc` and `stream` are **all three required** on both frames -

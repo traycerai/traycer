@@ -28,6 +28,7 @@ import { createWhatwgWebSocketFactory } from "@traycer-clients/shared/host-trans
 import { transportEvidenceRelay } from "@/lib/host/transport-evidence";
 import { appServerClock } from "@/lib/clock/app-server-clock";
 import { getGuiClientIdentity } from "@/lib/host/client-identity";
+import { mintAppMemberCredential } from "@/lib/auth/host-credential-provisioning";
 import {
   authorizesCloudCapability,
   useAuthStore,
@@ -154,6 +155,7 @@ export function buildRawHostMessengerForTarget<
       // reconnect replay could double-execute. Messenger-only bindings are in
       // fact a case the process-wide sweep exists to reach.
       proactiveWakeEligible: true,
+      mintMemberCredential: mintAppMemberCredential,
     });
     if (remoteTransport === null) return null;
     return {

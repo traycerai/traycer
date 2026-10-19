@@ -3,6 +3,7 @@ import type {
   VersionedRpcRegistry,
 } from "@traycer/protocol/framework/index";
 import type { VersionedStreamRpcRegistry } from "@traycer/protocol/framework/versioned-stream-rpc";
+import type { MemberCredentialHandoff } from "@traycer/protocol/host-transport/mux";
 import type {
   BearerSourceProvider,
   OpenFrameBearerSource,
@@ -184,6 +185,19 @@ export interface CreateRemoteTransportOptions<
    * inferred from `auth`.
    */
   readonly proactiveWakeEligible: boolean;
+  /**
+   * Mints the member credential a team host spends for this session's member
+   * (`RemoteSessionOptions.mintMemberCredential`). Handed to the session only
+   * when {@link openAuth} is `session-grant`; a personal host takes the user
+   * bearer on `open` and never offers the capability.
+   *
+   * Not part of the cache identity: every consumer in the process passes the
+   * app's one mint flow, so a cache hit inheriting it inherits the only value
+   * any consumer could have passed.
+   */
+  readonly mintMemberCredential:
+    | ((hostId: string) => Promise<MemberCredentialHandoff | null>)
+    | null;
 }
 
 /** See {@link CreateRemoteTransportOptions.openAuth}. */
@@ -316,6 +330,10 @@ export function createRemoteHostTransport<
         // verdict; a composition that should not make silence claims (a
         // host-to-host dialer) passes `null` at its own constructor.
         livenessProbe: HOST_STATUS_LIVENESS_PROBE,
+        mintMemberCredential:
+          options.openAuth === "session-grant"
+            ? options.mintMemberCredential
+            : null,
       });
       // A team host ends a removed member's session with this fatal; the app
       // turns the first report for a team into its one toast and one close of
