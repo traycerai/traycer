@@ -11,10 +11,12 @@ import {
 import { resolveHostAuth } from "../host-auth";
 import { readHostPidMetadata } from "../../host/pid-metadata";
 import {
+  HostRequestAbortedError,
   HostRpcError,
   HostTransportFailureError,
   RetryableTransportError,
 } from "../../../../shared/host-transport/host-messenger";
+import { RetryEpisodeOutcomeUnknownError } from "../../../../shared/host-transport/retrying-messenger";
 import { createCliCredentialsStore } from "../../store/credentials-store";
 import type { CredentialsMutationStore } from "@traycer/protocol/config/credentials-mutation";
 import { CLI_ERROR_CODES, EXPECTED_CLI_ERROR_CODES } from "../../runner/errors";
@@ -602,12 +604,15 @@ describe("callHostRpc", () => {
     );
   });
 
-  // A `HostTransportFailureError` means the connection itself failed or went
-  // quiet - the host never answered. This must map to HOST_UNREACHABLE
-  // rather than UNEXPECTED (its wire code is RPC_ERROR, indistinguishable by
-  // code alone from a resolver error the host actually answered with), and
-  // the transport's own message must pass through unchanged.
-  it("maps a HostTransportFailureError to HOST_UNREACHABLE with the transport's own message", async () => {
+  // A PLAIN `HostTransportFailureError` is the one shape the transport builds
+  // after the request frame went out with nothing making a replay safe
+  // (`requestSent && !requestReplaySafe`): the host may have carried the call
+  // out and answered into a connection that was already gone. It must NOT
+  // share HOST_UNREACHABLE, whose meaning is that nothing happened and the
+  // command can simply be run again - that reading is what made callers resend
+  // a message the host had already delivered. The transport's own message is
+  // kept and the guidance is appended to it.
+  it("maps a plain HostTransportFailureError to HOST_REQUEST_OUTCOME_UNKNOWN and says the request was sent", async () => {
     await expect(
       toAgentCliError(
         Promise.reject(
@@ -621,17 +626,31 @@ describe("callHostRpc", () => {
         ),
       ),
     ).rejects.toMatchObject({
-      code: CLI_ERROR_CODES.HOST_UNREACHABLE,
-      message: "WebSocket frame timed out after 15000ms",
+      code: CLI_ERROR_CODES.HOST_REQUEST_OUTCOME_UNKNOWN,
+      message:
+        "traycer: WebSocket frame timed out after 15000ms - the request was sent and the host may have carried it out; check before sending it again.",
       details: null,
       exitCode: 1,
     });
   });
 
-  // RetryableTransportError is a subclass of HostTransportFailureError (the
-  // retrying messenger's own signal that a redial is safe); it must map the
-  // same way as its parent class.
-  it("maps a RetryableTransportError (a HostTransportFailureError subclass) to HOST_UNREACHABLE the same way", async () => {
+  // The new code reports a state of the machine, not a CLI defect, so it is
+  // opted out of capture exactly as HOST_UNREACHABLE is. Without this the
+  // every-night volume this defect produces would be reported as defects.
+  it("treats HOST_REQUEST_OUTCOME_UNKNOWN as an expected outcome, not a captured defect", () => {
+    expect(
+      EXPECTED_CLI_ERROR_CODES.has(
+        CLI_ERROR_CODES.HOST_REQUEST_OUTCOME_UNKNOWN,
+      ),
+    ).toBe(true);
+  });
+
+  // RetryableTransportError is a subclass of HostTransportFailureError, and it
+  // is the transport's own statement that sending again is safe - either
+  // nothing was dispatched or the host is deduplicating a negotiated key. That
+  // is precisely what HOST_UNREACHABLE means, so it stays there and must not
+  // follow its parent class to the unknown-outcome code.
+  it("keeps a RetryableTransportError on HOST_UNREACHABLE, where a retry is safe", async () => {
     await expect(
       toAgentCliError(
         Promise.reject(
@@ -649,6 +668,67 @@ describe("callHostRpc", () => {
       code: CLI_ERROR_CODES.HOST_UNREACHABLE,
       message: "WebSocket frame timed out after 15000ms",
       details: null,
+      exitCode: 1,
+    });
+  });
+
+  // An ended retry episode whose EARLIER attempt was sent and lost is a plain
+  // `HostTransportFailureError` subclass carrying that fact in its own class.
+  // The host may be running that earlier send whatever the later attempt did.
+  it("maps a RetryEpisodeOutcomeUnknownError to HOST_REQUEST_OUTCOME_UNKNOWN", async () => {
+    await expect(
+      toAgentCliError(
+        Promise.reject(
+          new RetryEpisodeOutcomeUnknownError(
+            new HostRpcError({
+              code: "UNAUTHORIZED",
+              message: "bearer rejected",
+              requestId: "r1",
+              method: METHOD,
+              fatalDetails: null,
+            }),
+          ),
+        ),
+      ),
+    ).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.HOST_REQUEST_OUTCOME_UNKNOWN,
+      details: null,
+      exitCode: 1,
+    });
+  });
+
+  // An abort answers the question on its own flag rather than by its class:
+  // stopping the wait does not recall a request the host may already be
+  // running, while an abort before any send leaves nothing behind.
+  it("splits an aborted request by mayHaveDispatched", async () => {
+    await expect(
+      toAgentCliError(
+        Promise.reject(
+          new HostRequestAbortedError({
+            message: "Host request authority was aborted while open",
+            requestId: "r1",
+            method: METHOD,
+            mayHaveDispatched: true,
+          }),
+        ),
+      ),
+    ).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.HOST_REQUEST_OUTCOME_UNKNOWN,
+      exitCode: 1,
+    });
+    await expect(
+      toAgentCliError(
+        Promise.reject(
+          new HostRequestAbortedError({
+            message: "Host request authority was aborted before dispatch",
+            requestId: "r1",
+            method: METHOD,
+            mayHaveDispatched: false,
+          }),
+        ),
+      ),
+    ).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.HOST_UNREACHABLE,
       exitCode: 1,
     });
   });

@@ -245,8 +245,10 @@ export interface WsRpcClientOptions<Registry extends VersionedRpcRegistry> {
  *     own response deadline expires first, the socket is held open for a
  *     bounded remainder of `hostAttestationWindowMs` so that attestation can
  *     still arrive; the ambiguous local timeout on its own stays non-retryable,
- *     and once it has been recorded every other non-abort terminal event
- *     reports it rather than its own error.
+ *     and once it has been recorded the only frames that can still settle the
+ *     call are that attestation and this request's own response - every other
+ *     non-abort terminal event reports the recorded timeout rather than its own
+ *     error.
  *   - missing / released bearer before dial → `HostRpcError(code: "RPC_ERROR")`
  *   - every other host `fatalError { code }` (`INCOMPATIBLE`, `UNAUTHORIZED`,
  *     or a domain-specific code) → known RPC codes are preserved on
@@ -970,6 +972,20 @@ function isPostOpenTimeoutAttestation(frame: HostFrame): boolean {
   return frame.kind === "fatalError" && isRpcRequestTimeout(frame.details);
 }
 
+/**
+ * True for the frame that answers the caller's own request: the host ran this
+ * exact call and reported its outcome, error envelope included.
+ *
+ * Correlated on `requestId` HERE rather than left to `decodeResponseFrame`,
+ * even though one session carries one request. A response for another id
+ * proves nothing about this one, and resolving on it would replace an honest
+ * "outcome unknown" with a definite correlation failure - the opposite of what
+ * a caller that has to reconcile needs.
+ */
+function isResponseToRequest(frame: HostFrame, requestId: string): boolean {
+  return frame.kind === "response" && frame.requestId === requestId;
+}
+
 function isRpcRequestTimeout(details: FatalErrorDetails): boolean {
   if (details.code === RPC_REQUEST_TIMEOUT_FATAL_CODE) {
     return true;
@@ -1233,10 +1249,10 @@ function openSession(options: SessionOptions): Session {
   let requestReplaySafe = false;
   let failure: HostRpcError | null = null;
   // Non-null only for the duration of the attestation grace: the ambiguous
-  // post-send response timeout that will be raised unless the host attests,
-  // within the remainder of its post-`openAck` window, that it never dispatched
-  // the request. While it is set it is the session's decided outcome - see the
-  // sticky rule in `failAll`.
+  // post-send response timeout that will be raised unless, within the
+  // remainder of the host's post-`openAck` window, the host either attests
+  // that it never dispatched the request or answers it. While it is set it is
+  // the session's decided outcome - see the sticky rule in `failAll`.
   let ambiguousResponseTimeout: HostRpcError | null = null;
 
   /**
@@ -1316,12 +1332,13 @@ function openSession(options: SessionOptions): Session {
    * here, which is also where the post-deadline outcome is made sticky:
    * once `ambiguousResponseTimeout` is recorded, that error *is* the call's
    * answer, because the request may already have been dispatched and only the
-   * host's no-dispatch attestation - which resolves the wait rather than
-   * failing it - can change that. A close, a transport error, a malformed
-   * frame, a late/unrelated frame, and grace expiry are all downstream of a
-   * fate already decided, so none of them may substitute its own error and make
-   * the reported failure race-dependent. An authority abort is the one
-   * caller-owned cancellation that still overrides.
+   * host speaking to this request - its no-dispatch attestation, or the
+   * response to this exact `requestId`, both of which resolve the wait rather
+   * than failing it - can change that. A close, a transport error, a malformed
+   * frame, a frame that answers nothing of this request's, and grace expiry are
+   * all downstream of a fate already decided, so none of them may substitute
+   * its own error and make the reported failure race-dependent. An authority
+   * abort is the one caller-owned cancellation that still overrides.
    */
   const failAll = (error: HostRpcError): void => {
     const ambiguous = ambiguousResponseTimeout;
@@ -1470,14 +1487,24 @@ function openSession(options: SessionOptions): Session {
     }
     const frame = frameParse.data;
     if (frameResolver !== null) {
-      // Once the caller's response deadline has elapsed no frame can still
-      // satisfy this call. Only the host's no-dispatch attestation changes the
-      // outcome - it is handed to the caller, which maps it to a
-      // `RetryableTransportError`. Anything else, including a `response` that
-      // merely arrived late, keeps the recorded response-timeout failure.
+      // Once the caller's response deadline has elapsed, the call's fate is
+      // decided unless the HOST itself speaks to this request. Exactly two
+      // frames do, and both are handed to the caller:
+      //   - its no-dispatch attestation, which lifts the ambiguity by proving
+      //     nothing ran; the caller maps it to a `RetryableTransportError`;
+      //   - this request's OWN response, which is the definitive answer. The
+      //     host ran the call and said what happened, so failing the wait over
+      //     it would report a transport failure the host has just contradicted
+      //     - an `agent.sendMessage` whose message was delivered exited
+      //     `E_HOST_UNREACHABLE` while its own success frame sat on this
+      //     socket, and its callers resent the message.
+      // Anything else keeps the recorded response-timeout failure: a close, a
+      // malformed frame, an unrelated fatal, and a response correlated to some
+      // other request, none of which says what became of this one.
       if (
         ambiguousResponseTimeout !== null &&
-        !isPostOpenTimeoutAttestation(frame)
+        !isPostOpenTimeoutAttestation(frame) &&
+        !isResponseToRequest(frame, requestId)
       ) {
         failWithAmbiguousTimeout();
         return;
@@ -1595,7 +1622,7 @@ function openSession(options: SessionOptions): Session {
           // dispatched, so hold the socket for the rest of the window plus its
           // delivery tail instead. Nothing is decided here: the wait still fails
           // with this same ambiguous, non-retryable timeout unless the host's
-          // no-dispatch fatal lands first.
+          // no-dispatch fatal or this request's own response lands first.
           ambiguousResponseTimeout = ambiguous;
           armAttestationLeg(grace);
         }, timeoutMs);

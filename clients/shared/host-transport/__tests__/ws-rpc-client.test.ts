@@ -2507,12 +2507,52 @@ describe("WsRpcClient", () => {
       expect(sockets).toHaveLength(1);
     });
 
-    it("a late response frame during grace does not resolve the call", async () => {
+    // The host answering this request is the one thing that can outrank the
+    // recorded timeout besides the no-dispatch attestation: it ran the call and
+    // said what happened, so the deadline the client set for itself describes
+    // nothing any more. Failing over a success frame sitting on this very
+    // socket is what made `traycer agent send` report an unreachable host for a
+    // message the host had delivered.
+    it("a late response to this request during grace resolves the call", async () => {
       const { factory, sockets } = makeFactory();
       const client = makeClient({
         factory,
         authToken: "t",
         requestId: "req-grace-late-response",
+        dialTimeoutMs: 1_000,
+        frameTimeoutMs: CLI_FRAME_TIMEOUT_MS,
+        hostAttestationWindowMs: HOST_ATTESTATION_WINDOW_MS,
+      });
+
+      const pending = client.request("host.echo", { message: "x" });
+      await driveUntilRequestSent(sockets);
+
+      await vi.advanceTimersByTimeAsync(CLI_FRAME_TIMEOUT_MS);
+      expect(sockets[0].socket.closed).toBeNull();
+
+      const requestFrame = expectRequestFrame(sockets[0].sent[1]);
+      sockets[0].socket.fireMessage({
+        kind: "response",
+        requestId: requestFrame.requestId,
+        method: requestFrame.method,
+        schemaVersion: requestFrame.schemaVersion,
+        result: { echoed: "LATE" },
+        error: null,
+      });
+      await expect(pending).resolves.toEqual({ echoed: "LATE" });
+      // No redial: the answer arrived on the connection that was still held.
+      expect(sockets).toHaveLength(1);
+    });
+
+    // The correlation is what keeps the arm above honest. A response for some
+    // other request says nothing about this one, so it must leave the ambiguous
+    // timeout standing rather than replace it with a definite failure.
+    it("a late response correlated to another request keeps the ambiguous timeout", async () => {
+      const { factory, sockets } = makeFactory();
+      const client = makeClient({
+        factory,
+        authToken: "t",
+        requestId: "req-grace-foreign-response",
         dialTimeoutMs: 1_000,
         frameTimeoutMs: CLI_FRAME_TIMEOUT_MS,
         hostAttestationWindowMs: HOST_ATTESTATION_WINDOW_MS,
@@ -2535,11 +2575,49 @@ describe("WsRpcClient", () => {
       const requestFrame = expectRequestFrame(sockets[0].sent[1]);
       sockets[0].socket.fireMessage({
         kind: "response",
+        requestId: `${requestFrame.requestId}-someone-else`,
+        method: requestFrame.method,
+        schemaVersion: requestFrame.schemaVersion,
+        result: { echoed: "NOT MINE" },
+        error: null,
+      });
+      await rejection;
+    });
+
+    // A host error envelope is an answer too: the host ran the call and
+    // reported that it failed, which the caller must see instead of a
+    // transport failure it can retry.
+    it("a late response carrying a host error envelope settles as that host error", async () => {
+      const { factory, sockets } = makeFactory();
+      const client = makeClient({
+        factory,
+        authToken: "t",
+        requestId: "req-grace-late-error",
+        dialTimeoutMs: 1_000,
+        frameTimeoutMs: CLI_FRAME_TIMEOUT_MS,
+        hostAttestationWindowMs: HOST_ATTESTATION_WINDOW_MS,
+      });
+
+      const pending = client.request("host.echo", { message: "x" });
+      const rejection = expect(pending).rejects.toSatisfy(
+        (error: unknown) =>
+          error instanceof HostRpcError &&
+          !(error instanceof HostTransportFailureError) &&
+          error.message === "agent not found",
+      );
+      await driveUntilRequestSent(sockets);
+
+      await vi.advanceTimersByTimeAsync(CLI_FRAME_TIMEOUT_MS);
+      expect(sockets[0].socket.closed).toBeNull();
+
+      const requestFrame = expectRequestFrame(sockets[0].sent[1]);
+      sockets[0].socket.fireMessage({
+        kind: "response",
         requestId: requestFrame.requestId,
         method: requestFrame.method,
         schemaVersion: requestFrame.schemaVersion,
-        result: { echoed: "LATE" },
-        error: null,
+        result: null,
+        error: { code: "E_AGENT_NOT_FOUND", message: "agent not found" },
       });
       await rejection;
     });
