@@ -398,6 +398,59 @@ describe("<SandboxCard /> per state", () => {
     expect(screen.queryByTestId("sandbox-card-suspend-keeps")).toBeNull();
   });
 
+  it("reads what a suspend keeps from the catalogue entry of the sandbox's own OS", () => {
+    // A provider serving two OSes is one catalogue entry per OS, each with
+    // its own suspend: the card of one OS never says what the other keeps.
+    const entry = {
+      provider: "daytona",
+      shape: {
+        cpuMin: 1,
+        cpuMax: 4,
+        cpuStep: 1,
+        memoryPerCpuMinMb: 1024,
+        memoryPerCpuMaxMb: 8192,
+        memoryMinMb: 1024,
+        memoryMaxMb: 16384,
+        memoryStepMb: 512,
+        diskMinMb: 10240,
+        diskMaxMb: 51200,
+        diskDefaultMb: 10240,
+      },
+      stoppedStorage: "disk",
+      dockerInGuest: false,
+      creatable: true,
+      notCreatableReason: null,
+      regions: [],
+    };
+    mocks.catalogue = {
+      providers: [
+        {
+          ...entry,
+          os: ["linux"],
+          suspendFidelity: "disk",
+          wakeClass: "cold-boot",
+        },
+        {
+          ...entry,
+          os: ["windows"],
+          suspendFidelity: "memory",
+          wakeClass: "resume",
+        },
+      ],
+    };
+    renderCard(
+      sandboxOf("awake", false, { provider: "daytona", os: "windows" }),
+    );
+    expect(
+      screen.getByTestId("sandbox-card-suspend-keeps").textContent,
+    ).toContain("keeps memory");
+    cleanup();
+    renderCard(sandboxOf("awake", false, { provider: "daytona", os: "linux" }));
+    expect(
+      screen.getByTestId("sandbox-card-suspend-keeps").textContent,
+    ).toContain("disk only");
+  });
+
   it("shows the cost view and the runway warning when the figures and the warning are in", () => {
     mocks.costs = { sandboxes: [COST], awakeBurnMillicreditsPerHour: 120 };
     mocks.warning = { kind: "critical", runwayMinutes: 20 };
