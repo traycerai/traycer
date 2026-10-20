@@ -145,6 +145,13 @@ interface ChatRecordMutationContext {
 
 interface DeleteChatMutationContext extends ChatRecordMutationContext {
   readonly cloudDeletionToken: string | null;
+  /**
+   * The deleted chat's OWNER, read off the viewer's row at mutate time, which
+   * keys the cloud suppression and the confirmed removal. Not always the
+   * viewer: a team host's environment-owned chat is owned by the environment.
+   * `null` exactly when `viewerUserId` is.
+   */
+  readonly ownerUserId: string | null;
 }
 
 export type DeleteChatMutationOptions = Omit<
@@ -185,7 +192,7 @@ function getChatMutationViewer(
   const row = chats[chatId];
   const rowHostId = row.hostId ?? handle.hostId;
   if (
-    row.userId !== ctx.viewerUserId ||
+    !row.ownedByViewer ||
     (rowHostId !== ctx.hostId && rowHostId !== ownerHostId)
   )
     return null;
@@ -467,6 +474,21 @@ function retainCreatedChatUntilProjected(
     title: request.title,
     ownerUserId,
   });
+}
+
+/**
+ * The owner of the viewer's row for `chatId`, or `null` when the open epic
+ * holds no such row. The row's own `userId`, which for a team host's
+ * environment-owned chat is the environment id - the identity the host serves
+ * the row and its cloud copy under.
+ */
+function viewersChatOwnerUserId(epicId: string, chatId: string): string | null {
+  const handle = getOpenEpicRegistry().peek(epicId);
+  if (handle === null) return null;
+  const chats = handle.store.getState().chats.byId;
+  if (!Object.hasOwn(chats, chatId)) return null;
+  const row = chats[chatId];
+  return row.ownedByViewer ? row.userId : null;
 }
 
 /**
@@ -761,8 +783,10 @@ function useEpicArchiveChatMutation(
           invalidateEpicChatRecords(queryClient, currentHandle.hostId);
           const record = records.find(
             (row) =>
+              // No owner test: `own` is the owner host's word that this row is
+              // the viewer's, and a team host's environment-owned chat names
+              // an owner that is not the viewer.
               row.chatId === variables.chatId &&
-              row.ownerUserId === ctx.viewerUserId &&
               row.originHostId === ownerHostId &&
               row.origin === "own",
           );
@@ -981,18 +1005,18 @@ function settleChatDeletionSuppression(
   ownerHostId: string | null,
   ctx: Pick<
     DeleteChatMutationContext,
-    "cloudDeletionToken" | "hostId" | "viewerUserId"
+    "cloudDeletionToken" | "hostId" | "ownerUserId"
   >,
   epicId: string,
 ): void {
   if (
     data.publicationChatId !== null &&
     ownerHostId !== null &&
-    ctx.viewerUserId !== null
+    ctx.ownerUserId !== null
   ) {
     confirmCloudChatDeletion(ctx.cloudDeletionToken, {
       taskId: epicId,
-      ownerUserId: ctx.viewerUserId,
+      ownerUserId: ctx.ownerUserId,
       ownerHostId,
       chatId: data.publicationChatId,
     });
@@ -1034,6 +1058,10 @@ function useEpicDeleteChatMutation(
         const { hostId, epicId, chatId } = variables;
         const viewerHostId = sessionClient?.getActiveHostId() ?? null;
         const viewerUserId = currentProfileUserId();
+        const ownerUserId =
+          viewerUserId === null
+            ? null
+            : (viewersChatOwnerUserId(epicId, chatId) ?? viewerUserId);
         const cachedPublicationChatId =
           readCachedChatPublicationId(queryClient, hostId, epicId, chatId) ??
           readCachedChatPublicationId(
@@ -1049,13 +1077,14 @@ function useEpicDeleteChatMutation(
           hostId,
           viewerHostId,
           viewerUserId,
+          ownerUserId,
           servingHostId: route.servingHostId(variables),
           cloudDeletionToken:
-            hostId === null || viewerUserId === null
+            hostId === null || ownerUserId === null
               ? null
               : beginCloudChatDeletion({
                   taskId: epicId,
-                  ownerUserId: viewerUserId,
+                  ownerUserId,
                   ownerHostId: hostId,
                   chatId: publicationChatId,
                 }),
@@ -1124,13 +1153,13 @@ function useEpicDeleteChatMutation(
         if (
           handle !== null &&
           ownerHostId !== null &&
-          ctx.viewerUserId !== null &&
+          ctx.ownerUserId !== null &&
           ctx.viewerUserId === currentProfileUserId()
         ) {
           handle.store.getState().applyConfirmedChatMutation({
             kind: "remove",
             chatId: variables.chatId,
-            ownerUserId: ctx.viewerUserId,
+            ownerUserId: ctx.ownerUserId,
             originHostId: ownerHostId,
           });
         }

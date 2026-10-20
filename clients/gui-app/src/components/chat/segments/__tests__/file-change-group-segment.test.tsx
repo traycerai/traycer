@@ -148,7 +148,6 @@ const MANIFEST = {
 
 interface RenderGroupInput {
   readonly accessRole: ChatAccess["role"] | null;
-  readonly currentUserId: string | null;
   readonly activeHostId: string | null;
   readonly activeTurnStatus: ChatActiveTurn["status"] | null;
   readonly localSnapshotsClearedAt: number | null;
@@ -168,7 +167,6 @@ function renderGroup(input: RenderGroupInput) {
         <ChatRestoreProvider
           value={{
             accessRole: input.accessRole,
-            currentUserId: input.currentUserId,
             activeHostId: input.activeHostId,
             activeTurnStatus: input.activeTurnStatus,
             localSnapshotsClearedAt: input.localSnapshotsClearedAt,
@@ -199,7 +197,6 @@ function baseInput(
 ): RenderGroupInput {
   return {
     accessRole: "owner",
-    currentUserId: "owner-1",
     activeHostId: "host-1",
     activeTurnStatus: null,
     localSnapshotsClearedAt: null,

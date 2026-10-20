@@ -80,6 +80,7 @@ const SIDEBAR_CHAT: ChatProjection = {
   createdAt: 1,
   updatedAt: 1,
   userId: null,
+  ownedByViewer: true,
   hostId: null,
   isTitleEditedByUser: false,
   // Neutral scaffolding: this suite exercises drag-source-to-tile mapping,

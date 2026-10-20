@@ -223,6 +223,7 @@ function chat(
     createdAt: 0,
     updatedAt: 0,
     userId: null,
+    ownedByViewer: true,
     hostId,
     isTitleEditedByUser: false,
     // Ordinary registry-backed chat - this suite exercises the open

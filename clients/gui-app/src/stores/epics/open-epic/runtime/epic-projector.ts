@@ -59,7 +59,6 @@ import {
   getEpicMap,
   getTerminalAgentEntry,
   getTerminalAgentsMap,
-  isChatVisibleToUser,
   isTerminalAgentVisibleToUser,
   projectArtifact,
   projectAgentRolesSlice,
@@ -1117,11 +1116,11 @@ function applyChatsSlice(args: ApplyChatsArgs): ChatsSlice {
       }
       continue;
     }
-    const projected = projectChat(id, entry);
+    const projected = projectChat(id, entry, currentUserId);
     // A chat owned by a different user must never enter the projection. Treat a
     // not-visible result like a removal so a chat that arrives mid-session from
     // another collaborator (incremental container add) is dropped from `byId`.
-    if (!isChatVisibleToUser(projected.userId, currentUserId)) {
+    if (!projected.ownedByViewer) {
       if (Object.hasOwn(byId, id)) {
         delete byId[id];
         mutated = true;
@@ -1139,7 +1138,6 @@ function applyChatsSlice(args: ApplyChatsArgs): ChatsSlice {
       next,
       docChats: state.docChats,
       chatRecords,
-      currentUserId,
       docArm,
     });
   }
@@ -1152,7 +1150,6 @@ function applyChatsSlice(args: ApplyChatsArgs): ChatsSlice {
     next,
     docChats: nextDocChats,
     chatRecords,
-    currentUserId,
     docArm,
   });
 }
@@ -1174,16 +1171,10 @@ function unionInto(args: {
   readonly next: MutableProjectedPatch;
   readonly docChats: ChatsSlice;
   readonly chatRecords: ChatsSlice;
-  readonly currentUserId: string | null;
   readonly docArm: EpicDocRecordArms;
 }): ChatsSlice {
-  const { state, next, docChats, chatRecords, currentUserId, docArm } = args;
-  const union = unionChatsForConnection(
-    docChats,
-    chatRecords,
-    currentUserId,
-    docArm,
-  );
+  const { state, next, docChats, chatRecords, docArm } = args;
+  const union = unionChatsForConnection(docChats, chatRecords, docArm);
   if (chatSlicesEq(union, state.chats)) return state.chats;
   next.chats = union;
   return union;

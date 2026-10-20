@@ -157,6 +157,7 @@ describe("projectedSlicesView", () => {
       createdAt: 0,
       updatedAt: 0,
       userId: null,
+      ownedByViewer: true,
       hostId: null,
       isTitleEditedByUser: false,
       // Neutral scaffolding: nothing in these tests reads this field.

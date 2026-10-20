@@ -101,6 +101,9 @@ export function chatProjectionFromPendingCreation(
     createdAt: retained.createdAt,
     updatedAt: retained.createdAt,
     userId: retained.ownerUserId,
+    // The viewer's by construction: this client made it, and the union below
+    // shows it only to the identity it was filed under.
+    ownedByViewer: true,
     hostId: retained.pending.hostId,
     isTitleEditedByUser: false,
     // A creation THIS client just made through `epic.createChat`, which writes
@@ -137,7 +140,9 @@ export function unionPendingChatCreations(
   for (const entry of retained) {
     const { chatId } = entry.pending;
     if (Object.hasOwn(records.byId, chatId)) continue;
-    if (!isChatVisibleToUser(entry.ownerUserId, currentUserId)) continue;
+    if (!isChatVisibleToUser(null, entry.ownerUserId, currentUserId, null)) {
+      continue;
+    }
     if (byId === null || allIds === null) {
       byId = { ...records.byId };
       allIds = [...records.allIds];

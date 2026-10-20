@@ -505,6 +505,7 @@ function warmEpic(
       createdAt: startedAt,
       updatedAt: startedAt,
       userId: null,
+      ownedByViewer: true,
       hostId: "host-a",
       isTitleEditedByUser: false,
       docResident: false,

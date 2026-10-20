@@ -94,7 +94,6 @@ const HOST_ID = "host-1";
 
 const RESTORE_CONTEXT: ChatRestoreContextValue = {
   accessRole: "owner",
-  currentUserId: "user-1",
   activeHostId: "host-1",
   activeTurnStatus: null,
   localSnapshotsClearedAt: null,

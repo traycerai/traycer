@@ -437,7 +437,7 @@ function resolveAdoptableChat(
 ): EpicChatProjection | null {
   if (userId === null) return null;
   const candidates = chatRecords.filter(
-    (chat) => chat.parentId === null && chat.userId === userId,
+    (chat) => chat.parentId === null && chat.ownedByViewer,
   );
   if (candidates.length !== 1) return null;
   return candidates[0];

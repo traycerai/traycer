@@ -39,6 +39,7 @@ import {
   handleHostIds,
 } from "@/lib/registries/epic-session-registry";
 import { ChatRecordsStreamMount } from "@/providers/chat-records-stream-mount";
+import { useAuthStore } from "@/stores/auth/auth-store";
 import { subscribeRecordListDeltaStamps } from "@/lib/records/record-list-delta-stamps";
 
 interface OpenedStream {
@@ -118,6 +119,26 @@ vi.mock("@/lib/host/stream-runtime-context", () => ({
   // `useAddressableHostId` - so the stub lives on this mock, not a second one.
   useStreamHostId: () => streamState.hostId,
 }));
+
+const { observeOwnHistoryRecordChange } = vi.hoisted(() => ({
+  observeOwnHistoryRecordChange: vi.fn(),
+}));
+
+// The real module with its one recording edge spied, so the History bump is
+// read off the call the mount actually makes.
+vi.mock(
+  "@/hooks/home/use-optimistic-activity-history-items",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@/hooks/home/use-optimistic-activity-history-items")
+      >();
+    observeOwnHistoryRecordChange.mockImplementation(
+      actual.observeOwnHistoryRecordChange,
+    );
+    return { ...actual, observeOwnHistoryRecordChange };
+  },
+);
 
 function record(overrides: Partial<ChatRecordSummary>): ChatRecordSummary {
   return {
@@ -259,6 +280,8 @@ function fatalClose(code: string): StreamCloseReason {
 }
 
 afterEach(() => {
+  useAuthStore.getState().setSignedOut();
+  observeOwnHistoryRecordChange.mockClear();
   cleanup();
   getOpenEpicRegistry().disposeAll();
   resetHostConnectionRegistryForTest();
@@ -703,5 +726,92 @@ describe("<ChatRecordsStreamMount /> reopen lane", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe("<ChatRecordsStreamMount /> the History edge of a team host's chat", () => {
+  function signedInAs(userId: string): void {
+    useAuthStore
+      .getState()
+      .setSignedIn(
+        { userId, userName: userId, email: `${userId}@example.com` },
+        { userId, username: userId },
+        [],
+      );
+  }
+
+  it("bumps for an environment-owned `own` row, though its owner is not the viewer", () => {
+    signedInAs("user-b");
+    render(<ChatRecordsStreamMount />);
+
+    emit(
+      {
+        kind: "upsert",
+        epicId: "epic-1",
+        record: record({
+          chatId: "env-chat",
+          ownerUserId: "env_team",
+          updatedAt: 77,
+        }),
+      },
+      null,
+    );
+
+    expect(observeOwnHistoryRecordChange).toHaveBeenCalledWith(
+      "user-b",
+      "epic-1",
+      77,
+    );
+  });
+
+  it("does not bump for a collaborator's `foreign` row", () => {
+    signedInAs("user-b");
+    render(<ChatRecordsStreamMount />);
+
+    emit(
+      {
+        kind: "upsert",
+        epicId: "epic-1",
+        record: record({
+          chatId: "theirs",
+          ownerUserId: "user-c",
+          origin: "foreign",
+        }),
+      },
+      null,
+    );
+
+    expect(observeOwnHistoryRecordChange).not.toHaveBeenCalled();
+  });
+
+  it("still bumps by owner equality for a terminal agent, never by an `own` word", () => {
+    signedInAs("user-b");
+    render(<ChatRecordsStreamMount />);
+
+    emit(
+      {
+        kind: "tuiUpsert",
+        sessionFacet: null,
+        epicId: "epic-1",
+        record: tuiRecord({ ownerUserId: "env_team" }),
+      },
+      null,
+    );
+    expect(observeOwnHistoryRecordChange).not.toHaveBeenCalled();
+
+    emit(
+      {
+        kind: "tuiUpsert",
+        sessionFacet: null,
+        epicId: "epic-1",
+        record: tuiRecord({ ownerUserId: "user-b", updatedAt: 9 }),
+      },
+      null,
+    );
+    expect(observeOwnHistoryRecordChange).toHaveBeenCalledWith(
+      "user-b",
+      "epic-1",
+      9,
+    );
   });
 });
