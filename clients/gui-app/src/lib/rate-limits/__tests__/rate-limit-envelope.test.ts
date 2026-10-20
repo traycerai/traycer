@@ -6,6 +6,7 @@ import type {
 } from "@traycer/protocol/host";
 import {
   buildProviderRateLimitEnvelope,
+  NO_EPISODE,
   envelopeDegradedReason,
   isTransientUnavailableReason,
   mapResponseToProviderRateLimitEnvelope,
@@ -13,6 +14,14 @@ import {
   type ProviderRateLimitEnvelope,
   type RateLimitUsageResponse,
 } from "@/lib/rate-limits/rate-limit-envelope";
+
+/**
+ * The identity a `previous` envelope carries into a row. Negative on purpose:
+ * the builder's counter only ever hands out positives, so a row comparing a
+ * minted identity with this one cannot collide with it however many envelopes
+ * the file has built before it.
+ */
+const PREVIOUS_EPISODE = -1;
 
 const GOOD: ProviderRateLimits = {
   provider: "claude-code",
@@ -124,15 +133,16 @@ describe("buildProviderRateLimitEnvelope", () => {
       response(GOOD),
       1_000,
     );
-    expect(envelope).toEqual({
+    const { episode, ...rest } = envelope;
+    expect(rest).toEqual({
       latest: GOOD,
       lastGood: GOOD,
       lastGoodAt: 1_000,
       lastFailureAt: null,
-      // The reading IS an answer about this account, so it names the episode
-      // any run of failures after it belongs to.
-      lastTerminalAt: 1_000,
     });
+    // The reading IS an answer about this account, so it names the episode any
+    // run of failures after it belongs to.
+    expect(episode).toBeGreaterThan(NO_EPISODE);
   });
 
   it.each(["usage_fetch_failed", "timeout", "connection_failed"] as const)(
@@ -143,7 +153,7 @@ describe("buildProviderRateLimitEnvelope", () => {
         lastGood: GOOD,
         lastGoodAt: 1_000,
         lastFailureAt: null,
-        lastTerminalAt: 1_000,
+        episode: PREVIOUS_EPISODE,
       };
       const envelope = buildProviderRateLimitEnvelope(
         previous,
@@ -158,7 +168,7 @@ describe("buildProviderRateLimitEnvelope", () => {
         // A transient failure answers nothing, so the stamp stays where the
         // last answer put it: every failure in one run carries the same one,
         // which is what names the run.
-        lastTerminalAt: 1_000,
+        episode: PREVIOUS_EPISODE,
       });
     },
   );
@@ -169,13 +179,14 @@ describe("buildProviderRateLimitEnvelope", () => {
       response(unavailable("usage_fetch_failed")),
       1_000,
     );
-    expect(envelope).toEqual({
+    const { episode, ...rest } = envelope;
+    expect(rest).toEqual({
       latest: unavailable("usage_fetch_failed"),
       lastGood: null,
       lastGoodAt: null,
       lastFailureAt: 1_000,
-      lastTerminalAt: null,
     });
+    expect(episode).toBeGreaterThan(NO_EPISODE);
   });
 
   it("retains OpenCode last-good only when a transient carries the same generation", () => {
@@ -207,7 +218,7 @@ describe("buildProviderRateLimitEnvelope", () => {
       lastGood: openCodeGood,
       lastGoodAt: 1_000,
       lastFailureAt: null,
-      lastTerminalAt: null,
+      episode: PREVIOUS_EPISODE,
     };
     const sameGeneration: ProviderRateLimits = {
       provider: "opencode",
@@ -222,7 +233,7 @@ describe("buildProviderRateLimitEnvelope", () => {
       lastGood: openCodeGood,
       lastGoodAt: 1_000,
       lastFailureAt: 2_000,
-      lastTerminalAt: null,
+      episode: PREVIOUS_EPISODE,
     });
   });
 
@@ -255,7 +266,7 @@ describe("buildProviderRateLimitEnvelope", () => {
       lastGood: openCodeGood,
       lastGoodAt: 1_000,
       lastFailureAt: null,
-      lastTerminalAt: null,
+      episode: PREVIOUS_EPISODE,
     };
     const differentGeneration: ProviderRateLimits = {
       provider: "opencode",
@@ -274,7 +285,7 @@ describe("buildProviderRateLimitEnvelope", () => {
       lastGood: null,
       lastGoodAt: null,
       lastFailureAt: 2_000,
-      lastTerminalAt: null,
+      episode: PREVIOUS_EPISODE,
     });
 
     const missingGeneration: ProviderRateLimits = {
@@ -293,7 +304,7 @@ describe("buildProviderRateLimitEnvelope", () => {
       lastGood: null,
       lastGoodAt: null,
       lastFailureAt: 3_000,
-      lastTerminalAt: null,
+      episode: PREVIOUS_EPISODE,
     });
   });
 
@@ -303,22 +314,23 @@ describe("buildProviderRateLimitEnvelope", () => {
       lastGood: GOOD,
       lastGoodAt: 1_000,
       lastFailureAt: 500,
-      lastTerminalAt: 1_000,
+      episode: PREVIOUS_EPISODE,
     };
     const envelope = buildProviderRateLimitEnvelope(
       previous,
       response(unavailable("rate_limits_not_available")),
       2_000,
     );
-    expect(envelope).toEqual({
+    const { episode, ...rest } = envelope;
+    expect(rest).toEqual({
       latest: unavailable("rate_limits_not_available"),
       lastGood: null,
       lastGoodAt: null,
       lastFailureAt: null,
-      // An authoritative reason answers the account as surely as a reading
-      // does, so it ends the episode whatever run of failures was under way.
-      lastTerminalAt: 2_000,
     });
+    // An authoritative reason answers the account as surely as a reading does,
+    // so it ends whatever run of failures was under way.
+    expect(episode).not.toBe(previous.episode);
   });
 
   it("a fresh good reading replaces an older lastGood and clears lastFailureAt tracking forward, keeping only the new lastGoodAt", () => {
@@ -327,7 +339,7 @@ describe("buildProviderRateLimitEnvelope", () => {
       lastGood: GOOD,
       lastGoodAt: 1_000,
       lastFailureAt: 1_500,
-      lastTerminalAt: null,
+      episode: PREVIOUS_EPISODE,
     };
     const envelope = buildProviderRateLimitEnvelope(
       previous,
@@ -342,8 +354,9 @@ describe("buildProviderRateLimitEnvelope", () => {
       // some point) until either another failure or an authoritative
       // unavailable reason updates it again.
       lastFailureAt: 1_500,
-      lastTerminalAt: 2_000,
+      episode: envelope.episode,
     });
+    expect(envelope.episode).not.toBe(previous.episode);
   });
 
   it("retains Codex reset-credit details when a refresh only reports the unchanged count", () => {
@@ -352,7 +365,7 @@ describe("buildProviderRateLimitEnvelope", () => {
       lastGood: CODEX_WITH_RESET_DETAILS,
       lastGoodAt: 1_000,
       lastFailureAt: null,
-      lastTerminalAt: null,
+      episode: PREVIOUS_EPISODE,
     };
     const countOnlyRefresh: ProviderRateLimits = {
       ...CODEX_WITH_RESET_DETAILS,
@@ -379,7 +392,7 @@ describe("buildProviderRateLimitEnvelope", () => {
       lastGood: CODEX_WITH_RESET_DETAILS,
       lastGoodAt: 1_000,
       lastFailureAt: null,
-      lastTerminalAt: null,
+      episode: PREVIOUS_EPISODE,
     };
     const countOnlyRefresh: ProviderRateLimits = {
       ...CODEX_WITH_RESET_DETAILS,
@@ -401,7 +414,7 @@ describe("buildProviderRateLimitEnvelope", () => {
       lastGood: CODEX_WITH_RESET_DETAILS,
       lastGoodAt: 1_000,
       lastFailureAt: null,
-      lastTerminalAt: null,
+      episode: PREVIOUS_EPISODE,
     };
     const emptyDetailRefresh: ProviderRateLimits = {
       ...CODEX_WITH_RESET_DETAILS,
@@ -423,7 +436,7 @@ describe("buildProviderRateLimitEnvelope", () => {
       lastGood: GOOD,
       lastGoodAt: 1_000,
       lastFailureAt: null,
-      lastTerminalAt: null,
+      episode: PREVIOUS_EPISODE,
     };
     const envelope = buildProviderRateLimitEnvelope(
       previous,
@@ -435,8 +448,115 @@ describe("buildProviderRateLimitEnvelope", () => {
       lastGood: null,
       lastGoodAt: null,
       lastFailureAt: null,
-      lastTerminalAt: null,
+      episode: PREVIOUS_EPISODE,
     });
+  });
+});
+
+describe("the episode an envelope names", () => {
+  it("mints one for a reading, and a fresh one for every answer after it", () => {
+    const first = buildProviderRateLimitEnvelope(
+      undefined,
+      response(GOOD),
+      1_000,
+    );
+    // The same millisecond, deliberately: a run of failures is identified by
+    // this value, and two answers that shared one would read as a single run -
+    // the second of which would then be owed no scheduled read at all.
+    const second = buildProviderRateLimitEnvelope(
+      first,
+      response(OTHER_GOOD),
+      1_000,
+    );
+    expect(second.episode).not.toBe(first.episode);
+  });
+
+  it("carries one through a run of transient failures, and mints for a run that starts cold", () => {
+    const answered = buildProviderRateLimitEnvelope(
+      undefined,
+      response(GOOD),
+      1_000,
+    );
+    const failing = buildProviderRateLimitEnvelope(
+      answered,
+      response(unavailable("timeout")),
+      2_000,
+    );
+    const failingAgain = buildProviderRateLimitEnvelope(
+      failing,
+      response(unavailable("connection_failed")),
+      3_000,
+    );
+    expect(failing.episode).toBe(answered.episode);
+    expect(failingAgain.episode).toBe(answered.episode);
+
+    // Nothing to carry: a cold cache, or an entry collected while its provider
+    // was hidden. That is the start of a run too, and its own.
+    const cold = buildProviderRateLimitEnvelope(
+      undefined,
+      response(unavailable("timeout")),
+      4_000,
+    );
+    expect(cold.episode).not.toBe(answered.episode);
+  });
+
+  it("mints for an authoritative reason, which ends the run before it", () => {
+    const failing = buildProviderRateLimitEnvelope(
+      buildProviderRateLimitEnvelope(undefined, response(GOOD), 1_000),
+      response(unavailable("timeout")),
+      2_000,
+    );
+    const answered = buildProviderRateLimitEnvelope(
+      failing,
+      response(unavailable("cli_not_found")),
+      3_000,
+    );
+    const failingAfter = buildProviderRateLimitEnvelope(
+      answered,
+      response(unavailable("timeout")),
+      4_000,
+    );
+    expect(answered.episode).not.toBe(failing.episode);
+    expect(failingAfter.episode).toBe(answered.episode);
+    expect(failingAfter.episode).not.toBe(failing.episode);
+  });
+
+  it("is not a clock reading, so a clock corrected backwards still names a distinct run", () => {
+    const answered = buildProviderRateLimitEnvelope(
+      undefined,
+      response(unavailable("cli_not_found")),
+      10_000,
+    );
+    const failing = buildProviderRateLimitEnvelope(
+      answered,
+      response(unavailable("timeout")),
+      11_000,
+    );
+    // The clock goes back an hour between the two answers, which is what a
+    // correction does, and dates the second one where the first was.
+    const answeredAgain = buildProviderRateLimitEnvelope(
+      failing,
+      response(unavailable("cli_not_found")),
+      10_000,
+    );
+    const failingAgain = buildProviderRateLimitEnvelope(
+      answeredAgain,
+      response(unavailable("timeout")),
+      10_000,
+    );
+    expect(answeredAgain.episode).not.toBe(answered.episode);
+    expect(failingAgain.episode).not.toBe(failing.episode);
+  });
+
+  it("carries one through a response with no provider snapshot", () => {
+    const failing = buildProviderRateLimitEnvelope(
+      buildProviderRateLimitEnvelope(undefined, response(GOOD), 1_000),
+      response(unavailable("timeout")),
+      2_000,
+    );
+    expect(
+      buildProviderRateLimitEnvelope(failing, response(null), 3_000).episode,
+    ).toBe(failing.episode);
   });
 });
 
@@ -452,7 +572,7 @@ describe("resolveRetainedProviderRateLimits", () => {
         lastGood: null,
         lastGoodAt: null,
         lastFailureAt: null,
-        lastTerminalAt: null,
+        episode: PREVIOUS_EPISODE,
       }),
     ).toBeNull();
   });
@@ -464,7 +584,7 @@ describe("resolveRetainedProviderRateLimits", () => {
         lastGood: GOOD,
         lastGoodAt: 1_000,
         lastFailureAt: null,
-        lastTerminalAt: null,
+        episode: PREVIOUS_EPISODE,
       }),
     ).toEqual(GOOD);
   });
@@ -476,7 +596,7 @@ describe("resolveRetainedProviderRateLimits", () => {
         lastGood: GOOD,
         lastGoodAt: 1_000,
         lastFailureAt: 2_000,
-        lastTerminalAt: null,
+        episode: PREVIOUS_EPISODE,
       }),
     ).toEqual(GOOD);
   });
@@ -489,7 +609,7 @@ describe("resolveRetainedProviderRateLimits", () => {
         lastGood: null,
         lastGoodAt: null,
         lastFailureAt: 1_000,
-        lastTerminalAt: null,
+        episode: PREVIOUS_EPISODE,
       }),
     ).toEqual(latest);
   });
@@ -506,7 +626,7 @@ describe("resolveRetainedProviderRateLimits", () => {
         lastGood: GOOD,
         lastGoodAt: 1_000,
         lastFailureAt: null,
-        lastTerminalAt: null,
+        episode: PREVIOUS_EPISODE,
       }),
     ).toEqual(latest);
   });
@@ -524,7 +644,7 @@ describe("envelopeDegradedReason", () => {
         lastGood: GOOD,
         lastGoodAt: 1_000,
         lastFailureAt: null,
-        lastTerminalAt: null,
+        episode: PREVIOUS_EPISODE,
       }),
     ).toBeNull();
   });
@@ -536,7 +656,7 @@ describe("envelopeDegradedReason", () => {
         lastGood: GOOD,
         lastGoodAt: 1_000,
         lastFailureAt: 2_000,
-        lastTerminalAt: null,
+        episode: PREVIOUS_EPISODE,
       }),
     ).toBe("usage_fetch_failed");
   });
@@ -548,7 +668,7 @@ describe("envelopeDegradedReason", () => {
         lastGood: null,
         lastGoodAt: null,
         lastFailureAt: null,
-        lastTerminalAt: null,
+        episode: PREVIOUS_EPISODE,
       }),
     ).toBeNull();
   });
@@ -560,7 +680,7 @@ describe("envelopeDegradedReason", () => {
         lastGood: null,
         lastGoodAt: null,
         lastFailureAt: 1_000,
-        lastTerminalAt: null,
+        episode: PREVIOUS_EPISODE,
       }),
     ).toBeNull();
   });
@@ -633,7 +753,7 @@ describe("mapResponseToProviderRateLimitEnvelope providers.list convergence", ()
       lastGood: null,
       lastGoodAt: null,
       lastFailureAt: null,
-      lastTerminalAt: null,
+      episode: PREVIOUS_EPISODE,
     });
     mapResponseToProviderRateLimitEnvelope({
       response: response(GROK_GOOD),

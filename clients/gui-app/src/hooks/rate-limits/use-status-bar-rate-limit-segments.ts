@@ -43,6 +43,7 @@ import {
   envelopeDegradedReason,
   isTransientUnavailableReason,
   mapResponseToProviderRateLimitEnvelope,
+  NO_EPISODE,
   resolveRetainedProviderRateLimits,
   type ProviderRateLimitEnvelope,
 } from "@/lib/rate-limits/rate-limit-envelope";
@@ -231,10 +232,11 @@ export interface StatusBarRateLimitRetryTarget {
 }
 
 /**
- * One account's scheduled re-read, with the episode it is owed for - the stamp
- * of the last answer that account got (`lastTerminalAt`, 0 for none). The
- * reader records that stamp when it takes the read, which is what makes the
- * one-shot a fact about the run of failures rather than about a mount.
+ * One account's scheduled re-read, with the episode it is owed for - the
+ * identity of the run of failures it is in (`NO_EPISODE` for an account with
+ * no reading). The reader records that identity when it takes the read, which
+ * is what makes the one-shot a fact about the run rather than about a mount,
+ * and keys the timer, which is what gives a run its own full delay.
  */
 export interface StatusBarScheduledTransientRead extends StatusBarRateLimitRetryTarget {
   readonly episode: number;
@@ -571,10 +573,11 @@ function accountKey(
 }
 
 /**
- * Each of these accounts paired with the episode its reading is in - the stamp
- * of the last answer about it, or 0 for an account nothing has answered yet.
+ * Each of these accounts paired with the episode its reading is in - the
+ * identity the last answer about it minted, or `NO_EPISODE` for a key whose
+ * envelope has not landed.
  */
-function episodeStamps(
+function episodeIdentities(
   targets: ReadonlyArray<StatusBarRateLimitTarget>,
   queries: ReadonlyArray<
     UseQueryResult<ProviderRateLimitEnvelope, HostRpcError>
@@ -582,7 +585,7 @@ function episodeStamps(
 ): Array<[string, number]> {
   return targets.map((target, index) => [
     accountKey(target.provider.providerId, target.profileId),
-    queries[index].data?.lastTerminalAt ?? 0,
+    queries[index].data?.episode ?? NO_EPISODE,
   ]);
 }
 
@@ -916,50 +919,54 @@ export function useStatusBarRateLimitSegments(input: {
   );
   // Which episode each account is in, read from the reading itself, so the
   // one-shot a strip spends is remembered against the run of failures rather
-  // than against this mount. An account nothing has answered yet: 0.
+  // than against this mount. An account with no reading at all: `NO_EPISODE`.
   const episodes = new Map<string, number>([
-    ...episodeStamps(ephemeralObserved, ephemeralObservedQueries),
-    ...episodeStamps(httpPolling, httpPollingQueries),
-    ...episodeStamps(httpObserved, httpObservedQueries),
+    ...episodeIdentities(ephemeralObserved, ephemeralObservedQueries),
+    ...episodeIdentities(httpPolling, httpPollingQueries),
+    ...episodeIdentities(httpObserved, httpObservedQueries),
   ]);
-  // Nothing releases an episode - the stamp above is what ends one - but the
-  // strip does stop watching accounts: a profile removed, a provider
-  // deselected. Their entries are dropped here, in an effect, because it is a
-  // write about what has already been drawn; only in the placement that arms
-  // these reads, since its own list is the authority on what it watches; and
-  // never in the sample scene, whose invented readings say nothing about a
-  // real account.
-  const watchHostId = input.retryHostId;
-  const watchedLedgerKeys =
-    watchHostId === null || input.sample
+  // Nothing ends an episode here - the identity above is what does - and
+  // nothing on screen ends one either: hiding a provider, picking a different
+  // profile, remounting the strip and leaving the host are all the same run of
+  // failures when the strip comes back to it. What DOES end an entry's life is
+  // the account ceasing to exist, so the list below is this host's own
+  // inventory - every profile of every provider it reports, plus each
+  // provider's ambient account - with the display filter, the selection, the
+  // editor and the sample scene all read out of it. In an effect, because it
+  // is a write; and only in the placement that arms these reads.
+  const ledgerHostId = input.retryHostId;
+  const existingLedgerKeys =
+    ledgerHostId === null
       ? []
-      : targets.map((target) =>
-          rateLimitAccountLedgerKey(
-            watchHostId,
-            target.provider.providerId,
-            target.profileId,
+      : input.providers.flatMap((provider) =>
+          [null, ...provider.profiles.map(profileCommitId)].map((profileId) =>
+            rateLimitAccountLedgerKey(
+              ledgerHostId,
+              provider.providerId,
+              profileId,
+            ),
           ),
         );
-  const pruneUnwatchedEpisodes = useEffectEvent((): void => {
-    // The sample scene is read out of this test, not just absent from the
-    // list: its invented readings name real accounts on a real host, and an
-    // empty watch list from it would drop every entry that host has.
-    if (watchHostId === null || input.sample) return;
-    pruneScheduledTransientReads(watchHostId, new Set(watchedLedgerKeys));
+  const pruneRemovedEpisodes = useEffectEvent((): void => {
+    // An inventory this hook does not have is not an empty one: the provider
+    // list is a query, and while it is unanswered - cold, refetching, a scope
+    // with no pick - reporting nothing would drop every entry this host has.
+    if (ledgerHostId === null || existingLedgerKeys.length === 0) return;
+    pruneScheduledTransientReads(ledgerHostId, new Set(existingLedgerKeys));
   });
   // The set itself as the dependency, flattened: a fresh array every render
   // would run this on every render, and the keys are the only thing that can
   // make it mean something different.
-  const watchedEpisodeKeys = watchedLedgerKeys.join("\n");
+  const existingEpisodeKeys = existingLedgerKeys.join("\n");
   useEffect(() => {
-    pruneUnwatchedEpisodes();
-  }, [watchedEpisodeKeys]);
+    pruneRemovedEpisodes();
+  }, [existingEpisodeKeys]);
 
   return {
     cluster: clusterFor(input.providers.length, segments),
     retryTargets: targets.flatMap((target) => {
       const key = accountKey(target.provider.providerId, target.profileId);
-      const episode = episodes.get(key) ?? 0;
+      const episode = episodes.get(key) ?? NO_EPISODE;
       return !passive &&
         target.fetchEligible &&
         input.retryHostId !== null &&

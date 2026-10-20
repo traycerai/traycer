@@ -9,6 +9,7 @@ import type {
   AvailableProviderRateLimits,
   ProviderRateLimitEnvelope,
 } from "@/lib/rate-limits/rate-limit-envelope";
+import { NO_EPISODE } from "@/lib/rate-limits/rate-limit-envelope";
 import type { RateLimitProviderId } from "@/lib/rate-limit-providers";
 
 interface MockQueryResult {
@@ -124,7 +125,7 @@ function envelope(
     lastGood: data,
     lastGoodAt: NOW - 60_000,
     lastFailureAt: null,
-    lastTerminalAt: null,
+    episode: NO_EPISODE,
   };
 }
 
@@ -348,7 +349,7 @@ describe("useVisibleRateLimitProviders", () => {
         lastGood: null,
         lastGoodAt: null,
         lastFailureAt: NOW,
-        lastTerminalAt: null,
+        episode: NO_EPISODE,
       },
       isError: false,
     });
@@ -378,7 +379,7 @@ describe("useVisibleRateLimitProviders", () => {
         lastGood: null,
         lastGoodAt: null,
         lastFailureAt: NOW,
-        lastTerminalAt: null,
+        episode: NO_EPISODE,
       },
       isError: false,
     });

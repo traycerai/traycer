@@ -16,6 +16,7 @@ import type {
   AvailableProviderRateLimits,
   ProviderRateLimitEnvelope,
 } from "@/lib/rate-limits/rate-limit-envelope";
+import { NO_EPISODE } from "@/lib/rate-limits/rate-limit-envelope";
 import { useProvidersRefreshProfileStatusForClient } from "@/hooks/providers/use-providers-refresh-profile-status-mutation";
 
 type RefreshRequest = RequestOfMethod<
@@ -76,7 +77,7 @@ function rateLimitEnvelope(
     lastGood: providerRateLimits,
     lastGoodAt: 100,
     lastFailureAt: null,
-    lastTerminalAt: null,
+    episode: NO_EPISODE,
   };
 }
 

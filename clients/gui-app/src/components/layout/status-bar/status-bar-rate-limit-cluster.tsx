@@ -196,7 +196,15 @@ export function StatusBarRateLimitCluster(props: {
             // of the host it was started for against the scope of the one it
             // ended up on.
             <StatusBarTransientRetry
-              key={`${fetchScope.hostId}:${target.providerId}:${target.profileId ?? ""}`}
+              // The EPISODE is in the key, not only the account: a run of
+              // failures that ends and starts again between two commits -
+              // an answer and the failure after it, settled in one batch -
+              // leaves this component mounted otherwise, and its running
+              // timer would spend the next run's one-shot on the previous
+              // run's deadline. A different identity is a different
+              // instance, which clears the old timeout and arms a full
+              // delay of its own.
+              key={`${fetchScope.hostId}:${target.providerId}:${target.profileId ?? ""}:${target.episode}`}
               target={target}
               reading={statusBarSegmentIsReading(cluster, target)}
             />
@@ -442,9 +450,10 @@ function StatusBarTransientRetry(props: {
       force: false,
     });
   });
-  // No dependencies: the caller keys this component by its account, so a
-  // different account is a different instance with its own single timer, and
-  // the episode's one-shot is not this component's to re-arm.
+  // No dependencies: the caller keys this component by its account AND its
+  // episode, so a different run of failures is a different instance with its
+  // own single timer, and the episode's one-shot is not this component's to
+  // re-arm.
   useEffect(() => {
     const timer = window.setTimeout(read, TRANSIENT_RATE_LIMIT_RETRY_DELAY_MS);
     return () => window.clearTimeout(timer);

@@ -4,6 +4,7 @@ import type {
   ProviderRateLimitWindow,
 } from "@traycer/protocol/host/rate-limit";
 import type { ProviderRateLimitEnvelope } from "@/lib/rate-limits/rate-limit-envelope";
+import { NO_EPISODE } from "@/lib/rate-limits/rate-limit-envelope";
 import { projectProfileUsage } from "@/lib/rate-limits/profile-usage-projection";
 
 const NOW = 1_000_000;
@@ -202,7 +203,7 @@ function envelope(
     lastGood: data,
     lastGoodAt,
     lastFailureAt: null,
-    lastTerminalAt: null,
+    episode: NO_EPISODE,
   };
 }
 
@@ -520,7 +521,7 @@ describe("projectProfileUsage", () => {
       lastGood: data,
       lastGoodAt: NOW - 1_000,
       lastFailureAt: NOW,
-      lastTerminalAt: null,
+      episode: NO_EPISODE,
     };
     const retainedProjection = project("ok", NOW - 1_000, retained, false);
     expect(retainedProjection.kind).toBe("stale");
@@ -570,7 +571,7 @@ describe("projectProfileUsage", () => {
       lastGood: null,
       lastGoodAt: null,
       lastFailureAt: null,
-      lastTerminalAt: null,
+      episode: NO_EPISODE,
     };
     expect(project("unknown", NOW, unavailable, false)).toEqual({
       kind: "unavailable",

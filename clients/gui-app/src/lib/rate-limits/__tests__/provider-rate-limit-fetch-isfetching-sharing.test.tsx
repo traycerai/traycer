@@ -33,13 +33,13 @@ import {
 // `response()` doc comment: only fetch timing matters to these tests) into
 // the provider-pull envelope before TanStack caches it - a disabled passive
 // `useHostQuery` observer of this key family sees whatever's actually in the
-// cache, so its `.data` reflects the envelope shape too.
+// cache, so its `.data` reflects the envelope shape too. Matched rather than
+// equalled: the episode identity it also carries is the builder's to mint.
 const EXPECTED_RATE_LIMIT_ENVELOPE = {
   latest: null,
   lastGood: null,
   lastGoodAt: null,
   lastFailureAt: null,
-  lastTerminalAt: null,
 };
 
 function requestVia(
@@ -97,7 +97,7 @@ describe("fetchProviderRateLimits keeps a mounted useHostProviderRateLimitsQuery
     );
 
     await waitFor(() =>
-      expect(rendered.result.current.data).toEqual(
+      expect(rendered.result.current.data).toMatchObject(
         EXPECTED_RATE_LIMIT_ENVELOPE,
       ),
     );
@@ -121,6 +121,8 @@ describe("fetchProviderRateLimits keeps a mounted useHostProviderRateLimitsQuery
 
     harness.resolvePendingResponse();
     await waitFor(() => expect(rendered.result.current.isFetching).toBe(false));
-    expect(rendered.result.current.data).toEqual(EXPECTED_RATE_LIMIT_ENVELOPE);
+    expect(rendered.result.current.data).toMatchObject(
+      EXPECTED_RATE_LIMIT_ENVELOPE,
+    );
   });
 });

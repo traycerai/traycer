@@ -44,6 +44,7 @@ import type {
   AvailableProviderRateLimits,
   ProviderRateLimitEnvelope,
 } from "@/lib/rate-limits/rate-limit-envelope";
+import { NO_EPISODE } from "@/lib/rate-limits/rate-limit-envelope";
 import {
   accountContextValue,
   isCreditBasedPricing,
@@ -376,7 +377,7 @@ function envelopeFor(
       lastGood: providerRateLimits,
       lastGoodAt: NOW - 90_000,
       lastFailureAt: null,
-      lastTerminalAt: null,
+      episode: NO_EPISODE,
     };
   }
   return {
@@ -384,7 +385,7 @@ function envelopeFor(
     lastGood: null,
     lastGoodAt: null,
     lastFailureAt: null,
-    lastTerminalAt: null,
+    episode: NO_EPISODE,
   };
 }
 
@@ -415,7 +416,7 @@ function degradedRetainedResult(
       lastGood,
       lastGoodAt: NOW - 90_000,
       lastFailureAt: NOW - 1_000,
-      lastTerminalAt: null,
+      episode: NO_EPISODE,
     },
     isPending: false,
     isFetching: false,
@@ -2627,7 +2628,7 @@ describe("<RateLimitPopover /> per-provider states", () => {
           lastGood: codexReady(),
           lastGoodAt: NOW - 90_000,
           lastFailureAt: NOW - 1_000,
-          lastTerminalAt: null,
+          episode: NO_EPISODE,
         },
         isPending: false,
         isFetching: false,

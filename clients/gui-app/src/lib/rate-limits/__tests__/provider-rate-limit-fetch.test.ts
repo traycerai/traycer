@@ -251,12 +251,15 @@ describe("fetchProviderRateLimits", () => {
 
     // The cache identity (queryKey) carries no `force` field at all - so a
     // later automatic and a later forced call both resolve to this same slot.
-    expect(queryClient.getQueryData(keyFor("codex", "work-profile"))).toEqual({
+    // Matched rather than equalled: the envelope's episode identity is the
+    // builder's to mint, and no row about the CACHE KEY has a claim on it.
+    expect(
+      queryClient.getQueryData(keyFor("codex", "work-profile")),
+    ).toMatchObject({
       latest: null,
       lastGood: null,
       lastGoodAt: null,
       lastFailureAt: null,
-      lastTerminalAt: null,
     });
   });
 
@@ -463,12 +466,11 @@ describe("fetchProviderRateLimits", () => {
       await pull;
       const finalState = queryClient.getQueryState(keyFor("codex", null));
       expect(finalState?.status).toBe("success");
-      expect(finalState?.data).toEqual({
+      expect(finalState?.data).toMatchObject({
         latest: null,
         lastGood: null,
         lastGoodAt: null,
         lastFailureAt: null,
-        lastTerminalAt: null,
       });
     });
 

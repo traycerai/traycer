@@ -30,7 +30,10 @@ import type { ConfiguredRateLimitProvider } from "@/hooks/rate-limits/use-config
 import type { RateLimitProfileSelection } from "@/hooks/rate-limits/use-rate-limit-profile-selection";
 import type { RateLimitProviderId } from "@/lib/rate-limit-providers";
 import type { ProviderRateLimitEnvelope } from "@/lib/rate-limits/rate-limit-envelope";
-import { buildProviderRateLimitEnvelopeFromSnapshot } from "@/lib/rate-limits/rate-limit-envelope";
+import {
+  buildProviderRateLimitEnvelopeFromSnapshot,
+  NO_EPISODE,
+} from "@/lib/rate-limits/rate-limit-envelope";
 import {
   EPHEMERAL_RATE_LIMIT_POLL_INTERVAL_MS,
   TRANSIENT_RATE_LIMIT_RETRY_DELAY_MS,
@@ -128,9 +131,6 @@ import { StatusBarRateLimitCluster } from "@/components/layout/status-bar/status
 
 const HOST_ID = "host-a";
 
-/** The episode of an account no answer has ever landed for. */
-const NEVER_ANSWERED = 0;
-
 const PROFILE_SELECTION: RateLimitProfileSelection = {
   shownProfiles: {},
   lastProfileByHarness: {},
@@ -138,6 +138,14 @@ const PROFILE_SELECTION: RateLimitProfileSelection = {
 
 const CODEX: ConfiguredRateLimitProvider = {
   providerId: "codex",
+  profiles: [],
+  lane: "ephemeralProcess",
+  fetchEligibility: { ambient: true, managedProfiles: true },
+};
+
+/** A second account the host has, so a list without Codex is still a list. */
+const GROK: ConfiguredRateLimitProvider = {
+  providerId: "grok",
   profiles: [],
   lane: "ephemeralProcess",
   fetchEligibility: { ambient: true, managedProfiles: true },
@@ -281,6 +289,100 @@ describe("a transient account's scheduled re-read", () => {
     expect(forcedReads()).toBe(0);
   });
 
+  it("gives a run of failures its own delay when the run before it ended between commits", () => {
+    reading(transientEnvelope("timeout"));
+    const queryClient = newQueryClient();
+    const view = render(tree(queryClient, [CODEX]));
+
+    act(() => {
+      vi.advanceTimersByTime(TRANSIENT_RATE_LIMIT_RETRY_DELAY_MS - 1_000);
+    });
+    // An answer and the failure after it, both folded into the envelope before
+    // React commits anything: a profile refresh and a usage read settling in
+    // one batch do exactly this. The strip never draws the answer, so the
+    // account looks transient throughout - and the run of failures it is in is
+    // a different one.
+    reading(transientEnvelope("cli_not_found"));
+    reading(transientEnvelope("timeout"));
+    act(() => {
+      view.rerender(tree(queryClient, [CODEX]));
+    });
+
+    // One second later, which was the OLD run's deadline. A timer that
+    // outlived its run would read the current target here and spend this run's
+    // one-shot 59 seconds early.
+    act(() => {
+      vi.advanceTimersByTime(1_000);
+    });
+    expect(mocks.collect).not.toHaveBeenCalled();
+
+    // Its own full delay, from when it started.
+    act(() => {
+      vi.advanceTimersByTime(TRANSIENT_RATE_LIMIT_RETRY_DELAY_MS - 1_000);
+    });
+    expect(mocks.collect).toHaveBeenCalledTimes(1);
+  });
+
+  it("gives the next run its own read even when the clock is corrected backwards", () => {
+    const answeredAt = Date.now();
+    reading(transientEnvelope("cli_not_found"));
+    reading(transientEnvelope("timeout"));
+    const queryClient = newQueryClient();
+    const view = render(tree(queryClient, [CODEX]));
+
+    act(() => {
+      vi.advanceTimersByTime(TRANSIENT_RATE_LIMIT_RETRY_DELAY_MS);
+    });
+    expect(mocks.collect).toHaveBeenCalledTimes(1);
+
+    // The wall clock goes back to where the first answer was dated, which is
+    // what a correction does. An episode named by a clock reading would hand
+    // the next run the identity this one already spent, and the strip would
+    // say "Couldn't load, retrying" for fifteen minutes without retrying.
+    view.unmount();
+    vi.setSystemTime(answeredAt);
+    reading(transientEnvelope("cli_not_found"));
+    reading(transientEnvelope("timeout"));
+
+    render(tree(queryClient, [CODEX]));
+    act(() => {
+      vi.advanceTimersByTime(TRANSIENT_RATE_LIMIT_RETRY_DELAY_MS);
+    });
+    expect(mocks.collect).toHaveBeenCalledTimes(2);
+  });
+
+  it("stays spent when the provider is hidden and shown again", () => {
+    reading(transientEnvelope("timeout"));
+    const queryClient = newQueryClient();
+    render(tree(queryClient, [CODEX]));
+
+    act(() => {
+      vi.advanceTimersByTime(TRANSIENT_RATE_LIMIT_RETRY_DELAY_MS);
+    });
+    expect(mocks.collect).toHaveBeenCalledTimes(1);
+
+    // The arrangement's per-provider checkbox, twice. Nothing answered the
+    // account in between, so this is the same run of failures and it has had
+    // the read it was promised - however many times the segment leaves the
+    // strip and comes back.
+    act(() => {
+      useLayoutStore.getState().setArrangement({
+        ...useLayoutStore.getState().arrangement,
+        hiddenProviders: ["codex"],
+      });
+    });
+    act(() => {
+      useLayoutStore.getState().setArrangement({
+        ...useLayoutStore.getState().arrangement,
+        hiddenProviders: [],
+      });
+    });
+    act(() => {
+      vi.advanceTimersByTime(EPHEMERAL_RATE_LIMIT_POLL_INTERVAL_MS);
+    });
+    expect(mocks.collect).toHaveBeenCalledTimes(1);
+  });
+
   it("stays spent across a hide and a show with nothing answered in between", () => {
     reading(transientEnvelope("timeout"));
     const queryClient = newQueryClient();
@@ -303,7 +405,7 @@ describe("a transient account's scheduled re-read", () => {
     expect(mocks.collect).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps no entry for an account the strip stops watching", () => {
+  it("keeps no entry for an account the host no longer has", () => {
     reading(transientEnvelope("timeout"));
     const queryClient = newQueryClient();
     const view = render(tree(queryClient, [CODEX]));
@@ -313,16 +415,19 @@ describe("a transient account's scheduled re-read", () => {
     });
     expect(mocks.collect).toHaveBeenCalledTimes(1);
 
-    // The account is removed from the strip's watch list - the profile
-    // deleted, the provider deselected - while the same spent episode would
-    // otherwise sit in the map for the life of the window.
+    // The host stops reporting this account - signed out of it, or its profile
+    // deleted - and goes on reporting others, which is what tells the strip
+    // the difference between an account that is gone and a list that has not
+    // answered. Its entry would otherwise sit in the map for the life of the
+    // window.
+    const episode = mocks.results.get("codex:")?.data?.episode ?? NO_EPISODE;
     act(() => {
-      view.rerender(tree(queryClient, []));
+      view.rerender(tree(queryClient, [GROK]));
     });
     expect(
       scheduledTransientReadOwed(
         rateLimitAccountLedgerKey(HOST_ID, "codex", null),
-        NEVER_ANSWERED,
+        episode,
       ),
     ).toBe(true);
   });

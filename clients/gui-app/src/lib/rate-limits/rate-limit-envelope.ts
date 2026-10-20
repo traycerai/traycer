@@ -108,22 +108,46 @@ function retainCodexResetCreditDetails(
  * - `lastGoodAt` / `lastFailureAt`: epoch-ms timestamps for the two events
  *   above, `null` until they've happened at least once in this envelope's
  *   lifetime.
- * - `lastTerminalAt`: when this key last got an answer ABOUT THE ACCOUNT - a
- *   reading, or an authoritative reason. A transient failure is not one and
- *   carries the stamp over unchanged, so a run of them shares a value, which
- *   is what identifies that run: a surface that owes a transient account one
- *   action per run of failures (the strip's single re-read,
- *   `rate-limit-read-ledger.ts`) records this stamp with it and compares again
- *   before owing one. That answer can land while nothing is drawing the
- *   account - a background poll, a read from a different surface - so the
- *   identity has to live in the reading rather than in what was rendered.
+ * - `episode`: which RUN OF FAILURES this reading belongs to, as an opaque
+ *   identity. An answer ABOUT THE ACCOUNT - a reading, or an authoritative
+ *   reason - starts a run by minting a value no other envelope has. A
+ *   transient failure is not an answer and carries the value over, so one run
+ *   shares one, and no two runs share one. A surface that owes a transient
+ *   account one action per run (the strip's single re-read,
+ *   `rate-limit-read-ledger.ts`) records this value with the action and
+ *   compares before owing again. The identity lives in the reading rather
+ *   than in what was rendered, because the answer that ends a run usually
+ *   lands where nothing is drawing the account: a background poll, a read from
+ *   a different surface, a hidden window.
  */
 export interface ProviderRateLimitEnvelope {
   readonly latest: ProviderRateLimits | null;
   readonly lastGood: AvailableProviderRateLimits | null;
   readonly lastGoodAt: number | null;
   readonly lastFailureAt: number | null;
-  readonly lastTerminalAt: number | null;
+  readonly episode: number;
+}
+
+/**
+ * No run of failures: what a key with no envelope at all names, for a reader
+ * that has to name something. Never minted, so no envelope carries it.
+ */
+export const NO_EPISODE = 0;
+
+/**
+ * The episodes handed out in this window, in order. Deliberately NOT a clock
+ * reading: two answers can share a millisecond, and a wall clock corrected
+ * backwards can date a genuinely later answer at a value it has already used -
+ * either of which makes two runs of failures look like one and silently costs
+ * the second run the read it was promised. A counter cannot do that. It needs
+ * no persistence: nothing persists an envelope either, so a reload starts
+ * every key cold and every identity fresh together.
+ */
+let episodesMinted = NO_EPISODE;
+
+function nextEpisode(): number {
+  episodesMinted += 1;
+  return episodesMinted;
 }
 
 /**
@@ -194,9 +218,12 @@ function invalidateProvidersListForConvergence(
  *   `null`. An authoritative "this account can't see usage" reading must
  *   never be shown dimmed alongside a stale good one.
  *
- * `lastTerminalAt` advances with a reading and with an authoritative reason,
- * since both are answers about the account, and carries over unchanged through
- * a transient failure and through a response with no snapshot, which are not.
+ * `episode` is minted fresh by a reading and by an authoritative reason, since
+ * both are answers about the account, and carries over unchanged through a
+ * transient failure and through a response with no snapshot, which are not. A
+ * failure with no previous envelope mints one as well: that is the start of a
+ * run too, and it is reachable - a cold cache, and an entry collected while
+ * its provider was hidden.
  */
 export function buildProviderRateLimitEnvelope(
   previous: ProviderRateLimitEnvelope | undefined,
@@ -240,7 +267,7 @@ export function buildProviderRateLimitEnvelopeFromSnapshot(
       lastGood: retainedLatest,
       lastGoodAt: now,
       lastFailureAt: previous?.lastFailureAt ?? null,
-      lastTerminalAt: now,
+      episode: nextEpisode(),
     };
   }
 
@@ -250,20 +277,21 @@ export function buildProviderRateLimitEnvelopeFromSnapshot(
       ...retainedLastGood(previous, latest),
       lastFailureAt: now,
       // Carried over: a transient failure says nothing about the account, so
-      // it does not close the run of failures this stamp identifies.
-      lastTerminalAt: previous?.lastTerminalAt ?? null,
+      // it does not close the run of failures this identity names. With no
+      // previous envelope it IS the start of one, so it mints.
+      episode: previous?.episode ?? nextEpisode(),
     };
   }
 
   // No snapshot at all is no answer about the account either, so that carries
-  // the stamp over too; an authoritative reason below IS one.
+  // the identity over too; an authoritative reason below IS one.
   if (latest === null) {
     return {
       latest,
       lastGood: null,
       lastGoodAt: null,
       lastFailureAt: null,
-      lastTerminalAt: previous?.lastTerminalAt ?? null,
+      episode: previous?.episode ?? nextEpisode(),
     };
   }
 
@@ -272,7 +300,7 @@ export function buildProviderRateLimitEnvelopeFromSnapshot(
     lastGood: null,
     lastGoodAt: null,
     lastFailureAt: null,
-    lastTerminalAt: now,
+    episode: nextEpisode(),
   };
 }
 

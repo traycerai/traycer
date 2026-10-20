@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { NO_EPISODE } from "@/lib/rate-limits/rate-limit-envelope";
 import {
   act,
   cleanup,
@@ -1425,7 +1426,7 @@ describe("ProviderRateLimitBody (unavailable state)", () => {
           lastGood: null,
           lastGoodAt: null,
           lastFailureAt: NOW,
-          lastTerminalAt: null,
+          episode: NO_EPISODE,
         }}
         codexResetAction={null}
         openModelProvidersAction={null}
@@ -1454,7 +1455,7 @@ describe("ProviderRateLimitBody (unavailable state)", () => {
           lastGood: null,
           lastGoodAt: null,
           lastFailureAt: NOW,
-          lastTerminalAt: null,
+          episode: NO_EPISODE,
         }}
         codexResetAction={null}
         openModelProvidersAction={openModelProviders}
@@ -1480,7 +1481,7 @@ describe("ProviderRateLimitBody (unavailable state)", () => {
           lastGood: null,
           lastGoodAt: null,
           lastFailureAt: NOW,
-          lastTerminalAt: null,
+          episode: NO_EPISODE,
         }}
         codexResetAction={null}
         openModelProvidersAction={openModelProviders}
@@ -1517,7 +1518,7 @@ describe("ProviderRateLimitBody (Codex reset action)", () => {
           lastGood: null,
           lastGoodAt: null,
           lastFailureAt: null,
-          lastTerminalAt: null,
+          episode: NO_EPISODE,
         }}
         codexResetAction={() => <button type="button">Use reset</button>}
         openModelProvidersAction={null}

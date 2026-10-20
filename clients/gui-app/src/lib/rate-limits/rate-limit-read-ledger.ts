@@ -45,9 +45,9 @@
  * the strip - and a one-shot it re-armed each time would be a read a minute
  * for as long as the account kept failing.
  *
- * The episode is NAMED by the envelope's `lastTerminalAt`, the stamp of the
- * last answer about that account, which every run of failures shares and no
- * two runs do. So an entry records which episode spent the read, and the
+ * The episode is NAMED by the envelope's `episode`, an identity minted by the
+ * last answer about that account, which every failure in one run carries and
+ * no two runs share. So an entry records which episode spent the read, and the
  * question "is one owed" is answered by comparing, with nothing to release:
  * the answer that ends an episode often lands where no strip is drawing the
  * account - a background poll, a read from a different surface, a window that
@@ -57,8 +57,18 @@
  * and has taken. A sibling window has its own cache and its own poll, and
  * suppressing its first re-read because this one already made it would leave
  * it drawing words it never acted on. What bounds the provider traffic that
- * follows is the host's own floors, per lane (see the PR body's numbers). One
- * entry per account the strip is watching, pruned when it stops watching it.
+ * follows is the host's own floors, per lane (see the PR body's numbers).
+ *
+ * Two things bound the map, because they answer different questions. An
+ * account the strip's host NO LONGER HAS is pruned, from that host's own
+ * account inventory - never from what is on screen, since hiding a provider,
+ * picking a different profile and remounting the strip all leave a run of
+ * failures exactly where it was. And the map carries a hard cap with
+ * oldest-first eviction, which is what bounds the hosts this window is not
+ * pointed at: the renderer cannot enumerate another host's accounts, and
+ * dropping a host's entries when the strip leaves it would re-arm a read that
+ * run of failures has already had. An eviction costs at most one extra
+ * unforced read for that account, which the host's floor bounds.
  */
 import { RATE_LIMIT_MANUAL_RETRY_WITHHOLD_MS } from "@/lib/rate-limits/rate-limit-timing";
 
@@ -73,6 +83,15 @@ const stampsHere = new Map<string, number>();
 
 /** By account: the episode whose one scheduled read has been spent. */
 const spentEpisodes = new Map<string, number>();
+
+/**
+ * How many of those entries this window keeps. One entry is an account on a
+ * host, so the live number is the accounts a person has across the hosts this
+ * window has pointed at; this is two orders of magnitude above that, and it is
+ * here so a session that keeps meeting fresh accounts cannot grow the map
+ * without limit.
+ */
+const MAX_SPENT_EPISODES = 256;
 
 const listeners = new Set<() => void>();
 
@@ -116,7 +135,8 @@ export function manualRateLimitRetryWithheld(
 
 /**
  * Whether this account is still owed the one scheduled re-read of `episode`,
- * the stamp of the last answer it got (`lastTerminalAt`, 0 for none).
+ * the identity of the run of failures it is in (`NO_EPISODE` for a key with no
+ * envelope).
  *
  * A spent entry from any OTHER episode is not this episode's, so an account
  * answered and failing again owes one without anything having released it.
@@ -138,21 +158,36 @@ export function recordScheduledTransientRead(
   key: string,
   episode: number,
 ): void {
+  // Re-inserted, so an entry this window keeps touching is not the oldest one:
+  // a `Map` iterates in insertion order, and a plain `set` on an existing key
+  // keeps its original place.
+  spentEpisodes.delete(key);
   spentEpisodes.set(key, episode);
+  while (spentEpisodes.size > MAX_SPENT_EPISODES) {
+    const oldest = spentEpisodes.keys().next();
+    if (oldest.done === true) return;
+    spentEpisodes.delete(oldest.value);
+  }
 }
 
 /**
- * Forgets this host's entries for accounts it no longer names - a profile
- * removed, a provider deselected, a host the strip left - so the map holds one
- * entry per account being watched rather than one per account ever watched.
+ * Forgets this host's entries for accounts the host no longer HAS - a profile
+ * deleted, a provider signed out of entirely.
+ *
+ * `exists` is that host's own account inventory, and nothing about what is
+ * drawn: a hidden provider, an unpicked profile and an unmounted strip are all
+ * still the same run of failures, and the three rounds before this one each
+ * lost a live entry to one of them. Whether the caller KNOWS what exists is
+ * the caller's question - the hook holds an unanswered provider list back
+ * rather than reporting it as an empty inventory.
  */
 export function pruneScheduledTransientReads(
   hostId: string,
-  watched: ReadonlySet<string>,
+  exists: ReadonlySet<string>,
 ): void {
   const prefix = `${LEDGER_KEY_PREFIX}${hostId}:`;
   for (const key of spentEpisodes.keys()) {
-    if (key.startsWith(prefix) && !watched.has(key)) spentEpisodes.delete(key);
+    if (key.startsWith(prefix) && !exists.has(key)) spentEpisodes.delete(key);
   }
 }
 
