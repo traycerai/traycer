@@ -1576,10 +1576,18 @@ describe("<EpicsListPanel />", () => {
 
     const rows = await screen.findByTestId("epics-list-rows");
     expect(rows.textContent).toContain("Local");
-    // The scope bar's own count line is allowed; a completeness notice is not.
-    expect(screen.queryByRole("status")?.textContent ?? "").not.toMatch(
-      /cloud|device|partial|truncated/i,
+    // The scope bar's count line and the reduced-coverage note are the two
+    // status regions. The note says THAT tasks may be missing, never which
+    // source did not answer.
+    const coverageNote = screen.getByTestId("epics-list-reduced-coverage");
+    expect(coverageNote.textContent).toBe(
+      "Some tasks may be missing from this list.",
     );
+    const statusText = screen
+      .getAllByRole("status")
+      .map((region) => region.textContent)
+      .join(" ");
+    expect(statusText).not.toMatch(/cloud|device|partial|truncated/i);
     // Scoped to the list body's own container rather than the whole
     // document: unrelated chrome (a filter chip label, for example) could
     // otherwise fail this assertion for a reason that has nothing to do with

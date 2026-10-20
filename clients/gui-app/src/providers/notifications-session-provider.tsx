@@ -31,6 +31,7 @@ import {
 } from "@/stores/agent-activity-store";
 import {
   openHostNotificationsStream,
+  type HostNotificationsCloudLane,
   type HostNotificationsFeedFrame,
   useHostNotificationsStore,
 } from "@/stores/notifications/host-notifications-store";
@@ -107,6 +108,7 @@ import { occurrenceKeyForNotification } from "@/lib/notifications/notification-o
 import { NotificationConsumptionContext } from "@/components/notifications/notification-consumption-context";
 import { installNotificationChimeAudioWarmup } from "@/lib/notifications/notification-chime";
 import { usePoolTierStreamClient } from "@/hooks/host/use-pool-tier";
+import { readProcessHostRpcTierPlan } from "@traycer-clients/shared/host-client/host-rpc-routing";
 import { useViewReplicaPaint } from "@/lib/view-replica/view-replica-store";
 import {
   notificationFeedReplicaAddress,
@@ -114,6 +116,25 @@ import {
   rememberNotificationFeed,
   type NotificationFeedReplicaPage,
 } from "@/lib/view-replica/notification-feed-replica";
+
+/**
+ * The cloud lane a build with a server pool reads from the pool, as the
+ * serving host's local feed hears of it: delivering once the pool feed's
+ * snapshot has landed and while it stays connected. Without a pool the host
+ * serves that lane itself and observes it, so nothing is reported. Read when
+ * the stream opens: the tier plan settles before any surface renders.
+ */
+function poolCloudLane(): HostNotificationsCloudLane | null {
+  return readProcessHostRpcTierPlan().pool === null ? null : POOL_CLOUD_LANE;
+}
+
+const POOL_CLOUD_LANE: HostNotificationsCloudLane = {
+  serving: () => {
+    const state = useCloudNotificationsStore.getState();
+    return state.hasSnapshot && state.connectionState === "connected";
+  },
+  subscribe: (listener) => useCloudNotificationsStore.subscribe(listener),
+};
 
 export interface NotificationsSessionProviderProps {
   readonly children: ReactNode;
@@ -1332,6 +1353,7 @@ function NotificationsSessionBody(
             onPresenceChanged: (frame) =>
               onPresenceChanged(frame, streamHostId),
             onStreamOpened: onHostStreamOpened,
+            cloudLane: poolCloudLane(),
           },
         );
       }

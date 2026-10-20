@@ -1073,6 +1073,7 @@ export const HOST_METHOD_POLL_TABLE = {
   // so the only reader of this is the Settings entry, which asks on mount.
   "sessionImport.status": { ...LATEST_SCHEDULING, poll: null },
   "epic.listTasks": { ...LATEST_SCHEDULING, poll: null },
+  "epic.localHistory.read": { ...LATEST_SCHEDULING, poll: null },
   // Recording a view updates the user's central task ordering preference.
   "epic.recordViewed": {
     mode: "fifo",
@@ -2520,6 +2521,7 @@ export const HOST_METHOD_POLL_TABLE = {
   // session; no GUI reads them yet.
   "environment.list": { ...LATEST_SCHEDULING, poll: null },
   "environment.host.read": { ...LATEST_SCHEDULING, poll: null },
+  "environment.binding.read": { ...LATEST_SCHEDULING, poll: null },
   "environment.host.bind": {
     mode: "fifo",
     joinResponseTimeoutMs: null,

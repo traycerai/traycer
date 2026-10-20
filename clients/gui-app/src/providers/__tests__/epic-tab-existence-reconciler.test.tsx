@@ -14,10 +14,10 @@ import {
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import {
-  recordNegotiatedHostManifest,
   recordNegotiatedHostMethods,
   resetNegotiatedManifests,
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
+import type { LocalHistoryReadResponse } from "@traycer/protocol/host/epic/local-history";
 import type { LocalHostSnapshot } from "@traycer-clients/shared/platform/runner-host";
 import {
   HostCompatibilityProvider,
@@ -26,6 +26,7 @@ import {
   type HostRpcRegistry,
   type MessengerFactory,
 } from "@/lib/host";
+import { LIST_CLOUD_TASKS_REQUEST } from "@/lib/cloud-epic-tasks-query";
 import { EpicTabExistenceReconciler } from "@/providers/epic-tab-existence-reconciler";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { useAuthStore } from "@/stores/auth/auth-store";
@@ -209,6 +210,26 @@ interface MountOptions {
     params: ListTasksRequest,
   ) => Promise<ListTasksResponse> | ListTasksResponse;
   readonly remoteEntries?: readonly HostDirectoryEntry[];
+  /** What the host's `epic.localHistory.read` rejects with, when it does. */
+  readonly localHistoryFailure?: HostRpcError;
+}
+
+/**
+ * The host's local History contribution that a list page's local rows stand
+ * for: `home: "local"` rows are the local homes, preserved orphans fill gaps,
+ * and cloud-homed rows are not the host's to contribute.
+ */
+function contributionOfPage(page: ListTasksResponse): LocalHistoryReadResponse {
+  return {
+    complete: true,
+    willComplete: true,
+    localHomeRows: page.tasks.filter((task) => task.home === "local"),
+    preservedRows: page.tasks.filter(
+      (task) => task.preservation === "orphaned-local-edits",
+    ),
+    tombstonedEpicIds: [],
+    localRows: page.completeness?.localRows ?? "none",
+  };
 }
 
 function buildMessengerFactory(
@@ -223,13 +244,18 @@ function buildMessengerFactory(
       handlers: {
         "host.status": () => compatibleHostStatus,
         "epic.getTaskContexts": (params) => options.getTaskContexts(params),
-        "epic.listTasks": (params) => {
+        "epic.localHistory.read": async () => {
+          if (options.localHistoryFailure !== undefined) {
+            throw options.localHistoryFailure;
+          }
           const hostId =
             messenger?.calls.at(-1)?.authority.endpoint.hostId ??
             localSnapshot.hostId;
-          return options.listTasksByHost === undefined
-            ? listTasks(params)
-            : options.listTasksByHost(hostId, params);
+          return contributionOfPage(
+            await (options.listTasksByHost === undefined
+              ? listTasks(LIST_CLOUD_TASKS_REQUEST)
+              : options.listTasksByHost(hostId, LIST_CLOUD_TASKS_REQUEST)),
+          );
         },
       },
     });
@@ -364,15 +390,15 @@ function queriesSettled(
   );
 }
 
-function unsupportedError(): HostRpcError {
+function unsupportedError(method: string): HostRpcError {
   return new HostRpcError({
     code: "E_HOST_UNSUPPORTED",
-    message: "This host does not support 'epic.getTaskContexts'.",
+    message: `This host does not support '${method}'.`,
     requestId: "req-unsupported",
-    method: "epic.getTaskContexts",
+    method,
     fatalDetails: {
       code: "E_HOST_UNSUPPORTED",
-      reason: "This host does not support 'epic.getTaskContexts'.",
+      reason: `This host does not support '${method}'.`,
       incompatibleMethods: null,
       upgradeGuidance: { clientShouldUpgrade: false, hostShouldUpgrade: true },
     },
@@ -434,7 +460,7 @@ describe("EpicTabExistenceReconciler fail-closed paths", () => {
       "epic.getTaskContexts",
     ]);
     const getTaskContexts = vi.fn((_params: GetTaskContextsRequest) => {
-      throw unsupportedError();
+      throw unsupportedError("epic.getTaskContexts");
     });
 
     const { queryClient } = mountReconciler({ getTaskContexts });
@@ -1079,19 +1105,20 @@ describe("EpicTabExistenceReconciler local-homed durable protection", () => {
     queryClient.clear();
   });
 
-  it("does not read a completeness-less page from a local-row-capable line as exhaustive", async () => {
-    // `home: "local"` rows arrive from `epic.listTasks@1.4`; the `completeness`
-    // marker only from `@1.5`+. A `@1.4` page can therefore have truncated its
-    // local rows without saying so. RED before the fix: the missing marker was
-    // read as "complete" - the legacy-peer allowance meant for pre-`@1.4`
-    // lines, which cannot carry local rows at all - and the persisted tab of
-    // an epic beyond the page's cap was force-closed.
+  /**
+   * A destructive run whose host cannot say which open epics it holds locally
+   * has no exemption set to rest on. The anchor is the local-home probe
+   * reaching `"error"` - the read was made and rejected - and the stale tab
+   * surviving it.
+   */
+  async function expectNoTabClosedWhenLocalHistoryRejects(
+    failure: HostRpcError,
+  ): Promise<void> {
     useEpicCanvasStore.getState().openEpicTab(STALE_EPIC_ID, "Maybe Stale");
-    recordNegotiatedHostManifest(localSnapshot.hostId, {
-      "host.status": { major: 1, minor: 0 },
-      "epic.getTaskContexts": { major: 1, minor: 0 },
-      "epic.listTasks": { major: 1, minor: 4 },
-    });
+    recordNegotiatedHostMethods(localSnapshot.hostId, [
+      "host.status",
+      "epic.getTaskContexts",
+    ]);
 
     const getTaskContexts = vi.fn(
       (params: GetTaskContextsRequest): GetTaskContextsResponse => {
@@ -1105,19 +1132,24 @@ describe("EpicTabExistenceReconciler local-homed durable protection", () => {
         return { tasks };
       },
     );
-    const listTasks = vi.fn((_params: ListTasksRequest): ListTasksResponse => ({
-      tasks: [],
-      hasMore: true,
-    }));
 
-    const { queryClient } = mountReconciler({ getTaskContexts, listTasks });
+    const { queryClient } = mountReconciler({
+      getTaskContexts,
+      localHistoryFailure: failure,
+    });
 
     await waitFor(() => {
       expect(queriesSettled(queryClient, reconcileQueryKeys(queryClient))).toBe(
         true,
       );
+      const localHomeKeys = reconcileLocalHomeQueryKeys(queryClient);
+      expect(localHomeKeys.length).toBeGreaterThan(0);
       expect(
-        queriesSettled(queryClient, reconcileLocalHomeQueryKeys(queryClient)),
+        localHomeKeys.every(
+          (queryKey) =>
+            queryClient.getQueryCache().find({ queryKey })?.state.status ===
+            "error",
+        ),
       ).toBe(true);
     });
     await act(async () => {
@@ -1126,43 +1158,27 @@ describe("EpicTabExistenceReconciler local-homed durable protection", () => {
 
     expect(collectOpenEpicIds()).toContain(STALE_EPIC_ID);
     queryClient.clear();
+  }
+
+  it("closes nothing on a host that predates the local History read", async () => {
+    // Such a host answers `E_HOST_UNSUPPORTED`; the earlier allowance - a page
+    // from a pre-`@1.4` list line is exhaustive by construction - is gone with
+    // the list read it relied on.
+    await expectNoTabClosedWhenLocalHistoryRejects(
+      unsupportedError("epic.localHistory.read"),
+    );
   });
 
-  it("still closes a confirmed-absent tab on a pre-@1.4 line, whose page cannot have truncated local rows", async () => {
-    // The vacuity guard for the case above: the same completeness-less page
-    // from a line that cannot produce local rows is exhaustive by construction,
-    // so the legacy allowance still applies and the stale tab still closes.
-    useEpicCanvasStore.getState().openEpicTab(STALE_EPIC_ID, "Stale Epic");
-    recordNegotiatedHostManifest(localSnapshot.hostId, {
-      "host.status": { major: 1, minor: 0 },
-      "epic.getTaskContexts": { major: 1, minor: 0 },
-      "epic.listTasks": { major: 1, minor: 3 },
-    });
-
-    const getTaskContexts = vi.fn(
-      (params: GetTaskContextsRequest): GetTaskContextsResponse => {
-        const tasks: GetTaskContextsResponse["tasks"] = {};
-        for (const taskId of params.taskIds) {
-          tasks[taskId] =
-            taskId === STALE_EPIC_ID
-              ? { status: "confirmed-absent" as const }
-              : confirmedRow(taskId);
-        }
-        return { tasks };
-      },
+  it("closes nothing when the local History read fails for an ordinary transport reason", async () => {
+    await expectNoTabClosedWhenLocalHistoryRejects(
+      new HostRpcError({
+        code: "RPC_ERROR",
+        message: "connection reset",
+        requestId: "req-local-history",
+        method: "epic.localHistory.read",
+        fatalDetails: null,
+      }),
     );
-    const listTasks = vi.fn((_params: ListTasksRequest): ListTasksResponse => ({
-      tasks: [],
-      hasMore: true,
-    }));
-
-    const { queryClient } = mountReconciler({ getTaskContexts, listTasks });
-
-    await waitFor(() => {
-      expect(collectOpenEpicIds()).not.toContain(STALE_EPIC_ID);
-    });
-    expect(collectOpenEpicIds()).toContain(OPEN_EPIC_ID);
-    queryClient.clear();
   });
 
   it("keeps an epic the host could not classify open, so a promotion racing the reconcile cannot force-close it", async () => {

@@ -173,6 +173,27 @@ export const hostQueryKeys = {
       userId,
     ] as const,
   /**
+   * One named host's binding as the pool reads it (`environment.binding.read`),
+   * for ONE viewer - the shape `useHostQuery` produces with
+   * `cacheKeyIdentity: [viewerUserId]`: `["host", servingHostId, method,
+   * { hostId }, userId]`. The binding is the account's view of the host, so
+   * the viewer segment keeps one account's answer from serving the next, and
+   * a bind's write-through lands in the binder's entry only.
+   */
+  environmentBindingForViewer: (
+    servingHostId: string,
+    hostId: string,
+    userId: string,
+  ) =>
+    [
+      ...hostQueryKeys.method<HostRpcRegistry, "environment.binding.read">(
+        servingHostId,
+        "environment.binding.read",
+        { hostId },
+      ),
+      userId,
+    ] as const,
+  /**
    * Batch task-context title lookup (`epic.getTaskContexts`). Key shape matches
    * what `useHostQuery` / `useHostQueries` produce for that method with
    * `cacheKeyIdentity: userId`: `["host", hostId, method, { taskIds }, userId]`.

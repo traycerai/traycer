@@ -3,9 +3,9 @@ import {
   taskFiltersSchema,
   listTasksRequestSchema,
   listTasksResponseSchemaPre17,
-  listTasksResponseSchema,
+  listTasksResponseSchemaPre18,
   listTaskLightSchemaPre17,
-  listTaskLightSchema,
+  listTaskLightSchemaPre18,
 } from "@traycer/protocol/host/epic/unary-schemas";
 import { z } from "zod";
 
@@ -310,14 +310,16 @@ export const cloudListTasksResponseSchemaV10 = lazySchema(() =>
   }),
 );
 
-// The current cloud row is also the `organization.history@1.1` response.
+// The current cloud row is also the `organization.history@1.1` response,
+// pinned to the `epic.listTasks@1.7` row: a released response must not follow
+// the moving `listTaskLightSchema`.
 export const cloudListTaskLightSchema = lazySchema(() =>
-  listTaskLightSchema.extend({
+  listTaskLightSchemaPre18.extend({
     organization: taskOrganizationSchema.optional(),
   }),
 );
 export const cloudListTasksResponseSchema = lazySchema(() =>
-  listTasksResponseSchema.extend({
+  listTasksResponseSchemaPre18.extend({
     tasks: z.array(cloudListTaskLightSchema),
     organizationFacets: z
       .object({ labelNames: z.array(labelNameSchema) })

@@ -765,7 +765,8 @@ function changedReadinessHostIds(
   return changed;
 }
 
-function normalizeCloudEvent(
+/** A cloud feed event as the graph's row; shared by every cloud source. */
+export function normalizeCloudEvent(
   event: HostCommunicationGraphCloudFeedEvent,
 ): CommGraphEvent {
   return {

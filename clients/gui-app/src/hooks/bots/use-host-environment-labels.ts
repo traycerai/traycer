@@ -4,22 +4,28 @@ import {
   subscribeRemoteSessionReadiness,
 } from "@traycer-clients/shared/host-transport/remote/index";
 import { useReactiveLocalHostId } from "@/hooks/host/use-reactive-local-host-id";
-import { useHostEnvironmentBindings } from "@/hooks/bots/use-host-environment-bindings-query";
+import {
+  readsHostBindingsFromPool,
+  useHostEnvironmentBindings,
+} from "@/hooks/bots/use-host-environment-bindings-query";
 
 /**
  * Each listed host's environment label for Settings' host list (Tracy Bots),
- * obtained WITHOUT causing a connection - the same rule the fleet update
- * badges keep: Settings does not silently dial other hosts to decorate a
- * row. A host is read only when this client already holds a session to it:
- * the local host, the host Settings is scoped to, and any remote host with
- * a borrowable session. Every other host resolves to `null` and its row
- * says nothing about its environment.
+ * obtained WITHOUT causing a connection to the host. In a build with a pool
+ * every row's binding comes from the pool, so every row is read. Without
+ * one each read goes to the host itself, so the rule the fleet update badges
+ * keep applies - Settings does not silently dial other hosts to decorate a row:
+ * a host is read only when this client already holds a session to it (the
+ * local host, the host Settings is scoped to, and any remote host with a
+ * borrowable session). Every other host resolves to `null` and its row says
+ * nothing about its environment.
  */
 export function useHostEnvironmentLabelResolver(
   hostIds: ReadonlyArray<string>,
   scopedHostId: string | null,
 ): (hostId: string) => string | null {
   const localHostId = useReactiveLocalHostId();
+  const fromPool = readsHostBindingsFromPool();
   const idsKey = hostIds.join("\n");
   const subscribe = useCallback(
     (onStoreChange: () => void) =>
@@ -35,12 +41,13 @@ export function useHostEnvironmentLabelResolver(
         .filter(
           (hostId) =>
             hostId.length > 0 &&
-            (hostId === localHostId ||
+            (fromPool ||
+              hostId === localHostId ||
               hostId === scopedHostId ||
               hasBorrowableRemoteSession(hostId)),
         )
         .join("\n"),
-    [idsKey, localHostId, scopedHostId],
+    [fromPool, idsKey, localHostId, scopedHostId],
   );
   const readableStamp = useSyncExternalStore(
     subscribe,

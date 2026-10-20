@@ -11,6 +11,7 @@ import {
   listTasksResponseSchemaPre15,
   listTasksResponseSchemaPre16,
   listTasksResponseSchemaPre17,
+  listTasksResponseSchemaPre18,
 } from "@traycer/protocol/host/epic/unary-schemas";
 
 /**
@@ -31,13 +32,13 @@ import {
  * protocol package.
  */
 describe("epic.listTasks instance identity", () => {
-  // The LATEST installed minor, which `@1.7` now is - bump alongside
+  // The LATEST installed minor, which `@1.8` now is - bump alongside
   // `latestMinor` in the registry. The index is spelled rather than derived
   // because the invariant is about the canonical contract specifically; a
   // derived lookup would keep passing while silently pointing at whatever
   // happened to be last.
   const hostContract =
-    hostRpcRegistry["epic.listTasks"][1].versions[7].contract;
+    hostRpcRegistry["epic.listTasks"][1].versions[8].contract;
 
   it("host request schema is the canonical listTasksRequestSchema instance", () => {
     expect(hostContract.requestSchema).toBe(listTasksRequestSchema);
@@ -45,6 +46,34 @@ describe("epic.listTasks instance identity", () => {
 
   it("host response schema is the canonical listTasksResponseSchema instance", () => {
     expect(hostContract.responseSchema).toBe(listTasksResponseSchema);
+  });
+
+  it("keeps the 1.7 response frozen before the owning-environment key", () => {
+    const v17 = hostRpcRegistry["epic.listTasks"][1].versions[7].contract;
+    expect(v17.responseSchema).toBe(listTasksResponseSchemaPre18);
+    const page = {
+      tasks: [
+        {
+          epic: null,
+          phase: null,
+          recentAt: 1_700_000_000_000,
+          ownerEnvironmentId: "env-1",
+        },
+      ],
+      hasMore: false,
+    };
+    expect(
+      listTasksResponseSchemaPre18.parse(page).tasks[0],
+    ).not.toHaveProperty("ownerEnvironmentId");
+    expect(
+      listTasksResponseSchema.parse(page).tasks[0]?.ownerEnvironmentId,
+    ).toBe("env-1");
+    expect(
+      listTasksResponseSchema.parse({
+        tasks: [{ epic: null, phase: null }],
+        hasMore: false,
+      }).tasks[0],
+    ).not.toHaveProperty("ownerEnvironmentId");
   });
 
   it("keeps the 1.6 response frozen before the per-viewer activity key", () => {

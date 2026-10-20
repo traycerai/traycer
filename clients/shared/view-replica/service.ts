@@ -1,3 +1,4 @@
+import type { ViewReplicaAddress } from "./identity";
 import type { ViewReplicaRowScope } from "./row-scope";
 
 /** One row of a page, with the scope that authorized it. */
@@ -15,12 +16,14 @@ export interface ViewReplicaPageParts {
 
 /**
  * The local contribution a cached page must carry before it may paint: the
- * rows, tombstones and completeness only this device knows (History's is
- * P7's). `apply` returns `null` while the contribution cannot be applied yet,
- * and a paint is then refused rather than shown without it.
+ * rows, tombstones and completeness only this device knows (History's comes
+ * from the person's host). `apply` receives the page's address, whose request
+ * scope says which request the page answered, and returns `null` while the
+ * contribution cannot be applied yet; a paint is then refused rather than
+ * shown without it.
  */
 export interface ViewReplicaLocalContribution<Page> {
-  apply(page: Page): Page | null;
+  apply(page: Page, address: ViewReplicaAddress): Page | null;
 }
 
 /**
@@ -137,12 +140,15 @@ export class ViewReplicaService<Page> {
   }
 
   /** Admits a cached page for its first paint, applying the contribution. */
-  admitFirstPaint(page: Page): ViewReplicaPaintAdmission<Page> {
+  admitFirstPaint(
+    page: Page,
+    address: ViewReplicaAddress,
+  ): ViewReplicaPaintAdmission<Page> {
     const contribution = this.#contribution;
     if (contribution === null) {
       return { admitted: true, page, contribution: null };
     }
-    const contributed = contribution.value.apply(page);
+    const contributed = contribution.value.apply(page, address);
     if (contributed === null) {
       return { admitted: false, reason: "contribution-unavailable" };
     }

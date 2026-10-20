@@ -72,6 +72,7 @@ import {
   listTasksRequestSchemaV11,
   listTasksRequestSchemaPre13,
   listTasksResponseSchema,
+  listTasksResponseSchemaPre18,
   listTasksResponseSchemaV10,
   listTasksResponseSchemaPre13,
   listTasksResponseSchemaPre14,
@@ -218,6 +219,10 @@ import {
   attachEnvironmentRequestSchema,
   attachEnvironmentResponseSchema,
 } from "@traycer/protocol/host/epic/environment-attachment";
+import {
+  localHistoryReadRequestSchema,
+  localHistoryReadResponseSchema,
+} from "@traycer/protocol/host/epic/local-history";
 
 // `epic.listTasks@1.0` - frozen pre-pinning host entry point for the CloudData
 // task-list query. Both request and response preserve the released wire shape.
@@ -390,7 +395,7 @@ export const epicListTasksV17 = defineRpcContract({
   method: "epic.listTasks",
   schemaVersion: { major: 1, minor: 7 } as const,
   requestSchema: listTasksRequestSchema,
-  responseSchema: listTasksResponseSchema,
+  responseSchema: listTasksResponseSchemaPre18,
 });
 
 export const epicListTasksUpgradeV16ToV17 = defineUpgradePath<
@@ -399,6 +404,26 @@ export const epicListTasksUpgradeV16ToV17 = defineUpgradePath<
 >({
   from: epicListTasksV16.schemaVersion,
   to: epicListTasksV17.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
+});
+
+// The owning environment is display metadata and optional. A 1.7 peer keeps
+// its frozen row, so an upgraded row names no environment rather than a
+// guessed one.
+export const epicListTasksV18 = defineRpcContract({
+  method: "epic.listTasks",
+  schemaVersion: { major: 1, minor: 8 } as const,
+  requestSchema: listTasksRequestSchema,
+  responseSchema: listTasksResponseSchema,
+});
+
+export const epicListTasksUpgradeV17ToV18 = defineUpgradePath<
+  typeof epicListTasksV17,
+  typeof epicListTasksV18
+>({
+  from: epicListTasksV17.schemaVersion,
+  to: epicListTasksV18.schemaVersion,
   upgradeRequest: (request) => request,
   upgradeResponse: (response) => response,
 });
@@ -1165,6 +1190,17 @@ export const epicAttachEnvironmentV10 = defineRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: attachEnvironmentRequestSchema,
   responseSchema: attachEnvironmentResponseSchema,
+});
+
+/**
+ * Optional (non-floor): the host's local History contribution, read with no
+ * cloud call. See `local-history.ts`.
+ */
+export const epicLocalHistoryReadV10 = defineRpcContract({
+  method: "epic.localHistory.read",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: localHistoryReadRequestSchema,
+  responseSchema: localHistoryReadResponseSchema,
 });
 
 export const epicPrepareArtifactImageV10 = defineRpcContract({

@@ -1081,10 +1081,28 @@ export const listTaskLightSchemaPre17 = lazySchema(() =>
 export type ListTaskLightPre17 = z.infer<typeof listTaskLightSchemaPre17>;
 
 // `epic.listTasks@1.7` adds the per-viewer activity key. `updatedAt` inside
-// the Epic/Phase light remains the task document edit time.
-export const listTaskLightSchema = lazySchema(() =>
+// the Epic/Phase light remains the task document edit time. FROZEN - `@1.8`
+// adds a row key this schema would strip.
+export const listTaskLightSchemaPre18 = lazySchema(() =>
   listTaskLightSchemaPre17.extend({
     recentAt: z.number().optional(),
+  }),
+);
+export type ListTaskLightPre18 = z.infer<typeof listTaskLightSchemaPre18>;
+
+/**
+ * `epic.listTasks@1.8` names the environment that owns the task, when one
+ * does: a task a team's environment created rather than a person. DISPLAY
+ * metadata only, so a row can say whose it is. It is never an authorization
+ * input: what the viewer may do with the row is its `permission`, which the
+ * server computed under the viewer's own bearer.
+ *
+ * Absent, not `null`, for a task no environment owns and on a row from a
+ * peer that predates the key - both read as "no environment to name".
+ */
+export const listTaskLightSchema = lazySchema(() =>
+  listTaskLightSchemaPre18.extend({
+    ownerEnvironmentId: z.string().optional(),
   }),
 );
 export type ListTaskLight = z.infer<typeof listTaskLightSchema>;
@@ -1349,8 +1367,19 @@ export type ListTasksResponsePre17 = z.infer<
   typeof listTasksResponseSchemaPre17
 >;
 
-export const listTasksResponseSchema = lazySchema(() =>
+// `epic.listTasks@1.7` response: the per-viewer activity key. FROZEN - `@1.8`
+// adds `ownerEnvironmentId` to the row.
+export const listTasksResponseSchemaPre18 = lazySchema(() =>
   listTasksResponseSchemaPre17.extend({
+    tasks: z.array(listTaskLightSchemaPre18),
+  }),
+);
+export type ListTasksResponsePre18 = z.infer<
+  typeof listTasksResponseSchemaPre18
+>;
+
+export const listTasksResponseSchema = lazySchema(() =>
+  listTasksResponseSchemaPre18.extend({
     tasks: z.array(listTaskLightSchema),
   }),
 );
