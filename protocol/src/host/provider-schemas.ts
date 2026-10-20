@@ -5026,6 +5026,7 @@ export type DowngradableToV10ProviderState = (
   // (v9.1) the auto-mode judge. Optional here for the same reason as the rest:
   // a caller may hold a row from any released line, and only a 9.1 row has it.
   autoJudge?: ProviderCliState["autoJudge"];
+  nativeSubagents?: ProviderCliState["nativeSubagents"];
   // (v10.2) list-only host facts, absent from every earlier released carrier.
   macosRequirement?: ProviderCliState["macosRequirement"];
   // `V70` is named explicitly rather than left to ride the `V10` arm on the
@@ -5097,6 +5098,8 @@ export function downgradeProviderCliStateToV10(
     // maintains. ADD THE FIELD HERE; do not weaken that test.
     autoJudge: _autoJudge,
     macosRequirement: _macosRequirement,
+    // (10.5) the per-provider native-subagents switch; same trap, same guard.
+    nativeSubagents: _nativeSubagents,
     ...rest
   } = state;
   const parsed = providerCliStateSchemaV10.safeParse({
