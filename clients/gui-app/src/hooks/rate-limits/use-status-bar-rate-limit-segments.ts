@@ -488,10 +488,20 @@ function segmentState(
     // EVER, not now: a dataless query goes back to pending while the next read
     // runs, which clears the error flag. Read `erroredNow` here and the words
     // would drop to an empty track for the length of a retry - up to the CLI
-    // read budget - which is the one moment they are most true. With no data
-    // there is nothing a past error can misdescribe, so the sticky answer is
-    // the honest one.
-    return reads.erroredEver && reads.readable
+    // read budget - which is the one moment they are most true.
+    //
+    // Sticky, and so held to the one case nothing can contradict: a query with
+    // no envelope at all. `errorUpdateCount` never resets, so a key that
+    // rejected once answers `erroredEver` for the rest of the session. The
+    // other way into this branch is an envelope whose `latest` is null - a
+    // read that LANDED and carried no provider snapshot - and this is the
+    // branch that tells "a read failed and is being retried" from "nothing has
+    // been read yet". A response that arrived belongs on the second side,
+    // however long ago some read of the key rejected. It leaves the run
+    // itself alone: a response with no snapshot is no answer ABOUT the
+    // account, so it carries the episode over, and a transient failure after
+    // it is still owed that run's one re-read.
+    return envelope === null && reads.erroredEver && reads.readable
       ? { state: "transient", reason: null }
       : { state: "cold", reason: null };
   }
@@ -1003,12 +1013,15 @@ export function useStatusBarRateLimitSegments(input: {
     if (ledgerHostId === null || !inventory.answered) return;
     pruneScheduledTransientReads(ledgerHostId, new Set(existingLedgerKeys));
   });
-  // The set itself as the dependency, flattened, with the answer in front of
-  // it: a fresh array every render would run this on every render, and the
-  // keys are the only thing that can make it mean something different - except
-  // the host answering "none", which leaves them empty and means the opposite
-  // of what their being empty meant a moment ago.
+  // The set itself as the dependency, flattened, behind the two things that
+  // decide what it MEANS: a fresh array every render would run this on every
+  // render, while the host answering "none" leaves the keys empty and means the
+  // opposite of what their being empty meant a moment ago - and the host is in
+  // it because the prune is host-scoped. Two hosts that have both answered with
+  // no accounts have the same keys, and the entries at stake are not the same
+  // entries.
   const existingEpisodeKeys = [
+    ledgerHostId ?? "nohost",
     inventory.answered ? "answered" : "silent",
     ...existingLedgerKeys,
   ].join("\n");

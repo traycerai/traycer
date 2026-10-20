@@ -197,6 +197,21 @@ function renderSegmentsFor(
   });
 }
 
+/** The hook as the strip is pointed from one host to the next. */
+function renderSwitchingHostSegments(retryHostId: () => string | null) {
+  return renderHook(() => {
+    mocks.batches = [];
+    return useStatusBarRateLimitSegments({
+      providers: [],
+      profileSelection: PROFILE_SELECTION,
+      mode: "live",
+      editing: false,
+      sample: false,
+      retryHostId: retryHostId(),
+    });
+  });
+}
+
 /** The hook as the Customize editor mounts it: hidden providers still drawn. */
 function renderEditorSegments(
   providers: ReadonlyArray<ConfiguredRateLimitProvider>,
@@ -1211,6 +1226,57 @@ describe("useStatusBarRateLimitSegments", () => {
     rerender();
 
     expect(scheduledTransientReadOwed(key, 7)).toBe(true);
+  });
+
+  it("prunes the host it is pointed at, even when the host before it answered the same way", () => {
+    const left = rateLimitAccountLedgerKey("host-b", "codex", null);
+    recordScheduledTransientRead(left, 7);
+    // Both hosts have answered, and both answers are the same empty one - so
+    // the keys this hook watches are identical on either side of the switch,
+    // and the only thing that differs is which host they belong to.
+    mocks.inventory = { answered: true, providers: [] };
+    let hostId: string | null = RETRY_HOST_ID;
+
+    const { rerender } = renderSwitchingHostSegments(() => hostId);
+    // Host A's answer says nothing about host B's accounts.
+    expect(scheduledTransientReadOwed(left, 7)).toBe(false);
+
+    hostId = "host-b";
+    rerender();
+
+    expect(scheduledTransientReadOwed(left, 7)).toBe(true);
+  });
+
+  it("is cold, not retrying, once a read has come back with no snapshot at all", () => {
+    // `providerRateLimits: null` - the host answered about this account and had
+    // no usage to report. A read of the key rejected at some point, and that
+    // is not an answer the reader can be told about forever: the account HAS
+    // been answered, so the sentence that stays true is "no reading yet".
+    setResult("codex", {
+      data: buildProviderRateLimitEnvelopeFromSnapshot(
+        undefined,
+        null,
+        Date.now(),
+      ),
+      isError: false,
+    });
+    setFailed("codex");
+
+    const { result } = renderSegments([
+      configuredProvider({ providerId: "codex", lane: "ephemeralProcess" }),
+    ]);
+
+    expect(result.current.cluster).toEqual({
+      kind: "segments",
+      segments: [
+        expect.objectContaining({
+          state: "cold",
+          reason: null,
+          retryOffered: false,
+        }),
+      ],
+    });
+    expect(result.current.retryTargets).toEqual([]);
   });
 
   it("keeps the spent episode of an account the display list drops with its provider", () => {

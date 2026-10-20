@@ -45,6 +45,8 @@ import {
   rateLimitAccountLedgerKey,
   recordManualRateLimitRetry,
   recordScheduledTransientRead,
+  releaseManualRateLimitRetry,
+  reserveManualRateLimitRetry,
 } from "@/lib/rate-limits/rate-limit-read-ledger";
 import { rateLimitFetchLane } from "@/lib/rate-limit-providers";
 import { TRANSIENT_RATE_LIMIT_RETRY_DELAY_MS } from "@/lib/rate-limits/rate-limit-timing";
@@ -129,14 +131,23 @@ export function StatusBarRateLimitCluster(props: {
     // window's read can settle against this same account in between. This is
     // the gate; the affordance is an invitation.
     if (manualRateLimitRetryWithheld(key, Date.now())) return;
+    // The bound is dated when the read SETTLES, so it covers nothing while the
+    // read runs: the reservation is what holds that window, and it is released
+    // however the read ends. It does not move the date - a reserved click is
+    // refused, not stamped.
+    if (!reserveManualRateLimitRetry(key)) return;
     void readOneAccount({
       fetchScope,
       httpRefetches: refresh.httpRefetches,
       target,
       force: true,
-    }).then(() => {
-      recordManualRateLimitRetry(key, Date.now());
-    });
+    })
+      .then(() => {
+        recordManualRateLimitRetry(key, Date.now());
+      })
+      .finally(() => {
+        releaseManualRateLimitRetry(key);
+      });
   };
   return (
     <>

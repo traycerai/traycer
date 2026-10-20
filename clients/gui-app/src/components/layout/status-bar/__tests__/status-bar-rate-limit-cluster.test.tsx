@@ -33,6 +33,7 @@ import {
   pruneScheduledTransientReads,
   rateLimitAccountLedgerKey,
   recordManualRateLimitRetry,
+  releaseManualRateLimitRetry,
   scheduledTransientReadOwed,
 } from "@/lib/rate-limits/rate-limit-read-ledger";
 import type { ConfiguredRateLimitProvider } from "@/hooks/rate-limits/use-configured-rate-limit-providers";
@@ -233,6 +234,14 @@ beforeEach(() => {
     // The episode one-shot is this renderer's too, and a row that spent one
     // would otherwise hand a spent episode to the next row.
     pruneScheduledTransientReads(hostId, new Set());
+    // Likewise the in-flight reservation: a row that failed before its read
+    // settled would otherwise leave the account reserved for the rows after
+    // it, which refuses their clicks for a reason that is not theirs.
+    for (const providerId of ["codex", "openrouter"]) {
+      releaseManualRateLimitRetry(
+        rateLimitAccountLedgerKey(hostId, providerId, null),
+      );
+    }
   }
   window.localStorage.clear();
 });
@@ -958,6 +967,61 @@ describe("<StatusBarRateLimitCluster /> scrolls its readings", () => {
           Date.now(),
         ),
       ).toBe(false);
+    });
+
+    it("reads an http account once when the click is repeated before that read settles", async () => {
+      mocks.scope = { hostId: "host-a" };
+      let settle = (): void => undefined;
+      const refetch = vi.fn(
+        (): Promise<void> =>
+          new Promise<void>((resolve) => {
+            settle = () => resolve();
+          }),
+      );
+      mocks.cluster = {
+        kind: "segments",
+        segments: [
+          {
+            ...segmentFixture("openrouter", null),
+            state: "transient",
+            reason: "connection_failed",
+            retryOffered: true,
+          },
+        ],
+      };
+      mocks.refresh = {
+        ...mocks.refresh,
+        httpRefetches: [{ providerId: "openrouter", profileId: null, refetch }],
+      };
+      const key = rateLimitAccountLedgerKey("host-a", "openrouter", null);
+      // The row above stamped this account's bound when its read settled, and
+      // the floor is this WINDOW's - so release it the way the file's setup
+      // does: a stamp at the epoch binds nothing and is dropped on first read.
+      recordManualRateLimitRetry(key, 0);
+      window.localStorage.clear();
+      renderCluster({});
+
+      // The persisted bound is dated at SETTLEMENT, so while this read runs
+      // there is no stamp for a second click to meet. On the ephemeral lane the
+      // fetch function coalesces a forced read with the one in flight; the http
+      // lane refetches an observer, where a second refetch cancels and restarts
+      // the first - so the account has to be reserved for the duration here.
+      const segment = screen.getByTestId(
+        "status-bar-provider-segment-openrouter",
+      );
+      fireEvent.click(segment);
+      fireEvent.click(segment);
+
+      expect(refetch).toHaveBeenCalledTimes(1);
+
+      // And the reservation is not the bound: the stamp is still dated when the
+      // read settles, not when the click was made.
+      expect(manualRateLimitRetryWithheld(key, Date.now())).toBe(false);
+      await act(async () => {
+        settle();
+        await Promise.resolve();
+      });
+      expect(manualRateLimitRetryWithheld(key, Date.now())).toBe(true);
     });
 
     it("refuses a click the bound already covers, however the segment was drawn", () => {

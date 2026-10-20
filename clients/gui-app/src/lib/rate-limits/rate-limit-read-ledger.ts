@@ -33,6 +33,18 @@
  * storage can be absent or refuse to answer and must never throw into a
  * render.
  *
+ * Both layers are dated when a read SETTLES, which is deliberate - a slow
+ * probe is bounded from its failure rather than from the click - and that
+ * leaves the read's own duration with no stamp for a second click to meet. It
+ * is not a sliver: a usage probe may legitimately run for minutes - the
+ * ephemeral lane waits three of them for its frame - so the unstamped span can
+ * be several times `RATE_LIMIT_MANUAL_RETRY_WITHHOLD_MS`. A reservation held
+ * here covers exactly that span, for the window that started the read, and it
+ * moves no date: a click that meets it is refused, not stamped. It has to hold
+ * even though each lane coalesces, because coalescing is not refusing - the
+ * `httpFetch` lane has no registry and reads through the observer's `refetch`,
+ * which cancels the read in flight and starts it again.
+ *
  * ## The episode one-shot
  *
  * The transient words promise a retry, so the strip schedules exactly one,
@@ -106,6 +118,28 @@ export function rateLimitAccountLedgerKey(
   return `${LEDGER_KEY_PREFIX}${hostId}:${providerId}:${profileId ?? ""}`;
 }
 
+/**
+ * Accounts with a hand-driven read in flight in THIS window - the span the
+ * dated bound above cannot cover. In memory only, because it describes a read
+ * this window started and holds no claim over any other.
+ */
+const manualReadsInFlight = new Set<string>();
+
+/**
+ * Reserves the account for a hand-driven read, false if one is already in
+ * flight here. Pair every true with {@link releaseManualRateLimitRetry}.
+ */
+export function reserveManualRateLimitRetry(key: string): boolean {
+  if (manualReadsInFlight.has(key)) return false;
+  manualReadsInFlight.add(key);
+  return true;
+}
+
+/** Releases the reservation above, however the read ended. */
+export function releaseManualRateLimitRetry(key: string): void {
+  manualReadsInFlight.delete(key);
+}
+
 /** Records that this account was just read by hand. Call it at SETTLEMENT. */
 export function recordManualRateLimitRetry(key: string, at: number): void {
   stampsHere.set(key, at);
@@ -168,6 +202,17 @@ export function recordScheduledTransientRead(
     if (oldest.done === true) return;
     spentEpisodes.delete(oldest.value);
   }
+}
+
+/**
+ * Forgets which episode this account's one scheduled read was spent on, for a
+ * caller that ENDS a run rather than answering it: an OpenCode credential
+ * change resets the account's usage query, and `NO_EPISODE` is the one
+ * identity every account with no envelope shares - so the first failure under
+ * the credential after it would read as a run that has already been retried.
+ */
+export function clearScheduledTransientRead(key: string): void {
+  spentEpisodes.delete(key);
 }
 
 /**

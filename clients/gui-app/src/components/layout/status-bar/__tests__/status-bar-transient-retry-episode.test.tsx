@@ -155,6 +155,7 @@ vi.mock(
 );
 
 import { StatusBarRateLimitCluster } from "@/components/layout/status-bar/status-bar-rate-limit-cluster";
+import { invalidateAfterModelProviderMutation } from "@/hooks/providers/model-provider-invalidations";
 
 const HOST_ID = "host-a";
 
@@ -210,6 +211,14 @@ function managedProfile(profileId: string): ProviderProfile {
 const OPENCODE: ConfiguredRateLimitProvider = {
   providerId: "opencode",
   profiles: [managedProfile("work"), managedProfile("personal")],
+  lane: "httpFetch",
+  fetchEligibility: { ambient: true, managedProfiles: true },
+};
+
+/** The ambient OpenCode account, the one a credential change resets. */
+const OPENCODE_AMBIENT: ConfiguredRateLimitProvider = {
+  providerId: "opencode",
+  profiles: [],
   lane: "httpFetch",
   fetchEligibility: { ambient: true, managedProfiles: true },
 };
@@ -525,6 +534,53 @@ describe("a transient account's scheduled re-read", () => {
       vi.advanceTimersByTime(TRANSIENT_RATE_LIMIT_RETRY_DELAY_MS);
     });
     expect(mocks.collect).toHaveBeenCalledTimes(1);
+  });
+
+  it("owes the credential after a change its own read, with no envelope on either side", async () => {
+    // A transport-level rejection with no envelope at all: the strip says the
+    // reading could not load, and the one scheduled read it promises is
+    // recorded against `NO_EPISODE`, because there is no envelope to name a
+    // run. Then the account's credential changes, which RESETS its query - so
+    // the next rejection has no envelope either, and would read as the same
+    // run the credential before it already spent.
+    const key = rateLimitAccountLedgerKey(HOST_ID, "opencode", null);
+    mocks.inventory = { answered: true, providers: [OPENCODE_AMBIENT] };
+    mocks.results.set("opencode:", { data: undefined, isError: true });
+    const queryClient = newQueryClient();
+    const view = render(tree(queryClient, [OPENCODE_AMBIENT]));
+
+    act(() => {
+      vi.advanceTimersByTime(TRANSIENT_RATE_LIMIT_RETRY_DELAY_MS);
+    });
+    expect(mocks.collect).toHaveBeenCalledTimes(1);
+    expect(scheduledTransientReadOwed(key, NO_EPISODE)).toBe(false);
+    // The strip's render after that read, which stops listing the account and
+    // retires the timer that fired. Not staging: the read lands in the cache
+    // and the strip's own clock ticks every 60s, so a credential a person
+    // changes afterwards is always this far along.
+    act(() => {
+      view.rerender(tree(queryClient, [OPENCODE_AMBIENT]));
+    });
+
+    // Awaited, because the reset is what this row is about and it lands after
+    // the cancellations the mutation starts with.
+    await act(async () => {
+      await invalidateAfterModelProviderMutation({
+        queryClient,
+        hostId: HOST_ID,
+        providerId: "opencode",
+      });
+    });
+
+    // The mutation resets this account's query, so its observer notifies and
+    // the strip renders; with the queries doubled here, that is this rerender.
+    act(() => {
+      view.rerender(tree(queryClient, [OPENCODE_AMBIENT]));
+    });
+    act(() => {
+      vi.advanceTimersByTime(TRANSIENT_RATE_LIMIT_RETRY_DELAY_MS);
+    });
+    expect(mocks.collect).toHaveBeenCalledTimes(2);
   });
 
   it("keeps no entry for an account the host no longer has", () => {

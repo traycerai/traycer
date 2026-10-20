@@ -4,6 +4,10 @@ import type { ProviderId } from "@traycer/protocol/host/provider-schemas";
 import type { HostRpcRegistry } from "@/lib/host";
 import { queryKeys } from "@/lib/query-keys";
 import { modelProvidersQueryKeys } from "@/lib/query-keys/model-providers-query-keys";
+import {
+  clearScheduledTransientRead,
+  rateLimitAccountLedgerKey,
+} from "@/lib/rate-limits/rate-limit-read-ledger";
 
 /**
  * What a SETTLED upstream credential mutation retires, in one place so the
@@ -19,7 +23,11 @@ import { modelProvidersQueryKeys } from "@/lib/query-keys/model-providers-query-
  *    design, so without this it would serve the pre-connect list for the rest
  *    of the app session.
  * 3. OpenCode Go usage - an auth-store mutation can change the Go key, so its
- *    renderer-only last-good snapshot must be dropped before another read.
+ *    renderer-only last-good snapshot must be dropped before another read -
+ *    and with it the strip's record of which run of failures that account's
+ *    one scheduled re-read was spent on, since the reset leaves no envelope
+ *    from which to tell the credential before this mutation from the one
+ *    after it.
  *
  * Called only for a `done` result. A `pending` OAuth attempt has changed
  * nothing yet, and invalidating on it would re-list (and so re-lease a managed
@@ -63,6 +71,14 @@ export async function invalidateAfterModelProviderMutation(args: {
   ]);
   if (args.providerId === "opencode") {
     void args.queryClient.resetQueries(rateLimitScope);
+    // That reset leaves the account with no envelope, and the strip identifies
+    // a run of failures by the envelope's episode - with `NO_EPISODE` standing
+    // for every account that has none. So the run this credential's failures
+    // belonged to has to be let go of here, or the first failure under the
+    // next credential reads as a run that has already had its one re-read.
+    clearScheduledTransientRead(
+      rateLimitAccountLedgerKey(args.hostId, "opencode", null),
+    );
   }
   void args.queryClient.invalidateQueries(listScope);
   void args.queryClient.invalidateQueries(catalogScope);
