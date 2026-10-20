@@ -116,14 +116,26 @@ const PID = vi.hoisted(() => ({
   // to check" from "checked and could not prove" - two states whose
   // `forcedRecycle` answer is identical.
   goneCalls: 0,
+  // When set, answers the identity predicate per pid and per call (1-based),
+  // for the rows that need the published instance to change mid-route.
+  goneFn: null as ((pid: number, call: number) => boolean) | null,
+  // Evidence reads served first, in order, before `evidence` answers again.
+  evidenceReads: [] as Array<
+    | { readonly kind: "absent" }
+    | { readonly kind: "unreadable"; readonly cause: string }
+    | { readonly kind: "read"; readonly metadata: { readonly pid: number } }
+  >,
 }));
 vi.mock("../../../host/pid-metadata", () => ({
   readHostPidMetadata: async () =>
     PID.evidence.kind === "read" ? PID.evidence.metadata : null,
-  readHostPidMetadataEvidence: async () => PID.evidence,
-  publishedHostProcessGone: () => {
+  readHostPidMetadataEvidence: async () =>
+    PID.evidenceReads.shift() ?? PID.evidence,
+  publishedHostProcessGone: (metadata: { readonly pid: number }) => {
     PID.goneCalls += 1;
-    return PID.gone;
+    return PID.goneFn === null
+      ? PID.gone
+      : PID.goneFn(metadata.pid, PID.goneCalls);
   },
 }));
 
@@ -809,6 +821,210 @@ describe("linux service stop --force", () => {
     // Non-force never confirms the stop, so the finisher is never reached
     // either.
     expect(MOCKS.forceStopHostProcess).not.toHaveBeenCalled();
+  });
+
+  // traycer#1563 D3a: a wedged host ignores SIGTERM and outlives the 15 s
+  // `systemctl stop` subprocess. The plain stop must not report success while
+  // the published host is still alive; it fails and names `--force`, the one
+  // stop that escalates to SIGKILL.
+  it("without --force, a stop that leaves the published host alive fails and names --force", async () => {
+    PID.evidence = { kind: "read", metadata: { pid: 4242 } };
+    PID.gone = false;
+    // The plain stop waits the SIGTERM grace before it gives up on the host;
+    // at production timing that is the host's own ~32 s force-exit watchdog.
+    setRestartStopGracesForTests({ sigtermMs: 5, sigkillMs: 5 });
+    const { runner } = recordingRunner(() => false);
+
+    try {
+      await expect(
+        createLinuxController(runner).stop(label, { force: false }),
+      ).rejects.toMatchObject({
+        message: expect.stringContaining("--force"),
+      });
+    } finally {
+      setRestartStopGracesForTests(null);
+    }
+    expect(MOCKS.forceStopHostProcess).not.toHaveBeenCalled();
+  });
+
+  // The old process being gone is not the host being gone: a stop job that
+  // timed out leaves the unit failed, and `Restart=on-failure` starts a
+  // replacement that publishes its own record. The plain stop re-reads the
+  // record after the old pid exits and fails naming the NEW pid.
+  it("without --force, a stop whose old process exited but left a different live host published fails naming that pid and --force", async () => {
+    PID.evidenceReads = [
+      { kind: "read", metadata: { pid: 4242 } },
+      { kind: "read", metadata: { pid: 5151 } },
+    ];
+    // 4242 is alive while the stop is judged and exits during the grace
+    // wait; 5151, the successor, is alive throughout.
+    PID.goneFn = (pid, call) => pid === 4242 && call > 2;
+    setRestartStopGracesForTests({ sigtermMs: 5, sigkillMs: 5 });
+    const { runner } = recordingRunner(() => false);
+
+    try {
+      await expect(
+        createLinuxController(runner).stop(label, { force: false }),
+      ).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+        message: expect.stringMatching(/pid=5151.*--force/),
+      });
+    } finally {
+      setRestartStopGracesForTests(null);
+      PID.goneFn = null;
+      PID.evidenceReads = [];
+    }
+    expect(MOCKS.forceStopHostProcess).not.toHaveBeenCalled();
+  });
+
+  // An unreadable pid record is no evidence either way: it may belong to a
+  // live host mid-write. The plain stop gives it the same grace a live record
+  // gets, looks again, and reports success only for "nothing published" or a
+  // process proven gone.
+  describe("without --force, a pid record that cannot be read", () => {
+    afterEach(() => {
+      setRestartStopGracesForTests(null);
+      PID.goneFn = null;
+      PID.evidenceReads = [];
+    });
+
+    it("unreadable before the stop and still unreadable after it: fails saying it could not confirm the stop", async () => {
+      PID.evidenceReads = [
+        { kind: "unreadable", cause: "EACCES" },
+        { kind: "unreadable", cause: "EACCES" },
+      ];
+      setRestartStopGracesForTests({ sigtermMs: 5, sigkillMs: 5 });
+      const { runner } = recordingRunner(() => false);
+
+      await expect(
+        createLinuxController(runner).stop(label, { force: false }),
+      ).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+        message: expect.stringContaining("could not confirm the host stopped"),
+      });
+      expect(MOCKS.forceStopHostProcess).not.toHaveBeenCalled();
+    });
+
+    it("unreadable before the stop and absent after it: the stop is confirmed", async () => {
+      PID.evidenceReads = [
+        { kind: "unreadable", cause: "EACCES" },
+        { kind: "absent" },
+      ];
+      setRestartStopGracesForTests({ sigtermMs: 5, sigkillMs: 5 });
+      const { runner } = recordingRunner(() => false);
+
+      await expect(
+        createLinuxController(runner).stop(label, { force: false }),
+      ).resolves.toBeUndefined();
+    });
+
+    it("live before the stop, the process exits, then unreadable after it: fails saying it could not confirm the stop", async () => {
+      PID.evidenceReads = [
+        { kind: "read", metadata: { pid: 4242 } },
+        { kind: "unreadable", cause: "EACCES" },
+      ];
+      PID.goneFn = (pid, call) => pid === 4242 && call > 2;
+      setRestartStopGracesForTests({ sigtermMs: 5, sigkillMs: 5 });
+      const { runner } = recordingRunner(() => false);
+
+      await expect(
+        createLinuxController(runner).stop(label, { force: false }),
+      ).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+        message: expect.stringContaining("could not confirm the host stopped"),
+      });
+      expect(MOCKS.forceStopHostProcess).not.toHaveBeenCalled();
+    });
+  });
+
+  // What was published BEFORE the stop - nothing, or a process already gone -
+  // is not the host being gone: a host can publish while `systemctl stop` is
+  // awaited, and a failed stop job leaves a unit that restarts itself. The
+  // record is always read again after the stop, and judged then.
+  describe("without --force, the record is always read again after the stop", () => {
+    afterEach(() => {
+      setRestartStopGracesForTests(null);
+      PID.goneFn = null;
+      PID.evidenceReads = [];
+    });
+
+    it("nothing published before the stop, a live host published by the time it returns: fails naming that pid", async () => {
+      PID.evidenceReads = [
+        { kind: "absent" },
+        { kind: "read", metadata: { pid: 5151 } },
+      ];
+      // 5151 is alive.
+      PID.goneFn = () => false;
+      setRestartStopGracesForTests({ sigtermMs: 5, sigkillMs: 5 });
+      const { runner } = recordingRunner(() => false);
+
+      await expect(
+        createLinuxController(runner).stop(label, { force: false }),
+      ).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+        message: expect.stringMatching(/pid=5151.*still running.*--force/),
+      });
+      expect(MOCKS.forceStopHostProcess).not.toHaveBeenCalled();
+    });
+
+    it("a dead process published before the stop, a live host published after it: fails naming the live pid", async () => {
+      PID.evidenceReads = [
+        { kind: "read", metadata: { pid: 4242 } },
+        { kind: "read", metadata: { pid: 5151 } },
+      ];
+      PID.goneFn = (pid) => pid === 4242;
+      setRestartStopGracesForTests({ sigtermMs: 5, sigkillMs: 5 });
+      const { runner } = recordingRunner(() => false);
+
+      await expect(
+        createLinuxController(runner).stop(label, { force: false }),
+      ).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+        message: expect.stringMatching(/pid=5151.*still running.*--force/),
+      });
+      expect(MOCKS.forceStopHostProcess).not.toHaveBeenCalled();
+    });
+
+    it("nothing published before the stop and nothing after it: resolves", async () => {
+      PID.evidenceReads = [{ kind: "absent" }, { kind: "absent" }];
+      setRestartStopGracesForTests({ sigtermMs: 5, sigkillMs: 5 });
+      const { runner } = recordingRunner(() => false);
+
+      await expect(
+        createLinuxController(runner).stop(label, { force: false }),
+      ).resolves.toBeUndefined();
+    });
+
+    it("a dead process published before the stop and the same one after it: resolves", async () => {
+      PID.evidenceReads = [
+        { kind: "read", metadata: { pid: 4242 } },
+        { kind: "read", metadata: { pid: 4242 } },
+      ];
+      PID.goneFn = () => true;
+      setRestartStopGracesForTests({ sigtermMs: 5, sigkillMs: 5 });
+      const { runner } = recordingRunner(() => false);
+
+      await expect(
+        createLinuxController(runner).stop(label, { force: false }),
+      ).resolves.toBeUndefined();
+    });
+
+    it("a dead process published before the stop and an unreadable record after it: fails saying it could not confirm the stop", async () => {
+      PID.evidenceReads = [
+        { kind: "read", metadata: { pid: 4242 } },
+        { kind: "unreadable", cause: "EACCES" },
+      ];
+      PID.goneFn = () => true;
+      setRestartStopGracesForTests({ sigtermMs: 5, sigkillMs: 5 });
+      const { runner } = recordingRunner(() => false);
+
+      await expect(
+        createLinuxController(runner).stop(label, { force: false }),
+      ).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+        message: expect.stringContaining("could not confirm the host stopped"),
+      });
+    });
   });
 
   // Branch-1 re-confirmation: the FIRST settle (right after the plain stop)

@@ -58,6 +58,7 @@ vi.mock("@/lib/appearance/curated-wallpapers", () => ({
 }));
 vi.mock("@/components/settings/host-scope/use-host-scope", () => ({
   useHostScope: () => hostScopeFixture({}),
+  usePersonalHostScope: () => hostScopeFixture({}),
   useHostScopeFor: () => hostScopeFixture({}),
 }));
 vi.mock("@/lib/host", async (importOriginal) => ({

@@ -57,7 +57,7 @@ export interface SettingsSearchResult {
   readonly entry: SettingsSearchEntry;
   /** The page's own name, for the result's breadcrumb. */
   readonly sectionLabel: string;
-  /** "Application" / "Account" / "Host" — which scope the page belongs to. */
+  /** "Application" / "Personal" / "Account" / "Host" — which scope the page belongs to. */
   readonly scopeLabel: string;
 }
 

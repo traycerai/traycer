@@ -267,7 +267,7 @@ function CreateBotNoHost(props: {
         variant="link"
         size="xs"
         onClick={() =>
-          navigateToTabIntent(navigate, settingsTabIntent("agents"), undefined)
+          navigateToTabIntent(navigate, settingsTabIntent("host"), undefined)
         }
       >
         Settings

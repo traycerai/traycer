@@ -35,6 +35,7 @@ describe("dialPriorityForMethod", () => {
     "browser.sessions",
     "epic.listCollaborators",
     "epic.listCommentThreads",
+    "epic.listTaskHosts",
     "worktree.listBindingsForEpic",
   ])("classifies the re-measure method %s as background", (method) => {
     expect(dialPriorityForMethod(method)).toBe("background");

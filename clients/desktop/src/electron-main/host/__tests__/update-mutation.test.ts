@@ -193,6 +193,7 @@ describe("Desktop guarded final actuators", () => {
             capability,
             hostHomeDir,
             async () => true,
+            null,
           ),
         ).rejects.toMatchObject({
           verdict: "lost",

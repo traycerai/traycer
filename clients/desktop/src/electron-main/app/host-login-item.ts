@@ -507,11 +507,21 @@ const REGISTER_JOB_POLL_INTERVAL_MS = 200;
 // host that picked up real work while waiting its turn.
 // Return `false` from the callback to defer without mutating anything;
 // `registerHostLoginItemUnserialized` reports that back as `"deferred-busy"`.
+//
+// `confirmTargetBeforeBootout` is asked with it at the front of the cycle and
+// again immediately before each edge that can stop a running host - the
+// legacy-label retirement and the agent bootout - but not after: once the
+// bootout has run, a host published by this cycle's own register is not one
+// to refuse. `null` when the cycle was not confirmed for one host process.
 export function registerHostLoginItem(
   revalidateBeforeBootout: (() => Promise<boolean>) | undefined,
+  confirmTargetBeforeBootout: (() => Promise<boolean>) | null,
 ): Promise<RegisterHostLoginItemResult> {
   return withHostLoginItemRegistrationLock(() =>
-    registerHostLoginItemUnserialized(revalidateBeforeBootout),
+    registerHostLoginItemUnserialized(
+      revalidateBeforeBootout,
+      confirmTargetBeforeBootout,
+    ),
   );
 }
 
@@ -532,7 +542,11 @@ async function mutationAllowed(
 
 async function registerHostLoginItemUnserialized(
   revalidateBeforeBootout: (() => Promise<boolean>) | undefined,
+  confirmTargetBeforeBootout: (() => Promise<boolean>) | null,
 ): Promise<RegisterHostLoginItemResult> {
+  const allowedBeforeBootout = async (): Promise<boolean> =>
+    (await mutationAllowed(revalidateBeforeBootout)) &&
+    (await mutationAllowed(confirmTargetBeforeBootout));
   // Re-checked HERE, inside the locked section, not only at the callers'
   // entry points: an ensure can spend minutes streaming the CLI before its
   // register lands on this lock's tail - possibly queued BEHIND an in-app
@@ -547,7 +561,7 @@ async function registerHostLoginItemUnserialized(
     return "removed-by-user";
   }
 
-  if (!(await mutationAllowed(revalidateBeforeBootout))) {
+  if (!(await allowedBeforeBootout())) {
     log.info(
       "[host-login-item] register cycle deferred - caller's guard failed once dequeued from the registration lock (host is no longer idle)",
     );
@@ -588,7 +602,7 @@ async function registerHostLoginItemUnserialized(
   if (
     !(await retireLegacyLabelRegistrations(
       priorRegistration.legacy,
-      revalidateBeforeBootout,
+      allowedBeforeBootout,
     ))
   ) {
     parkRegistrationAfterAuthorityLoss("legacy registration retirement");
@@ -604,7 +618,7 @@ async function registerHostLoginItemUnserialized(
   {
     const bootout = await bootoutStaleAgent(
       HOST_AGENT_LABEL,
-      revalidateBeforeBootout,
+      allowedBeforeBootout,
     );
     if (bootout === "authority-lost") {
       parkRegistrationAfterAuthorityLoss("primary launchctl bootout");

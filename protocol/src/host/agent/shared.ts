@@ -12,6 +12,7 @@ import {
 } from "@traycer/protocol/host/agent-session-state";
 import { permissionModeSchema } from "@traycer/protocol/persistence/epic/foundation";
 import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
+import { lastKnownConnectivitySchema } from "@traycer/protocol/host/last-known-connectivity";
 
 export { DEFAULT_AGENT_MODE, agentModeSchema, type AgentMode };
 
@@ -1073,6 +1074,37 @@ export const agentSummarySchemaV100 = lazySchema(() =>
 );
 export type AgentSummaryV100 = z.infer<typeof agentSummarySchemaV100>;
 
+// ── `agent.list@10.2`: can a message from this host reach the agent? ───────
+//
+// Two more plain added keys on the non-strict row: `reach` and
+// `hostConnectivity`. A 10.1 caller's schema strips them, and the downgrade
+// bridges reparse through a frozen summary that drops them on the way out.
+
+/**
+ * The `agent.list@10.1` row, frozen when `@10.2` put `reach` and
+ * `hostConnectivity` on the head. Served by hosts built from `main` since the
+ * run tuple landed, so it never grows a key again. Built off the frozen
+ * `@10.0` row, so a key added to the head cannot reach it.
+ */
+export const agentSummarySchemaV101 = lazySchema(() =>
+  agentSummarySchemaV100.extend({
+    profile: z.string().nullable(),
+    permissionMode: permissionModeSchema.nullable(),
+  }),
+);
+export type AgentSummaryV101 = z.infer<typeof agentSummarySchemaV101>;
+
+/**
+ * Whether the answering host can reach the agent's host for the caller:
+ * `same_principal` when both hosts belong to one principal,
+ * `other_principal` when the agent's host is a collaborator's or another
+ * team's, `null` when this host cannot say (a host that predates the field).
+ */
+export const agentReachSchema = lazySchema(() =>
+  z.enum(["same_principal", "other_principal"]),
+);
+export type AgentReach = z.infer<typeof agentReachSchema>;
+
 // THE CANONICAL NAME STAYS ON THE HEAD, which is the rule
 // `head-names-canonical-alias.test.ts` enforces: writing the new row under a
 // suffix would leave `agentSummarySchema` exported, structurally plausible and
@@ -1081,8 +1113,8 @@ export type AgentSummaryV100 = z.infer<typeof agentSummarySchemaV100>;
 // Built off the live base rather than `agentSummarySchemaV90`, which pins the
 // harness id major 9 shipped: this row is the head (major 10) and tracks the
 // live enum. It carries every key the frozen major-9 minors carry
-// (`runConfig`, the session facet, `archived`), so a 10.1 answer downgrades to
-// 9.2 by dropping rows and the run tuple alone.
+// (`runConfig`, the session facet, `archived`), so a 10.2 answer downgrades to
+// 9.2 by dropping rows, the run tuple and the reach pair alone.
 export const agentSummarySchema = lazySchema(() =>
   releasedAgentSummarySchema.extend({
     runConfig: agentRunConfigSchema.nullable().default(null),
@@ -1124,6 +1156,19 @@ export const agentSummarySchema = lazySchema(() =>
      * never a stand-in for `full_access`.
      */
     permissionMode: permissionModeSchema.nullable(),
+    /**
+     * Whether a message from this host can reach the agent, or `null` when the
+     * answering host predates the field. An `other_principal` agent is listed
+     * and its transcript may be readable, but `agent.sendMessage` refuses it
+     * with `principal_mismatch`.
+     */
+    reach: agentReachSchema.nullable(),
+    /**
+     * What the answering host last observed about the agent's host. `unknown`
+     * unless a source this host is authorized to read said otherwise, and
+     * never `offline` for want of one.
+     */
+    hostConnectivity: lastKnownConnectivitySchema,
   }),
 );
 export type AgentSummary = z.infer<typeof agentSummarySchema>;
@@ -1360,6 +1405,19 @@ export const listAgentsResponseSchemaV100 = lazySchema(() =>
 );
 export type ListAgentsResponseV100 = z.infer<
   typeof listAgentsResponseSchemaV100
+>;
+
+/**
+ * The `agent.list@10.1` response, frozen when `@10.2` put `reach` and
+ * `hostConnectivity` on the row. See {@link agentSummarySchemaV101}.
+ */
+export const listAgentsResponseSchemaV101 = lazySchema(() =>
+  listAgentsResponseSchema.extend({
+    agents: z.array(agentSummarySchemaV101),
+  }),
+);
+export type ListAgentsResponseV101 = z.infer<
+  typeof listAgentsResponseSchemaV101
 >;
 
 /**

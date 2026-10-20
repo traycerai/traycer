@@ -65,6 +65,7 @@ afterAll(() => {
 const captured = vi.hoisted(() => ({
   restart: [] as unknown[],
   freePort: [] as unknown[],
+  serviceInstall: [] as unknown[],
 }));
 
 const noopCommand: CommandFn = async () => ({
@@ -76,6 +77,13 @@ const noopCommand: CommandFn = async () => ({
 vi.mock("../host-restart", () => ({
   buildHostRestartCommand: (args: unknown) => {
     captured.restart.push(args);
+    return noopCommand;
+  },
+}));
+
+vi.mock("../service-install", () => ({
+  buildServiceInstallCommand: (args: unknown) => {
+    captured.serviceInstall.push(args);
     return noopCommand;
   },
 }));
@@ -130,6 +138,7 @@ import { buildProgram } from "../../index";
 beforeEach(() => {
   captured.restart = [];
   captured.freePort = [];
+  captured.serviceInstall = [];
 });
 
 describe("--defer-if-parked reaches the builder through the Commander bridge", () => {
@@ -159,6 +168,7 @@ describe("--defer-if-parked reaches the builder through the Commander bridge", (
         ifIdle: false,
         force: true,
         deferIfParked: true,
+        expectedHost: null,
         lifecycleOrigin: "terminal",
       },
     ]);
@@ -177,6 +187,7 @@ describe("--defer-if-parked reaches the builder through the Commander bridge", (
         ifIdle: false,
         force: true,
         deferIfParked: false,
+        expectedHost: null,
         lifecycleOrigin: "terminal",
       },
     ]);
@@ -235,5 +246,124 @@ describe("--defer-if-parked reaches the builder through the Commander bridge", (
     expect(captured.restart).toEqual([
       expect.objectContaining({ deferIfParked: true, force: true }),
     ]);
+  });
+
+  // The two hidden flags that bind a restart to the host process Desktop's
+  // offer was made for. They build the builder's `expectedHost` inside the
+  // command, so a malformed pair is refused by the runner as a typed error.
+  describe("--expect-host-pid and --expect-host-start-identity", () => {
+    const IDENTITY = "linux:boot-a 4242";
+
+    it("host restart forwards both as expectedHost", async () => {
+      await buildProgram().parseAsync(
+        [
+          "host",
+          "restart",
+          "--force",
+          "--defer-if-parked",
+          "--expect-host-pid",
+          "4242",
+          "--expect-host-start-identity",
+          IDENTITY,
+        ],
+        { from: "user" },
+      );
+
+      expect(captured.restart).toEqual([
+        {
+          ifIdle: false,
+          force: true,
+          deferIfParked: true,
+          expectedHost: { pid: 4242, startIdentity: IDENTITY },
+          lifecycleOrigin: "terminal",
+        },
+      ]);
+    });
+
+    it.each([
+      ["the pid alone", ["--expect-host-pid", "4242"]],
+      ["the identity alone", ["--expect-host-start-identity", IDENTITY]],
+      [
+        "a zero pid",
+        ["--expect-host-pid", "0", "--expect-host-start-identity", IDENTITY],
+      ],
+      [
+        "a pid that is not a whole number",
+        ["--expect-host-pid", "42x", "--expect-host-start-identity", IDENTITY],
+      ],
+      [
+        "an identity that is not a start identity",
+        ["--expect-host-pid", "4242", "--expect-host-start-identity", "nope"],
+      ],
+    ])(
+      "host restart refuses %s with E_INVALID_ARGUMENT",
+      async (_name, flags) => {
+        await expect(
+          buildProgram().parseAsync(["host", "restart", "--force", ...flags], {
+            from: "user",
+          }),
+        ).rejects.toMatchObject({ code: "E_INVALID_ARGUMENT" });
+        expect(captured.restart).toEqual([]);
+      },
+    );
+  });
+  // `host service install --takeover` is the other command a Desktop force
+  // restart can bind to one host process (its packaged-macOS re-register
+  // fallback), through the same two hidden flags.
+  describe("host service install --takeover with --expect-host-pid", () => {
+    const IDENTITY = "linux:boot-a 4242";
+
+    it("forwards both flags as expectedHost, with takeover intact", async () => {
+      await buildProgram().parseAsync(
+        [
+          "host",
+          "service",
+          "install",
+          "--takeover",
+          "--expect-host-pid",
+          "4242",
+          "--expect-host-start-identity",
+          IDENTITY,
+        ],
+        { from: "user" },
+      );
+
+      expect(captured.serviceInstall).toEqual([
+        expect.objectContaining({
+          takeover: true,
+          expectedHost: { pid: 4242, startIdentity: IDENTITY },
+        }),
+      ]);
+    });
+
+    it("forwards expectedHost:null when neither flag is passed", async () => {
+      await buildProgram().parseAsync(
+        ["host", "service", "install", "--takeover"],
+        { from: "user" },
+      );
+
+      expect(captured.serviceInstall).toEqual([
+        expect.objectContaining({ takeover: true, expectedHost: null }),
+      ]);
+    });
+
+    it.each([
+      ["the pid alone", ["--expect-host-pid", "4242"]],
+      ["the identity alone", ["--expect-host-start-identity", IDENTITY]],
+    ])(
+      "refuses %s with E_INVALID_ARGUMENT, naming host service install",
+      async (_name, flags) => {
+        await expect(
+          buildProgram().parseAsync(
+            ["host", "service", "install", "--takeover", ...flags],
+            { from: "user" },
+          ),
+        ).rejects.toMatchObject({
+          code: "E_INVALID_ARGUMENT",
+          message: expect.stringContaining("host service install:"),
+        });
+        expect(captured.serviceInstall).toEqual([]);
+      },
+    );
   });
 });

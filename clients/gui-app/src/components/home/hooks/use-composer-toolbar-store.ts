@@ -41,6 +41,7 @@ import {
   selectionFromChatRunSettings,
   serviceTierFromChatRunSettings,
 } from "@/lib/composer/chat-run-settings";
+import { useTeamSandboxHarnessGate } from "@/hooks/sandboxes/use-team-sandbox-harness-blocked";
 
 const EMPTY_MODELS: ReadonlyArray<ModelOption> = [];
 
@@ -285,6 +286,12 @@ export function useComposerToolbarStore(
     chatLineCarriesAutoMode,
   ]);
 
+  // The palette commits too, so it is held to the same team-sandbox rule as the
+  // picker: a blocked harness is a no-op.
+  const teamSandboxHarnessBlocked = useTeamSandboxHarnessGate({
+    hostId,
+    client: hostClient,
+  });
   const registeredControls = useMemo(() => {
     const actions = store.getState();
     return {
@@ -294,12 +301,16 @@ export function useComposerToolbarStore(
       // The command palette has no rail/profile context of its own - default
       // the independent profile choice to ambient while restoring the
       // provider's last-used model/effort/tier.
-      switchHarness: (harnessId: ProviderId) =>
-        commitSelection(store, harnessId, null, null),
-      selectModel: (harnessId: ProviderId, modelSlug: string) =>
-        commitSelection(store, harnessId, modelSlug, null),
+      switchHarness: (harnessId: ProviderId) => {
+        if (teamSandboxHarnessBlocked(harnessId)) return;
+        commitSelection(store, harnessId, null, null);
+      },
+      selectModel: (harnessId: ProviderId, modelSlug: string) => {
+        if (teamSandboxHarnessBlocked(harnessId)) return;
+        commitSelection(store, harnessId, modelSlug, null);
+      },
     };
-  }, [store]);
+  }, [store, teamSandboxHarnessBlocked]);
   // The palette's composer subpages list the catalog of the SAME host this
   // store reads it through, so what they offer is what `switchHarness` /
   // `selectModel` can commit against.

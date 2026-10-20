@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { assertStopTarget } from "./stop-target";
 
 /**
  * A service controller has many platform-specific actuator edges. Command
@@ -43,13 +44,42 @@ export async function withServiceMutationAuthority<T>(
       // actuator check. Re-probe before surfacing the original error: if the
       // capability disappeared, callers must park/abort rather than swallow
       // it as an ordinary post-swap warning and continue a stale sequence.
-      await verifyServiceMutationAuthority();
+      // Authority alone: this is no actuator edge, and a stop-target refusal
+      // here would replace the error that actually ended the composite.
+      await verifyAuthority();
       throw cause;
     }
   });
 }
 
 export async function verifyServiceMutationAuthority(): Promise<void> {
+  await verifyAuthority();
+  // Every actuator edge that asks for authority also asks whether the stop
+  // it belongs to is still aimed at the host it was confirmed for - AFTER the
+  // authority read, which awaits lock verification: a host that publishes
+  // during that await is still read here, and nothing awaits between this
+  // read and the edge's subprocess or signal.
+  await verifyServiceStopTarget();
+}
+
+/**
+ * The stop-target half alone, for an edge that takes no service authority (a
+ * direct signal). Its refusal is a mutation-authority failure: a hard stop
+ * every caller propagates as itself, never an unreachable host that a macOS
+ * restart would answer with `forcedRecycle` and a `kickstart -k`.
+ */
+export async function verifyServiceStopTarget(): Promise<void> {
+  try {
+    await assertStopTarget();
+  } catch (refusal) {
+    if (typeof refusal === "object" && refusal !== null) {
+      authorityFailures.add(refusal);
+    }
+    throw refusal;
+  }
+}
+
+async function verifyAuthority(): Promise<void> {
   const verify = mutationAuthority.getStore();
   if (verify === undefined) return;
   try {

@@ -629,6 +629,7 @@ function viewerSurfacesProps(): ChatLowerInteractionSurfacesProps {
     onSettingsChange: null,
     workspaceControls: null,
     workspaceAvailability: WORKSPACE_COMPOSER_READY,
+    onContinueOnTeamHosts: () => undefined,
     suggestedPrompt: undefined,
   };
 

@@ -46,18 +46,20 @@ vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
   const { hostScopeFixture, hostScopeOptionFixture } =
     await import("@/components/settings/host-scope/host-scope-fixture");
   const host = hostScopeOptionFixture({ hostId: "host-a", name: "Test Host" });
+  const useHostScope = () =>
+    hostScopeFixture({
+      hosts: [host],
+      host,
+      hostId: host.hostId,
+      hostLabel: host.name,
+      activeHost: host,
+      isViewingActive: true,
+      status: "following",
+      client: null,
+    });
   return {
-    useHostScope: () =>
-      hostScopeFixture({
-        hosts: [host],
-        host,
-        hostId: host.hostId,
-        hostLabel: host.name,
-        activeHost: host,
-        isViewingActive: true,
-        status: "following",
-        client: null,
-      }),
+    useHostScope,
+    usePersonalHostScope: useHostScope,
   };
 });
 vi.mock("@/hooks/providers/use-fallback-policy-query", () => ({

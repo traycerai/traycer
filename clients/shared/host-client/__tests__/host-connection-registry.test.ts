@@ -122,6 +122,7 @@ function remoteEntry(
     transportDialability: "not-dialable",
     publicKey: `pubkey-${hostId}`,
     relayFuseGrace: false,
+    sandbox: null,
     remoteStatus: {
       connectivity: "offline",
       viewerReachability: "unknown",

@@ -14,7 +14,7 @@ import {
   hostRpcRegistry,
   type HostRpcRegistry,
 } from "@traycer/protocol/host/index";
-import type { AutoPolicyGetResponse } from "@traycer/protocol/host/auto-mode/contracts";
+import type { AutoPolicyGetResponseV11 } from "@traycer/protocol/host/auto-mode/contracts";
 import { useAutoPolicyQuery } from "@/hooks/auto-mode/use-auto-policy-query";
 import { useAutoPolicySetMutation } from "@/hooks/auto-mode/use-auto-policy-set-mutation";
 import { hostQueryKeys } from "@/lib/query-keys/host-query-keys";
@@ -81,7 +81,7 @@ function signInAs(userId: string): void {
  * `signInAs`, exactly as a real bearer token names the signed-in account.
  */
 function createAutoPolicyFixture(
-  initialPolicies: Record<string, AutoPolicyGetResponse>,
+  initialPolicies: Record<string, AutoPolicyGetResponseV11>,
 ): {
   readonly client: HostClient<HostRpcRegistry>;
   readonly queryClient: QueryClient;
@@ -96,7 +96,7 @@ function createAutoPolicyFixture(
    */
   readonly getCallCount: () => number;
 } {
-  const policies: Record<string, AutoPolicyGetResponse> = {
+  const policies: Record<string, AutoPolicyGetResponseV11> = {
     ...initialPolicies,
   };
   let currentBearerUser = USER_A;
@@ -129,6 +129,7 @@ function createAutoPolicyFixture(
               body: null,
               updatedAt: null,
               source: "account",
+              team: null,
               readState: "fresh",
             }
           );
@@ -140,6 +141,8 @@ function createAutoPolicyFixture(
             body: params.body,
             updatedAt,
             source: "account",
+            // The host's team state is not the account policy's to change.
+            team: policies[currentBearerUser]?.team ?? null,
             readState: "fresh",
           };
           return { updatedAt };
@@ -197,6 +200,7 @@ describe("useAutoPolicyQuery - per-viewer cache partition", () => {
         body: "A's policy",
         updatedAt: "2026-09-15T00:00:00.000Z",
         source: "account",
+        team: null,
         readState: "fresh",
       },
     });
@@ -238,12 +242,14 @@ describe("useAutoPolicyQuery - per-viewer cache partition", () => {
         body: "A's policy",
         updatedAt: "2026-09-15T00:00:00.000Z",
         source: "account",
+        team: null,
         readState: "fresh",
       },
       [USER_B]: {
         body: "B's policy",
         updatedAt: "2026-09-15T00:00:00.000Z",
         source: "account",
+        team: null,
         readState: "fresh",
       },
     });
@@ -293,12 +299,14 @@ describe("useAutoPolicyQuery - per-viewer cache partition", () => {
         body: "A's policy",
         updatedAt: "2026-09-15T00:00:00.000Z",
         source: "account",
+        team: null,
         readState: "fresh",
       },
       [USER_B]: {
         body: "B's original policy",
         updatedAt: "2026-09-15T00:00:00.000Z",
         source: "account",
+        team: null,
         readState: "fresh",
       },
     });
@@ -341,7 +349,7 @@ describe("useAutoPolicyQuery - per-viewer cache partition", () => {
 
     // B's own entry reflects the save...
     await waitFor(() => {
-      const bEntry = fixture.queryClient.getQueryData<AutoPolicyGetResponse>(
+      const bEntry = fixture.queryClient.getQueryData<AutoPolicyGetResponseV11>(
         hostQueryKeys.autoPolicyForViewer(mockLocalHostEntry.hostId, USER_B),
       );
       expect(bEntry?.body).toBe("B's edited policy");
@@ -362,10 +370,59 @@ describe("useAutoPolicyQuery - per-viewer cache partition", () => {
           query.queryKey[query.queryKey.length - 1] === USER_A,
       )?.queryKey;
     expect(aEntryKey).toBeDefined();
-    const aEntry = fixture.queryClient.getQueryData<AutoPolicyGetResponse>(
+    const aEntry = fixture.queryClient.getQueryData<AutoPolicyGetResponseV11>(
       aEntryKey ?? [],
     );
     expect(aEntry?.body).toBe("A's policy");
+  });
+
+  // `autoPolicy.get@1.1` carries a team host's policy
+  // state in `team`. The save writes the cache through (`setQueriesData`),
+  // and a write-through that rebuilds the record from its own fields would
+  // drop `team` until the next read - the support report would then call a
+  // team host personal right after an account-policy save. The host's team
+  // state is not the save's business, exactly as `shippedDefaults` is not.
+  it("keeps a team host's policy state in the viewer's cached entry when the account policy is saved", async () => {
+    const fixture = createAutoPolicyFixture({
+      [USER_A]: {
+        body: "A's policy",
+        updatedAt: "2026-09-15T00:00:00.000Z",
+        source: "account",
+        team: { state: "applied", policyVersion: "9" },
+        readState: "fresh",
+      },
+    });
+    fixtureClientRef.current = fixture.client;
+    signInAs(USER_A);
+    const mounted = renderHook(
+      () => ({
+        query: useAutoPolicyQuery(),
+        mutate: useAutoPolicySetMutation(),
+      }),
+      { wrapper: fixture.Wrapper },
+    );
+    await waitFor(() =>
+      expect(mounted.result.current.query.data?.team).toEqual({
+        state: "applied",
+        policyVersion: "9",
+      }),
+    );
+
+    mounted.result.current.mutate.mutate({ body: "A's edited policy" });
+    await waitFor(() => {
+      expect(mounted.result.current.mutate.isSuccess).toBe(true);
+    });
+
+    await waitFor(() => {
+      const entry = fixture.queryClient.getQueryData<AutoPolicyGetResponseV11>(
+        hostQueryKeys.autoPolicyForViewer(mockLocalHostEntry.hostId, USER_A),
+      );
+      expect(entry?.body).toBe("A's edited policy");
+    });
+    const entry = fixture.queryClient.getQueryData<AutoPolicyGetResponseV11>(
+      hostQueryKeys.autoPolicyForViewer(mockLocalHostEntry.hostId, USER_A),
+    );
+    expect(entry?.team).toEqual({ state: "applied", policyVersion: "9" });
   });
 });
 
@@ -386,6 +443,7 @@ describe('useAutoPolicyQuery / useAutoPolicySetMutation - the unattributed ("") 
         body: "A's policy",
         updatedAt: "2026-09-15T00:00:00.000Z",
         source: "account",
+        team: null,
         readState: "fresh",
       },
     });
@@ -410,6 +468,7 @@ describe('useAutoPolicyQuery / useAutoPolicySetMutation - the unattributed ("") 
         body: "A's policy",
         updatedAt: "2026-09-15T00:00:00.000Z",
         source: "account",
+        team: null,
         readState: "fresh",
       },
     });
@@ -444,12 +503,14 @@ describe('useAutoPolicyQuery / useAutoPolicySetMutation - the unattributed ("") 
         body: "A's policy, landed while the viewer was unattributed",
         updatedAt: "2026-09-15T00:00:00.000Z",
         source: "account",
+        team: null,
         readState: "fresh",
       },
       [USER_B]: {
         body: "B's own policy",
         updatedAt: "2026-09-15T00:00:00.000Z",
         source: "account",
+        team: null,
         readState: "fresh",
       },
     });
@@ -507,7 +568,7 @@ describe('useAutoPolicyQuery / useAutoPolicySetMutation - the unattributed ("") 
     // unattributed bucket the read refuses to populate. Nothing should be
     // there after the save either.
     expect(result.current.query.data).toBeUndefined();
-    const cached = fixture.queryClient.getQueryData<AutoPolicyGetResponse>(
+    const cached = fixture.queryClient.getQueryData<AutoPolicyGetResponseV11>(
       hostQueryKeys.autoPolicyForViewer(mockLocalHostEntry.hostId, ""),
     );
     expect(cached).toBeUndefined();

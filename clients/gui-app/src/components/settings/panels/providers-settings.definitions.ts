@@ -8,7 +8,7 @@ export const PROVIDERS = defineSettingsSection("providers", {
   page: {
     availableWhen: alwaysAvailable,
     label: "Providers",
-    description: "Coding agents, their accounts, models, and extensions.",
+    description: "Coding agents, their accounts, models and plugins.",
     keywords: [
       "claude",
       // Its display name. The Judge tab's removed built-in reviewer card was
@@ -63,15 +63,6 @@ export const PROVIDERS = defineSettingsSection("providers", {
       "account",
     ],
   },
-  mcpServers: {
-    kind: "group",
-    search: { anchor: null },
-    label: "MCP servers",
-    description: "Model Context Protocol servers, per provider.",
-    breadcrumb: "Providers",
-    availableWhen: alwaysAvailable,
-    keywords: ["mcp", "model context protocol", "server", "tools", "connector"],
-  },
   modelProviders: {
     kind: "group",
     search: { anchor: null },
@@ -80,15 +71,6 @@ export const PROVIDERS = defineSettingsSection("providers", {
     breadcrumb: "Providers",
     availableWhen: alwaysAvailable,
     keywords: ["model", "openrouter", "custom model", "endpoint", "base url"],
-  },
-  skills: {
-    kind: "group",
-    search: { anchor: null },
-    label: "Skills",
-    description: "Skills installed into a provider.",
-    breadcrumb: "Providers",
-    availableWhen: alwaysAvailable,
-    keywords: ["skill", "skills", "playbook", "install"],
   },
   plugins: {
     kind: "group",
@@ -139,10 +121,17 @@ export const PROVIDERS = defineSettingsSection("providers", {
   environmentVariables: {
     kind: "group",
     search: { anchor: null },
-    label: "Environment variables",
-    description: "Per-provider environment overrides.",
+    label: "Variables",
+    description: "Per-provider variable overrides.",
     breadcrumb: "Providers",
     availableWhen: alwaysAvailable,
-    keywords: ["env", "environment", "variable", "override", "secret", "proxy"],
+    keywords: [
+      "env",
+      "environment variables",
+      "variable",
+      "override",
+      "secret",
+      "proxy",
+    ],
   },
 });

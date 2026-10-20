@@ -19,8 +19,10 @@ const scopeOverrides = vi.hoisted((): { current: Record<string, unknown> } => ({
 vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
   const { hostScopeFixture } =
     await import("@/components/settings/host-scope/host-scope-fixture");
+  const useHostScope = () => hostScopeFixture(scopeOverrides.current);
   return {
-    useHostScope: () => hostScopeFixture(scopeOverrides.current),
+    useHostScope,
+    usePersonalHostScope: useHostScope,
   };
 });
 
@@ -65,6 +67,17 @@ vi.mock("@/hooks/host/use-fleet-update-views", async () => {
     await import("@/lib/host/fleet-update/fleet-update-view");
   return { useFleetUpdateViews: () => () => UNKNOWN_FLEET_UPDATE_VIEW };
 });
+
+// The host picker's balance banner reads the sandbox list through a
+// `useQuery`, which needs a query client this navigation suite deliberately
+// does not mount. It is irrelevant to navigation, and has its own suite.
+vi.mock("@/components/hosts/sandbox-balance-banner", () => ({
+  SandboxBalanceBanner: () => null,
+}));
+// Same reasoning: the Automations entry reads its own `useQuery`.
+vi.mock("@/components/hosts/automations-host-entry", () => ({
+  AutomationsHostEntry: () => <div data-testid="automations-entry-probe" />,
+}));
 
 function buildRouter(initialPath: string) {
   const rootRoute = createRootRoute({

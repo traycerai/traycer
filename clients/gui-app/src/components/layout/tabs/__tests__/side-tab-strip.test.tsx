@@ -66,7 +66,7 @@ import type {
   NotificationIndicatorState,
   SurfaceNotificationIndicators,
 } from "@/stores/notifications/notification-indicator-state";
-import type { HostNotificationEntryV22 } from "@traycer/protocol/host/notifications/contracts";
+import type { HostNotificationEntryV23 } from "@traycer/protocol/host/notifications/contracts";
 import {
   __resetAgentActivityStoreForTests,
   __setAgentActivityStateForTests,
@@ -1030,7 +1030,7 @@ describe("<SideTabStrip />", () => {
     }
 
     function seedApproval(epicId: string, chatId: string): void {
-      const entry: HostNotificationEntryV22 = {
+      const entry: HostNotificationEntryV23 = {
         id: "approval-0",
         updatedAt: 10,
         readAt: null,
@@ -1958,7 +1958,7 @@ describe("<SideTabStrip />", () => {
 
     /** Approvals waiting on the person, as the host's feed files them. */
     function seedPrompts(prompts: ReadonlyArray<Prompt>): void {
-      const entries = prompts.map((prompt): HostNotificationEntryV22 => ({
+      const entries = prompts.map((prompt): HostNotificationEntryV23 => ({
         id: prompt.id,
         updatedAt: Date.now() - prompt.minutesAgo * MINUTE_MS,
         readAt: null,

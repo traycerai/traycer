@@ -1,3 +1,40 @@
+import {
+  createSandboxViaHttp,
+  destroySandboxViaHttp,
+  fetchSandboxCatalogueViaHttp,
+  fetchSandboxCostsViaHttp,
+  getSandboxAutomationViaHttp,
+  listSandboxesViaHttp,
+  openSandboxAutomationViaHttp,
+  runSandboxVerbViaHttp,
+  type SandboxAutomationFetchResult,
+  type SandboxAutomationOpenFetchResult,
+  type SandboxCatalogueFetchResult,
+  type SandboxCostsFetchResult,
+  type SandboxCreateFetchResult,
+  type SandboxListFetchResult,
+  type SandboxVerbFetchResult,
+} from "../sandbox-control";
+import {
+  decideSecretRequestViaHttp,
+  fetchEnvironmentProvidersViaHttp,
+  fetchSandboxGrantsViaHttp,
+  fetchTeamEnvironmentViaHttp,
+  type EnvironmentProvidersFetchResult,
+  type SandboxGrantsFetchResult,
+  type TeamEnvironmentFetchResult,
+  type SecretRequestDecideFetchResult,
+} from "../sandbox-secrets";
+import type { SecretRequestDecision } from "@traycer/protocol/host/sandbox-secrets";
+import {
+  mintExecutableWriteGrantViaHttp,
+  type ExecutableWriteGrantFetchResult,
+} from "../executable-write-grant";
+import type {
+  SandboxAutomationOpenTarget,
+  SandboxCreateRequest,
+  SandboxLifecycleVerb,
+} from "@traycer/protocol/host/sandbox-control";
 import type { Disposable } from "../../platform/uri-callback";
 import type { NotificationFeedOccurrence } from "../../notifications/feed-delivery";
 import type {
@@ -20,6 +57,8 @@ import type {
   ITraycerCli,
   IWorkspaceFoldersHost,
   LocalHostSnapshot,
+  LocalHostUnresponsive,
+  LocalHostUnresponsiveOffer,
   RegisteredHostsChange,
   StoredAuthTokens,
   SystemResumeEvent,
@@ -85,6 +124,7 @@ import {
 } from "../../host-selection/selection-authority-engine";
 import {
   fetchRegisteredHostsViaHttp,
+  isRemoteHostDirectoryEntry,
   type HostListFetchResult,
 } from "../remote-fetcher";
 import {
@@ -160,7 +200,11 @@ export class MockRunnerHost implements IRunnerHost {
   // this mock (remote hosts flow through `hosts`/`HostDirectoryEntry` fixtures
   // instead), so this never needs to vary per test the way `authnBaseUrl` does.
   readonly relayBaseUrl: string = "wss://relay.test.invalid/attach";
+  // Fixed for the same reason as `relayBaseUrl`: the sandbox control-plane
+  // calls below go to the shared helpers, and no test points them at a server.
+  private readonly serverBaseUrl: string = "https://server.test.invalid";
   readonly hasLocalHost: boolean;
+  readonly sandboxControlUnavailableReason: string | null = null;
   // Browser-tab flavoured, like `fileSave` below: a tab's own clipboard takes
   // images, so image-copy affordances render by default in tests.
   readonly canCopyImages: boolean = true;
@@ -207,6 +251,10 @@ export class MockRunnerHost implements IRunnerHost {
     (event: SystemResumeEvent) => void
   >();
   private readonly networkPathChangedHandlers = new Set<() => void>();
+  private localHostUnresponsive: LocalHostUnresponsive | null = null;
+  private readonly localHostUnresponsiveHandlers = new Set<
+    (state: LocalHostUnresponsive | null) => void
+  >();
   private localHost: LocalHostSnapshot | null;
   /** `undefined` means "derive from `localHost`"; `null` means "no id on disk". */
   private readonly explicitLastKnownLocalHostId: string | null | undefined;
@@ -585,6 +633,129 @@ export class MockRunnerHost implements IRunnerHost {
     return deregisterHostViaHttp(this.authnBaseUrl, bearerToken, hostId);
   }
 
+  // The sandbox control plane: same no-CORS-boundary parity as above.
+  listSandboxes(bearerToken: string): Promise<SandboxListFetchResult> {
+    return listSandboxesViaHttp(this.serverBaseUrl, bearerToken);
+  }
+
+  getSandboxCosts(bearerToken: string): Promise<SandboxCostsFetchResult> {
+    return fetchSandboxCostsViaHttp(this.serverBaseUrl, bearerToken);
+  }
+
+  getSandboxCatalogue(
+    bearerToken: string,
+  ): Promise<SandboxCatalogueFetchResult> {
+    return fetchSandboxCatalogueViaHttp(this.serverBaseUrl, bearerToken);
+  }
+
+  createSandbox(
+    bearerToken: string,
+    request: SandboxCreateRequest,
+  ): Promise<SandboxCreateFetchResult> {
+    return createSandboxViaHttp(this.serverBaseUrl, bearerToken, request);
+  }
+
+  destroySandbox(
+    bearerToken: string,
+    sandboxId: string,
+  ): Promise<SandboxVerbFetchResult> {
+    return destroySandboxViaHttp(this.serverBaseUrl, bearerToken, sandboxId);
+  }
+
+  runSandboxVerb(
+    bearerToken: string,
+    sandboxId: string,
+    verb: SandboxLifecycleVerb,
+    timeoutMs: number,
+  ): Promise<SandboxVerbFetchResult> {
+    return runSandboxVerbViaHttp(
+      this.serverBaseUrl,
+      bearerToken,
+      sandboxId,
+      verb,
+      timeoutMs,
+    );
+  }
+
+  getSandboxAutomation(
+    bearerToken: string,
+    environmentId: string | null,
+  ): Promise<SandboxAutomationFetchResult> {
+    return getSandboxAutomationViaHttp(
+      this.serverBaseUrl,
+      bearerToken,
+      environmentId,
+    );
+  }
+
+  openSandboxAutomation(
+    bearerToken: string,
+    target: SandboxAutomationOpenTarget | null,
+  ): Promise<SandboxAutomationOpenFetchResult> {
+    return openSandboxAutomationViaHttp(
+      this.serverBaseUrl,
+      bearerToken,
+      target,
+    );
+  }
+
+  getSandboxGrants(
+    bearerToken: string,
+    environmentId: string | null,
+    hostId: string,
+  ): Promise<SandboxGrantsFetchResult> {
+    return fetchSandboxGrantsViaHttp(
+      this.authnBaseUrl,
+      bearerToken,
+      environmentId,
+      hostId,
+    );
+  }
+
+  getTeamEnvironment(
+    bearerToken: string,
+    teamId: string,
+  ): Promise<TeamEnvironmentFetchResult> {
+    return fetchTeamEnvironmentViaHttp(this.authnBaseUrl, bearerToken, teamId);
+  }
+
+  getEnvironmentProviders(
+    bearerToken: string,
+    environmentId: string,
+  ): Promise<EnvironmentProvidersFetchResult> {
+    return fetchEnvironmentProvidersViaHttp(
+      this.authnBaseUrl,
+      bearerToken,
+      environmentId,
+    );
+  }
+
+  mintExecutableWriteGrant(
+    bearerToken: string,
+    hostId: string,
+  ): Promise<ExecutableWriteGrantFetchResult> {
+    return mintExecutableWriteGrantViaHttp(
+      this.authnBaseUrl,
+      bearerToken,
+      hostId,
+    );
+  }
+
+  decideSecretRequest(
+    bearerToken: string,
+    environmentId: string | null,
+    requestId: string,
+    decision: SecretRequestDecision,
+  ): Promise<SecretRequestDecideFetchResult> {
+    return decideSecretRequestViaHttp(
+      this.authnBaseUrl,
+      bearerToken,
+      environmentId,
+      requestId,
+      decision,
+    );
+  }
+
   async openExternalLink(url: string): Promise<void> {
     this.openedExternalLinks.push(url);
   }
@@ -811,6 +982,21 @@ export class MockRunnerHost implements IRunnerHost {
     });
   }
 
+  async forceRestartUnresponsiveHost(
+    offer: LocalHostUnresponsiveOffer,
+  ): Promise<HostRestartRequestResult> {
+    if (
+      this.localHostUnresponsive?.pid !== offer.pid ||
+      this.localHostUnresponsive.offerId !== offer.offerId
+    ) {
+      return {
+        kind: "declined",
+        message: "The host is no longer unresponsive.",
+      };
+    }
+    return this.requestHostRespawn();
+  }
+
   async requestHostRespawn(): Promise<HostRestartRequestResult> {
     this.requestHostRespawnCalls += 1;
     return { kind: "restarted" };
@@ -886,6 +1072,18 @@ export class MockRunnerHost implements IRunnerHost {
     };
   }
 
+  onLocalHostUnresponsive(
+    handler: (state: LocalHostUnresponsive | null) => void,
+  ): Disposable {
+    handler(this.localHostUnresponsive);
+    this.localHostUnresponsiveHandlers.add(handler);
+    return {
+      dispose: () => {
+        this.localHostUnresponsiveHandlers.delete(handler);
+      },
+    };
+  }
+
   getLastKnownLocalHostId(): Promise<string | null> {
     if (this.explicitLastKnownLocalHostId !== undefined) {
       return Promise.resolve(this.explicitLastKnownLocalHostId);
@@ -933,6 +1131,14 @@ export class MockRunnerHost implements IRunnerHost {
     }
   }
 
+  /** Test helper: publish the "alive but not responding" verdict. */
+  setLocalHostUnresponsive(state: LocalHostUnresponsive | null): void {
+    this.localHostUnresponsive = state;
+    for (const handler of this.localHostUnresponsiveHandlers) {
+      handler(state);
+    }
+  }
+
   /** Test helper: fire the OS-wake signal to every `onSystemResumed` subscriber. */
   emitSystemResumed(event: SystemResumeEvent): void {
     for (const handler of this.systemResumedHandlers) {
@@ -974,12 +1180,20 @@ export class MockRunnerHost implements IRunnerHost {
       hostId: entry.hostId,
       kind:
         entry.hostId === localHostId ? ("local" as const) : ("remote" as const),
+      teamOwned:
+        isRemoteHostDirectoryEntry(entry) &&
+        entry.sandbox !== null &&
+        entry.sandbox.ownerTeamId !== null,
     }));
     if (
       localHostId !== null &&
       !hosts.some((entry) => entry.hostId === localHostId)
     ) {
-      hosts.push({ hostId: localHostId, kind: "local" as const });
+      hosts.push({
+        hostId: localHostId,
+        kind: "local" as const,
+        teamOwned: false,
+      });
     }
     this.selectionFleet.publish(
       this.selectionIdentity.current().generation,

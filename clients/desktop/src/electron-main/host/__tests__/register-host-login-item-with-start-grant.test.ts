@@ -179,6 +179,7 @@ describe("registerHostLoginItemWithStartGrant", () => {
           capability,
           layout.rootDir,
           SERVICE_LABEL,
+          null,
         );
       },
     );
@@ -340,6 +341,7 @@ describe("registerHostLoginItemWithStartGrant", () => {
             capability,
             layout.rootDir,
             SERVICE_LABEL,
+            null,
           );
         },
       );

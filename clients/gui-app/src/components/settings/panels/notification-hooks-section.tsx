@@ -279,7 +279,7 @@ function HooksEditor(props: {
   const configs = props.hooks.map(toConfig);
   const saveAll = (hooks: readonly NotificationHookConfig[], done: string) => {
     props.saveHooks.mutate(
-      { hooks: [...hooks] },
+      { hooks: [...hooks], executableWriteGrant: null },
       {
         onSuccess: () => {
           setEditor({ kind: "closed" });

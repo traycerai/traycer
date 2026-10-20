@@ -61,7 +61,10 @@ import {
   encodeMuxFrame,
   SESSION_CAPABILITY_BODY_COMPRESSION,
   SESSION_CAPABILITY_CLOUD_VERDICT_UPDATE,
+  SESSION_CAPABILITY_MEMBER_CREDENTIAL,
+  OPEN_AUTHZ_SESSION_GRANT_VERSION,
   type EncodeMuxFrameInput,
+  type MemberCredentialHandoff,
   type MuxFrame,
   type MuxFrameTypeValue,
   type QosClassValue,
@@ -340,6 +343,11 @@ class FakeRelayHost {
    * missing key it is.
    */
   readonly openIdentities: unknown[] = [];
+  /**
+   * The reserved `authz` slot on every `open`, index-aligned with
+   * `openBearers`. Raw for the reason `openIdentities` is.
+   */
+  readonly openAuthz: unknown[] = [];
   /** Params carried by every logical subscribe, including reconnect replay. */
   readonly subscribeParams: unknown[] = [];
   /** Schema version carried beside each logical subscribe. */
@@ -451,6 +459,12 @@ class FakeRelayHost {
    * the way `subscribeParams` is for SUBSCRIBE).
    */
   readonly cloudVerdictUpdates: boolean[] = [];
+  /**
+   * The reassembled json of every CREDENTIAL_UPDATE control frame the client
+   * sent (raw, like `openAuthz`: the point is what the transport put on the
+   * wire). Post-reassembly for the reason `cloudVerdictUpdates` is.
+   */
+  readonly credentialUpdates: unknown[] = [];
   /** Unexpected harness-side failures; asserted empty by the tests. */
   readonly errors: unknown[] = [];
   decideOpen: (bearer: string, openIndex: number) => OpenDecision = () => ({
@@ -788,6 +802,10 @@ class FakeRelayHost {
       }
       return;
     }
+    if (message.type === MuxFrameType.CREDENTIAL_UPDATE) {
+      this.credentialUpdates.push(message.json);
+      return;
+    }
     if (message.type === MuxFrameType.CREDIT) {
       const json = message.json;
       const credits =
@@ -871,6 +889,7 @@ class FakeRelayHost {
     const openIndex = this.openBearers.length;
     this.openBearers.push(bearer);
     this.openIdentities.push(message.json?.clientIdentity);
+    this.openAuthz.push(message.json?.authz);
     if (this.stallOpens) {
       // Freeze this attempt mid-flight (the session sits in its opening
       // phase, its own phase timer pending) until the test releases it -
@@ -1170,6 +1189,7 @@ function buildSessionOptions(
       }),
     bearer: () => lease,
     auth,
+    sessionGrant: null,
     clock: null,
     rpcRegistry: emptyRpcRegistry,
     streamRegistry: emptyStreamRegistry,
@@ -1184,6 +1204,7 @@ function buildSessionOptions(
     // `HOST_STATUS_LIVENESS_PROBE`, a `host.status` registry and a matching
     // `relay.floorRpcManifest`.
     livenessProbe: null,
+    mintMemberCredential: null,
   };
 }
 
@@ -4676,6 +4697,7 @@ describe("RemoteSession wake", () => {
       relayAttachUrl: "wss://relay.test/attach",
       authRecovery: "revalidate",
       authEpoch: "epoch-1",
+      openAuth: "user-bearer",
     };
     const view = acquireRemoteSession(
       identity,
@@ -10102,6 +10124,8 @@ describe("RemoteSession host-dialer traffic accounting (protocol base class, tas
       unaryResponseMs: 330_000,
       clientIdentity: TEST_CLIENT_IDENTITY,
       livenessProbe: null,
+      // A host-to-host dialer holds no member credential to hand.
+      mintMemberCredential: null,
     });
   }
 
@@ -10959,5 +10983,507 @@ describe("RemoteSession probed silence verdict (D4)", () => {
       }
     },
     SILENCE_PIN_BUDGET_MS,
+  );
+});
+
+describe("RemoteSession sandbox session grant", () => {
+  it(
+    "presents the session grant in authz v2 with an empty bearer, so no user credential reaches the sandbox",
+    async () => {
+      const relay = new FakeRelayHost();
+      const lease = new MutableBearerLease("user-bearer-secret", "user-1");
+      const session = new RemoteSession({
+        ...buildSessionOptions(relay, lease, null),
+        sessionGrant: () => "session-grant-jws",
+      });
+      try {
+        session.start();
+        await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+        expect(relay.openBearers[0]).toBe("");
+        expect(relay.openAuthz[0]).toEqual({
+          v: OPEN_AUTHZ_SESSION_GRANT_VERSION,
+          grant: "session-grant-jws",
+        });
+        expect(relay.openBearers).not.toContain("user-bearer-secret");
+      } finally {
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+
+  it(
+    "keeps presenting the user bearer, with no authz, to a personal host",
+    async () => {
+      const relay = new FakeRelayHost();
+      const lease = new MutableBearerLease("user-bearer", "user-1");
+      const session = buildSession(relay, lease, null);
+      try {
+        session.start();
+        await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+        expect(relay.openBearers[0]).toBe("user-bearer");
+        expect(relay.openAuthz[0] ?? null).toBeNull();
+      } finally {
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+});
+
+/**
+ * The no-progress bound counts an UNAUTHORIZED rejection whose revalidation
+ * answered "rotated" as no progress when the credential the next attach will
+ * present is the one just rejected. A session grant is not like a bearer: the
+ * grant reader keeps returning the grant the host just refused, because the
+ * fresh grant is minted only by the NEXT attach. So "unchanged" proves nothing
+ * for a grant, and a sandbox session must keep reconnecting through it.
+ */
+describe("RemoteSession no-progress UNAUTHORIZED bound by credential kind", () => {
+  const ROTATED: StreamAuthRevalidator = {
+    revalidateForReconnect: () => Promise.resolve("rotated" as const),
+  };
+
+  /**
+   * One open past the bound (three), or a terminal close. Four, not more: the
+   * reconnect backoff starts at 1 s and doubles, so a fourth open lands near
+   * 7 s and a fifth would not fit the wait.
+   */
+  async function untilPastTheBoundOrClosed(
+    relay: FakeRelayHost,
+    session: RemoteSession<VersionedRpcRegistry, VersionedStreamRpcRegistry>,
+  ): Promise<void> {
+    await vi.waitFor(
+      () =>
+        expect(session.isClosed() || relay.openBearers.length >= 4).toBe(true),
+      WAIT,
+    );
+  }
+
+  it(
+    "keeps reconnecting a session-grant session whose grant reader returns the rejected grant, after rotated revalidations past the bearer bound",
+    async () => {
+      const relay = new FakeRelayHost();
+      relay.decideOpen = () => ({
+        kind: "fatal",
+        details: unauthorizedDetails(),
+      });
+      const lease = new MutableBearerLease("user-bearer-secret", "user-1");
+      const session = new RemoteSession({
+        ...buildSessionOptions(relay, lease, ROTATED),
+        // The same grant every time: the next attach has not minted a new one.
+        sessionGrant: () => "session-grant-jws",
+      });
+      try {
+        session.start();
+        await untilPastTheBoundOrClosed(relay, session);
+
+        expect(session.isClosed()).toBe(false);
+        expect(relay.openBearers.length).toBeGreaterThanOrEqual(4);
+        // Every one of those opens carried the grant, never the user bearer.
+        expect(relay.openBearers.every((bearer) => bearer === "")).toBe(true);
+      } finally {
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+
+  it(
+    "control: a bearer session whose bearer is unchanged still goes terminal after three rejected opens",
+    async () => {
+      const relay = new FakeRelayHost();
+      relay.decideOpen = () => ({
+        kind: "fatal",
+        details: unauthorizedDetails(),
+      });
+      const lease = new MutableBearerLease("unchanged-bearer", "user-1");
+      const session = new RemoteSession(
+        buildSessionOptions(relay, lease, ROTATED),
+      );
+      try {
+        session.start();
+        await untilPastTheBoundOrClosed(relay, session);
+
+        expect(session.isClosed()).toBe(true);
+        expect(relay.openBearers).toHaveLength(3);
+      } finally {
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+});
+
+/**
+ * A grant provider that answers `refused` carries a typed, terminal verdict
+ * from authn (a sandbox whose credits ran out): the session must end on it at
+ * once, like a host fatal, and never retry, because no retry can change it.
+ */
+describe("RemoteSession refused attach grant", () => {
+  const FROZEN_FATAL: FatalErrorDetails = {
+    code: "SANDBOX_FROZEN",
+    reason: "This sandbox is paused because your credits ran out.",
+    incompatibleMethods: null,
+    upgradeGuidance: null,
+  };
+
+  /** A session whose provider is counted and whose relay dials are counted. */
+  function buildCountedSession(
+    relay: FakeRelayHost,
+    provider: RemoteSessionOptions<
+      VersionedRpcRegistry,
+      VersionedStreamRpcRegistry
+    >["grantProvider"],
+  ) {
+    const counts = { provider: 0, dials: 0 };
+    const lease = new MutableBearerLease("user-bearer", "user-1");
+    const session = new RemoteSession({
+      ...buildSessionOptions(relay, lease, null),
+      grantProvider: () => {
+        counts.provider += 1;
+        return provider();
+      },
+      webSocketFactory: {
+        create: (url, priority) => {
+          counts.dials += 1;
+          return relay.factory.create(url, priority);
+        },
+      },
+    });
+    return { session, counts };
+  }
+
+  const refusedProvider = () =>
+    Promise.resolve({
+      kind: "refused" as const,
+      fatal: FROZEN_FATAL,
+      detail:
+        "authn refused the mint: the sandbox is frozen (HTTP 402 sandbox_frozen)",
+      context: "",
+    });
+
+  it(
+    "goes terminal at once on a refused grant, with the SANDBOX_FROZEN fatal, and reports the close once",
+    async () => {
+      const relay = new FakeRelayHost();
+      const { session } = buildCountedSession(relay, refusedProvider);
+      let closedEvents = 0;
+      session.onClosed(() => {
+        closedEvents += 1;
+      });
+      try {
+        session.start();
+        await vi.waitFor(() => expect(session.isClosed()).toBe(true), WAIT);
+        expect(session.terminalFatal()).toEqual(FROZEN_FATAL);
+        expect(closedEvents).toBe(1);
+      } finally {
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+
+  it(
+    "calls the provider exactly once and opens no relay socket, even well past the first reconnect backoff",
+    async () => {
+      const relay = new FakeRelayHost();
+      const { session, counts } = buildCountedSession(relay, refusedProvider);
+      try {
+        session.start();
+        await vi.waitFor(() => expect(counts.provider).toBe(1), WAIT);
+        // Past the first reconnect rung (jittered floor 500 ms, 1 s nominal),
+        // and past the second, so a scheduled redial would have called again.
+        await new Promise((resolve) => setTimeout(resolve, 2_500));
+
+        expect(counts.provider).toBe(1);
+        expect(counts.dials).toBe(0);
+        expect(relay.openBearers).toEqual([]);
+        expect(session.isClosed()).toBe(true);
+      } finally {
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+
+  it(
+    "rejects a call parked on the session with the SANDBOX_FROZEN fatal, not as a retryable transport loss",
+    async () => {
+      const relay = new FakeRelayHost();
+      const { session } = buildCountedSession(relay, refusedProvider);
+      try {
+        session.start();
+        const error: unknown = await session
+          .sendUnary(
+            "host.status",
+            {},
+            null,
+            null,
+            null,
+            undefined,
+            false,
+            null,
+          )
+          .then(
+            () => null,
+            (reason: unknown) => reason,
+          );
+        expect(error).not.toBeNull();
+        expect(error).not.toBeInstanceOf(RetryableTransportError);
+        const fatal =
+          error instanceof HostTransportFailureError ||
+          error instanceof HostRpcError
+            ? error.fatalDetails
+            : null;
+        expect(fatal?.code).toBe("SANDBOX_FROZEN");
+        expect(relay.unaryRequests).toEqual([]);
+      } finally {
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+
+  it(
+    "control: a provider answering unavailable keeps the session reconnecting, calling it again and again",
+    async () => {
+      const relay = new FakeRelayHost();
+      const { session, counts } = buildCountedSession(relay, () =>
+        Promise.resolve({
+          kind: "unavailable" as const,
+          detail: "authn answered HTTP 503",
+          context: "",
+        }),
+      );
+      try {
+        session.start();
+        await vi.waitFor(
+          () => expect(counts.provider).toBeGreaterThanOrEqual(2),
+          WAIT,
+        );
+
+        expect(session.isClosed()).toBe(false);
+        expect(session.terminalFatal()).toBeNull();
+        expect(counts.dials).toBe(0);
+      } finally {
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+});
+
+const MEMBER_HANDOFF: MemberCredentialHandoff = {
+  token: "member-token",
+  refreshToken: "member-refresh-token",
+  familyId: "family-1",
+  provisionedAt: "2026-10-19T00:00:00.000Z",
+};
+
+function buildMemberCredentialSession(
+  relay: FakeRelayHost,
+  mint: ((hostId: string) => Promise<MemberCredentialHandoff | null>) | null,
+): RemoteSession<VersionedRpcRegistry, VersionedStreamRpcRegistry> {
+  applySilenceFloor(relay, SILENCE_FLOOR_METHODS);
+  const lease = new MutableBearerLease("token", "user-1");
+  return new RemoteSession({
+    ...buildSessionOptions(relay, lease, null),
+    rpcRegistry: silenceProbeRegistry(),
+    mintMemberCredential: mint,
+  });
+}
+
+function sendHostStatus(
+  session: RemoteSession<VersionedRpcRegistry, VersionedStreamRpcRegistry>,
+): Promise<unknown> {
+  return session.sendUnary(
+    "host.status",
+    {},
+    null,
+    null,
+    null,
+    undefined,
+    false,
+    null,
+  );
+}
+
+/**
+ * A team host spends only a member credential the client hands it after
+ * `OPEN_ACK`, so nothing may run on the session before that frame: the
+ * session holds its `ready` boundary (which is what releases parked callers
+ * and re-opens subscriptions) until the credential frame is enqueued.
+ */
+describe("RemoteSession member credential hand-off", () => {
+  it(
+    "enqueues the minted credential as the first client frame after OPEN_ACK, before any request parked ahead of the ack",
+    async () => {
+      const relay = new FakeRelayHost();
+      relay.openAckCapabilities = [SESSION_CAPABILITY_MEMBER_CREDENTIAL];
+      // Hold the ack so the unary below is issued strictly BEFORE it arrives.
+      relay.stallOpens = true;
+      let releaseMint: (handoff: MemberCredentialHandoff | null) => void = () =>
+        undefined;
+      const minted = new Promise<MemberCredentialHandoff | null>((resolve) => {
+        releaseMint = resolve;
+      });
+      const mint = vi.fn((_hostId: string) => minted);
+      const session = buildMemberCredentialSession(relay, mint);
+      try {
+        session.start();
+        const pending = sendHostStatus(session);
+        await vi.waitFor(() => expect(relay.openBearers).toHaveLength(1), WAIT);
+        await relay.releaseStalledOpens();
+
+        // The ack is in and the mint is outstanding: the session must NOT be
+        // ready, and nothing may have reached the wire behind the open.
+        await vi.waitFor(() => expect(mint).toHaveBeenCalledTimes(1), WAIT);
+        expect(mint).toHaveBeenCalledWith("host-1");
+        expect(session.isReady()).toBe(false);
+        expect(relay.credentialUpdates).toEqual([]);
+        expect(relay.unaryRequests).toEqual([]);
+
+        releaseMint(MEMBER_HANDOFF);
+        await expect(pending).resolves.toEqual({ ready: true });
+
+        const types = relay.clientFrames.map((frame) => frame.type);
+        const afterOpen = types.slice(types.indexOf(MuxFrameType.OPEN) + 1);
+        expect(afterOpen[0]).toBe(MuxFrameType.CREDENTIAL_UPDATE);
+        expect(relay.credentialUpdates).toEqual([
+          { bearer: null, memberCredential: MEMBER_HANDOFF },
+        ]);
+        expect(types.indexOf(MuxFrameType.CREDENTIAL_UPDATE)).toBeLessThan(
+          types.indexOf(MuxFrameType.REQUEST),
+        );
+        expect(relay.errors).toEqual([]);
+      } finally {
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+
+  it.each([
+    ["resolves null", "mint-unavailable", () => Promise.resolve(null)],
+    [
+      "throws",
+      "mint-failed",
+      () => Promise.reject(new Error("authn unreachable")),
+    ],
+  ])(
+    "a mint that %s sends no credential, warns once, and still opens the session",
+    async (_label, reason, mintBody) => {
+      const relay = new FakeRelayHost();
+      relay.openAckCapabilities = [SESSION_CAPABILITY_MEMBER_CREDENTIAL];
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const mint = vi.fn((_hostId: string) => mintBody());
+      const session = buildMemberCredentialSession(relay, mint);
+      try {
+        session.start();
+        // The parked unary going out and resolving is the proof the open
+        // completed without the credential.
+        await expect(sendHostStatus(session)).resolves.toEqual({ ready: true });
+
+        expect(session.isReady()).toBe(true);
+        expect(mint).toHaveBeenCalledTimes(1);
+        const handoffWarnings = warnSpy.mock.calls.filter(
+          (call) =>
+            typeof call[0] === "string" &&
+            call[0].includes("member credential not handed:"),
+        );
+        expect(handoffWarnings).toHaveLength(1);
+        expect(handoffWarnings[0]?.[0]).toContain(reason);
+        expect(relay.credentialUpdates).toEqual([]);
+        expect(relay.errors).toEqual([]);
+      } finally {
+        warnSpy.mockRestore();
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+
+  it(
+    "a credential that resolves after the host leg detached is carried by the redial's attach instead of minting again",
+    async () => {
+      const FIRST_HANDOFF: MemberCredentialHandoff = {
+        token: "first-member-token",
+        refreshToken: "first-member-refresh-token",
+        familyId: "family-first",
+        provisionedAt: "2026-10-19T01:00:00.000Z",
+      };
+      const relay = new FakeRelayHost();
+      relay.openAckCapabilities = [SESSION_CAPABILITY_MEMBER_CREDENTIAL];
+      let releaseFirstMint: (
+        handoff: MemberCredentialHandoff | null,
+      ) => void = () => undefined;
+      const firstMint = new Promise<MemberCredentialHandoff | null>(
+        (resolve) => {
+          releaseFirstMint = resolve;
+        },
+      );
+      const mint = vi
+        .fn((_hostId: string) =>
+          Promise.resolve<MemberCredentialHandoff | null>(null),
+        )
+        .mockImplementationOnce((_hostId: string) => firstMint);
+      const session = buildMemberCredentialSession(relay, mint);
+      try {
+        session.start();
+        await vi.waitFor(() => expect(mint).toHaveBeenCalledTimes(1), WAIT);
+        expect(session.isReady()).toBe(false);
+
+        // The host leg goes while the mint is outstanding, and the mint only
+        // settles afterwards: the credential has no live attach to ride.
+        relay.sendHostAttachment("host_detached");
+        releaseFirstMint(FIRST_HANDOFF);
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        expect(session.isReady()).toBe(false);
+        expect(relay.credentialUpdates).toEqual([]);
+
+        // The redial's own ack carries the held credential and does not mint.
+        relay.sendHostAttachment("host_attached");
+        await expect(sendHostStatus(session)).resolves.toEqual({ ready: true });
+
+        expect(session.isReady()).toBe(true);
+        expect(relay.credentialUpdates).toEqual([
+          { bearer: null, memberCredential: FIRST_HANDOFF },
+        ]);
+        expect(mint).toHaveBeenCalledTimes(1);
+        const types = relay.clientFrames.map((frame) => frame.type);
+        const afterRedialOpen = types.slice(
+          types.lastIndexOf(MuxFrameType.OPEN) + 1,
+        );
+        expect(afterRedialOpen[0]).toBe(MuxFrameType.CREDENTIAL_UPDATE);
+        expect(afterRedialOpen).toContain(MuxFrameType.REQUEST);
+        expect(relay.errors).toEqual([]);
+      } finally {
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+
+  it(
+    "a personal host's openAck without the member capability mints nothing and sends no credential frame",
+    async () => {
+      const relay = new FakeRelayHost();
+      relay.openAckCapabilities = [];
+      const mint = vi.fn((_hostId: string) => Promise.resolve(MEMBER_HANDOFF));
+      const session = buildMemberCredentialSession(relay, mint);
+      try {
+        session.start();
+        await expect(sendHostStatus(session)).resolves.toEqual({ ready: true });
+
+        expect(session.isReady()).toBe(true);
+        expect(mint).not.toHaveBeenCalled();
+        expect(relay.credentialUpdates).toEqual([]);
+        expect(relay.errors).toEqual([]);
+      } finally {
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
   );
 });

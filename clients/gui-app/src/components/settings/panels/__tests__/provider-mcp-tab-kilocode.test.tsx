@@ -132,6 +132,12 @@ vi.mock("@/hooks/host/use-addressable-host-id", () => ({
   useAddressableHostId: () => "host-1",
 }));
 
+// No host directory in this harness; the credential gate is the add and edit
+// dialogs' concern, not the origin and coverage rows'.
+vi.mock("@/hooks/host/use-host-credential-refusal", () => ({
+  useHostCredentialRefusal: () => null,
+}));
+
 vi.mock("@/lib/host", () => ({
   useHostClient: () => ({
     getActiveHostId: () => "host-1",

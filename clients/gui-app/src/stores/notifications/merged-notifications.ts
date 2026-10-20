@@ -91,7 +91,7 @@ import {
   type HostNotificationSeverity,
   type HostNotificationsAttentionCursor,
   type HostNotificationsChronologicalCursor,
-  type HostNotificationsCloudFeedRowV11,
+  type HostNotificationsCloudFeedRowV13,
   type HostNotificationsCloudFeedEntryRequest,
   type HostNotificationsCloudFeedMarkAllReadRequest,
   type HostNotificationsCloudFeedClearAllRequest,
@@ -109,6 +109,10 @@ import {
   type ProviderPackViewingLocalityContext,
 } from "@/lib/notifications/provider-pack-notification-attribution";
 import { useReactiveLocalHostEntry } from "@/hooks/host/use-reactive-local-host-entry";
+import {
+  secretsNotificationDetail,
+  type SecretsNotificationDetail,
+} from "@/lib/notifications/secrets-notification-detail";
 import { useRunnerHostOrNull } from "@/providers/use-runner-host";
 
 export type MergedNotificationSource =
@@ -130,6 +134,10 @@ export interface MergedNotificationRow {
    * the normalized navigation payload, where GUI chats and TUI agents both
    * intentionally route through a chat-shaped target. */
   readonly agentSurface?: "gui" | "tui" | null;
+  /** A secrets row's own facts (the grant request to decide, the export's
+   * expiry), read from its typed payload. Absent or `null` on every other
+   * row, and on a secrets row whose payload this build cannot read. */
+  readonly secrets?: SecretsNotificationDetail | null;
   readonly hostKind: HostNotificationFeedEntry["kind"] | null;
   readonly appLocalKind: AppLocalNotificationEntry["kind"] | null;
   readonly globalEntry: NotificationEntry | null;
@@ -303,7 +311,7 @@ export function useMergedNotificationRows(): ReadonlyArray<MergedNotificationRow
         ...orderedGlobalEntries.map((entry) => rowFromGlobalEntry(entry)),
         ...Object.values(cloudRows)
           .filter(
-            (row): row is HostNotificationsCloudFeedRowV11 => row !== undefined,
+            (row): row is HostNotificationsCloudFeedRowV13 => row !== undefined,
           )
           .filter((row) => !isAutomaticAgentRecovery(row.entry))
           .map(rowFromCloudFeedRow),
@@ -563,7 +571,7 @@ function rowFromLocalFeedId(input: {
 
 function rowFromCloudFeedId(input: {
   readonly feedMode: "local" | "cloud" | "upgrade-required";
-  readonly cloudRow: HostNotificationsCloudFeedRowV11 | undefined;
+  readonly cloudRow: HostNotificationsCloudFeedRowV13 | undefined;
 }): MergedNotificationRow | null {
   if (
     input.feedMode !== "cloud" ||
@@ -1412,7 +1420,7 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
           if (cloudState.version !== cloudVersion) return;
           const fallbackEntryIds = Object.values(cloudState.rows)
             .filter(
-              (row): row is HostNotificationsCloudFeedRowV11 =>
+              (row): row is HostNotificationsCloudFeedRowV13 =>
                 row !== undefined && row.entry.readAt === null,
             )
             .map((row) => row.entryId);
@@ -1731,6 +1739,7 @@ function rowFromHostEntryForOrigin(
     body: presentation.body,
     payload: payloadFromHostEntry(entry),
     agentSurface: agentSurfaceFromHostEntry(entry),
+    secrets: secretsNotificationDetail(entry.kind, entry.payload),
     hostKind: entry.kind,
     appLocalKind: null,
     globalEntry: null,
@@ -1795,7 +1804,7 @@ export function rowFromGlobalEntry(
 }
 
 export function rowFromCloudFeedRow(
-  row: HostNotificationsCloudFeedRowV11,
+  row: HostNotificationsCloudFeedRowV13,
 ): MergedNotificationRow {
   const fallback = formatHostNotificationPresentation(row.entry);
   const title =
@@ -1816,6 +1825,7 @@ export function rowFromCloudFeedRow(
     body: fallback.body,
     payload: payloadFromHostEntry(row.entry),
     agentSurface: agentSurfaceFromHostEntry(row.entry),
+    secrets: secretsNotificationDetail(row.entry.kind, row.entry.payload),
     hostKind: row.entry.kind,
     appLocalKind: null,
     globalEntry: null,
@@ -1965,9 +1975,40 @@ function agentSurfaceFromHostEntry(
   return null;
 }
 
+/**
+ * Payload kinds whose row is complete on itself: a rotation and the team
+ * rows name secrets, hosts and people, never a chat to open.
+ */
+const ROW_COMPLETE_PAYLOAD_KINDS = [
+  "secret_rotated",
+  "team_member_removed",
+  "team_member_joined",
+  "team_policy_unapplied",
+  "team_policy_authority_expired",
+  "team_installing_admin_gone",
+  "team_plan_unlinked",
+  "team_pods_full",
+] as const satisfies readonly HostNotificationKnownPayload["kind"][];
+
+type RowCompletePayload = Extract<
+  HostNotificationKnownPayload,
+  { readonly kind: (typeof ROW_COMPLETE_PAYLOAD_KINDS)[number] }
+>;
+
+const ROW_COMPLETE_PAYLOAD_KIND_SET: ReadonlySet<
+  HostNotificationKnownPayload["kind"]
+> = new Set(ROW_COMPLETE_PAYLOAD_KINDS);
+
+function isRowCompletePayload(
+  known: HostNotificationKnownPayload,
+): known is RowCompletePayload {
+  return ROW_COMPLETE_PAYLOAD_KIND_SET.has(known.kind);
+}
+
 function navigationPayloadFromKnown(
   known: HostNotificationKnownPayload,
 ): NotificationPayload | null {
+  if (isRowCompletePayload(known)) return null;
   switch (known.kind) {
     case "chat":
       return navigationPayloadForChatStopped(known);
@@ -2035,7 +2076,21 @@ function navigationPayloadFromKnown(
     // The chat's queue is paused and its remedy lives in that chat.
     case "managed_command_delivery_parked":
       return { kind: "chat", epicId: known.epicId, chatId: known.chatId };
+    // Both secrets rows are about a sandbox agent's chat when the host could
+    // name one, and about nothing navigable otherwise: the decision and the
+    // notice are complete on the row itself.
+    case "secret_grant_request":
+    case "secret_export_minted":
+      return navigationPayloadForSecretsRow(known.epicId, known.chatId);
   }
+}
+
+function navigationPayloadForSecretsRow(
+  epicId: string | undefined,
+  chatId: string | undefined,
+): NotificationPayload | null {
+  if (epicId === undefined || chatId === undefined) return null;
+  return { kind: "chat", epicId, chatId };
 }
 
 function navigationPayloadForChatStopped(

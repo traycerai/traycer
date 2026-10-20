@@ -22,6 +22,9 @@ import {
   refuseForegroundHostRun,
 } from "../host/foreground-host-run";
 import type { HostStartOrigin } from "../host/lifecycle-origin";
+import { refuseUnlessRestartTarget } from "../host/restart-target-guard";
+import { noteStopTargetProgress, withStopTarget } from "../service/stop-target";
+import type { RestartTargetHost } from "@traycer-clients/shared/host-lock/restart-target";
 import {
   formatCredentialProvisionNote,
   maybeProvisionCredential,
@@ -45,6 +48,12 @@ export interface ServiceInstallArgs {
   readonly enableLinger: boolean;
   readonly allowSelfInvocation: boolean;
   readonly takeover: boolean;
+  /**
+   * The one host process this command may stop or boot out, or null for
+   * whichever runs (`host/restart-target-guard.ts`). Desktop passes it on the
+   * takeover its force restart's re-register fallback can reach.
+   */
+  readonly expectedHost: RestartTargetHost | null;
   /** See `HostApplyArgs.attemptAdoption`. `null` for an ordinary invocation. */
   readonly attemptAdoption: string | null;
   /**
@@ -115,6 +124,14 @@ export function buildServiceInstallCommand(
             args.lifecycleOrigin,
           );
         }
+        if (args.expectedHost !== null) {
+          await refuseUnlessRestartTarget(
+            "host service install",
+            ctx.runtime.environment,
+            args.expectedHost,
+            null,
+          );
+        }
         const label = serviceLabelFor(ctx.runtime.environment);
         const cli = await resolveServiceCliInvocation({
           environment: ctx.runtime.environment,
@@ -127,52 +144,69 @@ export function buildServiceInstallCommand(
           argCount: cli.args.length,
         });
         const controller = createServiceController();
-        let takeover: DesktopRegistrationTakeover | null = null;
-        if (args.takeover) {
-          ctx.progress({
-            stage: "register",
-            message: `taking over host management from Traycer Desktop`,
-            percent: null,
-            bytes: null,
-            totalBytes: null,
-            workUnits: null,
-          });
-          takeover = await takeoverDesktopRegistrationWithAttempt(
-            capability,
-            contenderOptions,
-            controller,
-            label,
-          );
-          ctx.runtime.logger.info("Service install takeover step completed", {
-            environment: ctx.runtime.environment,
-            label: label.id,
-            outcome: takeover.kind,
-          });
-        }
-        ctx.progress({
-          stage: "register",
-          message: `registering service '${label.id}'`,
-          percent: null,
-          bytes: null,
-          totalBytes: null,
-          workUnits: null,
-        });
-        // THE named repair, typed at a terminal or pressed as Doctor's
-        // Register service: the one install that writes a task its owner
-        // disabled back to enabled and starts it. Every other install carries
-        // the owner's setting over (`runAsExplicitRegistrationRepair`).
-        await runAsExplicitRegistrationRepair(() =>
-          installHostServiceWithAttempt(
-            capability,
-            contenderOptions,
-            args.lifecycleOrigin,
-            controller,
-            {
-              label,
-              cli,
-              enableLinger: args.enableLinger,
-            },
-          ),
+        // The takeover stops and boots out the host it finds, and the install
+        // after it boots out a loaded registration - twice when it races
+        // another registrar. One scope holds every one of those edges to the
+        // confirmed host, up to the install's own launch
+        // (`service/stop-target.ts`).
+        const takeover = await withStopTarget(
+          "host service install",
+          ctx.runtime.environment,
+          args.expectedHost,
+          async (): Promise<DesktopRegistrationTakeover | null> => {
+            let takenOver: DesktopRegistrationTakeover | null = null;
+            if (args.takeover) {
+              ctx.progress({
+                stage: "register",
+                message: `taking over host management from Traycer Desktop`,
+                percent: null,
+                bytes: null,
+                totalBytes: null,
+                workUnits: null,
+              });
+              takenOver = await takeoverDesktopRegistrationWithAttempt(
+                capability,
+                contenderOptions,
+                controller,
+                label,
+              );
+              noteStopTargetProgress("stop-ran");
+              ctx.runtime.logger.info(
+                "Service install takeover step completed",
+                {
+                  environment: ctx.runtime.environment,
+                  label: label.id,
+                  outcome: takenOver.kind,
+                },
+              );
+            }
+            ctx.progress({
+              stage: "register",
+              message: `registering service '${label.id}'`,
+              percent: null,
+              bytes: null,
+              totalBytes: null,
+              workUnits: null,
+            });
+            // THE named repair, typed at a terminal or pressed as Doctor's
+            // Register service: the one install that writes a task its owner
+            // disabled back to enabled and starts it. Every other install carries
+            // the owner's setting over (`runAsExplicitRegistrationRepair`).
+            await runAsExplicitRegistrationRepair(() =>
+              installHostServiceWithAttempt(
+                capability,
+                contenderOptions,
+                args.lifecycleOrigin,
+                controller,
+                {
+                  label,
+                  cli,
+                  enableLinger: args.enableLinger,
+                },
+              ),
+            );
+            return takenOver;
+          },
         );
         const platform = process.platform;
         const manifestPath =

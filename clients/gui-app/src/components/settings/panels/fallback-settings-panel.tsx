@@ -36,7 +36,7 @@ import {
 import { useSettingsRowDescriptionId } from "@/components/settings/settings-row-description";
 import { HostScopeGate } from "@/components/settings/host-scope/host-scope-gate";
 import {
-  useHostScope,
+  usePersonalHostScope,
   type HostScope,
 } from "@/components/settings/host-scope/use-host-scope";
 import {
@@ -140,7 +140,7 @@ import {
  * chat gets are the actions on its own cards when a fallback arms.
  */
 export function FallbackSettingsPanel(): ReactNode {
-  const scope = useHostScope();
+  const scope = usePersonalHostScope();
   const realBinding = useHostBinding();
 
   // The same governed narrow the agent-guide section makes, for the same

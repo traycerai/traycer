@@ -338,6 +338,7 @@ function forkTarget(profileId: string | null): ChatForkDialogTarget {
     carriedInterviews: "settled",
     forkMode: "plain",
     initialHostId: null,
+    onlyHostIds: null,
   };
 }
 

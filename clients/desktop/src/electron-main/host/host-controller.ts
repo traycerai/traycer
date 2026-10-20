@@ -103,11 +103,20 @@ import {
   type DesktopHostInstallRecord,
   type HostEndpointReachabilityProbe,
 } from "./host-state";
+import { readPidMetadataState } from "./host-lifecycle";
+import {
+  restartTargetStillCurrent,
+  type RestartTargetHost,
+} from "@traycer-clients/shared/host-lock/restart-target";
 import {
   AUTOMATIC_INTENTS_HELD_MESSAGE,
   AUTOMATIC_INTENTS_QUIESCED_MESSAGE,
   HOST_NOT_SERVICE_RUN_MESSAGE,
   HOST_REMOVED_BY_USER_MESSAGE,
+  HOST_RESTART_TARGET_CHANGED_MESSAGE,
+  HOST_STARTUP_TURNED_OFF_NOTE,
+  HOST_UNINSTALL_HOST_BUSY_MESSAGE,
+  HOST_UNINSTALL_HOST_RUNNING_MESSAGE,
   HOST_UPDATE_SERVICE_DISABLED_MESSAGE,
   SERVICE_REGISTRATION_DISABLED_CODE,
   SERVICE_TASK_NOT_OWNED_CODE,
@@ -201,6 +210,24 @@ const CLI_LOCK_BUSY_CODE = "E_CLI_LOCK_BUSY";
 const HOST_BUSY_CODE = "E_HOST_BUSY";
 const HOST_UPDATE_ATTEMPT_ACTIVE_CODE = "E_HOST_UPDATE_ATTEMPT_ACTIVE";
 const HOST_NOT_SERVICE_RUN_CODE = "E_HOST_NOT_SERVICE_RUN";
+const HOST_UNINSTALL_HOST_RUNNING_CODE = "E_HOST_UNINSTALL_HOST_RUNNING";
+const HOST_RESTART_TARGET_CHANGED_CODE = "E_HOST_RESTART_TARGET_CHANGED";
+
+/**
+ * The CLI flags that hold a command to the host process a force restart was
+ * confirmed for (`host/restart-target-guard.ts` in the CLI): none when the
+ * restart was not confirmed for one.
+ */
+function restartTargetArgs(target: RestartTargetHost | null): string[] {
+  return target === null
+    ? []
+    : [
+        "--expect-host-pid",
+        String(target.pid),
+        "--expect-host-start-identity",
+        target.startIdentity,
+      ];
+}
 // `host service start` could not start the service: on a packaged Mac whose
 // job launchd no longer has loaded, the start that is left is a register.
 const SERVICE_CONTROL_FAILED_CODE = "E_SERVICE_CONTROL_FAILED";
@@ -2100,6 +2127,12 @@ export class HostController {
      * self-deadlock, which is the whole reason the adoption producer exists.
      */
     readonly adoptionArgs: readonly string[];
+    /**
+     * The host process a force restart was confirmed for, or null. The
+     * takeover can boot out a host it finds unreachable, after waiting for
+     * its own lock, so the CLI checks it there.
+     */
+    readonly target: RestartTargetHost | null;
   }): Promise<
     | { readonly recovered: true; readonly version: string | null }
     | {
@@ -2133,6 +2166,7 @@ export class HostController {
         "install",
         "--takeover",
         ...args.adoptionArgs,
+        ...restartTargetArgs(args.target),
         ...this.devServiceInstallExtras(),
       ]);
     } catch (err) {
@@ -2319,6 +2353,15 @@ export class HostController {
     force: boolean,
     postCommitContinuation: BusyContinuation,
     publishStartGrant: boolean,
+    /**
+     * The host process a force restart was confirmed for, or null. Checked
+     * here, under the lock, for the same reason the CLI checks it under its
+     * own: the caller's check came before the wait. And checked again by the
+     * registration immediately before each edge that can stop a host (its
+     * legacy retirement and its bootout), because a host admitted before the
+     * lock can still publish between here and there.
+     */
+    target: RestartTargetHost | null,
   ): Promise<LockedMacActivationStep> {
     // Re-read install/pid state after acquisition (lock rule 3) - a
     // superseding mutation may have landed while we waited.
@@ -2330,6 +2373,15 @@ export class HostController {
           kind: "failed",
           message: "No host installed.",
           errorCode: null,
+        },
+      };
+    }
+    if (target !== null && !(await this.restartTargetIsCurrent(target))) {
+      return {
+        phase: "terminal",
+        outcome: {
+          kind: "deferred",
+          message: HOST_RESTART_TARGET_CHANGED_MESSAGE,
         },
       };
     }
@@ -2368,17 +2420,39 @@ export class HostController {
       record.runtimeVersion === null
         ? attestedInstallGenerationFromDisk(record)
         : null;
+    let targetChanged = false;
+    const confirmTarget =
+      target === null
+        ? null
+        : async (): Promise<boolean> => {
+            const current = await this.restartTargetIsCurrent(target);
+            if (!current) targetChanged = true;
+            return current;
+          };
     const registerResult: RegisterHostLoginItemResult = publishStartGrant
       ? await registerHostLoginItemWithStartGrant(
           capability,
           this.layout.rootDir,
           smAppServiceAgentLabelId(labelForEnvironment(this.environment).id),
+          confirmTarget,
         )
       : await registerHostLoginItemWithAttempt(
           capability,
           this.layout.rootDir,
           async () => true,
+          confirmTarget,
         );
+    if (registerResult === "deferred-busy" && targetChanged) {
+      // The registration found another host published before it reached a
+      // bootout, and stopped there.
+      return {
+        phase: "terminal",
+        outcome: {
+          kind: "deferred",
+          message: HOST_RESTART_TARGET_CHANGED_MESSAGE,
+        },
+      };
+    }
     if (registerResult === "removed-by-user") {
       return {
         phase: "terminal",
@@ -2444,12 +2518,15 @@ export class HostController {
     postCommitContinuation: BusyContinuation,
     isConvergeReady: boolean,
     publishStartGrant: boolean,
+    /** The host process a force restart was confirmed for, or null. */
+    target: RestartTargetHost | null,
   ): Promise<MutationOutcome<{ readonly activated: boolean }>> {
     const first = await this.runLockedMacActivationCycleOnce(
       force,
       postCommitContinuation,
       isConvergeReady,
       publishStartGrant,
+      target,
     );
     if (first.kind !== "retryable-readiness-timeout") return first;
     // Re-probe before paying for a second DISRUPTIVE cycle.
@@ -2475,11 +2552,14 @@ export class HostController {
     log.warn(
       "[host-controller] readiness timed out after a completed register cycle - auto-retrying the cycle once before surfacing the failure",
     );
+    // Still held to the confirmed host: a host published since the first
+    // cycle - its own slow start among them - is left running, not booted out.
     const second = await this.runLockedMacActivationCycleOnce(
       force,
       postCommitContinuation,
       isConvergeReady,
       publishStartGrant,
+      target,
     );
     if (second.kind !== "retryable-readiness-timeout") return second;
     return this.failedAfterServiceCycle(second.message);
@@ -2547,6 +2627,7 @@ export class HostController {
   private async activateAroundParkedRegistration(
     step: Extract<LockedMacActivationStep, { phase: "parked" }>,
     force: boolean,
+    target: RestartTargetHost | null,
   ): Promise<MutationOutcome<{ readonly activated: boolean }>> {
     if (step.prePid === null) {
       // A host that is DOWN because its login item is toggled off reads as
@@ -2567,6 +2648,7 @@ export class HostController {
         const takeover = await this.takeOverParkedRegistrationIfDown(
           step.prePid,
           step.expectedRuntimeVersion,
+          target,
         );
         if (takeover.kind === "attempted") return takeover.outcome;
         log.warn(
@@ -2613,9 +2695,12 @@ export class HostController {
     // so a forced activation would commit the bytes and then fail to bring
     // them up - the same gap the CLI's own activation path had.
     return this.runCliRecoveryServiceCycle(
-      force
-        ? ["host", "restart", "--force", "--defer-if-parked"]
-        : ["host", "restart", "--if-idle", "--defer-if-parked"],
+      [
+        ...(force
+          ? ["host", "restart", "--force", "--defer-if-parked"]
+          : ["host", "restart", "--if-idle", "--defer-if-parked"]),
+        ...restartTargetArgs(target),
+      ],
       step.prePid,
     );
   }
@@ -2686,6 +2771,7 @@ export class HostController {
   private async takeOverParkedRegistrationIfDown(
     prePid: number | null,
     expectedRuntimeVersion: string | null,
+    target: RestartTargetHost | null,
   ): Promise<ParkedTakeoverAttempt> {
     const takeover = await this.parkedTakeoverVerdict(prePid);
     if (takeover.kind !== "takeover") {
@@ -2703,6 +2789,7 @@ export class HostController {
       failedStatus: takeover.status,
       prePid: null,
       expectedRuntimeVersion,
+      target,
     });
     if (recovery.recovered) {
       return {
@@ -2733,6 +2820,7 @@ export class HostController {
       readonly failedStatus: HostLoginItemStatus;
       readonly prePid: number | null;
       readonly expectedRuntimeVersion: string | null;
+      readonly target: RestartTargetHost | null;
     },
   ): () => Promise<DesktopActivationCycleOutcome> {
     return async (): Promise<DesktopActivationCycleOutcome> => {
@@ -2745,6 +2833,7 @@ export class HostController {
             prePid: args.prePid,
             expectedRuntimeVersion: args.expectedRuntimeVersion,
             adoptionArgs,
+            target: args.target,
           }),
       ).catch((err: unknown) => {
         const cause = err instanceof Error ? err.message : String(err);
@@ -2789,6 +2878,7 @@ export class HostController {
     // `respawn`, `recoverIfDown`, and `freePortAndRestart`.
     isConvergeReady: boolean,
     publishStartGrant: boolean,
+    target: RestartTargetHost | null,
   ): Promise<MacActivationCycleAttempt> {
     const outcome = await withDesktopUpdateContender(
       {
@@ -2805,6 +2895,7 @@ export class HostController {
           force,
           postCommitContinuation,
           publishStartGrant,
+          target,
         ),
     );
     if (outcome.kind !== "acquired") {
@@ -2817,7 +2908,7 @@ export class HostController {
       }
       return this.desktopContenderRefusal(outcome);
     }
-    return this.completeMacActivationStep(outcome.result, force, true);
+    return this.completeMacActivationStep(outcome.result, force, true, target);
   }
 
   /**
@@ -2832,12 +2923,18 @@ export class HostController {
     step: LockedMacActivationStep,
     force: boolean,
     stampRuntime: boolean,
+    /**
+     * The host process a force restart was confirmed for, or null: the
+     * fallbacks below run after the lock is released, and each one that can
+     * stop a host carries it to the CLI, which checks it under its own lock.
+     */
+    target: RestartTargetHost | null,
   ): Promise<MacActivationCycleAttempt> {
     if (step.phase === "terminal") {
       return step.outcome;
     }
     if (step.phase === "parked") {
-      return this.activateAroundParkedRegistration(step, force);
+      return this.activateAroundParkedRegistration(step, force, target);
     }
     if (step.phase === "register-failed") {
       const recovery = await this.recoverRegistrationViaCliTakeover({
@@ -2845,6 +2942,7 @@ export class HostController {
         failedStatus: step.status,
         prePid: step.prePid,
         expectedRuntimeVersion: step.expectedRuntimeVersion,
+        target,
       });
       if (!recovery.recovered) {
         return recovery.outcome;
@@ -3020,6 +3118,7 @@ export class HostController {
           force,
           postCommitContinuation,
           false,
+          null,
         ),
     );
     if (outcome.kind === "nonterminal-attempt") {
@@ -3028,7 +3127,7 @@ export class HostController {
     if (outcome.kind !== "acquired") {
       return this.desktopContenderRefusal(outcome);
     }
-    return this.completeMacActivationStep(outcome.result, force, false);
+    return this.completeMacActivationStep(outcome.result, force, false, null);
   }
 
   // ---- Pending LaunchAgent revision refresh (packaged macOS) --------------
@@ -3274,6 +3373,7 @@ export class HostController {
           capability,
           this.layout.rootDir,
           async () => (await probeHostBusyVerdict(this.layout)) === "idle",
+          null,
         );
         return {
           status,
@@ -3373,6 +3473,7 @@ export class HostController {
         failedStatus: status,
         prePid,
         expectedRuntimeVersion,
+        target: null,
       });
       if (!recovery.recovered) {
         return recovery.outcome;
@@ -3806,11 +3907,54 @@ export class HostController {
   private async runLaneHeadGuard(
     intent: LocalHostMutationIntent,
   ): Promise<AbandonedByGuard | null> {
-    if (intent.kind === "background") return null;
+    const admission = await this.admitAtLaneHead(intent);
+    return admission.kind === "abandoned" ? admission : null;
+  }
+
+  /**
+   * `runLaneHeadGuard` that also keeps the host process a guard confirmed the
+   * job for (`proceed-for-host`), for the one job that carries it to the step
+   * that stops a host: `respawn`.
+   */
+  private async admitAtLaneHead(
+    intent: LocalHostMutationIntent,
+  ): Promise<
+    | AbandonedByGuard
+    | { readonly kind: "admitted"; readonly target: RestartTargetHost | null }
+  > {
+    if (intent.kind === "background") return { kind: "admitted", target: null };
     const verdict = await intent.guard();
-    return verdict.kind === "abandon"
-      ? { kind: "abandoned", message: verdict.message }
-      : null;
+    switch (verdict.kind) {
+      case "abandon":
+        return { kind: "abandoned", message: verdict.message };
+      case "proceed":
+        return { kind: "admitted", target: null };
+      case "proceed-for-host":
+        return { kind: "admitted", target: verdict.host };
+    }
+  }
+
+  /**
+   * Whether `target` is still the host `pid.json` publishes, or no live host
+   * is published at all (`restartTargetStillCurrent`). The packaged-macOS
+   * continuation's check; the CLI makes the same one for every other route.
+   */
+  private async restartTargetIsCurrent(
+    target: RestartTargetHost,
+  ): Promise<boolean> {
+    const read = await readPidMetadataState(this.layout.pidMetadataFile);
+    return restartTargetStillCurrent(
+      target,
+      read.kind === "parsed"
+        ? {
+            kind: "published",
+            pid: read.snapshot.pid,
+            startIdentity: read.startIdentity,
+          }
+        : read.kind === "absent"
+          ? read
+          : { kind: "unreadable" },
+    );
   }
 
   private async convergeReadyCliOwned(
@@ -3926,6 +4070,7 @@ export class HostController {
       "activate",
       true,
       false,
+      null,
     );
     if (activation.kind !== "ok") {
       return activation as MutationOutcome<ConvergeReadyOk>;
@@ -3977,6 +4122,35 @@ export class HostController {
           code: err.code,
         });
         return { kind: "deferred", message: HOST_NOT_SERVICE_RUN_MESSAGE };
+      }
+      if (err.code === HOST_RESTART_TARGET_CHANGED_CODE) {
+        // A restart bound to one host process found another published in its
+        // place once the CLI held the lock, and stopped nothing.
+        log.info("[host-controller] host mutation refused", {
+          kind: this.mutationStatus?.kind ?? null,
+          reason: "restart-target-changed",
+          code: err.code,
+        });
+        return {
+          kind: "deferred",
+          message: HOST_RESTART_TARGET_CHANGED_MESSAGE,
+        };
+      }
+      if (err.code === HOST_UNINSTALL_HOST_RUNNING_CODE) {
+        // `host uninstall --all` asked the host to stop, could not confirm it
+        // did, and kept the install rather than remove it from under a
+        // running host. The service deregistration before the stop stands,
+        // which the message says; `removeTraycer` keeps its removed-by-user
+        // sentinel on it for the same reason.
+        log.info("[host-controller] host mutation refused", {
+          kind: this.mutationStatus?.kind ?? null,
+          reason: "host-did-not-stop",
+          code: err.code,
+        });
+        return {
+          kind: "deferred",
+          message: HOST_UNINSTALL_HOST_RUNNING_MESSAGE,
+        };
       }
       if (err.code === SERVICE_TASK_NOT_OWNED_CODE) {
         // The host's Scheduled Task is not this account's - another Windows
@@ -4701,6 +4875,7 @@ export class HostController {
       "activate",
       false,
       false,
+      null,
     );
     if (activation.kind !== "ok") {
       return activation as MutationOutcome<ApplyStagedOk>;
@@ -4852,6 +5027,7 @@ export class HostController {
                 "activate",
                 false,
                 false,
+                null,
               );
             }
             return this.activateInstalledCliOwned(force);
@@ -4994,6 +5170,7 @@ export class HostController {
       "activate",
       false,
       false,
+      null,
     );
     if (activation.kind !== "ok") {
       return activation as MutationOutcome<InstallVersionOk>;
@@ -5067,6 +5244,7 @@ export class HostController {
             capability,
             this.layout.rootDir,
             async () => true,
+            null,
           );
           return {
             status,
@@ -5113,6 +5291,7 @@ export class HostController {
           const takeover = await this.takeOverParkedRegistrationIfDown(
             registration.prePid,
             registration.expectedRuntimeVersion,
+            null,
           );
           if (takeover.kind === "attempted") {
             return takeover.outcome.kind === "ok"
@@ -5141,6 +5320,7 @@ export class HostController {
             expectedRuntimeVersion: registration.expectedRuntimeVersion,
           },
           false,
+          null,
         );
         return activated.kind === "ok"
           ? { kind: "ok", value: { registered: true } }
@@ -5164,6 +5344,7 @@ export class HostController {
           failedStatus: registration.status,
           prePid: registration.prePid,
           expectedRuntimeVersion: registration.expectedRuntimeVersion,
+          target: null,
         });
         if (!recovery.recovered) {
           return recovery.outcome;
@@ -5482,6 +5663,8 @@ export class HostController {
      * still unclaimable must surface, not spin.
      */
     allowRecoveryDispatch: boolean,
+    /** The host process the restart was confirmed for, or null for any. */
+    target: RestartTargetHost | null,
   ): Promise<GuardedMutationOutcome<ActivateInstalledOk> | null> {
     const read = await readUpdateAttemptRecord(this.layout.rootDir);
     // Absent, or unreadable: nothing to continue. An unreadable record must
@@ -5547,6 +5730,10 @@ export class HostController {
         },
         nowIso: () => new Date().toISOString(),
         drain: () => probeHostBusyVerdict(this.layout),
+        confirmTarget: () =>
+          target === null
+            ? Promise.resolve(true)
+            : this.restartTargetIsCurrent(target),
         commit: (capability: UpdateMutationCapability, intent) =>
           commitAttemptMutationWithCapability(
             capability,
@@ -5602,6 +5789,11 @@ export class HostController {
             true,
             "activate",
             false,
+            // Its span checked the host before the write-ahead; this checks it
+            // again at the bootout itself. A refusal here is terminal for the
+            // segment, as a lost authority is: the tombstone is withdrawn and
+            // the record terminalized with its bytes left placed.
+            target,
           );
           if (step.phase === "registered") return { kind: "activated" };
           if (step.phase === "parked") {
@@ -5627,6 +5819,7 @@ export class HostController {
                     failedStatus: takeover.status,
                     prePid: null,
                     expectedRuntimeVersion: step.expectedRuntimeVersion,
+                    target,
                   },
                 ),
               };
@@ -5651,6 +5844,7 @@ export class HostController {
                     failedStatus: step.status,
                     prePid: step.prePid,
                     expectedRuntimeVersion: step.expectedRuntimeVersion,
+                    target,
                   },
                 ),
               };
@@ -5743,6 +5937,12 @@ export class HostController {
           return null;
       }
     }
+    if (segment.kind === "parked" && segment.reason === "target-changed") {
+      // Another host was published in place of the confirmed one, and the
+      // record is re-parked with nothing stopped. Not a fall-through: the
+      // generic restart would refuse for the same reason.
+      return { kind: "deferred", message: HOST_RESTART_TARGET_CHANGED_MESSAGE };
+    }
     if (segment.kind === "parked" && segment.reason === "actuator-lock-busy") {
       // The INNER cli-lock was held elsewhere. Because acquisition now happens
       // before the `restarting` commit, nothing was promised and the record is
@@ -5756,7 +5956,11 @@ export class HostController {
       segment.reason === "requires-recovery" &&
       allowRecoveryDispatch
     ) {
-      return this.recoverOrphanedContinuationThenResume(identity, record);
+      return this.recoverOrphanedContinuationThenResume(
+        identity,
+        record,
+        target,
+      );
     }
     if (segment.kind === "refused" && segment.outcome.kind === "busy") {
       // A live executor owns this attempt. Stopping its host mid-flight is the
@@ -5805,6 +6009,7 @@ export class HostController {
   private async recoverOrphanedContinuationThenResume(
     identity: HostUpdateAttemptIdentity,
     record: HostUpdateAttemptRecord,
+    target: RestartTargetHost | null,
   ): Promise<GuardedMutationOutcome<ActivateInstalledOk> | null> {
     const report = await this.dispatchUpdateVerification(
       identity,
@@ -5846,7 +6051,7 @@ export class HostController {
       );
       return null;
     }
-    return this.routeForceRestartContinuation(false);
+    return this.routeForceRestartContinuation(false, target);
   }
 
   private async dispatchUpdateVerification(
@@ -5907,8 +6112,14 @@ export class HostController {
         // nobody asked about, killing its active sessions. Runs before
         // `notifyRespawning`, which clears the renderer-facing snapshot - an
         // abandoned job must leave no trace it was ever admitted.
-        const abandoned = await this.runLaneHeadGuard(intent);
-        if (abandoned !== null) return abandoned;
+        const admission = await this.admitAtLaneHead(intent);
+        if (admission.kind === "abandoned") return admission;
+        // The host process the guard confirmed this restart for, if it named
+        // one. Checked again by whichever step stops the host, under that
+        // step's lock: the continuation and the CLI's lock wait below both
+        // sit between this guard and the stop.
+        const target = admission.target;
+        const targetArgs = restartTargetArgs(target);
         // After the guard, before any effect: identity decides whether this
         // job may act at all; the generation only decides whether there is
         // anything left to do. A restart that completed since submission is
@@ -5937,7 +6148,13 @@ export class HostController {
           const prePid =
             (await readRunningHostIdentity(this.layout))?.pid ?? null;
           const recovery = await this.runCliRecoveryServiceCycle(
-            ["host", "restart", "--if-idle", "--defer-if-parked"],
+            [
+              "host",
+              "restart",
+              "--if-idle",
+              "--defer-if-parked",
+              ...targetArgs,
+            ],
             prePid,
           );
           if (recovery.kind === "ok" && recovery.value.activated) {
@@ -5952,7 +6169,10 @@ export class HostController {
         // continuation makes that announcement itself at its own claim point.
         // Returns null for every state that is not a pending packaged-macOS
         // activation, so the sequence below stays byte-identical.
-        const continuation = await this.routeForceRestartContinuation(true);
+        const continuation = await this.routeForceRestartContinuation(
+          true,
+          target,
+        );
         if (continuation !== null) {
           // A completed continuation IS a relaunch — verification reported
           // `complete`, so the host restarted onto the new bytes. It must
@@ -5973,9 +6193,15 @@ export class HostController {
         // own contender lock, so it is made from the record as it stands when
         // the action runs rather than from a snapshot taken here beforehand.
         const recovery = (await this.hasNoLaunchdJobToRestart())
-          ? await this.registerAgentInsteadOfRestart()
+          ? await this.registerAgentInsteadOfRestart(target)
           : await this.runCliRecoveryServiceCycle(
-              ["host", "restart", "--force", "--defer-if-parked"],
+              [
+                "host",
+                "restart",
+                "--force",
+                "--defer-if-parked",
+                ...targetArgs,
+              ],
               prePid,
             );
         // Only a completed relaunch satisfies later-submitted respawns. A
@@ -6026,7 +6252,7 @@ export class HostController {
           return { kind: "deferred", message: HOST_REMOVED_BY_USER_MESSAGE };
         }
         if (await this.hasNoLaunchdJobToRestart()) {
-          return this.registerAgentInsteadOfRestart();
+          return this.registerAgentInsteadOfRestart(null);
         }
         // The CLI attests the committed install record while it owns the
         // restart lock. Desktop only contributes its pre-cycle pid, then
@@ -6084,9 +6310,15 @@ export class HostController {
    * which is this same state; turning it back on is theirs to do, so that is
    * reported with the approval guidance and nothing is registered.
    */
-  private async registerAgentInsteadOfRestart(): Promise<
-    MutationOutcome<ActivateInstalledOk>
-  > {
+  private async registerAgentInsteadOfRestart(
+    /**
+     * The host process a force restart was confirmed for, or null. Reaching
+     * here means none answered and no job is loaded, but the cycle waits for
+     * its lock before it boots anything out, and another actor can start a
+     * host in that wait.
+     */
+    target: RestartTargetHost | null,
+  ): Promise<MutationOutcome<ActivateInstalledOk>> {
     const loginItemStatus = readHostLoginItemStatus();
     if (loginItemStatus === "requires-approval") {
       log.warn(
@@ -6103,6 +6335,7 @@ export class HostController {
       "retry-with-force",
       false,
       true,
+      target,
     );
   }
 
@@ -6157,7 +6390,7 @@ export class HostController {
               );
             }
           }
-          return this.registerAgentInsteadOfRestart();
+          return this.registerAgentInsteadOfRestart(null);
         }
         // The port repair reaches the identical `stop-only` branch, so it is
         // the same stop-without-relaunch hazard by another entry point.
@@ -6238,6 +6471,7 @@ export class HostController {
       async () => {
         // Off packaged macOS nothing precedes the CLI, which refuses a
         // terminal run itself before it touches anything.
+        let removedLoginItem = false;
         if (all && (await this.isPackagedMacOwned())) {
           const outcome = await this.unregisterLoginItemUnlessTerminalRun(
             "host-controller-uninstall",
@@ -6248,6 +6482,7 @@ export class HostController {
           if (outcome.result === "terminal-run") {
             return this.terminalRunRefusal("uninstallHost");
           }
+          removedLoginItem = true;
         }
         let raw: unknown;
         try {
@@ -6261,7 +6496,14 @@ export class HostController {
             all ? ["host", "uninstall", "--all"] : ["host", "uninstall"],
           );
         } catch (err) {
-          return this.classifyMutationSubprocessError(err, "retry-with-force");
+          const refused = this.classifyMutationSubprocessError<UninstallOk>(
+            err,
+            "retry-with-force",
+          );
+          return withStartupTurnedOff(
+            all ? uninstallBusyAsDeferred(refused) : refused,
+            removedLoginItem || (all && cliTurnedOffStartup(err)),
+          );
         }
         const result = parseUninstallResult(raw, all);
         this.hostLifecycle.ensureWatcherInstalled();
@@ -6293,6 +6535,9 @@ export class HostController {
     const sentinelWasSet = await isHostRemovedByUser();
     await markHostRemovedByUser();
     this.abortInFlightDownload();
+    // Whether a step below turned off the host's automatic start before the
+    // removal stopped short. That step stands, so the sentinel does too.
+    let startupTurnedOff = false;
     const outcome = await this.enqueueMutation<
       MutationOutcome<RemoveTraycerOk>
     >("removeTraycer", "removeTraycer", async () => {
@@ -6319,7 +6564,13 @@ export class HostController {
         // the third Desktop route that stops a host through the CLI.
         raw = await this.streamBundled<unknown>(["host", "uninstall", "--all"]);
       } catch (err) {
-        return this.classifyMutationSubprocessError(err, "retry-with-force");
+        startupTurnedOff = removedLoginItem || cliTurnedOffStartup(err);
+        return withStartupTurnedOff(
+          uninstallBusyAsDeferred(
+            this.classifyMutationSubprocessError(err, "retry-with-force"),
+          ),
+          startupTurnedOff,
+        );
       }
       const result = parseUninstallResult(raw, true);
       this.hostLifecycle.ensureWatcherInstalled();
@@ -6337,9 +6588,17 @@ export class HostController {
     });
     // A deferred removal did not happen: a terminal run that began after the
     // check above (the CLI refuses it under its own lock), a busy lock, an
-    // update attempt in progress. Take back the sentinel this call wrote, so
-    // a machine whose host is still installed is not reported removed.
-    if (outcome.kind === "deferred" && !sentinelWasSet) {
+    // update attempt in progress. Neither did a busy one, where the host
+    // declined to stop over work in progress. Take back the sentinel this call
+    // wrote, so a machine whose host is still installed is not reported
+    // removed - unless the host's automatic start was already turned off. Then
+    // the removal is half done, and clearing the sentinel would let an
+    // automatic intent treat that host as one this app still keeps running.
+    if (
+      (outcome.kind === "deferred" || outcome.kind === "busy") &&
+      !sentinelWasSet &&
+      !startupTurnedOff
+    ) {
       await clearHostRemovedByUser();
     }
     return outcome;
@@ -6348,4 +6607,54 @@ export class HostController {
 
 function describeError(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
+}
+
+/**
+ * Whether `host uninstall --all` refused AFTER turning off the host's
+ * automatic start: it deregisters the service first, then asks the host to
+ * stop, and these two refusals come from that stop.
+ */
+function cliTurnedOffStartup(err: unknown): boolean {
+  return (
+    err instanceof TraycerCliError &&
+    (err.code === HOST_UNINSTALL_HOST_RUNNING_CODE ||
+      err.code === HOST_BUSY_CODE)
+  );
+}
+
+/**
+ * `host uninstall --all` refuses a host with work in progress only after it
+ * has deregistered the service, and neither uninstall route can be forced: the
+ * busy outcome's Force continuation and its restart wording fit neither. It is
+ * a deferral that says what happened instead.
+ */
+function uninstallBusyAsDeferred<T>(
+  outcome: MutationOutcome<T>,
+): MutationOutcome<T> {
+  return outcome.kind === "busy"
+    ? { kind: "deferred", message: HOST_UNINSTALL_HOST_BUSY_MESSAGE }
+    : outcome;
+}
+
+/**
+ * A refused uninstall that had already turned off the host's automatic start
+ * says so. The host-running and host-busy refusals' own messages already do.
+ */
+function withStartupTurnedOff<T>(
+  outcome: MutationOutcome<T>,
+  turnedOff: boolean,
+): MutationOutcome<T> {
+  if (
+    !turnedOff ||
+    outcome.kind === "ok" ||
+    !("message" in outcome) ||
+    outcome.message === HOST_UNINSTALL_HOST_RUNNING_MESSAGE ||
+    outcome.message === HOST_UNINSTALL_HOST_BUSY_MESSAGE
+  ) {
+    return outcome;
+  }
+  return {
+    ...outcome,
+    message: `${HOST_STARTUP_TURNED_OFF_NOTE} ${outcome.message}`,
+  };
 }

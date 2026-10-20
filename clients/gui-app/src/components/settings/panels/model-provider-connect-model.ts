@@ -56,7 +56,7 @@ export function sourceBadgeLabel(
     case "api":
       return "API key";
     case "env":
-      return "Environment";
+      return "Shell variable";
     case "config":
       return configDeclaredCustom ? "Custom" : "Config";
     case "custom":
@@ -73,7 +73,7 @@ export function sourceBadgeHint(
     case "api":
       return `This key is stored in ${providerLabel}'s own credential store, shared with its CLI, and can be removed from here.`;
     case "env":
-      return "This credential comes from an environment variable, so it's managed outside Traycer.";
+      return "This credential comes from a shell variable, so it's managed outside Traycer.";
     case "config":
       return configDeclaredCustom
         ? `You declared this provider in ${providerLabel}'s config file, with its own base URL and models.`
@@ -113,7 +113,7 @@ export function credentialPrecedenceNotice(
       // with the classifier. The provider's own env var name is not something
       // the client can know without one, and guessing it would be worse than
       // the general statement.
-      return "An environment variable on this host already provides this credential, and it takes precedence - what you save here will not take effect until that variable is unset.";
+      return "A shell variable on this host already provides this credential, and it takes precedence - what you save here will not take effect until that variable is unset.";
     case "config":
       // Possessive rather than "A/An {label}": the article cannot be derived
       // from an arbitrary provider name, and "A OpenCode config file" is what

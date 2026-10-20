@@ -142,6 +142,7 @@ import type {
   ServiceRegistrationOk,
   UninstallOk,
 } from "../host/host-controller-types";
+import { readLocalHostUnresponsive } from "../host/local-host-unresponsive";
 
 /**
  * Minimal window surface the bridge needs. Declaring it structurally lets
@@ -1357,6 +1358,11 @@ export class RunnerIpcBridge {
       windowId,
       RunnerHostEvent.localHostChange,
       this.options.host.getSnapshot(),
+    );
+    this.safeSendToWindow(
+      windowId,
+      RunnerHostEvent.localHostUnresponsiveChange,
+      readLocalHostUnresponsive(),
     );
     this.safeSendToWindow(
       windowId,

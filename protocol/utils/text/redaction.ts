@@ -174,6 +174,15 @@ const TOKEN_SHAPE_PATTERN =
   /\b(?:sk-ant-[A-Za-z0-9_-]{20,}|sk-[A-Za-z0-9_-]{20,}|gh[oprsu]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|xox[baprs]-[A-Za-z0-9-]{10,}|AKIA[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{35}|(?:sk|rk)_live_[A-Za-z0-9]{20,}|eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+|npm_[A-Za-z0-9]{20,})\b/gi;
 
 /**
+ * Whether `value` contains a token with a real provider's published prefix
+ * ({@link TOKEN_SHAPE_PATTERN}). A fresh non-global copy per call, because the
+ * shared pattern is `/g` and `test` on it carries `lastIndex` between calls.
+ */
+export function containsKnownTokenShape(value: string): boolean {
+  return new RegExp(TOKEN_SHAPE_PATTERN.source, "i").test(value);
+}
+
+/**
  * KEY=value / "KEY": "value" assign candidates. Every key is matched here;
  * whether it is *sensitive* is decided in `isSensitiveAssignKey` rather than
  * by an alternation inside the pattern.
@@ -261,6 +270,17 @@ function isSensitiveAssignKey(rawKey: string): boolean {
   const key = rawKey.toLowerCase().replace(/-/g, "_");
   if (isTokenCountKey(key)) return false;
   return SENSITIVE_KEY_STEMS.some((stem) => key.includes(stem));
+}
+
+/**
+ * Whether a key or field NAME carries a credential (`OPENAI_API_KEY`,
+ * `GITHUB_TOKEN`, `DB_PASSWORD`), by the same stems the assignment redaction
+ * uses. Exported for the environment credential rule
+ * (`src/environment/credential-rule.ts`), so a name redacted in a log and a
+ * name held from distribution are the same names.
+ */
+export function isSensitiveKeyName(name: string): boolean {
+  return isSensitiveAssignKey(name);
 }
 
 function replaceSensitiveAssign(

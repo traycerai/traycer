@@ -7,6 +7,8 @@ import { writePostFinalizeMarkerFile } from "./cli-finalize-upgrade";
 import { assertHostNotBusy } from "../host/busy-check";
 import { attestInstallRuntime } from "../host/attested-install-runtime";
 import { refuseForegroundHostRun } from "../host/foreground-host-run";
+import { refuseUnlessRestartTarget } from "../host/restart-target-guard";
+import { noteStopTargetProgress, withStopTarget } from "../service/stop-target";
 import type { HostStartOrigin } from "../host/lifecycle-origin";
 import { CLI_ERROR_CODES, cliError } from "../runner/errors";
 import type { CommandFn, CommandResult } from "../runner/runner";
@@ -23,6 +25,7 @@ import {
   stopHostForRestartWithAttempt,
 } from "../host/update-mutation";
 import type { UpdateMutationCapability } from "@traycer-clients/shared/host-update";
+import type { RestartTargetHost } from "@traycer-clients/shared/host-lock/restart-target";
 import {
   describeNonterminalRecordRecovery,
   parkedActivationRelaunchable,
@@ -123,10 +126,25 @@ import {
 // before the busy probe, the stop, the finalize or the relaunch
 // (`refuseForegroundHostRun`, shared with `host stop` and
 // `host free-port-and-restart`). A terminal restart is unchanged.
+//
+// ## A restart bound to one host process
+//
+// `--expect-host-pid` with `--expect-host-start-identity` (hidden, internal -
+// Desktop's force restart of a host that stopped answering): the person
+// confirmed killing THAT process, and the confirmation is checked in Desktop
+// before this command is spawned - which is before this command waits up to
+// 30s for the lock. Another actor can publish a healthy replacement in that
+// wait, so the binding is checked again here, inside the lock and before
+// anything else (`refuseUnlessRestartTarget`), and once more at every
+// actuator edge of the stop itself (`withStopTarget`): a host the supervisor
+// admitted before this command took the lock can publish after that first
+// check, and the stop's unit-scoped signals would reach it.
 export interface HostRestartArgs {
   readonly ifIdle: boolean;
   readonly force: boolean;
   readonly deferIfParked: boolean;
+  /** The one host process this restart may stop, or null for whichever runs. */
+  readonly expectedHost: RestartTargetHost | null;
   /** Who asked: `desktop` for every restart the app issues. */
   readonly lifecycleOrigin: HostStartOrigin;
 }
@@ -160,6 +178,14 @@ export function buildHostRestartCommand(args: HostRestartArgs): CommandFn {
             "host restart",
             ctx.runtime.environment,
             args.lifecycleOrigin,
+          );
+        }
+        if (args.expectedHost !== null) {
+          await refuseUnlessRestartTarget(
+            "host restart",
+            ctx.runtime.environment,
+            args.expectedHost,
+            null,
           );
         }
         if (args.ifIdle) {
@@ -215,19 +241,25 @@ export function buildHostRestartCommand(args: HostRestartArgs): CommandFn {
           // does NOT match the installed bytes lands here too: the supervisor
           // would refuse that relaunch at spawn anyway, and a stop that says
           // so beats a "restart" that exits 0 having started nothing.
-          await stopHostServiceWithAttempt(
-            capability,
-            {
-              environment: ctx.runtime.environment,
-              reason: "host-restart",
-              waitMs: 30_000,
-              pollIntervalMs: 100,
-              admission: "recovery-maintenance",
-            },
-            controller,
-            label,
-            { force: args.force },
-            "unconditional",
+          await withStopTarget(
+            "host restart",
+            ctx.runtime.environment,
+            args.expectedHost,
+            () =>
+              stopHostServiceWithAttempt(
+                capability,
+                {
+                  environment: ctx.runtime.environment,
+                  reason: "host-restart",
+                  waitMs: 30_000,
+                  pollIntervalMs: 100,
+                  admission: "recovery-maintenance",
+                },
+                controller,
+                label,
+                { force: args.force },
+                "unconditional",
+              ),
           );
           return {
             kind: "stopped-for-parked-activation" as const,
@@ -256,6 +288,7 @@ export function buildHostRestartCommand(args: HostRestartArgs): CommandFn {
             pollIntervalMs: 100,
             admission: "recovery-maintenance",
           },
+          args.expectedHost,
         );
         return {
           kind: "restarted" as const,
@@ -344,29 +377,39 @@ async function restartWithPendingCliUpgradeFinalizeWithAttempt(
   args: RestartFinalizeArgs,
   capability: UpdateMutationCapability,
   contenderOptions: WithCliUpdateContenderOptions,
+  // Bound to the stop AND the relaunch (`service/stop-target.ts`): the
+  // relaunch's `kickstart -k` / `systemctl restart` kills whatever the label
+  // runs, and a host published before the relaunch's own launch returns is
+  // not the restart's.
+  expectedHost: RestartTargetHost | null,
 ): Promise<RestartFinalizeResult> {
-  return restartWithActuators(args, {
-    stop: () =>
-      stopHostForRestartWithAttempt(
-        capability,
-        contenderOptions,
-        args.controller,
-        args.label,
-        { force: args.force },
-        null,
-      ),
-    relaunch: (stopped) =>
-      relaunchHostAfterRestartWithAttempt(
-        capability,
-        contenderOptions,
-        // The restart's relaunch leg: `maintenance` whoever asked for the
-        // restart, desktop or terminal (`host/lifecycle-origin.ts`).
-        "maintenance",
-        args.controller,
-        args.label,
-        stopped,
-      ),
-  });
+  return withStopTarget("host restart", args.environment, expectedHost, () =>
+    restartWithActuators(args, {
+      stop: async () => {
+        const stopped = await stopHostForRestartWithAttempt(
+          capability,
+          contenderOptions,
+          args.controller,
+          args.label,
+          { force: args.force },
+          null,
+        );
+        noteStopTargetProgress("stop-ran");
+        return stopped;
+      },
+      relaunch: (stopped) =>
+        relaunchHostAfterRestartWithAttempt(
+          capability,
+          contenderOptions,
+          // The restart's relaunch leg: `maintenance` whoever asked for the
+          // restart, desktop or terminal (`host/lifecycle-origin.ts`).
+          "maintenance",
+          args.controller,
+          args.label,
+          stopped,
+        ),
+    }),
+  );
 }
 
 export interface RestartActuators {

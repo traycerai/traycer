@@ -42,6 +42,7 @@ import {
   nativeMutationResultSchemaV10Preimage,
   nativeMutationResultSchemaV11Preimage,
   nativeMutationSchema,
+  nativeMutationSchemaV12,
   nativeMutationSchemaV10Preimage,
   providerNativeCapabilitiesSchema,
   providerNativeCapabilitiesSchemaBeforeOpenChatPlugins,
@@ -66,6 +67,7 @@ import {
   type ProviderNativeCapabilitiesV70Preimage,
 } from "./provider-native-schemas";
 import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
+import { executableWriteGrantSchema } from "@traycer/protocol/host/executable-write-grant";
 
 export {
   providerIdSchema,
@@ -1948,7 +1950,7 @@ const providerCliStateBaseShapeV20 = {
 };
 
 /**
- * Latest provider CLI state (providers.list@10.3). Mutation echoes use their
+ * Latest provider CLI state (providers.list@10.5). Mutation echoes use their
  * own frozen shape. Includes `nativeCapabilities` — per-capability facts the UI
  * renders MCP/plugins/skills tabs from. `.catch(DEFAULT)` tolerates old host
  * builds that omit the field when an old-host response is parsed on a new
@@ -2228,7 +2230,7 @@ export type ProviderCliStateV90 = z.infer<typeof providerCliStateSchemaV90>;
  * here; do not regenerate the fixture.
  *
  * Do NOT add fields or ids here. Add them to `providerCliStateBaseShape`
- * above, which only the head line (10.0 today) publishes.
+ * above, which only the head line (10.1 today) publishes.
  */
 export const providerCliStateSchemaV92 = lazySchema(() =>
   providerCliStateSchemaV91.extend({
@@ -2334,6 +2336,36 @@ export const providersListResponseSchema = lazySchema(() =>
   z.object({
     providers: z.array(providerCliStateSchema),
     native: nativeListResultSchema.nullable().default(null),
+    // True on a sandbox host: it stores no provider credential
+    // (`SANDBOX_HOST_REFUSES_CREDENTIALS`), so API keys, logins and profiles
+    // are managed in the user's account and reach the sandbox through the
+    // egress broker. The Providers panel then replaces its credential controls
+    // with one line pointing there. Absent means false, which is every host
+    // that is not a sandbox and every host that predates the flag.
+    //
+    // A new KEY on `providers.list@10.5`. The frozen 10.0-10.4 responses strip
+    // it on the within-major re-parse, so no emission gate is needed.
+    // `.optional()` rather than defaulted, so it is not required on OUTPUT at
+    // the response's construction sites.
+    credentialsManagedInAccount: z.boolean().optional(),
+    // `"personal"` when this host serves its provider configuration from the
+    // person's Personal environment; `null` or absent on a host without
+    // environments. Another 10.5 KEY, stripped for an older peer the same way;
+    // `.optional()` for the same construction-site reason.
+    scope: z.literal("personal").nullable().optional(),
+    // The profiles that live on this host only, one entry each: "On <host>
+    // only, link to use everywhere". On the envelope rather than on the
+    // profile row because `providerProfileSchema` is shared by reference with
+    // every provider-state response, released lines included, so a row key
+    // would widen all of them. Open strings, so no id enum grows here.
+    onHostOnly: z
+      .array(
+        z.object({
+          providerId: z.string().min(1),
+          profileId: z.string().min(1),
+        }),
+      )
+      .optional(),
   }),
 );
 export type ProvidersListResponse = z.infer<typeof providersListResponseSchema>;
@@ -2394,6 +2426,27 @@ export const providersListResponseSchemaV103Preimage = lazySchema(() =>
           ),
       }),
     ),
+    native: nativeListResultSchema.nullable().default(null),
+  }),
+);
+
+/**
+ * Frozen `providers.list@10.4` response: the envelope before
+ * `credentialsManagedInAccount`, `scope` and `onHostOnly` opened 10.5 above
+ * it.
+ *
+ * A hand copy of the envelope rather than an `.omit()` of the live one, so the
+ * next envelope key cannot reach it. The provider row is still the live
+ * `providerCliStateSchema`, by reference: 10.5 adds nothing to the row, the
+ * two minors must share its id enums (no minor of a major may grow a response
+ * enum over its predecessor), and `frozen-catalog-lines.test.ts` pins this
+ * line's whole serialized shape, so a key added to the row reddens it rather
+ * than widening this line unseen. When that happens, hand-freeze the row here;
+ * do not regenerate the fixture.
+ */
+export const providersListResponseSchemaV104Preimage = lazySchema(() =>
+  z.object({
+    providers: z.array(providerCliStateSchema),
     native: nativeListResultSchema.nullable().default(null),
   }),
 );
@@ -3308,12 +3361,36 @@ export type ProvidersSetTerminalAgentArgsResponse = z.infer<
   typeof providersSetTerminalAgentArgsResponseSchema
 >;
 
+/**
+ * The 2.0 and 2.1 request, FROZEN when 2.2 opened (both are released). The
+ * provider id stays the live enum by reference, as it was while 2.1 was the
+ * head.
+ */
+export const providersSetEnvOverrideRequestSchemaV21 = lazySchema(() =>
+  z.object({
+    providerId: providerIdSchema,
+    key: z.string().min(1),
+    // null = explicit unset; a string sets the value.
+    value: z.string().nullable(),
+  }),
+);
+export type ProvidersSetEnvOverrideRequestV21 = z.infer<
+  typeof providersSetEnvOverrideRequestSchemaV21
+>;
+
+/**
+ * `providers.setEnvOverride@2.2` request: a launch-sensitive
+ * override selects what a harness starts, so the write carries the
+ * executable-write grant; whether a given key reaches a sink is the host's
+ * decision. Older callers are upgraded with `null`.
+ */
 export const providersSetEnvOverrideRequestSchema = lazySchema(() =>
   z.object({
     providerId: providerIdSchema,
     key: z.string().min(1),
     // null = explicit unset; a string sets the value.
     value: z.string().nullable(),
+    executableWriteGrant: executableWriteGrantSchema,
   }),
 );
 export const providersSetEnvOverrideRequestSchemaV10 = lazySchema(() =>
@@ -3939,14 +4016,34 @@ export type ProvidersCancelMcpAuthResponse = z.infer<
 >;
 
 /**
- * `providers.nativeMutate@1.0` request - MCP/plugins/skills mutations. The
- * scope tuple and its `scope`/`workspaceRoot` invariant live inside
- * `nativeMutationSchema`, so no XOR refinement is needed on this envelope.
+ * `providers.nativeMutate@1.1` request - MCP/plugins/skills mutations, with
+ * the MCP remedies. The scope tuple and its `scope`/`workspaceRoot` invariant
+ * live inside `nativeMutationSchema`, so no XOR refinement is needed on this
+ * envelope.
+ *
+ * Frozen when 1.3 opened above it; 1.3 below is the live request.
+ */
+export const providersNativeMutateRequestSchemaV11 = lazySchema(() =>
+  z.object({
+    providerId: providerIdSchema,
+    mutation: nativeMutationSchema,
+  }),
+);
+export type ProvidersNativeMutateRequestV11 = z.infer<
+  typeof providersNativeMutateRequestSchemaV11
+>;
+
+/**
+ * `providers.nativeMutate@1.3` request: the `promoteToPersonal` arm, and the
+ * executable-write grant, since an MCP add or update installs a command and a
+ * skill import or update installs content an agent runs. A v1.2 caller's
+ * request is upgraded with a `null` grant.
  */
 export const providersNativeMutateRequestSchema = lazySchema(() =>
   z.object({
     providerId: providerIdSchema,
-    mutation: nativeMutationSchema,
+    mutation: nativeMutationSchemaV12,
+    executableWriteGrant: executableWriteGrantSchema,
   }),
 );
 export const providersNativeMutateRequestSchemaV10Preimage = lazySchema(() =>

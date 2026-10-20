@@ -35,6 +35,15 @@ vi.mock("@/providers/use-runner-host", () => ({
   useRunnerHostOrNull: () => null,
 }));
 
+// The "Set up Personal" group reads the window's host through Query and has its
+// own suite (`onboarding/__tests__/set-up-personal-group.test.tsx`); these
+// suites are about the guide cards, so it is stood in for here.
+vi.mock("@/components/onboarding/set-up-personal-group", () => ({
+  SetUpPersonalGroup: (props: { readonly surface: string }) => (
+    <div data-testid="set-up-personal-stub" data-surface={props.surface} />
+  ),
+}));
+
 const setSectionMock = vi.hoisted(() => vi.fn());
 
 vi.mock("@/stores/tabs/system-tab-modal-bridge", () => ({
@@ -61,6 +70,14 @@ describe("GettingStartedSettingsPanel", () => {
   afterEach(() => {
     cleanup();
     mobileApp.value = false;
+  });
+
+  it("draws the Set up Personal group under the guide cards", () => {
+    render(<GettingStartedSettingsPanel />);
+
+    expect(
+      screen.getByTestId("set-up-personal-stub").getAttribute("data-surface"),
+    ).toBe("settings");
   });
 
   it("leaves the guide unarmed when the tab activation is refused", () => {

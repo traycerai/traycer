@@ -9,8 +9,11 @@ import { draftRuntimeRegistry } from "@/stores/home/draft-runtime-registry";
 import { fileEditRuntimeRegistry } from "@/lib/workspace/file-edit-runtime-registry";
 import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope-store";
 import { useAddHostDialogStore } from "@/stores/settings/add-host-dialog-store";
+import { useSandboxCreateDialogStore } from "@/stores/settings/sandbox-create-dialog-store";
 import { useProvidersFocusStore } from "@/stores/settings/providers-focus-store";
 import { useProfileSyncModalStore } from "@/stores/settings/profile-sync-modal-store";
+import { useProviderLinkDialogStore } from "@/stores/providers/provider-link-dialog-store";
+import { useLandingOwnerStore } from "@/stores/home/landing-owner-store";
 import { useWatchHostStore } from "@/stores/host-scope/watch-host-store";
 import { dismissRetainedDraftToasts } from "@/lib/toast/retained-draft-toasts";
 import { clearImagePathForIdentityTeardown } from "@/lib/attachments/image-path-identity-teardown";
@@ -102,6 +105,10 @@ export function EpicSessionLifecycleBridge(
       // host B already owns is absent from that snapshot and gets announced as
       // the machine that just connected.
       useAddHostDialogStore.getState().closeDialog();
+      // The New sandbox dialog is the same shape: left open it would show
+      // account B what A typed and A's last failure, which can name A's team.
+      // `closeDialog` drops the draft, the failure and the created line too.
+      useSandboxCreateDialogStore.getState().closeDialog();
       // The Providers deep-link intent is the third module-level store on this
       // boundary, and the most dangerous of them: `focusHostId` names account
       // A's machine and `startSignIn` asks Providers to begin a sign-in flow
@@ -117,6 +124,14 @@ export function EpicSessionLifecycleBridge(
       // A's captured source host id, which it would then dial under B's
       // session.
       useProfileSyncModalStore.getState().close();
+      // The provider Link dialog's target names one of the outgoing account's
+      // profiles; left set, account B's Providers would mount A's dialog and
+      // send A's profile id through B's host.
+      useProviderLinkDialogStore.getState().close();
+      // A landing Belongs to pick names one of the outgoing account's teams,
+      // and a pick made before the draft existed sits under the shared
+      // no-draft key, where account B's first task would read it.
+      useLandingOwnerStore.getState().clearAll();
       // A last-copy draft toast is minted with NO duration, and the app-level
       // `<Toaster />` is mounted outside this tree - so it is the one piece of
       // renderer state that survives everything disposed above and keeps the

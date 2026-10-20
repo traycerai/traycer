@@ -3,7 +3,10 @@ import {
   type MutationScope,
   type UseMutationResult,
 } from "@tanstack/react-query";
-import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import type {
+  HostClient,
+  HostRequester,
+} from "@traycer-clients/shared/host-client/host-client";
 import type {
   HostRpcError,
   RequestOfMethod,
@@ -104,6 +107,17 @@ interface UseHostScopedMutationArgs<
    * serializes unrelated calls that happen to use the same hook.
    */
   readonly scope?: MutationScope | undefined;
+  /**
+   * Completes the request at dispatch: the executable-write grant
+   * (`useExecutableWriteGrant`) on a write that can reach an execution sink.
+   * See `UseHostMutationOptions.prepareRequest`.
+   */
+  readonly prepareRequest?:
+    | ((
+        request: RequestOfMethod<HostRpcRegistry, Method>,
+        client: HostRequester<HostRpcRegistry>,
+      ) => Promise<RequestOfMethod<HostRpcRegistry, Method>>)
+    | undefined;
 }
 
 /**
@@ -147,6 +161,7 @@ export function useHostScopedMutationForClient<
     client,
     method: args.method,
     mapVariables: (variables) => variables,
+    prepareRequest: args.prepareRequest,
     options: {
       mutationKey: args.mutationKey,
       scope: args.scope,

@@ -1064,8 +1064,15 @@ export class SelectionAuthorityEngineImpl implements SelectionAuthorityEngine {
     // F14: the write is DIRECTORY-VALIDATED. Refusing an id the fleet does not
     // hold is what stops any path - a stale picker row, a replayed gesture -
     // from re-asserting a host that was deregistered.
-    if (!this.fleet.hosts.some((entry) => entry.hostId === hostId)) {
+    const fleetEntry =
+      this.fleet.hosts.find((entry) => entry.hostId === hostId) ?? null;
+    if (fleetEntry === null) {
       return Promise.resolve({ ok: false, reason: "unknown-host" });
+    }
+    // A team host serves its team's environment, not this person's own, so
+    // the app-wide host is never one. A tab can still be bound to it.
+    if (fleetEntry.teamOwned) {
+      return Promise.resolve({ ok: false, reason: "team-host" });
     }
     // D13/C4: an incompatible host is never selectable. Settings offers
     // Update instead. A host that becomes incompatible AFTER being preferred
@@ -1774,7 +1781,9 @@ export class SelectionAuthorityEngineImpl implements SelectionAuthorityEngine {
    * at different times: the preferred host is no longer in the account's
    * fleet. Deregistering it while the app runs and finding it already gone at
    * startup both land here, and both clear to null so nothing can re-assert a
-   * stale id.
+   * stale id. A preferred host a team owns is cleared the same way: it was
+   * stored before `activate` refused team hosts, and it can never be the
+   * app-wide host.
    *
    * An EMPTY fleet never triggers it. "No hosts" is what this port publishes
    * before its first genuine registry answer and while an identity transition
@@ -1788,7 +1797,11 @@ export class SelectionAuthorityEngineImpl implements SelectionAuthorityEngine {
     const preferredHostId = this.preferredHostId;
     if (preferredHostId === null) return false;
     if (this.fleet.hosts.length === 0) return false;
-    if (this.fleet.hosts.some((entry) => entry.hostId === preferredHostId)) {
+    if (
+      this.fleet.hosts.some(
+        (entry) => entry.hostId === preferredHostId && !entry.teamOwned,
+      )
+    ) {
       return false;
     }
     this.preferredHostId = null;
@@ -2430,15 +2443,29 @@ export class SelectionAuthorityEngineImpl implements SelectionAuthorityEngine {
   ): string | null {
     for (const hostId of this.mruEffectiveHostIds) {
       if (hostId === localHostId) continue;
+      if (this.isSandbox(hostId)) continue;
       if (!admits(hostId)) continue;
       if (this.isUsable(hostId, leases)) return hostId;
     }
     for (const lease of leases) {
       if (lease.hostId === localHostId) continue;
+      if (this.isSandbox(lease.hostId)) continue;
       if (!admits(lease.hostId)) continue;
       if (isUsableForSelection(lease)) return lease.hostId;
     }
     return null;
+  }
+
+  /**
+   * Whether the fleet lists this host as a sandbox, which the engine's own
+   * choice never lands on (see `HostFleetEntry`). Skipped in the MRU pass too:
+   * a sandbox only reaches the MRU list by being preferred, and preference is
+   * the user's arm, not this one.
+   */
+  private isSandbox(hostId: string): boolean {
+    return this.fleet.hosts.some(
+      (entry) => entry.hostId === hostId && entry.kind === "sandbox",
+    );
   }
 
   /**

@@ -38,10 +38,14 @@ import { useProvidersFocusStore } from "@/stores/settings/providers-focus-store"
 
 // ---- host boundary --------------------------------------------------------
 
-vi.mock("@/components/settings/host-scope/use-host-scope", () => ({
-  useHostScope: () =>
-    hostScopeFixture({ status: "following", hostId: "host-a" }),
-}));
+vi.mock("@/components/settings/host-scope/use-host-scope", () => {
+  const useHostScope = () =>
+    hostScopeFixture({ status: "following", hostId: "host-a" });
+  return {
+    useHostScope,
+    usePersonalHostScope: useHostScope,
+  };
+});
 vi.mock(
   "@/components/settings/host-scope/use-scoped-host-binding",
   async () => {
@@ -154,6 +158,12 @@ vi.mock("@/hooks/host/use-reactive-host-readiness", async () =>
 vi.mock("@/hooks/agent/use-host-reachability", async () =>
   (await import("./judge-test-support")).pickerHostMocks.hostReachability(),
 );
+// This suite's host binding is a bare fake with no directory, which the real
+// hook reads; the hook has its own test.
+vi.mock("@/hooks/host/use-host-credential-refusal", () => ({
+  useHostCredentialRefusal: () => null,
+}));
+
 vi.mock("@/hooks/host/use-addressable-host-id", async () =>
   (await import("./judge-test-support")).pickerHostMocks.addressableHostId(),
 );

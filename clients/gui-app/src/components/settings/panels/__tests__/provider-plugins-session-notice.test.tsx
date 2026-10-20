@@ -16,6 +16,11 @@ import {
  * the suite keeps testing the notice against a fixed scope, matching the
  * convention in provider-plugins-tab-scope.test.tsx.
  */
+// The bare host binding below has no directory to answer the sandbox refusal.
+vi.mock("@/hooks/host/use-host-credential-refusal", () => ({
+  useHostCredentialRefusal: () => null,
+}));
+
 vi.mock("@/hooks/host/use-addressable-host-id", () => ({
   useAddressableHostId: () => "host-1",
 }));

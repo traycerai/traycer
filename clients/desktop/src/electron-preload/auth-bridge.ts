@@ -14,6 +14,22 @@ import type {
   RevokeAllSessionsFetchResult,
   RevokeUserSessionFetchResult,
   StepUpChallengeFetchResult,
+  SandboxAutomationFetchResult,
+  ExecutableWriteGrantFetchResult,
+  SandboxAutomationOpenFetchResult,
+  SandboxCatalogueFetchResult,
+  SandboxCostsFetchResult,
+  SandboxCreateFetchResult,
+  SandboxAutomationOpenTarget,
+  SandboxCreateRequest,
+  EnvironmentProvidersFetchResult,
+  SandboxGrantsFetchResult,
+  TeamEnvironmentFetchResult,
+  SandboxLifecycleVerb,
+  SandboxListFetchResult,
+  SandboxVerbFetchResult,
+  SecretRequestDecideFetchResult,
+  SecretRequestDecision,
   UpdateHostVersionPolicyFetchResult,
   UpdateHostVersionPolicyInput,
 } from "../ipc-contracts/host-types";
@@ -106,6 +122,60 @@ export interface AuthBridgeSurface {
     bearerToken: string,
     hostId: string,
   ): Promise<DeregisterHostFetchResult>;
+  listSandboxes(bearerToken: string): Promise<SandboxListFetchResult>;
+  getSandboxCosts(bearerToken: string): Promise<SandboxCostsFetchResult>;
+  getSandboxCatalogue(
+    bearerToken: string,
+  ): Promise<SandboxCatalogueFetchResult>;
+  createSandbox(
+    bearerToken: string,
+    request: SandboxCreateRequest,
+  ): Promise<SandboxCreateFetchResult>;
+  destroySandbox(
+    bearerToken: string,
+    sandboxId: string,
+  ): Promise<SandboxVerbFetchResult>;
+  runSandboxVerb(
+    bearerToken: string,
+    sandboxId: string,
+    verb: SandboxLifecycleVerb,
+    timeoutMs: number,
+  ): Promise<SandboxVerbFetchResult>;
+  getSandboxAutomation(
+    bearerToken: string,
+    environmentId: string | null,
+  ): Promise<SandboxAutomationFetchResult>;
+  openSandboxAutomation(
+    bearerToken: string,
+    target: SandboxAutomationOpenTarget | null,
+  ): Promise<SandboxAutomationOpenFetchResult>;
+  getSandboxGrants(
+    bearerToken: string,
+    environmentId: string | null,
+    hostId: string,
+  ): Promise<SandboxGrantsFetchResult>;
+  /**
+   * A team's environment id and an environment's provider counts, both from
+   * authn with the user's bearer. See `host-client/sandbox-secrets.ts`.
+   */
+  getTeamEnvironment(
+    bearerToken: string,
+    teamId: string,
+  ): Promise<TeamEnvironmentFetchResult>;
+  getEnvironmentProviders(
+    bearerToken: string,
+    environmentId: string,
+  ): Promise<EnvironmentProvidersFetchResult>;
+  decideSecretRequest(
+    bearerToken: string,
+    environmentId: string | null,
+    requestId: string,
+    decision: SecretRequestDecision,
+  ): Promise<SecretRequestDecideFetchResult>;
+  mintExecutableWriteGrant(
+    bearerToken: string,
+    hostId: string,
+  ): Promise<ExecutableWriteGrantFetchResult>;
   beginAuthAttempt(): void;
   onAuthCallback(handler: Listener<void>): Disposable;
 }
@@ -178,6 +248,99 @@ export function buildAuthBridge(): AuthBridgeSurface {
         bearerToken,
         hostId,
       ) as Promise<DeregisterHostFetchResult>,
+
+    listSandboxes: (bearerToken) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.listSandboxes,
+        bearerToken,
+      ) as Promise<SandboxListFetchResult>,
+
+    getSandboxCosts: (bearerToken) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.getSandboxCosts,
+        bearerToken,
+      ) as Promise<SandboxCostsFetchResult>,
+
+    getSandboxCatalogue: (bearerToken) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.getSandboxCatalogue,
+        bearerToken,
+      ) as Promise<SandboxCatalogueFetchResult>,
+
+    createSandbox: (bearerToken, request) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.createSandbox,
+        bearerToken,
+        request,
+      ) as Promise<SandboxCreateFetchResult>,
+
+    destroySandbox: (bearerToken, sandboxId) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.destroySandbox,
+        bearerToken,
+        sandboxId,
+      ) as Promise<SandboxVerbFetchResult>,
+
+    runSandboxVerb: (bearerToken, sandboxId, verb, timeoutMs) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.runSandboxVerb,
+        bearerToken,
+        sandboxId,
+        verb,
+        timeoutMs,
+      ) as Promise<SandboxVerbFetchResult>,
+
+    getSandboxAutomation: (bearerToken, environmentId) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.getSandboxAutomation,
+        bearerToken,
+        environmentId,
+      ) as Promise<SandboxAutomationFetchResult>,
+
+    openSandboxAutomation: (bearerToken, target) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.openSandboxAutomation,
+        bearerToken,
+        target,
+      ) as Promise<SandboxAutomationOpenFetchResult>,
+
+    getSandboxGrants: (bearerToken, environmentId, hostId) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.getSandboxGrants,
+        bearerToken,
+        environmentId,
+        hostId,
+      ) as Promise<SandboxGrantsFetchResult>,
+
+    getTeamEnvironment: (bearerToken, teamId) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.getTeamEnvironment,
+        bearerToken,
+        teamId,
+      ) as Promise<TeamEnvironmentFetchResult>,
+
+    getEnvironmentProviders: (bearerToken, environmentId) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.getEnvironmentProviders,
+        bearerToken,
+        environmentId,
+      ) as Promise<EnvironmentProvidersFetchResult>,
+
+    mintExecutableWriteGrant: (bearerToken, hostId) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.mintExecutableWriteGrant,
+        bearerToken,
+        hostId,
+      ) as Promise<ExecutableWriteGrantFetchResult>,
+
+    decideSecretRequest: (bearerToken, environmentId, requestId, decision) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.decideSecretRequest,
+        bearerToken,
+        environmentId,
+        requestId,
+        decision,
+      ) as Promise<SecretRequestDecideFetchResult>,
 
     // Desktop does not dedupe browser-return signals on URL identity, so the
     // attempt-boundary hook is a renderer-local no-op. It still exists to

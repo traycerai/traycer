@@ -19,9 +19,8 @@ import { useAgentSelectionGuideSetGlobalMutation } from "@/hooks/agent/use-agent
 import { useAgentSelectionGuideResetGlobalMutation } from "@/hooks/agent/use-agent-selection-guide-reset-global-mutation";
 import { HostRuntimeContext, useHostBinding } from "@/lib/host/runtime";
 import { HostScopeGate } from "@/components/settings/host-scope/host-scope-gate";
-import { HostEnvironmentSection } from "@/components/settings/panels/host-environment-section";
 import {
-  useHostScope,
+  usePersonalHostScope,
   type HostScope,
 } from "@/components/settings/host-scope/use-host-scope";
 
@@ -103,7 +102,7 @@ function agentsGuideEditorReducer(
 }
 
 export function AgentSelectionGuideSection() {
-  const scope = useHostScope();
+  const scope = usePersonalHostScope();
   const realBinding = useHostBinding();
 
   // Only a fully-resolved scope re-provides the client — a still-connecting or
@@ -140,7 +139,6 @@ export function AgentSelectionGuideSection() {
         {/* This file is per-host, but neither the control that says WHICH host
             nor the readout of it lives here: both are the sidebar's, one row
             away and always on screen. */}
-        <HostEnvironmentSection scope={scope} />
         <HostScopeGate
           scope={scope}
           skeleton={

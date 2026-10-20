@@ -95,7 +95,7 @@ index 71985dc9ef879f8cfed92a960c6d8b6f15fad6a1..963d67cb12a32c825b8ed47fb78ac351
     */
    htmlAsLiteralText(html, isBlock) {
 -    const text = html.replace(/\s+$/, "");
-+    const text = html.replace(/[ \t\n]+$/, "");
++    const text = html.replace(/([^ \t\n])[ \t\n]+$|^[ \t\n]+$/, "$1");
      if (!text) {
        return null;
      }
@@ -196,7 +196,7 @@ index 2626d82021300047fc9e46ba99487097719f8ef9..aab8b129c404148b57f05ec97b36df7a
     */
    htmlAsLiteralText(html, isBlock) {
 -    const text = html.replace(/\s+$/, "");
-+    const text = html.replace(/[ \t\n]+$/, "");
++    const text = html.replace(/([^ \t\n])[ \t\n]+$|^[ \t\n]+$/, "$1");
      if (!text) {
        return null;
      }
@@ -329,7 +329,7 @@ index f5478f13e769850a5b3ffeeb60c41a0f6704e441..b7bb0da453baff3fef657f6303615fbc
      // tokens so the rendered text doesn't end with stray blank lines.
 -    const text = html.replace(/\s+$/, '')
 +    // Only spaces, tabs and line breaks: a no-break space is the user's text.
-+    const text = html.replace(/[ \t\n]+$/, '')
++    const text = html.replace(/([^ \t\n])[ \t\n]+$|^[ \t\n]+$/, '$1')
 
      if (!text) {
        return null

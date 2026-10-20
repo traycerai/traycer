@@ -183,6 +183,9 @@ function agentRow(id: string, harnessId: string | null) {
     // cannot say".
     profile: null,
     permissionMode: null,
+    // `agent.list@10.2` put the reach pair on the row.
+    reach: null,
+    hostConnectivity: { kind: "unknown" },
   };
 }
 

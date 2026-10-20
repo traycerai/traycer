@@ -28,6 +28,7 @@ import { cn } from "@/lib/utils";
 import { collapseToSingleLine } from "@/lib/text/format-single-line";
 import { toolHeaderLine } from "@traycer/protocol/host/agent/gui/tool-input-summary";
 import { AgentHeaderLink } from "./agent-header-link";
+import { a2aSendRefusalSentence } from "./a2a-send-refusal";
 import { AgentMessageBody } from "./agent-message-body";
 import { ReplyExpectedIcon, ReplyExpectedNote } from "./reply-expected";
 import { SegmentCard } from "./segment-card";
@@ -781,12 +782,21 @@ function A2ASendToolSegment(
     [collapsibleKey, id, setFindForcedOpen, setOpen],
   );
   const hasError = error !== null && error.length > 0;
+  // A same-principal refusal is not a fault: it is the host's sentence, already
+  // chosen by whether the person may open the target, and it shows as written
+  // instead of as a raw error dump.
+  const refusal = a2aSendRefusalSentence(error);
+  const showsFault = hasError && refusal === null;
+  // A refusal gets the ordinary end-state badge, not the error one: the send
+  // was answered with a sentence, not broken.
   const badgeState = resolveToolBadgeState({
-    hasError,
+    hasError: showsFault,
     isBackgroundComplete: false,
     isStreaming,
     isStopped: false,
   });
+  const refusalLine =
+    refusal === null ? null : <A2ASendRefusalLine sentence={refusal} />;
   const { name: receiverName, onOpen: openReceiver } = useA2ASendReceiver(
     send,
     receipt,
@@ -802,7 +812,7 @@ function A2ASendToolSegment(
       <SendHorizontal
         className={cn(
           "size-3.5 shrink-0",
-          hasError ? "text-destructive" : "text-primary",
+          showsFault ? "text-destructive" : "text-primary",
         )}
         aria-hidden
       />
@@ -821,16 +831,31 @@ function A2ASendToolSegment(
     </>
   );
 
-  const preview = <AgentMessagePreview message={send.message} tone="primary" />;
+  const messagePreview = (
+    <AgentMessagePreview message={send.message} tone="primary" />
+  );
+  // The card hides its preview while open, so the refusal rides both: it is
+  // read without opening the card, and stays once it is opened. The row has
+  // no preview; its footer shows the refusal open or closed.
+  const preview =
+    refusalLine === null ? (
+      messagePreview
+    ) : (
+      <div className="flex flex-col gap-1.5">
+        {refusalLine}
+        {messagePreview}
+      </div>
+    );
   const body = open ? (
     <div className="flex flex-col gap-2">
+      {variant === "row" ? null : refusalLine}
       {send.expectReply ? <ReplyExpectedNote /> : null}
       <AgentMessageBody
         value={send.message}
         bodyFindUnitId={bodyFindUnitId}
         isStreaming={isStreaming}
       />
-      {hasError ? (
+      {showsFault ? (
         <SegmentPanel
           label="Error"
           copyValue={error}
@@ -854,13 +879,13 @@ function A2ASendToolSegment(
         onOpenChange={handleOpenChange}
         header={header}
         body={body}
-        tone={hasError ? "destructive" : "default"}
+        tone={showsFault ? "destructive" : "default"}
         stickyHeader
         expandable
         headerFindUnitId={null}
         bodyFindUnitId={null}
         className={undefined}
-        footer={null}
+        footer={refusalLine}
       />
     );
   }
@@ -872,7 +897,7 @@ function A2ASendToolSegment(
       headerAction={null}
       collapsedPreview={preview}
       body={body}
-      tone={hasError ? "destructive" : "primary"}
+      tone={showsFault ? "destructive" : "primary"}
       headerPosition="normal"
       bodyOverflow="hidden"
       expandable
@@ -880,6 +905,18 @@ function A2ASendToolSegment(
       bodyFindUnitId={null}
       className={undefined}
     />
+  );
+}
+
+/** A refused send's sentence, verbatim: what happened, and what to do. */
+function A2ASendRefusalLine(props: { readonly sentence: string }) {
+  return (
+    <p
+      className="m-0 text-ui-sm text-muted-foreground"
+      data-testid="a2a-send-refusal"
+    >
+      {props.sentence}
+    </p>
   );
 }
 

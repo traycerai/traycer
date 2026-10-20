@@ -26,6 +26,7 @@ import {
   providerSignInUnavailableReason,
 } from "@/components/providers/provider-signin-availability";
 import { cn } from "@/lib/utils";
+import { ProviderOnHostOnlyLine } from "./provider-on-host-only-line";
 import {
   EmbeddedProviderRateLimitForProvider,
   ProviderProfilesRefreshButton,
@@ -70,6 +71,12 @@ interface ProviderProfileScopedSectionProps {
    *  only when it is not, or when the child printed a device code. */
   readonly isSelectedHostLocal: boolean;
   readonly canAddProfile: boolean;
+  /**
+   * Why no credential may go to this host (a sandbox), or `null`. Already
+   * folded into `canAddProfile`; here it is the reason the sign-in controls
+   * show, ahead of any CLI reason.
+   */
+  readonly credentialRefusal: string | null;
   readonly onOpenCliSettings: () => void;
   readonly startInReauth: boolean;
   readonly failedAttempt: FailedProviderProfileAttempt | null;
@@ -108,6 +115,7 @@ interface ProviderProfileScopedSectionProps {
 function profileControlsHold(
   state: ProviderCliState,
   isSelectedHostLocal: boolean,
+  credentialRefusal: string | null,
 ): {
   readonly signInUnavailableHint: string | null;
   readonly cliSetupNeeded: boolean;
@@ -120,7 +128,9 @@ function profileControlsHold(
     "sign-in",
   );
   let signInUnavailableHint: string | null = null;
-  if (reason?.kind === "host") {
+  if (credentialRefusal !== null) {
+    signInUnavailableHint = credentialRefusal;
+  } else if (reason?.kind === "host") {
     signInUnavailableHint =
       reason.block.kind === "pack"
         ? "Sign-in is unavailable until CLI setup is complete."
@@ -130,7 +140,10 @@ function profileControlsHold(
   }
   return {
     signInUnavailableHint,
-    cliSetupNeeded: reason?.kind === "host" && reason.block.kind !== "disabled",
+    cliSetupNeeded:
+      credentialRefusal === null &&
+      reason?.kind === "host" &&
+      reason.block.kind !== "disabled",
     managementHeldReason: state.enabled
       ? null
       : providerHostBlockLabel({ kind: "disabled" }, providerLabel),
@@ -233,6 +246,7 @@ export function ProviderProfileScopedSection(
     hostId,
     isSelectedHostLocal,
     canAddProfile,
+    credentialRefusal,
     onOpenCliSettings,
     startInReauth,
     failedAttempt,
@@ -262,7 +276,7 @@ export function ProviderProfileScopedSection(
   const providerLabel = PROVIDER_DISPLAY_NAMES[state.providerId];
   const addProfileDisabled = !canAddProfile;
   const { signInUnavailableHint, cliSetupNeeded, managementHeldReason } =
-    profileControlsHold(state, isSelectedHostLocal);
+    profileControlsHold(state, isSelectedHostLocal, credentialRefusal);
   // `TooltipWrapper` degrades to a passthrough Slot for both `null` and
   // `undefined` labels; `null` here is just the plainer of the two spellings.
   const addProfileDisabledReason = addProfileDisabled
@@ -365,6 +379,11 @@ export function ProviderProfileScopedSection(
               : null
           }
           admissionByProfileId={null}
+        />
+        <ProviderOnHostOnlyLine
+          hostId={hostId}
+          providerId={state.providerId}
+          profileId={selectedProfile.profileId}
         />
         <div
           data-slot="profile-summary-actions"
