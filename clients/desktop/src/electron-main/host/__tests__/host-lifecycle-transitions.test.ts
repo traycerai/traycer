@@ -1384,6 +1384,9 @@ describe("a quit verdict whose write failed is retried", () => {
       expect(writeSpy.mock.calls.length).toBeGreaterThanOrEqual(2);
     });
     expect(writeSpy.mock.calls[1]?.[0]).toBe("stop");
+    // The spy records the call as it starts; the presence file is rewritten a
+    // few awaits later. No policy file exists, so the retry is stamped rev 0.
+    await waitForPresence(harness.store, "stop", 0);
     const presence = await harness.store.readPresence();
     expect(presence?.onExit).toBe("stop");
   });
