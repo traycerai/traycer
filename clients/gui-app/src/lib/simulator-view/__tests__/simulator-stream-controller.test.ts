@@ -270,6 +270,38 @@ describe("simulator stream controller", () => {
     expect(h.session().framesOfKind("requestKeyframe")).toHaveLength(2);
   });
 
+  it("sends an ask that fell inside the floor when the floor ends, and drops it on close", async () => {
+    const h = harness("ios", true, false);
+    h.controller.start();
+    emitConfig(h.session(), IOS_CONFIG);
+    emitVideo(h.session(), "description", AVCC_DESCRIPTION);
+    await flushAsync();
+    emitVideo(h.session(), "keyframe", ANNEX_B_KEYFRAME);
+    h.codec.decoders[0].decodeQueueSize = SOFT_DECODE_QUEUE + 1;
+    emitVideo(h.session(), "delta", ANNEX_B_DELTA);
+    expect(h.session().framesOfKind("requestKeyframe")).toHaveLength(1);
+    // The decoder asks once per gap; the next gap's one ask lands 400 ms
+    // later, inside the floor. It must reach the hub when the floor ends,
+    // not never.
+    vi.advanceTimersByTime(400);
+    emitVideo(h.session(), "keyframe", ANNEX_B_KEYFRAME);
+    h.codec.decoders[1].decodeQueueSize = SOFT_DECODE_QUEUE + 1;
+    emitVideo(h.session(), "delta", ANNEX_B_DELTA);
+    expect(h.session().framesOfKind("requestKeyframe")).toHaveLength(1);
+    vi.advanceTimersByTime(599);
+    expect(h.session().framesOfKind("requestKeyframe")).toHaveLength(1);
+    vi.advanceTimersByTime(1);
+    expect(h.session().framesOfKind("requestKeyframe")).toHaveLength(2);
+    // A held ask does not outlive the stream.
+    emitVideo(h.session(), "keyframe", ANNEX_B_KEYFRAME);
+    h.codec.decoders[2].decodeQueueSize = SOFT_DECODE_QUEUE + 1;
+    emitVideo(h.session(), "delta", ANNEX_B_DELTA);
+    expect(h.session().framesOfKind("requestKeyframe")).toHaveLength(2);
+    h.controller.stop();
+    vi.advanceTimersByTime(2_000);
+    expect(h.session().framesOfKind("requestKeyframe")).toHaveLength(2);
+  });
+
   it("falls back to MJPEG on iOS when the profile is rejected, and paints JPEG frames on the image plane", async () => {
     const h = harness("ios", false, false);
     h.controller.start();
