@@ -24,9 +24,12 @@ const state = vi.hoisted(() => {
       method: string,
       params: { readonly taskIds: readonly string[] },
     ): Promise<OrganizationView> => {
-      if (method !== "organization.refresh" || hostView.current === null)
+      if (method !== "organization.refresh")
         return Promise.reject(new Error(`unexpected request ${method}`));
       refreshes.push([...params.taskIds]);
+      // A null host view is the host refusing the refresh.
+      if (hostView.current === null)
+        return Promise.reject(new Error("organization refresh unavailable"));
       const ids = new Set(params.taskIds);
       const view = structuredClone(hostView.current);
       return Promise.resolve({
@@ -169,41 +172,54 @@ afterEach(() => {
 });
 
 describe("organization subscription remount", () => {
-  it("never projects an earlier mount's cached view over the host's current one", async () => {
-    const tabA = openTask("task-a");
-    const queryClient = new QueryClient({
-      defaultOptions: { queries: { retry: false } },
-    });
-    render(
-      <QueryClientProvider client={queryClient}>
-        <OrganizationProvider>{null}</OrganizationProvider>
-      </QueryClientProvider>,
-    );
-    await waitFor(() => expect(tabGroupId(tabA)).toBe("group-1"));
+  it.each([
+    { refetch: "succeeds", hostAnswers: true },
+    // A failed refetch counts as fetched after mount while the cached answer
+    // stays in `data`; it must be rejected the same way.
+    { refetch: "fails", hostAnswers: false },
+  ])(
+    "never projects an earlier mount's cached view over the host's current one when the remount refetch $refetch",
+    async ({ hostAnswers }) => {
+      const tabA = openTask("task-a");
+      const queryClient = new QueryClient({
+        defaultOptions: { queries: { retry: false } },
+      });
+      render(
+        <QueryClientProvider client={queryClient}>
+          <OrganizationProvider>{null}</OrganizationProvider>
+        </QueryClientProvider>,
+      );
+      await waitFor(() => expect(tabGroupId(tabA)).toBe("group-1"));
 
-    // The group is dissolved on the host. Opening another task changes the
-    // subscribed set, so the new set's refresh carries the current view.
-    state.hostView.current = viewWithoutGroup();
-    let tabB = "";
-    act(() => {
-      tabB = openTask("task-b");
-    });
-    await waitFor(() => expect(tabGroupId(tabA)).toBeNull());
+      // The group is dissolved on the host. Opening another task changes the
+      // subscribed set, so the new set's refresh carries the current view.
+      state.hostView.current = viewWithoutGroup();
+      let tabB = "";
+      act(() => {
+        tabB = openTask("task-b");
+      });
+      await waitFor(() => expect(tabGroupId(tabA)).toBeNull());
 
-    // Closing it again remounts the subscription for the first set, whose
-    // earlier answer still held the group.
-    const groupIdsSeen: (string | null | undefined)[] = [];
-    const unsubscribe = useTabsStore.subscribe((tabs) =>
-      groupIdsSeen.push(tabs.customizations?.[`epic:${tabA}`]?.groupId),
-    );
-    const refreshesBefore = refreshesFor(["task-a"]);
-    act(() => useEpicCanvasStore.getState().closeTab(tabB));
-    await waitFor(() =>
-      expect(refreshesFor(["task-a"])).toBeGreaterThan(refreshesBefore),
-    );
-    await waitFor(() => expect(tabGroupId(tabA)).toBeNull());
-    unsubscribe();
+      // Closing it again remounts the subscription for the first set, whose
+      // earlier answer still held the group.
+      const groupIdsSeen: (string | null | undefined)[] = [];
+      const unsubscribe = useTabsStore.subscribe((tabs) =>
+        groupIdsSeen.push(tabs.customizations?.[`epic:${tabA}`]?.groupId),
+      );
+      const refreshesBefore = refreshesFor(["task-a"]);
+      if (!hostAnswers) state.hostView.current = null;
+      act(() => useEpicCanvasStore.getState().closeTab(tabB));
+      await waitFor(() =>
+        expect(refreshesFor(["task-a"])).toBeGreaterThan(refreshesBefore),
+      );
+      // Let the refetch settle either way before reading what was projected.
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+      await waitFor(() => expect(tabGroupId(tabA)).toBeNull());
+      unsubscribe();
 
-    expect(groupIdsSeen).not.toContain("group-1");
-  });
+      expect(groupIdsSeen).not.toContain("group-1");
+    },
+  );
 });
