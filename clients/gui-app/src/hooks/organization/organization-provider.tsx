@@ -35,6 +35,10 @@ import { useHostMutation, useHostQuery } from "@/hooks/host/use-host-query";
 import { useHostSupportsMethod } from "@/hooks/host/use-host-supports-method";
 import { useSurfaceHostStreamBinding } from "@/hooks/host/use-surface-host-stream-binding";
 import {
+  usePoolTierHostClient,
+  usePoolTierStreamClient,
+} from "@/hooks/host/use-pool-tier";
+import {
   authorizesCloudCapability,
   useAuthStore,
 } from "@/stores/auth/auth-store";
@@ -62,7 +66,8 @@ export function OrganizationProvider({
     value: OrganizationDialog;
     returnFocusTo: HTMLElement | null;
   } | null>(null);
-  const client = useHostClient();
+  // Organization is account-wide: the pool's family (see `usePoolTierHostClient`).
+  const client = usePoolTierHostClient(useHostClient());
   const readiness = useReactiveHostReadiness(client);
   const { hostId, requestContextUserId: userId } = readiness;
   const accountUserId = useAuthStore(
@@ -353,9 +358,12 @@ function OrganizationSubscription(props: {
   readonly taskIds: string[];
   readonly accept: (view: OrganizationView, ids: readonly string[]) => void;
 }) {
-  const client = useHostClient();
+  const client = usePoolTierHostClient(useHostClient());
   const binding = useSurfaceHostStreamBinding(null);
-  const streamClient = binding?.wsStreamClient ?? null;
+  const streamClient = usePoolTierStreamClient(
+    binding?.wsStreamClient ?? null,
+    props.userId,
+  );
   const { taskIds, accept } = props;
   const receivedFrame = useRef(false);
   const refresh = useHostQuery({

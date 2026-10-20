@@ -306,6 +306,7 @@ function buildComposition(): Composition {
     schedulingPolicy: hostRpcSchedulingPolicy,
     authorityRegistry: null,
     requestCoordinator: null,
+    selectedHostId: () => null,
     connectionRegistry: null,
   });
   const composition = { auth, directory, runtime, runnerHost };

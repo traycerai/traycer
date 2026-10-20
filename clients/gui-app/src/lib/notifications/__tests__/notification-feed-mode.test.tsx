@@ -108,14 +108,16 @@ describe("useNotificationFeedMode", () => {
     cloudFeedSupport.value = "supported";
 
     expect(
-      renderHook(() => useNotificationFeedModeFor(null, HOST_ID)).result
+      renderHook(() => useNotificationFeedModeFor(null, null, HOST_ID)).result
         .current,
     ).toBe("cloud");
   });
 
   it("keeps methodless and pending capability local and upgrades only after confirmed support", () => {
     cloudFeedSupport.value = null;
-    const hook = renderHook(() => useNotificationFeedModeFor(null, HOST_ID));
+    const hook = renderHook(() =>
+      useNotificationFeedModeFor(null, null, HOST_ID),
+    );
 
     expect(hook.result.current).toBe("local");
     cloudFeedSupport.value = "unknown";
@@ -140,7 +142,7 @@ describe("useNotificationFeedMode", () => {
     feedVersions.cloud = { major: 1, minor: 0 };
     feedVersions.local = { major: 1, minor: 2 };
     expect(
-      renderHook(() => useNotificationFeedModeFor(null, HOST_ID)).result
+      renderHook(() => useNotificationFeedModeFor(null, null, HOST_ID)).result
         .current,
     ).toBe("local");
 
@@ -148,7 +150,7 @@ describe("useNotificationFeedMode", () => {
     feedVersions.cloud = { major: 1, minor: 2 };
     feedVersions.local = { major: 1, minor: 1 };
     expect(
-      renderHook(() => useNotificationFeedModeFor(null, HOST_ID)).result
+      renderHook(() => useNotificationFeedModeFor(null, null, HOST_ID)).result
         .current,
     ).toBe("local");
 
@@ -156,7 +158,7 @@ describe("useNotificationFeedMode", () => {
     feedVersions.cloud = { major: 1, minor: 2 };
     feedVersions.local = { major: 1, minor: 2 };
     expect(
-      renderHook(() => useNotificationFeedModeFor(null, HOST_ID)).result
+      renderHook(() => useNotificationFeedModeFor(null, null, HOST_ID)).result
         .current,
     ).toBe("cloud");
   });
@@ -181,13 +183,13 @@ describe("useNotificationFeedMode", () => {
 
     feedVersions.cloud = { major: 1, minor: 1 };
     expect(
-      renderHook(() => useNotificationFeedModeFor(null, HOST_ID)).result
+      renderHook(() => useNotificationFeedModeFor(null, null, HOST_ID)).result
         .current,
     ).toBe("local");
 
     feedVersions.cloud = { major: 1, minor: 2 };
     expect(
-      renderHook(() => useNotificationFeedModeFor(null, HOST_ID)).result
+      renderHook(() => useNotificationFeedModeFor(null, null, HOST_ID)).result
         .current,
     ).toBe("cloud");
   });
@@ -215,13 +217,13 @@ describe("useNotificationFeedMode", () => {
 
     unaryVersions.indicatorState = { major: 1, minor: 0 };
     expect(
-      renderHook(() => useNotificationFeedModeFor(null, HOST_ID)).result
+      renderHook(() => useNotificationFeedModeFor(null, null, HOST_ID)).result
         .current,
     ).toBe("local");
 
     unaryVersions.indicatorState = { major: 1, minor: 1 };
     expect(
-      renderHook(() => useNotificationFeedModeFor(null, HOST_ID)).result
+      renderHook(() => useNotificationFeedModeFor(null, null, HOST_ID)).result
         .current,
     ).toBe("cloud");
   });
@@ -241,14 +243,14 @@ describe("useNotificationFeedMode", () => {
     // `host.notifications.list` one minor short of the partition selector.
     unaryVersions.list = { major: 2, minor: 1 };
     expect(
-      renderHook(() => useNotificationFeedModeFor(null, HOST_ID)).result
+      renderHook(() => useNotificationFeedModeFor(null, null, HOST_ID)).result
         .current,
     ).toBe("local");
 
     // ...and on the wrong major line entirely, which is not a scale.
     unaryVersions.list = { major: 1, minor: 9 };
     expect(
-      renderHook(() => useNotificationFeedModeFor(null, HOST_ID)).result
+      renderHook(() => useNotificationFeedModeFor(null, null, HOST_ID)).result
         .current,
     ).toBe("local");
 
@@ -256,7 +258,7 @@ describe("useNotificationFeedMode", () => {
     unaryVersions.list = { major: 2, minor: 2 };
     unaryVersions.markAllRead = { major: 1, minor: 0 };
     expect(
-      renderHook(() => useNotificationFeedModeFor(null, HOST_ID)).result
+      renderHook(() => useNotificationFeedModeFor(null, null, HOST_ID)).result
         .current,
     ).toBe("local");
 
@@ -268,7 +270,7 @@ describe("useNotificationFeedMode", () => {
     unaryVersions.markAllRead = { major: 1, minor: 1 };
     unaryVersions.clearAll = { major: 1, minor: 0 };
     expect(
-      renderHook(() => useNotificationFeedModeFor(null, HOST_ID)).result
+      renderHook(() => useNotificationFeedModeFor(null, null, HOST_ID)).result
         .current,
     ).toBe("local");
     unaryVersions.clearAll = { major: 1, minor: 1 };
@@ -276,7 +278,7 @@ describe("useNotificationFeedMode", () => {
     // Both unary floors met, with the stream minors already there → mixed.
     unaryVersions.markAllRead = { major: 1, minor: 1 };
     expect(
-      renderHook(() => useNotificationFeedModeFor(null, HOST_ID)).result
+      renderHook(() => useNotificationFeedModeFor(null, null, HOST_ID)).result
         .current,
     ).toBe("cloud");
   });
@@ -290,14 +292,14 @@ describe("useNotificationFeedMode", () => {
     // unary ack.
     unaryVersions.list = null;
     expect(
-      renderHook(() => useNotificationFeedModeFor(null, HOST_ID)).result
+      renderHook(() => useNotificationFeedModeFor(null, null, HOST_ID)).result
         .current,
     ).toBe("local");
 
     // `false` is a completed handshake that did not advertise the method.
     unaryVersions.list = false;
     expect(
-      renderHook(() => useNotificationFeedModeFor(null, HOST_ID)).result
+      renderHook(() => useNotificationFeedModeFor(null, null, HOST_ID)).result
         .current,
     ).toBe("local");
 

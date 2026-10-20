@@ -1,7 +1,9 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useHostQuery, useHostMutation } from "@/hooks/host/use-host-query";
-import { useHostClient, type HostRpcRegistry } from "@/lib/host";
+import { useHostBinding, type HostRpcRegistry } from "@/lib/host";
+import { resolveAppWideHostClient } from "@/lib/host/binding-host-client";
+import { useEffectiveHostId } from "@/hooks/host/use-effective-host-id";
 import { isMobileApp } from "@/lib/mobile-app";
 import { hostQueryKeys, speechMutationKeys } from "@/lib/query-keys";
 
@@ -41,9 +43,11 @@ export interface DictationAvailability {
  * never offered, and the OS mic prompt never fires, before the on-device model
  * exists) and surface `preparing` as a status indicator while it downloads.
  *
- * DELIBERATELY the app-wide host (`useHostClient()`), not the composer's target
- * host - the documented exception to the composer host-scope rule in
- * `AGENTS.md`. Dictation describes the person at the keyboard, not the run:
+ * DELIBERATELY the person's selected host (the app-wide effective host), not
+ * the composer's target host and not a host-scoped subtree's - the documented
+ * exception to the composer host-scope rule in `AGENTS.md`, and the
+ * `selected-host` route of the routing table, which sends `speech.*` there
+ * whichever requester carries it. Dictation describes the person at the keyboard, not the run:
  * `speech.dictate` streams live microphone audio and `speech.ensureModel`
  * downloads an on-device model, so following a remote run target would ship a
  * user's audio to a machine they only picked to execute a turn on, and drop a
@@ -66,7 +70,12 @@ export function useDictationAvailability(
   // (`isMobileApp()`) and not on viewport width: a phone-width desktop browser
   // can still be talking to an honest localhost host, and keeps its mic.
   const available = enabled && !isMobileApp();
-  const client = useHostClient();
+  const binding = useHostBinding();
+  const selectedHostId = useEffectiveHostId();
+  const client = useMemo(
+    () => resolveAppWideHostClient(binding, selectedHostId),
+    [binding, selectedHostId],
+  );
   const queryClient = useQueryClient();
 
   const statusQuery = useHostQuery<HostRpcRegistry, "speech.getModelStatus">({
@@ -89,7 +98,7 @@ export function useDictationAvailability(
     mapVariables: (variables) => variables,
     options: {
       mutationKey: speechMutationKeys.ensureModel(),
-      onMutate: () => ({ hostId: client.getActiveHostId() }),
+      onMutate: () => ({ hostId: client?.getActiveHostId() ?? null }),
       onSuccess: (_result, _variables, context) => {
         if (context.hostId !== null) {
           void queryClient.invalidateQueries({
@@ -112,7 +121,7 @@ export function useDictationAvailability(
   const downloadProgress = statusQuery.data?.downloadProgress ?? null;
   const ensure = ensureMutation.mutate;
   const ensurePending = ensureMutation.isPending;
-  const activeHostId = client.getActiveHostId();
+  const activeHostId = client?.getActiveHostId() ?? null;
   // The attempt budget is per-host: a different host has its own model on
   // disk, so switching hosts must reset it (otherwise host A exhausting the
   // budget would permanently disable auto-ensure for host B).

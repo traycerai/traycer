@@ -13,6 +13,10 @@ import {
 } from "@tanstack/react-query";
 import type { HostRequester } from "@traycer-clients/shared/host-client/host-client";
 import {
+  hostRpcServingTierHostId,
+  readProcessHostRpcTierPlan,
+} from "@traycer-clients/shared/host-client/host-rpc-routing";
+import {
   HostRpcError,
   toHostRpcError,
   type RequestOfMethod,
@@ -24,6 +28,7 @@ import type { HostRpcRegistry } from "@/lib/host";
 import { queryKeys } from "@/lib/query-keys";
 import { withHostQueryErrorBoundary } from "@/lib/query/host-query-error-boundary";
 import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
+import { useEffectiveHostId } from "@/hooks/host/use-effective-host-id";
 import {
   HOST_METHOD_POLL_TABLE,
   stampHostRpcMethod,
@@ -217,6 +222,7 @@ export function useHostQueryWithResponseMap<
   const conditionPollCoordinator =
     getConditionPollEpisodeCoordinator(queryClient);
   const readiness = useReactiveHostReadiness(client);
+  const effectiveHostId = useEffectiveHostId();
   const baseOptions = args.options ?? {};
   const { meta, poll, select, ...queryOptionsWithoutReservedFields } =
     baseOptions;
@@ -245,8 +251,19 @@ export function useHostQueryWithResponseMap<
       refetchIntervalInBackground: false,
     };
   }
+  // Keyed by the tier that ANSWERS, not the host the caller named: the client
+  // routes a pool-only method to the pool and an input-device method to the
+  // selected host whatever requester carried it, so keying by the caller
+  // would file one answer under every host and miss the serving tier's
+  // recovery sweeps.
+  const servingHostId = hostRpcServingTierHostId(
+    method,
+    readiness.hostId,
+    readProcessHostRpcTierPlan(),
+    effectiveHostId,
+  );
   const queryKey: QueryKey = [
-    ...queryKeys.hostMethod<Registry, Method>(readiness.hostId, method, params),
+    ...queryKeys.hostMethod<Registry, Method>(servingHostId, method, params),
     ...(args.cacheKeyIdentity ?? []),
   ];
 
