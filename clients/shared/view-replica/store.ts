@@ -186,9 +186,10 @@ export class ViewReplicaStore {
   }
 
   /**
-   * A write to `service` was confirmed. Every page of that service observed
-   * before `floor.at`, or stamped below `floor.generation` (the first source
-   * sequence that includes the write), is a miss from now on.
+   * A write to `service` was confirmed. From now on a page of that service is
+   * a miss when it is stamped below `floor.generation` (the first source
+   * sequence that includes the write), or, for a page or floor without a
+   * sequence, when it was observed before `floor.at`.
    */
   noteConfirmedWrite(
     accountId: string,
@@ -598,16 +599,19 @@ export interface ViewReplicaFloor {
   readonly generation: number | null;
 }
 
+/**
+ * Whether the page predates the write. The source's sequence decides when
+ * both carry one - a snapshot that includes the write can arrive before its
+ * acknowledgement - and the timestamps decide otherwise.
+ */
 function belowFloor(
   record: ViewReplicaStoredRecord,
   floor: ViewReplicaFloor,
 ): boolean {
-  if (record.savedAt < floor.at) return true;
-  return (
-    floor.generation !== null &&
-    record.sourceGeneration !== null &&
-    record.sourceGeneration < floor.generation
-  );
+  if (floor.generation !== null && record.sourceGeneration !== null) {
+    return record.sourceGeneration < floor.generation;
+  }
+  return record.savedAt < floor.at;
 }
 
 function higherFloor(
