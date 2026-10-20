@@ -1,13 +1,14 @@
 /**
  * Write keys for the host's simulator domain (`simulator.*` and the
  * `config.simulator.set` switch). Every key names the host the write goes to:
- * two tiles on two machines must never share a pending state, and the
- * sidebar reads "a boot is outstanding on this host" off the mutation cache.
+ * two tiles on two machines must never share a pending state.
  */
 export const simulatorMutationKeys = {
-  /** Boot (or attach to) one simulator. Keyed per simulator so one row spins. */
-  open: (hostId: string, simulatorId: string) =>
-    ["simulator.open", hostId, simulatorId] as const,
+  /**
+   * Boot (or attach to) a simulator. Keyed by host alone: which simulator is
+   * booting is the host's own `booting` list, which every window reads.
+   */
+  open: (hostId: string) => ["simulator.open", hostId] as const,
   close: (hostId: string, simulatorId: string) =>
     ["simulator.close", hostId, simulatorId] as const,
   shutdown: (hostId: string, simulatorId: string) =>

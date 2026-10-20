@@ -3,7 +3,12 @@
  * Update that file whenever this settings surface changes.
  */
 import { useState, type ReactNode } from "react";
+import type { UseQueryResult } from "@tanstack/react-query";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import type {
+  HostRpcError,
+  ResponseOfMethod,
+} from "@traycer-clients/shared/host-transport/host-messenger";
 import type {
   SimulatorInstalledTools,
   SimulatorPackState,
@@ -22,6 +27,7 @@ import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-di
 import { Switch } from "@/components/ui/switch";
 import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
 import {
+  type GatedSimulatorMutation,
   useSimulatorConfigQuery,
   useSimulatorConfigSetMutation,
   useSimulatorRemoveToolsMutation,
@@ -76,7 +82,7 @@ export function HostOverviewSimulatorsTab(props: {
           />
         ) : (
           <SettingsRow
-            row={HOST_OVERVIEW.definitions.useMobileSimulators}
+            row={HOST_OVERVIEW.definitions.mobileSimulatorsEnabled}
             status={
               supported === null
                 ? `Asking ${props.hostName} about mobile simulators.`
@@ -102,14 +108,8 @@ function SimulatorSettingsRows(props: {
   const statusSupported =
     useHostMethodSupport(hostId, "simulator.status") === true;
   const { mutation } = useSimulatorConfigSetMutation(client, hostId);
-  const switches: SimulatorSwitch = {
-    enabled: config.data?.enabled === true,
-    // Unread, unreadable or mid-write: the switch cannot be flipped.
-    locked: config.isPending || config.isError || mutation.isPending,
-    unreadable: config.isError,
-    writing: mutation.isPending,
-    write: mutation.mutate,
-  };
+  const remove = useSimulatorRemoveToolsMutation(client, hostId);
+  const switches = simulatorSwitch(config, mutation, remove.mutation.isPending);
   const installed = status.data?.installed ?? null;
   return (
     <>
@@ -136,8 +136,7 @@ function SimulatorSettingsRows(props: {
       status.data !== undefined &&
       (switches.enabled || installed !== null) ? (
         <SimulatorToolsRow
-          client={client}
-          hostId={hostId}
+          remove={remove}
           status={status.data}
           switches={switches}
           hostName={props.hostName}
@@ -155,13 +154,34 @@ interface SimulatorSwitch {
   readonly write: (next: { readonly enabled: boolean }) => void;
 }
 
+function simulatorSwitch(
+  config: UseQueryResult<
+    ResponseOfMethod<HostRpcRegistry, "config.simulator.get">,
+    HostRpcError
+  >,
+  mutation: GatedSimulatorMutation<"config.simulator.set">["mutation"],
+  removing: boolean,
+): SimulatorSwitch {
+  return {
+    enabled: config.data?.enabled === true,
+    // Unread, unreadable, mid-write or mid-removal: the switch cannot be
+    // flipped. Turning it on while the tools are being removed would race the
+    // removal for the same bytes.
+    locked:
+      config.isPending || config.isError || mutation.isPending || removing,
+    unreadable: config.isError,
+    writing: mutation.isPending,
+    write: mutation.mutate,
+  };
+}
+
 function SimulatorEnabledRow(props: {
   readonly switches: SimulatorSwitch;
   /** The host's status read, or null while it is unavailable or not advertised. */
   readonly status: SimulatorStatusResponse | null;
 }): ReactNode {
   const { switches, status } = props;
-  const row = HOST_OVERVIEW.definitions.useMobileSimulators;
+  const row = HOST_OVERVIEW.definitions.mobileSimulatorsEnabled;
   const noPlatform = status?.packState.kind === "unsupported";
   // The definition always carries a description; the type allows null for
   // rows that have none.
@@ -214,8 +234,7 @@ function platformSummary(
 }
 
 function SimulatorToolsRow(props: {
-  readonly client: HostClient<HostRpcRegistry> | null;
-  readonly hostId: string | null;
+  readonly remove: GatedSimulatorMutation<"simulator.removeTools">;
   readonly status: SimulatorStatusResponse;
   readonly switches: SimulatorSwitch;
   readonly hostName: string;
@@ -223,7 +242,7 @@ function SimulatorToolsRow(props: {
   const { status, switches } = props;
   const packState = status.packState;
   const installed = status.installed;
-  const remove = useSimulatorRemoveToolsMutation(props.client, props.hostId);
+  const { remove } = props;
   const [confirmingRemove, setConfirmingRemove] = useState(false);
   // Remove is offered only for bytes the switch no longer needs: off, with
   // the tools still in the host's store. On, and they are in use or about

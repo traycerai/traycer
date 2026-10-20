@@ -13,6 +13,8 @@ import type {
   SimulatorOpenRequest,
   SimulatorOpenResponse,
   SimulatorPackState,
+  SimulatorShutdownRequest,
+  SimulatorShutdownResponse,
   SimulatorState,
 } from "@traycer/protocol/host/simulator/schemas";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -51,13 +53,20 @@ type OpenOnHost = (
   variables: SimulatorOpenRequest,
 ) => Promise<SimulatorOpenResponse>;
 
+/** The host's side of `simulator.shutdown`; never answers by default. */
+type ShutdownOnHost = (
+  variables: SimulatorShutdownRequest,
+) => Promise<SimulatorShutdownResponse>;
+
 const fakes = vi.hoisted(() => ({
   reachability: "reachable",
   sessions: null as SimulatorSessionsState | null,
   configSet: vi.fn(),
   open: vi.fn<OpenOnHost>(() => new Promise<SimulatorOpenResponse>(() => {})),
   close: vi.fn(),
-  shutdown: vi.fn(),
+  shutdown: vi.fn<ShutdownOnHost>(
+    () => new Promise<SimulatorShutdownResponse>(() => {}),
+  ),
   action: vi.fn(),
   closeTile: vi.fn(),
   openTile: vi.fn(),
@@ -89,10 +98,10 @@ vi.mock("@/lib/simulator-view/use-simulator-sessions", () => ({
   useSimulatorSessionsForHost: () => fakes.sessions,
 }));
 vi.mock("@/hooks/simulator/use-simulator-mutations", async () => {
-  // The open rides a real mutation: the close rule hangs on its per-call
-  // `onSuccess`, which TanStack only delivers to an observer that is still
-  // mounted and still the mutation's own, so a hand-rolled fake would pass
-  // whatever the tile did with it.
+  // The open and the power off ride real mutations: what the tile does with
+  // an answer depends on whether TanStack still delivers it to an observer
+  // that may have unmounted, so a hand-rolled fake would pass whatever the
+  // tile did with it.
   const { useMutation } = await import("@tanstack/react-query");
   const gated = (mutate: unknown) => ({
     mutation: { mutate, isPending: false, variables: undefined },
@@ -110,7 +119,13 @@ vi.mock("@/hooks/simulator/use-simulator-mutations", async () => {
       supported: true,
     }),
     useSimulatorCloseMutation: () => gated(fakes.close),
-    useSimulatorShutdownMutation: () => gated(fakes.shutdown),
+    useSimulatorShutdownMutation: () => ({
+      mutation: useMutation({
+        mutationFn: (variables: SimulatorShutdownRequest) =>
+          fakes.shutdown(variables),
+      }),
+      supported: true,
+    }),
     useSimulatorActionMutation: () => gated(fakes.action),
     useSimulatorScreenshotMutation: () => gated(vi.fn()),
     useSimulatorDetailQuery: () => ({
@@ -686,6 +701,40 @@ describe("SimulatorTile", () => {
         platform: "android",
         boot: true,
       });
+    });
+  });
+
+  it("closes the tile after a power off even when its session ended before the host answered", async () => {
+    fakes.sessions = sessions({
+      state: { ...withTargetBooted(READY_STATE), sessions: [SESSION] },
+    });
+    let answer: (response: SimulatorShutdownResponse) => void = () => {};
+    fakes.shutdown.mockImplementationOnce(
+      () =>
+        new Promise<SimulatorShutdownResponse>((resolve) => {
+          answer = resolve;
+        }),
+    );
+    const rerender = renderTile();
+    fireEvent.click(screen.getByTestId("simulator-power-off"));
+    fireEvent.click(screen.getByRole("button", { name: "Power off" }));
+    await waitFor(() => {
+      expect(fakes.shutdown).toHaveBeenCalledTimes(1);
+    });
+
+    // The sessions stream drops the session first, which unmounts the live
+    // tile and the observer that sent the shutdown.
+    fakes.sessions = sessions({ state: READY_STATE });
+    rerender();
+    expect(screen.queryByTestId("simulator-toolbar")).toBeNull();
+    expect(fakes.closeTile).not.toHaveBeenCalled();
+
+    await act(async () => {
+      answer({ simulatorId: UDID, booted: false });
+      await Promise.resolve();
+    });
+    await waitFor(() => {
+      expect(fakes.closeTile).toHaveBeenCalledTimes(1);
     });
   });
 

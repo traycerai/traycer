@@ -30,6 +30,7 @@ interface TabFakes {
   status: SimulatorStatusResponse;
   write: Mock;
   remove: Mock;
+  removePending: boolean;
 }
 
 const fakes = vi.hoisted((): TabFakes => ({
@@ -43,6 +44,7 @@ const fakes = vi.hoisted((): TabFakes => ({
   },
   write: vi.fn(),
   remove: vi.fn(),
+  removePending: false,
 }));
 
 vi.mock("@/hooks/host/use-host-supports-method", () => ({
@@ -64,7 +66,7 @@ vi.mock("@/hooks/simulator/use-simulator-mutations", () => ({
     _client: unknown,
     _hostId: string | null,
   ) => ({
-    mutation: { mutate: fakes.remove, isPending: false },
+    mutation: { mutate: fakes.remove, isPending: fakes.removePending },
     supported: fakes.methodSupport["simulator.removeTools"] === true,
   }),
 }));
@@ -86,6 +88,7 @@ beforeEach(() => {
     "simulator.removeTools": true,
   };
   fakes.config = { enabled: true };
+  fakes.removePending = false;
   fakes.status = {
     platforms: [
       { platform: "ios", available: true, reason: null },
@@ -170,6 +173,16 @@ describe("HostOverviewSimulatorsTab", () => {
     fireEvent.click(screen.getByTestId("confirm-action"));
     expect(fakes.remove).toHaveBeenCalledTimes(1);
     expect(fakes.remove).toHaveBeenCalledWith({});
+  });
+
+  it("off with downloaded tools: holds the switch while the tools are being removed", () => {
+    fakes.config = { enabled: false };
+    fakes.status = withPack(OFF, null);
+    fakes.removePending = true;
+    renderTab();
+    expect(switchRow()).toHaveProperty("disabled", true);
+    fireEvent.click(switchRow());
+    expect(fakes.write).not.toHaveBeenCalled();
   });
 
   it("on: shows Platforms with each reason and the tools row, and never Remove", () => {
