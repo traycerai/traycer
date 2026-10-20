@@ -394,4 +394,41 @@ describe("useNotificationFeedMode", () => {
       "serving-host",
     );
   });
+
+  it("answers the cloud-projection floor from the replica's cached version while the live negotiation is unknown", () => {
+    cloudFeedSupport.value = "unknown";
+    // The live read is a version the floor refuses: only the cache can make
+    // this resolve to the cloud projection.
+    feedVersions.cloud = { major: 1, minor: 0 };
+
+    expect(
+      renderHook(() =>
+        useNotificationFeedModeFor(null, null, HOST_ID, { major: 1, minor: 2 }),
+      ).result.current,
+    ).toBe("cloud");
+    expect(
+      renderHook(() => useNotificationFeedModeFor(null, null, HOST_ID, null))
+        .result.current,
+    ).toBe("local");
+  });
+
+  it("ignores the replica's cached version once the live negotiation says unsupported", () => {
+    cloudFeedSupport.value = "unsupported";
+
+    expect(
+      renderHook(() =>
+        useNotificationFeedModeFor(null, null, HOST_ID, { major: 1, minor: 2 }),
+      ).result.current,
+    ).toBe("local");
+  });
+
+  it("does not let a cached version below the floor select the cloud projection", () => {
+    cloudFeedSupport.value = "unknown";
+
+    expect(
+      renderHook(() =>
+        useNotificationFeedModeFor(null, null, HOST_ID, { major: 1, minor: 0 }),
+      ).result.current,
+    ).toBe("local");
+  });
 });
