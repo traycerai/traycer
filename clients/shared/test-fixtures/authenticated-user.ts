@@ -50,6 +50,8 @@ export function createAuthenticatedUserFixture(
     payAsYouGoUsage: {
       allowPayAsYouGo: false,
     },
+    environments: { personal: null, teams: [] },
+    actingAs: null,
   };
 
   return { ...base, ...effectiveOverrides };

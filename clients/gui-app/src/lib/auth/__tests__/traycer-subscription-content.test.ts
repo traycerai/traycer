@@ -104,6 +104,8 @@ function userWith(
     userSubscription,
     payAsYouGoUsage: { allowPayAsYouGo: false },
     teamSubscriptions: teams,
+    environments: { personal: null, teams: [] },
+    actingAs: null,
   };
 }
 

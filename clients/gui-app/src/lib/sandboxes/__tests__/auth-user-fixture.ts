@@ -96,5 +96,7 @@ export function userWith(
     userSubscription: personal,
     payAsYouGoUsage: { allowPayAsYouGo: false },
     teamSubscriptions: teams,
+    environments: { personal: null, teams: [] },
+    actingAs: null,
   };
 }
