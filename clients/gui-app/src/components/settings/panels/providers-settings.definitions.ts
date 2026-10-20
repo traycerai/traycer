@@ -118,6 +118,25 @@ export const PROVIDERS = defineSettingsSection("providers", {
     availableWhen: alwaysAvailable,
     keywords: ["shared", "every provider", "all providers"],
   },
+  nativeSubagents: {
+    kind: "group",
+    search: { anchor: null },
+    label: "Native subagents",
+    description: "Whether a provider's agents may start its own subagents.",
+    breadcrumb: "Providers",
+    availableWhen: alwaysAvailable,
+    keywords: ["subagent", "sub-agent", "a2a", "delegate", "task tool"],
+  },
+  nativeSubagentsEnabled: {
+    kind: "row",
+    group: "nativeSubagents",
+    search: { contributesTo: "nativeSubagents" },
+    label: "Allow native subagents",
+    description:
+      "Off, this provider's agents delegate through Traycer agents instead of their own built-in subagents.",
+    availableWhen: alwaysAvailable,
+    keywords: ["subagents", "traycer agents"],
+  },
   environmentVariables: {
     kind: "group",
     search: { anchor: null },

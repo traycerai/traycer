@@ -2026,6 +2026,13 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
+  // Same shape and same ordering story as `providers.setAutoJudge`; the order
+  // comes from `providerNativeSubagentsWriteScope` on the hook.
+  "providers.setNativeSubagents": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
   // Whether the provider settings document is unusable as a whole: a plain
   // read, latest wins.
   "providers.settingsFile.status": { ...LATEST_SCHEDULING, poll: null },

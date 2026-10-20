@@ -60,6 +60,7 @@ export {
   autoPolicyWriteScope,
   providerAutoJudgeWriteScope,
 } from "@/lib/query-keys/auto-mode-write-scopes";
+export { providerNativeSubagentsWriteScope } from "@/lib/query-keys/providers-native-subagents-scope";
 export { providersListQueryKey } from "@/lib/query-keys/providers-query-keys";
 export {
   CLASSIC_PROVIDERS_LIST_PARAMS,

@@ -1353,6 +1353,8 @@ import {
   providersUsePackVersionResponseSchemaV10,
   providersSetPackPolicyRequestSchema,
   providersSetPackPolicyResponseSchema,
+  providersSetNativeSubagentsRequestSchema,
+  providersSetNativeSubagentsResponseSchema,
   providersRefreshPackDiscoveryRequestSchema,
   providersRefreshPackDiscoveryResponseSchema,
   upgradeProviderCliStateV10ToV20,
@@ -2810,7 +2812,9 @@ export const providersListV104 = defineRpcContract({
 /**
  * `providers.list@10.5` - the envelope's `credentialsManagedInAccount`
  * (this host is a sandbox, stores no provider credential, and the user's keys
- * and logins are managed in their account), `scope` and `onHostOnly`.
+ * and logins are managed in their account), `scope` and `onHostOnly`, and the
+ * row's `nativeSubagents` switch (added while 10.5 was still unreleased, so
+ * it widened this line rather than opening 10.6).
  *
  * A MINOR, with no `responseGrowthProjectionGated`: each is a new KEY, which the
  * within-major re-parse strips for an older peer. Its own minor rather than a
@@ -4709,6 +4713,17 @@ export const providersSetPackPolicyV10 = defineRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: providersSetPackPolicyRequestSchema,
   responseSchema: providersSetPackPolicyResponseSchema,
+});
+
+/**
+ * Set one provider's native-subagents switch (`providers.list@10.5` reads it
+ * back as the row's `nativeSubagents`).
+ */
+export const providersSetNativeSubagentsV10 = defineRpcContract({
+  method: "providers.setNativeSubagents",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: providersSetNativeSubagentsRequestSchema,
+  responseSchema: providersSetNativeSubagentsResponseSchema,
 });
 
 /**
@@ -12002,6 +12017,19 @@ const HOST_RPC_PROVIDERS_REGISTRY_DEFINITION = {
       versions: {
         0: {
           contract: providersSetAutoJudgeV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "providers.setNativeSubagents": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: providersSetNativeSubagentsV10,
           upgradeFromPreviousVersion: null,
         },
       },
