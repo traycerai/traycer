@@ -5,10 +5,8 @@
  * own entry, and none of these touches the pool's session.
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  poolHostDirectoryEntry,
-  type HostDirectoryEntry,
-} from "@traycer-clients/shared/host-client/host-directory";
+import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
+import { poolEntry } from "@traycer-clients/shared/host-client/__tests__/routing-entry-fixtures";
 import type { RemoteHostDirectoryEntry } from "@traycer-clients/shared/host-client/remote-fetcher";
 import type { IRemoteSession } from "@traycer-clients/shared/host-transport/remote/index";
 import {
@@ -123,11 +121,6 @@ const localEntry: HostDirectoryEntry = {
   version: "1.0.0",
   transportDialability: "dialable",
 };
-
-const poolEntry = poolHostDirectoryEntry("wss://pool.invalid/rpc");
-if (poolEntry === null) {
-  throw new Error("pool fixture must build");
-}
 
 const bearer = {
   getBearerToken: () => "bearer-token",
