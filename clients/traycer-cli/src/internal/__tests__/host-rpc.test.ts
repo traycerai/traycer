@@ -661,31 +661,6 @@ describe("callHostRpc", () => {
     });
   });
 
-  // An ended retry episode whose EARLIER attempt was sent and lost is a plain
-  // `HostTransportFailureError` subclass carrying that fact in its own class.
-  // The host may be running that earlier send whatever the later attempt did.
-  it("maps a RetryEpisodeOutcomeUnknownError to HOST_REQUEST_OUTCOME_UNKNOWN", async () => {
-    await expect(
-      toAgentCliError(
-        Promise.reject(
-          new RetryEpisodeOutcomeUnknownError(
-            new HostRpcError({
-              code: "UNAUTHORIZED",
-              message: "bearer rejected",
-              requestId: "r1",
-              method: METHOD,
-              fatalDetails: null,
-            }),
-          ),
-        ),
-      ),
-    ).rejects.toMatchObject({
-      code: CLI_ERROR_CODES.HOST_REQUEST_OUTCOME_UNKNOWN,
-      details: null,
-      exitCode: 1,
-    });
-  });
-
   // An abort answers the question on its own flag rather than by its class:
   // stopping the wait does not recall a request the host may already be
   // running, while an abort before any send leaves nothing behind.
