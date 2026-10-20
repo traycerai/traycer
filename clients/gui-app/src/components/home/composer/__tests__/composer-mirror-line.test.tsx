@@ -31,7 +31,6 @@ import type {
 } from "@traycer/protocol/host/task-host-summary";
 import {
   TASK_HOST_UNNAMED_LABEL,
-  type TaskHostDirectoryFact,
   type TaskHostGroup,
   type TaskHostGroupRow,
   taskHostGroups,
@@ -72,7 +71,7 @@ const inputs = vi.hoisted(() => {
   const collaboratorNames: { current: ReadonlyMap<string, string> } = {
     current: new Map(),
   };
-  const directory: { current: ReadonlyMap<string, TaskHostDirectoryFact> } = {
+  const directory: { current: ReadonlyMap<string, string> } = {
     current: new Map(),
   };
   return {
@@ -108,8 +107,7 @@ vi.mock("@/hooks/epic/use-task-host-groups", async () => {
             viewerUserId: inputs.groupViewerId,
             teams: inputs.teams.current,
             collaboratorNames: inputs.collaboratorNames.current,
-            directory: inputs.directory.current,
-            agentCountByHostId: new Map(),
+            directoryLabels: inputs.directory.current,
           }),
   };
 });
@@ -166,10 +164,10 @@ function registryItem(
 
 const SEEN_KEY = "traycer-gui-app:composer-mirror-line-seen";
 
-function defaultDirectory(): ReadonlyMap<string, TaskHostDirectoryFact> {
-  return new Map<string, TaskHostDirectoryFact>([
-    ["h-laptop", { label: "My laptop", state: "online" }],
-    ["h-laptop-2", { label: "My other laptop", state: "online" }],
+function defaultDirectory(): ReadonlyMap<string, string> {
+  return new Map<string, string>([
+    ["h-laptop", "My laptop"],
+    ["h-laptop-2", "My other laptop"],
   ]);
 }
 
@@ -205,10 +203,6 @@ function groupRow(hostId: string, label: string): TaskHostGroupRow {
   return {
     hostId,
     label,
-    agentsLine: null,
-    unreachable: false,
-    state: null,
-    openable: false,
   };
 }
 
@@ -508,10 +502,7 @@ describe("taskHostGroups, a personal host the registry never named", () => {
       viewerUserId: VIEWER_ID,
       teams: [],
       collaboratorNames: new Map(),
-      directory: new Map<string, TaskHostDirectoryFact>([
-        [hostId, { label: hostId, state: "online" }],
-      ]),
-      agentCountByHostId: new Map(),
+      directoryLabels: new Map<string, string>([[hostId, hostId]]),
     });
 
     expect(groups).toHaveLength(1);
@@ -799,8 +790,8 @@ describe("useComposerMirrorLine", () => {
   });
 
   it("names the label the task-host groups give the viewer's own host, from the directory", () => {
-    inputs.directory.current = new Map<string, TaskHostDirectoryFact>([
-      ["h-laptop", { label: "MacBook Pro", state: "online" }],
+    inputs.directory.current = new Map<string, string>([
+      ["h-laptop", "MacBook Pro"],
     ]);
     inputs.view.current = hostsView([LAPTOP, SANDBOX]);
     const { result } = renderHook(() =>
@@ -877,8 +868,8 @@ describe("useComposerMirrorLine", () => {
 
   it("calls the viewer's own host one of your hosts when the directory only echoes its host id", () => {
     const rawHostId = "h-raw-laptop";
-    inputs.directory.current = new Map<string, TaskHostDirectoryFact>([
-      [rawHostId, { label: rawHostId, state: "online" }],
+    inputs.directory.current = new Map<string, string>([
+      [rawHostId, rawHostId],
     ]);
     inputs.view.current = hostsView([row(rawHostId, null, VIEWER), SANDBOX]);
     const { result } = renderHook(() =>
