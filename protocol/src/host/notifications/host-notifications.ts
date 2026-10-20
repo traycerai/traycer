@@ -601,7 +601,7 @@ export function streamCarriesChannelEmissionFrame(
   schemaVersion: { readonly major: number; readonly minor: number },
 ): boolean {
   switch (surface.method) {
-    // Every installed minor of the feed (`@1.0` to `@1.4`) declares the frame.
+    // Every installed minor of the feed (`@1.0` to `@1.5`) declares the frame.
     case "host.notifications.feed.subscribe":
       return schemaVersion.major === 1;
     // The frozen released stream declares it at its only version.
@@ -1500,6 +1500,36 @@ export type HostNotificationsSubscribeClientFrame = z.infer<
   typeof hostNotificationsSubscribeClientFrameSchema
 >;
 
+/**
+ * `host.notifications.feed.subscribe@1.5` client frames: `@1.4`'s, plus
+ * `cloudLanePresence`. A client whose cloud notification lane is served by
+ * a peer other than this host (the server pool) tells the host whether that
+ * lane is delivering, so the host's local view serves the empty partition
+ * only while some lane really carries the user's cloud rows. Sent on change
+ * and on subscribe; a host that never receives one keeps its own answer.
+ */
+export const hostNotificationsSubscribeClientFrameSchemaV15 = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    z.object({ kind: z.literal("ping"), ...textFrameFields }),
+    z.object({
+      kind: z.literal("presence"),
+      ...textFrameFields,
+      windowId: z.string(),
+      focused: z.boolean(),
+      entity: hostNotificationsPresenceEntitySchema.nullable(),
+      at: z.number().int().nonnegative(),
+    }),
+    z.object({
+      kind: z.literal("cloudLanePresence"),
+      ...textFrameFields,
+      serving: z.boolean(),
+    }),
+  ]),
+);
+export type HostNotificationsSubscribeClientFrameV15 = z.infer<
+  typeof hostNotificationsSubscribeClientFrameSchemaV15
+>;
+
 /** Released `indicatorState@1.0` entity flags. FROZEN. */
 export const hostNotificationsIndicatorStateSchemaV10 = lazySchema(() =>
   z.object({
@@ -2391,6 +2421,17 @@ export const hostNotificationsFeedSubscribeV14 = defineStreamRpcContract({
   openRequestSchema: hostNotificationsSubscribeOpenRequestSchema,
   serverFrameSchema: hostNotificationsSubscribeServerFrameSchemaV14,
   clientFrameSchema: hostNotificationsSubscribeClientFrameSchema,
+});
+
+/** Additive minor: `@1.4`'s open request and server frames; the client may
+ * send `cloudLanePresence`. Negotiated, so a client sends it only to a host
+ * that offers `@1.5`. */
+export const hostNotificationsFeedSubscribeV15 = defineStreamRpcContract({
+  method: "host.notifications.feed.subscribe",
+  schemaVersion: { major: 1, minor: 5 } as const,
+  openRequestSchema: hostNotificationsSubscribeOpenRequestSchema,
+  serverFrameSchema: hostNotificationsSubscribeServerFrameSchemaV14,
+  clientFrameSchema: hostNotificationsSubscribeClientFrameSchemaV15,
 });
 
 export const hostNotificationsGetConfig = defineRpcContract({

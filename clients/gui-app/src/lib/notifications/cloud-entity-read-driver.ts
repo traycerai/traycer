@@ -99,7 +99,11 @@ export function requestCloudEntityRead(
   const state = useCloudNotificationsStore.getState();
   const { due, dropped } = selectCloudEntityReadRetries(state, deps.now());
   state.clearEntityReadRetries(dropped);
-  const discovered = selectCloudEntityReadTargets(state, entity, originHostId);
+  // Rows painted from the replica before this session's first snapshot are
+  // not the feed's current state: looking at a chat marks nothing from them.
+  const discovered = state.hasSnapshot
+    ? selectCloudEntityReadTargets(state, entity, originHostId)
+    : [];
   const entryIds = [...due, ...discovered];
   // Nothing to do: return WITHOUT touching the store. This runs on every
   // accepted snapshot, and a no-op that still wrote would re-trigger itself.

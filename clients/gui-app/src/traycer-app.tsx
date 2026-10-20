@@ -41,6 +41,7 @@ import { ComposerHarnessMemoryPersistLifecycleBridge } from "@/providers/compose
 import { WorktreeIntentMemoryPersistLifecycleBridge } from "@/providers/worktree-intent-memory-persist-lifecycle-bridge";
 import { WorktreeIntentStagingPersistLifecycleBridge } from "@/providers/worktree-intent-staging-persist-lifecycle-bridge";
 import { EpicCanvasPersistLifecycleBridge } from "@/providers/epic-canvas-persist-lifecycle-bridge";
+import { ViewReplicaLifecycleMount } from "@/providers/view-replica-lifecycle-mount";
 import { AppLocalNotificationsPersistLifecycleBridge } from "@/providers/app-local-notifications-persist-lifecycle-bridge";
 import { ReadingPositionPersistLifecycleBridge } from "@/providers/reading-position-persist-lifecycle-bridge";
 import { LandingTerminalPersistLifecycleBridge } from "@/providers/landing-terminal-persist-lifecycle-bridge";
@@ -287,6 +288,7 @@ function TraycerAuthenticatedRuntime(props: TraycerAuthenticatedRuntimeProps) {
                             <EpicSessionControllerBridge />
                             <EpicTabExistenceReconciler />
                             <PoolSessionMount />
+                            <ViewReplicaLifecycleMount />
                             <HostStreamProvider>
                               <HostScopeReady scope="default-host">
                                 <WorktreeChangedStreamMount />

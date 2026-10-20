@@ -35,10 +35,13 @@ import { isRemoteHostDirectoryEntry } from "./remote-fetcher";
  *   models never leave the person's machines.
  * - `pool-only` - the account-wide families: the notification cloud feed
  *   (`host.notifications.cloudFeed.*`), `environment.list`,
- *   `organization.*` and `autoPolicy.*`; and the chat serving witness
- *   (`chat.serving.subscribe`), the server's published fact. History (`epic.listTasks`) joins
- *   them in P7 (see its entry). A pool-only call never has a host fallback
- *   arm: a refusal or an outage is the caller's error.
+ *   `organization.*` and `autoPolicy.*`, the environment arm
+ *   (`environment.chats.subscribe`, `.plainTerminals.subscribe`,
+ *   `.communicationGraph.subscribe`), which no host serves, and the chat
+ *   serving witness (`chat.serving.subscribe`), the server's published
+ *   fact. History (`epic.listTasks`) joins them in P7 (see its entry). A
+ *   pool-only call never has a host fallback arm: a refusal or an outage is
+ *   the caller's error.
  * - `addressed-peer` - `host.status` and `host.getRuntimeCapabilities`: the
  *   session-level floor every peer genuinely serves, the pool included, so
  *   they go to whichever peer the requester names.
@@ -702,6 +705,12 @@ export const HOST_STREAM_RPC_ROUTES = {
   "epic.state.subscribe": "target-host",
   "epic.status.subscribe": "target-host",
   "epic.subscribe": "target-host",
+  // The environment arm: a team environment's own rows in one task, for a
+  // member of it. Only the server pool serves them; P7 composes them with
+  // the host's arm.
+  "environment.chats.subscribe": "pool-only",
+  "environment.communicationGraph.subscribe": "pool-only",
+  "environment.plainTerminals.subscribe": "pool-only",
   "git.streamFileAsset": "target-host",
   "git.subscribeStatus": "target-host",
   "host.browserPreparation.subscribe": "target-host",
