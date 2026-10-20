@@ -1,4 +1,6 @@
+import { JSDOM, VirtualConsole } from "jsdom";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { buildDocument, type ArtifactPageRole } from "../sandbox-document";
 
 // The loader is a classic script with no exports (`vite/sandbox-assets.ts`
 // inlines it on its own), so it is run for its effect: importing it starts it,
@@ -121,5 +123,51 @@ describe("sandbox loader wheel", () => {
       wheel(unscrollable, { deltaY: 40, ctrlKey: true }).defaultPrevented,
     ).toBe(false);
     expect(post).not.toHaveBeenCalled();
+  });
+});
+
+describe("served artifact page links", () => {
+  /**
+   * Clicks a link in a page running the composed bootstrap, in a window of
+   * its own at a served page's address. `true` when the click was left to the
+   * browser, so the frame follows the link itself.
+   */
+  function clickFollows(artifactPage: ArtifactPageRole, href: string): boolean {
+    const composed = buildDocument({
+      html: "",
+      csp: null,
+      nonce: "n-1",
+      theme: {
+        appliesToRoot: true,
+        colorScheme: "dark",
+        background: null,
+        variables: [],
+      },
+      shortcuts: [],
+      artifactPage,
+    });
+    const { window } = new JSDOM("<!doctype html><html><body></body></html>", {
+      runScripts: "dangerously",
+      url: "traycer-artifact://artifact-a1--m1/site/index.html",
+      // jsdom reports every followed link as an unimplemented navigation.
+      virtualConsole: new VirtualConsole(),
+    });
+    window.postMessage = () => undefined;
+    window.eval(between(composed, "<script>", "</script>"));
+    const anchor = window.document.createElement("a");
+    anchor.setAttribute("href", href);
+    window.document.body.append(anchor);
+    const followed = anchor.dispatchEvent(
+      new window.MouseEvent("click", { bubbles: true, cancelable: true }),
+    );
+    window.close();
+    return followed;
+  }
+
+  it("follows a link to another page of the folder only on a served artifact page", () => {
+    expect(clickFollows("found", "about.html")).toBe(true);
+    expect(clickFollows("found", "../other/page.htm")).toBe(true);
+    expect(clickFollows("found", "logo.png")).toBe(false);
+    expect(clickFollows(null, "about.html")).toBe(false);
   });
 });

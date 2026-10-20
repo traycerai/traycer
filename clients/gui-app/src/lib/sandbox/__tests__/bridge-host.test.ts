@@ -14,12 +14,14 @@ import {
   MAX_IN_FLIGHT_APP_REQUESTS,
   MAX_LINK_URL_CHARS,
   MAX_INBOUND_MESSAGE_BYTES,
+  PAGE_HANDSHAKE_TIMEOUT_MS,
   PING_TIMEOUT_MS,
   SandboxBridgeHost,
   TEARDOWN_GRACE_MS,
   type SandboxAppRequestHandler,
   type SandboxHostContext,
   type SandboxScrollDirection,
+  type SandboxServedPages,
   type SandboxShortcutPress,
   type SandboxSize,
   type SandboxStatus,
@@ -1016,6 +1018,7 @@ describe("teardown", () => {
 function createServedHarness(options: {
   readonly nonce: string;
   readonly appRequests: SandboxAppRequestHandler | null;
+  readonly pages: SandboxServedPages | null;
 }): Harness {
   const sent: Sent[] = [];
   const statuses: SandboxStatus[] = [];
@@ -1033,6 +1036,7 @@ function createServedHarness(options: {
       forwardedShortcuts: [
         { code: "KeyK", ctrl: false, meta: true, alt: false, shift: false },
       ],
+      pages: options.pages,
     },
     hostContext: HOST_CONTEXT,
     hostVersion: "9.9.9",
@@ -1072,7 +1076,11 @@ function createServedHarness(options: {
 
 describe("served document", () => {
   it("needs no proxy handshake: the right nonce alone reaches ready", () => {
-    const harness = createServedHarness({ nonce: NONCE, appRequests: null });
+    const harness = createServedHarness({
+      nonce: NONCE,
+      appRequests: null,
+      pages: null,
+    });
     expect(harness.host.status).toBe("loading");
     harness.host.receive(documentReady(NONCE, 120));
     expect(harness.host.status).toBe("ready");
@@ -1082,7 +1090,11 @@ describe("served document", () => {
   });
 
   it("ignores a proxy-ready instead of answering it: served documents never expect one", () => {
-    const harness = createServedHarness({ nonce: NONCE, appRequests: null });
+    const harness = createServedHarness({
+      nonce: NONCE,
+      appRequests: null,
+      pages: null,
+    });
     harness.host.receive(proxyReady());
     expect(harness.host.status).toBe("disposed");
     expect(harness.statuses).toEqual(["disposed", "crashed"]);
@@ -1090,14 +1102,22 @@ describe("served document", () => {
   });
 
   it("disposes on a wrong nonce, with no proxy-ready required first", () => {
-    const harness = createServedHarness({ nonce: NONCE, appRequests: null });
+    const harness = createServedHarness({
+      nonce: NONCE,
+      appRequests: null,
+      pages: null,
+    });
     harness.host.receive(documentReady("other-nonce", 120));
     expect(harness.host.status).toBe("disposed");
     expect(harness.statuses).toEqual(["disposed", "crashed"]);
   });
 
   it("disposes on a document-ready with no nonce at all", () => {
-    const harness = createServedHarness({ nonce: NONCE, appRequests: null });
+    const harness = createServedHarness({
+      nonce: NONCE,
+      appRequests: null,
+      pages: null,
+    });
     harness.host.receive(
       notification("traycer/notifications/document-ready", {}),
     );
@@ -1106,7 +1126,11 @@ describe("served document", () => {
   });
 
   it("disposes on a repeated nonce once already ready", () => {
-    const harness = createServedHarness({ nonce: NONCE, appRequests: null });
+    const harness = createServedHarness({
+      nonce: NONCE,
+      appRequests: null,
+      pages: null,
+    });
     harness.host.receive(documentReady(NONCE, 120));
     expect(harness.host.status).toBe("ready");
     harness.host.receive(documentReady(NONCE, 120));
@@ -1115,7 +1139,11 @@ describe("served document", () => {
   });
 
   it("allows exactly one frame load and disposes on the second", () => {
-    const harness = createServedHarness({ nonce: NONCE, appRequests: null });
+    const harness = createServedHarness({
+      nonce: NONCE,
+      appRequests: null,
+      pages: null,
+    });
     harness.host.receive(documentReady(NONCE, 120));
     harness.host.frameLoaded();
     expect(harness.host.status).toBe("ready");
@@ -1126,7 +1154,11 @@ describe("served document", () => {
   });
 
   it("still answers page requests once ready, exactly like a loaded document", () => {
-    const harness = createServedHarness({ nonce: NONCE, appRequests: null });
+    const harness = createServedHarness({
+      nonce: NONCE,
+      appRequests: null,
+      pages: null,
+    });
     harness.host.receive(documentReady(NONCE, 120));
     harness.host.receive(request(7, "ping", {}));
     expect(harness.responseTo(7)?.result).toEqual({});
@@ -1145,7 +1177,11 @@ describe("served document: gated until the nonce is proven", () => {
     const handler = vi.fn<SandboxAppRequestHandler>(() =>
       Promise.resolve({ content: ["ok"] }),
     );
-    const harness = createServedHarness({ nonce: NONCE, appRequests: handler });
+    const harness = createServedHarness({
+      nonce: NONCE,
+      appRequests: handler,
+      pages: null,
+    });
     const shortcutPress = (): Sent =>
       notification("traycer/notifications/shortcut", {
         key: "k",
@@ -1232,16 +1268,107 @@ describe("served document: gated until the nonce is proven", () => {
   });
 
   it("still answers ping before proof, with its correlated response", () => {
-    const harness = createServedHarness({ nonce: NONCE, appRequests: null });
+    const harness = createServedHarness({
+      nonce: NONCE,
+      appRequests: null,
+      pages: null,
+    });
     harness.host.receive(request(9, "ping", {}));
     expect(harness.responseTo(9)?.result).toEqual({});
   });
 
   it("still applies an early error before proof, crashing a document that then draws nothing", () => {
-    const harness = createServedHarness({ nonce: NONCE, appRequests: null });
+    const harness = createServedHarness({
+      nonce: NONCE,
+      appRequests: null,
+      pages: null,
+    });
     harness.host.receive(notification("traycer/notifications/early-error", {}));
     harness.host.receive(documentReady(NONCE, 0));
     expect(harness.host.status).toBe("crashed");
     expect(harness.all("ping")).toEqual([]);
+  });
+});
+
+describe("served document: a folder of pages", () => {
+  const PAGE_ORIGIN = "traycer-artifact://artifact-a1--m1";
+
+  function pagesHarness() {
+    const onNavigate = vi.fn<(path: string) => void>();
+    const onPageMissing = vi.fn<() => void>();
+    const harness = createServedHarness({
+      nonce: NONCE,
+      appRequests: null,
+      pages: { treePath: "site", onNavigate, onPageMissing },
+    });
+    return { harness, onNavigate, onPageMissing };
+  }
+
+  /** A served page's ready names the page it is, as the bootstrap sends it. */
+  function pageReady(path: string): Sent {
+    return notification("traycer/notifications/document-ready", {
+      nonce: NONCE,
+      height: 120,
+      url: `${PAGE_ORIGIN}/${path}`,
+    });
+  }
+
+  it("takes each later load as a page that must prove itself again, in either arrival order", () => {
+    const { harness, onNavigate } = pagesHarness();
+    harness.host.receive(pageReady("site/index.html"));
+    harness.host.frameLoaded();
+    expect(harness.host.status).toBe("ready");
+
+    // Load first: the page waits for its handshake, and its messages with it.
+    harness.host.frameLoaded();
+    expect(harness.host.status).toBe("loading");
+    harness.host.receive(
+      notification("ui/notifications/size-changed", { width: 10, height: 20 }),
+    );
+    expect(harness.onSize).not.toHaveBeenCalled();
+    harness.host.receive(pageReady("site/about.html"));
+    expect(harness.host.status).toBe("ready");
+
+    // Ready first: the load that follows belongs to the same page.
+    harness.host.receive(pageReady("docs/guide.html"));
+    harness.host.frameLoaded();
+    expect(harness.host.status).toBe("ready");
+
+    // The first page's unanswered ping must not mark a later page crashed.
+    expect(harness.statuses).toEqual([
+      "ready",
+      "loading",
+      "ready",
+      "loading",
+      "ready",
+    ]);
+    expect(onNavigate.mock.calls).toEqual([
+      ["index.html"],
+      ["about.html"],
+      ["../docs/guide.html"],
+    ]);
+  });
+
+  it("reports a later load that never proves itself as a missing page, not a crash", () => {
+    const { harness, onPageMissing } = pagesHarness();
+    harness.host.receive(pageReady("site/index.html"));
+    harness.host.frameLoaded();
+    harness.host.frameLoaded();
+    vi.advanceTimersByTime(PAGE_HANDSHAKE_TIMEOUT_MS - 1);
+    expect(onPageMissing).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1);
+    expect(onPageMissing).toHaveBeenCalledTimes(1);
+    vi.advanceTimersByTime(LOAD_TIMEOUT_MS);
+    expect(harness.statuses).not.toContain("crashed");
+  });
+
+  it("relays the stand-in page's own report that the page is missing", () => {
+    const { harness, onNavigate, onPageMissing } = pagesHarness();
+    harness.host.receive(pageReady("site/gone.html"));
+    harness.host.receive(
+      notification("traycer/notifications/page-missing", { nonce: NONCE }),
+    );
+    expect(onNavigate).toHaveBeenCalledWith("gone.html");
+    expect(onPageMissing).toHaveBeenCalledTimes(1);
   });
 });

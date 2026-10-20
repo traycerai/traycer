@@ -25,6 +25,7 @@ import type { SandboxNetworkPolicy } from "@/lib/sandbox/mcp-csp";
 import type { SandboxPermission } from "@/lib/sandbox/sandbox-url";
 import type { SandboxTheme } from "@/lib/sandbox/theme-map";
 import { MAX_EMBEDDED_DOWNLOAD_BYTES } from "@/lib/sandbox/download-limits";
+import { parseArtifactAddress } from "./artifact-serving/artifact-address";
 
 /**
  * The app side of the sandbox frame, with no DOM in it: the caller hands it
@@ -36,8 +37,10 @@ import { MAX_EMBEDDED_DOWNLOAD_BYTES } from "@/lib/sandbox/download-limits";
  * Trust is `event.source` alone - an opaque frame's `event.origin` is always
  * "null" - plus a nonce that proves the composed document. Loader mode allows
  * two loads (the loader and its rewrite); served mode allows only one and
- * needs no resource handshake. An extra load, an unexpected proxy-ready, or
- * a wrong or repeated nonce disposes the bridge. Loads
+ * needs no resource handshake, unless it serves a folder of pages, where each
+ * further load is the reader moving to another page and must prove itself
+ * again. An extra load, an unexpected proxy-ready, or a wrong or repeated
+ * nonce disposes the bridge. Loads
  * are COUNTED rather than ordered because the frame's messages and its
  * `load` events reach the app on different paths and can arrive in either
  * order. A page that rewrites itself trips the count too, which fails safe.
@@ -131,6 +134,19 @@ export type SandboxAppRequestHandler = (
   params: unknown,
 ) => Promise<unknown>;
 
+/**
+ * A plain-html artifact is a folder of pages the reader moves between inside
+ * one frame. Paths are relative to the artifact's folder; a page above it
+ * reads `../…`.
+ */
+export interface SandboxServedPages {
+  /** The artifact's folder relative to the artifacts tree root. */
+  readonly treePath: string;
+  readonly onNavigate: (path: string) => void;
+  /** The frame moved to something the artifact does not have as a page. */
+  readonly onPageMissing: () => void;
+}
+
 export interface SandboxBridgeHostOptions {
   readonly document:
     | {
@@ -143,6 +159,8 @@ export interface SandboxBridgeHostOptions {
         readonly canvas?: boolean;
         readonly nonce: string;
         readonly forwardedShortcuts: readonly ForwardedShortcut[];
+        /** `null` keeps the one-document rule: a canvas board never moves. */
+        readonly pages: SandboxServedPages | null;
       };
   readonly hostContext: SandboxHostContext;
   readonly hostVersion: string;
@@ -176,6 +194,12 @@ export const MAX_IN_FLIGHT_APP_REQUESTS = 16;
 /** From mount until the written page proves itself with its nonce. */
 export const LOAD_TIMEOUT_MS = 15_000;
 export const PING_TIMEOUT_MS = 5_000;
+/**
+ * A later page's ready follows its load within milliseconds. A load with no
+ * ready after this long is a document without the prelude: a child
+ * artifact's page, served as it is, or a file that is not a page.
+ */
+export const PAGE_HANDSHAKE_TIMEOUT_MS = 2_000;
 export const TEARDOWN_GRACE_MS = 2_000;
 /** After the reader declines a link, a frame asks about none for this long. */
 export const DECLINED_LINK_QUIET_MS = 2_000;
@@ -344,6 +368,25 @@ function parseHttpUrl(params: unknown): string | null {
   }
 }
 
+/** A served page's path relative to the artifact's folder, from its URL. */
+function pagePathFromUrl(url: unknown, treePath: string): string | null {
+  if (typeof url !== "string") return null;
+  const address = parseArtifactAddress(url);
+  if (address === null) return null;
+  if (treePath === "") return address.path;
+  const folder = treePath.split("/");
+  const page = address.path.split("/");
+  let shared = 0;
+  while (
+    shared < folder.length &&
+    shared < page.length - 1 &&
+    folder[shared] === page[shared]
+  ) {
+    shared += 1;
+  }
+  return "../".repeat(folder.length - shared) + page.slice(shared).join("/");
+}
+
 function changedContext(
   previous: SandboxHostContext,
   next: SandboxHostContext,
@@ -362,6 +405,10 @@ export class SandboxBridgeHost {
   private phase: Phase = "awaiting-proxy";
   private hostContext: SandboxHostContext;
   private loads = 0;
+  /** Accepted document-ready notifications, counted against loads. */
+  private readies = 0;
+  /** Documents begun so far; also tells one page's ping from the next's. */
+  private documents = 1;
   private earlyError = false;
   private initialized = false;
   private crashed = false;
@@ -370,7 +417,8 @@ export class SandboxBridgeHost {
   private linkDeclinedAt: number | null = null;
   /** This frame's claim on {@link linkConfirmOwner}. */
   private readonly linkConfirmKey = {};
-  private readonly loadWatchdog: number;
+  private loadWatchdog: number | null = null;
+  private pageHandshakeTimer: number | null = null;
   private readonly queuedNotifications: { method: string; params: unknown }[] =
     [];
   private readonly pendingResponses = new Map<
@@ -566,13 +614,80 @@ export class SandboxBridgeHost {
     this.options = options;
     this.hostContext = options.hostContext;
     if (options.document.kind === "served") this.phase = "delivered";
-    // A loader that never answers, or a page that never finishes loading,
-    // would otherwise sit at "loading" for good.
-    this.loadWatchdog = window.setTimeout(() => {
-      this.timers.delete(this.loadWatchdog);
+    this.armLoadWatchdog();
+  }
+
+  /**
+   * A loader that never answers, or a page that never finishes loading,
+   * would otherwise sit at "loading" for good.
+   */
+  private armLoadWatchdog(): void {
+    this.clearTimer(this.loadWatchdog);
+    const timer = window.setTimeout(() => {
+      this.timers.delete(timer);
+      this.loadWatchdog = null;
       this.markCrashed();
     }, LOAD_TIMEOUT_MS);
-    this.timers.add(this.loadWatchdog);
+    this.loadWatchdog = timer;
+    this.timers.add(timer);
+  }
+
+  private clearTimer(timer: number | null): void {
+    if (timer === null) return;
+    window.clearTimeout(timer);
+    this.timers.delete(timer);
+    if (this.loadWatchdog === timer) this.loadWatchdog = null;
+    if (this.pageHandshakeTimer === timer) this.pageHandshakeTimer = null;
+  }
+
+  private servedPages(): SandboxServedPages | null {
+    const document = this.options.document;
+    return document.kind === "served" ? document.pages : null;
+  }
+
+  /**
+   * The reader moved the frame to another page: it starts over as a freshly
+   * served document, and nothing the previous page left pending may answer
+   * for it.
+   */
+  private beginPage(): void {
+    this.documents += 1;
+    this.phase = "delivered";
+    this.earlyError = false;
+    this.initialized = false;
+    this.crashed = false;
+    this.queuedNotifications.length = 0;
+    this.clearTimer(this.pageHandshakeTimer);
+    const unanswered = [...this.pendingResponses.values()];
+    this.pendingResponses.clear();
+    for (const settle of unanswered) settle(false);
+    for (const { timer, settle } of this.canvasResponses.values()) {
+      window.clearTimeout(timer);
+      settle(null);
+    }
+    this.canvasResponses.clear();
+    this.armLoadWatchdog();
+    this.options.events.onStatus("loading");
+  }
+
+  private awaitPageHandshake(): void {
+    this.clearTimer(this.pageHandshakeTimer);
+    const timer = window.setTimeout(() => {
+      this.timers.delete(timer);
+      this.pageHandshakeTimer = null;
+      this.reportPageMissing();
+    }, PAGE_HANDSHAKE_TIMEOUT_MS);
+    this.pageHandshakeTimer = timer;
+    this.timers.add(timer);
+  }
+
+  private reportPageMissing(): void {
+    const pages = this.servedPages();
+    if (pages === null || this.phase === "disposed") return;
+    // A missing page is an answer, not a hang: it must not turn into a crash.
+    this.clearTimer(this.pageHandshakeTimer);
+    this.clearTimer(this.loadWatchdog);
+    pages.onPageMissing();
   }
 
   get status(): SandboxStatus {
@@ -638,8 +753,17 @@ export class SandboxBridgeHost {
   frameLoaded(): void {
     if (this.phase === "disposed") return;
     this.loads += 1;
-    const allowedLoads = this.options.document.kind === "loader" ? 2 : 1;
-    if (this.loads > allowedLoads) this.rejectDocument();
+    if (this.servedPages() === null) {
+      const allowedLoads = this.options.document.kind === "loader" ? 2 : 1;
+      if (this.loads > allowedLoads) this.rejectDocument();
+      return;
+    }
+    // A page's ready may reach the app before its load: whichever comes
+    // first begins the new document.
+    if (this.loads > this.documents) this.beginPage();
+    // The entry page keeps the crash watchdog; a later page that never
+    // proves itself was not a page of this artifact.
+    if (this.loads > 1 && this.readies < this.loads) this.awaitPageHandshake();
   }
 
   /** Send `host-context-changed` with the keys that changed, if any. */
@@ -794,6 +918,10 @@ export class SandboxBridgeHost {
       case "traycer/notifications/document-ready":
         this.onDocumentReady(params);
         return;
+      case "traycer/notifications/page-missing":
+        if (isRecord(params) && params.nonce === this.options.document.nonce)
+          this.reportPageMissing();
+        return;
       case "traycer/notifications/early-error":
         if (this.phase === "delivered") this.earlyError = true;
         return;
@@ -926,17 +1054,30 @@ export class SandboxBridgeHost {
   }
 
   private onDocumentReady(params: unknown): void {
-    const valid =
-      this.phase === "delivered" &&
-      isRecord(params) &&
-      params.nonce === this.options.document.nonce;
-    if (!valid) {
+    if (!isRecord(params) || params.nonce !== this.options.document.nonce) {
+      this.rejectDocument();
+      return;
+    }
+    const pages = this.servedPages();
+    if (pages !== null) {
+      // At most one ready may run ahead of its load.
+      if (this.readies > this.loads) {
+        this.rejectDocument();
+        return;
+      }
+      this.readies += 1;
+      if (this.readies > this.documents) this.beginPage();
+      this.clearTimer(this.pageHandshakeTimer);
+    }
+    if (this.phase !== "delivered") {
       this.rejectDocument();
       return;
     }
     this.phase = "ready";
-    window.clearTimeout(this.loadWatchdog);
-    this.timers.delete(this.loadWatchdog);
+    this.clearTimer(this.loadWatchdog);
+    const path =
+      pages === null ? null : pagePathFromUrl(params.url, pages.treePath);
+    if (pages !== null && path !== null) pages.onNavigate(path);
     // Too late: the watchdog already reported this frame.
     if (this.crashed) return;
     const height = finiteSize(params.height);
@@ -958,8 +1099,10 @@ export class SandboxBridgeHost {
         params: missed,
       });
     }
+    const pinged = this.documents;
     this.request("ping", {}, PING_TIMEOUT_MS, (answered) => {
-      if (!answered) this.markCrashed();
+      // The reader may have moved on: the next page is not the one that hung.
+      if (!answered && pinged === this.documents) this.markCrashed();
     });
   }
 

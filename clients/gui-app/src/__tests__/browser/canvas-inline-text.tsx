@@ -49,6 +49,7 @@ export function CanvasInlineTextFixture() {
         canvas: true,
         nonce: NONCE,
         forwardedShortcuts: [],
+        pages: null,
       },
       hostContext: {
         theme: "light",

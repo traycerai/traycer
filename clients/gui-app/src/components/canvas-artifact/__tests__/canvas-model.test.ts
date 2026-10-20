@@ -43,19 +43,19 @@ describe("canvasPageItems", () => {
   const snapshot = snapshotFromFixture(twoPageFile);
 
   it("treats items without a page as belonging to the first page", () => {
-    const items = canvasPageItems(snapshot, "page-1");
+    const items = canvasPageItems(snapshot, "page-1", null);
     expect(items.boards.map(([path]) => path)).toEqual([FAR, NEAR, MIDDLE]);
     expect(items.notes.map(([id]) => id)).toEqual(["note-default"]);
   });
 
   it("returns only the items that name the requested page", () => {
-    const items = canvasPageItems(snapshot, "page-2");
+    const items = canvasPageItems(snapshot, "page-2", null);
     expect(items.boards.map(([path]) => path)).toEqual([OTHER_PAGE]);
     expect(items.notes.map(([id]) => id)).toEqual(["note-explicit"]);
   });
 
   it("returns nothing for a page that does not exist", () => {
-    const items = canvasPageItems(snapshot, "page-missing");
+    const items = canvasPageItems(snapshot, "page-missing", null);
     expect(items.boards).toEqual([]);
     expect(items.notes).toEqual([]);
   });
@@ -66,8 +66,16 @@ describe("canvasPageItems", () => {
       order: [MIDDLE, FAR, NEAR, OTHER_PAGE],
     });
     expect(
-      canvasPageItems(reordered, "page-1").boards.map(([path]) => path),
+      canvasPageItems(reordered, "page-1", null).boards.map(([path]) => path),
     ).toEqual([MIDDLE, FAR, NEAR]);
+  });
+
+  it("leaves out a board whose file the committed manifest lacks, without moving the rest", () => {
+    const items = canvasPageItems(snapshot, "page-1", new Set([FAR, MIDDLE]));
+    expect(items.boards).toEqual([
+      [FAR, snapshot.boards[FAR]],
+      [MIDDLE, snapshot.boards[MIDDLE]],
+    ]);
   });
 });
 
@@ -76,34 +84,48 @@ describe("selectLiveBoards", () => {
   const origin = { x: 50, y: 50 };
 
   it("picks the boards closest to the viewport centre within the budget", () => {
-    expect(selectLiveBoards(snapshot, "page-1", origin, 2)).toEqual(
-      new Set([NEAR, MIDDLE]),
-    );
+    expect(
+      selectLiveBoards(canvasPageItems(snapshot, "page-1", null), origin, 2),
+    ).toEqual(new Set([NEAR, MIDDLE]));
   });
 
   it("follows the centre when the viewport moves", () => {
-    expect(selectLiveBoards(snapshot, "page-1", { x: 5050, y: 50 }, 1)).toEqual(
-      new Set([FAR]),
-    );
+    expect(
+      selectLiveBoards(
+        canvasPageItems(snapshot, "page-1", null),
+        { x: 5050, y: 50 },
+        1,
+      ),
+    ).toEqual(new Set([FAR]));
   });
 
   it("returns every board of the page when the budget exceeds the count", () => {
-    expect(selectLiveBoards(snapshot, "page-1", origin, 8)).toEqual(
-      new Set([NEAR, MIDDLE, FAR]),
-    );
+    expect(
+      selectLiveBoards(canvasPageItems(snapshot, "page-1", null), origin, 8),
+    ).toEqual(new Set([NEAR, MIDDLE, FAR]));
   });
 
   it("never includes boards from another page, however near", () => {
-    const live = selectLiveBoards(snapshot, "page-1", origin, 8);
-    expect(live.has(OTHER_PAGE)).toBe(false);
-    expect(selectLiveBoards(snapshot, "page-2", origin, 8)).toEqual(
-      new Set([OTHER_PAGE]),
+    const live = selectLiveBoards(
+      canvasPageItems(snapshot, "page-1", null),
+      origin,
+      8,
     );
+    expect(live.has(OTHER_PAGE)).toBe(false);
+    expect(
+      selectLiveBoards(canvasPageItems(snapshot, "page-2", null), origin, 8),
+    ).toEqual(new Set([OTHER_PAGE]));
   });
 
   it("yields nothing for a zero or negative budget", () => {
-    expect(selectLiveBoards(snapshot, "page-1", origin, 0).size).toBe(0);
-    expect(selectLiveBoards(snapshot, "page-1", origin, -3).size).toBe(0);
+    expect(
+      selectLiveBoards(canvasPageItems(snapshot, "page-1", null), origin, 0)
+        .size,
+    ).toBe(0);
+    expect(
+      selectLiveBoards(canvasPageItems(snapshot, "page-1", null), origin, -3)
+        .size,
+    ).toBe(0);
   });
 
   it("breaks distance ties by layout order", () => {
@@ -119,9 +141,13 @@ describe("selectLiveBoards", () => {
       order: [right, left],
     });
     // Both centres are 300 from x=0, so only the order can decide.
-    expect(selectLiveBoards(tied, "page-1", { x: 0, y: 50 }, 1)).toEqual(
-      new Set([right]),
-    );
+    expect(
+      selectLiveBoards(
+        canvasPageItems(tied, "page-1", null),
+        { x: 0, y: 50 },
+        1,
+      ),
+    ).toEqual(new Set([right]));
     const swapped = snapshotFromFixture({
       pages: [{ id: "page-1", name: "Flow" }],
       boards: {
@@ -131,9 +157,13 @@ describe("selectLiveBoards", () => {
       notes: {},
       order: [left, right],
     });
-    expect(selectLiveBoards(swapped, "page-1", { x: 0, y: 50 }, 1)).toEqual(
-      new Set([left]),
-    );
+    expect(
+      selectLiveBoards(
+        canvasPageItems(swapped, "page-1", null),
+        { x: 0, y: 50 },
+        1,
+      ),
+    ).toEqual(new Set([left]));
   });
 });
 
@@ -178,9 +208,13 @@ describe("boardFrame", () => {
     };
     // The unsized board's centre is (640, 400), 60 from the point; an 800 by 600
     // fallback would put it at (400, 300) and lose to the sized board at (550, 400).
-    expect(selectLiveBoards(snapshot, "page-1", { x: 700, y: 400 }, 1)).toEqual(
-      new Set([NEAR]),
-    );
+    expect(
+      selectLiveBoards(
+        canvasPageItems(snapshot, "page-1", null),
+        { x: 700, y: 400 },
+        1,
+      ),
+    ).toEqual(new Set([NEAR]));
   });
 });
 

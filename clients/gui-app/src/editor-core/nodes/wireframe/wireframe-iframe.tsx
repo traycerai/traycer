@@ -280,6 +280,7 @@ export function WireframeIframe(props: WireframeIframeProps) {
         onStatus={ignoreSandboxEvent}
         onRequestTeardown={ignoreSandboxEvent}
         displayMode="inline"
+        pageNavigation={null}
         onBridge={null}
       />
       {mode === "auto" ? (

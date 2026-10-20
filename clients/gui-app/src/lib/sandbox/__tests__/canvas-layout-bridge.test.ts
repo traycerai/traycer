@@ -290,6 +290,7 @@ describe("SandboxBridgeHost.siblingLayout", () => {
         canvas: options.canvas,
         nonce: NONCE,
         forwardedShortcuts: [],
+        pages: null,
       },
       hostContext: HOST_CONTEXT,
       hostVersion: "9.9.9",

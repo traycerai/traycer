@@ -72,7 +72,7 @@ function runLoader(): void {
     const theme = parseTheme(bootstrap.theme);
     const shortcuts = parseShortcuts(bootstrap.forwardedShortcuts);
     if (theme === null || shortcuts === null) return null;
-    return { html, csp, nonce, theme, shortcuts };
+    return { html, csp, nonce, theme, shortcuts, artifactPage: null };
   };
 
   let delivered = false;

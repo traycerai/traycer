@@ -5,6 +5,7 @@ import {
 import { isArtifactPath } from "./artifact-address";
 import {
   buildArtifactDocument,
+  buildMissingPageDocument,
   type ArtifactDocumentOptions,
 } from "./artifact-document";
 import {
@@ -147,6 +148,7 @@ export class ArtifactServer {
   private readonly outside: ArtifactOutsideReferenceResolver;
   private readonly treePrefix: string;
   private readonly readSignal = new AbortController().signal;
+  private missingPageBytes: Uint8Array | null = null;
 
   constructor(private readonly options: ArtifactServerOptions) {
     if (options.treePath !== "" && !isArtifactPath(options.treePath)) {
@@ -164,7 +166,12 @@ export class ArtifactServer {
       return unavailable("invalid-range", 404);
     }
     const resolved = this.resolve(path);
-    if (resolved === null) return unavailable("missing", 404);
+    if (resolved === null) {
+      // A page link that misses still gets a document with the prelude, so
+      // the frame can show that the page is missing. Other files stay 404.
+      if (!/\.html?$/i.test(path)) return unavailable("missing", 404);
+      return this.missingPage(offset, request.length);
+    }
     const { entry } = resolved;
     if (!Number.isSafeInteger(entry.byteLength) || entry.byteLength < 0) {
       return unavailable("invalid-size", 503);
@@ -203,6 +210,23 @@ export class ArtifactServer {
       offset,
       totalBytes: entry.byteLength,
       mediaType: entry.mediaType,
+    };
+  }
+
+  private missingPage(offset: number, length: number): ArtifactServeResult {
+    // Every missing page shares one stand-in, so it is composed once.
+    this.missingPageBytes ??= new TextEncoder().encode(
+      buildMissingPageDocument(this.options.document),
+    );
+    const bytes = this.missingPageBytes;
+    // The native v1 response has no 416 variant; a range past EOF maps to 404.
+    if (offset > bytes.length) return unavailable("invalid-range", 404);
+    return {
+      kind: "bytes",
+      bytes: bytes.slice(offset, offset + Math.min(length, BLOCK_BYTES)),
+      offset,
+      totalBytes: bytes.length,
+      mediaType: "text/html; charset=utf-8",
     };
   }
 

@@ -130,6 +130,7 @@ async function mountServed(canvas: boolean | undefined): Promise<Mounted> {
         onStatus={() => undefined}
         onRequestTeardown={() => undefined}
         displayMode="inline"
+        pageNavigation={null}
         onBridge={onBridge}
         onRelativeLink={listeners.onRelativeLink}
         onPageError={listeners.onPageError}
@@ -269,6 +270,7 @@ describe("<SandboxFrame /> forwarded ref", () => {
           onStatus={() => undefined}
           onRequestTeardown={() => undefined}
           displayMode="inline"
+          pageNavigation={null}
           onBridge={held.onBridge}
           ref={ref}
         />

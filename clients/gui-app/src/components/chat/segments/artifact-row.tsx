@@ -4,10 +4,8 @@ import {
   useChatAttachmentScope,
   type ChatAttachmentScopeValue,
 } from "@/components/chat/chat-attachment-scope-context";
-import {
-  SandboxFrame,
-  type SandboxSource,
-} from "@/components/sandbox/sandbox-frame";
+import { ArtifactPagesFrame } from "@/components/html-artifact/artifact-pages-frame";
+import type { SandboxSource } from "@/components/sandbox/sandbox-frame";
 import { useEpicStore } from "@/hooks/use-epic-store";
 import { artifactSourcePathsFor } from "@/lib/artifacts/artifact-object-paths";
 import { useStableOutsideReferenceResolver } from "@/lib/artifacts/use-stable-outside-reference-resolver";
@@ -27,11 +25,8 @@ import {
   selectArtifactRowState,
 } from "./artifact-row-state";
 
-const NO_PERMISSIONS = [] as const;
 const MIN_PAGE_HEIGHT_PX = 80;
 const MAX_PAGE_HEIGHT_PX = 4000;
-
-function ignoreFrameEvent(): void {}
 
 export function ArtifactRow(props: {
   readonly artifact: ToolCallArtifactStamp;
@@ -148,7 +143,10 @@ function ShownArtifact(props: {
   const resolveOutsideReference = useStableOutsideReferenceResolver(artifacts);
   const treePath = resolved?.treePath;
   const entryPath = resolved?.entryPath;
-  const source = useMemo<SandboxSource | null>(() => {
+  const source = useMemo<Extract<
+    SandboxSource,
+    { kind: "artifact" }
+  > | null>(() => {
     if (manifest === null || treePath === undefined || entryPath === undefined)
       return null;
     return {
@@ -225,24 +223,18 @@ function ShownArtifact(props: {
             Showing latest
           </figcaption>
         ) : null}
-        <SandboxFrame
+        <ArtifactPagesFrame
           key={generation}
           source={source}
-          kind="page"
           title={stamp.title}
-          appName={null}
-          networkPolicy="https-only"
-          appCsp={null}
-          permissions={NO_PERMISSIONS}
-          appRequests={null}
           className="w-full"
           height={height}
           onSize={handleSize}
           onStatus={handleStatus}
-          onRequestTeardown={ignoreFrameEvent}
-          displayMode="inline"
           onBridge={null}
-          ref={null}
+          onTextSelection={null}
+          onFrame={null}
+          renderOverlay={null}
         />
       </>
     );

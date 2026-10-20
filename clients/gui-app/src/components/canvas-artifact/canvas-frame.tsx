@@ -166,6 +166,7 @@ export function CanvasBoardFrame({
       onStatus={onStatus}
       onRequestTeardown={noop}
       displayMode={fullscreen ? "fullscreen" : "inline"}
+      pageNavigation={null}
       onBridge={onBridge}
       onDoubleClick={(element) => events?.onDoubleClick?.(path, element)}
       onTextSelection={(selection) =>

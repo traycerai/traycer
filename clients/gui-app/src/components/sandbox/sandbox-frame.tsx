@@ -12,6 +12,7 @@ import {
   useState,
   useSyncExternalStore,
   type Ref,
+  type RefObject,
 } from "react";
 import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
 import { getClientAppVersionLabel } from "@/lib/app-version";
@@ -101,9 +102,38 @@ function sameSource(previous: SandboxSource, next: SandboxSource): boolean {
   );
 }
 
+/**
+ * Moves a served plain-html artifact between its pages inside the same frame.
+ * Paths are relative to the artifact's folder.
+ */
+export interface SandboxPageNavigation {
+  /** The page to show; the frame loads it when it is not already showing. */
+  readonly path: string;
+  /**
+   * Bumped by each Back or Home, so asking again for the page the frame last
+   * showed still reloads it after the frame wandered off to a missing page.
+   */
+  readonly visit: number;
+  /** The frame now shows this page, whoever moved it there. */
+  readonly onNavigate: (path: string) => void;
+  readonly onPageMissing: () => void;
+}
+
+/** A page path relative to `treePath`, `../` included, as a tree path. */
+function pageTreePath(treePath: string, path: string): string {
+  const segments = treePath === "" ? [] : treePath.split("/");
+  for (const segment of path.split("/")) {
+    if (segment === "..") segments.pop();
+    else segments.push(segment);
+  }
+  return segments.join("/");
+}
+
 interface ServedFrame {
   readonly generation: number;
   readonly url: string;
+  /** The mount's address for another page of the same artifact. */
+  readonly pageUrl: (path: string) => string;
   readonly nonce: string;
   readonly theme: SandboxTheme;
   readonly forwardedShortcuts: readonly ForwardedShortcut[];
@@ -158,6 +188,8 @@ export interface SandboxFrameProps {
    * MCP App row sends its tool notifications and its teardown through it.
    */
   readonly onBridge: ((bridge: SandboxBridgeHost | null) => void) | null;
+  /** A served plain-html artifact's pages; `null` for everything else. */
+  readonly pageNavigation: SandboxPageNavigation | null;
   readonly ref: Ref<HTMLIFrameElement> | null;
 }
 
@@ -238,6 +270,27 @@ function replayShortcut(
       composed: true,
     }),
   );
+}
+
+/**
+ * The same iframe moves to the page asked for, under the same mount and
+ * bridge: the bridge takes the next load as a page change.
+ */
+function useServedPage(
+  frameRef: RefObject<HTMLIFrameElement | null>,
+  showingPageRef: RefObject<string | null>,
+  served: ServedFrame | null,
+  pageNavigation: SandboxPageNavigation | null,
+): void {
+  const path = pageNavigation?.path ?? null;
+  const visit = pageNavigation?.visit ?? 0;
+  useLayoutEffect(() => {
+    const iframe = frameRef.current;
+    if (served === null || path === null || iframe === null) return;
+    if (path === showingPageRef.current) return;
+    showingPageRef.current = path;
+    iframe.src = served.pageUrl(path);
+  }, [frameRef, showingPageRef, served, path, visit]);
 }
 
 /**
@@ -363,6 +416,18 @@ export function SandboxFrame(props: SandboxFrameProps) {
     props.onStatus(status);
   });
   const onRequestTeardown = useEffectEvent(() => props.onRequestTeardown());
+  // The page the iframe is showing, so a page reached by a link is not
+  // loaded a second time when the parent catches up with it. `null` once the
+  // frame went somewhere that is not a page of the artifact.
+  const showingPageRef = useRef<string | null>(null);
+  const onPageNavigate = useEffectEvent((path: string) => {
+    showingPageRef.current = path;
+    props.pageNavigation?.onNavigate(path);
+  });
+  const onPageMissing = useEffectEvent(() => {
+    showingPageRef.current = null;
+    props.pageNavigation?.onPageMissing();
+  });
   const onBridge = useEffectEvent((bridge: SandboxBridgeHost | null) =>
     props.onBridge?.(bridge),
   );
@@ -422,6 +487,7 @@ export function SandboxFrame(props: SandboxFrameProps) {
     hostContext: hostContextFor(theme, platform, kind, displayMode),
     appRequests,
     runnerHost,
+    pageNavigation: props.pageNavigation,
   }));
 
   // One frame element per content. Keyed by a generation, not by the content
@@ -467,16 +533,25 @@ export function SandboxFrame(props: SandboxFrameProps) {
       },
     });
     const mount = mountArtifact(inputs.runnerHost, server);
-    const url = buildArtifactAddress({
-      origin: inputs.runnerHost.sandboxArtifacts.artifactOrigin({
-        artifactId: inputs.source.artifactId,
-        mountId: mount.mountId,
-      }),
+    const origin = inputs.runnerHost.sandboxArtifacts.artifactOrigin({
       artifactId: inputs.source.artifactId,
       mountId: mount.mountId,
-      treePath: inputs.source.treePath,
-      path: inputs.source.entryPath,
     });
+    const { artifactId, treePath } = inputs.source;
+    const pageUrl = (path: string): string =>
+      buildArtifactAddress({
+        origin,
+        artifactId,
+        mountId: mount.mountId,
+        treePath: "",
+        // An empty entry path names the folder's index page.
+        path: pageTreePath(treePath, path === "" ? "index.html" : path),
+      });
+    // A remount (new bytes, new theme) keeps the reader on the page they were
+    // reading rather than sending them back to the entry page.
+    const page = inputs.pageNavigation?.path ?? inputs.source.entryPath;
+    showingPageRef.current = page;
+    const url = pageUrl(page);
     let active = true;
     void mount.ready.then(
       () => {
@@ -484,6 +559,7 @@ export function SandboxFrame(props: SandboxFrameProps) {
           setServedFrame({
             generation: frameGeneration,
             url,
+            pageUrl,
             nonce,
             theme: inputs.theme,
             forwardedShortcuts: inputs.forwardedShortcuts,
@@ -524,6 +600,14 @@ export function SandboxFrame(props: SandboxFrameProps) {
               canvas: inputs.source.canvas,
               nonce: served?.nonce ?? "",
               forwardedShortcuts: served?.forwardedShortcuts ?? [],
+              pages:
+                inputs.pageNavigation === null
+                  ? null
+                  : {
+                      treePath: inputs.source.treePath,
+                      onNavigate: onPageNavigate,
+                      onPageMissing,
+                    },
             }
           : {
               kind: "loader",
@@ -580,6 +664,8 @@ export function SandboxFrame(props: SandboxFrameProps) {
       onBridge(null);
     };
   }, [frameGeneration, served]);
+
+  useServedPage(frameRef, showingPageRef, served, props.pageNavigation);
 
   useLayoutEffect(() => {
     bridgeRef.current?.updateHostContext(

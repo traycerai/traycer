@@ -202,6 +202,7 @@ function canvasBridge() {
       canvas: true,
       nonce: "n",
       forwardedShortcuts: [],
+      pages: null,
     },
     hostContext: HOST_CONTEXT,
     hostVersion: "9.9.9",
@@ -261,6 +262,7 @@ function mount(overrides: Partial<Options>) {
             ? HTML_SOURCE
             : null
         }
+        boardFiles={null}
         frameEvents={options.frameEvents}
         liveFrameLimit={options.live ? 1 : 0}
         viewOnly={options.viewOnly}

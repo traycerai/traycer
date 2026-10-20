@@ -57,6 +57,15 @@ function useBoardSource(
     [artifact.head, artifact.id, treePath, readSpan, resolveOutsideReference],
   );
 }
+function useBoardFiles(
+  artifact: ArtifactProjection,
+): ReadonlySet<string> | null {
+  const head = artifact.head;
+  return useMemo(
+    () => (head === undefined ? null : new Set(Object.keys(head.files))),
+    [head],
+  );
+}
 function LiveCanvasSurface({
   epicId,
   artifactId,
@@ -92,6 +101,7 @@ function LiveCanvasSurface({
     readSpan,
     resolveOutsideReference,
   );
+  const boardFiles = useBoardFiles(artifact);
   return store === null ? (
     <div role="status" className="p-4 text-ui-sm text-muted-foreground">
       Opening canvas…
@@ -108,6 +118,7 @@ function LiveCanvasSurface({
       awareness={awareness}
       user={user}
       sourceForBoard={sourceForBoard}
+      boardFiles={boardFiles}
       frameEvents={frameEvents}
       liveFrameLimit={LIVE_BOARD_LIMIT}
     />
@@ -134,6 +145,7 @@ function FixtureCanvasSurface({
     fixture.readSpan,
     fixture.resolveOutsideReference,
   );
+  const boardFiles = useBoardFiles(artifact);
   return store === null ? null : (
     <CanvasArtifactEditor
       key={artifactId}
@@ -146,6 +158,7 @@ function FixtureCanvasSurface({
       awareness={fixture.awareness}
       user={fixture.user}
       sourceForBoard={sourceForBoard}
+      boardFiles={boardFiles}
       frameEvents={frameEvents}
       liveFrameLimit={LIVE_BOARD_LIMIT}
     />

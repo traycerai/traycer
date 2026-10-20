@@ -4,7 +4,7 @@ import {
 } from "../canvas-bootstrap";
 import { stampPositions } from "@traycer/html-source";
 import type { ForwardedShortcut } from "../forwarded-shortcuts";
-import { buildDocument } from "../sandbox-document";
+import { buildDocument, type ArtifactPageRole } from "../sandbox-document";
 import type { SandboxTheme } from "../theme-map";
 
 // Every intersecting policy must name the scheme: WebKit's wildcard does
@@ -29,9 +29,37 @@ export interface ArtifactDocumentOptions {
   readonly shortcuts: readonly ForwardedShortcut[];
 }
 
+/** Canvas boards report their links to the app; plain html pages follow them. */
+function isPlainHtmlPage(options: ArtifactDocumentOptions): boolean {
+  return options.canvas !== true || options.canvasLinks === "native";
+}
+
 export function buildArtifactDocument(
   html: string,
   options: ArtifactDocumentOptions,
+): string {
+  return composeArtifactDocument(
+    html,
+    options,
+    isPlainHtmlPage(options) ? "found" : null,
+  );
+}
+
+/**
+ * Stands in for an `.html` page the artifact does not have, so a link to it
+ * still loads a document that proves itself and tells the app the page is
+ * missing, instead of a blank browser error the app cannot see.
+ */
+export function buildMissingPageDocument(
+  options: ArtifactDocumentOptions,
+): string {
+  return composeArtifactDocument("", options, "missing");
+}
+
+function composeArtifactDocument(
+  html: string,
+  options: ArtifactDocumentOptions,
+  artifactPage: ArtifactPageRole,
 ): string {
   let extraScript: string | undefined;
   if (options.canvas === true) {
@@ -47,6 +75,7 @@ export function buildArtifactDocument(
         : html,
     ...options,
     extraScript,
+    artifactPage,
     theme: {
       ...options.theme,
       variables: Object.entries(options.theme.variables),

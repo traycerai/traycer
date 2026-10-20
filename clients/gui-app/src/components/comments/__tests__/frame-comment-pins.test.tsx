@@ -70,6 +70,7 @@ function createBridge(box: CanvasBox | null): SandboxBridgeHost {
       canvas: true,
       nonce: "n",
       forwardedShortcuts: [],
+      pages: null,
     },
     hostContext: {
       theme: "light",

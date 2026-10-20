@@ -52,6 +52,7 @@ describe("<SandboxFrame /> link confirm", () => {
         onStatus={(status) => statuses.push(status)}
         onRequestTeardown={() => undefined}
         displayMode="inline"
+        pageNavigation={null}
         onBridge={null}
         ref={null}
       />,
@@ -94,6 +95,7 @@ describe("<SandboxFrame /> unexpected disposal", () => {
         onStatus={onStatus}
         onRequestTeardown={() => undefined}
         displayMode="inline"
+        pageNavigation={null}
         onBridge={null}
         ref={null}
       />

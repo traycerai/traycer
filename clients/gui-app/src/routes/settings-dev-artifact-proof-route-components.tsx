@@ -159,6 +159,7 @@ function ArtifactProof() {
         onStatus={setStatus}
         onRequestTeardown={ignore}
         displayMode="inline"
+        pageNavigation={null}
         onBridge={null}
         ref={null}
       />
@@ -181,6 +182,7 @@ function ArtifactProof() {
         onStatus={ignore}
         onRequestTeardown={ignore}
         displayMode="inline"
+        pageNavigation={null}
         onBridge={null}
         ref={null}
       />

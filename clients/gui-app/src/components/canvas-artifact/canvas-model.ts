@@ -53,9 +53,16 @@ export function boardFrame(board: CanvasBoard): CanvasBoardFrame {
     h: Math.max(60, board.h ?? 800),
   };
 }
+/**
+ * `files` holds the committed manifest's paths. `canvas.json` can name a
+ * board whose file was never committed, and such a board is left off the
+ * page rather than drawn as a frame with nothing to load; its place in the
+ * layout is kept. `null`, before any manifest is known, keeps every board.
+ */
 export function canvasPageItems(
   snapshot: CanvasLayoutSnapshot,
   page: string,
+  files: ReadonlySet<string> | null,
 ): CanvasPageItems {
   const first = snapshot.pages.at(0)?.id ?? "";
   const onPage = (item: CanvasBoard | CanvasNote): boolean =>
@@ -63,22 +70,24 @@ export function canvasPageItems(
   return {
     boards: snapshot.order.flatMap((path) => {
       const board = snapshot.boards[path];
-      return Object.hasOwn(snapshot.boards, path) && onPage(board)
+      return Object.hasOwn(snapshot.boards, path) &&
+        onPage(board) &&
+        (files === null || files.has(path))
         ? [[path, board] as [string, CanvasBoard]]
         : [];
     }),
     notes: Object.entries(snapshot.notes).filter(([, note]) => onPage(note)),
   };
 }
+/** The page's boards nearest the centre, the ones worth a live frame. */
 export function selectLiveBoards(
-  snapshot: CanvasLayoutSnapshot,
-  page: string,
+  items: CanvasPageItems,
   center: CanvasPoint,
   limit: number,
 ): ReadonlySet<string> {
   return new Set(
-    canvasPageItems(snapshot, page)
-      .boards.map(([path, board], order) => {
+    items.boards
+      .map(([path, board], order) => {
         const frame = boardFrame(board);
         const distance =
           (frame.x + frame.w / 2 - center.x) ** 2 +

@@ -181,6 +181,7 @@ function artifactFrame(options: {
       onStatus={() => undefined}
       onRequestTeardown={() => undefined}
       displayMode="inline"
+      pageNavigation={null}
       onBridge={options.onBridge}
       ref={null}
     />

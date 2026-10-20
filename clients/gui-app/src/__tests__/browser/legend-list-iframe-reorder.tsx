@@ -51,6 +51,7 @@ export function RowView({ row }: { readonly row: Row }) {
         onStatus={(status) => record(row.id, status)}
         onRequestTeardown={() => undefined}
         displayMode="inline"
+        pageNavigation={null}
         onBridge={null}
         ref={null}
       />

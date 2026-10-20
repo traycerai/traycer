@@ -5,14 +5,12 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import {
-  SandboxFrame,
-  type SandboxSource,
-} from "@/components/sandbox/sandbox-frame";
+import type { SandboxSource } from "@/components/sandbox/sandbox-frame";
 import type {
   SandboxBridgeHost,
   SandboxStatus,
 } from "@/lib/sandbox/bridge-host";
+import { ArtifactPagesFrame } from "./artifact-pages-frame";
 import { HtmlSelectionLayer } from "./html-selection-layer";
 import { FrameCommentSurfaceProvider } from "@/components/comments/frame-comment-surface";
 import {
@@ -31,7 +29,6 @@ export interface HtmlArtifactFrameContext {
   readonly servedSha256: string | null;
 }
 
-const NO_PERMISSIONS = [] as const;
 const noop = (): void => undefined;
 
 export function HtmlArtifactFrame(props: {
@@ -100,50 +97,49 @@ export function HtmlArtifactFrame(props: {
     bridge: ready ? (document?.bridge ?? null) : null,
     servedSha256: document?.servedSha256 ?? null,
   };
+  // Selection and comments are anchored to the entry page's bytes, so they
+  // stand down while the reader is on another page of the artifact.
+  const renderOverlay = (onEntryPage: boolean): ReactNode => (
+    <>
+      {selectable && onEntryPage ? (
+        <HtmlSelectionLayer
+          artifactId={artifactId}
+          servedSha256={context.servedSha256}
+          bridge={context.bridge}
+          frame={frame}
+          actionControls={(selection) =>
+            props.actionControls?.(selection, context)
+          }
+          overlay={props.overlay}
+          toolbarControls={props.toolbarControls}
+        />
+      ) : null}
+      {onEntryPage ? props.renderComments?.(context) : null}
+      {!selectable && onEntryPage ? (
+        <div className="absolute right-2 top-2 z-30 rounded-md bg-popover">
+          {props.toolbarControls}
+        </div>
+      ) : null}
+    </>
+  );
   return (
     <FrameCommentSurfaceProvider>
-      <div className="relative h-full w-full">
-        <SandboxFrame
+      <div className="h-full w-full">
+        <ArtifactPagesFrame
           source={source}
-          kind="page"
           title={props.title}
-          appName={null}
-          networkPolicy="https-only"
-          appCsp={null}
-          permissions={NO_PERMISSIONS}
-          appRequests={null}
           className="h-full w-full"
           height={null}
           onSize={noop}
           onStatus={onStatus}
-          onRequestTeardown={noop}
-          displayMode="inline"
           onBridge={onBridge}
           onTextSelection={(range) => {
             if (selectable && ready)
               useHtmlSelectionStore.getState().setTextRange(artifactId, range);
           }}
-          ref={setFrame}
+          onFrame={setFrame}
+          renderOverlay={renderOverlay}
         />
-        {selectable ? (
-          <HtmlSelectionLayer
-            artifactId={artifactId}
-            servedSha256={context.servedSha256}
-            bridge={context.bridge}
-            frame={frame}
-            actionControls={(selection) =>
-              props.actionControls?.(selection, context)
-            }
-            overlay={props.overlay}
-            toolbarControls={props.toolbarControls}
-          />
-        ) : null}
-        {props.renderComments?.(context)}
-        {!selectable ? (
-          <div className="absolute right-2 top-2 z-30 rounded-md bg-popover">
-            {props.toolbarControls}
-          </div>
-        ) : null}
       </div>
     </FrameCommentSurfaceProvider>
   );

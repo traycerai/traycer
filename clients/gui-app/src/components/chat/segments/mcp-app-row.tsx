@@ -622,6 +622,7 @@ function LiveMcpApp(props: LiveMcpAppProps) {
                 onStatus={handleStatus}
                 onRequestTeardown={() => tearDown(() => setClosed(true))}
                 displayMode={displayMode}
+                pageNavigation={null}
                 onBridge={handleBridge}
                 ref={null}
               />

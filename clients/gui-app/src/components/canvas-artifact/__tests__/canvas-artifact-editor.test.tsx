@@ -204,6 +204,7 @@ function editorElement(
       awareness={null}
       user={{ name: "Ada", color: "#112233" }}
       sourceForBoard={sourceForBoard}
+      boardFiles={null}
       frameEvents={frameEvents}
       liveFrameLimit={0}
     />

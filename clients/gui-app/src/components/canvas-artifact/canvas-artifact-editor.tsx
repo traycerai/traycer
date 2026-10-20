@@ -101,6 +101,8 @@ export interface CanvasArtifactEditorProps {
   readonly awareness: Awareness | null;
   readonly user: CollabUser;
   readonly sourceForBoard: (path: string) => SandboxSource | null;
+  /** The committed manifest's paths; see {@link canvasPageItems}. */
+  readonly boardFiles: ReadonlySet<string> | null;
   readonly frameEvents: CanvasFrameEvents | null;
   readonly liveFrameLimit: number;
 }
@@ -233,6 +235,7 @@ export function CanvasArtifactEditor({
   awareness,
   user,
   sourceForBoard,
+  boardFiles,
   frameEvents,
   liveFrameLimit,
   viewOnly,
@@ -287,22 +290,21 @@ export function CanvasArtifactEditor({
     return () => observer.disconnect();
   }, []);
   const items = useMemo(
-    () => canvasPageItems(snapshot, page),
-    [snapshot, page],
+    () => canvasPageItems(snapshot, page, boardFiles),
+    [snapshot, page, boardFiles],
   );
   const activeFullscreen = currentFullscreen(snapshot.boards, fullscreen);
   const liveBoards = useMemo(
     () =>
       selectLiveBoards(
-        snapshot,
-        page,
+        items,
         {
           x: (size.width / 2 - settledViewport.x) / settledViewport.zoom,
           y: (size.height / 2 - settledViewport.y) / settledViewport.zoom,
         },
         Math.max(0, liveFrameLimit - (activeFullscreen === null ? 0 : 1)),
       ),
-    [snapshot, page, size, settledViewport, liveFrameLimit, activeFullscreen],
+    [items, size, settledViewport, liveFrameLimit, activeFullscreen],
   );
   const activeTool: CanvasTool = spaceHeld ? "hand" : tool;
   const selectEnabled = canvasSelectionEnabled(readOnly, play, activeTool);

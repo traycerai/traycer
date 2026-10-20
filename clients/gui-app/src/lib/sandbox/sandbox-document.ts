@@ -19,6 +19,15 @@ export interface LoaderTheme {
   readonly variables: readonly (readonly [string, string])[];
 }
 
+/**
+ * A served plain-html artifact is a folder of pages: `"found"` lets a link to
+ * a sibling page navigate the frame and reports which page is showing, and
+ * `"missing"` is the stand-in the artifact server composes for a page the
+ * folder lacks, which also says so. `null` for loader documents and canvas
+ * boards, whose links the app handles itself.
+ */
+export type ArtifactPageRole = "found" | "missing" | null;
+
 export interface LoaderResource {
   /** Trusted served-document extension; the standalone loader supplies none. */
   readonly extraScript?: string;
@@ -27,6 +36,7 @@ export interface LoaderResource {
   readonly nonce: string;
   readonly theme: LoaderTheme;
   readonly shortcuts: readonly LoaderShortcut[];
+  readonly artifactPage: ArtifactPageRole;
 }
 
 interface BootstrapConfig {
@@ -35,6 +45,7 @@ interface BootstrapConfig {
   readonly paintBackground: boolean;
   /** False for an MCP App, which applies the host context's theme itself. */
   readonly applyTheme: boolean;
+  readonly artifactPage: ArtifactPageRole;
 }
 
 /**
@@ -260,6 +271,18 @@ function bootstrapMain(config: BootstrapConfig): void {
     passive: true,
   });
 
+  // Links the frame follows itself: an anchor within this page, and on a
+  // served artifact page another `.html` page of the same folder, which loads
+  // through the same server and prelude. Any other file would load without
+  // the prelude and never prove itself to the app.
+  const followsInFrame = (url: URL): boolean => {
+    if (url.protocol !== location.protocol || url.host !== location.host) {
+      return false;
+    }
+    if (url.pathname === location.pathname) return url.hash !== "";
+    return config.artifactPage !== null && /\.html?$/i.test(url.pathname);
+  };
+
   // Bubble phase on window, so a page that handles its own clicks (and calls
   // preventDefault) keeps them.
   window.addEventListener("click", (event) => {
@@ -273,12 +296,7 @@ function bootstrapMain(config: BootstrapConfig): void {
     } catch {
       return;
     }
-    const inPage =
-      url.protocol === location.protocol &&
-      url.host === location.host &&
-      url.pathname === location.pathname &&
-      url.hash !== "";
-    if (inPage) return;
+    if (followsInFrame(url)) return;
     event.preventDefault();
     if (url.protocol !== "http:" && url.protocol !== "https:") return;
     linkRequestId += 1;
@@ -306,10 +324,17 @@ function bootstrapMain(config: BootstrapConfig): void {
     "load",
     () => {
       loaded = true;
-      notify("traycer/notifications/document-ready", {
-        nonce: config.nonce,
-        height: lastHeight,
-      });
+      // A served artifact page names itself, so the app can follow the
+      // reader's moves between the folder's pages.
+      notify(
+        "traycer/notifications/document-ready",
+        config.artifactPage === null
+          ? { nonce: config.nonce, height: lastHeight }
+          : { nonce: config.nonce, height: lastHeight, url: location.href },
+      );
+      if (config.artifactPage === "missing") {
+        notify("traycer/notifications/page-missing", { nonce: config.nonce });
+      }
       // Served frames drop size reports until the nonce proves this document.
       lastWidth = lastHeight = -1;
       reportSize();
@@ -368,6 +393,7 @@ export const buildDocument = (resource: LoaderResource): string => {
     paintBackground:
       resource.theme.appliesToRoot && resource.theme.background !== null,
     applyTheme: resource.theme.appliesToRoot,
+    artifactPage: resource.artifactPage,
   };
   return (
     "<!doctype html>" +

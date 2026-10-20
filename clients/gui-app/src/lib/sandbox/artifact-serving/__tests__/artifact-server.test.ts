@@ -17,6 +17,7 @@ import {
 } from "../artifact-address";
 import {
   buildArtifactDocument,
+  buildMissingPageDocument,
   type ArtifactDocumentOptions,
 } from "../artifact-document";
 import type {
@@ -309,6 +310,43 @@ describe("ArtifactServer.serve — manifest and outside resolver", () => {
       reason: "missing",
       status: 404,
     });
+  });
+});
+
+describe("ArtifactServer.serve — a page the artifact lacks", () => {
+  it("answers a missing .html with the stand-in page, and any other missing file with 404", async () => {
+    const readSpan = vi.fn();
+    const server = new ArtifactServer({
+      treePath: "site",
+      manifest: manifestWith("index.html", entry({})),
+      readSpan,
+      document: DOCUMENT_OPTIONS,
+    });
+    const page = await server.serve({
+      path: "site/gone.html",
+      offset: 0,
+      length: FOUR_MIB,
+      signal: signal(),
+    });
+    expect(page.kind).toBe("bytes");
+    if (page.kind === "bytes") {
+      expect(new TextDecoder().decode(page.bytes)).toBe(
+        buildMissingPageDocument(DOCUMENT_OPTIONS),
+      );
+      expect(page.mediaType).toBe("text/html; charset=utf-8");
+    }
+    const image = await server.serve({
+      path: "site/gone.png",
+      offset: 0,
+      length: 5,
+      signal: signal(),
+    });
+    expect(image).toEqual({
+      kind: "unavailable",
+      reason: "missing",
+      status: 404,
+    });
+    expect(readSpan).not.toHaveBeenCalled();
   });
 });
 
