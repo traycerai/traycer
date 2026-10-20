@@ -118,11 +118,14 @@ export type ChatContinueHereRequest = z.infer<
  *   owns the chat (or not a sandbox at all): clone instead.
  * - `already-moved` - another continue already moved the chat to
  *   `ownerHostId`.
+ * - `never-published` - the removed sandbox never published the chat, so
+ *   there is nothing to continue from.
  */
 export const CHAT_CONTINUE_REFUSALS = [
   "source-live",
   "other-environment",
   "already-moved",
+  "never-published",
 ] as const;
 export type ChatContinueRefusal = (typeof CHAT_CONTINUE_REFUSALS)[number];
 

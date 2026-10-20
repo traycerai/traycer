@@ -20,9 +20,15 @@ import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
 import { makePublishedChatTileRef } from "@/stores/epics/canvas/tile-schema/published-chat-tile";
 import { ChatDeadTileBannerContainer } from "@/components/epic-canvas/renderers/chat-tile";
 import {
+  ChatCatchingUpBanner,
   ChatDeadTileBanner,
   type ChatDeadTileBannerReason,
 } from "@/components/epic-canvas/renderers/dead-tile-banner";
+import type { ChatCatchingUpReason } from "@traycer/protocol/host/chat-serving/index";
+import {
+  useChatServing,
+  useChatServingHostId,
+} from "@/lib/chats/chat-serving-witness";
 import { useExistingChatSessionFatalClose } from "@/lib/registries/chat-session-registry";
 import {
   cloudChatListAuthorizesRecordSweep,
@@ -791,12 +797,30 @@ function usePublishedChatFallbackRef(args: {
   readonly bannerReason: ChatDeadTileBannerReason | null;
   readonly isCloudKnown: boolean;
   readonly cloudListAuthorizesChatAbsence: boolean;
+  /** Why a team sandbox's chat is catching up, shown above a substituted copy. */
+  readonly catchingUp: ChatCatchingUpReason | null;
 } {
   const { activeTab, epicId, liveArtifact, activeHostId } = args;
   const isChat = activeTab.type === "chat";
   const isSameHost = activeHostId === activeTab.hostId;
   const reachability = useHostReachability(
     isChat ? activeTab.hostId : UNKNOWN_HOST_PLACEHOLDER,
+  );
+  // The serving witness of a team sandbox's chat, read (and so retained) HERE
+  // as well as in `chat-tile.tsx`, because a substitution unmounts that tile:
+  // the decision below has to keep hearing it to give the tab back when the
+  // chat goes live. The peer it names is the one whose reachability counts:
+  // a sandbox asleep under a chat the pool serves is not an absent chat.
+  const servingKey = {
+    hostId: isChat ? activeTab.hostId : UNKNOWN_HOST_PLACEHOLDER,
+    epicId,
+    chatId: activeTab.id,
+  };
+  const servingHostId = useChatServingHostId(servingKey);
+  const serving = useChatServing(servingKey);
+  const servedByPool = isChat && servingHostId !== activeTab.hostId;
+  const servingReachability = useHostReachability(
+    isChat ? servingHostId : UNKNOWN_HOST_PLACEHOLDER,
   );
   // The tab's OWN bound host (`activeTab.hostId`), which is exactly the host
   // `chat-tile.tsx` opened the session under - peeking any other host's
@@ -842,9 +866,11 @@ function usePublishedChatFallbackRef(args: {
   const decision = resolveChatFallbackDecision({
     isChat,
     isSameHost,
-    hostUnreachable: reachability.status === "unreachable",
+    hostUnreachable: servingReachability.status === "unreachable",
     confirmedAbsent,
-    indexUnavailable: fatalCode === CHAT_INDEX_UNAVAILABLE_CODE,
+    // Held only while the pool still serves the chat: once the witness names
+    // the tab's host, the live tile opens a fresh stream there.
+    indexUnavailable: servedByPool && fatalCode === CHAT_INDEX_UNAVAILABLE_CODE,
     cloudChatOwnerUserId: cloudChatRecord?.identity.ownerUserId ?? null,
     liveArtifactOwnerUserId,
   });
@@ -898,6 +924,10 @@ function usePublishedChatFallbackRef(args: {
       cloudChats,
       cloudChatsCloudAuthorized,
     ),
+    catchingUp:
+      servedByPool && serving?.state === "catching-up"
+        ? serving.catchingUp
+        : null,
   };
 }
 
@@ -958,6 +988,7 @@ export function ActiveTabBody(props: ActiveTabBodyProps) {
     bannerReason: substitutionBanner,
     isCloudKnown,
     cloudListAuthorizesChatAbsence,
+    catchingUp,
   } = usePublishedChatFallbackRef({
     activeTab,
     epicId,
@@ -1116,6 +1147,12 @@ export function ActiveTabBody(props: ActiveTabBodyProps) {
             // ownership verdict cannot disagree with the copy rendered under
             // it, and does not depend on the container's own cloud lookup.
             sourceOwnerUserId={publishedFallbackRef.ownerUserId}
+          />
+        ) : null}
+        {catchingUp !== null ? (
+          <ChatCatchingUpBanner
+            reason={catchingUp}
+            testId={`chat-catching-up-${activeTab.id}`}
           />
         ) : null}
         <EpicNodeTile

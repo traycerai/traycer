@@ -98,6 +98,10 @@ export function useChatContinueHere(args: {
               toast("This agent's sandbox still exists. Resume it instead.");
               return;
             }
+            if (answer.reason === "never-published") {
+              toast("This agent has nothing saved to continue from.");
+              return;
+            }
           }
           // Accepted, ready, or already moved by another press: open the
           // chat where it now belongs.
