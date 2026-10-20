@@ -285,7 +285,7 @@ function useSimulatorConnect(args: {
 } {
   const { client, hostId, epicId, node, session, onOpened, placeTile } = args;
   const { mutation, supported } = useSimulatorOpenMutation(client, hostId);
-  const { mutate } = mutation;
+  const { mutateAsync } = mutation;
   const [awaiting, setAwaiting] = useState(false);
   // During render (React's "storing information from previous renders"): the
   // session the open asked for is here, so nothing is awaited any more.
@@ -293,18 +293,23 @@ function useSimulatorConnect(args: {
   const connect = useCallback(
     (target: SimulatorSummary) => {
       setAwaiting(true);
-      mutate(
-        {
-          epicId,
-          simulatorId: target.simulatorId,
-          platform: target.platform,
-          boot: true,
-        },
-        {
-          onSettled: () => {
-            setAwaiting(false);
-          },
-          onSuccess: (response) => {
+      // The answer is read off the mutation's OWN promise, never off
+      // `mutate`'s per-call callbacks. Those reach only an observer that is
+      // still attached to the mutation, and the open is usually sent from the
+      // gate's MOUNT effect; in development React runs mount effects twice,
+      // and the unsubscribe between the two runs detaches this observer from
+      // the mutation it had just started, so its success never arrived and a
+      // tile that booted its own simulator read as having merely attached.
+      // The failure itself is already toasted by the mutation; here it only
+      // ends the wait.
+      void mutateAsync({
+        epicId,
+        simulatorId: target.simulatorId,
+        platform: target.platform,
+        boot: true,
+      })
+        .then(
+          (response) => {
             onOpened();
             // The host's id is authoritative: an Android AVD becomes a serial
             // on boot, and the stream answers to the serial. This tile keeps
@@ -319,10 +324,13 @@ function useSimulatorConnect(args: {
               }),
             );
           },
-        },
-      );
+          () => undefined,
+        )
+        .finally(() => {
+          setAwaiting(false);
+        });
     },
-    [epicId, hostId, mutate, node.simulatorId, onOpened, placeTile],
+    [epicId, hostId, mutateAsync, node.simulatorId, onOpened, placeTile],
   );
   return { connect, connecting: awaiting, supported };
 }

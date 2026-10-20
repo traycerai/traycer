@@ -1,10 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { StrictMode } from "react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   act,
   cleanup,
   fireEvent,
   render,
   screen,
+  waitFor,
 } from "@testing-library/react";
 import type {
   SimulatorOpenRequest,
@@ -36,20 +39,22 @@ const HOST = "host-1";
 const EPIC = "epic-1";
 const UDID = "udid-1";
 
-/** The tile's `simulator.open` as it calls it: variables plus the answer hook. */
-type OpenMutate = (
+/**
+ * The host's side of `simulator.open`: what the tile's REAL TanStack mutation
+ * calls, so every per-call callback the tile hangs on the mutation runs the
+ * way it does in the app. By default the host never answers (a boot in
+ * flight); a test that wants an answer installs one with
+ * `mockImplementationOnce` before the tile sends the open.
+ */
+type OpenOnHost = (
   variables: SimulatorOpenRequest,
-  options: {
-    readonly onSuccess: (response: SimulatorOpenResponse) => void;
-    readonly onSettled: () => void;
-  },
-) => void;
+) => Promise<SimulatorOpenResponse>;
 
 const fakes = vi.hoisted(() => ({
   reachability: "reachable",
   sessions: null as SimulatorSessionsState | null,
   configSet: vi.fn(),
-  open: vi.fn<OpenMutate>(),
+  open: vi.fn<OpenOnHost>(() => new Promise<SimulatorOpenResponse>(() => {})),
   close: vi.fn(),
   shutdown: vi.fn(),
   action: vi.fn(),
@@ -82,7 +87,12 @@ vi.mock("@/hooks/host/use-host-supports-method", () => ({
 vi.mock("@/lib/simulator-view/use-simulator-sessions", () => ({
   useSimulatorSessionsForHost: () => fakes.sessions,
 }));
-vi.mock("@/hooks/simulator/use-simulator-mutations", () => {
+vi.mock("@/hooks/simulator/use-simulator-mutations", async () => {
+  // The open rides a real mutation: the close rule hangs on its per-call
+  // `onSuccess`, which TanStack only delivers to an observer that is still
+  // mounted and still the mutation's own, so a hand-rolled fake would pass
+  // whatever the tile did with it.
+  const { useMutation } = await import("@tanstack/react-query");
   const gated = (mutate: unknown) => ({
     mutation: { mutate, isPending: false, variables: undefined },
     supported: true,
@@ -92,7 +102,12 @@ vi.mock("@/hooks/simulator/use-simulator-mutations", () => {
       data: { enabled: false, agentAccess: false },
     }),
     useSimulatorConfigSetMutation: () => gated(fakes.configSet),
-    useSimulatorOpenMutation: () => gated(fakes.open),
+    useSimulatorOpenMutation: () => ({
+      mutation: useMutation({
+        mutationFn: (variables: SimulatorOpenRequest) => fakes.open(variables),
+      }),
+      supported: true,
+    }),
     useSimulatorCloseMutation: () => gated(fakes.close),
     useSimulatorShutdownMutation: () => gated(fakes.shutdown),
     useSimulatorActionMutation: () => gated(fakes.action),
@@ -240,7 +255,11 @@ function withTargetBooted(state: SimulatorState): SimulatorState {
   };
 }
 
-/** Re-renders with whatever `fakes.sessions` now says, as the stream would. */
+/**
+ * Re-renders with whatever `fakes.sessions` now says, as the stream would.
+ * Under StrictMode, as the desktop renders in development, so a double-run
+ * effect or a replayed render is part of what the suite proves.
+ */
 function renderTile(): () => void {
   const node = makeSimulatorTileRef({
     hostId: HOST,
@@ -248,22 +267,56 @@ function renderTile(): () => void {
     platform: "ios",
     name: "iPhone 16",
   });
+  const queryClient = new QueryClient({
+    defaultOptions: { mutations: { retry: false } },
+  });
   // A fresh element each time: React skips a subtree handed the very same
   // element object, and the fake hook is only re-read on a real render.
   const tile = () => (
-    <TooltipProvider>
-      <SimulatorTile
-        node={node}
-        viewTabId="tab-1"
-        tileId="pane-1"
-        epicId={EPIC}
-        isActive
-      />
-    </TooltipProvider>
+    <StrictMode>
+      <QueryClientProvider client={queryClient}>
+        <TooltipProvider>
+          <SimulatorTile
+            node={node}
+            viewTabId="tab-1"
+            tileId="pane-1"
+            epicId={EPIC}
+            isActive
+          />
+        </TooltipProvider>
+      </QueryClientProvider>
+    </StrictMode>
   );
   const { rerender } = render(tile());
   return () => rerender(tile());
 }
+
+/** Lets a mutation the tile just sent reach the host fake (TanStack dispatches after awaiting its hooks). */
+async function flush(): Promise<void> {
+  await act(async () => {
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+}
+
+const OPENED: SimulatorOpenResponse = {
+  session: {
+    epicId: EPIC,
+    ownerUserId: "user-1",
+    hostId: HOST,
+    simulatorId: UDID,
+    platform: "ios",
+    openedAt: "2026-10-18T00:00:00.000Z",
+  },
+  simulator: {
+    simulatorId: UDID,
+    platform: "ios",
+    name: "iPhone 16",
+    version: "18.0",
+    booted: true,
+    physical: false,
+  },
+};
 
 beforeEach(() => {
   fakes.reachability = "reachable";
@@ -366,11 +419,13 @@ describe("SimulatorTile", () => {
     expect(fakes.refresh).toHaveBeenCalledTimes(1);
   });
 
-  it("boots a cold simulator once when an explicit open placed the tile, and not when the tile is merely shown", () => {
+  it("boots a cold simulator once when an explicit open placed the tile, and not when the tile is merely shown", async () => {
     // A restored (or re-rendered) cold tile waits for the person.
     const rerender = renderTile();
+    await flush();
     expect(fakes.open).not.toHaveBeenCalled();
     rerender();
+    await flush();
     expect(fakes.open).not.toHaveBeenCalled();
     cleanup();
 
@@ -379,16 +434,21 @@ describe("SimulatorTile", () => {
       simulatorTileId({ hostId: HOST, simulatorId: UDID }),
     );
     const rerenderRequested = renderTile();
-    expect(fakes.open).toHaveBeenCalledTimes(1);
-    expect(fakes.open).toHaveBeenCalledWith(
-      { epicId: EPIC, simulatorId: UDID, platform: "ios", boot: true },
-      expect.anything(),
-    );
+    await waitFor(() => {
+      expect(fakes.open).toHaveBeenCalledTimes(1);
+    });
+    expect(fakes.open).toHaveBeenCalledWith({
+      epicId: EPIC,
+      simulatorId: UDID,
+      platform: "ios",
+      boot: true,
+    });
     rerenderRequested();
+    await flush();
     expect(fakes.open).toHaveBeenCalledTimes(1);
   });
 
-  it("drops a request for a simulator this tile already shows live", () => {
+  it("drops a request for a simulator this tile already shows live", async () => {
     fakes.sessions = sessions({
       state: { ...withTargetBooted(READY_STATE), sessions: [SESSION] },
     });
@@ -396,23 +456,29 @@ describe("SimulatorTile", () => {
       simulatorTileId({ hostId: HOST, simulatorId: UDID }),
     );
     const rerender = renderTile();
+    await flush();
     expect(fakes.open).not.toHaveBeenCalled();
     // The session ends later: the stale request must not boot anything.
     fakes.sessions = sessions({ state: withTargetBooted(READY_STATE) });
     rerender();
+    await flush();
     expect(fakes.open).not.toHaveBeenCalled();
   });
 
-  it("offers to boot a cold simulator, and places another row as its own tile without booting it", () => {
+  it("offers to boot a cold simulator, and places another row as its own tile without booting it", async () => {
     renderTile();
     expect(screen.getByTestId("simulator-inventory").textContent).toContain(
       "Powered off",
     );
     fireEvent.click(screen.getByTestId("simulator-connect"));
-    expect(fakes.open).toHaveBeenCalledWith(
-      { epicId: EPIC, simulatorId: UDID, platform: "ios", boot: true },
-      expect.anything(),
-    );
+    await waitFor(() => {
+      expect(fakes.open).toHaveBeenCalledWith({
+        epicId: EPIC,
+        simulatorId: UDID,
+        platform: "ios",
+        boot: true,
+      });
+    });
     const other = screen.getByTestId("simulator-inventory-row-udid-2");
     expect(other.textContent).toContain("iPad Air");
     fireEvent.click(other);
@@ -422,13 +488,16 @@ describe("SimulatorTile", () => {
       target: { tabId: "tab-1" },
     });
     // The other tile connects on its own; this one sent no open for it.
+    await flush();
     expect(fakes.open).toHaveBeenCalledTimes(1);
   });
 
-  it("attaches a booted simulator on its own, without a click", () => {
+  it("attaches a booted simulator on its own, without a click", async () => {
     fakes.sessions = sessions({ state: withTargetBooted(READY_STATE) });
     renderTile();
-    expect(fakes.open).toHaveBeenCalledTimes(1);
+    await waitFor(() => {
+      expect(fakes.open).toHaveBeenCalledTimes(1);
+    });
     expect(fakes.open.mock.calls[0][0]).toMatchObject({ simulatorId: UDID });
   });
 
@@ -460,21 +529,35 @@ describe("SimulatorTile", () => {
     expect(fakes.screenshot).toHaveBeenCalledTimes(1);
   });
 
-  it("ends the session on close when the host answered this tile's open", () => {
+  it("ends the session on close when the host answered the open a row click made this tile send", async () => {
+    // The row click filed its request; the gate sends the open; the stream
+    // delivers the session FIRST (the gate unmounts for the live view), and
+    // only then does the host answer the RPC - to the tile, which outlives
+    // the gate and is what the close rule hangs on.
+    let answer: ((response: SimulatorOpenResponse) => void) | null = null;
+    fakes.open.mockImplementationOnce(
+      () =>
+        new Promise<SimulatorOpenResponse>((resolve) => {
+          answer = resolve;
+        }),
+    );
+    requestSimulatorConnect(
+      simulatorTileId({ hostId: HOST, simulatorId: UDID }),
+    );
     fakes.sessions = sessions({ state: withTargetBooted(READY_STATE) });
     const rerender = renderTile();
-    expect(fakes.open).toHaveBeenCalledTimes(1);
-    // The host recorded the session; the stream delivers it first, then the
-    // RPC answers - to the tile, which outlives the inventory gate.
+    await waitFor(() => {
+      expect(fakes.open).toHaveBeenCalledTimes(1);
+    });
     fakes.sessions = sessions({
       state: { ...withTargetBooted(READY_STATE), sessions: [SESSION] },
     });
     rerender();
-    act(() => {
-      fakes.open.mock.calls[0][1].onSuccess({
-        session: SESSION,
-        simulator: { ...READY_STATE.simulators[0], booted: true },
-      });
+    expect(screen.getByTestId("simulator-toolbar")).toBeTruthy();
+    await act(async () => {
+      answer?.(OPENED);
+      // TanStack awaits its lifecycle hooks and notifies on its own timer.
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
     });
     fireEvent.click(screen.getByTestId("simulator-close"));
     expect(fakes.closeTile).toHaveBeenCalledTimes(1);
@@ -485,7 +568,7 @@ describe("SimulatorTile", () => {
     });
   });
 
-  it("leaves the session open on close when a connect request sent the open but the host never answered it", () => {
+  it("leaves the session open on close when a connect request sent the open but the host never answered it", async () => {
     // The row click's request makes the gate send `simulator.open`; the
     // session that then shows up on the stream is not proven to be this
     // tile's until the host answers that open.
@@ -494,7 +577,9 @@ describe("SimulatorTile", () => {
     );
     fakes.sessions = sessions({ state: withTargetBooted(READY_STATE) });
     const rerender = renderTile();
-    expect(fakes.open).toHaveBeenCalledTimes(1);
+    await waitFor(() => {
+      expect(fakes.open).toHaveBeenCalledTimes(1);
+    });
     fakes.sessions = sessions({
       state: { ...withTargetBooted(READY_STATE), sessions: [SESSION] },
     });
@@ -504,13 +589,15 @@ describe("SimulatorTile", () => {
     expect(fakes.close).not.toHaveBeenCalled();
   });
 
-  it("offers Boot and connect again once a session ends under it, even while its own open never settled", () => {
+  it("offers Boot and connect again once a session ends under it, even while its own open never settled", async () => {
     // The open the tile sent is still in flight on the RPC when the session
     // arrives on the stream; the host then ends that session (a device shut
     // down under the hub). The inventory that follows must be usable.
     fakes.sessions = sessions({ state: withTargetBooted(READY_STATE) });
     const rerender = renderTile();
-    expect(fakes.open).toHaveBeenCalledTimes(1);
+    await waitFor(() => {
+      expect(fakes.open).toHaveBeenCalledTimes(1);
+    });
     fakes.sessions = sessions({
       state: { ...withTargetBooted(READY_STATE), sessions: [SESSION] },
     });
@@ -523,7 +610,9 @@ describe("SimulatorTile", () => {
     expect(connect.textContent).toContain("Boot and connect");
     expect(connect).toHaveProperty("disabled", false);
     fireEvent.click(connect);
-    expect(fakes.open).toHaveBeenCalledTimes(2);
+    await waitFor(() => {
+      expect(fakes.open).toHaveBeenCalledTimes(2);
+    });
     // Sent again: in flight until the host answers or the session shows up.
     expect(screen.getByTestId("simulator-connect")).toHaveProperty(
       "disabled",
@@ -531,18 +620,19 @@ describe("SimulatorTile", () => {
     );
   });
 
-  it("leaves a session it only attached to - an agent's - open when the tile closes", () => {
+  it("leaves a session it only attached to - an agent's - open when the tile closes", async () => {
     fakes.sessions = sessions({
       state: { ...withTargetBooted(READY_STATE), sessions: [SESSION] },
     });
     renderTile();
+    await flush();
     expect(fakes.open).not.toHaveBeenCalled();
     fireEvent.click(screen.getByTestId("simulator-close"));
     expect(fakes.closeTile).toHaveBeenCalledTimes(1);
     expect(fakes.close).not.toHaveBeenCalled();
   });
 
-  it("does not reconnect on its own once its session is closed under it", () => {
+  it("does not reconnect on its own once its session is closed under it", async () => {
     fakes.sessions = sessions({
       state: { ...withTargetBooted(READY_STATE), sessions: [SESSION] },
     });
@@ -552,9 +642,12 @@ describe("SimulatorTile", () => {
     expect(screen.getByTestId("simulator-inventory").textContent).toContain(
       "not yet open in this task",
     );
+    await flush();
     expect(fakes.open).not.toHaveBeenCalled();
     fireEvent.click(screen.getByTestId("simulator-connect"));
-    expect(fakes.open).toHaveBeenCalledTimes(1);
+    await waitFor(() => {
+      expect(fakes.open).toHaveBeenCalledTimes(1);
+    });
   });
 
   it("opens the settings drawer from the toolbar and closes it again", () => {

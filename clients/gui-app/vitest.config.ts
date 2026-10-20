@@ -43,8 +43,12 @@ const MAX_TEST_WORKERS = Math.min(
 // were invisible for the same reason: the suite ran them uncompiled while the
 // desktop renderer compiles the whole tree, its dev server included (where
 // the freeze was seen).
+// `simulator-tile` keeps per-instance memory in render-time state writes
+// (whether its own `simulator.open` was answered, whether it has been live)
+// and reads a mutation's per-call callbacks; both are shapes the compiler
+// rewrites, so its suite runs compiled too.
 const REACT_COMPILER_REGRESSION_FILES =
-  /[/\\](?:composer-prompt-editor|use-workspace-file-list-subscription|shared-stream-subscription|use-header-tabs|use-pr-(?:list|detail)-subscription|auth-brand-splash|auth-landing-page|use-auth-splash-cover|relative-time|routing-card)\.(?:ts|tsx)$/;
+  /[/\\](?:composer-prompt-editor|use-workspace-file-list-subscription|shared-stream-subscription|use-header-tabs|use-pr-(?:list|detail)-subscription|auth-brand-splash|auth-landing-page|use-auth-splash-cover|relative-time|routing-card|simulator-tile)\.(?:ts|tsx)$/;
 
 export default defineConfig({
   // Run the affected composer boundary through the packaged desktop

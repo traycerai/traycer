@@ -228,6 +228,21 @@ describe("SimulatorsSidebarGroup", () => {
     expect(fakes.refresh).not.toHaveBeenCalled();
   });
 
+  it("asks again when the sessions stream comes back after a drop, and not on a mere re-render", () => {
+    const rerender = renderGroup();
+    expect(fakes.refresh).toHaveBeenCalledTimes(1);
+    // A host restart takes the stream down under a panel that stays mounted;
+    // the hub it had started is gone with the host.
+    fakes.sessions = sessions(STATE, "reconnecting");
+    rerender();
+    expect(fakes.refresh).toHaveBeenCalledTimes(1);
+    fakes.sessions = sessions(STATE, "live");
+    rerender();
+    expect(fakes.refresh).toHaveBeenCalledTimes(2);
+    rerender();
+    expect(fakes.refresh).toHaveBeenCalledTimes(2);
+  });
+
   it("offers Turn on while simulators are off, writing both switches", () => {
     fakes.sessions = sessions(
       {
