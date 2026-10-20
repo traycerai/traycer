@@ -32,7 +32,10 @@ import {
   type CloudChatRowExpansion,
 } from "@/components/epic-canvas/sidebar/epic-sidebar-cloud-chat-row";
 import type { UnifiedCloudChatEntry } from "@/lib/chats/unified-chat-list";
-import { CHAT_TREE_MESSAGE_HITS_NONE } from "@/components/epic-canvas/sidebar/epic-sidebar-message-hits-state";
+import {
+  CHAT_TREE_MESSAGE_HITS_NONE,
+  type ChatTreeMessageHits,
+} from "@/components/epic-canvas/sidebar/epic-sidebar-message-hits-state";
 import { STATUS_LABELS } from "@/components/epic-canvas/sidebar/epic-sidebar-tree-shared";
 import { useNewConversationModalOpenStore } from "@/stores/epics/new-conversation-modal-open-store";
 import { type EpicStreamClientFactory } from "@/stores/epics/open-epic/store";
@@ -623,6 +626,12 @@ function moreTriggerSnapshot(element: HTMLElement): {
 const opened: OpenedStoreForTest[] = [];
 
 function renderTree(): HTMLElement {
+  return renderTreeWithMessageHits(CHAT_TREE_MESSAGE_HITS_NONE);
+}
+
+function renderTreeWithMessageHits(
+  messageHits: ChatTreeMessageHits,
+): HTMLElement {
   const handle = createSession();
   opened.push(handle);
   render(
@@ -632,7 +641,7 @@ function renderTree(): HTMLElement {
           <ChatTreePanelBody
             epicId={EPIC_ID}
             tabId={TAB_ID}
-            messageHits={CHAT_TREE_MESSAGE_HITS_NONE}
+            messageHits={messageHits}
           />
         </DndContext>
       </EpicSessionContext.Provider>
@@ -1480,18 +1489,28 @@ describe("chat tree with the task on hosts", () => {
     taskHostsMount.view = TWO_MACHINES_VIEW;
     renderTree();
 
-    expect(screen.queryByTestId("task-host-groups")).toBeNull();
     expect(screen.queryByText("Hosts")).toBeNull();
     expect(screen.getByTestId(`epic-sidebar-item-${ROW_A}`)).toBeTruthy();
     expect(screen.getByTestId(`epic-sidebar-item-${ROW_B}`)).toBeTruthy();
   });
 
-  it("lets the tree fill the panel when there are no message hits", () => {
-    taskHostsMount.view = TWO_MACHINES_VIEW;
+  it("lets the tree fill the panel when no message hits follow it", () => {
     renderTree();
 
     const classes = treeContainerClasses();
     expect(classes).toContain("flex-1");
     expect(classes).not.toContain("shrink-0");
+  });
+
+  it("lets the rows shrink to their own height when message hits follow them", () => {
+    renderTreeWithMessageHits({
+      node: <div data-testid="message-hits-probe" />,
+      state: "hits",
+    });
+
+    expect(screen.getByTestId("message-hits-probe")).toBeTruthy();
+    const classes = treeContainerClasses();
+    expect(classes).toContain("shrink-0");
+    expect(classes).not.toContain("flex-1");
   });
 });

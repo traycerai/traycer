@@ -65,7 +65,7 @@ const inputs = vi.hoisted(() => {
   const registry: { current: { hosts: HostListItem[] } | null } = {
     current: null,
   };
-  // What the Hosts section composes its groups from, beside the task's rows.
+  // What the task-host groups are composed from, beside the task's rows.
   const teams: {
     current: readonly { readonly teamId: string; readonly name: string }[];
   } = { current: [] };
@@ -230,7 +230,7 @@ describe("mirrorLineOtherHostName", () => {
       row("h-globex", "Globex sandbox", GLOBEX),
       row("h-user-2", null, COLLABORATOR),
     ];
-    // Groups in the Hosts section's order: Personal, teams, collaborators. The
+    // Groups in the task-host groups' order: Personal, teams, collaborators. The
     // order of `hosts` (the wire order) is deliberately different.
     const groups = [
       group("personal", "Personal", [groupRow("h-viewer", "My laptop")]),
@@ -444,7 +444,7 @@ describe("mirrorLineOtherHostName", () => {
       });
     }
 
-    it("has the label the Hosts section gives unnamed hosts", () => {
+    it("has the label the task-host groups give unnamed hosts", () => {
       expect(TASK_HOST_UNNAMED_LABEL).toBe("Unnamed host");
     });
 
@@ -798,7 +798,7 @@ describe("useComposerMirrorLine", () => {
     });
   });
 
-  it("names the label the Hosts section shows for the viewer's own host, from the directory", () => {
+  it("names the label the task-host groups give the viewer's own host, from the directory", () => {
     inputs.directory.current = new Map<string, TaskHostDirectoryFact>([
       ["h-laptop", { label: "MacBook Pro", state: "online" }],
     ]);

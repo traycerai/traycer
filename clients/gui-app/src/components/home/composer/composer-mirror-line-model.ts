@@ -21,9 +21,9 @@ function samePrincipal(a: TaskHostPrincipal, b: TaskHostPrincipal): boolean {
 }
 
 /**
- * A host's name in the line: the label the Hosts section shows, or, when the
- * section can only say "Unnamed host", its owner group ("Alice's host"), so a
- * person's laptop the wire sends without a label is still told apart.
+ * A host's name in the line: the host's label, or, when it can only say
+ * "Unnamed host", its owner group ("Alice's host"), so a person's laptop the
+ * wire sends without a label is still told apart.
  */
 function mirrorHostName(group: TaskHostGroup, label: string): string {
   if (label !== TASK_HOST_UNNAMED_LABEL) return label;
@@ -39,7 +39,7 @@ function mirrorHostName(group: TaskHostGroup, label: string): string {
 
 /**
  * The host the mirror line names: the first host already in the task, in the
- * Hosts section's order, whose owner differs from the start host's; `null`
+ * task-host groups' order, whose owner differs from the start host's; `null`
  * when every one shares it. The start host's owner is its own task row's when
  * it already serves the task, else the caller's fallback (its registry owner,
  * or the viewer).
