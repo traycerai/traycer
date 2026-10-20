@@ -23,8 +23,8 @@ import {
 /**
  * Reads the current bearer string for the retry gate, tolerating a released
  * or empty lease (whose `getBearerToken()` throws) by returning `null`. The
- * gate then compares before/after: equal-or-null means "no rotation
- * happened", so don't retry.
+ * gate then compares before/after: when `after` is null, or `after` equals
+ * `before`, no rotation happened, so don't retry.
  */
 function readBearer(source: OpenFrameBearerSource): string | null {
   try {

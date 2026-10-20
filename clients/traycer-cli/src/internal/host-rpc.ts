@@ -12,6 +12,7 @@ import {
   createRetryingMessenger,
   DEFAULT_TRANSPORT_RETRY_POLICY,
   finalRefusalOf,
+  RetryEpisodeOutcomeUnknownError,
   NO_RETRY_TRANSPORT_POLICY,
   type TransportRetryPolicy,
 } from "../../../shared/host-transport/retrying-messenger";
@@ -483,7 +484,9 @@ const REQUEST_PROJECTION_FAILURE_PREFIX =
  * host speaks, and the request carries a value the host's older minor request
  * schema cannot represent (e.g. a newer enum value that isn't strippable like an
  * additive field). The transport raises this as a `RPC_ERROR` locally during
- * request preparation, so it never reached the host.
+ * request preparation, so the attempt that failed never reached the host. A
+ * refusal that ended a retry episode is matched too: its final attempt failed
+ * preparation, while an earlier attempt's outcome stays unknown.
  *
  * Best-effort hook commands use this to degrade a version-skew miss to a quiet
  * no-op instead of surfacing it: the call is meaningless against a host too old
@@ -634,10 +637,19 @@ function assertCanonicalResponseSchema(
   );
 }
 
+/**
+ * Appended to the mapped message when a refusal ended a retry episode whose
+ * earlier attempt may have reached the host: the refusal's own guidance stays
+ * true about the retry, and this says what may have happened to the request.
+ */
+const EARLIER_ATTEMPT_MAY_HAVE_RUN =
+  "An earlier attempt may have gone through. Check before repeating it.";
+
 function hostRpcToCliError(err: unknown): unknown {
   // Classified by the refusal that ended a retry episode, not by its
   // unknown-outcome wrapper: "sign in again" stays true about the retry
-  // whatever an earlier attempt did.
+  // whatever an earlier attempt did. The outcome stays unknown, and the
+  // message says so.
   const refusal = finalRefusalOf(err);
   if (!(refusal instanceof HostRpcError)) return err;
   createCliLogger(config.environment).warn(
@@ -647,7 +659,14 @@ function hostRpcToCliError(err: unknown): unknown {
       hostRpcCode: refusal.code,
     },
   );
-  return mapHostRpcError(refusal);
+  const mapped = mapHostRpcError(refusal);
+  if (!(err instanceof RetryEpisodeOutcomeUnknownError)) return mapped;
+  return cliError({
+    code: mapped.code,
+    message: `${mapped.message} ${EARLIER_ATTEMPT_MAY_HAVE_RUN}`,
+    details: mapped.details,
+    exitCode: mapped.exitCode,
+  });
 }
 
 /**

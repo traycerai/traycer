@@ -586,10 +586,11 @@ async function executeAvailableMethodRequest<Payload, Response>(
     idempotencyKey,
   });
 
-  // From here the host has the request and may have run it. A failure this
-  // side detects - a fatal after the request, a malformed, mismatched or
-  // unreadable answer - is marked for `mayHaveReachedHost`. The host's own
-  // error envelope is its answer and stays unmarked.
+  // From here the request has been handed to the socket, so it may have
+  // reached the host and run. A failure this side detects - a fatal after the
+  // request, a malformed, mismatched or unreadable answer - is marked for
+  // `mayHaveReachedHost`. The host's own error envelope is its answer and
+  // stays unmarked.
   let responseFrame: HostResponseFrame;
   try {
     responseFrame = await receiveResponseFrame(

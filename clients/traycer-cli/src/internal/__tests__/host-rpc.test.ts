@@ -700,7 +700,7 @@ describe("callHostRpc", () => {
     ).rejects.toMatchObject({
       code: CLI_ERROR_CODES.FORBIDDEN,
       message:
-        "traycer: access denied for this epic - check TRAYCER_EPIC_ID and that you're signed in to the account that owns it.",
+        "traycer: access denied for this epic - check TRAYCER_EPIC_ID and that you're signed in to the account that owns it. An earlier attempt may have gone through. Check before repeating it.",
       details: null,
     });
   });
