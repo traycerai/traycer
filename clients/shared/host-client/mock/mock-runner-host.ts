@@ -57,6 +57,8 @@ import type {
   ITraycerCli,
   IWorkspaceFoldersHost,
   LocalHostSnapshot,
+  LocalHostUnresponsive,
+  LocalHostUnresponsiveOffer,
   RegisteredHostsChange,
   StoredAuthTokens,
   SystemResumeEvent,
@@ -249,6 +251,10 @@ export class MockRunnerHost implements IRunnerHost {
     (event: SystemResumeEvent) => void
   >();
   private readonly networkPathChangedHandlers = new Set<() => void>();
+  private localHostUnresponsive: LocalHostUnresponsive | null = null;
+  private readonly localHostUnresponsiveHandlers = new Set<
+    (state: LocalHostUnresponsive | null) => void
+  >();
   private localHost: LocalHostSnapshot | null;
   /** `undefined` means "derive from `localHost`"; `null` means "no id on disk". */
   private readonly explicitLastKnownLocalHostId: string | null | undefined;
@@ -976,6 +982,21 @@ export class MockRunnerHost implements IRunnerHost {
     });
   }
 
+  async forceRestartUnresponsiveHost(
+    offer: LocalHostUnresponsiveOffer,
+  ): Promise<HostRestartRequestResult> {
+    if (
+      this.localHostUnresponsive?.pid !== offer.pid ||
+      this.localHostUnresponsive.offerId !== offer.offerId
+    ) {
+      return {
+        kind: "declined",
+        message: "The host is no longer unresponsive.",
+      };
+    }
+    return this.requestHostRespawn();
+  }
+
   async requestHostRespawn(): Promise<HostRestartRequestResult> {
     this.requestHostRespawnCalls += 1;
     return { kind: "restarted" };
@@ -1051,6 +1072,18 @@ export class MockRunnerHost implements IRunnerHost {
     };
   }
 
+  onLocalHostUnresponsive(
+    handler: (state: LocalHostUnresponsive | null) => void,
+  ): Disposable {
+    handler(this.localHostUnresponsive);
+    this.localHostUnresponsiveHandlers.add(handler);
+    return {
+      dispose: () => {
+        this.localHostUnresponsiveHandlers.delete(handler);
+      },
+    };
+  }
+
   getLastKnownLocalHostId(): Promise<string | null> {
     if (this.explicitLastKnownLocalHostId !== undefined) {
       return Promise.resolve(this.explicitLastKnownLocalHostId);
@@ -1095,6 +1128,14 @@ export class MockRunnerHost implements IRunnerHost {
     this.publishSelectionFleet();
     for (const handler of this.localHostHandlers) {
       handler(snapshot);
+    }
+  }
+
+  /** Test helper: publish the "alive but not responding" verdict. */
+  setLocalHostUnresponsive(state: LocalHostUnresponsive | null): void {
+    this.localHostUnresponsive = state;
+    for (const handler of this.localHostUnresponsiveHandlers) {
+      handler(state);
     }
   }
 

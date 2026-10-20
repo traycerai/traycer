@@ -85,6 +85,7 @@ import type {
   ITrayState,
   IWorkspaceFoldersHost,
   LocalHostSnapshot,
+  LocalHostUnresponsive,
   NotificationShowOutcome,
   PushPermissionState,
   RegisteredHostsChange,
@@ -894,6 +895,13 @@ export class MobileRunnerHost implements IRunnerHost {
     return disposable();
   }
 
+  onLocalHostUnresponsive(
+    handler: (state: LocalHostUnresponsive | null) => void,
+  ): Disposable {
+    handler(null);
+    return disposable();
+  }
+
   onSystemResumed(handler: (event: SystemResumeEvent) => void): Disposable {
     return this.systemResume.subscribe(handler);
   }
@@ -910,6 +918,11 @@ export class MobileRunnerHost implements IRunnerHost {
       kind: "declined",
       message: "Restart this host from the machine running it.",
     };
+  }
+
+  async forceRestartUnresponsiveHost(): Promise<HostRestartRequestResult> {
+    // The phone runs no local host, so it never offers this restart.
+    return this.requestHostRespawn();
   }
 }
 

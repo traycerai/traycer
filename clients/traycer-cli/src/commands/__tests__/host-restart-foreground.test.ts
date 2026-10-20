@@ -295,6 +295,7 @@ describe("host restart - foreground-run guard", () => {
       ifIdle: false,
       force: false,
       deferIfParked: false,
+      expectedHost: null,
       lifecycleOrigin: "desktop",
     } as Parameters<typeof buildHostRestartCommand>[0]);
     const caught: unknown = await command(fakeCtx()).then(
@@ -323,6 +324,7 @@ describe("host restart - foreground-run guard", () => {
       ifIdle: false,
       force: true,
       deferIfParked: false,
+      expectedHost: null,
       lifecycleOrigin: "desktop",
     } as Parameters<typeof buildHostRestartCommand>[0]);
     const caught: unknown = await command(fakeCtx()).then(
@@ -352,6 +354,7 @@ describe("host restart - foreground-run guard", () => {
       ifIdle: true,
       force: false,
       deferIfParked: false,
+      expectedHost: null,
       lifecycleOrigin: "desktop",
     } as Parameters<typeof buildHostRestartCommand>[0]);
     const caught: unknown = await command(fakeCtx()).then(
@@ -381,6 +384,7 @@ describe("host restart - foreground-run guard", () => {
       ifIdle: false,
       force: false,
       deferIfParked: false,
+      expectedHost: null,
       lifecycleOrigin: "terminal",
     })(fakeCtx());
 
@@ -405,6 +409,7 @@ describe("host restart - foreground-run guard", () => {
       ifIdle: false,
       force: true,
       deferIfParked: false,
+      expectedHost: null,
       lifecycleOrigin: "terminal",
     })(fakeCtx());
 

@@ -49,6 +49,13 @@ const mocks = vi.hoisted(() => ({
   ensureHostMock: vi.fn(),
   runSignInPreflightMock: vi.fn(),
   maybeProvisionCredentialMock: vi.fn(),
+  pidMetadata: null as { pid: number; websocketUrl: string } | null,
+}));
+
+// The pid record the responsiveness check reads. `null` (nothing published)
+// unless a test stages one, so no test reads the developer's real home.
+vi.mock("../../host/pid-metadata", () => ({
+  readHostPidMetadata: async () => mocks.pidMetadata,
 }));
 
 vi.mock("../../host/ensure", () => ({
@@ -192,6 +199,7 @@ function baseEnsureResult(
 
 describe("buildHostEnsureCommand", () => {
   beforeEach(() => {
+    mocks.pidMetadata = null;
     // Every existing test predates the caller needing an explicit default -
     // set one so only the tests that care about auth override it.
     mocks.runSignInPreflightMock.mockResolvedValue(signedInPreflight());
@@ -470,5 +478,90 @@ describe("buildHostEnsureCommand", () => {
     expect(result.human ?? "").toContain(
       "not signed in - the host is unprovisioned until you run `traycer login`",
     );
+  });
+});
+
+// traycer#1563 D3d: a reinstall or `host ensure` beside a wedged host found
+// it registered and running by its pid record and process table, and printed
+// "host already ready" while it answered nothing. The run still changes
+// nothing and kills nothing; it reports what it found and the way out.
+describe("host ensure over a running host that does not respond (traycer#1563 D3d)", () => {
+  beforeEach(() => {
+    mocks.pidMetadata = null;
+    mocks.runSignInPreflightMock.mockResolvedValue(signedInPreflight());
+    mocks.maybeProvisionCredentialMock.mockResolvedValue(null);
+  });
+
+  afterEach(() => {
+    mocks.pidMetadata = null;
+  });
+
+  it("reports a running host that answers nothing as not responding, naming the force restart", async () => {
+    const { createServer } = await import("node:net");
+    const held: import("node:net").Socket[] = [];
+    // Accepts and stays silent, as a host whose main thread is blocked does.
+    const silent = createServer((socket) => {
+      held.push(socket);
+    });
+    await new Promise<void>((resolve) => {
+      silent.listen(0, "127.0.0.1", resolve);
+    });
+    const address = silent.address();
+    const port =
+      typeof address === "object" && address !== null ? address.port : 0;
+    try {
+      mocks.pidMetadata = {
+        pid: 4242,
+        websocketUrl: `ws://127.0.0.1:${port}/rpc`,
+      };
+      mocks.ensureHostMock.mockResolvedValue(
+        baseEnsureResult({ action: "noop", installGeneration: null }),
+      );
+
+      const result = await buildHostEnsureCommand(baseArgs({}))(fakeCtx());
+
+      expect(result.data).toMatchObject({ hostResponsive: false });
+      expect(result.human).toContain("pid=4242");
+      expect(result.human).toContain("not responding");
+      expect(result.human).toContain("traycer host restart --force");
+      expect(result.human).not.toContain("already ready");
+    } finally {
+      for (const socket of held) socket.destroy();
+      await new Promise<void>((resolve) => {
+        silent.close(() => resolve());
+      });
+    }
+  });
+
+  it("still reports a responding host as ready", async () => {
+    const { createServer } = await import("node:http");
+    const server = createServer((_request, response) => {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end('{"busy":false}');
+    });
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", resolve);
+    });
+    const address = server.address();
+    const port =
+      typeof address === "object" && address !== null ? address.port : 0;
+    try {
+      mocks.pidMetadata = {
+        pid: 4242,
+        websocketUrl: `ws://127.0.0.1:${port}/rpc`,
+      };
+      mocks.ensureHostMock.mockResolvedValue(
+        baseEnsureResult({ action: "noop", installGeneration: null }),
+      );
+
+      const result = await buildHostEnsureCommand(baseArgs({}))(fakeCtx());
+
+      expect(result.data).toMatchObject({ hostResponsive: true });
+      expect(result.human).toContain("host already ready");
+    } finally {
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      });
+    }
   });
 });

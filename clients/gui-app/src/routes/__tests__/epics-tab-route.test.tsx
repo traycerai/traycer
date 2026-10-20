@@ -60,6 +60,9 @@ vi.mock("@/components/layout/host-ready-gate", () => ({
 vi.mock("@/components/layout/bridges/host-tray-command-listener", () => ({
   HostTrayCommandListener: () => null,
 }));
+vi.mock("@/components/layout/bridges/host-unresponsive-prompt", () => ({
+  HostUnresponsivePrompt: () => null,
+}));
 
 vi.mock("@/components/layout/bridges/notification-focus-bridge", () => ({
   NotificationFocusBridge: () => null,

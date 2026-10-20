@@ -1,7 +1,13 @@
 import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CommandContext } from "../../runner/runner";
 
@@ -238,6 +244,7 @@ describe.skipIf(process.platform === "win32")(
           ifIdle: false,
           force: false,
           deferIfParked: false,
+          expectedHost: null,
           lifecycleOrigin: "terminal",
         });
         const pending = command(fakeCtx());
@@ -291,6 +298,7 @@ describe.skipIf(process.platform === "win32")(
           ifIdle: true,
           force: false,
           deferIfParked: false,
+          expectedHost: null,
           lifecycleOrigin: "terminal",
         });
         const pending = command(fakeCtx());
@@ -311,6 +319,88 @@ describe.skipIf(process.platform === "win32")(
         // the lock until the test timeout.
         writeFileSync(join(holdBarrierDir, "release"), "");
         expect(await exited).toBe(0);
+        rmSync(holdBarrierDir, { recursive: true, force: true });
+      }
+    }, 20_000);
+
+    // The window a restart confirmed for one host process is exposed to: the
+    // confirmation is made before this command waits for the lock, and a
+    // healthy replacement published during that wait must not be stopped.
+    it("a restart bound to one host refuses a host published while it waited for the lock", async () => {
+      const {
+        cliLockPath,
+        ensureCliInstallHomeDir,
+        hostHomeDir,
+        hostPidMetadataPath,
+      } = await import("../../store/paths");
+      const { ownProcessStartIdentity } =
+        await import("../../store/process-identity");
+      expect(hostHomeDir("production").startsWith(workHome)).toBe(true);
+      await ensureCliInstallHomeDir("production");
+      const lockPath = cliLockPath("production");
+
+      const confirmedHost = { pid: 4242, startIdentity: "linux:boot-a 4242" };
+      const pidPath = hostPidMetadataPath("production");
+      const writePidMetadata = (pid: number, identity: string | null): void => {
+        mkdirSync(dirname(pidPath), { recursive: true });
+        writeFileSync(
+          pidPath,
+          JSON.stringify({
+            pid,
+            hostId: "host-a",
+            version: "1.9.0",
+            websocketUrl: `ws://127.0.0.1:${String(pid)}/rpc`,
+            startedAt: "2026-09-01T00:00:00.000Z",
+            processStartIdentity: identity,
+          }),
+          "utf8",
+        );
+      };
+      // Published as the confirmed host when the restart was requested.
+      writePidMetadata(confirmedHost.pid, confirmedHost.startIdentity);
+
+      const holdBarrierDir = mkdtempSync(
+        join(tmpdir(), "traycer-restart-lock-barrier-target-"),
+      );
+      const { exited } = spawnLockWorker(WORKER_SCRIPT, {
+        WORKER_LOCK_PATH: lockPath,
+        WORKER_MARKER_DIR: holdBarrierDir,
+        WORKER_LABEL: "foreign-holder",
+        WORKER_HOLD_BARRIER_DIR: holdBarrierDir,
+      });
+
+      try {
+        await waitForFile(join(holdBarrierDir, "held"));
+
+        const { buildHostRestartCommand } = await import("../host-restart");
+        const pending = buildHostRestartCommand({
+          ifIdle: false,
+          force: true,
+          deferIfParked: true,
+          expectedHost: confirmedHost,
+          lifecycleOrigin: "desktop",
+        })(fakeCtx());
+        const settled = pending.then(
+          () => null,
+          (err: unknown) => err,
+        );
+
+        await new Promise((resolve) => setTimeout(resolve, 200));
+        expect(mocks.controllerCalls).toEqual([]);
+
+        // A healthy replacement is published while the restart is still
+        // waiting for the lock: this test process stands in for it, a live
+        // process under its own identity.
+        writePidMetadata(process.pid, ownProcessStartIdentity());
+
+        writeFileSync(join(holdBarrierDir, "release"), "");
+        await expect(settled).resolves.toMatchObject({
+          code: "E_HOST_RESTART_TARGET_CHANGED",
+        });
+        expect(mocks.controllerCalls).toEqual([]);
+      } finally {
+        writeFileSync(join(holdBarrierDir, "release"), "");
+        await exited;
         rmSync(holdBarrierDir, { recursive: true, force: true });
       }
     }, 20_000);
@@ -338,6 +428,7 @@ describe.skipIf(process.platform === "win32")(
         ifIdle: false,
         force: false,
         deferIfParked: false,
+        expectedHost: null,
         lifecycleOrigin: "terminal",
       })(fakeCtx());
       await attestationStarted.promise;
