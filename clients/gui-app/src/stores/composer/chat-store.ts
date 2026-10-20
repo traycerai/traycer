@@ -22,6 +22,7 @@ import type {
   BrowserAnnotationRecord,
 } from "@traycer/protocol/persistence/epic/schemas";
 import type {
+  AgentMessageDelivery,
   AgentMessageReceipt,
   AgentMessageSend,
   ArtifactOperationAction,
@@ -157,6 +158,10 @@ export interface ToolSegment {
   // tool call, for a TUI receiver, and for sends persisted before the host
   // carried this (the card then just opens the receiver's tile).
   agentMessageReceipt: AgentMessageReceipt | null;
+  // Where a cross-host send stands: queued for the other host, delivered,
+  // expired or refused. Null for every other tool call, for a send delivered
+  // on the same host, and for sends persisted before the host carried this.
+  agentMessageDelivery: AgentMessageDelivery | null;
   isStreaming: boolean;
   // Terminal outcome when the turn ended mid-flight (else null). See SegmentEndState.
   endState: SegmentEndState;

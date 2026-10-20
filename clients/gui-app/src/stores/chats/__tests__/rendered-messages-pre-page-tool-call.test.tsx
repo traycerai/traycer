@@ -51,6 +51,7 @@ function prePageToolCall(): Record<string, unknown> {
     agentMessageSend: null,
     managedCommand: null,
     agentMessageReceipt: null,
+    agentMessageDelivery: null,
     progress: null,
     backgroundOutput: null,
     backgroundTask: false,

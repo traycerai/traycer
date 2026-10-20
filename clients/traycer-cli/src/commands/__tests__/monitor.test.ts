@@ -653,6 +653,7 @@ describe("follow-up inactivity notices (negotiated @1.3)", () => {
           message: selectedMessage,
           expectReply: selectedExpectReply,
           responseId: selectedResponseId ?? null,
+          workspace: null,
         });
         const commandResult = await command(makeCommandContext());
 
@@ -676,6 +677,7 @@ describe("follow-up inactivity notices (negotiated @1.3)", () => {
             prompt: "<follow-up>",
             expectReply: true,
             responseId: null,
+            workspace: null,
           }),
           {
             responseTimeoutMs: 60_000,

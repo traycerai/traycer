@@ -3472,6 +3472,10 @@ function registerAgentCommands(
       .option(
         "--response-id <id>",
         "Answer a request received from this recipient; omit on your own follow-ups",
+      )
+      .option(
+        "--workspace <path>",
+        "Absolute folder on the receiving agent's host for it to run in, when it has none yet. Ignored when it already has one.",
       ),
     (opts) =>
       buildAgentSendCommand({
@@ -3482,6 +3486,7 @@ function registerAgentCommands(
         expectReply: opts.expectReply === true,
         responseId:
           typeof opts.responseId === "string" ? opts.responseId : null,
+        workspace: typeof opts.workspace === "string" ? opts.workspace : null,
       }),
   );
 

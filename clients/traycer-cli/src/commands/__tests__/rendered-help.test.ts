@@ -1038,6 +1038,7 @@ const EXPECTED_PUBLIC_SURFACE: readonly ExpectedSurfaceEntry[] = [
       { flags: "--quiet", mandatory: false },
       { flags: "--response-id <id>", mandatory: false },
       { flags: "--to <agentId>", mandatory: true },
+      { flags: "--workspace <path>", mandatory: false },
     ],
     args: [],
   },
@@ -1726,6 +1727,17 @@ describe("rendered root/parent/leaf --help (CLI command audit regression suite)"
         "--response-id <id> Answer a request received from this recipient; omit on your own follow-ups",
       );
       expect(help).not.toContain("Close an open thread");
+    });
+
+    it("agent send --help documents --workspace", () => {
+      const program = freshProgram();
+      const help = renderHelp(findByPath(program, ["agent", "send"])).replace(
+        /\s+/g,
+        " ",
+      );
+      expect(help).toContain(
+        "--workspace <path> Absolute folder on the receiving agent's host for it to run in, when it has none yet.",
+      );
     });
 
     it("host --help lists 'free-port-and-restart' and not the bare 'free-port' (false-match guard)", () => {

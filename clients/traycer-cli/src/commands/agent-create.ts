@@ -157,9 +157,11 @@ function structuredEntries(
 type CreateAgentWorkspaceEntry =
   NonNullable<CreateAgentWorkspace>["entries"][number];
 
+// Not trimmed: a folder name may end in whitespace, and a blank or space-led
+// value is simply not absolute. Resolved here because `agent create` always
+// runs on this machine's host, so the path means a folder on this machine.
 function requireAbsolutePath(rawPath: string, label: string): string {
-  const trimmed = rawPath.trim();
-  if (trimmed.length === 0 || !path.isAbsolute(trimmed)) {
+  if (!path.isAbsolute(rawPath)) {
     throw cliError({
       code: CLI_ERROR_CODES.INVALID_ARGUMENT,
       message: `agent create: ${label} must be an absolute path. ${
@@ -171,5 +173,5 @@ function requireAbsolutePath(rawPath: string, label: string): string {
       exitCode: 1,
     });
   }
-  return path.resolve(trimmed);
+  return path.resolve(rawPath);
 }

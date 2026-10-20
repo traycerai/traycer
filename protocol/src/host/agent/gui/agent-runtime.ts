@@ -24,6 +24,7 @@ import {
 import { permissionModeSchema } from "@traycer/protocol/persistence/epic/foundation";
 import {
   agentFailureSchema,
+  agentMessageDeliverySchema,
   agentMessageReceiptSchema,
   agentMessageSendSchema,
   artifactOperationActionSchema,
@@ -49,6 +50,7 @@ import { imageResolutionEntrySchema } from "@traycer/protocol/persistence/epic/m
 
 export {
   agentFailureSchema,
+  agentMessageDeliverySchema,
   agentMessageReceiptSchema,
   agentMessageSendSchema,
   backgroundTaskOutputSchema,
@@ -566,6 +568,13 @@ export const toolCallCompletedEventSchema = lazySchema(() =>
     // too - an omission is "nothing to say", not "no receipt". See
     // `agentMessageReceiptSchema`.
     agentMessageReceipt: agentMessageReceiptSchema.nullable().optional(),
+    // Where a cross-host send stands when the call completes - `queued`, read
+    // off the call's queued result (`chat.subscribe@1.29`; see
+    // `agentMessageDeliverySchema`). Optional rather than defaulted, like the
+    // receipt beside it: an omission is "nothing to say", so a re-completion
+    // cannot erase a stamp the first completion carried. Not on the
+    // hand-frozen `toolCallCompletedEventSchemaPreDelivery` below.
+    agentMessageDelivery: agentMessageDeliverySchema.nullable().optional(),
     backgroundOutput: backgroundTaskOutputSchema.nullable().optional(),
     // For detached background command/Monitor completion, this is the SDK task's
     // own start time from BackgroundItem, not the short foreground spawn call.
@@ -593,6 +602,27 @@ export const toolCallCompletedEventSchema = lazySchema(() =>
 export type ToolCallCompletedEvent = z.infer<
   typeof toolCallCompletedEventSchema
 >;
+
+// Wire-freeze copy of `toolCallCompletedEventSchema` as `chat.subscribe@1.23`
+// through `@1.28` ship it: the live event without the `agentMessageDelivery`
+// stamp `1.29` added. Bound by the runtime-event union those lines decode.
+// Hand-frozen, NOT derived from the live shape.
+export const toolCallCompletedEventSchemaPreDelivery = lazySchema(() =>
+  z.object({
+    ...baseRuntimeEventFields,
+    type: z.literal("tool_call.completed"),
+    toolName: z.string(),
+    agentMessageSend: agentMessageSendSchema.nullable().default(null),
+    managedCommand: toolCallManagedCommandSchema.nullable().optional(),
+    agentMessageReceipt: agentMessageReceiptSchema.nullable().optional(),
+    backgroundOutput: backgroundTaskOutputSchema.nullable().optional(),
+    backgroundStartedAt: z.number().optional(),
+    backgroundTask: z.boolean().optional(),
+    imageResults: z.array(imageGenerationResultSchema).default([]),
+    page: toolCallPageStampSchema.nullable().optional(),
+    mcpApp: toolCallMcpAppStampSchema.nullable().optional(),
+  }),
+);
 
 // Wire-freeze copy of `toolCallCompletedEventSchema` as every `chat.subscribe`
 // line from `@1.7` to `@1.21` ships it: the live event without the `page` /

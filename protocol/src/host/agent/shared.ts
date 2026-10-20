@@ -1438,9 +1438,8 @@ export type ListAgentsResponseV101 = z.infer<
  *   - When `expectReply=false`, a non-null `responseId` closes an open
  *     thread; a null `responseId` is a one-shot delivery the sender does
  *     not want correlated.
- *   - Cross-host receivers are rejected with `RECEIVER_NOT_LOCAL`. The
- *     epic Y.Doc already replicates artifact records cross-host, but
- *     the message-delivery transport does not.
+ *   - A receiver on another host is queued for that host through the
+ *     cloud rather than delivered while the call runs.
  */
 export const sendAgentMessageRequestSchema = lazySchema(() =>
   z.object({
@@ -1454,6 +1453,23 @@ export const sendAgentMessageRequestSchema = lazySchema(() =>
 );
 export type SendAgentMessageRequest = z.infer<
   typeof sendAgentMessageRequestSchema
+>;
+
+/**
+ * `agent.sendMessage@1.1` - adds `workspace`: an absolute folder path on the
+ * RECEIVING agent's host for it to run in. It binds a receiver that has no
+ * workspace yet, so the message can run, and is ignored when the receiver is
+ * already bound (a send never rebinds an agent). `null` leaves the choice to
+ * the host: an unbound receiver takes the local sender's primary workspace,
+ * and otherwise the send is refused with `WORKSPACE_BINDING_REQUIRED`.
+ */
+export const sendAgentMessageRequestSchemaV11 = lazySchema(() =>
+  sendAgentMessageRequestSchema.extend({
+    workspace: z.string().nullable().default(null),
+  }),
+);
+export type SendAgentMessageRequestV11 = z.infer<
+  typeof sendAgentMessageRequestSchemaV11
 >;
 
 /**

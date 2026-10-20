@@ -183,6 +183,7 @@ const DOWNLOADING_STATUS: ResponseOfMethod<HostRpcRegistry, "host.status"> = {
   storeFormats: null,
   install: null,
   processMemory: null,
+  crossHostMessaging: null,
 };
 
 function scopeFrom(

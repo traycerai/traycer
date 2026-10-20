@@ -45,6 +45,7 @@ import {
   type HostPidMetadata,
 } from "../host/pid-metadata";
 import { callHostRpcAtEndpoint } from "../internal/host-rpc";
+import type { HostStatusCrossHostMessaging } from "@traycer/protocol/host/status/contracts";
 import { resolveHostAuth } from "../internal/host-auth";
 import {
   HostRpcError,
@@ -1599,8 +1600,8 @@ async function probeHostRpc(
     };
   }
   try {
-    await callHostRpcAtEndpoint("host.status", {}, endpoint);
-    return null;
+    const status = await callHostRpcAtEndpoint("host.status", {}, endpoint);
+    return crossHostMessagingIssue(status.crossHostMessaging);
   } catch (caught) {
     // Classified by the refusal that ended a retry episode, if one did.
     const err = finalRefusalOf(caught);
@@ -1656,6 +1657,46 @@ async function probeHostRpc(
       details: { websocketUrl },
     };
   }
+}
+
+// The host answered, so it is reachable - but its cross-host messages can
+// still be paused. `null` is a host older than `host.status@1.8`, which never
+// said; that is not a claim either way, so it raises nothing.
+export function crossHostMessagingIssue(
+  messaging: HostStatusCrossHostMessaging | null,
+): DoctorIssue | null {
+  if (messaging === null || messaging.state === "ok") return null;
+  const pausedSince = hostInstantText(messaging.pausedSince);
+  const nextRetryAt = hostInstantText(messaging.nextRetryAt);
+  const since = pausedSince === null ? "" : ` Paused since ${pausedSince}.`;
+  const retry =
+    nextRetryAt === null
+      ? " It retries on its own."
+      : ` It retries on its own; next attempt at ${nextRetryAt}.`;
+  return {
+    code: DOCTOR_ISSUE_CODES.HOST_CROSS_HOST_MESSAGES_PAUSED,
+    severity: "warning",
+    title: "Degraded: cross-host messages paused",
+    message: `The host is running, but messages to and from agents on your other devices are paused.${since}${retry}`,
+    fixAction: null,
+    terminalCommand: null,
+    details: {
+      pausedSince: messaging.pausedSince,
+      nextRetryAt: messaging.nextRetryAt,
+      cause: messaging.cause,
+    },
+  };
+}
+
+// A host-reported epoch-ms instant as ISO text, or `null` when there is none
+// or it lies outside what `Date` can hold. The schema bounds it below only, and
+// `toISOString()` throws `RangeError` past 8.64e15 - inside the RPC probe's
+// `try`, which would then report this healthy, answering host as a failed RPC
+// handshake. The raw value still travels in `details`.
+function hostInstantText(epochMs: number | null): string | null {
+  if (epochMs === null) return null;
+  const instant = new Date(epochMs);
+  return Number.isNaN(instant.getTime()) ? null : instant.toISOString();
 }
 
 function unresponsiveHostIssue(

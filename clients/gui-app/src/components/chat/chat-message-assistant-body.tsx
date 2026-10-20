@@ -1283,6 +1283,7 @@ export function AssistantSegment({
           agentMessageSend={segment.agentMessageSend}
           managedCommand={segment.managedCommand}
           agentMessageReceipt={segment.agentMessageReceipt}
+          agentMessageDelivery={segment.agentMessageDelivery}
           isStreaming={segment.isStreaming || isBackgroundRunning}
           endState={isBackgroundRunning ? null : segment.endState}
           stopped={segment.stopped}

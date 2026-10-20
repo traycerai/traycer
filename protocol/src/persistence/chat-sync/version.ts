@@ -146,6 +146,14 @@ import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 // re-publication. No
 // reader floor: an older reader renders the call as the plain tool row it
 // always did, which is what that row was before these keys existed.
+//
+// 1.7 also carries `tool_call.agentMessageDelivery` (where a cross-host send
+// stands - a `chat.subscribe@1.29` field that lands in a publication), on the
+// still-unreleased-minor rule above: the newest release, `host-v1.5.1`, ships
+// chat-sync 1.6. Defaulted `null`, so an older record parses unchanged, and a
+// content block's `raw` re-emission carries the key through an older reader's
+// re-publication. No reader floor: an older reader renders the send as the
+// plain sent card it always did.
 export const CHAT_SYNC_SCHEMA_VERSION = { major: 1, minor: 7 } as const;
 
 export type ChatSyncSchemaVersion = typeof CHAT_SYNC_SCHEMA_VERSION;

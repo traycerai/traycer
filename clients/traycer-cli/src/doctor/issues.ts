@@ -33,6 +33,13 @@ export const DOCTOR_ISSUE_CODES = {
   // of `traycer host doctor` for every user whose home is on a network
   // filesystem.
   HOST_LAYER0_NOT_GUARANTEED: "HOST_LAYER0_NOT_GUARANTEED",
+  // The host is serving, but messages to and from agents on the account's
+  // other hosts are paused: its inbound lane is parked or backing off, or the
+  // cloud is refusing the messaging calls (`host.status` `crossHostMessaging`).
+  // Warning, not error: the host retries on its own, and nothing local is
+  // broken - the same reason the Layer 0 verdict above does not flip the exit
+  // code.
+  HOST_CROSS_HOST_MESSAGES_PAUSED: "HOST_CROSS_HOST_MESSAGES_PAUSED",
   PORT_UNREACHABLE: "PORT_UNREACHABLE",
   PORT_CONFLICT: "PORT_CONFLICT",
   // The host's TCP port is open but a real (authenticated) RPC

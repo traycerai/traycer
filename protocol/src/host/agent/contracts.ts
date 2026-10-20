@@ -49,6 +49,7 @@ import {
   agentSummarySchemaV80,
   agentSummarySchemaV92,
   sendAgentMessageRequestSchema,
+  sendAgentMessageRequestSchemaV11,
   sendAgentMessageResponseSchema,
   stopAgentRequestSchema,
   stopAgentResponseSchema,
@@ -1544,6 +1545,31 @@ export const agentSendMessageV10 = defineRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: sendAgentMessageRequestSchema,
   responseSchema: sendAgentMessageResponseSchema,
+});
+
+/**
+ * `agent.sendMessage@1.1` - the request gains `workspace` (see
+ * `sendAgentMessageRequestSchemaV11`); the response is unchanged. A `1.1`
+ * caller on a `1.0` host has `workspace` stripped by the `1.0` schema, so a
+ * caller that depends on it requires `1.1` before sending.
+ */
+export const agentSendMessageV11 = defineRpcContract({
+  method: "agent.sendMessage",
+  schemaVersion: { major: 1, minor: 1 } as const,
+  requestSchema: sendAgentMessageRequestSchemaV11,
+  responseSchema: sendAgentMessageResponseSchema,
+});
+
+// A `1.0` caller never names a workspace: its upgrade leaves the choice to the
+// host, exactly as a `1.0` host makes it.
+export const agentSendMessageUpgradeV10ToV11 = defineUpgradePath<
+  typeof agentSendMessageV10,
+  typeof agentSendMessageV11
+>({
+  from: agentSendMessageV10.schemaVersion,
+  to: agentSendMessageV11.schemaVersion,
+  upgradeRequest: (request) => ({ ...request, workspace: null }),
+  upgradeResponse: (response) => response,
 });
 
 export const agentGetTranscriptV10 = defineRpcContract({

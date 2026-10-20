@@ -4,6 +4,7 @@ import {
   chatSubscribeV126,
   chatSubscribeV127,
   chatSubscribeV128,
+  chatSubscribeV129,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 
 /**
@@ -81,6 +82,15 @@ describe("chat.subscribe@1.28 carries the sign-in park mark", () => {
     expect(
       parsedItem(
         chatSubscribeV128.serverFrameSchema,
+        parkedAgentPrompt({ signInParked: true }),
+      ),
+    ).toMatchObject({ queueItemId: "queue-1", signInParked: true });
+  });
+
+  it("1.29 keeps signInParked on a queued prompt", () => {
+    expect(
+      parsedItem(
+        chatSubscribeV129.serverFrameSchema,
         parkedAgentPrompt({ signInParked: true }),
       ),
     ).toMatchObject({ queueItemId: "queue-1", signInParked: true });
