@@ -4,12 +4,12 @@ import type { FrameSize } from "@/lib/simulator-view/simulator-input-encoding";
 
 /**
  * The video half of the simulator tile: bytes from `simulator.stream` in,
- * painted frames out. A port of t3code's `device/stream.ts` decode path with
- * the socket layer removed. The relay has already demuxed serve-sim's AVCC
- * envelope (each `video` frame is ONE unit with its length prefix and tag
- * byte stripped), so this feeds WebCodecs by unit and never re-demuxes; an
- * Android SEMU packet still arrives whole, header included, and is parsed
- * here because its header carries the keyframe flag and the timestamp.
+ * painted frames out, with no socket layer. The relay has already demuxed
+ * serve-sim's AVCC envelope (each `video` frame is ONE unit with its length
+ * prefix and tag byte stripped), so this feeds WebCodecs by unit and never
+ * re-demuxes; an Android SEMU packet still arrives whole, header included,
+ * and is parsed here because its header carries the keyframe flag and the
+ * timestamp.
  *
  *   iOS     description ──▶ configure ──▶ keyframe/delta ──▶ decode ──▶ paint
  *           seed (JPEG)  ──▶ paint once, before the first decoded frame
