@@ -352,6 +352,11 @@ describe("Ticket 02 final-review OSS enforcement", () => {
       /const allowedBeforeBootout = async \(\): Promise<boolean> =>\s*\(await mutationAllowed\(revalidateBeforeBootout\)\) &&/,
     );
     expect(register).toMatch(/bootoutStaleAgent\([^;]+allowedBeforeBootout/);
+    // The legacy-label retirement removes a manifest, boots out a job and
+    // clears an SMAppService record, so it takes the same guard.
+    expect(register).toMatch(
+      /retireLegacyLabelRegistrations\([^;]+allowedBeforeBootout/,
+    );
     const bootout = sliceFrom(
       loginItem,
       "async function bootoutStaleAgent(",
