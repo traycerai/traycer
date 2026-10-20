@@ -29,10 +29,12 @@ import type {
 } from "@/hooks/rate-limits/use-status-bar-rate-limit-segments";
 import { TRANSIENT_RATE_LIMIT_RETRY_DELAY_MS } from "@/lib/rate-limits/rate-limit-timing";
 import {
-  manualRateLimitRetryKey,
   manualRateLimitRetryWithheld,
+  rateLimitAccountLedgerKey,
   recordManualRateLimitRetry,
-} from "@/lib/rate-limits/manual-retry-ledger";
+  releaseScheduledTransientRead,
+  scheduledTransientReadOwed,
+} from "@/lib/rate-limits/rate-limit-read-ledger";
 import type { ConfiguredRateLimitProvider } from "@/hooks/rate-limits/use-configured-rate-limit-providers";
 import type { RateLimitProfileSelection } from "@/hooks/rate-limits/use-rate-limit-profile-selection";
 import { windowPercentText } from "@/lib/rate-limits/status-bar-window-text";
@@ -82,7 +84,21 @@ vi.mock(
       useStatusBarRateLimitSegments: () => ({
         cluster: mocks.cluster,
         mountTargets: [],
-        retryTargets: mocks.retryTargets,
+        // A row declares which accounts are transient and eligible; the
+        // episode half of the real rule runs for real on top of it, so a row
+        // can take an account through its lifecycle instead of pinning the
+        // list the hook would hand over.
+        retryTargets: mocks.retryTargets.filter((target) =>
+          mocks.scope === null
+            ? false
+            : scheduledTransientReadOwed(
+                rateLimitAccountLedgerKey(
+                  mocks.scope.hostId,
+                  target.providerId,
+                  target.profileId,
+                ),
+              ),
+        ),
         refresh: mocks.refresh,
       }),
     };
@@ -203,8 +219,13 @@ beforeEach(() => {
   // storage is then emptied, so a row reads only what it wrote itself.
   for (const hostId of ["host-a", "host-b"]) {
     recordManualRateLimitRetry(
-      manualRateLimitRetryKey(hostId, "codex", null),
+      rateLimitAccountLedgerKey(hostId, "codex", null),
       0,
+    );
+    // The episode one-shot is this renderer's too, and a row that spent one
+    // would otherwise hand a spent episode to the next row.
+    releaseScheduledTransientRead(
+      rateLimitAccountLedgerKey(hostId, "codex", null),
     );
   }
   window.localStorage.clear();
@@ -906,7 +927,7 @@ describe("<StatusBarRateLimitCluster /> scrolls its readings", () => {
           },
         ],
       };
-      const key = manualRateLimitRetryKey("host-a", "codex", null);
+      const key = rateLimitAccountLedgerKey("host-a", "codex", null);
       renderCluster({});
 
       fireEvent.click(screen.getByTestId("status-bar-provider-segment-codex"));
@@ -927,7 +948,7 @@ describe("<StatusBarRateLimitCluster /> scrolls its readings", () => {
       // untouched.
       expect(
         manualRateLimitRetryWithheld(
-          manualRateLimitRetryKey("host-b", "codex", null),
+          rateLimitAccountLedgerKey("host-b", "codex", null),
           Date.now(),
         ),
       ).toBe(false);
@@ -953,7 +974,7 @@ describe("<StatusBarRateLimitCluster /> scrolls its readings", () => {
       // gate, so it has to read the bound itself rather than trust the
       // affordance it arrived through.
       recordManualRateLimitRetry(
-        manualRateLimitRetryKey("host-a", "codex", null),
+        rateLimitAccountLedgerKey("host-a", "codex", null),
         Date.now(),
       );
 
@@ -1007,7 +1028,7 @@ describe("<StatusBarRateLimitCluster /> scrolls its readings", () => {
           // a store that threw there would never reach the read.
         });
       onTestFinished(() => setItem.mockRestore());
-      const key = manualRateLimitRetryKey("host-a", "codex", null);
+      const key = rateLimitAccountLedgerKey("host-a", "codex", null);
       renderCluster({});
 
       fireEvent.click(screen.getByTestId("status-bar-provider-segment-codex"));
@@ -1061,6 +1082,47 @@ describe("<StatusBarRateLimitCluster /> scrolls its readings", () => {
         vi.advanceTimersByTime(TRANSIENT_RATE_LIMIT_RETRY_DELAY_MS * 10);
       });
       expect(mocks.collect).toHaveBeenCalledTimes(1);
+    });
+
+    it("stands down when the account is already being read, rather than cancelling that read", () => {
+      vi.useFakeTimers();
+      mocks.scope = { hostId: "host-a" };
+      mocks.retryTargets = [{ providerId: "openrouter", profileId: null }];
+      const refetch = vi.fn((): Promise<void> => Promise.resolve());
+      mocks.refresh = {
+        ...mocks.refresh,
+        httpRefetches: [{ providerId: "openrouter", profileId: null, refetch }],
+      };
+      // An `httpFetch` account whose read is in flight when the delay expires:
+      // refetching its observer here is what TanStack would cancel the running
+      // request for, aborting a person's own forced read and starting it over.
+      mocks.cluster = {
+        kind: "segments",
+        segments: [
+          {
+            ...segmentFixture("openrouter", null),
+            state: "transient",
+            reason: "connection_failed",
+            fetching: true,
+            retryOffered: false,
+          },
+        ],
+      };
+      renderCluster({});
+
+      act(() => {
+        vi.advanceTimersByTime(TRANSIENT_RATE_LIMIT_RETRY_DELAY_MS);
+      });
+
+      expect(refetch).not.toHaveBeenCalled();
+      expect(mocks.collect).not.toHaveBeenCalled();
+      // Spent even so: the read it stood down for IS the retry the words
+      // promise, and the episode does not get a second one for it.
+      expect(
+        scheduledTransientReadOwed(
+          rateLimitAccountLedgerKey("host-a", "openrouter", null),
+        ),
+      ).toBe(false);
     });
 
     it("starts a fresh timer when the strip is pointed at a different host, and never fires the old one against it", () => {

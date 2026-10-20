@@ -42,6 +42,8 @@ interface MockState {
   results: Map<string, MockQueryResult>;
   /** The keys a read is in flight for, which the double reports as an observer would. */
   reading: Set<string>;
+  /** The keys a read has rejected for, which an observer counts and keeps. */
+  failed: Set<string>;
   batches: RecordedBatch[];
   windowedProviders: ReadonlyArray<ConfiguredRateLimitProvider>;
 }
@@ -49,6 +51,7 @@ interface MockState {
 const mocks = vi.hoisted<MockState>(() => ({
   results: new Map(),
   reading: new Set(),
+  failed: new Set(),
   batches: [],
   windowedProviders: [],
 }));
@@ -93,22 +96,25 @@ function mockUseHostQueriesImpl(args: {
     })),
     options: args.options,
   });
-  return args.requests.map((request) => ({
-    // A real observer always says whether a read of its key is in flight, and
-    // the segments report it (`fetching`) and decide what is owed a scheduled
-    // re-read from it, so the double answers it too - from its own set, since
-    // a reading and a read in flight are independent facts about one key.
-    isFetching: mocks.reading.has(
-      `${request.params.providerId}:${request.params.profileId ?? ""}`,
-    ),
-    ...(mocks.results.get(
-      `${request.params.providerId}:${request.params.profileId ?? ""}`,
-    ) ??
+  return args.requests.map((request) => {
+    const key = `${request.params.providerId}:${request.params.profileId ?? ""}`;
+    const result = mocks.results.get(key) ??
       mocks.results.get(request.params.providerId) ?? {
         data: undefined,
         isError: false,
-      }),
-  }));
+      };
+    return {
+      // A real observer always says whether a read of its key is in flight, and
+      // the segments report it (`fetching`) and decide what is owed a scheduled
+      // re-read from it, so the double answers it too - from its own set, since
+      // a reading and a read in flight are independent facts about one key.
+      isFetching: mocks.reading.has(key),
+      // And it counts the errors it has seen, which does not reset when the
+      // next read starts. `isError` does.
+      errorUpdateCount: result.isError || mocks.failed.has(key) ? 1 : 0,
+      ...result,
+    };
+  });
 }
 vi.mock("@/hooks/host/use-host-queries", () => ({
   useHostQueries: mockUseHostQueriesImpl,
@@ -122,9 +128,11 @@ import {
   type StatusBarRateLimitCluster,
 } from "@/hooks/rate-limits/use-status-bar-rate-limit-segments";
 import {
-  manualRateLimitRetryKey,
+  rateLimitAccountLedgerKey,
   recordManualRateLimitRetry,
-} from "@/lib/rate-limits/manual-retry-ledger";
+  recordScheduledTransientRead,
+  releaseScheduledTransientRead,
+} from "@/lib/rate-limits/rate-limit-read-ledger";
 import { RATE_LIMIT_MANUAL_RETRY_WITHHOLD_MS } from "@/lib/rate-limits/rate-limit-timing";
 import type { RateLimitProfileSelection } from "@/hooks/rate-limits/use-rate-limit-profile-selection";
 import { SAMPLE_ACCOUNT_LABEL } from "@/components/sample-workspace/sample-workspace-scene";
@@ -406,6 +414,11 @@ function setReading(providerId: RateLimitProviderId): void {
   mocks.reading.add(`${providerId}:`);
 }
 
+/** Records that a read of this account has rejected, as an observer counts it. */
+function setFailed(providerId: RateLimitProviderId): void {
+  mocks.failed.add(`${providerId}:`);
+}
+
 function opencodeWindow(usedPercent: number): ProviderRateLimitWindow & {
   readonly status: "ok" | "rate-limited";
 } {
@@ -415,6 +428,7 @@ function opencodeWindow(usedPercent: number): ProviderRateLimitWindow & {
 beforeEach(() => {
   mocks.results = new Map();
   mocks.reading = new Set();
+  mocks.failed = new Set();
   mocks.batches = [];
   mocks.windowedProviders = [];
   // The retry bound's floor is the WINDOW's, and one vitest file is one
@@ -422,8 +436,13 @@ beforeEach(() => {
   // one. A stamp at the epoch binds nothing and is dropped on the first read.
   for (const hostId of [RETRY_HOST_ID, "host-b"]) {
     recordManualRateLimitRetry(
-      manualRateLimitRetryKey(hostId, "codex", null),
+      rateLimitAccountLedgerKey(hostId, "codex", null),
       0,
+    );
+    // The episode one-shot is this renderer's too, so a row that spent one
+    // would otherwise hand a spent episode to the next row.
+    releaseScheduledTransientRead(
+      rateLimitAccountLedgerKey(hostId, "codex", null),
     );
   }
   useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
@@ -837,7 +856,7 @@ describe("useStatusBarRateLimitSegments", () => {
     ]);
   });
 
-  it("owes no scheduled re-read while a read of that account is running", () => {
+  it("keeps the scheduled re-read owed while a read of that account is running", () => {
     setResult("codex", {
       data: freshEnvelope(
         unavailableRateLimits({ provider: "codex", reason: "timeout" }),
@@ -850,11 +869,12 @@ describe("useStatusBarRateLimitSegments", () => {
       configuredProvider({ providerId: "codex", lane: "ephemeralProcess" }),
     ]);
 
-    // The running read IS the retry. Scheduling one against it buys nothing,
-    // and on the http lane it would refetch the same observer - which cancels
-    // the read in flight, aborting the person's own forced one and starting it
-    // over. The target comes back when this read settles and leaves the
-    // account transient, so the delay runs from the latest failure.
+    // Owed THROUGH the read, not withdrawn and handed back: dropping the
+    // target while a read runs unmounts the component that holds the episode's
+    // timer, and the failure that follows mounts a fresh one - a read a minute
+    // for as long as the account keeps failing. What a running read gets
+    // instead is a scheduled read that stands down (`StatusBarTransientRetry`),
+    // so it is never cancelled. The segment offers no CLICK meanwhile.
     expect(statusBarSegments(result.current.cluster).at(0)).toEqual(
       expect.objectContaining({
         state: "transient",
@@ -862,7 +882,100 @@ describe("useStatusBarRateLimitSegments", () => {
         retryOffered: false,
       }),
     );
+    expect(result.current.retryTargets).toEqual([
+      { providerId: "codex", profileId: null },
+    ]);
+  });
+
+  it("keeps saying so while the retry of a rejected read is running", () => {
+    // A dataless query goes back to pending when the next read starts, so its
+    // error flag is down for the length of that read - up to the CLI read
+    // budget. The account has still failed, and this is the moment the words
+    // are most true: an empty track here would read as "no reading yet".
+    setResult("codex", { data: undefined, isError: false });
+    setFailed("codex");
+    setReading("codex");
+
+    const { result } = renderSegments([
+      configuredProvider({ providerId: "codex", lane: "ephemeralProcess" }),
+    ]);
+
+    expect(statusBarSegments(result.current.cluster).at(0)).toEqual(
+      expect.objectContaining({
+        state: "transient",
+        reason: null,
+        fetching: true,
+      }),
+    );
+  });
+
+  it("owes nothing more once the episode has spent its one scheduled re-read", () => {
+    const transient = {
+      data: freshEnvelope(
+        unavailableRateLimits({ provider: "codex", reason: "timeout" }),
+      ),
+      isError: false,
+    };
+    setResult("codex", transient);
+
+    const { result, rerender } = renderSegments([
+      configuredProvider({ providerId: "codex", lane: "ephemeralProcess" }),
+    ]);
+    expect(result.current.retryTargets).toEqual([
+      { providerId: "codex", profileId: null },
+    ]);
+
+    // What the strip's timer records when it fires.
+    recordScheduledTransientRead(
+      rateLimitAccountLedgerKey(RETRY_HOST_ID, "codex", null),
+    );
+    setResult("codex", transient);
+    rerender();
+
+    // Still transient, still saying the words - the poll owns the cadence from
+    // here - and owed nothing.
+    expect(statusBarSegments(result.current.cluster).at(0)?.state).toBe(
+      "transient",
+    );
     expect(result.current.retryTargets).toEqual([]);
+  });
+
+  it("hands the one-shot back when a reading lands, so a fresh failure gets its own", () => {
+    recordScheduledTransientRead(
+      rateLimitAccountLedgerKey(RETRY_HOST_ID, "codex", null),
+    );
+    // The reading that ends the episode.
+    setResult("codex", {
+      data: freshEnvelope(
+        codexRateLimits({
+          primary: rlWindow({ usedPercent: 20, resetsAt: null }),
+        }),
+      ),
+      isError: false,
+    });
+    const live = renderSegments([
+      configuredProvider({ providerId: "codex", lane: "ephemeralProcess" }),
+    ]);
+    expect(statusBarSegments(live.result.current.cluster).at(0)?.state).toBe(
+      "live",
+    );
+    live.unmount();
+
+    // And a transient failure after it, with nothing retained: a fresh
+    // episode, owed its own single re-read.
+    setResult("codex", {
+      data: freshEnvelope(
+        unavailableRateLimits({ provider: "codex", reason: "timeout" }),
+      ),
+      isError: false,
+    });
+    const { result } = renderSegments([
+      configuredProvider({ providerId: "codex", lane: "ephemeralProcess" }),
+    ]);
+
+    expect(result.current.retryTargets).toEqual([
+      { providerId: "codex", profileId: null },
+    ]);
   });
 
   it("is unavailable with the wire reason when the retained reading says available: false", () => {
@@ -928,7 +1041,7 @@ describe("useStatusBarRateLimitSegments", () => {
     // before this one mounted - wrote when ITS forced read settled. It is the
     // bound, and it is not this component's to reset.
     recordManualRateLimitRetry(
-      manualRateLimitRetryKey(RETRY_HOST_ID, "codex", null),
+      rateLimitAccountLedgerKey(RETRY_HOST_ID, "codex", null),
       Date.now(),
     );
 
@@ -957,7 +1070,7 @@ describe("useStatusBarRateLimitSegments", () => {
 
     // Past the bound, the same account offers it again.
     recordManualRateLimitRetry(
-      manualRateLimitRetryKey(RETRY_HOST_ID, "codex", null),
+      rateLimitAccountLedgerKey(RETRY_HOST_ID, "codex", null),
       Date.now() - RATE_LIMIT_MANUAL_RETRY_WITHHOLD_MS,
     );
     setResult("codex", transient);
@@ -977,7 +1090,7 @@ describe("useStatusBarRateLimitSegments", () => {
       isError: false,
     });
     recordManualRateLimitRetry(
-      manualRateLimitRetryKey("host-b", "codex", null),
+      rateLimitAccountLedgerKey("host-b", "codex", null),
       Date.now(),
     );
 
@@ -1010,7 +1123,7 @@ describe("useStatusBarRateLimitSegments", () => {
     // lands in the shared storage and the event is the only notice this window
     // gets. The sampled clock has not ticked, so an offer that waited for it
     // would keep inviting a click the bound now refuses.
-    const key = manualRateLimitRetryKey(RETRY_HOST_ID, "codex", null);
+    const key = rateLimitAccountLedgerKey(RETRY_HOST_ID, "codex", null);
     const settledAt = String(Date.now());
     act(() => {
       window.localStorage.setItem(key, settledAt);
@@ -1036,7 +1149,7 @@ describe("useStatusBarRateLimitSegments", () => {
     // stamp from a badly wrong clock would sit in storage withholding it across
     // reloads.
     recordManualRateLimitRetry(
-      manualRateLimitRetryKey(RETRY_HOST_ID, "codex", null),
+      rateLimitAccountLedgerKey(RETRY_HOST_ID, "codex", null),
       Date.now() + 60 * 60 * 1000,
     );
 

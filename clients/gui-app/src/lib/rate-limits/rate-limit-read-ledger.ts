@@ -1,6 +1,14 @@
 /**
- * When each account's usage was last read BY HAND, and whether a retry of it is
- * still withheld.
+ * What this app has already asked for, per account: when a person last read
+ * one BY HAND, and whether the one re-read a transient episode promises has
+ * been taken.
+ *
+ * Both answer the same question from different sides - may this account be
+ * asked for again - so they are keyed identically, by host as well as account:
+ * a read goes to one host, and says nothing about the same account on a
+ * different one.
+ *
+ * ## The hand-driven bound
  *
  * The strip's `transient` segment offers a retry, and that retry reads with
  * `force: true` - which is what tells the host a person is asking rather than
@@ -9,9 +17,7 @@
  * that: its single flight only coalesces reads that overlap, and its probe gate
  * caps how many run at once rather than how often one may be asked for. So the
  * bound on ASKING belongs on this side, and it has to hold wherever the asking
- * happens.
- *
- * Two layers, because they answer different failures:
+ * happens. Two layers, because they answer different failures:
  *
  * - This module's own map is the FLOOR. It holds in this window whatever
  *   storage does, so a refused write (quota, blocked site data) cannot leave a
@@ -23,32 +29,54 @@
  *   the gesture that re-renders it.
  *
  * A reader takes whichever of the two is later, so neither layer can lift a
- * bound the other still holds.
+ * bound the other still holds. Every storage access is wrapped, because
+ * storage can be absent or refuse to answer and must never throw into a
+ * render.
  *
- * Keyed by HOST as well as account: a read goes to one host, and says nothing
- * about the same account on a different one.
+ * ## The episode one-shot
  *
- * Every storage access is wrapped, because storage can be absent or refuse to
- * answer and must never throw into a render.
+ * The transient words promise a retry, so the strip schedules exactly one,
+ * `TRANSIENT_RATE_LIMIT_RETRY_DELAY_MS` after the account entered the state;
+ * the 15-minute poll owns the cadence from there. One per EPISODE, not one per
+ * mount: the run of failures is a single episode, and it ends only when a
+ * reading lands or the key changes. Kept here rather than in the component
+ * that times it, because that component unmounts for reasons that are not the
+ * end of an episode - hiding the usage region, a re-render of the strip - and
+ * a one-shot it re-armed each time would be a read a minute for as long as the
+ * account kept failing.
+ *
+ * In memory only, deliberately: this is a record of a read THIS renderer owes
+ * and has taken. A sibling window has its own cache and its own poll, and
+ * suppressing its first re-read because this one already made it would leave
+ * it drawing words it never acted on. What bounds the duplicate reads across
+ * windows is the host's own floors, which that read is subject to. One entry
+ * per account with an episode running, dropped when the episode ends.
  */
 import { RATE_LIMIT_MANUAL_RETRY_WITHHOLD_MS } from "@/lib/rate-limits/rate-limit-timing";
 
-const MANUAL_RETRY_STAMP_PREFIX = "traycer.rateLimits.manualRead.";
+/**
+ * The storage prefix, and so what the `storage` filter below matches. Its
+ * value is what windows already carry, so it stays as it is.
+ */
+const LEDGER_KEY_PREFIX = "traycer.rateLimits.manualRead.";
 
-/** This window's floor, by key. */
+/** This window's floor for the hand-driven bound, by key. */
 const stampsHere = new Map<string, number>();
+
+/** The accounts whose episode has already spent its one scheduled read. */
+const spentEpisodes = new Set<string>();
 
 const listeners = new Set<() => void>();
 
 let revision = 0;
 
-/** One account's stamp key, on the host a retry of it would read from. */
-export function manualRateLimitRetryKey(
+/** One account's ledger key, on the host a read of it would go to. */
+export function rateLimitAccountLedgerKey(
   hostId: string,
   providerId: string,
   profileId: string | null,
 ): string {
-  return `${MANUAL_RETRY_STAMP_PREFIX}${hostId}:${providerId}:${profileId ?? ""}`;
+  return `${LEDGER_KEY_PREFIX}${hostId}:${providerId}:${profileId ?? ""}`;
 }
 
 /** Records that this account was just read by hand. Call it at SETTLEMENT. */
@@ -76,6 +104,31 @@ export function manualRateLimitRetryWithheld(
 ): boolean {
   const readAt = manualRateLimitRetryAt(key, now);
   return readAt !== null && now - readAt < RATE_LIMIT_MANUAL_RETRY_WITHHOLD_MS;
+}
+
+/**
+ * Whether this account's transient episode is still owed its one scheduled
+ * re-read.
+ */
+export function scheduledTransientReadOwed(key: string): boolean {
+  return !spentEpisodes.has(key);
+}
+
+/**
+ * The episode's one scheduled re-read has been taken. Recorded when the timer
+ * fires, whether or not a request went out: a read already in flight IS the
+ * retry the words promise, and asking again over it is what the skip avoids.
+ */
+export function recordScheduledTransientRead(key: string): void {
+  spentEpisodes.add(key);
+}
+
+/**
+ * This account's episode is over - a reading landed - so the next one gets its
+ * own re-read.
+ */
+export function releaseScheduledTransientRead(key: string): void {
+  spentEpisodes.delete(key);
 }
 
 /**
@@ -151,7 +204,7 @@ function valid(at: number | null, now: number): number | null {
 
 function onStorageChanged(event: StorageEvent): void {
   // A `null` key is the whole store clearing, which can drop any stamp.
-  if (event.key !== null && !event.key.startsWith(MANUAL_RETRY_STAMP_PREFIX)) {
+  if (event.key !== null && !event.key.startsWith(LEDGER_KEY_PREFIX)) {
     return;
   }
   announce();

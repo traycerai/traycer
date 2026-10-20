@@ -1,4 +1,4 @@
-import { useSyncExternalStore } from "react";
+import { useEffect, useEffectEvent, useSyncExternalStore } from "react";
 import type { UseQueryResult } from "@tanstack/react-query";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type {
@@ -47,11 +47,13 @@ import {
   type ProviderRateLimitEnvelope,
 } from "@/lib/rate-limits/rate-limit-envelope";
 import {
-  manualRateLimitRetryKey,
   manualRateLimitRetryRevision,
   manualRateLimitRetryWithheld,
+  rateLimitAccountLedgerKey,
+  releaseScheduledTransientRead,
+  scheduledTransientReadOwed,
   subscribeManualRateLimitRetries,
-} from "@/lib/rate-limits/manual-retry-ledger";
+} from "@/lib/rate-limits/rate-limit-read-ledger";
 import {
   isWindowedRateLimitProvider,
   providerWindowEntries,
@@ -414,7 +416,12 @@ function requestsFor(
 function segmentState(
   rateLimits: ProviderRateLimits | null,
   envelope: ProviderRateLimitEnvelope | null,
-  isError: boolean,
+  errors: {
+    /** This read rejected and nothing has been read since. */
+    readonly erroredNow: boolean;
+    /** A read of this key has rejected at some point. */
+    readonly erroredEver: boolean;
+  },
 ): {
   readonly state: StatusBarProviderSegmentState;
   readonly reason: RateLimitUnavailableReason | null;
@@ -427,7 +434,14 @@ function segmentState(
     // before a first read, where "no reading yet" is the true sentence. No
     // reason: a rejection carries no wire reason, and the transient words name
     // no mechanism anyway.
-    return isError
+    //
+    // EVER, not now: a dataless query goes back to pending while the next read
+    // runs, which clears the error flag. Read `erroredNow` here and the words
+    // would drop to an empty track for the length of a retry - up to the CLI
+    // read budget - which is the one moment they are most true. With no data
+    // there is nothing a past error can misdescribe, so the sticky answer is
+    // the honest one.
+    return errors.erroredEver
       ? { state: "transient", reason: null }
       : { state: "cold", reason: null };
   }
@@ -451,8 +465,9 @@ function segmentState(
   }
   // A query that threw retains its data too, and the strip has to say so - but
   // a thrown fetch carries no wire reason, so the tooltip falls back to the
-  // generic sentence rather than inventing one.
-  if (isError) return { state: "degraded", reason: null };
+  // generic sentence rather than inventing one. NOW, not ever: a reading that
+  // arrived after the error is not degraded by it.
+  if (errors.erroredNow) return { state: "degraded", reason: null };
   return { state: "live", reason: null };
 }
 
@@ -544,7 +559,7 @@ function accountKey(
  * Whether this account may be offered a retry, or was read by hand too
  * recently.
  *
- * The bound itself is the ledger's (`manual-retry-ledger.ts`): its stamp is
+ * The bound itself is the ledger's (`rate-limit-read-ledger.ts`): its stamp is
  * written at SETTLEMENT, so a read that failed slowly is bounded from when it
  * failed, it survives this component, and it holds in every window. The same
  * predicate runs again when a click is dispatched, which is the gate that
@@ -561,7 +576,7 @@ function retryBoundLifted(
   now: number,
 ): boolean {
   return !manualRateLimitRetryWithheld(
-    manualRateLimitRetryKey(hostId, providerId, profileId),
+    rateLimitAccountLedgerKey(hostId, providerId, profileId),
     now,
   );
 }
@@ -603,7 +618,10 @@ function toSegments(
     );
     const reported = context.sample
       ? { state: "live" as const, reason: null }
-      : segmentState(retained, envelope, query.isError);
+      : segmentState(retained, envelope, {
+          erroredNow: query.isError,
+          erroredEver: query.isError || query.errorUpdateCount > 0,
+        });
     // Every read of these keys runs through TanStack, whichever trigger started
     // it, so the observer's own flag is the whole answer - the same one the
     // cluster's `↻` spins on.
@@ -858,27 +876,62 @@ export function useStatusBarRateLimitSegments(input: {
   // rather than baked into the store so a late-connected provider still lands
   // beside its canonical neighbour without a migration.
   const segments = applySegmentOrder(canonicallyOrdered, segmentOrder);
-  // Transient AND idle. A read already running IS the retry, so scheduling one
-  // against it buys nothing and costs something: on the `httpFetch` lane the
-  // scheduled read refetches that account's observer, and TanStack cancels an
-  // in-flight refetch - which would abort the person's own forced read and
-  // start it over. The target returns when the running read settles and leaves
-  // the account transient, so the delay is measured from the latest failure.
   const transientKeys = new Set(
     segments.flatMap((segment) =>
-      segment.state === "transient" && !segment.fetching
+      segment.state === "transient"
         ? [accountKey(segment.providerId, segment.profileId)]
         : [],
     ),
   );
+  // An episode is over when a reading lands, so the one-shot it spent is handed
+  // back and the next run of failures gets its own re-read. In an effect,
+  // because it is a write about what has already been drawn; only where a read
+  // would go from, since the key names that host; and never in the sample
+  // scene, whose invented readings say nothing about a real account.
+  const releaseHostId = input.retryHostId;
+  const settledLedgerKeys =
+    releaseHostId === null || input.sample
+      ? []
+      : segments.flatMap((segment) =>
+          segment.state === "transient"
+            ? []
+            : [
+                rateLimitAccountLedgerKey(
+                  releaseHostId,
+                  segment.providerId,
+                  segment.profileId,
+                ),
+              ],
+        );
+  const releaseSettledEpisodes = useEffectEvent((): void => {
+    for (const key of settledLedgerKeys) releaseScheduledTransientRead(key);
+  });
+  // The set itself as the dependency, flattened: a fresh array every render
+  // would run this on every render, and the keys are the only thing that can
+  // make it mean something different.
+  const settledEpisodeKeys = settledLedgerKeys.join("\n");
+  useEffect(() => {
+    releaseSettledEpisodes();
+  }, [settledEpisodeKeys]);
 
   return {
     cluster: clusterFor(input.providers.length, segments),
     retryTargets: targets.flatMap((target) =>
       !passive &&
       target.fetchEligible &&
+      input.retryHostId !== null &&
       transientKeys.has(
         accountKey(target.provider.providerId, target.profileId),
+      ) &&
+      // The episode's one re-read, once. A placement whose click does not read
+      // owes none at all: it has no host to read from, which is the same
+      // reason it offers no affordance.
+      scheduledTransientReadOwed(
+        rateLimitAccountLedgerKey(
+          input.retryHostId,
+          target.provider.providerId,
+          target.profileId,
+        ),
       )
         ? [
             {

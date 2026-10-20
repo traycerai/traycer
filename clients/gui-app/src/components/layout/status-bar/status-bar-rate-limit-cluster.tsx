@@ -40,10 +40,11 @@ import {
   type ProviderRateLimitFetchScope,
 } from "@/lib/rate-limits/provider-rate-limit-fetch";
 import {
-  manualRateLimitRetryKey,
   manualRateLimitRetryWithheld,
+  rateLimitAccountLedgerKey,
   recordManualRateLimitRetry,
-} from "@/lib/rate-limits/manual-retry-ledger";
+  recordScheduledTransientRead,
+} from "@/lib/rate-limits/rate-limit-read-ledger";
 import { rateLimitFetchLane } from "@/lib/rate-limit-providers";
 import { TRANSIENT_RATE_LIMIT_RETRY_DELAY_MS } from "@/lib/rate-limits/rate-limit-timing";
 import { cn } from "@/lib/utils";
@@ -117,7 +118,7 @@ export function StatusBarRateLimitCluster(props: {
   const retryNow = (target: StatusBarRateLimitRetryTarget): void => {
     const hostId = fetchScope?.hostId ?? null;
     if (hostId === null) return;
-    const key = manualRateLimitRetryKey(
+    const key = rateLimitAccountLedgerKey(
       hostId,
       target.providerId,
       target.profileId,
@@ -196,6 +197,7 @@ export function StatusBarRateLimitCluster(props: {
             <StatusBarTransientRetry
               key={`${fetchScope.hostId}:${target.providerId}:${target.profileId ?? ""}`}
               target={target}
+              reading={statusBarSegmentIsReading(cluster, target)}
               httpRefetches={refresh.httpRefetches}
             />
           ))}
@@ -325,12 +327,6 @@ function UsageTriggerReadings(props: {
 }
 
 /**
- * The account segment a click on the trigger landed in, if any. Read from the
- * segment's own `data-*` naming rather than from a handler on the segment,
- * because the segment is a `span` inside a button: the button is the control,
- * and the segment saying what it is lets the control answer for it.
- */
-/**
  * Whether the segment a click landed in is currently offering a retry.
  *
  * Read from the segment MODEL rather than from the DOM: the words, the
@@ -407,10 +403,28 @@ function readOneAccount(args: {
  */
 function StatusBarTransientRetry(props: {
   readonly target: StatusBarRateLimitRetryTarget;
+  /** Whether a read of this account is in flight right now. */
+  readonly reading: boolean;
   readonly httpRefetches: ReadonlyArray<StatusBarRateLimitHttpRefetch>;
 }): ReactNode {
   const fetchScope = useProviderRateLimitFetchScope();
   const read = useEffectEvent((): void => {
+    if (fetchScope === null) return;
+    // Spent here, before anything else: the episode promised ONE scheduled
+    // read, and the hook stops listing this account the moment it is spent, so
+    // nothing re-arms a timer while the account keeps failing.
+    recordScheduledTransientRead(
+      rateLimitAccountLedgerKey(
+        fetchScope.hostId,
+        props.target.providerId,
+        props.target.profileId,
+      ),
+    );
+    // A read already in flight IS the retry the words promise, so this one
+    // stands down rather than overtaking it. On the `httpFetch` lane it would
+    // refetch that account's observer, and TanStack cancels the request in
+    // flight - aborting a person's own forced read and starting it over.
+    if (props.reading) return;
     void readOneAccount({
       fetchScope,
       httpRefetches: props.httpRefetches,
@@ -419,7 +433,8 @@ function StatusBarTransientRetry(props: {
     });
   });
   // No dependencies: the caller keys this component by its account, so a
-  // different account is a different instance with its own single timer.
+  // different account is a different instance with its own single timer, and
+  // the episode's one-shot is not this component's to re-arm.
   useEffect(() => {
     const timer = window.setTimeout(read, TRANSIENT_RATE_LIMIT_RETRY_DELAY_MS);
     return () => window.clearTimeout(timer);
@@ -427,6 +442,25 @@ function StatusBarTransientRetry(props: {
   return null;
 }
 
+/** Whether a read of this account is in flight, from the segment model. */
+function statusBarSegmentIsReading(
+  cluster: StatusBarRateLimitClusterModel,
+  target: StatusBarRateLimitRetryTarget,
+): boolean {
+  return statusBarClusterSegments(cluster).some(
+    (segment) =>
+      segment.fetching &&
+      segment.providerId === target.providerId &&
+      segment.profileId === target.profileId,
+  );
+}
+
+/**
+ * The account segment a click on the trigger landed in, if any. Read from the
+ * segment's own `data-*` naming rather than from a handler on the segment,
+ * because the segment is a `span` inside a button: the button is the control,
+ * and the segment saying what it is lets the control answer for it.
+ */
 function statusBarSegmentAtClick(
   target: EventTarget,
 ): RateLimitPopoverRevealTarget | null {
