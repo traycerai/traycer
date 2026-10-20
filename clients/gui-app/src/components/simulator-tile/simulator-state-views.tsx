@@ -152,7 +152,7 @@ export function SimulatorSetupView(props: {
       <p>
         Turn them on to run {canRun} on that machine and work with them here.
         The first time, {props.hostLabel} downloads the simulator tools (under
-        60 MB) and keeps them until you turn simulators off.
+        60 MB) and keeps them until you remove them in the Host panel.
       </p>
       <label
         className={cn(
