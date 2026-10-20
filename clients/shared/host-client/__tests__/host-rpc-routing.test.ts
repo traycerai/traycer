@@ -175,10 +175,15 @@ describe("decideHostRpcDispatch", () => {
 });
 
 describe("hostRpcServingTierHostId", () => {
-  it("names the pool for a pool-only method only when the build has one", () => {
-    expect(
-      hostRpcServingTierHostId("environment.list", "host-a", POOL_PLAN, null),
-    ).toBe(POOL_HOST_ID);
+  it("names the pool for a pool-only method whatever the caller's host, null included", () => {
+    for (const caller of ["host-a", teamSandboxEntry.hostId, null]) {
+      expect(
+        hostRpcServingTierHostId("environment.list", caller, POOL_PLAN, null),
+      ).toBe(POOL_HOST_ID);
+    }
+  });
+
+  it("names the caller's host for a pool-only method when the build has no pool", () => {
     expect(
       hostRpcServingTierHostId(
         "environment.list",
@@ -189,13 +194,16 @@ describe("hostRpcServingTierHostId", () => {
     ).toBe("host-a");
   });
 
-  it("names the selected host for input-device methods and the caller otherwise", () => {
+  it("names the selected host for a selected-host method when known, else the caller's", () => {
     expect(
       hostRpcServingTierHostId("speech.getModelStatus", "sb", POOL_PLAN, "mac"),
     ).toBe("mac");
     expect(
       hostRpcServingTierHostId("speech.getModelStatus", "sb", POOL_PLAN, null),
     ).toBe("sb");
+  });
+
+  it("names the caller's host for a target-host method", () => {
     expect(hostRpcServingTierHostId("agent.list", "sb", POOL_PLAN, "mac")).toBe(
       "sb",
     );
