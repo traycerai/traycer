@@ -1140,11 +1140,15 @@ interface Session {
    * default frame timeout, while the response wait may pass a caller-extended
    * budget for long-poll methods.
    *
-   * `timeoutMs` bounds when this wait can *succeed*, not always when it
-   * rejects: a post-send timeout keeps the socket open for the remainder of the
-   * host's attestation window (see `attestationGraceFor`). A frame that arrives
-   * in that window can no longer complete the call - only the host's
-   * no-dispatch fatal is surfaced, and every other frame keeps the timeout.
+   * `timeoutMs` bounds neither end of this wait exactly: it is when the wait
+   * stops expecting an answer, after which a post-send timeout keeps the
+   * socket open for the remainder of the host's attestation window (see
+   * `attestationGraceFor`). Two frames arriving in that window still settle
+   * the call, because both are the host speaking to this request: its
+   * no-dispatch fatal, which the caller maps to a retryable failure, and the
+   * response to this exact `requestId`, which resolves the wait - so a
+   * success can land after `timeoutMs` as well as a rejection. Every other
+   * frame keeps the recorded ambiguous timeout.
    */
   next(timeoutMs: number): Promise<HostFrame>;
   send(frame: ClientFrame): void;

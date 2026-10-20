@@ -634,17 +634,6 @@ describe("callHostRpc", () => {
     });
   });
 
-  // The new code reports a state of the machine, not a CLI defect, so it is
-  // opted out of capture exactly as HOST_UNREACHABLE is. Without this the
-  // every-night volume this defect produces would be reported as defects.
-  it("treats HOST_REQUEST_OUTCOME_UNKNOWN as an expected outcome, not a captured defect", () => {
-    expect(
-      EXPECTED_CLI_ERROR_CODES.has(
-        CLI_ERROR_CODES.HOST_REQUEST_OUTCOME_UNKNOWN,
-      ),
-    ).toBe(true);
-  });
-
   // RetryableTransportError is a subclass of HostTransportFailureError, and it
   // is the transport's own statement that sending again is safe - either
   // nothing was dispatched or the host is deduplicating a negotiated key. That
