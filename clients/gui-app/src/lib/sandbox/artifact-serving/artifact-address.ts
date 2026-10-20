@@ -54,7 +54,7 @@ export function parseArtifactAddress(url: string): ArtifactAddress | null {
   } catch {
     return null;
   }
-  if (path === "") path = "index.html";
+  if (path === "" || path.endsWith("/")) path += "index.html";
   return isArtifactPath(path) ? { artifactId, mountId, path } : null;
 }
 

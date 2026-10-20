@@ -140,6 +140,7 @@ function startCard(): ReactNode {
         cwd: "/work/repo",
       }}
       agentMessageReceipt={null}
+      agentMessageDelivery={null}
       isStreaming={false}
       endState={null}
       stopped={false}
@@ -179,6 +180,7 @@ function restartCard(): ReactNode {
         outcome: { state: "running", pid: 4410, startedAtMs: 10 },
       }}
       agentMessageReceipt={null}
+      agentMessageDelivery={null}
       isStreaming={false}
       endState={null}
       stopped={false}

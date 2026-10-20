@@ -208,6 +208,7 @@ function hostStatusResponse(
     storeFormats: null,
     install: null,
     processMemory: null,
+    crossHostMessaging: null,
     ...overrides,
   };
 }

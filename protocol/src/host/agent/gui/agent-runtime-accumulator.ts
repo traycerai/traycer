@@ -986,6 +986,7 @@ export function accumulateEvent(
           managedCommand: null,
           agentMessageReceipt: null,
           artifact: null,
+          agentMessageDelivery: null,
           mcpApp: null,
           blockId: event.blockId,
           status: "streaming",
@@ -1025,6 +1026,10 @@ export function accumulateEvent(
           // that carried it, and a re-completion without one keeps it.
           agentMessageReceipt:
             event.agentMessageReceipt ?? existing.agentMessageReceipt,
+          // Where a cross-host send stands (`chat.subscribe@1.29`). A later
+          // event that carries it moves the state; one without it keeps it.
+          agentMessageDelivery:
+            event.agentMessageDelivery ?? existing.agentMessageDelivery,
           // The host's artifact and MCP App stamps: identity
           // the completion established, kept by a re-completion without them.
           artifact: event.artifact ?? existing.artifact,
@@ -1063,6 +1068,7 @@ export function accumulateEvent(
           managedCommand: event.managedCommand ?? null,
           agentMessageReceipt: event.agentMessageReceipt ?? null,
           artifact: event.artifact ?? null,
+          agentMessageDelivery: event.agentMessageDelivery ?? null,
           mcpApp: event.mcpApp ?? null,
           progress: null,
           backgroundOutput: event.backgroundOutput ?? null,
@@ -1103,6 +1109,7 @@ export function accumulateEvent(
           managedCommand: null,
           agentMessageReceipt: null,
           artifact: null,
+          agentMessageDelivery: null,
           mcpApp: null,
           blockId: event.blockId,
           status: "errored",

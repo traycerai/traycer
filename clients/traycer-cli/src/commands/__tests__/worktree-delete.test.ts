@@ -183,6 +183,42 @@ describe("buildWorktreeDeleteCommand input validation", () => {
     expect(resolveHostAuthMock).not.toHaveBeenCalled();
     expect(resolveEndpointMock).not.toHaveBeenCalled();
   });
+
+  it("refuses a whitespace-only --path with the usage message and no host call", async () => {
+    await expect(
+      buildWorktreeDeleteCommand({ worktreePath: "   " })(ctx),
+    ).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.INVALID_ARGUMENT,
+      message: "traycer: worktree delete requires --path <worktree path>.",
+    });
+    expect(hoisted.state.sessions).toHaveLength(0);
+    expect(resolveEndpointMock).not.toHaveBeenCalled();
+  });
+
+  // A folder name may end in whitespace, so a real value is sent as written.
+  it("sends a --path with a trailing space as written and reports it as is", async () => {
+    const pending = buildWorktreeDeleteCommand({
+      worktreePath: "/wt/feature ",
+    })(ctx);
+
+    await waitForSessions(1);
+    const session = commandSession();
+    expect(session.params).toMatchObject({
+      targets: [{ worktreePath: "/wt/feature ", scripts: null }],
+    });
+    session.frameHandler?.({
+      kind: "target.complete",
+      worktreePath: "/wt/feature ",
+      deleted: true,
+      hasBinaryPayload: false,
+    });
+
+    const result = await pending;
+    expect(result.data).toEqual({
+      worktreePath: "/wt/feature ",
+      deleted: true,
+    });
+  });
 });
 
 describe("buildWorktreeDeleteCommand command shape", () => {

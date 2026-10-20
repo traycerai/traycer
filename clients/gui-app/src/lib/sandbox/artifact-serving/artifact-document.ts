@@ -20,6 +20,7 @@ export function artifactBasePolicy(policySource: string | null): string {
 }
 
 export interface ArtifactDocumentOptions {
+  readonly artifactRootPath?: string;
   readonly canvas?: boolean;
   readonly canvasLinks?: "native";
   readonly policySource: string | null;

@@ -1,3 +1,4 @@
+import { FileArtifactViewer } from "./file-artifact-viewer";
 import type { HtmlSelection } from "@/components/html-artifact/html-selection-store";
 
 import {
@@ -128,6 +129,18 @@ export function ObjectArtifactTile(props: {
     return (
       <div className="p-4 text-muted-foreground">Artifact unavailable.</div>
     );
+  if (artifact.kind === "file" && artifact.object !== undefined) {
+    return (
+      <FileArtifactViewer
+        key={`${artifact.id}:${artifact.object.sha256}`}
+        epicId={props.epicId}
+        hostId={hostId}
+        name={artifact.folderName}
+        object={artifact.object}
+        readSpan={readSpan}
+      />
+    );
+  }
   if (artifact.kind === "canvas") {
     const mobile = isMobileApp();
     if (!mobile && !desktop)
@@ -158,6 +171,14 @@ export function ObjectArtifactTile(props: {
       />
     );
   }
+  return <ArtifactMetadata artifact={artifact} />;
+}
+
+function ArtifactMetadata({
+  artifact,
+}: {
+  readonly artifact: ArtifactProjection;
+}) {
   const byteLength =
     artifact.object?.byteLength ??
     (artifact.head === undefined

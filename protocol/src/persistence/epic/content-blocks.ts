@@ -499,6 +499,39 @@ export const agentMessageReceiptSchema = lazySchema(() =>
 );
 export type AgentMessageReceipt = z.infer<typeof agentMessageReceiptSchema>;
 
+// Where a cross-host `traycer_send_message` call stands. A send to an agent on
+// another host is queued through the cloud rather than delivered while the
+// call runs, so the sender's card cannot read "sent" off the call alone:
+//
+// - `queued`: the cloud accepted it; the receiving host has not taken it yet.
+// - `delivered`: the receiving host durably accepted it. The host also stamps
+//   `agentMessageReceipt` from the receiving host's own delivered report at
+//   that point.
+// - `expired`: it waited past the delivery window and was dropped unread.
+// - `failed`: it will not be delivered for any other terminal reason: the
+//   receiving host refused it, or that host was removed and its queue purged.
+//
+// Stamped at `tool_call.completed` from the queued result, then moved by the
+// sending host as the receiving host's delivered report, or a terminal failure
+// for `eventId`, arrives - after the turn has ended, as an ordinary row update.
+// Null for a send delivered on the same host and for every block persisted
+// before this field.
+export const agentMessageDeliveryStateSchema = lazySchema(() =>
+  z.enum(["queued", "delivered", "expired", "failed"]),
+);
+export type AgentMessageDeliveryState = z.infer<
+  typeof agentMessageDeliveryStateSchema
+>;
+
+export const agentMessageDeliverySchema = lazySchema(() =>
+  z.object({
+    targetHostId: z.string(),
+    eventId: z.string(),
+    state: agentMessageDeliveryStateSchema,
+  }),
+);
+export type AgentMessageDelivery = z.infer<typeof agentMessageDeliverySchema>;
+
 // Structured rendering of a tool call's input - the collapsed summary line
 // (`inputSummary`) plus this optional expand body. Computed on the host at
 // block-build time from the raw harness input, which is itself NOT persisted (it
@@ -884,6 +917,12 @@ export const toolCallBlockSchema = lazySchema(() =>
     // `toolCallBlockSchemaPreImage` below, so released `chat.subscribe` lines
     // never observe it.
     agentMessageReceipt: agentMessageReceiptSchema.nullable().default(null),
+    // Where a cross-host send stands (`chat.subscribe@1.29`) - see
+    // `agentMessageDeliverySchema`. Null for every other tool call, for a
+    // same-host send and for blocks persisted before this field. Not on the
+    // hand-frozen `toolCallBlockSchemaPreDelivery` below, so `1.28` and older
+    // never see it.
+    agentMessageDelivery: agentMessageDeliverySchema.nullable().default(null),
     // The shell a `traycer_run_shell` call created - see
     // `toolCallManagedCommandSchema`. Null for every other tool call.
     managedCommand: toolCallManagedCommandSchema.nullable().default(null),
@@ -956,10 +995,39 @@ export const toolCallBlockSchemaPreArtifact = lazySchema(() =>
     backgroundTask: z.boolean().nullable().default(false),
     stopped: z.boolean().default(false),
     imageResults: z.array(imageGenerationResultSchema).default([]),
+    agentMessageDelivery: agentMessageDeliverySchema.nullable().default(null),
     mcpApp: toolCallMcpAppStampSchema.nullable().default(null),
   }),
 );
 export type ToolCallBlock = z.infer<typeof toolCallBlockSchema>;
+
+// Wire-freeze copy of `toolCallBlockSchema` as `chat.subscribe@1.23` through
+// `@1.28` ship it: the live block without the `agentMessageDelivery` stamp
+// `1.29` added. Bound by the content-block unions those lines decode.
+// Hand-frozen, NOT `.omit()`-derived, so a later key cannot reach them.
+export const toolCallBlockSchemaPreDelivery = lazySchema(() =>
+  z.object({
+    ...baseBlockFields,
+    status: actionBlockStatus,
+    type: z.literal("tool_call"),
+    toolName: z.string(),
+    inputSummary: z.string().nullable().default(null),
+    inputDetail: toolInputDetailSchema.nullable().default(null),
+    taskTodoItems: z.array(parsedTaskTodoSchema).nullable().default(null),
+    error: z.string().nullable(),
+    agentMessageSend: agentMessageSendSchema.nullable().default(null),
+    agentMessageReceipt: agentMessageReceiptSchema.nullable().default(null),
+    managedCommand: toolCallManagedCommandSchema.nullable().default(null),
+    progress: z.string().nullable().default(null),
+    backgroundOutput: backgroundTaskOutputSchema.nullable().default(null),
+    startedAt: z.number().nullable().default(null),
+    endedAt: z.number().nullable().default(null),
+    backgroundTask: z.boolean().nullable().default(false),
+    stopped: z.boolean().default(false),
+    imageResults: z.array(imageGenerationResultSchema).default([]),
+    mcpApp: toolCallMcpAppStampSchema.nullable().default(null),
+  }),
+);
 
 // Wire-freeze copy of `toolCallBlockSchema` as every `chat.subscribe` line up to
 // `@1.21` ships it: the live block without the `mcpApp` stamp `1.23`

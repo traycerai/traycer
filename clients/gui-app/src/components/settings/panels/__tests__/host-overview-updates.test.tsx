@@ -3989,6 +3989,7 @@ describe("Overview updates — record-leg liveness and entry-level floor gates",
             storeFormats: null,
             install: null,
             processMemory: null,
+            crossHostMessaging: null,
           };
         },
         "host.update.check": () => ({

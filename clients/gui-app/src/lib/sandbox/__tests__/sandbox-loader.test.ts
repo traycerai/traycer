@@ -132,7 +132,11 @@ describe("served artifact page links", () => {
    * its own at a served page's address. `true` when the click was left to the
    * browser, so the frame follows the link itself.
    */
-  function clickFollows(artifactPage: ArtifactPageRole, href: string): boolean {
+  function clickFollows(
+    artifactPage: ArtifactPageRole,
+    href: string,
+    artifactRootPath: string | undefined,
+  ): boolean {
     const composed = buildDocument({
       html: "",
       csp: null,
@@ -145,6 +149,7 @@ describe("served artifact page links", () => {
       },
       shortcuts: [],
       artifactPage,
+      ...(artifactRootPath === undefined ? {} : { artifactRootPath }),
     });
     const { window } = new JSDOM("<!doctype html><html><body></body></html>", {
       runScripts: "dangerously",
@@ -164,10 +169,30 @@ describe("served artifact page links", () => {
     return followed;
   }
 
-  it("follows a link to another page of the folder only on a served artifact page", () => {
-    expect(clickFollows("found", "about.html")).toBe(true);
-    expect(clickFollows("found", "../other/page.htm")).toBe(true);
-    expect(clickFollows("found", "logo.png")).toBe(false);
-    expect(clickFollows(null, "about.html")).toBe(false);
+  it("follows a link to another page of the artifact only on a served artifact page that knows its root", () => {
+    expect(clickFollows("found", "about.html", "/site/")).toBe(true);
+    expect(clickFollows("found", "logo.png", "/site/")).toBe(false);
+    expect(clickFollows(null, "about.html", "/site/")).toBe(false);
+    // Without the root there is nothing to confine the link to, so it is
+    // handed to the app rather than followed.
+    expect(clickFollows("found", "about.html", undefined)).toBe(false);
+  });
+
+  it("follows a link to a directory of the artifact, which the server answers with its index page", () => {
+    expect(clickFollows("found", "docs/", "/site/")).toBe(true);
+    expect(clickFollows("found", "/site/", "/site/")).toBe(true);
+    // A directory link is not an html page by its extension, so the trailing
+    // slash is what must carry it.
+    expect(clickFollows("found", "docs", "/site/")).toBe(false);
+  });
+
+  it("refuses a link that leaves the artifact's own folder, including a sibling that shares its name as a prefix", () => {
+    expect(clickFollows("found", "../other/page.htm", "/site/")).toBe(false);
+    expect(clickFollows("found", "/site-evil/page.html", "/site/")).toBe(false);
+    expect(clickFollows("found", "/site-evil/", "/site/")).toBe(false);
+  });
+
+  it("refuses a link whose path cannot be decoded instead of following it", () => {
+    expect(clickFollows("found", "%E0%A4%A.html", "/site/")).toBe(false);
   });
 });

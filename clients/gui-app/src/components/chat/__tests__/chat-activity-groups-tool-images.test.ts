@@ -41,6 +41,7 @@ function toolSegment(id: string, toolName: string): ToolMessageSegment {
     agentMessageSend: null,
     managedCommand: null,
     agentMessageReceipt: null,
+    agentMessageDelivery: null,
     isStreaming: false,
     endState: null,
     stopped: false,

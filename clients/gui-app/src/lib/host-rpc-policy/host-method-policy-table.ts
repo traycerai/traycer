@@ -392,8 +392,10 @@ export const HOST_METHOD_POLL_TABLE = {
   // clears a row or a site writes a cookie, and the group refetches on the
   // former. Polling it would keep a settings page waking the host store.
   "browser.savedLoginSites": { ...LATEST_SCHEDULING, poll: null },
-  // Opt-in polling (`poll: true`), for one caller: the Overview's drain
-  // affordance. Its `busySessionCount` / `busyBreakdown` is what "Apply now
+  // Opt-in polling (`poll: true`), for two callers sharing one cache entry:
+  // the side strip's host indicator, which shows a host whose cross-host
+  // messages are paused (`crossHostMessaging`, @1.8) as degraded, and the
+  // Overview's drain affordance. Its `busySessionCount` / `busyBreakdown` is what "Apply now
   // — ends 2 agents and 1 terminal" (or "ends N sessions" on a @1.1 host)
   // promises and then destroys, so the question is not whether the
   // cached value may be reused but whether it is still TRUE. Going stale does

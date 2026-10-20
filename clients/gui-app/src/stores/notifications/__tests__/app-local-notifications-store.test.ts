@@ -25,6 +25,7 @@ import {
   type AppLocalNotificationEntry,
   useAppLocalNotificationsStore,
 } from "@/stores/notifications/app-local-notifications-store";
+import { rowFromAppLocalEntry } from "@/stores/notifications/merged-notifications";
 
 function entry(
   id: string,
@@ -935,6 +936,70 @@ describe("app-local notifications store", () => {
         tileInstanceId: "terminal-instance",
       },
     ]);
+  });
+});
+
+describe("chat stream error notification row", () => {
+  beforeEach(() => {
+    window.localStorage.clear();
+    __resetAppLocalNotificationsStoreForTests();
+    useAppLocalNotificationsStore.getState().activateIdentity("user-a");
+  });
+
+  function rowFor(
+    code: string,
+    upgradeGuidance: {
+      readonly hostShouldUpgrade: boolean;
+      readonly clientShouldUpgrade: boolean;
+    } | null,
+  ) {
+    const reason = `${code}: The caller does not have access to this epic (epic=e1 chat=c1).`;
+    emitChatStreamErrorNotification({
+      hostId: "h1",
+      epicId: "e1",
+      chatId: "c1",
+      details: { code, reason, incompatibleMethods: null, upgradeGuidance },
+    });
+    const state = useAppLocalNotificationsStore.getState();
+    const { title, body } = rowFromAppLocalEntry(
+      state.byId[`stream.transport.error:h1:c1:${code}`],
+    );
+    return { title, body, reason };
+  }
+
+  it.each([
+    [
+      "EPIC_NOT_FOUND",
+      "This task was deleted.",
+      "This agent can no longer be opened.",
+    ],
+    [
+      "EPIC_ACCESS_DENIED",
+      "You don't have access to this task.",
+      "Ask someone with access to share it with you.",
+    ],
+  ])("shows the cloud verdict %s as a two-line row", (code, title, body) => {
+    const row = rowFor(code, null);
+    expect({ title: row.title, body: row.body }).toEqual({ title, body });
+  });
+
+  it("keeps the generic title and raw reason for any other code", () => {
+    const row = rowFor("CHAT_INVALID", null);
+    expect({ title: row.title, body: row.body }).toEqual({
+      title: "Agent stream closed unexpectedly.",
+      body: row.reason,
+    });
+  });
+
+  it("lets a host update outrank the cloud verdict, as in the chat tile", () => {
+    const row = rowFor("EPIC_ACCESS_DENIED", {
+      hostShouldUpgrade: true,
+      clientShouldUpgrade: false,
+    });
+    expect({ title: row.title, body: row.body }).toEqual({
+      title: "Agent stream closed unexpectedly.",
+      body: row.reason,
+    });
   });
 });
 

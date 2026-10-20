@@ -45,6 +45,14 @@ const DOCUMENT_OPTIONS: ArtifactDocumentOptions = {
   },
 };
 
+/**
+ * The options the server composes a page with: the shared ones plus the root
+ * the served tree lives under, which the page's links are confined to.
+ */
+function composedWith(artifactRootPath: string): ArtifactDocumentOptions {
+  return { ...DOCUMENT_OPTIONS, artifactRootPath };
+}
+
 function entry(
   overrides: Partial<ArtifactManifestEntry>,
 ): ArtifactManifestEntry {
@@ -331,7 +339,7 @@ describe("ArtifactServer.serve — a page the artifact lacks", () => {
     expect(page.kind).toBe("bytes");
     if (page.kind === "bytes") {
       expect(new TextDecoder().decode(page.bytes)).toBe(
-        buildMissingPageDocument(DOCUMENT_OPTIONS),
+        buildMissingPageDocument(composedWith("/site/")),
       );
       expect(page.mediaType).toBe("text/html; charset=utf-8");
     }
@@ -787,7 +795,7 @@ describe("ArtifactServer.serve — HTML documents", () => {
       signal: signal(),
     });
 
-    const expected = buildArtifactDocument("<p>hi</p>", DOCUMENT_OPTIONS);
+    const expected = buildArtifactDocument("<p>hi</p>", composedWith("/"));
     expect(result.kind).toBe("bytes");
     if (result.kind === "bytes") {
       expect(new TextDecoder().decode(result.bytes)).toBe(expected);
@@ -808,7 +816,7 @@ describe("ArtifactServer.serve — HTML documents", () => {
     });
 
     const expectedBytes = new TextEncoder().encode(
-      buildArtifactDocument("<p>hello artifact world</p>", DOCUMENT_OPTIONS),
+      buildArtifactDocument("<p>hello artifact world</p>", composedWith("/")),
     );
     const mid = Math.floor(expectedBytes.length / 2);
 
@@ -849,7 +857,7 @@ describe("ArtifactServer.serve — HTML documents", () => {
     });
 
     const expectedBytes = new TextEncoder().encode(
-      buildArtifactDocument("a".repeat(size), DOCUMENT_OPTIONS),
+      buildArtifactDocument("a".repeat(size), composedWith("/")),
     );
     const totalLength = expectedBytes.length; // > 2 * FOUR_MIB, prelude included
 
@@ -1006,10 +1014,10 @@ describe("ArtifactServer.serve — HTML documents", () => {
       throw new Error("expected both compositions to succeed");
     }
     expect(new TextDecoder().decode(changed.bytes)).toBe(
-      buildArtifactDocument("<p>bb</p>", DOCUMENT_OPTIONS),
+      buildArtifactDocument("<p>bb</p>", composedWith("/")),
     );
     expect(new TextDecoder().decode(first.bytes)).toBe(
-      buildArtifactDocument("<p>a</p>", DOCUMENT_OPTIONS),
+      buildArtifactDocument("<p>a</p>", composedWith("/")),
     );
   });
 
@@ -1066,7 +1074,7 @@ describe("ArtifactServer.serve — HTML documents", () => {
       document: DOCUMENT_OPTIONS,
     });
 
-    const expected = buildArtifactDocument("", DOCUMENT_OPTIONS);
+    const expected = buildArtifactDocument("", composedWith("/"));
     // The composed document is still the full loader prelude even for an
     // empty raw body, so request the 4 MiB cap to capture all of it.
     const result = await server.serve({
@@ -1135,7 +1143,7 @@ describe("ArtifactServer.serve — HTML documents", () => {
       document: DOCUMENT_OPTIONS,
     });
     const expectedLength = new TextEncoder().encode(
-      buildArtifactDocument("<p>hi</p>", DOCUMENT_OPTIONS),
+      buildArtifactDocument("<p>hi</p>", composedWith("/")),
     ).length;
 
     const result = await server.serve({
@@ -1667,7 +1675,7 @@ describe("ArtifactServer.serve — tree-path nesting", () => {
     if (result.kind === "bytes") {
       expect(result.mediaType).toBe("text/html; charset=utf-8");
       expect(new TextDecoder().decode(result.bytes)).toBe(
-        buildArtifactDocument("<p>nested</p>", DOCUMENT_OPTIONS),
+        buildArtifactDocument("<p>nested</p>", composedWith("/parent/report/")),
       );
     }
   });

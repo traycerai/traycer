@@ -1,14 +1,14 @@
 import { describe, expect, it } from "vitest";
 import {
-  chatSubscribeV131,
   chatSubscribeV132,
+  chatSubscribeV133,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 
 /**
- * `chat.subscribe@1.32` is the first line whose accumulated-change tag can
- * name html, canvas or file: `chatSubscribeV132` binds the live windowed
+ * `chat.subscribe@1.33` is the first line whose accumulated-change tag can
+ * name html, canvas or file: `chatSubscribeV133` binds the live windowed
  * server frame schema, whose `accumulatedChanges` chunk carries the widened
- * `checkpointArtifactTagSchema`. `chatSubscribeV131` is frozen one version
+ * `checkpointArtifactTagSchema`. `chatSubscribeV132` is frozen one version
  * below it and still binds the pre-html tag (`checkpointArtifactTagSchemaPreHtml`)
  * via `chatAccumulatedChangeChunkSchemaPreHtml`. See
  * `CHAT_SUBSCRIBE_CHECKPOINT_ARTIFACT_KINDS_MINOR` in `chat-frame-compat.ts`.
@@ -53,15 +53,15 @@ function accumulatedChangesFrame(kind: string | null): Record<string, unknown> {
 
 describe("chat.subscribe accumulated-change summary tag kind, by line", () => {
   it.each(NEW_KINDS)(
-    "a %s tag parses on 1.32 and is rejected on 1.31",
+    "a %s tag parses on 1.33 and is rejected on 1.32",
     (kind) => {
       expect(
-        chatSubscribeV132.serverFrameSchema.safeParse(
+        chatSubscribeV133.serverFrameSchema.safeParse(
           accumulatedChangesFrame(kind),
         ).success,
       ).toBe(true);
       expect(
-        chatSubscribeV131.serverFrameSchema.safeParse(
+        chatSubscribeV132.serverFrameSchema.safeParse(
           accumulatedChangesFrame(kind),
         ).success,
       ).toBe(false);
@@ -69,15 +69,15 @@ describe("chat.subscribe accumulated-change summary tag kind, by line", () => {
   );
 
   it.each([...MARKDOWN_KINDS, null])(
-    "a %s tag parses on both 1.31 and 1.32",
+    "a %s tag parses on both 1.32 and 1.33",
     (kind) => {
       expect(
-        chatSubscribeV131.serverFrameSchema.safeParse(
+        chatSubscribeV132.serverFrameSchema.safeParse(
           accumulatedChangesFrame(kind),
         ).success,
       ).toBe(true);
       expect(
-        chatSubscribeV132.serverFrameSchema.safeParse(
+        chatSubscribeV133.serverFrameSchema.safeParse(
           accumulatedChangesFrame(kind),
         ).success,
       ).toBe(true);

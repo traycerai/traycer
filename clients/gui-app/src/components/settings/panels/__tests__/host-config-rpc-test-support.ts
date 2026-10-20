@@ -135,6 +135,7 @@ export function buildConfigHostFixture(options: {
         storeFormats: null,
         install: null,
         processMemory: null,
+        crossHostMessaging: null,
       };
     },
     "config.shell.get": async () => {

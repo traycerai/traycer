@@ -588,6 +588,7 @@ describe("createLocalMaintenanceFallbackClient", () => {
             storeFormats: null,
             install: null,
             processMemory: null,
+            crossHostMessaging: null,
           };
         },
       },

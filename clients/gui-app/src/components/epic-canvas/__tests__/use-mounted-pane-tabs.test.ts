@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { renderHook } from "@testing-library/react";
 import {
+  MOUNTED_PANE_HTML_CAP,
   MOUNTED_PANE_TAB_LRU_CAP,
   useMountedPaneTabs,
   type UseMountedPaneTabsInput,
@@ -15,6 +16,17 @@ function specTab(n: number): EpicCanvasTileRef {
     instanceId: `inst-spec-${n}`,
     type: "spec",
     name: `Spec ${n}`,
+    hostId: "host-A",
+  };
+}
+
+/** A tab whose body runs page script: an html artifact or a canvas board. */
+function scriptedTab(kind: "html" | "canvas", n: number): EpicCanvasTileRef {
+  return {
+    id: `${kind}-${n}`,
+    instanceId: `inst-${kind}-${n}`,
+    type: kind,
+    name: `${kind} ${n}`,
     hostId: "host-A",
   };
 }
@@ -379,5 +391,71 @@ describe("useMountedPaneTabs", () => {
     });
     rerender({ activeTabId: "inst-chat-1", tabs, paneVisible: false });
     expect([...result.current]).toEqual(["inst-term-1", "inst-chat-1"]);
+  });
+
+  it("retains html and canvas tabs up to their own cap, evicting only the oldest of them", () => {
+    const tabs = [
+      specTab(1),
+      specTab(2),
+      scriptedTab("html", 1),
+      scriptedTab("canvas", 1),
+      scriptedTab("html", 2),
+      scriptedTab("html", 3),
+    ];
+    const { result, rerender } = renderMounted({
+      activeTabId: "inst-spec-1",
+      tabs,
+      paneVisible: true,
+    });
+    for (const active of [
+      "inst-spec-2",
+      "inst-html-1",
+      "inst-canvas-1",
+      "inst-html-2",
+      "inst-html-3",
+    ]) {
+      rerender({ activeTabId: active, tabs, paneVisible: true });
+    }
+
+    // Four scripted tabs were visited: the oldest lost its script state, the
+    // other three kept it.
+    const mountedScripted = [...result.current].filter(
+      (id) => id.startsWith("inst-html-") || id.startsWith("inst-canvas-"),
+    );
+    expect(mountedScripted.length).toBe(MOUNTED_PANE_HTML_CAP);
+    expect(result.current.has("inst-html-1")).toBe(false);
+    // They were not charged to the ordinary LRU, which still holds the specs
+    // it had before the scripted tabs took the foreground.
+    expect(result.current.has("inst-spec-1")).toBe(true);
+    expect(result.current.has("inst-spec-2")).toBe(true);
+  });
+
+  it("keeps a scripted tab mounted while ordinary tabs churn past the LRU cap", () => {
+    const tabs = [
+      scriptedTab("html", 1),
+      specTab(1),
+      specTab(2),
+      specTab(3),
+      specTab(4),
+    ];
+    const { result, rerender } = renderMounted({
+      activeTabId: "inst-html-1",
+      tabs,
+      paneVisible: true,
+    });
+    for (const active of [
+      "inst-spec-1",
+      "inst-spec-2",
+      "inst-spec-3",
+      "inst-spec-4",
+    ]) {
+      rerender({ activeTabId: active, tabs, paneVisible: true });
+    }
+
+    expect(result.current.has("inst-html-1")).toBe(true);
+    const mountedSpecs = [...result.current].filter((id) =>
+      id.startsWith("inst-spec-"),
+    );
+    expect(mountedSpecs.length).toBe(MOUNTED_PANE_TAB_LRU_CAP);
   });
 });

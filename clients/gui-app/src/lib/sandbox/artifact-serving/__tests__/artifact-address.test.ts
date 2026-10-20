@@ -33,6 +33,15 @@ describe("parseArtifactAddress", () => {
       { artifactId: "myart123", mountId: MOUNT, path: "index.html" },
     ],
     [
+      "a nested directory with a trailing slash",
+      `${SCHEME}://artifact-myart123--${MOUNT}/site/subdir/`,
+      {
+        artifactId: "myart123",
+        mountId: MOUNT,
+        path: "site/subdir/index.html",
+      },
+    ],
+    [
       "a percent-encoded space",
       `${SCHEME}://artifact-myart123--${MOUNT}/file%20name.txt`,
       { artifactId: "myart123", mountId: MOUNT, path: "file name.txt" },
@@ -91,6 +100,14 @@ describe("parseArtifactAddress", () => {
     [
       "an empty segment from a doubled slash",
       `${SCHEME}://artifact-myart123--${MOUNT}//foo`,
+    ],
+    [
+      "a doubled trailing slash, which the index.html it gains must not hide",
+      `${SCHEME}://artifact-myart123--${MOUNT}/site//`,
+    ],
+    [
+      "a dot segment before a directory's trailing slash",
+      `${SCHEME}://artifact-myart123--${MOUNT}/site/../`,
     ],
     ["malformed percent-encoding", `${SCHEME}://artifact-myart123--${MOUNT}/%`],
     ["an uppercase artifact id", `${SCHEME}://artifact-MyArt123--${MOUNT}/x`],

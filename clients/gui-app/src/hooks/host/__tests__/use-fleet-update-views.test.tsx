@@ -113,6 +113,7 @@ function idleStatus(version: string) {
     storeFormats: null,
     install: null,
     processMemory: null,
+    crossHostMessaging: null,
   };
 }
 

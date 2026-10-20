@@ -4375,6 +4375,39 @@ export const epicSchemaSurfaceBaseline = {
                                     ]
                                   }
                                 },
+                                "agentMessageDelivery": {
+                                  "default": null,
+                                  "anyOf": [
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "targetHostId": {
+                                          "type": "string"
+                                        },
+                                        "eventId": {
+                                          "type": "string"
+                                        },
+                                        "state": {
+                                          "type": "string",
+                                          "enum": [
+                                            "queued",
+                                            "delivered",
+                                            "expired",
+                                            "failed"
+                                          ]
+                                        }
+                                      },
+                                      "required": [
+                                        "targetHostId",
+                                        "eventId",
+                                        "state"
+                                      ]
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
                                 "mcpApp": {
                                   "default": null,
                                   "anyOf": [
@@ -14311,6 +14344,40 @@ export const epicSchemaSurfaceBaseline = {
                                     "additionalProperties": false
                                   }
                                 },
+                                "agentMessageDelivery": {
+                                  "default": null,
+                                  "anyOf": [
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "targetHostId": {
+                                          "type": "string"
+                                        },
+                                        "eventId": {
+                                          "type": "string"
+                                        },
+                                        "state": {
+                                          "type": "string",
+                                          "enum": [
+                                            "queued",
+                                            "delivered",
+                                            "expired",
+                                            "failed"
+                                          ]
+                                        }
+                                      },
+                                      "required": [
+                                        "targetHostId",
+                                        "eventId",
+                                        "state"
+                                      ],
+                                      "additionalProperties": false
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
                                 "mcpApp": {
                                   "default": null,
                                   "anyOf": [
@@ -14524,6 +14591,7 @@ export const epicSchemaSurfaceBaseline = {
                                 "backgroundTask",
                                 "stopped",
                                 "imageResults",
+                                "agentMessageDelivery",
                                 "mcpApp"
                               ],
                               "additionalProperties": false

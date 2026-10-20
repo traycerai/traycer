@@ -3,14 +3,16 @@
  * `use-mounted-tab-set` port + traycer terminal pinning):
  *
  *   mounted = {pinned terminal surfaces} ∪ LRU(cap 3, head = active tab)
- *             ∪ retained chats
+ *             ∪ retained chats ∪ HTML/canvas LRU(cap 3)
  *
- * - The LRU tracks the most recently ACTIVE non-terminal, non-chat tabs, so
+ * - The LRU tracks the most recently ACTIVE ordinary tabs, so
  *   switching back to a recently used editor/spec is a visibility toggle
  *   instead of a remount. The active tab IS the LRU head - it occupies one
  *   of the slots, so at most 3 such bodies are mounted in total, INCLUDING
  *   the active one. The cap bounds how many heavy hidden bodies a pane can
  *   hold.
+ * - HTML and canvas tabs have a separate three-tab LRU which stays mounted
+ *   while the pane is hidden, preserving script state across editor switches.
  * - Terminal surfaces (`terminal` / `terminal-agent`) are PINNED: they are
  *   always mounted while their tab is open and never count against - nor can
  *   they be evicted by - the LRU. A PTY's scrollback cannot be rebuilt from
@@ -70,8 +72,10 @@ import {
   retainedPaneChatInstanceIds,
 } from "@/stores/epics/canvas/retained-pane-chats";
 
-/** Max recently-active non-terminal, non-chat tab bodies kept mounted per pane. */
+/** Max recently-active ordinary tab bodies kept mounted per pane. */
 export const MOUNTED_PANE_TAB_LRU_CAP = 3;
+/** Script state survives ordinary tab switches, bounded independently of editors. */
+export const MOUNTED_PANE_HTML_CAP = 3;
 
 /**
  * Terminal-backed surfaces keep their xterm buffers mounted for the pane's
@@ -147,24 +151,29 @@ export function useMountedPaneTabs(
 
   // Terminals are pinned; chats are retained by their own policies
   // below; everything else competes for LRU slots.
-  const { pinnedIds, availableLruIds, tileByInstanceId } = useMemo(() => {
-    const pinned = new Set<string>();
-    const available = new Set<string>();
-    const byInstanceId = new Map<string, EpicCanvasTileRef>();
-    for (const tab of tabs) {
-      byInstanceId.set(tab.instanceId, tab);
-      if (isPersistentTerminalSurface(tab)) {
-        pinned.add(tab.instanceId);
-      } else if (!isRetainablePaneChat(tab)) {
-        available.add(tab.instanceId);
+  const { pinnedIds, availableLruIds, htmlIds, tileByInstanceId } =
+    useMemo(() => {
+      const pinned = new Set<string>();
+      const available = new Set<string>();
+      const html = new Set<string>();
+      const byInstanceId = new Map<string, EpicCanvasTileRef>();
+      for (const tab of tabs) {
+        byInstanceId.set(tab.instanceId, tab);
+        if (isPersistentTerminalSurface(tab)) {
+          pinned.add(tab.instanceId);
+        } else if (tab.type === "html" || tab.type === "canvas") {
+          html.add(tab.instanceId);
+        } else if (!isRetainablePaneChat(tab)) {
+          available.add(tab.instanceId);
+        }
       }
-    }
-    return {
-      pinnedIds: pinned,
-      availableLruIds: available,
-      tileByInstanceId: byInstanceId,
-    };
-  }, [tabs]);
+      return {
+        pinnedIds: pinned,
+        availableLruIds: available,
+        htmlIds: html,
+        tileByInstanceId: byInstanceId,
+      };
+    }, [tabs]);
 
   // The SAME window `tile-surface-membership.ts` picks, from the same
   // kind-only predicate. Membership then drops the ineligible ones (a
@@ -208,10 +217,21 @@ export function useMountedPaneTabs(
     setCommittedLru(mountedTabLru);
   }
 
+  const [retainedHtml, setRetainedHtml] =
+    useState<ReadonlyArray<string>>(EMPTY_LRU);
+  const nextHtml = deriveMountedTabLru({
+    activeTabId,
+    availableTabIds: htmlIds,
+    cap: MOUNTED_PANE_HTML_CAP,
+    previousLru: retainedHtml,
+  });
+  if (!lruEquals(nextHtml, retainedHtml)) setRetainedHtml(nextHtml);
+
   return useMemo(() => {
     const mounted = new Set<string>(committedLru);
+    for (const id of retainedHtml) mounted.add(id);
     for (const id of pinnedIds) mounted.add(id);
     for (const id of retainedChatIds) mounted.add(id);
     return mounted;
-  }, [committedLru, pinnedIds, retainedChatIds]);
+  }, [committedLru, pinnedIds, retainedChatIds, retainedHtml]);
 }

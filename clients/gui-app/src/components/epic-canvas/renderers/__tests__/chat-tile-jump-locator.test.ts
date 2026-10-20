@@ -116,6 +116,7 @@ function toolSegment(input: {
             receiverAgentId: "receiver-1",
             messageId: input.agentMessageReceipt.messageId,
           },
+    agentMessageDelivery: null,
     isStreaming: false,
     endState: null,
     stopped: false,

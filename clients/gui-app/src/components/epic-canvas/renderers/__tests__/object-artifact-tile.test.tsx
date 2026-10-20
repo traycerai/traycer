@@ -1,5 +1,5 @@
 import { cleanup, render, screen } from "@testing-library/react";
-import type { ReactNode } from "react";
+import { useEffect, type ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SandboxSource } from "@/components/sandbox/sandbox-frame";
 import type {
@@ -26,6 +26,13 @@ const mocks = vi.hoisted(() => ({
   }>,
   // Every argument the tile handed the body-lease hook, null arms included.
   bodyLeases: [] as Array<string | null>,
+  fileViewerProps: [] as Array<{
+    readonly epicId: string;
+    readonly hostId: string;
+    readonly name: string;
+    readonly sha256: string;
+  }>,
+  fileViewerMounts: [] as string[],
 }));
 
 vi.mock("@/lib/mobile-app", async (importOriginal) => ({
@@ -42,6 +49,28 @@ vi.mock("@/components/canvas-artifact/canvas-artifact-surface", () => ({
   }) => {
     mocks.surfaceProps.push(props);
     return <div data-testid="canvas-surface" />;
+  },
+}));
+
+// The viewer has its own tests. What the tile owns is whether a file artifact
+// reaches it, with what, and whether a new sha gets a fresh instance.
+vi.mock("@/components/epic-canvas/renderers/file-artifact-viewer", () => ({
+  FileArtifactViewer: (props: {
+    readonly epicId: string;
+    readonly hostId: string;
+    readonly name: string;
+    readonly object: { readonly sha256: string };
+  }) => {
+    mocks.fileViewerProps.push({
+      epicId: props.epicId,
+      hostId: props.hostId,
+      name: props.name,
+      sha256: props.object.sha256,
+    });
+    useEffect(() => {
+      mocks.fileViewerMounts.push(props.object.sha256);
+    }, [props.object.sha256]);
+    return <div data-testid="file-viewer" />;
   },
 }));
 
@@ -130,6 +159,8 @@ afterEach(() => {
   mocks.mobile = false;
   mocks.surfaceProps = [];
   mocks.bodyLeases = [];
+  mocks.fileViewerProps = [];
+  mocks.fileViewerMounts = [];
 });
 
 describe("<ObjectArtifactTile />", () => {
@@ -301,7 +332,7 @@ describe("<ObjectArtifactTile />", () => {
     expect(mocks.bodyLeases).toEqual([null]);
   });
 
-  it("shows the plain summary card with the byte count for a file artifact", () => {
+  it("shows the plain summary card, not the viewer, for a file artifact whose object has not been captured yet", () => {
     setArtifacts([
       artifact({
         id: "logo",
@@ -310,20 +341,15 @@ describe("<ObjectArtifactTile />", () => {
         layout: "file",
         relativePath: "logo.png",
         title: "Logo",
-        object: {
-          sha256: SHA,
-          byteLength: 2048,
-          mediaType: "image/png",
-          status: "published",
-        },
       }),
     ]);
 
     render(tile("logo"));
 
+    expect(screen.queryByTestId("file-viewer")).toBeNull();
     expect(screen.queryByTestId("sandbox-frame")).toBeNull();
     expect(screen.getByText("Logo")).toBeTruthy();
-    expect(screen.getByText("File · 2,048 bytes")).toBeTruthy();
+    expect(screen.getByText("File")).toBeTruthy();
   });
 
   it("keeps the sandbox source's resolver and read span stable across an unrelated artifact's rename", () => {
@@ -374,5 +400,71 @@ describe("<ObjectArtifactTile />", () => {
       expect(second.treePath).toBe(first.treePath);
       expect(second.entryPath).toBe(first.entryPath);
     }
+  });
+
+  it("routes a file artifact to the file viewer under its file name, on the tab's host", () => {
+    setArtifacts([
+      artifact({
+        id: "photo",
+        kind: "file",
+        folderName: "photo.png",
+        object: {
+          sha256: SHA,
+          byteLength: 3,
+          mediaType: "image/png",
+          status: "published",
+        },
+      }),
+    ]);
+
+    render(tile("photo"));
+
+    expect(screen.getByTestId("file-viewer")).toBeTruthy();
+    expect(mocks.fileViewerProps.at(-1)).toEqual({
+      epicId: EPIC_ID,
+      hostId: "host-1",
+      name: "photo.png",
+      sha256: SHA,
+    });
+  });
+
+  it("gives a file artifact whose bytes changed a fresh viewer instead of repainting the old file", () => {
+    const refreshed = "b".repeat(64);
+    const file = (sha256: string) =>
+      artifact({
+        id: "photo",
+        kind: "file",
+        folderName: "photo.png",
+        object: {
+          sha256,
+          byteLength: 3,
+          mediaType: "image/png",
+          status: "published",
+        },
+      });
+    setArtifacts([file(SHA)]);
+    const view = render(tile("photo"));
+
+    setArtifacts([file(refreshed)]);
+    view.rerender(tile("photo"));
+
+    expect(mocks.fileViewerMounts).toEqual([SHA, refreshed]);
+  });
+
+  it("keeps the same viewer instance when only the object's status moves from queued to published", () => {
+    const file = (status: "queued" | "published") =>
+      artifact({
+        id: "photo",
+        kind: "file",
+        folderName: "photo.png",
+        object: { sha256: SHA, byteLength: 3, mediaType: "image/png", status },
+      });
+    setArtifacts([file("queued")]);
+    const view = render(tile("photo"));
+
+    setArtifacts([file("published")]);
+    view.rerender(tile("photo"));
+
+    expect(mocks.fileViewerMounts).toEqual([SHA]);
   });
 });

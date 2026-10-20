@@ -786,3 +786,60 @@ export const hostStatusUpgradeV16ToV17 = defineUpgradePath<
   upgradeRequest: (request) => request,
   upgradeResponse: (response) => ({ ...response, processMemory: null }),
 });
+
+/**
+ * Whether messages to and from agents on this account's other hosts are
+ * flowing. `paused` is a host that is serving but whose cross-host messages
+ * wait - the inbound lane parked or backing off, or the cloud refusing the
+ * messaging calls - and it is reported as degraded, never as offline.
+ *
+ * - `pausedSince`: when messages stopped flowing (epoch ms); null when `ok`.
+ * - `nextRetryAt`: when the host tries again (epoch ms); null when `ok` or
+ *   not known.
+ * - `cause`: a diagnostic code (`breaker-open`, `upstream-unavailable`,
+ *   `transient`, `authentication`), never copy. A string rather than an enum
+ *   so a later code needs no new minor.
+ */
+export const hostStatusCrossHostMessagingSchema = lazySchema(() =>
+  z.object({
+    state: z.enum(["ok", "paused"]),
+    pausedSince: z.number().int().nonnegative().nullable(),
+    nextRetryAt: z.number().int().nonnegative().nullable(),
+    cause: z.string().nullable(),
+  }),
+);
+export type HostStatusCrossHostMessaging = z.infer<
+  typeof hostStatusCrossHostMessagingSchema
+>;
+
+/**
+ * v1.8 adds `crossHostMessaging`. `null` means the host did not report: a
+ * peer below this minor. Every other field is v1.7's, unchanged.
+ *
+ * A caller on 1.7 or older is served by the host re-parsing this response
+ * through that minor's schema; zod strips the key, so an older caller receives
+ * exactly the bytes it did before 1.8 existed.
+ */
+export const hostStatusV18 = defineRpcContract({
+  method: "host.status",
+  schemaVersion: { major: 1, minor: 8 } as const,
+  requestSchema: hostStatusV17.requestSchema,
+  responseSchema: lazySchema(() =>
+    hostStatusV17.responseSchema.extend({
+      crossHostMessaging: hostStatusCrossHostMessagingSchema.nullable(),
+    }),
+  ),
+});
+
+// A pre-1.8 peer never reported its cross-host messages. `null` - "did not
+// report" - never `ok`: saying messages flow on a host that was never asked is
+// the fabrication `processMemory: null` refuses above.
+export const hostStatusUpgradeV17ToV18 = defineUpgradePath<
+  typeof hostStatusV17,
+  typeof hostStatusV18
+>({
+  from: hostStatusV17.schemaVersion,
+  to: hostStatusV18.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => ({ ...response, crossHostMessaging: null }),
+});

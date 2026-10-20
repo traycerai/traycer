@@ -38,6 +38,7 @@ import {
   chatSubscribeV129,
   chatSubscribeV130,
   chatSubscribeV131,
+  chatSubscribeV132,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 
 function canonical(value: unknown): unknown {
@@ -319,24 +320,31 @@ const SERVER_FRAME_DIGESTS = {
     "2fa10fd797a2fa6ca24ba12dfbb9e094c02323be834289461d9da4c1e4af1825",
     "9fa4bf2415eb41959bc60b2742dcdbe788b239f899636c42943bd391e0aecca2",
   ],
-  // The html/canvas/file artifact-kind line, with tool calls carrying no
-  // `artifact` stamp. Re-captured with `signInParked` when it re-minted above
-  // main's 1.28.
+  // The delivery line (main's 1.29): a tool block may carry
+  // `agentMessageDelivery`; operation blocks and events keep the four markdown
+  // kinds, tool calls carry no `artifact` stamp. Captured from the merged tree
+  // when the artifact lines re-minted above it.
   29: [
-    "db7afddb789e6a9ddb8030348739cce3c3a6d6665bce0825d56b308f52070ea4",
-    "02f7dcb3e35583d22a902e4fe5e844abecd5566afa5196c0bdc210790f8a93d9",
+    "ff80088af8d120e484edeebeb174b98edc0e835195485ed8da3882ce9cbc22ac",
+    "ae5c18eef8e54df29224a14c15dbde506fbae4b8280301c5c4117be7cfb03dc6",
   ],
-  // The artifact-stamp line, with no canvas annotations. Re-captured with
-  // `signInParked` when it re-minted above main's 1.28.
+  // The html/canvas/file artifact-kind line, with tool calls carrying no
+  // `artifact` stamp. Re-minted above main's 1.29.
   30: [
-    "62238a7797d3791f95a9d5036731f1aead0f2ee2fa27a9e20d4385efad29e272",
-    "993ebf9cf6b6e6a482d974ca75bc9a7c732721159c607a2b195d4ee77470d709",
+    "ad28da595739a9b08eb8359900668ff5314956d59fe98f27c43a3b6776bff340",
+    "da1175d2e006b02071e5aad6e2e1e2cfd951797f3d8add9aa78830f776367ec3",
   ],
-  // The canvas-annotation line, before 1.32 widened checkpoint artifact tags.
-  // Re-captured with `signInParked` when it re-minted above main's 1.28.
+  // The artifact-stamp line, with no canvas annotations. Re-minted above
+  // main's 1.29.
   31: [
-    "31f0c5043a7de5d6588863d566dd64fa791a491a1d5e85dbfcfe67d804374c9d",
-    "93e11aac794fd8f5f1322a2bd2a102d6e26c7a0cd1432aa4901487b32d5c65ba",
+    "4ebde3e2196de26fc51f5916767dc4d08cd67d29575ddbb48eaf8de6c877584b",
+    "59f2036e7d30c9aa5e6cc38b60383021945a03ba46c050d961dd91192d34e946",
+  ],
+  // The canvas-annotation line, before 1.33 widened checkpoint artifact tags.
+  // Re-minted above main's 1.29.
+  32: [
+    "188ef3ce38e34bc9d68f4cd8c8b2c78d9f87994d3fa0e6c2c51b2c58b39e20a3",
+    "11b2fd7e7c917320e3081933b0f0eb493ca436750d4e3ab291bf9bfec0dd960a",
   ],
 } as const;
 
@@ -373,10 +381,11 @@ const contracts = [
   chatSubscribeV129,
   chatSubscribeV130,
   chatSubscribeV131,
+  chatSubscribeV132,
 ] as const;
 
 describe("chat.subscribe placement freeze", () => {
-  it("keeps every 1.0–1.31 server schema input/output surface byte-stable", () => {
+  it("keeps every 1.0–1.32 server schema input/output surface byte-stable", () => {
     for (const contract of contracts) {
       const minor = contract.schemaVersion.minor;
       expect([

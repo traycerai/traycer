@@ -163,6 +163,17 @@ export const CHAT_SUBSCRIBE_TASK_CHECKIN_MINOR = 26;
 export const CHAT_SUBSCRIBE_TASK_OVERDUE_MINOR = 27;
 
 /**
+ * The first minor whose `tool_call` block and `tool_call.completed` event may
+ * carry `agentMessageDelivery` (where a cross-host send stands). A literal for
+ * the reason the constants above are. The host deletes the key by name from
+ * every block and completed event it sends a peer below this minor
+ * (`chat-frame-projection.ts`), the way it deletes the page stamps below
+ * `1.23`; the client needs no predicate on it, since a `1.29` peer parses with
+ * the schemas its line binds.
+ */
+export const CHAT_SUBSCRIBE_AGENT_MESSAGE_DELIVERY_MINOR = 29;
+
+/**
  * Typed against the live enum on purpose: a rename of the mode breaks this
  * compile rather than leaving a string literal that silently matches nothing.
  *
@@ -774,7 +785,7 @@ export interface ProjectedChatSubscribeServerFrame {
 }
 
 /** Canvas annotations first ride 1.31; older lines carry browser evidence only. */
-export const CHAT_SUBSCRIBE_CANVAS_ANNOTATIONS_MINOR = 31;
+export const CHAT_SUBSCRIBE_CANVAS_ANNOTATIONS_MINOR = 32;
 
 function supportsCanvasAnnotations(negotiated: SchemaVersion | null): boolean {
   return (
@@ -1556,10 +1567,10 @@ function projectChatEvents(value: unknown): unknown {
 }
 
 /** Below 1.29 the host omits operation blocks/events for non-markdown kinds. */
-export const CHAT_SUBSCRIBE_HTML_ARTIFACTS_MINOR = 29;
+export const CHAT_SUBSCRIBE_HTML_ARTIFACTS_MINOR = 30;
 
 /** Older peers receive the tool row without its inline artifact stamp. */
-export const CHAT_SUBSCRIBE_ARTIFACT_STAMP_MINOR = 30;
+export const CHAT_SUBSCRIBE_ARTIFACT_STAMP_MINOR = 31;
 
 /** Older peers receive accumulated changes without new-kind artifact tags. */
-export const CHAT_SUBSCRIBE_CHECKPOINT_ARTIFACT_KINDS_MINOR = 32;
+export const CHAT_SUBSCRIBE_CHECKPOINT_ARTIFACT_KINDS_MINOR = 33;

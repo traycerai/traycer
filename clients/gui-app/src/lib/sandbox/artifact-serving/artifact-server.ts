@@ -216,7 +216,10 @@ export class ArtifactServer {
   private missingPage(offset: number, length: number): ArtifactServeResult {
     // Every missing page shares one stand-in, so it is composed once.
     this.missingPageBytes ??= new TextEncoder().encode(
-      buildMissingPageDocument(this.options.document),
+      buildMissingPageDocument({
+        ...this.options.document,
+        artifactRootPath: `/${this.treePrefix}`,
+      }),
     );
     const bytes = this.missingPageBytes;
     // The native v1 response has no 416 variant; a range past EOF maps to 404.
@@ -309,10 +312,10 @@ export class ArtifactServer {
         sha256: entry.sha256,
         sourceSize: entry.byteLength,
         bytes: new TextEncoder().encode(
-          buildArtifactDocument(
-            new TextDecoder().decode(bytes),
-            this.options.document,
-          ),
+          buildArtifactDocument(new TextDecoder().decode(bytes), {
+            ...this.options.document,
+            artifactRootPath: `/${this.treePrefix}`,
+          }),
         ),
       };
       this.insert(key, document);

@@ -16,6 +16,7 @@ import {
   chatSubscribeV128,
   chatSubscribeV129,
   chatSubscribeV130,
+  chatSubscribeV131,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import {
   ARTIFACT_STAMP_MAX_FILES,
@@ -33,15 +34,15 @@ import {
 } from "@traycer/protocol/persistence/epic/content-blocks";
 
 /**
- * `chat.subscribe@1.30`: `artifact` on a `tool_call` block and on its
+ * `chat.subscribe@1.31`: `artifact` on a `tool_call` block and on its
  * `tool_call.completed` event - the manifest an inline `traycer_render_inline`
  * artifact showed. A direct structural clone of `chat-subscribe-mcp-app-freeze.test.ts`
  * for this key, extended with the manifest's own size guards.
  *
- * PROJECTION, not tolerance: every line below `1.30` binds a hand-frozen block
+ * PROJECTION, not tolerance: every line below `1.31` binds a hand-frozen block
  * and event that do not declare the key, so a frame carrying it parses there
  * with the key gone and everything else intact - on each channel a body
- * reaches a peer on (the tail, a `range` response, `blockDelta`). `1.29`
+ * reaches a peer on (the tail, a `range` response, `blockDelta`). `1.30`
  * (the html/canvas/file artifact-KIND line) is frozen the same way: it is
  * where `contentBlockSchemaPreHtml` / `openContentBlockSchemaPreHtml`, which
  * used to bind the live `tool_call` schema BY REFERENCE, were repointed to the
@@ -234,6 +235,7 @@ const FROZEN_LINES = [
   { label: "1.27", contract: chatSubscribeV127 },
   { label: "1.28", contract: chatSubscribeV128 },
   { label: "1.29", contract: chatSubscribeV129 },
+  { label: "1.30", contract: chatSubscribeV130 },
 ] as const;
 
 describe.each(FROZEN_LINES)(
@@ -277,8 +279,8 @@ describe.each(FROZEN_LINES)(
   },
 );
 
-describe("chat.subscribe@1.30 carries the artifact stamp", () => {
-  const frames = chatSubscribeV130.serverFrameSchema;
+describe("chat.subscribe@1.31 carries the artifact stamp", () => {
+  const frames = chatSubscribeV131.serverFrameSchema;
 
   it("round-trips the stamp on the snapshot tail and on a range response", () => {
     const row = assistantRow([stampedToolCall()]);

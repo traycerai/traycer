@@ -112,6 +112,7 @@ import {
   openChatEventSchema,
   openChatSchema,
   openRuntimeEventSchema,
+  openRuntimeEventSchemaPreDelivery,
   openRuntimeEventSchemaPreHtml,
   openRuntimeEventSchemaPreArtifact,
   openRuntimeEventSchemaPreMcpApp,
@@ -155,6 +156,7 @@ import {
   chatTranscriptWindowSchemaPreMessageDelivery,
   openChatRangeResponseSchema,
   openChatRangeResponseSchemaPreCanvas,
+  openChatRangeResponseSchemaPreDelivery,
   openChatRangeResponseSchemaPreHtml,
   openChatRangeResponseSchemaPreArtifact,
   openChatRangeResponseSchemaPreConversation,
@@ -163,6 +165,7 @@ import {
   openChatTranscriptWindowSchemaPreMcpApp,
   openChatTranscriptWindowSchema,
   openChatTranscriptWindowSchemaPreCanvas,
+  openChatTranscriptWindowSchemaPreDelivery,
   openChatTranscriptWindowSchemaPreHtml,
   openChatTranscriptWindowSchemaPreArtifact,
   chatTranscriptWindowSchemaPreBrowser,
@@ -1114,7 +1117,7 @@ export const openChatQueueStateSchemaPreCanvas = lazySchema(() =>
 );
 export type OpenChatQueueState = z.infer<typeof openChatQueueStateSchema>;
 
-// Live 1.31 queue: the prompt payload carries canvas annotations.
+// Live 1.32 queue: the prompt payload carries canvas annotations.
 export const chatQueuedPromptItemSchema = lazySchema(() =>
   chatQueuedPromptItemSchemaPreCanvas.extend({
     message: userMessagePayloadSchema,
@@ -3676,11 +3679,11 @@ const chatSubscribeCommonServerFrameSchemasOpenHarnessPreSignInParked =
     },
   });
 
-// The common frames as `chat.subscribe@1.28` through `@1.30` ship them: the
+// The common frames as `chat.subscribe@1.28` through `@1.31` ship them: the
 // open-harness set over the user row that may carry a bot-conversation request
 // and the queue that may carry a conversation-message, a task-checkin or a
 // task-overdue item and a prompt held for a sign-in. Neither the user row nor
-// the queued prompt carries the canvas annotations `1.31` added.
+// the queued prompt carries the canvas annotations `1.32` added.
 const chatSubscribeCommonServerFrameSchemasOpenHarnessPreCanvas =
   buildChatSubscribeCommonServerFrameSchemas({
     message: openUserMessageSchemaPreCanvas,
@@ -3836,23 +3839,23 @@ const chatSubscribeSharedServerFrameSchemas = [
 const chatSubscribeSharedServerFrameSchemasOpenHarnessPreConversation = [
   messageDeliveryChangedServerFrameSchema,
   ...chatSubscribeCommonServerFrameSchemasOpenHarnessPreConversation,
-  blockDeltaServerFrameSchema(openRuntimeEventSchemaPreHtml),
+  blockDeltaServerFrameSchema(openRuntimeEventSchemaPreDelivery),
 ];
 // The shared frames `chat.subscribe@1.25` ships: the open-harness common set
 // with the pre-task-checkin queue, over the same `blockDelta`.
 const chatSubscribeSharedServerFrameSchemasOpenHarnessPreTaskCheckin = [
   messageDeliveryChangedServerFrameSchema,
   ...chatSubscribeCommonServerFrameSchemasOpenHarnessPreTaskCheckin,
-  blockDeltaServerFrameSchema(openRuntimeEventSchemaPreHtml),
+  blockDeltaServerFrameSchema(openRuntimeEventSchemaPreDelivery),
 ];
 // The shared frames `chat.subscribe@1.26` ships: the open-harness common set
 // with the pre-task-overdue queue, over the same `blockDelta`.
 const chatSubscribeSharedServerFrameSchemasOpenHarnessPreTaskOverdue = [
   messageDeliveryChangedServerFrameSchema,
   ...chatSubscribeCommonServerFrameSchemasOpenHarnessPreTaskOverdue,
-  blockDeltaServerFrameSchema(openRuntimeEventSchemaPreHtml),
+  blockDeltaServerFrameSchema(openRuntimeEventSchemaPreDelivery),
 ];
-// The live shared frames (`chat.subscribe@1.30`): the live open-harness common
+// The live shared frames (`chat.subscribe@1.31`): the live open-harness common
 // set over the same `blockDelta`.
 const chatSubscribeSharedServerFrameSchemasOpenHarness = [
   messageDeliveryChangedServerFrameSchema,
@@ -6602,14 +6605,14 @@ const chatSubscribeServerFrameSchemaV125 = lazySchema(() =>
     chatSubscribeWindowedSnapshotServerFrameSchemaOpenHarness.extend({
       snapshot: chatWindowedSnapshotSchemaV124.extend({
         queue: openChatQueueStateSchemaPreTaskCheckin,
-        tail: openChatTranscriptWindowSchemaPreHtml,
+        tail: openChatTranscriptWindowSchemaPreDelivery,
       }),
     }),
     chatSubscribeSkeletonChunkServerFrameSchemaV119,
     chatSubscribeAccumulatedChangesServerFrameSchemaPreHtml,
     chatSubscribeIndexChangedServerFrameSchema,
     chatSubscribeRangeServerFrameSchemaOpenHarness.extend({
-      range: openChatRangeResponseSchemaPreHtml,
+      range: openChatRangeResponseSchemaPreDelivery,
     }),
     chatSubscribeTurnStateChangedServerFrameSchema,
     chatSubscribeManagedCommandsChangedServerFrameSchema,
@@ -6631,14 +6634,14 @@ const chatSubscribeServerFrameSchemaV126 = lazySchema(() =>
     chatSubscribeWindowedSnapshotServerFrameSchemaOpenHarness.extend({
       snapshot: chatWindowedSnapshotSchemaV124.extend({
         queue: openChatQueueStateSchemaPreTaskOverdue,
-        tail: openChatTranscriptWindowSchemaPreHtml,
+        tail: openChatTranscriptWindowSchemaPreDelivery,
       }),
     }),
     chatSubscribeSkeletonChunkServerFrameSchemaV119,
     chatSubscribeAccumulatedChangesServerFrameSchemaPreHtml,
     chatSubscribeIndexChangedServerFrameSchema,
     chatSubscribeRangeServerFrameSchemaOpenHarness.extend({
-      range: openChatRangeResponseSchemaPreHtml,
+      range: openChatRangeResponseSchemaPreDelivery,
     }),
     chatSubscribeTurnStateChangedServerFrameSchema,
     chatSubscribeManagedCommandsChangedServerFrameSchema,
@@ -6652,7 +6655,7 @@ const chatSubscribeServerFrameSchemaV126 = lazySchema(() =>
 /**
  * Frozen 1.27: the task-overdue line - the queue may carry its task-overdue
  * item - with no `signInParked` on a queued prompt (`1.28`), and operation
- * blocks and events on the four markdown kinds (`1.29`). Frozen since `1.28`
+ * blocks and events on the four markdown kinds (`1.30`). Frozen since `1.28`
  * opened above it: the snapshot and `queueChanged` bind the pre-sign-in-park
  * queue, the rest is `1.28`'s.
  */
@@ -6661,14 +6664,14 @@ const chatSubscribeServerFrameSchemaV127 = lazySchema(() =>
     chatSubscribeWindowedSnapshotServerFrameSchemaOpenHarness.extend({
       snapshot: chatWindowedSnapshotSchemaV124.extend({
         queue: openChatQueueStateSchemaPreSignInParked,
-        tail: openChatTranscriptWindowSchemaPreHtml,
+        tail: openChatTranscriptWindowSchemaPreDelivery,
       }),
     }),
     chatSubscribeSkeletonChunkServerFrameSchemaV119,
     chatSubscribeAccumulatedChangesServerFrameSchemaPreHtml,
     chatSubscribeIndexChangedServerFrameSchema,
     chatSubscribeRangeServerFrameSchemaOpenHarness.extend({
-      range: openChatRangeResponseSchemaPreHtml,
+      range: openChatRangeResponseSchemaPreDelivery,
     }),
     chatSubscribeTurnStateChangedServerFrameSchema,
     chatSubscribeManagedCommandsChangedServerFrameSchema,
@@ -6677,16 +6680,42 @@ const chatSubscribeServerFrameSchemaV127 = lazySchema(() =>
     chatSubscribeThinkingTokensServerFrameSchema,
     messageDeliveryChangedServerFrameSchema,
     ...chatSubscribeCommonServerFrameSchemasOpenHarnessPreSignInParked,
-    blockDeltaServerFrameSchema(openRuntimeEventSchemaPreHtml),
+    blockDeltaServerFrameSchema(openRuntimeEventSchemaPreDelivery),
   ]),
 );
 
 /**
  * Frozen 1.28: the sign-in park line - a queued prompt may carry
  * `signInParked` - with operation blocks and events on the four markdown kinds
- * (`1.29`).
+ * (`1.30`).
  */
 const chatSubscribeServerFrameSchemaV128 = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    chatSubscribeWindowedSnapshotServerFrameSchemaOpenHarness.extend({
+      snapshot: chatWindowedSnapshotSchemaV124.extend({
+        queue: openChatQueueStateSchemaPreCanvas,
+        tail: openChatTranscriptWindowSchemaPreDelivery,
+      }),
+    }),
+    chatSubscribeSkeletonChunkServerFrameSchemaV119,
+    chatSubscribeAccumulatedChangesServerFrameSchemaPreHtml,
+    chatSubscribeIndexChangedServerFrameSchema,
+    chatSubscribeRangeServerFrameSchemaOpenHarness.extend({
+      range: openChatRangeResponseSchemaPreDelivery,
+    }),
+    chatSubscribeTurnStateChangedServerFrameSchema,
+    chatSubscribeManagedCommandsChangedServerFrameSchema,
+    chatSubscribePortForwardsChangedServerFrameSchema,
+    chatSubscribeHeldUpdatesChangedServerFrameSchema,
+    chatSubscribeThinkingTokensServerFrameSchema,
+    messageDeliveryChangedServerFrameSchema,
+    ...chatSubscribeCommonServerFrameSchemasOpenHarnessPreCanvas,
+    blockDeltaServerFrameSchema(openRuntimeEventSchemaPreDelivery),
+  ]),
+);
+
+/** 1.29 carries the cross-host send delivery stamp, before HTML artifacts. */
+const chatSubscribeServerFrameSchemaV129 = lazySchema(() =>
   z.discriminatedUnion("kind", [
     chatSubscribeWindowedSnapshotServerFrameSchemaOpenHarness.extend({
       snapshot: chatWindowedSnapshotSchemaV124.extend({
@@ -6711,8 +6740,8 @@ const chatSubscribeServerFrameSchemaV128 = lazySchema(() =>
   ]),
 );
 
-/** Frozen 1.29: tool calls carry no artifact stamp (`1.30`). */
-const chatSubscribeServerFrameSchemaV129 = lazySchema(() =>
+/** Frozen 1.30: tool calls carry no artifact stamp (`1.31`). */
+const chatSubscribeServerFrameSchemaV130 = lazySchema(() =>
   z.discriminatedUnion("kind", [
     chatSubscribeWindowedSnapshotServerFrameSchemaOpenHarness.extend({
       snapshot: chatWindowedSnapshotSchemaV124.extend({
@@ -6737,8 +6766,8 @@ const chatSubscribeServerFrameSchemaV129 = lazySchema(() =>
   ]),
 );
 
-/** Frozen 1.30: no canvas annotations or new-kind checkpoint tags (`1.31`). */
-const chatSubscribeServerFrameSchemaV130 = lazySchema(() =>
+/** Frozen 1.31: no canvas annotations or new-kind checkpoint tags (`1.32`). */
+const chatSubscribeServerFrameSchemaV131 = lazySchema(() =>
   z.discriminatedUnion("kind", [
     chatSubscribeWindowedSnapshotServerFrameSchemaOpenHarness.extend({
       snapshot: chatWindowedSnapshotSchemaV124.extend({
@@ -6763,8 +6792,8 @@ const chatSubscribeServerFrameSchemaV130 = lazySchema(() =>
   ]),
 );
 
-/** Frozen 1.31: accumulated-change tags keep the four markdown kinds (`1.32`). */
-const chatSubscribeServerFrameSchemaV131 = lazySchema(() =>
+/** Frozen 1.32: accumulated-change tags keep the four markdown kinds (`1.33`). */
+const chatSubscribeServerFrameSchemaV132 = lazySchema(() =>
   z.discriminatedUnion("kind", [
     chatSubscribeWindowedSnapshotServerFrameSchemaOpenHarness,
     chatSubscribeSkeletonChunkServerFrameSchemaV119,
@@ -6781,7 +6810,7 @@ const chatSubscribeServerFrameSchemaV131 = lazySchema(() =>
 );
 
 /**
- * The live windowed union as a READER decodes it (`chat.subscribe@1.32`): the
+ * The live windowed union as a READER decodes it (`chat.subscribe@1.33`): the
  * union above with the snapshot, the `range` response, the three
  * sender-bearing common frames and the `blockDelta` bound to their
  * open-harness copies. The frames a peer DRIVES through - `turnStateChanged`
@@ -7790,7 +7819,7 @@ export const chatSubscribeV127 = defineStreamRpcContract({
  * false. Nothing is withheld and nothing is refused.
  *
  * The open request and the client frames are `1.27`'s, unchanged. Frozen at
- * the four markdown kinds since `1.29` opened above it.
+ * the four markdown kinds since `1.30` opened above it.
  */
 export const chatSubscribeV128 = defineStreamRpcContract({
   method: "chat.subscribe",
@@ -7800,7 +7829,7 @@ export const chatSubscribeV128 = defineStreamRpcContract({
   clientFrameSchema: chatSubscribeWindowedClientFrameSchemaPreCanvas,
 });
 
-/** 1.29 carries HTML, canvas and file operation kinds; 1.28 stays frozen. */
+/** 1.29 adds agentMessageDelivery; 1.28 and earlier strip it. */
 export const chatSubscribeV129 = defineStreamRpcContract({
   method: "chat.subscribe",
   schemaVersion: { major: 1, minor: 29 } as const,
@@ -7809,7 +7838,7 @@ export const chatSubscribeV129 = defineStreamRpcContract({
   clientFrameSchema: chatSubscribeWindowedClientFrameSchemaPreCanvas,
 });
 
-/** 1.30 stamps the manifest rendered by an inline HTML artifact. */
+/** 1.30 carries HTML, canvas and file operation kinds; 1.28 stays frozen. */
 export const chatSubscribeV130 = defineStreamRpcContract({
   method: "chat.subscribe",
   schemaVersion: { major: 1, minor: 30 } as const,
@@ -7818,19 +7847,28 @@ export const chatSubscribeV130 = defineStreamRpcContract({
   clientFrameSchema: chatSubscribeWindowedClientFrameSchemaPreCanvas,
 });
 
-/** 1.31 carries canvas annotations, including selections with no crop. */
+/** 1.31 stamps the manifest rendered by an inline HTML artifact. */
 export const chatSubscribeV131 = defineStreamRpcContract({
   method: "chat.subscribe",
   schemaVersion: { major: 1, minor: 31 } as const,
   openRequestSchema: chatSubscribeOpenRequestSchemaV119,
   serverFrameSchema: chatSubscribeServerFrameSchemaV131,
-  clientFrameSchema: chatSubscribeWindowedClientFrameSchema,
+  clientFrameSchema: chatSubscribeWindowedClientFrameSchemaPreCanvas,
 });
 
-/** 1.32 carries all seven artifact kinds in accumulated-change tags. */
+/** 1.32 carries canvas annotations, including selections with no crop. */
 export const chatSubscribeV132 = defineStreamRpcContract({
   method: "chat.subscribe",
   schemaVersion: { major: 1, minor: 32 } as const,
+  openRequestSchema: chatSubscribeOpenRequestSchemaV119,
+  serverFrameSchema: chatSubscribeServerFrameSchemaV132,
+  clientFrameSchema: chatSubscribeWindowedClientFrameSchema,
+});
+
+/** 1.33 carries all seven artifact kinds in accumulated-change tags. */
+export const chatSubscribeV133 = defineStreamRpcContract({
+  method: "chat.subscribe",
+  schemaVersion: { major: 1, minor: 33 } as const,
   openRequestSchema: chatSubscribeOpenRequestSchemaV119,
   serverFrameSchema: openChatSubscribeWindowedServerFrameSchema,
   clientFrameSchema: chatSubscribeWindowedClientFrameSchema,

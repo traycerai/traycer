@@ -37,6 +37,7 @@ export interface LoaderResource {
   readonly theme: LoaderTheme;
   readonly shortcuts: readonly LoaderShortcut[];
   readonly artifactPage: ArtifactPageRole;
+  readonly artifactRootPath?: string;
 }
 
 interface BootstrapConfig {
@@ -46,6 +47,7 @@ interface BootstrapConfig {
   /** False for an MCP App, which applies the host context's theme itself. */
   readonly applyTheme: boolean;
   readonly artifactPage: ArtifactPageRole;
+  readonly artifactRootPath: string | null;
 }
 
 /**
@@ -280,7 +282,18 @@ function bootstrapMain(config: BootstrapConfig): void {
       return false;
     }
     if (url.pathname === location.pathname) return url.hash !== "";
-    return config.artifactPage !== null && /\.html?$/i.test(url.pathname);
+    if (config.artifactPage === null || config.artifactRootPath === null)
+      return false;
+    let targetPath: string;
+    try {
+      targetPath = decodeURIComponent(url.pathname);
+    } catch {
+      return false;
+    }
+    return (
+      targetPath.startsWith(config.artifactRootPath) &&
+      (/\.html?$/i.test(targetPath) || targetPath.endsWith("/"))
+    );
   };
 
   // Bubble phase on window, so a page that handles its own clicks (and calls
@@ -394,6 +407,7 @@ export const buildDocument = (resource: LoaderResource): string => {
       resource.theme.appliesToRoot && resource.theme.background !== null,
     applyTheme: resource.theme.appliesToRoot,
     artifactPage: resource.artifactPage,
+    artifactRootPath: resource.artifactRootPath ?? null,
   };
   return (
     "<!doctype html>" +

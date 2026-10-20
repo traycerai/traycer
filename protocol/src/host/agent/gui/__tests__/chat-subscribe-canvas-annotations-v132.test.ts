@@ -3,8 +3,8 @@ import type { SchemaVersion } from "@traycer/protocol/framework/versioned-stream
 import {
   chatSubscribeClientFrameSchema,
   type ChatSubscribeClientFrame,
-  chatSubscribeV130,
   chatSubscribeV131,
+  chatSubscribeV132,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import {
   projectChatClientFrameForVersion,
@@ -13,24 +13,24 @@ import {
 } from "../chat-frame-compat";
 
 /**
- * `chat.subscribe@1.31` lets a browser annotation record name a canvas
+ * `chat.subscribe@1.32` lets a browser annotation record name a canvas
  * artifact as its source, with no crop and with elements that carry their
  * place in the artifact's source (`sourceRange`, `tid`, `textRange`).
  *
- * PROJECTION, not tolerance. Every line from `1.7` to `1.30` binds the frozen
+ * PROJECTION, not tolerance. Every line from `1.7` to `1.31` binds the frozen
  * browser-only record, which requires `tabId`, `sessionId`, `origin`,
  * `pageUrl`, `pageTitle`, a non-null crop and has no `source`. A canvas record
  * cannot be expressed there at all, so the projector drops it rather than
  * strip it into a half-record, and a browser record loses the `source` and
- * element keys that line never declared. `1.31` sees every record untouched.
+ * element keys that line never declared. `1.32` sees every record untouched.
  *
  * Lines below `1.7` already lose the whole `browserAnnotations` key; that
  * older cliff is pinned by `chat-frame-compat.test.ts` and only checked here
  * to prove the new projection did not move it.
  */
 
-const CANVAS_AWARE: SchemaVersion = { major: 1, minor: 31 };
-const DOWNGRADED_MINORS = [7, 12, 22, 28, 29, 30] as const;
+const CANVAS_AWARE: SchemaVersion = { major: 1, minor: 32 };
+const DOWNGRADED_MINORS = [7, 12, 22, 28, 29, 30, 31] as const;
 
 const BROWSER_PAGE = {
   tabId: "t-1",
@@ -61,7 +61,7 @@ const BASE_ELEMENT = {
   computedStyles: [{ property: "font-size", value: "26px" }],
 };
 
-/** The browser record as every line up to `1.30` declares it. */
+/** The browser record as every line up to `1.31` declares it. */
 const FROZEN_BROWSER_RECORD = {
   kind: "browser-annotation" as const,
   annotationId: "ann-browser",
@@ -75,7 +75,7 @@ const FROZEN_BROWSER_RECORD = {
   droppedElementCount: 0,
 };
 
-/** The same record as a `1.31` peer carries it: `source` is present. */
+/** The same record as a `1.32` peer carries it: `source` is present. */
 const LIVE_BROWSER_RECORD = {
   ...FROZEN_BROWSER_RECORD,
   source: { kind: "browser" as const, ...BROWSER_PAGE },
@@ -420,7 +420,7 @@ describe("chat.subscribe client send frame projection", () => {
         version(minor),
       );
 
-      const parsed = chatSubscribeV130.clientFrameSchema.parse(projected);
+      const parsed = chatSubscribeV131.clientFrameSchema.parse(projected);
       if (parsed.kind !== "send") {
         throw new Error("expected send frame");
       }
@@ -454,7 +454,7 @@ describe("chat.subscribe client send frame projection", () => {
       LIVE_BROWSER_RECORD,
       CANVAS_RECORD,
     ]);
-    const parsed = chatSubscribeV131.clientFrameSchema.parse(projected);
+    const parsed = chatSubscribeV132.clientFrameSchema.parse(projected);
     if (parsed.kind !== "send") {
       throw new Error("expected send frame");
     }
@@ -487,7 +487,7 @@ describe("chat.subscribe server frame projection", () => {
       expect(frameMessageAnnotations(projected)).toEqual([
         FROZEN_BROWSER_RECORD,
       ]);
-      const parsed = chatSubscribeV130.serverFrameSchema.safeParse(projected);
+      const parsed = chatSubscribeV131.serverFrameSchema.safeParse(projected);
       expect(parsed.success).toBe(true);
     });
 
@@ -611,7 +611,7 @@ describe("chat.subscribe server frame projection", () => {
     ];
 
     for (const frame of frames) {
-      expect(chatSubscribeV131.serverFrameSchema.safeParse(frame).success).toBe(
+      expect(chatSubscribeV132.serverFrameSchema.safeParse(frame).success).toBe(
         true,
       );
     }
@@ -661,7 +661,7 @@ describe("chat.subscribe server frame projection", () => {
 /**
  * Queue events re-embed the whole prompt item under untyped metadata: `item`
  * on `queue.added`, `items` on `queue.paused` / `queue.reordered`. The queue
- * and transcript strips never reach it, so a peer below `1.31` would read a
+ * and transcript strips never reach it, so a peer below `1.32` would read a
  * canvas record out of the event channel unless the projector walks the same
  * metadata. The event rides four carriers: `eventAppended`, a snapshot's
  * `tail.events`, a range's `events`, and - on the whole-snapshot shape - the

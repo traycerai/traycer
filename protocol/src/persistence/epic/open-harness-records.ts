@@ -50,6 +50,7 @@ import {
   todoBlockSchema,
   toolCallBlockSchema,
   toolCallBlockSchemaPreArtifact,
+  toolCallBlockSchemaPreDelivery,
 } from "@traycer/protocol/persistence/epic/content-blocks";
 import {
   assistantMessageSchema,
@@ -208,6 +209,32 @@ export const openContentBlockSchema = lazySchema(() =>
 );
 export type OpenContentBlock = z.infer<typeof openContentBlockSchema>;
 
+/**
+ * The open content-block union as `chat.subscribe@1.23` through `@1.28` ship
+ * it: the tool block without `1.29`'s `agentMessageDelivery` stamp. Listed
+ * explicitly, like the live union above, so a member joins it by a visible
+ * edit.
+ */
+export const openContentBlockSchemaPreDelivery = lazySchema(() =>
+  z.discriminatedUnion("type", [
+    openTextBlockSchema,
+    reasoningBlockSchema,
+    toolCallBlockSchemaPreDelivery,
+    fileChangeBlockSchema,
+    commandBlockSchema,
+    subAgentBlockSchema,
+    approvalBlockSchema,
+    todoBlockSchema,
+    openPlanBlockSchema,
+    errorBlockSchema,
+    compactionBlockSchema,
+    autonomousResumeBlockSchema,
+    openSteerBlockSchema,
+    interviewBlockSchema,
+    artifactOperationBlockSchemaPreHtml,
+  ]),
+);
+
 // ---- Messages, events, the chat --------------------------------------- //
 
 // A spread of the live shape with the `sender.type === message.kind` check
@@ -273,6 +300,14 @@ export const openAssistantMessageSchema = lazySchema(() =>
 );
 export type OpenAssistantMessage = z.infer<typeof openAssistantMessageSchema>;
 
+/** The open assistant row `chat.subscribe@1.23` through `@1.28` ship. */
+export const openAssistantMessageSchemaPreDelivery = lazySchema(() =>
+  assistantMessageSchema.extend({
+    sender: openAgentSenderSchema,
+    blocks: z.array(openContentBlockSchemaPreDelivery),
+  }),
+);
+
 export const openMessageSchema = lazySchema(() =>
   z.discriminatedUnion("role", [
     openUserMessageSchema,
@@ -315,7 +350,18 @@ export const openMessageSchemaPreHtml = lazySchema(() =>
 export const openMessageSchemaPreConversation = lazySchema(() =>
   z.discriminatedUnion("role", [
     openUserMessageSchemaPreConversation,
-    openAssistantMessageSchemaPreHtml,
+    openAssistantMessageSchemaPreDelivery,
+  ]),
+);
+
+/**
+ * The open message union `chat.subscribe@1.25` through `@1.28` ship: the live
+ * user row, the assistant row without `1.29`'s `agentMessageDelivery`.
+ */
+export const openMessageSchemaPreDelivery = lazySchema(() =>
+  z.discriminatedUnion("role", [
+    openUserMessageSchemaPreCanvas,
+    openAssistantMessageSchemaPreDelivery,
   ]),
 );
 

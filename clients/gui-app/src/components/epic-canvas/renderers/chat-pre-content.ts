@@ -4,13 +4,16 @@ import type {
 } from "@traycer-clients/shared/host-selection/selection-authority-contract";
 import type { StreamConnectionStatus } from "@traycer-clients/shared/host-transport/i-stream-session";
 import type { IncompatibilityUpgradeGuidance } from "@traycer/protocol/framework/index";
-import { HOST_OLDER_THAN_DATA_FATAL_CODE } from "@traycer/protocol/host/store-formats";
 import {
   resolvedHostLabel,
   type HostReachability,
   type HostReachabilityHostKind,
   type HostReachabilityStatus,
 } from "@/hooks/agent/use-host-reachability";
+import {
+  fatalRemedyIsHostUpdate,
+  taskVerdictCopy,
+} from "@/lib/chats/fatal-close-copy";
 import { HOST_UPDATE_SKEW_COPY } from "@/lib/host/version-skew-copy";
 import {
   createReportIssueContext,
@@ -494,23 +497,8 @@ export function describeChatPreContent(
   const code = input.session?.retries?.code ?? null;
   switch (kind) {
     case "failed":
-    case "failed-host-update": {
-      const fatal = fatalCloseOf(input);
-      const copy = describeFatalCopy(fatal);
-      return {
-        kind,
-        headline: copy.paneTitle,
-        // The reason's `CODE: ` prefix repeats the code the report carries.
-        detail: fatal.reason.replace(/^[A-Z_]+:\s*/, ""),
-        settled: true,
-        spinner: false,
-        layout: "card",
-        offersHostUpdate: copy.offersHostUpdate,
-        offersTryAgain: hasHandle,
-        offersReport: true,
-        code: fatal.code,
-      };
-    }
+    case "failed-host-update":
+      return failedView(kind, fatalCloseOf(input), hasHandle);
     case "host-gone":
       return {
         kind,
@@ -571,6 +559,27 @@ export function describeChatPreContent(
         code,
       };
   }
+}
+
+/** Arms 1 and 2, worded from the fatal close. */
+function failedView(
+  kind: "failed" | "failed-host-update",
+  fatal: ChatTileFatalDetails,
+  hasHandle: boolean,
+): ChatPreContentView {
+  const copy = describeFatalCopy(fatal);
+  return {
+    kind,
+    headline: copy.paneTitle,
+    detail: copy.detail,
+    settled: true,
+    spinner: false,
+    layout: "card",
+    offersHostUpdate: copy.offersHostUpdate,
+    offersTryAgain: hasHandle && copy.offersTryAgain,
+    offersReport: true,
+    code: fatal.code,
+  };
 }
 
 /**
@@ -766,8 +775,12 @@ function loadingDetail(evidence: ChatPreContentEvidence, host: string): string {
 
 interface ChatTileFatalCopy {
   readonly paneTitle: string;
+  /** The second line, or `null` for none. */
+  readonly detail: string | null;
   readonly reportTitle: string;
   readonly offersHostUpdate: boolean;
+  /** Whether another attempt could open it; the handle is checked apart. */
+  readonly offersTryAgain: boolean;
 }
 
 /**
@@ -786,31 +799,36 @@ interface ChatTileFatalCopy {
  * "the remedy differs - this one needs a repair or a support report, not a
  * host update". Its body is the generic one, whose Report issue is that
  * report.
+ *
+ * A verdict on the task itself takes {@link taskVerdictCopy}'s words.
  */
 function describeFatalCopy(details: ChatTileFatalDetails): ChatTileFatalCopy {
+  // The reason's `CODE: ` prefix repeats the code the report carries.
+  const reason = details.reason.replace(/^[A-Z_]+:\s*/, "");
   if (fatalRemedyIsHostUpdate(details)) {
     return {
       paneTitle: HOST_UPDATE_SKEW_COPY.title,
+      detail: reason,
       reportTitle: HOST_UPDATE_SKEW_COPY.title,
       offersHostUpdate: true,
+      offersTryAgain: true,
+    };
+  }
+  const verdict = taskVerdictCopy(details);
+  if (verdict !== null) {
+    return {
+      paneTitle: verdict.headline,
+      detail: null,
+      reportTitle: verdict.title,
+      offersHostUpdate: false,
+      offersTryAgain: verdict.offersTryAgain,
     };
   }
   return {
     paneTitle: "This agent could not be opened.",
+    detail: reason,
     reportTitle: "This agent could not be opened",
     offersHostUpdate: false,
+    offersTryAgain: true,
   };
-}
-
-/**
- * Whether the host has said, one way or the other, that IT is the leg that has
- * to move. The code is the authoritative form; the guidance is the general
- * one, and covers a future code this build has never heard of whose host still
- * marked the direction. Neither is a version comparison.
- */
-function fatalRemedyIsHostUpdate(details: ChatTileFatalDetails): boolean {
-  if (details.code === HOST_OLDER_THAN_DATA_FATAL_CODE) return true;
-  const guidance = details.upgradeGuidance;
-  if (guidance === null) return false;
-  return guidance.hostShouldUpgrade && !guidance.clientShouldUpgrade;
 }

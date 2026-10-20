@@ -1,12 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
-  chatSubscribeV128,
   chatSubscribeV129,
+  chatSubscribeV130,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 
 /**
- * `chat.subscribe@1.29` lets an `artifact_operation` block and runtime event
- * name the html, canvas and file artifact kinds. `1.28` binds the frozen
+ * `chat.subscribe@1.30` lets an `artifact_operation` block and runtime event
+ * name the html, canvas and file artifact kinds. `1.29` binds the frozen
  * pre-html schemas, so a frame carrying one of the new kinds is refused there
  * rather than stripped: a released peer cannot decode a kind it has never
  * heard of, and the host must not send it one.
@@ -157,15 +157,15 @@ const BLOCK_FRAMES = [
 
 describe("chat.subscribe artifact_operation block kinds", () => {
   describe.each(BLOCK_FRAMES)("in a $surface", ({ frame }) => {
-    it.each(NEW_KINDS)("@1.29 accepts a %s block", (kind) => {
-      const result = chatSubscribeV129.serverFrameSchema.safeParse(
+    it.each(NEW_KINDS)("@1.30 accepts a %s block", (kind) => {
+      const result = chatSubscribeV130.serverFrameSchema.safeParse(
         frame(artifactOperationBlock(kind)),
       );
       expect(result.success).toBe(true);
     });
 
-    it.each(NEW_KINDS)("@1.28 refuses a %s block", (kind) => {
-      const result = chatSubscribeV128.serverFrameSchema.safeParse(
+    it.each(NEW_KINDS)("@1.29 refuses a %s block", (kind) => {
+      const result = chatSubscribeV129.serverFrameSchema.safeParse(
         frame(artifactOperationBlock(kind)),
       );
       expect(result.success).toBe(false);
@@ -173,17 +173,17 @@ describe("chat.subscribe artifact_operation block kinds", () => {
 
     it.each(MARKDOWN_KINDS)("both lines accept a %s block", (kind) => {
       const block = frame(artifactOperationBlock(kind));
-      expect(chatSubscribeV128.serverFrameSchema.safeParse(block).success).toBe(
+      expect(chatSubscribeV129.serverFrameSchema.safeParse(block).success).toBe(
         true,
       );
-      expect(chatSubscribeV129.serverFrameSchema.safeParse(block).success).toBe(
+      expect(chatSubscribeV130.serverFrameSchema.safeParse(block).success).toBe(
         true,
       );
     });
 
-    it("@1.29 still refuses a kind that does not exist", () => {
+    it("@1.30 still refuses a kind that does not exist", () => {
       expect(
-        chatSubscribeV129.serverFrameSchema.safeParse(
+        chatSubscribeV130.serverFrameSchema.safeParse(
           frame(artifactOperationBlock("spreadsheet")),
         ).success,
       ).toBe(false);
@@ -192,15 +192,15 @@ describe("chat.subscribe artifact_operation block kinds", () => {
 });
 
 describe("chat.subscribe artifact_operation event kinds", () => {
-  it.each(NEW_KINDS)("@1.29 accepts a %s event", (kind) => {
-    const result = chatSubscribeV129.serverFrameSchema.safeParse(
+  it.each(NEW_KINDS)("@1.30 accepts a %s event", (kind) => {
+    const result = chatSubscribeV130.serverFrameSchema.safeParse(
       blockDeltaFrame(artifactOperationEvent(kind)),
     );
     expect(result.success).toBe(true);
   });
 
-  it.each(NEW_KINDS)("@1.28 refuses a %s event", (kind) => {
-    const result = chatSubscribeV128.serverFrameSchema.safeParse(
+  it.each(NEW_KINDS)("@1.29 refuses a %s event", (kind) => {
+    const result = chatSubscribeV129.serverFrameSchema.safeParse(
       blockDeltaFrame(artifactOperationEvent(kind)),
     );
     expect(result.success).toBe(false);
@@ -208,17 +208,17 @@ describe("chat.subscribe artifact_operation event kinds", () => {
 
   it.each(MARKDOWN_KINDS)("both lines accept a %s event", (kind) => {
     const frame = blockDeltaFrame(artifactOperationEvent(kind));
-    expect(chatSubscribeV128.serverFrameSchema.safeParse(frame).success).toBe(
+    expect(chatSubscribeV129.serverFrameSchema.safeParse(frame).success).toBe(
       true,
     );
-    expect(chatSubscribeV129.serverFrameSchema.safeParse(frame).success).toBe(
+    expect(chatSubscribeV130.serverFrameSchema.safeParse(frame).success).toBe(
       true,
     );
   });
 
-  it("@1.29 still refuses a kind that does not exist", () => {
+  it("@1.30 still refuses a kind that does not exist", () => {
     expect(
-      chatSubscribeV129.serverFrameSchema.safeParse(
+      chatSubscribeV130.serverFrameSchema.safeParse(
         blockDeltaFrame(artifactOperationEvent("spreadsheet")),
       ).success,
     ).toBe(false);

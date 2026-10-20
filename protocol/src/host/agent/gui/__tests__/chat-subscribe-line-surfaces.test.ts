@@ -44,7 +44,7 @@
  *   kind, and the approval card's display facts / cautious / rule-forced
  *   keys. Unlike `1.16` these are PROJECTED for an older peer, and the older
  *   lines bind frozen schemas without them, so needles do pin the boundary;
- * - `1.30` is the tool-call `artifact` stamp, minted above `1.29`: the
+ * - `1.31` is the tool-call `artifact` stamp, minted above `1.30`: the
  *   manifest an inline `traycer_render_inline` artifact showed. PROJECTED,
  *   like `1.23`'s MCP App stamp, so a needle pins the boundary.
  *
@@ -94,32 +94,33 @@ const CLAUDE_PARITY_MINOR = 20;
 // `conversation-message` queue item (pinned below). `1.26` adds the
 // `task-checkin` queue item (pinned below). `1.27` adds the `task-overdue`
 // queue item (pinned below). `1.28` adds `signInParked` on a queued prompt
-// (pinned below). `1.29` lets an `artifact_operation` block and event name
-// the html, canvas and file artifact kinds (pinned below). `1.30` adds the
-// tool-call `artifact` stamp (pinned below). `1.31` grows the browser
+// (pinned below). `1.29` adds the tool-call `agentMessageDelivery` stamp
+// (pinned below). `1.30` lets an `artifact_operation` block and event name
+// the html, canvas and file artifact kinds (pinned below). `1.31` adds the
+// tool-call `artifact` stamp (pinned below). `1.32` grows the browser
 // annotation record with the canvas arm (pinned by
-// `chat-subscribe-canvas-annotations-v131.test.ts`). `1.32` widens the
+// `chat-subscribe-canvas-annotations-v132.test.ts`). `1.33` widens the
 // accumulated-change `artifact` tag to all seven artifact kinds (pinned by
 // `checkpoint-artifact-kinds.test.ts`). Every threshold above still reads
 // `>=` against the live line.
-const LIVE_MINOR = 32;
+const LIVE_MINOR = 33;
 // `1.28`: the host's sign-in park mark on a queued prompt, server frames only
 // (the host sets it; a client never sends a queue item).
 const SIGN_IN_PARK_MINOR = 28;
 const SIGN_IN_PARK_NEEDLES = ['"signInParked":'];
-// `1.30`: the tool-call `artifact` stamp - the manifest an inline
+// `1.31`: the tool-call `artifact` stamp - the manifest an inline
 // `traycer_render_inline` artifact showed. Found structurally
 // (`toolCallArtifactStampPresent`, defined below), not by a substring
 // needle: `'"artifact":'` already appears on every line via the unrelated
 // `checkpointArtifactTagSchema` field.
-const ARTIFACT_STAMP_MINOR = 30;
-// `1.29`: the html-artifacts surface - the artifact kinds an `artifact_operation`
+const ARTIFACT_STAMP_MINOR = 31;
+// `1.30`: the html-artifacts surface - the artifact kinds an `artifact_operation`
 // block and event may name. Found structurally (`artifactOperationKinds`,
-// defined below), not by a `'"canvas"'` needle: from `1.31` a browser
+// defined below), not by a `'"canvas"'` needle: from `1.32` a browser
 // annotation's `source` is the literal `"canvas"` too, which is a different
 // fact (where an annotation was captured, not which artifact kind an
 // operation touched) and must not read as the kind enum having grown.
-const HTML_ARTIFACTS_MINOR = 29;
+const HTML_ARTIFACTS_MINOR = 30;
 const HTML_ARTIFACT_KINDS = ["html", "canvas", "file"];
 // `1.27`: the task-overdue surface - the queue item's discriminant, its one
 // needle for the same reason as the check-in's.
@@ -136,6 +137,10 @@ const TASK_CHECKIN_NEEDLES = ['"task-checkin"'];
 // carried one since `1.8`.) All or none - a line that carried the queue item
 // without the row key would show a chip for a request it cannot name.
 const CONVERSATION_MINOR = 25;
+// `1.29`: the cross-host send state on a tool call, server frames only (the
+// host stamps it; a client never sends a body).
+const DELIVERY_MINOR = 29;
+const DELIVERY_NEEDLES = ['"agentMessageDelivery":'];
 const CONVERSATION_NEEDLES = [
   '"conversationRequest":',
   '"resolvedByMessageId":',
@@ -366,13 +371,13 @@ function actionAckPropertyNames(serverFrameSchema: z.ZodType): string[] {
 }
 
 describe("chat.subscribe line surfaces", () => {
-  it("covers chat.subscribe@1.0 through @1.32 (a line added later cannot drop out)", () => {
+  it("covers chat.subscribe@1.0 through @1.33 (a line added later cannot drop out)", () => {
     // RESTATED on purpose: this is the change-detector for the line SET, so a
     // derived list would assert the registry against itself. When a new minor
     // lands, extending this by hand is the acknowledgement.
     expect(MINORS).toEqual([
       0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20,
-      21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32,
+      21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33,
     ]);
     expect(chatSubscribeLine.latestMinor).toBe(LIVE_MINOR);
   });
@@ -400,6 +405,21 @@ describe("chat.subscribe line surfaces", () => {
       const carriesMcpAppStamp = minor >= MCP_APP_STAMP_MINOR;
       const carriesConversation = minor >= CONVERSATION_MINOR;
       const carriesSignInPark = minor >= SIGN_IN_PARK_MINOR;
+      const carriesDelivery = minor >= DELIVERY_MINOR;
+
+      it(`server frames ${carriesDelivery ? "carry" : "hold back"} the cross-host send delivery state`, () => {
+        const text = schemaText(contract.serverFrameSchema);
+        expect(
+          DELIVERY_NEEDLES.filter((needle) => text.includes(needle)),
+        ).toEqual(carriesDelivery ? DELIVERY_NEEDLES : []);
+      });
+
+      it("client frames hold back the delivery state on every line", () => {
+        const text = schemaText(contract.clientFrameSchema);
+        expect(
+          DELIVERY_NEEDLES.filter((needle) => text.includes(needle)),
+        ).toEqual([]);
+      });
 
       it(`server frames ${carriesSignInPark ? "carry" : "hold back"} the sign-in park mark`, () => {
         const text = schemaText(contract.serverFrameSchema);
