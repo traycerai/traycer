@@ -775,6 +775,44 @@ function substitutionBannerReason(input: {
   return input.isSameHost ? "chat-not-on-this-host" : "chat-not-visible";
 }
 
+/**
+ * The serving witness of a team sandbox's chat tab, read (and so retained) at
+ * canvas altitude as well as in `chat-tile.tsx`, because a substitution
+ * unmounts that tile: the fallback has to keep hearing it to give the tab back
+ * when the chat goes live. The peer it names is the one whose reachability
+ * counts: a sandbox asleep under a chat the pool serves is not an absent chat.
+ */
+function useChatTabServing(
+  activeTab: EpicCanvasTileRef,
+  epicId: string,
+): {
+  /** The pool, not the tab's host, serves the chat now. */
+  readonly servedByPool: boolean;
+  readonly servingUnreachable: boolean;
+  readonly catchingUp: ChatCatchingUpReason | null;
+} {
+  const isChat = activeTab.type === "chat";
+  const servingKey = {
+    hostId: isChat ? activeTab.hostId : UNKNOWN_HOST_PLACEHOLDER,
+    epicId,
+    chatId: activeTab.id,
+  };
+  const servingHostId = useChatServingHostId(servingKey);
+  const serving = useChatServing(servingKey);
+  const servedByPool = isChat && servingHostId !== activeTab.hostId;
+  const reachability = useHostReachability(
+    isChat ? servingHostId : UNKNOWN_HOST_PLACEHOLDER,
+  );
+  return {
+    servedByPool,
+    servingUnreachable: reachability.status === "unreachable",
+    catchingUp:
+      servedByPool && serving?.state === "catching-up"
+        ? serving.catchingUp
+        : null,
+  };
+}
+
 function usePublishedChatFallbackRef(args: {
   readonly activeTab: EpicCanvasTileRef;
   readonly epicId: string;
@@ -806,22 +844,7 @@ function usePublishedChatFallbackRef(args: {
   const reachability = useHostReachability(
     isChat ? activeTab.hostId : UNKNOWN_HOST_PLACEHOLDER,
   );
-  // The serving witness of a team sandbox's chat, read (and so retained) HERE
-  // as well as in `chat-tile.tsx`, because a substitution unmounts that tile:
-  // the decision below has to keep hearing it to give the tab back when the
-  // chat goes live. The peer it names is the one whose reachability counts:
-  // a sandbox asleep under a chat the pool serves is not an absent chat.
-  const servingKey = {
-    hostId: isChat ? activeTab.hostId : UNKNOWN_HOST_PLACEHOLDER,
-    epicId,
-    chatId: activeTab.id,
-  };
-  const servingHostId = useChatServingHostId(servingKey);
-  const serving = useChatServing(servingKey);
-  const servedByPool = isChat && servingHostId !== activeTab.hostId;
-  const servingReachability = useHostReachability(
-    isChat ? servingHostId : UNKNOWN_HOST_PLACEHOLDER,
-  );
+  const tabServing = useChatTabServing(activeTab, epicId);
   // The tab's OWN bound host (`activeTab.hostId`), which is exactly the host
   // `chat-tile.tsx` opened the session under - peeking any other host's
   // session for this chat id would read a different machine's terminate.
@@ -866,11 +889,12 @@ function usePublishedChatFallbackRef(args: {
   const decision = resolveChatFallbackDecision({
     isChat,
     isSameHost,
-    hostUnreachable: servingReachability.status === "unreachable",
+    hostUnreachable: tabServing.servingUnreachable,
     confirmedAbsent,
     // Held only while the pool still serves the chat: once the witness names
     // the tab's host, the live tile opens a fresh stream there.
-    indexUnavailable: servedByPool && fatalCode === CHAT_INDEX_UNAVAILABLE_CODE,
+    indexUnavailable:
+      tabServing.servedByPool && fatalCode === CHAT_INDEX_UNAVAILABLE_CODE,
     cloudChatOwnerUserId: cloudChatRecord?.identity.ownerUserId ?? null,
     liveArtifactOwnerUserId,
   });
@@ -924,10 +948,7 @@ function usePublishedChatFallbackRef(args: {
       cloudChats,
       cloudChatsCloudAuthorized,
     ),
-    catchingUp:
-      servedByPool && serving?.state === "catching-up"
-        ? serving.catchingUp
-        : null,
+    catchingUp: tabServing.catchingUp,
   };
 }
 
