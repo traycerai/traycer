@@ -11,6 +11,7 @@ import {
   type HostReachabilityHostKind,
   type HostReachabilityStatus,
 } from "@/hooks/agent/use-host-reachability";
+import { taskVerdictCopy } from "@/lib/chats/task-verdict-copy";
 import { HOST_UPDATE_SKEW_COPY } from "@/lib/host/version-skew-copy";
 import {
   createReportIssueContext,
@@ -797,10 +798,7 @@ interface ChatTileFatalCopy {
  * host update". Its body is the generic one, whose Report issue is that
  * report.
  *
- * `EPIC_NOT_FOUND` and `EPIC_ACCESS_DENIED` are the cloud's verdicts on the
- * task itself, so the headline says that and the host's reason, written for
- * logs, is not shown. A deleted task offers no Try again, since no attempt
- * can open it; missing access keeps it, because the task can be shared.
+ * A verdict on the task itself takes {@link taskVerdictCopy}'s words.
  */
 function describeFatalCopy(details: ChatTileFatalDetails): ChatTileFatalCopy {
   // The reason's `CODE: ` prefix repeats the code the report carries.
@@ -814,23 +812,15 @@ function describeFatalCopy(details: ChatTileFatalDetails): ChatTileFatalCopy {
       offersTryAgain: true,
     };
   }
-  switch (details.code) {
-    case "EPIC_NOT_FOUND":
-      return {
-        paneTitle: "This task was deleted.",
-        detail: null,
-        reportTitle: "This task was deleted",
-        offersHostUpdate: false,
-        offersTryAgain: false,
-      };
-    case "EPIC_ACCESS_DENIED":
-      return {
-        paneTitle: "You don't have access to this task.",
-        detail: null,
-        reportTitle: "You don't have access to this task",
-        offersHostUpdate: false,
-        offersTryAgain: true,
-      };
+  const verdict = taskVerdictCopy(details.code);
+  if (verdict !== null) {
+    return {
+      paneTitle: verdict.headline,
+      detail: null,
+      reportTitle: verdict.title,
+      offersHostUpdate: false,
+      offersTryAgain: verdict.offersTryAgain,
+    };
   }
   return {
     paneTitle: "This agent could not be opened.",

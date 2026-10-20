@@ -21,6 +21,7 @@ import {
   emitTerminalClosedNotification,
   emitTerminalCrashedNotification,
   emitChatStreamErrorNotification,
+  chatStreamErrorNotification,
   migrateAppLocalNotificationsPersistedState,
   type AppLocalNotificationEntry,
   useAppLocalNotificationsStore,
@@ -935,6 +936,43 @@ describe("app-local notifications store", () => {
         tileInstanceId: "terminal-instance",
       },
     ]);
+  });
+});
+
+describe("chatStreamErrorNotification", () => {
+  function notificationFor(code: string) {
+    const reason = `${code}: The caller does not have access to this epic (epic=e1 chat=c1).`;
+    const { message, detail } = chatStreamErrorNotification({
+      hostId: "h1",
+      epicId: "e1",
+      chatId: "c1",
+      details: {
+        code,
+        reason,
+        incompatibleMethods: null,
+        upgradeGuidance: null,
+      },
+    });
+    return { message, detail, reason };
+  }
+
+  it.each([
+    ["EPIC_NOT_FOUND", "This task was deleted."],
+    ["EPIC_ACCESS_DENIED", "You don't have access to this task."],
+  ])(
+    "words the cloud verdict %s for the person, with no detail",
+    (code, message) => {
+      const { message: actual, detail } = notificationFor(code);
+      expect({ message: actual, detail }).toEqual({ message, detail: null });
+    },
+  );
+
+  it("keeps the generic message and raw reason for any other code", () => {
+    const { message, detail, reason } = notificationFor("CHAT_INVALID");
+    expect({ message, detail }).toEqual({
+      message: "Agent stream closed unexpectedly.",
+      detail: reason,
+    });
   });
 });
 
