@@ -1,6 +1,6 @@
 import { MediaArtifactContent } from "./media-artifact-content";
 import { useEffect, useState, type ReactNode } from "react";
-import { queryOptions, useQuery } from "@tanstack/react-query";
+import { queryOptions, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { ArtifactObjectRef } from "@traycer/protocol/persistence/epic/artifacts";
 import { Button } from "@/components/ui/button";
 import {
@@ -21,7 +21,10 @@ import {
   artifactFileViewer,
   type ArtifactFileViewer,
 } from "@/lib/files/artifact-file-viewer";
-import { readArtifactBlob } from "@/lib/files/read-artifact-blob";
+import {
+  readArtifactBlob,
+  readArtifactBlobPrefix,
+} from "@/lib/files/read-artifact-blob";
 import { hostQueryKeys } from "@/lib/query-keys";
 import { stampHostRpcMethod } from "@/lib/host-rpc-policy/host-method-policy-table";
 import type { ArtifactReadSpan } from "@/lib/sandbox/artifact-serving/artifact-server";
@@ -37,6 +40,7 @@ export function FileArtifactViewer(props: {
   const kind = artifactFileViewer(name, object.mediaType);
   const mediaKind = kind === "audio" || kind === "video" ? kind : null;
   const fileSave = useFileSaveHost();
+  const queryClient = useQueryClient();
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const content = {
@@ -44,15 +48,42 @@ export function FileArtifactViewer(props: {
     byteLength: object.byteLength,
     mediaType: object.mediaType,
   };
-  const queryFn = ({ signal }: { signal: AbortSignal }): Promise<Blob> =>
-    readArtifactBlob(content, props.readSpan, signal);
+  const fullBlobQueryFn = ({
+    signal,
+  }: {
+    signal: AbortSignal;
+  }): Promise<Blob> => readArtifactBlob(content, props.readSpan, signal);
+  const previewQueryFn = ({
+    signal,
+  }: {
+    signal: AbortSignal;
+  }): Promise<Blob> =>
+    kind === "text"
+      ? readArtifactBlobPrefix(
+          content,
+          props.readSpan,
+          signal,
+          TEXT_PREVIEW_BYTES,
+        )
+      : readArtifactBlob(content, props.readSpan, signal);
+  const fullBlobOptions = queryOptions({
+    queryKey: [
+      ...hostQueryKeys.methodScope(props.hostId, "epic.readArtifactObject"),
+      { epicId: props.epicId, content, want: "blob" },
+    ],
+    queryFn: fullBlobQueryFn,
+    meta: stampHostRpcMethod(undefined, "epic.readArtifactObject"),
+    staleTime: Infinity,
+    gcTime: 60_000,
+    retry: false,
+  });
   const query = useQuery(
     queryOptions({
-      queryKey: [
-        ...hostQueryKeys.methodScope(props.hostId, "epic.readArtifactObject"),
-        { epicId: props.epicId, content, want: "blob" },
-      ],
-      queryFn,
+      queryKey:
+        kind === "text"
+          ? [...fullBlobOptions.queryKey, { prefixBytes: TEXT_PREVIEW_BYTES }]
+          : fullBlobOptions.queryKey,
+      queryFn: previewQueryFn,
       meta: stampHostRpcMethod(undefined, "epic.readArtifactObject"),
       enabled: kind !== null && mediaKind === null,
       staleTime: Infinity,
@@ -65,8 +96,9 @@ export function FileArtifactViewer(props: {
     setSaveError(null);
     try {
       const blob =
-        query.data ?? (await query.refetch({ throwOnError: true })).data;
-      if (blob === undefined) throw new Error("The file is unavailable.");
+        query.data?.size === object.byteLength
+          ? query.data
+          : await queryClient.fetchQuery(fullBlobOptions);
       await (route === "download" ? downloadBlobToDevice : saveBlobToDisk)(
         blob,
         name,
@@ -130,6 +162,7 @@ export function FileArtifactViewer(props: {
           <FileContent
             key={object.sha256}
             blob={query.data}
+            totalBytes={object.byteLength}
             kind={kind}
             name={name}
             actions={actions}
@@ -172,6 +205,7 @@ export function FileArtifactViewer(props: {
 
 function FileContent(props: {
   readonly blob: Blob;
+  readonly totalBytes: number;
   readonly kind: ArtifactFileViewer;
   readonly name: string;
   readonly actions: ReactNode;
@@ -230,33 +264,38 @@ function FileContent(props: {
           This file can't be previewed here. Save it to open it.
         </p>
       ) : null}
-      {!failed && kind === "text" && <TextFileContent blob={blob} />}
+      {!failed && kind === "text" && (
+        <TextFileContent blob={blob} truncated={props.totalBytes > blob.size} />
+      )}
     </>
   );
 }
 
 const TEXT_PREVIEW_BYTES = 100_000;
-function TextFileContent({ blob }: { readonly blob: Blob }) {
+function TextFileContent({
+  blob,
+  truncated,
+}: {
+  readonly blob: Blob;
+  readonly truncated: boolean;
+}) {
   const [text, setText] = useState<string | null>(null);
   useEffect(() => {
     let active = true;
-    void blob
-      .slice(0, TEXT_PREVIEW_BYTES)
-      .text()
-      .then((value) => {
-        if (active) setText(value);
-      });
+    void blob.text().then((value) => {
+      if (active) setText(value);
+    });
     return () => {
       active = false;
     };
   }, [blob]);
   return (
     <div className="min-h-0 flex-1 overflow-auto p-4">
-      {blob.size > TEXT_PREVIEW_BYTES && (
+      {truncated ? (
         <p className="mb-2 text-sm text-muted-foreground">
           Preview truncated. Save for the full file.
         </p>
-      )}
+      ) : null}
       <pre className="whitespace-pre-wrap break-words text-sm">
         {text ?? "Loading text…"}
       </pre>

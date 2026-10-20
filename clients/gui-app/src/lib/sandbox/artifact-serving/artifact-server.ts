@@ -147,7 +147,8 @@ export class ArtifactServer {
   private cacheBytes = 0;
   private readonly outside: ArtifactOutsideReferenceResolver;
   private readonly treePrefix: string;
-  private readonly readSignal = new AbortController().signal;
+  private readonly lifetime = new AbortController();
+  private readonly readSignal = this.lifetime.signal;
   private missingPageBytes: Uint8Array | null = null;
 
   constructor(private readonly options: ArtifactServerOptions) {
@@ -158,9 +159,18 @@ export class ArtifactServer {
     this.outside = options.resolveOutsideReference ?? NO_OUTSIDE_REFERENCE;
   }
 
+  dispose(): void {
+    this.lifetime.abort();
+    this.cache.clear();
+    this.pending.clear();
+    this.cacheBytes = 0;
+    this.missingPageBytes = null;
+  }
+
   async serve(request: ArtifactServeRequest): Promise<ArtifactServeResult> {
     const { path, offset, signal } = request;
     signal.throwIfAborted();
+    this.readSignal.throwIfAborted();
     if (!isArtifactPath(path)) return unavailable("missing", 404);
     if (!isValidRange(offset, request.length)) {
       return unavailable("invalid-range", 404);
@@ -347,6 +357,7 @@ export class ArtifactServer {
     );
     let received = 0;
     do {
+      this.readSignal.throwIfAborted();
       const length = Math.max(1, bytes.length - received);
       const response = await this.options.readSpan(
         entry.sha256,
@@ -354,6 +365,7 @@ export class ArtifactServer {
         length,
         this.readSignal,
       );
+      this.readSignal.throwIfAborted();
       if ("unavailable" in response) {
         return unavailable(
           response.unavailable,
@@ -424,6 +436,7 @@ export class ArtifactServer {
   }
 
   private insert(key: string, value: CachedBytes): void {
+    if (this.readSignal.aborted) return;
     // A read may have awaited through replacement or eviction of this key.
     // Charge only what is present now, and publish once per shared producer.
     this.remove(key);

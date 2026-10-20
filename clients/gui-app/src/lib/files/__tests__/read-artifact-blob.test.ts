@@ -4,7 +4,10 @@ import type {
   ArtifactReadSpan,
   ArtifactReadSpanResult,
 } from "@/lib/sandbox/artifact-serving/artifact-server";
-import { readArtifactBlob } from "@/lib/files/read-artifact-blob";
+import {
+  readArtifactBlob,
+  readArtifactBlobPrefix,
+} from "@/lib/files/read-artifact-blob";
 
 // A four-byte range cap makes a small fixture span several requests, so the
 // reader's offset arithmetic is exercised without allocating megabytes.
@@ -179,5 +182,56 @@ describe("readArtifactBlob", () => {
     await expect(
       readArtifactBlob(objectOf(3), readSpan, controller.signal),
     ).rejects.toThrow();
+  });
+});
+
+describe("readArtifactBlobPrefix", () => {
+  it("reads only the leading window of a larger object, in range-sized requests", async () => {
+    const source = bytesOf(1, 2, 3, 4, 5, 6, 7, 8, 9, 10);
+    const { readSpan, requests } = spanServer(source, source.length);
+
+    const blob = await readArtifactBlobPrefix(
+      objectOf(source.length),
+      readSpan,
+      new AbortController().signal,
+      6,
+    );
+
+    expect(await bytesOfBlob(blob)).toEqual([1, 2, 3, 4, 5, 6]);
+    // Never past the window: the second request is trimmed to what is left.
+    expect(requests).toEqual([
+      { offset: 0, length: 4 },
+      { offset: 4, length: 2 },
+    ]);
+  });
+
+  it("returns the whole object when it is smaller than the window", async () => {
+    const source = bytesOf(1, 2, 3);
+    const { readSpan } = spanServer(source, source.length);
+
+    const blob = await readArtifactBlobPrefix(
+      objectOf(source.length),
+      readSpan,
+      new AbortController().signal,
+      100,
+    );
+
+    expect(await bytesOfBlob(blob)).toEqual([1, 2, 3]);
+  });
+
+  it("refuses a total that disagrees with the object's length, as the full reader does", async () => {
+    await expect(
+      readArtifactBlobPrefix(
+        objectOf(10),
+        () =>
+          Promise.resolve({
+            bytes: bytesOf(1, 2, 3, 4),
+            totalBytes: 99,
+            mediaType: "application/octet-stream",
+          }),
+        new AbortController().signal,
+        6,
+      ),
+    ).rejects.toThrow("incomplete");
   });
 });

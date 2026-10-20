@@ -171,9 +171,10 @@ function textBytes(text: string): Uint8Array {
 
 /** Serves `bytes` whole and records every span it was asked for. */
 function servingSpan(bytes: Uint8Array) {
-  const requests: Array<{ sha256: string; offset: number }> = [];
+  const requests: Array<{ sha256: string; offset: number; length: number }> =
+    [];
   const readSpan: ArtifactReadSpan = (sha256, offset, length) => {
-    requests.push({ sha256, offset });
+    requests.push({ sha256, offset, length });
     return Promise.resolve({
       bytes: bytes.slice(offset, offset + length),
       totalBytes: bytes.length,
@@ -236,6 +237,45 @@ describe("<FileArtifactViewer />", () => {
       expect(preview.getAttribute("data-url")).toBe(mocks.createdUrls.at(-1));
     },
   );
+
+  it("reads only the preview window of a large text file and says the preview is cut", async () => {
+    const bytes = new Uint8Array(300_000).fill(97);
+    const { readSpan, requests } = servingSpan(bytes);
+
+    renderViewer(
+      "big.txt",
+      objectOf(bytes, "a".repeat(64), "text/plain"),
+      readSpan,
+    );
+
+    expect(await screen.findByText(/Preview truncated/)).toBeTruthy();
+    // The preview never pulls the whole file: it asks for no more than the
+    // window it shows, and nothing past it.
+    expect(
+      requests.reduce((total, request) => total + request.length, 0),
+    ).toBeLessThanOrEqual(100_000);
+    expect(requests.every((request) => request.offset < 100_000)).toBe(true);
+  });
+
+  it("hands an explicit save of a large text file every byte, not the preview window", async () => {
+    const bytes = new Uint8Array(150_000).fill(98);
+    const { readSpan } = servingSpan(bytes);
+    renderViewer(
+      "big.txt",
+      objectOf(bytes, "a".repeat(64), "text/plain"),
+      readSpan,
+    );
+    await screen.findByText(/Preview truncated/);
+
+    fireEvent.click(screen.getByRole("button", { name: "Download" }));
+
+    await waitFor(() =>
+      expect(mocks.downloadBlobToDevice).toHaveBeenCalledTimes(1),
+    );
+    const [blob, name] = mocks.downloadBlobToDevice.mock.calls[0];
+    expect(name).toBe("big.txt");
+    expect(blob.size).toBe(150_000);
+  });
 
   it("shows a text file's content", async () => {
     const bytes = textBytes("hello from the file");

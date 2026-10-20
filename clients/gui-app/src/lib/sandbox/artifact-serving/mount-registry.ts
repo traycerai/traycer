@@ -64,6 +64,7 @@ class MountDispatcher {
           this.requests.delete(requestId);
         }
         entry.requests.clear();
+        server.dispose();
         // Even an unmount during registration must remove the native lease.
         void ready
           .then(

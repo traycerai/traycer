@@ -341,6 +341,39 @@ describe("mountArtifact", () => {
     expect(bridge.responses).toEqual([]);
   });
 
+  it("aborts the shared read itself when the mount is disposed, so a download parked on the host stops with the page", async () => {
+    // The read behind a request is shared by every waiter on the block, so it
+    // is not tied to any one request's signal: only the mount's end stops it.
+    const seen: { signal: AbortSignal | null } = { signal: null };
+    const readSpan: ArtifactReadSpan = (_sha256, _offset, _length, signal) => {
+      seen.signal = signal;
+      return new Promise(() => undefined);
+    };
+    const server = new ArtifactServer({
+      treePath: "",
+      manifest: manifestOf("a.txt", 5),
+      readSpan,
+      document: {
+        policySource: "traycer-sandbox:",
+        csp: null,
+        theme: THEME,
+        nonce: "n",
+        shortcuts: [],
+      },
+    });
+    const bridge = createFakeBridge();
+    const mount = mountArtifact(hostWith(bridge), server);
+    await mount.ready;
+
+    bridge.emit(requestFor(mount.mountId, "a.txt", "req-1"));
+    await vi.waitFor(() => expect(seen.signal).not.toBeNull());
+    expect(seen.signal?.aborted).toBe(false);
+
+    mount.dispose();
+
+    expect(seen.signal?.aborted).toBe(true);
+  });
+
   it("aborts every mount's in-flight requests independently: disposing one leaves the other's alone", async () => {
     const settles: ((result: ArtifactReadSpanResult) => void)[] = [];
     function slowServer(path: string): ArtifactServer {

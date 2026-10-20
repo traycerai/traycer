@@ -58,14 +58,12 @@ function NativeMediaContent(props: {
   useEffect(() => {
     const bridge = runnerHost.sandboxArtifacts;
     if (bridge === null) return;
-    const lifetime = new AbortController();
     // A fixed non-document path avoids extension-based HTML composition.
     // Shared block reads live until this mount ends, including download retries.
     const server = new ArtifactServer({
       treePath: "",
       manifest: { files: { media: { sha256, byteLength, mediaType } } },
-      readSpan: (sha, offset, length) =>
-        readSpan(sha, offset, length, lifetime.signal),
+      readSpan,
       document: {
         policySource: bridge.policySource,
         csp: null,
@@ -95,14 +93,12 @@ function NativeMediaContent(props: {
       },
       () => {
         mount.dispose();
-        lifetime.abort();
         if (active) setMounted({ source, url: null });
       },
     );
     return () => {
       active = false;
       mount.dispose();
-      lifetime.abort();
     };
   }, [source, runnerHost, sha256, byteLength, mediaType, readSpan]);
   if (mounted?.source !== source) return <MediaStatus loading />;

@@ -8,13 +8,24 @@ export async function readArtifactBlob(
   readSpan: ArtifactReadSpan,
   signal: AbortSignal,
 ): Promise<Blob> {
+  return readArtifactBlobPrefix(object, readSpan, signal, object.byteLength);
+}
+
+/** A bounded preview still validates spans against the complete object's size. */
+export async function readArtifactBlobPrefix(
+  object: Pick<ArtifactObjectRef, "sha256" | "byteLength" | "mediaType">,
+  readSpan: ArtifactReadSpan,
+  signal: AbortSignal,
+  maxBytes: number,
+): Promise<Blob> {
+  const end = Math.min(object.byteLength, maxBytes);
   const parts: ArrayBuffer[] = [];
   let offset = 0;
   do {
     signal.throwIfAborted();
     const length = Math.min(
       EPIC_READ_ARTIFACT_OBJECT_RANGE_MAX_BYTES,
-      Math.max(1, object.byteLength - offset),
+      Math.max(1, end - offset),
     );
     const result = await readSpan(object.sha256, offset, length, signal);
     signal.throwIfAborted();
@@ -32,6 +43,6 @@ export async function readArtifactBlob(
     }
     parts.push(new Uint8Array(result.bytes).buffer);
     offset += result.bytes.length;
-  } while (offset < object.byteLength);
+  } while (offset < end);
   return new Blob(parts, { type: object.mediaType });
 }
