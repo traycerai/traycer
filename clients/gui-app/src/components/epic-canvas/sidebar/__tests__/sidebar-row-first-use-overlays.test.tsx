@@ -72,18 +72,11 @@ const dndRegistrations = vi.hoisted(() => ({
 }));
 
 /**
- * The Hosts section's mount: the view hook answers from here, and the section
- * is a probe that records the props the tree hands it. Neither reaches the
- * host runtime, so every other case in this file mounts the tree as before
- * (no hosts, so no section).
+ * The task's hosts view, answered from here so the tree never reaches the host
+ * runtime for it.
  */
 const taskHostsMount = vi.hoisted(() => ({
   view: { kind: "none" } as TaskHostsView,
-  sectionProps: [] as {
-    epicId: string;
-    tabId: string;
-    canMutate: boolean;
-  }[],
 }));
 
 const OWNER_PR_REFERENCES = vi.hoisted(() =>
@@ -106,22 +99,6 @@ vi.mock("@/hooks/host/use-host-client-for-host-id", async (importOriginal) => {
 vi.mock("@/hooks/epic/use-task-hosts-view", () => ({
   useTaskHostsView: () => taskHostsMount.view,
 }));
-
-vi.mock("@/components/epic-canvas/sidebar/task-host-groups", async () => {
-  const React = await import("react");
-  return {
-    TaskHostGroupsSection: (props: {
-      epicId: string;
-      tabId: string;
-      canMutate: boolean;
-    }): React.ReactNode => {
-      taskHostsMount.sectionProps.push(props);
-      return React.createElement("div", {
-        "data-testid": "task-host-groups-probe",
-      });
-    },
-  };
-});
 
 vi.mock("@/hooks/pr/use-owner-pr-references", () => ({
   useOwnerListPrReferences: () => OWNER_PR_REFERENCES,
@@ -768,7 +745,6 @@ afterEach(() => {
   dndRegistrations.draggableIds = [];
   dndRegistrations.droppableIds = [];
   taskHostsMount.view = { kind: "none" };
-  taskHostsMount.sectionProps.length = 0;
   resetOverlayMounted();
   useNewConversationModalOpenStore.getState().close();
   vi.useRealTimers();
@@ -1474,7 +1450,7 @@ describe("sidebar row first-use overlays", () => {
   });
 });
 
-const ONE_HOST_VIEW: TaskHostsView = {
+const TWO_MACHINES_VIEW: TaskHostsView = {
   kind: "hosts",
   hosts: [
     {
@@ -1483,36 +1459,14 @@ const ONE_HOST_VIEW: TaskHostsView = {
       principal: { kind: "user", id: USER_ID },
       reach: "same_principal",
     },
+    {
+      hostId: "host-b",
+      label: "Another machine",
+      principal: { kind: "user", id: USER_ID },
+      reach: "same_principal",
+    },
   ],
 };
-
-/** Mounts the tree on a session whose store the case has already set up. */
-function renderTreeOn(handle: OpenedStoreForTest): void {
-  opened.push(handle);
-  render(
-    <QueryClientProvider client={new QueryClient()}>
-      <EpicSessionContext.Provider value={handle}>
-        <DndContext>
-          <ChatTreePanelBody
-            epicId={EPIC_ID}
-            tabId={TAB_ID}
-            messageHits={CHAT_TREE_MESSAGE_HITS_NONE}
-          />
-        </DndContext>
-      </EpicSessionContext.Provider>
-    </QueryClientProvider>,
-  );
-}
-
-function lastSectionProps(): {
-  epicId: string;
-  tabId: string;
-  canMutate: boolean;
-} {
-  const props = taskHostsMount.sectionProps.at(-1);
-  if (props === undefined) throw new Error("the section was not mounted");
-  return props;
-}
 
 /** The tree's own container: the parent of `role="tree"`. */
 function treeContainerClasses(): readonly string[] {
@@ -1521,133 +1475,23 @@ function treeContainerClasses(): readonly string[] {
   return [...container.classList];
 }
 
-describe("chat tree Hosts section mount", () => {
-  it("mounts the section inside the chat tree region with the epic id, the tab id and a boolean canMutate", () => {
-    taskHostsMount.view = {
-      kind: "hosts",
-      hosts: [
-        {
-          hostId: "host-a",
-          label: "This machine",
-          principal: { kind: "user", id: USER_ID },
-          reach: "same_principal",
-        },
-      ],
-    };
+describe("chat tree with the task on hosts", () => {
+  it("renders no Hosts section for a task with hosts on two machines, and keeps the rows", () => {
+    taskHostsMount.view = TWO_MACHINES_VIEW;
     renderTree();
 
-    const region = screen.getByTestId("epic-chat-tree-region");
-    const probe = screen.getByTestId("task-host-groups-probe");
-    expect(region.contains(probe)).toBe(true);
-    const props =
-      taskHostsMount.sectionProps[taskHostsMount.sectionProps.length - 1];
-    expect(props.epicId).toBe(EPIC_ID);
-    expect(props.tabId).toBe(TAB_ID);
-    expect(typeof props.canMutate).toBe("boolean");
-  });
-
-  it("mounts the section once, beside the rows rather than instead of them", () => {
-    taskHostsMount.view = {
-      kind: "hosts",
-      hosts: [
-        {
-          hostId: "host-a",
-          label: null,
-          principal: { kind: "user", id: USER_ID },
-          reach: "same_principal",
-        },
-      ],
-    };
-    renderTree();
-
-    expect(screen.getAllByTestId("task-host-groups-probe")).toHaveLength(1);
+    expect(screen.queryByTestId("task-host-groups")).toBeNull();
+    expect(screen.queryByText("Hosts")).toBeNull();
     expect(screen.getByTestId(`epic-sidebar-item-${ROW_A}`)).toBeTruthy();
     expect(screen.getByTestId(`epic-sidebar-item-${ROW_B}`)).toBeTruthy();
   });
 
-  it("lets the rows shrink to their own height when the section follows them", () => {
-    taskHostsMount.view = ONE_HOST_VIEW;
-    renderTree();
-
-    const classes = treeContainerClasses();
-    expect(classes).toContain("shrink-0");
-    expect(classes).not.toContain("flex-1");
-  });
-
-  it("lets the tree fill the panel when there is no section and no message hits", () => {
-    taskHostsMount.view = { kind: "none" };
+  it("lets the tree fill the panel when there are no message hits", () => {
+    taskHostsMount.view = TWO_MACHINES_VIEW;
     renderTree();
 
     const classes = treeContainerClasses();
     expect(classes).toContain("flex-1");
     expect(classes).not.toContain("shrink-0");
-  });
-
-  it("hands the section canMutate true for an editor on a live connection", () => {
-    taskHostsMount.view = ONE_HOST_VIEW;
-    const handle = createSession();
-    handle.store.setState({
-      permissionRole: "editor",
-      connectionStatus: "open",
-    });
-    renderTreeOn(handle);
-
-    expect(lastSectionProps().canMutate).toBe(true);
-  });
-
-  it("hands the section canMutate true for an owner on a live connection", () => {
-    taskHostsMount.view = ONE_HOST_VIEW;
-    const handle = createSession();
-    handle.store.setState({
-      permissionRole: "owner",
-      connectionStatus: "open",
-    });
-    renderTreeOn(handle);
-
-    expect(lastSectionProps().canMutate).toBe(true);
-  });
-
-  it("hands the section canMutate false for a viewer on a live connection", () => {
-    taskHostsMount.view = ONE_HOST_VIEW;
-    const handle = createSession();
-    handle.store.setState({
-      permissionRole: "viewer",
-      connectionStatus: "open",
-    });
-    renderTreeOn(handle);
-
-    expect(lastSectionProps().canMutate).toBe(false);
-  });
-
-  it("hands the section canMutate false for an editor whose connection is closed", () => {
-    taskHostsMount.view = ONE_HOST_VIEW;
-    const handle = createSession();
-    handle.store.setState({
-      permissionRole: "editor",
-      connectionStatus: "closed",
-    });
-    renderTreeOn(handle);
-
-    expect(lastSectionProps().canMutate).toBe(false);
-  });
-
-  it("does not mount the section when the view is none", () => {
-    taskHostsMount.view = { kind: "none" };
-    renderTree();
-
-    expect(screen.queryByTestId("task-host-groups-probe")).toBeNull();
-    expect(taskHostsMount.sectionProps).toHaveLength(0);
-    expect(screen.getByTestId(`epic-sidebar-item-${ROW_A}`)).toBeTruthy();
-  });
-
-  it("mounts the section for a retryable failure, so the error line has somewhere to show", () => {
-    taskHostsMount.view = { kind: "error", retry: () => undefined };
-    renderTree();
-
-    expect(
-      screen
-        .getByTestId("epic-chat-tree-region")
-        .contains(screen.getByTestId("task-host-groups-probe")),
-    ).toBe(true);
   });
 });
