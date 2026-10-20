@@ -27,7 +27,8 @@ interface SessionCredentialPlane {
   readonly readCredentialUpdateBearer: () => string | null;
   readonly currentFingerprint: () => string | null;
   readonly revalidateForReconnect:
-    (() => Promise<RemoteSessionAuthRecoveryOutcome>) | null;
+    | (() => Promise<RemoteSessionAuthRecoveryOutcome>)
+    | null;
 }
 
 /**

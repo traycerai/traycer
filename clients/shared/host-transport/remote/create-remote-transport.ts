@@ -198,7 +198,8 @@ export interface CreateRemoteTransportOptions<
    * any consumer could have passed.
    */
   readonly mintMemberCredential:
-    ((hostId: string) => Promise<MemberCredentialHandoff | null>) | null;
+    | ((hostId: string) => Promise<MemberCredentialHandoff | null>)
+    | null;
 }
 
 /** See {@link CreateRemoteTransportOptions.openAuth}. */

@@ -48,7 +48,9 @@ export type ConnectionManifest = Readonly<Record<string, ManifestMethodEntry>>;
  *   between the two canonicals using its installed upgrade/downgrade paths.
  */
 export type IncompatibleMethodBlocking =
-  "client-missing-method" | "host-missing-method" | "no-bridge";
+  | "client-missing-method"
+  | "host-missing-method"
+  | "no-bridge";
 
 /**
  * Per-method incompatibility record carried on a fatal error frame. Either
@@ -306,7 +308,9 @@ export type ClientFatalErrorFrame = {
  * connection.
  */
 export type ClientFrame =
-  ClientOpenFrame | ClientRequestFrame | ClientFatalErrorFrame;
+  | ClientOpenFrame
+  | ClientRequestFrame
+  | ClientFatalErrorFrame;
 
 /**
  * Host acknowledgement of a successful token + compatibility check, carrying
@@ -355,7 +359,9 @@ export type HostFatalErrorFrame = {
  * connection.
  */
 export type HostFrame =
-  HostOpenAckFrame | HostResponseFrame | HostFatalErrorFrame;
+  | HostOpenAckFrame
+  | HostResponseFrame
+  | HostFatalErrorFrame;
 
 // ---- Canonical Zod schemas -------------------------------------------- //
 

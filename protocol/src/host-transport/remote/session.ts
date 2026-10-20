@@ -530,7 +530,8 @@ export interface RemoteSessionOptions<
    * still names the cause.
    */
   readonly mintMemberCredential:
-    ((hostId: string) => Promise<MemberCredentialHandoff | null>) | null;
+    | ((hostId: string) => Promise<MemberCredentialHandoff | null>)
+    | null;
 }
 
 /**
@@ -612,7 +613,8 @@ type SessionDial =
       readonly grantProvider: AttachGrantProvider;
       readonly auth: RemoteSessionAuth;
       readonly mintMemberCredential:
-        ((hostId: string) => Promise<MemberCredentialHandoff | null>) | null;
+        | ((hostId: string) => Promise<MemberCredentialHandoff | null>)
+        | null;
     }
   | {
       readonly kind: "pool";
@@ -2537,11 +2539,11 @@ export class RemoteSession<
       return;
     }
 
-    const relaySocket = new RelaySocket({
+    const relaySocket: RelaySocket = new RelaySocket({
       attachBaseUrl: dial.attachBaseUrl,
       grantJws: grant.grant,
       webSocketFactory: this.options.webSocketFactory,
-      handlers: this.socketHandlers(generation, () => relaySocket),
+      handlers: this.socketHandlers(generation, (): RelaySocket => relaySocket),
     });
     this.installConnection(generation, grant, relaySocket, noise);
   }
@@ -2552,10 +2554,10 @@ export class RemoteSession<
    * it directly (see `onAttachAck`).
    */
   private attachDirect(generation: number, poolUrl: string): void {
-    const socket = new RelaySocket({
+    const socket: RelaySocket = new RelaySocket({
       directUrl: poolUrl,
       webSocketFactory: this.options.webSocketFactory,
-      handlers: this.socketHandlers(generation, () => socket),
+      handlers: this.socketHandlers(generation, (): RelaySocket => socket),
     });
     this.installConnection(generation, null, socket, PLAIN_MUX_CHANNEL);
   }

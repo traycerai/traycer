@@ -352,9 +352,7 @@ export function openBrowserSessionsTransport(
  * are the whole allowlist: this machine's own host, and a registry host that
  * is a well-formed personal (non-sandbox) remote.
  */
-function jarTransportLane(
-  target: HostDirectoryEntry,
-):
+function jarTransportLane(target: HostDirectoryEntry):
   | { readonly kind: "local" }
   | {
       readonly kind: "personal-remote";
