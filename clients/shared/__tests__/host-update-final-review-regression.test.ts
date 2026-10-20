@@ -343,9 +343,15 @@ describe("Ticket 02 final-review OSS enforcement", () => {
     );
     for (const body of [register, unregister]) {
       expect(body).toMatch(/mutationAllowed|setLoginItemSettingsWithGuard/);
-      expect(body).toMatch(/bootoutStaleAgent\([^;]+revalidate/);
       expect(body).toMatch(/setLoginItemSettingsWithGuard\([^;]+revalidate/s);
     }
+    expect(unregister).toMatch(/bootoutStaleAgent\([^;]+revalidate/);
+    // The register cycle's bootouts also ask a force restart's confirmed
+    // host, through one guard whose first check is the live revalidation.
+    expect(register).toMatch(
+      /const allowedBeforeBootout = async \(\): Promise<boolean> =>\s*\(await mutationAllowed\(revalidateBeforeBootout\)\) &&/,
+    );
+    expect(register).toMatch(/bootoutStaleAgent\([^;]+allowedBeforeBootout/);
     const bootout = sliceFrom(
       loginItem,
       "async function bootoutStaleAgent(",
