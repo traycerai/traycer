@@ -451,6 +451,10 @@ export function sandboxStateWord(sandbox: HostScopeSandbox): string | null {
  * picker. A picker fails CLOSED on a sandbox whose control-plane row has not
  * answered (`summary === null`): until `GET /api/sandboxes` says it is not
  * burst, it might be, and a burst sandbox offered once is the leak.
+ *
+ * The server pool (`kind: "pool"`) is hidden from every list: it serves the
+ * cloud's own read paths and is not a machine anyone picks, activates or
+ * manages.
  */
 export type HostPickerGroup =
   | "personal"
@@ -463,6 +467,7 @@ export function hostOptionPickerGroup(
   listsAgentSandboxes: boolean,
   offersAutomations: boolean,
 ): HostPickerGroup {
+  if (host.entry?.kind === "pool") return "hidden";
   if (host.sandbox === null) return "personal";
   // A sandbox no host row stands for yet: never offered as a
   // host. The host list groups it by the rules below, like any sandbox.
@@ -602,10 +607,12 @@ export const SANDBOX_CREDENTIALS_REFUSED = "Sandboxes don't take sign-ins";
  * none of them. The check is made BEFORE the RPC: the sandbox's own
  * `SANDBOX_HOST_REFUSES_CREDENTIALS` arrives only after the secret already
  * has. {@link hostEntryTakesCredentials} is the same rule over a directory
- * entry, for a surface that holds one instead of a picker row.
+ * entry, for a surface that holds one instead of a picker row. The server
+ * pool takes none either: it serves the cloud's reads and holds no one's
+ * secrets.
  */
 export function hostTakesCredentials(host: HostScopeOption): boolean {
-  return host.sandbox === null;
+  return host.sandbox === null && host.entry?.kind !== "pool";
 }
 
 /**
@@ -616,7 +623,10 @@ export function hostTakesCredentials(host: HostScopeOption): boolean {
 export function hostEntryTakesCredentials(
   entry: HostDirectoryEntry | null,
 ): boolean {
-  return entry === null || !isSandboxHostDirectoryEntry(entry);
+  return (
+    entry === null ||
+    (entry.kind !== "pool" && !isSandboxHostDirectoryEntry(entry))
+  );
 }
 
 /**

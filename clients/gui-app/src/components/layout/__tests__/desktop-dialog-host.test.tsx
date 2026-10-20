@@ -310,6 +310,7 @@ function createBaseRunnerHost(): IRunnerHost {
     signInUrl: "https://auth.example.invalid/sign-in",
     authnBaseUrl: "https://auth.example.invalid",
     relayBaseUrl: "wss://relay.example.invalid/attach",
+    poolBaseUrl: "",
     hasLocalHost: true,
     sandboxControlUnavailableReason: null,
     canCopyImages: true,

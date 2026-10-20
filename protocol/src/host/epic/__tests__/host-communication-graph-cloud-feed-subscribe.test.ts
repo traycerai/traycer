@@ -61,7 +61,6 @@ describe("host.communicationGraph.subscribe@1.0 contract", () => {
     ).toEqual({
       major: 1,
       minor: 1,
-      supportedMajors: [1],
     });
   });
 

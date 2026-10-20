@@ -123,6 +123,20 @@ export const IDEMPOTENCY_KEY_REUSE_MESSAGE_FRAGMENT =
 export const CLIENT_CAPABILITY_EPIC_WRITE_PATH_V1 = "epic.writePath/1";
 
 /**
+ * The socket-level keepalive a session's client sends and the peer answers,
+ * as TEXT frames beside the binary mux frames.
+ *
+ * The relay answers it at its edge, and the server pool answers it on its
+ * direct leg. It is the client's only way to find a peer that stopped
+ * answering - a browser cannot send WebSocket ping control frames - so a peer
+ * on either leg must answer exactly {@link SOCKET_KEEPALIVE_PING} with exactly
+ * {@link SOCKET_KEEPALIVE_PONG}, and the strings never change: every relay and
+ * every released client already speaks them.
+ */
+export const SOCKET_KEEPALIVE_PING = "relay-ping";
+export const SOCKET_KEEPALIVE_PONG = "relay-pong";
+
+/**
  * Fatal code a host emits on every live connection when it is deliberately
  * standing itself down and expects to come back - the restart tombstone
  * (connection registry §3 / D5 / M1). Always paired with `retryable: true`

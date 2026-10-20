@@ -665,7 +665,6 @@ describe("stream compatibility", () => {
     expect(openAckManifest["terminal.subscribe"]).toEqual({
       major: 1,
       minor: 7,
-      supportedMajors: [1],
     });
 
     const terminalAsHost = checkStreamMethodCompatibility(

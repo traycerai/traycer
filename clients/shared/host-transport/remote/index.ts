@@ -1,7 +1,9 @@
 /**
  * Client remote transport (Ticket T12) — a persistent, E2E-encrypted, multiplexed
  * session behind the same `IHostMessenger` / `IStreamClient` interfaces the local
- * transports implement, selected by `HostDirectoryEntry.kind === "remote"`.
+ * transports implement, selected by `HostDirectoryEntry.kind === "remote"` -
+ * and, for the server pool (`kind === "pool"`), the same session over a direct
+ * `wss:` leg instead of the relay.
  *
  * The client↔host mux wire contract this transport speaks is documented for the
  * T11 host responder in `../host-client/REMOTE-TRANSPORT.md` and codified in
@@ -9,8 +11,10 @@
  */
 
 export {
+  createPoolHostTransport,
   createRemoteHostTransport,
   remoteOpenAuthFor,
+  type CreatePoolTransportOptions,
   type CreateRemoteTransportOptions,
   type RemoteHostTransport,
   type RemoteOpenAuth,
@@ -71,3 +75,7 @@ export {
   type SessionOpenPayload,
   type SessionOpenAckPayload,
 } from "@traycer/protocol/host-transport/mux";
+export {
+  poolSessionPresence,
+  type PoolSessionPresence,
+} from "./pool-session-presence";
