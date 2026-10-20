@@ -81,9 +81,9 @@ export type BotRecord = z.infer<typeof botRecordSchema>;
 // ---- bot.create -------------------------------------------------------- //
 
 /**
- * The host mints the two chat ids and binds itself as the bot's host, the
+ * The host mints the trunk's chat id and binds itself as the bot's host, the
  * same way it mints every chat id it owns; the cloud takes the owner from the
- * bearer. The response also names the app conversation's chat id so the
+ * bearer and derives the app conversation's chat id from the bot's id. The response also names the app conversation's chat id so the
  * caller can open it without a list round trip.
  *
  * `requestKey` makes the create safe to repeat: the cloud creates at most one

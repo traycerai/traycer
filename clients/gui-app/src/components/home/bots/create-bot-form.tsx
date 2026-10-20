@@ -32,9 +32,13 @@ const BOT_TITLE_MAX = 500;
  * per form (`requestKeyRef` below), and the cloud makes at most one bot per
  * key, so submitting again after any failure never makes a second bot.
  *
- * - Not created: the host answered, with no earlier attempt that may have
- *   reached it, with a code the cloud's create only answers before it writes
- *   anything (`NOT_CREATED_CODES`).
+ * - Not created: the host answered with a code the cloud's create only
+ *   answers before it writes anything (`NOT_CREATED_CODES`), no earlier
+ *   attempt of this call may have reached the host, and no earlier submit
+ *   under the same key may have created the bot (`earlierMayHaveCreated`).
+ *   A later refusal says nothing about what an earlier try did: membership
+ *   revoked between two tries refuses the second although the first made
+ *   the bot.
  * - The key already made a bot this create cannot be answered with (the
  *   fields were changed since, or that bot was deleted).
  * - Anything else may have created the bot, and trying again is safe.
@@ -60,19 +64,34 @@ const NOT_CREATED_CODES: ReadonlySet<string> = new Set([
   "E_INVALID_ARGUMENT",
 ]);
 
-function createFailureLine(error: Error): string {
+/** What one failed submit says about the bot, on its own. */
+type CreateFailure = "key-reused" | "not-created" | "unknown";
+
+function classifyCreateFailure(error: unknown): CreateFailure {
   const refusal = finalRefusalOf(error);
   if (
     refusal instanceof HostRpcError &&
     refusal.code === "E_BOT_REQUEST_KEY_REUSED"
   ) {
-    return CREATE_KEY_REUSED;
+    return "key-reused";
   }
   if (
     !mayHaveReachedHost(error) &&
     error instanceof HostRpcError &&
     NOT_CREATED_CODES.has(error.code)
   ) {
+    return "not-created";
+  }
+  return "unknown";
+}
+
+function createFailureLine(
+  error: Error,
+  earlierMayHaveCreated: boolean,
+): string {
+  const failure = classifyCreateFailure(error);
+  if (failure === "key-reused") return CREATE_KEY_REUSED;
+  if (failure === "not-created" && !earlierMayHaveCreated) {
     return CREATE_REFUSED;
   }
   return CREATE_UNCONFIRMED;
@@ -151,6 +170,10 @@ export function CreateBotForm(props: {
   // too: an edited retry of a create that did go through is refused rather
   // than made twice.
   const requestKeyRef = useRef<string | null>(null);
+  // Whether a submit under the current key may have created the bot: set by
+  // every failure that is not a refusal before any write, cleared with the
+  // key. While set, a later refusal cannot say the bot was not created.
+  const [earlierMayHaveCreated, setEarlierMayHaveCreated] = useState(false);
   const openBotTab = useBotTabsStore((s) => s.openBotTab);
   const navigate = useNavigate();
   const titleId = useId();
@@ -172,11 +195,11 @@ export function CreateBotForm(props: {
     // the component unmounts, and a form that is closed (or whose group
     // re-renders away) mid-create would still create the bot and never open
     // its tab. The continuation below reads no component state - the store
-    // action and the router navigate are both module-level, and clearing the
-    // key ref of an unmounted form is a no-op - so it runs whatever happened
-    // to the form. A failure is already surfaced by the
-    // mutation's own error channel (toast + the inline line), so the
-    // rejection is swallowed here.
+    // action and the router navigate are both module-level, and writing the
+    // key ref or the latch of an unmounted form is a no-op - so it runs
+    // whatever happened to the form. A failure is already surfaced by the
+    // mutation's own error channel (toast + the inline line); here it only
+    // updates the latch.
     void create
       .mutateAsync({
         environmentId,
@@ -187,21 +210,29 @@ export function CreateBotForm(props: {
         profile: toolbar.selection.profileId,
         requestKey,
       })
-      .then((response) => {
-        // The create is done: the next one this form makes is another bot.
-        requestKeyRef.current = null;
-        openBotTab({
-          botId: response.bot.botId,
-          hostId,
-          title: response.bot.title,
-        });
-        onDone();
-        navigateToTabIntent(
-          navigate,
-          botTabIntent(response.bot.botId),
-          undefined,
-        );
-      })
+      .then(
+        (response) => {
+          // The create is done: the next one this form makes is another bot.
+          requestKeyRef.current = null;
+          setEarlierMayHaveCreated(false);
+          openBotTab({
+            botId: response.bot.botId,
+            hostId,
+            title: response.bot.title,
+          });
+          onDone();
+          navigateToTabIntent(
+            navigate,
+            botTabIntent(response.bot.botId),
+            undefined,
+          );
+        },
+        (error: unknown) => {
+          if (classifyCreateFailure(error) !== "not-created") {
+            setEarlierMayHaveCreated(true);
+          }
+        },
+      )
       .catch(() => undefined);
   };
 
@@ -257,7 +288,7 @@ export function CreateBotForm(props: {
       </div>
       {create.error === null ? null : (
         <p role="alert" className="text-ui-xs text-destructive">
-          {createFailureLine(create.error)}
+          {createFailureLine(create.error, earlierMayHaveCreated)}
         </p>
       )}
       <div className="flex items-center justify-end gap-2">

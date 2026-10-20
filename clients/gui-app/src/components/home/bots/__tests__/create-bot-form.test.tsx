@@ -72,7 +72,10 @@ const mocks = vi.hoisted(() => ({
    * above, which the other tests rely on.
    */
   seedFromSettings: false,
-  /** The error `useBotCreateMutation` reports. */
+  /**
+   * The error `useBotCreateMutation` reports before any submit has failed;
+   * once one has, it reports the latest submit's, as the real mutation does.
+   */
   createError: null as Error | null,
   state: {
     localHostId: null as string | null,
@@ -111,10 +114,22 @@ vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
 vi.mock("@/hooks/bots/use-bot-mutations", () => ({
   useBotCreateMutation: (client: object | null) => {
     mocks.createClients.push(client);
+    const [latest, setLatest] = useState<{ error: Error | null } | null>(null);
     return {
       isPending: false,
-      error: mocks.createError,
-      mutateAsync: mocks.createAsync,
+      error: latest === null ? mocks.createError : latest.error,
+      mutateAsync: (variables: BotCreateRequest) => {
+        setLatest({ error: null });
+        return mocks.createAsync(variables).then(
+          (response) => response,
+          (error: unknown) => {
+            setLatest({
+              error: error instanceof Error ? error : new Error("rejected"),
+            });
+            throw error;
+          },
+        );
+      },
     };
   },
 }));
@@ -962,6 +977,100 @@ describe("<CreateBotForm /> failed create", () => {
       expect(screen.getByRole("alert").textContent).toBe(line);
     },
   );
+
+  describe("after an earlier submit under the same key", () => {
+    // A marked failure: the create was sent and its answer lost, so it may
+    // have made the bot.
+    const earlierSendLost = (): HostRpcError => sessionFatalError();
+
+    async function settle(): Promise<void> {
+      await act(async () => {
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, 0);
+        });
+      });
+    }
+
+    async function submitAgain(user: UserEvent): Promise<void> {
+      await user.click(submitButton());
+      await settle();
+    }
+
+    function alertText(): string | null {
+      return screen.queryByRole("alert")?.textContent ?? null;
+    }
+
+    it.each(["E_INVALID_ARGUMENT", "FORBIDDEN", "E_HOST_UNSUPPORTED"] as const)(
+      "does not say the bot wasn't created when a later submit is refused with %s",
+      async (code) => {
+        const user = userEvent.setup();
+        mocks.createAsync
+          .mockRejectedValueOnce(earlierSendLost())
+          .mockRejectedValueOnce(hostRefusal(code));
+        mountForm(TEAM_WITH_LOCAL);
+
+        await createBot(user);
+        await settle();
+        expect(alertText()).toBe(UNCONFIRMED);
+
+        await submitAgain(user);
+        expect(mocks.createAsync).toHaveBeenCalledTimes(2);
+        expect(alertText()).toBe(UNCONFIRMED);
+      },
+    );
+
+    it("says the key already made a bot when a later submit is refused for it", async () => {
+      const user = userEvent.setup();
+      mocks.createAsync
+        .mockRejectedValueOnce(earlierSendLost())
+        .mockRejectedValueOnce(hostRefusal("E_BOT_REQUEST_KEY_REUSED"));
+      mountForm(TEAM_WITH_LOCAL);
+
+      await createBot(user);
+      await settle();
+      expect(alertText()).toBe(UNCONFIRMED);
+
+      await submitAgain(user);
+      expect(mocks.createAsync).toHaveBeenCalledTimes(2);
+      expect(alertText()).toBe(KEY_REUSED);
+    });
+
+    it("still says the bot wasn't created after earlier submits that were refused", async () => {
+      const user = userEvent.setup();
+      mocks.createAsync
+        .mockRejectedValueOnce(hostRefusal("E_INVALID_ARGUMENT"))
+        .mockRejectedValueOnce(hostRefusal("FORBIDDEN"));
+      mountForm(TEAM_WITH_LOCAL);
+
+      await createBot(user);
+      await settle();
+      expect(alertText()).toBe(REFUSED);
+
+      await submitAgain(user);
+      expect(mocks.createAsync).toHaveBeenCalledTimes(2);
+      expect(alertText()).toBe(REFUSED);
+    });
+
+    it("trusts a refusal again once a create succeeded", async () => {
+      const user = userEvent.setup();
+      mocks.createAsync
+        .mockRejectedValueOnce(earlierSendLost())
+        .mockResolvedValueOnce(botCreateResponse())
+        .mockRejectedValueOnce(hostRefusal("E_INVALID_ARGUMENT"));
+      mountForm(TEAM_WITH_LOCAL);
+
+      await createBot(user);
+      await settle();
+      expect(alertText()).toBe(UNCONFIRMED);
+
+      await submitAgain(user);
+      expect(alertText()).toBeNull();
+
+      await submitAgain(user);
+      expect(mocks.createAsync).toHaveBeenCalledTimes(3);
+      expect(alertText()).toBe(REFUSED);
+    });
+  });
 });
 
 function cursorMaxRow(
