@@ -1243,9 +1243,10 @@ function NotificationsSessionBody(
                 page: {
                   rows,
                   summary: accepted.summary,
-                  cloudFeedVersion: cloudFeedStreamClient.getMethodSchemaVersion(
-                    "host.notifications.cloudFeed.subscribe",
-                  ),
+                  cloudFeedVersion:
+                    cloudFeedStreamClient.getMethodSchemaVersion(
+                      "host.notifications.cloudFeed.subscribe",
+                    ),
                 },
                 version: accepted.version,
               });

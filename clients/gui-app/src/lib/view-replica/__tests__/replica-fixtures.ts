@@ -75,7 +75,9 @@ export function taskIds(page: ListTasksResponse): readonly string[] {
   });
 }
 
-export function historyPage(tasks: readonly ListTaskLight[]): ListTasksResponse {
+export function historyPage(
+  tasks: readonly ListTaskLight[],
+): ListTasksResponse {
   return {
     tasks: [...tasks],
     hasMore: true,

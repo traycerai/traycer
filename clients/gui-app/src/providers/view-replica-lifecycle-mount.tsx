@@ -40,7 +40,9 @@ export function ViewReplicaLifecycleMount(): null {
         const next = transition.userId;
         void viewReplicaStore
           .evict({ kind: "identity-retired" })
-          .then(() => (next === null ? undefined : viewReplicaStore.warm(next)));
+          .then(() =>
+            next === null ? undefined : viewReplicaStore.warm(next),
+          );
         return;
       }
       case "signedOut":

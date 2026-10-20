@@ -97,7 +97,9 @@ describe("useCloudEpicTasksQuery with the replica tier", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     // The serving tier never answers: the pool is unreachable.
-    mockHostClient.request.mockImplementation(() => new Promise(() => undefined));
+    mockHostClient.request.mockImplementation(
+      () => new Promise(() => undefined),
+    );
     useAuthStore.setState({
       status: "signed-in",
       profile: { userId: USER_ID, userName: "Test", email: "t@example.com" },

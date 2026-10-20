@@ -30,7 +30,11 @@ import {
 } from "@/lib/view-replica/__tests__/replica-fixtures";
 
 function addressFor(accountId: string): ViewReplicaAddress {
-  const address = historyReplicaAddress(accountId, HOST, LIST_CLOUD_TASKS_REQUEST);
+  const address = historyReplicaAddress(
+    accountId,
+    HOST,
+    LIST_CLOUD_TASKS_REQUEST,
+  );
   if (address === null) throw new Error("Expected a History address");
   return address;
 }
@@ -46,9 +50,7 @@ function readPage(
   store: ViewReplicaStore,
   accountId: string,
 ): ListTasksResponse | null {
-  return (
-    store.read(historyReplicaService, addressFor(accountId))?.page ?? null
-  );
+  return store.read(historyReplicaService, addressFor(accountId))?.page ?? null;
 }
 
 function mixedPage(): ListTasksResponse {
@@ -64,16 +66,20 @@ function historyServiceAtVersion(
     canonicalVersion,
     split: (page) => historyReplicaService.split(page),
     join: (shell, rows) => historyReplicaService.join(shell, rows),
-    asCached: (page, withdrawn) => historyReplicaService.asCached(page, withdrawn),
+    asCached: (page, withdrawn) =>
+      historyReplicaService.asCached(page, withdrawn),
   });
 }
 
-async function warmedWithPage(
-  accountId: string,
-): Promise<ReplicaRig> {
+async function warmedWithPage(accountId: string): Promise<ReplicaRig> {
   const rig = createReplicaRig();
   await rig.store.warm(accountId);
-  rig.store.write(historyReplicaService, addressFor(accountId), mixedPage(), stamp(100));
+  rig.store.write(
+    historyReplicaService,
+    addressFor(accountId),
+    mixedPage(),
+    stamp(100),
+  );
   await rig.store.drain();
   return rig;
 }
@@ -124,14 +130,27 @@ describe("ViewReplicaStore: scope withdrawal", () => {
       at: 200,
     });
 
-    rig.store.write(historyReplicaService, addressFor(ACCOUNT), mixedPage(), stamp(150));
+    rig.store.write(
+      historyReplicaService,
+      addressFor(ACCOUNT),
+      mixedPage(),
+      stamp(150),
+    );
     const fenced = readPage(rig.store, ACCOUNT);
     expect(fenced === null ? null : taskIds(fenced)).toEqual(["mine"]);
     expect(fenced?.completeness?.facets).toBe("partial");
 
-    rig.store.write(historyReplicaService, addressFor(ACCOUNT), mixedPage(), stamp(250));
+    rig.store.write(
+      historyReplicaService,
+      addressFor(ACCOUNT),
+      mixedPage(),
+      stamp(250),
+    );
     const admitted = readPage(rig.store, ACCOUNT);
-    expect(admitted === null ? null : taskIds(admitted)).toEqual(["mine", "teams"]);
+    expect(admitted === null ? null : taskIds(admitted)).toEqual([
+      "mine",
+      "teams",
+    ]);
   });
 });
 
@@ -155,7 +174,12 @@ describe("ViewReplicaStore: identity mismatch is a miss", () => {
     });
     expect(readPage(rig.store, ACCOUNT)).toBeNull();
 
-    rig.store.write(historyReplicaService, address, historyPage([taskLight("fresh", null)]), stamp(300));
+    rig.store.write(
+      historyReplicaService,
+      address,
+      historyPage([taskLight("fresh", null)]),
+      stamp(300),
+    );
     await rig.store.drain();
     const page = readPage(rig.store, ACCOUNT);
     expect(page === null ? null : taskIds(page)).toEqual(["fresh"]);
@@ -184,7 +208,12 @@ describe("ViewReplicaStore: eviction classes", () => {
   it("account-refused drops that account's pages and meta, and keeps another account's", async () => {
     const rig = await warmedWithPage(ACCOUNT);
     await rig.store.warm(OTHER_ACCOUNT);
-    rig.store.write(historyReplicaService, addressFor(OTHER_ACCOUNT), mixedPage(), stamp(100));
+    rig.store.write(
+      historyReplicaService,
+      addressFor(OTHER_ACCOUNT),
+      mixedPage(),
+      stamp(100),
+    );
     rig.store.noteConfirmedWrite(ACCOUNT, historyReplicaService.service, 500);
 
     await rig.store.evict({ kind: "account-refused", accountId: ACCOUNT });
@@ -195,7 +224,12 @@ describe("ViewReplicaStore: eviction classes", () => {
     // The floor went with the account's meta: after it warms again, an old
     // page reads.
     await rig.store.warm(ACCOUNT);
-    rig.store.write(historyReplicaService, addressFor(ACCOUNT), mixedPage(), stamp(100));
+    rig.store.write(
+      historyReplicaService,
+      addressFor(ACCOUNT),
+      mixedPage(),
+      stamp(100),
+    );
     expect(readPage(rig.store, ACCOUNT)).not.toBeNull();
 
     const reloaded = rig.reopen();
@@ -216,7 +250,12 @@ describe("ViewReplicaStore: eviction classes", () => {
 
     // A write queued before the wipe must not reach disk after it.
     await rig.store.warm(OTHER_ACCOUNT);
-    rig.store.write(historyReplicaService, addressFor(OTHER_ACCOUNT), mixedPage(), stamp(100));
+    rig.store.write(
+      historyReplicaService,
+      addressFor(OTHER_ACCOUNT),
+      mixedPage(),
+      stamp(100),
+    );
     await rig.store.evict({ kind: "identity-retired" });
     await rig.store.drain();
     expect(readPage(rig.store, ACCOUNT)).toBeNull();
@@ -237,16 +276,28 @@ describe("ViewReplicaStore: read-your-write floor", () => {
     rig.store.noteConfirmedWrite(ACCOUNT, historyReplicaService.service, 300);
     expect(readPage(rig.store, ACCOUNT)).toBeNull();
 
-    rig.store.write(historyReplicaService, addressFor(ACCOUNT), mixedPage(), stamp(400));
+    rig.store.write(
+      historyReplicaService,
+      addressFor(ACCOUNT),
+      mixedPage(),
+      stamp(400),
+    );
     expect(readPage(rig.store, ACCOUNT)).not.toBeNull();
   });
 });
 
 function storedRecord(
   store: ViewReplicaStore,
-  overrides: { readonly key: string | null; readonly savedAt: number; readonly shell: { readonly value: unknown } | null },
+  overrides: {
+    readonly key: string | null;
+    readonly savedAt: number;
+    readonly shell: { readonly value: unknown } | null;
+  },
 ): ViewReplicaStoredRecord {
-  const identity = store.identityFor(historyReplicaService, addressFor(ACCOUNT));
+  const identity = store.identityFor(
+    historyReplicaService,
+    addressFor(ACCOUNT),
+  );
   const parts = historyReplicaService.split(mixedPage());
   return {
     version: 1,
@@ -268,7 +319,13 @@ describe("ViewReplicaStore: corrupt records", () => {
       "replica-test",
     );
     await backend.write(
-      [storedRecord(rig.store, { key: "corrupt-key", savedAt: -1, shell: null })],
+      [
+        storedRecord(rig.store, {
+          key: "corrupt-key",
+          savedAt: -1,
+          shell: null,
+        }),
+      ],
       [],
       null,
     );
@@ -295,7 +352,13 @@ describe("ViewReplicaStore: corrupt records", () => {
       "replica-test",
     );
     await backend.write(
-      [storedRecord(rig.store, { key: null, savedAt: 100, shell: { value: 42 } })],
+      [
+        storedRecord(rig.store, {
+          key: null,
+          savedAt: 100,
+          shell: { value: 42 },
+        }),
+      ],
       [],
       null,
     );

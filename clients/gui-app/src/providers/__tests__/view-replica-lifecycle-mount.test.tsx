@@ -28,7 +28,11 @@ import {
 const TEAMS = [{ teamId: TEAM, slug: "team-slug", avatarUrl: null }];
 
 function cachedIds(accountId: string): readonly string[] | null {
-  const address = historyReplicaAddress(accountId, HOST, LIST_CLOUD_TASKS_REQUEST);
+  const address = historyReplicaAddress(
+    accountId,
+    HOST,
+    LIST_CLOUD_TASKS_REQUEST,
+  );
   if (address === null) throw new Error("Expected a History address");
   const hit = viewReplicaStore.read(historyReplicaService, address);
   return hit === null ? null : taskIds(hit.page);
@@ -43,7 +47,11 @@ async function seedPreviousSession(accountId: string): Promise<void> {
     ),
   );
   await previous.warm(accountId);
-  const address = historyReplicaAddress(accountId, HOST, LIST_CLOUD_TASKS_REQUEST);
+  const address = historyReplicaAddress(
+    accountId,
+    HOST,
+    LIST_CLOUD_TASKS_REQUEST,
+  );
   if (address === null) throw new Error("Expected a History address");
   const page: ListTasksResponse = historyPage([
     taskLight("mine", null),
@@ -108,7 +116,9 @@ describe("ViewReplicaLifecycleMount", () => {
       signIn(OTHER_ACCOUNT);
     });
 
-    await waitFor(() => expect(viewReplicaStore.isWarm(OTHER_ACCOUNT)).toBe(true));
+    await waitFor(() =>
+      expect(viewReplicaStore.isWarm(OTHER_ACCOUNT)).toBe(true),
+    );
     expect(cachedIds(ACCOUNT)).toBeNull();
     expect(cachedIds(OTHER_ACCOUNT)).toBeNull();
   });

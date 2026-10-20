@@ -90,7 +90,10 @@ describe("notification feed replica", () => {
     useCloudNotificationsStore.getState().seedFromReplica(page);
 
     expect(seededKeys()).toEqual(
-      [cloudNotificationFeedId("entry-1"), cloudNotificationFeedId("entry-2")].sort(),
+      [
+        cloudNotificationFeedId("entry-1"),
+        cloudNotificationFeedId("entry-2"),
+      ].sort(),
     );
     const state = useCloudNotificationsStore.getState();
     expect(state.hasSnapshot).toBe(false);
@@ -125,7 +128,10 @@ describe("notification feed replica", () => {
     });
 
     expect(seededKeys()).toEqual(
-      [cloudNotificationFeedId("cached-2"), cloudNotificationFeedId("live-3")].sort(),
+      [
+        cloudNotificationFeedId("cached-2"),
+        cloudNotificationFeedId("live-3"),
+      ].sort(),
     );
   });
 });

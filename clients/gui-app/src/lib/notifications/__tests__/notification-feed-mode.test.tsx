@@ -173,8 +173,8 @@ describe("useNotificationFeedMode", () => {
     cloudFeedSupport.value = "supported";
 
     expect(
-      renderHook(() => useNotificationFeedModeFor(null, null, HOST_ID, null)).result
-        .current,
+      renderHook(() => useNotificationFeedModeFor(null, null, HOST_ID, null))
+        .result.current,
     ).toBe("cloud");
   });
 
@@ -207,24 +207,24 @@ describe("useNotificationFeedMode", () => {
     feedVersions.cloud = { major: 1, minor: 0 };
     feedVersions.local = { major: 1, minor: 2 };
     expect(
-      renderHook(() => useNotificationFeedModeFor(null, null, HOST_ID, null)).result
-        .current,
+      renderHook(() => useNotificationFeedModeFor(null, null, HOST_ID, null))
+        .result.current,
     ).toBe("local");
 
     // Local feed present but pre-partition (pre-1.2), cloud at its floor.
     feedVersions.cloud = { major: 1, minor: 2 };
     feedVersions.local = { major: 1, minor: 1 };
     expect(
-      renderHook(() => useNotificationFeedModeFor(null, null, HOST_ID, null)).result
-        .current,
+      renderHook(() => useNotificationFeedModeFor(null, null, HOST_ID, null))
+        .result.current,
     ).toBe("local");
 
     // Both projection minors present → mixed (named "cloud" feed mode).
     feedVersions.cloud = { major: 1, minor: 2 };
     feedVersions.local = { major: 1, minor: 2 };
     expect(
-      renderHook(() => useNotificationFeedModeFor(null, null, HOST_ID, null)).result
-        .current,
+      renderHook(() => useNotificationFeedModeFor(null, null, HOST_ID, null))
+        .result.current,
     ).toBe("cloud");
   });
 
@@ -248,14 +248,14 @@ describe("useNotificationFeedMode", () => {
 
     feedVersions.cloud = { major: 1, minor: 1 };
     expect(
-      renderHook(() => useNotificationFeedModeFor(null, null, HOST_ID, null)).result
-        .current,
+      renderHook(() => useNotificationFeedModeFor(null, null, HOST_ID, null))
+        .result.current,
     ).toBe("local");
 
     feedVersions.cloud = { major: 1, minor: 2 };
     expect(
-      renderHook(() => useNotificationFeedModeFor(null, null, HOST_ID, null)).result
-        .current,
+      renderHook(() => useNotificationFeedModeFor(null, null, HOST_ID, null))
+        .result.current,
     ).toBe("cloud");
   });
 
@@ -282,14 +282,14 @@ describe("useNotificationFeedMode", () => {
 
     unaryVersions.indicatorState = { major: 1, minor: 0 };
     expect(
-      renderHook(() => useNotificationFeedModeFor(null, null, HOST_ID, null)).result
-        .current,
+      renderHook(() => useNotificationFeedModeFor(null, null, HOST_ID, null))
+        .result.current,
     ).toBe("local");
 
     unaryVersions.indicatorState = { major: 1, minor: 1 };
     expect(
-      renderHook(() => useNotificationFeedModeFor(null, null, HOST_ID, null)).result
-        .current,
+      renderHook(() => useNotificationFeedModeFor(null, null, HOST_ID, null))
+        .result.current,
     ).toBe("cloud");
   });
 
@@ -308,23 +308,23 @@ describe("useNotificationFeedMode", () => {
     // `host.notifications.list` one minor short of the partition selector.
     unaryVersions.list = { major: 2, minor: 1 };
     expect(
-      renderHook(() => useNotificationFeedModeFor(null, null, HOST_ID, null)).result
-        .current,
+      renderHook(() => useNotificationFeedModeFor(null, null, HOST_ID, null))
+        .result.current,
     ).toBe("local");
 
     // ...and on the wrong major line entirely, which is not a scale.
     unaryVersions.list = { major: 1, minor: 9 };
     expect(
-      renderHook(() => useNotificationFeedModeFor(null, null, HOST_ID, null)).result
-        .current,
+      renderHook(() => useNotificationFeedModeFor(null, null, HOST_ID, null))
+        .result.current,
     ).toBe("local");
 
     // `markAllRead` short instead, with `list` at its floor.
     unaryVersions.list = { major: 2, minor: 2 };
     unaryVersions.markAllRead = { major: 1, minor: 0 };
     expect(
-      renderHook(() => useNotificationFeedModeFor(null, null, HOST_ID, null)).result
-        .current,
+      renderHook(() => useNotificationFeedModeFor(null, null, HOST_ID, null))
+        .result.current,
     ).toBe("local");
 
     // `clearAll` short, with every other floor met. The least recoverable of
@@ -335,16 +335,16 @@ describe("useNotificationFeedMode", () => {
     unaryVersions.markAllRead = { major: 1, minor: 1 };
     unaryVersions.clearAll = { major: 1, minor: 0 };
     expect(
-      renderHook(() => useNotificationFeedModeFor(null, null, HOST_ID, null)).result
-        .current,
+      renderHook(() => useNotificationFeedModeFor(null, null, HOST_ID, null))
+        .result.current,
     ).toBe("local");
     unaryVersions.clearAll = { major: 1, minor: 1 };
 
     // Both unary floors met, with the stream minors already there → mixed.
     unaryVersions.markAllRead = { major: 1, minor: 1 };
     expect(
-      renderHook(() => useNotificationFeedModeFor(null, null, HOST_ID, null)).result
-        .current,
+      renderHook(() => useNotificationFeedModeFor(null, null, HOST_ID, null))
+        .result.current,
     ).toBe("cloud");
   });
 
@@ -357,15 +357,15 @@ describe("useNotificationFeedMode", () => {
     // unary ack.
     unaryVersions.list = null;
     expect(
-      renderHook(() => useNotificationFeedModeFor(null, null, HOST_ID, null)).result
-        .current,
+      renderHook(() => useNotificationFeedModeFor(null, null, HOST_ID, null))
+        .result.current,
     ).toBe("local");
 
     // `false` is a completed handshake that did not advertise the method.
     unaryVersions.list = false;
     expect(
-      renderHook(() => useNotificationFeedModeFor(null, null, HOST_ID, null)).result
-        .current,
+      renderHook(() => useNotificationFeedModeFor(null, null, HOST_ID, null))
+        .result.current,
     ).toBe("local");
 
     // No host to read a manifest from at all - the provider passes `null` when
@@ -373,8 +373,8 @@ describe("useNotificationFeedMode", () => {
     // withheld rather than assumed.
     unaryVersions.list = { major: 2, minor: 2 };
     expect(
-      renderHook(() => useNotificationFeedModeFor(null, null, null)).result
-        .current,
+      renderHook(() => useNotificationFeedModeFor(null, null, null, null))
+        .result.current,
     ).toBe("local");
   });
   it("reads the cloud projection from the cloud feed client and the local projection from the serving client", () => {
@@ -383,8 +383,9 @@ describe("useNotificationFeedMode", () => {
     const cloudFeed = new IdentifiedStreamClient("pool");
 
     expect(
-      renderHook(() => useNotificationFeedModeFor(serving, cloudFeed, HOST_ID))
-        .result.current,
+      renderHook(() =>
+        useNotificationFeedModeFor(serving, cloudFeed, HOST_ID, null),
+      ).result.current,
     ).toBe("cloud");
 
     expect(readsByMethod.get("host.notifications.cloudFeed.subscribe")).toBe(

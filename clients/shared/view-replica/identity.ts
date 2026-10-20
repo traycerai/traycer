@@ -111,7 +111,9 @@ const UNARY_LINES: ManifestRegistry = hostRpcRegistry;
 const STREAM_LINES: ManifestRegistry = hostStreamRpcRegistry;
 
 /** This client's canonical version of a unary method. */
-export function clientUnaryCanonicalVersion(method: HostUnaryRpcMethod): string {
+export function clientUnaryCanonicalVersion(
+  method: HostUnaryRpcMethod,
+): string {
   return formatCanonical(UNARY_LINES, method);
 }
 

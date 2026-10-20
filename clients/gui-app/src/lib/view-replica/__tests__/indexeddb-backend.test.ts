@@ -9,7 +9,10 @@ import type {
   ViewReplicaStoredRecord,
 } from "@traycer-clients/shared/view-replica/store";
 
-function record(accountId: string, requestScope: string): ViewReplicaStoredRecord {
+function record(
+  accountId: string,
+  requestScope: string,
+): ViewReplicaStoredRecord {
   const identity = {
     accountId,
     service: "test.list",

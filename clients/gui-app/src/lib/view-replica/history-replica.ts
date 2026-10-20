@@ -41,44 +41,42 @@ const SERVICE = "epic.listTasks";
  * completeness) on {@link historyReplicaService}; from then on no cached
  * History page paints without it.
  */
-export const historyReplicaService = new ViewReplicaService<ListTasksResponse>(
-  {
-    service: SERVICE,
-    canonicalVersion: clientUnaryCanonicalVersion(SERVICE),
-    split: (page) => {
-      const { tasks, ...shell } = page;
-      return {
-        shell,
-        rows: tasks.map((task) => ({ scope: taskRowScope(task), value: task })),
-      };
-    },
-    join: (shell, rows) => {
-      if (typeof shell !== "object" || shell === null) return null;
-      const parsed = listTasksResponseSchema.safeParse({
-        ...shell,
-        tasks: rows,
-      });
-      return parsed.success ? parsed.data : null;
-    },
-    asCached: (page, withdrawnScopes) => {
-      const completeness = page.completeness;
-      return {
-        ...page,
-        nextCursor: undefined,
-        completeness:
-          completeness === undefined
-            ? undefined
-            : {
-                ...completeness,
-                cloudPage: "unavailable",
-                // The counts include rows a withdrawal removed.
-                facets:
-                  withdrawnScopes.length > 0 ? "partial" : completeness.facets,
-              },
-      };
-    },
+export const historyReplicaService = new ViewReplicaService<ListTasksResponse>({
+  service: SERVICE,
+  canonicalVersion: clientUnaryCanonicalVersion(SERVICE),
+  split: (page) => {
+    const { tasks, ...shell } = page;
+    return {
+      shell,
+      rows: tasks.map((task) => ({ scope: taskRowScope(task), value: task })),
+    };
   },
-);
+  join: (shell, rows) => {
+    if (typeof shell !== "object" || shell === null) return null;
+    const parsed = listTasksResponseSchema.safeParse({
+      ...shell,
+      tasks: rows,
+    });
+    return parsed.success ? parsed.data : null;
+  },
+  asCached: (page, withdrawnScopes) => {
+    const completeness = page.completeness;
+    return {
+      ...page,
+      nextCursor: undefined,
+      completeness:
+        completeness === undefined
+          ? undefined
+          : {
+              ...completeness,
+              cloudPage: "unavailable",
+              // The counts include rows a withdrawal removed.
+              facets:
+                withdrawnScopes.length > 0 ? "partial" : completeness.facets,
+            },
+    };
+  },
+});
 
 export function taskRowScope(task: ListTaskLight): ViewReplicaRowScope {
   const permission = task.epic?.permission ?? task.phase?.permission ?? null;

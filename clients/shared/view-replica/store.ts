@@ -64,11 +64,13 @@ export class ViewReplicaStore {
     if (this.#warm.has(accountId)) return Promise.resolve();
     const pending = this.#warming.get(accountId);
     if (pending !== undefined) return pending;
-    const loading = this.#load(accountId, this.#fenceOf(accountId)).finally(() => {
-      if (this.#warming.get(accountId) === loading) {
-        this.#warming.delete(accountId);
-      }
-    });
+    const loading = this.#load(accountId, this.#fenceOf(accountId)).finally(
+      () => {
+        if (this.#warming.get(accountId) === loading) {
+          this.#warming.delete(accountId);
+        }
+      },
+    );
     this.#warming.set(accountId, loading);
     return loading;
   }
@@ -539,12 +541,16 @@ function fenceRecord(
   );
   const rows = record.rows.filter(
     (row) =>
-      !applicable.some((withdrawal) => sameRowScope(withdrawal.scope, row.scope)),
+      !applicable.some((withdrawal) =>
+        sameRowScope(withdrawal.scope, row.scope),
+      ),
   );
   if (rows.length === record.rows.length) return record;
   const withdrawnScopes = [...record.withdrawnScopes];
   for (const { scope } of applicable) {
-    const removedRows = record.rows.some((row) => sameRowScope(row.scope, scope));
+    const removedRows = record.rows.some((row) =>
+      sameRowScope(row.scope, scope),
+    );
     const held = withdrawnScopes.some((candidate) =>
       sameRowScope(candidate, scope),
     );
