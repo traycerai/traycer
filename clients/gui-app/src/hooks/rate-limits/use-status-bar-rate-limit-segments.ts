@@ -1,3 +1,4 @@
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { UseQueryResult } from "@tanstack/react-query";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type {
@@ -40,10 +41,12 @@ import {
 } from "@/lib/rate-limit-providers";
 import {
   envelopeDegradedReason,
+  isTransientUnavailableReason,
   mapResponseToProviderRateLimitEnvelope,
   resolveRetainedProviderRateLimits,
   type ProviderRateLimitEnvelope,
 } from "@/lib/rate-limits/rate-limit-envelope";
+import { RATE_LIMIT_MANUAL_RETRY_WITHHOLD_MS } from "@/lib/rate-limits/rate-limit-timing";
 import {
   isWindowedRateLimitProvider,
   providerWindowEntries,
@@ -81,10 +84,13 @@ import { SAMPLE_ACCOUNT_LABEL } from "@/components/sample-workspace/sample-works
  * - `cold`: nothing has ever arrived for this provider. Neutral track, never a
  *   spinner - the reading is not loading, it simply has not been taken.
  * - `unavailable`: the provider answered and the answer was not a reading
- *   (`cli_not_found`, `rate_limits_not_available`, ...). Usually authoritative
- *   about the account, but a FIRST read that merely timed out lands here too -
- *   there is no retained reading for it to be shown beside, and a dash is the
- *   honest rendering either way. The tooltip names which it was.
+ *   (`cli_not_found`, `rate_limits_not_available`, ...). It is authoritative
+ *   about the account: a dash, and the reason in the tooltip, because the
+ *   reason is what says what to fix.
+ * - `transient`: the latest attempt failed in a way a later one may not
+ *   (`timeout`, `connection_failed`, `usage_fetch_failed`) and there is no
+ *   retained reading to show in its place. Nothing is known about the account
+ *   yet, so the segment says that and offers the read again.
  * - `degraded`: the latest attempt failed transiently and a last-known-good
  *   reading is being shown in its place.
  * - `live`: the reading is the latest one.
@@ -92,6 +98,7 @@ import { SAMPLE_ACCOUNT_LABEL } from "@/components/sample-workspace/sample-works
 export type StatusBarProviderSegmentState =
   | "cold"
   | "unavailable"
+  | "transient"
   | "degraded"
   | "live";
 
@@ -143,10 +150,25 @@ export interface StatusBarProviderSegmentModel {
    */
   readonly reason: RateLimitUnavailableReason | null;
   /**
+   * Whether a read of this account's usage is in flight right now, whoever
+   * started it. Only the `transient` state draws it: that is the state which
+   * says a retry is coming, so it is the one that has to be able to say when
+   * one is running.
+   */
+  readonly fetching: boolean;
+  /**
+   * Whether a click on this segment would read again NOW. True only on a
+   * resting `transient` segment: no other state offers a retry, a read already
+   * in flight IS the retry, and a key asked for by hand within
+   * `RATE_LIMIT_MANUAL_RETRY_WITHHOLD_MS` is withheld. Never true for a passive
+   * reader, which holds no handle it could fetch with.
+   */
+  readonly retryOffered: boolean;
+  /**
    * Every live window in catalog order - what the provider HAS, before the
    * user's selection is applied. A `degraded` segment carries the retained
-   * reading's windows - dimming them is the whole point - while `cold` and
-   * `unavailable` have none to carry.
+   * reading's windows - dimming them is the whole point - while `cold`,
+   * `transient` and `unavailable` have none to carry.
    */
   readonly windows: ReadonlyArray<StatusBarRateLimitWindow>;
   /**
@@ -185,10 +207,25 @@ export interface StatusBarRateLimitRefreshModel {
   }>;
   /** Whether any of those targets is fetching right now. */
   readonly ephemeralFetching: boolean;
-  /** Eligible `httpFetch` observers, refreshed through their own queries. */
-  readonly httpRefetches: ReadonlyArray<() => Promise<unknown>>;
+  /**
+   * Eligible `httpFetch` observers, refreshed through their own queries. Each
+   * carries the account it reads, so one segment's retry can reach its own
+   * observer rather than every one of them.
+   */
+  readonly httpRefetches: ReadonlyArray<StatusBarRateLimitHttpRefetch>;
   /** Whether any of those http observers is fetching right now. */
   readonly httpFetching: boolean;
+}
+
+/** One account a surface can read on demand. */
+export interface StatusBarRateLimitRetryTarget {
+  readonly providerId: RateLimitProviderId;
+  readonly profileId: string | null;
+}
+
+/** One `httpFetch` account's observer, named so a single key can be refetched. */
+export interface StatusBarRateLimitHttpRefetch extends StatusBarRateLimitRetryTarget {
+  readonly refetch: () => Promise<unknown>;
 }
 
 /**
@@ -208,7 +245,29 @@ export type StatusBarRateLimitCluster =
 export interface StatusBarRateLimitSegments {
   readonly cluster: StatusBarRateLimitCluster;
   readonly mountTargets: ReadonlyArray<StatusBarRateLimitMountTarget>;
+  /**
+   * The accounts the surface owes ONE re-read: every `transient` segment of an
+   * account it may still fetch. The state says a retry is coming, so one has to
+   * happen rather than waiting out the background poll; the surface schedules
+   * it (`TRANSIENT_RATE_LIMIT_RETRY_DELAY_MS`) and a segment that leaves the
+   * state takes its re-read with it.
+   *
+   * Resolved here, beside `mountTargets` and for the same reason: whether an
+   * account may be fetched at all is settled in this hook, and a caller
+   * deciding it again would be a second opinion about it.
+   */
+  readonly retryTargets: ReadonlyArray<StatusBarRateLimitRetryTarget>;
   readonly refresh: StatusBarRateLimitRefreshModel;
+  /**
+   * Call it when a read of one account was asked for by hand, which withholds
+   * that account's retry affordance for
+   * `RATE_LIMIT_MANUAL_RETRY_WITHHOLD_MS` (`retryOffered`).
+   *
+   * Recorded here rather than in the caller because the offer is part of what a
+   * segment can say, and the hook is the one place that resolves that. The
+   * caller does the reading; this is only what it tells us it did.
+   */
+  readonly recordManualRetry: (target: StatusBarRateLimitRetryTarget) => void;
 }
 
 /**
@@ -367,7 +426,18 @@ function segmentState(
 } {
   if (rateLimits === null) return { state: "cold", reason: null };
   if (!rateLimits.available) {
-    return { state: "unavailable", reason: rateLimits.reason };
+    // A transient failure only REACHES this branch with nothing retained:
+    // `resolveRetainedProviderRateLimits` hands back `lastGood` wherever one
+    // exists, which is the `degraded` case below. So a transient reason here is
+    // a read that did not land, never a fact about the account - the one
+    // distinction `@traycer/protocol`'s `semantics.ts` exists to keep from
+    // drifting between the peers.
+    return {
+      state: isTransientUnavailableReason(rateLimits.reason)
+        ? "transient"
+        : "unavailable",
+      reason: rateLimits.reason,
+    };
   }
   const degradedReason = envelopeDegradedReason(envelope);
   if (degradedReason !== null) {
@@ -429,7 +499,10 @@ function shownWindows(
 }
 
 /** Stable identity for a passive reader's empty refresh handles. */
-const NO_REFETCHES: ReadonlyArray<() => Promise<unknown>> = [];
+const NO_REFETCHES: ReadonlyArray<StatusBarRateLimitHttpRefetch> = [];
+
+/** Stable identity for "no account has been read by hand recently". */
+const NO_WITHHELD_RETRIES: ReadonlySet<string> = new Set();
 
 /** Whether a segment has anything to draw beyond an icon nobody can read. */
 function hasContent(segment: StatusBarProviderSegmentModel): boolean {
@@ -450,6 +523,22 @@ interface ToSegmentsContext {
   readonly hiddenProviders: ReadonlyArray<RateLimitProviderId>;
   readonly now: number;
   readonly sample: boolean;
+  /** A passive reader offers no retry: it has no handle to fetch with. */
+  readonly passive: boolean;
+  /** Accounts read by hand too recently to offer again (`retryKey`). */
+  readonly withheldRetries: ReadonlySet<string>;
+}
+
+/**
+ * One account's key in the withheld-retry set: the same `(provider, account)`
+ * pair the host keys its gauge and its read floors by, so a withhold can never
+ * straddle two accounts of one provider.
+ */
+function retryKey(
+  providerId: RateLimitProviderId,
+  profileId: string | null,
+): string {
+  return `${providerId}:${profileId ?? ""}`;
 }
 
 function toSegments(
@@ -487,6 +576,13 @@ function toSegments(
         target.provider.providerId,
       ),
     );
+    const reported = context.sample
+      ? { state: "live" as const, reason: null }
+      : segmentState(retained, envelope, query.isError);
+    // Every read of these keys runs through TanStack, whichever trigger started
+    // it, so the observer's own flag is the whole answer - the same one the
+    // cluster's `↻` spins on.
+    const fetching = !context.sample && query.isFetching;
     return {
       order: target.order,
       segment: {
@@ -497,9 +593,16 @@ function toSegments(
             ? target.account
             : { ...target.account, label: SAMPLE_ACCOUNT_LABEL },
         hidden: context.hiddenProviders.includes(target.provider.providerId),
-        ...(context.sample
-          ? { state: "live" as const, reason: null }
-          : segmentState(retained, envelope, query.isError)),
+        ...reported,
+        fetching,
+        retryOffered:
+          reported.state === "transient" &&
+          !fetching &&
+          !context.passive &&
+          target.fetchEligible &&
+          !context.withheldRetries.has(
+            retryKey(target.provider.providerId, target.profileId),
+          ),
         windows,
         shown,
         tightest: tightestRateLimitWindow(shown),
@@ -573,6 +676,56 @@ function applySegmentOrder(
  * "unused" is the way that promise would be broken by the next caller, since
  * refetching a disabled query fetches.
  */
+/**
+ * Which accounts were read by hand too recently to offer the read again, and
+ * the recorder that puts one there.
+ *
+ * A withhold expires on a timer of its own rather than against a clock the
+ * render samples: the affordance has to come back with nothing else happening
+ * on screen, and the strip's shared 60s clock is too coarse to release a 60s
+ * withhold. Every timer is cleared on unmount, so a strip switched off and on
+ * offers each retry afresh - what actually protects a provider across that gap
+ * is the host's own read floors, never this.
+ */
+function useWithheldRetries(): {
+  readonly withheldRetries: ReadonlySet<string>;
+  readonly recordManualRetry: (target: StatusBarRateLimitRetryTarget) => void;
+} {
+  const [withheldRetries, setWithheldRetries] =
+    useState<ReadonlySet<string>>(NO_WITHHELD_RETRIES);
+  const timers = useRef(new Map<string, number>());
+  useEffect(() => {
+    const pending = timers.current;
+    return () => {
+      for (const timer of pending.values()) window.clearTimeout(timer);
+      pending.clear();
+    };
+  }, []);
+  const recordManualRetry = useCallback(
+    (target: StatusBarRateLimitRetryTarget): void => {
+      const key = retryKey(target.providerId, target.profileId);
+      const running = timers.current.get(key);
+      // A second hand-driven read of one account restarts its withhold rather
+      // than inheriting the remainder of the first.
+      if (running !== undefined) window.clearTimeout(running);
+      setWithheldRetries((current) => new Set(current).add(key));
+      timers.current.set(
+        key,
+        window.setTimeout(() => {
+          timers.current.delete(key);
+          setWithheldRetries((current) => {
+            const next = new Set(current);
+            next.delete(key);
+            return next;
+          });
+        }, RATE_LIMIT_MANUAL_RETRY_WITHHOLD_MS),
+      );
+    },
+    [],
+  );
+  return { withheldRetries, recordManualRetry };
+}
+
 export function useStatusBarRateLimitSegments(input: {
   readonly providers: ReadonlyArray<ConfiguredRateLimitProvider>;
   readonly profileSelection: RateLimitProfileSelection;
@@ -599,6 +752,7 @@ export function useStatusBarRateLimitSegments(input: {
   // The shared 60s clock, so a window that expires while the strip is on screen
   // drops out of it within the minute rather than at the next fetch.
   const now = useSampledNow();
+  const { withheldRetries, recordManualRetry } = useWithheldRetries();
 
   const targets = input.providers
     .filter(
@@ -674,18 +828,24 @@ export function useStatusBarRateLimitSegments(input: {
         hiddenProviders,
         now,
         sample: input.sample,
+        passive,
+        withheldRetries,
       }),
       ...toSegments(httpPolling, httpPollingQueries, {
         providerLimits,
         hiddenProviders,
         now,
         sample: input.sample,
+        passive,
+        withheldRetries,
       }),
       ...toSegments(httpObserved, httpObservedQueries, {
         providerLimits,
         hiddenProviders,
         now,
         sample: input.sample,
+        passive,
+        withheldRetries,
       }),
     ]
       .sort((left, right) => left.order - right.order)
@@ -696,9 +856,29 @@ export function useStatusBarRateLimitSegments(input: {
   // rather than baked into the store so a late-connected provider still lands
   // beside its canonical neighbour without a migration.
   const segments = applySegmentOrder(canonicallyOrdered, segmentOrder);
+  const transientKeys = new Set(
+    segments.flatMap((segment) =>
+      segment.state === "transient"
+        ? [retryKey(segment.providerId, segment.profileId)]
+        : [],
+    ),
+  );
 
   return {
     cluster: clusterFor(input.providers.length, segments),
+    recordManualRetry,
+    retryTargets: targets.flatMap((target) =>
+      !passive &&
+      target.fetchEligible &&
+      transientKeys.has(retryKey(target.provider.providerId, target.profileId))
+        ? [
+            {
+              providerId: target.provider.providerId,
+              profileId: target.profileId,
+            },
+          ]
+        : [],
+    ),
     // Only the ephemeral lane: an `httpFetch` observer is enabled and fetches its
     // own cold start on mount, so routing it through the mount hook as well
     // would put two fetches on one key. And none of it in `passive`, where a
@@ -737,7 +917,11 @@ export function useStatusBarRateLimitSegments(input: {
         ),
       httpRefetches: passive
         ? NO_REFETCHES
-        : httpPollingQueries.map((query) => query.refetch),
+        : httpPolling.map((target, index) => ({
+            providerId: target.provider.providerId,
+            profileId: target.profileId,
+            refetch: httpPollingQueries[index].refetch,
+          })),
       httpFetching:
         !passive && httpPollingQueries.some((query) => query.isFetching),
     },

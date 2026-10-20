@@ -207,6 +207,8 @@ function segmentFixture(overrides: {
     hidden: false,
     state: overrides.state ?? "live",
     reason: null,
+    fetching: false,
+    retryOffered: false,
     windows,
     shown: windows,
     tightest: windows.at(0) ?? null,

@@ -8,6 +8,8 @@ import { StatusBarMiniBar } from "@/components/layout/status-bar/status-bar-mini
 import {
   statusBarSegmentSeverity,
   statusBarSegmentTooltip,
+  STATUS_BAR_TRANSIENT_LABEL,
+  STATUS_BAR_TRANSIENT_RUNNING_LABEL,
   type StatusBarUsageDisplay,
 } from "@/components/layout/status-bar/status-bar-usage-display";
 import type {
@@ -94,6 +96,11 @@ export interface StatusBarProviderSegmentProps {
  *   was; the track says "this provider has a place in the bar" and nothing more.
  * - **unavailable** — the icon and a dash. The provider answered and said it
  *   cannot report usage, which is a fact about the account, not a blip.
+ * - **transient** — the icon and the words, in the warning role: the attempt
+ *   failed in a way the next one may not, and nothing has ever been read for
+ *   this account, so there is no number to stand in. Dotted-underlined while a
+ *   click would read again, which is the only thing on this row where a click
+ *   does something besides open the panel.
  * - **degraded** — the last good numbers behind a dimmed provider icon and a
  *   warning glyph whose tooltip names the failure. Hiding them would throw
  *   away the only reading there is.
@@ -193,6 +200,45 @@ export function StatusBarProviderSegment(
 }
 
 /**
+ * What a segment with no number says in the reading's place.
+ *
+ * **unavailable** is a dash: the provider answered and said it cannot report
+ * usage, which is a fact about the account the tooltip names.
+ * **transient** is the words, because the opposite is true - nothing is known
+ * about the account yet, and a dash there would read as an answer. Dotted
+ * underline exactly while a click would read again (`retryOffered`), so the
+ * affordance and the tooltip that describes it come from one field.
+ */
+function NoReading(props: {
+  readonly segment: StatusBarProviderSegmentModel;
+}): ReactNode {
+  const { segment } = props;
+  if (segment.state === "transient") {
+    return (
+      <span
+        data-testid="status-bar-provider-transient"
+        // Warning rather than destructive: no reading arrived, and one still
+        // may.
+        className={cn(
+          "whitespace-nowrap text-ui-xs text-warning-foreground",
+          segment.retryOffered &&
+            "underline decoration-dotted underline-offset-2",
+        )}
+      >
+        {segment.fetching
+          ? STATUS_BAR_TRANSIENT_RUNNING_LABEL
+          : STATUS_BAR_TRANSIENT_LABEL}
+      </span>
+    );
+  }
+  return (
+    <span aria-hidden="true" data-testid="status-bar-provider-unavailable">
+      {UNAVAILABLE_DASH}
+    </span>
+  );
+}
+
+/**
  * The reading itself, in the form the profile's severity earns.
  *
  * **Calm** (`healthy`): what the Reading style draws - the 16px bar by default,
@@ -217,6 +263,10 @@ function SegmentBody(props: {
   const { segment, display, now } = props;
   const motionEnabled = useMotionEnabled();
   const isCold = segment.state === "cold";
+  // The two states that report something OTHER than a number in the reading's
+  // place. Both still animate in as a reading does: what arrived is news.
+  const hasNoNumber =
+    segment.state === "transient" || segment.state === "unavailable";
   const expanded =
     display.readingStyle === "full" ||
     statusBarSegmentSeverity(segment) !== "healthy";
@@ -280,13 +330,8 @@ function SegmentBody(props: {
             animate={READING_PRESENT}
             transition={READING_TRANSITION}
           >
-            {segment.state === "unavailable" ? (
-              <span
-                aria-hidden="true"
-                data-testid="status-bar-provider-unavailable"
-              >
-                {UNAVAILABLE_DASH}
-              </span>
+            {hasNoNumber ? (
+              <NoReading segment={segment} />
             ) : (
               segment.shown.map((window, index) => (
                 <Fragment key={window.windowKey}>

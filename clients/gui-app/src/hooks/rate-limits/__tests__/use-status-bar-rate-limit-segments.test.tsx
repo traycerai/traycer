@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, renderHook } from "@testing-library/react";
+import { act, cleanup, renderHook } from "@testing-library/react";
 import type {
   ProviderRateLimits,
   ProviderRateLimitWindow,
@@ -90,16 +90,20 @@ function mockUseHostQueriesImpl(args: {
     })),
     options: args.options,
   });
-  return args.requests.map(
-    (request) =>
-      mocks.results.get(
-        `${request.params.providerId}:${request.params.profileId ?? ""}`,
-      ) ??
+  return args.requests.map((request) => ({
+    // A real observer always says whether a read of its key is in flight, and
+    // the segments report it (`fetching`), so the double answers it too. No
+    // stored result carries one: a test that needs a read in flight is a test
+    // of what the SEGMENT draws, which takes the model directly.
+    isFetching: false,
+    ...(mocks.results.get(
+      `${request.params.providerId}:${request.params.profileId ?? ""}`,
+    ) ??
       mocks.results.get(request.params.providerId) ?? {
         data: undefined,
         isError: false,
-      },
-  );
+      }),
+  }));
 }
 vi.mock("@/hooks/host/use-host-queries", () => ({
   useHostQueries: mockUseHostQueriesImpl,
@@ -109,8 +113,10 @@ vi.mock("@/hooks/host/use-host-queries", () => ({
 import {
   useStatusBarRateLimitSegments,
   useStatusBarWindowedProviders,
+  type StatusBarProviderSegmentModel,
   type StatusBarRateLimitCluster,
 } from "@/hooks/rate-limits/use-status-bar-rate-limit-segments";
+import { RATE_LIMIT_MANUAL_RETRY_WITHHOLD_MS } from "@/lib/rate-limits/rate-limit-timing";
 import type { RateLimitProfileSelection } from "@/hooks/rate-limits/use-rate-limit-profile-selection";
 import { SAMPLE_ACCOUNT_LABEL } from "@/components/sample-workspace/sample-workspace-scene";
 
@@ -188,6 +194,12 @@ function codexWithAccounts(): ConfiguredRateLimitProvider {
       profileFixture("work", "managed"),
     ],
   });
+}
+
+function statusBarSegments(
+  cluster: StatusBarRateLimitCluster,
+): ReadonlyArray<StatusBarProviderSegmentModel> {
+  return cluster.kind === "segments" ? cluster.segments : [];
 }
 
 function segmentIdentities(
@@ -392,6 +404,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
+  vi.useRealTimers();
   useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
 });
 
@@ -788,6 +801,71 @@ describe("useStatusBarRateLimitSegments", () => {
         }),
       ],
     });
+  });
+
+  it("is transient, offering a retry and owing one re-read, when a transient failure is all that was ever read", () => {
+    setResult("codex", {
+      data: freshEnvelope(
+        unavailableRateLimits({ provider: "codex", reason: "timeout" }),
+      ),
+      isError: false,
+    });
+
+    const { result } = renderSegments([
+      configuredProvider({ providerId: "codex", lane: "ephemeralProcess" }),
+    ]);
+
+    expect(result.current.cluster).toEqual({
+      kind: "segments",
+      segments: [
+        expect.objectContaining({
+          state: "transient",
+          reason: "timeout",
+          fetching: false,
+          retryOffered: true,
+        }),
+      ],
+    });
+    expect(result.current.retryTargets).toEqual([
+      { providerId: "codex", profileId: null },
+    ]);
+  });
+
+  it("withholds a transient segment's retry for a minute after one is asked for by hand", () => {
+    vi.useFakeTimers();
+    setResult("codex", {
+      data: freshEnvelope(
+        unavailableRateLimits({ provider: "codex", reason: "timeout" }),
+      ),
+      isError: false,
+    });
+
+    const { result } = renderSegments([
+      configuredProvider({ providerId: "codex", lane: "ephemeralProcess" }),
+    ]);
+
+    act(() => {
+      result.current.recordManualRetry({
+        providerId: "codex",
+        profileId: null,
+      });
+    });
+    expect(statusBarSegments(result.current.cluster).at(0)?.retryOffered).toBe(
+      false,
+    );
+
+    // The affordance comes back on its own: nothing else happens on screen
+    // between these two reads, and the one re-read the state owes is still
+    // owed throughout - the withhold bounds the asking, not the retrying.
+    expect(result.current.retryTargets).toEqual([
+      { providerId: "codex", profileId: null },
+    ]);
+    act(() => {
+      vi.advanceTimersByTime(RATE_LIMIT_MANUAL_RETRY_WITHHOLD_MS);
+    });
+    expect(statusBarSegments(result.current.cluster).at(0)?.retryOffered).toBe(
+      true,
+    );
   });
 
   describe("accounts", () => {

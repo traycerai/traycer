@@ -3967,6 +3967,8 @@ describe("<RateLimitPopover /> limited profiles", () => {
       hidden: false,
       state: "live",
       reason: null,
+      fetching: false,
+      retryOffered: false,
       windows: [window],
       shown: [window],
       tightest: window,

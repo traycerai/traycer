@@ -1,4 +1,12 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+  type Mock,
+} from "vitest";
 import {
   act,
   cleanup,
@@ -7,14 +15,17 @@ import {
   screen,
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { DEFAULT_ACCOUNT_CONTEXT } from "@traycer/protocol/common/schemas";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { Popover, PopoverAnchor } from "@/components/ui/popover";
 import type {
   StatusBarProviderSegmentModel,
   StatusBarRateLimitCluster as StatusBarRateLimitClusterModel,
   StatusBarRateLimitRefreshModel,
+  StatusBarRateLimitRetryTarget,
   StatusBarRateLimitWindow,
 } from "@/hooks/rate-limits/use-status-bar-rate-limit-segments";
+import { TRANSIENT_RATE_LIMIT_RETRY_DELAY_MS } from "@/lib/rate-limits/rate-limit-timing";
 import type { ConfiguredRateLimitProvider } from "@/hooks/rate-limits/use-configured-rate-limit-providers";
 import type { RateLimitProfileSelection } from "@/hooks/rate-limits/use-rate-limit-profile-selection";
 import { windowPercentText } from "@/lib/rate-limits/status-bar-window-text";
@@ -28,6 +39,14 @@ import {
 interface MockState {
   cluster: StatusBarRateLimitClusterModel;
   refresh: StatusBarRateLimitRefreshModel;
+  retryTargets: ReadonlyArray<StatusBarRateLimitRetryTarget>;
+  recordManualRetry: Mock<(target: StatusBarRateLimitRetryTarget) => void>;
+  // `null` by default, exactly as the host-less rows below expect: only a row
+  // about reading gives the cluster a scope to read through.
+  scope: { readonly hostId: string } | null;
+  fetch: Mock<
+    (scope: unknown, target: unknown, opts: unknown) => Promise<void>
+  >;
 }
 
 const mocks = vi.hoisted<MockState>(() => ({
@@ -38,6 +57,10 @@ const mocks = vi.hoisted<MockState>(() => ({
     httpRefetches: [],
     httpFetching: false,
   },
+  retryTargets: [],
+  recordManualRetry: vi.fn(),
+  scope: null,
+  fetch: vi.fn((): Promise<void> => Promise.resolve()),
 }));
 
 vi.mock(
@@ -52,14 +75,25 @@ vi.mock(
       useStatusBarRateLimitSegments: () => ({
         cluster: mocks.cluster,
         mountTargets: [],
+        retryTargets: mocks.retryTargets,
         refresh: mocks.refresh,
+        recordManualRetry: mocks.recordManualRetry,
       }),
     };
   },
 );
 
 vi.mock("@/hooks/rate-limits/use-provider-rate-limit-fetch-scope", () => ({
-  useProviderRateLimitFetchScope: () => null,
+  useProviderRateLimitFetchScope: () => mocks.scope,
+}));
+
+// The one way the GUI reads the ephemeral lane, and the boundary that talks to
+// the host - so the spy is what proves which read a gesture made. `force` is
+// the whole claim: a click passes the host's read floors, the state's own one
+// re-read does not.
+vi.mock("@/lib/rate-limits/provider-rate-limit-fetch", () => ({
+  fetchProviderRateLimits: (scope: unknown, target: unknown, opts: unknown) =>
+    mocks.fetch(scope, target, opts),
 }));
 
 vi.mock("@/hooks/host/use-refresh-provider-rate-limits-on-mount", () => ({
@@ -84,6 +118,8 @@ function segmentFixture(
     hidden: false,
     state: "live",
     reason: null,
+    fetching: false,
+    retryOffered: false,
     windows: tightest === null ? [] : [tightest],
     shown: tightest === null ? [] : [tightest],
     tightest,
@@ -152,6 +188,10 @@ afterEach(() => {
     httpRefetches: [],
     httpFetching: false,
   };
+  mocks.retryTargets = [];
+  mocks.scope = null;
+  vi.clearAllMocks();
+  vi.useRealTimers();
   useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
 });
 
@@ -743,6 +783,108 @@ describe("<StatusBarRateLimitCluster /> scrolls its readings", () => {
       ).toBe(
         "Usage limits: Codex · Work 34% used, Codex · Personal 80% used, Claude Code 57% used",
       );
+    });
+
+    it("reads the clicked account again, forced, when its segment is offering a retry - and only then", () => {
+      mocks.scope = { hostId: "host-a" };
+      const transient: StatusBarProviderSegmentModel = {
+        ...segmentFixture("codex", null),
+        state: "transient",
+        reason: "timeout",
+        retryOffered: true,
+      };
+      const httpTransient: StatusBarProviderSegmentModel = {
+        ...segmentFixture("openrouter", null),
+        state: "transient",
+        reason: "connection_failed",
+        retryOffered: true,
+      };
+      const refetch = vi.fn((): Promise<void> => Promise.resolve());
+      mocks.cluster = {
+        kind: "segments",
+        segments: [transient, httpTransient, segmentFixture("cursor", null)],
+      };
+      mocks.refresh = {
+        ...mocks.refresh,
+        httpRefetches: [
+          { providerId: "openrouter", profileId: null, refetch },
+          // A second observer, so a keyed retry proves it reaches ITS own
+          // account rather than every http account the cluster holds.
+          {
+            providerId: "cursor",
+            profileId: null,
+            refetch: vi.fn((): Promise<void> => Promise.resolve()),
+          },
+        ],
+      };
+      renderCluster({});
+
+      fireEvent.click(screen.getByTestId("status-bar-provider-segment-codex"));
+
+      // The ephemeral lane: one forced read of that account, through the one
+      // function that may read it.
+      expect(mocks.fetch).toHaveBeenCalledTimes(1);
+      expect(mocks.fetch.mock.calls[0][1]).toEqual({
+        providerId: "codex",
+        accountContext: DEFAULT_ACCOUNT_CONTEXT,
+        profileId: null,
+      });
+      expect(mocks.fetch.mock.calls[0][2]).toEqual({ force: true });
+      // And the withhold that bounds the asking starts with the read.
+      expect(mocks.recordManualRetry).toHaveBeenCalledWith({
+        providerId: "codex",
+        profileId: null,
+      });
+      // The click is still the deep link it was.
+      expect(useRateLimitPopoverStore.getState().revealProfile).toEqual({
+        providerId: "codex",
+        profileId: null,
+      });
+
+      // The http lane refetches its own observer instead, and no other.
+      fireEvent.click(
+        screen.getByTestId("status-bar-provider-segment-openrouter"),
+      );
+      expect(refetch).toHaveBeenCalledTimes(1);
+      expect(mocks.fetch).toHaveBeenCalledTimes(1);
+
+      // A segment that is not offering one reads nothing at all, and starts no
+      // withhold: both offered clicks did, and this one adds nothing.
+      fireEvent.click(screen.getByTestId("status-bar-provider-segment-cursor"));
+      expect(mocks.fetch).toHaveBeenCalledTimes(1);
+      expect(refetch).toHaveBeenCalledTimes(1);
+      expect(mocks.recordManualRetry).toHaveBeenCalledTimes(2);
+    });
+
+    it("re-reads a transient account once, unforced, and does not keep re-reading it", () => {
+      vi.useFakeTimers();
+      mocks.scope = { hostId: "host-a" };
+      mocks.retryTargets = [{ providerId: "codex", profileId: null }];
+      mocks.cluster = {
+        kind: "segments",
+        segments: [
+          {
+            ...segmentFixture("codex", null),
+            state: "transient",
+            reason: "timeout",
+            retryOffered: true,
+          },
+        ],
+      };
+      renderCluster({});
+
+      expect(mocks.fetch).not.toHaveBeenCalled();
+      act(() => {
+        vi.advanceTimersByTime(TRANSIENT_RATE_LIMIT_RETRY_DELAY_MS);
+      });
+      expect(mocks.fetch).toHaveBeenCalledTimes(1);
+      expect(mocks.fetch.mock.calls[0][2]).toEqual({ force: false });
+
+      // One, not a loop: the poll owns the cadence from here.
+      act(() => {
+        vi.advanceTimersByTime(TRANSIENT_RATE_LIMIT_RETRY_DELAY_MS * 10);
+      });
+      expect(mocks.fetch).toHaveBeenCalledTimes(1);
     });
 
     it("arms the panel to reveal the clicked account's card, on that provider's tab", () => {
