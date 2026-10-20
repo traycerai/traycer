@@ -1,7 +1,10 @@
-import type {
-  ViewReplicaAccountMeta,
-  ViewReplicaBackend,
-  ViewReplicaStoredRecord,
+import {
+  fenceRecord,
+  mergeMeta,
+  parseAccountMeta,
+  type ViewReplicaAccountMeta,
+  type ViewReplicaBackend,
+  type ViewReplicaStoredRecord,
 } from "./store";
 
 const RECORDS = "records";
@@ -92,9 +95,27 @@ export function createIndexedDbViewReplicaBackend(
       if (db === null) return;
       const tx = db.transaction([RECORDS, META], "readwrite");
       const recordStore = tx.objectStore(RECORDS);
+      const metaStore = tx.objectStore(META);
       for (const key of deleteKeys) recordStore.delete(key);
-      for (const record of records) recordStore.put(record);
-      if (meta !== null) tx.objectStore(META).put(meta);
+      const accountId = meta?.accountId ?? records[0]?.identity.accountId;
+      if (accountId !== undefined) {
+        // Every window writes this database from its own memory. The meta is
+        // merged with what is durable, never replaced, and each page passes
+        // the durable withdrawals, inside this transaction, so one window's
+        // write cannot undo another's confirmed loss.
+        const held = metaStore.get(accountId);
+        held.onsuccess = () => {
+          const durable = mergeMeta(
+            parseAccountMeta(held.result, accountId),
+            meta,
+            accountId,
+          );
+          for (const record of records) {
+            recordStore.put(fenceRecord(record, durable.withdrawals));
+          }
+          if (meta !== null) metaStore.put(durable);
+        };
+      }
       await transactionDone(tx);
     },
     async deleteAccount(accountId) {

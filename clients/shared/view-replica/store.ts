@@ -16,8 +16,8 @@ import type { ViewReplicaRow, ViewReplicaService } from "./service";
 
 /**
  * The client replica tier: one durable store of the account-wide pages the
- * app paints before their serving tier answers (History, the notification
- * feed, the environment list).
+ * app paints before their serving tier answers (History's first page and
+ * the notification feed).
  *
  * It is a RENDER-BEFORE-CONFIRM cache, which this client did not have before:
  * a cached page paints at once, stating that it is cached, and is replaced by
@@ -90,7 +90,7 @@ export class ViewReplicaStore {
     if (record === undefined) return null;
     if (!sameViewReplicaIdentity(record.identity, identity)) return null;
     const floor = this.#metaFor(address.accountId).floors[service.service];
-    if (floor !== undefined && record.savedAt < floor) return null;
+    if (floor !== undefined && belowFloor(record, floor)) return null;
     const page = service.join(
       record.shell,
       record.rows.map((row) => row.value),
@@ -186,13 +186,50 @@ export class ViewReplicaStore {
   }
 
   /**
-   * A write to `service` was confirmed at `at`. Every page of that service
-   * observed before it is a miss from now on.
+   * A write to `service` was confirmed. Every page of that service observed
+   * before `floor.at`, or stamped at or below `floor.generation` (the source's
+   * sequence when the write was sent), is a miss from now on.
    */
-  noteConfirmedWrite(accountId: string, service: string, at: number): void {
+  noteConfirmedWrite(
+    accountId: string,
+    service: string,
+    floor: ViewReplicaFloor,
+  ): void {
     const meta = this.#metaFor(accountId);
-    if ((meta.floors[service] ?? -1) >= at) return;
-    this.#setMeta({ ...meta, floors: { ...meta.floors, [service]: at } });
+    const current = meta.floors[service];
+    const next = current === undefined ? floor : higherFloor(current, floor);
+    if (
+      current !== undefined &&
+      next.at === current.at &&
+      next.generation === current.generation
+    ) {
+      return;
+    }
+    this.#setMeta({ ...meta, floors: { ...meta.floors, [service]: next } });
+  }
+
+  /**
+   * Withdraws, as of `at`, every team scope the account's warmed pages hold
+   * rows for that `isMember` no longer admits. The reconciliation a fresh
+   * membership list asks for: it catches a removal no single transition
+   * showed (one made while the session was unverified, or before this start).
+   */
+  reconcileMemberships(
+    accountId: string,
+    isMember: (organizationId: string) => boolean,
+    at: number,
+  ): void {
+    const lost = new Map<string, ViewReplicaRowScope>();
+    for (const record of this.#records.values()) {
+      if (record.identity.accountId !== accountId) continue;
+      for (const { scope } of record.rows) {
+        if (scope.kind === "organization" && !isMember(scope.id)) {
+          lost.set(scope.id, scope);
+        }
+      }
+    }
+    for (const scope of lost.values())
+      this.#withdrawScope(accountId, scope, at);
   }
 
   /** Applies one authority loss. See {@link ViewReplicaEviction}. */
@@ -306,10 +343,9 @@ export class ViewReplicaStore {
     if (loaded !== null) {
       // What this session recorded before the load finished is newer than
       // the disk, and the disk may hold what this session has not seen.
-      const disk = accountMetaSchema.safeParse(loaded.meta);
       const session = this.#meta.get(accountId);
       const meta = mergeMeta(
-        disk.success && disk.data.accountId === accountId ? disk.data : null,
+        parseAccountMeta(loaded.meta, accountId),
         session ?? null,
         accountId,
       );
@@ -453,7 +489,12 @@ export type ViewReplicaEviction =
 
 export type ViewReplicaEvictionClass = ViewReplicaEviction["kind"];
 
-/** Where the replica keeps its pages. Each call is one transaction. */
+/**
+ * Where the replica keeps its pages. Each call is one transaction, and
+ * `write` merges `meta` into the durable meta ({@link mergeMeta}) and fences
+ * each record against the durable withdrawals ({@link fenceRecord}) inside it:
+ * every window of the app writes the same store from its own memory.
+ */
 export interface ViewReplicaBackend {
   load(accountId: string): Promise<{
     readonly records: readonly unknown[];
@@ -498,11 +539,25 @@ const storedRecordSchema = z.object({
 const accountMetaSchema = z.object({
   accountId: z.string().min(1),
   epochs: z.record(z.string(), sourceEpochSchema),
-  floors: z.record(z.string(), z.number()),
+  floors: z.record(
+    z.string(),
+    z.object({ at: z.number(), generation: z.number().nullable() }),
+  ),
   withdrawals: z.array(
     z.object({ scope: viewReplicaRowScopeSchema, at: z.number() }),
   ),
 });
+
+/** `raw` as the account's meta, or `null` for none or a corrupt row. */
+export function parseAccountMeta(
+  raw: unknown,
+  accountId: string,
+): ViewReplicaAccountMeta | null {
+  const parsed = accountMetaSchema.safeParse(raw);
+  return parsed.success && parsed.data.accountId === accountId
+    ? parsed.data
+    : null;
+}
 
 export interface ViewReplicaStoredRecord {
   readonly version: 1;
@@ -520,7 +575,7 @@ export interface ViewReplicaAccountMeta {
   /** The source epoch each serving tier last reported. */
   readonly epochs: Readonly<Record<string, ViewReplicaSourceEpoch>>;
   /** The read-your-write floor of each service. */
-  readonly floors: Readonly<Record<string, number>>;
+  readonly floors: Readonly<Record<string, ViewReplicaFloor>>;
   /** Every confirmed scope loss, fencing answers observed before it. */
   readonly withdrawals: readonly {
     readonly scope: ViewReplicaRowScope;
@@ -529,10 +584,46 @@ export interface ViewReplicaAccountMeta {
 }
 
 /**
+ * A confirmed write's floor: when it was confirmed, and the source's own
+ * sequence when it was sent (`null` for a source without one). A page from
+ * a stream is stamped when it arrives, so only the sequence can say that a
+ * page arriving after the write was produced before it.
+ */
+export interface ViewReplicaFloor {
+  readonly at: number;
+  readonly generation: number | null;
+}
+
+function belowFloor(
+  record: ViewReplicaStoredRecord,
+  floor: ViewReplicaFloor,
+): boolean {
+  if (record.savedAt < floor.at) return true;
+  return (
+    floor.generation !== null &&
+    record.sourceGeneration !== null &&
+    record.sourceGeneration <= floor.generation
+  );
+}
+
+function higherFloor(
+  left: ViewReplicaFloor,
+  right: ViewReplicaFloor,
+): ViewReplicaFloor {
+  const generation =
+    left.generation === null
+      ? right.generation
+      : right.generation === null
+        ? left.generation
+        : Math.max(left.generation, right.generation);
+  return { at: Math.max(left.at, right.at), generation };
+}
+
+/**
  * The record without the rows of any scope withdrawn after it was observed,
  * or the same record when nothing applies.
  */
-function fenceRecord(
+export function fenceRecord(
   record: ViewReplicaStoredRecord,
   withdrawals: ViewReplicaAccountMeta["withdrawals"],
 ): ViewReplicaStoredRecord {
@@ -560,18 +651,19 @@ function fenceRecord(
 }
 
 /**
- * The account's meta from disk and from this session together: every
- * withdrawal either knows, the higher floor, and the epoch this session
- * observed over the one on disk.
+ * Two copies of the account's meta together - the disk's and this
+ * renderer's, or two windows' - growing only: every withdrawal either knows,
+ * the higher floor, and `session`'s epoch over `disk`'s.
  */
-function mergeMeta(
+export function mergeMeta(
   disk: ViewReplicaAccountMeta | null,
   session: ViewReplicaAccountMeta | null,
   accountId: string,
 ): ViewReplicaAccountMeta {
-  const floors: Record<string, number> = { ...disk?.floors };
-  for (const [service, at] of Object.entries(session?.floors ?? {})) {
-    floors[service] = Math.max(floors[service] ?? at, at);
+  const floors: Record<string, ViewReplicaFloor> = { ...disk?.floors };
+  for (const [service, floor] of Object.entries(session?.floors ?? {})) {
+    const held = floors[service];
+    floors[service] = held === undefined ? floor : higherFloor(held, floor);
   }
   const withdrawals = [...(disk?.withdrawals ?? [])];
   for (const withdrawal of session?.withdrawals ?? []) {

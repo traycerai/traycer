@@ -166,5 +166,8 @@ export function rememberHistoryFirstPage(input: {
 
 /** A History write (a pin) was confirmed: older pages must not paint. */
 export function noteHistoryConfirmedWrite(accountId: string): void {
-  viewReplicaStore.noteConfirmedWrite(accountId, SERVICE, Date.now());
+  viewReplicaStore.noteConfirmedWrite(accountId, SERVICE, {
+    at: Date.now(),
+    generation: null,
+  });
 }

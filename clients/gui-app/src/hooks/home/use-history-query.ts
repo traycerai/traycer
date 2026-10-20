@@ -170,6 +170,9 @@ export function useHistoryQuery(
     currentUserId,
     tasks,
     query: tasksQuery,
+    firstPage,
+    firstPagePending,
+    firstPageError,
     fetchNextPage,
     fetchAllPages,
     hasNextPage,
@@ -314,7 +317,7 @@ export function useHistoryQuery(
         hostRequiresCloudToList: true,
       };
     }
-    if (tasksQuery.data === undefined) {
+    if (firstPage === undefined) {
       return undefined;
     }
     // The settled server order is pinned-first, but an optimistic pin patch
@@ -334,7 +337,7 @@ export function useHistoryQuery(
     const canUseServerFacets =
       !isQueryDebouncing && !tasksQuery.isPlaceholderData;
     const facets = canUseServerFacets
-      ? mapHistoryFacets(tasksQuery.data.facets)
+      ? mapHistoryFacets(firstPage.facets)
       : EMPTY_FACETS;
     // The union's statement, not the first page's. `items` is assembled from
     // the first page AND every retained "Show more" tail, so reading
@@ -429,7 +432,7 @@ export function useHistoryQuery(
     isQueryDebouncing,
     params.search,
     shouldProjectLocally,
-    tasksQuery.data,
+    firstPage,
     tasksQuery.isPlaceholderData,
     unionCompleteness,
     worktreesByEpicId,
@@ -484,14 +487,16 @@ export function useHistoryQuery(
     // A refused leg is SETTLED, not pending. The underlying query reports
     // `pending` forever - it has no data and never will - and passing that
     // through is what put a permanent skeleton on History.
-    isPending: !initialLegRefused && tasksQuery.isPending,
+    // A cached page is shown in place of the spinner, and in place of the
+    // serving tier's error: it says itself that it is cached.
+    isPending: !initialLegRefused && firstPagePending,
     // Placeholder rows answer the previous request; local projection during
     // debounce/hydration is only a preview. A background first-page refresh
     // with current-query data, however, retains a usable loaded count.
     isCountPending:
       !initialLegRefused &&
       [
-        tasksQuery.isPending,
+        firstPagePending,
         isQueryDebouncing,
         tasksQuery.isPlaceholderData,
         isCloudPagePending,
@@ -500,7 +505,7 @@ export function useHistoryQuery(
     isFetching:
       tasksQuery.isFetching || isQueryDebouncing || isHydratingSearchMatches,
     error:
-      (tasksQuery.error instanceof Error ? tasksQuery.error : null) ??
+      firstPageError ??
       (isPullRequestNumberQuery ? activityIndex.error : null) ??
       taskContexts.error,
     hostId,

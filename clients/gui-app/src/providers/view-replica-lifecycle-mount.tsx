@@ -1,15 +1,21 @@
-import { useCallback, useEffect, useRef } from "react";
-import { organizationRowScope } from "@traycer-clients/shared/view-replica/row-scope";
+import { useCallback, useEffect, useSyncExternalStore } from "react";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import {
   useAuthIdentityTransition,
   type AuthIdentityTransition,
 } from "@/hooks/auth/use-auth-identity-transition";
-import { removedTeamIds } from "@/hooks/teams/team-removal-model";
 import {
   viewReplicaEvictionForVerdictLoss,
   viewReplicaStore,
 } from "@/lib/view-replica/view-replica-store";
+
+function subscribeToReplica(listener: () => void): () => void {
+  return viewReplicaStore.subscribe(listener);
+}
+
+function readReplicaVersion(): number {
+  return viewReplicaStore.version();
+}
 
 /**
  * Binds the replica tier to the signed-in identity.
@@ -20,8 +26,8 @@ import {
  *   - wipes the replica.
  * - Losing the cloud verdict applies its eviction class: an unreachable
  *   authn or a refused token keeps the pages, a refused account drops them.
- * - Leaving a team while signed in withdraws that team's rows from every
- *   cached page, as of now.
+ * - A team missing from a signed-in verdict's team list has its rows
+ *   withdrawn from every cached page, as of then.
  */
 export function ViewReplicaLifecycleMount(): null {
   const status = useAuthStore((state) => state.status);
@@ -59,38 +65,25 @@ export function ViewReplicaLifecycleMount(): null {
     );
   }, [cloudVerdictLoss, status, userId]);
 
-  const previousTeams = useRef<{
-    readonly userId: string | null;
-    readonly signedIn: boolean;
-    readonly teamIds: readonly string[];
-  } | null>(null);
+  // Every team list a signed-in verdict carries is the account's membership,
+  // so the cached pages are reconciled against each one, and again whenever
+  // they change (a warm landing, a page written): a removal made while the
+  // session was unverified, or before this start, is caught at the first
+  // verdict after it. Only a signed-in list counts - the `unverified` list is
+  // empty because no verdict is held, which is not a loss.
+  const storeVersion = useSyncExternalStore(
+    subscribeToReplica,
+    readReplicaVersion,
+  );
   useEffect(() => {
-    const signedIn = status === "signed-in";
-    const teamIds = teams.map((team) => team.teamId);
-    const before = previousTeams.current;
-    previousTeams.current = { userId, signedIn, teamIds };
-    // Only a removal one signed-in session observed, the same edge
-    // `useCloseTilesOnTeamRemoval` closes a removed team's tiles on: a list
-    // that is empty because no verdict is held is not a loss.
-    if (
-      !signedIn ||
-      userId === null ||
-      before === null ||
-      !before.signedIn ||
-      before.userId !== userId
-    ) {
-      return;
-    }
-    const at = Date.now();
-    for (const teamId of removedTeamIds(before.teamIds, teamIds)) {
-      void viewReplicaStore.evict({
-        kind: "scope-withdrawn",
-        accountId: userId,
-        scope: organizationRowScope(teamId),
-        at,
-      });
-    }
-  }, [status, teams, userId]);
+    if (status !== "signed-in" || userId === null) return;
+    const members = new Set(teams.map((team) => team.teamId));
+    viewReplicaStore.reconcileMemberships(
+      userId,
+      (organizationId) => members.has(organizationId),
+      Date.now(),
+    );
+  }, [status, storeVersion, teams, userId]);
 
   return null;
 }

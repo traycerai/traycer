@@ -358,14 +358,17 @@ function NotificationsSessionBody(
   // The replica tier's copy of the cloud feed, painted before this session's
   // first snapshot so the list and the badge show what the person had while
   // the feed connects or cannot. Every relay reset (`sessionEpoch`) clears
-  // the rows it painted, so it is applied again after each.
+  // the rows it painted, so it is applied again after each; and when the
+  // replica stops admitting the page (the account refused, a confirmed write
+  // above it) the rows it seeded go with it.
   const cloudSessionEpoch = useCloudNotificationsStore(
     (state) => state.sessionEpoch,
   );
   const replicaFeed = props.replicaFeed;
   useEffect(() => {
-    if (replicaFeed === null) return;
-    useCloudNotificationsStore.getState().seedFromReplica(replicaFeed);
+    const store = useCloudNotificationsStore.getState();
+    if (replicaFeed === null) store.revokeReplicaSeed();
+    else store.seedFromReplica(replicaFeed);
   }, [replicaFeed, cloudSessionEpoch]);
   const disposerRef = useRef<(() => void) | null>(null);
   const activityDisposerRef = useRef<(() => void) | null>(null);
