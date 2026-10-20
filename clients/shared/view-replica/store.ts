@@ -46,6 +46,8 @@ export class ViewReplicaStore {
   readonly #warm = new Set<string>();
   readonly #warming = new Map<string, Promise<void>>();
   readonly #listeners = new Set<() => void>();
+  /** Bumped by an account drop: fences that account's queued work. */
+  readonly #accountGenerations = new Map<string, number>();
   #generation = 0;
   #version = 0;
   #writes: Promise<void> = Promise.resolve();
@@ -62,8 +64,7 @@ export class ViewReplicaStore {
     if (this.#warm.has(accountId)) return Promise.resolve();
     const pending = this.#warming.get(accountId);
     if (pending !== undefined) return pending;
-    const generation = this.#generation;
-    const loading = this.#load(accountId, generation).finally(() => {
+    const loading = this.#load(accountId, this.#fenceOf(accountId)).finally(() => {
       if (this.#warming.get(accountId) === loading) {
         this.#warming.delete(accountId);
       }
@@ -128,26 +129,20 @@ export class ViewReplicaStore {
     ) {
       return;
     }
-    const meta = this.#metaFor(address.accountId);
     const parts = service.split(page);
-    const rows = parts.rows.filter(
-      (row) =>
-        !meta.withdrawals.some(
-          (withdrawal) =>
-            withdrawal.at > stamp.observedAt &&
-            sameRowScope(withdrawal.scope, row.scope),
-        ),
+    const record = fenceRecord(
+      {
+        version: 1,
+        key,
+        identity,
+        shell: parts.shell,
+        rows: parts.rows,
+        withdrawnScopes: [],
+        savedAt: stamp.observedAt,
+        sourceGeneration: stamp.sourceGeneration,
+      },
+      this.#metaFor(address.accountId).withdrawals,
     );
-    const record: ViewReplicaStoredRecord = {
-      version: 1,
-      key,
-      identity,
-      shell: parts.shell,
-      rows,
-      withdrawnScopes: [],
-      savedAt: stamp.observedAt,
-      sourceGeneration: stamp.sourceGeneration,
-    };
     // One slot holds one page: a page under a superseded epoch or canonical
     // version is unreachable once this one exists, so it goes now.
     const slot = viewReplicaSlotKey(address);
@@ -160,7 +155,7 @@ export class ViewReplicaStore {
       .map((candidate) => candidate.key);
     for (const supersededKey of superseded) this.#records.delete(supersededKey);
     this.#records.set(key, record);
-    this.#persist([record], superseded, null);
+    this.#persist(address.accountId, [record], superseded, null);
     this.#changed();
   }
 
@@ -256,32 +251,30 @@ export class ViewReplicaStore {
       withdrawals: [...meta.withdrawals, { scope, at }],
     };
     this.#meta.set(accountId, nextMeta);
+    // Records still on disk are fenced the same way when the account warms.
     const changed: ViewReplicaStoredRecord[] = [];
     for (const record of this.#records.values()) {
       if (record.identity.accountId !== accountId) continue;
-      const rows = record.rows.filter((row) => !sameRowScope(row.scope, scope));
-      if (rows.length === record.rows.length) continue;
-      const withdrawn: ViewReplicaStoredRecord = {
-        ...record,
-        rows,
-        withdrawnScopes: record.withdrawnScopes.some((held) =>
-          sameRowScope(held, scope),
-        )
-          ? record.withdrawnScopes
-          : [...record.withdrawnScopes, scope],
-      };
+      const withdrawn = fenceRecord(record, nextMeta.withdrawals);
+      if (withdrawn === record) continue;
       this.#records.set(record.key, withdrawn);
       changed.push(withdrawn);
     }
-    this.#persist(changed, [], nextMeta);
+    this.#persist(accountId, changed, [], nextMeta);
     this.#changed();
   }
 
   #dropAccount(accountId: string): Promise<void> {
+    this.#accountGenerations.set(
+      accountId,
+      (this.#accountGenerations.get(accountId) ?? 0) + 1,
+    );
     for (const [key, record] of this.#records) {
       if (record.identity.accountId === accountId) this.#records.delete(key);
     }
     this.#meta.delete(accountId);
+    this.#warm.delete(accountId);
+    this.#warming.delete(accountId);
     this.#changed();
     const backend = this.#backend;
     if (backend === null) return this.#writes;
@@ -301,18 +294,25 @@ export class ViewReplicaStore {
     return this.#enqueue(() => backend.clear());
   }
 
-  async #load(accountId: string, generation: number): Promise<void> {
+  async #load(accountId: string, fence: string): Promise<void> {
     await this.#writes;
     const loaded =
       this.#backend === null
         ? { records: [], meta: null }
         : await this.#backend.load(accountId).catch(() => null);
-    if (generation !== this.#generation) return;
+    if (fence !== this.#fenceOf(accountId)) return;
     if (loaded !== null) {
-      const meta = accountMetaSchema.safeParse(loaded.meta);
-      if (meta.success && meta.data.accountId === accountId) {
-        this.#meta.set(accountId, meta.data);
-      }
+      // What this session recorded before the load finished is newer than
+      // the disk, and the disk may hold what this session has not seen.
+      const disk = accountMetaSchema.safeParse(loaded.meta);
+      const session = this.#meta.get(accountId);
+      const meta = mergeMeta(
+        disk.success && disk.data.accountId === accountId ? disk.data : null,
+        session ?? null,
+        accountId,
+      );
+      this.#meta.set(accountId, meta);
+      const rewrite: ViewReplicaStoredRecord[] = [];
       const corrupt: string[] = [];
       for (const raw of loaded.records) {
         const record = storedRecordSchema.safeParse(raw);
@@ -326,14 +326,26 @@ export class ViewReplicaStore {
           continue;
         }
         // A page written in this session before the load finished is newer.
-        if (!this.#records.has(record.data.key)) {
-          this.#records.set(record.data.key, record.data);
-        }
+        if (this.#records.has(record.data.key)) continue;
+        const fenced = fenceRecord(record.data, meta.withdrawals);
+        if (fenced !== record.data) rewrite.push(fenced);
+        this.#records.set(fenced.key, fenced);
       }
-      if (corrupt.length > 0) this.#persist([], corrupt, null);
+      this.#warm.add(accountId);
+      this.#persist(
+        accountId,
+        rewrite,
+        corrupt,
+        session === undefined ? null : meta,
+      );
     }
     this.#warm.add(accountId);
     this.#changed();
+  }
+
+  /** Changes whenever queued work for `accountId` must be discarded. */
+  #fenceOf(accountId: string): string {
+    return `${this.#generation}:${this.#accountGenerations.get(accountId) ?? 0}`;
   }
 
   #metaFor(accountId: string): ViewReplicaAccountMeta {
@@ -349,24 +361,32 @@ export class ViewReplicaStore {
 
   #setMeta(meta: ViewReplicaAccountMeta): void {
     this.#meta.set(meta.accountId, meta);
-    this.#persist([], [], meta);
+    this.#persist(meta.accountId, [], [], meta);
     this.#changed();
   }
 
   #persist(
+    accountId: string,
     records: readonly ViewReplicaStoredRecord[],
     deleteKeys: readonly string[],
     meta: ViewReplicaAccountMeta | null,
   ): void {
     const backend = this.#backend;
     if (backend === null) return;
-    if (records.length === 0 && deleteKeys.length === 0 && meta === null) {
+    // Meta is written whole, so before the account warms only memory holds
+    // it: the load merges it with the disk's and writes the union.
+    const persistedMeta = this.#warm.has(accountId) ? meta : null;
+    if (
+      records.length === 0 &&
+      deleteKeys.length === 0 &&
+      persistedMeta === null
+    ) {
       return;
     }
-    const generation = this.#generation;
+    const fence = this.#fenceOf(accountId);
     void this.#enqueue(async () => {
-      if (generation !== this.#generation) return;
-      await backend.write(records, deleteKeys, meta);
+      if (fence !== this.#fenceOf(accountId)) return;
+      await backend.write(records, deleteKeys, persistedMeta);
     });
   }
 
@@ -504,6 +524,64 @@ export interface ViewReplicaAccountMeta {
     readonly scope: ViewReplicaRowScope;
     readonly at: number;
   }[];
+}
+
+/**
+ * The record without the rows of any scope withdrawn after it was observed,
+ * or the same record when nothing applies.
+ */
+function fenceRecord(
+  record: ViewReplicaStoredRecord,
+  withdrawals: ViewReplicaAccountMeta["withdrawals"],
+): ViewReplicaStoredRecord {
+  const applicable = withdrawals.filter(
+    (withdrawal) => withdrawal.at > record.savedAt,
+  );
+  const rows = record.rows.filter(
+    (row) =>
+      !applicable.some((withdrawal) => sameRowScope(withdrawal.scope, row.scope)),
+  );
+  if (rows.length === record.rows.length) return record;
+  const withdrawnScopes = [...record.withdrawnScopes];
+  for (const { scope } of applicable) {
+    const removedRows = record.rows.some((row) => sameRowScope(row.scope, scope));
+    const held = withdrawnScopes.some((candidate) =>
+      sameRowScope(candidate, scope),
+    );
+    if (removedRows && !held) withdrawnScopes.push(scope);
+  }
+  return { ...record, rows, withdrawnScopes };
+}
+
+/**
+ * The account's meta from disk and from this session together: every
+ * withdrawal either knows, the higher floor, and the epoch this session
+ * observed over the one on disk.
+ */
+function mergeMeta(
+  disk: ViewReplicaAccountMeta | null,
+  session: ViewReplicaAccountMeta | null,
+  accountId: string,
+): ViewReplicaAccountMeta {
+  const floors: Record<string, number> = { ...disk?.floors };
+  for (const [service, at] of Object.entries(session?.floors ?? {})) {
+    floors[service] = Math.max(floors[service] ?? at, at);
+  }
+  const withdrawals = [...(disk?.withdrawals ?? [])];
+  for (const withdrawal of session?.withdrawals ?? []) {
+    const known = withdrawals.some(
+      (candidate) =>
+        candidate.at === withdrawal.at &&
+        sameRowScope(candidate.scope, withdrawal.scope),
+    );
+    if (!known) withdrawals.push(withdrawal);
+  }
+  return {
+    accountId,
+    epochs: { ...disk?.epochs, ...session?.epochs },
+    floors,
+    withdrawals,
+  };
 }
 
 function rawKey(raw: unknown): string | null {
