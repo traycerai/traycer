@@ -229,6 +229,7 @@ describe("SimulatorStreamClient", () => {
         height: 2532,
         orientation: "portrait",
         inputAvailable: true,
+        frameIntervalMs: 200,
       },
     });
     sockets[0].fireText({

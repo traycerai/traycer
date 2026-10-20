@@ -46,6 +46,7 @@ import { getMobileAppPlatform } from "@/lib/mobile-app";
  * this app cannot decode the profile), and the state a tile renders.
  *
  *   connecting ──first frame──▶ streaming ──socket drop──▶ reconnecting ──▶ streaming
+ *   streaming ──no frame for 5 hub intervals──▶ streaming + stalled ──frame──▶ streaming
  *   connecting ──15 s silent──▶ error (Reconnect)
  *   any ──SIMULATOR_INIT_FAILED──▶ connecting, after 1 s
  *   any ──SESSION_CLOSED / NOT_FOUND / UNAUTHORIZED──▶ error, terminal
@@ -78,6 +79,13 @@ export interface SimulatorStreamState {
   readonly plane: "canvas" | "image";
   readonly frameSize: FrameSize | null;
   readonly input: SimulatorInputState;
+  /**
+   * Streaming, but no frame has arrived for longer than the hub's own frame
+   * cadence allows ({@link SIMULATOR_STALL_GAP_FRAME_INTERVALS}): the last
+   * frame is still on screen and the tile says it is waiting. Cleared by the
+   * next frame. Never true while the hub's frame interval is unknown.
+   */
+  readonly stalled: boolean;
 }
 
 export interface SimulatorStreamController {
@@ -115,6 +123,38 @@ export interface SimulatorStreamControllerArgs {
   readonly preferMjpeg: boolean;
   /** Injectable for tests; production passes {@link defaultSimulatorDecoderRuntime}. */
   readonly decoderRuntime: SimulatorDecoderRuntime | null;
+}
+
+/**
+ * The hub's longest normal gap between two video frames, in milliseconds, as
+ * its `streamConfig` reports it - the hub keeps an idle floor (it re-sends a
+ * frame of a still screen at a fixed rate), so a longer silence is the
+ * capture standing still, not the screen. `null` when the hub does not say,
+ * which turns the stall overlay off rather than guessing.
+ */
+export function simulatorStreamFrameIntervalMs(
+  config: SimulatorStreamConfig,
+): number | null {
+  return config.frameIntervalMs;
+}
+
+/**
+ * How many of the hub's frame intervals may pass in silence before the tile
+ * says it is waiting. One missed interval is a dropped frame or a decoder
+ * that is briefly behind, and must show nothing; five is a second at the
+ * hub's 5 fps idle floor, long enough that a busy machine never flashes the
+ * notice and short enough that a frozen capture reads as "waiting" within
+ * the second, where the live walk saw a still frame for 90 s with no word.
+ */
+export const SIMULATOR_STALL_GAP_FRAME_INTERVALS = 5;
+
+/** The silence that reads as a stall for `config`, or null when unknown. */
+export function simulatorStallGapMs(
+  config: SimulatorStreamConfig,
+): number | null {
+  const interval = simulatorStreamFrameIntervalMs(config);
+  if (interval === null || !(interval > 0)) return null;
+  return interval * SIMULATOR_STALL_GAP_FRAME_INTERVALS;
 }
 
 /**
@@ -174,6 +214,7 @@ const INITIAL_STATE: SimulatorStreamState = {
   plane: "canvas",
   frameSize: null,
   input: { connected: false, detail: null },
+  stalled: false,
 };
 
 export function createSimulatorStreamController(
@@ -194,6 +235,8 @@ export function createSimulatorStreamController(
   let mjpegRequested = false;
   let watchdog: number | null = null;
   let retryTimer: number | null = null;
+  let stallTimer: number | null = null;
+  let stallGapMs: number | null = null;
   let lastKeyframeRequestAt = Number.NEGATIVE_INFINITY;
   let decodeErrorTimes: number[] = [];
   // Bumped on every open so a callback from a stream that was replaced
@@ -213,6 +256,32 @@ export function createSimulatorStreamController(
   const clearRetry = (): void => {
     if (retryTimer !== null) window.clearTimeout(retryTimer);
     retryTimer = null;
+  };
+
+  const clearStallTimer = (): void => {
+    if (stallTimer !== null) window.clearTimeout(stallTimer);
+    stallTimer = null;
+  };
+
+  /**
+   * Re-arms the silence clock. Called on every presented frame, and when the
+   * config (so the gap) changes under a stream that is already showing
+   * frames. No clock while the gap is unknown.
+   */
+  const armStallTimer = (): void => {
+    clearStallTimer();
+    if (stallGapMs === null) return;
+    stallTimer = window.setTimeout(() => {
+      stallTimer = null;
+      if (!started || state.lifecycle !== "streaming") return;
+      publish({ stalled: true });
+    }, stallGapMs);
+  };
+
+  /** A frame was shown: not stalled, and the clock starts over. */
+  const noteFrame = (): void => {
+    if (state.stalled) publish({ stalled: false });
+    armStallTimer();
   };
 
   const send = (frame: SimulatorStreamClientFrame): void => {
@@ -246,6 +315,7 @@ export function createSimulatorStreamController(
     discarded?.close();
     closeDecoder();
     clearWatchdog();
+    clearStallTimer();
   };
 
   const fail = (detail: string, terminal: boolean): void => {
@@ -256,6 +326,7 @@ export function createSimulatorStreamController(
       detail,
       terminal,
       input: { connected: false, detail: null },
+      stalled: false,
     });
   };
 
@@ -275,6 +346,7 @@ export function createSimulatorStreamController(
       lifecycle: "reconnecting",
       detail,
       input: { connected: false, detail: null },
+      stalled: false,
     });
     clearRetry();
     retryTimer = window.setTimeout(() => {
@@ -303,13 +375,15 @@ export function createSimulatorStreamController(
             clearWatchdog();
           }
           const toStreaming = wasFirst || state.lifecycle !== "streaming";
-          if (nextSize === null && !toStreaming) return;
-          publish({
-            ...(nextSize === null ? {} : { frameSize: nextSize }),
-            ...(toStreaming
-              ? { lifecycle: "streaming" as const, detail: null }
-              : {}),
-          });
+          if (nextSize !== null || toStreaming) {
+            publish({
+              ...(nextSize === null ? {} : { frameSize: nextSize }),
+              ...(toStreaming
+                ? { lifecycle: "streaming" as const, detail: null }
+                : {}),
+            });
+          }
+          noteFrame();
         },
         onConfigRejected: () => {
           if (platform === "ios") {
@@ -358,7 +432,15 @@ export function createSimulatorStreamController(
       // not probed: its units are dropped until the MJPEG config arrives.
       decoder = makeDecoder();
     }
-    publish({ config, plane });
+    stallGapMs = simulatorStallGapMs(config);
+    publish({
+      config,
+      plane,
+      ...(stallGapMs === null ? { stalled: false } : {}),
+    });
+    // A config that changes under a running stream re-times the clock; one
+    // that arrives before the first frame leaves it to that frame.
+    if (firstFrame) armStallTimer();
   };
 
   const handleServerFrame = (
@@ -374,11 +456,13 @@ export function createSimulatorStreamController(
       case "video":
         if (bytes === null) return;
         if (frame.unit === "jpeg") {
-          if (sink.presentJpeg(bytes) && !firstFrame) {
+          if (!sink.presentJpeg(bytes)) return;
+          if (!firstFrame) {
             firstFrame = true;
             clearWatchdog();
             publish({ lifecycle: "streaming", detail: null, plane: "image" });
           }
+          noteFrame();
           return;
         }
         if (decoder === null) {
@@ -422,10 +506,12 @@ export function createSimulatorStreamController(
         // H.264 again, so MJPEG is asked for again on the next `open`.
         mjpegRequested = false;
         decoder?.reset();
+        clearStallTimer();
         publish({
           lifecycle: "reconnecting",
           detail: null,
           input: { connected: false, detail: null },
+          stalled: false,
         });
         return;
       case "closed": {
@@ -460,6 +546,7 @@ export function createSimulatorStreamController(
       terminal: false,
       detail: null,
       input: { connected: false, detail: null },
+      stalled: false,
     });
     armWatchdog();
     stream = new SimulatorStreamClient({

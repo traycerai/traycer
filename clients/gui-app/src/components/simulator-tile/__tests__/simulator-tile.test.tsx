@@ -1,6 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+} from "@testing-library/react";
 import type {
+  SimulatorOpenRequest,
+  SimulatorOpenResponse,
   SimulatorPackState,
   SimulatorState,
 } from "@traycer/protocol/host/simulator/schemas";
@@ -28,11 +36,17 @@ const HOST = "host-1";
 const EPIC = "epic-1";
 const UDID = "udid-1";
 
+/** The tile's `simulator.open` as it calls it: variables plus the answer hook. */
+type OpenMutate = (
+  variables: SimulatorOpenRequest,
+  options: { readonly onSuccess: (response: SimulatorOpenResponse) => void },
+) => void;
+
 const fakes = vi.hoisted(() => ({
   reachability: "reachable",
   sessions: null as SimulatorSessionsState | null,
   configSet: vi.fn(),
-  open: vi.fn(),
+  open: vi.fn<OpenMutate>(),
   close: vi.fn(),
   shutdown: vi.fn(),
   action: vi.fn(),
@@ -176,10 +190,12 @@ const STREAMING: SimulatorStreamState = {
     height: 2556,
     orientation: "portrait",
     inputAvailable: true,
+    frameIntervalMs: 200,
   },
   plane: "canvas",
   frameSize: { width: 1179, height: 2556 },
   input: { connected: true, detail: null },
+  stalled: false,
 };
 
 function sessions(
@@ -441,15 +457,22 @@ describe("SimulatorTile", () => {
     expect(fakes.screenshot).toHaveBeenCalledTimes(1);
   });
 
-  it("ends the session on close when this tile opened it", () => {
+  it("ends the session on close when the host answered this tile's open", () => {
     fakes.sessions = sessions({ state: withTargetBooted(READY_STATE) });
     const rerender = renderTile();
     expect(fakes.open).toHaveBeenCalledTimes(1);
-    // The host recorded the session; the stream delivers it.
+    // The host recorded the session; the stream delivers it first, then the
+    // RPC answers - to the tile, which outlives the inventory gate.
     fakes.sessions = sessions({
       state: { ...withTargetBooted(READY_STATE), sessions: [SESSION] },
     });
     rerender();
+    act(() => {
+      fakes.open.mock.calls[0][1].onSuccess({
+        session: SESSION,
+        simulator: { ...READY_STATE.simulators[0], booted: true },
+      });
+    });
     fireEvent.click(screen.getByTestId("simulator-close"));
     expect(fakes.closeTile).toHaveBeenCalledTimes(1);
     expect(fakes.close).toHaveBeenCalledWith({
@@ -457,6 +480,25 @@ describe("SimulatorTile", () => {
       simulatorId: UDID,
       shutdown: false,
     });
+  });
+
+  it("leaves the session open on close when a connect request sent the open but the host never answered it", () => {
+    // The row click's request makes the gate send `simulator.open`; the
+    // session that then shows up on the stream is not proven to be this
+    // tile's until the host answers that open.
+    requestSimulatorConnect(
+      simulatorTileId({ hostId: HOST, simulatorId: UDID }),
+    );
+    fakes.sessions = sessions({ state: withTargetBooted(READY_STATE) });
+    const rerender = renderTile();
+    expect(fakes.open).toHaveBeenCalledTimes(1);
+    fakes.sessions = sessions({
+      state: { ...withTargetBooted(READY_STATE), sessions: [SESSION] },
+    });
+    rerender();
+    fireEvent.click(screen.getByTestId("simulator-close"));
+    expect(fakes.closeTile).toHaveBeenCalledTimes(1);
+    expect(fakes.close).not.toHaveBeenCalled();
   });
 
   it("leaves a session it only attached to - an agent's - open when the tile closes", () => {
@@ -497,6 +539,25 @@ describe("SimulatorTile", () => {
     expect(screen.getByTestId("simulator-settings-drawer")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Close settings" }));
     expect(screen.queryByTestId("simulator-settings-drawer")).toBeNull();
+  });
+
+  it("says it is waiting over the last frame while the hub has gone quiet, with the surface still live", () => {
+    fakes.sessions = sessions({
+      state: { ...READY_STATE, sessions: [SESSION] },
+    });
+    fakes.streamState = { ...STREAMING, stalled: true };
+    const rerender = renderTile();
+    expect(screen.getByTestId("simulator-stall-overlay").textContent).toContain(
+      "Waiting for the simulator",
+    );
+    expect(
+      screen.getByTestId("simulator-surface").getAttribute("data-lifecycle"),
+    ).toBe("streaming");
+    expect(screen.queryByTestId("simulator-surface-overlay")).toBeNull();
+    // The next frame clears it.
+    fakes.streamState = STREAMING;
+    rerender();
+    expect(screen.queryByTestId("simulator-stall-overlay")).toBeNull();
   });
 
   it("offers Reconnect when the video stopped, and nothing when the session is gone", () => {

@@ -29,6 +29,7 @@ import {
   orderSimulators,
   simulatorHasSession,
 } from "@/lib/simulator-view/simulator-sessions-coordinator";
+import { useSimulatorInventoryRefreshOnMount } from "@/lib/simulator-view/use-simulator-inventory-refresh";
 import { useSimulatorSessionsForHost } from "@/lib/simulator-view/use-simulator-sessions";
 import { useIsActiveTile } from "@/stores/epics/canvas/store";
 import { simulatorTileId } from "@/stores/epics/canvas/tile-schema/simulator-tile";
@@ -63,6 +64,8 @@ export function SimulatorsSidebarGroup(props: {
 }) {
   const { epicId, tabId, hostId } = props;
   const sessions = useSimulatorSessionsForHost({ hostId, epicId });
+  // A fresh host lists nothing until something runs `simulator.list`.
+  useSimulatorInventoryRefreshOnMount({ hostId, sessions });
   const { openTile } = useEpicTileNavigation();
   const { open, supported } = useOpenSimulatorTile({ hostId });
 

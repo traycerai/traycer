@@ -57,6 +57,7 @@ describe("simulator stream contracts", () => {
           height: null,
           orientation: "portrait",
           inputAvailable: true,
+          frameIntervalMs: null,
         },
       }).success,
     ).toBe(true);

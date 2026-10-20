@@ -19,6 +19,7 @@ const fakes = vi.hoisted(() => ({
   openTile: vi.fn(),
   configSet: vi.fn(),
   close: vi.fn(),
+  refresh: vi.fn(),
 }));
 
 vi.mock("@/lib/simulator-view/use-simulator-sessions", () => ({
@@ -103,17 +104,19 @@ function sessions(
     lifecycle,
     state,
     errorMessage: null,
-    refresh: () => undefined,
+    refresh: fakes.refresh,
     retry: () => undefined,
   };
 }
 
-function renderGroup(): void {
-  render(
+function renderGroup(): () => void {
+  const group = () => (
     <TooltipProvider>
       <SimulatorsSidebarGroup epicId={EPIC} tabId="tab-1" hostId={HOST} />
-    </TooltipProvider>,
+    </TooltipProvider>
   );
+  const { rerender } = render(group());
+  return () => rerender(group());
 }
 
 beforeEach(() => {
@@ -204,6 +207,25 @@ describe("SimulatorsSidebarGroup", () => {
     expect(
       screen.queryByTestId("epic-simulator-sidebar-close-udid-cold"),
     ).toBeNull();
+  });
+
+  it("asks the host for its inventory once when it mounts with simulators on, and not while they are off", () => {
+    const rerender = renderGroup();
+    expect(fakes.refresh).toHaveBeenCalledTimes(1);
+    rerender();
+    expect(fakes.refresh).toHaveBeenCalledTimes(1);
+    cleanup();
+    fakes.refresh.mockClear();
+    fakes.sessions = sessions(
+      {
+        ...STATE,
+        packState: { kind: "off", reason: null, progress: null },
+        simulators: [],
+      },
+      "live",
+    );
+    renderGroup();
+    expect(fakes.refresh).not.toHaveBeenCalled();
   });
 
   it("offers Turn on while simulators are off, writing both switches", () => {

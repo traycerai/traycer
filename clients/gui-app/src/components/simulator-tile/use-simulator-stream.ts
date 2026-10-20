@@ -27,6 +27,7 @@ const IDLE_STATE: SimulatorStreamState = {
   plane: "canvas",
   frameSize: null,
   input: { connected: false, detail: null },
+  stalled: false,
 };
 
 const noop = (): void => undefined;

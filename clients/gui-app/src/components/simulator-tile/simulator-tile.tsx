@@ -5,6 +5,7 @@ import type {
   SimulatorSummary,
 } from "@traycer/protocol/host/simulator/schemas";
 import type { SimulatorHardwareButton } from "@traycer/protocol/host/simulator/stream-contracts";
+import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
 import { useTileBodyVisible } from "@/components/epic-canvas/hooks/use-tile-body-visible";
 import { useCloseCanvasTileWithNestedFocus } from "@/components/epic-canvas/renderers/use-close-canvas-tile-with-nested-focus";
@@ -22,6 +23,7 @@ import {
   useSimulatorShutdownMutation,
 } from "@/hooks/simulator/use-simulator-mutations";
 import { tileIntent } from "@/lib/canvas/tile-open/intent";
+import type { HostRpcRegistry } from "@/lib/host";
 import { useStreamAuthRevalidator } from "@/lib/host/stream-auth-revalidator";
 import {
   takeSimulatorConnectRequest,
@@ -100,6 +102,22 @@ export function SimulatorTile(props: SimulatorTileProps) {
     if (connectRequest === null || session === null) return;
     takeSimulatorConnectRequest(node.id, connectRequest);
   }, [connectRequest, node.id, session]);
+  const hostClient = useTabHostClient();
+  const { openTile } = useEpicTileNavigation();
+  const placeTile = useCallback(
+    (ref: SimulatorTileRef) => {
+      openTile(tileIntent(ref, { tabId: viewTabId }, "explicit", "direct_ui"));
+    },
+    [openTile, viewTabId],
+  );
+  const connection = useSimulatorConnect({
+    client: hostClient,
+    hostId,
+    epicId,
+    node,
+    onOpened,
+    placeTile,
+  });
 
   if (reachability.status === "unreachable") {
     return <SimulatorHostUnreachableView hostLabel={hostLabel} />;
@@ -179,7 +197,9 @@ export function SimulatorTile(props: SimulatorTileProps) {
         state={state}
         autoAttach={!wasLive}
         connectRequest={connectRequest}
-        onOpened={onOpened}
+        onConnect={connection.supported ? connection.connect : null}
+        connecting={connection.connecting}
+        onPlaceTile={placeTile}
       />
     );
   }
@@ -209,7 +229,8 @@ function findSessionFor(
 
 /**
  * What the tile remembers about its session across the inventory and live
- * views: whether THIS tile sent the `simulator.open` it came from, and
+ * views: whether the host answered a `simulator.open` THIS tile sent (never
+ * a connect request it merely consumed, nor an open that failed), and
  * whether the tile has been live at all. `wasLive` is set the first time a
  * session is seen, during render (React's "storing information from previous
  * renders"), so the inventory that follows a closed session knows not to
@@ -227,6 +248,64 @@ function useSessionMemory(session: SimulatorSession | null): {
   const [wasLive, setWasLive] = useState(session !== null);
   if (session !== null && !wasLive) setWasLive(true);
   return { openedHere, onOpened, wasLive };
+}
+
+/**
+ * This tile's `simulator.open`, held by the tile rather than by the inventory
+ * gate that triggers it: the session the host records usually reaches the
+ * tile on the sessions stream BEFORE the RPC answers, and the gate unmounts
+ * for the live view at that moment. A mutation observer that unmounts has
+ * its per-call callbacks skipped, so the answer - which is what makes the
+ * session this tile's own, and what carries an Android serial - has to land
+ * on an observer that outlives the gate.
+ */
+function useSimulatorConnect(args: {
+  readonly client: HostClient<HostRpcRegistry> | null;
+  readonly hostId: string;
+  readonly epicId: string;
+  readonly node: SimulatorTileRef;
+  /** The host answered an open this tile sent. */
+  readonly onOpened: () => void;
+  readonly placeTile: (ref: SimulatorTileRef) => void;
+}): {
+  readonly connect: (target: SimulatorSummary) => void;
+  readonly connecting: boolean;
+  readonly supported: boolean;
+} {
+  const { client, hostId, epicId, node, onOpened, placeTile } = args;
+  const { mutation, supported } = useSimulatorOpenMutation(client, hostId);
+  const { mutate, isPending } = mutation;
+  const connect = useCallback(
+    (target: SimulatorSummary) => {
+      mutate(
+        {
+          epicId,
+          simulatorId: target.simulatorId,
+          platform: target.platform,
+          boot: true,
+        },
+        {
+          onSuccess: (response) => {
+            onOpened();
+            // The host's id is authoritative: an Android AVD becomes a serial
+            // on boot, and the stream answers to the serial. This tile keeps
+            // the AVD's name, so the serial gets a tile of its own beside it.
+            if (response.simulator.simulatorId === node.simulatorId) return;
+            placeTile(
+              makeSimulatorTileRef({
+                hostId,
+                simulatorId: response.simulator.simulatorId,
+                platform: response.simulator.platform,
+                name: response.simulator.name,
+              }),
+            );
+          },
+        },
+      );
+    },
+    [epicId, hostId, mutate, node.simulatorId, onOpened, placeTile],
+  );
+  return { connect, connecting: isPending, supported };
 }
 
 /** The setup view, with the switch wired to this host's `config.simulator.set`. */
@@ -286,66 +365,27 @@ function SimulatorInventoryGate(props: {
   readonly autoAttach: boolean;
   /** An explicit open's pending request for this tile, consumed here. */
   readonly connectRequest: number | null;
-  /** Called when this tile sends `simulator.open` for its own simulator. */
-  readonly onOpened: () => void;
+  /** Sends this tile's `simulator.open`; `null` when the host lacks the verb. */
+  readonly onConnect: ((target: SimulatorSummary) => void) | null;
+  readonly connecting: boolean;
+  readonly onPlaceTile: (ref: SimulatorTileRef) => void;
 }) {
   const {
     node,
-    viewTabId,
-    epicId,
     hostId,
     state,
     autoAttach,
     connectRequest,
-    onOpened,
+    onConnect,
+    connecting,
+    onPlaceTile,
   } = props;
-  const hostClient = useTabHostClient();
-  const { openTile } = useEpicTileNavigation();
   const { open } = useOpenSimulatorTile({ hostId });
-  const { mutation, supported } = useSimulatorOpenMutation(hostClient, hostId);
-  const { mutate, isPending } = mutation;
-
-  const placeTile = useCallback(
-    (ref: SimulatorTileRef) => {
-      openTile(tileIntent(ref, { tabId: viewTabId }, "explicit", "direct_ui"));
-    },
-    [openTile, viewTabId],
-  );
   const openOther = useCallback(
     (simulator: SimulatorSummary) => {
-      open(simulator, placeTile);
+      open(simulator, onPlaceTile);
     },
-    [open, placeTile],
-  );
-  const connect = useCallback(
-    (target: SimulatorSummary) => {
-      onOpened();
-      mutate(
-        {
-          epicId,
-          simulatorId: target.simulatorId,
-          platform: target.platform,
-          boot: true,
-        },
-        {
-          onSuccess: (response) => {
-            // The host's id is authoritative: an Android AVD becomes a serial
-            // on boot, and the stream answers to the serial. This tile keeps
-            // the AVD's name, so the serial gets a tile of its own beside it.
-            if (response.simulator.simulatorId === node.simulatorId) return;
-            placeTile(
-              makeSimulatorTileRef({
-                hostId,
-                simulatorId: response.simulator.simulatorId,
-                platform: response.simulator.platform,
-                name: response.simulator.name,
-              }),
-            );
-          },
-        },
-      );
-    },
-    [epicId, hostId, mutate, node.simulatorId, onOpened, placeTile],
+    [open, onPlaceTile],
   );
 
   const target =
@@ -360,22 +400,14 @@ function SimulatorInventoryGate(props: {
     const requested =
       connectRequest !== null &&
       takeSimulatorConnectRequest(node.id, connectRequest);
-    if (!supported || target === null) return;
+    if (onConnect === null || target === null) return;
     if (state.booting.includes(target.simulatorId)) return;
     if (!requested) {
       if (autoAttached.current || !autoAttach || !target.booted) return;
     }
     autoAttached.current = true;
-    connect(target);
-  }, [
-    autoAttach,
-    connect,
-    connectRequest,
-    node.id,
-    supported,
-    state.booting,
-    target,
-  ]);
+    onConnect(target);
+  }, [autoAttach, connectRequest, node.id, onConnect, state.booting, target]);
 
   return (
     <SimulatorInventoryView
@@ -384,9 +416,9 @@ function SimulatorInventoryGate(props: {
       booting={state.booting}
       targetSimulatorId={node.simulatorId}
       targetName={target?.name ?? node.name}
-      onConnect={supported ? connect : null}
-      connecting={isPending}
-      onOpen={supported ? openOther : null}
+      onConnect={onConnect}
+      connecting={connecting}
+      onOpen={onConnect === null ? null : openOther}
     />
   );
 }

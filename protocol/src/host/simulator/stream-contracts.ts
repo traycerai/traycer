@@ -185,6 +185,14 @@ export const simulatorStreamConfigSchema = lazySchema(() =>
     orientation: simulatorOrientationSchema,
     /** False when the hub reports the simulator's input unavailable. */
     inputAvailable: z.boolean(),
+    /**
+     * The longest normal gap between video frames, in milliseconds, as the
+     * hub reports it (its idle frame floor: a healthy capture re-sends the
+     * last frame at that rate while the screen is still). Null when unknown,
+     * and then no stall detection: neither the host's re-attach nor the
+     * viewer's overlay has a number to measure a gap against.
+     */
+    frameIntervalMs: z.number().int().positive().nullable(),
   }),
 );
 export type SimulatorStreamConfig = z.infer<typeof simulatorStreamConfigSchema>;

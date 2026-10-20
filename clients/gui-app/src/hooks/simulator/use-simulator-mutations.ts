@@ -10,9 +10,15 @@ import type {
   ResponseOfMethod,
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostRpcRegistry } from "@/lib/host";
-import { useHostMutation, useHostQuery } from "@/hooks/host/use-host-query";
+import {
+  useHostMutation,
+  useHostMutationWithResponseTimeout,
+  useHostQuery,
+} from "@/hooks/host/use-host-query";
 import { useHostScopedMutationForClient } from "@/hooks/host/use-host-scoped-mutation";
 import { useHostSupportsMethod } from "@/hooks/host/use-host-supports-method";
+import { toastFromHostError } from "@/lib/host-error-toast";
+import { SIMULATOR_OPEN_RESPONSE_TIMEOUT_MS } from "@/lib/host-rpc-policy/simulator-open-response-timeout";
 import { queryKeys, simulatorMutationKeys } from "@/lib/query-keys";
 
 /**
@@ -83,20 +89,41 @@ export function useSimulatorConfigSetMutation(
 }
 
 /**
- * Boots (or attaches to) one simulator. Keyed by host alone: the row that is
- * booting reads `variables.simulatorId` off the pending mutation, and the
- * host's own `booting` list says the same thing to every other window.
+ * Boots (or attaches to) one simulator. Keyed by host alone: the host's own
+ * `booting` list says which simulator is booting to every window.
+ *
+ * `useHostMutationWithResponseTimeout`, NOT a plain host mutation: a cold
+ * open answers after the boot, and the host bounds the boot at three minutes
+ * (see {@link SIMULATOR_OPEN_RESPONSE_TIMEOUT_MS}). The policy table's row is
+ * only the permission for that budget; passing the constant here is what
+ * applies it. A real error - the host's own boot deadline included - still
+ * surfaces as a toast.
  */
 export function useSimulatorOpenMutation(
   client: HostClient<HostRpcRegistry> | null,
   hostId: string | null,
 ): GatedSimulatorMutation<"simulator.open"> {
   const supported = useHostSupportsMethod(hostId, "simulator.open");
-  const mutation = useHostScopedMutationForClient(client, {
+  const mutation = useHostMutationWithResponseTimeout<
+    HostRpcRegistry,
+    "simulator.open",
+    { readonly hostId: string | null; readonly captured: undefined }
+  >({
+    client,
     method: "simulator.open",
-    mutationKey: simulatorMutationKeys.open(hostId ?? "", "*"),
-    errorMessage: "Couldn't open the simulator.",
-    invalidateMethods: NO_INVALIDATIONS,
+    mapVariables: (variables) => variables,
+    responseTimeoutMs: SIMULATOR_OPEN_RESPONSE_TIMEOUT_MS,
+    signalFor: null,
+    options: {
+      mutationKey: simulatorMutationKeys.open(hostId ?? "", "*"),
+      onMutate: () => ({
+        hostId: client?.getActiveHostId() ?? null,
+        captured: undefined,
+      }),
+      onError: (error) => {
+        toastFromHostError(error, "Couldn't open the simulator.");
+      },
+    },
   });
   return { mutation, supported };
 }

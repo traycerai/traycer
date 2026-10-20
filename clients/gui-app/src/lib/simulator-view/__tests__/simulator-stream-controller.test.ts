@@ -11,6 +11,7 @@ import {
   SIMULATOR_FIRST_FRAME_TIMEOUT_MS,
   SIMULATOR_HOST_TOO_OLD_MESSAGE,
   SIMULATOR_NO_VIDEO_MESSAGE,
+  SIMULATOR_STALL_GAP_FRAME_INTERVALS,
   SIMULATOR_STREAM_RETRY_DELAY_MS,
   prefersMjpegFirst,
   type SimulatorStreamController,
@@ -90,6 +91,7 @@ const IOS_CONFIG: SimulatorStreamConfig = {
   height: 2556,
   orientation: "portrait",
   inputAvailable: true,
+  frameIntervalMs: 200,
 };
 
 interface Harness {
@@ -503,5 +505,76 @@ describe("simulator stream controller", () => {
     emitVideo(h.session(), "keyframe", ANNEX_B_KEYFRAME);
     h.codec.decoders.at(-1)?.emitFrame(1179, 2556);
     expect(h.controller.getState().lifecycle).toBe("streaming");
+  });
+
+  describe("a quiet hub", () => {
+    const GAP_MS = 200 * SIMULATOR_STALL_GAP_FRAME_INTERVALS;
+
+    async function streamingHarness(
+      config: SimulatorStreamConfig,
+    ): Promise<Harness> {
+      const h = harness("ios", true, false);
+      h.controller.start();
+      emitConfig(h.session(), config);
+      emitVideo(h.session(), "description", AVCC_DESCRIPTION);
+      await flushAsync();
+      emitVideo(h.session(), "keyframe", ANNEX_B_KEYFRAME);
+      h.codec.decoders[0].emitFrame(1179, 2556);
+      expect(h.controller.getState()).toMatchObject({
+        lifecycle: "streaming",
+        stalled: false,
+      });
+      return h;
+    }
+
+    it("reads as stalled after five of the hub's frame intervals without a frame, and the next frame clears it", async () => {
+      const h = await streamingHarness(IOS_CONFIG);
+      vi.advanceTimersByTime(GAP_MS - 1);
+      expect(h.controller.getState().stalled).toBe(false);
+      vi.advanceTimersByTime(1);
+      expect(h.controller.getState()).toMatchObject({
+        lifecycle: "streaming",
+        stalled: true,
+      });
+      // Still streaming: input keeps flowing, the last frame stays painted.
+      expect(h.sink.painted).toHaveLength(1);
+
+      h.codec.decoders[0].emitFrame(1179, 2556);
+      expect(h.controller.getState().stalled).toBe(false);
+      // Every frame starts the clock over.
+      vi.advanceTimersByTime(GAP_MS - 1);
+      h.codec.decoders[0].emitFrame(1179, 2556);
+      vi.advanceTimersByTime(GAP_MS - 1);
+      expect(h.controller.getState().stalled).toBe(false);
+
+      h.controller.stop();
+      vi.advanceTimersByTime(GAP_MS * 2);
+      expect(h.controller.getState()).toMatchObject({
+        lifecycle: "idle",
+        stalled: false,
+      });
+    });
+
+    it("never reads as stalled while the hub does not say how often it sends frames", async () => {
+      const h = await streamingHarness({
+        ...IOS_CONFIG,
+        frameIntervalMs: null,
+      });
+      vi.advanceTimersByTime(GAP_MS * 20);
+      expect(h.controller.getState().stalled).toBe(false);
+    });
+
+    it("drops the stall with the stream on a transport drop, and measures again once frames return", async () => {
+      const h = await streamingHarness(IOS_CONFIG);
+      vi.advanceTimersByTime(GAP_MS);
+      expect(h.controller.getState().stalled).toBe(true);
+      h.session().emitStatus("reconnecting");
+      expect(h.controller.getState()).toMatchObject({
+        lifecycle: "reconnecting",
+        stalled: false,
+      });
+      vi.advanceTimersByTime(GAP_MS * 2);
+      expect(h.controller.getState().stalled).toBe(false);
+    });
   });
 });

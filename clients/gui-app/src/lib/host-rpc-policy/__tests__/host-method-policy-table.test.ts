@@ -53,6 +53,7 @@ import type {
 } from "@traycer/protocol/host/maintenance/index";
 import { UPDATE_CHECK_CLI_RECOVERY_POLL_LANE } from "@/lib/host-rpc-policy/host-method-policy-table";
 import { USAGE_SUMMARY_RESPONSE_TIMEOUT_MS } from "@/lib/usage-analytics/usage-summary-timing";
+import { SIMULATOR_OPEN_RESPONSE_TIMEOUT_MS } from "@/lib/host-rpc-policy/simulator-open-response-timeout";
 
 const typedProvidersClassifier = (
   data: ResponseOfMethod<HostRpcRegistry, "providers.list"> | undefined,
@@ -1112,5 +1113,24 @@ describe("agent.resolveMessagePeer poll policy", () => {
 
   it("stops polling once a named peer resolves, so the other task can be reclaimed", () => {
     expect(policy.classify({ peer })).toBe(false);
+  });
+});
+
+describe("simulator.open declared budget", () => {
+  it("lets a cold open outlast the host's three-minute boot deadline", () => {
+    // The host answers a boot that misses its deadline with an error of its
+    // own; the client budget has to be the one that is NOT the first to give
+    // up, or every long boot reads as a client-side failure while the host
+    // goes on to boot the simulator.
+    expect(SIMULATOR_OPEN_RESPONSE_TIMEOUT_MS).toBe(210_000);
+    expect(SIMULATOR_OPEN_RESPONSE_TIMEOUT_MS).toBeGreaterThan(3 * 60_000);
+    expect(HOST_METHOD_POLL_TABLE["simulator.open"]).toEqual({
+      mode: "fifo",
+      joinResponseTimeoutMs: SIMULATOR_OPEN_RESPONSE_TIMEOUT_MS,
+      poll: null,
+    });
+    expect(
+      hostRpcSchedulingPolicy.joinResponseTimeoutMs("simulator.open"),
+    ).toBe(SIMULATOR_OPEN_RESPONSE_TIMEOUT_MS);
   });
 });

@@ -20,6 +20,7 @@ const fakes = vi.hoisted(() => ({
   sessions: null as SimulatorSessionsState | null,
   configSet: vi.fn(),
   close: vi.fn(),
+  refresh: vi.fn(),
   activated: [] as EpicCanvasTileRef[],
 }));
 
@@ -106,20 +107,22 @@ function sessions(
     lifecycle,
     state,
     errorMessage: null,
-    refresh: () => undefined,
+    refresh: fakes.refresh,
     retry: () => undefined,
   };
 }
 
-function renderSection(onClose: () => void): void {
-  render(
+function renderSection(onClose: () => void): () => void {
+  const section = () => (
     <SwitcherSimulatorsSection
       epicId={EPIC}
       tabId={TAB}
       hostId={HOST}
       onClose={onClose}
-    />,
+    />
   );
+  const { rerender } = render(section());
+  return () => rerender(section());
 }
 
 beforeEach(() => {
@@ -207,6 +210,13 @@ describe("SwitcherSimulatorsSection", () => {
       shutdown: false,
     });
     expect(fakes.activated).toEqual([]);
+  });
+
+  it("asks the host for its inventory once when it mounts with simulators on", () => {
+    const rerender = renderSection(vi.fn());
+    expect(fakes.refresh).toHaveBeenCalledTimes(1);
+    rerender();
+    expect(fakes.refresh).toHaveBeenCalledTimes(1);
   });
 
   it("offers Turn on while simulators are off, writing both switches", () => {

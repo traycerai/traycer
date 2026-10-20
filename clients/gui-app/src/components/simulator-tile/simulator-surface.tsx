@@ -191,6 +191,24 @@ export function SimulatorSurface(props: {
           }}
         />
       </button>
+      {/*
+        The hub has gone quiet for longer than its own frame cadence allows:
+        the last frame stays, and a quiet note says the tile is waiting. The
+        next frame clears it; a device that is no longer booted ends the
+        session instead, and the tile falls back to its inventory.
+      */}
+      {streaming && state.stalled ? (
+        <div
+          role="status"
+          aria-live="polite"
+          data-testid="simulator-stall-overlay"
+          className="pointer-events-none absolute inset-0 flex items-center justify-center p-4 text-center text-ui-sm"
+        >
+          <span className="rounded-md bg-background/85 px-2 py-1 text-muted-foreground">
+            Waiting for the simulator…
+          </span>
+        </div>
+      ) : null}
       {streaming && !state.input.connected ? (
         <div className="pointer-events-none absolute inset-x-0 bottom-0 flex justify-center p-2">
           <span className="rounded-md bg-background/85 px-2 py-1 text-ui-xs text-muted-foreground">

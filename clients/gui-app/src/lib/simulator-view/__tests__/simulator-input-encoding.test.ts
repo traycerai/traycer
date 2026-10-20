@@ -23,6 +23,7 @@ function config(
     height: 2556,
     orientation: "portrait",
     inputAvailable: true,
+    frameIntervalMs: 200,
     ...overrides,
   };
 }

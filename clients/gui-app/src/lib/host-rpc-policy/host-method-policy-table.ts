@@ -15,6 +15,7 @@ import { chatPublicationDefinitiveReason } from "@/lib/chats/chat-publication-de
 import { DRAFT_BLOB_PUT_RESPONSE_TIMEOUT_MS } from "@/lib/drafts/draft-blob-transport-budget";
 import { CATALOG_LIST_RESPONSE_TIMEOUT_MS } from "@/lib/host-rpc-policy/catalog-list-response-timeout";
 import { PROVIDER_PACK_DISCOVERY_CHECK_TIMEOUT_MS } from "@/lib/host-rpc-policy/provider-pack-discovery-check-timeout";
+import { SIMULATOR_OPEN_RESPONSE_TIMEOUT_MS } from "@/lib/host-rpc-policy/simulator-open-response-timeout";
 import { RATE_LIMIT_USAGE_RESPONSE_TIMEOUT_MS } from "@/lib/rate-limits/rate-limit-timing";
 import { USAGE_SUMMARY_RESPONSE_TIMEOUT_MS } from "@/lib/usage-analytics/usage-summary-timing";
 
@@ -2353,7 +2354,14 @@ export const HOST_METHOD_POLL_TABLE = {
       resetLaneIds: NO_RESET_LANES,
     }),
   },
-  "simulator.open": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
+  // The budget is a PERMISSION (see `providers.refreshPackDiscovery`): a cold
+  // open answers after the boot, which the host bounds at three minutes, and
+  // only `useSimulatorOpenMutation` passing this same constant makes it apply.
+  "simulator.open": {
+    mode: "fifo",
+    joinResponseTimeoutMs: SIMULATOR_OPEN_RESPONSE_TIMEOUT_MS,
+    poll: null,
+  },
   "simulator.close": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
   "simulator.shutdown": {
     mode: "fifo",
