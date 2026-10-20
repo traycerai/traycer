@@ -124,9 +124,14 @@ export interface HostReachability {
  * healthy machine read-only for two hours on 2026-08-11.
  *
  * The server pool is not in the directory and has no lease, so neither can
- * speak for it: it is reachable exactly while its session is open, and a
- * drain it announced holds it at "host-starting" the way a lease's expected
- * restart holds a host.
+ * speak for it, and nothing else can prove it dead: its session dials
+ * lazily, so "no ready session" is also every moment before the first dial
+ * and every redial. It therefore never reads "unreachable" - that verdict
+ * arms the dead-tile banner, the Clone offer and the terminal-closed
+ * notification, while guessing "reachable" costs a dial that fails
+ * recoverably (the `indeterminate` arm's reasoning). A drain the pool
+ * ANNOUNCED reads "host-starting" until its session is ready again, the way
+ * a lease's expected restart holds a host.
  */
 export function useHostReachability(hostId: string): HostReachability {
   const lease = useHostLease(hostId);
@@ -136,9 +141,12 @@ export function useHostReachability(hostId: string): HostReachability {
   const directoryVerdict = useMemo<HostReachability>(() => {
     if (hostId === POOL_HOST_ID) {
       return {
-        status: hasReadySession ? "reachable" : "unreachable",
+        status:
+          poolRestartExpected && !hasReadySession
+            ? "host-starting"
+            : "reachable",
         hostLabel: POOL_HOST_LABEL,
-        unavailability: hasReadySession ? null : "offline",
+        unavailability: null,
         basis: "directory",
         hostKind: "pool",
       };
@@ -306,7 +314,13 @@ export function useHostReachability(hostId: string): HostReachability {
       basis: "directory",
       hostKind,
     };
-  }, [hostId, list.data, list.fetchStatus, hasReadySession]);
+  }, [
+    hostId,
+    list.data,
+    list.fetchStatus,
+    hasReadySession,
+    poolRestartExpected,
+  ]);
 
   // D4. An announced restart is not an outage. While the lease says
   // `restarting-expected`, the authority expects the host back: inside a
@@ -317,7 +331,8 @@ export function useHostReachability(hostId: string): HostReachability {
   // `host-starting`, and every tile keeps its non-destructive wait instead of
   // the dead-tile banner, the Clone offer and the terminal's "permanently
   // closed" notification. A crash announces nothing and opens no episode,
-  // so it still reads `offline`. A pool's announced drain is the same hold.
+  // so it still reads `offline`. A pool's announced drain is the same hold,
+  // so the starting budget below does not run through it either.
   const restartExpected =
     lease?.status === "restarting-expected" || poolRestartExpected;
   const heldVerdict = useMemo<HostReachability>(() => {

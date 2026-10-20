@@ -35,7 +35,6 @@ describe("epic.setChatArchived is optional, not floor", () => {
     expect(split.optionalManifest["epic.setChatArchived"]).toEqual({
       major: 1,
       minor: 1,
-      supportedMajors: [1],
     });
     expect(split.manifest["epic.setChatArchived"]).toBeUndefined();
   });

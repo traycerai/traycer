@@ -74,7 +74,6 @@ describe("per-profile API-key methods are optional, not floor", () => {
       expect(split.optionalManifest[m]).toEqual({
         major: 1,
         minor: 0,
-        supportedMajors: [1],
       });
       expect(split.manifest[m]).toBeUndefined();
     },

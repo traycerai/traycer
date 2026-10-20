@@ -268,8 +268,8 @@ export function buildHostStreamClient(params: {
    * Gates the remote session's attach-grant MINT only - see
    * `CreateRemoteTransportOptions.cloudAuthorized`. A parameter rather than an
    * ambient store read for the same reason as the messenger builder's: this is
-   * the seam tests construct through. Only consulted on the
-   * `target.kind === "remote"` branch, so local hosts are unaffected.
+   * the seam tests construct through. Only consulted on the remote and pool
+   * branches, so local hosts are unaffected.
    */
   readonly cloudAuthorized: () => boolean;
   readonly authnBaseUrl: string;
@@ -277,12 +277,12 @@ export function buildHostStreamClient(params: {
   /**
    * The signed-in user this transport is built for. Part of the shared
    * `(hostId, userId)` remote-session cache key (Architecture §4 / S1) - only
-   * consulted on the `target.kind === "remote"` branch.
+   * consulted on the remote and pool branches.
    */
   readonly userId: string;
   /**
    * Whether the process-wide wake sweep may proactively poke or force-drop
-   * the shared session behind this client (remote branch only). The caller's
+   * the shared session behind this client (remote and pool branches only). The caller's
    * statement that a reconnect's subscribe replay is safe for the streams it
    * will open: durable/warm transports pass `true`; the one-shot
    * side-effecting transport passes `false`, because a forced replay would

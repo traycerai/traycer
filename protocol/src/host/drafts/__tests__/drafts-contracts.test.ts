@@ -222,7 +222,7 @@ describe("drafts unary contracts", () => {
       expect(split.optionalManifest[method]).toEqual({
         major: line.major,
         minor: line.minor,
-        supportedMajors: line.major === 2 ? [1, 2] : [1],
+        ...(line.major === 2 ? { supportedMajors: [1, 2] } : {}),
       });
     }
   });
@@ -402,7 +402,6 @@ describe("drafts.subscribe@1.0 contract", () => {
       // above the frozen 1.0 that the released hosts shipped.
       major: 1,
       minor: 1,
-      supportedMajors: [1],
     });
     expect(hostStreamRpcRegistry[STREAM_METHOD][1].versions[0].contract).toBe(
       draftsSubscribeV10,

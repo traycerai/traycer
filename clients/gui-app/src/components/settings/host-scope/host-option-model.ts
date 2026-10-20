@@ -604,10 +604,12 @@ export const SANDBOX_CREDENTIALS_REFUSED = "Sandboxes don't take sign-ins";
  * none of them. The check is made BEFORE the RPC: the sandbox's own
  * `SANDBOX_HOST_REFUSES_CREDENTIALS` arrives only after the secret already
  * has. {@link hostEntryTakesCredentials} is the same rule over a directory
- * entry, for a surface that holds one instead of a picker row.
+ * entry, for a surface that holds one instead of a picker row. The server
+ * pool takes none either: it serves the cloud's reads and holds no one's
+ * secrets.
  */
 export function hostTakesCredentials(host: HostScopeOption): boolean {
-  return host.sandbox === null;
+  return host.sandbox === null && host.entry?.kind !== "pool";
 }
 
 /**
@@ -618,7 +620,10 @@ export function hostTakesCredentials(host: HostScopeOption): boolean {
 export function hostEntryTakesCredentials(
   entry: HostDirectoryEntry | null,
 ): boolean {
-  return entry === null || !isSandboxHostDirectoryEntry(entry);
+  return (
+    entry === null ||
+    (entry.kind !== "pool" && !isSandboxHostDirectoryEntry(entry))
+  );
 }
 
 /**

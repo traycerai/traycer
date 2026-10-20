@@ -141,7 +141,6 @@ describe("host.chatRecords.subscribe@1.0 contract", () => {
     ).toEqual({
       major: 1,
       minor: 4,
-      supportedMajors: [1],
     });
   });
 

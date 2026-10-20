@@ -44,7 +44,6 @@ describe("artifact-versioning handshake compatibility", () => {
       expect(current.optionalManifest[method]).toEqual({
         major: 1,
         minor: 0,
-        supportedMajors: [1],
       });
       expect(hostRpcRegistry[method].degrade).toEqual({ kind: "unsupported" });
     },
@@ -93,7 +92,6 @@ describe("artifact-versioning handshake compatibility", () => {
       expect(negotiatedManifest[method]).toEqual({
         major: 1,
         minor: 0,
-        supportedMajors: [1],
       });
     }
   });

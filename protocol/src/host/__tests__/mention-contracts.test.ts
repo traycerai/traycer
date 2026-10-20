@@ -392,12 +392,10 @@ describe("GitHub mention RPC contracts", () => {
     expect(split.optionalManifest["mention.githubCatalog"]).toEqual({
       major: 1,
       minor: 0,
-      supportedMajors: [1],
     });
     expect(split.optionalManifest["mention.githubSearch"]).toEqual({
       major: 1,
       minor: 0,
-      supportedMajors: [1],
     });
   });
 });

@@ -57,7 +57,6 @@ describe("epic.createChat stays on the released floor", () => {
     expect(split.manifest["epic.createChat"]).toEqual({
       major: 1,
       minor: 2,
-      supportedMajors: [1],
     });
     expect(split.optionalManifest["epic.createChat"]).toBeUndefined();
   });

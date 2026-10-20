@@ -20,6 +20,10 @@ import {
 } from "../config";
 import { InsecureRelaySchemeError } from "@traycer/protocol/host-transport/relay-attach-url";
 import { RelaySocket, type RelaySocketHandlers } from "../relay-socket";
+import {
+  SOCKET_KEEPALIVE_PING,
+  SOCKET_KEEPALIVE_PONG,
+} from "@traycer/protocol/framework/ws-protocol";
 // `RelaySocket.pokeKeepalive` runs the keepalive's staleness check off the
 // 25s interval schedule - the whole reason `RemoteSession.wake` can detect a
 // socket the runtime's frozen interval never got the chance to notice was
@@ -902,5 +906,140 @@ describe("RelaySocket onTextBytes", () => {
 
     expect(onTextBytes).toHaveBeenCalledTimes(1);
     expect(onTextBytes).toHaveBeenCalledWith(8);
+  });
+});
+
+/**
+ * The direct leg (`directUrl`): the server pool, dialed with no relay in
+ * between. The socket's own open is the attach, relay control frames have no
+ * standing from a direct peer, and the keepalive pair is the one the pool
+ * answers.
+ */
+describe("RelaySocket direct leg", () => {
+  const RELAY_CONTROL_FRAMES: readonly string[] = [
+    JSON.stringify({ type: "host_detached" }),
+    JSON.stringify({ type: "host_attached" }),
+    JSON.stringify({ type: "reauth_ack" }),
+    JSON.stringify({ type: "peer_gone", reason: "host-gone" }),
+    JSON.stringify({ type: "killed", reason: "revoked" }),
+    JSON.stringify({ type: "error", code: "E_X", message: "nope" }),
+  ];
+
+  function openDirect(handlers: RelaySocketHandlers): {
+    readonly socket: RelaySocket;
+    readonly stream: FakeStreamSocket;
+    readonly dialedUrls: string[];
+  } {
+    const dialedUrls: string[] = [];
+    const stream = new FakeStreamSocket();
+    const socket = new RelaySocket({
+      directUrl: "wss://pool.test/v1/session",
+      webSocketFactory: {
+        create: (url) => {
+          dialedUrls.push(url);
+          return stream;
+        },
+      },
+      handlers,
+    });
+    return { socket, stream, dialedUrls };
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("dials the pool URL as given, with no grant, and fires attach exactly when the socket opens", () => {
+    const handlers = makeHandlers({});
+    const { socket, stream, dialedUrls } = openDirect(handlers);
+
+    expect(dialedUrls).toEqual(["wss://pool.test/v1/session"]);
+    expect(handlers.onAttachAck).not.toHaveBeenCalled();
+
+    stream.open();
+
+    expect(handlers.onAttachAck).toHaveBeenCalledTimes(1);
+    socket.close(1000, "test-teardown");
+  });
+
+  it("drops every relay control frame, while the relay leg still acts on them", () => {
+    const direct = makeHandlers({});
+    const { socket: directSocket, stream: directStream } = openDirect(direct);
+    directStream.open();
+    for (const frame of RELAY_CONTROL_FRAMES) {
+      directStream.emitText(frame);
+    }
+
+    expect(direct.onHostDetached).not.toHaveBeenCalled();
+    expect(direct.onHostAttached).not.toHaveBeenCalled();
+    expect(direct.onReauthAck).not.toHaveBeenCalled();
+    expect(direct.onPeerGone).not.toHaveBeenCalled();
+    expect(direct.onError).not.toHaveBeenCalled();
+    // A control frame a relay may legitimately send must not be able to
+    // re-fire attach on a direct leg either: attach fired once, at open.
+    expect(direct.onAttachAck).toHaveBeenCalledTimes(1);
+
+    const relay = makeHandlers({});
+    const { socket: relaySocket, stream: relayStream } = openSocket(relay);
+    relayStream.emitText(RELAY_CONTROL_FRAMES[0]);
+    expect(relay.onHostDetached).toHaveBeenCalledTimes(1);
+
+    directSocket.close(1000, "test-teardown");
+    relaySocket.close(1000, "test-teardown");
+  });
+
+  it("refuses a cleartext non-loopback URL before any socket is created, and still dials loopback", () => {
+    let created = 0;
+    const factory: IStreamWebSocketFactory = {
+      create: () => {
+        created += 1;
+        return new FakeStreamSocket();
+      },
+    };
+
+    expect(
+      () =>
+        new RelaySocket({
+          directUrl: "ws://pool.test/v1/session",
+          webSocketFactory: factory,
+          handlers: makeHandlers({}),
+        }),
+    ).toThrow(InsecureRelaySchemeError);
+    expect(created).toBe(0);
+
+    const loopback = new RelaySocket({
+      directUrl: "ws://127.0.0.1:8788/v1/session",
+      webSocketFactory: factory,
+      handlers: makeHandlers({}),
+    });
+    expect(created).toBe(1);
+    loopback.close(1000, "test-teardown");
+  });
+
+  it("keeps the exact keepalive strings the pool answers: it pings with relay-ping and answers a peer ping with relay-pong", () => {
+    // The pool server and every released client speak these literals, so the
+    // named constants are pinned to them rather than to each other.
+    expect(SOCKET_KEEPALIVE_PING).toBe("relay-ping");
+    expect(SOCKET_KEEPALIVE_PONG).toBe("relay-pong");
+
+    const handlers = makeHandlers({});
+    const { socket, stream } = openDirect(handlers);
+    stream.open();
+
+    vi.advanceTimersByTime(RELAY_PING_INTERVAL_MS);
+    expect(stream.sent).toEqual(["relay-ping"]);
+
+    stream.emitText("relay-ping");
+    expect(stream.sent).toEqual(["relay-ping", "relay-pong"]);
+
+    // A pong answers the ping: the socket stays healthy past the idle deadline.
+    stream.emitPong();
+    vi.advanceTimersByTime(RELAY_PONG_TIMEOUT_MS - RELAY_PING_TICK_MS);
+    expect(handlers.onClose).not.toHaveBeenCalled();
+    socket.close(1000, "test-teardown");
   });
 });

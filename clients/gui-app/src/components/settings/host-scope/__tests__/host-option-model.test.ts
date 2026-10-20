@@ -1,7 +1,16 @@
 import { describe, expect, it } from "vitest";
 import {
+  poolHostDirectoryEntry,
+  type HostDirectoryEntry,
+  type HostKind,
+} from "@traycer-clients/shared/host-client/host-directory";
+import {
   AVAILABLE_HOST_ROW_SURFACE_STATE,
   hostOptionKindLabel,
+  hostEntryTakesCredentials,
+  hostOptionPickerGroup,
+  hostTakesCredentials,
+  type HostPickerGroup,
   hostOptionStatusWord,
   hostOptionUpdateBadge,
   isHostOptionSelectable,
@@ -403,4 +412,64 @@ describe("sandboxWordYieldsToHealth", () => {
   it("is false for a personal host, whatever its health", () => {
     expect(sandboxWordYieldsToHealth(option({ state: "offline" }))).toBe(false);
   });
+});
+
+describe("hostOptionPickerGroup by directory kind", () => {
+  // Exhaustive over `HostKind`: a kind added later fails to compile here until
+  // someone decides which picker group it belongs to.
+  const GROUP_BY_KIND: Readonly<Record<HostKind, HostPickerGroup>> = {
+    local: "personal",
+    remote: "personal",
+    mock: "personal",
+    pool: "hidden",
+  };
+  const KINDS: readonly HostKind[] = ["local", "remote", "mock", "pool"];
+
+  function entryOf(kind: HostKind): HostDirectoryEntry {
+    if (kind === "pool") {
+      const pool = poolHostDirectoryEntry("wss://pool.test/v1/session");
+      if (pool === null) {
+        throw new Error("a non-empty pool URL synthesizes an entry");
+      }
+      return pool;
+    }
+    return {
+      hostId: `host-${kind}`,
+      label: kind,
+      kind,
+      websocketUrl: "ws://127.0.0.1:4455/ws",
+      version: null,
+      transportDialability: "dialable",
+    };
+  }
+
+  it.each(KINDS)("a %s entry lands in its group on every surface", (kind) => {
+    const option = hostScopeOptionFixture({
+      hostId: `host-${kind}`,
+      entry: entryOf(kind),
+    });
+    for (const listsAgentSandboxes of [false, true]) {
+      for (const offersAutomations of [false, true]) {
+        expect(
+          hostOptionPickerGroup(option, listsAgentSandboxes, offersAutomations),
+        ).toBe(GROUP_BY_KIND[kind]);
+      }
+    }
+  });
+
+  it.each(KINDS)(
+    "a %s entry takes credentials unless it is the pool",
+    (kind) => {
+      const takes = kind !== "pool";
+      expect(hostEntryTakesCredentials(entryOf(kind))).toBe(takes);
+      expect(
+        hostTakesCredentials(
+          hostScopeOptionFixture({
+            hostId: `host-${kind}`,
+            entry: entryOf(kind),
+          }),
+        ),
+      ).toBe(takes);
+    },
+  );
 });
