@@ -618,11 +618,24 @@ export function useCloudEpicTasksQuery(
   // from. A placeholder page describes a DIFFERENT request than the one being
   // rendered, so it states nothing - the same suppression the server facets
   // already apply one layer up. The cached page is THIS request's, so its
-  // statement (cached, cloud page unavailable) is the one to show.
+  // statement is the one to show: its cloud half is still pending while the
+  // request is in flight, and unavailable once the request has failed - the
+  // list states reduced coverage then, not during render-before-confirm.
+  const queryError = query.error;
   const completeness = useMemo<ListTasksCompleteness | null>(() => {
     if (isPlaceholderData || firstPage === undefined) return null;
-    return unionCompleteness([firstPage, ...extraPages]);
-  }, [extraPages, firstPage, isPlaceholderData]);
+    const statedFirstPage =
+      presentsCachedPage && queryError === null
+        ? reopenLocalFirstCloudPage(firstPage)
+        : firstPage;
+    return unionCompleteness([statedFirstPage ?? firstPage, ...extraPages]);
+  }, [
+    extraPages,
+    firstPage,
+    isPlaceholderData,
+    presentsCachedPage,
+    queryError,
+  ]);
 
   const lastPage: ListTasksResponse | undefined =
     extraPages.length > 0 ? extraPages[extraPages.length - 1] : firstPage;

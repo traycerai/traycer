@@ -171,7 +171,10 @@ describe("useCloudEpicTasksQuery with the replica tier", () => {
     await waitFor(() => expect(idsOf(result.current)).toEqual(CACHED_IDS));
     expect(result.current.presentsCachedPage).toBe(true);
     expect(result.current.firstPagePending).toBe(false);
-    expect(result.current.completeness?.cloudPage).toBe("unavailable");
+    // The request is still waiting: the cached page's cloud half is pending,
+    // not unavailable, so the coverage line does not flash before the answer.
+    expect(result.current.query.status).toBe("pending");
+    expect(result.current.completeness?.cloudPage).toBe("pending");
   });
 
   it("keeps the cached page, with no error, after the request fails", async () => {

@@ -212,13 +212,16 @@ export function hostLocalHistoryPage(
 /**
  * Whether the listing states reduced coverage: rows that may belong on it are
  * missing for a reason the person cannot see - the host could not add the
- * tasks only it holds, or a filter is one those tasks cannot be judged
- * against. The list says so instead of silently shrinking.
+ * tasks only it holds, a filter is one those tasks cannot be judged against,
+ * or the serving tier did not answer (the host's rows alone, or a cached page
+ * standing in for a failed request). The list says so instead of silently
+ * shrinking.
  */
 export function historyCoverageIsReduced(
   completeness: ListTasksCompleteness | null,
 ): boolean {
   return (
+    completeness?.cloudPage === "unavailable" ||
     completeness?.localRows === "truncated" ||
     completeness?.localRows === "suppressed-unprovable-filter"
   );
