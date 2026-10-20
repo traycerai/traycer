@@ -148,6 +148,8 @@ export const hostNotificationChatStoppedPayloadSchema = lazySchema(() =>
       eventId: idSchema.optional(),
       backgroundWorkRunning: z.boolean().optional(),
       automaticRecovery: z.literal(true).optional(),
+      /** Present only on a completed turn the provider paused before verification. */
+      unverified: z.literal(true).optional(),
     })
     .catchall(z.unknown()),
 );

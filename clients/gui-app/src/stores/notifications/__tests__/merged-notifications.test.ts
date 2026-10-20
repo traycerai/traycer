@@ -209,6 +209,45 @@ describe("merged notifications feed", () => {
     });
   });
 
+  it("labels a paused completed chat row and keeps its Done navigation", () => {
+    const row = rowFromHostEntry({
+      id: "agent.stopped:chat-1",
+      updatedAt: 10,
+      readAt: null,
+      kind: "agent.stopped",
+      sourceRef: "chat-1",
+      severity: "done",
+      outcome: "completed",
+      epicId: "epic-1",
+      chatId: "chat-1",
+      payload: {
+        kind: "chat",
+        epicId: "epic-1",
+        chatId: "chat-1",
+        hostId: "chat-host",
+        agentName: "Agent",
+        taskTitle: "Task",
+        outcome: "completed",
+        messageId: "assistant-message-1",
+        eventId: "event-1",
+        unverified: true,
+      },
+    });
+
+    expect(row.body).toBe("Agent • Paused, not verified");
+    expect(row.severity).toBe("done");
+    expect(row.outcome).toBe("completed");
+    expect(row.payload).toEqual({
+      kind: "chat",
+      epicId: "epic-1",
+      chatId: "chat-1",
+      hostId: "chat-host",
+      messageId: undefined,
+      eventId: undefined,
+      scrollToEnd: true,
+    });
+  });
+
   it("uses embedded cloud payload titles when the presentation snapshot is absent", () => {
     const embedded: HostNotificationsCloudFeedRow = {
       entryId: "entry-legacy",
