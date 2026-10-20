@@ -50,6 +50,8 @@ interface MockState {
   failed: Set<string>;
   batches: RecordedBatch[];
   windowedProviders: ReadonlyArray<ConfiguredRateLimitProvider>;
+  /** Whether the host has reported its provider inventory at all. */
+  inventoryAnswered: boolean;
 }
 
 const mocks = vi.hoisted<MockState>(() => ({
@@ -58,6 +60,7 @@ const mocks = vi.hoisted<MockState>(() => ({
   failed: new Set(),
   batches: [],
   windowedProviders: [],
+  inventoryAnswered: true,
 }));
 
 vi.mock("@/lib/host", () => ({
@@ -77,6 +80,7 @@ vi.mock(
       ...actual,
       useConfiguredRateLimitProviders: () => mocks.windowedProviders,
       useVisibleRateLimitProviders: () => mocks.windowedProviders,
+      useRateLimitProvidersAnswered: () => mocks.inventoryAnswered,
     };
   },
 );
@@ -491,6 +495,7 @@ beforeEach(() => {
   mocks.failed = new Set();
   mocks.batches = [];
   mocks.windowedProviders = [];
+  mocks.inventoryAnswered = true;
   // The retry bound's floor is the WINDOW's, and one vitest file is one
   // window, so a row that stamped a bound would otherwise hand it to the next
   // one. A stamp at the epoch binds nothing and is dropped on the first read.
@@ -1150,9 +1155,50 @@ describe("useStatusBarRateLimitSegments", () => {
     // An unanswered provider list - cold, refetching, a scope with no pick -
     // reads as an empty inventory, and an empty inventory is not evidence that
     // every account has been removed.
+    mocks.inventoryAnswered = false;
     renderSegments([]);
 
     expect(scheduledTransientReadOwed(key, 7)).toBe(false);
+  });
+
+  it("keeps no entry once the host answers that it has no providers left", () => {
+    const key = rateLimitAccountLedgerKey(RETRY_HOST_ID, "codex", null);
+    recordScheduledTransientRead(key, 7);
+
+    // The same empty list as the row above, and the opposite fact: the host
+    // has ANSWERED, and its answer is that the last rate-limit account is
+    // gone. The list cannot tell the two apart, so the entry's life would hang
+    // on a distinction nothing was reading - and the account's own query is
+    // retained for the window's life (`gcTime: Infinity`), so a sign-in that
+    // brings it back would meet its old run of failures and the read that run
+    // had already spent.
+    mocks.inventoryAnswered = true;
+    renderSegments([]);
+
+    expect(scheduledTransientReadOwed(key, 7)).toBe(true);
+  });
+
+  it("drops a removed account's entry only once the host has answered", () => {
+    const key = rateLimitAccountLedgerKey(RETRY_HOST_ID, "codex", "work");
+    recordScheduledTransientRead(key, 7);
+    mocks.inventoryAnswered = false;
+    let providers: ReadonlyArray<ConfiguredRateLimitProvider> = [
+      codexWithAccounts(),
+    ];
+
+    const { rerender } = renderChangingSegments(() => providers);
+    providers = [
+      configuredProvider({ providerId: "codex", lane: "ephemeralProcess" }),
+    ];
+    rerender();
+    // A list that shrank while the query is unanswered is not an answer about
+    // what the host has.
+    expect(scheduledTransientReadOwed(key, 7)).toBe(false);
+
+    mocks.inventoryAnswered = true;
+    rerender();
+
+    expect(scheduledTransientReadOwed(key, 7)).toBe(true);
   });
 
   it("keeps the entries of the host it is pointed away from", () => {
@@ -1221,6 +1267,67 @@ describe("useStatusBarRateLimitSegments", () => {
     expect(result.current.retryTargets).toEqual([
       { providerId: "codex", profileId: null, episode: episodeOf("codex") },
     ]);
+  });
+
+  it("says usage is unavailable, not that it is retrying, when nothing can read the account", () => {
+    setResult("codex", {
+      data: freshEnvelope(
+        unavailableRateLimits({ provider: "codex", reason: "timeout" }),
+      ),
+      isError: false,
+    });
+
+    // Signed out after the failure, with the failure still in the cache. The
+    // account stays on the strip - that is deliberate, it is the user's
+    // account - but no poll, no affordance and no scheduled read will touch an
+    // ineligible one, so the transient words would promise a read that nothing
+    // anywhere performs. The reason the words drop is still on the tooltip.
+    const { result } = renderSegments([
+      configuredProvider({
+        providerId: "codex",
+        lane: "ephemeralProcess",
+        fetchEligibility: { ambient: false, managedProfiles: false },
+      }),
+    ]);
+
+    expect(result.current.cluster).toEqual({
+      kind: "segments",
+      segments: [
+        expect.objectContaining({
+          state: "unavailable",
+          reason: "timeout",
+          retryOffered: false,
+        }),
+      ],
+    });
+    expect(result.current.retryTargets).toEqual([]);
+  });
+
+  it("leaves an account nothing can read cold when its reads only rejected", () => {
+    setFailed("codex");
+
+    // The same promise through the other door: a rejected read retains no
+    // snapshot at all, and "no reading yet" is the sentence that stays true
+    // while nothing is going to read one.
+    const { result } = renderSegments([
+      configuredProvider({
+        providerId: "codex",
+        lane: "ephemeralProcess",
+        fetchEligibility: { ambient: false, managedProfiles: false },
+      }),
+    ]);
+
+    expect(result.current.cluster).toEqual({
+      kind: "segments",
+      segments: [
+        expect.objectContaining({
+          state: "cold",
+          reason: null,
+          retryOffered: false,
+        }),
+      ],
+    });
+    expect(result.current.retryTargets).toEqual([]);
   });
 
   it("withholds a transient segment's retry for a minute after a read of that account settled, wherever that read was asked for", () => {

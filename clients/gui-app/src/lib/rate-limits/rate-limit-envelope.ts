@@ -112,7 +112,10 @@ function retainCodexResetCreditDetails(
  *   identity. An answer ABOUT THE ACCOUNT - a reading, or an authoritative
  *   reason - starts a run by minting a value no other envelope has. A
  *   transient failure is not an answer and carries the value over, so one run
- *   shares one, and no two runs share one. A surface that owes a transient
+ *   shares one, and no two runs share one. The one exception is a failure that
+ *   came back under a different credential than the reading behind it
+ *   (OpenCode's generation): that is a run of its own, because the run before
+ *   it describes a credential this account no longer uses. A surface that owes a transient
  *   account one action per run (the strip's single re-read,
  *   `rate-limit-read-ledger.ts`) records this value with the action and
  *   compares before owing again. The identity lives in the reading rather
@@ -238,20 +241,70 @@ export function buildProviderRateLimitEnvelope(
 }
 
 /**
- * What a transient failure keeps of the reading before it: the retained one
- * where that is allowed, nothing where it is not (OpenCode's credential
- * generation is the case that forbids it).
+ * Which credential a snapshot was read with, where the wire says so - OpenCode
+ * reports one on both arms, required on a reading and optional on a failure,
+ * and no other provider reports one at all.
  */
-function retainedLastGood(
+function openCodeGeneration(
+  snapshot: ProviderRateLimits | null | undefined,
+): string | null {
+  if (snapshot === null || snapshot === undefined) return null;
+  if (snapshot.provider !== "opencode") return null;
+  if (snapshot.available) return snapshot.credentialGeneration;
+  return snapshot.credentialGeneration ?? null;
+}
+
+/**
+ * Whether this failure came back under a DIFFERENT credential than the attempt
+ * before it. The comparison is against the last generation this envelope SAW,
+ * from either arm, because a rotation that fails leaves no reading behind to
+ * compare the one after it against - and successive rotations are exactly the
+ * case that matters.
+ *
+ * Only when the wire names both. A failure that reports no generation has not
+ * said the credential changed, and treating silence as a change would start a
+ * run per failure - which is also why this is a narrower question than whether
+ * the READING may be retained: showing a reading from a credential that might
+ * be gone is worth refusing on a maybe, while ending a run of failures on one
+ * costs the account an extra read every time it fails.
+ */
+function credentialGenerationChanged(
   previous: ProviderRateLimitEnvelope | undefined,
   latest: UnavailableProviderRateLimits,
-): Pick<ProviderRateLimitEnvelope, "lastGood" | "lastGoodAt"> {
+): boolean {
+  if (latest.provider !== "opencode") return false;
+  const latestGeneration = latest.credentialGeneration;
+  const previousGeneration =
+    openCodeGeneration(previous?.latest) ??
+    openCodeGeneration(previous?.lastGood);
+  if (latestGeneration === undefined || previousGeneration === null) {
+    return false;
+  }
+  return previousGeneration !== latestGeneration;
+}
+
+/**
+ * What a transient failure keeps of the run before it: the retained reading
+ * where that is allowed, nothing where it is not, and the identity of the run
+ * it continues. A credential rotation keeps NEITHER - its predecessor's
+ * readings are another credential's, and so is whatever that run has already
+ * spent - so it starts a run, exactly as an answer would.
+ */
+function carriedRun(
+  previous: ProviderRateLimitEnvelope | undefined,
+  latest: UnavailableProviderRateLimits,
+): Pick<ProviderRateLimitEnvelope, "lastGood" | "lastGoodAt" | "episode"> {
+  if (credentialGenerationChanged(previous, latest)) {
+    return { lastGood: null, lastGoodAt: null, episode: nextEpisode() };
+  }
+  const episode = previous?.episode ?? nextEpisode();
   if (!canRetainPreviousRateLimits(previous, latest)) {
-    return { lastGood: null, lastGoodAt: null };
+    return { lastGood: null, lastGoodAt: null, episode };
   }
   return {
     lastGood: previous?.lastGood ?? null,
     lastGoodAt: previous?.lastGoodAt ?? null,
+    episode,
   };
 }
 
@@ -274,12 +327,14 @@ export function buildProviderRateLimitEnvelopeFromSnapshot(
   if (latest !== null && isTransientUnavailableReason(latest.reason)) {
     return {
       latest,
-      ...retainedLastGood(previous, latest),
+      // The identity comes from here too, because one fact decides both: a
+      // transient failure says nothing about the account, so it does not close
+      // the run of failures this identity names - unless it came back under
+      // another credential, which is the one case that invalidates the reading
+      // and the run together. With no previous envelope it IS the start of a
+      // run, so it mints.
+      ...carriedRun(previous, latest),
       lastFailureAt: now,
-      // Carried over: a transient failure says nothing about the account, so
-      // it does not close the run of failures this identity names. With no
-      // previous envelope it IS the start of one, so it mints.
-      episode: previous?.episode ?? nextEpisode(),
     };
   }
 

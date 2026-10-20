@@ -106,6 +106,20 @@ vi.mock("@/hooks/host/use-host-queries", () => ({
   useHostQueriesWithResponseMap: hostQueriesDouble,
 }));
 
+// The provider list these rows hand the cluster is the host's answer: an entry
+// whose account is gone from it is gone because the host said so, which is the
+// one thing that ends an entry's life.
+vi.mock(
+  "@/hooks/rate-limits/use-configured-rate-limit-providers",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@/hooks/rate-limits/use-configured-rate-limit-providers")
+      >();
+    return { ...actual, useRateLimitProvidersAnswered: () => true };
+  },
+);
+
 vi.mock("@/hooks/rate-limits/use-provider-rate-limit-fetch-scope", () => ({
   useProviderRateLimitFetchScope: () => ({ hostId: HOST_ID }),
 }));

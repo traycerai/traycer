@@ -19,6 +19,7 @@ import {
 } from "@/hooks/host/provider-rate-limit-query-options";
 import {
   PASSIVE_PROVIDER_RATE_LIMIT_OPTIONS,
+  useRateLimitProvidersAnswered,
   useVisibleRateLimitProviders,
   type ConfiguredRateLimitProvider,
 } from "@/hooks/rate-limits/use-configured-rate-limit-providers";
@@ -433,11 +434,23 @@ function requestsFor(
 function segmentState(
   rateLimits: ProviderRateLimits | null,
   envelope: ProviderRateLimitEnvelope | null,
-  errors: {
+  reads: {
     /** This read rejected and nothing has been read since. */
     readonly erroredNow: boolean;
     /** A read of this key has rejected at some point. */
     readonly erroredEver: boolean;
+    /**
+     * Whether this account can be read AT ALL - `fetchEligible`, which is the
+     * account's own answer and not the placement's. A placement that reads
+     * nothing (`retryHostId: null`) still shows the transient words, because
+     * some other placement's poll is reading the account; an account with no
+     * usable credential is read by nobody, anywhere, so the words that promise
+     * a retry would be promising one that nothing performs. Only a person
+     * signing back in changes that, and the host answers authoritatively for
+     * the account in the meantime - which is the state it had before this
+     * strip ever said `transient`.
+     */
+    readonly readable: boolean;
   },
 ): {
   readonly state: StatusBarProviderSegmentState;
@@ -458,7 +471,7 @@ function segmentState(
     // read budget - which is the one moment they are most true. With no data
     // there is nothing a past error can misdescribe, so the sticky answer is
     // the honest one.
-    return errors.erroredEver
+    return reads.erroredEver && reads.readable
       ? { state: "transient", reason: null }
       : { state: "cold", reason: null };
   }
@@ -469,10 +482,15 @@ function segmentState(
     // a read that did not land, never a fact about the account - the one
     // distinction `@traycer/protocol`'s `semantics.ts` exists to keep from
     // drifting between the peers.
+    //
+    // Unless nothing can read the account, where the distinction stops paying:
+    // a blip nobody will retry is indistinguishable, to the reader, from a
+    // fact about the account, and the reason is on the tooltip either way.
     return {
-      state: isTransientUnavailableReason(rateLimits.reason)
-        ? "transient"
-        : "unavailable",
+      state:
+        isTransientUnavailableReason(rateLimits.reason) && reads.readable
+          ? "transient"
+          : "unavailable",
       reason: rateLimits.reason,
     };
   }
@@ -484,7 +502,7 @@ function segmentState(
   // a thrown fetch carries no wire reason, so the tooltip falls back to the
   // generic sentence rather than inventing one. NOW, not ever: a reading that
   // arrived after the error is not degraded by it.
-  if (errors.erroredNow) return { state: "degraded", reason: null };
+  if (reads.erroredNow) return { state: "degraded", reason: null };
   return { state: "live", reason: null };
 }
 
@@ -655,6 +673,7 @@ function toSegments(
       : segmentState(retained, envelope, {
           erroredNow: query.isError,
           erroredEver: query.isError || query.errorUpdateCount > 0,
+          readable: target.fetchEligible,
         });
     // Every read of these keys runs through TanStack, whichever trigger started
     // it, so the observer's own flag is the whole answer - the same one the
@@ -935,6 +954,7 @@ export function useStatusBarRateLimitSegments(input: {
   // editor and the sample scene all read out of it. In an effect, because it
   // is a write; and only in the placement that arms these reads.
   const ledgerHostId = input.retryHostId;
+  const inventoryAnswered = useRateLimitProvidersAnswered();
   const existingLedgerKeys =
     ledgerHostId === null
       ? []
@@ -951,13 +971,21 @@ export function useStatusBarRateLimitSegments(input: {
     // An inventory this hook does not have is not an empty one: the provider
     // list is a query, and while it is unanswered - cold, refetching, a scope
     // with no pick - reporting nothing would drop every entry this host has.
-    if (ledgerHostId === null || existingLedgerKeys.length === 0) return;
+    // The LIST cannot say which it is, since both are no providers, so the
+    // query's own answer is what decides - and a host that answers with none
+    // left has told this hook that every account it was keeping is gone.
+    if (ledgerHostId === null || !inventoryAnswered) return;
     pruneScheduledTransientReads(ledgerHostId, new Set(existingLedgerKeys));
   });
-  // The set itself as the dependency, flattened: a fresh array every render
-  // would run this on every render, and the keys are the only thing that can
-  // make it mean something different.
-  const existingEpisodeKeys = existingLedgerKeys.join("\n");
+  // The set itself as the dependency, flattened, with the answer in front of
+  // it: a fresh array every render would run this on every render, and the
+  // keys are the only thing that can make it mean something different - except
+  // the host answering "none", which leaves them empty and means the opposite
+  // of what their being empty meant a moment ago.
+  const existingEpisodeKeys = [
+    inventoryAnswered ? "answered" : "silent",
+    ...existingLedgerKeys,
+  ].join("\n");
   useEffect(() => {
     pruneRemovedEpisodes();
   }, [existingEpisodeKeys]);

@@ -274,38 +274,43 @@ describe("buildProviderRateLimitEnvelope", () => {
       reason: "timeout",
       credentialGeneration: "gen-b",
     };
-    expect(
+    const { episode: differentEpisode, ...differentRest } =
       buildProviderRateLimitEnvelope(
         previous,
         response(differentGeneration),
         2_000,
-      ),
-    ).toEqual({
+      );
+    expect(differentRest).toEqual({
       latest: differentGeneration,
       lastGood: null,
       lastGoodAt: null,
       lastFailureAt: 2_000,
-      episode: PREVIOUS_EPISODE,
     });
+    // And a NAMED different credential takes the run with the reading: see the
+    // rotation rows below.
+    expect(differentEpisode).not.toBe(PREVIOUS_EPISODE);
 
     const missingGeneration: ProviderRateLimits = {
       provider: "opencode",
       available: false,
       reason: "connection_failed",
     };
-    expect(
+    const { episode: missingEpisode, ...missingRest } =
       buildProviderRateLimitEnvelope(
         previous,
         response(missingGeneration),
         3_000,
-      ),
-    ).toEqual({
+      );
+    expect(missingRest).toEqual({
       latest: missingGeneration,
       lastGood: null,
       lastGoodAt: null,
       lastFailureAt: 3_000,
-      episode: PREVIOUS_EPISODE,
     });
+    // The two questions part here: a failure that names no credential cannot
+    // be shown the old reading, and has not said the credential changed, so
+    // the run it belongs to carries on.
+    expect(missingEpisode).toBe(PREVIOUS_EPISODE);
   });
 
   it("an authoritative reason (rate_limits_not_available) replaces the picture entirely, clearing any retained lastGood", () => {
@@ -498,6 +503,120 @@ describe("the episode an envelope names", () => {
       4_000,
     );
     expect(cold.episode).not.toBe(answered.episode);
+  });
+
+  it("mints for a failure that came back under another credential", () => {
+    // OpenCode is the one provider whose readings name the credential they
+    // were read with, and a rotation is the one thing that can make a run of
+    // failures describe an account nobody is using any more. The reading goes
+    // (`lastGood: null`, the row above), and the run has to go with it: the
+    // read the old run already spent was spent on the old credential.
+    const openCodeGood: ProviderRateLimits = {
+      provider: "opencode",
+      available: true,
+      credentialGeneration: "gen-a",
+      fiveHour: {
+        status: "ok",
+        usedPercent: 10,
+        resetsAt: 2_000,
+        durationMinutes: 300,
+      },
+      weekly: {
+        status: "ok",
+        usedPercent: 20,
+        resetsAt: 2_000,
+        durationMinutes: 10_080,
+      },
+      monthly: {
+        status: "ok",
+        usedPercent: 30,
+        resetsAt: 2_000,
+        durationMinutes: null,
+      },
+    };
+    const answered = buildProviderRateLimitEnvelope(
+      undefined,
+      response(openCodeGood),
+      1_000,
+    );
+    const sameCredential = buildProviderRateLimitEnvelope(
+      answered,
+      response({
+        provider: "opencode",
+        available: false,
+        reason: "timeout",
+        credentialGeneration: "gen-a",
+      }),
+      2_000,
+    );
+    const rotated = buildProviderRateLimitEnvelope(
+      sameCredential,
+      response({
+        provider: "opencode",
+        available: false,
+        reason: "timeout",
+        credentialGeneration: "gen-b",
+      }),
+      3_000,
+    );
+    const rotatedAgain = buildProviderRateLimitEnvelope(
+      rotated,
+      response({
+        provider: "opencode",
+        available: false,
+        reason: "timeout",
+        credentialGeneration: "gen-c",
+      }),
+      4_000,
+    );
+
+    expect(sameCredential.episode).toBe(answered.episode);
+    expect(rotated.episode).not.toBe(answered.episode);
+    // Including the second rotation, which is the one a comparison against the
+    // RETAINED reading cannot see: the first rotation already dropped it, so
+    // what gen-c differs from is the gen-b failure before it.
+    expect(rotatedAgain.episode).not.toBe(rotated.episode);
+  });
+
+  it("carries one through an OpenCode run with no reading to retain", () => {
+    // The trap under the row above: retention is also refused when there is no
+    // OpenCode reading to compare at all, which is every failure of an account
+    // that has never been read. Minting there would hand each failure in one
+    // run its own identity, and the strip's one re-read per run would become
+    // one per failure.
+    const failing = buildProviderRateLimitEnvelope(
+      undefined,
+      response({
+        provider: "opencode",
+        available: false,
+        reason: "timeout",
+        credentialGeneration: "gen-a",
+      }),
+      1_000,
+    );
+    const failingAgain = buildProviderRateLimitEnvelope(
+      failing,
+      response({
+        provider: "opencode",
+        available: false,
+        reason: "connection_failed",
+        credentialGeneration: "gen-a",
+      }),
+      2_000,
+    );
+    const failingWithoutGeneration = buildProviderRateLimitEnvelope(
+      failingAgain,
+      response({
+        provider: "opencode",
+        available: false,
+        reason: "timeout",
+      }),
+      3_000,
+    );
+
+    expect(failing.episode).toBeGreaterThan(NO_EPISODE);
+    expect(failingAgain.episode).toBe(failing.episode);
+    expect(failingWithoutGeneration.episode).toBe(failing.episode);
   });
 
   it("mints for an authoritative reason, which ends the run before it", () => {

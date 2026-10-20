@@ -124,6 +124,26 @@ export function useConfiguredRateLimitProviders(): ReadonlyArray<ConfiguredRateL
 }
 
 /**
+ * Whether this host has ANSWERED with its provider inventory yet, as opposed
+ * to not having said anything (a cold query, a refetch with nothing cached, no
+ * host to ask). Both read as an empty provider list, and a caller that ends
+ * something when an account stops being listed has to tell them apart: an
+ * answer of "none" is the host reporting that every account is gone, while
+ * silence is no report at all.
+ *
+ * A passive observer (`enabled: false`, `subscribed: false`) of the same
+ * `providers.list` key the app shell already keeps subscribed on this host, so
+ * it reads that answer without asking for one.
+ */
+export function useRateLimitProvidersAnswered(): boolean {
+  const providersQuery = useProvidersList({
+    enabled: false,
+    subscribed: false,
+  });
+  return providersQuery.data !== undefined;
+}
+
+/**
  * Rate-limit providers that should be displayed in user-facing surfaces
  * (header glyph / popover). This deliberately has a wider gate than
  * `useConfiguredRateLimitProviders()`: the poll reads only providers with at
