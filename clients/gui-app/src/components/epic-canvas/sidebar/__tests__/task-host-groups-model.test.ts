@@ -81,7 +81,7 @@ function onlyRow(group: TaskHostGroup): TaskHostGroupRow {
 }
 
 describe("task host copy constants", () => {
-  it("pins the two strings the section renders", () => {
+  it("pins the reach-mark line and the unnamed-host label", () => {
     expect(TASK_HOST_UNREACHABLE_LINE).toBe("not reachable from this host");
     expect(TASK_HOST_UNNAMED_LABEL).toBe("Unnamed host");
   });
