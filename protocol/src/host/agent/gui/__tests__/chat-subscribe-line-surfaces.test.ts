@@ -90,9 +90,14 @@ const CLAUDE_PARITY_MINOR = 20;
 // adds the bot-conversation request on a user row and the
 // `conversation-message` queue item (pinned below). `1.26` adds the
 // `task-checkin` queue item (pinned below). `1.27` adds the `task-overdue`
-// queue item (pinned below). Every threshold above still reads `>=` against
-// the live line.
-const LIVE_MINOR = 27;
+// queue item (pinned below). `1.28` adds `signInParked` on a queued prompt
+// (pinned below). Every threshold above still reads `>=` against the live
+// line.
+const LIVE_MINOR = 28;
+// `1.28`: the host's sign-in park mark on a queued prompt, server frames only
+// (the host sets it; a client never sends a queue item).
+const SIGN_IN_PARK_MINOR = 28;
+const SIGN_IN_PARK_NEEDLES = ['"signInParked":'];
 // `1.27`: the task-overdue surface - the queue item's discriminant, its one
 // needle for the same reason as the check-in's.
 const TASK_OVERDUE_MINOR = 27;
@@ -257,13 +262,13 @@ function actionAckPropertyNames(serverFrameSchema: z.ZodType): string[] {
 }
 
 describe("chat.subscribe line surfaces", () => {
-  it("covers chat.subscribe@1.0 through @1.27 (a line added later cannot drop out)", () => {
+  it("covers chat.subscribe@1.0 through @1.28 (a line added later cannot drop out)", () => {
     // RESTATED on purpose: this is the change-detector for the line SET, so a
     // derived list would assert the registry against itself. When a new minor
     // lands, extending this by hand is the acknowledgement.
     expect(MINORS).toEqual([
       0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20,
-      21, 22, 23, 24, 25, 26, 27,
+      21, 22, 23, 24, 25, 26, 27, 28,
     ]);
     expect(chatSubscribeLine.latestMinor).toBe(LIVE_MINOR);
   });
@@ -290,6 +295,21 @@ describe("chat.subscribe line surfaces", () => {
       const carriesClaudeParity = minor >= CLAUDE_PARITY_MINOR;
       const carriesPageStamps = minor >= PAGE_STAMP_MINOR;
       const carriesConversation = minor >= CONVERSATION_MINOR;
+      const carriesSignInPark = minor >= SIGN_IN_PARK_MINOR;
+
+      it(`server frames ${carriesSignInPark ? "carry" : "hold back"} the sign-in park mark`, () => {
+        const text = schemaText(contract.serverFrameSchema);
+        expect(
+          SIGN_IN_PARK_NEEDLES.filter((needle) => text.includes(needle)),
+        ).toEqual(carriesSignInPark ? SIGN_IN_PARK_NEEDLES : []);
+      });
+
+      it("client frames hold back the sign-in park mark on every line", () => {
+        const text = schemaText(contract.clientFrameSchema);
+        expect(
+          SIGN_IN_PARK_NEEDLES.filter((needle) => text.includes(needle)),
+        ).toEqual([]);
+      });
 
       it(`server frames ${carriesConversation ? "carry" : "hold back"} the bot-conversation surface`, () => {
         const text = schemaText(contract.serverFrameSchema);

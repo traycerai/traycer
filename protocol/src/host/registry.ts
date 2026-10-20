@@ -367,6 +367,7 @@ import {
   chatSubscribeV125,
   chatSubscribeV126,
   chatSubscribeV127,
+  chatSubscribeV128,
 } from "@traycer/protocol/host/agent/gui/contracts";
 import {
   agentTuiGenerateTitleV10,
@@ -14366,7 +14367,7 @@ const HOST_STREAM_RPC_REGISTRY_DEFINITION = {
   ...HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION,
   "chat.subscribe": {
     1: {
-      latestMinor: 27,
+      latestMinor: 28,
       versions: {
         0: {
           contract: chatSubscribeV10,
@@ -14536,9 +14537,16 @@ const HOST_STREAM_RPC_REGISTRY_DEFINITION = {
         // @1.27 is the task-overdue line: the `task-overdue` queue item on a
         // bot's trunk (projection: the host omits it below @1.27, as it omits
         // the task-checkin item below @1.26). @1.26 is frozen at its five-arm
-        // queue.
+        // queue. Frozen at the pre-sign-in-park queue since @1.28 opened
+        // above it.
         27: {
           contract: chatSubscribeV127,
+        },
+        // @1.28 adds `signInParked` to the queued prompt item: the host holds
+        // an agent's prompt for a provider sign-in, and a person may cancel
+        // it. Tolerance: optional, dropped as an unknown key below @1.28.
+        28: {
+          contract: chatSubscribeV128,
         },
       },
     },
