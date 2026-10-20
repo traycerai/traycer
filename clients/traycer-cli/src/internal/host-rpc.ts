@@ -483,21 +483,23 @@ const REQUEST_PROJECTION_FAILURE_PREFIX =
  * i.e. this CLI negotiated a newer canonical version for the method than the
  * host speaks, and the request carries a value the host's older minor request
  * schema cannot represent (e.g. a newer enum value that isn't strippable like an
- * additive field). The transport raises this as a `RPC_ERROR` locally during
- * request preparation, so the attempt that failed never reached the host. A
+ * additive field). Both transports raise this as `DOWNGRADE_UNSUPPORTED`
+ * locally during request preparation (`ws-rpc-client.ts` and the remote
+ * `rpc-codec.ts`), so the attempt that failed never reached the host. A
  * refusal that ended a retry episode is matched too: its final attempt failed
  * preparation, while an earlier attempt's outcome stays unknown.
  *
  * Best-effort hook commands use this to degrade a version-skew miss to a quiet
  * no-op instead of surfacing it: the call is meaningless against a host too old
  * to understand it. Matched narrowly (the specific code + preparation message)
- * so genuine host `RPC_ERROR`s and auth failures still surface.
+ * so other downgrade refusals, genuine host errors and auth failures still
+ * surface.
  */
 export function isRequestVersionProjectionError(err: unknown): boolean {
   const refusal = finalRefusalOf(err);
   return (
     refusal instanceof HostRpcError &&
-    refusal.code === "RPC_ERROR" &&
+    refusal.code === "DOWNGRADE_UNSUPPORTED" &&
     refusal.message.startsWith(REQUEST_PROJECTION_FAILURE_PREFIX)
   );
 }

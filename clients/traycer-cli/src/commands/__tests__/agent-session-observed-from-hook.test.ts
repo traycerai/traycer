@@ -4,6 +4,8 @@ import { callHostRpcFastFail } from "../../internal/host-rpc";
 import { cliError, CLI_ERROR_CODES } from "../../runner/errors";
 import { HostRpcError } from "../../../../shared/host-transport/host-messenger";
 import { RetryEpisodeOutcomeUnknownError } from "../../../../shared/host-transport/retrying-messenger";
+import { prepareRequestPayload } from "../../../../shared/host-transport/ws-rpc-client";
+import { hostRpcRegistry } from "@traycer/protocol/host/registry";
 import {
   makeCtx,
   restoreAgentIdentityEnv,
@@ -223,18 +225,12 @@ describe("buildAgentSessionObservedFromHookCommand", () => {
     async (_label, endedRetryEpisode) => {
       // A newer CLI negotiated recordActivity@1.1, but the running host only
       // speaks @1.0, whose event enum has no "resync": the transport fails to
-      // project the request locally (before sending) and raises this RPC_ERROR.
+      // project the request locally (before sending). The error is the one the
+      // transport's own projection raises for this request.
       const stderrSpy = vi
         .spyOn(process.stderr, "write")
         .mockImplementation(() => true);
-      const projectionMiss = new HostRpcError({
-        code: "RPC_ERROR",
-        message:
-          "Failed to project request params onto 1.0: Invalid enum value.",
-        requestId: "req-x",
-        method: "agent.tui.recordActivity",
-        fatalDetails: null,
-      });
+      const projectionMiss = resyncProjectionMissOnOlderHost();
       rpcMock.mockRejectedValueOnce(
         endedRetryEpisode
           ? new RetryEpisodeOutcomeUnknownError(projectionMiss)
@@ -338,3 +334,32 @@ describe("buildAgentSessionObservedFromHookCommand", () => {
     await expect(fn(makeCtx())).rejects.toThrow(/bearer rejected/);
   });
 });
+
+/**
+ * What the transport raises when this hook's resync request is prepared for a
+ * host on `agent.tui.recordActivity@1.0`, produced by the transport's real
+ * projection over the real registry rather than written by hand.
+ */
+function resyncProjectionMissOnOlderHost(): HostRpcError {
+  try {
+    prepareRequestPayload(
+      hostRpcRegistry["agent.tui.recordActivity"],
+      { major: 1, minor: 1 },
+      { major: 1, minor: 0 },
+      {
+        epicId: "epic-x",
+        tuiAgentId: "tui-x",
+        harnessSessionId: null,
+        harnessId: "claude",
+        event: "resync",
+        observedHarnessSessionId: "sess-x",
+      },
+      "req-x",
+      "agent.tui.recordActivity",
+    );
+  } catch (cause) {
+    if (cause instanceof HostRpcError) return cause;
+    throw cause;
+  }
+  throw new Error("the resync request projected onto 1.0 unexpectedly");
+}
