@@ -120,9 +120,14 @@ describe("the canvas bootstrap is a separate script", () => {
     const ordinary = buildArtifactDocument(html, optionsFor(false));
     const canvas = buildArtifactDocument(html, optionsFor(true));
     const [, canvasScript] = scriptsOf(canvas);
-    expect(canvas.replace(canvasScript, "").replace(STAMP_PATTERN, "")).toBe(
-      ordinary,
-    );
+    // A board is not a page the frame navigates between, so its bootstrap
+    // carries no page role where the ordinary document carries "found".
+    expect(
+      canvas
+        .replace(canvasScript, "")
+        .replace(STAMP_PATTERN, "")
+        .replace('"artifactPage":null', '"artifactPage":"found"'),
+    ).toBe(ordinary);
   });
 });
 

@@ -167,9 +167,16 @@ describe("buildArtifactDocument / sandbox loader parity", () => {
 
       expect(composed.startsWith(`<!doctype html>${BASE_META}`)).toBe(true);
       // The loader never gains the base policy meta (it inherits the sandbox
-      // origin's own base policy); stripping it out of the composed document
-      // must reproduce the loader's output byte for byte.
-      expect(composed.replace(BASE_META, "")).toBe(fromLoader);
+      // origin's own base policy). A served document is a page of its
+      // artifact, so its bootstrap carries the "found" role and follows
+      // sibling html links; the loader's inline document has no pages, so it
+      // carries null. With those two deliberate differences taken out, the
+      // composed document must reproduce the loader's output byte for byte.
+      expect(
+        composed
+          .replace(BASE_META, "")
+          .replace('"artifactPage":"found"', '"artifactPage":null'),
+      ).toBe(fromLoader);
     },
   );
 
@@ -375,7 +382,12 @@ describe("sandbox bootstrap load ordering", () => {
     expect(messages[0]).toEqual({
       jsonrpc: "2.0",
       method: "traycer/notifications/document-ready",
-      params: { nonce: "n-document-ready", height: seededHeight },
+      // The address is what the host matches a page navigation against.
+      params: {
+        nonce: "n-document-ready",
+        height: seededHeight,
+        url: "https://sandbox.test/",
+      },
     });
     // A port dropped any size report sent before document-ready proved the
     // nonce; the bootstrap must still get one through once it is proven,
