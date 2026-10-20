@@ -344,6 +344,8 @@ function externalSessionForUser(
       },
       teamSubscriptions: [],
       payAsYouGoUsage: { allowPayAsYouGo: false },
+      environments: { personal: null, teams: [] },
+      actingAs: null,
     },
   };
 }
