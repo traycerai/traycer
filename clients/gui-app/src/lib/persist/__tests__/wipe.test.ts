@@ -47,6 +47,7 @@ import { persistKey } from "@/lib/persist/keys";
 import { STASH_DB_NAME } from "@/lib/drafts/stash-migration";
 import { fileEditRuntimeRegistry } from "@/lib/workspace/file-edit-runtime-registry";
 import { SKELETON_RESUME_DB_NAME } from "@/stores/chats/skeleton-resume-durable-cache";
+import { VIEW_REPLICA_DB_NAME } from "@/lib/view-replica/view-replica-store";
 
 const SKELETON_RESUME_PRESENT_KEY = persistKey(
   "chat-skeleton-resume-present-v1",
@@ -379,6 +380,7 @@ describe("clearAllPersistedStores — renderer IndexedDB drop", () => {
         "traycer-gui-app:anon:transcript-image-meta",
         "traycer-gui-app:user-1:transcript-image-meta",
         SKELETON_RESUME_DB_NAME,
+        VIEW_REPLICA_DB_NAME,
         "traycer-gui-app:tab-recovery",
       ].sort(),
     );

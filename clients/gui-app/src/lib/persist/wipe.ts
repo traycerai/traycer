@@ -42,6 +42,10 @@ import {
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { SKELETON_RESUME_DB_NAME } from "@/stores/chats/skeleton-resume-durable-cache";
 import { clearAllSkeletonsForResume } from "@/stores/chats/skeleton-resume-cache";
+import {
+  VIEW_REPLICA_DB_NAME,
+  viewReplicaStore,
+} from "@/lib/view-replica/view-replica-store";
 
 // The `:` boundary is load-bearing: a bare `startsWith(PERSIST_PREFIX)` would
 // also sweep a hypothetical `traycer-gui-appX:foo` key. Anchoring on the colon
@@ -159,6 +163,7 @@ async function deleteRendererDatabases(): Promise<void> {
   names.add(transcriptImageDbName(accountId));
   names.add(transcriptImageMetaDbName(accountId));
   names.add(SKELETON_RESUME_DB_NAME);
+  names.add(VIEW_REPLICA_DB_NAME);
   // Recovery history must actually be deleted before reload. Other partitions
   // remain best-effort: a single db whose delete errors must not abort
   // the rest of the wipe or - critically - the reload (step 4), which is the
@@ -248,6 +253,8 @@ export async function clearAllPersistedStores(args: {
     });
   });
   await clearAllSkeletonsForResume();
+  // Fences queued replica writes before its database is deleted below.
+  await viewReplicaStore.evict({ kind: "identity-retired" });
   await deleteRendererDatabases();
 
   // 4. Reload last.
