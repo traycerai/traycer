@@ -171,6 +171,7 @@ export function useHistoryQuery(
     tasks,
     query: tasksQuery,
     firstPage,
+    presentsCachedPage,
     firstPagePending,
     firstPageError,
     fetchNextPage,
@@ -301,8 +302,10 @@ export function useHistoryQuery(
     // Ahead of the `undefined` guard, because the refusal PRODUCES that
     // `undefined` and would otherwise be indistinguishable from a first load.
     // A settled result is the whole point: it is what moves the panel off the
-    // spinner and onto a sentence that names the actual condition.
-    if (initialLegRefused) {
+    // spinner and onto a sentence that names the actual condition. A cached
+    // page needs no dispatch: it is shown, stating itself as cached, and the
+    // refusal still holds for the request it stands in for.
+    if (initialLegRefused && !presentsCachedPage) {
       return {
         items: [],
         availableRepos: EMPTY_REPOS,
@@ -431,6 +434,7 @@ export function useHistoryQuery(
     initialLegRefused,
     isQueryDebouncing,
     params.search,
+    presentsCachedPage,
     shouldProjectLocally,
     firstPage,
     tasksQuery.isPlaceholderData,

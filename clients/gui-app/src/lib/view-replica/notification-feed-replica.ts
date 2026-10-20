@@ -123,16 +123,16 @@ export function rememberNotificationFeed(input: {
 
 /**
  * A feed write (read, clear) was confirmed. A snapshot is stamped when it
- * arrives, so one sent before the write can arrive after it: the feed version
- * held when the write was sent (`feedVersion`, the cloud's per-user change
- * sequence) is what marks every snapshot at or below it as older.
+ * arrives, so one produced before the write can arrive after it: the version
+ * the write's acknowledgement reports (`writeVersion`, the cloud's per-user
+ * change sequence after the write) marks every snapshot below it as older.
  */
 export function noteNotificationFeedConfirmedWrite(
   accountId: string,
-  feedVersion: number | null,
+  writeVersion: number | null,
 ): void {
   viewReplicaStore.noteConfirmedWrite(accountId, SERVICE, {
     at: Date.now(),
-    generation: feedVersion,
+    generation: writeVersion,
   });
 }

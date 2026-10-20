@@ -223,9 +223,6 @@ interface HostNotificationMutationContext {
 interface CloudFeedMutationContext {
   readonly hostId: string | null;
   readonly sessionEpoch: number;
-  /** The feed version held when the write was sent: every snapshot at or
-   * below it was produced before the write. */
-  readonly feedVersion: number | null;
 }
 
 export function hostFeedId(id: string): string {
@@ -899,10 +896,10 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
   const markCloudUnavailable = (): void => {
     useCloudNotificationsStore.getState().setConnectionState("unavailable");
   };
-  const handleCloudMutationResult = (
-    data: { readonly status: "applied" | "unavailable" },
-    context: CloudFeedMutationContext,
-  ): void => {
+  const handleCloudMutationResult = (data: {
+    readonly status: "applied" | "unavailable";
+    readonly version: number | null;
+  }): void => {
     if (data.status === "unavailable") {
       markCloudUnavailable();
       return;
@@ -911,14 +908,13 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
     // cold open.
     const accountId = useAuthStore.getState().contextMetadata?.userId ?? null;
     if (accountId !== null) {
-      noteNotificationFeedConfirmedWrite(accountId, context.feedVersion);
+      noteNotificationFeedConfirmedWrite(accountId, data.version);
     }
   };
   const captureCloudMutationContext = useCallback(
     (): CloudFeedMutationContext => ({
       hostId: client?.getActiveHostId() ?? null,
       sessionEpoch: useCloudNotificationsStore.getState().sessionEpoch,
-      feedVersion: useCloudNotificationsStore.getState().version,
     }),
     [client],
   );
@@ -943,7 +939,7 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
       onMutate: captureCloudMutationContext,
       onSuccess: (data, _variables, context) => {
         if (isCurrentCloudMutation(context)) {
-          handleCloudMutationResult(data, context);
+          handleCloudMutationResult(data);
         }
       },
       onError: (_error, _variables, context) => {
@@ -968,9 +964,12 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
       onSuccess: (data, _variables, context) => {
         if (!isCurrentCloudMutation(context)) return;
         if (data.status === "applied") {
-          handleCloudMutationResult({ status: "applied" }, context);
+          handleCloudMutationResult({
+            status: "applied",
+            version: data.version,
+          });
         } else if (data.status === "unavailable") {
-          handleCloudMutationResult({ status: "unavailable" }, context);
+          handleCloudMutationResult({ status: "unavailable", version: null });
         }
       },
       onError: (error, _variables, context) => {
@@ -997,7 +996,7 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
       onMutate: captureCloudMutationContext,
       onSuccess: (data, _variables, context) => {
         if (isCurrentCloudMutation(context)) {
-          handleCloudMutationResult(data, context);
+          handleCloudMutationResult(data);
         }
       },
       onError: (_error, _variables, context) => {
@@ -1021,7 +1020,7 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
       onMutate: captureCloudMutationContext,
       onSuccess: (data, _variables, context) => {
         if (isCurrentCloudMutation(context)) {
-          handleCloudMutationResult(data, context);
+          handleCloudMutationResult(data);
         }
       },
       onError: (_error, _variables, context) => {

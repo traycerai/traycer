@@ -187,8 +187,8 @@ export class ViewReplicaStore {
 
   /**
    * A write to `service` was confirmed. Every page of that service observed
-   * before `floor.at`, or stamped at or below `floor.generation` (the source's
-   * sequence when the write was sent), is a miss from now on.
+   * before `floor.at`, or stamped below `floor.generation` (the first source
+   * sequence that includes the write), is a miss from now on.
    */
   noteConfirmedWrite(
     accountId: string,
@@ -290,11 +290,14 @@ export class ViewReplicaStore {
       withdrawals: [...meta.withdrawals, { scope, at }],
     };
     this.#meta.set(accountId, nextMeta);
-    // Records still on disk are fenced the same way when the account warms.
+    // Every page held now predates the loss, whatever its stamp says (a clock
+    // moved back can stamp one after it), so its rows of the scope go. The
+    // withdrawal fences what is not held yet: pages still on disk, at warm,
+    // and answers still in flight, at write, by when they were observed.
     const changed: ViewReplicaStoredRecord[] = [];
     for (const record of this.#records.values()) {
       if (record.identity.accountId !== accountId) continue;
-      const withdrawn = fenceRecord(record, nextMeta.withdrawals);
+      const withdrawn = withoutScope(record, scope);
       if (withdrawn === record) continue;
       this.#records.set(record.key, withdrawn);
       changed.push(withdrawn);
@@ -584,10 +587,11 @@ export interface ViewReplicaAccountMeta {
 }
 
 /**
- * A confirmed write's floor: when it was confirmed, and the source's own
- * sequence when it was sent (`null` for a source without one). A page from
- * a stream is stamped when it arrives, so only the sequence can say that a
- * page arriving after the write was produced before it.
+ * A confirmed write's floor: when it was confirmed, and the first source
+ * sequence that includes it, as the write's acknowledgement reports it
+ * (`null` for a source without one). A page from a stream is stamped when it
+ * arrives, so only the sequence can say that a page arriving after the write
+ * was produced before it.
  */
 export interface ViewReplicaFloor {
   readonly at: number;
@@ -602,7 +606,7 @@ function belowFloor(
   return (
     floor.generation !== null &&
     record.sourceGeneration !== null &&
-    record.sourceGeneration <= floor.generation
+    record.sourceGeneration < floor.generation
   );
 }
 
@@ -617,6 +621,25 @@ function higherFloor(
         ? left.generation
         : Math.max(left.generation, right.generation);
   return { at: Math.max(left.at, right.at), generation };
+}
+
+/** The record without `scope`'s rows, or the same record when it has none. */
+function withoutScope(
+  record: ViewReplicaStoredRecord,
+  scope: ViewReplicaRowScope,
+): ViewReplicaStoredRecord {
+  const rows = record.rows.filter((row) => !sameRowScope(row.scope, scope));
+  if (rows.length === record.rows.length) return record;
+  const held = record.withdrawnScopes.some((candidate) =>
+    sameRowScope(candidate, scope),
+  );
+  return {
+    ...record,
+    rows,
+    withdrawnScopes: held
+      ? record.withdrawnScopes
+      : [...record.withdrawnScopes, scope],
+  };
 }
 
 /**
