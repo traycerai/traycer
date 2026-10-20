@@ -1,6 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { renderHook } from "@testing-library/react";
 import type { SchemaVersion } from "@traycer/protocol/framework/index";
+import type { ParamsOf } from "@traycer-clients/shared/host-transport/ws-stream-client";
+import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
+import type { IHostStreamClient } from "@traycer-clients/shared/host-transport/host-stream-client";
+import type { IStreamSession } from "@traycer-clients/shared/host-transport/i-stream-session";
+import type { StreamParamsProvider } from "@traycer-clients/shared/host-transport/i-stream-client";
 import type { StreamMethodSupport } from "@traycer-clients/shared/host-transport/ws-stream-client";
 import { useNotificationFeedModeFor } from "@/lib/notifications/notification-feed-mode";
 import { useAuthStore } from "@/stores/auth/auth-store";
@@ -10,6 +15,7 @@ const HOST_ID = "host-1";
 const cloudFeedSupport = vi.hoisted<{ value: StreamMethodSupport | null }>(
   () => ({ value: null }),
 );
+const readsByMethod = vi.hoisted(() => new Map<string, string>());
 const feedVersions = vi.hoisted(() => ({
   cloud: { major: 1, minor: 2 },
   local: { major: 1, minor: 2 },
@@ -43,12 +49,70 @@ vi.mock("@/lib/host/stream-runtime-context", () => ({
     method === "host.notifications.cloudFeed.subscribe"
       ? feedVersions.cloud
       : feedVersions.local,
-  useStreamMethodSupportFor: () => cloudFeedSupport.value,
-  useStreamMethodSchemaVersionFor: (_client: unknown, method: string) =>
-    method === "host.notifications.cloudFeed.subscribe"
+  useStreamMethodSupportFor: (
+    client: { readonly instanceId: string } | null,
+    method: string,
+  ) => {
+    readsByMethod.set(method, client?.instanceId ?? "none");
+    return cloudFeedSupport.value;
+  },
+  useStreamMethodSchemaVersionFor: (
+    client: { readonly instanceId: string } | null,
+    method: string,
+  ) => {
+    readsByMethod.set(method, client?.instanceId ?? "none");
+    return method === "host.notifications.cloudFeed.subscribe"
       ? feedVersions.cloud
-      : feedVersions.local,
+      : feedVersions.local;
+  },
 }));
+
+/** A client the hook only ever identifies by `instanceId`; the rest is inert. */
+class IdentifiedStreamClient implements IHostStreamClient<HostStreamRpcRegistry> {
+  constructor(readonly instanceId: string) {}
+  isReady(): boolean {
+    return true;
+  }
+  subscribe<Method extends keyof HostStreamRpcRegistry & string>(
+    _method: Method,
+    _params: ParamsOf<HostStreamRpcRegistry, Method>,
+  ): IStreamSession {
+    throw new Error("not exercised by this test");
+  }
+  subscribeWithParamsProvider<
+    Method extends keyof HostStreamRpcRegistry & string,
+  >(
+    _method: Method,
+    _paramsProvider: StreamParamsProvider<HostStreamRpcRegistry, Method>,
+  ): IStreamSession {
+    throw new Error("not exercised by this test");
+  }
+  getMethodSchemaVersion(): SchemaVersion | null {
+    return null;
+  }
+  close(): void {}
+  isClosed(): boolean {
+    return false;
+  }
+  getClosedReason(): string | null {
+    return null;
+  }
+  onClosed(): () => void {
+    return () => {};
+  }
+  notifyBearerRotated(): void {}
+  notifyCloudVerdictChanged(): void {}
+  reconnectAll(): void {}
+  getMethodSupport(): "unknown" {
+    return "unknown";
+  }
+  subscribeMethodSupport(): () => void {
+    return () => {};
+  }
+  subscribeAvailabilityRecovered(): () => void {
+    return () => {};
+  }
+}
 
 /**
  * Deliberately HOOK-SHAPED. The real `useHostNegotiatedMethodVersions` consumes
@@ -95,6 +159,7 @@ describe("useNotificationFeedMode", () => {
   afterEach(() => {
     useAuthStore.setState({ subscriptionStatus: null });
     cloudFeedSupport.value = null;
+    readsByMethod.clear();
     feedVersions.cloud = { major: 1, minor: 2 };
     feedVersions.local = { major: 1, minor: 2 };
     unaryVersions.list = { major: 2, minor: 2 };
@@ -308,7 +373,25 @@ describe("useNotificationFeedMode", () => {
     // withheld rather than assumed.
     unaryVersions.list = { major: 2, minor: 2 };
     expect(
-      renderHook(() => useNotificationFeedModeFor(null, null)).result.current,
+      renderHook(() => useNotificationFeedModeFor(null, null, null)).result
+        .current,
     ).toBe("local");
+  });
+  it("reads the cloud projection from the cloud feed client and the local projection from the serving client", () => {
+    cloudFeedSupport.value = "supported";
+    const serving = new IdentifiedStreamClient("serving-host");
+    const cloudFeed = new IdentifiedStreamClient("pool");
+
+    expect(
+      renderHook(() => useNotificationFeedModeFor(serving, cloudFeed, HOST_ID))
+        .result.current,
+    ).toBe("cloud");
+
+    expect(readsByMethod.get("host.notifications.cloudFeed.subscribe")).toBe(
+      "pool",
+    );
+    expect(readsByMethod.get("host.notifications.feed.subscribe")).toBe(
+      "serving-host",
+    );
   });
 });
