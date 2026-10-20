@@ -113,7 +113,7 @@ export function CreateBotForm(props: {
   readonly environmentLabel: string;
   /** Hosts this client can dial now; the candidates the choice walks. */
   readonly connectableHostIds: ReadonlyArray<string>;
-  /** Each connectable host's environment, as `environment.host.read` says. */
+  /** Each connectable host's environment (`useHostEnvironmentBindings`). */
   readonly environmentBindings: HostEnvironmentBindings;
   readonly onDone: () => void;
 }): ReactNode {

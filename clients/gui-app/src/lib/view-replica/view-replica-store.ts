@@ -77,7 +77,7 @@ function createPaintReader<Page>(
     const page =
       hit === null
         ? null
-        : service.paintableFrom(service.admitFirstPaint(hit.page));
+        : service.paintableFrom(service.admitFirstPaint(hit.page, address));
     last = { slot, storeVersion, gateVersion, page };
     return page;
   };

@@ -33,8 +33,10 @@ const EXPECTED_POOL_ONLY = [
   "autoPolicy.get",
   "autoPolicy.set",
   "environment.chats.subscribe",
+  "environment.binding.read",
   "environment.communicationGraph.subscribe",
   "environment.list",
+  "epic.listTasks",
   "environment.plainTerminals.subscribe",
   "host.notifications.cloudFeed.clear",
   "host.notifications.cloudFeed.clearAll",
@@ -85,8 +87,8 @@ describe("host RPC routing table", () => {
     expect(poolOnly).toEqual(EXPECTED_POOL_ONLY);
   });
 
-  it("keeps epic.listTasks on the target host until P7 flips it to pool-only", () => {
-    expect(hostRpcRouteOf("epic.listTasks")).toBe("target-host");
+  it("reads the local History contribution from the host that holds it", () => {
+    expect(hostRpcRouteOf("epic.localHistory.read")).toBe("target-host");
   });
 
   it("keeps environment.host.read on the target host for good", () => {

@@ -29,6 +29,8 @@ import type { ListCloudChatsResponse } from "@traycer/protocol/host/epic/cloud-c
 import type { CloudChatIdentity } from "@traycer/protocol/host/epic/cloud-chat";
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
 import { useHostQuery } from "@/hooks/host/use-host-query";
+import { useEnvironmentArmChats } from "@/hooks/environment/use-environment-arms";
+import { uniteTaskChats } from "@/lib/chats/compose-task-chat-list";
 import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
 import { cloudChatListCacheKeyIdentity } from "@/lib/chats/cloud-chat-list-cache";
 import { hostQueryKeys } from "@/lib/query-keys/host-query-keys";
@@ -114,7 +116,9 @@ export interface UseCloudChatListArgs {
 
 /**
  * A task's cloud chats: every `task`-visible chat plus the viewer's OWN private
- * ones, from every host they have ever used.
+ * ones, from every host they have ever used - and, for a member of a team
+ * environment the task is attached to, the chats that environment owns
+ * (`TASK_CHAT_LIST_COMPOSED_VIEW`), united by identity triple.
  *
  * Not polled after success. A published head changes only when its owning host
  * publishes again and this reader has no signal for that, so a success cadence
@@ -135,12 +139,14 @@ export function useCloudChatList(
   const cloudAuthorized = useCloudChatHasCloudAuthorization();
   const params = useMemo(() => ({ taskId: args.taskId }), [args.taskId]);
   const deletions = useCloudChatDeletions();
+  const armChats = useEnvironmentArmChats(args.enabled ? args.taskId : "");
   const select = useCallback(
     (data: ListCloudChatsResponse): ListCloudChatsResponse => {
-      const chats = filterDeletedCloudChats(data.chats, deletions);
+      const united = uniteTaskChats(data.chats, armChats);
+      const chats = filterDeletedCloudChats(united, deletions);
       return chats === data.chats ? data : { ...data, chats: [...chats] };
     },
-    [deletions],
+    [armChats, deletions],
   );
   return useHostQuery<HostRpcRegistry, "epic.listCloudChats">({
     // The one shared spelling of this key's viewer component -

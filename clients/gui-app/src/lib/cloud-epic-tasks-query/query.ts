@@ -23,17 +23,26 @@ import {
 import type { HostRpcRegistry } from "@/lib/host";
 import { queryKeys } from "@/lib/query-keys";
 import { getCloudEpicTasksClient } from "@/lib/cloud-epic-tasks-query/client-registry";
-import { LIST_TASKS_LOCAL_FIRST_MINOR } from "@/lib/cloud-epic-tasks-query/local-first-admission";
 import {
   authorizesCloudCapability,
   useAuthStore,
 } from "@/stores/auth/auth-store";
 import { beginLocalFirstRevalidationEpisode } from "@/lib/cloud-epic-tasks-query/local-first-revalidation-coordinator";
 import { CloudEpicTasksRequestContextTimeoutError } from "@/lib/cloud-epic-tasks-query/request-context-timeout-error";
-import { HostMethodVersionUnsatisfiedError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { CloudEpicTasksVerdictWithdrawnError } from "@/lib/cloud-epic-tasks-query/verdict-withdrawn-error";
 import { admitCloudEpicTasksFirstPage } from "@/lib/cloud-epic-tasks-query/cache";
 import { rememberHistoryFirstPage } from "@/lib/view-replica/history-replica";
+import {
+  composeHistoryPage,
+  composeHistoryPageWithoutPool,
+  hostLocalHistoryPage,
+  type ComposeHistoryPageInput,
+  type HistoryHostContribution,
+} from "@/lib/history-composition/compose-history-page";
+import {
+  noteUnfilteredHistoryContribution,
+  readHistoryHostContribution,
+} from "@/lib/history-composition/history-local-contribution";
 import type { HistorySearchState } from "@/lib/history-search";
 import { dedupSortWorkspaces } from "@/components/home/data/home-page.data";
 import {
@@ -137,9 +146,15 @@ interface FetchCloudEpicTasksFirstPageOptions {
 
 /**
  * Fetches one first page and admits it before exposing it to any Query writer.
- * This is the public first-page delivery API for History and reconciliation.
- * Every settled first page it delivers is also kept in the replica tier,
- * stamped with when it was asked for.
+ * This is the public first-page delivery API for History.
+ *
+ * The page is a composition: the serving tier's page (the server pool, in a
+ * build with one) and the host's local contribution, read in parallel and
+ * composed by `composeHistoryPage` - local homes win their ids, preserved
+ * orphans fill gaps, tombstones apply. The replica tier keeps the serving
+ * tier's settled page alone, stamped with when it was asked for: a cached
+ * page has the host's contribution applied again when it paints, so a
+ * deletion recorded since is honoured.
  */
 export function fetchCloudEpicTasksFirstPageByHostId(
   hostId: string,
@@ -147,24 +162,124 @@ export function fetchCloudEpicTasksFirstPageByHostId(
   options: FetchCloudEpicTasksFirstPageOptions,
 ): Promise<ListTasksResponse> {
   const observedAt = Date.now();
-  return fetchCloudEpicTasksScopedPageByHostId(hostId, {
+  const contribution = readHistoryContributionForPage(hostId, userId, {
+    filters: options.request.filters,
+    abortSignal: options.abortSignal,
+    requestContextPolicy: options.requestContextPolicy,
+  });
+  const pool = fetchCloudEpicTasksScopedPageByHostId(hostId, {
     expectedUserId: userId,
     request: options.request,
     cursor: undefined,
     abortSignal: options.abortSignal,
     localFirstPhase: options.localFirstPhase,
     requestContextPolicy: options.requestContextPolicy,
-  }).then((response) => {
-    const page = admitCloudEpicTasksFirstPage(response, { hostId, userId });
-    rememberHistoryFirstPage({
-      accountId: userId,
-      hostId,
-      request: options.request,
-      page,
-      observedAt,
-    });
-    return page;
   });
+  return Promise.allSettled([pool, contribution]).then(
+    ([poolResult, contributionResult]) => {
+      if (contributionResult.status === "rejected") {
+        throw contributionResult.reason;
+      }
+      const composition: Omit<ComposeHistoryPageInput, "page"> = {
+        contribution: contributionResult.value,
+        sort: options.request.sort,
+        query: options.request.filters?.query,
+        placement: hasOrganizationFilters(options.request.filters)
+          ? "unprovable-filter"
+          : "admit",
+      };
+      if (poolResult.status === "rejected") {
+        const local = composeHistoryPageWithoutPool(composition);
+        if (local === null) throw poolResult.reason;
+        return admitCloudEpicTasksFirstPage(local, { hostId, userId });
+      }
+      const page = admitCloudEpicTasksFirstPage(poolResult.value, {
+        hostId,
+        userId,
+      });
+      rememberHistoryFirstPage({
+        accountId: userId,
+        hostId,
+        request: options.request,
+        page,
+        observedAt,
+      });
+      return admitCloudEpicTasksFirstPage(
+        composeHistoryPage({ ...composition, page }),
+        { hostId, userId },
+      );
+    },
+  );
+}
+
+/**
+ * What ONE host holds locally, as a page (`hostLocalHistoryPage`), with no
+ * serving tier involved. For the readers that ask a specific host about its
+ * own local-homed rows: the tab reconciler's exemption and the local pin
+ * reading. A local read, so it spends no cloud verdict.
+ */
+export function fetchHostLocalHistoryPageByHostId(
+  hostId: string,
+  userId: string,
+  options: {
+    readonly filters: ListCloudTasksRequest["filters"];
+    readonly abortSignal: AbortSignal | undefined;
+    readonly requestContextPolicy: "wait" | "require-current";
+  },
+): Promise<ListTasksResponse> {
+  return readHistoryContributionForPage(hostId, userId, options).then(
+    (contribution) =>
+      admitCloudEpicTasksFirstPage(hostLocalHistoryPage(contribution), {
+        hostId,
+        userId,
+      }),
+  );
+}
+
+/**
+ * The host's contribution to one History page, read under the same
+ * request-context rule as the page: it waits for, or requires, a context
+ * naming the page's user and refuses one that names anyone else, exactly as
+ * the page's own leg does. The unfiltered listing's answer is also recorded
+ * for the replica's paint gate.
+ */
+async function readHistoryContributionForPage(
+  hostId: string,
+  userId: string,
+  options: {
+    readonly filters: ListCloudTasksRequest["filters"];
+    readonly abortSignal: AbortSignal | undefined;
+    readonly requestContextPolicy: "wait" | "require-current";
+  },
+): Promise<HistoryHostContribution> {
+  const client = getCloudEpicTasksClient(hostId);
+  if (client !== null && options.requestContextPolicy === "wait") {
+    await waitForMatchingRequestContext(client, {
+      expectedUserId: userId,
+      abortSignal: options.abortSignal,
+    });
+  }
+  if (client !== null && !hasMatchingRequestContext(client, userId)) {
+    throw new Error(
+      "Cloud epic tasks request context no longer matches its cache user.",
+    );
+  }
+  const unfiltered = options.filters === null;
+  const contribution = await readHistoryHostContribution({
+    client,
+    filters: options.filters,
+    signal: options.abortSignal,
+    onIncomplete: unfiltered
+      ? () =>
+          noteUnfilteredHistoryContribution(userId, hostId, {
+            kind: "pending",
+          })
+      : null,
+  });
+  if (unfiltered) {
+    noteUnfilteredHistoryContribution(userId, hostId, contribution);
+  }
+  return contribution;
 }
 
 interface FetchCloudEpicTasksCursorPageOptions {
@@ -183,15 +298,34 @@ export function fetchCloudEpicTasksCursorPageByHostId(
   userId: string,
   options: FetchCloudEpicTasksCursorPageOptions,
 ): Promise<ListTasksResponse> {
-  return fetchCloudEpicTasksScopedPageByHostId(hostId, {
-    expectedUserId: userId,
-    request: options.request,
-    cursor: options.cursor,
+  // A cursor page carries no local rows, but the host's tombstones apply to
+  // it too: a pool page further down can still list a task deleted here.
+  const contribution = readHistoryContributionForPage(hostId, userId, {
+    filters: options.request.filters,
     abortSignal: options.abortSignal,
-    localFirstPhase: undefined,
     requestContextPolicy: "require-current",
-  }).then((response) =>
-    admitCloudEpicTasksFirstPage(response, { hostId, userId }),
+  });
+  return Promise.all([
+    fetchCloudEpicTasksScopedPageByHostId(hostId, {
+      expectedUserId: userId,
+      request: options.request,
+      cursor: options.cursor,
+      abortSignal: options.abortSignal,
+      localFirstPhase: undefined,
+      requestContextPolicy: "require-current",
+    }),
+    contribution,
+  ]).then(([response, hostContribution]) =>
+    admitCloudEpicTasksFirstPage(
+      composeHistoryPage({
+        page: response,
+        contribution: hostContribution,
+        sort: options.request.sort,
+        query: options.request.filters?.query,
+        placement: "cursor-page",
+      }),
+      { hostId, userId },
+    ),
   );
 }
 
@@ -351,7 +485,10 @@ function parseRepoLabel(label: string): TaskRepoIdentifier[] {
 
 function waitForMatchingRequestContext(
   client: HostClient<HostRpcRegistry>,
-  options: FetchCloudEpicTasksScopedPageOptions,
+  options: Pick<
+    FetchCloudEpicTasksScopedPageOptions,
+    "expectedUserId" | "abortSignal"
+  >,
 ): Promise<void> {
   if (hasMatchingRequestContext(client, options.expectedUserId)) {
     return Promise.resolve();
@@ -406,63 +543,25 @@ async function dispatchScopedPageWithCurrentRequestContext(
       "Cloud epic tasks request context no longer matches its cache user.",
     );
   }
-  const admission = cloudLegAdmittedAtDispatch(client, options);
-  if (admission === "refused") {
+  // The verdict, re-read at the POST-WAIT dispatch boundary rather than
+  // trusted from the render that started the fetch: `wait` may resume after
+  // the session was demoted to `unverified`, and the request-context check
+  // above is about the USER, not the verdict. Without one this leg - a cloud
+  // read - is not sent at all; an unverified session's first page is the
+  // host's own contribution (`epic.localHistory.read`), read beside it.
+  if (!authorizesCloudCapability(useAuthStore.getState().status)) {
     throw new CloudEpicTasksVerdictWithdrawnError();
   }
   const request = buildListTasksRequest(options.request, options.cursor);
   if (hasOrganizationFilters(options.request.filters))
-    return fetchOrganizationHistory(client, options, admission);
-  if (options.localFirstPhase === undefined) {
-    return client.requestWithSignal(
-      "epic.listTasks",
-      request,
-      options.abortSignal,
-    );
-  }
-  const params = {
-    ...request,
-    // On a pre-1.6 host the same-major transport downgrade parses against
-    // its frozen request schema and strips this additive field. Its response
-    // therefore remains exactly the released one-shot list request.
-    localFirstPhase: options.localFirstPhase,
-  };
-  if (admission === "authorized") {
-    return client.requestWithSignal(
-      "epic.listTasks",
-      params,
-      options.abortSignal,
-    );
-  }
-  // `admission === "local-first-only"`: an unverified session, whose one
-  // permitted page is the local-first initial leg. Nothing above this line can
-  // establish that the host answering THIS request serves it - every local
-  // unary dials and handshakes afresh - so the floor rides along and the
-  // transport answers it from the connection carrying the frame. A host that
-  // restarted below `@1.6` in the meantime refuses here instead of stripping
-  // `localFirstPhase` and running the released cloud-backed list on the
-  // retained credential.
-  return client
-    .requestWithSignalRequiringHostMethodVersion(
-      "epic.listTasks",
-      params,
-      options.abortSignal,
-      {
-        method: "epic.listTasks",
-        version: { major: 1, minor: LIST_TASKS_LOCAL_FIRST_MINOR },
-      },
-    )
-    .catch((cause: unknown) => {
-      // Re-shaped into the caller's own refusal so this arrives exactly where
-      // a render-time or wait-boundary refusal does: `query-client.ts`
-      // suppresses retries and the error toast for this type specifically, and
-      // a raw transport error would instead retry into the same downgraded
-      // host and surface as a failure the user cannot act on.
-      if (cause instanceof HostMethodVersionUnsatisfiedError) {
-        throw new CloudEpicTasksVerdictWithdrawnError();
-      }
-      throw cause;
-    });
+    return fetchOrganizationHistory(client, options);
+  return client.requestWithSignal(
+    "epic.listTasks",
+    options.localFirstPhase === undefined
+      ? request
+      : { ...request, localFirstPhase: options.localFirstPhase },
+    options.abortSignal,
+  );
 }
 
 function hasOrganizationFilters(filters: CloudTaskFilters | null): boolean {
@@ -475,7 +574,6 @@ function hasOrganizationFilters(filters: CloudTaskFilters | null): boolean {
 function fetchOrganizationHistory(
   client: HostClient<HostRpcRegistry>,
   options: FetchCloudEpicTasksScopedPageOptions,
-  admission: DispatchAdmission,
 ): Promise<ListTasksResponse> {
   // The tier that serves `organization.history` (the pool, in a build with
   // one), whose manifest is the one that says whether it is there.
@@ -486,7 +584,6 @@ function fetchOrganizationHistory(
     null,
   );
   if (
-    admission !== "authorized" ||
     servingHostId === null ||
     !getNegotiatedHostMethods(servingHostId)?.has("organization.history")
   )
@@ -509,51 +606,6 @@ function hasMatchingRequestContext(
 ): boolean {
   return client.getRequestContextUserId() === expectedUserId;
 }
-
-/**
- * The verdict half of the admission, re-read at the POST-WAIT dispatch
- * boundary rather than trusted from the render that started the fetch.
- *
- * `wait` may resume after an arbitrary interval: a signed-in first page
- * waiting out a reconnect for its host client's request context can see the
- * session demoted to `unverified` before the same-user context arrives, and
- * the request-context check above is about the USER, not the verdict. On a
- * pre-`epic.listTasks@1.6` host the local-first directive is stripped and
- * the continuation is the ordinary cloud-backed list call - so without this
- * the render and manual-refetch gates were bypassed by the one path that
- * waits. Same shape as those gates: the live verdict admits everything; an
- * initial leg is still admitted when the live negotiated version says the
- * host serves it local-first; a page with no directive - a cursor page, or
- * the tab reconciler's local-home probe - needs the verdict. The reconciler
- * only seeds a run under `signed-in`, so this bites it solely when the
- * verdict is withdrawn mid-run, and its combiner reads any error as "do not
- * close anything": the refusal is the fail-closed outcome that path wants.
- */
-function cloudLegAdmittedAtDispatch(
-  client: HostClient<HostRpcRegistry>,
-  options: FetchCloudEpicTasksScopedPageOptions,
-): DispatchAdmission {
-  if (authorizesCloudCapability(useAuthStore.getState().status)) {
-    return "authorized";
-  }
-  if (options.localFirstPhase === undefined) return "refused";
-  if (client.getActiveHostId() === null) return "refused";
-  // Deliberately NOT a version read here. The version this page depends on is
-  // a fact about the connection that will carry it, and no read taken on this
-  // side of the dispatch is that - see the requirement attached at the send.
-  return "local-first-only";
-}
-
-/**
- * What this dispatch is allowed to send.
- *
- * - `authorized` - a live cloud verdict; any page, no floor.
- * - `local-first-only` - an unverified session sending the one page it may,
- *   which is admissible only on a host that honours the local-first directive.
- *   The dispatch carries that requirement rather than pre-checking it.
- * - `refused` - not admissible at all.
- */
-type DispatchAdmission = "authorized" | "local-first-only" | "refused";
 
 function createAbortError(): Error {
   if (typeof DOMException !== "undefined") {

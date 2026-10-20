@@ -45,6 +45,8 @@ import {
 import { useHostDirectoryList } from "@/hooks/host/use-host-directory-list-query";
 import { useRemoteSessionsPollReadiness } from "@/hooks/host/use-remote-sessions-poll-readiness";
 import { reconcileCommGraphCloudAuthorityCursor } from "@/stores/epics/comm-graph-timeline-store";
+import { withEnvironmentArmGraphEvents } from "@/lib/comm-graph/compose-comm-graph-events";
+import { useEnvironmentArmGraphEvents } from "@/hooks/environment/use-environment-arms";
 
 export function useCommGraphSnapshot(
   epicId: string,
@@ -249,5 +251,11 @@ export function useCommGraphSnapshot(
     epicId,
   ]);
 
-  return cloudSnapshot;
+  // The task's team environments' events, which only the pool serves to a
+  // member (`COMM_GRAPH_COMPOSED_VIEW`).
+  const armEvents = useEnvironmentArmGraphEvents(epicId);
+  return useMemo(
+    () => withEnvironmentArmGraphEvents(cloudSnapshot, armEvents),
+    [armEvents, cloudSnapshot],
+  );
 }

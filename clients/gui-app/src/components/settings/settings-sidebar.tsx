@@ -195,7 +195,8 @@ function SettingsSidebarHostPicker(props: {
     [scope.hosts],
   );
   const updateViewForHost = useFleetUpdateViews(hostIds);
-  // Same rule for the environment label (Tracy Bots): read only over a
+  // The environment label (Tracy Bots) causes no connection either: every
+  // row is read from the pool, or, in a build without one, only a row whose
   // session this client already holds; every other row says nothing.
   const environmentLabelForHost = useHostEnvironmentLabelResolver(
     hostIds,
