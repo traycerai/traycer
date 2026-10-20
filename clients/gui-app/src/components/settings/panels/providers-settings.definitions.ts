@@ -133,7 +133,7 @@ export const PROVIDERS = defineSettingsSection("providers", {
     search: { contributesTo: "nativeSubagents" },
     label: "Allow native subagents",
     description:
-      "Off, this provider's agents delegate through Traycer agents instead of their own built-in subagents.",
+      "When off, this provider's agents delegate through Traycer agents instead of their own built-in subagents.",
     availableWhen: alwaysAvailable,
     keywords: ["subagents", "traycer agents"],
   },

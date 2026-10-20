@@ -2888,7 +2888,7 @@ window`, recorded in the type as `coverage.browsersAreMountedOnly` -
     pre-fills this value as a cosmetic default; an untouched pre-fill launches
     with `null` so the host resolves the current saved value itself.
   - **Native subagents** (`provider-native-subagents-group.tsx`), one switch,
-    "Allow native subagents", on by default. Off, the host turns the
+    "Allow native subagents", on by default. When off, the host turns the
     provider's own built-in subagent tool off for that provider's sessions
     where the provider's CLI or SDK has a switch for it (Claude, Codex,
     OpenCode and its derivatives, Kilo, Copilot, Cursor, Droid, Grok, Qwen,
