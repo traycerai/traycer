@@ -37,7 +37,7 @@ function meta(accountId: string): ViewReplicaAccountMeta {
   return {
     accountId,
     epochs: { "host-1": { source: "pool", value: "e1" } },
-    floors: { "test.list": 5 },
+    floors: { "test.list": { at: 5, generation: null } },
     withdrawals: [{ scope: { kind: "organization", id: "team-1" }, at: 7 }],
   };
 }

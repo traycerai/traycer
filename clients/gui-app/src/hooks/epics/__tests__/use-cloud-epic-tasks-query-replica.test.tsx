@@ -148,7 +148,9 @@ describe("useCloudEpicTasksQuery with the replica tier", () => {
     await viewReplicaStore.evict({ kind: "identity-retired" });
   });
 
-  async function renderWarmCached(): Promise<RenderHookResult<CloudEpicTasksQueryResult, unknown>> {
+  async function renderWarmCached(): Promise<
+    RenderHookResult<CloudEpicTasksQueryResult, unknown>
+  > {
     await seedPreviousSession();
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false } },

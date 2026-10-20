@@ -161,9 +161,7 @@ describe("notification feed replica", () => {
     useCloudNotificationsStore.getState().revokeReplicaSeed();
 
     expect(seededKeys()).toEqual([cloudNotificationFeedId("live-1")]);
-    expect(useCloudNotificationsStore.getState().summary).toEqual(
-      FEED_SUMMARY,
-    );
+    expect(useCloudNotificationsStore.getState().summary).toEqual(FEED_SUMMARY);
   });
 
   it("stops admitting the cached feed once the account is refused", async () => {
