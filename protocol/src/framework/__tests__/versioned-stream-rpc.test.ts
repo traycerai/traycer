@@ -133,14 +133,17 @@ describe("validateVersionedStreamRpcRegistry", () => {
     // @1.21 (the released minors froze the row context without it). The
     // open-harness-id line, which reopens every heard-from harness leaf to a
     // string, took @1.22. A tool call's `mcpApp` stamp (an MCP App a tool
-    // rendered) took @1.23. The html / canvas / file artifact operation
-    // kinds took @1.28. A tool call's `artifact` stamp (an inline
-    // `traycer_render_inline` artifact's manifest) took @1.29.
+    // rendered) took @1.23. The queued prompt's `signInParked` mark took
+    // @1.28. The html / canvas / file artifact operation kinds re-minted
+    // above it at @1.29. A tool call's `artifact` stamp (an inline
+    // `traycer_render_inline` artifact's manifest) took @1.30, canvas
+    // annotations @1.31, and every artifact kind on an accumulated-change
+    // tag @1.32.
     //
     // RESTATED rather than derived, deliberately: this file is the
     // change-detector for the line set, so deriving it from the registry would
     // assert the registry against itself.
-    expect(hostStreamRpcRegistry["chat.subscribe"][1].latestMinor).toBe(31);
+    expect(hostStreamRpcRegistry["chat.subscribe"][1].latestMinor).toBe(32);
     // @1.6 added the `viewer` intent on the open request; @1.7 added the
     // `viewer` client frame that restates it on a live stream.
     expect(hostStreamRpcRegistry["terminal.subscribe"][1].latestMinor).toBe(7);

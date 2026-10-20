@@ -45,7 +45,7 @@ const jsonContentSchema = getRecordSchema(
 
 /**
  * One annotation bundle: structured fields only (no pixels). Browser crops
- * ride the existing `imageAttachment` atom. Canvas selections (1.30) may have
+ * ride the existing `imageAttachment` atom. Canvas selections (1.31) may have
  * no crop and carry their artifact identity in `source`. The carrier name
  * stays `browserAnnotations` for compatibility with existing records.
  *
@@ -245,7 +245,7 @@ export type CanvasAnnotationRecord = z.infer<
   typeof canvasAnnotationRecordSchema
 >;
 
-/** The live 1.30 annotation carrier. Canvas needs no fabricated browser identity. */
+/** The live 1.31 annotation carrier. Canvas needs no fabricated browser identity. */
 export const browserAnnotationRecordSchema = lazySchema(() =>
   z.union([browserAnnotationWithSourceSchema, canvasAnnotationRecordSchema]),
 );
@@ -301,7 +301,7 @@ export const userAuthoredMessageSchemaPreCanvas = lazySchema(() =>
      * the field here would silently lose the user's annotation for any
      * message that sits in the queue before its turn starts.
      *
-     * Wire: browser-only on `chat.subscribe@1.7–1.29`. The live 1.30
+     * Wire: browser-only on `chat.subscribe@1.7–1.30`. The live 1.31
      * payload below rebinds the annotation union; 1.0–1.6 omit it.
      */
     browserAnnotations: z

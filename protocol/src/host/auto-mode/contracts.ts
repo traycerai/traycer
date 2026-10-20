@@ -973,6 +973,63 @@ export const autoPolicyGetV10 = defineRpcContract({
   responseSchema: autoPolicyGetResponseSchema,
 });
 
+/**
+ * A team host's policy state (`autoPolicy.get@1.1`): `none` until the team's
+ * policy is applied, `applied` while its 60-second authority lease holds,
+ * `lapsed` once the lease lapsed while a policy was applied (approvals then
+ * escalate to a person). Closed; the environment store's own list
+ * (`TEAM_POLICY_HOST_STATES`) has the same three values.
+ */
+export const autoPolicyTeamStateSchema = lazySchema(() =>
+  z.enum(["none", "applied", "lapsed"]),
+);
+export type AutoPolicyTeamState = z.infer<typeof autoPolicyTeamStateSchema>;
+
+/**
+ * `autoPolicy.get@1.1`: 1.0's answer plus `team`, the team policy a team
+ * host judges under. `null` on a personal host, and on a host older than
+ * 1.1 (the upgrade below cannot tell the two apart, and says nothing rather
+ * than guess). `policyVersion` is the team policy item's row revision, null
+ * exactly when `state` is `none`. The team policy's body is never here: the
+ * account-policy fields above stay the account's.
+ */
+export const autoPolicyTeamSchema = lazySchema(() =>
+  z.object({
+    state: autoPolicyTeamStateSchema,
+    policyVersion: z
+      .string()
+      .regex(/^(0|[1-9][0-9]{0,30})$/)
+      .nullable(),
+  }),
+);
+export type AutoPolicyTeam = z.infer<typeof autoPolicyTeamSchema>;
+
+export const autoPolicyGetResponseV11Schema = lazySchema(() =>
+  autoPolicyGetResponseSchema.extend({
+    team: autoPolicyTeamSchema.nullable(),
+  }),
+);
+export type AutoPolicyGetResponseV11 = z.infer<
+  typeof autoPolicyGetResponseV11Schema
+>;
+
+export const autoPolicyGetV11 = defineRpcContract({
+  method: "autoPolicy.get",
+  schemaVersion: { major: 1, minor: 1 } as const,
+  requestSchema: autoPolicyGetRequestSchema,
+  responseSchema: autoPolicyGetResponseV11Schema,
+});
+
+export const autoPolicyGetUpgradeV10ToV11 = defineUpgradePath<
+  typeof autoPolicyGetV10,
+  typeof autoPolicyGetV11
+>({
+  from: autoPolicyGetV10.schemaVersion,
+  to: autoPolicyGetV11.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => ({ ...response, team: null }),
+});
+
 export const autoPolicySetRequestSchema = lazySchema(() =>
   z.object({
     /** Last-write-wins; an empty string is a real value that clears the policy. */

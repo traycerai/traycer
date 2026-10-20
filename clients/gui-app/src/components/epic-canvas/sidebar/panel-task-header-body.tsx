@@ -9,7 +9,7 @@ import { cn } from "@/lib/utils";
  *
  * `titleEditor` replaces the title while it is being renamed; `titleAction`
  * sits after the title and shows only while the row is hovered or the action
- * holds focus.
+ * holds focus. `teamChip` names the team that owns the task, after the title.
  */
 export function PanelTaskHeaderBody(props: {
   readonly testId: string | null;
@@ -17,6 +17,7 @@ export function PanelTaskHeaderBody(props: {
   readonly title: string;
   readonly titleEditor: ReactNode | null;
   readonly titleAction: ReactNode | null;
+  readonly teamChip: ReactNode | null;
 }): ReactNode {
   return (
     <div
@@ -34,6 +35,7 @@ export function PanelTaskHeaderBody(props: {
           >
             {props.title}
           </span>
+          {props.teamChip}
           {props.titleAction === null ? null : (
             <span className="flex shrink-0 opacity-0 transition-opacity group-hover/task-header:opacity-100 focus-within:opacity-100">
               {props.titleAction}

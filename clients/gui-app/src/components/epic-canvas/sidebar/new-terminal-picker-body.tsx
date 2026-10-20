@@ -157,7 +157,7 @@ export function NewTerminalPickerBody(props: NewTerminalPickerBodyProps) {
           host's own row is still in the list, worded `offline` by the shared
           health vocabulary, so the pin is reselectable the moment it returns.
         */}
-        <WorktreePickerHostSection surfaceKey={surfaceKey} />
+        <WorktreePickerHostSection surfaceKey={surfaceKey} offersAutomations />
         <WorktreeFolderListBody
           isPending={bindingsQuery.isPending}
           isError={bindingsQuery.isError}

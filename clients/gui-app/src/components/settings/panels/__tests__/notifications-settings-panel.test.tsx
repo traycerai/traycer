@@ -43,18 +43,20 @@ const hostScopeMocks: {
 vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
   const { hostScopeFixture, hostScopeOptionFixture } =
     await import("@/components/settings/host-scope/host-scope-fixture");
+  const useHostScope = () =>
+    hostScopeFixture({
+      client: hostScopeMocks.client,
+      host:
+        hostScopeMocks.hostId === null
+          ? null
+          : hostScopeOptionFixture({ hostId: hostScopeMocks.hostId }),
+      ...(hostScopeMocks.status === null
+        ? {}
+        : { status: hostScopeMocks.status }),
+    });
   return {
-    useHostScope: () =>
-      hostScopeFixture({
-        client: hostScopeMocks.client,
-        host:
-          hostScopeMocks.hostId === null
-            ? null
-            : hostScopeOptionFixture({ hostId: hostScopeMocks.hostId }),
-        ...(hostScopeMocks.status === null
-          ? {}
-          : { status: hostScopeMocks.status }),
-      }),
+    useHostScope,
+    usePersonalHostScope: useHostScope,
   };
 });
 

@@ -929,13 +929,13 @@ export const toolCallBlockSchema = lazySchema(() =>
     // persisted before this field existed parse cleanly. See
     // `imageGenerationResultSchema`.
     imageResults: z.array(imageGenerationResultSchema).default([]),
-    // The artifact this call captured (`chat.subscribe@1.29`).
+    // The artifact this call captured (`chat.subscribe@1.30`).
     artifact: toolCallArtifactStampSchema.nullable().default(null),
     // The MCP App this call rendered (`chat.subscribe@1.23`).
     mcpApp: toolCallMcpAppStampSchema.nullable().default(null),
   }),
 );
-// Frozen through chat.subscribe@1.28: keep the artifact stamp off older lines.
+// Frozen through chat.subscribe@1.29: keep the artifact stamp off older lines.
 export const toolCallBlockSchemaPreArtifact = lazySchema(() =>
   z.object({
     ...baseBlockFields,
@@ -2405,7 +2405,7 @@ export const artifactOperationBlockSchemaPreHtml = lazySchema(() =>
     afterHash: z.string().nullable().default(null),
   }),
 );
-/** New artifact kinds are carried only by chat.subscribe 1.28 and later. */
+/** New artifact kinds are carried only by chat.subscribe 1.29 and later. */
 export const artifactOperationBlockSchema = lazySchema(() =>
   artifactOperationBlockSchemaPreHtml.extend({
     kind: getRecordSchema(commonRecordRegistry, "epic-artifact-kind", "latest"),

@@ -4,7 +4,7 @@ import type {
   ConfigDetectedShell,
   ConfigEnvEntry,
   ConfigShellProbeResponse,
-  ConfigShellSetRequest,
+  ConfigShellSetRequestV10,
 } from "@traycer/protocol/host/config/index";
 
 /**
@@ -43,7 +43,8 @@ export interface ShellConfigSnapshot {
  */
 export interface ShellCommandCallbacks {
   readonly onSuccess: () => void;
-  readonly onError: () => void;
+  /** Called with the save's error. */
+  readonly onError: (error: unknown) => void;
 }
 
 export interface ShellConfigController {
@@ -80,7 +81,7 @@ export interface ShellConfigController {
   readonly envPending: boolean;
   readonly probeSource: ShellProbeSource;
   readonly setShell: (
-    request: ConfigShellSetRequest,
+    request: ConfigShellSetRequestV10,
     callbacks: ShellCommandCallbacks,
   ) => void;
   readonly resetShell: (callbacks: ShellCommandCallbacks) => void;

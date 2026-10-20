@@ -723,6 +723,6 @@ function describeTarget(input: {
   return {
     path: { label: "Folder", value: input.workspacePath },
     scriptsNote:
-      "Saved in this checkout. Commit the environment file to share these scripts.",
+      "Saved in this checkout. Commit the scripts file under .traycer/ to share them.",
   };
 }

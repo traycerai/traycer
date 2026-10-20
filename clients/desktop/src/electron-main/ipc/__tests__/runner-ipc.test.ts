@@ -9,7 +9,12 @@ import {
   RunnerHostInvoke,
   RunnerHostSync,
 } from "../../../ipc-contracts/ipc-channels";
-import type { DesktopPublishedHostSnapshot } from "../../../ipc-contracts/host-types";
+import type {
+  DesktopPublishedHostSnapshot,
+  LocalHostUnresponsive,
+  LocalHostUnresponsiveOffer,
+} from "../../../ipc-contracts/host-types";
+import type { RestartTargetHost } from "@traycer-clients/shared/host-lock/restart-target";
 import type { UnsyncedEditsSnapshotEntry } from "../../../ipc-contracts/app-lifecycle-types";
 import type {
   IpcHostLifecycle,
@@ -34,7 +39,25 @@ import type {
   WindowSummary,
 } from "../../../ipc-contracts/window-types";
 import { createAuthenticatedUserFixture } from "@traycer-clients/shared/test-fixtures/authenticated-user";
+import type {
+  getSandboxAutomationViaHttp,
+  openSandboxAutomationViaHttp,
+  runSandboxVerbViaHttp,
+} from "@traycer-clients/shared/host-client/sandbox-control";
+import type {
+  decideSecretRequestViaHttp,
+  fetchEnvironmentProvidersViaHttp,
+  fetchSandboxGrantsViaHttp,
+  fetchTeamEnvironmentViaHttp,
+} from "@traycer-clients/shared/host-client/sandbox-secrets";
+import { config } from "../../../config";
 import { FakeHostController } from "./fake-host-controller";
+import type {
+  ActivateInstalledOk,
+  GuardedMutationOutcome,
+  HostRespawnMode,
+  LocalHostMutationIntent,
+} from "../../host/host-controller-types";
 import { setAppliedLocalHostCapability } from "../../host/local-host-capability";
 import {
   createSigningKey,
@@ -43,6 +66,70 @@ import {
 } from "../../auth/__tests__/jws-fixture";
 
 const featureSettings = vi.hoisted(() => ({ agentRoles: false }));
+/** The control-plane call the `runSandboxVerb` handler makes, observed. */
+const runSandboxVerbViaHttpMock = vi.hoisted(() =>
+  vi.fn<typeof runSandboxVerbViaHttp>(async () => ({
+    kind: "ok",
+    settled: true,
+  })),
+);
+/** The Automations read and open the two new handlers make, observed. */
+const getSandboxAutomationViaHttpMock = vi.hoisted(() =>
+  vi.fn<typeof getSandboxAutomationViaHttp>(async () => ({
+    kind: "ok",
+    automation: { available: true, sandbox: null, pods: [] },
+  })),
+);
+const openSandboxAutomationViaHttpMock = vi.hoisted(() =>
+  vi.fn<typeof openSandboxAutomationViaHttp>(async () => ({
+    kind: "network-error",
+    detail: "unscripted",
+  })),
+);
+/** The secrets broker's grants read and decide the two handlers make, observed. */
+const fetchSandboxGrantsViaHttpMock = vi.hoisted(() =>
+  vi.fn<typeof fetchSandboxGrantsViaHttp>(async () => ({
+    kind: "ok",
+    summary: { version: 3, grants: [], github: null },
+  })),
+);
+const decideSecretRequestViaHttpMock = vi.hoisted(() =>
+  vi.fn<typeof decideSecretRequestViaHttp>(async () => ({
+    kind: "ok",
+    status: "approved",
+    decidedBy: null,
+  })),
+);
+/** The team environment and provider counts the two handlers read, observed. */
+const fetchTeamEnvironmentViaHttpMock = vi.hoisted(() =>
+  vi.fn<typeof fetchTeamEnvironmentViaHttp>(async () => ({
+    kind: "ok",
+    environmentId: "env-acme",
+  })),
+);
+const fetchEnvironmentProvidersViaHttpMock = vi.hoisted(() =>
+  vi.fn<typeof fetchEnvironmentProvidersViaHttp>(async () => ({
+    kind: "ok",
+    counts: { providerSecretCount: 2, connectedPlanCount: 1 },
+  })),
+);
+vi.mock(
+  "@traycer-clients/shared/host-client/sandbox-control",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@traycer-clients/shared/host-client/sandbox-control")
+    >()),
+    runSandboxVerbViaHttp: runSandboxVerbViaHttpMock,
+    getSandboxAutomationViaHttp: getSandboxAutomationViaHttpMock,
+    openSandboxAutomationViaHttp: openSandboxAutomationViaHttpMock,
+  }),
+);
+vi.mock("@traycer-clients/shared/host-client/sandbox-secrets", () => ({
+  fetchSandboxGrantsViaHttp: fetchSandboxGrantsViaHttpMock,
+  fetchTeamEnvironmentViaHttp: fetchTeamEnvironmentViaHttpMock,
+  fetchEnvironmentProvidersViaHttp: fetchEnvironmentProvidersViaHttpMock,
+  decideSecretRequestViaHttp: decideSecretRequestViaHttpMock,
+}));
 /**
  * `app`-level event listeners, recorded rather than discarded so a test can
  * drive them. `epic-visibility-ipc.ts` registers a `render-process-gone`
@@ -607,6 +694,21 @@ describe("RunnerIpcBridge", () => {
           RunnerHostInvoke.deregisterHostFromAccount,
           RunnerHostInvoke.listRegisteredHosts,
           RunnerHostInvoke.updateHostVersionPolicy,
+          // The sandbox control plane, for traycer-server's CORS reason.
+          RunnerHostInvoke.listSandboxes,
+          RunnerHostInvoke.getSandboxCosts,
+          RunnerHostInvoke.getSandboxCatalogue,
+          RunnerHostInvoke.createSandbox,
+          RunnerHostInvoke.destroySandbox,
+          RunnerHostInvoke.runSandboxVerb,
+          RunnerHostInvoke.getSandboxAutomation,
+          RunnerHostInvoke.openSandboxAutomation,
+          // The secrets broker, on authn.
+          RunnerHostInvoke.getSandboxGrants,
+          RunnerHostInvoke.getTeamEnvironment,
+          RunnerHostInvoke.getEnvironmentProviders,
+          RunnerHostInvoke.decideSecretRequest,
+          RunnerHostInvoke.mintExecutableWriteGrant,
           RunnerHostInvoke.listUserSessions,
           RunnerHostInvoke.revokeUserSession,
           RunnerHostInvoke.revokeAllSessions,
@@ -623,6 +725,8 @@ describe("RunnerIpcBridge", () => {
           RunnerHostInvoke.requestHostRespawn,
           RunnerHostInvoke.lastKnownLocalHostId,
           RunnerHostInvoke.localHostSnapshot,
+          RunnerHostInvoke.localHostUnresponsive,
+          RunnerHostInvoke.forceRestartUnresponsiveHost,
           RunnerHostInvoke.traySetIndicator,
           RunnerHostInvoke.traySetEpics,
           RunnerHostInvoke.setUnsyncedEditsSnapshot,
@@ -893,6 +997,297 @@ describe("RunnerIpcBridge", () => {
       "featureSettings:agentRoles:set requires a boolean",
     );
     expect(setAgentRolesEnabledMock).toHaveBeenCalledTimes(1);
+    bridge.dispose();
+  });
+
+  it("forwards the runSandboxVerb timeout to the control-plane call, and rejects a timeout that is not a number before any request", async () => {
+    const mod = await import("../register-runner-ipc");
+    const bridge = new mod.RunnerIpcBridge({
+      host: new FakeHost(),
+      hostController: new FakeHostController(),
+      authnBaseUrl: "http://localhost:5005",
+      authRedirectUri: null,
+      tray: null,
+      zoomController: undefined,
+      authTokenStore: undefined,
+      window: buildWindow(),
+    });
+    bridge.install();
+    const handler = ipcMainState.handlers.get(RunnerHostInvoke.runSandboxVerb);
+    if (handler === undefined) {
+      throw new Error("runSandboxVerb handler missing");
+    }
+
+    await expect(
+      handler(bareEvent(), "bearer-1", "sbx_1", "resume", 119_000),
+    ).resolves.toEqual({ kind: "ok", settled: true });
+    expect(runSandboxVerbViaHttpMock).toHaveBeenCalledTimes(1);
+    expect(runSandboxVerbViaHttpMock).toHaveBeenCalledWith(
+      config.serverBaseUrl,
+      "bearer-1",
+      "sbx_1",
+      "resume",
+      119_000,
+    );
+
+    for (const bad of ["119000", null, undefined, {}]) {
+      await expect(
+        handler(bareEvent(), "bearer-1", "sbx_1", "resume", bad),
+      ).rejects.toThrow("runSandboxVerb.timeoutMs");
+    }
+    // The old four-argument call, from a renderer that predates the field.
+    await expect(
+      handler(bareEvent(), "bearer-1", "sbx_1", "resume"),
+    ).rejects.toThrow("runSandboxVerb.timeoutMs");
+    expect(runSandboxVerbViaHttpMock).toHaveBeenCalledTimes(1);
+    bridge.dispose();
+  });
+
+  it("routes the Automations read and open to the control plane with the bearer, and rejects a bearer that is not a string before any request", async () => {
+    const mod = await import("../register-runner-ipc");
+    const bridge = new mod.RunnerIpcBridge({
+      host: new FakeHost(),
+      hostController: new FakeHostController(),
+      authnBaseUrl: "http://localhost:5005",
+      authRedirectUri: null,
+      tray: null,
+      zoomController: undefined,
+      authTokenStore: undefined,
+      window: buildWindow(),
+    });
+    bridge.install();
+    const read = ipcMainState.handlers.get(
+      RunnerHostInvoke.getSandboxAutomation,
+    );
+    const open = ipcMainState.handlers.get(
+      RunnerHostInvoke.openSandboxAutomation,
+    );
+    if (read === undefined || open === undefined) {
+      throw new Error("an Automations handler is missing");
+    }
+
+    await expect(read(bareEvent(), "bearer-1", null)).resolves.toEqual({
+      kind: "ok",
+      automation: { available: true, sandbox: null, pods: [] },
+    });
+    expect(getSandboxAutomationViaHttpMock).toHaveBeenLastCalledWith(
+      config.serverBaseUrl,
+      "bearer-1",
+      null,
+    );
+    expect(openSandboxAutomationViaHttpMock).not.toHaveBeenCalled();
+
+    await read(bareEvent(), "bearer-1", "env-team");
+    expect(getSandboxAutomationViaHttpMock).toHaveBeenLastCalledWith(
+      config.serverBaseUrl,
+      "bearer-1",
+      "env-team",
+    );
+
+    await expect(open(bareEvent(), "bearer-2", null)).resolves.toEqual({
+      kind: "network-error",
+      detail: "unscripted",
+    });
+    expect(openSandboxAutomationViaHttpMock).toHaveBeenLastCalledWith(
+      config.serverBaseUrl,
+      "bearer-2",
+      null,
+    );
+
+    await open(bareEvent(), "bearer-2", {
+      environmentId: "env-team",
+      ordinal: 1,
+    });
+    expect(openSandboxAutomationViaHttpMock).toHaveBeenLastCalledWith(
+      config.serverBaseUrl,
+      "bearer-2",
+      { environmentId: "env-team", ordinal: 1 },
+    );
+
+    for (const bad of [null, undefined, 7, {}]) {
+      await expect(read(bareEvent(), bad, null)).rejects.toThrow(
+        "getSandboxAutomation.bearerToken",
+      );
+      await expect(open(bareEvent(), bad, null)).rejects.toThrow(
+        "openSandboxAutomation.bearerToken",
+      );
+    }
+    for (const bad of ["", undefined, 7, {}]) {
+      await expect(read(bareEvent(), "bearer-1", bad)).rejects.toThrow(
+        "getSandboxAutomation.environmentId",
+      );
+    }
+    for (const bad of [undefined, 7, "env-team", { ordinal: 1 }]) {
+      await expect(open(bareEvent(), "bearer-2", bad)).rejects.toThrow(
+        "openSandboxAutomation.target",
+      );
+    }
+    expect(getSandboxAutomationViaHttpMock).toHaveBeenCalledTimes(2);
+    expect(openSandboxAutomationViaHttpMock).toHaveBeenCalledTimes(2);
+    bridge.dispose();
+  });
+
+  it("routes the grants read and the grant decision to the secrets broker on authn with the bearer, and rejects a malformed argument before any request", async () => {
+    const mod = await import("../register-runner-ipc");
+    const bridge = new mod.RunnerIpcBridge({
+      host: new FakeHost(),
+      hostController: new FakeHostController(),
+      authnBaseUrl: "http://localhost:5005",
+      authRedirectUri: null,
+      tray: null,
+      zoomController: undefined,
+      authTokenStore: undefined,
+      window: buildWindow(),
+    });
+    bridge.install();
+    const grants = ipcMainState.handlers.get(RunnerHostInvoke.getSandboxGrants);
+    const decide = ipcMainState.handlers.get(
+      RunnerHostInvoke.decideSecretRequest,
+    );
+    if (grants === undefined || decide === undefined) {
+      throw new Error("a secrets handler is missing");
+    }
+
+    await expect(
+      grants(bareEvent(), "bearer-1", "env-1", "host-1"),
+    ).resolves.toEqual({
+      kind: "ok",
+      summary: { version: 3, grants: [], github: null },
+    });
+    expect(fetchSandboxGrantsViaHttpMock).toHaveBeenLastCalledWith(
+      "http://localhost:5005",
+      "bearer-1",
+      "env-1",
+      "host-1",
+    );
+
+    await expect(
+      decide(bareEvent(), "bearer-2", "env-1", "request-1", "approve_default"),
+    ).resolves.toEqual({ kind: "ok", status: "approved", decidedBy: null });
+    expect(decideSecretRequestViaHttpMock).toHaveBeenLastCalledWith(
+      "http://localhost:5005",
+      "bearer-2",
+      "env-1",
+      "request-1",
+      "approve_default",
+    );
+
+    // A null environment (a server that predates environments) crosses as null.
+    await grants(bareEvent(), "bearer-1", null, "host-1");
+    expect(fetchSandboxGrantsViaHttpMock).toHaveBeenLastCalledWith(
+      "http://localhost:5005",
+      "bearer-1",
+      null,
+      "host-1",
+    );
+    await decide(bareEvent(), "bearer-2", null, "request-1", "approve");
+    expect(decideSecretRequestViaHttpMock).toHaveBeenLastCalledWith(
+      "http://localhost:5005",
+      "bearer-2",
+      null,
+      "request-1",
+      "approve",
+    );
+
+    for (const bad of [null, undefined, 7, {}]) {
+      await expect(grants(bareEvent(), bad, "env-1", "host-1")).rejects.toThrow(
+        "getSandboxGrants.bearerToken",
+      );
+      await expect(
+        grants(bareEvent(), "bearer-1", "env-1", bad),
+      ).rejects.toThrow("getSandboxGrants.hostId");
+      await expect(
+        decide(bareEvent(), bad, "env-1", "request-1", "approve"),
+      ).rejects.toThrow("decideSecretRequest.bearerToken");
+      await expect(
+        decide(bareEvent(), "bearer-2", "env-1", bad, "approve"),
+      ).rejects.toThrow("decideSecretRequest.requestId");
+    }
+    // An environment that is neither a string nor null is refused in the
+    // main process, before any request.
+    for (const bad of [undefined, 7, {}, true]) {
+      await expect(
+        grants(bareEvent(), "bearer-1", bad, "host-1"),
+      ).rejects.toThrow("getSandboxGrants.environmentId");
+      await expect(
+        decide(bareEvent(), "bearer-2", bad, "request-1", "approve"),
+      ).rejects.toThrow("decideSecretRequest.environmentId");
+    }
+    // A decision outside the three is refused in the main process.
+    await expect(
+      decide(bareEvent(), "bearer-2", "env-1", "request-1", "approve_once"),
+    ).rejects.toThrow();
+    expect(fetchSandboxGrantsViaHttpMock).toHaveBeenCalledTimes(2);
+    expect(decideSecretRequestViaHttpMock).toHaveBeenCalledTimes(2);
+    bridge.dispose();
+  });
+
+  it("routes the team environment and provider reads to authn with the bearer, and rejects a malformed argument before any request", async () => {
+    const mod = await import("../register-runner-ipc");
+    const bridge = new mod.RunnerIpcBridge({
+      host: new FakeHost(),
+      hostController: new FakeHostController(),
+      authnBaseUrl: "http://localhost:5005",
+      authRedirectUri: null,
+      tray: null,
+      zoomController: undefined,
+      authTokenStore: undefined,
+      window: buildWindow(),
+    });
+    bridge.install();
+    const teamEnvironment = ipcMainState.handlers.get(
+      RunnerHostInvoke.getTeamEnvironment,
+    );
+    const providers = ipcMainState.handlers.get(
+      RunnerHostInvoke.getEnvironmentProviders,
+    );
+    if (teamEnvironment === undefined || providers === undefined) {
+      throw new Error("an environment handler is missing");
+    }
+    fetchTeamEnvironmentViaHttpMock.mockClear();
+    fetchEnvironmentProvidersViaHttpMock.mockClear();
+
+    await expect(
+      teamEnvironment(bareEvent(), "bearer-1", "team-acme"),
+    ).resolves.toEqual({ kind: "ok", environmentId: "env-acme" });
+    expect(fetchTeamEnvironmentViaHttpMock).toHaveBeenCalledTimes(1);
+    expect(fetchTeamEnvironmentViaHttpMock).toHaveBeenLastCalledWith(
+      "http://localhost:5005",
+      "bearer-1",
+      "team-acme",
+    );
+
+    await expect(
+      providers(bareEvent(), "bearer-2", "env-acme"),
+    ).resolves.toEqual({
+      kind: "ok",
+      counts: { providerSecretCount: 2, connectedPlanCount: 1 },
+    });
+    expect(fetchEnvironmentProvidersViaHttpMock).toHaveBeenCalledTimes(1);
+    expect(fetchEnvironmentProvidersViaHttpMock).toHaveBeenLastCalledWith(
+      "http://localhost:5005",
+      "bearer-2",
+      "env-acme",
+    );
+
+    for (const bad of [null, undefined, 7, {}]) {
+      await expect(
+        teamEnvironment(bareEvent(), bad, "team-acme"),
+      ).rejects.toThrow("getTeamEnvironment.bearerToken");
+      await expect(providers(bareEvent(), bad, "env-acme")).rejects.toThrow(
+        "getEnvironmentProviders.bearerToken",
+      );
+    }
+    for (const bad of ["", null, undefined, 7, {}]) {
+      await expect(
+        teamEnvironment(bareEvent(), "bearer-1", bad),
+      ).rejects.toThrow("getTeamEnvironment.teamId");
+      await expect(providers(bareEvent(), "bearer-1", bad)).rejects.toThrow(
+        "getEnvironmentProviders.environmentId",
+      );
+    }
+    expect(fetchTeamEnvironmentViaHttpMock).toHaveBeenCalledTimes(1);
+    expect(fetchEnvironmentProvidersViaHttpMock).toHaveBeenCalledTimes(1);
     bridge.dispose();
   });
 
@@ -4144,6 +4539,301 @@ describe("RunnerIpcBridge", () => {
     bridge.dispose();
   });
 
+  // The force restart offered for an unresponsive host is about ONE host. The
+  // restart can queue behind another mutation, so the question "is it still
+  // that host, and still silent?" is the intent's guard, asked by the lane once
+  // the job owns it - never by this handler beforehand (traycer#1563 D3a).
+  describe("forceRestartUnresponsiveHost", () => {
+    const UNRESPONSIVE = {
+      pid: 4242,
+      offerId: 1,
+      unreachableForMs: 12 * 60_000,
+    };
+    const OFFER = { pid: 4242, offerId: 1 };
+    // What the monitor's check answers for the offer: the host it confirmed.
+    const OFFERED_HOST = { pid: 4242, startIdentity: "linux:boot-a 4242" };
+    const STILL_RUNNING_MESSAGE =
+      "The host started responding again or was replaced, so it was not restarted.";
+
+    /**
+     * A controller whose `respawn` queues the job instead of running it, as a
+     * lane busy with another mutation would. `runQueued` is the lane reaching
+     * the head: it asks the intent's guard then, and only a `proceed` acts.
+     */
+    class QueueingHostController extends FakeHostController {
+      readonly queued: Array<{
+        readonly intent: LocalHostMutationIntent;
+        readonly settle: (
+          outcome: GuardedMutationOutcome<ActivateInstalledOk>,
+        ) => void;
+      }> = [];
+      killed = 0;
+      /** The host each restart that proceeded was confirmed for, if any. */
+      readonly stoppedHosts: Array<RestartTargetHost | null> = [];
+
+      override respawn(
+        intent: LocalHostMutationIntent,
+        mode: HostRespawnMode,
+      ): Promise<GuardedMutationOutcome<ActivateInstalledOk>> {
+        this.respawnCalls += 1;
+        this.respawnCallArgs.push({ intent, mode });
+        return new Promise((resolve) => {
+          this.queued.push({ intent, settle: resolve });
+        });
+      }
+
+      async runQueued(): Promise<void> {
+        for (const job of this.queued.splice(0)) {
+          if (job.intent.kind === "user-repair") {
+            const verdict = await job.intent.guard();
+            if (verdict.kind === "abandon") {
+              job.settle({ kind: "abandoned", message: verdict.message });
+              continue;
+            }
+            this.stoppedHosts.push(
+              verdict.kind === "proceed-for-host" ? verdict.host : null,
+            );
+          }
+          this.killed += 1;
+          job.settle({ kind: "ok", value: { activated: true } });
+        }
+      }
+    }
+
+    async function installBridge(
+      confirm:
+        | ((
+            offer: LocalHostUnresponsiveOffer,
+          ) => Promise<RestartTargetHost | null>)
+        | null,
+      verdict: LocalHostUnresponsive | null,
+    ) {
+      const mod = await import("../register-runner-ipc");
+      const unresponsive = await import("../../host/local-host-unresponsive");
+      unresponsive.setLocalHostStillUnresponsiveCheck(confirm);
+      unresponsive.publishLocalHostUnresponsive(verdict);
+      const hostController = new QueueingHostController();
+      const bridge = new mod.RunnerIpcBridge({
+        host: new FakeHost(),
+        hostController,
+        authnBaseUrl: "http://localhost:5005",
+        authRedirectUri: null,
+        tray: null,
+        zoomController: undefined,
+        authTokenStore: undefined,
+        window: buildWindow(),
+      });
+      bridge.install();
+      const handler = ipcMainState.handlers.get(
+        RunnerHostInvoke.forceRestartUnresponsiveHost,
+      );
+      if (handler === undefined) {
+        throw new Error("forceRestartUnresponsiveHost handler missing");
+      }
+      return {
+        hostController,
+        invoke: (offer: unknown) => handler(bareEvent(), offer),
+        dispose: () => {
+          bridge.dispose();
+          unresponsive.setLocalHostStillUnresponsiveCheck(null);
+          unresponsive.publishLocalHostUnresponsive(null);
+        },
+      };
+    }
+
+    it("hands the lane a forced user-repair intent keyed by the offer, and asks nothing itself", async () => {
+      const confirm = vi.fn(async () => OFFERED_HOST);
+      const harness = await installBridge(confirm, UNRESPONSIVE);
+
+      const result = harness.invoke(OFFER);
+      await vi.waitFor(() => {
+        expect(harness.hostController.respawnCalls).toBe(1);
+      });
+
+      const call = harness.hostController.respawnCallArgs[0];
+      expect(call?.mode).toBe("force");
+      expect(call?.intent).toMatchObject({
+        kind: "user-repair",
+        targetHostId: "unresponsive-offer:1:4242",
+      });
+      // The handler is not the one who asks: the lane does, at its head.
+      expect(confirm).not.toHaveBeenCalled();
+
+      await harness.hostController.runQueued();
+      await expect(result).resolves.toEqual({ kind: "restarted" });
+      expect(confirm).toHaveBeenCalledWith(OFFER);
+      expect(harness.hostController.killed).toBe(1);
+      harness.dispose();
+    });
+
+    it("carries the host the check confirmed to the step that stops it", async () => {
+      const harness = await installBridge(
+        async () => OFFERED_HOST,
+        UNRESPONSIVE,
+      );
+
+      const result = harness.invoke(OFFER);
+      await vi.waitFor(() => {
+        expect(harness.hostController.queued).toHaveLength(1);
+      });
+      await harness.hostController.runQueued();
+
+      await expect(result).resolves.toEqual({ kind: "restarted" });
+      expect(harness.hostController.stoppedHosts).toEqual([OFFERED_HOST]);
+      harness.dispose();
+    });
+
+    it("declines, and kills nothing, when the host recovers while the restart waits for the lane", async () => {
+      let stillUnresponsive = true;
+      const harness = await installBridge(
+        async () => (stillUnresponsive ? OFFERED_HOST : null),
+        UNRESPONSIVE,
+      );
+
+      const result = harness.invoke(OFFER);
+      await vi.waitFor(() => {
+        expect(harness.hostController.queued).toHaveLength(1);
+      });
+      // Queued behind another mutation; the host answers again meanwhile.
+      stillUnresponsive = false;
+      await harness.hostController.runQueued();
+
+      await expect(result).resolves.toEqual({
+        kind: "declined",
+        message: STILL_RUNNING_MESSAGE,
+      });
+      expect(harness.hostController.killed).toBe(0);
+      harness.dispose();
+    });
+
+    it("keys two pids apart, so one restart never joins the other's", async () => {
+      const harness = await installBridge(
+        async () => OFFERED_HOST,
+        UNRESPONSIVE,
+      );
+
+      void harness.invoke({ pid: 1, offerId: 1 });
+      void harness.invoke({ pid: 2, offerId: 1 });
+      await vi.waitFor(() => {
+        expect(harness.hostController.respawnCalls).toBe(2);
+      });
+
+      expect(
+        harness.hostController.respawnCallArgs.map((call) =>
+          call.intent.kind === "user-repair" ? call.intent.targetHostId : null,
+        ),
+      ).toEqual(["unresponsive-offer:1:1", "unresponsive-offer:1:2"]);
+      harness.dispose();
+    });
+
+    it("keys two offers for the same pid apart, so a restart for a later host never joins the earlier one's", async () => {
+      const harness = await installBridge(
+        async () => OFFERED_HOST,
+        UNRESPONSIVE,
+      );
+
+      void harness.invoke({ pid: 7, offerId: 1 });
+      void harness.invoke({ pid: 7, offerId: 2 });
+      await vi.waitFor(() => {
+        expect(harness.hostController.respawnCalls).toBe(2);
+      });
+
+      const keys = harness.hostController.respawnCallArgs.map((call) =>
+        call.intent.kind === "user-repair" ? call.intent.targetHostId : null,
+      );
+      expect(keys).toEqual([
+        "unresponsive-offer:1:7",
+        "unresponsive-offer:2:7",
+      ]);
+      expect(new Set(keys).size).toBe(2);
+      harness.dispose();
+    });
+
+    // The review schedule, end to end through the real verdict store: the
+    // offer is out for A, the restart waits for the lane, and B replaces A
+    // under the same pid and does not answer either. The check mimics the
+    // monitor's: it holds the offer to the host recorded when it was made.
+    it("abandons the restart, killing nothing, when a host that reuses the pid replaced the offered one while it waited", async () => {
+      const offered = { offerId: 1, pid: 4242, websocketUrl: "ws://a/rpc" };
+      let published = { pid: 4242, websocketUrl: "ws://a/rpc" };
+      const harness = await installBridge(
+        async (offer) =>
+          offer.offerId === offered.offerId &&
+          offer.pid === offered.pid &&
+          published.pid === offered.pid &&
+          published.websocketUrl === offered.websocketUrl
+            ? OFFERED_HOST
+            : null,
+        UNRESPONSIVE,
+      );
+
+      const result = harness.invoke(OFFER);
+      await vi.waitFor(() => {
+        expect(harness.hostController.queued).toHaveLength(1);
+      });
+      // B, same pid, another endpoint, published with no tick in between: the
+      // verdict store still holds A's offer.
+      published = { pid: 4242, websocketUrl: "ws://b/rpc" };
+      await harness.hostController.runQueued();
+
+      await expect(result).resolves.toEqual({
+        kind: "declined",
+        message: STILL_RUNNING_MESSAGE,
+      });
+      expect(harness.hostController.killed).toBe(0);
+      harness.dispose();
+    });
+
+    it("abandons an offer id other than the verdict's without asking the monitor's check", async () => {
+      const confirm = vi.fn(async () => OFFERED_HOST);
+      const harness = await installBridge(confirm, UNRESPONSIVE);
+
+      const result = harness.invoke({ pid: 4242, offerId: 2 });
+      await vi.waitFor(() => {
+        expect(harness.hostController.queued).toHaveLength(1);
+      });
+      await harness.hostController.runQueued();
+
+      await expect(result).resolves.toEqual({
+        kind: "declined",
+        message: STILL_RUNNING_MESSAGE,
+      });
+      expect(confirm).not.toHaveBeenCalled();
+      expect(harness.hostController.killed).toBe(0);
+      harness.dispose();
+    });
+
+    it.each([
+      ["a bare pid, the old form", 4242],
+      ["a string", "4242"],
+      ["undefined", undefined],
+      ["null", null],
+      ["an empty object", {}],
+      ["a missing offerId", { pid: 4242 }],
+      ["a missing pid", { offerId: 1 }],
+      ["a zero offerId", { pid: 4242, offerId: 0 }],
+      ["a negative offerId", { pid: 4242, offerId: -1 }],
+      ["a fractional offerId", { pid: 4242, offerId: 1.5 }],
+      ["a string offerId", { pid: 4242, offerId: "1" }],
+      ["an unsafe offerId", { pid: 4242, offerId: 2 ** 53 }],
+      ["a zero pid", { pid: 0, offerId: 1 }],
+      ["a negative pid", { pid: -1, offerId: 1 }],
+      ["a fractional pid", { pid: 1.5, offerId: 1 }],
+      ["a string pid", { pid: "4242", offerId: 1 }],
+    ])("declines %s without calling respawn", async (_name, rawOffer) => {
+      const confirm = vi.fn(async () => OFFERED_HOST);
+      const harness = await installBridge(confirm, UNRESPONSIVE);
+
+      await expect(harness.invoke(rawOffer)).resolves.toEqual({
+        kind: "declined",
+        message: STILL_RUNNING_MESSAGE,
+      });
+      expect(harness.hostController.respawnCalls).toBe(0);
+      expect(confirm).not.toHaveBeenCalled();
+      harness.dispose();
+    });
+  });
+
   // The renderer's host directory seeds "which id is THIS machine" from this
   // handler, and then persists the answer and neutralizes the matching registry
   // row. A wrong answer therefore does not degrade - it neutralizes the wrong
@@ -4455,6 +5145,10 @@ describe("RunnerIpcBridge", () => {
 
     expect(windowA.sentMessages).toEqual([
       { channel: RunnerHostEvent.localHostChange, payload: null },
+      {
+        channel: RunnerHostEvent.localHostUnresponsiveChange,
+        payload: null,
+      },
       {
         channel: RunnerHostEvent.windowsChange,
         payload: [

@@ -52,6 +52,11 @@ interface HostSectionProps {
   /** A host list request FAILED, so an empty `hosts` proves nothing. */
   readonly listsFailed: boolean;
   readonly onRetryLists: () => void;
+  /**
+   * Whether this picker offers the Automations host: only the new terminal
+   * picker. See `hostOptionPickerGroup`.
+   */
+  readonly offersAutomations: boolean;
 }
 
 interface WorkspaceHostSwitcherProps extends HostSectionProps {
@@ -97,6 +102,7 @@ export function WorkspaceHostSwitcher(
       listsFailed={props.listsFailed}
       onRetryLists={props.onRetryLists}
       updateViewForHost={null}
+      offersAutomations={props.offersAutomations}
       environmentLabelForHost={null}
       disabled={props.disabled}
       keepFocusableWhenDisabled={props.keepFocusableWhenDisabled}

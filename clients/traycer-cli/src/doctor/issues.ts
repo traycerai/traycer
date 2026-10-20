@@ -43,6 +43,12 @@ export const DOCTOR_ISSUE_CODES = {
   HOST_RPC_UNAUTHORIZED: "HOST_RPC_UNAUTHORIZED",
   HOST_RPC_INCOMPATIBLE: "HOST_RPC_INCOMPATIBLE",
   HOST_RPC_UNVERIFIED: "HOST_RPC_UNVERIFIED",
+  // The host process is alive and its port accepts a connection, but it
+  // answers nothing: its main thread is blocked. It ignores a cooperative stop
+  // too, so the fix is the forced restart, and the message says how long it
+  // has been silent (from its log's last write) so a stall is told apart from
+  // a host that has been wedged for an hour.
+  HOST_RPC_UNRESPONSIVE: "HOST_RPC_UNRESPONSIVE",
   HOST_CRASHED_AT_STARTUP: "HOST_CRASHED_AT_STARTUP",
   RECENT_CRASH_MARKERS: "RECENT_CRASH_MARKERS",
   REGISTRY_NOT_IMPLEMENTED: "REGISTRY_NOT_IMPLEMENTED",

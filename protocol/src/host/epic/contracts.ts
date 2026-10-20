@@ -25,6 +25,7 @@ import {
   createCommentThreadResponseSchema,
   createEpicRequestSchema,
   createEpicRequestSchemaV12,
+  createEpicRequestSchemaV13,
   createEpicResponseSchema,
   createEpicResponseSchemaPre11,
   createEpicResponseSchemaV12,
@@ -150,6 +151,10 @@ import {
   epicSubscribeV15,
   epicSubscribeV16,
 } from "@traycer/protocol/host/epic/subscribe";
+import {
+  listTaskHostsRequestSchema,
+  listTaskHostsResponseSchema,
+} from "@traycer/protocol/host/task-host-summary";
 import {
   listCloudChatPayloadsRequestSchema,
   listCloudChatPayloadsResponseSchema,
@@ -705,6 +710,31 @@ export const epicCreateUpgradeV11ToV12 = defineUpgradePath<
   upgradeResponse: (response) => response,
 });
 
+/**
+ * `epic.create@1.3` - the epic's owner: `owner` names the person
+ * or one of their teams, `null` the person. The request is a stripping object,
+ * so the field is additive and rides a minor; the response is `@1.2`'s,
+ * unchanged.
+ */
+export const epicCreateV13 = defineRpcContract({
+  method: "epic.create",
+  schemaVersion: { major: 1, minor: 3 } as const,
+  requestSchema: createEpicRequestSchemaV13,
+  responseSchema: createEpicResponseSchemaV12,
+});
+
+// A `@1.2` caller named no owner, which is the person: the upgrade fills the
+// honest `null`. The response is the same instance both sides.
+export const epicCreateUpgradeV12ToV13 = defineUpgradePath<
+  typeof epicCreateV12,
+  typeof epicCreateV13
+>({
+  from: epicCreateV12.schemaVersion,
+  to: epicCreateV13.schemaVersion,
+  upgradeRequest: (request) => ({ ...request, owner: null }),
+  upgradeResponse: (response) => response,
+});
+
 // `epic.batchDelete@1.0` - host-side entry point for the CloudData
 // task batch-delete mutation (POST /api/tasks/batch-delete). Accepts a
 // mixed list of epic and phase ids; returns per-id success/error details.
@@ -785,6 +815,19 @@ export const epicMentionReviewsV10 = defineRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: epicMentionArtifactsRequestSchema,
   responseSchema: epicMentionReviewsResponseSchema,
+});
+
+/**
+ * The task's hosts, each with its owner principal and whether the reading
+ * host's principal reaches it: a pass-through of traycer-server's task host
+ * list with the request's own credential. Optional (non-floor): a host without
+ * it degrades `unsupported`, and the client shows no host list.
+ */
+export const epicListTaskHostsV10 = defineRpcContract({
+  method: "epic.listTaskHosts",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: listTaskHostsRequestSchema,
+  responseSchema: listTaskHostsResponseSchema,
 });
 
 // `epic.listCollaborators@1.0` - host-side entry point for the

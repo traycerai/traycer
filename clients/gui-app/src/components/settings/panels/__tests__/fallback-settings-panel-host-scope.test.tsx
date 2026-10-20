@@ -56,25 +56,27 @@ const scopeMocks = vi.hoisted(
 vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
   const { hostScopeFixture, hostScopeOptionFixture } =
     await import("@/components/settings/host-scope/host-scope-fixture");
+  // Read per render, not captured once: the whole subject is what happens
+  // when this answer CHANGES between two renders.
+  const useHostScope = () => {
+    const host = hostScopeOptionFixture({
+      hostId: scopeMocks.hostId,
+      name: scopeMocks.hostName,
+    });
+    return hostScopeFixture({
+      hosts: [host],
+      host,
+      hostId: host.hostId,
+      hostLabel: host.name,
+      activeHost: host,
+      isViewingActive: true,
+      status: "following",
+      client: null,
+    });
+  };
   return {
-    // Read per render, not captured once: the whole subject is what happens
-    // when this answer CHANGES between two renders.
-    useHostScope: () => {
-      const host = hostScopeOptionFixture({
-        hostId: scopeMocks.hostId,
-        name: scopeMocks.hostName,
-      });
-      return hostScopeFixture({
-        hosts: [host],
-        host,
-        hostId: host.hostId,
-        hostLabel: host.name,
-        activeHost: host,
-        isViewingActive: true,
-        status: "following",
-        client: null,
-      });
-    },
+    useHostScope,
+    usePersonalHostScope: useHostScope,
   };
 });
 

@@ -773,8 +773,8 @@ export interface ProjectedChatSubscribeServerFrame {
   readonly [key: string]: unknown;
 }
 
-/** Canvas annotations first ride 1.30; older lines carry browser evidence only. */
-export const CHAT_SUBSCRIBE_CANVAS_ANNOTATIONS_MINOR = 30;
+/** Canvas annotations first ride 1.31; older lines carry browser evidence only. */
+export const CHAT_SUBSCRIBE_CANVAS_ANNOTATIONS_MINOR = 31;
 
 function supportsCanvasAnnotations(negotiated: SchemaVersion | null): boolean {
   return (
@@ -1555,11 +1555,11 @@ function projectChatEvents(value: unknown): unknown {
   return changed ? projected : value;
 }
 
-/** Below 1.28 the host omits operation blocks/events for non-markdown kinds. */
-export const CHAT_SUBSCRIBE_HTML_ARTIFACTS_MINOR = 28;
+/** Below 1.29 the host omits operation blocks/events for non-markdown kinds. */
+export const CHAT_SUBSCRIBE_HTML_ARTIFACTS_MINOR = 29;
 
 /** Older peers receive the tool row without its inline artifact stamp. */
-export const CHAT_SUBSCRIBE_ARTIFACT_STAMP_MINOR = 29;
+export const CHAT_SUBSCRIBE_ARTIFACT_STAMP_MINOR = 30;
 
 /** Older peers receive accumulated changes without new-kind artifact tags. */
-export const CHAT_SUBSCRIBE_CHECKPOINT_ARTIFACT_KINDS_MINOR = 31;
+export const CHAT_SUBSCRIBE_CHECKPOINT_ARTIFACT_KINDS_MINOR = 32;

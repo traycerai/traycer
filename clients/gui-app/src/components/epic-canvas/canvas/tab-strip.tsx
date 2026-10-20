@@ -114,7 +114,11 @@ import {
 import { useClipboardCopy } from "@/hooks/ui/use-clipboard-copy";
 import { resolveAbsolutePath } from "@/lib/path/cross-platform-path";
 import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
-import { useEpicTerminalAuthority } from "@/hooks/terminal/use-epic-terminal-authority";
+import {
+  terminalTabUsesLegacyReads,
+  useTerminalTabControl,
+  type TerminalTabControl,
+} from "@/components/epic-canvas/canvas/use-terminal-tab-control";
 import { BrowserFavicon } from "@/components/epic-canvas/browser-favicon";
 import {
   useBrowserTabPresentation,
@@ -510,13 +514,6 @@ function useChatUsageMenuHandler(
   }, [chatTitle, openChatUsageDialog, tab.id, usageChatHostId, usageSupported]);
 }
 
-interface TerminalTabControl {
-  readonly mode: "unknown" | "legacy" | "capable";
-  readonly displayTitle: string;
-  readonly canMutate: boolean;
-  readonly rename: (title: string) => void;
-}
-
 function TabItem(props: TabItemProps) {
   if (props.tab.type === "browser-session") {
     return <BrowserTabItem {...props} tab={props.tab} />;
@@ -556,29 +553,7 @@ function BrowserTabItem(
 function TerminalTabItem(
   props: Omit<TabItemProps, "tab"> & { readonly tab: EpicTerminalRef },
 ) {
-  const controller = useEpicTerminalAuthority({
-    epicId: props.epicId,
-    node: props.tab,
-  });
-  const rename = controller.rename;
-  const terminalId = props.tab.id;
-  const canMutate =
-    controller.canMutate &&
-    !controller.migrationPending &&
-    controller.projection !== undefined;
-  const control: TerminalTabControl = {
-    mode: controller.capability,
-    displayTitle: controller.viewModel?.displayTitle ?? props.tab.name,
-    canMutate,
-    rename: (title) => {
-      if (!controller.canMutate) return;
-      rename.mutate({
-        hostId: props.tab.hostId,
-        terminalId,
-        manualTitle: title,
-      });
-    },
-  };
+  const control = useTerminalTabControl(props.epicId, props.tab);
   return (
     <TabItemBody
       {...props}
@@ -611,7 +586,7 @@ function useTabRenameControl(args: {
     isTerminalTab ? tabHostId(tab) : null,
   );
   const terminalHostClient =
-    isTerminalTab && terminalControl?.mode !== "capable"
+    isTerminalTab && terminalTabUsesLegacyReads(terminalControl)
       ? resolvedHostClient
       : null;
   const fallbackDisplayTitle = useEpicTabDisplayTitle(

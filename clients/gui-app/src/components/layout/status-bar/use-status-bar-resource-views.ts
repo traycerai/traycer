@@ -1,3 +1,4 @@
+import { useDesktopAppResourceUsage } from "@/hooks/resources/use-desktop-app-resource-usage";
 import { useGlobalResourcesUnsupported } from "@/hooks/resources/use-global-resources-unsupported";
 import { attributedProjection } from "@/lib/resources/headline-resource-summary";
 import {
@@ -47,6 +48,13 @@ export function useStatusBarResourceMetrics(input: {
    * name. See `attributedProjection`.
    */
   readonly hasExplicitPick: boolean;
+  /**
+   * The watched host is THIS computer, so the desktop shell's own processes
+   * belong in its total - the same answer the resource monitor's headline
+   * gives (`readingShowsLocalDesktop`), so the strip and the panel print one
+   * number for one machine.
+   */
+  readonly watchesThisMachine: boolean;
   readonly compact: boolean;
 }): {
   readonly views: ReadonlyArray<StatusBarResourceMetricView>;
@@ -61,11 +69,20 @@ export function useStatusBarResourceMetrics(input: {
   // Answered against this subtree's stream binding.
   const globalStreamUnsupported = useGlobalResourcesUnsupported(input.hostId);
   const sample = useSampleScene();
+  // The shell sampler is an IPC round trip a second, started by its first
+  // subscriber, and this hook is mounted for the life of the window. So it is
+  // asked for only while something would print it: a reading about another
+  // machine does not count the shell, a readout with every metric off draws
+  // nothing, and the sample shell prints specimens.
+  const desktopApp = useDesktopAppResourceUsage(
+    input.watchesThisMachine && metrics.length > 0 && !sample,
+  );
   const views = statusBarResourceMetricViews({
     metrics,
     projection,
     watchedHostId: input.hostId,
     hasExplicitPick: input.hasExplicitPick,
+    desktopApp,
     globalStreamUnsupported,
     hostLabel: input.hostLabel,
   });
@@ -86,6 +103,7 @@ export function useStatusBarResourceMetrics(input: {
       hasExplicitPick: input.hasExplicitPick,
       streamed: projection,
     }),
+    desktopApp,
   );
   return { views, cpuPercent: reading.cpuPercent };
 }

@@ -1,4 +1,5 @@
 import type { ResourceMetric } from "@/lib/layout/layout-values";
+import type { DesktopAppResourceUsage } from "@/lib/resources/desktop-app-resource-usage";
 import {
   formatCpuPercent,
   formatMemoryBytes,
@@ -11,14 +12,20 @@ import {
 import type { GlobalResourceProjection } from "@/stores/resources/resources-registry";
 
 /**
- * The status bar's resource numbers, for the watched host's process tree.
+ * The status bar's resource numbers: the watched host's process tree, plus the
+ * local desktop shell whenever the watched host IS this computer.
  *
- * Deliberately NOT built on `combineHeadlineResourceSummary` /
- * `resolveResourceMonitorHostReading`, which the resource monitor uses and
- * which look close enough to reuse. Both ADD the local desktop shell to the
- * watched host's tree - the popover reports one machine's complete load, so
- * the Electron app belongs in its total whenever the watched host IS this
- * computer. The strip reports the host's processes and only those.
+ * That second part is what makes the strip agree with the resource monitor's
+ * headline (`combineHeadlineResourceSummary`), which reports one machine's
+ * complete load and so counts the Electron app in it. The strip used to print
+ * the host tree alone, and the two then disagreed by exactly the shell's
+ * working set with nothing on screen to say why. The caller decides whether
+ * the shell belongs in the reading (`readingShowsLocalDesktop`) and hands the
+ * sample in, or `null`; nothing here can tell which machine it is describing.
+ *
+ * Still not built on `combineHeadlineResourceSummary` itself: that reads the
+ * owner trees and the PSS metric for the panel, and the strip's unavailable
+ * sentences need each field resolved on its own (below).
  */
 export interface StatusBarResourceReading {
   readonly cpuPercent: number | null;
@@ -64,21 +71,30 @@ export interface StatusBarResourceMetricView {
  */
 export function statusBarResourceReading(
   projection: GlobalResourceProjection,
+  desktopApp: DesktopAppResourceUsage | null,
 ): StatusBarResourceReading {
-  return hostTreeReading(projection);
+  return hostTreeReading(projection, desktopApp);
 }
 
 /**
- * The watched host's whole process tree.
+ * The watched host's whole process tree, with the desktop shell on top when
+ * the caller says it belongs there.
  *
  * `hostTree` is absent on a pre-@1.2 host, which reports only its own host
  * process (`app`). Falling back to it keeps an old host showing a real, if
  * narrower, number instead of a dash that reads as "broken" — and the fallback
  * keys on the FIELD being null rather than on a negotiated stream version, so
  * this stays a pure function of the projection.
+ *
+ * The shell is an ADDITION to a host reading, never a reading of its own: with
+ * no host sample there is nothing to attribute the strip's numbers to, and a
+ * figure that was only the Electron app would print under the host's name.
+ * Electron reports working-set memory, the same thing the host tree's
+ * `rssBytes` is, which is why the two add (`selectResourceMemoryMetric`).
  */
 function hostTreeReading(
   projection: GlobalResourceProjection,
+  desktopApp: DesktopAppResourceUsage | null,
 ): StatusBarResourceReading {
   const base = projection.hostTree ?? projection.app;
   if (base === null) return EMPTY_READING;
@@ -86,15 +102,17 @@ function hostTreeReading(
   // read memory this sample still reports CPU and a process count, so the
   // metrics are resolved independently rather than the whole reading being
   // thrown away for one missing field.
+  const memoryBytes =
+    base.rssBytes === null ? null : base.rssBytes + (desktopApp?.rssBytes ?? 0);
   return {
-    cpuPercent: base.cpuPercent,
-    memoryBytes: base.rssBytes,
-    processCount: base.processCount,
+    cpuPercent: base.cpuPercent + (desktopApp?.cpuPercent ?? 0),
+    memoryBytes,
+    processCount: base.processCount + (desktopApp?.processCount ?? 0),
     // `hostTotalMemoryBytes` rides on the host `app` snapshot, so the share is
     // available even where the tree total came from the pre-@1.2 fallback
     // above — numerator and denominator then describe the same (smaller) set,
     // which is the only thing a share has to be true of.
-    ramSharePercent: hostMemorySharePercent(base.rssBytes, projection.app),
+    ramSharePercent: hostMemorySharePercent(memoryBytes, projection.app),
   };
 }
 
@@ -114,6 +132,11 @@ export function statusBarResourceMetricViews(input: {
   /** The host the strip is WATCHING, and `hasExplicitPick` beside it. */
   readonly watchedHostId: string | null;
   readonly hasExplicitPick: boolean;
+  /**
+   * This computer's desktop shell, when the watched host IS this computer and
+   * so the shell belongs in its total; `null` for any other machine.
+   */
+  readonly desktopApp: DesktopAppResourceUsage | null;
   /** The watched host cannot serve a global `resources.subscribe` at all. */
   readonly globalStreamUnsupported: boolean;
   readonly hostLabel: string;
@@ -134,7 +157,7 @@ export function statusBarResourceMetricViews(input: {
     hasExplicitPick: input.hasExplicitPick,
     streamed: input.projection,
   });
-  const reading = statusBarResourceReading(projection);
+  const reading = statusBarResourceReading(projection, input.desktopApp);
   return input.metrics.map((metric) => {
     const value = formatStatusBarMetric(metric, reading);
     return {

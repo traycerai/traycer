@@ -120,7 +120,7 @@ export function useBotUpdateRunSettingsMutation(
 }
 
 /**
- * Opens the bot on the host behind `client` (T18): that host answers whether
+ * Opens the bot on the host behind `client`: that host answers whether
  * it serves the bot, whether another host does, or why none can now, and
  * claims the bot onto itself when its bound host cannot be reached. The tab
  * follows the answer; the person never picks the host. No toast: the tab

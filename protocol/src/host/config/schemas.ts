@@ -2,6 +2,7 @@ import { z } from "zod";
 import { LOG_LEVELS } from "@traycer/protocol/config/log-level";
 import { AGENT_WORKTREE_CREATE_POLICIES } from "@traycer/protocol/config/schema";
 import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
+import { executableWriteGrantSchema } from "@traycer/protocol/host/executable-write-grant";
 
 /**
  * RPC payloads for the machine-user-global CLI config store.
@@ -37,13 +38,43 @@ export type ConfigShellGetResponse = z.infer<
 // A shell-set operation must change either the selected program or its args;
 // accepting `{ path: null, args: null }` would turn an RPC typo into a silent
 // config-file rewrite instead of matching the CLI command's validation.
-export const configShellSetRequestSchema = lazySchema(() =>
+//
+// The v1.0 request, FROZEN as released (`host-v1.5.1`). v1.1 below adds the
+// executable-write grant; a hand copy, so the next field cannot reach it.
+export const configShellSetRequestSchemaV10 = lazySchema(() =>
   z.union([
     z.object({ path: shellPathSchema, args: shellArgsSchema }),
     z.object({ path: z.null(), args: z.array(z.string()) }),
   ]),
 );
+
+/**
+ * v1.1: the shell path and args select what starts, so the write reaches an
+ * execution sink and carries the executable-write grant. Each arm
+ * carries it; a v1.0 caller's request is upgraded with `null`.
+ */
+export const configShellSetRequestSchema = lazySchema(() =>
+  z.union([
+    z.object({
+      path: shellPathSchema,
+      args: shellArgsSchema,
+      executableWriteGrant: executableWriteGrantSchema,
+    }),
+    z.object({
+      path: z.null(),
+      args: z.array(z.string()),
+      executableWriteGrant: executableWriteGrantSchema,
+    }),
+  ]),
+);
 export type ConfigShellSetRequest = z.infer<typeof configShellSetRequestSchema>;
+/**
+ * The shell choice itself, without the transport's grant: what the Settings
+ * editor produces and what the desktop's local CLI bridge writes.
+ */
+export type ConfigShellSetRequestV10 = z.infer<
+  typeof configShellSetRequestSchemaV10
+>;
 
 export const configShellSetResponseSchema = lazySchema(() =>
   z.object({
@@ -55,7 +86,13 @@ export type ConfigShellSetResponse = z.infer<
   typeof configShellSetResponseSchema
 >;
 
-export const configShellResetRequestSchema = emptyRequestSchema;
+/** The v1.0 request, FROZEN as released: empty. */
+export const configShellResetRequestSchemaV10 = emptyRequestSchema;
+
+/** v1.1: resetting the shell changes what starts, so it carries the grant. */
+export const configShellResetRequestSchema = lazySchema(() =>
+  z.object({ executableWriteGrant: executableWriteGrantSchema }),
+);
 export type ConfigShellResetRequest = z.infer<
   typeof configShellResetRequestSchema
 >;
@@ -69,8 +106,17 @@ export type ConfigShellResetResponse = z.infer<
   typeof configShellResetResponseSchema
 >;
 
-export const configShellAddRequestSchema = lazySchema(() =>
+/** The v1.0 request, FROZEN as released. */
+export const configShellAddRequestSchemaV10 = lazySchema(() =>
   z.object({ path: shellPathSchema }),
+);
+
+/** v1.1: adds the executable-write grant. */
+export const configShellAddRequestSchema = lazySchema(() =>
+  z.object({
+    path: shellPathSchema,
+    executableWriteGrant: executableWriteGrantSchema,
+  }),
 );
 export type ConfigShellAddRequest = z.infer<typeof configShellAddRequestSchema>;
 
@@ -92,9 +138,18 @@ export type ConfigShellAddResponse = z.infer<
   typeof configShellAddResponseSchema
 >;
 
+/** The v1.0 request, FROZEN as released. */
+export const configShellRemoveRequestSchemaV10 = lazySchema(() =>
+  z.object({
+    path: shellPathSchema,
+  }),
+);
+
+/** v1.1: adds the executable-write grant. */
 export const configShellRemoveRequestSchema = lazySchema(() =>
   z.object({
     path: shellPathSchema,
+    executableWriteGrant: executableWriteGrantSchema,
   }),
 );
 export type ConfigShellRemoveRequest = z.infer<
@@ -111,9 +166,18 @@ export type ConfigShellRemoveResponse = z.infer<
   typeof configShellRemoveResponseSchema
 >;
 
+/** The v1.0 request, FROZEN as released. */
+export const configShellRevertArgsRequestSchemaV10 = lazySchema(() =>
+  z.object({
+    path: shellPathSchema,
+  }),
+);
+
+/** v1.1: adds the executable-write grant. */
 export const configShellRevertArgsRequestSchema = lazySchema(() =>
   z.object({
     path: shellPathSchema,
+    executableWriteGrant: executableWriteGrantSchema,
   }),
 );
 export type ConfigShellRevertArgsRequest = z.infer<
@@ -218,10 +282,24 @@ export const configEnvListResponseSchema = lazySchema(() =>
 );
 export type ConfigEnvListResponse = z.infer<typeof configEnvListResponseSchema>;
 
+/** The v1.0 request, FROZEN as released. */
+export const configEnvSetRequestSchemaV10 = lazySchema(() =>
+  z.object({
+    key: envKeySchema,
+    value: z.string().nullable(),
+  }),
+);
+
+/**
+ * v1.1: a host-process variable can select what starts (a launch-sensitive
+ * name), so the write carries the executable-write grant; whether a given key
+ * reaches a sink is the host's decision, not the client's.
+ */
 export const configEnvSetRequestSchema = lazySchema(() =>
   z.object({
     key: envKeySchema,
     value: z.string().nullable(),
+    executableWriteGrant: executableWriteGrantSchema,
   }),
 );
 export type ConfigEnvSetRequest = z.infer<typeof configEnvSetRequestSchema>;

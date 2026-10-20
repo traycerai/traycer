@@ -67,6 +67,8 @@ import {
   type ProviderProfileLoginFlowCodePaste,
   type ProviderProfileLoginFlowState,
 } from "./use-provider-profile-login-flow";
+import { CredentialRefusalNote } from "@/components/providers/credential-refusal-note";
+import { useHostCredentialRefusal } from "@/hooks/host/use-host-credential-refusal";
 
 /**
  * Whether a new managed profile for this provider can SHARE the ambient
@@ -122,6 +124,21 @@ export interface FailedProviderProfileAttempt {
   readonly message: string;
 }
 
+/** Whether "Link account" is held off: any one reason is enough. */
+function linkHeldOff(reasons: {
+  readonly labelEmpty: boolean;
+  readonly busy: boolean;
+  readonly credentialRefused: boolean;
+  readonly macosBlocked: boolean;
+}): boolean {
+  return (
+    reasons.labelEmpty ||
+    reasons.busy ||
+    reasons.credentialRefused ||
+    reasons.macosBlocked
+  );
+}
+
 export function AddProviderProfileDialog({
   state,
   client,
@@ -145,6 +162,11 @@ export function AddProviderProfileDialog({
   readonly onProfileCreated: (profileId: string) => void;
 }): ReactNode {
   const openLink = useOpenLink();
+  // Every entry point gates on the target host already; this is the floor
+  // under all of them, so no sign-in ever starts on a sandbox.
+  const credentialRefusal = useHostCredentialRefusal(
+    client === null ? null : client.getActiveHostId(),
+  );
   const supportsShareSkillsAndPlugins =
     PROVIDER_SHARES_SKILLS_AND_PLUGINS[state.providerId];
   const [shareSkillsAndPlugins, setShareSkillsAndPlugins] = useState(
@@ -299,7 +321,7 @@ export function AddProviderProfileDialog({
   };
 
   const linkAccount = (): void => {
-    if (trimmedLabel.length === 0) return;
+    if (trimmedLabel.length === 0 || credentialRefusal !== null) return;
     // A fresh attempt supersedes any previously reported failure - covers
     // both the initial "Link account" and the failed-state Retry.
     onFailedAttempt(null);
@@ -362,6 +384,7 @@ export function AddProviderProfileDialog({
             />
           ) : null}
 
+          <CredentialRefusalNote refusal={credentialRefusal} />
           <ProfileMacosNotice
             block={macosBlock}
             providerId={state.providerId}
@@ -384,9 +407,12 @@ export function AddProviderProfileDialog({
             namingError={renameProfile.error}
             emailRevealed={emailRevealed}
             setEmailRevealed={setEmailRevealed}
-            linkDisabled={
-              trimmedLabel.length === 0 || flow.busy || macosBlock !== null
-            }
+            linkDisabled={linkHeldOff({
+              labelEmpty: trimmedLabel.length === 0,
+              busy: flow.busy,
+              credentialRefused: credentialRefusal !== null,
+              macosBlocked: macosBlock !== null,
+            })}
             onLink={linkAccount}
             onOpenExternalLink={(url) => {
               void openLink(url, "auth", null);
@@ -429,6 +455,7 @@ export function AddProviderProfileDialog({
               type="button"
               size="sm"
               variant="ghost"
+              disabled={credentialRefusal !== null}
               onClick={linkAccount}
             >
               Sign in again

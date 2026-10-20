@@ -56,8 +56,8 @@ function buildAuthority(): TestAuthority {
     identityGeneration: 0,
     localHostId: LOCAL_HOST_ID,
     hosts: [
-      { hostId: LOCAL_HOST_ID, kind: "local" },
-      { hostId: REMOTE_HOST_ID, kind: "remote" },
+      { hostId: LOCAL_HOST_ID, kind: "local", teamOwned: false },
+      { hostId: REMOTE_HOST_ID, kind: "remote", teamOwned: false },
     ],
   });
   const engine = new SelectionAuthorityEngineImpl({

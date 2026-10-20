@@ -23,6 +23,8 @@ export function supportBridgeQueryScopeId(
 
 export const runnerMutationKeys = {
   requestHostRespawn: () => ["runner.requestHostRespawn"] as const,
+  forceRestartUnresponsiveHost: () =>
+    ["runner.forceRestartUnresponsiveHost"] as const,
   serviceInstall: () => ["runner.serviceInstall"] as const,
   serviceUninstall: () => ["runner.serviceUninstall"] as const,
   serviceStart: () => ["runner.serviceStart"] as const,

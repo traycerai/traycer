@@ -486,12 +486,23 @@ export function hostDirectoryEntryEquals(
     // some consumer named and expires a linger after the last holder lets go.
     // A host with a populated cache and nobody holding it is exactly the case
     // this module cannot see.
-    remotePublicKeyOf(a) === remotePublicKeyOf(b)
+    remotePublicKeyOf(a) === remotePublicKeyOf(b) &&
+    // A sandbox's lifecycle moves with its connectivity mostly, not always (a
+    // frozen flag set on an already-suspended row moves nothing else), and a
+    // tab deciding whether its open wakes the sandbox must hear the move.
+    sandboxStateKeyOf(a) === sandboxStateKeyOf(b)
   );
 }
 
 function remotePublicKeyOf(entry: HostDirectoryEntry): string | null {
   return isRemoteHostDirectoryEntry(entry) ? entry.publicKey : null;
+}
+
+function sandboxStateKeyOf(entry: HostDirectoryEntry): string | null {
+  if (!isRemoteHostDirectoryEntry(entry) || entry.sandbox === null) {
+    return null;
+  }
+  return `${entry.sandbox.state ?? "none"}:${entry.sandbox.frozen ? "frozen" : "thawed"}`;
 }
 
 /**

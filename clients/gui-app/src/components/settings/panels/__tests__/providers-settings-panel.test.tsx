@@ -158,57 +158,102 @@ type CancelLoginVariables = RequestOfMethod<
   "providers.cancelLogin"
 >;
 
-const providerMocks = vi.hoisted(() => ({
-  listResult: {
-    data: { providers: [] as ProviderCliState[] },
-    isPending: false,
-    isError: false,
-    isFetching: false,
-    error: undefined as
-      | HostRpcError
-      | { message: string; code: string }
+// The `providers.list` envelope as this harness serves it. The flag is the
+// `providers.list@10.5` key a sandbox host sets; every other host omits it.
+interface ProvidersListEnvelope {
+  providers: ProviderCliState[];
+  credentialsManagedInAccount?: boolean;
+}
+
+const providerMocks = vi.hoisted(() => {
+  const initialList: ProvidersListEnvelope = { providers: [] };
+  return {
+    listResult: {
+      data: initialList,
+      isPending: false,
+      isError: false,
+      isFetching: false,
+      error: undefined as
+        | HostRpcError
+        | { message: string; code: string }
+        | undefined,
+      refetch: vi.fn(() => Promise.resolve({})),
+    },
+    setSelectionMutate: vi.fn(),
+    addCustomPathMutate: vi.fn(),
+    removeCustomPathMutate: vi.fn(),
+    setEnabledMutate: vi.fn<SetEnabledMutate>(),
+    setProfileEnabledMutate: vi.fn(),
+    refreshProfileStatusMutate: vi.fn(() => Promise.resolve()),
+    setApiKeyMutate: vi.fn(),
+    clearApiKeyMutate: vi.fn(),
+    setTerminalAgentArgsMutate: vi.fn(),
+    setEnvOverrideMutate: vi.fn(),
+    deleteEnvOverrideMutate: vi.fn(),
+    startLoginMutate: vi.fn<StartLoginMutate>(),
+    awaitLoginMutate: vi.fn<AwaitLoginMutate>(),
+    cancelLoginMutate: vi.fn(),
+    cancelLoginPending: false,
+    submitLoginCodeMutate: vi.fn<SubmitLoginCodeMutate>(),
+    submitLoginCodeReset: vi.fn(),
+    submitLoginCodePending: false,
+    submitLoginCodeSuccess: false,
+    submitLoginCodeData: undefined as
+      | { readonly outcome: "accepted" | "noActiveLogin" }
       | undefined,
-    refetch: vi.fn(() => Promise.resolve({})),
+    submitLoginCodeError: null as Error | null,
+    touchLoginMutate: vi.fn(),
+    touchLoginReset: vi.fn(),
+    renameProfileMutate: vi.fn<RenameProfileMutate>(),
+    renameProfilePending: false,
+    renameProfileError: null as Error | null,
+    recolorProfileMutate: vi.fn<RecolorProfileMutate>(),
+    removeProfileMutate: vi.fn<RemoveProfileMutate>(),
+    refreshProviders: vi.fn(() => Promise.resolve()),
+    /** Host id each Refresh RESOLVED, which is the wrong-host bug's signature. */
+    refreshedHostIds: [] as string[],
+    /** The app-wide binding. Null unless a test opts into a distinct ambient. */
+    ambientBinding: null as {
+      hostClient: { getActiveHostId: () => string };
+    } | null,
+    refreshUsageLimits: vi.fn(() => Promise.resolve()),
+    openLink: vi.fn(),
+    /** What `useHostCredentialRefusal` answers; `null` is a host that takes sign-ins. */
+    credentialRefusal: null as string | null,
+  };
+});
+
+// The optional "Reset provider settings" capability. `unsupportedMethods` is
+// what a host that predates `providers.settingsFile.*` would not advertise;
+// the status hook and the reset mutation are stubbed at their module seams
+// (this suite renders without a `QueryClientProvider`, like every other data
+// hook it uses). The hooks' own behavior - the request, the toast, the refetch
+// - is held by `provider-settings-reset-action.test.tsx`.
+type ResetSettingsFileMutate = (
+  variables: Record<string, never>,
+  options: { readonly onSettled: () => void },
+) => void;
+
+const settingsFileMocks = vi.hoisted(() => ({
+  unsupportedMethods: new Set<string>(),
+  statusData: undefined as { readonly unreadable: boolean } | undefined,
+  /** The `enabled` argument of every `useProvidersSettingsFileStatus` call. */
+  statusEnabledArgs: [] as boolean[],
+  resetMutate: vi.fn<ResetSettingsFileMutate>(),
+}));
+
+vi.mock("@/hooks/providers/use-providers-settings-file-status-query", () => ({
+  useProvidersSettingsFileStatus: (enabled: boolean) => {
+    settingsFileMocks.statusEnabledArgs.push(enabled);
+    return { data: enabled ? settingsFileMocks.statusData : undefined };
   },
-  setSelectionMutate: vi.fn(),
-  addCustomPathMutate: vi.fn(),
-  removeCustomPathMutate: vi.fn(),
-  setEnabledMutate: vi.fn<SetEnabledMutate>(),
-  setProfileEnabledMutate: vi.fn(),
-  refreshProfileStatusMutate: vi.fn(() => Promise.resolve()),
-  setApiKeyMutate: vi.fn(),
-  clearApiKeyMutate: vi.fn(),
-  setTerminalAgentArgsMutate: vi.fn(),
-  setEnvOverrideMutate: vi.fn(),
-  deleteEnvOverrideMutate: vi.fn(),
-  startLoginMutate: vi.fn<StartLoginMutate>(),
-  awaitLoginMutate: vi.fn<AwaitLoginMutate>(),
-  cancelLoginMutate: vi.fn(),
-  cancelLoginPending: false,
-  submitLoginCodeMutate: vi.fn<SubmitLoginCodeMutate>(),
-  submitLoginCodeReset: vi.fn(),
-  submitLoginCodePending: false,
-  submitLoginCodeSuccess: false,
-  submitLoginCodeData: undefined as
-    | { readonly outcome: "accepted" | "noActiveLogin" }
-    | undefined,
-  submitLoginCodeError: null as Error | null,
-  touchLoginMutate: vi.fn(),
-  touchLoginReset: vi.fn(),
-  renameProfileMutate: vi.fn<RenameProfileMutate>(),
-  renameProfilePending: false,
-  renameProfileError: null as Error | null,
-  recolorProfileMutate: vi.fn<RecolorProfileMutate>(),
-  removeProfileMutate: vi.fn<RemoveProfileMutate>(),
-  refreshProviders: vi.fn(() => Promise.resolve()),
-  /** Host id each Refresh RESOLVED, which is the wrong-host bug's signature. */
-  refreshedHostIds: [] as string[],
-  /** The app-wide binding. Null unless a test opts into a distinct ambient. */
-  ambientBinding: null as {
-    hostClient: { getActiveHostId: () => string };
-  } | null,
-  refreshUsageLimits: vi.fn(() => Promise.resolve()),
-  openLink: vi.fn(),
+}));
+
+vi.mock("@/hooks/providers/use-providers-settings-file-reset-mutation", () => ({
+  useProvidersSettingsFileReset: () => ({
+    mutate: settingsFileMocks.resetMutate,
+    isPending: false,
+  }),
 }));
 
 // The auto-judge row the panel now renders reaches TanStack Query for the
@@ -238,6 +283,16 @@ vi.mock("@/components/settings/panels/provider-usage-limits-section", () => ({
 vi.mock("@/hooks/providers/use-providers-set-auto-judge-mutation", () => ({
   useProvidersSetAutoJudge: () => ({ mutate: vi.fn(), isPending: false }),
 }));
+
+vi.mock(
+  "@/hooks/providers/use-providers-set-native-subagents-mutation",
+  () => ({
+    useProvidersSetNativeSubagents: () => ({
+      mutate: vi.fn(),
+      isPending: false,
+    }),
+  }),
+);
 
 vi.mock("@/hooks/providers/use-providers-list-query", () => ({
   useProvidersList: () => providerMocks.listResult,
@@ -565,7 +620,11 @@ vi.mock("@/hooks/host/use-host-supports-method", async (importOriginal) => {
     await importOriginal<
       typeof import("@/hooks/host/use-host-supports-method")
     >();
-  return { ...actual, useHostSupportsMethod: () => true };
+  return {
+    ...actual,
+    useHostSupportsMethod: (_hostId: string | null, method: string) =>
+      !settingsFileMocks.unsupportedMethods.has(method),
+  };
 });
 
 vi.mock("@/hooks/providers/use-providers-detect-version-query", () => ({
@@ -659,6 +718,9 @@ vi.mock("@/lib/links/open-link", () => ({
 // no `<RunnerHostProvider>` above it.
 vi.mock("@/providers/use-runner-host", () => ({
   useRunnerHost: () => ({ signInUrl: "https://auth.example/sign-in" }),
+  // The account-managed line's Secrets link is null-tolerant; null renders the
+  // line without it, which is all these cases need.
+  useRunnerHostOrNull: () => null,
 }));
 
 // MCP Project scope resolves workspaces via host query; this harness has no
@@ -723,6 +785,12 @@ vi.mock("@/lib/host/runtime", async (importOriginal) => {
 
 vi.mock("@/hooks/host/use-addressable-host-id", () => ({
   useAddressableHostId: () => "host-1",
+}));
+
+// The real hook reads the host binding's directory, which this suite's bare
+// ambient binding does not carry; the hook has its own test.
+vi.mock("@/hooks/host/use-host-credential-refusal", () => ({
+  useHostCredentialRefusal: () => providerMocks.credentialRefusal,
 }));
 
 // The Traycer provider mounts the subscription card; stub its credits query so
@@ -931,30 +999,42 @@ const hostScopeMocks: {
 vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
   const { hostScopeFixture } =
     await import("@/components/settings/host-scope/host-scope-fixture");
-  return {
-    useHostScope: () => ({
-      ...hostScopeFixture({
-        setHostId: hostScopeMocks.setHostId,
-        hostId: hostScopeMocks.hostId,
-        // `host: undefined` must be OMITTED, not passed: the fixture's final
-        // spread would clobber its default host with the explicit undefined.
-        ...(hostScopeMocks.host === undefined
-          ? {}
-          : { host: hostScopeMocks.host }),
-        // Same omit-don't-pass rule as `host`: an explicit undefined would
-        // clobber the fixture's derived status.
-        ...(hostScopeMocks.status === undefined
-          ? {}
-          : { status: hostScopeMocks.status }),
-      }),
-      // Spread OUTSIDE the fixture call: the stub satisfies what the panel
-      // uses, not the full `HostClient` the fixture's type demands.
-      client: hostScopeMocks.client,
+  const useHostScope = () => ({
+    ...hostScopeFixture({
+      setHostId: hostScopeMocks.setHostId,
+      hostId: hostScopeMocks.hostId,
+      // `host: undefined` must be OMITTED, not passed: the fixture's final
+      // spread would clobber its default host with the explicit undefined.
+      ...(hostScopeMocks.host === undefined
+        ? {}
+        : { host: hostScopeMocks.host }),
+      // Same omit-don't-pass rule as `host`: an explicit undefined would
+      // clobber the fixture's derived status.
+      ...(hostScopeMocks.status === undefined
+        ? {}
+        : { status: hostScopeMocks.status }),
     }),
+    // Spread OUTSIDE the fixture call: the stub satisfies what the panel
+    // uses, not the full `HostClient` the fixture's type demands.
+    client: hostScopeMocks.client,
+  });
+  return {
+    useHostScope,
+    usePersonalHostScope: useHostScope,
   };
 });
 
-import { ProvidersSettingsPanel } from "@/components/settings/panels/providers-settings-panel";
+import {
+  McpServersSettingsPanel,
+  ProvidersSettingsPanel,
+  SkillsSettingsPanel,
+} from "@/components/settings/panels/providers-settings-panel";
+import {
+  PROVIDER_SETTINGS_RESET_CONSENT,
+  PROVIDER_SETTINGS_RESET_LABEL,
+  PROVIDER_SETTINGS_RESET_TITLE,
+  PROVIDER_SETTINGS_UNUSABLE_COPY,
+} from "@/components/settings/panels/provider-settings-reset-action";
 import { ProviderProfileScopedSection } from "@/components/settings/panels/provider-profile-scoped-section";
 import {
   AMBIENT_AUTH_PENDING_REPOLL_CAP,
@@ -1617,6 +1697,10 @@ describe("<ProvidersSettingsPanel />", () => {
     providerMocks.removeProfileMutate.mockReset();
     providerMocks.refreshProviders.mockClear();
     providerMocks.refreshUsageLimits.mockClear();
+    settingsFileMocks.unsupportedMethods.clear();
+    settingsFileMocks.statusData = undefined;
+    settingsFileMocks.statusEnabledArgs.length = 0;
+    settingsFileMocks.resetMutate.mockReset();
     vi.mocked(toast.success).mockClear();
     hostScopeMocks.setHostId.mockClear();
     hostScopeMocks.hostId = "host-a";
@@ -1626,6 +1710,7 @@ describe("<ProvidersSettingsPanel />", () => {
     hostScopeMocks.status = undefined;
     providerMocks.refreshedHostIds.length = 0;
     providerMocks.ambientBinding = null;
+    providerMocks.credentialRefusal = null;
     hostScopeMocks.client = null;
     useProvidersFocusStore.getState().clearFocusHarnessId();
   });
@@ -1981,6 +2066,177 @@ describe("<ProvidersSettingsPanel />", () => {
     expect(screen.getByText(/Couldn't load provider state/)).toBeDefined();
     expect(screen.queryByText(PROVIDER_SETTINGS_UNREADABLE_COPY)).toBeNull();
     expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+  });
+
+  describe("Reset provider settings", () => {
+    const READ_FAULT_MESSAGE = `${PROVIDER_SETTINGS_UNREADABLE_MESSAGE_PREFIX}: EIO reading config/provider-overrides.json`;
+
+    function renderPanel(): void {
+      render(
+        <TooltipProvider>
+          <ProvidersSettingsPanel />
+        </TooltipProvider>,
+      );
+    }
+
+    function failListWithReadFault(): void {
+      providerMocks.listResult.isError = true;
+      providerMocks.listResult.error = {
+        message: READ_FAULT_MESSAGE,
+        code: "RPC_ERROR",
+      };
+    }
+
+    function openResetDialog(): HTMLElement {
+      fireEvent.click(
+        screen.getByRole("button", { name: PROVIDER_SETTINGS_RESET_LABEL }),
+      );
+      return screen.getByRole("dialog", {
+        name: PROVIDER_SETTINGS_RESET_TITLE,
+      });
+    }
+
+    it("offers the reset above the providers when the host reports the whole settings file unreadable", () => {
+      settingsFileMocks.statusData = { unreadable: true };
+
+      renderPanel();
+
+      const alert = screen.getByRole("alert");
+      expect(
+        within(alert).getByText(PROVIDER_SETTINGS_UNUSABLE_COPY),
+      ).toBeDefined();
+      expect(
+        within(alert).getByRole("button", {
+          name: PROVIDER_SETTINGS_RESET_LABEL,
+        }),
+      ).toBeDefined();
+      const providers = screen.getByRole("navigation", { name: "Providers" });
+      expect(
+        alert.compareDocumentPosition(providers) &
+          Node.DOCUMENT_POSITION_FOLLOWING,
+      ).toBeTruthy();
+    });
+
+    it("offers no reset when the status answer is not unreadable (one malformed row, or a healthy file)", () => {
+      settingsFileMocks.statusData = { unreadable: false };
+
+      renderPanel();
+
+      expect(screen.queryByRole("alert")).toBeNull();
+      expect(screen.queryByText(PROVIDER_SETTINGS_UNUSABLE_COPY)).toBeNull();
+      expect(
+        screen.queryByRole("button", { name: PROVIDER_SETTINGS_RESET_LABEL }),
+      ).toBeNull();
+    });
+
+    it("offers the reset beside Retry on the read-fault card", () => {
+      failListWithReadFault();
+
+      renderPanel();
+
+      expect(screen.getByText(PROVIDER_SETTINGS_UNREADABLE_COPY)).toBeDefined();
+      expect(screen.getByRole("button", { name: "Retry" })).toBeDefined();
+      expect(
+        screen.getByRole("button", { name: PROVIDER_SETTINGS_RESET_LABEL }),
+      ).toBeDefined();
+    });
+
+    it.each([
+      ["providers.settingsFile.status"],
+      ["providers.settingsFile.reset"],
+    ])(
+      "offers no reset and never asks for the status when the host does not advertise %s",
+      (missing) => {
+        settingsFileMocks.unsupportedMethods.add(missing);
+        settingsFileMocks.statusData = { unreadable: true };
+
+        renderPanel();
+
+        expect(screen.queryByRole("alert")).toBeNull();
+        expect(
+          screen.queryByRole("button", { name: PROVIDER_SETTINGS_RESET_LABEL }),
+        ).toBeNull();
+        expect(settingsFileMocks.statusEnabledArgs).not.toContain(true);
+      },
+    );
+
+    it("offers no reset on the read-fault card when the host does not advertise the methods", () => {
+      settingsFileMocks.unsupportedMethods.add("providers.settingsFile.status");
+      settingsFileMocks.unsupportedMethods.add("providers.settingsFile.reset");
+      failListWithReadFault();
+
+      renderPanel();
+
+      expect(screen.getByText(PROVIDER_SETTINGS_UNREADABLE_COPY)).toBeDefined();
+      expect(screen.getByRole("button", { name: "Retry" })).toBeDefined();
+      expect(
+        screen.queryByRole("button", { name: PROVIDER_SETTINGS_RESET_LABEL }),
+      ).toBeNull();
+      expect(settingsFileMocks.statusEnabledArgs).not.toContain(true);
+    });
+
+    it("asks for consent in a dialog and sends nothing until it is confirmed", () => {
+      settingsFileMocks.statusData = { unreadable: true };
+      renderPanel();
+
+      const dialog = openResetDialog();
+
+      expect(
+        within(dialog).getByText(PROVIDER_SETTINGS_RESET_CONSENT),
+      ).toBeDefined();
+      expect(settingsFileMocks.resetMutate).not.toHaveBeenCalled();
+    });
+
+    it("sends nothing when the dialog is cancelled", () => {
+      settingsFileMocks.statusData = { unreadable: true };
+      renderPanel();
+
+      const dialog = openResetDialog();
+      fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+
+      expect(settingsFileMocks.resetMutate).not.toHaveBeenCalled();
+      expect(
+        screen.queryByRole("dialog", { name: PROVIDER_SETTINGS_RESET_TITLE }),
+      ).toBeNull();
+    });
+
+    it("sends exactly one reset with empty params on confirm, and closes the dialog once it settles", () => {
+      settingsFileMocks.statusData = { unreadable: true };
+      renderPanel();
+
+      const dialog = openResetDialog();
+      fireEvent.click(
+        within(dialog).getByRole("button", {
+          name: PROVIDER_SETTINGS_RESET_LABEL,
+        }),
+      );
+
+      expect(settingsFileMocks.resetMutate).toHaveBeenCalledTimes(1);
+      const call = settingsFileMocks.resetMutate.mock.calls.at(0);
+      if (call === undefined) throw new Error("Expected a reset request.");
+      expect(call[0]).toEqual({});
+      act(() => {
+        call[1].onSettled();
+      });
+      expect(
+        screen.queryByRole("dialog", { name: PROVIDER_SETTINGS_RESET_TITLE }),
+      ).toBeNull();
+    });
+
+    it("sends the reset from the read-fault card too", () => {
+      failListWithReadFault();
+      renderPanel();
+
+      const dialog = openResetDialog();
+      fireEvent.click(
+        within(dialog).getByRole("button", {
+          name: PROVIDER_SETTINGS_RESET_LABEL,
+        }),
+      );
+
+      expect(settingsFileMocks.resetMutate).toHaveBeenCalledTimes(1);
+      expect(settingsFileMocks.resetMutate.mock.calls.at(0)?.[0]).toEqual({});
+    });
   });
 
   it("lists OpenCode CLI candidates for Traycer and mutates Traycer selection", () => {
@@ -2442,7 +2698,7 @@ describe("<ProvidersSettingsPanel />", () => {
 
     selectTab("Env");
 
-    expect(screen.getByText("Environment variables")).toBeDefined();
+    expect(screen.getByText("Variables")).toBeDefined();
     expect(screen.getByDisplayValue("OPENAI_API_KEY")).toBeDefined();
     expect(
       screen.getByText(/Applied when Traycer spawns the OpenCode/),
@@ -2736,9 +2992,11 @@ describe("<ProvidersSettingsPanel />", () => {
     expect(screen.getByRole("tab", { name: "CLI & Args" })).toBeDefined();
     expect(screen.getByRole("tab", { name: "Env" })).toBeDefined();
     expect(screen.getByRole("tab", { name: "Usage limits" })).toBeDefined();
-    expect(screen.getByRole("tab", { name: "MCP" })).toBeDefined();
+    // MCP servers and Skills are Personal pages of their own, so Providers
+    // draws neither tab even where the provider advertises them.
+    expect(screen.queryByRole("tab", { name: "MCP" })).toBeNull();
     expect(screen.getByRole("tab", { name: "Plugins" })).toBeDefined();
-    expect(screen.getByRole("tab", { name: "Skills" })).toBeDefined();
+    expect(screen.queryByRole("tab", { name: "Skills" })).toBeNull();
 
     expectPinnedRailLayout();
 
@@ -2747,9 +3005,9 @@ describe("<ProvidersSettingsPanel />", () => {
     expect(screen.queryByRole("tab", { name: "CLI & Args" })).toBeNull();
     expect(screen.queryByRole("tab", { name: "Usage limits" })).toBeNull();
     expect(screen.getByRole("tab", { name: "Env" })).toBeDefined();
-    expect(screen.getByRole("tab", { name: "MCP" })).toBeDefined();
+    expect(screen.queryByRole("tab", { name: "MCP" })).toBeNull();
     expect(screen.getByRole("tab", { name: "Plugins" })).toBeDefined();
-    expect(screen.getByRole("tab", { name: "Skills" })).toBeDefined();
+    expect(screen.queryByRole("tab", { name: "Skills" })).toBeNull();
   });
 
   it("offers the provider's Limits pick on its usage tab, which the Layout page no longer carries", () => {
@@ -2860,6 +3118,90 @@ describe("<ProvidersSettingsPanel />", () => {
     expect(field().value).toBe("");
   });
 
+  describe("account-managed credentials (providers.list credentialsManagedInAccount)", () => {
+    function apiKeyProvider(): ProviderCliState {
+      return providerState({
+        providerId: "cursor",
+        selected: { kind: "bundled" },
+        candidates: [],
+        envOverrides: [],
+        nativeCapabilities: CURSOR_TABS,
+        apiKey: { supported: true, configured: false, source: null },
+      });
+    }
+
+    function renderPanel(): void {
+      render(
+        <TooltipProvider>
+          <ProvidersSettingsPanel />
+        </TooltipProvider>,
+      );
+    }
+
+    it("shows the account-managed line instead of the API key controls on the Account tab", () => {
+      providerMocks.listResult.data = {
+        providers: [apiKeyProvider()],
+        credentialsManagedInAccount: true,
+      };
+      renderPanel();
+
+      selectTab("Account");
+
+      const panel = within(screen.getByRole("tabpanel"));
+      expect(panel.getByTestId("credentials-managed-in-account")).toBeDefined();
+      expect(panel.queryByLabelText("API key")).toBeNull();
+    });
+
+    it("renders the API key controls and no line when the flag is false", () => {
+      providerMocks.listResult.data = {
+        providers: [apiKeyProvider()],
+        credentialsManagedInAccount: false,
+      };
+      renderPanel();
+
+      selectTab("Account");
+
+      const panel = within(screen.getByRole("tabpanel"));
+      expect(panel.getByLabelText("API key")).toBeDefined();
+      expect(panel.queryByTestId("credentials-managed-in-account")).toBeNull();
+    });
+
+    it("renders the API key controls and no line when the flag is absent", () => {
+      providerMocks.listResult.data = { providers: [apiKeyProvider()] };
+      renderPanel();
+
+      selectTab("Account");
+
+      const panel = within(screen.getByRole("tabpanel"));
+      expect(panel.getByLabelText("API key")).toBeDefined();
+      expect(panel.queryByTestId("credentials-managed-in-account")).toBeNull();
+    });
+
+    it("shows the line above the profile section on the Usage tab", () => {
+      providerMocks.listResult.data = {
+        providers: [
+          providerState({
+            providerId: "codex",
+            selected: { kind: "bundled" },
+            candidates: [],
+            envOverrides: [],
+            nativeCapabilities: FULL_TABS,
+          }),
+        ],
+        credentialsManagedInAccount: true,
+      };
+      renderPanel();
+
+      openProfilesTab();
+
+      expect(
+        within(screen.getByRole("tabpanel")).getByTestId(
+          "credentials-managed-in-account",
+        ),
+      ).toBeDefined();
+    });
+  });
+
   it("falls back to the first supported tab when the current tab is missing", () => {
     providerMocks.listResult.data = {
       providers: [
@@ -2886,18 +3228,20 @@ describe("<ProvidersSettingsPanel />", () => {
       </TooltipProvider>,
     );
 
-    selectTab("MCP");
-    expect(screen.getByTestId("provider-mcp-tab")).toBeDefined();
+    selectTab("Plugins");
+    expect(
+      screen.getByRole("button", { name: /^Plugins location/ }),
+    ).toBeDefined();
 
     fireEvent.click(railProviderRow("Amp", false));
-    expect(screen.queryByRole("tab", { name: "MCP" })).toBeNull();
+    expect(screen.queryByRole("tab", { name: "Plugins" })).toBeNull();
     expect(screen.getByRole("tab", { name: "Env" })).toBeDefined();
-    expect(screen.getByText("Environment variables")).toBeDefined();
+    expect(screen.getByText("Variables")).toBeDefined();
   });
 
   it("deep-links focusTab once-and-clear alongside focusHarnessId", () => {
     useProvidersFocusStore.getState().setFocusHarnessId("cursor");
-    useProvidersFocusStore.getState().setFocusTab("mcp");
+    useProvidersFocusStore.getState().setFocusTab("plugins");
 
     providerMocks.listResult.data = {
       providers: [
@@ -2924,9 +3268,41 @@ describe("<ProvidersSettingsPanel />", () => {
       </TooltipProvider>,
     );
 
-    expect(screen.getByTestId("provider-mcp-tab")).toBeDefined();
     expect(
-      screen.getByRole("tab", { name: "MCP" }).getAttribute("data-state"),
+      screen.getByRole("tab", { name: "Plugins" }).getAttribute("data-state"),
+    ).toBe("active");
+    expect(useProvidersFocusStore.getState().focusHarnessId).toBeNull();
+    expect(useProvidersFocusStore.getState().focusTab).toBeNull();
+  });
+
+  it("does not open a focusTab the Providers page no longer draws (mcp), and still clears the link", () => {
+    useProvidersFocusStore.getState().setFocusHarnessId("cursor");
+    useProvidersFocusStore.getState().setFocusTab("mcp");
+
+    providerMocks.listResult.data = {
+      providers: [
+        providerState({
+          providerId: "cursor",
+          selected: { kind: "bundled" },
+          candidates: [],
+          envOverrides: [],
+          nativeCapabilities: CURSOR_TABS,
+        }),
+      ],
+    };
+
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    // The MCP tab lives on its own page now: the deep link opens the
+    // provider's own first tab here instead of a tab that is not drawn.
+    expect(screen.queryByRole("tab", { name: "MCP" })).toBeNull();
+    expect(screen.queryByTestId("provider-mcp-tab")).toBeNull();
+    expect(
+      screen.getByRole("tab", { name: "Env" }).getAttribute("data-state"),
     ).toBe("active");
     expect(useProvidersFocusStore.getState().focusHarnessId).toBeNull();
     expect(useProvidersFocusStore.getState().focusTab).toBeNull();
@@ -3011,7 +3387,7 @@ describe("<ProvidersSettingsPanel />", () => {
     ).toBe("active");
   });
 
-  it("shows Plugins tab body and Skills tab body", () => {
+  it("shows the Plugins tab body, and no Skills tab, which has its own page", () => {
     render(
       <TooltipProvider>
         <ProvidersSettingsPanel />
@@ -3027,13 +3403,8 @@ describe("<ProvidersSettingsPanel />", () => {
       screen.getByRole("button", { name: /^Plugins location/ }),
     ).toBeDefined();
 
-    selectTab("Skills");
-    expect(
-      screen.getByRole("textbox", { name: "Search skills" }),
-    ).toBeDefined();
-    expect(
-      screen.getByRole("button", { name: /^Skills location/ }),
-    ).toBeDefined();
+    expect(screen.queryByRole("tab", { name: "Skills" })).toBeNull();
+    expect(screen.queryByRole("textbox", { name: "Search skills" })).toBeNull();
   });
 
   it("does not flush terminal-agent args on keystroke alone", () => {
@@ -3206,6 +3577,56 @@ describe("<ProvidersSettingsPanel />", () => {
     expect(
       screen.getByRole("progressbar", { name: "Installing · 100%" }),
     ).toBeDefined();
+  });
+
+  it("holds Add profile and says why when the scoped host takes no credentials, whatever the CLI state", () => {
+    providerMocks.credentialRefusal = "Sandboxes don't take sign-ins";
+    providerMocks.listResult.data = {
+      providers: [
+        {
+          ...providerState({
+            providerId: "codex",
+            selected: { kind: "bundled" },
+            candidates: [],
+            envOverrides: [],
+            profiles: [
+              profile({
+                profileId: "ambient",
+                kind: "ambient",
+                label: "Terminal account",
+                email: "ambient@example.test",
+                tier: null,
+                authStatus: "authenticated",
+                duplicateOfProfileId: null,
+                ambientDriftNotice: null,
+              }),
+            ],
+          }),
+          loginCapability: {
+            oauthArgs: ["auth", "login"],
+            token: null,
+            codePaste: null,
+            terminalLogin: null,
+            remoteSafe: null,
+            selfOpensBrowser: null,
+          },
+        },
+      ],
+    };
+
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    openProfilesTab();
+
+    const addProfile = screen.getByRole("button", { name: "Add profile" });
+    expect(addProfile.hasAttribute("disabled")).toBe(true);
+    expect(screen.getByText("Sandboxes don't take sign-ins")).toBeDefined();
+    // The reason is the refusal, not a CLI-setup problem to go and fix.
+    expect(screen.queryByRole("button", { name: "CLI & Args" })).toBeNull();
   });
 
   it("uses the shared profile switcher and combined refresh when only the terminal profile exists", async () => {
@@ -3652,6 +4073,7 @@ describe("<ProvidersSettingsPanel />", () => {
           hostId={hostId}
           isSelectedHostLocal
           canAddProfile
+          credentialRefusal={null}
           onOpenCliSettings={() => undefined}
           startInReauth={false}
           failedAttempt={null}
@@ -4079,6 +4501,81 @@ describe("<ProvidersSettingsPanel />", () => {
     });
     expect(awaitVariables.signal).toBeInstanceOf(AbortSignal);
     expect(typeof awaitOptions.onSuccess).toBe("function");
+  });
+
+  it("disables Link account and shows the refusal in the Add profile dialog when the host takes no credentials, and starts no login", () => {
+    providerMocks.listResult.data = {
+      providers: [
+        {
+          ...providerState({
+            providerId: "codex",
+            selected: { kind: "bundled" },
+            candidates: [
+              {
+                kind: "bundled",
+                path: "/opt/traycer/bin/codex",
+                version: "1.0.0",
+                available: true,
+                versionPending: false,
+              },
+            ],
+            envOverrides: [],
+            profiles: [
+              profile({
+                profileId: "ambient",
+                kind: "ambient",
+                label: "Terminal account",
+                email: "ambient@example.test",
+                tier: null,
+                authStatus: "authenticated",
+                duplicateOfProfileId: null,
+                ambientDriftNotice: null,
+              }),
+            ],
+          }),
+          loginCapability: {
+            oauthArgs: ["auth", "login"],
+            token: null,
+            codePaste: null,
+            terminalLogin: null,
+            remoteSafe: null,
+            selfOpensBrowser: null,
+          },
+        },
+      ],
+    };
+
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+    openProfilesTab();
+
+    // The panel's own gate keeps the Add profile button shut on a sandbox, so
+    // the dialog is opened while the host still takes credentials; the dialog
+    // is the floor under every entry point, and re-reads the answer.
+    fireEvent.click(screen.getByRole("button", { name: "Add profile" }));
+    expect(screen.queryByTestId("credential-refusal")).toBeNull();
+    expect(
+      screen
+        .getByRole("button", { name: "Link account" })
+        .hasAttribute("disabled"),
+    ).toBe(false);
+
+    providerMocks.credentialRefusal = "Sandboxes don't take sign-ins";
+    fireEvent.change(screen.getByLabelText("Profile name"), {
+      target: { value: "Work" },
+    });
+
+    const link = screen.getByRole("button", { name: "Link account" });
+    expect(link.hasAttribute("disabled")).toBe(true);
+    expect(screen.getByTestId("credential-refusal").textContent).toBe(
+      "Sandboxes don't take sign-ins",
+    );
+
+    fireEvent.click(link);
+    expect(providerMocks.startLoginMutate).not.toHaveBeenCalled();
   });
 
   it("does not render the paste field until the flow reaches waiting (fixup review finding 2)", async () => {
@@ -7541,6 +8038,159 @@ describe("<ProvidersSettingsPanel />", () => {
 
     expect(screen.queryByRole("tab", { name: "Permissions" })).toBeNull();
   });
+
+  describe("MCP servers and Skills pages (the Providers rail, narrowed to one tab)", () => {
+    beforeEach(() => {
+      // Opencode and Cursor advertise MCP and Skills; Amp advertises Env only.
+      providerMocks.listResult.data = {
+        providers: [
+          providerState({
+            providerId: "opencode",
+            selected: { kind: "bundled" },
+            candidates: OPENCODE_CANDIDATES,
+            envOverrides: [],
+            nativeCapabilities: FULL_TABS,
+          }),
+          providerState({
+            providerId: "cursor",
+            selected: { kind: "bundled" },
+            candidates: [],
+            envOverrides: [],
+            nativeCapabilities: CURSOR_TABS,
+          }),
+          providerState({
+            providerId: "amp",
+            selected: { kind: "bundled" },
+            candidates: [],
+            envOverrides: [],
+            nativeCapabilities: ENV_ONLY_TABS,
+          }),
+        ],
+      };
+    });
+
+    function railProviderNames(): string[] {
+      const nav = screen.getByRole("navigation", { name: "Providers" });
+      const list = within(nav).getByRole("list", { name: "Providers" });
+      return within(list)
+        .getAllByRole("button")
+        .map((button) => button.textContent);
+    }
+
+    it("draws the MCP servers page with only the providers that have MCP, on the MCP tab alone", () => {
+      render(
+        <TooltipProvider>
+          <McpServersSettingsPanel />
+        </TooltipProvider>,
+      );
+
+      expect(
+        screen.getByRole("heading", { name: "MCP servers" }),
+      ).toBeDefined();
+      const names = railProviderNames();
+      expect(names.some((name) => /OpenCode/.test(name))).toBe(true);
+      expect(names.some((name) => /Cursor/.test(name))).toBe(true);
+      // Amp has no MCP tab, so it has nothing on this page.
+      expect(names.some((name) => /Amp/.test(name))).toBe(false);
+      // Only the MCP tab: its body, and none of the Providers tabs.
+      expect(screen.getByTestId("provider-mcp-tab")).toBeDefined();
+      expect(
+        screen.getByRole("tab", { name: "MCP" }).getAttribute("data-state"),
+      ).toBe("active");
+      expect(screen.getAllByRole("tab")).toHaveLength(1);
+      expect(screen.queryByRole("tab", { name: "Env" })).toBeNull();
+      expect(screen.queryByRole("tab", { name: "Plugins" })).toBeNull();
+      expect(screen.queryByRole("tab", { name: "Skills" })).toBeNull();
+    });
+
+    it("draws the Skills page with only the providers that have Skills, on the Skills tab alone", () => {
+      render(
+        <TooltipProvider>
+          <SkillsSettingsPanel />
+        </TooltipProvider>,
+      );
+
+      expect(screen.getByRole("heading", { name: "Skills" })).toBeDefined();
+      const names = railProviderNames();
+      expect(names.some((name) => /OpenCode/.test(name))).toBe(true);
+      expect(names.some((name) => /Cursor/.test(name))).toBe(true);
+      expect(names.some((name) => /Amp/.test(name))).toBe(false);
+      expect(
+        screen.getByRole("textbox", { name: "Search skills" }),
+      ).toBeDefined();
+      expect(screen.getAllByRole("tab")).toHaveLength(1);
+      expect(
+        screen.getByRole("tab", { name: "Skills" }).getAttribute("data-state"),
+      ).toBe("active");
+      expect(screen.queryByRole("tab", { name: "MCP" })).toBeNull();
+      expect(screen.queryByTestId("provider-mcp-tab")).toBeNull();
+    });
+
+    it("opens the MCP tab for a deep link to one provider's MCP tab", () => {
+      useProvidersFocusStore.getState().setFocusHarnessId("cursor");
+      useProvidersFocusStore.getState().setFocusTab("mcp");
+
+      render(
+        <TooltipProvider>
+          <McpServersSettingsPanel />
+        </TooltipProvider>,
+      );
+
+      expect(screen.getByTestId("provider-mcp-tab")).toBeDefined();
+      expect(
+        screen.getByRole("tab", { name: "MCP" }).getAttribute("data-state"),
+      ).toBe("active");
+      expect(useProvidersFocusStore.getState().focusHarnessId).toBeNull();
+      expect(useProvidersFocusStore.getState().focusTab).toBeNull();
+    });
+
+    it("says no provider supports MCP servers or skills when none of them has the tab", () => {
+      providerMocks.listResult.data = {
+        providers: [
+          providerState({
+            providerId: "amp",
+            selected: { kind: "bundled" },
+            candidates: [],
+            envOverrides: [],
+            nativeCapabilities: ENV_ONLY_TABS,
+          }),
+        ],
+      };
+
+      const mcp = render(
+        <TooltipProvider>
+          <McpServersSettingsPanel />
+        </TooltipProvider>,
+      );
+      expect(
+        screen.getByText("No provider on this host supports MCP servers."),
+      ).toBeDefined();
+      expect(screen.queryAllByRole("tab")).toEqual([]);
+      mcp.unmount();
+
+      render(
+        <TooltipProvider>
+          <SkillsSettingsPanel />
+        </TooltipProvider>,
+      );
+      expect(
+        screen.getByText("No provider on this host supports skills."),
+      ).toBeDefined();
+    });
+
+    it("keeps the Providers page's own copy and rail on every provider", () => {
+      render(
+        <TooltipProvider>
+          <ProvidersSettingsPanel />
+        </TooltipProvider>,
+      );
+
+      expect(screen.getByRole("heading", { name: "Providers" })).toBeDefined();
+      // Amp is on the Providers rail (it has Env), though it is not on the MCP
+      // or Skills pages.
+      expect(railProviderNames().some((name) => /Amp/.test(name))).toBe(true);
+    });
+  });
 });
 
 // -----------------------------------------------------------------------------
@@ -7709,9 +8359,7 @@ describe("<ProvidersSettingsPanel /> mobile section picker", () => {
       "Env",
       "Permissions",
       "Model Providers",
-      "MCP",
       "Plugins",
-      "Skills",
     ]);
   });
 
@@ -7773,7 +8421,7 @@ describe("<ProvidersSettingsPanel /> mobile section picker", () => {
     // on a chooser for a question the caller already answered.
     expect(screen.queryByRole("tablist")).toBeNull();
     expect(screen.queryAllByRole("tab")).toHaveLength(0);
-    expect(screen.getByText("Environment variables")).toBeDefined();
+    expect(screen.getByText("Variables")).toBeDefined();
     expect(screen.getByRole("tabpanel").getAttribute("aria-label")).toBe("Env");
   });
 

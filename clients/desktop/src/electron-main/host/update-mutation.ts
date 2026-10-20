@@ -50,6 +50,8 @@ export async function registerHostLoginItemWithAttempt(
   capability: UpdateMutationCapability,
   hostHomeDir: string,
   revalidateBeforeBootout: () => Promise<boolean>,
+  // See `registerHostLoginItem`: asked only up to the bootout.
+  confirmTargetBeforeBootout: (() => Promise<boolean>) | null,
 ): Promise<RegisterHostLoginItemResult> {
   await requireLiveCapability(capability, hostHomeDir);
   const result = await registerHostLoginItem(async () => {
@@ -58,7 +60,7 @@ export async function registerHostLoginItemWithAttempt(
       hostHomeDir,
     );
     return verdict.kind === "live" && (await revalidateBeforeBootout());
-  });
+  }, confirmTargetBeforeBootout);
   await requireLiveCapability(capability, hostHomeDir);
   return result;
 }
@@ -68,6 +70,7 @@ export async function registerHostLoginItemWithStartGrant(
   capability: UpdateMutationCapability,
   hostHomeDir: string,
   serviceLabel: string,
+  confirmTargetBeforeBootout: (() => Promise<boolean>) | null,
 ): Promise<RegisterHostLoginItemResult> {
   await requireLiveCapability(capability, hostHomeDir);
   const lease = await publishHostStartAdoption(
@@ -81,6 +84,7 @@ export async function registerHostLoginItemWithStartGrant(
       capability,
       hostHomeDir,
       async () => true,
+      confirmTargetBeforeBootout,
     );
     // A parked, refused or approval-gated registration cannot spawn a child.
     if (result === "enabled") await lease.waitForSpawn();

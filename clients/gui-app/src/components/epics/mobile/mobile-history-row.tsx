@@ -219,6 +219,7 @@ export const MobileHistoryRow = memo(function MobileHistoryRow(
     // A row nobody may act on has nothing to select, so the hold would open a
     // mode with a permanently unchecked row in it.
     disabled: selectionMode || isRenaming || !canDelete,
+    acceptsMouse: false,
     onLongPress: () => {
       setTrayOpen(false);
       onToggleSelection(item.epicId);

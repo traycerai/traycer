@@ -60,6 +60,11 @@ export function ProviderSkillDetailDialog(props: {
   readonly removePending: boolean;
   readonly removeDisabled: boolean;
   readonly actionError: string | null;
+  /**
+   * Why this skill's settings can't be changed here, or `null`. A skill that
+   * is one of the person's settings is changed in the dashboard; Remove stays.
+   */
+  readonly lockedNote: string | null;
   readonly canEdit: boolean;
   readonly canUpdate: boolean;
   readonly origin: string | null;
@@ -119,6 +124,7 @@ export function ProviderSkillDetailDialog(props: {
             removePending={props.removePending}
             actionsDisabled={props.removeDisabled}
             actionError={props.actionError}
+            lockedNote={props.lockedNote}
             canUpdate={props.canUpdate}
             origin={props.origin}
             updatePending={props.updatePending}
@@ -709,6 +715,7 @@ function ReadOnlySkillDetail(props: {
   readonly removePending: boolean;
   readonly actionsDisabled: boolean;
   readonly actionError: string | null;
+  readonly lockedNote: string | null;
   readonly canUpdate: boolean;
   readonly origin: string | null;
   readonly updatePending: boolean;
@@ -730,6 +737,14 @@ function ReadOnlySkillDetail(props: {
         onRequestUpdate={props.onRequestUpdate}
       />
       <div className="flex min-h-0 flex-col overflow-hidden px-5 py-4">
+        {props.lockedNote === null ? null : (
+          <p
+            className="mb-3 rounded-md border border-border/60 bg-foreground/3 px-3 py-2 text-ui-sm text-muted-foreground"
+            data-testid="skill-detail-locked-note"
+          >
+            {props.lockedNote}
+          </p>
+        )}
         {props.actionError === null ? null : (
           <div className="mb-3 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-ui-sm text-destructive">
             {props.actionError}

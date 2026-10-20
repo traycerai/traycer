@@ -391,6 +391,16 @@ export const PERSIST_STORES = [
     kind: "static",
   },
   {
+    camelName: "hostAccessPrompts",
+    leaf: "host-access-prompts",
+    kind: "static",
+  },
+  {
+    camelName: "terminalAccountMention",
+    leaf: "terminal-account-mention",
+    kind: "static",
+  },
+  {
     camelName: "providerLoginTerminals",
     leaf: "provider-login-terminals",
     kind: "static",
@@ -424,6 +434,27 @@ export const PERSIST_STORES = [
   {
     camelName: "featureAnnouncements",
     leaf: "feature-announcements",
+    kind: "static",
+  },
+  // The tasks whose mirror line each person has seen, keyed by viewer and
+  // epic inside the record (`composer-mirror-line-seen-store.ts`).
+  {
+    camelName: "composerMirrorLineSeen",
+    leaf: "composer-mirror-line-seen",
+    kind: "static",
+  },
+  // The team hosts whose first-tab disclosure each person has seen, keyed by
+  // viewer and host inside the record (`team-host-disclosure-seen-store.ts`).
+  {
+    camelName: "teamHostDisclosureSeen",
+    leaf: "team-host-disclosure-seen",
+    kind: "static",
+  },
+  // The teams whose "Continue on a <team> host" caution each person has
+  // confirmed (`team-continue-caution-seen-store.ts`).
+  {
+    camelName: "teamContinueCautionSeen",
+    leaf: "team-continue-caution-seen",
     kind: "static",
   },
   // The bot tabs open in this window, each with the host it is bound to for

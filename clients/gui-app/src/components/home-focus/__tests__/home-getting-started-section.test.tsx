@@ -37,6 +37,15 @@ vi.mock("@/lib/host", () => ({
   useHostBinding: () => hostBinding.value,
 }));
 
+// The "Set up Personal" group reads the window's host through Query and has its
+// own suite (`onboarding/__tests__/set-up-personal-group.test.tsx`); these
+// suites are about the guide cards, so it is stood in for here.
+vi.mock("@/components/onboarding/set-up-personal-group", () => ({
+  SetUpPersonalGroup: (props: { readonly surface: string }) => (
+    <div data-testid="set-up-personal-stub" data-surface={props.surface} />
+  ),
+}));
+
 vi.mock("@/providers/use-runner-host", () => ({
   useRunnerHostOrNull: () =>
     runnerHost.browserView === null

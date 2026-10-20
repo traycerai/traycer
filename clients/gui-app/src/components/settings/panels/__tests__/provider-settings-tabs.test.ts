@@ -5,6 +5,9 @@ import {
   PROVIDER_TAB_ORDER,
   providerTabLabel,
   supportedTabsFor,
+  tabsForView,
+  type ProvidersPanelView,
+  type ProviderTabKey,
 } from "@/components/settings/panels/provider-settings-tabs";
 
 const ALL_TABS: readonly ProviderSettingsTab[] = [
@@ -297,5 +300,60 @@ describe("supportedTabsFor", () => {
         expect(providerTabLabel(tab, LABELS, "claude-code")).toBe(LABELS[tab]);
       }
     });
+  });
+});
+
+describe("tabsForView", () => {
+  // MCP servers and Skills are Personal pages of their own: the Providers page
+  // drops those two tabs and each page keeps only its own. Every other tab
+  // stays on Providers, in the order it came in.
+  const EVERY_TAB: readonly ProviderTabKey[] = PROVIDER_TAB_ORDER;
+
+  const CASES: ReadonlyArray<{
+    readonly view: ProvidersPanelView;
+    readonly tabs: readonly ProviderTabKey[];
+    readonly expected: readonly ProviderTabKey[];
+  }> = [
+    {
+      view: "providers",
+      tabs: EVERY_TAB,
+      expected: [
+        "account",
+        "usage",
+        "general",
+        "env",
+        "permissions",
+        "modelProviders",
+        "plugins",
+      ],
+    },
+    { view: "mcp-servers", tabs: EVERY_TAB, expected: ["mcp"] },
+    { view: "skills", tabs: EVERY_TAB, expected: ["skills"] },
+    // A provider that does not advertise the page's tab has nothing on that
+    // page, which is what narrows the page's provider rail.
+    { view: "mcp-servers", tabs: ["general", "env", "skills"], expected: [] },
+    { view: "skills", tabs: ["general", "mcp"], expected: [] },
+    // A provider with only MCP and Skills has nothing left on Providers.
+    { view: "providers", tabs: ["mcp", "skills"], expected: [] },
+    {
+      view: "providers",
+      tabs: ["env", "mcp", "skills", "plugins"],
+      expected: ["env", "plugins"],
+    },
+  ];
+
+  it.each(CASES)(
+    "draws $expected for the $view view of $tabs",
+    ({ view, tabs, expected }) => {
+      expect(tabsForView(tabs, view)).toEqual(expected);
+    },
+  );
+
+  it("never gives the Providers view an mcp or skills tab, nor a page view any other tab", () => {
+    expect(tabsForView(EVERY_TAB, "providers")).not.toContain("mcp");
+    expect(tabsForView(EVERY_TAB, "providers")).not.toContain("skills");
+    for (const view of ["mcp-servers", "skills"] as const) {
+      expect(tabsForView(EVERY_TAB, view)).toHaveLength(1);
+    }
   });
 });

@@ -1,6 +1,13 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+} from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { InlineTitleField } from "@/components/epic-canvas/mobile/inline-title-field";
+import { LONG_PRESS_MS } from "@/hooks/ui/use-long-press";
 
 const onCommit = vi.fn();
 
@@ -14,8 +21,21 @@ const DEFAULT_PROPS = {
 };
 
 function openEdit(): HTMLElement {
-  fireEvent.click(screen.getByTestId("title-field"));
+  fireEvent.keyDown(screen.getByTestId("title-field"), { key: "Enter" });
   return screen.getByTestId("title-field-input");
+}
+
+function press(pointerType: "touch" | "mouse"): HTMLElement {
+  const title = screen.getByTestId("title-field");
+  fireEvent.pointerDown(title, {
+    pointerId: 1,
+    pointerType,
+    isPrimary: true,
+    button: 0,
+    clientX: 10,
+    clientY: 10,
+  });
+  return title;
 }
 
 describe("<InlineTitleField />", () => {
@@ -36,12 +56,74 @@ describe("<InlineTitleField />", () => {
     expect(el.textContent).toBe("Original title");
   });
 
-  it("tapping the button enters edit mode with an autofocused, labelled input", () => {
+  it("Enter on the focused button enters edit mode with an autofocused, labelled input", () => {
     render(<InlineTitleField {...DEFAULT_PROPS} />);
     const input = openEdit();
     expect(input.tagName).toBe("INPUT");
     expect(input.getAttribute("aria-label")).toBe("Title");
     expect(document.activeElement).toBe(input);
+  });
+
+  it("Space on the focused button enters edit mode", () => {
+    render(<InlineTitleField {...DEFAULT_PROPS} />);
+    fireEvent.keyDown(screen.getByTestId("title-field"), { key: " " });
+    expect(screen.getByTestId("title-field-input")).not.toBeNull();
+  });
+
+  describe("hold to edit", () => {
+    beforeEach(() => vi.useFakeTimers());
+    afterEach(() => vi.useRealTimers());
+
+    it("a plain tap does not enter edit mode", () => {
+      render(<InlineTitleField {...DEFAULT_PROPS} />);
+      const title = press("touch");
+      fireEvent.pointerUp(title, { pointerId: 1 });
+      fireEvent.click(title);
+      act(() => {
+        vi.advanceTimersByTime(LONG_PRESS_MS);
+      });
+      expect(screen.queryByTestId("title-field-input")).toBeNull();
+    });
+
+    it.each(["touch", "mouse"] as const)(
+      "a %s hold past the threshold enters edit mode with the title selected",
+      (pointerType) => {
+        render(<InlineTitleField {...DEFAULT_PROPS} />);
+        press(pointerType);
+        act(() => {
+          vi.advanceTimersByTime(LONG_PRESS_MS - 1);
+        });
+        expect(screen.queryByTestId("title-field-input")).toBeNull();
+        act(() => {
+          vi.advanceTimersByTime(1);
+        });
+        const input = screen.getByTestId("title-field-input");
+        expect(document.activeElement).toBe(input);
+        expect(input).toBeInstanceOf(HTMLInputElement);
+        if (!(input instanceof HTMLInputElement)) return;
+        expect(input.selectionStart).toBe(0);
+        expect(input.selectionEnd).toBe("Original title".length);
+      },
+    );
+
+    it("moving the pointer during the hold abandons it", () => {
+      render(<InlineTitleField {...DEFAULT_PROPS} />);
+      const title = press("touch");
+      fireEvent.pointerMove(title, { pointerId: 1, clientX: 40, clientY: 10 });
+      act(() => {
+        vi.advanceTimersByTime(LONG_PRESS_MS);
+      });
+      expect(screen.queryByTestId("title-field-input")).toBeNull();
+    });
+
+    it("a hold on a non-editable title enters nothing", () => {
+      render(<InlineTitleField {...DEFAULT_PROPS} editable={false} />);
+      press("touch");
+      act(() => {
+        vi.advanceTimersByTime(LONG_PRESS_MS);
+      });
+      expect(screen.queryByTestId("title-field-input")).toBeNull();
+    });
   });
 
   it("commits the trimmed value on blur", () => {

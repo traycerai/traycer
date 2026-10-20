@@ -151,6 +151,7 @@ function baseArgs(overrides: Partial<ServiceInstallArgs>): ServiceInstallArgs {
     // exactly the acquire-or-refuse path these tests already assert.
     attemptAdoption: null,
     lifecycleOrigin: "terminal",
+    expectedHost: null,
     ...overrides,
   };
 }

@@ -19,6 +19,7 @@ import {
   providersListResponseSchemaV92,
   providersListResponseSchemaV102Preimage,
   providersListResponseSchemaV103Preimage,
+  providersListResponseSchemaV104Preimage,
 } from "@traycer/protocol/host/provider-schemas";
 import { hostRpcRegistry } from "@traycer/protocol/host/index";
 
@@ -76,8 +77,8 @@ describe("Claude plugin and command catalog minors", () => {
     expect(row.nativeCapabilities.supportedTabs).toEqual(["plugins"]);
   });
 
-  it("keeps Kilo's published 10.3 and opens Claude on 10.4", () => {
-    expect(hostRpcRegistry["providers.list"][10].latestMinor).toBe(4);
+  it("keeps Kilo's published 10.3 and Claude's 10.4 below the live 10.5", () => {
+    expect(hostRpcRegistry["providers.list"][10].latestMinor).toBe(5);
     expect(
       hostRpcRegistry["providers.list"][10].versions[2].contract.responseSchema,
     ).toBe(providersListResponseSchemaV102Preimage);
@@ -86,6 +87,9 @@ describe("Claude plugin and command catalog minors", () => {
     ).toBe(providersListResponseSchemaV103Preimage);
     expect(
       hostRpcRegistry["providers.list"][10].versions[4].contract.responseSchema,
+    ).toBe(providersListResponseSchemaV104Preimage);
+    expect(
+      hostRpcRegistry["providers.list"][10].versions[5].contract.responseSchema,
     ).toBe(providersListResponseSchema);
     expect(
       JSON.stringify(
@@ -96,7 +100,7 @@ describe("Claude plugin and command catalog minors", () => {
     ).not.toContain("openChatsApplyNextMessage");
   });
 
-  it("decodes an old-host row on the live 10.4 response and drops an explicit true on the frozen 10.3 one", () => {
+  it("decodes an old-host row on the live 10.5 response and drops an explicit true on the frozen 10.3 one", () => {
     const row = (nativeCapabilities: unknown) => ({
       providerId: "claude-code",
       enabled: true,

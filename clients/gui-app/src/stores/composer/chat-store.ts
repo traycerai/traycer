@@ -742,6 +742,12 @@ export interface ChatMessage {
    * reads it.
    */
   conversationRequest?: ConversationRequest;
+  /**
+   * The picture of the member who wrote this user row, in a bot
+   * conversation whose member directory knows one. Absent on every other
+   * row, and on a member with no picture.
+   */
+  senderAvatarUrl?: string;
   structuredContent: JsonContent | null;
   attachments: ReadonlyArray<Attachment>;
   browserAnnotations?: ReadonlyArray<BrowserAnnotationRecord>;

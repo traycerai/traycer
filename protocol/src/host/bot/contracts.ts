@@ -93,7 +93,7 @@ export const botClaimAuthorityV10 = defineRpcContract({
 });
 
 /**
- * `bot.open@1.0` (T18): open a bot on the serving host, claiming it there
+ * `bot.open@1.0`: open a bot on the serving host, claiming it there
  * when its bound host is unreachable. Same optional posture as the rest of
  * the namespace.
  */

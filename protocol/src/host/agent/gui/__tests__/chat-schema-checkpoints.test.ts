@@ -37,6 +37,7 @@ import {
   chatSubscribeV128,
   chatSubscribeV129,
   chatSubscribeV130,
+  chatSubscribeV131,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 
 function canonical(value: unknown): unknown {
@@ -180,7 +181,7 @@ function schemaDigest(schema: z.ZodType, io: "input" | "output"): string {
 // NOT carry the tool-call MCP App stamp.
 //
 // 1.23 adds the MCP App stamp. The PreMcpApp leaves keep it off older lines.
-// Entries 1.23–1.29 were regenerated when the never-released page stamp was
+// Entries 1.23–1.27 were regenerated when the never-released page stamp was
 // removed. The released 1.0–1.22 digests remain unchanged.
 const SERVER_FRAME_DIGESTS = {
   0: [
@@ -299,28 +300,43 @@ const SERVER_FRAME_DIGESTS = {
     "a41a8553d19255eb4dbb7334f5332134d9ed187f5f95d09c452f2c04b3005cff",
   ],
   // Captured from the live schema the moment before 1.28 opened above it: the
-  // task-overdue line, with operation blocks and events limited to the four
-  // markdown artifact kinds.
+  // task-overdue line, with no `signInParked` on a queued prompt and operation
+  // blocks and events limited to the four markdown artifact kinds. Main pinned
+  // its own 1.27 with the page stamp this tree removed; the value here is the
+  // one this tree pinned before main's 1.28 landed, and the merged tree's
+  // frozen 1.27 reproduces it.
   27: [
     "8d04e50cb1e605fa1ef204f057463add6d4075277016a2c23d38d8beb53fdc58",
     "88da8359f5ee5a694a313c1be9f7223fd0e7681dc8dca2c0cfc1cd79031ccd03",
   ],
-  // Captured from the live schema the moment before 1.29 opened above it: the
-  // html/canvas/file artifact-kind line, with tool calls carrying no
-  // `artifact` stamp. Verified against an independent read of the pre-change
-  // git baseline (HEAD), not just the frozen copy now in the tree.
+  // The sign-in park line (main's 1.28): a queued prompt may carry
+  // `signInParked`; operation blocks and events keep the four markdown kinds.
+  // Captured from the merged tree when the artifact lines re-minted above it.
+  // With `signInParked` removed from the rendered schema, 1.28 reproduces
+  // 1.27 above, and 1.29–1.31 reproduce the values this tree pinned for them
+  // as 1.28–1.30, so the re-mint moved nothing else.
   28: [
-    "59bb875d38642421bd3a489fa4275f8e6f2210b2bbb65848d1791cf0918f796b",
-    "35d505da4044a612fb67c7f6545c9a62a28f76af08a410e28309714e9d597d19",
+    "2fa10fd797a2fa6ca24ba12dfbb9e094c02323be834289461d9da4c1e4af1825",
+    "9fa4bf2415eb41959bc60b2742dcdbe788b239f899636c42943bd391e0aecca2",
   ],
+  // The html/canvas/file artifact-kind line, with tool calls carrying no
+  // `artifact` stamp. Re-captured with `signInParked` when it re-minted above
+  // main's 1.28.
   29: [
-    "1d3b534a2619caad181d1401e52f7065f6264794f5c5f99bf8f45cb612768aeb",
-    "6e8d92246352639bc8d1a3c560ce3851f473c8d033b4b283e8a5e2d0c907738a",
+    "db7afddb789e6a9ddb8030348739cce3c3a6d6665bce0825d56b308f52070ea4",
+    "02f7dcb3e35583d22a902e4fe5e844abecd5566afa5196c0bdc210790f8a93d9",
   ],
-  // Captured at 7bc0e2e9f before 1.31 widened checkpoint artifact tags.
+  // The artifact-stamp line, with no canvas annotations. Re-captured with
+  // `signInParked` when it re-minted above main's 1.28.
   30: [
-    "d013d992fccdd46c5b000cdf5ae5da57e9fc798d9fd1e2e203025b931d34cd5a",
-    "17258a62bb64e1f636a5457b9be882b688c5547f75fd12a2a11236c31e57a92b",
+    "62238a7797d3791f95a9d5036731f1aead0f2ee2fa27a9e20d4385efad29e272",
+    "993ebf9cf6b6e6a482d974ca75bc9a7c732721159c607a2b195d4ee77470d709",
+  ],
+  // The canvas-annotation line, before 1.32 widened checkpoint artifact tags.
+  // Re-captured with `signInParked` when it re-minted above main's 1.28.
+  31: [
+    "31f0c5043a7de5d6588863d566dd64fa791a491a1d5e85dbfcfe67d804374c9d",
+    "93e11aac794fd8f5f1322a2bd2a102d6e26c7a0cd1432aa4901487b32d5c65ba",
   ],
 } as const;
 
@@ -356,10 +372,11 @@ const contracts = [
   chatSubscribeV128,
   chatSubscribeV129,
   chatSubscribeV130,
+  chatSubscribeV131,
 ] as const;
 
 describe("chat.subscribe placement freeze", () => {
-  it("keeps every 1.0–1.30 server schema input/output surface byte-stable", () => {
+  it("keeps every 1.0–1.31 server schema input/output surface byte-stable", () => {
     for (const contract of contracts) {
       const minor = contract.schemaVersion.minor;
       expect([

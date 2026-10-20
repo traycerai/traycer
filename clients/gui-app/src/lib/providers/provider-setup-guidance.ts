@@ -99,7 +99,7 @@ export const PROVIDER_SETUP_GUIDANCE: {
 } = {
   reasonix: {
     summary:
-      "Reasonix keeps provider API keys in its own store, not in your shell environment.",
+      "Reasonix keeps provider API keys in its own store, not in your shell.",
     stepsAfterAction: [
       "Paste your provider API key when asked (DeepSeek by default).",
       "Refresh this list.",
@@ -115,7 +115,7 @@ export const PROVIDER_SETUP_GUIDANCE: {
   },
   hermes: {
     summary:
-      "Hermes Agent keeps provider API keys in its own store, not in your shell environment.",
+      "Hermes Agent keeps provider API keys in its own store, not in your shell.",
     stepsAfterAction: [
       "Choose your inference provider from the list in that terminal.",
       "Give that provider an API key when Hermes asks for one.",

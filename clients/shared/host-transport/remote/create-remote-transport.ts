@@ -3,6 +3,7 @@ import type {
   VersionedRpcRegistry,
 } from "@traycer/protocol/framework/index";
 import type { VersionedStreamRpcRegistry } from "@traycer/protocol/framework/versioned-stream-rpc";
+import type { MemberCredentialHandoff } from "@traycer/protocol/host-transport/mux";
 import type {
   BearerSourceProvider,
   OpenFrameBearerSource,
@@ -18,12 +19,18 @@ import {
 } from "./remote-session";
 import { RemoteHostMessenger } from "./remote-host-messenger";
 import { RemoteStreamClient } from "./remote-stream-client";
-import { createAttachGrantProvider } from "./grant-client";
+import {
+  createAttachGrantProvider,
+  createSandboxAttachGrantProvider,
+} from "./grant-client";
+import type { RemoteHostDirectoryEntry } from "@traycer-clients/shared/host-client/remote-fetcher";
 import { decodeHostPublicKey } from "./noise-channel";
 import {
   acquireRemoteSession,
   type RemoteSessionIdentity,
 } from "./active-remote-sessions";
+import { TEAM_MEMBER_REMOVED_FATAL_CODE } from "../../host-client/host-connection-reconnect-engine";
+import { reportTeamMemberRemovedClose } from "../team-member-removed-close";
 
 /**
  * Assembles the client remote transport for one host: one `RemoteSession`,
@@ -57,6 +64,20 @@ export interface CreateRemoteTransportOptions<
   readonly hostPublicKey: string;
   /** Serves the in-channel bearer AND (derived) the grant-mint user bearer. */
   readonly bearer: BearerSourceProvider;
+  /**
+   * What `OPEN` presents. `user-bearer` for a personal host. `session-grant`
+   * for a `kind: sandbox` host: the attach-grant mint must also
+   * return a host-bound session grant, `OPEN` carries it in `authz` v2 with an
+   * empty bearer, and the user bearer never leaves this client - it only
+   * authorizes the mint at authn. Read it off the directory entry with
+   * {@link remoteOpenAuthFor}.
+   *
+   * Part of the session cache identity (`RemoteSessionIdentity.openAuth`): a
+   * host's kind is fixed for its life, but a stale directory read can project
+   * a sandbox row as a personal host, and a session built from that read must
+   * never be adopted by a consumer that knows the host is a sandbox.
+   */
+  readonly openAuth: RemoteOpenAuth;
   /**
    * Whether this client currently holds a CLOUD capability - a session the
    * account's authn has confirmed - read live, per attach.
@@ -164,6 +185,29 @@ export interface CreateRemoteTransportOptions<
    * inferred from `auth`.
    */
   readonly proactiveWakeEligible: boolean;
+  /**
+   * Mints the member credential a team host spends for this session's member
+   * (`RemoteSessionOptions.mintMemberCredential`). Handed to the session only
+   * when {@link openAuth} is `session-grant`; a personal host takes the user
+   * bearer on `open` and never offers the capability.
+   *
+   * Not part of the cache identity: every consumer in the process passes the
+   * app's one mint flow, so a cache hit inheriting it inherits the only value
+   * any consumer could have passed.
+   */
+  readonly mintMemberCredential:
+    | ((hostId: string) => Promise<MemberCredentialHandoff | null>)
+    | null;
+}
+
+/** See {@link CreateRemoteTransportOptions.openAuth}. */
+export type RemoteOpenAuth = "user-bearer" | "session-grant";
+
+/** The `OPEN` credential a remote directory entry's host takes. */
+export function remoteOpenAuthFor(
+  entry: RemoteHostDirectoryEntry,
+): RemoteOpenAuth {
+  return entry.sandbox === null ? "user-bearer" : "session-grant";
 }
 
 export interface RemoteHostTransport<
@@ -231,28 +275,43 @@ export function createRemoteHostTransport<
     // Same reasoning applied to WHICH auth context wired those closures, not
     // just which policy they implement. See `RemoteSessionIdentity.authEpoch`.
     authEpoch: authEpochFor(bearerSource),
+    openAuth: options.openAuth,
   };
   const session = acquireRemoteSession(
     identity,
     { proactiveWakeEligible: options.proactiveWakeEligible },
     () => {
-      const grantProvider = createAttachGrantProvider({
-        authnBaseUrl: options.authnBaseUrl,
-        hostId: options.hostId,
-        // The mint's permission check. `null` is a value the grant client
-        // already handles (it is the signed-out channel), so this refuses
-        // through an existing, tested path rather than inventing a failure
-        // mode. See `cloudAuthorized` for why the check lives in here and not
-        // at build time.
-        getBearerToken: () =>
-          options.cloudAuthorized() ? deriveBearerToken(options.bearer) : null,
-      });
-      return new RemoteSession<RpcRegistry, StreamRegistry>({
+      // The mint's permission check. `null` is a value the grant client
+      // already handles (it is the signed-out channel), so this refuses
+      // through an existing, tested path rather than inventing a failure
+      // mode. See `cloudAuthorized` for why the check lives in here and not
+      // at build time.
+      const getBearerToken = (): string | null =>
+        options.cloudAuthorized() ? deriveBearerToken(options.bearer) : null;
+      const sandboxGrants =
+        options.openAuth === "session-grant"
+          ? createSandboxAttachGrantProvider({
+              authnBaseUrl: options.authnBaseUrl,
+              hostId: options.hostId,
+              getBearerToken,
+            })
+          : null;
+      const grantProvider =
+        sandboxGrants === null
+          ? createAttachGrantProvider({
+              authnBaseUrl: options.authnBaseUrl,
+              hostId: options.hostId,
+              getBearerToken,
+            })
+          : sandboxGrants.provider;
+      const created = new RemoteSession<RpcRegistry, StreamRegistry>({
         hostId: options.hostId,
         attachBaseUrl: options.relayAttachUrl,
         hostStaticPublicKey,
         grantProvider,
         bearer: options.bearer,
+        sessionGrant:
+          sandboxGrants === null ? null : sandboxGrants.readSessionGrant,
         // The SAME read the grant provider above uses, now also reported to the
         // host at the far end. The mint gate decides whether this client may
         // reach the relay; this tells the host what the session it reaches may
@@ -271,7 +330,21 @@ export function createRemoteHostTransport<
         // verdict; a composition that should not make silence claims (a
         // host-to-host dialer) passes `null` at its own constructor.
         livenessProbe: HOST_STATUS_LIVENESS_PROBE,
+        mintMemberCredential:
+          options.openAuth === "session-grant"
+            ? options.mintMemberCredential
+            : null,
       });
+      // A team host ends a removed member's session with this fatal; the app
+      // turns the first report for a team into its one toast and one close of
+      // the team's tiles. Once per session: the session is shared by every
+      // consumer of this host, and closes once.
+      created.onClosed(() => {
+        if (created.terminalFatal()?.code === TEAM_MEMBER_REMOVED_FATAL_CODE) {
+          reportTeamMemberRemovedClose(options.hostId);
+        }
+      });
+      return created;
     },
   );
 

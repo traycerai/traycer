@@ -580,7 +580,7 @@ export const toolCallCompletedEventSchema = lazySchema(() =>
     mcpApp: toolCallMcpAppStampSchema.nullable().optional(),
   }),
 );
-// Frozen through chat.subscribe@1.28.
+// Frozen through chat.subscribe@1.29.
 export const toolCallCompletedEventSchemaPreArtifact = lazySchema(() =>
   z.object({
     ...baseRuntimeEventFields,
@@ -1272,7 +1272,7 @@ export const artifactOperationEventSchemaPreHtml = lazySchema(() =>
     afterHash: z.string().nullable().optional(),
   }),
 );
-/** New artifact kinds require chat.subscribe 1.28. */
+/** New artifact kinds require chat.subscribe 1.29. */
 export const artifactOperationEventSchema = lazySchema(() =>
   artifactOperationEventSchemaPreHtml.extend({
     kind: getRecordSchema(commonRecordRegistry, "epic-artifact-kind", "latest"),

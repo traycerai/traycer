@@ -1,4 +1,5 @@
 import type { HostCredentialState } from "@traycer/protocol/framework/stream-ws-protocol";
+import type { MemberCredentialHandoff } from "@traycer/protocol/host-transport/mux";
 import type {
   HostCredentialMintFlow,
   HostCredentialMintOutcome,
@@ -415,3 +416,32 @@ export const appHostCredentialMintFlow: HostCredentialMintFlow = (request) => {
   attemptsByHostId.set(hostId, { settled, claim });
   return settled.then(claim);
 };
+
+/**
+ * The member credential a team host spends for the signed-in person, minted
+ * through {@link appHostCredentialMintFlow}: the same runner, the same
+ * identity-change drop and the same one mint in flight per host. `null` when
+ * nothing was minted for this caller, which the remote session logs and goes
+ * on from.
+ *
+ * Every GUI composition that builds a remote session passes this one function:
+ * it is not part of the session cache identity, so the first acquirer's value
+ * is the one every later consumer of that session inherits.
+ */
+export async function mintAppMemberCredential(
+  hostId: string,
+): Promise<MemberCredentialHandoff | null> {
+  const outcome = await appHostCredentialMintFlow({
+    hostId,
+    reason: "missing",
+  });
+  if (outcome.kind !== "provisioned") {
+    return null;
+  }
+  return {
+    token: outcome.token,
+    refreshToken: outcome.refreshToken,
+    familyId: outcome.familyId,
+    provisionedAt: outcome.provisionedAt,
+  };
+}

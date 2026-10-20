@@ -81,6 +81,8 @@ export function formatAgentListPage(
   // Gated on the flag being REPORTED rather than on any row being archived -
   // see `hasArchiveEnrichment`.
   const showArchived = rendered.some(hasArchiveEnrichment);
+  // Gated on a row printing the marker: only an `other_principal` row does.
+  const showUnreachable = rendered.some(isOtherPrincipalAgent);
   const showRunConfig = full && rendered.some(hasRunConfigEnrichment);
   const showOwnerHostConnectivity =
     full && rendered.some(hasConnectivityEnrichment);
@@ -119,6 +121,7 @@ ${formatAgentListLegend(
   options.detail,
   showSend,
   showArchived,
+  showUnreachable,
   showRunConfig,
   showOwnerHostConnectivity,
   showSessionState,
@@ -511,8 +514,12 @@ function formatAgentListLine(
 ): string {
   const self = agent.isSelf ? " [self]" : "";
   const archived = isArchivedAgent(agent) ? " [archived]" : "";
+  // The marker names no owner: a collaborator's host label is theirs to show.
+  const unreachable = isOtherPrincipalAgent(agent)
+    ? " [not reachable from this host]"
+    : "";
   const parts = [
-    `${agent.id}${self}${archived}${formatTitleToken(agent)}`,
+    `${agent.id}${self}${archived}${unreachable}${formatTitleToken(agent)}`,
     `${agent.surface}/${agent.harnessId ?? "-"}`,
   ];
   const full = detail === "full";
@@ -723,6 +730,7 @@ function formatAgentListLegend(
   detail: AgentListDetail,
   showSend: boolean,
   showArchived: boolean,
+  showUnreachable: boolean,
   showRunConfig: boolean,
   showOwnerHostConnectivity: boolean,
   showSessionState: boolean,
@@ -731,6 +739,9 @@ function formatAgentListLegend(
 ): string {
   const archived = showArchived
     ? "\n[archived]: the agent/chat is archived and treated as inactive until its next user or A2A message"
+    : "";
+  const unreachable = showUnreachable
+    ? "\n[not reachable from this host]: another collaborator's host; not reachable from this host"
     : "";
   const runConfig = showRunConfig
     ? "\nmodel: <slug>: the configured model (provider default means the TUI provider resolves it)\neffort: <level>: the configured reasoning effort; omitted when absent\nfast: fast mode is enabled"
@@ -788,14 +799,14 @@ function formatAgentListLegend(
       : "";
   if (!showSend) {
     return `Legend:
-[self]: this agent, i.e. the caller of agent.list${archived}
+[self]: this agent, i.e. the caller of agent.list${archived}${unreachable}
 "<title>": the agent's chat/session title (omitted when untitled)
 R: the agent has a readable transcript
 -: the agent has no readable transcript${location}${runConfig}${runTuple}${activity}${sessionState}${ownerHost}
 Sending is unavailable in this session`;
   }
   return `Legend:
-[self]: this agent, i.e. the caller of agent.list${archived}
+[self]: this agent, i.e. the caller of agent.list${archived}${unreachable}
 "<title>": the agent's chat/session title (omitted when untitled)
 R: the agent has a readable transcript
 S: the agent can be sent messages to
@@ -843,16 +854,14 @@ const RUN_TUPLE_PROFILE_PATTERN = /^[A-Za-z0-9_.-]+$/;
 /**
  * `profile` off a row, or `null` when the row does not carry a usable one.
  *
- * Narrowed at RUNTIME rather than typed, for the same reason
- * `ownerHostConnectivity` is: the released `AgentSummary` has no such
- * property, so a listing that has been through the wire schema has had it
- * stripped, and this formatter renders both shapes. The direct host-side A2A
- * listing sends it for the caller's own GUI agents on that host and `null` for
- * every row it cannot answer for.
+ * A wire field since `agent.list@10.1`: a host at or past it sends it for the
+ * caller's own GUI agents on that host and `null` for every row it cannot
+ * answer for, and a host that predates it is upgraded to `null`. Still
+ * narrowed at runtime, so a hand-built row that skipped the schema reads as
+ * absent and nothing but an id can reach the line.
  */
 function readRunTupleProfile(agent: AgentSummary): string | null {
-  if (!("profile" in agent)) return null;
-  const value = agent.profile;
+  const value: unknown = agent.profile;
   return typeof value === "string" && RUN_TUPLE_PROFILE_PATTERN.test(value)
     ? value
     : null;
@@ -866,8 +875,7 @@ function readRunTupleProfile(agent: AgentSummary): string | null {
 function readRunTuplePermissionMode(
   agent: AgentSummary,
 ): PermissionMode | null {
-  if (!("permissionMode" in agent)) return null;
-  const value = agent.permissionMode;
+  const value: unknown = agent.permissionMode;
   return ALL_PERMISSION_MODES.find((mode) => mode === value) ?? null;
 }
 
@@ -915,6 +923,14 @@ function formatRunTupleSelfLines(agent: AgentSummary): string[] {
  * keep explaining the marker, while a listing from an older host must never
  * advertise a marker none of its rows can show.
  */
+/**
+ * Only an affirmative `other_principal` marks a row. `null` (a host that
+ * predates `agent.list@10.2`) is "not reported" and prints nothing.
+ */
+function isOtherPrincipalAgent(agent: AgentSummary): boolean {
+  return agent.reach === "other_principal";
+}
+
 function hasArchiveEnrichment(agent: AgentSummary): boolean {
   return typeof agent.archived === "boolean";
 }

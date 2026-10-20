@@ -45,8 +45,8 @@ const liveHostClient = liveHostClientSpine.createRequester(mockLocalHostEntry);
 // The Host-group pick is unreachable, so the scope carries NO client and a
 // non-`following` status - exactly the shape `HostScopeGate` used to refuse to
 // render behind. This section must not consult any of it for transport.
-vi.mock("@/components/settings/host-scope/use-host-scope", () => ({
-  useHostScope: () => ({
+vi.mock("@/components/settings/host-scope/use-host-scope", () => {
+  const useHostScope = () => ({
     hosts: [
       { hostId: ACTIVE_HOST_ID, name: "This machine" },
       { hostId: DEAD_PICKED_HOST_ID, name: "Old laptop" },
@@ -62,8 +62,12 @@ vi.mock("@/components/settings/host-scope/use-host-scope", () => ({
     client: null,
     isLoading: false,
     listsFailed: false,
-  }),
-}));
+  });
+  return {
+    useHostScope,
+    usePersonalHostScope: useHostScope,
+  };
+});
 
 const activeHostIdHolder: { current: string | null } = {
   current: ACTIVE_HOST_ID,

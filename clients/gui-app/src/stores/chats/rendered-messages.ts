@@ -144,6 +144,10 @@ function isRenderablePlanBlock(block: PlanContentBlock): boolean {
 
 export interface RenderedMessagesDisplayContext {
   readonly resolveUserSenderLabel: (sender: OpenUserMessageSender) => string;
+  /** The sender's picture, or null to show none (every chat but a bot's). */
+  readonly resolveUserSenderAvatarUrl: (
+    sender: OpenUserMessageSender,
+  ) => string | null;
   readonly resolveAgentSenderDisplay: (
     sender: OpenAgentSender,
   ) => AgentSenderDisplay;
@@ -3779,6 +3783,10 @@ function renderSteerBlockUserMessage(
     sender: block.sender,
     senderLabel:
       block.sender === null ? null : ctx.resolveUserSenderLabel(block.sender),
+    senderAvatarUrl:
+      block.sender === null
+        ? null
+        : ctx.resolveUserSenderAvatarUrl(block.sender),
     settings: null,
     steerBadge: {
       status: "steered",
@@ -3794,6 +3802,7 @@ function renderSteeredUserMessage(input: {
   readonly persistentMessageId: string | null;
   readonly sender: OpenUserMessageSender | null;
   readonly senderLabel: string | null;
+  readonly senderAvatarUrl: string | null;
   readonly settings: ChatMessageModel["settings"];
   readonly steerBadge: ChatMessageSteerBadge;
 }): ChatMessageModel {
@@ -3821,6 +3830,7 @@ function renderSteeredUserMessage(input: {
     stopped: null,
     persistentMessageId: input.persistentMessageId,
     senderLabel: input.senderLabel,
+    ...senderAvatarField(input.senderAvatarUrl),
     assistantMeta: null,
     statusLabel: null,
     agentSenderInfo:
@@ -3882,6 +3892,7 @@ function renderUserMessage(
     stopped: null,
     persistentMessageId: message.messageId,
     senderLabel: ctx.resolveUserSenderLabel(message.sender),
+    ...senderAvatarField(ctx.resolveUserSenderAvatarUrl(message.sender)),
     assistantMeta: null,
     statusLabel: null,
     agentSenderInfo: agentSenderInfoFromSender(message.sender),
@@ -3895,6 +3906,16 @@ function renderUserMessage(
       ? {}
       : { conversationRequest: message.conversationRequest }),
   };
+}
+
+/**
+ * A user row's `senderAvatarUrl`: the key only when there is a picture, so
+ * no row outside a bot conversation grows one.
+ */
+function senderAvatarField(
+  avatarUrl: string | null,
+): Pick<ChatMessageModel, "senderAvatarUrl"> {
+  return avatarUrl === null ? {} : { senderAvatarUrl: avatarUrl };
 }
 
 function renderPendingUserMessage(
@@ -3931,6 +3952,7 @@ function renderPendingUserMessage(
     stopped: null,
     persistentMessageId: null,
     senderLabel: ctx.resolveUserSenderLabel(message.sender),
+    ...senderAvatarField(ctx.resolveUserSenderAvatarUrl(message.sender)),
     assistantMeta: null,
     statusLabel: "Pending",
     agentSenderInfo: agentSenderInfoFromSender(message.sender),

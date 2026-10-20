@@ -3,6 +3,7 @@ import {
   defineRpcContract,
   defineUpgradePath,
 } from "@traycer/protocol/framework/index";
+import { UNKNOWN_CONNECTIVITY } from "@traycer/protocol/host/last-known-connectivity";
 import {
   createAgentRequestSchema,
   createAgentRequestSchemaV20,
@@ -36,6 +37,8 @@ import {
   listAgentsResponseSchemaV90,
   listAgentsResponseSchemaV91,
   listAgentsResponseSchemaV92,
+  listAgentsResponseSchemaV100,
+  listAgentsResponseSchemaV101,
   agentSummarySchemaV10,
   agentSummarySchemaV20,
   agentSummarySchemaV30,
@@ -1271,9 +1274,10 @@ export const agentListV100 = defineRpcContract({
   method: "agent.list",
   schemaVersion: { major: 10, minor: 0 } as const,
   requestSchema: listAgentsRequestSchema,
-  // The CANONICAL alias, which this head must name - see
-  // `head-names-canonical-alias.test.ts`. Major 9 holds the suffixed copies.
-  responseSchema: listAgentsResponseSchema,
+  // Frozen when `@10.1` put the run tuple on the row: `host-v1.5.1` registers
+  // 10.0, so it keeps serving the row those peers negotiate. See
+  // `agentSummarySchemaV100`.
+  responseSchema: listAgentsResponseSchemaV100,
 });
 
 export const agentListUpgradeV92ToV100 = defineUpgradePath<
@@ -1288,11 +1292,92 @@ export const agentListUpgradeV92ToV100 = defineUpgradePath<
   upgradeResponse: (response) => response,
 });
 
-export const agentListDowngradeV10ToV9 = defineDowngradePath<
+// @10.1 puts the run tuple (`profile`, `permissionMode`) on the row, the two
+// halves `agent.configure` requires and `traycer agent list --json` could not
+// read. Two plain added keys on a non-strict row, so a @10.0 peer's schema
+// strips them; the reasoning lives on `agentSummarySchema`.
+export const agentListV101 = defineRpcContract({
+  method: "agent.list",
+  schemaVersion: { major: 10, minor: 1 } as const,
+  requestSchema: listAgentsRequestSchema,
+  // Frozen when `@10.2` put `reach` and `hostConnectivity` on the row: hosts
+  // built from `main` since the run tuple landed serve this line. See
+  // `agentSummarySchemaV101`.
+  responseSchema: listAgentsResponseSchemaV101,
+});
+
+/**
+ * REQUEST: unchanged, so the fill is the identity.
+ *
+ * RESPONSE, `profile: null` and `permissionMode: null` on every row: a
+ * `@10.0` host was never asked. `null` is the row's vocabulary for "this
+ * answer cannot say", exactly as the `@9.1 -> @9.2` fill uses it for
+ * `archived`. Writing `"ambient"` or `full_access` here would put a tuple in
+ * the mouth of a host that may hold another one, and a script restating it
+ * through `agent.configure` would then switch the agent's profile or widen
+ * its permissions.
+ */
+export const agentListUpgradeV100ToV101 = defineUpgradePath<
   typeof agentListV100,
+  typeof agentListV101
+>({
+  from: agentListV100.schemaVersion,
+  to: agentListV101.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => ({
+    ...response,
+    agents: response.agents.map((agent) => ({
+      ...agent,
+      profile: null,
+      permissionMode: null,
+    })),
+  }),
+});
+
+// @10.2 says, per row, whether this host can reach the agent's host for the
+// caller and what it last saw of that host. Two plain added keys on a
+// non-strict row, so a @10.1 peer's schema strips them; the reasoning lives
+// on the head `agentSummarySchema`.
+export const agentListV102 = defineRpcContract({
+  method: "agent.list",
+  schemaVersion: { major: 10, minor: 2 } as const,
+  requestSchema: listAgentsRequestSchema,
+  // The CANONICAL alias, which this head must name - see
+  // `head-names-canonical-alias.test.ts`. The older lines hold the suffixed
+  // copies.
+  responseSchema: listAgentsResponseSchema,
+});
+
+/**
+ * REQUEST: unchanged, so the fill is the identity.
+ *
+ * RESPONSE, `reach: null` and `hostConnectivity: unknown` on every row: a
+ * `@10.1` host was never asked. `null` is the row's "this answer cannot say",
+ * and `unknown` is never `offline`, so an older host's agent is not reported
+ * unreachable or down on its behalf.
+ */
+export const agentListUpgradeV101ToV102 = defineUpgradePath<
+  typeof agentListV101,
+  typeof agentListV102
+>({
+  from: agentListV101.schemaVersion,
+  to: agentListV102.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => ({
+    ...response,
+    agents: response.agents.map((agent) => ({
+      ...agent,
+      reach: null,
+      hostConnectivity: UNKNOWN_CONNECTIVITY,
+    })),
+  }),
+});
+
+export const agentListDowngradeV10ToV9 = defineDowngradePath<
+  typeof agentListV102,
   typeof agentListV92
 >({
-  from: { major: 10, minor: 0 },
+  from: { major: 10, minor: 2 },
   // Lands on 9.2, major 9's latest installed minor, so `archived` survives; a
   // 9.1 or 9.0 caller's own contract parse then strips what its minor lacks.
   to: { major: 9, minor: 2 },
@@ -1311,10 +1396,10 @@ export const agentListDowngradeV10ToV9 = defineDowngradePath<
 });
 
 export const agentListDowngradeV10ToV8 = defineDowngradePath<
-  typeof agentListV100,
+  typeof agentListV102,
   typeof agentListV80
 >({
-  from: { major: 10, minor: 0 },
+  from: { major: 10, minor: 2 },
   to: { major: 8, minor: 0 },
   downgradeRequest: (request) => ({ ok: true, value: request }),
   downgradeResponse: (response) => ({
@@ -1329,10 +1414,10 @@ export const agentListDowngradeV10ToV8 = defineDowngradePath<
 });
 
 export const agentListDowngradeV10ToV7 = defineDowngradePath<
-  typeof agentListV100,
+  typeof agentListV102,
   typeof agentListV70
 >({
-  from: { major: 10, minor: 0 },
+  from: { major: 10, minor: 2 },
   to: { major: 7, minor: 0 },
   downgradeRequest: (request) => ({ ok: true, value: request }),
   downgradeResponse: (response) => ({
@@ -1347,10 +1432,10 @@ export const agentListDowngradeV10ToV7 = defineDowngradePath<
 });
 
 export const agentListDowngradeV10ToV6 = defineDowngradePath<
-  typeof agentListV100,
+  typeof agentListV102,
   typeof agentListV60
 >({
-  from: { major: 10, minor: 0 },
+  from: { major: 10, minor: 2 },
   to: { major: 6, minor: 0 },
   downgradeRequest: (request) => ({ ok: true, value: request }),
   downgradeResponse: (response) => ({
@@ -1365,10 +1450,10 @@ export const agentListDowngradeV10ToV6 = defineDowngradePath<
 });
 
 export const agentListDowngradeV10ToV5 = defineDowngradePath<
-  typeof agentListV100,
+  typeof agentListV102,
   typeof agentListV50
 >({
-  from: { major: 10, minor: 0 },
+  from: { major: 10, minor: 2 },
   to: { major: 5, minor: 0 },
   downgradeRequest: (request) => ({ ok: true, value: request }),
   downgradeResponse: (response) => ({
@@ -1383,10 +1468,10 @@ export const agentListDowngradeV10ToV5 = defineDowngradePath<
 });
 
 export const agentListDowngradeV10ToV4 = defineDowngradePath<
-  typeof agentListV100,
+  typeof agentListV102,
   typeof agentListV40
 >({
-  from: { major: 10, minor: 0 },
+  from: { major: 10, minor: 2 },
   to: { major: 4, minor: 0 },
   downgradeRequest: (request) => ({ ok: true, value: request }),
   downgradeResponse: (response) => ({
@@ -1401,10 +1486,10 @@ export const agentListDowngradeV10ToV4 = defineDowngradePath<
 });
 
 export const agentListDowngradeV10ToV3 = defineDowngradePath<
-  typeof agentListV100,
+  typeof agentListV102,
   typeof agentListV30
 >({
-  from: { major: 10, minor: 0 },
+  from: { major: 10, minor: 2 },
   to: { major: 3, minor: 0 },
   downgradeRequest: (request) => ({ ok: true, value: request }),
   downgradeResponse: (response) => ({
@@ -1419,10 +1504,10 @@ export const agentListDowngradeV10ToV3 = defineDowngradePath<
 });
 
 export const agentListDowngradeV10ToV2 = defineDowngradePath<
-  typeof agentListV100,
+  typeof agentListV102,
   typeof agentListV20
 >({
-  from: { major: 10, minor: 0 },
+  from: { major: 10, minor: 2 },
   to: { major: 2, minor: 0 },
   downgradeRequest: (request) => ({ ok: true, value: request }),
   downgradeResponse: (response) => ({
@@ -1437,10 +1522,10 @@ export const agentListDowngradeV10ToV2 = defineDowngradePath<
 });
 
 export const agentListDowngradeV10ToV1 = defineDowngradePath<
-  typeof agentListV100,
+  typeof agentListV102,
   typeof agentListV10
 >({
-  from: { major: 10, minor: 0 },
+  from: { major: 10, minor: 2 },
   to: { major: 1, minor: 0 },
   downgradeRequest: (request) => ({ ok: true, value: request }),
   downgradeResponse: (response) => ({

@@ -175,6 +175,7 @@ function activeTurn(turnId: string): ChatActiveTurn {
 
 const displayContext: RenderedMessagesDisplayContext = {
   resolveUserSenderLabel: () => "You",
+  resolveUserSenderAvatarUrl: () => null,
   resolveAgentSenderDisplay: () => ({
     senderLabel: "Claude",
     providerLabel: "Claude Code",

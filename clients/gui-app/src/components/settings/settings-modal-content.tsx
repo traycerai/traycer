@@ -10,6 +10,8 @@ import {
   type SettingsSectionId,
 } from "@/lib/settings-sections";
 import { BrowserSettingsPanel } from "@/components/settings/panels/browser-settings-panel";
+import { BrowserAgentAccessSettingsPanel } from "@/components/settings/panels/browser-agent-access-settings-panel";
+import { SecretsSettingsPanel } from "@/components/settings/panels/secrets-settings-panel";
 import { GeneralSettingsPanel } from "@/components/settings/panels/general-settings-panel";
 import { AppearanceSettingsPanel } from "@/components/settings/panels/appearance-settings-panel";
 import { LayoutSettingsPanel } from "@/components/settings/panels/layout-settings-panel";
@@ -24,7 +26,13 @@ import { DeleteAccountSettingsPanel } from "@/components/settings/panels/delete-
 import { AppDiagnosticsSettingsPanel } from "@/components/settings/panels/app-diagnostics-settings-panel";
 import { AppNotificationsSettingsPanel } from "@/components/settings/panels/app-notifications-settings-panel";
 import { DiagnosticsSettingsPanel } from "@/components/settings/panels/diagnostics-settings-panel";
-import { ProvidersSettingsPanel } from "@/components/settings/panels/providers-settings-panel";
+import {
+  McpServersSettingsPanel,
+  ProvidersSettingsPanel,
+  SkillsSettingsPanel,
+} from "@/components/settings/panels/providers-settings-panel";
+import { AgentDefinitionsSettingsPanel } from "@/components/settings/panels/agent-definitions-settings-panel";
+import { MachineSetupSettingsPanel } from "@/components/settings/panels/machine-setup-settings-panel";
 import { AgentsSettingsPanel } from "@/components/settings/panels/agents-settings-panel";
 import { PermissionsSettingsPanel } from "@/components/settings/panels/permissions-settings-panel";
 import { FallbackSettingsPanel } from "@/components/settings/panels/fallback-settings-panel";
@@ -32,6 +40,7 @@ import { NotificationsSettingsPanel } from "@/components/settings/panels/notific
 import { UsageSettingsPanel } from "@/components/settings/panels/usage-settings-panel";
 import { useSystemTabModalActions } from "@/stores/tabs/use-system-tab-modal";
 import { useSettingsAnchorReveal } from "@/components/settings/use-settings-anchor-reveal";
+import { PersonalPageFrame } from "@/components/settings/personal/personal-page-frame";
 import "./settings-search.css";
 
 export interface SettingsModalContentProps {
@@ -92,11 +101,17 @@ const SETTINGS_PANELS = {
   "getting-started": GettingStartedSettingsPanel,
   general: GeneralSettingsPanel,
   browser: BrowserSettingsPanel,
+  "browser-agent-access": BrowserAgentAccessSettingsPanel,
   appearance: AppearanceSettingsPanel,
   layout: LayoutSettingsPanel,
   "opening-behavior": OpeningBehaviorPanel,
   "app-notifications": AppNotificationsSettingsPanel,
   providers: ProvidersSettingsPanel,
+  secrets: SecretsSettingsPanel,
+  "mcp-servers": McpServersSettingsPanel,
+  skills: SkillsSettingsPanel,
+  "agent-definitions": AgentDefinitionsSettingsPanel,
+  "machine-setup": MachineSetupSettingsPanel,
   notifications: NotificationsSettingsPanel,
   permissions: PermissionsSettingsPanel,
   agents: AgentsSettingsPanel,
@@ -125,7 +140,9 @@ export function SettingsPanelForSection(props: {
   const Panel = SETTINGS_PANELS[props.section];
   return (
     <div ref={rootRef} className="contents">
-      <Panel />
+      <PersonalPageFrame section={props.section}>
+        <Panel />
+      </PersonalPageFrame>
       <SettingsSetupGuide section={props.section} rootRef={rootRef} />
     </div>
   );

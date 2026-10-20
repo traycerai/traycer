@@ -19,6 +19,7 @@ import type {
   ListTasksResponse,
   ListTaskLight,
   ListTasksSort,
+  EpicCreateOwner,
   TaskLight,
   TaskRepoIdentifier,
   TaskWorkspaceIdentifier,
@@ -29,7 +30,11 @@ import {
 } from "@traycer/protocol/host/epic/unary-schemas";
 import type { HostRpcRegistry } from "@/lib/host";
 import { useHostMutation } from "@/hooks/host/use-host-query";
-import { EPIC_CREATE_LOCAL_FIRST_MINOR } from "@/lib/epic-create-admission";
+import {
+  EPIC_CREATE_TEAM_OWNER_MINOR,
+  epicCreateFloor,
+  teamCreateRejectionMessage,
+} from "@/lib/epic-create-admission";
 import { createWithoutCloudVerdictMessage } from "@/lib/composer/landing-placement";
 import {
   authorizesCloudCapability,
@@ -37,6 +42,7 @@ import {
 } from "@/stores/auth/auth-store";
 import { cloudEpicTasksQueryKeyMatchesScope } from "@/lib/cloud-epic-tasks-query/cache";
 import type { ListCloudTasksRequest } from "@/lib/cloud-epic-tasks-query";
+import { toast } from "sonner";
 import {
   toastFromHostError,
   toastUnknownOutcomeAfterRefusedRetry,
@@ -66,6 +72,12 @@ import { getOpenEpicRegistry } from "@/lib/registries/epic-session-registry";
 interface CreateEpicMutationContext {
   readonly hostId: string | null;
   readonly userId: string | null;
+  /**
+   * The slug of the team a team create was sent for, captured at dispatch: a
+   * refusal can arrive after the team left the person's list, and its line
+   * still names the team.
+   */
+  readonly teamSlug: string | null;
 }
 
 function taskCreationMode(
@@ -122,7 +134,8 @@ export function useEpicCreateForClient(
       }
       return variables;
     },
-    requiredHostMethodVersion: () => createRequiresLocalFirstHost(),
+    requiredHostMethodVersion: (variables) =>
+      createFloorFor(variables.owner ?? null),
     // The epic this request is MINTING, which makes a replay of the frame the
     // same create rather than a second one. Only stable because hash-only
     // content keeps the params byte-identical across that replay - an inlined
@@ -187,6 +200,7 @@ export function useEpicCreateForClient(
         return {
           hostId: client?.getActiveHostId() ?? null,
           userId: client?.getRequestContextUserId() ?? null,
+          teamSlug: teamSlugFor(variables.owner ?? null),
         };
       },
       onSuccess: (response, variables, ctx) => {
@@ -252,6 +266,16 @@ export function useEpicCreateForClient(
           mode: taskCreationMode(variables.chat),
           blocker: analyticsBlockerFromError(error),
         });
+        // A team create's own refusals say what they are: the host below
+        // `@1.3`, and the cloud's `FORBIDDEN`. Nothing was created for either.
+        const teamRejection = teamCreateRejectionMessage(
+          error,
+          ctx?.teamSlug ?? null,
+        );
+        if (teamRejection !== null) {
+          toast.error(teamRejection);
+          return;
+        }
         // NO LONGER UNCONDITIONAL. "May or may not have gone through" is the
         // right sentence only where the outcome is genuinely unknowable, and
         // now that this create carries `idempotencyKey = epicId` a dropped
@@ -883,13 +907,18 @@ function liveOpenEpicTitle(epicId: string): string | null {
  *
  * `null` for a `signed-in` session: it may spend the capability whatever the
  * peer's minor is, and pays no floor.
+ *
+ * A team owner requires `@1.3` whatever the session:
+ * an older host's frozen request strips `owner` and would create the person's
+ * own epic. `@1.3` is above the local-first floor, so it covers that one too.
  */
-function createRequiresLocalFirstHost(): RequiredHostMethodVersion | null {
-  if (authorizesCloudCapability(useAuthStore.getState().status)) return null;
-  return {
-    method: "epic.create",
-    version: { major: 1, minor: EPIC_CREATE_LOCAL_FIRST_MINOR },
-  };
+function createFloorFor(
+  owner: EpicCreateOwner | null,
+): RequiredHostMethodVersion | null {
+  return epicCreateFloor({
+    owner,
+    cloudAuthorized: authorizesCloudCapability(useAuthStore.getState().status),
+  });
 }
 
 /**
@@ -899,6 +928,11 @@ function createRequiresLocalFirstHost(): RequiredHostMethodVersion | null {
  */
 function asCreateWithoutCloudVerdictError(cause: unknown): unknown {
   if (!(cause instanceof HostMethodVersionUnsatisfiedError)) return cause;
+  // The team-owner floor is not the cloud-verdict one: its line is the one
+  // which `teamCreateRejectionMessage` reads off this same error.
+  if (cause.requirement.version.minor >= EPIC_CREATE_TEAM_OWNER_MINOR) {
+    return cause;
+  }
   return new HostRpcError({
     code: "RPC_ERROR",
     message: createWithoutCloudVerdictMessage("this device"),
@@ -906,4 +940,14 @@ function asCreateWithoutCloudVerdictError(cause: unknown): unknown {
     method: "epic.create",
     fatalDetails: null,
   });
+}
+
+/** The slug of a team owner among the person's teams, or `null`. */
+function teamSlugFor(owner: EpicCreateOwner | null): string | null {
+  if (owner?.kind !== "team") return null;
+  return (
+    useAuthStore
+      .getState()
+      .shareableTeams.find((team) => team.teamId === owner.teamId)?.slug ?? null
+  );
 }

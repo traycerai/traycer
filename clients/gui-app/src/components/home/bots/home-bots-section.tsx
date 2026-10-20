@@ -167,6 +167,8 @@ export function HomeBotsSection(): ReactNode {
             }
             connectableHostIds={connectable.hostIds}
             environmentBindings={bindings}
+            client={client}
+            hostId={hostId}
           />
         ))}
       </div>

@@ -4,7 +4,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import { createReportIssueContext } from "@/lib/report-issue-context";
-import { getSupportContextSnapshot } from "@/lib/support-context-registry";
+import {
+  getSupportContextSnapshot,
+  getSupportEnvironmentSection,
+} from "@/lib/support-context-registry";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 
 /**
@@ -137,6 +140,7 @@ describe("ReportIssueAction analytics", () => {
             fingerprint: null,
             stackFamily: null,
             correlationId: "test-correlation",
+            environment: getSupportEnvironmentSection(),
           },
         })}
         presentation="text"

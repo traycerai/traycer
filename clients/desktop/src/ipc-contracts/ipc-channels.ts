@@ -68,6 +68,24 @@ export const RunnerHostInvoke = {
   // no route to the machine, which is why it does not live on the host-
   // management bridge next to the OS-service verbs it must not be confused with.
   deregisterHostFromAccount: "runnerHost:hosts:deregisterFromAccount",
+  // The sandbox control plane (traycer-server `/api/sandboxes`). Same CORS
+  // reason as the registry calls above: traycer-server's allow-list is the web
+  // dashboard origin, so the renderer cannot reach it directly.
+  listSandboxes: "runnerHost:sandboxes:list",
+  getSandboxCosts: "runnerHost:sandboxes:costs",
+  getSandboxCatalogue: "runnerHost:sandboxes:catalogue",
+  createSandbox: "runnerHost:sandboxes:create",
+  destroySandbox: "runnerHost:sandboxes:destroy",
+  runSandboxVerb: "runnerHost:sandboxes:verb",
+  getSandboxAutomation: "runnerHost:sandboxes:automation:get",
+  openSandboxAutomation: "runnerHost:sandboxes:automation:open",
+  // The secrets broker (authn), from Electron main for the same reason.
+  getSandboxGrants: "runnerHost:sandboxSecrets:grants",
+  getTeamEnvironment: "runnerHost:environments:team",
+  getEnvironmentProviders: "runnerHost:environments:providers",
+  decideSecretRequest: "runnerHost:sandboxSecrets:decide",
+  // The executable-write grant (authn), from Electron main for the same reason.
+  mintExecutableWriteGrant: "runnerHost:environment:mintExecutableWriteGrant",
   openExternalLink: "runnerHost:openExternalLink",
   getRegisteredUrlSchemes: "runnerHost:getRegisteredUrlSchemes",
   requestMicrophoneAccess: "runnerHost:requestMicrophoneAccess",
@@ -112,6 +130,14 @@ export const RunnerHostInvoke = {
   // change may never come. This channel removes the whole class: a subscriber
   // asks for the current value instead of hoping it was told.
   localHostSnapshot: "runnerHost:host:localHostSnapshot",
+  // PULL for the same state `localHostUnresponsiveChange` pushes, for the
+  // same reason as `localHostSnapshot`: a window that subscribes after the
+  // push asks instead of hoping it was told.
+  localHostUnresponsive: "runnerHost:host:localHostUnresponsive",
+  // The force restart offered for an unresponsive host, carrying that host's
+  // pid: main restarts only while the same host is published and still not
+  // answering, never whatever host has replaced it since.
+  forceRestartUnresponsiveHost: "runnerHost:host:forceRestartUnresponsive",
   setUnsyncedEditsSnapshot: "runnerHost:appLifecycle:setUnsyncedEditsSnapshot",
   // Renderer-initiated app quit (the removed surface's "Quit Traycer" button).
   // Routes through the normal `before-quit` flow (unsynced-edits guard etc.).
@@ -438,6 +464,11 @@ export const RunnerHostEvent = {
   // superseded attempt's late result can't be mistaken for the live one.
   deviceFlowResult: "runnerHost:event:deviceFlowResult",
   localHostChange: "runnerHost:event:localHostChange",
+  // The health monitor's verdict that the local host is alive but has not
+  // answered past the busy window (`LocalHostUnresponsive`), or `null` once it
+  // answers again or dies. The renderer offers a force restart; nothing is
+  // killed on this signal.
+  localHostUnresponsiveChange: "runnerHost:event:localHostUnresponsiveChange",
   // OS wake pulse (powerMonitor `resume` / `unlock-screen`) bridged to the
   // renderer so it force-reconnects its host streams - re-registering the
   // live request context within seconds of wake instead of waiting out the

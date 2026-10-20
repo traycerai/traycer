@@ -248,7 +248,7 @@ describe("host uninstall --all over a Scheduled Task another Windows user owns",
     const { runner, calls } = slotRunner();
 
     const result = await runHostUninstall(
-      { all: true },
+      { all: true, force: false },
       context,
       depsWith(runner),
       actuators,
@@ -277,7 +277,7 @@ describe("host uninstall --all over a Scheduled Task another Windows user owns",
     registered = { kind: "xml", xml: taskXml(OTHER_SID) };
     const { runner } = slotRunner();
     const result = await runHostUninstall(
-      { all: true },
+      { all: true, force: false },
       context,
       depsWith(runner),
       actuators,
@@ -292,7 +292,7 @@ describe("host uninstall --all over a Scheduled Task another Windows user owns",
     registered = { kind: "failed", reason: "access denied" };
     const { runner, calls } = slotRunner();
     const result = await runHostUninstall(
-      { all: true },
+      { all: true, force: false },
       context,
       depsWith(runner),
       actuators,
@@ -316,7 +316,7 @@ describe("host uninstall --all over a Scheduled Task another Windows user owns",
     registered = { kind: "xml", xml: taskXml(CALLER_SID) };
     const { runner, calls } = slotRunner();
     const result = await runHostUninstall(
-      { all: true },
+      { all: true, force: false },
       context,
       depsWith(runner),
       actuators,
@@ -337,7 +337,7 @@ describe("bare host uninstall over another user's task", () => {
     registered = { kind: "xml", xml: taskXml(OTHER_SID) };
     const { runner, calls } = slotRunner();
     const result = await runHostUninstall(
-      { all: false },
+      { all: false, force: false },
       context,
       depsWith(runner),
       actuators,

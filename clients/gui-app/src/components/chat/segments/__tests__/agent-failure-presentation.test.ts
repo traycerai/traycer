@@ -12,6 +12,17 @@ describe("presentationForUntypedCode", () => {
     });
   });
 
+  it("presents the team-host codes as interruptions with their own headlines", () => {
+    expect(presentationForUntypedCode("TEAM_MEMBER_REMOVED")).toEqual({
+      presentation: "interrupted",
+      headline: "Member left the team",
+    });
+    expect(presentationForUntypedCode("TEAM_HOST_RECONNECTING")).toEqual({
+      presentation: "interrupted",
+      headline: "Waiting for the team's host",
+    });
+  });
+
   it("presents an unanswered predecessor fence as an interruption", () => {
     expect(
       presentationForUntypedCode("CLAUDE_PREVIOUS_SESSION_STOPPING"),

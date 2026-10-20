@@ -1,10 +1,15 @@
 // @vitest-environment node
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   downloadCuratedWallpaper,
   fetchCuratedWallpaperManifest,
   type CuratedWallpaper,
 } from "../curated-wallpapers";
+import {
+  removeNativeAbortHelpers,
+  signalOfLastFetch,
+  stubHangingFetch,
+} from "@traycer-clients/shared/auth/__tests__/no-native-abort-helpers";
 
 const MANIFEST_URL = "https://assets.traycer.ai/start-page/wallpapers/v1.json";
 
@@ -283,5 +288,136 @@ describe("downloadCuratedWallpaper", () => {
     ).rejects.toThrow(
       "The wallpaper download is larger than the catalog declared.",
     );
+  });
+});
+
+describe("the curated wallpaper fetches on a WebView without AbortSignal.timeout or AbortSignal.any (iOS 15.5)", () => {
+  beforeEach(() => {
+    removeNativeAbortHelpers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  function entryFor(bytes: Uint8Array, sha256: string): CuratedWallpaper {
+    return {
+      id: "dunes",
+      title: "Dunes",
+      fullUrl:
+        "https://assets.traycer.ai/start-page/wallpapers/blobs/sha256/aa11.webp",
+      thumbUrl:
+        "https://assets.traycer.ai/start-page/wallpapers/blobs/sha256/aa11-thumb.webp",
+      sha256,
+      bytes: bytes.byteLength,
+    };
+  }
+
+  it("still fetches and parses the manifest", async () => {
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(
+        jsonResponse({ version: 1, wallpapers: [validEntry({})] }, {}),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const wallpapers = await fetchCuratedWallpaperManifest(
+      new AbortController().signal,
+    );
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(wallpapers).toHaveLength(1);
+  });
+
+  it("aborts a manifest request that never answers after 15 s, rejecting with the timeout", async () => {
+    vi.useFakeTimers();
+    const fetchMock = stubHangingFetch();
+
+    const pending = fetchCuratedWallpaperManifest(new AbortController().signal);
+    const outcome = expect(pending).rejects.toMatchObject({
+      name: "TimeoutError",
+    });
+    const signal = signalOfLastFetch(fetchMock);
+    await vi.advanceTimersByTimeAsync(14_999);
+    expect(signal.aborted).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(signal.aborted).toBe(true);
+    await outcome;
+  });
+
+  it("aborts the manifest request when the caller's signal aborts, well before the timeout", async () => {
+    const fetchMock = stubHangingFetch();
+    const caller = new AbortController();
+
+    const pending = fetchCuratedWallpaperManifest(caller.signal);
+    const outcome = expect(pending).rejects.toMatchObject({
+      name: "AbortError",
+    });
+    const signal = signalOfLastFetch(fetchMock);
+    expect(signal.aborted).toBe(false);
+
+    caller.abort();
+
+    expect(signal.aborted).toBe(true);
+    await outcome;
+  });
+
+  it("still downloads and verifies a wallpaper", async () => {
+    const bytes = new Uint8Array([1, 2, 3, 4]);
+    const hash = await sha256Hex(bytes);
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(bytes, {
+        status: 200,
+        headers: { "content-type": "image/webp" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const blob = await downloadCuratedWallpaper(
+      entryFor(bytes, hash),
+      new AbortController().signal,
+    );
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(new Uint8Array(await blob.arrayBuffer())).toEqual(bytes);
+  });
+
+  it("aborts a wallpaper download that never answers after 60 s", async () => {
+    vi.useFakeTimers();
+    const fetchMock = stubHangingFetch();
+    const bytes = new Uint8Array([1, 2, 3, 4]);
+
+    const pending = downloadCuratedWallpaper(
+      entryFor(bytes, "a".repeat(64)),
+      new AbortController().signal,
+    );
+    const outcome = expect(pending).rejects.toMatchObject({
+      name: "TimeoutError",
+    });
+    const signal = signalOfLastFetch(fetchMock);
+    await vi.advanceTimersByTimeAsync(59_999);
+    expect(signal.aborted).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(signal.aborted).toBe(true);
+    await outcome;
+  });
+
+  it("leaves no timer behind once a request has settled", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn<typeof fetch>()
+        .mockResolvedValue(jsonResponse({ version: 1, wallpapers: [] }, {})),
+    );
+
+    await fetchCuratedWallpaperManifest(new AbortController().signal);
+
+    expect(vi.getTimerCount()).toBe(0);
   });
 });

@@ -25,6 +25,7 @@ export {
   supportBridgeQueryScopeId,
 } from "@/lib/query-keys/runner-mutation-keys";
 export { configMutationKeys } from "@/lib/query-keys/config-mutation-keys";
+export { environmentMutationKeys } from "@/lib/query-keys/environment-mutation-keys";
 export { autoModeMutationKeys } from "@/lib/query-keys/auto-mode-mutation-keys";
 export {
   chatAutoArchiveMutationKeys,
@@ -58,6 +59,7 @@ export {
   autoPolicyWriteScope,
   providerAutoJudgeWriteScope,
 } from "@/lib/query-keys/auto-mode-write-scopes";
+export { providerNativeSubagentsWriteScope } from "@/lib/query-keys/providers-native-subagents-scope";
 export { providersListQueryKey } from "@/lib/query-keys/providers-query-keys";
 export {
   CLASSIC_PROVIDERS_LIST_PARAMS,
@@ -76,10 +78,7 @@ export { notificationsMutationKeys } from "@/lib/query-keys/notifications-mutati
 export { notificationsQueryKeys } from "@/lib/query-keys/notifications-query-keys";
 export { prQueryKeys } from "@/lib/query-keys/pr-query-keys";
 export { botQueryKeys } from "@/lib/query-keys/bot-query-keys";
-export {
-  botMutationKeys,
-  environmentMutationKeys,
-} from "@/lib/query-keys/bot-mutation-keys";
+export { botMutationKeys } from "@/lib/query-keys/bot-mutation-keys";
 export { mentionQueryKeys } from "@/lib/query-keys/mention-query-keys";
 export { imageMutationKeys } from "@/lib/query-keys/image-mutation-keys";
 export { appearanceQueryKeys } from "@/lib/query-keys/appearance-query-keys";
@@ -104,3 +103,7 @@ export const queryKeys = {
   hostPickerMissing: uiQueryKeys.hostPickerMissing,
   cloudEpicTasksDisabled: uiQueryKeys.cloudEpicTasksDisabled,
 };
+export {
+  sandboxMutationKeys,
+  sandboxQueryKeys,
+} from "@/lib/query-keys/sandbox-query-keys";

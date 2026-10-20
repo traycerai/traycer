@@ -35,6 +35,8 @@ import type { DesktopPublishedHostSnapshot } from "../../ipc-contracts/host-type
 import type {
   DesktopAuthSessionSnapshot,
   SupportBuildPublicDraftResult,
+  SupportCapturedField,
+  SupportEnvironmentSection,
   SupportHostLayer0Snapshot,
   SupportFreezeEvidenceResult,
   SupportImageAttachmentInput,
@@ -479,6 +481,15 @@ export class DesktopSupportService {
             : { registry: { ...privateDiagnostics.registry } }),
         })
       : {};
+    // The selected host's environment section, under the same consent gate as
+    // everything above, and never in the public draft or the saved bundle.
+    // Scrubbed leaf by leaf inside `environmentContextForSentry`, not by the
+    // deep scrub above.
+    if (includeDiagnostics && privateDiagnostics !== undefined) {
+      contexts.environment = environmentContextForSentry(
+        privateDiagnostics.environment,
+      );
+    }
     // Registered after context construction but before `captureFeedback`, so
     // the listener is live when the envelope goes out and every later exit is
     // covered by the `finally` below. `afterSendEvent` carries the transport's
@@ -1427,6 +1438,142 @@ function flattenAppMetricsForSentry(
       memoryWorkingSetKb: metric.memory.workingSetSize,
       memoryPeakWorkingSetKb: metric.memory.peakWorkingSetSize,
     })),
+  };
+}
+
+/**
+ * The environment section as one Sentry context within the depth budget
+ * above: its scalars as fields, each list or record as JSON text, so an
+ * item's args or a rotation's evidence never collapse to "[Object]". The
+ * section is already closed and bounded by `support-ipc.ts`.
+ *
+ * Every text leaf goes through `scrubSupportText` here, field by field,
+ * before any JSON is made. Not `deepScrubSupportValue`: its key rule redacts
+ * any field named like a secret, and this record's `secretName` is the
+ * secret's name, the one thing a rotation row is for; the record is closed,
+ * so no key of it can hold a value. Nor a scrub of the JSON text afterwards,
+ * which reads `"secretName":"STRIPE_KEY"` as an assignment and redacts it
+ * into invalid JSON.
+ */
+function environmentContextForSentry(
+  environment: SupportCapturedField<SupportEnvironmentSection>,
+): Record<string, unknown> {
+  if (environment.status === "unavailable") return { status: "unavailable" };
+  const section = scrubEnvironmentSection(environment.value);
+  return {
+    status: environment.status,
+    hostId: section.hostId,
+    principal: section.principal,
+    reachability: section.reachability,
+    bindingGeneration: section.bindingGeneration,
+    desiredRevision: section.desiredRevision,
+    receivedRevision: section.receivedRevision,
+    appliedRevision: section.appliedRevision,
+    receiptAgeMs: section.receiptAgeMs,
+    items: JSON.stringify(section.items),
+    setupAttempts: JSON.stringify(section.setupAttempts),
+    policy: JSON.stringify(section.policy),
+    rotations: JSON.stringify(section.rotations),
+    reachDenials: JSON.stringify(section.reachDenials),
+    servedTask: JSON.stringify(section.servedTask),
+  };
+}
+
+function scrubNullableText(value: string | null): string | null {
+  return value === null ? null : scrubSupportText(value);
+}
+
+/** Every text leaf of the closed section, scrubbed in place of its shape. */
+function scrubEnvironmentSection(
+  section: SupportEnvironmentSection,
+): SupportEnvironmentSection {
+  return {
+    ...section,
+    hostId: scrubSupportText(section.hostId),
+    reachability: scrubSupportText(section.reachability),
+    items: section.items.map((item) => {
+      // Destructured, not `item.key` / `item.code`: the keyboard-read
+      // inventory counts a `.key` read beside a `.code` read as a key event.
+      const { key, code } = item;
+      return {
+        kind: scrubSupportText(item.kind),
+        key: scrubSupportText(key),
+        os: scrubSupportText(item.os),
+        status: scrubSupportText(item.status),
+        code: scrubSupportText(code),
+        args: {
+          ...item.args,
+          stage: scrubNullableText(item.args.stage),
+          kind: scrubNullableText(item.args.kind),
+        },
+      };
+    }),
+    setupAttempts:
+      section.setupAttempts === null
+        ? null
+        : section.setupAttempts.map((attempt) => ({
+            ...attempt,
+            attemptId: scrubSupportText(attempt.attemptId),
+            scriptHash: scrubSupportText(attempt.scriptHash),
+            trigger: scrubSupportText(attempt.trigger),
+            stageReached: scrubNullableText(attempt.stageReached),
+            result: scrubNullableText(attempt.result),
+          })),
+    policy:
+      section.policy === null
+        ? null
+        : {
+            source: scrubSupportText(section.policy.source),
+            readState: scrubSupportText(section.policy.readState),
+            teamState: scrubNullableText(section.policy.teamState),
+            teamPolicyVersion: scrubNullableText(
+              section.policy.teamPolicyVersion,
+            ),
+          },
+    rotations:
+      section.rotations === null
+        ? null
+        : section.rotations.map((rotation) => ({
+            secretName: scrubSupportText(rotation.secretName),
+            state: scrubSupportText(rotation.state),
+            producers: rotation.producers.map((producer) => ({
+              producer: scrubSupportText(producer.producer),
+              workerClass: scrubNullableText(producer.workerClass),
+              hostId: scrubNullableText(producer.hostId),
+              hostName: null,
+              status: scrubSupportText(producer.status),
+              evidence:
+                producer.evidence === null
+                  ? null
+                  : producer.evidence.map((entry) => ({
+                      kind: scrubSupportText(entry.kind),
+                      count: entry.count,
+                    })),
+            })),
+          })),
+    reachDenials:
+      section.reachDenials === null
+        ? null
+        : section.reachDenials.map((denial) => ({
+            denialId: scrubSupportText(denial.denialId),
+            at: denial.at,
+            sourceHostRef: scrubSupportText(denial.sourceHostRef),
+            targetHostRef: scrubSupportText(denial.targetHostRef),
+            taskRef: scrubNullableText(denial.taskRef),
+            reason: scrubSupportText(denial.reason),
+            sourcePrincipal: scrubSupportText(denial.sourcePrincipal),
+            targetPrincipal: scrubSupportText(denial.targetPrincipal),
+            count: denial.count,
+          })),
+    servedTask:
+      section.servedTask === null
+        ? null
+        : {
+            taskRef: scrubSupportText(section.servedTask.taskRef),
+            otherHostPrincipals: section.servedTask.otherHostPrincipals.map(
+              (category) => scrubSupportText(category),
+            ),
+          },
   };
 }
 

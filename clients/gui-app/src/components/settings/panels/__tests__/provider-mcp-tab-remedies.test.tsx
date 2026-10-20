@@ -182,6 +182,11 @@ vi.mock("@/hooks/worktree/use-worktree-list-by-workspace-paths-query", () => ({
   }),
 }));
 
+// No host directory in this harness; the credential gate is the add and edit
+// dialogs' concern, not the remedies'.
+vi.mock("@/hooks/host/use-host-credential-refusal", () => ({
+  useHostCredentialRefusal: () => null,
+}));
 vi.mock("@/lib/links/open-link", () => ({
   useOpenLink: () => mcpMocks.openLink,
 }));

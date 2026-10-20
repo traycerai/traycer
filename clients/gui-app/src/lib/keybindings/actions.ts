@@ -429,7 +429,7 @@ export const ACTION_META: Readonly<Record<ActionId, ActionMeta>> = {
     id: "group.split.horizontal",
     label: "Split group horizontally",
     description:
-      "Split the focused group horizontally with an empty placeholder group on the right.",
+      "Split the focused group horizontally with an empty group on the right.",
     category: "groups",
     kind: "chord",
     defaultChord: "mod+d",
@@ -442,7 +442,7 @@ export const ACTION_META: Readonly<Record<ActionId, ActionMeta>> = {
     id: "group.split.vertical",
     label: "Split group vertically",
     description:
-      "Split the focused group vertically with an empty placeholder group on the bottom.",
+      "Split the focused group vertically with an empty group on the bottom.",
     category: "groups",
     kind: "chord",
     defaultChord: "mod+shift+d",

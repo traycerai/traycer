@@ -48,6 +48,7 @@ const ASSISTANT_SENDER: AgentSender = {
 
 const displayContext: RenderedMessagesDisplayContext = {
   resolveUserSenderLabel: () => "You",
+  resolveUserSenderAvatarUrl: () => null,
   resolveAgentSenderDisplay: () => ({
     senderLabel: "Claude",
     providerLabel: "Claude Code",

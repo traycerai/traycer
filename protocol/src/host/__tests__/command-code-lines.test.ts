@@ -179,6 +179,13 @@ function agentRow(id: string, harnessId: string | null) {
     lastExit: null,
     // `agent.list@9.2` put `archived` on the row; 10.0 carries it live.
     archived: null,
+    // `agent.list@10.1` put the run tuple on the row; `null` is "this answer
+    // cannot say".
+    profile: null,
+    permissionMode: null,
+    // `agent.list@10.2` put the reach pair on the row.
+    reach: null,
+    hostConnectivity: { kind: "unknown" },
   };
 }
 
@@ -290,7 +297,7 @@ describe("every new head is the registry's canonical line", () => {
 
   it("stream heads are the new minors, with the released minors still installed", () => {
     const chat = hostStreamRpcRegistry["chat.subscribe"][1];
-    expect(chat.latestMinor).toBe(30);
+    expect(chat.latestMinor).toBe(32);
     expect(chat.versions[22].contract).toBe(chatSubscribeV122);
     expect(chat.versions[23].contract).toBe(chatSubscribeV123);
     expect(chat.versions[21].contract).toBe(chatSubscribeV121);

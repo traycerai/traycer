@@ -124,6 +124,7 @@ export function StatusBarUsageScrollFixture(props: {
           hostId={FIXTURE_HOST_ID}
           hostLabel="Fixture"
           hasExplicitPick={false}
+          watchesThisMachine={false}
           interactive={false}
         />
       </div>

@@ -48,6 +48,7 @@ import {
   isUnacknowledgedSpawn,
   runWithLeaseAtServiceSpawnEdge,
 } from "../service/spawn-edge";
+import { rearmStopTarget } from "../service/stop-target";
 import { assertHostIdleForStop } from "./busy-check";
 import { publishHostStartAdoption } from "./host-start-adoption";
 import { findLiveIncumbentHost } from "./incumbent-check";
@@ -358,6 +359,10 @@ async function startRetryingUnacknowledged(
         return after;
       case "stopped":
         reportBoundedWait("starting the host service again");
+        // Retried on a positive read that nothing runs, so a host published
+        // after that read is not the first start's: a stop's confirmed host
+        // holds this launch too (`service/stop-target.ts`).
+        rearmStopTarget();
         await startOnce();
         return { kind: "started" };
     }

@@ -18,7 +18,7 @@ import type { CanvasSelection } from "./canvas-selection-store";
  * until sent. The shared composer-drafts localStorage bucket excludes them.
  * The mirrored composer draft contains content only; draft-head@1.0's legacy
  * stash annotation leaf remains browser-only. Sending carries the complete
- * sidecar through chat.subscribe@1.30 and chat-sync@1.10.
+ * sidecar through chat.subscribe@1.31 and chat-sync@1.10.
  */
 export function canvasAnnotationElement(
   selection: CanvasSelection,

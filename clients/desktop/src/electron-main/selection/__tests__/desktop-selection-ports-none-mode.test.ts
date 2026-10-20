@@ -260,8 +260,8 @@ describe("DesktopHostFleetSource in none mode", () => {
     const snapshot = fleet.snapshot();
     expect(snapshot.localHostId).toBe("local-host");
     expect(snapshot.hosts).toEqual([
-      { hostId: "local-host", kind: "local" },
-      { hostId: "remote-host", kind: "remote" },
+      { hostId: "local-host", kind: "local", teamOwned: false },
+      { hostId: "remote-host", kind: "remote", teamOwned: false },
     ]);
     fleet.dispose();
   });
@@ -276,8 +276,8 @@ describe("DesktopHostFleetSource in none mode", () => {
     expect(snapshot.localHostId).toBeNull();
     expect(snapshot.hosts.some((entry) => entry.kind === "local")).toBe(false);
     expect(snapshot.hosts).toEqual([
-      { hostId: "local-host", kind: "remote" },
-      { hostId: "remote-host", kind: "remote" },
+      { hostId: "local-host", kind: "remote", teamOwned: false },
+      { hostId: "remote-host", kind: "remote", teamOwned: false },
     ]);
     fleet.dispose();
   });

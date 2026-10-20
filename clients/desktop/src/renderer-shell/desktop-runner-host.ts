@@ -63,6 +63,8 @@ import type {
   IZoomHost,
   LocalHostCapability,
   LocalHostSnapshot,
+  LocalHostUnresponsive,
+  LocalHostUnresponsiveOffer,
   MigrationRunningSnapshot,
   RegisteredHostsChange,
   SystemResumeEvent,
@@ -140,6 +142,29 @@ import type {
   UpdateHostVersionPolicyInput,
 } from "@traycer-clients/shared/host-client/host-version-policy-fetcher";
 import type { DeregisterHostFetchResult } from "@traycer-clients/shared/host-client/host-deregister-fetcher";
+import {
+  SANDBOXES_UNAVAILABLE_IN_STAGING,
+  type SandboxAutomationFetchResult,
+  type SandboxAutomationOpenFetchResult,
+  type SandboxCatalogueFetchResult,
+  type SandboxCreateFetchResult,
+  type SandboxListFetchResult,
+  type SandboxCostsFetchResult,
+  type SandboxVerbFetchResult,
+} from "@traycer-clients/shared/host-client/sandbox-control";
+import type {
+  EnvironmentProvidersFetchResult,
+  SandboxGrantsFetchResult,
+  TeamEnvironmentFetchResult,
+  SecretRequestDecideFetchResult,
+} from "@traycer-clients/shared/host-client/sandbox-secrets";
+import type { SecretRequestDecision } from "@traycer/protocol/host/sandbox-secrets";
+import type { ExecutableWriteGrantFetchResult } from "@traycer-clients/shared/host-client/executable-write-grant";
+import type {
+  SandboxAutomationOpenTarget,
+  SandboxCreateRequest,
+  SandboxLifecycleVerb,
+} from "@traycer/protocol/host/sandbox-control";
 import type { Disposable } from "@traycer-clients/shared/platform/uri-callback";
 import type {
   DesktopAppUpdateCheckIntent,
@@ -175,6 +200,7 @@ import type {
 } from "../ipc-contracts/window-types";
 import type { ZoomPercent } from "../ipc-contracts/zoom-types";
 import type { BrowserViewBridge } from "@traycer-clients/shared/platform/browser-view";
+import { config } from "../config";
 
 /**
  * Shape of the `window.runnerHost` object installed by the Electron preload
@@ -202,6 +228,60 @@ export interface DesktopPreloadBridge {
     bearerToken: string,
     hostId: string,
   ): Promise<DeregisterHostFetchResult>;
+  listSandboxes(bearerToken: string): Promise<SandboxListFetchResult>;
+  getSandboxCosts(bearerToken: string): Promise<SandboxCostsFetchResult>;
+  getSandboxCatalogue(
+    bearerToken: string,
+  ): Promise<SandboxCatalogueFetchResult>;
+  createSandbox(
+    bearerToken: string,
+    request: SandboxCreateRequest,
+  ): Promise<SandboxCreateFetchResult>;
+  destroySandbox(
+    bearerToken: string,
+    sandboxId: string,
+  ): Promise<SandboxVerbFetchResult>;
+  runSandboxVerb(
+    bearerToken: string,
+    sandboxId: string,
+    verb: SandboxLifecycleVerb,
+    timeoutMs: number,
+  ): Promise<SandboxVerbFetchResult>;
+  getSandboxAutomation(
+    bearerToken: string,
+    environmentId: string | null,
+  ): Promise<SandboxAutomationFetchResult>;
+  openSandboxAutomation(
+    bearerToken: string,
+    target: SandboxAutomationOpenTarget | null,
+  ): Promise<SandboxAutomationOpenFetchResult>;
+  getSandboxGrants(
+    bearerToken: string,
+    environmentId: string | null,
+    hostId: string,
+  ): Promise<SandboxGrantsFetchResult>;
+  /**
+   * A team's environment id and an environment's provider counts, both from
+   * authn with the user's bearer. See `host-client/sandbox-secrets.ts`.
+   */
+  getTeamEnvironment(
+    bearerToken: string,
+    teamId: string,
+  ): Promise<TeamEnvironmentFetchResult>;
+  getEnvironmentProviders(
+    bearerToken: string,
+    environmentId: string,
+  ): Promise<EnvironmentProvidersFetchResult>;
+  decideSecretRequest(
+    bearerToken: string,
+    environmentId: string | null,
+    requestId: string,
+    decision: SecretRequestDecision,
+  ): Promise<SecretRequestDecideFetchResult>;
+  mintExecutableWriteGrant(
+    bearerToken: string,
+    hostId: string,
+  ): Promise<ExecutableWriteGrantFetchResult>;
   // Credentials-file token store (tech plan §3): an IPC client of the main
   // `FileTokenStore`. Replaces the renderer-local encrypt-storage token slots.
   tokenStore: ITokenStore;
@@ -260,8 +340,14 @@ export interface DesktopPreloadBridge {
   onRegisteredHostsChange(handler: (push: RegisteredHostsChange) => void): {
     dispose: () => void;
   };
+  onLocalHostUnresponsive(
+    handler: (state: LocalHostUnresponsive | null) => void,
+  ): { dispose: () => void };
   onSystemResumed(handler: () => void): { dispose: () => void };
   requestHostRespawn(): Promise<HostRestartRequestResult>;
+  forceRestartUnresponsiveHost(
+    offer: LocalHostUnresponsiveOffer,
+  ): Promise<HostRestartRequestResult>;
   getLastKnownLocalHostId(): Promise<string | null>;
   trayState: {
     setEpics(epics: readonly TrayEpic[]): Promise<void>;
@@ -731,6 +817,10 @@ export class DesktopRunnerHost implements IRunnerHost {
   // False for a launch booted in the `none` lifecycle mode: main runs no
   // local-host lanes, so nothing may wait on, provision or manage one.
   readonly hasLocalHost: boolean;
+  // Staging's traycer-server is fronted by IAP, which refuses the app's
+  // bearer, so a staging build offers no sandbox surfaces.
+  readonly sandboxControlUnavailableReason: string | null =
+    config.environment === "staging" ? SANDBOXES_UNAVAILABLE_IN_STAGING : null;
   // The renderer's own clipboard takes images, and where a MIME type defeats
   // it the main-process nativeImage bridge picks the write up.
   readonly canCopyImages: boolean = true;
@@ -1098,6 +1188,100 @@ export class DesktopRunnerHost implements IRunnerHost {
     return this.bridge.deregisterHostFromAccount(bearerToken, hostId);
   }
 
+  listSandboxes(bearerToken: string): Promise<SandboxListFetchResult> {
+    return this.bridge.listSandboxes(bearerToken);
+  }
+
+  getSandboxCosts(bearerToken: string): Promise<SandboxCostsFetchResult> {
+    return this.bridge.getSandboxCosts(bearerToken);
+  }
+
+  getSandboxCatalogue(
+    bearerToken: string,
+  ): Promise<SandboxCatalogueFetchResult> {
+    return this.bridge.getSandboxCatalogue(bearerToken);
+  }
+
+  createSandbox(
+    bearerToken: string,
+    request: SandboxCreateRequest,
+  ): Promise<SandboxCreateFetchResult> {
+    return this.bridge.createSandbox(bearerToken, request);
+  }
+
+  destroySandbox(
+    bearerToken: string,
+    sandboxId: string,
+  ): Promise<SandboxVerbFetchResult> {
+    return this.bridge.destroySandbox(bearerToken, sandboxId);
+  }
+
+  runSandboxVerb(
+    bearerToken: string,
+    sandboxId: string,
+    verb: SandboxLifecycleVerb,
+    timeoutMs: number,
+  ): Promise<SandboxVerbFetchResult> {
+    return this.bridge.runSandboxVerb(bearerToken, sandboxId, verb, timeoutMs);
+  }
+
+  getSandboxAutomation(
+    bearerToken: string,
+    environmentId: string | null,
+  ): Promise<SandboxAutomationFetchResult> {
+    return this.bridge.getSandboxAutomation(bearerToken, environmentId);
+  }
+
+  openSandboxAutomation(
+    bearerToken: string,
+    target: SandboxAutomationOpenTarget | null,
+  ): Promise<SandboxAutomationOpenFetchResult> {
+    return this.bridge.openSandboxAutomation(bearerToken, target);
+  }
+
+  getSandboxGrants(
+    bearerToken: string,
+    environmentId: string | null,
+    hostId: string,
+  ): Promise<SandboxGrantsFetchResult> {
+    return this.bridge.getSandboxGrants(bearerToken, environmentId, hostId);
+  }
+
+  getTeamEnvironment(
+    bearerToken: string,
+    teamId: string,
+  ): Promise<TeamEnvironmentFetchResult> {
+    return this.bridge.getTeamEnvironment(bearerToken, teamId);
+  }
+
+  getEnvironmentProviders(
+    bearerToken: string,
+    environmentId: string,
+  ): Promise<EnvironmentProvidersFetchResult> {
+    return this.bridge.getEnvironmentProviders(bearerToken, environmentId);
+  }
+
+  decideSecretRequest(
+    bearerToken: string,
+    environmentId: string | null,
+    requestId: string,
+    decision: SecretRequestDecision,
+  ): Promise<SecretRequestDecideFetchResult> {
+    return this.bridge.decideSecretRequest(
+      bearerToken,
+      environmentId,
+      requestId,
+      decision,
+    );
+  }
+
+  mintExecutableWriteGrant(
+    bearerToken: string,
+    hostId: string,
+  ): Promise<ExecutableWriteGrantFetchResult> {
+    return this.bridge.mintExecutableWriteGrant(bearerToken, hostId);
+  }
+
   beginAuthAttempt(): void {
     this.bridge.beginAuthAttempt();
   }
@@ -1122,6 +1306,13 @@ export class DesktopRunnerHost implements IRunnerHost {
     return this.bridge.getLastKnownLocalHostId();
   }
 
+  onLocalHostUnresponsive(
+    handler: (state: LocalHostUnresponsive | null) => void,
+  ): Disposable {
+    // The preload caches the state and replays it on subscribe.
+    return toDisposable(this.bridge.onLocalHostUnresponsive(handler));
+  }
+
   onSystemResumed(handler: (event: SystemResumeEvent) => void): Disposable {
     this.systemResumedHandlers.add(handler);
     return {
@@ -1143,6 +1334,12 @@ export class DesktopRunnerHost implements IRunnerHost {
 
   requestHostRespawn(): Promise<HostRestartRequestResult> {
     return this.bridge.requestHostRespawn();
+  }
+
+  forceRestartUnresponsiveHost(
+    offer: LocalHostUnresponsiveOffer,
+  ): Promise<HostRestartRequestResult> {
+    return this.bridge.forceRestartUnresponsiveHost(offer);
   }
 
   dispose(): void {

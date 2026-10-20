@@ -44,7 +44,7 @@
  *   kind, and the approval card's display facts / cautious / rule-forced
  *   keys. Unlike `1.16` these are PROJECTED for an older peer, and the older
  *   lines bind frozen schemas without them, so needles do pin the boundary;
- * - `1.29` is the tool-call `artifact` stamp, minted above `1.28`: the
+ * - `1.30` is the tool-call `artifact` stamp, minted above `1.29`: the
  *   manifest an inline `traycer_render_inline` artifact showed. PROJECTED,
  *   like `1.23`'s MCP App stamp, so a needle pins the boundary.
  *
@@ -93,26 +93,33 @@ const CLAUDE_PARITY_MINOR = 20;
 // adds the bot-conversation request on a user row and the
 // `conversation-message` queue item (pinned below). `1.26` adds the
 // `task-checkin` queue item (pinned below). `1.27` adds the `task-overdue`
-// queue item (pinned below). `1.28` lets an `artifact_operation` block and
-// event name the html, canvas and file artifact kinds (pinned below). `1.29`
-// adds the tool-call `artifact` stamp (pinned below). `1.30` grows the browser
+// queue item (pinned below). `1.28` adds `signInParked` on a queued prompt
+// (pinned below). `1.29` lets an `artifact_operation` block and event name
+// the html, canvas and file artifact kinds (pinned below). `1.30` adds the
+// tool-call `artifact` stamp (pinned below). `1.31` grows the browser
 // annotation record with the canvas arm (pinned by
-// `chat-subscribe-canvas-annotations-v130.test.ts`). Every threshold above
-// still reads `>=` against the live line.
-const LIVE_MINOR = 30;
-// `1.29`: the tool-call `artifact` stamp - the manifest an inline
+// `chat-subscribe-canvas-annotations-v131.test.ts`). `1.32` widens the
+// accumulated-change `artifact` tag to all seven artifact kinds (pinned by
+// `checkpoint-artifact-kinds.test.ts`). Every threshold above still reads
+// `>=` against the live line.
+const LIVE_MINOR = 32;
+// `1.28`: the host's sign-in park mark on a queued prompt, server frames only
+// (the host sets it; a client never sends a queue item).
+const SIGN_IN_PARK_MINOR = 28;
+const SIGN_IN_PARK_NEEDLES = ['"signInParked":'];
+// `1.30`: the tool-call `artifact` stamp - the manifest an inline
 // `traycer_render_inline` artifact showed. Found structurally
 // (`toolCallArtifactStampPresent`, defined below), not by a substring
 // needle: `'"artifact":'` already appears on every line via the unrelated
 // `checkpointArtifactTagSchema` field.
-const ARTIFACT_STAMP_MINOR = 29;
-// `1.28`: the html-artifacts surface - the artifact kinds an `artifact_operation`
+const ARTIFACT_STAMP_MINOR = 30;
+// `1.29`: the html-artifacts surface - the artifact kinds an `artifact_operation`
 // block and event may name. Found structurally (`artifactOperationKinds`,
-// defined below), not by a `'"canvas"'` needle: from `1.30` a browser
+// defined below), not by a `'"canvas"'` needle: from `1.31` a browser
 // annotation's `source` is the literal `"canvas"` too, which is a different
 // fact (where an annotation was captured, not which artifact kind an
 // operation touched) and must not read as the kind enum having grown.
-const HTML_ARTIFACTS_MINOR = 28;
+const HTML_ARTIFACTS_MINOR = 29;
 const HTML_ARTIFACT_KINDS = ["html", "canvas", "file"];
 // `1.27`: the task-overdue surface - the queue item's discriminant, its one
 // needle for the same reason as the check-in's.
@@ -359,13 +366,13 @@ function actionAckPropertyNames(serverFrameSchema: z.ZodType): string[] {
 }
 
 describe("chat.subscribe line surfaces", () => {
-  it("covers chat.subscribe@1.0 through @1.30 (a line added later cannot drop out)", () => {
+  it("covers chat.subscribe@1.0 through @1.32 (a line added later cannot drop out)", () => {
     // RESTATED on purpose: this is the change-detector for the line SET, so a
     // derived list would assert the registry against itself. When a new minor
     // lands, extending this by hand is the acknowledgement.
     expect(MINORS).toEqual([
       0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20,
-      21, 22, 23, 24, 25, 26, 27, 28, 29, 30,
+      21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32,
     ]);
     expect(chatSubscribeLine.latestMinor).toBe(LIVE_MINOR);
   });
@@ -392,6 +399,21 @@ describe("chat.subscribe line surfaces", () => {
       const carriesClaudeParity = minor >= CLAUDE_PARITY_MINOR;
       const carriesMcpAppStamp = minor >= MCP_APP_STAMP_MINOR;
       const carriesConversation = minor >= CONVERSATION_MINOR;
+      const carriesSignInPark = minor >= SIGN_IN_PARK_MINOR;
+
+      it(`server frames ${carriesSignInPark ? "carry" : "hold back"} the sign-in park mark`, () => {
+        const text = schemaText(contract.serverFrameSchema);
+        expect(
+          SIGN_IN_PARK_NEEDLES.filter((needle) => text.includes(needle)),
+        ).toEqual(carriesSignInPark ? SIGN_IN_PARK_NEEDLES : []);
+      });
+
+      it("client frames hold back the sign-in park mark on every line", () => {
+        const text = schemaText(contract.clientFrameSchema);
+        expect(
+          SIGN_IN_PARK_NEEDLES.filter((needle) => text.includes(needle)),
+        ).toEqual([]);
+      });
 
       it(`server frames ${carriesConversation ? "carry" : "hold back"} the bot-conversation surface`, () => {
         const text = schemaText(contract.serverFrameSchema);

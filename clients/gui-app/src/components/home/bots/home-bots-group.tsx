@@ -2,7 +2,13 @@ import { useState, type ReactNode } from "react";
 import { Plus } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HomeBotsGroup } from "@/lib/home-bots/bots-model";
+import type { HostRpcRegistry } from "@/lib/host";
+import { botCreatedByLabel } from "@/lib/bots/bot-member-names";
+import { useEnvironmentMembers } from "@/hooks/bots/use-environment-members-query";
+import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
+import { useAuthStore } from "@/stores/auth/auth-store";
 import type { HostEnvironmentBindings } from "@/hooks/bots/use-host-environment-bindings-query";
 import {
   HomeBotRow,
@@ -23,6 +29,10 @@ export function HomeBotsGroupCard(props: {
   readonly environmentHostIds: ReadonlySet<string> | null;
   readonly connectableHostIds: ReadonlyArray<string>;
   readonly environmentBindings: HostEnvironmentBindings;
+  /** The client the band reads through and its host: a team bot's row
+   * names who made it when that host answers `environment.members`. */
+  readonly client: HostClient<HostRpcRegistry> | null;
+  readonly hostId: string | null;
 }): ReactNode {
   const {
     group,
@@ -30,8 +40,20 @@ export function HomeBotsGroupCard(props: {
     environmentHostIds,
     connectableHostIds,
     environmentBindings,
+    client,
+    hostId,
   } = props;
   const [creating, setCreating] = useState(false);
+  const isTeam = group.ownerKind === "organization";
+  // Only a team bot has another member to name; a personal one asks nothing.
+  const membersSupported =
+    useHostMethodSupport(hostId, "environment.members") === true;
+  const resolveMember = useEnvironmentMembers(
+    client,
+    isTeam ? group.environmentId : null,
+    membersSupported && isTeam,
+  );
+  const viewerUserId = useAuthStore((s) => s.profile?.userId ?? null);
 
   return (
     <section
@@ -87,6 +109,12 @@ export function HomeBotsGroupCard(props: {
                 hostReach={hostReach}
                 environmentHostIds={environmentHostIds}
                 environmentOwnerKind={group.ownerKind}
+                createdBy={botCreatedByLabel({
+                  createdByUserId: bot.createdByUserId,
+                  viewerUserId,
+                  isTeamBot: isTeam,
+                  resolveMember,
+                })}
               />
             </li>
           ))}

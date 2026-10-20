@@ -10,7 +10,10 @@ import {
 } from "react";
 import type { SetupCardWindowIdentity } from "@traycer/protocol/host/agent/gui/subscribe-windowed";
 import { useMeasuredElementHeight } from "@/hooks/ui/use-measured-element-height";
-import { useChatMessageActions } from "./use-chat-message-actions";
+import {
+  FORK_ON_SOURCE_HOST,
+  useChatMessageActions,
+} from "./use-chat-message-actions";
 import { useChatQueueActions } from "./use-chat-queue-actions";
 import type { ChatForkMode } from "@/components/chat/chat-message";
 import { useStore } from "zustand";
@@ -2181,6 +2184,7 @@ function useChatTileSessionViewModel(
     () => ({
       resolveUserSenderLabel: (sender) =>
         resolveSenderLabel(sender, displayContext),
+      resolveUserSenderAvatarUrl: () => null,
       resolveAgentSenderDisplay: (sender) =>
         resolveAgentSenderDisplay(sender, displayContext),
       resolveAgentReasoningLabel: (sender, reasoningEffort) =>
@@ -2809,7 +2813,23 @@ function useChatTileSessionViewModel(
   // the destination at submit time. Per-message forks still name an exact reply.
   const forkChatOnHost = useCallback(
     (targetHostId: string): void => {
-      forkAtAssistantMessage(null, "plain", null, targetHostId);
+      forkAtAssistantMessage(null, "plain", null, {
+        initialHostId: targetHostId,
+        onlyHostIds: null,
+      });
+    },
+    [forkAtAssistantMessage],
+  );
+  // A chat on a host no team owns, in a team's task, continues on that team's
+  // hosts - the fork dialog lists them only.
+  const continueOnTeamHosts = useCallback(
+    (teamHostIds: ReadonlySet<string>): void => {
+      const first = teamHostIds.values().next();
+      if (first.done === true) return;
+      forkAtAssistantMessage(null, "plain", null, {
+        initialHostId: first.value,
+        onlyHostIds: teamHostIds,
+      });
     },
     [forkAtAssistantMessage],
   );
@@ -3546,7 +3566,7 @@ function useChatTileSessionViewModel(
               forkPendingInterviewAssistantMessageId,
               mode,
               pendingInterview?.blockId ?? null,
-              null,
+              FORK_ON_SOURCE_HOST,
             ),
     [
       forkPendingInterviewAssistantMessageId,
@@ -3718,6 +3738,7 @@ function useChatTileSessionViewModel(
       onSettingsChange: handleComposerSettingsChange,
       workspaceControls,
       workspaceAvailability,
+      onContinueOnTeamHosts: continueOnTeamHosts,
       suggestedPrompt: suggestionOfferableWhilePending(
         state.suggestedPrompt,
         state.pendingActions,
@@ -3737,6 +3758,7 @@ function useChatTileSessionViewModel(
       handleComposerSettingsChange,
       workspaceControls,
       workspaceAvailability,
+      continueOnTeamHosts,
       state.suggestedPrompt,
       state.pendingActions,
     ],

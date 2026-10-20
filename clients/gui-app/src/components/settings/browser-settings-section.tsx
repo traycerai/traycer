@@ -60,9 +60,11 @@ import { useSettingsStore } from "@/stores/settings/settings-store";
  * sessions.
  *
  * The Agents group holds one row that is drawn in every shell - Agent-opened
- * tabs, which the panel owns and hands in - between two that are not: agent
- * access needs a host that advertises it, and the dev origins need a terminal
- * to have printed one. So the card always has a row.
+ * tabs, which the panel owns and hands in - and one that is not: the dev
+ * origins need a terminal to have printed one. So the card always has a row.
+ * Whether agents may use the browser at all is Personal > Browser agent
+ * access, not a row here: it follows the person, and this page is the
+ * window's own browsing.
  */
 export function BrowserSettingsSection(props: {
   /** The always-present row of the Agents group, drawn by the panel. */
@@ -80,13 +82,8 @@ export function BrowserSettingsSection(props: {
   //
   // BOTH methods, because they negotiate independently: the row is an
   // interactive switch, so a host that could answer `get` but not `set` would
-  // render a control whose every flip fails. They ship together today, which is
-  // exactly why `degrade` is declared per method rather than per namespace.
-  // Two statements, not one `&&`: short-circuiting a hook call is a
-  // rules-of-hooks violation.
-  const getSupported = useHostMethodSupport(hostId, AGENT_BROWSER_ACCESS_GET);
-  const setSupported = useHostMethodSupport(hostId, AGENT_BROWSER_ACCESS_SET);
-  const agentAccessSupported = getSupported === true && setSupported === true;
+  // render a control whose every flip fails. Two statements, not one `&&`:
+  // short-circuiting a hook call is a rules-of-hooks violation.
   const inlineArtifactsGetSupported = useHostMethodSupport(
     hostId,
     INLINE_ARTIFACTS_GET,
@@ -108,9 +105,6 @@ export function BrowserSettingsSection(props: {
         dataTestId="settings-browser-agents"
         fill={false}
       >
-        {agentAccessSupported ? (
-          <AgentBrowserAccessRow hostId={hostId} />
-        ) : null}
         {inlineArtifactsSupported ? (
           <InlineArtifactsRow hostId={hostId} />
         ) : null}
@@ -132,9 +126,6 @@ export function BrowserSettingsSection(props: {
   );
 }
 
-const AGENT_BROWSER_ACCESS_GET = "config.browser.get";
-const AGENT_BROWSER_ACCESS_SET = "config.browser.set";
-
 /**
  * What a sentence calls a host: its directory label, or its id when it has no
  * label. A blank label is no label - "On ." is not a sentence.
@@ -145,65 +136,6 @@ function hostNameOf(
 ): string | null {
   const label = entry?.label.trim() ?? "";
   return label.length > 0 ? label : hostId;
-}
-
-/**
- * The host-wide "let agents use the in-app browser" switch (plan B08).
- *
- * Off means agent registrations on this host are minted with no browser MCP
- * server and no steering that names it; the user's own browser tiles, saved
- * logins and dev-origin detection are untouched. The value is machine-user
- * global, so the row names the host it is about - Settings > Browser has no
- * host picker, and this is the one place on the page where "which machine"
- * is not obvious from the copy.
- *
- * Rendered ONLY under a positive `useHostMethodSupport` for both the getter and
- * the setter, which is what makes `useHostClient()` safe here: a host that
- * advertised the methods has a binding.
- */
-function AgentBrowserAccessRow(props: {
-  readonly hostId: string | null;
-}): ReactNode {
-  const client = useHostClient();
-  const hostName = hostNameOf(
-    useHostDirectoryEntry(props.hostId),
-    props.hostId,
-  );
-  const query = useHostQuery<HostRpcRegistry, "config.browser.get">({
-    cacheKeyIdentity: undefined,
-    client,
-    method: AGENT_BROWSER_ACCESS_GET,
-    params: {},
-    options: { enabled: true },
-  });
-  const setAccess = useHostScopedMutationForClient(client, {
-    method: AGENT_BROWSER_ACCESS_SET,
-    mutationKey: configMutationKeys.browserSet(),
-    errorMessage: "Couldn't update agent browser access",
-    invalidateMethods: [AGENT_BROWSER_ACCESS_GET],
-  });
-
-  return (
-    <SettingsRow
-      row={BROWSER.definitions.agentBrowserAccess}
-      status={
-        query.isError
-          ? "Couldn't read this host's browser setting. Repair Traycer's config.json on that machine, or back it up before resetting it, then reopen Settings."
-          : `On ${hostName ?? "this host"}. ${BROWSER.definitions.agentBrowserAccess.description} Running agents pick this up on their next turn.`
-      }
-      control={
-        <Switch
-          checked={query.data?.agentAccess === true}
-          disabled={query.isPending || query.isError || setAccess.isPending}
-          aria-label="Let agents use the in-app browser"
-          onCheckedChange={(next) => {
-            trackSettingChanged("browser", "agentBrowserAccess");
-            setAccess.mutate({ agentAccess: next });
-          }}
-        />
-      }
-    />
-  );
 }
 
 const INLINE_ARTIFACTS_GET = "config.visualization.get";

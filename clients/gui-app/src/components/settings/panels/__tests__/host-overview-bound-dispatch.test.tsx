@@ -20,6 +20,19 @@ vi.mock("@/components/settings/host-scope/use-scoped-stream-binding", () => ({
   useScopedStreamBinding: () => null,
 }));
 
+// A marker carrying the host its scope names, so the Overview case below can
+// see the section mounted for the picker's host.
+vi.mock("@/components/settings/panels/host-environment-section", () => ({
+  HostEnvironmentSection: (props: {
+    readonly scope: { readonly hostId: string | null };
+  }) => (
+    <div
+      data-testid="host-environment-section"
+      data-host-id={props.scope.hostId ?? ""}
+    />
+  ),
+}));
+
 const scopeOverrides = vi.hoisted((): { current: Record<string, unknown> } => ({
   current: {},
 }));
@@ -2452,5 +2465,21 @@ describe("HostOverviewPanel — reason vocabularies are partitioned per wire fie
       hostBindingMock.current = null;
       vi.clearAllMocks();
     }
+  });
+});
+
+describe("HostOverviewPanel — whose bots the host runs", () => {
+  it("mounts the environment section for the host the picker names", async () => {
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: true,
+    });
+    record("host-a", METHODS_WITH_BOUND);
+    hostBindingMock.current = bindingWith(fixture.client);
+    scopeOverrides.current = scopeFrom("host-a", fixture);
+    renderPanel();
+
+    const section = await screen.findByTestId("host-environment-section");
+    expect(section.getAttribute("data-host-id")).toBe("host-a");
   });
 });

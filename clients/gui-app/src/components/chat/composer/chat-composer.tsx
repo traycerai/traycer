@@ -72,6 +72,7 @@ import { ChatComposerToolbarSlot } from "./chat-composer-toolbar-slot";
 import { ComposerTileIdProvider } from "@/components/home/composer/composer-tile-context";
 import { createComposerPickerStore } from "./picker/composer-picker-store";
 import { ProviderReauthBanner } from "./provider-reauth-banner";
+import { ChatSecretExportNotices } from "./chat-secret-export-notices";
 import { ProfileRateLimitSwitchBanner } from "./profile-rate-limit-switch-banner";
 import { ProfileDisabledBanner } from "./profile-disabled-banner";
 import {
@@ -824,6 +825,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
             eligibility={profileEligibility}
             onChooseProfile={toggleActiveModelPicker}
           />
+          <ChatSecretExportNotices chatId={taskId} />
           {topBannerKind === "reauth" && reauthBanner !== null ? (
             <ProviderReauthBanner
               providerId={reauthBanner.providerId}

@@ -38,6 +38,7 @@ import {
   chatSubscribeV129,
   chatSubscribeV130,
   chatSubscribeV131,
+  chatSubscribeV132,
   createImageResolutionUpdatedFrame,
   chatApprovalStateSchema,
   chatApprovalStateSchemaPreAuto,
@@ -2298,7 +2299,7 @@ describe("chat.subscribe@1.6 (image generation)", () => {
 });
 
 describe("chat.subscribe registry membership", () => {
-  it("registers chat.subscribe major 1 latestMinor 31 as chatSubscribeV131", () => {
+  it("registers chat.subscribe major 1 latestMinor 32 as chatSubscribeV132", () => {
     const entry = hostStreamRpcRegistry["chat.subscribe"];
     expect(entry).toBeDefined();
     // Registering `8` was the switch to the windowed line: a stream minor
@@ -2364,16 +2365,17 @@ describe("chat.subscribe registry membership", () => {
     // `26` is the task check-in line: the `task-checkin` queue item on a
     // bot's trunk (projected away below it, as the conversation-message item
     // is below `25`). `27` is the task-overdue line: the `task-overdue` queue
-    // item on a bot's trunk (projected away below it the same way). `28` is the
-    // html-artifacts line: operation blocks and events may name the html,
-    // canvas and file kinds (omitted for every `<=1.27` peer). `29` adds the
-    // tool-call `artifact` stamp: the manifest an inline
-    // `traycer_render_inline` artifact showed, projected away for every
-    // `<=1.28` peer. `30` grows the browser annotation record with the canvas
-    // arm, projected away for every `<=1.29` peer. `31` widens the
-    // accumulated-change `artifact` tag to all seven artifact kinds, blanked
-    // to `null` for every `<=1.30` peer.
-    expect(entry[1].latestMinor).toBe(31);
+    // item on a bot's trunk (projected away below it the same way).
+    // `28` is the sign-in park line: `signInParked` on a queued prompt, an
+    // optional key every `<=1.27` peer drops. `29` is the html-artifacts
+    // line: operation blocks and events may name the html, canvas and file
+    // kinds (omitted for every `<=1.28` peer). `30` adds the tool-call
+    // `artifact` stamp: the manifest an inline `traycer_render_inline`
+    // artifact showed, projected away for every `<=1.29` peer. `31` grows the
+    // browser annotation record with the canvas arm, projected away for every
+    // `<=1.30` peer. `32` widens the accumulated-change `artifact` tag to all
+    // seven artifact kinds, blanked to `null` for every `<=1.31` peer.
+    expect(entry[1].latestMinor).toBe(32);
     expect(entry[1].versions[6].contract).toBe(chatSubscribeV16);
     expect(entry[1].versions[7].contract).toBe(chatSubscribeV17);
     expect(entry[1].versions[8].contract).toBe(chatSubscribeV18);
@@ -2400,6 +2402,7 @@ describe("chat.subscribe registry membership", () => {
     expect(entry[1].versions[29].contract).toBe(chatSubscribeV129);
     expect(entry[1].versions[30].contract).toBe(chatSubscribeV130);
     expect(entry[1].versions[31].contract).toBe(chatSubscribeV131);
+    expect(entry[1].versions[32].contract).toBe(chatSubscribeV132);
     expect(chatSubscribeV17.schemaVersion).toEqual({ major: 1, minor: 7 });
     expect(chatSubscribeV18.schemaVersion).toEqual({ major: 1, minor: 8 });
     expect(chatSubscribeV19.schemaVersion).toEqual({ major: 1, minor: 9 });
@@ -2478,6 +2481,22 @@ describe("chat.subscribe registry membership", () => {
     expect(chatSubscribeV128.schemaVersion).toEqual({
       major: 1,
       minor: 28,
+    });
+    expect(chatSubscribeV129.schemaVersion).toEqual({
+      major: 1,
+      minor: 29,
+    });
+    expect(chatSubscribeV130.schemaVersion).toEqual({
+      major: 1,
+      minor: 30,
+    });
+    expect(chatSubscribeV131.schemaVersion).toEqual({
+      major: 1,
+      minor: 31,
+    });
+    expect(chatSubscribeV132.schemaVersion).toEqual({
+      major: 1,
+      minor: 32,
     });
   });
 
