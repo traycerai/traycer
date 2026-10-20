@@ -1328,6 +1328,11 @@ export const HOST_METHOD_POLL_TABLE = {
   },
   // Granting access changes the epic's collaborator set.
   "epic.grantAccess": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
+  "epic.attachEnvironment": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
   // Updating roles changes collaborator permissions.
   "epic.batchUpdateRoles": {
     mode: "fifo",
