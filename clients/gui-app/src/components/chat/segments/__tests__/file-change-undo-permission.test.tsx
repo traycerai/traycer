@@ -73,7 +73,6 @@ function renderSegment(args: RenderArgs) {
       <ChatRestoreProvider
         value={{
           accessRole: args.accessRole,
-          currentUserId: "owner-1",
           activeHostId: args.activeHostId,
           activeTurnStatus: args.activeTurnStatus,
           localSnapshotsClearedAt: null,

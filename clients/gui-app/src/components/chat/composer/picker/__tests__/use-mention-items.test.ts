@@ -42,6 +42,7 @@ function chat(
     createdAt: 0,
     updatedAt,
     userId: null,
+    ownedByViewer: true,
     hostId: null,
     isTitleEditedByUser: false,
     // Ordinary registry-backed chat - this suite exercises mention-item

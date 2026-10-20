@@ -20,6 +20,7 @@ import {
   requestHistoryActivityRefresh,
 } from "@/hooks/home/use-optimistic-activity-history-items";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import { isChatVisibleToUser } from "@/stores/epics/open-epic/projection-helpers";
 import type { RecordListRevision } from "@traycer/protocol/host/epic/record-list-revision";
 
 /**
@@ -128,7 +129,21 @@ export function ChatRecordsStreamMount(): ReactNode {
       const userId = useAuthStore.getState().contextMetadata?.userId;
       if (userId !== undefined) {
         if (delta.kind === "upsert" || delta.kind === "tuiUpsert") {
-          if (delta.record.ownerUserId === userId) {
+          // A chat row asks the one helper, so a team host's
+          // environment-owned `own` row counts as the viewer's; a terminal
+          // agent stays member-owned and answers by owner equality. The frame
+          // was answered on this connection's stream for the identity signed
+          // in now, so that is the identity its `own` word is trusted for.
+          const viewersRow =
+            delta.kind === "upsert"
+              ? isChatVisibleToUser(
+                  delta.record.origin,
+                  delta.record.ownerUserId,
+                  userId,
+                  userId,
+                )
+              : delta.record.ownerUserId === userId;
+          if (viewersRow) {
             observeOwnHistoryRecordChange(
               userId,
               delta.epicId,

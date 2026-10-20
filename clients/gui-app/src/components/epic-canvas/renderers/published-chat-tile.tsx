@@ -215,7 +215,7 @@ export function PublishedChatTile(props: PublishedChatTileProps): ReactNode {
   // (and, in the child banner, the clone copy) for the foreign-owner arm -
   // the offline/back-soon vocabulary below is about the viewer's own fleet
   // and cannot be honestly said about a machine this account never sees.
-  const ownedByViewer = useOwnedByViewer(node.ownerUserId);
+  const ownedByViewer = useOwnedByViewer(node.ownerUserId, node.chatId);
   // Whether this copy is on screen because the owner, though reachable, is a
   // build too old for the epic's store. Read live rather than off the ref so
   // the lock sentence follows the host: an update retires the verdict and

@@ -8,7 +8,6 @@ import type { ChatRestoreSlot } from "@/stores/chats/chat-session-store";
 
 export interface ChatRestoreContextValue {
   readonly accessRole: ChatAccess["role"] | null;
-  readonly currentUserId: string | null;
   readonly activeHostId: string | null;
   readonly activeTurnStatus: ChatActiveTurn["status"] | null;
   readonly localSnapshotsClearedAt: number | null;

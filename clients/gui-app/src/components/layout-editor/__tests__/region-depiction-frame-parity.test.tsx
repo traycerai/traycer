@@ -211,7 +211,6 @@ const EMPTY_QUEUE: ChatSessionState["queue"] = { status: "idle", items: [] };
 
 const RESTORE: ChatRestoreContextValue = {
   accessRole: "owner",
-  currentUserId: null,
   activeHostId: null,
   activeTurnStatus: null,
   localSnapshotsClearedAt: null,
