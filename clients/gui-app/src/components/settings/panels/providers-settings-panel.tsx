@@ -107,6 +107,7 @@ import {
   type ProviderRailView,
 } from "./provider-rail-filter";
 import { TerminalAgentArgsSection } from "./terminal-agent-args-section";
+import { ProviderNativeSubagentsGroup } from "./provider-native-subagents-group";
 import { ProviderAutoJudgeSection } from "./provider-auto-judge-section";
 import { ProviderEnvOverridesSection } from "./provider-env-overrides-section";
 import { ProviderSectionSelect } from "./provider-section-select";
@@ -1600,6 +1601,10 @@ function ProviderTabBody({
             key={state.terminalAgentArgs}
             state={state}
           />
+          {/* Keyed by provider: the group holds a local echo of the user's
+              flip while the host's read-back is in flight, and that echo
+              belongs to one provider. */}
+          <ProviderNativeSubagentsGroup key={state.providerId} state={state} />
           <ProviderCatalogTimeoutGroup
             providerId={state.providerId}
             hostId={hostId}

@@ -764,6 +764,75 @@ describe("<QueuedMessagePanel />", () => {
     expect(screen.getByText("Agent response")).not.toBeNull();
   });
 
+  it("offers cancel on a received agent prompt held for a provider sign-in", () => {
+    renderPanel({
+      queue: queueState([
+        signInParkedAgentItem("queue-parked", "Agent prompt", true),
+      ]),
+      readOnly: false,
+      canAct: true,
+      onReorder: null,
+    });
+
+    const parkedRow = screen.getByTestId("queued-message-row");
+    // Still a received row: no edit and no steer, only the cancel.
+    expect(
+      within(parkedRow).queryByRole("button", { name: "Edit queued message" }),
+    ).toBeNull();
+    expect(
+      within(parkedRow).queryByRole("button", {
+        name: "Steer queued message now",
+      }),
+    ).toBeNull();
+    fireEvent.click(
+      within(parkedRow).getByRole("button", {
+        name: "Cancel agent message waiting for sign-in",
+      }),
+    );
+    expect(onCancelSpy).toHaveBeenCalledTimes(1);
+    expect(onCancelSpy.mock.calls[0]?.[0]).toMatchObject({
+      queueItemId: "queue-parked",
+      kind: "prompt",
+    });
+  });
+
+  it("offers no cancel on a paused agent prompt the host does not hold for a sign-in", () => {
+    renderPanel({
+      queue: queueState([
+        signInParkedAgentItem("queue-flag-false", "Agent prompt", false),
+        signInParkedAgentItem("queue-flag-absent", "Older host", undefined),
+      ]),
+      readOnly: false,
+      canAct: true,
+      onReorder: null,
+    });
+
+    for (const row of screen.getAllByTestId("queued-message-row")) {
+      expect(
+        within(row).queryByRole("button", {
+          name: "Cancel agent message waiting for sign-in",
+        }),
+      ).toBeNull();
+    }
+  });
+
+  it("hides the sign-in park cancel in read-only mode", () => {
+    renderPanel({
+      queue: queueState([
+        signInParkedAgentItem("queue-parked", "Agent prompt", true),
+      ]),
+      readOnly: true,
+      canAct: true,
+      onReorder: null,
+    });
+
+    expect(
+      within(screen.getByTestId("queued-message-row")).queryByRole("button", {
+        name: "Cancel agent message waiting for sign-in",
+      }),
+    ).toBeNull();
+  });
+
   it("renders a managed-command item as a describable, cancellable chip", () => {
     renderPanel({
       queue: queueState([
@@ -2046,6 +2115,22 @@ function agentQueuedItem(
     // Received A2A responses are enqueued as `same_turn` so they steer into the
     // running turn (matches the host delivery path).
     delivery: "same_turn",
+  };
+}
+
+// A received agent prompt the host paused. `signInParked` is the host's mark
+// that the pause waits on a provider sign-in; `undefined` is an older host
+// that never sends the key.
+function signInParkedAgentItem(
+  queueItemId: string,
+  text: string,
+  signInParked: boolean | undefined,
+): OpenChatQueuedPromptItem {
+  return {
+    ...agentQueuedItem(queueItemId, text),
+    delivery: "next_turn",
+    status: "paused",
+    ...(signInParked === undefined ? {} : { signInParked }),
   };
 }
 

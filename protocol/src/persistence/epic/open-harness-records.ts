@@ -168,8 +168,8 @@ export const openContentBlockSchema = lazySchema(() =>
 export type OpenContentBlock = z.infer<typeof openContentBlockSchema>;
 
 /**
- * The open content-block union as `chat.subscribe@1.23` through `@1.27` ship
- * it: the tool block without `1.28`'s `agentMessageDelivery` stamp. Listed
+ * The open content-block union as `chat.subscribe@1.23` through `@1.28` ship
+ * it: the tool block without `1.29`'s `agentMessageDelivery` stamp. Listed
  * explicitly, like the live union above, so a member joins it by a visible
  * edit.
  */
@@ -261,7 +261,7 @@ export type OpenMessage = z.infer<typeof openMessageSchema>;
 
 /**
  * The open message union `chat.subscribe@1.23` and `@1.24` ship: the user row
- * without `1.25`'s `conversationRequest`, the assistant row without `1.28`'s
+ * without `1.25`'s `conversationRequest`, the assistant row without `1.29`'s
  * `agentMessageDelivery`.
  */
 export const openMessageSchemaPreConversation = lazySchema(() =>
@@ -272,8 +272,8 @@ export const openMessageSchemaPreConversation = lazySchema(() =>
 );
 
 /**
- * The open message union `chat.subscribe@1.25` through `@1.27` ship: the live
- * user row, the assistant row without `1.28`'s `agentMessageDelivery`.
+ * The open message union `chat.subscribe@1.25` through `@1.28` ship: the live
+ * user row, the assistant row without `1.29`'s `agentMessageDelivery`.
  */
 export const openMessageSchemaPreDelivery = lazySchema(() =>
   z.discriminatedUnion("role", [

@@ -1638,8 +1638,8 @@ export const openChatRangeResponseSchemaPreConversation = lazySchema(() =>
 );
 
 /**
- * The tail as `chat.subscribe@1.25` through `@1.27` ship it: the live user row, the
- * tool block without `1.28`'s `agentMessageDelivery`.
+ * The tail as `chat.subscribe@1.25` through `@1.28` ship it: the live user row, the
+ * tool block without `1.29`'s `agentMessageDelivery`.
  */
 export const openChatTranscriptWindowSchemaPreDelivery = lazySchema(() =>
   chatTranscriptWindowSchema.extend({

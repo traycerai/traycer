@@ -1026,7 +1026,7 @@ export function accumulateEvent(
           // that carried it, and a re-completion without one keeps it.
           agentMessageReceipt:
             event.agentMessageReceipt ?? existing.agentMessageReceipt,
-          // Where a cross-host send stands (`chat.subscribe@1.28`). A later
+          // Where a cross-host send stands (`chat.subscribe@1.29`). A later
           // event that carries it moves the state; one without it keeps it.
           agentMessageDelivery:
             event.agentMessageDelivery ?? existing.agentMessageDelivery,

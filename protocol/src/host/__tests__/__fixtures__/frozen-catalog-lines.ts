@@ -38642,6 +38642,9 @@ export const FROZEN_CATALOG_LINE_SNAPSHOTS = {
                   "traycer"
                 ]
               },
+              "nativeSubagents": {
+                "type": "boolean"
+              },
               "envOverrides": {
                 "default": [],
                 "type": "array",

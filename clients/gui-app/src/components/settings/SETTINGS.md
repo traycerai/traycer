@@ -2887,6 +2887,19 @@ window`, recorded in the type as `coverage.browsersAreMountedOnly` -
     Claude/OpenCode, but BEFORE Codex's `resume` subcommand). The launch picker
     pre-fills this value as a cosmetic default; an untouched pre-fill launches
     with `null` so the host resolves the current saved value itself.
+  - **Native subagents** (`provider-native-subagents-group.tsx`), one switch,
+    "Allow native subagents", on by default. When off, the host turns the
+    provider's own built-in subagent tool off for that provider's sessions
+    where the provider's CLI or SDK has a switch for it (Claude, Codex,
+    OpenCode and its derivatives, Kilo, Copilot, Cursor, Droid, Grok, Qwen,
+    Antigravity) and, for every provider, tells the agent in its system prompt
+    to delegate through Traycer agents instead. Persisted as `nativeSubagents`
+    in `provider-overrides.json` via `providers.setNativeSubagents`
+    (`useProvidersSetNativeSubagents`, invalidates only `providers.list`),
+    read back as the row's `nativeSubagents` from `providers.list@10.5`. Drawn
+    only when the surface's host advertises both (the method is optional), so
+    an older host shows nothing here. Holds a local echo of a flip until the
+    host's read-back lands, like the per-provider judge select.
   - **Model list** (`provider-catalog-timeout-group.tsx`), the last group on
     CLI & Args: how long the scoped host waits for this provider's model and
     command lists (`~/.traycer/cli/config.json` on that machine: the shared

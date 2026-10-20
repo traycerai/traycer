@@ -370,6 +370,7 @@ import {
   chatSubscribeV126,
   chatSubscribeV127,
   chatSubscribeV128,
+  chatSubscribeV129,
 } from "@traycer/protocol/host/agent/gui/contracts";
 import {
   agentTuiGenerateTitleV10,
@@ -1358,6 +1359,8 @@ import {
   providersUsePackVersionResponseSchemaV10,
   providersSetPackPolicyRequestSchema,
   providersSetPackPolicyResponseSchema,
+  providersSetNativeSubagentsRequestSchema,
+  providersSetNativeSubagentsResponseSchema,
   providersRefreshPackDiscoveryRequestSchema,
   providersRefreshPackDiscoveryResponseSchema,
   upgradeProviderCliStateV10ToV20,
@@ -2815,7 +2818,9 @@ export const providersListV104 = defineRpcContract({
 /**
  * `providers.list@10.5` - the envelope's `credentialsManagedInAccount`
  * (this host is a sandbox, stores no provider credential, and the user's keys
- * and logins are managed in their account), `scope` and `onHostOnly`.
+ * and logins are managed in their account), `scope` and `onHostOnly`, and the
+ * row's `nativeSubagents` switch (added while 10.5 was still unreleased, so
+ * it widened this line rather than opening 10.6).
  *
  * A MINOR, with no `responseGrowthProjectionGated`: each is a new KEY, which the
  * within-major re-parse strips for an older peer. Its own minor rather than a
@@ -4714,6 +4719,17 @@ export const providersSetPackPolicyV10 = defineRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: providersSetPackPolicyRequestSchema,
   responseSchema: providersSetPackPolicyResponseSchema,
+});
+
+/**
+ * Set one provider's native-subagents switch (`providers.list@10.5` reads it
+ * back as the row's `nativeSubagents`).
+ */
+export const providersSetNativeSubagentsV10 = defineRpcContract({
+  method: "providers.setNativeSubagents",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: providersSetNativeSubagentsRequestSchema,
+  responseSchema: providersSetNativeSubagentsResponseSchema,
 });
 
 /**
@@ -12025,6 +12041,19 @@ const HOST_RPC_PROVIDERS_REGISTRY_DEFINITION = {
       downgradePathsFromLatest: {},
     },
   },
+  "providers.setNativeSubagents": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: providersSetNativeSubagentsV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
   // Whether the whole provider settings document is unreadable, and the
   // explicit reset that sets it aside unchanged. Optional capabilities: a host
   // without them offers no reset (see `provider-settings-file/contracts.ts`).
@@ -14355,7 +14384,7 @@ const HOST_STREAM_RPC_REGISTRY_DEFINITION = {
   ...HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION,
   "chat.subscribe": {
     1: {
-      latestMinor: 28,
+      latestMinor: 29,
       versions: {
         0: {
           contract: chatSubscribeV10,
@@ -14513,7 +14542,7 @@ const HOST_STREAM_RPC_REGISTRY_DEFINITION = {
         // `conversation-message` queue item on the bot's trunk (projection:
         // the host omits it below @1.25, as it omits port-forward below @1.14).
         // Frozen at the pre-delivery tool block and `tool_call.completed`
-        // since @1.28 opened above it.
+        // since @1.29 opened above it.
         25: {
           contract: chatSubscribeV125,
         },
@@ -14521,23 +14550,32 @@ const HOST_STREAM_RPC_REGISTRY_DEFINITION = {
         // bot's trunk (projection: the host omits it below @1.26, as it omits
         // the conversation-message item below @1.25). @1.25 is frozen at its
         // four-arm queue. Frozen at the pre-delivery tool block and
-        // `tool_call.completed` since @1.28 opened above it.
+        // `tool_call.completed` since @1.29 opened above it.
         26: {
           contract: chatSubscribeV126,
         },
         // @1.27 is the task-overdue line: the `task-overdue` queue item on a
         // bot's trunk (projection: the host omits it below @1.27, as it omits
         // the task-checkin item below @1.26). @1.26 is frozen at its five-arm
-        // queue. Frozen at the pre-delivery tool block and
-        // `tool_call.completed` since @1.28 opened above it.
+        // queue. Frozen at the pre-sign-in-park queue since @1.28 opened
+        // above it, and at the pre-delivery tool block and
+        // `tool_call.completed` since @1.29 did.
         27: {
           contract: chatSubscribeV127,
         },
-        // @1.28 adds `agentMessageDelivery` to the `tool_call` block and its
-        // completed event: where a cross-host send stands (queued, delivered,
-        // expired, failed). Projection: the host deletes the key below @1.28.
+        // @1.28 adds `signInParked` to the queued prompt item: the host holds
+        // an agent's prompt for a provider sign-in, and a person may cancel
+        // it. Tolerance: optional, dropped as an unknown key below @1.28.
+        // Frozen at the pre-delivery tool block and `tool_call.completed`
+        // since @1.29 opened above it.
         28: {
           contract: chatSubscribeV128,
+        },
+        // @1.29 adds `agentMessageDelivery` to the `tool_call` block and its
+        // completed event: where a cross-host send stands (queued, delivered,
+        // expired, failed). Projection: the host deletes the key below @1.29.
+        29: {
+          contract: chatSubscribeV129,
         },
       },
     },

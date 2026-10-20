@@ -7,13 +7,14 @@ import {
   chatSubscribeV126,
   chatSubscribeV127,
   chatSubscribeV128,
+  chatSubscribeV129,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 
 /**
- * `chat.subscribe@1.28`: `agentMessageDelivery` on a `tool_call` block and on
+ * `chat.subscribe@1.29`: `agentMessageDelivery` on a `tool_call` block and on
  * its `tool_call.completed` event.
  *
- * PROJECTION, not tolerance: `1.23`-`1.27` bind hand-frozen copies without the
+ * PROJECTION, not tolerance: `1.23`-`1.28` bind hand-frozen copies without the
  * key, so a frame carrying it parses there with the key gone and everything
  * else intact - on the tail, a `range` response and `blockDelta`.
  */
@@ -24,7 +25,7 @@ const DELIVERY = {
   state: "queued",
 };
 
-/** A cross-host send exactly as a 1.28 host persists it. */
+/** A cross-host send exactly as a 1.29 host persists it. */
 function sendToolCall(): Record<string, unknown> {
   return {
     type: "tool_call",
@@ -195,6 +196,7 @@ const FROZEN_LINES = [
   { label: "1.25", contract: chatSubscribeV125 },
   { label: "1.26", contract: chatSubscribeV126 },
   { label: "1.27", contract: chatSubscribeV127 },
+  { label: "1.28", contract: chatSubscribeV128 },
 ] as const;
 
 describe.each(FROZEN_LINES)(
@@ -236,8 +238,8 @@ describe.each(FROZEN_LINES)(
   },
 );
 
-describe("chat.subscribe@1.28 carries the delivery state", () => {
-  const frames = chatSubscribeV128.serverFrameSchema;
+describe("chat.subscribe@1.29 carries the delivery state", () => {
+  const frames = chatSubscribeV129.serverFrameSchema;
 
   it("round-trips it on the snapshot tail and on a range response", () => {
     const row = assistantRow([sendToolCall()]);
@@ -303,8 +305,8 @@ describe("chat.subscribe@1.27 is main's task-overdue line, minus the delivery st
     ).toBe(false);
   });
 
-  it("1.28 carries both the task-overdue item and the key", () => {
-    const parsed = chatSubscribeV128.serverFrameSchema.parse(overdueSnapshot());
+  it("1.29 carries both the task-overdue item and the key", () => {
+    const parsed = chatSubscribeV129.serverFrameSchema.parse(overdueSnapshot());
     if (parsed.kind !== "snapshot") throw new Error("wrong kind");
     expect(parsed.snapshot.queue.items[0]).toMatchObject({
       kind: "task-overdue",

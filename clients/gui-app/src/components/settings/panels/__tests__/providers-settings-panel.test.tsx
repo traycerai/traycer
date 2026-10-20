@@ -284,6 +284,16 @@ vi.mock("@/hooks/providers/use-providers-set-auto-judge-mutation", () => ({
   useProvidersSetAutoJudge: () => ({ mutate: vi.fn(), isPending: false }),
 }));
 
+vi.mock(
+  "@/hooks/providers/use-providers-set-native-subagents-mutation",
+  () => ({
+    useProvidersSetNativeSubagents: () => ({
+      mutate: vi.fn(),
+      isPending: false,
+    }),
+  }),
+);
+
 vi.mock("@/hooks/providers/use-providers-list-query", () => ({
   useProvidersList: () => providerMocks.listResult,
 }));

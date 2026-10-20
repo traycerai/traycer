@@ -569,7 +569,7 @@ export const toolCallCompletedEventSchema = lazySchema(() =>
     // `agentMessageReceiptSchema`.
     agentMessageReceipt: agentMessageReceiptSchema.nullable().optional(),
     // Where a cross-host send stands when the call completes - `queued`, read
-    // off the call's queued result (`chat.subscribe@1.28`; see
+    // off the call's queued result (`chat.subscribe@1.29`; see
     // `agentMessageDeliverySchema`). Optional rather than defaulted, like the
     // receipt beside it: an omission is "nothing to say", so a re-completion
     // cannot erase a stamp the first completion carried. Not on the
@@ -604,8 +604,8 @@ export type ToolCallCompletedEvent = z.infer<
 >;
 
 // Wire-freeze copy of `toolCallCompletedEventSchema` as `chat.subscribe@1.23`
-// through `@1.27` ship it: the live event without the `agentMessageDelivery`
-// stamp `1.28` added. Bound by the runtime-event union those lines decode.
+// through `@1.28` ship it: the live event without the `agentMessageDelivery`
+// stamp `1.29` added. Bound by the runtime-event union those lines decode.
 // Hand-frozen, NOT derived from the live shape.
 export const toolCallCompletedEventSchemaPreDelivery = lazySchema(() =>
   z.object({
