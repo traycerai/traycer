@@ -93,7 +93,6 @@ import {
   textDeltaEventSchema,
   todoUpdatedEventSchema,
   toolCallCompletedEventSchema,
-  toolCallCompletedEventSchemaPreDelivery,
   toolCallCompletedEventSchemaPrePage,
   toolCallErroredEventSchema,
   toolCallProgressEventSchema,
@@ -132,7 +131,6 @@ export {
   openHarnessIdSchema,
   openMessageSchema,
   openMessageSchemaPreConversation,
-  openMessageSchemaPreDelivery,
   openPlanBlockSchema,
   openPlanSourceSchema,
   openProviderNoticeMetadataSchema,
@@ -275,60 +273,6 @@ export const openRuntimeEventSchema = lazySchema(() =>
   ]),
 );
 export type OpenRuntimeEvent = z.infer<typeof openRuntimeEventSchema>;
-
-/**
- * The open runtime-event union as `chat.subscribe@1.23` through `@1.27` ship
- * it: `tool_call.completed` without `1.28`'s `agentMessageDelivery` stamp.
- * Listed explicitly, like every frozen copy.
- */
-export const openRuntimeEventSchemaPreDelivery = lazySchema(() =>
-  z.discriminatedUnion("type", [
-    textDeltaEventSchema,
-    textCompletedEventSchema,
-    reasoningDeltaEventSchema,
-    reasoningCompletedEventSchema,
-    toolCallStartedEventSchema,
-    toolCallCompletedEventSchemaPreDelivery,
-    toolCallErroredEventSchema,
-    toolCallProgressEventSchema,
-    approvalRequestedEventSchema,
-    approvalResolvedEventSchema,
-    todoUpdatedEventSchema,
-    openPlanDeltaEventSchema,
-    openPlanUpdatedEventSchema,
-    openPlanCompletedEventSchema,
-    compactionStartedEventSchema,
-    compactionCompletedEventSchema,
-    compactionErroredEventSchema,
-    interviewRequestedEventSchema,
-    interviewResolvedEventSchema,
-    interviewErroredEventSchema,
-    subAgentStartedEventSchema,
-    subAgentProgressEventSchema,
-    subAgentCompletedEventSchema,
-    fileChangeStartedEventSchema,
-    fileChangeCompletedEventSchema,
-    artifactOperationEventSchema,
-    commandStartedEventSchema,
-    commandCompletedEventSchema,
-    openSessionCreatedEventSchema,
-    openSessionResumedEventSchema,
-    turnStartedEventSchema,
-    userMessageAnchorResolvedEventSchema,
-    turnCompletedEventSchema,
-    turnStoppedEventSchema,
-    turnInterruptedEventSchema,
-    openSteerSubmittedEventSchema,
-    usageUpdatedEventSchema,
-    errorEventSchema,
-    workflowStartedEventSchema,
-    workflowProgressEventSchema,
-    workflowCompletedEventSchema,
-    openProviderNoticeUpsertEventSchema,
-    imageResolutionUpdatedEventSchema,
-    userMessageAnchorTailUpdatedEventSchema,
-  ]),
-);
 
 /** Frozen 1.22 runtime events, before page/app stamps. */
 export const openRuntimeEventSchemaPrePage = lazySchema(() =>

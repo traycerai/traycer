@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { Cloud, Laptop, MonitorSmartphone, Server } from "lucide-react";
+import { Box, Cloud, Laptop, MonitorSmartphone, Server } from "lucide-react";
 import type { HostScopeOption } from "@/components/settings/host-scope/host-scope-model";
 import { PingRing } from "@/components/ui/ping-ring";
 import { cn } from "@/lib/utils";
@@ -26,6 +26,9 @@ export function HostGlyph(props: {
   const className = cn("shrink-0", props.className);
   if (props.host.isLocalMachine) {
     return <Laptop className={className} aria-hidden />;
+  }
+  if (props.host.sandbox !== null) {
+    return <Box className={className} aria-hidden />;
   }
   if (props.host.entry?.kind === "remote") {
     return <Cloud className={className} aria-hidden />;

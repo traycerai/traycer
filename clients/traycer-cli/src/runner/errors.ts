@@ -17,6 +17,16 @@ export const CLI_ERROR_CODES = {
   // required permission for task"). Distinct from NOT_FOUND ("doesn't
   // exist") and AUTH_REJECTED ("not signed in / bad token").
   FORBIDDEN: "E_FORBIDDEN",
+  // The data-migration startup gate refused this invocation: a migration is
+  // in progress, or the data location record and its migration journal
+  // disagree. Nothing was written; the message says what to run.
+  DATA_MIGRATION_BLOCKED: "E_DATA_MIGRATION_BLOCKED",
+  // `traycer data init` / `data migrate` is not offered by this build on this
+  // platform yet (`data-availability.ts`). Nothing was written.
+  DATA_OPERATION_UNAVAILABLE: "E_DATA_OPERATION_UNAVAILABLE",
+  // A data migration stopped to show its session impact report; re-run with
+  // `--accept-session-impact <digest>` naming exactly the reported digest.
+  DATA_ACCEPTANCE_REQUIRED: "E_DATA_ACCEPTANCE_REQUIRED",
 
   // --- Agent roles (mirror the host's typed role-surface wire codes 1:1) ---
   // Absent and foreign-account agents share ONE code and template - no
@@ -73,11 +83,21 @@ export const CLI_ERROR_CODES = {
   // --- Host supervisor + lifecycle ---
   HOST_NOT_RUNNING: "E_HOST_NOT_RUNNING",
   // The host's process is there and its endpoint is published, but the
-  // connection to it failed or went quiet: the socket errored, closed before
-  // a frame, or a frame did not arrive inside its timeout. Distinct from
+  // connection to it failed before the request went out: the dial timed out,
+  // the socket errored, or it closed before a frame. Distinct from
   // HOST_NOT_RUNNING (nothing to dial) and from every code the host itself
-  // answers with - here nothing answered.
+  // answers with - here nothing answered and nothing was carried out, so
+  // running the command again is safe. A post-send failure the transport
+  // marked replayable lands here too, for the same reason: the host is
+  // deduplicating the retry.
   HOST_UNREACHABLE: "E_HOST_UNREACHABLE",
+  // The request WAS sent and no answer came back, so the host may have
+  // carried it out: its response did not arrive inside the deadline, or the
+  // connection was lost after the send with nothing to prove the host never
+  // acted. The one code that must NOT be read as "nothing happened" - running
+  // the command again can repeat whatever it did, such as delivering the same
+  // message to an agent twice. The message says to check before re-sending.
+  HOST_REQUEST_OUTCOME_UNKNOWN: "E_HOST_REQUEST_OUTCOME_UNKNOWN",
   // A running host reported (or, fail-safe, was assumed to have) work in
   // progress, so the CLI refused to reinstall/restart it. The desktop maps
   // this to its "host busy" flow (surface the host, run the renderer's
@@ -117,6 +137,18 @@ export const CLI_ERROR_CODES = {
   // the two ways that do end it (Ctrl-C there, or `--force`). Expected: it
   // describes where the host came from, not a broken machine.
   HOST_NOT_SERVICE_RUN: "E_HOST_NOT_SERVICE_RUN",
+  // `host uninstall --all` asked the host to stop and it is still running (a
+  // host whose event loop is wedged ignores the request). The install is kept,
+  // because deleting it would leave that host running from removed bytes and
+  // still holding the lock every reinstall waits on. `--force` stops it anyway
+  // and removes the install.
+  HOST_UNINSTALL_HOST_RUNNING: "E_HOST_UNINSTALL_HOST_RUNNING",
+  // A `host restart` bound to one host process (`--expect-host-pid` with
+  // `--expect-host-start-identity`, Desktop's force restart of a host that
+  // stopped answering) found, once it held the lifecycle lock, that `pid.json`
+  // names another process that is or may be running, or cannot be read. The
+  // restart was confirmed for the first host, so nothing was stopped.
+  HOST_RESTART_TARGET_CHANGED: "E_HOST_RESTART_TARGET_CHANGED",
 
   // --- Port-conflict repair (`host free-port`, `host free-port-and-restart`)
   // All three replace what used to be an `exitCode: 0` result carrying a
@@ -257,9 +289,12 @@ export const EXPECTED_CLI_ERROR_CODES: ReadonlySet<CliErrorCode> =
     CLI_ERROR_CODES.AUTH_NETWORK,
     CLI_ERROR_CODES.HOST_NOT_RUNNING,
     CLI_ERROR_CODES.HOST_UNREACHABLE,
+    CLI_ERROR_CODES.HOST_REQUEST_OUTCOME_UNKNOWN,
     CLI_ERROR_CODES.HOST_BUSY,
     CLI_ERROR_CODES.HOST_UPDATE_ATTEMPT_ACTIVE,
     CLI_ERROR_CODES.HOST_NOT_SERVICE_RUN,
+    CLI_ERROR_CODES.HOST_UNINSTALL_HOST_RUNNING,
+    CLI_ERROR_CODES.HOST_RESTART_TARGET_CHANGED,
     CLI_ERROR_CODES.HOST_ALREADY_RUNNING,
     CLI_ERROR_CODES.HOST_NOT_INSTALLED,
     CLI_ERROR_CODES.HOST_INCOMPATIBLE,

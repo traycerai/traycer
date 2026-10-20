@@ -393,10 +393,8 @@ export const HOST_METHOD_POLL_TABLE = {
   // clears a row or a site writes a cookie, and the group refetches on the
   // former. Polling it would keep a settings page waking the host store.
   "browser.savedLoginSites": { ...LATEST_SCHEDULING, poll: null },
-  // Opt-in polling (`poll: true`), for two callers sharing one cache entry:
-  // the side strip's host indicator, which shows a host whose cross-host
-  // messages are paused (`crossHostMessaging`, @1.8) as degraded, and the
-  // Overview's drain affordance. Its `busySessionCount` / `busyBreakdown` is what "Apply now
+  // Opt-in polling (`poll: true`), for one caller: the Overview's drain
+  // affordance. Its `busySessionCount` / `busyBreakdown` is what "Apply now
   // — ends 2 agents and 1 terminal" (or "ends N sessions" on a @1.1 host)
   // promises and then destroys, so the question is not whether the
   // cached value may be reused but whether it is still TRUE. Going stale does
@@ -977,6 +975,13 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
+  // A repair re-applies the guest's files and refetches its configuration; two
+  // presses must run in order, never coalesce into one answer.
+  "host.sandbox.repairGuestConfiguration": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
   // Dial-only lease verbs: one host calls these on another, never the
   // renderer. Here because this table is exhaustive over the registry. `fifo`
   // because each acquires, releases or ends a lease and must never coalesce.
@@ -1421,6 +1426,10 @@ export const HOST_METHOD_POLL_TABLE = {
   // one read per open, picked up by reopening.
   "epic.listCloudChats": { ...LATEST_SCHEDULING, poll: null },
   "epic.resolveCloudChatHead": { ...LATEST_SCHEDULING, poll: null },
+  // The task's host list. Not polled: it changes when a host first owns a
+  // chat the viewer can read, and a reopened panel or a focus refetch reads
+  // it again.
+  "epic.listTaskHosts": { ...LATEST_SCHEDULING, poll: null },
   "epic.readCloudChatPart": { ...LATEST_SCHEDULING, poll: null },
   "epic.listCloudChatPayloads": { ...LATEST_SCHEDULING, poll: null },
   "epic.readCloudChatPayload": { ...LATEST_SCHEDULING, poll: null },
@@ -1598,6 +1607,10 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
+  // Opening a bot may claim it onto this host: `fifo`, like the claim
+  // itself, so two opens are never coalesced into one answer that was decided
+  // before the other's claim.
+  "bot.open": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
   // The conversation list is a cloud list like `bot.list`. A send is a
   // mutation that mints a request: `fifo` keeps two identical sends from
   // coalescing into one message.
@@ -2013,6 +2026,16 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
+  // Whether the provider settings document is unusable as a whole: a plain
+  // read, latest wins.
+  "providers.settingsFile.status": { ...LATEST_SCHEDULING, poll: null },
+  // Sets that document aside and starts a fresh one. Persisted and not
+  // idempotent across a later corruption, so it is queued, never merged.
+  "providers.settingsFile.reset": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
   // Setting an environment override changes persisted provider configuration.
   "providers.setEnvOverride": {
     mode: "fifo",
@@ -2285,6 +2308,116 @@ export const HOST_METHOD_POLL_TABLE = {
   },
   "config.shell.listDetected": { ...LATEST_SCHEDULING, poll: null },
   "config.shell.probe": { ...LATEST_SCHEDULING, poll: null },
+  // The environment methods: reads take the latest answer; writes, Verify and
+  // the link steps are ordered and never joined.
+  "environment.localOverrides": { ...LATEST_SCHEDULING, poll: null },
+  "environment.secrets.list": { ...LATEST_SCHEDULING, poll: null },
+  "environment.secrets.versions": { ...LATEST_SCHEDULING, poll: null },
+  // A replaced value's status moves within seconds of the replacement; the
+  // Secrets page re-reads it only while it is still moving.
+  "environment.secrets.rotation": {
+    ...LATEST_SCHEDULING,
+    poll: { kind: "fixed", intervalMs: 3_000 },
+  },
+  "environment.agentDefinitions.list": { ...LATEST_SCHEDULING, poll: null },
+  "environment.setup.get": { ...LATEST_SCHEDULING, poll: null },
+  // The support report's reach section: read with the rest of the environment
+  // section, never polled on its own.
+  "environment.reachDiagnostics": { ...LATEST_SCHEDULING, poll: null },
+  // Machine setup re-reads it while open: a run started by a save, a retry or
+  // a restart ends on its own, and nothing else tells the page it did.
+  "environment.setup.attempts": {
+    ...LATEST_SCHEDULING,
+    poll: { kind: "fixed", intervalMs: 5_000 },
+  },
+  // A Personal page re-reads it while open: an edit goes from "applying" to
+  // "applied" in seconds and nothing else tells the page it did.
+  "environment.status": {
+    ...LATEST_SCHEDULING,
+    poll: { kind: "fixed", intervalMs: 5_000 },
+  },
+  "environment.notices": { ...LATEST_SCHEDULING, poll: null },
+  "environment.review": { ...LATEST_SCHEDULING, poll: null },
+  "providers.link": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "providers.linkComplete": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "config.env.localOverride.set": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "config.env.localOverride.clear": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "environment.secrets.create": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "environment.secrets.verify": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "environment.secrets.replaceValue": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "environment.secrets.undo": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "environment.secrets.destroy": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "environment.secrets.consent": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "environment.agentDefinitions.put": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "environment.agentDefinitions.delete": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "environment.setup.put": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "environment.setup.retry": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "environment.undo": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "host.remoteAccess.set": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
   "config.env.list": { ...LATEST_SCHEDULING, poll: null },
   "config.env.set": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
   "config.env.delete": {
@@ -2381,6 +2514,7 @@ export const HOST_METHOD_POLL_TABLE = {
     poll: null,
   },
   "environment.host.list": { ...LATEST_SCHEDULING, poll: null },
+  "environment.members": { ...LATEST_SCHEDULING, poll: null },
   "diagnostics.logs.list": { ...LATEST_SCHEDULING, poll: null },
   "diagnostics.logs.tail": { ...LATEST_SCHEDULING, poll: null },
   // A bounded read over settled facts (Usage page + epic cost badge). The

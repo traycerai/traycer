@@ -26,6 +26,8 @@ import {
   resolveHostStartTarget,
   SUSTAINED_UPTIME_RESET_MS,
   MAX_IMMEDIATE_RESTARTS,
+  YIELDED_INCUMBENT_EXIT_POLL_MS,
+  YIELDED_INCUMBENT_EXIT_WAIT_MS,
   runHostStart,
   type HostStartTarget,
   type RunHostStartDeps,
@@ -478,6 +480,12 @@ function makeRunStubs(
     // from a real `traycer host stop` would then be remembered as "served at
     // startup", silently changing what every intent assertion below means.
     readStopIntentIdentity: async () => null,
+    // Same hazard class once more: a child that yields to an incumbent makes
+    // the supervisor poll THAT pid, and unset this falls through to the real
+    // `isProcessAlive`, which would probe whatever process happens to hold
+    // the fixture's pid on this machine. Rows that exercise the wait script
+    // the answer themselves.
+    isProcessAlive: () => false,
     sleep: async () => undefined,
     closeLogFd: async () => undefined,
     // Pin the shared harness to a SINGLE attempt. Every test built on
@@ -1042,15 +1050,17 @@ describe("runHostStart - installed-record launch path", () => {
     expect(call?.args[3]).toMatch(
       /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
     );
-    // No status pipe was opened on this path, so the host must NOT be
-    // authorised to write status frames. The flag IS the authorisation:
-    // passing it speculatively is what let the host sniff fd 3 by type and
-    // inject frames into an unrelated Node IPC channel.
-    expect(call?.args).not.toContain("--layer0-status-fd");
+    // The status pipe is opened on EVERY attempt now (the clean-exit branch
+    // reads the child's Layer 0 verdict from it), and the flag IS the
+    // authorisation to write into it - so the two must agree here too:
+    // passing the flag without the pipe is what let the host sniff fd 3 by
+    // type and inject frames into an unrelated Node IPC channel.
+    expect(call?.args.slice(4, 6)).toEqual(["--layer0-status-fd", "3"]);
     expect(call?.stdio).toEqual([
       "ignore",
       expect.anything(),
       expect.anything(),
+      "pipe",
     ]);
     expect(call?.env.TRAYCER_CHANNEL).toBeUndefined();
     expect(call?.env.TRAYCER_STAGING_RELEASE_TOKEN).toBeUndefined();
@@ -5277,15 +5287,18 @@ describe("runHostStart - relaunch loop, per-attempt isolation", () => {
     );
 
     expect(recorded.spawnCalls).toHaveLength(2);
-    // Attempt 1 is the probe attempt: fd 3 is opened and the flag passed.
-    // Attempt 2 must carry neither, or the host writes a status frame for a
-    // transition that was already decided.
+    // Both attempts open fd 3 and pass the flag: the status transport is
+    // per-attempt now (the clean-exit branch reads every child's Layer 0
+    // verdict from it). What stays one-shot is the PROBE - the observer that
+    // turns a frame into a transition marker - so argv and stdio no longer
+    // say anything about re-arming, and the marker counts below are the
+    // whole assertion.
     const first = recorded.spawnCalls[0];
     const second = recorded.spawnCalls[1];
     expect(first?.args).toContain("--layer0-status-fd");
-    expect(second?.args).not.toContain("--layer0-status-fd");
+    expect(second?.args).toContain("--layer0-status-fd");
     expect((first?.stdio as unknown[]).length).toBe(4);
-    expect((second?.stdio as unknown[]).length).toBe(3);
+    expect((second?.stdio as unknown[]).length).toBe(4);
     // THE LOAD-BEARING ASSERTIONS. argv and stdio alone are satisfied by the
     // spawn sites using the per-attempt context while the OBSERVER still reads
     // the outer one - exactly the defect this test is named for, and it passed
@@ -6045,6 +6058,355 @@ describe("runHostStart - per-attempt setup failures stay inside the budget", () 
     expect(recorded.markers.some((m) => m.phase === "failed-to-spawn")).toBe(
       true,
     );
+  });
+});
+
+describe("runHostStart - a child that yields to an incumbent still exiting", () => {
+  // The 2026-10-18 staging outage. Desktop's force restart booted the agent
+  // job out and re-registered it without waiting for the old host, whose
+  // graceful teardown took ~12s. The replacement supervisor's incumbent probe
+  // saw no SERVING host and spawned; the child found the Layer 0 lock still
+  // held by the dying pid, declined after its 750ms retry window and exited
+  // 0; and the clean-exit branch read that 0 as "stood down on purpose",
+  // exited 0 itself, and left launchd (`SuccessfulExit: false`) with nothing
+  // to relaunch. Nobody started a host until Desktop's readiness timeout
+  // retried the whole cycle 65s later.
+  //
+  // The child's own verdict tells the two apart: a decline NAMES the pid it
+  // lost to. A clean exit carrying that verdict is a wait, not a stop.
+  const exec = "/opt/traycer/host/install/traycer-host";
+  const incumbentPid = 1098;
+
+  /**
+   * Every attempt gets a child with a readable fd 3 and exits 0. The first
+   * attempt's frame declines in favour of `incumbentPid` with the evidence
+   * given; every later attempt's frame is `acquired`, so the supervisor's own
+   * clean-exit policy ends the run once the relaunch has happened.
+   */
+  function withYieldingFirstAttempt(
+    recorded: Recorded,
+    deps: Partial<RunHostStartDeps>,
+    evidence:
+      | { readonly kind: "pid-metadata" }
+      | { readonly kind: "held-retry-window" },
+  ): Partial<RunHostStartDeps> {
+    const originalSpawn = deps.spawn;
+    if (originalSpawn === undefined) {
+      throw new Error("test spawn dependency missing");
+    }
+    return {
+      ...deps,
+      maxRelaunches: 5,
+      spawn: (command, args, options) => {
+        originalSpawn(command, args, options);
+        const child = makeStubChild();
+        const status = new PassThrough();
+        Object.assign(child, { stdio: [null, null, null, status] });
+        setImmediate(() => {
+          status.end();
+          child.emit("exit", 0, null);
+        });
+        return asChildProcess(child);
+      },
+      readLayer0Frame: async (): Promise<Layer0FrameRead> => {
+        const ids = startingAttemptIds(recorded);
+        const attemptId = ids[ids.length - 1] ?? "";
+        if (ids.length > 1) {
+          return { kind: "frame", frame: { attemptId, layer0: "acquired" } };
+        }
+        return {
+          kind: "frame",
+          frame: {
+            attemptId,
+            layer0: "declined",
+            incumbentEvidence:
+              evidence.kind === "pid-metadata"
+                ? {
+                    kind: "pid-metadata",
+                    pid: incumbentPid,
+                    hostId: "host-a",
+                    startedAt: "2026-10-16T00:34:11.000Z",
+                  }
+                : {
+                    kind: "held-retry-window",
+                    lockPath: "/tmp/lifecycle.lock",
+                    observedForMs: 750,
+                  },
+          },
+        };
+      },
+    };
+  }
+
+  it("waits for the named incumbent to exit, then respawns instead of exiting 0", async () => {
+    const { recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+    const sleeps: number[] = [];
+    const livenessProbes: number[] = [];
+    // Alive for three polls - the dying host still tearing down - then gone.
+    let aliveFor = 3;
+
+    await runUntilExit(
+      () =>
+        runHostStart(
+          { environment: "production", cwd: null },
+          {
+            ...withYieldingFirstAttempt(recorded, deps, {
+              kind: "pid-metadata",
+            }),
+            isProcessAlive: (pid) => {
+              livenessProbes.push(pid);
+              aliveFor -= 1;
+              return aliveFor >= 0;
+            },
+            sleep: async (ms) => {
+              sleeps.push(ms);
+            },
+          },
+        ),
+      recorded,
+    );
+
+    // The load-bearing assertion: the host came back from THIS supervisor.
+    // Before the fix the run ends at one spawn and exit 0, which is the
+    // outage - launchd does not relaunch a job that exited cleanly.
+    expect(recorded.spawnCalls).toHaveLength(2);
+    expect(recorded.exited).toBe(0);
+    // It waited on the pid the child named, not on a clock: one poll per
+    // "still alive" answer, and the respawn followed the first "gone".
+    expect(livenessProbes.every((pid) => pid === incumbentPid)).toBe(true);
+    expect(sleeps).toEqual([
+      YIELDED_INCUMBENT_EXIT_POLL_MS,
+      YIELDED_INCUMBENT_EXIT_POLL_MS,
+      YIELDED_INCUMBENT_EXIT_POLL_MS,
+    ]);
+    // A yield is not a crash: no crash evidence, no crash budget spent.
+    expect(
+      recorded.markers.filter((marker) => marker.phase === "crashed"),
+    ).toHaveLength(0);
+    expect(recorded.findCrashReportCalls).toHaveLength(0);
+    expect(
+      recorded.loggerInfos.some(
+        (entry) =>
+          entry.message ===
+          "Host supervisor relaunching after the incumbent it yielded to exited",
+      ),
+    ).toBe(true);
+    // The verdict can only be read if EVERY attempt opens the status pipe and
+    // authorises the host to write into it - not just a probed first attempt.
+    for (const call of recorded.spawnCalls) {
+      const flagAt = call.args.indexOf("--layer0-status-fd");
+      expect(flagAt).toBeGreaterThanOrEqual(0);
+      expect(call.args[flagAt + 1]).toBe("3");
+      expect(Array.isArray(call.stdio) ? call.stdio.length : 0).toBe(4);
+    }
+  });
+
+  it("keeps the never-evict policy when the incumbent outlives the whole wait", async () => {
+    // A genuine second host - serving, not dying - is exactly what the
+    // incumbent guard exists to leave alone. The wait is bounded by the
+    // host's own force-exit watchdog: a host that has not exited by then is
+    // not exiting.
+    const { recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+    const sleeps: number[] = [];
+
+    await runUntilExit(
+      () =>
+        runHostStart(
+          { environment: "production", cwd: null },
+          {
+            ...withYieldingFirstAttempt(recorded, deps, {
+              kind: "pid-metadata",
+            }),
+            isProcessAlive: () => true,
+            sleep: async (ms) => {
+              sleeps.push(ms);
+            },
+          },
+        ),
+      recorded,
+    );
+
+    expect(recorded.spawnCalls).toHaveLength(1);
+    expect(recorded.exited).toBe(0);
+    expect(sleeps).toHaveLength(
+      Math.ceil(
+        YIELDED_INCUMBENT_EXIT_WAIT_MS / YIELDED_INCUMBENT_EXIT_POLL_MS,
+      ),
+    );
+    expect(
+      recorded.loggerWarns.some(
+        (entry) =>
+          entry.message ===
+          "Host supervisor leaving a live incumbent in place - it did not exit within the wait",
+      ),
+    ).toBe(true);
+  });
+
+  it("abandons the wait when a shutdown signal latches, exit 0", async () => {
+    // `launchctl bootout` / `systemctl stop` reach this supervisor as a
+    // signal while it is polling. The wait is raced against the latch like
+    // the backoff is, so the stop is honoured within one poll, not after the
+    // whole bound - and with no record standing it exits 0 and stays down.
+    const { recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+    const sleeps: number[] = [];
+    let livenessProbes = 0;
+
+    await runUntilExit(
+      () =>
+        runHostStart(
+          { environment: "production", cwd: null },
+          {
+            ...withYieldingFirstAttempt(recorded, deps, {
+              kind: "pid-metadata",
+            }),
+            isProcessAlive: () => {
+              livenessProbes += 1;
+              // Latched from inside the second poll: the handler sets the
+              // flag and resolves `shutdownRequested` before this returns.
+              if (livenessProbes === 2) process.emit("SIGTERM");
+              return true;
+            },
+            sleep: async (ms) => {
+              sleeps.push(ms);
+            },
+          },
+        ),
+      recorded,
+    );
+
+    expect(recorded.spawnCalls).toHaveLength(1);
+    expect(recorded.exited).toBe(0);
+    // Two polls, not the full bound.
+    expect(sleeps).toEqual([
+      YIELDED_INCUMBENT_EXIT_POLL_MS,
+      YIELDED_INCUMBENT_EXIT_POLL_MS,
+    ]);
+    expect(
+      recorded.loggerInfos.some(
+        (entry) =>
+          entry.message === "Host supervisor not relaunching - shutting down" &&
+          entry.fields.reason === "yielded-to-incumbent",
+      ),
+    ).toBe(true);
+  });
+
+  it("does not wait on a PROBED attempt's decline", async () => {
+    // A transition probe skips the incumbent gate and is EXPECTED to decline
+    // against the live host it is reclaiming from: its product is the marker,
+    // and the desktop owns the next step. Holding that supervisor for the
+    // whole bound - or relaunching from under the desktop's kickstart - would
+    // be a new behaviour on a path the wait was never meant for.
+    const { recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+    const sleeps: number[] = [];
+    const markerWrites: ProbeMarker[] = [];
+
+    await runUntilExit(
+      () =>
+        runHostStart(
+          {
+            environment: "production",
+            cwd: null,
+            probe: {
+              transitionId: "t-yield",
+              probeNonce: "n-yield",
+              serviceLabel: "ai.traycer.host",
+            },
+          },
+          {
+            ...withYieldingFirstAttempt(recorded, deps, {
+              kind: "pid-metadata",
+            }),
+            isProcessAlive: () => true,
+            sleep: async (ms) => {
+              sleeps.push(ms);
+            },
+            readLiveProbeContext: async () => ({
+              kind: "authorised" as const,
+              context: {
+                transitionId: "t-yield",
+                probeNonce: "n-yield",
+                serviceLabel: "ai.traycer.host",
+              },
+            }),
+            attestProbeSupervisor: async () => ({
+              serviceLabel: "ai.traycer.host",
+              supervisorPid: process.pid,
+              capturedAt: "2026-10-18T21:37:52.000Z",
+            }),
+            writeProbeMarker: async (_environment, marker) => {
+              markerWrites.push(marker);
+            },
+          },
+        ),
+      recorded,
+    );
+
+    // The probe ran (its verdict was recorded) and the supervisor ended at
+    // once, as before: one spawn, no polls, exit 0.
+    expect(
+      markerWrites.some((marker) => marker.outcome.kind === "lock-declined"),
+    ).toBe(true);
+    expect(recorded.spawnCalls).toHaveLength(1);
+    expect(sleeps).toEqual([]);
+    expect(recorded.exited).toBe(0);
+  });
+
+  it("honours a restart intent found once the incumbent has exited, exit 77", async () => {
+    // The wait is a window like the admission wait and the backoff: a stop
+    // announced inside it is a newer instruction than the relaunch. `restart`
+    // is the reason that owes a comeback, so it exits RESTART_OWED, never 0.
+    const { recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+    let incumbentGone = false;
+
+    await runUntilExit(
+      () =>
+        runHostStart(
+          { environment: "production", cwd: null },
+          {
+            ...withYieldingFirstAttempt(recorded, deps, {
+              kind: "pid-metadata",
+            }),
+            isProcessAlive: () => {
+              const alive = !incumbentGone;
+              incumbentGone = true;
+              return alive;
+            },
+            hasStopIntent: async () => (incumbentGone ? "restart" : null),
+          },
+        ),
+      recorded,
+    );
+
+    expect(recorded.spawnCalls).toHaveLength(1);
+    expect(recorded.exited).toBe(77);
+  });
+
+  it("exits 0 as before when the decline names no pid to wait for", async () => {
+    // `held-retry-window` is a flock that nothing attests: there is no process
+    // to wait on, so there is nothing this branch can add to today's answer.
+    const { recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+    const livenessProbes: number[] = [];
+
+    await runUntilExit(
+      () =>
+        runHostStart(
+          { environment: "production", cwd: null },
+          {
+            ...withYieldingFirstAttempt(recorded, deps, {
+              kind: "held-retry-window",
+            }),
+            isProcessAlive: (pid) => {
+              livenessProbes.push(pid);
+              return true;
+            },
+          },
+        ),
+      recorded,
+    );
+
+    expect(recorded.spawnCalls).toHaveLength(1);
+    expect(recorded.exited).toBe(0);
+    expect(livenessProbes).toEqual([]);
   });
 });
 

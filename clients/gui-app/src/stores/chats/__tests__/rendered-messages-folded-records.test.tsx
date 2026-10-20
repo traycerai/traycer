@@ -22,12 +22,14 @@ const CONTENT: JsonContent = {
 
 const displayContext: RenderedMessagesDisplayContext = {
   resolveUserSenderLabel: () => "You",
+  resolveUserSenderAvatarUrl: () => null,
   resolveAgentSenderDisplay: () => ({
     senderLabel: "Agent",
     providerLabel: "Provider",
     modelLabel: null,
   }),
   resolveAgentReasoningLabel: () => null,
+  resolveAgentServiceTierLabel: () => null,
   contentBlocksPreview: () => "",
 };
 

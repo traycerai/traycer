@@ -13,6 +13,12 @@ import type { ITraycerCli } from "@traycer-clients/shared/platform/runner-host";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { isWindows } from "@/lib/keybindings/platform";
 import { HoverCard } from "@/components/ui/hover-card";
+import { classifyCredential } from "@traycer/protocol/environment/credential-rule";
+import { CredentialChoiceDialog } from "@/components/settings/personal/credential-choice-dialog";
+import {
+  usePersonalHostState,
+  usePersonalRowNotes,
+} from "@/components/settings/personal/personal-page-context";
 import { SHELL } from "@/components/settings/panels/shell-settings.definitions";
 import { SettingsGroup } from "@/components/settings/settings-group";
 import { SettingsPanelShell } from "@/components/settings/settings-panel-shell";
@@ -32,11 +38,15 @@ import {
 } from "@/components/settings/host-scope/host-scope-model";
 import { useScopedHostBinding } from "@/components/settings/host-scope/use-scoped-host-binding";
 import {
-  useHostScope,
+  usePersonalHostScope,
   type HostScope,
 } from "@/components/settings/host-scope/use-host-scope";
 import { EffectiveCommandPreview } from "@/components/settings/panels/shell/effective-command-preview";
-import { EnvOverrideEditor } from "@/components/settings/panels/env-override-editor";
+import {
+  EnvOverrideEditor,
+  type EnvStaleRefusal,
+} from "@/components/settings/panels/env-override-editor";
+import { staleWriteOf } from "@/lib/environment/stale-write";
 import { ShellFlagChips } from "@/components/settings/panels/shell/shell-flag-chips";
 import { ShellProgramCombobox } from "@/components/settings/panels/shell/shell-program-combobox";
 import type {
@@ -50,6 +60,11 @@ import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { HostRuntimeContext } from "@/lib/host";
 import { useHostCapabilityProbe } from "@/hooks/host/use-host-capability-probe";
+import { useHostCredentialRefusal } from "@/hooks/host/use-host-credential-refusal";
+import {
+  isCredentialShapedEnvName,
+  urlCarriesCredentials,
+} from "@/components/providers/credential-bearing-values";
 import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
 import { useOpenLink } from "@/lib/links/open-link";
 import { cn } from "@/lib/utils";
@@ -57,7 +72,7 @@ import { useSettingsDensity } from "@/providers/settings-density-context";
 import { useRunnerHost } from "@/providers/use-runner-host";
 
 const PANEL_DESCRIPTION =
-  "How Traycer launches terminals, the host, and provider harnesses. New terminals pick up shell changes immediately; host env changes apply on restart.";
+  "How Traycer launches terminals, the host, and provider harnesses. New terminals pick up shell changes immediately; variable changes apply on restart.";
 const SAVED_FLASH_MS = 1600;
 type ShellSaveTarget = "program" | "flags";
 
@@ -141,7 +156,7 @@ const SHELL_CONFIG_GATE_METHOD = "config.shell.get";
  * local truth about it to fall back to.
  */
 export function ShellSettingsPanel() {
-  const scope = useHostScope();
+  const scope = usePersonalHostScope();
   // Hoisted above the branch, because the branch itself depends on it. The
   // nullable form is load-bearing: `false` is a host that HANDSHAKED without
   // the methods, while `null` is "no handshake yet" — and the panel's own first
@@ -180,7 +195,7 @@ export function ShellSettingsPanel() {
 
   const inner = (
     <SettingsPanelShell
-      title="Shell"
+      title={SHELL.page.label}
       description={PANEL_DESCRIPTION}
       bodyClassName="overflow-visible rounded-none border-none bg-transparent"
     >
@@ -251,14 +266,17 @@ function ShellSettingsPanelOverLocalStore(props: {
   const traycerCli = runnerHost.traycerCli;
   if (traycerCli === null) {
     return (
-      <SettingsPanelShell title="Shell" description={PANEL_DESCRIPTION}>
+      <SettingsPanelShell
+        title={SHELL.page.label}
+        description={PANEL_DESCRIPTION}
+      >
         <NoConfigSourceNotice hostName={props.hostName} />
       </SettingsPanelShell>
     );
   }
   return (
     <SettingsPanelShell
-      title="Shell"
+      title={SHELL.page.label}
       description={PANEL_DESCRIPTION}
       bodyClassName="overflow-visible rounded-none border-none bg-transparent"
     >
@@ -310,6 +328,11 @@ function ShellSettingsPanelBody(props: {
 
   const shellPending = controller.shellPending;
   const envPending = controller.envPending;
+  // A sandbox takes no credentials. Its host variables are runtime settings
+  // and stay editable, but a variable whose name looks like a credential's
+  // (the host's own rule) or whose value is a URL with a sign-in is refused
+  // here and never sent. Provider keys live in Providers, which refuses them.
+  const credentialRefusal = useHostCredentialRefusal(null);
   const [shellSaveTarget, setShellSaveTarget] =
     useState<ShellSaveTarget | null>(null);
   const [shellSavedTarget, setShellSavedTarget] =
@@ -373,10 +396,21 @@ function ShellSettingsPanelBody(props: {
     onSuccess: () => finishShellSave(target),
     onError: cancelShellSave,
   });
-  const envSaveCallbacks = {
+  // A save of the row named `rowKey` refused because the setting changed
+  // elsewhere first: the row drops its draft for the setting as re-read.
+  const [envStaleRefusal, setEnvStaleRefusal] =
+    useState<EnvStaleRefusal | null>(null);
+  const envSaveCallbacks = (rowKey: string) => ({
     onSuccess: finishEnvSave,
-    onError: cancelEnvSave,
-  };
+    onError: (error: unknown) => {
+      cancelEnvSave();
+      if (staleWriteOf(error) === null) return;
+      setEnvStaleRefusal((current) => ({
+        key: rowKey,
+        seq: current === null ? 1 : current.seq + 1,
+      }));
+    },
+  });
 
   const onSavePath = (path: string): void => {
     if (shellPending) return;
@@ -424,15 +458,48 @@ function ShellSettingsPanelBody(props: {
     beginShellSave("flags");
     controller.revertShellArgs(config.path, shellSaveCallbacks("flags"));
   };
+  const personalHostState = usePersonalHostState();
+  const [heldCredential, setHeldCredential] = useState<{
+    readonly oldKey: string;
+    readonly newKey: string;
+    readonly value: string;
+  } | null>(null);
   const onEnvCommit = (
     oldKey: string,
     newKey: string,
     value: string | null,
   ): void => {
     if (envPending) return;
+    if (
+      credentialRefusal !== null &&
+      (isCredentialShapedEnvName(newKey) ||
+        (value !== null && urlCarriesCredentials(value)))
+    ) {
+      return;
+    }
+    // Before anything is stored: a value that looks like a credential, on a
+    // host that hands variables to every host the person uses, asks first.
+    // While the host's status is not known yet it may be such a host, so it
+    // asks then too rather than storing first.
+    if (
+      (personalHostState?.kind === "ready" ||
+        personalHostState?.kind === "unknown") &&
+      value !== null &&
+      classifyCredential({ name: newKey, value }).credentialLike
+    ) {
+      setHeldCredential({ oldKey, newKey, value });
+      return;
+    }
+    storeEnv(oldKey, newKey, value);
+  };
+  const storeEnv = (
+    oldKey: string,
+    newKey: string,
+    value: string | null,
+  ): void => {
     beginEnvSave();
     if (oldKey === newKey) {
-      controller.setEnv({ key: newKey, value }, envSaveCallbacks);
+      controller.setEnv({ key: newKey, value }, envSaveCallbacks(oldKey));
       return;
     }
     // ONE call, not a set whose per-`mutate` `onSuccess` fires the delete.
@@ -442,12 +509,12 @@ function ShellSettingsPanelBody(props: {
     // the rename left two live variables. The controller owns the sequencing
     // now - create first, then drop, so a failed delete still leaves a
     // harmless duplicate rather than a lost value.
-    controller.renameEnv({ oldKey, newKey, value }, envSaveCallbacks);
+    controller.renameEnv({ oldKey, newKey, value }, envSaveCallbacks(oldKey));
   };
   const onEnvDelete = (key: string): void => {
     if (envPending) return;
     beginEnvSave();
-    controller.deleteEnv(key, envSaveCallbacks);
+    controller.deleteEnv(key, envSaveCallbacks(key));
   };
 
   return (
@@ -480,8 +547,24 @@ function ShellSettingsPanelBody(props: {
         pending={envPending}
         saveActive={envSaveActive}
         justSaved={envJustSaved}
+        credentialRefusal={credentialRefusal}
+        staleRefusal={envStaleRefusal}
         onCommit={onEnvCommit}
         onDelete={onEnvDelete}
+      />
+      <CredentialChoiceDialog
+        name={heldCredential?.newKey ?? null}
+        onKeepAsVariable={() => {
+          if (heldCredential !== null) {
+            storeEnv(
+              heldCredential.oldKey,
+              heldCredential.newKey,
+              heldCredential.value,
+            );
+          }
+          setHeldCredential(null);
+        }}
+        onDismiss={() => setHeldCredential(null)}
       />
     </div>
   );
@@ -866,6 +949,8 @@ function HostEnvironmentGroup(props: {
   readonly pending: boolean;
   readonly saveActive: boolean;
   readonly justSaved: boolean;
+  readonly credentialRefusal: string | null;
+  readonly staleRefusal: EnvStaleRefusal | null;
   readonly onCommit: (
     oldKey: string,
     newKey: string,
@@ -873,6 +958,8 @@ function HostEnvironmentGroup(props: {
   ) => void;
   readonly onDelete: (key: string) => void;
 }) {
+  const rowNotes = usePersonalRowNotes("variable");
+  const personalHostState = usePersonalHostState();
   return (
     <SettingsGroup
       group={SHELL.definitions.hostEnvironment}
@@ -885,7 +972,7 @@ function HostEnvironmentGroup(props: {
         <TransientSaveLiveStatus
           pending={props.pending ? props.saveActive : false}
           saved={props.justSaved}
-          label="Host environment"
+          label="Variables"
         />
         <div
           className={cn(
@@ -894,9 +981,22 @@ function HostEnvironmentGroup(props: {
             props.compact ? "px-4 py-2.5" : "px-5 py-3",
           )}
         >
-          <p className="text-ui-xs text-muted-foreground">
-            Per-provider environment variables live in Settings → Providers.
-          </p>
+          <div className="flex min-w-0 flex-col gap-0.5">
+            <p className="text-ui-xs text-muted-foreground">
+              Per-provider variables live in Settings → Providers.
+            </p>
+            {/* This page edits this host's own operating system; a value for
+                another one is set where every host is listed. */}
+            {personalHostState?.kind === "ready" ? (
+              <p
+                data-testid="other-os-values-note"
+                className="text-ui-xs text-muted-foreground"
+              >
+                Values and shells for other operating systems are set in the
+                dashboard.
+              </p>
+            ) : null}
+          </div>
           <TransientSaveIndicator
             pending={props.pending ? props.saveActive : false}
             saved={props.justSaved}
@@ -905,10 +1005,16 @@ function HostEnvironmentGroup(props: {
         </div>
         <div className={props.compact ? "p-4" : "p-5"}>
           <EnvOverrideEditor
+            rowNotes={rowNotes}
             overrides={props.overrides}
             disabled={props.pending}
-            namePlaceholder="OPENAI_API_KEY"
-            emptyLabel="No host environment variables. The host starts with the environment your shell produces."
+            credentialRefusal={props.credentialRefusal}
+            // No key-shaped hint on a host that takes no credentials.
+            namePlaceholder={
+              props.credentialRefusal === null ? "OPENAI_API_KEY" : "NODE_ENV"
+            }
+            emptyLabel="Variables are plain values every host gets. Add a variable."
+            staleRefusal={props.staleRefusal}
             onCommit={props.onCommit}
             onDelete={props.onDelete}
           />

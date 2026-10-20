@@ -3,7 +3,6 @@ import { Globe2, SendHorizontal, Wrench } from "lucide-react";
 import { useCallback, useMemo } from "react";
 import type { ReactNode } from "react";
 import type {
-  AgentMessageDelivery,
   AgentMessageReceipt,
   AgentMessageSend,
   BackgroundTaskOutput,
@@ -13,11 +12,6 @@ import type {
   ToolCallPageStamp,
 } from "@traycer/protocol/persistence/epic/content-blocks";
 import { useChatTranscriptJumpStore } from "@/stores/chats/chat-transcript-jump-store";
-import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
-import {
-  a2aSendDeliveryView,
-  type A2ASendDeliveryView,
-} from "./a2a-send-delivery";
 import type { SegmentEndState } from "@/stores/composer/chat-store";
 import { deriveA2ASendCollapsibleKey } from "@/components/chat/chat-collapsible-key";
 import { chatFindA2ASendBodyUnitId } from "@/components/chat/chat-find";
@@ -34,6 +28,7 @@ import { cn } from "@/lib/utils";
 import { collapseToSingleLine } from "@/lib/text/format-single-line";
 import { toolHeaderLine } from "@traycer/protocol/host/agent/gui/tool-input-summary";
 import { AgentHeaderLink } from "./agent-header-link";
+import { a2aSendRefusalSentence } from "./a2a-send-refusal";
 import { AgentMessageBody } from "./agent-message-body";
 import { ReplyExpectedIcon, ReplyExpectedNote } from "./reply-expected";
 import { SegmentCard } from "./segment-card";
@@ -63,6 +58,7 @@ import { isTraycerBrowserReplToolName } from "@traycer/protocol/host/agent/gui/b
 import { isPageToolCall } from "@/components/chat/chat-activity-groups";
 import { McpAppRow } from "./mcp-app-row";
 import { PageRow } from "./page-row";
+import { ToolImageGallery } from "./tool-image-gallery";
 
 interface ToolSegmentProps {
   id: string;
@@ -79,9 +75,6 @@ interface ToolSegmentProps {
   // Where that send landed in the receiver's transcript, stamped at
   // completion. Non-null lets the receiver link jump to the exact row.
   agentMessageReceipt: AgentMessageReceipt | null;
-  // Where a cross-host send stands. Non-null turns the card from "sent" into
-  // queued / delivered / not-delivered for the receiving host.
-  agentMessageDelivery: AgentMessageDelivery | null;
   isStreaming: boolean;
   // Terminal outcome when the turn ended mid-call (else null): drives a neutral
   // "stopped"/"superseded" badge instead of a spinner.
@@ -409,6 +402,11 @@ function GenericToolSegment(props: ToolSegmentProps) {
     progress,
     stackedHeader,
   });
+  const imageGallery = genericToolImageGallery(
+    props.id,
+    toolName,
+    props.imageResults,
+  );
 
   const header = (
     <GenericToolHeader
@@ -458,7 +456,7 @@ function GenericToolSegment(props: ToolSegmentProps) {
         headerFindUnitId={props.headerFindUnitId}
         bodyFindUnitId={null}
         className={undefined}
-        footer={streamingFooter}
+        footer={renderToolFooter(streamingFooter, imageGallery)}
       />
     );
   }
@@ -468,8 +466,8 @@ function GenericToolSegment(props: ToolSegmentProps) {
       onOpenChange={setOpen}
       header={header}
       headerAction={null}
-      collapsedPreview={null}
-      body={body}
+      collapsedPreview={imageGallery}
+      body={renderToolCardBody(body, imageGallery)}
       tone={toolCardTone(hasError, isStreaming)}
       headerPosition="normal"
       bodyOverflow="hidden"
@@ -478,6 +476,41 @@ function GenericToolSegment(props: ToolSegmentProps) {
       bodyFindUnitId={null}
       className={undefined}
     />
+  );
+}
+
+function genericToolImageGallery(
+  id: string,
+  toolName: string,
+  imageResults: ReadonlyArray<ImageGenerationResult>,
+): ReactNode {
+  if (toolName === "image_generation" || imageResults.length === 0) return null;
+  return <ToolImageGallery id={id} imageResults={imageResults} />;
+}
+
+function renderToolFooter(
+  streamingFooter: ReactNode,
+  imageGallery: ReactNode,
+): ReactNode {
+  if (streamingFooter === null && imageGallery === null) return null;
+  return (
+    <div className="flex flex-col gap-2">
+      {streamingFooter}
+      {imageGallery}
+    </div>
+  );
+}
+
+function renderToolCardBody(
+  body: ReactNode,
+  imageGallery: ReactNode,
+): ReactNode {
+  if (imageGallery === null) return body;
+  return (
+    <div className="flex flex-col gap-2">
+      {body}
+      {imageGallery}
+    </div>
   );
 }
 
@@ -749,21 +782,25 @@ function A2ASendToolSegment(
     [collapsibleKey, id, setFindForcedOpen, setOpen],
   );
   const hasError = error !== null && error.length > 0;
+  // A same-principal refusal is not a fault: it is the host's sentence, already
+  // chosen by whether the person may open the target, and it shows as written
+  // instead of as a raw error dump.
+  const refusal = a2aSendRefusalSentence(error);
+  const showsFault = hasError && refusal === null;
+  // A refusal gets the ordinary end-state badge, not the error one: the send
+  // was answered with a sentence, not broken.
   const badgeState = resolveToolBadgeState({
-    hasError,
+    hasError: showsFault,
     isBackgroundComplete: false,
     isStreaming,
     isStopped: false,
   });
+  const refusalLine =
+    refusal === null ? null : <A2ASendRefusalLine sentence={refusal} />;
   const { name: receiverName, onOpen: openReceiver } = useA2ASendReceiver(
     send,
     receipt,
   );
-  const delivery = useA2ASendDeliveryPresentation(
-    props.agentMessageDelivery,
-    hasError,
-  );
-  const destructive = hasError || delivery.undelivered;
 
   // The header is one row and the receiver name is the only element allowed
   // to shrink, so every fixed-width neighbour costs name characters on a
@@ -773,16 +810,18 @@ function A2ASendToolSegment(
   const header = (
     <>
       <SendHorizontal
-        className={cn("size-3.5 shrink-0", delivery.iconClassName)}
+        className={cn(
+          "size-3.5 shrink-0",
+          showsFault ? "text-destructive" : "text-primary",
+        )}
         aria-hidden
       />
-      <span className="sr-only">{delivery.srLabel}</span>
+      <span className="sr-only">Sent message</span>
       <span className="flex min-w-0 flex-1 items-center gap-1.5 text-ui-sm">
         <span className="shrink-0 text-muted-foreground">to</span>
         <AgentHeaderLink name={receiverName} onOpen={openReceiver} />
         {send.expectReply ? <ReplyExpectedIcon /> : null}
       </span>
-      {delivery.badge}
       <ToolBadge state={badgeState} endState={endState} />
       <ChatMessageTimestamp
         timestamp={props.startedAt}
@@ -792,22 +831,31 @@ function A2ASendToolSegment(
     </>
   );
 
-  const preview = (
-    <>
-      {delivery.note}
-      <AgentMessagePreview message={send.message} tone="primary" />
-    </>
+  const messagePreview = (
+    <AgentMessagePreview message={send.message} tone="primary" />
   );
+  // The card hides its preview while open, so the refusal rides both: it is
+  // read without opening the card, and stays once it is opened. The row has
+  // no preview; its footer shows the refusal open or closed.
+  const preview =
+    refusalLine === null ? (
+      messagePreview
+    ) : (
+      <div className="flex flex-col gap-1.5">
+        {refusalLine}
+        {messagePreview}
+      </div>
+    );
   const body = open ? (
     <div className="flex flex-col gap-2">
-      {delivery.note}
+      {variant === "row" ? null : refusalLine}
       {send.expectReply ? <ReplyExpectedNote /> : null}
       <AgentMessageBody
         value={send.message}
         bodyFindUnitId={bodyFindUnitId}
         isStreaming={isStreaming}
       />
-      {hasError ? (
+      {showsFault ? (
         <SegmentPanel
           label="Error"
           copyValue={error}
@@ -831,13 +879,13 @@ function A2ASendToolSegment(
         onOpenChange={handleOpenChange}
         header={header}
         body={body}
-        tone={destructive ? "destructive" : "default"}
+        tone={showsFault ? "destructive" : "default"}
         stickyHeader
         expandable
         headerFindUnitId={null}
         bodyFindUnitId={null}
         className={undefined}
-        footer={null}
+        footer={refusalLine}
       />
     );
   }
@@ -849,7 +897,7 @@ function A2ASendToolSegment(
       headerAction={null}
       collapsedPreview={preview}
       body={body}
-      tone={destructive ? "destructive" : "primary"}
+      tone={showsFault ? "destructive" : "primary"}
       headerPosition="normal"
       bodyOverflow="hidden"
       expandable
@@ -860,93 +908,14 @@ function A2ASendToolSegment(
   );
 }
 
-/** What the sent card shows for a send's delivery state, ready to render. */
-interface A2ASendDeliveryPresentation {
-  readonly undelivered: boolean;
-  readonly iconClassName: string;
-  readonly srLabel: string;
-  readonly badge: ReactNode;
-  readonly note: ReactNode;
-}
-
-function useA2ASendDeliveryPresentation(
-  delivery: AgentMessageDelivery | null,
-  hasError: boolean,
-): A2ASendDeliveryPresentation {
-  const hostEntry = useHostDirectoryEntry(delivery?.targetHostId ?? null);
-  if (delivery === null) {
-    return {
-      undelivered: false,
-      iconClassName: hasError ? "text-destructive" : "text-primary",
-      srLabel: "Sent message",
-      badge: null,
-      note: null,
-    };
-  }
-  const view = a2aSendDeliveryView(delivery, hostEntry?.label ?? null);
-  const undelivered = view.tone === "undelivered";
-  return {
-    undelivered,
-    iconClassName: deliveryIconClassName(view, hasError),
-    srLabel: view.srLabel,
-    // A call error already carries the error badge; a second tag would only
-    // repeat it.
-    badge:
-      view.badge === null || hasError ? null : (
-        <A2ADeliveryBadge label={view.badge} undelivered={undelivered} />
-      ),
-    note: <A2ADeliveryNote view={view} />,
-  };
-}
-
-function deliveryIconClassName(
-  view: A2ASendDeliveryView,
-  hasError: boolean,
-): string {
-  if (hasError || view.tone === "undelivered") return "text-destructive";
-  if (view.tone === "pending") return "text-muted-foreground";
-  return "text-primary";
-}
-
-// A foreground-alpha fill rather than `bg-muted`: the card this sits on is a
-// raised surface, where a muted fill collapses into the card in the preset
-// themes and the queued tag would vanish.
-function A2ADeliveryBadge(props: {
-  readonly label: string;
-  readonly undelivered: boolean;
-}) {
-  return (
-    <span
-      className={cn(
-        "shrink-0 rounded border px-1 text-overline font-medium uppercase",
-        props.undelivered
-          ? "border-destructive/40 bg-destructive/10 text-destructive"
-          : "border-border bg-foreground/8 text-muted-foreground",
-      )}
-    >
-      {props.label}
-    </span>
-  );
-}
-
-// `data-find-skip`: the note names the receiving device from the host
-// directory at paint time, which the find projection (a pure read of the
-// segment) cannot reproduce. Indexed without it, a query would count matches
-// the row cannot highlight; painted inside the row's anchor unindexed, a
-// query on its words would highlight text that counted no match. So find
-// reaches the message, as it always did, and not this status line.
-function A2ADeliveryNote(props: { readonly view: A2ASendDeliveryView }) {
+/** A refused send's sentence, verbatim: what happened, and what to do. */
+function A2ASendRefusalLine(props: { readonly sentence: string }) {
   return (
     <p
-      data-find-skip
-      className={cn(
-        "m-0 text-ui-xs leading-5",
-        props.view.tone === "undelivered"
-          ? "text-destructive"
-          : "text-muted-foreground",
-      )}
+      className="m-0 text-ui-sm text-muted-foreground"
+      data-testid="a2a-send-refusal"
     >
-      {props.view.note}
+      {props.sentence}
     </p>
   );
 }

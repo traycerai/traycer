@@ -1,66 +1,146 @@
-import { useId, useState, type ReactNode } from "react";
+import { useId, useMemo, useRef, useState, type ReactNode } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { useStore } from "zustand";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { HarnessModelPicker } from "@/components/home/pickers/harness-model-picker";
+import { chatMaxModeContextForToolbar } from "@/components/home/data/model-max-mode";
 import { useComposerToolbarStore } from "@/components/home/hooks/use-composer-toolbar-store";
 import { fallbackSeedSource } from "@/lib/composer/composer-seed-source";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
+import { useReactiveLocalHostId } from "@/hooks/host/use-reactive-local-host-id";
+import { useEffectiveHostId } from "@/hooks/host/use-effective-host-id";
+import { useHostsAdvertisingMethod } from "@/hooks/host/use-hosts-advertising-method";
 import { useBotCreateMutation } from "@/hooks/bots/use-bot-mutations";
+import type { HostEnvironmentBindings } from "@/hooks/bots/use-host-environment-bindings-query";
+import { chooseBotCreateHost } from "@/lib/home-bots/bot-create-host";
 import { useBotTabsStore } from "@/stores/bots/bot-tabs-store";
 import { botTabIntent, settingsTabIntent } from "@/lib/tab-navigation/intents";
 import { navigateToTabIntent } from "@/lib/tab-navigation";
+import {
+  HostRpcError,
+  mayHaveReachedHost,
+} from "@traycer-clients/shared/host-transport/host-messenger";
+import { finalRefusalOf } from "@traycer-clients/shared/host-transport/retrying-messenger";
 
 const BOT_TITLE_MAX = 500;
 
 /**
+ * The form's line for a failed create. Every create carries one request key
+ * per form (`requestKeyRef` below), and the cloud makes at most one bot per
+ * key, so submitting again after any failure never makes a second bot.
+ *
+ * - Not created: the host answered with a code the cloud's create only
+ *   answers before it writes anything (`NOT_CREATED_CODES`), no earlier
+ *   attempt of this call may have reached the host, and no earlier submit
+ *   under the same key may have created the bot (`earlierMayHaveCreated`).
+ *   A later refusal says nothing about what an earlier try did: membership
+ *   revoked between two tries refuses the second although the first made
+ *   the bot.
+ * - The key already made a bot this create cannot be answered with (the
+ *   fields were changed since, or that bot was deleted).
+ * - Anything else may have created the bot, and trying again is safe.
+ *
+ * The error's own text is never shown; the mutation cache logs it.
+ */
+const CREATE_UNCONFIRMED =
+  "Couldn't confirm the bot was created. Try again. It won't make a second bot.";
+const CREATE_REFUSED = "The bot wasn't created.";
+const CREATE_KEY_REUSED =
+  "A bot from an earlier try was already created. Check your bots.";
+
+/**
+ * Host answers to `bot.create` that come before any write: the method is not
+ * served, the cloud refused the caller, or the cloud refused the request. The
+ * host answers every cloud refusal of a create's fields as
+ * `E_INVALID_ARGUMENT`, and the cloud's create is one transaction, so a
+ * refusal wrote nothing.
+ */
+const NOT_CREATED_CODES: ReadonlySet<string> = new Set([
+  "E_HOST_UNSUPPORTED",
+  "FORBIDDEN",
+  "E_INVALID_ARGUMENT",
+]);
+
+/** What one failed submit says about the bot, on its own. */
+type CreateFailure = "key-reused" | "not-created" | "unknown";
+
+function classifyCreateFailure(error: unknown): CreateFailure {
+  const refusal = finalRefusalOf(error);
+  if (
+    refusal instanceof HostRpcError &&
+    refusal.code === "E_BOT_REQUEST_KEY_REUSED"
+  ) {
+    return "key-reused";
+  }
+  if (
+    !mayHaveReachedHost(error) &&
+    error instanceof HostRpcError &&
+    NOT_CREATED_CODES.has(error.code)
+  ) {
+    return "not-created";
+  }
+  return "unknown";
+}
+
+function createFailureLine(
+  error: Error,
+  earlierMayHaveCreated: boolean,
+): string {
+  const failure = classifyCreateFailure(error);
+  if (failure === "key-reused") return CREATE_KEY_REUSED;
+  if (failure === "not-created" && !earlierMayHaveCreated) {
+    return CREATE_REFUSED;
+  }
+  return CREATE_UNCONFIRMED;
+}
+
+/**
  * Creates a bot INTO one environment (Tracy Bots). The environment is the
- * card's and is sent explicitly; what the reader chooses here is the title,
- * the model, and - when more than one of their hosts runs this environment -
- * which host the bot's trunk starts on. A host that runs a different
- * environment is not offered, because the host, not the form, decides what
- * environment it serves; that is changed in Settings.
+ * card's and is sent explicitly; what the reader chooses here is the title
+ * and the model. Never the machine: the app picks the host the bot starts on
+ * (`chooseBotCreateHost`, which documents the order), and the form names no
+ * host - when none qualifies it says the bot needs a machine that runs bots,
+ * and where to set one up.
  *
  * The create goes to the chosen host's own client, and the tab the success
- * opens binds to that host for life.
+ * opens binds to that host.
  */
 export function CreateBotForm(props: {
   readonly environmentId: string;
   readonly environmentLabel: string;
-  /** Connectable hosts whose `environment.host.read` names this environment. */
-  readonly boundHostIds: ReadonlyArray<string>;
-  /** Every connectable host has answered; false while one is still asked. */
-  readonly bindingsResolved: boolean;
-  /** Connectable hosts whose environment could not be read: not offered, and
-   * said so, since a host that could not be asked may well run this one. */
-  readonly failedHostIds: ReadonlyArray<string>;
-  readonly onRetryFailedHosts: () => void;
-  readonly hostLabels: ReadonlyMap<string, string>;
+  /** Hosts this client can dial now; the candidates the choice walks. */
+  readonly connectableHostIds: ReadonlyArray<string>;
+  /** Each connectable host's environment, as `environment.host.read` says. */
+  readonly environmentBindings: HostEnvironmentBindings;
   readonly onDone: () => void;
 }): ReactNode {
   const {
     environmentId,
     environmentLabel,
-    boundHostIds,
-    bindingsResolved,
-    failedHostIds,
-    onRetryFailedHosts,
-    hostLabels,
+    connectableHostIds,
+    environmentBindings,
     onDone,
   } = props;
   const [title, setTitle] = useState("");
-  const [pickedHostId, setPickedHostId] = useState<string | null>(null);
-  const hostId = resolveHostChoice(boundHostIds, pickedHostId);
+  const localHostId = useReactiveLocalHostId();
+  const effectiveHostId = useEffectiveHostId();
+  const creatingHostIds = useHostsAdvertisingMethod(
+    connectableHostIds,
+    "bot.create",
+  );
+  const choice = chooseBotCreateHost({
+    environmentId,
+    localHostId,
+    effectiveHostId,
+    connectableHostIds,
+    bindings: environmentBindings.byHostId,
+    failedHostIds: environmentBindings.failedHostIds,
+    creatingHostIds,
+  });
+  const hostId = choice.kind === "chosen" ? choice.hostId : null;
   const namedClient = useHostClientForHostId(hostId);
   const client = hostId === null ? null : namedClient;
   const toolbarStore = useComposerToolbarStore(
@@ -77,7 +157,23 @@ export function CreateBotForm(props: {
     },
   );
   const modelSlug = useStore(toolbarStore, (s) => s.selection.modelSlug);
+  const reasoning = useStore(toolbarStore, (s) => s.reasoning);
+  // Bot creation persists no service tier; the trunk starts with Fast off.
+  const maxModeContext = useMemo(
+    () => chatMaxModeContextForToolbar(reasoning, ""),
+    [reasoning],
+  );
   const create = useBotCreateMutation(client);
+  // One key for every submit of this form until a create succeeds: a retry
+  // after an unknown outcome names the same key, so the cloud answers it with
+  // the bot the first try made instead of making a second. Kept across edits
+  // too: an edited retry of a create that did go through is refused rather
+  // than made twice.
+  const requestKeyRef = useRef<string | null>(null);
+  // Whether a submit under the current key may have created the bot: set by
+  // every failure that is not a refusal before any write, cleared with the
+  // key. While set, a later refusal cannot say the bot was not created.
+  const [earlierMayHaveCreated, setEarlierMayHaveCreated] = useState(false);
   const openBotTab = useBotTabsStore((s) => s.openBotTab);
   const navigate = useNavigate();
   const titleId = useId();
@@ -93,14 +189,17 @@ export function CreateBotForm(props: {
   const submit = (): void => {
     if (!canSubmit) return;
     const toolbar = toolbarStore.getState();
+    requestKeyRef.current ??= crypto.randomUUID();
+    const requestKey = requestKeyRef.current;
     // `mutateAsync`, not per-call `mutate` callbacks: those are dropped once
     // the component unmounts, and a form that is closed (or whose group
     // re-renders away) mid-create would still create the bot and never open
-    // its tab. The continuation below holds no component state - the store
-    // action and the router navigate are both module-level - so it runs
+    // its tab. The continuation below reads no component state - the store
+    // action and the router navigate are both module-level, and writing the
+    // key ref or the latch of an unmounted form is a no-op - so it runs
     // whatever happened to the form. A failure is already surfaced by the
-    // mutation's own error channel (toast + the inline line), so the
-    // rejection is swallowed here.
+    // mutation's own error channel (toast + the inline line); here it only
+    // updates the latch.
     void create
       .mutateAsync({
         environmentId,
@@ -109,20 +208,31 @@ export function CreateBotForm(props: {
         model: toolbar.selection.modelSlug,
         effort: toolbar.reasoning.length === 0 ? null : toolbar.reasoning,
         profile: toolbar.selection.profileId,
+        requestKey,
       })
-      .then((response) => {
-        openBotTab({
-          botId: response.bot.botId,
-          hostId,
-          title: response.bot.title,
-        });
-        onDone();
-        navigateToTabIntent(
-          navigate,
-          botTabIntent(response.bot.botId),
-          undefined,
-        );
-      })
+      .then(
+        (response) => {
+          // The create is done: the next one this form makes is another bot.
+          requestKeyRef.current = null;
+          setEarlierMayHaveCreated(false);
+          openBotTab({
+            botId: response.bot.botId,
+            hostId,
+            title: response.bot.title,
+          });
+          onDone();
+          navigateToTabIntent(
+            navigate,
+            botTabIntent(response.bot.botId),
+            undefined,
+          );
+        },
+        (error: unknown) => {
+          if (classifyCreateFailure(error) !== "not-created") {
+            setEarlierMayHaveCreated(true);
+          }
+        },
+      )
       .catch(() => undefined);
   };
 
@@ -147,40 +257,20 @@ export function CreateBotForm(props: {
           onChange={(event) => setTitle(event.target.value)}
         />
       </div>
-      <CreateBotHostField
-        environmentLabel={environmentLabel}
-        boundHostIds={boundHostIds}
-        bindingsResolved={bindingsResolved}
-        hostLabels={hostLabels}
-        hostId={hostId}
-        disabled={create.isPending}
-        onPick={setPickedHostId}
-      />
-      {failedHostIds.length === 0 ? null : (
-        <p
-          role="status"
-          className="text-ui-xs text-muted-foreground"
-          data-testid="create-bot-failed-hosts"
-        >
-          Couldn&apos;t read which environment{" "}
-          {failedHostIds.map((id) => hostLabels.get(id) ?? id).join(", ")}{" "}
-          {failedHostIds.length === 1 ? "runs" : "run"}, so{" "}
-          {failedHostIds.length === 1 ? "it is" : "they are"} not offered.{" "}
-          <Button
-            type="button"
-            variant="link"
-            size="xs"
-            onClick={onRetryFailedHosts}
-          >
-            Retry
-          </Button>
-        </p>
+      {choice.kind === "chosen" ? null : (
+        <CreateBotNoHost
+          checking={choice.kind === "checking"}
+          environmentLabel={environmentLabel}
+          someUnchecked={environmentBindings.failedHostIds.length > 0}
+          onRetry={environmentBindings.retryFailed}
+        />
       )}
       <div className="flex flex-col gap-1">
         <span className="text-ui-xs text-muted-foreground">Model</span>
         <div className="flex min-w-0">
           <HarnessModelPicker
             labelDisplay="responsive"
+            maxModeContext={maxModeContext}
             store={toolbarStore}
             withServiceTier={false}
             withReasoning
@@ -198,7 +288,7 @@ export function CreateBotForm(props: {
       </div>
       {create.error === null ? null : (
         <p role="alert" className="text-ui-xs text-destructive">
-          {create.error.message}
+          {createFailureLine(create.error, earlierMayHaveCreated)}
         </p>
       )}
       <div className="flex items-center justify-end gap-2">
@@ -232,102 +322,52 @@ export function CreateBotForm(props: {
 }
 
 /**
- * The host the create goes to: the reader's pick while it is still one of
- * the bound hosts, else the first bound host, else none.
+ * Said in place of a host when the choice found none, or is still asking:
+ * what the bot needs and where to set it up, never which machines were
+ * looked at.
  */
-function resolveHostChoice(
-  boundHostIds: ReadonlyArray<string>,
-  pickedHostId: string | null,
-): string | null {
-  if (pickedHostId !== null && boundHostIds.includes(pickedHostId)) {
-    return pickedHostId;
-  }
-  return boundHostIds.length > 0 ? boundHostIds[0] : null;
-}
-
-function CreateBotHostField(props: {
+function CreateBotNoHost(props: {
+  readonly checking: boolean;
   readonly environmentLabel: string;
-  readonly boundHostIds: ReadonlyArray<string>;
-  readonly bindingsResolved: boolean;
-  readonly hostLabels: ReadonlyMap<string, string>;
-  readonly hostId: string | null;
-  readonly disabled: boolean;
-  readonly onPick: (hostId: string) => void;
+  readonly someUnchecked: boolean;
+  readonly onRetry: () => void;
 }): ReactNode {
-  const {
-    environmentLabel,
-    boundHostIds,
-    bindingsResolved,
-    hostLabels,
-    hostId,
-    disabled,
-    onPick,
-  } = props;
+  const { checking, environmentLabel, someUnchecked, onRetry } = props;
   const navigate = useNavigate();
-  const fieldId = useId();
-  if (hostId === null) {
-    if (!bindingsResolved) {
-      return (
-        <p className="text-ui-xs text-muted-foreground" aria-busy="true">
-          Checking which hosts run {environmentLabel}…
-        </p>
-      );
-    }
+  if (checking) {
     return (
-      <p
-        className="text-ui-xs text-muted-foreground"
-        data-testid="create-bot-no-host"
-      >
-        None of your connected hosts runs {environmentLabel}. A host runs one
-        environment at a time; choose it in{" "}
-        <Button
-          type="button"
-          variant="link"
-          size="xs"
-          onClick={() =>
-            navigateToTabIntent(
-              navigate,
-              settingsTabIntent("agents"),
-              undefined,
-            )
-          }
-        >
-          Settings
-        </Button>
-        .
-      </p>
-    );
-  }
-  if (boundHostIds.length === 1) {
-    return (
-      <p
-        className="text-ui-xs text-muted-foreground"
-        data-testid="create-bot-host"
-      >
-        Runs on {hostLabels.get(hostId) ?? hostId}
+      <p className="text-ui-xs text-muted-foreground" aria-busy="true">
+        Finding a machine that runs {environmentLabel}&apos;s bots…
       </p>
     );
   }
   return (
-    <div className="flex flex-col gap-1">
-      <Label htmlFor={fieldId}>Runs on</Label>
-      <Select value={hostId} onValueChange={onPick} disabled={disabled}>
-        <SelectTrigger
-          id={fieldId}
-          size="sm"
-          className="w-full"
-          data-testid="create-bot-host"
-        >
-          <SelectValue />
-        </SelectTrigger>
-        <SelectContent>
-          {boundHostIds.map((id) => (
-            <SelectItem key={id} value={id}>
-              {hostLabels.get(id) ?? id}
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
-    </div>
+    <p
+      className="text-ui-xs text-muted-foreground"
+      data-testid="create-bot-no-host"
+    >
+      This bot needs a machine that runs bots for {environmentLabel}. Set one up
+      in{" "}
+      <Button
+        type="button"
+        variant="link"
+        size="xs"
+        onClick={() =>
+          navigateToTabIntent(navigate, settingsTabIntent("host"), undefined)
+        }
+      >
+        Settings
+      </Button>
+      .
+      {someUnchecked ? (
+        <span data-testid="create-bot-unchecked">
+          {" "}
+          Some of your machines couldn&apos;t be checked.{" "}
+          <Button type="button" variant="link" size="xs" onClick={onRetry}>
+            Retry
+          </Button>
+        </span>
+      ) : null}
+    </p>
   );
 }

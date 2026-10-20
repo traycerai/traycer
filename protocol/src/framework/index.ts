@@ -64,6 +64,17 @@ export type {
   WorktreeBusyOwnerRef,
   WorktreeHoldersChangedErrorDetails,
 } from "./worktree-busy-holders";
+export type {
+  EnvironmentChangedBy,
+  EnvironmentStaleWrite,
+} from "./environment-stale-write";
+export {
+  ENVIRONMENT_WRITE_STALE_CODE,
+  environmentChangedBySchema,
+  environmentStaleWriteSchema,
+  staleWriteForCode,
+  staleWriteWireFieldSchema,
+} from "./environment-stale-write";
 export {
   HOLDERS_REVISION_DIGEST_PATTERN,
   holdersRevisionWireFieldSchema,

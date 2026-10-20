@@ -1,17 +1,18 @@
-import { homedir } from "node:os";
 import { join } from "node:path";
+import { traycerDataRoot } from "./data-root";
 
 /**
- * `~/.traycer/cli/` - the shared CLI surface. Environment-agnostic: a
+ * `<data root>/cli/` (`~/.traycer/cli/` by default) - the shared CLI surface. Environment-agnostic: a
  * user's shell + env config is shared between prod and dev installs. The
  * CLI (`traycer config …`) and the host (terminal PTY spawns) both read
  * and write the single `config.json` underneath it.
  *
- * Resolved with `os.homedir()` + `path.join` so it is correct on Windows
- * too - the host and CLI both run there; never hand-build `~/` strings.
+ * Resolved from the shared data root + `path.join` so it is correct on
+ * Windows too - the host and CLI both run there; never hand-build `~/`
+ * strings.
  */
 export function cliConfigDir(): string {
-  return join(homedir(), ".traycer", "cli");
+  return join(traycerDataRoot(), "cli");
 }
 
 export function cliConfigPath(): string {

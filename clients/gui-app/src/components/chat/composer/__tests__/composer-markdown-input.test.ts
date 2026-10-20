@@ -4,6 +4,9 @@ import { Editor } from "@tiptap/core";
 import { jsonContentToMarkdown } from "@traycer/protocol/common/json-content-serializer";
 
 import { insertImageAttachmentsCommand } from "@/hooks/composer/use-composer-paste";
+import type { JsonContent } from "@traycer/protocol/common/registry";
+import { artifactDocumentBundle } from "@/editor-core/artifact-document-bundle";
+import { recoveryTextFromContent } from "@/lib/composer/content-recovery";
 import { buildSubmittedChatJSONContent } from "@/lib/composer/tiptap-json-content";
 import { buildComposerExtensions } from "../editor/editor-config";
 import type { ImageAttachmentAttrs } from "../editor/extensions/image-attachment-extension";
@@ -559,3 +562,208 @@ function typeChar(editor: Editor, char: string): void {
     editor.view.dispatch(defaultTransaction());
   }
 }
+
+// The recovery text a failed send puts back is pasted through the composer's
+// own paste path, so the request that goes out again has to be the one that
+// failed.
+function pasteText(editor: Editor, text: string): void {
+  fireEvent.paste(editor.view.dom, {
+    clipboardData: {
+      files: [],
+      items: [],
+      types: ["text/plain"],
+      getData: (type: string) => (type === "text/plain" ? text : ""),
+    },
+  });
+}
+
+const PROMPT_OPTIONS = { mentionFormat: "llm", platform: "POSIX" } as const;
+
+function paragraphDoc(text: string): JsonContent {
+  return {
+    type: "doc",
+    content: [{ type: "paragraph", content: [{ type: "text", text }] }],
+  };
+}
+
+function orderedItemDoc(text: string): JsonContent {
+  return {
+    type: "doc",
+    content: [
+      {
+        type: "orderedList",
+        attrs: { start: 1 },
+        content: [
+          {
+            type: "listItem",
+            content: [{ type: "paragraph", content: [{ type: "text", text }] }],
+          },
+        ],
+      },
+    ],
+  };
+}
+
+function bulletItemDoc(text: string): JsonContent {
+  return {
+    type: "doc",
+    content: [
+      {
+        type: "bulletList",
+        content: [
+          {
+            type: "listItem",
+            content: [{ type: "paragraph", content: [{ type: "text", text }] }],
+          },
+        ],
+      },
+    ],
+  };
+}
+
+function pastedRecovery(doc: JsonContent): Editor {
+  const { editor } = makeFixture();
+  pasteText(editor, recoveryTextFromContent(doc));
+  return editor;
+}
+
+describe("recovery text pastes back to the same request", () => {
+  function sentBytes(editor: Editor): string {
+    return jsonContentToMarkdown(
+      buildSubmittedChatJSONContent(editor.getJSON(), null),
+      PROMPT_OPTIONS,
+    );
+  }
+
+  function boldTexts(node: JsonContent): string[] {
+    const own = (node.marks ?? []).some((mark) => mark.type === "bold")
+      ? [node.text ?? ""]
+      : [];
+    return [...own, ...(node.content ?? []).flatMap(boldTexts)];
+  }
+
+  for (const typed of ["1. x", "- x", "---"]) {
+    it(`paste → send keeps the request for the paragraph "${typed}"`, () => {
+      const doc = paragraphDoc(typed);
+      expect(sentBytes(pastedRecovery(doc))).toBe(
+        jsonContentToMarkdown(doc, PROMPT_OPTIONS),
+      );
+    });
+  }
+
+  for (const typed of ["1. x", "- x", "---"]) {
+    it(`paste → send makes the agent read the same markdown for an ordered item whose text is "${typed}"`, () => {
+      const doc = orderedItemDoc(typed);
+      const editor = pastedRecovery(doc);
+      expect(
+        artifactDocumentBundle.markdownManager.parse(sentBytes(editor)),
+      ).toEqual(
+        artifactDocumentBundle.markdownManager.parse(
+          jsonContentToMarkdown(doc, PROMPT_OPTIONS),
+        ),
+      );
+      expect(editor.state.doc.textContent).toContain(
+        typed.replace(/^[-1.]+ /, ""),
+      );
+    });
+  }
+
+  for (const rule of ["---", "***", "* * *"]) {
+    it(`paste keeps the rule "${rule}" as text in the composer`, () => {
+      const { editor } = makeFixture();
+      pasteText(editor, rule);
+      expect(editor.state.doc.textContent).toBe(rule);
+    });
+  }
+
+  it("paste → send keeps the text of a top-level heading as bold text", () => {
+    const editor = pastedRecovery(paragraphDoc("# h"));
+    expect(editor.state.doc.textContent).toContain("h");
+    expect(boldTexts(editor.getJSON())).toContain("h");
+  });
+
+  it("paste → send keeps the text of a heading as an ordered item's first line as bold text", () => {
+    const editor = pastedRecovery(orderedItemDoc("# h"));
+    expect(editor.state.doc.textContent).toContain("h");
+    expect(boldTexts(editor.getJSON())).toContain("h");
+  });
+
+  it("paste → send keeps the text of a top-level quote", () => {
+    const editor = pastedRecovery(paragraphDoc("> q"));
+    expect(editor.state.doc.textContent).toContain("q");
+  });
+
+  it("paste → send keeps the text of a quote as an ordered item's first line", () => {
+    const editor = pastedRecovery(orderedItemDoc("> q"));
+    expect(editor.state.doc.textContent).toContain("q");
+  });
+
+  it("paste → send keeps the text of a paragraph that reads as an ordered item with indented code", () => {
+    const editor = pastedRecovery(paragraphDoc("1.      a"));
+    expect(editor.state.doc.textContent).toContain("a");
+  });
+});
+
+type PasteOutcome = "identical" | "read-equivalent" | "exception";
+
+// Each cell is exactly one outcome: identical (byte-equal send), read-equivalent
+// (different bytes the patched parser reads as the same JSON, no text dropped)
+// or exception (the composer rewrites the text by design; the text survives).
+const OUTCOME_ROWS: ReadonlyArray<
+  readonly [string, string, ReadonlyArray<PasteOutcome>]
+> = [
+  ["# h", "h", ["exception", "exception", "exception"]],
+  ["1. x", "x", ["identical", "identical", "read-equivalent"]],
+  ["- x", "x", ["identical", "read-equivalent", "read-equivalent"]],
+  ["---", "---", ["identical", "identical", "identical"]],
+  ["> q", "q", ["exception", "exception", "exception"]],
+  ["1.      a", "a", ["read-equivalent", "identical", "read-equivalent"]],
+];
+
+const POSITIONS: ReadonlyArray<
+  readonly [string, (text: string) => JsonContent]
+> = [
+  ["top level", paragraphDoc],
+  ["a bullet item", bulletItemDoc],
+  ["an ordered first line", orderedItemDoc],
+];
+
+describe("paste → send outcome by position", () => {
+  for (const [typed, needle, outcomes] of OUTCOME_ROWS) {
+    POSITIONS.forEach(([position, build], index) => {
+      const outcome = outcomes[index];
+      it(`paste → send: "${typed}" at ${position} is ${outcome}`, () => {
+        const doc = build(typed);
+        const editor = pastedRecovery(doc);
+        const sent = jsonContentToMarkdown(
+          buildSubmittedChatJSONContent(editor.getJSON(), null),
+          PROMPT_OPTIONS,
+        );
+        const original = jsonContentToMarkdown(doc, PROMPT_OPTIONS);
+        const parser = artifactDocumentBundle.markdownManager;
+        const sameJson =
+          JSON.stringify(parser.parse(sent)) ===
+          JSON.stringify(parser.parse(original));
+        expect(editor.state.doc.textContent).toContain(needle);
+        if (outcome === "identical") {
+          expect(sent).toBe(original);
+        } else if (outcome === "read-equivalent") {
+          expect(sent).not.toBe(original);
+          expect(sameJson).toBe(true);
+        } else {
+          expect(sameJson).toBe(false);
+        }
+      });
+    });
+  }
+});
+
+describe("a pasted rule line keeps its spaces", () => {
+  for (const line of ["  ---  ", "   ***", " * * * ", "___  "]) {
+    it(`paste keeps ${JSON.stringify(line)} exactly in the composer`, () => {
+      const { editor } = makeFixture();
+      pasteText(editor, line);
+      expect(editor.state.doc.textContent).toBe(line);
+    });
+  }
+});

@@ -100,47 +100,6 @@ describe("agent create workspace CLI parsing", () => {
   });
 });
 
-// A folder name may end in whitespace, so a value is checked and resolved as
-// written, never trimmed.
-describe("agent create workspace CLI parsing: no trimming", () => {
-  it("keeps the trailing space of a --cwd", () => {
-    expect(
-      parseAgentCreateWorkspace({
-        cwd: "/srv/project ",
-        workspacePaths: [],
-        workspaceEntries: [],
-      }),
-    ).toEqual({ entries: [{ path: "/srv/project ", workspacePath: null }] });
-  });
-
-  it("keeps the trailing spaces of both halves of a --workspace-entry", () => {
-    expect(
-      parseAgentCreateWorkspace({
-        cwd: null,
-        workspacePaths: [],
-        workspaceEntries: ["/src/a =/run/b "],
-      }),
-    ).toEqual({
-      entries: [{ path: "/run/b ", workspacePath: "/src/a " }],
-    });
-  });
-
-  it.each(["   ", " /work"])("refuses %j as INVALID_ARGUMENT", (value) => {
-    let thrown: unknown = null;
-    try {
-      parseAgentCreateWorkspace({
-        cwd: value,
-        workspacePaths: [],
-        workspaceEntries: [],
-      });
-    } catch (error) {
-      thrown = error;
-    }
-    expect(thrown).toBeInstanceOf(CliError);
-    expect(thrown).toMatchObject({ code: CLI_ERROR_CODES.INVALID_ARGUMENT });
-  });
-});
-
 describe("agent create: relative path error", () => {
   function relativeCwdError(): CliError {
     try {

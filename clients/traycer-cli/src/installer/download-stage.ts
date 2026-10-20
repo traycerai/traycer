@@ -50,6 +50,7 @@ import {
   stageVerifiedSource,
 } from "./install";
 import { hashFileSha256 } from "./sha256";
+import { refuseOlderHostWhileDataMoved } from "./moved-data-root-guard";
 import { invalidateAsideDir } from "./aside-dirs";
 import { renameWithRetry } from "./rename-retry";
 import {
@@ -1019,6 +1020,16 @@ export async function resolveUpdatePlan(
   if (request.intent === "activate") return { kind: "activate", identity };
 
   if (request.intent === "continue") {
+    // A park can outlive a move of the data folder (the migration does not
+    // look at update attempts), and its target can be below the install (a
+    // downgrade park) or a registry build over a `local-*` one. A park whose
+    // swap already happened targets the installed version and passes.
+    refuseOlderHostWhileDataMoved({
+      command: "host update",
+      environment: opts.environment,
+      installedVersion: installed.version,
+      targetVersion: request.targetVersion,
+    });
     if (!request.needsTransfer) {
       return {
         kind: "resume",
@@ -1081,6 +1092,12 @@ export async function resolveUpdatePlan(
     // BOTH shapes the shared monotonic stage refuses: a target below the
     // record, and another build of the record's release.
     if (request.allowDowngrade && explicitOtherArtifact) {
+      refuseOlderHostWhileDataMoved({
+        command: "host update",
+        environment: opts.environment,
+        installedVersion: installed.version,
+        targetVersion,
+      });
       return { kind: "downgrade", targetVersion, identity };
     }
     // Refused, not a no-op. A no-op here exits 0 with the requested
@@ -1110,6 +1127,14 @@ export async function resolveUpdatePlan(
     }
     return { kind: "no-op", targetVersion, identity };
   }
+  // Below the target, or not orderable against it (a `local-*` install):
+  // both the stage-and-promote and the already-staged arm replace the install.
+  refuseOlderHostWhileDataMoved({
+    command: "host update",
+    environment: opts.environment,
+    installedVersion: installed.version,
+    targetVersion,
+  });
   if (
     identity.stageFingerprint !== null &&
     identity.stagedVersion === targetVersion

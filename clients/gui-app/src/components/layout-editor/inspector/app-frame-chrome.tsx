@@ -583,6 +583,7 @@ function AppFrameTaskTile(props: {
 export function AppFramePanelTaskHeader(): ReactNode {
   return (
     <PanelTaskHeaderBody
+      teamChip={null}
       testId={null}
       chip={<AppFrameTaskChip task={APP_FRAME_ACTIVE_TASK} />}
       title={APP_FRAME_ACTIVE_TASK.label}

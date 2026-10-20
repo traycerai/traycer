@@ -6,12 +6,13 @@ import {
   type KeyboardEvent,
   type ReactNode,
 } from "react";
+import { useLongPress } from "@/hooks/ui/use-long-press";
 import { cn } from "@/lib/utils";
 
 interface InlineTitleFieldProps {
   /** Title as it currently reads; also the value an edit starts from. */
   readonly value: string;
-  /** False renders plain text - the caller's kind/permission rules decide. */
+  /** False renders plain text - the caller's permission rule decides. */
   readonly editable: boolean;
   /** Fires only with a non-empty title that differs from `value`. */
   readonly onCommit: (next: string) => void;
@@ -22,9 +23,15 @@ interface InlineTitleFieldProps {
 }
 
 /**
- * A title that becomes its own text field in place: tap to edit, commit on blur
- * or Return, cancel on Escape. The title IS the control - it carries no edit
- * affordance of its own and opens no dialog.
+ * A title that becomes its own text field in place: press and hold to edit,
+ * commit on blur or Return, cancel on Escape. The title IS the control - it
+ * carries no edit affordance of its own and opens no dialog.
+ *
+ * A plain tap does nothing. The title sits beside the phone header's hamburger
+ * and fills the rest of the row, so a tap that misses the menu lands here; a
+ * one-tap rename turned every near miss into a selected name and a raised
+ * keyboard. Enter or Space on the focused title still opens the edit, so the
+ * keyboard route needs no hold.
  *
  * COMMIT ON BLUR is what makes this safe on a phone. The mobile shell dismisses
  * the soft keyboard by blurring the focused field when a tap lands outside it,
@@ -44,6 +51,12 @@ export function InlineTitleField(props: InlineTitleFieldProps): ReactNode {
   // Return and Escape both settle the edit and then drop focus; without this the
   // blur they cause would run the commit path a second time.
   const settledRef = useRef(false);
+  const startEdit = (): void => setDraft(value);
+  const longPress = useLongPress({
+    onLongPress: startEdit,
+    disabled: !editable || draft !== null,
+    acceptsMouse: true,
+  });
 
   const focusOnMount = useCallback((node: HTMLInputElement | null) => {
     if (node === null) return;
@@ -122,11 +135,19 @@ export function InlineTitleField(props: InlineTitleFieldProps): ReactNode {
   return (
     <button
       type="button"
-      onClick={() => setDraft(value)}
+      {...longPress.handlers}
+      onKeyDown={(event) => {
+        if (event.key !== "Enter" && event.key !== " ") return;
+        event.preventDefault();
+        startEdit();
+      }}
       data-testid={testId}
+      // `touch-chrome` on every pointer, not only coarse ones: the hold is
+      // the gesture here, and the platform's own hold behaviours (the iOS
+      // callout, a text selection under a held mouse) would claim it first.
       className={cn(
         className,
-        "cursor-text self-stretch rounded-sm text-left focus-visible:ring-1 focus-visible:ring-ring focus-visible:outline-hidden",
+        "touch-chrome self-stretch rounded-sm text-left focus-visible:ring-1 focus-visible:ring-ring focus-visible:outline-hidden",
       )}
     >
       {value}

@@ -4,6 +4,7 @@ import {
   type VirtuosoHandle,
 } from "react-virtuoso";
 import type { HarnessModelRow } from "@/components/home/data/harness-model-search";
+import type { MaxModeContext } from "@/components/home/data/model-max-mode";
 import type { GuiHarnessCatalogEntry } from "@/hooks/harnesses/use-gui-harness-catalog";
 import { HarnessModelPickerItem } from "@/components/home/pickers/harness-model-picker-item";
 import { ModelRowsState } from "@/components/home/pickers/harness-model-picker-empty";
@@ -17,6 +18,7 @@ interface HarnessModelPickerListProps {
   readonly listRef: RefObject<VirtuosoHandle | null>;
   readonly listKey: string;
   readonly rows: ReadonlyArray<HarnessModelRow>;
+  readonly maxModeContextKind: MaxModeContext["kind"];
   readonly selectedRowId: string;
   readonly activeRowId: string;
   readonly hoveredRowId: string;
@@ -34,6 +36,8 @@ interface HarnessModelPickerListProps {
   readonly terminalLoginSurface: ProviderTerminalLoginSurface | null;
   readonly runTargetHostId: string | null;
   readonly onClosePicker: () => void;
+  /** Every row listed but not selectable. */
+  readonly rowsDisabled: boolean;
 }
 
 export function HarnessModelPickerList(
@@ -45,6 +49,7 @@ export function HarnessModelPickerList(
     listRef,
     listKey,
     rows,
+    maxModeContextKind,
     selectedRowId,
     activeRowId,
     hoveredRowId,
@@ -62,6 +67,7 @@ export function HarnessModelPickerList(
     terminalLoginSurface,
     runTargetHostId,
     onClosePicker,
+    rowsDisabled,
   } = props;
 
   const stateRow = ModelRowsState({
@@ -122,9 +128,11 @@ export function HarnessModelPickerList(
               selected={row.id === selectedRowId}
               active={row.id === activeRowId}
               showCapacity={row.id === activeRowId || row.id === hoveredRowId}
+              maxModeContextKind={maxModeContextKind}
               onHover={onHover}
               onActive={onActive}
               onSelect={onSelect}
+              disabled={rowsDisabled}
             />
           </div>
         );

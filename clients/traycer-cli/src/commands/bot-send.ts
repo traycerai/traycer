@@ -23,7 +23,10 @@ import {
   type IStreamSession,
   type StreamFrameEnvelope,
 } from "@traycer/protocol/host-transport/stream-session";
-import type { OpenMessage } from "@traycer/protocol/persistence/epic/open-harness-records";
+import type {
+  OpenAssistantMessage,
+  OpenMessage,
+} from "@traycer/protocol/persistence/epic/open-harness-records";
 import { TRANSCRIPT_RANGE_MAX_BYTES } from "@traycer/protocol/persistence/chat-transcript/read-range";
 import {
   botHostUpdateError,
@@ -271,7 +274,6 @@ interface KnownRow {
 
 interface OutstandingRange {
   readonly epoch: number;
-  readonly fromOrdinal: number;
   readonly toOrdinal: number;
 }
 
@@ -625,7 +627,6 @@ class ReplyFollower {
     const requestId = randomUUID();
     this.outstanding.set(requestId, {
       epoch: this.epoch,
-      fromOrdinal,
       toOrdinal,
     });
     this.send({
@@ -716,8 +717,7 @@ export function touchedOrdinals(
   };
 }
 
-function replyText(message: OpenMessage): string {
-  if (message.role !== "assistant") return "";
+function replyText(message: OpenAssistantMessage): string {
   return message.blocks
     .map((block) => (block.type === "text" ? block.text : ""))
     .filter((text) => text.length > 0)

@@ -84,20 +84,20 @@ Fixed 15-byte header, big-endian:
 
 ### Frame types (`type`)
 
-| Value | Name                | streamId | Payload (json)                                                |
-| ----- | ------------------- | -------- | ------------------------------------------------------------- |
-| 1     | `OPEN`              | 0        | `{muxVersion, bearer, manifest, authz, resume}`               |
-| 2     | `OPEN_ACK`          | 0        | `{manifest, capabilities}`                                    |
-| 3     | `REQUEST`           | ≥1       | `{requestId, method, schemaVersion, params, idempotencyKey}`  |
-| 4     | `RESPONSE`          | ≥1       | `{requestId, method, result, error}`                          |
-| 5     | `SUBSCRIBE`         | ≥1       | `{method, schemaVersion, params}`                             |
-| 6     | `STREAM_FRAME`      | ≥1       | the stream envelope `{kind, hasBinaryPayload, …}` + binary    |
-| 7     | `CLOSE`             | ≥1       | `{reason}`                                                    |
-| 8     | `FATAL`             | 0 or ≥1  | `{details}` (`FatalErrorDetails`; streamId 0 = whole session) |
-| 9     | `CREDIT`            | 0        | `{credits}` (bulk send-window replenish)                      |
-| 10    | `REAUTH_NOTICE`     | 0        | `{standingUntil}` — host-standing evidence (R4-D2)            |
-| 11    | `RESUME`            | 0        | **RESERVED** (R4-E3 resume ticket) — not sent in v1           |
-| 12    | `CREDENTIAL_UPDATE` | 0        | `{bearer}` — in-place bearer rotation (capability-gated)      |
+| Value | Name                | streamId | Payload (json)                                                                                                                          |
+| ----- | ------------------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| 1     | `OPEN`              | 0        | `{muxVersion, bearer, manifest, authz, resume}`                                                                                         |
+| 2     | `OPEN_ACK`          | 0        | `{manifest, capabilities}`                                                                                                              |
+| 3     | `REQUEST`           | ≥1       | `{requestId, method, schemaVersion, params, idempotencyKey}`                                                                            |
+| 4     | `RESPONSE`          | ≥1       | `{requestId, method, result, error}`                                                                                                    |
+| 5     | `SUBSCRIBE`         | ≥1       | `{method, schemaVersion, params}`                                                                                                       |
+| 6     | `STREAM_FRAME`      | ≥1       | the stream envelope `{kind, hasBinaryPayload, …}` + binary                                                                              |
+| 7     | `CLOSE`             | ≥1       | `{reason}`                                                                                                                              |
+| 8     | `FATAL`             | 0 or ≥1  | `{details}` (`FatalErrorDetails`; streamId 0 = whole session)                                                                           |
+| 9     | `CREDIT`            | 0        | `{credits}` (bulk send-window replenish)                                                                                                |
+| 10    | `REAUTH_NOTICE`     | 0        | `{standingUntil}` — host-standing evidence (R4-D2)                                                                                      |
+| 11    | `RESUME`            | 0        | **RESERVED** (for resume) — not sent in v1                                                                                              |
+| 12    | `CREDENTIAL_UPDATE` | 0        | `{bearer, memberCredential}` — in-place bearer rotation, or a team host's member credential with `bearer: null` (each capability-gated) |
 
 `streamId` allocation: the client allocates monotonically from 1. A **subscribe
 streamId is stable for the subscription's life across resumes**; a **unary
@@ -144,6 +144,15 @@ every resume**:
   "capabilities": ["credentialUpdate"]         // additive; e.g. in-place bearer rotation
 }
 ```
+
+A team host's session-grant session offers `memberCredential` in place of
+`credentialUpdate`. The host spends only a member credential the client hands
+it after `OPEN_ACK`, so the client mints the member's credential and sends
+`CREDENTIAL_UPDATE {bearer: null, memberCredential}` as the first frame after
+the ack; the session is not ready, and carries no request or subscription,
+until that frame is enqueued. It does the same on every re-attach. A mint that
+fails is logged and the session goes on, so the host's own refusal names the
+cause.
 
 ### Manifest shape (floor / optional split)
 

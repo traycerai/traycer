@@ -48,12 +48,14 @@ const ASSISTANT_SENDER: AgentSender = {
 
 const displayContext: RenderedMessagesDisplayContext = {
   resolveUserSenderLabel: () => "You",
+  resolveUserSenderAvatarUrl: () => null,
   resolveAgentSenderDisplay: () => ({
     senderLabel: "Claude",
     providerLabel: "Claude Code",
     modelLabel: null,
   }),
   resolveAgentReasoningLabel: () => null,
+  resolveAgentServiceTierLabel: () => null,
   contentBlocksPreview: () => "",
 };
 
@@ -148,7 +150,6 @@ function toolCallWithImages(args: {
     agentMessageSend: null,
     managedCommand: null,
     agentMessageReceipt: null,
-    agentMessageDelivery: null,
     page: null,
     mcpApp: null,
     progress: null,

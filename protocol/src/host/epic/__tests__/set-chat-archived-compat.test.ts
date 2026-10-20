@@ -26,7 +26,7 @@ describe("epic.setChatArchived is optional, not floor", () => {
     expect(releasedMethodNames).not.toContain("epic.setChatArchived");
   });
 
-  it("advertises on the optional manifest at 1.0, not the floor manifest", () => {
+  it("advertises on the optional manifest at 1.1, not the floor manifest", () => {
     const split = splitConnectionManifest(
       hostRpcRegistry,
       RELEASED_FLOOR_METHOD_NAMES,
@@ -34,7 +34,7 @@ describe("epic.setChatArchived is optional, not floor", () => {
     );
     expect(split.optionalManifest["epic.setChatArchived"]).toEqual({
       major: 1,
-      minor: 0,
+      minor: 1,
       supportedMajors: [1],
     });
     expect(split.manifest["epic.setChatArchived"]).toBeUndefined();
@@ -97,19 +97,28 @@ describe("setChatArchivedRequestSchema", () => {
 describe("setChatArchivedResponseSchema", () => {
   it("accepts { updated: true }", () => {
     expect(
-      setChatArchivedResponseSchema.safeParse({ updated: true }).success,
+      setChatArchivedResponseSchema.safeParse({
+        updated: true,
+        outcome: "applied",
+      }).success,
     ).toBe(true);
   });
 
   it("accepts { updated: false }", () => {
     expect(
-      setChatArchivedResponseSchema.safeParse({ updated: false }).success,
+      setChatArchivedResponseSchema.safeParse({
+        updated: false,
+        outcome: "requested",
+      }).success,
     ).toBe(true);
   });
 
   it("rejects a wrong-typed updated flag", () => {
     expect(
-      setChatArchivedResponseSchema.safeParse({ updated: "true" }).success,
+      setChatArchivedResponseSchema.safeParse({
+        updated: "true",
+        outcome: "applied",
+      }).success,
     ).toBe(false);
   });
 });

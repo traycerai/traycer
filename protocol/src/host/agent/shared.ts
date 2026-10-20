@@ -12,6 +12,7 @@ import {
 } from "@traycer/protocol/host/agent-session-state";
 import { permissionModeSchema } from "@traycer/protocol/persistence/epic/foundation";
 import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
+import { lastKnownConnectivitySchema } from "@traycer/protocol/host/last-known-connectivity";
 
 export { DEFAULT_AGENT_MODE, agentModeSchema, type AgentMode };
 
@@ -1042,16 +1043,78 @@ export const agentSummarySchemaV92 = lazySchema(() =>
 );
 export type AgentSummaryV92 = z.infer<typeof agentSummarySchemaV92>;
 
+// ── `agent.list@10.1`: which profile and mode does this agent run on? ─────
+//
+// `agent.configure` takes the whole run tuple - `traycer agent configure`
+// requires `--profile`, and an omitted `--permission-mode` becomes
+// `full_access` - yet nothing a script could read named either half, so
+// restating an agent's tuple to change one part of it meant guessing the
+// rest. The host already reads both for the A2A `traycer_list_agents`
+// listing; the wire row had no key for them, so `traycer agent list --json`
+// lost them.
+//
+// Two plain added keys on a non-strict row, so a 10.0 caller's schema strips
+// them, and the nine major-10 downgrade bridges keep working unchanged - each
+// reparses through a frozen summary that drops the pair on the way out.
+
+/**
+ * The `agent.list@10.0` row, frozen when `@10.1` put the run tuple on the
+ * head. RELEASED (`host-v1.5.1` registers `@10.0`), so it never grows a key
+ * again. Hand-frozen off the released base, not `.omit()`ted off the live
+ * head, so a key added to the head cannot reach it; the harness id stays the
+ * live enum both minors share, as a minor may not grow it.
+ */
+export const agentSummarySchemaV100 = lazySchema(() =>
+  releasedAgentSummarySchema.extend({
+    runConfig: agentRunConfigSchema.nullable().default(null),
+    sessionState: agentSessionStateSchema.nullable(),
+    lastExit: agentSessionLastExitSchema.nullable(),
+    archived: z.boolean().nullable(),
+  }),
+);
+export type AgentSummaryV100 = z.infer<typeof agentSummarySchemaV100>;
+
+// ── `agent.list@10.2`: can a message from this host reach the agent? ───────
+//
+// Two more plain added keys on the non-strict row: `reach` and
+// `hostConnectivity`. A 10.1 caller's schema strips them, and the downgrade
+// bridges reparse through a frozen summary that drops them on the way out.
+
+/**
+ * The `agent.list@10.1` row, frozen when `@10.2` put `reach` and
+ * `hostConnectivity` on the head. Served by hosts built from `main` since the
+ * run tuple landed, so it never grows a key again. Built off the frozen
+ * `@10.0` row, so a key added to the head cannot reach it.
+ */
+export const agentSummarySchemaV101 = lazySchema(() =>
+  agentSummarySchemaV100.extend({
+    profile: z.string().nullable(),
+    permissionMode: permissionModeSchema.nullable(),
+  }),
+);
+export type AgentSummaryV101 = z.infer<typeof agentSummarySchemaV101>;
+
+/**
+ * Whether the answering host can reach the agent's host for the caller:
+ * `same_principal` when both hosts belong to one principal,
+ * `other_principal` when the agent's host is a collaborator's or another
+ * team's, `null` when this host cannot say (a host that predates the field).
+ */
+export const agentReachSchema = lazySchema(() =>
+  z.enum(["same_principal", "other_principal"]),
+);
+export type AgentReach = z.infer<typeof agentReachSchema>;
+
 // THE CANONICAL NAME STAYS ON THE HEAD, which is the rule
 // `head-names-canonical-alias.test.ts` enforces: writing the new row under a
 // suffix would leave `agentSummarySchema` exported, structurally plausible and
 // backing nothing, while every import site still read like the live line.
 //
 // Built off the live base rather than `agentSummarySchemaV90`, which pins the
-// harness id major 9 shipped: this row is the head (major 10) and is the only
-// one that tracks the live enum. It carries every key the frozen major-9
-// minors carry (`runConfig`, the session facet, `archived`), so a 10.0 answer
-// downgrades to 9.2 by dropping rows alone.
+// harness id major 9 shipped: this row is the head (major 10) and tracks the
+// live enum. It carries every key the frozen major-9 minors carry
+// (`runConfig`, the session facet, `archived`), so a 10.2 answer downgrades to
+// 9.2 by dropping rows, the run tuple and the reach pair alone.
 export const agentSummarySchema = lazySchema(() =>
   releasedAgentSummarySchema.extend({
     runConfig: agentRunConfigSchema.nullable().default(null),
@@ -1076,6 +1139,36 @@ export const agentSummarySchema = lazySchema(() =>
      * `false` reports an archived agent on an older host as live.
      */
     archived: z.boolean().nullable(),
+    /**
+     * The provider profile the agent's next turn runs on, in the form
+     * `agent.configure` takes back: `"ambient"` for the provider's own login,
+     * else the managed profile id.
+     *
+     * `null` when this answer cannot say, never "ambient": a terminal agent
+     * (its record names no profile), a chat with no run settings, a chat on
+     * another host, a row owned by another user, or an answering host that
+     * predates the field.
+     */
+    profile: z.string().nullable(),
+    /**
+     * The permission mode the agent's next turn runs in, as `agent.configure`
+     * takes it back. `null` on exactly the rows `profile` is `null` on, and
+     * never a stand-in for `full_access`.
+     */
+    permissionMode: permissionModeSchema.nullable(),
+    /**
+     * Whether a message from this host can reach the agent, or `null` when the
+     * answering host predates the field. An `other_principal` agent is listed
+     * and its transcript may be readable, but `agent.sendMessage` refuses it
+     * with `principal_mismatch`.
+     */
+    reach: agentReachSchema.nullable(),
+    /**
+     * What the answering host last observed about the agent's host. `unknown`
+     * unless a source this host is authorized to read said otherwise, and
+     * never `offline` for want of one.
+     */
+    hostConnectivity: lastKnownConnectivitySchema,
   }),
 );
 export type AgentSummary = z.infer<typeof agentSummarySchema>;
@@ -1302,6 +1395,32 @@ export const listAgentsResponseSchemaV92 = lazySchema(() =>
 export type ListAgentsResponseV92 = z.infer<typeof listAgentsResponseSchemaV92>;
 
 /**
+ * The `agent.list@10.0` response, frozen when `@10.1` put the run tuple on the
+ * row. See {@link agentSummarySchemaV100}.
+ */
+export const listAgentsResponseSchemaV100 = lazySchema(() =>
+  listAgentsResponseSchema.extend({
+    agents: z.array(agentSummarySchemaV100),
+  }),
+);
+export type ListAgentsResponseV100 = z.infer<
+  typeof listAgentsResponseSchemaV100
+>;
+
+/**
+ * The `agent.list@10.1` response, frozen when `@10.2` put `reach` and
+ * `hostConnectivity` on the row. See {@link agentSummarySchemaV101}.
+ */
+export const listAgentsResponseSchemaV101 = lazySchema(() =>
+  listAgentsResponseSchema.extend({
+    agents: z.array(agentSummarySchemaV101),
+  }),
+);
+export type ListAgentsResponseV101 = z.infer<
+  typeof listAgentsResponseSchemaV101
+>;
+
+/**
  * `agent.sendMessage@1.0` - fire-and-forget enqueue from one agent to
  * another. Distinct from `chat.subscribe`'s `send` action: that surface
  * streams a turn back to a UI client; this surface hands a prompt off to
@@ -1319,8 +1438,9 @@ export type ListAgentsResponseV92 = z.infer<typeof listAgentsResponseSchemaV92>;
  *   - When `expectReply=false`, a non-null `responseId` closes an open
  *     thread; a null `responseId` is a one-shot delivery the sender does
  *     not want correlated.
- *   - A receiver on another host is queued for that host through the
- *     cloud rather than delivered while the call runs.
+ *   - Cross-host receivers are rejected with `RECEIVER_NOT_LOCAL`. The
+ *     epic Y.Doc already replicates artifact records cross-host, but
+ *     the message-delivery transport does not.
  */
 export const sendAgentMessageRequestSchema = lazySchema(() =>
   z.object({
@@ -1334,23 +1454,6 @@ export const sendAgentMessageRequestSchema = lazySchema(() =>
 );
 export type SendAgentMessageRequest = z.infer<
   typeof sendAgentMessageRequestSchema
->;
-
-/**
- * `agent.sendMessage@1.1` - adds `workspace`: an absolute folder path on the
- * RECEIVING agent's host for it to run in. It binds a receiver that has no
- * workspace yet, so the message can run, and is ignored when the receiver is
- * already bound (a send never rebinds an agent). `null` leaves the choice to
- * the host: an unbound receiver takes the local sender's primary workspace,
- * and otherwise the send is refused with `WORKSPACE_BINDING_REQUIRED`.
- */
-export const sendAgentMessageRequestSchemaV11 = lazySchema(() =>
-  sendAgentMessageRequestSchema.extend({
-    workspace: z.string().nullable().default(null),
-  }),
-);
-export type SendAgentMessageRequestV11 = z.infer<
-  typeof sendAgentMessageRequestSchemaV11
 >;
 
 /**

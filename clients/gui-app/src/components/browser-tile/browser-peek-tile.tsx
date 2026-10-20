@@ -47,6 +47,11 @@ import { useStreamAuthRevalidator } from "@/lib/host/stream-auth-revalidator";
 import { cn } from "@/lib/utils";
 import { useScreencastArmedStore } from "@/stores/screencast-armed-store";
 import { DEFAULT_BROWSER_TILE_URL } from "@/lib/browser-view/browser-tile-defaults";
+import { toast } from "sonner";
+import {
+  CREDENTIALED_URL_REFUSAL_DESCRIPTION,
+  credentialedUrlRefusal,
+} from "@/hooks/host/use-host-credential-refusal";
 
 /**
  * `touch-none`: the controller translates a finger drag into wheel frames
@@ -228,6 +233,14 @@ export function BrowserPeekTile(props: BrowserPeekTileProps) {
     // reads as the read-only chrome it is instead of silently dropping clicks.
     disabled: readOnly || client === null,
     onNavigateUrl: (url) => {
+      // A sandbox's browser is not sent a URL carrying a sign-in.
+      const refusal = credentialedUrlRefusal(hostEntry, url);
+      if (refusal !== null) {
+        toast.warning(refusal, {
+          description: CREDENTIALED_URL_REFUSAL_DESCRIPTION,
+        });
+        return;
+      }
       session.requestNav({ kind: "navigate", url });
     },
     onBack: () => {

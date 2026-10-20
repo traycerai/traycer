@@ -101,6 +101,7 @@ vi.mock("../../internal/host-rpc", () => ({
 // Imports must come AFTER the vi.mock calls so the mocked modules are in
 // place when `update-recovery-evidence` resolves them.
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import { RetryEpisodeOutcomeUnknownError } from "@traycer-clients/shared/host-transport/retrying-messenger";
 import * as paths from "../../store/paths";
 import { writeHostInstallRecord } from "../../manifest/host-install";
 import { writeHostStagedRecordAt } from "../../manifest/host-staged";
@@ -207,7 +208,6 @@ function hostStatusResponse(
     storeFormats: null,
     install: null,
     processMemory: null,
-    crossHostMessaging: null,
     ...overrides,
   };
 }
@@ -1167,39 +1167,52 @@ describe("observeAttemptRecoveryEvidence - the running leg's DIAGNOSIS (Linux E1
     [
       "an UNAUTHORIZED frame is a refusal",
       "UNAUTHORIZED",
+      false,
       "host-refuses-authenticated-rpc",
     ],
     [
       "a FORBIDDEN frame is a refusal",
       "FORBIDDEN",
+      false,
+      "host-refuses-authenticated-rpc",
+    ],
+    [
+      "a FORBIDDEN refusal that ended a retry episode is still a refusal",
+      "FORBIDDEN",
+      true,
       "host-refuses-authenticated-rpc",
     ],
     [
       "any OTHER RPC error keeps the budgeted reading",
       "WORKTREE_BUSY",
+      false,
       "host-rpc-unreachable",
     ],
-  ] as const)("Q19: %s", async (_label, code, diagnosis) => {
+  ] as const)("Q19: %s", async (_label, code, endedRetryEpisode, diagnosis) => {
     // The gate is the RPC error CODE, never the host's wording. `WORKTREE_BUSY`
     // is here as the negative: a host that answered with something that is not
     // about admission has not decided anything the next poll cannot change, so
     // it must NOT shorten the budget.
     // Falsification: widen the code test in `authenticatedRefusalReason` and
-    // the third row reddens; narrow it to UNAUTHORIZED alone and the second
-    // does.
+    // the last row reddens; narrow it to UNAUTHORIZED alone and the second
+    // does; read the caught value without unwrapping it and the retry-episode
+    // row does.
     writePidMetadata({
       version: "1.2.3",
       processStartIdentity: "linux:boot-a 4242",
     });
     identityVerdictMock.mockResolvedValue("current");
+    const refusal = new HostRpcError({
+      code,
+      message: "no applicable key found in the JSON Web Key Set",
+      requestId: "r",
+      method: "host.status",
+      fatalDetails: null,
+    });
     callHostRpcMock.mockRejectedValue(
-      new HostRpcError({
-        code,
-        message: "no applicable key found in the JSON Web Key Set",
-        requestId: "r",
-        method: "host.status",
-        fatalDetails: null,
-      }),
+      endedRetryEpisode
+        ? new RetryEpisodeOutcomeUnknownError(refusal)
+        : refusal,
     );
 
     const observation = await observeAttemptRecoveryEvidence(

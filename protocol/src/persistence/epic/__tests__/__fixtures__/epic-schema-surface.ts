@@ -4022,39 +4022,6 @@ export const epicSchemaSurfaceBaseline = {
                                     }
                                   ]
                                 },
-                                "agentMessageDelivery": {
-                                  "default": null,
-                                  "anyOf": [
-                                    {
-                                      "type": "object",
-                                      "properties": {
-                                        "targetHostId": {
-                                          "type": "string"
-                                        },
-                                        "eventId": {
-                                          "type": "string"
-                                        },
-                                        "state": {
-                                          "type": "string",
-                                          "enum": [
-                                            "queued",
-                                            "delivered",
-                                            "expired",
-                                            "failed"
-                                          ]
-                                        }
-                                      },
-                                      "required": [
-                                        "targetHostId",
-                                        "eventId",
-                                        "state"
-                                      ]
-                                    },
-                                    {
-                                      "type": "null"
-                                    }
-                                  ]
-                                },
                                 "managedCommand": {
                                   "default": null,
                                   "anyOf": [
@@ -13350,40 +13317,6 @@ export const epicSchemaSurfaceBaseline = {
                                     }
                                   ]
                                 },
-                                "agentMessageDelivery": {
-                                  "default": null,
-                                  "anyOf": [
-                                    {
-                                      "type": "object",
-                                      "properties": {
-                                        "targetHostId": {
-                                          "type": "string"
-                                        },
-                                        "eventId": {
-                                          "type": "string"
-                                        },
-                                        "state": {
-                                          "type": "string",
-                                          "enum": [
-                                            "queued",
-                                            "delivered",
-                                            "expired",
-                                            "failed"
-                                          ]
-                                        }
-                                      },
-                                      "required": [
-                                        "targetHostId",
-                                        "eventId",
-                                        "state"
-                                      ],
-                                      "additionalProperties": false
-                                    },
-                                    {
-                                      "type": "null"
-                                    }
-                                  ]
-                                },
                                 "managedCommand": {
                                   "default": null,
                                   "anyOf": [
@@ -14033,7 +13966,6 @@ export const epicSchemaSurfaceBaseline = {
                                 "error",
                                 "agentMessageSend",
                                 "agentMessageReceipt",
-                                "agentMessageDelivery",
                                 "managedCommand",
                                 "progress",
                                 "backgroundOutput",

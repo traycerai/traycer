@@ -74,9 +74,9 @@ vi.mock("../../../store/paths", async (importOriginal) => {
 
 // `runCommandForBytes` is the seam ONLY the decode-coverage describe block
 // below uses (by leaving `queryTaskXml` at its default so the real
-// `queryScheduledTaskXml` decodes real bytes). Every other test in this file
-// overrides `queryTaskXml` via `setWindowsDefinitionDepsForTests` and never
-// reaches this mock at all.
+// `queryScheduledTaskXml` decodes the Base64 answer of the task definition
+// read). Every other test in this file overrides `queryTaskXml` via
+// `setWindowsDefinitionDepsForTests` and never reaches this mock at all.
 const runCommandForBytesMock = vi.hoisted(() => ({
   impl: null as
     | ((
@@ -230,6 +230,20 @@ function oldRunOnlyLauncherBody(cli: CliInvocation): string {
     "WScript.Quit exitCode",
     "",
   ].join("\r\n");
+}
+
+/** The task definition read's success answer (exit 0): Base64 of the XML's
+ * UTF-8 bytes, ASCII on the wire in every code page. */
+function comReadAnswer(xml: string): {
+  stdout: Buffer;
+  exitCode: number;
+  stderr: string;
+} {
+  return {
+    stdout: Buffer.from(Buffer.from(xml, "utf8").toString("base64"), "latin1"),
+    exitCode: 0,
+    stderr: "",
+  };
 }
 
 interface RecordedCall {
@@ -761,11 +775,7 @@ describe("planning predicts the slot invocation without staging", () => {
       TEST_TASK_USER_ID,
       true,
     );
-    runCommandForBytesMock.impl = async () => ({
-      stdout: Buffer.from(`﻿${queriedXml}`, "utf16le"),
-      exitCode: 0,
-      stderr: "",
-    });
+    runCommandForBytesMock.impl = async () => comReadAnswer(queriedXml);
 
     const cliInstallHomeBefore = await snapshotFilesRecursively(
       cliInstallHomeDir(label.environment),
@@ -798,11 +808,7 @@ describe("planning predicts the slot invocation without staging", () => {
       TEST_TASK_USER_ID,
       true,
     );
-    runCommandForBytesMock.impl = async () => ({
-      stdout: Buffer.from(`﻿${queriedXml}`, "utf16le"),
-      exitCode: 0,
-      stderr: "",
-    });
+    runCommandForBytesMock.impl = async () => comReadAnswer(queriedXml);
 
     const cliInstallHomeBefore = await snapshotFilesRecursively(
       cliInstallHomeDir(label.environment),
@@ -832,34 +838,29 @@ describe("planning predicts the slot invocation without staging", () => {
   });
 });
 
-describe("schtasks /Query /XML decode (reachable without the queryTaskXml seam)", () => {
+describe("task definition read decode (reachable without the queryTaskXml seam)", () => {
   const UNRECOGNIZED_XML = execTaskXml(
     "C:\\Windows\\System32\\notepad.exe",
     "readme.txt",
   );
 
   it.each([
+    { name: "an ASCII path", xml: UNRECOGNIZED_XML },
     {
-      name: "UTF-16LE with BOM",
-      encode: (xml: string) => Buffer.from(`\ufeff${xml}`, "utf16le"),
+      name: "a path outside ASCII",
+      xml: execTaskXml(
+        "D:\\q8t\\p4\\Tráycer Data m\\notepad.exe",
+        "readme.txt",
+      ),
     },
-    {
-      name: "UTF-16LE without BOM",
-      encode: (xml: string) => Buffer.from(xml, "utf16le"),
-    },
-    { name: "UTF-8", encode: (xml: string) => Buffer.from(xml, "utf8") },
   ])(
     "$name decodes correctly - proven by reaching 'unrecognized' (a real parse), not a decode-failure 'failed'",
-    async ({ encode }) => {
+    async ({ xml }) => {
       const label = labelFor("w-decode");
       // Deliberately NOT calling setWindowsDefinitionDepsForTests: the
       // default deps' real `queryScheduledTaskXml` is what calls the mocked
-      // `runCommandForBytes` and decodes its bytes.
-      runCommandForBytesMock.impl = async () => ({
-        stdout: encode(UNRECOGNIZED_XML),
-        exitCode: 0,
-        stderr: "",
-      });
+      // `runCommandForBytes` and decodes its Base64 answer.
+      runCommandForBytesMock.impl = async () => comReadAnswer(xml);
 
       const state = await inspectWindowsServiceDefinition(label);
 
@@ -870,16 +871,14 @@ describe("schtasks /Query /XML decode (reachable without the queryTaskXml seam)"
     },
   );
 
-  // This row used to read EVERY non-zero exit as not-registered - the
-  // defect: an access denial or any other `/Query` failure then passed for
-  // "nothing to refresh". A non-zero exit is still never decoded, but only
-  // stderr that names a missing task reads as not-registered (the
-  // describe below); a silent failure names nothing, so it is reported.
-  it("a non-zero schtasks exit with no stderr is not decoded, and is reported rather than read as not-registered", async () => {
+  // A failed read is reported with its exit code, never decoded and never
+  // read as not-registered: only the read's own absence code (the describe
+  // below) reads as a missing task.
+  it("a non-zero exit with no stderr is not decoded, and is reported rather than read as not-registered", async () => {
     const label = labelFor("w-decode-nonzero-exit");
     runCommandForBytesMock.impl = async () => ({
       stdout: Buffer.alloc(0),
-      exitCode: 1,
+      exitCode: 4,
       stderr: "",
     });
 
@@ -887,28 +886,28 @@ describe("schtasks /Query /XML decode (reachable without the queryTaskXml seam)"
 
     expect(state).toEqual({
       kind: "unrecognized",
-      reason: "schtasks /Query failed (exit 1)",
+      reason: "the task definition read failed (exit 4)",
     });
   });
 });
 
-// A non-zero `schtasks /Query` exit should not ALWAYS mean "no such
-// task" - an access denial is a real failure the refresh must surface, not
-// silently swallow as "nothing to refresh". Only stderr that actually NAMES
-// a missing task may still read as not-registered.
-describe("schtasks /Query non-zero exit disambiguated by stderr", () => {
-  it("access denied (exit 1): inspect is 'unrecognized' naming schtasks /Query, refresh rejects E_SERVICE_TASK_NOT_OWNED (unconfirmed) - head misreads this as not-registered", async () => {
+// A failed read should not ALWAYS mean "no such task" - an access denial is a
+// real failure the refresh must surface, not silently swallow as "nothing to
+// refresh". Only the read's absence code (exit 2, a missing task or folder
+// HRESULT) may still read as not-registered.
+describe("task definition read: absence comes from Task Scheduler's code, never from a failure", () => {
+  it("access denied (exit 4, 0x80070005): inspect is 'unrecognized' naming the failed read, refresh rejects E_SERVICE_TASK_NOT_OWNED (unconfirmed) - head misreads this as not-registered", async () => {
     const label = labelFor("w-f18-access-denied");
     runCommandForBytesMock.impl = async () => ({
       stdout: Buffer.alloc(0),
-      exitCode: 1,
-      stderr: "ERROR: Access is denied.\r\n",
+      exitCode: 4,
+      stderr: "0x80070005",
     });
 
     const state = await inspectWindowsServiceDefinition(label);
     expect(state).toEqual({
       kind: "unrecognized",
-      reason: expect.stringContaining("schtasks /Query"),
+      reason: expect.stringContaining("the task definition read failed"),
     });
 
     const { CLI_ERROR_CODES, CliError } =
@@ -927,12 +926,12 @@ describe("schtasks /Query non-zero exit disambiguated by stderr", () => {
     expect(error.details).toMatchObject({ reason: "unconfirmed" });
   });
 
-  it("control: 'cannot find the file specified' (exit 1) still reads as not-registered", async () => {
+  it("control: the read's absence code (exit 2) still reads as not-registered", async () => {
     const label = labelFor("w-f18-missing-task-control");
     runCommandForBytesMock.impl = async () => ({
       stdout: Buffer.alloc(0),
-      exitCode: 1,
-      stderr: "ERROR: The system cannot find the file specified.\r\n",
+      exitCode: 2,
+      stderr: "",
     });
 
     const state = await inspectWindowsServiceDefinition(label);

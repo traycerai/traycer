@@ -985,7 +985,6 @@ export function accumulateEvent(
           type: "tool_call",
           managedCommand: null,
           agentMessageReceipt: null,
-          agentMessageDelivery: null,
           page: null,
           mcpApp: null,
           blockId: event.blockId,
@@ -1026,10 +1025,6 @@ export function accumulateEvent(
           // that carried it, and a re-completion without one keeps it.
           agentMessageReceipt:
             event.agentMessageReceipt ?? existing.agentMessageReceipt,
-          // Where a cross-host send stands (`chat.subscribe@1.28`). A later
-          // event that carries it moves the state; one without it keeps it.
-          agentMessageDelivery:
-            event.agentMessageDelivery ?? existing.agentMessageDelivery,
           // The host's page / MCP App stamps (`chat.subscribe@1.22`): identity
           // the completion established, kept by a re-completion without them.
           page: event.page ?? existing.page,
@@ -1067,7 +1062,6 @@ export function accumulateEvent(
           agentMessageSend: event.agentMessageSend,
           managedCommand: event.managedCommand ?? null,
           agentMessageReceipt: event.agentMessageReceipt ?? null,
-          agentMessageDelivery: event.agentMessageDelivery ?? null,
           page: event.page ?? null,
           mcpApp: event.mcpApp ?? null,
           progress: null,
@@ -1108,7 +1102,6 @@ export function accumulateEvent(
           type: "tool_call",
           managedCommand: null,
           agentMessageReceipt: null,
-          agentMessageDelivery: null,
           page: null,
           mcpApp: null,
           blockId: event.blockId,

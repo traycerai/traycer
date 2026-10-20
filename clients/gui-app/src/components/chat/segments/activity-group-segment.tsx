@@ -437,7 +437,6 @@ function ActivityChildRow(props: ActivityChildRowProps) {
           agentMessageSend={segment.agentMessageSend}
           managedCommand={segment.managedCommand}
           agentMessageReceipt={segment.agentMessageReceipt}
-          agentMessageDelivery={segment.agentMessageDelivery}
           isStreaming={segment.isStreaming}
           endState={segment.endState}
           stopped={segment.stopped}
@@ -490,6 +489,7 @@ function ActivityChildRow(props: ActivityChildRowProps) {
         <SubagentSegment
           id={segment.id}
           cardId={segment.id}
+          toolImageResults={segment.toolImageResults}
           name={segment.name}
           agentType={segment.agentType}
           task={segment.task}

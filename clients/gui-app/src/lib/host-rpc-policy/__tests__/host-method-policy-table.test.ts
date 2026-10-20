@@ -336,6 +336,18 @@ describe("host method poll policy table", () => {
     ).toBe(16 * 60 * 1_000);
   });
 
+  it("re-reads a secret's rotation every three seconds while the page asks to, and reads the rest once", () => {
+    expect(HOST_METHOD_POLL_TABLE["environment.secrets.rotation"]).toEqual({
+      mode: "latest",
+      joinResponseTimeoutMs: null,
+      poll: { kind: "fixed", intervalMs: 3_000 },
+    });
+    expect(HOST_METHOD_POLL_TABLE["environment.secrets.list"].poll).toBeNull();
+    expect(
+      HOST_METHOD_POLL_TABLE["environment.secrets.versions"].poll,
+    ).toBeNull();
+  });
+
   it("narrows null and fixed policies", () => {
     const neverPolled: null = HOST_METHOD_POLL_TABLE["host.identity.get"].poll;
     expect(neverPolled).toBeNull();

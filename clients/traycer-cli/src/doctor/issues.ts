@@ -33,13 +33,6 @@ export const DOCTOR_ISSUE_CODES = {
   // of `traycer host doctor` for every user whose home is on a network
   // filesystem.
   HOST_LAYER0_NOT_GUARANTEED: "HOST_LAYER0_NOT_GUARANTEED",
-  // The host is serving, but messages to and from agents on the account's
-  // other hosts are paused: its inbound lane is parked or backing off, or the
-  // cloud is refusing the messaging calls (`host.status` `crossHostMessaging`).
-  // Warning, not error: the host retries on its own, and nothing local is
-  // broken - the same reason the Layer 0 verdict above does not flip the exit
-  // code.
-  HOST_CROSS_HOST_MESSAGES_PAUSED: "HOST_CROSS_HOST_MESSAGES_PAUSED",
   PORT_UNREACHABLE: "PORT_UNREACHABLE",
   PORT_CONFLICT: "PORT_CONFLICT",
   // The host's TCP port is open but a real (authenticated) RPC
@@ -50,6 +43,12 @@ export const DOCTOR_ISSUE_CODES = {
   HOST_RPC_UNAUTHORIZED: "HOST_RPC_UNAUTHORIZED",
   HOST_RPC_INCOMPATIBLE: "HOST_RPC_INCOMPATIBLE",
   HOST_RPC_UNVERIFIED: "HOST_RPC_UNVERIFIED",
+  // The host process is alive and its port accepts a connection, but it
+  // answers nothing: its main thread is blocked. It ignores a cooperative stop
+  // too, so the fix is the forced restart, and the message says how long it
+  // has been silent (from its log's last write) so a stall is told apart from
+  // a host that has been wedged for an hour.
+  HOST_RPC_UNRESPONSIVE: "HOST_RPC_UNRESPONSIVE",
   HOST_CRASHED_AT_STARTUP: "HOST_CRASHED_AT_STARTUP",
   RECENT_CRASH_MARKERS: "RECENT_CRASH_MARKERS",
   REGISTRY_NOT_IMPLEMENTED: "REGISTRY_NOT_IMPLEMENTED",

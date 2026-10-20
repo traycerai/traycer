@@ -23,6 +23,7 @@ import { ToolbarPillButton } from "@/components/home/toolbar/toolbar-buttons";
 import type { DictationPreparingStatus } from "@/hooks/composer/use-dictation-availability";
 import type { ChatActiveTurn } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { ComposerToolbarStore } from "@/stores/composer/composer-toolbar-store";
+import { chatMaxModeContextForToolbar } from "@/components/home/data/model-max-mode";
 
 import type { ProviderTerminalLoginSurface } from "@/lib/providers/provider-terminal-login-surface";
 
@@ -85,6 +86,12 @@ function ComposerMobileToolbarImpl(props: ComposerMobileToolbarProps) {
   const [optionsOpen, setOptionsOpen] = useState(false);
 
   const permission = useStore(store, (s) => s.permission);
+  const reasoning = useStore(store, (state) => state.reasoning);
+  const serviceTier = useStore(store, (state) => state.serviceTier);
+  const maxModeContext = useMemo(
+    () => chatMaxModeContextForToolbar(reasoning, serviceTier),
+    [reasoning, serviceTier],
+  );
   const supportedPermissionModes = useStore(
     store,
     (s) => s.supportedPermissionModes,
@@ -202,6 +209,7 @@ function ComposerMobileToolbarImpl(props: ComposerMobileToolbarProps) {
       <div className="ml-auto flex min-w-0 shrink items-center gap-1">
         <HarnessModelPicker
           store={store}
+          maxModeContext={maxModeContext}
           withServiceTier
           withReasoning
           tuiOnly={false}

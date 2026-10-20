@@ -1341,13 +1341,6 @@ function ConversationMessageBadge() {
 }
 
 /**
- * The only affordance a host-authored row offers. For a shell, cancelling is
- * not destructive to the underlying output: the host leaves the delivery
- * cursor where it is, so the next output from that command re-queues a fresh
- * digest. For a forward it IS final - the notice is raised once, so dismissing
- * it means the agent is not told - and the copy says which.
- */
-/**
  * A check-in on the tasks a bot tracks, waiting for the bot's next turn (a
  * `task-checkin` item on the bot's trunk). Content-free like the two chips
  * above it: the report is composed when the item is delivered, from whatever
@@ -1450,6 +1443,15 @@ function cancelOnlyKind(item: OpenChatQueuedItem): CancelOnlyKind {
   }
 }
 
+/**
+ * The only affordance a host-authored row, or an agent prompt held for a
+ * sign-in, offers. For a shell, cancelling is not destructive to the
+ * underlying output: the host leaves the delivery cursor where it is, so the
+ * next output from that command re-queues a fresh digest. For a forward or a
+ * held prompt it IS final - the notice is raised once, so dismissing it means
+ * the agent is not told, and a cancelled prompt never runs - and the copy says
+ * which.
+ */
 function ManagedCommandCancelButton(props: {
   readonly kind: CancelOnlyKind;
   readonly onCancel: () => void;
@@ -1525,10 +1527,10 @@ function shouldShowDropIndicatorAfter(input: {
  * edit/delete/steer trio.
  *
  * A received A2A row gets that same cancel-only toolbar in one state: paused
- * with the host's `signInParked` mark (`chat.subscribe@1.29`), held until its
+ * with the host's `signInParked` mark (`chat.subscribe@1.28`), held until its
  * provider is signed in again. It runs unattended once the sign-in returns,
  * and this control is the only place a person can stop it first. A host
- * below `1.29` never sends the mark, so its rows stay without one.
+ * below `1.28` never sends the mark, so its rows stay without one.
  *
  * Only a user-owned safe-point steer still "Waiting for steer" can be
  * un-staged: an interrupt_restart ("Restart pending") has already torn the turn

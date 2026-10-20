@@ -115,9 +115,12 @@ export {
   worktreeSetRepoScriptsV10,
   worktreeSetRepoBranchPrefixV10,
   worktreeGetBindingV10,
+  PROMOTE_TO_PERSONAL_REQUIRED_HOST_VERSION,
   type HostRpcRegistry,
   type HostStreamRpcRegistry,
 } from "./registry";
+export * from "./environment-schemas";
+export * from "./executable-write-grant";
 
 export {
   diskWorktreeEntrySchema,

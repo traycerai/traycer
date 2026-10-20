@@ -37,7 +37,7 @@ jobs:
     name: Render + PR traycer-desktop cask
     # Skip non-desktop release events (cli-v*/host-v* also fire `released`).
     if: ${{ github.event_name == 'workflow_dispatch' || startsWith(github.event.release.tag_name, 'desktop-v') }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     environment: release
     permissions:
       contents: read

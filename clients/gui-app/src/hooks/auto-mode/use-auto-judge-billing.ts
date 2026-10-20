@@ -8,6 +8,7 @@ import {
   type ListGuiAgentModelsResponse,
 } from "@traycer/protocol/host/index";
 import type { GuiAgentModelOption } from "@traycer/protocol/host/agent/gui/unary-schemas";
+import { effectiveJudgeReasoningEffort } from "@traycer/protocol/host/agent/gui/reasoning-effort-order";
 import type { AutoJudgeGetResponse } from "@traycer/protocol/host/auto-mode/contracts";
 import type { ProviderCliState } from "@traycer/protocol/host/provider-schemas";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
@@ -30,6 +31,7 @@ import {
   type AutoJudgeTarget,
 } from "@/lib/auto-mode/auto-judge-billing";
 import { providersListReportsAutoJudge } from "@/lib/providers/provider-auto-judge";
+import { maxModeListedFor } from "@/components/home/data/model-max-mode";
 import { useHostMethodSchemaVersion } from "@/hooks/host/use-host-supports-method";
 import {
   catalogLineKnowsAutoMode,
@@ -527,6 +529,24 @@ export function useAutoJudgeBilling(
       judgeModelsQuery.isSuccess,
     );
   const judgeModelLabel = targetModelLabel(target, judgeModelsQuery.data);
+  const judgeModels = offeredJudgeModels(judgeModelsQuery.data);
+  const judgeMaxModeListed = (() => {
+    if (target.kind !== "judge" || judgeModels === undefined) return false;
+    const model = readableModelMatch(
+      resolveModelBySlug(judgeModels, target.modelSlug),
+    );
+    const requested =
+      selection !== null &&
+      selection.harnessId === target.harnessId &&
+      selection.model === target.modelSlug
+        ? selection.reasoningEffort
+        : null;
+    const reasoningEffort = autoJudgeGetKnowsReasoningEffort(judgeGetVersion)
+      ? (effectiveJudgeReasoningEffort(judgeModels, target.modelSlug, requested)
+          ?.id ?? null)
+      : null;
+    return maxModeListedFor(model, { kind: "judge", reasoningEffort });
+  })();
   // Named only on a host that runs the judge at an effort of its own; an older
   // host runs the model's default, and the row must not promise otherwise.
   const judgeEffortLabel = autoJudgeEffortLabel({
@@ -557,6 +577,7 @@ export function useAutoJudgeBilling(
             target,
             judgeModelLabel,
             judgeEffortLabel,
+            judgeMaxModeListed,
             judgeRecordUnrunnable:
               storedProfileUnavailable || storedModelUnavailable,
           })
@@ -568,6 +589,7 @@ export function useAutoJudgeBilling(
       target,
       judgeModelLabel,
       judgeEffortLabel,
+      judgeMaxModeListed,
       storedProfileUnavailable,
       storedModelUnavailable,
     ],

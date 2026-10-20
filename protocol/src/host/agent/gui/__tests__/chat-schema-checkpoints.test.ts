@@ -34,7 +34,6 @@ import {
   chatSubscribeV125,
   chatSubscribeV126,
   chatSubscribeV127,
-  chatSubscribeV128,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 
 function canonical(value: unknown): unknown {
@@ -301,16 +300,10 @@ const SERVER_FRAME_DIGESTS = {
     "e19f9e26679c833d184d861b3c1b271b321e411b5888f91fd13f09384fb2b14e",
   ],
   // Captured from the live schema the moment before 1.28 opened above it: the
-  // task-overdue line, with no `agentMessageDelivery` on a tool block.
+  // task-overdue line, with no `signInParked` on a queued prompt.
   27: [
     "4e9bcb56f5427b4fe47487bcd73a7a3bf5a0eb903882a3e9a09d35b7291d49f7",
     "30c937db5a5850bec9474b167d4bd7667e4fefb6f97559d3999dcbf03fec41e6",
-  ],
-  // Captured from the live schema the moment before 1.29 opened above it: the
-  // cross-host send-state line, with no `signInParked` on a queued prompt.
-  28: [
-    "ec0270de7d75b0f3ac322372aec48064c04386891b6e02699527e12c436d164a",
-    "359f395053c621f5631f863fd06da5149d9f51c16d062c02dab55b7ca50e054b",
   ],
 } as const;
 
@@ -343,11 +336,10 @@ const contracts = [
   chatSubscribeV125,
   chatSubscribeV126,
   chatSubscribeV127,
-  chatSubscribeV128,
 ] as const;
 
 describe("chat.subscribe placement freeze", () => {
-  it("keeps every 1.0–1.28 server schema input/output surface byte-stable", () => {
+  it("keeps every 1.0–1.27 server schema input/output surface byte-stable", () => {
     for (const contract of contracts) {
       const minor = contract.schemaVersion.minor;
       expect([

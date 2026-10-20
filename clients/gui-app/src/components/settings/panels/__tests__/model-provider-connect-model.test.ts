@@ -54,7 +54,7 @@ describe("source badges", () => {
     // other. "Saved in OpenCode" is true and useful in a sentence, but not in
     // the one slot that has to stay scannable across ~180 rows.
     expect(sourceBadgeLabel("api", false)).toBe("API key");
-    expect(sourceBadgeLabel("env", false)).toBe("Environment");
+    expect(sourceBadgeLabel("env", false)).toBe("Shell variable");
     expect(sourceBadgeLabel("custom", false)).toBe("Custom");
   });
 

@@ -2,14 +2,27 @@ import {
   RunnerHostEvent,
   RunnerHostInvoke,
 } from "../../ipc-contracts/ipc-channels";
-import type { DesktopPublishedHostSnapshot } from "../../ipc-contracts/host-types";
+import type {
+  DesktopPublishedHostSnapshot,
+  LocalHostUnresponsive,
+  LocalHostUnresponsiveOffer,
+} from "../../ipc-contracts/host-types";
 import type {
   HostRestartRequestResult,
   HostServiceRestartResult,
 } from "../../ipc-contracts/host-management-types";
-import type { GuardedMutationOutcome } from "../host/host-controller-types";
+import {
+  HOST_RESTART_TARGET_CHANGED_MESSAGE,
+  type GuardedMutationOutcome,
+  type LocalHostMutationIntent,
+} from "../host/host-controller-types";
 import { readLastKnownLocalHostId } from "../host/local-host-identity";
 import { appliedLocalHostCapability } from "../host/local-host-capability";
+import {
+  confirmLocalHostStillUnresponsive,
+  onLocalHostUnresponsiveChange,
+  readLocalHostUnresponsive,
+} from "../host/local-host-unresponsive";
 import type { RunnerIpcBridge } from "./runner-ipc-bridge";
 
 // Collapses a restart-intent outcome to the wire result every restart
@@ -50,6 +63,52 @@ export function serviceRestartResultFromOutcome<TOk>(
   return restartRequestResultFromOutcome(outcome);
 }
 
+/**
+ * The restart behind an unresponsive host's offer, guarded at the head of the
+ * controller's lane rather than before it. The restart can queue behind
+ * another mutation, and the host it was offered for can answer again, or be
+ * replaced, while it waits; so the check that the offer is still out, that
+ * the host the monitor recorded when it made the offer is still the one
+ * published, and that it is still silent, runs once the job owns the lane,
+ * right before it acts, and the job is abandoned otherwise. The host it
+ * confirmed travels on with the job (`proceed-for-host`), because the lane
+ * head is not where the host is stopped: the step that stops it checks it
+ * again under its own lock. Keyed by the offer, so a restart from any other offer - another host's, or a later one
+ * for a host that reused this pid - never joins this one and inherits its
+ * answer.
+ */
+export function unresponsiveHostRestartIntent(
+  offer: LocalHostUnresponsiveOffer,
+): LocalHostMutationIntent {
+  return {
+    kind: "user-repair",
+    targetHostId: `unresponsive-offer:${offer.offerId}:${offer.pid}`,
+    guard: async () => {
+      const host = await confirmLocalHostStillUnresponsive(offer);
+      return host === null
+        ? { kind: "abandon", message: HOST_RESTART_TARGET_CHANGED_MESSAGE }
+        : { kind: "proceed-for-host", host };
+    },
+  };
+}
+
+function isPositiveSafeInteger(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0;
+}
+
+/** The renderer's offer, or `null` when it does not name one. */
+function parseUnresponsiveHostOffer(
+  raw: unknown,
+): LocalHostUnresponsiveOffer | null {
+  if (raw === null || typeof raw !== "object") return null;
+  const record = raw as Record<string, unknown>;
+  const pid = record.pid;
+  const offerId = record.offerId;
+  return isPositiveSafeInteger(pid) && isPositiveSafeInteger(offerId)
+    ? { pid, offerId }
+    : null;
+}
+
 export function registerHostIpc(bridge: RunnerIpcBridge): void {
   // Renderer-driven host respawn.
   //
@@ -82,6 +141,27 @@ export function registerHostIpc(bridge: RunnerIpcBridge): void {
       // the job to. Only the Doctor repairs name a specific host.
       const outcome = await bridge.options.hostController.respawn(
         { kind: "background" },
+        "force",
+      );
+      return restartRequestResultFromOutcome(outcome);
+    },
+  );
+
+  // The force restart offered for an unresponsive host. Unlike the channel
+  // above, it is about ONE host: the one the offer was made for, and a host
+  // that answered again or replaced it since must not be killed in its place.
+  bridge.handleInvoke(
+    RunnerHostInvoke.forceRestartUnresponsiveHost,
+    async (_event, rawOffer: unknown): Promise<HostRestartRequestResult> => {
+      const offer = parseUnresponsiveHostOffer(rawOffer);
+      if (offer === null) {
+        return {
+          kind: "declined",
+          message: HOST_RESTART_TARGET_CHANGED_MESSAGE,
+        };
+      }
+      const outcome = await bridge.options.hostController.respawn(
+        unresponsiveHostRestartIntent(offer),
         "force",
       );
       return restartRequestResultFromOutcome(outcome);
@@ -128,5 +208,16 @@ export function registerHostIpc(bridge: RunnerIpcBridge): void {
   bridge.fanOut(
     RunnerHostEvent.localHostChange,
     bridge.options.host.getSnapshot(),
+  );
+
+  bridge.handleInvoke(
+    RunnerHostInvoke.localHostUnresponsive,
+    (): Promise<LocalHostUnresponsive | null> =>
+      Promise.resolve(readLocalHostUnresponsive()),
+  );
+  bridge.disposeFns.push(
+    onLocalHostUnresponsiveChange((state) => {
+      bridge.fanOut(RunnerHostEvent.localHostUnresponsiveChange, state);
+    }),
   );
 }

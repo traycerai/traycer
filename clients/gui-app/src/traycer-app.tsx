@@ -58,6 +58,7 @@ import { ProvidersChangedStreamMount } from "@/providers/providers-changed-strea
 import { RateLimitPollProvider } from "@/providers/rate-limit-poll-provider";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { SupportContextRegistryBridge } from "@/providers/support-context-registry-bridge";
+import { SupportEnvironmentBridge } from "@/providers/support-environment-bridge";
 import { ThemeProvider } from "@/providers/theme-provider";
 import { WindowsBridgeAuthSessionBridge } from "@/providers/windows-bridge-auth-session";
 import { WindowsBridgeProvider } from "@/providers/windows-bridge-provider";
@@ -266,6 +267,7 @@ function TraycerAuthenticatedRuntime(props: TraycerAuthenticatedRuntimeProps) {
   return (
     <CommandPaletteProvider router={props.router}>
       <SupportContextRegistryBridge router={props.router} />
+      <SupportEnvironmentBridge />
       <WindowsBridgeAuthSessionBridge>
         <AuthSessionExpiredToastBridge />
         <HostTrustAlertBridge />

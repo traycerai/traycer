@@ -24,6 +24,11 @@ import {
   transientClientEntry,
   type HostScopeOption,
 } from "@/components/settings/host-scope/host-scope-model";
+import { wakeSandboxOnPick } from "@/lib/sandboxes/sandbox-wake";
+import {
+  hostOptionCanActivate,
+  TEAM_HOST_ACTIVATE_REASON,
+} from "@/components/settings/host-scope/host-option-model";
 
 export interface HostScope {
   /** Every host this account owns or this client can dial, merged and sorted. */
@@ -105,14 +110,30 @@ export interface HostScopeSelection {
 }
 
 /**
- * The one host-scope hook for Settings. Every host-scoped panel reads this and
- * nothing else, which is what makes the sidebar switcher authoritative rather
- * than one more picker among five.
+ * The one host-scope hook for the Host group in Settings. Every panel under the
+ * sidebar's picker reads this and nothing else, which is what makes the
+ * switcher authoritative rather than one more picker among five.
  */
 export function useHostScope(): HostScope {
   const scopedHostId = useSettingsHostScopeStore((s) => s.scopedHostId);
   const setScopedHostId = useSettingsHostScopeStore((s) => s.setScopedHostId);
   return useHostScopeFor({ scopedHostId, setScopedHostId });
+}
+
+/**
+ * Personal and Account pages never read through the picker: what they show
+ * follows the person, not a machine, so they read through the window's own
+ * host, which is `useHostScopeFor`'s answer to a `null` selection. Nothing on
+ * those pages can re-point it - the setter is a no-op - so a pick made under
+ * the Host group never changes what a Personal page shows.
+ */
+const PERSONAL_HOST_SELECTION: HostScopeSelection = {
+  scopedHostId: null,
+  setScopedHostId: () => undefined,
+};
+
+export function usePersonalHostScope(): HostScope {
+  return useHostScopeFor(PERSONAL_HOST_SELECTION);
 }
 
 /**
@@ -292,6 +313,14 @@ export function useMakeActiveHost(hosts: readonly HostScopeOption[]): {
     (hostId: string) => {
       if (pendingActivations.has(authority)) return;
       const option = findHostOption(hosts, hostId);
+      // Defence for every caller, not only the Overview that hides the
+      // button: a management-only row is never made the window's host.
+      if (option !== null && !hostOptionCanActivate(option)) {
+        appLogger.debug("[host-scope] activate refused: management-only host", {
+          hostId,
+        });
+        return;
+      }
       pendingActivations.set(authority, hostId);
       notifyPendingActivation();
       void requestActivate(authority, hostId, option).finally(() => {
@@ -344,6 +373,9 @@ export async function requestActivate(
     return;
   }
   if (result.ok) {
+    // Preferred is intent, not liveness: a sleeping sandbox is now preferred,
+    // so it is woken, and derivation serves a fallback until it is up.
+    if (option !== null) wakeSandboxOnPick(option);
     Analytics.getInstance().track(AnalyticsEvent.HostSelected, {
       source: "direct_ui",
       host_kind: option?.isLocalMachine === true ? "local" : "remote",
@@ -366,7 +398,8 @@ export async function requestActivate(
  * trouble to distinguish. That is exactly how `persist-failed` arrived.
  *
  * Two families, and the split matters for the copy: `unknown-host` /
- * `incompatible` are statements ABOUT THE HOST and name it; `not-attached` /
+ * `incompatible` are statements ABOUT THE HOST and name it (`team-host` is
+ * one too, said once for every team host); `not-attached` /
  * `persist-failed` are failures of this window's own machinery, where naming
  * the host would misattribute the fault to a machine that is fine.
  */
@@ -378,6 +411,7 @@ const ACTIVATE_REFUSAL_COPY: Record<
     `${label} is no longer registered to this account.`,
   incompatible: (label) =>
     `${label} needs a host update before it can be activated.`,
+  "team-host": () => TEAM_HOST_ACTIVATE_REASON,
   "not-attached": () =>
     "This window lost its connection to the selection service - reload and try again.",
   // Nothing moved: the preference was refused BEFORE any state changed and no

@@ -169,7 +169,6 @@ const compatibleHostStatus: HostStatusResponse = {
   storeFormats: null,
   install: null,
   processMemory: null,
-  crossHostMessaging: null,
 };
 
 interface Deferred<T> {

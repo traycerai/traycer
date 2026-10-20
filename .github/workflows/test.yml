@@ -41,7 +41,7 @@ jobs:
     # fork workers (`MAX_TEST_WORKERS` in clients/gui-app/vitest.config.ts) —
     # so the extra cores were never used. Public-repo standard runners are
     # 4 vCPU / 16 GB, which covers two forks plus the parent comfortably.
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # The GUI suite deliberately runs isolated two-worker forks: disabling
     # isolation makes tests leak state. Twenty deterministic Vitest shards run
     # as parallel matrix jobs; the twelve-shard bodies measured 2m20–4m20 on
@@ -296,7 +296,7 @@ jobs:
         || github.event.pull_request.head.repo.full_name != github.repository
         || github.event.pull_request.user.type == 'Bot'
       )
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
       - name: Every test leg passed
@@ -370,6 +370,13 @@ jobs:
       - name: Update-recovery reader, real Windows open flags
         working-directory: clients/traycer-cli
         run: bunx vitest run src/host/__tests__/update-recovery-evidence-flag-fallback-real-platform.test.ts
+      # The only Windows run of the settings lock (`config.json.lock`) against
+      # the real filesystem: the lock's create, a peer's release and the
+      # rename over `config.json`, with several processes changing settings
+      # in one home at once. No write may be lost.
+      - name: Settings lock, concurrent writers on real Windows
+        working-directory: protocol
+        run: bunx vitest run src/config/__tests__/store-lock-multiprocess.test.ts
       # The only real run of the CLI finalize helper's Windows launch. A
       # detached spawn there exits 0 having run no line of the script, and no
       # stubbed test can see that: this starts a marker-only helper through
@@ -393,7 +400,7 @@ jobs:
       || github.base_ref != 'main'
       || github.event.pull_request.head.repo.full_name != github.repository
       || github.event.pull_request.user.type == 'Bot'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     outputs:
       run: ${{ steps.filter.outputs.run }}

@@ -120,7 +120,6 @@ function taskCreateBlock(
     agentMessageSend: null,
     managedCommand: null,
     agentMessageReceipt: null,
-    agentMessageDelivery: null,
     page: null,
     mcpApp: null,
     progress: null,
@@ -177,6 +176,7 @@ function assistantMessage(input: {
 
 const displayContext: RenderedMessagesDisplayContext = {
   resolveUserSenderLabel: () => "You",
+  resolveUserSenderAvatarUrl: () => null,
   resolveAgentSenderDisplay: () => ({
     senderLabel: "Claude",
     providerLabel: "Claude Code",
@@ -184,6 +184,7 @@ const displayContext: RenderedMessagesDisplayContext = {
   }),
   resolveAgentReasoningLabel: (_sender, reasoningEffort) =>
     reasoningEffort === null ? null : `Resolved ${reasoningEffort}`,
+  resolveAgentServiceTierLabel: () => null,
   contentBlocksPreview: () => "",
 };
 

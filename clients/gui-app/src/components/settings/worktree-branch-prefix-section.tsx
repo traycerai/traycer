@@ -196,7 +196,7 @@ export function WorktreeBranchPrefixSection(): ReactNode {
           <p>
             New branches start like{" "}
             <span className="font-medium text-foreground">{previewBranch}</span>{" "}
-            unless a repository sets its own prefix in Environment
+            unless a repository sets its own prefix in Repository settings
           </p>
           {error !== null ? (
             <p id={errorId} role="alert" className="text-destructive">

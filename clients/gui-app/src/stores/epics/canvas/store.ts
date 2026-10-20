@@ -692,6 +692,12 @@ export interface EpicCanvasStore {
     hostId: string,
     agentType: "chat" | "terminal-agent",
   ) => void;
+  /**
+   * Closes every open tile bound to one of these hosts, in every tab, and
+   * retires their reopen and Back/Forward entries; returns how many closed.
+   * A removed team member's tiles on the team's hosts.
+   */
+  closeTilesOnHosts: (hostIds: ReadonlySet<string>) => number;
   prepareCloseCanvasTabFocusTarget: (
     tabId: string,
     paneId: string,
@@ -2723,6 +2729,47 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
               }
             }
           }
+        },
+
+        closeTilesOnHosts: (hostIds) => {
+          if (hostIds.size === 0) return 0;
+          // Snapshot every target before closing any: a close can dissolve
+          // its pane and rewrite the surrounding tree.
+          const targets: Array<{
+            readonly tabId: string;
+            readonly paneId: string;
+            readonly instanceId: string;
+          }> = [];
+          const state = get();
+          Object.keys(state.tabsById).forEach((tabId) => {
+            const canvas = state.canvasByTabId[tabId];
+            if (canvas === undefined) return;
+            collectPanes(canvas.root).forEach((pane) => {
+              pane.tabInstanceIds.forEach((instanceId) => {
+                const tile = canvas.tilesByInstanceId[instanceId];
+                if (tile !== undefined && hostIds.has(tile.hostId)) {
+                  targets.push({ tabId, paneId: pane.id, instanceId });
+                }
+              });
+            });
+          });
+          pruneRecoveryTiles((tile) => hostIds.has(tile.hostId));
+          targets.forEach(({ tabId, paneId, instanceId }) => {
+            get().closeCanvasTab(tabId, paneId, instanceId);
+          });
+          // Closing captures Back/Forward payloads; none may reopen a tile on
+          // a host the person can no longer use.
+          const afterClose = get();
+          for (const tabId of Object.keys(afterClose.tabsById)) {
+            for (const [instanceId, payload] of Object.entries(
+              afterClose.closedTilePayloadsByTabId[tabId] ?? {},
+            )) {
+              if (payload !== undefined && hostIds.has(payload.node.hostId)) {
+                afterClose.discardClosedTilePayload(tabId, instanceId);
+              }
+            }
+          }
+          return targets.length;
         },
 
         prepareCloseCanvasTabFocusTarget: (tabId, paneId, tileTabId) => {

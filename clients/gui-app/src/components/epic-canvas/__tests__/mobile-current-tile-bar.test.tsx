@@ -1,12 +1,10 @@
 import "../../../../__tests__/test-browser-apis";
-import type { ReactNode } from "react";
 import {
   act,
   cleanup,
   fireEvent,
   render,
   screen,
-  waitFor,
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as Y from "yjs";
@@ -25,18 +23,10 @@ import {
   useSurfaceSyncStore,
   type SurfaceSyncEntry,
 } from "@/stores/sync/surface-sync-store";
-import {
-  recordNegotiatedHostMethods,
-  resetNegotiatedManifests,
-} from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
-import { resolveChatWriteRoute } from "@/hooks/epic/use-chat-write-route";
-import type { ChatProjection } from "@/stores/epics/open-epic/types";
-import { useEpicCanvas, useEpicCanvasStore } from "@/stores/epics/canvas/store";
-import { selectMobileTile } from "@/components/epic-canvas/mobile/mobile-tile-selection";
 import { LINK_DOWN_ESCALATION_MS } from "@/lib/link-down-escalation";
 
 // The live tile icon is covered by the tab-strip tests; stub it here so this
-// test targets the bar's own composition (title, rename gating).
+// test targets the bar's own composition (the title it reads).
 vi.mock("@/components/epic-canvas/canvas/tab-strip", () => ({
   TabIcon: () => <span data-testid="tab-icon" />,
   TabStrip: () => null,
@@ -46,18 +36,61 @@ vi.mock("@/components/epic-canvas/canvas/browser-tab-presentation", () => ({
   useBrowserTabPresentation: () => null,
 }));
 
-const holder = vi.hoisted(() => ({ role: "owner" }));
-
-// `useEpicNodeHostId` / `useEpicTabDisplayTitle` pass through real; their
-// unrelated external sub-readers are mocked below instead.
+// `useEpicTabDisplayTitle` passes through real; its unrelated external
+// sub-readers are mocked below instead.
 vi.mock("@/lib/epic-selectors", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/epic-selectors")>()),
   useEpicLiveArtifactTitleGenerating: () => false,
-  useEpicPermissionRole: () => holder.role,
+}));
+
+/**
+ * The host client the bar resolves for a terminal's bound host, and what the
+ * legacy title read (`terminal.list`) was handed: `null` means no legacy read
+ * was made at all.
+ */
+const terminalLegacy = vi.hoisted(() => ({
+  client: { tag: "terminal-host-client" },
+  titleReadClients: [] as Array<unknown>,
 }));
 
 vi.mock("@/hooks/terminal/use-terminal-display-title", () => ({
-  useTerminalDisplayTitle: () => null,
+  useTerminalDisplayTitle: (input: { readonly client: unknown }) => {
+    terminalLegacy.titleReadClients.push(input.client);
+    return null;
+  },
+}));
+
+interface TerminalAuthorityTestState {
+  capability: "unknown" | "legacy" | "capable";
+  displayTitle: string | null;
+}
+
+const terminalAuthority = vi.hoisted((): TerminalAuthorityTestState => ({
+  capability: "legacy",
+  displayTitle: null,
+}));
+
+vi.mock("@/hooks/terminal/use-epic-terminal-authority", () => ({
+  useEpicTerminalAuthority: () => ({
+    capability: terminalAuthority.capability,
+    projection: terminalAuthority.capability === "capable" ? {} : undefined,
+    viewModel:
+      terminalAuthority.displayTitle === null
+        ? null
+        : {
+            displayTitle: terminalAuthority.displayTitle,
+            manualTitle: null,
+            activeProcessName: null,
+            liveCwd: null,
+          },
+    canMutate: false,
+    migrationPending: false,
+    migrationError: null,
+    retryMigration: () => undefined,
+    ensureRunning: {},
+    rename: { mutate: () => undefined },
+    close: { isPending: false, mutateAsync: () => Promise.resolve() },
+  }),
 }));
 
 vi.mock("@/stores/managed-commands/managed-commands-for-chat", () => ({
@@ -65,81 +98,21 @@ vi.mock("@/stores/managed-commands/managed-commands-for-chat", () => ({
 }));
 
 vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
-  useHostClientForHostId: () => null,
+  useHostClientForHostId: (hostId: string | null) =>
+    hostId === null ? null : terminalLegacy.client,
 }));
 
 const mocks = vi.hoisted(() => ({
   handle: { current: null as OpenedStoreForTest | null },
 }));
 
-const mutateSpies = vi.hoisted(() => ({
-  renameChat: vi.fn(),
-  renameTuiAgent: vi.fn(),
-  renameArtifact: vi.fn(),
-  renameTerminal: vi.fn(),
-}));
-
-// Held open by the deferred-ACK persistence tests below; every other test
-// leaves it `null`, which resolves immediately as before.
-const renameChatHold = vi.hoisted((): { value: Promise<void> | null } => ({
-  value: null,
-}));
-
-function makeMutateAsync<TVariables>(
-  spy: (variables: TVariables) => void,
-  hold: { readonly value: Promise<void> | null } | null,
-): (variables: TVariables) => Promise<void> {
-  return (variables: TVariables) => {
-    spy(variables);
-    return hold?.value ?? Promise.resolve();
-  };
-}
-
-// `useRenameCanvasTab` reads a REAL session handle for the optimistic overlay
-// (`beginRenameMutation` / `retirePendingMutation`); the mutation hooks stay
-// mocked, exercising the real kind -> mutation mapping in
-// `use-rename-canvas-tab.ts`. `useMaybeOpenEpicHandle` and `useOpenEpicHandle`
-// return the SAME handle: `useEpicNodeHostId` and `useChatWriteRoute` must see
-// one session for the cross-host gate comparison to mean anything.
+// The display title's live-artifact read resolves through the open session.
 vi.mock("@/providers/use-open-epic-handle", () => ({
   useMaybeOpenEpicHandle: () => mocks.handle.current,
   useOpenEpicHandle: () => {
     if (mocks.handle.current === null) throw new Error("no handle seeded");
     return mocks.handle.current;
   },
-}));
-// Defaults to `null` (no session context, matching every existing test);
-// the cross-host write-route suite below overrides it.
-const sessionHostIdMock = vi.hoisted(() => ({ value: null as string | null }));
-vi.mock("@/hooks/epic/use-epic-session-host-id", () => ({
-  useEpicSessionHostId: () => sessionHostIdMock.value,
-}));
-vi.mock("@/hooks/epic/use-epic-chat-mutations", () => ({
-  useEpicRenameChat: () => ({
-    mutateAsync: makeMutateAsync(mutateSpies.renameChat, renameChatHold),
-    isPending: false,
-  }),
-}));
-vi.mock("@/hooks/epic/use-epic-tui-agent-mutations", () => ({
-  useEpicRenameTuiAgent: () => ({
-    mutateAsync: makeMutateAsync(mutateSpies.renameTuiAgent, null),
-    isPending: false,
-  }),
-}));
-vi.mock("@/hooks/epic/use-epic-node-mutations", () => ({
-  useEpicRenameArtifact: () => ({
-    mutateAsync: makeMutateAsync(mutateSpies.renameArtifact, null),
-    isPending: false,
-  }),
-}));
-vi.mock("@/hooks/epic/use-epic-session-host-client", () => ({
-  useEpicSessionHostClient: () => null,
-}));
-vi.mock("@/hooks/terminal/use-terminal-rename-for-mutation", () => ({
-  useTerminalRenameFor: () => ({
-    mutate: mutateSpies.renameTerminal,
-    isPending: false,
-  }),
 }));
 
 // The chat SESSION is the external boundary here - this suite opens no chat
@@ -186,36 +159,15 @@ const CHAT_TILE: EpicCanvasTileRef = {
   hostId: "host-A",
 };
 
-const FILE_TILE: EpicCanvasTileRef = {
-  id: "file-1",
-  instanceId: "inst-3",
-  type: "workspace-file",
-  name: "index.ts",
+const TERMINAL_TILE: EpicCanvasTileRef = {
+  id: "terminal-1",
+  instanceId: "inst-4",
+  type: "terminal",
+  name: "Local presentation",
+  titleSource: "manual",
   hostId: "host-A",
-  workspacePath: "/ws",
-  filePath: "index.ts",
+  cwd: "/ws",
 };
-
-/** A `ChatProjection` literal with every field populated explicitly. */
-function chatRow(
-  id: string,
-  hostId: string,
-  docResident: boolean | null,
-): ChatProjection {
-  return {
-    id,
-    title: id,
-    parentId: null,
-    createdAt: 0,
-    updatedAt: 0,
-    userId: null,
-    hostId,
-    isTitleEditedByUser: false,
-    docResident,
-    settings: null,
-    archivedAt: null,
-  };
-}
 
 function encodeBase64(bytes: Uint8Array): string {
   return btoa(String.fromCharCode(...bytes));
@@ -248,9 +200,7 @@ function makeMeta(): SnapshotMetaEpic {
   };
 }
 
-/** A live session for "epic-1" - no nodes seeded, since these tests only
- * assert on the RPC call args, and `useRenameCanvasTab` fires the RPC
- * regardless of whether `beginRenameMutation` finds a row to overlay. */
+/** A live session for "epic-1" with no nodes seeded. */
 function newSession(): OpenedStoreForTest {
   const captured: { value: EpicStreamCallbacks | null } = { value: null };
   const factory: EpicStreamClientFactory = (_id, callbacks) => {
@@ -285,41 +235,9 @@ function newSession(): OpenedStoreForTest {
   return handle;
 }
 
-function openEdit(): HTMLElement {
-  fireEvent.click(screen.getByTestId("mobile-current-tile-title"));
-  return screen.getByTestId("mobile-current-tile-title-input");
-}
-
-/** Reads the current tile off the real canvas store, like `MobileEpicTileView` does. */
-function MountedCurrentTileBar(props: {
-  readonly epicId: string;
-  readonly tabId: string;
-}): ReactNode {
-  const canvas = useEpicCanvas(props.tabId);
-  const selection = selectMobileTile(canvas);
-  if (selection === null) return null;
-  return (
-    <MobileCurrentTileBar
-      epicId={props.epicId}
-      tabId={props.tabId}
-      tile={selection.ref}
-    />
-  );
-}
-
-let tabId: string;
-
 describe("<MobileCurrentTileBar />", () => {
   beforeEach(() => {
-    holder.role = "owner";
-    mutateSpies.renameChat.mockClear();
-    mutateSpies.renameTuiAgent.mockClear();
-    mutateSpies.renameArtifact.mockClear();
-    mutateSpies.renameTerminal.mockClear();
-    renameChatHold.value = null;
     mocks.handle.current = newSession();
-    useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
-    tabId = useEpicCanvasStore.getState().openEpicTab("epic-1", "Tab");
   });
   afterEach(() => {
     cleanup();
@@ -328,91 +246,61 @@ describe("<MobileCurrentTileBar />", () => {
   });
 
   it("shows the current tile title and icon", () => {
-    render(
-      <MobileCurrentTileBar epicId="epic-1" tabId={tabId} tile={SPEC_TILE} />,
-    );
+    render(<MobileCurrentTileBar epicId="epic-1" tile={SPEC_TILE} />);
     const bar = screen.getByTestId("mobile-current-tile-bar");
     expect(bar.textContent).toContain("Life Philosophy");
     expect(screen.getByTestId("tab-icon")).not.toBeNull();
   });
 
-  it("renders the title as an editable control for a renameable kind and an editor role", () => {
-    render(
-      <MobileCurrentTileBar epicId="epic-1" tabId={tabId} tile={CHAT_TILE} />,
-    );
-    expect(screen.getByTestId("mobile-current-tile-title").tagName).toBe(
-      "BUTTON",
-    );
+  it("renders the title as a plain label that a tap never turns into an editor", () => {
+    render(<MobileCurrentTileBar epicId="epic-1" tile={CHAT_TILE} />);
+    const title = screen.getByTestId("mobile-current-tile-title");
+    expect(title.tagName).toBe("SPAN");
+    fireEvent.click(title);
+    expect(screen.queryByRole("textbox")).toBeNull();
   });
 
-  it("commits an edited title through the rename mutation, keyed to the tile kind", async () => {
-    render(
-      <MobileCurrentTileBar epicId="epic-1" tabId={tabId} tile={CHAT_TILE} />,
-    );
-    const input = openEdit();
-    fireEvent.change(input, { target: { value: "New title" } });
-    fireEvent.blur(input);
-    // AWAITED: the commit stamps the overlay through the worker's queue first,
-    // so the mutation fires a round trip after the blur rather than inside it.
-    await waitFor(() =>
-      expect(mutateSpies.renameChat).toHaveBeenCalledTimes(1),
-    );
-    expect(mutateSpies.renameChat).toHaveBeenCalledWith({
-      epicId: "epic-1",
-      chatId: "chat-1",
-      title: "New title",
-      // The current-tile bar supplies the TILE's own host, not the ambient
-      // session's - `CHAT_TILE.hostId` above.
-      hostId: "host-A",
+  describe("a terminal tile", () => {
+    beforeEach(() => {
+      terminalAuthority.capability = "legacy";
+      terminalAuthority.displayTitle = null;
+      terminalLegacy.titleReadClients.length = 0;
     });
-    expect(mutateSpies.renameTuiAgent).not.toHaveBeenCalled();
-    expect(mutateSpies.renameArtifact).not.toHaveBeenCalled();
-    expect(mutateSpies.renameTerminal).not.toHaveBeenCalled();
-  });
 
-  it("Escape restores the previous title and does not commit", () => {
-    render(
-      <MobileCurrentTileBar epicId="epic-1" tabId={tabId} tile={CHAT_TILE} />,
-    );
-    const input = openEdit();
-    fireEvent.change(input, { target: { value: "Discarded" } });
-    fireEvent.keyDown(input, { key: "Escape" });
-    expect(mutateSpies.renameChat).not.toHaveBeenCalled();
-    expect(screen.getByTestId("mobile-current-tile-title").textContent).toBe(
-      "Chat title",
-    );
-  });
+    it("on a capable host shows the authority's title and makes no legacy terminal.list read", () => {
+      terminalAuthority.capability = "capable";
+      terminalAuthority.displayTitle = "Authority title";
+      render(<MobileCurrentTileBar epicId="epic-1" tile={TERMINAL_TILE} />);
+      expect(screen.getByTestId("mobile-current-tile-title").textContent).toBe(
+        "Authority title",
+      );
+      expect(terminalLegacy.titleReadClients.length).toBeGreaterThan(0);
+      expect(
+        terminalLegacy.titleReadClients.every((client) => client === null),
+      ).toBe(true);
+    });
 
-  it("empty/whitespace commit does not call the mutation and keeps the previous title", () => {
-    render(
-      <MobileCurrentTileBar epicId="epic-1" tabId={tabId} tile={CHAT_TILE} />,
-    );
-    const input = openEdit();
-    fireEvent.change(input, { target: { value: "   " } });
-    fireEvent.blur(input);
-    expect(mutateSpies.renameChat).not.toHaveBeenCalled();
-    expect(screen.getByTestId("mobile-current-tile-title").textContent).toBe(
-      "Chat title",
-    );
-  });
+    it("on a legacy host keeps the legacy title read", () => {
+      terminalAuthority.capability = "legacy";
+      render(<MobileCurrentTileBar epicId="epic-1" tile={TERMINAL_TILE} />);
+      expect(screen.getByTestId("mobile-current-tile-title").textContent).toBe(
+        "Local presentation",
+      );
+      expect(terminalLegacy.titleReadClients).toContain(terminalLegacy.client);
+    });
 
-  it("renders plain text with no editable control for a non-renameable tile kind", () => {
-    render(
-      <MobileCurrentTileBar epicId="epic-1" tabId={tabId} tile={FILE_TILE} />,
-    );
-    const title = screen.getByTestId("mobile-current-tile-title");
-    expect(title.tagName).toBe("SPAN");
-    expect(screen.queryByTestId("mobile-current-tile-title-input")).toBeNull();
-  });
-
-  it("renders plain text for a viewer role even on a renameable kind", () => {
-    holder.role = "viewer";
-    render(
-      <MobileCurrentTileBar epicId="epic-1" tabId={tabId} tile={CHAT_TILE} />,
-    );
-    const title = screen.getByTestId("mobile-current-tile-title");
-    expect(title.tagName).toBe("SPAN");
-    expect(screen.queryByTestId("mobile-current-tile-title-input")).toBeNull();
+    it("while the capability is still unknown shows the authority's title and makes no legacy read", () => {
+      terminalAuthority.capability = "unknown";
+      terminalAuthority.displayTitle = "Deciding";
+      render(<MobileCurrentTileBar epicId="epic-1" tile={TERMINAL_TILE} />);
+      expect(terminalLegacy.titleReadClients.length).toBeGreaterThan(0);
+      expect(
+        terminalLegacy.titleReadClients.every((client) => client === null),
+      ).toBe(true);
+      expect(screen.getByTestId("mobile-current-tile-title").textContent).toBe(
+        "Deciding",
+      );
+    });
   });
 
   describe("stream-syncing report", () => {
@@ -435,7 +323,7 @@ describe("<MobileCurrentTileBar />", () => {
       render(
         <MobileCurrentTileBar
           epicId="epic-1"
-          tabId={tabId}
+
           tile={input.tile}
         />,
       );
@@ -528,7 +416,7 @@ describe("<MobileCurrentTileBar />", () => {
       // A closed surface is no longer a claim about anything; leaving the entry
       // behind would hold the indicator open over a stream nobody is watching.
       const view = render(
-        <MobileCurrentTileBar epicId="epic-1" tabId={tabId} tile={CHAT_TILE} />,
+        <MobileCurrentTileBar epicId="epic-1" tile={CHAT_TILE} />,
       );
       expect(published()).toBeDefined();
       view.unmount();
@@ -550,7 +438,7 @@ describe("<MobileCurrentTileBar />", () => {
           wake: chatWakeSpy,
         };
         const view = render(
-          <MobileCurrentTileBar epicId="epic-1" tabId={tabId} tile={aTile} />,
+          <MobileCurrentTileBar epicId="epic-1" tile={aTile} />,
         );
         act(() => {
           vi.advanceTimersByTime(LINK_DOWN_ESCALATION_MS);
@@ -559,9 +447,7 @@ describe("<MobileCurrentTileBar />", () => {
           publishedFor(`chat:host-A:${CHAT_TILE.id}`)?.spell.escalated,
         ).toBe(true);
 
-        view.rerender(
-          <MobileCurrentTileBar epicId="epic-1" tabId={tabId} tile={bTile} />,
-        );
+        view.rerender(<MobileCurrentTileBar epicId="epic-1" tile={bTile} />);
         expect(publishedFor(`chat:host-A:${CHAT_TILE.id}`)).toBeUndefined();
         const bEntry = publishedFor(`chat:host-B:${CHAT_TILE.id}`);
         expect(bEntry?.spell.syncing).toBe(true);
@@ -576,228 +462,6 @@ describe("<MobileCurrentTileBar />", () => {
       } finally {
         vi.useRealTimers();
       }
-    });
-  });
-
-  describe("cross-host write-route gate", () => {
-    afterEach(() => {
-      sessionHostIdMock.value = null;
-      resetNegotiatedManifests();
-    });
-
-    function seedChatRow(row: ChatProjection): void {
-      const handle = mocks.handle.current;
-      if (handle === null) throw new Error("expected a seeded session handle");
-      handle.store.setState({
-        chats: { byId: { [row.id]: row }, allIds: [row.id] },
-      });
-    }
-
-    it("stays editable, and commits to its OWN host, when a same-id row projected from another host is unadopted", async () => {
-      // host-A must actually serve a chat record plane, or its row resolves
-      // "registry-rpc" on its own and the test can't tell the gate apart.
-      recordNegotiatedHostMethods("host-A", ["epic.listChatRecords"]);
-      const projectedRowOnA = chatRow("chat-shared", "host-A", true);
-      seedChatRow(projectedRowOnA);
-      expect(
-        resolveChatWriteRoute({
-          chatsById: { "chat-shared": projectedRowOnA },
-          isChatRow: true,
-          nodeId: "chat-shared",
-          sessionHostId: "host-A",
-        }),
-      ).toBe("unavailable");
-      sessionHostIdMock.value = "host-A";
-      const tile: EpicCanvasTileRef = {
-        id: "chat-shared",
-        instanceId: "inst-cross",
-        type: "chat",
-        name: "Cross-host chat",
-        hostId: "host-B",
-      };
-
-      render(
-        <MobileCurrentTileBar epicId="epic-1" tabId={tabId} tile={tile} />,
-      );
-      expect(screen.getByTestId("mobile-current-tile-title").tagName).toBe(
-        "BUTTON",
-      );
-
-      const input = openEdit();
-      fireEvent.change(input, { target: { value: "Renamed on B" } });
-      fireEvent.blur(input);
-
-      await waitFor(() =>
-        expect(mutateSpies.renameChat).toHaveBeenCalledTimes(1),
-      );
-      expect(mutateSpies.renameChat).toHaveBeenCalledWith({
-        epicId: "epic-1",
-        chatId: "chat-shared",
-        title: "Renamed on B",
-        hostId: "host-B",
-      });
-    });
-
-    it("stays disabled for a row unadopted on its OWN (matching) host", () => {
-      sessionHostIdMock.value = "host-B";
-      recordNegotiatedHostMethods("host-B", ["epic.listChatRecords"]);
-      seedChatRow(chatRow("chat-same", "host-B", true));
-      const tile: EpicCanvasTileRef = {
-        id: "chat-same",
-        instanceId: "inst-same",
-        type: "chat",
-        name: "Same-host chat",
-        hostId: "host-B",
-      };
-
-      render(
-        <MobileCurrentTileBar epicId="epic-1" tabId={tabId} tile={tile} />,
-      );
-
-      const title = screen.getByTestId("mobile-current-tile-title");
-      expect(title.tagName).toBe("SPAN");
-      expect(
-        screen.queryByTestId("mobile-current-tile-title-input"),
-      ).toBeNull();
-    });
-  });
-
-  describe("cross-host rename persistence", () => {
-    afterEach(() => {
-      sessionHostIdMock.value = null;
-      resetNegotiatedManifests();
-      renameChatHold.value = null;
-    });
-
-    /** Same-id A (projected row's host) / B (viewed tile's host) live tiles. */
-    function seedCrossHostTiles(): void {
-      const handle = mocks.handle.current;
-      if (handle === null) throw new Error("expected a seeded session handle");
-      recordNegotiatedHostMethods("host-A", ["epic.listChatRecords"]);
-      handle.store.setState({
-        chats: {
-          byId: { "chat-shared": chatRow("chat-shared", "host-A", true) },
-          allIds: ["chat-shared"],
-        },
-      });
-      useEpicCanvasStore.getState().openTileInTab(tabId, {
-        id: "chat-shared",
-        instanceId: "inst-a-live",
-        type: "chat",
-        name: "A original",
-        hostId: "host-A",
-      });
-      // Opened last, so `selectMobileTile` shows this one - the header is
-      // "viewing B".
-      useEpicCanvasStore.getState().openTileInTab(tabId, {
-        id: "chat-shared",
-        instanceId: "inst-b-live",
-        type: "chat",
-        name: "B original",
-        hostId: "host-B",
-      });
-    }
-
-    function bTileName(): string | undefined {
-      return useEpicCanvasStore.getState().canvasByTabId[tabId]
-        ?.tilesByInstanceId["inst-b-live"]?.name;
-    }
-
-    function aTileName(): string | undefined {
-      return useEpicCanvasStore.getState().canvasByTabId[tabId]
-        ?.tilesByInstanceId["inst-a-live"]?.name;
-    }
-
-    it("persists a cross-host rename on ACK, keeps the peer host untouched, and keeps a stale earlier submission from overwriting a later one", async () => {
-      seedCrossHostTiles();
-      render(<MountedCurrentTileBar epicId="epic-1" tabId={tabId} />);
-      expect(screen.getByTestId("mobile-current-tile-title").textContent).toBe(
-        "B original",
-      );
-
-      let resolveFirst: () => void = () => {
-        throw new Error("first resolver unavailable");
-      };
-      renameChatHold.value = new Promise<void>((resolve) => {
-        resolveFirst = resolve;
-      });
-      fireEvent.change(openEdit(), { target: { value: "First title" } });
-      fireEvent.blur(screen.getByTestId("mobile-current-tile-title-input"));
-      await waitFor(() =>
-        expect(mutateSpies.renameChat).toHaveBeenCalledTimes(1),
-      );
-
-      // Before the ACK: the display and the canvas snapshot are unchanged.
-      expect(screen.getByTestId("mobile-current-tile-title").textContent).toBe(
-        "B original",
-      );
-      expect(bTileName()).toBe("B original");
-
-      // A second, LATER submission - resolves before the first.
-      let resolveSecond: () => void = () => {
-        throw new Error("second resolver unavailable");
-      };
-      renameChatHold.value = new Promise<void>((resolve) => {
-        resolveSecond = resolve;
-      });
-      fireEvent.change(openEdit(), { target: { value: "Second title" } });
-      fireEvent.blur(screen.getByTestId("mobile-current-tile-title-input"));
-      await waitFor(() =>
-        expect(mutateSpies.renameChat).toHaveBeenCalledTimes(2),
-      );
-
-      await act(async () => {
-        resolveSecond();
-        await Promise.resolve();
-        await Promise.resolve();
-        await Promise.resolve();
-      });
-      expect(screen.getByTestId("mobile-current-tile-title").textContent).toBe(
-        "Second title",
-      );
-      expect(bTileName()).toBe("Second title");
-
-      // The stale first submission lands late - it must not overwrite the
-      // newer title that already landed.
-      await act(async () => {
-        resolveFirst();
-        await Promise.resolve();
-        await Promise.resolve();
-        await Promise.resolve();
-      });
-      expect(screen.getByTestId("mobile-current-tile-title").textContent).toBe(
-        "Second title",
-      );
-      expect(bTileName()).toBe("Second title");
-
-      // The peer host's row and tile were never touched by either submission.
-      expect(aTileName()).toBe("A original");
-      expect(
-        mocks.handle.current?.store.getState().chats.byId["chat-shared"]?.title,
-      ).toBe("chat-shared");
-    });
-
-    it("leaves the display and canvas snapshot unchanged when the RPC rejects", async () => {
-      seedCrossHostTiles();
-      render(<MountedCurrentTileBar epicId="epic-1" tabId={tabId} />);
-
-      renameChatHold.value = Promise.reject(new Error("rejected"));
-      fireEvent.change(openEdit(), { target: { value: "Rejected title" } });
-      fireEvent.blur(screen.getByTestId("mobile-current-tile-title-input"));
-      await waitFor(() =>
-        expect(mutateSpies.renameChat).toHaveBeenCalledTimes(1),
-      );
-
-      await act(async () => {
-        await Promise.resolve();
-        await Promise.resolve();
-        await Promise.resolve();
-      });
-      expect(screen.getByTestId("mobile-current-tile-title").textContent).toBe(
-        "B original",
-      );
-      expect(bTileName()).toBe("B original");
-      expect(aTileName()).toBe("A original");
     });
   });
 });

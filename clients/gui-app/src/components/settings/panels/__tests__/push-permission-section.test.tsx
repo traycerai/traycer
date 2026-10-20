@@ -165,7 +165,9 @@ describe("<PushPermissionSection />", () => {
     expect(await screen.findByText("On")).toBeTruthy();
     expect(screen.getByText("Push notifications on this phone")).toBeTruthy();
     expect(
-      screen.getByText("Delivered to this phone when an agent needs you."),
+      screen.getByText(
+        "Delivered to this phone for the events turned on under Notification events.",
+      ),
     ).toBeTruthy();
     expect(screen.getByTestId("push-permission-state").dataset.state).toBe(
       "granted",
@@ -182,9 +184,7 @@ describe("<PushPermissionSection />", () => {
     });
     expect(action.dataset.testid).toBe("push-permission-action");
     expect(
-      screen.getByText(
-        "Turned off for Traycer in system Settings. Turn them on to get buzzed when an agent needs you.",
-      ),
+      screen.getByText("Turned off for Traycer in system Settings."),
     ).toBeTruthy();
     expect(screen.getByTestId("push-permission-state").dataset.state).toBe(
       "denied",
@@ -199,7 +199,9 @@ describe("<PushPermissionSection />", () => {
     const action = await screen.findByRole("button", { name: "Enable" });
     expect(action.dataset.testid).toBe("push-permission-action");
     expect(
-      screen.getByText("Get buzzed when an agent needs you."),
+      screen.getByText(
+        "Get buzzed on this phone for the events turned on under Notification events.",
+      ),
     ).toBeTruthy();
     expect(screen.getByTestId("push-permission-state").dataset.state).toBe(
       "prompt",

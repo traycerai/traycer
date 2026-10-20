@@ -38,6 +38,7 @@ import type {
   DesktopPublishedHostSnapshot,
   RegisteredHostsPush,
 } from "../../../ipc-contracts/host-types";
+import { FakeStreamClient } from "@traycer-clients/shared/host-transport/__testing__/fake-stream-client";
 import { DesktopAuthSession } from "../../auth/desktop-auth-session";
 import type { DesktopAuthSessionSnapshot } from "../../../ipc-contracts/window-types";
 import type { LocalHostIdentityFiles } from "../../host/local-host-identity";
@@ -47,6 +48,7 @@ import {
   DesktopHostFleetSource,
   DesktopLocalHostOutageSignal,
 } from "../desktop-selection-ports";
+import { startLocalHostInventorySubscription } from "../local-host-inventory-subscription";
 
 /**
  * Controllable stand-in for the fleet port's enrollment read. Default is the
@@ -594,7 +596,11 @@ describe("DesktopHostFleetSource", () => {
 
     expect(fleet.snapshot().hosts).toHaveLength(1);
     for (const entry of fleet.snapshot().hosts) {
-      expect(Object.keys(entry).sort()).toEqual(["hostId", "kind"]);
+      expect(Object.keys(entry).sort()).toEqual([
+        "hostId",
+        "kind",
+        "teamOwned",
+      ]);
     }
     fleet.dispose();
   });
@@ -625,8 +631,50 @@ describe("DesktopHostFleetSource", () => {
     await fleet.refresh();
 
     expect(fleet.snapshot().hosts).toEqual([
-      { hostId: "local-host", kind: "local" },
-      { hostId: "remote-host", kind: "remote" },
+      { hostId: "local-host", kind: "local", teamOwned: false },
+      { hostId: "remote-host", kind: "remote", teamOwned: false },
+    ]);
+    fleet.dispose();
+  });
+
+  it("publishes teamOwned only for a registry row a team owns", async () => {
+    const dir = await makeTempDir();
+    const enrollmentFile = await writeEnrollment(dir, "local-host");
+    const authSession = new DesktopAuthSession();
+    setVerifiedSession(authSession, signedInSnapshot("user-a", "token-1"));
+    const identity = new FakeIdentitySource("user-a", 0);
+    const host = new FakeHostLifecycle();
+    host.identityEnrollmentFile = enrollmentFile;
+    const fleet = buildFleetSource({
+      identity,
+      authSession,
+      host,
+      listRegisteredHosts: async () => ({
+        kind: "ok",
+        response: {
+          hosts: [
+            buildHostListItem("local-host"),
+            {
+              ...buildHostListItem("team-host"),
+              owner: { kind: "team", id: "team-1", name: "Platform" },
+            },
+            {
+              ...buildHostListItem("own-host"),
+              owner: { kind: "user", id: "user-a" },
+            },
+            buildHostListItem("remote-host"),
+          ],
+        },
+      }),
+    });
+
+    await fleet.refresh();
+
+    expect(fleet.snapshot().hosts).toEqual([
+      { hostId: "local-host", kind: "local", teamOwned: false },
+      { hostId: "own-host", kind: "remote", teamOwned: false },
+      { hostId: "remote-host", kind: "remote", teamOwned: false },
+      { hostId: "team-host", kind: "remote", teamOwned: true },
     ]);
     fleet.dispose();
   });
@@ -652,8 +700,8 @@ describe("DesktopHostFleetSource", () => {
     await fleet.refresh();
 
     expect(fleet.snapshot().hosts).toEqual([
-      { hostId: "local-host", kind: "local" },
-      { hostId: "remote-host", kind: "remote" },
+      { hostId: "local-host", kind: "local", teamOwned: false },
+      { hostId: "remote-host", kind: "remote", teamOwned: false },
     ]);
     fleet.dispose();
   });
@@ -866,6 +914,7 @@ describe("DesktopHostFleetSource", () => {
     expect(snapshots.at(-1)?.hosts).toContainEqual({
       hostId: "host-b",
       kind: "remote",
+      teamOwned: false,
     });
 
     // ...THEN resolve A's now-doubly-stale fetch LAST.
@@ -968,7 +1017,7 @@ describe("DesktopHostFleetSource", () => {
       expect(snapshots).toHaveLength(1);
       expect(snapshots[0]).toMatchObject({
         localHostId: "local-host",
-        hosts: [{ hostId: "local-host", kind: "local" }],
+        hosts: [{ hostId: "local-host", kind: "local", teamOwned: false }],
       });
       fleet.dispose();
     }
@@ -1014,8 +1063,8 @@ describe("DesktopHostFleetSource", () => {
     expect(snapshots[0]).toMatchObject({
       localHostId: "local-host",
       hosts: [
-        { hostId: "local-host", kind: "local" },
-        { hostId: "remote-1", kind: "remote" },
+        { hostId: "local-host", kind: "local", teamOwned: false },
+        { hostId: "remote-1", kind: "remote", teamOwned: false },
       ],
     });
     fleet.dispose();
@@ -1584,11 +1633,15 @@ describe("DesktopHostFleetSource publishRegistryResponse", () => {
 
     // The push carries the full row - status DTO and all.
     expect(published[0]?.response.hosts[0]).toHaveProperty("status");
-    // The snapshot the authority itself reads carries ONLY hostId/kind -
+    // The snapshot the authority itself reads carries ONLY hostId/kind/teamOwned -
     // unchanged by this port gaining a second consumer of the same fetch.
     expect(fleet.snapshot().hosts).toHaveLength(1);
     for (const entry of fleet.snapshot().hosts) {
-      expect(Object.keys(entry).sort()).toEqual(["hostId", "kind"]);
+      expect(Object.keys(entry).sort()).toEqual([
+        "hostId",
+        "kind",
+        "teamOwned",
+      ]);
     }
     fleet.dispose();
   });
@@ -1640,6 +1693,122 @@ describe("DesktopHostFleetSource acceptPushedRows", () => {
         .sort(),
     ).toEqual(["local-host", "remote-host"]);
     fleet.dispose();
+  });
+
+  describe("C1w: the real local-host inventory subscription feeding the real fleet source, wired as selection-authority-ipc wires them", () => {
+    async function wired() {
+      const dir = await makeTempDir();
+      const enrollmentFile = await writeEnrollment(dir, "local-host");
+      const authSession = new DesktopAuthSession();
+      setVerifiedSession(authSession, signedInSnapshot("user-a", "token-1"));
+      const identity = new FakeIdentitySource("user-a", 0);
+      const host = new FakeHostLifecycle();
+      host.identityEnrollmentFile = enrollmentFile;
+      const sandboxRow: HostListItem = {
+        ...buildHostListItem("sbx-1"),
+        kind: "sandbox",
+        sandboxState: "awake",
+        sandboxFrozen: false,
+        profile: "agent",
+      };
+      const registry = [buildHostListItem("local-host"), sandboxRow];
+      const { fleet, published } = buildFleetSourceWithPublisher({
+        identity,
+        authSession,
+        host,
+        listRegisteredHosts: async () => ({
+          kind: "ok",
+          response: { hosts: registry },
+        }),
+      });
+      // The registry poll listed a sandbox beside the personal host.
+      await fleet.refresh();
+      const hostIds = (): string[] =>
+        fleet
+          .snapshot()
+          .hosts.map((entry) => entry.hostId)
+          .sort();
+      expect(hostIds()).toEqual(["local-host", "sbx-1"]);
+
+      const streamClient = new FakeStreamClient(true);
+      const subscription = startLocalHostInventorySubscription({
+        localHost: () => ({
+          hostId: "local-host",
+          websocketUrl: "ws://local-host",
+        }),
+        onLocalHostChanged: () => () => undefined,
+        identity: () => ({
+          userId: identity.current().identityKey,
+          generation: identity.current().generation,
+        }),
+        onAuthChanged: () => () => undefined,
+        openStreamClient: () => streamClient,
+        onRows: (read) => {
+          void fleet.acceptPushedRows(read);
+        },
+        onPushActiveChanged: (active) => {
+          fleet.setPushActive(active);
+        },
+        log: silentLog,
+      });
+      const session = streamClient.sessions[0];
+      if (session === undefined) throw new Error("no session opened");
+      return { fleet, published, hostIds, subscription, session };
+    }
+
+    it("a @1.0 snapshot (personal hosts only) leaves the sandbox in the fleet and leaves the poll running", async () => {
+      const { fleet, published, hostIds, subscription, session } =
+        await wired();
+      const publishedBefore = published.length;
+      session.negotiatedSchemaVersion = { major: 1, minor: 0 };
+
+      session.emit(
+        {
+          kind: "snapshot",
+          hasBinaryPayload: false,
+          hosts: [buildHostListItem("local-host")],
+          fetchedAtMs: 2_000,
+          stale: false,
+        },
+        null,
+      );
+      // Anything adopted would publish; let the async adopt path run.
+      await new Promise((resolve) => setTimeout(resolve, 20));
+
+      expect(hostIds()).toEqual(["local-host", "sbx-1"]);
+      expect(published).toHaveLength(publishedBefore);
+      expect(fleet.isPushActive()).toBe(false);
+
+      subscription.dispose();
+      fleet.dispose();
+    });
+
+    it("control: the same personal-only snapshot on @1.1 IS adopted, so the wiring above is live", async () => {
+      const { fleet, published, hostIds, subscription, session } =
+        await wired();
+      const publishedBefore = published.length;
+      session.negotiatedSchemaVersion = { major: 1, minor: 1 };
+
+      session.emit(
+        {
+          kind: "snapshot",
+          hasBinaryPayload: false,
+          hosts: [buildHostListItem("local-host")],
+          fetchedAtMs: 2_000,
+          stale: false,
+        },
+        null,
+      );
+      await vi.waitFor(() => {
+        expect(published.length).toBeGreaterThan(publishedBefore);
+      });
+
+      expect(hostIds()).toEqual(["local-host"]);
+      expect(fleet.isPushActive()).toBe(true);
+
+      subscription.dispose();
+      fleet.dispose();
+    });
   });
 
   it("C2: applies the signed-out rule exactly like refresh() does - publishes nothing and the fleet stays empty", async () => {

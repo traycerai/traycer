@@ -251,7 +251,6 @@ function statusWith(
     storeFormats: null,
     install: null,
     processMemory: null,
-    crossHostMessaging: null,
   };
 }
 
@@ -321,7 +320,6 @@ function statusWithBusy(
     storeFormats: null,
     install: null,
     processMemory: null,
-    crossHostMessaging: null,
   };
 }
 
@@ -344,7 +342,6 @@ function statusOperationNull(
     storeFormats: null,
     install: null,
     processMemory: null,
-    crossHostMessaging: null,
   };
 }
 

@@ -199,7 +199,6 @@ const messengerFactory: MessengerFactory<HostRpcRegistry> = ({ registry }) =>
         storeFormats: null,
         install: null,
         processMemory: null,
-        crossHostMessaging: null,
       }),
       "host.notifications.indicatorState": () => ({ epics: {}, chats: {} }),
       "epic.getTaskContexts": () => ({ tasks: {} }),

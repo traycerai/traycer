@@ -214,6 +214,7 @@ describe("ActiveHostWorkspaceControls selected scope", () => {
       onSelect: mocks.onSelect,
       refusalByHostId: NO_HOST_OPTION_REFUSALS,
       unselectableExceptHostId: null,
+      onlyHostIds: null,
     });
 
     pickOtherHost();
@@ -240,6 +241,7 @@ describe("ActiveHostWorkspaceControls selected scope", () => {
       onSelect: mocks.onSelect,
       refusalByHostId: NO_HOST_OPTION_REFUSALS,
       unselectableExceptHostId: "tab-host-id",
+      onlyHostIds: null,
     });
 
     fireEvent.click(screen.getByRole("button", { name: "Host: Tab host" }));

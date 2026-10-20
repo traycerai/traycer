@@ -183,7 +183,6 @@ const DOWNLOADING_STATUS: ResponseOfMethod<HostRpcRegistry, "host.status"> = {
   storeFormats: null,
   install: null,
   processMemory: null,
-  crossHostMessaging: null,
 };
 
 function scopeFrom(
@@ -318,7 +317,7 @@ afterEach(() => {
 });
 
 describe("<HostSettingsPanel /> Overview — tabbed shell", () => {
-  it("opens on Installation, ahead of Updates, Data and Ports", () => {
+  it("opens on Installation, ahead of Updates, Access and setup, Data and Ports", () => {
     const fixture = buildFixture("host-a");
     recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
     hostBindingMock.current = bindingWith(fixture.client);
@@ -329,6 +328,7 @@ describe("<HostSettingsPanel /> Overview — tabbed shell", () => {
     expect(HOST_OVERVIEW_TABS).toEqual([
       "installation",
       "updates",
+      "access",
       "data",
       "ports",
     ]);
@@ -574,11 +574,11 @@ describe("<HostSettingsPanel /> Overview — tabbed shell", () => {
     ).toBe(true);
   });
 
-  it("renders all four tab triggers under a connecting host", async () => {
+  it("renders all five tab triggers under a connecting host", async () => {
     scopeOverrides.current = coldConnectingScope();
     renderPanel();
 
-    expect(HOST_OVERVIEW_TABS).toHaveLength(4);
+    expect(HOST_OVERVIEW_TABS).toHaveLength(5);
     for (const tab of HOST_OVERVIEW_TABS) {
       expect(
         await screen.findByTestId(`host-overview-tab-${tab}`),

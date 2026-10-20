@@ -18,6 +18,7 @@ import {
 import {
   providersNativeMutateRequestSchema,
   providersNativeMutateRequestSchemaV10Preimage,
+  providersNativeMutateRequestSchemaV11,
 } from "@traycer/protocol/host/provider-schemas";
 
 /**
@@ -232,15 +233,24 @@ describe("applyRemedy action and capability", () => {
     mutation: { action: "applyRemedy", remedyId: REMEDY.id },
   };
 
-  it("the live mutation request spells applyRemedy; the released 1.0 request does not", () => {
+  it("the 1.1 and live 1.2 mutation requests spell applyRemedy; the released 1.0 request does not", () => {
     expect(nativeMutationSchema.safeParse(applyRemedy).success).toBe(true);
     expect(nativeMutationSchemaV10Preimage.safeParse(applyRemedy).success).toBe(
       false,
     );
+    // 1.1 is frozen with no grant; the live 1.2 request carries one, null for
+    // a mutation that installs nothing.
+    expect(
+      providersNativeMutateRequestSchemaV11.safeParse({
+        providerId: "kimi",
+        mutation: applyRemedy,
+      }).success,
+    ).toBe(true);
     expect(
       providersNativeMutateRequestSchema.safeParse({
         providerId: "kimi",
         mutation: applyRemedy,
+        executableWriteGrant: null,
       }).success,
     ).toBe(true);
     expect(

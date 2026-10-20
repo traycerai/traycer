@@ -10,8 +10,10 @@
 
 export {
   createRemoteHostTransport,
+  remoteOpenAuthFor,
   type CreateRemoteTransportOptions,
   type RemoteHostTransport,
+  type RemoteOpenAuth,
 } from "./create-remote-transport";
 export {
   RemoteSession,
@@ -48,6 +50,8 @@ export {
 export {
   mintAttachGrantViaHttp,
   createAttachGrantProvider,
+  createSandboxAttachGrantProvider,
+  type SandboxAttachGrantSource,
   type AttachGrant,
   type AttachGrantResult,
   type AttachGrantProvider,

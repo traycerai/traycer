@@ -193,6 +193,10 @@ interface PreloadBridge {
     openSavedFile(path: string): Promise<void>;
   };
   requestHostRespawn(): Promise<unknown>;
+  forceRestartUnresponsiveHost(offer: {
+    readonly pid: number;
+    readonly offerId: number;
+  }): Promise<unknown>;
   hostManagement: {
     convergeReady(force: boolean): Promise<unknown>;
     applyStaged(trigger: "launch" | "manual", force: boolean): Promise<unknown>;
@@ -679,6 +683,22 @@ describe("preload new-capability wiring", () => {
     });
     await bridge.requestHostRespawn();
     expect(invokeFn).toHaveBeenCalledWith(RunnerHostInvoke.requestHostRespawn);
+  });
+
+  it("forwards forceRestartUnresponsiveHost through ipcRenderer.invoke with the pid and the offer id", async () => {
+    const invokeFn = vi.fn(async () => undefined);
+    const bridge = await loadPreload({
+      authnApiUrl: undefined,
+      desktopDev: undefined,
+      initialRouteArg: undefined,
+      invokeFn,
+      sendSyncFn: undefined,
+    });
+    await bridge.forceRestartUnresponsiveHost({ pid: 4242, offerId: 7 });
+    expect(invokeFn).toHaveBeenCalledWith(
+      RunnerHostInvoke.forceRestartUnresponsiveHost,
+      { pid: 4242, offerId: 7 },
+    );
   });
 
   it("forwards workspace folder picking through ipcRenderer.invoke", async () => {

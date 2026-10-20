@@ -1050,6 +1050,7 @@ function RateLimitHostPickerRow({
         listsFailed={scope.listsFailed}
         onRetryLists={scope.retryLists}
         updateViewForHost={null}
+        offersAutomations={false}
         environmentLabelForHost={null}
       />
     </div>

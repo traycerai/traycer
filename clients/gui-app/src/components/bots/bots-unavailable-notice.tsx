@@ -10,7 +10,6 @@ import { Bot } from "lucide-react";
  * a `bot.*` method the host does not have.
  */
 export function BotsUnavailableNotice(props: {
-  readonly hostLabel: string | null;
   readonly testId: string;
 }): ReactNode {
   return (
@@ -24,9 +23,7 @@ export function BotsUnavailableNotice(props: {
       </span>
       <div className="max-w-[60ch] space-y-1">
         <p className="font-medium text-ui-sm text-foreground">
-          {props.hostLabel === null
-            ? "Bots aren't available on this host yet"
-            : `Bots aren't available on ${props.hostLabel} yet`}
+          Bots aren&apos;t available on this host yet
         </p>
         <p className="text-ui-sm text-muted-foreground">
           This host predates bots. Update it to create and run them from here.

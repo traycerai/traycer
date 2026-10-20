@@ -10,6 +10,7 @@ import type {
   TokenRotateOutcome,
   TokenRotateResult,
 } from "@traycer-clients/shared/platform/runner-host";
+import type { ExecutableWriteGrantFetchResult } from "@traycer-clients/shared/host-client/executable-write-grant";
 import { shouldWipeLegacyCredentials } from "@traycer-clients/shared/platform/runner-host";
 import type { Disposable } from "@traycer-clients/shared/platform/uri-callback";
 import type { AuthenticatedUser } from "@traycer/protocol/auth";
@@ -37,6 +38,28 @@ import type {
   UpdateHostVersionPolicyInput,
 } from "@traycer-clients/shared/host-client/host-version-policy-fetcher";
 import type { DeregisterHostFetchResult } from "@traycer-clients/shared/host-client/host-deregister-fetcher";
+import type {
+  SandboxAutomationFetchResult,
+  SandboxAutomationOpenFetchResult,
+  SandboxCatalogueFetchResult,
+  SandboxControlFailure,
+  SandboxCostsFetchResult,
+  SandboxCreateFetchResult,
+  SandboxListFetchResult,
+  SandboxVerbFetchResult,
+} from "@traycer-clients/shared/host-client/sandbox-control";
+import type {
+  EnvironmentProvidersFetchResult,
+  SandboxGrantsFetchResult,
+  TeamEnvironmentFetchResult,
+  SecretRequestDecideFetchResult,
+} from "@traycer-clients/shared/host-client/sandbox-secrets";
+import type { SecretRequestDecision } from "@traycer/protocol/host/sandbox-secrets";
+import type {
+  SandboxAutomationOpenTarget,
+  SandboxCreateRequest,
+  SandboxLifecycleVerb,
+} from "@traycer/protocol/host/sandbox-control";
 import type { AuthIdentityValidationResult } from "@traycer-clients/shared/auth/auth-validation";
 import { credentialsIdentityFromAuthenticatedUser } from "@traycer-clients/shared/auth/auth-validation";
 import {
@@ -2965,6 +2988,205 @@ export class AuthService {
       throw new Error("Sign in to remove this host.");
     }
     return this.runnerHost.deregisterHostFromAccount(bearer, hostId);
+  }
+
+  /**
+   * The sandbox control plane (`/api/sandboxes` on traycer-server) via the
+   * runner host, which runs it where {@link fetchRegisteredHosts} runs (Electron
+   * main on desktop, for CORS). The reads answer `unauthorized` with no cloud
+   * bearer, the way a list has an empty state to render; the writes throw, for
+   * the reason {@link updateHostVersionPolicy} gives.
+   */
+  /** `IRunnerHost.sandboxControlUnavailableReason`, for a caller to say why. */
+  sandboxControlUnavailableReason(): string | null {
+    return this.runnerHost.sandboxControlUnavailableReason;
+  }
+
+  /**
+   * The floor under every sandbox call: a build that cannot reach the
+   * control plane (`IRunnerHost.sandboxControlUnavailableReason`, staging)
+   * sends none of them, and each answers this failure instead.
+   */
+  private sandboxControlRefusal(): SandboxControlFailure | null {
+    const reason = this.sandboxControlUnavailableReason();
+    return reason === null ? null : { kind: "unavailable", reason };
+  }
+
+  async listSandboxes(): Promise<SandboxListFetchResult> {
+    const refusal = this.sandboxControlRefusal();
+    if (refusal !== null) return refusal;
+    const bearer = this.cloudBearer();
+    if (bearer === null) {
+      return { kind: "unauthorized" };
+    }
+    return this.runnerHost.listSandboxes(bearer);
+  }
+
+  async getSandboxCosts(): Promise<SandboxCostsFetchResult> {
+    const refusal = this.sandboxControlRefusal();
+    if (refusal !== null) return refusal;
+    const bearer = this.cloudBearer();
+    if (bearer === null) {
+      return { kind: "unauthorized" };
+    }
+    return this.runnerHost.getSandboxCosts(bearer);
+  }
+
+  async getSandboxCatalogue(): Promise<SandboxCatalogueFetchResult> {
+    const refusal = this.sandboxControlRefusal();
+    if (refusal !== null) return refusal;
+    const bearer = this.cloudBearer();
+    if (bearer === null) {
+      return { kind: "unauthorized" };
+    }
+    return this.runnerHost.getSandboxCatalogue(bearer);
+  }
+
+  async createSandbox(
+    request: SandboxCreateRequest,
+  ): Promise<SandboxCreateFetchResult> {
+    const refusal = this.sandboxControlRefusal();
+    if (refusal !== null) return refusal;
+    const bearer = this.cloudBearer();
+    if (bearer === null) {
+      throw new Error("Sign in to create a sandbox.");
+    }
+    return this.runnerHost.createSandbox(bearer, request);
+  }
+
+  async destroySandbox(sandboxId: string): Promise<SandboxVerbFetchResult> {
+    const refusal = this.sandboxControlRefusal();
+    if (refusal !== null) return refusal;
+    const bearer = this.cloudBearer();
+    if (bearer === null) {
+      throw new Error("Sign in to destroy this sandbox.");
+    }
+    return this.runnerHost.destroySandbox(bearer, sandboxId);
+  }
+
+  /**
+   * A lifecycle verb: the card's suspend / resume / stop / start, and the
+   * wake a tab open runs. Answers `unauthorized` with no cloud bearer rather
+   * than throwing, because the tab-open wake reads it as an outcome.
+   */
+  async runSandboxVerb(
+    sandboxId: string,
+    verb: SandboxLifecycleVerb,
+    timeoutMs: number,
+  ): Promise<SandboxVerbFetchResult> {
+    const refusal = this.sandboxControlRefusal();
+    if (refusal !== null) return refusal;
+    const bearer = this.cloudBearer();
+    if (bearer === null) {
+      return { kind: "unauthorized" };
+    }
+    return this.runnerHost.runSandboxVerb(bearer, sandboxId, verb, timeoutMs);
+  }
+
+  /**
+   * `GET /api/sandboxes/automation`: the user's Automations host, or a team's
+   * pods when `environmentId` names the team's environment. A read.
+   */
+  async getSandboxAutomation(
+    environmentId: string | null,
+  ): Promise<SandboxAutomationFetchResult> {
+    const refusal = this.sandboxControlRefusal();
+    if (refusal !== null) return refusal;
+    const bearer = this.cloudBearer();
+    if (bearer === null) {
+      return { kind: "unauthorized" };
+    }
+    return this.runnerHost.getSandboxAutomation(bearer, environmentId);
+  }
+
+  /**
+   * `POST /api/sandboxes/automation`: creates or wakes it, a write; a team's
+   * pod when `target` names it.
+   */
+  async openSandboxAutomation(
+    target: SandboxAutomationOpenTarget | null,
+  ): Promise<SandboxAutomationOpenFetchResult> {
+    const refusal = this.sandboxControlRefusal();
+    if (refusal !== null) return refusal;
+    const bearer = this.cloudBearer();
+    if (bearer === null) {
+      throw new Error("Sign in to start Automations.");
+    }
+    return this.runnerHost.openSandboxAutomation(bearer, target);
+  }
+
+  /**
+   * The secrets one sandbox host may use, from the broker (authn). No
+   * `sandboxControlRefusal` here: the broker is authn, which every build
+   * reaches, and a build with no sandboxes simply never asks.
+   */
+  async getSandboxGrants(
+    environmentId: string | null,
+    hostId: string,
+  ): Promise<SandboxGrantsFetchResult> {
+    const bearer = this.cloudBearer();
+    if (bearer === null) {
+      return { kind: "unauthorized" };
+    }
+    return this.runnerHost.getSandboxGrants(bearer, environmentId, hostId);
+  }
+
+  /**
+   * A team's environment id, read for a team the person picked in the create
+   * form. The route creates the environment and syncs the member's items on its
+   * first call, so it is never read for every team.
+   */
+  async getTeamEnvironment(
+    teamId: string,
+  ): Promise<TeamEnvironmentFetchResult> {
+    const bearer = this.cloudBearer();
+    if (bearer === null) {
+      return { kind: "unauthorized" };
+    }
+    return this.runnerHost.getTeamEnvironment(bearer, teamId);
+  }
+
+  /** An environment's provider counts: its API keys and linked plans. */
+  async getEnvironmentProviders(
+    environmentId: string,
+  ): Promise<EnvironmentProvidersFetchResult> {
+    const bearer = this.cloudBearer();
+    if (bearer === null) {
+      return { kind: "unauthorized" };
+    }
+    return this.runnerHost.getEnvironmentProviders(bearer, environmentId);
+  }
+
+  /** The user's answer to an agent's grant request. */
+  async decideSecretRequest(
+    environmentId: string | null,
+    requestId: string,
+    decision: SecretRequestDecision,
+  ): Promise<SecretRequestDecideFetchResult> {
+    const bearer = this.cloudBearer();
+    if (bearer === null) {
+      return { kind: "unauthorized" };
+    }
+    return this.runnerHost.decideSecretRequest(
+      bearer,
+      environmentId,
+      requestId,
+      decision,
+    );
+  }
+
+  /**
+   * An executable-write grant for one host, minted on this user's session
+   * (`lib/environment/executable-write-grant.ts` is the caller and the cache).
+   */
+  async mintExecutableWriteGrant(
+    hostId: string,
+  ): Promise<ExecutableWriteGrantFetchResult> {
+    const bearer = this.cloudBearer();
+    if (bearer === null) {
+      return { kind: "unauthorized" };
+    }
+    return this.runnerHost.mintExecutableWriteGrant(bearer, hostId);
   }
 
   private async revalidateCurrentContextOnce(

@@ -583,7 +583,10 @@ function GitDiffPanelDegraded(props: GitDiffPanelDegradedProps): ReactNode {
                 selected={null}
                 onSelectRoot={handleSelectRoot}
                 hostSection={
-                  <WorktreePickerHostSection surfaceKey={props.surfaceKey} />
+                  <WorktreePickerHostSection
+                    surfaceKey={props.surfaceKey}
+                    offersAutomations={false}
+                  />
                 }
                 // Opening the switcher is a tap to pick a workspace, not to
                 // type. A touch pointer would pay for the search's focus with
@@ -809,7 +812,10 @@ function GitDiffPanelLoaded(props: GitDiffPanelLoadedProps): ReactNode {
                 selected={workspaceSelected}
                 onSelectRoot={handleSelectRoot}
                 hostSection={
-                  <WorktreePickerHostSection surfaceKey={surfaceKey} />
+                  <WorktreePickerHostSection
+                    surfaceKey={surfaceKey}
+                    offersAutomations={false}
+                  />
                 }
                 // Opening the switcher is a tap to pick a workspace, not to
                 // type. A touch pointer would pay for the search's focus with

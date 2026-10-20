@@ -14,6 +14,7 @@ export {
   markdownToChatSearchText,
   chatFindMessageContentUnitId,
   chatFindSegmentUnitId,
+  chatFindToolImageGalleryUnitId,
   chatFindActivityGroupSummaryUnitId,
   chatFindActivityGroupChildHeaderUnitId,
   chatFindSubagentHeaderUnitId,

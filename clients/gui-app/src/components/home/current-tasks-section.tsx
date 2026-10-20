@@ -316,7 +316,6 @@ function CurrentTaskRow(props: {
         />
       )}
       renameEditor={null}
-      renameControl={null}
       deleteControl={null}
       sweepControl={null}
       sweepMenuItem={null}

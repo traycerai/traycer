@@ -85,7 +85,11 @@ export const noopLogger: ILogger = {
 };
 
 export function createCliLogger(environment: Environment): ILogger {
-  const path = cliLogPath(environment);
+  // The log path derives from the data location record, which can be
+  // unusable (a missing drive, a malformed record). Resolved at the first
+  // write, inside the guard below, so constructing a logger never throws and
+  // the entry can still refuse cleanly with the record's own message.
+  let path: string | null = null;
   // Resolve the client threshold once at construction — config.json is shared
   // and rarely changes mid-process, and a fresh CLI invocation picks up the
   // latest level. Defaults to `info`, so debug output is dropped unless raised.
@@ -98,6 +102,7 @@ export function createCliLogger(environment: Environment): ILogger {
   ): void => {
     if (!logLevelAllows(threshold, level)) return;
     try {
+      path ??= cliLogPath(environment);
       mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
       appendFileSync(
         path,

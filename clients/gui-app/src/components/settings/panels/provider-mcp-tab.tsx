@@ -19,6 +19,7 @@ import {
 import type { ProviderId } from "@traycer/protocol/host/provider-schemas";
 import type {
   ProviderMcpCapabilities,
+  ProviderMcpCoverage,
   ProviderMcpNotice,
   ProviderMcpRemedy,
   ProviderMcpServer,
@@ -28,6 +29,16 @@ import type {
 } from "@traycer/protocol/host/provider-native-schemas";
 import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
 import { Badge } from "@/components/ui/badge";
+import {
+  PersonalEntryMark,
+  type PersonalMarkTarget,
+} from "@/components/settings/personal/personal-entry-mark";
+import {
+  PERSONAL_ENTRY_LOCKED_TEXT,
+  personalRemoveText,
+  usePersonalEntryApplied,
+} from "@/components/settings/personal/personal-page-context";
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { Button } from "@/components/ui/button";
 import {
   Collapsible,
@@ -74,6 +85,8 @@ import {
   ProviderListSearchEmptyState,
 } from "./provider-list-search";
 import { useProviderNativeScope } from "./use-provider-native-scope";
+import { CredentialRefusalNote } from "@/components/providers/credential-refusal-note";
+import { useHostCredentialRefusal } from "@/hooks/host/use-host-credential-refusal";
 
 const EMPTY_MCP_SERVERS: readonly ProviderMcpServer[] = [];
 function mcpListPresentation(listData: McpListData | undefined): {
@@ -167,6 +180,9 @@ function canToggleMcpServer(args: {
   const { server, capabilities, canToggleServer, canApplyRemedy } = args;
   return (
     canToggleServer &&
+    (server.origin === null ||
+      server.origin === undefined ||
+      server.origin.editable) &&
     (server.enabled ||
       server.enableConfirmation === null ||
       server.enableConfirmation === undefined ||
@@ -177,6 +193,18 @@ function canToggleMcpServer(args: {
       (canApplyRemedy &&
         server.enableConfirmation !== null &&
         server.enableConfirmation !== undefined))
+  );
+}
+
+function canRemoveMcpServer(
+  server: ProviderMcpServer,
+  canRemove: boolean,
+): boolean {
+  return (
+    canRemove &&
+    (server.origin === null ||
+      server.origin === undefined ||
+      (server.origin.editable && !server.origin.inherited))
   );
 }
 
@@ -310,6 +338,7 @@ function useResumeOauthPolling(
 function mcpMutationFlags(
   capabilities: ProviderMcpCapabilities,
   effectiveScope: ProviderNativeScope,
+  credentialRefusal: string | null,
 ) {
   const scopes = capabilities.actionScopes;
   const canAdd = scopes.add.includes(effectiveScope);
@@ -334,6 +363,9 @@ function mcpMutationFlags(
     canApplyRemedy,
     canDiscover,
     canAuth,
+    // A server's sign-in is a credential, and a sandbox takes none: Login and
+    // Force re-auth hold on this. Log out sends nothing secret (`canAuth`).
+    canSignIn: canAuth && credentialRefusal === null,
     toolsReadOnly,
   };
 }
@@ -492,7 +524,11 @@ export function ProviderMcpTab(props: {
     if (effectiveScope !== "global") return new Set<string>();
     const projectServers = projectListForShadow.data?.servers;
     if (projectServers === undefined) return new Set<string>();
-    return new Set(projectServers.map((s) => s.name));
+    return new Set(
+      projectServers
+        .filter((server) => server.origin?.inherited !== true)
+        .map((server) => server.name),
+    );
   }, [effectiveScope, projectListForShadow.data?.servers]);
 
   const mutate = useProvidersMcpMutate();
@@ -507,7 +543,17 @@ export function ProviderMcpTab(props: {
   // logical `&&` inside a JSX attribute into `cond ? value : null`, which makes
   // this `boolean | null` and fails the dialog's `isPending: boolean` prop.
   const deleteDialogPending = mutate.isPending && deleteTarget !== null;
+  // One of the person's settings: the host forwards Remove as the item's
+  // delete, so the confirmation names where it really goes.
+  const deleteTargetPersonal = usePersonalEntryApplied(
+    "mcp",
+    deleteTarget,
+    effectiveScope,
+  );
 
+  // `handleAuth` refuses a sign-in on a sandbox as the floor under every
+  // caller; the flags hide its controls (`canSignIn`).
+  const credentialRefusal = useHostCredentialRefusal(hostId);
   const {
     canAdd,
     canRemove,
@@ -515,8 +561,9 @@ export function ProviderMcpTab(props: {
     canApplyRemedy,
     canDiscover,
     canAuth,
+    canSignIn,
     toolsReadOnly,
-  } = mcpMutationFlags(capabilities, effectiveScope);
+  } = mcpMutationFlags(capabilities, effectiveScope, credentialRefusal);
 
   const markPending = useCallback((name: string, pending: boolean) => {
     setPendingServerNames((prev) => {
@@ -776,6 +823,7 @@ export function ProviderMcpTab(props: {
 
   const handleAuth = useCallback(
     (serverName: string, action: "login" | "logout" | "forceReauth") => {
+      if (credentialRefusal !== null && action !== "logout") return;
       markPending(serverName, true);
       setAuthInstruction(null);
       clearRowError(serverName);
@@ -847,6 +895,7 @@ export function ProviderMcpTab(props: {
     [
       auth,
       clearRowError,
+      credentialRefusal,
       hostId,
       markPending,
       openLink,
@@ -923,15 +972,16 @@ export function ProviderMcpTab(props: {
 
   const handleAdded = useCallback(
     (args: { name: string; requiresAuth: boolean }) => {
-      if (args.requiresAuth && canAuth) {
+      if (args.requiresAuth && canSignIn) {
         handleAuth(args.name, "login");
       }
     },
-    [canAuth, handleAuth],
+    [canSignIn, handleAuth],
   );
 
   return (
     <div className="flex flex-col gap-3" data-testid="provider-mcp-tab">
+      <CredentialRefusalNote refusal={credentialRefusal} />
       <McpScopeHeader
         multiScope={multiScope}
         effectiveScope={effectiveScope}
@@ -974,6 +1024,11 @@ export function ProviderMcpTab(props: {
         }}
       />
 
+      <McpCoverageLine
+        providerId={providerId}
+        coverage={listData?.coverage ?? null}
+      />
+
       {!projectNeedsWorkspace ? (
         <ProviderListSearch
           query={searchQuery}
@@ -984,6 +1039,11 @@ export function ProviderMcpTab(props: {
       ) : null}
 
       <McpServerList
+        markTarget={{ entryKind: "mcp", providerId, scope: effectiveScope }}
+        canAdd={canAdd}
+        onAdd={() => {
+          setAddOpen(true);
+        }}
         projectNeedsWorkspace={projectNeedsWorkspace}
         multiWorkspace={multiWorkspace}
         workspacesLoading={workspacesLoading}
@@ -1016,6 +1076,7 @@ export function ProviderMcpTab(props: {
         canApplyRemedy={canApplyRemedy}
         canDiscover={canDiscover}
         canAuth={canAuth}
+        canSignIn={canSignIn}
         toolsReadOnly={toolsReadOnly}
         onRefresh={handleRefresh}
         onToggleServer={handleToggleServer}
@@ -1056,11 +1117,11 @@ export function ProviderMcpTab(props: {
           if (!open) setDeleteTarget(null);
         }}
         title="Remove MCP server"
-        description={
-          deleteTarget === null
-            ? ""
-            : `Remove “${deleteTarget}” from this provider's ${effectiveScope} config?`
-        }
+        description={removeDescription(
+          deleteTarget,
+          deleteTargetPersonal,
+          effectiveScope,
+        )}
         cascadeSummary={null}
         actionLabel="Remove"
         isPending={deleteDialogPending}
@@ -1079,6 +1140,20 @@ export function ProviderMcpTab(props: {
       />
     </div>
   );
+}
+
+/**
+ * The Remove confirmation's question: a Personal server leaves every provider
+ * on every host, a local one only this provider's config at `scope`.
+ */
+function removeDescription(
+  name: string | null,
+  personal: boolean,
+  scope: ProviderNativeScope,
+): string {
+  if (name === null) return "";
+  if (personal) return personalRemoveText(name);
+  return `Remove “${name}” from this provider's ${scope} config?`;
 }
 
 function McpConfirmationDialog(props: {
@@ -1233,6 +1308,34 @@ function McpCapabilityNotices(props: {
   );
 }
 
+function McpCoverageLine(props: {
+  readonly providerId: ProviderId;
+  readonly coverage: ProviderMcpCoverage | null;
+}): ReactNode {
+  const coverage = props.coverage;
+  if (coverage === null || coverage.complete) return null;
+  const notRead = coverage.sources.filter(
+    (source) => source.outcome !== "read" && source.outcome !== "absent",
+  );
+  const description =
+    props.providerId === "kilocode"
+      ? "Showing servers from the Kilo config files Traycer can read."
+      : "This server list may be incomplete.";
+  const unreadPrefix =
+    props.providerId === "kilocode" ? " Not read: " : " Check: ";
+  return (
+    <p
+      className="text-ui-xs text-muted-foreground"
+      data-testid="mcp-coverage-line"
+    >
+      {description}
+      {notRead.length > 0
+        ? `${unreadPrefix}${notRead.map((source) => `${source.label}${source.reason === null ? "" : ` (${source.reason})`}`).join(", ")}.`
+        : null}
+    </p>
+  );
+}
+
 function McpHostNotices(props: {
   readonly notices: readonly ProviderMcpNotice[];
   readonly canApplyRemedy: boolean;
@@ -1270,6 +1373,10 @@ function McpHostNotices(props: {
 }
 
 function McpServerList(props: {
+  readonly markTarget: PersonalMarkTarget;
+  /** Whether the empty state offers to add a server, and how. */
+  readonly canAdd: boolean;
+  readonly onAdd: () => void;
   readonly projectNeedsWorkspace: boolean;
   readonly multiWorkspace: boolean;
   readonly workspacesLoading: boolean;
@@ -1295,6 +1402,8 @@ function McpServerList(props: {
   readonly canApplyRemedy: boolean;
   readonly canDiscover: boolean;
   readonly canAuth: boolean;
+  /** `canAuth`, less a host that takes no credentials (a sandbox). */
+  readonly canSignIn: boolean;
   readonly toolsReadOnly: boolean;
   readonly onRefresh: (serverName: string) => void;
   readonly onToggleServer: (
@@ -1367,14 +1476,7 @@ function McpServerList(props: {
   }
   if (props.blockingNoRows && !props.listError) return null;
   if (props.unfilteredServerCount === 0 && !props.listError) {
-    return (
-      <EmptyState
-        title="No MCP servers"
-        description={`Add an MCP server so ${props.providerLabel} can use external tools and context.`}
-        actionLabel={null}
-        onAction={null}
-      />
-    );
+    return <NoMcpServersState canAdd={props.canAdd} onAdd={props.onAdd} />;
   }
   return (
     <>
@@ -1412,7 +1514,9 @@ function McpServerList(props: {
                 canApplyRemedy={props.canApplyRemedy}
                 canDiscover={props.canDiscover}
                 canAuth={props.canAuth}
+                canSignIn={props.canSignIn}
                 toolsReadOnly={props.toolsReadOnly}
+                markTarget={props.markTarget}
                 onRefresh={() => {
                   props.onRefresh(server.name);
                 }}
@@ -1497,6 +1601,21 @@ function McpListRefreshError(props: {
   );
 }
 
+/** No servers yet: what they are for, and the one action. */
+function NoMcpServersState(props: {
+  readonly canAdd: boolean;
+  readonly onAdd: () => void;
+}): ReactNode {
+  return (
+    <EmptyState
+      title="No MCP servers"
+      description="MCP servers give agents tools."
+      actionLabel={props.canAdd ? "Add a server" : null}
+      onAction={props.canAdd ? props.onAdd : null}
+    />
+  );
+}
+
 function EmptyState(props: {
   readonly title: string;
   readonly description: string;
@@ -1528,11 +1647,12 @@ function serverRowFlags(
   server: ProviderMcpServer,
   capabilities: ProviderMcpCapabilities,
   canAuth: boolean,
+  canSignIn: boolean,
 ) {
   // Auth action buttons require both the action in authActions and the
   // selected scope advertising auth support (actionScopes.auth).
   const showLogin =
-    canAuth &&
+    canSignIn &&
     capabilities.authActions.includes("login") &&
     (server.status === "needs_auth" || server.status === "error");
   const showLogout =
@@ -1540,7 +1660,7 @@ function serverRowFlags(
     capabilities.authActions.includes("logout") &&
     server.status === "connected";
   const showForceReauth =
-    canAuth &&
+    canSignIn &&
     capabilities.authActions.includes("forceReauth") &&
     (server.status === "needs_auth" || server.status === "error");
   const toolsListable =
@@ -1576,7 +1696,11 @@ function McpServerRow(props: {
   readonly canApplyRemedy: boolean;
   readonly canDiscover: boolean;
   readonly canAuth: boolean;
+  /** `canAuth`, less a host that takes no credentials (a sandbox). */
+  readonly canSignIn: boolean;
   readonly toolsReadOnly: boolean;
+  /** Where the row's Personal mark reads from (`PersonalEntryMark`). */
+  readonly markTarget: PersonalMarkTarget;
   readonly onRefresh: () => void;
   readonly onToggleServer: (enabled: boolean) => void;
   readonly onRemedy: () => void;
@@ -1599,6 +1723,7 @@ function McpServerRow(props: {
     canApplyRemedy,
     canDiscover,
     canAuth,
+    canSignIn,
     toolsReadOnly,
     onRefresh,
     onToggleServer,
@@ -1615,7 +1740,14 @@ function McpServerRow(props: {
 
   const statusLabel = statusLabelFor(server);
   const { showLogin, showLogout, showForceReauth, toolsListable } =
-    serverRowFlags(server, capabilities, canAuth);
+    serverRowFlags(server, capabilities, canAuth, canSignIn);
+  // One of the person's settings: the host forwards only Remove and the
+  // tool switches for it, so turning the server on or off is the dashboard's.
+  const personal = usePersonalEntryApplied(
+    "mcp",
+    server.name,
+    props.markTarget.scope,
+  );
 
   return (
     <li className="rounded-lg border border-border/60">
@@ -1651,6 +1783,8 @@ function McpServerRow(props: {
             </button>
           </CollapsibleTrigger>
 
+          <PersonalEntryMark target={props.markTarget} name={server.name} />
+
           <ServerRowActions
             serverName={server.name}
             serverEnabled={server.enabled}
@@ -1659,14 +1793,19 @@ function McpServerRow(props: {
             showLogin={showLogin}
             showLogout={showLogout}
             showForceReauth={showForceReauth}
-            canRemove={canRemove}
+            canRemove={canRemoveMcpServer(server, canRemove)}
             canToggleServer={canToggleMcpServer({
               server,
               capabilities,
               canToggleServer,
               canApplyRemedy,
             })}
-            remedy={canApplyRemedy ? (server.remedy ?? null) : null}
+            toggleLockedNote={personal ? PERSONAL_ENTRY_LOCKED_TEXT : null}
+            // The host forwards only Remove and the tool switches for a
+            // personal entry, so a remedy would be refused there.
+            remedy={
+              canApplyRemedy && !personal ? (server.remedy ?? null) : null
+            }
             canDiscover={canDiscover}
             onLogin={onLogin}
             onLogout={onLogout}
@@ -1690,7 +1829,7 @@ function McpServerRow(props: {
               <ToolsUnavailableState
                 server={server}
                 onLogin={
-                  canAuth && capabilities.authActions.includes("login")
+                  canSignIn && capabilities.authActions.includes("login")
                     ? onLogin
                     : null
                 }
@@ -1728,6 +1867,20 @@ function ServerRowBadges(props: {
           shadowed by project
         </Badge>
       ) : null}
+      {server.origin !== null && server.origin !== undefined ? (
+        <>
+          <Badge variant="muted" className="h-4" size="xs">
+            {server.origin.inherited && server.origin.scope === "global"
+              ? "From global"
+              : server.origin.label}
+          </Badge>
+          {!server.origin.editable ? (
+            <Badge variant="muted" className="h-4" size="xs">
+              read-only
+            </Badge>
+          ) : null}
+        </>
+      ) : null}
       {server.statusSource === "probe" ? (
         <Badge variant="muted" className="h-4" size="xs">
           connectivity check
@@ -1757,6 +1910,8 @@ function ServerRowActions(props: {
   readonly showForceReauth: boolean;
   readonly canRemove: boolean;
   readonly canToggleServer: boolean;
+  /** Why the server switch is held off, or `null` for a live switch. */
+  readonly toggleLockedNote: string | null;
   readonly remedy: ProviderMcpRemedy | null;
   readonly canDiscover: boolean;
   readonly onLogin: () => void;
@@ -1829,6 +1984,24 @@ function ServerRowActions(props: {
           <Trash2 className="size-3.5" />
         </Button>
       ) : null}
+      {props.canToggleServer && props.toggleLockedNote !== null ? (
+        <TooltipWrapper
+          label={props.toggleLockedNote}
+          side="top"
+          sideOffset={4}
+          align="center"
+        >
+          {/* A disabled control takes no pointer events; the span carries the
+              tooltip and the sentence for assistive technology. */}
+          <span data-testid="mcp-server-toggle-locked">
+            <Switch
+              checked={props.serverEnabled}
+              disabled
+              aria-label={`${props.serverName}: ${props.toggleLockedNote}`}
+            />
+          </span>
+        </TooltipWrapper>
+      ) : null}
       {props.remedy !== null ? (
         <Button
           type="button"
@@ -1841,7 +2014,7 @@ function ServerRowActions(props: {
           {props.remedy.label}
         </Button>
       ) : null}
-      {props.canToggleServer ? (
+      {props.canToggleServer && props.toggleLockedNote === null ? (
         <Switch
           checked={props.serverEnabled}
           disabled={props.pending || props.confirmationPending}
@@ -1994,15 +2167,15 @@ function ServerToolsPanel(props: {
   );
 }
 
-function ToolsUnavailableState(props: {
-  readonly server: ProviderMcpServer;
-  readonly onLogin: (() => void) | null;
-  readonly onRefresh: (() => void) | null;
-  readonly pending: boolean;
-}): ReactNode {
-  const { server, onLogin, onRefresh, pending } = props;
+function toolsUnavailableMessage(server: ProviderMcpServer): string {
   let message = "Tools are unavailable until this server is connected.";
-  if (server.configOnly) {
+  if (
+    server.configOnly &&
+    server.status === "needs_auth" &&
+    server.statusDetail !== null
+  ) {
+    message = redactLogText(server.statusDetail);
+  } else if (server.configOnly) {
     message =
       "This OAuth-gated server is config-only — manage it in the provider's native surface, or sign in if available.";
   } else if (server.stdioDegraded) {
@@ -2020,6 +2193,18 @@ function ToolsUnavailableState(props: {
   } else if (!server.enabled) {
     message = "Enable this server to discover tools.";
   }
+
+  return message;
+}
+
+function ToolsUnavailableState(props: {
+  readonly server: ProviderMcpServer;
+  readonly onLogin: (() => void) | null;
+  readonly onRefresh: (() => void) | null;
+  readonly pending: boolean;
+}): ReactNode {
+  const { server, onLogin, onRefresh, pending } = props;
+  const message = toolsUnavailableMessage(server);
 
   const showRetry =
     onRefresh !== null &&
@@ -2064,9 +2249,24 @@ function denySourceLabel(source: string): string {
 }
 
 function toolDenySourceSummary(tool: ProviderMcpTool): string | null {
+  if (tool.decidedBy !== null && tool.decidedBy !== undefined) {
+    const decision = tool.decidedBy;
+    return decision.action === "deny"
+      ? `${decision.pattern} in ${decision.label}`
+      : null;
+  }
   const sources = tool.denySources ?? [];
   if (sources.length === 0) return null;
   return sources.map(denySourceLabel).join(", ");
+}
+
+function toolDecisionText(
+  decision: NonNullable<ProviderMcpTool["decidedBy"]>,
+): string {
+  let verb = "Approval required";
+  if (decision.action === "deny") verb = "Denied";
+  else if (decision.action === "allow") verb = "Allowed";
+  return `${verb} by ${decision.pattern} in ${decision.label}`;
 }
 
 function toolAriaLabel(tool: ProviderMcpTool, readOnly: boolean): string {
@@ -2087,6 +2287,14 @@ function ToolChip(props: {
 }): ReactNode {
   const { tool, readOnly, disabled, onToggle } = props;
   const denySummary = toolDenySourceSummary(tool);
+  const decision = tool.decidedBy ?? null;
+  const chipDetail =
+    decision === null ? denySummary : toolDecisionText(decision);
+  let hoverDetail: string | null = null;
+  if (decision !== null) hoverDetail = toolDecisionText(decision);
+  else if (denySummary !== null) {
+    hoverDetail = `Disabled by ${denySummary}${readOnly && denySummary !== "local project settings" ? " (locked - clear the deny in that source to re-enable)" : ""}`;
+  }
   const chipDisabled = disabled || readOnly;
   const chip = (
     <button
@@ -2110,9 +2318,9 @@ function ToolChip(props: {
       aria-label={toolAriaLabel(tool, readOnly)}
     >
       <span className="truncate">{tool.name}</span>
-      {denySummary !== null ? (
+      {chipDetail !== null ? (
         <span className="mt-0.5 block truncate text-[0.65rem] font-normal text-muted-foreground no-underline">
-          {denySummary}
+          {chipDetail}
         </span>
       ) : null}
     </button>
@@ -2126,12 +2334,9 @@ function ToolChip(props: {
           <div className="text-ui-sm font-medium text-foreground">
             {tool.name}
           </div>
-          {denySummary !== null ? (
+          {hoverDetail !== null ? (
             <p className="mt-1 text-ui-xs text-muted-foreground">
-              Disabled by {denySummary}
-              {readOnly && denySummary !== "local project settings"
-                ? " (locked - clear the deny in that source to re-enable)"
-                : null}
+              {hoverDetail}
             </p>
           ) : null}
           {tool.description !== null && tool.description.length > 0 ? (

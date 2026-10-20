@@ -20,7 +20,6 @@ import {
   subAgentBlockSchema,
   textBlockSchema,
   toolCallBlockSchema,
-  toolCallBlockSchemaPreDelivery,
   type ApprovalBlock,
   type AutonomousResumeBlock,
   type FileChangeBlock,
@@ -1447,57 +1446,5 @@ describe("interviewQuestionSchema allowsCustomAnswer (additive, reader-permissiv
       metadata: null,
     }) as InterviewBlock;
     expect(block.questions).toHaveLength(1);
-  });
-});
-
-describe("toolCallBlockSchema agentMessageDelivery (cross-host send state)", () => {
-  const base = {
-    type: "tool_call" as const,
-    blockId: "tc-send",
-    status: "completed" as const,
-    timestamp: 1,
-    toolName: "traycer_send_message",
-    error: null,
-  };
-
-  it.each(["queued", "delivered", "expired", "failed"] as const)(
-    "keeps agentMessageDelivery in state %s",
-    (state) => {
-      const delivery = { targetHostId: "host-2", eventId: "evt-1", state };
-      const block = toolCallBlockSchema.parse({
-        ...base,
-        agentMessageDelivery: delivery,
-      });
-      expect(block.agentMessageDelivery).toEqual(delivery);
-    },
-  );
-
-  it("defaults to null when absent", () => {
-    expect(toolCallBlockSchema.parse(base).agentMessageDelivery).toBeNull();
-  });
-
-  it("rejects an unknown state", () => {
-    const result = toolCallBlockSchema.safeParse({
-      ...base,
-      agentMessageDelivery: {
-        targetHostId: "host-2",
-        eventId: "evt-1",
-        state: "lost",
-      },
-    });
-    expect(result.success).toBe(false);
-  });
-
-  it("toolCallBlockSchemaPreDelivery strips the key", () => {
-    const block = toolCallBlockSchemaPreDelivery.parse({
-      ...base,
-      agentMessageDelivery: {
-        targetHostId: "host-2",
-        eventId: "evt-1",
-        state: "queued",
-      },
-    });
-    expect(Object.hasOwn(block, "agentMessageDelivery")).toBe(false);
-    expect(block.toolName).toBe("traycer_send_message");
   });
 });

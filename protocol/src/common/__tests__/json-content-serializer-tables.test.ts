@@ -214,3 +214,135 @@ describe("controls: the same code text outside a table is not escaped", () => {
     expect(toMarkdown(doc)).toBe("```\ngrep '\\.tuple\\)' | wc -l\n```");
   });
 });
+
+describe("a table cell with several blocks stays on one line", () => {
+  const KEPT_SPACE = "\uFDD0";
+
+  function blockTable(cellBlocks: JsonContent[]): JsonContent {
+    return {
+      type: "doc",
+      content: [
+        {
+          type: "table",
+          content: [
+            {
+              type: "tableRow",
+              content: [cell([text("h", undefined)], true)],
+            },
+            {
+              type: "tableRow",
+              content: [{ type: "tableCell", content: cellBlocks }],
+            },
+          ],
+        },
+      ],
+    };
+  }
+
+  function para(value: string): JsonContent {
+    return { type: "paragraph", content: [text(value, undefined)] };
+  }
+
+  function item(type: string, content: JsonContent[]): JsonContent {
+    return { type, content };
+  }
+
+  it("writes a task list as its lines joined with <br>", () => {
+    const out = toMarkdown(
+      blockTable([
+        {
+          type: "taskList",
+          content: [
+            {
+              type: "taskItem",
+              attrs: { checked: false },
+              content: [para("a")],
+            },
+            {
+              type: "taskItem",
+              attrs: { checked: true },
+              content: [para("b")],
+            },
+          ],
+        },
+      ]),
+    );
+    expect(out.split("\n")).toHaveLength(3);
+    expect(bodyRow(out)).toContain("- [ ] a<br>- [x] b");
+    expect(out).not.toContain(KEPT_SPACE);
+  });
+
+  it("writes a bullet list as its lines joined with <br>", () => {
+    const out = toMarkdown(
+      blockTable([
+        item("bulletList", [
+          item("listItem", [para("a")]),
+          item("listItem", [para("b")]),
+        ]),
+      ]),
+    );
+    expect(out.split("\n")).toHaveLength(3);
+    expect(bodyRow(out)).toContain("- a<br>- b");
+    expect(out).not.toContain(KEPT_SPACE);
+  });
+
+  it("writes a hard break in a cell paragraph as <br>", () => {
+    const out = toMarkdown(
+      blockTable([
+        {
+          type: "paragraph",
+          content: [
+            text("a", undefined),
+            { type: "hardBreak" },
+            text("b", undefined),
+          ],
+        },
+      ]),
+    );
+    expect(out.split("\n")).toHaveLength(3);
+    expect(bodyRow(out)).toContain("a<br>b");
+  });
+
+  it("writes an ordered list whose first item is empty without the kept-space marker", () => {
+    const out = toMarkdown(
+      blockTable([
+        {
+          type: "orderedList",
+          attrs: { start: 1 },
+          content: [
+            item("listItem", [{ type: "paragraph" }]),
+            item("listItem", [para("b")]),
+          ],
+        },
+      ]),
+    );
+    expect(out.split("\n")).toHaveLength(3);
+    expect(out).not.toContain(KEPT_SPACE);
+    expect(bodyRow(out)).toMatch(/1\. (<br>| \|$)/);
+  });
+});
+
+describe("a <br> typed in a table cell is text, not a line break", () => {
+  it("escapes a typed <br>", () => {
+    const out = toMarkdown(tableDoc([text("a<br>b", undefined)]));
+    expect(out.split("\n")).toHaveLength(3);
+    expect(bodyRow(out)).toContain("a\\<br>b");
+  });
+
+  it("escapes a typed <BR/> whatever its case", () => {
+    const out = toMarkdown(tableDoc([text("a<BR/>b", undefined)]));
+    expect(out.split("\n")).toHaveLength(3);
+    expect(bodyRow(out)).toContain("a\\<BR/>b");
+  });
+
+  it("leaves the serializer's own break unescaped next to a typed one", () => {
+    const out = toMarkdown(
+      tableDoc([
+        text("a<br>b", undefined),
+        { type: "hardBreak" },
+        text("c", undefined),
+      ]),
+    );
+    expect(bodyRow(out)).toContain("a\\<br>b<br>c");
+  });
+});

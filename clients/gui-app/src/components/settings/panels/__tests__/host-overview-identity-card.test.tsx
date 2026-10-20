@@ -63,6 +63,7 @@ import {
   type OverviewHostFixture,
 } from "@/components/settings/panels/__tests__/host-overview-test-support";
 import { hostQueryKeys } from "@/lib/query-keys";
+import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
 
 /**
  * `HostIdentityCard`'s restructure (`host-identity-card.tsx`): `actions` moved
@@ -289,7 +290,6 @@ describe("<HostSettingsPanel /> Overview identity card — busy chip", () => {
             storeFormats: null,
             install: null,
             processMemory: null,
-            crossHostMessaging: null,
           };
         },
       },
@@ -348,7 +348,6 @@ describe("<HostSettingsPanel /> Overview identity card — busy chip", () => {
             storeFormats: null,
             install: null,
             processMemory: null,
-            crossHostMessaging: null,
           };
         },
       },
@@ -427,6 +426,108 @@ describe("<HostSettingsPanel /> Overview identity card — window binding", () =
     expect(button.textContent).toBe("Activate");
     fireEvent.click(button);
     expect(makeActive).toHaveBeenCalledWith("host-a");
+  });
+
+  it.each([
+    ["the Automations pod", { kind: "automation" as const, burst: false }],
+    ["a burst sandbox", { kind: "agent" as const, burst: true }],
+  ])(
+    "offers no Activate on %s, which no picker offers either",
+    async (_label, summary) => {
+      const fixture = buildOverviewHostFixture({
+        hostId: "host-sbx",
+        isLocalMachine: false,
+        effectiveName: "Managed box",
+      });
+      recordNegotiatedHostMethods("host-sbx", ALL_OVERVIEW_METHODS);
+      hostBindingMock.current = { hostClient: fixture.client };
+      scopeOverrides.current = {
+        host: hostScopeOptionFixture({
+          hostId: "host-sbx",
+          kind: "sandbox",
+          connectable: true,
+          isActive: false,
+          sandbox: {
+            state: "awake",
+            frozen: false,
+            summary: sandboxSummaryFixture({ hostId: "host-sbx", ...summary }),
+            teamOwned: false,
+          },
+        }),
+        hostId: "host-sbx",
+        status: "ready",
+        client: fixture.client,
+      };
+      renderPanel(undefined);
+
+      await screen.findByTestId("host-overview-menu");
+      expect(screen.queryByTestId("host-make-active")).toBeNull();
+    },
+  );
+
+  it("offers no Activate on a sandbox whose list row has not answered yet", async () => {
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-sbx",
+      isLocalMachine: false,
+      effectiveName: "Managed box",
+    });
+    recordNegotiatedHostMethods("host-sbx", ALL_OVERVIEW_METHODS);
+    hostBindingMock.current = { hostClient: fixture.client };
+    scopeOverrides.current = {
+      host: hostScopeOptionFixture({
+        hostId: "host-sbx",
+        kind: "sandbox",
+        connectable: true,
+        isActive: false,
+        sandbox: {
+          state: "awake",
+          frozen: false,
+          summary: null,
+          teamOwned: false,
+        },
+      }),
+      hostId: "host-sbx",
+      status: "ready",
+      client: fixture.client,
+    };
+    renderPanel(undefined);
+
+    await screen.findByTestId("host-overview-menu");
+    expect(screen.queryByTestId("host-make-active")).toBeNull();
+  });
+
+  it("offers Activate on an ordinary confirmed sandbox", async () => {
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-sbx",
+      isLocalMachine: false,
+      effectiveName: "Managed box",
+    });
+    recordNegotiatedHostMethods("host-sbx", ALL_OVERVIEW_METHODS);
+    hostBindingMock.current = { hostClient: fixture.client };
+    scopeOverrides.current = {
+      host: hostScopeOptionFixture({
+        hostId: "host-sbx",
+        kind: "sandbox",
+        connectable: true,
+        isActive: false,
+        sandbox: {
+          state: "awake",
+          frozen: false,
+          summary: sandboxSummaryFixture({
+            hostId: "host-sbx",
+            kind: "agent",
+            burst: false,
+          }),
+          teamOwned: false,
+        },
+      }),
+      hostId: "host-sbx",
+      status: "ready",
+      client: fixture.client,
+    };
+    renderPanel(undefined);
+
+    expect(await screen.findByTestId("host-make-active")).not.toBeNull();
   });
 
   it("host.isActive: true renders no Activate button", async () => {

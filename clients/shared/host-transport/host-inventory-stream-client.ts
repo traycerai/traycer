@@ -1,6 +1,8 @@
 import {
   hostInventorySubscribeServerFrameSchemaV10,
+  hostInventorySubscribeServerFrameSchemaV11,
   type HostInventorySubscribeServerFrameV10,
+  type HostInventorySubscribeServerFrameV11,
 } from "@traycer/protocol/host/host-inventory";
 import type { SchemaVersion } from "@traycer/protocol/framework/versioned-stream-rpc";
 import type { HostListItem } from "@traycer/protocol/host/host-status";
@@ -34,6 +36,15 @@ export interface HostInventorySnapshot {
    * re-auth is stale in a way the client's own fetch is not.
    */
   readonly stale: boolean;
+  /**
+   * The rows are the account's WHOLE registry, sandbox rows included: the
+   * stream negotiated @1.1. A @1.0 host (one that predates sandboxes) strips
+   * every `kind: sandbox` row before it sends, so its snapshot is the personal
+   * hosts alone; read as the whole fleet it would remove every sandbox each
+   * time it arrives. A consumer that keeps a fleet takes a `false` snapshot
+   * as a cue to re-read the registry itself, never as the fleet.
+   */
+  readonly includesSandboxRows: boolean;
 }
 
 export interface HostInventoryStreamCallbacks {
@@ -62,12 +73,14 @@ export interface HostInventoryStreamClientOptions {
  * fields the minor existed to carry, and the ladder is only safe if it starts
  * this way.
  */
-export const HOST_INVENTORY_STREAM_PARSED_MINOR_CEILING = 0;
+export const HOST_INVENTORY_STREAM_PARSED_MINOR_CEILING = 1;
 
 type ParsedFrame =
   | {
       readonly success: true;
-      readonly data: HostInventorySubscribeServerFrameV10;
+      readonly data:
+        | HostInventorySubscribeServerFrameV10
+        | HostInventorySubscribeServerFrameV11;
     }
   | { readonly success: false };
 
@@ -86,6 +99,12 @@ function parseNegotiatedFrame(
       negotiated.minor > HOST_INVENTORY_STREAM_PARSED_MINOR_CEILING)
   ) {
     return { success: false };
+  }
+  // @1.1 rows may carry the sandbox fields and include `kind: sandbox` rows;
+  // @1.0 (and the pre-handshake parse) is the frozen pre-sandbox row, which
+  // REJECTS those fields rather than stripping them.
+  if (negotiated !== null && negotiated.minor === 1) {
+    return hostInventorySubscribeServerFrameSchemaV11.safeParse(envelope);
   }
   return hostInventorySubscribeServerFrameSchemaV10.safeParse(envelope);
 }
@@ -126,10 +145,10 @@ export class HostInventoryStreamClient {
   }
 
   private handleServerFrame(envelope: StreamFrameEnvelope): void {
-    const parsed = parseNegotiatedFrame(
-      this.session.getNegotiatedSchemaVersion(),
-      envelope,
-    );
+    // Read once: the minor that picked the parse arm is the minor that says
+    // what the rows cover, even across a reconnect's renegotiation.
+    const negotiated = this.session.getNegotiatedSchemaVersion();
+    const parsed = parseNegotiatedFrame(negotiated, envelope);
     if (!parsed.success) return;
     const frame = parsed.data;
     if (frame.kind !== "snapshot") return;
@@ -137,6 +156,9 @@ export class HostInventoryStreamClient {
       hosts: frame.hosts,
       fetchedAtMs: frame.fetchedAtMs,
       stale: frame.stale,
+      // Only an arm that admits sandbox rows can carry all of them; @1.0 and
+      // the pre-handshake parse cannot.
+      includesSandboxRows: negotiated !== null && negotiated.minor >= 1,
     });
   }
 }

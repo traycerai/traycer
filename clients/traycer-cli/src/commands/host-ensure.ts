@@ -1,8 +1,11 @@
 import { resolveAttemptAdoptionFromNonce } from "../host/update-adoption";
+import { probeHostReachable } from "@traycer-clients/shared/host-client/host-activity-probe";
 import { hostHomeDir } from "../store/paths";
+import { readHostPidMetadata } from "../host/pid-metadata";
 import { ensureHost, type HostEnsureResult } from "../host/ensure";
 import type { HostStartOrigin } from "../host/lifecycle-origin";
 import type { CommandFn, CommandResult } from "../runner/runner";
+import type { Environment } from "../runner/environment";
 import { formatServiceLifecycleWarning } from "../service";
 import {
   formatCredentialProvisionNote,
@@ -120,6 +123,10 @@ export function buildHostEnsureCommand(args: HostEnsureArgs): CommandFn {
     // Read off the result rather than `serviceLifecycle.postSwapError`: both
     // carry the same value on every branch provision.ts constructs, and the
     // top-level field is what this file's human line already reads.
+    const responsiveness = await readNoopHostResponsiveness(
+      result,
+      ctx.runtime.environment,
+    );
     const credentialProvision = await maybeProvisionCredential(
       ctx,
       result.serviceLifecycle !== null && result.postSwapError === null
@@ -138,10 +145,18 @@ export function buildHostEnsureCommand(args: HostEnsureArgs): CommandFn {
         serviceLifecycle: result.serviceLifecycle,
         postSwapError: result.postSwapError,
         installGeneration: result.installGeneration,
+        // `null` unless this run touched nothing and a host is running: then
+        // whether that host answered. Nothing is killed either way.
+        hostResponsive: responsiveness?.responsive ?? null,
         authPreflight,
         credentialProvision,
       },
-      human: buildHuman(result, authPreflight, credentialProvision),
+      human: buildHuman(
+        result,
+        responsiveness,
+        authPreflight,
+        credentialProvision,
+      ),
       // An ensure whose post-swap start failed did not ensure anything is
       // running, so it exits non-zero - the same rule as `host install`. The
       // payload is unchanged: Desktop trusts a terminal `ok` line over a
@@ -151,12 +166,41 @@ export function buildHostEnsureCommand(args: HostEnsureArgs): CommandFn {
   };
 }
 
+interface NoopHostResponsiveness {
+  readonly pid: number;
+  readonly responsive: boolean;
+}
+
+// A run that changed nothing found a host registered and running, and used
+// to print "host already ready" on that alone: the pid record and the process
+// table. A host whose main thread is blocked passes both, so a reinstall over
+// one reported success while every client failed to connect. Ask the host
+// itself, the same unauthenticated loopback probe the supervisor's incumbent
+// check uses. `null` when there is nothing to ask (something was started,
+// nothing runs, or no endpoint is published).
+async function readNoopHostResponsiveness(
+  result: HostEnsureResult,
+  environment: Environment,
+): Promise<NoopHostResponsiveness | null> {
+  if (result.action !== "noop" || !result.running) return null;
+  const metadata = await readHostPidMetadata(environment);
+  if (metadata === null) return null;
+  return {
+    pid: metadata.pid,
+    responsive: await probeHostReachable(metadata.websocketUrl),
+  };
+}
+
 function buildHuman(
   result: HostEnsureResult,
+  responsiveness: NoopHostResponsiveness | null,
   authPreflight: HostInstallAuthPreflight,
   credentialProvision: HostCredentialProvisionOutcome | null,
 ): string {
-  let base = describeAction(result);
+  let base =
+    responsiveness !== null && !responsiveness.responsive
+      ? `host is installed and running (pid=${String(responsiveness.pid)}) but not responding - run 'traycer host restart --force' to restart it (running terminal sessions and in-flight agent work will be killed)`
+      : describeAction(result);
   if (result.postSwapError !== null && result.serviceLifecycle !== null) {
     base = `${base}; ${formatServiceLifecycleWarning(result.serviceLifecycle.postSwapAction, result.postSwapError)}`;
   }

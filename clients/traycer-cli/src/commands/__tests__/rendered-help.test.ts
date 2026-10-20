@@ -541,6 +541,7 @@ const EXPECTED_PUBLIC_SURFACE: readonly ExpectedSurfaceEntry[] = [
     path: "host uninstall",
     options: [
       { flags: "--all", mandatory: false },
+      { flags: "--force", mandatory: false },
       { flags: "--json", mandatory: false },
       { flags: "--no-progress", mandatory: false },
       { flags: "--quiet", mandatory: false },
@@ -1037,7 +1038,6 @@ const EXPECTED_PUBLIC_SURFACE: readonly ExpectedSurfaceEntry[] = [
       { flags: "--quiet", mandatory: false },
       { flags: "--response-id <id>", mandatory: false },
       { flags: "--to <agentId>", mandatory: true },
-      { flags: "--workspace <path>", mandatory: false },
     ],
     args: [],
   },
@@ -1574,6 +1574,14 @@ describe("rendered root/parent/leaf --help (CLI command audit regression suite)"
         // a host a person started in a terminal, so it carries the flag too.
         "traycer host uninstall --lifecycle-origin",
         "traycer host free-port-and-restart --lifecycle-origin",
+        // The host process a Desktop force restart was confirmed for: the
+        // restart, and the takeover its re-register fallback reaches, refuse
+        // when pid.json names another one. Desktop passes them from its own
+        // check; a person never does.
+        "traycer host restart --expect-host-pid",
+        "traycer host restart --expect-host-start-identity",
+        "traycer host service install --expect-host-pid",
+        "traycer host service install --expect-host-start-identity",
       ].sort(),
     );
   });
@@ -1718,17 +1726,6 @@ describe("rendered root/parent/leaf --help (CLI command audit regression suite)"
         "--response-id <id> Answer a request received from this recipient; omit on your own follow-ups",
       );
       expect(help).not.toContain("Close an open thread");
-    });
-
-    it("agent send --help documents --workspace", () => {
-      const program = freshProgram();
-      const help = renderHelp(findByPath(program, ["agent", "send"])).replace(
-        /\s+/g,
-        " ",
-      );
-      expect(help).toContain(
-        "--workspace <path> Absolute folder on the receiving agent's host for it to run in, when it has none yet.",
-      );
     });
 
     it("host --help lists 'free-port-and-restart' and not the bare 'free-port' (false-match guard)", () => {

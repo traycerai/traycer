@@ -2,7 +2,8 @@
  * The conversation request state on a bot conversation's user rows (Tracy
  * Bots): `renderUserMessage` carries `conversationRequest` from the persisted
  * row onto the rendered model, and `<ChatMessage>` draws the Open / Resolved
- * badge with a "See reply" jump when the surface can scroll to one.
+ * badge with a "See reply" jump when the surface can scroll to one. The
+ * sending member's picture rides the same rows (`senderAvatarUrl`).
  */
 import { StrictMode, type ReactNode } from "react";
 import {
@@ -153,6 +154,18 @@ describe("<ChatMessage /> conversation request line", () => {
     expect(screen.queryByTestId("conversation-request-reply-link")).toBeNull();
   });
 
+  it("draws the sender's picture on a user row that carries one, and none on a row that does not", () => {
+    renderRow(
+      { ...userRow(undefined), senderAvatarUrl: "https://avatars/tess.png" },
+      null,
+    );
+    expect(screen.getByTestId("chat-sender-avatar")).toBeTruthy();
+    cleanup();
+
+    renderRow(userRow(undefined), null);
+    expect(screen.queryByTestId("chat-sender-avatar")).toBeNull();
+  });
+
   it("renders no request line for a user row without a conversation request", () => {
     renderRow(userRow(undefined), vi.fn());
 
@@ -172,12 +185,14 @@ describe("useRenderedMessages conversation request", () => {
 
   const displayContext: RenderedMessagesDisplayContext = {
     resolveUserSenderLabel: () => "You",
+    resolveUserSenderAvatarUrl: () => null,
     resolveAgentSenderDisplay: () => ({
       senderLabel: "Claude",
       providerLabel: "Claude Code",
       modelLabel: null,
     }),
     resolveAgentReasoningLabel: () => null,
+    resolveAgentServiceTierLabel: () => null,
     contentBlocksPreview: () => "",
   };
 
@@ -199,7 +214,14 @@ describe("useRenderedMessages conversation request", () => {
   }
 
   function renderRows(messages: ReadonlyArray<Message>) {
-    const input: RenderedMessagesInput = {
+    const input = renderInput(messages);
+    return renderHook(() => useRenderedMessages(input, displayContext));
+  }
+
+  function renderInput(
+    messages: ReadonlyArray<Message>,
+  ): RenderedMessagesInput {
+    return {
       epicId: "epic-1",
       ownerId: "owner-1",
       ownerKind: "chat",
@@ -214,7 +236,6 @@ describe("useRenderedMessages conversation request", () => {
       activeTurn: null,
       runStatus: "idle",
     };
-    return renderHook(() => useRenderedMessages(input, displayContext));
   }
 
   it("carries the persisted row's conversationRequest onto the rendered user row", () => {
@@ -228,6 +249,26 @@ describe("useRenderedMessages conversation request", () => {
     const row = result.current.find((candidate) => candidate.id === "m-open");
     expect(row?.role).toBe("user");
     expect(row?.conversationRequest).toEqual(request);
+  });
+
+  it("carries the sender's picture onto a user row, and leaves the key absent when there is none", () => {
+    const pictured = renderHook(() =>
+      useRenderedMessages(renderInput([userMessage("m-pic", undefined)]), {
+        ...displayContext,
+        resolveUserSenderAvatarUrl: (sender) =>
+          sender.type === "user"
+            ? `https://avatars/${sender.userId}.png`
+            : null,
+      }),
+    );
+    expect(
+      pictured.result.current.find((row) => row.id === "m-pic")
+        ?.senderAvatarUrl,
+    ).toBe("https://avatars/owner-1.png");
+
+    const { result } = renderRows([userMessage("m-plain", undefined)]);
+    const row = result.current.find((candidate) => candidate.id === "m-plain");
+    expect(row !== undefined && "senderAvatarUrl" in row).toBe(false);
   });
 
   it("leaves the key absent on a row that opened no request", () => {

@@ -215,6 +215,16 @@ vi.mock("@/hooks/host/use-composer-placement", () => ({
 // The Epic session's host, the modal's DEFAULT placement tier - handed to the
 // (mocked) placement above, so this suite pins that the modal asks for the
 // session's host and not the app-wide one.
+// The mirror line reads the task's hosts and the host registry, which this
+// suite's `@/lib/host` mock does not carry; it has its own suite
+// (`composer-mirror-line.test.tsx`), so here it shows nothing.
+const NO_MIRROR_LINE = vi.hoisted(() =>
+  Object.freeze({ notice: null, markSeen: (): void => undefined }),
+);
+vi.mock("@/hooks/composer/use-composer-mirror-line", () => ({
+  useComposerMirrorLine: () => NO_MIRROR_LINE,
+}));
+
 vi.mock("@/hooks/epic/use-epic-session-host-id", () => ({
   useEpicSessionHostId: () => "host-session",
 }));
@@ -787,6 +797,7 @@ describe("new-conversation modal shares the composer's placement semantics", () 
         hostId: "host-session",
         onSelect: testState.recordPlacement,
         unselectableExceptHostId: null,
+        onlyHostIds: null,
       });
     }
     expect(testState.latestSeedPins.length).toBeGreaterThan(0);

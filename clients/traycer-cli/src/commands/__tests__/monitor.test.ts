@@ -4,11 +4,7 @@ import { runMonitor } from "../monitor";
 import { buildProgramWithAgentRoles } from "../../index";
 import { resolveHostAuth } from "../../internal/host-auth";
 import { readHostPidMetadata } from "../../host/pid-metadata";
-import {
-  callHostRpc,
-  callHostRpcWithDispatch,
-  PLAIN_DISPATCH,
-} from "../../internal/host-rpc";
+import { callHostRpc, callHostRpcWithDispatch } from "../../internal/host-rpc";
 import { createOutput } from "../../runner/output";
 import type { CommandContext } from "../../runner/runner";
 import { resolveRuntimeContext } from "../../runner/runtime";
@@ -657,7 +653,6 @@ describe("follow-up inactivity notices (negotiated @1.3)", () => {
           message: selectedMessage,
           expectReply: selectedExpectReply,
           responseId: selectedResponseId ?? null,
-          workspace: null,
         });
         const commandResult = await command(makeCommandContext());
 
@@ -667,6 +662,11 @@ describe("follow-up inactivity notices (negotiated @1.3)", () => {
         expect(commandResult.human).toContain(
           `responseId: ${returnedResponseId}`,
         );
+        // The dispatch is asserted with the request, not beside it: the
+        // receiving agent's chat session has to be opened before the host
+        // answers, and the transport's 15s default expires mid-open on a
+        // loaded machine. A send that lost its own response deadline would
+        // report a failure for a message the host went on to deliver.
         expect(callHostRpcWithDispatchMock).toHaveBeenCalledWith(
           "agent.sendMessage",
           expect.objectContaining({
@@ -676,9 +676,13 @@ describe("follow-up inactivity notices (negotiated @1.3)", () => {
             prompt: "<follow-up>",
             expectReply: true,
             responseId: null,
-            workspace: null,
           }),
-          PLAIN_DISPATCH,
+          {
+            responseTimeoutMs: 60_000,
+            requiredHostMethodVersion: null,
+            signal: null,
+            failFast: false,
+          },
         );
         expect(output).toContain("omit --response-id for this follow-up");
         expect(output).toContain(

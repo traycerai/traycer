@@ -23,11 +23,15 @@ type PushPermissionView =
   | { readonly kind: "error"; readonly message: string }
   | { readonly kind: PushPermissionState };
 
+// The events that reach the phone are the ones each host has turned on under
+// Notification events (the row below), so the copy points there rather than
+// naming a subset of them.
 const STATE_DESCRIPTIONS: { readonly [K in PushPermissionState]: string } = {
-  granted: "Delivered to this phone when an agent needs you.",
-  denied:
-    "Turned off for Traycer in system Settings. Turn them on to get buzzed when an agent needs you.",
-  prompt: "Get buzzed when an agent needs you.",
+  granted:
+    "Delivered to this phone for the events turned on under Notification events.",
+  denied: "Turned off for Traycer in system Settings.",
+  prompt:
+    "Get buzzed on this phone for the events turned on under Notification events.",
 };
 
 const READ_FAILED = "Couldn't read this phone's notification setting.";

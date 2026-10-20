@@ -20,6 +20,19 @@ vi.mock("@/components/settings/host-scope/use-scoped-stream-binding", () => ({
   useScopedStreamBinding: () => null,
 }));
 
+// A marker carrying the host its scope names, so the Overview case below can
+// see the section mounted for the picker's host.
+vi.mock("@/components/settings/panels/host-environment-section", () => ({
+  HostEnvironmentSection: (props: {
+    readonly scope: { readonly hostId: string | null };
+  }) => (
+    <div
+      data-testid="host-environment-section"
+      data-host-id={props.scope.hostId ?? ""}
+    />
+  ),
+}));
+
 const scopeOverrides = vi.hoisted((): { current: Record<string, unknown> } => ({
   current: {},
 }));
@@ -374,7 +387,6 @@ describe("HostOverviewPanel — bound-dispatch sequence: accept, park, auto-open
           storeFormats: null,
           install: null,
           processMemory: null,
-          crossHostMessaging: null,
         }),
         "host.update.check": () => ({
           outcome: "ok" as const,
@@ -491,7 +503,6 @@ describe("HostOverviewPanel — dispatch ownership: ACK racing the cache, an un-
           storeFormats: null,
           install: null,
           processMemory: null,
-          crossHostMessaging: null,
         }),
         "host.update.check": () => ({
           outcome: "ok" as const,
@@ -559,7 +570,6 @@ describe("HostOverviewPanel — dispatch ownership: ACK racing the cache, an un-
           storeFormats: null,
           install: null,
           processMemory: null,
-          crossHostMessaging: null,
         }),
       },
     });
@@ -607,7 +617,6 @@ describe("HostOverviewPanel — dispatch ownership: ACK racing the cache, an un-
           storeFormats: null,
           install: null,
           processMemory: null,
-          crossHostMessaging: null,
         }),
         "host.update.check": () => ({
           outcome: "ok" as const,
@@ -748,7 +757,6 @@ describe("HostOverviewPanel — dispatch ownership: unusable scope and unmount-b
           storeFormats: null,
           install: null,
           processMemory: null,
-          crossHostMessaging: null,
         }),
         "host.update.check": () => ({
           outcome: "ok" as const,
@@ -896,7 +904,6 @@ describe("HostOverviewPanel — an accepted host-service deregister clears the d
           storeFormats: null,
           install: null,
           processMemory: null,
-          crossHostMessaging: null,
         }),
         "host.update.check": () => ({
           outcome: "ok" as const,
@@ -999,7 +1006,6 @@ describe("HostOverviewPanel — the dialog's Force bypasses the catalog gate (i)
           storeFormats: null,
           install: null,
           processMemory: null,
-          crossHostMessaging: null,
         }),
         // The catalog does NOT list "1.6.0" — the attempt's own target.
         // Falsifies: routing the dialog's Force through `installForce`
@@ -1081,7 +1087,6 @@ describe("HostOverviewPanel — the dialog's Force bypasses the catalog gate (i)
           storeFormats: null,
           install: null,
           processMemory: null,
-          crossHostMessaging: null,
         }),
         "host.update.check": () => ({
           outcome: "ok" as const,
@@ -1197,7 +1202,6 @@ describe("HostOverviewPanel — a host without the two methods keeps the legacy 
           storeFormats: null,
           install: null,
           processMemory: null,
-          crossHostMessaging: null,
         }),
         // Registered so "never called" is a fact about the page's routing and
         // not about a handler that was missing anyway.
@@ -1296,7 +1300,6 @@ describe("HostOverviewPanel — the bound methods' cli-failed and dispatch-indet
           storeFormats: null,
           install: null,
           processMemory: null,
-          crossHostMessaging: null,
         }),
         "host.update.check": () => ({
           outcome: "ok" as const,
@@ -1425,7 +1428,6 @@ describe("HostOverviewPanel — the bound methods' cli-failed and dispatch-indet
             storeFormats: null,
             install: null,
             processMemory: null,
-            crossHostMessaging: null,
           }),
           "host.update.check": () => ({
             outcome: "ok" as const,
@@ -1702,7 +1704,6 @@ describe("HostOverviewPanel — the bound control takes the page's gates (ticket
           storeFormats: null,
           install: null,
           processMemory: null,
-          crossHostMessaging: null,
         }),
         ...overrides,
       },
@@ -1862,7 +1863,6 @@ describe("HostOverviewPanel — the Defer promise follows the continuation (tick
           storeFormats: null,
           install: null,
           processMemory: null,
-          crossHostMessaging: null,
         }),
       },
     });
@@ -1915,7 +1915,6 @@ describe("HostOverviewPanel — the Defer promise follows the continuation (tick
           storeFormats: null,
           install: null,
           processMemory: null,
-          crossHostMessaging: null,
         }),
       },
     });
@@ -2002,7 +2001,6 @@ describe("HostOverviewPanel — a RECOVERABLE region retirement does not spend t
           storeFormats: null,
           install: null,
           processMemory: null,
-          crossHostMessaging: null,
         }),
         "host.update.check": () => {
           checkCalls += 1;
@@ -2194,7 +2192,6 @@ describe("update dispatch onError — a transport drop keeps the accepted latch 
             storeFormats: null,
             install: null,
             processMemory: null,
-            crossHostMessaging: null,
           }),
           "host.update.check": () => ({
             outcome: "ok" as const,
@@ -2468,5 +2465,21 @@ describe("HostOverviewPanel — reason vocabularies are partitioned per wire fie
       hostBindingMock.current = null;
       vi.clearAllMocks();
     }
+  });
+});
+
+describe("HostOverviewPanel — whose bots the host runs", () => {
+  it("mounts the environment section for the host the picker names", async () => {
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: true,
+    });
+    record("host-a", METHODS_WITH_BOUND);
+    hostBindingMock.current = bindingWith(fixture.client);
+    scopeOverrides.current = scopeFrom("host-a", fixture);
+    renderPanel();
+
+    const section = await screen.findByTestId("host-environment-section");
+    expect(section.getAttribute("data-host-id")).toBe("host-a");
   });
 });

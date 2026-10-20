@@ -1,11 +1,21 @@
 import { describe, expect, it, vi } from "vitest";
 import { createAuthAwareMessenger } from "../auth-aware-messenger";
 import {
+  createRetryingMessenger,
+  RetryEpisodeOutcomeUnknownError,
+} from "../retrying-messenger";
+import {
   HostAuthoritySupersededError,
+  HostRequestAbortedError,
   HostRpcError,
+  HostTransportFailureError,
+  RetryableTransportError,
+  mayHaveReachedHost,
   type HostRequestAuthority,
+  type HostRequestOptions,
   type IHostMessenger,
 } from "../host-messenger";
+import { markMayHaveReachedHost } from "@traycer/protocol/host-transport/remote/rpc-types";
 import { MutableBearerLease } from "@traycer-clients/shared/auth/bearer-source";
 import type { AuthorityBoundAuthRevalidator } from "@traycer-clients/shared/auth/bearer-revalidator";
 import { hostRpcRegistry } from "@traycer/protocol/host/index";
@@ -290,5 +300,261 @@ describe("createAuthAwareMessenger", () => {
     ).rejects.toBeInstanceOf(HostAuthoritySupersededError);
     expect(replacementLease.getBearerToken()).toBe("replacement");
     expect(inner.request).toHaveBeenCalledTimes(1);
+  });
+});
+
+// A pending request answered by a session that went terminally fatal: the same
+// class a host refusal arrives as, marked because the request was already sent.
+function sessionFatalError(marked: boolean): HostRpcError {
+  const error = new HostRpcError({
+    code: "UNAUTHORIZED",
+    message: "Host access was revoked",
+    requestId: "session-fatal",
+    method: "",
+    fatalDetails: {
+      code: "UNAUTHORIZED",
+      reason: "Host access was revoked",
+      incompatibleMethods: null,
+      upgradeGuidance: null,
+    },
+  });
+  if (marked) markMayHaveReachedHost(error);
+  return error;
+}
+
+function hostRefusal(): HostRpcError {
+  return new HostRpcError({
+    code: "FORBIDDEN",
+    message: "not allowed",
+    requestId: "req-retry",
+    method: METHOD,
+    fatalDetails: null,
+  });
+}
+
+function preSendRetryable(): RetryableTransportError {
+  return new RetryableTransportError({
+    code: "RPC_ERROR",
+    message: "WebSocket dial timed out",
+    requestId: "req-retry",
+    method: METHOD,
+    fatalDetails: null,
+    replaySafetyFromKey: false,
+  });
+}
+
+function requestOptions(authority: HostRequestAuthority): HostRequestOptions {
+  return {
+    replayMustBeKeyed: false,
+    requiredHostMethodVersion: null,
+    idempotencyKey: null,
+    authority,
+  };
+}
+
+function innerFailing(
+  ...outcomes: ReadonlyArray<HostRpcError>
+): IHostMessenger<Registry> {
+  const request = vi.fn();
+  for (const outcome of outcomes) request.mockRejectedValueOnce(outcome);
+  return { request, requestWithResponseTimeout: uncalledLongPoll() };
+}
+
+async function failureOf(
+  inner: IHostMessenger<Registry>,
+  authority: HostRequestAuthority,
+  revalidate: AuthorityBoundAuthRevalidator["revalidateExpectedBearer"],
+): Promise<unknown> {
+  return createAuthAwareMessenger(inner, authRevalidator(revalidate))
+    .request(METHOD, PARAMS, requestOptions(authority))
+    .then(
+      () => null,
+      (reason: unknown) => reason,
+    );
+}
+
+function abortDispatchOf(thrown: unknown): boolean | null {
+  return thrown instanceof HostRequestAbortedError
+    ? thrown.mayHaveDispatched
+    : null;
+}
+
+function rotateTo(
+  lease: MutableBearerLease,
+): AuthorityBoundAuthRevalidator["revalidateExpectedBearer"] {
+  return () => {
+    lease.rotate("fresh");
+    return Promise.resolve("rotated");
+  };
+}
+
+describe("createAuthAwareMessenger dispatch provenance", () => {
+  it("an abort before recovery says whether the first attempt may have been sent", async () => {
+    const outcomes: Array<boolean | null> = [];
+    for (const marked of [true, false]) {
+      const controller = new AbortController();
+      controller.abort();
+      const revalidate = vi.fn();
+      const thrown = await failureOf(
+        innerFailing(sessionFatalError(marked)),
+        { ...authorityFor(defaultLease()), abortSignal: controller.signal },
+        revalidate,
+      );
+      expect(revalidate).not.toHaveBeenCalled();
+      outcomes.push(abortDispatchOf(thrown));
+    }
+    expect(outcomes).toEqual([true, false]);
+  });
+
+  it("an abort during recovery says whether the first attempt may have been sent", async () => {
+    const outcomes: Array<boolean | null> = [];
+    for (const marked of [true, false]) {
+      const lease = new MutableBearerLease("stale", "u1");
+      const controller = new AbortController();
+      const inner = innerFailing(sessionFatalError(marked));
+      const thrown = await failureOf(
+        inner,
+        { ...authorityFor(lease), abortSignal: controller.signal },
+        () => {
+          controller.abort();
+          lease.rotate("fresh");
+          return Promise.resolve("rotated");
+        },
+      );
+      expect(inner.request).toHaveBeenCalledTimes(1);
+      outcomes.push(abortDispatchOf(thrown));
+    }
+    expect(outcomes).toEqual([true, false]);
+  });
+
+  it("a superseded recovery after a sent first attempt is an unattested transport failure", async () => {
+    const marked = await failureOf(
+      innerFailing(sessionFatalError(true)),
+      authorityFor(defaultLease()),
+      () => Promise.resolve("superseded"),
+    );
+    expect(marked).toBeInstanceOf(HostTransportFailureError);
+    expect(marked).not.toBeInstanceOf(HostAuthoritySupersededError);
+    expect(marked).toMatchObject({ fatalDetails: null });
+    expect(mayHaveReachedHost(marked)).toBe(true);
+
+    const unmarked = await failureOf(
+      innerFailing(sessionFatalError(false)),
+      authorityFor(defaultLease()),
+      () => Promise.resolve("superseded"),
+    );
+    expect(unmarked).toBeInstanceOf(HostAuthoritySupersededError);
+  });
+
+  it("a refused retry after a sent first attempt is an unknown outcome carrying the refusal", async () => {
+    const refusal = hostRefusal();
+    const lease = new MutableBearerLease("stale", "u1");
+    const marked = await failureOf(
+      innerFailing(sessionFatalError(true), refusal),
+      authorityFor(lease),
+      rotateTo(lease),
+    );
+    expect(marked).toBeInstanceOf(RetryEpisodeOutcomeUnknownError);
+    expect(marked).toHaveProperty("finalRefusal", refusal);
+    expect(mayHaveReachedHost(marked)).toBe(true);
+
+    const unmarkedRefusal = hostRefusal();
+    const unmarkedLease = new MutableBearerLease("stale", "u1");
+    const unmarked = await failureOf(
+      innerFailing(sessionFatalError(false), unmarkedRefusal),
+      authorityFor(unmarkedLease),
+      rotateTo(unmarkedLease),
+    );
+    expect(unmarked).toBe(unmarkedRefusal);
+  });
+
+  it("a pre-send retry failure after a sent first attempt is restored to the keyed ground", async () => {
+    const preSend = preSendRetryable();
+    const lease = new MutableBearerLease("stale", "u1");
+    const marked = await failureOf(
+      innerFailing(sessionFatalError(true), preSend),
+      authorityFor(lease),
+      rotateTo(lease),
+    );
+    expect(marked).toBeInstanceOf(RetryableTransportError);
+    expect(marked).not.toBe(preSend);
+    expect(marked).toMatchObject({
+      code: preSend.code,
+      message: preSend.message,
+      requestId: preSend.requestId,
+      replaySafetyFromKey: true,
+    });
+
+    const unmarkedPreSend = preSendRetryable();
+    const unmarkedLease = new MutableBearerLease("stale", "u1");
+    const unmarked = await failureOf(
+      innerFailing(sessionFatalError(false), unmarkedPreSend),
+      authorityFor(unmarkedLease),
+      rotateTo(unmarkedLease),
+    );
+    expect(unmarked).toBe(unmarkedPreSend);
+  });
+
+  it("an unrotated recovery rethrows the same first failure, mark intact", async () => {
+    const markedCause = sessionFatalError(true);
+    const marked = await failureOf(
+      innerFailing(markedCause),
+      authorityFor(defaultLease()),
+      () => Promise.resolve("rejected"),
+    );
+    expect(marked).toBe(markedCause);
+    expect(mayHaveReachedHost(marked)).toBe(true);
+
+    const unmarkedCause = sessionFatalError(false);
+    const unmarked = await failureOf(
+      innerFailing(unmarkedCause),
+      authorityFor(defaultLease()),
+      () => Promise.resolve("rejected"),
+    );
+    expect(unmarked).toBe(unmarkedCause);
+    expect(mayHaveReachedHost(unmarked)).toBe(false);
+  });
+
+  it("makes a retrying layer above key its replay once recovery's retry fails before sending", async () => {
+    const replayRequirementsFor = async (
+      marked: boolean,
+    ): Promise<boolean[]> => {
+      const lease = new MutableBearerLease("stale", "u1");
+      const outcomes = [sessionFatalError(marked), preSendRetryable()];
+      const seen: boolean[] = [];
+      const request = vi
+        .fn()
+        .mockImplementation(
+          (_method: string, _params: object, options: HostRequestOptions) => {
+            const outcome = outcomes[seen.length];
+            seen.push(options.replayMustBeKeyed);
+            return outcome === undefined
+              ? Promise.resolve(undefined)
+              : Promise.reject(outcome);
+          },
+        );
+      const composed = createRetryingMessenger(
+        createAuthAwareMessenger(
+          { request, requestWithResponseTimeout: uncalledLongPoll() },
+          authRevalidator(rotateTo(lease)),
+        ),
+        {
+          maxRetries: 1,
+          initialDelayMs: 0,
+          maxDelayMs: 0,
+          sleep: () => Promise.resolve(),
+          random: () => 0,
+        },
+      );
+      await composed.request(
+        METHOD,
+        PARAMS,
+        requestOptions(authorityFor(lease)),
+      );
+      return seen;
+    };
+
+    expect(await replayRequirementsFor(true)).toEqual([false, false, true]);
+    expect(await replayRequirementsFor(false)).toEqual([false, false, false]);
   });
 });
