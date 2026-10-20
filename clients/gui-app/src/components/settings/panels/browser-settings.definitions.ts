@@ -144,7 +144,7 @@ export const BROWSER = defineSettingsSection("browser", {
     search: { contributesTo: "page" },
     label: "Use simulators",
     description:
-      "Run iOS Simulators and Android Emulators on this host and use them in a tile. Turning this on downloads the simulator tools once, under 60 MB. Simulator.app runs hidden while a simulator is on; quitting it shuts the simulators down.",
+      "Run iOS Simulators and Android Emulators on this host and use them in a tile. Turning this on downloads the simulator tools once, under 60 MB.",
     availableWhen: alwaysAvailable,
     keywords: ["simulator", "emulator", "device"],
   },
