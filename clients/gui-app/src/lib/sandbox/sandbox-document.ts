@@ -309,7 +309,12 @@ function bootstrapMain(config: BootstrapConfig): void {
     } catch {
       return;
     }
-    if (followsInFrame(url)) return;
+    if (followsInFrame(url)) {
+      // The sandbox has no popup permission. Override explicit and inherited
+      // targets so a page inside this artifact always stays in its frame.
+      anchor.setAttribute("target", "_self");
+      return;
+    }
     event.preventDefault();
     if (url.protocol !== "http:" && url.protocol !== "https:") return;
     linkRequestId += 1;

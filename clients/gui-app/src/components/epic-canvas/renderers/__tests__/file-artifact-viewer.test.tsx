@@ -7,8 +7,26 @@ import {
   waitFor,
 } from "@testing-library/react";
 import type { ReactNode } from "react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { IFileSaveHost } from "@traycer-clients/shared/platform/runner-host";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+  type Mock,
+} from "vitest";
+import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
+import type {
+  IFileSaveHost,
+  IRunnerHost,
+} from "@traycer-clients/shared/platform/runner-host";
+import type {
+  SandboxArtifactBridge,
+  SandboxArtifactReply,
+  SandboxArtifactRequest,
+} from "@traycer-clients/shared/platform/sandbox-artifacts";
+import type { EpicReadArtifactObjectResponse } from "@traycer/protocol/host/epic/artifact-objects";
 import type { ArtifactObjectRef } from "@traycer/protocol/persistence/epic/artifacts";
 import type { ArtifactReadSpan } from "@/lib/sandbox/artifact-serving/artifact-server";
 import { FileArtifactViewer } from "@/components/epic-canvas/renderers/file-artifact-viewer";
@@ -21,6 +39,20 @@ const mocks = vi.hoisted(() => ({
   saveBlobToDisk:
     vi.fn<(blob: Blob, name: string, host: unknown) => Promise<null>>(),
   fileSave: null as IFileSaveHost | null,
+  runnerHost: null as IRunnerHost | null,
+  // A fixed query result for the tests that watch the renewal timer; `null`
+  // lets the adapter below run a real query against `urlResponse`.
+  hostQuery: null as {
+    data: unknown;
+    isPending: boolean;
+    refetch: Mock<(...args: unknown[]) => unknown>;
+  } | null,
+  urlResponse: {
+    kind: "unavailable",
+    reason: "missing",
+  } as EpicReadArtifactObjectResponse,
+  urlRequests: [] as unknown[],
+  hostQueryParams: [] as unknown[],
   createdUrls: [] as string[],
   revokedUrls: [] as string[],
 }));
@@ -43,6 +75,42 @@ vi.mock("@/components/epic-canvas/docx-preview/docx-preview-lazy", () => ({
     <div data-testid="docx-preview" data-url={props.url} />
   ),
 }));
+// Media never reads the object into a Blob: the native shell streams it through
+// a mounted artifact server, and a browser asks the host for a signed URL. The
+// real mount and server stay; only where the runner host and host client come
+// from is faked.
+vi.mock("@/providers/use-runner-host", () => ({
+  useRunnerHostOrNull: () => mocks.runnerHost,
+}));
+vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
+  useHostClientForHostId: () => null,
+}));
+// Backed by a real query, so `options.enabled` and the cache behave as in the
+// app; the host's answer is `urlResponse`, and each request is recorded.
+vi.mock("@/hooks/host/use-host-query", async () => {
+  const { useQuery } = await import("@tanstack/react-query");
+  return {
+    useHostQuery: (input: {
+      readonly params: unknown;
+      readonly options: {
+        readonly enabled: boolean | undefined;
+        readonly staleTime: number | undefined;
+      };
+    }) => {
+      mocks.hostQueryParams.push(input.params);
+      const real = useQuery({
+        queryKey: ["media-url", input.params],
+        queryFn: () => {
+          mocks.urlRequests.push(input.params);
+          return Promise.resolve(mocks.urlResponse);
+        },
+        enabled: mocks.hostQuery === null && input.options.enabled !== false,
+        staleTime: input.options.staleTime,
+      });
+      return mocks.hostQuery ?? real;
+    },
+  };
+});
 vi.mock("@/hooks/files/use-file-save-host", () => ({
   useFileSaveHost: () => mocks.fileSave,
 }));
@@ -80,6 +148,11 @@ afterEach(() => {
   mocks.downloadBlobToDevice.mockReset();
   mocks.saveBlobToDisk.mockReset();
   mocks.fileSave = null;
+  mocks.runnerHost = null;
+  mocks.hostQuery = null;
+  mocks.urlResponse = { kind: "unavailable", reason: "missing" };
+  mocks.urlRequests.length = 0;
+  mocks.hostQueryParams.length = 0;
   mocks.createdUrls.length = 0;
   mocks.revokedUrls.length = 0;
 });
@@ -161,29 +234,6 @@ describe("<FileArtifactViewer />", () => {
 
       const preview = await screen.findByTestId(testId);
       expect(preview.getAttribute("data-url")).toBe(mocks.createdUrls.at(-1));
-    },
-  );
-
-  it.each([
-    ["video", "clip.mp4", "video/mp4", "video"],
-    ["audio", "song.mp3", "audio/mpeg", "audio"],
-  ])(
-    "plays %s natively from the blob URL",
-    async (_label, name, mediaType, tag) => {
-      const bytes = textBytes("payload");
-      const { readSpan } = servingSpan(bytes);
-
-      const { container } = renderViewer(
-        name,
-        objectOf(bytes, "a".repeat(64), mediaType),
-        readSpan,
-      );
-
-      await waitFor(() =>
-        expect(container.querySelector(tag)?.getAttribute("src")).toBe(
-          mocks.createdUrls.at(-1),
-        ),
-      );
     },
   );
 
@@ -346,5 +396,418 @@ describe("<FileArtifactViewer />", () => {
 
     expect(mocks.revokedUrls).toEqual(mocks.createdUrls);
     expect(mocks.revokedUrls.length).toBeGreaterThan(0);
+  });
+});
+
+interface MediaBridge extends SandboxArtifactBridge {
+  readonly registered: string[];
+  readonly unregistered: string[];
+  readonly responses: SandboxArtifactReply[];
+  emit(request: SandboxArtifactRequest): void;
+  finishRegistration(): void;
+}
+
+/** A shell bridge; `holdRegistration` keeps `register` pending until released. */
+function mediaBridge(holdRegistration: boolean): MediaBridge {
+  const handlers = new Set<(request: SandboxArtifactRequest) => void>();
+  const registered: string[] = [];
+  const unregistered: string[] = [];
+  const responses: SandboxArtifactReply[] = [];
+  const gate = Promise.withResolvers<void>();
+  if (!holdRegistration) gate.resolve();
+  return {
+    policySource: "traycer-sandbox:",
+    artifactOrigin: ({ artifactId, mountId }) =>
+      `traycer-sandbox://artifact-${artifactId}--${mountId}`,
+    registered,
+    unregistered,
+    responses,
+    register: (mountId) => {
+      registered.push(mountId);
+      return gate.promise;
+    },
+    unregister: (mountId) => {
+      unregistered.push(mountId);
+      return Promise.resolve();
+    },
+    onRequest: (handler) => {
+      handlers.add(handler);
+      return { dispose: () => handlers.delete(handler) };
+    },
+    onCancel: () => ({ dispose: () => undefined }),
+    respond: (reply) => {
+      responses.push(reply);
+      return Promise.resolve();
+    },
+    emit: (request) => {
+      for (const handler of handlers) handler(request);
+    },
+    finishRegistration: () => gate.resolve(),
+  };
+}
+
+/** MockRunnerHost always carries a null bridge; these tests need a real one. */
+function nativeHostWith(bridge: SandboxArtifactBridge): IRunnerHost {
+  const host = new MockRunnerHost({
+    signInUrl: "https://example.invalid/signin",
+    authnBaseUrl: "https://example.invalid",
+    localHost: null,
+    hosts: [],
+    workspaceFolderPickerPaths: undefined,
+    hasLocalHost: undefined,
+    traycerCli: undefined,
+  });
+  const proto = Object.getPrototypeOf(host) as object;
+  return Object.assign(Object.create(proto) as IRunnerHost, host, {
+    sandboxArtifacts: bridge,
+  });
+}
+
+const HUGE_MEDIA_BYTES = 5 * 1024 ** 3;
+const MEDIA_SHA = "d".repeat(64);
+
+function mediaObject(
+  status: ArtifactObjectRef["status"],
+  mediaType: string,
+): ArtifactObjectRef {
+  return {
+    sha256: MEDIA_SHA,
+    byteLength: HUGE_MEDIA_BYTES,
+    mediaType,
+    status,
+  };
+}
+
+/** Serves a recognisable byte for any span, and records each span's size. */
+function recordedMediaSpans() {
+  const spans: Array<{ sha256: string; offset: number; length: number }> = [];
+  const readSpan: ArtifactReadSpan = (sha256, offset, length) => {
+    spans.push({ sha256, offset, length });
+    return Promise.resolve({
+      bytes: new Uint8Array(length).fill(7),
+      totalBytes: HUGE_MEDIA_BYTES,
+      mediaType: "video/mp4",
+    });
+  };
+  return { readSpan, spans };
+}
+
+describe("<FileArtifactViewer /> media in the native shell", () => {
+  it.each([
+    ["video", "clip.mp4", "video/mp4"],
+    ["audio", "song.mp3", "audio/mpeg"],
+  ])(
+    "streams %s from the shell's own artifact address without reading the object or making a blob URL",
+    async (tag, name, mediaType) => {
+      const bridge = mediaBridge(false);
+      mocks.runnerHost = nativeHostWith(bridge);
+      const { readSpan, spans } = recordedMediaSpans();
+
+      const { container } = renderViewer(
+        name,
+        mediaObject("published", mediaType),
+        readSpan,
+      );
+
+      await waitFor(() => expect(container.querySelector(tag)).not.toBeNull());
+      expect(bridge.registered).toHaveLength(1);
+      expect(container.querySelector(tag)?.getAttribute("src")).toBe(
+        `traycer-sandbox://artifact-media-${MEDIA_SHA}--${bridge.registered[0]}/media`,
+      );
+      // A five-gigabyte recording must cost nothing until the player asks.
+      expect(spans).toEqual([]);
+      expect(mocks.createdUrls).toEqual([]);
+    },
+  );
+
+  it("shows the player only after the shell has registered the mount", async () => {
+    const bridge = mediaBridge(true);
+    mocks.runnerHost = nativeHostWith(bridge);
+    const { readSpan } = recordedMediaSpans();
+
+    const { container } = renderViewer(
+      "clip.mp4",
+      mediaObject("published", "video/mp4"),
+      readSpan,
+    );
+
+    await waitFor(() => expect(bridge.registered).toHaveLength(1));
+    expect(screen.getByText("Loading media…")).toBeTruthy();
+    expect(container.querySelector("video")).toBeNull();
+
+    bridge.finishRegistration();
+
+    await waitFor(() =>
+      expect(container.querySelector("video")).not.toBeNull(),
+    );
+  });
+
+  it("answers the player's small range request with a bounded read of the object's own sha", async () => {
+    const bridge = mediaBridge(false);
+    mocks.runnerHost = nativeHostWith(bridge);
+    const { readSpan, spans } = recordedMediaSpans();
+    const { container } = renderViewer(
+      "clip.mp4",
+      mediaObject("published", "video/mp4"),
+      readSpan,
+    );
+    await waitFor(() =>
+      expect(container.querySelector("video")).not.toBeNull(),
+    );
+
+    bridge.emit({
+      requestId: "range-1",
+      mountId: bridge.registered[0],
+      path: "media",
+      offset: 0,
+      length: 4,
+    });
+
+    await waitFor(() => expect(bridge.responses).toHaveLength(1));
+    const reply = bridge.responses[0];
+    if (reply.kind !== "bytes") throw new Error("expected a bytes reply");
+    expect(reply.bytes).toHaveLength(4);
+    expect(reply.totalBytes).toBe(HUGE_MEDIA_BYTES);
+    expect(spans.length).toBeGreaterThan(0);
+    for (const span of spans) {
+      expect(span.sha256).toBe(MEDIA_SHA);
+      // Never the whole object: a bounded read at the host's range ceiling.
+      expect(span.length).toBeLessThanOrEqual(4 * 1024 * 1024);
+    }
+  });
+
+  it.each(["queued", "local-only"] as const)(
+    "plays a %s object, since the shell serves it from this host rather than a published URL",
+    async (status) => {
+      const bridge = mediaBridge(false);
+      mocks.runnerHost = nativeHostWith(bridge);
+      const { readSpan } = recordedMediaSpans();
+
+      const { container } = renderViewer(
+        "clip.mp4",
+        mediaObject(status, "video/mp4"),
+        readSpan,
+      );
+
+      await waitFor(() =>
+        expect(container.querySelector("video")).not.toBeNull(),
+      );
+    },
+  );
+
+  it("keeps the same mount when only the object's status moves from queued to published", async () => {
+    const bridge = mediaBridge(false);
+    mocks.runnerHost = nativeHostWith(bridge);
+    const { readSpan, spans } = recordedMediaSpans();
+    const { container, rerenderWith } = renderViewer(
+      "clip.mp4",
+      mediaObject("queued", "video/mp4"),
+      readSpan,
+    );
+    await waitFor(() =>
+      expect(container.querySelector("video")).not.toBeNull(),
+    );
+
+    rerenderWith("clip.mp4", mediaObject("published", "video/mp4"), readSpan);
+
+    expect(container.querySelector("video")).not.toBeNull();
+    expect(bridge.registered).toHaveLength(1);
+    expect(bridge.unregistered).toEqual([]);
+    expect(spans).toEqual([]);
+  });
+
+  it("releases the shell's mount on unmount, aborts the read it was waiting on and never answers the request", async () => {
+    const bridge = mediaBridge(false);
+    mocks.runnerHost = nativeHostWith(bridge);
+    const release = Promise.withResolvers<void>();
+    // The signal the mount hands every read: it must end with the mount.
+    const consumed: { signal: AbortSignal | null } = { signal: null };
+    const slowRead: ArtifactReadSpan = async (
+      _sha,
+      _offset,
+      length,
+      signal,
+    ) => {
+      consumed.signal = signal;
+      await release.promise;
+      return {
+        bytes: new Uint8Array(length),
+        totalBytes: HUGE_MEDIA_BYTES,
+        mediaType: "video/mp4",
+      };
+    };
+    const { container, unmount } = renderViewer(
+      "clip.mp4",
+      mediaObject("published", "video/mp4"),
+      slowRead,
+    );
+    await waitFor(() =>
+      expect(container.querySelector("video")).not.toBeNull(),
+    );
+    bridge.emit({
+      requestId: "in-flight",
+      mountId: bridge.registered[0],
+      path: "media",
+      offset: 0,
+      length: 4,
+    });
+
+    await waitFor(() => expect(consumed.signal).not.toBeNull());
+    expect(consumed.signal?.aborted).toBe(false);
+
+    unmount();
+    release.resolve();
+
+    expect(consumed.signal?.aborted).toBe(true);
+    await waitFor(() =>
+      expect(bridge.unregistered).toEqual([bridge.registered[0]]),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(bridge.responses).toEqual([]);
+  });
+
+  it("offers Retry after a playback error and brings back the same player, resuming where it was", async () => {
+    const bridge = mediaBridge(false);
+    mocks.runnerHost = nativeHostWith(bridge);
+    const { readSpan } = recordedMediaSpans();
+    const { container } = renderViewer(
+      "clip.mp4",
+      mediaObject("published", "video/mp4"),
+      readSpan,
+    );
+    await waitFor(() =>
+      expect(container.querySelector("video")).not.toBeNull(),
+    );
+    const failing = container.querySelector("video");
+    if (failing === null) throw new Error("expected a video");
+    const src = failing.getAttribute("src");
+    // jsdom exposes `readyState` read-only; a loaded recording has metadata.
+    Object.defineProperty(failing, "readyState", { value: 1 });
+    failing.currentTime = 42;
+    fireEvent.timeUpdate(failing);
+
+    // A transient host failure ends playback of that URL.
+    fireEvent.error(failing);
+    expect(container.querySelector("video")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+
+    await waitFor(() =>
+      expect(container.querySelector("video")).not.toBeNull(),
+    );
+    const retried = container.querySelector("video");
+    if (retried === null) throw new Error("expected the player back");
+    expect(retried).not.toBe(failing);
+    expect(retried.getAttribute("src")).toBe(src);
+    expect(bridge.registered).toHaveLength(1);
+    fireEvent.loadedMetadata(retried);
+    expect(retried.currentTime).toBe(42);
+  });
+});
+
+describe("<FileArtifactViewer /> media in a browser", () => {
+  const SIGNED = "https://cdn.example.test/clip.mp4?sig=abc";
+
+  it("plays the host's signed URL for the object without reading its bytes", () => {
+    mocks.hostQuery = {
+      data: { kind: "url", url: SIGNED, expiresAt: Date.now() + 60_000 },
+      isPending: false,
+      refetch: vi.fn<(...args: unknown[]) => unknown>(),
+    };
+    const { readSpan, spans } = recordedMediaSpans();
+
+    const { container } = renderViewer(
+      "clip.mp4",
+      mediaObject("published", "video/mp4"),
+      readSpan,
+    );
+
+    expect(container.querySelector("video")?.getAttribute("src")).toBe(SIGNED);
+    expect(mocks.hostQueryParams).toContainEqual({
+      epicId: "epic-1",
+      sha256: MEDIA_SHA,
+      want: { kind: "url" },
+    });
+    expect(spans).toEqual([]);
+    expect(mocks.createdUrls).toEqual([]);
+  });
+
+  it("renews the signed URL when Retry is pressed after a playback error", async () => {
+    const refetch = vi.fn<(...args: unknown[]) => unknown>();
+    mocks.hostQuery = {
+      data: { kind: "url", url: SIGNED, expiresAt: Date.now() + 60_000 },
+      isPending: false,
+      refetch,
+    };
+    const { readSpan } = recordedMediaSpans();
+    const { container } = renderViewer(
+      "clip.mp4",
+      mediaObject("published", "video/mp4"),
+      readSpan,
+    );
+    const player = container.querySelector("video");
+    if (player === null) throw new Error("expected a video");
+
+    fireEvent.error(player);
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+
+    // The failure is surfaced to Retry itself, so it can stay on screen.
+    await waitFor(() =>
+      expect(refetch).toHaveBeenCalledWith({ throwOnError: true }),
+    );
+    await waitFor(() =>
+      expect(container.querySelector("video")).not.toBeNull(),
+    );
+  });
+
+  it("asks for no URL while the object is still queued, then plays it once the same sha is published", async () => {
+    mocks.urlResponse = {
+      kind: "url",
+      url: SIGNED,
+      expiresAt: Date.now() + 60_000,
+    };
+    const { readSpan } = recordedMediaSpans();
+    const queued = mediaObject("queued", "video/mp4");
+    const { container, rerenderWith } = renderViewer(
+      "clip.mp4",
+      queued,
+      readSpan,
+    );
+
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    // Nothing is published to sign yet, so asking would be answered with an
+    // unavailable result that a later publish would not refresh.
+    expect(mocks.urlRequests).toEqual([]);
+    expect(container.querySelector("video")).toBeNull();
+
+    rerenderWith("clip.mp4", { ...queued, status: "published" }, readSpan);
+
+    await waitFor(() =>
+      expect(container.querySelector("video")?.getAttribute("src")).toBe(
+        SIGNED,
+      ),
+    );
+    expect(mocks.urlRequests).toHaveLength(1);
+  });
+
+  it("asks the host for a fresh URL before the signed one expires", () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    try {
+      const refetch = vi.fn<(...args: unknown[]) => unknown>();
+      mocks.hostQuery = {
+        data: { kind: "url", url: SIGNED, expiresAt: Date.now() + 10_000 },
+        isPending: false,
+        refetch,
+      };
+      const { readSpan } = recordedMediaSpans();
+      renderViewer("clip.mp4", mediaObject("published", "video/mp4"), readSpan);
+
+      vi.advanceTimersByTime(7_000);
+      expect(refetch).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(1_500);
+
+      expect(refetch).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

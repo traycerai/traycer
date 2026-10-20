@@ -137,6 +137,27 @@ describe("served artifact page links", () => {
     href: string,
     artifactRootPath: string | undefined,
   ): boolean {
+    return clickLink({
+      artifactPage,
+      href,
+      artifactRootPath,
+      anchorTarget: null,
+      baseTarget: null,
+    }).followed;
+  }
+
+  /** The same click with the anchor's and the document's `target` settable. */
+  function clickLink(input: {
+    readonly artifactPage: ArtifactPageRole;
+    readonly href: string;
+    readonly artifactRootPath: string | undefined;
+    readonly anchorTarget: string | null;
+    readonly baseTarget: string | null;
+  }): {
+    readonly followed: boolean;
+    readonly target: string | null;
+    readonly linkRequests: readonly unknown[];
+  } {
     const composed = buildDocument({
       html: "",
       csp: null,
@@ -148,8 +169,10 @@ describe("served artifact page links", () => {
         variables: [],
       },
       shortcuts: [],
-      artifactPage,
-      ...(artifactRootPath === undefined ? {} : { artifactRootPath }),
+      artifactPage: input.artifactPage,
+      ...(input.artifactRootPath === undefined
+        ? {}
+        : { artifactRootPath: input.artifactRootPath }),
     });
     const { window } = new JSDOM("<!doctype html><html><body></body></html>", {
       runScripts: "dangerously",
@@ -157,17 +180,76 @@ describe("served artifact page links", () => {
       // jsdom reports every followed link as an unimplemented navigation.
       virtualConsole: new VirtualConsole(),
     });
-    window.postMessage = () => undefined;
+    const posted: unknown[] = [];
+    window.postMessage = (message: unknown) => {
+      posted.push(message);
+    };
     window.eval(between(composed, "<script>", "</script>"));
+    if (input.baseTarget !== null) {
+      const base = window.document.createElement("base");
+      base.setAttribute("target", input.baseTarget);
+      window.document.head.append(base);
+    }
     const anchor = window.document.createElement("a");
-    anchor.setAttribute("href", href);
+    anchor.setAttribute("href", input.href);
+    if (input.anchorTarget !== null)
+      anchor.setAttribute("target", input.anchorTarget);
     window.document.body.append(anchor);
     const followed = anchor.dispatchEvent(
       new window.MouseEvent("click", { bubbles: true, cancelable: true }),
     );
+    const target = anchor.getAttribute("target");
     window.close();
-    return followed;
+    // The bootstrap posts other notifications too; only link requests matter here.
+    const linkRequests = posted.filter(
+      (message) =>
+        typeof message === "object" &&
+        message !== null &&
+        "method" in message &&
+        message.method === "ui/open-link",
+    );
+    return { followed, target, linkRequests };
   }
+
+  it.each([
+    ["an explicit target=_blank", "_blank", null],
+    ["a target=_blank inherited from <base>", null, "_blank"],
+  ])(
+    "keeps a link to another page of the artifact in its own frame despite %s",
+    (_label, anchorTarget, baseTarget) => {
+      const clicked = clickLink({
+        artifactPage: "found",
+        href: "about.html",
+        artifactRootPath: "/site/",
+        anchorTarget,
+        baseTarget,
+      });
+
+      // The sandbox has no popup permission, so a blank target would do nothing.
+      expect(clicked.followed).toBe(true);
+      expect(clicked.target).toBe("_self");
+      expect(clicked.linkRequests).toEqual([]);
+    },
+  );
+
+  it("still hands a link that leaves the artifact to the app, with its blank target untouched", () => {
+    const clicked = clickLink({
+      artifactPage: "found",
+      href: "https://example.com/docs",
+      artifactRootPath: "/site/",
+      anchorTarget: "_blank",
+      baseTarget: null,
+    });
+
+    expect(clicked.followed).toBe(false);
+    expect(clicked.target).toBe("_blank");
+    expect(clicked.linkRequests).toEqual([
+      expect.objectContaining({
+        method: "ui/open-link",
+        params: { url: "https://example.com/docs" },
+      }),
+    ]);
+  });
 
   it("follows a link to another page of the artifact only on a served artifact page that knows its root", () => {
     expect(clickFollows("found", "about.html", "/site/")).toBe(true);

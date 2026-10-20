@@ -93,7 +93,7 @@ export function buildCspDirectives(env: NodeJS.ProcessEnv): readonly string[] {
     // sandbox scheme (`electron-main/app/sandbox-protocol.ts`). This is also
     // what stops such a frame navigating itself anywhere else.
     "frame-src traycer-sandbox:",
-    "media-src 'self' https: blob:",
+    "media-src 'self' https: blob: traycer-sandbox:",
     "object-src 'none'",
     "base-uri 'self'",
     "form-action 'self'",

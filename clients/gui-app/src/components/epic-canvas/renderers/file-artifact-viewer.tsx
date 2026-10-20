@@ -1,3 +1,4 @@
+import { MediaArtifactContent } from "./media-artifact-content";
 import { useEffect, useState, type ReactNode } from "react";
 import { queryOptions, useQuery } from "@tanstack/react-query";
 import type { ArtifactObjectRef } from "@traycer/protocol/persistence/epic/artifacts";
@@ -34,6 +35,7 @@ export function FileArtifactViewer(props: {
 }) {
   const { object, name } = props;
   const kind = artifactFileViewer(name, object.mediaType);
+  const mediaKind = kind === "audio" || kind === "video" ? kind : null;
   const fileSave = useFileSaveHost();
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -52,7 +54,7 @@ export function FileArtifactViewer(props: {
       ],
       queryFn,
       meta: stampHostRpcMethod(undefined, "epic.readArtifactObject"),
-      enabled: kind !== null,
+      enabled: kind !== null && mediaKind === null,
       staleTime: Infinity,
       gcTime: 60_000,
       retry: false,
@@ -107,46 +109,63 @@ export function FileArtifactViewer(props: {
           {saveError}
         </div>
       )}
-      {query.data !== undefined && kind !== null ? (
-        <FileContent
-          key={object.sha256}
-          blob={query.data}
-          kind={kind}
-          name={name}
-          actions={actions}
-        />
-      ) : (
+      {mediaKind !== null && (
         <>
           <div className="flex items-center justify-between gap-2 border-b p-2">
             <span className="truncate">{name}</span>
             {actions}
           </div>
-          <div
-            role="status"
-            className="flex flex-1 flex-col items-center justify-center gap-2 p-4 text-muted-foreground"
-          >
-            {query.isError ? (
-              <>
-                <p>Couldn't load this file.</p>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => void query.refetch()}
-                >
-                  Retry
-                </Button>
-              </>
-            ) : null}
-            {!query.isError && (
-              <p>
-                {kind === null
-                  ? "No preview is available. Save the file to open it."
-                  : "Loading file…"}
-              </p>
-            )}
-          </div>
+          <MediaArtifactContent
+            key={`${props.hostId}:${props.epicId}:${object.sha256}`}
+            epicId={props.epicId}
+            hostId={props.hostId}
+            object={object}
+            kind={mediaKind}
+            readSpan={props.readSpan}
+          />
         </>
       )}
+      {mediaKind === null &&
+        (query.data !== undefined && kind !== null ? (
+          <FileContent
+            key={object.sha256}
+            blob={query.data}
+            kind={kind}
+            name={name}
+            actions={actions}
+          />
+        ) : (
+          <>
+            <div className="flex items-center justify-between gap-2 border-b p-2">
+              <span className="truncate">{name}</span>
+              {actions}
+            </div>
+            <div
+              role="status"
+              className="flex flex-1 flex-col items-center justify-center gap-2 p-4 text-muted-foreground"
+            >
+              {query.isError ? (
+                <>
+                  <p>Couldn't load this file.</p>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => void query.refetch()}
+                  >
+                    Retry
+                  </Button>
+                </>
+              ) : null}
+              {!query.isError && (
+                <p>
+                  {kind === null
+                    ? "No preview is available. Save the file to open it."
+                    : "Loading file…"}
+                </p>
+              )}
+            </div>
+          </>
+        ))}
     </div>
   );
 }
@@ -212,25 +231,6 @@ function FileContent(props: {
         </p>
       ) : null}
       {!failed && kind === "text" && <TextFileContent blob={blob} />}
-      {!failed && (kind === "audio" || kind === "video") && (
-        <div className="flex min-h-0 flex-1 items-center justify-center">
-          {kind === "video" ? (
-            <video
-              src={url}
-              controls
-              preload="metadata"
-              className="max-h-full max-w-full"
-              onError={fail}
-            >
-              <track kind="captions" />
-            </video>
-          ) : (
-            <audio src={url} controls preload="metadata" onError={fail}>
-              <track kind="captions" />
-            </audio>
-          )}
-        </div>
-      )}
     </>
   );
 }
