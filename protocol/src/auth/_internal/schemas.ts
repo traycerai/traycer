@@ -300,6 +300,38 @@ export const authenticatedUserSchema = lazySchema(() =>
 );
 
 /**
+ * The caller's environment ids, as authn holds them. `personal: null`, or a
+ * team the caller belongs to that is missing from `teams`, means authn holds
+ * no row for that owner YET - a reader treats it as not yet available, never
+ * as a reason to mint one.
+ */
+const callerEnvironmentsSchema = lazySchema(() =>
+  z.object({
+    personal: z.string().nullable(),
+    teams: z.array(z.object({ teamId: z.string(), environmentId: z.string() })),
+  }),
+);
+
+/** The environment an act-as grant acts for; `null` for any other bearer. */
+const actingAsSchema = lazySchema(() =>
+  z.object({ environmentId: z.string() }).nullable(),
+);
+
+/**
+ * Major 3: major 2 plus the two fields a server authorizes with. An
+ * extension of the major-2 schema, never of `authenticatedUserResponseFields`,
+ * whose fields land on major 1 too. Both are REQUIRED, which is what makes
+ * this a major: a reader can tell "the caller has no environments" from
+ * "authn did not say".
+ */
+export const authenticatedUserSchemaWithEnvironments = lazySchema(() =>
+  authenticatedUserSchema.extend({
+    environments: callerEnvironmentsSchema,
+    actingAs: actingAsSchema,
+  }),
+);
+
+/**
  * `legacy-authenticated-user-response` is the frozen wire contract for
  * out-of-repo extension builds, so it stays at major 1 and keeps the
  * pre-Apple user. An Apple user reaching this envelope is downgraded
