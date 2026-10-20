@@ -150,6 +150,7 @@ function useLaneProbe(mode: StatusBarRateLimitMode, editing: boolean) {
     mode,
     editing,
     sample: false,
+    retryHostId: "host-a",
   });
 }
 

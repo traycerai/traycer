@@ -35,9 +35,14 @@ import {
 import { useRegionDensity } from "@/lib/layout-overrides";
 import { resolveReadingDensity } from "@/lib/layout/reading-density";
 import {
+  collectProviderRateLimits,
   fetchProviderRateLimits,
   type ProviderRateLimitFetchScope,
 } from "@/lib/rate-limits/provider-rate-limit-fetch";
+import {
+  manualRateLimitRetryKey,
+  recordManualRateLimitRetry,
+} from "@/lib/rate-limits/manual-retry-ledger";
 import { rateLimitFetchLane } from "@/lib/rate-limit-providers";
 import { TRANSIENT_RATE_LIMIT_RETRY_DELAY_MS } from "@/lib/rate-limits/rate-limit-timing";
 import { cn } from "@/lib/utils";
@@ -78,7 +83,7 @@ export function StatusBarRateLimitCluster(props: {
     (state) => state.requestRevealProfile,
   );
   const fetchScope = useProviderRateLimitFetchScope();
-  const { cluster, mountTargets, retryTargets, refresh, recordManualRetry } =
+  const { cluster, mountTargets, retryTargets, refresh } =
     useStatusBarRateLimitSegments({
       providers: props.providers,
       profileSelection: props.profileSelection,
@@ -89,21 +94,38 @@ export function StatusBarRateLimitCluster(props: {
       mode: "live",
       editing: props.editing,
       sample: sampleCold,
+      // This strip is the one placement whose segment click reads again, and
+      // `fetchScope` is the host it reads from - the same scope the `↻` below
+      // forces against, so the bound a retry writes names the host the read
+      // actually went to.
+      retryHostId: fetchScope?.hostId ?? null,
     });
   // A person asking for one account's reading, from the segment that said it
   // could not load one. Forced, which is what tells the host this is not an
   // automatic caller: it passes the read floors that exist to keep automatic
   // callers off a penalized endpoint, and nothing else - the read still joins
   // one already in flight for this account and still waits for the provider's
-  // usage-probe slot. What keeps a held mouse from asking as fast as the
-  // answers come back is the withhold `recordManualRetry` starts.
+  // usage-probe slot.
+  //
+  // The bound on asking is stamped when the read SETTLES, not when it starts:
+  // a probe that fails after ninety seconds has to be bounded from its
+  // failure, and until then the segment is already saying `Retrying...` and
+  // offering nothing. A click while that read runs is coalesced onto it by
+  // `fetchProviderRateLimits`' own registry, so a second one cannot overtake
+  // the stamp either.
   const retryNow = (target: StatusBarRateLimitRetryTarget): void => {
-    recordManualRetry(target);
-    readOneAccount({
+    const hostId = fetchScope?.hostId ?? null;
+    if (hostId === null) return;
+    void readOneAccount({
       fetchScope,
       httpRefetches: refresh.httpRefetches,
       target,
       force: true,
+    }).then(() => {
+      recordManualRateLimitRetry(
+        manualRateLimitRetryKey(hostId, target.providerId, target.profileId),
+        Date.now(),
+      );
     });
   };
   return (
@@ -155,13 +177,20 @@ export function StatusBarRateLimitCluster(props: {
           target={target}
         />
       ))}
-      {retryTargets.map((target) => (
-        <StatusBarTransientRetry
-          key={`${target.providerId}:${target.profileId ?? ""}`}
-          target={target}
-          httpRefetches={refresh.httpRefetches}
-        />
-      ))}
+      {fetchScope === null
+        ? null
+        : retryTargets.map((target) => (
+            // Keyed by the HOST as well as the account: the strip can be
+            // pointed at a different host while the same account is transient
+            // on both, and a timer that outlived that move would fire a read
+            // of the host it was started for against the scope of the one it
+            // ended up on.
+            <StatusBarTransientRetry
+              key={`${fetchScope.hostId}:${target.providerId}:${target.profileId ?? ""}`}
+              target={target}
+              httpRefetches={refresh.httpRefetches}
+            />
+          ))}
     </>
   );
 }
@@ -331,26 +360,28 @@ function readOneAccount(args: {
   readonly httpRefetches: ReadonlyArray<StatusBarRateLimitHttpRefetch>;
   readonly target: StatusBarRateLimitRetryTarget;
   readonly force: boolean;
-}): void {
+}): Promise<void> {
+  const params = {
+    providerId: args.target.providerId,
+    accountContext: DEFAULT_ACCOUNT_CONTEXT,
+    profileId: args.target.profileId,
+  };
   if (rateLimitFetchLane(args.target.providerId) === "ephemeralProcess") {
-    if (args.fetchScope === null) return;
-    void fetchProviderRateLimits(
-      args.fetchScope,
-      {
-        providerId: args.target.providerId,
-        accountContext: DEFAULT_ACCOUNT_CONTEXT,
-        profileId: args.target.profileId,
-      },
-      { force: args.force },
-    );
-    return;
+    // Unforced reads go through `collectProviderRateLimits`, not
+    // `fetchProviderRateLimits`: this renderer's own freshness guard would
+    // answer the scheduled re-read of a transient failure from the cache
+    // entry that failure wrote, and the host would never hear the question.
+    return args.force
+      ? fetchProviderRateLimits(args.fetchScope, params, { force: true })
+      : collectProviderRateLimits(args.fetchScope, params);
   }
   const observer = args.httpRefetches.find(
     (candidate) =>
       candidate.providerId === args.target.providerId &&
       candidate.profileId === args.target.profileId,
   );
-  if (observer !== undefined) void observer.refetch();
+  if (observer === undefined) return Promise.resolve();
+  return observer.refetch().then(() => undefined);
 }
 
 /**
@@ -372,7 +403,7 @@ function StatusBarTransientRetry(props: {
 }): ReactNode {
   const fetchScope = useProviderRateLimitFetchScope();
   const read = useEffectEvent((): void => {
-    readOneAccount({
+    void readOneAccount({
       fetchScope,
       httpRefetches: props.httpRefetches,
       target: props.target,

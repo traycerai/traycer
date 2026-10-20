@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, renderHook } from "@testing-library/react";
+import { cleanup, renderHook } from "@testing-library/react";
 import type {
   ProviderRateLimits,
   ProviderRateLimitWindow,
@@ -116,6 +116,10 @@ import {
   type StatusBarProviderSegmentModel,
   type StatusBarRateLimitCluster,
 } from "@/hooks/rate-limits/use-status-bar-rate-limit-segments";
+import {
+  manualRateLimitRetryKey,
+  recordManualRateLimitRetry,
+} from "@/lib/rate-limits/manual-retry-ledger";
 import { RATE_LIMIT_MANUAL_RETRY_WITHHOLD_MS } from "@/lib/rate-limits/rate-limit-timing";
 import type { RateLimitProfileSelection } from "@/hooks/rate-limits/use-rate-limit-profile-selection";
 import { SAMPLE_ACCOUNT_LABEL } from "@/components/sample-workspace/sample-workspace-scene";
@@ -125,14 +129,17 @@ const PROFILE_SELECTION: RateLimitProfileSelection = {
   lastProfileByHarness: {},
 };
 
+const RETRY_HOST_ID = "host-a";
+
 function renderSegments(providers: ReadonlyArray<ConfiguredRateLimitProvider>) {
-  return renderSegmentsFor(providers, PROFILE_SELECTION, false);
+  return renderSegmentsFor(providers, PROFILE_SELECTION, false, RETRY_HOST_ID);
 }
 
 function renderSegmentsFor(
   providers: ReadonlyArray<ConfiguredRateLimitProvider>,
   profileSelection: RateLimitProfileSelection,
   sample: boolean,
+  retryHostId: string | null,
 ) {
   return renderHook(() => {
     // The batches describe ONE render. The hook samples the clock through
@@ -146,6 +153,7 @@ function renderSegmentsFor(
       mode: "live",
       editing: false,
       sample,
+      retryHostId,
     });
   });
 }
@@ -154,7 +162,7 @@ function renderSampleSegments(
   providers: ReadonlyArray<ConfiguredRateLimitProvider>,
   profileSelection: RateLimitProfileSelection,
 ) {
-  return renderSegmentsFor(providers, profileSelection, true);
+  return renderSegmentsFor(providers, profileSelection, true, RETRY_HOST_ID);
 }
 
 function profileFixture(
@@ -405,6 +413,7 @@ afterEach(() => {
   cleanup();
   vi.clearAllMocks();
   vi.useRealTimers();
+  window.localStorage.clear();
   useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
 });
 
@@ -831,8 +840,82 @@ describe("useStatusBarRateLimitSegments", () => {
     ]);
   });
 
-  it("withholds a transient segment's retry for a minute after one is asked for by hand", () => {
-    vi.useFakeTimers();
+  it("withholds a transient segment's retry for a minute after a read of that account settled, wherever that read was asked for", () => {
+    const transient = {
+      data: freshEnvelope(
+        unavailableRateLimits({ provider: "codex", reason: "timeout" }),
+      ),
+      isError: false,
+    };
+    setResult("codex", transient);
+    // The stamp another strip - in this window or in a second one, now or
+    // before this one mounted - wrote when ITS forced read settled. It is the
+    // bound, and it is not this component's to reset.
+    recordManualRateLimitRetry(
+      manualRateLimitRetryKey(RETRY_HOST_ID, "codex", null),
+      Date.now(),
+    );
+
+    const { result, unmount } = renderSegments([
+      configuredProvider({ providerId: "codex", lane: "ephemeralProcess" }),
+    ]);
+    expect(statusBarSegments(result.current.cluster).at(0)?.retryOffered).toBe(
+      false,
+    );
+    // The one re-read the state owes is owed throughout: this bounds the
+    // asking, never the retrying.
+    expect(result.current.retryTargets).toEqual([
+      { providerId: "codex", profileId: null },
+    ]);
+
+    // A remount is the gesture that hides and shows the usage region, and it
+    // does not hand the account back its affordance.
+    unmount();
+    setResult("codex", transient);
+    const remounted = renderSegments([
+      configuredProvider({ providerId: "codex", lane: "ephemeralProcess" }),
+    ]);
+    expect(
+      statusBarSegments(remounted.result.current.cluster).at(0)?.retryOffered,
+    ).toBe(false);
+
+    // Past the bound, the same account offers it again.
+    recordManualRateLimitRetry(
+      manualRateLimitRetryKey(RETRY_HOST_ID, "codex", null),
+      Date.now() - RATE_LIMIT_MANUAL_RETRY_WITHHOLD_MS,
+    );
+    setResult("codex", transient);
+    const lifted = renderSegments([
+      configuredProvider({ providerId: "codex", lane: "ephemeralProcess" }),
+    ]);
+    expect(
+      statusBarSegments(lifted.result.current.cluster).at(0)?.retryOffered,
+    ).toBe(true);
+  });
+
+  it("keeps a transient segment's bound on the host the read would go to", () => {
+    setResult("codex", {
+      data: freshEnvelope(
+        unavailableRateLimits({ provider: "codex", reason: "timeout" }),
+      ),
+      isError: false,
+    });
+    recordManualRateLimitRetry(
+      manualRateLimitRetryKey("host-b", "codex", null),
+      Date.now(),
+    );
+
+    const { result } = renderSegments([
+      configuredProvider({ providerId: "codex", lane: "ephemeralProcess" }),
+    ]);
+
+    // A read of this account on another host says nothing about this one.
+    expect(statusBarSegments(result.current.cluster).at(0)?.retryOffered).toBe(
+      true,
+    );
+  });
+
+  it("draws the transient words with no retry in a placement whose click does not read", () => {
     setResult("codex", {
       data: freshEnvelope(
         unavailableRateLimits({ provider: "codex", reason: "timeout" }),
@@ -840,32 +923,22 @@ describe("useStatusBarRateLimitSegments", () => {
       isError: false,
     });
 
-    const { result } = renderSegments([
-      configuredProvider({ providerId: "codex", lane: "ephemeralProcess" }),
-    ]);
-
-    act(() => {
-      result.current.recordManualRetry({
-        providerId: "codex",
-        profileId: null,
-      });
-    });
-    expect(statusBarSegments(result.current.cluster).at(0)?.retryOffered).toBe(
+    // What the header's reading and the panel's pass: their click opens a
+    // surface rather than reading, so the words stay (the poll is what makes
+    // them true) and the affordance does not.
+    const { result } = renderSegmentsFor(
+      [configuredProvider({ providerId: "codex", lane: "ephemeralProcess" })],
+      PROFILE_SELECTION,
       false,
+      null,
     );
 
-    // The affordance comes back on its own: nothing else happens on screen
-    // between these two reads, and the one re-read the state owes is still
-    // owed throughout - the withhold bounds the asking, not the retrying.
-    expect(result.current.retryTargets).toEqual([
-      { providerId: "codex", profileId: null },
-    ]);
-    act(() => {
-      vi.advanceTimersByTime(RATE_LIMIT_MANUAL_RETRY_WITHHOLD_MS);
+    expect(result.current.cluster).toEqual({
+      kind: "segments",
+      segments: [
+        expect.objectContaining({ state: "transient", retryOffered: false }),
+      ],
     });
-    expect(statusBarSegments(result.current.cluster).at(0)?.retryOffered).toBe(
-      true,
-    );
   });
 
   describe("accounts", () => {
@@ -892,6 +965,7 @@ describe("useStatusBarRateLimitSegments", () => {
           lastProfileByHarness: {},
         },
         false,
+        RETRY_HOST_ID,
       );
 
       expect(segmentIdentities(result.current.cluster)).toEqual([
@@ -935,6 +1009,7 @@ describe("useStatusBarRateLimitSegments", () => {
           lastProfileByHarness: { codex: "personal" },
         },
         false,
+        RETRY_HOST_ID,
       );
       expect(segmentIdentities(nothingChecked.result.current.cluster)).toEqual([
         ["codex", "personal"],
@@ -948,6 +1023,7 @@ describe("useStatusBarRateLimitSegments", () => {
           lastProfileByHarness: {},
         },
         false,
+        RETRY_HOST_ID,
       );
       expect(segmentIdentities(stale.result.current.cluster)).toEqual([
         ["codex", "personal"],
@@ -966,6 +1042,7 @@ describe("useStatusBarRateLimitSegments", () => {
         ],
         { shownProfiles: { codex: ["work"] }, lastProfileByHarness: {} },
         false,
+        RETRY_HOST_ID,
       );
       const segments =
         result.current.cluster.kind === "segments"
@@ -1013,6 +1090,7 @@ describe("useStatusBarRateLimitSegments", () => {
           lastProfileByHarness: {},
         },
         false,
+        RETRY_HOST_ID,
       );
 
       // The split happened: one target per http batch.
@@ -1047,6 +1125,7 @@ describe("useStatusBarRateLimitSegments", () => {
             mode: "live",
             editing: false,
             sample: false,
+            retryHostId: RETRY_HOST_ID,
           }),
         { initialProps: { selection: hostA } },
       );

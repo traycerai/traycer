@@ -15,6 +15,7 @@ import {
   screen,
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import type { ReactNode } from "react";
 import { DEFAULT_ACCOUNT_CONTEXT } from "@traycer/protocol/common/schemas";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { Popover, PopoverAnchor } from "@/components/ui/popover";
@@ -26,6 +27,10 @@ import type {
   StatusBarRateLimitWindow,
 } from "@/hooks/rate-limits/use-status-bar-rate-limit-segments";
 import { TRANSIENT_RATE_LIMIT_RETRY_DELAY_MS } from "@/lib/rate-limits/rate-limit-timing";
+import {
+  manualRateLimitRetryAt,
+  manualRateLimitRetryKey,
+} from "@/lib/rate-limits/manual-retry-ledger";
 import type { ConfiguredRateLimitProvider } from "@/hooks/rate-limits/use-configured-rate-limit-providers";
 import type { RateLimitProfileSelection } from "@/hooks/rate-limits/use-rate-limit-profile-selection";
 import { windowPercentText } from "@/lib/rate-limits/status-bar-window-text";
@@ -40,13 +45,13 @@ interface MockState {
   cluster: StatusBarRateLimitClusterModel;
   refresh: StatusBarRateLimitRefreshModel;
   retryTargets: ReadonlyArray<StatusBarRateLimitRetryTarget>;
-  recordManualRetry: Mock<(target: StatusBarRateLimitRetryTarget) => void>;
   // `null` by default, exactly as the host-less rows below expect: only a row
   // about reading gives the cluster a scope to read through.
   scope: { readonly hostId: string } | null;
   fetch: Mock<
     (scope: unknown, target: unknown, opts: unknown) => Promise<void>
   >;
+  collect: Mock<(scope: unknown, target: unknown) => Promise<void>>;
 }
 
 const mocks = vi.hoisted<MockState>(() => ({
@@ -58,9 +63,9 @@ const mocks = vi.hoisted<MockState>(() => ({
     httpFetching: false,
   },
   retryTargets: [],
-  recordManualRetry: vi.fn(),
   scope: null,
   fetch: vi.fn((): Promise<void> => Promise.resolve()),
+  collect: vi.fn((): Promise<void> => Promise.resolve()),
 }));
 
 vi.mock(
@@ -77,7 +82,6 @@ vi.mock(
         mountTargets: [],
         retryTargets: mocks.retryTargets,
         refresh: mocks.refresh,
-        recordManualRetry: mocks.recordManualRetry,
       }),
     };
   },
@@ -94,6 +98,8 @@ vi.mock("@/hooks/rate-limits/use-provider-rate-limit-fetch-scope", () => ({
 vi.mock("@/lib/rate-limits/provider-rate-limit-fetch", () => ({
   fetchProviderRateLimits: (scope: unknown, target: unknown, opts: unknown) =>
     mocks.fetch(scope, target, opts),
+  collectProviderRateLimits: (scope: unknown, target: unknown) =>
+    mocks.collect(scope, target),
 }));
 
 vi.mock("@/hooks/host/use-refresh-provider-rate-limits-on-mount", () => ({
@@ -143,13 +149,11 @@ function windowFixture(overrides: {
   };
 }
 
-function renderCluster(props: {
-  readonly providers?: ReadonlyArray<ConfiguredRateLimitProvider>;
-}) {
-  const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
-  });
-  return render(
+function clusterTree(
+  props: { readonly providers?: ReadonlyArray<ConfiguredRateLimitProvider> },
+  queryClient: QueryClient,
+): ReactNode {
+  return (
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
         {/*
@@ -167,8 +171,26 @@ function renderCluster(props: {
           />
         </Popover>
       </TooltipProvider>
-    </QueryClientProvider>,
+    </QueryClientProvider>
   );
+}
+
+function renderCluster(props: {
+  readonly providers?: ReadonlyArray<ConfiguredRateLimitProvider>;
+}) {
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+  });
+  const view = render(clusterTree(props, queryClient));
+  return {
+    ...view,
+    // The same tree again, for a test that changes what the mocks answer and
+    // needs the cluster to re-render rather than to mount afresh - a remount
+    // would restart every timer whether or not its key moved.
+    rerenderCluster: (): void => {
+      view.rerender(clusterTree(props, queryClient));
+    },
+  };
 }
 
 beforeEach(() => {
@@ -190,6 +212,8 @@ afterEach(() => {
   };
   mocks.retryTargets = [];
   mocks.scope = null;
+  mocks.fetch.mockImplementation((): Promise<void> => Promise.resolve());
+  window.localStorage.clear();
   vi.clearAllMocks();
   vi.useRealTimers();
   useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
@@ -830,11 +854,6 @@ describe("<StatusBarRateLimitCluster /> scrolls its readings", () => {
         profileId: null,
       });
       expect(mocks.fetch.mock.calls[0][2]).toEqual({ force: true });
-      // And the withhold that bounds the asking starts with the read.
-      expect(mocks.recordManualRetry).toHaveBeenCalledWith({
-        providerId: "codex",
-        profileId: null,
-      });
       // The click is still the deep link it was.
       expect(useRateLimitPopoverStore.getState().revealProfile).toEqual({
         providerId: "codex",
@@ -848,12 +867,56 @@ describe("<StatusBarRateLimitCluster /> scrolls its readings", () => {
       expect(refetch).toHaveBeenCalledTimes(1);
       expect(mocks.fetch).toHaveBeenCalledTimes(1);
 
-      // A segment that is not offering one reads nothing at all, and starts no
-      // withhold: both offered clicks did, and this one adds nothing.
+      // A segment that is not offering one reads nothing at all.
       fireEvent.click(screen.getByTestId("status-bar-provider-segment-cursor"));
       expect(mocks.fetch).toHaveBeenCalledTimes(1);
       expect(refetch).toHaveBeenCalledTimes(1);
-      expect(mocks.recordManualRetry).toHaveBeenCalledTimes(2);
+    });
+
+    it("stamps the retry bound when the read settles, on the host it went to, and not before", async () => {
+      mocks.scope = { hostId: "host-a" };
+      let settle = (): void => undefined;
+      mocks.fetch.mockImplementation(
+        () =>
+          new Promise<void>((resolve) => {
+            settle = () => resolve();
+          }),
+      );
+      mocks.cluster = {
+        kind: "segments",
+        segments: [
+          {
+            ...segmentFixture("codex", null),
+            state: "transient",
+            reason: "timeout",
+            retryOffered: true,
+          },
+        ],
+      };
+      const key = manualRateLimitRetryKey("host-a", "codex", null);
+      renderCluster({});
+
+      fireEvent.click(screen.getByTestId("status-bar-provider-segment-codex"));
+      // While the read runs there is no stamp: a probe that fails after ninety
+      // seconds has to be bounded from its failure, not from the click. The
+      // segment is saying `Retrying...` and offering nothing meanwhile.
+      expect(mocks.fetch).toHaveBeenCalledTimes(1);
+      expect(manualRateLimitRetryAt(key)).toBeNull();
+
+      // `act` around the settle, so the `.then` that stamps has run and the
+      // re-render it causes is committed before the assertion reads storage.
+      await act(async () => {
+        settle();
+        await Promise.resolve();
+      });
+      expect(manualRateLimitRetryAt(key)).not.toBeNull();
+      // Keyed by the host the read went to, so the same account elsewhere is
+      // untouched.
+      expect(
+        manualRateLimitRetryAt(
+          manualRateLimitRetryKey("host-b", "codex", null),
+        ),
+      ).toBeNull();
     });
 
     it("re-reads a transient account once, unforced, and does not keep re-reading it", () => {
@@ -873,18 +936,64 @@ describe("<StatusBarRateLimitCluster /> scrolls its readings", () => {
       };
       renderCluster({});
 
-      expect(mocks.fetch).not.toHaveBeenCalled();
+      expect(mocks.collect).not.toHaveBeenCalled();
       act(() => {
         vi.advanceTimersByTime(TRANSIENT_RATE_LIMIT_RETRY_DELAY_MS);
       });
-      expect(mocks.fetch).toHaveBeenCalledTimes(1);
-      expect(mocks.fetch.mock.calls[0][2]).toEqual({ force: false });
+      // Through the COLLECTION path, which is the only unforced read that
+      // reaches the host for an entry this renderer just wrote: a plain
+      // `force: false` fetch is answered by the renderer's own freshness
+      // guard, so the host never hears the question the words promise.
+      expect(mocks.collect).toHaveBeenCalledTimes(1);
+      expect(mocks.collect.mock.calls[0][1]).toEqual({
+        providerId: "codex",
+        accountContext: DEFAULT_ACCOUNT_CONTEXT,
+        profileId: null,
+      });
+      expect(mocks.fetch).not.toHaveBeenCalled();
 
       // One, not a loop: the poll owns the cadence from here.
       act(() => {
         vi.advanceTimersByTime(TRANSIENT_RATE_LIMIT_RETRY_DELAY_MS * 10);
       });
-      expect(mocks.fetch).toHaveBeenCalledTimes(1);
+      expect(mocks.collect).toHaveBeenCalledTimes(1);
+    });
+
+    it("starts a fresh timer when the strip is pointed at a different host, and never fires the old one against it", () => {
+      vi.useFakeTimers();
+      mocks.scope = { hostId: "host-a" };
+      mocks.retryTargets = [{ providerId: "codex", profileId: null }];
+      mocks.cluster = {
+        kind: "segments",
+        segments: [
+          {
+            ...segmentFixture("codex", null),
+            state: "transient",
+            reason: "timeout",
+            retryOffered: true,
+          },
+        ],
+      };
+      const view = renderCluster({});
+
+      act(() => {
+        vi.advanceTimersByTime(TRANSIENT_RATE_LIMIT_RETRY_DELAY_MS / 2);
+      });
+      mocks.scope = { hostId: "host-b" };
+      view.rerenderCluster();
+      // Host A's half-spent timer went with the account it was started for:
+      // at A's deadline nothing is read, because the read would have gone to
+      // B's scope while counting A's wait.
+      act(() => {
+        vi.advanceTimersByTime(TRANSIENT_RATE_LIMIT_RETRY_DELAY_MS / 2);
+      });
+      expect(mocks.collect).not.toHaveBeenCalled();
+
+      act(() => {
+        vi.advanceTimersByTime(TRANSIENT_RATE_LIMIT_RETRY_DELAY_MS / 2);
+      });
+      expect(mocks.collect).toHaveBeenCalledTimes(1);
+      expect(mocks.collect.mock.calls[0][0]).toEqual({ hostId: "host-b" });
     });
 
     it("arms the panel to reveal the clicked account's card, on that provider's tab", () => {

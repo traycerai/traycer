@@ -1,4 +1,3 @@
-import { useCallback, useEffect, useRef, useState } from "react";
 import type { UseQueryResult } from "@tanstack/react-query";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type {
@@ -46,6 +45,10 @@ import {
   resolveRetainedProviderRateLimits,
   type ProviderRateLimitEnvelope,
 } from "@/lib/rate-limits/rate-limit-envelope";
+import {
+  manualRateLimitRetryAt,
+  manualRateLimitRetryKey,
+} from "@/lib/rate-limits/manual-retry-ledger";
 import { RATE_LIMIT_MANUAL_RETRY_WITHHOLD_MS } from "@/lib/rate-limits/rate-limit-timing";
 import {
   isWindowedRateLimitProvider,
@@ -258,16 +261,6 @@ export interface StatusBarRateLimitSegments {
    */
   readonly retryTargets: ReadonlyArray<StatusBarRateLimitRetryTarget>;
   readonly refresh: StatusBarRateLimitRefreshModel;
-  /**
-   * Call it when a read of one account was asked for by hand, which withholds
-   * that account's retry affordance for
-   * `RATE_LIMIT_MANUAL_RETRY_WITHHOLD_MS` (`retryOffered`).
-   *
-   * Recorded here rather than in the caller because the offer is part of what a
-   * segment can say, and the hook is the one place that resolves that. The
-   * caller does the reading; this is only what it tells us it did.
-   */
-  readonly recordManualRetry: (target: StatusBarRateLimitRetryTarget) => void;
 }
 
 /**
@@ -501,9 +494,6 @@ function shownWindows(
 /** Stable identity for a passive reader's empty refresh handles. */
 const NO_REFETCHES: ReadonlyArray<StatusBarRateLimitHttpRefetch> = [];
 
-/** Stable identity for "no account has been read by hand recently". */
-const NO_WITHHELD_RETRIES: ReadonlySet<string> = new Set();
-
 /** Whether a segment has anything to draw beyond an icon nobody can read. */
 function hasContent(segment: StatusBarProviderSegmentModel): boolean {
   return segment.windows.length > 0 || segment.state !== "live";
@@ -525,20 +515,39 @@ interface ToSegmentsContext {
   readonly sample: boolean;
   /** A passive reader offers no retry: it has no handle to fetch with. */
   readonly passive: boolean;
-  /** Accounts read by hand too recently to offer again (`retryKey`). */
-  readonly withheldRetries: ReadonlySet<string>;
+  /** The host a retry click would read from, or `null` where none would. */
+  readonly retryHostId: string | null;
 }
 
-/**
- * One account's key in the withheld-retry set: the same `(provider, account)`
- * pair the host keys its gauge and its read floors by, so a withhold can never
- * straddle two accounts of one provider.
- */
-function retryKey(
+/** One account's identity within one render, for joining the lists below. */
+function accountKey(
   providerId: RateLimitProviderId,
   profileId: string | null,
 ): string {
   return `${providerId}:${profileId ?? ""}`;
+}
+
+/**
+ * Whether this account may be offered a retry, or was read by hand too
+ * recently (`RATE_LIMIT_MANUAL_RETRY_WITHHOLD_MS`).
+ *
+ * `now` is the strip's shared 60s clock, so the affordance comes back on a tick
+ * rather than needing a timer of its own - which makes the bound "at least"
+ * 60s rather than exactly 60s, and never less. The stamp it reads is written at
+ * SETTLEMENT and lives in `localStorage`, so a read that failed slowly is
+ * bounded from when it failed, and the bound survives this component and holds
+ * in every window (`manual-retry-ledger.ts`).
+ */
+function retryBoundLifted(
+  hostId: string,
+  providerId: RateLimitProviderId,
+  profileId: string | null,
+  now: number,
+): boolean {
+  const readAt = manualRateLimitRetryAt(
+    manualRateLimitRetryKey(hostId, providerId, profileId),
+  );
+  return readAt === null || now - readAt >= RATE_LIMIT_MANUAL_RETRY_WITHHOLD_MS;
 }
 
 function toSegments(
@@ -600,8 +609,12 @@ function toSegments(
           !fetching &&
           !context.passive &&
           target.fetchEligible &&
-          !context.withheldRetries.has(
-            retryKey(target.provider.providerId, target.profileId),
+          context.retryHostId !== null &&
+          retryBoundLifted(
+            context.retryHostId,
+            target.provider.providerId,
+            target.profileId,
+            context.now,
           ),
         windows,
         shown,
@@ -676,56 +689,6 @@ function applySegmentOrder(
  * "unused" is the way that promise would be broken by the next caller, since
  * refetching a disabled query fetches.
  */
-/**
- * Which accounts were read by hand too recently to offer the read again, and
- * the recorder that puts one there.
- *
- * A withhold expires on a timer of its own rather than against a clock the
- * render samples: the affordance has to come back with nothing else happening
- * on screen, and the strip's shared 60s clock is too coarse to release a 60s
- * withhold. Every timer is cleared on unmount, so a strip switched off and on
- * offers each retry afresh - what actually protects a provider across that gap
- * is the host's own read floors, never this.
- */
-function useWithheldRetries(): {
-  readonly withheldRetries: ReadonlySet<string>;
-  readonly recordManualRetry: (target: StatusBarRateLimitRetryTarget) => void;
-} {
-  const [withheldRetries, setWithheldRetries] =
-    useState<ReadonlySet<string>>(NO_WITHHELD_RETRIES);
-  const timers = useRef(new Map<string, number>());
-  useEffect(() => {
-    const pending = timers.current;
-    return () => {
-      for (const timer of pending.values()) window.clearTimeout(timer);
-      pending.clear();
-    };
-  }, []);
-  const recordManualRetry = useCallback(
-    (target: StatusBarRateLimitRetryTarget): void => {
-      const key = retryKey(target.providerId, target.profileId);
-      const running = timers.current.get(key);
-      // A second hand-driven read of one account restarts its withhold rather
-      // than inheriting the remainder of the first.
-      if (running !== undefined) window.clearTimeout(running);
-      setWithheldRetries((current) => new Set(current).add(key));
-      timers.current.set(
-        key,
-        window.setTimeout(() => {
-          timers.current.delete(key);
-          setWithheldRetries((current) => {
-            const next = new Set(current);
-            next.delete(key);
-            return next;
-          });
-        }, RATE_LIMIT_MANUAL_RETRY_WITHHOLD_MS),
-      );
-    },
-    [],
-  );
-  return { withheldRetries, recordManualRetry };
-}
-
 export function useStatusBarRateLimitSegments(input: {
   readonly providers: ReadonlyArray<ConfiguredRateLimitProvider>;
   readonly profileSelection: RateLimitProfileSelection;
@@ -742,6 +705,20 @@ export function useStatusBarRateLimitSegments(input: {
    * exactly as it is - the real strip beside the scene still owns it.
    */
   readonly sample: boolean;
+  /**
+   * The host a click on one of these segments would read from, or `null` in a
+   * placement whose click does not read at all.
+   *
+   * Required of every caller rather than assumed, because the words a
+   * `transient` segment wears include a click affordance, and a placement that
+   * draws them without wiring the click would be promising a gesture it does
+   * not honour. `null` keeps the words (the background poll is what makes them
+   * true) and drops the affordance and the clause in its tooltip.
+   *
+   * It is also what keys the retry bound, which has to name the host a read
+   * goes to: the same account on a different host is a different reading.
+   */
+  readonly retryHostId: string | null;
 }): StatusBarRateLimitSegments {
   const passive = input.mode === "passive";
   const client = useHostClient();
@@ -752,7 +729,6 @@ export function useStatusBarRateLimitSegments(input: {
   // The shared 60s clock, so a window that expires while the strip is on screen
   // drops out of it within the minute rather than at the next fetch.
   const now = useSampledNow();
-  const { withheldRetries, recordManualRetry } = useWithheldRetries();
 
   const targets = input.providers
     .filter(
@@ -829,7 +805,7 @@ export function useStatusBarRateLimitSegments(input: {
         now,
         sample: input.sample,
         passive,
-        withheldRetries,
+        retryHostId: input.retryHostId,
       }),
       ...toSegments(httpPolling, httpPollingQueries, {
         providerLimits,
@@ -837,7 +813,7 @@ export function useStatusBarRateLimitSegments(input: {
         now,
         sample: input.sample,
         passive,
-        withheldRetries,
+        retryHostId: input.retryHostId,
       }),
       ...toSegments(httpObserved, httpObservedQueries, {
         providerLimits,
@@ -845,7 +821,7 @@ export function useStatusBarRateLimitSegments(input: {
         now,
         sample: input.sample,
         passive,
-        withheldRetries,
+        retryHostId: input.retryHostId,
       }),
     ]
       .sort((left, right) => left.order - right.order)
@@ -859,18 +835,19 @@ export function useStatusBarRateLimitSegments(input: {
   const transientKeys = new Set(
     segments.flatMap((segment) =>
       segment.state === "transient"
-        ? [retryKey(segment.providerId, segment.profileId)]
+        ? [accountKey(segment.providerId, segment.profileId)]
         : [],
     ),
   );
 
   return {
     cluster: clusterFor(input.providers.length, segments),
-    recordManualRetry,
     retryTargets: targets.flatMap((target) =>
       !passive &&
       target.fetchEligible &&
-      transientKeys.has(retryKey(target.provider.providerId, target.profileId))
+      transientKeys.has(
+        accountKey(target.provider.providerId, target.profileId),
+      )
         ? [
             {
               providerId: target.provider.providerId,

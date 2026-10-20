@@ -832,6 +832,9 @@ function RateLimitPopoverScopedBody({
     mode: "passive",
     editing: false,
     sample: false,
+    // The panel's own per-account control is the retry here, so a segment in
+    // this reading offers none of its own.
+    retryHostId: null,
   });
   const limitedProviders = limitedProviderIds(cluster);
   const activeTab = useRateLimitPopoverStore((state) => state.activeTab);
