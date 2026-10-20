@@ -375,6 +375,10 @@ export function createHostRuntime<Registry extends VersionedRpcRegistry>(
         authorityRegistry,
         schedulingPolicy,
         requestCoordinator,
+        // The selection authority's derived host: the only host the person's
+        // input devices are served by (`selected-host` in the routing table).
+        selectedHostId: () =>
+          useSelectionAuthorityStore.getState().effectiveHostId,
         // The window's connection-registry wiring (connection-registry §1).
         // Both halves are READ PORTS: the registry keeps no copy of a row or
         // a lease, so there is still exactly one directory and exactly one

@@ -106,6 +106,7 @@ import { activationResultHandler } from "@/lib/notifications/notification-activa
 import { occurrenceKeyForNotification } from "@/lib/notifications/notification-occurrence";
 import { NotificationConsumptionContext } from "@/components/notifications/notification-consumption-context";
 import { installNotificationChimeAudioWarmup } from "@/lib/notifications/notification-chime";
+import { usePoolTierStreamClient } from "@/hooks/host/use-pool-tier";
 
 export interface NotificationsSessionProviderProps {
   readonly children: ReactNode;
@@ -221,8 +222,17 @@ export function NotificationsSessionProvider(
   // which travel on the host client and do not need a stream to exist at all.
   // A null entry yields a null id, which withholds mixed mode - the safe way
   // for this to be unknown.
+  // The cloud feed is a pool-only family: in a build with a server pool it is
+  // opened on the pool's client, independent of the serving host; without
+  // one it rides the serving host's client as before. The serving host keeps
+  // its own lane either way, and the host-side presence fallback behind it.
+  const cloudFeedStreamClient = usePoolTierStreamClient(
+    servingStreamClient,
+    hostClient.getRequestContextUserId(),
+  );
   const negotiatedFeedMode = useNotificationFeedModeFor(
     servingStreamClient,
+    cloudFeedStreamClient,
     servingHostEntry?.hostId ?? null,
   );
   // Raw negotiation state, read beside the mode: `unknown` marks a client
@@ -233,7 +243,7 @@ export function NotificationsSessionProvider(
   // the same value rather than the body holding privately while the context
   // reports a raw `local`.
   const cloudFeedSupport = useStreamMethodSupportFor(
-    servingStreamClient,
+    cloudFeedStreamClient,
     "host.notifications.cloudFeed.subscribe",
   );
   const { mode: notificationFeedMode, settling: notificationFeedModeSettling } =
@@ -259,6 +269,7 @@ export function NotificationsSessionProvider(
           navigate={props.navigate}
           servingHostEntry={servingHostEntry}
           servingStreamClient={servingStreamClient}
+          cloudFeedStreamClient={cloudFeedStreamClient}
           notificationFeedMode={notificationFeedMode}
         >
           {props.children}
@@ -271,6 +282,8 @@ export function NotificationsSessionProvider(
 interface NotificationsSessionBodyProps extends NotificationsSessionProviderProps {
   readonly servingHostEntry: HostDirectoryEntry | null;
   readonly servingStreamClient: IHostStreamClient<HostStreamRpcRegistry> | null;
+  /** See `useNotificationFeedModeFor`'s `cloudFeedClient`. */
+  readonly cloudFeedStreamClient: IHostStreamClient<HostStreamRpcRegistry> | null;
   readonly notificationFeedMode: NotificationFeedMode;
 }
 
@@ -279,6 +292,7 @@ function NotificationsSessionBody(
 ): ReactNode {
   const servingHostEntry = props.servingHostEntry;
   const servingStreamClient = props.servingStreamClient;
+  const cloudFeedStreamClient = props.cloudFeedStreamClient;
   // Already HELD across a client rebuild's `unknown` beat by the shell, so it
   // is the same value the mode context publishes to every other consumer.
   const notificationFeedMode = props.notificationFeedMode;
@@ -333,6 +347,10 @@ function NotificationsSessionBody(
   // replacement), the old client's sessions are already dead, so the streams
   // must be torn down and reopened against the new client.
   const openedStreamClientRef =
+    useRef<IHostStreamClient<HostStreamRpcRegistry> | null>(null);
+  // The client the cloud lane was opened on, on the same ownership rule: the
+  // server pool's in a build with one, so it can be replaced on its own.
+  const openedCloudFeedClientRef =
     useRef<IHostStreamClient<HostStreamRpcRegistry> | null>(null);
   const previousStreamClientRef =
     useRef<IHostStreamClient<HostStreamRpcRegistry> | null>(
@@ -1145,7 +1163,7 @@ function NotificationsSessionBody(
       if (
         settledFeedMode === "cloud" &&
         cloudAuthorized &&
-        servingStreamClient !== null
+        cloudFeedStreamClient !== null
       ) {
         // The cloud feed owns host/agent rows only. Collaboration events are
         // still written to the per-user Notifications room, so cloud mode must
@@ -1156,9 +1174,10 @@ function NotificationsSessionBody(
           createNotificationsStream,
           onAuthError,
         );
+        openedCloudFeedClientRef.current = cloudFeedStreamClient;
         cloudDisposerRef.current = openCloudNotificationsStream(
           reconnect,
-          servingStreamClient,
+          cloudFeedStreamClient,
           onAuthError,
           ({ rows, arrivals }) => {
             recordCompletions(
@@ -1245,6 +1264,7 @@ function NotificationsSessionBody(
     },
     [
       servingStreamClient,
+      cloudFeedStreamClient,
       recordCompletions,
       servingHostId,
       windowId,
@@ -1438,9 +1458,13 @@ function NotificationsSessionBody(
       hostDisposerRef,
       cloudDisposerRef,
     ];
+    // The cloud lane's own client counts too: in a build with a server pool
+    // it is the pool's, which rebuilds independently of the serving host's.
     if (
       anyStreamOpen(openStreams) &&
-      openedStreamClientRef.current !== servingStreamClient
+      (openedStreamClientRef.current !== servingStreamClient ||
+        (cloudDisposerRef.current !== null &&
+          openedCloudFeedClientRef.current !== cloudFeedStreamClient))
     ) {
       tearDown();
       resetCloudRelayOwnership();
@@ -1465,6 +1489,7 @@ function NotificationsSessionBody(
     status,
     userId,
     servingStreamClient,
+    cloudFeedStreamClient,
     tearDown,
     settleCloudVerdictEdge,
     resetHostReplica,

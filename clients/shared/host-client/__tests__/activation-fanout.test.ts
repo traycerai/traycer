@@ -191,6 +191,7 @@ function buildFanOutFixture(): FanOutFixture {
     directory,
     invalidator,
     schedulingPolicy,
+    selectedHostId: () => null,
     // The REAL coordinator: `abortHostTransition` is what used to kill a
     // pinned surface's in-flight work, so a fake here would test nothing.
     requestCoordinator: null,
