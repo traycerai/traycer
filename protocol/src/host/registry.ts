@@ -3,6 +3,11 @@ import { PROFILE_SYNC_LINK_RPC_METHODS } from "./profile-sync-link-contracts";
 import { ENVIRONMENT_RPC_METHODS } from "./environment-contracts";
 import type { NativeListResult } from "./provider-native-schemas";
 import {
+  environmentChatsSubscribeV10,
+  environmentCommunicationGraphSubscribeV10,
+  environmentPlainTerminalsSubscribeV10,
+} from "@traycer/protocol/host/environment/arm-streams";
+import {
   organizationReadV10,
   organizationReadV11,
   organizationReadUpgradeV10ToV11,
@@ -13421,6 +13426,30 @@ export type HostRpcRegistry = typeof hostRpcRegistry;
 // slot precise (the same cut as `HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION`).
 // Where the cut falls carries no meaning; `HostStreamRpcMethodMap` refuses a
 // method held by both.
+// The environment arm (`environment/arm-streams.ts`): a team environment's
+// own rows in one task, served to its members by the server pool. Cut apart
+// for the same `.d.ts` emission reason as the notification literal below.
+const HOST_STREAM_RPC_REGISTRY_ENVIRONMENT_ARM_DEFINITION = {
+  "environment.chats.subscribe": {
+    1: {
+      latestMinor: 0,
+      versions: { 0: { contract: environmentChatsSubscribeV10 } },
+    },
+  },
+  "environment.plainTerminals.subscribe": {
+    1: {
+      latestMinor: 0,
+      versions: { 0: { contract: environmentPlainTerminalsSubscribeV10 } },
+    },
+  },
+  "environment.communicationGraph.subscribe": {
+    1: {
+      latestMinor: 0,
+      versions: { 0: { contract: environmentCommunicationGraphSubscribeV10 } },
+    },
+  },
+} as const;
+
 const HOST_STREAM_RPC_REGISTRY_NOTIFICATIONS_DEFINITION = {
   "notifications.subscribe": {
     1: {
@@ -14396,6 +14425,7 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
 } as const;
 
 const HOST_STREAM_RPC_REGISTRY_DEFINITION = {
+  ...HOST_STREAM_RPC_REGISTRY_ENVIRONMENT_ARM_DEFINITION,
   ...HOST_STREAM_RPC_REGISTRY_NOTIFICATIONS_DEFINITION,
   ...HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION,
   "chat.subscribe": {
@@ -14600,14 +14630,20 @@ const HOST_STREAM_RPC_REGISTRY_DEFINITION = {
 // narrow, intentional trade-off - confirmed by a full workspace
 // compile+build with this annotation in place.
 type HostStreamRpcMethodMap = typeof HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION &
-  typeof HOST_STREAM_RPC_REGISTRY_NOTIFICATIONS_DEFINITION & {
+  typeof HOST_STREAM_RPC_REGISTRY_NOTIFICATIONS_DEFINITION &
+  typeof HOST_STREAM_RPC_REGISTRY_ENVIRONMENT_ARM_DEFINITION & {
     readonly "chat.subscribe": UncheckedStreamMethodVersionRegistry;
   } & Record<
     AssertNever<
-      Extract<
-        keyof typeof HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION,
-        keyof typeof HOST_STREAM_RPC_REGISTRY_NOTIFICATIONS_DEFINITION
-      >
+      | Extract<
+          keyof typeof HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION,
+          keyof typeof HOST_STREAM_RPC_REGISTRY_NOTIFICATIONS_DEFINITION
+        >
+      | Extract<
+          keyof typeof HOST_STREAM_RPC_REGISTRY_ENVIRONMENT_ARM_DEFINITION,
+          | keyof typeof HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION
+          | keyof typeof HOST_STREAM_RPC_REGISTRY_NOTIFICATIONS_DEFINITION
+        >
     >,
     never
   >;
