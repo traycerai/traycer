@@ -206,23 +206,25 @@ describe("notification feed replica", () => {
       return hit === null ? null : hit.page.rows.map((row) => row.entryId);
     }
 
-    it("misses a snapshot at the version held when the write was sent, even when it arrives later", async () => {
+    it("misses a delayed snapshot produced before the acknowledged version, even one the renderer had not yet received when the write was sent", async () => {
       await viewReplicaStore.warm(ACCOUNT);
-      remember(7);
+      remember(5);
+      // Version 6 was sent before the mark-read and arrives after it.
+      remember(6);
       noteNotificationFeedConfirmedWrite(ACCOUNT, 7);
       expect(cachedFeedIds()).toBeNull();
 
-      remember(7);
+      remember(6);
 
       expect(cachedFeedIds()).toBeNull();
     });
 
-    it("hits a snapshot a later version produced", async () => {
+    it("hits the snapshot at the acknowledged version, which includes the write", async () => {
       await viewReplicaStore.warm(ACCOUNT);
-      remember(7);
+      remember(5);
       noteNotificationFeedConfirmedWrite(ACCOUNT, 7);
 
-      remember(8);
+      remember(7);
 
       expect(cachedFeedIds()).toEqual(["unread"]);
     });

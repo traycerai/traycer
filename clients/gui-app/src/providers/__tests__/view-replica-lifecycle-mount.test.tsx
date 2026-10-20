@@ -39,7 +39,10 @@ function cachedIds(accountId: string): readonly string[] | null {
 }
 
 /** A previous session's replica for `accountId`: on disk, not in memory. */
-async function seedPreviousSession(accountId: string): Promise<void> {
+async function seedPreviousSession(
+  accountId: string,
+  observedAt: number,
+): Promise<void> {
   const previous = new ViewReplicaStore(
     createIndexedDbViewReplicaBackend(
       () => globalThis.indexedDB,
@@ -58,7 +61,7 @@ async function seedPreviousSession(accountId: string): Promise<void> {
     taskLight("teams", TEAM),
   ]);
   previous.write(historyReplicaService, address, page, {
-    observedAt: 100,
+    observedAt,
     sourceGeneration: null,
   });
   await previous.drain();
@@ -75,7 +78,7 @@ function signIn(userId: string): void {
 }
 
 async function mountSignedIn(userId: string): Promise<void> {
-  await seedPreviousSession(userId);
+  await seedPreviousSession(userId, 100);
   signIn(userId);
   render(<ViewReplicaLifecycleMount />);
   await waitFor(() => expect(viewReplicaStore.isWarm(userId)).toBe(true));
@@ -159,7 +162,7 @@ describe("ViewReplicaLifecycleMount", () => {
   });
 
   it("withdraws a team the first signed-in verdict after a cold start no longer lists", async () => {
-    await seedPreviousSession(ACCOUNT);
+    await seedPreviousSession(ACCOUNT, 100);
     signIn(ACCOUNT);
     act(() => {
       useAuthStore.setState({ shareableTeams: [] });
@@ -183,5 +186,27 @@ describe("ViewReplicaLifecycleMount", () => {
     });
 
     expect(cachedIds(ACCOUNT)).toEqual(["mine", "teams"]);
+  });
+
+  it("withdraws a lost team's rows from a page stamped ahead of the clock, and settles", async () => {
+    // The page was saved before the clock moved back: its stamp is a minute
+    // AHEAD of now, so no withdrawal made now is "after" it.
+    await seedPreviousSession(ACCOUNT, Date.now() + 60_000);
+    signIn(ACCOUNT);
+    act(() => {
+      useAuthStore.setState({ shareableTeams: [] });
+    });
+
+    render(<ViewReplicaLifecycleMount />);
+
+    await waitFor(() => expect(cachedIds(ACCOUNT)).toEqual(["mine"]));
+    const settled = viewReplicaStore.version();
+    for (let tick = 0; tick < 3; tick += 1) {
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      });
+    }
+    expect(viewReplicaStore.version()).toBe(settled);
+    expect(cachedIds(ACCOUNT)).toEqual(["mine"]);
   });
 });

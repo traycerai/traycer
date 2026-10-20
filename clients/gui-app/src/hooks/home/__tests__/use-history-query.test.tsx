@@ -1414,6 +1414,36 @@ describe("useHistoryQuery", () => {
     ).toBe("");
   });
 
+  it("shows the cached page when the initial leg is refused, and still refuses without one", () => {
+    testState.initialLegRefused = true;
+    testState.queryIsPending = true;
+    testState.presentsCachedPage = true;
+    testState.tasks = [taskLight("cached-epic", "Cached title", "traycer/app")];
+    testState.response = { tasks: testState.tasks, hasMore: false };
+
+    const { unmount } = render(
+      <HistoryQueryHarness search={DEFAULT_HISTORY_SEARCH} />,
+    );
+
+    expect(screen.getByTestId("host-requires-cloud-to-list").textContent).toBe(
+      "false",
+    );
+    expect(
+      screen.getByRole("status", { name: "History titles" }).textContent,
+    ).toBe("Cached title");
+    unmount();
+
+    testState.presentsCachedPage = false;
+    render(<HistoryQueryHarness search={DEFAULT_HISTORY_SEARCH} />);
+
+    expect(screen.getByTestId("host-requires-cloud-to-list").textContent).toBe(
+      "true",
+    );
+    expect(
+      screen.getByRole("status", { name: "History titles" }).textContent,
+    ).toBe("");
+  });
+
   // The drawer is now the ONLY History warmer on the phone (the tray epics
   // source no longer mounts there, and the epic-tab route loader skips its
   // History prefetch under `isMobileApp()`) - so its `useHistoryQuery` call
