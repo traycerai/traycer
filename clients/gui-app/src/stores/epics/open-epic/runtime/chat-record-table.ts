@@ -227,6 +227,15 @@ export function createChatRecordTable(
   const pendingCreations = new Map<string, RetainedChatCreation>();
 
   /**
+   * The signed-in user when the latest list SNAPSHOT was applied, and the only
+   * identity the host's `own` word is trusted for - see `isChatVisibleToUser`.
+   * Table-level, and deltas leave it alone: after an account switch the
+   * previous identity's `own` rows stop admitting until the new identity's
+   * first answer lands. `null` until a snapshot has applied with a profile.
+   */
+  let answeredForViewer: string | null = null;
+
+  /**
    * Drops this session's creations of `chatId` on `hostId`, whoever they were
    * filed under. A host mints its chat ids, so the pair names one chat.
    */
@@ -320,7 +329,12 @@ export function createChatRecordTable(
        */
       retractionIdOf: (row) => row.chatId,
       isVisibleToUser: (row, currentUserId) =>
-        isChatVisibleToUser(row.origin, row.ownerUserId, currentUserId),
+        isChatVisibleToUser(
+          row.origin,
+          row.ownerUserId,
+          currentUserId,
+          answeredForViewer,
+        ),
       supersedesOnSnapshot: chatRowSupersedesOnSnapshot,
       /**
        * The bare guard, and deliberately NOT the snapshot rule - the twin
@@ -358,7 +372,7 @@ export function createChatRecordTable(
        */
       buildSlice: (visibleRows, currentUserId) => {
         const next = unionPendingChatCreations(
-          chatRecordsSlice(visibleRows, currentUserId),
+          chatRecordsSlice(visibleRows, currentUserId, answeredForViewer),
           pendingCreations.values(),
           currentUserId,
         );
@@ -408,8 +422,9 @@ export function createChatRecordTable(
 
     // `@1.1` states the home for every row it carries, so the answer is
     // authoritative and the held row takes it verbatim.
-    applyRecords: (records, issuedAtSeq) =>
-      published(
+    applyRecords: (records, issuedAtSeq) => {
+      answeredForViewer = getCurrentUserId();
+      return published(
         table.applySnapshot(
           records.flatMap<HeldChatRecordRow>((record) => {
             if (!confirmedDeletions.has(identityKey(record))) return [record];
@@ -423,7 +438,8 @@ export function createChatRecordTable(
           }),
           issuedAtSeq,
         ),
-      ),
+      );
+    },
 
     applyTouches: (patches) => published(table.applyTouches(patches)),
 

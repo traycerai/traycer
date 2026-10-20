@@ -513,22 +513,24 @@ describe("chats.byId unions the host's records with the doc projection", () => {
     session.handle.dispose();
   });
 
-  it("keeps another signed-in user's rows out of the record table", () => {
-    // Rows in hand when the account switches, or a host that answered for the
-    // wrong identity: the union applies the same display filter the doc
-    // projection does, at projection time rather than at ingest, so a user
-    // switch re-derives it instead of trusting an older decision.
+  it("keeps another user's foreign rows out of the record table", () => {
+    // A replica of a chat another user owns: the union applies the same
+    // display filter the doc projection does. An `own` row is the serving
+    // host's word and is admitted whatever its owner (a team host's
+    // environment-owned chat), so the stranger here is a FOREIGN row.
     signedInAs("user-a");
     const session = newSession(seedChats([]));
-    session.handle.store
-      .getState()
-      .applyChatRecords(
-        [
-          record({ chatId: "mine", ownerUserId: "user-a" }),
-          record({ chatId: "theirs", ownerUserId: "user-b" }),
-        ],
-        null,
-      );
+    session.handle.store.getState().applyChatRecords(
+      [
+        record({ chatId: "mine", ownerUserId: "user-a" }),
+        record({
+          chatId: "theirs",
+          ownerUserId: "user-b",
+          origin: "foreign",
+        }),
+      ],
+      null,
+    );
 
     const state = session.handle.store.getState();
     expect(state.chats.allIds).toEqual(["mine"]);

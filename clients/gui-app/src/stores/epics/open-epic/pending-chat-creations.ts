@@ -140,7 +140,9 @@ export function unionPendingChatCreations(
   for (const entry of retained) {
     const { chatId } = entry.pending;
     if (Object.hasOwn(records.byId, chatId)) continue;
-    if (!isChatVisibleToUser(null, entry.ownerUserId, currentUserId)) continue;
+    if (!isChatVisibleToUser(null, entry.ownerUserId, currentUserId, null)) {
+      continue;
+    }
     if (byId === null || allIds === null) {
       byId = { ...records.byId };
       allIds = [...records.allIds];

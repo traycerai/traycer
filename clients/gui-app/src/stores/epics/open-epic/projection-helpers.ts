@@ -307,7 +307,7 @@ export function projectChat(
     updatedAt: readMaybeNumber(entry, "updatedAt"),
     userId,
     // A doc entry carries no `origin`, so it answers by owner equality.
-    ownedByViewer: isChatVisibleToUser(null, userId, currentUserId),
+    ownedByViewer: isChatVisibleToUser(null, userId, currentUserId, null),
     hostId: readMaybeNullableString(entry, "hostId"),
     isTitleEditedByUser: readMaybeBoolean(entry, "isTitleEditedByUser"),
     // A chat projected FROM THE DOC is doc-homed by construction - the doc is
@@ -644,18 +644,32 @@ function isOwnedRecordVisibleToUser(
  * {@link ChatProjection} is built and carried as `ownedByViewer`.
  *
  * `origin` is the serving host's word on a record row, `null` for a row that
- * has none (a doc entry, a pending stand-in). `"own"` admits whatever the
+ * has none (a doc entry, a pending stand-in). An `own` row admits whatever its
  * owner is: a team host keys its task chats by its environment id, so an
  * admitted member's own chat names an owner that is not the member, and the
- * host lists that row as `own` only to a viewer who may act on it. Any other
- * row answers by owner equality, failing open as described above.
+ * host lists that row as `own` only to a viewer who may act on it.
+ *
+ * The host is the authority for an `own` row only for the identity it
+ * answered. `answeredForViewer` is the signed-in user when the table's latest
+ * list snapshot was applied, so after an account switch the previous
+ * identity's `own` rows stop admitting until the new identity's first answer
+ * re-stamps it. `null` (no snapshot yet, or one that landed before a profile
+ * hydrated) fails open, as the boot window always has. Every other case
+ * answers by owner equality, failing open as described above, so the
+ * viewer's own rows show whatever the stamp says.
  */
 export function isChatVisibleToUser(
   origin: ChatRecordOrigin | null,
   ownerUserId: string | null,
   currentUserId: string | null,
+  answeredForViewer: string | null,
 ): boolean {
-  if (origin === "own") return true;
+  if (
+    origin === "own" &&
+    (answeredForViewer === null || answeredForViewer === currentUserId)
+  ) {
+    return true;
+  }
   return isOwnedRecordVisibleToUser(ownerUserId, currentUserId);
 }
 
@@ -725,6 +739,7 @@ function projectChatsSlice(
 export function chatProjectionFromRecord(
   record: HeldChatRecordRow,
   currentUserId: string | null,
+  answeredForViewer: string | null,
 ): ChatProjection {
   return {
     id: record.chatId,
@@ -737,6 +752,7 @@ export function chatProjectionFromRecord(
       record.origin,
       record.ownerUserId,
       currentUserId,
+      answeredForViewer,
     ),
     // Never `null` here, unlike a legacy doc entry: the registry row always
     // names the host that minted the chat.
@@ -755,7 +771,8 @@ export function chatProjectionFromRecord(
 
 /**
  * The host-served rows as a slice, each stamped `ownedByViewer` for
- * `currentUserId`.
+ * `currentUserId` against the table's `answeredForViewer` (see
+ * {@link isChatVisibleToUser}).
  *
  * A pure mapping, with no ownership filter: the record table selects the rows
  * the viewer may see before this runs, and {@link unionChatsSlice} drops any
@@ -766,11 +783,16 @@ export function chatProjectionFromRecord(
 export function chatRecordsSlice(
   records: readonly HeldChatRecordRow[],
   currentUserId: string | null,
+  answeredForViewer: string | null,
 ): ChatsSlice {
   const byId: Record<string, ChatProjection> = {};
   const allIds: string[] = [];
   for (const record of records) {
-    const projected = chatProjectionFromRecord(record, currentUserId);
+    const projected = chatProjectionFromRecord(
+      record,
+      currentUserId,
+      answeredForViewer,
+    );
     byId[projected.id] = projected;
     allIds.push(projected.id);
   }
