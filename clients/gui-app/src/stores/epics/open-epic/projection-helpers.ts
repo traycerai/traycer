@@ -23,6 +23,7 @@
  *   }
  */
 import type { EpicArtifactKind } from "@traycer/protocol/common/registry";
+import type { ChatRecordOrigin } from "@traycer/protocol/host/epic/chat-records";
 import type { TuiAgentRecordSummaryV13 } from "@traycer/protocol/host/epic/tui-agent-records";
 import type {
   AgentMode,
@@ -292,14 +293,21 @@ export function projectDeletedArtifact(
   };
 }
 
-export function projectChat(id: string, entry: Y.Map<unknown>): ChatProjection {
+export function projectChat(
+  id: string,
+  entry: Y.Map<unknown>,
+  currentUserId: string | null,
+): ChatProjection {
+  const userId = readMaybeNullableString(entry, "userId");
   return {
     id,
     title: readMaybeString(entry, "title"),
     parentId: readMaybeNullableString(entry, "parentId"),
     createdAt: readMaybeNumber(entry, "createdAt"),
     updatedAt: readMaybeNumber(entry, "updatedAt"),
-    userId: readMaybeNullableString(entry, "userId"),
+    userId,
+    // A doc entry carries no `origin`, so it answers by owner equality.
+    ownedByViewer: isChatVisibleToUser(null, userId, currentUserId),
     hostId: readMaybeNullableString(entry, "hostId"),
     isTitleEditedByUser: readMaybeBoolean(entry, "isTitleEditedByUser"),
     // A chat projected FROM THE DOC is doc-homed by construction - the doc is
@@ -452,6 +460,7 @@ export function chatProjectionsEq(
     a.createdAt === b.createdAt &&
     a.updatedAt === b.updatedAt &&
     a.userId === b.userId &&
+    a.ownedByViewer === b.ownedByViewer &&
     a.hostId === b.hostId &&
     a.isTitleEditedByUser === b.isTitleEditedByUser &&
     a.archivedAt === b.archivedAt &&
@@ -630,13 +639,32 @@ function isOwnedRecordVisibleToUser(
   return ownerUserId === currentUserId;
 }
 
+/**
+ * Whether a chat is the viewer's own: THE one decision, made where a
+ * {@link ChatProjection} is built and carried as `ownedByViewer`.
+ *
+ * `origin` is the serving host's word on a record row, `null` for a row that
+ * has none (a doc entry, a pending stand-in). `"own"` admits whatever the
+ * owner is: a team host keys its task chats by its environment id, so an
+ * admitted member's own chat names an owner that is not the member, and the
+ * host lists that row as `own` only to a viewer who may act on it. Any other
+ * row answers by owner equality, failing open as described above.
+ */
 export function isChatVisibleToUser(
-  chatUserId: string | null,
+  origin: ChatRecordOrigin | null,
+  ownerUserId: string | null,
   currentUserId: string | null,
 ): boolean {
-  return isOwnedRecordVisibleToUser(chatUserId, currentUserId);
+  if (origin === "own") return true;
+  return isOwnedRecordVisibleToUser(ownerUserId, currentUserId);
 }
 
+/**
+ * Owner equality only, with no `origin` arm: terminal agents stay
+ * member-owned on a team host, so no TUI row is ever keyed by the environment
+ * and no TUI arm admits. (The TUI `origin` is `registry`/`doc`/`cloud`, and
+ * the `doc` arm carries every collaborator's agents.)
+ */
 export function isTerminalAgentVisibleToUser(
   agentUserId: string | null,
   currentUserId: string | null,
@@ -656,8 +684,8 @@ function projectChatsSlice(
   const allIds: string[] = [];
   for (const [id, entry] of map.entries()) {
     if (!(entry instanceof Y.Map)) continue;
-    const projected = projectChat(id, entry as Y.Map<unknown>);
-    if (!isChatVisibleToUser(projected.userId, currentUserId)) continue;
+    const projected = projectChat(id, entry as Y.Map<unknown>, currentUserId);
+    if (!projected.ownedByViewer) continue;
     byId[id] = projected;
     allIds.push(id);
   }
@@ -696,6 +724,7 @@ function projectChatsSlice(
  */
 export function chatProjectionFromRecord(
   record: HeldChatRecordRow,
+  currentUserId: string | null,
 ): ChatProjection {
   return {
     id: record.chatId,
@@ -704,6 +733,11 @@ export function chatProjectionFromRecord(
     createdAt: record.createdAt,
     updatedAt: record.updatedAt,
     userId: record.ownerUserId,
+    ownedByViewer: isChatVisibleToUser(
+      record.origin,
+      record.ownerUserId,
+      currentUserId,
+    ),
     // Never `null` here, unlike a legacy doc entry: the registry row always
     // names the host that minted the chat.
     hostId: record.originHostId,
@@ -720,22 +754,23 @@ export function chatProjectionFromRecord(
 }
 
 /**
- * The host-served rows as a slice.
+ * The host-served rows as a slice, each stamped `ownedByViewer` for
+ * `currentUserId`.
  *
- * A pure mapping, with no ownership filter: the display boundary for "somebody
- * else's agent" is applied in {@link unionChatsSlice}, at projection time,
- * because that is when the signed-in user is known. Filtering here would freeze
- * the answer at the moment the rows ARRIVED, and a user switch afterwards would
- * re-project the previous user's chats out of a slice that had already been
- * declared safe.
+ * A pure mapping, with no ownership filter: the record table selects the rows
+ * the viewer may see before this runs, and {@link unionChatsSlice} drops any
+ * entry not stamped as the viewer's. The stamp is not frozen at arrival: the
+ * table re-runs this over its retained rows on every recompute, and a user
+ * switch republishes before it re-projects.
  */
 export function chatRecordsSlice(
   records: readonly HeldChatRecordRow[],
+  currentUserId: string | null,
 ): ChatsSlice {
   const byId: Record<string, ChatProjection> = {};
   const allIds: string[] = [];
   for (const record of records) {
-    const projected = chatProjectionFromRecord(record);
+    const projected = chatProjectionFromRecord(record, currentUserId);
     byId[projected.id] = projected;
     allIds.push(projected.id);
   }
@@ -786,7 +821,6 @@ export function chatSlicesEq(a: ChatsSlice, b: ChatsSlice): boolean {
 export function unionChatsSlice(
   docChats: ChatsSlice,
   records: ChatsSlice,
-  currentUserId: string | null,
 ): ChatsSlice {
   if (records.allIds.length === 0) return docChats;
   const byId: Record<string, ChatProjection> = { ...docChats.byId };
@@ -810,7 +844,14 @@ export function unionChatsSlice(
     // collapse two people's chats into one entry. That re-keying is the real
     // precondition for retiring the sidebar's `epic.listCloudChats` arm, which
     // is where collaborators' chats are served from today.
-    if (!isChatVisibleToUser(record.userId, currentUserId)) continue;
+    //
+    // The one owner other than the viewer that passes is a row its serving
+    // host lists as `origin: "own"` - a team host's environment-owned task
+    // chat. That cannot collapse two chats: a host serves its own rows only to
+    // a viewer who may act on them, and one host never holds two own rows with
+    // one `chatId`. The stamp was made by `isChatVisibleToUser` when the record
+    // slice was built for this viewer.
+    if (!record.ownedByViewer) continue;
     if (!Object.hasOwn(byId, id)) {
       byId[id] = record;
       allIds.push(id);
@@ -1553,13 +1594,11 @@ export function readEpicRawProjectionSources(
 export function unionChatsForConnection(
   docChats: ChatsSlice,
   chatRecords: ChatsSlice,
-  currentUserId: string | null,
   docArm: EpicDocRecordArms,
 ): ChatsSlice {
   return unionChatsSlice(
     docArm.chats ? docChats : EMPTY_CHATS_SLICE,
     chatRecords,
-    currentUserId,
   );
 }
 
@@ -1594,12 +1633,7 @@ export function composeEpicProjection(
   const { chatRecords, tuiAgentRecords, pendingOverlay, reportDeadMutations } =
     inputs;
   const { artifacts, deletedArtifacts, docChats, docTuiAgents } = raw;
-  const chats = unionChatsForConnection(
-    docChats,
-    chatRecords,
-    currentUserId,
-    inputs.docArm,
-  );
+  const chats = unionChatsForConnection(docChats, chatRecords, inputs.docArm);
   const tuiAgents = unionTuiAgentsForConnection(
     docTuiAgents,
     tuiAgentRecords,

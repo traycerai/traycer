@@ -23,6 +23,7 @@ function chat(fields: {
     createdAt: 0,
     updatedAt: 0,
     userId: null,
+    ownedByViewer: true,
     hostId: fields.hostId ?? SOURCE_HOST,
     docResident: false,
     isTitleEditedByUser: false,

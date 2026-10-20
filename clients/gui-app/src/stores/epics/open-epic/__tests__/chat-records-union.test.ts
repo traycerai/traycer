@@ -220,6 +220,7 @@ describe("chats.byId unions the host's records with the doc projection", () => {
       createdAt: 1,
       updatedAt: 2,
       userId: "user-a",
+      ownedByViewer: true,
       hostId: "host-1",
       isTitleEditedByUser: true,
       // The registry answered for this row, so the home it states is the one

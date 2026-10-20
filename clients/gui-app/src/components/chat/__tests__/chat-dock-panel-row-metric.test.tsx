@@ -168,7 +168,6 @@ const ONE_ARTIFACT_CHANGE: AccumulatedChangeRow = {
 
 const RESTORE: ChatRestoreContextValue = {
   accessRole: "owner",
-  currentUserId: "owner-1",
   activeHostId: "host-1",
   activeTurnStatus: null,
   localSnapshotsClearedAt: null,

@@ -94,6 +94,7 @@ function chat(id: string, hostId: string | null): ChatProjection {
     createdAt: 1,
     updatedAt: 1,
     userId: "viewer",
+    ownedByViewer: true,
     hostId,
     isTitleEditedByUser: false,
     settings: null,

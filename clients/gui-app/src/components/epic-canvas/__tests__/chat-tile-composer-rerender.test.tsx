@@ -241,7 +241,6 @@ const COMPOSER: ChatLowerComposerState = {
 function restoreContext(): ChatRestoreContextValue {
   return {
     accessRole: "owner",
-    currentUserId: "user-1",
     activeHostId: "host-1",
     activeTurnStatus: null,
     localSnapshotsClearedAt: null,

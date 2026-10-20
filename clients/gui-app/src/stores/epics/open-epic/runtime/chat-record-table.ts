@@ -227,15 +227,37 @@ export function createChatRecordTable(
   const pendingCreations = new Map<string, RetainedChatCreation>();
 
   /**
+   * Drops this session's creations of `chatId` on `hostId`, whoever they were
+   * filed under. A host mints its chat ids, so the pair names one chat.
+   */
+  const dropPendingCreationsOnHost = (chatId: string, hostId: string): void => {
+    for (const [key, retained] of pendingCreations) {
+      if (retained.pending.chatId !== chatId) continue;
+      if (retained.pending.hostId !== hostId) continue;
+      pendingCreations.delete(key);
+    }
+  };
+
+  /**
    * Retires the stand-in that an ARRIVING RECORD has just made redundant.
    *
    * Keyed on the record's full identity, not on its id: `chatId` is not
    * globally unique, and a collaborator's legitimate same-id row must not be
    * able to retire the viewer's own in-flight creation - the row that replaces
    * a stand-in has to be the SAME chat, not merely a chat with the same id.
+   *
+   * One record retires a stand-in filed under ANOTHER owner: an `own` row from
+   * the host the creation was sent to. A team host keys the task chat it
+   * creates by its environment id, which the create's answer does not carry,
+   * so the stand-in is filed under the viewer and the real row arrives under
+   * the environment. The host minted the chat and names it `own`, and one host
+   * never holds two own rows with one `chatId`, so `(chatId, host)` is that
+   * same chat.
    */
   const expirePendingCreationForRecord = (record: HeldChatRecordRow): void => {
     pendingCreations.delete(recordKey(record.ownerUserId, record.chatId));
+    if (record.origin !== "own") return;
+    dropPendingCreationsOnHost(record.chatId, record.originHostId);
   };
 
   /**
@@ -287,14 +309,18 @@ export function createChatRecordTable(
        * frame's addressing is COARSER than a record identity and a removal
        * retracts every retained row with that id in this epic.
        *
-       * Bounded and invisible today - the display filter already withholds
-       * every row whose owner is not the signed-in user, so the only rows that
-       * can render are ones for which `chatId` IS unique. Widening the frame is
-       * a protocol change, not something to guess at here.
+       * Bounded and invisible today - the display filter withholds every row
+       * that is not the viewer's: one whose owner is not the signed-in user,
+       * unless its serving host lists it as `origin: "own"` (a team host's
+       * environment-owned task chat). A host serves its own rows only to a
+       * viewer who may act on them and never holds two own rows with one
+       * `chatId`, so the only rows that can render are ones for which `chatId`
+       * IS unique. Widening the frame is a protocol change, not something to
+       * guess at here.
        */
       retractionIdOf: (row) => row.chatId,
       isVisibleToUser: (row, currentUserId) =>
-        isChatVisibleToUser(row.ownerUserId, currentUserId),
+        isChatVisibleToUser(row.origin, row.ownerUserId, currentUserId),
       supersedesOnSnapshot: chatRowSupersedesOnSnapshot,
       /**
        * The bare guard, and deliberately NOT the snapshot rule - the twin
@@ -332,7 +358,7 @@ export function createChatRecordTable(
        */
       buildSlice: (visibleRows, currentUserId) => {
         const next = unionPendingChatCreations(
-          chatRecordsSlice(visibleRows),
+          chatRecordsSlice(visibleRows, currentUserId),
           pendingCreations.values(),
           currentUserId,
         );
@@ -418,9 +444,10 @@ export function createChatRecordTable(
       }
       confirmedDeletions.add(identityKey(mutation));
       const key = recordKey(mutation.ownerUserId, mutation.chatId);
-      const pending = pendingCreations.get(key);
-      if (pending?.pending.hostId === mutation.originHostId)
-        pendingCreations.delete(key);
+      // By `(chatId, host)` rather than by `key`: the removal is filed under the
+      // row's owner, and a stand-in for an environment-owned chat is filed
+      // under the viewer who created it (see `expirePendingCreationForRecord`).
+      dropPendingCreationsOnHost(mutation.chatId, mutation.originHostId);
       const held = table.retainedRow(key);
       if (held !== null && held.originHostId === mutation.originHostId) {
         return published(table.removeRow(key));

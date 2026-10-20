@@ -17,6 +17,7 @@ function chat(
     createdAt,
     updatedAt,
     userId: null,
+    ownedByViewer: true,
     hostId: "host-1",
     isTitleEditedByUser: false,
     // Ordinary registry-backed chat - this suite exercises workspace-seed

@@ -69,6 +69,7 @@ function makeChatProjection(
     createdAt: 0,
     updatedAt: 0,
     userId: null,
+    ownedByViewer: true,
     hostId: null,
     isTitleEditedByUser: false,
     // Neutral scaffolding: these rows exercise the overlay applier's
