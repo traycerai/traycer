@@ -52,6 +52,7 @@ import {
   type LocalFirstRevalidationLease,
 } from "@/lib/cloud-epic-tasks-query/local-first-revalidation-coordinator";
 import { queryKeys, uiQueryKeys } from "@/lib/query-keys";
+import { useHistoryReplicaPage } from "@/lib/view-replica/history-replica";
 
 /**
  * Variables for the next-page mutation. `identity`/`generation` are captured
@@ -284,6 +285,14 @@ export function useCloudEpicTasksQuery(
     );
   }, [hostId]);
 
+  // What History paints while nothing fresher is in hand, including before
+  // the host's request context exists.
+  const replicaPage = useHistoryReplicaPage(
+    authIdentity,
+    hostId,
+    effectiveRequest,
+  );
+
   const query = useQuery<ListTasksResponse>(
     // The null re-checks are redundant with `dispatchable` and kept anyway:
     // they are what narrows both ids to `string` for the enabled arm below.
@@ -293,6 +302,7 @@ export function useCloudEpicTasksQuery(
           queryFn: (): Promise<ListTasksResponse> =>
             Promise.resolve(EMPTY_FIRST_PAGE),
           enabled: false,
+          placeholderData: replicaPage,
         }
       : {
           ...cloudEpicTasksFirstPageQueryOptions(
@@ -315,9 +325,12 @@ export function useCloudEpicTasksQuery(
             // as a promoted History tab does in place of the modal's
             // observer). Fall back to the last page that settled anywhere
             // for this host/user, so rows already known to be current don't
-            // disappear across that remount.
-            return queryClient.getQueryData<ListTasksResponse>(
-              cloudEpicTasksLastKnownQueryKey(hostId, userId),
+            // disappear across that remount - and, before any page has
+            // settled in this session, to the replica's.
+            return (
+              queryClient.getQueryData<ListTasksResponse>(
+                cloudEpicTasksLastKnownQueryKey(hostId, userId),
+              ) ?? replicaPage
             );
           },
         },

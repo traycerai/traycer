@@ -66,6 +66,7 @@ import {
   useCloudNotificationsStore,
 } from "@/stores/notifications/cloud-notifications-store";
 import { requestCloudEntityRead } from "@/lib/notifications/cloud-entity-read-driver";
+import { noteNotificationFeedConfirmedWrite } from "@/lib/view-replica/notification-feed-replica";
 import {
   NOTIFICATIONS_PARTITIONED_CLEAR_ALL_MINOR,
   NOTIFICATIONS_PARTITIONED_LIST_MAJOR,
@@ -898,7 +899,14 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
   const handleCloudMutationResult = (data: {
     readonly status: "applied" | "unavailable";
   }): void => {
-    if (data.status === "unavailable") markCloudUnavailable();
+    if (data.status === "unavailable") {
+      markCloudUnavailable();
+      return;
+    }
+    // A cached feed from before this write would show it undone on the next
+    // cold open.
+    const accountId = useAuthStore.getState().contextMetadata?.userId ?? null;
+    if (accountId !== null) noteNotificationFeedConfirmedWrite(accountId);
   };
   const captureCloudMutationContext = useCallback(
     (): CloudFeedMutationContext => ({

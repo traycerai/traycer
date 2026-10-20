@@ -107,6 +107,13 @@ import { occurrenceKeyForNotification } from "@/lib/notifications/notification-o
 import { NotificationConsumptionContext } from "@/components/notifications/notification-consumption-context";
 import { installNotificationChimeAudioWarmup } from "@/lib/notifications/notification-chime";
 import { usePoolTierStreamClient } from "@/hooks/host/use-pool-tier";
+import { useViewReplicaPaint } from "@/lib/view-replica/view-replica-store";
+import {
+  notificationFeedReplicaAddress,
+  notificationFeedReplicaService,
+  rememberNotificationFeed,
+  type NotificationFeedReplicaPage,
+} from "@/lib/view-replica/notification-feed-replica";
 
 export interface NotificationsSessionProviderProps {
   readonly children: ReactNode;
@@ -230,10 +237,29 @@ export function NotificationsSessionProvider(
     servingStreamClient,
     hostClient.getRequestContextUserId(),
   );
+  // The replica tier's copy of the cloud feed: painted by the body before
+  // this session's first snapshot, and the version it was stored with
+  // answers the mode's cloud-projection floor until the feed's own client
+  // has negotiated (see `useNotificationFeedModeFor`).
+  const replicaStatus = useAuthStore((state) => state.status);
+  const replicaAccountId = useAuthStore(
+    (state) => state.contextMetadata?.userId ?? null,
+  );
+  const replicaFeed = useViewReplicaPaint(
+    notificationFeedReplicaService,
+    replicaAccountId === null || !admitsLocalPlane(replicaStatus)
+      ? null
+      : notificationFeedReplicaAddress(
+          replicaAccountId,
+          servingHostEntry?.hostId ?? null,
+        ),
+  );
+  const cachedCloudFeedVersion = replicaFeed?.cloudFeedVersion ?? null;
   const negotiatedFeedMode = useNotificationFeedModeFor(
     servingStreamClient,
     cloudFeedStreamClient,
     servingHostEntry?.hostId ?? null,
+    cachedCloudFeedVersion,
   );
   // Raw negotiation state, read beside the mode: `unknown` marks a client
   // whose handshake has not landed. The published mode HOLDS the previously
@@ -246,10 +272,16 @@ export function NotificationsSessionProvider(
     cloudFeedStreamClient,
     "host.notifications.cloudFeed.subscribe",
   );
+  // A negotiation the replica answered is a decision, not a beat to hold
+  // the previous one across.
+  const heldCloudFeedSupport =
+    cloudFeedSupport === "unknown" && cachedCloudFeedVersion !== null
+      ? "supported"
+      : cloudFeedSupport;
   const { mode: notificationFeedMode, settling: notificationFeedModeSettling } =
     useHeldNotificationFeedMode(
       negotiatedFeedMode,
-      cloudFeedSupport,
+      heldCloudFeedSupport,
       // The hold is per serving host: a switch to another host settles to
       // that host's own negotiation instead of carrying the previous host's
       // mode.
@@ -271,6 +303,7 @@ export function NotificationsSessionProvider(
           servingStreamClient={servingStreamClient}
           cloudFeedStreamClient={cloudFeedStreamClient}
           notificationFeedMode={notificationFeedMode}
+          replicaFeed={replicaFeed}
         >
           {props.children}
         </NotificationsSessionBody>
@@ -285,6 +318,8 @@ interface NotificationsSessionBodyProps extends NotificationsSessionProviderProp
   /** See `useNotificationFeedModeFor`'s `cloudFeedClient`. */
   readonly cloudFeedStreamClient: IHostStreamClient<HostStreamRpcRegistry> | null;
   readonly notificationFeedMode: NotificationFeedMode;
+  /** The replica tier's feed for this account, painted until a snapshot. */
+  readonly replicaFeed: NotificationFeedReplicaPage | null;
 }
 
 function NotificationsSessionBody(
@@ -320,6 +355,18 @@ function NotificationsSessionBody(
   const windowsBridge = useWindowsBridge();
   const status = useAuthStore((state) => state.status);
   const userId = useAuthStore((state) => state.contextMetadata?.userId ?? null);
+  // The replica tier's copy of the cloud feed, painted before this session's
+  // first snapshot so the list and the badge show what the person had while
+  // the feed connects or cannot. Every relay reset (`sessionEpoch`) clears
+  // the rows it painted, so it is applied again after each.
+  const cloudSessionEpoch = useCloudNotificationsStore(
+    (state) => state.sessionEpoch,
+  );
+  const replicaFeed = props.replicaFeed;
+  useEffect(() => {
+    if (replicaFeed === null) return;
+    useCloudNotificationsStore.getState().seedFromReplica(replicaFeed);
+  }, [replicaFeed, cloudSessionEpoch]);
   const disposerRef = useRef<(() => void) | null>(null);
   const activityDisposerRef = useRef<(() => void) | null>(null);
   /** The host whose lane `activityDisposerRef` holds - the slice a verdict loss clears. */
@@ -1180,6 +1227,29 @@ function NotificationsSessionBody(
           cloudFeedStreamClient,
           onAuthError,
           ({ rows, arrivals }) => {
+            // Read at delivery: the snapshot belongs to the account signed in
+            // now, and this callback is deliberately not re-created per user.
+            const accountId =
+              useAuthStore.getState().contextMetadata?.userId ?? null;
+            const accepted = useCloudNotificationsStore.getState();
+            if (
+              accountId !== null &&
+              accepted.summary !== null &&
+              accepted.version !== null
+            ) {
+              rememberNotificationFeed({
+                accountId,
+                servingHostId,
+                page: {
+                  rows,
+                  summary: accepted.summary,
+                  cloudFeedVersion: cloudFeedStreamClient.getMethodSchemaVersion(
+                    "host.notifications.cloudFeed.subscribe",
+                  ),
+                },
+                version: accepted.version,
+              });
+            }
             recordCompletions(
               rows.map((row) => ({
                 entry: row.entry,

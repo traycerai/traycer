@@ -33,6 +33,7 @@ import { CloudEpicTasksRequestContextTimeoutError } from "@/lib/cloud-epic-tasks
 import { HostMethodVersionUnsatisfiedError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { CloudEpicTasksVerdictWithdrawnError } from "@/lib/cloud-epic-tasks-query/verdict-withdrawn-error";
 import { admitCloudEpicTasksFirstPage } from "@/lib/cloud-epic-tasks-query/cache";
+import { rememberHistoryFirstPage } from "@/lib/view-replica/history-replica";
 import type { HistorySearchState } from "@/lib/history-search";
 import { dedupSortWorkspaces } from "@/components/home/data/home-page.data";
 import {
@@ -137,12 +138,15 @@ interface FetchCloudEpicTasksFirstPageOptions {
 /**
  * Fetches one first page and admits it before exposing it to any Query writer.
  * This is the public first-page delivery API for History and reconciliation.
+ * Every settled first page it delivers is also kept in the replica tier,
+ * stamped with when it was asked for.
  */
 export function fetchCloudEpicTasksFirstPageByHostId(
   hostId: string,
   userId: string,
   options: FetchCloudEpicTasksFirstPageOptions,
 ): Promise<ListTasksResponse> {
+  const observedAt = Date.now();
   return fetchCloudEpicTasksScopedPageByHostId(hostId, {
     expectedUserId: userId,
     request: options.request,
@@ -150,9 +154,17 @@ export function fetchCloudEpicTasksFirstPageByHostId(
     abortSignal: options.abortSignal,
     localFirstPhase: options.localFirstPhase,
     requestContextPolicy: options.requestContextPolicy,
-  }).then((response) =>
-    admitCloudEpicTasksFirstPage(response, { hostId, userId }),
-  );
+  }).then((response) => {
+    const page = admitCloudEpicTasksFirstPage(response, { hostId, userId });
+    rememberHistoryFirstPage({
+      accountId: userId,
+      hostId,
+      request: options.request,
+      page,
+      observedAt,
+    });
+    return page;
+  });
 }
 
 interface FetchCloudEpicTasksCursorPageOptions {
