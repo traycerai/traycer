@@ -1,3 +1,4 @@
+import { SandboxArtifactServer } from "../app/sandbox-artifact-server";
 import { app, dialog, nativeImage } from "electron";
 import type { Event as ElectronEvent } from "electron";
 import { randomUUID } from "node:crypto";
@@ -327,6 +328,7 @@ export async function runDesktopStartup(): Promise<void> {
 }
 
 interface BootState {
+  readonly sandboxArtifacts: SandboxArtifactServer;
   readonly config: DesktopConfig;
   // Set when a browser-return deep link arrives before the bridge is installed;
   // drained once the window phase exposes a renderer. Coalesced - the signal is
@@ -410,6 +412,10 @@ async function runTestStartupPhases(
 ): Promise<DeferredStartupPlan> {
   initLogger();
   const state: BootState = {
+    sandboxArtifacts: new SandboxArtifactServer(
+      (windowId, channel, request) =>
+        state.bridge?.safeSendToWindow(windowId, channel, request) ?? false,
+    ),
     config: testHooks.config,
     pendingAuthReturnSignal: false,
     bridge: null,
@@ -429,6 +435,10 @@ async function runProductionStartupPhases(): Promise<DeferredStartupPlan> {
   initLogger();
   const config = resolveDesktopConfig();
   const state: BootState = {
+    sandboxArtifacts: new SandboxArtifactServer(
+      (windowId, channel, request) =>
+        state.bridge?.safeSendToWindow(windowId, channel, request) ?? false,
+    ),
     config,
     pendingAuthReturnSignal: false,
     bridge: null,
@@ -602,7 +612,7 @@ async function runOnReady(state: BootState): Promise<void> {
   await Promise.all([
     timed("on-ready", "app-protocol", () => installAppProtocolHandler()),
     timed("on-ready", "sandbox-protocol", () =>
-      installSandboxProtocolHandler(),
+      installSandboxProtocolHandler(state.sandboxArtifacts),
     ),
     timed("on-ready", "app-identity", () =>
       configureAppIdentity(state.config.iconPath),
@@ -943,6 +953,7 @@ async function runWindowPhase(state: BootState): Promise<AppServices> {
 
   log.debug("[desktop] authn base URL", { authnBaseUrl: config.authnBaseUrl });
   const bridge = new RunnerIpcBridge({
+    sandboxArtifacts: state.sandboxArtifacts,
     host,
     hostController,
     authnBaseUrl: config.authnBaseUrl,

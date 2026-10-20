@@ -16,7 +16,7 @@ import {
   shift,
 } from "@floating-ui/dom";
 import type { Editor } from "@tiptap/core";
-import { type EpicArtifactKind } from "@traycer/protocol/common/registry";
+import { type MarkdownArtifactKind } from "@traycer/protocol/common/registry";
 import type { CommentThreadWire } from "@traycer/protocol/host/epic/unary-schemas";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { cn } from "@/lib/utils";
@@ -38,7 +38,7 @@ export interface ThreadAnchorHoverPopoverProps {
    *  (`enabled: false`) lands on a different host's key and never resolves a
    *  thread (D15). */
   readonly hostClient: HostClient<HostRpcRegistry> | null;
-  readonly artifactType: EpicArtifactKind;
+  readonly artifactType: MarkdownArtifactKind;
   readonly artifactId: string;
   /** The state lane's comment records for this artifact, or `null` when the
    *  lane has said nothing about it. Resolved by the tile alongside the same

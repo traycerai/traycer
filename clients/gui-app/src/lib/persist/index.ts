@@ -10,6 +10,8 @@ export {
   appLocalNotificationCompletionReceiptPrefix,
   appLocalNotificationsKey,
   composerHarnessMemoryKey,
+  composerCanvasAnnotationsKey,
+  composerCanvasAnnotationsKeyPrefix,
   composerRunSettingsKey,
   deliveryRestoreAckKey,
   epicCanvasKey,

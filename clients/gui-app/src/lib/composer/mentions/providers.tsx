@@ -12,7 +12,7 @@ import type {
   WorkspaceEntry,
 } from "@/lib/composer/types";
 import { basenameOfPath } from "@/lib/path";
-import type { EpicArtifactKind } from "@traycer/protocol/common/registry";
+import type { MarkdownArtifactKind } from "@traycer/protocol/common/registry";
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
 import type {
   GithubMentionRepository,
@@ -929,7 +929,7 @@ class TerminalMentionProvider extends ComposerMentionProvider {
 }
 
 const EPIC_ARTIFACT_MENTION_METHODS: Record<
-  EpicArtifactKind,
+  MarkdownArtifactKind,
   EpicArtifactMentionMethod
 > = {
   spec: "epic.mentionSpecs",
@@ -938,7 +938,7 @@ const EPIC_ARTIFACT_MENTION_METHODS: Record<
   review: "epic.mentionReviews",
 };
 
-const ALL_ARTIFACT_KINDS: ReadonlyArray<EpicArtifactKind> = [
+const ALL_ARTIFACT_KINDS: ReadonlyArray<MarkdownArtifactKind> = [
   "spec",
   "ticket",
   "story",

@@ -1,3 +1,4 @@
+import { captureWindowRegion } from "../app/window-capture";
 import { rememberRecentDocument } from "../app/recent-documents";
 import {
   handleFlashFrame,
@@ -261,6 +262,11 @@ export function registerPlatformIpc(
         rememberRecentDocument(path);
       }
     },
+  );
+
+  bridge.handleInvoke(
+    RunnerHostInvoke.windowCaptureRegion,
+    captureWindowRegion,
   );
 
   bridge.handleInvoke(

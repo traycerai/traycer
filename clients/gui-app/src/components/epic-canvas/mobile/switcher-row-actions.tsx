@@ -1,3 +1,5 @@
+import { isMarkdownArtifactKind } from "@/lib/artifacts/node-display";
+import { useArtifactById } from "@/lib/epic-selectors";
 import { useCallback, useState } from "react";
 import { FileDown, MoreHorizontal, Pencil, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -63,6 +65,7 @@ interface RowMenuInput {
   readonly kind: SwitcherRowKind;
   readonly canMutate: boolean;
   readonly chatWriteUnavailable: boolean;
+  readonly canExport: boolean;
   readonly exportPending: boolean;
   readonly closePending: boolean;
   readonly onExport: (format: ArtifactExportFormat) => void;
@@ -91,7 +94,7 @@ function rowMenuEntries(
     onSelect: () => input.onExport(format),
   });
   return [
-    ...(kind === "artifact"
+    ...(input.canExport
       ? [
           exportEntry("markdown"),
           exportEntry("pdf"),
@@ -177,6 +180,10 @@ function SwitcherRowActionsBody(
   const deleteTuiAgent = useEpicDeleteTuiAgent();
   const deleteArtifact = useEpicDeleteArtifact(nodeId);
   const exportArtifacts = useEpicExportArtifacts();
+  const artifact = useArtifactById(nodeId);
+  // Document export requires a Markdown body.
+  const canExport =
+    kind === "artifact" && isMarkdownArtifactKind(artifact?.kind);
   // The row's terminal lives on the host the switcher LISTS (the Epic
   // session's), so kill goes to that same client - never the ambient one.
   const killTerminal = useTerminalKillFor(
@@ -270,6 +277,7 @@ function SwitcherRowActionsBody(
     kind,
     canMutate,
     chatWriteUnavailable,
+    canExport,
     exportPending: exportArtifacts.isPending,
     closePending: killTerminal.isPending,
     onExport: (format) =>

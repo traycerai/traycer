@@ -14,7 +14,7 @@
  */
 import { useCallback, useMemo } from "react";
 import type { EpicArtifactKind } from "@traycer/protocol/common/registry";
-import { artifactFolderChain } from "@/lib/artifacts/artifact-folder-chain";
+import { artifactTreePath } from "@/lib/artifacts/artifact-object-paths";
 import { useActiveEpicProjection } from "@/lib/commands/sources/open/use-active-epic-projection";
 import type { ArtifactsSlice, TreeSlice } from "@/stores/epics/open-epic/types";
 
@@ -45,9 +45,8 @@ export function buildArtifactPathIndex(
   if (tree === null || artifacts === null) return index;
   const ambiguous = new Set<string>();
   for (const id of artifacts.allIds) {
-    const chain = artifactFolderChain(tree, artifacts, id);
-    if (chain === null) continue;
-    const key = chain.join("/");
+    const key = artifactTreePath(artifacts, id);
+    if (key === null) continue;
     if (ambiguous.has(key)) continue;
     if (index.has(key)) {
       // A second artifact claims this path: drop it entirely and remember it so

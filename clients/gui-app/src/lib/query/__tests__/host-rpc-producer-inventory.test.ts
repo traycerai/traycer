@@ -9,9 +9,15 @@ import path from "node:path";
  */
 const guiAppSrc = path.resolve(import.meta.dirname, "../../..");
 
+const FILE_ARTIFACT_VIEWER_WRITER =
+  "components/epic-canvas/renderers/file-artifact-viewer.tsx";
+const GIT_REFRESH_WRITER = "hooks/git/use-git-submodule-snapshot-refresh.ts";
+const RATE_LIMIT_WRITER = "lib/rate-limits/provider-rate-limit-fetch.ts";
+// In the order the source scan discovers them.
 const OBSERVER_FREE_FETCH_QUERY_WRITERS = [
-  "hooks/git/use-git-submodule-snapshot-refresh.ts",
-  "lib/rate-limits/provider-rate-limit-fetch.ts",
+  FILE_ARTIFACT_VIEWER_WRITER,
+  GIT_REFRESH_WRITER,
+  RATE_LIMIT_WRITER,
 ] as const;
 
 const CONDITION_RETRY_FALSE_PRODUCERS = [
@@ -69,7 +75,7 @@ const NONCONDITION_RETRY_CALLSITES = [
 ] as const;
 
 describe("observer-free host fetchQuery producer inventory", () => {
-  it("covers only git manual refresh and the provider rate-limit fetch writer", () => {
+  it("covers only the file viewer's full-save read, git manual refresh and the provider rate-limit fetch writer", () => {
     const productionSources = sourceFiles(guiAppSrc).filter(
       (relativePath) => !relativePath.includes("__tests__"),
     );
@@ -91,7 +97,7 @@ describe("observer-free host fetchQuery producer inventory", () => {
 
   it("stamps each observer-free writer with its host method", () => {
     const gitRefresh = readFileSync(
-      path.join(guiAppSrc, OBSERVER_FREE_FETCH_QUERY_WRITERS[0]),
+      path.join(guiAppSrc, GIT_REFRESH_WRITER),
       "utf8",
     );
     expect(gitRefresh).toMatch(
@@ -100,11 +106,19 @@ describe("observer-free host fetchQuery producer inventory", () => {
     expect(gitRefresh).toMatch(/retry:\s*false/);
 
     const providerRateLimitFetch = readFileSync(
-      path.join(guiAppSrc, OBSERVER_FREE_FETCH_QUERY_WRITERS[1]),
+      path.join(guiAppSrc, RATE_LIMIT_WRITER),
       "utf8",
     );
     expect(providerRateLimitFetch).toMatch(
       /\.fetchQuery\s*\([\s\S]*stampHostRpcMethod\(undefined,\s*"host\.getRateLimitUsage"\)/,
+    );
+
+    const fileViewer = readFileSync(
+      path.join(guiAppSrc, FILE_ARTIFACT_VIEWER_WRITER),
+      "utf8",
+    );
+    expect(fileViewer).toMatch(
+      /stampHostRpcMethod\(undefined,\s*"epic\.readArtifactObject"\)[\s\S]*\.fetchQuery\s*\(|\.fetchQuery\s*\([\s\S]*stampHostRpcMethod\(undefined,\s*"epic\.readArtifactObject"\)/,
     );
   });
 

@@ -1,4 +1,12 @@
+// @vitest-environment node
+//
+// esbuild's own build() call does an `instanceof Uint8Array` check that
+// fails under jsdom's realm (jsdom's Uint8Array is not the same constructor
+// as Node's), so this suite - which drives a real esbuild build through
+// buildSandboxIndex() - runs in the node environment and parses the built
+// HTML with jsdom directly instead of the globally-provided DOMParser.
 import { runInNewContext } from "node:vm";
+import { JSDOM } from "jsdom";
 import { describe, expect, it } from "vitest";
 import {
   buildSandboxIndex,
@@ -12,28 +20,42 @@ import {
 describe("the built sandbox document", () => {
   it("references no other file", async () => {
     const html = await buildSandboxIndex();
-    const doc = new DOMParser().parseFromString(html, "text/html");
+    const doc = new JSDOM(html).window.document;
 
     expect(doc.querySelectorAll("[src], [href], link, base")).toHaveLength(0);
     expect(html).not.toMatch(/\bsrc\s*=|\bhref\s*=|@import|import\s*\(/i);
     // The one CSS `url(` (not the JS `new URL(`) is the Figtree face, and its
-    // value is a `data:` URL.
+    // value is a `data:` URL referenced through whatever name esbuild gave
+    // the bundled font constant - the bundler is free to rename it, so the
+    // check follows the reference rather than assuming "FIGTREE_FONT_URL".
     const urls = html.match(/(?<!new )url\([^)]*\)/gi) ?? [];
-    expect(urls).toEqual(['url("${FIGTREE_FONT_URL}")']);
-    expect(html).toMatch(/const FIGTREE_FONT_URL = "data:font\/woff2;base64,/);
+    expect(urls).toHaveLength(1);
+    const [firstUrl] = urls;
+    if (firstUrl === undefined) {
+      throw new Error("expected exactly one url(...) reference");
+    }
+    const reference = /^url\("\$\{([A-Za-z_$][\w$]*)\}"\)$/.exec(firstUrl);
+    if (reference === null) {
+      throw new Error('expected a url("${...}") reference in the built loader');
+    }
+    const fontVariable = reference[1].replace(/\$/g, "\\$");
+    // esbuild's bundled output may declare the constant with const, let or var.
+    expect(html).toMatch(
+      new RegExp(
+        `(?:const|let|var) ${fontVariable} = "data:font/woff2;base64,`,
+      ),
+    );
   });
 
   it("holds the whole loader as its one inline script", async () => {
-    const doc = new DOMParser().parseFromString(
-      await buildSandboxIndex(),
-      "text/html",
-    );
+    const doc = new JSDOM(await buildSandboxIndex()).window.document;
 
     expect(doc.scripts).toHaveLength(1);
     const code = doc.scripts[0].text.trim();
     expect(code).toContain("ui/notifications/sandbox-proxy-ready");
-    // Ends where the loader ends: nothing in it closed the element early.
-    expect(code.endsWith("runLoader();")).toBe(true);
+    // esbuild bundles the entry as an IIFE; nothing in it closed the
+    // element early.
+    expect(code.endsWith("})();")).toBe(true);
   });
 });
 

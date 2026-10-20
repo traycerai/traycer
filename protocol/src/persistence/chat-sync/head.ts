@@ -383,6 +383,68 @@ export const CHAT_SYNC_AUTO_JUDGE_NOTICE_READER_FLOOR = {
 // is what ships: the row is projected honestly to every client version, and the
 // versions that cannot draw its delivery state are simply not told about it.
 
+export const CHAT_SYNC_CANVAS_ANNOTATION_READER_FLOOR: SchemaVersion = {
+  major: 1,
+  minor: 10,
+};
+
+function payloadHasCanvasAnnotations(payload: unknown): boolean {
+  if (
+    typeof payload !== "object" ||
+    payload === null ||
+    !("kind" in payload) ||
+    payload.kind !== "user" ||
+    !("browserAnnotations" in payload) ||
+    !Array.isArray(payload.browserAnnotations)
+  )
+    return false;
+  return payload.browserAnnotations.some((annotation: unknown) => {
+    if (
+      typeof annotation !== "object" ||
+      annotation === null ||
+      !("source" in annotation)
+    )
+      return false;
+    const source = annotation.source;
+    return (
+      typeof source === "object" &&
+      source !== null &&
+      "kind" in source &&
+      source.kind === "canvas"
+    );
+  });
+}
+
+function queuedItemHasCanvasAnnotations(item: unknown): boolean {
+  return (
+    typeof item === "object" &&
+    item !== null &&
+    "message" in item &&
+    payloadHasCanvasAnnotations(item.message)
+  );
+}
+
+/** Canvas changes the known user payload, so pre-1.10 readers cannot decode it.
+ * The publisher combines this floor with the event floor before writing HEAD;
+ * gating at HEAD prevents every shard fetch on an incompatible reader. */
+export function chatSyncReaderFloorForTranscriptMessages(
+  messages: Iterable<unknown>,
+): SchemaVersion | null {
+  for (const message of messages) {
+    if (
+      typeof message !== "object" ||
+      message === null ||
+      !("role" in message) ||
+      message.role !== "user" ||
+      !("message" in message)
+    )
+      continue;
+    if (payloadHasCanvasAnnotations(message.message))
+      return CHAT_SYNC_CANVAS_ANNOTATION_READER_FLOOR;
+  }
+  return null;
+}
+
 /**
  * The floor a publication of `events` must stamp as `minReaderVersion`, or
  * `null` when every supported reader can render it.
@@ -395,7 +457,7 @@ export const CHAT_SYNC_AUTO_JUDGE_NOTICE_READER_FLOOR = {
  * Derives its answer from the row predicates rather than restating their
  * conditions, so the two cannot drift - the same arrangement
  * `minimumChatSubscribeMinorForTranscriptEvent` has with the same predicates.
- * With two rows floored it answers the HIGHER floor any event demands, since a
+ * With judge rows and queued canvas evidence it answers the HIGHER floor any event demands, since a
  * reader must be able to draw every row the publication holds.
  *
  * The PUBLISHER calls this; the protocol only states the rule. Same split as
@@ -407,13 +469,24 @@ export function chatSyncReaderFloorForTranscriptEvents(
 ): SchemaVersion | null {
   let floor: SchemaVersion | null = null;
   for (const event of events) {
-    // The notice floor is the higher of the two, so the first notice settles
-    // the answer; a denial only raises it from nothing, and the walk goes on
-    // in case a notice follows.
-    if (autoJudgeNoticeRowSource(event) !== null) {
-      return CHAT_SYNC_AUTO_JUDGE_NOTICE_READER_FLOOR;
+    // An unaccepted prompt may exist only in a queue event. Its canvas
+    // evidence requires the same floor as a transcript message, regardless of
+    // whether it has a crop. This is higher than either judge-row floor.
+    const metadata = event.metadata;
+    if (
+      metadata !== null &&
+      (queuedItemHasCanvasAnnotations(metadata.item) ||
+        (Array.isArray(metadata.items) &&
+          metadata.items.some(queuedItemHasCanvasAnnotations)))
+    ) {
+      return CHAT_SYNC_CANVAS_ANNOTATION_READER_FLOOR;
     }
-    if (autoJudgeUnattendedDenialRowSource(event) !== null) {
+    if (autoJudgeNoticeRowSource(event) !== null) {
+      floor = CHAT_SYNC_AUTO_JUDGE_NOTICE_READER_FLOOR;
+    } else if (
+      floor === null &&
+      autoJudgeUnattendedDenialRowSource(event) !== null
+    ) {
       floor = CHAT_SYNC_UNATTENDED_DENIAL_READER_FLOOR;
     }
   }

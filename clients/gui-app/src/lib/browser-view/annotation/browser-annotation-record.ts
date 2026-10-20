@@ -67,7 +67,7 @@ export function collectAnnotationImageHashes(
   const hashes: string[] = [];
   const seen = new Set<string>();
   for (const record of records) {
-    if (seen.has(record.imageHash)) continue;
+    if (record.imageHash === null || seen.has(record.imageHash)) continue;
     seen.add(record.imageHash);
     hashes.push(record.imageHash);
   }

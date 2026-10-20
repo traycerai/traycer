@@ -1,3 +1,5 @@
+import { SandboxArtifactServer } from "../app/sandbox-artifact-server";
+import { registerSandboxArtifactIpc } from "./sandbox-artifact-ipc";
 import type { BrowserDesktopControl } from "../browser-sessions/browser-desktop-control";
 import { ipcMain, type IpcMainEvent, type IpcMainInvokeEvent } from "electron";
 import { randomUUID } from "node:crypto";
@@ -549,6 +551,7 @@ export interface IpcHostController {
 }
 
 export interface RunnerIpcOptions {
+  readonly sandboxArtifacts?: SandboxArtifactServer;
   readonly host: IpcHostLifecycle;
   readonly hostController: IpcHostController;
   readonly authnBaseUrl: string;
@@ -564,6 +567,7 @@ export interface RunnerIpcOptions {
 }
 
 export interface RunnerIpcRegistryOptions {
+  readonly sandboxArtifacts?: SandboxArtifactServer;
   readonly host: IpcHostLifecycle;
   readonly hostController: IpcHostController;
   readonly authnBaseUrl: string;
@@ -684,7 +688,14 @@ export class RunnerIpcBridge {
   private browserSessions: BrowserSessionsRegistry | null = null;
   private browserPreparation: BrowserDesktopControl | null = null;
 
+  readonly sandboxArtifacts: SandboxArtifactServer;
+
   constructor(options: RunnerIpcBridgeOptions) {
+    this.sandboxArtifacts =
+      options.sandboxArtifacts ??
+      new SandboxArtifactServer((windowId, channel, request) =>
+        this.safeSendToWindow(windowId, channel, request),
+      );
     this.options = options;
     this.authTokenStore = options.authTokenStore ?? new NullAuthTokenStore();
     if ("windowRegistry" in options) {
@@ -721,6 +732,7 @@ export class RunnerIpcBridge {
   }
 
   install(): void {
+    registerSandboxArtifactIpc(this);
     registerAuthIpc(this);
     registerDeviceFlowIpc(this);
     registerTrayIpc(this);
@@ -1039,6 +1051,7 @@ export class RunnerIpcBridge {
   }
 
   markRendererUnavailable(windowId: string): void {
+    this.sandboxArtifacts.dropWindow(windowId);
     this.appLifecycleReadyWindowIds.delete(windowId);
     // The reset renderer's preload realm is gone with its subscribers; a
     // reloaded one reports `listening` again when its modal re-subscribes.
@@ -1114,6 +1127,7 @@ export class RunnerIpcBridge {
   }
 
   dispose(): void {
+    this.sandboxArtifacts.dispose();
     if (this.options.tray !== null) {
       this.options.tray.setEpicSelectedHandler(null);
     }
@@ -1484,6 +1498,7 @@ export class RunnerIpcBridge {
     const liveWindowIds = new Set(
       this.windowRegistry.records().map((record) => record.windowId),
     );
+    this.sandboxArtifacts.retainWindows(liveWindowIds);
     for (const windowId of this.unsyncedEditsSnapshots.keys()) {
       if (!liveWindowIds.has(windowId)) {
         this.unsyncedEditsSnapshots.delete(windowId);

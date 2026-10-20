@@ -2,9 +2,10 @@ import { commonRecordRegistry } from "@traycer/protocol/common/registry";
 import { getRecordSchema } from "@traycer/protocol/framework/versioned-record";
 import {
   contentBlockSchema,
+  contentBlockSchemaPreHtml,
   contentBlockSchemaPreFallback,
   contentBlockSchemaPreBrowser,
-  contentBlockSchemaPrePage,
+  contentBlockSchemaPreMcpApp,
   contentBlockSchemaPreReceipt,
   contentBlockSchemaV18,
   contentBlockSchemaPreImage,
@@ -43,9 +44,10 @@ const jsonContentSchema = getRecordSchema(
 );
 
 /**
- * Browser-annotations ticket 05. One attached annotation bundle: structured
- * fields only (no pixels). The crop rides the existing `imageAttachment`
- * content atom, paired by `imageFileName` / `annotationId`.
+ * One annotation bundle: structured fields only (no pixels). Browser crops
+ * ride the existing `imageAttachment` atom. Canvas selections (1.31) may have
+ * no crop and carry their artifact identity in `source`. The carrier name
+ * stays `browserAnnotations` for compatibility with existing records.
  *
  * Lives on its own array (`browserAnnotations`) rather than folded into
  * `content`. Adding a new content-block kind would be a breaking persist
@@ -118,7 +120,7 @@ export type BrowserViewElementCapture = z.infer<
   typeof browserViewElementCaptureSchema
 >;
 
-export const browserAnnotationRecordSchema = lazySchema(() =>
+export const browserAnnotationRecordSchemaPreCanvas = lazySchema(() =>
   z.object({
     kind: z.literal("browser-annotation"),
     annotationId: z.string().min(1),
@@ -138,6 +140,114 @@ export const browserAnnotationRecordSchema = lazySchema(() =>
     // `.default(0)` so records written before this field parse cleanly.
     droppedElementCount: z.number().int().nonnegative().default(0),
   }),
+);
+/** Canvas stays in chat.db/chat-sync; legacy epic and draft records bind the
+ * browser-only copy above. Browser source is inferred only for legacy inputs. */
+export const browserAnnotationSourceSchema = lazySchema(() =>
+  z.object({
+    kind: z.literal("browser"),
+    tabId: z.string().min(1),
+    sessionId: z.string().min(1),
+    origin: z.string(),
+    pageUrl: z.string(),
+    pageTitle: z.string(),
+  }),
+);
+export type BrowserAnnotationSource = z.infer<
+  typeof browserAnnotationSourceSchema
+>;
+
+export const canvasAnnotationSourceSchema = lazySchema(() =>
+  z.object({
+    kind: z.literal("canvas"),
+    artifactId: z.string().min(1),
+    boardPath: z.string().min(1),
+    canvasPage: z.string().nullable(),
+    artifactTitle: z.string(),
+  }),
+);
+export type CanvasAnnotationSource = z.infer<
+  typeof canvasAnnotationSourceSchema
+>;
+
+export const canvasElementCaptureSchema = lazySchema(() =>
+  browserViewElementCaptureSchema.extend({
+    sourceRange: z
+      .object({
+        start: z.number().int().nonnegative(),
+        end: z.number().int().nonnegative(),
+        line: z.number().int().positive(),
+      })
+      .nullable()
+      .default(null),
+    tid: z.string().nullable().default(null),
+    textRange: z
+      .object({
+        start: z.number().int().nonnegative(),
+        end: z.number().int().nonnegative(),
+        quote: z.string(),
+      })
+      .nullable()
+      .default(null),
+  }),
+);
+export type CanvasElementCapture = z.infer<typeof canvasElementCaptureSchema>;
+
+const sourcedBrowserAnnotationRecordSchema = lazySchema(() =>
+  browserAnnotationRecordSchemaPreCanvas.extend({
+    source: browserAnnotationSourceSchema,
+  }),
+);
+const legacyBrowserAnnotationInputSchema = lazySchema(() =>
+  browserAnnotationRecordSchemaPreCanvas.extend({
+    source: browserAnnotationSourceSchema.optional(),
+  }),
+);
+const browserAnnotationWithSourceSchema = lazySchema(() =>
+  z.codec(
+    legacyBrowserAnnotationInputSchema,
+    sourcedBrowserAnnotationRecordSchema,
+    {
+      decode: (record) => ({
+        ...record,
+        source: record.source ?? {
+          kind: "browser" as const,
+          tabId: record.tabId,
+          sessionId: record.sessionId,
+          origin: record.origin,
+          pageUrl: record.pageUrl,
+          pageTitle: record.pageTitle,
+        },
+      }),
+      encode: (record) => ({
+        ...record,
+        droppedElementCount: record.droppedElementCount ?? 0,
+      }),
+    },
+  ),
+);
+
+export const canvasAnnotationRecordSchema = lazySchema(() =>
+  z.object({
+    kind: z.literal("browser-annotation"),
+    annotationId: z.string().min(1),
+    source: canvasAnnotationSourceSchema,
+    capturedAt: z.number(),
+    comment: z.string(),
+    counts: browserAnnotationCountsSchema,
+    elements: z.array(canvasElementCaptureSchema),
+    imageFileName: z.string().min(1).nullable(),
+    imageHash: z.string().min(1).nullable(),
+    droppedElementCount: z.number().int().nonnegative().default(0),
+  }),
+);
+export type CanvasAnnotationRecord = z.infer<
+  typeof canvasAnnotationRecordSchema
+>;
+
+/** The live 1.31 annotation carrier. Canvas needs no fabricated browser identity. */
+export const browserAnnotationRecordSchema = lazySchema(() =>
+  z.union([browserAnnotationWithSourceSchema, canvasAnnotationRecordSchema]),
 );
 export type BrowserAnnotationRecord = z.infer<
   typeof browserAnnotationRecordSchema
@@ -176,7 +286,7 @@ export const userAuthoredMessageSchemaPreAnnotation = lazySchema(() =>
   z.object(userAuthoredMessagePreTicket13Fields),
 );
 
-export const userAuthoredMessageSchema = lazySchema(() =>
+export const userAuthoredMessageSchemaPreCanvas = lazySchema(() =>
   z.object({
     ...userAuthoredMessagePreTicket13Fields,
     /**
@@ -191,10 +301,25 @@ export const userAuthoredMessageSchema = lazySchema(() =>
      * the field here would silently lose the user's annotation for any
      * message that sits in the queue before its turn starts.
      *
-     * Wire: live `chat.subscribe@1.7` only. Frozen 1.0–1.6 copies omit it.
+     * Wire: browser-only on `chat.subscribe@1.7–1.30`. The live 1.31
+     * payload below rebinds the annotation union; 1.0–1.6 omit it.
      */
+    browserAnnotations: z
+      .array(browserAnnotationRecordSchemaPreCanvas)
+      .default([]),
+  }),
+);
+
+export const userAuthoredMessageSchema = lazySchema(() =>
+  userAuthoredMessageSchemaPreCanvas.extend({
     browserAnnotations: z.array(browserAnnotationRecordSchema).default([]),
   }),
+);
+export const userMessagePayloadSchemaPreCanvas = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    userAuthoredMessageSchemaPreCanvas,
+    agentUserMessageSchema,
+  ]),
 );
 
 export const userMessagePayloadSchemaPreAnnotation = lazySchema(() =>
@@ -233,7 +358,7 @@ export const userMessageSchemaV18 = lazySchema(() =>
       role: z.literal("user"),
       messageId: z.string(),
       sender: userMessageSenderSchema,
-      message: userMessagePayloadSchema,
+      message: userMessagePayloadSchemaPreCanvas,
       timestamp: z.number(),
       sessionAnchor: chatSessionAnchorSchema.nullable(),
     })
@@ -248,7 +373,7 @@ export const userMessageSchemaV18 = lazySchema(() =>
 // Wire-freeze copy of the user row as `chat.subscribe@1.15` through `@1.24`
 // ship it: the `1.7`/`1.8` field set plus `providerHistory`, without the
 // `conversationRequest` that `1.25` added. Bound by `messageSchemaPreReceipt`
-// (`1.15`-`1.17`), `messageSchemaPrePage` (`1.18`-`1.21`), the `1.15`-`1.21`
+// (`1.15`-`1.17`), `messageSchemaPreMcpApp` (`1.18`-`1.21`), the `1.15`-`1.21`
 // common frames, and - through `openUserMessageSchemaPreConversation` - the
 // `1.22`-`1.24` open-harness lines. A later key must not reach them through it.
 export const userMessageSchemaPreConversation = lazySchema(() =>
@@ -291,10 +416,18 @@ export type ConversationRequest = z.infer<typeof conversationRequestSchema>;
  * above and strips the key on decode, and such a peer renders the row as the
  * plain user message it is.
  */
-export const userMessageSchema = lazySchema(() =>
+export const userMessageSchemaPreCanvas = lazySchema(() =>
   userMessageSchemaPreConversation.safeExtend({
     conversationRequest: conversationRequestSchema.optional(),
   }),
+);
+export const userMessageSchema = lazySchema(() =>
+  z
+    .object({
+      ...userMessageSchemaPreCanvas.shape,
+      message: userMessagePayloadSchema,
+    })
+    .superRefine(userMessageSenderKindRefine),
 );
 export type UserMessage = z.infer<typeof userMessageSchema>;
 
@@ -515,6 +648,16 @@ export type AssistantMessage = z.infer<typeof assistantMessageSchema>;
 
 export const messageSchema = lazySchema(() =>
   z.discriminatedUnion("role", [userMessageSchema, assistantMessageSchema]),
+);
+/** Epic records and released chat lines retain the four-kind operation block. */
+export const assistantMessageSchemaPreHtml = lazySchema(() =>
+  assistantMessageSchema.extend({ blocks: z.array(contentBlockSchemaPreHtml) }),
+);
+export const messageSchemaPreHtml = lazySchema(() =>
+  z.discriminatedUnion("role", [
+    userMessageSchemaPreCanvas,
+    assistantMessageSchemaPreHtml,
+  ]),
 );
 export type Message = z.infer<typeof messageSchema>;
 
@@ -883,18 +1026,18 @@ export const messageSchemaPreReceipt = lazySchema(() =>
   ]),
 );
 
-// ── Wire-freeze variant (pre-page, `chat.subscribe@1.18`-`@1.21`) ──────────
+// ── Wire-freeze variant (pre-MCP-App, `chat.subscribe@1.18`-`@1.21`) ──────────
 // Hand-frozen copy of `assistantMessageSchema` as those lines ship it: the
-// complete live shape with `blocks` swapped for `contentBlockSchemaPrePage`, so
-// a tool call's `page` / `mcpApp` stamps (`1.23`) cannot reach them. Same key
+// complete live shape with `blocks` swapped for `contentBlockSchemaPreMcpApp`, so
+// a tool call's `mcpApp` stamp (`1.23`) cannot reach them. Same key
 // order as the live `.extend()` result, because the order is part of the
 // captured digest.
-export const assistantMessageSchemaPrePage = lazySchema(() =>
+export const assistantMessageSchemaPreMcpApp = lazySchema(() =>
   z.object({
     role: z.literal("assistant"),
     messageId: z.string().min(1),
     sender: agentSenderSchema,
-    blocks: z.array(contentBlockSchemaPrePage),
+    blocks: z.array(contentBlockSchemaPreMcpApp),
     startedAt: z.number().nullable().default(null),
     blocksVersion: z.number().int().nonnegative().optional(),
     timestamp: z.number(),
@@ -909,10 +1052,10 @@ export const assistantMessageSchemaPrePage = lazySchema(() =>
 );
 
 /** The message union shipped on chat.subscribe `1.18` through `1.21`. */
-export const messageSchemaPrePage = lazySchema(() =>
+export const messageSchemaPreMcpApp = lazySchema(() =>
   z.discriminatedUnion("role", [
     userMessageSchemaPreConversation,
-    assistantMessageSchemaPrePage,
+    assistantMessageSchemaPreMcpApp,
   ]),
 );
 

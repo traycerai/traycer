@@ -131,7 +131,7 @@ function renderTool(
           toolName={toolName}
           inputSummary={deriveToolInputSummary(toolName, EVAL_INPUT)}
           inputDetail={deriveToolInputDetail(toolName, EVAL_INPUT)}
-          page={null}
+          artifact={null}
           mcpApp={null}
           error={null}
           agentMessageSend={null}

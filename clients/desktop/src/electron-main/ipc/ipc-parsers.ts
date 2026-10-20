@@ -1,3 +1,7 @@
+import {
+  SANDBOX_ARTIFACT_SPAN_BYTES,
+  type SandboxArtifactReply,
+} from "../../ipc-contracts/sandbox-artifact-types";
 import type { IpcMainEvent, IpcMainInvokeEvent } from "electron";
 import { log } from "../app/logger";
 import type {
@@ -703,4 +707,62 @@ export function isMruFallbackMenuCommand(command: MenuCommandId): boolean {
     command === "host.installUpdate" ||
     command === "host.restart"
   );
+}
+
+export function parseSandboxArtifactMountId(value: unknown): string {
+  if (typeof value !== "string" || !/^[a-z0-9]+$/.test(value)) {
+    throw new Error("Invalid artifact mount id");
+  }
+  return value;
+}
+
+export function parseSandboxArtifactReply(
+  value: unknown,
+): SandboxArtifactReply | null {
+  if (value === null || typeof value !== "object") return null;
+  const record = value as Record<string, unknown>;
+  if (
+    typeof record.requestId !== "string" ||
+    record.requestId.length === 0 ||
+    record.requestId.length > 128
+  )
+    return null;
+  if (record.kind === "unavailable") {
+    if (
+      (record.status !== 404 && record.status !== 503) ||
+      typeof record.reason !== "string" ||
+      record.reason.length > 256
+    )
+      return null;
+    return {
+      requestId: record.requestId,
+      kind: "unavailable",
+      status: record.status,
+      reason: record.reason,
+    };
+  }
+  if (
+    record.kind !== "bytes" ||
+    !(record.bytes instanceof Uint8Array) ||
+    record.bytes.byteLength > SANDBOX_ARTIFACT_SPAN_BYTES + 1024 ||
+    typeof record.offset !== "number" ||
+    !Number.isSafeInteger(record.offset) ||
+    record.offset < 0 ||
+    typeof record.totalBytes !== "number" ||
+    !Number.isSafeInteger(record.totalBytes) ||
+    record.totalBytes < 0 ||
+    typeof record.mediaType !== "string" ||
+    record.mediaType.length === 0 ||
+    record.mediaType.length > 256 ||
+    /[^\x20-\x7e]/.test(record.mediaType)
+  )
+    return null;
+  return {
+    requestId: record.requestId,
+    kind: "bytes",
+    bytes: record.bytes,
+    offset: record.offset,
+    totalBytes: record.totalBytes,
+    mediaType: record.mediaType,
+  };
 }

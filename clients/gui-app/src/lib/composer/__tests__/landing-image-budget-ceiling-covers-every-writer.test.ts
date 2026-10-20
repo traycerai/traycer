@@ -27,7 +27,8 @@
  *
  * The writers do not share one ceiling, which is the whole difficulty:
  *
- *  - paste / drop / structured-paste ingest / browser-annotation crops all
+ *  - paste / drop / structured-paste ingest / browser-annotation and
+ *    canvas-annotation crops all
  *    prepare under `PREPARED_IMAGE_POLICY` and land at most
  *    `PREPARED_IMAGE_MAX_BYTES`;
  *  - the legacy-stash migration writes the old blob straight through with no
@@ -142,6 +143,11 @@ const WRITERS = [
     path: "src/lib/browser-view/annotation/browser-annotation-attach.ts",
     bound: PREPARED_IMAGE_POLICY.byteCeiling,
     why: "prepares the crop under PREPARED_IMAGE_POLICY",
+  },
+  {
+    path: "src/components/canvas-artifact/canvas-annotation-attach.ts",
+    bound: PREPARED_IMAGE_POLICY.byteCeiling,
+    why: "prepares the canvas selection crop under PREPARED_IMAGE_POLICY, like the browser-annotation crop",
   },
   {
     path: "src/lib/composer/landing-image-import.ts",

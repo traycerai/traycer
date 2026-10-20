@@ -1,0 +1,30 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "plugins": [],
+  "categories": {
+    "correctness": "off"
+  },
+  "env": {
+    "builtin": true
+  },
+  "ignorePatterns": [
+    "**/node_modules/**",
+    "**/dist/**",
+    "**/dist-*/**",
+    "**/out/**",
+    "**/@types/**",
+    "**/*.d.ts",
+    "**/*.cjs",
+    "**/*.mjs"
+  ],
+  "overrides": [
+    {
+      "files": ["**/*.ts"],
+      "env": {
+        "es2026": true,
+        "browser": true,
+        "node": true
+      }
+    }
+  ]
+}

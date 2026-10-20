@@ -54,6 +54,7 @@ export function createFakeRunnerHost(
 ): IRunnerHost {
   const base: IRunnerHost = {
     browserView: null,
+    sandboxArtifacts: null,
     signInUrl: "https://auth.example.invalid/sign-in",
     authnBaseUrl: "https://auth.example.invalid",
     relayBaseUrl: "wss://relay.example.invalid/attach",

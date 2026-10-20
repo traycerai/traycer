@@ -21,6 +21,12 @@ export const persistKey = (name: string): string => `${PERSIST_PREFIX}:${name}`;
 export const scopedPersistKey = (name: string, ...segments: string[]): string =>
   [persistKey(name), ...segments].join(":");
 
+export const composerCanvasAnnotationsKeyPrefix = (): string =>
+  `${persistKey("composer-canvas-annotations")}:`;
+
+export const composerCanvasAnnotationsKey = (windowId: string): string =>
+  `${composerCanvasAnnotationsKeyPrefix()}${encodeURIComponent(windowId)}`;
+
 // ── Scoped builders (reproduce today's exact strings) ──────────────────────
 // Each scoped store namespaces its key by the signed-in identity; the bridges
 // pass the CANONICAL `profile.userId` (or `null` → the shared `anon` bucket).
@@ -243,6 +249,11 @@ export const PERSIST_STORES = [
   { camelName: "readingPosition", leaf: "reading-position", kind: "scoped" },
 
   // ── Scoped non-zustand key families (2) ──────────────────────────────────
+  {
+    camelName: "composerCanvasAnnotations",
+    leaf: "composer-canvas-annotations",
+    kind: "scoped",
+  },
   {
     camelName: "appLocalNotificationCompletionReceipt",
     leaf: "app-local-notification-completion-receipt",

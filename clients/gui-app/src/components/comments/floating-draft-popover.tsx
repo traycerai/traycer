@@ -16,7 +16,7 @@ import {
 import type { Editor } from "@tiptap/core";
 import type { Transaction } from "@tiptap/pm/state";
 import type { JsonContent } from "@traycer/protocol/common/registry";
-import { type EpicArtifactKind } from "@traycer/protocol/common/registry";
+import { type MarkdownArtifactKind } from "@traycer/protocol/common/registry";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { cn } from "@/lib/utils";
 import {
@@ -38,7 +38,7 @@ export interface FloatingDraftPopoverProps {
    *  created on the host that serves the artifact being annotated, not on
    *  whichever one the app is currently pointed at (D15). */
   readonly hostClient: HostClient<HostRpcRegistry> | null;
-  readonly artifactType: EpicArtifactKind;
+  readonly artifactType: MarkdownArtifactKind;
   readonly artifactId: string;
   readonly tileId: string;
   /** Tiptap editor backing the active tile. The popover anchors to its

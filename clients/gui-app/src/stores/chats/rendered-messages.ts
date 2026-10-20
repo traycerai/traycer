@@ -4996,25 +4996,17 @@ function parentIdField(parentBlockId: string | null | undefined): {
     : { parentId: parentBlockId };
 }
 
-/**
- * A tool call's page stamp, or `null` for a record that never carried the
- * field. Same hazard as `assistantImageResolutions`: a snapshot taken on a
- * SHALLOW parse path (`ChatStreamClient`, live and `1.6` lines alike) runs no
- * zod defaults, so a block a pre-pages host stored arrives typed as carrying
- * `page: null` and genuinely `undefined` - and every `page !== null` check
- * downstream would promote it to a page row with no page.
- */
-function toolCallPageStamp(
+/** An artifact stamp, or `null`, normalizing older records that omit the field. */
+function toolCallArtifactStamp(
   block: Extract<OpenContentBlock, { type: "tool_call" }>,
-): Extract<OpenContentBlock, { type: "tool_call" }>["page"] {
-  // Read through `unknown` for the reason `assistantImageResolutions` gives.
-  const page: unknown = block.page;
-  return page === undefined ? null : block.page;
+): Extract<OpenContentBlock, { type: "tool_call" }>["artifact"] {
+  const artifact: unknown = block.artifact;
+  return artifact === undefined ? null : block.artifact;
 }
 
 /**
  * A tool block field the shallow parse path may hand over absent, as `null`,
- * for the reason {@link toolCallPageStamp} gives. Used for the agent-message
+ * normalizing older records that omit the field. Used for the agent-message
  * fields a sent-message card reads: each is defaulted `null` by the schema, and
  * the card treats anything but `null` as present, so an absent one would be
  * read as a value and throw.
@@ -5025,7 +5017,7 @@ function absentAsNull<T>(value: T | null): T | null {
   return read === undefined ? null : value;
 }
 
-/** A tool call's app stamp, or `null`, for the reason {@link toolCallPageStamp} gives. */
+/** A tool call's app stamp, or `null`, normalizing older records that omit the field. */
 function toolCallMcpAppStamp(
   block: Extract<OpenContentBlock, { type: "tool_call" }>,
 ): Extract<OpenContentBlock, { type: "tool_call" }>["mcpApp"] {
@@ -5108,7 +5100,7 @@ const BLOCK_HANDLERS: {
     durationMs: backgroundToolDurationMs(block),
     parentId: block.parentBlockId ?? null,
     imageResults: block.imageResults,
-    page: toolCallPageStamp(block),
+    artifact: toolCallArtifactStamp(block),
     mcpApp: toolCallMcpAppStamp(block),
   }),
   file_change: (block) => ({

@@ -1,4 +1,6 @@
 import { useRef, type ReactNode } from "react";
+import { ArtifactProofRoute } from "@/routes/settings-dev-artifact-proof-route-components";
+import { CanvasProofRoute } from "@/routes/settings-dev-canvas-proof-route-components";
 import { GettingStartedSettingsPanel } from "./panels/getting-started-settings-panel";
 import { SettingsSetupGuide } from "./settings-setup-guide";
 import { SettingsDensityContext } from "@/providers/settings-density-context";
@@ -94,6 +96,8 @@ export function SettingsModalContent(
  * error here) without a `case` per entry.
  */
 const SETTINGS_PANELS = {
+  "dev-artifact-proof": ArtifactProofRoute,
+  "dev-canvas-proof": CanvasProofRoute,
   "getting-started": GettingStartedSettingsPanel,
   general: GeneralSettingsPanel,
   browser: BrowserSettingsPanel,

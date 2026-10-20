@@ -6,6 +6,9 @@ export interface DescendantCounts {
   readonly ticket: number;
   readonly story: number;
   readonly review: number;
+  readonly html: number;
+  readonly canvas: number;
+  readonly file: number;
   readonly chat: number;
   readonly "terminal-agent": number;
 }
@@ -27,6 +30,9 @@ export function computeDescendantCounts(
     ticket: 0,
     story: 0,
     review: 0,
+    html: 0,
+    canvas: 0,
+    file: 0,
     chat: 0,
     "terminal-agent": 0,
   };
@@ -62,6 +68,9 @@ export function computeDescendantCountsFromTree(
     ticket: 0,
     story: 0,
     review: 0,
+    html: 0,
+    canvas: 0,
+    file: 0,
     chat: 0,
     "terminal-agent": 0,
   };
@@ -105,6 +114,9 @@ const CASCADE_LABELS: ReadonlyArray<{
   { keys: ["ticket"], singular: "ticket", plural: "tickets" },
   { keys: ["story"], singular: "story", plural: "stories" },
   { keys: ["review"], singular: "review", plural: "reviews" },
+  { keys: ["html"], singular: "page", plural: "pages" },
+  { keys: ["canvas"], singular: "canvas", plural: "canvases" },
+  { keys: ["file"], singular: "file", plural: "files" },
   { keys: ["chat", "terminal-agent"], singular: "agent", plural: "agents" },
 ];
 

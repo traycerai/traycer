@@ -796,6 +796,10 @@ const EXPECTED_SECTION_GROUPS: ReadonlyArray<
   ["secrets", "personal"],
   ["agent-definitions", "personal"],
   ["machine-setup", "personal"],
+  // Dev-only proof pages: offered whenever `import.meta.env.DEV` holds, which
+  // is every vitest run, and withheld from production builds.
+  ["dev-artifact-proof", "app"],
+  ["dev-canvas-proof", "app"],
   ["devices", "account"],
   ["link-phone", "account"],
   ["usage", "account"],

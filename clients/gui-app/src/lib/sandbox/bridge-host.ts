@@ -1,3 +1,21 @@
+import {
+  parseCanvasSiblingLayout,
+  type CanvasSiblingLayout,
+} from "./canvas-layout-bridge";
+import {
+  canvasRecord,
+  parseCanvasBox,
+  parseCanvasElement,
+  parseCanvasPageError,
+  parseCanvasRelativeLink,
+  parseCanvasTextSelection,
+  type CanvasBox,
+  type CanvasElement,
+  type CanvasElementLocator,
+  type CanvasMode,
+  type CanvasPageError,
+  type CanvasTextSelection,
+} from "./canvas-bridge";
 import type { ResolvedTheme } from "@/lib/theme-applier";
 import {
   isForwardedShortcut,
@@ -7,6 +25,7 @@ import type { SandboxNetworkPolicy } from "@/lib/sandbox/mcp-csp";
 import type { SandboxPermission } from "@/lib/sandbox/sandbox-url";
 import type { SandboxTheme } from "@/lib/sandbox/theme-map";
 import { MAX_EMBEDDED_DOWNLOAD_BYTES } from "@/lib/sandbox/download-limits";
+import { parseArtifactAddress } from "./artifact-serving/artifact-address";
 
 /**
  * The app side of the sandbox frame, with no DOM in it: the caller hands it
@@ -16,11 +35,12 @@ import { MAX_EMBEDDED_DOWNLOAD_BYTES } from "@/lib/sandbox/download-limits";
  * (`traycer/notifications/document-ready` and `…/shortcut`).
  *
  * Trust is `event.source` alone - an opaque frame's `event.origin` is always
- * "null" - plus one rule about documents: exactly two documents ever load in
- * the frame, the loader and the resource it writes over itself. The written
- * document proves itself with the nonce delivered in
- * `sandbox-resource-ready`. A third load, a second `sandbox-proxy-ready` (the
- * loader came back), or a wrong or repeated nonce disposes the bridge. Loads
+ * "null" - plus a nonce that proves the composed document. Loader mode allows
+ * two loads (the loader and its rewrite); served mode allows only one and
+ * needs no resource handshake, unless it serves a folder of pages, where each
+ * further load is the reader moving to another page and must prove itself
+ * again. An extra load, an unexpected proxy-ready, or a wrong or repeated
+ * nonce disposes the bridge. Loads
  * are COUNTED rather than ordered because the frame's messages and its
  * `load` events reach the app on different paths and can arrive in either
  * order. A page that rewrites itself trips the count too, which fails safe.
@@ -83,6 +103,10 @@ const MAX_WHEEL_DELTA_PX = 4000;
 const WHEEL_LINE_PX = 16;
 
 export interface SandboxBridgeEvents {
+  readonly onDoubleClick?: (element: CanvasElement) => void;
+  readonly onTextSelection?: (selection: CanvasTextSelection | null) => void;
+  readonly onPageError?: (error: CanvasPageError) => void;
+  readonly onRelativeLink?: (href: string) => void;
   readonly onStatus: (status: SandboxStatus) => void;
   readonly onSize: (size: SandboxSize) => void;
   /**
@@ -110,15 +134,48 @@ export type SandboxAppRequestHandler = (
   params: unknown,
 ) => Promise<unknown>;
 
+/**
+ * A plain-html artifact is a folder of pages the reader moves between inside
+ * one frame. Paths are relative to the artifact's folder; a page above it
+ * reads `../…`.
+ */
+export interface SandboxServedPages {
+  /** The artifact's folder relative to the artifacts tree root. */
+  readonly treePath: string;
+  readonly onNavigate: (path: string) => void;
+  /** The frame moved to something the artifact does not have as a page. */
+  readonly onPageMissing: () => void;
+}
+
 export interface SandboxBridgeHostOptions {
-  readonly resource: SandboxResource;
-  readonly nonce: string;
+  readonly document:
+    | {
+        readonly kind: "loader";
+        readonly resource: SandboxResource;
+        readonly nonce: string;
+      }
+    | {
+        readonly kind: "served";
+        readonly canvas?: boolean;
+        readonly nonce: string;
+        readonly forwardedShortcuts: readonly ForwardedShortcut[];
+        /** `null` keeps the one-document rule: a canvas board never moves. */
+        readonly pages: SandboxServedPages | null;
+      };
   readonly hostContext: SandboxHostContext;
   readonly hostVersion: string;
   readonly post: (message: unknown) => void;
   readonly events: SandboxBridgeEvents;
   /** `null` for pages and wireframes: app methods answer -32601. */
   readonly appRequests: SandboxAppRequestHandler | null;
+}
+
+function documentShortcuts(
+  document: SandboxBridgeHostOptions["document"],
+): readonly ForwardedShortcut[] {
+  return document.kind === "loader"
+    ? document.resource.forwardedShortcuts
+    : document.forwardedShortcuts;
 }
 
 export const MCP_APPS_PROTOCOL_VERSION = "2026-01-26";
@@ -137,6 +194,12 @@ export const MAX_IN_FLIGHT_APP_REQUESTS = 16;
 /** From mount until the written page proves itself with its nonce. */
 export const LOAD_TIMEOUT_MS = 15_000;
 export const PING_TIMEOUT_MS = 5_000;
+/**
+ * A later page's ready follows its load within milliseconds. A load with no
+ * ready after this long is a document without the prelude: a child
+ * artifact's page, served as it is, or a file that is not a page.
+ */
+export const PAGE_HANDSHAKE_TIMEOUT_MS = 2_000;
 export const TEARDOWN_GRACE_MS = 2_000;
 /** After the reader declines a link, a frame asks about none for this long. */
 export const DECLINED_LINK_QUIET_MS = 2_000;
@@ -167,6 +230,12 @@ const APP_METHODS: ReadonlySet<string> = new Set([
   "ui/update-model-context",
   "ui/request-display-mode",
   "ui/download-file",
+]);
+
+const BEFORE_DOCUMENT_PROOF: ReadonlySet<string> = new Set([
+  "traycer/notifications/document-ready",
+  "traycer/notifications/early-error",
+  "ping",
 ]);
 
 /** The page forwards this while fullscreen (`host-context-changed`). */
@@ -299,6 +368,25 @@ function parseHttpUrl(params: unknown): string | null {
   }
 }
 
+/** A served page's path relative to the artifact's folder, from its URL. */
+function pagePathFromUrl(url: unknown, treePath: string): string | null {
+  if (typeof url !== "string") return null;
+  const address = parseArtifactAddress(url);
+  if (address === null) return null;
+  if (treePath === "") return address.path;
+  const folder = treePath.split("/");
+  const page = address.path.split("/");
+  let shared = 0;
+  while (
+    shared < folder.length &&
+    shared < page.length - 1 &&
+    folder[shared] === page[shared]
+  ) {
+    shared += 1;
+  }
+  return "../".repeat(folder.length - shared) + page.slice(shared).join("/");
+}
+
 function changedContext(
   previous: SandboxHostContext,
   next: SandboxHostContext,
@@ -317,6 +405,10 @@ export class SandboxBridgeHost {
   private phase: Phase = "awaiting-proxy";
   private hostContext: SandboxHostContext;
   private loads = 0;
+  /** Accepted document-ready notifications, counted against loads. */
+  private readies = 0;
+  /** Documents begun so far; also tells one page's ping from the next's. */
+  private documents = 1;
   private earlyError = false;
   private initialized = false;
   private crashed = false;
@@ -325,7 +417,8 @@ export class SandboxBridgeHost {
   private linkDeclinedAt: number | null = null;
   /** This frame's claim on {@link linkConfirmOwner}. */
   private readonly linkConfirmKey = {};
-  private readonly loadWatchdog: number;
+  private loadWatchdog: number | null = null;
+  private pageHandshakeTimer: number | null = null;
   private readonly queuedNotifications: { method: string; params: unknown }[] =
     [];
   private readonly pendingResponses = new Map<
@@ -333,17 +426,268 @@ export class SandboxBridgeHost {
     (answered: boolean) => void
   >();
   private readonly timers = new Set<number>();
+  private readonly canvasResponses = new Map<
+    RequestId,
+    {
+      readonly timer: number;
+      readonly settle: (result: Record<string, unknown> | null) => void;
+    }
+  >();
+
+  hitTest(point: {
+    readonly x: number;
+    readonly y: number;
+  }): Promise<CanvasElement | null> {
+    if (!Number.isFinite(point.x) || !Number.isFinite(point.y))
+      return Promise.resolve(null);
+    return this.canvasRequest("hit-test", point).then((result) =>
+      parseCanvasElement(result?.element),
+    );
+  }
+
+  setTextSelectionTarget(
+    locator: CanvasElementLocator | null,
+  ): Promise<boolean> {
+    return this.canvasRequest("set-text-selection-target", {
+      target: locator,
+    }).then((result) => result !== null);
+  }
+
+  selectTextRange(points: {
+    readonly start: { readonly x: number; readonly y: number };
+    readonly end: { readonly x: number; readonly y: number };
+  }): Promise<boolean> {
+    return this.canvasRequest("select-text-range", points).then(
+      (result) => result !== null,
+    );
+  }
+
+  retypeAt(point: {
+    readonly x: number;
+    readonly y: number;
+  }): Promise<boolean> {
+    return this.canvasRequest("retype-at", point).then(
+      (result) => result !== null,
+    );
+  }
+
+  describeElement(
+    locator: CanvasElementLocator,
+  ): Promise<CanvasElement | null> {
+    return this.canvasRequest("describe-element", locator).then((result) =>
+      parseCanvasElement(result?.element),
+    );
+  }
+
+  literalAncestor(
+    locator: CanvasElementLocator | { readonly selector: string },
+  ): Promise<CanvasElement | null> {
+    return this.canvasRequest("literal-ancestor", locator).then((result) =>
+      canvasRecord(result) ? parseCanvasElement(result.element) : null,
+    );
+  }
+
+  textRangeRect(params: {
+    readonly tid: string;
+    readonly start: number;
+    readonly end: number;
+    readonly quotedText?: string;
+  }): Promise<CanvasBox | null> {
+    return this.canvasRequest("text-range-rect", params).then((result) =>
+      canvasRecord(result) ? parseCanvasBox(result.box) : null,
+    );
+  }
+
+  elementBox(locator: CanvasElementLocator): Promise<CanvasBox | null> {
+    return this.canvasRequest("element-box", locator).then((result) =>
+      parseCanvasBox(result?.box),
+    );
+  }
+
+  revealElement(locator: CanvasElementLocator): Promise<boolean> {
+    return this.canvasRequest("reveal-element", locator).then(
+      (result) => result?.revealed === true,
+    );
+  }
+
+  siblingLayout(
+    locator: CanvasElementLocator,
+  ): Promise<CanvasSiblingLayout | null> {
+    return this.canvasRequest("sibling-layout", locator).then((result) =>
+      parseCanvasSiblingLayout(result?.layout),
+    );
+  }
+
+  setMode(mode: CanvasMode): Promise<boolean> {
+    return this.canvasRequest("set-mode", { mode }).then(
+      (result) => result !== null,
+    );
+  }
+
+  private canvasDocumentProven(): boolean {
+    return (
+      this.options.document.kind === "served" &&
+      this.options.document.canvas === true &&
+      this.phase === "ready"
+    );
+  }
+
+  private canvasEnabled(): boolean {
+    return this.canvasDocumentProven() && !this.crashed;
+  }
+
+  private canvasRequest(
+    method: string,
+    params: object,
+  ): Promise<Record<string, unknown> | null> {
+    if (!this.canvasEnabled() || this.canvasResponses.size >= 32)
+      return Promise.resolve(null);
+    return new Promise((settle) => {
+      this.nextRequestId += 1;
+      const id = `traycer-canvas-${this.nextRequestId}`;
+      const timer = window.setTimeout(() => {
+        this.canvasResponses.delete(id);
+        settle(null);
+      }, PING_TIMEOUT_MS);
+      this.canvasResponses.set(id, { timer, settle });
+      this.post({
+        jsonrpc: "2.0",
+        id,
+        method: `traycer/canvas/${method}`,
+        params: { ...params, nonce: this.options.document.nonce },
+      });
+    });
+  }
+
+  private receiveCanvasResponse(data: unknown, id: RequestId): boolean {
+    const pending = this.canvasResponses.get(id);
+    if (pending === undefined) return false;
+    if (
+      !this.canvasEnabled() ||
+      !canvasRecord(data) ||
+      !canvasRecord(data.result) ||
+      data.result.nonce !== this.options.document.nonce
+    )
+      return true;
+    this.canvasResponses.delete(id);
+    window.clearTimeout(pending.timer);
+    pending.settle(data.result);
+    return true;
+  }
+
+  private receiveCanvasTextSelection(params: Record<string, unknown>): void {
+    if (params.selection === null) {
+      this.options.events.onTextSelection?.(null);
+      return;
+    }
+    const selection = parseCanvasTextSelection(params);
+    if (selection !== null) this.options.events.onTextSelection?.(selection);
+  }
+
+  private receiveCanvasNotification(method: string, params: unknown): void {
+    if (
+      !this.canvasDocumentProven() ||
+      !canvasRecord(params) ||
+      params.nonce !== this.options.document.nonce
+    )
+      return;
+    // Startup/liveness failures can mark a proven page crashed before its
+    // buffered error arrives. Diagnostics still belong on that board's pill.
+    if (method === "traycer/canvas/page-error") {
+      const error = parseCanvasPageError(params);
+      if (error !== null) this.options.events.onPageError?.(error);
+      return;
+    }
+    if (!this.canvasEnabled()) return;
+    if (method === "traycer/canvas/double-click") {
+      const element = parseCanvasElement(params.element);
+      if (element !== null) this.options.events.onDoubleClick?.(element);
+    } else if (method === "traycer/canvas/text-selection") {
+      this.receiveCanvasTextSelection(params);
+    } else if (method === "traycer/canvas/relative-link") {
+      const href = parseCanvasRelativeLink(params);
+      if (href !== null) this.options.events.onRelativeLink?.(href);
+    }
+  }
 
   constructor(options: SandboxBridgeHostOptions) {
     this.options = options;
     this.hostContext = options.hostContext;
-    // A loader that never answers, or a page that never finishes loading,
-    // would otherwise sit at "loading" for good.
-    this.loadWatchdog = window.setTimeout(() => {
-      this.timers.delete(this.loadWatchdog);
+    if (options.document.kind === "served") this.phase = "delivered";
+    this.armLoadWatchdog();
+  }
+
+  /**
+   * A loader that never answers, or a page that never finishes loading,
+   * would otherwise sit at "loading" for good.
+   */
+  private armLoadWatchdog(): void {
+    this.clearTimer(this.loadWatchdog);
+    const timer = window.setTimeout(() => {
+      this.timers.delete(timer);
+      this.loadWatchdog = null;
       this.markCrashed();
     }, LOAD_TIMEOUT_MS);
-    this.timers.add(this.loadWatchdog);
+    this.loadWatchdog = timer;
+    this.timers.add(timer);
+  }
+
+  private clearTimer(timer: number | null): void {
+    if (timer === null) return;
+    window.clearTimeout(timer);
+    this.timers.delete(timer);
+    if (this.loadWatchdog === timer) this.loadWatchdog = null;
+    if (this.pageHandshakeTimer === timer) this.pageHandshakeTimer = null;
+  }
+
+  private servedPages(): SandboxServedPages | null {
+    const document = this.options.document;
+    return document.kind === "served" ? document.pages : null;
+  }
+
+  /**
+   * The reader moved the frame to another page: it starts over as a freshly
+   * served document, and nothing the previous page left pending may answer
+   * for it.
+   */
+  private beginPage(): void {
+    this.documents += 1;
+    this.phase = "delivered";
+    this.earlyError = false;
+    this.initialized = false;
+    this.crashed = false;
+    this.queuedNotifications.length = 0;
+    this.clearTimer(this.pageHandshakeTimer);
+    const unanswered = [...this.pendingResponses.values()];
+    this.pendingResponses.clear();
+    for (const settle of unanswered) settle(false);
+    for (const { timer, settle } of this.canvasResponses.values()) {
+      window.clearTimeout(timer);
+      settle(null);
+    }
+    this.canvasResponses.clear();
+    this.armLoadWatchdog();
+    this.options.events.onStatus("loading");
+  }
+
+  private awaitPageHandshake(): void {
+    this.clearTimer(this.pageHandshakeTimer);
+    const timer = window.setTimeout(() => {
+      this.timers.delete(timer);
+      this.pageHandshakeTimer = null;
+      this.reportPageMissing();
+    }, PAGE_HANDSHAKE_TIMEOUT_MS);
+    this.pageHandshakeTimer = timer;
+    this.timers.add(timer);
+  }
+
+  private reportPageMissing(): void {
+    const pages = this.servedPages();
+    if (pages === null || this.phase === "disposed") return;
+    // A missing page is an answer, not a hang: it must not turn into a crash.
+    this.clearTimer(this.pageHandshakeTimer);
+    this.clearTimer(this.loadWatchdog);
+    pages.onPageMissing();
   }
 
   get status(): SandboxStatus {
@@ -377,25 +721,49 @@ export class SandboxBridgeHost {
     const message = parseInbound(json.value);
     if (message === null) return;
     if (message.isResponse) {
-      if (message.id === null) return;
-      const settle = this.pendingResponses.get(message.id);
-      this.pendingResponses.delete(message.id);
-      settle?.(true);
+      this.settleResponse(message.id, json.value);
       return;
     }
     if (message.method === "ui/notifications/sandbox-proxy-ready") {
       this.onProxyReady();
       return;
     }
-    if (this.phase === "awaiting-proxy") return;
+    if (!this.canDispatch(message.method)) return;
     this.dispatch(message);
+  }
+
+  private settleResponse(id: RequestId | null, value: unknown): void {
+    if (id === null || this.receiveCanvasResponse(value, id)) return;
+    const settle = this.pendingResponses.get(id);
+    this.pendingResponses.delete(id);
+    settle?.(true);
+  }
+
+  private canDispatch(method: string | null): boolean {
+    if (this.phase === "awaiting-proxy") return false;
+    // Served documents skip the loader handshake, but their callbacks must
+    // still wait for the composed document to prove its nonce.
+    if (this.options.document.kind === "served" && this.phase !== "ready") {
+      return method !== null && BEFORE_DOCUMENT_PROOF.has(method);
+    }
+    return true;
   }
 
   /** The frame element fired `load`. */
   frameLoaded(): void {
     if (this.phase === "disposed") return;
     this.loads += 1;
-    if (this.loads > 2) this.rejectDocument();
+    if (this.servedPages() === null) {
+      const allowedLoads = this.options.document.kind === "loader" ? 2 : 1;
+      if (this.loads > allowedLoads) this.rejectDocument();
+      return;
+    }
+    // A page's ready may reach the app before its load: whichever comes
+    // first begins the new document.
+    if (this.loads > this.documents) this.beginPage();
+    // The entry page keeps the crash watchdog; a later page that never
+    // proves itself was not a page of this artifact.
+    if (this.loads > 1 && this.readies < this.loads) this.awaitPageHandshake();
   }
 
   /** Send `host-context-changed` with the keys that changed, if any. */
@@ -450,6 +818,11 @@ export class SandboxBridgeHost {
     const unanswered = [...this.pendingResponses.values()];
     this.pendingResponses.clear();
     for (const settle of unanswered) settle(false);
+    for (const { timer, settle } of this.canvasResponses.values()) {
+      window.clearTimeout(timer);
+      settle(null);
+    }
+    this.canvasResponses.clear();
     this.queuedNotifications.length = 0;
     try {
       // The frame takes down a confirm it is showing on "disposed", so this
@@ -474,7 +847,12 @@ export class SandboxBridgeHost {
       this.rejectDocument();
       return;
     }
-    const { resource } = this.options;
+    const document = this.options.document;
+    if (document.kind !== "loader") {
+      this.rejectDocument();
+      return;
+    }
+    const { resource } = document;
     this.phase = "delivered";
     this.post({
       jsonrpc: "2.0",
@@ -485,7 +863,7 @@ export class SandboxBridgeHost {
         networkPolicy: resource.networkPolicy,
         csp: resource.csp,
         permissions: resource.permissions,
-        nonce: this.options.nonce,
+        nonce: this.options.document.nonce,
         bootstrap: {
           theme: resource.theme,
           forwardedShortcuts: resource.forwardedShortcuts,
@@ -511,29 +889,45 @@ export class SandboxBridgeHost {
     }
   }
 
+  private relayShortcut(params: unknown): void {
+    const press = parseShortcutPress(params);
+    if (press === null) return;
+    const forwarded = documentShortcuts(this.options.document);
+    // Bare Escape leaves fullscreen or clears an inline canvas selection.
+    const exitsFullscreen =
+      this.phase === "ready" &&
+      this.hostContext.displayMode === "fullscreen" &&
+      isForwardedShortcut([FULLSCREEN_EXIT], press);
+    const clearsCanvasSelection =
+      this.canvasEnabled() &&
+      isRecord(params) &&
+      params.nonce === this.options.document.nonce &&
+      isForwardedShortcut([FULLSCREEN_EXIT], press);
+    if (
+      exitsFullscreen ||
+      clearsCanvasSelection ||
+      isForwardedShortcut(forwarded, press)
+    ) {
+      this.options.events.onShortcut(press);
+    }
+  }
+
   private dispatch(message: InboundMessage): void {
     const { method, id, params } = message;
     switch (method) {
       case "traycer/notifications/document-ready":
         this.onDocumentReady(params);
         return;
+      case "traycer/notifications/page-missing":
+        if (isRecord(params) && params.nonce === this.options.document.nonce)
+          this.reportPageMissing();
+        return;
       case "traycer/notifications/early-error":
         if (this.phase === "delivered") this.earlyError = true;
         return;
-      case "traycer/notifications/shortcut": {
-        const press = parseShortcutPress(params);
-        if (press === null) return;
-        const forwarded = this.options.resource.forwardedShortcuts;
-        // Bare Escape only from the proven page, and only while fullscreen.
-        const exitsFullscreen =
-          this.phase === "ready" &&
-          this.hostContext.displayMode === "fullscreen" &&
-          isForwardedShortcut([FULLSCREEN_EXIT], press);
-        if (exitsFullscreen || isForwardedShortcut(forwarded, press)) {
-          this.options.events.onShortcut(press);
-        }
+      case "traycer/notifications/shortcut":
+        this.relayShortcut(params);
         return;
-      }
       case "ui/notifications/size-changed":
         if (isRecord(params)) {
           this.options.events.onSize({
@@ -553,6 +947,7 @@ export class SandboxBridgeHost {
     }
     if (method === null) return;
     if (id === null) {
+      this.receiveCanvasNotification(method, params);
       this.relayScroll(method, params);
       return;
     }
@@ -659,17 +1054,30 @@ export class SandboxBridgeHost {
   }
 
   private onDocumentReady(params: unknown): void {
-    const valid =
-      this.phase === "delivered" &&
-      isRecord(params) &&
-      params.nonce === this.options.nonce;
-    if (!valid) {
+    if (!isRecord(params) || params.nonce !== this.options.document.nonce) {
+      this.rejectDocument();
+      return;
+    }
+    const pages = this.servedPages();
+    if (pages !== null) {
+      // At most one ready may run ahead of its load.
+      if (this.readies > this.loads) {
+        this.rejectDocument();
+        return;
+      }
+      this.readies += 1;
+      if (this.readies > this.documents) this.beginPage();
+      this.clearTimer(this.pageHandshakeTimer);
+    }
+    if (this.phase !== "delivered") {
       this.rejectDocument();
       return;
     }
     this.phase = "ready";
-    window.clearTimeout(this.loadWatchdog);
-    this.timers.delete(this.loadWatchdog);
+    this.clearTimer(this.loadWatchdog);
+    const path =
+      pages === null ? null : pagePathFromUrl(params.url, pages.treePath);
+    if (pages !== null && path !== null) pages.onNavigate(path);
     // Too late: the watchdog already reported this frame.
     if (this.crashed) return;
     const height = finiteSize(params.height);
@@ -691,8 +1099,10 @@ export class SandboxBridgeHost {
         params: missed,
       });
     }
+    const pinged = this.documents;
     this.request("ping", {}, PING_TIMEOUT_MS, (answered) => {
-      if (!answered) this.markCrashed();
+      // The reader may have moved on: the next page is not the one that hung.
+      if (!answered && pinged === this.documents) this.markCrashed();
     });
   }
 

@@ -37,7 +37,7 @@ export function RowView({ row }: { readonly row: Row }) {
   return (
     <div data-row={row.id} style={{ height: 120 }}>
       <SandboxFrame
-        html={`<main>page ${row.id}</main>`}
+        source={{ kind: "html", html: `<main>page ${row.id}</main>` }}
         kind="page"
         title={`Page ${row.id}`}
         appName={null}
@@ -51,6 +51,7 @@ export function RowView({ row }: { readonly row: Row }) {
         onStatus={(status) => record(row.id, status)}
         onRequestTeardown={() => undefined}
         displayMode="inline"
+        pageNavigation={null}
         onBridge={null}
         ref={null}
       />

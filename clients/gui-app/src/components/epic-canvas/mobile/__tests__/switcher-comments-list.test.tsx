@@ -226,7 +226,7 @@ function renderList() {
   );
 }
 
-const NO_ARTIFACT_MESSAGE = "Open an artifact to see and add comments on it.";
+const NO_ARTIFACT_MESSAGE = "Open an artifact to read its comments.";
 
 describe("<SwitcherCommentsList />", () => {
   it("lists the shown artifact's threads", async () => {

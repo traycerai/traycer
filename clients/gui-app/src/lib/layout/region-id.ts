@@ -40,7 +40,6 @@ export type RailRegionId =
   | "railTerminals"
   | "railBrowsers"
   | "railArtifacts"
-  | "railFiles"
   | "railGitDiff"
   | "railPullRequests"
   | "railFileTree"

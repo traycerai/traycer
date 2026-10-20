@@ -266,7 +266,7 @@ export function WireframeIframe(props: WireframeIframeProps) {
     <>
       <SandboxFrame
         ref={setRef}
-        html={htmlContent}
+        source={{ kind: "html", html: htmlContent }}
         kind="wireframe"
         title={title}
         appName={null}
@@ -280,6 +280,7 @@ export function WireframeIframe(props: WireframeIframeProps) {
         onStatus={ignoreSandboxEvent}
         onRequestTeardown={ignoreSandboxEvent}
         displayMode="inline"
+        pageNavigation={null}
         onBridge={null}
       />
       {mode === "auto" ? (

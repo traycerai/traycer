@@ -36,6 +36,7 @@ import {
 import { resolveAutoOpenTarget } from "@/lib/epic-auto-open";
 import { useLeftPanelStore } from "@/stores/epics/left-panel-store";
 import { useCommentThreadsStore } from "@/stores/comments/comment-threads-store";
+import { requestCommentThreadAnchorReveal } from "@/lib/comments/comment-editor-registry";
 import { getHistoryController } from "@/lib/persistent-history";
 import { applyRouteBookkeeping } from "@/lib/tab-navigation/route-bookkeeping";
 import {
@@ -317,8 +318,8 @@ export function useEpicRouteSynchronization(
     nestedRouteTarget,
   ]);
 
-  // When the route handed us a `focusThreadId`, swap the left panel to
-  // Comments and activate the matching thread *after* the auto-open
+  // When the route handed us a `focusThreadId`, show its comments surface
+  // and activate the matching thread *after* the auto-open
   // effect has set the artifact active. Gating on `activeArtifactId ===
   // focusArtifactId` avoids racing active-artifact fallback behavior, which
   // reverts the panel when the active artifact stops supporting comments.
@@ -335,9 +336,16 @@ export function useEpicRouteSynchronization(
     const key = `${epicId}|${focusedAt ?? ""}|${focusThreadId}`;
     if (lastDeepLinkRef.current === key) return;
     lastDeepLinkRef.current = key;
-    useLeftPanelStore.getState().revealCommentsPanel(tabId);
-    useLeftPanelStore.getState().setActivePanelIdAndExpand(tabId, "comments");
+    const type = records.find((record) => record.id === focusArtifactId)?.type;
+    if (type !== "html" && type !== "canvas") {
+      useLeftPanelStore.getState().revealCommentsPanel(tabId);
+      useLeftPanelStore.getState().setActivePanelIdAndExpand(tabId, "comments");
+    }
     useCommentThreadsStore.getState().setActiveThread(epicId, focusThreadId);
+    if (type === "html" || type === "canvas") {
+      useCommentThreadsStore.getState().setFlashThread(epicId, focusThreadId);
+      requestCommentThreadAnchorReveal(epicId, focusArtifactId, focusThreadId);
+    }
   }, [
     snapshotLoaded,
     focusThreadId,
@@ -347,6 +355,7 @@ export function useEpicRouteSynchronization(
     legacyFocusHonorableAfterArtifactActivation,
     epicId,
     tabId,
+    records,
   ]);
 
   const lastAutoOpenKey = useRef<string | null>(null);

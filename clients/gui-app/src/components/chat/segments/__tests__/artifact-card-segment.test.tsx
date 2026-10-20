@@ -2,6 +2,7 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import type { EpicArtifactKind } from "@traycer/protocol/common/registry";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ArtifactCardSegment } from "@/components/chat/segments/artifact-card-segment";
+import { EPIC_NODE_SENTENCE_NOUNS } from "@/lib/artifacts/node-display";
 import { readEpicCanvasDragSourceData } from "@/components/epic-canvas/dnd/dnd";
 import { commitResolvedCanvasDrop } from "@/components/epic-canvas/dnd/root-dnd-commits";
 import type { EpicArtifactRef } from "@/stores/epics/canvas/types";
@@ -83,6 +84,15 @@ const dnd = vi.hoisted(() => ({
   draggables: [] as CapturedDraggable[],
 }));
 
+// Counts the hooks the card calls on its way to a live form, so a test can
+// prove a hidden kind returned before any session or projection work.
+const hookCalls = vi.hoisted(() => ({
+  openEpicHandle: 0,
+  artifactById: 0,
+  deletedArtifact: 0,
+  tabHostId: 0,
+}));
+
 const tileNavigation = vi.hoisted(() => ({
   openTile: vi.fn<(intent: TileOpenIntent) => null>(() => null),
 }));
@@ -91,23 +101,33 @@ const tileNavigation = vi.hoisted(() => ({
 // the session handle); outside one it is inert, which the bot transcript
 // suite covers. This suite is the in-session half.
 vi.mock("@/providers/use-open-epic-handle", () => ({
-  useMaybeOpenEpicHandle: () => ({ epicId: "epic-1" }),
+  useMaybeOpenEpicHandle: () => {
+    hookCalls.openEpicHandle += 1;
+    return { epicId: "epic-1" };
+  },
   useOpenEpicHandle: () => ({ epicId: "epic-1" }),
 }));
 vi.mock("@/lib/epic-selectors", () => ({
-  useArtifactById: (id: string | null) =>
-    id !== null && Object.hasOwn(projection.artifacts, id)
+  useArtifactById: (id: string | null) => {
+    hookCalls.artifactById += 1;
+    return id !== null && Object.hasOwn(projection.artifacts, id)
       ? projection.artifacts[id]
-      : null,
-  useEpicDeletedArtifact: (id: string | null) =>
-    id !== null && Object.hasOwn(projection.deleted, id)
+      : null;
+  },
+  useEpicDeletedArtifact: (id: string | null) => {
+    hookCalls.deletedArtifact += 1;
+    return id !== null && Object.hasOwn(projection.deleted, id)
       ? projection.deleted[id]
-      : null,
+      : null;
+  },
   useOpenEpicId: () => "epic-1",
 }));
 
 vi.mock("@/components/epic-canvas/hooks/use-tab-host-id", () => ({
-  useTabHostId: () => projection.hostId ?? "host-1",
+  useTabHostId: () => {
+    hookCalls.tabHostId += 1;
+    return projection.hostId ?? "host-1";
+  },
 }));
 vi.mock("@/components/epic-canvas/view-tab-context", () => ({
   useEpicViewTabId: () => projection.resolvedTabId,
@@ -166,6 +186,10 @@ describe("<ArtifactCardSegment />", () => {
     projection.hostId = "host-1";
     projection.resolvedTabId = "tab-1";
     dnd.draggables = [];
+    hookCalls.openEpicHandle = 0;
+    hookCalls.artifactById = 0;
+    hookCalls.deletedArtifact = 0;
+    hookCalls.tabHostId = 0;
     canvas.resolveTargetTabForEpic.mockClear();
     canvas.openTileInTab.mockClear();
     canvas.resolveTabIdForEpic.mockClear();
@@ -725,5 +749,181 @@ describe("<ArtifactCardSegment />", () => {
     const drag = dnd.draggables.at(-1) ?? null;
     expect(drag).not.toBeNull();
     expect(drag?.disabled).toBe(true);
+  });
+
+  describe("kinds with a plain object card (html, canvas, file)", () => {
+    const objectKinds = ["html", "canvas", "file"] as const;
+
+    it.each(objectKinds)(
+      "renders the live title and sentence noun for a %s block",
+      (objectKind) => {
+        projection.artifacts["h1"] = {
+          id: "h1",
+          kind: objectKind,
+          title: "My Page",
+          status: null,
+        };
+        render(
+          <ArtifactCardSegment
+            findUnitId={null}
+            operation="create"
+            artifactKind={objectKind}
+            artifactId="h1"
+            title="Fallback Title"
+            change={{ beforeHash: "h0", afterHash: "h1" }}
+          />,
+        );
+
+        expect(screen.getByText("My Page")).toBeTruthy();
+        expect(
+          screen.getByText(EPIC_NODE_SENTENCE_NOUNS[objectKind]),
+        ).toBeTruthy();
+        expect(screen.getByRole("button")).toBeTruthy();
+      },
+    );
+
+    it.each(objectKinds)(
+      "falls back to the block's own title and stays disabled for a %s artifact that is not yet projected",
+      (objectKind) => {
+        render(
+          <ArtifactCardSegment
+            findUnitId={null}
+            operation="update"
+            artifactKind={objectKind}
+            artifactId="unseen"
+            title="Fallback Title"
+            change={null}
+          />,
+        );
+
+        expect(screen.getByText("Fallback Title")).toBeTruthy();
+        expect(screen.getByRole("button")).toHaveProperty("disabled", true);
+      },
+    );
+
+    it.each(objectKinds)(
+      "reaches the session gate and the projection/host hooks for a %s block, never the drag hook",
+      (objectKind) => {
+        projection.artifacts["h1"] = {
+          id: "h1",
+          kind: objectKind,
+          title: "My Page",
+          status: null,
+        };
+        render(
+          <ArtifactCardSegment
+            findUnitId={null}
+            operation="update"
+            artifactKind={objectKind}
+            artifactId="h1"
+            title={null}
+            change={null}
+          />,
+        );
+
+        expect(hookCalls).toEqual({
+          openEpicHandle: 1,
+          artifactById: 1,
+          deletedArtifact: 1,
+          tabHostId: 1,
+        });
+        expect(dnd.draggables).toHaveLength(0);
+      },
+    );
+
+    it("opens the object artifact's tile on click, same as a markdown card's button", () => {
+      projection.artifacts["h1"] = {
+        id: "h1",
+        kind: "html",
+        title: "My Page",
+        status: null,
+      };
+      render(
+        <ArtifactCardSegment
+          findUnitId={null}
+          operation="create"
+          artifactKind="html"
+          artifactId="h1"
+          title={null}
+          change={null}
+        />,
+      );
+
+      fireEvent.click(screen.getByRole("button"));
+
+      expect(tileNavigation.openTile).toHaveBeenCalledTimes(1);
+    });
+
+    it("renders a card for every object kind beside a markdown card in the same transcript", () => {
+      projection.artifacts["a1"] = {
+        id: "a1",
+        kind: "spec",
+        title: "Auth Spec",
+        status: null,
+      };
+      projection.artifacts["h1"] = {
+        id: "h1",
+        kind: "html",
+        title: "Landing Page",
+        status: null,
+      };
+      projection.artifacts["c1"] = {
+        id: "c1",
+        kind: "canvas",
+        title: "Design Board",
+        status: null,
+      };
+      projection.artifacts["f1"] = {
+        id: "f1",
+        kind: "file",
+        title: "Report",
+        status: null,
+      };
+      render(
+        <>
+          <ArtifactCardSegment
+            findUnitId={null}
+            operation="create"
+            artifactKind="html"
+            artifactId="h1"
+            title={null}
+            change={null}
+          />
+          <ArtifactCardSegment
+            findUnitId={null}
+            operation="create"
+            artifactKind="spec"
+            artifactId="a1"
+            title={null}
+            change={null}
+          />
+          <ArtifactCardSegment
+            findUnitId={null}
+            operation="create"
+            artifactKind="canvas"
+            artifactId="c1"
+            title={null}
+            change={null}
+          />
+          <ArtifactCardSegment
+            findUnitId={null}
+            operation="create"
+            artifactKind="file"
+            artifactId="f1"
+            title={null}
+            change={null}
+          />
+        </>,
+      );
+
+      expect(screen.getByText("Auth Spec")).toBeTruthy();
+      expect(screen.getByText("Landing Page")).toBeTruthy();
+      expect(screen.getByText("Design Board")).toBeTruthy();
+      expect(screen.getByText("Report")).toBeTruthy();
+      // Only the markdown card reaches the drag hook; the three object cards
+      // are plain buttons.
+      expect(dnd.draggables).toHaveLength(1);
+      expect(screen.getAllByRole("button")).toHaveLength(4);
+    });
   });
 });

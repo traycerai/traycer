@@ -15,6 +15,11 @@ import {
   epicStateSubscribeOpenRequestSchemaV10,
   epicStateSubscribeServerFrameSchemaV10,
   epicStateSubscribeServerFrameSchemaV11,
+  epicStateSubscribeServerFrameSchemaV12,
+  epicStateSubscribeServerFrameSchemaV13,
+  epicStateSubscribeServerFrameSchemaV14,
+  epicStateSubscribeV13,
+  epicStateSubscribeV14,
 } from "@traycer/protocol/host/epic/state-subscribe";
 import {
   epicDeletionAttributionSchema,
@@ -75,12 +80,13 @@ import { RELEASED_FLOOR_METHOD_NAMES } from "@traycer/protocol/host/released-flo
 describe("registry shape: the epic lane surface installs at the versions the split promised", () => {
   it("installs epic.state.subscribe / epic.status.subscribe / artifact.subscribe at major 1, each with a @1.0 line", () => {
     // `epic.state.subscribe` grew `@1.1` (tombstones carry artifact metadata)
-    // and `@1.2` (the epic files arm),
+    // `@1.2` (the epic files arm) and `@1.3` (the html, canvas and file
+    // artifact kinds) and `@1.4` (anchor fields on comment thread records),
     // `epic.status.subscribe` grew `@1.1` after `@1.0` shipped in 1.3.0, and
     // `artifact.subscribe` grew `@1.1` for the `bodySync` frame. All three keep
     // `@1.0` installed for released peers.
     for (const [method, latestMinor] of [
-      ["epic.state.subscribe", 2],
+      ["epic.state.subscribe", 4],
       ["epic.status.subscribe", 1],
       ["artifact.subscribe", 1],
     ] as const) {
@@ -518,6 +524,29 @@ describe("epic.state.subscribe@1.0", () => {
       artifactRoomId: "room-1",
     });
     expect(parsed).not.toHaveProperty("artifactRoomId");
+  });
+
+  it("strips a supplied artifactRoomId off an html lane record too, now that htmlArtifactSchema carries one", () => {
+    const htmlFixture = {
+      kind: "html" as const,
+      id: "html-1",
+      folderName: "page-1",
+      title: "A page",
+      createdAt: 1,
+      updatedAt: 1,
+      createdManually: false,
+      parentId: null,
+      head: { files: {}, capturedAt: 1 },
+      revision: 0,
+    };
+    const parsed = epicArtifactRecordSchema.parse({
+      ...htmlFixture,
+      artifactRoomId: "room-1",
+    });
+    expect(parsed).not.toHaveProperty("artifactRoomId");
+    // Parses just as well with no room supplied at all - htmlArtifactSchema's
+    // own default never reaches the wire either way.
+    expect(epicArtifactRecordSchema.safeParse(htmlFixture).success).toBe(true);
   });
 
   it("parses a deleted-artifact tombstone record", () => {
@@ -1592,6 +1621,293 @@ describe("epic.state.subscribe@1.1: tombstones carry artifact metadata; @1.0 sta
       artifactTombstones: [ticketWithoutStatus],
     });
     expect(result.success).toBe(false);
+  });
+});
+
+describe("epic.state.subscribe@1.3: html, canvas and file artifact records and tombstones", () => {
+  const artifactBase = {
+    folderName: "page-1",
+    title: "A page",
+    createdAt: 1,
+    updatedAt: 2,
+    createdManually: false,
+    parentId: null,
+    revision: 5,
+  };
+  const head = { files: {}, capturedAt: 3 };
+  const sha256 = "a".repeat(64);
+  const htmlRecord = {
+    ...artifactBase,
+    kind: "html" as const,
+    id: "html-1",
+    layout: "folder" as const,
+    head,
+  };
+  // A canvas keeps a Yjs body, but the lane row names no room: the room id
+  // is host-private and the lane omits it for every kind.
+  const canvasRecord = {
+    ...artifactBase,
+    kind: "canvas" as const,
+    id: "canvas-1",
+    layout: "folder" as const,
+    head,
+  };
+  const fileRecord = {
+    ...artifactBase,
+    kind: "file" as const,
+    id: "file-1",
+    layout: "file" as const,
+    object: {
+      sha256,
+      byteLength: 12,
+      mediaType: "image/png",
+      status: "published" as const,
+    },
+  };
+  const markdownRecord = {
+    ...artifactBase,
+    kind: "spec" as const,
+    id: "spec-1",
+    layout: "folder" as const,
+  };
+  const tombstoneBase = {
+    title: "Gone",
+    deletedAt: "2026-01-01T00:00:00.000Z",
+    revision: 6,
+    folderName: "gone-1",
+    parentId: null,
+    createdAt: 1,
+    createdManually: false,
+    assignee: null,
+    status: null,
+  };
+  const tombstones = (["html", "canvas", "file"] as const).map((kind) => ({
+    ...tombstoneBase,
+    kind,
+    id: `${kind}-gone`,
+  }));
+  const newKindDelta = {
+    kind: "delta" as const,
+    authorityEpoch: "epoch-1",
+    seq: 8,
+    artifactUpserts: [htmlRecord, canvasRecord, fileRecord, markdownRecord],
+    artifactTombstones: tombstones,
+    commentThreadUpserts: [],
+    commentThreadRemovals: [],
+    epicMeta: null,
+    roleClaims: null,
+    hasBinaryPayload: false,
+  };
+  const newKindSnapshot = {
+    kind: "snapshot" as const,
+    authorityEpoch: "epoch-1",
+    position: 8,
+    basis: "cold" as const,
+    reconciledWithCloud: false,
+    epicMeta: { revision: 0, meta: { title: "An epic", updatedAt: 1 } },
+    artifactRecords: [htmlRecord, canvasRecord, fileRecord, markdownRecord],
+    deletedArtifacts: tombstones,
+    roleClaims: { revision: 0, claims: [] },
+    commentThreads: [],
+    hasBinaryPayload: false,
+  };
+
+  it("@1.3 parses upserts and tombstones of the three new kinds, with the markdown rows beside them", () => {
+    const parsed = epicStateSubscribeServerFrameSchemaV13.parse(newKindDelta);
+    if (parsed.kind !== "delta") throw new Error("expected a delta frame");
+    expect(parsed.artifactUpserts.map((record) => record.kind)).toEqual([
+      "html",
+      "canvas",
+      "file",
+      "spec",
+    ]);
+    expect(parsed.artifactTombstones.map((record) => record.kind)).toEqual([
+      "html",
+      "canvas",
+      "file",
+    ]);
+  });
+
+  it("@1.3 parses a snapshot holding the three new kinds as records and as tombstones", () => {
+    const parsed =
+      epicStateSubscribeServerFrameSchemaV13.parse(newKindSnapshot);
+    if (parsed.kind !== "snapshot") throw new Error("expected a snapshot");
+    expect(parsed.artifactRecords).toHaveLength(4);
+    expect(parsed.deletedArtifacts.map((record) => record.kind)).toEqual([
+      "html",
+      "canvas",
+      "file",
+    ]);
+  });
+
+  it.each(["html", "canvas", "file"] as const)(
+    "@1.2 refuses the %s kind in an upsert and in a tombstone, where @1.3 accepts it: the released peer cannot decode the kind",
+    (kind) => {
+      const upsert = {
+        html: htmlRecord,
+        canvas: canvasRecord,
+        file: fileRecord,
+      }[kind];
+      const upsertOnly = {
+        ...newKindDelta,
+        artifactUpserts: [upsert],
+        artifactTombstones: [],
+      };
+      const tombstoneOnly = {
+        ...newKindDelta,
+        artifactUpserts: [],
+        artifactTombstones: tombstones.filter((row) => row.kind === kind),
+      };
+      expect(
+        epicStateSubscribeServerFrameSchemaV13.safeParse(upsertOnly).success,
+      ).toBe(true);
+      expect(
+        epicStateSubscribeServerFrameSchemaV12.safeParse(upsertOnly).success,
+      ).toBe(false);
+      expect(
+        epicStateSubscribeServerFrameSchemaV13.safeParse(tombstoneOnly).success,
+      ).toBe(true);
+      expect(
+        epicStateSubscribeServerFrameSchemaV12.safeParse(tombstoneOnly).success,
+      ).toBe(false);
+    },
+  );
+
+  it("@1.2 refuses a snapshot holding a new kind, in records or in tombstones", () => {
+    expect(
+      epicStateSubscribeServerFrameSchemaV12.safeParse({
+        ...newKindSnapshot,
+        deletedArtifacts: [],
+      }).success,
+    ).toBe(false);
+    expect(
+      epicStateSubscribeServerFrameSchemaV12.safeParse({
+        ...newKindSnapshot,
+        artifactRecords: [markdownRecord],
+      }).success,
+    ).toBe(false);
+  });
+
+  it("@1.2 still decodes a frame holding only markdown rows, and @1.3 decodes the same frame", () => {
+    const markdownOnly = {
+      ...newKindDelta,
+      artifactUpserts: [markdownRecord],
+      artifactTombstones: [],
+    };
+    expect(
+      epicStateSubscribeServerFrameSchemaV12.safeParse(markdownOnly).success,
+    ).toBe(true);
+    expect(
+      epicStateSubscribeServerFrameSchemaV13.safeParse(markdownOnly).success,
+    ).toBe(true);
+  });
+
+  it("@1.3 refuses a file record without its object fields", () => {
+    const { sha256: _dropped, ...objectWithoutSha } = fileRecord.object;
+    const fileWithoutSha = { ...fileRecord, object: objectWithoutSha };
+    expect(
+      epicStateSubscribeServerFrameSchemaV13.safeParse({
+        ...newKindDelta,
+        artifactUpserts: [fileWithoutSha],
+        artifactTombstones: [],
+      }).success,
+    ).toBe(false);
+  });
+
+  it("is still installed under the top of the line, with @1.2 below it", () => {
+    expect(epicStateSubscribeV13.schemaVersion).toEqual({ major: 1, minor: 3 });
+    const line = hostStreamRpcRegistry["epic.state.subscribe"][1];
+    expect(line.versions[3].contract).toBe(epicStateSubscribeV13);
+    expect(line.versions[2].contract.serverFrameSchema).toBe(
+      epicStateSubscribeServerFrameSchemaV12,
+    );
+  });
+});
+
+describe("epic.state.subscribe@1.4: comment thread records carry anchor fields; @1.3 stays frozen", () => {
+  const anchorData = {
+    anchorKind: "text" as const,
+    artboard: "board-1",
+    elementId: "tid-1",
+    startOffset: 2,
+    endOffset: 9,
+    label: "Hero heading",
+  };
+  const anchoredThread = {
+    ...commentThreadFixture,
+    data: { ...commentThreadFixture.data, ...anchorData },
+  };
+  const delta = {
+    kind: "delta" as const,
+    authorityEpoch: "epoch-1",
+    seq: 9,
+    artifactUpserts: [],
+    artifactTombstones: [],
+    commentThreadUpserts: [anchoredThread],
+    commentThreadRemovals: [],
+    epicMeta: null,
+    roleClaims: null,
+    hasBinaryPayload: false,
+  };
+  const snapshot = {
+    kind: "snapshot" as const,
+    authorityEpoch: "epoch-1",
+    position: 9,
+    basis: "cold" as const,
+    reconciledWithCloud: false,
+    epicMeta: { revision: 0, meta: { title: "An epic", updatedAt: 1 } },
+    artifactRecords: [],
+    deletedArtifacts: [],
+    roleClaims: { revision: 0, claims: [] },
+    commentThreads: [anchoredThread],
+    hasBinaryPayload: false,
+  };
+
+  it("@1.4 keeps the anchor fields on an upserted thread in a delta and in a snapshot", () => {
+    const parsedDelta = epicStateSubscribeServerFrameSchemaV14.parse(delta);
+    if (parsedDelta.kind !== "delta") throw new Error("expected a delta frame");
+    expect(parsedDelta.commentThreadUpserts[0]?.data).toMatchObject(anchorData);
+    const parsedSnapshot =
+      epicStateSubscribeServerFrameSchemaV14.parse(snapshot);
+    if (parsedSnapshot.kind !== "snapshot") {
+      throw new Error("expected a snapshot frame");
+    }
+    expect(parsedSnapshot.commentThreads[0]?.data).toMatchObject(anchorData);
+  });
+
+  it("@1.3 strips the anchor fields, so a released peer sees the thread it always did", () => {
+    const parsedDelta = epicStateSubscribeServerFrameSchemaV13.parse(delta);
+    if (parsedDelta.kind !== "delta") throw new Error("expected a delta frame");
+    expect(parsedDelta.commentThreadUpserts[0]?.data).toEqual(
+      commentThreadFixture.data,
+    );
+    const parsedSnapshot =
+      epicStateSubscribeServerFrameSchemaV13.parse(snapshot);
+    if (parsedSnapshot.kind !== "snapshot") {
+      throw new Error("expected a snapshot frame");
+    }
+    expect(parsedSnapshot.commentThreads[0]?.data).toEqual(
+      commentThreadFixture.data,
+    );
+  });
+
+  it("@1.4 still reads a thread that carries no anchor", () => {
+    expect(
+      epicStateSubscribeServerFrameSchemaV14.safeParse({
+        ...delta,
+        commentThreadUpserts: [commentThreadFixture],
+      }).success,
+    ).toBe(true);
+  });
+
+  it("is the registered top of the line, with @1.3 still installed", () => {
+    expect(epicStateSubscribeV14.schemaVersion).toEqual({ major: 1, minor: 4 });
+    const line = hostStreamRpcRegistry["epic.state.subscribe"][1];
+    expect(line.latestMinor).toBe(4);
+    expect(line.versions[4].contract).toBe(epicStateSubscribeV14);
+    expect(line.versions[3].contract.serverFrameSchema).toBe(
+      epicStateSubscribeServerFrameSchemaV13,
+    );
   });
 });
 

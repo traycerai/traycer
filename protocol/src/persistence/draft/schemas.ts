@@ -5,7 +5,7 @@ import {
   chatRunSettingsStrictSchema,
   chatRunSettingsStrictSchemaPreCommandCode,
 } from "@traycer/protocol/persistence/epic/foundation";
-import { browserAnnotationRecordSchema } from "@traycer/protocol/persistence/epic/messages";
+import { browserAnnotationRecordSchemaPreCanvas } from "@traycer/protocol/persistence/epic/messages";
 import { sha256HexSchema } from "@traycer/protocol/persistence/chat-sync/version";
 import {
   DRAFT_HEAD_DIALECT,
@@ -177,7 +177,8 @@ export const draftStashPortableSchema = lazySchema(() =>
      * `.default([])` so entries written before this field parse cleanly, same as
      * `droppedElementCount` inside the record.
      */
-    annotations: z.array(browserAnnotationRecordSchema).default([]),
+    // draft-head 1.0 stays browser-only; canvas cards are not mirrored.
+    annotations: z.array(browserAnnotationRecordSchemaPreCanvas).default([]),
   }),
 );
 export type DraftStashPortable = z.infer<typeof draftStashPortableSchema>;

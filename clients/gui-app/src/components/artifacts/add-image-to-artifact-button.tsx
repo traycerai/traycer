@@ -17,7 +17,7 @@ import {
   useArtifactImageOperations,
   type ArtifactImagePreparation,
 } from "@/hooks/artifacts/use-artifact-image-operations";
-import { isEpicArtifactKind } from "@/lib/artifacts/node-display";
+import { isMarkdownArtifactKind } from "@/lib/artifacts/node-display";
 import {
   ArtifactBodyUnavailableError,
   holdArtifactBody,
@@ -41,7 +41,7 @@ export function AddImageToArtifactButton(props: {
   const operations = useArtifactImageOperations(epicId);
   const records = useEpicArtifactRecords();
   const artifacts = useMemo(
-    () => records.filter((record) => isEpicArtifactKind(record.type)),
+    () => records.filter((record) => isMarkdownArtifactKind(record.type)),
     [records],
   );
   const [open, setOpen] = useState(false);
