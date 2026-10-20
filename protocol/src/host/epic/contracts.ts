@@ -214,6 +214,10 @@ import {
   fetchArtifactAttachmentRequestSchema,
   fetchArtifactAttachmentResponseSchema,
 } from "@traycer/protocol/host/epic/artifact-attachment";
+import {
+  attachEnvironmentRequestSchema,
+  attachEnvironmentResponseSchema,
+} from "@traycer/protocol/host/epic/environment-attachment";
 
 // `epic.listTasks@1.0` - frozen pre-pinning host entry point for the CloudData
 // task-list query. Both request and response preserve the released wire shape.
@@ -1149,6 +1153,18 @@ export const epicChatPublicationStateV10 = defineRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: chatPublicationStateRequestSchema,
   responseSchema: chatPublicationStateResponseSchema,
+});
+
+/**
+ * Optional (non-floor) capability: a new method NAME rides the optional
+ * channel, so a host that predates it answers `E_HOST_UNSUPPORTED` for this
+ * call alone and the handshake is untouched.
+ */
+export const epicAttachEnvironmentV10 = defineRpcContract({
+  method: "epic.attachEnvironment",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: attachEnvironmentRequestSchema,
+  responseSchema: attachEnvironmentResponseSchema,
 });
 
 export const epicPrepareArtifactImageV10 = defineRpcContract({

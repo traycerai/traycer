@@ -806,6 +806,7 @@ import {
   epicRevokeCollaboratorV11,
   epicRevokeCollaboratorUpgradeV10ToV11,
   epicChatPublicationStateV10,
+  epicAttachEnvironmentV10,
   epicSetChatArchivedV10,
   epicSetChatArchivedV11,
   epicSetChatArchivedUpgradeV10ToV11,
@@ -8743,6 +8744,22 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
       versions: {
         0: {
           contract: epicChatPublicationStateV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+    degrade: { kind: "unsupported" },
+  },
+  // Optional (non-floor) capability: attaching a task to a team environment
+  // before a chat continues on that team's host. A host that predates it
+  // answers E_HOST_UNSUPPORTED for this call alone.
+  "epic.attachEnvironment": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: epicAttachEnvironmentV10,
           upgradeFromPreviousVersion: null,
         },
       },
