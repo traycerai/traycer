@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, renderHook } from "@testing-library/react";
+import { act, cleanup, renderHook } from "@testing-library/react";
 import type {
   ProviderRateLimits,
   ProviderRateLimitWindow,
@@ -40,12 +40,15 @@ interface RecordedBatch {
 interface MockState {
   /** Keyed by `providerId` or, for one account's reading, `providerId:profileId`. */
   results: Map<string, MockQueryResult>;
+  /** The keys a read is in flight for, which the double reports as an observer would. */
+  reading: Set<string>;
   batches: RecordedBatch[];
   windowedProviders: ReadonlyArray<ConfiguredRateLimitProvider>;
 }
 
 const mocks = vi.hoisted<MockState>(() => ({
   results: new Map(),
+  reading: new Set(),
   batches: [],
   windowedProviders: [],
 }));
@@ -92,10 +95,12 @@ function mockUseHostQueriesImpl(args: {
   });
   return args.requests.map((request) => ({
     // A real observer always says whether a read of its key is in flight, and
-    // the segments report it (`fetching`), so the double answers it too. No
-    // stored result carries one: a test that needs a read in flight is a test
-    // of what the SEGMENT draws, which takes the model directly.
-    isFetching: false,
+    // the segments report it (`fetching`) and decide what is owed a scheduled
+    // re-read from it, so the double answers it too - from its own set, since
+    // a reading and a read in flight are independent facts about one key.
+    isFetching: mocks.reading.has(
+      `${request.params.providerId}:${request.params.profileId ?? ""}`,
+    ),
     ...(mocks.results.get(
       `${request.params.providerId}:${request.params.profileId ?? ""}`,
     ) ??
@@ -396,6 +401,11 @@ function setResult(
   mocks.results.set(providerId, result);
 }
 
+/** Puts a read of this account in flight, as an observer would report it. */
+function setReading(providerId: RateLimitProviderId): void {
+  mocks.reading.add(`${providerId}:`);
+}
+
 function opencodeWindow(usedPercent: number): ProviderRateLimitWindow & {
   readonly status: "ok" | "rate-limited";
 } {
@@ -404,8 +414,18 @@ function opencodeWindow(usedPercent: number): ProviderRateLimitWindow & {
 
 beforeEach(() => {
   mocks.results = new Map();
+  mocks.reading = new Set();
   mocks.batches = [];
   mocks.windowedProviders = [];
+  // The retry bound's floor is the WINDOW's, and one vitest file is one
+  // window, so a row that stamped a bound would otherwise hand it to the next
+  // one. A stamp at the epoch binds nothing and is dropped on the first read.
+  for (const hostId of [RETRY_HOST_ID, "host-b"]) {
+    recordManualRateLimitRetry(
+      manualRateLimitRetryKey(hostId, "codex", null),
+      0,
+    );
+  }
   useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
 });
 
@@ -789,6 +809,62 @@ describe("useStatusBarRateLimitSegments", () => {
     });
   });
 
+  it("is transient when the first read rejected, rather than cold", () => {
+    // The read did not come back with a failure, it REJECTED: the transport
+    // gave up, or the frame budget ran out. Nothing is retained, and "no
+    // reading yet" is then the one sentence that is not true - a read was
+    // taken and it did not land, which is exactly what the words say.
+    setResult("codex", { data: undefined, isError: true });
+
+    const { result } = renderSegments([
+      configuredProvider({ providerId: "codex", lane: "ephemeralProcess" }),
+    ]);
+
+    expect(result.current.cluster).toEqual({
+      kind: "segments",
+      segments: [
+        expect.objectContaining({
+          state: "transient",
+          // No wire reason to report, and the transient words name no
+          // mechanism anyway.
+          reason: null,
+          retryOffered: true,
+        }),
+      ],
+    });
+    expect(result.current.retryTargets).toEqual([
+      { providerId: "codex", profileId: null },
+    ]);
+  });
+
+  it("owes no scheduled re-read while a read of that account is running", () => {
+    setResult("codex", {
+      data: freshEnvelope(
+        unavailableRateLimits({ provider: "codex", reason: "timeout" }),
+      ),
+      isError: false,
+    });
+    setReading("codex");
+
+    const { result } = renderSegments([
+      configuredProvider({ providerId: "codex", lane: "ephemeralProcess" }),
+    ]);
+
+    // The running read IS the retry. Scheduling one against it buys nothing,
+    // and on the http lane it would refetch the same observer - which cancels
+    // the read in flight, aborting the person's own forced one and starting it
+    // over. The target comes back when this read settles and leaves the
+    // account transient, so the delay runs from the latest failure.
+    expect(statusBarSegments(result.current.cluster).at(0)).toEqual(
+      expect.objectContaining({
+        state: "transient",
+        fetching: true,
+        retryOffered: false,
+      }),
+    );
+    expect(result.current.retryTargets).toEqual([]);
+  });
+
   it("is unavailable with the wire reason when the retained reading says available: false", () => {
     setResult("codex", {
       data: freshEnvelope(
@@ -910,6 +986,64 @@ describe("useStatusBarRateLimitSegments", () => {
     ]);
 
     // A read of this account on another host says nothing about this one.
+    expect(statusBarSegments(result.current.cluster).at(0)?.retryOffered).toBe(
+      true,
+    );
+  });
+
+  it("takes the affordance away as soon as a second window's read of that account settles", () => {
+    setResult("codex", {
+      data: freshEnvelope(
+        unavailableRateLimits({ provider: "codex", reason: "timeout" }),
+      ),
+      isError: false,
+    });
+
+    const { result } = renderSegments([
+      configuredProvider({ providerId: "codex", lane: "ephemeralProcess" }),
+    ]);
+    expect(statusBarSegments(result.current.cluster).at(0)?.retryOffered).toBe(
+      true,
+    );
+
+    // What a second window's settled read looks like from in here: the stamp
+    // lands in the shared storage and the event is the only notice this window
+    // gets. The sampled clock has not ticked, so an offer that waited for it
+    // would keep inviting a click the bound now refuses.
+    const key = manualRateLimitRetryKey(RETRY_HOST_ID, "codex", null);
+    const settledAt = String(Date.now());
+    act(() => {
+      window.localStorage.setItem(key, settledAt);
+      window.dispatchEvent(
+        new StorageEvent("storage", { key, newValue: settledAt }),
+      );
+    });
+
+    expect(statusBarSegments(result.current.cluster).at(0)?.retryOffered).toBe(
+      false,
+    );
+  });
+
+  it("offers the retry when the stamp is dated ahead of the clock", () => {
+    setResult("codex", {
+      data: freshEnvelope(
+        unavailableRateLimits({ provider: "codex", reason: "timeout" }),
+      ),
+      isError: false,
+    });
+    // A wall clock corrected backwards leaves stamps in the future behind it.
+    // Trusting one withholds the retry for the correction AND the minute, and a
+    // stamp from a badly wrong clock would sit in storage withholding it across
+    // reloads.
+    recordManualRateLimitRetry(
+      manualRateLimitRetryKey(RETRY_HOST_ID, "codex", null),
+      Date.now() + 60 * 60 * 1000,
+    );
+
+    const { result } = renderSegments([
+      configuredProvider({ providerId: "codex", lane: "ephemeralProcess" }),
+    ]);
+
     expect(statusBarSegments(result.current.cluster).at(0)?.retryOffered).toBe(
       true,
     );

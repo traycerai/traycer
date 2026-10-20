@@ -4,6 +4,7 @@ import {
   describe,
   expect,
   it,
+  onTestFinished,
   vi,
   type Mock,
 } from "vitest";
@@ -28,8 +29,9 @@ import type {
 } from "@/hooks/rate-limits/use-status-bar-rate-limit-segments";
 import { TRANSIENT_RATE_LIMIT_RETRY_DELAY_MS } from "@/lib/rate-limits/rate-limit-timing";
 import {
-  manualRateLimitRetryAt,
   manualRateLimitRetryKey,
+  manualRateLimitRetryWithheld,
+  recordManualRateLimitRetry,
 } from "@/lib/rate-limits/manual-retry-ledger";
 import type { ConfiguredRateLimitProvider } from "@/hooks/rate-limits/use-configured-rate-limit-providers";
 import type { RateLimitProfileSelection } from "@/hooks/rate-limits/use-rate-limit-profile-selection";
@@ -195,6 +197,17 @@ function renderCluster(props: {
 
 beforeEach(() => {
   useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
+  // The retry bound's floor is the WINDOW's, and one vitest file is one
+  // window, so a row that stamped a bound would otherwise hand it to the next
+  // one. A stamp at the epoch binds nothing and is dropped on the first read;
+  // storage is then emptied, so a row reads only what it wrote itself.
+  for (const hostId of ["host-a", "host-b"]) {
+    recordManualRateLimitRetry(
+      manualRateLimitRetryKey(hostId, "codex", null),
+      0,
+    );
+  }
+  window.localStorage.clear();
 });
 
 afterEach(() => {
@@ -901,22 +914,113 @@ describe("<StatusBarRateLimitCluster /> scrolls its readings", () => {
       // seconds has to be bounded from its failure, not from the click. The
       // segment is saying `Retrying...` and offering nothing meanwhile.
       expect(mocks.fetch).toHaveBeenCalledTimes(1);
-      expect(manualRateLimitRetryAt(key)).toBeNull();
+      expect(manualRateLimitRetryWithheld(key, Date.now())).toBe(false);
 
       // `act` around the settle, so the `.then` that stamps has run and the
-      // re-render it causes is committed before the assertion reads storage.
+      // re-render it causes is committed before the assertion reads the bound.
       await act(async () => {
         settle();
         await Promise.resolve();
       });
-      expect(manualRateLimitRetryAt(key)).not.toBeNull();
+      expect(manualRateLimitRetryWithheld(key, Date.now())).toBe(true);
       // Keyed by the host the read went to, so the same account elsewhere is
       // untouched.
       expect(
-        manualRateLimitRetryAt(
+        manualRateLimitRetryWithheld(
           manualRateLimitRetryKey("host-b", "codex", null),
+          Date.now(),
         ),
-      ).toBeNull();
+      ).toBe(false);
+    });
+
+    it("refuses a click the bound already covers, however the segment was drawn", () => {
+      mocks.scope = { hostId: "host-a" };
+      mocks.cluster = {
+        kind: "segments",
+        segments: [
+          {
+            ...segmentFixture("codex", null),
+            state: "transient",
+            reason: "timeout",
+            // Offered, which is what a strip that drew this segment before a
+            // sibling window's read settled is still showing.
+            retryOffered: true,
+          },
+        ],
+      };
+      renderCluster({});
+      // That sibling's settlement, landing after the render: the click is the
+      // gate, so it has to read the bound itself rather than trust the
+      // affordance it arrived through.
+      recordManualRateLimitRetry(
+        manualRateLimitRetryKey("host-a", "codex", null),
+        Date.now(),
+      );
+
+      fireEvent.click(screen.getByTestId("status-bar-provider-segment-codex"));
+
+      expect(mocks.fetch).not.toHaveBeenCalled();
+      // The deep link is not the retry, and a refused read does not take it
+      // away: the click still opens the panel on that account's card.
+      expect(useRateLimitPopoverStore.getState().revealProfile).toEqual({
+        providerId: "codex",
+        profileId: null,
+      });
+    });
+
+    it("keeps the bound in this window when storage refuses the stamp", async () => {
+      mocks.scope = { hostId: "host-a" };
+      let settle = (): void => undefined;
+      mocks.fetch.mockImplementation(
+        () =>
+          new Promise<void>((resolve) => {
+            settle = () => resolve();
+          }),
+      );
+      mocks.cluster = {
+        kind: "segments",
+        segments: [
+          {
+            ...segmentFixture("codex", null),
+            state: "transient",
+            reason: "timeout",
+            retryOffered: true,
+          },
+        ],
+      };
+      // Quota exhausted, or site data blocked. The cross-window layer is gone
+      // for this read, and the bound still has to hold where the click was.
+      //
+      // Spied on the PROTOTYPE, because jsdom's storage is a proxy whose `set`
+      // trap writes an own property as a stored ITEM rather than defining one,
+      // so an instance spy is never the function the code calls. Only the
+      // ledger's own keys are refused: this click also persists the panel's
+      // reveal, and a store that threw there would never reach the read.
+      const setItem = vi
+        .spyOn(Storage.prototype, "setItem")
+        .mockImplementation((name: string) => {
+          if (name.startsWith("traycer.rateLimits.manualRead.")) {
+            throw new Error("QuotaExceededError");
+          }
+          // Anything else this click persists - the panel's reveal - is
+          // dropped rather than stored: the bound is what this row reads, and
+          // a store that threw there would never reach the read.
+        });
+      onTestFinished(() => setItem.mockRestore());
+      const key = manualRateLimitRetryKey("host-a", "codex", null);
+      renderCluster({});
+
+      fireEvent.click(screen.getByTestId("status-bar-provider-segment-codex"));
+      expect(mocks.fetch).toHaveBeenCalledTimes(1);
+      await act(async () => {
+        settle();
+        await Promise.resolve();
+      });
+
+      expect(setItem.mock.calls.some(([name]) => name === key)).toBe(true);
+      expect(window.localStorage.getItem(key)).toBeNull();
+      // Refused by storage, held here anyway.
+      expect(manualRateLimitRetryWithheld(key, Date.now())).toBe(true);
     });
 
     it("re-reads a transient account once, unforced, and does not keep re-reading it", () => {

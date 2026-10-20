@@ -8,8 +8,7 @@ import { StatusBarMiniBar } from "@/components/layout/status-bar/status-bar-mini
 import {
   statusBarSegmentSeverity,
   statusBarSegmentTooltip,
-  STATUS_BAR_TRANSIENT_LABEL,
-  STATUS_BAR_TRANSIENT_RUNNING_LABEL,
+  statusBarTransientLabel,
   type StatusBarUsageDisplay,
 } from "@/components/layout/status-bar/status-bar-usage-display";
 import type {
@@ -225,9 +224,7 @@ function NoReading(props: {
             "underline decoration-dotted underline-offset-2",
         )}
       >
-        {segment.fetching
-          ? STATUS_BAR_TRANSIENT_RUNNING_LABEL
-          : STATUS_BAR_TRANSIENT_LABEL}
+        {statusBarTransientLabel(segment)}
       </span>
     );
   }

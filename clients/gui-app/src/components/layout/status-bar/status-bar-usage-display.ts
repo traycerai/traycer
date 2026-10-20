@@ -150,6 +150,20 @@ export const STATUS_BAR_TRANSIENT_LABEL = "Couldn't load, retrying";
 export const STATUS_BAR_TRANSIENT_RUNNING_LABEL = "Retrying...";
 
 /**
+ * Which of the two a `transient` segment reads, wherever one is drawn - the
+ * strip's segment, the header's Detailed rows, the tooltip and the trigger's
+ * accessible name. One function, so no surface can be left on the resting
+ * sentence while a read is running.
+ */
+export function statusBarTransientLabel(
+  segment: StatusBarProviderSegmentModel,
+): string {
+  return segment.fetching
+    ? STATUS_BAR_TRANSIENT_RUNNING_LABEL
+    : STATUS_BAR_TRANSIENT_LABEL;
+}
+
+/**
  * Why one provider's reading is dimmed, dashed or missing, in one sentence.
  *
  * Lives beside the readings rather than inside the segment because two surfaces
@@ -163,12 +177,10 @@ export function statusBarSegmentTooltip(
 ): string {
   const providerName = statusBarSegmentName(segment);
   if (segment.state === "transient") {
-    if (segment.fetching) {
-      return `${providerName} · ${STATUS_BAR_TRANSIENT_RUNNING_LABEL}`;
-    }
+    const words = statusBarTransientLabel(segment);
     return segment.retryOffered
-      ? `${providerName} · ${STATUS_BAR_TRANSIENT_LABEL} - click to retry now`
-      : `${providerName} · ${STATUS_BAR_TRANSIENT_LABEL}`;
+      ? `${providerName} · ${words} - click to retry now`
+      : `${providerName} · ${words}`;
   }
   if (segment.state === "degraded") {
     return segment.reason === null
@@ -207,11 +219,7 @@ export function statusBarUsageTriggerName(
     // draw a track and a dash, which say nothing to override.
     if (segment.state === "transient") {
       return [
-        `${statusBarSegmentName(segment)} ${
-          segment.fetching
-            ? STATUS_BAR_TRANSIENT_RUNNING_LABEL
-            : STATUS_BAR_TRANSIENT_LABEL
-        }`,
+        `${statusBarSegmentName(segment)} ${statusBarTransientLabel(segment)}`,
       ];
     }
     return segment.tightest === null

@@ -41,6 +41,7 @@ import {
 } from "@/lib/rate-limits/provider-rate-limit-fetch";
 import {
   manualRateLimitRetryKey,
+  manualRateLimitRetryWithheld,
   recordManualRateLimitRetry,
 } from "@/lib/rate-limits/manual-retry-ledger";
 import { rateLimitFetchLane } from "@/lib/rate-limit-providers";
@@ -116,16 +117,23 @@ export function StatusBarRateLimitCluster(props: {
   const retryNow = (target: StatusBarRateLimitRetryTarget): void => {
     const hostId = fetchScope?.hostId ?? null;
     if (hostId === null) return;
+    const key = manualRateLimitRetryKey(
+      hostId,
+      target.providerId,
+      target.profileId,
+    );
+    // The bound is checked HERE, not only where the affordance was drawn: an
+    // offer on screen is as old as the render that drew it, and a sibling
+    // window's read can settle against this same account in between. This is
+    // the gate; the affordance is an invitation.
+    if (manualRateLimitRetryWithheld(key, Date.now())) return;
     void readOneAccount({
       fetchScope,
       httpRefetches: refresh.httpRefetches,
       target,
       force: true,
     }).then(() => {
-      recordManualRateLimitRetry(
-        manualRateLimitRetryKey(hostId, target.providerId, target.profileId),
-        Date.now(),
-      );
+      recordManualRateLimitRetry(key, Date.now());
     });
   };
   return (

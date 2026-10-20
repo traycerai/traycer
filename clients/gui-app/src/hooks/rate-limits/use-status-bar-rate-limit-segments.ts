@@ -1,3 +1,4 @@
+import { useSyncExternalStore } from "react";
 import type { UseQueryResult } from "@tanstack/react-query";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type {
@@ -46,10 +47,11 @@ import {
   type ProviderRateLimitEnvelope,
 } from "@/lib/rate-limits/rate-limit-envelope";
 import {
-  manualRateLimitRetryAt,
   manualRateLimitRetryKey,
+  manualRateLimitRetryRevision,
+  manualRateLimitRetryWithheld,
+  subscribeManualRateLimitRetries,
 } from "@/lib/rate-limits/manual-retry-ledger";
-import { RATE_LIMIT_MANUAL_RETRY_WITHHOLD_MS } from "@/lib/rate-limits/rate-limit-timing";
 import {
   isWindowedRateLimitProvider,
   providerWindowEntries,
@@ -417,7 +419,18 @@ function segmentState(
   readonly state: StatusBarProviderSegmentState;
   readonly reason: RateLimitUnavailableReason | null;
 } {
-  if (rateLimits === null) return { state: "cold", reason: null };
+  if (rateLimits === null) {
+    // A read that REJECTED - the transport gave up, the frame budget ran out -
+    // left nothing retained, and it is the same thing to the reader as a
+    // failure the host put in an envelope: nothing is known about the account,
+    // and the surface has to say so and read again. `cold` is only the state
+    // before a first read, where "no reading yet" is the true sentence. No
+    // reason: a rejection carries no wire reason, and the transient words name
+    // no mechanism anyway.
+    return isError
+      ? { state: "transient", reason: null }
+      : { state: "cold", reason: null };
+  }
   if (!rateLimits.available) {
     // A transient failure only REACHES this branch with nothing retained:
     // `resolveRetainedProviderRateLimits` hands back `lastGood` wherever one
@@ -529,14 +542,17 @@ function accountKey(
 
 /**
  * Whether this account may be offered a retry, or was read by hand too
- * recently (`RATE_LIMIT_MANUAL_RETRY_WITHHOLD_MS`).
+ * recently.
+ *
+ * The bound itself is the ledger's (`manual-retry-ledger.ts`): its stamp is
+ * written at SETTLEMENT, so a read that failed slowly is bounded from when it
+ * failed, it survives this component, and it holds in every window. The same
+ * predicate runs again when a click is dispatched, which is the gate that
+ * decides; this one decides only whether to invite the click.
  *
  * `now` is the strip's shared 60s clock, so the affordance comes back on a tick
  * rather than needing a timer of its own - which makes the bound "at least"
- * 60s rather than exactly 60s, and never less. The stamp it reads is written at
- * SETTLEMENT and lives in `localStorage`, so a read that failed slowly is
- * bounded from when it failed, and the bound survives this component and holds
- * in every window (`manual-retry-ledger.ts`).
+ * 60s rather than exactly 60s, and never less.
  */
 function retryBoundLifted(
   hostId: string,
@@ -544,10 +560,10 @@ function retryBoundLifted(
   profileId: string | null,
   now: number,
 ): boolean {
-  const readAt = manualRateLimitRetryAt(
+  return !manualRateLimitRetryWithheld(
     manualRateLimitRetryKey(hostId, providerId, profileId),
+    now,
   );
-  return readAt === null || now - readAt >= RATE_LIMIT_MANUAL_RETRY_WITHHOLD_MS;
 }
 
 function toSegments(
@@ -729,6 +745,16 @@ export function useStatusBarRateLimitSegments(input: {
   // The shared 60s clock, so a window that expires while the strip is on screen
   // drops out of it within the minute rather than at the next fetch.
   const now = useSampledNow();
+  // The clock lifts a retry bound; this lifts nothing and only makes a bound
+  // VISIBLE the moment it is written - by this window, or by any other one
+  // sharing the stamps. On the clock alone, an offer drawn before a sibling
+  // window's read settled would keep inviting the click for the rest of the
+  // minute it is sampling.
+  useSyncExternalStore(
+    subscribeManualRateLimitRetries,
+    manualRateLimitRetryRevision,
+    manualRateLimitRetryRevision,
+  );
 
   const targets = input.providers
     .filter(
@@ -832,9 +858,15 @@ export function useStatusBarRateLimitSegments(input: {
   // rather than baked into the store so a late-connected provider still lands
   // beside its canonical neighbour without a migration.
   const segments = applySegmentOrder(canonicallyOrdered, segmentOrder);
+  // Transient AND idle. A read already running IS the retry, so scheduling one
+  // against it buys nothing and costs something: on the `httpFetch` lane the
+  // scheduled read refetches that account's observer, and TanStack cancels an
+  // in-flight refetch - which would abort the person's own forced read and
+  // start it over. The target returns when the running read settles and leaves
+  // the account transient, so the delay is measured from the latest failure.
   const transientKeys = new Set(
     segments.flatMap((segment) =>
-      segment.state === "transient"
+      segment.state === "transient" && !segment.fetching
         ? [accountKey(segment.providerId, segment.profileId)]
         : [],
     ),
