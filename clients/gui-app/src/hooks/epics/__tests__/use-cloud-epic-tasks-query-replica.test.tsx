@@ -1,7 +1,13 @@
 import "fake-indexeddb/auto";
 import { createElement, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  renderHook,
+  waitFor,
+  type RenderHookResult,
+} from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ListTasksResponse } from "@traycer/protocol/host/epic/unary-schemas";
 import { createIndexedDbViewReplicaBackend } from "@traycer-clients/shared/view-replica/indexeddb-backend";
@@ -10,7 +16,10 @@ import {
   recordNegotiatedHostManifest,
   resetNegotiatedManifests,
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
-import { useCloudEpicTasksQuery } from "@/hooks/epics/use-cloud-epic-tasks-query";
+import {
+  useCloudEpicTasksQuery,
+  type CloudEpicTasksQueryResult,
+} from "@/hooks/epics/use-cloud-epic-tasks-query";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { LIST_CLOUD_TASKS_REQUEST } from "@/lib/cloud-epic-tasks-query";
 import {
@@ -28,6 +37,7 @@ import {
 } from "@/lib/view-replica/__tests__/replica-fixtures";
 
 const HOST_ID = "host-test";
+const CACHED_IDS = ["cached-one", "cached-two"];
 const USER_ID = "user-test";
 
 type PendingRequest = (
@@ -61,6 +71,26 @@ vi.mock("@/lib/host", () => ({
     },
   }),
 }));
+
+interface Deferred {
+  readonly promise: Promise<ListTasksResponse>;
+  readonly resolve: (page: ListTasksResponse) => void;
+  readonly reject: (error: Error) => void;
+}
+
+function deferred(): Deferred {
+  let resolve: Deferred["resolve"] = () => undefined;
+  let reject: Deferred["reject"] = () => undefined;
+  const promise = new Promise<ListTasksResponse>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
+function idsOf(result: CloudEpicTasksQueryResult): readonly string[] {
+  return taskIds({ tasks: [...result.tasks], hasMore: false });
+}
 
 function makeWrapper(
   queryClient: QueryClient,
@@ -118,25 +148,62 @@ describe("useCloudEpicTasksQuery with the replica tier", () => {
     await viewReplicaStore.evict({ kind: "identity-retired" });
   });
 
-  it("paints the cached History rows once the replica is warm, with no answer from the serving tier", async () => {
+  async function renderWarmCached(): Promise<RenderHookResult<CloudEpicTasksQueryResult, unknown>> {
     await seedPreviousSession();
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false } },
     });
-    const { result } = renderHook(
+    const rendered = renderHook(
       () => useCloudEpicTasksQuery(LIST_CLOUD_TASKS_REQUEST, { enabled: true }),
       { wrapper: makeWrapper(queryClient) },
     );
-    expect(result.current.tasks).toEqual([]);
-
     await act(async () => {
       await viewReplicaStore.warm(USER_ID);
     });
+    return rendered;
+  }
 
-    await waitFor(() => {
-      expect(
-        taskIds({ tasks: [...result.current.tasks], hasMore: false }),
-      ).toEqual(["cached-one", "cached-two"]);
+  it("presents the cached page, stating that it is cached, while the request is pending", async () => {
+    const { result } = await renderWarmCached();
+
+    await waitFor(() => expect(idsOf(result.current)).toEqual(CACHED_IDS));
+    expect(result.current.presentsCachedPage).toBe(true);
+    expect(result.current.firstPagePending).toBe(false);
+    expect(result.current.completeness?.cloudPage).toBe("unavailable");
+  });
+
+  it("keeps the cached page, with no error, after the request fails", async () => {
+    const failure = deferred();
+    mockHostClient.request.mockImplementation(() => failure.promise);
+    const { result } = await renderWarmCached();
+    await waitFor(() => expect(idsOf(result.current)).toEqual(CACHED_IDS));
+
+    await act(async () => {
+      failure.reject(new Error("pool unreachable"));
+      await failure.promise.catch(() => undefined);
     });
+
+    await waitFor(() => expect(result.current.query.status).toBe("error"));
+    expect(idsOf(result.current)).toEqual(CACHED_IDS);
+    expect(result.current.presentsCachedPage).toBe(true);
+    expect(result.current.firstPageError).toBeNull();
+    expect(result.current.firstPagePending).toBe(false);
+    expect(result.current.completeness?.cloudPage).toBe("unavailable");
+  });
+
+  it("replaces the cached page with a settled answer", async () => {
+    const answer = deferred();
+    mockHostClient.request.mockImplementation(() => answer.promise);
+    const { result } = await renderWarmCached();
+    await waitFor(() => expect(idsOf(result.current)).toEqual(CACHED_IDS));
+
+    await act(async () => {
+      answer.resolve(historyPage([taskLight("fresh", null)]));
+      await answer.promise;
+    });
+
+    await waitFor(() => expect(result.current.presentsCachedPage).toBe(false));
+    expect(idsOf(result.current)).toEqual(["fresh"]);
+    expect(result.current.completeness?.cloudPage).toBe("settled");
   });
 });

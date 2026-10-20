@@ -4,8 +4,10 @@ import { act, cleanup, renderHook } from "@testing-library/react";
 import { createIndexedDbViewReplicaBackend } from "@traycer-clients/shared/view-replica/indexeddb-backend";
 import { ViewReplicaStore } from "@traycer-clients/shared/view-replica/store";
 import {
+  noteNotificationFeedConfirmedWrite,
   notificationFeedReplicaAddress,
   notificationFeedReplicaService,
+  rememberNotificationFeed,
 } from "@/lib/view-replica/notification-feed-replica";
 import {
   VIEW_REPLICA_DB_NAME,
@@ -133,5 +135,96 @@ describe("notification feed replica", () => {
         cloudNotificationFeedId("live-3"),
       ].sort(),
     );
+  });
+
+  it("revokes the rows a replica page seeded, and the summary, when the replica stops admitting it", () => {
+    useCloudNotificationsStore.getState().seedFromReplica({
+      rows: [feedRow("cached-1")],
+      summary: FEED_SUMMARY,
+    });
+
+    useCloudNotificationsStore.getState().revokeReplicaSeed();
+
+    const state = useCloudNotificationsStore.getState();
+    expect(seededKeys()).toEqual([]);
+    expect(state.summary).toBeNull();
+    expect(state.hasSnapshot).toBe(false);
+  });
+
+  it("keeps a live snapshot when the replica seed is revoked", () => {
+    useCloudNotificationsStore.getState().applySnapshot({
+      rows: [feedRow("live-1")],
+      summary: FEED_SUMMARY,
+      version: 5,
+    });
+
+    useCloudNotificationsStore.getState().revokeReplicaSeed();
+
+    expect(seededKeys()).toEqual([cloudNotificationFeedId("live-1")]);
+    expect(useCloudNotificationsStore.getState().summary).toEqual(
+      FEED_SUMMARY,
+    );
+  });
+
+  it("stops admitting the cached feed once the account is refused", async () => {
+    await seedPreviousSession(["entry-1"]);
+    await viewReplicaStore.warm(ACCOUNT);
+    const { result } = renderHook(() =>
+      useViewReplicaPaint(notificationFeedReplicaService, address()),
+    );
+    expect(result.current?.rows).toHaveLength(1);
+
+    await act(async () => {
+      await viewReplicaStore.evict({
+        kind: "account-refused",
+        accountId: ACCOUNT,
+      });
+    });
+
+    expect(result.current).toBeNull();
+  });
+
+  describe("confirmed-write floor", () => {
+    function remember(version: number): void {
+      rememberNotificationFeed({
+        accountId: ACCOUNT,
+        servingHostId: HOST,
+        page: {
+          rows: [feedRow("unread")],
+          summary: FEED_SUMMARY,
+          cloudFeedVersion: { major: 1, minor: 2 },
+        },
+        version,
+      });
+    }
+
+    function cachedFeedIds(): readonly string[] | null {
+      const hit = viewReplicaStore.read(
+        notificationFeedReplicaService,
+        address(),
+      );
+      return hit === null ? null : hit.page.rows.map((row) => row.entryId);
+    }
+
+    it("misses a snapshot at the version held when the write was sent, even when it arrives later", async () => {
+      await viewReplicaStore.warm(ACCOUNT);
+      remember(7);
+      noteNotificationFeedConfirmedWrite(ACCOUNT, 7);
+      expect(cachedFeedIds()).toBeNull();
+
+      remember(7);
+
+      expect(cachedFeedIds()).toBeNull();
+    });
+
+    it("hits a snapshot a later version produced", async () => {
+      await viewReplicaStore.warm(ACCOUNT);
+      remember(7);
+      noteNotificationFeedConfirmedWrite(ACCOUNT, 7);
+
+      remember(8);
+
+      expect(cachedFeedIds()).toEqual(["unread"]);
+    });
   });
 });

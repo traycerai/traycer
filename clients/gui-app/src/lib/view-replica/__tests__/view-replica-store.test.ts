@@ -214,7 +214,10 @@ describe("ViewReplicaStore: eviction classes", () => {
       mixedPage(),
       stamp(100),
     );
-    rig.store.noteConfirmedWrite(ACCOUNT, historyReplicaService.service, 500);
+    rig.store.noteConfirmedWrite(ACCOUNT, historyReplicaService.service, {
+      at: 500,
+      generation: null,
+    });
 
     await rig.store.evict({ kind: "account-refused", accountId: ACCOUNT });
 
@@ -273,7 +276,10 @@ describe("ViewReplicaStore: read-your-write floor", () => {
   it("misses a page saved before a confirmed write and hits one saved after", async () => {
     const rig = await warmedWithPage(ACCOUNT);
 
-    rig.store.noteConfirmedWrite(ACCOUNT, historyReplicaService.service, 300);
+    rig.store.noteConfirmedWrite(ACCOUNT, historyReplicaService.service, {
+      at: 300,
+      generation: null,
+    });
     expect(readPage(rig.store, ACCOUNT)).toBeNull();
 
     rig.store.write(
@@ -380,7 +386,10 @@ describe("ViewReplicaStore: what the session records while a warm is in flight",
     const fresh = rig.reopen();
 
     const warming = fresh.warm(ACCOUNT);
-    fresh.noteConfirmedWrite(ACCOUNT, historyReplicaService.service, 300);
+    fresh.noteConfirmedWrite(ACCOUNT, historyReplicaService.service, {
+      at: 300,
+      generation: null,
+    });
     await warming;
     await fresh.drain();
 
@@ -460,5 +469,69 @@ describe("ViewReplicaStore: what the session records while a warm is in flight",
     await fresh.warm(ACCOUNT);
     expect(fresh.isWarm(ACCOUNT)).toBe(true);
     expect(readPage(fresh, ACCOUNT)).toBeNull();
+  });
+});
+
+describe("ViewReplicaStore: two windows over one database", () => {
+  it("keeps a withdrawal another window confirmed when this window writes an older answer and then a floor", async () => {
+    const seeded = await warmedWithPage(ACCOUNT);
+    const windowA = seeded.reopen();
+    const windowB = seeded.reopen();
+    await Promise.all([windowA.warm(ACCOUNT), windowB.warm(ACCOUNT)]);
+
+    await windowA.evict({
+      kind: "scope-withdrawn",
+      accountId: ACCOUNT,
+      scope: organizationRowScope(TEAM),
+      at: 200,
+    });
+    await windowA.drain();
+    windowB.write(
+      historyReplicaService,
+      addressFor(ACCOUNT),
+      mixedPage(),
+      stamp(150),
+    );
+    windowB.noteConfirmedWrite(ACCOUNT, "unrelated.service", {
+      at: 210,
+      generation: null,
+    });
+    await windowB.drain();
+
+    const windowC = seeded.reopen();
+    await windowC.warm(ACCOUNT);
+    const page = readPage(windowC, ACCOUNT);
+    expect(page === null ? null : taskIds(page)).toEqual(["mine"]);
+    expect(page?.completeness?.facets).toBe("partial");
+  });
+
+  it("merges the floors two windows confirmed to the higher one", async () => {
+    const rig = createReplicaRig();
+    await rig.store.warm(ACCOUNT);
+    rig.store.write(
+      historyReplicaService,
+      addressFor(ACCOUNT),
+      mixedPage(),
+      stamp(400),
+    );
+    await rig.store.drain();
+    const windowA = rig.reopen();
+    const windowB = rig.reopen();
+    await Promise.all([windowA.warm(ACCOUNT), windowB.warm(ACCOUNT)]);
+
+    windowA.noteConfirmedWrite(ACCOUNT, historyReplicaService.service, {
+      at: 500,
+      generation: null,
+    });
+    await windowA.drain();
+    windowB.noteConfirmedWrite(ACCOUNT, historyReplicaService.service, {
+      at: 300,
+      generation: null,
+    });
+    await windowB.drain();
+
+    const windowC = rig.reopen();
+    await windowC.warm(ACCOUNT);
+    expect(readPage(windowC, ACCOUNT)).toBeNull();
   });
 });

@@ -142,4 +142,46 @@ describe("ViewReplicaLifecycleMount", () => {
 
     expect(cachedIds(ACCOUNT)).toEqual(["mine", "teams"]);
   });
+
+  it("withdraws a team removed while unverified once a signed-in verdict arrives without it", async () => {
+    await mountSignedIn(ACCOUNT);
+
+    act(() => {
+      useAuthStore.setState({ status: "unverified", shareableTeams: [] });
+    });
+    expect(cachedIds(ACCOUNT)).toEqual(["mine", "teams"]);
+
+    act(() => {
+      useAuthStore.setState({ status: "signed-in", shareableTeams: [] });
+    });
+
+    await waitFor(() => expect(cachedIds(ACCOUNT)).toEqual(["mine"]));
+  });
+
+  it("withdraws a team the first signed-in verdict after a cold start no longer lists", async () => {
+    await seedPreviousSession(ACCOUNT);
+    signIn(ACCOUNT);
+    act(() => {
+      useAuthStore.setState({ shareableTeams: [] });
+    });
+
+    render(<ViewReplicaLifecycleMount />);
+
+    await waitFor(() => expect(cachedIds(ACCOUNT)).toEqual(["mine"]));
+  });
+
+  it("keeps the rows of a team a later signed-in verdict still lists", async () => {
+    await mountSignedIn(ACCOUNT);
+
+    act(() => {
+      useAuthStore.setState({
+        shareableTeams: [
+          ...TEAMS,
+          { teamId: "team-2", slug: "other-slug", avatarUrl: null },
+        ],
+      });
+    });
+
+    expect(cachedIds(ACCOUNT)).toEqual(["mine", "teams"]);
+  });
 });
