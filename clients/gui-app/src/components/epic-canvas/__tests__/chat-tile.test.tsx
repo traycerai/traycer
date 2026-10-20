@@ -311,6 +311,12 @@ vi.mock("@/hooks/host/use-host-stream-client-for", async (importActual) => ({
   useHostStreamClientBindingFor: () => null,
 }));
 
+// Dictation reads the person's selected host through its own surface binding;
+// these tiles do not exercise it.
+vi.mock("@/hooks/host/use-surface-host-stream-binding", () => ({
+  useSurfaceHostStreamBinding: () => null,
+}));
+
 vi.mock("@/lib/host/stream-runtime-context", () => ({
   useWsStreamClient: () => null,
   // No stream client means nothing has been negotiated yet, which is what

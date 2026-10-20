@@ -55,8 +55,20 @@ vi.mock("@/providers/use-runner-host", () => ({
   useRunnerHost: () => ({ openMicrophoneSettings: () => Promise.resolve() }),
 }));
 
+// The availability hook resolves the person's selected host explicitly:
+// `resolveAppWideHostClient(useHostBinding(), useEffectiveHostId())`.
 vi.mock("@/lib/host", () => ({
-  useHostClient: () => ({ getActiveHostId: () => "host-1" }),
+  useHostBinding: () => ({
+    hostClient: {
+      createRequesterForHostId: (hostId: string | null) => ({
+        getActiveHostId: () => hostId,
+      }),
+    },
+  }),
+}));
+
+vi.mock("@/hooks/host/use-effective-host-id", () => ({
+  useEffectiveHostId: () => "host-1",
 }));
 
 vi.mock("@/hooks/host/use-host-query", () => ({

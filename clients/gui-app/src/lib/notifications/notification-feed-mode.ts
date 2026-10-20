@@ -259,17 +259,23 @@ export function useHeldNotificationFeedMode(
  * `hostId` names the host whose unary manifest to read and must be the SAME
  * host `client` is bound to - passing the app-wide host here would gate a
  * remote host's lanes on the local host's capabilities.
+ *
+ * `cloudFeedClient` is the client the cloud feed is opened on: the server
+ * pool's in a build that has one (the feed is a pool-only family), else
+ * `client` itself. Only the cloud projection is read from it; the local
+ * projection and the four partitioned unary methods are the serving host's.
  */
 export function useNotificationFeedModeFor(
   client: IHostStreamClient<HostStreamRpcRegistry> | null,
+  cloudFeedClient: IHostStreamClient<HostStreamRpcRegistry> | null,
   hostId: string | null,
 ): NotificationFeedMode {
   const cloudFeedSupport = useStreamMethodSupportFor(
-    client,
+    cloudFeedClient,
     "host.notifications.cloudFeed.subscribe",
   );
   const cloudFeedVersion = useStreamMethodSchemaVersionFor(
-    client,
+    cloudFeedClient,
     "host.notifications.cloudFeed.subscribe",
   );
   const localFeedVersion = useStreamMethodSchemaVersionFor(

@@ -33,6 +33,12 @@ const host = vi.hoisted<{
   queries: CapturedHostQuery[];
 }>(() => ({ answer: undefined, isError: false, queries: [] }));
 
+// No directory entry and no witness: the chat stays on its own host, which
+// is what `useChatServingHostId` answers in production today.
+vi.mock("@/hooks/host/use-host-directory-entry", () => ({
+  useHostDirectoryEntry: () => null,
+}));
+
 vi.mock("@/hooks/host/use-host-query", () => ({
   useHostQuery: (args: CapturedHostQuery) => {
     host.queries.push(args);

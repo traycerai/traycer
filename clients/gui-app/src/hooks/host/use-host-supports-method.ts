@@ -5,6 +5,27 @@ import {
   subscribeNegotiatedManifests,
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import type { SchemaVersion } from "@traycer/protocol/framework/index";
+import {
+  hostRpcServingTierHostId,
+  readProcessHostRpcTierPlan,
+} from "@traycer-clients/shared/host-client/host-rpc-routing";
+
+/**
+ * The host whose manifest answers for `method`: the pool for a pool-only
+ * method in a build that has one, since that is where the call goes whichever
+ * host the caller names.
+ */
+function manifestHostIdFor(
+  hostId: string | null,
+  method: string,
+): string | null {
+  return hostRpcServingTierHostId(
+    method,
+    hostId,
+    readProcessHostRpcTierPlan(),
+    null,
+  );
+}
 
 /**
  * Whether `hostId` advertised `method` in its last handshake.
@@ -54,9 +75,10 @@ export function useHostMethodSupport(
   hostId: string | null,
   method: string,
 ): boolean | null {
+  const manifestHostId = manifestHostIdFor(hostId, method);
   return useSyncExternalStore(subscribeNegotiatedManifests, () => {
-    if (hostId === null) return null;
-    const methods = getNegotiatedHostMethods(hostId);
+    if (manifestHostId === null) return null;
+    const methods = getNegotiatedHostMethods(manifestHostId);
     if (methods === null) return null;
     return methods.has(method);
   });
@@ -67,8 +89,9 @@ export function useHostMethodSchemaVersion(
   hostId: string | null,
   method: string,
 ): SchemaVersion | null {
+  const manifestHostId = manifestHostIdFor(hostId, method);
   return useSyncExternalStore(subscribeNegotiatedManifests, () => {
-    if (hostId === null) return null;
-    return getNegotiatedHostMethodVersion(hostId, method);
+    if (manifestHostId === null) return null;
+    return getNegotiatedHostMethodVersion(manifestHostId, method);
   });
 }

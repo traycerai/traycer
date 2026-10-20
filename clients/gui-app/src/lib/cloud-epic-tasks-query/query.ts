@@ -5,6 +5,10 @@ import type {
 import { getNegotiatedHostMethods } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import { queryOptions, replaceEqualDeep } from "@tanstack/react-query";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import {
+  hostRpcServingTierHostId,
+  readProcessHostRpcTierPlan,
+} from "@traycer-clients/shared/host-client/host-rpc-routing";
 import type {
   ListTasksRequest,
   ListTasksResponse,
@@ -461,11 +465,18 @@ function fetchOrganizationHistory(
   options: FetchCloudEpicTasksScopedPageOptions,
   admission: DispatchAdmission,
 ): Promise<ListTasksResponse> {
-  const hostId = client.getActiveHostId();
+  // The tier that serves `organization.history` (the pool, in a build with
+  // one), whose manifest is the one that says whether it is there.
+  const servingHostId = hostRpcServingTierHostId(
+    "organization.history",
+    client.getActiveHostId(),
+    readProcessHostRpcTierPlan(),
+    null,
+  );
   if (
     admission !== "authorized" ||
-    hostId === null ||
-    !getNegotiatedHostMethods(hostId)?.has("organization.history")
+    servingHostId === null ||
+    !getNegotiatedHostMethods(servingHostId)?.has("organization.history")
   )
     return Promise.reject(
       new Error("Update this device to filter by labels or groups."),

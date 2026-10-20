@@ -3,6 +3,7 @@ import type { AutoPolicyGetResponseV11 } from "@traycer/protocol/host/auto-mode/
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { useHostClient } from "@/lib/host";
 import { useHostQuery } from "@/hooks/host/use-host-query";
+import { usePoolTierHostClient } from "@/hooks/host/use-pool-tier";
 import { useCloudChatViewerId } from "@/hooks/chats/use-cloud-chat-queries";
 
 // Stable params identity so the host-scoped query key stays referentially
@@ -41,7 +42,8 @@ export function useAutoPolicyQuery(): UseQueryResult<
   AutoPolicyGetResponseV11,
   HostRpcError
 > {
-  const client = useHostClient();
+  // The account's policy is the pool's family (see `usePoolTierHostClient`).
+  const client = usePoolTierHostClient(useHostClient());
   // ACCOUNT-OWNED DATA UNDER A HOST KEY IS A CROSS-IDENTITY LEAK.
   //
   // `["host", hostId, method, params]` says nothing about WHO asked, and an

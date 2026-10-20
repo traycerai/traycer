@@ -53,6 +53,7 @@ import { setEpicChatWorkProbe } from "@/stores/epics/open-epic/session-registry"
 import { subscribeAgentActivity } from "@/stores/agent-activity-store";
 import { getRetentionProfile } from "@/stores/replica-memory/retention-profile";
 import { getOpenEpicRegistry } from "@/lib/registries/epic-session-registry";
+import { useChatServingHostId } from "@/lib/chats/chat-serving-witness";
 import { createManagedDataByteBudget } from "@/stores/replica-memory/managed-data-byte-budget";
 import {
   readProcessMemoryRuntime,
@@ -316,8 +317,15 @@ export function useChatSessionHandleForContainer(
   hostId: string,
   enabled: boolean,
 ): ChatSessionStoreHandle | null {
-  const hostEntry = useHostDirectoryEntry(hostId);
-  const lease = useHostLease(hostId);
+  // The peer that serves this chat's stream: its own host, or - for a team
+  // sandbox's chat at rest - the server pool (`useChatServingHostId`). The
+  // registry still files the session under the chat's own host, so every
+  // reader finds it wherever it is served from; the transport and the
+  // session's scope follow the serving peer, so a change of peer is a fresh
+  // subscribe on the other one.
+  const servingHostId = useChatServingHostId({ hostId, epicId, chatId });
+  const hostEntry = useHostDirectoryEntry(servingHostId);
+  const lease = useHostLease(servingHostId);
   // Chat is a DURABLE per-tab stream: its `WsStreamClient` is OWNED by the
   // session store for the session's warm lifetime, NOT by this tile, so closing
   // the tab (tile unmount) no longer `.close()`s the socket and strands the warm
@@ -401,7 +409,7 @@ export function useChatSessionHandleForContainer(
       epicId,
       chatId,
       userId,
-      hostId,
+      hostId: servingHostId,
       hostKind,
       ownerIdentityKey,
     });
@@ -438,7 +446,7 @@ export function useChatSessionHandleForContainer(
       // the half-built transport so its socket and wake listeners never leak.
       const result = openOwnedDurableStreamClient(
         openTransport,
-        hostId,
+        servingHostId,
         (ws) => {
           boundStreamClient = ws;
           return new ChatStreamClient({
@@ -551,6 +559,7 @@ export function useChatSessionHandleForContainer(
   }, [
     chatId,
     hostId,
+    servingHostId,
     hostKind,
     epicId,
     sessionAllowed,

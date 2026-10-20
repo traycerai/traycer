@@ -7,7 +7,8 @@ import type {
 } from "../auth/request-context-provider";
 import type { IHostMessenger } from "../host-transport/host-messenger";
 import { HostClient, type IHostQueryInvalidator } from "./host-client";
-import type { HostDirectoryEntry } from "./host-directory";
+import { POOL_HOST_ID, type HostDirectoryEntry } from "./host-directory";
+import { settleProcessHostRpcTierPlan } from "./host-rpc-routing";
 import {
   installHostConnectionRegistrySource,
   resetHostConnectionRegistry,
@@ -83,6 +84,11 @@ export interface HostRuntimeOptions<Registry extends VersionedRpcRegistry> {
   readonly authorityRegistry?: HostBindingAuthorityRegistry | null;
   /** Provider-owned in GUI; standalone runtimes may create one. */
   readonly requestCoordinator: HostRequestCoordinator<Registry> | null;
+  /**
+   * The person's selected host, read at dispatch: where `selected-host`
+   * methods (the person's input devices) go, whatever the caller's target.
+   */
+  readonly selectedHostId: () => string | null;
 }
 
 /**
@@ -147,6 +153,15 @@ export class HostRuntime<Registry extends VersionedRpcRegistry> {
       schedulingPolicy: options.schedulingPolicy,
       requestCoordinator: this.requestCoordinator,
       findHostById: (hostId) => options.directory.findById(hostId),
+      routing: {
+        // The directory synthesizes the pool's entry from the build's own
+        // configuration, so this is the build's answer, frozen for the
+        // process life.
+        plan: settleProcessHostRpcTierPlan(
+          options.directory.findById(POOL_HOST_ID),
+        ),
+        selectedHostId: options.selectedHostId,
+      },
     });
   }
 

@@ -12,6 +12,12 @@ import {
   type UseVoiceDictation,
 } from "@/hooks/composer/use-voice-dictation";
 import { useSettingsStore } from "@/stores/settings/settings-store";
+import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
+import {
+  localEntry,
+  personalRemoteEntry,
+  teamSandboxEntry,
+} from "@traycer-clients/shared/host-client/__tests__/routing-entry-fixtures";
 
 // ---------------------------------------------------------------------------
 // Module fakes. The hook's true external boundaries are the speech stream
@@ -85,8 +91,26 @@ const streamRuntimeState = vi.hoisted(
   (): { wsStreamClient: object | null } => ({ wsStreamClient: {} }),
 );
 
-vi.mock("@/lib/host/stream-runtime-context", () => ({
-  useWsStreamClient: () => streamRuntimeState.wsStreamClient,
+// The hook reads the person's SELECTED host, never the ambient stream: the
+// selected host's directory entry decides whether it may carry the microphone,
+// and its surface stream binding supplies the client.
+const selectedHostState = vi.hoisted(
+  (): { entry: HostDirectoryEntry | null } => ({ entry: null }),
+);
+
+vi.mock("@/hooks/host/use-effective-host-id", () => ({
+  useEffectiveHostId: () => selectedHostState.entry?.hostId ?? null,
+}));
+
+vi.mock("@/hooks/host/use-host-directory-entry", () => ({
+  useHostDirectoryEntry: () => selectedHostState.entry,
+}));
+
+vi.mock("@/hooks/host/use-surface-host-stream-binding", () => ({
+  useSurfaceHostStreamBinding: () =>
+    streamRuntimeState.wsStreamClient === null
+      ? null
+      : { wsStreamClient: streamRuntimeState.wsStreamClient },
 }));
 
 // ---------------------------------------------------------------------------
@@ -204,6 +228,7 @@ beforeEach(() => {
   speech.FakeSpeechStreamClient.instances = [];
   FakeAudioContext.instances = [];
   streamRuntimeState.wsStreamClient = {};
+  selectedHostState.entry = localEntry;
   runnerHostState.requestMicrophoneAccess = () => Promise.resolve("granted");
   getUserMediaCalls = 0;
   lastGetUserMediaConstraints = null;
@@ -516,6 +541,35 @@ describe("useVoiceDictation failure logging", () => {
       connectionStatus: "none",
     });
     expect(result.current.failureClass).toBe("not_connected");
+  });
+
+  it("refuses to stream the microphone when the selected host is a sandbox", () => {
+    selectedHostState.entry = teamSandboxEntry;
+    const log = spyOnFailureLog();
+    const { result } = renderDictation();
+
+    act(() => {
+      result.current.start();
+    });
+
+    expect(log.failures()).toHaveLength(1);
+    expect(log.failures()[0][1]).toMatchObject({
+      failureClass: "not_connected",
+      hasStreamClient: false,
+    });
+    expect(speech.FakeSpeechStreamClient.instances).toHaveLength(0);
+  });
+
+  it("streams the microphone to a selected personal remote host", async () => {
+    selectedHostState.entry = personalRemoteEntry;
+    const { result } = renderDictation();
+
+    await act(async () => {
+      result.current.start();
+      await Promise.resolve();
+    });
+
+    expect(speech.FakeSpeechStreamClient.instances).toHaveLength(1);
   });
 
   it("names connection_lost, with the close reason, when the stream drops mid-recording", async () => {

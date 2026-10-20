@@ -7,6 +7,7 @@ import type {
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { useHostClient, type HostRpcRegistry } from "@/lib/host";
 import { useHostMutation } from "@/hooks/host/use-host-query";
+import { usePoolTierHostClient } from "@/hooks/host/use-pool-tier";
 import { useCloudChatViewerId } from "@/hooks/chats/use-cloud-chat-queries";
 import {
   autoModeMutationKeys,
@@ -50,7 +51,8 @@ export function useAutoPolicySetMutation(): UseMutationResult<
   AutoPolicySetRequest,
   SetAutoPolicyContext
 > {
-  const client = useHostClient();
+  // The account's policy is the pool's family (see `usePoolTierHostClient`).
+  const client = usePoolTierHostClient(useHostClient());
   const queryClient = useQueryClient();
   const viewerUserId = useCloudChatViewerId();
   return useHostMutation<

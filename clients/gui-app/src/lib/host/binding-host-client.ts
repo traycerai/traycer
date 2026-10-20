@@ -1,4 +1,6 @@
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import { POOL_HOST_ID } from "@traycer-clients/shared/host-client/host-directory";
+import { readProcessHostRpcTierPlan } from "@traycer-clients/shared/host-client/host-rpc-routing";
 import type { HostRuntimeBinding } from "@/providers/host-runtime-provider";
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
 
@@ -100,4 +102,26 @@ export function resolveNamedHostClient(
     return null;
   }
   return binding.hostClient.createRequesterForHostId(hostId);
+}
+
+/**
+ * The client a POOL-ONLY family (`host-rpc-routing.ts`) is served through:
+ * the server pool's in a build that has one, whatever subtree the caller is
+ * in, and otherwise `surfaceClient`, the client the surface already holds.
+ * The second branch is a fact of the build, not a fallback: no request-time
+ * condition ever reaches it.
+ *
+ * The client routes a pool-only method to the pool on its own, whichever
+ * requester carries it. A family surface still resolves the pool's requester
+ * here because it also KEYS and GATES on the requester's host: its readiness,
+ * its cache entries and their invalidations, and its capability reads then
+ * all name the tier that answers.
+ */
+export function resolvePoolTierHostClient(
+  surfaceClient: HostClient<HostRpcRegistry>,
+): HostClient<HostRpcRegistry> {
+  if (readProcessHostRpcTierPlan().pool === null) {
+    return surfaceClient;
+  }
+  return surfaceClient.createRequesterForHostId(POOL_HOST_ID);
 }
