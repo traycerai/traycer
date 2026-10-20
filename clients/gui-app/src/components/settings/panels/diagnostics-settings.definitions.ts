@@ -45,7 +45,7 @@ export const HOST_DIAGNOSTICS = defineSettingsSection("diagnostics", {
     search: { contributesTo: "page" },
     label: "CLI log level",
     description:
-      "Verbosity of the Traycer CLI's logs. Applies to every Traycer host environment on this machine.",
+      "Verbosity of the Traycer CLI's logs. Applies to every Traycer host on this machine.",
     availableWhen: alwaysAvailable,
     keywords: [],
   },
@@ -55,7 +55,7 @@ export const HOST_DIAGNOSTICS = defineSettingsSection("diagnostics", {
     search: { contributesTo: "page" },
     label: "Host log level",
     description:
-      "Verbosity of the background host process's logs. Applies to every Traycer host environment on this machine.",
+      "Verbosity of the background host process's logs. Applies to every Traycer host on this machine.",
     availableWhen: alwaysAvailable,
     keywords: [],
   },

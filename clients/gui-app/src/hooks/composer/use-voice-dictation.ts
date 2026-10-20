@@ -421,8 +421,8 @@ export function useVoiceDictation(
         fail(
           "capture_unavailable",
           {},
-          "Microphone capture is not available in this environment.",
-          "Microphone capture is not available in this environment.",
+          "Microphone capture isn't available here.",
+          "Microphone capture isn't available here.",
         );
         return null;
       }

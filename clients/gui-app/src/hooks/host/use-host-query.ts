@@ -345,6 +345,20 @@ export interface UseHostMutationOptions<
   readonly mapVariables: (
     variables: TVariables,
   ) => RequestOfMethod<Registry, Method>;
+  /**
+   * Completes the mapped request asynchronously, at DISPATCH, on the client
+   * the request is about to be sent on. The one caller is the executable-write
+   * grant (`lib/environment/executable-write-grant.ts`): a grant is minted for
+   * one host and expires, so it has to be read when the write goes, not when
+   * the variables were built. Inside the dispatch boundary, so a throw here
+   * surfaces as the declared `HostRpcError` like a `mapVariables` throw does.
+   */
+  readonly prepareRequest?:
+    | ((
+        request: RequestOfMethod<Registry, Method>,
+        client: HostRequester<Registry>,
+      ) => Promise<RequestOfMethod<Registry, Method>>)
+    | undefined;
   /** Runs at the raw-response boundary, before TanStack lifecycle callbacks. */
   readonly onResponse?: (
     response: ResponseOfMethod<Registry, Method>,
@@ -464,7 +478,11 @@ export function useHostMutation<
             hostClientUnavailableError(args.method),
           );
         }
-        const params = args.mapVariables(variables);
+        const mapped = args.mapVariables(variables);
+        const params =
+          args.prepareRequest === undefined
+            ? mapped
+            : await args.prepareRequest(mapped, client);
         const requirement = args.requiredHostMethodVersion?.(variables) ?? null;
         const idempotencyKey = args.idempotencyKey?.(variables) ?? null;
         // THREE branches, and the third is the only one that can carry two

@@ -10,10 +10,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { RpcErrorCode } from "@traycer/protocol/framework/index";
 import { buildAgentSendCommand } from "../agent-send";
-import {
-  callHostRpcWithDispatch,
-  PLAIN_DISPATCH,
-} from "../../internal/host-rpc";
+import { callHostRpcWithDispatch } from "../../internal/host-rpc";
 import { HostRpcError } from "../../../../shared/host-transport/host-messenger";
 import { noopLogger } from "../../logger";
 import { CLI_ERROR_CODES, CliError } from "../../runner/errors";
@@ -104,7 +101,7 @@ afterEach(() => {
 });
 
 describe("agent send --workspace", () => {
-  it("without --workspace sends workspace: null with plain dispatch", async () => {
+  it("without --workspace sends workspace: null with the 60 s response deadline", async () => {
     const result = await send(null);
 
     expect(rpcMock).toHaveBeenCalledWith(
@@ -114,9 +111,13 @@ describe("agent send --workspace", () => {
         prompt: "pick this up",
         workspace: null,
       }),
-      PLAIN_DISPATCH,
+      {
+        responseTimeoutMs: 60_000,
+        requiredHostMethodVersion: null,
+        signal: null,
+        failFast: false,
+      },
     );
-    expect(PLAIN_DISPATCH.requiredHostMethodVersion).toBeNull();
     expect(result.exitCode).toBe(0);
   });
 
@@ -127,7 +128,9 @@ describe("agent send --workspace", () => {
       "agent.sendMessage",
       expect.objectContaining({ workspace: "/work/repo" }),
       {
-        ...PLAIN_DISPATCH,
+        responseTimeoutMs: 60_000,
+        signal: null,
+        failFast: false,
         requiredHostMethodVersion: {
           method: "agent.sendMessage",
           version: { major: 1, minor: 1 },

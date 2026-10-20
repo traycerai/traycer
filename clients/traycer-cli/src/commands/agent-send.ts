@@ -7,7 +7,6 @@ import {
   callHostRpcWithDispatch,
   parseCanonicalHostResponse,
   parseUserInput,
-  PLAIN_DISPATCH,
   toAgentCliError,
   type HostRpcDispatch,
 } from "../internal/host-rpc";
@@ -16,13 +15,35 @@ import { cliError, CliError, CLI_ERROR_CODES } from "../runner/errors";
 import type { CommandFn } from "../runner/runner";
 
 /**
+ * The host answers this call once the receiver has DURABLY ACCEPTED the
+ * message, and reaching that point means opening the receiving agent's chat
+ * session when it is not already open. That open is the cost: on a loaded
+ * machine it has been measured at 26s and 38s for one send, against the
+ * transport's 15s default - so the deadline expired while the host was still
+ * on its way to delivering, and the command reported a failure for a message
+ * that then arrived. 60s covers the measured spread with room above it.
+ *
+ * It bounds the RESPONSE wait only. The dial and the handshake keep their own
+ * deadlines, so a host that is genuinely not there still fails in seconds, and
+ * the post-send attestation grace shrinks to its floor as this grows rather
+ * than stacking on top of it.
+ */
+const SEND_MESSAGE_RESPONSE_TIMEOUT_MS = 60_000;
+const SEND_MESSAGE_DISPATCH: HostRpcDispatch = {
+  responseTimeoutMs: SEND_MESSAGE_RESPONSE_TIMEOUT_MS,
+  requiredHostMethodVersion: null,
+  signal: null,
+  failFast: false,
+};
+
+/**
  * `--workspace` rides `agent.sendMessage@1.1`. Below it the field is stripped
  * and the host acts on what is left - a send with no folder - so a send that
  * names one requires 1.1, and an older host refuses it before anything is
  * sent ("update the host").
  */
 const WORKSPACE_SEND_DISPATCH: HostRpcDispatch = {
-  ...PLAIN_DISPATCH,
+  ...SEND_MESSAGE_DISPATCH,
   requiredHostMethodVersion: {
     method: "agent.sendMessage",
     version: { major: 1, minor: 1 },
@@ -69,7 +90,7 @@ export function buildAgentSendCommand(opts: {
       callHostRpcWithDispatch(
         "agent.sendMessage",
         request,
-        workspace === null ? PLAIN_DISPATCH : WORKSPACE_SEND_DISPATCH,
+        workspace === null ? SEND_MESSAGE_DISPATCH : WORKSPACE_SEND_DISPATCH,
       ),
     ).catch((error: unknown) => {
       throw withWorkspaceHint(error, workspace);

@@ -1,3 +1,4 @@
+import type { RestartTargetHost } from "@traycer-clients/shared/host-lock/restart-target";
 import type { HostActivationState } from "./host-state";
 import type {
   HostUpdateAttemptContinuation,
@@ -230,6 +231,36 @@ export const AUTOMATIC_INTENTS_HELD_MESSAGE =
 export const HOST_NOT_SERVICE_RUN_MESSAGE =
   "A host you started in a terminal is running, and Traycer leaves it alone. Stop it there to continue.";
 
+// `host uninstall --all` kept the install because it could not confirm the
+// host stopped: the stop failed, the host is still running, or its pid record
+// or process could not be read. None of these shows the host is not
+// responding, so this says only what happened - including what already had:
+// the CLI turns off the host's automatic start before it asks the host to
+// stop, and that stands.
+export const HOST_UNINSTALL_HOST_RUNNING_MESSAGE =
+  "Traycer was not fully removed. Its automatic start was turned off, but the host could not be confirmed as stopped, so its files were kept. Try again in a moment.";
+
+// A force restart confirmed for one host process found, at the step that
+// would stop it, that another host had been published in its place
+// (`E_HOST_RESTART_TARGET_CHANGED`, or the packaged-macOS continuation's own
+// check), or that the confirmed host had answered again before the restart
+// left the lane head.
+export const HOST_RESTART_TARGET_CHANGED_MESSAGE =
+  "The host started responding again or was replaced, so it was not restarted.";
+
+// `host uninstall --all` refused to stop a host with work in progress, after
+// it had deregistered the service. No route offers a forced uninstall, so
+// this says what happened and when to try again, not a restart refusal.
+export const HOST_UNINSTALL_HOST_BUSY_MESSAGE =
+  "Traycer was not fully removed. Its automatic start was turned off, but the host has work in progress, so it was not stopped and its files were kept. Try again when it is idle.";
+
+// Put in front of any other refusal of an uninstall that had already turned
+// off the host's automatic start (the CLI deregisters the service before a
+// busy stop refuses; packaged macOS removes the login item before the CLI
+// runs), so the person is not told nothing changed.
+export const HOST_STARTUP_TURNED_OFF_NOTE =
+  "Traycer was not fully removed: its automatic start was turned off.";
+
 // Who asked for a local-host mutation. Three methods take it -
 // `convergeReady`, `registerService` and `freePortAndRestart` - and they use
 // DIFFERENT halves of it, which is the distinction the name has to carry:
@@ -275,6 +306,14 @@ export type LocalHostMutationIntent =
 
 export type ReprovisionGuardVerdict =
   | { readonly kind: "proceed" }
+  /**
+   * Proceed, and stop only this host process. The guard confirmed the
+   * mutation for one process, and the lane head is not where the stop
+   * happens: the CLI's lifecycle lock wait and the packaged-macOS
+   * continuation sit between them, so `respawn` carries the process to the
+   * step that stops it, which re-checks it under its own lock.
+   */
+  | { readonly kind: "proceed-for-host"; readonly host: RestartTargetHost }
   | { readonly kind: "abandon"; readonly message: string };
 
 // Per-intent result. Every mutation intent resolves ONE of these - the

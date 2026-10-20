@@ -231,7 +231,7 @@ describe("TUI agent hover card identity (real HoverCard)", () => {
       "High",
     );
     // TUI records have no serviceTier / fast mode field.
-    expect(screen.queryByLabelText("Fast mode")).toBeNull();
+    expect(screen.queryByLabelText(/^Speed:/)).toBeNull();
     expect(screen.queryByText("Fast")).toBeNull();
   });
 

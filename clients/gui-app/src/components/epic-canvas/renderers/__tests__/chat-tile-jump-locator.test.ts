@@ -152,6 +152,7 @@ function subagentSegment(input: {
     spawnToolCallId: null,
     parentId: null,
     workflowMeta: null,
+    toolImageResults: [],
     children: input.children,
   };
 }

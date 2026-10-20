@@ -397,7 +397,7 @@ describe("MobileAppHeader on a cold-restored epic tab", () => {
     renderRestoredAtLanding();
 
     const field = await screen.findByTestId("mobile-epic-header-title");
-    fireEvent.click(field);
+    fireEvent.keyDown(field, { key: "Enter" });
     const input = await screen.findByLabelText("Epic title");
     fireEvent.change(input, { target: { value: "Renamed on the phone" } });
     fireEvent.blur(input);

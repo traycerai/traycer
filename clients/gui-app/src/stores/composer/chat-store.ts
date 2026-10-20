@@ -317,6 +317,9 @@ export interface CommandSegment {
 export interface SubagentSegment {
   id: string;
   kind: "subagent";
+  // A tool owning child blocks is re-cast as this card. Keep that tool's own
+  // results visible on the parent card; ordinary subagents carry an empty list.
+  toolImageResults: ReadonlyArray<ImageGenerationResult>;
   name: string | null;
   agentType: string | null;
   task: string | null;
@@ -683,6 +686,7 @@ export interface AssistantTurnMeta {
   /** Picker-style label resolved from the selected model's reasoning options. */
   readonly reasoningEffortLabel: string | null;
   readonly serviceTier: string | null;
+  readonly serviceTierLabel: string | null;
   /**
    * Cumulative billed cost for the turn in USD, from the turn's final usage.
    * `null` for harnesses that don't price the turn (Codex/Cursor) and for live/
@@ -746,6 +750,12 @@ export interface ChatMessage {
    * reads it.
    */
   conversationRequest?: ConversationRequest;
+  /**
+   * The picture of the member who wrote this user row, in a bot
+   * conversation whose member directory knows one. Absent on every other
+   * row, and on a member with no picture.
+   */
+  senderAvatarUrl?: string;
   structuredContent: JsonContent | null;
   attachments: ReadonlyArray<Attachment>;
   browserAnnotations?: ReadonlyArray<BrowserAnnotationRecord>;

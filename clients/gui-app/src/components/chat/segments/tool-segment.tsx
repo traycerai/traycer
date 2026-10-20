@@ -34,6 +34,7 @@ import { cn } from "@/lib/utils";
 import { collapseToSingleLine } from "@/lib/text/format-single-line";
 import { toolHeaderLine } from "@traycer/protocol/host/agent/gui/tool-input-summary";
 import { AgentHeaderLink } from "./agent-header-link";
+import { a2aSendRefusalSentence } from "./a2a-send-refusal";
 import { AgentMessageBody } from "./agent-message-body";
 import { ReplyExpectedIcon, ReplyExpectedNote } from "./reply-expected";
 import { SegmentCard } from "./segment-card";
@@ -63,6 +64,7 @@ import { isTraycerBrowserReplToolName } from "@traycer/protocol/host/agent/gui/b
 import { isPageToolCall } from "@/components/chat/chat-activity-groups";
 import { McpAppRow } from "./mcp-app-row";
 import { PageRow } from "./page-row";
+import { ToolImageGallery } from "./tool-image-gallery";
 
 interface ToolSegmentProps {
   id: string;
@@ -409,6 +411,11 @@ function GenericToolSegment(props: ToolSegmentProps) {
     progress,
     stackedHeader,
   });
+  const imageGallery = genericToolImageGallery(
+    props.id,
+    toolName,
+    props.imageResults,
+  );
 
   const header = (
     <GenericToolHeader
@@ -458,7 +465,7 @@ function GenericToolSegment(props: ToolSegmentProps) {
         headerFindUnitId={props.headerFindUnitId}
         bodyFindUnitId={null}
         className={undefined}
-        footer={streamingFooter}
+        footer={renderToolFooter(streamingFooter, imageGallery)}
       />
     );
   }
@@ -468,8 +475,8 @@ function GenericToolSegment(props: ToolSegmentProps) {
       onOpenChange={setOpen}
       header={header}
       headerAction={null}
-      collapsedPreview={null}
-      body={body}
+      collapsedPreview={imageGallery}
+      body={renderToolCardBody(body, imageGallery)}
       tone={toolCardTone(hasError, isStreaming)}
       headerPosition="normal"
       bodyOverflow="hidden"
@@ -478,6 +485,41 @@ function GenericToolSegment(props: ToolSegmentProps) {
       bodyFindUnitId={null}
       className={undefined}
     />
+  );
+}
+
+function genericToolImageGallery(
+  id: string,
+  toolName: string,
+  imageResults: ReadonlyArray<ImageGenerationResult>,
+): ReactNode {
+  if (toolName === "image_generation" || imageResults.length === 0) return null;
+  return <ToolImageGallery id={id} imageResults={imageResults} />;
+}
+
+function renderToolFooter(
+  streamingFooter: ReactNode,
+  imageGallery: ReactNode,
+): ReactNode {
+  if (streamingFooter === null && imageGallery === null) return null;
+  return (
+    <div className="flex flex-col gap-2">
+      {streamingFooter}
+      {imageGallery}
+    </div>
+  );
+}
+
+function renderToolCardBody(
+  body: ReactNode,
+  imageGallery: ReactNode,
+): ReactNode {
+  if (imageGallery === null) return body;
+  return (
+    <div className="flex flex-col gap-2">
+      {body}
+      {imageGallery}
+    </div>
   );
 }
 
@@ -749,21 +791,30 @@ function A2ASendToolSegment(
     [collapsibleKey, id, setFindForcedOpen, setOpen],
   );
   const hasError = error !== null && error.length > 0;
+  // A same-principal refusal is not a fault: it is the host's sentence, already
+  // chosen by whether the person may open the target, and it shows as written
+  // instead of as a raw error dump.
+  const refusal = a2aSendRefusalSentence(error);
+  const showsFault = hasError && refusal === null;
+  // A refusal gets the ordinary end-state badge, not the error one: the send
+  // was answered with a sentence, not broken.
   const badgeState = resolveToolBadgeState({
-    hasError,
+    hasError: showsFault,
     isBackgroundComplete: false,
     isStreaming,
     isStopped: false,
   });
+  const refusalLine =
+    refusal === null ? null : <A2ASendRefusalLine sentence={refusal} />;
   const { name: receiverName, onOpen: openReceiver } = useA2ASendReceiver(
     send,
     receipt,
   );
   const delivery = useA2ASendDeliveryPresentation(
     props.agentMessageDelivery,
-    hasError,
+    showsFault,
   );
-  const destructive = hasError || delivery.undelivered;
+  const destructive = showsFault || delivery.undelivered;
 
   // The header is one row and the receiver name is the only element allowed
   // to shrink, so every fixed-width neighbour costs name characters on a
@@ -792,22 +843,36 @@ function A2ASendToolSegment(
     </>
   );
 
-  const preview = (
-    <>
-      {delivery.note}
-      <AgentMessagePreview message={send.message} tone="primary" />
-    </>
+  const messagePreview = (
+    <AgentMessagePreview message={send.message} tone="primary" />
   );
+  // The card hides its preview while open, so the refusal rides both: it is
+  // read without opening the card, and stays once it is opened. The row has
+  // no preview; its footer shows the refusal open or closed.
+  const preview =
+    refusalLine === null ? (
+      <>
+        {delivery.note}
+        {messagePreview}
+      </>
+    ) : (
+      <div className="flex flex-col gap-1.5">
+        {delivery.note}
+        {refusalLine}
+        {messagePreview}
+      </div>
+    );
   const body = open ? (
     <div className="flex flex-col gap-2">
       {delivery.note}
+      {variant === "row" ? null : refusalLine}
       {send.expectReply ? <ReplyExpectedNote /> : null}
       <AgentMessageBody
         value={send.message}
         bodyFindUnitId={bodyFindUnitId}
         isStreaming={isStreaming}
       />
-      {hasError ? (
+      {showsFault ? (
         <SegmentPanel
           label="Error"
           copyValue={error}
@@ -837,7 +902,7 @@ function A2ASendToolSegment(
         headerFindUnitId={null}
         bodyFindUnitId={null}
         className={undefined}
-        footer={null}
+        footer={refusalLine}
       />
     );
   }
@@ -871,13 +936,13 @@ interface A2ASendDeliveryPresentation {
 
 function useA2ASendDeliveryPresentation(
   delivery: AgentMessageDelivery | null,
-  hasError: boolean,
+  showsFault: boolean,
 ): A2ASendDeliveryPresentation {
   const hostEntry = useHostDirectoryEntry(delivery?.targetHostId ?? null);
   if (delivery === null) {
     return {
       undelivered: false,
-      iconClassName: hasError ? "text-destructive" : "text-primary",
+      iconClassName: showsFault ? "text-destructive" : "text-primary",
       srLabel: "Sent message",
       badge: null,
       note: null,
@@ -887,12 +952,12 @@ function useA2ASendDeliveryPresentation(
   const undelivered = view.tone === "undelivered";
   return {
     undelivered,
-    iconClassName: deliveryIconClassName(view, hasError),
+    iconClassName: deliveryIconClassName(view, showsFault),
     srLabel: view.srLabel,
-    // A call error already carries the error badge; a second tag would only
-    // repeat it.
+    // A fault already carries the error badge; a second tag would only repeat
+    // it. A refusal is not a fault (see `a2aSendRefusalSentence`).
     badge:
-      view.badge === null || hasError ? null : (
+      view.badge === null || showsFault ? null : (
         <A2ADeliveryBadge label={view.badge} undelivered={undelivered} />
       ),
     note: <A2ADeliveryNote view={view} />,
@@ -901,9 +966,9 @@ function useA2ASendDeliveryPresentation(
 
 function deliveryIconClassName(
   view: A2ASendDeliveryView,
-  hasError: boolean,
+  showsFault: boolean,
 ): string {
-  if (hasError || view.tone === "undelivered") return "text-destructive";
+  if (showsFault || view.tone === "undelivered") return "text-destructive";
   if (view.tone === "pending") return "text-muted-foreground";
   return "text-primary";
 }
@@ -947,6 +1012,18 @@ function A2ADeliveryNote(props: { readonly view: A2ASendDeliveryView }) {
       )}
     >
       {props.view.note}
+    </p>
+  );
+}
+
+/** A refused send's sentence, verbatim: what happened, and what to do. */
+function A2ASendRefusalLine(props: { readonly sentence: string }) {
+  return (
+    <p
+      className="m-0 text-ui-sm text-muted-foreground"
+      data-testid="a2a-send-refusal"
+    >
+      {props.sentence}
     </p>
   );
 }

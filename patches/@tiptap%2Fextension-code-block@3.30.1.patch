@@ -1,0 +1,47 @@
+diff --git a/dist/index.cjs b/dist/index.cjs
+index 780e96eaf9fb4e060aadb4eb5b9b7dd71742a66c..74891dc638033e1ed503198f0ccd5cc9d76ce273 100644
+--- a/dist/index.cjs
++++ b/dist/index.cjs
+@@ -98,7 +98,8 @@ var CodeBlock = import_core.Node.create({
+   markdownTokenName: "code",
+   parseMarkdown: (token, helpers) => {
+     var _a, _b;
+-    if (((_a = token.raw) == null ? void 0 : _a.startsWith("```")) === false && ((_b = token.raw) == null ? void 0 : _b.startsWith("~~~")) === false && token.codeBlockStyle !== "indented") {
++    const fence = (_a = token.raw) == null ? void 0 : _a.replace(/^ {1,3}/, "");
++    if ((fence == null ? void 0 : fence.startsWith("```")) === false && (fence == null ? void 0 : fence.startsWith("~~~")) === false && token.codeBlockStyle !== "indented") {
+       return [];
+     }
+     return helpers.createNode(
+diff --git a/dist/index.js b/dist/index.js
+index 4ab8861156dc2987e6e01e313b2720f97dc146fb..a6580400134d5b6452e6efa9189b8269f35634df 100644
+--- a/dist/index.js
++++ b/dist/index.js
+@@ -69,7 +69,8 @@ var CodeBlock = Node.create({
+   markdownTokenName: "code",
+   parseMarkdown: (token, helpers) => {
+     var _a, _b;
+-    if (((_a = token.raw) == null ? void 0 : _a.startsWith("```")) === false && ((_b = token.raw) == null ? void 0 : _b.startsWith("~~~")) === false && token.codeBlockStyle !== "indented") {
++    const fence = (_a = token.raw) == null ? void 0 : _a.replace(/^ {1,3}/, "");
++    if ((fence == null ? void 0 : fence.startsWith("```")) === false && (fence == null ? void 0 : fence.startsWith("~~~")) === false && token.codeBlockStyle !== "indented") {
+       return [];
+     }
+     return helpers.createNode(
+diff --git a/src/code-block.ts b/src/code-block.ts
+index 439cb1ddae0bf5acfda68acd27f94b71b811fc5e..9532f4313d4ffeadb78579d41e7fcbf3a76e768e 100644
+--- a/src/code-block.ts
++++ b/src/code-block.ts
+@@ -163,9 +163,12 @@ export const CodeBlock = Node.create<CodeBlockOptions>({
+   markdownTokenName: 'code',
+
+   parseMarkdown: (token, helpers) => {
++    // A fence may be indented up to 3 spaces; marked already strips that
++    // indent from the code it reads, so only the opener check needs it.
++    const fence = token.raw?.replace(/^ {1,3}/, '')
+     if (
+-      token.raw?.startsWith('```') === false &&
+-      token.raw?.startsWith('~~~') === false &&
++      fence?.startsWith('```') === false &&
++      fence?.startsWith('~~~') === false &&
+       token.codeBlockStyle !== 'indented'
+     ) {
+       return []

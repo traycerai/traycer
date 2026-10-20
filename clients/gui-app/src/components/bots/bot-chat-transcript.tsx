@@ -8,6 +8,11 @@ import {
 import type { TranscriptRowLocator } from "@traycer/protocol/persistence/chat-transcript/locate-row";
 import { useChatLocateRow } from "@/hooks/chats/use-chat-locate-row";
 import { replyRowIdFor } from "@/lib/bots/reply-row";
+import {
+  botUserSenderAvatarUrl,
+  botUserSenderLabel,
+  type BotMemberResolver,
+} from "@/lib/bots/bot-member-names";
 import { useStore } from "zustand";
 import { useShallow } from "zustand/react/shallow";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
@@ -28,8 +33,8 @@ import { getModelLabelIndex } from "@/lib/chat/model-label-index";
 import {
   resolveAgentReasoningLabel,
   resolveAgentSenderDisplay,
-  resolveSenderLabel,
   type SenderDisplayContext,
+  resolveAgentServiceTierLabel,
 } from "@/lib/chat/sender-display";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import {
@@ -64,6 +69,9 @@ const EMPTY_SETUP_CARD_WINDOWS: ReadonlyArray<SetupCardWindowIdentity> = [];
  *
  * `linkRequests` wires the user rows' "See reply" link to a scroll of this
  * list, so a resolved request lands on the reply that resolved it.
+ *
+ * `resolveMember` names and pictures the members whose messages the chat
+ * carries; a member it does not know shows as their user id.
  */
 export function BotChatTranscript(props: {
   readonly botId: string;
@@ -72,8 +80,17 @@ export function BotChatTranscript(props: {
   readonly title: string;
   readonly instanceId: string;
   readonly linkRequests: boolean;
+  readonly resolveMember: BotMemberResolver;
 }): ReactNode {
-  const { botId, chatId, hostId, title, instanceId, linkRequests } = props;
+  const {
+    botId,
+    chatId,
+    hostId,
+    title,
+    instanceId,
+    linkRequests,
+    resolveMember,
+  } = props;
   const handle = useChatSessionHandleForContainer(botId, chatId, hostId, true);
   if (handle === null) {
     return (
@@ -100,6 +117,7 @@ export function BotChatTranscript(props: {
         title={title}
         instanceId={instanceId}
         linkRequests={linkRequests}
+        resolveMember={resolveMember}
       />
     </TileErrorBoundary>
   );
@@ -113,9 +131,18 @@ function BotChatTranscriptBody(props: {
   readonly title: string;
   readonly instanceId: string;
   readonly linkRequests: boolean;
+  readonly resolveMember: BotMemberResolver;
 }): ReactNode {
-  const { handle, botId, chatId, hostId, title, instanceId, linkRequests } =
-    props;
+  const {
+    handle,
+    botId,
+    chatId,
+    hostId,
+    title,
+    instanceId,
+    linkRequests,
+    resolveMember,
+  } = props;
   const state = useStore(
     handle.store,
     useShallow((s) => ({
@@ -153,7 +180,7 @@ function BotChatTranscriptBody(props: {
     subscribed: true,
     modelsFetch: "cached-only",
   });
-  const { modelLabels, modelReasoningLabels } = useMemo(
+  const { modelLabels, modelReasoningLabels, modelServiceTierLabels } = useMemo(
     () => getModelLabelIndex(catalog.harnesses),
     [catalog.harnesses],
   );
@@ -163,20 +190,25 @@ function BotChatTranscriptBody(props: {
       collaborators: NO_COLLABORATORS,
       modelLabels,
       modelReasoningLabels,
+      modelServiceTierLabels,
     }),
-    [modelLabels, modelReasoningLabels, profile],
+    [modelLabels, modelReasoningLabels, modelServiceTierLabels, profile],
   );
   const renderedDisplayContext = useMemo<RenderedMessagesDisplayContext>(
     () => ({
       resolveUserSenderLabel: (sender) =>
-        resolveSenderLabel(sender, displayContext),
+        botUserSenderLabel(sender, displayContext, resolveMember),
+      resolveUserSenderAvatarUrl: (sender) =>
+        botUserSenderAvatarUrl(sender, resolveMember),
       resolveAgentSenderDisplay: (sender) =>
         resolveAgentSenderDisplay(sender, displayContext),
       resolveAgentReasoningLabel: (sender, reasoningEffort) =>
         resolveAgentReasoningLabel(sender, reasoningEffort, displayContext),
+      resolveAgentServiceTierLabel: (sender, serviceTier) =>
+        resolveAgentServiceTierLabel(sender, serviceTier, displayContext),
       contentBlocksPreview,
     }),
-    [displayContext],
+    [displayContext, resolveMember],
   );
   const queuedPromptIds = useMemo(
     () => queuedPromptMessageIds(state.queue.items),

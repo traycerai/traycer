@@ -5,10 +5,11 @@ import type {
 import type { StreamConnectionStatus } from "@traycer-clients/shared/host-transport/i-stream-session";
 import type { IncompatibilityUpgradeGuidance } from "@traycer/protocol/framework/index";
 import { HOST_OLDER_THAN_DATA_FATAL_CODE } from "@traycer/protocol/host/store-formats";
-import type {
-  HostReachability,
-  HostReachabilityHostKind,
-  HostReachabilityStatus,
+import {
+  resolvedHostLabel,
+  type HostReachability,
+  type HostReachabilityHostKind,
+  type HostReachabilityStatus,
 } from "@/hooks/agent/use-host-reachability";
 import { HOST_UPDATE_SKEW_COPY } from "@/lib/host/version-skew-copy";
 import {
@@ -142,6 +143,10 @@ export interface ChatTilePreContentFrame {
    * offline.
    */
   readonly reachability: HostReachability;
+  /** See `ChatPreContentInput.cloneAllowed`. */
+  readonly cloneAllowed: boolean;
+  /** See `ChatPreContentInput.hasReadySession`. */
+  readonly hasReadySession: boolean;
 }
 
 /**
@@ -269,11 +274,61 @@ export interface ChatPreContentInput {
   readonly hostLabel: string | null;
   /** `hostIsBehindClient` over the two app versions. */
   readonly hostBehindClient: boolean;
+  /**
+   * Whether the offline strip above this body offers Clone agent - the same
+   * role gate as `ChatDeadTileBanner`'s `cloneAllowed`, so the body never
+   * points at a button the strip does not draw.
+   */
+  readonly cloneAllowed: boolean;
+  /**
+   * Whether this client holds a ready live session to the host
+   * (`useRemoteSessionPollReadiness`). It is firsthand proof the host is up,
+   * so a dead lease that has not caught up with it draws no offline strip.
+   */
+  readonly hasReadySession: boolean;
   readonly elapsed: ChatPreContentElapsed;
 }
 
+/**
+ * The label the chat tile names its host by, in the strip and the body alike,
+ * or `null` for "the host".
+ *
+ * `useHostReachability` falls back to the raw host id wherever the directory
+ * has no label - a listed entry with an empty one, a host it does not list -
+ * and `resolvedHostLabel` clears only the `checking` state. A host id is not
+ * a name a person can act on, so it reads as no label here.
+ */
+export function chatTileHostLabel(
+  reachability: HostReachability,
+  hostId: string,
+): string | null {
+  const label = resolvedHostLabel(reachability);
+  return label === null || label.length === 0 || label === hostId
+    ? null
+    : label;
+}
+
+/**
+ * Which strip `ChatTile` draws, and the only place that decides it: the tile
+ * mounts its banner off this answer, and the body reads the same one.
+ *
+ * The directory decides first. A lease that reads dead and offline also draws
+ * the offline strip while the directory still says reachable or checking: the
+ * lease is the stronger evidence (refusals this client saw), and the
+ * directory's cloud presence keeps a host that just vanished connectable for
+ * minutes. Without this the body said the host was offline while nothing
+ * above it offered a way to continue. A host that is starting keeps its
+ * starting strip, which never offers Clone.
+ *
+ * A ready live session outranks the lease, as it outranks the directory in
+ * `useHostReachability`: the lease arrives on its own path and can still read
+ * dead for a render after the session to the host is up, and a Clone offer
+ * over a working chat invites a fork of a healthy agent.
+ */
 export function chatPreContentStrip(
   status: HostReachabilityStatus,
+  lease: HostLeaseSnapshot | null,
+  hasReadySession: boolean,
 ): ChatPreContentStrip {
   switch (status) {
     case "host-starting":
@@ -282,8 +337,12 @@ export function chatPreContentStrip(
       return "offline";
     case "checking":
     case "reachable":
-      return "none";
+      return !hasReadySession && leaseReadsOffline(lease) ? "offline" : "none";
   }
+}
+
+function leaseReadsOffline(lease: HostLeaseSnapshot | null): boolean {
+  return lease?.status === "dead" && lease.dead.reason === "offline";
 }
 
 export function chatPreContentHost(
@@ -344,7 +403,11 @@ export function chatPreContentElapsed(
 export function chatPreContentAxes(
   input: ChatPreContentInput,
 ): ChatPreContentAxes {
-  const strip = chatPreContentStrip(input.reachabilityStatus);
+  const strip = chatPreContentStrip(
+    input.reachabilityStatus,
+    input.lease,
+    input.hasReadySession,
+  );
   return {
     fatal: chatPreContentFatal(input.session?.fatalClose ?? null),
     host: chatPreContentHost(input.lease, strip),
@@ -452,7 +515,7 @@ export function describeChatPreContent(
       return {
         kind,
         headline: tileDeadMessage(deadStateOf(input), "agent", input.hostLabel),
-        detail: null,
+        detail: hostGoneDetail(axes, input, host),
         settled: false,
         spinner: false,
         layout: "plain",
@@ -619,6 +682,30 @@ function waitingForHostHeadline(
     case "dead":
       return `Connecting to ${host}…`;
   }
+}
+
+/**
+ * Arm 3's second line: what the reader can do about a remote host that is
+ * offline. The other machine is the one that needs a person, and the strip
+ * above is where this one continues - offered only while that strip draws
+ * Clone agent. A local host's own recovery, and a removed or incompatible
+ * host, keep the headline alone. So does a host this client holds a ready
+ * live session to: that machine is already on and running Traycer, and only
+ * the lease has not caught up.
+ */
+function hostGoneDetail(
+  axes: ChatPreContentAxes,
+  input: ChatPreContentInput,
+  host: string,
+): string | null {
+  if (input.hostKind !== "remote" || input.hasReadySession) return null;
+  if (deadStateOf(input).reason !== "offline") return null;
+  // Says what to do on that machine and nothing about its power: a lease
+  // reads offline whether the machine is off or only unreachable from here.
+  const openThere = `Open Traycer on ${host}`;
+  return axes.strip === "offline" && input.cloneAllowed
+    ? `${openThere}, or continue here as a new agent.`
+    : `${openThere}.`;
 }
 
 /** Arm 4's second line, first match wins. */

@@ -3,14 +3,22 @@ import type {
   RenameTuiAgentRequest,
 } from "@traycer/protocol/host/epic/unary-schemas";
 import {
+  enactedOwnerHostId,
+  useEpicRecordLifecycleMutationClient,
   useEpicRecordMutationClient,
+  type EpicRecordLifecycleMutationContext,
   type EpicRecordMutationContext,
   type EpicRecordMutationTarget,
 } from "@/hooks/epic/use-epic-record-mutation-client";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
+import { getOpenEpicRegistry } from "@/lib/registries/epic-session-registry";
 import { useQueryClient } from "@tanstack/react-query";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
-import type { HostRpcRegistry } from "@/lib/host";
+import { useHostBinding, type HostRpcRegistry } from "@/lib/host";
+import {
+  recordOwnerHostLabel,
+  toastRequestedRecordWrite,
+} from "@/lib/epics/record-write-outcome-toast";
 import { useHostMutation } from "@/hooks/host/use-host-query";
 import { useEpicSessionHostClient } from "@/hooks/epic/use-epic-session-host-client";
 import { toastFromHostError } from "@/lib/host-error-toast";
@@ -83,7 +91,11 @@ export type DeleteTuiAgentMutationInput = DeleteTuiAgentRequest &
 export type RenameTuiAgentMutationInput = RenameTuiAgentRequest &
   EpicRecordMutationTarget;
 
-/** Delete on the owning host, which also tears down its runtime and worktree binding. */
+/**
+ * Delete on the owning host, which also tears down its runtime and worktree
+ * binding. When the owner is down the call goes to a live host, which deletes
+ * the cloud row (`outcome: "requested"`); the owner tears down when it is back.
+ */
 export function useEpicDeleteTuiAgent() {
   return useEpicDeleteTuiAgentMutation("individual");
 }
@@ -100,53 +112,92 @@ export function useEpicDeleteTuiAgentInBatch() {
 function useEpicDeleteTuiAgentMutation(
   failurePresentation: "individual" | "aggregate",
 ) {
-  const client = useEpicRecordMutationClient();
+  const route = useEpicRecordLifecycleMutationClient("epic.deleteTuiAgent");
   const sessionClient = useEpicSessionHostClient();
+  const binding = useHostBinding();
   const queryClient = useQueryClient();
   return useHostMutation<
     HostRpcRegistry,
     "epic.deleteTuiAgent",
-    EpicRecordMutationContext,
+    EpicRecordLifecycleMutationContext,
     DeleteTuiAgentMutationInput
   >({
-    client,
+    client: route.client,
     method: "epic.deleteTuiAgent",
     mapVariables: ({ epicId, tuiAgentId }) => ({ epicId, tuiAgentId }),
+    requiredHostMethodVersion: route.requiredHostMethodVersion,
     options: {
-      onMutate: ({ hostId }) => ({
-        hostId,
+      onMutate: (variables) => ({
+        hostId: variables.hostId,
         viewerHostId: sessionClient?.getActiveHostId() ?? null,
+        servingHostId: route.servingHostId(variables),
       }),
-      onSuccess: (_data, variables, ctx) => {
+      onSuccess: (data, variables, ctx) => {
+        // Every follow-up below is keyed to the host whose record changed: a
+        // stand-in's `applied` means authority had moved to it, and a
+        // `requested` answer names the owner it filed for (`enactedOwnerHostId`).
+        const ownerHostId = enactedOwnerHostId(data, ctx);
         // Hook callbacks survive the row unmounting before the response arrives.
-        if (ctx.hostId !== null) {
+        if (ownerHostId !== null) {
           useEpicCanvasStore
             .getState()
             .closeConfirmedDeletedAgentTiles(
               variables.epicId,
               variables.tuiAgentId,
-              ctx.hostId,
+              ownerHostId,
               "terminal-agent",
             );
         }
         // The deletion is a registry fact on a migrated host; without this the
-        // row would linger in the tree until the next poll tick.
-        for (const hostId of new Set([ctx.hostId, ctx.viewerHostId])) {
+        // row would linger in the tree until the next poll tick. The visible
+        // session may have been replaced while the write travelled, and its
+        // list fetched before the delete committed.
+        for (const hostId of new Set([
+          ctx.hostId,
+          ownerHostId,
+          ctx.viewerHostId,
+          ctx.servingHostId,
+          getOpenEpicRegistry().peek(variables.epicId)?.hostId ?? null,
+        ])) {
           invalidateEpicTuiAgentRecords(queryClient, hostId);
         }
-        Analytics.getInstance().track(AnalyticsEvent.TerminalAgentStopped, {
-          source: "direct_ui",
-        });
+        // Only an applied delete stopped the agent: a requested one deleted
+        // the cloud row, and the agent runs until its owner is back.
+        if (data.outcome === "applied") {
+          Analytics.getInstance().track(AnalyticsEvent.TerminalAgentStopped, {
+            source: "direct_ui",
+          });
+        }
+        if (data.outcome === "requested" && ownerHostId !== null) {
+          toastRequestedRecordWrite({
+            write: "remove-terminal-agent",
+            ownerHostId,
+            hostLabel: recordOwnerHostLabel(binding, ownerHostId),
+          });
+        }
       },
-      onError:
-        failurePresentation === "individual"
-          ? (error) => {
-              toastFromOwnerHostWriteError(
-                error,
-                "Couldn't delete terminal agent.",
-              );
-            }
-          : undefined,
+      onError: (error, variables, ctx) => {
+        // The host may have committed the delete before its answer was lost,
+        // so refresh every list it could have changed - the routed owner's,
+        // the viewer's, the host the call went to and the visible session's -
+        // whichever way the failure is presented.
+        if (ctx !== undefined) {
+          for (const hostId of new Set([
+            ctx.hostId,
+            ctx.viewerHostId,
+            ctx.servingHostId,
+            getOpenEpicRegistry().peek(variables.epicId)?.hostId ?? null,
+          ])) {
+            invalidateEpicTuiAgentRecords(queryClient, hostId);
+          }
+        }
+        if (failurePresentation === "individual") {
+          toastFromOwnerHostWriteError(
+            error,
+            "Couldn't delete terminal agent.",
+          );
+        }
+      },
     },
   });
 }
@@ -177,11 +228,16 @@ export function useEpicRenameTuiAgent() {
         hostId,
         viewerHostId: sessionClient?.getActiveHostId() ?? null,
       }),
-      onSuccess: (_data, _variables, ctx) => {
+      onSuccess: (_data, variables, ctx) => {
         // Same refresh as the chat rename: on a migrated host the new title
         // lives in the registry, so without this the row keeps its old title
-        // until the poll fires - a rename that reads as a no-op.
-        for (const hostId of new Set([ctx.hostId, ctx.viewerHostId])) {
+        // until the poll fires - a rename that reads as a no-op. The visible
+        // session too: it may have been replaced while the rename travelled.
+        for (const hostId of new Set([
+          ctx.hostId,
+          ctx.viewerHostId,
+          getOpenEpicRegistry().peek(variables.epicId)?.hostId ?? null,
+        ])) {
           invalidateEpicTuiAgentRecords(queryClient, hostId);
         }
         Analytics.getInstance().track(AnalyticsEvent.TerminalRenamed, {

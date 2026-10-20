@@ -63,7 +63,7 @@ function buildFixture(): Fixture {
     revision: 0,
     identityGeneration: 0,
     localHostId: null,
-    hosts: [{ hostId: HOST_ID, kind: "remote" }],
+    hosts: [{ hostId: HOST_ID, kind: "remote", teamOwned: false }],
   });
   const identity = new InMemoryAuthorityIdentitySource("acct-1");
   const engine = new SelectionAuthorityEngineImpl({
@@ -273,7 +273,9 @@ describe("TransportEvidenceRelay - inventory replay across a kernel replacement"
     // the relay consumes rather than trusting the consumer.
     release();
     fixture.fleet.publish(0, null, []);
-    fixture.fleet.publish(0, null, [{ hostId: HOST_ID, kind: "remote" }]);
+    fixture.fleet.publish(0, null, [
+      { hostId: HOST_ID, kind: "remote", teamOwned: false },
+    ]);
 
     const second = fixture.newKernel();
     fixture.relay.bind(second.kernel);
@@ -306,7 +308,9 @@ describe("TransportEvidenceRelay - inventory replay across a kernel replacement"
     // The incoming identity needs its own fleet, or the engine adopts the
     // EMPTY one and there is no lease to read at all - a transition detail,
     // not the property under test.
-    fixture.fleet.publish(1, null, [{ hostId: HOST_ID, kind: "remote" }]);
+    fixture.fleet.publish(1, null, [
+      { hostId: HOST_ID, kind: "remote", teamOwned: false },
+    ]);
     await settle();
 
     expect(leaseFor(fixture.engine).status).not.toBe("restarting-expected");

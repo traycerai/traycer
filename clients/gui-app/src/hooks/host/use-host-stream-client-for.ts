@@ -5,10 +5,20 @@ import { DEFAULT_DIAL_TIMEOUT_MS } from "@traycer-clients/shared/host-transport/
 import { createWhatwgStreamWebSocketFactory } from "@traycer-clients/shared/host-transport/whatwg-stream-ws-factory";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import {
+  terminalFatalCodeOf,
+  useFrozenSandboxRebuildPark,
+} from "@/lib/host/frozen-sandbox-rebuild-park";
+import { sandboxFreezeOf } from "@/lib/host/host-messenger";
+import {
   isRemoteHostDirectoryEntry,
   type RemoteHostDirectoryEntry,
+  type RemoteHostSandboxFacts,
 } from "@traycer-clients/shared/host-client/remote-fetcher";
-import { createRemoteHostTransport } from "@traycer-clients/shared/host-transport/remote/index";
+import {
+  createRemoteHostTransport,
+  remoteOpenAuthFor,
+  type RemoteOpenAuth,
+} from "@traycer-clients/shared/host-transport/remote/index";
 import type { HostStatusDTO } from "@traycer/protocol/host/host-status";
 import {
   hostRpcRegistry,
@@ -23,6 +33,7 @@ import type { HostClient } from "@traycer-clients/shared/host-client/host-client
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
 import {
   appHostCredentialMintFlow,
+  mintAppMemberCredential,
   noteHostCredentialState,
 } from "@/lib/auth/host-credential-provisioning";
 import { acquireHostStreamClient } from "@/lib/host/host-stream-client-cache";
@@ -73,6 +84,28 @@ const PLACEHOLDER_REMOTE_STATUS: HostStatusDTO = {
   appVersion: null,
   lastSeenAt: null,
 };
+
+/**
+ * Inert placeholder for a fabricated sandbox entry, for the same reason as
+ * {@link PLACEHOLDER_REMOTE_STATUS}: transport construction reads only whether
+ * the entry HAS sandbox facts (it decides what `OPEN` presents), never them.
+ */
+const PLACEHOLDER_SANDBOX_FACTS: RemoteHostSandboxFacts = {
+  state: null,
+  frozen: false,
+  profile: null,
+  ownerTeamName: null,
+  ownerTeamId: null,
+};
+
+/** What a remote target's `OPEN` presents; `null` for a local target or none. */
+function openAuthOfTarget(
+  target: HostDirectoryEntry | null,
+): RemoteOpenAuth | null {
+  return target !== null && isRemoteHostDirectoryEntry(target)
+    ? remoteOpenAuthFor(target)
+    : null;
+}
 
 export interface HostStreamClientBinding {
   readonly client: IHostStreamClient<HostStreamRpcRegistry>;
@@ -286,6 +319,7 @@ export function buildHostStreamClient(params: {
       authnBaseUrl: params.authnBaseUrl,
       hostPublicKey: params.target.publicKey,
       bearer: params.bearer,
+      openAuth: remoteOpenAuthFor(params.target),
       cloudAuthorized: params.cloudAuthorized,
       // Same UNAUTHORIZED recovery the local branch wires below: an expired
       // bearer at a wake-time re-attach revalidates + redials instead of
@@ -303,6 +337,7 @@ export function buildHostStreamClient(params: {
       evidence: transportEvidenceRelay,
       clientIdentity: getGuiClientIdentity(),
       proactiveWakeEligible: params.proactiveWakeEligible,
+      mintMemberCredential: mintAppMemberCredential,
     });
     if (remoteTransport === null) return null;
     if (params.autoStart) {
@@ -428,9 +463,16 @@ export function useHostStreamClientBindingFor(
     target !== null && isRemoteHostDirectoryEntry(target)
       ? target.publicKey
       : null;
+  // A primitive, like the three above: what `OPEN` presents is fixed for a
+  // host id's life, and the entry object's identity must not churn the build.
+  const endpointOpenAuth = openAuthOfTarget(target);
 
   const [binding, setBinding] = useState<HostStreamClientBinding | null>(null);
   const [rebuildNonce, setRebuildNonce] = useState(0);
+  // A frozen sandbox refuses every fresh session's grant, so its close parks
+  // the rebuild until the list shows the sandbox thawed or gone.
+  const { parkIfFrozen, releases: frozenParkReleases } =
+    useFrozenSandboxRebuildPark(sandboxFreezeOf(target));
   const teardownInProgressRef = useRef(false);
   // Same rebuild pacing the app-wide `HostStreamProvider` runs, and needed here
   // MORE than there: that provider follows the active host, while this hook
@@ -501,6 +543,13 @@ export function useHostStreamClientBindingFor(
             remoteStatus: PLACEHOLDER_REMOTE_STATUS,
             // Fabricated endpoint, not a directory verdict: never in fuse grace.
             relayFuseGrace: false,
+            // Only its PRESENCE is read here (`remoteOpenAuthFor`, so a
+            // sandbox's OPEN presents a session grant); the facts themselves
+            // are the real entry's business, not this fabricated one's.
+            sandbox:
+              endpointOpenAuth === "session-grant"
+                ? PLACEHOLDER_SANDBOX_FACTS
+                : null,
           } satisfies RemoteHostDirectoryEntry)
         : ({
             hostId: endpointHostId,
@@ -589,11 +638,13 @@ export function useHostStreamClientBindingFor(
     authnBaseUrl,
     endpointHostId,
     endpointKind,
+    endpointOpenAuth,
     endpointPublicKey,
     endpointWebsocketUrl,
     globalClient,
     rebuildBackoff,
     rebuildNonce,
+    frozenParkReleases,
     transportKey,
     userId,
   ]);
@@ -637,6 +688,13 @@ export function useHostStreamClientBindingFor(
     };
     const rebuild = (): void => {
       if (teardownInProgressRef.current) return;
+      if (parkIfFrozen(terminalFatalCodeOf(client))) {
+        appLogger.info(
+          "[stream] host stream client closed on a frozen sandbox - rebuild held until it thaws",
+          { client: client.instanceId },
+        );
+        return;
+      }
       const delayMs = rebuildBackoff.nextRebuildDelayMs(Date.now());
       appLogger.warn(
         "[stream] transient host stream client closed underneath its binding - rebuilding",
@@ -664,7 +722,7 @@ export function useHostStreamClientBindingFor(
       unsubscribe();
       clearBackoffTimer();
     };
-  }, [client, rebuildBackoff]);
+  }, [client, rebuildBackoff, parkIfFrozen]);
 
   // Wake a binding whose backoff was earned entirely under a cloud capability
   // that has since come back. Both halves are needed and neither is sufficient:

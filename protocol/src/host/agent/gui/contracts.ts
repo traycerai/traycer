@@ -7,6 +7,7 @@ import {
   getGuiAgentPlanRequestSchema,
   getGuiAgentPlanResponseSchema,
   listGuiAgentCommandsRequestSchema,
+  listGuiAgentCommandsRequestSchemaV11,
   listGuiAgentCommandsResponseSchema,
   listGuiAgentModelsRequestSchema,
   listGuiAgentModelsResponseSchema,
@@ -24,6 +25,7 @@ import {
   listGuiHarnessesResponseSchemaV90,
   listGuiHarnessesResponseSchemaV91,
   listGuiHarnessesResponseSchemaV92,
+  listGuiHarnessesResponseSchemaV100,
   listGuiHarnessesResponseSchemaV70,
   guiHarnessOptionSchemaV10,
   guiHarnessOptionSchemaV21,
@@ -1013,12 +1015,15 @@ export const agentGuiListHarnessesDowngradeV9ToV1 = defineDowngradePath<
 //
 // Major 9 froze above because `1.5.0` shipped it. Every bridge below is the v9
 // bridge one major up: same projection, same filter, same landing minor, one
-// more id dropped.
+// more id dropped. They start from 10.1, the line's latest minor.
 export const agentGuiListHarnessesV100 = defineRpcContract({
   method: "agent.gui.listHarnesses",
   schemaVersion: { major: 10, minor: 0 } as const,
   requestSchema: listGuiHarnessesRequestSchema,
-  responseSchema: listGuiHarnessesResponseSchema,
+  // Frozen when 10.1 opened: 10.0 is released (`host-v1.5.1`), so it serves
+  // the row those peers negotiate rather than the live one. See
+  // `guiHarnessOptionSchemaV100`.
+  responseSchema: listGuiHarnessesResponseSchemaV100,
 });
 
 export const agentGuiListHarnessesUpgradeV92ToV100 = defineUpgradePath<
@@ -1033,18 +1038,53 @@ export const agentGuiListHarnessesUpgradeV92ToV100 = defineUpgradePath<
   upgradeResponse: (response) => response,
 });
 
-export const agentGuiListHarnessesDowngradeV10ToV9 = defineDowngradePath<
+/**
+ * `agent.gui.listHarnesses@10.1` - the row's `sandboxCredentialMode` and
+ * `sandboxCredentialNote`: how a harness reaches its provider on a sandbox
+ * host, where no user credential is stored.
+ *
+ * A MINOR, and with no `responseGrowthProjectionGated`: both are new KEYS,
+ * which the within-major re-parse strips for a 10.0 peer (the 9.2
+ * `judgeDefaultModel` precedent). The mode's own enum is new with the key, so
+ * it grows nothing a 10.0 peer can read.
+ *
+ * Its own minor rather than a widening of 10.0, because 10.0 is released: a
+ * client and a `host-v1.5.1` host both negotiating 10.0 skip the response
+ * parse by cast, so a key added in place would be one the declared type
+ * promises and the wire does not keep.
+ */
+export const agentGuiListHarnessesV101 = defineRpcContract({
+  method: "agent.gui.listHarnesses",
+  schemaVersion: { major: 10, minor: 1 } as const,
+  requestSchema: listGuiHarnessesRequestSchema,
+  responseSchema: listGuiHarnessesResponseSchema,
+});
+
+export const agentGuiListHarnessesUpgradeV100ToV101 = defineUpgradePath<
   typeof agentGuiListHarnessesV100,
-  typeof agentGuiListHarnessesV92
+  typeof agentGuiListHarnessesV101
 >({
   from: { major: 10, minor: 0 },
+  to: { major: 10, minor: 1 },
+  upgradeRequest: (request) => request,
+  // Nothing to fill: both keys are optional on 10.1, and a 10.0 host is not a
+  // sandbox host that knows its launch states. Absent stays absent, which the
+  // picker already reads as "say nothing".
+  upgradeResponse: (response) => response,
+});
+
+export const agentGuiListHarnessesDowngradeV10ToV9 = defineDowngradePath<
+  typeof agentGuiListHarnessesV101,
+  typeof agentGuiListHarnessesV92
+>({
+  from: { major: 10, minor: 1 },
   // Lands on 9.2, major 9's latest installed minor; a 9.0 or 9.1 caller's own
   // contract parse then strips the keys its minor predates.
   to: { major: 9, minor: 2 },
   downgradeRequest: (request) => ({ ok: true, value: request }),
   // Drop the harnesses major 9 cannot spell so an already-shipped major-9
-  // client's strict decode never sees one. Nothing else differs: the row body
-  // is the one 9.2 shipped.
+  // client's strict decode never sees one. The frozen 9.2 parse strips the two
+  // keys 10.1 added; nothing else differs from the row 9.2 shipped.
   downgradeResponse: (response) => ({
     ok: true,
     value: listGuiHarnessesResponseSchemaV92.parse({
@@ -1056,10 +1096,10 @@ export const agentGuiListHarnessesDowngradeV10ToV9 = defineDowngradePath<
 });
 
 export const agentGuiListHarnessesDowngradeV10ToV8 = defineDowngradePath<
-  typeof agentGuiListHarnessesV100,
+  typeof agentGuiListHarnessesV101,
   typeof agentGuiListHarnessesV80
 >({
-  from: { major: 10, minor: 0 },
+  from: { major: 10, minor: 1 },
   to: { major: 8, minor: 0 },
   downgradeRequest: (request) => ({ ok: true, value: request }),
   downgradeResponse: (response) => ({
@@ -1075,10 +1115,10 @@ export const agentGuiListHarnessesDowngradeV10ToV8 = defineDowngradePath<
 });
 
 export const agentGuiListHarnessesDowngradeV10ToV7 = defineDowngradePath<
-  typeof agentGuiListHarnessesV100,
+  typeof agentGuiListHarnessesV101,
   typeof agentGuiListHarnessesV71
 >({
-  from: { major: 10, minor: 0 },
+  from: { major: 10, minor: 1 },
   // Lands on 7.1, major 7's latest installed minor; a frozen-7.0 caller's own
   // contract parse then strips the 7.1-only `authStatus` key.
   to: { major: 7, minor: 1 },
@@ -1096,10 +1136,10 @@ export const agentGuiListHarnessesDowngradeV10ToV7 = defineDowngradePath<
 });
 
 export const agentGuiListHarnessesDowngradeV10ToV6 = defineDowngradePath<
-  typeof agentGuiListHarnessesV100,
+  typeof agentGuiListHarnessesV101,
   typeof agentGuiListHarnessesV60
 >({
-  from: { major: 10, minor: 0 },
+  from: { major: 10, minor: 1 },
   to: { major: 6, minor: 0 },
   downgradeRequest: (request) => ({ ok: true, value: request }),
   downgradeResponse: (response) => ({
@@ -1115,10 +1155,10 @@ export const agentGuiListHarnessesDowngradeV10ToV6 = defineDowngradePath<
 });
 
 export const agentGuiListHarnessesDowngradeV10ToV5 = defineDowngradePath<
-  typeof agentGuiListHarnessesV100,
+  typeof agentGuiListHarnessesV101,
   typeof agentGuiListHarnessesV50
 >({
-  from: { major: 10, minor: 0 },
+  from: { major: 10, minor: 1 },
   to: { major: 5, minor: 0 },
   downgradeRequest: (request) => ({ ok: true, value: request }),
   downgradeResponse: (response) => ({
@@ -1134,10 +1174,10 @@ export const agentGuiListHarnessesDowngradeV10ToV5 = defineDowngradePath<
 });
 
 export const agentGuiListHarnessesDowngradeV10ToV4 = defineDowngradePath<
-  typeof agentGuiListHarnessesV100,
+  typeof agentGuiListHarnessesV101,
   typeof agentGuiListHarnessesV40
 >({
-  from: { major: 10, minor: 0 },
+  from: { major: 10, minor: 1 },
   to: { major: 4, minor: 0 },
   downgradeRequest: (request) => ({ ok: true, value: request }),
   downgradeResponse: (response) => ({
@@ -1153,10 +1193,10 @@ export const agentGuiListHarnessesDowngradeV10ToV4 = defineDowngradePath<
 });
 
 export const agentGuiListHarnessesDowngradeV10ToV3 = defineDowngradePath<
-  typeof agentGuiListHarnessesV100,
+  typeof agentGuiListHarnessesV101,
   typeof agentGuiListHarnessesV30
 >({
-  from: { major: 10, minor: 0 },
+  from: { major: 10, minor: 1 },
   to: { major: 3, minor: 0 },
   downgradeRequest: (request) => ({ ok: true, value: request }),
   downgradeResponse: (response) => ({
@@ -1172,10 +1212,10 @@ export const agentGuiListHarnessesDowngradeV10ToV3 = defineDowngradePath<
 });
 
 export const agentGuiListHarnessesDowngradeV10ToV2 = defineDowngradePath<
-  typeof agentGuiListHarnessesV100,
+  typeof agentGuiListHarnessesV101,
   typeof agentGuiListHarnessesV21
 >({
-  from: { major: 10, minor: 0 },
+  from: { major: 10, minor: 1 },
   // Lands on 2.1, major 2's latest installed minor; a frozen-2.0 caller's
   // contract parse then strips the 2.1-only `enabled` field.
   to: { major: 2, minor: 1 },
@@ -1193,10 +1233,10 @@ export const agentGuiListHarnessesDowngradeV10ToV2 = defineDowngradePath<
 });
 
 export const agentGuiListHarnessesDowngradeV10ToV1 = defineDowngradePath<
-  typeof agentGuiListHarnessesV100,
+  typeof agentGuiListHarnessesV101,
   typeof agentGuiListHarnessesV10
 >({
-  from: { major: 10, minor: 0 },
+  from: { major: 10, minor: 1 },
   to: { major: 1, minor: 0 },
   downgradeRequest: (request) => ({ ok: true, value: request }),
   downgradeResponse: (response) => ({
@@ -1350,6 +1390,23 @@ export const agentGuiListCommandsV10 = defineRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: listGuiAgentCommandsRequestSchema,
   responseSchema: listGuiAgentCommandsResponseSchema,
+});
+
+export const agentGuiListCommandsV11 = defineRpcContract({
+  method: "agent.gui.listCommands",
+  schemaVersion: { major: 1, minor: 1 } as const,
+  requestSchema: listGuiAgentCommandsRequestSchemaV11,
+  responseSchema: listGuiAgentCommandsResponseSchema,
+});
+
+export const agentGuiListCommandsUpgradeV10ToV11 = defineUpgradePath<
+  typeof agentGuiListCommandsV10,
+  typeof agentGuiListCommandsV11
+>({
+  from: { major: 1, minor: 0 },
+  to: { major: 1, minor: 1 },
+  upgradeRequest: (request) => ({ ...request, profileId: null }),
+  upgradeResponse: (response) => response,
 });
 
 export const agentGuiGetPlanV10 = defineRpcContract({

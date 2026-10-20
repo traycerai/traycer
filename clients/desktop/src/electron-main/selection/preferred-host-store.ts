@@ -1,6 +1,6 @@
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import { traycerDataRoot } from "@traycer/protocol/config/data-root";
 import { config } from "../../config";
 import type {
   PreferredHostSaveResult,
@@ -48,10 +48,7 @@ function isMissingFile(error: unknown): boolean {
  * the ids name registry rows in different clouds.
  */
 export function resolvePreferredHostFilePath(): string {
-  const base = environmentSubdir(
-    join(homedir(), ".traycer"),
-    config.environment,
-  );
+  const base = environmentSubdir(traycerDataRoot(), config.environment);
   return join(base, "desktop-preferred-host.json");
 }
 

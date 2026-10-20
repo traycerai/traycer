@@ -768,6 +768,7 @@ function TerminalAgentForkDialogBody(props: TerminalAgentForkDialogProps) {
                 </div>
                 <div className="flex min-w-0 items-center gap-2 rounded-md">
                   <HarnessModelPicker
+                    maxModeContext={{ kind: "none" }}
                     labelDisplay="responsive"
                     key={terminalForkModelPickerKey(target)}
                     store={toolbarStore}

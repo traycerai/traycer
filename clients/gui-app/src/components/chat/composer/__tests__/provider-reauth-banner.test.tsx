@@ -7,6 +7,7 @@ import {
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactElement, ReactNode } from "react";
+import type { ReportIssueContext } from "@/lib/report-issue-context";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   ProviderCliState,
@@ -95,8 +96,19 @@ const mocks = vi.hoisted(() => ({
   openLink: vi.fn(),
   reportableErrorToast: vi.fn(),
   openSettings: vi.fn(),
+  reportContexts: new Array<ReportIssueContext>(),
   hostKind: "local",
+  /** What `useHostCredentialRefusal` answers for the tab's host; `null` takes sign-ins. */
+  credentialRefusal: null as string | null,
 }));
+
+vi.mock("@/hooks/host/use-host-credential-refusal", () => ({
+  useHostCredentialRefusal: () => mocks.credentialRefusal,
+}));
+
+afterEach(() => {
+  mocks.credentialRefusal = null;
+});
 
 vi.mock("@/stores/tabs/use-system-tab-modal", () => ({
   useSystemTabModalActions: () => ({ openSettings: mocks.openSettings }),
@@ -188,10 +200,17 @@ vi.mock("@/hooks/providers/use-tab-refresh-providers", () => ({
 vi.mock("@/lib/links/open-link", () => ({
   useOpenLink: () => mocks.openLink,
 }));
+vi.mock("@/components/report-issue/report-issue-action", () => ({
+  ReportIssueAction: (props: { readonly context: ReportIssueContext }) => {
+    mocks.reportContexts.push(props.context);
+    return null;
+  },
+}));
 vi.mock("@/lib/reportable-error-toast", () => ({
   reportableErrorToast: mocks.reportableErrorToast,
 }));
 
+import { providerSignedOutMessage } from "@traycer/protocol/host/provider-display";
 import { ProviderReauthBanner } from "../provider-reauth-banner";
 import { useProvidersFocusStore } from "@/stores/settings/providers-focus-store";
 
@@ -511,6 +530,7 @@ describe("<ProviderReauthBanner />", () => {
     mocks.openLink.mockClear();
     mocks.reportableErrorToast.mockClear();
     mocks.hostKind = "local";
+    mocks.reportContexts.length = 0;
     useProvidersFocusStore.getState().clearFocusHarnessId();
   });
 
@@ -1699,6 +1719,7 @@ describe("<ProviderReauthBanner />", () => {
         providerId: "claude-code",
         key: "ANTHROPIC_API_KEY",
         value: "sk-ant-123",
+        executableWriteGrant: null,
       },
       expect.anything(),
     );
@@ -2126,5 +2147,190 @@ describe("<ProviderReauthBanner /> when the provider refuses the sign-in", () =>
 
     expect(screen.queryByText(HEADLINE)).toBeNull();
     expect(screen.getByRole("button", { name: /Authenticate/ })).toBeDefined();
+  });
+});
+
+// The tab's host is a sandbox: it takes no credential, so no reconnect form
+// that would send one is offered; the Terminal-account fallback is not a
+// credential and stays.
+describe("<ProviderReauthBanner /> on a host that takes no credentials", () => {
+  const REFUSAL = "Sandboxes don't take sign-ins";
+
+  beforeEach(() => {
+    mocks.startLoginMutate.mockReset();
+    mocks.setApiKeyMutate.mockClear();
+    mocks.setEnvOverrideMutate.mockClear();
+    mocks.openSettings.mockClear();
+    mocks.hostKind = "local";
+    mocks.credentialRefusal = REFUSAL;
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("renders the provider's message plus the refusal, and no OAuth, terminal or token form, for provider_unauthenticated", () => {
+    render(
+      <ProviderReauthBanner
+        epicId={null}
+        viewTabId={null}
+        providerId="claude-code"
+        state={claudeState(CLAUDE_CAP)}
+        reason="provider_unauthenticated"
+        profileId={null}
+        profileLabel={null}
+        onContinueOnAmbient={null}
+      />,
+    );
+
+    expect(
+      screen.getByText(providerSignedOutMessage("claude-code")),
+    ).toBeDefined();
+    expect(screen.getByTestId("credential-refusal").textContent).toBe(REFUSAL);
+    expect(screen.queryByRole("button", { name: /Authenticate/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /terminal/i })).toBeNull();
+    expect(screen.queryByRole("textbox")).toBeNull();
+    expect(screen.queryByLabelText(/token|key/i)).toBeNull();
+    expect(mocks.startLoginMutate).not.toHaveBeenCalled();
+    expect(mocks.setApiKeyMutate).not.toHaveBeenCalled();
+    expect(mocks.setEnvOverrideMutate).not.toHaveBeenCalled();
+  });
+
+  it("offers no terminal sign-in either for a terminal-login provider", () => {
+    render(
+      <ProviderReauthBanner
+        epicId="epic-1"
+        viewTabId="tab-1"
+        providerId="copilot"
+        state={copilotState(COPILOT_TERMINAL_CAP)}
+        reason="provider_unauthenticated"
+        profileId={null}
+        profileLabel={null}
+        onContinueOnAmbient={null}
+      />,
+    );
+
+    expect(screen.getByTestId("credential-refusal").textContent).toBe(REFUSAL);
+    expect(screen.queryByRole("button", { name: /terminal/i })).toBeNull();
+  });
+
+  it("disables Sign in for profile_unauthenticated, shows the refusal, and keeps Continue on Terminal account enabled", () => {
+    const onContinueOnAmbient = vi.fn();
+    render(
+      <ProviderReauthBanner
+        epicId={null}
+        viewTabId={null}
+        providerId="claude-code"
+        state={claudeState(CLAUDE_CAP)}
+        reason="profile_unauthenticated"
+        profileId="work-profile"
+        profileLabel="Work"
+        onContinueOnAmbient={onContinueOnAmbient}
+      />,
+    );
+
+    const signIn = screen.getByRole<HTMLButtonElement>("button", {
+      name: "Sign in",
+    });
+    expect(signIn.disabled).toBe(true);
+    expect(screen.getByTestId("credential-refusal").textContent).toBe(REFUSAL);
+    const fallback = screen.getByRole<HTMLButtonElement>("button", {
+      name: "Continue on Terminal account",
+    });
+    expect(fallback.disabled).toBe(false);
+
+    fireEvent.click(signIn);
+    expect(mocks.openSettings).not.toHaveBeenCalled();
+    fireEvent.click(fallback);
+    expect(onContinueOnAmbient).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps Manage in Settings enabled for profile_missing: nothing is signed in from there", () => {
+    render(
+      <ProviderReauthBanner
+        epicId={null}
+        viewTabId={null}
+        providerId="claude-code"
+        state={claudeState(CLAUDE_CAP)}
+        reason="profile_missing"
+        profileId="removed-profile"
+        profileLabel={null}
+        onContinueOnAmbient={vi.fn()}
+      />,
+    );
+
+    expect(
+      screen.getByRole<HTMLButtonElement>("button", {
+        name: "Manage in Settings",
+      }).disabled,
+    ).toBe(false);
+    expect(screen.queryByTestId("credential-refusal")).toBeNull();
+  });
+
+  it("control: on a host that takes sign-ins the same banner offers Authenticate and no refusal", () => {
+    mocks.credentialRefusal = null;
+    render(
+      <ProviderReauthBanner
+        epicId={null}
+        viewTabId={null}
+        providerId="claude-code"
+        state={claudeState(CLAUDE_CAP)}
+        reason="provider_unauthenticated"
+        profileId={null}
+        profileLabel={null}
+        onContinueOnAmbient={null}
+      />,
+    );
+
+    expect(screen.queryByTestId("credential-refusal")).toBeNull();
+    expect(screen.getByRole("button", { name: /Authenticate/ })).toBeDefined();
+  });
+});
+
+describe("<ProviderReauthBanner /> report action code", () => {
+  beforeEach(() => {
+    mocks.reportContexts.length = 0;
+  });
+
+  function lastReportCode(): string | null {
+    const context = mocks.reportContexts.at(-1);
+    if (context === undefined) throw new Error("no report action rendered");
+    return context.code;
+  }
+
+  it("carries the provider and reason so a report says what was blocked", () => {
+    render(
+      <ProviderReauthBanner
+        epicId={null}
+        viewTabId={null}
+        providerId="codex"
+        state={codexState(CLAUDE_CAP)}
+        reason="provider_unauthenticated"
+        profileId={null}
+        profileLabel={null}
+        onContinueOnAmbient={null}
+      />,
+    );
+
+    expect(lastReportCode()).toBe("codex:provider_unauthenticated");
+  });
+
+  it("never carries the profile id", () => {
+    render(
+      <ProviderReauthBanner
+        epicId={null}
+        viewTabId={null}
+        providerId="codex"
+        state={codexState(CLAUDE_CAP)}
+        reason="profile_unauthenticated"
+        profileId="prof-SECRET-123"
+        profileLabel="Work"
+        onContinueOnAmbient={vi.fn()}
+      />,
+    );
+
+    const code = lastReportCode();
+    expect(code).toBe("codex:profile_unauthenticated");
+    expect(code ?? "").not.toContain("prof-SECRET-123");
   });
 });

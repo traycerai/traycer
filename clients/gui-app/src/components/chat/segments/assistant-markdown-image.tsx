@@ -5,7 +5,6 @@ import {
   useScrollToChatBlock,
   type ScrollToChatBlock,
 } from "@/components/chat/chat-scroll-to-block";
-import { useChatAttachmentBlobSrc } from "@/lib/attachments/use-attachment-blob-src";
 import type {
   AssistantMarkdownImageContext,
   AssistantMarkdownImageResolution,
@@ -14,7 +13,7 @@ import type {
 import {
   AttachmentImage,
   AttachmentImageFailure,
-  AttachmentImageLoading,
+  ResolvedImage,
 } from "./attachment-image";
 import { base64ToBytes, bytesToBase64 } from "@/lib/composer/image-base64";
 import {
@@ -316,6 +315,8 @@ function AssistantMarkdownImage(props: AssistantMarkdownImageProps): ReactNode {
         mediaType={null}
         suggestedName={null}
         fullWidth={false}
+        width={null}
+        height={null}
       />
     );
   }
@@ -328,6 +329,8 @@ function AssistantMarkdownImage(props: AssistantMarkdownImageProps): ReactNode {
         mediaType={dataMediaType(source.src)}
         suggestedName={null}
         fullWidth={false}
+        width={null}
+        height={null}
       />
     );
   }
@@ -340,6 +343,8 @@ function AssistantMarkdownImage(props: AssistantMarkdownImageProps): ReactNode {
         mediaType="image/svg+xml"
         suggestedName={null}
         fullWidth={false}
+        width={null}
+        height={null}
       />
     );
   }
@@ -389,6 +394,9 @@ function renderImageResolution(
         alt={alt}
         hash={resolution.entry.attachmentHash}
         mediaType={resolution.entry.mediaType}
+        suggestedName={null}
+        width={null}
+        height={null}
       />
     );
   }
@@ -429,45 +437,6 @@ function resolutionFailureReason(
   }
   if (state === "oversized") return "This image is too large to show here.";
   return "This image is no longer available.";
-}
-
-function ResolvedImage(props: {
-  readonly alt: string;
-  readonly hash: string;
-  readonly mediaType: string;
-}): ReactNode {
-  const image = useChatAttachmentBlobSrc(props.hash, props.mediaType, null);
-  if (image.status === "loading") {
-    return (
-      <AttachmentImageLoading
-        label="Waiting for image sync"
-        fullWidth={false}
-      />
-    );
-  }
-  if (image.status === "unavailable") {
-    return (
-      <AttachmentImageFailure
-        alt={props.alt}
-        reason="This image is no longer available."
-      />
-    );
-  }
-  return (
-    <AttachmentImage
-      key={image.src}
-      src={image.src}
-      // The resolved blob's OWN type, not `props.mediaType`: the latter is the
-      // claim stored on the message, and `AttachmentImage` gates SVG
-      // sanitization on what it is handed. A host-sniffed type overrides the
-      // claim (see `ImageBlobResolution`), so bytes that are really SVG cannot
-      // slip past the gate behind a stored `image/png`.
-      mediaType={image.mediaType}
-      alt={props.alt}
-      suggestedName={null}
-      fullWidth={false}
-    />
-  );
 }
 
 function dataMediaType(src: string): string | null {

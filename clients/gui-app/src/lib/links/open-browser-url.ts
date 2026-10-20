@@ -1,6 +1,7 @@
 import { useCallback } from "react";
 import { toast } from "sonner";
 import type { BrowserSessionInfo } from "@traycer/protocol/host/browser/contracts";
+import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import { browserSessionsRefusal } from "@traycer-clients/shared/platform/browser-view";
 import {
   useMaybeBrowserSessionsSnapshot,
@@ -8,6 +9,11 @@ import {
   type BrowserSessionsState,
 } from "@/components/epic-canvas/renderers/browser-sessions-context";
 import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
+import {
+  CREDENTIALED_URL_REFUSAL_DESCRIPTION,
+  credentialedUrlRefusal,
+} from "@/hooks/host/use-host-credential-refusal";
+import { useHostBinding, type HostDirectoryService } from "@/lib/host";
 import { electronTabBinding } from "@/lib/browser-view/sessions/electron-tab-directory";
 import { ignoreError } from "@/lib/browser-view/ignore-error";
 import { useOpenExternalLink } from "@/lib/links/open-external-link";
@@ -56,6 +62,8 @@ export function useOpenBrowserUrl(): (input: OpenBrowserUrlInput) => void {
   // surface in the app and the sessions context is a fresh object per stream
   // frame (C8).
   const snapshot = useMaybeBrowserSessionsSnapshot();
+  const binding = useHostBinding();
+  const directory = binding === null ? null : binding.directory;
   const { openTile } = useEpicTileNavigation();
   const { mutateAsync: openExternal } = useOpenExternalLink();
 
@@ -83,6 +91,25 @@ export function useOpenBrowserUrl(): (input: OpenBrowserUrlInput) => void {
             ? browserSessionsRefusal(sessions)
             : "Browsers aren't connected on this host yet.",
         );
+        return;
+      }
+
+      // Before either RPC below (a navigate of a matched tab, or a new tab):
+      // a sandbox's browser is never sent a URL carrying a sign-in.
+      const refusal = credentialedUrlRefusal(
+        directoryEntry(directory, hostId),
+        input.url,
+      );
+      if (refusal !== null) {
+        toast.warning(refusal, {
+          description: CREDENTIALED_URL_REFUSAL_DESCRIPTION,
+          action: {
+            label: "Open in browser",
+            onClick: () => {
+              void openExternal(input.url).catch(ignoreError);
+            },
+          },
+        });
         return;
       }
 
@@ -129,8 +156,15 @@ export function useOpenBrowserUrl(): (input: OpenBrowserUrlInput) => void {
           );
         });
     },
-    [openExternal, openTile, snapshot],
+    [directory, openExternal, openTile, snapshot],
   );
+}
+
+function directoryEntry(
+  directory: HostDirectoryService | null,
+  hostId: string,
+): HostDirectoryEntry | null {
+  return directory === null ? null : directory.findById(hostId);
 }
 
 /**

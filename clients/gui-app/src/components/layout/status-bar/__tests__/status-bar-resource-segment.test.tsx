@@ -11,6 +11,7 @@ import {
 } from "@/stores/layout/layout-store";
 import type { ResourceMetric } from "@/lib/layout/layout-values";
 import { RUNNING_LOW_TEXT_CLASS_NAME } from "@/lib/rate-limits/window-severity";
+import type { DesktopAppResourceUsage } from "@/lib/resources/desktop-app-resource-usage";
 
 /**
  * What the segment does with the data it is handed — attribution above all,
@@ -42,9 +43,35 @@ vi.mock("@/hooks/resources/use-global-resources-unsupported", () => ({
   useGlobalResourcesUnsupported: () => registry.unsupported,
 }));
 
+/**
+ * The shell sampler, as the segment asks for it: `enabled` is what starts a
+ * once-a-second IPC poll, so the test records it rather than only answering.
+ */
+const desktopSampler: {
+  usage: DesktopAppResourceUsage | null;
+  enabledCalls: boolean[];
+} = { usage: null, enabledCalls: [] };
+
+vi.mock("@/hooks/resources/use-desktop-app-resource-usage", () => ({
+  useDesktopAppResourceUsage: (enabled: boolean) => {
+    desktopSampler.enabledCalls.push(enabled);
+    return enabled ? desktopSampler.usage : null;
+  },
+}));
+
 import { StatusBarResourceSegment } from "@/components/layout/status-bar/status-bar-resource-segment";
 
 const GIB = 1024 * 1024 * 1024;
+
+const DESKTOP_APP: DesktopAppResourceUsage = {
+  sampledAt: 1,
+  cpuPercent: 3,
+  rssBytes: GIB / 2,
+  processCount: 6,
+  main: { cpuPercent: 1, rssBytes: GIB / 8, processCount: 1 },
+  renderer: { cpuPercent: 2, rssBytes: GIB / 4, processCount: 2 },
+  other: { cpuPercent: 0, rssBytes: GIB / 8, processCount: 3 },
+};
 
 function liveProjection(hostId: string | null): GlobalResourceProjection {
   return {
@@ -72,13 +99,17 @@ function liveProjection(hostId: string | null): GlobalResourceProjection {
   };
 }
 
-function renderSegment(props: { readonly hasExplicitPick: boolean }): void {
+function renderSegment(props: {
+  readonly hasExplicitPick: boolean;
+  readonly watchesThisMachine?: boolean;
+}): void {
   render(
     <TooltipProvider delayDuration={0}>
       <StatusBarResourceSegment
         hostId="host-b"
         hostLabel="Office Linux"
         hasExplicitPick={props.hasExplicitPick}
+        watchesThisMachine={props.watchesThisMachine ?? false}
         interactive={false}
       />
     </TooltipProvider>,
@@ -93,6 +124,8 @@ describe("<StatusBarResourceSegment />", () => {
   beforeEach(() => {
     registry.projection = EMPTY_GLOBAL_RESOURCE_PROJECTION;
     registry.unsupported = false;
+    desktopSampler.usage = DESKTOP_APP;
+    desktopSampler.enabledCalls = [];
     useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
   });
 
@@ -108,6 +141,55 @@ describe("<StatusBarResourceSegment />", () => {
 
     expect(metricText("cpu")).toContain("12%");
     expect(metricText("processes")).toContain("14");
+  });
+
+  describe("the desktop shell", () => {
+    it("is counted in the total when the watched host is this computer", () => {
+      // The same number the resource monitor's headline prints for this
+      // machine: the host tree plus the Electron app, so the strip and the
+      // panel can no longer disagree by the shell's working set.
+      registry.projection = liveProjection("host-b");
+      useLayoutStore.getState().setRegionValues("resourceMonitor", {
+        cpu: true,
+        memory: true,
+        processes: true,
+        ramShare: true,
+      });
+
+      renderSegment({ hasExplicitPick: true, watchesThisMachine: true });
+
+      expect(metricText("memory")).toBe("mem1.5 GB");
+      expect(metricText("cpu")).toBe("cpu15%");
+      expect(metricText("processes")).toBe("procs20");
+      expect(metricText("ramShare")).toBe("ram9.4%");
+    });
+
+    it("is left out of another machine's total, and never sampled for it", () => {
+      // Sampling is an IPC round trip a second for the life of the window, so
+      // a reading about a remote host must not start it, not merely ignore it.
+      registry.projection = liveProjection("host-b");
+      useLayoutStore
+        .getState()
+        .setRegionValues("resourceMonitor", { memory: true });
+
+      renderSegment({ hasExplicitPick: true, watchesThisMachine: false });
+
+      expect(metricText("memory")).toBe("mem1.0 GB");
+      expect(desktopSampler.enabledCalls).not.toContain(true);
+    });
+
+    it("is not sampled while every metric is switched off", () => {
+      useLayoutStore.getState().setRegionValues("resourceMonitor", {
+        cpu: false,
+        memory: false,
+        processes: false,
+        ramShare: false,
+      });
+
+      renderSegment({ hasExplicitPick: false, watchesThisMachine: true });
+
+      expect(desktopSampler.enabledCalls).not.toContain(true);
+    });
   });
 
   describe("density", () => {

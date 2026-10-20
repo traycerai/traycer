@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import { cn } from "@/lib/utils";
 import { useSettingsDensity } from "@/providers/settings-density-context";
+import { PersonalPageHeaderStatus } from "@/components/settings/personal/personal-page-frame";
 
 interface SettingsPanelShellProps {
   title: string;
@@ -61,6 +62,9 @@ export function SettingsPanelShell(props: SettingsPanelShellProps) {
               {description}
             </p>
           ) : null}
+          {/* A Personal page's line about the host it reads through;
+              nothing on any other page. */}
+          <PersonalPageHeaderStatus />
         </div>
         {headerAction === undefined ? null : (
           <div className="shrink-0">{headerAction}</div>

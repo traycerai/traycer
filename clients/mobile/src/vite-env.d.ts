@@ -29,6 +29,8 @@ interface TraycerMobileBakedConfig {
    */
   readonly environment: "dev" | "staging" | "production";
   readonly authnBaseUrl: string;
+  /** traycer-server, which serves the sandbox control plane. */
+  readonly serverBaseUrl: string;
   readonly signInUrl: string;
   /** The relay's WS attach endpoint, baked the way the desktop bakes its own. */
   readonly relayBaseUrl: string;

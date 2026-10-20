@@ -1,5 +1,5 @@
 import type { UseQueryResult } from "@tanstack/react-query";
-import type { AutoPolicyGetResponse } from "@traycer/protocol/host/auto-mode/contracts";
+import type { AutoPolicyGetResponseV11 } from "@traycer/protocol/host/auto-mode/contracts";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { useHostClient } from "@/lib/host";
 import { useHostQuery } from "@/hooks/host/use-host-query";
@@ -38,7 +38,7 @@ const AUTO_POLICY_GET_PARAMS = {};
  * `useHostSupportsMethod(hostId, "autoPolicy.get")`.
  */
 export function useAutoPolicyQuery(): UseQueryResult<
-  AutoPolicyGetResponse,
+  AutoPolicyGetResponseV11,
   HostRpcError
 > {
   const client = useHostClient();

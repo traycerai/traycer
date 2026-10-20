@@ -899,17 +899,12 @@ describe("<EpicsListPanel />", () => {
 
       // The controls a settled row has - proven present on the live neighbour
       // so their absence on the deleting row is not an artefact of the page.
-      for (const testId of [
-        "epics-list-row-delete",
-        "epics-list-row-pin",
-        "epics-list-row-edit-title",
-      ]) {
+      for (const testId of ["epics-list-row-delete", "epics-list-row-pin"]) {
         expect(within(live).queryByTestId(testId)).not.toBeNull();
         expect(within(deleting).queryByTestId(testId)).toBeNull();
       }
       for (const testId of [
         "epics-list-row-delete-disabled",
-        "epics-list-row-edit-title-disabled",
         "epics-list-row-sweep",
         "epics-list-row-sweep-disabled",
         "epics-list-row-sweep-menu",
@@ -3183,24 +3178,29 @@ describe("<EpicsListPanel />", () => {
     ).toBe(false);
   });
 
-  it("hides history title edit controls in selection mode", async () => {
+  it("drops the Rename menu entry in selection mode", async () => {
     renderPanel("page", "/");
 
+    fireEvent.contextMenu(await screen.findByTestId("epics-list-row-card"));
     expect(
-      await screen.findByRole("button", {
-        name: /edit title for open from landing/i,
-      }),
+      await screen.findByRole("menuitem", { name: "Rename" }),
     ).not.toBeNull();
+    fireEvent.keyDown(document.activeElement ?? document.body, {
+      key: "Escape",
+    });
+    await waitFor(() =>
+      expect(screen.queryByRole("menuitem", { name: "Rename" })).toBeNull(),
+    );
 
     fireEvent.click(
       screen.getByRole("button", { name: "Select history items" }),
     );
+    fireEvent.contextMenu(screen.getByTestId("epics-list-row-card"));
 
     expect(
-      screen.queryByRole("button", {
-        name: /edit title for open from landing/i,
-      }),
-    ).toBeNull();
+      await screen.findByTestId("epics-list-row-open-background"),
+    ).not.toBeNull();
+    expect(screen.queryByRole("menuitem", { name: "Rename" })).toBeNull();
   });
 
   it("keeps bulk Sweep closed for a selection where no task owns a worktree", async () => {
@@ -4421,6 +4421,8 @@ describe("<EpicsListPanel />", () => {
       ids: ["epic-local"],
       worktreeCleanup: null,
     });
+    // Its row says local-homed when the request is built.
+    expect(variables.isLocalHomedNow("epic-local")).toBe(true);
   });
 
   it("checks only PROVEN-removable rows by default (unproven and dirty stay unchecked)", async () => {
@@ -4609,14 +4611,11 @@ describe("<EpicsListPanel />", () => {
     expect(screen.queryByTestId("delete-tasks-worktree-cleanup")).toBeNull();
   });
 
-  it("edits an epic title from a history row without opening the epic", async () => {
+  it("edits an epic title from a history row's Rename menu entry without opening the epic", async () => {
     const router = renderPanel("page", "/");
 
-    fireEvent.click(
-      await screen.findByRole("button", {
-        name: /edit title for open from landing/i,
-      }),
-    );
+    fireEvent.contextMenu(await screen.findByTestId("epics-list-row-card"));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Rename" }));
 
     const input = await screen.findByRole("textbox", {
       name: /rename open from landing/i,
@@ -4635,19 +4634,18 @@ describe("<EpicsListPanel />", () => {
     expect(router.state.location.pathname).toBe("/");
   });
 
-  it("shows disabled history title editing for viewer rows", async () => {
+  it("disables the Rename menu entry for viewer rows", async () => {
     testState.items = [
       historyItem({ ownership: "shared", permissionRole: "viewer" }),
     ];
 
     renderPanel("page", "/");
 
-    expect(await screen.findByText("Open from landing")).not.toBeNull();
-    expect(screen.queryByTestId("epics-list-row-edit-title")).toBeNull();
-    const disabledEdit = screen.getByRole("button", {
-      name: /viewers can't edit title for open from landing/i,
-    });
-    expect(disabledEdit.getAttribute("aria-disabled")).toBe("true");
+    fireEvent.contextMenu(await screen.findByTestId("epics-list-row-card"));
+    const rename = await screen.findByRole("menuitem", { name: "Rename" });
+    expect(rename.hasAttribute("data-disabled")).toBe(true);
+    fireEvent.click(rename);
+    expect(screen.queryByTestId("epics-list-row-title-input")).toBeNull();
   });
 
   it("opens the filter popover and live-applies selections to typed route search", async () => {

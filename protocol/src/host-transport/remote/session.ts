@@ -51,6 +51,7 @@ import {
   HostRequestAbortedError,
   HostRpcError,
   HostTransportFailureError,
+  markMayHaveReachedHost,
   negotiatedVersionMeetsRequirement,
   RetryableTransportError,
   type RequestOfMethod,
@@ -95,6 +96,7 @@ import {
   FINE_INITIAL_BULK_SEND_CREDITS,
   MuxFrameDecodeError,
   MuxFrameType,
+  type CredentialUpdatePayload,
   MuxMessageSizeError,
   QosClass,
   SESSION_CONTROL_STREAM_ID,
@@ -102,6 +104,7 @@ import {
   SESSION_CAPABILITY_CREDENTIAL_UPDATE,
   SESSION_CAPABILITY_CLOUD_VERDICT_UPDATE,
   SESSION_CAPABILITY_FINE_CREDITS,
+  SESSION_CAPABILITY_MEMBER_CREDENTIAL,
   SESSION_CAPABILITY_TUNNEL_STREAMS,
   creditPayloadSchema,
   decodeMuxFrame,
@@ -110,6 +113,7 @@ import {
   sessionOpenAckPayloadSchema,
   unaryResponsePayloadSchema,
   type EncodeMuxFrameInput,
+  type MemberCredentialHandoff,
   type MuxFrame,
   type QosClassValue,
   type SessionManifests,
@@ -474,6 +478,25 @@ export interface RemoteSessionOptions<
    * host rather than the transport layer alone).
    */
   readonly livenessProbe: SessionLivenessProbe | null;
+  /**
+   * Mints the credential a team host spends for this session's member, or
+   * `null` for a composition that never opens one: a personal host, which
+   * takes the user bearer on `open`, and a host-to-host dialer.
+   *
+   * A team host spends only a member credential the client hands it after
+   * `OPEN_ACK`, so nothing may run on the session before that frame. When the
+   * host offers {@link SESSION_CAPABILITY_MEMBER_CREDENTIAL}, the session
+   * mints, enqueues `CREDENTIAL_UPDATE {bearer: null, memberCredential}` and
+   * only then becomes `ready`, which is what releases parked unary callers and
+   * re-opens streams; the same on every re-attach, except that a credential
+   * minted for an attach that dropped before carrying it is carried by the
+   * next one instead of a new mint. A mint that resolves `null`
+   * or throws is logged and the session goes on, so the host's own refusal
+   * still names the cause.
+   */
+  readonly mintMemberCredential:
+    | ((hostId: string) => Promise<MemberCredentialHandoff | null>)
+    | null;
 }
 
 /**
@@ -755,6 +778,11 @@ interface ActiveConnection {
   bodyCompressionSupported: boolean;
   /** Whether the HOST advertised `SESSION_CAPABILITY_TUNNEL_STREAMS`; gates `host.tunnel.open` in `openSubscription`. */
   tunnelStreamsSupported: boolean;
+  /**
+   * Whether this connection's `OPEN_ACK` is held while the member credential
+   * is minted. A second ack on the same connection is ignored meanwhile.
+   */
+  memberCredentialPending: boolean;
   hostAttached: boolean;
   /**
    * When this connection last received a frame THROUGH THE NOISE CHANNEL -
@@ -1004,6 +1032,14 @@ export class RemoteSession<
   }>();
   private nextStreamId = 1;
   private readyBoundaryGeneration: number | null = null;
+  /**
+   * A minted member credential whose attach went stale or lost its host
+   * before it could carry it. The mint flow holds an adoption claim for the
+   * credential it just handed out, so a fresh mint on the redial answers that
+   * one is already pending; the next attach that offers the capability carries
+   * this one instead of minting.
+   */
+  private undeliveredMemberCredential: MemberCredentialHandoff | null = null;
   /**
    * The bearer presented in the current connection's `open` frame, captured
    * at send time so the `UNAUTHORIZED` session-fatal recovery can tell
@@ -1921,7 +1957,10 @@ export class RemoteSession<
       type: MuxFrameType.CREDENTIAL_UPDATE,
       streamId: SESSION_CONTROL_STREAM_ID,
       qos: QosClass.INTERACTIVE,
-      json: { bearer },
+      json: {
+        bearer,
+        memberCredential: null,
+      } satisfies CredentialUpdatePayload,
       binary: null,
     });
   }
@@ -2270,6 +2309,18 @@ export class RemoteSession<
     if (generation !== this.connectGeneration || this.isClosed()) {
       return;
     }
+    if (provision.kind === "refused") {
+      // Authn's verdict, not a transient: a retry would be refused the same
+      // way, so the loop ends here on the typed fatal. Still INDETERMINATE
+      // evidence - the host was never dialed, so this says nothing about
+      // whether it is alive (see the `unavailable` arm below).
+      this.reportEvidenceOutcome(
+        this.dialAttemptId(generation),
+        "indeterminate",
+      );
+      this.goTerminalFatal(provision.fatal);
+      return;
+    }
     if (provision.kind === "unavailable") {
       // No grant (signed out / revoked / transient CS failure): stay in backoff.
       // This attach attempt is over before it dialed, so parked `sendUnary`
@@ -2378,6 +2429,7 @@ export class RemoteSession<
       idempotencyKeySupported: false,
       bodyCompressionSupported: false,
       tunnelStreamsSupported: false,
+      memberCredentialPending: false,
       hostAttached: true,
       lastInChannelInboundAt: Date.now(),
       inChannelFrames: 0,
@@ -3017,7 +3069,7 @@ export class RemoteSession<
     connection: ActiveConnection,
     json: Record<string, unknown> | null,
   ): void {
-    if (this.phase !== "opening") {
+    if (this.phase !== "opening" || connection.memberCredentialPending) {
       return;
     }
     if (!connection.hostAttached) {
@@ -3107,6 +3159,105 @@ export class RemoteSession<
         FINE_INITIAL_BULK_SEND_CREDITS,
       );
     }
+    const mintMemberCredential = this.options.mintMemberCredential;
+    if (
+      mintMemberCredential !== null &&
+      parsed.data.capabilities.includes(SESSION_CAPABILITY_MEMBER_CREDENTIAL)
+    ) {
+      const held = this.undeliveredMemberCredential;
+      if (held !== null) {
+        this.undeliveredMemberCredential = null;
+        this.enqueueMemberCredential(connection, held);
+        this.completeOpen(generation, connection);
+        return;
+      }
+      // The open-ack timer stays armed across the mint, so a mint that never
+      // settles drops this attach like a missing ack would.
+      connection.memberCredentialPending = true;
+      void this.handOffMemberCredential(
+        generation,
+        connection,
+        mintMemberCredential,
+      );
+      return;
+    }
+    this.completeOpen(generation, connection);
+  }
+
+  /**
+   * Mints the member credential and enqueues it as the session's first frame
+   * after `OPEN_ACK`, then completes the open. `INTERACTIVE` frames leave in
+   * enqueue order, and nothing else is enqueued before `ready`, so the host
+   * reads the credential before any request this session carries.
+   */
+  private async handOffMemberCredential(
+    generation: number,
+    connection: ActiveConnection,
+    mint: (hostId: string) => Promise<MemberCredentialHandoff | null>,
+  ): Promise<void> {
+    let handoff: MemberCredentialHandoff | null = null;
+    let failure: "mint-unavailable" | "mint-failed" | null = null;
+    try {
+      handoff = await mint(this.options.hostId);
+      if (handoff === null) {
+        failure = "mint-unavailable";
+      }
+    } catch {
+      failure = "mint-failed";
+    }
+    if (
+      !this.isCurrent(generation) ||
+      this.connection !== connection ||
+      this.phase !== "opening"
+    ) {
+      this.holdUndeliveredMemberCredential(handoff);
+      return;
+    }
+    connection.memberCredentialPending = false;
+    if (!connection.hostAttached) {
+      // Parked exactly as `handleOpenAck` parks a pre-ready detach: the
+      // redial's own ack carries the held credential.
+      this.holdUndeliveredMemberCredential(handoff);
+      return;
+    }
+    if (handoff === null) {
+      // Console on purpose, as the dial-failure log: shared transport code
+      // with no logger seam.
+      console.warn(
+        `[remote-session] member credential not handed: ${failure ?? "mint-unavailable"}`,
+      );
+    } else {
+      this.enqueueMemberCredential(connection, handoff);
+    }
+    this.completeOpen(generation, connection);
+  }
+
+  private holdUndeliveredMemberCredential(
+    handoff: MemberCredentialHandoff | null,
+  ): void {
+    if (handoff !== null) {
+      this.undeliveredMemberCredential = handoff;
+    }
+  }
+
+  private enqueueMemberCredential(
+    connection: ActiveConnection,
+    handoff: MemberCredentialHandoff,
+  ): void {
+    this.enqueueMessage(connection, {
+      type: MuxFrameType.CREDENTIAL_UPDATE,
+      streamId: SESSION_CONTROL_STREAM_ID,
+      qos: QosClass.INTERACTIVE,
+      json: {
+        bearer: null,
+        memberCredential: handoff,
+      } satisfies CredentialUpdatePayload,
+      binary: null,
+    });
+  }
+
+  /** The `ready` boundary of an accepted open. */
+  private completeOpen(generation: number, connection: ActiveConnection): void {
     this.clearPhaseTimer();
     this.phase = "ready";
     this.reattachMarks.openAckAt = Date.now();
@@ -3911,7 +4062,12 @@ export class RemoteSession<
       );
       entry.resolve(decoded);
     } catch (cause) {
-      entry.reject(asHostRpcError(cause, entry.requestId, entry.method));
+      // The host answered success, so it ran the call; only this side could
+      // not read the answer. Unlike the error envelope above, which is the
+      // host's own refusal, this one is marked.
+      const unreadable = asHostRpcError(cause, entry.requestId, entry.method);
+      markMayHaveReachedHost(unreadable);
+      entry.reject(unreadable);
     }
   }
 
@@ -5289,11 +5445,18 @@ export class RemoteSession<
     // still has a CLOSE to send on it. Each caller retires the counter itself.
   }
 
+  /**
+   * Every pending entry was enqueued for the wire, so the host may have run
+   * it whatever ended the wait - a timeout, a corrupt inbound frame, or the
+   * host's per-stream FATAL, which carries no attestation that the request was
+   * never dispatched - and the rejection is marked for `mayHaveReachedHost`.
+   */
   private rejectUnary(streamId: number, error: HostRpcError): void {
     const entry = this.pendingUnary.get(streamId);
     if (entry === undefined) {
       return;
     }
+    markMayHaveReachedHost(error);
     this.clearPendingUnary(streamId);
     this.traffic?.end(streamId, true);
     const nextSeq = this.retireOutboundSeq(streamId);
@@ -5346,7 +5509,13 @@ export class RemoteSession<
     }
   }
 
+  /**
+   * Every pending entry was enqueued for the wire, so the host may have run
+   * it: the rejection is marked so callers can tell it from a host refusal,
+   * which arrives as the same class.
+   */
   private rejectAllPendingUnary(error: HostRpcError): void {
+    markMayHaveReachedHost(error);
     for (const [streamId, entry] of Array.from(this.pendingUnary)) {
       this.traffic?.end(streamId, true);
       if (entry.timer !== null) {

@@ -11,6 +11,10 @@ import {
   worktreeBusyHoldersWireFieldSchema,
   type WorktreeBusyHolder,
 } from "./worktree-busy-holders";
+import {
+  staleWriteWireFieldSchema,
+  type EnvironmentStaleWrite,
+} from "./environment-stale-write";
 
 /**
  * Wire-level frame types for the per-request WebSocket RPC protocol.
@@ -323,6 +327,7 @@ export type HostResponseFrame = {
     readonly message: string;
     readonly holders?: readonly WorktreeBusyHolder[];
     readonly holdersRevision?: string;
+    readonly staleWrite?: EnvironmentStaleWrite;
   } | null;
 };
 
@@ -504,6 +509,8 @@ export const hostResponseErrorSchema = z.object({
   // field must never fail a `{ code, message }` that parsed before it.
   holders: worktreeBusyHoldersWireFieldSchema,
   holdersRevision: holdersRevisionWireFieldSchema,
+  // `ENVIRONMENT_WRITE_STALE`'s detail; sanitized to absent like `holders`.
+  staleWrite: staleWriteWireFieldSchema,
 });
 
 /** Canonical schema for the host `response` frame. */

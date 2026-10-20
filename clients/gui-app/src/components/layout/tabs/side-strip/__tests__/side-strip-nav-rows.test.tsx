@@ -26,7 +26,7 @@ import {
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import type { IHostMessenger } from "@traycer-clients/shared/host-transport/host-messenger";
-import type { HostNotificationEntryV22 } from "@traycer/protocol/host/notifications/contracts";
+import type { HostNotificationEntryV23 } from "@traycer/protocol/host/notifications/contracts";
 import { SideTabStrip } from "@/components/layout/tabs/side-strip/side-tab-strip";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import {
@@ -176,7 +176,7 @@ function signIn(): void {
 function approvalEntry(
   id: string,
   updatedAt: number,
-): HostNotificationEntryV22 {
+): HostNotificationEntryV23 {
   return {
     id,
     updatedAt,

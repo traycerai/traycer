@@ -298,7 +298,9 @@ describe("<ProviderSkillsTab /> skill detail", () => {
     skillMocks.skills = [];
     renderTab();
 
-    expect(screen.getByText("No skills yet")).toBeDefined();
+    expect(
+      screen.getByText("Skills give agents instructions for a kind of task."),
+    ).toBeDefined();
     expect(
       screen.getByRole("textbox", { name: "Search skills" }),
     ).toBeDefined();

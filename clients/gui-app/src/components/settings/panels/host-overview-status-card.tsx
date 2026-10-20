@@ -24,6 +24,7 @@ import {
   describeOverviewDegrade,
   type OverviewDegradeReason,
 } from "@/components/settings/panels/host-overview-model";
+import { TEAM_HOST_ACTIVATE_REASON } from "@/components/settings/host-scope/host-option-model";
 
 /**
  * The Overview status card's moving parts — the pieces that differ between a
@@ -335,10 +336,12 @@ function HostOverviewMenuAction(props: {
  */
 function HostOverviewInlineActivate(props: {
   readonly isActive: boolean;
-  readonly connectable: boolean;
+  /** Activate can be offered now; `reason` says why when it cannot. */
+  readonly available: boolean;
   readonly activateBusy: boolean;
   readonly reason: string;
-  readonly onMakeActive: () => void;
+  /** `null`: the row is not offered as the window's host (`hostOptionCanActivate`). */
+  readonly onMakeActive: (() => void) | null;
 }): ReactNode {
   if (props.isActive) {
     return (
@@ -351,6 +354,9 @@ function HostOverviewInlineActivate(props: {
       </span>
     );
   }
+  // A management-only row is never offered as the window's host.
+  const onMakeActive = props.onMakeActive;
+  if (onMakeActive === null) return null;
   // The asymmetry has to be said out loud somewhere, and the row that used to
   // say it is gone. A person who expects this to move their work would
   // otherwise watch nothing happen and conclude it is broken — so the sentence
@@ -372,8 +378,8 @@ function HostOverviewInlineActivate(props: {
           type="button"
           variant="outline"
           size="sm"
-          disabled={!props.connectable || props.activateBusy}
-          onClick={props.onMakeActive}
+          disabled={!props.available || props.activateBusy}
+          onClick={onMakeActive}
           data-testid="host-make-active"
         >
           Activate
@@ -395,10 +401,12 @@ function HostOverviewInlineActivate(props: {
  */
 function HostOverviewMenuActivate(props: {
   readonly isActive: boolean;
-  readonly connectable: boolean;
+  /** Activate can be offered now; `reason` says why when it cannot. */
+  readonly available: boolean;
   readonly activateBusy: boolean;
   readonly reason: string;
-  readonly onMakeActive: () => void;
+  /** `null`: the row is not offered as the window's host (`hostOptionCanActivate`). */
+  readonly onMakeActive: (() => void) | null;
 }): ReactNode {
   if (props.isActive) {
     return (
@@ -408,22 +416,22 @@ function HostOverviewMenuActivate(props: {
       </DropdownMenuItem>
     );
   }
+  const onMakeActive = props.onMakeActive;
+  if (onMakeActive === null) return null;
   return (
     <DropdownMenuItem
       disabled={props.activateBusy}
-      aria-disabled={
-        !props.connectable || props.activateBusy ? true : undefined
-      }
+      aria-disabled={!props.available || props.activateBusy ? true : undefined}
       onSelect={(event) => {
-        if (!props.connectable) {
+        if (!props.available) {
           event.preventDefault();
           return;
         }
-        props.onMakeActive();
+        onMakeActive();
       }}
       data-testid="host-make-active"
       className="flex-col items-start gap-0.5"
-      variant={props.connectable ? "default" : "muted"}
+      variant={props.available ? "default" : "muted"}
     >
       <span className="flex items-center gap-2">
         <ArrowRightLeft className="size-3.5" aria-hidden />
@@ -434,6 +442,22 @@ function HostOverviewMenuActivate(props: {
       </span>
     </DropdownMenuItem>
   );
+}
+
+/** The sentence Activate carries: why it is disabled, or what it changes. */
+function hostOverviewActivateReason(
+  hostName: string,
+  connectable: boolean,
+  teamOwned: boolean,
+): string {
+  if (teamOwned) return TEAM_HOST_ACTIVATE_REASON;
+  if (!connectable) {
+    return `${hostName} has no dialable route from this window, so it can't become this window's host.`;
+  }
+  // Not "tabs stay on the host they started on" - the active-host switch
+  // still reloads open tabs today (F2/F3/F7), so that promise would be
+  // false. This only says what IS true.
+  return "Switching changes where new work starts.";
 }
 
 /**
@@ -479,6 +503,8 @@ export function HostOverviewHeaderActions(props: {
   readonly isActive: boolean;
   /** A host with no dialable route cannot become this window's host. */
   readonly connectable: boolean;
+  /** A team owns this host, so it is never this window's host. */
+  readonly teamOwned: boolean;
   /**
    * Clearing a custom name is the same write as saving one, with `null`. It
    * lives here rather than beside the inline editor because the editor is now
@@ -489,7 +515,8 @@ export function HostOverviewHeaderActions(props: {
   readonly resetNameDegrade: OverviewDegradeReason | null;
   readonly onRestart: () => void;
   readonly onOpenDoctor: () => void;
-  readonly onMakeActive: () => void;
+  /** `null`: the row is not offered as the window's host (`hostOptionCanActivate`). */
+  readonly onMakeActive: (() => void) | null;
   /** An Activate is already in flight - see `HostScope.isActivating`. */
   readonly activateBusy: boolean;
   readonly onCopyHostId: () => void;
@@ -501,19 +528,19 @@ export function HostOverviewHeaderActions(props: {
   readonly activateInMenu: boolean;
 }): ReactNode {
   const { hostName } = props;
-  const activateReason = props.connectable
-    ? // Not "tabs stay on the host they started on" - the active-host switch
-      // still reloads open tabs today (F2/F3/F7), so that promise would be
-      // false. This only says what IS true.
-      "Switching changes where new work starts."
-    : `${hostName} has no dialable route from this window, so it can't become this window's host.`;
+  const activateAvailable = props.connectable && !props.teamOwned;
+  const activateReason = hostOverviewActivateReason(
+    hostName,
+    props.connectable,
+    props.teamOwned,
+  );
   return (
     <div className="flex shrink-0 items-center gap-1.5">
       {props.primaryAction}
       {props.activateInMenu ? null : (
         <HostOverviewInlineActivate
           isActive={props.isActive}
-          connectable={props.connectable}
+          available={activateAvailable}
           activateBusy={props.activateBusy}
           reason={activateReason}
           onMakeActive={props.onMakeActive}
@@ -533,11 +560,12 @@ export function HostOverviewHeaderActions(props: {
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" className="min-w-56">
-          {props.activateInMenu ? (
+          {props.activateInMenu &&
+          (props.isActive || props.onMakeActive !== null) ? (
             <>
               <HostOverviewMenuActivate
                 isActive={props.isActive}
-                connectable={props.connectable}
+                available={activateAvailable}
                 activateBusy={props.activateBusy}
                 reason={activateReason}
                 onMakeActive={props.onMakeActive}

@@ -38,6 +38,7 @@ function remoteEntry(overrides: {
     hostId: overrides.hostId ?? mockRemoteHostEntry.hostId,
     publicKey: overrides.publicKey,
     relayFuseGrace: false,
+    sandbox: null,
     remoteStatus: {
       connectivity: "connectable",
       viewerReachability: "ok",

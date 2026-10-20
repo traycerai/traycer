@@ -9,6 +9,8 @@ import {
   buildHomeBotRow,
   buildHomeBotsModel,
   foldTaskCheckins,
+  homeBotState,
+  type HomeBotState,
 } from "../bots-model";
 
 const BOT_A = "bot_01ARZ3NDEKTSV4RRFFQ69G5FAV";
@@ -349,5 +351,222 @@ describe("buildHomeBotRow", () => {
       expect(row.tasksTracking).toBe(1);
       expect(row.boundHere).toBe(true);
     });
+  });
+});
+
+describe("homeBotState", () => {
+  const OWN = "host-own";
+  const TEAMMATE = "host-teammate";
+  const SANDBOX = "host-sandbox";
+  // A personal environment has no machines beyond the reader's own.
+  const PERSONAL_ENV: ReadonlySet<string> = new Set();
+
+  function state(
+    overrides: Partial<Parameters<typeof homeBotState>[0]>,
+  ): HomeBotState {
+    return homeBotState({
+      working: false,
+      boundHostId: OWN,
+      directoryHostIds: new Set([OWN]),
+      connectableHostIds: new Set([OWN]),
+      connectableResolved: true,
+      environmentHostIds: PERSONAL_ENV,
+      environmentOwnerKind: "user",
+      personalHostIds: new Set(),
+      ...overrides,
+    });
+  }
+
+  it("is paused for a bot no host runs, even while it looks busy", () => {
+    expect(state({ boundHostId: null })).toBe("paused");
+    expect(state({ boundHostId: null, working: true })).toBe("paused");
+  });
+
+  it("is working while the bot's agents run", () => {
+    expect(state({ working: true })).toBe("working");
+    // Working wins over an unreachable host: activity is evidence it runs.
+    expect(state({ working: true, connectableHostIds: new Set() })).toBe(
+      "working",
+    );
+  });
+
+  it("is idle on one of the reader's own hosts that can be dialled", () => {
+    expect(state({})).toBe("idle");
+  });
+
+  it("is paused on one of the reader's own hosts that cannot be dialled now", () => {
+    expect(state({ connectableHostIds: new Set() })).toBe("paused");
+  });
+
+  it("is paused for a personal environment's bot bound to a host outside the directory", () => {
+    expect(
+      state({
+        boundHostId: TEAMMATE,
+        environmentHostIds: PERSONAL_ENV,
+      }),
+    ).toBe("paused");
+  });
+
+  it("is idle for a team environment's sandbox: in the environment's list, not the reader's directory", () => {
+    expect(
+      state({
+        boundHostId: SANDBOX,
+        environmentHostIds: new Set([SANDBOX]),
+      }),
+    ).toBe("idle");
+  });
+
+  it("is idle for a team environment whose machine list has not answered", () => {
+    expect(state({ boundHostId: TEAMMATE, environmentHostIds: null })).toBe(
+      "idle",
+    );
+  });
+
+  it("is paused for another member's laptop once the team list is known and does not carry it", () => {
+    expect(
+      state({
+        boundHostId: TEAMMATE,
+        environmentHostIds: new Set([SANDBOX]),
+      }),
+    ).toBe("paused");
+  });
+
+  it("trusts the reader's own directory over the environment list", () => {
+    // Own host, not dialable: paused whether or not the team list names it.
+    expect(
+      state({
+        connectableHostIds: new Set(),
+        environmentHostIds: new Set([OWN]),
+      }),
+    ).toBe("paused");
+    expect(
+      state({ connectableHostIds: new Set(), environmentHostIds: null }),
+    ).toBe("paused");
+  });
+
+  it("is idle for an own-host bot while the host directory has not answered", () => {
+    // The directory and connectable sets are empty for want of an answer.
+    const unanswered = {
+      directoryHostIds: new Set<string>(),
+      connectableHostIds: new Set<string>(),
+    };
+    expect(state({ ...unanswered, connectableResolved: false })).toBe("idle");
+    expect(state({ ...unanswered, connectableResolved: true })).toBe("paused");
+    // The directory said the host exists but is not dialable: resolved, paused.
+    expect(
+      state({ connectableHostIds: new Set(), connectableResolved: true }),
+    ).toBe("paused");
+    expect(
+      state({ connectableHostIds: new Set(), connectableResolved: false }),
+    ).toBe("idle");
+  });
+
+  it("is idle for a personal-environment bot outside the directory while the directory has not answered", () => {
+    const unanswered = {
+      boundHostId: TEAMMATE,
+      environmentHostIds: PERSONAL_ENV,
+      directoryHostIds: new Set<string>(),
+      connectableHostIds: new Set<string>(),
+    };
+    expect(state({ ...unanswered, connectableResolved: false })).toBe("idle");
+    expect(state({ ...unanswered, connectableResolved: true })).toBe("paused");
+  });
+
+  describe("a team's bots run on the team's machines only", () => {
+    const TEAM_ENV_HOSTS: ReadonlySet<string> = new Set([SANDBOX]);
+
+    it("is paused for a team bot bound to one of the reader's personal hosts, even when it can be dialled", () => {
+      expect(
+        state({
+          environmentOwnerKind: "organization",
+          personalHostIds: new Set([OWN]),
+        }),
+      ).toBe("paused");
+    });
+
+    it("is paused for that binding even while the bot looks busy", () => {
+      expect(
+        state({
+          working: true,
+          environmentOwnerKind: "organization",
+          personalHostIds: new Set([OWN]),
+        }),
+      ).toBe("paused");
+    });
+
+    it("is idle for a personal environment's bot on the same dialable personal host", () => {
+      expect(
+        state({
+          environmentOwnerKind: "user",
+          personalHostIds: new Set([OWN]),
+        }),
+      ).toBe("idle");
+    });
+
+    it.each([false, true])(
+      "is idle for a team bot, never working or paused, while the registry has not answered (working: %s)",
+      (working) => {
+        expect(
+          state({
+            working,
+            environmentOwnerKind: "organization",
+            personalHostIds: null,
+          }),
+        ).toBe("idle");
+      },
+    );
+
+    it("is paused for a team bot whose own host is known and cannot be dialled, while the registry has not answered", () => {
+      expect(
+        state({
+          environmentOwnerKind: "organization",
+          personalHostIds: null,
+          connectableHostIds: new Set(),
+        }),
+      ).toBe("paused");
+    });
+
+    it("is paused for a team bot on a host neither answered list carries, while the registry has not answered", () => {
+      expect(
+        state({
+          boundHostId: "host-elsewhere",
+          environmentHostIds: TEAM_ENV_HOSTS,
+          environmentOwnerKind: "organization",
+          personalHostIds: null,
+        }),
+      ).toBe("paused");
+    });
+
+    it("keeps a personal environment's working bot working while the registry has not answered", () => {
+      expect(
+        state({
+          working: true,
+          environmentOwnerKind: "user",
+          personalHostIds: null,
+        }),
+      ).toBe("working");
+    });
+
+    it("is idle for a team bot on a dialable sandbox, which is not a personal host", () => {
+      expect(
+        state({
+          boundHostId: SANDBOX,
+          directoryHostIds: new Set([OWN, SANDBOX]),
+          connectableHostIds: new Set([OWN, SANDBOX]),
+          environmentHostIds: TEAM_ENV_HOSTS,
+          environmentOwnerKind: "organization",
+          personalHostIds: new Set([OWN]),
+        }),
+      ).toBe("idle");
+    });
+  });
+
+  it("keeps an unbound bot paused and a working bot working before the directory answers", () => {
+    expect(state({ boundHostId: null, connectableResolved: false })).toBe(
+      "paused",
+    );
+    expect(state({ working: true, connectableResolved: false })).toBe(
+      "working",
+    );
   });
 });

@@ -92,6 +92,8 @@ import { toastRepointedStagingReset } from "@/lib/composer/repointed-staging-toa
 import { subscribeFollowingSurfaceReset } from "@/stores/host/surface-host-selection-store";
 import { ComposerHostNotice } from "@/components/home/composer/composer-host-notice";
 import { useComposerHostNotice } from "@/hooks/composer/use-composer-host-notice";
+import { composerTopNotice } from "@/components/home/composer/composer-mirror-line-model";
+import { useComposerMirrorLine } from "@/hooks/composer/use-composer-mirror-line";
 import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
 import { readLocalHostIdSnapshot } from "@/lib/host/local-host-id-snapshot";
 import { LEADER_SCOPE_NEW_CONVERSATION_MODAL } from "@/lib/keybindings/leader-scope";
@@ -176,6 +178,8 @@ import {
   worktreeStagingKeyString,
 } from "@/stores/worktree/worktree-intent-staging-store";
 import { useWorktreeIntentMemoryStore } from "@/stores/worktree/worktree-intent-memory-store";
+import { useTeamSandboxHarnessGate } from "@/hooks/sandboxes/use-team-sandbox-harness-blocked";
+import { TEAM_SANDBOX_HARNESS_UNAVAILABLE } from "@/lib/sandboxes/team-sandbox-harness";
 
 /** Nothing confirmed: below `epic.createChat@1.2`, or an upload that failed. */
 const NO_CONFIRMED_HASHES: ReadonlySet<string> = new Set<string>();
@@ -674,6 +678,12 @@ export function NewConversationModalBody(props: {
   });
   const resolvedHostId = composerPlacement.target.resolvedHostId;
   const hostClient = composerPlacement.target.client;
+  // A harness a team sandbox does not offer is refused at Send and at a
+  // terminal launch.
+  const teamSandboxHarnessBlocked = useTeamSandboxHarnessGate({
+    hostId: resolvedHostId,
+    client: hostClient,
+  });
   const submitTarget = composerPlacement.submitTarget;
   const composerFollowsEffective = composerPlacement.followsEffective;
   const hostLabelFor = composerPlacement.hostLabelFor;
@@ -811,6 +821,10 @@ export function NewConversationModalBody(props: {
     toolbarStore,
     (state) => state.selection.harnessId,
   );
+  const profileId = useStore(
+    toolbarStore,
+    (state) => state.selection.profileId,
+  );
   const mentionIntent = useMemo(
     () =>
       effectiveWorktreeIntent({
@@ -834,6 +848,7 @@ export function NewConversationModalBody(props: {
     pickerStore,
     hostClient,
     harnessId,
+    profileId,
     mentionRoots,
     currentEpicId: epicId,
     // Skip the eager catalog fetch when the modal is in Terminal mode: the chat
@@ -973,6 +988,15 @@ export function NewConversationModalBody(props: {
     raise: raiseHostNotice,
     dismiss: dismissHostNotice,
   } = useComposerHostNotice(resolvedHostId);
+  // The mirror line, once per task: the start host has another owner than a
+  // host already working here. A refusal outranks it in the one slot; it is
+  // marked seen when dismissed or when the agent starts.
+  const mirrorLine = useComposerMirrorLine(epicId, resolvedHostId);
+  const topNotice = composerTopNotice(
+    hostNotice,
+    dismissHostNotice,
+    mirrorLine,
+  );
   // G4: this modal FOLLOWS the effective host only when nothing else answered
   // its placement - no named host, no per-Epic pin in force, no session host
   // in force - and only then does a derivation move re-point it. Its staged
@@ -996,12 +1020,23 @@ export function NewConversationModalBody(props: {
       }
     });
   }, [clearStagedIntent, composerFollowsEffective, hostLabelFor, stagingKey]);
+  const mirrorLineShown = mirrorLine.notice !== null;
+  const markMirrorLineSeen = mirrorLine.markSeen;
   const cleanupAfterSubmit = useCallback((): void => {
+    if (mirrorLineShown) markMirrorLineSeen();
     clearDraft(epicId);
     clearStagedIntent(stagingKey);
     editorRef.current?.clear();
     onSubmitted();
-  }, [clearDraft, clearStagedIntent, epicId, onSubmitted, stagingKey]);
+  }, [
+    clearDraft,
+    clearStagedIntent,
+    epicId,
+    markMirrorLineSeen,
+    mirrorLineShown,
+    onSubmitted,
+    stagingKey,
+  ]);
   const worktreeIntentForSubmit = useCallback(
     (): WorktreeIntent | null =>
       effectiveWorktreeIntent({
@@ -1379,6 +1414,15 @@ export function NewConversationModalBody(props: {
     // before resolution finished, the live check passed and the chat was
     // created from a keystroke the user had every reason to read as a no-op.
     if (!canSubmit) return;
+    if (
+      teamSandboxHarnessBlocked(toolbarStore.getState().selection.harnessId)
+    ) {
+      raiseHostNotice({
+        kind: "refused",
+        message: TEAM_SANDBOX_HARNESS_UNAVAILABLE,
+      });
+      return;
+    }
     const editor = editorRef.current;
     if (editor === null) return;
     const captured = editor.getJSON();
@@ -1675,6 +1719,8 @@ export function NewConversationModalBody(props: {
     // received.
     submitTarget,
     submitPreparedDraft,
+    teamSandboxHarnessBlocked,
+    toolbarStore,
   ]);
   // The re-entry itself. Declared AFTER `handleSubmit` so it can name it
   // directly - that is the whole point of routing through state instead of a
@@ -1701,6 +1747,13 @@ export function NewConversationModalBody(props: {
   const handleStartTerminal = useCallback(
     (launch: TerminalAgentLaunch) => {
       if (!canMutate || !workspaceCanStart) return;
+      if (teamSandboxHarnessBlocked(launch.harnessId)) {
+        raiseHostNotice({
+          kind: "refused",
+          message: TEAM_SANDBOX_HARNESS_UNAVAILABLE,
+        });
+        return;
+      }
       // Same §54 gate as `handleSubmit`, and for the same ordering reason:
       // `cleanupAfterSubmit` runs before the async create, so a placement that
       // cannot be created on must be refused here or the draft is gone before
@@ -1756,6 +1809,7 @@ export function NewConversationModalBody(props: {
       recordPlacement,
       rememberEpicIntent,
       tabId,
+      teamSandboxHarnessBlocked,
       terminalAgentCreate,
       worktreeIntentForSubmit,
       workspaceCanStart,
@@ -1801,7 +1855,10 @@ export function NewConversationModalBody(props: {
       workspaceDisabledHint={composerDisabledHint}
       header={header}
       topBanner={
-        <ComposerHostNotice notice={hostNotice} onDismiss={dismissHostNotice} />
+        <ComposerHostNotice
+          notice={topNotice.notice}
+          onDismiss={topNotice.dismiss}
+        />
       }
       // Same rule as the landing composer's row (`landing-composer.tsx`): six
       // pills do not fit a phone-width row, so below `md` the agent-mode pill

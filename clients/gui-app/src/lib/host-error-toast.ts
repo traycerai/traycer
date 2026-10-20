@@ -6,6 +6,8 @@ import {
   type HostRpcError,
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import { toast } from "sonner";
+import { staleWriteOfHostError } from "@/lib/environment/stale-write";
+import { showStaleWriteNotice } from "@/lib/environment/write-outcome";
 import { emitHostErrorNotification } from "@/stores/notifications/app-local-notifications-store";
 import { useAuthStore, type CloudVerdictLoss } from "@/stores/auth/auth-store";
 import { createReportIssueContext } from "@/lib/report-issue-context";
@@ -267,6 +269,11 @@ export function toastFromHostError(
   // saying "couldn't do X" for something they themselves cancelled is no
   // better.
   if (isSilentHostError(error)) return;
+  const staleWrite = staleWriteOfHostError(error);
+  if (staleWrite !== null) {
+    showStaleWriteNotice(staleWrite);
+    return;
+  }
   if (isTransportClassFailure(error)) {
     transportNoticeToast(error);
     return;
@@ -404,6 +411,11 @@ export function toastFromHostErrorWithDetail(
   fallback: string,
 ): void {
   if (shouldSuppressRecoverableUnauthorized(error)) return;
+  const staleWrite = staleWriteOfHostError(error);
+  if (staleWrite !== null) {
+    showStaleWriteNotice(staleWrite);
+    return;
+  }
   if (error instanceof HostRequestAbortedError) return;
   if (isTransportClassFailure(error)) {
     transportNoticeToast(error);

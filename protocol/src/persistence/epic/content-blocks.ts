@@ -508,13 +508,15 @@ export type AgentMessageReceipt = z.infer<typeof agentMessageReceiptSchema>;
 //
 // - `queued`: the cloud accepted it; the receiving host has not taken it yet.
 // - `delivered`: the receiving host durably accepted it. The host also stamps
-//   `agentMessageReceipt` from the receiver's acknowledgement at that point.
+//   `agentMessageReceipt` from the receiving host's own delivered report at
+//   that point.
 // - `expired`: it waited past the delivery window and was dropped unread.
-// - `failed`: the receiving host refused it for any other terminal reason.
+// - `failed`: it will not be delivered for any other terminal reason: the
+//   receiving host refused it, or that host was removed and its queue purged.
 //
 // Stamped at `tool_call.completed` from the queued result, then moved by the
-// sending host as the receiver's acknowledgement or a terminal failure for
-// `eventId` arrives - after the turn has ended, as an ordinary row update.
+// sending host as the receiving host's delivered report, or a terminal failure
+// for `eventId`, arrives - after the turn has ended, as an ordinary row update.
 // Null for a send delivered on the same host and for every block persisted
 // before this field.
 export const agentMessageDeliveryStateSchema = lazySchema(() =>

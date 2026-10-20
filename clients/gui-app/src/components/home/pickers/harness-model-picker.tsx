@@ -1,4 +1,8 @@
 import { useStore } from "zustand";
+import {
+  maxModeTooltipCopy,
+  type MaxModeContext,
+} from "@/components/home/data/model-max-mode";
 
 import { Popover, PopoverTrigger } from "@/components/ui/popover";
 import { HarnessModelPickerTriggerTooltip } from "@/components/home/pickers/harness-model-picker-trigger-tooltip";
@@ -8,7 +12,10 @@ import { HarnessModelTrigger } from "@/components/home/pickers/harness-model-tri
 import { useLayoutRegion } from "@/components/layout-editor/use-layout-region";
 import { useComposerTileId } from "@/components/home/composer/composer-tile-hooks";
 import {
-  findUpgradeServiceTierForModel,
+  nonDefaultServiceTiersForModel,
+  selectedServiceTierOption,
+  serviceTierControlForModel,
+  standardServiceTierLabel,
   findReasoningOptionsForModel,
   type HarnessModelSelection,
   type HarnessOption,
@@ -127,6 +134,9 @@ import {
   usePaneActivationFocusIntent,
 } from "@/components/epic-canvas/pane-activation";
 import { useProvidersFocusStore } from "@/stores/settings/providers-focus-store";
+import { useHostCredentialRefusal } from "@/hooks/host/use-host-credential-refusal";
+import { useOnTeamSandbox } from "@/hooks/sandboxes/use-on-team-sandbox";
+import { teamSandboxHarnessBlocked } from "@/lib/sandboxes/team-sandbox-harness";
 
 export type { ReasoningFooterConfig, ServiceTierFooterConfig };
 
@@ -212,6 +222,7 @@ export interface HarnessModelPickerEmbedding {
 
 interface HarnessModelPickerProps {
   readonly presentation?: boolean;
+  readonly maxModeContext: MaxModeContext;
   /** Per-composer toolbar store; the picker subscribes to the selection /
    *  reasoning / service-tier slices and dispatches through its actions. */
   store: ComposerToolbarStore;
@@ -343,9 +354,21 @@ function isModelHotspotInteractive(
   return registerActivation && activityEnabled;
 }
 
+function maxModeRowContextKind(
+  context: MaxModeContext,
+): MaxModeContext["kind"] {
+  if (context.kind === "chat" && context.tuple === null) return "none";
+  return context.kind;
+}
+
+function maxModeLabel(required: boolean): string | null {
+  return required ? maxModeTooltipCopy() : null;
+}
+
 function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
   const {
     store,
+    maxModeContext,
     withServiceTier,
     withReasoning,
     tuiOnly,
@@ -525,6 +548,8 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
   );
   const createProfileHostIsLocal =
     useCreateProfileHostIsLocal(createProfileHostId);
+  const createProfileCredentialRefusal =
+    useHostCredentialRefusal(createProfileHostId);
   // Not gated on `activityEnabled`: the query's own `enabled`/`subscribed`
   // already release the observer, and `enabled:false` keeps the cache. Blanking
   // this list on blur only blanked the trigger a background split pane still
@@ -588,6 +613,7 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
     selection.harnessId,
     EMPTY_COMMANDS_WORKING_DIRECTORIES,
     {
+      profileId: selection.profileId,
       enabled: false,
       subscribed: false,
     },
@@ -595,14 +621,15 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
   // Latest-ref indirection: a `UseQueryResult` is a fresh object every render,
   // and `selectedHarnessRefetchGate` must be read at the moment the intent
   // effects below actually fire rather than captured as a stale closure from
-  // whenever `visibleOpen` / `selection.harnessId` last changed - so none of
-  // these is a dependency of those effects. Adding the gate as a dependency
+  // whenever `visibleOpen`, `selection.harnessId`, or `selection.profileId`
+  // last changed. None of those query results or the gate is a dependency of
+  // the intent effects. Adding the gate as a dependency
   // would re-run them on every gate flip, not just on an actual open/selection
   // edge. This effect has no dependency array, so it re-syncs after every
   // render and is declared BEFORE the intent effects: React runs effects in
-  // declaration order, so on the render where the user picks a new harness the
-  // refs already point at that harness's query by the time the selection edge
-  // fires.
+  // declaration order, so on the render where the user picks a new harness or
+  // profile the refs already point at that selection's queries by the time the
+  // selection edge fires.
   const selectedModelsQueryRef = useRef(selectedModelsQuery);
   const selectedCommandsQueryRef = useRef(selectedCommandsQuery);
   const selectedHarnessRefetchGateRef = useRef(selectedHarnessRefetchGate);
@@ -645,14 +672,18 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
     if (!visibleOpen) return;
     runSelectedHarnessIntentRefetch();
   }, [runSelectedHarnessIntentRefetch, visibleOpen]);
-  const skipInitialHarnessRefetchRef = useRef(true);
+  const skipInitialSelectionRefetchRef = useRef(true);
   useEffect(() => {
-    if (skipInitialHarnessRefetchRef.current) {
-      skipInitialHarnessRefetchRef.current = false;
+    if (skipInitialSelectionRefetchRef.current) {
+      skipInitialSelectionRefetchRef.current = false;
       return;
     }
     runSelectedHarnessIntentRefetch();
-  }, [runSelectedHarnessIntentRefetch, selection.harnessId]);
+  }, [
+    runSelectedHarnessIntentRefetch,
+    selection.harnessId,
+    selection.profileId,
+  ]);
   const catalogActive = activityEnabled && visibleOpen;
   // `"cached-only"`: the open popover renders every rail entry's models from
   // whatever the run-target host's cache slots hold (the prefetcher's app-load
@@ -703,8 +734,10 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
       deriveHarnessModelPickerPresentation({
         selection,
         models: selectedModels,
+        selectedModel,
         reasoningFooter,
         serviceTierFooter,
+        maxModeContext,
         harnessesPending,
         modelsPending,
         selectedHarnessAvailable,
@@ -718,8 +751,10 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
       reasoningFooter,
       selectedHarnessAvailable,
       selectedModels,
+      selectedModel,
       selection,
       serviceTierFooter,
+      maxModeContext,
     ],
   );
   const trimmedQuery = query.trim();
@@ -750,6 +785,7 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
   // A tab-bound composer gates on the TAB's host locality (`createProfileHostIsLocal`,
   // resolved from `createProfileHostId`), never the renderer-default host.
   const createProfileGate = resolveCreateProfileGate(
+    createProfileCredentialRefusal,
     createProfileHostIsLocal,
     createProfileStateByHarnessId.get(resolvedActiveProviderId),
   );
@@ -937,10 +973,22 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
     query: trimmedQuery,
     activeProviderId: resolvedActiveProviderId,
   });
+  const onTeamSandbox = useOnTeamSandbox(runTargetHostId);
   const selectRow = useCallback(
     (row: HarnessModelRow) => {
       if (disabled) {
         closeOnly();
+        return;
+      }
+      // The keyboard path to a row a team sandbox does not offer: the row is
+      // listed but not selectable.
+      const entry = catalogHarnesses.find(
+        (harness) => harness.id === row.harnessId,
+      );
+      if (
+        entry !== undefined &&
+        teamSandboxHarnessBlocked(entry.sandboxCredentialMode, onTeamSandbox)
+      ) {
         return;
       }
       // Commit the picked model through the memory-aware funnel (restores that
@@ -949,7 +997,14 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
       // click / escape (handled by Popover's onOpenChange -> closeOnly).
       commitSelection(store, row.harnessId, row.value, activePanelProfileId);
     },
-    [activePanelProfileId, closeOnly, disabled, store],
+    [
+      activePanelProfileId,
+      catalogHarnesses,
+      closeOnly,
+      disabled,
+      onTeamSandbox,
+      store,
+    ],
   );
   const handleRailEntryChange = useCallback(
     (providerId: ProviderId) => {
@@ -969,11 +1024,20 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
       // Only an AVAILABLE, non-degraded entry commits a switch (restoring its
       // remembered model/effort/tier, or landing on an embedding's own
       // model). A degraded / unavailable entry just browses the rail - the
-      // panel shows its reauth / setup CTA, no commit.
+      // panel shows its reauth / setup CTA, no commit. Nor does a provider a
+      // team sandbox does not offer: the panel says so.
       const entry = railEntries.find(
         (candidate) => candidate.harness.id === providerId,
       );
-      if (entry !== undefined && entry.harness.available && !entry.degraded) {
+      if (
+        entry !== undefined &&
+        entry.harness.available &&
+        !entry.degraded &&
+        !teamSandboxHarnessBlocked(
+          entry.harness.sandboxCredentialMode,
+          onTeamSandbox,
+        )
+      ) {
         commitSelection(
           store,
           providerId,
@@ -988,6 +1052,7 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
       activeProviderId,
       embedding,
       lockedHarnessId,
+      onTeamSandbox,
       profilesByHarnessId,
       railEntries,
       selection.harnessId,
@@ -1001,6 +1066,18 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
       // Mirrors `handleRailEntryChange`'s lock rule: while a fork lock is
       // active the strip stays interactive for the locked provider only.
       if (lockedHarnessId !== null && providerId !== lockedHarnessId) return;
+      // A provider a team sandbox does not offer is only browsed, never
+      // committed.
+      const entry = catalogHarnesses.find(
+        (harness) => harness.id === providerId,
+      );
+      if (
+        entry !== undefined &&
+        teamSandboxHarnessBlocked(entry.sandboxCredentialMode, onTeamSandbox)
+      ) {
+        setActiveRailEntry(providerId, profileId);
+        return;
+      }
       // Same-provider profile changes only replace the credential, preserving
       // the user's configured model, reasoning effort, and tier. The provider
       // can differ after browsing a degraded rail entry without committing it,
@@ -1021,7 +1098,14 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
       }
       setActiveRailEntry(providerId, profileId);
     },
-    [embedding, lockedHarnessId, setActiveRailEntry, store],
+    [
+      catalogHarnesses,
+      embedding,
+      lockedHarnessId,
+      onTeamSandbox,
+      setActiveRailEntry,
+      store,
+    ],
   );
 
   const handleKeyDown = useCallback(
@@ -1139,7 +1223,8 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
         presentation.reasoningLabel,
         presentation.reasoningStep,
       )}
-      fastModeLabel={fastModeTooltipLabel(serviceTierFooter, selectedModel)}
+      serviceTierTooltip={serviceTierTooltip(serviceTierFooter, selectedModel)}
+      maxModeLabel={maxModeLabel(presentation.maxModeRequired)}
       profileLabel={profileTooltipLabel(
         profilesByHarnessId.get(selection.harnessId) ?? [],
         selection.profileId,
@@ -1167,6 +1252,7 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
         reasoningIndicator={reasoningIndicator}
         serviceTierLabel={presentation.activeServiceTierLabel}
         serviceTierActive={presentation.serviceTierActive}
+        maxModeRequired={presentation.maxModeRequired}
         profileLabel={presentation.profileLabel}
         profileAccentDot={presentation.profileAccentDot}
         isLoading={presentation.isLoading}
@@ -1227,6 +1313,8 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
         reasoningFooter={reasoningFooter}
         reasoningPickerOpen={visibleOpen}
         serviceTierFooter={serviceTierFooter}
+        maxModeContextKind={maxModeRowContextKind(maxModeContext)}
+        maxModeRequired={presentation.maxModeRequired}
         createProfileHostId={createProfileHostId}
         runTargetHostId={runTargetHostId}
         terminalLoginSurface={terminalLoginSurface}
@@ -1420,6 +1508,7 @@ function PresentationHarnessModelPicker(props: HarnessModelPickerProps) {
       reasoningIndicator={reasoningIndicator}
       serviceTierLabel={null}
       serviceTierActive={false}
+      maxModeRequired={false}
       profileLabel={null}
       profileAccentDot={null}
       isLoading={false}
@@ -1433,14 +1522,19 @@ function HarnessModelPickerTooltip({
   harnessLabel,
   modelLabel,
   reasoningLabel,
-  fastModeLabel,
+  serviceTierTooltip,
+  maxModeLabel,
   profileLabel,
   shortcutLabel,
 }: {
   readonly harnessLabel: string;
   readonly modelLabel: string;
   readonly reasoningLabel: string | null;
-  readonly fastModeLabel: string | null;
+  readonly serviceTierTooltip: {
+    readonly label: string;
+    readonly value: string;
+  } | null;
+  readonly maxModeLabel: string | null;
   readonly profileLabel: string | null;
   readonly shortcutLabel: string | null;
 }): ReactNode {
@@ -1451,8 +1545,17 @@ function HarnessModelPickerTooltip({
       {reasoningLabel === null ? null : (
         <TooltipSummaryRow label="Effort" value={reasoningLabel} />
       )}
-      {fastModeLabel === null ? null : (
-        <TooltipSummaryRow label="Fast" value={fastModeLabel} />
+      {serviceTierTooltip === null ? null : (
+        <TooltipSummaryRow
+          label={serviceTierTooltip.label}
+          value={serviceTierTooltip.value}
+        />
+      )}
+      {maxModeLabel === null ? null : (
+        <div className="flex min-w-0 flex-col gap-0.5">
+          <span className="text-background/70">Max Mode</span>
+          <p className="whitespace-normal font-medium">{maxModeLabel}</p>
+        </div>
       )}
       {profileLabel === null ? null : (
         <TooltipSummaryRow label="Profile" value={profileLabel} />
@@ -1505,15 +1608,28 @@ function reasoningTooltipLabel(
   return position === null ? reasoningLabel : `${reasoningLabel} (${position})`;
 }
 
-function fastModeTooltipLabel(
+function serviceTierTooltip(
   serviceTierFooter: ServiceTierFooterConfig | null,
   selectedModel: ModelOption | null,
-): string | null {
+): { readonly label: string; readonly value: string } | null {
   if (serviceTierFooter === null) return null;
-  const upgrade = findUpgradeServiceTierForModel(selectedModel);
-  if (upgrade === null) return null;
-  const active = serviceTierFooter.value === upgrade.id;
-  return `${upgrade.label} ${active ? "on" : "off"}`;
+  const control = serviceTierControlForModel(selectedModel);
+  if (control === "none") return null;
+  const selected = selectedServiceTierOption(
+    serviceTierFooter.value,
+    selectedModel,
+  );
+  if (control === "menu") {
+    return {
+      label: "Speed",
+      value: selected?.label ?? standardServiceTierLabel(selectedModel),
+    };
+  }
+  const upgrade = nonDefaultServiceTiersForModel(selectedModel)[0];
+  return {
+    label: "Fast",
+    value: `${upgrade.label} ${selected === null ? "off" : "on"}`,
+  };
 }
 
 function profileTooltipLabel(

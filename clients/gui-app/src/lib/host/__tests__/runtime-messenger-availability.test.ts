@@ -14,14 +14,20 @@
  * against it sit on an error card until their own retry backoff fires. So the
  * subscription has to outlive the binding.
  */
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import type { RemoteHostDirectoryEntry } from "@traycer-clients/shared/host-client/remote-fetcher";
 import type { IRemoteSession } from "@traycer-clients/shared/host-transport/remote/index";
 import {
   HostRequestAbortedError,
+  HostRpcError,
   HostTransportFailureError,
+  mayHaveReachedHost,
 } from "@traycer-clients/shared/host-transport/host-messenger";
+import { createAuthAwareMessenger } from "@traycer-clients/shared/host-transport/auth-aware-messenger";
+import { RetryEpisodeOutcomeUnknownError } from "@traycer-clients/shared/host-transport/retrying-messenger";
+import { MutableBearerLease } from "@traycer-clients/shared/auth/bearer-source";
+import { markMayHaveReachedHost } from "@traycer/protocol/host-transport/remote/rpc-types";
 import type {
   FatalErrorDetails,
   SchemaVersion,
@@ -32,7 +38,10 @@ import {
   type HostRpcRegistry,
 } from "@traycer/protocol/host/index";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
-import { buildRuntimeHostMessenger } from "../host-messenger";
+import {
+  buildRuntimeHostMessenger,
+  type RuntimeHostMessengerBinding,
+} from "../host-messenger";
 
 // Only the network boundary is replaced. Every other export of this barrel
 // stays REAL, matching `stream-runtime.test.tsx`.
@@ -202,6 +211,7 @@ const remoteEntry: RemoteHostDirectoryEntry = {
   },
   publicKey: "pubkey-b",
   relayFuseGrace: false,
+  sandbox: null,
 };
 
 const localEntry: HostDirectoryEntry = {
@@ -230,6 +240,7 @@ function harness(): {
   session: ControllableSession;
   sessions: readonly ControllableSession[];
   recovered: string[];
+  terminals: { readonly hostId: string; readonly fatal: FatalErrorDetails }[];
   requestRemote: () => void;
   requestRemoteRaw: () => Promise<unknown>;
   requestRemoteWithSignal: (abortSignal: AbortSignal) => Promise<unknown>;
@@ -260,6 +271,10 @@ function harness(): {
     };
   });
   const recovered: string[] = [];
+  const terminals: {
+    readonly hostId: string;
+    readonly fatal: FatalErrorDetails;
+  }[] = [];
   const binding = buildRuntimeHostMessenger<HostRpcRegistry>({
     registry: hostRpcRegistry,
     resolveTarget: (hostId) =>
@@ -270,11 +285,15 @@ function harness(): {
     onRemoteAvailabilityRecovered: (hostId) => {
       recovered.push(hostId);
     },
+    onRemoteSessionTerminal: (hostId, fatal) => {
+      terminals.push({ hostId, fatal });
+    },
   });
   return {
     session: firstSession,
     sessions,
     recovered,
+    terminals,
     requestRemote: () => {
       void binding.messenger
         .request(
@@ -743,6 +762,44 @@ describe("RuntimeHostMessenger availability forwarding", () => {
     h.dispose();
   });
 
+  it("tells the terminal-session callback ONCE, with the host and the SANDBOX_FROZEN fatal it ended on", () => {
+    const h = harness();
+    h.requestRemote();
+    expect(h.terminals).toEqual([]);
+
+    const fatal = frozenFatal();
+    h.session.fatal = fatal;
+    h.session.emitClosed();
+
+    expect(h.terminals).toEqual([{ hostId: REMOTE_HOST_ID, fatal }]);
+
+    h.dispose();
+  });
+
+  it("passes any terminal fatal to the callback, not only the frozen one (the consumer filters)", () => {
+    const h = harness();
+    h.requestRemote();
+
+    const fatal = incompatibleFatal();
+    h.session.fatal = fatal;
+    h.session.emitClosed();
+
+    expect(h.terminals).toEqual([{ hostId: REMOTE_HOST_ID, fatal }]);
+
+    h.dispose();
+  });
+
+  it("never calls the terminal-session callback for a routine close", () => {
+    const h = harness();
+    h.requestRemote();
+
+    h.session.emitClosed();
+
+    expect(h.terminals).toEqual([]);
+
+    h.dispose();
+  });
+
   it("auth reset clears a terminal verdict before the next credential context requests", async () => {
     const h = harness();
     h.requestRemote();
@@ -795,6 +852,187 @@ describe("RuntimeHostMessenger availability forwarding", () => {
     }
   });
 
+  describe("credential recovery after the session went terminally fatal", () => {
+    // One call: its request is pending when the session is revoked, the
+    // session closes (recording the verdict) and fails the request, and
+    // recovery's revalidation is held until the test releases it.
+    function recoveringCall(refusal: HostRpcError): {
+      readonly callRemote: () => Promise<unknown>;
+      readonly failFirstSession: () => void;
+      readonly revalidations: () => number;
+      readonly releaseRevalidation: () => void;
+      readonly firstCalls: () => number;
+      readonly secondCalls: () => number;
+      readonly revoked: FatalErrorDetails;
+      readonly dispose: () => void;
+    } {
+      const revoked = revokedFatal();
+      const lease = new MutableBearerLease("stale", "user-1");
+      const gate: { open: () => void } = { open: () => undefined };
+      const pendingFirst: { reject: (reason: unknown) => void } = {
+        reject: () => undefined,
+      };
+      let revalidations = 0;
+      let firstCalls = 0;
+      let secondCalls = 0;
+      const firstSession = controllableSession();
+      const transports = [
+        {
+          session: firstSession,
+          request: () => {
+            firstCalls += 1;
+            return new Promise<never>((_, reject) => {
+              pendingFirst.reject = reject;
+            });
+          },
+        },
+        {
+          session: controllableSession(),
+          request: () => {
+            secondCalls += 1;
+            return Promise.reject(refusal);
+          },
+        },
+      ];
+      mocks.createRemoteHostTransport.mockImplementation(() => {
+        const transport = transports.at(
+          mocks.createRemoteHostTransport.mock.calls.length - 1,
+        );
+        if (transport === undefined) {
+          throw new Error("unexpected extra transport build");
+        }
+        return {
+          session: transport.session,
+          messenger: {
+            request: transport.request,
+            requestWithResponseTimeout: transport.request,
+          },
+          streamClient: {},
+        };
+      });
+      const binding = buildRuntimeHostMessenger<HostRpcRegistry>({
+        registry: hostRpcRegistry,
+        resolveTarget: () => remoteEntry,
+        auth: null,
+        authnBaseUrl: "https://authn.invalid",
+        requestId: () => "req-1",
+        onRemoteAvailabilityRecovered: () => undefined,
+        onRemoteSessionTerminal: () => undefined,
+      });
+      const recovering = createAuthAwareMessenger(binding.messenger, {
+        revalidateExpectedBearer: () => {
+          revalidations += 1;
+          return new Promise((resolve) => {
+            gate.open = () => {
+              lease.rotate("fresh");
+              resolve("rotated");
+            };
+          });
+        },
+      });
+      return {
+        callRemote: () =>
+          recovering
+            .request(
+              "host.status",
+              {},
+              {
+                replayMustBeKeyed: false,
+                requiredHostMethodVersion: null,
+                idempotencyKey: null,
+                authority: {
+                  endpoint: {
+                    hostId: REMOTE_HOST_ID,
+                    websocketUrl: remoteEntry.websocketUrl ?? "",
+                  },
+                  bearer: lease,
+                  abortSignal: new AbortController().signal,
+                },
+              },
+            )
+            .then(
+              () => null,
+              (reason: unknown) => reason,
+            ),
+        failFirstSession: () => {
+          firstSession.fatal = revoked;
+          firstSession.emitClosed();
+          pendingFirst.reject(markedSessionFatal(revoked));
+        },
+        revalidations: () => revalidations,
+        releaseRevalidation: () => gate.open(),
+        firstCalls: () => firstCalls,
+        secondCalls: () => secondCalls,
+        revoked,
+        dispose: () => binding.dispose(),
+      };
+    }
+
+    function refusalOfTheHost(): HostRpcError {
+      return new HostRpcError({
+        code: "FORBIDDEN",
+        message: "not allowed",
+        requestId: "req-refused",
+        method: "host.status",
+        fatalDetails: null,
+      });
+    }
+
+    it("a retry that lands on the fresh verdict reports an unknown outcome and never dials", async () => {
+      vi.useFakeTimers();
+      try {
+        const h = recoveringCall(refusalOfTheHost());
+        const outcome = h.callRemote();
+        expect(h.firstCalls()).toBe(1);
+        h.failFirstSession();
+        await vi.advanceTimersByTimeAsync(0);
+        expect(h.revalidations()).toBe(1);
+
+        h.releaseRevalidation();
+        const error = await outcome;
+
+        expect(error).toBeInstanceOf(RetryEpisodeOutcomeUnknownError);
+        expect(mayHaveReachedHost(error)).toBe(true);
+        expect(error).toHaveProperty("finalRefusal.fatalDetails", h.revoked);
+        expect(mocks.createRemoteHostTransport).toHaveBeenCalledTimes(1);
+        expect(h.secondCalls()).toBe(0);
+
+        h.dispose();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("recovery that outlasts the verdict's TTL redials, and a refused retry still reports an unknown outcome", async () => {
+      vi.useFakeTimers();
+      try {
+        const refusal = refusalOfTheHost();
+        const h = recoveringCall(refusal);
+        const outcome = h.callRemote();
+        expect(h.firstCalls()).toBe(1);
+        h.failFirstSession();
+        await vi.advanceTimersByTimeAsync(0);
+        expect(h.revalidations()).toBe(1);
+
+        // The verdict expires while this same call is still being recovered.
+        vi.advanceTimersByTime(30_000);
+        h.releaseRevalidation();
+        const error = await outcome;
+
+        expect(mocks.createRemoteHostTransport).toHaveBeenCalledTimes(2);
+        expect(h.firstCalls()).toBe(1);
+        expect(h.secondCalls()).toBe(1);
+        expect(error).toBeInstanceOf(RetryEpisodeOutcomeUnknownError);
+        expect(error).toHaveProperty("finalRefusal", refusal);
+        expect(mayHaveReachedHost(error)).toBe(true);
+
+        h.dispose();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
+
   it("drops the verdict early when the host's transport identity changes - a host update must not wait out the TTL", async () => {
     // An INCOMPATIBLE fatal is resolved exactly by a version change, and the
     // directory publishes that as a new transport key. The verdict describes
@@ -819,6 +1057,7 @@ describe("RuntimeHostMessenger availability forwarding", () => {
       authnBaseUrl: "https://authn.invalid",
       requestId: () => "req-1",
       onRemoteAvailabilityRecovered: () => undefined,
+      onRemoteSessionTerminal: () => undefined,
     });
     const requestRemote = (): Promise<unknown> =>
       binding.messenger.request(
@@ -857,6 +1096,93 @@ describe("RuntimeHostMessenger availability forwarding", () => {
     binding.dispose();
   });
 
+  it("rebuilds its remote transport with a session grant when a personal-looking entry is corrected to a sandbox, and not for a same-content re-emit", async () => {
+    // A sandbox first projected as a personal host (a list read before the
+    // sandbox facts arrived) built a user-bearer transport. Once the entry is
+    // corrected that transport must not be kept.
+    const session = controllableSession();
+    mocks.createRemoteHostTransport.mockImplementation(() => ({
+      session,
+      messenger: {
+        request: () => Promise.resolve({}),
+        requestWithResponseTimeout: () => Promise.resolve({}),
+      },
+      streamClient: {},
+    }));
+    let currentRemoteEntry: RemoteHostDirectoryEntry = remoteEntry;
+    const binding = buildRuntimeHostMessenger<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      resolveTarget: (hostId) =>
+        hostId === REMOTE_HOST_ID ? currentRemoteEntry : localEntry,
+      auth: null,
+      authnBaseUrl: "https://authn.invalid",
+      requestId: () => "req-1",
+      onRemoteAvailabilityRecovered: () => undefined,
+      onRemoteSessionTerminal: () => undefined,
+    });
+    const requestRemote = (): Promise<unknown> =>
+      binding.messenger
+        .request(
+          "host.status",
+          {},
+          {
+            replayMustBeKeyed: false,
+            requiredHostMethodVersion: null,
+            idempotencyKey: null,
+            authority: authorityFor(
+              REMOTE_HOST_ID,
+              remoteEntry.websocketUrl ?? "",
+            ),
+          },
+        )
+        .catch(() => undefined);
+    await requestRemote();
+    expect(mocks.createRemoteHostTransport).toHaveBeenCalledTimes(1);
+    expect(mocks.createRemoteHostTransport).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ openAuth: "user-bearer" }),
+    );
+
+    // Same content, re-emitted as a new object: the live transport is kept.
+    currentRemoteEntry = { ...remoteEntry };
+    await requestRemote();
+    expect(mocks.createRemoteHostTransport).toHaveBeenCalledTimes(1);
+
+    // The same host, now carrying its sandbox facts: rebuilt on a grant.
+    currentRemoteEntry = {
+      ...remoteEntry,
+      sandbox: {
+        state: "suspended",
+        frozen: false,
+        profile: null,
+        ownerTeamName: null,
+        ownerTeamId: null,
+      },
+    };
+    await requestRemote();
+    expect(mocks.createRemoteHostTransport).toHaveBeenCalledTimes(2);
+    expect(mocks.createRemoteHostTransport).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ openAuth: "session-grant" }),
+    );
+
+    // And a same-content re-emit of the corrected entry keeps that one.
+    currentRemoteEntry = {
+      ...remoteEntry,
+      sandbox: {
+        state: "suspended",
+        frozen: false,
+        profile: null,
+        ownerTeamName: null,
+        ownerTeamId: null,
+      },
+    };
+    await requestRemote();
+    expect(mocks.createRemoteHostTransport).toHaveBeenCalledTimes(2);
+
+    binding.dispose();
+  });
+
   it("a routine close (no fatal) records no verdict, fires no invalidation, and the next request rebuilds", () => {
     // Linger expiry / supersession retire a session without a verdict; the
     // host's next visit must dial normally, not land on a poisoned error.
@@ -873,6 +1199,361 @@ describe("RuntimeHostMessenger availability forwarding", () => {
   });
 });
 
+/**
+ * A binding over ONE remote sandbox host whose directory row the test moves.
+ * Every dial the messenger makes is a `createRemoteHostTransport` call, and
+ * each gets a fresh session once the previous one has closed.
+ */
+interface SandboxVerdictRig {
+  readonly binding: RuntimeHostMessengerBinding<HostRpcRegistry>;
+  /** Moves the directory row; `null` is a host the list no longer holds. */
+  readonly setEntry: (entry: HostDirectoryEntry | null) => void;
+  readonly request: () => Promise<unknown>;
+  /** Ends the live session on `fatal`, as the session does: records, closes, notifies. */
+  readonly endSessionOn: (fatal: FatalErrorDetails) => void;
+  readonly dials: () => number;
+}
+
+function sandboxVerdictRig(first: HostDirectoryEntry): SandboxVerdictRig {
+  let current: HostDirectoryEntry | null = first;
+  let live: ControllableSession | null = null;
+  mocks.createRemoteHostTransport.mockImplementation(() => {
+    if (live === null || live.isClosed()) {
+      live = controllableSession();
+    }
+    return {
+      session: live,
+      messenger: {
+        request: () => Promise.resolve({}),
+        requestWithResponseTimeout: () => Promise.resolve({}),
+      },
+      streamClient: {},
+    };
+  });
+  const binding = buildRuntimeHostMessenger<HostRpcRegistry>({
+    registry: hostRpcRegistry,
+    resolveTarget: () => current,
+    auth: null,
+    authnBaseUrl: "https://authn.invalid",
+    requestId: () => "req-1",
+    onRemoteAvailabilityRecovered: () => undefined,
+    onRemoteSessionTerminal: () => undefined,
+  });
+  return {
+    binding,
+    setEntry: (entry) => {
+      current = entry;
+    },
+    request: () =>
+      binding.messenger.request(
+        "host.status",
+        {},
+        {
+          replayMustBeKeyed: false,
+          requiredHostMethodVersion: null,
+          idempotencyKey: null,
+          authority: authorityFor(
+            REMOTE_HOST_ID,
+            remoteEntry.websocketUrl ?? "",
+          ),
+        },
+      ),
+    endSessionOn: (fatal) => {
+      if (live === null) throw new Error("no session has been dialed yet");
+      live.fatal = fatal;
+      live.emitClosed();
+    },
+    dials: () => mocks.createRemoteHostTransport.mock.calls.length,
+  };
+}
+
+function sandboxRow(frozen: boolean): RemoteHostDirectoryEntry {
+  return {
+    ...remoteEntry,
+    sandbox: {
+      state: "awake",
+      frozen,
+      profile: null,
+      ownerTeamName: null,
+      ownerTeamId: null,
+    },
+  };
+}
+
+function rejection(request: Promise<unknown>): Promise<unknown> {
+  return request.then(
+    () => null,
+    (reason: unknown) => reason,
+  );
+}
+
+function expectFrozenVerdict(error: unknown): void {
+  expect(error).toBeInstanceOf(HostTransportFailureError);
+  if (!(error instanceof HostTransportFailureError)) return;
+  expect(error.fatalDetails).toEqual(frozenFatal());
+}
+
+describe("a SANDBOX_FROZEN verdict ends when the list shows the sandbox thawed or gone", () => {
+  it("(a) dials again once the entry flips to not frozen, through the redial gate alone", async () => {
+    const rig = sandboxVerdictRig(sandboxRow(true));
+    await rig.request();
+    expect(rig.dials()).toBe(1);
+    rig.endSessionOn(frozenFatal());
+
+    // Frozen still: the verdict holds and nothing is dialed.
+    expectFrozenVerdict(await rejection(rig.request()));
+    expect(rig.dials()).toBe(1);
+
+    // A top-up: the next request dials instead of waiting out the TTL.
+    rig.setEntry(sandboxRow(false));
+    await rig.request();
+    expect(rig.dials()).toBe(2);
+
+    rig.binding.dispose();
+  });
+
+  it("(a) dials again after hostListChanged() sees the flip, with no request in between", async () => {
+    const rig = sandboxVerdictRig(sandboxRow(true));
+    await rig.request();
+    rig.endSessionOn(frozenFatal());
+
+    rig.setEntry(sandboxRow(false));
+    rig.binding.hostListChanged();
+    await rig.request();
+
+    expect(rig.dials()).toBe(2);
+
+    rig.binding.dispose();
+  });
+
+  it("(b) a verdict recorded while the entry still said not frozen is kept: the list is merely stale", async () => {
+    const rig = sandboxVerdictRig(sandboxRow(false));
+    await rig.request();
+    rig.endSessionOn(frozenFatal());
+
+    // The list has not yet caught up with the fatal. Refetches landing in
+    // this window must not drop the verdict and mint a doomed grant again.
+    rig.binding.hostListChanged();
+    expectFrozenVerdict(await rejection(rig.request()));
+    rig.binding.hostListChanged();
+    expectFrozenVerdict(await rejection(rig.request()));
+    expect(rig.dials()).toBe(1);
+
+    rig.binding.dispose();
+  });
+
+  it("(c) stale first, then the list shows frozen, then not frozen: dials", async () => {
+    const rig = sandboxVerdictRig(sandboxRow(false));
+    await rig.request();
+    rig.endSessionOn(frozenFatal());
+    rig.binding.hostListChanged();
+    expect(await rejection(rig.request())).toBeInstanceOf(
+      HostTransportFailureError,
+    );
+
+    // The list agrees with the fatal: confirmed.
+    rig.setEntry(sandboxRow(true));
+    rig.binding.hostListChanged();
+    expectFrozenVerdict(await rejection(rig.request()));
+    expect(rig.dials()).toBe(1);
+
+    // Now the top-up.
+    rig.setEntry(sandboxRow(false));
+    rig.binding.hostListChanged();
+    await rig.request();
+    expect(rig.dials()).toBe(2);
+
+    rig.binding.dispose();
+  });
+
+  it("(c) confirmation by a request through the redial gate counts too", async () => {
+    const rig = sandboxVerdictRig(sandboxRow(false));
+    await rig.request();
+    rig.endSessionOn(frozenFatal());
+
+    rig.setEntry(sandboxRow(true));
+    expectFrozenVerdict(await rejection(rig.request()));
+
+    rig.setEntry(sandboxRow(false));
+    await rig.request();
+    expect(rig.dials()).toBe(2);
+
+    rig.binding.dispose();
+  });
+
+  it("(d) a sandbox that is gone from the list ends the verdict: a host listed again dials", async () => {
+    const rig = sandboxVerdictRig(sandboxRow(true));
+    await rig.request();
+    rig.endSessionOn(frozenFatal());
+
+    rig.setEntry(null);
+    rig.binding.hostListChanged();
+    // It comes back (re-created under the same id) and is frozen again: the
+    // old verdict described the old sandbox, so this request dials.
+    rig.setEntry(sandboxRow(true));
+    await rig.request();
+
+    expect(rig.dials()).toBe(2);
+
+    rig.binding.dispose();
+  });
+
+  it("(d) a host the list now shows as no sandbox at all dials", async () => {
+    const rig = sandboxVerdictRig(sandboxRow(true));
+    await rig.request();
+    rig.endSessionOn(frozenFatal());
+
+    const noSandbox: RemoteHostDirectoryEntry = {
+      ...remoteEntry,
+      sandbox: null,
+    };
+    rig.setEntry(noSandbox);
+    rig.binding.hostListChanged();
+    await rig.request();
+
+    expect(rig.dials()).toBe(2);
+
+    rig.binding.dispose();
+  });
+
+  it("(e) a different fatal on the same key keeps failing fast within the TTL, even when the entry shows not frozen", async () => {
+    const rig = sandboxVerdictRig(sandboxRow(false));
+    await rig.request();
+    rig.endSessionOn(incompatibleFatal());
+
+    rig.binding.hostListChanged();
+    const error = await rejection(rig.request());
+
+    expect(error).toBeInstanceOf(HostTransportFailureError);
+    if (error instanceof HostTransportFailureError) {
+      expect(error.fatalDetails).toEqual(incompatibleFatal());
+    }
+    expect(rig.dials()).toBe(1);
+
+    rig.binding.dispose();
+  });
+
+  it("(e) nor does a thaw end it when the entry showed frozen at the time", async () => {
+    const rig = sandboxVerdictRig(sandboxRow(true));
+    await rig.request();
+    rig.endSessionOn(incompatibleFatal());
+
+    rig.setEntry(sandboxRow(false));
+    rig.binding.hostListChanged();
+    expect(await rejection(rig.request())).toBeInstanceOf(
+      HostTransportFailureError,
+    );
+    expect(rig.dials()).toBe(1);
+
+    rig.binding.dispose();
+  });
+
+  describe("past the 30 s TTL", () => {
+    const PAST_TTL_MS = 30_001;
+
+    beforeEach(() => {
+      vi.useFakeTimers();
+    });
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("(1) a CONFIRMED frozen verdict still fails fast with the frozen fatal, and nothing is dialed", async () => {
+      const rig = sandboxVerdictRig(sandboxRow(true));
+      await rig.request();
+      rig.endSessionOn(frozenFatal());
+      expectFrozenVerdict(await rejection(rig.request()));
+      expect(rig.dials()).toBe(1);
+
+      vi.advanceTimersByTime(PAST_TTL_MS);
+
+      expectFrozenVerdict(await rejection(rig.request()));
+      // A long wait later, still: the host's billing state does not change
+      // with time, so no grant is minted for a session that will end the same
+      // way.
+      vi.advanceTimersByTime(10 * PAST_TTL_MS);
+      rig.binding.hostListChanged();
+      expectFrozenVerdict(await rejection(rig.request()));
+      expect(rig.dials()).toBe(1);
+
+      rig.binding.dispose();
+    });
+
+    it("(2) control: once the list shows it thawed after that wait, the next request dials", async () => {
+      const rig = sandboxVerdictRig(sandboxRow(true));
+      await rig.request();
+      rig.endSessionOn(frozenFatal());
+      vi.advanceTimersByTime(PAST_TTL_MS);
+      expectFrozenVerdict(await rejection(rig.request()));
+      expect(rig.dials()).toBe(1);
+
+      rig.setEntry(sandboxRow(false));
+      rig.binding.hostListChanged();
+      await rig.request();
+
+      expect(rig.dials()).toBe(2);
+
+      rig.binding.dispose();
+    });
+
+    it("(3) control: an UNconfirmed frozen verdict (the list never showed frozen) expires at the TTL and dials", async () => {
+      const rig = sandboxVerdictRig(sandboxRow(false));
+      await rig.request();
+      rig.endSessionOn(frozenFatal());
+      // Within the TTL it holds.
+      expectFrozenVerdict(await rejection(rig.request()));
+      expect(rig.dials()).toBe(1);
+
+      vi.advanceTimersByTime(PAST_TTL_MS);
+      await rig.request();
+
+      expect(rig.dials()).toBe(2);
+
+      rig.binding.dispose();
+    });
+
+    it("(4) control: a non-frozen fatal expires at the TTL and dials, even on an entry that shows frozen", async () => {
+      const rig = sandboxVerdictRig(sandboxRow(true));
+      await rig.request();
+      rig.endSessionOn(incompatibleFatal());
+      expect(await rejection(rig.request())).toBeInstanceOf(
+        HostTransportFailureError,
+      );
+      expect(rig.dials()).toBe(1);
+
+      vi.advanceTimersByTime(PAST_TTL_MS);
+      await rig.request();
+
+      expect(rig.dials()).toBe(2);
+
+      rig.binding.dispose();
+    });
+  });
+
+  it("a fresh frozen verdict still fails fast while the list agrees, and hostListChanged() with no verdict is harmless", async () => {
+    const rig = sandboxVerdictRig(sandboxRow(true));
+    rig.binding.hostListChanged();
+    await rig.request();
+    rig.endSessionOn(frozenFatal());
+
+    rig.binding.hostListChanged();
+    rig.binding.hostListChanged();
+    expectFrozenVerdict(await rejection(rig.request()));
+    expect(rig.dials()).toBe(1);
+
+    rig.binding.dispose();
+  });
+});
+
+function frozenFatal(): FatalErrorDetails {
+  return {
+    code: "SANDBOX_FROZEN",
+    reason: "This sandbox is paused because your credits ran out.",
+    incompatibleMethods: null,
+    upgradeGuidance: null,
+  };
+}
+
 function incompatibleFatal(): FatalErrorDetails {
   return {
     code: "INCOMPATIBLE",
@@ -880,4 +1561,27 @@ function incompatibleFatal(): FatalErrorDetails {
     incompatibleMethods: null,
     upgradeGuidance: null,
   };
+}
+
+function revokedFatal(): FatalErrorDetails {
+  return {
+    code: "UNAUTHORIZED",
+    reason: "Host access was revoked",
+    incompatibleMethods: null,
+    upgradeGuidance: null,
+  };
+}
+
+// What a session answers a pending request with when it goes terminally
+// fatal: a plain `HostRpcError`, marked because the request was already sent.
+function markedSessionFatal(fatal: FatalErrorDetails): HostRpcError {
+  const error = new HostRpcError({
+    code: "UNAUTHORIZED",
+    message: fatal.reason,
+    requestId: "session-fatal",
+    method: "",
+    fatalDetails: fatal,
+  });
+  markMayHaveReachedHost(error);
+  return error;
 }

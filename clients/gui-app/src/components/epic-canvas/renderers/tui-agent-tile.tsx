@@ -107,6 +107,12 @@ import { createReportIssueContext } from "@/lib/report-issue-context";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
 
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
+import {
+  terminalAgentRelocationHeldReason,
+  terminalAgentRelocationHoldIsHostWide,
+} from "@/lib/terminal-agent-relocation-held";
+import { useNewConversationModalStore } from "@/stores/epics/new-conversation-modal-store";
+import { useNewConversationModalOpenStore } from "@/stores/epics/new-conversation-modal-open-store";
 /**
  * A bound worktree/folder is gone from disk. The host's prepare-launch
  * resolver rejects with the typed `WORKTREE_MISSING` envelope instead of
@@ -385,6 +391,19 @@ function TuiAgentTileLive(
   );
   const hostClient = useHostClientFor(hostEntry);
   const prepareLaunch = useAgentStartTerminalSession(hostClient);
+  // A data relocation held this agent: offer the explicit new-agent path (the
+  // same modal the palette's "New agent (Terminal)" opens) on this agent's
+  // host, leaving this agent and its native files untouched.
+  const startNewAgentForRelocationHold = useCallback((): void => {
+    useNewConversationModalStore.getState().setComposerMode(epicId, "terminal");
+    useNewConversationModalOpenStore.getState().open({
+      epicId,
+      tabId: props.viewTabId,
+      placement: null,
+      parentId: null,
+      hostId,
+    });
+  }, [epicId, hostId, props.viewTabId]);
   const killTerminal = useTerminalKillFor(
     hostClient,
     "Couldn't restart terminal after updating folders.",
@@ -896,6 +915,7 @@ function TuiAgentTileLive(
           isActive={props.isActive}
           recovery={props.recovery}
           onCrashExit={props.onCrashExit}
+          onStartNewAgent={startNewAgentForRelocationHold}
           measureProbe={
             <TerminalGridMeasureProbe
               sessionId={sessionId}
@@ -967,11 +987,40 @@ interface TerminalAgentBodyProps {
   readonly onCrashExit: () => void;
   /** Pre-subscribe grid measurement probe, rendered in the loading state. */
   readonly measureProbe: React.ReactNode;
+  /** Opens the new-agent flow for a launch a data relocation holds. */
+  readonly onStartNewAgent: () => void;
 }
 
 function TerminalAgentBody(props: TerminalAgentBodyProps): React.ReactNode {
   if (props.prepareLaunchIsError || props.createIsError) {
     const error = props.prepareLaunchError ?? props.createError;
+    const relocationHeldReason = terminalAgentRelocationHeldReason(error);
+    if (relocationHeldReason !== null) {
+      // Held, not failed: the host refuses to resume this agent's native
+      // session at the moved location and will not start it fresh under the
+      // same identity. No Retry - nothing changes until a supported resume
+      // exists - and this agent and its files stay as they are. A host-wide
+      // hold (unreadable impact record) holds new agents too, so it offers
+      // no new agent; its reason names the command to run.
+      const hostWide = terminalAgentRelocationHoldIsHostWide(error);
+      return (
+        <div className="flex h-full w-full flex-col items-center justify-center gap-3 px-6 text-center">
+          <span className="max-w-prose text-ui-sm text-muted-foreground">
+            {relocationHeldReason}
+          </span>
+          {hostWide ? null : (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={props.onStartNewAgent}
+            >
+              Start a new agent
+            </Button>
+          )}
+        </div>
+      );
+    }
     if (isWorktreeMissingError(error)) {
       // No silent demote-to-Local: the host refused to launch into a missing
       // cwd. A terminal agent stays bound to its folder for life (a PTY can't
@@ -1148,7 +1197,7 @@ function continueUnderProfileDisabledReasonFor(
     return "Update Traycer host to continue this session under another profile.";
   }
   if (forkDisabled) {
-    return "Fork is available after the terminal agent session and workspace binding are ready.";
+    return "Fork is available once the terminal agent session and its workspace are ready.";
   }
   return undefined;
 }
@@ -1314,7 +1363,7 @@ function TerminalAgentPreLaunchToolbar(
             <TooltipWrapper
               label={
                 forkDisabled
-                  ? "Fork is available after the terminal agent session and workspace binding are ready."
+                  ? "Fork is available once the terminal agent session and its workspace are ready."
                   : "Fork terminal agent"
               }
               side="top"

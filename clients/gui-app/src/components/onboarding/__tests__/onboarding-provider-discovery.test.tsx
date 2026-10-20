@@ -98,6 +98,7 @@ function providerState(enabled: boolean, installed: boolean): ProviderCliState {
         addModes: ["read-only"],
         marketplaceBrowse: false,
         traycerSessionToolsNotice: false,
+        openChatsApplyNextMessage: false,
         actionScopes: {
           list: ["global"],
           add: [],

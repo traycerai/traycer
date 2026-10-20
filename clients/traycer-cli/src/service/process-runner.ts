@@ -220,8 +220,9 @@ export interface RunBytesResult {
 }
 
 /**
- * {@link runCommand} for a READ whose stdout is not UTF-8 - `schtasks /Query
- * /XML` writes UTF-16LE, which a `utf8` decode turns into garbage. Resolves
+ * {@link runCommand} for a READ whose caller decodes stdout itself - the task
+ * definition read, which must refuse a byte its strict decode does not
+ * expect rather than have a code page guessed for it. Resolves
  * with the raw bytes and the exit code whatever that code is (the caller
  * decides what a non-zero exit means); rejects only when the child could not
  * be run at all, ran past `timeoutMs`, or overflowed the output cap.

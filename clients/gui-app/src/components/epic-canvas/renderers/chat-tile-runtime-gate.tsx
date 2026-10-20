@@ -5,7 +5,6 @@ import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
-import { resolvedHostLabel } from "@/hooks/agent/use-host-reachability";
 import { useHostLease } from "@/hooks/host/use-host-lease";
 import { useDeadlineReached } from "@/hooks/use-deadline-reached";
 import {
@@ -23,6 +22,7 @@ import {
   chatLoadWaitBeganAt,
   chatPreContentElapsed,
   chatPreContentReport,
+  chatTileHostLabel,
   describeChatPreContent,
   STALLED_CHAT_LOAD_ELAPSED_MS,
   type ChatPreContentInput,
@@ -105,7 +105,7 @@ export function ChatTilePreContent(props: {
     lease,
     reachabilityStatus: frame.reachability.status,
     hostKind: frame.reachability.hostKind,
-    hostLabel: resolvedHostLabel(frame.reachability),
+    hostLabel: chatTileHostLabel(frame.reachability, tabHostId),
     // The versions are the only skew evidence a wait has: there is no close
     // to read a code or a guidance off. The predicate answers from the two
     // alone, where `describeVersionSkew`'s fallback would warn and offer a
@@ -115,6 +115,8 @@ export function ChatTilePreContent(props: {
       hostAppVersion: hostUpdate.hostAppVersion,
       clientAppVersion: hostUpdate.clientAppVersion,
     }),
+    cloneAllowed: frame.cloneAllowed,
+    hasReadySession: frame.hasReadySession,
     elapsed: chatPreContentElapsed(slow, overdue),
   };
   const view = describeChatPreContent(input);

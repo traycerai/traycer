@@ -375,6 +375,7 @@ export function AssistantMessageBody({
               <SubagentSegment
                 id={item.id}
                 cardId={item.segment.id}
+                toolImageResults={item.segment.toolImageResults}
                 name={item.segment.name}
                 agentType={item.segment.agentType}
                 task={item.segment.task}
@@ -809,7 +810,6 @@ function AssistantMetaTooltip({
   completedAt: number | null;
 }) {
   const reasoning = meta?.reasoningEffortLabel ?? null;
-  const fastModeEnabled = meta !== null && isFastModeEnabled(meta.serviceTier);
   return (
     // Tooltip surface is `bg-foreground text-background`, so all text here must
     // be tinted off `background` (using `foreground` would be invisible).
@@ -839,9 +839,7 @@ function AssistantMetaTooltip({
           {reasoning === null ? null : (
             <AssistantMetaRow label="Reasoning" value={reasoning} />
           )}
-          {fastModeEnabled ? (
-            <AssistantMetaRow label="Fast mode" value="On" />
-          ) : null}
+          <AssistantSpeedMetaRow meta={meta} />
           {meta.costUsd !== null && meta.costUsd > 0 ? (
             <AssistantMetaRow label="Cost" value={formatUsd(meta.costUsd)} />
           ) : null}
@@ -860,6 +858,17 @@ function AssistantMetaTooltip({
         dividerAbove={meta !== null || startedAt !== null}
       />
     </div>
+  );
+}
+
+function AssistantSpeedMetaRow(props: { readonly meta: AssistantTurnMeta }) {
+  const { meta } = props;
+  if (!isFastModeEnabled(meta.serviceTier)) return null;
+  return (
+    <AssistantMetaRow
+      label="Speed"
+      value={meta.serviceTierLabel ?? meta.serviceTier ?? ""}
+    />
   );
 }
 
@@ -1338,6 +1347,7 @@ export function AssistantSegment({
         <SubagentSegment
           id={id}
           cardId={segment.id}
+          toolImageResults={segment.toolImageResults}
           name={segment.name}
           agentType={segment.agentType}
           task={segment.task}

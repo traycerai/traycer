@@ -539,3 +539,53 @@ describe("<PermissionsPicker /> - trailing 'Permission settings…' item", () =>
     ).toBeNull();
   });
 });
+
+describe("<PermissionsPicker /> - Max Mode judge suffix", () => {
+  function menuItemFor(label: string): HTMLElement {
+    const item = screen
+      .getAllByRole("menuitemradio")
+      .find(
+        (option) => option.querySelector(".font-medium")?.textContent === label,
+      );
+    if (item === undefined) throw new Error(`no "${label}" menu item`);
+    return item;
+  }
+  const autoMenuItem = () => menuItemFor("Auto");
+
+  const providerBilling = (maxModeListed: boolean): AutoJudgeBilling => ({
+    kind: "provider",
+    harnessId: "cursor",
+    harnessLabel: "Cursor",
+    modelLabel: "Example",
+    effortLabel: "High",
+    maxModeListed,
+  });
+
+  it("appends '· Max Mode' to the Auto row when the judge selection is listed", () => {
+    renderPicker({ judgeBilling: providerBilling(true) });
+    openMenu();
+
+    expect(within(autoMenuItem()).getByText(/·\s*Max Mode/)).toBeTruthy();
+    expect(
+      within(menuItemFor("Supervised")).queryByText(/Max Mode/),
+    ).toBeNull();
+  });
+
+  it("shows no Max Mode text when the provider judge is not listed", () => {
+    renderPicker({ judgeBilling: providerBilling(false) });
+    openMenu();
+
+    expect(within(autoMenuItem()).queryByText(/Max Mode/)).toBeNull();
+  });
+
+  it.each<[string, AutoJudgeBilling | null]>([
+    ["traycer", { kind: "traycer", modelLabel: "Sonnet 5", effortLabel: null }],
+    ["blocked", { kind: "blocked" }],
+    ["unknown (null)", null],
+  ])("shows no Max Mode text for %s billing", (_name, judgeBilling) => {
+    renderPicker({ judgeBilling });
+    openMenu();
+
+    expect(within(autoMenuItem()).queryByText(/Max Mode/)).toBeNull();
+  });
+});

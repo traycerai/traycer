@@ -1934,29 +1934,6 @@ const EpicsListRow = memo(function EpicsListRow(props: EpicsListRowProps) {
     canEdit: canEditTitle && !isRenamePending,
     onCommit: commitEpicTitle,
   });
-  const startRename = useCallback(
-    (event: React.MouseEvent<HTMLButtonElement>) => {
-      event.preventDefault();
-      event.stopPropagation();
-      startRenaming();
-    },
-    [startRenaming],
-  );
-  const blockDisabledEditTitleClick = useCallback(
-    (event: React.MouseEvent<HTMLButtonElement>) => {
-      event.preventDefault();
-      event.stopPropagation();
-    },
-    [],
-  );
-  const blockDisabledEditTitleKeyDown = useCallback(
-    (event: React.KeyboardEvent<HTMLButtonElement>) => {
-      if (event.key !== "Enter" && event.key !== " ") return;
-      event.preventDefault();
-      event.stopPropagation();
-    },
-    [],
-  );
   const openEpic = useCallback(() => {
     openHistoryItem(item);
   }, [item, openHistoryItem]);
@@ -1995,17 +1972,6 @@ const EpicsListRow = memo(function EpicsListRow(props: EpicsListRowProps) {
       event.stopPropagation();
     },
     [],
-  );
-  const titleEditControl = (
-    <HistoryTitleEditControl
-      item={item}
-      selectionMode={selectionMode}
-      canEditTitle={canEditTitle}
-      isRenamePending={isRenamePending}
-      onStartRename={startRename}
-      onBlockDisabledEditTitleClick={blockDisabledEditTitleClick}
-      onBlockDisabledEditTitleKeyDown={blockDisabledEditTitleKeyDown}
-    />
   );
   const checkboxChecked = historyCheckboxChecked(isSelected, canDeleteItem);
   const checkboxVisibilityClass = historySelectionCheckboxVisibility({
@@ -2113,7 +2079,6 @@ const EpicsListRow = memo(function EpicsListRow(props: EpicsListRowProps) {
           />
         ) : null
       }
-      renameControl={titleEditControl}
       deleteControl={deleteControl}
       sweepControl={
         <HistoryRowSweepControl sweep={rowSweep} displayTitle={displayTitle} />
@@ -2125,6 +2090,16 @@ const EpicsListRow = memo(function EpicsListRow(props: EpicsListRowProps) {
       contextMenuItems={
         isPhase ? null : (
           <>
+            {selectionMode ? null : (
+              <ContextMenuItem
+                disabled={!canEditTitle || isRenamePending}
+                onSelect={startRenaming}
+                data-testid="epics-list-row-rename-menu"
+              >
+                <Pencil />
+                Rename
+              </ContextMenuItem>
+            )}
             <HistoryTaskOrganizationMenu item={item} canEdit={canEditTitle} />
             <HistoryOpenInBackgroundMenuItem item={item} isOpen={isOpen} />
           </>
@@ -2347,57 +2322,6 @@ function HistorySweepMenuItem(props: {
       <Paintbrush />
       Sweep Worktrees…
     </ContextMenuItem>
-  );
-}
-
-function HistoryTitleEditControl(props: {
-  readonly item: HistoryItem;
-  readonly selectionMode: boolean;
-  readonly canEditTitle: boolean;
-  readonly isRenamePending: boolean;
-  readonly onStartRename: (event: React.MouseEvent<HTMLButtonElement>) => void;
-  readonly onBlockDisabledEditTitleClick: (
-    event: React.MouseEvent<HTMLButtonElement>,
-  ) => void;
-  readonly onBlockDisabledEditTitleKeyDown: (
-    event: React.KeyboardEvent<HTMLButtonElement>,
-  ) => void;
-}): ReactNode {
-  if (props.selectionMode) return null;
-  if (props.canEditTitle) {
-    return (
-      <Button
-        type="button"
-        variant="ghost"
-        size="icon-xs"
-        aria-label={`Edit title for ${historyItemDisplayTitle(props.item)}`}
-        data-testid="epics-list-row-edit-title"
-        disabled={props.isRenamePending}
-        className="pointer-events-auto size-5 opacity-0 transition-opacity focus-visible:opacity-100 group-hover:opacity-100 pointer-coarse:opacity-100"
-        onClick={props.onStartRename}
-      >
-        <Pencil className="size-3.5" />
-      </Button>
-    );
-  }
-  if (props.item.permissionRole !== "viewer") return null;
-  return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <button
-          type="button"
-          aria-disabled="true"
-          aria-label={`Viewers can't edit title for ${historyItemDisplayTitle(props.item)}`}
-          data-testid="epics-list-row-edit-title-disabled"
-          className="pointer-events-auto inline-flex size-5 cursor-not-allowed items-center justify-center rounded-sm text-muted-foreground/60 opacity-0 transition-opacity outline-none focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring/50 group-hover:opacity-100"
-          onClick={props.onBlockDisabledEditTitleClick}
-          onKeyDown={props.onBlockDisabledEditTitleKeyDown}
-        >
-          <Pencil className="size-3.5" />
-        </button>
-      </TooltipTrigger>
-      <TooltipContent>Viewers cannot edit epic titles.</TooltipContent>
-    </Tooltip>
   );
 }
 

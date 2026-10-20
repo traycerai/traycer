@@ -14,8 +14,9 @@ import {
   stat,
   writeFile,
 } from "node:fs/promises";
-import { homedir, platform } from "node:os";
+import { platform } from "node:os";
 import { delimiter, dirname, join, parse } from "node:path";
+import { traycerDataRoot } from "@traycer/protocol/config/data-root";
 import { config, isDevBuild } from "../../config";
 import { environmentSubdir } from "../host/host-paths";
 import { devDesktopSlotForEnvironment } from "../host/dev-desktop-slot";
@@ -25,7 +26,8 @@ import devWrapperPaths from "./dev-wrapper-paths.json";
 
 /**
  * Stable per-user CLI install layout (Tech Plan Decision 6 / Data Model),
- * environment-scoped to match the CLI package's `store/paths.ts`:
+ * environment-scoped to match the CLI package's `store/paths.ts`, under the
+ * shared data root (`~/.traycer` by default; `traycerDataRoot()`):
  *
  *   production → ~/.traycer/cli/         (no suffix)
  *   dev        → ~/.traycer/cli/dev/
@@ -41,8 +43,9 @@ import devWrapperPaths from "./dev-wrapper-paths.json";
  * the env-propagated run slot selects the per-run install surface while shared
  * CLI config/credentials remain in the normal dev home.
  */
-const TRAYCER_HOME = join(homedir(), ".traycer");
-const CLI_HOME = join(TRAYCER_HOME, "cli");
+function cliHome(): string {
+  return join(traycerDataRoot(), "cli");
+}
 
 // Resolved on every call (not cached at module load) so a value read before
 // `DEV_DESKTOP_SLOT` is set in a test - or, in principle, before Electron's
@@ -57,8 +60,8 @@ function resolveCliSlotHome(): string {
     process.env,
   );
   return devDesktopSlot === null
-    ? environmentSubdir(CLI_HOME, config.environment)
-    : join(CLI_HOME, "dev-runs", devDesktopSlot);
+    ? environmentSubdir(cliHome(), config.environment)
+    : join(cliHome(), "dev-runs", devDesktopSlot);
 }
 
 function resolveCliBinDir(): string {

@@ -8,9 +8,12 @@ import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
 import { BotsUnavailableNotice } from "@/components/bots/bots-unavailable-notice";
 import { useHostDirectoryList } from "@/hooks/host/use-host-directory-list-query";
 import { useConnectableHostIds } from "@/hooks/host/use-connectable-host-ids";
+import { useRegisteredHosts } from "@/hooks/auth/use-registered-hosts-query";
 import { useEnvironmentListQuery } from "@/hooks/bots/use-environment-list-query";
 import { useBotListQuery } from "@/hooks/bots/use-bot-list-query";
+import { useBotListChangedSubscriptionForApp } from "@/hooks/bots/use-bot-list-changed-subscription";
 import { useHostEnvironmentBindings } from "@/hooks/bots/use-host-environment-bindings-query";
+import { useEnvironmentHostLists } from "@/hooks/bots/use-environment-host-lists-query";
 import {
   buildHomeBotsModel,
   EMPTY_HOME_BOTS_MODEL,
@@ -21,6 +24,7 @@ import { HomeBotsGroupCard } from "@/components/home/bots/home-bots-group";
 const HEADING_CLASS_NAME = "tracking-[0.08em] uppercase";
 const EMPTY_ENVIRONMENTS: ReadonlyArray<EnvironmentDescriptor> = [];
 const EMPTY_BOTS: ReadonlyArray<BotRecord> = [];
+const NO_MACHINES: ReadonlySet<string> = new Set();
 
 /**
  * The bots band on Home (Tracy Bots): every environment the reader belongs
@@ -28,7 +32,9 @@ const EMPTY_BOTS: ReadonlyArray<BotRecord> = [];
  *
  * Read through the app-wide host like the rest of Home. The host answers for
  * every environment from the cloud, so which host serves the list does not
- * change it; a bot's TAB, by contrast, binds to the host its trunk runs on.
+ * change it. No machine is named anywhere in the band: a row says whether its
+ * bot is working, idle or paused, and its tab opens through this window's
+ * host, which finds the one that serves the bot.
  * On a host whose handshake has no `bot.list` the band shows the same update
  * notice the usage panel uses, and nothing else on Home changes.
  */
@@ -39,22 +45,68 @@ export function HomeBotsSection(): ReactNode {
   const enabled = support === true;
   const environments = useEnvironmentListQuery(client, enabled);
   const bots = useBotListQuery(client, enabled);
+  // A teammate's change to the list refetches it without waiting for focus.
+  useBotListChangedSubscriptionForApp(enabled);
   const directory = useHostDirectoryList();
   const connectable = useConnectableHostIds();
   const bindings = useHostEnvironmentBindings(connectable.hostIds, enabled);
+  const hostListSupport = useHostMethodSupport(hostId, "environment.host.list");
   const headingId = useId();
 
-  const hostLabels = useMemo(() => {
-    const labels = new Map<string, string>();
-    for (const entry of directory.data ?? [])
-      labels.set(entry.hostId, entry.label);
-    return labels;
-  }, [directory.data]);
-  const connectableHostIds = useMemo(
-    () => new Set(connectable.hostIds),
-    [connectable.hostIds],
+  const registeredHosts = useRegisteredHosts();
+  // `undefined` while loading or failed with nothing kept, `null` with no
+  // signed-in registry: neither is an answer.
+  const registry = registeredHosts.data ?? null;
+  const hostReach = useMemo(
+    () => ({
+      directoryHostIds: new Set(
+        (directory.data ?? []).map((entry) => entry.hostId),
+      ),
+      connectableHostIds: new Set(connectable.hostIds),
+      connectableResolved: connectable.resolved,
+      // An unanswered registry is not "no personal hosts": the rows read
+      // it as not known yet.
+      personalHostIds:
+        registry === null
+          ? null
+          : new Set(
+              registry.hosts
+                .filter((host) => host.kind === "personal")
+                .map((host) => host.hostId),
+            ),
+    }),
+    [connectable.hostIds, connectable.resolved, directory.data, registry],
   );
   const environmentList = environments.data?.environments ?? EMPTY_ENVIRONMENTS;
+  // A team environment's machines the reader may see beyond their own (its
+  // sandboxes), for each row's paused state; a personal one has none.
+  const teamEnvironmentIds = useMemo(
+    () =>
+      environmentList
+        .filter((environment) => environment.ownerKind === "organization")
+        .map((environment) => environment.environmentId),
+    [environmentList],
+  );
+  const environmentHosts = useEnvironmentHostLists(
+    client,
+    teamEnvironmentIds,
+    enabled && hostListSupport === true,
+  );
+  const environmentHostIds = useMemo(() => {
+    const byEnvironmentId = new Map<string, ReadonlySet<string>>();
+    // A failed list stays out of the map, read as unanswered: the rows say
+    // idle rather than claim a machine is away.
+    for (const [
+      environmentId,
+      hosts,
+    ] of environmentHosts.hostsByEnvironmentId) {
+      byEnvironmentId.set(
+        environmentId,
+        new Set(hosts.map((host) => host.hostId)),
+      );
+    }
+    return byEnvironmentId;
+  }, [environmentHosts.hostsByEnvironmentId]);
   const botList = bots.data?.bots ?? EMPTY_BOTS;
   const model = useMemo(
     () =>
@@ -68,18 +120,9 @@ export function HomeBotsSection(): ReactNode {
   // that flashes "unavailable" before every connect is worse than a late one.
   if (support === null) return null;
 
-  // The directory's label, else the raw id; never the placeholder constant,
-  // which is a sentinel and not a word for a person.
-  const hostLabel = hostId === null ? null : (hostLabels.get(hostId) ?? hostId);
-
   let body: ReactNode;
   if (!support) {
-    body = (
-      <BotsUnavailableNotice
-        hostLabel={hostLabel}
-        testId="home-bots-unavailable"
-      />
-    );
+    body = <BotsUnavailableNotice testId="home-bots-unavailable" />;
   } else if (environments.isError || bots.isError) {
     body = (
       <div
@@ -116,9 +159,16 @@ export function HomeBotsSection(): ReactNode {
           <HomeBotsGroupCard
             key={group.environmentId}
             group={group}
-            hostLabels={hostLabels}
-            connectableHostIds={connectableHostIds}
+            hostReach={hostReach}
+            environmentHostIds={
+              group.ownerKind === "organization"
+                ? (environmentHostIds.get(group.environmentId) ?? null)
+                : NO_MACHINES
+            }
+            connectableHostIds={connectable.hostIds}
             environmentBindings={bindings}
+            client={client}
+            hostId={hostId}
           />
         ))}
       </div>

@@ -1,4 +1,12 @@
-import { useEffect, useId, useMemo, useState, type ReactNode } from "react";
+import {
+  createContext,
+  useContext,
+  useEffect,
+  useId,
+  useMemo,
+  useState,
+  type ReactNode,
+} from "react";
 import type { UseQueryResult } from "@tanstack/react-query";
 import {
   PROVIDER_DISPLAY_NAMES,
@@ -11,6 +19,7 @@ import type {
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { GuiHarnessId } from "@traycer/protocol/host/index";
 import { SettingsPanelShell } from "@/components/settings/settings-panel-shell";
+import { ProviderLinkDialog } from "@/components/settings/panels/provider-link-dialog";
 import {
   SettingsDetailHeader,
   SettingsMasterDetail,
@@ -31,7 +40,9 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ProviderList } from "@/components/providers/provider-list";
 import { HarnessIcon } from "@/components/home/pickers/harness-icon";
 import { useProvidersList } from "@/hooks/providers/use-providers-list-query";
+import { AccountManagedCredentialsLine } from "@/components/providers/secrets-dashboard-link";
 import { useProvidersSetEnabled } from "@/hooks/providers/use-providers-set-enabled-mutation";
+import { useProvidersSettingsFileStatus } from "@/hooks/providers/use-providers-settings-file-status-query";
 import {
   useHostMethodSchemaVersion,
   useHostSupportsMethod,
@@ -50,7 +61,7 @@ import {
 } from "@/components/settings/host-scope/host-scope-gate";
 import { isHostScopeUsable } from "@/components/settings/host-scope/host-scope-status";
 import {
-  useHostScope,
+  usePersonalHostScope,
   type HostScope,
 } from "@/components/settings/host-scope/use-host-scope";
 import type { HostRpcRegistry } from "@/lib/host";
@@ -79,6 +90,10 @@ import { ProviderProfileScopedSection } from "./provider-profile-scoped-section"
 import { FallbackCrossLinkRow } from "./fallback/fallback-cross-link-row";
 import { ProviderUsageLimitsSection } from "./provider-usage-limits-section";
 import {
+  PROVIDER_SETTINGS_UNUSABLE_COPY,
+  ProviderSettingsResetAction,
+} from "./provider-settings-reset-action";
+import {
   defaultSelectedProfileId,
   profileCommitId,
 } from "@/components/providers/provider-profile-model";
@@ -100,10 +115,14 @@ import {
   providerTabInputs,
   providerTabLabel,
   supportedTabsFor as resolveSupportedTabs,
+  tabsForView,
   type ProviderTabKey,
+  type ProvidersPanelView,
 } from "./provider-settings-tabs";
 
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
+import { useHostCredentialRefusal } from "@/hooks/host/use-host-credential-refusal";
+
 type ProviderId = ProviderCliState["providerId"];
 type ProviderProfile = ProviderCliState["profiles"][number];
 type ProvidersListQuery = UseQueryResult<
@@ -148,6 +167,72 @@ function initialActiveProviderId(
   return providers[0].providerId;
 }
 
+/** The tabs `state` shows on the page `view` draws. */
+function viewTabs(
+  state: ProviderCliState,
+  permissionsTab: boolean,
+  view: ProvidersPanelView,
+): readonly ProviderTabKey[] {
+  return tabsForView(
+    resolveSupportedTabs(providerTabInputs(state, permissionsTab)),
+    view,
+  );
+}
+
+/** Which page this panel is drawn as; Providers unless a section says so. */
+const ProvidersPanelViewContext =
+  createContext<ProvidersPanelView>("providers");
+
+const VIEW_COPY: Readonly<
+  Record<
+    ProvidersPanelView,
+    {
+      readonly title: string;
+      readonly description: string;
+      readonly empty: string;
+    }
+  >
+> = {
+  providers: {
+    title: "Providers",
+    description:
+      "Choose the CLI binary Traycer runs for each coding agent. Pick the bundled binary, one found on your PATH, or a custom install. Disable a provider to hide it when creating an agent.",
+    empty: "No providers on this host.",
+  },
+  "mcp-servers": {
+    title: "MCP servers",
+    description:
+      "The MCP servers each coding agent can use. Yours follow you to every host; one added on this computer stays here until you add it to Personal.",
+    empty: "No provider on this host supports MCP servers.",
+  },
+  skills: {
+    title: "Skills",
+    description:
+      "The skills each coding agent can use. Yours follow you to every host; one added on this computer stays here until you add it to Personal.",
+    empty: "No provider on this host supports skills.",
+  },
+};
+
+/**
+ * Settings > Personal > MCP servers and Skills: the Providers rail and tab
+ * bodies, narrowed to that one tab.
+ */
+export function McpServersSettingsPanel(): ReactNode {
+  return (
+    <ProvidersPanelViewContext.Provider value="mcp-servers">
+      <ProvidersSettingsPanel />
+    </ProvidersPanelViewContext.Provider>
+  );
+}
+
+export function SkillsSettingsPanel(): ReactNode {
+  return (
+    <ProvidersPanelViewContext.Provider value="skills">
+      <ProvidersSettingsPanel />
+    </ProvidersPanelViewContext.Provider>
+  );
+}
+
 // Initial tab for the deep-linked (or first) provider: honor `focusTab` when
 // the target supports it, else the first supported tab in
 // {@link PROVIDER_TAB_ORDER} (account → usage → general → …).
@@ -155,10 +240,11 @@ function initialActiveTab(
   providers: readonly ProviderCliState[],
   providerId: ProviderId,
   permissionsTab: boolean,
+  view: ProvidersPanelView,
 ): ProviderTabKey {
   const state =
     providers.find((p) => p.providerId === providerId) ?? providers[0];
-  const tabs = resolveSupportedTabs(providerTabInputs(state, permissionsTab));
+  const tabs = viewTabs(state, permissionsTab, view);
   // `focusTab` is a plain `string` in the store, so a deep link CAN name the
   // client-only `account` tab even though it is absent from the wire enum -
   // the match below is against the resolved tab list, not the schema. When no
@@ -180,8 +266,9 @@ function resolveTabForProvider(
   state: ProviderCliState,
   preferred: ProviderTabKey,
   permissionsTab: boolean,
+  view: ProvidersPanelView,
 ): ProviderTabKey {
-  const tabs = resolveSupportedTabs(providerTabInputs(state, permissionsTab));
+  const tabs = viewTabs(state, permissionsTab, view);
   if (tabs.includes(preferred)) return preferred;
   return tabs[0] ?? "general";
 }
@@ -309,7 +396,7 @@ function ProviderCheckedTimestamp({
 }
 
 export function ProvidersSettingsPanel() {
-  const scope = useHostScope();
+  const scope = usePersonalHostScope();
   const setHostId = scope.setHostId;
   // A deep link that already knows which machine needs attention — the
   // composer's provider re-auth banner knows exactly whose profile expired —
@@ -400,20 +487,17 @@ function ProvidersSettingsPanelInner({
   readonly isSelectedHostLocal: boolean;
 }) {
   const isMobile = useIsMobileViewport();
+  const copy = VIEW_COPY[useContext(ProvidersPanelViewContext)];
   return (
     <SettingsPanelShell
-      title="Providers"
+      title={copy.title}
       // The blurb is desktop-only, and its absence is what puts the global
       // status control on the TITLE's line. The shell's header is a wrapping
       // row of [title + description] and [action]; the description's flex base
       // size is its max-content width, which on a phone exceeds the row on its
       // own, so the action wraps to a line of its own and spends a whole row of
       // the shortest viewport restating what the panel's contents already show.
-      description={
-        isMobile
-          ? undefined
-          : "Choose the CLI binary Traycer runs for each coding agent. Pick the bundled binary, one found on your PATH, or a custom install. Disable a provider to hide it when creating an agent."
-      }
+      description={isMobile ? undefined : copy.description}
       // Desktop only, and this is the whole mobile scroll model. `fillHeight`
       // stretches the card to the settings scroll container and lets the ACTIVE
       // PANE own an internal scroll, which needs `min-h-0` at every level
@@ -469,6 +553,9 @@ function ProvidersSettingsPanelInner({
           hostId={hostId}
           isSelectedHostLocal={isSelectedHostLocal}
         />
+        {/* The Link dialog: mounted once, inside the scoped
+            host, so its calls go to the host this page shows. */}
+        <ProviderLinkDialog />
       </HostScopeGate>
     </SettingsPanelShell>
   );
@@ -558,6 +645,22 @@ function ProvidersPanelBody({
   readonly hostId: string | null;
   readonly isSelectedHostLocal: boolean;
 }): ReactNode {
+  const view = useContext(ProvidersPanelViewContext);
+  // The reset is offered only by a host that has it, and only where that host
+  // says the WHOLE settings document is unusable: a read fault fails the list
+  // (below), while a document that does not parse is answered normally - every
+  // provider at its default - so only the status read can tell that apart from
+  // a user who switched them off.
+  const supportsReset = useHostSupportsMethod(
+    hostId,
+    "providers.settingsFile.reset",
+  );
+  const supportsStatus = useHostSupportsMethod(
+    hostId,
+    "providers.settingsFile.status",
+  );
+  const canReset = supportsReset && supportsStatus;
+  const settingsFileStatus = useProvidersSettingsFileStatus(canReset);
   if (query.isPending) {
     return (
       <div className="flex items-center gap-2 px-6 py-8 text-ui-sm text-muted-foreground">
@@ -640,6 +743,7 @@ function ProvidersPanelBody({
           >
             Retry
           </Button>
+          {canReset ? <ProviderSettingsResetAction /> : null}
         </div>
       );
     }
@@ -666,12 +770,42 @@ function ProvidersPanelBody({
       </div>
     );
   }
-  return (
+  // On MCP servers and Skills, only the providers that have that tab: the
+  // permissions tab is never one of them, so its gate does not matter here.
+  const providers =
+    view === "providers"
+      ? query.data.providers
+      : query.data.providers.filter(
+          (state) => viewTabs(state, false, view).length > 0,
+        );
+  if (providers.length === 0) {
+    return (
+      <div className="px-6 py-8 text-ui-sm text-muted-foreground">
+        {VIEW_COPY[view].empty}
+      </div>
+    );
+  }
+  const rail = (
     <ProvidersRailLayout
-      providers={query.data.providers}
+      providers={providers}
       hostId={hostId}
       isSelectedHostLocal={isSelectedHostLocal}
     />
+  );
+  if (!canReset || settingsFileStatus.data?.unreadable !== true) return rail;
+  return (
+    <div className="flex flex-col gap-3 md:h-full md:min-h-0">
+      <div
+        role="alert"
+        className="mx-6 mt-4 flex flex-wrap items-center gap-2 rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-ui-sm text-warning-foreground"
+      >
+        <span className="min-w-0 flex-1">
+          {PROVIDER_SETTINGS_UNUSABLE_COPY}
+        </span>
+        <ProviderSettingsResetAction />
+      </div>
+      <div className="flex-1 md:min-h-0">{rail}</div>
+    </div>
   );
 }
 
@@ -684,6 +818,7 @@ function ProvidersRailLayout({
   readonly hostId: string | null;
   readonly isSelectedHostLocal: boolean;
 }) {
+  const view = useContext(ProvidersPanelViewContext);
   const orderedProviders = useMemo(
     () => sortProviderStatesByProviderOrder(providers),
     [providers],
@@ -769,6 +904,7 @@ function ProvidersRailLayout({
       orderedProviders,
       initialActiveProviderId(orderedProviders, initialFocus.harnessId),
       permissionsTab,
+      view,
     ),
   );
   useEffect(() => {
@@ -779,7 +915,12 @@ function ProvidersRailLayout({
   const active =
     orderedProviders.find((p) => p.providerId === activeId) ??
     orderedProviders[0];
-  const resolvedTab = resolveTabForProvider(active, activeTab, permissionsTab);
+  const resolvedTab = resolveTabForProvider(
+    active,
+    activeTab,
+    permissionsTab,
+    view,
+  );
 
   // The rail's own view state. Resolved against `orderedProviders` for the ROWS
   // only - `active` above is deliberately unaffected, so narrowing the rail
@@ -801,7 +942,7 @@ function ProvidersRailLayout({
     const next =
       orderedProviders.find((p) => p.providerId === providerId) ??
       orderedProviders[0];
-    setActiveTab(resolveTabForProvider(next, activeTab, permissionsTab));
+    setActiveTab(resolveTabForProvider(next, activeTab, permissionsTab, view));
   };
 
   return (
@@ -1127,10 +1268,14 @@ function ProviderDetail({
   // choosing anything, which is why this gate used to read the sticky mode
   // instead of the effective flag.
   const detailPaneInert = !state.enabled;
-  const canAddProfile = providerCanStartProfileOauth(
-    state,
-    isSelectedHostLocal,
-  );
+  // A sandbox takes no sign-in: every control that would start one (Add
+  // profile, Retry, Sign in, Switch account, the deep link's auto-reauth)
+  // reads `canAddProfile`, so folding the refusal in here holds all of them
+  // and says why.
+  const credentialRefusal = useHostCredentialRefusal(null);
+  const canAddProfile =
+    credentialRefusal === null &&
+    providerCanStartProfileOauth(state, isSelectedHostLocal);
   // A focus intent names a profile by its wire `profileId`, while the selection
   // holds its commit id - `null` for the Terminal account, whose wire id is
   // the "ambient" sentinel. Comparing the two raw values made a sign-in link
@@ -1149,7 +1294,11 @@ function ProviderDetail({
   const enabledProviderCount = providers.filter(
     (provider) => provider.enabled,
   ).length;
-  const tabs = resolveSupportedTabs(providerTabInputs(state, permissionsTab));
+  const tabs = viewTabs(
+    state,
+    permissionsTab,
+    useContext(ProvidersPanelViewContext),
+  );
   // Bundled once here (rather than threaded as eight separate props) since
   // only the "usage" ("Profiles & Limits") tab body needs the profile-
   // management surface - the other tabs never see it.
@@ -1157,6 +1306,7 @@ function ProviderDetail({
     hostId,
     isSelectedHostLocal,
     canAddProfile,
+    credentialRefusal,
     startInReauth: shouldStartInReauth,
     failedAttempt: failedProfileAttempt,
     onAddProfile: () => setAddProfileOpen(true),
@@ -1383,6 +1533,8 @@ interface ProviderProfileTabProps {
   readonly hostId: string | null;
   readonly isSelectedHostLocal: boolean;
   readonly canAddProfile: boolean;
+  /** `useHostCredentialRefusal` for the scoped host; see `canAddProfile`. */
+  readonly credentialRefusal: string | null;
   readonly startInReauth: boolean;
   readonly failedAttempt: FailedProviderProfileAttempt | null;
   readonly onAddProfile: () => void;
@@ -1396,6 +1548,22 @@ interface ProviderProfileTabProps {
     profileId: string | null,
     enabled: boolean,
   ) => void;
+}
+
+/**
+ * A sandbox host says its credentials live in the account
+ * (`providers.list@10.5`). Its key and sign-in controls could only ever be
+ * refused, so the one line that says where they are managed stands in their
+ * place; on every other host the controls (`children`) render as they did.
+ * Reads the panel's own query key, so there is no second fetch.
+ */
+function CredentialsManagedInAccountOr(props: {
+  readonly children: ReactNode;
+}): ReactNode {
+  const managedInAccount =
+    useProvidersList({ enabled: true, subscribed: true }).data
+      ?.credentialsManagedInAccount === true;
+  return managedInAccount ? <AccountManagedCredentialsLine /> : props.children;
 }
 
 function ProviderTabBody({
@@ -1462,15 +1630,18 @@ function ProviderTabBody({
     // sitting outside the tab bar entirely.
     case "account":
       return (
-        <ProviderApiKeySection
-          state={state}
-          draft={apiKeyDraft}
-          onDraftChange={onApiKeyDraftChange}
-        />
+        <CredentialsManagedInAccountOr>
+          <ProviderApiKeySection
+            state={state}
+            draft={apiKeyDraft}
+            onDraftChange={onApiKeyDraftChange}
+          />
+        </CredentialsManagedInAccountOr>
       );
     case "usage":
       return (
         <div className="flex flex-col gap-3">
+          <CredentialsManagedInAccountOr>{null}</CredentialsManagedInAccountOr>
           <ProviderProfileScopedSection
             state={state}
             {...profileTab}

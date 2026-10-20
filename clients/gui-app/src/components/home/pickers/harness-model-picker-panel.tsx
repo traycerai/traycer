@@ -6,7 +6,14 @@ import { HarnessModelPickerSearch } from "@/components/home/pickers/harness-mode
 import { HarnessModelPickerList } from "@/components/home/pickers/harness-model-picker-list";
 import { ProviderRail } from "@/components/home/pickers/harness-model-picker-group";
 import { PickerProviderAuthLine } from "@/components/home/pickers/harness-model-picker-auth-line";
+import { PickerSandboxCredentialLine } from "@/components/home/pickers/harness-sandbox-credential-line";
+import { useOnTeamSandbox } from "@/hooks/sandboxes/use-on-team-sandbox";
+import {
+  TEAM_SANDBOX_HARNESS_UNAVAILABLE,
+  teamSandboxHarnessBlocked,
+} from "@/lib/sandboxes/team-sandbox-harness";
 import { PickerProfileDropdown } from "@/components/home/pickers/picker-profile-dropdown";
+import { TerminalAccountFirstMention } from "@/components/home/pickers/terminal-account-first-mention";
 import { isProfileUsageSidecarTarget } from "@/components/providers/profile-usage-sidecar-target";
 import { useProviderProfileAddFlowStore } from "@/stores/settings/provider-profile-add-flow-store";
 import { pickerProfileShortcutHintForIndex } from "@/components/home/pickers/harness-model-picker-shortcut-hint";
@@ -38,6 +45,7 @@ import {
   type ReasoningFooterConfig,
   type ServiceTierFooterConfig,
 } from "@/components/home/pickers/harness-model-picker-footers";
+import type { MaxModeContext } from "@/components/home/data/model-max-mode";
 
 /**
  * What the picker's body draws from. Props only: the live picker feeds it from
@@ -108,6 +116,8 @@ export interface HarnessModelPickerPanelBodyProps {
   /** The picker's `visibleOpen`, for the footer's max treatment. */
   readonly reasoningPickerOpen: boolean;
   readonly serviceTierFooter: ServiceTierFooterConfig | null;
+  readonly maxModeContextKind?: MaxModeContext["kind"];
+  readonly maxModeRequired?: boolean;
   /** The host "Create new profile" creates on - see `HarnessModelPicker`'s
    *  prop of the same name. */
   readonly createProfileHostId: string | null;
@@ -197,7 +207,12 @@ export function HarnessModelPickerPanel(props: HarnessModelPickerPanelProps) {
       // Both halves have to move together or the gate is a no-op.
       onOpenAutoFocus={coarseOpenAutoFocus}
       onKeyDown={(event) => {
-        if (isInsideEmbeddingFooter(event.target)) return;
+        if (
+          isInsideEmbeddingFooter(event.target) ||
+          isInsideSpeedMenu(event.target)
+        ) {
+          return;
+        }
         onKeyDown(event);
       }}
       onEscapeKeyDown={(event) => {
@@ -276,6 +291,8 @@ export function HarnessModelPickerPanelBody(
     reasoningFooter,
     reasoningPickerOpen,
     serviceTierFooter,
+    maxModeContextKind,
+    maxModeRequired,
     createProfileHostId,
     runTargetHostId,
     terminalLoginSurface,
@@ -283,6 +300,15 @@ export function HarnessModelPickerPanelBody(
     createProfileDisabledReason,
     profileAdmission,
   } = props;
+  // On a team sandbox only a harness whose credential stays a placeholder is
+  // offered; any other is listed, not selectable.
+  const onTeamSandbox = useOnTeamSandbox(runTargetHostId);
+  const teamBlocked =
+    activeProvider !== null &&
+    teamSandboxHarnessBlocked(
+      activeProvider.sandboxCredentialMode,
+      onTeamSandbox,
+    );
   const openAddProfile = useProviderProfileAddFlowStore(
     (state) => state.openForHarness,
   );
@@ -362,6 +388,11 @@ export function HarnessModelPickerPanelBody(
                 runTargetHostId={runTargetHostId}
                 admissionByProfileId={profileAdmission}
               />
+              <TerminalAccountFirstMention
+                named={activeProviderProfiles.some(
+                  (profile) => profile.kind === "ambient",
+                )}
+              />
             </div>
           ) : (
             <PickerProviderAuthLine
@@ -372,6 +403,16 @@ export function HarnessModelPickerPanelBody(
               onClosePicker={onClosePicker}
             />
           )}
+          {teamBlocked ? (
+            <p
+              className="px-3 py-1 text-ui-xs text-muted-foreground"
+              data-testid="picker-team-sandbox-unavailable"
+            >
+              {TEAM_SANDBOX_HARNESS_UNAVAILABLE}
+            </p>
+          ) : (
+            <PickerSandboxCredentialLine harness={activeProvider} />
+          )}
           <div className="min-h-0 flex-1 overflow-hidden">
             <HarnessModelPickerList
               idPrefix={idPrefix}
@@ -379,6 +420,7 @@ export function HarnessModelPickerPanelBody(
               listRef={listRef}
               listKey={listKey}
               rows={visibleRows}
+              maxModeContextKind={maxModeContextKind ?? "none"}
               selectedRowId={selectedRowId}
               activeRowId={effectiveActiveRowId}
               hoveredRowId={hoveredRowId}
@@ -396,12 +438,14 @@ export function HarnessModelPickerPanelBody(
               terminalLoginSurface={terminalLoginSurface}
               runTargetHostId={runTargetHostId}
               onClosePicker={onClosePicker}
+              rowsDisabled={teamBlocked}
             />
           </div>
           <HarnessModelPickerModelSettingsFooter
             reasoning={reasoningFooter}
             pickerOpen={reasoningPickerOpen}
             serviceTier={serviceTierFooter}
+            maxMode={maxModeRequired === true}
           />
         </div>
       </div>
@@ -416,5 +460,13 @@ function isInsideEmbeddingFooter(target: EventTarget): boolean {
   return (
     target instanceof Element &&
     target.closest(EMBEDDING_FOOTER_SELECTOR) !== null
+  );
+}
+
+/** Radix owns keyboard input inside the Speed trigger and its portalled menu. */
+function isInsideSpeedMenu(target: EventTarget): boolean {
+  return (
+    target instanceof Element &&
+    target.closest("[data-picker-speed-menu]") !== null
   );
 }

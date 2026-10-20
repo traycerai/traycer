@@ -28,9 +28,6 @@ export interface HostEnvironmentBindings {
    * asked is not a host that runs some other environment.
    */
   readonly failedHostIds: ReadonlyArray<string>;
-  /** Every listed host has answered or refused; false while one is still
-   * being asked, and false while the reads are disabled. */
-  readonly resolved: boolean;
   /** Asks the failed hosts again. A no-op when none failed. */
   readonly retryFailed: () => void;
 }
@@ -60,7 +57,6 @@ export function useHostEnvironmentBindings(
       const byHostId = new Map<string, EnvironmentHostBinding>();
       const failedHostIds: string[] = [];
       const failedRefetches: Array<() => Promise<unknown>> = [];
-      let resolved = enabled;
       // Positional, and safe by construction: `useQueries` returns results in
       // the order the queries were given, so index `n` is `hostIdList[n]`.
       results.forEach((result, index) => {
@@ -71,21 +67,17 @@ export function useHostEnvironmentBindings(
         } else if (result.status === "error") {
           failedHostIds.push(hostId);
           failedRefetches.push(result.refetch);
-        } else {
-          // Still pending (the only status left without data or an error).
-          resolved = false;
         }
       });
       return {
         byHostId,
         failedHostIds,
-        resolved,
         retryFailed: () => {
           for (const refetch of failedRefetches) void refetch();
         },
       };
     },
-    [enabled, hostIdList],
+    [hostIdList],
   );
   return useQueries({
     queries: hostIdList.map((hostId) =>

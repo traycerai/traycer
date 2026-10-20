@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { noopLogger } from "../../logger";
-import { serviceLabelFor, type ServiceStatus } from "../../service";
+import { CLI_ERROR_CODES, cliError } from "../../runner/errors";
+import {
+  serviceLabelFor,
+  type ServiceStatus,
+  type StopServiceOptions,
+} from "../../service";
 import type { PublishedProcessIdentityVerdict } from "../../store/process-identity";
 import type { UninstallHostOptions } from "../../installer";
 import {
@@ -77,6 +82,21 @@ function testActuators(deps: RunHostUninstallDeps): HostUninstallActuators {
   };
 }
 
+/** The actuators of `testActuators`, plus a record of what `stop` was asked. */
+function stopRecordingActuators(
+  deps: RunHostUninstallDeps,
+  stopOptions: StopServiceOptions[],
+): HostUninstallActuators {
+  const actuators = testActuators(deps);
+  return {
+    ...actuators,
+    stop: (controller, label, options) => {
+      stopOptions.push(options);
+      return actuators.stop(controller, label, options);
+    },
+  };
+}
+
 describe("stopServiceBeforeRuntimePurge", () => {
   it("allows runtime purge after stop confirms the host exited", async () => {
     const label = serviceLabelFor("dev");
@@ -130,7 +150,7 @@ describe("runHostUninstall", () => {
       publishedPid: null,
     });
     const result = await runHostUninstall(
-      { all: true },
+      { all: true, force: false },
       COMMAND_CONTEXT,
       deps,
       testActuators(deps),
@@ -163,7 +183,7 @@ describe("runHostUninstall", () => {
       publishedPid: null,
     });
     const result = await runHostUninstall(
-      { all: true },
+      { all: true, force: false },
       COMMAND_CONTEXT,
       deps,
       testActuators(deps),
@@ -199,7 +219,7 @@ describe("runHostUninstall", () => {
       publishedPid: null,
     });
     const result = await runHostUninstall(
-      { all: true },
+      { all: true, force: false },
       COMMAND_CONTEXT,
       deps,
       testActuators(deps),
@@ -225,7 +245,7 @@ describe("runHostUninstall", () => {
       publishedPid: null,
     });
     const result = await runHostUninstall(
-      { all: true },
+      { all: true, force: false },
       COMMAND_CONTEXT,
       deps,
       testActuators(deps),
@@ -237,8 +257,39 @@ describe("runHostUninstall", () => {
     });
   });
 
-  it("forwards runtime preservation after a failed stop", async () => {
+  it("keeps the install and the runtime after a failed stop, without --force", async () => {
     const receivedOptions: UninstallHostOptions[] = [];
+    const stopOptions: StopServiceOptions[] = [];
+
+    const deps = commandDeps({
+      stop: async () => {
+        throw new Error("host still running");
+      },
+      receivedOptions,
+      status: async () => NOT_INSTALLED_STATUS,
+      liveness: null,
+      successorAfterTeardown: null,
+      publishedPid: null,
+    });
+
+    await expect(
+      runHostUninstall(
+        { all: true, force: false },
+        COMMAND_CONTEXT,
+        deps,
+        stopRecordingActuators(deps, stopOptions),
+      ),
+    ).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.HOST_UNINSTALL_HOST_RUNNING,
+      exitCode: 1,
+    });
+    expect(stopOptions).toEqual([{ force: false }]);
+    expect(receivedOptions).toEqual([]);
+  });
+
+  it("with --force, forwards runtime preservation after a failed stop and still removes the install", async () => {
+    const receivedOptions: UninstallHostOptions[] = [];
+    const stopOptions: StopServiceOptions[] = [];
 
     const deps = commandDeps({
       stop: async () => {
@@ -251,12 +302,13 @@ describe("runHostUninstall", () => {
       publishedPid: null,
     });
     const result = await runHostUninstall(
-      { all: true },
+      { all: true, force: true },
       COMMAND_CONTEXT,
       deps,
-      testActuators(deps),
+      stopRecordingActuators(deps, stopOptions),
     );
 
+    expect(stopOptions).toEqual([{ force: true }]);
     expect(receivedOptions).toEqual([
       expect.objectContaining({
         environment: "dev",
@@ -267,6 +319,85 @@ describe("runHostUninstall", () => {
     expect(result.data).toMatchObject({ purgedRuntime: false });
   });
 
+  // traycer#1563 D3b: a wedged host ignores SIGTERM, so `--all`'s stop
+  // throws and the probe still finds the process serving. Deleting the
+  // install directory then leaves an orphan running from unlinked bytes,
+  // still holding the lifecycle lock that makes every reinstall defer to it.
+  // The install directory and record stay until the stop takes effect.
+  it("keeps the install when the --all stop did not take effect and the host is still serving", async () => {
+    const receivedOptions: UninstallHostOptions[] = [];
+
+    const deps = commandDeps({
+      stop: async () => {
+        throw new Error(
+          "host (pid=4242) did not exit within 32000ms of SIGTERM; stop did not take effect.",
+        );
+      },
+      receivedOptions,
+      status: async () => NOT_INSTALLED_STATUS,
+      liveness: "current",
+      successorAfterTeardown: true,
+      publishedPid: null,
+    });
+
+    await expect(
+      runHostUninstall(
+        { all: true, force: false },
+        COMMAND_CONTEXT,
+        deps,
+        testActuators(deps),
+      ),
+    ).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.HOST_UNINSTALL_HOST_RUNNING,
+      exitCode: 1,
+      message: expect.stringContaining("--force"),
+      details: {
+        environment: "dev",
+        hostStillRunning: true,
+        removedInstallDir: false,
+        serviceDeregistrationRequested: true,
+      },
+    });
+    expect(receivedOptions).toEqual([]);
+  });
+
+  it("with --force, removes the install even though the host is still serving", async () => {
+    const receivedOptions: UninstallHostOptions[] = [];
+    const stopOptions: StopServiceOptions[] = [];
+
+    const deps = commandDeps({
+      stop: async () => {
+        throw new Error(
+          "host (pid=4242) did not exit within 32000ms of SIGTERM; stop did not take effect.",
+        );
+      },
+      receivedOptions,
+      status: async () => NOT_INSTALLED_STATUS,
+      liveness: "current",
+      successorAfterTeardown: true,
+      publishedPid: null,
+    });
+    const result = await runHostUninstall(
+      { all: true, force: true },
+      COMMAND_CONTEXT,
+      deps,
+      stopRecordingActuators(deps, stopOptions),
+    );
+
+    expect(stopOptions).toEqual([{ force: true }]);
+    expect(receivedOptions).toEqual([
+      expect.objectContaining({
+        environment: "dev",
+        purgeChannelRuntime: false,
+      }),
+    ]);
+    expect(result.data).toMatchObject({
+      removedInstallDir: true,
+      purgedRuntime: false,
+      hostStillRunning: true,
+    });
+  });
+
   // The load-bearing one. A resolved `stop()` is NOT evidence the host
   // exited: on Linux and Windows every teardown call passes
   // `tolerateNonZeroExit: true`, and the runner resolves on any error under
@@ -275,7 +406,7 @@ describe("runHostUninstall", () => {
   // host is still serving. Inferring shutdown from that resolution purged the
   // pid metadata and rotated the log of a LIVE host - exactly what the purge
   // gate exists to prevent - and reported it as stopped.
-  it("withholds the purge and reports the host live when a resolved --all stop left one serving", async () => {
+  it("keeps the install and reports the host live when a resolved --all stop left one serving, without --force", async () => {
     const receivedOptions: UninstallHostOptions[] = [];
 
     const deps = commandDeps({
@@ -286,13 +417,47 @@ describe("runHostUninstall", () => {
       successorAfterTeardown: null,
       publishedPid: null,
     });
+
+    await expect(
+      runHostUninstall(
+        { all: true, force: false },
+        COMMAND_CONTEXT,
+        deps,
+        testActuators(deps),
+      ),
+    ).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.HOST_UNINSTALL_HOST_RUNNING,
+      exitCode: 1,
+      details: {
+        environment: "dev",
+        hostStillRunning: true,
+        removedInstallDir: false,
+        serviceDeregistrationRequested: true,
+      },
+    });
+    expect(receivedOptions).toEqual([]);
+  });
+
+  it("with --force, withholds the purge and reports the host live when a resolved --all stop left one serving", async () => {
+    const receivedOptions: UninstallHostOptions[] = [];
+    const stopOptions: StopServiceOptions[] = [];
+
+    const deps = commandDeps({
+      stop: async () => undefined, // resolves, proving nothing
+      receivedOptions,
+      status: async () => NOT_INSTALLED_STATUS,
+      liveness: "current",
+      successorAfterTeardown: null,
+      publishedPid: null,
+    });
     const result = await runHostUninstall(
-      { all: true },
+      { all: true, force: true },
       COMMAND_CONTEXT,
       deps,
-      testActuators(deps),
+      stopRecordingActuators(deps, stopOptions),
     );
 
+    expect(stopOptions).toEqual([{ force: true }]);
     expect(receivedOptions).toEqual([
       expect.objectContaining({
         environment: "dev",
@@ -306,6 +471,240 @@ describe("runHostUninstall", () => {
     });
     expect(result.human ?? "").toContain("STILL RUNNING");
     expect(result.human ?? "").toContain("traycer host stop --force");
+  });
+
+  // The host answered the stop and declined because it has work in progress:
+  // it is busy, not wedged. Its own refusal is the one worth surfacing, since
+  // it names the work and the `--force` that would end it.
+  it("rethrows the host's own E_HOST_BUSY when the --all stop was declined for work in progress, keeping the install", async () => {
+    const receivedOptions: UninstallHostOptions[] = [];
+    const busy = cliError({
+      code: CLI_ERROR_CODES.HOST_BUSY,
+      message: "host stop: the host has work in progress",
+      details: null,
+      exitCode: 1,
+    });
+    const deps = commandDeps({
+      stop: async () => {
+        throw busy;
+      },
+      receivedOptions,
+      status: async () => NOT_INSTALLED_STATUS,
+      liveness: "current",
+      successorAfterTeardown: null,
+      publishedPid: null,
+    });
+
+    await expect(
+      runHostUninstall(
+        { all: true, force: false },
+        COMMAND_CONTEXT,
+        deps,
+        testActuators(deps),
+      ),
+    ).rejects.toMatchObject({ code: "E_HOST_BUSY" });
+    expect(receivedOptions).toEqual([]);
+  });
+
+  // The boundary read of the published record is the last evidence about
+  // whether a host is still there. A record that cannot be read (a live host
+  // mid-write, a permission error) is no evidence of absence; "nothing
+  // published" is.
+  it("keeps the install when the published record cannot be read at the boundary, without --force", async () => {
+    const receivedOptions: UninstallHostOptions[] = [];
+    const base = commandDeps({
+      stop: async () => undefined,
+      receivedOptions,
+      status: async () => NOT_INSTALLED_STATUS,
+      liveness: "dead",
+      successorAfterTeardown: null,
+      publishedPid: null,
+    });
+    let reads = 0;
+    const deps: RunHostUninstallDeps = {
+      ...base,
+      readPublishedHost: async (environment) => {
+        reads += 1;
+        if (reads > 1) throw new Error("EACCES: permission denied");
+        return base.readPublishedHost(environment);
+      },
+    };
+
+    await expect(
+      runHostUninstall(
+        { all: true, force: false },
+        COMMAND_CONTEXT,
+        deps,
+        testActuators(deps),
+      ),
+    ).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.HOST_UNINSTALL_HOST_RUNNING,
+      exitCode: 1,
+      details: {
+        environment: "dev",
+        removedInstallDir: false,
+        serviceDeregistrationRequested: true,
+      },
+    });
+    expect(receivedOptions).toEqual([]);
+  });
+
+  it("with --force, removes the install although the published record cannot be read at the boundary", async () => {
+    const receivedOptions: UninstallHostOptions[] = [];
+    const base = commandDeps({
+      stop: async () => undefined,
+      receivedOptions,
+      status: async () => NOT_INSTALLED_STATUS,
+      liveness: "dead",
+      successorAfterTeardown: null,
+      publishedPid: null,
+    });
+    let reads = 0;
+    const deps: RunHostUninstallDeps = {
+      ...base,
+      readPublishedHost: async (environment) => {
+        reads += 1;
+        if (reads > 1) throw new Error("EACCES: permission denied");
+        return base.readPublishedHost(environment);
+      },
+    };
+    const result = await runHostUninstall(
+      { all: true, force: true },
+      COMMAND_CONTEXT,
+      deps,
+      testActuators(deps),
+    );
+
+    expect(receivedOptions).toEqual([
+      expect.objectContaining({
+        environment: "dev",
+        purgeChannelRuntime: false,
+      }),
+    ]);
+    expect(result.data).toMatchObject({ removedInstallDir: true });
+  });
+
+  it("removes the install when the boundary read answers that nothing is published and the stop resolved", async () => {
+    const receivedOptions: UninstallHostOptions[] = [];
+    const deps = commandDeps({
+      stop: async () => undefined,
+      receivedOptions,
+      status: async () => NOT_INSTALLED_STATUS,
+      liveness: "unpublished",
+      successorAfterTeardown: null,
+      publishedPid: null,
+    });
+    const result = await runHostUninstall(
+      { all: true, force: false },
+      COMMAND_CONTEXT,
+      deps,
+      testActuators(deps),
+    );
+
+    expect(receivedOptions).toEqual([
+      expect.objectContaining({
+        environment: "dev",
+        purgeChannelRuntime: false,
+      }),
+    ]);
+    expect(result.data).toMatchObject({ removedInstallDir: true });
+  });
+
+  // The read at entry is evidence too: one that threw is no proof that
+  // nothing was published, so a boundary read that then finds nothing must not
+  // turn into "the host is gone".
+  function readsPublished(
+    entry: "throws" | "null",
+    boundary: "throws" | "null",
+    receivedOptions: UninstallHostOptions[],
+  ): RunHostUninstallDeps {
+    const base = commandDeps({
+      stop: async () => undefined,
+      receivedOptions,
+      status: async () => NOT_INSTALLED_STATUS,
+      liveness: "dead",
+      successorAfterTeardown: null,
+      publishedPid: null,
+    });
+    let reads = 0;
+    return {
+      ...base,
+      readPublishedHost: async () => {
+        reads += 1;
+        const behaviour = reads === 1 ? entry : boundary;
+        if (behaviour === "throws")
+          throw new Error("EACCES: permission denied");
+        return null;
+      },
+    };
+  }
+
+  it("keeps the install when the entry read threw and the boundary read finds nothing, without --force", async () => {
+    const receivedOptions: UninstallHostOptions[] = [];
+    const deps = readsPublished("throws", "null", receivedOptions);
+
+    await expect(
+      runHostUninstall(
+        { all: true, force: false },
+        COMMAND_CONTEXT,
+        deps,
+        testActuators(deps),
+      ),
+    ).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.HOST_UNINSTALL_HOST_RUNNING,
+      exitCode: 1,
+      details: { environment: "dev", removedInstallDir: false },
+    });
+    expect(receivedOptions).toEqual([]);
+  });
+
+  it("with --force, removes the install although the entry read threw", async () => {
+    const receivedOptions: UninstallHostOptions[] = [];
+    const deps = readsPublished("throws", "null", receivedOptions);
+    const result = await runHostUninstall(
+      { all: true, force: true },
+      COMMAND_CONTEXT,
+      deps,
+      testActuators(deps),
+    );
+
+    expect(receivedOptions).toEqual([
+      expect.objectContaining({ environment: "dev" }),
+    ]);
+    expect(result.data).toMatchObject({ removedInstallDir: true });
+  });
+
+  it("keeps the install when both the entry read and the boundary read threw, without --force", async () => {
+    const receivedOptions: UninstallHostOptions[] = [];
+    const deps = readsPublished("throws", "throws", receivedOptions);
+
+    await expect(
+      runHostUninstall(
+        { all: true, force: false },
+        COMMAND_CONTEXT,
+        deps,
+        testActuators(deps),
+      ),
+    ).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.HOST_UNINSTALL_HOST_RUNNING,
+    });
+    expect(receivedOptions).toEqual([]);
+  });
+
+  it("removes the install when both the entry read and the boundary read answer that nothing is published", async () => {
+    const receivedOptions: UninstallHostOptions[] = [];
+    const deps = readsPublished("null", "null", receivedOptions);
+    const result = await runHostUninstall(
+      { all: true, force: false },
+      COMMAND_CONTEXT,
+      deps,
+      testActuators(deps),
+    );
+
+    expect(receivedOptions).toEqual([
+      expect.objectContaining({ environment: "dev" }),
+    ]);
+    expect(result.data).toMatchObject({ removedInstallDir: true });
   });
 
   it("reads --all's registration back from the platform rather than assuming the deregister landed", async () => {
@@ -325,7 +724,7 @@ describe("runHostUninstall", () => {
       publishedPid: null,
     });
     const result = await runHostUninstall(
-      { all: true },
+      { all: true, force: false },
       COMMAND_CONTEXT,
       deps,
       testActuators(deps),
@@ -362,7 +761,7 @@ describe("runHostUninstall", () => {
       publishedPid: null,
     });
     const result = await runHostUninstall(
-      { all: true },
+      { all: true, force: false },
       COMMAND_CONTEXT,
       deps,
       testActuators(deps),
@@ -393,7 +792,7 @@ describe("runHostUninstall", () => {
       publishedPid: null,
     });
     const result = await runHostUninstall(
-      { all: true },
+      { all: true, force: false },
       COMMAND_CONTEXT,
       deps,
       testActuators(deps),
@@ -422,7 +821,7 @@ describe("runHostUninstall", () => {
       publishedPid: -5,
     });
     const result = await runHostUninstall(
-      { all: true },
+      { all: true, force: true },
       COMMAND_CONTEXT,
       deps,
       testActuators(deps),
@@ -444,7 +843,7 @@ describe("runHostUninstall", () => {
       publishedPid: null,
     });
     const result = await runHostUninstall(
-      { all: true },
+      { all: true, force: true },
       COMMAND_CONTEXT,
       deps,
       testActuators(deps),
@@ -471,7 +870,7 @@ describe("runHostUninstall", () => {
       publishedPid: null,
     });
     const result = await runHostUninstall(
-      { all: false },
+      { all: false, force: false },
       COMMAND_CONTEXT,
       deps,
       testActuators(deps),
@@ -497,7 +896,7 @@ describe("runHostUninstall", () => {
       publishedPid: null,
     });
     const result = await runHostUninstall(
-      { all: false },
+      { all: false, force: false },
       COMMAND_CONTEXT,
       deps,
       testActuators(deps),
@@ -528,7 +927,7 @@ describe("runHostUninstall", () => {
       publishedPid: null,
     });
     const result = await runHostUninstall(
-      { all: false },
+      { all: false, force: false },
       COMMAND_CONTEXT,
       deps,
       testActuators(deps),
@@ -556,7 +955,42 @@ describe("runHostUninstall", () => {
   // was never asked/consented to die, so even a probe that finds nothing
   // serving does not license deleting its runtime - the process may simply
   // not be publishing yet.
-  it("withholds the purge when the stop threw, even with nothing serving", async () => {
+  it("keeps the install when the stop threw, even with nothing serving, without --force", async () => {
+    const receivedOptions: UninstallHostOptions[] = [];
+
+    const deps = commandDeps({
+      stop: async () => {
+        throw new Error("host denied the shutdown claim");
+      },
+      receivedOptions,
+      status: async () => NOT_INSTALLED_STATUS,
+      liveness: null,
+      successorAfterTeardown: null,
+      publishedPid: null,
+    });
+
+    await expect(
+      runHostUninstall(
+        { all: true, force: false },
+        COMMAND_CONTEXT,
+        deps,
+        testActuators(deps),
+      ),
+    ).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.HOST_UNINSTALL_HOST_RUNNING,
+      exitCode: 1,
+      // Nothing was observed serving, so the host is not claimed to be live.
+      details: {
+        environment: "dev",
+        hostStillRunning: null,
+        removedInstallDir: false,
+        serviceDeregistrationRequested: true,
+      },
+    });
+    expect(receivedOptions).toEqual([]);
+  });
+
+  it("with --force, withholds the purge when the stop threw, even with nothing serving", async () => {
     const deps = commandDeps({
       stop: async () => {
         throw new Error("host denied the shutdown claim");
@@ -568,7 +1002,7 @@ describe("runHostUninstall", () => {
       publishedPid: null,
     });
     const result = await runHostUninstall(
-      { all: true },
+      { all: true, force: true },
       COMMAND_CONTEXT,
       deps,
       testActuators(deps),
@@ -598,7 +1032,7 @@ describe("runHostUninstall", () => {
       publishedPid: null,
     });
     const result = await runHostUninstall(
-      { all: true },
+      { all: true, force: false },
       COMMAND_CONTEXT,
       deps,
       testActuators(deps),
@@ -611,4 +1045,227 @@ describe("runHostUninstall", () => {
       serviceRegistrationRetained: null,
     });
   });
+});
+
+describe("runHostUninstall - a published process that is not proven gone (traycer#1563)", () => {
+  interface PublishedRecord {
+    readonly pid: number;
+    readonly startIdentity: string | null;
+  }
+  interface Scenario {
+    readonly name: string;
+    // What each successive read of the published record answers; the last
+    // answer repeats.
+    readonly reads: ReadonlyArray<PublishedRecord | null>;
+    // What the identity probe answers per pid.
+    readonly probe: (pid: number) => Promise<PublishedProcessIdentityVerdict>;
+  }
+
+  function scenarioDeps(
+    scenario: Scenario,
+    receivedOptions: UninstallHostOptions[],
+  ): RunHostUninstallDeps {
+    const base = commandDeps({
+      stop: async () => undefined,
+      receivedOptions,
+      status: async () => NOT_INSTALLED_STATUS,
+      liveness: "dead",
+      successorAfterTeardown: null,
+      publishedPid: null,
+    });
+    let reads = 0;
+    return {
+      ...base,
+      readPublishedHost: async () => {
+        const index = Math.min(reads, scenario.reads.length - 1);
+        reads += 1;
+        return scenario.reads[index] ?? null;
+      },
+      probeProcessExited: (pid) => scenario.probe(pid),
+    };
+  }
+
+  const KEEPS_THE_INSTALL: readonly Scenario[] = [
+    {
+      name: "a published successor whose identity probe is indeterminate",
+      reads: [
+        { pid: 4242, startIdentity: "first" },
+        { pid: 5151, startIdentity: "second" },
+      ],
+      probe: async (pid) => (pid === 4242 ? "dead" : "indeterminate"),
+    },
+    {
+      name: "a published successor whose identity probe throws",
+      reads: [
+        { pid: 4242, startIdentity: "first" },
+        { pid: 5151, startIdentity: "second" },
+      ],
+      probe: async (pid) => {
+        if (pid === 4242) return "dead";
+        throw new Error("ps: operation not permitted");
+      },
+    },
+    {
+      name: "the captured host unknown, with nothing published at the boundary",
+      reads: [{ pid: 4242, startIdentity: "first" }, null],
+      probe: async () => "indeterminate",
+    },
+    {
+      name: "the captured host's probe throwing, with nothing published at the boundary",
+      reads: [{ pid: 4242, startIdentity: "first" }, null],
+      probe: async () => {
+        throw new Error("ps: operation not permitted");
+      },
+    },
+    {
+      name: "a legacy record with no start identity that cannot be told apart",
+      reads: [{ pid: 4242, startIdentity: null }, null],
+      probe: async () => "indeterminate",
+    },
+    // The entry capture A and the boundary successor B are different
+    // processes: a dead B says nothing about A.
+    {
+      name: "a captured host still serving behind a dead successor",
+      reads: [
+        { pid: 111, startIdentity: "a" },
+        { pid: 222, startIdentity: "b" },
+      ],
+      probe: async (pid) => (pid === 111 ? "current" : "dead"),
+    },
+    {
+      name: "a captured host whose probe is indeterminate behind a dead successor",
+      reads: [
+        { pid: 111, startIdentity: "a" },
+        { pid: 222, startIdentity: "b" },
+      ],
+      probe: async (pid) => (pid === 111 ? "indeterminate" : "dead"),
+    },
+    {
+      name: "a captured host whose probe throws behind a dead successor",
+      reads: [
+        { pid: 111, startIdentity: "a" },
+        { pid: 222, startIdentity: "b" },
+      ],
+      probe: async (pid) => {
+        if (pid === 111) throw new Error("ps: operation not permitted");
+        return "dead";
+      },
+    },
+    {
+      name: "an unusable published pid, which names no process",
+      reads: [{ pid: -5, startIdentity: "first" }, null],
+      probe: async () => "dead",
+    },
+  ];
+
+  for (const scenario of KEEPS_THE_INSTALL) {
+    it(`keeps the install with E_HOST_UNINSTALL_HOST_RUNNING for ${scenario.name}, without --force`, async () => {
+      const receivedOptions: UninstallHostOptions[] = [];
+      const deps = scenarioDeps(scenario, receivedOptions);
+
+      await expect(
+        runHostUninstall(
+          { all: true, force: false },
+          COMMAND_CONTEXT,
+          deps,
+          testActuators(deps),
+        ),
+      ).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.HOST_UNINSTALL_HOST_RUNNING,
+        exitCode: 1,
+        details: { removedInstallDir: false },
+      });
+      expect(receivedOptions).toEqual([]);
+    });
+
+    it(`with --force, removes the install for ${scenario.name}`, async () => {
+      const receivedOptions: UninstallHostOptions[] = [];
+      const deps = scenarioDeps(scenario, receivedOptions);
+
+      const result = await runHostUninstall(
+        { all: true, force: true },
+        COMMAND_CONTEXT,
+        deps,
+        testActuators(deps),
+      );
+
+      expect(receivedOptions).toHaveLength(1);
+      expect(result.data).toMatchObject({ removedInstallDir: true });
+    });
+  }
+
+  const STILL_UNINSTALLS: readonly Scenario[] = [
+    {
+      name: "nothing published at entry or at the boundary",
+      reads: [null, null],
+      probe: async () => "indeterminate",
+    },
+    {
+      name: "a published process proven gone",
+      reads: [{ pid: 4242, startIdentity: "first" }, null],
+      probe: async () => "dead",
+    },
+    {
+      name: "a published pid that now belongs to another process",
+      reads: [{ pid: 4242, startIdentity: "first" }, null],
+      probe: async () => "mismatch",
+    },
+    {
+      name: "a captured host and a different successor, both proven gone",
+      reads: [
+        { pid: 111, startIdentity: "a" },
+        { pid: 222, startIdentity: "b" },
+      ],
+      probe: async () => "dead",
+    },
+    {
+      name: "the same published process read again at the boundary, proven gone",
+      reads: [
+        { pid: 111, startIdentity: "a" },
+        { pid: 111, startIdentity: "a" },
+      ],
+      probe: async () => "dead",
+    },
+    // A later probe of the SAME process (pid and start identity) is newer
+    // evidence about it and replaces the earlier verdict.
+    {
+      name: "the same published process, first indeterminate and then proven gone at the boundary",
+      reads: [
+        { pid: 111, startIdentity: "a" },
+        { pid: 111, startIdentity: "a" },
+      ],
+      probe: (() => {
+        let calls = 0;
+        return async (): Promise<PublishedProcessIdentityVerdict> => {
+          calls += 1;
+          return calls === 1 ? "indeterminate" : "dead";
+        };
+      })(),
+    },
+    {
+      name: "a published successor proven gone",
+      reads: [
+        { pid: 4242, startIdentity: "first" },
+        { pid: 5151, startIdentity: "second" },
+      ],
+      probe: async () => "dead",
+    },
+  ];
+
+  for (const scenario of STILL_UNINSTALLS) {
+    it(`still uninstalls without --force for ${scenario.name}`, async () => {
+      const receivedOptions: UninstallHostOptions[] = [];
+      const deps = scenarioDeps(scenario, receivedOptions);
+
+      const result = await runHostUninstall(
+        { all: true, force: false },
+        COMMAND_CONTEXT,
+        deps,
+        testActuators(deps),
+      );
+
+      expect(receivedOptions).toHaveLength(1);
+      expect(result.data).toMatchObject({ removedInstallDir: true });
+    });
+  }
 });

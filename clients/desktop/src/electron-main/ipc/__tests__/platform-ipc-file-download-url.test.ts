@@ -96,7 +96,7 @@ vi.mock("@traycer/protocol/config/store", () => ({
   readFeatureSettings: vi.fn(() => ({ agentRolesEnabled: false })),
   readLogLevels: vi.fn(() => ({})),
   setAgentRolesEnabled: vi.fn(),
-  setLogLevels: vi.fn(),
+  setLogLevel: vi.fn(),
 }));
 vi.mock("@traycer/protocol/config/log-level", () => ({
   isLogLevel: () => true,

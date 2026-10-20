@@ -1071,7 +1071,12 @@ function observeProcessStart(
     : { kind: "windows-denied-read", creationMicros };
 }
 
-async function observeProcessStartAsync(
+/**
+ * {@link observeProcessStart} without blocking the event loop: the identity
+ * read the data-migration incarnation probe composes with its own liveness
+ * reads (`./data-migration-admission`).
+ */
+export async function observeProcessStartAsync(
   pid: number,
   recorded: ProcessStartIdentity | null,
 ): Promise<ObservedProcessStart | null> {

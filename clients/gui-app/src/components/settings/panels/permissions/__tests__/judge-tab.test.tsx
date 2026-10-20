@@ -14,6 +14,7 @@ import type {
   AutoJudgeGetResponse,
   AutoJudgeSelection,
 } from "@traycer/protocol/host/auto-mode/contracts";
+import type { GuiAgentModelOption } from "@traycer/protocol/host/agent/gui/unary-schemas";
 import type { ProviderCliState } from "@traycer/protocol/host/provider-schemas";
 import { SurfaceActivityProvider } from "@/components/home/composer/surface-activity-context";
 import { hostScopeFixture } from "@/components/settings/host-scope/host-scope-fixture";
@@ -37,10 +38,14 @@ import { useProvidersFocusStore } from "@/stores/settings/providers-focus-store"
 
 // ---- host boundary --------------------------------------------------------
 
-vi.mock("@/components/settings/host-scope/use-host-scope", () => ({
-  useHostScope: () =>
-    hostScopeFixture({ status: "following", hostId: "host-a" }),
-}));
+vi.mock("@/components/settings/host-scope/use-host-scope", () => {
+  const useHostScope = () =>
+    hostScopeFixture({ status: "following", hostId: "host-a" });
+  return {
+    useHostScope,
+    usePersonalHostScope: useHostScope,
+  };
+});
 vi.mock(
   "@/components/settings/host-scope/use-scoped-host-binding",
   async () => {
@@ -153,6 +158,12 @@ vi.mock("@/hooks/host/use-reactive-host-readiness", async () =>
 vi.mock("@/hooks/agent/use-host-reachability", async () =>
   (await import("./judge-test-support")).pickerHostMocks.hostReachability(),
 );
+// This suite's host binding is a bare fake with no directory, which the real
+// hook reads; the hook has its own test.
+vi.mock("@/hooks/host/use-host-credential-refusal", () => ({
+  useHostCredentialRefusal: () => null,
+}));
+
 vi.mock("@/hooks/host/use-addressable-host-id", async () =>
   (await import("./judge-test-support")).pickerHostMocks.addressableHostId(),
 );
@@ -2683,5 +2694,117 @@ describe("JudgeTab", () => {
 
       expect(writes()).toEqual([]);
     });
+  });
+});
+
+// The judge picker's pre-send Max Mode label is keyed on the effort the HOST
+// runs the judge at, which is decided by two independent lines: `autoJudge.get`
+// (does the host run the judge at an effort of its own: 1.3) and
+// `autoJudge.set` (can the picker STORE one, and so draw the effort footer:
+// 1.3). A host can run the lowest advertised effort without the footer being
+// drawn (get 1.3, set 1.2), and the label must follow what the host runs.
+describe("<JudgeTab /> Max Mode label follows the effort the host runs", () => {
+  const CURSOR_STORED: AutoJudgeSelection = {
+    harnessId: "cursor",
+    model: "cursor-max",
+    profileId: null,
+    reasoningEffort: null,
+  };
+
+  function cursorMaxModel(
+    judge: ReadonlyArray<string | null>,
+  ): GuiAgentModelOption {
+    return model("cursor", "cursor-max", "Cursor Max", {
+      defaultReasoningEffort: "high",
+      supportedReasoningEfforts: [
+        { id: "high", label: "High", description: null },
+        { id: "low", label: "Low", description: null },
+      ],
+      metadata: {
+        maxMode: {
+          chat: [],
+          judge: judge.map((reasoningEffort) => ({ reasoningEffort })),
+          fastServiceTierId: null,
+        },
+      },
+    });
+  }
+
+  function seedCursorJudge(
+    judge: ReadonlyArray<string | null>,
+    selection: AutoJudgeSelection,
+  ): void {
+    judgeCatalog.harnesses = [
+      ...judgeCatalog.harnesses,
+      harness({
+        id: "cursor",
+        label: "Cursor",
+        nativeAutoJudge: false,
+        judgeDefaultModel: null,
+      }),
+    ];
+    judgeCatalog.providers = [
+      ...(judgeCatalog.providers ?? []),
+      provider("cursor", [profile("ambient", "ambient")]),
+    ];
+    setModels("cursor", { kind: "ready", models: [cursorMaxModel(judge)] });
+    judgeRecord.current = { selection };
+  }
+
+  async function openPicker(): Promise<void> {
+    renderTab();
+    const user = userEvent.setup();
+    await user.click(face());
+    await screen.findByRole("dialog", { name: "Select model" });
+  }
+
+  function maxBadge(): HTMLElement | null {
+    return screen.queryByTestId("model-max-mode-badge");
+  }
+
+  it("labels the lowest advertised effort when the host runs it but the effort footer is not drawn (get 1.3, set 1.2)", async () => {
+    autoJudgeGetVersion.current = { major: 1, minor: 3 };
+    autoJudgeSetVersion.current = { major: 1, minor: 2 };
+    seedCursorJudge(["low"], CURSOR_STORED);
+    await openPicker();
+
+    expect(screen.queryByRole("group", { name: "Thinking effort" })).toBeNull();
+    expect(maxBadge()).not.toBeNull();
+  });
+
+  it("does not label it when the lowest effort the host runs is not Max-only, even if a null (no-effort) key is", async () => {
+    autoJudgeGetVersion.current = { major: 1, minor: 3 };
+    autoJudgeSetVersion.current = { major: 1, minor: 2 };
+    seedCursorJudge(["high", null], CURSOR_STORED);
+    await openPicker();
+
+    expect(maxBadge()).toBeNull();
+  });
+
+  it("does not label it when the model lists no Max-only judge selection at all", async () => {
+    autoJudgeGetVersion.current = { major: 1, minor: 3 };
+    autoJudgeSetVersion.current = { major: 1, minor: 2 };
+    seedCursorJudge([], CURSOR_STORED);
+    await openPicker();
+
+    expect(maxBadge()).toBeNull();
+  });
+
+  it("makes no claim about an effort on a host that does not run one (get below 1.3)", async () => {
+    autoJudgeGetVersion.current = { major: 1, minor: 2 };
+    autoJudgeSetVersion.current = { major: 1, minor: 2 };
+    seedCursorJudge(["low"], CURSOR_STORED);
+    await openPicker();
+
+    expect(maxBadge()).toBeNull();
+  });
+
+  it("still labels the stored effort when the footer is drawn (get 1.3, set 1.3)", async () => {
+    autoJudgeGetVersion.current = { major: 1, minor: 3 };
+    autoJudgeSetVersion.current = { major: 1, minor: 3 };
+    seedCursorJudge(["high"], { ...CURSOR_STORED, reasoningEffort: "high" });
+    await openPicker();
+
+    expect(maxBadge()).not.toBeNull();
   });
 });

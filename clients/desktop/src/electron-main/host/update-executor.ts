@@ -221,6 +221,14 @@ export interface DesktopActivationDeps {
     capability: UpdateMutationCapability,
     run: () => Promise<T>,
   ) => Promise<DesktopActuatorSpan<T>>;
+  /**
+   * Whether the host the bootout would stop is still the one the caller's
+   * restart was confirmed for. Asked INSIDE the span, before the write-ahead:
+   * the drain and the span's own lock wait both sit after the caller's check,
+   * and a replacement published in either must not be booted out. Always true
+   * for a restart that was not confirmed for one process.
+   */
+  readonly confirmTarget: () => Promise<boolean>;
   /** The SMAppService registration itself. Runs INSIDE the span; spawns no CLI child. */
   readonly registerActuator: (
     capability: UpdateMutationCapability,
@@ -266,7 +274,11 @@ export type DesktopActivationOutcome =
  * acquisition ahead of the write-ahead is what made the second park both
  * possible and correct; see the review note in the ticket design.)
  */
-export type DesktopParkReason = "drain-busy" | "actuator-lock-busy";
+export type DesktopParkReason =
+  | "drain-busy"
+  | "actuator-lock-busy"
+  /** `confirmTarget` said the running host is no longer the confirmed one. */
+  | "target-changed";
 
 /**
  * Why a segment that had already promised a restart could not deliver one.
@@ -471,6 +483,11 @@ async function runClaimedActivation(
   // of no return. Inside the span nothing spawns a CLI child, which is what
   // makes holding the lock here safe (see `needs-takeover`).
   const span = await deps.withActuatorLock(capability, async () => {
+    // ---- The confirmed host, under the lock and on this side of the point
+    // of no return, so a refusal can still re-park.
+    if (!(await deps.confirmTarget())) {
+      return { step: "target-changed" as const };
+    }
     // ---- Write-ahead: the promise of a return, before anything that tears down.
     const restarting = await advance(capability, identity, deps, {
       phase: "restarting",
@@ -508,6 +525,21 @@ async function runClaimedActivation(
       outcome:
         reparked.kind === "advanced"
           ? { kind: "parked", reason: "actuator-lock-busy" }
+          : { kind: "rejected", reason: reparked.reason },
+    };
+  }
+  if (span.value.step === "target-changed") {
+    // Still `preparing`, as for a busy span: nothing was promised and nothing
+    // was stopped, so the record is re-parked for a later activation.
+    const reparked = await advance(capability, identity, deps, {
+      phase: "waiting-to-activate",
+      continuation: "activate",
+    });
+    return {
+      kind: "settled",
+      outcome:
+        reparked.kind === "advanced"
+          ? { kind: "parked", reason: "target-changed" }
           : { kind: "rejected", reason: reparked.reason },
     };
   }

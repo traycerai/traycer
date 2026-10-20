@@ -426,6 +426,7 @@ function persistedPlanBlock(input: {
 
 const displayContext: RenderedMessagesDisplayContext = {
   resolveUserSenderLabel: () => "You",
+  resolveUserSenderAvatarUrl: () => null,
   resolveAgentSenderDisplay: () => ({
     senderLabel: "Claude",
     providerLabel: "Claude Code",
@@ -433,6 +434,8 @@ const displayContext: RenderedMessagesDisplayContext = {
   }),
   resolveAgentReasoningLabel: (_sender, reasoningEffort) =>
     reasoningEffort === null ? null : `Resolved ${reasoningEffort}`,
+  resolveAgentServiceTierLabel: (_sender, serviceTier) =>
+    serviceTier === null ? null : `Resolved ${serviceTier}`,
   contentBlocksPreview: () => "",
 };
 
@@ -1418,6 +1421,7 @@ describe("useRenderedMessages", () => {
       reasoningEffort: "high",
       reasoningEffortLabel: "Resolved high",
       serviceTier: "priority",
+      serviceTierLabel: "Resolved priority",
       // Null, not absent: this fixture's record carries no env credential, and
       // that IS the claim "the profile sign-in ran the turn".
       envCredentialVar: null,

@@ -33,6 +33,19 @@ const botProfileSchema = lazySchema(() =>
   z.string().min(1).max(255).nullable(),
 );
 
+/**
+ * `bot.create`'s request key: a lowercase UUID, and only that spelling - not
+ * `z.uuid()`, which admits uppercase. No database compares the key (the cloud
+ * hashes it into the bot's id), so collation never folds two spellings
+ * together; one canonical spelling keeps that hash one-to-one with the key
+ * the caller minted. Mirrored by the cloud's request schema.
+ */
+const botRequestKeySchema = lazySchema(() =>
+  z
+    .string()
+    .regex(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/),
+);
+
 /** The bot row as the cloud returns it. */
 export const botRecordSchema = lazySchema(() =>
   z.object({
@@ -68,10 +81,18 @@ export type BotRecord = z.infer<typeof botRecordSchema>;
 // ---- bot.create -------------------------------------------------------- //
 
 /**
- * The host mints the two chat ids and binds itself as the bot's host, the
+ * The host mints the trunk's chat id and binds itself as the bot's host, the
  * same way it mints every chat id it owns; the cloud takes the owner from the
- * bearer. The response also names the app conversation's chat id so the
+ * bearer and derives the app conversation's chat id from the bot's id. The response also names the app conversation's chat id so the
  * caller can open it without a list round trip.
+ *
+ * `requestKey` makes the create safe to repeat: the cloud creates at most one
+ * bot per caller and key, and answers a repeat with that bot as it is now, so
+ * a retry after an unknown outcome - by the transport's credential recovery,
+ * or by the person pressing the button again - never makes a second bot. The
+ * caller mints it once per create it means (a lowercase UUID) and keeps it
+ * across its own retries; a repeat whose fields differ, or whose bot was
+ * deleted since, is refused with `E_BOT_REQUEST_KEY_REUSED`.
  */
 export const botCreateRequestSchema = lazySchema(() =>
   z.object({
@@ -81,6 +102,7 @@ export const botCreateRequestSchema = lazySchema(() =>
     model: botModelSchema,
     effort: botEffortSchema,
     profile: botProfileSchema,
+    requestKey: botRequestKeySchema,
   }),
 );
 export type BotCreateRequest = z.infer<typeof botCreateRequestSchema>;
@@ -189,6 +211,93 @@ export const botClaimAuthorityResponseSchema = lazySchema(() =>
 export type BotClaimAuthorityResponse = z.infer<
   typeof botClaimAuthorityResponseSchema
 >;
+
+// ---- bot.open ---------------------------------------------------------- //
+
+/**
+ * Open a bot on THIS host (the host serving the tab), claiming it here when
+ * its bound host cannot be reached. The person never picks the host:
+ * the app opens the bot through whichever host serves the tab and follows
+ * the answer. A caller the bot is not visible to - not a member of its
+ * environment, or the bot deleted - gets the same not-found error
+ * `bot.read` answers; every other answer is an `outcome`.
+ */
+export const botOpenRequestSchema = lazySchema(() =>
+  z.object({ botId: botIdSchema }),
+);
+export type BotOpenRequest = z.infer<typeof botOpenRequestSchema>;
+
+/**
+ * Why this host claimed the bot: its bound host is not reachable now, or no
+ * host was bound at all.
+ */
+export const botOpenClaimReasonSchema = lazySchema(() =>
+  z.enum(["bound-host-unreachable", "no-bound-host"]),
+);
+export type BotOpenClaimReason = z.infer<typeof botOpenClaimReasonSchema>;
+
+/**
+ * Why the bot cannot be served right now, with no claim made:
+ *
+ * - `host-not-in-environment`: this host is not a host of the bot's
+ *   environment, so it may not run the bot;
+ * - `bound-to-sandbox`: the bot runs on its environment's sandbox, which is
+ *   never claimed away from, and the sandbox is not reachable from here;
+ * - `bound-host-not-observable`: the bot runs on another member's machine,
+ *   whose reachability this account cannot see;
+ * - `reachability-unknown`: whether the bound host is reachable, or what kind
+ *   of host it is, could not be read now;
+ * - `trunk-busy`: this host still runs a turn of the bot's trunk from an
+ *   earlier binding, and the bot is not claimed under it until it settles.
+ */
+export const botOpenPausedReasonSchema = lazySchema(() =>
+  z.enum([
+    "host-not-in-environment",
+    "bound-to-sandbox",
+    "bound-host-not-observable",
+    "reachability-unknown",
+    "trunk-busy",
+  ]),
+);
+export type BotOpenPausedReason = z.infer<typeof botOpenPausedReasonSchema>;
+
+export const botOpenOutcomeSchema = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    /**
+     * This host runs the bot: it was bound here already (`claimed: null`),
+     * or this call claimed it here for `claimed`.
+     */
+    z.object({
+      kind: z.literal("serve-here"),
+      claimed: botOpenClaimReasonSchema.nullable(),
+    }),
+    /**
+     * Another host runs the bot and serves it: it is reachable
+     * (`reachable`), or another host claimed it while this call was
+     * deciding (`claimed-concurrently`) and this host made no second claim.
+     */
+    z.object({
+      kind: z.literal("serve-on-bound-host"),
+      hostId: hostIdSchema,
+      why: z.enum(["reachable", "claimed-concurrently"]),
+    }),
+    /** No host can serve the bot from here now; nothing was claimed. */
+    z.object({
+      kind: z.literal("paused"),
+      reason: botOpenPausedReasonSchema,
+    }),
+  ]),
+);
+export type BotOpenOutcome = z.infer<typeof botOpenOutcomeSchema>;
+
+export const botOpenResponseSchema = lazySchema(() =>
+  z.object({
+    /** The bot row after the decision (after the claim, when one was made). */
+    bot: botRecordSchema,
+    outcome: botOpenOutcomeSchema,
+  }),
+);
+export type BotOpenResponse = z.infer<typeof botOpenResponseSchema>;
 
 // ---- bot.subscribe ----------------------------------------------------- //
 
@@ -494,8 +603,6 @@ export const botTaskEntrySchema = lazySchema(() =>
         .nullable(),
     })
     .superRefine((entry, ctx) => {
-      // The two invariants the fields document, enforced: an entry with a
-      // reason it ended is ended, and only a periodic cadence has a due time.
       if ((entry.state === "ended") !== (entry.endedReason !== null)) {
         ctx.addIssue({
           code: "custom",
@@ -576,4 +683,47 @@ export const botSubscribeClientFrameSchema = lazySchema(() =>
 );
 export type BotSubscribeClientFrame = z.infer<
   typeof botSubscribeClientFrameSchema
+>;
+
+// ---- bot.listChanged --------------------------------------------------- //
+
+export const botListChangedOpenRequestSchema = lazySchema(() => z.object({}));
+export type BotListChangedOpenRequest = z.infer<
+  typeof botListChangedOpenRequestSchema
+>;
+
+/**
+ * `changed`: the bot list of an environment the subscriber belongs to moved
+ * on another host or for another member. It carries NOTHING: the client
+ * refetches `bot.list`, so a late or repeated frame can only cost a
+ * refetch, never replay an older list. A change made through this host for
+ * the same subscriber is not reported (the client that made it already
+ * refetched).
+ */
+export const botListChangedServerFrameSchema = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    z.object({
+      kind: z.literal("changed"),
+      hasBinaryPayload: z.literal(false),
+    }),
+    z.object({
+      kind: z.literal("pong"),
+      hasBinaryPayload: z.literal(false),
+    }),
+  ]),
+);
+export type BotListChangedServerFrame = z.infer<
+  typeof botListChangedServerFrameSchema
+>;
+
+export const botListChangedClientFrameSchema = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    z.object({
+      kind: z.literal("ping"),
+      hasBinaryPayload: z.literal(false),
+    }),
+  ]),
+);
+export type BotListChangedClientFrame = z.infer<
+  typeof botListChangedClientFrameSchema
 >;

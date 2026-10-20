@@ -1,12 +1,18 @@
 import type { ReactNode } from "react";
-import { AlertTriangle, X } from "lucide-react";
+import { AlertTriangle, Info, X } from "lucide-react";
 
 /**
- * The composer's host-placement refusal slot (selection model §2/§54):
- * submit-time re-validation refused to create. Nothing was created, the
- * draft is untouched, and this states why. It is deliberately inline rather
- * than a toast: a toast that scrolls away leaves the user pressing send
- * again on a composer that still looks fine.
+ * The composer's host-placement slot.
+ *
+ * `refused` is the selection model's §2/§54 refusal: submit-time
+ * re-validation refused to create. Nothing was created, the draft is
+ * untouched, and this states why. It is deliberately inline rather than a
+ * toast: a toast that scrolls away leaves the user pressing send again on a
+ * composer that still looks fine.
+ *
+ * `mirror` is the mirror line: the host this agent starts on has a different
+ * owner from a host already working in the task. It is information, not a
+ * blocker, so it is a status rather than an alert.
  *
  * The G4 `repointed` kind used to share this slot. It is a toast now
  * (`toastRepointedStagingReset`), and only when the move actually reset
@@ -15,7 +21,7 @@ import { AlertTriangle, X } from "lucide-react";
  * after a failover round trip it announced the user's own host as news.
  */
 export interface ComposerHostNoticeState {
-  readonly kind: "refused";
+  readonly kind: "refused" | "mirror";
   readonly message: string;
 }
 
@@ -27,14 +33,26 @@ interface ComposerHostNoticeProps {
 export function ComposerHostNotice(props: ComposerHostNoticeProps): ReactNode {
   const notice = props.notice;
   if (notice === null) return null;
+  const refused = notice.kind === "refused";
+  const Icon = refused ? AlertTriangle : Info;
   return (
     <div
-      role="alert"
+      role={refused ? "alert" : "status"}
       data-testid="composer-host-notice"
       data-notice-kind={notice.kind}
-      className="relative flex w-full max-w-full min-w-0 items-start gap-2 rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-ui-sm"
+      className={
+        refused
+          ? "relative flex w-full max-w-full min-w-0 items-start gap-2 rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-ui-sm"
+          : "relative flex w-full max-w-full min-w-0 items-start gap-2 rounded-md border border-border bg-foreground/5 px-3 py-2 text-ui-sm"
+      }
     >
-      <AlertTriangle className="mt-0.5 size-4 shrink-0 text-warning-foreground" />
+      <Icon
+        className={
+          refused
+            ? "mt-0.5 size-4 shrink-0 text-warning-foreground"
+            : "mt-0.5 size-4 shrink-0 text-muted-foreground"
+        }
+      />
       <p className="min-w-0 flex-1 text-foreground">{notice.message}</p>
       <button
         type="button"

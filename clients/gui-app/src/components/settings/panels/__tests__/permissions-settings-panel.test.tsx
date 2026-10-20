@@ -21,9 +21,13 @@ import type { SettingsRuleDraft } from "@/stores/tabs/system-overlay-types";
 const scopeOverrides = vi.hoisted((): { current: Partial<HostScope> } => ({
   current: {},
 }));
-vi.mock("@/components/settings/host-scope/use-host-scope", () => ({
-  useHostScope: () => hostScopeFixture(scopeOverrides.current),
-}));
+vi.mock("@/components/settings/host-scope/use-host-scope", () => {
+  const useHostScope = () => hostScopeFixture(scopeOverrides.current);
+  return {
+    useHostScope,
+    usePersonalHostScope: useHostScope,
+  };
+});
 
 // The real carry, observed: the mock records the call and forwards it, so the
 // scope store is what proves "carried" and "not carried".

@@ -103,6 +103,17 @@ type ArmedReaderDeparture =
       readonly blocksAutomaticCorrection: boolean;
     }
   | { readonly source: "owned-navigation" }
+  | {
+      /** A finger is on the transcript. Armed at `touchstart`, released at
+       *  `touchend`/`touchcancel`, and never by a pointer edge or a strict-
+       *  bottom report: iOS WebKit stops delivering `touchmove` (and fires
+       *  `pointercancel` at once) when its native pan owns the touch, so the
+       *  contact itself is the only reader evidence the page can count on. */
+      readonly source: "touch";
+      /** Fresh `scrollTop` at contact. A later report that moved past it is
+       *  the reader's; one that did not is a tap. */
+      readonly scrollTopAtContact: number;
+    }
   | null;
 
 /** One immediate issue plus four measured reissues, each after two frames.
@@ -124,6 +135,37 @@ function readScrollGeometry(node: HTMLElement): ChatTimelineScrollGeometry {
     scrollTop: node.scrollTop,
     scrollHeight: node.scrollHeight,
     clientHeight: node.clientHeight,
+  };
+}
+
+function armBlocksAutomaticCorrection(arm: ArmedReaderDeparture): boolean {
+  if (arm === null) return false;
+  if (arm.source === "gesture") return arm.blocksAutomaticCorrection;
+  return true;
+}
+
+/** The end a toward-end gesture may reattach at by reaching it. None under a
+ *  touch contact: the end recorded there goes stale as streaming grows the
+ *  tail, and the finger crossing that old offset while still above the live
+ *  end would reattach and start a correction under the finger. A contact
+ *  reattaches only at the live strict end (`reconcileStrictBottom`). */
+function readerEndCandidateFor(
+  direction: ChatTimelineReaderScrollDirection,
+  geometry: ChatTimelineScrollGeometry | null,
+  arm: ArmedReaderDeparture,
+  readerGestureGeneration: number,
+): ReaderEndCandidate | null {
+  if (
+    direction !== "toward-end" ||
+    arm?.source === "touch" ||
+    geometry === null ||
+    !isChatTimelineGeometryMeasurable(geometry)
+  ) {
+    return null;
+  }
+  return {
+    readerGestureGeneration,
+    targetScrollTop: Math.max(0, geometry.scrollHeight - geometry.clientHeight),
   };
 }
 
@@ -181,6 +223,18 @@ function canReaderGestureMove(
  *   correction is never used as reader-intent evidence because MVCP,
  *   ResizeObserver delivery, browser clamping, and content-inset compensation
  *   can all move `scrollTop` in the opposite direction without reader input.
+ * - A touch arms at `touchstart`, not at `touchmove`. iOS WebKit hands the
+ *   touch to its native pan and stops delivering `touchmove` to the page
+ *   (`pointercancel` fires at once), and a touch that lands during a fling
+ *   fires no touch or pointer event at all; the page only ever sees the
+ *   `scroll` reports. With no arm those reports read as layout-owned, the
+ *   latch corrects toward the tail, and because iOS ignores a `scrollTop`
+ *   write while a finger is down the correction lands only after the lift -
+ *   or, with permission still held, on the next message. So a finger on the
+ *   transcript blocks automatic correction for as long as it is down; a
+ *   report that moved past the contact offset detaches, and a lift that
+ *   never moved releases the arm as a tap. A delivered `touchmove` publishes
+ *   its direction without ending the contact.
  * - `followEndIfPermitted` is the one automatic path that turns permission
  *   into an actual scroll. Explicit go-live navigation declares its own
  *   ownership through the same latch and uses the same fresh-DOM authority.
@@ -264,7 +318,12 @@ export function useChatTimelineFollowLatch(
       // (genuinely departing) report reads as layout-owned and the latch
       // yanks the jump straight back to the tail.
       if (permissionRef.current === isFollowing) return;
-      armedReaderDepartureRef.current = null;
+      // A touch arm outlives intent transitions: a finger that reaches the
+      // strict bottom and keeps dragging is still the reader's, and only the
+      // lift says the contact is over.
+      if (armedReaderDepartureRef.current?.source !== "touch") {
+        armedReaderDepartureRef.current = null;
+      }
       permissionRef.current = isFollowing;
       onFollowIntentChangeRef.current?.(isFollowing);
     },
@@ -281,28 +340,29 @@ export function useChatTimelineFollowLatch(
         geometry === null ||
         !isChatTimelineGeometryMeasurable(geometry) ||
         canReaderGestureMove(geometry, intent.direction);
-      armedReaderDepartureRef.current = intent.publishesReaderPosition
-        ? {
-            source: "gesture",
-            direction: intent.direction,
-            // Unknown/hidden geometry cannot safely prove a no-op. When it is
-            // measurable, an edge-directed gesture that cannot move must not
-            // strand follow if no native scroll event is emitted.
-            blocksAutomaticCorrection,
-          }
-        : null;
-      readerEndCandidateRef.current =
-        intent.direction === "toward-end" &&
-        geometry !== null &&
-        isChatTimelineGeometryMeasurable(geometry)
+      // A touch contact outlives every intent during it: neither a delivered
+      // `touchmove` nor a pointer preflight ends it. Replacing it with a
+      // gesture arm would let a strict-bottom report release that
+      // arm, leaving the rest of the contact - which iOS may deliver as bare
+      // scroll reports - unprotected. Only the lift ends the contact.
+      if (armedReaderDepartureRef.current?.source !== "touch") {
+        armedReaderDepartureRef.current = intent.publishesReaderPosition
           ? {
-              readerGestureGeneration: readerGestureGenerationRef.current,
-              targetScrollTop: Math.max(
-                0,
-                geometry.scrollHeight - geometry.clientHeight,
-              ),
+              source: "gesture",
+              direction: intent.direction,
+              // Unknown/hidden geometry cannot safely prove a no-op. When it
+              // is measurable, an edge-directed gesture that cannot move must
+              // not strand follow if no native scroll event is emitted.
+              blocksAutomaticCorrection,
             }
           : null;
+      }
+      readerEndCandidateRef.current = readerEndCandidateFor(
+        intent.direction,
+        geometry,
+        armedReaderDepartureRef.current,
+        readerGestureGenerationRef.current,
+      );
       if (
         intent.publishesReaderPosition &&
         blocksAutomaticCorrection &&
@@ -432,10 +492,20 @@ export function useChatTimelineFollowLatch(
   );
 
   const reconcileStrictBottom = useCallback(
-    (isNativeScrollReport: boolean): void => {
+    (isNativeScrollReport: boolean, scrollTop: number): void => {
       cancelActiveCorrection();
       readerEndCandidateRef.current = null;
       const armedDeparture = armedReaderDepartureRef.current;
+      if (armedDeparture?.source === "touch" && isNativeScrollReport) {
+        // The finger reached the tail mid-contact (streaming grew it past
+        // the contact offset): later movement is measured from here, or a
+        // drag back to the original offset would read as a tap and the lift
+        // would correct the reader to the tail.
+        armedReaderDepartureRef.current = {
+          source: "touch",
+          scrollTopAtContact: scrollTop,
+        };
+      }
       if (
         armedDeparture?.source === "gesture" &&
         (!armedDeparture.blocksAutomaticCorrection || isNativeScrollReport)
@@ -486,13 +556,48 @@ export function useChatTimelineFollowLatch(
     [isCorrectionSuppressed, listRef, setFollowIntent, startEndCorrection],
   );
 
+  /** Whether a non-bottom report under this arm is the reader leaving the
+   *  tail, with the side effects a confirmed departure carries. */
+  const publishArmedDeparture = useCallback(
+    (
+      armedDeparture: NonNullable<ArmedReaderDeparture>,
+      geometry: ChatTimelineScrollGeometry,
+    ): boolean => {
+      if (armedDeparture.source === "touch") {
+        // A report at the contact offset is not the finger moving the view:
+        // the correction the contact cancelled may have left the DOM a hair
+        // off the tail, and the lift resolves that as a tap. Keep the arm.
+        if (
+          Math.abs(geometry.scrollTop - armedDeparture.scrollTopAtContact) <=
+          CHAT_TIMELINE_STRICT_BOTTOM_EPSILON_PX
+        ) {
+          return false;
+        }
+        // The finger moved the view: this is the published reader position a
+        // delivered `touchmove` would have reported.
+        supersedePendingEndCorrection(geometry.scrollTop);
+        onReaderGestureRef.current?.({
+          direction: "indeterminate",
+          freezeInFlightScroll: true,
+          publishesReaderPosition: true,
+        });
+      } else if (armedDeparture.source === "gesture") {
+        // Backstop if arm-time geometry was unmeasurable or a later native
+        // report is the first moment the reader's offset is known.
+        supersedePendingEndCorrection(geometry.scrollTop);
+      }
+      return true;
+    },
+    [supersedePendingEndCorrection],
+  );
+
   const observeLiveGeometry = useCallback((): void => {
     const node = listRef.current?.getScrollableNode();
     if (!node) return;
     const geometry = readScrollGeometry(node);
     if (!isChatTimelineGeometryMeasurable(geometry)) return;
     if (isChatTimelineAtStrictBottom(geometry)) {
-      reconcileStrictBottom(true);
+      reconcileStrictBottom(true, geometry.scrollTop);
       return;
     }
 
@@ -507,12 +612,13 @@ export function useChatTimelineFollowLatch(
     if (!permissionRef.current) return;
     const armedDeparture = armedReaderDepartureRef.current;
     if (armedDeparture !== null) {
-      if (armedDeparture.source === "gesture") {
-        // Backstop if arm-time geometry was unmeasurable or a later native
-        // report is the first moment the reader's offset is known.
-        supersedePendingEndCorrection(geometry.scrollTop);
+      if (!publishArmedDeparture(armedDeparture, geometry)) return;
+      // A touch contact is not consumed by one departure: the finger may
+      // reach the strict bottom (which re-grants follow) and keep dragging,
+      // and that later report is still the reader's. Only the lift ends it.
+      if (armedDeparture.source !== "touch") {
+        armedReaderDepartureRef.current = null;
       }
-      armedReaderDepartureRef.current = null;
       setFollowIntent(false);
       return;
     }
@@ -526,10 +632,10 @@ export function useChatTimelineFollowLatch(
   }, [
     isCorrectionSuppressed,
     listRef,
+    publishArmedDeparture,
     reconcileStrictBottom,
     setFollowIntent,
     startEndCorrection,
-    supersedePendingEndCorrection,
     tryReattachReader,
   ]);
 
@@ -554,21 +660,17 @@ export function useChatTimelineFollowLatch(
       // leave a jump pill visible when there is no useful bottom to reach.
       // This performs no imperative navigation, preserving destructive-clamp
       // behavior while allowing subsequent streaming growth to stay latched.
-      reconcileStrictBottom(false);
+      reconcileStrictBottom(false, geometry.scrollTop);
       return;
     }
     if (!permissionRef.current) return;
     if (isCorrectionSuppressed?.() === true) return;
-    const armedDeparture = armedReaderDepartureRef.current;
-    if (
-      armedDeparture?.source === "owned-navigation" ||
-      armedDeparture?.blocksAutomaticCorrection === true
-    ) {
-      // Reader/free-navigation intent was published before its native scroll
-      // report. Starting a correction here would inherit that gesture's
-      // generation and then mask the departure as correction-owned.
-      return;
-    }
+    // Reader/free-navigation intent published before its native scroll
+    // report, or a finger still on the transcript: starting a correction here
+    // would inherit that gesture's generation and then mask the departure as
+    // correction-owned - and under a finger iOS drops the write anyway, only
+    // to land it after the lift.
+    if (armBlocksAutomaticCorrection(armedReaderDepartureRef.current)) return;
 
     startEndCorrection(list, node);
   }, [
@@ -618,6 +720,25 @@ export function useChatTimelineFollowLatch(
     };
     const handleTouchStart = (event: TouchEvent): void => {
       lastTouchClientYRef.current = event.touches.item(0)?.clientY ?? null;
+      const liveNode = listRef.current?.getScrollableNode();
+      const geometry = liveNode ? readScrollGeometry(liveNode) : null;
+      if (geometry === null || !isChatTimelineGeometryMeasurable(geometry)) {
+        return;
+      }
+      // The contact is the reader's, whether or not a `touchmove` follows
+      // (see the hook's doc comment): cancel any correction, retire a queued
+      // LegendList end command at the live offset so it cannot land after
+      // the finger has moved the view, and hold automatic correction until
+      // the lift. The host is told at the first report that moved the view,
+      // not here - a tap publishes no reading position.
+      readerGestureGenerationRef.current += 1;
+      cancelActiveCorrection();
+      readerEndCandidateRef.current = null;
+      armedReaderDepartureRef.current = {
+        source: "touch",
+        scrollTopAtContact: geometry.scrollTop,
+      };
+      supersedePendingEndCorrection(geometry.scrollTop);
     };
     const handleTouchMove = (event: TouchEvent): void => {
       const clientY = event.touches.item(0)?.clientY;
@@ -633,6 +754,29 @@ export function useChatTimelineFollowLatch(
     };
     const clearTouch = (): void => {
       lastTouchClientYRef.current = null;
+      const armedDeparture = armedReaderDepartureRef.current;
+      if (armedDeparture?.source !== "touch") return;
+      const liveNode = listRef.current?.getScrollableNode();
+      const liveGeometry = liveNode ? readScrollGeometry(liveNode) : null;
+      if (
+        permissionRef.current &&
+        liveGeometry !== null &&
+        isChatTimelineGeometryMeasurable(liveGeometry) &&
+        !isChatTimelineAtStrictBottom(liveGeometry) &&
+        Math.abs(liveGeometry.scrollTop - armedDeparture.scrollTopAtContact) >
+          CHAT_TIMELINE_STRICT_BOTTOM_EPSILON_PX
+      ) {
+        // The finger moved the view and its scroll report has not arrived
+        // (or arrived before the lift could be read). Publish the departure
+        // now, while the arm is intact, so the next maintain trigger cannot
+        // classify it as layout-owned.
+        observeLiveGeometry();
+      }
+      // The lift ends the contact. After a departure, follow is already off
+      // and the catch-up is a no-op; after a tap it lets streaming follow
+      // again and corrects any growth the contact held back.
+      armedReaderDepartureRef.current = null;
+      followEndIfPermitted();
     };
     const completePointerPreflight = (): void => {
       const armedDeparture = armedReaderDepartureRef.current;
@@ -709,6 +853,7 @@ export function useChatTimelineFollowLatch(
     listRef,
     noteReaderGesture,
     observeLiveGeometry,
+    supersedePendingEndCorrection,
   ]);
 
   return useMemo(

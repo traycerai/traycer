@@ -61,6 +61,7 @@ function card(id: string, parentId: string | null): SubagentSegment {
     spawnToolCallId: null,
     parentId,
     workflowMeta: null,
+    toolImageResults: [],
     children: [],
   };
 }
@@ -203,6 +204,7 @@ describe("useSubagentContinueAsChat", () => {
                 reasoningEffort: null,
                 reasoningEffortLabel: null,
                 serviceTier: null,
+                serviceTierLabel: null,
                 costUsd: null,
               },
       };

@@ -17,6 +17,11 @@ import { useHostBinding } from "@/lib/host";
  */
 export interface WorktreePickerHostSectionProps {
   readonly surfaceKey: string;
+  /**
+   * Only the terminal picker offers the Automations host; the
+   * git diff panel and the file tree read worktrees it does not serve.
+   */
+  readonly offersAutomations: boolean;
 }
 
 export function WorktreePickerHostSection(
@@ -41,6 +46,7 @@ export function WorktreePickerHostSection(
         listsFailed={options.listsFailed}
         onRetryLists={options.retryLists}
         intent="pin"
+        offersAutomations={props.offersAutomations}
       />
     </div>
   );
