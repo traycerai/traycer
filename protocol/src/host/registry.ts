@@ -13539,7 +13539,7 @@ export type HostRpcRegistry = typeof hostRpcRegistry;
 // position only picks OTHER methods out of the merge. Keeping this const free
 // of `chat.subscribe` means `typeof HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION`
 // never has to expand it (see `HostStreamRpcMethodMap` below).
-const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
+const HOST_STREAM_RPC_REGISTRY_CORE_DEFINITION = {
   "organization.subscribe": {
     1: {
       latestMinor: 1,
@@ -14010,6 +14010,9 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
       },
     },
   },
+} as const;
+
+const HOST_STREAM_RPC_REGISTRY_FEATURE_DEFINITION = {
   "resources.subscribe": {
     1: {
       latestMinor: 5,
@@ -14459,6 +14462,14 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
     },
   },
 } as const;
+
+// Keep declaration inference below TypeScript's serialization limit without
+// widening any method contract. Each half has its own named inferred type.
+const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION: typeof HOST_STREAM_RPC_REGISTRY_CORE_DEFINITION &
+  typeof HOST_STREAM_RPC_REGISTRY_FEATURE_DEFINITION = {
+  ...HOST_STREAM_RPC_REGISTRY_CORE_DEFINITION,
+  ...HOST_STREAM_RPC_REGISTRY_FEATURE_DEFINITION,
+};
 
 const HOST_STREAM_RPC_REGISTRY_DEFINITION = {
   ...HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION,
