@@ -98,7 +98,7 @@ vi.mock("@/lib/host", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/host")>();
   return {
     ...actual,
-    useHostClient: () => null,
+    useHostClient: () => APP_WIDE_HOST_CLIENT,
   };
 });
 
@@ -216,6 +216,10 @@ function buildHostClient(hostId: string): HostClient<HostRpcRegistry> {
 // The tab's own host client (`useTabHostClient()`'s mocked result) - the
 // only client the dialog is allowed to thread into a "fixed" scope.
 const TAB_HOST_CLIENT = buildHostClient(TAB_HOST_ID);
+
+// The app-wide client (`useHostClient()`), on a host of its own so nothing
+// the dialog threads into its fixed scope can be mistaken for it.
+const APP_WIDE_HOST_CLIENT = buildHostClient("app-wide-host-id");
 
 function forkTarget(): ChatForkDialogTarget {
   return {
