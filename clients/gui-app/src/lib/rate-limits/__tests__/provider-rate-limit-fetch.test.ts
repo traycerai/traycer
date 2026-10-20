@@ -256,6 +256,7 @@ describe("fetchProviderRateLimits", () => {
       lastGood: null,
       lastGoodAt: null,
       lastFailureAt: null,
+      lastTerminalAt: null,
     });
   });
 
@@ -467,6 +468,7 @@ describe("fetchProviderRateLimits", () => {
         lastGood: null,
         lastGoodAt: null,
         lastFailureAt: null,
+        lastTerminalAt: null,
       });
     });
 

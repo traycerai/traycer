@@ -108,12 +108,22 @@ function retainCodexResetCreditDetails(
  * - `lastGoodAt` / `lastFailureAt`: epoch-ms timestamps for the two events
  *   above, `null` until they've happened at least once in this envelope's
  *   lifetime.
+ * - `lastTerminalAt`: when this key last got an answer ABOUT THE ACCOUNT - a
+ *   reading, or an authoritative reason. A transient failure is not one and
+ *   carries the stamp over unchanged, so a run of them shares a value, which
+ *   is what identifies that run: a surface that owes a transient account one
+ *   action per run of failures (the strip's single re-read,
+ *   `rate-limit-read-ledger.ts`) records this stamp with it and compares again
+ *   before owing one. That answer can land while nothing is drawing the
+ *   account - a background poll, a read from a different surface - so the
+ *   identity has to live in the reading rather than in what was rendered.
  */
 export interface ProviderRateLimitEnvelope {
   readonly latest: ProviderRateLimits | null;
   readonly lastGood: AvailableProviderRateLimits | null;
   readonly lastGoodAt: number | null;
   readonly lastFailureAt: number | null;
+  readonly lastTerminalAt: number | null;
 }
 
 /**
@@ -183,6 +193,10 @@ function invalidateProvidersListForConvergence(
  *   picture entirely: `lastGood`/`lastGoodAt`/`lastFailureAt` all reset to
  *   `null`. An authoritative "this account can't see usage" reading must
  *   never be shown dimmed alongside a stale good one.
+ *
+ * `lastTerminalAt` advances with a reading and with an authoritative reason,
+ * since both are answers about the account, and carries over unchanged through
+ * a transient failure and through a response with no snapshot, which are not.
  */
 export function buildProviderRateLimitEnvelope(
   previous: ProviderRateLimitEnvelope | undefined,
@@ -194,6 +208,24 @@ export function buildProviderRateLimitEnvelope(
     response.providerRateLimits,
     now,
   );
+}
+
+/**
+ * What a transient failure keeps of the reading before it: the retained one
+ * where that is allowed, nothing where it is not (OpenCode's credential
+ * generation is the case that forbids it).
+ */
+function retainedLastGood(
+  previous: ProviderRateLimitEnvelope | undefined,
+  latest: UnavailableProviderRateLimits,
+): Pick<ProviderRateLimitEnvelope, "lastGood" | "lastGoodAt"> {
+  if (!canRetainPreviousRateLimits(previous, latest)) {
+    return { lastGood: null, lastGoodAt: null };
+  }
+  return {
+    lastGood: previous?.lastGood ?? null,
+    lastGoodAt: previous?.lastGoodAt ?? null,
+  };
 }
 
 export function buildProviderRateLimitEnvelopeFromSnapshot(
@@ -208,20 +240,40 @@ export function buildProviderRateLimitEnvelopeFromSnapshot(
       lastGood: retainedLatest,
       lastGoodAt: now,
       lastFailureAt: previous?.lastFailureAt ?? null,
+      lastTerminalAt: now,
     };
   }
 
   if (latest !== null && isTransientUnavailableReason(latest.reason)) {
-    const canRetainPrevious = canRetainPreviousRateLimits(previous, latest);
     return {
       latest,
-      lastGood: canRetainPrevious ? (previous?.lastGood ?? null) : null,
-      lastGoodAt: canRetainPrevious ? (previous?.lastGoodAt ?? null) : null,
+      ...retainedLastGood(previous, latest),
       lastFailureAt: now,
+      // Carried over: a transient failure says nothing about the account, so
+      // it does not close the run of failures this stamp identifies.
+      lastTerminalAt: previous?.lastTerminalAt ?? null,
     };
   }
 
-  return { latest, lastGood: null, lastGoodAt: null, lastFailureAt: null };
+  // No snapshot at all is no answer about the account either, so that carries
+  // the stamp over too; an authoritative reason below IS one.
+  if (latest === null) {
+    return {
+      latest,
+      lastGood: null,
+      lastGoodAt: null,
+      lastFailureAt: null,
+      lastTerminalAt: previous?.lastTerminalAt ?? null,
+    };
+  }
+
+  return {
+    latest,
+    lastGood: null,
+    lastGoodAt: null,
+    lastFailureAt: null,
+    lastTerminalAt: now,
+  };
 }
 
 /**

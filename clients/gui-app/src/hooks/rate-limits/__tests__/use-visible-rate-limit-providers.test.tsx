@@ -124,6 +124,7 @@ function envelope(
     lastGood: data,
     lastGoodAt: NOW - 60_000,
     lastFailureAt: null,
+    lastTerminalAt: null,
   };
 }
 
@@ -347,6 +348,7 @@ describe("useVisibleRateLimitProviders", () => {
         lastGood: null,
         lastGoodAt: null,
         lastFailureAt: NOW,
+        lastTerminalAt: null,
       },
       isError: false,
     });
@@ -376,6 +378,7 @@ describe("useVisibleRateLimitProviders", () => {
         lastGood: null,
         lastGoodAt: null,
         lastFailureAt: NOW,
+        lastTerminalAt: null,
       },
       isError: false,
     });

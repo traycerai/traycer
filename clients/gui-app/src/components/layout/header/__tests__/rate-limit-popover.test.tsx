@@ -376,6 +376,7 @@ function envelopeFor(
       lastGood: providerRateLimits,
       lastGoodAt: NOW - 90_000,
       lastFailureAt: null,
+      lastTerminalAt: null,
     };
   }
   return {
@@ -383,6 +384,7 @@ function envelopeFor(
     lastGood: null,
     lastGoodAt: null,
     lastFailureAt: null,
+    lastTerminalAt: null,
   };
 }
 
@@ -413,6 +415,7 @@ function degradedRetainedResult(
       lastGood,
       lastGoodAt: NOW - 90_000,
       lastFailureAt: NOW - 1_000,
+      lastTerminalAt: null,
     },
     isPending: false,
     isFetching: false,
@@ -2624,6 +2627,7 @@ describe("<RateLimitPopover /> per-provider states", () => {
           lastGood: codexReady(),
           lastGoodAt: NOW - 90_000,
           lastFailureAt: NOW - 1_000,
+          lastTerminalAt: null,
         },
         isPending: false,
         isFetching: false,

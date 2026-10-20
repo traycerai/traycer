@@ -49,8 +49,8 @@ import {
 import {
   manualRateLimitRetryRevision,
   manualRateLimitRetryWithheld,
+  pruneScheduledTransientReads,
   rateLimitAccountLedgerKey,
-  releaseScheduledTransientRead,
   scheduledTransientReadOwed,
   subscribeManualRateLimitRetries,
 } from "@/lib/rate-limits/rate-limit-read-ledger";
@@ -230,8 +230,23 @@ export interface StatusBarRateLimitRetryTarget {
   readonly profileId: string | null;
 }
 
-/** One `httpFetch` account's observer, named so a single key can be refetched. */
-export interface StatusBarRateLimitHttpRefetch extends StatusBarRateLimitRetryTarget {
+/**
+ * One account's scheduled re-read, with the episode it is owed for - the stamp
+ * of the last answer that account got (`lastTerminalAt`, 0 for none). The
+ * reader records that stamp when it takes the read, which is what makes the
+ * one-shot a fact about the run of failures rather than about a mount.
+ */
+export interface StatusBarScheduledTransientRead extends StatusBarRateLimitRetryTarget {
+  readonly episode: number;
+}
+
+/**
+ * One `httpFetch` account's observer, named so a single key can be refetched.
+ * Not a retry target: a handle to refetch with is not something owed a read.
+ */
+export interface StatusBarRateLimitHttpRefetch {
+  readonly providerId: RateLimitProviderId;
+  readonly profileId: string | null;
   readonly refetch: () => Promise<unknown>;
 }
 
@@ -263,7 +278,7 @@ export interface StatusBarRateLimitSegments {
    * account may be fetched at all is settled in this hook, and a caller
    * deciding it again would be a second opinion about it.
    */
-  readonly retryTargets: ReadonlyArray<StatusBarRateLimitRetryTarget>;
+  readonly retryTargets: ReadonlyArray<StatusBarScheduledTransientRead>;
   readonly refresh: StatusBarRateLimitRefreshModel;
 }
 
@@ -553,6 +568,22 @@ function accountKey(
   profileId: string | null,
 ): string {
   return `${providerId}:${profileId ?? ""}`;
+}
+
+/**
+ * Each of these accounts paired with the episode its reading is in - the stamp
+ * of the last answer about it, or 0 for an account nothing has answered yet.
+ */
+function episodeStamps(
+  targets: ReadonlyArray<StatusBarRateLimitTarget>,
+  queries: ReadonlyArray<
+    UseQueryResult<ProviderRateLimitEnvelope, HostRpcError>
+  >,
+): Array<[string, number]> {
+  return targets.map((target, index) => [
+    accountKey(target.provider.providerId, target.profileId),
+    queries[index].data?.lastTerminalAt ?? 0,
+  ]);
 }
 
 /**
@@ -883,64 +914,76 @@ export function useStatusBarRateLimitSegments(input: {
         : [],
     ),
   );
-  // An episode is over when a reading lands, so the one-shot it spent is handed
-  // back and the next run of failures gets its own re-read. In an effect,
-  // because it is a write about what has already been drawn; only where a read
-  // would go from, since the key names that host; and never in the sample
-  // scene, whose invented readings say nothing about a real account.
-  const releaseHostId = input.retryHostId;
-  const settledLedgerKeys =
-    releaseHostId === null || input.sample
+  // Which episode each account is in, read from the reading itself, so the
+  // one-shot a strip spends is remembered against the run of failures rather
+  // than against this mount. An account nothing has answered yet: 0.
+  const episodes = new Map<string, number>([
+    ...episodeStamps(ephemeralObserved, ephemeralObservedQueries),
+    ...episodeStamps(httpPolling, httpPollingQueries),
+    ...episodeStamps(httpObserved, httpObservedQueries),
+  ]);
+  // Nothing releases an episode - the stamp above is what ends one - but the
+  // strip does stop watching accounts: a profile removed, a provider
+  // deselected. Their entries are dropped here, in an effect, because it is a
+  // write about what has already been drawn; only in the placement that arms
+  // these reads, since its own list is the authority on what it watches; and
+  // never in the sample scene, whose invented readings say nothing about a
+  // real account.
+  const watchHostId = input.retryHostId;
+  const watchedLedgerKeys =
+    watchHostId === null || input.sample
       ? []
-      : segments.flatMap((segment) =>
-          segment.state === "transient"
-            ? []
-            : [
-                rateLimitAccountLedgerKey(
-                  releaseHostId,
-                  segment.providerId,
-                  segment.profileId,
-                ),
-              ],
+      : targets.map((target) =>
+          rateLimitAccountLedgerKey(
+            watchHostId,
+            target.provider.providerId,
+            target.profileId,
+          ),
         );
-  const releaseSettledEpisodes = useEffectEvent((): void => {
-    for (const key of settledLedgerKeys) releaseScheduledTransientRead(key);
+  const pruneUnwatchedEpisodes = useEffectEvent((): void => {
+    // The sample scene is read out of this test, not just absent from the
+    // list: its invented readings name real accounts on a real host, and an
+    // empty watch list from it would drop every entry that host has.
+    if (watchHostId === null || input.sample) return;
+    pruneScheduledTransientReads(watchHostId, new Set(watchedLedgerKeys));
   });
   // The set itself as the dependency, flattened: a fresh array every render
   // would run this on every render, and the keys are the only thing that can
   // make it mean something different.
-  const settledEpisodeKeys = settledLedgerKeys.join("\n");
+  const watchedEpisodeKeys = watchedLedgerKeys.join("\n");
   useEffect(() => {
-    releaseSettledEpisodes();
-  }, [settledEpisodeKeys]);
+    pruneUnwatchedEpisodes();
+  }, [watchedEpisodeKeys]);
 
   return {
     cluster: clusterFor(input.providers.length, segments),
-    retryTargets: targets.flatMap((target) =>
-      !passive &&
-      target.fetchEligible &&
-      input.retryHostId !== null &&
-      transientKeys.has(
-        accountKey(target.provider.providerId, target.profileId),
-      ) &&
-      // The episode's one re-read, once. A placement whose click does not read
-      // owes none at all: it has no host to read from, which is the same
-      // reason it offers no affordance.
-      scheduledTransientReadOwed(
-        rateLimitAccountLedgerKey(
-          input.retryHostId,
-          target.provider.providerId,
-          target.profileId,
-        ),
-      )
+    retryTargets: targets.flatMap((target) => {
+      const key = accountKey(target.provider.providerId, target.profileId);
+      const episode = episodes.get(key) ?? 0;
+      return !passive &&
+        target.fetchEligible &&
+        input.retryHostId !== null &&
+        transientKeys.has(key) &&
+        // The episode's one re-read, once. A placement whose click does not
+        // read owes none at all: it has no host to read from, which is the
+        // same reason it offers no affordance.
+        scheduledTransientReadOwed(
+          rateLimitAccountLedgerKey(
+            input.retryHostId,
+            target.provider.providerId,
+            target.profileId,
+          ),
+          episode,
+        )
         ? [
             {
               providerId: target.provider.providerId,
               profileId: target.profileId,
+              episode,
             },
           ]
-        : [],
-    ),
+        : [];
+    }),
     // Only the ephemeral lane: an `httpFetch` observer is enabled and fetches its
     // own cold start on mount, so routing it through the mount hook as well
     // would put two fetches on one key. And none of it in `passive`, where a

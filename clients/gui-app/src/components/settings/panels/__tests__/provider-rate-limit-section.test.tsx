@@ -464,6 +464,7 @@ describe("ProviderRateLimitForProvider", () => {
       lastGood: CODEX_RATE_LIMITS,
       lastGoodAt: Date.now(),
       lastFailureAt: Date.now(),
+      lastTerminalAt: null,
     };
     mocks.isError = false;
     render(

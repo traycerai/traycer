@@ -129,6 +129,9 @@ describe("buildProviderRateLimitEnvelope", () => {
       lastGood: GOOD,
       lastGoodAt: 1_000,
       lastFailureAt: null,
+      // The reading IS an answer about this account, so it names the episode
+      // any run of failures after it belongs to.
+      lastTerminalAt: 1_000,
     });
   });
 
@@ -140,6 +143,7 @@ describe("buildProviderRateLimitEnvelope", () => {
         lastGood: GOOD,
         lastGoodAt: 1_000,
         lastFailureAt: null,
+        lastTerminalAt: 1_000,
       };
       const envelope = buildProviderRateLimitEnvelope(
         previous,
@@ -151,6 +155,10 @@ describe("buildProviderRateLimitEnvelope", () => {
         lastGood: GOOD,
         lastGoodAt: 1_000,
         lastFailureAt: 2_000,
+        // A transient failure answers nothing, so the stamp stays where the
+        // last answer put it: every failure in one run carries the same one,
+        // which is what names the run.
+        lastTerminalAt: 1_000,
       });
     },
   );
@@ -166,6 +174,7 @@ describe("buildProviderRateLimitEnvelope", () => {
       lastGood: null,
       lastGoodAt: null,
       lastFailureAt: 1_000,
+      lastTerminalAt: null,
     });
   });
 
@@ -198,6 +207,7 @@ describe("buildProviderRateLimitEnvelope", () => {
       lastGood: openCodeGood,
       lastGoodAt: 1_000,
       lastFailureAt: null,
+      lastTerminalAt: null,
     };
     const sameGeneration: ProviderRateLimits = {
       provider: "opencode",
@@ -212,6 +222,7 @@ describe("buildProviderRateLimitEnvelope", () => {
       lastGood: openCodeGood,
       lastGoodAt: 1_000,
       lastFailureAt: 2_000,
+      lastTerminalAt: null,
     });
   });
 
@@ -244,6 +255,7 @@ describe("buildProviderRateLimitEnvelope", () => {
       lastGood: openCodeGood,
       lastGoodAt: 1_000,
       lastFailureAt: null,
+      lastTerminalAt: null,
     };
     const differentGeneration: ProviderRateLimits = {
       provider: "opencode",
@@ -262,6 +274,7 @@ describe("buildProviderRateLimitEnvelope", () => {
       lastGood: null,
       lastGoodAt: null,
       lastFailureAt: 2_000,
+      lastTerminalAt: null,
     });
 
     const missingGeneration: ProviderRateLimits = {
@@ -280,6 +293,7 @@ describe("buildProviderRateLimitEnvelope", () => {
       lastGood: null,
       lastGoodAt: null,
       lastFailureAt: 3_000,
+      lastTerminalAt: null,
     });
   });
 
@@ -289,6 +303,7 @@ describe("buildProviderRateLimitEnvelope", () => {
       lastGood: GOOD,
       lastGoodAt: 1_000,
       lastFailureAt: 500,
+      lastTerminalAt: 1_000,
     };
     const envelope = buildProviderRateLimitEnvelope(
       previous,
@@ -300,6 +315,9 @@ describe("buildProviderRateLimitEnvelope", () => {
       lastGood: null,
       lastGoodAt: null,
       lastFailureAt: null,
+      // An authoritative reason answers the account as surely as a reading
+      // does, so it ends the episode whatever run of failures was under way.
+      lastTerminalAt: 2_000,
     });
   });
 
@@ -309,6 +327,7 @@ describe("buildProviderRateLimitEnvelope", () => {
       lastGood: GOOD,
       lastGoodAt: 1_000,
       lastFailureAt: 1_500,
+      lastTerminalAt: null,
     };
     const envelope = buildProviderRateLimitEnvelope(
       previous,
@@ -323,6 +342,7 @@ describe("buildProviderRateLimitEnvelope", () => {
       // some point) until either another failure or an authoritative
       // unavailable reason updates it again.
       lastFailureAt: 1_500,
+      lastTerminalAt: 2_000,
     });
   });
 
@@ -332,6 +352,7 @@ describe("buildProviderRateLimitEnvelope", () => {
       lastGood: CODEX_WITH_RESET_DETAILS,
       lastGoodAt: 1_000,
       lastFailureAt: null,
+      lastTerminalAt: null,
     };
     const countOnlyRefresh: ProviderRateLimits = {
       ...CODEX_WITH_RESET_DETAILS,
@@ -358,6 +379,7 @@ describe("buildProviderRateLimitEnvelope", () => {
       lastGood: CODEX_WITH_RESET_DETAILS,
       lastGoodAt: 1_000,
       lastFailureAt: null,
+      lastTerminalAt: null,
     };
     const countOnlyRefresh: ProviderRateLimits = {
       ...CODEX_WITH_RESET_DETAILS,
@@ -379,6 +401,7 @@ describe("buildProviderRateLimitEnvelope", () => {
       lastGood: CODEX_WITH_RESET_DETAILS,
       lastGoodAt: 1_000,
       lastFailureAt: null,
+      lastTerminalAt: null,
     };
     const emptyDetailRefresh: ProviderRateLimits = {
       ...CODEX_WITH_RESET_DETAILS,
@@ -400,6 +423,7 @@ describe("buildProviderRateLimitEnvelope", () => {
       lastGood: GOOD,
       lastGoodAt: 1_000,
       lastFailureAt: null,
+      lastTerminalAt: null,
     };
     const envelope = buildProviderRateLimitEnvelope(
       previous,
@@ -411,6 +435,7 @@ describe("buildProviderRateLimitEnvelope", () => {
       lastGood: null,
       lastGoodAt: null,
       lastFailureAt: null,
+      lastTerminalAt: null,
     });
   });
 });
@@ -427,6 +452,7 @@ describe("resolveRetainedProviderRateLimits", () => {
         lastGood: null,
         lastGoodAt: null,
         lastFailureAt: null,
+        lastTerminalAt: null,
       }),
     ).toBeNull();
   });
@@ -438,6 +464,7 @@ describe("resolveRetainedProviderRateLimits", () => {
         lastGood: GOOD,
         lastGoodAt: 1_000,
         lastFailureAt: null,
+        lastTerminalAt: null,
       }),
     ).toEqual(GOOD);
   });
@@ -449,6 +476,7 @@ describe("resolveRetainedProviderRateLimits", () => {
         lastGood: GOOD,
         lastGoodAt: 1_000,
         lastFailureAt: 2_000,
+        lastTerminalAt: null,
       }),
     ).toEqual(GOOD);
   });
@@ -461,6 +489,7 @@ describe("resolveRetainedProviderRateLimits", () => {
         lastGood: null,
         lastGoodAt: null,
         lastFailureAt: 1_000,
+        lastTerminalAt: null,
       }),
     ).toEqual(latest);
   });
@@ -477,6 +506,7 @@ describe("resolveRetainedProviderRateLimits", () => {
         lastGood: GOOD,
         lastGoodAt: 1_000,
         lastFailureAt: null,
+        lastTerminalAt: null,
       }),
     ).toEqual(latest);
   });
@@ -494,6 +524,7 @@ describe("envelopeDegradedReason", () => {
         lastGood: GOOD,
         lastGoodAt: 1_000,
         lastFailureAt: null,
+        lastTerminalAt: null,
       }),
     ).toBeNull();
   });
@@ -505,6 +536,7 @@ describe("envelopeDegradedReason", () => {
         lastGood: GOOD,
         lastGoodAt: 1_000,
         lastFailureAt: 2_000,
+        lastTerminalAt: null,
       }),
     ).toBe("usage_fetch_failed");
   });
@@ -516,6 +548,7 @@ describe("envelopeDegradedReason", () => {
         lastGood: null,
         lastGoodAt: null,
         lastFailureAt: null,
+        lastTerminalAt: null,
       }),
     ).toBeNull();
   });
@@ -527,6 +560,7 @@ describe("envelopeDegradedReason", () => {
         lastGood: null,
         lastGoodAt: null,
         lastFailureAt: 1_000,
+        lastTerminalAt: null,
       }),
     ).toBeNull();
   });
@@ -599,6 +633,7 @@ describe("mapResponseToProviderRateLimitEnvelope providers.list convergence", ()
       lastGood: null,
       lastGoodAt: null,
       lastFailureAt: null,
+      lastTerminalAt: null,
     });
     mapResponseToProviderRateLimitEnvelope({
       response: response(GROK_GOOD),

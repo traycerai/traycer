@@ -27,6 +27,7 @@ function envelope(
     lastGood: null,
     lastGoodAt: null,
     lastFailureAt: null,
+    lastTerminalAt: null,
     ...overrides,
   };
 }

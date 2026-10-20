@@ -147,6 +147,7 @@ describe("resolveProviderRateLimitViewState", () => {
           lastGood: ANOTHER_READY,
           lastGoodAt: 1_000,
           lastFailureAt: 2_000,
+          lastTerminalAt: null,
         },
       });
       expect(state).toEqual({
@@ -174,6 +175,7 @@ describe("resolveProviderRateLimitViewState", () => {
         lastGood: null,
         lastGoodAt: null,
         lastFailureAt: 1_000,
+        lastTerminalAt: null,
       },
     });
     expect(state).toEqual({
@@ -312,6 +314,7 @@ describe("resolvePopoverProviderRateLimitState", () => {
           lastGood: ANOTHER_READY,
           lastGoodAt: 1_000,
           lastFailureAt: 2_000,
+          lastTerminalAt: null,
         },
       });
       expect(state).toEqual({
@@ -333,6 +336,7 @@ describe("resolvePopoverProviderRateLimitState", () => {
         lastGood: null,
         lastGoodAt: null,
         lastFailureAt: 1_000,
+        lastTerminalAt: null,
       },
     });
     expect(state).toEqual({

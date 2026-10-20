@@ -76,6 +76,7 @@ function rateLimitEnvelope(
     lastGood: providerRateLimits,
     lastGoodAt: 100,
     lastFailureAt: null,
+    lastTerminalAt: null,
   };
 }
 

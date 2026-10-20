@@ -39,6 +39,7 @@ const EXPECTED_RATE_LIMIT_ENVELOPE = {
   lastGood: null,
   lastGoodAt: null,
   lastFailureAt: null,
+  lastTerminalAt: null,
 };
 
 function requestVia(

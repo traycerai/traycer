@@ -202,6 +202,7 @@ function envelope(
     lastGood: data,
     lastGoodAt,
     lastFailureAt: null,
+    lastTerminalAt: null,
   };
 }
 
@@ -519,6 +520,7 @@ describe("projectProfileUsage", () => {
       lastGood: data,
       lastGoodAt: NOW - 1_000,
       lastFailureAt: NOW,
+      lastTerminalAt: null,
     };
     const retainedProjection = project("ok", NOW - 1_000, retained, false);
     expect(retainedProjection.kind).toBe("stale");
@@ -568,6 +570,7 @@ describe("projectProfileUsage", () => {
       lastGood: null,
       lastGoodAt: null,
       lastFailureAt: null,
+      lastTerminalAt: null,
     };
     expect(project("unknown", NOW, unavailable, false)).toEqual({
       kind: "unavailable",

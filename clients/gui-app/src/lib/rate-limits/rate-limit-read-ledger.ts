@@ -38,19 +38,27 @@
  * The transient words promise a retry, so the strip schedules exactly one,
  * `TRANSIENT_RATE_LIMIT_RETRY_DELAY_MS` after the account entered the state;
  * the 15-minute poll owns the cadence from there. One per EPISODE, not one per
- * mount: the run of failures is a single episode, and it ends only when a
- * reading lands or the key changes. Kept here rather than in the component
- * that times it, because that component unmounts for reasons that are not the
- * end of an episode - hiding the usage region, a re-render of the strip - and
- * a one-shot it re-armed each time would be a read a minute for as long as the
- * account kept failing.
+ * mount: the run of failures is a single episode, and it ends when the account
+ * is answered - a reading, or an authoritative reason. Kept here rather than
+ * in the component that times it, because that component unmounts for reasons
+ * that are not the end of an episode - hiding the usage region, a re-render of
+ * the strip - and a one-shot it re-armed each time would be a read a minute
+ * for as long as the account kept failing.
+ *
+ * The episode is NAMED by the envelope's `lastTerminalAt`, the stamp of the
+ * last answer about that account, which every run of failures shares and no
+ * two runs do. So an entry records which episode spent the read, and the
+ * question "is one owed" is answered by comparing, with nothing to release:
+ * the answer that ends an episode often lands where no strip is drawing the
+ * account - a background poll, a read from a different surface, a window that
+ * was hidden - and anything that had to observe it being drawn would miss it.
  *
  * In memory only, deliberately: this is a record of a read THIS renderer owes
  * and has taken. A sibling window has its own cache and its own poll, and
  * suppressing its first re-read because this one already made it would leave
- * it drawing words it never acted on. What bounds the duplicate reads across
- * windows is the host's own floors, which that read is subject to. One entry
- * per account with an episode running, dropped when the episode ends.
+ * it drawing words it never acted on. What bounds the provider traffic that
+ * follows is the host's own floors, per lane (see the PR body's numbers). One
+ * entry per account the strip is watching, pruned when it stops watching it.
  */
 import { RATE_LIMIT_MANUAL_RETRY_WITHHOLD_MS } from "@/lib/rate-limits/rate-limit-timing";
 
@@ -63,8 +71,8 @@ const LEDGER_KEY_PREFIX = "traycer.rateLimits.manualRead.";
 /** This window's floor for the hand-driven bound, by key. */
 const stampsHere = new Map<string, number>();
 
-/** The accounts whose episode has already spent its one scheduled read. */
-const spentEpisodes = new Set<string>();
+/** By account: the episode whose one scheduled read has been spent. */
+const spentEpisodes = new Map<string, number>();
 
 const listeners = new Set<() => void>();
 
@@ -107,28 +115,45 @@ export function manualRateLimitRetryWithheld(
 }
 
 /**
- * Whether this account's transient episode is still owed its one scheduled
- * re-read.
+ * Whether this account is still owed the one scheduled re-read of `episode`,
+ * the stamp of the last answer it got (`lastTerminalAt`, 0 for none).
+ *
+ * A spent entry from any OTHER episode is not this episode's, so an account
+ * answered and failing again owes one without anything having released it.
  */
-export function scheduledTransientReadOwed(key: string): boolean {
-  return !spentEpisodes.has(key);
+export function scheduledTransientReadOwed(
+  key: string,
+  episode: number,
+): boolean {
+  return spentEpisodes.get(key) !== episode;
 }
 
 /**
- * The episode's one scheduled re-read has been taken. Recorded when the timer
- * fires, whether or not a request went out: a read already in flight IS the
- * retry the words promise, and asking again over it is what the skip avoids.
+ * The scheduled re-read of this episode has been taken. Recorded when the
+ * timer fires, whether or not a request went out: a read already in flight IS
+ * the retry the words promise, and asking again over it is what the skip
+ * avoids.
  */
-export function recordScheduledTransientRead(key: string): void {
-  spentEpisodes.add(key);
+export function recordScheduledTransientRead(
+  key: string,
+  episode: number,
+): void {
+  spentEpisodes.set(key, episode);
 }
 
 /**
- * This account's episode is over - a reading landed - so the next one gets its
- * own re-read.
+ * Forgets this host's entries for accounts it no longer names - a profile
+ * removed, a provider deselected, a host the strip left - so the map holds one
+ * entry per account being watched rather than one per account ever watched.
  */
-export function releaseScheduledTransientRead(key: string): void {
-  spentEpisodes.delete(key);
+export function pruneScheduledTransientReads(
+  hostId: string,
+  watched: ReadonlySet<string>,
+): void {
+  const prefix = `${LEDGER_KEY_PREFIX}${hostId}:`;
+  for (const key of spentEpisodes.keys()) {
+    if (key.startsWith(prefix) && !watched.has(key)) spentEpisodes.delete(key);
+  }
 }
 
 /**

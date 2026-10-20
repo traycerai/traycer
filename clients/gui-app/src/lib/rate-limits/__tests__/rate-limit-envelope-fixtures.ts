@@ -1,4 +1,5 @@
 import type { ProviderRateLimits } from "@traycer/protocol/host";
+import { isTransientRateLimitUnavailableReason } from "@traycer/protocol/host";
 import type { ProviderRateLimitEnvelope } from "@/lib/rate-limits/rate-limit-envelope";
 
 /**
@@ -12,7 +13,24 @@ export function envelopeFromRateLimits(
   data: ProviderRateLimits,
   lastGoodAt: number,
 ): ProviderRateLimitEnvelope {
-  return data.available
-    ? { latest: data, lastGood: data, lastGoodAt, lastFailureAt: null }
-    : { latest: data, lastGood: null, lastGoodAt: null, lastFailureAt: null };
+  if (data.available) {
+    return {
+      latest: data,
+      lastGood: data,
+      lastGoodAt,
+      lastFailureAt: null,
+      lastTerminalAt: lastGoodAt,
+    };
+  }
+  return {
+    latest: data,
+    lastGood: null,
+    lastGoodAt: null,
+    lastFailureAt: null,
+    // A transient failure is no answer about the account, so it dates none;
+    // an authoritative reason is one.
+    lastTerminalAt: isTransientRateLimitUnavailableReason(data.reason)
+      ? null
+      : lastGoodAt,
+  };
 }

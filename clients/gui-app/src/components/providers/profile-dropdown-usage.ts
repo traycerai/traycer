@@ -50,6 +50,9 @@ function envelopeFromDetail(
         lastGood: detail.usage,
         lastGoodAt: detail.asOf,
         lastFailureAt: null,
+        // The reading itself is the answer about this account, so it dates the
+        // last one.
+        lastTerminalAt: detail.asOf,
       };
     case "failed-with-last-good":
       return {
@@ -57,6 +60,9 @@ function envelopeFromDetail(
         lastGood: detail.usage,
         lastGoodAt: detail.asOf,
         lastFailureAt: detail.failedAt,
+        // The failure that follows a reading is transient here, and a
+        // transient failure is no answer about the account.
+        lastTerminalAt: detail.asOf,
       };
     case "unavailable":
       return {
@@ -64,6 +70,9 @@ function envelopeFromDetail(
         lastGood: null,
         lastGoodAt: null,
         lastFailureAt: null,
+        // An authoritative reason IS an answer, and this projection carries no
+        // stamp for when it arrived.
+        lastTerminalAt: null,
       };
     case "never-checked":
     case "semantic-only":

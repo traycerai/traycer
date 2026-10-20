@@ -25,6 +25,7 @@ import {
   type StatusBarRateLimitMountTarget,
   type StatusBarRateLimitRefreshModel,
   type StatusBarRateLimitRetryTarget,
+  type StatusBarScheduledTransientRead,
 } from "@/hooks/rate-limits/use-status-bar-rate-limit-segments";
 import { DEFAULT_ACCOUNT_CONTEXT } from "@traycer/protocol/common/schemas";
 import { rateLimitCapableProviderIdSchema } from "@traycer/protocol/host/rate-limit";
@@ -198,7 +199,6 @@ export function StatusBarRateLimitCluster(props: {
               key={`${fetchScope.hostId}:${target.providerId}:${target.profileId ?? ""}`}
               target={target}
               reading={statusBarSegmentIsReading(cluster, target)}
-              httpRefetches={refresh.httpRefetches}
             />
           ))}
     </>
@@ -370,15 +370,22 @@ function readOneAccount(args: {
     accountContext: DEFAULT_ACCOUNT_CONTEXT,
     profileId: args.target.profileId,
   };
+  // An unforced read takes the collection path on BOTH lanes, and that is the
+  // only way it stays unforced. `collectProviderRateLimits` sends
+  // `force: false` and skips this renderer's freshness guard, which would
+  // otherwise answer the scheduled re-read of a transient failure from the
+  // cache entry that failure wrote, leaving the host with no question to hear.
+  // An http observer's own `refetch()` sends no `force` at all, and an absent
+  // `force` is FORCED on the wire (`protocol/src/host/rate-limit/schemas.ts`),
+  // so refetching one here would turn this lane's automatic one-shot into a
+  // read past the host's floors.
+  if (!args.force) return collectProviderRateLimits(args.fetchScope, params);
   if (rateLimitFetchLane(args.target.providerId) === "ephemeralProcess") {
-    // Unforced reads go through `collectProviderRateLimits`, not
-    // `fetchProviderRateLimits`: this renderer's own freshness guard would
-    // answer the scheduled re-read of a transient failure from the cache
-    // entry that failure wrote, and the host would never hear the question.
-    return args.force
-      ? fetchProviderRateLimits(args.fetchScope, params, { force: true })
-      : collectProviderRateLimits(args.fetchScope, params);
+    return fetchProviderRateLimits(args.fetchScope, params, { force: true });
   }
+  // A person's click, where forced is what is wanted: the observer refetch is
+  // the panel's own path for that, and it writes the entry every surface
+  // reads.
   const observer = args.httpRefetches.find(
     (candidate) =>
       candidate.providerId === args.target.providerId &&
@@ -402,32 +409,35 @@ function readOneAccount(args: {
  * while the transient set changes.
  */
 function StatusBarTransientRetry(props: {
-  readonly target: StatusBarRateLimitRetryTarget;
+  readonly target: StatusBarScheduledTransientRead;
   /** Whether a read of this account is in flight right now. */
   readonly reading: boolean;
-  readonly httpRefetches: ReadonlyArray<StatusBarRateLimitHttpRefetch>;
 }): ReactNode {
   const fetchScope = useProviderRateLimitFetchScope();
   const read = useEffectEvent((): void => {
     if (fetchScope === null) return;
-    // Spent here, before anything else: the episode promised ONE scheduled
-    // read, and the hook stops listing this account the moment it is spent, so
-    // nothing re-arms a timer while the account keeps failing.
+    // Spent here, before anything else, and spent against the EPISODE this
+    // read was owed for: the hook stops listing this account the moment it is
+    // spent, so nothing re-arms a timer while the account keeps failing, and
+    // the next answer about the account is what makes one owed again.
     recordScheduledTransientRead(
       rateLimitAccountLedgerKey(
         fetchScope.hostId,
         props.target.providerId,
         props.target.profileId,
       ),
+      props.target.episode,
     );
     // A read already in flight IS the retry the words promise, so this one
     // stands down rather than overtaking it. On the `httpFetch` lane it would
     // refetch that account's observer, and TanStack cancels the request in
     // flight - aborting a person's own forced read and starting it over.
     if (props.reading) return;
+    // No observer handles: an unforced read is the collection path on both
+    // lanes, and that path needs only the scope.
     void readOneAccount({
       fetchScope,
-      httpRefetches: props.httpRefetches,
+      httpRefetches: [],
       target: props.target,
       force: false,
     });

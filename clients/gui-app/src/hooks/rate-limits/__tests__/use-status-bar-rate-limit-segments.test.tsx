@@ -17,6 +17,7 @@ import type {
   AvailableProviderRateLimits,
   ProviderRateLimitEnvelope,
 } from "@/lib/rate-limits/rate-limit-envelope";
+import { buildProviderRateLimitEnvelopeFromSnapshot } from "@/lib/rate-limits/rate-limit-envelope";
 import {
   DEFAULT_LAYOUT_SNAPSHOT,
   useLayoutStore,
@@ -128,10 +129,11 @@ import {
   type StatusBarRateLimitCluster,
 } from "@/hooks/rate-limits/use-status-bar-rate-limit-segments";
 import {
+  pruneScheduledTransientReads,
   rateLimitAccountLedgerKey,
   recordManualRateLimitRetry,
   recordScheduledTransientRead,
-  releaseScheduledTransientRead,
+  scheduledTransientReadOwed,
 } from "@/lib/rate-limits/rate-limit-read-ledger";
 import { RATE_LIMIT_MANUAL_RETRY_WITHHOLD_MS } from "@/lib/rate-limits/rate-limit-timing";
 import type { RateLimitProfileSelection } from "@/hooks/rate-limits/use-rate-limit-profile-selection";
@@ -143,6 +145,15 @@ const PROFILE_SELECTION: RateLimitProfileSelection = {
 };
 
 const RETRY_HOST_ID = "host-a";
+
+/**
+ * The episode of an account that has never been answered: the hook reads the
+ * envelope's `lastTerminalAt`, and `0` is what it reports for `null`.
+ */
+const NEVER_ANSWERED = 0;
+
+/** When the answer that ended an episode landed. */
+const ANSWERED_AT = 1_700_000_000_000;
 
 function renderSegments(providers: ReadonlyArray<ConfiguredRateLimitProvider>) {
   return renderSegmentsFor(providers, PROFILE_SELECTION, false, RETRY_HOST_ID);
@@ -167,6 +178,23 @@ function renderSegmentsFor(
       editing: false,
       sample,
       retryHostId,
+    });
+  });
+}
+
+/** The hook over a provider list a row changes between renders. */
+function renderChangingSegments(
+  providers: () => ReadonlyArray<ConfiguredRateLimitProvider>,
+) {
+  return renderHook(() => {
+    mocks.batches = [];
+    return useStatusBarRateLimitSegments({
+      providers: providers(),
+      profileSelection: PROFILE_SELECTION,
+      mode: "live",
+      editing: false,
+      sample: false,
+      retryHostId: RETRY_HOST_ID,
     });
   });
 }
@@ -391,15 +419,43 @@ function unavailableRateLimits(input: {
   return { provider: input.provider, available: false, reason: input.reason };
 }
 
+/**
+ * A cold-start envelope for one reading, built by the PRODUCTION builder: the
+ * episode stamp a transient segment is owed its re-read against is one of the
+ * fields it decides, and a fixture restating that rule would be asserting its
+ * own copy of it.
+ */
 function freshEnvelope(
   rateLimits: ProviderRateLimits,
 ): ProviderRateLimitEnvelope {
-  return {
-    latest: rateLimits,
-    lastGood: rateLimits.available ? rateLimits : null,
-    lastGoodAt: rateLimits.available ? Date.now() : null,
-    lastFailureAt: null,
-  };
+  return buildProviderRateLimitEnvelopeFromSnapshot(
+    undefined,
+    rateLimits,
+    Date.now(),
+  );
+}
+
+/**
+ * What an account looks like after an answer landed at `answeredAt` and it
+ * began failing again: built through the production builder in two steps,
+ * because the episode stamp is something the builder carries over from the
+ * previous envelope and not a field a test should invent.
+ */
+function envelopeAfterAnswer(
+  answer: ProviderRateLimits,
+  answeredAt: number,
+  failure: ProviderRateLimits,
+): ProviderRateLimitEnvelope {
+  const answered = buildProviderRateLimitEnvelopeFromSnapshot(
+    undefined,
+    answer,
+    answeredAt,
+  );
+  return buildProviderRateLimitEnvelopeFromSnapshot(
+    answered,
+    failure,
+    answeredAt + 1_000,
+  );
 }
 
 function setResult(
@@ -441,9 +497,7 @@ beforeEach(() => {
     );
     // The episode one-shot is this renderer's too, so a row that spent one
     // would otherwise hand a spent episode to the next row.
-    releaseScheduledTransientRead(
-      rateLimitAccountLedgerKey(hostId, "codex", null),
-    );
+    pruneScheduledTransientReads(hostId, new Set());
   }
   useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
 });
@@ -776,6 +830,7 @@ describe("useStatusBarRateLimitSegments", () => {
         }),
         lastGoodAt: Date.now() - 90_000,
         lastFailureAt: Date.now() - 1_000,
+        lastTerminalAt: Date.now() - 90_000,
       },
       isError: false,
     });
@@ -852,7 +907,7 @@ describe("useStatusBarRateLimitSegments", () => {
       ],
     });
     expect(result.current.retryTargets).toEqual([
-      { providerId: "codex", profileId: null },
+      { providerId: "codex", profileId: null, episode: NEVER_ANSWERED },
     ]);
   });
 
@@ -883,7 +938,7 @@ describe("useStatusBarRateLimitSegments", () => {
       }),
     );
     expect(result.current.retryTargets).toEqual([
-      { providerId: "codex", profileId: null },
+      { providerId: "codex", profileId: null, episode: NEVER_ANSWERED },
     ]);
   });
 
@@ -922,12 +977,14 @@ describe("useStatusBarRateLimitSegments", () => {
       configuredProvider({ providerId: "codex", lane: "ephemeralProcess" }),
     ]);
     expect(result.current.retryTargets).toEqual([
-      { providerId: "codex", profileId: null },
+      { providerId: "codex", profileId: null, episode: NEVER_ANSWERED },
     ]);
 
-    // What the strip's timer records when it fires.
+    // What the strip's timer records when it fires, against the episode the
+    // target named.
     recordScheduledTransientRead(
       rateLimitAccountLedgerKey(RETRY_HOST_ID, "codex", null),
+      NEVER_ANSWERED,
     );
     setResult("codex", transient);
     rerender();
@@ -940,42 +997,109 @@ describe("useStatusBarRateLimitSegments", () => {
     expect(result.current.retryTargets).toEqual([]);
   });
 
-  it("hands the one-shot back when a reading lands, so a fresh failure gets its own", () => {
-    recordScheduledTransientRead(
-      rateLimitAccountLedgerKey(RETRY_HOST_ID, "codex", null),
-    );
-    // The reading that ends the episode.
+  it("owes the next episode its own re-read, on an answer no surface drew", () => {
+    const key = rateLimitAccountLedgerKey(RETRY_HOST_ID, "codex", null);
+    recordScheduledTransientRead(key, NEVER_ANSWERED);
+
+    // The sequence a strip cannot witness, and the one that matters most: the
+    // account is not being drawn - hidden region, deselected provider, another
+    // window - while a background read answers it and the read after that
+    // fails. No segment existed to see either, and both are in the envelope
+    // the strip reads when it comes back. So the episode that spent the
+    // one-shot is over, and the run of failures after it is a distinct episode
+    // owed its own.
     setResult("codex", {
-      data: freshEnvelope(
-        codexRateLimits({
-          primary: rlWindow({ usedPercent: 20, resetsAt: null }),
-        }),
+      data: envelopeAfterAnswer(
+        unavailableRateLimits({ provider: "codex", reason: "cli_not_found" }),
+        ANSWERED_AT,
+        unavailableRateLimits({ provider: "codex", reason: "timeout" }),
       ),
       isError: false,
     });
-    const live = renderSegments([
+
+    const { result } = renderSegments([
       configuredProvider({ providerId: "codex", lane: "ephemeralProcess" }),
     ]);
-    expect(statusBarSegments(live.result.current.cluster).at(0)?.state).toBe(
-      "live",
-    );
-    live.unmount();
 
-    // And a transient failure after it, with nothing retained: a fresh
-    // episode, owed its own single re-read.
+    expect(result.current.retryTargets).toEqual([
+      { providerId: "codex", profileId: null, episode: ANSWERED_AT },
+    ]);
+    // And the spent entry is that episode's once its read is taken.
+    recordScheduledTransientRead(key, ANSWERED_AT);
+    expect(scheduledTransientReadOwed(key, ANSWERED_AT)).toBe(false);
+  });
+
+  it("keeps the one-shot spent across a hide and a show with no answer in between", () => {
+    const transient = {
+      data: freshEnvelope(
+        unavailableRateLimits({ provider: "codex", reason: "timeout" }),
+      ),
+      isError: false,
+    };
+    setResult("codex", transient);
+    const codex = configuredProvider({
+      providerId: "codex",
+      lane: "ephemeralProcess",
+    });
+
+    const shown = renderSegments([codex]);
+    recordScheduledTransientRead(
+      rateLimitAccountLedgerKey(RETRY_HOST_ID, "codex", null),
+      shown.result.current.retryTargets[0]?.episode ?? -1,
+    );
+    // Hiding the usage region unmounts the strip, and showing it mounts a new
+    // one. Nothing answered the account in between, so it is the same episode
+    // and the read it was promised has been made.
+    shown.unmount();
+
+    const again = renderSegments([codex]);
+    expect(statusBarSegments(again.result.current.cluster).at(0)?.state).toBe(
+      "transient",
+    );
+    expect(again.result.current.retryTargets).toEqual([]);
+  });
+
+  it("keeps no entry for an account it stops watching", () => {
+    const key = rateLimitAccountLedgerKey(RETRY_HOST_ID, "codex", null);
     setResult("codex", {
       data: freshEnvelope(
         unavailableRateLimits({ provider: "codex", reason: "timeout" }),
       ),
       isError: false,
     });
-    const { result } = renderSegments([
+    let providers: ReadonlyArray<ConfiguredRateLimitProvider> = [
       configuredProvider({ providerId: "codex", lane: "ephemeralProcess" }),
-    ]);
+    ];
 
-    expect(result.current.retryTargets).toEqual([
-      { providerId: "codex", profileId: null },
-    ]);
+    const { result, rerender } = renderChangingSegments(() => providers);
+    recordScheduledTransientRead(
+      key,
+      result.current.retryTargets[0]?.episode ?? -1,
+    );
+    expect(scheduledTransientReadOwed(key, NEVER_ANSWERED)).toBe(false);
+
+    // The account goes away: the profile removed, the provider deselected, the
+    // host left. Its entry would otherwise sit in the map for the life of the
+    // window, one per account ever watched.
+    providers = [];
+    rerender();
+
+    expect(scheduledTransientReadOwed(key, NEVER_ANSWERED)).toBe(true);
+  });
+
+  it("drops no entry for the sample scene, whose readings are invented", () => {
+    const key = rateLimitAccountLedgerKey(RETRY_HOST_ID, "codex", null);
+    recordScheduledTransientRead(key, NEVER_ANSWERED);
+
+    // The sample strip runs with the real host id and a list of its own, so an
+    // empty watch list from it would read as "this host watches nothing" and
+    // drop the entries of every account the real strip is watching.
+    renderSampleSegments(
+      [configuredProvider({ providerId: "codex", lane: "ephemeralProcess" })],
+      PROFILE_SELECTION,
+    );
+
+    expect(scheduledTransientReadOwed(key, NEVER_ANSWERED)).toBe(false);
   });
 
   it("is unavailable with the wire reason when the retained reading says available: false", () => {
@@ -1025,7 +1149,7 @@ describe("useStatusBarRateLimitSegments", () => {
       ],
     });
     expect(result.current.retryTargets).toEqual([
-      { providerId: "codex", profileId: null },
+      { providerId: "codex", profileId: null, episode: NEVER_ANSWERED },
     ]);
   });
 
@@ -1054,7 +1178,7 @@ describe("useStatusBarRateLimitSegments", () => {
     // The one re-read the state owes is owed throughout: this bounds the
     // asking, never the retrying.
     expect(result.current.retryTargets).toEqual([
-      { providerId: "codex", profileId: null },
+      { providerId: "codex", profileId: null, episode: NEVER_ANSWERED },
     ]);
 
     // A remount is the gesture that hides and shows the usage region, and it
