@@ -800,7 +800,7 @@ interface ChatTileFatalCopy {
  * `EPIC_NOT_FOUND` and `EPIC_ACCESS_DENIED` are the cloud's verdicts on the
  * task itself, so the headline says that and the host's reason, written for
  * logs, is not shown. A deleted task offers no Try again, since no attempt
- * can open it; lost access keeps it, because the task can be shared again.
+ * can open it; missing access keeps it, because the task can be shared.
  */
 function describeFatalCopy(details: ChatTileFatalDetails): ChatTileFatalCopy {
   // The reason's `CODE: ` prefix repeats the code the report carries.
@@ -825,9 +825,9 @@ function describeFatalCopy(details: ChatTileFatalDetails): ChatTileFatalCopy {
       };
     case "EPIC_ACCESS_DENIED":
       return {
-        paneTitle: "You no longer have access to this task.",
+        paneTitle: "You don't have access to this task.",
         detail: null,
-        reportTitle: "You no longer have access to this task",
+        reportTitle: "You don't have access to this task",
         offersHostUpdate: false,
         offersTryAgain: true,
       };

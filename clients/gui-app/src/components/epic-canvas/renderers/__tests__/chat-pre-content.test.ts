@@ -700,7 +700,7 @@ describe("arms 1 and 2: the host's verdict", () => {
     });
   });
 
-  it("says access was lost for EPIC_ACCESS_DENIED, with no detail and Try again kept", () => {
+  it("says there is no access for EPIC_ACCESS_DENIED, with no detail and Try again kept", () => {
     const view = failed(
       {
         code: "EPIC_ACCESS_DENIED",
@@ -712,7 +712,7 @@ describe("arms 1 and 2: the host's verdict", () => {
     );
     expect(view).toEqual({
       kind: "failed",
-      headline: "You no longer have access to this task.",
+      headline: "You don't have access to this task.",
       detail: null,
       settled: true,
       spinner: false,
@@ -1357,7 +1357,7 @@ describe("chatPreContentReport", () => {
 
   it.each([
     ["EPIC_NOT_FOUND", "This task was deleted"],
-    ["EPIC_ACCESS_DENIED", "You no longer have access to this task"],
+    ["EPIC_ACCESS_DENIED", "You don't have access to this task"],
   ])("titles the %s verdict for the task it is about", (code, title) => {
     expect(
       chatPreContentReport(
