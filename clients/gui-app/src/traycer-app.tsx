@@ -49,6 +49,7 @@ import { LandingTerminalPersistLifecycleBridge } from "@/providers/landing-termi
 import { LandingTerminalTombstoneRecoveryBridge } from "@/providers/landing-terminal-tombstone-recovery-bridge";
 import { EpicTabExistenceReconciler } from "@/providers/epic-tab-existence-reconciler";
 import { PoolSessionMount } from "@/providers/pool-session-mount";
+import { ChatServingWitnessProvider } from "@/providers/chat-serving-witness-provider";
 import { EnvironmentArmScopeMount } from "@/providers/environment-arm-scope-mount";
 import { EpicSessionControllerBridge } from "@/providers/epic-session-controller-bridge";
 import { HarnessCatalogPrefetcher } from "@/providers/harness-catalog-prefetcher";
@@ -310,9 +311,11 @@ function TraycerAuthenticatedRuntime(props: TraycerAuthenticatedRuntimeProps) {
                                   <NotificationsSessionProvider
                                     navigate={props.router.navigate}
                                   >
-                                    <TraycerAppRuntimeSurface
-                                      router={props.router}
-                                    />
+                                    <ChatServingWitnessProvider>
+                                      <TraycerAppRuntimeSurface
+                                        router={props.router}
+                                      />
+                                    </ChatServingWitnessProvider>
                                   </NotificationsSessionProvider>
                                 </ReadingPositionPersistLifecycleBridge>
                               </AppLocalNotificationsPersistLifecycleBridge>

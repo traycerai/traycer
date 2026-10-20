@@ -119,7 +119,7 @@ function renderFrame(): void {
   });
   render(
     <QueryClientProvider client={queryClient}>
-      <SandboxTileStateFrame>
+      <SandboxTileStateFrame chat={null}>
         <textarea data-testid="tile-body" />
       </SandboxTileStateFrame>
       <TeamWakeConfirmDialogHost />

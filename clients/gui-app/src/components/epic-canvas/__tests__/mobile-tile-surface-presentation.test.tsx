@@ -74,6 +74,16 @@ vi.mock("@/hooks/epic/use-epic-session-host-client", () => ({
   useEpicSessionHostClient: () => null,
 }));
 
+// The canvas reads the chat host's directory row (the serving witness), which
+// needs a host runtime this suite does not mount; no row is the answer for a
+// host with no runtime.
+vi.mock("@/hooks/host/use-host-directory-entry", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/hooks/host/use-host-directory-entry")
+  >()),
+  useHostDirectoryEntry: () => null,
+}));
+
 vi.mock("@/hooks/agent/use-host-reachability", () => ({
   useHostReachability: (hostId: string) => ({
     status: "reachable",

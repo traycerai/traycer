@@ -35,16 +35,20 @@ import { isRemoteHostDirectoryEntry } from "./remote-fetcher";
  * - `pool-only` - the account-wide families: History (`epic.listTasks`),
  *   the notification cloud feed (`host.notifications.cloudFeed.*`),
  *   `environment.list` and `environment.binding.read`, `organization.*` and
- *   `autoPolicy.*`, and the environment arm (`environment.chats.subscribe`,
+ *   `autoPolicy.*`, the environment arm (`environment.chats.subscribe`,
  *   `.plainTerminals.subscribe`, `.communicationGraph.subscribe`), which no
- *   host serves. A pool-only call never has a host fallback arm: a refusal or
- *   an outage is the caller's error.
+ *   host serves, and the chat serving witness (`chat.serving.subscribe`),
+ *   the server's published fact. A pool-only call never has a host fallback
+ *   arm: a refusal or an outage is the caller's error.
  * - `addressed-peer` - `host.status` and `host.getRuntimeCapabilities`: the
  *   session-level floor every peer genuinely serves, the pool included, so
  *   they go to whichever peer the requester names.
  * - `target-host-live-pool-at-rest` - a chat's transcript: the team sandbox
  *   serves it while it is live, the pool at rest. Which one is the caller's
- *   choice ({@link chatServingHostId}); both are allowed here.
+ *   choice ({@link chatServingHostId}); both are allowed here. The
+ *   whole-download pair (`epic.resolveCloudChatHead`,
+ *   `epic.readCloudChatPart`) too: the pool serves it for a chat at rest that
+ *   its index cannot open.
  *
  * A `target-host` or `sender-host` method is never sent to the pool:
  * dispatching one on a pool requester is refused before anything leaves.
@@ -325,6 +329,8 @@ export const HOST_UNARY_RPC_ROUTES = {
   "browser.repl.runCell": "target-host",
   "browser.repl.stopCell": "target-host",
   "browser.savedLoginSites": "target-host",
+  // The sandbox host the person continues a removed sandbox's chat on.
+  "chat.continueHere": "target-host",
   "chat.fallback.cancel": "target-host",
   "chat.fallback.chooseTarget": "target-host",
   "chat.fallback.listTargets": "target-host",
@@ -467,7 +473,10 @@ export const HOST_UNARY_RPC_ROUTES = {
   "epic.mentionTickets": "target-host",
   "epic.prepareArtifactImage": "target-host",
   "epic.readChatAttachment": "target-host",
-  "epic.readCloudChatPart": "target-host",
+  // The whole-download pair: a host the device holds reads them as a byte
+  // pipe, and the pool serves them for a chat its index cannot open
+  // (`CHAT_INDEX_UNAVAILABLE` on `chat.subscribe`).
+  "epic.readCloudChatPart": "target-host-live-pool-at-rest",
   "epic.readCloudChatPayload": "target-host",
   "epic.readFile": "target-host",
   "epic.recordViewed": "target-host",
@@ -479,7 +488,7 @@ export const HOST_UNARY_RPC_ROUTES = {
   "epic.reparentChat": "target-host",
   "epic.replyToCommentThread": "target-host",
   "epic.resolveArtifactByPath": "target-host",
-  "epic.resolveCloudChatHead": "target-host",
+  "epic.resolveCloudChatHead": "target-host-live-pool-at-rest",
   "epic.restoreFile": "target-host",
   "epic.retryMigration": "target-host",
   "epic.revokeCollaborator": "target-host",
@@ -690,6 +699,7 @@ export const HOST_STREAM_RPC_ROUTES = {
   "bot.subscribe": "target-host",
   "browser.screencast": "target-host",
   "browser.sessions": "target-host",
+  "chat.serving.subscribe": "pool-only",
   "chat.subscribe": "target-host-live-pool-at-rest",
   "drafts.subscribe": "target-host",
   "epic.communicationGraph.subscribe": "target-host",

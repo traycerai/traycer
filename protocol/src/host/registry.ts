@@ -590,6 +590,10 @@ import { hostRebindLocalStoreV10 } from "@traycer/protocol/host/local-store/cont
 import { chatForkGetV10 } from "@traycer/protocol/host/chat-fork/contracts";
 import { chatSearchV10 } from "@traycer/protocol/host/chat-search/contracts";
 import {
+  chatContinueHereV10,
+  chatServingSubscribeV10,
+} from "@traycer/protocol/host/chat-serving/contracts";
+import {
   botClaimAuthorityV10,
   botConversationListV10,
   botConversationSendV10,
@@ -7344,6 +7348,19 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
       downgradePathsFromLatest: {},
     },
   },
+  // Continue a removed team sandbox's chat on this sandbox host. Off-floor: a
+  // personal host, or one that predates it, does not advertise it, and the
+  // client offers Clone instead.
+  "chat.continueHere": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: { contract: chatContinueHereV10, upgradeFromPreviousVersion: null },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
   // The five external fallback actions. All off-floor: a client meeting a host
   // without the fallback engine must simply not render the affordance, which is
   // exactly what `unsupported` degradation gives it. Unary rather than stream
@@ -13624,6 +13641,14 @@ const HOST_STREAM_RPC_REGISTRY_NOTIFICATIONS_DEFINITION = {
 // of `chat.subscribe` means `typeof HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION`
 // never has to expand it (see `HostStreamRpcMethodMap` below).
 const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
+  "chat.serving.subscribe": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: { contract: chatServingSubscribeV10 },
+      },
+    },
+  },
   "organization.subscribe": {
     1: {
       latestMinor: 1,

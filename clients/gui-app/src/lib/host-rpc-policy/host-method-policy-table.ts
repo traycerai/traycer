@@ -936,6 +936,13 @@ export const HOST_METHOD_POLL_TABLE = {
   "agent.stop": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
   // Forking an agent persists a new collaboration record, like agent.create.
   "agent.fork": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
+  // Continuing a chat here moves its authority to this host; fifo so a press
+  // is never coalesced into another chat's.
+  "chat.continueHere": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
   // Archiving retires the agent record; fifo so a tap is not coalesced away.
   "agent.archive": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
   "host.resolveRepoPaths": { ...LATEST_SCHEDULING, poll: null },
