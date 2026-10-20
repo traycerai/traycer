@@ -9,10 +9,11 @@ import type { HostClient } from "@traycer-clients/shared/host-client/host-client
 import type { HostRpcRegistry } from "@/lib/host";
 import { useHostQuery } from "@/hooks/host/use-host-query";
 import { resolvePoolTierHostClient } from "@/lib/host/binding-host-client";
+import { useCloudChatViewerId } from "@/hooks/chats/use-cloud-chat-queries";
 import {
-  useCloudChatHasCloudAuthorization,
-  useCloudChatViewerId,
-} from "@/hooks/chats/use-cloud-chat-queries";
+  authorizesCloudCapability,
+  useAuthStore,
+} from "@/stores/auth/auth-store";
 import { cloudVerdictPreflight } from "@/lib/host/cloud-verdict-preflight";
 import { readsHostBindingsFromPool } from "@/hooks/bots/use-host-environment-bindings-query";
 
@@ -44,7 +45,9 @@ export function useEnvironmentHostReadQuery(
     [client],
   );
   const viewerUserId = useCloudChatViewerId();
-  const cloudAuthorized = useCloudChatHasCloudAuthorization();
+  const cloudAuthorized = useAuthStore((state) =>
+    authorizesCloudCapability(state.status),
+  );
   // `hostId` is null only while the scope has no host, when neither read is
   // enabled; the empty id is never sent.
   const poolParams = useMemo<EnvironmentBindingReadRequest>(

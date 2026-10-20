@@ -19,10 +19,11 @@ import {
 import { hostQueryKeys } from "@/lib/query-keys";
 import { withHostQueryErrorBoundary } from "@/lib/query/host-query-error-boundary";
 import { hostClientUnavailableError } from "@/hooks/host/use-host-query";
+import { useCloudChatViewerId } from "@/hooks/chats/use-cloud-chat-queries";
 import {
-  useCloudChatHasCloudAuthorization,
-  useCloudChatViewerId,
-} from "@/hooks/chats/use-cloud-chat-queries";
+  authorizesCloudCapability,
+  useAuthStore,
+} from "@/stores/auth/auth-store";
 import { cloudVerdictPreflight } from "@/lib/host/cloud-verdict-preflight";
 
 const HOST_READ_METHOD = "environment.host.read";
@@ -94,7 +95,9 @@ export function useHostEnvironmentBindings(
 ): HostEnvironmentBindings {
   const binding = useHostBinding();
   const viewerUserId = useCloudChatViewerId();
-  const cloudAuthorized = useCloudChatHasCloudAuthorization();
+  const cloudAuthorized = useAuthStore((state) =>
+    authorizesCloudCapability(state.status),
+  );
   const fromPool = readsHostBindingsFromPool();
   const idsKey = hostIds.join("\n");
   const hostIdList = useMemo(
