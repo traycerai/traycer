@@ -13,11 +13,15 @@ import type { HostClient } from "@traycer-clients/shared/host-client/host-client
 import type { HostRpcRegistry } from "@/lib/host";
 import { useHostMutation } from "@/hooks/host/use-host-query";
 import { environmentMutationKeys, hostQueryKeys } from "@/lib/query-keys";
+import { useCloudChatViewerId } from "@/hooks/chats/use-cloud-chat-queries";
+import { hostEnvironmentBindingQueryKey } from "@/hooks/bots/use-host-environment-bindings-query";
 
 const HOST_LIST_METHOD = "environment.host.list";
 
 interface BindContext {
   readonly hostId: string | null;
+  /** The viewer whose cached binding of the host the bind writes through. */
+  readonly viewerUserId: string;
   /** The environments the host was in before the bind, as cached. */
   readonly previousEnvironmentIds: ReadonlyArray<string>;
 }
@@ -40,8 +44,9 @@ interface BindContext {
  * environments' lists are invalidated on every host scope - Settings' machine
  * list and Home's row states both read them - and no other environment's.
  * The environment it leaves is read before the bind overwrites the cache:
- * from this host's cached `environment.host.read`, and from any cached list
- * that names the host.
+ * from this host's cached binding (`hostEnvironmentBindingQueryKey`, the
+ * entry every reader of the host's binding shares, which the bind's answer
+ * then replaces), and from any cached list that names the host.
  */
 export function useEnvironmentHostBindMutation(
   client: HostClient<HostRpcRegistry> | null,
@@ -53,6 +58,7 @@ export function useEnvironmentHostBindMutation(
   BindContext
 > {
   const queryClient = useQueryClient();
+  const viewerUserId = useCloudChatViewerId();
   return useHostMutation<HostRpcRegistry, "environment.host.bind", BindContext>(
     {
       client,
@@ -62,21 +68,25 @@ export function useEnvironmentHostBindMutation(
         mutationKey: environmentMutationKeys.hostBind(),
         onMutate: () => ({
           hostId,
+          viewerUserId,
           previousEnvironmentIds: cachedEnvironmentIdsOfHost(
             queryClient,
             hostId,
+            viewerUserId,
           ),
         }),
         onSuccess: (binding, variables, ctx) => {
-          queryClient.setQueriesData<EnvironmentHostBinding>(
-            {
-              queryKey: hostQueryKeys.methodScope(
-                ctx.hostId,
-                "environment.host.read",
-              ),
-            },
-            binding,
-          );
+          if (ctx.hostId !== null) {
+            queryClient.setQueriesData<EnvironmentHostBinding>(
+              {
+                queryKey: hostEnvironmentBindingQueryKey(
+                  ctx.hostId,
+                  ctx.viewerUserId,
+                ),
+              },
+              binding,
+            );
+          }
           const affected = new Set([
             ...ctx.previousEnvironmentIds,
             variables.environmentId,
@@ -98,11 +108,12 @@ export function useEnvironmentHostBindMutation(
 function cachedEnvironmentIdsOfHost(
   queryClient: QueryClient,
   hostId: string | null,
+  viewerUserId: string,
 ): ReadonlyArray<string> {
   if (hostId === null) return [];
   const ids = new Set<string>();
   for (const [, binding] of queryClient.getQueriesData<EnvironmentHostBinding>({
-    queryKey: hostQueryKeys.methodScope(hostId, "environment.host.read"),
+    queryKey: hostEnvironmentBindingQueryKey(hostId, viewerUserId),
   })) {
     if (binding !== undefined) ids.add(binding.environment.environmentId);
   }

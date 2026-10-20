@@ -3,9 +3,17 @@ import {
   ViewReplicaService,
   type ViewReplicaLocalContribution,
 } from "@traycer-clients/shared/view-replica/service";
+import type { ViewReplicaAddress } from "@traycer-clients/shared/view-replica/identity";
 import { ACCOUNT_ROW_SCOPE } from "@traycer-clients/shared/view-replica/row-scope";
 
 type Page = readonly string[];
+
+const ADDRESS: ViewReplicaAddress = {
+  accountId: "user-1",
+  service: "test.list",
+  servingTier: "pool",
+  requestScope: "{}",
+};
 
 function createService(): ViewReplicaService<Page> {
   return new ViewReplicaService<Page>({
@@ -29,24 +37,23 @@ describe("ViewReplicaService paint gate", () => {
   it("paints the cached page as it is when no contribution is registered", () => {
     const service = createService();
 
-    expect(service.paintableFrom(service.admitFirstPaint(["cached"]))).toEqual([
-      "cached",
-    ]);
+    expect(
+      service.paintableFrom(service.admitFirstPaint(["cached"], ADDRESS)),
+    ).toEqual(["cached"]);
   });
 
   it("paints the page with the registered contribution applied", () => {
     const service = createService();
     service.registerLocalContribution(withLocalRow);
 
-    expect(service.paintableFrom(service.admitFirstPaint(["cached"]))).toEqual([
-      "cached",
-      "local",
-    ]);
+    expect(
+      service.paintableFrom(service.admitFirstPaint(["cached"], ADDRESS)),
+    ).toEqual(["cached", "local"]);
   });
 
   it("refuses a paint admitted before a contribution was registered", () => {
     const service = createService();
-    const admission = service.admitFirstPaint(["cached"]);
+    const admission = service.admitFirstPaint(["cached"], ADDRESS);
 
     service.registerLocalContribution(withLocalRow);
 
@@ -56,7 +63,7 @@ describe("ViewReplicaService paint gate", () => {
   it("refuses a paint admitted under a registration that has since been removed", () => {
     const service = createService();
     const registration = service.registerLocalContribution(withLocalRow);
-    const admission = service.admitFirstPaint(["cached"]);
+    const admission = service.admitFirstPaint(["cached"], ADDRESS);
     expect(service.paintableFrom(admission)).not.toBeNull();
 
     registration.unregister();
@@ -68,7 +75,7 @@ describe("ViewReplicaService paint gate", () => {
     const service = createService();
     service.registerLocalContribution({ apply: () => null });
 
-    const admission = service.admitFirstPaint(["cached"]);
+    const admission = service.admitFirstPaint(["cached"], ADDRESS);
 
     expect(admission).toEqual({
       admitted: false,

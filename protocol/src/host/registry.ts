@@ -784,6 +784,7 @@ import {
   epicListTasksV15,
   epicListTasksV16,
   epicListTasksV17,
+  epicListTasksV18,
   epicListTasksUpgradeV10ToV11,
   epicListTasksUpgradeV11ToV12,
   epicListTasksUpgradeV12ToV13,
@@ -791,6 +792,7 @@ import {
   epicListTasksUpgradeV14ToV15,
   epicListTasksUpgradeV15ToV16,
   epicListTasksUpgradeV16ToV17,
+  epicListTasksUpgradeV17ToV18,
   epicMentionEpicsV10,
   epicMentionReviewsV10,
   epicMentionSpecsV10,
@@ -816,6 +818,7 @@ import {
   epicRevokeCollaboratorUpgradeV10ToV11,
   epicChatPublicationStateV10,
   epicAttachEnvironmentV10,
+  epicLocalHistoryReadV10,
   epicSetChatArchivedV10,
   epicSetChatArchivedV11,
   epicSetChatArchivedUpgradeV10ToV11,
@@ -1089,6 +1092,7 @@ import {
   chatAutoArchiveSetV10,
 } from "@traycer/protocol/host/chat-auto-archive/contracts";
 import {
+  environmentBindingReadV10,
   environmentHostBindV10,
   environmentHostListV10,
   environmentHostReadV10,
@@ -6076,6 +6080,21 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
       downgradePathsFromLatest: {},
     },
   },
+  // A named host's binding, served by the server pool from the account's
+  // binding records; `environment.host.read` stays the host's own answer.
+  "environment.binding.read": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: environmentBindingReadV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
   "environment.host.bind": {
     degrade: { kind: "unsupported" },
     1: {
@@ -7919,7 +7938,7 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
   },
   "epic.listTasks": {
     1: {
-      latestMinor: 7,
+      latestMinor: 8,
       versions: {
         0: {
           contract: epicListTasksV10,
@@ -7956,6 +7975,10 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
         7: {
           contract: epicListTasksV17,
           upgradeFromPreviousVersion: epicListTasksUpgradeV16ToV17,
+        },
+        8: {
+          contract: epicListTasksV18,
+          upgradeFromPreviousVersion: epicListTasksUpgradeV17ToV18,
         },
       },
       downgradePathsFromLatest: {},
@@ -8783,6 +8806,22 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
       versions: {
         0: {
           contract: epicAttachEnvironmentV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+    degrade: { kind: "unsupported" },
+  },
+  // Optional (non-floor): the host's local History contribution, which the app
+  // composes into the server pool's History pages. A host that predates it
+  // refuses this call alone; the app then states reduced coverage.
+  "epic.localHistory.read": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: epicLocalHistoryReadV10,
           upgradeFromPreviousVersion: null,
         },
       },

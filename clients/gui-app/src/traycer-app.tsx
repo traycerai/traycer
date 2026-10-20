@@ -42,6 +42,7 @@ import { WorktreeIntentMemoryPersistLifecycleBridge } from "@/providers/worktree
 import { WorktreeIntentStagingPersistLifecycleBridge } from "@/providers/worktree-intent-staging-persist-lifecycle-bridge";
 import { EpicCanvasPersistLifecycleBridge } from "@/providers/epic-canvas-persist-lifecycle-bridge";
 import { ViewReplicaLifecycleMount } from "@/providers/view-replica-lifecycle-mount";
+import { HistoryLocalContributionMount } from "@/providers/history-local-contribution-mount";
 import { AppLocalNotificationsPersistLifecycleBridge } from "@/providers/app-local-notifications-persist-lifecycle-bridge";
 import { ReadingPositionPersistLifecycleBridge } from "@/providers/reading-position-persist-lifecycle-bridge";
 import { LandingTerminalPersistLifecycleBridge } from "@/providers/landing-terminal-persist-lifecycle-bridge";
@@ -49,6 +50,7 @@ import { LandingTerminalTombstoneRecoveryBridge } from "@/providers/landing-term
 import { EpicTabExistenceReconciler } from "@/providers/epic-tab-existence-reconciler";
 import { PoolSessionMount } from "@/providers/pool-session-mount";
 import { ChatServingWitnessProvider } from "@/providers/chat-serving-witness-provider";
+import { EnvironmentArmScopeMount } from "@/providers/environment-arm-scope-mount";
 import { EpicSessionControllerBridge } from "@/providers/epic-session-controller-bridge";
 import { HarnessCatalogPrefetcher } from "@/providers/harness-catalog-prefetcher";
 import { HistoryPruneProvider } from "@/providers/history-prune-provider";
@@ -289,6 +291,7 @@ function TraycerAuthenticatedRuntime(props: TraycerAuthenticatedRuntimeProps) {
                             <EpicTabExistenceReconciler />
                             <PoolSessionMount />
                             <ViewReplicaLifecycleMount />
+                            <HistoryLocalContributionMount />
                             <HostStreamProvider>
                               <HostScopeReady scope="default-host">
                                 <WorktreeChangedStreamMount />
@@ -302,6 +305,7 @@ function TraycerAuthenticatedRuntime(props: TraycerAuthenticatedRuntimeProps) {
                                   with no run handle to call. This is the lowest node both
                                   shells share that still has the host stream. */}
                               <SessionImportRunController />
+                              <EnvironmentArmScopeMount />
                               <AppLocalNotificationsPersistLifecycleBridge>
                                 <ReadingPositionPersistLifecycleBridge>
                                   <NotificationsSessionProvider

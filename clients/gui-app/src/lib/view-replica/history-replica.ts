@@ -37,9 +37,10 @@ const SERVICE = "epic.listTasks";
  * current answer. Its cursor is dropped, since a cursor names a position in a
  * listing that has moved on.
  *
- * P7 registers History's local contribution (local-homed rows, tombstones,
- * completeness) on {@link historyReplicaService}; from then on no cached
- * History page paints without it.
+ * History's local contribution (local-homed rows, tombstones, completeness)
+ * is registered on {@link historyReplicaService} by
+ * `HistoryLocalContributionMount`, so no cached History page paints without
+ * it.
  */
 export const historyReplicaService = new ViewReplicaService<ListTasksResponse>({
   service: SERVICE,

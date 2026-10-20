@@ -18,8 +18,7 @@ import { isRemoteHostDirectoryEntry } from "./remote-fetcher";
  * host"): prefer the host that runs the target for host-local work, execution
  * and genuinely host-cached principal-scoped reads; the five account-wide
  * families always go to the server pool, independent of where the call came
- * from and of whether any host is reachable (History once P7 lands, see
- * `epic.listTasks` below).
+ * from and of whether any host is reachable.
  *
  * - `target-host` - the host that runs the target: the chat's host, the
  *   workspace's host, the terminal's host. Whatever host the caller's
@@ -33,15 +32,14 @@ import { isRemoteHostDirectoryEntry } from "./remote-fetcher";
  *   the person's own selected single-tenant host, whatever the caller's
  *   target is. Never a sandbox and never the pool, so audio and on-device
  *   models never leave the person's machines.
- * - `pool-only` - the account-wide families: the notification cloud feed
- *   (`host.notifications.cloudFeed.*`), `environment.list`,
- *   `organization.*` and `autoPolicy.*`, the environment arm
- *   (`environment.chats.subscribe`, `.plainTerminals.subscribe`,
- *   `.communicationGraph.subscribe`), which no host serves, and the chat
- *   serving witness (`chat.serving.subscribe`), the server's published
- *   fact. History (`epic.listTasks`) joins them in P7 (see its entry). A
- *   pool-only call never has a host fallback arm: a refusal or an outage is
- *   the caller's error.
+ * - `pool-only` - the account-wide families: History (`epic.listTasks`),
+ *   the notification cloud feed (`host.notifications.cloudFeed.*`),
+ *   `environment.list` and `environment.binding.read`, `organization.*` and
+ *   `autoPolicy.*`, the environment arm (`environment.chats.subscribe`,
+ *   `.plainTerminals.subscribe`, `.communicationGraph.subscribe`), which no
+ *   host serves, and the chat serving witness (`chat.serving.subscribe`),
+ *   the server's published fact. A pool-only call never has a host fallback
+ *   arm: a refusal or an outage is the caller's error.
  * - `addressed-peer` - `host.status` and `host.getRuntimeCapabilities`: the
  *   session-level floor every peer genuinely serves, the pool included, so
  *   they go to whichever peer the requester names.
@@ -385,12 +383,16 @@ export const HOST_UNARY_RPC_ROUTES = {
   "environment.agentDefinitions.delete": "target-host",
   "environment.agentDefinitions.list": "target-host",
   "environment.agentDefinitions.put": "target-host",
+  // A named host's binding from the account's records: Home's bot hosts, the
+  // Settings host list and the host scope read every row's binding here,
+  // without a connection to each host.
+  "environment.binding.read": "pool-only",
   "environment.host.bind": "target-host",
   "environment.host.list": "target-host",
   // Host-local for good: its request names no host, and it answers "the
   // environment THIS host is bound to". The pool-served form is a separate
-  // method naming the host (`environment.binding.read { hostId }`, P7), which
-  // the per-host-row readers switch to.
+  // method naming the host (`environment.binding.read { hostId }`), which
+  // the per-host-row readers use in a build with a pool.
   "environment.host.read": "target-host",
   "environment.list": "pool-only",
   "environment.localOverrides": "target-host",
@@ -457,14 +459,13 @@ export const HOST_UNARY_RPC_ROUTES = {
   "epic.listCollaborators": "target-host",
   "epic.listCommentThreads": "target-host",
   "epic.listTaskHosts": "target-host",
-  // History. Ruled pool-only, and stays on the host until P7 lands the
-  // versioned local contribution (local-homed rows, tombstones, completeness)
-  // and the app-side composition: today this answer is the app's ONLY source
-  // of the host's local-homed rows and tombstones, which History, the tab
-  // reconciler's local-home exemption and the pin reading all consume. Flips
-  // to "pool-only" in P7.
-  "epic.listTasks": "target-host",
+  // History: the server pool's pages. What only a host knows - its
+  // local-homed rows, preserved orphans and tombstones - comes from that
+  // host's own `epic.localHistory.read`, and the app composes the two.
+  "epic.listTasks": "pool-only",
   "epic.listTuiAgents": "target-host",
+  // The host's local History contribution, from the host that holds it.
+  "epic.localHistory.read": "target-host",
   "epic.mentionEpics": "target-host",
   "epic.mentionReviews": "target-host",
   "epic.mentionSpecs": "target-host",
@@ -706,8 +707,8 @@ export const HOST_STREAM_RPC_ROUTES = {
   "epic.status.subscribe": "target-host",
   "epic.subscribe": "target-host",
   // The environment arm: a team environment's own rows in one task, for a
-  // member of it. Only the server pool serves them; P7 composes them with
-  // the host's arm.
+  // member of it. Only the server pool serves them; the app composes them
+  // with the viewer's own rows.
   "environment.chats.subscribe": "pool-only",
   "environment.communicationGraph.subscribe": "pool-only",
   "environment.plainTerminals.subscribe": "pool-only",

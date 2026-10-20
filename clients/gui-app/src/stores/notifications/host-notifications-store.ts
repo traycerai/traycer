@@ -8,7 +8,9 @@ import type {
 } from "@traycer-clients/shared/host-transport/i-stream-session";
 import type { IHostStreamClient } from "@traycer-clients/shared/host-transport/host-stream-client";
 import {
+  hostNotificationsFeedSubscribeV15,
   hostNotificationsSubscribeClientFrameSchema,
+  hostNotificationsSubscribeClientFrameSchemaV15,
   hostNotificationsSubscribeServerFrameSchemaV14,
   type HostNotificationEntryV23,
   type HostNotificationsAttentionCursor,
@@ -481,6 +483,17 @@ export const useHostNotificationsStore = create<HostNotificationsState>()(
   }),
 );
 
+/**
+ * The cloud notification lane as the host's local feed needs to hear of it:
+ * whether it is delivering this client's cloud rows right now. Only a lane
+ * served by a peer other than this host (the server pool) is reported - the
+ * host observes its own relay.
+ */
+export interface HostNotificationsCloudLane {
+  readonly serving: () => boolean;
+  readonly subscribe: (listener: () => void) => () => void;
+}
+
 export function openHostNotificationsStream(
   /**
    * THE reconnect policy for this stream's host (redesign P4.1 /
@@ -502,6 +515,8 @@ export function openHostNotificationsStream(
     readonly onFeedFrame: (frame: HostNotificationsFeedFrame) => void;
     readonly onPresenceChanged: (frame: HostNotificationPresenceFrame) => void;
     readonly onStreamOpened: () => void;
+    /** `null` when this host serves the cloud lane itself. */
+    readonly cloudLane: HostNotificationsCloudLane | null;
   },
 ): () => void {
   let disposed = false;
@@ -509,6 +524,7 @@ export function openHostNotificationsStream(
   let streamOpen = false;
   let lastSentPresenceKey: string | null = null;
   let lastNotifiedPresenceKey: string | null = null;
+  let lastSentCloudLaneServing: boolean | null = null;
 
   // A terminal close ("closed" + fatalError) DISPOSES the transport session:
   // `requestReconnect` and wake-time `forceReconnect` are both no-ops on it,
@@ -562,6 +578,40 @@ export function openHostNotificationsStream(
   const presenceHeartbeat = globalThis.setInterval(() => {
     emitPresence({ forceSend: true, forceNotify: false });
   }, HOST_NOTIFICATIONS_PRESENCE_HEARTBEAT_MS);
+
+  // Tells the host whether the cloud lane it does not run is delivering, so
+  // its local view serves the empty partition exactly while that lane
+  // carries the cloud rows - and the complete one otherwise. Sent on open and
+  // on every change; a host below `@1.5` cannot parse the frame and keeps
+  // deciding on its own relay.
+  const emitCloudLanePresence = (force: boolean): void => {
+    const lane = options.cloudLane;
+    const session = currentSession;
+    if (lane === null || session === null || !streamOpen) return;
+    const negotiated = wsStreamClient.getMethodSchemaVersion(
+      "host.notifications.feed.subscribe",
+    );
+    const floor = hostNotificationsFeedSubscribeV15.schemaVersion;
+    if (
+      negotiated === null ||
+      negotiated.major !== floor.major ||
+      negotiated.minor < floor.minor
+    ) {
+      return;
+    }
+    const serving = lane.serving();
+    if (!force && serving === lastSentCloudLaneServing) return;
+    const parsed = hostNotificationsSubscribeClientFrameSchemaV15.safeParse({
+      kind: "cloudLanePresence",
+      hasBinaryPayload: false,
+      serving,
+    });
+    if (!parsed.success) return;
+    lastSentCloudLaneServing = serving;
+    session.sendClientFrame(parsed.data, null);
+  };
+  const unsubscribeCloudLane =
+    options.cloudLane?.subscribe(() => emitCloudLanePresence(false)) ?? null;
 
   // A stream frame that fails the contract-specific schema is a
   // connection-integrity failure: the exact summary can no longer be
@@ -669,6 +719,7 @@ export function openHostNotificationsStream(
         // entity, so the focused entity must be re-consumed even though its
         // content key is unchanged.
         emitPresence({ forceSend: true, forceNotify: true });
+        emitCloudLanePresence(true);
       } else {
         streamOpen = false;
       }
@@ -686,6 +737,7 @@ export function openHostNotificationsStream(
     globalThis.clearInterval(presenceHeartbeat);
     reopenScheduler.dispose();
     unsubscribePresence();
+    unsubscribeCloudLane?.();
     currentSession?.close();
     currentSession = null;
   };
