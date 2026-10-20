@@ -18,6 +18,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
+import { simulatorVersionLabel } from "@/lib/simulator-view/simulator-labels";
 import {
   hardwareButtonLabel,
   hardwareButtonsForPlatform,
@@ -69,7 +70,10 @@ export function SimulatorToolbar(props: SimulatorToolbarProps) {
           {props.simulatorName}
         </span>
         <Badge variant="muted" size="xs" className="shrink-0">
-          {props.platform === "ios" ? "iOS" : "Android"} {props.version}
+          {simulatorVersionLabel({
+            platform: props.platform,
+            version: props.version,
+          })}
         </Badge>
       </div>
       <div className="flex shrink-0 items-center gap-0.5">

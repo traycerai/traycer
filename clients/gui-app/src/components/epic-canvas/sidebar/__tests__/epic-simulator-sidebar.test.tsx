@@ -161,6 +161,38 @@ describe("SimulatorsSidebarGroup", () => {
     expect(screen.queryByTestId(/^epic-simulator-sidebar-close-/)).toBeNull();
   });
 
+  it("names the OS once in a row whose version already carries it", () => {
+    fakes.sessions = sessions(
+      {
+        ...STATE,
+        simulators: [
+          ...STATE.simulators,
+          {
+            simulatorId: "emulator-5554",
+            platform: "android",
+            name: "Pixel_8_API_35",
+            version: "Android 15.0",
+            booted: true,
+            physical: false,
+          },
+        ],
+      },
+      "live",
+    );
+    renderGroup();
+    const android = screen.getByTestId(
+      "epic-simulator-sidebar-row-emulator-5554",
+    );
+    expect(android.textContent).toContain("Android 15.0");
+    expect(android.textContent).not.toContain("Android Android");
+    expect(android.getAttribute("aria-label")).toBe(
+      "Pixel_8_API_35, Android 15.0, running",
+    );
+    expect(
+      screen.getByTestId("epic-simulator-sidebar-row-udid-cold").textContent,
+    ).toContain("iOS 17.5");
+  });
+
   it("marks a simulator the task holds a session on, attaches to it on click, and ends it from the row", () => {
     fakes.sessions = sessions(
       {

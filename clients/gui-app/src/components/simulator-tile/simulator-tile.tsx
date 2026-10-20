@@ -31,6 +31,7 @@ import {
 } from "@/lib/simulator-view/simulator-connect-requests";
 import { nextOrientation } from "@/lib/simulator-view/simulator-input-encoding";
 import type { SimulatorSessionsState } from "@/lib/simulator-view/simulator-sessions-coordinator";
+import { findSimulatorForTile } from "@/lib/simulator-view/simulator-tile-target";
 import { useSimulatorSessionsForHost } from "@/lib/simulator-view/use-simulator-sessions";
 import { makeSimulatorTileRef } from "@/stores/epics/canvas/tile-schema/simulator-tile";
 import type { SimulatorTileRef } from "@/stores/epics/canvas/types";
@@ -415,10 +416,9 @@ function SimulatorInventoryGate(props: {
     [open, onPlaceTile],
   );
 
-  const target =
-    state.simulators.find(
-      (simulator) => simulator.simulatorId === node.simulatorId,
-    ) ?? null;
+  // By id, or for an Android serial whose emulator has exited, the cold AVD
+  // row of the same name: that is what "Boot and connect" boots again.
+  const target = findSimulatorForTile(state.simulators, node);
   const autoAttached = useRef(false);
   useEffect(() => {
     // The request is taken whether or not it can be acted on: a target the
@@ -441,7 +441,7 @@ function SimulatorInventoryGate(props: {
       hostLabel={props.hostLabel}
       simulators={state.simulators}
       booting={state.booting}
-      targetSimulatorId={node.simulatorId}
+      targetSimulatorId={target?.simulatorId ?? node.simulatorId}
       targetName={target?.name ?? node.name}
       onConnect={onConnect}
       connecting={connecting}

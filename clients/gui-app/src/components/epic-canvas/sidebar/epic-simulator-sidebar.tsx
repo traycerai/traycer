@@ -29,6 +29,7 @@ import {
   orderSimulators,
   simulatorHasSession,
 } from "@/lib/simulator-view/simulator-sessions-coordinator";
+import { simulatorVersionLabel } from "@/lib/simulator-view/simulator-labels";
 import { useSimulatorInventoryRefreshOnMount } from "@/lib/simulator-view/use-simulator-inventory-refresh";
 import { useSimulatorSessionsForHost } from "@/lib/simulator-view/use-simulator-sessions";
 import { useIsActiveTile } from "@/stores/epics/canvas/store";
@@ -269,7 +270,7 @@ function SimulatorRow(props: {
       shutdown: false,
     });
   }, [closeMutate, epicId, simulator.simulatorId]);
-  const platformLabel = simulator.platform === "ios" ? "iOS" : "Android";
+  const versionLabel = simulatorVersionLabel(simulator);
   const stateLabel = simulatorRowStateLabel(open, simulator.booted);
   return (
     <li>
@@ -287,7 +288,7 @@ function SimulatorRow(props: {
         <button
           type="button"
           data-testid={`epic-simulator-sidebar-row-${simulator.simulatorId}`}
-          aria-label={`${simulator.name}, ${platformLabel} ${simulator.version}${stateLabel}`}
+          aria-label={`${simulator.name}, ${versionLabel}${stateLabel}`}
           disabled={props.onOpen === null || props.busy}
           className="flex h-8 min-w-0 cursor-pointer items-center gap-2 rounded-md px-2 text-left text-ui-sm outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-default"
           onClick={() => props.onOpen?.(simulator)}
@@ -295,7 +296,7 @@ function SimulatorRow(props: {
           <Smartphone className="size-4 shrink-0" aria-hidden />
           <span className="min-w-0 flex-1 truncate">{simulator.name}</span>
           <span className="shrink-0 text-ui-xs text-muted-foreground">
-            {platformLabel} {simulator.version}
+            {versionLabel}
           </span>
           <SimulatorRowTrailing
             busy={props.busy}

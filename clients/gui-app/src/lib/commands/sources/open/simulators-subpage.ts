@@ -10,6 +10,10 @@ import { openerActionLeaf } from "@/lib/commands/sources/open/open-leaf";
 import { useActiveEpicSurfaceHostPin } from "@/lib/commands/sources/open/use-active-epic-surface-host-pin";
 import type { CommandContext, CommandItem } from "@/lib/commands/types";
 import {
+  simulatorPlatformLabel,
+  simulatorVersionLabel,
+} from "@/lib/simulator-view/simulator-labels";
+import {
   orderSimulators,
   simulatorHasSession,
   type SimulatorSessionsState,
@@ -62,14 +66,13 @@ export function useSimulatorsOpenerItems(
   if (placeholder !== null || state === null) return placeholder ?? [];
   const rows = orderSimulators(state.simulators).map((simulator) => {
     const busy = state.booting.includes(simulator.simulatorId);
-    const platformLabel = simulator.platform === "ios" ? "iOS" : "Android";
     return {
       ...openerActionLeaf({
         id: `open:simulators:${simulator.simulatorId}`,
         label: simulator.name,
         keywords: [
           simulator.name,
-          platformLabel,
+          simulatorPlatformLabel(simulator.platform),
           simulator.version,
           "simulator",
           "emulator",
@@ -105,8 +108,7 @@ function simulatorStatusBadge(
   open: boolean,
 ): string {
   if (busy) return "Starting…";
-  const platformLabel = simulator.platform === "ios" ? "iOS" : "Android";
-  const base = `${platformLabel} ${simulator.version}`;
+  const base = simulatorVersionLabel(simulator);
   if (open) return `${base} · Open`;
   return simulator.booted ? `${base} · Running` : base;
 }

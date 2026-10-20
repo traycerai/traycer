@@ -20,6 +20,7 @@ import {
   orderSimulators,
   simulatorHasSession,
 } from "@/lib/simulator-view/simulator-sessions-coordinator";
+import { simulatorVersionLabel } from "@/lib/simulator-view/simulator-labels";
 import { useSimulatorInventoryRefreshOnMount } from "@/lib/simulator-view/use-simulator-inventory-refresh";
 import { useSimulatorSessionsForHost } from "@/lib/simulator-view/use-simulator-sessions";
 import { useIsActiveTile } from "@/stores/epics/canvas/store";
@@ -177,12 +178,11 @@ function SwitcherSimulatorRow(props: {
     if (busy || onOpen === null) return;
     onOpen(simulator);
   }, [busy, onOpen, simulator]);
-  const platformLabel = simulator.platform === "ios" ? "iOS" : "Android";
   return (
     <SwitcherListRow
       icon={<Smartphone className="size-4" aria-hidden />}
       label={simulator.name}
-      secondaryLabel={`${platformLabel} ${simulator.version}`}
+      secondaryLabel={simulatorVersionLabel(simulator)}
       badge={
         <SwitcherSimulatorBadge
           busy={busy}

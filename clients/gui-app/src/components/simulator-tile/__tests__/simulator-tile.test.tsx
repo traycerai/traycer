@@ -26,6 +26,7 @@ import {
   makeSimulatorTileRef,
   simulatorTileId,
 } from "@/stores/epics/canvas/tile-schema/simulator-tile";
+import type { SimulatorTileRef } from "@/stores/epics/canvas/types";
 
 /**
  * The tile's states, one per host condition: the host that cannot run
@@ -261,12 +262,17 @@ function withTargetBooted(state: SimulatorState): SimulatorState {
  * effect or a replayed render is part of what the suite proves.
  */
 function renderTile(): () => void {
-  const node = makeSimulatorTileRef({
-    hostId: HOST,
-    simulatorId: UDID,
-    platform: "ios",
-    name: "iPhone 16",
-  });
+  return renderTileFor(
+    makeSimulatorTileRef({
+      hostId: HOST,
+      simulatorId: UDID,
+      platform: "ios",
+      name: "iPhone 16",
+    }),
+  );
+}
+
+function renderTileFor(node: SimulatorTileRef): () => void {
   const queryClient = new QueryClient({
     defaultOptions: { mutations: { retry: false } },
   });
@@ -618,6 +624,72 @@ describe("SimulatorTile", () => {
       "disabled",
       true,
     );
+  });
+
+  it("offers Boot and connect for an Android emulator whose serial vanished when it powered off", async () => {
+    // An Android emulator is listed under its serial while booted and under
+    // its AVD name once it has exited; the tile was placed on the serial.
+    const serial = "emulator-5554";
+    const avd = "Pixel_8_API_35";
+    const bootedRow = {
+      simulatorId: serial,
+      platform: "android",
+      name: avd,
+      version: "Android 15.0",
+      booted: true,
+      physical: false,
+    } as const;
+    const coldRow = {
+      simulatorId: avd,
+      platform: "android",
+      name: avd,
+      version: "Android",
+      booted: false,
+      physical: false,
+    } as const;
+    fakes.sessions = sessions({
+      state: {
+        ...READY_STATE,
+        simulators: [...READY_STATE.simulators, bootedRow],
+        sessions: [{ ...SESSION, simulatorId: serial, platform: "android" }],
+      },
+    });
+    const rerender = renderTileFor(
+      makeSimulatorTileRef({
+        hostId: HOST,
+        simulatorId: serial,
+        platform: "android",
+        name: avd,
+      }),
+    );
+    expect(screen.getByTestId("simulator-toolbar")).toBeTruthy();
+
+    // Power off: the session ends and the serial is gone from the list.
+    fakes.sessions = sessions({
+      state: {
+        ...READY_STATE,
+        simulators: [...READY_STATE.simulators, coldRow],
+      },
+    });
+    rerender();
+    const inventory = screen.getByTestId("simulator-inventory");
+    expect(inventory.textContent).not.toContain("no longer lists");
+    expect(inventory.textContent).toContain("Powered off");
+    // The AVD is this tile's own row, not one of the "other simulators".
+    expect(screen.queryByTestId(`simulator-inventory-row-${avd}`)).toBeNull();
+    await flush();
+    expect(fakes.open).not.toHaveBeenCalled();
+    const connect = screen.getByTestId("simulator-connect");
+    expect(connect.textContent).toContain("Boot and connect");
+    fireEvent.click(connect);
+    await waitFor(() => {
+      expect(fakes.open).toHaveBeenCalledWith({
+        epicId: EPIC,
+        simulatorId: avd,
+        platform: "android",
+        boot: true,
+      });
+    });
   });
 
   it("leaves a session it only attached to - an agent's - open when the tile closes", async () => {

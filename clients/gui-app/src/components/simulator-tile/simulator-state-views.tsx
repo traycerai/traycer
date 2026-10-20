@@ -9,6 +9,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { UpdateProgressBar } from "@/components/host/update-progress-bar";
+import { simulatorVersionLabel } from "@/lib/simulator-view/simulator-labels";
 import { orderSimulators } from "@/lib/simulator-view/simulator-sessions-coordinator";
 import { cn } from "@/lib/utils";
 
@@ -341,8 +342,7 @@ export function SimulatorInventoryView(props: {
                     {simulator.name}
                   </span>
                   <Badge variant="muted" size="xs" className="shrink-0">
-                    {simulator.platform === "ios" ? "iOS" : "Android"}{" "}
-                    {simulator.version}
+                    {simulatorVersionLabel(simulator)}
                   </Badge>
                   <InventoryRowTrailing busy={busy} booted={simulator.booted} />
                 </button>
