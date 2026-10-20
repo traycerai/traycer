@@ -30,6 +30,8 @@ import {
   type RemoteSessionIdentity,
 } from "./active-remote-sessions";
 import { TEAM_MEMBER_REMOVED_FATAL_CODE } from "../../host-client/host-connection-reconnect-engine";
+import type { PoolHostDirectoryEntry } from "../../host-client/host-directory";
+import { poolSessionPresence } from "./pool-session-presence";
 import { reportTeamMemberRemovedClose } from "../team-member-removed-close";
 
 /**
@@ -196,8 +198,7 @@ export interface CreateRemoteTransportOptions<
    * any consumer could have passed.
    */
   readonly mintMemberCredential:
-    | ((hostId: string) => Promise<MemberCredentialHandoff | null>)
-    | null;
+    ((hostId: string) => Promise<MemberCredentialHandoff | null>) | null;
 }
 
 /** See {@link CreateRemoteTransportOptions.openAuth}. */
@@ -348,6 +349,106 @@ export function createRemoteHostTransport<
     },
   );
 
+  return {
+    session,
+    messenger: new RemoteHostMessenger(session),
+    streamClient: new RemoteStreamClient(session),
+  };
+}
+
+/**
+ * What a session to the server pool needs from its caller. A subset of
+ * {@link CreateRemoteTransportOptions}: no relay, no authn mint, no host key,
+ * no member credential, and no evidence choice (see `createPoolHostTransport`).
+ */
+export interface CreatePoolTransportOptions<
+  RpcRegistry extends VersionedRpcRegistry,
+  StreamRegistry extends VersionedStreamRpcRegistry,
+> {
+  readonly entry: PoolHostDirectoryEntry;
+  /** The signed-in user this session is opened for; part of the cache key. */
+  readonly userId: string;
+  /** Serves the bearer the pool's `open` presents. */
+  readonly bearer: BearerSourceProvider;
+  /** See {@link CreateRemoteTransportOptions.cloudAuthorized}. */
+  readonly cloudAuthorized: () => boolean;
+  /** See {@link CreateRemoteTransportOptions.auth}. */
+  readonly auth: StreamAuthRevalidator | null;
+  /** See {@link CreateRemoteTransportOptions.clock}. */
+  readonly clock: ServerClockSkewSignal | null;
+  readonly rpcRegistry: RpcRegistry;
+  readonly streamRegistry: StreamRegistry;
+  readonly webSocketFactory: IStreamWebSocketFactory;
+  readonly requestId: () => string;
+  /** See {@link CreateRemoteTransportOptions.clientIdentity}. */
+  readonly clientIdentity: FirstPartyClientIdentity;
+  /** See {@link CreateRemoteTransportOptions.proactiveWakeEligible}. */
+  readonly proactiveWakeEligible: boolean;
+}
+
+/**
+ * Assembles the client transport for the server pool: one direct `wss:`
+ * session per signed-in user, shared through the same session cache a host's
+ * is (keyed `openAuth: "pool-bearer"`, so it never shares a connection with a
+ * host), behind the same messenger and stream client.
+ *
+ * What the session presents is decided here, from the entry's kind, before
+ * any byte is exchanged: the user bearer on `open`, `authz: null`, no member
+ * credential. Nothing the peer says can change that, so a host advertising a
+ * pool-like manifest cannot obtain what a pool is given, and a pool cannot
+ * obtain what a sandbox is given.
+ *
+ * Its evidence goes to {@link poolSessionPresence} and never to the selection
+ * authority: the pool is not a host the app may choose.
+ *
+ * Returns `null` in the same build-time gaps `createRemoteHostTransport`
+ * does: an entry with no URL, or no usable auth context.
+ */
+export function createPoolHostTransport<
+  RpcRegistry extends VersionedRpcRegistry,
+  StreamRegistry extends VersionedStreamRpcRegistry,
+>(
+  options: CreatePoolTransportOptions<RpcRegistry, StreamRegistry>,
+): RemoteHostTransport<RpcRegistry, StreamRegistry> | null {
+  const poolUrl = options.entry.websocketUrl;
+  if (poolUrl === null) {
+    return null;
+  }
+  const bearerSource = options.bearer();
+  if (bearerSource === null || !canProvideBearer(bearerSource)) {
+    return null;
+  }
+  const identity: RemoteSessionIdentity = {
+    hostId: options.entry.hostId,
+    userId: options.userId,
+    hostPublicKey: "",
+    relayAttachUrl: poolUrl,
+    authRecovery: options.auth === null ? "terminal" : "revalidate",
+    authEpoch: authEpochFor(bearerSource),
+    openAuth: "pool-bearer",
+  };
+  const session = acquireRemoteSession(
+    identity,
+    { proactiveWakeEligible: options.proactiveWakeEligible },
+    () =>
+      new RemoteSession<RpcRegistry, StreamRegistry>({
+        hostId: options.entry.hostId,
+        poolUrl,
+        bearer: options.bearer,
+        cloudAuthorized: options.cloudAuthorized,
+        auth: options.auth,
+        clock: options.clock,
+        rpcRegistry: options.rpcRegistry,
+        streamRegistry: options.streamRegistry,
+        webSocketFactory: options.webSocketFactory,
+        requestId: options.requestId,
+        evidence: poolSessionPresence,
+        clientIdentity: options.clientIdentity,
+        // `host.status` is one of the two floor methods the pool serves
+        // genuinely, so the silence verdict works exactly as on a host.
+        livenessProbe: HOST_STATUS_LIVENESS_PROBE,
+      }),
+  );
   return {
     session,
     messenger: new RemoteHostMessenger(session),

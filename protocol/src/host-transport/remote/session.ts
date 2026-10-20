@@ -34,8 +34,10 @@ import {
   type WakeProbeTuning,
 } from "./session-client-params";
 import type {
+  PoolSessionAuth,
   RemoteSessionAuth,
   RemoteSessionAuthRecoveryOutcome,
+  RemoteSessionOpenAuth,
 } from "./auth";
 import type { IStreamWebSocketFactory } from "../stream-websocket";
 import type {
@@ -137,7 +139,12 @@ import {
 } from "@traycer/protocol/host-transport/chunking";
 import { InboundCreditTracker, PriorityScheduler } from "./scheduler";
 import { NoiseChannel } from "./noise-channel";
-import { RelaySocket, type RelayKillReason } from "./relay-socket";
+import { PLAIN_MUX_CHANNEL, type MuxChannel } from "./mux-channel";
+import {
+  RelaySocket,
+  type RelayKillReason,
+  type RelaySocketHandlers,
+} from "./relay-socket";
 import type { AttachGrant, AttachGrantProvider } from "./grant";
 import { LogicalStream, type LogicalStreamPort } from "./logical-stream";
 import {
@@ -184,6 +191,13 @@ function qosForStreamMethod(method: string): QosClassValue {
  *     → open{bearer, manifest, authz:null, resume:null}  (re-presents bearer, A2)
  *     → openAck{manifest, capabilities}  → compat mirror → ready
  *     → re-subscribe every live stream
+ *
+ * A session to the server pool ({@link PoolSessionOptions}) runs the same
+ * lifecycle from `open` on, over a direct WSS leg instead of the relay: no
+ * grant, no `attach_ack` (the socket opening stands for it), no Noise
+ * handshake (the pool is trusted infrastructure and TLS carries the channel),
+ * and `authz: null` always. The `open` and `openAck` bytes are the same as on
+ * the relay leg, and so is everything after.
  *
  * Ready is the host's ack, not the fan-out that follows it: the re-subscribes
  * go out from a session that is already carrying traffic, and what each stream
@@ -301,31 +315,39 @@ function relayKillProvenance(
     : "not-host-evidence";
 }
 
-export interface RemoteSessionEvidence {
+/**
+ * Which kind of leg a session's evidence speaks for: a host reached through
+ * the relay, or the server pool dialed directly. Typed per session shape
+ * ({@link RemoteSessionOptions} takes `"remote-relay"` evidence, and
+ * {@link PoolSessionOptions} `"pool-direct"`), so a sink that feeds the
+ * selection authority, which may only ever choose a host, cannot be handed a
+ * pool session's evidence.
+ */
+export type RemoteSessionTransportKind = "remote-relay" | "pool-direct";
+
+export interface RemoteSessionEvidence<
+  Kind extends RemoteSessionTransportKind = "remote-relay",
+> {
   sessionEstablished(
     hostId: string,
     sessionId: string,
-    transportKind: "remote-relay",
+    transportKind: Kind,
   ): void;
-  sessionLost(
-    hostId: string,
-    sessionId: string,
-    transportKind: "remote-relay",
-  ): void;
+  sessionLost(hostId: string, sessionId: string, transportKind: Kind): void;
   reportDialSuccess(
     hostId: string,
     attemptId: string,
-    transportKind: "remote-relay",
+    transportKind: Kind,
   ): void;
   reportDialRefusal(
     hostId: string,
     attemptId: string,
-    transportKind: "remote-relay",
+    transportKind: Kind,
   ): void;
   reportDialIndeterminate(
     hostId: string,
     attemptId: string,
-    transportKind: "remote-relay",
+    transportKind: Kind,
   ): void;
   reportRestartIntent(
     hostId: string,
@@ -354,19 +376,17 @@ export type SessionLivenessProbe = {
   readonly params: unknown;
 };
 
-export interface RemoteSessionOptions<
+/**
+ * Everything a session needs whichever peer it dials. The two dialable
+ * shapes, {@link RemoteSessionOptions} (a host behind the relay) and
+ * {@link PoolSessionOptions} (the server pool, directly), add only how the
+ * peer is reached and authenticated.
+ */
+interface SessionCommonOptions<
   RpcRegistry extends VersionedRpcRegistry,
   StreamRegistry extends VersionedStreamRpcRegistry,
 > {
   readonly hostId: string;
-  /** Relay attach URL (e.g. `wss://relay.example/attach`). */
-  readonly attachBaseUrl: string;
-  /** Host static X25519 public key for the NK handshake (registry-published). */
-  readonly hostStaticPublicKey: Uint8Array;
-  /** Mints a fresh single-use `role:"client"` attach grant per attach + reauth. */
-  readonly grantProvider: AttachGrantProvider;
-  /** Supplies the encrypted in-channel identity proof and recovery policy. */
-  readonly auth: RemoteSessionAuth;
   /**
    * Reads whether the session behind `auth` may spend a CLOUD CAPABILITY,
    * asserted to the host on every session `open` and updated in place through
@@ -401,15 +421,6 @@ export interface RemoteSessionOptions<
   readonly streamRegistry: StreamRegistry;
   readonly webSocketFactory: IStreamWebSocketFactory;
   readonly requestId: () => string;
-  /**
-   * Where this session's dial outcomes and liveness go (redesign P1.3). The
-   * selection authority's confirmed-death counter is fed from HERE and from
-   * the local WS transport - never from the directory's cloud DTO, and never
-   * from `isConfirmedTransportRefusal`, which is a pre-dial gate that folds
-   * DTO verdicts in (invariant 5). Shells with no authority to feed pass
-   * `NO_TRANSPORT_EVIDENCE`. Host dialers pass `null`.
-   */
-  readonly evidence: RemoteSessionEvidence | null;
   /**
    * Optional client-side capability publication hook. `null` on host dialers.
    */
@@ -478,6 +489,30 @@ export interface RemoteSessionOptions<
    * host rather than the transport layer alone).
    */
   readonly livenessProbe: SessionLivenessProbe | null;
+}
+
+/** A session to a host reached through the relay, over a Noise channel. */
+export interface RemoteSessionOptions<
+  RpcRegistry extends VersionedRpcRegistry,
+  StreamRegistry extends VersionedStreamRpcRegistry,
+> extends SessionCommonOptions<RpcRegistry, StreamRegistry> {
+  /** Relay attach URL (e.g. `wss://relay.example/attach`). */
+  readonly attachBaseUrl: string;
+  /** Host static X25519 public key for the NK handshake (registry-published). */
+  readonly hostStaticPublicKey: Uint8Array;
+  /** Mints a fresh single-use `role:"client"` attach grant per attach + reauth. */
+  readonly grantProvider: AttachGrantProvider;
+  /** Supplies the encrypted in-channel identity proof and recovery policy. */
+  readonly auth: RemoteSessionAuth;
+  /**
+   * Where this session's dial outcomes and liveness go (redesign P1.3). The
+   * selection authority's confirmed-death counter is fed from HERE and from
+   * the local WS transport - never from the directory's cloud DTO, and never
+   * from `isConfirmedTransportRefusal`, which is a pre-dial gate that folds
+   * DTO verdicts in (invariant 5). Shells with no authority to feed pass
+   * `NO_TRANSPORT_EVIDENCE`. Host dialers pass `null`.
+   */
+  readonly evidence: RemoteSessionEvidence | null;
   /**
    * Mints the credential a team host spends for this session's member, or
    * `null` for a composition that never opens one: a personal host, which
@@ -495,9 +530,95 @@ export interface RemoteSessionOptions<
    * still names the cause.
    */
   readonly mintMemberCredential:
-    | ((hostId: string) => Promise<MemberCredentialHandoff | null>)
-    | null;
+    ((hostId: string) => Promise<MemberCredentialHandoff | null>) | null;
 }
+
+/**
+ * A session to the server pool, dialed directly over `wss:` with no relay,
+ * no Noise, no attach grant and no `Host` row behind it.
+ *
+ * It speaks the same mux as a host session, `open` and `openAck` included, so
+ * negotiation, credits, chunking and the silence probe are the same code.
+ * What it cannot carry is fixed by the shape of these options rather than
+ * checked at run time:
+ *
+ *  - `authz` is always `null` on its `open`: {@link PoolSessionAuth} has no
+ *    slot to fill;
+ *  - it never mints or hands off a member credential: there is no minter,
+ *    and a pool `openAck` that offers the capability is not acted on.
+ *
+ * There is no re-authentication loop: that loop re-presents an attach grant
+ * to the relay, and the pool re-authorizes its own connections. Nor a
+ * host-standing watchdog: that one exists because a revoked host will not
+ * enforce its own death and relay frames cannot prove it alive, while every
+ * keepalive answer on a direct leg is the pool's own.
+ */
+export interface PoolSessionOptions<
+  RpcRegistry extends VersionedRpcRegistry,
+  StreamRegistry extends VersionedStreamRpcRegistry,
+> extends SessionCommonOptions<RpcRegistry, StreamRegistry> {
+  /** The pool's `wss:` URL, from trusted client configuration only. */
+  readonly poolUrl: string;
+  readonly auth: PoolSessionAuth;
+  /**
+   * Where this session's open, loss and restart intent go. Never the
+   * selection authority's sink: the pool is not a host it may choose.
+   */
+  readonly evidence: RemoteSessionEvidence<"pool-direct"> | null;
+}
+
+/** A session's evidence sink with its transport kind already applied. */
+interface BoundSessionEvidence {
+  established(hostId: string, sessionId: string): void;
+  lost(hostId: string, sessionId: string): void;
+  dialSuccess(hostId: string, attemptId: string): void;
+  dialRefusal(hostId: string, attemptId: string): void;
+  dialIndeterminate(hostId: string, attemptId: string): void;
+  restartIntent(
+    hostId: string,
+    tombstoneId: string,
+    expiresAt: number | null,
+  ): void;
+}
+
+function bindSessionEvidence<Kind extends RemoteSessionTransportKind>(
+  evidence: RemoteSessionEvidence<Kind> | null,
+  kind: Kind,
+): BoundSessionEvidence | null {
+  if (evidence === null) {
+    return null;
+  }
+  return {
+    established: (hostId, sessionId) =>
+      evidence.sessionEstablished(hostId, sessionId, kind),
+    lost: (hostId, sessionId) => evidence.sessionLost(hostId, sessionId, kind),
+    dialSuccess: (hostId, attemptId) =>
+      evidence.reportDialSuccess(hostId, attemptId, kind),
+    dialRefusal: (hostId, attemptId) =>
+      evidence.reportDialRefusal(hostId, attemptId, kind),
+    dialIndeterminate: (hostId, attemptId) =>
+      evidence.reportDialIndeterminate(hostId, attemptId, kind),
+    restartIntent: (hostId, tombstoneId, expiresAt) =>
+      evidence.reportRestartIntent(hostId, tombstoneId, expiresAt),
+  };
+}
+
+/** How a constructed session reaches its peer, resolved once. */
+type SessionDial =
+  | {
+      readonly kind: "relay";
+      readonly attachBaseUrl: string;
+      readonly hostStaticPublicKey: Uint8Array;
+      readonly grantProvider: AttachGrantProvider;
+      readonly auth: RemoteSessionAuth;
+      readonly mintMemberCredential:
+        ((hostId: string) => Promise<MemberCredentialHandoff | null>) | null;
+    }
+  | {
+      readonly kind: "pool";
+      readonly poolUrl: string;
+      readonly auth: PoolSessionAuth;
+    };
 
 /**
  * Public surface of `RemoteSession` (Architecture §4 / S1 session-collapse).
@@ -751,9 +872,11 @@ interface PendingUnary {
 
 interface ActiveConnection {
   readonly generation: number;
-  readonly attachGrant: AttachGrant;
-  readonly relaySocket: RelaySocket;
-  readonly noise: NoiseChannel;
+  /** The grant this relay attach presented; `null` on a direct pool leg. */
+  readonly attachGrant: AttachGrant | null;
+  /** The relay leg, or the direct leg to the pool. */
+  readonly socket: RelaySocket;
+  readonly channel: MuxChannel;
   readonly scheduler: PriorityScheduler;
   readonly reassembler: ChunkReassembler;
   readonly inboundCredits: InboundCreditTracker;
@@ -803,6 +926,16 @@ interface ActiveConnection {
    * millisecond frame could make ambiguous.
    */
   inChannelFrames: number;
+  /**
+   * Methods this peer answered with the typed `E_HOST_UNSUPPORTED` refusal,
+   * keyed to the message it gave. A peer emits that code only at dispatch -
+   * an unknown method, or one it does not serve - so it is a fact about the
+   * method on this peer, not about one call: every later call to it on this
+   * connection is answered here with the peer's own refusal and never sent.
+   * Per connection, because a redial may land on a newer incarnation that
+   * serves it.
+   */
+  readonly refusedMethods: Map<string, string>;
 }
 
 /**
@@ -834,7 +967,13 @@ export class RemoteSession<
 >
   implements LogicalStreamPort, IRemoteSession<RpcRegistry, StreamRegistry>
 {
-  private readonly options: RemoteSessionOptions<RpcRegistry, StreamRegistry>;
+  private readonly options:
+    | RemoteSessionOptions<RpcRegistry, StreamRegistry>
+    | PoolSessionOptions<RpcRegistry, StreamRegistry>;
+  /** How this session reaches its peer; fixed for its life. */
+  private readonly dial: SessionDial;
+  /** Where this session's dial outcomes and liveness go, or `null`. */
+  private readonly evidence: BoundSessionEvidence | null;
   private readonly clientManifests: SessionManifests;
   /**
    * Per-method verdicts of {@link streamMethodCapability}, keyed on the host
@@ -1181,8 +1320,27 @@ export class RemoteSession<
   /** See {@link IRemoteSession.terminalFatal}. Set once, by `goTerminalFatal`. */
   private terminalFatalDetails: FatalErrorDetails | null = null;
 
-  constructor(options: RemoteSessionOptions<RpcRegistry, StreamRegistry>) {
+  constructor(
+    options:
+      | RemoteSessionOptions<RpcRegistry, StreamRegistry>
+      | PoolSessionOptions<RpcRegistry, StreamRegistry>,
+  ) {
     this.options = options;
+    this.dial =
+      "poolUrl" in options
+        ? { kind: "pool", poolUrl: options.poolUrl, auth: options.auth }
+        : {
+            kind: "relay",
+            attachBaseUrl: options.attachBaseUrl,
+            hostStaticPublicKey: options.hostStaticPublicKey,
+            grantProvider: options.grantProvider,
+            auth: options.auth,
+            mintMemberCredential: options.mintMemberCredential,
+          };
+    this.evidence =
+      "poolUrl" in options
+        ? bindSessionEvidence(options.evidence, "pool-direct")
+        : bindSessionEvidence(options.evidence, "remote-relay");
     // The same floor/optional split the local `WsRpcClient` advertises, from
     // the same released-floor list - the remote handshake's compatibility
     // check runs over the floor ONLY, so a peer that lacks an optional
@@ -1209,7 +1367,10 @@ export class RemoteSession<
     );
     this.clientIdentity = toClientHandshakeIdentity(options.clientIdentity);
     this.dialFailures = new DialFailureLog({
-      label: `remote session (host ${options.hostId})`,
+      label:
+        this.dial.kind === "pool"
+          ? `pool session (${options.hostId})`
+          : `remote session (host ${options.hostId})`,
       now: () => Date.now(),
       repeatIntervalMs: DIAL_FAILURE_RESTATE_MS,
       // Console on purpose: this is shared OSS transport code with no logger
@@ -1764,6 +1925,16 @@ export class RemoteSession<
     idempotencyKey: string | null,
     replayMustBeKeyed: boolean,
   ): Promise<unknown> {
+    const refusal = connection.refusedMethods.get(method);
+    if (refusal !== undefined) {
+      return Promise.reject(
+        HostRpcError.fromWireEnvelope(
+          { code: "E_HOST_UNSUPPORTED", message: refusal },
+          requestId,
+          method,
+        ),
+      );
+    }
     let prepared: { onWireVersion: SchemaVersion; onWirePayload: unknown };
     try {
       prepared = prepareRequestPayload(
@@ -2032,7 +2203,7 @@ export class RemoteSession<
       // immediate-redial policy can be raised but never lowered), so mixed
       // wake bursts - a measured mobile resume beside a generic online edge,
       // in either order - always keep the stronger evidence.
-      this.connection.relaySocket.pokeKeepalive(
+      this.connection.socket.pokeKeepalive(
         probe === null ? RELAY_WAKE_PROBE_TIMEOUT_MS : probe.timeoutMs,
         probe !== null && probe.immediateRedialOnFailure,
       );
@@ -2305,7 +2476,12 @@ export class RemoteSession<
       startedAt: Date.now(),
     };
 
-    const provision = await this.options.grantProvider();
+    const dial = this.dial;
+    if (dial.kind === "pool") {
+      this.attachDirect(generation, dial.poolUrl);
+      return;
+    }
+    const provision = await dial.grantProvider();
     if (generation !== this.connectGeneration || this.isClosed()) {
       return;
     }
@@ -2356,6 +2532,84 @@ export class RemoteSession<
     }
     const grant = provision.grant;
 
+    const noise = await NoiseChannel.begin(dial.hostStaticPublicKey);
+    if (generation !== this.connectGeneration || this.isClosed()) {
+      return;
+    }
+
+    const relaySocket = new RelaySocket({
+      attachBaseUrl: dial.attachBaseUrl,
+      grantJws: grant.grant,
+      webSocketFactory: this.options.webSocketFactory,
+      handlers: this.socketHandlers(generation, () => relaySocket),
+    });
+    this.installConnection(generation, grant, relaySocket, noise);
+  }
+
+  /**
+   * The pool's attach: one `wss:` dial, no grant to mint and no handshake to
+   * run. The socket's open is the attach, and the session's `open` follows
+   * it directly (see `onAttachAck`).
+   */
+  private attachDirect(generation: number, poolUrl: string): void {
+    const socket = new RelaySocket({
+      directUrl: poolUrl,
+      webSocketFactory: this.options.webSocketFactory,
+      handlers: this.socketHandlers(generation, () => socket),
+    });
+    this.installConnection(generation, null, socket, PLAIN_MUX_CHANNEL);
+  }
+
+  /**
+   * One generation's socket callbacks. `socket` is read lazily: the handlers
+   * are built before the socket they belong to exists.
+   */
+  private socketHandlers(
+    generation: number,
+    socket: () => RelaySocket,
+  ): RelaySocketHandlers {
+    return {
+      onAttachAck: () => this.onAttachAck(generation),
+      onData: (bytes) => this.onData(generation, bytes),
+      onTextBytes:
+        this.traffic === null
+          ? undefined
+          : (bytes) => this.traffic?.receiveText(bytes),
+      onHostDetached: () => this.onHostDetached(generation),
+      onHostAttached: () => this.onHostAttached(generation),
+      onReauthAck: () => undefined,
+      onPeerGone: (reason) => this.onPeerGone(generation, reason),
+      onError: () => undefined,
+      onClose: (info) => {
+        // The socket's own verdict on the current wake-probe arm, read at
+        // the one moment it matters: this close IS the arm's negative
+        // ending, whatever delivered it - the arm's own deadline, an
+        // OS-delivered error close, missed pongs. An answered arm reads
+        // false here forever, so a loss after proven liveness stays an
+        // ordinary loss. Each connection owns its socket object, so this
+        // cannot leak across dials.
+        const immediateRedialEarned =
+          socket().hasUnansweredImmediateRedialProbe();
+        this.handleConnectionLost(
+          generation,
+          describeSocketClose(this.phase, info),
+          "host-transport-plane",
+        );
+        if (immediateRedialEarned) {
+          // A user is watching this recovery happen; sleeping out the
+          // backoff rung the funnel armed would be pure added outage.
+          this.pullRedialToNow("wake-probe-failed");
+        }
+      },
+    };
+  }
+
+  private installConnection(
+    generation: number,
+    attachGrant: AttachGrant | null,
+    socket: RelaySocket,
+    channel: MuxChannel,
+  ): void {
     const scheduler = new PriorityScheduler({
       write: (frame) => this.writeFrame(generation, frame),
       onWriteError: () =>
@@ -2369,56 +2623,11 @@ export class RemoteSession<
     });
     scheduler.onFrameWritten = (streamId) =>
       this.subscriptions.get(streamId)?.notifyOutboundProgress();
-    const noise = await NoiseChannel.begin(this.options.hostStaticPublicKey);
-    if (generation !== this.connectGeneration || this.isClosed()) {
-      return;
-    }
-
-    const relaySocket = new RelaySocket({
-      attachBaseUrl: this.options.attachBaseUrl,
-      grantJws: grant.grant,
-      webSocketFactory: this.options.webSocketFactory,
-      handlers: {
-        onAttachAck: () => this.onAttachAck(generation),
-        onData: (bytes) => this.onData(generation, bytes),
-        onTextBytes:
-          this.traffic === null
-            ? undefined
-            : (bytes) => this.traffic?.receiveText(bytes),
-        onHostDetached: () => this.onHostDetached(generation),
-        onHostAttached: () => this.onHostAttached(generation),
-        onReauthAck: () => undefined,
-        onPeerGone: (reason) => this.onPeerGone(generation, reason),
-        onError: () => undefined,
-        onClose: (info) => {
-          // The socket's own verdict on the current wake-probe arm, read at
-          // the one moment it matters: this close IS the arm's negative
-          // ending, whatever delivered it - the arm's own deadline, an
-          // OS-delivered error close, missed pongs. An answered arm reads
-          // false here forever, so a loss after proven liveness stays an
-          // ordinary loss. Each connection owns its socket object, so this
-          // cannot leak across dials.
-          const immediateRedialEarned =
-            relaySocket.hasUnansweredImmediateRedialProbe();
-          this.handleConnectionLost(
-            generation,
-            describeSocketClose(this.phase, info),
-            "host-transport-plane",
-          );
-          if (immediateRedialEarned) {
-            // A user is watching this recovery happen; sleeping out the
-            // backoff rung the funnel armed would be pure added outage.
-            this.pullRedialToNow("wake-probe-failed");
-          }
-        },
-      },
-    });
-
     this.connection = {
       generation,
-      attachGrant: grant,
-      relaySocket,
-      noise,
+      attachGrant,
+      socket,
+      channel,
       scheduler,
       reassembler: new ChunkReassembler(undefined),
       inboundCredits: new InboundCreditTracker(),
@@ -2433,6 +2642,7 @@ export class RemoteSession<
       hostAttached: true,
       lastInChannelInboundAt: Date.now(),
       inChannelFrames: 0,
+      refusedMethods: new Map(),
     };
     this.parkedRefusals = 0;
     this.armPhaseTimer(generation, ATTACH_ACK_TIMEOUT_MS, "attach-ack-timeout");
@@ -2446,19 +2656,26 @@ export class RemoteSession<
     if (connection === null) {
       return;
     }
-    this.phase = "handshaking";
     this.reattachMarks.attachAckAt = Date.now();
+    const handshake = connection.channel.handshake;
+    if (handshake === null) {
+      // A direct leg has nothing to agree before the session can speak: the
+      // socket's own open is the attach, and TLS is already up under it.
+      this.sendOpenFrame(generation, connection);
+      return;
+    }
+    this.phase = "handshaking";
     this.armPhaseTimer(
       generation,
       NOISE_HANDSHAKE_TIMEOUT_MS,
       "handshake-timeout",
     );
     void (async () => {
-      const msg0 = await connection.noise.writeInitiatorMessage();
+      const msg0 = await handshake.writeInitiatorMessage();
       if (!this.isCurrent(generation) || this.phase !== "handshaking") {
         return;
       }
-      if (!connection.relaySocket.sendData(msg0)) {
+      if (!connection.socket.sendData(msg0)) {
         this.handleConnectionLost(
           generation,
           "handshake-send-failed",
@@ -2486,7 +2703,7 @@ export class RemoteSession<
       // carry traffic yet.
       this.noteInChannelEvidence(connection);
       void (async () => {
-        await connection.noise.readResponderMessage(bytes);
+        await connection.channel.handshake?.readResponderMessage(bytes);
         if (!this.isCurrent(generation) || this.phase !== "handshaking") {
           return;
         }
@@ -2510,8 +2727,9 @@ export class RemoteSession<
     // Established transport: decrypt → decode → reassemble → dispatch.
     //
     // ORDERING INVARIANT (load-bearing once every large message is a long
-    // chunk sequence): `noise.decrypt` is entered SYNCHRONOUSLY here and its
-    // receive mutex admits waiters in call order, so per-frame continuations
+    // chunk sequence): `channel.decrypt` is entered SYNCHRONOUSLY here and
+    // resumes its waiters in call order (Noise through its receive mutex, the
+    // plain channel through already-settled promises), so per-frame continuations
     // resume in arrival order — and nothing below may `await` between decrypt
     // and `reassembler.accept`, or concurrent inbound delivery could splice
     // chunk sequences. Pinned by the arrival-order conformance test.
@@ -2522,7 +2740,7 @@ export class RemoteSession<
     // verdict honest about an error envelope or a FATAL - both are frames.
     this.noteInChannelEvidence(connection);
     void (async () => {
-      const muxBytes = await connection.noise.decrypt(bytes);
+      const muxBytes = await connection.channel.decrypt(bytes);
       if (!this.isCurrent(generation)) {
         return;
       }
@@ -2737,11 +2955,31 @@ export class RemoteSession<
     return true;
   }
 
+  /**
+   * The credentials this attach's `open` carries, chosen by how the session
+   * was constructed and never by anything the peer has said: no frame has
+   * come back by the time `open` is written. A pool session's `authz` is
+   * `null` by construction (see {@link PoolSessionAuth}).
+   */
+  private readOpenAuth(
+    connection: ActiveConnection,
+  ): RemoteSessionOpenAuth | null {
+    const dial = this.dial;
+    if (dial.kind === "pool") {
+      const auth = dial.auth.readOpenAuth();
+      return auth === null
+        ? null
+        : { bearer: auth.bearer, authz: null, fingerprint: auth.fingerprint };
+    }
+    const grant = connection.attachGrant;
+    return grant === null ? null : dial.auth.readOpenAuth(grant);
+  }
+
   private sendOpenFrame(
     generation: number,
     connection: ActiveConnection,
   ): void {
-    const openAuth = this.options.auth.readOpenAuth(connection.attachGrant);
+    const openAuth = this.readOpenAuth(connection);
     if (openAuth === null) {
       // No bearer to present → cannot authenticate the session; stay in
       // backoff. `not-host-evidence` for the same reason a failed grant mint
@@ -3159,7 +3397,11 @@ export class RemoteSession<
         FINE_INITIAL_BULK_SEND_CREDITS,
       );
     }
-    const mintMemberCredential = this.options.mintMemberCredential;
+    // A pool session has no minter, so a pool `openAck` offering the
+    // capability is never acted on: the member credential is not requested
+    // from, nor handed to, a pool peer.
+    const mintMemberCredential =
+      this.dial.kind === "relay" ? this.dial.mintMemberCredential : null;
     if (
       mintMemberCredential !== null &&
       parsed.data.capabilities.includes(SESSION_CAPABILITY_MEMBER_CREDENTIAL)
@@ -4040,6 +4282,14 @@ export class RemoteSession<
     // The response ends the exchange; the client sends nothing further here.
     this.retireOutboundSeq(streamId);
     if (parsed.data.error !== null) {
+      if (parsed.data.error.code === "E_HOST_UNSUPPORTED") {
+        // A pending unary is rejected on every drop, so an answer that finds
+        // its entry came over the current connection.
+        this.connection?.refusedMethods.set(
+          entry.method,
+          parsed.data.error.message,
+        );
+      }
       entry.reject(
         HostRpcError.fromWireEnvelope(
           parsed.data.error,
@@ -4373,7 +4623,7 @@ export class RemoteSession<
     cause: string,
     retryCause: FatalErrorDetails | null,
   ): void {
-    if (this.traffic !== null && this.connection?.relaySocket.hasOpened()) {
+    if (this.traffic !== null && this.connection?.socket.hasOpened()) {
       this.traffic.connectionLost();
     }
     // Before anything else: a connection that is being lost never earned its
@@ -4493,7 +4743,7 @@ export class RemoteSession<
    * have failed cleanly with the host's own UNAUTHORIZED message instead dies
    * as an unhandled rejection with no diagnostic. Normalize once, here.
    */
-  private revalidator(): RemoteSessionAuth | null {
+  private revalidator(): RemoteSessionAuth | PoolSessionAuth | null {
     return this.options.auth.revalidateForReconnect === null
       ? null
       : this.options.auth;
@@ -4502,7 +4752,7 @@ export class RemoteSession<
   private handleUnauthorizedSessionFatal(
     generation: number,
     details: FatalErrorDetails,
-    auth: RemoteSessionAuth,
+    auth: RemoteSessionAuth | PoolSessionAuth,
   ): void {
     if (!this.isCurrent(generation) || this.phase === "closed") {
       return;
@@ -4546,7 +4796,7 @@ export class RemoteSession<
    */
   private async revalidateThenReconnect(
     generation: number,
-    auth: RemoteSessionAuth,
+    auth: RemoteSessionAuth | PoolSessionAuth,
     details: FatalErrorDetails,
     rejectedBearer: string | null,
   ): Promise<void> {
@@ -4761,7 +5011,7 @@ export class RemoteSession<
    * must never strand the session in "reconnecting" forever.
    */
   private async revalidateWithinBudget(
-    auth: RemoteSessionAuth,
+    auth: RemoteSessionAuth | PoolSessionAuth,
   ): Promise<RemoteSessionAuthRecoveryOutcome> {
     let timer: TimerHandle | null = null;
     const budget = new Promise<RemoteSessionAuthRecoveryOutcome>((resolve) => {
@@ -5236,6 +5486,12 @@ export class RemoteSession<
 
   private startReauthLoop(): void {
     this.clearReauthTimer();
+    // The loop re-presents an attach grant to the relay's client-leg deadline.
+    // A direct pool leg has neither, and the pool re-authorizes its own
+    // connections.
+    if (this.dial.kind !== "relay") {
+      return;
+    }
     const jitter = Math.round(
       CLIENT_REAUTH_JITTER_MS * 2 * this.pseudoJitter() -
         CLIENT_REAUTH_JITTER_MS,
@@ -5259,7 +5515,11 @@ export class RemoteSession<
     ) {
       return;
     }
-    const provision = await this.options.grantProvider();
+    const dial = this.dial;
+    if (dial.kind !== "relay") {
+      return;
+    }
+    const provision = await dial.grantProvider();
     if (
       this.connection !== connection ||
       !(this.phase === "ready" || this.isParkedBeforeReady())
@@ -5267,7 +5527,7 @@ export class RemoteSession<
       return;
     }
     if (provision.kind === "ok") {
-      connection.relaySocket.sendReauth(provision.grant.grant);
+      connection.socket.sendReauth(provision.grant.grant);
     }
     // Re-arm regardless. A failed mint (`unavailable`) retries at the next
     // cadence, which lands PAST the relay's 60-min client-leg deadline: the
@@ -5314,6 +5574,11 @@ export class RemoteSession<
   }
 
   private armStandingTimer(): void {
+    // See `PoolSessionOptions`: on a direct leg every keepalive answer is the
+    // pool's own, so missed pongs already detect a peer that stopped.
+    if (this.dial.kind !== "relay") {
+      return;
+    }
     if (this.standingTimer !== null) {
       clearTimeout(this.standingTimer);
     }
@@ -5398,11 +5663,11 @@ export class RemoteSession<
       return;
     }
     const plaintext = encodeMuxFrame(frame);
-    const sealed = await connection.noise.encrypt(plaintext);
+    const sealed = await connection.channel.encrypt(plaintext);
     if (!this.isCurrent(generation)) {
       return;
     }
-    if (!connection.relaySocket.sendData(sealed)) {
+    if (!connection.socket.sendData(sealed)) {
       throw new Error("relay socket send failed");
     }
   }
@@ -5697,7 +5962,7 @@ export class RemoteSession<
     if (restartIntent === undefined) {
       return;
     }
-    this.options.evidence?.reportRestartIntent(
+    this.evidence?.restartIntent(
       this.options.hostId,
       restartIntent.tombstoneId,
       restartIntent.expiresAt,
@@ -5709,19 +5974,19 @@ export class RemoteSession<
     outcome: "success" | "refusal" | "indeterminate",
   ): void {
     const hostId = this.options.hostId;
-    const evidence = this.options.evidence;
+    const evidence = this.evidence;
     if (evidence === null) {
       return;
     }
     if (outcome === "success") {
-      evidence.reportDialSuccess(hostId, attemptId, "remote-relay");
+      evidence.dialSuccess(hostId, attemptId);
       return;
     }
     if (outcome === "indeterminate") {
-      evidence.reportDialIndeterminate(hostId, attemptId, "remote-relay");
+      evidence.dialIndeterminate(hostId, attemptId);
       return;
     }
-    evidence.reportDialRefusal(hostId, attemptId, "remote-relay");
+    evidence.dialRefusal(hostId, attemptId);
   }
 
   private announceSession(sessionId: string): void {
@@ -5730,22 +5995,14 @@ export class RemoteSession<
     // Retract first rather than leaking the previous id.
     this.retractSession();
     this.announcedSessionId = sessionId;
-    this.options.evidence?.sessionEstablished(
-      this.options.hostId,
-      sessionId,
-      "remote-relay",
-    );
+    this.evidence?.established(this.options.hostId, sessionId);
   }
 
   private retractSession(): void {
     const sessionId = this.announcedSessionId;
     if (sessionId === null) return;
     this.announcedSessionId = null;
-    this.options.evidence?.sessionLost(
-      this.options.hostId,
-      sessionId,
-      "remote-relay",
-    );
+    this.evidence?.lost(this.options.hostId, sessionId);
   }
 
   private isCurrent(generation: number): boolean {
@@ -5871,8 +6128,8 @@ export class RemoteSession<
     }
     connection.scheduler.stop();
     connection.reassembler.reset();
-    connection.relaySocket.close(1000, reason);
-    connection.noise.wipe();
+    connection.socket.close(1000, reason);
+    connection.channel.wipe();
   }
 
   private armPhaseTimer(

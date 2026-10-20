@@ -208,6 +208,7 @@ import { config } from "../config";
 export interface DesktopPreloadBridge {
   readonly authnBaseUrl: string;
   readonly relayBaseUrl: string;
+  readonly poolBaseUrl: string;
   // Runtime redirect_uri from main (dev loopback). Empty string when the build
   // uses the compile-time custom-scheme redirect (staging/prod).
   readonly authRedirectUri: string;
@@ -609,9 +610,7 @@ export interface DesktopPlatformBridge {
     onTopologyChange(
       handler: (event: {
         readonly reason:
-          | "display-added"
-          | "display-removed"
-          | "display-metrics-changed";
+          "display-added" | "display-removed" | "display-metrics-changed";
         readonly topology: DisplayTopology;
       }) => void,
     ): { dispose: () => void };
@@ -810,6 +809,7 @@ export class DesktopRunnerHost implements IRunnerHost {
   readonly signInUrl: string;
   readonly authnBaseUrl: string;
   readonly relayBaseUrl: string;
+  readonly poolBaseUrl: string;
   // False for a launch booted in the `none` lifecycle mode: main runs no
   // local-host lanes, so nothing may wait on, provision or manage one.
   readonly hasLocalHost: boolean;
@@ -873,6 +873,7 @@ export class DesktopRunnerHost implements IRunnerHost {
     this.signInUrl = options.signInUrl;
     this.authnBaseUrl = options.bridge.authnBaseUrl;
     this.relayBaseUrl = options.bridge.relayBaseUrl;
+    this.poolBaseUrl = options.bridge.poolBaseUrl;
     this.hasLocalHost = options.bridge.localHostCapability !== "none";
     this.windows = options.bridge.windows;
     this.menu = options.bridge.menu;

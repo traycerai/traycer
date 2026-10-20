@@ -1,7 +1,10 @@
 import type { AuthEra } from "@traycer-clients/shared/auth/request-context-provider";
 import {
   isHostReachable,
+  poolHostDirectoryEntry,
+  POOL_HOST_ID,
   type HostDirectoryEntry,
+  type PoolHostDirectoryEntry,
 } from "@traycer-clients/shared/host-client/host-directory";
 import type { IHostDirectoryService } from "@traycer-clients/shared/host-client/host-runtime";
 import {
@@ -142,6 +145,16 @@ export type HostDirectoryListener = (
  */
 export class HostDirectoryService implements IHostDirectoryService {
   private readonly runnerHost: IRunnerHost;
+  /**
+   * The server pool's entry, built once from this build's own configuration,
+   * or `null` when it has none. RESOLVED by id like any host (`findById`) and
+   * never ENUMERATED: it is not part of `snapshot()`, so `list()`, the
+   * cardinality, the default entry and every surface that walks the directory
+   * stay hosts only. That is what keeps the exclusion central - the pool is
+   * addressable at the requester seam and absent from every list a person
+   * picks from or a sweep walks.
+   */
+  private readonly poolEntry: PoolHostDirectoryEntry | null;
   private readonly remoteFetcher: RemoteHostFetcher;
   private readonly onRegistryPollTick: (() => void) | null;
   private readonly authContextId: () => string | null;
@@ -309,6 +322,7 @@ export class HostDirectoryService implements IHostDirectoryService {
 
   constructor(options: HostDirectoryServiceOptions) {
     this.runnerHost = options.runnerHost;
+    this.poolEntry = poolHostDirectoryEntry(options.runnerHost.poolBaseUrl);
     this.hasLocalHost = options.runnerHost.hasLocalHost;
     this.lastKnownLocalHostId = this.hasLocalHost
       ? loadPersistedLocalHostId()
@@ -613,6 +627,9 @@ export class HostDirectoryService implements IHostDirectoryService {
   }
 
   findById(hostId: string): HostDirectoryEntry | null {
+    if (hostId === POOL_HOST_ID) {
+      return this.poolEntry;
+    }
     for (const entry of this.snapshot()) {
       if (entry.hostId === hostId) {
         return entry;

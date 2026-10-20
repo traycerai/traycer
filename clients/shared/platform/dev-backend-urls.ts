@@ -26,6 +26,9 @@ export const DEV_SERVER_BASE_URL_ENV = "TRAYCER_DEV_SERVER_BASE_URL";
 // relay URL is `ws:`, not `http:`, and carries a real path (`/attach`), not
 // just an origin.
 export const DEV_RELAY_BASE_URL_ENV = "TRAYCER_DEV_RELAY_BASE_URL";
+// The server pool's local session socket, read only by the desktop build.
+// Same shape and validation as the relay's (`ws:`, loopback, a real path).
+export const DEV_POOL_BASE_URL_ENV = "TRAYCER_DEV_POOL_BASE_URL";
 
 const ALLOWED_DEV_BACKEND_HOSTS: ReadonlySet<string> = new Set([
   "localhost",

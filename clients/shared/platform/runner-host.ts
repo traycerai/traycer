@@ -177,6 +177,14 @@ export interface IRunnerHost {
   readonly relayBaseUrl: string;
 
   /**
+   * The server pool's session socket (`wss://…/v1/session`), from this
+   * build's own configuration, or `""` when the build has no pool. The only
+   * input `poolHostDirectoryEntry` takes, so the pool entry is never a claim a
+   * peer made.
+   */
+  readonly poolBaseUrl: string;
+
+  /**
    * Validates a Traycer bearer token and returns the full AuthnV3 identity
    * shape required to mint a client `RequestContext`. ACCESS-ONLY (tech plan
    * §3): a single identity lookup with NO refresh-on-401 fallback, so it
@@ -864,9 +872,7 @@ export type LocalHostCapability = "managed" | "none";
  * means there is no host to apply anything to.
  */
 export type HostLifecycleSupervisorState =
-  | "enforcing"
-  | "not-enforcing"
-  | "not-running";
+  "enforcing" | "not-enforcing" | "not-running";
 
 /**
  * How the running supervisor's run was started, as its `supervisor.json`
@@ -934,14 +940,10 @@ export interface HostLifecycleSetRequest {
 }
 
 export type HostLifecycleStopRefusal =
-  | "host-busy"
-  | "lock-busy"
-  | "update-active";
+  "host-busy" | "lock-busy" | "update-active";
 
 export type HostLifecycleSetFailure =
-  | "confirmation-required"
-  | "stop-failed"
-  | "write-failed";
+  "confirmation-required" | "stop-failed" | "write-failed";
 
 /**
  * The answer to `hostLifecycle.set`. Every arm carries a fresh view, so a
@@ -1235,8 +1237,7 @@ export interface IFileSaveHost {
    * things worth offering separately there.
    */
   readonly downloadFile:
-    | ((request: FileSaveRequest) => Promise<SavedFileLocation>)
-    | null;
+    ((request: FileSaveRequest) => Promise<SavedFileLocation>) | null;
   /**
    * What {@link saveFile} DOES, from the user's point of view: `"download"`
    * where it commits the file itself (a desktop save dialog), `"share"` where
@@ -1259,8 +1260,7 @@ export interface IFileSaveHost {
    * the bytes themselves, within a cap.
    */
   readonly downloadUrl:
-    | ((request: UrlDownloadRequest) => Promise<SavedFileLocation | null>)
-    | null;
+    ((request: UrlDownloadRequest) => Promise<SavedFileLocation | null>) | null;
 }
 
 /**
@@ -1326,11 +1326,7 @@ export interface TraycerPidMetadata {
 }
 
 export type BootstrapPhase =
-  | "starting"
-  | "exited"
-  | "crashed"
-  | "killed"
-  | "failed-to-spawn";
+  "starting" | "exited" | "crashed" | "killed" | "failed-to-spawn";
 
 export interface BootstrapMarkerEntry {
   readonly timestamp: string;
@@ -1934,10 +1930,7 @@ export interface ITokenStore {
  *   Feed callers must await this decision before showing a toast or chiming.
  */
 export type NotificationShowOutcome =
-  | "presented"
-  | "duplicate"
-  | "undeliverable"
-  | NotificationFeedDeliveryResult;
+  "presented" | "duplicate" | "undeliverable" | NotificationFeedDeliveryResult;
 
 /**
  * Which feed produced the notification being shown - delivery provenance,
@@ -2123,10 +2116,7 @@ export interface HostInstallResult {
   readonly previousVersion: string | null;
   readonly serviceLifecycle: {
     readonly priorServiceState:
-      | "running"
-      | "stopped"
-      | "not-installed"
-      | "externally-managed";
+      "running" | "stopped" | "not-installed" | "externally-managed";
     readonly stoppedBeforeSwap: boolean;
     readonly postSwapAction: "install" | "restart" | "start" | "none";
     readonly postSwapError: string | null;
@@ -2349,10 +2339,7 @@ export interface DownloadLaneStatus {
 }
 
 export type HostActivationState =
-  | "activated"
-  | "pendingActivation"
-  | "activationUnknown"
-  | "unavailable";
+  "activated" | "pendingActivation" | "activationUnknown" | "unavailable";
 
 /**
  * What a READER can say about the durable attempt's holder while the host is
@@ -2540,8 +2527,7 @@ export type HostRestartRequestResult =
 // shows that work with Force as the explicit choice. It carries no text - the
 // CLI's refusal is an instruction to its own caller, not to the person.
 export type HostServiceRestartResult =
-  | HostRestartRequestResult
-  | { readonly kind: "host-busy" };
+  HostRestartRequestResult | { readonly kind: "host-busy" };
 
 // Per-intent result. Every mutation intent resolves ONE of these - the
 // lane itself never rejects ("wait-never-reject"); a busy/deferred/failed
@@ -2648,8 +2634,7 @@ export interface FreePortAndRestartApplied extends FreePortAndRestartInput {
 }
 
 export type FreePortAndRestartResult =
-  | FreePortAndRestartApplied
-  | HostMutationDeclined;
+  FreePortAndRestartApplied | HostMutationDeclined;
 
 export type HostTrayCommand =
   | { readonly kind: "openSettingsHost" }
@@ -2716,9 +2701,7 @@ export interface CliInstallManifestSnapshot {
  *   - `register-service` — add the OS service registration.
  */
 export type DoctorRepairIntent =
-  | "converge-ready"
-  | "converge-latest"
-  | "register-service";
+  "converge-ready" | "converge-latest" | "register-service";
 
 /**
  * The recovery console's repairs, which QUEUE rather than refusing.

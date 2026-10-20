@@ -4,7 +4,10 @@ import type {
   OpenFrameBearerSource,
 } from "@traycer-clients/shared/auth/bearer-source";
 import type { StreamAuthRevalidator } from "@traycer-clients/shared/auth/bearer-revalidator";
-import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
+import {
+  isPoolHostDirectoryEntry,
+  type HostDirectoryEntry,
+} from "@traycer-clients/shared/host-client/host-directory";
 import { isRemoteHostDirectoryEntry } from "@traycer-clients/shared/host-client/remote-fetcher";
 import {
   HostRequestAbortedError,
@@ -17,6 +20,7 @@ import {
   type ResponseOfMethod,
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import {
+  createPoolHostTransport,
   createRemoteHostTransport,
   remoteOpenAuthFor,
   type IRemoteSession,
@@ -91,8 +95,8 @@ export interface BuildRawHostMessengerForTargetParams<
    * than read off the auth store in here, because this function is also the
    * seam tests build through: an implicit ambient read would make the
    * permission untestable from the outside and invisible at the call site.
-   * Only consulted on the `target.kind === "remote"` branch, so local hosts are
-   * unaffected.
+   * Only consulted on the `remote` and `pool` branches, so local hosts are
+   * unaffected; a pool session has no mint and only reports it on `open`.
    */
   readonly cloudAuthorized: () => boolean;
   /**
@@ -113,6 +117,35 @@ export function buildRawHostMessengerForTarget<
 >(
   params: BuildRawHostMessengerForTargetParams<Registry>,
 ): BuiltHostMessenger<Registry> | null {
+  if (isPoolHostDirectoryEntry(params.target)) {
+    // The server pool: the same session as a host's, on a direct leg. What
+    // `open` presents (the user bearer, `authz: null`, no member credential)
+    // is fixed by the entry's kind here, before any byte is exchanged.
+    const poolTransport = createPoolHostTransport<
+      Registry,
+      HostStreamRpcRegistry
+    >({
+      entry: params.target,
+      userId: params.userId,
+      bearer: params.bearer,
+      cloudAuthorized: params.cloudAuthorized,
+      auth: params.auth,
+      // Same value as every other consumer of this session, for the reason
+      // the remote branch below gives.
+      clock: appServerClock,
+      rpcRegistry: params.registry,
+      streamRegistry: hostStreamRpcRegistry,
+      webSocketFactory: browserStreamWebSocketFactory,
+      requestId: params.requestId,
+      clientIdentity: getGuiClientIdentity(),
+      proactiveWakeEligible: true,
+    });
+    if (poolTransport === null) return null;
+    return {
+      messenger: poolTransport.messenger,
+      remoteTransport: poolTransport,
+    };
+  }
   if (params.target.kind === "remote") {
     if (
       !isRemoteHostDirectoryEntry(params.target) ||
@@ -162,6 +195,13 @@ export function buildRawHostMessengerForTarget<
       messenger: remoteTransport.messenger,
       remoteTransport,
     };
+  }
+  // An allowlist, not a fall-through: the per-request local socket presents
+  // the user bearer to whatever endpoint the entry names, so only the kinds
+  // that ARE a local socket reach it. A kind this code does not know builds
+  // nothing.
+  if (!servesOverLocalSocket(params.target)) {
+    return null;
   }
 
   return {
@@ -396,7 +436,7 @@ class RuntimeHostMessenger<
       return abortedRejection;
     }
     const target = this.resolveTarget(authority.endpoint.hostId);
-    if (target === null || target.kind !== "remote") {
+    if (target === null || servesOverLocalSocket(target)) {
       this.closeRemoteTransport();
       return this.localMessenger.request(method, params, options);
     }
@@ -443,7 +483,7 @@ class RuntimeHostMessenger<
       return abortedRejection;
     }
     const target = this.resolveTarget(authority.endpoint.hostId);
-    if (target === null || target.kind !== "remote") {
+    if (target === null || servesOverLocalSocket(target)) {
       this.closeRemoteTransport();
       return this.localMessenger.requestWithResponseTimeout(
         method,
@@ -879,7 +919,23 @@ interface RemoteBinding<Registry extends VersionedRpcRegistry> {
   readonly availability: AvailabilitySubscription;
 }
 
+/**
+ * Whether `entry` is reached through the per-request local socket. Every
+ * other kind - a relay host, the server pool, a kind this code does not know
+ * - goes through the session binding, which refuses what it cannot build.
+ */
+function servesOverLocalSocket(entry: HostDirectoryEntry): boolean {
+  return entry.kind === "local" || entry.kind === "mock";
+}
+
 function remoteTransportKey(entry: HostDirectoryEntry): string | null {
+  if (isPoolHostDirectoryEntry(entry)) {
+    return entry.websocketUrl === null
+      ? null
+      : [entry.hostId, entry.websocketUrl, "pool-bearer"].join(
+          TRANSPORT_KEY_SEPARATOR,
+        );
+  }
   if (
     entry.kind !== "remote" ||
     !isRemoteHostDirectoryEntry(entry) ||

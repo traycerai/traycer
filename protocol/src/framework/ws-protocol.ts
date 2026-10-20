@@ -48,9 +48,7 @@ export type ConnectionManifest = Readonly<Record<string, ManifestMethodEntry>>;
  *   between the two canonicals using its installed upgrade/downgrade paths.
  */
 export type IncompatibleMethodBlocking =
-  | "client-missing-method"
-  | "host-missing-method"
-  | "no-bridge";
+  "client-missing-method" | "host-missing-method" | "no-bridge";
 
 /**
  * Per-method incompatibility record carried on a fatal error frame. Either
@@ -121,6 +119,20 @@ export const IDEMPOTENCY_KEY_REUSE_MESSAGE_FRAGMENT =
  * a new name instead of silently widening this contract.
  */
 export const CLIENT_CAPABILITY_EPIC_WRITE_PATH_V1 = "epic.writePath/1";
+
+/**
+ * The socket-level keepalive a session's client sends and the peer answers,
+ * as TEXT frames beside the binary mux frames.
+ *
+ * The relay answers it at its edge, and the server pool answers it on its
+ * direct leg. It is the client's only way to find a peer that stopped
+ * answering - a browser cannot send WebSocket ping control frames - so a peer
+ * on either leg must answer exactly {@link SOCKET_KEEPALIVE_PING} with exactly
+ * {@link SOCKET_KEEPALIVE_PONG}, and the strings never change: every relay and
+ * every released client already speaks them.
+ */
+export const SOCKET_KEEPALIVE_PING = "relay-ping";
+export const SOCKET_KEEPALIVE_PONG = "relay-pong";
 
 /**
  * Fatal code a host emits on every live connection when it is deliberately
@@ -294,9 +306,7 @@ export type ClientFatalErrorFrame = {
  * connection.
  */
 export type ClientFrame =
-  | ClientOpenFrame
-  | ClientRequestFrame
-  | ClientFatalErrorFrame;
+  ClientOpenFrame | ClientRequestFrame | ClientFatalErrorFrame;
 
 /**
  * Host acknowledgement of a successful token + compatibility check, carrying
@@ -345,9 +355,7 @@ export type HostFatalErrorFrame = {
  * connection.
  */
 export type HostFrame =
-  | HostOpenAckFrame
-  | HostResponseFrame
-  | HostFatalErrorFrame;
+  HostOpenAckFrame | HostResponseFrame | HostFatalErrorFrame;
 
 // ---- Canonical Zod schemas -------------------------------------------- //
 

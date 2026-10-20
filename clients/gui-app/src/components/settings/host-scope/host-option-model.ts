@@ -451,18 +451,20 @@ export function sandboxStateWord(sandbox: HostScopeSandbox): string | null {
  * picker. A picker fails CLOSED on a sandbox whose control-plane row has not
  * answered (`summary === null`): until `GET /api/sandboxes` says it is not
  * burst, it might be, and a burst sandbox offered once is the leak.
+ *
+ * The server pool (`kind: "pool"`) is hidden from every list: it serves the
+ * cloud's own read paths and is not a machine anyone picks, activates or
+ * manages.
  */
 export type HostPickerGroup =
-  | "personal"
-  | "sandbox"
-  | "agent-sandbox"
-  | "hidden";
+  "personal" | "sandbox" | "agent-sandbox" | "hidden";
 
 export function hostOptionPickerGroup(
   host: HostScopeOption,
   listsAgentSandboxes: boolean,
   offersAutomations: boolean,
 ): HostPickerGroup {
+  if (host.entry?.kind === "pool") return "hidden";
   if (host.sandbox === null) return "personal";
   // A sandbox no host row stands for yet: never offered as a
   // host. The host list groups it by the rules below, like any sandbox.

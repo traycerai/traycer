@@ -64,6 +64,7 @@ window.addEventListener("paste", nativeClipboardReadGate.observePaste, true);
 contextBridge.exposeInMainWorld("runnerHost", {
   authnBaseUrl: config.authnBaseUrl,
   relayBaseUrl: config.relayBaseUrl,
+  poolBaseUrl: config.poolBaseUrl,
   // Runtime-resolved in main (dev loopback port is dynamic), so it must be a
   // sync read rather than a compile-time `config` value. Empty → the renderer
   // uses its compile-time custom-scheme redirect.

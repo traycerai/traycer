@@ -1,12 +1,16 @@
 export {
   RemoteSession,
   type IRemoteSession,
+  type PoolSessionOptions,
   type RemoteSessionEvidence,
   type RemoteSessionOptions,
+  type RemoteSessionTransportKind,
   type SessionLivenessProbe,
 } from "./session";
 export type { WakeProbeTuning } from "./session-client-params";
 export type {
+  PoolSessionAuth,
+  PoolSessionOpenAuth,
   RemoteSessionAuth,
   RemoteSessionAuthRecoveryOutcome,
   RemoteSessionOpenAuth,

@@ -20,6 +20,16 @@ export interface RemoteSessionOpenAuth {
   readonly fingerprint: string;
 }
 
+/** What every session's credential plane answers, whatever its peer. */
+interface SessionCredentialPlane {
+  /** Stable diagnostic cause used when no open-frame credentials are ready. */
+  readonly missingOpenAuthCause: string;
+  readonly readCredentialUpdateBearer: () => string | null;
+  readonly currentFingerprint: () => string | null;
+  readonly revalidateForReconnect:
+    (() => Promise<RemoteSessionAuthRecoveryOutcome>) | null;
+}
+
 /**
  * Authentication plug for a relay client session.
  *
@@ -28,15 +38,27 @@ export interface RemoteSessionOpenAuth {
  * importing any client bearer machinery. The attach grant is supplied because
  * host-principal deployments may deliberately reuse it as the in-channel proof.
  */
-export interface RemoteSessionAuth {
-  /** Stable diagnostic cause used when no open-frame credentials are ready. */
-  readonly missingOpenAuthCause: string;
+export interface RemoteSessionAuth extends SessionCredentialPlane {
   readonly readOpenAuth: (
     attachGrant: AttachGrant,
   ) => RemoteSessionOpenAuth | null;
-  readonly readCredentialUpdateBearer: () => string | null;
-  readonly currentFingerprint: () => string | null;
-  readonly revalidateForReconnect:
-    | (() => Promise<RemoteSessionAuthRecoveryOutcome>)
-    | null;
+}
+
+/** The bearer a pool session presents on `open`. */
+export interface PoolSessionOpenAuth {
+  readonly bearer: SessionOpenPayload["bearer"];
+  /** Stable comparison key used to bound no-progress UNAUTHORIZED retries. */
+  readonly fingerprint: string;
+}
+
+/**
+ * Authentication plug for a session to the server pool.
+ *
+ * It has no `authz` to give, by construction: the reserved slot carries a
+ * session grant for an untrusted sandbox, and the pool is trusted
+ * infrastructure whose authority IS the viewer's bearer. A pool `open` always
+ * writes `authz: null`.
+ */
+export interface PoolSessionAuth extends SessionCredentialPlane {
+  readonly readOpenAuth: () => PoolSessionOpenAuth | null;
 }
