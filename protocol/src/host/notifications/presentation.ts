@@ -47,11 +47,13 @@ export function formatHostNotificationPresentation(
       const providerId = known === null ? null : knownProviderId(known);
       const backgroundWorkRunning =
         known === null ? false : knownBackgroundWorkRunning(known);
+      const unverified = known === null ? false : knownUnverified(known);
       const status = agentStoppedStatus(
         entry.outcome,
         reason,
         providerId,
         backgroundWorkRunning,
+        unverified,
       );
       return {
         title,
@@ -631,13 +633,42 @@ function agentStoppedStatus(
   reason: string | null,
   providerId: ProviderId | null,
   backgroundWorkRunning: boolean,
+  unverified: boolean,
 ): string {
   if (outcome === "errored") {
     return agentStoppedFailureStatus(reason, providerId);
   }
   if (outcome === "stopped") return "Stopped";
   if (backgroundWorkRunning) return "Background work running";
+  if (unverified) return "Paused, not verified";
   return "Done";
+}
+
+function knownUnverified(payload: HostNotificationKnownPayload): boolean {
+  switch (payload.kind) {
+    case "chat":
+      return payload.unverified === true;
+    case "epic":
+    case "agent_stalled":
+    case "approval":
+    case "interview":
+    case "workspace_operation_failed":
+    case "worktree_deletion":
+    case "worktree_auto_cleanup":
+    case "managed_command_delivery_parked":
+    case "browser_human_needed":
+    case "secret_grant_request":
+    case "secret_export_minted":
+    case "secret_rotated":
+    case "team_member_removed":
+    case "team_member_joined":
+    case "team_policy_unapplied":
+    case "team_policy_authority_expired":
+    case "team_installing_admin_gone":
+    case "team_plan_unlinked":
+    case "team_pods_full":
+      return false;
+  }
 }
 
 function knownBackgroundWorkRunning(
