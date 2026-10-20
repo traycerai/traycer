@@ -32,7 +32,7 @@ export function remoteEntry(
     relayFuseGrace: false,
     sandbox,
     remoteStatus: {
-      connectivity: "online",
+      connectivity: "connectable",
       viewerReachability: "unknown",
       clientCloud: "ok",
       updateState: "current",

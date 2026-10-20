@@ -6,6 +6,7 @@ import type { HostClient } from "@traycer-clients/shared/host-client/host-client
 import type { HostRpcRegistry } from "@/lib/host";
 import { useHostQuery } from "@/hooks/host/use-host-query";
 import { resolvePoolTierHostClient } from "@/lib/host/binding-host-client";
+import { useCloudChatViewerId } from "@/hooks/chats/use-cloud-chat-queries";
 
 // Stable params identity so the host-scoped query key stays referentially
 // constant across renders.
@@ -23,6 +24,11 @@ const EMPTY_PARAMS = {};
  * the request decides whether it is answered at all (`enabled` is the
  * capability gate the caller already resolved with `useHostMethodSupport`,
  * which reads the same tier).
+ *
+ * The answer is the ACCOUNT's, so its key carries the viewer and the read waits
+ * until the viewer resolves, as `useAutoPolicyQuery` explains: an account
+ * switch marks host keys stale without dropping them, and an unpartitioned
+ * entry would serve the previous account's environments to the next one.
  */
 export function useEnvironmentListQuery(
   client: HostClient<HostRpcRegistry> | null,
@@ -32,11 +38,15 @@ export function useEnvironmentListQuery(
     () => (client === null ? null : resolvePoolTierHostClient(client)),
     [client],
   );
+  const viewerUserId = useCloudChatViewerId();
   return useHostQuery<HostRpcRegistry, "environment.list">({
-    cacheKeyIdentity: undefined,
+    cacheKeyIdentity: [viewerUserId],
     client: servingClient,
     method: "environment.list",
     params: EMPTY_PARAMS,
-    options: { enabled, refetchOnWindowFocus: false },
+    options: {
+      enabled: enabled && viewerUserId.length > 0,
+      refetchOnWindowFocus: false,
+    },
   });
 }
