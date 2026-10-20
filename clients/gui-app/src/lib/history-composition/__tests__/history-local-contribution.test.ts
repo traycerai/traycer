@@ -13,12 +13,15 @@ import type {
   ListTaskLight,
   ListTasksResponse,
 } from "@traycer/protocol/host/epic/unary-schemas";
+import type { HistoryHostContribution } from "../compose-history-page";
 import { hostRpcRegistry } from "@traycer/protocol/host/registry";
 import {
   __resetHistoryContributionsForTests,
   applyHistoryContributionToCachedPage,
   noteUnfilteredHistoryContribution,
+  noteUnfilteredHistoryContributionPending,
   readHistoryHostContribution,
+  unfilteredHistoryContribution,
   subscribeUnfilteredHistoryContributions,
 } from "../history-local-contribution";
 
@@ -309,5 +312,53 @@ describe("applyHistoryContributionToCachedPage", () => {
     unsubscribe();
     noteUnfilteredHistoryContribution(ACCOUNT, "host-1", { kind: "absent" });
     expect(listener).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("noteUnfilteredHistoryContributionPending", () => {
+  afterEach(() => {
+    __resetHistoryContributionsForTests();
+  });
+
+  it("restores the absence it replaced when abandoned, telling subscribers", () => {
+    const listener = vi.fn();
+    subscribeUnfilteredHistoryContributions(listener);
+
+    const abandon = noteUnfilteredHistoryContributionPending(ACCOUNT, "host-1");
+    expect(unfilteredHistoryContribution(ACCOUNT, "host-1")).toEqual({
+      kind: "pending",
+    });
+    expect(listener).toHaveBeenCalledTimes(1);
+
+    abandon();
+    expect(unfilteredHistoryContribution(ACCOUNT, "host-1")).toBeUndefined();
+    expect(listener).toHaveBeenCalledTimes(2);
+  });
+
+  it("restores the previous learned state when abandoned", () => {
+    noteUnfilteredHistoryContribution(ACCOUNT, "host-1", { kind: "absent" });
+
+    const abandon = noteUnfilteredHistoryContributionPending(ACCOUNT, "host-1");
+    abandon();
+
+    expect(unfilteredHistoryContribution(ACCOUNT, "host-1")).toEqual({
+      kind: "absent",
+    });
+  });
+
+  it("lets a later note win over a stale abandon", () => {
+    const abandon = noteUnfilteredHistoryContributionPending(ACCOUNT, "host-1");
+    const learned: HistoryHostContribution = {
+      kind: "contributed",
+      read: response({ tombstonedEpicIds: ["gone"] }),
+    };
+    noteUnfilteredHistoryContribution(ACCOUNT, "host-1", learned);
+    const listener = vi.fn();
+    subscribeUnfilteredHistoryContributions(listener);
+
+    abandon();
+
+    expect(unfilteredHistoryContribution(ACCOUNT, "host-1")).toBe(learned);
+    expect(listener).not.toHaveBeenCalled();
   });
 });

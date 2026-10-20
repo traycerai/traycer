@@ -83,6 +83,28 @@ export function noteUnfilteredHistoryContribution(
   for (const listener of [...listeners]) listener();
 }
 
+/**
+ * Holds the paint while a read of the unfiltered contribution is in flight,
+ * and returns how to abandon it: an abandoned read (its caller aborted, or it
+ * failed) puts back what was there before, so a `pending` nobody will answer
+ * never outlives its reader.
+ */
+export function noteUnfilteredHistoryContributionPending(
+  accountId: string,
+  hostId: string,
+): () => void {
+  const key = scopeKey(accountId, hostId);
+  const previous = unfiltered.get(key);
+  const pending: HistoryHostContributionState = { kind: "pending" };
+  noteUnfilteredHistoryContribution(accountId, hostId, pending);
+  return () => {
+    if (unfiltered.get(key) !== pending) return;
+    if (previous === undefined) unfiltered.delete(key);
+    else unfiltered.set(key, previous);
+    for (const listener of [...listeners]) listener();
+  };
+}
+
 export function unfilteredHistoryContribution(
   accountId: string,
   hostId: string,

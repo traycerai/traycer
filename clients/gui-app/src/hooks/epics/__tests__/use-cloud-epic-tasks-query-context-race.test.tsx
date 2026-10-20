@@ -8,13 +8,9 @@ import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 // below counts calls on those shared mocks.
 afterEach(() => {
   cleanup();
-  resetNegotiatedManifests();
-  // Hoisted fixture state is shared across cases, and the floor list is a
-  // COUNT assertion like the spies beside it - left accumulating, a later case
-  // would read an earlier one's dispatch as its own.
-  fixture.floorsRequested.length = 0;
 });
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import type { LocalHistoryReadResponse } from "@traycer/protocol/host/epic/local-history";
 import type {
   ListTaskLight,
   ListTasksRequest,
@@ -31,15 +27,6 @@ import {
   useCloudEpicTasksPagesStore,
 } from "@/stores/epics/cloud-epic-tasks-pages-store";
 import { useAuthStore } from "@/stores/auth/auth-store";
-import { CloudEpicTasksVerdictWithdrawnError } from "@/lib/cloud-epic-tasks-query/verdict-withdrawn-error";
-import {
-  recordNegotiatedHostManifest,
-  resetNegotiatedManifests,
-} from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
-import {
-  HostMethodVersionUnsatisfiedError,
-  type RequiredHostMethodVersion,
-} from "@traycer-clients/shared/host-transport/host-messenger";
 
 const HOST_ID = "host-test";
 const USER_A = "user-a";
@@ -54,39 +41,27 @@ const fixture = vi.hoisted(() => ({
   activeHostId: "host-test",
   requestContextUserId: "user-a",
   request: vi.fn<ContextRaceRequest>(),
+  // The host's local History contribution rides this entry point too; it is
+  // answered empty and complete without touching `fixture.request`, whose
+  // counts are the cloud-page dispatches these cases assert on.
   requestWithSignal: vi.fn(
     (
       method: string,
       params: ListTasksRequest,
       _signal: AbortSignal | undefined,
-    ): Promise<ListTasksResponse> => fixture.request(method, params),
+    ): Promise<ListTasksResponse | LocalHistoryReadResponse> =>
+      method === "epic.localHistory.read"
+        ? Promise.resolve(fixture.emptyLocalHistory)
+        : fixture.request(method, params),
   ),
-  // The floor-carrying entry point an UNVERIFIED local-first leg dispatches
-  // on. It refuses, because that is this case's premise: nothing negotiated
-  // `epic.listTasks@1.6`, and the real transport answers a floor from the
-  // handshake of the connection carrying the frame. The call is still recorded
-  // through `fixture.request`, so the counts below keep meaning what they did.
-  requestWithSignalRequiringHostMethodVersion: vi.fn(
-    (
-      method: string,
-      params: ListTasksRequest,
-      _signal: AbortSignal | undefined,
-      requiredHostMethodVersion: RequiredHostMethodVersion,
-    ): Promise<ListTasksResponse> => {
-      fixture.floorsRequested.push(requiredHostMethodVersion);
-      void fixture.request(method, params);
-      return Promise.reject(
-        new HostMethodVersionUnsatisfiedError({
-          requirement: requiredHostMethodVersion,
-          negotiated: { major: 1, minor: 5 },
-          requestId: "req-context-race",
-          method,
-          hostId: HOST_ID,
-        }),
-      );
-    },
-  ),
-  floorsRequested: new Array<RequiredHostMethodVersion>(),
+  emptyLocalHistory: {
+    complete: true,
+    willComplete: true,
+    localHomeRows: [],
+    preservedRows: [],
+    tombstonedEpicIds: [],
+    localRows: "none",
+  } satisfies LocalHistoryReadResponse,
   requestContextListeners: new Set<() => void>(),
   dispatchedAs: new Array<string>(),
   switchToUserBAfterNextContextRead: false,
@@ -115,8 +90,6 @@ vi.mock("@/lib/host", () => ({
     onChange: fixture.onChange,
     request: fixture.request,
     requestWithSignal: fixture.requestWithSignal,
-    requestWithSignalRequiringHostMethodVersion:
-      fixture.requestWithSignalRequiringHostMethodVersion,
   }),
 }));
 
@@ -381,15 +354,9 @@ describe("useCloudEpicTasksQuery request-context race", () => {
   it("re-reads the cloud verdict when a request-context wait resumes, not only when it began", async () => {
     // A signed-in first page waits for its host client's request context
     // during a reconnect; the session is demoted to `unverified` before the
-    // same-user context arrives. The render-time hook mock above says the
-    // host serves the initial leg local-first (1.6), but the DISPATCH-time
-    // gate reads the live registry, which here says 1.5 - so the resumed
-    // continuation would be the ordinary cloud-backed list call on the
-    // retained bearer, and must be refused.
-    resetNegotiatedManifests();
-    recordNegotiatedHostManifest(HOST_ID, {
-      "epic.listTasks": { major: 1, minor: 5 },
-    });
+    // same-user context arrives. The resumed continuation would be the
+    // ordinary cloud-backed list call on the retained bearer, and must be
+    // refused.
     fixture.request.mockResolvedValue({ tasks: [], hasMore: false });
 
     // The control first: the same wait, resumed while the verdict still
@@ -402,7 +369,8 @@ describe("useCloudEpicTasksQuery request-context race", () => {
     await act(async () => {
       await Promise.resolve();
     });
-    expect(fixture.onChange).toHaveBeenCalledTimes(1);
+    // The pool leg and the host's History contribution each wait.
+    expect(fixture.onChange).toHaveBeenCalledTimes(2);
     await act(async () => {
       fixture.requestContextUserId = USER_A;
       for (const listener of fixture.requestContextListeners) listener();
@@ -423,7 +391,7 @@ describe("useCloudEpicTasksQuery request-context race", () => {
     await act(async () => {
       await Promise.resolve();
     });
-    expect(fixture.onChange).toHaveBeenCalledTimes(1);
+    expect(fixture.onChange).toHaveBeenCalledTimes(2);
 
     // Demoted while waiting; then the same-user context arrives.
     act(() => {
@@ -445,44 +413,27 @@ describe("useCloudEpicTasksQuery request-context race", () => {
       await Promise.resolve();
       await Promise.resolve();
     });
-    // No probe RPC. There used to be one here - a `host.status` dispatched to
-    // force a handshake and re-read the negotiated line - and it was removed
-    // because it proves nothing about the connection the NEXT request rides:
-    // every local unary dials afresh. The floor travels on the request itself
-    // now, so the observable proof that the resume re-read the verdict is that
-    // the second list call carries one.
-    expect(
-      fixture.request.mock.calls.filter(([method]) => method === "host.status"),
-    ).toHaveLength(0);
+    // The resume re-read the verdict: the demoted session's pool leg is
+    // refused before any list call is dispatched (there is no local-first
+    // floor for an unverified session any more), so the only list call is the
+    // signed-in control's.
     expect(
       fixture.request.mock.calls.filter(
         ([method]) => method === "epic.listTasks",
       ),
-    ).toHaveLength(2);
-    // ...and only the UNVERIFIED resume carries it: the signed-in run above
-    // dispatched through the plain path, so one floor for two list calls is
-    // what separates "re-read the verdict" from "attaches one unconditionally".
-    expect(fixture.floorsRequested).toEqual([
-      { method: "epic.listTasks", version: { major: 1, minor: 6 } },
-    ]);
-    // The refusal is TERMINAL for the production client (no retry that would
-    // re-ask and be refused again), so the query settles on it rather than
-    // sitting in a retry delay with no error yet.
+    ).toHaveLength(1);
+    // The pool leg's refusal is not the page's error here: the host gave a
+    // complete (empty) answer, so the page settles on it with the cloud half
+    // stated as unavailable.
     await waitFor(() => {
       expect(
-        queryClient.getQueryState(
+        queryClient.getQueryData<ListTasksResponse>(
           cloudEpicTasksQueryKey(HOST_ID, USER_A, LIST_CLOUD_TASKS_REQUEST),
-        )?.error,
-      ).toBeInstanceOf(CloudEpicTasksVerdictWithdrawnError);
+        )?.completeness?.cloudPage,
+      ).toBe("unavailable");
     });
-    // Settling on the refusal dispatched nothing further: still the two list
-    // calls, and no retry that would be refused again.
-    expect(
-      fixture.request.mock.calls.filter(
-        ([method]) => method === "epic.listTasks",
-      ),
-    ).toHaveLength(2);
-    expect(fixture.request).toHaveBeenCalledTimes(2);
+    // Settling dispatched nothing further.
+    expect(fixture.request).toHaveBeenCalledTimes(1);
   });
 
   it("bounds an initial request-context wait at the discovery deadline", async () => {
@@ -502,7 +453,7 @@ describe("useCloudEpicTasksQuery request-context race", () => {
       await act(async () => {
         await vi.advanceTimersByTimeAsync(0);
       });
-      expect(fixture.onChange).toHaveBeenCalledTimes(1);
+      expect(fixture.onChange).toHaveBeenCalledTimes(2);
       await act(async () => {
         await vi.advanceTimersByTimeAsync(15_000);
         await vi.advanceTimersByTimeAsync(0);

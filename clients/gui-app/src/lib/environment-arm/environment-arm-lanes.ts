@@ -76,8 +76,11 @@ function openLane<State, Frame>(
   const connection = acquireHostConnection(spec.poolHostId);
   let disposed = false;
   let session: IStreamSession | null = null;
-  // Frames built under an older authorization than one already seen are
-  // stale: a reopen after a re-authorization can still deliver them.
+  // Frames built under an older authorization than one already seen on the
+  // SAME server stream are stale: a re-authorization raises the generation
+  // while frames read under the previous one may still be queued. The pool
+  // numbers each stream from 0, so every (re)subscribe - a redial of this
+  // session or a reopened one - starts the comparison over.
   let newestGeneration = -1;
   const reopen = connection.reconnect.openReopenLane(
     () => {
@@ -107,6 +110,7 @@ function openLane<State, Frame>(
     if (disposed) return;
     const current = spec.open(spec.client, () => lane.state);
     session = current;
+    newestGeneration = -1;
     current.onServerFrame((envelope, binaryPayload) => {
       if (session !== current) return;
       const parsed = binaryPayload === null ? spec.parse(envelope) : null;
@@ -121,7 +125,12 @@ function openLane<State, Frame>(
       publish(spec.reduce(lane.state, parsed.frame));
     });
     current.onStatusChange((status, reason) => {
-      if (session !== current || status !== "closed") return;
+      if (session !== current) return;
+      if (status === "open") {
+        newestGeneration = -1;
+        return;
+      }
+      if (status !== "closed") return;
       if (endsTheArm(reason)) {
         publish(spec.ended);
         return;

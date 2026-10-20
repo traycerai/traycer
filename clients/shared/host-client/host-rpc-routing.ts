@@ -385,8 +385,8 @@ export const HOST_UNARY_RPC_ROUTES = {
   "environment.host.list": "target-host",
   // Host-local for good: its request names no host, and it answers "the
   // environment THIS host is bound to". The pool-served form is a separate
-  // method naming the host (`environment.binding.read { hostId }`, P7), which
-  // the per-host-row readers switch to.
+  // method naming the host (`environment.binding.read { hostId }`), which
+  // the per-host-row readers use in a build with a pool.
   "environment.host.read": "target-host",
   "environment.list": "pool-only",
   "environment.localOverrides": "target-host",
@@ -697,8 +697,8 @@ export const HOST_STREAM_RPC_ROUTES = {
   "epic.status.subscribe": "target-host",
   "epic.subscribe": "target-host",
   // The environment arm: a team environment's own rows in one task, for a
-  // member of it. Only the server pool serves them; P7 composes them with
-  // the host's arm.
+  // member of it. Only the server pool serves them; the app composes them
+  // with the viewer's own rows.
   "environment.chats.subscribe": "pool-only",
   "environment.communicationGraph.subscribe": "pool-only",
   "environment.plainTerminals.subscribe": "pool-only",

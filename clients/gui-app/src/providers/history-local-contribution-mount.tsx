@@ -6,6 +6,7 @@ import { registerCloudEpicTasksClient } from "@/lib/cloud-epic-tasks-query/clien
 import {
   applyHistoryContributionToCachedPage,
   noteUnfilteredHistoryContribution,
+  noteUnfilteredHistoryContributionPending,
   readHistoryHostContribution,
   subscribeUnfilteredHistoryContributions,
   unfilteredHistoryContribution,
@@ -67,7 +68,10 @@ export function HistoryLocalContributionMount(): null {
     }
     registerCloudEpicTasksClient(hostId, client);
     const abort = new AbortController();
-    noteUnfilteredHistoryContribution(accountId, hostId, { kind: "pending" });
+    const abandonPending = noteUnfilteredHistoryContributionPending(
+      accountId,
+      hostId,
+    );
     void readHistoryHostContribution({
       client,
       filters: null,
@@ -76,9 +80,14 @@ export function HistoryLocalContributionMount(): null {
     }).then(
       (contribution) =>
         noteUnfilteredHistoryContribution(accountId, hostId, contribution),
-      () => undefined,
+      abandonPending,
     );
-    return () => abort.abort();
+    // An unanswered read gives its scope back, so the next mount of this
+    // host and account reads it again instead of finding a stale `pending`.
+    return () => {
+      abort.abort();
+      abandonPending();
+    };
   }, [accountId, client, hostId, requestContextUserId]);
 
   return null;

@@ -311,7 +311,7 @@ describe("composeHistoryPageWithoutPool", () => {
     placement: HistoryLocalRowsPlacement,
   ) => ({ contribution, placement, sort: "recent" as const, query: undefined });
 
-  it("is null for an absent contribution, a non-admit placement, or no rows", () => {
+  it("is null for an absent contribution or a non-admit placement", () => {
     const withRows = readOf({ localHomeRows: [plain("a", 1)] });
     expect(
       composeHistoryPageWithoutPool(input({ kind: "absent" }, "admit")),
@@ -322,9 +322,16 @@ describe("composeHistoryPageWithoutPool", () => {
     expect(
       composeHistoryPageWithoutPool(input(withRows, "unprovable-filter")),
     ).toBeNull();
-    expect(
-      composeHistoryPageWithoutPool(input(readOf({}), "admit")),
-    ).toBeNull();
+  });
+
+  it("states an empty page when the host answered completely with no rows", () => {
+    const page = composeHistoryPageWithoutPool(input(readOf({}), "admit"));
+
+    expect(page?.tasks).toEqual([]);
+    expect(page?.completeness).toMatchObject({
+      cloudPage: "unavailable",
+      facets: "partial",
+    });
   });
 
   it("states a page whose cloud half is unavailable", () => {
@@ -352,20 +359,16 @@ describe("composeHistoryPageWithoutPool", () => {
 });
 
 describe("hostLocalHistoryPage", () => {
-  it("reads truncated for a host that could not contribute", () => {
-    const page = hostLocalHistoryPage({ kind: "absent" });
-    expect(page.tasks).toEqual([]);
-    expect(page.completeness?.localRows).toBe("truncated");
-  });
-
   it("lists the host's own rows with its completeness", () => {
-    const page = hostLocalHistoryPage(
-      readOf({
-        localHomeRows: [plain("a", 1)],
-        preservedRows: [plain("b", 2)],
-        localRows: "present",
-      }),
-    );
+    const contribution = readOf({
+      localHomeRows: [plain("a", 1)],
+      preservedRows: [plain("b", 2)],
+      localRows: "present",
+    });
+    if (contribution.kind !== "contributed") {
+      throw new Error("expected a contributed read");
+    }
+    const page = hostLocalHistoryPage(contribution.read);
 
     expect(ids(page)).toEqual(["a", "b"]);
     expect(page.completeness).toMatchObject({

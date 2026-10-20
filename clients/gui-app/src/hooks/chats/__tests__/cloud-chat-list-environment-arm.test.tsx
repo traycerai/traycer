@@ -4,6 +4,7 @@ import { cleanup, renderHook, waitFor } from "@testing-library/react";
 import { createElement, type ReactNode } from "react";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
+import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
 import type { CloudChatSummary } from "@traycer/protocol/host/epic/cloud-chat";
@@ -49,7 +50,9 @@ function chat(
   };
 }
 
-function renderList(viewerRows: readonly CloudChatSummary[]) {
+type ViewerAnswer = readonly CloudChatSummary[] | "unsupported" | "pending";
+
+function renderList(viewerAnswer: ViewerAnswer) {
   const queryClient = createAppQueryClient();
   const spine = new HostClient<HostRpcRegistry>({
     registry: hostRpcRegistry,
@@ -60,8 +63,20 @@ function renderList(viewerRows: readonly CloudChatSummary[]) {
       registry: hostRpcRegistry,
       requestId: () => "list",
       handlers: {
-        "epic.listCloudChats": () =>
-          Promise.resolve({ chats: [...viewerRows] }),
+        "epic.listCloudChats": () => {
+          if (viewerAnswer === "pending")
+            return new Promise<never>(() => undefined);
+          if (viewerAnswer === "unsupported") {
+            throw new HostRpcError({
+              code: "E_HOST_UNSUPPORTED",
+              message: "this host cannot list cloud chats",
+              requestId: "list",
+              method: "epic.listCloudChats",
+              fatalDetails: null,
+            });
+          }
+          return Promise.resolve({ chats: [...viewerAnswer] });
+        },
       },
     }),
   });
@@ -133,5 +148,48 @@ describe("useCloudChatList with the environment arm", () => {
       expect(rendered.result.current.isSuccess).toBe(true);
     });
     expect(idsOf(rendered.result.current.data)).toEqual([`${VIEWER}:a`]);
+  });
+
+  it("shows the arm's chats, deletions filtered, when the viewer's list errors, while the result stays an error", async () => {
+    arm.chats = [
+      chat("m", "member", "sandbox-1"),
+      chat("gone", "member", "sandbox-1"),
+    ];
+    beginCloudChatDeletion({
+      taskId: TASK_ID,
+      ownerUserId: "member",
+      ownerHostId: "sandbox-1",
+      chatId: "gone",
+    });
+
+    const rendered = renderList("unsupported");
+
+    await waitFor(() => {
+      expect(rendered.result.current.isError).toBe(true);
+    });
+    expect(rendered.result.current.isSuccess).toBe(false);
+    expect(rendered.result.current.error?.code).toBe("E_HOST_UNSUPPORTED");
+    expect(idsOf(rendered.result.current.data)).toEqual(["member:m"]);
+  });
+
+  it("is the plain error when the viewer's list errors and the arm holds nothing", async () => {
+    const rendered = renderList("unsupported");
+
+    await waitFor(() => {
+      expect(rendered.result.current.isError).toBe(true);
+    });
+    expect(rendered.result.current.data).toBeUndefined();
+  });
+
+  it("substitutes nothing while the viewer's list is still pending", async () => {
+    arm.chats = [chat("m", "member", "sandbox-1")];
+
+    const rendered = renderList("pending");
+
+    await waitFor(() => {
+      expect(rendered.result.current.isFetching).toBe(true);
+    });
+    expect(rendered.result.current.isPending).toBe(true);
+    expect(rendered.result.current.data).toBeUndefined();
   });
 });

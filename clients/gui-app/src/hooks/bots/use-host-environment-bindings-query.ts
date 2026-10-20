@@ -19,7 +19,11 @@ import {
 import { hostQueryKeys } from "@/lib/query-keys";
 import { withHostQueryErrorBoundary } from "@/lib/query/host-query-error-boundary";
 import { hostClientUnavailableError } from "@/hooks/host/use-host-query";
-import { useCloudChatViewerId } from "@/hooks/chats/use-cloud-chat-queries";
+import {
+  useCloudChatHasCloudAuthorization,
+  useCloudChatViewerId,
+} from "@/hooks/chats/use-cloud-chat-queries";
+import { cloudVerdictPreflight } from "@/lib/host/cloud-verdict-preflight";
 
 const HOST_READ_METHOD = "environment.host.read";
 const POOL_READ_METHOD = "environment.binding.read";
@@ -90,6 +94,7 @@ export function useHostEnvironmentBindings(
 ): HostEnvironmentBindings {
   const binding = useHostBinding();
   const viewerUserId = useCloudChatViewerId();
+  const cloudAuthorized = useCloudChatHasCloudAuthorization();
   const fromPool = readsHostBindingsFromPool();
   const idsKey = hostIds.join("\n");
   const hostIdList = useMemo(
@@ -137,6 +142,7 @@ export function useHostEnvironmentBindings(
         queryFn: ({ signal }): Promise<EnvironmentHostBinding> => {
           if (fromPool) {
             return withHostQueryErrorBoundary(POOL_READ_METHOD, async () => {
+              cloudVerdictPreflight(POOL_READ_METHOD)();
               if (binding === null) {
                 throw hostClientUnavailableError(POOL_READ_METHOD);
               }
@@ -161,8 +167,10 @@ export function useHostEnvironmentBindings(
           });
         },
         // The pool's answer is the account's: wait for the viewer it is
-        // filed under.
-        enabled: enabled && (!fromPool || viewerUserId.length > 0),
+        // filed under, and for a session the cloud has verified.
+        enabled:
+          enabled &&
+          (!fromPool || (cloudAuthorized && viewerUserId.length > 0)),
         staleTime: BINDING_STALE_MS,
         refetchOnWindowFocus: false,
       }),

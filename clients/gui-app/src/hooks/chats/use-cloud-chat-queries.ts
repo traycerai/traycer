@@ -3,6 +3,7 @@ import {
   queryOptions,
   useQuery,
   useQueryClient,
+  type QueryObserverRefetchErrorResult,
   type UseQueryResult,
 } from "@tanstack/react-query";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
@@ -148,7 +149,7 @@ export function useCloudChatList(
     },
     [armChats, deletions],
   );
-  return useHostQuery<HostRpcRegistry, "epic.listCloudChats">({
+  const viewerList = useHostQuery<HostRpcRegistry, "epic.listCloudChats">({
     // The one shared spelling of this key's viewer component -
     // `cloudChatListQueryKey` (the imperative reader's builder) appends the
     // same call to the same base, which is what keeps the two sides of that
@@ -177,6 +178,33 @@ export function useCloudChatList(
       retry: (_failureCount, error) => isTransientHostRpcFailure(error),
     },
   });
+  // The arm is its own source: when the viewer's list failed (this host
+  // cannot serve it, or it gave up), the team environments' chats still show.
+  // The result stays an error, so nothing that waits on the viewer's own
+  // answer - the record sweep above all - reads the arm rows as that answer.
+  const armOnly = useMemo(
+    () => filterDeletedCloudChats(armChats, deletions),
+    [armChats, deletions],
+  );
+  return useMemo(() => {
+    if (
+      !viewerList.isError ||
+      viewerList.data !== undefined ||
+      armOnly.length === 0
+    ) {
+      return viewerList;
+    }
+    const withArm: QueryObserverRefetchErrorResult<
+      ListCloudChatsResponse,
+      HostRpcError
+    > = {
+      ...viewerList,
+      data: { chats: [...armOnly] },
+      isLoadingError: false,
+      isRefetchError: true,
+    };
+    return withArm;
+  }, [viewerList, armOnly]);
 }
 
 /**

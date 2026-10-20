@@ -41,6 +41,7 @@ import {
 } from "@/lib/history-composition/compose-history-page";
 import {
   noteUnfilteredHistoryContribution,
+  noteUnfilteredHistoryContributionPending,
   readHistoryHostContribution,
 } from "@/lib/history-composition/history-local-contribution";
 import type { HistorySearchState } from "@/lib/history-search";
@@ -190,7 +191,16 @@ export function fetchCloudEpicTasksFirstPageByHostId(
       };
       if (poolResult.status === "rejected") {
         const local = composeHistoryPageWithoutPool(composition);
-        if (local === null) throw poolResult.reason;
+        // A session without a verdict never sends the pool leg, so the host's
+        // answer is the whole page it can have - an empty one included. Any
+        // other pool failure with nothing local to show is the page's error.
+        if (
+          local === null ||
+          (local.tasks.length === 0 &&
+            !(poolResult.reason instanceof CloudEpicTasksVerdictWithdrawnError))
+        ) {
+          throw poolResult.reason;
+        }
         return admitCloudEpicTasksFirstPage(local, { hostId, userId });
       }
       const page = admitCloudEpicTasksFirstPage(poolResult.value, {
@@ -228,12 +238,30 @@ export function fetchHostLocalHistoryPageByHostId(
   },
 ): Promise<ListTasksResponse> {
   return readHistoryContributionForPage(hostId, userId, options).then(
-    (contribution) =>
-      admitCloudEpicTasksFirstPage(hostLocalHistoryPage(contribution), {
-        hostId,
-        userId,
-      }),
+    (contribution) => {
+      // These readers ask one host what it holds, so a host that could not
+      // answer is their failure, not an empty answer: the reconciler then
+      // closes nothing, and Home reports its coverage as partial.
+      if (contribution.kind === "absent") {
+        throw new HostLocalHistoryUnavailableError();
+      }
+      return admitCloudEpicTasksFirstPage(
+        hostLocalHistoryPage(contribution.read),
+        {
+          hostId,
+          userId,
+        },
+      );
+    },
   );
+}
+
+/** The host named by a host-local read did not answer it completely. */
+export class HostLocalHistoryUnavailableError extends Error {
+  constructor() {
+    super("The host's local History could not be read.");
+    this.name = "HostLocalHistoryUnavailableError";
+  }
 }
 
 /**
@@ -265,21 +293,29 @@ async function readHistoryContributionForPage(
     );
   }
   const unfiltered = options.filters === null;
-  const contribution = await readHistoryHostContribution({
-    client,
-    filters: options.filters,
-    signal: options.abortSignal,
-    onIncomplete: unfiltered
-      ? () =>
-          noteUnfilteredHistoryContribution(userId, hostId, {
-            kind: "pending",
-          })
-      : null,
-  });
-  if (unfiltered) {
-    noteUnfilteredHistoryContribution(userId, hostId, contribution);
+  const held: { abandon: (() => void) | null } = { abandon: null };
+  try {
+    const contribution = await readHistoryHostContribution({
+      client,
+      filters: options.filters,
+      signal: options.abortSignal,
+      onIncomplete: unfiltered
+        ? () => {
+            held.abandon = noteUnfilteredHistoryContributionPending(
+              userId,
+              hostId,
+            );
+          }
+        : null,
+    });
+    if (unfiltered) {
+      noteUnfilteredHistoryContribution(userId, hostId, contribution);
+    }
+    return contribution;
+  } catch (error) {
+    held.abandon?.();
+    throw error;
   }
-  return contribution;
 }
 
 interface FetchCloudEpicTasksCursorPageOptions {

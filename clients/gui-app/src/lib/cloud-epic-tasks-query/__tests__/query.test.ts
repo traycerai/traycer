@@ -1,5 +1,5 @@
 import { QueryClient, QueryObserver } from "@tanstack/react-query";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
@@ -13,13 +13,20 @@ import {
 } from "@/lib/history-search";
 import {
   __resetCloudEpicTasksClientsForTests,
+  fetchCloudEpicTasksFirstPageByHostId,
   cloudEpicTasksFirstPageQueryOptions,
   cloudEpicTasksQueryKey,
   LIST_CLOUD_TASKS_REQUEST,
   listCloudTasksRequestForHistorySearch,
   registerCloudEpicTasksClient,
 } from "@/lib/cloud-epic-tasks-query";
+import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import type { LocalHistoryReadResponse } from "@traycer/protocol/host/epic/local-history";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
+import {
+  __resetHistoryContributionsForTests,
+  unfilteredHistoryContribution,
+} from "@/lib/history-composition/history-local-contribution";
 import { useAuthStore } from "@/stores/auth/auth-store";
 
 const USER_ID = "user-1";
@@ -168,7 +175,9 @@ describe("listCloudTasksRequestForHistorySearch", () => {
     registerCloudEpicTasksClient(hostId, client);
 
     try {
-      await expect(queryClient.fetchQuery(options)).resolves.toEqual(pages[0]);
+      await expect(queryClient.fetchQuery(options)).resolves.toMatchObject(
+        pages[0] ?? {},
+      );
       expect(dispatchCount).toBe(1);
 
       const freshObserver = new QueryObserver(queryClient, options);
@@ -200,11 +209,173 @@ describe("listCloudTasksRequestForHistorySearch", () => {
         });
       });
 
-      await expect(refreshed).resolves.toEqual(pages[1]);
+      await expect(refreshed).resolves.toMatchObject(pages[1] ?? {});
       expect(dispatchCount).toBe(2);
       expect(queryClient.getQueryState(options.queryKey)?.isInvalidated).toBe(
         false,
       );
+    } finally {
+      __resetCloudEpicTasksClientsForTests();
+      useAuthStore.getState().setSignedOut();
+    }
+  });
+});
+
+describe("the unfiltered History read's contribution state", () => {
+  beforeEach(() => {
+    __resetHistoryContributionsForTests();
+  });
+
+  it("leaves no pending entry behind when a read that reported incomplete is aborted", async () => {
+    const controller = new AbortController();
+    const asked: boolean[] = [];
+    const queryClient = new QueryClient();
+    const messenger = new MockHostMessenger<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      requestId: () => "history-contribution",
+      handlers: {
+        "epic.listTasks": () => ({ tasks: [], hasMore: false }),
+        "epic.localHistory.read": (params) => {
+          asked.push(params.awaitComplete);
+          if (!params.awaitComplete) {
+            return {
+              complete: false,
+              willComplete: true,
+              localHomeRows: [],
+              preservedRows: [],
+              tombstonedEpicIds: [],
+              localRows: "truncated",
+            };
+          }
+          controller.abort(new Error("caller gone"));
+          return new Promise<never>(() => undefined);
+        },
+      },
+    });
+    const spine = new HostClient<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      invalidator: createHostQueryInvalidator(queryClient),
+      findHostById: (hostId) =>
+        hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,
+      messenger,
+    });
+    spine.setRequestContext(requestContextFor(USER_ID));
+    const hostId = mockLocalHostEntry.hostId;
+    useAuthStore.getState().setSignedIn(USER_PROFILE, USER_CONTEXT, []);
+    __resetCloudEpicTasksClientsForTests();
+    registerCloudEpicTasksClient(
+      hostId,
+      spine.createRequester(mockLocalHostEntry),
+    );
+
+    try {
+      await expect(
+        fetchCloudEpicTasksFirstPageByHostId(hostId, USER_ID, {
+          request: LIST_CLOUD_TASKS_REQUEST,
+          abortSignal: controller.signal,
+          localFirstPhase: undefined,
+          requestContextPolicy: "wait",
+        }),
+      ).rejects.toBeDefined();
+
+      expect(asked).toEqual([false, true]);
+      expect(unfilteredHistoryContribution(USER_ID, hostId)).toBeUndefined();
+    } finally {
+      __resetCloudEpicTasksClientsForTests();
+      useAuthStore.getState().setSignedOut();
+    }
+  });
+});
+
+describe("the first page when the pool leg does not answer", () => {
+  const EMPTY_COMPLETE_CONTRIBUTION: LocalHistoryReadResponse = {
+    complete: true,
+    willComplete: true,
+    localHomeRows: [],
+    preservedRows: [],
+    tombstonedEpicIds: [],
+    localRows: "none",
+  };
+
+  function registerHost(): { readonly listCalls: () => number } {
+    let listCalls = 0;
+    const queryClient = new QueryClient();
+    const messenger = new MockHostMessenger<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      requestId: () => "pool-unavailable",
+      handlers: {
+        "epic.listTasks": () => {
+          listCalls += 1;
+          throw new HostRpcError({
+            code: "RPC_ERROR",
+            message: "pool unavailable",
+            requestId: "pool-unavailable",
+            method: "epic.listTasks",
+            fatalDetails: null,
+          });
+        },
+        "epic.localHistory.read": () => EMPTY_COMPLETE_CONTRIBUTION,
+      },
+    });
+    const spine = new HostClient<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      invalidator: createHostQueryInvalidator(queryClient),
+      findHostById: (hostId) =>
+        hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,
+      messenger,
+    });
+    spine.setRequestContext(requestContextFor(USER_ID));
+    __resetCloudEpicTasksClientsForTests();
+    registerCloudEpicTasksClient(
+      mockLocalHostEntry.hostId,
+      spine.createRequester(mockLocalHostEntry),
+    );
+    return { listCalls: () => listCalls };
+  }
+
+  function fetchFirstPage(): Promise<ListTasksResponse> {
+    return fetchCloudEpicTasksFirstPageByHostId(
+      mockLocalHostEntry.hostId,
+      USER_ID,
+      {
+        request: LIST_CLOUD_TASKS_REQUEST,
+        abortSignal: undefined,
+        localFirstPhase: undefined,
+        requestContextPolicy: "require-current",
+      },
+    );
+  }
+
+  beforeEach(() => {
+    __resetHistoryContributionsForTests();
+  });
+
+  it("settles an unverified session on the host's empty complete answer instead of an error", async () => {
+    useAuthStore.getState().setUnverifiedSession(USER_PROFILE, USER_CONTEXT);
+    const host = registerHost();
+
+    try {
+      await expect(fetchFirstPage()).resolves.toMatchObject({
+        tasks: [],
+        hasMore: false,
+        completeness: { cloudPage: "unavailable", facets: "partial" },
+      });
+      expect(host.listCalls()).toBe(0);
+    } finally {
+      __resetCloudEpicTasksClientsForTests();
+      useAuthStore.getState().setSignedOut();
+    }
+  });
+
+  it("still errors for a verified session whose pool leg fails with nothing local to show", async () => {
+    useAuthStore.getState().setSignedIn(USER_PROFILE, USER_CONTEXT, []);
+    const host = registerHost();
+
+    try {
+      await expect(fetchFirstPage()).rejects.toMatchObject({
+        message: "pool unavailable",
+      });
+      expect(host.listCalls()).toBe(1);
     } finally {
       __resetCloudEpicTasksClientsForTests();
       useAuthStore.getState().setSignedOut();

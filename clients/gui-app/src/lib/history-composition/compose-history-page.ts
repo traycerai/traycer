@@ -150,9 +150,9 @@ export function composeHistoryPage(
 
 /**
  * The page when the pool did not answer: what the host contributed, stated as
- * a page whose cloud half is missing. `null` when the host has nothing to
- * show either, so the caller surfaces the pool's error - a local arm is an
- * alternate answer, never a conversion of a failure into an empty success.
+ * a page whose cloud half is missing. `null` when the host gave no complete
+ * answer. An empty page is the caller's to judge: a local arm is an alternate
+ * answer, never a conversion of a pool failure into an empty success.
  */
 export function composeHistoryPageWithoutPool(
   input: Omit<ComposeHistoryPageInput, "page">,
@@ -162,7 +162,6 @@ export function composeHistoryPageWithoutPool(
   }
   const read = input.contribution.read;
   const rows = [...read.localHomeRows, ...read.preservedRows];
-  if (rows.length === 0) return null;
   return {
     tasks: orderComposedRows(rows, input.sort, input.query),
     hasMore: false,
@@ -190,28 +189,14 @@ function localRowsStatement(
 }
 
 /**
- * One host's contribution on its own, as a page: the rows only that host
+ * One host's complete answer on its own, as a page: the rows only that host
  * holds, for readers that ask a SPECIFIC host what it holds locally (the tab
- * reconciler's exemption, the local pin reading). Its `localRows` says
- * whether the host answered completely; a host that could not answer reads
- * `truncated`, which those readers already treat as "decide nothing".
+ * reconciler's exemption, the local pin reading). Its `localRows` says what
+ * the host claims about them.
  */
 export function hostLocalHistoryPage(
-  contribution: HistoryHostContribution,
+  read: LocalHistoryReadResponse,
 ): ListTasksResponse {
-  if (contribution.kind === "absent") {
-    return {
-      tasks: [],
-      hasMore: false,
-      completeness: {
-        cloudPage: "unavailable",
-        facets: "partial",
-        localRows: "truncated",
-        sort: "loaded-union",
-      },
-    };
-  }
-  const read = contribution.read;
   return {
     tasks: [...read.localHomeRows, ...read.preservedRows],
     hasMore: false,

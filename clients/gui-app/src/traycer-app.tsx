@@ -49,6 +49,7 @@ import { LandingTerminalPersistLifecycleBridge } from "@/providers/landing-termi
 import { LandingTerminalTombstoneRecoveryBridge } from "@/providers/landing-terminal-tombstone-recovery-bridge";
 import { EpicTabExistenceReconciler } from "@/providers/epic-tab-existence-reconciler";
 import { PoolSessionMount } from "@/providers/pool-session-mount";
+import { EnvironmentArmScopeMount } from "@/providers/environment-arm-scope-mount";
 import { EpicSessionControllerBridge } from "@/providers/epic-session-controller-bridge";
 import { HarnessCatalogPrefetcher } from "@/providers/harness-catalog-prefetcher";
 import { HistoryPruneProvider } from "@/providers/history-prune-provider";
@@ -303,6 +304,7 @@ function TraycerAuthenticatedRuntime(props: TraycerAuthenticatedRuntimeProps) {
                                   with no run handle to call. This is the lowest node both
                                   shells share that still has the host stream. */}
                               <SessionImportRunController />
+                              <EnvironmentArmScopeMount />
                               <AppLocalNotificationsPersistLifecycleBridge>
                                 <ReadingPositionPersistLifecycleBridge>
                                   <NotificationsSessionProvider

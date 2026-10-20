@@ -131,6 +131,30 @@ describe("createEnvironmentArmLanes", () => {
     expect(lanes.read("k", [])).toEqual(["a", "b"]);
   });
 
+  it("applies generation 0 again after the same session redials", () => {
+    lanes.acquire(spec("k"));
+    const session = sessions[0];
+    session.emit(frameEnvelope(2, "a"), null);
+
+    session.emitStatus("reconnecting");
+    session.emitStatus("open");
+    session.emit(frameEnvelope(0, "b"), null);
+
+    expect(lanes.read("k", [])).toEqual(["a", "b"]);
+  });
+
+  it("applies generation 0 again on a reopened session", async () => {
+    lanes.acquire(spec("k"));
+    sessions[0]?.emit(frameEnvelope(2, "a"), null);
+
+    sessions[0]?.closeWith(fatal("UNAUTHORIZED"));
+    await vi.advanceTimersByTimeAsync(600_000);
+    sessions[1]?.emit(frameEnvelope(0, "b"), null);
+
+    expect(sessions).toHaveLength(2);
+    expect(lanes.read("k", [])).toEqual(["a", "b"]);
+  });
+
   it("asks the session to reconnect on an unparseable frame and on a binary payload", () => {
     lanes.acquire(spec("k"));
     const session = sessions[0];

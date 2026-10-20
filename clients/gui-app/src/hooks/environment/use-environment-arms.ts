@@ -5,7 +5,6 @@ import {
   useRef,
   useSyncExternalStore,
 } from "react";
-import { readProcessHostRpcTierPlan } from "@traycer-clients/shared/host-client/host-rpc-routing";
 import type { IHostStreamClient } from "@traycer-clients/shared/host-transport/host-stream-client";
 import type { CloudChatSummary } from "@traycer/protocol/host/epic/cloud-chat";
 import type {
@@ -19,73 +18,71 @@ import {
 } from "@traycer/protocol/host/environment/arm-streams";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import type { PlainTerminalRecord } from "@traycer/protocol/host/terminal/plain-schemas";
-import { useEnvironmentListQuery } from "@/hooks/bots/use-environment-list-query";
-import { usePoolTierStreamClient } from "@/hooks/host/use-pool-tier";
 import {
   createEnvironmentArmLanes,
   type EnvironmentArmLaneSpec,
   type EnvironmentArmLanes,
 } from "@/lib/environment-arm/environment-arm-lanes";
-import { useHostClient } from "@/lib/host";
-import { useStreamMethodSupportFor } from "@/lib/host/stream-runtime-context";
-import {
-  authorizesCloudCapability,
-  useAuthStore,
-} from "@/stores/auth/auth-store";
 
-type EnvironmentArmMethod =
+export type EnvironmentArmMethod =
   | "environment.chats.subscribe"
   | "environment.plainTerminals.subscribe"
   | "environment.communicationGraph.subscribe";
 
-interface EnvironmentArmScope {
+/**
+ * Where the arms are read: published by `EnvironmentArmScopeMount`, the one
+ * reader of the pool's client, the session's verdict and the viewer's team
+ * environments, and only in a build with a pool. A surface that shows arm
+ * rows reads this and nothing of the host runtime itself.
+ */
+export interface EnvironmentArmScope {
   readonly poolHostId: string;
   readonly client: IHostStreamClient<HostStreamRpcRegistry>;
   readonly viewerId: string;
   /** The viewer's team environments: the only ones with an arm. */
   readonly environmentIds: readonly string[];
+  /** The arm methods the pool's session serves. */
+  readonly supported: ReadonlySet<EnvironmentArmMethod>;
+}
+
+let publishedScope: EnvironmentArmScope | null = null;
+const scopeListeners = new Set<() => void>();
+
+export function publishEnvironmentArmScope(
+  scope: EnvironmentArmScope | null,
+): void {
+  if (publishedScope === scope) return;
+  publishedScope = scope;
+  for (const listener of [...scopeListeners]) listener();
+}
+
+function subscribeEnvironmentArmScope(listener: () => void): () => void {
+  scopeListeners.add(listener);
+  return () => {
+    scopeListeners.delete(listener);
+  };
+}
+
+function readEnvironmentArmScope(): EnvironmentArmScope | null {
+  return publishedScope;
 }
 
 /**
- * Where `method`'s arms are read, or `null` when there are none to read: a
- * build without a server pool, a session the cloud has not authorized, a
- * pool that does not serve the method, or a viewer in no team. The task's
- * attachment is not known here - an environment the task is not attached to
- * ends its arm with `FORBIDDEN`, which reads as no rows.
+ * Where `method`'s arms are read, or `null` when there are none to read: no
+ * scope is published (a build without a server pool, a session the cloud has
+ * not authorized, a viewer in no team) or the pool does not serve the
+ * method. The task's attachment is not known here - an environment the task
+ * is not attached to ends its arm with `FORBIDDEN`, which reads as no rows.
  */
 function useEnvironmentArmScope(
   method: EnvironmentArmMethod,
 ): EnvironmentArmScope | null {
-  const pool = readProcessHostRpcTierPlan().pool;
-  const authorized = useAuthStore((state) =>
-    authorizesCloudCapability(state.status),
+  const scope = useSyncExternalStore(
+    subscribeEnvironmentArmScope,
+    readEnvironmentArmScope,
+    readEnvironmentArmScope,
   );
-  const viewerId = useAuthStore(
-    (state) => state.contextMetadata?.userId ?? null,
-  );
-  const client = usePoolTierStreamClient(null, viewerId);
-  const support = useStreamMethodSupportFor(client, method);
-  const environments = useEnvironmentListQuery(
-    useHostClient(),
-    pool !== null && authorized,
-  );
-  const environmentData = environments.data;
-  return useMemo(() => {
-    const environmentIds = (environmentData?.environments ?? [])
-      .filter((environment) => environment.ownerKind === "organization")
-      .map((environment) => environment.environmentId);
-    if (
-      pool === null ||
-      !authorized ||
-      viewerId === null ||
-      client === null ||
-      support !== "supported" ||
-      environmentIds.length === 0
-    ) {
-      return null;
-    }
-    return { poolHostId: pool.hostId, client, viewerId, environmentIds };
-  }, [authorized, client, environmentData, pool, support, viewerId]);
+  return scope !== null && scope.supported.has(method) ? scope : null;
 }
 
 /**
