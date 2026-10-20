@@ -73,6 +73,20 @@ export interface CloudNotificationsState {
     readonly summary: HostNotificationsCloudFeedSummary;
     readonly version: number;
   }): ReadonlyArray<HostNotificationsCloudFeedRowV13> | null;
+  /**
+   * Paints the replica tier's copy of the feed before this session's first
+   * snapshot. A no-op once a snapshot landed. It leaves `hasSnapshot` false
+   * and `version` null, so the seeded rows are never authoritative: no bulk
+   * mutation names them, they raise no arrival, and the first snapshot
+   * replaces them wholesale.
+   */
+  seedFromReplica(input: {
+    readonly rows: ReadonlyArray<HostNotificationsCloudFeedRowV13>;
+    readonly summary: HostNotificationsCloudFeedSummary;
+  }): void;
+  /** The replica no longer admits its page: drop the rows it seeded. A live
+   * snapshot, once held, is the feed's own and stays. */
+  revokeReplicaSeed(): void;
   /** Optimistic set-once marker application. A later authoritative snapshot
    * reconciles the row, but the common successful mutation never waits on a
    * wake or the relay's correctness poll to look read. */
@@ -237,6 +251,21 @@ export const useCloudNotificationsStore = create<CloudNotificationsState>()(
       });
       return arrivals;
     },
+    seedFromReplica: (input) =>
+      set((state) => {
+        if (state.hasSnapshot) return state;
+        const rows: Partial<Record<string, HostNotificationsCloudFeedRowV13>> =
+          {};
+        for (const row of input.rows) rows[rowKey(row)] = row;
+        return { rows, summary: input.summary };
+      }),
+    revokeReplicaSeed: () =>
+      set((state) =>
+        state.hasSnapshot ||
+        (state.summary === null && Object.keys(state.rows).length === 0)
+          ? state
+          : { rows: {}, summary: null },
+      ),
     markReadLocally: (entryId, readAt) =>
       set((state) => {
         const key = cloudNotificationFeedId(entryId);
