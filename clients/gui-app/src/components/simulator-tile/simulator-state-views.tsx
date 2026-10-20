@@ -260,9 +260,12 @@ export function SimulatorInventoryView(props: {
   readonly booting: readonly string[];
   readonly targetSimulatorId: string;
   readonly targetName: string;
-  /** `null` when the host does not offer `simulator.open`. */
+  /** Connects this tile's simulator; `null` when the host does not offer `simulator.open`. */
+  readonly onConnect: ((simulator: SimulatorSummary) => void) | null;
+  /** Whether this tile's own `simulator.open` is in flight. */
+  readonly connecting: boolean;
+  /** Places another simulator's tile; `null` when the host cannot open one. */
   readonly onOpen: ((simulator: SimulatorSummary) => void) | null;
-  readonly openingSimulatorId: string | null;
 }) {
   const ordered = orderSimulators(props.simulators);
   const target =
@@ -274,8 +277,7 @@ export function SimulatorInventoryView(props: {
   );
   const targetBusy =
     target !== null &&
-    (props.booting.includes(target.simulatorId) ||
-      props.openingSimulatorId === target.simulatorId);
+    (props.booting.includes(target.simulatorId) || props.connecting);
   return (
     <div
       className="flex h-full min-h-0 w-full flex-col items-center gap-4 overflow-y-auto bg-canvas px-6 py-8 text-ui-sm text-muted-foreground"
@@ -302,9 +304,9 @@ export function SimulatorInventoryView(props: {
               type="button"
               variant="default"
               size="sm"
-              disabled={props.onOpen === null || targetBusy}
+              disabled={props.onConnect === null || targetBusy}
               data-testid="simulator-connect"
-              onClick={() => props.onOpen?.(target)}
+              onClick={() => props.onConnect?.(target)}
             >
               {targetBusy ? (
                 <AgentSpinningDots
@@ -324,9 +326,7 @@ export function SimulatorInventoryView(props: {
           aria-label={`Other simulators on ${props.hostLabel}`}
         >
           {others.map((simulator) => {
-            const busy =
-              props.booting.includes(simulator.simulatorId) ||
-              props.openingSimulatorId === simulator.simulatorId;
+            const busy = props.booting.includes(simulator.simulatorId);
             return (
               <li key={simulator.simulatorId}>
                 <button

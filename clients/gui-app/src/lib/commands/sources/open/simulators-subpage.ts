@@ -3,10 +3,7 @@ import type {
   SimulatorSummary,
 } from "@traycer/protocol/host/simulator/schemas";
 import { useOpenSimulatorTile } from "@/components/simulator-tile/use-open-simulator-tile";
-import {
-  useHostClientForHostId,
-  useHostDirectoryEntryForHostId,
-} from "@/hooks/host/use-host-client-for-host-id";
+import { useHostDirectoryEntryForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import { useTabSurfaceKey } from "@/hooks/host/use-surface-host-pin";
 import { openTileIntoTargetGroup } from "@/lib/commands/actions";
 import { openerActionLeaf } from "@/lib/commands/sources/open/open-leaf";
@@ -14,6 +11,7 @@ import { useActiveEpicSurfaceHostPin } from "@/lib/commands/sources/open/use-act
 import type { CommandContext, CommandItem } from "@/lib/commands/types";
 import {
   orderSimulators,
+  simulatorHasSession,
   type SimulatorSessionsState,
 } from "@/lib/simulator-view/simulator-sessions-coordinator";
 import { useSimulatorSessionsForHost } from "@/lib/simulator-view/use-simulator-sessions";
@@ -21,8 +19,8 @@ import { useSimulatorSessionsForHost } from "@/lib/simulator-view/use-simulator-
 /**
  * The "Simulators" opener category, beside Browser. It reads the same host
  * the Browser category does - the browsers surface pin - so the two agree
- * about which machine they list, and each row opens (booting when needed)
- * that simulator into the bound target group.
+ * about which machine they list, and each row places that simulator's tile
+ * into the bound target group; the tile connects, and boots when needed.
  */
 export function useSimulatorsOpenerItems(
   ctx: CommandContext,
@@ -39,13 +37,8 @@ export function useSimulatorsOpenerItems(
     hostId: targetHostId,
     epicId,
   });
-  const hostClient = useHostClientForHostId(targetHostId);
   const hostEntry = useHostDirectoryEntryForHostId(targetHostId);
-  const opener = useOpenSimulatorTile({
-    client: hostClient,
-    hostId: targetHostId,
-    epicId,
-  });
+  const opener = useOpenSimulatorTile({ hostId: targetHostId });
   const directoryLabel = hostEntry?.label.trim() ?? "";
   const hostLabel =
     directoryLabel.length > 0
@@ -68,9 +61,7 @@ export function useSimulatorsOpenerItems(
   const placeholder = placeholderItems(sessions, hostLabel);
   if (placeholder !== null || state === null) return placeholder ?? [];
   const rows = orderSimulators(state.simulators).map((simulator) => {
-    const busy =
-      state.booting.includes(simulator.simulatorId) ||
-      opener.openingSimulatorId === simulator.simulatorId;
+    const busy = state.booting.includes(simulator.simulatorId);
     const platformLabel = simulator.platform === "ios" ? "iOS" : "Android";
     return {
       ...openerActionLeaf({
@@ -86,7 +77,11 @@ export function useSimulatorsOpenerItems(
         ],
         run: () => openSimulator(simulator),
       }),
-      statusBadge: simulatorStatusBadge(simulator, busy),
+      statusBadge: simulatorStatusBadge(
+        simulator,
+        busy,
+        simulatorHasSession(state, simulator.simulatorId),
+      ),
       disabled: !opener.supported || busy,
     };
   });
@@ -107,10 +102,12 @@ export function useSimulatorsOpenerItems(
 function simulatorStatusBadge(
   simulator: SimulatorSummary,
   busy: boolean,
+  open: boolean,
 ): string {
   if (busy) return "Starting…";
   const platformLabel = simulator.platform === "ios" ? "iOS" : "Android";
   const base = `${platformLabel} ${simulator.version}`;
+  if (open) return `${base} · Open`;
   return simulator.booted ? `${base} · Running` : base;
 }
 

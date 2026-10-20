@@ -60,6 +60,19 @@ export function orderSimulators(
 }
 
 /**
+ * Whether the task holds a session on `simulatorId` - whoever opened it: a
+ * tile in this window, one in another, or an agent's `simulator_open`. The
+ * wire does not say which; the sessions list is epic-scoped, so any entry is
+ * this task's.
+ */
+export function simulatorHasSession(
+  state: SimulatorState,
+  simulatorId: string,
+): boolean {
+  return state.sessions.some((session) => session.simulatorId === simulatorId);
+}
+
+/**
  * Folds a `stateChanged` into the state it patches. Each patch field is
  * present only when it moved, so an absent one keeps the previous value.
  */

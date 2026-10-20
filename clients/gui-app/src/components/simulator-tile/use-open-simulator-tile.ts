@@ -1,29 +1,27 @@
 import { useCallback } from "react";
 import { toast } from "sonner";
-import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { SimulatorSummary } from "@traycer/protocol/host/simulator/schemas";
 import { useHostReachability } from "@/hooks/agent/use-host-reachability";
-import { useSimulatorOpenMutation } from "@/hooks/simulator/use-simulator-mutations";
-import type { HostRpcRegistry } from "@/lib/host";
+import { useHostSupportsMethod } from "@/hooks/host/use-host-supports-method";
 import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
+import { requestSimulatorConnect } from "@/lib/simulator-view/simulator-connect-requests";
 import { makeSimulatorTileRef } from "@/stores/epics/canvas/tile-schema/simulator-tile";
 import type { SimulatorTileRef } from "@/stores/epics/canvas/types";
 
 export interface OpenSimulatorTile {
   /**
-   * Opens `simulator` on the host (booting it when it is cold) and, once the
-   * host has answered, hands the caller a tile ref to place. The ref's
-   * `simulatorId` is the HOST's: an Android AVD name becomes a serial on
-   * boot, and the tile must point at what the stream will answer to.
+   * Hands the caller a tile ref for `simulator` to place, at once, with a
+   * one-shot connect request filed for that tile. The tile itself attaches
+   * to the session the task already holds or sends the `simulator.open`
+   * (booting a cold simulator) - a boot can outlast the RPC frame timeout,
+   * so no surface waits on it before showing anything.
    */
   readonly open: (
     simulator: SimulatorSummary,
     place: (ref: SimulatorTileRef) => void,
   ) => void;
-  /** Whether the host offers `simulator.open` at all. */
+  /** Whether the host offers `simulator.open`, which the tile needs to connect. */
   readonly supported: boolean;
-  /** The simulator an open is in flight for, so its row alone spins. */
-  readonly openingSimulatorId: string | null;
 }
 
 /**
@@ -31,16 +29,17 @@ export interface OpenSimulatorTile {
  * the tile's own inventory - with the same host-reachability check at open
  * that browser tiles make: a host the directory cannot reach is refused with
  * a toast rather than opening a tile that can only show "unreachable".
+ *
+ * The ref carries the simulator id the HOST lists today. An Android AVD takes
+ * a serial on boot; the tile's own connect path opens the serial's tile
+ * beside this one when that happens.
  */
 export function useOpenSimulatorTile(args: {
-  readonly client: HostClient<HostRpcRegistry> | null;
   readonly hostId: string | null;
-  readonly epicId: string;
 }): OpenSimulatorTile {
-  const { client, hostId, epicId } = args;
+  const { hostId } = args;
   const reachability = useHostReachability(hostId ?? UNKNOWN_HOST_PLACEHOLDER);
-  const { mutation, supported } = useSimulatorOpenMutation(client, hostId);
-  const { mutate, isPending, variables } = mutation;
+  const supported = useHostSupportsMethod(hostId, "simulator.open");
   const open = useCallback(
     (simulator: SimulatorSummary, place: (ref: SimulatorTileRef) => void) => {
       if (hostId === null) return;
@@ -48,32 +47,18 @@ export function useOpenSimulatorTile(args: {
         toast.error(`${reachability.hostLabel} is unreachable right now.`);
         return;
       }
-      mutate(
-        {
-          epicId,
-          simulatorId: simulator.simulatorId,
-          platform: simulator.platform,
-          boot: true,
-        },
-        {
-          onSuccess: (response) => {
-            place(
-              makeSimulatorTileRef({
-                hostId,
-                simulatorId: response.simulator.simulatorId,
-                platform: response.simulator.platform,
-                name: response.simulator.name,
-              }),
-            );
-          },
-        },
-      );
+      const ref = makeSimulatorTileRef({
+        hostId,
+        simulatorId: simulator.simulatorId,
+        platform: simulator.platform,
+        name: simulator.name,
+      });
+      // Filed before the tile exists: the gate reads it on mount, or at once
+      // when the row's tile is already open and showing its inventory.
+      requestSimulatorConnect(ref.id);
+      place(ref);
     },
-    [epicId, hostId, mutate, reachability.hostLabel, reachability.status],
+    [hostId, reachability.hostLabel, reachability.status],
   );
-  return {
-    open,
-    supported,
-    openingSimulatorId: isPending ? variables.simulatorId : null,
-  };
+  return { open, supported };
 }

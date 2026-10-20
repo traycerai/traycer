@@ -1,33 +1,25 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import type {
-  SimulatorState,
-  SimulatorSummary,
-} from "@traycer/protocol/host/simulator/schemas";
+import type { SimulatorState } from "@traycer/protocol/host/simulator/schemas";
 import type { SimulatorSessionsState } from "@/lib/simulator-view/simulator-sessions-coordinator";
-import type {
-  EpicCanvasTileRef,
-  SimulatorTileRef,
-} from "@/stores/epics/canvas/types";
-import { makeSimulatorTileRef } from "@/stores/epics/canvas/tile-schema/simulator-tile";
+import type { EpicCanvasTileRef } from "@/stores/epics/canvas/types";
 
 /**
  * The Simulators section under the phone switcher's browser rows: booted
- * simulators first, the sheet staying up until the host has answered the open,
- * a row that is booting not acted on, and the one control that turns
- * simulators on for a host that has them off.
+ * simulators first, a tap placing the tile and closing the sheet at once, a
+ * row that is booting not acted on, a row the task holds a session on marked
+ * and ended from its action, and the one control that turns simulators on for
+ * a host that has them off.
  */
 
 const HOST = "host-1";
 const EPIC = "epic-1";
 const TAB = "tab-1";
 
-type PlaceTile = (ref: SimulatorTileRef) => void;
-
 const fakes = vi.hoisted(() => ({
   sessions: null as SimulatorSessionsState | null,
-  open: vi.fn<(simulator: SimulatorSummary, place: PlaceTile) => void>(),
   configSet: vi.fn(),
+  close: vi.fn(),
   activated: [] as EpicCanvasTileRef[],
 }));
 
@@ -37,12 +29,11 @@ vi.mock("@/lib/simulator-view/use-simulator-sessions", () => ({
 vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
   useHostClientForHostId: () => null,
 }));
-vi.mock("@/components/simulator-tile/use-open-simulator-tile", () => ({
-  useOpenSimulatorTile: () => ({
-    open: fakes.open,
-    supported: true,
-    openingSimulatorId: null,
-  }),
+vi.mock("@/hooks/agent/use-host-reachability", () => ({
+  useHostReachability: () => ({ status: "reachable", hostLabel: "Studio Mac" }),
+}));
+vi.mock("@/hooks/host/use-host-supports-method", () => ({
+  useHostSupportsMethod: () => true,
 }));
 vi.mock("@/hooks/simulator/use-simulator-mutations", () => ({
   useSimulatorConfigQuery: () => ({
@@ -50,6 +41,10 @@ vi.mock("@/hooks/simulator/use-simulator-mutations", () => ({
   }),
   useSimulatorConfigSetMutation: () => ({
     mutation: { mutate: fakes.configSet, isPending: false },
+    supported: true,
+  }),
+  useSimulatorCloseMutation: () => ({
+    mutation: { mutate: fakes.close, isPending: false },
     supported: true,
   }),
 }));
@@ -138,7 +133,7 @@ afterEach(() => {
 });
 
 describe("SwitcherSimulatorsSection", () => {
-  it("lists booted simulators first and keeps the sheet up until the host has answered the open", () => {
+  it("lists booted simulators first and places a cold one's tile at once, closing the sheet", () => {
     const onClose = vi.fn();
     renderSection(onClose);
     const rows = screen
@@ -153,22 +148,16 @@ describe("SwitcherSimulatorsSection", () => {
     expect(rows[1]).not.toContain("Running");
 
     fireEvent.click(screen.getByTestId("switcher-simulator-row-udid-cold"));
-    expect(fakes.open).toHaveBeenCalledTimes(1);
-    expect(fakes.open.mock.calls[0][0]).toMatchObject({
-      simulatorId: "udid-cold",
-    });
-    expect(fakes.activated).toEqual([]);
-    expect(onClose).not.toHaveBeenCalled();
-
-    // The host answered with the id the stream will answer to.
-    const ref = makeSimulatorTileRef({
-      hostId: HOST,
-      simulatorId: "udid-cold",
-      platform: "ios",
-      name: "iPhone 15",
-    });
-    fakes.open.mock.calls[0][1](ref);
-    expect(fakes.activated).toEqual([ref]);
+    // Nothing waits on `simulator.open`: the tile boots the simulator itself.
+    expect(fakes.activated).toEqual([
+      expect.objectContaining({
+        type: "simulator",
+        hostId: HOST,
+        simulatorId: "udid-cold",
+        platform: "ios",
+        name: "iPhone 15",
+      }),
+    ]);
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
@@ -184,7 +173,40 @@ describe("SwitcherSimulatorsSection", () => {
     ).toBeNull();
 
     fireEvent.click(cold);
-    expect(fakes.open).not.toHaveBeenCalled();
+    expect(fakes.activated).toEqual([]);
+  });
+
+  it("marks a simulator the task holds a session on and ends it from the row's action", () => {
+    fakes.sessions = sessions(
+      {
+        ...STATE,
+        sessions: [
+          {
+            epicId: EPIC,
+            ownerUserId: "user-1",
+            hostId: HOST,
+            simulatorId: "udid-hot",
+            platform: "ios",
+            openedAt: "2026-10-19T00:00:00.000Z",
+          },
+        ],
+      },
+      "live",
+    );
+    renderSection(vi.fn());
+    expect(
+      screen.getByTestId("switcher-simulator-row-udid-hot").textContent,
+    ).toContain("Open");
+    expect(
+      screen.queryByTestId("switcher-simulator-close-udid-cold"),
+    ).toBeNull();
+    fireEvent.click(screen.getByTestId("switcher-simulator-close-udid-hot"));
+    expect(fakes.close).toHaveBeenCalledWith({
+      epicId: EPIC,
+      simulatorId: "udid-hot",
+      shutdown: false,
+    });
+    expect(fakes.activated).toEqual([]);
   });
 
   it("offers Turn on while simulators are off, writing both switches", () => {

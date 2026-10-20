@@ -1,5 +1,5 @@
 import { useCallback, useMemo, type ReactNode } from "react";
-import { Smartphone } from "lucide-react";
+import { Smartphone, X } from "lucide-react";
 import type {
   SimulatorState,
   SimulatorSummary,
@@ -12,10 +12,14 @@ import { useSwitcherActivate } from "@/components/epic-canvas/mobile/use-switche
 import { useOpenSimulatorTile } from "@/components/simulator-tile/use-open-simulator-tile";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import {
+  useSimulatorCloseMutation,
   useSimulatorConfigQuery,
   useSimulatorConfigSetMutation,
 } from "@/hooks/simulator/use-simulator-mutations";
-import { orderSimulators } from "@/lib/simulator-view/simulator-sessions-coordinator";
+import {
+  orderSimulators,
+  simulatorHasSession,
+} from "@/lib/simulator-view/simulator-sessions-coordinator";
 import { useSimulatorSessionsForHost } from "@/lib/simulator-view/use-simulator-sessions";
 import { useIsActiveTile } from "@/stores/epics/canvas/store";
 import { simulatorTileId } from "@/stores/epics/canvas/tile-schema/simulator-tile";
@@ -26,9 +30,10 @@ import { simulatorTileId } from "@/stores/epics/canvas/tile-schema/simulator-til
  * same host (the browsers surface pin), the same order, the same open path,
  * on 44px rows.
  *
- * A tap keeps the sheet up until the host has answered the open: the tile ref
- * carries the HOST's simulator id (an Android AVD becomes a serial on boot),
- * and an unmounted sheet would never receive it. The row spins meanwhile.
+ * A tap places the tile and closes the sheet at once; the tile connects (and
+ * boots, when asked) on its own, so a slow boot never holds the sheet. A row
+ * the task holds a session on is marked "Open" and attaches to it; the row's
+ * action ends that session, as on desktop.
  */
 export function SwitcherSimulatorsSection(props: {
   readonly epicId: string;
@@ -38,9 +43,7 @@ export function SwitcherSimulatorsSection(props: {
 }) {
   const { epicId, tabId, hostId, onClose } = props;
   const sessions = useSimulatorSessionsForHost({ hostId, epicId });
-  const hostClient = useHostClientForHostId(hostId);
-  const opener = useOpenSimulatorTile({ client: hostClient, hostId, epicId });
-  const { open, supported, openingSimulatorId } = opener;
+  const { open, supported } = useOpenSimulatorTile({ hostId });
   const activate = useSwitcherActivate(tabId, onClose);
   const openSimulator = useCallback(
     (simulator: SimulatorSummary) => {
@@ -70,11 +73,11 @@ export function SwitcherSimulatorsSection(props: {
         Simulators
       </h3>
       <SwitcherSimulatorsBody
+        epicId={epicId}
         hostId={hostId}
         tabId={tabId}
         state={state}
         simulators={simulators}
-        openingSimulatorId={openingSimulatorId}
         onOpen={supported ? openSimulator : null}
       />
     </section>
@@ -82,11 +85,11 @@ export function SwitcherSimulatorsSection(props: {
 }
 
 function SwitcherSimulatorsBody(props: {
+  readonly epicId: string;
   readonly hostId: string;
   readonly tabId: string;
   readonly state: SimulatorState;
   readonly simulators: readonly SimulatorSummary[];
-  readonly openingSimulatorId: string | null;
   readonly onOpen: ((simulator: SimulatorSummary) => void) | null;
 }) {
   const { state } = props;
@@ -136,13 +139,12 @@ function SwitcherSimulatorsBody(props: {
       {props.simulators.map((simulator) => (
         <SwitcherSimulatorRow
           key={simulator.simulatorId}
+          epicId={props.epicId}
           hostId={props.hostId}
           tabId={props.tabId}
           simulator={simulator}
-          busy={
-            state.booting.includes(simulator.simulatorId) ||
-            props.openingSimulatorId === simulator.simulatorId
-          }
+          busy={state.booting.includes(simulator.simulatorId)}
+          open={simulatorHasSession(state, simulator.simulatorId)}
           onOpen={props.onOpen}
         />
       ))}
@@ -151,22 +153,22 @@ function SwitcherSimulatorsBody(props: {
 }
 
 function SwitcherSimulatorRow(props: {
+  readonly epicId: string;
   readonly hostId: string;
   readonly tabId: string;
   readonly simulator: SimulatorSummary;
   readonly busy: boolean;
+  /** The task holds a session on this simulator. */
+  readonly open: boolean;
   readonly onOpen: ((simulator: SimulatorSummary) => void) | null;
 }) {
-  const { simulator, busy, onOpen } = props;
+  const { epicId, hostId, simulator, busy, open, onOpen } = props;
   const isActive = useIsActiveTile(
     props.tabId,
-    simulatorTileId({
-      hostId: props.hostId,
-      simulatorId: simulator.simulatorId,
-    }),
-    props.hostId,
+    simulatorTileId({ hostId, simulatorId: simulator.simulatorId }),
+    hostId,
   );
-  // The row has no disabled state, so a tap while the open is in flight (or on
+  // The row has no disabled state, so a tap while the simulator boots (or on
   // a host without `simulator.open`) is simply not acted on.
   const onSelect = useCallback(() => {
     if (busy || onOpen === null) return;
@@ -178,18 +180,75 @@ function SwitcherSimulatorRow(props: {
       icon={<Smartphone className="size-4" aria-hidden />}
       label={simulator.name}
       secondaryLabel={`${platformLabel} ${simulator.version}`}
-      badge={<SwitcherSimulatorBadge busy={busy} booted={simulator.booted} />}
+      badge={
+        <SwitcherSimulatorBadge
+          busy={busy}
+          booted={simulator.booted}
+          open={open}
+        />
+      }
       active={isActive}
       onSelect={onSelect}
-      actions={null}
+      actions={
+        open ? (
+          <SwitcherSimulatorCloseAction
+            epicId={epicId}
+            hostId={hostId}
+            simulator={simulator}
+          />
+        ) : null
+      }
       selectTestId={`switcher-simulator-row-${simulator.simulatorId}`}
     />
+  );
+}
+
+/** Ends the task's session on this simulator; the desktop row's X. */
+function SwitcherSimulatorCloseAction(props: {
+  readonly epicId: string;
+  readonly hostId: string;
+  readonly simulator: SimulatorSummary;
+}) {
+  const { epicId, hostId, simulator } = props;
+  const hostClient = useHostClientForHostId(hostId);
+  const close = useSimulatorCloseMutation(
+    hostClient,
+    hostId,
+    simulator.simulatorId,
+  );
+  const { mutate, isPending } = close.mutation;
+  if (!close.supported) return null;
+  return (
+    <Button
+      type="button"
+      variant="ghost"
+      size="icon-sm"
+      disabled={isPending}
+      aria-label={`Close ${simulator.name} in this task`}
+      data-testid={`switcher-simulator-close-${simulator.simulatorId}`}
+      className="shrink-0"
+      onClick={() =>
+        mutate({ epicId, simulatorId: simulator.simulatorId, shutdown: false })
+      }
+    >
+      {isPending ? (
+        <AgentSpinningDots
+          className={undefined}
+          testId={undefined}
+          variant={undefined}
+          tone="muted"
+        />
+      ) : (
+        <X className="size-4" aria-hidden />
+      )}
+    </Button>
   );
 }
 
 function SwitcherSimulatorBadge(props: {
   readonly busy: boolean;
   readonly booted: boolean;
+  readonly open: boolean;
 }) {
   if (props.busy) {
     return (
@@ -199,6 +258,13 @@ function SwitcherSimulatorBadge(props: {
         variant={undefined}
         tone="muted"
       />
+    );
+  }
+  if (props.open) {
+    return (
+      <Badge variant="info" size="xs" className="shrink-0">
+        Open
+      </Badge>
     );
   }
   if (!props.booted) return null;

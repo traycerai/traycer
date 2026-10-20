@@ -6,8 +6,9 @@ import type { SimulatorSessionsState } from "@/lib/simulator-view/simulator-sess
 
 /**
  * The Simulators group under the browser rows: booted simulators first, a
- * row click opens (booting when needed) the tile, and a host with
- * simulators off gets the one control that turns them on.
+ * row click places the tile at once (the tile connects and boots on its own),
+ * a row the task holds a session on is marked and ends that session from the
+ * row, and a host with simulators off gets the one control that turns them on.
  */
 
 const HOST = "host-1";
@@ -15,9 +16,9 @@ const EPIC = "epic-1";
 
 const fakes = vi.hoisted(() => ({
   sessions: null as SimulatorSessionsState | null,
-  open: vi.fn(),
   openTile: vi.fn(),
   configSet: vi.fn(),
+  close: vi.fn(),
 }));
 
 vi.mock("@/lib/simulator-view/use-simulator-sessions", () => ({
@@ -29,12 +30,11 @@ vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
 vi.mock("@/hooks/epic/use-epic-tile-navigation", () => ({
   useEpicTileNavigation: () => ({ openTile: fakes.openTile }),
 }));
-vi.mock("@/components/simulator-tile/use-open-simulator-tile", () => ({
-  useOpenSimulatorTile: () => ({
-    open: fakes.open,
-    supported: true,
-    openingSimulatorId: null,
-  }),
+vi.mock("@/hooks/agent/use-host-reachability", () => ({
+  useHostReachability: () => ({ status: "reachable", hostLabel: "Studio Mac" }),
+}));
+vi.mock("@/hooks/host/use-host-supports-method", () => ({
+  useHostSupportsMethod: () => true,
 }));
 vi.mock("@/hooks/simulator/use-simulator-mutations", () => ({
   useSimulatorConfigQuery: () => ({
@@ -42,6 +42,10 @@ vi.mock("@/hooks/simulator/use-simulator-mutations", () => ({
   }),
   useSimulatorConfigSetMutation: () => ({
     mutation: { mutate: fakes.configSet, isPending: false },
+    supported: true,
+  }),
+  useSimulatorCloseMutation: () => ({
+    mutation: { mutate: fakes.close, isPending: false },
     supported: true,
   }),
 }));
@@ -54,6 +58,10 @@ vi.mock("@/stores/epics/sidebar-node-reveal-store", () => ({
 }));
 
 import { SimulatorsSidebarGroup } from "@/components/epic-canvas/sidebar/epic-simulator-sidebar";
+import {
+  pendingSimulatorConnectRequest,
+  resetSimulatorConnectRequestsForTests,
+} from "@/lib/simulator-view/simulator-connect-requests";
 
 const STATE: SimulatorState = {
   revision: 1,
@@ -114,11 +122,12 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  resetSimulatorConnectRequestsForTests();
   vi.clearAllMocks();
 });
 
 describe("SimulatorsSidebarGroup", () => {
-  it("lists the host's simulators, booted first, and opens the one clicked", () => {
+  it("lists the host's simulators, booted first, and places a cold one's tile at once", () => {
     renderGroup();
     const rows = screen.getAllByRole("listitem");
     expect(rows.map((row) => row.textContent)).toEqual([
@@ -127,10 +136,74 @@ describe("SimulatorsSidebarGroup", () => {
     ]);
     expect(rows[0].textContent).toContain("Running");
     fireEvent.click(screen.getByTestId("epic-simulator-sidebar-row-udid-cold"));
-    expect(fakes.open).toHaveBeenCalledTimes(1);
-    expect(fakes.open.mock.calls[0][0]).toMatchObject({
-      simulatorId: "udid-cold",
+    // Synchronous: no `simulator.open` answer is awaited, so a boot that
+    // outlasts the RPC timeout still shows the tile.
+    expect(fakes.openTile).toHaveBeenCalledTimes(1);
+    expect(fakes.openTile.mock.calls[0][0]).toMatchObject({
+      node: {
+        type: "simulator",
+        hostId: HOST,
+        simulatorId: "udid-cold",
+        platform: "ios",
+        name: "iPhone 15",
+      },
+      target: { tabId: "tab-1" },
+      gesture: "explicit",
     });
+    // The click said "boot this": the tile's gate finds the request and sends
+    // the one `simulator.open` itself.
+    expect(
+      pendingSimulatorConnectRequest(`simulator:${HOST}:udid-cold`),
+    ).not.toBeNull();
+    expect(screen.queryByTestId(/^epic-simulator-sidebar-close-/)).toBeNull();
+  });
+
+  it("marks a simulator the task holds a session on, attaches to it on click, and ends it from the row", () => {
+    fakes.sessions = sessions(
+      {
+        ...STATE,
+        sessions: [
+          {
+            epicId: EPIC,
+            ownerUserId: "user-1",
+            hostId: HOST,
+            simulatorId: "udid-hot",
+            platform: "ios",
+            openedAt: "2026-10-19T00:00:00.000Z",
+          },
+        ],
+      },
+      "live",
+    );
+    renderGroup();
+    const row = screen.getByTestId("epic-simulator-sidebar-row-udid-hot");
+    expect(row.textContent).toContain("Open");
+    expect(row.textContent).not.toContain("Running");
+    expect(row.getAttribute("aria-label")).toContain("open in this task");
+    expect(
+      screen.getByTestId("epic-simulator-sidebar-row-udid-cold").textContent,
+    ).not.toContain("Open");
+
+    // The tile placed for the row is the same tile id the session's tile has,
+    // so it attaches to the existing session instead of opening a second one.
+    fireEvent.click(row);
+    expect(fakes.openTile).toHaveBeenCalledTimes(1);
+    expect(fakes.openTile.mock.calls[0][0]).toMatchObject({
+      node: { id: `simulator:${HOST}:udid-hot`, simulatorId: "udid-hot" },
+      dedupe: true,
+    });
+
+    fireEvent.click(
+      screen.getByTestId("epic-simulator-sidebar-close-udid-hot"),
+    );
+    expect(fakes.close).toHaveBeenCalledWith({
+      epicId: EPIC,
+      simulatorId: "udid-hot",
+      shutdown: false,
+    });
+    expect(
+      screen.queryByTestId("epic-simulator-sidebar-close-udid-cold"),
+    ).toBeNull();
   });
 
   it("offers Turn on while simulators are off, writing both switches", () => {

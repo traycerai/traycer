@@ -1,5 +1,5 @@
 import { useCallback, useLayoutEffect, useMemo, useRef } from "react";
-import { Smartphone } from "lucide-react";
+import { Smartphone, X } from "lucide-react";
 import type {
   SimulatorState,
   SimulatorSummary,
@@ -20,11 +20,15 @@ import { useOpenSimulatorTile } from "@/components/simulator-tile/use-open-simul
 import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import {
+  useSimulatorCloseMutation,
   useSimulatorConfigQuery,
   useSimulatorConfigSetMutation,
 } from "@/hooks/simulator/use-simulator-mutations";
 import { tileIntent } from "@/lib/canvas/tile-open/intent";
-import { orderSimulators } from "@/lib/simulator-view/simulator-sessions-coordinator";
+import {
+  orderSimulators,
+  simulatorHasSession,
+} from "@/lib/simulator-view/simulator-sessions-coordinator";
 import { useSimulatorSessionsForHost } from "@/lib/simulator-view/use-simulator-sessions";
 import { useIsActiveTile } from "@/stores/epics/canvas/store";
 import { simulatorTileId } from "@/stores/epics/canvas/tile-schema/simulator-tile";
@@ -36,13 +40,21 @@ import { cn } from "@/lib/utils";
 
 /**
  * The Simulators group of the Browsers panel: the pinned host's simulators,
- * booted ones first, each a row that opens (booting when needed) its tile.
+ * booted ones first, each a row that places its tile at once (the tile does
+ * the connecting, and the booting when needed).
  *
  * It follows the panel's host pin, so what it lists is the same machine the
  * browser rows above it are on. A host that cannot run simulators gets no
  * group at all; one with them turned off gets the one line that can change
  * that. The explanations live in the tile and in Settings - this panel is
  * for what can be opened.
+ *
+ * A simulator the task holds a session on - opened by an agent's
+ * `simulator_open`, by another window, or before a reload - is marked "Open",
+ * the way the browser rows mark a tab an agent drives, and its row attaches a
+ * tile to that session rather than opening a second one. Like a browser tab,
+ * such a session is ended from the row, not by closing a tile that only
+ * watched it.
  */
 export function SimulatorsSidebarGroup(props: {
   readonly epicId: string;
@@ -51,10 +63,8 @@ export function SimulatorsSidebarGroup(props: {
 }) {
   const { epicId, tabId, hostId } = props;
   const sessions = useSimulatorSessionsForHost({ hostId, epicId });
-  const hostClient = useHostClientForHostId(hostId);
   const { openTile } = useEpicTileNavigation();
-  const opener = useOpenSimulatorTile({ client: hostClient, hostId, epicId });
-  const { open, supported, openingSimulatorId } = opener;
+  const { open, supported } = useOpenSimulatorTile({ hostId });
 
   const openSimulator = useCallback(
     (simulator: SimulatorSummary) => {
@@ -83,11 +93,11 @@ export function SimulatorsSidebarGroup(props: {
       <SidebarGroup className="shrink-0" data-testid="epic-simulators-group">
         <SidebarGroupLabel>Simulators</SidebarGroupLabel>
         <SimulatorsGroupBody
+          epicId={epicId}
           hostId={hostId}
           tabId={tabId}
           state={state}
           simulators={simulators}
-          openingSimulatorId={openingSimulatorId}
           onOpen={supported ? openSimulator : null}
         />
       </SidebarGroup>
@@ -96,11 +106,11 @@ export function SimulatorsSidebarGroup(props: {
 }
 
 function SimulatorsGroupBody(props: {
+  readonly epicId: string;
   readonly hostId: string;
   readonly tabId: string;
   readonly state: SimulatorState;
   readonly simulators: readonly SimulatorSummary[];
-  readonly openingSimulatorId: string | null;
   readonly onOpen: ((simulator: SimulatorSummary) => void) | null;
 }) {
   const { state, simulators, tabId } = props;
@@ -159,13 +169,12 @@ function SimulatorsGroupBody(props: {
       {props.simulators.map((simulator) => (
         <SimulatorRow
           key={simulator.simulatorId}
+          epicId={props.epicId}
           hostId={props.hostId}
           viewTabId={props.tabId}
           simulator={simulator}
-          busy={
-            state.booting.includes(simulator.simulatorId) ||
-            props.openingSimulatorId === simulator.simulatorId
-          }
+          busy={state.booting.includes(simulator.simulatorId)}
+          open={simulatorHasSession(state, simulator.simulatorId)}
           onOpen={props.onOpen}
         />
       ))}
@@ -228,53 +237,114 @@ function SimulatorsOffRow(props: { readonly hostId: string }) {
 }
 
 function SimulatorRow(props: {
+  readonly epicId: string;
   readonly hostId: string;
   readonly viewTabId: string;
   readonly simulator: SimulatorSummary;
   readonly busy: boolean;
+  /** The task holds a session on this simulator. */
+  readonly open: boolean;
   readonly onOpen: ((simulator: SimulatorSummary) => void) | null;
 }) {
-  const { simulator } = props;
+  const { epicId, hostId, simulator, open } = props;
   const tileId = simulatorTileId({
-    hostId: props.hostId,
+    hostId,
     simulatorId: simulator.simulatorId,
   });
-  const isActive = useIsActiveTile(props.viewTabId, tileId, props.hostId);
+  const isActive = useIsActiveTile(props.viewTabId, tileId, hostId);
+  const hostClient = useHostClientForHostId(hostId);
+  const close = useSimulatorCloseMutation(
+    hostClient,
+    hostId,
+    simulator.simulatorId,
+  );
+  const { mutate: closeMutate, isPending: closing } = close.mutation;
+  const closeSession = useCallback(() => {
+    closeMutate({
+      epicId,
+      simulatorId: simulator.simulatorId,
+      shutdown: false,
+    });
+  }, [closeMutate, epicId, simulator.simulatorId]);
   const platformLabel = simulator.platform === "ios" ? "iOS" : "Android";
+  const stateLabel = simulatorRowStateLabel(open, simulator.booted);
   return (
     <li>
-      <button
-        type="button"
+      <div
         data-active={isActive}
         data-sidebar-node-id={tileId}
-        data-testid={`epic-simulator-sidebar-row-${simulator.simulatorId}`}
-        aria-label={`${simulator.name}, ${platformLabel} ${simulator.version}${
-          simulator.booted ? ", running" : ""
-        }`}
-        disabled={props.onOpen === null || props.busy}
         className={cn(
-          "flex h-8 w-full min-w-0 cursor-pointer items-center gap-2 rounded-md px-2 text-left text-ui-sm outline-none transition-colors duration-100 focus-visible:ring-2 focus-visible:ring-ring motion-reduce:transition-none disabled:cursor-default",
+          "group/simulator-row relative grid h-8 min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center rounded-md transition-colors duration-100 motion-reduce:transition-none",
           isActive
             ? "bg-accent text-accent-foreground"
             : "text-foreground/75 hover:bg-accent/70 hover:text-accent-foreground",
           SIDEBAR_REVEAL_HIGHLIGHT_CLASS,
         )}
-        onClick={() => props.onOpen?.(simulator)}
       >
-        <Smartphone className="size-4 shrink-0" aria-hidden />
-        <span className="min-w-0 flex-1 truncate">{simulator.name}</span>
-        <span className="shrink-0 text-ui-xs text-muted-foreground">
-          {platformLabel} {simulator.version}
-        </span>
-        <SimulatorRowTrailing busy={props.busy} booted={simulator.booted} />
-      </button>
+        <button
+          type="button"
+          data-testid={`epic-simulator-sidebar-row-${simulator.simulatorId}`}
+          aria-label={`${simulator.name}, ${platformLabel} ${simulator.version}${stateLabel}`}
+          disabled={props.onOpen === null || props.busy}
+          className="flex h-8 min-w-0 cursor-pointer items-center gap-2 rounded-md px-2 text-left text-ui-sm outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-default"
+          onClick={() => props.onOpen?.(simulator)}
+        >
+          <Smartphone className="size-4 shrink-0" aria-hidden />
+          <span className="min-w-0 flex-1 truncate">{simulator.name}</span>
+          <span className="shrink-0 text-ui-xs text-muted-foreground">
+            {platformLabel} {simulator.version}
+          </span>
+          <SimulatorRowTrailing
+            busy={props.busy}
+            booted={simulator.booted}
+            open={open}
+          />
+        </button>
+        {open && close.supported ? (
+          <Button
+            type="button"
+            variant="muted-destructive"
+            size="icon-xs"
+            disabled={closing}
+            aria-label={`Close ${simulator.name} in this task`}
+            data-testid={`epic-simulator-sidebar-close-${simulator.simulatorId}`}
+            className={cn(
+              "size-6 cursor-pointer justify-self-center opacity-0 transition-opacity duration-100 pointer-events-none motion-reduce:transition-none",
+              "group-focus-within/simulator-row:pointer-events-auto group-focus-within/simulator-row:opacity-100",
+              "group-hover/simulator-row:pointer-events-auto group-hover/simulator-row:opacity-100",
+              "group-data-[active=true]/simulator-row:pointer-events-auto group-data-[active=true]/simulator-row:opacity-100",
+              "[@media(hover:none)]:pointer-events-auto [@media(hover:none)]:opacity-100",
+              closing && "pointer-events-auto opacity-100",
+            )}
+            onClick={closeSession}
+          >
+            {closing ? (
+              <AgentSpinningDots
+                className={undefined}
+                testId={undefined}
+                variant={undefined}
+                tone="muted"
+              />
+            ) : (
+              <X className="size-3.5" aria-hidden />
+            )}
+          </Button>
+        ) : null}
+      </div>
     </li>
   );
+}
+
+function simulatorRowStateLabel(open: boolean, booted: boolean): string {
+  if (open) return ", open in this task";
+  if (booted) return ", running";
+  return "";
 }
 
 function SimulatorRowTrailing(props: {
   readonly busy: boolean;
   readonly booted: boolean;
+  readonly open: boolean;
 }) {
   if (props.busy) {
     return (
@@ -284,6 +354,13 @@ function SimulatorRowTrailing(props: {
         variant={undefined}
         tone="muted"
       />
+    );
+  }
+  if (props.open) {
+    return (
+      <Badge variant="info" size="xs" className="shrink-0">
+        Open
+      </Badge>
     );
   }
   if (!props.booted) return null;

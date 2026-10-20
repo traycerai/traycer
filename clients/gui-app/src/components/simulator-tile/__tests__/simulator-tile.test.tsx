@@ -7,7 +7,14 @@ import type {
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { SimulatorSessionsState } from "@/lib/simulator-view/simulator-sessions-coordinator";
 import type { SimulatorStreamState } from "@/lib/simulator-view/simulator-stream-controller";
-import { makeSimulatorTileRef } from "@/stores/epics/canvas/tile-schema/simulator-tile";
+import {
+  requestSimulatorConnect,
+  resetSimulatorConnectRequestsForTests,
+} from "@/lib/simulator-view/simulator-connect-requests";
+import {
+  makeSimulatorTileRef,
+  simulatorTileId,
+} from "@/stores/epics/canvas/tile-schema/simulator-tile";
 
 /**
  * The tile's states, one per host condition: the host that cannot run
@@ -51,6 +58,9 @@ vi.mock("@/hooks/agent/use-host-reachability", () => ({
     status: fakes.reachability,
     hostLabel: "Studio Mac",
   }),
+}));
+vi.mock("@/hooks/host/use-host-supports-method", () => ({
+  useHostSupportsMethod: () => true,
 }));
 vi.mock("@/lib/simulator-view/use-simulator-sessions", () => ({
   useSimulatorSessionsForHost: () => fakes.sessions,
@@ -190,14 +200,38 @@ function withPack(packState: SimulatorPackState): SimulatorState {
   return { ...READY_STATE, packState };
 }
 
-function renderTile(): void {
+const SESSION = {
+  epicId: EPIC,
+  ownerUserId: "user-1",
+  hostId: HOST,
+  simulatorId: UDID,
+  platform: "ios",
+  openedAt: "2026-10-18T00:00:00.000Z",
+} as const;
+
+/** The tile with its own simulator booted, as the host lists it. */
+function withTargetBooted(state: SimulatorState): SimulatorState {
+  return {
+    ...state,
+    simulators: state.simulators.map((simulator) =>
+      simulator.simulatorId === UDID
+        ? { ...simulator, booted: true }
+        : simulator,
+    ),
+  };
+}
+
+/** Re-renders with whatever `fakes.sessions` now says, as the stream would. */
+function renderTile(): () => void {
   const node = makeSimulatorTileRef({
     hostId: HOST,
     simulatorId: UDID,
     platform: "ios",
     name: "iPhone 16",
   });
-  render(
+  // A fresh element each time: React skips a subtree handed the very same
+  // element object, and the fake hook is only re-read on a real render.
+  const tile = () => (
     <TooltipProvider>
       <SimulatorTile
         node={node}
@@ -206,8 +240,10 @@ function renderTile(): void {
         epicId={EPIC}
         isActive
       />
-    </TooltipProvider>,
+    </TooltipProvider>
   );
+  const { rerender } = render(tile());
+  return () => rerender(tile());
 }
 
 beforeEach(() => {
@@ -218,6 +254,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  resetSimulatorConnectRequestsForTests();
   vi.clearAllMocks();
 });
 
@@ -310,7 +347,44 @@ describe("SimulatorTile", () => {
     expect(fakes.refresh).toHaveBeenCalledTimes(1);
   });
 
-  it("offers to boot a cold simulator, and opens another row as its own tile", () => {
+  it("boots a cold simulator once when an explicit open placed the tile, and not when the tile is merely shown", () => {
+    // A restored (or re-rendered) cold tile waits for the person.
+    const rerender = renderTile();
+    expect(fakes.open).not.toHaveBeenCalled();
+    rerender();
+    expect(fakes.open).not.toHaveBeenCalled();
+    cleanup();
+
+    // The row click filed its request before the tile mounted.
+    requestSimulatorConnect(
+      simulatorTileId({ hostId: HOST, simulatorId: UDID }),
+    );
+    const rerenderRequested = renderTile();
+    expect(fakes.open).toHaveBeenCalledTimes(1);
+    expect(fakes.open).toHaveBeenCalledWith(
+      { epicId: EPIC, simulatorId: UDID, platform: "ios", boot: true },
+      expect.anything(),
+    );
+    rerenderRequested();
+    expect(fakes.open).toHaveBeenCalledTimes(1);
+  });
+
+  it("drops a request for a simulator this tile already shows live", () => {
+    fakes.sessions = sessions({
+      state: { ...withTargetBooted(READY_STATE), sessions: [SESSION] },
+    });
+    requestSimulatorConnect(
+      simulatorTileId({ hostId: HOST, simulatorId: UDID }),
+    );
+    const rerender = renderTile();
+    expect(fakes.open).not.toHaveBeenCalled();
+    // The session ends later: the stale request must not boot anything.
+    fakes.sessions = sessions({ state: withTargetBooted(READY_STATE) });
+    rerender();
+    expect(fakes.open).not.toHaveBeenCalled();
+  });
+
+  it("offers to boot a cold simulator, and places another row as its own tile without booting it", () => {
     renderTile();
     expect(screen.getByTestId("simulator-inventory").textContent).toContain(
       "Powered off",
@@ -320,22 +394,20 @@ describe("SimulatorTile", () => {
       { epicId: EPIC, simulatorId: UDID, platform: "ios", boot: true },
       expect.anything(),
     );
-    expect(
-      screen.getByTestId("simulator-inventory-row-udid-2").textContent,
-    ).toContain("iPad Air");
+    const other = screen.getByTestId("simulator-inventory-row-udid-2");
+    expect(other.textContent).toContain("iPad Air");
+    fireEvent.click(other);
+    expect(fakes.openTile).toHaveBeenCalledTimes(1);
+    expect(fakes.openTile.mock.calls[0][0]).toMatchObject({
+      node: { type: "simulator", hostId: HOST, simulatorId: "udid-2" },
+      target: { tabId: "tab-1" },
+    });
+    // The other tile connects on its own; this one sent no open for it.
+    expect(fakes.open).toHaveBeenCalledTimes(1);
   });
 
   it("attaches a booted simulator on its own, without a click", () => {
-    fakes.sessions = sessions({
-      state: {
-        ...READY_STATE,
-        simulators: READY_STATE.simulators.map((simulator) =>
-          simulator.simulatorId === UDID
-            ? { ...simulator, booted: true }
-            : simulator,
-        ),
-      },
-    });
+    fakes.sessions = sessions({ state: withTargetBooted(READY_STATE) });
     renderTile();
     expect(fakes.open).toHaveBeenCalledTimes(1);
     expect(fakes.open.mock.calls[0][0]).toMatchObject({ simulatorId: UDID });
@@ -343,19 +415,7 @@ describe("SimulatorTile", () => {
 
   it("shows the live surface with the platform's buttons once the task holds a session", () => {
     fakes.sessions = sessions({
-      state: {
-        ...READY_STATE,
-        sessions: [
-          {
-            epicId: EPIC,
-            ownerUserId: "user-1",
-            hostId: HOST,
-            simulatorId: UDID,
-            platform: "ios",
-            openedAt: "2026-10-18T00:00:00.000Z",
-          },
-        ],
-      },
+      state: { ...READY_STATE, sessions: [SESSION] },
     });
     renderTile();
     expect(screen.getByTestId("simulator-toolbar").textContent).toContain(
@@ -379,6 +439,17 @@ describe("SimulatorTile", () => {
     expect(fakes.rotate).toHaveBeenCalledTimes(1);
     fireEvent.click(screen.getByTestId("simulator-screenshot"));
     expect(fakes.screenshot).toHaveBeenCalledTimes(1);
+  });
+
+  it("ends the session on close when this tile opened it", () => {
+    fakes.sessions = sessions({ state: withTargetBooted(READY_STATE) });
+    const rerender = renderTile();
+    expect(fakes.open).toHaveBeenCalledTimes(1);
+    // The host recorded the session; the stream delivers it.
+    fakes.sessions = sessions({
+      state: { ...withTargetBooted(READY_STATE), sessions: [SESSION] },
+    });
+    rerender();
     fireEvent.click(screen.getByTestId("simulator-close"));
     expect(fakes.closeTile).toHaveBeenCalledTimes(1);
     expect(fakes.close).toHaveBeenCalledWith({
@@ -388,21 +459,35 @@ describe("SimulatorTile", () => {
     });
   });
 
+  it("leaves a session it only attached to - an agent's - open when the tile closes", () => {
+    fakes.sessions = sessions({
+      state: { ...withTargetBooted(READY_STATE), sessions: [SESSION] },
+    });
+    renderTile();
+    expect(fakes.open).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByTestId("simulator-close"));
+    expect(fakes.closeTile).toHaveBeenCalledTimes(1);
+    expect(fakes.close).not.toHaveBeenCalled();
+  });
+
+  it("does not reconnect on its own once its session is closed under it", () => {
+    fakes.sessions = sessions({
+      state: { ...withTargetBooted(READY_STATE), sessions: [SESSION] },
+    });
+    const rerender = renderTile();
+    fakes.sessions = sessions({ state: withTargetBooted(READY_STATE) });
+    rerender();
+    expect(screen.getByTestId("simulator-inventory").textContent).toContain(
+      "not yet open in this task",
+    );
+    expect(fakes.open).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByTestId("simulator-connect"));
+    expect(fakes.open).toHaveBeenCalledTimes(1);
+  });
+
   it("opens the settings drawer from the toolbar and closes it again", () => {
     fakes.sessions = sessions({
-      state: {
-        ...READY_STATE,
-        sessions: [
-          {
-            epicId: EPIC,
-            ownerUserId: "user-1",
-            hostId: HOST,
-            simulatorId: UDID,
-            platform: "ios",
-            openedAt: "2026-10-18T00:00:00.000Z",
-          },
-        ],
-      },
+      state: { ...READY_STATE, sessions: [SESSION] },
     });
     renderTile();
     const toggle = screen.getByTestId("simulator-settings-toggle");
@@ -417,16 +502,7 @@ describe("SimulatorTile", () => {
   it("offers Reconnect when the video stopped, and nothing when the session is gone", () => {
     const withSession: SimulatorState = {
       ...READY_STATE,
-      sessions: [
-        {
-          epicId: EPIC,
-          ownerUserId: "user-1",
-          hostId: HOST,
-          simulatorId: UDID,
-          platform: "ios",
-          openedAt: "2026-10-18T00:00:00.000Z",
-        },
-      ],
+      sessions: [SESSION],
     };
     fakes.sessions = sessions({ state: withSession });
     fakes.streamState = {
