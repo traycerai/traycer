@@ -439,6 +439,8 @@ function specimenSegment(
     hidden: false,
     state: "live",
     reason: null,
+    fetching: false,
+    retryOffered: false,
     windows: drawn,
     shown: drawn,
     tightest: tightestRateLimitWindow(drawn),

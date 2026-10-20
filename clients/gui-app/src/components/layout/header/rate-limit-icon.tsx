@@ -269,6 +269,11 @@ function LiveRateLimitGlyph({
     mode: "live",
     editing: false,
     sample,
+    // A click on the header's reading opens the usage panel; it reads nothing.
+    // So a `transient` segment here keeps the words the background poll makes
+    // true and offers no click affordance - the panel it opens carries the
+    // per-account control that does read.
+    retryHostId: null,
   });
   return (
     <>

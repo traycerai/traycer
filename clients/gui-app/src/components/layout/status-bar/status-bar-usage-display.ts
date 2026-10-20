@@ -137,6 +137,33 @@ export function statusBarClusterSegments(
 }
 
 /**
+ * What a `transient` segment says in place of a reading, and what it says while
+ * a read is running.
+ *
+ * Here rather than in the segment that draws them so the strip, its tooltip and
+ * the trigger's own name cannot come to say three different things about one
+ * state. Both are true whenever they are shown: the strip keeps re-reading
+ * these accounts on its own (`rate-limit-poll-provider.tsx`), and the second
+ * one is only up while a read is actually in flight.
+ */
+export const STATUS_BAR_TRANSIENT_LABEL = "Couldn't load, retrying";
+export const STATUS_BAR_TRANSIENT_RUNNING_LABEL = "Retrying...";
+
+/**
+ * Which of the two a `transient` segment reads, wherever one is drawn - the
+ * strip's segment, the header's Detailed rows, the tooltip and the trigger's
+ * accessible name. One function, so no surface can be left on the resting
+ * sentence while a read is running.
+ */
+export function statusBarTransientLabel(
+  segment: StatusBarProviderSegmentModel,
+): string {
+  return segment.fetching
+    ? STATUS_BAR_TRANSIENT_RUNNING_LABEL
+    : STATUS_BAR_TRANSIENT_LABEL;
+}
+
+/**
  * Why one provider's reading is dimmed, dashed or missing, in one sentence.
  *
  * Lives beside the readings rather than inside the segment because two surfaces
@@ -149,6 +176,12 @@ export function statusBarSegmentTooltip(
   segment: StatusBarProviderSegmentModel,
 ): string {
   const providerName = statusBarSegmentName(segment);
+  if (segment.state === "transient") {
+    const words = statusBarTransientLabel(segment);
+    return segment.retryOffered
+      ? `${providerName} · ${words} - click to retry now`
+      : `${providerName} · ${words}`;
+  }
   if (segment.state === "degraded") {
     return segment.reason === null
       ? `${providerName} · couldn't refresh usage, showing the last reading`
@@ -179,16 +212,25 @@ export function statusBarUsageTriggerName(
   percentMode: AmountMode,
 ): string {
   if (cluster.kind !== "segments") return "Usage limits";
-  const readings = cluster.segments.flatMap((segment) =>
-    segment.tightest === null
+  const readings = cluster.segments.flatMap((segment) => {
+    // A `transient` segment has no reading and says so in words the trigger's
+    // `aria-label` would otherwise override - the one state whose text a
+    // screen reader could not reach any other way. `cold` and `unavailable`
+    // draw a track and a dash, which say nothing to override.
+    if (segment.state === "transient") {
+      return [
+        `${statusBarSegmentName(segment)} ${statusBarTransientLabel(segment)}`,
+      ];
+    }
+    return segment.tightest === null
       ? []
       : [
           `${statusBarSegmentName(segment)} ${windowPercentText(
             segment.tightest.usedPercent,
             percentMode,
           )}`,
-        ],
-  );
+        ];
+  });
   if (readings.length === 0) return "Usage limits";
   return `Usage limits: ${readings.join(", ")}`;
 }
