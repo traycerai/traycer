@@ -248,7 +248,7 @@ describe("deleting an environment-owned chat", () => {
       hostId: OWNER_HOST,
     };
 
-    const ctx = await onMutate(variables);
+    const ctx = await onMutate(variables, MUTATION_CONTEXT);
     expect(ctx.ownerUserId).toBe(ENV);
     // Provisionally suppressed under the environment, which is the identity the
     // cloud copy of this chat carries, and not under the member.
@@ -279,11 +279,14 @@ describe("deleting an environment-owned chat", () => {
     signedInAs("user-b");
     openEpicWith([]);
     const { onMutate } = deleteOptions();
-    const ctx = await onMutate({
-      epicId: "epic-1",
-      chatId: "unknown",
-      hostId: OWNER_HOST,
-    });
+    const ctx = await onMutate(
+      {
+        epicId: "epic-1",
+        chatId: "unknown",
+        hostId: OWNER_HOST,
+      },
+      MUTATION_CONTEXT,
+    );
     expect(ctx.ownerUserId).toBe("user-b");
   });
 });

@@ -791,6 +791,7 @@ describe("<ChatRecordsStreamMount /> the History edge of a team host's chat", ()
     emit(
       {
         kind: "tuiUpsert",
+        sessionFacet: null,
         epicId: "epic-1",
         record: tuiRecord({ ownerUserId: "env_team" }),
       },
@@ -801,6 +802,7 @@ describe("<ChatRecordsStreamMount /> the History edge of a team host's chat", ()
     emit(
       {
         kind: "tuiUpsert",
+        sessionFacet: null,
         epicId: "epic-1",
         record: tuiRecord({ ownerUserId: "user-b", updatedAt: 9 }),
       },
