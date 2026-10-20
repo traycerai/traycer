@@ -4,14 +4,16 @@ import type {
 } from "@traycer-clients/shared/host-selection/selection-authority-contract";
 import type { StreamConnectionStatus } from "@traycer-clients/shared/host-transport/i-stream-session";
 import type { IncompatibilityUpgradeGuidance } from "@traycer/protocol/framework/index";
-import { HOST_OLDER_THAN_DATA_FATAL_CODE } from "@traycer/protocol/host/store-formats";
 import {
   resolvedHostLabel,
   type HostReachability,
   type HostReachabilityHostKind,
   type HostReachabilityStatus,
 } from "@/hooks/agent/use-host-reachability";
-import { taskVerdictCopy } from "@/lib/chats/task-verdict-copy";
+import {
+  fatalRemedyIsHostUpdate,
+  taskVerdictCopy,
+} from "@/lib/chats/fatal-close-copy";
 import { HOST_UPDATE_SKEW_COPY } from "@/lib/host/version-skew-copy";
 import {
   createReportIssueContext,
@@ -812,7 +814,7 @@ function describeFatalCopy(details: ChatTileFatalDetails): ChatTileFatalCopy {
       offersTryAgain: true,
     };
   }
-  const verdict = taskVerdictCopy(details.code);
+  const verdict = taskVerdictCopy(details);
   if (verdict !== null) {
     return {
       paneTitle: verdict.headline,
@@ -829,17 +831,4 @@ function describeFatalCopy(details: ChatTileFatalDetails): ChatTileFatalCopy {
     offersHostUpdate: false,
     offersTryAgain: true,
   };
-}
-
-/**
- * Whether the host has said, one way or the other, that IT is the leg that has
- * to move. The code is the authoritative form; the guidance is the general
- * one, and covers a future code this build has never heard of whose host still
- * marked the direction. Neither is a version comparison.
- */
-function fatalRemedyIsHostUpdate(details: ChatTileFatalDetails): boolean {
-  if (details.code === HOST_OLDER_THAN_DATA_FATAL_CODE) return true;
-  const guidance = details.upgradeGuidance;
-  if (guidance === null) return false;
-  return guidance.hostShouldUpgrade && !guidance.clientShouldUpgrade;
 }

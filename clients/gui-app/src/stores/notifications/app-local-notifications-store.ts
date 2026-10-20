@@ -12,7 +12,7 @@ import {
   parseNotificationPayload,
 } from "@/lib/notifications";
 import { appLocalNotificationsKey, basePersistOptions } from "@/lib/persist";
-import { taskVerdictCopy } from "@/lib/chats/task-verdict-copy";
+import { taskVerdictCopy } from "@/lib/chats/fatal-close-copy";
 import type { HostNotificationsEntityRef } from "@traycer/protocol/host/notifications/contracts";
 import { clearAppLocalDisplayReceipts } from "@/lib/notifications/app-local-display-receipts";
 import {
@@ -896,7 +896,7 @@ export function chatStreamErrorNotification(input: {
   readonly chatId: string;
   readonly details: FatalErrorDetails;
 }): AppLocalNotificationInput {
-  const verdict = taskVerdictCopy(input.details.code);
+  const verdict = taskVerdictCopy(input.details);
   return {
     id: `stream.transport.error:${input.hostId}:${input.chatId}:${input.details.code}`,
     originHostId: input.hostId,
@@ -910,7 +910,7 @@ export function chatStreamErrorNotification(input: {
       chatId: input.chatId,
     },
     message: verdict?.headline ?? "Agent stream closed unexpectedly.",
-    detail: verdict === null ? input.details.reason : null,
+    detail: verdict?.notificationDetail ?? input.details.reason,
   };
 }
 
