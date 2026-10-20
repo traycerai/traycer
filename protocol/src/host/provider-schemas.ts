@@ -10,7 +10,10 @@
  * `~/.traycer/host/config/provider-overrides.json`.
  */
 import { z } from "zod";
-import type { TuiHarnessId } from "@traycer/protocol/host/agent/shared";
+import {
+  guiHarnessIdSchema,
+  type TuiHarnessId,
+} from "@traycer/protocol/host/agent/shared";
 import { autoJudgeKindSchema } from "@traycer/protocol/host/auto-mode/contracts";
 import { projectOntoFrozenLine } from "./frozen-line-projection";
 import {
@@ -1787,6 +1790,15 @@ const providerCliStateBaseShape = {
   // the harness row. Readers spell the fallback themselves
   // (`state.autoJudge ?? "traycer"`), matching the documented default.
   autoJudge: lazySchema(() => autoJudgeKindSchema.optional()),
+  // Whether this provider's agents may spawn the provider's OWN built-in
+  // subagents (Claude's `Agent` tool, Codex's multi-agent feature, OpenCode's
+  // `task`, ...). `false` turns that tool off for the session where the
+  // provider has a switch for it, and steers the model to Traycer agents
+  // everywhere; written by `providers.setNativeSubagents`, first published by
+  // `providers.list@10.5`. `.optional()` for the reasons `autoJudge` gives:
+  // absent is "host too old to say", and readers spell the `true` default
+  // themselves (`providerNativeSubagentsFor`).
+  nativeSubagents: lazySchema(() => z.boolean().optional()),
   // Per-provider environment overrides applied when the host spawns this
   // provider's harness. Sorted by key for stable rendering; `[]` when unset.
   envOverrides: lazySchema(() => z.array(providerEnvOverrideSchema).catch([])),
@@ -1967,6 +1979,17 @@ export const providerCliStateSchema = lazySchema(() =>
   }),
 );
 export type ProviderCliState = z.infer<typeof providerCliStateSchema>;
+
+/**
+ * The provider row as every `providers.list` line below 10.5 published it:
+ * without `nativeSubagents`, which 10.5 added to the row. The 9.1 row and every
+ * 10.0-10.4 preimage derive from this row, so a released reader of those lines
+ * never sees the key, and `frozen-catalog-lines.test.ts` pins each line's serialized shape,
+ * so the NEXT row key reddens there rather than widening these lines unseen.
+ */
+const providerCliStateSchemaBeforeNativeSubagents = lazySchema(() =>
+  providerCliStateSchema.omit({ nativeSubagents: true }),
+);
 
 /**
  * The profile row `providers.list@9.0` / `@9.1` shipped: v8.0's plus `apiKey`,
@@ -2165,24 +2188,26 @@ const providerManagedVersionsSchemaV91 = lazySchema(() =>
  * whole comment exists to prevent.
  */
 export const providerCliStateSchemaV91 = lazySchema(() =>
-  providerCliStateSchema.omit({ macosRequirement: true }).extend({
-    providerId: providerIdSchemaV91,
-    profiles: z.array(providerProfileSchemaV91).catch([]),
-    managedVersions: providerManagedVersionsSchemaV91
-      .nullable()
-      .catch(null)
-      .optional(),
-    loginCapability: providerLoginCapabilitySchemaV70.nullable().catch(null),
-    managedInstallState: providerManagedInstallStateSchemaV70
-      .nullable()
-      .catch(null)
-      .optional(),
-    advisory: providerAdvisorySchemaV70.nullable().catch(null).optional(),
-    autoJudge: autoJudgeKindSchemaV91.optional(),
-    nativeCapabilities: providerNativeCapabilitiesSchemaV70.catch(
-      DEFAULT_PROVIDER_NATIVE_CAPABILITIES,
-    ),
-  }),
+  providerCliStateSchemaBeforeNativeSubagents
+    .omit({ macosRequirement: true })
+    .extend({
+      providerId: providerIdSchemaV91,
+      profiles: z.array(providerProfileSchemaV91).catch([]),
+      managedVersions: providerManagedVersionsSchemaV91
+        .nullable()
+        .catch(null)
+        .optional(),
+      loginCapability: providerLoginCapabilitySchemaV70.nullable().catch(null),
+      managedInstallState: providerManagedInstallStateSchemaV70
+        .nullable()
+        .catch(null)
+        .optional(),
+      advisory: providerAdvisorySchemaV70.nullable().catch(null).optional(),
+      autoJudge: autoJudgeKindSchemaV91.optional(),
+      nativeCapabilities: providerNativeCapabilitiesSchemaV70.catch(
+        DEFAULT_PROVIDER_NATIVE_CAPABILITIES,
+      ),
+    }),
 );
 export type ProviderCliStateV91 = z.infer<typeof providerCliStateSchemaV91>;
 
@@ -2374,12 +2399,14 @@ export type ProvidersListResponse = z.infer<typeof providersListResponseSchema>;
 export const providersListResponseSchemaV100Preimage = lazySchema(() =>
   z.object({
     providers: z.array(
-      providerCliStateSchema.omit({ macosRequirement: true }).extend({
-        nativeCapabilities:
-          providerNativeCapabilitiesSchemaBeforeMcpRemedies.catch(
-            DEFAULT_PROVIDER_NATIVE_CAPABILITIES,
-          ),
-      }),
+      providerCliStateSchemaBeforeNativeSubagents
+        .omit({ macosRequirement: true })
+        .extend({
+          nativeCapabilities:
+            providerNativeCapabilitiesSchemaBeforeMcpRemedies.catch(
+              DEFAULT_PROVIDER_NATIVE_CAPABILITIES,
+            ),
+        }),
     ),
     native: nativeListResultSchemaBeforeMcpRemedies.nullable().default(null),
   }),
@@ -2389,12 +2416,14 @@ export const providersListResponseSchemaV100Preimage = lazySchema(() =>
 export const providersListResponseSchemaV101Preimage = lazySchema(() =>
   z.object({
     providers: z.array(
-      providerCliStateSchema.omit({ macosRequirement: true }).extend({
-        nativeCapabilities:
-          providerNativeCapabilitiesSchemaBeforeOpenChatPlugins.catch(
-            DEFAULT_PROVIDER_NATIVE_CAPABILITIES,
-          ),
-      }),
+      providerCliStateSchemaBeforeNativeSubagents
+        .omit({ macosRequirement: true })
+        .extend({
+          nativeCapabilities:
+            providerNativeCapabilitiesSchemaBeforeOpenChatPlugins.catch(
+              DEFAULT_PROVIDER_NATIVE_CAPABILITIES,
+            ),
+        }),
     ),
     native: nativeListResultSchemaV101Preimage.nullable().default(null),
   }),
@@ -2404,7 +2433,7 @@ export const providersListResponseSchemaV101Preimage = lazySchema(() =>
 export const providersListResponseSchemaV102Preimage = lazySchema(() =>
   z.object({
     providers: z.array(
-      providerCliStateSchema.extend({
+      providerCliStateSchemaBeforeNativeSubagents.extend({
         nativeCapabilities:
           providerNativeCapabilitiesSchemaBeforeOpenChatPlugins.catch(
             DEFAULT_PROVIDER_NATIVE_CAPABILITIES,
@@ -2419,7 +2448,7 @@ export const providersListResponseSchemaV102Preimage = lazySchema(() =>
 export const providersListResponseSchemaV103Preimage = lazySchema(() =>
   z.object({
     providers: z.array(
-      providerCliStateSchema.extend({
+      providerCliStateSchemaBeforeNativeSubagents.extend({
         nativeCapabilities:
           providerNativeCapabilitiesSchemaBeforeOpenChatPlugins.catch(
             DEFAULT_PROVIDER_NATIVE_CAPABILITIES,
@@ -2436,17 +2465,17 @@ export const providersListResponseSchemaV103Preimage = lazySchema(() =>
  * it.
  *
  * A hand copy of the envelope rather than an `.omit()` of the live one, so the
- * next envelope key cannot reach it. The provider row is still the live
- * `providerCliStateSchema`, by reference: 10.5 adds nothing to the row, the
- * two minors must share its id enums (no minor of a major may grow a response
- * enum over its predecessor), and `frozen-catalog-lines.test.ts` pins this
- * line's whole serialized shape, so a key added to the row reddens it rather
- * than widening this line unseen. When that happens, hand-freeze the row here;
- * do not regenerate the fixture.
+ * next envelope key cannot reach it. The provider row is the pre-10.5 row
+ * (`providerCliStateSchemaBeforeNativeSubagents`): 10.5 added `nativeSubagents`
+ * to it, the two minors must share its id enums (no minor of a major may grow
+ * a response enum over its predecessor), and `frozen-catalog-lines.test.ts`
+ * pins this line's whole serialized shape, so the next key added to the row
+ * reddens it rather than widening this line unseen. When that happens, freeze
+ * the row again; do not regenerate the fixture.
  */
 export const providersListResponseSchemaV104Preimage = lazySchema(() =>
   z.object({
-    providers: z.array(providerCliStateSchema),
+    providers: z.array(providerCliStateSchemaBeforeNativeSubagents),
     native: nativeListResultSchema.nullable().default(null),
   }),
 );
@@ -4762,6 +4791,33 @@ export const providersSetPackPolicyResponseSchema = lazySchema(() =>
 );
 export type ProvidersSetPackPolicyResponse = z.infer<
   typeof providersSetPackPolicyResponseSchema
+>;
+
+// ── Native subagents ───────────────────────────────────────────────────────
+//
+// `providers.setNativeSubagents` writes the per-provider `nativeSubagents`
+// switch (the row field above) - a brand-new method at `@1.0`, registered
+// `degrade: unsupported` like `providers.setAutoJudge`, whose shape it copies:
+// keyed by HARNESS on the wire (the live GUI enum; the host re-validates
+// against its own roster), stored per provider, and echoing the persisted
+// value so the settings row can settle on truth.
+export const providersSetNativeSubagentsRequestSchema = lazySchema(() =>
+  z.object({
+    harnessId: guiHarnessIdSchema,
+    nativeSubagents: z.boolean(),
+  }),
+);
+export type ProvidersSetNativeSubagentsRequest = z.infer<
+  typeof providersSetNativeSubagentsRequestSchema
+>;
+
+export const providersSetNativeSubagentsResponseSchema = lazySchema(() =>
+  z.object({
+    nativeSubagents: z.boolean(),
+  }),
+);
+export type ProvidersSetNativeSubagentsResponse = z.infer<
+  typeof providersSetNativeSubagentsResponseSchema
 >;
 
 // ── On-demand pack discovery refresh ───────────────────────────────────────
