@@ -108,6 +108,13 @@ function retainCodexResetCreditDetails(
  * - `lastGoodAt` / `lastFailureAt`: epoch-ms timestamps for the two events
  *   above, `null` until they've happened at least once in this envelope's
  *   lifetime.
+ * - `credentialGeneration`: the last credential any snapshot of this account
+ *   NAMED, which only OpenCode reports. It is here rather than read back off
+ *   `latest` or `lastGood` because a failure may omit it while replacing one
+ *   and clearing the other, and the credential a run of failures belongs to
+ *   has to survive that: otherwise the rotation after such a failure is
+ *   invisible and inherits a run that has already spent its re-read. `null`
+ *   until something names one, and for every provider that names none.
  * - `episode`: which RUN OF FAILURES this reading belongs to, as an opaque
  *   identity. An answer ABOUT THE ACCOUNT - a reading, or an authoritative
  *   reason - starts a run by minting a value no other envelope has. A
@@ -128,6 +135,7 @@ export interface ProviderRateLimitEnvelope {
   readonly lastGood: AvailableProviderRateLimits | null;
   readonly lastGoodAt: number | null;
   readonly lastFailureAt: number | null;
+  readonly credentialGeneration: string | null;
   readonly episode: number;
 }
 
@@ -256,10 +264,10 @@ function openCodeGeneration(
 
 /**
  * Whether this failure came back under a DIFFERENT credential than the attempt
- * before it. The comparison is against the last generation this envelope SAW,
- * from either arm, because a rotation that fails leaves no reading behind to
- * compare the one after it against - and successive rotations are exactly the
- * case that matters.
+ * before it. The comparison is against the generation the envelope REMEMBERS -
+ * see `credentialGeneration` - because a rotation that fails leaves no reading
+ * behind, and a failure that names nothing replaces `latest` as well, so
+ * neither arm can answer this after one of those.
  *
  * Only when the wire names both. A failure that reports no generation has not
  * said the credential changed, and treating silence as a change would start a
@@ -274,9 +282,7 @@ function credentialGenerationChanged(
 ): boolean {
   if (latest.provider !== "opencode") return false;
   const latestGeneration = latest.credentialGeneration;
-  const previousGeneration =
-    openCodeGeneration(previous?.latest) ??
-    openCodeGeneration(previous?.lastGood);
+  const previousGeneration = previous?.credentialGeneration ?? null;
   if (latestGeneration === undefined || previousGeneration === null) {
     return false;
   }
@@ -313,6 +319,10 @@ export function buildProviderRateLimitEnvelopeFromSnapshot(
   latest: ProviderRateLimits | null,
   now: number,
 ): ProviderRateLimitEnvelope {
+  // What this account was last read with, kept across every answer that names
+  // nothing - including a response with no snapshot at all.
+  const credentialGeneration =
+    openCodeGeneration(latest) ?? previous?.credentialGeneration ?? null;
   if (latest !== null && latest.available) {
     const retainedLatest = retainCodexResetCreditDetails(previous, latest);
     return {
@@ -320,6 +330,7 @@ export function buildProviderRateLimitEnvelopeFromSnapshot(
       lastGood: retainedLatest,
       lastGoodAt: now,
       lastFailureAt: previous?.lastFailureAt ?? null,
+      credentialGeneration,
       episode: nextEpisode(),
     };
   }
@@ -335,6 +346,7 @@ export function buildProviderRateLimitEnvelopeFromSnapshot(
       // run, so it mints.
       ...carriedRun(previous, latest),
       lastFailureAt: now,
+      credentialGeneration,
     };
   }
 
@@ -346,6 +358,7 @@ export function buildProviderRateLimitEnvelopeFromSnapshot(
       lastGood: null,
       lastGoodAt: null,
       lastFailureAt: null,
+      credentialGeneration,
       episode: previous?.episode ?? nextEpisode(),
     };
   }
@@ -355,6 +368,7 @@ export function buildProviderRateLimitEnvelopeFromSnapshot(
     lastGood: null,
     lastGoodAt: null,
     lastFailureAt: null,
+    credentialGeneration,
     episode: nextEpisode(),
   };
 }

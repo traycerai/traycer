@@ -377,6 +377,7 @@ function envelopeFor(
       lastGood: providerRateLimits,
       lastGoodAt: NOW - 90_000,
       lastFailureAt: null,
+      credentialGeneration: null,
       episode: NO_EPISODE,
     };
   }
@@ -385,6 +386,7 @@ function envelopeFor(
     lastGood: null,
     lastGoodAt: null,
     lastFailureAt: null,
+    credentialGeneration: null,
     episode: NO_EPISODE,
   };
 }
@@ -416,6 +418,7 @@ function degradedRetainedResult(
       lastGood,
       lastGoodAt: NOW - 90_000,
       lastFailureAt: NOW - 1_000,
+      credentialGeneration: null,
       episode: NO_EPISODE,
     },
     isPending: false,
@@ -2628,6 +2631,7 @@ describe("<RateLimitPopover /> per-provider states", () => {
           lastGood: codexReady(),
           lastGoodAt: NOW - 90_000,
           lastFailureAt: NOW - 1_000,
+          credentialGeneration: null,
           episode: NO_EPISODE,
         },
         isPending: false,

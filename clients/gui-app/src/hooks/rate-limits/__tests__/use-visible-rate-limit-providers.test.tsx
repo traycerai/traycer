@@ -20,15 +20,20 @@ interface MockQueryResult {
 interface MockState {
   providers: readonly ProviderCliState[];
   results: Map<RateLimitProviderId, MockQueryResult>;
+  /** Whether the host has answered with a list at all. */
+  answered: boolean;
 }
 
 const mocks = vi.hoisted<MockState>(() => ({
   providers: [],
   results: new Map(),
+  answered: true,
 }));
 
 vi.mock("@/hooks/providers/use-providers-list-query", () => ({
-  useProvidersList: () => ({ data: { providers: mocks.providers } }),
+  useProvidersList: () => ({
+    data: mocks.answered ? { providers: mocks.providers } : undefined,
+  }),
 }));
 vi.mock("@/lib/host", () => ({
   useHostClient: () => null,
@@ -52,6 +57,7 @@ vi.mock("@/hooks/host/use-host-queries", () => ({
 
 import {
   useConfiguredRateLimitProviders,
+  useRateLimitAccountInventory,
   useVisibleRateLimitProviders,
 } from "@/hooks/rate-limits/use-configured-rate-limit-providers";
 
@@ -125,6 +131,7 @@ function envelope(
     lastGood: data,
     lastGoodAt: NOW - 60_000,
     lastFailureAt: null,
+    credentialGeneration: null,
     episode: NO_EPISODE,
   };
 }
@@ -132,6 +139,7 @@ function envelope(
 beforeEach(() => {
   mocks.providers = [];
   mocks.results = new Map();
+  mocks.answered = true;
 });
 
 afterEach(() => {
@@ -349,6 +357,7 @@ describe("useVisibleRateLimitProviders", () => {
         lastGood: null,
         lastGoodAt: null,
         lastFailureAt: NOW,
+        credentialGeneration: null,
         episode: NO_EPISODE,
       },
       isError: false,
@@ -379,6 +388,7 @@ describe("useVisibleRateLimitProviders", () => {
         lastGood: null,
         lastGoodAt: null,
         lastFailureAt: NOW,
+        credentialGeneration: null,
         episode: NO_EPISODE,
       },
       isError: false,
@@ -394,5 +404,73 @@ describe("useVisibleRateLimitProviders", () => {
         fetchEligibility: { ambient: true, managedProfiles: true },
       },
     ]);
+  });
+});
+
+describe("useRateLimitAccountInventory", () => {
+  it("says nothing while the host has not answered", () => {
+    mocks.answered = false;
+    mocks.providers = [
+      providerState({
+        providerId: "codex",
+        status: "authenticated",
+        enabled: true,
+        authPending: false,
+        availabilityPending: false,
+      }),
+    ];
+
+    const { result } = renderHook(() => useRateLimitAccountInventory());
+
+    // The query has no data, so this host has reported nothing - which is a
+    // different fact from a host that has reported no accounts, and the only
+    // one that distinguishes them. A caller that ends an account's state on an
+    // empty list has to read this.
+    expect(result.current).toEqual({ answered: false, providers: [] });
+  });
+
+  it("answers with no accounts when the host has none", () => {
+    const { result } = renderHook(() => useRateLimitAccountInventory());
+
+    expect(result.current).toEqual({ answered: true, providers: [] });
+  });
+
+  it("keeps an account the display rules drop, because the host still has it", () => {
+    mocks.providers = [
+      providerState({
+        providerId: "opencode",
+        status: "authenticated",
+        enabled: true,
+        authPending: false,
+        availabilityPending: false,
+      }),
+    ];
+    // The same snapshot that takes OpenCode out of the display list two rows
+    // above: a fact about one account, applied to the provider. The host's own
+    // answer is unchanged by it.
+    mocks.results.set("opencode", {
+      data: {
+        latest: {
+          provider: "opencode",
+          available: false,
+          reason: "rate_limits_not_available",
+        },
+        lastGood: null,
+        lastGoodAt: null,
+        lastFailureAt: NOW,
+        credentialGeneration: null,
+        episode: NO_EPISODE,
+      },
+      isError: false,
+    });
+
+    const visible = renderHook(() => useVisibleRateLimitProviders());
+    const inventory = renderHook(() => useRateLimitAccountInventory());
+
+    expect(visible.result.current).toEqual([]);
+    expect(inventory.result.current.answered).toBe(true);
+    expect(
+      inventory.result.current.providers.map((provider) => provider.providerId),
+    ).toEqual(["opencode"]);
   });
 });

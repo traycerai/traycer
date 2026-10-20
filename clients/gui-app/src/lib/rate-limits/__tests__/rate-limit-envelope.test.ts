@@ -139,6 +139,7 @@ describe("buildProviderRateLimitEnvelope", () => {
       lastGood: GOOD,
       lastGoodAt: 1_000,
       lastFailureAt: null,
+      credentialGeneration: null,
     });
     // The reading IS an answer about this account, so it names the episode any
     // run of failures after it belongs to.
@@ -153,6 +154,7 @@ describe("buildProviderRateLimitEnvelope", () => {
         lastGood: GOOD,
         lastGoodAt: 1_000,
         lastFailureAt: null,
+        credentialGeneration: null,
         episode: PREVIOUS_EPISODE,
       };
       const envelope = buildProviderRateLimitEnvelope(
@@ -165,6 +167,7 @@ describe("buildProviderRateLimitEnvelope", () => {
         lastGood: GOOD,
         lastGoodAt: 1_000,
         lastFailureAt: 2_000,
+        credentialGeneration: null,
         // A transient failure answers nothing, so the stamp stays where the
         // last answer put it: every failure in one run carries the same one,
         // which is what names the run.
@@ -185,6 +188,7 @@ describe("buildProviderRateLimitEnvelope", () => {
       lastGood: null,
       lastGoodAt: null,
       lastFailureAt: 1_000,
+      credentialGeneration: null,
     });
     expect(episode).toBeGreaterThan(NO_EPISODE);
   });
@@ -218,6 +222,9 @@ describe("buildProviderRateLimitEnvelope", () => {
       lastGood: openCodeGood,
       lastGoodAt: 1_000,
       lastFailureAt: null,
+      // What a reading at `gen-a` leaves behind, which is where the comparison
+      // reads the credential from.
+      credentialGeneration: "gen-a",
       episode: PREVIOUS_EPISODE,
     };
     const sameGeneration: ProviderRateLimits = {
@@ -233,6 +240,7 @@ describe("buildProviderRateLimitEnvelope", () => {
       lastGood: openCodeGood,
       lastGoodAt: 1_000,
       lastFailureAt: 2_000,
+      credentialGeneration: "gen-a",
       episode: PREVIOUS_EPISODE,
     });
   });
@@ -266,6 +274,9 @@ describe("buildProviderRateLimitEnvelope", () => {
       lastGood: openCodeGood,
       lastGoodAt: 1_000,
       lastFailureAt: null,
+      // What a reading at `gen-a` leaves behind, which is where the comparison
+      // reads the credential from.
+      credentialGeneration: "gen-a",
       episode: PREVIOUS_EPISODE,
     };
     const differentGeneration: ProviderRateLimits = {
@@ -285,6 +296,7 @@ describe("buildProviderRateLimitEnvelope", () => {
       lastGood: null,
       lastGoodAt: null,
       lastFailureAt: 2_000,
+      credentialGeneration: "gen-b",
     });
     // And a NAMED different credential takes the run with the reading: see the
     // rotation rows below.
@@ -306,6 +318,10 @@ describe("buildProviderRateLimitEnvelope", () => {
       lastGood: null,
       lastGoodAt: null,
       lastFailureAt: 3_000,
+      // Nothing named a credential here, so the one the envelope remembers is
+      // still the one the reading named - which is why this failure is not a
+      // rotation.
+      credentialGeneration: "gen-a",
     });
     // The two questions part here: a failure that names no credential cannot
     // be shown the old reading, and has not said the credential changed, so
@@ -319,6 +335,7 @@ describe("buildProviderRateLimitEnvelope", () => {
       lastGood: GOOD,
       lastGoodAt: 1_000,
       lastFailureAt: 500,
+      credentialGeneration: null,
       episode: PREVIOUS_EPISODE,
     };
     const envelope = buildProviderRateLimitEnvelope(
@@ -332,6 +349,7 @@ describe("buildProviderRateLimitEnvelope", () => {
       lastGood: null,
       lastGoodAt: null,
       lastFailureAt: null,
+      credentialGeneration: null,
     });
     // An authoritative reason answers the account as surely as a reading does,
     // so it ends whatever run of failures was under way.
@@ -344,6 +362,7 @@ describe("buildProviderRateLimitEnvelope", () => {
       lastGood: GOOD,
       lastGoodAt: 1_000,
       lastFailureAt: 1_500,
+      credentialGeneration: null,
       episode: PREVIOUS_EPISODE,
     };
     const envelope = buildProviderRateLimitEnvelope(
@@ -359,6 +378,7 @@ describe("buildProviderRateLimitEnvelope", () => {
       // some point) until either another failure or an authoritative
       // unavailable reason updates it again.
       lastFailureAt: 1_500,
+      credentialGeneration: null,
       episode: envelope.episode,
     });
     expect(envelope.episode).not.toBe(previous.episode);
@@ -370,6 +390,7 @@ describe("buildProviderRateLimitEnvelope", () => {
       lastGood: CODEX_WITH_RESET_DETAILS,
       lastGoodAt: 1_000,
       lastFailureAt: null,
+      credentialGeneration: null,
       episode: PREVIOUS_EPISODE,
     };
     const countOnlyRefresh: ProviderRateLimits = {
@@ -397,6 +418,7 @@ describe("buildProviderRateLimitEnvelope", () => {
       lastGood: CODEX_WITH_RESET_DETAILS,
       lastGoodAt: 1_000,
       lastFailureAt: null,
+      credentialGeneration: null,
       episode: PREVIOUS_EPISODE,
     };
     const countOnlyRefresh: ProviderRateLimits = {
@@ -419,6 +441,7 @@ describe("buildProviderRateLimitEnvelope", () => {
       lastGood: CODEX_WITH_RESET_DETAILS,
       lastGoodAt: 1_000,
       lastFailureAt: null,
+      credentialGeneration: null,
       episode: PREVIOUS_EPISODE,
     };
     const emptyDetailRefresh: ProviderRateLimits = {
@@ -441,6 +464,7 @@ describe("buildProviderRateLimitEnvelope", () => {
       lastGood: GOOD,
       lastGoodAt: 1_000,
       lastFailureAt: null,
+      credentialGeneration: null,
       episode: PREVIOUS_EPISODE,
     };
     const envelope = buildProviderRateLimitEnvelope(
@@ -453,6 +477,7 @@ describe("buildProviderRateLimitEnvelope", () => {
       lastGood: null,
       lastGoodAt: null,
       lastFailureAt: null,
+      credentialGeneration: null,
       episode: PREVIOUS_EPISODE,
     });
   });
@@ -578,6 +603,68 @@ describe("the episode an envelope names", () => {
     expect(rotatedAgain.episode).not.toBe(rotated.episode);
   });
 
+  it("mints for a rotation named across a failure that named none", () => {
+    // The generation is OPTIONAL on a failure, and a failure that omits it
+    // keeps no reading (there is nothing to compare the credential of). So
+    // after one of those, the only place the credential this account was last
+    // read with can be is the envelope itself: the arms both say null, and the
+    // rotation after it would be missed - with the middle state spendable,
+    // since it is transient with no reading behind it.
+    const openCodeGood: ProviderRateLimits = {
+      provider: "opencode",
+      available: true,
+      credentialGeneration: "gen-a",
+      fiveHour: {
+        status: "ok",
+        usedPercent: 10,
+        resetsAt: 2_000,
+        durationMinutes: 300,
+      },
+      weekly: {
+        status: "ok",
+        usedPercent: 20,
+        resetsAt: 2_000,
+        durationMinutes: 10_080,
+      },
+      monthly: {
+        status: "ok",
+        usedPercent: 30,
+        resetsAt: 2_000,
+        durationMinutes: null,
+      },
+    };
+    const answered = buildProviderRateLimitEnvelope(
+      undefined,
+      response(openCodeGood),
+      1_000,
+    );
+    const unnamed = buildProviderRateLimitEnvelope(
+      answered,
+      response({
+        provider: "opencode",
+        available: false,
+        reason: "timeout",
+      }),
+      2_000,
+    );
+    const rotated = buildProviderRateLimitEnvelope(
+      unnamed,
+      response({
+        provider: "opencode",
+        available: false,
+        reason: "timeout",
+        credentialGeneration: "gen-b",
+      }),
+      3_000,
+    );
+
+    // The failure that named nothing is the same run, and keeps no reading.
+    expect(unnamed.episode).toBe(answered.episode);
+    expect(unnamed.lastGood).toBeNull();
+    // The rotation after it is a run of its own.
+    expect(rotated.episode).not.toBe(answered.episode);
+  });
+
   it("carries one through an OpenCode run with no reading to retain", () => {
     // The trap under the row above: retention is also refused when there is no
     // OpenCode reading to compare at all, which is every failure of an account
@@ -691,6 +778,7 @@ describe("resolveRetainedProviderRateLimits", () => {
         lastGood: null,
         lastGoodAt: null,
         lastFailureAt: null,
+        credentialGeneration: null,
         episode: PREVIOUS_EPISODE,
       }),
     ).toBeNull();
@@ -703,6 +791,7 @@ describe("resolveRetainedProviderRateLimits", () => {
         lastGood: GOOD,
         lastGoodAt: 1_000,
         lastFailureAt: null,
+        credentialGeneration: null,
         episode: PREVIOUS_EPISODE,
       }),
     ).toEqual(GOOD);
@@ -715,6 +804,7 @@ describe("resolveRetainedProviderRateLimits", () => {
         lastGood: GOOD,
         lastGoodAt: 1_000,
         lastFailureAt: 2_000,
+        credentialGeneration: null,
         episode: PREVIOUS_EPISODE,
       }),
     ).toEqual(GOOD);
@@ -728,6 +818,7 @@ describe("resolveRetainedProviderRateLimits", () => {
         lastGood: null,
         lastGoodAt: null,
         lastFailureAt: 1_000,
+        credentialGeneration: null,
         episode: PREVIOUS_EPISODE,
       }),
     ).toEqual(latest);
@@ -745,6 +836,7 @@ describe("resolveRetainedProviderRateLimits", () => {
         lastGood: GOOD,
         lastGoodAt: 1_000,
         lastFailureAt: null,
+        credentialGeneration: null,
         episode: PREVIOUS_EPISODE,
       }),
     ).toEqual(latest);
@@ -763,6 +855,7 @@ describe("envelopeDegradedReason", () => {
         lastGood: GOOD,
         lastGoodAt: 1_000,
         lastFailureAt: null,
+        credentialGeneration: null,
         episode: PREVIOUS_EPISODE,
       }),
     ).toBeNull();
@@ -775,6 +868,7 @@ describe("envelopeDegradedReason", () => {
         lastGood: GOOD,
         lastGoodAt: 1_000,
         lastFailureAt: 2_000,
+        credentialGeneration: null,
         episode: PREVIOUS_EPISODE,
       }),
     ).toBe("usage_fetch_failed");
@@ -787,6 +881,7 @@ describe("envelopeDegradedReason", () => {
         lastGood: null,
         lastGoodAt: null,
         lastFailureAt: null,
+        credentialGeneration: null,
         episode: PREVIOUS_EPISODE,
       }),
     ).toBeNull();
@@ -799,6 +894,7 @@ describe("envelopeDegradedReason", () => {
         lastGood: null,
         lastGoodAt: null,
         lastFailureAt: 1_000,
+        credentialGeneration: null,
         episode: PREVIOUS_EPISODE,
       }),
     ).toBeNull();

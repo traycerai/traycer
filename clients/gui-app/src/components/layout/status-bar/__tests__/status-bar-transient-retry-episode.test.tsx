@@ -27,6 +27,7 @@ import { Popover } from "@/components/ui/popover";
 import type { RateLimitUnavailableReason } from "@traycer/protocol/host";
 import type { ProviderRateLimitTanstackOptions } from "@/hooks/host/provider-rate-limit-query-options";
 import type { ConfiguredRateLimitProvider } from "@/hooks/rate-limits/use-configured-rate-limit-providers";
+import type { ProviderProfile } from "@traycer/protocol/host/provider-schemas";
 import type { RateLimitProfileSelection } from "@/hooks/rate-limits/use-rate-limit-profile-selection";
 import type { RateLimitProviderId } from "@/lib/rate-limit-providers";
 import type { ProviderRateLimitEnvelope } from "@/lib/rate-limits/rate-limit-envelope";
@@ -53,9 +54,16 @@ interface QueryDouble {
   readonly isError: boolean;
 }
 
+interface RateLimitProviderInventory {
+  readonly answered: boolean;
+  readonly providers: ReadonlyArray<ConfiguredRateLimitProvider>;
+}
+
 interface MockState {
   results: Map<string, QueryDouble>;
   reading: Set<string>;
+  /** What the HOST says it has, which a display list is not. */
+  inventory: RateLimitProviderInventory;
   collect: Mock<(scope: unknown, target: unknown) => Promise<void>>;
   fetch: Mock<
     (
@@ -69,6 +77,7 @@ interface MockState {
 const mocks = vi.hoisted<MockState>(() => ({
   results: new Map(),
   reading: new Set(),
+  inventory: { answered: false, providers: [] },
   collect: vi.fn((): Promise<void> => Promise.resolve()),
   fetch: vi.fn((): Promise<void> => Promise.resolve()),
 }));
@@ -106,9 +115,10 @@ vi.mock("@/hooks/host/use-host-queries", () => ({
   useHostQueriesWithResponseMap: hostQueriesDouble,
 }));
 
-// The provider list these rows hand the cluster is the host's answer: an entry
-// whose account is gone from it is gone because the host said so, which is the
-// one thing that ends an entry's life.
+// What the host says it has, which is the only thing that ends an entry's
+// life. Deliberately not the list a row hands the cluster: that one is the
+// display projection, and `useVisibleRateLimitProviders` drops a whole
+// provider from it for reasons that are not an account ceasing to exist.
 vi.mock(
   "@/hooks/rate-limits/use-configured-rate-limit-providers",
   async (importOriginal) => {
@@ -116,7 +126,10 @@ vi.mock(
       await importOriginal<
         typeof import("@/hooks/rate-limits/use-configured-rate-limit-providers")
       >();
-    return { ...actual, useRateLimitProvidersAnswered: () => true };
+    return {
+      ...actual,
+      useRateLimitAccountInventory: () => mocks.inventory,
+    };
   },
 );
 
@@ -165,6 +178,47 @@ const GROK: ConfiguredRateLimitProvider = {
   fetchEligibility: { ambient: true, managedProfiles: true },
 };
 
+function managedProfile(profileId: string): ProviderProfile {
+  return {
+    profileId,
+    enabled: true,
+    kind: "managed",
+    authType: "oauth",
+    label: profileId,
+    auth: {
+      status: "authenticated",
+      badgeText: null,
+      label: null,
+      detail: null,
+    },
+    identity: null,
+    usageUpdatedAt: null,
+    rateLimitStatus: "unknown",
+    rateLimitLimitedScopes: null,
+    duplicateOfProfileId: null,
+    accentColor: null,
+    ambientDriftNotice: null,
+  };
+}
+
+/**
+ * Two OpenCode accounts on the host. One account answering
+ * `rate_limits_not_available` takes the WHOLE provider out of the display list
+ * (`use-configured-rate-limit-providers.ts`, `hideOpenCode`), which is how a
+ * display act can look like an account ceasing to exist.
+ */
+const OPENCODE: ConfiguredRateLimitProvider = {
+  providerId: "opencode",
+  profiles: [managedProfile("work"), managedProfile("personal")],
+  lane: "httpFetch",
+  fetchEligibility: { ambient: true, managedProfiles: true },
+};
+
+const WORK_SELECTION: RateLimitProfileSelection = {
+  shownProfiles: { opencode: ["work"] },
+  lastProfileByHarness: {},
+};
+
 function transientEnvelope(
   reason: RateLimitUnavailableReason,
 ): ProviderRateLimitEnvelope {
@@ -191,6 +245,14 @@ function tree(
   queryClient: QueryClient,
   providers: ReadonlyArray<ConfiguredRateLimitProvider>,
 ): ReactNode {
+  return treeFor(queryClient, providers, PROFILE_SELECTION);
+}
+
+function treeFor(
+  queryClient: QueryClient,
+  providers: ReadonlyArray<ConfiguredRateLimitProvider>,
+  profileSelection: RateLimitProfileSelection,
+): ReactNode {
   return (
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
@@ -198,7 +260,7 @@ function tree(
           <StatusBarRateLimitCluster
             hostId={HOST_ID}
             providers={providers}
-            profileSelection={PROFILE_SELECTION}
+            profileSelection={profileSelection}
             editing={false}
           />
         </Popover>
@@ -220,6 +282,9 @@ beforeEach(() => {
   vi.useFakeTimers();
   mocks.results = new Map();
   mocks.reading = new Set();
+  // The host has these accounts for the length of a row, whatever the display
+  // list a row hands the cluster says.
+  mocks.inventory = { answered: true, providers: [CODEX, GROK] };
   pruneScheduledTransientReads(HOST_ID, new Set());
   useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
 });
@@ -419,6 +484,49 @@ describe("a transient account's scheduled re-read", () => {
     expect(mocks.collect).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps the spent episode of an account whose provider left the display list", () => {
+    // One OpenCode account answering `rate_limits_not_available` takes the
+    // provider out of the display list, siblings and all - a fact about ONE
+    // account, applied to the provider. The sibling here is in the same run of
+    // failures it was in, and it has had the read that run promised.
+    const key = rateLimitAccountLedgerKey(HOST_ID, "opencode", "work");
+    mocks.inventory = { answered: true, providers: [OPENCODE, CODEX] };
+    mocks.results.set("opencode:work", {
+      data: buildProviderRateLimitEnvelopeFromSnapshot(
+        undefined,
+        { provider: "opencode", available: false, reason: "timeout" },
+        Date.now(),
+      ),
+      isError: false,
+    });
+    const episode =
+      mocks.results.get("opencode:work")?.data?.episode ?? NO_EPISODE;
+    const queryClient = newQueryClient();
+    const view = render(treeFor(queryClient, [OPENCODE], WORK_SELECTION));
+
+    act(() => {
+      vi.advanceTimersByTime(TRANSIENT_RATE_LIMIT_RETRY_DELAY_MS);
+    });
+    expect(mocks.collect).toHaveBeenCalledTimes(1);
+
+    // The provider drops out of the display list, and the host goes on saying
+    // it has both accounts.
+    act(() => {
+      view.rerender(treeFor(queryClient, [CODEX], WORK_SELECTION));
+    });
+    expect(scheduledTransientReadOwed(key, episode)).toBe(false);
+
+    // And comes back, with the same failure in the envelope: the run has had
+    // its read.
+    act(() => {
+      view.rerender(treeFor(queryClient, [OPENCODE], WORK_SELECTION));
+    });
+    act(() => {
+      vi.advanceTimersByTime(TRANSIENT_RATE_LIMIT_RETRY_DELAY_MS);
+    });
+    expect(mocks.collect).toHaveBeenCalledTimes(1);
+  });
+
   it("keeps no entry for an account the host no longer has", () => {
     reading(transientEnvelope("timeout"));
     const queryClient = newQueryClient();
@@ -435,6 +543,7 @@ describe("a transient account's scheduled re-read", () => {
     // answered. Its entry would otherwise sit in the map for the life of the
     // window.
     const episode = mocks.results.get("codex:")?.data?.episode ?? NO_EPISODE;
+    mocks.inventory = { answered: true, providers: [GROK] };
     act(() => {
       view.rerender(tree(queryClient, [GROK]));
     });

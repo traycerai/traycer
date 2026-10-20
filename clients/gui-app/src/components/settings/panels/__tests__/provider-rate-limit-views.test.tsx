@@ -1426,6 +1426,7 @@ describe("ProviderRateLimitBody (unavailable state)", () => {
           lastGood: null,
           lastGoodAt: null,
           lastFailureAt: NOW,
+          credentialGeneration: null,
           episode: NO_EPISODE,
         }}
         codexResetAction={null}
@@ -1455,6 +1456,7 @@ describe("ProviderRateLimitBody (unavailable state)", () => {
           lastGood: null,
           lastGoodAt: null,
           lastFailureAt: NOW,
+          credentialGeneration: null,
           episode: NO_EPISODE,
         }}
         codexResetAction={null}
@@ -1481,6 +1483,7 @@ describe("ProviderRateLimitBody (unavailable state)", () => {
           lastGood: null,
           lastGoodAt: null,
           lastFailureAt: NOW,
+          credentialGeneration: null,
           episode: NO_EPISODE,
         }}
         codexResetAction={null}
@@ -1518,6 +1521,7 @@ describe("ProviderRateLimitBody (Codex reset action)", () => {
           lastGood: null,
           lastGoodAt: null,
           lastFailureAt: null,
+          credentialGeneration: null,
           episode: NO_EPISODE,
         }}
         codexResetAction={() => <button type="button">Use reset</button>}

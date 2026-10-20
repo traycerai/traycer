@@ -19,7 +19,7 @@ import {
 } from "@/hooks/host/provider-rate-limit-query-options";
 import {
   PASSIVE_PROVIDER_RATE_LIMIT_OPTIONS,
-  useRateLimitProvidersAnswered,
+  useRateLimitAccountInventory,
   useVisibleRateLimitProviders,
   type ConfiguredRateLimitProvider,
 } from "@/hooks/rate-limits/use-configured-rate-limit-providers";
@@ -321,7 +321,20 @@ interface StatusBarRateLimitTarget {
   readonly order: number;
   readonly profileId: string | null;
   readonly account: ProfileAccentDotInput | null;
+  /**
+   * Whether THIS PLACEMENT may start a read for the account: the account's own
+   * answer, masked by the things that make a placement observe rather than
+   * pull (the usage region hidden, the provider deny-listed, the layout editor
+   * drawing from cache). What the lanes and the affordance ask.
+   */
   readonly fetchEligible: boolean;
+  /**
+   * Whether the ACCOUNT can be read at all, unmasked: its credential's own
+   * answer. What the WORDS ask, because they describe the account and are true
+   * or false whatever this placement is allowed to do - the app-shell poll is
+   * reading it meanwhile, and a deny-list is a display act.
+   */
+  readonly accountReadable: boolean;
   readonly usageUpdatedAt: number | null;
   readonly lane: RateLimitFetchLane;
 }
@@ -346,6 +359,13 @@ function resolveTargets(
     const selectedProfile = provider.profiles.find(
       (profile) => profileCommitId(profile) === profileId,
     );
+    const accountReadable =
+      selectedProfile === undefined
+        ? provider.fetchEligibility.ambient
+        : isRateLimitProfileFetchEligible(
+            provider.fetchEligibility,
+            selectedProfile,
+          );
     return {
       provider,
       profileId,
@@ -353,13 +373,10 @@ function resolveTargets(
         selectedProfile === undefined || provider.profiles.length < 2
           ? null
           : profileAccentDotInput(selectedProfile),
-      fetchEligible:
-        selectedProfile === undefined
-          ? provider.fetchEligibility.ambient
-          : isRateLimitProfileFetchEligible(
-              provider.fetchEligibility,
-              selectedProfile,
-            ),
+      // One answer, under two names: the mask below moves `fetchEligible` and
+      // never this.
+      fetchEligible: accountReadable,
+      accountReadable,
       usageUpdatedAt: selectedProfile?.usageUpdatedAt ?? null,
       // The provider's OWN lane, not a second call to the classifier.
       // Re-deriving it would make this the one place the batch split disagrees
@@ -440,15 +457,18 @@ function segmentState(
     /** A read of this key has rejected at some point. */
     readonly erroredEver: boolean;
     /**
-     * Whether this account can be read AT ALL - `fetchEligible`, which is the
-     * account's own answer and not the placement's. A placement that reads
-     * nothing (`retryHostId: null`) still shows the transient words, because
-     * some other placement's poll is reading the account; an account with no
-     * usable credential is read by nobody, anywhere, so the words that promise
-     * a retry would be promising one that nothing performs. Only a person
-     * signing back in changes that, and the host answers authoritatively for
-     * the account in the meantime - which is the state it had before this
-     * strip ever said `transient`.
+     * Whether this account can be read AT ALL: `accountReadable`, the
+     * credential's own answer, never the placement-masked `fetchEligible`.
+     * Three things mask that one - the usage region hidden, the provider
+     * deny-listed, the layout editor drawing from cache - and none of them is
+     * a fact about the account: the app-shell poll goes on reading it while
+     * every one of them is true, so a segment that read the masked flag here
+     * would say the account answered while a read of it was in flight, and say
+     * the opposite again when the mask lifted. What makes the words false is
+     * an account nobody can read anywhere, which no placement can mask and
+     * only a person signing back in changes; the host answers authoritatively
+     * for it in the meantime, which is the state it had before this strip ever
+     * said `transient`.
      */
     readonly readable: boolean;
   },
@@ -673,7 +693,7 @@ function toSegments(
       : segmentState(retained, envelope, {
           erroredNow: query.isError,
           erroredEver: query.isError || query.errorUpdateCount > 0,
-          readable: target.fetchEligible,
+          readable: target.accountReadable,
         });
     // Every read of these keys runs through TanStack, whichever trigger started
     // it, so the observer's own flag is the whole answer - the same one the
@@ -837,6 +857,11 @@ export function useStatusBarRateLimitSegments(input: {
       ...target,
       order,
       // Editor-only segments observe cached data without starting requests.
+      // Only what this placement may PULL: `accountReadable` carries the
+      // account's own answer past here, because a provider in the deny-list is
+      // still being read by the app shell's poll, and a segment that dropped
+      // the transient words here would say the account answered while a read
+      // of it was in flight - and say it again the other way round on unhide.
       fetchEligible:
         target.fetchEligible &&
         usageShown &&
@@ -950,15 +975,16 @@ export function useStatusBarRateLimitSegments(input: {
   // failures when the strip comes back to it. What DOES end an entry's life is
   // the account ceasing to exist, so the list below is this host's own
   // inventory - every profile of every provider it reports, plus each
-  // provider's ambient account - with the display filter, the selection, the
-  // editor and the sample scene all read out of it. In an effect, because it
-  // is a write; and only in the placement that arms these reads.
+  // provider's ambient account - read from the host and not from the list this
+  // hook was handed: that one is the display projection, and a provider leaves
+  // it for reasons that are not an account ceasing to exist. In an effect,
+  // because it is a write; and only in the placement that arms these reads.
   const ledgerHostId = input.retryHostId;
-  const inventoryAnswered = useRateLimitProvidersAnswered();
+  const inventory = useRateLimitAccountInventory();
   const existingLedgerKeys =
     ledgerHostId === null
       ? []
-      : input.providers.flatMap((provider) =>
+      : inventory.providers.flatMap((provider) =>
           [null, ...provider.profiles.map(profileCommitId)].map((profileId) =>
             rateLimitAccountLedgerKey(
               ledgerHostId,
@@ -974,7 +1000,7 @@ export function useStatusBarRateLimitSegments(input: {
     // The LIST cannot say which it is, since both are no providers, so the
     // query's own answer is what decides - and a host that answers with none
     // left has told this hook that every account it was keeping is gone.
-    if (ledgerHostId === null || !inventoryAnswered) return;
+    if (ledgerHostId === null || !inventory.answered) return;
     pruneScheduledTransientReads(ledgerHostId, new Set(existingLedgerKeys));
   });
   // The set itself as the dependency, flattened, with the answer in front of
@@ -983,7 +1009,7 @@ export function useStatusBarRateLimitSegments(input: {
   // the host answering "none", which leaves them empty and means the opposite
   // of what their being empty meant a moment ago.
   const existingEpisodeKeys = [
-    inventoryAnswered ? "answered" : "silent",
+    inventory.answered ? "answered" : "silent",
     ...existingLedgerKeys,
   ].join("\n");
   useEffect(() => {

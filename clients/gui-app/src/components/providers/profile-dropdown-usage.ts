@@ -51,8 +51,10 @@ function envelopeFromDetail(
         lastGood: detail.usage,
         lastGoodAt: detail.asOf,
         lastFailureAt: null,
-        // No run of failures: this is a projection of one dropdown row, and
-        // nothing schedules a read from it.
+        // No run of failures, and no credential remembered: this is a
+        // projection of one dropdown row, and nothing schedules a read from it
+        // or compares what it was read with.
+        credentialGeneration: null,
         episode: NO_EPISODE,
       };
     case "failed-with-last-good":
@@ -61,6 +63,7 @@ function envelopeFromDetail(
         lastGood: detail.usage,
         lastGoodAt: detail.asOf,
         lastFailureAt: detail.failedAt,
+        credentialGeneration: null,
         episode: NO_EPISODE,
       };
     case "unavailable":
@@ -69,6 +72,7 @@ function envelopeFromDetail(
         lastGood: null,
         lastGoodAt: null,
         lastFailureAt: null,
+        credentialGeneration: null,
         episode: NO_EPISODE,
       };
     case "never-checked":

@@ -465,6 +465,7 @@ describe("ProviderRateLimitForProvider", () => {
       lastGood: CODEX_RATE_LIMITS,
       lastGoodAt: Date.now(),
       lastFailureAt: Date.now(),
+      credentialGeneration: null,
       episode: NO_EPISODE,
     };
     mocks.isError = false;

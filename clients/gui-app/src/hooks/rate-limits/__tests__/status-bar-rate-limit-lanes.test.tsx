@@ -59,8 +59,11 @@ vi.mock(
       useConfiguredRateLimitProviders: () => configuredProviders,
       useVisibleRateLimitProviders: () => configuredProviders,
       // The inventory above IS this host's answer in these rows, which is what
-      // the real hook reads the query's own settled state for.
-      useRateLimitProvidersAnswered: () => true,
+      // the real hook reads the host's own account list for.
+      useRateLimitAccountInventory: () => ({
+        answered: true,
+        providers: configuredProviders,
+      }),
     };
   },
 );

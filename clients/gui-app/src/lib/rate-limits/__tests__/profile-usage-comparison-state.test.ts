@@ -28,6 +28,7 @@ function envelope(
     lastGood: null,
     lastGoodAt: null,
     lastFailureAt: null,
+    credentialGeneration: null,
     episode: NO_EPISODE,
     ...overrides,
   };

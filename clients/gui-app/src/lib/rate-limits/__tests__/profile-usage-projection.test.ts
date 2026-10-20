@@ -203,6 +203,7 @@ function envelope(
     lastGood: data,
     lastGoodAt,
     lastFailureAt: null,
+    credentialGeneration: null,
     episode: NO_EPISODE,
   };
 }
@@ -521,6 +522,7 @@ describe("projectProfileUsage", () => {
       lastGood: data,
       lastGoodAt: NOW - 1_000,
       lastFailureAt: NOW,
+      credentialGeneration: null,
       episode: NO_EPISODE,
     };
     const retainedProjection = project("ok", NOW - 1_000, retained, false);
@@ -571,6 +573,7 @@ describe("projectProfileUsage", () => {
       lastGood: null,
       lastGoodAt: null,
       lastFailureAt: null,
+      credentialGeneration: null,
       episode: NO_EPISODE,
     };
     expect(project("unknown", NOW, unavailable, false)).toEqual({

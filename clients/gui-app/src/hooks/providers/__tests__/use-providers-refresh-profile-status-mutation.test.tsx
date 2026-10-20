@@ -77,6 +77,7 @@ function rateLimitEnvelope(
     lastGood: providerRateLimits,
     lastGoodAt: 100,
     lastFailureAt: null,
+    credentialGeneration: null,
     episode: NO_EPISODE,
   };
 }

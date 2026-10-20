@@ -21,6 +21,7 @@ export function envelopeFromRateLimits(
       lastGood: data,
       lastGoodAt,
       lastFailureAt: null,
+      credentialGeneration: null,
       episode: NO_EPISODE,
     };
   }
@@ -29,6 +30,7 @@ export function envelopeFromRateLimits(
     lastGood: null,
     lastGoodAt: null,
     lastFailureAt: null,
+    credentialGeneration: null,
     episode: NO_EPISODE,
   };
 }

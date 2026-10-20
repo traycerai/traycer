@@ -50,8 +50,15 @@ interface MockState {
   failed: Set<string>;
   batches: RecordedBatch[];
   windowedProviders: ReadonlyArray<ConfiguredRateLimitProvider>;
-  /** Whether the host has reported its provider inventory at all. */
-  inventoryAnswered: boolean;
+  /**
+   * What the HOST says it has, and whether it has said anything. Never the
+   * list a row hands the hook: that one is the display projection, which drops
+   * a provider for reasons that are not an account ceasing to exist.
+   */
+  inventory: {
+    readonly answered: boolean;
+    readonly providers: ReadonlyArray<ConfiguredRateLimitProvider>;
+  };
 }
 
 const mocks = vi.hoisted<MockState>(() => ({
@@ -60,7 +67,7 @@ const mocks = vi.hoisted<MockState>(() => ({
   failed: new Set(),
   batches: [],
   windowedProviders: [],
-  inventoryAnswered: true,
+  inventory: { answered: true, providers: [] },
 }));
 
 vi.mock("@/lib/host", () => ({
@@ -80,7 +87,7 @@ vi.mock(
       ...actual,
       useConfiguredRateLimitProviders: () => mocks.windowedProviders,
       useVisibleRateLimitProviders: () => mocks.windowedProviders,
-      useRateLimitProvidersAnswered: () => mocks.inventoryAnswered,
+      useRateLimitAccountInventory: () => mocks.inventory,
     };
   },
 );
@@ -186,6 +193,23 @@ function renderSegmentsFor(
       editing: false,
       sample,
       retryHostId,
+    });
+  });
+}
+
+/** The hook as the Customize editor mounts it: hidden providers still drawn. */
+function renderEditorSegments(
+  providers: ReadonlyArray<ConfiguredRateLimitProvider>,
+) {
+  return renderHook(() => {
+    mocks.batches = [];
+    return useStatusBarRateLimitSegments({
+      providers,
+      profileSelection: PROFILE_SELECTION,
+      mode: "live",
+      editing: true,
+      sample: false,
+      retryHostId: RETRY_HOST_ID,
     });
   });
 }
@@ -495,7 +519,9 @@ beforeEach(() => {
   mocks.failed = new Set();
   mocks.batches = [];
   mocks.windowedProviders = [];
-  mocks.inventoryAnswered = true;
+  // Silence by default - the host has said nothing, so nothing prunes. A row
+  // about an entry's life says what the host has.
+  mocks.inventory = { answered: false, providers: [] };
   // The retry bound's floor is the WINDOW's, and one vitest file is one
   // window, so a row that stamped a bound would otherwise hand it to the next
   // one. A stamp at the epoch binds nothing and is dropped on the first read.
@@ -839,6 +865,7 @@ describe("useStatusBarRateLimitSegments", () => {
         }),
         lastGoodAt: Date.now() - 90_000,
         lastFailureAt: Date.now() - 1_000,
+        credentialGeneration: null,
         episode: NO_EPISODE,
       },
       isError: false,
@@ -1052,6 +1079,9 @@ describe("useStatusBarRateLimitSegments", () => {
       providerId: "codex",
       lane: "ephemeralProcess",
     });
+    // The host has the account through all of this, which is what makes the
+    // prune run and keep the entry rather than not run at all.
+    mocks.inventory = { answered: true, providers: [codex] };
 
     const shown = renderSegments([codex]);
     recordScheduledTransientRead(
@@ -1082,6 +1112,7 @@ describe("useStatusBarRateLimitSegments", () => {
       ),
       isError: false,
     });
+    mocks.inventory = { answered: true, providers: [codex] };
 
     const { result, rerender } = renderSegments([codex]);
     recordScheduledTransientRead(key, episodeOf("codex"));
@@ -1116,6 +1147,7 @@ describe("useStatusBarRateLimitSegments", () => {
     // ambient account only. An entry's life follows existence, so it stays.
     const key = rateLimitAccountLedgerKey(RETRY_HOST_ID, "codex", "work");
     recordScheduledTransientRead(key, 7);
+    mocks.inventory = { answered: true, providers: [codexWithAccounts()] };
 
     renderSegmentsFor(
       [codexWithAccounts()],
@@ -1127,27 +1159,6 @@ describe("useStatusBarRateLimitSegments", () => {
     expect(scheduledTransientReadOwed(key, 7)).toBe(false);
   });
 
-  it("keeps no entry for an account the host no longer has", () => {
-    const key = rateLimitAccountLedgerKey(RETRY_HOST_ID, "codex", "work");
-    recordScheduledTransientRead(key, 7);
-    let providers: ReadonlyArray<ConfiguredRateLimitProvider> = [
-      codexWithAccounts(),
-    ];
-
-    const { rerender } = renderChangingSegments(() => providers);
-    expect(scheduledTransientReadOwed(key, 7)).toBe(false);
-
-    // The profile is deleted on the host, so `providers.list` stops reporting
-    // it. That is the one thing that ends an entry's life, and it would
-    // otherwise sit in the map for as long as the window lives.
-    providers = [
-      configuredProvider({ providerId: "codex", lane: "ephemeralProcess" }),
-    ];
-    rerender();
-
-    expect(scheduledTransientReadOwed(key, 7)).toBe(true);
-  });
-
   it("keeps every entry while the host's provider list says nothing", () => {
     const key = rateLimitAccountLedgerKey(RETRY_HOST_ID, "codex", null);
     recordScheduledTransientRead(key, 7);
@@ -1155,7 +1166,7 @@ describe("useStatusBarRateLimitSegments", () => {
     // An unanswered provider list - cold, refetching, a scope with no pick -
     // reads as an empty inventory, and an empty inventory is not evidence that
     // every account has been removed.
-    mocks.inventoryAnswered = false;
+    mocks.inventory = { answered: false, providers: [] };
     renderSegments([]);
 
     expect(scheduledTransientReadOwed(key, 7)).toBe(false);
@@ -1172,7 +1183,7 @@ describe("useStatusBarRateLimitSegments", () => {
     // retained for the window's life (`gcTime: Infinity`), so a sign-in that
     // brings it back would meet its old run of failures and the read that run
     // had already spent.
-    mocks.inventoryAnswered = true;
+    mocks.inventory = { answered: true, providers: [] };
     renderSegments([]);
 
     expect(scheduledTransientReadOwed(key, 7)).toBe(true);
@@ -1181,24 +1192,53 @@ describe("useStatusBarRateLimitSegments", () => {
   it("drops a removed account's entry only once the host has answered", () => {
     const key = rateLimitAccountLedgerKey(RETRY_HOST_ID, "codex", "work");
     recordScheduledTransientRead(key, 7);
-    mocks.inventoryAnswered = false;
-    let providers: ReadonlyArray<ConfiguredRateLimitProvider> = [
+    const left = [
+      configuredProvider({ providerId: "codex", lane: "ephemeralProcess" }),
+    ];
+    mocks.inventory = { answered: false, providers: left };
+    const providers: ReadonlyArray<ConfiguredRateLimitProvider> = [
       codexWithAccounts(),
     ];
 
     const { rerender } = renderChangingSegments(() => providers);
-    providers = [
-      configuredProvider({ providerId: "codex", lane: "ephemeralProcess" }),
-    ];
-    rerender();
-    // A list that shrank while the query is unanswered is not an answer about
-    // what the host has.
+    // An inventory that lost the account while the query is unanswered is not
+    // an answer about what the host has.
     expect(scheduledTransientReadOwed(key, 7)).toBe(false);
 
-    mocks.inventoryAnswered = true;
+    // The display list goes on showing all three accounts, because what ends
+    // an entry's life is the host's answer and nothing else.
+    mocks.inventory = { answered: true, providers: left };
     rerender();
 
     expect(scheduledTransientReadOwed(key, 7)).toBe(true);
+  });
+
+  it("keeps the spent episode of an account the display list drops with its provider", () => {
+    const key = rateLimitAccountLedgerKey(RETRY_HOST_ID, "opencode", "work");
+    recordScheduledTransientRead(key, 7);
+    // What `useVisibleRateLimitProviders` does when ONE OpenCode account
+    // answers `rate_limits_not_available`: the whole provider leaves the
+    // display list, siblings included. The host still has both accounts, and
+    // each is in the run of failures it was in.
+    mocks.inventory = {
+      answered: true,
+      providers: [
+        configuredProvider({
+          providerId: "opencode",
+          lane: "httpFetch",
+          profiles: [
+            profileFixture("work", "managed"),
+            profileFixture("personal", "managed"),
+          ],
+        }),
+      ],
+    };
+
+    renderSegments([
+      configuredProvider({ providerId: "codex", lane: "ephemeralProcess" }),
+    ]);
+
+    expect(scheduledTransientReadOwed(key, 7)).toBe(false);
   });
 
   it("keeps the entries of the host it is pointed away from", () => {
@@ -1328,6 +1368,39 @@ describe("useStatusBarRateLimitSegments", () => {
       ],
     });
     expect(result.current.retryTargets).toEqual([]);
+  });
+
+  it("keeps the transient words in the editor for a provider the deny-list hides", () => {
+    setResult("codex", {
+      data: freshEnvelope(
+        unavailableRateLimits({ provider: "codex", reason: "timeout" }),
+      ),
+      isError: false,
+    });
+    useLayoutStore.getState().setArrangement({
+      ...useLayoutStore.getState().arrangement,
+      hiddenProviders: ["codex"],
+    });
+
+    // The editor draws a deny-listed provider so it can be un-hidden, and
+    // observes rather than pulls - so this placement may not read the account.
+    // The account is still readable, and the app shell's poll is still reading
+    // it, so the words describe something true; what the placement may do is
+    // the affordance's question, and it has none here.
+    const { result } = renderEditorSegments([
+      configuredProvider({ providerId: "codex", lane: "ephemeralProcess" }),
+    ]);
+
+    expect(result.current.cluster).toEqual({
+      kind: "segments",
+      segments: [
+        expect.objectContaining({
+          state: "transient",
+          hidden: true,
+          retryOffered: false,
+        }),
+      ],
+    });
   });
 
   it("withholds a transient segment's retry for a minute after a read of that account settled, wherever that read was asked for", () => {
