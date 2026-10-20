@@ -9,7 +9,10 @@ import {
   type RenderHookResult,
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import type { ListTasksResponse } from "@traycer/protocol/host/epic/unary-schemas";
+import type {
+  ListTaskLight,
+  ListTasksResponse,
+} from "@traycer/protocol/host/epic/unary-schemas";
 import { createIndexedDbViewReplicaBackend } from "@traycer-clients/shared/view-replica/indexeddb-backend";
 import { ViewReplicaStore } from "@traycer-clients/shared/view-replica/store";
 import {
@@ -38,6 +41,7 @@ import {
 
 const HOST_ID = "host-test";
 const CACHED_IDS = ["cached-one", "cached-two"];
+const CACHED_TASKS = CACHED_IDS.map((id) => taskLight(id, null));
 const USER_ID = "user-test";
 
 type PendingRequest = (
@@ -100,7 +104,9 @@ function makeWrapper(
 }
 
 /** A previous session's replica: written to the database, not to this memory. */
-async function seedPreviousSession(): Promise<void> {
+async function seedPreviousSession(
+  tasks: readonly ListTaskLight[],
+): Promise<void> {
   const previous = new ViewReplicaStore(
     createIndexedDbViewReplicaBackend(
       () => globalThis.indexedDB,
@@ -114,12 +120,10 @@ async function seedPreviousSession(): Promise<void> {
     LIST_CLOUD_TASKS_REQUEST,
   );
   if (address === null) throw new Error("Expected a History address");
-  previous.write(
-    historyReplicaService,
-    address,
-    historyPage([taskLight("cached-one", null), taskLight("cached-two", null)]),
-    { observedAt: 100, sourceGeneration: null },
-  );
+  previous.write(historyReplicaService, address, historyPage(tasks), {
+    observedAt: 100,
+    sourceGeneration: null,
+  });
   await previous.drain();
 }
 
@@ -148,10 +152,10 @@ describe("useCloudEpicTasksQuery with the replica tier", () => {
     await viewReplicaStore.evict({ kind: "identity-retired" });
   });
 
-  async function renderWarmCached(): Promise<
-    RenderHookResult<CloudEpicTasksQueryResult, unknown>
-  > {
-    await seedPreviousSession();
+  async function renderWarmCached(
+    tasks: readonly ListTaskLight[],
+  ): Promise<RenderHookResult<CloudEpicTasksQueryResult, unknown>> {
+    await seedPreviousSession(tasks);
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false } },
     });
@@ -166,7 +170,7 @@ describe("useCloudEpicTasksQuery with the replica tier", () => {
   }
 
   it("presents the cached page, stating that it is cached, while the request is pending", async () => {
-    const { result } = await renderWarmCached();
+    const { result } = await renderWarmCached(CACHED_TASKS);
 
     await waitFor(() => expect(idsOf(result.current)).toEqual(CACHED_IDS));
     expect(result.current.presentsCachedPage).toBe(true);
@@ -180,7 +184,7 @@ describe("useCloudEpicTasksQuery with the replica tier", () => {
   it("keeps the cached page, with no error, after the request fails", async () => {
     const failure = deferred();
     mockHostClient.request.mockImplementation(() => failure.promise);
-    const { result } = await renderWarmCached();
+    const { result } = await renderWarmCached(CACHED_TASKS);
     await waitFor(() => expect(idsOf(result.current)).toEqual(CACHED_IDS));
 
     await act(async () => {
@@ -199,7 +203,7 @@ describe("useCloudEpicTasksQuery with the replica tier", () => {
   it("replaces the cached page with a settled answer", async () => {
     const answer = deferred();
     mockHostClient.request.mockImplementation(() => answer.promise);
-    const { result } = await renderWarmCached();
+    const { result } = await renderWarmCached(CACHED_TASKS);
     await waitFor(() => expect(idsOf(result.current)).toEqual(CACHED_IDS));
 
     await act(async () => {
@@ -210,5 +214,19 @@ describe("useCloudEpicTasksQuery with the replica tier", () => {
     await waitFor(() => expect(result.current.presentsCachedPage).toBe(false));
     expect(idsOf(result.current)).toEqual(["fresh"]);
     expect(result.current.completeness?.cloudPage).toBe("settled");
+  });
+
+  it("does not present an empty cached page while the request is pending", async () => {
+    const { result } = await renderWarmCached([]);
+
+    // An empty cached page has nothing to stand in with: the list stays
+    // loading until the request answers, never "No tasks yet." from the cache.
+    await waitFor(() => expect(result.current.query.status).toBe("pending"));
+    await act(async () => {
+      await viewReplicaStore.warm(USER_ID);
+    });
+    expect(result.current.presentsCachedPage).toBe(false);
+    expect(result.current.firstPagePending).toBe(true);
+    expect(result.current.firstPage).toBeUndefined();
   });
 });

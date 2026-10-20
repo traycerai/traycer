@@ -801,10 +801,14 @@ function presentFirstPage(
   CloudEpicTasksQueryResult,
   "firstPage" | "presentsCachedPage" | "firstPagePending" | "firstPageError"
 > {
+  // An empty cached page has nothing to stand in with: presenting it would
+  // claim an empty account (and a zero count) before the request answers.
   const presentsCachedPage =
-    query.data === undefined && replicaPage !== undefined;
+    query.data === undefined &&
+    replicaPage !== undefined &&
+    replicaPage.tasks.length > 0;
   return {
-    firstPage: query.data ?? replicaPage,
+    firstPage: query.data ?? (presentsCachedPage ? replicaPage : undefined),
     presentsCachedPage,
     firstPagePending: query.isPending && !presentsCachedPage,
     firstPageError: presentsCachedPage ? null : query.error,
