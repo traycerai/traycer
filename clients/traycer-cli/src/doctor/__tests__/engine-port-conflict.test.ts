@@ -1,5 +1,6 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { createServer } from "node:net";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -54,6 +55,8 @@ afterEach(() => {
   vi.doUnmock("../../service");
   vi.doUnmock("../../commands/cli-upgrade");
   vi.doUnmock("../../upgrade/finalize-helper");
+  vi.doUnmock("../../internal/host-auth");
+  vi.doUnmock("../../internal/host-rpc");
 });
 
 function stageMocks(opts: {
@@ -235,4 +238,81 @@ describe("runDoctor port-conflict detection", () => {
       result.issues.find((i) => i.code === "PORT_CONFLICT"),
     ).toBeUndefined();
   });
+
+  it.each([
+    ["directly", false],
+    [
+      "on the retry that ended an episode whose earlier attempt may have run",
+      true,
+    ],
+  ] as const)(
+    "reads an UNAUTHORIZED RPC probe refusal %s as rejected credentials, with no restart",
+    async (_label, endedRetryEpisode) => {
+      // A listening port, so the engine goes on to the authenticated probe.
+      const listener = createServer();
+      await new Promise<void>((resolve) => {
+        listener.listen(0, "127.0.0.1", resolve);
+      });
+      try {
+        const address = listener.address();
+        if (address === null || typeof address === "string") {
+          throw new Error("listener has no port");
+        }
+        stageMocks({
+          hostPid: process.pid,
+          websocketUrl: `ws://127.0.0.1:${address.port}/socket`,
+        });
+        vi.doMock("../../internal/host-auth", () => ({
+          resolveHostAuth: async () => ({
+            token: "token",
+            authnBaseUrl: "https://authn.invalid",
+            userId: "user-1",
+          }),
+        }));
+        // The error classes come from the registry the engine is about to
+        // load, so the engine's `instanceof` checks see them.
+        const { HostRpcError } =
+          await import("../../../../shared/host-transport/host-messenger");
+        const { RetryEpisodeOutcomeUnknownError } =
+          await import("../../../../shared/host-transport/retrying-messenger");
+        const refusal = new HostRpcError({
+          code: "UNAUTHORIZED",
+          message: "no applicable key found in the JSON Web Key Set",
+          requestId: "r",
+          method: "host.status",
+          fatalDetails: null,
+        });
+        vi.doMock("../../internal/host-rpc", () => ({
+          callHostRpcAtEndpoint: () =>
+            Promise.reject(
+              endedRetryEpisode
+                ? new RetryEpisodeOutcomeUnknownError(refusal)
+                : refusal,
+            ),
+        }));
+        const { runDoctor } = await import("../engine");
+
+        const result = await runDoctor({
+          environment: "production",
+          portConflictDeps: {
+            platform: "darwin",
+            runCommand: async () => null,
+          },
+        });
+
+        const rejected = result.issues.find(
+          (i) => i.code === "HOST_RPC_UNAUTHORIZED",
+        );
+        expect(rejected?.terminalCommand).toBe("traycer login");
+        expect(rejected?.fixAction).toBeNull();
+        expect(
+          result.issues.find((i) => i.code === "PORT_UNREACHABLE"),
+        ).toBeUndefined();
+      } finally {
+        await new Promise<void>((resolve) => {
+          listener.close(() => resolve());
+        });
+      }
+    },
+  );
 });

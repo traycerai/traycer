@@ -91,6 +91,9 @@ import {
   ServiceMutationAuthorityError,
   withServiceMutationAuthority,
 } from "../../mutation-authority";
+import { withStopTarget } from "../../stop-target";
+import { createVerifyRace } from "../../__tests__/fixtures/verify-race";
+import { ownProcessStartIdentity } from "@traycer-clients/shared/host-lock/process-identity";
 import {
   isUnreportedSpawnEdgeRefusal,
   runWithLeaseAtServiceSpawnEdge,
@@ -186,6 +189,35 @@ const mocks = vi.hoisted(() => ({
   // logic unless a test stages otherwise.
   requestCooperativeShutdownReporting: vi.fn(),
 }));
+
+// The liveness probe a record naming another instance is classified by
+// (`restartTargetStillCurrent`). A test that needs a host to publish while it
+// runs answers the probe itself; every other call reaches the real one.
+const livenessProbe = vi.hoisted(() => ({
+  answer: null as
+    | ((
+        pid: number,
+      ) => "dead" | "current" | "mismatch" | "indeterminate" | null)
+    | null,
+}));
+vi.mock(
+  "@traycer-clients/shared/host-lock/process-identity",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@traycer-clients/shared/host-lock/process-identity")
+      >();
+    return {
+      ...actual,
+      getPublishedProcessIdentityVerdict: async (
+        pid: number,
+        identity: string | null,
+      ) =>
+        livenessProbe.answer?.(pid) ??
+        actual.getPublishedProcessIdentityVerdict(pid, identity),
+    };
+  },
+);
 
 vi.mock("../../../host/pid-metadata", () => ({
   readHostPidMetadata: mocks.readHostPidMetadata,
@@ -6991,9 +7023,14 @@ describe("Windows cooperative stop", () => {
     const { controller, calls } = idleController();
 
     const stopping = controller.stop(label, { force: false });
-    for (let turn = 0; turn < 5; turn += 1) await Promise.resolve();
-
-    expect(mocks.requestCooperativeShutdownReporting).toHaveBeenCalledTimes(1);
+    // The ask follows the guard's scan, which is a service call behind its
+    // own authority and stop-target checks: wait for it rather than count the
+    // turns those checks take.
+    await vi.waitFor(() => {
+      expect(mocks.requestCooperativeShutdownReporting).toHaveBeenCalledTimes(
+        1,
+      );
+    });
     // Only the guard's read-only scan ran so far: no /End, no kill - `some
     // call is schtasks` would miss a kill script, which is a `powershell.exe`
     // call too, so every recorded call must still be that same read.
@@ -7048,6 +7085,163 @@ describe("Windows cooperative stop", () => {
     await controller.stop(label, { force: false, onHostAddressed });
 
     expect(onHostAddressed).toHaveBeenCalledTimes(1);
+  });
+
+  // A stop confirmed for one host process (`withStopTarget`) reads `pid.json`
+  // as the last thing before each service call. The authority check in front
+  // of the call awaits lock verification, and a host published during that
+  // await has to be read.
+  describe("a restart's stop confirmed for one host process", () => {
+    const CONFIRMED_HOST = { pid: 4242, startIdentity: "windows:boot-a 4242" };
+
+    // A record naming an instance that is neither the confirmed host nor
+    // running. Classifying it takes a liveness probe, and a replacement can
+    // publish while that probe runs.
+    const STALE_INSTANCE = {
+      pid: 31337,
+      startIdentity: "windows:boot-z 31337",
+    };
+
+    // What the last authority check finds: the replacement itself, a stale
+    // record whose probe is when the replacement publishes, or a stale record
+    // that stays what it is.
+    type LastCheck = "replacement" | "stale-then-replacement" | "stale-only";
+
+    async function stopAndObserve(
+      publishAt: number | null,
+      lastCheck: LastCheck,
+    ): Promise<{
+      readonly calls: RecordedCall[];
+      readonly verifiesAtCall: number[];
+      readonly error: unknown;
+    }> {
+      let published: {
+        readonly kind: "read";
+        readonly metadata: {
+          readonly pid: number;
+          readonly processStartIdentity: string;
+        };
+      } = {
+        kind: "read",
+        metadata: {
+          pid: CONFIRMED_HOST.pid,
+          processStartIdentity: CONFIRMED_HOST.startIdentity,
+        },
+      };
+      mocks.readHostPidMetadataEvidence.mockImplementation(
+        async () => published,
+      );
+      const publishReplacement = (): void => {
+        published = {
+          kind: "read",
+          metadata: {
+            pid: process.pid,
+            processStartIdentity: ownProcessStartIdentity() ?? "",
+          },
+        };
+      };
+      const publishStale = (): void => {
+        published = {
+          kind: "read",
+          metadata: {
+            pid: STALE_INSTANCE.pid,
+            processStartIdentity: STALE_INSTANCE.startIdentity,
+          },
+        };
+      };
+      livenessProbe.answer =
+        lastCheck === "replacement"
+          ? null
+          : (pid) => {
+              if (pid !== STALE_INSTANCE.pid) return null;
+              if (lastCheck === "stale-then-replacement") publishReplacement();
+              return "dead";
+            };
+      const race = createVerifyRace(
+        publishAt,
+        lastCheck === "replacement" ? publishReplacement : publishStale,
+      );
+      const { runner, calls } = convergingTableRunner([]);
+      const verifiesAtCall: number[] = [];
+      const controller = createWindowsController(async (...callArgs) => {
+        verifiesAtCall.push(race.verifyCount());
+        return runner(...callArgs);
+      }, noTimingDeps);
+      const error = await withServiceMutationAuthority(race.verify, () =>
+        withStopTarget("host restart", label.environment, CONFIRMED_HOST, () =>
+          controller.stopForRestart(label, { force: false }),
+        ),
+      ).then(
+        () => null,
+        (cause: unknown) => cause,
+      );
+      return { calls, verifiesAtCall, error };
+    }
+
+    afterEach(() => {
+      livenessProbe.answer = null;
+    });
+
+    it("never ends the task when a live host is published while the last authority check is awaited, and refuses as a mutation-authority failure", async () => {
+      // The dry run finds which authority check is the last one before the
+      // task is ended.
+      const dry = await stopAndObserve(null, "replacement");
+      const endAt = dry.calls.findIndex(
+        (call) => call.command === "schtasks" && call.args[0] === "/End",
+      );
+      expect(endAt).toBeGreaterThanOrEqual(0);
+      expect(dry.error).toBeNull();
+
+      const raced = await stopAndObserve(
+        dry.verifiesAtCall[endAt] ?? null,
+        "replacement",
+      );
+
+      expect(raced.error).toMatchObject({
+        code: CLI_ERROR_CODES.HOST_RESTART_TARGET_CHANGED,
+      });
+      expect(isServiceMutationAuthorityError(raced.error)).toBe(true);
+      expect(raced.calls.some((call) => call.command === "schtasks")).toBe(
+        false,
+      );
+    });
+
+    it("never ends the task when a host is published while a stale record's liveness probe runs", async () => {
+      const dry = await stopAndObserve(null, "stale-then-replacement");
+      const endAt = dry.calls.findIndex(
+        (call) => call.command === "schtasks" && call.args[0] === "/End",
+      );
+      expect(dry.error).toBeNull();
+
+      const raced = await stopAndObserve(
+        dry.verifiesAtCall[endAt] ?? null,
+        "stale-then-replacement",
+      );
+
+      expect(raced.error).toMatchObject({
+        code: CLI_ERROR_CODES.HOST_RESTART_TARGET_CHANGED,
+      });
+      expect(raced.calls.some((call) => call.command === "schtasks")).toBe(
+        false,
+      );
+    });
+
+    it("still ends the task when the stale record stays the stale record across its probe", async () => {
+      const dry = await stopAndObserve(null, "stale-only");
+      const endAt = dry.calls.findIndex(
+        (call) => call.command === "schtasks" && call.args[0] === "/End",
+      );
+
+      const raced = await stopAndObserve(
+        dry.verifiesAtCall[endAt] ?? null,
+        "stale-only",
+      );
+
+      expect(raced.error).toBeNull();
+      expect(raced.calls.some((call) => call.command === "schtasks")).toBe(
+        true,
+      );
+    });
   });
 
   interface BusySite {

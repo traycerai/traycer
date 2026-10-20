@@ -7,21 +7,29 @@
  * toolbar store, so the model the form submits is the production store's.
  */
 import { StrictMode, useState } from "react";
-import { act, cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent, { type UserEvent } from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   botCreateRequestSchema,
+  type BotCreateRequest,
   type BotCreateResponse,
 } from "@traycer/protocol/host/bot/schemas";
+import { markMayHaveReachedHost } from "@traycer/protocol/host-transport/remote/rpc-types";
 import {
   HostRequestAbortedError,
   HostRpcError,
   HostTransportFailureError,
   RetryableTransportError,
+  type HostRequestOptions,
   type IHostMessenger,
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import { createAuthAwareMessenger } from "@traycer-clients/shared/host-transport/auth-aware-messenger";
+import {
+  createRetryingMessenger,
+  RetryEpisodeOutcomeUnknownError,
+  type TransportRetryPolicy,
+} from "@traycer-clients/shared/host-transport/retrying-messenger";
 import { MutableBearerLease } from "@traycer-clients/shared/auth/bearer-source";
 import type { HostRpcRegistry } from "@/lib/host";
 import type {
@@ -42,7 +50,8 @@ import {
 const mocks = vi.hoisted(() => ({
   navigate: vi.fn(),
   navigateToTabIntent: vi.fn(),
-  createAsync: vi.fn<(variables: object) => Promise<BotCreateResponse>>(),
+  createAsync:
+    vi.fn<(variables: BotCreateRequest) => Promise<BotCreateResponse>>(),
   /** The client each `useBotCreateMutation` call was given. */
   createClients: [] as Array<object | null>,
   /** The host id each `useHostClientForHostId` call asked for. */
@@ -63,7 +72,10 @@ const mocks = vi.hoisted(() => ({
    * above, which the other tests rely on.
    */
   seedFromSettings: false,
-  /** The error `useBotCreateMutation` reports. */
+  /**
+   * The error `useBotCreateMutation` reports before any submit has failed;
+   * once one has, it reports the latest submit's, as the real mutation does.
+   */
   createError: null as Error | null,
   state: {
     localHostId: null as string | null,
@@ -102,10 +114,22 @@ vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
 vi.mock("@/hooks/bots/use-bot-mutations", () => ({
   useBotCreateMutation: (client: object | null) => {
     mocks.createClients.push(client);
+    const [latest, setLatest] = useState<{ error: Error | null } | null>(null);
     return {
       isPending: false,
-      error: mocks.createError,
-      mutateAsync: mocks.createAsync,
+      error: latest === null ? mocks.createError : latest.error,
+      mutateAsync: (variables: BotCreateRequest) => {
+        setLatest({ error: null });
+        return mocks.createAsync(variables).then(
+          (response) => response,
+          (error: unknown) => {
+            setLatest({
+              error: error instanceof Error ? error : new Error("rejected"),
+            });
+            throw error;
+          },
+        );
+      },
     };
   },
 }));
@@ -163,6 +187,9 @@ const LOCAL = "host-local";
 const EFFECTIVE = "host-effective";
 const OTHER = "host-other";
 const BOT_ID = "bot_01ARZ3NDEKTSV4RRFFQ69G5FAV";
+const LOWERCASE_UUID: unknown = expect.stringMatching(
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
+);
 
 function descriptor(environmentId: string): EnvironmentDescriptor {
   return {
@@ -257,6 +284,77 @@ function submitButton(): HTMLButtonElement {
     throw new Error("the submit control is not a button");
   }
   return button;
+}
+
+// A session-level fatal, as `RemoteSession` rejects pending requests with.
+const sessionFatal = {
+  code: "UNAUTHORIZED",
+  reason: "credential revoked",
+  incompatibleMethods: null,
+  upgradeGuidance: null,
+};
+
+/**
+ * What `RemoteSession.rejectAllPendingUnary` rejects a request already sent
+ * with: marked, because the host may have run it.
+ */
+function sessionFatalError(): HostRpcError {
+  const error = new HostRpcError({
+    code: "UNAUTHORIZED",
+    message: "credential revoked",
+    requestId: "session-fatal",
+    method: "",
+    fatalDetails: sessionFatal,
+  });
+  markMayHaveReachedHost(error);
+  return error;
+}
+
+const FAST_RETRY_POLICY: TransportRetryPolicy = {
+  maxRetries: 2,
+  initialDelayMs: 0,
+  maxDelayMs: 0,
+  sleep: () => Promise.resolve(),
+  random: () => 0,
+};
+
+/**
+ * The messenger as `host-runtime-provider` composes it: the retrying layer
+ * outside the auth-aware one, over `inner`. `recover` plays the credential
+ * recovery the auth layer waits on, and a recovery that rotates the lease
+ * makes the auth layer send the original call again.
+ */
+function composedMessenger(
+  inner: IHostMessenger<HostRpcRegistry>,
+  recover: (controller: AbortController, lease: MutableBearerLease) => void,
+): {
+  readonly messenger: IHostMessenger<HostRpcRegistry>;
+  readonly options: HostRequestOptions;
+} {
+  const controller = new AbortController();
+  const lease = new MutableBearerLease("token", "user-1");
+  const messenger = createRetryingMessenger(
+    createAuthAwareMessenger(inner, {
+      revalidateExpectedBearer: () => {
+        recover(controller, lease);
+        return Promise.resolve("rotated");
+      },
+    }),
+    FAST_RETRY_POLICY,
+  );
+  return {
+    messenger,
+    options: {
+      replayMustBeKeyed: false,
+      requiredHostMethodVersion: null,
+      idempotencyKey: null,
+      authority: {
+        endpoint: { hostId: LOCAL, websocketUrl: "ws://host-local/rpc" },
+        bearer: lease,
+        abortSignal: controller.signal,
+      },
+    },
+  };
 }
 
 beforeEach(() => {
@@ -396,12 +494,12 @@ describe("<CreateBotForm /> when no host qualifies", () => {
   });
 });
 
-describe("<CreateBotForm /> create goes to the chosen host", () => {
-  async function createBot(user: UserEvent): Promise<void> {
-    await user.type(screen.getByTestId("create-bot-title"), "  Release Bot  ");
-    await user.click(submitButton());
-  }
+async function createBot(user: UserEvent): Promise<void> {
+  await user.type(screen.getByTestId("create-bot-title"), "  Release Bot  ");
+  await user.click(submitButton());
+}
 
+describe("<CreateBotForm /> create goes to the chosen host", () => {
   it("creates through this machine's client when it qualifies, then opens the tab bound to it", async () => {
     const user = userEvent.setup();
     mountForm(TEAM_WITH_LOCAL);
@@ -418,6 +516,7 @@ describe("<CreateBotForm /> create goes to the chosen host", () => {
       model: "model-a",
       effort: null,
       profile: null,
+      requestKey: LOWERCASE_UUID,
     });
     const record = lookupBotTab(useBotTabsStore.getState().tabs, BOT_ID);
     expect(record?.hostId).toBe(LOCAL);
@@ -495,6 +594,7 @@ describe("<CreateBotForm /> create goes to the chosen host", () => {
       model: "model-a",
       effort: null,
       profile: null,
+      requestKey: LOWERCASE_UUID,
     });
     expect(lookupBotTab(useBotTabsStore.getState().tabs, BOT_ID)?.hostId).toBe(
       LOCAL,
@@ -512,60 +612,167 @@ describe("<CreateBotForm /> create goes to the chosen host", () => {
   });
 });
 
+describe("<CreateBotForm /> request key", () => {
+  function keysSent(): string[] {
+    return mocks.createAsync.mock.calls.map(([variables]) => {
+      return variables.requestKey;
+    });
+  }
+
+  it("names the same key when the person submits again after a failed create", async () => {
+    const user = userEvent.setup();
+    mocks.createAsync.mockRejectedValueOnce(new Error("outcome unknown"));
+    mountForm(TEAM_WITH_LOCAL);
+
+    await createBot(user);
+    await user.click(submitButton());
+
+    const keys = keysSent();
+    expect(keys).toHaveLength(2);
+    expect(keys[0]).toEqual(LOWERCASE_UUID);
+    expect(keys[1]).toBe(keys[0]);
+  });
+
+  it("names a different key from a newly mounted form, even after a failed create", async () => {
+    const user = userEvent.setup();
+    mocks.createAsync.mockRejectedValueOnce(new Error("outcome unknown"));
+    mountForm(TEAM_WITH_LOCAL);
+    await createBot(user);
+    cleanup();
+
+    mountForm(TEAM_WITH_LOCAL);
+    await createBot(user);
+
+    const keys = keysSent();
+    expect(keys).toHaveLength(2);
+    expect(keys[1]).not.toBe(keys[0]);
+  });
+
+  it("names a new key for the next create once a create succeeded", async () => {
+    const user = userEvent.setup();
+    mountForm(TEAM_WITH_LOCAL);
+
+    await createBot(user);
+    await user.click(submitButton());
+
+    const keys = keysSent();
+    expect(keys).toHaveLength(2);
+    expect(keys[1]).not.toBe(keys[0]);
+  });
+});
+
+describe("<CreateBotForm /> a create the transport sends again", () => {
+  function botNumbered(n: number): BotCreateResponse {
+    const base = botCreateResponse();
+    return { ...base, bot: { ...base.bot, botId: `${BOT_ID}-${n}` } };
+  }
+
+  function requestKeyOf(params: object): string | undefined {
+    return "requestKey" in params && typeof params.requestKey === "string"
+      ? params.requestKey
+      : undefined;
+  }
+
+  it("makes one bot when credential recovery sends a create the host already committed again", async () => {
+    const user = userEvent.setup();
+    // The host and the cloud behind it: a request key names at most one bot,
+    // and a create without one always makes a new bot, as the cloud did
+    // before keys.
+    const bots: BotCreateResponse[] = [];
+    const botByKey = new Map<string, BotCreateResponse>();
+    const sentKeys: Array<string | undefined> = [];
+    const request = vi
+      .fn()
+      .mockImplementation(
+        (_method: string, params: object): Promise<BotCreateResponse> => {
+          const key = requestKeyOf(params);
+          sentKeys.push(key);
+          const existing = key === undefined ? undefined : botByKey.get(key);
+          const made = existing ?? botNumbered(bots.length + 1);
+          if (existing === undefined) {
+            bots.push(made);
+            if (key !== undefined) botByKey.set(key, made);
+          }
+          // The first answer is lost: the create is committed, then the
+          // session goes fatal with it pending.
+          return request.mock.calls.length === 1
+            ? Promise.reject(sessionFatalError())
+            : Promise.resolve(made);
+        },
+      );
+    const { messenger, options } = composedMessenger(
+      {
+        request,
+        requestWithResponseTimeout: () =>
+          Promise.reject(new Error("the create is a plain request")),
+      },
+      (_controller, lease) => lease.rotate("rotated-token"),
+    );
+    mocks.createAsync.mockImplementation((variables) =>
+      messenger.request("bot.create", variables, options),
+    );
+    mountForm(TEAM_WITH_LOCAL);
+
+    await createBot(user);
+
+    await waitFor(() => {
+      expect(onDone).toHaveBeenCalledTimes(1);
+    });
+    // Sent twice, and one bot came of it, made by the first send.
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(bots).toHaveLength(1);
+    expect(sentKeys[0]).toEqual(LOWERCASE_UUID);
+    expect(sentKeys[1]).toBe(sentKeys[0]);
+    expect(Object.keys(useBotTabsStore.getState().tabs)).toEqual([
+      bots[0].bot.botId,
+    ]);
+    expect(mocks.navigateToTabIntent).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("<CreateBotForm /> failed create", () => {
-  const CREATE_FAILED =
-    "Couldn't confirm the bot was created. Check your bots, and try again if it isn't there.";
+  const UNCONFIRMED =
+    "Couldn't confirm the bot was created. Try again. It won't make a second bot.";
+  const REFUSED = "The bot wasn't created.";
+  const KEY_REUSED =
+    "A bot from an earlier try was already created. Check your bots.";
 
   const transport = {
     requestId: "request-1",
     method: "bot.create",
   };
 
-  // A session-level fatal, as `RemoteSession` rejects pending requests with.
-  const sessionFatal = {
-    code: "UNAUTHORIZED",
-    reason: "credential revoked",
-    incompatibleMethods: null,
-    upgradeGuidance: null,
-  };
-
-  function sessionFatalError(): HostRpcError {
+  function hostRefusal(code: HostRpcError["code"]): HostRpcError {
     return new HostRpcError({
-      code: "UNAUTHORIZED",
-      message: "credential revoked",
-      requestId: "session-fatal",
-      method: "",
-      fatalDetails: sessionFatal,
+      ...transport,
+      code,
+      message: "refusal text the form must not show",
+      fatalDetails: null,
     });
   }
 
   /**
    * The error the form receives when a create already sent is rejected by a
-   * session fatal and then passes through the real auth-aware messenger:
+   * session fatal and then passes through the messenger the app composes:
    * `recover` plays the credential recovery, and `retry` answers the second
-   * attempt the messenger makes after a rotation.
+   * attempt the auth layer makes after a rotation.
    */
   async function throughAuthRecovery(
     recover: (controller: AbortController, lease: MutableBearerLease) => void,
     retry: () => Error,
   ): Promise<Error> {
-    const controller = new AbortController();
-    const lease = new MutableBearerLease("token", "user-1");
     let attempts = 0;
-    const inner: IHostMessenger<HostRpcRegistry> = {
-      request: () => {
-        attempts += 1;
-        return Promise.reject(attempts === 1 ? sessionFatalError() : retry());
+    const { messenger, options } = composedMessenger(
+      {
+        request: () => {
+          attempts += 1;
+          return Promise.reject(attempts === 1 ? sessionFatalError() : retry());
+        },
+        requestWithResponseTimeout: () =>
+          Promise.reject(new Error("the create is a plain request")),
       },
-      requestWithResponseTimeout: () =>
-        Promise.reject(new Error("the create is a plain request")),
-    };
-    const messenger = createAuthAwareMessenger(inner, {
-      revalidateExpectedBearer: () => {
-        recover(controller, lease);
-        return Promise.resolve("rotated");
-      },
-    });
+      recover,
+    );
     const failure = await messenger
       .request(
         "bot.create",
@@ -576,17 +783,9 @@ describe("<CreateBotForm /> failed create", () => {
           model: "model-a",
           effort: null,
           profile: null,
+          requestKey: "0c5f4b8e-3a1d-4f6b-9e2a-7d8c1b2a3f40",
         },
-        {
-          replayMustBeKeyed: false,
-          requiredHostMethodVersion: null,
-          idempotencyKey: null,
-          authority: {
-            endpoint: { hostId: LOCAL, websocketUrl: "ws://host-local/rpc" },
-            bearer: lease,
-            abortSignal: controller.signal,
-          },
-        },
+        options,
       )
       .then(
         () => null,
@@ -601,6 +800,7 @@ describe("<CreateBotForm /> failed create", () => {
   it.each([
     [
       "a validation error",
+      UNCONFIRMED,
       () => {
         const parsed = botCreateRequestSchema.safeParse({
           environmentId: TEAM_ENV,
@@ -617,6 +817,7 @@ describe("<CreateBotForm /> failed create", () => {
     ],
     [
       "a request that never left",
+      UNCONFIRMED,
       () =>
         Promise.resolve<Error>(
           new RetryableTransportError({
@@ -630,6 +831,7 @@ describe("<CreateBotForm /> failed create", () => {
     ],
     [
       "a keyed request dropped after it was sent",
+      UNCONFIRMED,
       () =>
         Promise.resolve<Error>(
           new RetryableTransportError({
@@ -643,6 +845,7 @@ describe("<CreateBotForm /> failed create", () => {
     ],
     [
       "an abort",
+      UNCONFIRMED,
       () =>
         Promise.resolve<Error>(
           new HostRequestAbortedError({
@@ -653,20 +856,34 @@ describe("<CreateBotForm /> failed create", () => {
         ),
     ],
     [
-      "the host refusing the request with a specific code",
-      () =>
-        Promise.resolve<Error>(
-          new HostRpcError({
-            ...transport,
-            code: "FORBIDDEN",
-            message: "not allowed",
-            fatalDetails: null,
-          }),
-        ),
+      "the host refusing the caller",
+      REFUSED,
+      () => Promise.resolve<Error>(hostRefusal("FORBIDDEN")),
+    ],
+    [
+      "the host refusing the request's fields",
+      REFUSED,
+      () => Promise.resolve<Error>(hostRefusal("E_INVALID_ARGUMENT")),
+    ],
+    [
+      "a host that does not serve the method",
+      REFUSED,
+      () => Promise.resolve<Error>(hostRefusal("E_HOST_UNSUPPORTED")),
+    ],
+    [
+      "the host rejecting the bearer, which the create may have followed",
+      UNCONFIRMED,
+      () => Promise.resolve<Error>(hostRefusal("UNAUTHORIZED")),
+    ],
+    [
+      "a key that already made a bot this create cannot be answered with",
+      KEY_REUSED,
+      () => Promise.resolve<Error>(hostRefusal("E_BOT_REQUEST_KEY_REUSED")),
     ],
     [
       // `RemoteSession.close()` rejects every pending unary with this error.
       "a session closed while the create was pending",
+      UNCONFIRMED,
       () =>
         Promise.resolve<Error>(
           new HostRpcError({
@@ -681,6 +898,7 @@ describe("<CreateBotForm /> failed create", () => {
     [
       // `notReadyRejection` on a closed session.
       "a create waiting on a session that closed before it was ready",
+      UNCONFIRMED,
       () =>
         Promise.resolve<Error>(
           new HostTransportFailureError({
@@ -692,7 +910,25 @@ describe("<CreateBotForm /> failed create", () => {
         ),
     ],
     [
+      // A fatal whose own code is one the host also answers a refusal with:
+      // the marked create was sent, so the code does not say nothing was made.
+      "a session fatal naming a refusal code while the create was pending",
+      UNCONFIRMED,
+      () => {
+        const error = new HostRpcError({
+          code: "FORBIDDEN",
+          message: "access revoked",
+          requestId: "session-fatal",
+          method: "",
+          fatalDetails: { ...sessionFatal, code: "FORBIDDEN" },
+        });
+        markMayHaveReachedHost(error);
+        return Promise.resolve<Error>(error);
+      },
+    ],
+    [
       "a session fatal rewritten into an abort during credential recovery",
+      UNCONFIRMED,
       async () => {
         const failure = await throughAuthRecovery(
           (controller) => controller.abort(),
@@ -706,35 +942,135 @@ describe("<CreateBotForm /> failed create", () => {
     ],
     [
       "a session fatal followed by a refused retry after the bearer rotated",
+      UNCONFIRMED,
       async () => {
         const failure = await throughAuthRecovery(
           (_controller, lease) => lease.rotate("rotated-token"),
-          () =>
-            new HostRpcError({
-              ...transport,
-              code: "FORBIDDEN",
-              message: "not allowed",
-              fatalDetails: null,
-            }),
+          () => hostRefusal("FORBIDDEN"),
         );
-        if (
-          !(failure instanceof HostRpcError) ||
-          failure.code !== "FORBIDDEN"
-        ) {
+        if (!(failure instanceof RetryEpisodeOutcomeUnknownError)) {
+          throw new Error("recovery did not take the retry exit");
+        }
+        return failure;
+      },
+    ],
+    [
+      "a session fatal followed by a retry the key refused after the bearer rotated",
+      KEY_REUSED,
+      async () => {
+        const failure = await throughAuthRecovery(
+          (_controller, lease) => lease.rotate("rotated-token"),
+          () => hostRefusal("E_BOT_REQUEST_KEY_REUSED"),
+        );
+        if (!(failure instanceof RetryEpisodeOutcomeUnknownError)) {
           throw new Error("recovery did not take the retry exit");
         }
         return failure;
       },
     ],
   ])(
-    "says it could not confirm the create for %s, never the error's text",
-    async (_label, makeError) => {
+    "says what is known after %s, never the error's text",
+    async (_label, line, makeError) => {
       mocks.createError = await makeError();
       mountForm(TEAM_WITH_LOCAL);
 
-      expect(screen.getByRole("alert").textContent).toBe(CREATE_FAILED);
+      expect(screen.getByRole("alert").textContent).toBe(line);
     },
   );
+
+  describe("after an earlier submit under the same key", () => {
+    // A marked failure: the create was sent and its answer lost, so it may
+    // have made the bot.
+    const earlierSendLost = (): HostRpcError => sessionFatalError();
+
+    async function settle(): Promise<void> {
+      await act(async () => {
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, 0);
+        });
+      });
+    }
+
+    async function submitAgain(user: UserEvent): Promise<void> {
+      await user.click(submitButton());
+      await settle();
+    }
+
+    function alertText(): string | null {
+      return screen.queryByRole("alert")?.textContent ?? null;
+    }
+
+    it.each(["E_INVALID_ARGUMENT", "FORBIDDEN", "E_HOST_UNSUPPORTED"] as const)(
+      "does not say the bot wasn't created when a later submit is refused with %s",
+      async (code) => {
+        const user = userEvent.setup();
+        mocks.createAsync
+          .mockRejectedValueOnce(earlierSendLost())
+          .mockRejectedValueOnce(hostRefusal(code));
+        mountForm(TEAM_WITH_LOCAL);
+
+        await createBot(user);
+        await settle();
+        expect(alertText()).toBe(UNCONFIRMED);
+
+        await submitAgain(user);
+        expect(mocks.createAsync).toHaveBeenCalledTimes(2);
+        expect(alertText()).toBe(UNCONFIRMED);
+      },
+    );
+
+    it("says the key already made a bot when a later submit is refused for it", async () => {
+      const user = userEvent.setup();
+      mocks.createAsync
+        .mockRejectedValueOnce(earlierSendLost())
+        .mockRejectedValueOnce(hostRefusal("E_BOT_REQUEST_KEY_REUSED"));
+      mountForm(TEAM_WITH_LOCAL);
+
+      await createBot(user);
+      await settle();
+      expect(alertText()).toBe(UNCONFIRMED);
+
+      await submitAgain(user);
+      expect(mocks.createAsync).toHaveBeenCalledTimes(2);
+      expect(alertText()).toBe(KEY_REUSED);
+    });
+
+    it("still says the bot wasn't created after earlier submits that were refused", async () => {
+      const user = userEvent.setup();
+      mocks.createAsync
+        .mockRejectedValueOnce(hostRefusal("E_INVALID_ARGUMENT"))
+        .mockRejectedValueOnce(hostRefusal("FORBIDDEN"));
+      mountForm(TEAM_WITH_LOCAL);
+
+      await createBot(user);
+      await settle();
+      expect(alertText()).toBe(REFUSED);
+
+      await submitAgain(user);
+      expect(mocks.createAsync).toHaveBeenCalledTimes(2);
+      expect(alertText()).toBe(REFUSED);
+    });
+
+    it("trusts a refusal again once a create succeeded", async () => {
+      const user = userEvent.setup();
+      mocks.createAsync
+        .mockRejectedValueOnce(earlierSendLost())
+        .mockResolvedValueOnce(botCreateResponse())
+        .mockRejectedValueOnce(hostRefusal("E_INVALID_ARGUMENT"));
+      mountForm(TEAM_WITH_LOCAL);
+
+      await createBot(user);
+      await settle();
+      expect(alertText()).toBe(UNCONFIRMED);
+
+      await submitAgain(user);
+      expect(alertText()).toBeNull();
+
+      await submitAgain(user);
+      expect(mocks.createAsync).toHaveBeenCalledTimes(3);
+      expect(alertText()).toBe(REFUSED);
+    });
+  });
 });
 
 function cursorMaxRow(

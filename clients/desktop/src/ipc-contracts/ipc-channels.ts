@@ -127,6 +127,14 @@ export const RunnerHostInvoke = {
   // change may never come. This channel removes the whole class: a subscriber
   // asks for the current value instead of hoping it was told.
   localHostSnapshot: "runnerHost:host:localHostSnapshot",
+  // PULL for the same state `localHostUnresponsiveChange` pushes, for the
+  // same reason as `localHostSnapshot`: a window that subscribes after the
+  // push asks instead of hoping it was told.
+  localHostUnresponsive: "runnerHost:host:localHostUnresponsive",
+  // The force restart offered for an unresponsive host, carrying that host's
+  // pid: main restarts only while the same host is published and still not
+  // answering, never whatever host has replaced it since.
+  forceRestartUnresponsiveHost: "runnerHost:host:forceRestartUnresponsive",
   setUnsyncedEditsSnapshot: "runnerHost:appLifecycle:setUnsyncedEditsSnapshot",
   // Renderer-initiated app quit (the removed surface's "Quit Traycer" button).
   // Routes through the normal `before-quit` flow (unsynced-edits guard etc.).
@@ -450,6 +458,11 @@ export const RunnerHostEvent = {
   // superseded attempt's late result can't be mistaken for the live one.
   deviceFlowResult: "runnerHost:event:deviceFlowResult",
   localHostChange: "runnerHost:event:localHostChange",
+  // The health monitor's verdict that the local host is alive but has not
+  // answered past the busy window (`LocalHostUnresponsive`), or `null` once it
+  // answers again or dies. The renderer offers a force restart; nothing is
+  // killed on this signal.
+  localHostUnresponsiveChange: "runnerHost:event:localHostUnresponsiveChange",
   // OS wake pulse (powerMonitor `resume` / `unlock-screen`) bridged to the
   // renderer so it force-reconnects its host streams - re-registering the
   // live request context within seconds of wake instead of waiting out the

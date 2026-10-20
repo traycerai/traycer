@@ -225,6 +225,7 @@ function baseArgs(overrides: Partial<ServiceInstallArgs>): ServiceInstallArgs {
     takeover: false,
     attemptAdoption: null,
     lifecycleOrigin: "terminal",
+    expectedHost: null,
     ...overrides,
   };
 }

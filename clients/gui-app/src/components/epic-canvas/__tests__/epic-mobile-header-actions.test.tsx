@@ -145,7 +145,7 @@ vi.mock("@/lib/analytics", async (importOriginal) => {
 });
 
 function openEdit(testId: string): HTMLElement {
-  fireEvent.click(screen.getByTestId(testId));
+  fireEvent.keyDown(screen.getByTestId(testId), { key: "Enter" });
   return screen.getByTestId(`${testId}-input`);
 }
 

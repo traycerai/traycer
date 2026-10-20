@@ -75,7 +75,6 @@ export interface HistoryTaskRowProps {
   readonly selectionControl: ReactNode;
   readonly renderInteractionTarget: (describedBy: string) => ReactNode;
   readonly renameEditor: ReactNode;
-  readonly renameControl: ReactNode;
   readonly deleteControl: ReactNode;
   readonly sweepControl: ReactNode;
   readonly sweepMenuItem: ReactNode;
@@ -204,7 +203,6 @@ export function HistoryTaskRow(props: HistoryTaskRowProps): ReactNode {
                   onSetPinned={props.onSetPinned}
                 />
               )}
-              {isDeleting ? null : props.renameControl}
             </span>
           )}
         </span>

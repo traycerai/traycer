@@ -634,6 +634,7 @@ describe("HostLifecycle.bootstrap (metadata-first)", () => {
         }),
         readLiveness: undefined,
         readLiveSupervisorPid: () => Promise.resolve(null),
+        onHostUnresponsive: () => undefined,
       });
 
       // Listening BEFORE the write, since the watcher may fire first.

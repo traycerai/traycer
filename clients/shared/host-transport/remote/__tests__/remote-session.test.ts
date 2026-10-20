@@ -80,6 +80,7 @@ import {
   HostRequestAbortedError,
   HostRpcError,
   HostTransportFailureError,
+  mayHaveReachedHost,
   RetryableTransportError,
 } from "../../host-messenger";
 import {
@@ -2023,6 +2024,261 @@ describe("RemoteSession unary in flight at a connection drop", () => {
         expect(Date.now() - droppedAt).toBeLessThan(
           UNARY_RESPONSE_TIMEOUT_MS / 10,
         );
+      } finally {
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+});
+
+describe("RemoteSession pending unary dispatch provenance", () => {
+  async function readySession(
+    relay: FakeRelayHost,
+  ): Promise<RemoteSession<VersionedRpcRegistry, VersionedStreamRpcRegistry>> {
+    applySilenceFloor(relay, ["worktree.getBinding"]);
+    const lease = new MutableBearerLease("valid-token", "user-1");
+    const session = new RemoteSession({
+      ...buildSessionOptions(relay, lease, null),
+      rpcRegistry: bindingOnlyRegistry(),
+    });
+    session.start();
+    await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+    return session;
+  }
+
+  it(
+    "marks the UNAUTHORIZED rejection a revoked peer gives a pending unary",
+    async () => {
+      const relay = new FakeRelayHost();
+      relay.skipUnaryAutoRespond = true;
+      const session = await readySession(relay);
+      try {
+        const settled = sendBindingUnary(session);
+        await vi.waitFor(
+          () => expect(relay.unaryRequests).toHaveLength(1),
+          WAIT,
+        );
+
+        relay.sendRelayKill("peer_gone", "revoked");
+        const error = await settled;
+
+        expect(error).toBeInstanceOf(HostRpcError);
+        expect(error).not.toBeInstanceOf(HostTransportFailureError);
+        expect(error).toMatchObject({ code: "UNAUTHORIZED" });
+        expect(mayHaveReachedHost(error)).toBe(true);
+      } finally {
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+
+  it(
+    "marks the rejection a caller close gives a pending unary",
+    async () => {
+      const relay = new FakeRelayHost();
+      relay.skipUnaryAutoRespond = true;
+      const session = await readySession(relay);
+      try {
+        const settled = sendBindingUnary(session);
+        await vi.waitFor(
+          () => expect(relay.unaryRequests).toHaveLength(1),
+          WAIT,
+        );
+
+        session.close();
+        const error = await settled;
+
+        expect(error).toBeInstanceOf(HostRpcError);
+        expect(mayHaveReachedHost(error)).toBe(true);
+      } finally {
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+
+  it(
+    "marks a success answer this side cannot read",
+    async () => {
+      // A host on 1.0 answering a client on 1.1: the answer must parse as 1.0
+      // before it is upgraded, and this one does not.
+      const statusV10 = defineRpcContract({
+        method: "host.status",
+        schemaVersion: { major: 1, minor: 0 } as const,
+        requestSchema: z.object({}),
+        responseSchema: z.object({ ready: z.boolean() }),
+      });
+      const statusV11 = defineRpcContract({
+        method: "host.status",
+        schemaVersion: { major: 1, minor: 1 } as const,
+        requestSchema: z.object({}),
+        responseSchema: z.object({ ready: z.boolean(), detail: z.string() }),
+      });
+      const upgradeStatus = defineUpgradePath<
+        typeof statusV10,
+        typeof statusV11
+      >({
+        from: statusV10.schemaVersion,
+        to: statusV11.schemaVersion,
+        upgradeRequest: () => ({}),
+        upgradeResponse: (response) => ({
+          ready: response.ready,
+          detail: "upgraded",
+        }),
+      });
+      const relay = new FakeRelayHost();
+      relay.floorRpcManifest = { "host.status": { major: 1, minor: 0 } };
+      relay.unaryResult = { ready: "not-a-boolean" };
+      const lease = new MutableBearerLease("valid-token", "user-1");
+      const session = new RemoteSession({
+        ...buildSessionOptions(relay, lease, null),
+        rpcRegistry: defineFloorAwareVersionedRpcRegistry(
+          ["host.status"] as const,
+          {
+            "host.status": {
+              1: {
+                latestMinor: 1,
+                versions: {
+                  0: { contract: statusV10, upgradeFromPreviousVersion: null },
+                  1: {
+                    contract: statusV11,
+                    upgradeFromPreviousVersion: upgradeStatus,
+                  },
+                },
+                downgradePathsFromLatest: {},
+              },
+            },
+          },
+        ),
+      });
+      try {
+        session.start();
+        await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+        const error: unknown = await session
+          .sendUnary(
+            "host.status",
+            {},
+            null,
+            null,
+            null,
+            undefined,
+            false,
+            null,
+          )
+          .then(
+            () => null,
+            (reason: unknown) => reason,
+          );
+
+        expect(error).toBeInstanceOf(HostRpcError);
+        expect(error).toMatchObject({ code: "RPC_ERROR", fatalDetails: null });
+        expect(mayHaveReachedHost(error)).toBe(true);
+      } finally {
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+
+  it(
+    "marks the rejection a corrupt inbound frame gives a pending unary",
+    async () => {
+      const relay = new FakeRelayHost();
+      relay.skipUnaryAutoRespond = true;
+      const session = await readySession(relay);
+      try {
+        const settled = sendBindingUnary(session);
+        await vi.waitFor(
+          () => expect(relay.unaryRequests).toHaveLength(1),
+          WAIT,
+        );
+        const streamId = relay.unaryRequests.at(0)?.streamId;
+        if (streamId === undefined) {
+          throw new Error("no REQUEST recorded");
+        }
+
+        // Flagged compressed, but the payload is not a deflate stream.
+        const corrupt = new Uint8Array(4 + 8);
+        new DataView(corrupt.buffer).setUint32(0, 64);
+        corrupt.set([9, 9, 9, 9, 9, 9, 9, 9], 4);
+        relay.deliverToClient(
+          await relay.encryptFrame({
+            type: MuxFrameType.RESPONSE,
+            streamId,
+            seq: 0,
+            qos: QosClass.BULK,
+            chunked: false,
+            chunkFirst: false,
+            chunkLast: false,
+            compressed: true,
+            json: null,
+            binary: corrupt,
+          }),
+        );
+        const error = await settled;
+
+        expect(error).toBeInstanceOf(HostRpcError);
+        expect(error).toMatchObject({
+          fatalDetails: { code: "STREAM_BODY_DECODE_FAILED" },
+        });
+        expect(mayHaveReachedHost(error)).toBe(true);
+        expect(session.isClosed()).toBe(false);
+      } finally {
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+
+  it(
+    "marks the rejection a host per-stream FATAL gives a pending unary",
+    async () => {
+      const relay = new FakeRelayHost();
+      relay.skipUnaryAutoRespond = true;
+      const session = await readySession(relay);
+      try {
+        const settled = sendBindingUnary(session);
+        await vi.waitFor(
+          () => expect(relay.unaryRequests).toHaveLength(1),
+          WAIT,
+        );
+        const streamId = relay.unaryRequests.at(0)?.streamId;
+        if (streamId === undefined) {
+          throw new Error("no REQUEST recorded");
+        }
+
+        await relay.sendStreamFatal(streamId, {
+          code: "RPC_ERROR",
+          reason: "host abandoned the request mid-flight",
+          incompatibleMethods: null,
+          upgradeGuidance: null,
+        });
+        const error = await settled;
+
+        expect(error).toBeInstanceOf(HostRpcError);
+        expect(error).toMatchObject({ fatalDetails: { code: "RPC_ERROR" } });
+        expect(mayHaveReachedHost(error)).toBe(true);
+      } finally {
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+
+  it(
+    "leaves a host's own refusal unmarked",
+    async () => {
+      const relay = new FakeRelayHost();
+      relay.unaryError = { code: "FORBIDDEN", message: "not yours" };
+      const session = await readySession(relay);
+      try {
+        const error = await sendBindingUnary(session);
+
+        expect(error).toBeInstanceOf(HostRpcError);
+        expect(error).toMatchObject({ code: "FORBIDDEN" });
+        expect(mayHaveReachedHost(error)).toBe(false);
       } finally {
         session.close();
       }

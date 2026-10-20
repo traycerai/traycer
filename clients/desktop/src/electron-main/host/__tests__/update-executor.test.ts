@@ -87,6 +87,7 @@ interface DepsOverrides {
   readonly drain?: () => Promise<DesktopDrainVerdict>;
   readonly publishTombstone?: DesktopActivationDeps["publishTombstone"];
   readonly withActuatorLock?: DesktopActivationDeps["withActuatorLock"];
+  readonly confirmTarget?: DesktopActivationDeps["confirmTarget"];
   readonly registerActuator?: (
     capability: UpdateMutationCapability,
   ) => Promise<DesktopActivationCycleOutcome>;
@@ -127,6 +128,7 @@ function baseDeps(
     withActuatorLock:
       overrides.withActuatorLock ??
       (async (_capability, run) => ({ kind: "ran", value: await run() })),
+    confirmTarget: overrides.confirmTarget ?? (async () => true),
     registerActuator:
       overrides.registerActuator ?? (async () => ({ kind: "activated" })),
     clearTombstone: overrides.clearTombstone ?? (async () => {}),
@@ -528,6 +530,73 @@ describe("runDesktopActivationSegment - drain busy", () => {
     expect(outcome.kind).toBe("verified");
     const record = await currentRecord(layout);
     expect(record.phase).toBe("restarting");
+  });
+});
+
+describe("runDesktopActivationSegment - confirmed host changed", () => {
+  it("re-parks waiting-to-activate/activate, publishes no tombstone and registers nothing when the confirmed host is no longer the running one", async () => {
+    eligibleCohort();
+    const layout = await freshLayout();
+    const lockPath = join(layout.rootDir, "cli-lock");
+    const identity = await seedParkedAttempt(layout, {});
+    let tombstoneCalled = false;
+    let registerCalled = false;
+
+    const outcome = await runDesktopActivationSegment(
+      activateRequest(identity, {}),
+      baseDeps(layout, lockPath, {
+        confirmTarget: async () => false,
+        publishTombstone: async () => {
+          tombstoneCalled = true;
+          return { kind: "published" };
+        },
+        registerActuator: async () => {
+          registerCalled = true;
+          return { kind: "activated" };
+        },
+      }),
+    );
+
+    expect(outcome).toEqual({ kind: "parked", reason: "target-changed" });
+    expect(tombstoneCalled).toBe(false);
+    expect(registerCalled).toBe(false);
+    const record = await currentRecord(layout);
+    expect(record.phase).toBe("waiting-to-activate");
+    expect(record.continuation).toBe("activate");
+    expect(record.execution).not.toBe("terminal");
+  });
+
+  it("asks while the actuator lock is held, ahead of the restarting write-ahead", async () => {
+    eligibleCohort();
+    const layout = await freshLayout();
+    const lockPath = join(layout.rootDir, "cli-lock");
+    const identity = await seedParkedAttempt(layout, {});
+    let lockHeld = false;
+    let heldWhenAsked: boolean | null = null;
+    let phaseWhenAsked: string | null = null;
+
+    const outcome = await runDesktopActivationSegment(
+      activateRequest(identity, {}),
+      baseDeps(layout, lockPath, {
+        withActuatorLock: async (_capability, run) => {
+          lockHeld = true;
+          try {
+            return { kind: "ran", value: await run() };
+          } finally {
+            lockHeld = false;
+          }
+        },
+        confirmTarget: async () => {
+          heldWhenAsked = lockHeld;
+          phaseWhenAsked = (await currentRecord(layout)).phase;
+          return true;
+        },
+      }),
+    );
+
+    expect(outcome.kind).toBe("verified");
+    expect(heldWhenAsked).toBe(true);
+    expect(phaseWhenAsked).toBe("preparing");
   });
 });
 

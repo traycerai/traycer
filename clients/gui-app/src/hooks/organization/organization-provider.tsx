@@ -370,9 +370,17 @@ function OrganizationSubscription(props: {
     ),
     options: { staleTime: Infinity, refetchOnMount: "always" },
   });
+  // Only this mount's own successful answer is accepted. A task set that was
+  // subscribed before keeps its earlier answer in the query cache, and a
+  // remount is handed that answer at once, ahead of the refetch: a group
+  // dissolved since then would be projected onto the strip again until the
+  // fresh view lands. A failed refetch also counts as fetched after mount
+  // while `data` stays the cached answer, so success is required too.
+  const refreshedAfterMount = refresh.isFetchedAfterMount && refresh.isSuccess;
   useEffect(() => {
-    if (refresh.data && !receivedFrame.current) accept(refresh.data, taskIds);
-  }, [refresh.data, accept, taskIds]);
+    if (refresh.data && refreshedAfterMount && !receivedFrame.current)
+      accept(refresh.data, taskIds);
+  }, [refresh.data, refreshedAfterMount, accept, taskIds]);
   useEffect(() => {
     let active = true;
     if (streamClient === null)

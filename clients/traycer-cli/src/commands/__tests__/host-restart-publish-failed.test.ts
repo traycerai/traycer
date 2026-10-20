@@ -246,6 +246,7 @@ describe("host restart survives a CLI upgrade publication failure (Codex P1 #2)"
       ifIdle: false,
       force: false,
       deferIfParked: false,
+      expectedHost: null,
       lifecycleOrigin: "terminal",
     });
 

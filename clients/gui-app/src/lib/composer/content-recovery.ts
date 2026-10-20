@@ -365,6 +365,9 @@ export const CLASSIFIED_LABELS_FOR_TESTS: ReadonlySet<string> = new Set([
   // Text-complete VIA THE SEAM, like the atoms: `linkedTextNode` emits the
   // serializer's `[label](href)`, so nothing about a link is lost.
   "link",
+  // The artifact serializer's spelling of a link whose text is its own URL
+  // (`<href>`), so text-complete like `link`; composer content never holds it.
+  "autolink",
   // Classified per node by `lostSlashChip` rather than by type.
   "slashCommand",
 ]);

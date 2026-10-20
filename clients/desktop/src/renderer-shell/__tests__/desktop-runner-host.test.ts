@@ -83,6 +83,10 @@ interface FakeBridgeHandle {
     readonly epicId: string;
   }>;
   readonly ownershipReleases: readonly string[];
+  readonly forceRestartOffers: ReadonlyArray<{
+    readonly pid: number;
+    readonly offerId: number;
+  }>;
   readonly temporaryWrites: ReadonlyArray<{
     readonly name: string;
     readonly type: string;
@@ -106,6 +110,7 @@ function buildFakeBridge(
 
   const tokenSlot = { value: null as string | null };
   const respawnCounter = { count: 0 };
+  const forceRestartOffers: Array<{ pid: number; offerId: number }> = [];
   const ownershipClaims: Array<{
     readonly tabId: string;
     readonly epicId: string;
@@ -267,6 +272,7 @@ function buildFakeBridge(
         },
       };
     },
+    onLocalHostUnresponsive: () => ({ dispose: () => undefined }),
     onSystemResumed: (handler: () => void) => {
       systemResumedHandlers.add(handler);
       return {
@@ -278,6 +284,16 @@ function buildFakeBridge(
     requestHostRespawn: async () => {
       respawnCounter.count += 1;
       return { kind: "restarted" as const };
+    },
+    forceRestartUnresponsiveHost: async (offer: {
+      readonly pid: number;
+      readonly offerId: number;
+    }) => {
+      forceRestartOffers.push(offer);
+      return {
+        kind: "declined" as const,
+        message: "The host started responding again.",
+      };
     },
     getLastKnownLocalHostId: async () => null,
     trayState: {
@@ -823,6 +839,7 @@ function buildFakeBridge(
     bridge,
     ownershipClaims,
     ownershipReleases,
+    forceRestartOffers,
     temporaryWrites,
     emit(snapshot: LocalHostSnapshot | null): void {
       lastEmitted = snapshot;
@@ -1398,6 +1415,22 @@ describe("DesktopRunnerHost.onLocalHostChange", () => {
     // The fake bridge increments its internal counter - observable via a
     // subsequent respawn not throwing and the await resolving.
     expect(host.authnBaseUrl).toBe("http://localhost:5005");
+  });
+
+  it("forwards forceRestartUnresponsiveHost(offer) to the bridge with that pid and offer id and returns its result", async () => {
+    const fake = buildFakeBridge(null);
+    const host = new DesktopRunnerHost({
+      bridge: fake.bridge,
+      signInUrl: "https://auth.example.invalid/sign-in",
+    });
+
+    await expect(
+      host.forceRestartUnresponsiveHost({ pid: 4242, offerId: 7 }),
+    ).resolves.toEqual({
+      kind: "declined",
+      message: "The host started responding again.",
+    });
+    expect(fake.forceRestartOffers).toEqual([{ pid: 4242, offerId: 7 }]);
   });
 
   it("passes host controller status subscriptions through to the bridge", () => {

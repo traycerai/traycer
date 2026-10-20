@@ -52,6 +52,7 @@ export const LOCAL_WS_DOCTOR_TRIVIALLY_GREEN_ISSUE_CODES = [
   "SERVICE_STOPPED",
   "PORT_UNREACHABLE",
   "PORT_CONFLICT",
+  "HOST_RPC_UNRESPONSIVE",
 ] as const;
 
 /** No code is universally proven: a relay-served RPC gets this empty set. */
@@ -62,9 +63,10 @@ export const RPC_DOCTOR_TRIVIALLY_GREEN_ISSUE_CODES = [] as const;
  * arrived over a direct local WebSocket. A relay session proves the relay
  * connection, not the daemon's loopback listener or its local CLI state.
  *
- * `SERVICE_STOPPED`, `PORT_UNREACHABLE`, and `PORT_CONFLICT` are local-WS
- * facts: the responding process accepted the loopback connection on its
- * configured endpoint. PID sidecar codes remain meaningful (the listener may
+ * `SERVICE_STOPPED`, `PORT_UNREACHABLE`, `PORT_CONFLICT` and
+ * `HOST_RPC_UNRESPONSIVE` are local-WS facts: the responding process accepted
+ * the loopback connection on its configured endpoint and answered it, so it
+ * is neither stopped, unreachable nor unresponsive. PID sidecar codes remain meaningful (the listener may
  * have been started outside its service metadata), and the three host-RPC
  * credential/protocol codes remain meaningful because the spawned CLI uses a
  * separate stored bearer and performs its own negotiation.

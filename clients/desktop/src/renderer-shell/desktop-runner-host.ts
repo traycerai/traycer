@@ -61,6 +61,8 @@ import type {
   IZoomHost,
   LocalHostCapability,
   LocalHostSnapshot,
+  LocalHostUnresponsive,
+  LocalHostUnresponsiveOffer,
   MigrationRunningSnapshot,
   RegisteredHostsChange,
   SystemResumeEvent,
@@ -336,8 +338,14 @@ export interface DesktopPreloadBridge {
   onRegisteredHostsChange(handler: (push: RegisteredHostsChange) => void): {
     dispose: () => void;
   };
+  onLocalHostUnresponsive(
+    handler: (state: LocalHostUnresponsive | null) => void,
+  ): { dispose: () => void };
   onSystemResumed(handler: () => void): { dispose: () => void };
   requestHostRespawn(): Promise<HostRestartRequestResult>;
+  forceRestartUnresponsiveHost(
+    offer: LocalHostUnresponsiveOffer,
+  ): Promise<HostRestartRequestResult>;
   getLastKnownLocalHostId(): Promise<string | null>;
   trayState: {
     setEpics(epics: readonly TrayEpic[]): Promise<void>;
@@ -1292,6 +1300,13 @@ export class DesktopRunnerHost implements IRunnerHost {
     return this.bridge.getLastKnownLocalHostId();
   }
 
+  onLocalHostUnresponsive(
+    handler: (state: LocalHostUnresponsive | null) => void,
+  ): Disposable {
+    // The preload caches the state and replays it on subscribe.
+    return toDisposable(this.bridge.onLocalHostUnresponsive(handler));
+  }
+
   onSystemResumed(handler: (event: SystemResumeEvent) => void): Disposable {
     this.systemResumedHandlers.add(handler);
     return {
@@ -1313,6 +1328,12 @@ export class DesktopRunnerHost implements IRunnerHost {
 
   requestHostRespawn(): Promise<HostRestartRequestResult> {
     return this.bridge.requestHostRespawn();
+  }
+
+  forceRestartUnresponsiveHost(
+    offer: LocalHostUnresponsiveOffer,
+  ): Promise<HostRestartRequestResult> {
+    return this.bridge.forceRestartUnresponsiveHost(offer);
   }
 
   dispose(): void {

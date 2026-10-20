@@ -604,6 +604,21 @@ export interface IRunnerHost {
   ): Disposable;
 
   /**
+   * Subscribes to the shell's verdict that the local host has stopped
+   * responding: its process is alive, but its endpoint has not answered for
+   * longer than a busy host plausibly stays silent. The handler fires
+   * synchronously on subscribe with the current state (or `null`), then again
+   * whenever it changes; `null` means the host answered again, died, or was
+   * never unresponsive. The shell kills nothing on this verdict - restarting
+   * is the person's call (`forceRestartUnresponsiveHost`). Shells without a
+   * local host
+   * emit a single `null` on subscribe and never transition.
+   */
+  onLocalHostUnresponsive(
+    handler: (state: LocalHostUnresponsive | null) => void,
+  ): Disposable;
+
+  /**
    * The `hostId` this machine's local host most recently published, read from
    * durable host metadata rather than from a live connection - so it still
    * answers while the host is stopped, restarting, or unreachable.
@@ -661,6 +676,20 @@ export interface IRunnerHost {
    * on genuine failures.
    */
   requestHostRespawn(): Promise<HostRestartRequestResult>;
+
+  /**
+   * Force-restarts the local host the person was offered a restart for
+   * (`onLocalHostUnresponsive`), and only that host: the shell first checks
+   * that this offer is still the one out, and that the host it was made for -
+   * the one the shell recorded when it made the offer, not whatever is
+   * published now - is still published and still does not answer. A host
+   * that answered again, or was replaced (even under the same pid), since
+   * the offer was made is left running, and the call resolves `declined`.
+   * Shells without a local host resolve `declined`.
+   */
+  forceRestartUnresponsiveHost(
+    offer: LocalHostUnresponsiveOffer,
+  ): Promise<HostRestartRequestResult>;
 
   /**
    * OS-service control surface used by the Service Health settings pane.
@@ -2010,6 +2039,32 @@ export interface IWorkspaceFoldersHost {
    */
   readonly canPickNatively: boolean;
   pickFolders(): Promise<readonly string[]>;
+}
+
+/**
+ * Names one force-restart offer: the host's pid, and the shell's id for the
+ * offer. The shell records which host it made the offer for, and a restart
+ * names the offer rather than a host, so it can only ever reach that one.
+ */
+export interface LocalHostUnresponsiveOffer {
+  readonly pid: number;
+  readonly offerId: number;
+}
+
+/**
+ * A local host whose process is alive but whose endpoint has gone unanswered
+ * past the shell's busy window. See `IRunnerHost.onLocalHostUnresponsive`.
+ */
+export interface LocalHostUnresponsive {
+  readonly pid: number;
+  /**
+   * The force-restart offer, or null when the shell makes none: the host
+   * published no start identity, so a restart could not be held to this host
+   * rather than one that reused its pid and endpoint.
+   */
+  readonly offerId: number | null;
+  /** How long the endpoint had gone unanswered when the verdict was reached. */
+  readonly unreachableForMs: number;
 }
 
 /**
