@@ -115,6 +115,7 @@ export function SimulatorTile(props: SimulatorTileProps) {
     hostId,
     epicId,
     node,
+    session,
     onOpened,
     placeTile,
   });
@@ -258,12 +259,22 @@ function useSessionMemory(session: SimulatorSession | null): {
  * its per-call callbacks skipped, so the answer - which is what makes the
  * session this tile's own, and what carries an Android serial - has to land
  * on an observer that outlives the gate.
+ *
+ * `connecting` is the inventory's "in flight" from the person's side: set
+ * when this tile sends an open, cleared when that open settles OR when the
+ * session shows up on the stream, whichever is first. The stream is what the
+ * open is for, so a session that arrives - and may later end under the tile
+ * through the stall path - is the open having done its work, whatever the
+ * RPC still owes; a tile that kept waiting on the RPC alone showed a disabled
+ * "Boot and connect" over an inventory the host reported idle.
  */
 function useSimulatorConnect(args: {
   readonly client: HostClient<HostRpcRegistry> | null;
   readonly hostId: string;
   readonly epicId: string;
   readonly node: SimulatorTileRef;
+  /** The task's session on this tile's simulator, as the stream reports it. */
+  readonly session: SimulatorSession | null;
   /** The host answered an open this tile sent. */
   readonly onOpened: () => void;
   readonly placeTile: (ref: SimulatorTileRef) => void;
@@ -272,11 +283,16 @@ function useSimulatorConnect(args: {
   readonly connecting: boolean;
   readonly supported: boolean;
 } {
-  const { client, hostId, epicId, node, onOpened, placeTile } = args;
+  const { client, hostId, epicId, node, session, onOpened, placeTile } = args;
   const { mutation, supported } = useSimulatorOpenMutation(client, hostId);
-  const { mutate, isPending } = mutation;
+  const { mutate } = mutation;
+  const [awaiting, setAwaiting] = useState(false);
+  // During render (React's "storing information from previous renders"): the
+  // session the open asked for is here, so nothing is awaited any more.
+  if (awaiting && session !== null) setAwaiting(false);
   const connect = useCallback(
     (target: SimulatorSummary) => {
+      setAwaiting(true);
       mutate(
         {
           epicId,
@@ -285,6 +301,9 @@ function useSimulatorConnect(args: {
           boot: true,
         },
         {
+          onSettled: () => {
+            setAwaiting(false);
+          },
           onSuccess: (response) => {
             onOpened();
             // The host's id is authoritative: an Android AVD becomes a serial
@@ -305,7 +324,7 @@ function useSimulatorConnect(args: {
     },
     [epicId, hostId, mutate, node.simulatorId, onOpened, placeTile],
   );
-  return { connect, connecting: isPending, supported };
+  return { connect, connecting: awaiting, supported };
 }
 
 /** The setup view, with the switch wired to this host's `config.simulator.set`. */

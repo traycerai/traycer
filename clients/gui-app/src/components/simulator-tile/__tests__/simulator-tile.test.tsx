@@ -39,7 +39,10 @@ const UDID = "udid-1";
 /** The tile's `simulator.open` as it calls it: variables plus the answer hook. */
 type OpenMutate = (
   variables: SimulatorOpenRequest,
-  options: { readonly onSuccess: (response: SimulatorOpenResponse) => void },
+  options: {
+    readonly onSuccess: (response: SimulatorOpenResponse) => void;
+    readonly onSettled: () => void;
+  },
 ) => void;
 
 const fakes = vi.hoisted(() => ({
@@ -499,6 +502,33 @@ describe("SimulatorTile", () => {
     fireEvent.click(screen.getByTestId("simulator-close"));
     expect(fakes.closeTile).toHaveBeenCalledTimes(1);
     expect(fakes.close).not.toHaveBeenCalled();
+  });
+
+  it("offers Boot and connect again once a session ends under it, even while its own open never settled", () => {
+    // The open the tile sent is still in flight on the RPC when the session
+    // arrives on the stream; the host then ends that session (a device shut
+    // down under the hub). The inventory that follows must be usable.
+    fakes.sessions = sessions({ state: withTargetBooted(READY_STATE) });
+    const rerender = renderTile();
+    expect(fakes.open).toHaveBeenCalledTimes(1);
+    fakes.sessions = sessions({
+      state: { ...withTargetBooted(READY_STATE), sessions: [SESSION] },
+    });
+    rerender();
+    expect(screen.getByTestId("simulator-toolbar")).toBeTruthy();
+
+    fakes.sessions = sessions({ state: READY_STATE });
+    rerender();
+    const connect = screen.getByTestId("simulator-connect");
+    expect(connect.textContent).toContain("Boot and connect");
+    expect(connect).toHaveProperty("disabled", false);
+    fireEvent.click(connect);
+    expect(fakes.open).toHaveBeenCalledTimes(2);
+    // Sent again: in flight until the host answers or the session shows up.
+    expect(screen.getByTestId("simulator-connect")).toHaveProperty(
+      "disabled",
+      true,
+    );
   });
 
   it("leaves a session it only attached to - an agent's - open when the tile closes", () => {
