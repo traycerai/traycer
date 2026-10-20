@@ -144,6 +144,10 @@ function isRenderablePlanBlock(block: PlanContentBlock): boolean {
 
 export interface RenderedMessagesDisplayContext {
   readonly resolveUserSenderLabel: (sender: OpenUserMessageSender) => string;
+  /** The sender's picture, or null to show none (every chat but a bot's). */
+  readonly resolveUserSenderAvatarUrl: (
+    sender: OpenUserMessageSender,
+  ) => string | null;
   readonly resolveAgentSenderDisplay: (
     sender: OpenAgentSender,
   ) => AgentSenderDisplay;
@@ -334,9 +338,32 @@ function blockContentVersion(block: OpenContentBlock): number {
       return extractPlainTextFromComposerJSONContent(block.content).length;
     case "plan":
       return planBlockContentVersion(block);
+    case "tool_call":
+      return toolCallBlockContentVersion(block);
     default:
       return 0;
   }
+}
+
+/**
+ * A sent-message card keeps changing after its call settles: the host stamps
+ * `agentMessageDelivery` (queued, then delivered, expired or failed) and, once
+ * delivered, `agentMessageReceipt`, as an ordinary row update that leaves the
+ * block's status and timestamp alone. Without `blocksVersion` those are all
+ * `turnSignature` sees, so a card would keep its cached "queued" segment; both
+ * stamps are hashed here. Every other tool call keeps the cheap `0`.
+ */
+function toolCallBlockContentVersion(
+  block: Extract<OpenContentBlock, { type: "tool_call" }>,
+): number {
+  const delivery = absentAsNull(block.agentMessageDelivery);
+  const receipt = absentAsNull(block.agentMessageReceipt);
+  if (delivery === null && receipt === null) return 0;
+  const hash = hashStringField(
+    TURN_SIGNATURE_HASH_OFFSET,
+    JSON.stringify(delivery),
+  );
+  return hashStringField(hash, JSON.stringify(receipt));
 }
 
 function errorBlockContentVersion(
@@ -3779,6 +3806,10 @@ function renderSteerBlockUserMessage(
     sender: block.sender,
     senderLabel:
       block.sender === null ? null : ctx.resolveUserSenderLabel(block.sender),
+    senderAvatarUrl:
+      block.sender === null
+        ? null
+        : ctx.resolveUserSenderAvatarUrl(block.sender),
     settings: null,
     steerBadge: {
       status: "steered",
@@ -3794,6 +3825,7 @@ function renderSteeredUserMessage(input: {
   readonly persistentMessageId: string | null;
   readonly sender: OpenUserMessageSender | null;
   readonly senderLabel: string | null;
+  readonly senderAvatarUrl: string | null;
   readonly settings: ChatMessageModel["settings"];
   readonly steerBadge: ChatMessageSteerBadge;
 }): ChatMessageModel {
@@ -3821,6 +3853,7 @@ function renderSteeredUserMessage(input: {
     stopped: null,
     persistentMessageId: input.persistentMessageId,
     senderLabel: input.senderLabel,
+    ...senderAvatarField(input.senderAvatarUrl),
     assistantMeta: null,
     statusLabel: null,
     agentSenderInfo:
@@ -3882,6 +3915,7 @@ function renderUserMessage(
     stopped: null,
     persistentMessageId: message.messageId,
     senderLabel: ctx.resolveUserSenderLabel(message.sender),
+    ...senderAvatarField(ctx.resolveUserSenderAvatarUrl(message.sender)),
     assistantMeta: null,
     statusLabel: null,
     agentSenderInfo: agentSenderInfoFromSender(message.sender),
@@ -3895,6 +3929,16 @@ function renderUserMessage(
       ? {}
       : { conversationRequest: message.conversationRequest }),
   };
+}
+
+/**
+ * A user row's `senderAvatarUrl`: the key only when there is a picture, so
+ * no row outside a bot conversation grows one.
+ */
+function senderAvatarField(
+  avatarUrl: string | null,
+): Pick<ChatMessageModel, "senderAvatarUrl"> {
+  return avatarUrl === null ? {} : { senderAvatarUrl: avatarUrl };
 }
 
 function renderPendingUserMessage(
@@ -3931,6 +3975,7 @@ function renderPendingUserMessage(
     stopped: null,
     persistentMessageId: null,
     senderLabel: ctx.resolveUserSenderLabel(message.sender),
+    ...senderAvatarField(ctx.resolveUserSenderAvatarUrl(message.sender)),
     assistantMeta: null,
     statusLabel: "Pending",
     agentSenderInfo: agentSenderInfoFromSender(message.sender),
@@ -4967,6 +5012,19 @@ function toolCallPageStamp(
   return page === undefined ? null : block.page;
 }
 
+/**
+ * A tool block field the shallow parse path may hand over absent, as `null`,
+ * for the reason {@link toolCallPageStamp} gives. Used for the agent-message
+ * fields a sent-message card reads: each is defaulted `null` by the schema, and
+ * the card treats anything but `null` as present, so an absent one would be
+ * read as a value and throw.
+ */
+function absentAsNull<T>(value: T | null): T | null {
+  // Read through `unknown` for the reason `assistantImageResolutions` gives.
+  const read: unknown = value;
+  return read === undefined ? null : value;
+}
+
 /** A tool call's app stamp, or `null`, for the reason {@link toolCallPageStamp} gives. */
 function toolCallMcpAppStamp(
   block: Extract<OpenContentBlock, { type: "tool_call" }>,
@@ -5036,9 +5094,10 @@ const BLOCK_HANDLERS: {
     inputDetail: block.inputDetail,
     taskTodoItems: block.taskTodoItems,
     error: block.error,
-    agentMessageSend: block.agentMessageSend,
+    agentMessageSend: absentAsNull(block.agentMessageSend),
     managedCommand: block.managedCommand,
-    agentMessageReceipt: block.agentMessageReceipt,
+    agentMessageReceipt: absentAsNull(block.agentMessageReceipt),
+    agentMessageDelivery: absentAsNull(block.agentMessageDelivery),
     isStreaming: block.status === "streaming",
     endState: segmentEndState(block.status),
     stopped: block.stopped,

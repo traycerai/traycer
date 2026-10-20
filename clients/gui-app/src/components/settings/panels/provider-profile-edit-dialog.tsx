@@ -37,6 +37,8 @@ import { useRemoveProviderProfile } from "@/hooks/providers/use-remove-provider-
 import { useRenameProviderProfile } from "@/hooks/providers/use-rename-provider-profile-mutation";
 import { redactEmail } from "@/lib/providers/redact-email";
 import { ProviderProfileReauthPanel } from "./provider-profile-reauth-panel";
+import { CredentialRefusalNote } from "@/components/providers/credential-refusal-note";
+import { useHostCredentialRefusal } from "@/hooks/host/use-host-credential-refusal";
 
 type ProviderId = ProviderCliState["providerId"];
 
@@ -263,6 +265,9 @@ function ProfileApiKeyForm(props: {
   };
   const setApiKey = useSetProviderProfileApiKey(onSaved);
   const clearApiKey = useClearProviderProfileApiKey(onSaved);
+  // A sandbox never takes a key; removing one sends nothing secret, so
+  // Remove key stays.
+  const credentialRefusal = useHostCredentialRefusal(null);
 
   const apiKey = props.apiKey;
   const providerLabel = PROVIDER_DISPLAY_NAMES[props.providerId];
@@ -275,7 +280,7 @@ function ProfileApiKeyForm(props: {
     // `min(1)` on the wire: an empty paste is a slip, and the host refuses it
     // rather than reading it as a clear. Refuse it here too so the slip never
     // becomes a round trip.
-    if (busy || trimmed.length === 0) return;
+    if (busy || trimmed.length === 0 || credentialRefusal !== null) return;
     // Drop the sibling's error before starting: the two are separate observers,
     // so a failure from one otherwise outlives the other's success and gets
     // rendered underneath a profile whose state contradicts it. Only the most
@@ -314,7 +319,7 @@ function ProfileApiKeyForm(props: {
           }
           value={props.draft}
           onChange={(event) => props.onDraftChange(event.target.value)}
-          disabled={busy}
+          disabled={busy || credentialRefusal !== null}
           onKeyDown={(event) => {
             if (event.key === "Enter") onSave();
           }}
@@ -326,7 +331,7 @@ function ProfileApiKeyForm(props: {
           size="sm"
           variant="secondary"
           onClick={onSave}
-          disabled={busy || trimmed.length === 0}
+          disabled={busy || trimmed.length === 0 || credentialRefusal !== null}
         >
           {setApiKey.isPending ? <MutedAgentSpinner /> : null}
           {saveLabel}
@@ -353,6 +358,7 @@ function ProfileApiKeyForm(props: {
           </Button>
         ) : null}
       </div>
+      <CredentialRefusalNote refusal={credentialRefusal} />
       {/*
         "Stored encrypted on this device" is the PROVIDER-level section's exact
         claim, and it is reused verbatim because it describes the same

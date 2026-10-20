@@ -677,6 +677,53 @@ describe("arms 1 and 2: the host's verdict", () => {
     expect(view.offersHostUpdate).toBe(false);
   });
 
+  it("says the task was deleted for EPIC_NOT_FOUND, with no detail and no Try again", () => {
+    const view = failed(
+      {
+        code: "EPIC_NOT_FOUND",
+        reason: "EPIC_NOT_FOUND: This epic was deleted (epic=e1 chat=c1).",
+        upgradeGuidance: null,
+      },
+      false,
+    );
+    expect(view).toEqual({
+      kind: "failed",
+      headline: "This task was deleted.",
+      detail: null,
+      settled: true,
+      spinner: false,
+      layout: "card",
+      offersHostUpdate: false,
+      offersTryAgain: false,
+      offersReport: true,
+      code: "EPIC_NOT_FOUND",
+    });
+  });
+
+  it("says there is no access for EPIC_ACCESS_DENIED, with no detail and Try again kept", () => {
+    const view = failed(
+      {
+        code: "EPIC_ACCESS_DENIED",
+        reason:
+          "The caller does not have access to this epic (epic=e1 chat=c1).",
+        upgradeGuidance: null,
+      },
+      false,
+    );
+    expect(view).toEqual({
+      kind: "failed",
+      headline: "You don't have access to this task.",
+      detail: null,
+      settled: true,
+      spinner: false,
+      layout: "card",
+      offersHostUpdate: false,
+      offersTryAgain: true,
+      offersReport: true,
+      code: "EPIC_ACCESS_DENIED",
+    });
+  });
+
   it("words a verdict as a verdict under a dead lease and past the deadline", () => {
     const view = describeChatPreContent(
       input({
@@ -1304,6 +1351,32 @@ describe("chatPreContentReport", () => {
       title: "This agent could not be opened",
       message: "The agent could not be opened.",
       code: "CHAT_INVALID",
+      source: "Chat",
+    });
+  });
+
+  it.each([
+    ["EPIC_NOT_FOUND", "This task was deleted"],
+    ["EPIC_ACCESS_DENIED", "You don't have access to this task"],
+  ])("titles the %s verdict for the task it is about", (code, title) => {
+    expect(
+      chatPreContentReport(
+        input({
+          session: {
+            ...stream("closed", 0),
+            fatalClose: {
+              code,
+              reason: `${code}: closed`,
+              upgradeGuidance: null,
+            },
+          },
+        }),
+        5_000,
+      ),
+    ).toEqual({
+      title,
+      message: "The agent could not be opened.",
+      code,
       source: "Chat",
     });
   });

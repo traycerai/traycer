@@ -1,12 +1,15 @@
 import { describe, expect, it } from "vitest";
 import {
   downgradeRecordAcrossMajors,
+  loadRecord,
   upgradeRecordToVersion,
   type ValueOf,
 } from "@traycer/protocol/framework/index";
 import {
   authRecordRegistry,
   authenticatedUserResponseRecordV100,
+  authenticatedUserResponseRecordV200,
+  authenticatedUserResponseRecordV300,
   exchangeTokenResponseRecordV100,
   exchangeTokenResponseRecordV200,
   listAllMcpServersResponseRecordV100,
@@ -16,11 +19,7 @@ import {
   userRecordV100,
   userRecordV200,
 } from "@traycer/protocol/auth/registry";
-import type {
-  AuthenticatedUser,
-  ProviderType,
-  User,
-} from "@traycer/protocol/auth";
+import type { ProviderType, User } from "@traycer/protocol/auth";
 
 /**
  * Bridge coverage for the two records that actually downgrade: `user` owns
@@ -33,8 +32,9 @@ import type {
  * comparing strings - a bridge that emitted an out-of-contract shape would
  * pass a string comparison and fail here.
  *
- * `User` and `AuthenticatedUser` are the registry's own latest-major (2)
- * types, so the fixtures below stay in lock-step with the schema.
+ * `User` is the registry's latest-major (2) type and the envelope fixtures
+ * are typed at major 2, the source side of the 2-to-1 bridge; the major-3
+ * fixtures add the two fields that major introduces.
  */
 
 function userFixture(providerType: ProviderType): User {
@@ -55,7 +55,14 @@ function userFixture(providerType: ProviderType): User {
   };
 }
 
-function subscriptionFixture(): AuthenticatedUser["userSubscription"] {
+type AuthenticatedUserV200 = ValueOf<
+  typeof authenticatedUserResponseRecordV200
+>;
+type AuthenticatedUserV300 = ValueOf<
+  typeof authenticatedUserResponseRecordV300
+>;
+
+function subscriptionFixture(): AuthenticatedUserV200["userSubscription"] {
   return {
     id: "sub-1",
     userID: "user-1",
@@ -76,7 +83,7 @@ function subscriptionFixture(): AuthenticatedUser["userSubscription"] {
 function authenticatedUserResponseFixtureWithHostId(
   providerType: ProviderType,
   hostId: string | null,
-): AuthenticatedUser {
+): AuthenticatedUserV200 {
   return {
     user: userFixture(providerType),
     userSubscription: subscriptionFixture(),
@@ -88,7 +95,7 @@ function authenticatedUserResponseFixtureWithHostId(
 
 function authenticatedUserResponseFixtureWithoutHostId(
   providerType: ProviderType,
-): AuthenticatedUser {
+): AuthenticatedUserV200 {
   return {
     user: userFixture(providerType),
     userSubscription: subscriptionFixture(),
@@ -215,6 +222,79 @@ describe("authenticated-user-response bridge (2 to 1)", () => {
       result.value,
     );
     expect(parsed).toEqual(v200);
+  });
+});
+
+function authenticatedUserResponseFixtureV300(
+  providerType: ProviderType,
+): AuthenticatedUserV300 {
+  return {
+    ...authenticatedUserResponseFixtureWithoutHostId(providerType),
+    environments: {
+      personal: "env-personal",
+      teams: [{ teamId: "team-1", environmentId: "env-team-1" }],
+    },
+    actingAs: { environmentId: "env-team-1" },
+  };
+}
+
+describe("authenticated-user-response major 3 bridges", () => {
+  it("upgrades a loaded major-2 body to the no-environments value", () => {
+    const v200 = authenticatedUserResponseFixtureWithHostId("GITHUB", "host-1");
+    const loaded = loadRecord(
+      authRecordRegistry,
+      "authenticated-user-response",
+      v200,
+      { major: 2, minor: 0 },
+    );
+    expect(loaded).toEqual({
+      ...v200,
+      environments: { personal: null, teams: [] },
+      actingAs: null,
+    });
+  });
+
+  it("downgrades 3 to 2 to exactly the major-2 value, without either new field", () => {
+    const v300 = authenticatedUserResponseFixtureV300("APPLE");
+    const result = downgradeRecordAcrossMajors(
+      authRecordRegistry["authenticated-user-response"],
+      3,
+      2,
+      v300,
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("unreachable");
+    expect(result.value).toStrictEqual(
+      authenticatedUserResponseFixtureWithoutHostId("APPLE"),
+    );
+  });
+
+  it("downgrades 3 to 1 to exactly the major-1 value, APPLE as EMAIL and without either new field", () => {
+    const v300 = authenticatedUserResponseFixtureV300("APPLE");
+    const result = downgradeRecordAcrossMajors(
+      authRecordRegistry["authenticated-user-response"],
+      3,
+      1,
+      v300,
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("unreachable");
+    const v200 = authenticatedUserResponseFixtureWithoutHostId("APPLE");
+    expect(result.value).toStrictEqual({
+      ...v200,
+      user: { ...v200.user, providerType: "EMAIL" },
+    });
+  });
+
+  it("round-trips a major-3 body with a team environment and actingAs through loadRecord", () => {
+    const v300 = authenticatedUserResponseFixtureV300("GITHUB");
+    const loaded = loadRecord(
+      authRecordRegistry,
+      "authenticated-user-response",
+      v300,
+      { major: 3, minor: 0 },
+    );
+    expect(loaded).toEqual(v300);
   });
 });
 

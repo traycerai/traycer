@@ -200,6 +200,11 @@ ReturnType<typeof fn>          // name the concrete type
 | ---------------------------------------------------------- | --------------------------------------------------------------------------------- |
 | Repeat the same input, path and assertion in another test. | Keep one case; add coverage only for a distinct regression.                       |
 | Leave A's contract above newly inserted B.                 | Keep each contract comment attached to the declaration or operation it describes. |
+| Assert only a constant or two aliases.                     | Assert its effect through the real consumer.                                      |
+| Ticket BEGIN/END or review-round markers in source.        | Remove workflow markers; retain durable invariants.                               |
+| Carry state that no consumer reads.                        | Remove unused fields and the work that populates them.                            |
+| Wrap one call or expression without a distinct contract.   | Keep the expression at its caller.                                                |
+| Describe access using a retired owner or cache policy.     | Match the current authorization boundary and freshness policy.                    |
 
 ## Skills
 

@@ -189,14 +189,6 @@ function AgentStopRow(props: {
           >
             {agent.title}
           </span>
-          <span
-            className={cn(
-              "shrink-0 rounded bg-foreground/8 px-1.5 py-0.5 uppercase text-muted-foreground",
-              CHAT_DOCK_PANEL_ROW_TEXT,
-            )}
-          >
-            {agent.surface}
-          </span>
         </button>
       </TooltipWrapper>
       {self ? (
@@ -233,8 +225,10 @@ function AgentStopRow(props: {
  * consistent.
  *
  * Every row carries a trailing stop control occupying the same slot, so the
- * surface badges stay column-aligned regardless of which stops are visible. The
- * single `surface` prop drives the only presentation difference:
+ * titles truncate at the same column regardless of which stops are visible.
+ * A row shows no GUI/TUI badge: the surface decides which tile opens, and
+ * which one that is does not help the reader choose what to stop. The single
+ * `surface` prop drives the only presentation difference:
  *   - `composer-panel` uses compact icon-only stops; the current agent's
  *     "Stop all" stays visible (so the parent row never looks stop-less) while
  *     each descendant's stop reveals on hover (matching the accumulated-changes

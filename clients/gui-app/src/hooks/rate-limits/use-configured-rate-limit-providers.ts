@@ -123,6 +123,50 @@ export function useConfiguredRateLimitProviders(): ReadonlyArray<ConfiguredRateL
   }, [providers]);
 }
 
+/** What a host says it has, and whether it has said anything at all. */
+export interface RateLimitAccountInventory {
+  /**
+   * Whether the host has ANSWERED, as opposed to not having said anything (a
+   * cold query, a refetch with nothing cached, no host to ask). Both read as
+   * an empty list, and a caller that ends something when an account stops
+   * being listed has to tell them apart: an answer of "none" is the host
+   * reporting that every account is gone, while silence is no report at all.
+   */
+  readonly answered: boolean;
+  /**
+   * Every rate-limit-capable provider the host reports, with every account it
+   * lists for each - before eligibility, before the cache, before the display
+   * rules. Deliberately NOT `useVisibleRateLimitProviders`: that one drops a
+   * provider for reasons that are not an account ceasing to exist (one
+   * OpenCode account answering `rate_limits_not_available` takes the whole
+   * provider out of the display, siblings included), and a caller that ends an
+   * account's state on this list would be ending it on a display act.
+   */
+  readonly providers: ReadonlyArray<ConfiguredRateLimitProvider>;
+}
+
+/**
+ * The host's own account inventory, for a caller whose question is which
+ * accounts EXIST. A passive observer (`enabled: false`, `subscribed: false`)
+ * of the same `providers.list` key the app shell already keeps subscribed on
+ * this host, so it reads the answer without asking for one.
+ */
+export function useRateLimitAccountInventory(): RateLimitAccountInventory {
+  const providersQuery = useProvidersList({
+    enabled: false,
+    subscribed: false,
+  });
+  const providers = providersQuery.data?.providers;
+  return useMemo(
+    () => ({
+      answered: providers !== undefined,
+      providers:
+        providers === undefined ? [] : rateLimitProviderCandidates(providers),
+    }),
+    [providers],
+  );
+}
+
 /**
  * Rate-limit providers that should be displayed in user-facing surfaces
  * (header glyph / popover). This deliberately has a wider gate than

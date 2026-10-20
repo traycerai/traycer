@@ -50,7 +50,9 @@ vi.mock("@/hooks/host/use-surface-host-pin", () => ({
 
 vi.mock("@/components/settings/host-scope/use-host-options", () => ({
   useHostOptions: () => ({
-    hosts: [{ hostId: "host-1", name: "Home Mac", connectable: true }],
+    hosts: [
+      { hostId: "host-1", name: "Home Mac", connectable: true, sandbox: null },
+    ],
     activeHostId: "host-1",
     isLoading: false,
     listsFailed: false,

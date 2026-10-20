@@ -62,6 +62,10 @@ export function HostDangerZone(props: {
  *
  * Account removal is registered-only: a directory-only host has no membership to
  * end, so the row would be a destructive control with nothing behind it.
+ *
+ * A sandbox is never removed here: its membership follows its lifecycle, and
+ * the account refuses the removal. The row keeps its label, so a search for
+ * "remove" still lands on it, and says where the sandbox is removed instead.
  */
 function HostRemovalRow(props: {
   readonly host: HostScopeOption;
@@ -70,6 +74,19 @@ function HostRemovalRow(props: {
   const { host } = props;
   if (host.isLocalMachine) return <RemoveTraycerRow />;
   if (!host.registered) return null;
+  if (host.sandbox !== null) {
+    return (
+      <SettingsRow
+        row={HOST_OVERVIEW.definitions.removeFromAccount}
+        status={
+          <span data-testid="settings-remove-host-sandbox-managed">
+            Managed from its sandbox card.
+          </span>
+        }
+        control={null}
+      />
+    );
+  }
   // Keyed by host id so a scope change REMOUNTS the row. Passing the new id
   // into the same instance would leave an already-open confirmation - and the
   // mutation's own `isPending` - pointing at whichever host the page moved to.

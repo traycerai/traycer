@@ -142,6 +142,31 @@ describe("parseKnownHostNotificationPayload", () => {
     });
   });
 
+  it("retains the literal-true unverified marker on a chat payload", () => {
+    expect(
+      parseKnownHostNotificationPayload({ ...CHAT_STOPPED, unverified: true }),
+    ).toMatchObject({ kind: "chat", unverified: true });
+  });
+
+  it("accepts a chat payload without the unverified marker", () => {
+    const parsed = parseKnownHostNotificationPayload(CHAT_STOPPED);
+    expect(parsed).toMatchObject({ kind: "chat" });
+    expect(parsed).not.toHaveProperty("unverified");
+  });
+
+  it.each([
+    ["false", false],
+    ["a string", "true"],
+    ["a number", 1],
+    ["null", null],
+    ["an object", { value: true }],
+    ["an array", [true]],
+  ])("rejects an unverified marker that is %s", (_label, unverified) => {
+    expect(
+      parseKnownHostNotificationPayload({ ...CHAT_STOPPED, unverified }),
+    ).toBeNull();
+  });
+
   // A malformed row with empty identifiers must degrade rather than mint an
   // unusable deep-link.
   it("rejects empty identifier fields", () => {

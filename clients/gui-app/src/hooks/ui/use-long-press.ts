@@ -10,15 +10,19 @@ import {
  * shorter drag-arm one: this opens a mode, and a mode that appears while
  * someone is still deciding whether to scroll is worse than one that takes a
  * beat.
+ *
+ * Exported for the terminal's touch recognizer, which owns its own hold (it
+ * also arms a selection drag on the way) and must open its menu at the tier
+ * every other long press in the app uses.
  */
-const LONG_PRESS_MS = 450;
+export const LONG_PRESS_MS = 450;
 
 /**
  * Movement that abandons the hold. Fingers are never still, so a zero budget
  * would make the gesture unreachable; 6px is under the swipe recognizer's own
  * activation distance, so the two never both claim one drag.
  */
-const LONG_PRESS_SLOP_PX = 6;
+export const LONG_PRESS_SLOP_PX = 6;
 
 interface LongPressTracking {
   readonly pointerId: number;
@@ -56,20 +60,28 @@ export interface LongPressHandlers {
 export interface LongPressArgs {
   readonly onLongPress: () => void;
   readonly disabled: boolean;
+  /**
+   * Also recognize a held left mouse button. Only for a control whose hold is
+   * its one way in, with no right-click route beside it (the phone header's
+   * task title, which a narrow desktop window renders too).
+   */
+  readonly acceptsMouse: boolean;
 }
 
 /**
- * Press-and-hold on a touch pointer.
+ * Press-and-hold on a touch pointer, and on a mouse when `acceptsMouse` says
+ * so.
  *
- * Touch only, because a mouse already has a right-click and a long left-click
- * there is an interrupted drag rather than an intent. The iOS copy/look-up
- * callout that a hold over chrome would otherwise raise is suppressed by the
- * row's `pointer-coarse:touch-chrome`, not here - it is a styling policy the
- * whole app shares, and a recognizer that reached for `preventDefault` instead
- * would also kill the tap it is trying to coexist with.
+ * Touch only by default, because a mouse already has a right-click and a long
+ * left-click there is an interrupted drag rather than an intent. The iOS
+ * copy/look-up callout that a hold over chrome would otherwise raise is
+ * suppressed by the row's `pointer-coarse:touch-chrome`, not here - it is a
+ * styling policy the whole app shares, and a recognizer that reached for
+ * `preventDefault` instead would also kill the tap it is trying to coexist
+ * with.
  */
 export function useLongPress(args: LongPressArgs): LongPress {
-  const { onLongPress, disabled } = args;
+  const { onLongPress, disabled, acceptsMouse } = args;
   const trackingRef = useRef<LongPressTracking | null>(null);
   const firedRef = useRef(false);
   // Read at fire time so a re-render between press and timeout cannot fire a
@@ -100,7 +112,9 @@ export function useLongPress(args: LongPressArgs): LongPress {
       cancel();
       firedRef.current = false;
       if (disabled) return;
-      if (event.pointerType !== "touch") return;
+      const isMouse = event.pointerType === "mouse";
+      if (event.pointerType !== "touch" && !(acceptsMouse && isMouse)) return;
+      if (isMouse && event.button !== 0) return;
       if (!event.isPrimary) return;
       const pointerId = event.pointerId;
       const timer = window.setTimeout(() => {
@@ -115,7 +129,7 @@ export function useLongPress(args: LongPressArgs): LongPress {
         timer,
       };
     },
-    [cancel, disabled],
+    [acceptsMouse, cancel, disabled],
   );
 
   const onPointerMove = useCallback(

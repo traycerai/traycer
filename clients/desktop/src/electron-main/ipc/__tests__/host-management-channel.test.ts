@@ -39,6 +39,7 @@ import type {
   ServiceRegistrationOk,
   UninstallOk,
 } from "../../host/host-controller-types";
+import { HOST_UNINSTALL_HOST_BUSY_MESSAGE } from "../../host/host-controller-types";
 
 // Ticket 29cf341f - Desktop host-management IPC must respect the same
 // prod/dev environment selected by Desktop main and `HostLifecycle`. These
@@ -1273,6 +1274,39 @@ describe("host-management IPC - traycerHostConvergeReady delegates to HostContro
       errorCode: null,
     });
   });
+});
+
+describe("host-management IPC - uninstall routes resolve a deferred outcome as declined", () => {
+  it.each([
+    { name: "traycerHostUninstall", channel: "traycerHostUninstall" },
+    { name: "traycerAppUninstall", channel: "traycerAppUninstall" },
+  ] as const)(
+    "$name resolves the host-busy deferral as declined with its message",
+    async ({ channel }) => {
+      installFakeCli({ runResult: {}, streamResult: {} });
+      const mgmt = await import("../host-management-ipc");
+      const { RunnerHostInvoke } =
+        await import("../../../ipc-contracts/ipc-channels");
+      const bridge = makeBridge();
+      mgmt.registerHostManagementIpc(bridge as never);
+      const deferred = {
+        kind: "deferred" as const,
+        message: HOST_UNINSTALL_HOST_BUSY_MESSAGE,
+      };
+      bridge.options.hostController.uninstallHostResult = deferred;
+      bridge.options.hostController.removeTraycerResult = deferred;
+
+      const result = await bridge.handlers.get(RunnerHostInvoke[channel])!(
+        null,
+        { all: true },
+      );
+
+      expect(result).toEqual({
+        kind: "declined",
+        message: HOST_UNINSTALL_HOST_BUSY_MESSAGE,
+      });
+    },
+  );
 });
 
 // Renderer surfaces cutover (Host Update Layer Redesign Tech Plan): this

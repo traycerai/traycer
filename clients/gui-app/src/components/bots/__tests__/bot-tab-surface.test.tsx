@@ -42,6 +42,12 @@ const mocks = vi.hoisted(() => ({
     },
   },
   supportQueries: [] as Array<{ hostId: string | null; method: string }>,
+  membersQueries: [] as Array<{
+    environmentId: string | null;
+    enabled: boolean;
+  }>,
+  useBotListChangedSubscriptionForHost:
+    vi.fn<(hostId: string, enabled: boolean) => void>(),
   state: {
     snapshot: null as BotSubscriptionSnapshot | null,
     deleted: false,
@@ -50,6 +56,7 @@ const mocks = vi.hoisted(() => ({
     connectable: { hostIds: [] as string[], resolved: true },
     listedBotIds: undefined as string[] | undefined,
     support: null as boolean | null,
+    membersSupport: null as boolean | null,
     openResult: null as OpenResult | null,
   },
 }));
@@ -57,7 +64,24 @@ const mocks = vi.hoisted(() => ({
 vi.mock("@/hooks/host/use-host-supports-method", () => ({
   useHostMethodSupport: (hostId: string | null, method: string) => {
     mocks.supportQueries.push({ hostId, method });
-    return mocks.state.support;
+    return method === "environment.members"
+      ? mocks.state.membersSupport
+      : mocks.state.support;
+  },
+}));
+// The members of the bot's environment, as the conversation view's resolver:
+// one teammate it knows by name.
+vi.mock("@/hooks/bots/use-environment-members-query", () => ({
+  useEnvironmentMembers: (
+    _client: unknown,
+    environmentId: string | null,
+    enabled: boolean,
+  ) => {
+    mocks.membersQueries.push({ environmentId, enabled });
+    return (userId: string) =>
+      enabled && userId === "user-teammate"
+        ? { displayName: "Tess Teammate", avatarUrl: null }
+        : null;
   },
 }));
 
@@ -103,6 +127,10 @@ vi.mock("@/hooks/bots/use-bot-list-query", () => ({
         : { bots: mocks.state.listedBotIds.map((botId) => ({ botId })) },
   }),
 }));
+vi.mock("@/hooks/bots/use-bot-list-changed-subscription", () => ({
+  useBotListChangedSubscriptionForHost: (hostId: string, enabled: boolean) =>
+    mocks.useBotListChangedSubscriptionForHost(hostId, enabled),
+}));
 vi.mock("@/hooks/bots/use-environment-list-query", () => ({
   useEnvironmentListQuery: () => ({
     data: {
@@ -121,12 +149,18 @@ vi.mock("@/components/bots/bot-conversation-view", () => ({
     hostId: string;
     botTitle: string;
     paused: boolean;
+    resolveMember: (
+      userId: string,
+    ) => { displayName: string | null; avatarUrl: string | null } | null;
   }) => (
     <div
       data-testid="stub-conversation"
       data-host-id={props.hostId}
       data-bot-title={props.botTitle}
       data-paused={String(props.paused)}
+      data-teammate-name={
+        props.resolveMember("user-teammate")?.displayName ?? "unresolved"
+      }
     />
   ),
 }));
@@ -208,6 +242,8 @@ function tabHostIdInStore(): string | null {
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.supportQueries.length = 0;
+  mocks.membersQueries.length = 0;
+  mocks.state.membersSupport = true;
   mocks.state.snapshot = snapshot();
   mocks.state.deleted = false;
   mocks.state.error = null;
@@ -234,9 +270,7 @@ describe("<BotTabSurface /> on a host without bot.open", () => {
       hostId: TAB_HOST,
       method: "bot.open",
     });
-    expect(mocks.supportQueries.every((q) => q.method === "bot.open")).toBe(
-      true,
-    );
+    expect(mocks.supportQueries.every((q) => q.hostId === TAB_HOST)).toBe(true);
   });
 
   it("shows the update notice, without naming a host, and none of the tab's controls", () => {
@@ -434,6 +468,36 @@ describe("<BotTabSurface /> paused", () => {
     ).toBe("true");
   });
 
+  it("names the conversation's members from the bot's environment when the tab's host lists them", () => {
+    render(surface());
+
+    expect(mocks.supportQueries).toContainEqual({
+      hostId: TAB_HOST,
+      method: "environment.members",
+    });
+    expect(mocks.membersQueries).toContainEqual({
+      environmentId: "env-team",
+      enabled: true,
+    });
+    expect(
+      screen
+        .getByTestId("stub-conversation")
+        .getAttribute("data-teammate-name"),
+    ).toBe("Tess Teammate");
+  });
+
+  it("leaves the members unresolved on a host without environment.members", () => {
+    mocks.state.membersSupport = false;
+    render(surface());
+
+    expect(mocks.membersQueries.every((q) => !q.enabled)).toBe(true);
+    expect(
+      screen
+        .getByTestId("stub-conversation")
+        .getAttribute("data-teammate-name"),
+    ).toBe("unresolved");
+  });
+
   it("hands the under-the-hood view the paused flag too", async () => {
     const user = userEvent.setup();
     mocks.state.openResult = answer({
@@ -607,6 +671,15 @@ describe("<BotTabSurface /> tab lifetime", () => {
     render(surface());
 
     expect(lookupBotTab(useBotTabsStore.getState().tabs, BOT_ID)).toBeNull();
+  });
+
+  it("keeps bot.list current through the change stream on the tab's own host", () => {
+    render(surface());
+
+    expect(mocks.useBotListChangedSubscriptionForHost).toHaveBeenLastCalledWith(
+      TAB_HOST,
+      true,
+    );
   });
 });
 

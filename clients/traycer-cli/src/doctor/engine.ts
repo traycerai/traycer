@@ -18,6 +18,7 @@ import {
   hostHomeDir,
   hostIdentityNeedsReauthPath,
   hostNeedsReauthPath,
+  hostLogPath,
   hostUpdateProgressMarkerLockPath,
 } from "../store/paths";
 import { lockHolderLivenessGivenPublisher } from "@traycer-clients/shared/host-lock/cross-process-lock";
@@ -44,8 +45,13 @@ import {
   type HostPidMetadata,
 } from "../host/pid-metadata";
 import { callHostRpcAtEndpoint } from "../internal/host-rpc";
+import type { HostStatusCrossHostMessaging } from "@traycer/protocol/host/status/contracts";
 import { resolveHostAuth } from "../internal/host-auth";
-import { HostRpcError } from "../../../shared/host-transport/host-messenger";
+import {
+  HostRpcError,
+  HostTransportFailureError,
+} from "../../../shared/host-transport/host-messenger";
+import { finalRefusalOf } from "../../../shared/host-transport/retrying-messenger";
 import type { HostTransportEndpoint } from "../../../shared/host-transport/ws-rpc-client";
 import {
   readHostInstallRecord,
@@ -424,6 +430,7 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
           websocketUrl: pidMetadata.websocketUrl,
         },
         opts.environment,
+        pidMetadata.pid,
       );
       if (rpcIssue !== null) {
         issues.push(rpcIssue);
@@ -1574,6 +1581,7 @@ function probeWebsocketUrl(url: string): Promise<boolean> {
 async function probeHostRpc(
   endpoint: HostTransportEndpoint,
   environment: Environment,
+  pid: number,
 ): Promise<DoctorIssue | null> {
   const { websocketUrl } = endpoint;
   const auth = await resolveHostAuth();
@@ -1592,9 +1600,11 @@ async function probeHostRpc(
     };
   }
   try {
-    await callHostRpcAtEndpoint("host.status", {}, endpoint);
-    return null;
-  } catch (err) {
+    const status = await callHostRpcAtEndpoint("host.status", {}, endpoint);
+    return crossHostMessagingIssue(status.crossHostMessaging);
+  } catch (caught) {
+    // Classified by the refusal that ended a retry episode, if one did.
+    const err = finalRefusalOf(caught);
     if (err instanceof HostRpcError) {
       if (err.code === "UNAUTHORIZED") {
         return {
@@ -1611,8 +1621,20 @@ async function probeHostRpc(
       if (err.code === "INCOMPATIBLE" || err.code === "DOWNGRADE_UNSUPPORTED") {
         return incompatibleRpcIssue(websocketUrl, err, environment);
       }
-      // RPC_ERROR / transport: the port accepted a TCP connection but the
-      // RPC layer didn't answer (wedged listener, dial/frame timeout).
+      // A transport failure: the process is alive (checked before this
+      // probe) and its port accepted a TCP connection, but nothing answered -
+      // the host's main thread is blocked. A cooperative restart asks that
+      // same thread, so the fix is the forced one.
+      if (err instanceof HostTransportFailureError) {
+        return unresponsiveHostIssue(
+          pid,
+          await minutesSinceHostLogWrite(environment),
+          websocketUrl,
+          err.code,
+        );
+      }
+      // The host answered, with an error: it is serving, so nothing here
+      // justifies killing its work.
       return {
         code: DOCTOR_ISSUE_CODES.PORT_UNREACHABLE,
         severity: "error",
@@ -1634,6 +1656,88 @@ async function probeHostRpc(
       terminalCommand: "traycer host restart",
       details: { websocketUrl },
     };
+  }
+}
+
+// The host answered, so it is reachable - but its cross-host messages can
+// still be paused. `null` is a host older than `host.status@1.8`, which never
+// said; that is not a claim either way, so it raises nothing.
+export function crossHostMessagingIssue(
+  messaging: HostStatusCrossHostMessaging | null,
+): DoctorIssue | null {
+  if (messaging === null || messaging.state === "ok") return null;
+  const pausedSince = hostInstantText(messaging.pausedSince);
+  const nextRetryAt = hostInstantText(messaging.nextRetryAt);
+  const since = pausedSince === null ? "" : ` Paused since ${pausedSince}.`;
+  const retry =
+    nextRetryAt === null
+      ? " It retries on its own."
+      : ` It retries on its own; next attempt at ${nextRetryAt}.`;
+  return {
+    code: DOCTOR_ISSUE_CODES.HOST_CROSS_HOST_MESSAGES_PAUSED,
+    severity: "warning",
+    title: "Degraded: cross-host messages paused",
+    message: `The host is running, but messages to and from agents on your other devices are paused.${since}${retry}`,
+    fixAction: null,
+    terminalCommand: null,
+    details: {
+      pausedSince: messaging.pausedSince,
+      nextRetryAt: messaging.nextRetryAt,
+      cause: messaging.cause,
+    },
+  };
+}
+
+// A host-reported epoch-ms instant as ISO text, or `null` when there is none
+// or it lies outside what `Date` can hold. The schema bounds it below only, and
+// `toISOString()` throws `RangeError` past 8.64e15 - inside the RPC probe's
+// `try`, which would then report this healthy, answering host as a failed RPC
+// handshake. The raw value still travels in `details`.
+function hostInstantText(epochMs: number | null): string | null {
+  if (epochMs === null) return null;
+  const instant = new Date(epochMs);
+  return Number.isNaN(instant.getTime()) ? null : instant.toISOString();
+}
+
+function unresponsiveHostIssue(
+  pid: number,
+  silentMinutes: number | null,
+  websocketUrl: string | null,
+  rpcCode: string,
+): DoctorIssue {
+  // How long the log has been quiet, said as exactly that: a healthy host can
+  // go quiet for hours, so it is a clue to how long the host has been stuck,
+  // not a measure of it.
+  const silence =
+    silentMinutes === null
+      ? "is not responding"
+      : silentMinutes < 1
+        ? "is not responding (its log last changed under 1 min ago)"
+        : `is not responding (its log last changed ${String(silentMinutes)} min ago)`;
+  return {
+    code: DOCTOR_ISSUE_CODES.HOST_RPC_UNRESPONSIVE,
+    severity: "error",
+    title: "Host is not responding",
+    message: `The host (pid=${String(pid)}) is running but ${silence}. Force restart it with 'traycer host restart --force' (running terminal sessions and in-flight agent work will be killed).`,
+    // The Doctor card's "Restart host" repair is already the forced respawn.
+    fixAction: "host-restart",
+    terminalCommand: "traycer host restart --force",
+    details: { pid, websocketUrl, rpcCode, silentMinutes },
+  };
+}
+
+// How long ago the host last wrote its log, in whole minutes. A host whose
+// main thread is blocked writes nothing - not even its own stall warning - so
+// it has been stuck for at most this long. `null` when the log cannot be
+// read; the issue is reported either way.
+async function minutesSinceHostLogWrite(
+  environment: Environment,
+): Promise<number | null> {
+  try {
+    const { mtimeMs } = await stat(hostLogPath(environment));
+    return Math.max(0, Math.floor((Date.now() - mtimeMs) / 60_000));
+  } catch {
+    return null;
   }
 }
 

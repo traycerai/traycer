@@ -17,6 +17,8 @@ import {
 } from "commander";
 import { A2A_PERMISSION_MODE_INSTRUCTION } from "@traycer/protocol/agent/agent-selection-guide-format";
 import { AGENT_FACING_HARNESS_ID_LIST } from "@traycer/protocol/host/agent/shared";
+import { isProcessStartIdentity } from "@traycer/protocol/host/lifecycle";
+import type { RestartTargetHost } from "@traycer-clients/shared/host-lock/restart-target";
 import { readFeatureSettingsSync } from "@traycer/protocol/config/store";
 import { config } from "./config";
 import {
@@ -340,6 +342,48 @@ const ACCEPT_STORE_FORMAT_LOSS_HELP =
 function attemptAdoptionNonce(opts: Record<string, unknown>): string | null {
   const value = opts.attemptAdoption;
   return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+// Hidden: Desktop's force restart of a host that stopped answering, which may
+// stop only the process the person confirmed - see host/restart-target-guard.ts.
+// On `host restart`, and on `host service install` for the takeover its
+// packaged-macOS re-register fallback can reach.
+function expectHostPidOption(): Option {
+  return new Option(
+    "--expect-host-pid <pid>",
+    "Internal: refuse with E_HOST_RESTART_TARGET_CHANGED unless the published host is still this pid (or no live host is published)",
+  ).hideHelp();
+}
+
+function expectHostStartIdentityOption(): Option {
+  return new Option(
+    "--expect-host-start-identity <identity>",
+    "Internal: the start identity the expected host published; required with --expect-host-pid",
+  ).hideHelp();
+}
+
+/**
+ * The binding to one host process: both flags or neither. Thrown from inside
+ * the command so the refusal reaches the runner as a typed error.
+ */
+function expectedRestartHostArg(
+  verb: string,
+  opts: Record<string, unknown>,
+): RestartTargetHost | null {
+  const rawPid = opts.expectHostPid;
+  const rawIdentity = opts.expectHostStartIdentity;
+  if (rawPid === undefined && rawIdentity === undefined) return null;
+  const pid =
+    typeof rawPid === "string" ? parsePositiveIntegerArg(rawPid) : null;
+  if (pid === null || !isProcessStartIdentity(rawIdentity)) {
+    throw cliError({
+      code: CLI_ERROR_CODES.INVALID_ARGUMENT,
+      message: `${verb}: --expect-host-pid takes a positive whole number and must be passed with a valid --expect-host-start-identity`,
+      details: null,
+      exitCode: 1,
+    });
+  }
+  return { pid, startIdentity: rawIdentity };
 }
 
 function parsePortArg(value: string): number | null {
@@ -1393,14 +1437,17 @@ function registerHostCommands(program: Command): void {
           "Internal: when a parked packaged activation makes a generic restart unsafe, refuse without stopping the service instead of stopping it",
         ).hideHelp(),
       )
+      .addOption(expectHostPidOption())
+      .addOption(expectHostStartIdentityOption())
       .addOption(lifecycleOriginOption()),
-    (opts) =>
+    (opts) => (ctx) =>
       buildHostRestartCommand({
         ifIdle: opts.ifIdle === true,
         force: opts.force === true,
         deferIfParked: opts.deferIfParked === true,
+        expectedHost: expectedRestartHostArg("host restart", opts),
         lifecycleOrigin: hostStartOriginFromOption(opts.lifecycleOrigin),
-      }),
+      })(ctx),
   );
 
   withRunner(
@@ -1991,7 +2038,11 @@ function registerHostCommands(program: Command): void {
       )
       .option(
         "--all",
-        "Deregister the OS service first, then ask the running host to stop, then remove the bytes - so nothing is left registered. The stop is cooperative and best-effort: a host that denies or outlives the shutdown claim is left running, and its pid metadata and log are preserved rather than purged.",
+        "Deregister the OS service first, then ask the running host to stop, then remove the bytes - so nothing is left registered. On macOS and Linux the stop is cooperative: if the host does not stop, its install is kept and the command fails, naming --force. On Windows the stop ends the host's process tree, so running terminal sessions and in-flight agent work are lost.",
+      )
+      .option(
+        "--force",
+        "With --all: stop the host even if it is not responding, then remove the install. Running terminal sessions and in-flight agent work are killed.",
       )
       .addHelpText(
         "after",
@@ -2014,13 +2065,14 @@ function registerHostCommands(program: Command): void {
           "           null means nothing could confirm either way.",
           "           WINDOWS: deregistration force-kills the host process tree",
           "           first - there is no busy check, so running terminal sessions and",
-          "           in-flight agent work are lost. macOS/Linux: the stop is cooperative and",
-          "           best-effort, so a host that denies the claim or outlives it keeps",
-          "           serving while the bytes are removed anyway, with its pid metadata and",
-          "           log preserved by this command. `hostStillRunning` in the result (and",
-          "           the summary line) reports what the probe could establish; it is null",
-          "           when nothing could be. Re-run with 'traycer host stop --force' if a",
-          "           host is still up. Runtime state is never purged here - removing it is",
+          "           in-flight agent work are lost. macOS/Linux: the stop is cooperative, so",
+          "           a host that denies the claim or outlives it keeps serving - and then",
+          "           its install is KEPT and the command fails, because removing it would",
+          "           leave that host running from deleted bytes with nothing able to",
+          "           replace it. Re-run with --force to stop it anyway and remove the",
+          "           install. `hostStillRunning` in the result (and the summary line)",
+          "           reports what the probe could establish; it is null when nothing",
+          "           could be. Runtime state is never purged here - removing it is",
           "           only safe once the supervisor is confirmed stopped, which needs a",
           "           backend completion contract that does not exist yet.",
           "Neither mode touches your data or credentials.",
@@ -2028,11 +2080,25 @@ function registerHostCommands(program: Command): void {
         ].join("\n"),
       )
       .addOption(lifecycleOriginOption()),
-    (opts) =>
-      buildHostUninstallCommand({
+    // Refused inside the returned command so it flows through the runner's
+    // CliError handling. Without --all nothing is stopped, so a --force there
+    // would read as a forced stop while the bytes go from under a running host.
+    (opts) => (ctx) => {
+      if (opts.force === true && opts.all !== true) {
+        throw cliError({
+          code: CLI_ERROR_CODES.INVALID_ARGUMENT,
+          message:
+            "host uninstall: --force only applies with --all, which stops the host. Run 'traycer host uninstall --all --force' to stop it and remove the install.",
+          details: { all: false, force: true },
+          exitCode: 1,
+        });
+      }
+      return buildHostUninstallCommand({
         all: opts.all === true,
+        force: opts.force === true,
         lifecycleOrigin: hostStartOriginFromOption(opts.lifecycleOrigin),
-      }),
+      })(ctx);
+    },
   );
 
   withRunner(
@@ -2314,15 +2380,18 @@ function registerServiceCommands(host: Command): void {
         "macOS only: move host management from the Traycer Desktop app to the CLI (stops the Desktop-managed host cooperatively, deregisters its agent, then registers the CLI-owned service)",
       )
       .addOption(attemptAdoptionOption())
+      .addOption(expectHostPidOption())
+      .addOption(expectHostStartIdentityOption())
       .addOption(lifecycleOriginOption()),
-    (opts) =>
+    (opts) => (ctx) =>
       buildServiceInstallCommand({
         attemptAdoption: attemptAdoptionNonce(opts),
         lifecycleOrigin: hostStartOriginFromOption(opts.lifecycleOrigin),
         enableLinger: opts.linger !== false,
         allowSelfInvocation: opts.allowSelfInvocation === true,
         takeover: opts.takeover === true,
-      }),
+        expectedHost: expectedRestartHostArg("host service install", opts),
+      })(ctx),
   );
 
   // The public background start, and the answer to "why does `host start`
@@ -3403,6 +3472,10 @@ function registerAgentCommands(
       .option(
         "--response-id <id>",
         "Answer a request received from this recipient; omit on your own follow-ups",
+      )
+      .option(
+        "--workspace <path>",
+        "Absolute folder on the receiving agent's host for it to run in, when it has none yet. Ignored when it already has one.",
       ),
     (opts) =>
       buildAgentSendCommand({
@@ -3413,6 +3486,7 @@ function registerAgentCommands(
         expectReply: opts.expectReply === true,
         responseId:
           typeof opts.responseId === "string" ? opts.responseId : null,
+        workspace: typeof opts.workspace === "string" ? opts.workspace : null,
       }),
   );
 

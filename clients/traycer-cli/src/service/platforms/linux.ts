@@ -4,6 +4,7 @@ import {
   isServiceMutationAuthorityError,
   verifyServiceMutationAuthority,
 } from "../mutation-authority";
+import { runAtStopTargetEdge } from "../stop-target";
 import { dirname, isAbsolute } from "node:path";
 import {
   publishedHostProcessGone,
@@ -78,7 +79,7 @@ export function createLinuxController(
   const unverifiedRun: ProcessRunner = runner ?? runCommand;
   const run: ProcessRunner = async (command, args, options) => {
     await verifyServiceMutationAuthority();
-    return unverifiedRun(command, args, options);
+    return runAtStopTargetEdge(() => unverifiedRun(command, args, options));
   };
   return {
     install: (options) => installService(options, run),
@@ -568,6 +569,45 @@ async function waitForSignalledHostGone(
   }
 }
 
+type PlainStopConfirmation =
+  | { readonly kind: "stopped" }
+  | { readonly kind: "running"; readonly pid: number }
+  | { readonly kind: "unconfirmed" };
+
+// Whether a plain stop took effect. Fails closed: only "nothing published"
+// or a published process proven gone counts as stopped, and that is judged by
+// what is published AFTER the stop, whatever was published before it. An
+// unreadable record may belong to a live host mid-write, so it is not
+// evidence either way.
+async function confirmPlainStop(
+  before: HostPidMetadataEvidence,
+  environment: ServiceLabel["environment"],
+): Promise<PlainStopConfirmation> {
+  if (before.kind === "read") {
+    if (
+      !publishedHostProcessGone(before.metadata) &&
+      !(await waitForSignalledHostGone(before, restartStopGraces().sigtermMs))
+    ) {
+      return { kind: "running", pid: before.metadata.pid };
+    }
+  } else if (before.kind === "unreadable") {
+    // No identity to wait on: give it the same grace a live record gets,
+    // then look again.
+    await waitForSignalledHostGone(before, restartStopGraces().sigtermMs);
+  }
+  // What was published before the stop - nothing, a process already gone, or
+  // one that has exited since - is not the host being gone. A host can
+  // publish while `systemctl stop` is awaited (a unit still starting, a
+  // terminal run), and a stop job that timed out leaves the unit failed, so
+  // `Restart=on-failure` starts a replacement. Ask what is published now.
+  const after = await readHostPidMetadataEvidence(environment);
+  if (after.kind === "absent") return { kind: "stopped" };
+  if (after.kind === "unreadable") return { kind: "unconfirmed" };
+  return publishedHostProcessGone(after.metadata)
+    ? { kind: "stopped" }
+    : { kind: "running", pid: after.metadata.pid };
+}
+
 async function stopService(
   label: ServiceLabel,
   run: ProcessRunner,
@@ -591,7 +631,33 @@ async function stopService(
     timeoutMs: 15_000,
     tolerateNonZeroExit: true,
   });
-  if (!force) return;
+  if (!force) {
+    // The plain stop asks and never escalates, but it must not report a stop
+    // that did not happen. A host whose event loop is wedged ignores SIGTERM
+    // and outlives the 15 s subprocess; one running outside the unit is not
+    // touched by `systemctl stop` at all. Give the published instance the
+    // same grace `--force` gives it before escalating (by then systemd's own
+    // `TimeoutStopSec` kill has landed on a unit-managed host), and if it is
+    // still there, say so and name the one stop that ends it.
+    const confirmed = await confirmPlainStop(before, label.environment);
+    if (confirmed.kind === "running") {
+      throw cliError({
+        code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+        message: `host ${operation}: the host (pid=${confirmed.pid}) is still running after the stop request; stop did not take effect. Re-run with --force to stop it anyway (running terminal sessions and in-flight agent work will be killed).`,
+        details: { unit: unitName(label), pid: confirmed.pid },
+        exitCode: 1,
+      });
+    }
+    if (confirmed.kind === "unconfirmed") {
+      throw cliError({
+        code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+        message: `host ${operation}: could not confirm the host stopped, because its pid record is unreadable. Run 'traycer host status' to check, or re-run with --force to stop it anyway (running terminal sessions and in-flight agent work will be killed).`,
+        details: { unit: unitName(label), pid: null },
+        exitCode: 1,
+      });
+    }
+    return;
+  }
   // `--force` promises the host is DOWN when this returns, and the plain
   // stop above cannot promise that: the runner caps the subprocess at 15s
   // while the stop job may run for the unit's whole `TimeoutStopSec` (37s,

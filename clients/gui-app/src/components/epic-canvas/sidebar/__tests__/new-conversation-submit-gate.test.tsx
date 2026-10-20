@@ -10,6 +10,7 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createStore } from "zustand/vanilla";
 import type { JsonContent } from "@traycer/protocol/common/registry";
+import type { TaskHostRow } from "@traycer/protocol/host/task-host-summary";
 
 import type { ComposerBodyProps } from "@/components/home/composer/composer-body";
 import type { ComposerPromptEditorHandle } from "@/components/chat/composer/composer-prompt-editor";
@@ -24,6 +25,12 @@ import {
   type ComposerPickerStore,
 } from "@/components/chat/composer/picker/composer-picker-store";
 import { createAppQueryClient } from "@/lib/query-client";
+import type { TaskHostGroup } from "@/components/epic-canvas/sidebar/task-host-groups-model";
+import type { TaskHostsView } from "@/hooks/epic/use-task-hosts-view";
+import {
+  composerMirrorLineSeen,
+  useComposerMirrorLineSeenStore,
+} from "@/stores/epics/composer-mirror-line-seen-store";
 import { NewConversationModalBody } from "../new-conversation-modal";
 import { NewConversationTransientContext } from "../new-conversation-transient-context";
 
@@ -89,12 +96,65 @@ vi.mock("@/components/home/composer/composer-body", async () => {
       testState.installEditor = () => {
         props.editorRef.current = editorHandle();
       };
+      // The real body renders `topBanner` above the editor; the mirror-line
+      // case below reads the host-notice slot it carries.
       return React.createElement(
-        "button",
-        { type: "button", onClick: props.onSubmit },
-        "Submit new conversation",
+        React.Fragment,
+        null,
+        props.topBanner,
+        React.createElement(
+          "button",
+          { type: "button", onClick: props.onSubmit },
+          "Submit new conversation",
+        ),
       );
     },
+  };
+});
+
+/**
+ * What the REAL `useComposerMirrorLine` reads. The defaults - no hosts view, no
+ * groups, no viewer - mean no mirror line, so every case outside the mirror-line
+ * describe below sees today's composer. Each holder is annotated inside the
+ * hoisted factory so `kind` does not widen to `string`.
+ */
+const mirrorInputs = vi.hoisted(() => {
+  const view: { current: TaskHostsView } = { current: { kind: "none" } };
+  const groups: { current: readonly TaskHostGroup[] } = { current: [] };
+  const viewerId: { current: string } = { current: "" };
+  return { view, groups, viewerId };
+});
+
+vi.mock("@/hooks/epic/use-task-hosts-view", () => ({
+  useTaskHostsView: (): TaskHostsView => mirrorInputs.view.current,
+}));
+
+vi.mock("@/hooks/epic/use-task-host-groups", () => ({
+  useTaskHostGroups: (
+    _epicId: string,
+    _hosts: readonly TaskHostRow[] | null,
+  ): readonly TaskHostGroup[] => mirrorInputs.groups.current,
+}));
+
+vi.mock("@/hooks/chats/use-cloud-chat-queries", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("@/hooks/chats/use-cloud-chat-queries")
+    >();
+  return {
+    ...actual,
+    useCloudChatViewerId: (): string => mirrorInputs.viewerId.current,
+  };
+});
+
+vi.mock("@/hooks/auth/use-registered-hosts-query", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("@/hooks/auth/use-registered-hosts-query")
+    >();
+  return {
+    ...actual,
+    useRegisteredHosts: (): { readonly data: null } => ({ data: null }),
   };
 });
 
@@ -822,6 +882,120 @@ describe("NewConversationModalBody submit generation guard", () => {
     });
     expect(testState.createChat).toHaveBeenCalledTimes(1);
     expect(imageStoreMocks.getImageBytes).toHaveBeenCalledTimes(1);
+  });
+});
+
+// The mirror line says once per task that the start host has another owner than
+// a host already working in it, and a conversation that starts counts as having
+// heard it. This drives the REAL hook through the real modal body, so the seen
+// mark is the one the modal's own submit writes.
+//
+// REGRESSION case, not a red one: the modal already marks the line seen on a
+// successful start today. It pins that behavior while the hook underneath is
+// reshaped (group-composed names, a rehydrating store), so it may be green on
+// code that has not changed yet.
+describe("NewConversationModalBody mirror line", () => {
+  const VIEWER_ID = "user-mirror-viewer";
+  const TEAM = { kind: "team", id: "team-acme" } as const;
+
+  beforeEach(() => {
+    useComposerMirrorLineSeenStore.setState({ seen: {} });
+    mirrorInputs.viewerId.current = VIEWER_ID;
+    // "host-1" is the resolved start host; the team sandbox is another owner's.
+    mirrorInputs.view.current = {
+      kind: "hosts",
+      hosts: [
+        {
+          hostId: "host-1",
+          label: null,
+          principal: { kind: "user", id: VIEWER_ID },
+          reach: "same_principal",
+        },
+        {
+          hostId: "host-sandbox",
+          label: "Acme sandbox",
+          principal: TEAM,
+          reach: "other_principal",
+        },
+      ],
+    };
+    mirrorInputs.groups.current = [
+      {
+        key: "personal",
+        title: "Personal",
+        rows: [
+          {
+            hostId: "host-1",
+            label: "My laptop",
+          },
+        ],
+      },
+      {
+        key: "team:team-acme",
+        title: "acme",
+        rows: [
+          {
+            hostId: "host-sandbox",
+            label: "Acme sandbox",
+          },
+        ],
+      },
+    ];
+  });
+
+  afterEach(() => {
+    mirrorInputs.view.current = { kind: "none" };
+    mirrorInputs.groups.current = [];
+    mirrorInputs.viewerId.current = "";
+    useComposerMirrorLineSeenStore.setState({ seen: {} });
+    window.localStorage.removeItem("traycer-gui-app:composer-mirror-line-seen");
+  });
+
+  it("shows the line in the host-notice slot, and marks the task seen once the conversation starts", async () => {
+    render(
+      <NewConversationModalBody
+        epicId="epic-1"
+        tabId="tab-1"
+        placement={null}
+        parentId={null}
+        hostId={null}
+        dismissPickerRef={createRef<(() => boolean) | null>()}
+        onSubmitted={() => undefined}
+      />,
+      { wrapper: QueryWrapper },
+    );
+
+    const slot = screen.getByTestId("composer-host-notice");
+    expect(slot.getAttribute("data-notice-kind")).toBe("mirror");
+    expect(slot.textContent).toContain(
+      "Agents here cannot work with the agents on Acme sandbox; the task still shares its files and chats.",
+    );
+    expect(
+      composerMirrorLineSeen(
+        useComposerMirrorLineSeenStore.getState().seen,
+        VIEWER_ID,
+        "epic-1",
+      ),
+    ).toBe(false);
+
+    const installEditor = testState.installEditor;
+    if (installEditor === null) throw new Error("expected ComposerBody seam");
+    installEditor();
+    fireEvent.keyDown(window, { key: "Enter", metaKey: true });
+    await act(async () => {
+      await flushMicrotasks();
+    });
+
+    expect(testState.createChat).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => {
+      expect(
+        composerMirrorLineSeen(
+          useComposerMirrorLineSeenStore.getState().seen,
+          VIEWER_ID,
+          "epic-1",
+        ),
+      ).toBe(true);
+    });
   });
 });
 

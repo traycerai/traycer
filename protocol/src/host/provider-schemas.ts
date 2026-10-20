@@ -10,7 +10,10 @@
  * `~/.traycer/host/config/provider-overrides.json`.
  */
 import { z } from "zod";
-import type { TuiHarnessId } from "@traycer/protocol/host/agent/shared";
+import {
+  guiHarnessIdSchema,
+  type TuiHarnessId,
+} from "@traycer/protocol/host/agent/shared";
 import { autoJudgeKindSchema } from "@traycer/protocol/host/auto-mode/contracts";
 import { projectOntoFrozenLine } from "./frozen-line-projection";
 import {
@@ -42,6 +45,7 @@ import {
   nativeMutationResultSchemaV10Preimage,
   nativeMutationResultSchemaV11Preimage,
   nativeMutationSchema,
+  nativeMutationSchemaV12,
   nativeMutationSchemaV10Preimage,
   providerNativeCapabilitiesSchema,
   providerNativeCapabilitiesSchemaBeforeOpenChatPlugins,
@@ -66,6 +70,7 @@ import {
   type ProviderNativeCapabilitiesV70Preimage,
 } from "./provider-native-schemas";
 import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
+import { executableWriteGrantSchema } from "@traycer/protocol/host/executable-write-grant";
 
 export {
   providerIdSchema,
@@ -1785,6 +1790,15 @@ const providerCliStateBaseShape = {
   // the harness row. Readers spell the fallback themselves
   // (`state.autoJudge ?? "traycer"`), matching the documented default.
   autoJudge: lazySchema(() => autoJudgeKindSchema.optional()),
+  // Whether this provider's agents may spawn the provider's OWN built-in
+  // subagents (Claude's `Agent` tool, Codex's multi-agent feature, OpenCode's
+  // `task`, ...). `false` turns that tool off for the session where the
+  // provider has a switch for it, and steers the model to Traycer agents
+  // everywhere; written by `providers.setNativeSubagents`, first published by
+  // `providers.list@10.5`. `.optional()` for the reasons `autoJudge` gives:
+  // absent is "host too old to say", and readers spell the `true` default
+  // themselves (`providerNativeSubagentsFor`).
+  nativeSubagents: lazySchema(() => z.boolean().optional()),
   // Per-provider environment overrides applied when the host spawns this
   // provider's harness. Sorted by key for stable rendering; `[]` when unset.
   envOverrides: lazySchema(() => z.array(providerEnvOverrideSchema).catch([])),
@@ -1948,7 +1962,7 @@ const providerCliStateBaseShapeV20 = {
 };
 
 /**
- * Latest provider CLI state (providers.list@10.3). Mutation echoes use their
+ * Latest provider CLI state (providers.list@10.5). Mutation echoes use their
  * own frozen shape. Includes `nativeCapabilities` — per-capability facts the UI
  * renders MCP/plugins/skills tabs from. `.catch(DEFAULT)` tolerates old host
  * builds that omit the field when an old-host response is parsed on a new
@@ -1965,6 +1979,17 @@ export const providerCliStateSchema = lazySchema(() =>
   }),
 );
 export type ProviderCliState = z.infer<typeof providerCliStateSchema>;
+
+/**
+ * The provider row as every `providers.list` line below 10.5 published it:
+ * without `nativeSubagents`, which 10.5 added to the row. The 9.1 row and every
+ * 10.0-10.4 preimage derive from this row, so a released reader of those lines
+ * never sees the key, and `frozen-catalog-lines.test.ts` pins each line's serialized shape,
+ * so the NEXT row key reddens there rather than widening these lines unseen.
+ */
+const providerCliStateSchemaBeforeNativeSubagents = lazySchema(() =>
+  providerCliStateSchema.omit({ nativeSubagents: true }),
+);
 
 /**
  * The profile row `providers.list@9.0` / `@9.1` shipped: v8.0's plus `apiKey`,
@@ -2163,24 +2188,26 @@ const providerManagedVersionsSchemaV91 = lazySchema(() =>
  * whole comment exists to prevent.
  */
 export const providerCliStateSchemaV91 = lazySchema(() =>
-  providerCliStateSchema.omit({ macosRequirement: true }).extend({
-    providerId: providerIdSchemaV91,
-    profiles: z.array(providerProfileSchemaV91).catch([]),
-    managedVersions: providerManagedVersionsSchemaV91
-      .nullable()
-      .catch(null)
-      .optional(),
-    loginCapability: providerLoginCapabilitySchemaV70.nullable().catch(null),
-    managedInstallState: providerManagedInstallStateSchemaV70
-      .nullable()
-      .catch(null)
-      .optional(),
-    advisory: providerAdvisorySchemaV70.nullable().catch(null).optional(),
-    autoJudge: autoJudgeKindSchemaV91.optional(),
-    nativeCapabilities: providerNativeCapabilitiesSchemaV70.catch(
-      DEFAULT_PROVIDER_NATIVE_CAPABILITIES,
-    ),
-  }),
+  providerCliStateSchemaBeforeNativeSubagents
+    .omit({ macosRequirement: true })
+    .extend({
+      providerId: providerIdSchemaV91,
+      profiles: z.array(providerProfileSchemaV91).catch([]),
+      managedVersions: providerManagedVersionsSchemaV91
+        .nullable()
+        .catch(null)
+        .optional(),
+      loginCapability: providerLoginCapabilitySchemaV70.nullable().catch(null),
+      managedInstallState: providerManagedInstallStateSchemaV70
+        .nullable()
+        .catch(null)
+        .optional(),
+      advisory: providerAdvisorySchemaV70.nullable().catch(null).optional(),
+      autoJudge: autoJudgeKindSchemaV91.optional(),
+      nativeCapabilities: providerNativeCapabilitiesSchemaV70.catch(
+        DEFAULT_PROVIDER_NATIVE_CAPABILITIES,
+      ),
+    }),
 );
 export type ProviderCliStateV91 = z.infer<typeof providerCliStateSchemaV91>;
 
@@ -2228,7 +2255,7 @@ export type ProviderCliStateV90 = z.infer<typeof providerCliStateSchemaV90>;
  * here; do not regenerate the fixture.
  *
  * Do NOT add fields or ids here. Add them to `providerCliStateBaseShape`
- * above, which only the head line (10.0 today) publishes.
+ * above, which only the head line (10.1 today) publishes.
  */
 export const providerCliStateSchemaV92 = lazySchema(() =>
   providerCliStateSchemaV91.extend({
@@ -2334,6 +2361,36 @@ export const providersListResponseSchema = lazySchema(() =>
   z.object({
     providers: z.array(providerCliStateSchema),
     native: nativeListResultSchema.nullable().default(null),
+    // True on a sandbox host: it stores no provider credential
+    // (`SANDBOX_HOST_REFUSES_CREDENTIALS`), so API keys, logins and profiles
+    // are managed in the user's account and reach the sandbox through the
+    // egress broker. The Providers panel then replaces its credential controls
+    // with one line pointing there. Absent means false, which is every host
+    // that is not a sandbox and every host that predates the flag.
+    //
+    // A new KEY on `providers.list@10.5`. The frozen 10.0-10.4 responses strip
+    // it on the within-major re-parse, so no emission gate is needed.
+    // `.optional()` rather than defaulted, so it is not required on OUTPUT at
+    // the response's construction sites.
+    credentialsManagedInAccount: z.boolean().optional(),
+    // `"personal"` when this host serves its provider configuration from the
+    // person's Personal environment; `null` or absent on a host without
+    // environments. Another 10.5 KEY, stripped for an older peer the same way;
+    // `.optional()` for the same construction-site reason.
+    scope: z.literal("personal").nullable().optional(),
+    // The profiles that live on this host only, one entry each: "On <host>
+    // only, link to use everywhere". On the envelope rather than on the
+    // profile row because `providerProfileSchema` is shared by reference with
+    // every provider-state response, released lines included, so a row key
+    // would widen all of them. Open strings, so no id enum grows here.
+    onHostOnly: z
+      .array(
+        z.object({
+          providerId: z.string().min(1),
+          profileId: z.string().min(1),
+        }),
+      )
+      .optional(),
   }),
 );
 export type ProvidersListResponse = z.infer<typeof providersListResponseSchema>;
@@ -2342,12 +2399,14 @@ export type ProvidersListResponse = z.infer<typeof providersListResponseSchema>;
 export const providersListResponseSchemaV100Preimage = lazySchema(() =>
   z.object({
     providers: z.array(
-      providerCliStateSchema.omit({ macosRequirement: true }).extend({
-        nativeCapabilities:
-          providerNativeCapabilitiesSchemaBeforeMcpRemedies.catch(
-            DEFAULT_PROVIDER_NATIVE_CAPABILITIES,
-          ),
-      }),
+      providerCliStateSchemaBeforeNativeSubagents
+        .omit({ macosRequirement: true })
+        .extend({
+          nativeCapabilities:
+            providerNativeCapabilitiesSchemaBeforeMcpRemedies.catch(
+              DEFAULT_PROVIDER_NATIVE_CAPABILITIES,
+            ),
+        }),
     ),
     native: nativeListResultSchemaBeforeMcpRemedies.nullable().default(null),
   }),
@@ -2357,12 +2416,14 @@ export const providersListResponseSchemaV100Preimage = lazySchema(() =>
 export const providersListResponseSchemaV101Preimage = lazySchema(() =>
   z.object({
     providers: z.array(
-      providerCliStateSchema.omit({ macosRequirement: true }).extend({
-        nativeCapabilities:
-          providerNativeCapabilitiesSchemaBeforeOpenChatPlugins.catch(
-            DEFAULT_PROVIDER_NATIVE_CAPABILITIES,
-          ),
-      }),
+      providerCliStateSchemaBeforeNativeSubagents
+        .omit({ macosRequirement: true })
+        .extend({
+          nativeCapabilities:
+            providerNativeCapabilitiesSchemaBeforeOpenChatPlugins.catch(
+              DEFAULT_PROVIDER_NATIVE_CAPABILITIES,
+            ),
+        }),
     ),
     native: nativeListResultSchemaV101Preimage.nullable().default(null),
   }),
@@ -2372,7 +2433,7 @@ export const providersListResponseSchemaV101Preimage = lazySchema(() =>
 export const providersListResponseSchemaV102Preimage = lazySchema(() =>
   z.object({
     providers: z.array(
-      providerCliStateSchema.extend({
+      providerCliStateSchemaBeforeNativeSubagents.extend({
         nativeCapabilities:
           providerNativeCapabilitiesSchemaBeforeOpenChatPlugins.catch(
             DEFAULT_PROVIDER_NATIVE_CAPABILITIES,
@@ -2387,13 +2448,34 @@ export const providersListResponseSchemaV102Preimage = lazySchema(() =>
 export const providersListResponseSchemaV103Preimage = lazySchema(() =>
   z.object({
     providers: z.array(
-      providerCliStateSchema.extend({
+      providerCliStateSchemaBeforeNativeSubagents.extend({
         nativeCapabilities:
           providerNativeCapabilitiesSchemaBeforeOpenChatPlugins.catch(
             DEFAULT_PROVIDER_NATIVE_CAPABILITIES,
           ),
       }),
     ),
+    native: nativeListResultSchema.nullable().default(null),
+  }),
+);
+
+/**
+ * Frozen `providers.list@10.4` response: the envelope before
+ * `credentialsManagedInAccount`, `scope` and `onHostOnly` opened 10.5 above
+ * it.
+ *
+ * A hand copy of the envelope rather than an `.omit()` of the live one, so the
+ * next envelope key cannot reach it. The provider row is the pre-10.5 row
+ * (`providerCliStateSchemaBeforeNativeSubagents`): 10.5 added `nativeSubagents`
+ * to it, the two minors must share its id enums (no minor of a major may grow
+ * a response enum over its predecessor), and `frozen-catalog-lines.test.ts`
+ * pins this line's whole serialized shape, so the next key added to the row
+ * reddens it rather than widening this line unseen. When that happens, freeze
+ * the row again; do not regenerate the fixture.
+ */
+export const providersListResponseSchemaV104Preimage = lazySchema(() =>
+  z.object({
+    providers: z.array(providerCliStateSchemaBeforeNativeSubagents),
     native: nativeListResultSchema.nullable().default(null),
   }),
 );
@@ -3308,12 +3390,36 @@ export type ProvidersSetTerminalAgentArgsResponse = z.infer<
   typeof providersSetTerminalAgentArgsResponseSchema
 >;
 
+/**
+ * The 2.0 and 2.1 request, FROZEN when 2.2 opened (both are released). The
+ * provider id stays the live enum by reference, as it was while 2.1 was the
+ * head.
+ */
+export const providersSetEnvOverrideRequestSchemaV21 = lazySchema(() =>
+  z.object({
+    providerId: providerIdSchema,
+    key: z.string().min(1),
+    // null = explicit unset; a string sets the value.
+    value: z.string().nullable(),
+  }),
+);
+export type ProvidersSetEnvOverrideRequestV21 = z.infer<
+  typeof providersSetEnvOverrideRequestSchemaV21
+>;
+
+/**
+ * `providers.setEnvOverride@2.2` request: a launch-sensitive
+ * override selects what a harness starts, so the write carries the
+ * executable-write grant; whether a given key reaches a sink is the host's
+ * decision. Older callers are upgraded with `null`.
+ */
 export const providersSetEnvOverrideRequestSchema = lazySchema(() =>
   z.object({
     providerId: providerIdSchema,
     key: z.string().min(1),
     // null = explicit unset; a string sets the value.
     value: z.string().nullable(),
+    executableWriteGrant: executableWriteGrantSchema,
   }),
 );
 export const providersSetEnvOverrideRequestSchemaV10 = lazySchema(() =>
@@ -3939,14 +4045,34 @@ export type ProvidersCancelMcpAuthResponse = z.infer<
 >;
 
 /**
- * `providers.nativeMutate@1.0` request - MCP/plugins/skills mutations. The
- * scope tuple and its `scope`/`workspaceRoot` invariant live inside
- * `nativeMutationSchema`, so no XOR refinement is needed on this envelope.
+ * `providers.nativeMutate@1.1` request - MCP/plugins/skills mutations, with
+ * the MCP remedies. The scope tuple and its `scope`/`workspaceRoot` invariant
+ * live inside `nativeMutationSchema`, so no XOR refinement is needed on this
+ * envelope.
+ *
+ * Frozen when 1.3 opened above it; 1.3 below is the live request.
+ */
+export const providersNativeMutateRequestSchemaV11 = lazySchema(() =>
+  z.object({
+    providerId: providerIdSchema,
+    mutation: nativeMutationSchema,
+  }),
+);
+export type ProvidersNativeMutateRequestV11 = z.infer<
+  typeof providersNativeMutateRequestSchemaV11
+>;
+
+/**
+ * `providers.nativeMutate@1.3` request: the `promoteToPersonal` arm, and the
+ * executable-write grant, since an MCP add or update installs a command and a
+ * skill import or update installs content an agent runs. A v1.2 caller's
+ * request is upgraded with a `null` grant.
  */
 export const providersNativeMutateRequestSchema = lazySchema(() =>
   z.object({
     providerId: providerIdSchema,
-    mutation: nativeMutationSchema,
+    mutation: nativeMutationSchemaV12,
+    executableWriteGrant: executableWriteGrantSchema,
   }),
 );
 export const providersNativeMutateRequestSchemaV10Preimage = lazySchema(() =>
@@ -4667,6 +4793,33 @@ export type ProvidersSetPackPolicyResponse = z.infer<
   typeof providersSetPackPolicyResponseSchema
 >;
 
+// ── Native subagents ───────────────────────────────────────────────────────
+//
+// `providers.setNativeSubagents` writes the per-provider `nativeSubagents`
+// switch (the row field above) - a brand-new method at `@1.0`, registered
+// `degrade: unsupported` like `providers.setAutoJudge`, whose shape it copies:
+// keyed by HARNESS on the wire (the live GUI enum; the host re-validates
+// against its own roster), stored per provider, and echoing the persisted
+// value so the settings row can settle on truth.
+export const providersSetNativeSubagentsRequestSchema = lazySchema(() =>
+  z.object({
+    harnessId: guiHarnessIdSchema,
+    nativeSubagents: z.boolean(),
+  }),
+);
+export type ProvidersSetNativeSubagentsRequest = z.infer<
+  typeof providersSetNativeSubagentsRequestSchema
+>;
+
+export const providersSetNativeSubagentsResponseSchema = lazySchema(() =>
+  z.object({
+    nativeSubagents: z.boolean(),
+  }),
+);
+export type ProvidersSetNativeSubagentsResponse = z.infer<
+  typeof providersSetNativeSubagentsResponseSchema
+>;
+
 // ── On-demand pack discovery refresh ───────────────────────────────────────
 //
 // Another BRAND-NEW method name at `@1.0`, riding the same
@@ -4875,6 +5028,8 @@ export type DowngradableToV10ProviderState = (
   autoJudge?: ProviderCliState["autoJudge"];
   // (v10.2) list-only host facts, absent from every earlier released carrier.
   macosRequirement?: ProviderCliState["macosRequirement"];
+  // (v10.5) per-provider native subagent setting, absent from earlier rows.
+  nativeSubagents?: ProviderCliState["nativeSubagents"];
   // `V70` is named explicitly rather than left to ride the `V10` arm on the
   // strength of structural width: the v7.0 and v8.0 list lines are pinned to
   // `providerLoginCapabilitySchemaV70`, so that is the concrete shape those
@@ -4906,6 +5061,7 @@ export function downgradeProviderCliStateToV10(
   //   provider-pack-registry fields.
   // - `cliBinaryResolved` — the binary-absent explanation field.
   // - `macosRequirement` (v10.2) — list-only host macOS requirements.
+  // - `nativeSubagents` (v10.5) — the per-provider native subagent setting.
   // - `packId` / `managedVersions` / `managedVersionsUnavailable` /
   //   `nextRunBinary` (v7.0) — the version manager. Same trap, and it is worth
   //   restating rather than assuming the list above covers it: this parse is
@@ -4944,6 +5100,8 @@ export function downgradeProviderCliStateToV10(
     // maintains. ADD THE FIELD HERE; do not weaken that test.
     autoJudge: _autoJudge,
     macosRequirement: _macosRequirement,
+    // (v10.5) the per-provider native subagent setting.
+    nativeSubagents: _nativeSubagents,
     ...rest
   } = state;
   const parsed = providerCliStateSchemaV10.safeParse({

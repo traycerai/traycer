@@ -9,7 +9,7 @@ import {
   HostScopeGate,
 } from "@/components/settings/host-scope/host-scope-gate";
 import {
-  useHostScope,
+  usePersonalHostScope,
   type HostScope,
 } from "@/components/settings/host-scope/use-host-scope";
 import { carryViewedHostIntoSettingsScope } from "@/components/settings/host-scope/carry-viewed-host-into-settings";
@@ -69,7 +69,7 @@ import {
  * account, Discard, or closing Settings drops it.
  */
 export function PermissionsSettingsPanel(): ReactNode {
-  const scope = useHostScope();
+  const scope = usePersonalHostScope();
   const isMobile = useIsMobileViewport();
   const intent = useSettingsOpenIntent("permissions");
   const pendingReveal = useSettingsSearchStore((state) => state.pendingReveal);

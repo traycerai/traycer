@@ -123,6 +123,8 @@ export function buildHomeBotRow(
   };
 }
 
+export type HomeBotState = "working" | "idle" | "paused";
+
 /**
  * What a Home row says about a bot (Tracy Bots): working, idle, or paused -
  * never which machine it runs on. Paused means the bot's host cannot be
@@ -144,8 +146,6 @@ export function buildHomeBotRow(
  * has not answered (`connectableResolved` false): until then the reader's
  * own machines are not known, so nothing about them is evidence.
  */
-export type HomeBotState = "working" | "idle" | "paused";
-
 export function homeBotState(input: {
   readonly working: boolean;
   readonly boundHostId: string | null;

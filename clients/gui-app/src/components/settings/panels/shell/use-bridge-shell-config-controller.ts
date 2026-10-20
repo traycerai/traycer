@@ -3,7 +3,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import type { QueryKey } from "@tanstack/react-query";
 import type {
   ConfigShellProbeResponse,
-  ConfigShellSetRequest,
+  ConfigShellSetRequestV10,
 } from "@traycer/protocol/host/config/index";
 import type { ITraycerCli } from "@traycer-clients/shared/platform/runner-host";
 import { runnerMutationKeys, runnerQueryKeys } from "@/lib/query-keys";
@@ -143,7 +143,7 @@ export function useBridgeShellConfigController(props: {
       envDeleteMutation.isPending ||
       envRenameMutation.isPending,
     probeSource,
-    setShell: (request: ConfigShellSetRequest, callbacks) =>
+    setShell: (request: ConfigShellSetRequestV10, callbacks) =>
       setMutation.mutate({ path: request.path, args: request.args }, callbacks),
     resetShell: (callbacks) => resetMutation.mutate(undefined, callbacks),
     addShell: (path, callbacks) => addMutation.mutate({ path }, callbacks),

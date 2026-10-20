@@ -11,6 +11,7 @@ import {
   providersListResponseSchema,
   providersListResponseSchemaV102Preimage,
   providersListResponseSchemaV103Preimage,
+  providersListResponseSchemaV104Preimage,
   providersUsePackVersionResponseSchema,
 } from "@traycer/protocol/host/provider-schemas";
 
@@ -64,7 +65,9 @@ const MACOS_INELIGIBLE = {
 describe("providers.list@10.2 carries macosRequirement", () => {
   it("keeps list@10.2 registered after the next minor opens", () => {
     const entry = hostRpcRegistry["providers.list"][10];
-    expect(entry.latestMinor).toBe(4);
+    // 10.3 (MCP origin), 10.4 (open-chat plugins) and 10.5 (the envelope
+    // keys) opened above it.
+    expect(entry.latestMinor).toBe(5);
     expect(entry.versions[2].contract.schemaVersion).toEqual({
       major: 10,
       minor: 2,
@@ -158,6 +161,8 @@ describe("providers.list@10.2 carries macosRequirement", () => {
     expect(
       hostRpcRegistry["providers.list"][10].versions[1].contract,
     ).toMatchObject({ responseSchema: preimage });
+    // Each earlier line binds its own preimage; the head names the live
+    // response.
     expect(
       hostRpcRegistry["providers.list"][10].versions[2].contract,
     ).toMatchObject({
@@ -170,6 +175,11 @@ describe("providers.list@10.2 carries macosRequirement", () => {
     });
     expect(
       hostRpcRegistry["providers.list"][10].versions[4].contract,
+    ).toMatchObject({
+      responseSchema: providersListResponseSchemaV104Preimage,
+    });
+    expect(
+      hostRpcRegistry["providers.list"][10].versions[5].contract,
     ).toMatchObject({ responseSchema: providersListResponseSchema });
   });
 

@@ -5,6 +5,7 @@ import {
   verifyServiceMutationAuthority,
   withServiceMutationAuthority,
 } from "../mutation-authority";
+import { runAtStopTargetEdge } from "../stop-target";
 import {
   CLI_INVOCATION_TXN_POLL_MS,
   CLI_INVOCATION_TXN_WAIT_MS,
@@ -153,7 +154,7 @@ export function createWindowsController(
   const unverifiedRun: ProcessRunner = runner ?? runCommand;
   const run: ProcessRunner = async (command, args, options) => {
     await verifyServiceMutationAuthority();
-    return unverifiedRun(command, args, options);
+    return runAtStopTargetEdge(() => unverifiedRun(command, args, options));
   };
   return {
     install: (options) => installService(options, run),
@@ -3085,7 +3086,7 @@ export async function killSupervisedHostTree(
   const unverifiedRun: ProcessRunner = runner ?? runCommand;
   const run: ProcessRunner = async (command, args, options) => {
     await verifyServiceMutationAuthority();
-    return unverifiedRun(command, args, options);
+    return runAtStopTargetEdge(() => unverifiedRun(command, args, options));
   };
   await withServiceMutationAuthority(verifyAuthority, () =>
     killVerifiedProcessTree(serviceLabelFor(environment), run, deps, {

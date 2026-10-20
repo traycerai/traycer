@@ -47,8 +47,12 @@ const MAX_TEST_WORKERS = Math.min(
 // (whether its own `simulator.open` was answered, whether it has been live)
 // and reads a mutation's per-call callbacks; both are shapes the compiler
 // rewrites, so its suite runs compiled too.
+// `use-environment-members-query` read the query cache at render time to
+// walk its page chain; the compiler memoized that walk on the environment and
+// host alone, so a page that answered re-rendered the hook and got back the
+// first render's cursors - a team's second page was never asked for.
 const REACT_COMPILER_REGRESSION_FILES =
-  /[/\\](?:composer-prompt-editor|use-workspace-file-list-subscription|shared-stream-subscription|use-header-tabs|use-pr-(?:list|detail)-subscription|auth-brand-splash|auth-landing-page|use-auth-splash-cover|relative-time|routing-card|simulator-tile)\.(?:ts|tsx)$/;
+  /[/\\](?:composer-prompt-editor|use-workspace-file-list-subscription|shared-stream-subscription|use-header-tabs|use-pr-(?:list|detail)-subscription|auth-brand-splash|auth-landing-page|use-auth-splash-cover|relative-time|routing-card|use-environment-members-query)\.(?:ts|tsx)$/;
 
 export default defineConfig({
   // Run the affected composer boundary through the packaged desktop

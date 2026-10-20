@@ -23,6 +23,7 @@ import {
   HostRequestAbortedError,
   HostRpcError,
   HostTransportFailureError,
+  mayHaveReachedHost,
   RetryableTransportError,
   type HostRequestAuthority,
   type IHostMessenger,
@@ -2507,12 +2508,52 @@ describe("WsRpcClient", () => {
       expect(sockets).toHaveLength(1);
     });
 
-    it("a late response frame during grace does not resolve the call", async () => {
+    // The host answering this request is the one thing that can outrank the
+    // recorded timeout besides the no-dispatch attestation: it ran the call and
+    // said what happened, so the deadline the client set for itself describes
+    // nothing any more. Failing over a success frame sitting on this very
+    // socket is what made `traycer agent send` report an unreachable host for a
+    // message the host had delivered.
+    it("a late response to this request during grace resolves the call", async () => {
       const { factory, sockets } = makeFactory();
       const client = makeClient({
         factory,
         authToken: "t",
         requestId: "req-grace-late-response",
+        dialTimeoutMs: 1_000,
+        frameTimeoutMs: CLI_FRAME_TIMEOUT_MS,
+        hostAttestationWindowMs: HOST_ATTESTATION_WINDOW_MS,
+      });
+
+      const pending = client.request("host.echo", { message: "x" });
+      await driveUntilRequestSent(sockets);
+
+      await vi.advanceTimersByTimeAsync(CLI_FRAME_TIMEOUT_MS);
+      expect(sockets[0].socket.closed).toBeNull();
+
+      const requestFrame = expectRequestFrame(sockets[0].sent[1]);
+      sockets[0].socket.fireMessage({
+        kind: "response",
+        requestId: requestFrame.requestId,
+        method: requestFrame.method,
+        schemaVersion: requestFrame.schemaVersion,
+        result: { echoed: "LATE" },
+        error: null,
+      });
+      await expect(pending).resolves.toEqual({ echoed: "LATE" });
+      // No redial: the answer arrived on the connection that was still held.
+      expect(sockets).toHaveLength(1);
+    });
+
+    // The correlation is what keeps the arm above honest. A response for some
+    // other request says nothing about this one, so it must leave the ambiguous
+    // timeout standing rather than replace it with a definite failure.
+    it("a late response correlated to another request keeps the ambiguous timeout", async () => {
+      const { factory, sockets } = makeFactory();
+      const client = makeClient({
+        factory,
+        authToken: "t",
+        requestId: "req-grace-foreign-response",
         dialTimeoutMs: 1_000,
         frameTimeoutMs: CLI_FRAME_TIMEOUT_MS,
         hostAttestationWindowMs: HOST_ATTESTATION_WINDOW_MS,
@@ -2535,11 +2576,49 @@ describe("WsRpcClient", () => {
       const requestFrame = expectRequestFrame(sockets[0].sent[1]);
       sockets[0].socket.fireMessage({
         kind: "response",
+        requestId: `${requestFrame.requestId}-someone-else`,
+        method: requestFrame.method,
+        schemaVersion: requestFrame.schemaVersion,
+        result: { echoed: "NOT MINE" },
+        error: null,
+      });
+      await rejection;
+    });
+
+    // A host error envelope is an answer too: the host ran the call and
+    // reported that it failed, which the caller must see instead of a
+    // transport failure it can retry.
+    it("a late response carrying a host error envelope settles as that host error", async () => {
+      const { factory, sockets } = makeFactory();
+      const client = makeClient({
+        factory,
+        authToken: "t",
+        requestId: "req-grace-late-error",
+        dialTimeoutMs: 1_000,
+        frameTimeoutMs: CLI_FRAME_TIMEOUT_MS,
+        hostAttestationWindowMs: HOST_ATTESTATION_WINDOW_MS,
+      });
+
+      const pending = client.request("host.echo", { message: "x" });
+      const rejection = expect(pending).rejects.toSatisfy(
+        (error: unknown) =>
+          error instanceof HostRpcError &&
+          !(error instanceof HostTransportFailureError) &&
+          error.message === "agent not found",
+      );
+      await driveUntilRequestSent(sockets);
+
+      await vi.advanceTimersByTimeAsync(CLI_FRAME_TIMEOUT_MS);
+      expect(sockets[0].socket.closed).toBeNull();
+
+      const requestFrame = expectRequestFrame(sockets[0].sent[1]);
+      sockets[0].socket.fireMessage({
+        kind: "response",
         requestId: requestFrame.requestId,
         method: requestFrame.method,
         schemaVersion: requestFrame.schemaVersion,
-        result: { echoed: "LATE" },
-        error: null,
+        result: null,
+        error: { code: "E_AGENT_NOT_FOUND", message: "agent not found" },
       });
       await rejection;
     });
@@ -4290,6 +4369,191 @@ describe("WsRpcClient", () => {
       });
     });
   });
+});
+
+describe("WsRpcClient dispatch provenance of a failure after the request was sent", () => {
+  // Client on 1.1 against a host on 1.0, so a response is parsed as 1.0
+  // before it is upgraded and a mistyped result fails decoding.
+  const echoV10Contract = defineRpcContract({
+    method: "host.echo",
+    schemaVersion: { major: 1, minor: 0 } as const,
+    requestSchema: z.object({ message: z.string() }),
+    responseSchema: z.object({ echoed: z.string() }),
+  });
+  const echoV11Contract = defineRpcContract({
+    method: "host.echo",
+    schemaVersion: { major: 1, minor: 1 } as const,
+    requestSchema: z.object({ message: z.string() }),
+    responseSchema: z.object({ echoed: z.string(), volume: z.number() }),
+  });
+  const upgradeEcho = defineUpgradePath<
+    typeof echoV10Contract,
+    typeof echoV11Contract
+  >({
+    from: echoV10Contract.schemaVersion,
+    to: echoV11Contract.schemaVersion,
+    upgradeRequest: (request) => request,
+    upgradeResponse: (response) => ({ echoed: response.echoed, volume: 0 }),
+  });
+  const registry = defineVersionedRpcRegistry({
+    "host.echo": {
+      1: {
+        latestMinor: 1,
+        versions: {
+          0: { contract: echoV10Contract, upgradeFromPreviousVersion: null },
+          1: {
+            contract: echoV11Contract,
+            upgradeFromPreviousVersion: upgradeEcho,
+          },
+        },
+        downgradePathsFromLatest: {},
+      },
+    },
+  });
+
+  const REQUEST_ID = "req-provenance";
+  const fatalWith = (code: string, retryable: boolean): HostFrame => ({
+    kind: "fatalError",
+    details: {
+      code,
+      reason: `host said ${code}`,
+      incompatibleMethods: null,
+      upgradeGuidance: null,
+      retryable,
+    },
+  });
+  const responseFrame = (overrides: {
+    readonly requestId: string;
+    readonly method: string;
+    readonly result: object | null;
+    readonly error: { readonly code: string; readonly message: string } | null;
+  }): HostFrame => ({
+    kind: "response",
+    schemaVersion: { major: 1, minor: 0 },
+    ...overrides,
+  });
+
+  const rows: ReadonlyArray<{
+    readonly name: string;
+    readonly deliver: (socket: StubWebSocket) => void;
+    readonly mayHaveReached: boolean;
+  }> = [
+    {
+      name: "a response payload that fails decoding",
+      deliver: (socket) =>
+        socket.fireMessage(
+          responseFrame({
+            requestId: REQUEST_ID,
+            method: "host.echo",
+            result: { echoed: 7 },
+            error: null,
+          }),
+        ),
+      mayHaveReached: true,
+    },
+    {
+      name: "the host's own error envelope",
+      deliver: (socket) =>
+        socket.fireMessage(
+          responseFrame({
+            requestId: REQUEST_ID,
+            method: "host.echo",
+            result: null,
+            error: { code: "FORBIDDEN", message: "not allowed" },
+          }),
+        ),
+      mayHaveReached: false,
+    },
+    {
+      name: "a host fatalError after the request",
+      deliver: (socket) => socket.fireMessage(fatalWith("INCOMPATIBLE", false)),
+      mayHaveReached: true,
+    },
+    {
+      name: "the host's post-open timeout attestation",
+      deliver: (socket) =>
+        socket.fireMessage(fatalWith("RPC_REQUEST_TIMEOUT", true)),
+      mayHaveReached: false,
+    },
+    {
+      name: "a malformed frame after the request",
+      deliver: (socket) => socket.fireRawMessage("{ not json"),
+      mayHaveReached: true,
+    },
+    {
+      name: "an unexpected frame kind",
+      deliver: (socket) =>
+        socket.fireMessage(
+          openAckWithOnlyOptionalHostEcho({ major: 1, minor: 0 }),
+        ),
+      mayHaveReached: true,
+    },
+    {
+      name: "a response for another request",
+      deliver: (socket) =>
+        socket.fireMessage(
+          responseFrame({
+            requestId: "someone-else",
+            method: "host.echo",
+            result: { echoed: "x" },
+            error: null,
+          }),
+        ),
+      mayHaveReached: true,
+    },
+    {
+      name: "a response for another method",
+      deliver: (socket) =>
+        socket.fireMessage(
+          responseFrame({
+            requestId: REQUEST_ID,
+            method: "host.other",
+            result: { echoed: "x" },
+            error: null,
+          }),
+        ),
+      mayHaveReached: true,
+    },
+  ];
+
+  it.each(rows)(
+    "$name reads mayHaveReachedHost=$mayHaveReached",
+    async (row) => {
+      const { factory, sockets } = makeFactory();
+      const client = new BoundWsRpcClient(
+        new WsRpcClient<typeof registry>({
+          clientIdentity: TEST_CLIENT_IDENTITY,
+          registry,
+          requestId: () => REQUEST_ID,
+          webSocketFactory: factory,
+          dialTimeoutMs: 1000,
+          frameTimeoutMs: 1000,
+          hostAttestationWindowMs: 0,
+          evidence: NO_TRANSPORT_EVIDENCE,
+        }),
+        authorityForToken("t"),
+      );
+
+      const pending = client.request("host.echo", { message: "hi" });
+      await flush();
+      sockets[0].socket.fireOpen();
+      await flush();
+      sockets[0].socket.fireMessage(
+        openAckWithOnlyOptionalHostEcho({ major: 1, minor: 0 }),
+      );
+      await flush();
+      expectRequestFrame(sockets[0].sent[1]);
+
+      row.deliver(sockets[0].socket);
+      const error: unknown = await pending.then(
+        () => null,
+        (reason: unknown) => reason,
+      );
+
+      expect(error).toBeInstanceOf(HostRpcError);
+      expect(mayHaveReachedHost(error)).toBe(row.mayHaveReached);
+    },
+  );
 });
 
 describe("WsRpcClient negotiated-manifest publication", () => {

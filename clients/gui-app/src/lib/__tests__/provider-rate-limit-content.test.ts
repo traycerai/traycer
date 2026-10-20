@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { NO_EPISODE } from "@/lib/rate-limits/rate-limit-envelope";
 import type { ProviderRateLimits } from "@traycer/protocol/host";
 import { envelopeFromRateLimits } from "@/lib/rate-limits/__tests__/rate-limit-envelope-fixtures";
 import {
@@ -147,6 +148,8 @@ describe("resolveProviderRateLimitViewState", () => {
           lastGood: ANOTHER_READY,
           lastGoodAt: 1_000,
           lastFailureAt: 2_000,
+          credentialGeneration: null,
+          episode: NO_EPISODE,
         },
       });
       expect(state).toEqual({
@@ -174,6 +177,8 @@ describe("resolveProviderRateLimitViewState", () => {
         lastGood: null,
         lastGoodAt: null,
         lastFailureAt: 1_000,
+        credentialGeneration: null,
+        episode: NO_EPISODE,
       },
     });
     expect(state).toEqual({
@@ -312,6 +317,8 @@ describe("resolvePopoverProviderRateLimitState", () => {
           lastGood: ANOTHER_READY,
           lastGoodAt: 1_000,
           lastFailureAt: 2_000,
+          credentialGeneration: null,
+          episode: NO_EPISODE,
         },
       });
       expect(state).toEqual({
@@ -333,6 +340,8 @@ describe("resolvePopoverProviderRateLimitState", () => {
         lastGood: null,
         lastGoodAt: null,
         lastFailureAt: 1_000,
+        credentialGeneration: null,
+        episode: NO_EPISODE,
       },
     });
     expect(state).toEqual({

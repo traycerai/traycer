@@ -1,8 +1,16 @@
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import type {
   HostListItem,
+  HostRegistryKind,
+  HostSandboxState,
   HostUpdateState,
 } from "@traycer/protocol/host/host-status";
+import type { SandboxSummary } from "@traycer/protocol/host/sandbox-control";
+import {
+  isRemoteHostDirectoryEntry,
+  type RemoteHostSandboxFacts,
+} from "@traycer-clients/shared/host-client/remote-fetcher";
+import { isSandboxFrozenInEffect } from "@traycer-clients/shared/host-client/sandbox-control";
 import type { ServiceStatusSnapshot } from "@traycer-clients/shared/platform/runner-host";
 import type { HostLeaseSnapshot } from "@traycer-clients/shared/host-selection/selection-authority-contract";
 import { dialableHostEndpointFor } from "@/lib/host/transport-key";
@@ -65,6 +73,33 @@ export interface HostScopeOption {
   readonly entry: HostDirectoryEntry | null;
   /** The registry row, when there is one — needed for update policy writes. */
   readonly item: HostListItem | null;
+  /**
+   * The registry's kind (`personal` or `sandbox`), from the registry row or,
+   * when only the directory has the host, from whether its entry carries
+   * sandbox facts. `null` when neither says.
+   */
+  readonly kind: HostRegistryKind | null;
+  /** The sandbox facts of a `kind: sandbox` row, else `null`. */
+  readonly sandbox: HostScopeSandbox | null;
+}
+
+/**
+ * What a sandbox row knows about its sandbox. `state` and `frozen` come with
+ * the host list; `summary` is the control plane's row (`GET /api/sandboxes`),
+ * which alone says whether the sandbox is `burst`, and is `null` until that
+ * list has answered. A picker reads `null` as "might be burst" and leaves the
+ * row out (see `hostOptionPickerGroup`).
+ */
+export interface HostScopeSandbox {
+  readonly state: HostSandboxState | null;
+  readonly frozen: boolean;
+  readonly summary: SandboxSummary | null;
+  /**
+   * A team owns it: the registry row's `owner`, or the
+   * directory entry's copy of it for a row the registry has not answered
+   * for yet. Decides the card's team lines and whether a wake asks first.
+   */
+  readonly teamOwned: boolean;
 }
 
 export interface BuildHostScopeOptionsInput {
@@ -99,6 +134,12 @@ export interface BuildHostScopeOptionsInput {
    * the selection authority's ensure, or a user's Retry asked for it.
    */
   readonly localHostSettingUp: boolean;
+  /**
+   * The control plane's sandbox rows, or `null` until `GET /api/sandboxes`
+   * has answered (or while it fails), which keeps every sandbox's `summary`
+   * unknown rather than inventing "not burst".
+   */
+  readonly sandboxes: readonly SandboxSummary[] | null;
   readonly nowMs: number;
 }
 
@@ -108,6 +149,10 @@ export function buildHostScopeOptions(
   const entries = new Map(input.directory.map((e) => [e.hostId, e]));
   const items = new Map(input.registry.map((i) => [i.hostId, i]));
   const leases = new Map(input.leases.map((l) => [l.hostId, l]));
+  const sandboxes =
+    input.sandboxes === null
+      ? null
+      : new Map(input.sandboxes.map((s) => [s.hostId, s]));
   const hostIds = [...new Set([...entries.keys(), ...items.keys()])];
 
   const options = hostIds.map((hostId): HostScopeOption => {
@@ -137,10 +182,173 @@ export function buildHostScopeOptions(
       updateState: item?.status.updateState ?? null,
       entry,
       item,
+      ...sandboxFactsOf(entry, item, sandboxes?.get(hostId) ?? null),
     };
   });
+  const listed = new Set(hostIds);
+  const unenrolled = (input.sandboxes ?? [])
+    .filter((summary) => !listed.has(summary.hostId))
+    .map((summary) => unenrolledSandboxOption(summary, input));
 
-  return options.sort(compareHostOptions);
+  return [...options, ...unenrolled].sort(compareHostOptions);
+}
+
+/**
+ * A sandbox the control plane lists before any host row exists for it: its
+ * guest has not enrolled yet (`creating`), or never will (`failed`, `lost`),
+ * so authn has nothing to list. The host list shows it so the
+ * person can see it and destroy it; with no entry and no registry row it is
+ * management-only (see `hostOptionPickerGroup`), and once the guest enrols the
+ * registry row takes this `hostId` over.
+ */
+function unenrolledSandboxOption(
+  summary: SandboxSummary,
+  input: BuildHostScopeOptionsInput,
+): HostScopeOption {
+  return {
+    hostId: summary.hostId,
+    name: summary.displayName.length > 0 ? summary.displayName : summary.hostId,
+    isLocalMachine: false,
+    isActive: summary.hostId === input.activeHostId,
+    connectable: false,
+    settingUp: false,
+    registered: false,
+    platform: null,
+    version: null,
+    health: deriveHostHealth({
+      item: null,
+      isLocalMachine: false,
+      hasLiveSession: false,
+      service: undefined,
+      lease: null,
+      authorityAttached: input.authorityAttached,
+      nowMs: input.nowMs,
+    }),
+    updateState: null,
+    entry: null,
+    item: null,
+    kind: "sandbox",
+    sandbox: {
+      state: summary.state,
+      frozen: isSandboxFrozenInEffect(summary.state, summary.frozen),
+      summary,
+      // The server names a creator only on a team agent sandbox. The summary
+      // carries no team, so a team's sandbox lists in the top-level group
+      // until its registry row names the team.
+      teamOwned: summary.createdBy !== null,
+    },
+  };
+}
+
+/**
+ * Whether this row is one `unenrolledSandboxOption` built: a listed sandbox
+ * with no directory entry and no registry row. Destroying it removes the row,
+ * so the overview hands Settings back to the active host rather than reading
+ * the pick as vanished.
+ */
+export function isUnenrolledSandboxOption(host: HostScopeOption): boolean {
+  return host.entry === null && !host.registered && host.sandbox !== null;
+}
+
+/**
+ * The registry kind and sandbox facts of one row. The registry row speaks
+ * first (it is what `include=sandboxState` answered); a directory-only row
+ * falls back to its entry's own copy of the same answer.
+ */
+function sandboxFactsOf(
+  entry: HostDirectoryEntry | null,
+  item: HostListItem | null,
+  summary: SandboxSummary | null,
+): Pick<HostScopeOption, "kind" | "sandbox"> {
+  const entryFacts =
+    entry !== null && isRemoteHostDirectoryEntry(entry) ? entry.sandbox : null;
+  const kind = item === null ? kindOfEntryFacts(entryFacts) : item.kind;
+  if (kind !== "sandbox") {
+    return { kind, sandbox: null };
+  }
+  const listed = item === null ? null : listedSandboxFacts(item);
+  const known = listed ?? entryFacts;
+  const state = sandboxStateOf(known?.state ?? null, summary);
+  return {
+    kind,
+    sandbox: {
+      state,
+      frozen: isSandboxFrozenInEffect(
+        state,
+        known?.frozen ?? summary?.frozen ?? false,
+      ),
+      summary,
+      teamOwned: isTeamOwned(item, entryFacts),
+    },
+  };
+}
+
+/**
+ * The row's sandbox state: the registry's word, or the control plane's row
+ * while it is still on its way to the destination the registry already reads
+ * (`transitDestinationOf`), or the row's when the registry has said nothing.
+ */
+function sandboxStateOf(
+  knownState: HostSandboxState | null,
+  summary: SandboxSummary | null,
+): HostSandboxState | null {
+  if (summary === null) return knownState;
+  if (knownState === null) return summary.state;
+  return transitDestinationOf(summary.state) === knownState
+    ? summary.state
+    : knownState;
+}
+
+/**
+ * Where an in-flight server state lands, for the transitions the registry is
+ * told the end of BEFORE the row gets there: the control plane revokes a
+ * sandbox's credentials first, so the registry already reads `stopped` while
+ * the stop is still running (or failed and waits for its retry). While the
+ * registry reads exactly that destination and the control plane's row is
+ * still in flight, the row's state is the true one; any other pairing keeps
+ * the registry's word, so this never moves a card backwards.
+ */
+function transitDestinationOf(
+  state: HostSandboxState,
+): HostSandboxState | null {
+  switch (state) {
+    case "stopping":
+      return "stopped";
+    case "suspending":
+      return "suspended";
+    case "destroying":
+      return "destroyed";
+    default:
+      return null;
+  }
+}
+
+/**
+ * Whether a team owns the row: the registry row's `owner`, or the directory
+ * entry's copy for a row the registry has not answered for yet.
+ */
+function isTeamOwned(
+  item: HostListItem | null,
+  entryFacts: RemoteHostSandboxFacts | null,
+): boolean {
+  if (item?.owner?.kind === "team") return true;
+  return entryFacts !== null && entryFacts.ownerTeamName !== null;
+}
+
+function kindOfEntryFacts(
+  facts: RemoteHostSandboxFacts | null,
+): HostRegistryKind | null {
+  return facts === null ? null : "sandbox";
+}
+
+/** The registry row's own sandbox facts, or `null` when it carried none. */
+function listedSandboxFacts(
+  item: HostListItem,
+): Pick<RemoteHostSandboxFacts, "state" | "frozen"> | null {
+  if (item.sandboxState === undefined || item.sandboxState === null) {
+    return null;
+  }
+  return { state: item.sandboxState, frozen: item.sandboxFrozen === true };
 }
 
 /**
@@ -438,5 +646,7 @@ export function unavailableHostOption(
     updateState: null,
     entry: null,
     item: null,
+    kind: null,
+    sandbox: null,
   };
 }

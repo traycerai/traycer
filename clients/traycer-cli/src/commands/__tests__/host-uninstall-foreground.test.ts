@@ -1,6 +1,12 @@
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CommandContext } from "../../runner/runner";
 import type { buildHostUninstallCommand as BuildHostUninstallCommandType } from "../host-uninstall";
@@ -270,6 +276,7 @@ describe("buildHostUninstallCommand --all - refusal over a foreground run (deskt
       buildHostUninstallCommand as typeof BuildHostUninstallCommandType
     )({
       all: true,
+      force: false,
       lifecycleOrigin: "desktop",
     } as Parameters<typeof buildHostUninstallCommand>[0]);
     const caught: unknown = await command(fakeCtx()).then(
@@ -306,6 +313,7 @@ describe("buildHostUninstallCommand --all - refusal over a foreground run (deskt
       buildHostUninstallCommand as typeof BuildHostUninstallCommandType
     )({
       all: true,
+      force: false,
       lifecycleOrigin: "terminal",
     } as Parameters<typeof buildHostUninstallCommand>[0]);
     const result = await command(fakeCtx());
@@ -329,6 +337,7 @@ describe("buildHostUninstallCommand --all - refusal over a foreground run (deskt
       buildHostUninstallCommand as typeof BuildHostUninstallCommandType
     )({
       all: true,
+      force: false,
       lifecycleOrigin: "desktop",
     } as Parameters<typeof buildHostUninstallCommand>[0]);
     const result = await command(fakeCtx());
@@ -350,6 +359,7 @@ describe("buildHostUninstallCommand --all - refusal over a foreground run (deskt
       buildHostUninstallCommand as typeof BuildHostUninstallCommandType
     )({
       all: false,
+      force: false,
       lifecycleOrigin: "desktop",
     } as Parameters<typeof buildHostUninstallCommand>[0]);
     const result = await command(fakeCtx());
@@ -357,6 +367,58 @@ describe("buildHostUninstallCommand --all - refusal over a foreground run (deskt
     expect(mocks.uninstallHostMock).toHaveBeenCalledTimes(1);
     expect(mocks.uninstallMock).not.toHaveBeenCalled();
     expect(mocks.stopMock).not.toHaveBeenCalled();
+    expect(result.exitCode).toBe(0);
+  });
+});
+
+// traycer#1563 R2: the PRODUCTION `readPublishedHost` (not a test double) must
+// report an unreadable `pid.json` as "did not answer", so the boundary read
+// keeps the install rather than reading it as "nothing published".
+describe("buildHostUninstallCommand --all - unreadable pid.json at the boundary", () => {
+  async function writeMalformedPidJson(): Promise<void> {
+    const { hostPidMetadataPath } = await import("../../store/paths");
+    const path = hostPidMetadataPath("production");
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, "{ this is not json");
+  }
+
+  it("without --force, a malformed pid.json keeps the install and refuses E_HOST_UNINSTALL_HOST_RUNNING", async () => {
+    await writeMalformedPidJson();
+
+    const { buildHostUninstallCommand } = await import("../host-uninstall");
+    const command = (
+      buildHostUninstallCommand as typeof BuildHostUninstallCommandType
+    )({
+      all: true,
+      force: false,
+      lifecycleOrigin: "terminal",
+    } as Parameters<typeof buildHostUninstallCommand>[0]);
+    const caught: unknown = await command(fakeCtx()).then(
+      () => null,
+      (err: unknown) => err,
+    );
+
+    expect(caught).toMatchObject({
+      code: CLI_ERROR_CODES.HOST_UNINSTALL_HOST_RUNNING,
+      exitCode: 1,
+    });
+    expect(mocks.uninstallHostMock).not.toHaveBeenCalled();
+  });
+
+  it("with --force, a malformed pid.json still removes the install", async () => {
+    await writeMalformedPidJson();
+
+    const { buildHostUninstallCommand } = await import("../host-uninstall");
+    const command = (
+      buildHostUninstallCommand as typeof BuildHostUninstallCommandType
+    )({
+      all: true,
+      force: true,
+      lifecycleOrigin: "terminal",
+    } as Parameters<typeof buildHostUninstallCommand>[0]);
+    const result = await command(fakeCtx());
+
+    expect(mocks.uninstallHostMock).toHaveBeenCalledTimes(1);
     expect(result.exitCode).toBe(0);
   });
 });

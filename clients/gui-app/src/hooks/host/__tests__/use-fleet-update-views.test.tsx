@@ -95,6 +95,7 @@ function remoteIdentity(hostId: string): RemoteSessionIdentity {
     relayAttachUrl: `wss://relay.test/attach-${hostId}`,
     authRecovery: "revalidate",
     authEpoch: "lease-1",
+    openAuth: "user-bearer",
   };
 }
 
@@ -112,6 +113,7 @@ function idleStatus(version: string) {
     storeFormats: null,
     install: null,
     processMemory: null,
+    crossHostMessaging: null,
   };
 }
 

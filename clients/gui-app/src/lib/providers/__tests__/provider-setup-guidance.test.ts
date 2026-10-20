@@ -79,7 +79,7 @@ describe("providerSetupGuidance", () => {
     expect(guidance).not.toHaveProperty("command");
     expect(guidance?.manualCommand).toBe("reasonix setup");
     expect(guidance?.summary).toBe(
-      "Reasonix keeps provider API keys in its own store, not in your shell environment.",
+      "Reasonix keeps provider API keys in its own store, not in your shell.",
     );
     expect(guidance?.stepsAfterAction).toEqual([
       "Paste your provider API key when asked (DeepSeek by default).",
@@ -100,7 +100,7 @@ describe("providerSetupGuidance", () => {
     expect(guidance).not.toBeNull();
     expect(guidance?.manualCommand).toBe("hermes setup model");
     expect(guidance?.summary).toBe(
-      "Hermes Agent keeps provider API keys in its own store, not in your shell environment.",
+      "Hermes Agent keeps provider API keys in its own store, not in your shell.",
     );
     expect(guidance?.stepsAfterAction).toEqual([
       "Choose your inference provider from the list in that terminal.",
@@ -323,7 +323,7 @@ describe("resolveProviderTerminalSetup", () => {
     expect(setup?.canStartTerminal).toBe(false);
     expect(setup?.guidance.manualCommand).toBe("hermes setup model");
     expect(setup?.guidance.summary).toBe(
-      "Hermes Agent keeps provider API keys in its own store, not in your shell environment.",
+      "Hermes Agent keeps provider API keys in its own store, not in your shell.",
     );
   });
 
@@ -376,7 +376,7 @@ describe("resolveProviderTerminalSetup", () => {
     expect(setup?.canStartTerminal).toBe(false);
     expect(setup?.guidance.manualCommand).toBe("reasonix setup");
     expect(setup?.guidance.summary).toBe(
-      "Reasonix keeps provider API keys in its own store, not in your shell environment.",
+      "Reasonix keeps provider API keys in its own store, not in your shell.",
     );
   });
 

@@ -34,6 +34,13 @@ export const PROVIDER_INVALIDATIONS: ReadonlyArray<
   // proxies an ACCOUNT record (body, stamp, read state, the host's bundled
   // defaults) that no provider override touches.
   "autoJudge.get",
+  // Whether the settings document is unusable as a whole, which is what shows
+  // the panel's "Reset provider settings". The file goes bad outside the app,
+  // so nothing the panel does announces it: this entry is what lets the
+  // Providers refresh, the host's providers-changed stream and any provider
+  // mutation re-read it - including after a first read that failed. An
+  // optional method; invalidating it on a host without it is a no-op.
+  "providers.settingsFile.status",
 ];
 
 /**

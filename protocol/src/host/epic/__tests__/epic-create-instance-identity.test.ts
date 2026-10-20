@@ -13,6 +13,7 @@ import {
   createEpicChatSeedSchemaV12,
   createEpicRequestSchema,
   createEpicRequestSchemaV12,
+  createEpicRequestSchemaV13,
   createEpicResponseSchema,
   createEpicResponseSchemaPre11,
   createEpicResponseSchemaV12,
@@ -85,6 +86,15 @@ describe("epic.create instance identity", () => {
     expect(v12.requestSchema).not.toBe(createEpicRequestSchema);
     expect(v12.responseSchema).not.toBe(createEpicResponseSchema);
     expect(v12.responseSchema).not.toBe(createEpicResponseSchemaPre11);
+  });
+
+  it("1.3 pins the V13 request instance and keeps 1.2's response instance", () => {
+    const v12 = hostRpcRegistry["epic.create"][1].versions[2].contract;
+    const v13 = hostRpcRegistry["epic.create"][1].versions[3].contract;
+    expect(v13.requestSchema).toBe(createEpicRequestSchemaV13);
+    expect(v13.requestSchema).not.toBe(v12.requestSchema);
+    // `@1.3` grows the REQUEST only (`owner`); the response is `@1.2`'s.
+    expect(v13.responseSchema).toBe(createEpicResponseSchemaV12);
   });
 });
 

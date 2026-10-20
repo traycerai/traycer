@@ -16,6 +16,7 @@ import type {
   ApplyStagedTrigger,
   ConvergeReadyOk,
   ConvergeReadyVersionPolicy,
+  GuardedMutationOutcome,
   HostControllerStatus,
   HostRespawnMode,
   InstallVersionOk,
@@ -107,7 +108,7 @@ export class FakeHostController implements IpcHostController {
   async respawn(
     intent: LocalHostMutationIntent,
     mode: HostRespawnMode,
-  ): Promise<MutationOutcome<ActivateInstalledOk>> {
+  ): Promise<GuardedMutationOutcome<ActivateInstalledOk>> {
     this.respawnCalls += 1;
     this.respawnCallArgs.push({ intent, mode });
     return { kind: "ok", value: { activated: true } };

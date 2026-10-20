@@ -57,6 +57,7 @@ function renderItem(modelOption: ModelOption) {
       selected={false}
       active={false}
       showCapacity={false}
+      disabled={false}
       onHover={vi.fn()}
       onActive={vi.fn()}
       onSelect={vi.fn()}

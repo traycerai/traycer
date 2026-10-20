@@ -520,6 +520,7 @@ describe.skipIf(baselines.length === 0)(
             install: null,
             // @1.7
             processMemory: null,
+            crossHostMessaging: null,
           };
 
           // SELF-CHECKING FIXTURE. Without this, the next released minor a

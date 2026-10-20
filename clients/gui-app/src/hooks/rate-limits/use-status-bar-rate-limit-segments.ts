@@ -1,3 +1,4 @@
+import { useEffect, useEffectEvent, useSyncExternalStore } from "react";
 import type { UseQueryResult } from "@tanstack/react-query";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type {
@@ -18,6 +19,7 @@ import {
 } from "@/hooks/host/provider-rate-limit-query-options";
 import {
   PASSIVE_PROVIDER_RATE_LIMIT_OPTIONS,
+  useRateLimitAccountInventory,
   useVisibleRateLimitProviders,
   type ConfiguredRateLimitProvider,
 } from "@/hooks/rate-limits/use-configured-rate-limit-providers";
@@ -40,10 +42,20 @@ import {
 } from "@/lib/rate-limit-providers";
 import {
   envelopeDegradedReason,
+  isTransientUnavailableReason,
   mapResponseToProviderRateLimitEnvelope,
+  NO_EPISODE,
   resolveRetainedProviderRateLimits,
   type ProviderRateLimitEnvelope,
 } from "@/lib/rate-limits/rate-limit-envelope";
+import {
+  manualRateLimitRetryRevision,
+  manualRateLimitRetryWithheld,
+  pruneScheduledTransientReads,
+  rateLimitAccountLedgerKey,
+  scheduledTransientReadOwed,
+  subscribeManualRateLimitRetries,
+} from "@/lib/rate-limits/rate-limit-read-ledger";
 import {
   isWindowedRateLimitProvider,
   providerWindowEntries,
@@ -81,10 +93,13 @@ import { SAMPLE_ACCOUNT_LABEL } from "@/components/sample-workspace/sample-works
  * - `cold`: nothing has ever arrived for this provider. Neutral track, never a
  *   spinner - the reading is not loading, it simply has not been taken.
  * - `unavailable`: the provider answered and the answer was not a reading
- *   (`cli_not_found`, `rate_limits_not_available`, ...). Usually authoritative
- *   about the account, but a FIRST read that merely timed out lands here too -
- *   there is no retained reading for it to be shown beside, and a dash is the
- *   honest rendering either way. The tooltip names which it was.
+ *   (`cli_not_found`, `rate_limits_not_available`, ...). It is authoritative
+ *   about the account: a dash, and the reason in the tooltip, because the
+ *   reason is what says what to fix.
+ * - `transient`: the latest attempt failed in a way a later one may not
+ *   (`timeout`, `connection_failed`, `usage_fetch_failed`) and there is no
+ *   retained reading to show in its place. Nothing is known about the account
+ *   yet, so the segment says that and offers the read again.
  * - `degraded`: the latest attempt failed transiently and a last-known-good
  *   reading is being shown in its place.
  * - `live`: the reading is the latest one.
@@ -92,6 +107,7 @@ import { SAMPLE_ACCOUNT_LABEL } from "@/components/sample-workspace/sample-works
 export type StatusBarProviderSegmentState =
   | "cold"
   | "unavailable"
+  | "transient"
   | "degraded"
   | "live";
 
@@ -143,10 +159,25 @@ export interface StatusBarProviderSegmentModel {
    */
   readonly reason: RateLimitUnavailableReason | null;
   /**
+   * Whether a read of this account's usage is in flight right now, whoever
+   * started it. Only the `transient` state draws it: that is the state which
+   * says a retry is coming, so it is the one that has to be able to say when
+   * one is running.
+   */
+  readonly fetching: boolean;
+  /**
+   * Whether a click on this segment would read again NOW. True only on a
+   * resting `transient` segment: no other state offers a retry, a read already
+   * in flight IS the retry, and a key asked for by hand within
+   * `RATE_LIMIT_MANUAL_RETRY_WITHHOLD_MS` is withheld. Never true for a passive
+   * reader, which holds no handle it could fetch with.
+   */
+  readonly retryOffered: boolean;
+  /**
    * Every live window in catalog order - what the provider HAS, before the
    * user's selection is applied. A `degraded` segment carries the retained
-   * reading's windows - dimming them is the whole point - while `cold` and
-   * `unavailable` have none to carry.
+   * reading's windows - dimming them is the whole point - while `cold`,
+   * `transient` and `unavailable` have none to carry.
    */
   readonly windows: ReadonlyArray<StatusBarRateLimitWindow>;
   /**
@@ -185,10 +216,41 @@ export interface StatusBarRateLimitRefreshModel {
   }>;
   /** Whether any of those targets is fetching right now. */
   readonly ephemeralFetching: boolean;
-  /** Eligible `httpFetch` observers, refreshed through their own queries. */
-  readonly httpRefetches: ReadonlyArray<() => Promise<unknown>>;
+  /**
+   * Eligible `httpFetch` observers, refreshed through their own queries. Each
+   * carries the account it reads, so one segment's retry can reach its own
+   * observer rather than every one of them.
+   */
+  readonly httpRefetches: ReadonlyArray<StatusBarRateLimitHttpRefetch>;
   /** Whether any of those http observers is fetching right now. */
   readonly httpFetching: boolean;
+}
+
+/** One account a surface can read on demand. */
+export interface StatusBarRateLimitRetryTarget {
+  readonly providerId: RateLimitProviderId;
+  readonly profileId: string | null;
+}
+
+/**
+ * One account's scheduled re-read, with the episode it is owed for - the
+ * identity of the run of failures it is in (`NO_EPISODE` for an account with
+ * no reading). The reader records that identity when it takes the read, which
+ * is what makes the one-shot a fact about the run rather than about a mount,
+ * and keys the timer, which is what gives a run its own full delay.
+ */
+export interface StatusBarScheduledTransientRead extends StatusBarRateLimitRetryTarget {
+  readonly episode: number;
+}
+
+/**
+ * One `httpFetch` account's observer, named so a single key can be refetched.
+ * Not a retry target: a handle to refetch with is not something owed a read.
+ */
+export interface StatusBarRateLimitHttpRefetch {
+  readonly providerId: RateLimitProviderId;
+  readonly profileId: string | null;
+  readonly refetch: () => Promise<unknown>;
 }
 
 /**
@@ -208,6 +270,18 @@ export type StatusBarRateLimitCluster =
 export interface StatusBarRateLimitSegments {
   readonly cluster: StatusBarRateLimitCluster;
   readonly mountTargets: ReadonlyArray<StatusBarRateLimitMountTarget>;
+  /**
+   * The accounts the surface owes ONE re-read: every `transient` segment of an
+   * account it may still fetch. The state says a retry is coming, so one has to
+   * happen rather than waiting out the background poll; the surface schedules
+   * it (`TRANSIENT_RATE_LIMIT_RETRY_DELAY_MS`) and a segment that leaves the
+   * state takes its re-read with it.
+   *
+   * Resolved here, beside `mountTargets` and for the same reason: whether an
+   * account may be fetched at all is settled in this hook, and a caller
+   * deciding it again would be a second opinion about it.
+   */
+  readonly retryTargets: ReadonlyArray<StatusBarScheduledTransientRead>;
   readonly refresh: StatusBarRateLimitRefreshModel;
 }
 
@@ -247,7 +321,20 @@ interface StatusBarRateLimitTarget {
   readonly order: number;
   readonly profileId: string | null;
   readonly account: ProfileAccentDotInput | null;
+  /**
+   * Whether THIS PLACEMENT may start a read for the account: the account's own
+   * answer, masked by the things that make a placement observe rather than
+   * pull (the usage region hidden, the provider deny-listed, the layout editor
+   * drawing from cache). What the lanes and the affordance ask.
+   */
   readonly fetchEligible: boolean;
+  /**
+   * Whether the ACCOUNT can be read at all, unmasked: its credential's own
+   * answer. What the WORDS ask, because they describe the account and are true
+   * or false whatever this placement is allowed to do - the app-shell poll is
+   * reading it meanwhile, and a deny-list is a display act.
+   */
+  readonly accountReadable: boolean;
   readonly usageUpdatedAt: number | null;
   readonly lane: RateLimitFetchLane;
 }
@@ -272,6 +359,13 @@ function resolveTargets(
     const selectedProfile = provider.profiles.find(
       (profile) => profileCommitId(profile) === profileId,
     );
+    const accountReadable =
+      selectedProfile === undefined
+        ? provider.fetchEligibility.ambient
+        : isRateLimitProfileFetchEligible(
+            provider.fetchEligibility,
+            selectedProfile,
+          );
     return {
       provider,
       profileId,
@@ -279,13 +373,10 @@ function resolveTargets(
         selectedProfile === undefined || provider.profiles.length < 2
           ? null
           : profileAccentDotInput(selectedProfile),
-      fetchEligible:
-        selectedProfile === undefined
-          ? provider.fetchEligibility.ambient
-          : isRateLimitProfileFetchEligible(
-              provider.fetchEligibility,
-              selectedProfile,
-            ),
+      // One answer, under two names: the mask below moves `fetchEligible` and
+      // never this.
+      fetchEligible: accountReadable,
+      accountReadable,
       usageUpdatedAt: selectedProfile?.usageUpdatedAt ?? null,
       // The provider's OWN lane, not a second call to the classifier.
       // Re-deriving it would make this the one place the batch split disagrees
@@ -360,14 +451,78 @@ function requestsFor(
 function segmentState(
   rateLimits: ProviderRateLimits | null,
   envelope: ProviderRateLimitEnvelope | null,
-  isError: boolean,
+  reads: {
+    /** This read rejected and nothing has been read since. */
+    readonly erroredNow: boolean;
+    /** A read of this key has rejected at some point. */
+    readonly erroredEver: boolean;
+    /**
+     * Whether this account can be read AT ALL: `accountReadable`, the
+     * credential's own answer, never the placement-masked `fetchEligible`.
+     * Three things mask that one - the usage region hidden, the provider
+     * deny-listed, the layout editor drawing from cache - and none of them is
+     * a fact about the account: the app-shell poll goes on reading it while
+     * every one of them is true, so a segment that read the masked flag here
+     * would say the account answered while a read of it was in flight, and say
+     * the opposite again when the mask lifted. What makes the words false is
+     * an account nobody can read anywhere, which no placement can mask and
+     * only a person signing back in changes; the host answers authoritatively
+     * for it in the meantime, which is the state it had before this strip ever
+     * said `transient`.
+     */
+    readonly readable: boolean;
+  },
 ): {
   readonly state: StatusBarProviderSegmentState;
   readonly reason: RateLimitUnavailableReason | null;
 } {
-  if (rateLimits === null) return { state: "cold", reason: null };
+  if (rateLimits === null) {
+    // A read that REJECTED - the transport gave up, the frame budget ran out -
+    // left nothing retained, and it is the same thing to the reader as a
+    // failure the host put in an envelope: nothing is known about the account,
+    // and the surface has to say so and read again. `cold` is only the state
+    // before a first read, where "no reading yet" is the true sentence. No
+    // reason: a rejection carries no wire reason, and the transient words name
+    // no mechanism anyway.
+    //
+    // EVER, not now: a dataless query goes back to pending while the next read
+    // runs, which clears the error flag. Read `erroredNow` here and the words
+    // would drop to an empty track for the length of a retry - up to the CLI
+    // read budget - which is the one moment they are most true.
+    //
+    // Sticky, and so held to the one case nothing can contradict: a query with
+    // no envelope at all. `errorUpdateCount` never resets, so a key that
+    // rejected once answers `erroredEver` for the rest of the session. The
+    // other way into this branch is an envelope whose `latest` is null - a
+    // read that LANDED and carried no provider snapshot - and this is the
+    // branch that tells "a read failed and is being retried" from "nothing has
+    // been read yet". A response that arrived belongs on the second side,
+    // however long ago some read of the key rejected. It leaves the run
+    // itself alone: a response with no snapshot is no answer ABOUT the
+    // account, so it carries the episode over, and a transient failure after
+    // it is still owed that run's one re-read.
+    return envelope === null && reads.erroredEver && reads.readable
+      ? { state: "transient", reason: null }
+      : { state: "cold", reason: null };
+  }
   if (!rateLimits.available) {
-    return { state: "unavailable", reason: rateLimits.reason };
+    // A transient failure only REACHES this branch with nothing retained:
+    // `resolveRetainedProviderRateLimits` hands back `lastGood` wherever one
+    // exists, which is the `degraded` case below. So a transient reason here is
+    // a read that did not land, never a fact about the account - the one
+    // distinction `@traycer/protocol`'s `semantics.ts` exists to keep from
+    // drifting between the peers.
+    //
+    // Unless nothing can read the account, where the distinction stops paying:
+    // a blip nobody will retry is indistinguishable, to the reader, from a
+    // fact about the account, and the reason is on the tooltip either way.
+    return {
+      state:
+        isTransientUnavailableReason(rateLimits.reason) && reads.readable
+          ? "transient"
+          : "unavailable",
+      reason: rateLimits.reason,
+    };
   }
   const degradedReason = envelopeDegradedReason(envelope);
   if (degradedReason !== null) {
@@ -375,8 +530,9 @@ function segmentState(
   }
   // A query that threw retains its data too, and the strip has to say so - but
   // a thrown fetch carries no wire reason, so the tooltip falls back to the
-  // generic sentence rather than inventing one.
-  if (isError) return { state: "degraded", reason: null };
+  // generic sentence rather than inventing one. NOW, not ever: a reading that
+  // arrived after the error is not degraded by it.
+  if (reads.erroredNow) return { state: "degraded", reason: null };
   return { state: "live", reason: null };
 }
 
@@ -429,7 +585,7 @@ function shownWindows(
 }
 
 /** Stable identity for a passive reader's empty refresh handles. */
-const NO_REFETCHES: ReadonlyArray<() => Promise<unknown>> = [];
+const NO_REFETCHES: ReadonlyArray<StatusBarRateLimitHttpRefetch> = [];
 
 /** Whether a segment has anything to draw beyond an icon nobody can read. */
 function hasContent(segment: StatusBarProviderSegmentModel): boolean {
@@ -450,6 +606,61 @@ interface ToSegmentsContext {
   readonly hiddenProviders: ReadonlyArray<RateLimitProviderId>;
   readonly now: number;
   readonly sample: boolean;
+  /** A passive reader offers no retry: it has no handle to fetch with. */
+  readonly passive: boolean;
+  /** The host a retry click would read from, or `null` where none would. */
+  readonly retryHostId: string | null;
+}
+
+/** One account's identity within one render, for joining the lists below. */
+function accountKey(
+  providerId: RateLimitProviderId,
+  profileId: string | null,
+): string {
+  return `${providerId}:${profileId ?? ""}`;
+}
+
+/**
+ * Each of these accounts paired with the episode its reading is in - the
+ * identity the last answer about it minted, or `NO_EPISODE` for a key whose
+ * envelope has not landed.
+ */
+function episodeIdentities(
+  targets: ReadonlyArray<StatusBarRateLimitTarget>,
+  queries: ReadonlyArray<
+    UseQueryResult<ProviderRateLimitEnvelope, HostRpcError>
+  >,
+): Array<[string, number]> {
+  return targets.map((target, index) => [
+    accountKey(target.provider.providerId, target.profileId),
+    queries[index].data?.episode ?? NO_EPISODE,
+  ]);
+}
+
+/**
+ * Whether this account may be offered a retry, or was read by hand too
+ * recently.
+ *
+ * The bound itself is the ledger's (`rate-limit-read-ledger.ts`): its stamp is
+ * written at SETTLEMENT, so a read that failed slowly is bounded from when it
+ * failed, it survives this component, and it holds in every window. The same
+ * predicate runs again when a click is dispatched, which is the gate that
+ * decides; this one decides only whether to invite the click.
+ *
+ * `now` is the strip's shared 60s clock, so the affordance comes back on a tick
+ * rather than needing a timer of its own - which makes the bound "at least"
+ * 60s rather than exactly 60s, and never less.
+ */
+function retryBoundLifted(
+  hostId: string,
+  providerId: RateLimitProviderId,
+  profileId: string | null,
+  now: number,
+): boolean {
+  return !manualRateLimitRetryWithheld(
+    rateLimitAccountLedgerKey(hostId, providerId, profileId),
+    now,
+  );
 }
 
 function toSegments(
@@ -487,6 +698,17 @@ function toSegments(
         target.provider.providerId,
       ),
     );
+    const reported = context.sample
+      ? { state: "live" as const, reason: null }
+      : segmentState(retained, envelope, {
+          erroredNow: query.isError,
+          erroredEver: query.isError || query.errorUpdateCount > 0,
+          readable: target.accountReadable,
+        });
+    // Every read of these keys runs through TanStack, whichever trigger started
+    // it, so the observer's own flag is the whole answer - the same one the
+    // cluster's `↻` spins on.
+    const fetching = !context.sample && query.isFetching;
     return {
       order: target.order,
       segment: {
@@ -497,9 +719,20 @@ function toSegments(
             ? target.account
             : { ...target.account, label: SAMPLE_ACCOUNT_LABEL },
         hidden: context.hiddenProviders.includes(target.provider.providerId),
-        ...(context.sample
-          ? { state: "live" as const, reason: null }
-          : segmentState(retained, envelope, query.isError)),
+        ...reported,
+        fetching,
+        retryOffered:
+          reported.state === "transient" &&
+          !fetching &&
+          !context.passive &&
+          target.fetchEligible &&
+          context.retryHostId !== null &&
+          retryBoundLifted(
+            context.retryHostId,
+            target.provider.providerId,
+            target.profileId,
+            context.now,
+          ),
         windows,
         shown,
         tightest: tightestRateLimitWindow(shown),
@@ -589,6 +822,20 @@ export function useStatusBarRateLimitSegments(input: {
    * exactly as it is - the real strip beside the scene still owns it.
    */
   readonly sample: boolean;
+  /**
+   * The host a click on one of these segments would read from, or `null` in a
+   * placement whose click does not read at all.
+   *
+   * Required of every caller rather than assumed, because the words a
+   * `transient` segment wears include a click affordance, and a placement that
+   * draws them without wiring the click would be promising a gesture it does
+   * not honour. `null` keeps the words (the background poll is what makes them
+   * true) and drops the affordance and the clause in its tooltip.
+   *
+   * It is also what keys the retry bound, which has to name the host a read
+   * goes to: the same account on a different host is a different reading.
+   */
+  readonly retryHostId: string | null;
 }): StatusBarRateLimitSegments {
   const passive = input.mode === "passive";
   const client = useHostClient();
@@ -599,6 +846,16 @@ export function useStatusBarRateLimitSegments(input: {
   // The shared 60s clock, so a window that expires while the strip is on screen
   // drops out of it within the minute rather than at the next fetch.
   const now = useSampledNow();
+  // The clock lifts a retry bound; this lifts nothing and only makes a bound
+  // VISIBLE the moment it is written - by this window, or by any other one
+  // sharing the stamps. On the clock alone, an offer drawn before a sibling
+  // window's read settled would keep inviting the click for the rest of the
+  // minute it is sampling.
+  useSyncExternalStore(
+    subscribeManualRateLimitRetries,
+    manualRateLimitRetryRevision,
+    manualRateLimitRetryRevision,
+  );
 
   const targets = input.providers
     .filter(
@@ -610,6 +867,11 @@ export function useStatusBarRateLimitSegments(input: {
       ...target,
       order,
       // Editor-only segments observe cached data without starting requests.
+      // Only what this placement may PULL: `accountReadable` carries the
+      // account's own answer past here, because a provider in the deny-list is
+      // still being read by the app shell's poll, and a segment that dropped
+      // the transient words here would say the account answered while a read
+      // of it was in flight - and say it again the other way round on unhide.
       fetchEligible:
         target.fetchEligible &&
         usageShown &&
@@ -674,18 +936,24 @@ export function useStatusBarRateLimitSegments(input: {
         hiddenProviders,
         now,
         sample: input.sample,
+        passive,
+        retryHostId: input.retryHostId,
       }),
       ...toSegments(httpPolling, httpPollingQueries, {
         providerLimits,
         hiddenProviders,
         now,
         sample: input.sample,
+        passive,
+        retryHostId: input.retryHostId,
       }),
       ...toSegments(httpObserved, httpObservedQueries, {
         providerLimits,
         hiddenProviders,
         now,
         sample: input.sample,
+        passive,
+        retryHostId: input.retryHostId,
       }),
     ]
       .sort((left, right) => left.order - right.order)
@@ -696,9 +964,100 @@ export function useStatusBarRateLimitSegments(input: {
   // rather than baked into the store so a late-connected provider still lands
   // beside its canonical neighbour without a migration.
   const segments = applySegmentOrder(canonicallyOrdered, segmentOrder);
+  const transientKeys = new Set(
+    segments.flatMap((segment) =>
+      segment.state === "transient"
+        ? [accountKey(segment.providerId, segment.profileId)]
+        : [],
+    ),
+  );
+  // Which episode each account is in, read from the reading itself, so the
+  // one-shot a strip spends is remembered against the run of failures rather
+  // than against this mount. An account with no reading at all: `NO_EPISODE`.
+  const episodes = new Map<string, number>([
+    ...episodeIdentities(ephemeralObserved, ephemeralObservedQueries),
+    ...episodeIdentities(httpPolling, httpPollingQueries),
+    ...episodeIdentities(httpObserved, httpObservedQueries),
+  ]);
+  // Nothing ends an episode here - the identity above is what does - and
+  // nothing on screen ends one either: hiding a provider, picking a different
+  // profile, remounting the strip and leaving the host are all the same run of
+  // failures when the strip comes back to it. What DOES end an entry's life is
+  // the account ceasing to exist, so the list below is this host's own
+  // inventory - every profile of every provider it reports, plus each
+  // provider's ambient account - read from the host and not from the list this
+  // hook was handed: that one is the display projection, and a provider leaves
+  // it for reasons that are not an account ceasing to exist. In an effect,
+  // because it is a write; and only in the placement that arms these reads.
+  const ledgerHostId = input.retryHostId;
+  const inventory = useRateLimitAccountInventory();
+  const existingLedgerKeys =
+    ledgerHostId === null
+      ? []
+      : inventory.providers.flatMap((provider) =>
+          [null, ...provider.profiles.map(profileCommitId)].map((profileId) =>
+            rateLimitAccountLedgerKey(
+              ledgerHostId,
+              provider.providerId,
+              profileId,
+            ),
+          ),
+        );
+  const pruneRemovedEpisodes = useEffectEvent((): void => {
+    // An inventory this hook does not have is not an empty one: the provider
+    // list is a query, and while it is unanswered - cold, refetching, a scope
+    // with no pick - reporting nothing would drop every entry this host has.
+    // The LIST cannot say which it is, since both are no providers, so the
+    // query's own answer is what decides - and a host that answers with none
+    // left has told this hook that every account it was keeping is gone.
+    if (ledgerHostId === null || !inventory.answered) return;
+    pruneScheduledTransientReads(ledgerHostId, new Set(existingLedgerKeys));
+  });
+  // The set itself as the dependency, flattened, behind the two things that
+  // decide what it MEANS: a fresh array every render would run this on every
+  // render, while the host answering "none" leaves the keys empty and means the
+  // opposite of what their being empty meant a moment ago - and the host is in
+  // it because the prune is host-scoped. Two hosts that have both answered with
+  // no accounts have the same keys, and the entries at stake are not the same
+  // entries.
+  const existingEpisodeKeys = [
+    ledgerHostId ?? "nohost",
+    inventory.answered ? "answered" : "silent",
+    ...existingLedgerKeys,
+  ].join("\n");
+  useEffect(() => {
+    pruneRemovedEpisodes();
+  }, [existingEpisodeKeys]);
 
   return {
     cluster: clusterFor(input.providers.length, segments),
+    retryTargets: targets.flatMap((target) => {
+      const key = accountKey(target.provider.providerId, target.profileId);
+      const episode = episodes.get(key) ?? NO_EPISODE;
+      return !passive &&
+        target.fetchEligible &&
+        input.retryHostId !== null &&
+        transientKeys.has(key) &&
+        // The episode's one re-read, once. A placement whose click does not
+        // read owes none at all: it has no host to read from, which is the
+        // same reason it offers no affordance.
+        scheduledTransientReadOwed(
+          rateLimitAccountLedgerKey(
+            input.retryHostId,
+            target.provider.providerId,
+            target.profileId,
+          ),
+          episode,
+        )
+        ? [
+            {
+              providerId: target.provider.providerId,
+              profileId: target.profileId,
+              episode,
+            },
+          ]
+        : [];
+    }),
     // Only the ephemeral lane: an `httpFetch` observer is enabled and fetches its
     // own cold start on mount, so routing it through the mount hook as well
     // would put two fetches on one key. And none of it in `passive`, where a
@@ -737,7 +1096,11 @@ export function useStatusBarRateLimitSegments(input: {
         ),
       httpRefetches: passive
         ? NO_REFETCHES
-        : httpPollingQueries.map((query) => query.refetch),
+        : httpPolling.map((target, index) => ({
+            providerId: target.provider.providerId,
+            profileId: target.profileId,
+            refetch: httpPollingQueries[index].refetch,
+          })),
       httpFetching:
         !passive && httpPollingQueries.some((query) => query.isFetching),
     },

@@ -24,6 +24,7 @@ import { WireframeNode } from "./nodes/wireframe/wireframe-node";
 import { ThreadAnchor } from "./extensions/thread-anchor";
 import { ArtifactImageNode } from "./nodes/image/artifact-image-node";
 import { ArtifactCodeBlock } from "./nodes/code-block/artifact-code-block";
+import { BlockBreakAsText } from "./extensions/block-break-as-text";
 
 const lowlight = createLowlight(common);
 
@@ -93,6 +94,8 @@ const extensions: AnyExtension[] = [
   MermaidNode,
   WireframeNode,
   ArtifactCodeBlock.configure({ lowlight }),
+  // A line holding only `<br>` reads as text, as the host stores it.
+  BlockBreakAsText,
   // Inline mark anchoring artifact comment threads. It belongs in the shared
   // document schema so editor and export serialization cannot drift.
   ThreadAnchor,

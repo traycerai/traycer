@@ -7,6 +7,7 @@ import type {
   CreateEpicChatSeedV12,
   CreateEpicResponseV12,
   CreateEpicWorkspaceIdentifier,
+  EpicCreateOwner,
   TaskRepoIdentifier,
 } from "@traycer/protocol/host/epic/unary-schemas";
 import type {
@@ -27,7 +28,22 @@ import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
 import { readLocalHostIdSnapshot } from "@/lib/host/local-host-id-snapshot";
 import { useEpicCreateForClient } from "@/hooks/epic/use-epic-create-mutation";
 import { useCreateTuiAgentForClient } from "@/hooks/agent/use-create-tui-agent";
-import { useAuthStore } from "@/stores/auth/auth-store";
+import {
+  authorizesCloudCapability,
+  useAuthStore,
+} from "@/stores/auth/auth-store";
+import {
+  epicCreateOwnerFor,
+  landingOwnerRefusal,
+  type LandingOwnerTeam,
+} from "@/components/home/composer/landing-owner-model";
+import {
+  NO_DRAFT_OWNER_KEY,
+  landingOwnerDraftKey,
+  useLandingOwnerStore,
+} from "@/stores/home/landing-owner-store";
+import { TEAM_SANDBOX_HARNESS_UNAVAILABLE } from "@/lib/sandboxes/team-sandbox-harness";
+import { readNegotiatedMethodVersion } from "@/lib/host/read-negotiated-method-version";
 import {
   selectWorkspaceFoldersBucket,
   useWorkspaceFoldersStore,
@@ -164,6 +180,16 @@ export interface LandingComposerSubmitArgs {
     readonly serviceTier: ServiceTier;
     readonly permission: PermissionMode;
   };
+  /**
+   * Who the new task belongs to: the draft's Belongs to owner, read by the
+   * caller at submit; `null` is Personal.
+   */
+  readonly owner: LandingOwnerTeam | null;
+  /**
+   * Whether the selected harness is one a team sandbox does not offer, on a
+   * team sandbox, read by the caller at submit.
+   */
+  readonly teamSandboxHarnessBlocked: boolean;
 }
 
 export interface TerminalAgentLaunch {
@@ -189,6 +215,8 @@ export interface LandingComposerActions {
   readonly selectTerminalAgent: (
     launch: TerminalAgentLaunch,
     draftId: string | null,
+    owner: LandingOwnerTeam | null,
+    teamSandboxHarnessBlocked: boolean,
   ) => LandingPlacementRefusal | null;
   /**
    * Whether a create started here is still running.
@@ -321,6 +349,8 @@ export function useLandingComposerActions(
       readonly title: string;
       readonly initialUserPrompt: string;
       readonly chat: CreateEpicChatSeedV12 | null;
+      /** `epic.create@1.3`'s owner; `null` is the person. */
+      readonly owner: EpicCreateOwner | null;
       readonly workspaceFolders: ReadonlyArray<string>;
       readonly workspaceFolderInfoByPath: Readonly<
         Record<string, WorkspaceFolderInfo>
@@ -451,6 +481,9 @@ export function useLandingComposerActions(
           input.workspaceFolderInfoByPath,
         ),
         chat: input.chat,
+        // A team owner is floored at `epic.create@1.3` by the create
+        // mutation, so it never reaches a host that would strip it.
+        owner: input.owner,
       })
         .then((response) => {
           // A REFUSAL resolves, so it arrives HERE and not in the `.catch`
@@ -745,6 +778,7 @@ export function useLandingComposerActions(
         captureSeedRecovery: (recover) => {
           seedRecovery.run = recover;
         },
+        owner: epicCreateOwnerFor(args.owner),
         chat: {
           chatId,
           parentId: null,
@@ -1285,6 +1319,7 @@ export function useLandingComposerActions(
       launch: TerminalAgentLaunch,
       workspaceContext: LandingWorkspaceContext,
       hostId: string,
+      owner: LandingOwnerTeam | null,
     ) => {
       const {
         harnessId,
@@ -1371,6 +1406,7 @@ export function useLandingComposerActions(
         // should stand. Nothing to recover to.
         captureSeedRecovery: () => undefined,
         chat: null,
+        owner: epicCreateOwnerFor(owner),
       })
         .then(
           (response) => {
@@ -1485,6 +1521,11 @@ export function useLandingComposerActions(
       if (placement.kind === "refused") {
         return { message: placement.message };
       }
+      if (args.teamSandboxHarnessBlocked) {
+        return { message: TEAM_SANDBOX_HARNESS_UNAVAILABLE };
+      }
+      const ownerRefusal = refuseTeamOwner(args.owner, placement.hostId);
+      if (ownerRefusal !== null) return ownerRefusal;
       const workspaceContext = readLandingWorkspaceContext(
         args.draftId,
         queryClient,
@@ -1492,6 +1533,7 @@ export function useLandingComposerActions(
       );
       if (workspaceContext.worktreeIntentSuspended) return null;
       dispatchSubmission(args, workspaceContext, placement.hostId);
+      clearLandingOwnerChoice(args.draftId);
       return null;
     },
     [dispatchSubmission, queryClient, resolveAdmittedPlacement],
@@ -1501,18 +1543,26 @@ export function useLandingComposerActions(
     (
       launch: TerminalAgentLaunch,
       draftId: string | null,
+      owner: LandingOwnerTeam | null,
+      teamSandboxHarnessBlocked: boolean,
     ): LandingPlacementRefusal | null => {
       const placement = resolveAdmittedPlacement();
       if (placement.kind === "refused") {
         return { message: placement.message };
       }
+      if (teamSandboxHarnessBlocked) {
+        return { message: TEAM_SANDBOX_HARNESS_UNAVAILABLE };
+      }
+      const ownerRefusal = refuseTeamOwner(owner, placement.hostId);
+      if (ownerRefusal !== null) return ownerRefusal;
       const workspaceContext = readLandingWorkspaceContext(
         draftId,
         queryClient,
         placement.hostId,
       );
       if (workspaceContext.worktreeIntentSuspended) return null;
-      dispatchTerminalAgent(launch, workspaceContext, placement.hostId);
+      dispatchTerminalAgent(launch, workspaceContext, placement.hostId, owner);
+      clearLandingOwnerChoice(draftId);
       return null;
     },
     [dispatchTerminalAgent, queryClient, resolveAdmittedPlacement],
@@ -1541,6 +1591,17 @@ export function useLandingComposerActions(
       terminalAgentCreate.isPending,
     ],
   );
+}
+
+/**
+ * Forgets the Belongs to pick once its create is sent, under the draft's key
+ * and the not-yet-a-draft key, so the next task starts from the host's team
+ * again.
+ */
+function clearLandingOwnerChoice(draftId: string | null): void {
+  const store = useLandingOwnerStore.getState();
+  store.clearChoice(landingOwnerDraftKey(draftId));
+  store.clearChoice(NO_DRAFT_OWNER_KEY);
 }
 
 function ensureSubmissionDraft(
@@ -2108,4 +2169,22 @@ function buildRepoIdentifiers(
       }),
     ).values(),
   );
+}
+
+/**
+ * The refusals for a team owner, before any frame and with the draft left as it
+ * is: a host below `epic.create@1.3`, or no cloud authorization. Personal is
+ * never refused here.
+ */
+function refuseTeamOwner(
+  owner: LandingOwnerTeam | null,
+  hostId: string,
+): LandingPlacementRefusal | null {
+  if (owner === null) return null;
+  const message = landingOwnerRefusal({
+    owner,
+    hostEpicCreateVersion: readNegotiatedMethodVersion(hostId, "epic.create"),
+    cloudAuthorized: authorizesCloudCapability(useAuthStore.getState().status),
+  });
+  return message === null ? null : { message };
 }

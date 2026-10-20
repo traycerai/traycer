@@ -4,17 +4,23 @@ import {
   Bell,
   Bot,
   Boxes,
+  FileText,
   GitBranch,
   ListChecks,
   Globe,
   Keyboard,
   KeyRound,
+  LockKeyhole,
+  MousePointerClick,
   LineChart,
   Palette,
+  Plug,
   PanelBottom,
   PanelsTopLeft,
   QrCode,
   Server,
+  Sparkles,
+  Wrench,
   ShieldCheck,
   Settings as SettingsIcon,
   TerminalSquare,
@@ -28,11 +34,17 @@ export type SettingsSectionId =
   | "getting-started"
   | "general"
   | "browser"
+  | "browser-agent-access"
   | "appearance"
   | "layout"
   | "opening-behavior"
   | "app-notifications"
   | "providers"
+  | "secrets"
+  | "mcp-servers"
+  | "skills"
+  | "agent-definitions"
+  | "machine-setup"
   | "notifications"
   | "permissions"
   | "agents"
@@ -74,21 +86,25 @@ export const FALLBACK_SETTINGS_SECTION_ID =
 /**
  * What a section BELONGS to — the organising idea of the whole surface.
  *
- * Settings used to be one flat list in which "Appearance" (this app),
- * "Sessions" (your account) and "Providers" (one specific host) were
- * indistinguishable peers. Nothing said which of them followed you between
- * hosts, and four sections quietly grew their own host dropdown to cover for
- * it.
+ * One rule, said beside the map (the environments core flows' Settings map):
+ * if it varies by computer it sits under the host picker; if it follows you it
+ * sits under Personal; if it is about your account rather than your settings
+ * it sits under Account; the rest is the app itself.
  *
- * The fix is a SCOPE, not a level. Settings has already spent its nesting
+ * The scopes are groups, not levels. Settings has already spent its nesting
  * budget inside Providers — that panel is a rail plus a per-provider tab bar,
- * so the sidebar itself gets exactly one level and the host cannot become
- * another one. The host group is therefore headed by ONE picker, and
- * everything under it is scoped by that pick. Depth stays flat; the rule ("if
- * it varies by host it sits under the picker") becomes structural rather than
- * memorised.
+ * so the sidebar itself gets exactly one level. Only the host group carries a
+ * picker, and everything under it is scoped by that pick; Personal and Account
+ * pages read through the window's own host (`usePersonalHostScope`), never
+ * through the picker, because what they show follows the person rather than a
+ * machine.
  */
-export type SettingsSectionGroupId = "guide" | "app" | "account" | "host";
+export type SettingsSectionGroupId =
+  | "guide"
+  | "app"
+  | "personal"
+  | "account"
+  | "host";
 
 export interface SettingsSectionGroup {
   readonly id: SettingsSectionGroupId;
@@ -96,14 +112,15 @@ export interface SettingsSectionGroup {
 }
 
 /**
- * Getting started leads in its own group, followed by Application and Account.
- * The host group goes last because it is the only one whose contents are
- * scoped — it carries the picker, and everything beneath the picker belongs
- * to whichever host that picker names.
+ * Getting started leads in its own group, followed by Application, Personal
+ * and Account. The host group goes last because it is the only one whose
+ * contents are scoped — it carries the picker, and everything beneath the
+ * picker belongs to whichever host that picker names.
  */
 export const SETTINGS_SECTION_GROUPS: ReadonlyArray<SettingsSectionGroup> = [
   { id: "guide", label: "Guide" },
   { id: "app", label: "Application" },
+  { id: "personal", label: "Personal" },
   { id: "account", label: "Account" },
   { id: "host", label: "Host" },
 ];
@@ -131,20 +148,14 @@ export interface SettingsSection {
  * stay contiguous per group or the sidebar renders a group heading twice.
  *
  * Only the first ten entries can carry a digit
- * (`SINGLE_DIGIT_LEADER_INDEX_LIMIT`), and there are now twenty-one. The whole
- * host group - Overview, Providers, Worktrees, the host's Notifications,
- * Permissions, Agent selection, Fallback, Shell and Diagnostics - is the
- * twelfth through twentieth desktop entries and goes without. Browser is
- * the third Application entry, so Layout is the eighth and Usage is the first
- * account entry without a digit on desktop. Permissions and Fallback were
- * both added into the digit-less tail and so moved no existing shortcut -
- * Permissions sits between Notifications and Agent selection, Fallback between
- * Agent selection and Shell, all already there.
- *
- * Worktrees is the one that lost a digit to the app-scoped Sounds
- * entry below. That follows from keeping Application entries together at the
- * start: giving Worktrees its digit back would require shortcut order to
- * diverge from both sidebar reading order and command-palette row order.
+ * (`SINGLE_DIGIT_LEADER_INDEX_LIMIT`), and there are now twenty-three on
+ * desktop. Getting started and the eight Application entries take 1 to 9, and
+ * Providers, the first Personal entry, takes 0. Everything after it - the
+ * rest of Personal, all of Account and the host group - goes without. That
+ * cost Sessions the digit it held while Account came straight after
+ * Application: Personal is the more frequent destination, and the groups must
+ * stay contiguous, so the trade could only go one way without shortcut order
+ * diverging from sidebar reading order and command-palette row order.
  *
  * Section `id`s are a compatibility surface — routes (`/settings/<id>`), the
  * settings-modal panel table, the command palette and remembered tab paths key
@@ -192,7 +203,7 @@ export const SETTINGS_SECTIONS: ReadonlyArray<SettingsSection> = [
     icon: PanelsTopLeft,
     group: "app",
   },
-  // Different controls than Host → Notifications, so a different word and
+  // Different controls than Account → Notifications, so a different word and
   // icon (see the rail-table rule above). The section `id` stays
   // `app-notifications`.
   {
@@ -228,6 +239,90 @@ export const SETTINGS_SECTIONS: ReadonlyArray<SettingsSection> = [
     icon: PanelBottom,
     group: "app",
   },
+  // The Personal group: what follows the person to every computer they use.
+  // These pages read through the window's own host, never the picker, and
+  // what they save applies wherever the person signs in.
+  {
+    id: "providers",
+    label: "Providers",
+    icon: Boxes,
+    group: "personal",
+  },
+  // MCP servers and Skills were tabs inside each provider. They are pages of
+  // their own because each entry is one of the person's settings: managed
+  // entries follow them to every host, and a local one is added on a click.
+  {
+    id: "mcp-servers",
+    label: "MCP servers",
+    icon: Plug,
+    group: "personal",
+  },
+  {
+    id: "skills",
+    label: "Skills",
+    icon: Sparkles,
+    group: "personal",
+  },
+  // "Model routing" and not "Route automatically" - the section is the whole
+  // subject, and "Route automatically" is the master toggle INSIDE it, so using
+  // the same words for both would make the rail row read as a switch.
+  {
+    id: "fallback",
+    label: "Model routing",
+    icon: Waypoints,
+    group: "personal",
+  },
+  // The section `id` stays `shell`; the page now also holds the variables
+  // every agent starts with, so the label names both.
+  {
+    id: "shell",
+    label: "Variables and shells",
+    icon: TerminalSquare,
+    group: "personal",
+  },
+  // "Agent selection", not "Agents": this section configures HOW a coding agent
+  // and model get chosen when spawning child agents. It does not manage the
+  // Agents that live in a Task, and the old label collided with that surface.
+  // The section `id` (and its `/settings/agents` route) is an internal
+  // identifier on the compatibility boundary and stays put.
+  {
+    id: "agents",
+    label: "Agent selection",
+    icon: Bot,
+    group: "personal",
+  },
+  // Whether agents may drive the in-app browser. Its own page rather than a
+  // row on Browser: Browser is this app's own browsing, which stays with the
+  // window, while this follows the person.
+  {
+    id: "browser-agent-access",
+    label: "Browser agent access",
+    icon: MousePointerClick,
+    group: "personal",
+  },
+  // Where secrets and GitHub access are managed. The page itself lives on the
+  // web dashboard; this entry is how Settings reaches it.
+  {
+    id: "secrets",
+    label: "Secrets",
+    icon: LockKeyhole,
+    group: "personal",
+  },
+  // The agent definition files every host gets ("Agent definitions", never
+  // "Agents": that word is the agents running in a task).
+  {
+    id: "agent-definitions",
+    label: "Agent definitions",
+    icon: FileText,
+    group: "personal",
+  },
+  // The script each computer runs once to set itself up, one per OS.
+  {
+    id: "machine-setup",
+    label: "Machine setup",
+    icon: Wrench,
+    group: "personal",
+  },
   {
     id: "devices",
     label: "Sessions",
@@ -248,17 +343,32 @@ export const SETTINGS_SECTIONS: ReadonlyArray<SettingsSection> = [
   // host scopes on one screen, with the outer one unable to describe the
   // number the inner one produced. It still reads through a host client -
   // every RPC does - but that is a transport fact, not a scope one.
-  //
-  // Moving it here cost Shell its leader digit: the group must stay
-  // contiguous (see this array's doc comment), so Usage had to land beside
-  // Sessions rather than stay appended, and that pushes Shell past
-  // `SINGLE_DIGIT_LEADER_INDEX_LIMIT` into the digit-less tail with
-  // Diagnostics. Shell is the right one to lose it to - Diagnostics was
-  // already there, and Usage is a far more frequent destination than either.
   {
     id: "usage",
     label: "Usage",
     icon: LineChart,
+    group: "account",
+  },
+  // What an agent may do on its own: the mode a conversation starts in, the
+  // judge that reviews actions under the `auto` permission mode, the rules it
+  // follows, and what it decided. Its own page rather than rows on Agent
+  // selection - that page is about which agent gets CHOSEN for a task, and
+  // permissions are a different question. Under Account because the policy is
+  // the account's, whichever computer the agent runs on.
+  {
+    id: "permissions",
+    label: "Permissions",
+    // A key, the common permissions glyph; a gavel at sidebar size read as a
+    // broom.
+    icon: KeyRound,
+    group: "account",
+  },
+  // Event policy and automation for the account. Different controls than
+  // Application → Sounds, so it keeps the generic word and the bell.
+  {
+    id: "notifications",
+    label: "Notifications",
+    icon: Bell,
     group: "account",
   },
   // Offered ONLY by the installed mobile app (`MOBILE_APP_ONLY_SECTION_IDS`
@@ -280,67 +390,9 @@ export const SETTINGS_SECTIONS: ReadonlyArray<SettingsSection> = [
     group: "host",
   },
   {
-    id: "providers",
-    label: "Providers",
-    icon: Boxes,
-    group: "host",
-  },
-  {
     id: "worktrees",
     label: "Worktrees",
     icon: GitBranch,
-    group: "host",
-  },
-  // Event policy and automation for the selected host. Different controls
-  // than Application → Sounds, so it keeps the generic word and the bell.
-  {
-    id: "notifications",
-    label: "Notifications",
-    icon: Bell,
-    group: "host",
-  },
-  // What an agent may do on its own: the mode a conversation starts in, the
-  // judge that reviews actions under the `auto` permission mode, the rules it
-  // follows, and what it decided. Its own page rather than rows on Agent
-  // selection - that page is about which agent gets CHOSEN for a task, and
-  // permissions are a different question. In the Host group because three of
-  // its four tabs are per machine; the Modes tab is the one application-scoped
-  // region on a host page (SETTINGS.md, "Scope: the organising idea").
-  {
-    id: "permissions",
-    label: "Permissions",
-    // A key, the common permissions glyph; a gavel at sidebar size read as a
-    // broom.
-    icon: KeyRound,
-    group: "host",
-  },
-  // "Agent selection", not "Agents": this section configures HOW a coding agent
-  // and model get chosen when spawning child agents. It does not manage the
-  // Agents that live in a Task, and the old label collided with that surface.
-  // The section `id` (and its `/settings/agents` route) is an internal
-  // identifier on the compatibility boundary and stays put.
-  {
-    id: "agents",
-    label: "Agent selection",
-    icon: Bot,
-    group: "host",
-  },
-  // Beside Agent selection, and for the same reason it sits under the picker at
-  // all: both configure how a chat agent gets ROUTED, and both answer per host,
-  // because the providers and accounts a route can reach are that machine's.
-  // "Model routing" and not "Route automatically" - the section is the whole
-  // subject, and "Route automatically" is the master toggle INSIDE it, so using
-  // the same words for both would make the rail row read as a switch.
-  {
-    id: "fallback",
-    label: "Model routing",
-    icon: Waypoints,
-    group: "host",
-  },
-  {
-    id: "shell",
-    label: "Shell",
-    icon: TerminalSquare,
     group: "host",
   },
   // Same kind of page as Application → Diagnostics, partitioned by scope, so

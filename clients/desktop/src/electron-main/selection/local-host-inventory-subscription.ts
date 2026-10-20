@@ -28,7 +28,11 @@
  *    freshest anyone has - but the push stops counting as coverage, because
  *    the host reads with a device credential and this process reads with the
  *    user's bearer: a host whose credential needs re-auth is stale in a way
- *    the poll is not.
+ *    the poll is not;
+ *  - a host that negotiated only @1.0 of the method (it predates sandboxes)
+ *    sends the personal hosts alone, every sandbox row stripped. That is not
+ *    the registry, so its snapshots are neither adopted nor counted as
+ *    coverage, and the poll carries the whole registry as before.
  *
  * In each case `onPushActiveChanged(false)` fires and the poll resumes on its
  * next tick; a later healthy snapshot arms it again. Nothing here retries on
@@ -237,6 +241,16 @@ export function startLocalHostInventorySubscription(
       callbacks: {
         onSnapshot: (snapshot) => {
           if (disposed) return;
+          // A @1.0 host strips every sandbox row, so its rows are the
+          // personal hosts alone. Adopted, they would replace the fleet and
+          // remove every sandbox each time one arrived, and the poll that
+          // restores them would be standing down. Such a snapshot covers
+          // nothing here: it is not forwarded, and the poll keeps reading the
+          // whole registry.
+          if (!snapshot.includesSandboxRows) {
+            setPushActive(false);
+            return;
+          }
           // Forwarded whatever its staleness, and whatever stream it came
           // from: rows the host could not refresh are still rows, and a
           // retired stream's rows are fenced by the generation they carry, at

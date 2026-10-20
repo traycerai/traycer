@@ -125,6 +125,7 @@ interface QueuedMessageRowActionStateInput {
 interface QueuedMessageRowChrome {
   readonly showOwnerActions: boolean;
   readonly showManagedCommandCancel: boolean;
+  readonly showSignInParkCancel: boolean;
   readonly canAbortSteer: boolean;
 }
 
@@ -880,6 +881,7 @@ const QueuedMessageRow = memo(function QueuedMessageRow(props: {
         actionState={actionState}
         showOwnerActions={chrome.showOwnerActions}
         showManagedCommandCancel={chrome.showManagedCommandCancel}
+        showSignInParkCancel={chrome.showSignInParkCancel}
         canAbortSteer={chrome.canAbortSteer}
         agentFold={
           receivedAgentResponse
@@ -908,6 +910,7 @@ function QueuedMessageRowContent(props: {
   readonly actionState: QueuedMessageRowActionState;
   readonly showOwnerActions: boolean;
   readonly showManagedCommandCancel: boolean;
+  readonly showSignInParkCancel: boolean;
   readonly canAbortSteer: boolean;
   /**
    * A received agent row's fold (#2441), or `null` for every other row. Such
@@ -922,10 +925,10 @@ function QueuedMessageRowContent(props: {
   readonly handleSteerNow: () => void;
 }) {
   const item = props.item;
+  const showCancelOnly =
+    props.showManagedCommandCancel || props.showSignInParkCancel;
   const framed =
-    props.showOwnerActions ||
-    props.showManagedCommandCancel ||
-    props.canAbortSteer;
+    props.showOwnerActions || showCancelOnly || props.canAbortSteer;
   const showFloatingChrome = framed || props.statusLabel !== null;
   const compact = agentFoldCompact(props.agentFold);
 
@@ -969,16 +972,9 @@ function QueuedMessageRowContent(props: {
                 onSteerNow={props.handleSteerNow}
               />
             ) : null}
-            {props.showManagedCommandCancel ? (
+            {showCancelOnly ? (
               <ManagedCommandCancelButton
-                kind={
-                  item.kind === "port-forward" ||
-                  item.kind === "conversation-message" ||
-                  item.kind === "task-checkin" ||
-                  item.kind === "task-overdue"
-                    ? item.kind
-                    : "shell"
-                }
+                kind={cancelOnlyKind(item)}
                 onCancel={props.handleCancel}
               />
             ) : null}
@@ -1388,12 +1384,16 @@ function TaskOverdueBadge() {
   );
 }
 
-const CANCEL_COPY: Record<
+type CancelOnlyKind =
   | "shell"
   | "port-forward"
   | "conversation-message"
   | "task-checkin"
-  | "task-overdue",
+  | "task-overdue"
+  | "sign-in-park";
+
+const CANCEL_COPY: Record<
+  CancelOnlyKind,
   { readonly ariaLabel: string; readonly tooltip: string }
 > = {
   shell: {
@@ -1419,22 +1419,41 @@ const CANCEL_COPY: Record<
     ariaLabel: "Dismiss overdue notice",
     tooltip: "Dismiss this notice — the bot won't see it",
   },
+  "sign-in-park": {
+    ariaLabel: "Cancel agent message waiting for sign-in",
+    tooltip: "Cancel this message — it won't run when you sign back in",
+  },
 };
 
 /**
- * The only affordance a host-authored row offers. For a shell, cancelling is
- * not destructive to the underlying output: the host leaves the delivery
- * cursor where it is, so the next output from that command re-queues a fresh
- * digest. For a forward it IS final - the notice is raised once, so dismissing
- * it means the agent is not told - and the copy says which.
+ * Which cancel-only toolbar a row offers. A prompt row reaches it only while
+ * held for a provider sign-in (`queuedMessageRowChrome`).
+ */
+function cancelOnlyKind(item: OpenChatQueuedItem): CancelOnlyKind {
+  switch (item.kind) {
+    case "port-forward":
+    case "conversation-message":
+    case "task-checkin":
+    case "task-overdue":
+      return item.kind;
+    case "prompt":
+      return "sign-in-park";
+    case "managed-command":
+      return "shell";
+  }
+}
+
+/**
+ * The only affordance a host-authored row, or an agent prompt held for a
+ * sign-in, offers. For a shell, cancelling is not destructive to the
+ * underlying output: the host leaves the delivery cursor where it is, so the
+ * next output from that command re-queues a fresh digest. For a forward or a
+ * held prompt it IS final - the notice is raised once, so dismissing it means
+ * the agent is not told, and a cancelled prompt never runs - and the copy says
+ * which.
  */
 function ManagedCommandCancelButton(props: {
-  readonly kind:
-    | "shell"
-    | "port-forward"
-    | "conversation-message"
-    | "task-checkin"
-    | "task-overdue";
+  readonly kind: CancelOnlyKind;
   readonly onCancel: () => void;
 }) {
   const { ariaLabel, tooltip } = CANCEL_COPY[props.kind];
@@ -1507,6 +1526,12 @@ function shouldShowDropIndicatorAfter(input: {
  * single-action toolbar (cancel only) rather than the prompt row's
  * edit/delete/steer trio.
  *
+ * A received A2A row gets that same cancel-only toolbar in one state: paused
+ * with the host's `signInParked` mark (`chat.subscribe@1.28`), held until its
+ * provider is signed in again. It runs unattended once the sign-in returns,
+ * and this control is the only place a person can stop it first. A host
+ * below `1.28` never sends the mark, so its rows stay without one.
+ *
  * Only a user-owned safe-point steer still "Waiting for steer" can be
  * un-staged: an interrupt_restart ("Restart pending") has already torn the turn
  * down, and received-agent rows are system-owned. The host re-checks and rejects
@@ -1517,10 +1542,12 @@ function queuedMessageRowChrome(
 ): QueuedMessageRowChrome {
   const { promptItem, readOnly, canAct, isLocked } = input;
   const userOwned = promptItem !== null && !input.receivedAgentResponse;
+  const canCancelOnly = !readOnly && canAct && !isLocked;
   return {
     showOwnerActions: userOwned && !readOnly && !isLocked,
-    showManagedCommandCancel:
-      promptItem === null && !readOnly && canAct && !isLocked,
+    showManagedCommandCancel: promptItem === null && canCancelOnly,
+    showSignInParkCancel:
+      canCancelOnly && heldForSignIn(promptItem, input.receivedAgentResponse),
     canAbortSteer:
       userOwned &&
       !readOnly &&
@@ -1531,6 +1558,18 @@ function queuedMessageRowChrome(
       promptItem.status === "steer_requested" &&
       promptItem.steerRequest?.mode === "safe_point",
   };
+}
+
+function heldForSignIn(
+  promptItem: OpenChatQueuedPromptItem | null,
+  receivedAgentResponse: boolean,
+): boolean {
+  return (
+    promptItem !== null &&
+    receivedAgentResponse &&
+    promptItem.signInParked === true &&
+    promptItem.status === "paused"
+  );
 }
 
 /**

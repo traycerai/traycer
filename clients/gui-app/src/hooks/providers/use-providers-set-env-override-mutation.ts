@@ -6,6 +6,7 @@ import type {
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostRpcRegistry } from "@/lib/host";
 import { useHostScopedMutation } from "@/hooks/host/use-host-scoped-mutation";
+import { useExecutableWriteGrant } from "@/hooks/environment/use-executable-write-grant";
 import { PROVIDER_INVALIDATIONS } from "@/hooks/providers/invalidations";
 import { providersMutationKeys } from "@/lib/query-keys";
 
@@ -19,10 +20,13 @@ export function useProvidersSetEnvOverride(): UseMutationResult<
   RequestOfMethod<HostRpcRegistry, "providers.setEnvOverride">,
   { readonly hostId: string | null }
 > {
+  // A variable can choose what a harness launches, so it carries the grant.
+  const grant = useExecutableWriteGrant();
   return useHostScopedMutation({
     method: "providers.setEnvOverride",
+    prepareRequest: grant,
     mutationKey: providersMutationKeys.setEnvOverride(),
-    errorMessage: "Couldn't save environment variable.",
+    errorMessage: "Couldn't save the variable.",
     invalidateMethods: PROVIDER_INVALIDATIONS,
   });
 }

@@ -7,6 +7,7 @@ import {
   environmentHostListV10,
   environmentHostReadV10,
   environmentListV10,
+  environmentMembersV10,
 } from "@traycer/protocol/host/environment/contracts";
 
 const PERSONAL = {
@@ -117,6 +118,7 @@ describe("environment.host.read / .bind / .list protocol contracts", () => {
       ["environment.host.read", environmentHostReadV10],
       ["environment.host.bind", environmentHostBindV10],
       ["environment.host.list", environmentHostListV10],
+      ["environment.members", environmentMembersV10],
     ] as const) {
       expect(RELEASED_FLOOR_METHOD_NAMES).not.toContain(method);
       const entry = hostRpcRegistry[method];
@@ -180,6 +182,49 @@ describe("environment.host.list protocol contract", () => {
       [host],
     ]) {
       expect(environmentHostListV10.responseSchema.safeParse(bad).success).toBe(
+        false,
+      );
+    }
+  });
+});
+
+describe("environment.members protocol contract", () => {
+  it("parses a first-page request, a cursor, and a page of members with a next cursor", () => {
+    for (const request of [
+      { environmentId: TEAM.environmentId, cursor: null },
+      { environmentId: TEAM.environmentId, cursor: "user-2" },
+    ]) {
+      expect(environmentMembersV10.requestSchema.parse(request)).toEqual(
+        request,
+      );
+    }
+    const response = {
+      members: [
+        { userId: "user-1", displayName: "Ada", avatarUrl: "https://a/1.png" },
+        { userId: "user-2", displayName: null, avatarUrl: null },
+      ],
+      nextCursor: "user-2",
+    };
+    expect(environmentMembersV10.responseSchema.parse(response)).toEqual(
+      response,
+    );
+  });
+
+  it("rejects a request without a cursor, a member without a user id, an empty name, an empty next cursor, or a bare array root", () => {
+    expect(
+      environmentMembersV10.requestSchema.safeParse({
+        environmentId: TEAM.environmentId,
+      }).success,
+    ).toBe(false);
+    const member = { userId: "user-1", displayName: "Ada", avatarUrl: null };
+    const { userId: _userId, ...noUser } = member;
+    for (const bad of [
+      { members: [noUser], nextCursor: null },
+      { members: [{ ...member, displayName: "" }], nextCursor: null },
+      { members: [member], nextCursor: "" },
+      [member],
+    ]) {
+      expect(environmentMembersV10.responseSchema.safeParse(bad).success).toBe(
         false,
       );
     }

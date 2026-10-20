@@ -20,6 +20,8 @@ interface HarnessModelPickerItemProps {
   readonly onHover: (rowId: string) => void;
   readonly onActive: (rowId: string) => void;
   readonly onSelect: (row: HarnessModelRow) => void;
+  /** Listed but not selectable (a harness a team sandbox does not offer). */
+  readonly disabled: boolean;
 }
 
 export function HarnessModelPickerItem(props: HarnessModelPickerItemProps) {
@@ -33,6 +35,7 @@ export function HarnessModelPickerItem(props: HarnessModelPickerItemProps) {
     onHover,
     onActive,
     onSelect,
+    disabled,
   } = props;
 
   // Search is scoped to the active harness, so rows render identically whether
@@ -67,6 +70,7 @@ export function HarnessModelPickerItem(props: HarnessModelPickerItemProps) {
         type="button"
         role="option"
         aria-selected={selected}
+        aria-disabled={disabled}
         data-active={active}
         data-selected={selected}
         className={cn(
@@ -86,6 +90,7 @@ export function HarnessModelPickerItem(props: HarnessModelPickerItemProps) {
           onActive(row.id);
         }}
         onClick={() => {
+          if (disabled) return;
           onSelect(row);
         }}
       >

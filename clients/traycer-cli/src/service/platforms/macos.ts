@@ -95,6 +95,7 @@ import {
   isServiceMutationAuthorityError,
   verifyServiceMutationAuthority,
 } from "../mutation-authority";
+import { runAtStopTargetEdge } from "../stop-target";
 import { markRegistrationCommitted } from "../cli-invocation-record";
 import { atServiceInstallEdge, atServiceSpawnEdge } from "../spawn-edge";
 import {
@@ -147,7 +148,7 @@ export function createMacosController(
   const unverifiedRun: ProcessRunner = runner ?? runCommand;
   const run: ProcessRunner = async (command, args, options) => {
     await verifyServiceMutationAuthority();
-    return unverifiedRun(command, args, options);
+    return runAtStopTargetEdge(() => unverifiedRun(command, args, options));
   };
   return {
     install: (options) => installService(options, run),
@@ -1216,6 +1217,9 @@ async function installService(
       timeoutMs: LAUNCHCTL_CALL_TIMEOUT_MS,
       tolerateNonZeroExit: false,
     }).catch((cause: unknown) => {
+      // An authority loss - a stop's confirmed host replaced included - is
+      // not a bootout failure, and keeps its identity and code.
+      if (isServiceMutationAuthorityError(cause)) throw cause;
       throw cliError({
         code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
         message: `launchctl bootout failed for ${options.label.id}: ${describeCause(cause)}`,
@@ -1928,7 +1932,7 @@ async function stopDesktopManagedHost(
     case "hung":
       throw cliError({
         code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
-        message: `host stop: the host acknowledged the shutdown claim but pid=${outcome.pid} did not exit within the shutdown grace; stop did not take effect.`,
+        message: `host stop: the host acknowledged the shutdown claim but pid=${outcome.pid} did not exit within the shutdown grace; stop did not take effect. Re-run with --force to stop it anyway (running terminal sessions and in-flight agent work will be killed).`,
         details: {
           label: label.id,
           agentLabel: agent.agentLabelId,
@@ -1939,7 +1943,7 @@ async function stopDesktopManagedHost(
     case "unreachable":
       throw cliError({
         code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
-        message: `host stop: Traycer Desktop owns host registration on this machine (SMAppService agent '${agent.agentLabelId}' loaded from ${agent.loadedPath}) and the running host's RPC endpoint is unreachable (${outcome.cause}); stopping it from the CLI would deregister Desktop's agent. Use the Traycer app to stop it, or take over management with 'traycer host service uninstall' followed by 'traycer host service install', then retry.`,
+        message: `host stop: Traycer Desktop owns host registration on this machine (SMAppService agent '${agent.agentLabelId}' loaded from ${agent.loadedPath}) and the running host's RPC endpoint is unreachable (${outcome.cause}); stopping it from the CLI would deregister Desktop's agent. If the host is not responding, re-run with --force to stop it anyway (running terminal sessions and in-flight agent work will be killed). Otherwise use the Traycer app to stop it, or take over management with 'traycer host service uninstall' followed by 'traycer host service install', then retry.`,
         details: {
           label: label.id,
           agentLabel: agent.agentLabelId,

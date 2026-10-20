@@ -5,7 +5,7 @@ import {
   render,
   screen,
 } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   recordNegotiatedHostManifest,
   resetNegotiatedManifests,
@@ -15,6 +15,14 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { useProfileSyncModalStore } from "@/stores/settings/profile-sync-modal-store";
 
 const HOST_ID = "host-source";
+
+// What `useHostCredentialRefusal` answers for the host; `null` is one that syncs.
+const credentialHost = vi.hoisted(() => ({
+  refusal: null as string | null,
+}));
+vi.mock("@/hooks/host/use-host-credential-refusal", () => ({
+  useHostCredentialRefusal: () => credentialHost.refusal,
+}));
 
 function renderButton(
   hostId: string | null,
@@ -30,6 +38,7 @@ function renderButton(
 describe("<ProfileSyncEntryButton />", () => {
   beforeEach(() => {
     resetNegotiatedManifests();
+    credentialHost.refusal = null;
     useProfileSyncModalStore.getState().close();
   });
 
@@ -95,5 +104,31 @@ describe("<ProfileSyncEntryButton />", () => {
     });
     expect(useProfileSyncModalStore.getState().sourceHostId).toBe(HOST_ID);
     expect(screen.queryByRole("button", { name: /copy/i })).toBeNull();
+  });
+
+  it("is disabled with the refusal as its label, and never opens the modal, when the host takes no credentials", () => {
+    credentialHost.refusal = "Sandboxes don't take sign-ins";
+    // Overview IS advertised: only the refusal can be what holds it.
+    recordNegotiatedHostManifest(HOST_ID, {
+      "providers.profileSync.overview": { major: 1, minor: 0 },
+    });
+    renderButton(HOST_ID, "claude-code");
+
+    const button = screen.getByRole<HTMLButtonElement>("button", {
+      name: "Sync profiles…",
+    });
+    expect(button.disabled).toBe(true);
+    const trigger = button.parentElement;
+    if (trigger === null)
+      throw new Error("expected a tooltip trigger around the button");
+    fireEvent.focus(trigger);
+    expect(screen.getByRole("tooltip").textContent).toBe(
+      "Sandboxes don't take sign-ins",
+    );
+
+    act(() => {
+      fireEvent.click(button);
+    });
+    expect(useProfileSyncModalStore.getState().sourceHostId).toBeNull();
   });
 });

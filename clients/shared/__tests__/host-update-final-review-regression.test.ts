@@ -343,9 +343,20 @@ describe("Ticket 02 final-review OSS enforcement", () => {
     );
     for (const body of [register, unregister]) {
       expect(body).toMatch(/mutationAllowed|setLoginItemSettingsWithGuard/);
-      expect(body).toMatch(/bootoutStaleAgent\([^;]+revalidate/);
       expect(body).toMatch(/setLoginItemSettingsWithGuard\([^;]+revalidate/s);
     }
+    expect(unregister).toMatch(/bootoutStaleAgent\([^;]+revalidate/);
+    // The register cycle's bootouts also ask a force restart's confirmed
+    // host, through one guard: the live revalidation first, then the target.
+    expect(register).toMatch(
+      /const allowedBeforeBootout = async \(\): Promise<boolean> =>\s*\(await mutationAllowed\(revalidateBeforeBootout\)\)\s*&&\s*\(await mutationAllowed\(confirmTargetBeforeBootout\)\);/,
+    );
+    expect(register).toMatch(/bootoutStaleAgent\([^;]+allowedBeforeBootout/);
+    // The legacy-label retirement removes a manifest, boots out a job and
+    // clears an SMAppService record, so it takes the same guard.
+    expect(register).toMatch(
+      /retireLegacyLabelRegistrations\([^;]+allowedBeforeBootout/,
+    );
     const bootout = sliceFrom(
       loginItem,
       "async function bootoutStaleAgent(",

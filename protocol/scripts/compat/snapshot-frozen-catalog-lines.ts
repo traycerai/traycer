@@ -24,6 +24,8 @@ import {
   listAgentsResponseSchemaV90,
   listAgentsResponseSchemaV91,
   listAgentsResponseSchemaV92,
+  listAgentsResponseSchemaV100,
+  listAgentsResponseSchemaV101,
   listAgentsResponseSchema,
 } from "../../src/host/agent/shared";
 import {
@@ -40,6 +42,7 @@ import {
   listGuiHarnessesResponseSchemaV90,
   listGuiHarnessesResponseSchemaV91,
   listGuiHarnessesResponseSchemaV92,
+  listGuiHarnessesResponseSchemaV100,
   listGuiHarnessesResponseSchema,
 } from "../../src/host/agent/gui/unary-schemas";
 import {
@@ -58,6 +61,7 @@ import {
   providersListResponseSchemaV101Preimage,
   providersListResponseSchemaV102Preimage,
   providersListResponseSchemaV103Preimage,
+  providersListResponseSchemaV104Preimage,
   providersUsePackVersionResponseSchemaV10,
   providersUsePackVersionResponseSchema,
   providersListResponseSchemaV70,
@@ -117,9 +121,11 @@ const FIXTURES = {
   // Code): the 1.5.0 tags shipped 9.2, so it keeps the twenty-one-id row those
   // peers negotiate. Its dump did not change by the freeze.
   "agent.gui.listHarnesses@9.2": dump(listGuiHarnessesResponseSchemaV92),
-  // The head line, pinned for the same reason `providers.list@10.0` is: growth
-  // of the live row now has nothing else to fail against.
-  "agent.gui.listHarnesses@10.0": dump(listGuiHarnessesResponseSchema),
+  // 10.0 froze when 10.1 opened for the sandbox credential keys: `host-v1.5.1`
+  // shipped 10.0. Its dump did not change by the freeze.
+  "agent.gui.listHarnesses@10.0": dump(listGuiHarnessesResponseSchemaV100),
+  // The head line since the sandbox credential keys opened it.
+  "agent.gui.listHarnesses@10.1": dump(listGuiHarnessesResponseSchema),
   "agent.list@1.0": dump(listAgentsResponseSchemaV10),
   "agent.list@2.0": dump(listAgentsResponseSchemaV20),
   "agent.list@3.0": dump(listAgentsResponseSchemaV30),
@@ -139,12 +145,22 @@ const FIXTURES = {
   // 9.1 froze when 9.2 opened to put `archived` on the row. It is RELEASED
   // (`host-v1.4.2` registers `agent.list@9.1`), so it names its own frozen
   // schema and must not regenerate. 9.2 froze when 10.0 opened for the first
-  // harness id after 1.5.0; its dump did not change by the freeze. 10.0 is the
+  // harness id after 1.5.0; its dump did not change by the freeze. 10.0 froze
+  // when 10.1 opened to put the run tuple on the row; it is RELEASED
+  // (`host-v1.5.1` registers it), so its dump must not regenerate. 10.1 is the
   // head line and dumps LIVE, so the next attempt to grow the row goes red on
   // that line.
   "agent.list@9.1": dump(listAgentsResponseSchemaV91),
   "agent.list@9.2": dump(listAgentsResponseSchemaV92),
-  "agent.list@10.0": dump(listAgentsResponseSchema),
+  // 10.0 froze when 10.1 opened to put the run tuple on the row; `1.5.1`
+  // shipped 10.0, and its dump did not change by the freeze.
+  "agent.list@10.0": dump(listAgentsResponseSchemaV100),
+  // 10.1 froze when 10.2 opened to put `reach` and `hostConnectivity` on the
+  // row. Its dump did not change by the freeze.
+  "agent.list@10.1": dump(listAgentsResponseSchemaV101),
+  // The head line. It dumps LIVE, so the next attempt to grow the row goes red
+  // on this line.
+  "agent.list@10.2": dump(listAgentsResponseSchema),
   "providers.list@1.0": dump(providersListResponseSchemaV10),
   "providers.list@2.0": dump(providersListResponseSchemaV20),
   // Frozen with Amp, before `profiles` (the v4.0 cut) - pinned now that this
@@ -207,16 +223,19 @@ const FIXTURES = {
   // Code). It is RELEASED - the 1.5.0 tags ship it - so it names its own frozen
   // schema and must not regenerate. Its dump did not change by the freeze.
   "providers.list@9.2": dump(providersListResponseSchemaV92),
-  // The head line. It dumps the LIVE schema, so the FIRST attempt to grow the
-  // live shape goes red on this row rather than on the release that ships the
-  // growth. Same response then applies - freeze the line that stopped being
-  // head, open the next one.
   "providers.list@10.0": dump(providersListResponseSchemaV100Preimage),
   "providers.list@10.1": dump(providersListResponseSchemaV101Preimage),
   "providers.list@10.2": dump(providersListResponseSchemaV102Preimage),
   // Kilo's published 10.3 remains frozen at its original MCP result/error shape.
   "providers.list@10.3": dump(providersListResponseSchemaV103Preimage),
-  "providers.list@10.4": dump(providersListResponseSchema),
+  // 10.4 froze when `credentialsManagedInAccount`, `scope` and `onHostOnly`
+  // opened 10.5. Its dump did not change by the freeze.
+  "providers.list@10.4": dump(providersListResponseSchemaV104Preimage),
+  // The head line. It dumps the LIVE schema, so the FIRST attempt to grow the
+  // live shape goes red on this row rather than on the release that ships the
+  // growth. Same response then applies - freeze the line that stopped being
+  // head, open the next one.
+  "providers.list@10.5": dump(providersListResponseSchema),
   "providers.usePackVersion@1.0": dump(providersUsePackVersionResponseSchemaV10),
   "providers.usePackVersion@1.1": dump(providersUsePackVersionResponseSchema),
   // The REQUEST lines carry their own freeze history (`native` grew the

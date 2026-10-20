@@ -6,10 +6,7 @@ import {
   authRetryDelayMs,
 } from "@traycer-clients/shared/auth/auth-validation";
 import { authenticatedUserResponseRecordV100 } from "@traycer/protocol/auth/registry";
-import type {
-  AuthenticatedUser,
-  SubscriptionStatus,
-} from "@traycer/protocol/auth";
+import type { SubscriptionStatus } from "@traycer/protocol/auth";
 import { AuthService, AUTH_ERROR_LAUNCH_FAILED } from "@/lib/auth/auth-service";
 import { useAuthStore } from "@/stores/auth/auth-store";
 
@@ -146,11 +143,14 @@ function authenticatedUserRawPayload(
   };
 }
 
-/** The protocol-parsed value, for seeding a snapshot with a genuine `AuthenticatedUser`. */
+/** The major-1 value a snapshot persists - the record's frozen shape, not the latest. */
+type MajorOneUser = z.infer<typeof authenticatedUserResponseRecordV100.schema>;
+
+/** The protocol-parsed value, for seeding a snapshot with a genuine major-1 user. */
 function authenticatedUser(
   userId: string,
   subscriptionStatus: SubscriptionStatus,
-): AuthenticatedUser {
+): MajorOneUser {
   return authenticatedUserResponseRecordV100.schema.parse(
     authenticatedUserRawPayload(userId, subscriptionStatus),
   );
@@ -244,7 +244,7 @@ function authenticatedUserWithName(
   userId: string,
   subscriptionStatus: SubscriptionStatus,
   name: string,
-): AuthenticatedUser {
+): MajorOneUser {
   return authenticatedUserResponseRecordV100.schema.parse(
     authenticatedUserRawPayloadWithName(userId, subscriptionStatus, name),
   );
@@ -360,7 +360,7 @@ function authenticatedUserWithTeams(
   userId: string,
   subscriptionStatus: SubscriptionStatus,
   teams: readonly RawTeam[],
-): AuthenticatedUser {
+): MajorOneUser {
   return authenticatedUserResponseRecordV100.schema.parse(
     authenticatedUserRawPayloadWithTeams(userId, subscriptionStatus, teams),
   );

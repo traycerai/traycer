@@ -7,7 +7,7 @@ import { defineSettingsSection } from "@/lib/settings-search/settings-definition
 export const SHELL = defineSettingsSection("shell", {
   page: {
     availableWhen: alwaysAvailable,
-    label: "Shell",
+    label: "Variables and shells",
     description:
       "How Traycer launches terminals, the host, and provider harnesses.",
     keywords: [
@@ -25,6 +25,7 @@ export const SHELL = defineSettingsSection("shell", {
       "arguments",
       "wsl",
       "host environment",
+      "variables",
       "env",
       "environment variables",
       "path",
@@ -45,7 +46,7 @@ export const SHELL = defineSettingsSection("shell", {
   hostEnvironment: {
     kind: "group",
     search: { contributesTo: "page" },
-    label: "Host environment · After restart",
+    label: "Variables · After restart",
     description: null,
     breadcrumb: null,
     availableWhen: alwaysAvailable,

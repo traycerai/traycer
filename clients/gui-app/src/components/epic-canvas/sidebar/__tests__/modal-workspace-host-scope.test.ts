@@ -65,6 +65,7 @@ describe("modalWorkspaceHostScope", () => {
       onSelect,
       refusalByHostId: NO_HOST_OPTION_REFUSALS,
       unselectableExceptHostId: null,
+      onlyHostIds: null,
     });
   });
 });

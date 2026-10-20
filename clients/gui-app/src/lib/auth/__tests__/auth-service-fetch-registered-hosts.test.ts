@@ -15,7 +15,11 @@ import { useAuthStore } from "@/stores/auth/auth-store";
 // The identity route `validateAuthTokenIdentity*` calls FIRST (see
 // `auth-validation.ts`); every fixture in this file answers this one.
 const VALIDATION_URL = "http://localhost:5005/api/v3/user/negotiated";
-const HOSTS_URL = "http://localhost:5005/api/v3/hosts";
+// Every OSS reader of the registry opts into `include=sandboxState,owner`
+// (`remote-fetcher.ts`; a comma is serialized `%2C`), so this is the URL a
+// `fetchRegisteredHosts` call hits.
+const HOSTS_URL =
+  "http://localhost:5005/api/v3/hosts?include=sandboxState%2Cowner";
 
 type FetchHandler = (
   input: unknown,

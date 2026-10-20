@@ -32,5 +32,6 @@ export function modalWorkspaceHostScope(input: {
     onSelect: input.onSelect,
     refusalByHostId: NO_HOST_OPTION_REFUSALS,
     unselectableExceptHostId: null,
+    onlyHostIds: null,
   };
 }

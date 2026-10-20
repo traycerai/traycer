@@ -74,7 +74,7 @@ export function useWorktreeSetRepoScriptsFor(
         }
       },
       onError: (error) =>
-        toastFromHostError(error, "Couldn't save environment."),
+        toastFromHostError(error, "Couldn't save the scripts."),
     },
   });
 }

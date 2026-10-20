@@ -601,7 +601,11 @@ async function runUnderFakeTimers(args: {
   timeline.push(startedAt);
 
   const runPromise = runCommand(
-    buildHostRestartCommand({ ...args, lifecycleOrigin: "terminal" }),
+    buildHostRestartCommand({
+      ...args,
+      expectedHost: null,
+      lifecycleOrigin: "terminal",
+    }),
     {
       json: true,
       quiet: false,

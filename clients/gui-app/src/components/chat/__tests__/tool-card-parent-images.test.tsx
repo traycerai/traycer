@@ -75,6 +75,7 @@ const SENDER: AgentSender = {
 
 const DISPLAY_CONTEXT: RenderedMessagesDisplayContext = {
   resolveUserSenderLabel: () => "You",
+  resolveUserSenderAvatarUrl: () => null,
   resolveAgentSenderDisplay: () => ({
     senderLabel: "Claude",
     providerLabel: "Claude Code",
@@ -132,6 +133,7 @@ function toolBlock(
     agentMessageSend: null,
     managedCommand: null,
     agentMessageReceipt: null,
+    agentMessageDelivery: null,
     page: null,
     mcpApp: null,
     progress: null,

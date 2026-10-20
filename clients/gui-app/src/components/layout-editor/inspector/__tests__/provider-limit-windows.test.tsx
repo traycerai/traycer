@@ -128,6 +128,8 @@ function segment(
     hidden: false,
     state: "live",
     reason: null,
+    fetching: false,
+    retryOffered: false,
     windows,
     shown,
     tightest: shown.at(0) ?? null,

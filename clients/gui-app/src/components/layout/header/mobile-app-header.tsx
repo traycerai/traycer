@@ -68,13 +68,13 @@ export function MobileAppHeader(): ReactNode {
       // the two cannot drift apart.
       className={cn(
         APP_HEADER_HEIGHT_CLASS,
-        "relative z-20 flex shrink-0 items-center gap-1 bg-background px-2 text-foreground after:absolute after:inset-x-0 after:bottom-0 after:z-1 after:h-px after:bg-border/90 after:content-[''] pointer-coarse:touch-chrome",
+        "relative z-20 flex shrink-0 items-center gap-2 bg-background px-2 text-foreground after:absolute after:inset-x-0 after:bottom-0 after:z-1 after:h-px after:bg-border/90 after:content-[''] pointer-coarse:touch-chrome",
       )}
     >
       <Button
         type="button"
         variant="muted"
-        size="icon-sm"
+        size="icon-touch"
         aria-label="Open menu"
         data-testid="mobile-nav-trigger"
         onClick={() => setNavOpen(true)}

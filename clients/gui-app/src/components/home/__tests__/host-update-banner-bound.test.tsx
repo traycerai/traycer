@@ -309,6 +309,7 @@ function attemptStatus(
     storeFormats: null,
     install: null,
     processMemory: null,
+    crossHostMessaging: null,
   };
 }
 
@@ -793,6 +794,7 @@ describe("HostUpdateBanner — bound arm (Ticket 06 subject E)", () => {
                 storeFormats: null,
                 install: null,
                 processMemory: null,
+                crossHostMessaging: null,
               }
             : { ...attemptStatus(operation), updateProgress },
       });

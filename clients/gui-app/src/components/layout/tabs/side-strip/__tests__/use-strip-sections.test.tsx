@@ -9,7 +9,7 @@ import { createElement, type ReactNode } from "react";
 import { act, cleanup, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type {
-  HostNotificationsCloudFeedRowV11,
+  HostNotificationsCloudFeedRowV13,
   HostNotificationsIndicatorState,
 } from "@traycer/protocol/host/notifications/contracts";
 import { NotificationIndicatorsProvider } from "@/components/notifications/notification-indicators-provider";
@@ -100,7 +100,7 @@ function cloudRow(input: {
         readonly agentTitle: string;
       }
     | { readonly kind: "agent.stopped"; readonly failed: boolean };
-}): HostNotificationsCloudFeedRowV11 {
+}): HostNotificationsCloudFeedRowV13 {
   const { entryId, at, epicId, entry } = input;
   const chatId = `chat-${entryId}`;
   const base = {

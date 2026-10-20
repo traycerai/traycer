@@ -38,6 +38,7 @@ export type HostOverviewTabBadges = Readonly<
 export const NO_HOST_OVERVIEW_TAB_BADGES: HostOverviewTabBadges = {
   installation: null,
   updates: null,
+  access: null,
   data: null,
   ports: null,
   simulators: null,

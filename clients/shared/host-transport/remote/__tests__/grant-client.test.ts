@@ -1,8 +1,15 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createAttachGrantProvider,
+  createSandboxAttachGrantProvider,
   mintAttachGrantViaHttp,
 } from "../grant-client";
+import {
+  removeNativeAbortHelpers,
+  signalOfLastFetch,
+  stubHangingFetch,
+} from "../../../auth/__tests__/no-native-abort-helpers";
+import { SANDBOX_FROZEN_MESSAGE } from "../../../host-client/sandbox-control";
 
 const AUTHN = "https://authn.test";
 const HOST_ID = "host-1";
@@ -20,6 +27,45 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+describe("mintAttachGrantViaHttp on a WebView without AbortSignal.timeout or AbortSignal.any (iOS 15.5)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    removeNativeAbortHelpers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("still makes the mint request and parses the grant", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async () =>
+      jsonResponse({ grant: "jws-abc", role: "client", expires_in: 120 }, 200),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await mintAttachGrantViaHttp(AUTHN, HOST_ID, BEARER);
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(result).toMatchObject({
+      kind: "ok",
+      grant: { grant: "jws-abc", expiresInSeconds: 120 },
+    });
+  });
+
+  it("aborts a mint that never answers once its 10 s timeout passes, and resolves to network-error", async () => {
+    const fetchMock = stubHangingFetch();
+
+    const pending = mintAttachGrantViaHttp(AUTHN, HOST_ID, BEARER);
+    const signal = signalOfLastFetch(fetchMock);
+    await vi.advanceTimersByTimeAsync(9_999);
+    expect(signal.aborted).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(signal.aborted).toBe(true);
+    expect(await pending).toMatchObject({ kind: "network-error" });
+  });
+});
+
 describe("mintAttachGrantViaHttp", () => {
   it("parses T9's { grant, role, expires_in } shape and carries the TTL in seconds", async () => {
     const fetchMock = vi.fn<typeof fetch>(async () =>
@@ -31,6 +77,7 @@ describe("mintAttachGrantViaHttp", () => {
     expect(result).toEqual({
       kind: "ok",
       grant: { grant: "jws-abc", expiresInSeconds: 120 },
+      sessionGrant: null,
     });
 
     // POST with the user bearer + a role:"client" body to the T9 endpoint.
@@ -411,5 +458,303 @@ describe("mint failure detail", () => {
       expect(result.detail).not.toContain("secret-grant-bytes");
       expect(result.context).toBe("");
     }
+  });
+});
+
+describe("mintAttachGrantViaHttp session grant", () => {
+  it("carries the host-bound session grant authn mints beside the attach grant for a sandbox", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(async () =>
+        jsonResponse(
+          {
+            grant: "jws-abc",
+            role: "client",
+            expires_in: 120,
+            session_grant: "session-jws",
+            session_grant_expires_in: 600,
+          },
+          200,
+        ),
+      ),
+    );
+    expect(await mintAttachGrantViaHttp(AUTHN, HOST_ID, BEARER)).toEqual({
+      kind: "ok",
+      grant: { grant: "jws-abc", expiresInSeconds: 120 },
+      sessionGrant: "session-jws",
+    });
+  });
+
+  it("rejects an empty session grant as a malformed body rather than reading it as a grant", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(async () =>
+        jsonResponse(
+          {
+            grant: "jws-abc",
+            role: "client",
+            expires_in: 120,
+            session_grant: "",
+          },
+          200,
+        ),
+      ),
+    );
+    const result = await mintAttachGrantViaHttp(AUTHN, HOST_ID, BEARER);
+    expect(result.kind).toBe("network-error");
+  });
+});
+
+describe("createSandboxAttachGrantProvider", () => {
+  const deps = (token: string | null) => ({
+    authnBaseUrl: AUTHN,
+    hostId: HOST_ID,
+    getBearerToken: () => token,
+  });
+
+  it("returns the attach grant and exposes the session grant minted for the same attach", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(async () =>
+        jsonResponse(
+          {
+            grant: "jws-abc",
+            role: "client",
+            expires_in: 120,
+            session_grant: "session-1",
+          },
+          200,
+        ),
+      ),
+    );
+    const source = createSandboxAttachGrantProvider(deps(BEARER));
+    expect(source.readSessionGrant()).toBeNull();
+
+    expect(await source.provider()).toEqual({
+      kind: "ok",
+      grant: { grant: "jws-abc", expiresInSeconds: 120 },
+    });
+    expect(source.readSessionGrant()).toBe("session-1");
+  });
+
+  it("fails closed when authn mints no session grant for a sandbox, never falling back to the user bearer", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(async () =>
+        jsonResponse(
+          { grant: "jws-abc", role: "client", expires_in: 120 },
+          200,
+        ),
+      ),
+    );
+    const source = createSandboxAttachGrantProvider(deps(BEARER));
+    expect(await source.provider()).toEqual({
+      kind: "unavailable",
+      detail: "authn minted no session grant for a sandbox target",
+      context: "",
+    });
+    expect(source.readSessionGrant()).toBeNull();
+  });
+
+  it("keeps the last session grant through a failed re-mint and replaces it on the next good one", async () => {
+    const answers = [
+      jsonResponse(
+        { grant: "g1", role: "client", expires_in: 120, session_grant: "s1" },
+        200,
+      ),
+      jsonResponse({}, 503),
+      jsonResponse(
+        { grant: "g2", role: "client", expires_in: 120, session_grant: "s2" },
+        200,
+      ),
+    ];
+    let call = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(async () => answers[call++]),
+    );
+    const source = createSandboxAttachGrantProvider(deps(BEARER));
+    await source.provider();
+    expect(source.readSessionGrant()).toBe("s1");
+    expect((await source.provider()).kind).toBe("unavailable");
+    expect(source.readSessionGrant()).toBe("s1");
+    await source.provider();
+    expect(source.readSessionGrant()).toBe("s2");
+  });
+
+  it("says there is no user bearer, and calls authn not at all, when signed out", async () => {
+    const fetchMock = vi.fn<typeof fetch>();
+    vi.stubGlobal("fetch", fetchMock);
+    const source = createSandboxAttachGrantProvider(deps(null));
+    expect(await source.provider()).toEqual({
+      kind: "unavailable",
+      detail: "no user bearer available (signed out?)",
+      context: "",
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("mintAttachGrantViaHttp 402 handling", () => {
+  const FROZEN_DETAIL =
+    "authn refused the mint: the sandbox is frozen (HTTP 402 sandbox_frozen)";
+
+  it("maps a 402 whose JSON body code is sandbox_frozen to sandbox-frozen, with the stable detail", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(async () =>
+        jsonResponse({ code: "sandbox_frozen" }, 402),
+      ),
+    );
+    const result = await mintAttachGrantViaHttp(AUTHN, HOST_ID, BEARER);
+    expect(result).toMatchObject({
+      kind: "sandbox-frozen",
+      detail: FROZEN_DETAIL,
+    });
+  });
+
+  it("keeps the same detail when the body carries extra fields, such as a message", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(async () =>
+        jsonResponse(
+          { code: "sandbox_frozen", message: "credits ran out at 12:03" },
+          402,
+        ),
+      ),
+    );
+    const result = await mintAttachGrantViaHttp(AUTHN, HOST_ID, BEARER);
+    expect(result).toMatchObject({
+      kind: "sandbox-frozen",
+      detail: FROZEN_DETAIL,
+    });
+  });
+
+  it("leaves a 402 with any other code a network-error", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(async () =>
+        jsonResponse({ code: "insufficient_credit" }, 402),
+      ),
+    );
+    const result = await mintAttachGrantViaHttp(AUTHN, HOST_ID, BEARER);
+    expect(result).toMatchObject({
+      kind: "network-error",
+      detail: "authn answered HTTP 402",
+    });
+  });
+
+  it("leaves a 402 with a non-JSON body a network-error", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(
+        async () =>
+          new Response("<html>payment required</html>", { status: 402 }),
+      ),
+    );
+    const result = await mintAttachGrantViaHttp(AUTHN, HOST_ID, BEARER);
+    expect(result).toMatchObject({
+      kind: "network-error",
+      detail: "authn answered HTTP 402",
+    });
+  });
+
+  it("leaves a 402 with a JSON body that has no code a network-error", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(async () => jsonResponse({ error: "pay up" }, 402)),
+    );
+    const result = await mintAttachGrantViaHttp(AUTHN, HOST_ID, BEARER);
+    expect(result).toMatchObject({
+      kind: "network-error",
+      detail: "authn answered HTTP 402",
+    });
+  });
+
+  it("keeps a 403 unauthorized even when its body names sandbox_frozen", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(async () =>
+        jsonResponse({ code: "sandbox_frozen" }, 403),
+      ),
+    );
+    const result = await mintAttachGrantViaHttp(AUTHN, HOST_ID, BEARER);
+    expect(result).toMatchObject({ kind: "unauthorized" });
+  });
+});
+
+describe("attach grant providers on a frozen sandbox", () => {
+  const FROZEN_DETAIL =
+    "authn refused the mint: the sandbox is frozen (HTTP 402 sandbox_frozen)";
+  const deps = {
+    authnBaseUrl: AUTHN,
+    hostId: HOST_ID,
+    getBearerToken: () => BEARER,
+  };
+
+  function stub402(body: unknown): void {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(async () => jsonResponse(body, 402)),
+    );
+  }
+
+  it("createAttachGrantProvider answers refused, with the SANDBOX_FROZEN fatal and the frozen copy", async () => {
+    stub402({ code: "sandbox_frozen" });
+    const provision = await createAttachGrantProvider(deps)();
+    expect(provision).toMatchObject({
+      kind: "refused",
+      detail: FROZEN_DETAIL,
+      fatal: {
+        code: "SANDBOX_FROZEN",
+        reason: SANDBOX_FROZEN_MESSAGE,
+        incompatibleMethods: null,
+        upgradeGuidance: null,
+      },
+    });
+  });
+
+  it("createSandboxAttachGrantProvider answers refused the same way, and keeps no session grant", async () => {
+    stub402({ code: "sandbox_frozen" });
+    const source = createSandboxAttachGrantProvider(deps);
+    const provision = await source.provider();
+    expect(provision).toMatchObject({
+      kind: "refused",
+      detail: FROZEN_DETAIL,
+      fatal: {
+        code: "SANDBOX_FROZEN",
+        reason: SANDBOX_FROZEN_MESSAGE,
+        incompatibleMethods: null,
+        upgradeGuidance: null,
+      },
+    });
+    expect(source.readSessionGrant()).toBeNull();
+  });
+
+  it("both providers keep a 402 with any other code unavailable", async () => {
+    stub402({ code: "insufficient_credit" });
+    expect(await createAttachGrantProvider(deps)()).toMatchObject({
+      kind: "unavailable",
+      detail: "authn answered HTTP 402",
+    });
+    expect(
+      await createSandboxAttachGrantProvider(deps).provider(),
+    ).toMatchObject({
+      kind: "unavailable",
+      detail: "authn answered HTTP 402",
+    });
+  });
+
+  it("both providers keep a 403 unavailable, not refused", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(async () => jsonResponse({ error: "revoked" }, 403)),
+    );
+    expect(await createAttachGrantProvider(deps)()).toMatchObject({
+      kind: "unavailable",
+    });
+    expect(
+      await createSandboxAttachGrantProvider(deps).provider(),
+    ).toMatchObject({ kind: "unavailable" });
   });
 });

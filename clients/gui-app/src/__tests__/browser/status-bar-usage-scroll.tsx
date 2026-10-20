@@ -73,6 +73,8 @@ function accountSegment(index: number): StatusBarProviderSegmentModel {
     account: { profileId, accentColor: "#5b8def", label: profileId },
     state: "live",
     reason: null,
+    fetching: false,
+    retryOffered: false,
     windows: [window],
     shown: [window],
     tightest: window,
@@ -113,6 +115,7 @@ export function StatusBarUsageScrollFixture(props: {
                 display={display}
                 compact={false}
                 onRevealProfile={() => undefined}
+                onRetry={() => undefined}
               />
             </StatusBarUsageScroller>
             <span className="flex shrink-0 items-center pl-1">
@@ -124,6 +127,7 @@ export function StatusBarUsageScrollFixture(props: {
           hostId={FIXTURE_HOST_ID}
           hostLabel="Fixture"
           hasExplicitPick={false}
+          watchesThisMachine={false}
           interactive={false}
         />
       </div>

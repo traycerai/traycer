@@ -2574,6 +2574,40 @@ export const chatSyncSchemaSurfaceBaseline = {
                                                 }
                                               ]
                                             },
+                                            "agentMessageDelivery": {
+                                              "default": null,
+                                              "anyOf": [
+                                                {
+                                                  "type": "object",
+                                                  "properties": {
+                                                    "targetHostId": {
+                                                      "type": "string"
+                                                    },
+                                                    "eventId": {
+                                                      "type": "string"
+                                                    },
+                                                    "state": {
+                                                      "type": "string",
+                                                      "enum": [
+                                                        "queued",
+                                                        "delivered",
+                                                        "expired",
+                                                        "failed"
+                                                      ]
+                                                    }
+                                                  },
+                                                  "required": [
+                                                    "targetHostId",
+                                                    "eventId",
+                                                    "state"
+                                                  ],
+                                                  "additionalProperties": false
+                                                },
+                                                {
+                                                  "type": "null"
+                                                }
+                                              ]
+                                            },
                                             "managedCommand": {
                                               "default": null,
                                               "anyOf": [
@@ -3223,6 +3257,7 @@ export const chatSyncSchemaSurfaceBaseline = {
                                             "error",
                                             "agentMessageSend",
                                             "agentMessageReceipt",
+                                            "agentMessageDelivery",
                                             "managedCommand",
                                             "progress",
                                             "backgroundOutput",

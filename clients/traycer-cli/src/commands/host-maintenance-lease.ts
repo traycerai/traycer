@@ -900,7 +900,10 @@ async function executeAction(
       );
       return;
     }
-    const args: HostUninstallArgs = { all: true };
+    // The plain stop: on Windows, where this lease runs the app's uninstall,
+    // every stop already ends in a kill sweep, and a host that still will not
+    // stop keeps its install rather than lose it from under itself.
+    const args: HostUninstallArgs = { all: true, force: false };
     await runHostUninstallWithAttempt(
       args,
       {

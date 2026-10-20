@@ -12,6 +12,7 @@ import { RemoteStreamClient } from "../remote-stream-client";
 import {
   acquireRemoteSession,
   hasReadyRemoteSession,
+  remoteSessionCacheKey,
   remoteSessionRefCountForTest,
   resetRemoteSessionReadinessListenersForTest,
   retireAllRemoteSessions,
@@ -163,6 +164,7 @@ function freshIdentity(): RemoteSessionIdentity {
     relayAttachUrl: `wss://relay.test/attach-${nextHostId}`,
     authRecovery: "revalidate",
     authEpoch: "lease-1",
+    openAuth: "user-bearer",
   };
 }
 
@@ -986,6 +988,68 @@ describe("auth-recovery policy is part of the session identity", () => {
 
     expect(staleSession.closeCalls).toBe(1);
     expect(hasReadyRemoteSession(retired.hostId)).toBe(false);
+  });
+
+  it("keys a user-bearer and a session-grant identity apart", () => {
+    const bearer = freshIdentity();
+    const grant: RemoteSessionIdentity = {
+      ...bearer,
+      openAuth: "session-grant",
+    };
+    expect(remoteSessionCacheKey(bearer)).not.toBe(
+      remoteSessionCacheKey(grant),
+    );
+  });
+
+  it("supersedes a user-bearer entry when the same host is acquired as a session-grant one, instead of adopting it", () => {
+    // A sandbox row that briefly projected as a personal host built a
+    // user-bearer session. The cache hit would hand it to every later
+    // session-grant consumer, so the grant identity must displace it.
+    const stale = freshIdentity();
+    const staleSession = fakeSession();
+    staleSession.ready = true;
+    acquireRemoteSession(stale, ELIGIBLE_POLICY, () => staleSession).close();
+    expect(hasReadyRemoteSession(stale.hostId)).toBe(true);
+
+    const grant: RemoteSessionIdentity = {
+      ...stale,
+      openAuth: "session-grant",
+    };
+    const grantSession = fakeSession();
+    grantSession.ready = false;
+    let builds = 0;
+    acquireRemoteSession(grant, ELIGIBLE_POLICY, () => {
+      builds += 1;
+      return grantSession;
+    });
+
+    expect(builds).toBe(1);
+    expect(staleSession.closeCalls).toBe(1);
+    expect(hasReadyRemoteSession(stale.hostId)).toBe(false);
+  });
+
+  it("marks a HELD user-bearer entry superseded by the session-grant acquire, closing it at its own release", () => {
+    const stale = freshIdentity();
+    const staleSession = fakeSession();
+    staleSession.ready = true;
+    const holder = acquireRemoteSession(
+      stale,
+      ELIGIBLE_POLICY,
+      () => staleSession,
+    );
+
+    const grant: RemoteSessionIdentity = {
+      ...stale,
+      openAuth: "session-grant",
+    };
+    acquireRemoteSession(grant, ELIGIBLE_POLICY, () => fakeSession());
+
+    // Held, so the sweep leaves it alone, but it no longer answers for the host.
+    expect(staleSession.closeCalls).toBe(0);
+    expect(hasReadyRemoteSession(stale.hostId)).toBe(false);
+
+    holder.close();
+    expect(staleSession.closeCalls).toBe(1);
   });
 
   it("retireAllRemoteSessions closes a HELD entry outright at the auth boundary - unlike ordinary supersession, which waits for release", () => {

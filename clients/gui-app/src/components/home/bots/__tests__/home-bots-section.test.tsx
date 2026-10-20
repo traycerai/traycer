@@ -49,7 +49,6 @@ const mocks = vi.hoisted(() => {
       connectableResolved: true,
       hostListSupport: true,
       hostLists: new Map<string, ReadonlyArray<EnvironmentHostRecord>>(),
-      failedHostListIds: new Set<string>(),
     },
     groupProps: [] as Array<{
       environmentId: string;
@@ -70,6 +69,7 @@ const mocks = vi.hoisted(() => {
     useEnvironmentListQuery:
       vi.fn<(client: object, enabled: boolean) => unknown>(),
     useBotListQuery: vi.fn<(client: object, enabled: boolean) => unknown>(),
+    useBotListChangedSubscriptionForApp: vi.fn<(enabled: boolean) => void>(),
     useHostMethodSupport:
       vi.fn<(hostId: string | null, method: string) => boolean | null>(),
   };
@@ -105,11 +105,14 @@ vi.mock("@/hooks/bots/use-bot-list-query", () => ({
   useBotListQuery: (client: object, enabled: boolean) =>
     mocks.useBotListQuery(client, enabled),
 }));
+vi.mock("@/hooks/bots/use-bot-list-changed-subscription", () => ({
+  useBotListChangedSubscriptionForApp: (enabled: boolean) =>
+    mocks.useBotListChangedSubscriptionForApp(enabled),
+}));
 vi.mock("@/hooks/bots/use-host-environment-bindings-query", () => ({
   useHostEnvironmentBindings: () => ({
     byHostId: new Map(),
     failedHostIds: [],
-    resolved: true,
     retryFailed: () => undefined,
   }),
 }));
@@ -217,7 +220,6 @@ beforeEach(() => {
   mocks.state.connectableResolved = true;
   mocks.state.hostListSupport = true;
   mocks.state.hostLists = new Map();
-  mocks.state.failedHostListIds = new Set();
   mocks.groupProps.length = 0;
   mocks.useHostMethodSupport.mockImplementation((_hostId, method) =>
     method === "environment.host.list"
@@ -226,7 +228,7 @@ beforeEach(() => {
   );
   mocks.useEnvironmentHostLists.mockImplementation(() => ({
     hostsByEnvironmentId: mocks.state.hostLists,
-    failedEnvironmentIds: mocks.state.failedHostListIds,
+    failedEnvironmentIds: new Set<string>(),
     retryFailed: () => undefined,
   }));
   mocks.useEnvironmentListQuery.mockImplementation(
@@ -310,6 +312,26 @@ describe("HomeBotsSection capability gate", () => {
       mocks.hostClient,
       true,
     );
+  });
+});
+
+describe("HomeBotsSection live list", () => {
+  it("keeps bot.list current through the change stream on a supported host", () => {
+    mountSection();
+
+    expect(mocks.useBotListChangedSubscriptionForApp).toHaveBeenLastCalledWith(
+      true,
+    );
+  });
+
+  it("holds the change stream off until the host supports bot.list", () => {
+    mocks.state.support = false;
+    mountSection();
+
+    expect(mocks.useBotListChangedSubscriptionForApp).toHaveBeenCalled();
+    for (const call of mocks.useBotListChangedSubscriptionForApp.mock.calls) {
+      expect(call[0]).toBe(false);
+    }
   });
 });
 
@@ -476,19 +498,6 @@ describe("HomeBotsSection what each group is told", () => {
 
     expect(latestGroupProps("env-team").environmentHostIds).toBeNull();
     // A personal environment is never waiting on a list it does not have.
-    expect(latestGroupProps("env-personal").environmentHostIds).toEqual(
-      new Set(),
-    );
-  });
-
-  it("gives a team environment null, never an empty set, when its machine list failed", () => {
-    mocks.state.failedHostListIds = new Set(["env-team"]);
-    resolveBothQueries();
-    mountSection();
-
-    // Absent from the answered lists and named failed: unanswered, not "no
-    // machine", so its rows read idle rather than paused.
-    expect(latestGroupProps("env-team").environmentHostIds).toBeNull();
     expect(latestGroupProps("env-personal").environmentHostIds).toEqual(
       new Set(),
     );

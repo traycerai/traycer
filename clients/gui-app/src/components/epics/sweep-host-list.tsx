@@ -14,6 +14,7 @@ import {
   type SweepHostPickerRow,
 } from "@/components/epics/sweep-host-model";
 import { cn } from "@/lib/utils";
+import { wakeSandboxOnPick } from "@/lib/sandboxes/sandbox-wake";
 
 /**
  * Sweep's host list: WHICH machine's worktrees the open dialog is censusing.
@@ -69,6 +70,14 @@ export function SweepHostList(props: {
         onRetryLists={props.onRetryLists}
         onPick={props.onPick}
       />
+      {props.isLoading && props.rows.length > 0 ? (
+        <p
+          className="shrink-0 text-ui-xs text-muted-foreground"
+          data-testid="sweep-host-loading-more"
+        >
+          Loading more hosts…
+        </p>
+      ) : null}
       {props.listsFailed && !props.isLoading && props.rows.length > 0 ? (
         <div
           className="flex shrink-0 items-center justify-between gap-2"
@@ -191,7 +200,11 @@ function SweepHostOption(props: {
         type="button"
         disabled={!selectable}
         aria-current={row.isDefault ? "true" : undefined}
-        onClick={() => props.onPick(row.host.hostId)}
+        onClick={() => {
+          // A pick of a sleeping sandbox wakes it, as in every `pin` picker.
+          wakeSandboxOnPick(row.host);
+          props.onPick(row.host.hostId);
+        }}
         data-testid={`sweep-host-option-${row.host.hostId}`}
         data-current={row.isDefault ? "true" : "false"}
         className={cn(

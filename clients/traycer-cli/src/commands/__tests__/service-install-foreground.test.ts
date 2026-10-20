@@ -253,6 +253,7 @@ function baseArgs(overrides: Partial<ServiceInstallArgs>): ServiceInstallArgs {
     takeover: false,
     attemptAdoption: null,
     lifecycleOrigin: "terminal",
+    expectedHost: null,
     ...overrides,
   };
 }
@@ -401,5 +402,98 @@ describe("buildServiceInstallCommand - takeover over a foreground run", () => {
     expect(result.data).toMatchObject({
       takeover: { kind: "cli-host-stopped", cooperativeStop: "stopped" },
     });
+  });
+});
+
+// Desktop's force restart of a host that stopped answering can reach this
+// takeover from its packaged-macOS re-register fallback, after waiting for
+// this command's lock. The takeover boots out whatever `pid.json` names, so
+// a restart confirmed for one host process must refuse a different live one
+// published meanwhile, before either actuator runs.
+describe("buildServiceInstallCommand - takeover bound to one host process", () => {
+  const CONFIRMED_HOST = { pid: 4242, startIdentity: "linux:boot-a 4242" };
+
+  async function writePidMetadata(published: {
+    readonly pid: number;
+    readonly identity: string | null;
+  }): Promise<void> {
+    const { hostHomeDir, hostPidMetadataPath } =
+      await import("../../store/paths");
+    mkdirSync(hostHomeDir("production"), { recursive: true });
+    writeFileSync(
+      hostPidMetadataPath("production"),
+      JSON.stringify({
+        pid: published.pid,
+        hostId: "host-b",
+        version: "1.9.0",
+        websocketUrl: `ws://127.0.0.1:${String(published.pid)}/rpc`,
+        startedAt: "2026-09-01T00:00:00.000Z",
+        processStartIdentity: published.identity,
+      }),
+      "utf8",
+    );
+  }
+
+  async function runDesktopTakeover(
+    expectedHost: ServiceInstallArgs["expectedHost"],
+  ): Promise<unknown> {
+    const { buildServiceInstallCommand } = await import("../service-install");
+    return buildServiceInstallCommand(
+      baseArgs({ takeover: true, lifecycleOrigin: "desktop", expectedHost }),
+    )(fakeCtx()).then(
+      () => null,
+      (err: unknown) => err,
+    );
+  }
+
+  it("refuses E_HOST_RESTART_TARGET_CHANGED when pid.json names a different live host, without touching either actuator", async () => {
+    const { ownProcessStartIdentity } =
+      await import("../../store/process-identity");
+    await writePidMetadata({
+      pid: process.pid,
+      identity: ownProcessStartIdentity(),
+    });
+
+    const caught = await runDesktopTakeover(CONFIRMED_HOST);
+
+    expect(mocks.takeoverMock).not.toHaveBeenCalled();
+    expect(mocks.installMock).not.toHaveBeenCalled();
+    expect(caught).toMatchObject({
+      code: CLI_ERROR_CODES.HOST_RESTART_TARGET_CHANGED,
+    });
+  });
+
+  it("proceeds through both actuators when pid.json still names the confirmed host", async () => {
+    await writePidMetadata({
+      pid: CONFIRMED_HOST.pid,
+      identity: CONFIRMED_HOST.startIdentity,
+    });
+
+    const caught = await runDesktopTakeover(CONFIRMED_HOST);
+
+    expect(caught).toBeNull();
+    expect(mocks.takeoverMock).toHaveBeenCalledTimes(1);
+    expect(mocks.installMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("proceeds when no host is published", async () => {
+    const caught = await runDesktopTakeover(CONFIRMED_HOST);
+
+    expect(caught).toBeNull();
+    expect(mocks.takeoverMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("is not held to any host when the takeover was not bound to one", async () => {
+    const { ownProcessStartIdentity } =
+      await import("../../store/process-identity");
+    await writePidMetadata({
+      pid: process.pid,
+      identity: ownProcessStartIdentity(),
+    });
+
+    const caught = await runDesktopTakeover(null);
+
+    expect(caught).toBeNull();
+    expect(mocks.takeoverMock).toHaveBeenCalledTimes(1);
   });
 });

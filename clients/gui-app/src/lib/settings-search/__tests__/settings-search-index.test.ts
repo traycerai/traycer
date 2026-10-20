@@ -22,6 +22,7 @@ import {
 } from "@/lib/settings-search/settings-search";
 import {
   SETTINGS_SECTIONS,
+  type SettingsSectionGroupId,
   type SettingsSectionId,
 } from "@/lib/settings-sections";
 
@@ -115,10 +116,17 @@ describe("settings search index", () => {
     // host-scoped page (Permissions' tab bar and its app-scoped Modes row), and
     // the executor is what proves it: an anchored entry there is allowed only
     // when that section's registered fixture mounts it under a connecting host.
+    // Personal and Account pages read through the window's own host and gate
+    // on it just as Host pages do, so all three groups are held to this rule.
+    const hostReadingGroups = new Set<SettingsSectionGroupId>([
+      "personal",
+      "account",
+      "host",
+    ]);
     const hostSections = new Set(
-      SETTINGS_SECTIONS.filter((section) => section.group === "host").map(
-        (section) => section.id,
-      ),
+      SETTINGS_SECTIONS.filter((section) =>
+        hostReadingGroups.has(section.group),
+      ).map((section) => section.id),
     );
     const provenWithoutAHost = new Set<SettingsSectionId>(
       SETTINGS_SEARCH_FIXTURES.filter(

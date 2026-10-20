@@ -1,4 +1,5 @@
 import { HostRestartSessions } from "@/components/host/host-restart-sessions";
+import { SandboxCard } from "@/components/hosts/sandbox-card";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useIsMutating, useMutation } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -11,6 +12,11 @@ import {
 } from "@/components/host/host-restart-copy";
 import { DoctorSheet } from "@/components/settings/panels/host-settings-doctor-sheet";
 import { HostIdentityCard } from "@/components/settings/host-scope/host-identity-card";
+import {
+  hostOptionCanActivate,
+  hostOptionTeamOwner,
+} from "@/components/settings/host-scope/host-option-model";
+import type { SandboxCreateBelongsTo } from "@/components/hosts/sandbox-create-model";
 import { HostLifecycleModeLine } from "@/components/settings/host-scope/host-lifecycle-mode-line";
 import { HostUpdateRequiredAction } from "@/components/settings/host-scope/host-update-required-action";
 import { useHostLease } from "@/hooks/host/use-host-lease";
@@ -22,12 +28,15 @@ import {
   HostOverviewHeaderActions,
   HostOverviewNameAction,
 } from "@/components/settings/panels/host-overview-status-card";
+import { HostEnvironmentSection } from "@/components/settings/panels/host-environment-section";
 import { HostOverviewTabs } from "@/components/settings/panels/host-overview-tabs";
 import {
   NO_HOST_OVERVIEW_TAB_BADGES,
   type HostOverviewSelectTab,
 } from "@/components/settings/panels/host-overview-tab-state";
 import { HostOverviewNotices } from "@/components/settings/panels/host-overview-notices";
+import { HostOverviewAccessTab } from "@/components/settings/panels/host-overview-access-tab";
+import { RemoteAccessQuestion } from "@/components/settings/host-scope/remote-access-question";
 import {
   describeHostOfflineNotice,
   inFlightUpdateKind,
@@ -124,7 +133,11 @@ import type { HostRestartRequestResult } from "@traycer-clients/shared/platform/
 import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 import { isHostScopeUsable } from "@/components/settings/host-scope/host-scope-status";
 import type { HostScope } from "@/components/settings/host-scope/use-host-scope";
-import type { HostScopeOption } from "@/components/settings/host-scope/host-scope-model";
+import {
+  isUnenrolledSandboxOption,
+  type HostScopeOption,
+  type HostScopeSandbox,
+} from "@/components/settings/host-scope/host-scope-model";
 import type { HostIdentity } from "@traycer/protocol/host/identity/index";
 import type { HostRestartBusyVerdict } from "@traycer/protocol/host/restart/index";
 import type { ResponseOfMethod } from "@traycer-clients/shared/host-transport/host-messenger";
@@ -1611,7 +1624,14 @@ export function HostOverviewPanel(props: {
         resetNameDegrade={renameDegrade}
         onRestart={() => openRestartConfirm()}
         onOpenDoctor={() => setDoctorOpen(true)}
-        onMakeActive={() => scope.makeActive(host.hostId)}
+        // None on a management-only row (the Automations pod, a burst or
+        // unconfirmed sandbox): the list shows it, no picker offers it.
+        onMakeActive={
+          hostOptionCanActivate(host)
+            ? () => scope.makeActive(host.hostId)
+            : null
+        }
+        teamOwned={host.sandbox?.teamOwned === true}
         activateBusy={scope.isActivating}
         onCopyHostId={() => hostIdCopy.copy(host.hostId)}
         // A phone's name row never wraps: Activate becomes the menu's first
@@ -1843,6 +1863,17 @@ export function HostOverviewPanel(props: {
       hostName={displayName}
     />
   );
+  const accessTab = (
+    <HostOverviewAccessTab
+      client={client}
+      hostId={scope.hostId}
+      hostName={displayName}
+      connecting={
+        scope.status === "connecting" || host.health.state === "restarting"
+      }
+      usable={usable}
+    />
+  );
   const dataTab = (
     <HostOverviewDataTab
       client={client}
@@ -1888,6 +1919,19 @@ export function HostOverviewPanel(props: {
 
   return (
     <>
+      {host.sandbox === null ? null : (
+        <SandboxCard
+          hostName={displayName}
+          hostState={host.health.state}
+          sandbox={host.sandbox}
+          likeThis={sandboxLikeThis(host, host.sandbox)}
+          // Destroying a sandbox no host row stands for removes its row, so
+          // Settings returns to the active host instead of calling it vanished.
+          onDestroyed={
+            isUnenrolledSandboxOption(host) ? scope.returnToActive : null
+          }
+        />
+      )}
       <HostIdentityCard
         host={host}
         displayName={displayName}
@@ -1954,6 +1998,15 @@ export function HostOverviewPanel(props: {
         lifecycleLine={host.isLocalMachine ? <HostLifecycleModeLine /> : null}
       >
         {notices}
+        {/* The one-time Remote access question, on every tab like the
+            strip above it; it draws nothing once answered on this desktop. */}
+        <RemoteAccessQuestion
+          client={client}
+          hostId={scope.hostId}
+          enabled={usable}
+        />
+        {/* Whose bots this host runs, for the host the picker names. */}
+        <HostEnvironmentSection scope={scope} />
         {/* The tab bar and the one body showing, pinned under the header.
             The Ports count and the Installation dot hang on `badges`. */}
         <HostOverviewTabs
@@ -1975,6 +2028,7 @@ export function HostOverviewPanel(props: {
           bodies={{
             installation: installationTab,
             updates: updatesTab,
+            access: accessTab,
             data: dataTab,
             ports: portsTab,
             simulators: simulatorsTab,
@@ -2956,4 +3010,18 @@ function overviewBusySnapshot(
       reportedBreakdown: status?.busyBreakdown ?? null,
     }),
   };
+}
+
+/**
+ * What a sandbox's "New sandbox like this" preselects: its team, Personal
+ * for the person's own, or `null` for a team's whose id the registry has not
+ * answered yet, which hides the button until it has.
+ */
+function sandboxLikeThis(
+  host: HostScopeOption,
+  sandbox: HostScopeSandbox,
+): SandboxCreateBelongsTo | null {
+  const owner = hostOptionTeamOwner(host);
+  if (owner !== null) return { kind: "team", teamId: owner.teamId };
+  return sandbox.teamOwned ? null : { kind: "personal" };
 }

@@ -200,3 +200,30 @@ export function providerTabLabel(
   }
   return "Usage limits";
 }
+
+/**
+ * Which page the provider rail and tabs are drawn for. MCP servers and Skills
+ * are Personal pages of their own: the same rail and
+ * the same tab bodies, narrowed to that one tab, while Providers keeps every
+ * other tab. The `supportedTabs` wire is unchanged; the narrowing is here.
+ */
+export type ProvidersPanelView = "providers" | "mcp-servers" | "skills";
+
+const VIEW_TAB: Readonly<
+  Record<Exclude<ProvidersPanelView, "providers">, ProviderTabKey>
+> = {
+  "mcp-servers": "mcp",
+  skills: "skills",
+};
+
+/** `tabs` as `view` shows them. */
+export function tabsForView(
+  tabs: readonly ProviderTabKey[],
+  view: ProvidersPanelView,
+): readonly ProviderTabKey[] {
+  if (view === "providers") {
+    return tabs.filter((tab) => tab !== "mcp" && tab !== "skills");
+  }
+  const only = VIEW_TAB[view];
+  return tabs.filter((tab) => tab === only);
+}

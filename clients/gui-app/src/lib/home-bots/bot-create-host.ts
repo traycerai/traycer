@@ -1,5 +1,10 @@
 import type { EnvironmentHostBinding } from "@traycer/protocol/host/environment/contracts";
 
+export type BotCreateHostChoice =
+  | { readonly kind: "chosen"; readonly hostId: string }
+  | { readonly kind: "checking" }
+  | { readonly kind: "none" };
+
 /**
  * Where a new bot is created (Tracy Bots). The person never picks: the app
  * walks this order and takes the first host that runs the bot's environment
@@ -8,9 +13,7 @@ import type { EnvironmentHostBinding } from "@traycer/protocol/host/environment/
  * 1. this machine (the app's local host);
  * 2. the app's active host, which is "this machine" where the app has no
  *    local host (web, mobile);
- * 3. the environment's sandbox ({@link environmentSandboxForCreate}, level 2
- *    of the host-invisible revision: none until sandboxes exist);
- * 4. any other reachable host bound to the environment, by host id - a
+ * 3. any other reachable host bound to the environment, by host id - a
  *    stable order, unlike labels, which can be renamed.
  *
  * A host whose environment is still being read holds the walk at its place:
@@ -18,11 +21,6 @@ import type { EnvironmentHostBinding } from "@traycer/protocol/host/environment/
  * a later host never wins only because it answered first. A host whose read
  * failed is passed over.
  */
-export type BotCreateHostChoice =
-  | { readonly kind: "chosen"; readonly hostId: string }
-  | { readonly kind: "checking" }
-  | { readonly kind: "none" };
-
 export function chooseBotCreateHost(input: {
   readonly environmentId: string;
   readonly localHostId: string | null;
@@ -45,7 +43,6 @@ export function chooseBotCreateHost(input: {
   };
   push(input.localHostId);
   push(input.effectiveHostId);
-  push(environmentSandboxForCreate(input.environmentId));
   for (const hostId of [...input.connectableHostIds].sort()) push(hostId);
 
   for (const hostId of ordered) {
@@ -62,16 +59,4 @@ export function chooseBotCreateHost(input: {
     }
   }
   return { kind: "none" };
-}
-
-/**
- * The environment's sandbox, when it should take a new bot: the level-2 arm
- * of the host choice (after the sandbox train), where a team bot defaults to
- * the team's sandbox so it outlives any member's laptop. No environment has
- * one yet.
- */
-export function environmentSandboxForCreate(
-  _environmentId: string,
-): string | null {
-  return null;
 }

@@ -78,8 +78,8 @@ const browserHostProviderState = vi.hoisted(() => ({
 
 const browserHostOptionsState = vi.hoisted(() => ({
   hosts: [
-    { hostId: "host-1", name: "Home Mac", connectable: true },
-    { hostId: "host-2", name: "Work Mac", connectable: true },
+    { hostId: "host-1", name: "Home Mac", connectable: true, sandbox: null },
+    { hostId: "host-2", name: "Work Mac", connectable: true, sandbox: null },
   ],
   isLoading: false,
   listsFailed: false,
@@ -317,8 +317,8 @@ describe("BrowsersPanelBody", () => {
     browserHostPinState.setSelection.mockClear();
     browserHostProviderState.hostIds = [];
     browserHostOptionsState.hosts = [
-      { hostId: "host-1", name: "Home Mac", connectable: true },
-      { hostId: "host-2", name: "Work Mac", connectable: true },
+      { hostId: "host-1", name: "Home Mac", connectable: true, sandbox: null },
+      { hostId: "host-2", name: "Work Mac", connectable: true, sandbox: null },
     ];
     browserHostOptionsState.isLoading = false;
     browserHostOptionsState.listsFailed = false;
@@ -1540,8 +1540,8 @@ describe("BrowsersPanelActions", () => {
     browserHostPinState.selection = null;
     browserHostPinState.setSelection.mockClear();
     browserHostOptionsState.hosts = [
-      { hostId: "host-1", name: "Home Mac", connectable: true },
-      { hostId: "host-2", name: "Work Mac", connectable: true },
+      { hostId: "host-1", name: "Home Mac", connectable: true, sandbox: null },
+      { hostId: "host-2", name: "Work Mac", connectable: true, sandbox: null },
     ];
     browserHostOptionsState.isLoading = false;
     browserHostOptionsState.listsFailed = false;

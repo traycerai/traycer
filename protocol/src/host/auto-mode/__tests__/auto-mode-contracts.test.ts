@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { validateVersionedRpcRegistry } from "@traycer/protocol/framework/index";
+import {
+  upgradeResponseToVersion,
+  validateVersionedRpcRegistry,
+} from "@traycer/protocol/framework/index";
 import { validateVersionedStreamRpcRegistry } from "@traycer/protocol/framework/versioned-stream-rpc";
 import {
   hostRpcRegistry,
@@ -12,8 +15,13 @@ import {
   autoJudgeSelectionSchema,
   autoJudgeSelectionSchemaPreEffort,
   autoJudgeSetV10,
+  autoPolicyGetResponseV11Schema,
+  autoPolicyGetUpgradeV10ToV11,
   autoPolicyGetV10,
+  autoPolicyGetV11,
   autoPolicySetV10,
+  autoPolicyTeamSchema,
+  autoPolicyTeamStateSchema,
   providersSetAutoJudgeV10,
 } from "@traycer/protocol/host/auto-mode/contracts";
 import {
@@ -111,7 +119,8 @@ describe("auto-mode protocol change", () => {
       { method: "providers.setAutoJudge", latestMinor: 0 },
       { method: "autoJudge.get", latestMinor: 3 },
       { method: "autoJudge.set", latestMinor: 3 },
-      { method: "autoPolicy.get", latestMinor: 0 },
+      // `1.1` adds `team`.
+      { method: "autoPolicy.get", latestMinor: 1 },
       { method: "autoPolicy.set", latestMinor: 0 },
       { method: "autoJudge.listRecent", latestMinor: 0 },
     ] as const;
@@ -380,5 +389,179 @@ describe("auto-mode protocol change", () => {
       source: "account",
     });
     expect(Object.hasOwn(withoutShipped, "shippedDefaults")).toBe(false);
+  });
+});
+
+describe("autoPolicy.get 1.1: the team policy state", () => {
+  const ACCOUNT = { body: null, updatedAt: null, source: "account" };
+
+  it("registers latestMinor 1 with 1.0 and 1.1 bound to their own contracts and the upgrade between them", () => {
+    const line = hostRpcRegistry["autoPolicy.get"][1];
+
+    expect(line.latestMinor).toBe(1);
+    expect(line.versions[0].contract).toBe(autoPolicyGetV10);
+    expect(line.versions[1].contract).toBe(autoPolicyGetV11);
+    expect(line.versions[1].upgradeFromPreviousVersion).toBe(
+      autoPolicyGetUpgradeV10ToV11,
+    );
+    expect(autoPolicyGetV11.schemaVersion).toEqual({ major: 1, minor: 1 });
+    expect(autoPolicyGetV10.schemaVersion).toEqual({ major: 1, minor: 0 });
+  });
+
+  it("keeps the unsupported degrade and stays off the released floor", () => {
+    expect(hostRpcRegistry["autoPolicy.get"].degrade).toEqual({
+      kind: "unsupported",
+    });
+    expect(RELEASED_FLOOR_METHOD_NAMES).not.toContain("autoPolicy.get");
+  });
+
+  it("keeps the request as it was: 1.1 asks nothing more", () => {
+    expect(autoPolicyGetV11.requestSchema).toBe(autoPolicyGetV10.requestSchema);
+  });
+
+  it("parses with team null, as a personal host answers", () => {
+    const parsed = autoPolicyGetResponseV11Schema.safeParse({
+      ...ACCOUNT,
+      team: null,
+    });
+
+    expect(parsed.success).toBe(true);
+    expect(parsed.success && parsed.data.team).toBeNull();
+  });
+
+  it.each([
+    ["none", null],
+    ["applied", "42"],
+    ["lapsed", "42"],
+    ["applied", "0"],
+  ] as const)(
+    "parses team state %s with policyVersion %s",
+    (state, policyVersion) => {
+      const parsed = autoPolicyGetResponseV11Schema.safeParse({
+        ...ACCOUNT,
+        team: { state, policyVersion },
+      });
+
+      expect(parsed.success).toBe(true);
+      expect(parsed.success && parsed.data.team).toEqual({
+        state,
+        policyVersion,
+      });
+    },
+  );
+
+  it("closes the state list at none, applied and lapsed", () => {
+    for (const state of ["none", "applied", "lapsed"]) {
+      expect(autoPolicyTeamStateSchema.safeParse(state).success).toBe(true);
+    }
+    for (const other of ["expired", "held", "", "APPLIED", null, 1]) {
+      expect(autoPolicyTeamStateSchema.safeParse(other).success).toBe(false);
+    }
+  });
+
+  it.each([
+    ["an unknown state", { state: "stale", policyVersion: null }],
+    ["a numeric version", { state: "applied", policyVersion: 7 }],
+    ["a non-decimal version", { state: "applied", policyVersion: "v7" }],
+    ["a leading-zero version", { state: "applied", policyVersion: "07" }],
+    ["a negative version", { state: "applied", policyVersion: "-1" }],
+    ["a missing version", { state: "applied" }],
+    ["a missing state", { policyVersion: "7" }],
+  ])("refuses a team with %s", (_label, team) => {
+    expect(autoPolicyTeamSchema.safeParse(team).success).toBe(false);
+    expect(
+      autoPolicyGetResponseV11Schema.safeParse({ ...ACCOUNT, team }).success,
+    ).toBe(false);
+  });
+
+  it("requires the team key at 1.1 (null, never absent)", () => {
+    expect(autoPolicyGetResponseV11Schema.safeParse(ACCOUNT).success).toBe(
+      false,
+    );
+  });
+
+  it("carries the 1.0 fields unchanged beside team", () => {
+    const parsed = autoPolicyGetResponseV11Schema.parse({
+      body: "account text",
+      updatedAt: "2026-10-16T00:00:00.000Z",
+      source: "account",
+      readState: "stale",
+      shippedDefaults: "## shipped",
+      team: { state: "none", policyVersion: null },
+    });
+
+    expect(parsed).toMatchObject({
+      body: "account text",
+      source: "account",
+      readState: "stale",
+      shippedDefaults: "## shipped",
+    });
+  });
+
+  it("upgrades a 1.0 response to team: null, valid under the 1.1 schema, keeping every 1.0 field", () => {
+    const v10 = {
+      body: "account text",
+      updatedAt: "2026-10-16T00:00:00.000Z",
+      source: "account",
+      readState: "fresh",
+      shippedDefaults: "## shipped",
+    } as const;
+
+    const direct = autoPolicyGetUpgradeV10ToV11.upgradeResponse(v10);
+    expect(direct).toEqual({ ...v10, team: null });
+    expect(autoPolicyGetResponseV11Schema.safeParse(direct).success).toBe(true);
+
+    const viaRegistry = upgradeResponseToVersion(
+      hostRpcRegistry["autoPolicy.get"],
+      { major: 1, minor: 0 },
+      { major: 1, minor: 1 },
+      v10,
+    );
+    expect(viaRegistry).toEqual({ ...v10, team: null });
+    expect(autoPolicyGetResponseV11Schema.safeParse(viaRegistry).success).toBe(
+      true,
+    );
+  });
+
+  it("upgrades a 1.0 response that omits readState and shippedDefaults without inventing them", () => {
+    const direct = autoPolicyGetUpgradeV10ToV11.upgradeResponse({
+      body: null,
+      updatedAt: null,
+      source: "account",
+    });
+
+    expect(direct).toEqual({ ...ACCOUNT, team: null });
+    expect(Object.hasOwn(direct, "readState")).toBe(false);
+    expect(Object.hasOwn(direct, "shippedDefaults")).toBe(false);
+  });
+
+  it("passes the request through the upgrade untouched", () => {
+    expect(autoPolicyGetUpgradeV10ToV11.upgradeRequest({})).toEqual({});
+  });
+
+  it("a 1.1 response still parses under the 1.0 schema: an older peer drops team and keeps the rest", () => {
+    const parsed = autoPolicyGetV10.responseSchema.safeParse({
+      ...ACCOUNT,
+      readState: "fresh",
+      team: { state: "applied", policyVersion: "9" },
+    });
+
+    expect(parsed.success).toBe(true);
+    expect(parsed.success && parsed.data).toMatchObject({
+      source: "account",
+      readState: "fresh",
+    });
+    expect(parsed.success && Object.hasOwn(parsed.data, "team")).toBe(false);
+  });
+
+  it("never carries a policy body: a body sent beside the state is dropped by the team schema", () => {
+    const parsed = autoPolicyTeamSchema.parse({
+      state: "applied",
+      policyVersion: "9",
+      body: "TEAM RULES",
+    });
+
+    expect(parsed).toEqual({ state: "applied", policyVersion: "9" });
+    expect(JSON.stringify(parsed)).not.toContain("TEAM RULES");
   });
 });
