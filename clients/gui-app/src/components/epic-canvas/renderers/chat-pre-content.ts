@@ -494,23 +494,8 @@ export function describeChatPreContent(
   const code = input.session?.retries?.code ?? null;
   switch (kind) {
     case "failed":
-    case "failed-host-update": {
-      const fatal = fatalCloseOf(input);
-      const copy = describeFatalCopy(fatal);
-      return {
-        kind,
-        headline: copy.paneTitle,
-        // The reason's `CODE: ` prefix repeats the code the report carries.
-        detail: fatal.reason.replace(/^[A-Z_]+:\s*/, ""),
-        settled: true,
-        spinner: false,
-        layout: "card",
-        offersHostUpdate: copy.offersHostUpdate,
-        offersTryAgain: hasHandle,
-        offersReport: true,
-        code: fatal.code,
-      };
-    }
+    case "failed-host-update":
+      return failedView(kind, fatalCloseOf(input), hasHandle);
     case "host-gone":
       return {
         kind,
@@ -571,6 +556,27 @@ export function describeChatPreContent(
         code,
       };
   }
+}
+
+/** Arms 1 and 2, worded from the fatal close. */
+function failedView(
+  kind: "failed" | "failed-host-update",
+  fatal: ChatTileFatalDetails,
+  hasHandle: boolean,
+): ChatPreContentView {
+  const copy = describeFatalCopy(fatal);
+  return {
+    kind,
+    headline: copy.paneTitle,
+    detail: copy.detail,
+    settled: true,
+    spinner: false,
+    layout: "card",
+    offersHostUpdate: copy.offersHostUpdate,
+    offersTryAgain: hasHandle && copy.offersTryAgain,
+    offersReport: true,
+    code: fatal.code,
+  };
 }
 
 /**
@@ -766,8 +772,12 @@ function loadingDetail(evidence: ChatPreContentEvidence, host: string): string {
 
 interface ChatTileFatalCopy {
   readonly paneTitle: string;
+  /** The second line, or `null` for none. */
+  readonly detail: string | null;
   readonly reportTitle: string;
   readonly offersHostUpdate: boolean;
+  /** Whether another attempt could open it; the handle is checked apart. */
+  readonly offersTryAgain: boolean;
 }
 
 /**
@@ -786,19 +796,48 @@ interface ChatTileFatalCopy {
  * "the remedy differs - this one needs a repair or a support report, not a
  * host update". Its body is the generic one, whose Report issue is that
  * report.
+ *
+ * `EPIC_NOT_FOUND` and `EPIC_ACCESS_DENIED` are the cloud's verdicts on the
+ * task itself, so the headline says that and the host's reason, written for
+ * logs, is not shown. A deleted task offers no Try again, since no attempt
+ * can open it; lost access keeps it, because the task can be shared again.
  */
 function describeFatalCopy(details: ChatTileFatalDetails): ChatTileFatalCopy {
+  // The reason's `CODE: ` prefix repeats the code the report carries.
+  const reason = details.reason.replace(/^[A-Z_]+:\s*/, "");
   if (fatalRemedyIsHostUpdate(details)) {
     return {
       paneTitle: HOST_UPDATE_SKEW_COPY.title,
+      detail: reason,
       reportTitle: HOST_UPDATE_SKEW_COPY.title,
       offersHostUpdate: true,
+      offersTryAgain: true,
     };
+  }
+  switch (details.code) {
+    case "EPIC_NOT_FOUND":
+      return {
+        paneTitle: "This task was deleted.",
+        detail: null,
+        reportTitle: "This task was deleted",
+        offersHostUpdate: false,
+        offersTryAgain: false,
+      };
+    case "EPIC_ACCESS_DENIED":
+      return {
+        paneTitle: "You no longer have access to this task.",
+        detail: null,
+        reportTitle: "You no longer have access to this task",
+        offersHostUpdate: false,
+        offersTryAgain: true,
+      };
   }
   return {
     paneTitle: "This agent could not be opened.",
+    detail: reason,
     reportTitle: "This agent could not be opened",
     offersHostUpdate: false,
+    offersTryAgain: true,
   };
 }
 
