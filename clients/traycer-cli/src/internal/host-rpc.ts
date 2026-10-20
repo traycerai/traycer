@@ -18,8 +18,10 @@ import {
 } from "../../../shared/host-transport/retrying-messenger";
 import { DEFAULT_DIAL_TIMEOUT_MS } from "../../../shared/host-transport/transport-config";
 import {
+  HostRequestAbortedError,
   HostRpcError,
   HostTransportFailureError,
+  RetryableTransportError,
   type RequiredHostMethodVersion,
   type RequestOfMethod,
   type ResponseOfMethod,
@@ -695,8 +697,13 @@ function hostRpcToCliError(err: unknown): unknown {
  *     this host, actionable by updating the host.
  *   - `INCOMPATIBLE` / `DOWNGRADE_UNSUPPORTED` → `HOST_INCOMPATIBLE`: host/CLI
  *     protocol skew, actionable via `host restart` / updating the CLI.
- *   - a `HostTransportFailureError` of any code → `HOST_UNREACHABLE`: the
- *     connection failed or went quiet, so nothing below applies.
+ *   - a transport failure the transport could not prove was pre-dispatch →
+ *     `HOST_REQUEST_OUTCOME_UNKNOWN`: the request frame went out and no answer
+ *     came back, so the host may have carried the call out and re-running the
+ *     command can repeat it.
+ *   - every other `HostTransportFailureError` → `HOST_UNREACHABLE`: the
+ *     connection failed before the request went out, or the failure is
+ *     replayable, so nothing below applies and a retry is safe.
  *   - everything else, including `RPC_ERROR` → `UNEXPECTED`: `RPC_ERROR` is the
  *     host's catch-all for any resolver error (e.g. "agent not found"), so it
  *     must NOT be reported as "host not running" - the host answered. A
@@ -706,7 +713,26 @@ function hostRpcToCliError(err: unknown): unknown {
  *     is preserved so the user still sees what went wrong.
  */
 function mapHostRpcError(err: HostRpcError): CliError {
-  // First, and by class rather than by code: the transport raises its own
+  // Ahead of the unreachable arm below, and the two must never share a code:
+  // this is the failure the transport could not prove was pre-dispatch, so
+  // the host may have run the call and answered into a connection that was
+  // already gone. Reported as "unreachable" it reads as "nothing happened",
+  // and a caller that re-runs on that reading repeats whatever the first send
+  // did - an `agent.sendMessage` whose message was delivered exited
+  // `E_HOST_UNREACHABLE`, and the callers that retried on it delivered the
+  // same message twice.
+  //
+  // The message keeps the transport's own text (it carries no host text) and
+  // adds what the caller has to do about it.
+  if (mayHaveReachedHost(err)) {
+    return cliError({
+      code: CLI_ERROR_CODES.HOST_REQUEST_OUTCOME_UNKNOWN,
+      message: `traycer: ${err.message} - the request was sent and the host may have carried it out; check before sending it again.`,
+      details: null,
+      exitCode: 1,
+    });
+  }
+  // Then by class rather than by code: the transport raises its own
   // failures as `RPC_ERROR` too, so the code cannot tell "the host answered
   // with an error" from "nothing answered". The class can. A connection that
   // errored, closed early or timed out is a state of the machine the command
@@ -873,6 +899,37 @@ function isAccessDenied(err: HostRpcError): boolean {
     err.code === "RPC_ERROR" &&
     /does not have (?:access|[\w ]*permission)/i.test(err.message)
   );
+}
+
+/**
+ * True when the request frame may already have reached the host and its
+ * outcome is therefore unknown.
+ *
+ * Read off the CLASS and the FLAG the transport sets, never off the message
+ * text, because the same sentence describes both outcomes: a frame timeout
+ * before the request went out and one after it read identically, and the
+ * transport is the only layer that knows which happened. `ws-rpc-client.ts`'s
+ * `transientFailure` builds a plain {@link HostTransportFailureError} for
+ * exactly `requestSent && !requestReplaySafe` and a
+ * {@link RetryableTransportError} for every failure that is provably
+ * pre-dispatch or safe to replay, and `createRetryingMessenger` ends an
+ * episode whose earlier attempt was sent and lost with a plain one too
+ * (`RetryEpisodeOutcomeUnknownError`).
+ *
+ * The three arms, in the order they are decided:
+ *   - a `RetryableTransportError` is safe to send again - either nothing was
+ *     dispatched or the host is deduplicating a negotiated key - so it keeps
+ *     the unreachable code, whose whole meaning is "try again";
+ *   - a `HostRequestAbortedError` carries the answer on its own
+ *     `mayHaveDispatched` flag: an abort stops the caller waiting, it does not
+ *     recall a request the host may already be running;
+ *   - every other `HostTransportFailureError` is the ambiguous post-send case.
+ */
+function mayHaveReachedHost(err: HostRpcError): boolean {
+  if (!(err instanceof HostTransportFailureError)) return false;
+  if (err instanceof RetryableTransportError) return false;
+  if (err instanceof HostRequestAbortedError) return err.mayHaveDispatched;
+  return true;
 }
 
 function retryPolicyLabel(
