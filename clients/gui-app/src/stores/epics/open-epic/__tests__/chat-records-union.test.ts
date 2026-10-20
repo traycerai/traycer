@@ -689,12 +689,18 @@ describe("applyChatRecordDelta pushes into the same table the poll fills", () =>
     // selection that was already frozen. Ablation: drop the
     // `republishChatRecordsForCurrentUser` call from the auth subscription and
     // user-b signs in to user-a's chat list.
+    //
+    // The host's `own` word is trusted only for the identity its snapshot
+    // answered: user-a's stamp does not carry over to user-b, so A's `mine`
+    // and an environment-owned `own` row both stay hidden after the switch
+    // until user-b's own snapshot applies.
     signedInAs("user-a");
     const session = newSession(seedChats([]));
     const store = session.handle.store;
     store.getState().applyChatRecords(
       [
         record({ chatId: "mine", ownerUserId: "user-a" }),
+        record({ chatId: "env", ownerUserId: "env_team" }),
         record({
           chatId: "theirs",
           ownerUserId: "user-b",
@@ -704,7 +710,10 @@ describe("applyChatRecordDelta pushes into the same table the poll fills", () =>
       null,
     );
     store.getState().markChatRecordListAuthoritative();
-    expect(store.getState().chats.allIds).toEqual(["mine"]);
+    expect(store.getState().chats.allIds.slice().sort()).toEqual([
+      "env",
+      "mine",
+    ]);
     expect(store.getState().chatRecordListAuthoritative).toBe(true);
 
     signedInAs("user-b");
@@ -712,6 +721,24 @@ describe("applyChatRecordDelta pushes into the same table the poll fills", () =>
     // User A's answered list cannot authorize deleting rows for user B. The
     // viewer-keyed query marks the new answer authoritative when it arrives.
     expect(store.getState().chatRecordListAuthoritative).toBe(false);
+
+    // User B's own answer re-stamps the table, and the environment's row is
+    // B's chat from then on. The host does not list A's `mine` to B.
+    store.getState().applyChatRecords(
+      [
+        record({ chatId: "env", ownerUserId: "env_team" }),
+        record({
+          chatId: "theirs",
+          ownerUserId: "user-b",
+          origin: "foreign",
+        }),
+      ],
+      null,
+    );
+    expect(store.getState().chats.allIds.slice().sort()).toEqual([
+      "env",
+      "theirs",
+    ]);
     session.handle.dispose();
   });
 
