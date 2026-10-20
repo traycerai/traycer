@@ -167,6 +167,8 @@ const VERIFIED_ALTERNATE_GATE: Readonly<Record<string, string>> = {
     "same proxy and inline refusal as bot.delete (bot-settings-panel.tsx)",
   "bot.conversation.send":
     "same bot.list proxy as bot.delete; documented no-toast: the composer states the refusal inline under the field (use-bot-mutations.ts, bot-conversation-view.tsx)",
+  "epic.attachEnvironment":
+    "call-and-catch degrade: a host that predates it answers E_HOST_UNSUPPORTED, which the hook does not toast and the fork dialog answers by forking as it did before the method existed (use-epic-attach-environment-mutation.ts, chat-fork-dialog.tsx)",
   "environment.host.bind":
     "sibling-method proxy gate: host-environment-section.tsx renders the picker only under useHostMethodSupport(hostId, 'environment.host.read'), registered in the same block as bind; the refusal is the picker's inline notice (use-environment-host-bind-mutation.ts)",
 };
