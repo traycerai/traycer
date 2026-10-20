@@ -83,11 +83,21 @@ export const CLI_ERROR_CODES = {
   // --- Host supervisor + lifecycle ---
   HOST_NOT_RUNNING: "E_HOST_NOT_RUNNING",
   // The host's process is there and its endpoint is published, but the
-  // connection to it failed or went quiet: the socket errored, closed before
-  // a frame, or a frame did not arrive inside its timeout. Distinct from
+  // connection to it failed before the request went out: the dial timed out,
+  // the socket errored, or it closed before a frame. Distinct from
   // HOST_NOT_RUNNING (nothing to dial) and from every code the host itself
-  // answers with - here nothing answered.
+  // answers with - here nothing answered and nothing was carried out, so
+  // running the command again is safe. A post-send failure the transport
+  // marked replayable lands here too, for the same reason: the host is
+  // deduplicating the retry.
   HOST_UNREACHABLE: "E_HOST_UNREACHABLE",
+  // The request WAS sent and no answer came back, so the host may have
+  // carried it out: its response did not arrive inside the deadline, or the
+  // connection was lost after the send with nothing to prove the host never
+  // acted. The one code that must NOT be read as "nothing happened" - running
+  // the command again can repeat whatever it did, such as delivering the same
+  // message to an agent twice. The message says to check before re-sending.
+  HOST_REQUEST_OUTCOME_UNKNOWN: "E_HOST_REQUEST_OUTCOME_UNKNOWN",
   // A running host reported (or, fail-safe, was assumed to have) work in
   // progress, so the CLI refused to reinstall/restart it. The desktop maps
   // this to its "host busy" flow (surface the host, run the renderer's
@@ -279,6 +289,7 @@ export const EXPECTED_CLI_ERROR_CODES: ReadonlySet<CliErrorCode> =
     CLI_ERROR_CODES.AUTH_NETWORK,
     CLI_ERROR_CODES.HOST_NOT_RUNNING,
     CLI_ERROR_CODES.HOST_UNREACHABLE,
+    CLI_ERROR_CODES.HOST_REQUEST_OUTCOME_UNKNOWN,
     CLI_ERROR_CODES.HOST_BUSY,
     CLI_ERROR_CODES.HOST_UPDATE_ATTEMPT_ACTIVE,
     CLI_ERROR_CODES.HOST_NOT_SERVICE_RUN,
