@@ -1,4 +1,4 @@
-import { useId, useMemo, useState, type ReactNode } from "react";
+import { useId, useMemo, useRef, useState, type ReactNode } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { useStore } from "zustand";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
@@ -19,21 +19,83 @@ import { chooseBotCreateHost } from "@/lib/home-bots/bot-create-host";
 import { useBotTabsStore } from "@/stores/bots/bot-tabs-store";
 import { botTabIntent, settingsTabIntent } from "@/lib/tab-navigation/intents";
 import { navigateToTabIntent } from "@/lib/tab-navigation";
+import {
+  HostRpcError,
+  mayHaveReachedHost,
+} from "@traycer-clients/shared/host-transport/host-messenger";
+import { finalRefusalOf } from "@traycer-clients/shared/host-transport/retrying-messenger";
 
 const BOT_TITLE_MAX = 500;
 
 /**
- * The form's line for every failed create. It makes no claim about whether
- * the create reached the host. `mayHaveReachedHost` now says, across
- * credential recovery too, whether a create may have reached the host; false
- * means it never did or the host answered with its own error, and whether a
- * host error followed a commit is `bot.create`'s contract, read from the code.
- * The form reads neither yet, so the line tells the person to check before
- * trying again. The error's own text is never shown; the mutation cache logs
- * it.
+ * The form's line for a failed create. Every create carries one request key
+ * per form (`requestKeyRef` below), and the cloud makes at most one bot per
+ * key, so submitting again after any failure never makes a second bot.
+ *
+ * - Not created: the host answered with a code the cloud's create only
+ *   answers before it writes anything (`NOT_CREATED_CODES`), no earlier
+ *   attempt of this call may have reached the host, and no earlier submit
+ *   under the same key may have created the bot (`earlierMayHaveCreated`).
+ *   A later refusal says nothing about what an earlier try did: membership
+ *   revoked between two tries refuses the second although the first made
+ *   the bot.
+ * - The key already made a bot this create cannot be answered with (the
+ *   fields were changed since, or that bot was deleted).
+ * - Anything else may have created the bot, and trying again is safe.
+ *
+ * The error's own text is never shown; the mutation cache logs it.
  */
-const CREATE_FAILED =
-  "Couldn't confirm the bot was created. Check your bots, and try again if it isn't there.";
+const CREATE_UNCONFIRMED =
+  "Couldn't confirm the bot was created. Try again. It won't make a second bot.";
+const CREATE_REFUSED = "The bot wasn't created.";
+const CREATE_KEY_REUSED =
+  "A bot from an earlier try was already created. Check your bots.";
+
+/**
+ * Host answers to `bot.create` that come before any write: the method is not
+ * served, the cloud refused the caller, or the cloud refused the request. The
+ * host answers every cloud refusal of a create's fields as
+ * `E_INVALID_ARGUMENT`, and the cloud's create is one transaction, so a
+ * refusal wrote nothing.
+ */
+const NOT_CREATED_CODES: ReadonlySet<string> = new Set([
+  "E_HOST_UNSUPPORTED",
+  "FORBIDDEN",
+  "E_INVALID_ARGUMENT",
+]);
+
+/** What one failed submit says about the bot, on its own. */
+type CreateFailure = "key-reused" | "not-created" | "unknown";
+
+function classifyCreateFailure(error: unknown): CreateFailure {
+  const refusal = finalRefusalOf(error);
+  if (
+    refusal instanceof HostRpcError &&
+    refusal.code === "E_BOT_REQUEST_KEY_REUSED"
+  ) {
+    return "key-reused";
+  }
+  if (
+    !mayHaveReachedHost(error) &&
+    error instanceof HostRpcError &&
+    NOT_CREATED_CODES.has(error.code)
+  ) {
+    return "not-created";
+  }
+  return "unknown";
+}
+
+function createFailureLine(
+  error: Error,
+  earlierMayHaveCreated: boolean,
+): string {
+  const failure = classifyCreateFailure(error);
+  if (failure === "key-reused") return CREATE_KEY_REUSED;
+  if (failure === "not-created" && !earlierMayHaveCreated) {
+    return CREATE_REFUSED;
+  }
+  return CREATE_UNCONFIRMED;
+}
 
 /**
  * Creates a bot INTO one environment (Tracy Bots). The environment is the
@@ -102,6 +164,16 @@ export function CreateBotForm(props: {
     [reasoning],
   );
   const create = useBotCreateMutation(client);
+  // One key for every submit of this form until a create succeeds: a retry
+  // after an unknown outcome names the same key, so the cloud answers it with
+  // the bot the first try made instead of making a second. Kept across edits
+  // too: an edited retry of a create that did go through is refused rather
+  // than made twice.
+  const requestKeyRef = useRef<string | null>(null);
+  // Whether a submit under the current key may have created the bot: set by
+  // every failure that is not a refusal before any write, cleared with the
+  // key. While set, a later refusal cannot say the bot was not created.
+  const [earlierMayHaveCreated, setEarlierMayHaveCreated] = useState(false);
   const openBotTab = useBotTabsStore((s) => s.openBotTab);
   const navigate = useNavigate();
   const titleId = useId();
@@ -117,14 +189,17 @@ export function CreateBotForm(props: {
   const submit = (): void => {
     if (!canSubmit) return;
     const toolbar = toolbarStore.getState();
+    requestKeyRef.current ??= crypto.randomUUID();
+    const requestKey = requestKeyRef.current;
     // `mutateAsync`, not per-call `mutate` callbacks: those are dropped once
     // the component unmounts, and a form that is closed (or whose group
     // re-renders away) mid-create would still create the bot and never open
-    // its tab. The continuation below holds no component state - the store
-    // action and the router navigate are both module-level - so it runs
+    // its tab. The continuation below reads no component state - the store
+    // action and the router navigate are both module-level, and writing the
+    // key ref or the latch of an unmounted form is a no-op - so it runs
     // whatever happened to the form. A failure is already surfaced by the
-    // mutation's own error channel (toast + the inline line), so the
-    // rejection is swallowed here.
+    // mutation's own error channel (toast + the inline line); here it only
+    // updates the latch.
     void create
       .mutateAsync({
         environmentId,
@@ -133,20 +208,31 @@ export function CreateBotForm(props: {
         model: toolbar.selection.modelSlug,
         effort: toolbar.reasoning.length === 0 ? null : toolbar.reasoning,
         profile: toolbar.selection.profileId,
+        requestKey,
       })
-      .then((response) => {
-        openBotTab({
-          botId: response.bot.botId,
-          hostId,
-          title: response.bot.title,
-        });
-        onDone();
-        navigateToTabIntent(
-          navigate,
-          botTabIntent(response.bot.botId),
-          undefined,
-        );
-      })
+      .then(
+        (response) => {
+          // The create is done: the next one this form makes is another bot.
+          requestKeyRef.current = null;
+          setEarlierMayHaveCreated(false);
+          openBotTab({
+            botId: response.bot.botId,
+            hostId,
+            title: response.bot.title,
+          });
+          onDone();
+          navigateToTabIntent(
+            navigate,
+            botTabIntent(response.bot.botId),
+            undefined,
+          );
+        },
+        (error: unknown) => {
+          if (classifyCreateFailure(error) !== "not-created") {
+            setEarlierMayHaveCreated(true);
+          }
+        },
+      )
       .catch(() => undefined);
   };
 
@@ -202,7 +288,7 @@ export function CreateBotForm(props: {
       </div>
       {create.error === null ? null : (
         <p role="alert" className="text-ui-xs text-destructive">
-          {CREATE_FAILED}
+          {createFailureLine(create.error, earlierMayHaveCreated)}
         </p>
       )}
       <div className="flex items-center justify-end gap-2">

@@ -33,6 +33,19 @@ const botProfileSchema = lazySchema(() =>
   z.string().min(1).max(255).nullable(),
 );
 
+/**
+ * `bot.create`'s request key: a lowercase UUID, and only that spelling - not
+ * `z.uuid()`, which admits uppercase. No database compares the key (the cloud
+ * hashes it into the bot's id), so collation never folds two spellings
+ * together; one canonical spelling keeps that hash one-to-one with the key
+ * the caller minted. Mirrored by the cloud's request schema.
+ */
+const botRequestKeySchema = lazySchema(() =>
+  z
+    .string()
+    .regex(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/),
+);
+
 /** The bot row as the cloud returns it. */
 export const botRecordSchema = lazySchema(() =>
   z.object({
@@ -68,10 +81,18 @@ export type BotRecord = z.infer<typeof botRecordSchema>;
 // ---- bot.create -------------------------------------------------------- //
 
 /**
- * The host mints the two chat ids and binds itself as the bot's host, the
+ * The host mints the trunk's chat id and binds itself as the bot's host, the
  * same way it mints every chat id it owns; the cloud takes the owner from the
- * bearer. The response also names the app conversation's chat id so the
+ * bearer and derives the app conversation's chat id from the bot's id. The response also names the app conversation's chat id so the
  * caller can open it without a list round trip.
+ *
+ * `requestKey` makes the create safe to repeat: the cloud creates at most one
+ * bot per caller and key, and answers a repeat with that bot as it is now, so
+ * a retry after an unknown outcome - by the transport's credential recovery,
+ * or by the person pressing the button again - never makes a second bot. The
+ * caller mints it once per create it means (a lowercase UUID) and keeps it
+ * across its own retries; a repeat whose fields differ, or whose bot was
+ * deleted since, is refused with `E_BOT_REQUEST_KEY_REUSED`.
  */
 export const botCreateRequestSchema = lazySchema(() =>
   z.object({
@@ -81,6 +102,7 @@ export const botCreateRequestSchema = lazySchema(() =>
     model: botModelSchema,
     effort: botEffortSchema,
     profile: botProfileSchema,
+    requestKey: botRequestKeySchema,
   }),
 );
 export type BotCreateRequest = z.infer<typeof botCreateRequestSchema>;

@@ -289,6 +289,13 @@ export const RPC_ERROR_CODES = [
   // which says nothing about who owns the target. Additive, as above: a
   // released peer narrows it to RPC_ERROR and keeps the status.
   "principal_mismatch",
+  // ─── Bots ───────────────────────────────────────────────────────────────
+  //
+  // `bot.create` named a `requestKey` that already made a bot, and this
+  // request cannot be answered with it: its fields differ, or that bot was
+  // deleted since. Nothing was created; the bot the key made, if live, is in
+  // the person's list. Additive, as above.
+  "E_BOT_REQUEST_KEY_REUSED",
 ] as const;
 
 export type RpcErrorCode = (typeof RPC_ERROR_CODES)[number];
