@@ -32,7 +32,10 @@ const POOL_PLAN = createHostRpcTierPlan(poolEntry);
 const EXPECTED_POOL_ONLY = [
   "autoPolicy.get",
   "autoPolicy.set",
+  "environment.chats.subscribe",
+  "environment.communicationGraph.subscribe",
   "environment.list",
+  "environment.plainTerminals.subscribe",
   "host.notifications.cloudFeed.clear",
   "host.notifications.cloudFeed.clearAll",
   "host.notifications.cloudFeed.markAllRead",
