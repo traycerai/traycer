@@ -53,7 +53,10 @@ import { setEpicChatWorkProbe } from "@/stores/epics/open-epic/session-registry"
 import { subscribeAgentActivity } from "@/stores/agent-activity-store";
 import { getRetentionProfile } from "@/stores/replica-memory/retention-profile";
 import { getOpenEpicRegistry } from "@/lib/registries/epic-session-registry";
-import { useChatServingHostId } from "@/lib/chats/chat-serving-witness";
+import {
+  useChatServingHostId,
+  useChatServingSettled,
+} from "@/lib/chats/chat-serving-witness";
 import { createManagedDataByteBudget } from "@/stores/replica-memory/managed-data-byte-budget";
 import {
   readProcessMemoryRuntime,
@@ -324,6 +327,9 @@ export function useChatSessionHandleForContainer(
   // session's scope follow the serving peer, so a change of peer is a fresh
   // subscribe on the other one.
   const servingHostId = useChatServingHostId({ hostId, epicId, chatId });
+  // A team sandbox's chat waits for the server's first serving state, so a
+  // live chat is never first subscribed on the pool and then moved.
+  const servingSettled = useChatServingSettled({ hostId, epicId, chatId });
   const hostEntry = useHostDirectoryEntry(servingHostId);
   const lease = useHostLease(servingHostId);
   // Chat is a DURABLE per-tab stream: its `WsStreamClient` is OWNED by the
@@ -367,6 +373,7 @@ export function useChatSessionHandleForContainer(
   // releases: identity loss, a missing entry, and a confirmed refusal with no
   // restart episode vouching for the host.
   const sessionAllowed =
+    servingSettled &&
     ownerIdentityKey !== null &&
     (transportKey !== null ||
       isLocalHostBootingEntry(hostEntry) ||

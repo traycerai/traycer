@@ -1,4 +1,15 @@
-import type { ReactNode } from "react";
+import {
+  use,
+  useCallback,
+  useSyncExternalStore,
+  type ReactNode,
+} from "react";
+import {
+  chatServingHostId,
+  readProcessHostRpcTierPlan,
+} from "@traycer-clients/shared/host-client/host-rpc-routing";
+import { ChatServingWitnessContext } from "@/lib/chats/chat-serving-witness";
+import { cn } from "@/lib/utils";
 import { useIsMutating } from "@tanstack/react-query";
 import type { SandboxLifecycleVerb } from "@traycer/protocol/host/sandbox-control";
 import { isRemoteHostDirectoryEntry } from "@traycer-clients/shared/host-client/remote-fetcher";
@@ -43,23 +54,59 @@ import { TeamHostDisclosure } from "@/components/hosts/team-host-disclosure";
  * unwrapped: there is no directory to read.
  */
 export function SandboxTileStateFrame(props: {
+  /** The chat a chat tile shows; null for every other tile. */
+  readonly chat: { readonly epicId: string; readonly chatId: string } | null;
   readonly children: ReactNode;
 }): ReactNode {
   // A tile rendered with no host runtime above it (a shell mounted bare, a
   // tile under test) has no directory to read and no sandbox to frame.
   if (useHostBinding() === null) return props.children;
   return (
-    <SandboxTileStateFrameInRuntime>
+    <SandboxTileStateFrameInRuntime chat={props.chat}>
       {props.children}
     </SandboxTileStateFrameInRuntime>
   );
 }
 
+/**
+ * Whether the pool serves this tile's chat at rest (the witness says so):
+ * the tile's body is then the pool's copy, readable whatever the sandbox's
+ * state, so the sandbox's state is a strip above it and never greys it.
+ */
+function useServedAtRest(
+  hostId: string,
+  chat: { readonly epicId: string; readonly chatId: string } | null,
+): boolean {
+  const witness = use(ChatServingWitnessContext);
+  const entry = useHostDirectoryEntry(hostId);
+  const subscribe = useCallback(
+    (listener: () => void): (() => void) =>
+      witness === null ? () => undefined : witness.subscribe(listener),
+    [witness],
+  );
+  const verdict = useSyncExternalStore(subscribe, () =>
+    witness === null || chat === null
+      ? null
+      : witness.verdictFor({ hostId, ...chat }),
+  );
+  if (chat === null || verdict === null) return false;
+  return (
+    chatServingHostId(
+      { hostId, ...chat },
+      entry,
+      witness,
+      readProcessHostRpcTierPlan(),
+    ) !== hostId
+  );
+}
+
 function SandboxTileStateFrameInRuntime(props: {
+  readonly chat: { readonly epicId: string; readonly chatId: string } | null;
   readonly children: ReactNode;
 }): ReactNode {
   const hostId = useTabHostId();
   const entry = useHostDirectoryEntry(hostId);
+  const servedAtRest = useServedAtRest(hostId, props.chat);
   const facts =
     entry !== null && isRemoteHostDirectoryEntry(entry) ? entry.sandbox : null;
   // The same two wrappers for every tile, from the first render: a restored
@@ -77,7 +124,16 @@ function SandboxTileStateFrameInRuntime(props: {
       className="relative flex h-full min-h-0 min-w-0 flex-1 flex-col"
       data-sandbox-tile-state={overlay === null ? "live" : overlay.kind}
     >
-      <div className="contents" inert={overlay !== null}>
+      {overlay === null || !servedAtRest ? null : (
+        <SandboxTileOverlayLayer
+          hostId={hostId}
+          overlay={overlay}
+          wakeAsks={wakeAsks}
+          teamOwned={facts !== null && facts.ownerTeamName !== null}
+          placement="strip"
+        />
+      )}
+      <div className="contents" inert={overlay !== null && !servedAtRest}>
         {props.children}
       </div>
       {facts === null ||
@@ -89,12 +145,13 @@ function SandboxTileStateFrameInRuntime(props: {
           teamName={facts.ownerTeamName}
         />
       )}
-      {overlay === null ? null : (
+      {overlay === null || servedAtRest ? null : (
         <SandboxTileOverlayLayer
           hostId={hostId}
           overlay={overlay}
           wakeAsks={wakeAsks}
           teamOwned={facts !== null && facts.ownerTeamName !== null}
+          placement="cover"
         />
       )}
     </div>
@@ -108,6 +165,11 @@ function SandboxTileOverlayLayer(props: {
   readonly wakeAsks: boolean;
   /** A team's frozen sandbox says whose bundle is out, not "your credits". */
   readonly teamOwned: boolean;
+  /**
+   * `cover` greys the body under the state; `strip` sits above a body that
+   * stays readable (a chat the pool serves at rest).
+   */
+  readonly placement: "cover" | "strip";
 }): ReactNode {
   const list = useSandboxList();
   const viewerUserId = useAuthStore((s) => s.contextMetadata?.userId ?? null);
@@ -129,11 +191,20 @@ function SandboxTileOverlayLayer(props: {
     <div
       data-testid="sandbox-tile-overlay"
       data-kind={overlay.kind}
-      className="absolute inset-0 z-10 flex items-center justify-center bg-background/70 p-4 backdrop-grayscale"
+      data-placement={props.placement}
+      className={cn(
+        props.placement === "cover"
+          ? "absolute inset-0 z-10 flex items-center justify-center bg-background/70 p-4 backdrop-grayscale"
+          : "flex shrink-0 items-center border-b border-border px-4 py-2",
+      )}
     >
       <div
         role="status"
-        className="flex max-w-sm flex-col items-center gap-2 text-center text-ui-sm"
+        className={cn(
+          props.placement === "cover"
+            ? "flex max-w-sm flex-col items-center gap-2 text-center text-ui-sm"
+            : "flex min-w-0 flex-1 flex-wrap items-center gap-2 text-ui-sm",
+        )}
       >
         {overlay.kind === "frozen" ? (
           <p className="font-medium text-warning-foreground">

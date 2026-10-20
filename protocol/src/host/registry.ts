@@ -585,6 +585,10 @@ import { hostRebindLocalStoreV10 } from "@traycer/protocol/host/local-store/cont
 import { chatForkGetV10 } from "@traycer/protocol/host/chat-fork/contracts";
 import { chatSearchV10 } from "@traycer/protocol/host/chat-search/contracts";
 import {
+  chatContinueHereV10,
+  chatServingSubscribeV10,
+} from "@traycer/protocol/host/chat-serving/contracts";
+import {
   botClaimAuthorityV10,
   botConversationListV10,
   botConversationSendV10,
@@ -7309,6 +7313,16 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
   },
   // Full-text search over this host's chats. Off-floor: a host without the
   // search index does not advertise it, and the client hides search.
+  "chat.continueHere": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: { contract: chatContinueHereV10, upgradeFromPreviousVersion: null },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
   "chat.search": {
     degrade: { kind: "unsupported" },
     1: {
@@ -13463,6 +13477,14 @@ export type HostRpcRegistry = typeof hostRpcRegistry;
 // of `chat.subscribe` means `typeof HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION`
 // never has to expand it (see `HostStreamRpcMethodMap` below).
 const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
+  "chat.serving.subscribe": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: { contract: chatServingSubscribeV10 },
+      },
+    },
+  },
   "organization.subscribe": {
     1: {
       latestMinor: 1,

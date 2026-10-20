@@ -1,3 +1,4 @@
+import { POOL_HOST_ID } from "@traycer-clients/shared/host-client/host-directory";
 import { browserSessionTileId } from "@/stores/epics/canvas/tile-schema/browser-tile";
 import { requestPaneOpenerFocus } from "@/lib/canvas/focus-pane-opener";
 import {
@@ -577,6 +578,15 @@ export interface ActiveTabBodyProps {
 const CHAT_SESSION_NOT_VISIBLE_CODE = "CHAT_NOT_VISIBLE";
 
 /**
+ * The pool's `chat.subscribe` refusal for a chat at rest its index cannot open
+ * (not yet indexed, or parked: `reason` is `unindexed` or `parked`). The
+ * pool serves the whole-download pair (`epic.resolveCloudChatHead`,
+ * `epic.readCloudChatPart`) for exactly this case, so the tab reads the
+ * published copy through the pool instead.
+ */
+const CHAT_INDEX_UNAVAILABLE_CODE = "CHAT_INDEX_UNAVAILABLE";
+
+/**
  * CONSISTENCY over ref provenance (user ruling, 2026-08-09): a live chat tab
  * whose bound host is unreachable renders what a fresh click on its row
  * renders - the published copy, locked - instead of a dead dial wearing a
@@ -673,6 +683,8 @@ interface ChatFallbackDecision {
   /** The banner the canvas mounts above the copy; `null` leaves it to the copy tile. */
   readonly bannerReason: ChatDeadTileBannerReason | null;
   readonly ownerUserId: string | null;
+  /** Whether the copy is read through the pool (`CHAT_INDEX_UNAVAILABLE`). */
+  readonly readsFromPool: boolean;
 }
 
 /**
@@ -688,6 +700,12 @@ function resolveChatFallbackDecision(args: {
   readonly isSameHost: boolean;
   readonly hostUnreachable: boolean;
   readonly confirmedAbsent: boolean;
+  /**
+   * The pool refused the chat's `chat.subscribe` with
+   * `CHAT_INDEX_UNAVAILABLE`. Only the pool says it, so the session that heard
+   * it was the pool's, and the copy is read where the transcript was served.
+   */
+  readonly indexUnavailable: boolean;
   readonly cloudChatOwnerUserId: string | null;
   readonly liveArtifactOwnerUserId: string | null;
 }): ChatFallbackDecision {
@@ -708,13 +726,21 @@ function resolveChatFallbackDecision(args: {
   const sameHostFallback =
     args.isSameHost && sameHostCloudCopyAvailable && absent;
   const crossHostFallback = !args.isSameHost && absent;
+  const ownerUserId = args.liveArtifactOwnerUserId ?? args.cloudChatOwnerUserId;
+  if (args.isChat && args.indexUnavailable) {
+    return {
+      substitute: true,
+      bannerReason: null,
+      ownerUserId,
+      readsFromPool: true,
+    };
+  }
   const substitute = args.isChat && (crossHostFallback || sameHostFallback);
   const bannerReason = substitutionBannerReason({
     hostUnreachable: args.hostUnreachable,
     isSameHost: args.isSameHost,
   });
-  const ownerUserId = args.liveArtifactOwnerUserId ?? args.cloudChatOwnerUserId;
-  return { substitute, bannerReason, ownerUserId };
+  return { substitute, bannerReason, ownerUserId, readsFromPool: false };
 }
 
 /**
@@ -780,10 +806,8 @@ function usePublishedChatFallbackRef(args: {
     activeTab.id,
     activeTab.hostId,
   );
-  const confirmedAbsent =
-    isChat &&
-    fatalClose !== null &&
-    fatalClose.code === CHAT_SESSION_NOT_VISIBLE_CODE;
+  const fatalCode = isChat ? (fatalClose?.code ?? null) : null;
+  const confirmedAbsent = fatalCode === CHAT_SESSION_NOT_VISIBLE_CODE;
   const wantsCloudChatFallback = isChat && isSameHost && liveArtifact === null;
   // The Epic SESSION's client - the same one the sidebar's tree fetches this
   // list on, so the TanStack cache is shared rather than split by host, and
@@ -820,10 +844,11 @@ function usePublishedChatFallbackRef(args: {
     isSameHost,
     hostUnreachable: reachability.status === "unreachable",
     confirmedAbsent,
+    indexUnavailable: fatalCode === CHAT_INDEX_UNAVAILABLE_CODE,
     cloudChatOwnerUserId: cloudChatRecord?.identity.ownerUserId ?? null,
     liveArtifactOwnerUserId,
   });
-  const { substitute, bannerReason, ownerUserId } = decision;
+  const { substitute, bannerReason, ownerUserId, readsFromPool } = decision;
   // The SERVING host is chosen once, when this fallback first opens, and then
   // held. `activeHostId` has to stay reactive for the decision above it (the
   // record gate and `isSameHost` are questions about the projection this render
@@ -848,7 +873,8 @@ function usePublishedChatFallbackRef(args: {
   // itself later would need either a render-time ref write or a
   // set-state-in-effect, both unsafe under concurrent rendering and both refused
   // by `react-hooks/*` here.
-  const [readingHostId] = useState<string | null>(() => activeHostId);
+  const [mountReadingHostId] = useState<string | null>(() => activeHostId);
+  const readingHostId = readsFromPool ? POOL_HOST_ID : mountReadingHostId;
   const fallbackRef = useMemo(
     () =>
       substitute && ownerUserId !== null && readingHostId !== null

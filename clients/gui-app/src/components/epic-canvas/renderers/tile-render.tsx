@@ -216,7 +216,8 @@ function tileRenderer<K extends TileKindId>(
  *
  * On a sandbox host the body sits in `<SandboxTileStateFrame>`, which greys
  * the last screen under the sandbox's state while it is frozen, asleep or
- * waking; a personal host's body is not wrapped.
+ * waking - except a chat the pool serves at rest, whose body stays readable
+ * under a strip; a personal host's body is not wrapped.
  *
  * Accepted cost: the coordinator is acquired EAGERLY while the tile is
  * mounted - a lazy one would not be live at click time, so the first link
@@ -249,7 +250,13 @@ export function renderTile(args: TileRenderArgs<EpicCanvasTileRef>): ReactNode {
                 instanceId={args.node.instanceId}
                 resetKey={args.node.instanceId}
               >
-                <SandboxTileStateFrame>
+                <SandboxTileStateFrame
+                  chat={
+                    args.node.type === "chat"
+                      ? { epicId: args.epicId, chatId: args.node.id }
+                      : null
+                  }
+                >
                   {tileRenderer(args.node.type)(args)}
                 </SandboxTileStateFrame>
               </TileErrorBoundary>
