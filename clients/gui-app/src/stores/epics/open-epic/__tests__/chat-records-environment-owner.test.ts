@@ -172,12 +172,20 @@ describe("isChatVisibleToUser", () => {
       visible: true,
     },
     {
-      name: "own, foreign owner, no snapshot yet",
+      name: "own, foreign owner, no stamp and no viewer fails open",
+      origin: "own",
+      owner: ENV,
+      viewer: null,
+      answeredFor: null,
+      visible: true,
+    },
+    {
+      name: "own, foreign owner, no stamp once the viewer is known",
       origin: "own",
       owner: ENV,
       viewer: "u",
       answeredFor: null,
-      visible: true,
+      visible: false,
     },
     {
       name: "own, foreign owner, stamp is the viewer",
@@ -296,6 +304,34 @@ describe("an environment-owned `own` row, through the record table", () => {
       .getState()
       .applyChatRecords([envRecord({ chatId: "env-chat", revision: 2 })], null);
     expect(Object.hasOwn(store.getState().chats.byId, "env-chat")).toBe(true);
+    handle.dispose();
+  });
+});
+
+describe("an account switch on a table that has only seen deltas", () => {
+  it("does not show the previous account's `own` rows to the next one", () => {
+    // No list snapshot ever lands, so only the deltas can say whom the host
+    // answered for. A's rows must not survive the switch into B's slice.
+    signedInAs("user-a");
+    const handle = newSession();
+    const store = handle.store;
+    store.getState().applyChatRecordDelta({
+      kind: "upsert",
+      epicId: "epic-test",
+      record: record({ chatId: "a-chat", ownerUserId: "user-a" }),
+    });
+    store.getState().applyChatRecordDelta({
+      kind: "upsert",
+      epicId: "epic-test",
+      record: envRecord({ chatId: "env-chat" }),
+    });
+    expect(store.getState().chats.allIds.slice().sort()).toEqual([
+      "a-chat",
+      "env-chat",
+    ]);
+
+    signedInAs("user-b");
+    expect(store.getState().chats.allIds).toEqual([]);
     handle.dispose();
   });
 });

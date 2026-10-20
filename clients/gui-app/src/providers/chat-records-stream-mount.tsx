@@ -131,16 +131,16 @@ export function ChatRecordsStreamMount(): ReactNode {
         if (delta.kind === "upsert" || delta.kind === "tuiUpsert") {
           // A chat row asks the one helper, so a team host's
           // environment-owned `own` row counts as the viewer's; a terminal
-          // agent stays member-owned and answers by owner equality. No list
-          // snapshot is stamped on this path, so it fails open as the boot
-          // window does: the frame is from this connection's own stream.
+          // agent stays member-owned and answers by owner equality. The frame
+          // was answered on this connection's stream for the identity signed
+          // in now, so that is the identity its `own` word is trusted for.
           const viewersRow =
             delta.kind === "upsert"
               ? isChatVisibleToUser(
                   delta.record.origin,
                   delta.record.ownerUserId,
                   userId,
-                  null,
+                  userId,
                 )
               : delta.record.ownerUserId === userId;
           if (viewersRow) {

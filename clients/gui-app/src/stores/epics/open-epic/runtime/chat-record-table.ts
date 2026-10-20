@@ -227,13 +227,19 @@ export function createChatRecordTable(
   const pendingCreations = new Map<string, RetainedChatCreation>();
 
   /**
-   * The signed-in user when the latest list SNAPSHOT was applied, and the only
-   * identity the host's `own` word is trusted for - see `isChatVisibleToUser`.
-   * Table-level, and deltas leave it alone: after an account switch the
-   * previous identity's `own` rows stop admitting until the new identity's
-   * first answer lands. `null` until a snapshot has applied with a profile.
+   * The identity this table's rows were answered for, and the only one the
+   * host's `own` word is trusted for - see `isChatVisibleToUser`. Table-level:
+   * every list SNAPSHOT re-stamps it with the signed-in user, and any other
+   * ingest that lands rows (a delta, a touch, a confirmed point read) stamps it
+   * only while it is still `null`. So rows that arrived under A keep the stamp
+   * A, and after a switch to B the previous identity's `own` rows stop
+   * admitting until B's first snapshot lands. `null` until some ingest ran
+   * with a profile signed in.
    */
   let answeredForViewer: string | null = null;
+  const stampIfUnanswered = (): void => {
+    if (answeredForViewer === null) answeredForViewer = getCurrentUserId();
+  };
 
   /**
    * Drops this session's creations of `chatId` on `hostId`, whoever they were
@@ -441,11 +447,15 @@ export function createChatRecordTable(
       );
     },
 
-    applyTouches: (patches) => published(table.applyTouches(patches)),
+    applyTouches: (patches) => {
+      stampIfUnanswered();
+      return published(table.applyTouches(patches));
+    },
 
     applyConfirmedMutation: (mutation) => {
       if (mutation.kind === "upsert") {
         if (confirmedDeletions.has(identityKey(mutation.record))) return null;
+        stampIfUnanswered();
         const held = table.retainedRow(
           recordKey(mutation.record.ownerUserId, mutation.record.chatId),
         );
@@ -476,6 +486,7 @@ export function createChatRecordTable(
         return published(table.applyRemoval(delta.chatId, delta.reason));
       }
       if (confirmedDeletions.has(identityKey(delta.record))) return null;
+      stampIfUnanswered();
       // `host.chatRecords.subscribe` carries the BASE row, which says nothing
       // about the home - and unlike the terminal twin, "a doc-homed row cannot
       // produce a delta" is FALSE here: `ChatRegistryService.acquire` calls

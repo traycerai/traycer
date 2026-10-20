@@ -650,13 +650,14 @@ function isOwnedRecordVisibleToUser(
  * host lists that row as `own` only to a viewer who may act on it.
  *
  * The host is the authority for an `own` row only for the identity it
- * answered. `answeredForViewer` is the signed-in user when the table's latest
- * list snapshot was applied, so after an account switch the previous
- * identity's `own` rows stop admitting until the new identity's first answer
- * re-stamps it. `null` (no snapshot yet, or one that landed before a profile
- * hydrated) fails open, as the boot window always has. Every other case
- * answers by owner equality, failing open as described above, so the
- * viewer's own rows show whatever the stamp says.
+ * answered, so the arm admits only when `answeredForViewer` - whom the table's
+ * rows were answered for - IS the current viewer. After an account switch the
+ * previous identity's `own` rows stop admitting until the new identity's first
+ * answer re-stamps it. A `null` stamp admits only while the viewer is `null`
+ * too, the boot fail-open the owner arm below already gives; once a viewer is
+ * known, rows nobody stamped wait for an answer. Every other case answers by
+ * owner equality, failing open as described above, so the viewer's own rows
+ * show whatever the stamp says.
  */
 export function isChatVisibleToUser(
   origin: ChatRecordOrigin | null,
@@ -664,12 +665,7 @@ export function isChatVisibleToUser(
   currentUserId: string | null,
   answeredForViewer: string | null,
 ): boolean {
-  if (
-    origin === "own" &&
-    (answeredForViewer === null || answeredForViewer === currentUserId)
-  ) {
-    return true;
-  }
+  if (origin === "own" && answeredForViewer === currentUserId) return true;
   return isOwnedRecordVisibleToUser(ownerUserId, currentUserId);
 }
 
