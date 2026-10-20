@@ -38,6 +38,8 @@ const dialogMocks = vi.hoisted(() => ({
   creates: [] as Array<{ readonly client: unknown; readonly input: unknown }>,
   events: [] as string[],
   clientsByHostId: new Map<string, unknown>(),
+  /** The host the app-wide (effective) client belongs to. */
+  appWideHostId: "tab-host-id",
   directoryHosts: [] as HostDirectoryEntry[],
   toastError: vi.fn<(message: string) => void>(),
 }));
@@ -87,7 +89,8 @@ vi.mock("@/lib/host", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/host")>();
   return {
     ...actual,
-    useHostClient: () => dialogMocks.clientsByHostId.get(TAB_HOST_ID) ?? null,
+    useHostClient: () =>
+      dialogMocks.clientsByHostId.get(dialogMocks.appWideHostId) ?? null,
     useHostBinding: () => ({
       directory: { selectById: vi.fn() },
     }),
@@ -252,7 +255,10 @@ function personalEntry(hostId: string, label: string): HostDirectoryEntry {
 }
 
 /** A team's sandbox: a remote row whose `sandbox.ownerTeamId` names the team. */
-function teamSandboxEntry(hostId: string, teamId: string): RemoteHostDirectoryEntry {
+function teamSandboxEntry(
+  hostId: string,
+  teamId: string,
+): RemoteHostDirectoryEntry {
   return {
     hostId,
     label: "Team sandbox",
@@ -271,7 +277,7 @@ function teamSandboxEntry(hostId: string, teamId: string): RemoteHostDirectoryEn
     publicKey: `pubkey-${hostId}`,
     relayFuseGrace: false,
     sandbox: {
-      state: "running",
+      state: "awake",
       frozen: false,
       profile: "agent",
       ownerTeamName: "Team",
@@ -435,7 +441,9 @@ function forkButton(): HTMLButtonElement {
   return screen.getByRole<HTMLButtonElement>("button", { name: "Fork" });
 }
 
-function rpcError(code: "FORBIDDEN" | "E_HOST_UNSUPPORTED" | "RPC_ERROR"): HostRpcError {
+function rpcError(
+  code: "FORBIDDEN" | "E_HOST_UNSUPPORTED" | "RPC_ERROR",
+): HostRpcError {
   return new HostRpcError({
     code,
     message: "refused by the host",
@@ -470,6 +478,7 @@ describe("ChatForkDialog continuing a personal task on a team host", () => {
     attachCalls.length = 0;
     onOpenChange.mockReset();
     dialogMocks.clientsByHostId.clear();
+    dialogMocks.appWideHostId = TAB_HOST_ID;
     dialogMocks.clientsByHostId.set(TAB_HOST_ID, TAB_HOST_CLIENT);
     dialogMocks.clientsByHostId.set(TEAM_HOST_ID, TEAM_HOST_CLIENT);
     dialogMocks.directoryHosts = [TAB_ENTRY, TEAM_ENTRY];
@@ -562,6 +571,24 @@ describe("ChatForkDialog continuing a personal task on a team host", () => {
       expect(dialogMocks.creates).toHaveLength(1);
     });
 
+    expect(dialogMocks.creates[0]?.client).toBe(TEAM_HOST_CLIENT);
+    expect(dialogMocks.toastError).not.toHaveBeenCalled();
+  });
+  it("sends the attachment through the tab's own host when the app-wide host is a team host", async () => {
+    // The person activated team host A; the source tab stays on their own
+    // host. The attachment is theirs to send, never A's member credential's.
+    dialogMocks.appWideHostId = TEAM_HOST_ID;
+    await startFork();
+
+    expect(dialogMocks.events).toEqual([`attach-sent@${TAB_HOST_ID}`]);
+    expect(attachCalls[0]?.params).toEqual({
+      epicId: "epic-test",
+      teamId: TEAM_ID,
+    });
+    attachCalls[0]?.settle("resolve");
+    await waitFor(() => {
+      expect(dialogMocks.creates).toHaveLength(1);
+    });
     expect(dialogMocks.creates[0]?.client).toBe(TEAM_HOST_CLIENT);
     expect(dialogMocks.toastError).not.toHaveBeenCalled();
   });

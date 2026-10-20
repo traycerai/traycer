@@ -10,6 +10,15 @@ import { epicMutationKeys } from "@/lib/query-keys/epic-mutation-keys";
 export const ATTACH_ENVIRONMENT_REFUSED_COPY =
   "Ask the task's owner to continue it on a team host.";
 
+/** Shown when no host of the person's own is connected to send it from. */
+export const ATTACH_ENVIRONMENT_NEEDS_OWN_HOST_COPY =
+  "Open this task on your own computer to continue it on a team host.";
+
+/** The refusal when no host of the person's own can send the attachment. */
+export function toastAttachEnvironmentNeedsOwnHost(): void {
+  toast.error(ATTACH_ENVIRONMENT_NEEDS_OWN_HOST_COPY);
+}
+
 /** A host that predates `epic.attachEnvironment` answers this for it alone. */
 export function isAttachEnvironmentUnsupported(error: unknown): boolean {
   return error instanceof HostRpcError && error.code === "E_HOST_UNSUPPORTED";

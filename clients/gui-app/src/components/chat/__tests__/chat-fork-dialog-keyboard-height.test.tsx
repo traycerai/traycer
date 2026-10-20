@@ -96,6 +96,7 @@ vi.mock("@/components/epic-canvas/hooks/use-tab-host-id", () => ({
 // so every fork here goes on to `epic.createChat` as it did before.
 vi.mock("@/hooks/epic/use-epic-attach-environment-mutation", () => ({
   isAttachEnvironmentUnsupported: () => false,
+  toastAttachEnvironmentNeedsOwnHost: () => undefined,
   useEpicAttachEnvironment: () => ({
     isPending: false,
     mutate: (_input: unknown, options: { readonly onSuccess: () => void }) => {

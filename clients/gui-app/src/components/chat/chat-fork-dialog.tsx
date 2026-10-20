@@ -42,6 +42,7 @@ import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus
 import { useEpicCreateChatForHostClient } from "@/hooks/epic/use-epic-chat-mutations";
 import {
   isAttachEnvironmentUnsupported,
+  toastAttachEnvironmentNeedsOwnHost,
   useEpicAttachEnvironment,
 } from "@/hooks/epic/use-epic-attach-environment-mutation";
 import { useHostOwnerTeamId } from "@/hooks/sandboxes/use-on-team-sandbox";
@@ -562,7 +563,16 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
     selectedHostTeamId !== null && selectedHostTeamId !== tabHostTeamId
       ? selectedHostTeamId
       : null;
-  const attachEnvironment = useEpicAttachEnvironment(appWideClient);
+  // The attachment is the person's act, so it travels on a host no team owns:
+  // the source tab's, else the app-wide one. A team's host would send it with
+  // a member's credential, which the cloud refuses. With neither, there is no
+  // host to send it from.
+  const appWideHostTeamId = useHostOwnerTeamId(appWideClient.getActiveHostId());
+  const personalAppWideClient =
+    appWideHostTeamId === null ? appWideClient : null;
+  const attachClient =
+    tabHostTeamId === null ? tabHostClient : personalAppWideClient;
+  const attachEnvironment = useEpicAttachEnvironment(attachClient);
   const sourceOwnerUserId = useCloneSourceOwnerUserId({
     client: appWideClient,
     epicId,
@@ -829,6 +839,10 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
       createForkChat();
       return;
     }
+    if (attachClient === null) {
+      toastAttachEnvironmentNeedsOwnHost();
+      return;
+    }
     attachEnvironment.mutate(
       { epicId, teamId: attachTeamId },
       {
@@ -840,6 +854,7 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
       },
     );
   }, [
+    attachClient,
     attachEnvironment,
     attachTeamId,
     canSubmit,
