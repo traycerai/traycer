@@ -1,5 +1,5 @@
 import "fake-indexeddb/auto";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, renderHook } from "@testing-library/react";
 import { createIndexedDbViewReplicaBackend } from "@traycer-clients/shared/view-replica/indexeddb-backend";
 import { ViewReplicaStore } from "@traycer-clients/shared/view-replica/store";
@@ -217,6 +217,32 @@ describe("notification feed replica", () => {
       remember(6);
 
       expect(cachedFeedIds()).toBeNull();
+    });
+
+    it("hits a snapshot at the acknowledged version that arrived before the acknowledgement, and so does a reopened replica", async () => {
+      const now = vi.spyOn(Date, "now");
+      try {
+        await viewReplicaStore.warm(ACCOUNT);
+        now.mockReturnValue(300);
+        remember(7);
+        now.mockReturnValue(400);
+
+        noteNotificationFeedConfirmedWrite(ACCOUNT, 7);
+
+        expect(cachedFeedIds()).toEqual(["unread"]);
+        await viewReplicaStore.drain();
+        const reopened = new ViewReplicaStore(
+          createIndexedDbViewReplicaBackend(
+            () => globalThis.indexedDB,
+            VIEW_REPLICA_DB_NAME,
+          ),
+        );
+        await reopened.warm(ACCOUNT);
+        const hit = reopened.read(notificationFeedReplicaService, address());
+        expect(hit?.page.rows.map((row) => row.entryId)).toEqual(["unread"]);
+      } finally {
+        now.mockRestore();
+      }
     });
 
     it("hits the snapshot at the acknowledged version, which includes the write", async () => {
