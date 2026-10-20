@@ -411,6 +411,7 @@ export const HOST_UNARY_RPC_ROUTES = {
   "epic.artifactVersions.getBlob": "target-host",
   "epic.artifactVersions.list": "target-host",
   "epic.artifactVersions.restore": "target-host",
+  "epic.attachEnvironment": "target-host",
   "epic.batchDelete": "target-host",
   "epic.batchUpdateRoles": "target-host",
   "epic.cancelFetchFile": "target-host",
