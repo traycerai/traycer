@@ -21,7 +21,7 @@ describe("epic.state.subscribe@1.2 (files arm removed before release)", () => {
     );
   });
 
-  it("stays installed at minor 2, below the @1.3 head", () => {
+  it("stays installed at minor 2, below the @1.4 head", () => {
     expect(epicStateSubscribeV12.schemaVersion).toEqual({
       major: 1,
       minor: 2,
@@ -30,7 +30,7 @@ describe("epic.state.subscribe@1.2 (files arm removed before release)", () => {
       epicStateSubscribeServerFrameSchemaV12,
     );
     const line = hostStreamRpcRegistry["epic.state.subscribe"][1];
-    expect(line.latestMinor).toBe(3);
+    expect(line.latestMinor).toBe(4);
     expect(line.versions[2].contract).toBe(epicStateSubscribeV12);
   });
 

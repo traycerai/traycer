@@ -110,6 +110,11 @@ const KEYBOARD_KEY_READS: Readonly<Record<string, number>> = {
   // not resolve registered shortcut identity, which remains code-derived.
   "gui-app/src/components/browser-tile/browser-viewport-handles.tsx": 6,
   "gui-app/src/components/browser-tile/browser-viewport-toolbar.tsx": 5,
+  // Escape on a canvas artifact: the overlay clears the selected element
+  // before the board itself deselects, and the structure gesture abandons a
+  // drag or resize in flight. A named key, not a registered chord.
+  "gui-app/src/components/canvas-artifact/canvas-selection-overlay.tsx": 1,
+  "gui-app/src/components/canvas-artifact/use-canvas-structure-gesture.ts": 1,
   "gui-app/src/components/chat/chat-messages.tsx": 10,
   // Bare ArrowRight accepts an offered suggestion: a named platform
   // navigation/acceptance key, not a registered physical chord.
@@ -151,6 +156,8 @@ const KEYBOARD_KEY_READS: Readonly<Record<string, number>> = {
   "gui-app/src/components/epic-canvas/zoom-controls/zoom-controls.tsx": 7,
   // The search box's Escape (clears a non-empty query; not a registered chord).
   "gui-app/src/components/epics/epics-list-panel.tsx": 1,
+  // Bare Escape leaves the HTML artifact's edit selection. A named key.
+  "gui-app/src/components/html-artifact/html-selection-layer.tsx": 1,
   // The layout editor's sortable list: Space grabs a row (or activates it in
   // an unordered list), Enter activates, arrows move a grabbed row or, with
   // Alt, reorder it (L-31), and Escape cancels a grab. All named keys, none of
@@ -191,7 +198,10 @@ const KEYBOARD_KEY_READS: Readonly<Record<string, number>> = {
   // the system text bindings they stand in for do.
   "gui-app/src/lib/keybindings/list-navigation-key.ts": 3,
   "gui-app/src/lib/notifications/notification-feed-keyboard-navigation.ts": 1,
-  "gui-app/src/lib/sandbox/sandbox-loader.ts": 1,
+  // The sandboxed pages forward a press to the app. Both MATCH on `code` and
+  // only copy `key` into the forwarded payload beside it.
+  "gui-app/src/lib/sandbox/canvas-bootstrap.ts": 1,
+  "gui-app/src/lib/sandbox/sandbox-document.ts": 1,
   "gui-app/src/lib/terminal-line-edit.ts": 6,
   "gui-app/src/providers/keybinding-provider.tsx": 2,
   // The mac/non-mac history-modifier check, kept separate from every

@@ -199,6 +199,18 @@ export function readAttributes(
 ): HtmlAttribute[] {
   const attrs: HtmlAttribute[] = [];
   const seen = new Set<string>();
+  // Indexed once per tag: a lookup per authored attribute made a tag with
+  // thousands of attributes quadratic.
+  const parsedByName = new Map<
+    string,
+    DefaultTreeAdapterTypes.Element["attrs"][number]
+  >();
+  for (const attr of node.attrs) {
+    const qualifiedName = asciiLower(
+      attr.prefix ? `${attr.prefix}:${attr.name}` : attr.name,
+    );
+    if (!parsedByName.has(qualifiedName)) parsedByName.set(qualifiedName, attr);
+  }
   let cursor = nameEnd;
   while (cursor < end) {
     while (isHtmlSpace(text.charAt(cursor))) cursor++;
@@ -249,14 +261,7 @@ export function readAttributes(
     } else {
       cursor = nameRange.end;
     }
-    const parsed = seen.has(name)
-      ? undefined
-      : node.attrs.find(
-          (attr) =>
-            asciiLower(
-              attr.prefix ? `${attr.prefix}:${attr.name}` : attr.name,
-            ) === name,
-        );
+    const parsed = seen.has(name) ? undefined : parsedByName.get(name);
     seen.add(name);
     attrs.push({
       name,

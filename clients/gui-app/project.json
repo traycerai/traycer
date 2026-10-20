@@ -1,6 +1,10 @@
 {
   "name": "traycer-clients-gui-app",
-  "implicitDependencies": ["@traycer-clients/shared", "@traycer/protocol"],
+  "implicitDependencies": [
+    "@traycer-clients/shared",
+    "@traycer/protocol",
+    "@traycer/html-source"
+  ],
   "namedInputs": {
     "default": ["{projectRoot}/**/*"]
   },

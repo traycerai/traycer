@@ -135,7 +135,7 @@ const baseEpicArtifactFields = {
   // segment for anything that displays it. Absent means the entry sits directly
   // under its parent (or the root) as `folderName`, which is every entry
   // written before this field existed.
-  relativePath: artifactManifestPathSchema.optional(),
+  relativePath: lazySchema(() => artifactManifestPathSchema.optional()),
 } as const;
 
 export const specArtifactSchema = lazySchema(() =>

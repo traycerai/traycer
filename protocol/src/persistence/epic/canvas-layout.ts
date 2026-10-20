@@ -13,6 +13,7 @@
  */
 import * as Y from "yjs";
 import { z } from "zod";
+import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 
 export const CANVAS_LAYOUT_ROOT_PREFIX = "canvas-layout:";
 export const CANVAS_LAYOUT_VERSION_FIELD = "v";
@@ -81,63 +82,71 @@ export function openCanvasLayout(
   };
 }
 
-const number = z.number().finite().optional();
-const pageSchema = z
-  .object({ id: z.string().optional(), name: z.string().optional() })
-  .passthrough();
-const boardSchema = z
-  .object({
-    x: number,
-    y: number,
-    w: number,
-    h: number,
-    page: z.string().optional(),
-    title: z.string().optional(),
-    is_interactive: z.boolean().optional(),
-    radius: number,
-  })
-  .passthrough();
-const noteSchema = z
-  .object({
-    type: z
-      .enum([
-        "sticky",
-        "title",
-        "rect",
-        "oval",
-        "line",
-        "arrow",
-        "pen",
-        "image",
-      ])
-      .optional(),
-    x: number,
-    y: number,
-    w: number,
-    h: number,
-    x2: number,
-    y2: number,
-    text: z.string().optional(),
-    color: z.string().optional(),
-    size: number,
-    maxW: number,
-    points: z.string().optional(),
-    src: z.string().optional(),
-    page: z.string().optional(),
-  })
-  .passthrough();
+const number = lazySchema(() => z.number().finite().optional());
+const pageSchema = lazySchema(() =>
+  z
+    .object({ id: z.string().optional(), name: z.string().optional() })
+    .passthrough(),
+);
+const boardSchema = lazySchema(() =>
+  z
+    .object({
+      x: number,
+      y: number,
+      w: number,
+      h: number,
+      page: z.string().optional(),
+      title: z.string().optional(),
+      is_interactive: z.boolean().optional(),
+      radius: number,
+    })
+    .passthrough(),
+);
+const noteSchema = lazySchema(() =>
+  z
+    .object({
+      type: z
+        .enum([
+          "sticky",
+          "title",
+          "rect",
+          "oval",
+          "line",
+          "arrow",
+          "pen",
+          "image",
+        ])
+        .optional(),
+      x: number,
+      y: number,
+      w: number,
+      h: number,
+      x2: number,
+      y2: number,
+      text: z.string().optional(),
+      color: z.string().optional(),
+      size: number,
+      maxW: number,
+      points: z.string().optional(),
+      src: z.string().optional(),
+      page: z.string().optional(),
+    })
+    .passthrough(),
+);
 
 /** Missing data is repaired by the host; malformed present fields are rejected. */
-export const canvasJsonV1Schema = z
-  .object({
-    v: z.literal(1).optional(),
-    title: z.string().optional(),
-    pages: z.array(pageSchema).optional(),
-    boards: z.record(z.string(), boardSchema).optional(),
-    notes: z.record(z.string(), noteSchema).optional(),
-    order: z.array(z.string()).optional(),
-  })
-  .passthrough();
+export const canvasJsonV1Schema = lazySchema(() =>
+  z
+    .object({
+      v: z.literal(1).optional(),
+      title: z.string().optional(),
+      pages: z.array(pageSchema).optional(),
+      boards: z.record(z.string(), boardSchema).optional(),
+      notes: z.record(z.string(), noteSchema).optional(),
+      order: z.array(z.string()).optional(),
+    })
+    .passthrough(),
+);
 export type CanvasJsonV1 = z.infer<typeof canvasJsonV1Schema>;
 export type CanvasBoard = z.infer<typeof boardSchema>;
 export type CanvasNote = z.infer<typeof noteSchema>;

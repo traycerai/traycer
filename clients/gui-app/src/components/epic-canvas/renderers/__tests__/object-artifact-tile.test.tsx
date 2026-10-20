@@ -53,6 +53,9 @@ vi.mock("@/lib/epic-selectors", () => ({
   useEpicArtifactBodyLease: (id: string | null) => {
     mocks.bodyLeases.push(id);
   },
+  // Comments on the tile have their own tests; here the room stays unanswered
+  // so the tile renders without its comment layer.
+  useEpicCommentRoomAvailability: () => ({ kind: "checking" as const }),
 }));
 
 vi.mock("@/hooks/use-epic-store", () => ({
@@ -110,8 +113,13 @@ function node(id: string): EpicArtifactRef {
   };
 }
 
+// Tile renderers always mount under the tab's host provider.
 function tile(id: string): ReactNode {
-  return <ObjectArtifactTile node={node(id)} epicId={EPIC_ID} />;
+  return (
+    <TabHostContext.Provider value="host-1">
+      <ObjectArtifactTile node={node(id)} epicId={EPIC_ID} />
+    </TabHostContext.Provider>
+  );
 }
 
 afterEach(() => {
@@ -242,11 +250,7 @@ describe("<ObjectArtifactTile />", () => {
       mocks.mobile = true;
       setArtifacts([canvasArtifact()]);
 
-      render(
-        <TabHostContext.Provider value="host-1">
-          {tile("board")}
-        </TabHostContext.Provider>,
-      );
+      render(tile("board"));
 
       expect(screen.getByTestId("canvas-surface")).toBeTruthy();
       expect(screen.queryByTestId("sandbox-frame")).toBeNull();

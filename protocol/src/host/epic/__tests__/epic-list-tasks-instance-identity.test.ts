@@ -31,13 +31,13 @@ import {
  * protocol package.
  */
 describe("epic.listTasks instance identity", () => {
-  // The LATEST installed minor, which `@1.7` now is - bump alongside
+  // The LATEST installed minor, which `@1.8` now is - bump alongside
   // `latestMinor` in the registry. The index is spelled rather than derived
   // because the invariant is about the canonical contract specifically; a
   // derived lookup would keep passing while silently pointing at whatever
   // happened to be last.
   const hostContract =
-    hostRpcRegistry["epic.listTasks"][1].versions[7].contract;
+    hostRpcRegistry["epic.listTasks"][1].versions[8].contract;
 
   it("host request schema is the canonical listTasksRequestSchema instance", () => {
     expect(hostContract.requestSchema).toBe(listTasksRequestSchema);

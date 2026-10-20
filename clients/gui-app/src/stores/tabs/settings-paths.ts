@@ -29,6 +29,8 @@ export const SETTINGS_PATHS = new Set([
   "browser",
   "browser-agent-access",
   "delete-account",
+  "dev-artifact-proof",
+  "dev-canvas-proof",
   "devices",
   "diagnostics",
   "fallback",

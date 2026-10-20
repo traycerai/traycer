@@ -464,6 +464,15 @@ const MOBILE_APP_ONLY_SECTION_IDS: ReadonlySet<SettingsSectionId> = new Set([
 ]);
 
 /**
+ * Proof pages for developers, offered in navigation by dev builds only. They
+ * stay in `SETTINGS_SECTIONS` so a production deep link still resolves and
+ * reaches its 404 panel, and they have no settings-search collection, since
+ * search would otherwise point production users at pages they cannot open.
+ */
+export const DEV_ONLY_SETTINGS_SECTION_IDS: ReadonlySet<SettingsSectionId> =
+  new Set(["dev-artifact-proof", "dev-canvas-proof"]);
+
+/**
  * Both offered lists, resolved once at module load.
  *
  * Precomputed rather than filtered per call so each build's list keeps ONE
@@ -475,12 +484,9 @@ const MOBILE_APP_ONLY_SECTION_IDS: ReadonlySet<SettingsSectionId> = new Set([
  * before the first render, which is not necessarily before this module is
  * evaluated.
  */
-// Keep the path resolvable so a production deep link reaches its 404 panel,
-// while only dev builds offer the proof in navigation.
 const OFFERED_SECTIONS = SETTINGS_SECTIONS.filter(
   (section) =>
-    import.meta.env.DEV ||
-    (section.id !== "dev-artifact-proof" && section.id !== "dev-canvas-proof"),
+    import.meta.env.DEV || !DEV_ONLY_SETTINGS_SECTION_IDS.has(section.id),
 );
 
 const DESKTOP_SECTIONS: ReadonlyArray<SettingsSection> =

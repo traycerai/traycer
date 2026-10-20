@@ -13,6 +13,12 @@ export type CheckpointFileOperation = z.infer<
   typeof checkpointFileOperationSchema
 >;
 
+const checkpointArtifactKindSchema = getRecordSchema(
+  commonRecordRegistry,
+  "epic-artifact-kind",
+  "latest",
+);
+
 /**
  * Tags a manifest entry whose `filePath` is a Traycer artifact `index.md`. The
  * presence of this tag (non-null) is what marks an entry as an artifact change:
@@ -36,11 +42,7 @@ export const checkpointArtifactTagSchemaPreHtml = lazySchema(() =>
 // the frozen copy through 1.31 and the live copy from 1.32.
 export const checkpointArtifactTagSchema = lazySchema(() =>
   checkpointArtifactTagSchemaPreHtml.extend({
-    kind: getRecordSchema(
-      commonRecordRegistry,
-      "epic-artifact-kind",
-      "latest",
-    ).nullable(),
+    kind: checkpointArtifactKindSchema.nullable(),
   }),
 );
 export type CheckpointArtifactTag = z.infer<typeof checkpointArtifactTagSchema>;
