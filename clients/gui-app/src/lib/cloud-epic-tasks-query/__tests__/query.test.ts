@@ -1,11 +1,15 @@
 import { QueryClient, QueryObserver } from "@tanstack/react-query";
 import { beforeEach, describe, expect, it } from "vitest";
+import { waitFor } from "@testing-library/react";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
 import { hostRpcRegistry, type HostRpcRegistry } from "@traycer/protocol/host";
-import type { ListTasksResponse } from "@traycer/protocol/host/epic/unary-schemas";
+import type {
+  ListTaskLight,
+  ListTasksResponse,
+} from "@traycer/protocol/host/epic/unary-schemas";
 import type { HistorySearchState } from "@/lib/history-search";
 import {
   DEFAULT_HISTORY_SEARCH,
@@ -275,6 +279,7 @@ describe("the unfiltered History read's contribution state", () => {
           abortSignal: controller.signal,
           localFirstPhase: undefined,
           requestContextPolicy: "wait",
+          queryClient,
         }),
       ).rejects.toBeDefined();
 
@@ -342,6 +347,7 @@ describe("the first page when the pool leg does not answer", () => {
         abortSignal: undefined,
         localFirstPhase: undefined,
         requestContextPolicy: "require-current",
+        queryClient: new QueryClient(),
       },
     );
   }
@@ -377,6 +383,137 @@ describe("the first page when the pool leg does not answer", () => {
       });
       expect(host.listCalls()).toBe(1);
     } finally {
+      __resetCloudEpicTasksClientsForTests();
+      useAuthStore.getState().setSignedOut();
+    }
+  });
+});
+
+describe("the deletion fence after the pool's page", () => {
+  function row(id: string): ListTaskLight {
+    return {
+      epic: {
+        light: {
+          id,
+          title: id,
+          initialUserPrompt: "",
+          ticketCount: 0,
+          specCount: 0,
+          storyCount: 0,
+          reviewCount: 0,
+          status: "draft",
+          createdAt: 0,
+          updatedAt: 0,
+          createdBy: USER_ID,
+          version: "1.0.0",
+        },
+        permission: null,
+        repos: [],
+        workspaces: [],
+        roomInfo: null,
+      },
+      pinned: false,
+    };
+  }
+
+  // The deletion ledger is process-wide, so each case deletes its own id.
+  function setup(goneId: string, fenceTombstones: readonly string[]) {
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    const reads: boolean[] = [];
+    const messenger = new MockHostMessenger<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      requestId: () => "deletion-fence",
+      handlers: {
+        "epic.listTasks": () => ({
+          tasks: [row("kept"), row(goneId)],
+          hasMore: false,
+        }),
+        "epic.localHistory.read": () => {
+          reads.push(true);
+          return {
+            complete: true,
+            willComplete: true,
+            localHomeRows: [],
+            preservedRows: [],
+            // The first read predates the deletion; the fence read is the
+            // post-pool one and sees it.
+            tombstonedEpicIds: reads.length === 1 ? [] : [...fenceTombstones],
+            localRows: "none",
+          } satisfies LocalHistoryReadResponse;
+        },
+      },
+    });
+    const spine = new HostClient<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      invalidator: createHostQueryInvalidator(queryClient),
+      findHostById: (hostId) =>
+        hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,
+      messenger,
+    });
+    spine.setRequestContext(requestContextFor(USER_ID));
+    useAuthStore.getState().setSignedIn(USER_PROFILE, USER_CONTEXT, []);
+    __resetCloudEpicTasksClientsForTests();
+    __resetHistoryContributionsForTests();
+    registerCloudEpicTasksClient(
+      mockLocalHostEntry.hostId,
+      spine.createRequester(mockLocalHostEntry),
+    );
+    const options = cloudEpicTasksFirstPageQueryOptions(
+      mockLocalHostEntry.hostId,
+      USER_ID,
+      LIST_CLOUD_TASKS_REQUEST,
+    );
+    return { queryClient, options, reads };
+  }
+
+  function paintedIds(page: ListTasksResponse | undefined): string[] {
+    return (page?.tasks ?? []).map((task) => task.epic?.light?.id ?? "");
+  }
+
+  it("removes a task the host deleted after its first read from the cached page", async () => {
+    const { queryClient, options, reads } = setup("gone-deleted", [
+      "gone-deleted",
+    ]);
+    const observer = new QueryObserver(queryClient, options);
+    const unsubscribe = observer.subscribe(() => undefined);
+
+    try {
+      await waitFor(() => {
+        expect(reads).toHaveLength(2);
+        expect(
+          paintedIds(
+            queryClient.getQueryData<ListTasksResponse>(options.queryKey),
+          ),
+        ).toEqual(["kept"]);
+      });
+    } finally {
+      unsubscribe();
+      __resetCloudEpicTasksClientsForTests();
+      useAuthStore.getState().setSignedOut();
+    }
+  });
+
+  it("leaves the cached page as it was when the fence tombstones nothing new", async () => {
+    const { queryClient, options, reads } = setup("gone-kept", []);
+    const observer = new QueryObserver(queryClient, options);
+    const unsubscribe = observer.subscribe(() => undefined);
+
+    try {
+      await waitFor(() => {
+        expect(reads).toHaveLength(2);
+      });
+      const settled = queryClient.getQueryData<ListTasksResponse>(
+        options.queryKey,
+      );
+      expect(paintedIds(settled)).toEqual(["kept", "gone-kept"]);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(
+        queryClient.getQueryData<ListTasksResponse>(options.queryKey),
+      ).toBe(settled);
+    } finally {
+      unsubscribe();
       __resetCloudEpicTasksClientsForTests();
       useAuthStore.getState().setSignedOut();
     }

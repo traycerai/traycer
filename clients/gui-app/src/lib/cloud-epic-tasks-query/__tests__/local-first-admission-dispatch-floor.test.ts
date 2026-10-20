@@ -1,3 +1,4 @@
+import { QueryClient } from "@tanstack/react-query";
 import { afterEach, describe, expect, it } from "vitest";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
@@ -95,6 +96,7 @@ function fetchFirstPage(): Promise<ListTasksResponse> {
     abortSignal: undefined,
     localFirstPhase: undefined,
     requestContextPolicy: "require-current",
+    queryClient: new QueryClient(),
   });
 }
 

@@ -66,42 +66,61 @@ export async function readHistoryHostContribution(input: {
 
 const ABSENT: HistoryHostContribution = { kind: "absent" };
 
-const unfiltered = new Map<string, HistoryHostContributionState>();
+/** The last answer learned for each (account, host) scope. */
+const settled = new Map<string, HistoryHostContribution>();
+/**
+ * The reads of each scope still in flight. A scope is `pending` while any is,
+ * so one reader giving up never releases the paint another still holds, in
+ * whichever order they finish.
+ */
+const holds = new Map<string, Set<symbol>>();
 const listeners = new Set<() => void>();
 
 function scopeKey(accountId: string, hostId: string): string {
   return JSON.stringify([accountId, hostId]);
 }
 
-/** Records what the host contributes to the unfiltered listing. */
+function notify(): void {
+  for (const listener of [...listeners]) listener();
+}
+
+/**
+ * Records what the host contributes to the unfiltered listing. An answer
+ * supersedes every read still in flight for the scope: the paint has what it
+ * waited for.
+ */
 export function noteUnfilteredHistoryContribution(
   accountId: string,
   hostId: string,
-  state: HistoryHostContributionState,
+  contribution: HistoryHostContribution,
 ): void {
-  unfiltered.set(scopeKey(accountId, hostId), state);
-  for (const listener of [...listeners]) listener();
+  const key = scopeKey(accountId, hostId);
+  settled.set(key, contribution);
+  holds.delete(key);
+  notify();
 }
 
 /**
  * Holds the paint while a read of the unfiltered contribution is in flight,
  * and returns how to abandon it: an abandoned read (its caller aborted, or it
- * failed) puts back what was there before, so a `pending` nobody will answer
- * never outlives its reader.
+ * failed) releases only its own hold, so a `pending` nobody will answer never
+ * outlives its readers.
  */
 export function noteUnfilteredHistoryContributionPending(
   accountId: string,
   hostId: string,
 ): () => void {
   const key = scopeKey(accountId, hostId);
-  const previous = unfiltered.get(key);
-  const pending: HistoryHostContributionState = { kind: "pending" };
-  noteUnfilteredHistoryContribution(accountId, hostId, pending);
+  const hold = Symbol("history-contribution-read");
+  const scopeHolds = holds.get(key) ?? new Set<symbol>();
+  scopeHolds.add(hold);
+  holds.set(key, scopeHolds);
+  notify();
   return () => {
-    if (unfiltered.get(key) !== pending) return;
-    if (previous === undefined) unfiltered.delete(key);
-    else unfiltered.set(key, previous);
-    for (const listener of [...listeners]) listener();
+    const current = holds.get(key);
+    if (current === undefined || !current.delete(hold)) return;
+    if (current.size === 0) holds.delete(key);
+    notify();
   };
 }
 
@@ -109,8 +128,11 @@ export function unfilteredHistoryContribution(
   accountId: string,
   hostId: string,
 ): HistoryHostContributionState | undefined {
-  return unfiltered.get(scopeKey(accountId, hostId));
+  const key = scopeKey(accountId, hostId);
+  return holds.has(key) ? PENDING : settled.get(key);
 }
+
+const PENDING: HistoryHostContributionState = { kind: "pending" };
 
 export function subscribeUnfilteredHistoryContributions(
   listener: () => void,
@@ -123,7 +145,8 @@ export function subscribeUnfilteredHistoryContributions(
 
 /** Test-only: forget every recorded contribution. */
 export function __resetHistoryContributionsForTests(): void {
-  unfiltered.clear();
+  settled.clear();
+  holds.clear();
 }
 
 const cachedRequestScopeSchema = z.object({

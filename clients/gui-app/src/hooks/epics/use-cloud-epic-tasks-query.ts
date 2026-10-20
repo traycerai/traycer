@@ -185,7 +185,7 @@ function localFirstRevalidationQueryOptions(
       variables.request,
       variables.lease.generation,
     ),
-    queryFn: () =>
+    queryFn: ({ client }) =>
       fetchCloudEpicTasksFirstPageByHostId(
         variables.scope.hostId,
         variables.scope.userId,
@@ -194,6 +194,7 @@ function localFirstRevalidationQueryOptions(
           abortSignal: undefined,
           localFirstPhase: "revalidate",
           requestContextPolicy: "require-current",
+          queryClient: client,
         },
       ),
     retry: false,

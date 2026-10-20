@@ -238,10 +238,12 @@ describe("applyHistoryContributionToCachedPage", () => {
       applyHistoryContributionToCachedPage(page, address("{}"), "host-1"),
     ).toBeNull();
 
-    noteUnfilteredHistoryContribution(ACCOUNT, "host-1", { kind: "pending" });
+    noteUnfilteredHistoryContribution(ACCOUNT, "host-1", { kind: "absent" });
+    const abandon = noteUnfilteredHistoryContributionPending(ACCOUNT, "host-1");
     expect(
       applyHistoryContributionToCachedPage(page, address("{}"), "host-1"),
     ).toBeNull();
+    abandon();
   });
 
   it("applies a learned contribution with the sort parsed from the request scope", () => {
@@ -357,6 +359,77 @@ describe("noteUnfilteredHistoryContributionPending", () => {
     subscribeUnfilteredHistoryContributions(listener);
 
     abandon();
+
+    expect(unfilteredHistoryContribution(ACCOUNT, "host-1")).toBe(learned);
+    expect(listener).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["A then B", true],
+    ["B then A", false],
+  ])(
+    "releases the paint once both overlapping reads are abandoned, %s",
+    (_order, abandonFirstHoldFirst) => {
+      const abandonA = noteUnfilteredHistoryContributionPending(
+        ACCOUNT,
+        "host-1",
+      );
+      const abandonB = noteUnfilteredHistoryContributionPending(
+        ACCOUNT,
+        "host-1",
+      );
+      const [first, second] = abandonFirstHoldFirst
+        ? [abandonA, abandonB]
+        : [abandonB, abandonA];
+
+      first();
+      expect(unfilteredHistoryContribution(ACCOUNT, "host-1")).toEqual({
+        kind: "pending",
+      });
+      second();
+
+      expect(unfilteredHistoryContribution(ACCOUNT, "host-1")).toBeUndefined();
+    },
+  );
+
+  it("falls back to the earlier settled answer once overlapping reads are abandoned", () => {
+    noteUnfilteredHistoryContribution(ACCOUNT, "host-1", { kind: "absent" });
+    const abandonA = noteUnfilteredHistoryContributionPending(
+      ACCOUNT,
+      "host-1",
+    );
+    const abandonB = noteUnfilteredHistoryContributionPending(
+      ACCOUNT,
+      "host-1",
+    );
+
+    abandonA();
+    abandonB();
+
+    expect(unfilteredHistoryContribution(ACCOUNT, "host-1")).toEqual({
+      kind: "absent",
+    });
+  });
+
+  it("clears every hold when an answer is noted, so later abandons change nothing", () => {
+    const abandonA = noteUnfilteredHistoryContributionPending(
+      ACCOUNT,
+      "host-1",
+    );
+    const abandonB = noteUnfilteredHistoryContributionPending(
+      ACCOUNT,
+      "host-1",
+    );
+    const learned: HistoryHostContribution = {
+      kind: "contributed",
+      read: response({ tombstonedEpicIds: ["gone"] }),
+    };
+    noteUnfilteredHistoryContribution(ACCOUNT, "host-1", learned);
+    const listener = vi.fn();
+    subscribeUnfilteredHistoryContributions(listener);
+
+    abandonA();
+    abandonB();
 
     expect(unfilteredHistoryContribution(ACCOUNT, "host-1")).toBe(learned);
     expect(listener).not.toHaveBeenCalled();

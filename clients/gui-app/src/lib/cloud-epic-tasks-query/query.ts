@@ -3,7 +3,11 @@ import type {
   CloudTaskFilters,
 } from "@traycer/protocol/host/organization/schemas";
 import { getNegotiatedHostMethods } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
-import { queryOptions, replaceEqualDeep } from "@tanstack/react-query";
+import {
+  queryOptions,
+  replaceEqualDeep,
+  type QueryClient,
+} from "@tanstack/react-query";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import {
   hostRpcServingTierHostId,
@@ -30,7 +34,10 @@ import {
 import { beginLocalFirstRevalidationEpisode } from "@/lib/cloud-epic-tasks-query/local-first-revalidation-coordinator";
 import { CloudEpicTasksRequestContextTimeoutError } from "@/lib/cloud-epic-tasks-query/request-context-timeout-error";
 import { CloudEpicTasksVerdictWithdrawnError } from "@/lib/cloud-epic-tasks-query/verdict-withdrawn-error";
-import { admitCloudEpicTasksFirstPage } from "@/lib/cloud-epic-tasks-query/cache";
+import {
+  admitCloudEpicTasksFirstPage,
+  removeDeletedEpicsFromCloudTaskCaches,
+} from "@/lib/cloud-epic-tasks-query/cache";
 import { rememberHistoryFirstPage } from "@/lib/view-replica/history-replica";
 import {
   composeHistoryPage,
@@ -143,6 +150,11 @@ interface FetchCloudEpicTasksFirstPageOptions {
   readonly abortSignal: AbortSignal | undefined;
   readonly localFirstPhase: LocalFirstPhase | undefined;
   readonly requestContextPolicy: "wait" | "require-current";
+  /**
+   * The cache the page is written to, which the deletion fence edits once
+   * the page is in it.
+   */
+  readonly queryClient: QueryClient;
 }
 
 /**
@@ -207,6 +219,7 @@ export function fetchCloudEpicTasksFirstPageByHostId(
         hostId,
         userId,
       });
+      fenceDeletionsAfterPoolPage(hostId, userId, options, composition);
       rememberHistoryFirstPage({
         accountId: userId,
         hostId,
@@ -262,6 +275,45 @@ export class HostLocalHistoryUnavailableError extends Error {
     super("The host's local History could not be read.");
     this.name = "HostLocalHistoryUnavailableError";
   }
+}
+
+/**
+ * The deletion fence. The contribution is read beside the pool's page, so a
+ * task the host deletes after its read and before the cloud learns of it is
+ * on the pool's page with no tombstone to remove it. A second read,
+ * dispatched only once the pool's page has arrived, sees every deletion up
+ * to then; what it tombstones that the first did not leaves the History
+ * caches and joins the deletion ledger, which also fences a cache write
+ * still in flight. The page paints from the first read and never waits on
+ * this one. A deletion after the fence is any later deletion.
+ */
+function fenceDeletionsAfterPoolPage(
+  hostId: string,
+  userId: string,
+  options: FetchCloudEpicTasksFirstPageOptions,
+  composition: Omit<ComposeHistoryPageInput, "page">,
+): void {
+  const applied = new Set(
+    composition.contribution.kind === "contributed"
+      ? composition.contribution.read.tombstonedEpicIds
+      : [],
+  );
+  readHistoryContributionForPage(hostId, userId, {
+    filters: options.request.filters,
+    abortSignal: options.abortSignal,
+    requestContextPolicy: "require-current",
+  }).then(
+    (fence) => {
+      if (fence.kind !== "contributed") return;
+      removeDeletedEpicsFromCloudTaskCaches(
+        options.queryClient,
+        { hostId, userId },
+        fence.read.tombstonedEpicIds.filter((id) => !applied.has(id)),
+      );
+    },
+    // A fence that cannot be read leaves the page as the first read made it.
+    () => undefined,
+  );
 }
 
 /**
@@ -389,6 +441,7 @@ export function cloudEpicTasksFirstPageQueryOptions(
         abortSignal: signal,
         localFirstPhase: "initial",
         requestContextPolicy: "wait",
+        queryClient: client,
       });
     },
     // First-page delivery admits the response before it reaches TanStack so
