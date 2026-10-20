@@ -6,7 +6,7 @@
  * key is filled in when a kind is added.
  */
 import {
-  AppWindow,
+  FileCode,
   BookOpen,
   Bot,
   ClipboardCheck,
@@ -105,7 +105,7 @@ export const EPIC_NODE_ICONS: Readonly<Record<EpicNodeKind, LucideIcon>> = {
   ticket: Ticket,
   story: BookOpen,
   review: ClipboardCheck,
-  html: AppWindow,
+  html: FileCode,
   canvas: PanelsTopLeft,
   file: File,
   terminal: Terminal,
