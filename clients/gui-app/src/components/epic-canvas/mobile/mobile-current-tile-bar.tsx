@@ -1,8 +1,6 @@
-import { useCallback } from "react";
 import { TabIcon } from "@/components/epic-canvas/canvas/tab-strip";
 import {
   terminalTabDisplayTitle,
-  terminalTabRenamable,
   terminalTabUsesLegacyReads,
   useTerminalTabControl,
   type TerminalTabControl,
@@ -11,25 +9,17 @@ import {
   useBrowserTabPresentation,
   type BrowserTabPresentation,
 } from "@/components/epic-canvas/canvas/browser-tab-presentation";
-import { InlineTitleField } from "@/components/epic-canvas/mobile/inline-title-field";
 import { ContentMinimapButton } from "@/components/minimap/content-minimap-button";
 import { useChatStreamSyncState } from "@/hooks/chats/use-chat-stream-sync-state";
 import { usePublishSurfaceSync } from "@/hooks/sync/use-publish-surface-sync";
 import { useStreamSyncingSpell } from "@/hooks/sync/use-stream-syncing-spell";
 import { SURFACE_SYNC_RANK } from "@/stores/sync/surface-sync-store";
 import { NO_STREAM_SYNCING_SPELL } from "@/lib/sync/stream-syncing-state";
-import { tileRenameKind } from "@/components/epic-canvas/mobile/use-switcher-rename";
-import { useRenameCanvasTab } from "@/components/epic-canvas/canvas/use-rename-canvas-tab";
-import { useTerminalRenameFor } from "@/hooks/terminal/use-terminal-rename-for-mutation";
 import "@/components/layout/shell/mobile-shell-touch-targets.css";
 import {
-  useEpicPermissionRole,
-  useEpicNodeHostId,
   useEpicTabDisplayTitle,
   useEpicLiveArtifactTitleGenerating,
 } from "@/lib/epic-selectors";
-import { isEditableRole } from "@/lib/epic-permissions";
-import { useChatWriteRoute } from "@/hooks/epic/use-chat-write-route";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import type {
   BrowserSessionTileRef,
@@ -39,7 +29,6 @@ import type {
 
 interface MobileCurrentTileBarProps {
   readonly epicId: string;
-  readonly tabId: string;
   readonly tile: EpicCanvasTileRef;
 }
 
@@ -50,9 +39,9 @@ interface MobileCurrentTileBarProps {
  * trigger, so this bar carries no BETWEEN-tile navigation; the minimap moves
  * within the tile already on screen.
  *
- * The title renames in place for every kind that has a name of its own
- * (agents, artifacts, raw terminals) and an editor's permission; anything else
- * reads as plain text, matching what the switcher rows offer for the same item.
+ * The title is a label, never a control: a tap on this bar is almost always a
+ * reach for the tile below it. Renaming a tile lives in the switcher row's
+ * actions menu.
  *
  * Icon + title reuse the exact desktop tab-strip resolution (`TabIcon`,
  * `useEpicTabDisplayTitle`), including the terminal bound-host client so a
@@ -75,10 +64,9 @@ export function MobileCurrentTileBar(props: MobileCurrentTileBarProps) {
 }
 
 /**
- * A terminal's title and rename go through its host authority, as the tab
- * strip's do: the plain verbs on a capable host, the legacy `terminal.list` /
- * `terminal.rename` only on a host without them (the Automations host serves
- * the plain verbs alone).
+ * A terminal's title goes through its host authority, as the tab strip's does:
+ * the plain verbs on a capable host, the legacy `terminal.list` only on a host
+ * without them (the Automations host serves the plain verbs alone).
  */
 function MobileTerminalCurrentTileBar(
   props: Omit<MobileCurrentTileBarProps, "tile"> & {
@@ -119,7 +107,7 @@ function MobileCurrentTileBarBody(
     readonly terminalControl: TerminalTabControl | null;
   },
 ) {
-  const { epicId, tabId, tile, browserPresentation, terminalControl } = props;
+  const { epicId, tile, browserPresentation, terminalControl } = props;
   const isTerminal = tile.type === "terminal";
   // Terminal titles resolve against the tab's bound host; `null` for every
   // other kind (mirrors the tab strip). `useHostClientForHostId(null)` returns
@@ -149,43 +137,6 @@ function MobileCurrentTileBarBody(
     browserPresentation?.title ??
     terminalTabDisplayTitle(terminalControl, fallbackDisplayTitle);
 
-  const renameKind = tileRenameKind(tile);
-  const canMutate = isEditableRole(useEpicPermissionRole());
-  // An unadopted chat's title must not become EDITABLE. Refusing at commit
-  // would silently discard what the user typed; refusing to enter edit mode
-  // tells them before they type, which is the same rule the sidebar's
-  // disabled Rename entry follows.
-  // A same-id row on another host cannot determine this tile's editability.
-  // Its owning host validates the rename, as in the commit handler.
-  const projectedHostId = useEpicNodeHostId(tile.id);
-  const matchesProjection =
-    projectedHostId === null || projectedHostId === tile.hostId;
-  const chatWriteRoute = useChatWriteRoute(
-    tile.type === "chat" && matchesProjection,
-    tile.id,
-  );
-  const editable =
-    renameKind !== null &&
-    canMutate &&
-    chatWriteRoute !== "unavailable" &&
-    terminalTabRenamable(terminalControl);
-  const rename = useRenameCanvasTab(epicId, tabId);
-  const renameTerminal = useTerminalRenameFor(terminalHostClient);
-  const handleCommit = useCallback(
-    (next: string) => {
-      if (renameKind === null) return;
-      const trimmed = next.trim();
-      if (trimmed.length === 0) return;
-      if (tile.type === "terminal") {
-        commitTerminalTitle(terminalControl, trimmed, () =>
-          renameTerminal.mutate({ sessionId: tile.id, title: trimmed }),
-        );
-        return;
-      }
-      rename(tile, trimmed);
-    },
-    [rename, renameKind, renameTerminal, terminalControl, tile],
-  );
   // A chat is the one tile kind whose own stream can be away while its content
   // stays on screen with nothing said about it. Terminals already overlay
   // theirs, a shell window already banners its own, and every artifact kind is
@@ -243,33 +194,14 @@ function MobileCurrentTileBarBody(
           titleGenerationPending={titleGenerationPending}
           browserPresentation={browserPresentation}
         />
-        <InlineTitleField
-          value={displayTitle}
-          editable={editable}
-          onCommit={handleCommit}
-          inputLabel="Tab title"
-          testId="mobile-current-tile-title"
+        <span
+          data-testid="mobile-current-tile-title"
           className="min-w-0 flex-1 truncate text-ui-sm font-medium text-foreground"
-        />
+        >
+          {displayTitle}
+        </span>
         <ContentMinimapButton tileInstanceId={tile.instanceId} />
       </div>
     </div>
   );
-}
-
-/**
- * A terminal rename: through the authority on a capable host, nothing while it
- * is still deciding, the legacy `terminal.rename` only off a capable host.
- */
-function commitTerminalTitle(
-  control: TerminalTabControl | null,
-  title: string,
-  renameLegacy: () => void,
-): void {
-  if (control?.mode === "capable") {
-    control.rename(title);
-    return;
-  }
-  if (control?.mode === "unknown") return;
-  renameLegacy();
 }

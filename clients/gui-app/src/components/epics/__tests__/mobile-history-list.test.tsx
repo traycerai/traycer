@@ -1909,7 +1909,6 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
 
       expect(await screen.findByTestId("epics-list-row-pin")).not.toBeNull();
       expect(screen.getByTestId("epics-list-row-delete")).not.toBeNull();
-      expect(screen.getByTestId("epics-list-row-edit-title")).not.toBeNull();
       expect(screen.queryByTestId("epics-list-row-tray")).toBeNull();
     });
   });

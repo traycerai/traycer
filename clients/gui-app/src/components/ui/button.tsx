@@ -171,6 +171,12 @@ const buttonVariants = cva(
           "size-6 rounded-sm in-data-[slot=button-group]:rounded-md [&_svg:not([class*='size-'])]:size-3",
         "icon-sm": "size-7 rounded-sm in-data-[slot=button-group]:rounded-md",
         "icon-lg": "size-9",
+        // `icon-sm`'s glyph in a box a finger can find: the phone header's
+        // hamburger, where a near miss used to land on the title beside it.
+        // The header row's full height rather than 44px, because the row is
+        // 40px tall; the mobile shell's coarse-pointer slop adds the vertical
+        // rest without moving anything.
+        "icon-touch": "size-10 rounded-sm",
         // A round control floating over content rather than sitting in a bar:
         // the always-visible actions button a page row wears on a coarse
         // pointer (D40, the MobileChat artboard's 30px circle).

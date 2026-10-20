@@ -16,7 +16,7 @@ export interface TerminalTabControl {
 
 /**
  * Shared by the tab strip and the phone's current-tile bar, so a terminal
- * renames the same way on both. A host that serves only the plain verbs (the
+ * reads the same title on both; only the strip renames through it. A host that serves only the plain verbs (the
  * Automations host) is never sent the legacy ones.
  */
 export function useTerminalTabControl(
@@ -66,12 +66,4 @@ export function terminalTabDisplayTitle(
     return control.displayTitle;
   }
   return fallbackTitle;
-}
-
-/** Whether a rename may be offered, as far as the terminal's authority says. */
-export function terminalTabRenamable(
-  control: TerminalTabControl | null,
-): boolean {
-  if (control === null || control.mode === "legacy") return true;
-  return control.mode === "capable" && control.canMutate;
 }
