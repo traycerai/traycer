@@ -968,7 +968,7 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
       expect(screen.queryByTestId("epics-list-empty")).toBeNull();
     });
 
-    it("renders the rows with no cloud or device notice when the cloud page is unavailable", async () => {
+    it("renders the rows with the reduced-coverage line, naming no cloud or device, when the cloud page is unavailable", async () => {
       testState.items = [
         historyItem({ id: "history-local", epicId: "local", title: "Local" }),
       ];
@@ -982,7 +982,11 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
 
       const rows = await screen.findByTestId("epics-list-rows");
       expect(rows.textContent).toContain("Local");
-      expect(screen.queryByRole("status")).toBeNull();
+      // The serving tier did not answer, so the host's rows alone are on
+      // screen: the list says some may be missing, never where rows came from.
+      expect(screen.getByRole("status").textContent).toBe(
+        "Some tasks may be missing from this list.",
+      );
       // Scoped to the list body's own container rather than the whole
       // document: unrelated chrome (a filter chip label, for example) could
       // otherwise fail this assertion for a reason that has nothing to do

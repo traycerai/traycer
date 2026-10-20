@@ -1598,6 +1598,29 @@ describe("<EpicsListPanel />", () => {
     expect(listBody?.textContent ?? "").not.toMatch(/device/i);
   });
 
+  it("states that tasks may be missing for a host-only page when the pool did not answer", async () => {
+    // The host-only page shape (composeHistoryPageWithoutPool): the host
+    // answered completely, the pool did not.
+    testState.items = [
+      historyItem({ id: "history-local", epicId: "local", title: "Local" }),
+    ];
+    testState.completeness = {
+      cloudPage: "unavailable",
+      facets: "partial",
+      localRows: "present",
+      sort: "loaded-union",
+    };
+    renderPanel("page", "/");
+
+    const rows = await screen.findByTestId("epics-list-rows");
+    expect(rows.textContent).toContain("Local");
+    const coverageNote = screen.getByTestId("epics-list-reduced-coverage");
+    expect(coverageNote.textContent).toBe(
+      "Some tasks may be missing from this list.",
+    );
+    expect(coverageNote.getAttribute("role")).toBe("status");
+  });
+
   it("disables pin mutation for a local-home epic and names the cloud-sync boundary", async () => {
     testState.items = [
       historyItem({

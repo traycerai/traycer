@@ -8,6 +8,7 @@ import type {
 import {
   composeHistoryPage,
   composeHistoryPageWithoutPool,
+  historyCoverageIsReduced,
   hostLocalHistoryPage,
   type HistoryHostContribution,
   type HistoryLocalRowsPlacement,
@@ -375,5 +376,30 @@ describe("hostLocalHistoryPage", () => {
       cloudPage: "unavailable",
       localRows: "present",
     });
+  });
+});
+
+describe("historyCoverageIsReduced", () => {
+  it("states reduced coverage for the host-only page when the pool did not answer", () => {
+    const hostOnly = composeHistoryPageWithoutPool({
+      contribution: readOf({
+        localHomeRows: [plain("a", 1)],
+        localRows: "present",
+      }),
+      placement: "admit",
+      sort: "recent",
+      query: undefined,
+    });
+
+    expect(hostOnly?.completeness?.cloudPage).toBe("unavailable");
+    expect(hostOnly?.completeness?.localRows).toBe("present");
+    expect(historyCoverageIsReduced(hostOnly?.completeness ?? null)).toBe(true);
+  });
+
+  it("states no reduced coverage for a settled server page", () => {
+    const settled = compose(pageOf([plain("a", 5)], {}), readOf({}), "admit");
+
+    expect(settled.completeness?.cloudPage).toBe("settled");
+    expect(historyCoverageIsReduced(settled.completeness ?? null)).toBe(false);
   });
 });
