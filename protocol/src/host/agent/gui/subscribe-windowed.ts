@@ -1648,7 +1648,7 @@ export const openChatTranscriptWindowSchemaPreDelivery = lazySchema(() =>
   }),
 );
 
-/** The `1.25`-`1.27` range, with the same pre-delivery body as its tail. */
+/** The `1.25`-`1.28` range, with the same pre-delivery body as its tail. */
 export const openChatRangeResponseSchemaPreDelivery = lazySchema(() =>
   chatRangeResponseSchema.extend({
     messages: z.array(openMessageSchemaPreDelivery),

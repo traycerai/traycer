@@ -243,7 +243,7 @@ export const openAssistantMessageSchema = lazySchema(() =>
 );
 export type OpenAssistantMessage = z.infer<typeof openAssistantMessageSchema>;
 
-/** The open assistant row `chat.subscribe@1.23` through `@1.27` ship. */
+/** The open assistant row `chat.subscribe@1.23` through `@1.28` ship. */
 export const openAssistantMessageSchemaPreDelivery = lazySchema(() =>
   assistantMessageSchema.extend({
     sender: openAgentSenderSchema,

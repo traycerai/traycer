@@ -883,7 +883,7 @@ export const toolCallBlockSchema = lazySchema(() =>
     // Where a cross-host send stands (`chat.subscribe@1.29`) - see
     // `agentMessageDeliverySchema`. Null for every other tool call, for a
     // same-host send and for blocks persisted before this field. Not on the
-    // hand-frozen `toolCallBlockSchemaPreDelivery` below, so `1.27` and older
+    // hand-frozen `toolCallBlockSchemaPreDelivery` below, so `1.28` and older
     // never see it.
     agentMessageDelivery: agentMessageDeliverySchema.nullable().default(null),
     // The shell a `traycer_run_shell` call created - see
