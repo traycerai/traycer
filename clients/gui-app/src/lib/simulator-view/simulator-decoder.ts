@@ -131,10 +131,16 @@ export function defaultSimulatorDecoderRuntime(): SimulatorDecoderRuntime {
   };
 }
 
+/** The DOM sink; its owner disposes it once its elements are let go. */
+export interface CanvasFrameSink extends SimulatorFrameSink {
+  /** Revokes the object URL the `<img>` is showing; each new frame revokes the one before. */
+  readonly dispose: () => void;
+}
+
 export function createCanvasFrameSink(
   canvas: HTMLCanvasElement,
   image: HTMLImageElement | null,
-): SimulatorFrameSink {
+): CanvasFrameSink {
   let objectUrl: string | null = null;
   return {
     present(source, width, height) {
@@ -157,6 +163,10 @@ export function createCanvasFrameSink(
       image.src = next;
       if (previous !== null) URL.revokeObjectURL(previous);
       return true;
+    },
+    dispose() {
+      if (objectUrl !== null) URL.revokeObjectURL(objectUrl);
+      objectUrl = null;
     },
   };
 }
@@ -240,6 +250,9 @@ export function createSimulatorDecoder(args: {
   let decoder: SimulatorVideoDecoder | null = null;
   let lastConfig: VideoDecoderConfig | null = null;
   let awaitingKeyframe = true;
+  // Whether the hub has been asked for a keyframe since `awaitingKeyframe`
+  // last turned on, so a run of dropped deltas asks once, not once a frame.
+  let keyframeAsked = false;
   let configuring = false;
   let decodedFrames = 0;
   let timestamp = 0;
@@ -256,7 +269,13 @@ export function createSimulatorDecoder(args: {
     }
     decoder = null;
     awaitingKeyframe = true;
+    keyframeAsked = false;
     configuring = false;
+  };
+
+  const askForKeyframe = (reason: KeyframeNeededReason): void => {
+    keyframeAsked = true;
+    events.onKeyframeNeeded(reason);
   };
 
   const makeDecoder = (): SimulatorVideoDecoder => {
@@ -294,6 +313,7 @@ export function createSimulatorDecoder(args: {
       decoder.configure(config);
       lastConfig = config;
       awaitingKeyframe = true;
+      keyframeAsked = false;
       return true;
     } catch (cause) {
       events.onDecodeError(
@@ -318,7 +338,7 @@ export function createSimulatorDecoder(args: {
     if (applyConfig(full) && platform === "android") {
       // The SPS that configured us rode a frame the decoder was not yet ready
       // for; the hub has to start again from an IDR.
-      events.onKeyframeNeeded("configured");
+      askForKeyframe("configured");
     }
   };
 
@@ -332,12 +352,18 @@ export function createSimulatorDecoder(args: {
       return;
     }
     if (awaitingKeyframe) {
-      if (!isKey) return;
+      if (!isKey) {
+        // The keyframe this gap waits on may already have gone by, dropped
+        // while the configuration was still being probed; without a request
+        // the stream would stall until the hub sends one on its own.
+        if (!keyframeAsked) askForKeyframe("delta-before-keyframe");
+        return;
+      }
       awaitingKeyframe = false;
     }
     if (decoder.decodeQueueSize > SOFT_DECODE_QUEUE) {
       reset();
-      events.onKeyframeNeeded("backpressure");
+      askForKeyframe("backpressure");
       return;
     }
     try {

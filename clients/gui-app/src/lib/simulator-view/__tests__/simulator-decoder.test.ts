@@ -105,6 +105,34 @@ describe("iOS (avcc units)", () => {
     expect(ev.onFrame).toHaveBeenCalledWith({ width: 1179, height: 2556 });
   });
 
+  it("asks once for a keyframe when the first one went by while the configuration was probed", async () => {
+    const codec = fakeCodecRuntime(true);
+    const ev = events();
+    const decoder = createSimulatorDecoder({
+      platform: "ios",
+      sink: recordingSink(),
+      events: ev,
+      runtime: codec.runtime,
+    });
+    decoder.feed("description", AVCC_DESCRIPTION);
+    // The probe is still pending: the keyframe has no decoder to go to.
+    decoder.feed("keyframe", ANNEX_B_KEYFRAME);
+    await flushAsync();
+    expect(codec.decoders[0].state).toBe("configured");
+    expect(ev.onKeyframeNeeded).not.toHaveBeenCalled();
+
+    decoder.feed("delta", ANNEX_B_DELTA);
+    decoder.feed("delta", ANNEX_B_DELTA);
+    expect(codec.decoders[0].chunks).toHaveLength(0);
+    expect(ev.onKeyframeNeeded.mock.calls).toEqual([["delta-before-keyframe"]]);
+
+    // The keyframe ends the gap; the next gap asks again.
+    decoder.feed("keyframe", ANNEX_B_KEYFRAME);
+    decoder.reset();
+    decoder.feed("delta", ANNEX_B_DELTA);
+    expect(ev.onKeyframeNeeded).toHaveBeenCalledTimes(2);
+  });
+
   it("reports a rejected profile and creates no decoder", async () => {
     const codec = fakeCodecRuntime(false);
     const ev = events();

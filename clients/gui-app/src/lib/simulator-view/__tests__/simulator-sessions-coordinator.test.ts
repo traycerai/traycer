@@ -2,8 +2,9 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { SimulatorState } from "@traycer/protocol/host/simulator/schemas";
 import {
   FakeStreamClient,
-  type FakeStreamSession,
+  FakeStreamSession,
 } from "@traycer-clients/shared/host-transport/__testing__/fake-stream-client";
+import type { StatusChangeHandler } from "@traycer-clients/shared/host-transport/i-stream-session";
 import type { DurableStreamTransport } from "@/lib/host/durable-stream-transport";
 import {
   acquireSimulatorSessionsCoordinator,
@@ -78,6 +79,59 @@ function transportHarness(): {
       };
     },
   };
+}
+
+/**
+ * A session whose fatal close is the host's INCOMPATIBLE answer naming one
+ * method. The shared fake's `emitFatal` always says `UNAUTHORIZED`, so this
+ * one keeps the status handler to drive the coded close.
+ */
+class IncompatibleCloseSession extends FakeStreamSession {
+  private handler: StatusChangeHandler | null = null;
+
+  override onStatusChange(handler: StatusChangeHandler): void {
+    this.handler = handler;
+    super.onStatusChange(handler);
+  }
+
+  emitIncompatible(method: string): void {
+    this.handler?.(
+      "closed",
+      {
+        kind: "fatalError",
+        details: {
+          code: "INCOMPATIBLE",
+          reason: "host is missing a method",
+          incompatibleMethods: [
+            {
+              method,
+              clientCanonical: null,
+              hostCanonical: null,
+              blocking: "host-missing-method",
+            },
+          ],
+          upgradeGuidance: null,
+        },
+      },
+      null,
+    );
+  }
+}
+
+class IncompatibleCloseClient extends FakeStreamClient {
+  readonly codedSessions: IncompatibleCloseSession[] = [];
+
+  override subscribe(
+    method: string,
+    params: unknown,
+  ): IncompatibleCloseSession {
+    const session = new IncompatibleCloseSession();
+    this.sessions.push(session);
+    this.codedSessions.push(session);
+    this.subscribes.push({ method, params });
+    session.emitStatus("open");
+    return session;
+  }
 }
 
 function session(harness: {
@@ -180,6 +234,40 @@ describe("simulator sessions coordinator", () => {
   });
 
   it("reads an INCOMPATIBLE close for the method as a host that cannot show simulators", () => {
+    const clients: IncompatibleCloseClient[] = [];
+    const release = acquireSimulatorSessionsCoordinator({
+      key: KEY,
+      consumerId: Symbol("a"),
+      hostId: HOST,
+      epicId: EPIC,
+      openTransport: () => {
+        const client = new IncompatibleCloseClient(true);
+        clients.push(client);
+        return { wsStreamClient: client, close: () => client.close() };
+      },
+    });
+    const latest = (): IncompatibleCloseSession => {
+      const stream = clients.at(-1)?.codedSessions.at(-1);
+      if (stream === undefined) throw new Error("no simulator.sessions stream");
+      return stream;
+    };
+    expect(simulatorSessionsCoordinatorState(KEY)?.lifecycle).toBe("live");
+
+    // An INCOMPATIBLE close naming another method is an ordinary failure.
+    latest().emitIncompatible("simulator.stream");
+    expect(simulatorSessionsCoordinatorState(KEY)?.lifecycle).toBe("failed");
+
+    simulatorSessionsCoordinatorState(KEY)?.retry();
+    latest().emitIncompatible("simulator.sessions");
+    expect(simulatorSessionsCoordinatorState(KEY)).toMatchObject({
+      lifecycle: "unsupported",
+      errorMessage: SIMULATORS_UNSUPPORTED_MESSAGE,
+    });
+    expect(SIMULATORS_UNSUPPORTED_MESSAGE).toMatch(/update/);
+    release();
+  });
+
+  it("reads a plain close as closed, recovers on retry, and reads a fatal close as failed", () => {
     const harness = transportHarness();
     const release = acquireSimulatorSessionsCoordinator({
       key: KEY,
@@ -203,7 +291,6 @@ describe("simulator sessions coordinator", () => {
       lifecycle: "failed",
       errorMessage: "bearer expired",
     });
-    expect(SIMULATORS_UNSUPPORTED_MESSAGE).toMatch(/update/);
     release();
   });
 });

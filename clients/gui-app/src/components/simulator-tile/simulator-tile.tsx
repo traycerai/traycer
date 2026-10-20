@@ -522,13 +522,19 @@ function LiveSimulatorTile(props: {
     onCloseTile,
   ]);
 
-  const shutdownMutate = shutdown.mutation.mutate;
+  const shutdownMutateAsync = shutdown.mutation.mutateAsync;
   const onPowerOff = useCallback(() => {
-    shutdownMutate(
-      { epicId, simulatorId: node.simulatorId, platform },
-      { onSuccess: onCloseTile },
-    );
-  }, [epicId, node.simulatorId, onCloseTile, platform, shutdownMutate]);
+    // The tile closes off the mutation's OWN promise, never off `mutate`'s
+    // per-call `onSuccess`: the sessions stream can drop this simulator's
+    // session before the shutdown answers, which unmounts this tile and
+    // detaches the observer those callbacks reach. A failure is already
+    // toasted by the mutation and leaves the tile open.
+    void shutdownMutateAsync({
+      epicId,
+      simulatorId: node.simulatorId,
+      platform,
+    }).then(onCloseTile, () => undefined);
+  }, [epicId, node.simulatorId, onCloseTile, platform, shutdownMutateAsync]);
 
   const actionMutate = action.mutation.mutate;
   const orientation = streamState.config?.orientation ?? "portrait";

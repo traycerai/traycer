@@ -2478,8 +2478,8 @@ export const HOST_METHOD_POLL_TABLE = {
     poll: null,
   },
   // The simulator verbs: reads coalesce to the latest ask, every mutation is
-  // ordered. `open` waits on a boot (up to three minutes on the host side),
-  // so it carries no join timeout of its own.
+  // ordered. `open` waits on a boot, so its row below carries a longer
+  // response budget.
   "simulator.list": { ...LATEST_SCHEDULING, poll: null },
   // Settings' machine-wide read; polled only while the tools download.
   "simulator.status": {

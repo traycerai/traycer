@@ -121,6 +121,23 @@ describe("key and touch frames", () => {
       shouldForwardKey({ ...cmdW, metaKey: false, ctrlKey: true }, false),
     ).toBe(false);
   });
+
+  it("keeps Tab and Shift+Tab for the app so focus can leave the surface", () => {
+    const tab = {
+      key: "Tab",
+      code: "Tab",
+      altKey: false,
+      ctrlKey: false,
+      metaKey: false,
+      shiftKey: false,
+    };
+    expect(shouldForwardKey(tab, true)).toBe(false);
+    expect(shouldForwardKey({ ...tab, shiftKey: true }, false)).toBe(false);
+    // Any other unmodified key still reaches the device.
+    expect(shouldForwardKey({ ...tab, key: "a", code: "KeyA" }, true)).toBe(
+      true,
+    );
+  });
 });
 
 describe("orientation and buttons", () => {

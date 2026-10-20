@@ -347,6 +347,31 @@ describe("simulator stream controller", () => {
       expect(h.session().framesOfKind("preferMjpeg")).toHaveLength(2);
     });
 
+    it("reads as streaming again on the first JPEG after a transport drop, and measures stalls again", () => {
+      setMobileAppPlatform("ios");
+      const h = harness("ios", true, prefersMjpegFirst());
+      h.controller.start();
+      const mjpeg = { ...IOS_CONFIG, codec: "mjpeg" } as const;
+      const jpeg = new Uint8Array([0xff, 0xd8, 0xff, 0xd9]);
+      emitConfig(h.session(), mjpeg);
+      emitVideo(h.session(), "jpeg", jpeg);
+      expect(h.controller.getState().lifecycle).toBe("streaming");
+
+      h.session().emitStatus("reconnecting");
+      expect(h.controller.getState().lifecycle).toBe("reconnecting");
+      h.session().emitStatus("open");
+      emitConfig(h.session(), mjpeg);
+      emitVideo(h.session(), "jpeg", jpeg);
+      expect(h.controller.getState()).toMatchObject({
+        lifecycle: "streaming",
+        plane: "image",
+        stalled: false,
+      });
+      // IOS_CONFIG's hub sends a frame every 200 ms.
+      vi.advanceTimersByTime(200 * SIMULATOR_STALL_GAP_FRAME_INTERVALS);
+      expect(h.controller.getState().stalled).toBe(true);
+    });
+
     it("gives up on an Android emulator after three decode errors in ten seconds instead of looping on keyframes", async () => {
       setMobileAppPlatform("ios");
       const h = harness("android", true, prefersMjpegFirst());

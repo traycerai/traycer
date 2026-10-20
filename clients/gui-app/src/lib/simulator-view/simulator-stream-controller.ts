@@ -461,6 +461,10 @@ export function createSimulatorStreamController(
             firstFrame = true;
             clearWatchdog();
             publish({ lifecycle: "streaming", detail: null, plane: "image" });
+          } else if (state.lifecycle !== "streaming") {
+            // The first frame after a transport drop, which keeps
+            // `firstFrame` so the last frame stays on screen meanwhile.
+            publish({ lifecycle: "streaming", detail: null });
           }
           noteFrame();
           return;

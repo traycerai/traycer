@@ -109,12 +109,15 @@ export function buildKeyFrame(
  * Whether a key pressed on the focused surface belongs to the simulator or to
  * this app. A chord on the viewer's platform modifier (Cmd on a Mac, Ctrl
  * elsewhere) stays with the app - closing the tab, opening the palette - and
- * is never forwarded; everything else, modifiers included, goes to the device.
+ * is never forwarded. Tab and Shift+Tab stay with the app too, so keyboard
+ * focus can leave the surface. Everything else, modifiers included, goes to
+ * the device.
  */
 export function shouldForwardKey(
   event: KeyLike,
   viewerIsMac: boolean,
 ): boolean {
+  if (event.key === "Tab") return false;
   return viewerIsMac ? !event.metaKey : !event.ctrlKey;
 }
 

@@ -135,7 +135,7 @@ export function useSimulatorOpenMutation(
     responseTimeoutMs: SIMULATOR_OPEN_RESPONSE_TIMEOUT_MS,
     signalFor: null,
     options: {
-      mutationKey: simulatorMutationKeys.open(hostId ?? "", "*"),
+      mutationKey: simulatorMutationKeys.open(hostId ?? ""),
       onMutate: () => ({
         hostId: client?.getActiveHostId() ?? null,
         captured: undefined,

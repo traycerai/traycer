@@ -353,7 +353,7 @@ export const HOST_OVERVIEW = defineSettingsSection("host", {
     availableWhen: alwaysAvailable,
     keywords: [],
   },
-  useMobileSimulators: {
+  mobileSimulatorsEnabled: {
     kind: "row",
     group: "mobileSimulators",
     search: { contributesTo: "simulatorsTab" },
