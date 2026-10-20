@@ -7313,22 +7313,25 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
   },
   // Full-text search over this host's chats. Off-floor: a host without the
   // search index does not advertise it, and the client hides search.
-  "chat.continueHere": {
-    degrade: { kind: "unsupported" },
-    1: {
-      latestMinor: 0,
-      versions: {
-        0: { contract: chatContinueHereV10, upgradeFromPreviousVersion: null },
-      },
-      downgradePathsFromLatest: {},
-    },
-  },
   "chat.search": {
     degrade: { kind: "unsupported" },
     1: {
       latestMinor: 0,
       versions: {
         0: { contract: chatSearchV10, upgradeFromPreviousVersion: null },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  // Continue a removed team sandbox's chat on this sandbox host. Off-floor: a
+  // personal host, or one that predates it, does not advertise it, and the
+  // client offers Clone instead.
+  "chat.continueHere": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: { contract: chatContinueHereV10, upgradeFromPreviousVersion: null },
       },
       downgradePathsFromLatest: {},
     },

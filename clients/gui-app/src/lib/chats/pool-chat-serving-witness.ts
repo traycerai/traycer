@@ -105,7 +105,9 @@ export class PoolChatServingWitness implements RetainingChatServingWitness {
    * or still the previous account's). A new client reopens every retained
    * chat on it; the states already heard are kept until it answers.
    */
-  setStreamClient(client: IHostStreamClient<HostStreamRpcRegistry> | null): void {
+  setStreamClient(
+    client: IHostStreamClient<HostStreamRpcRegistry> | null,
+  ): void {
     if (client === this.client) return;
     this.client = client;
     for (const [key, watched] of this.watched) {
