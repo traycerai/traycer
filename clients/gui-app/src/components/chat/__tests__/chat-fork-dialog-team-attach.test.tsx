@@ -33,11 +33,6 @@ const TAB_HOST_ID = "tab-host-id";
 const TEAM_HOST_ID = "team-host-id";
 const TEAM_ID = "team-9";
 
-interface BlockedInput {
-  readonly hostId: string | null;
-  readonly harnessId: string | null;
-}
-
 const dialogMocks = vi.hoisted(() => ({
   /** Every `epic.createChat` the dialog sent, with the client it was sent on. */
   creates: [] as Array<{ readonly client: unknown; readonly input: unknown }>,
