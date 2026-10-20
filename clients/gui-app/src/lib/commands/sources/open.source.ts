@@ -57,8 +57,16 @@ const OPENER_CATEGORIES: ReadonlyArray<OpenerCategory> = [
   },
   {
     id: "simulators",
-    title: "Simulators",
-    keywords: ["simulator", "emulator", "ios", "android", "phone", "device"],
+    title: "Mobile simulators",
+    keywords: [
+      "simulator",
+      "emulator",
+      "mobile",
+      "ios",
+      "android",
+      "phone",
+      "device",
+    ],
     useItems: useSimulatorsOpenerItems,
   },
   {

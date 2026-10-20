@@ -82,7 +82,7 @@ export function useSimulatorConfigSetMutation(
   const mutation = useHostScopedMutationForClient(client, {
     method: "config.simulator.set",
     mutationKey: simulatorMutationKeys.configSet(hostId ?? ""),
-    errorMessage: "Couldn't change the simulator setting.",
+    errorMessage: "Couldn't change the mobile simulators setting.",
     invalidateMethods: CONFIG_INVALIDATIONS,
   });
   return { mutation, supported };

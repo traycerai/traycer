@@ -39,7 +39,7 @@ vi.mock("@/hooks/host/use-host-supports-method", () => ({
 }));
 vi.mock("@/hooks/simulator/use-simulator-mutations", () => ({
   useSimulatorConfigQuery: () => ({
-    data: { enabled: false, agentAccess: false },
+    data: { enabled: false },
   }),
   useSimulatorConfigSetMutation: () => ({
     mutation: { mutate: fakes.configSet, isPending: false },
@@ -318,10 +318,7 @@ describe("SimulatorsSidebarGroup", () => {
     );
     renderGroup();
     fireEvent.click(screen.getByTestId("epic-simulators-turn-on"));
-    expect(fakes.configSet).toHaveBeenCalledWith({
-      enabled: true,
-      agentAccess: false,
-    });
+    expect(fakes.configSet).toHaveBeenCalledWith({ enabled: true });
   });
 
   it("renders nothing for a host that can run neither platform, or cannot show simulators", () => {

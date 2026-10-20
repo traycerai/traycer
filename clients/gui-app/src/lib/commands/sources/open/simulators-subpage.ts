@@ -21,7 +21,7 @@ import {
 import { useSimulatorSessionsForHost } from "@/lib/simulator-view/use-simulator-sessions";
 
 /**
- * The "Simulators" opener category, beside Browser. It reads the same host
+ * The "Mobile simulators" opener category, beside Browser. It reads the same host
  * the Browser category does - the browsers surface pin - so the two agree
  * about which machine they list, and each row places that simulator's tile
  * into the bound target group; the tile connects, and boots when needed.
@@ -118,11 +118,11 @@ function emptyInventoryLabel(
 ): string {
   switch (packKind) {
     case "off":
-      return "Simulators are off on this host";
+      return "Mobile simulators are off on this host";
     case "installing":
-      return "Setting up simulators…";
+      return "Setting up mobile simulators…";
     default:
-      return "No simulators on this host";
+      return "No mobile simulators on this host";
   }
 }
 

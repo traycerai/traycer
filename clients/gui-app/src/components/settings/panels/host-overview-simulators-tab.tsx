@@ -1,3 +1,7 @@
+/**
+ * Docs: see ../SETTINGS.md (Host ▸ Overview ▸ Mobile simulators).
+ * Update that file whenever this settings surface changes.
+ */
 import { useState, type ReactNode } from "react";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type {
@@ -7,7 +11,8 @@ import type {
   SimulatorStatusResponse,
 } from "@traycer/protocol/host/simulator/schemas";
 import { UpdateProgressBar } from "@/components/host/update-progress-bar";
-import { BROWSER } from "@/components/settings/panels/browser-settings.definitions";
+import { HOST_OVERVIEW } from "@/components/settings/panels/host-overview.definitions";
+import { HostOverviewTabSections } from "@/components/settings/panels/host-overview-tabs";
 import { SettingsGroup } from "@/components/settings/settings-group";
 import { SettingsRow } from "@/components/settings/settings-row";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
@@ -15,7 +20,6 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
 import { Switch } from "@/components/ui/switch";
-import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
 import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
 import {
   useSimulatorConfigQuery,
@@ -23,23 +27,25 @@ import {
   useSimulatorRemoveToolsMutation,
   useSimulatorStatusQuery,
 } from "@/hooks/simulator/use-simulator-mutations";
-import { useHostClient, type HostRpcRegistry } from "@/lib/host";
+import type { HostRpcRegistry } from "@/lib/host";
 import { formatHostProgressBytes } from "@/lib/host/host-progress-copy";
 
 /**
- * Settings > Browser > Simulators: the two switches of `config.simulator`,
- * what this host's machine can run, and the simulator tools' install there.
+ * Overview ▸ Mobile simulators: the one switch of `config.simulator`, what
+ * this host's machine can run, and the simulator tools' install there. The
+ * page's host, like Ports: the client and the id are handed in by the panel.
  *
- * The ACTIVE host, like the agent-access rows beside it: Browser carries no
- * host scope of its own, so the switches are about the machine the app is
- * using, and the copy names it.
- *
- * The group renders only once the host advertises both config methods, the
- * same rule as agent browser access: a switch whose every flip fails is
- * worse than no switch.
+ * The switch gates the rest. Off: the switch alone, with the platform status
+ * folded into its description, plus the tools row only while the tools are
+ * still downloaded (so Remove stays reachable). On: Platforms and the tools
+ * row. On every host, in every state: a host that does not advertise both
+ * config methods gets one sentence in place of the switch, because a switch
+ * whose every flip fails is worse than no switch.
  */
-export function SimulatorSettingsGroup(props: {
+export function HostOverviewSimulatorsTab(props: {
+  readonly client: HostClient<HostRpcRegistry> | null;
   readonly hostId: string | null;
+  readonly hostName: string;
 }): ReactNode {
   const getSupported = useHostMethodSupport(
     props.hostId,
@@ -49,106 +55,141 @@ export function SimulatorSettingsGroup(props: {
     props.hostId,
     "config.simulator.set",
   );
-  if (getSupported !== true || setSupported !== true) return null;
-  return <SimulatorSettingsRows hostId={props.hostId} />;
+  const supported =
+    getSupported === null || setSupported === null
+      ? null
+      : getSupported && setSupported;
+  return (
+    <HostOverviewTabSections>
+      <SettingsGroup
+        group={HOST_OVERVIEW.definitions.mobileSimulators}
+        showTitle={false}
+        tone="default"
+        dataTestId="host-overview-mobile-simulators"
+        fill={false}
+      >
+        {supported === true ? (
+          <SimulatorSettingsRows
+            client={props.client}
+            hostId={props.hostId}
+            hostName={props.hostName}
+          />
+        ) : (
+          <SettingsRow
+            row={HOST_OVERVIEW.definitions.useMobileSimulators}
+            status={
+              supported === null
+                ? `Asking ${props.hostName} about mobile simulators.`
+                : `${props.hostName} needs an update before it can run mobile simulators.`
+            }
+            control={null}
+          />
+        )}
+      </SettingsGroup>
+    </HostOverviewTabSections>
+  );
 }
 
-/**
- * Rendered only under a positive method check, which is what makes
- * `useHostClient()` safe here: a host that advertised the methods has a
- * binding.
- */
+/** Rendered only under a positive method check. */
 function SimulatorSettingsRows(props: {
+  readonly client: HostClient<HostRpcRegistry> | null;
   readonly hostId: string | null;
+  readonly hostName: string;
 }): ReactNode {
-  const { hostId } = props;
-  const client = useHostClient();
-  const entryLabel = useHostDirectoryEntry(hostId)?.label.trim() ?? "";
-  const hostName = entryLabel.length > 0 ? entryLabel : (hostId ?? "this host");
+  const { client, hostId } = props;
   const config = useSimulatorConfigQuery(client, hostId);
   const status = useSimulatorStatusQuery(client, hostId);
   const statusSupported =
     useHostMethodSupport(hostId, "simulator.status") === true;
   const { mutation } = useSimulatorConfigSetMutation(client, hostId);
-  const switches: SimulatorSwitches = {
+  const switches: SimulatorSwitch = {
     enabled: config.data?.enabled === true,
-    agentAccess: config.data?.agentAccess === true,
-    // Unread, unreadable or mid-write: neither switch can be flipped.
+    // Unread, unreadable or mid-write: the switch cannot be flipped.
     locked: config.isPending || config.isError || mutation.isPending,
     unreadable: config.isError,
     writing: mutation.isPending,
     write: mutation.mutate,
   };
+  const installed = status.data?.installed ?? null;
   return (
-    <SettingsGroup
-      group={BROWSER.definitions.simulators}
-      showTitle
-      tone="default"
-      dataTestId="settings-browser-simulators"
-      fill={false}
-    >
+    <>
       <SimulatorEnabledRow
         switches={switches}
-        hostName={hostName}
-        noPlatform={status.data?.packState.kind === "unsupported"}
+        status={statusSupported ? (status.data ?? null) : null}
       />
-      <SimulatorAgentAccessRow switches={switches} />
-      {statusSupported ? (
-        <SimulatorStatusRows
-          client={client}
-          hostId={hostId}
-          status={status.data ?? null}
-          statusUnreadable={status.isError}
-          switches={switches}
-          hostName={hostName}
+      {/* Platforms only while on; the switch's description carries the
+          platform status while off. The tools row while on, and while off
+          only when there are bytes to remove. */}
+      {statusSupported && switches.enabled ? (
+        <SettingsRow
+          row={HOST_OVERVIEW.definitions.simulatorPlatforms}
+          status={status.isError ? "Couldn't ask this host." : undefined}
+          control={null}
+          details={
+            status.data === undefined ? null : (
+              <SimulatorPlatformList platforms={status.data.platforms} />
+            )
+          }
         />
       ) : null}
-    </SettingsGroup>
+      {statusSupported &&
+      status.data !== undefined &&
+      (switches.enabled || installed !== null) ? (
+        <SimulatorToolsRow
+          client={client}
+          hostId={hostId}
+          status={status.data}
+          switches={switches}
+          hostName={props.hostName}
+        />
+      ) : null}
+    </>
   );
 }
 
-interface SimulatorSwitches {
+interface SimulatorSwitch {
   readonly enabled: boolean;
-  readonly agentAccess: boolean;
   readonly locked: boolean;
   readonly unreadable: boolean;
   readonly writing: boolean;
-  /** Both switches travel on every write; the host keeps no implicit default. */
-  readonly write: (next: {
-    readonly enabled: boolean;
-    readonly agentAccess: boolean;
-  }) => void;
+  readonly write: (next: { readonly enabled: boolean }) => void;
 }
 
 function SimulatorEnabledRow(props: {
-  readonly switches: SimulatorSwitches;
-  readonly hostName: string;
-  readonly noPlatform: boolean;
+  readonly switches: SimulatorSwitch;
+  /** The host's status read, or null while it is unavailable or not advertised. */
+  readonly status: SimulatorStatusResponse | null;
 }): ReactNode {
-  const { switches } = props;
+  const { switches, status } = props;
+  const row = HOST_OVERVIEW.definitions.useMobileSimulators;
+  const noPlatform = status?.packState.kind === "unsupported";
+  // The definition always carries a description; the type allows null for
+  // rows that have none.
+  const rowDescription = row.description ?? "";
+  let description: string;
+  if (switches.unreadable) {
+    description =
+      "Couldn't read this host's mobile simulators setting. Repair Traycer's config.json on that machine, or back it up before resetting it, then reopen Settings.";
+  } else if (!switches.enabled && status !== null) {
+    // Off: the Platforms row is not drawn, so its answer rides here.
+    description = `${rowDescription} ${platformSummary(status.platforms)}`;
+  } else {
+    description = rowDescription;
+  }
   return (
     <SettingsRow
-      row={BROWSER.definitions.simulatorsEnabled}
-      status={
-        switches.unreadable
-          ? "Couldn't read this host's simulator setting. Repair Traycer's config.json on that machine, or back it up before resetting it, then reopen Settings."
-          : `On ${props.hostName}. ${BROWSER.definitions.simulatorsEnabled.description}`
-      }
+      row={row}
+      status={description}
       control={
         <Switch
           checked={switches.enabled}
           // A machine that can run neither platform has nothing to turn on;
           // one already on can still be turned off.
-          disabled={switches.locked || (props.noPlatform && !switches.enabled)}
-          aria-label="Use simulators"
+          disabled={switches.locked || (noPlatform && !switches.enabled)}
+          aria-label="Use mobile simulators"
           data-testid="settings-simulators-enabled"
           onCheckedChange={(next) => {
-            // Turning simulators off withdraws agent access too, which the
-            // host refuses to keep without them.
-            switches.write({
-              enabled: next,
-              agentAccess: next ? switches.agentAccess : false,
-            });
+            switches.write({ enabled: next });
           }}
         />
       }
@@ -156,72 +197,50 @@ function SimulatorEnabledRow(props: {
   );
 }
 
-function SimulatorAgentAccessRow(props: {
-  readonly switches: SimulatorSwitches;
-}): ReactNode {
-  const { switches } = props;
-  return (
-    <SettingsRow
-      row={BROWSER.definitions.simulatorAgentAccess}
-      status={
-        switches.enabled ? undefined : "Turn on Use simulators to allow this."
-      }
-      control={
-        <Switch
-          checked={switches.agentAccess}
-          disabled={!switches.enabled || switches.locked}
-          aria-label="Let agents drive simulators"
-          data-testid="settings-simulators-agent-access"
-          onCheckedChange={(next) => {
-            switches.write({ enabled: true, agentAccess: next });
-          }}
-        />
-      }
-    />
-  );
+const PLATFORM_LABELS = { ios: "iOS", android: "Android" } as const;
+
+/** "iOS available. Android: <reason>." for the switch's description while off. */
+function platformSummary(
+  platforms: readonly SimulatorPlatformAvailability[],
+): string {
+  return platforms
+    .map((platform) => {
+      const label = PLATFORM_LABELS[platform.platform];
+      return platform.available
+        ? `${label} available.`
+        : `${label}: ${platform.reason ?? "not available on this host."}`;
+    })
+    .join(" ");
 }
 
-function SimulatorStatusRows(props: {
+function SimulatorToolsRow(props: {
   readonly client: HostClient<HostRpcRegistry> | null;
   readonly hostId: string | null;
-  readonly status: SimulatorStatusResponse | null;
-  readonly statusUnreadable: boolean;
-  readonly switches: SimulatorSwitches;
+  readonly status: SimulatorStatusResponse;
+  readonly switches: SimulatorSwitch;
   readonly hostName: string;
 }): ReactNode {
   const { status, switches } = props;
-  const packState = status?.packState ?? null;
-  const installed = status?.installed ?? null;
+  const packState = status.packState;
+  const installed = status.installed;
   const remove = useSimulatorRemoveToolsMutation(props.client, props.hostId);
   const [confirmingRemove, setConfirmingRemove] = useState(false);
   // Remove is offered only for bytes the switch no longer needs: off, with
   // the tools still in the host's store. On, and they are in use or about
   // to be; the host refuses either way, so the button is not drawn.
   const removable =
-    remove.supported && packState?.kind === "off" && installed !== null;
+    remove.supported && packState.kind === "off" && installed !== null;
   return (
     <>
       <SettingsRow
-        row={BROWSER.definitions.simulatorPlatforms}
-        status={props.statusUnreadable ? "Couldn't ask this host." : undefined}
-        control={null}
-        details={
-          status === null ? null : (
-            <SimulatorPlatformList platforms={status.platforms} />
-          )
-        }
-      />
-      <SettingsRow
-        row={BROWSER.definitions.simulatorTools}
+        row={HOST_OVERVIEW.definitions.simulatorTools}
         status={
-          status === null || packState === null ? undefined : (
-            <SimulatorToolsStatus
-              packState={packState}
-              packVersion={status.packVersion}
-              installed={installed}
-              hostName={props.hostName}
-            />
-          )
+          <SimulatorToolsStatus
+            packState={packState}
+            packVersion={status.packVersion}
+            installed={installed}
+            hostName={props.hostName}
+          />
         }
         control={
           <SimulatorToolsControl
@@ -239,7 +258,7 @@ function SimulatorStatusRows(props: {
         open={confirmingRemove}
         onOpenChange={setConfirmingRemove}
         title="Remove simulator tools?"
-        description={`Remove the simulator tools from ${props.hostName}? Turning simulators on downloads them again.`}
+        description={`Remove the simulator tools from ${props.hostName}? Turning mobile simulators on downloads them again.`}
         // Nothing is nested under the tools; the cascade slot is for rows
         // with descendants.
         cascadeSummary={null}
@@ -262,14 +281,14 @@ function SimulatorStatusRows(props: {
  * Remove for downloaded tools the switch no longer needs, nothing otherwise.
  */
 function SimulatorToolsControl(props: {
-  readonly packState: SimulatorPackState | null;
+  readonly packState: SimulatorPackState;
   readonly removable: boolean;
   readonly removing: boolean;
-  readonly switches: SimulatorSwitches;
+  readonly switches: SimulatorSwitch;
   readonly onRemove: () => void;
 }): ReactNode {
   const { switches } = props;
-  if (props.packState?.kind === "failed") {
+  if (props.packState.kind === "failed") {
     return (
       <Button
         type="button"
@@ -279,12 +298,7 @@ function SimulatorToolsControl(props: {
         data-testid="settings-simulators-retry"
         // Re-asserting the switch is the install's retry: the host
         // converges the tools again on every `enabled: true`.
-        onClick={() =>
-          switches.write({
-            enabled: true,
-            agentAccess: switches.agentAccess,
-          })
-        }
+        onClick={() => switches.write({ enabled: true })}
       >
         {switches.writing ? (
           <AgentSpinningDots
@@ -318,8 +332,6 @@ function SimulatorToolsControl(props: {
     </Button>
   );
 }
-
-const PLATFORM_LABELS = { ios: "iOS", android: "Android" } as const;
 
 function SimulatorPlatformList(props: {
   readonly platforms: readonly SimulatorPlatformAvailability[];
@@ -361,13 +373,13 @@ function SimulatorToolsStatus(props: {
     case "off":
       return props.installed === null ? (
         <span data-testid="settings-simulator-tools-off">
-          Not downloaded. Turning simulators on downloads them to{" "}
+          Not downloaded. Turning mobile simulators on downloads them to{" "}
           {props.hostName}.
         </span>
       ) : (
         <span data-testid="settings-simulator-tools-downloaded">
           Downloaded, {formatHostProgressBytes(props.installed.sizeBytes)}.
-          Simulators are off.
+          Mobile simulators are off.
         </span>
       );
     case "installing": {

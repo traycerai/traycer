@@ -2,13 +2,13 @@ import { alwaysAvailable } from "@/lib/settings/settings-availability";
 import { defineSettingsSection } from "@/lib/settings-search/settings-definitions";
 
 // No host-GATED element carries an anchor (SETTINGS.md § Search); a tab trigger
-// is not gated. The page's four tab triggers render for every host in every
+// is not gated. The page's five tab triggers render for every host in every
 // state - connecting, restarting, unreachable, stopped - because the header and
 // the tab bar sit outside anything that withholds a body, and each tab body
 // decides for itself what it can show. So each tab anchors on its trigger (on a
 // phone, on the section Select, which carries the active tab's anchor), and a
 // search that lands there opens the tab. The page's own vocabulary is split
-// across the four tabs by the core flows' Search table; the words about the
+// across the five tabs by the core flows' Search table; the words about the
 // header (the host itself, its name, its connection, Restart) stay on the page,
 // since the header is on every tab.
 //
@@ -70,6 +70,31 @@ export const HOST_OVERVIEW = defineSettingsSection("host", {
       "localhost",
       "tunnel",
       "cut",
+    ],
+  },
+  // Mobile simulators: one switch for iOS Simulators and Android Emulators on
+  // this host, what the machine can run, and the simulator tools' install
+  // there. The rows below fold their words into this trigger, since the card
+  // and its rows come and go with the switch and the host's state.
+  simulatorsTab: {
+    kind: "group",
+    search: { anchor: "host-overview-tab-simulators" },
+    label: "Mobile simulators",
+    description:
+      "iOS Simulators and Android Emulators on this host, for you and for agents, and the simulator tools.",
+    breadcrumb: "Overview",
+    availableWhen: alwaysAvailable,
+    keywords: [
+      "simulator",
+      "emulator",
+      "iOS",
+      "Android",
+      "iPhone",
+      "Xcode",
+      "Android Studio",
+      "mobile",
+      "device",
+      "phone",
     ],
   },
   dataTab: {
@@ -249,6 +274,47 @@ export const HOST_OVERVIEW = defineSettingsSection("host", {
     availableWhen: alwaysAvailable,
     keywords: [],
   },
+  // The Mobile simulators tab's one card. The switch row is always drawn (the
+  // host's methods permitting); Platforms only while the switch is on; the
+  // tools row while on, and while off only when the tools are still
+  // downloaded, so Remove stays reachable.
+  mobileSimulators: {
+    kind: "group",
+    search: { contributesTo: "simulatorsTab" },
+    label: "Mobile simulators",
+    description: null,
+    breadcrumb: null,
+    availableWhen: alwaysAvailable,
+    keywords: [],
+  },
+  useMobileSimulators: {
+    kind: "row",
+    group: "mobileSimulators",
+    search: { contributesTo: "simulatorsTab" },
+    label: "Use mobile simulators",
+    description:
+      "Run iOS Simulators and Android Emulators on this host in a tile and let agents drive them. Turning this on downloads the simulator tools once, under 60 MB.",
+    availableWhen: alwaysAvailable,
+    keywords: ["simulator", "emulator", "device", "agent", "mcp"],
+  },
+  simulatorPlatforms: {
+    kind: "row",
+    group: "mobileSimulators",
+    search: { contributesTo: "simulatorsTab" },
+    label: "Platforms",
+    description: "Which simulators this host can run.",
+    availableWhen: alwaysAvailable,
+    keywords: ["Xcode", "Android SDK", "ANDROID_HOME"],
+  },
+  simulatorTools: {
+    kind: "row",
+    group: "mobileSimulators",
+    search: { contributesTo: "simulatorsTab" },
+    label: "Simulator tools",
+    description: "Downloaded to this host when mobile simulators are on.",
+    availableWhen: alwaysAvailable,
+    keywords: ["install", "download", "version", "remove"],
+  },
   dangerZone: {
     kind: "group",
     search: { contributesTo: "page" },
@@ -339,6 +405,7 @@ export const HOST_OVERVIEW_TABS = [
   "updates",
   "data",
   "ports",
+  "simulators",
 ] as const;
 
 export type HostOverviewTab = (typeof HOST_OVERVIEW_TABS)[number];
@@ -380,6 +447,7 @@ export const HOST_OVERVIEW_TAB_GROUPS = {
   updates: HOST_OVERVIEW.definitions.updatesTab,
   data: HOST_OVERVIEW.definitions.dataTab,
   ports: HOST_OVERVIEW.definitions.portsTab,
+  simulators: HOST_OVERVIEW.definitions.simulatorsTab,
 } as const;
 
 /**

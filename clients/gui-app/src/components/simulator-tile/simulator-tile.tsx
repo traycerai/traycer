@@ -137,7 +137,7 @@ export function SimulatorTile(props: SimulatorTileProps) {
     if (sessions.lifecycle === "failed" || sessions.lifecycle === "closed") {
       return (
         <SimulatorFailedView
-          title={`Couldn't reach the simulators on ${hostLabel}`}
+          title={`Couldn't reach the mobile simulators on ${hostLabel}`}
           reason={sessions.errorMessage}
           onRetry={sessions.retry}
         />
@@ -173,7 +173,7 @@ export function SimulatorTile(props: SimulatorTileProps) {
   if (state.packState.kind === "failed") {
     return (
       <SimulatorFailedView
-        title={`Couldn't set up simulators on ${hostLabel}`}
+        title={`Couldn't set up mobile simulators on ${hostLabel}`}
         reason={state.packState.reason}
         onRetry={sessions.refresh}
       />
@@ -182,7 +182,7 @@ export function SimulatorTile(props: SimulatorTileProps) {
   if (state.hubState.kind === "failed") {
     return (
       <SimulatorFailedView
-        title={`Simulators stopped on ${hostLabel}`}
+        title={`Mobile simulators stopped on ${hostLabel}`}
         reason={state.hubState.lastError}
         onRetry={sessions.refresh}
       />
@@ -348,15 +348,12 @@ function SimulatorSetupGate(props: {
     hostClient,
     props.hostId,
   );
-  const agentAccess = config.data?.agentAccess ?? false;
   const { mutate, isPending } = mutation;
   const onEnabledChange = useCallback(
     (enabled: boolean) => {
-      // Both switches travel on every write. Turning simulators off also
-      // withdraws agent access, which the host refuses to keep without them.
-      mutate({ enabled, agentAccess: enabled ? agentAccess : false });
+      mutate({ enabled });
     },
-    [agentAccess, mutate],
+    [mutate],
   );
   return (
     <SimulatorSetupView

@@ -42,6 +42,7 @@ import {
   HostOverviewPortsTab,
 } from "@/components/settings/panels/host-overview-ports-tab";
 import { useHostPortForwards } from "@/components/settings/panels/host-port-forwards-state";
+import { HostOverviewSimulatorsTab } from "@/components/settings/panels/host-overview-simulators-tab";
 import { HostOverviewDataTab } from "@/components/settings/panels/host-overview-data-tab";
 import { HostOverviewInstallationTab } from "@/components/settings/panels/host-overview-installation-tab";
 import { LocalPackageManagerUpgradeDot } from "@/components/settings/panels/host-settings-package-manager-upgrade-hint";
@@ -1762,7 +1763,7 @@ export function HostOverviewPanel(props: {
     />
   );
 
-  // The four tab bodies, each handed what it draws. Built on every render
+  // The five tab bodies, each handed what it draws. Built on every render
   // and cheap to build - a body MOUNTS only once its tab is first visited.
   const versionConnecting =
     scope.status === "connecting" ||
@@ -1833,6 +1834,13 @@ export function HostOverviewPanel(props: {
       hostId={host.hostId}
       hostName={displayName}
       hosts={scope.hosts}
+    />
+  );
+  const simulatorsTab = (
+    <HostOverviewSimulatorsTab
+      client={client}
+      hostId={host.hostId}
+      hostName={displayName}
     />
   );
   const dataTab = (
@@ -1969,6 +1977,7 @@ export function HostOverviewPanel(props: {
             updates: updatesTab,
             data: dataTab,
             ports: portsTab,
+            simulators: simulatorsTab,
           }}
         />
       </HostIdentityCard>

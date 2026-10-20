@@ -17,7 +17,7 @@ import { appLogger } from "@/lib/logger";
 
 /**
  * One host's simulator inventory for one epic, shared by every surface that
- * reads it in this window - the tile, the Browsers panel's Simulators group,
+ * reads it in this window - the tile, the Browsers panel's Mobile simulators group,
  * the open menu - the way `browser-sessions-coordinator.ts` shares the
  * browser inventory. Keyed by {host, epic, authenticated owner} so two epics
  * on one host are two streams (the sessions and boots the host publishes are

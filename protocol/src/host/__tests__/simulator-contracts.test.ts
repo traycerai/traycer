@@ -55,19 +55,22 @@ describe("simulator contracts", () => {
     }
   });
 
-  it("states both switches on every config write", () => {
+  it("carries the one switch, stated on every config write", () => {
     expect(configSimulatorGetV10.requestSchema.parse({})).toEqual({});
+    expect(
+      configSimulatorSetV10.requestSchema.parse({ enabled: true }),
+    ).toEqual({ enabled: true });
+    expect(
+      configSimulatorGetV10.responseSchema.parse({ enabled: false }),
+    ).toEqual({ enabled: false });
+    // One switch: the old agent-access key is not on the wire, and a missing
+    // switch is a malformed peer, not "leave it alone".
     expect(
       configSimulatorSetV10.requestSchema.parse({
         enabled: true,
-        agentAccess: false,
+        agentAccess: true,
       }),
-    ).toEqual({ enabled: true, agentAccess: false });
-    // No implicit default on the wire: a missing switch is a malformed peer,
-    // not "leave that one alone".
-    expect(() =>
-      configSimulatorSetV10.requestSchema.parse({ enabled: true }),
-    ).toThrow();
+    ).toEqual({ enabled: true });
     expect(() => configSimulatorSetV10.requestSchema.parse({})).toThrow();
   });
 

@@ -21,7 +21,6 @@ import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import {
   useSimulatorCloseMutation,
-  useSimulatorConfigQuery,
   useSimulatorConfigSetMutation,
 } from "@/hooks/simulator/use-simulator-mutations";
 import { tileIntent } from "@/lib/canvas/tile-open/intent";
@@ -95,7 +94,7 @@ export function SimulatorsSidebarGroup(props: {
     <>
       <SidebarSeparator />
       <SidebarGroup className="shrink-0" data-testid="epic-simulators-group">
-        <SidebarGroupLabel>Simulators</SidebarGroupLabel>
+        <SidebarGroupLabel>Mobile simulators</SidebarGroupLabel>
         <SimulatorsGroupBody
           epicId={epicId}
           hostId={hostId}
@@ -148,7 +147,7 @@ function SimulatorsGroupBody(props: {
           variant={undefined}
           tone="muted"
         />
-        Setting up simulators on this host…
+        Setting up mobile simulators on this host…
       </p>
     );
   }
@@ -162,14 +161,14 @@ function SimulatorsGroupBody(props: {
       <SimulatorsNote
         text={
           state.hubState.kind === "failed"
-            ? "Simulators stopped on this host."
-            : "No simulators on this host."
+            ? "Mobile simulators stopped on this host."
+            : "No mobile simulators on this host."
         }
       />
     );
   }
   return (
-    <ul ref={listRef} aria-label="Simulators" className="space-y-0.5">
+    <ul ref={listRef} aria-label="Mobile simulators" className="space-y-0.5">
       {props.simulators.map((simulator) => (
         <SimulatorRow
           key={simulator.simulatorId}
@@ -198,24 +197,24 @@ function SimulatorsNote(props: { readonly text: string }) {
 }
 
 /**
- * The switch's sidebar form: one button that turns simulators on for this
- * host. Agent access stays as it was (off until Settings says otherwise).
+ * The switch's sidebar form: one button that turns mobile simulators on for
+ * this host.
  */
 function SimulatorsOffRow(props: { readonly hostId: string }) {
   const hostClient = useHostClientForHostId(props.hostId);
-  const config = useSimulatorConfigQuery(hostClient, props.hostId);
   const { mutation, supported } = useSimulatorConfigSetMutation(
     hostClient,
     props.hostId,
   );
   const { mutate, isPending } = mutation;
-  const agentAccess = config.data?.agentAccess ?? false;
   return (
     <div
       className="flex items-center gap-2 px-2 pb-1 text-ui-xs text-muted-foreground"
       data-testid="epic-simulators-note"
     >
-      <span className="min-w-0 flex-1">Simulators are off on this host.</span>
+      <span className="min-w-0 flex-1">
+        Mobile simulators are off on this host.
+      </span>
       {supported ? (
         <Button
           type="button"
@@ -223,7 +222,7 @@ function SimulatorsOffRow(props: { readonly hostId: string }) {
           size="xs"
           disabled={isPending}
           data-testid="epic-simulators-turn-on"
-          onClick={() => mutate({ enabled: true, agentAccess })}
+          onClick={() => mutate({ enabled: true })}
         >
           {isPending ? (
             <AgentSpinningDots

@@ -6,7 +6,7 @@ export const BROWSER = defineSettingsSection("browser", {
     availableWhen: alwaysAvailable,
     label: "Browser",
     description:
-      "Search, agent access, tab placement, saved website sessions, and simulators.",
+      "Search, agent access, tab placement, and saved website sessions.",
     keywords: [
       "cookies",
       "logins",
@@ -116,65 +116,6 @@ export const BROWSER = defineSettingsSection("browser", {
       "Terminal URLs with local hosts or explicit ports are kept for browser-origin classification.",
     availableWhen: alwaysAvailable,
     keywords: [],
-  },
-  // Gated on the HOST like agent access, and beside it: the second switch is
-  // the same kind of grant, a tool agents are launched with. The group renders
-  // once the active host advertises `config.simulator.get` and `.set`.
-  simulators: {
-    kind: "group",
-    search: { contributesTo: "page" },
-    label: "Simulators",
-    description: null,
-    breadcrumb: null,
-    availableWhen: alwaysAvailable,
-    keywords: [
-      "simulator",
-      "emulator",
-      "iOS",
-      "Android",
-      "iPhone",
-      "Xcode",
-      "Android Studio",
-      "mobile",
-    ],
-  },
-  simulatorsEnabled: {
-    kind: "row",
-    group: "simulators",
-    search: { contributesTo: "page" },
-    label: "Use simulators",
-    description:
-      "Run iOS Simulators and Android Emulators on this host and use them in a tile. Turning this on downloads the simulator tools once, under 60 MB.",
-    availableWhen: alwaysAvailable,
-    keywords: ["simulator", "emulator", "device"],
-  },
-  simulatorAgentAccess: {
-    kind: "row",
-    group: "simulators",
-    search: { contributesTo: "page" },
-    label: "Let agents drive simulators",
-    description:
-      "Agents can open a simulator, see its screen, and tap, type and run apps on it.",
-    availableWhen: alwaysAvailable,
-    keywords: ["agent", "simulator", "emulator", "mcp"],
-  },
-  simulatorPlatforms: {
-    kind: "row",
-    group: "simulators",
-    search: { contributesTo: "page" },
-    label: "Platforms",
-    description: "Which simulators this host can run.",
-    availableWhen: alwaysAvailable,
-    keywords: ["Xcode", "Android SDK", "ANDROID_HOME"],
-  },
-  simulatorTools: {
-    kind: "row",
-    group: "simulators",
-    search: { contributesTo: "page" },
-    label: "Simulator tools",
-    description: "Downloaded to this host when simulators are on.",
-    availableWhen: alwaysAvailable,
-    keywords: ["install", "download", "version"],
   },
   // Gated on the HOST RUNTIME: the group also needs a bound host runtime and a
   // first successful read of the browser bridge, so none of it is a target.

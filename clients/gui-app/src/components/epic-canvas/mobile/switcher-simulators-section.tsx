@@ -13,7 +13,6 @@ import { useOpenSimulatorTile } from "@/components/simulator-tile/use-open-simul
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import {
   useSimulatorCloseMutation,
-  useSimulatorConfigQuery,
   useSimulatorConfigSetMutation,
 } from "@/hooks/simulator/use-simulator-mutations";
 import {
@@ -27,7 +26,7 @@ import { useIsActiveTile } from "@/stores/epics/canvas/store";
 import { simulatorTileId } from "@/stores/epics/canvas/tile-schema/simulator-tile";
 
 /**
- * The Browsers category's Simulators section: the desktop panel's Simulators
+ * The Browsers category's Mobile simulators section: the desktop panel's Mobile simulators
  * group (`epic-simulator-sidebar.tsx`) in the switcher's touch chrome - the
  * same host (the browsers surface pin), the same order, the same open path,
  * on 44px rows.
@@ -69,7 +68,7 @@ export function SwitcherSimulatorsSection(props: {
 
   return (
     <section
-      aria-label="Simulators"
+      aria-label="Mobile simulators"
       className="mt-1.5"
       data-testid="switcher-simulators-section"
     >
@@ -111,7 +110,7 @@ function SwitcherSimulatorsBody(props: {
             tone="muted"
           />
         }
-        text="Setting up simulators on this host…"
+        text="Setting up mobile simulators on this host…"
         trailing={null}
       />
     );
@@ -131,8 +130,8 @@ function SwitcherSimulatorsBody(props: {
         leading={null}
         text={
           state.hubState.kind === "failed"
-            ? "Simulators stopped on this host."
-            : "No simulators on this host."
+            ? "Mobile simulators stopped on this host."
+            : "No mobile simulators on this host."
         }
         trailing={null}
       />
@@ -295,20 +294,18 @@ function SwitcherSimulatorsNote(props: {
   );
 }
 
-/** The desktop group's "Turn on", for a host with simulators switched off. */
+/** The desktop group's "Turn on", for a host with mobile simulators switched off. */
 function SwitcherSimulatorsOffNote(props: { readonly hostId: string }) {
   const hostClient = useHostClientForHostId(props.hostId);
-  const config = useSimulatorConfigQuery(hostClient, props.hostId);
   const { mutation, supported } = useSimulatorConfigSetMutation(
     hostClient,
     props.hostId,
   );
   const { mutate, isPending } = mutation;
-  const agentAccess = config.data?.agentAccess ?? false;
   return (
     <SwitcherSimulatorsNote
       leading={null}
-      text="Simulators are off on this host."
+      text="Mobile simulators are off on this host."
       trailing={
         supported ? (
           <Button
@@ -317,7 +314,7 @@ function SwitcherSimulatorsOffNote(props: { readonly hostId: string }) {
             size="sm"
             disabled={isPending}
             data-testid="switcher-simulators-turn-on"
-            onClick={() => mutate({ enabled: true, agentAccess })}
+            onClick={() => mutate({ enabled: true })}
           >
             {isPending ? (
               <AgentSpinningDots

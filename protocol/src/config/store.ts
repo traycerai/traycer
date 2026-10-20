@@ -1301,21 +1301,20 @@ export function readSimulatorConfigSync(): SimulatorConfig {
     const result = simulatorOnlyConfigSchema.safeParse(JSON.parse(raw));
     if (result.success) return result.data.simulator;
   } catch {
-    // An unreadable config reverts to both switches off; see above.
+    // An unreadable config reverts to the switch off; see above.
   }
   return { ...SIMULATOR_CONFIG_DEFAULT };
 }
 
 /**
- * Writes both simulator switches while preserving the rest of the config. The
- * caller states both values: there is no implicit default on this write, so a
- * host never guesses which switch a partial write meant to leave alone.
+ * Writes the simulator switch while preserving the rest of the config. The
+ * caller states the value: there is no implicit default on this write.
  */
 export async function setSimulatorConfig(next: SimulatorConfig): Promise<void> {
   await updateCliConfig((current) => ({
     next: {
       ...current,
-      simulator: { enabled: next.enabled, agentAccess: next.agentAccess },
+      simulator: { enabled: next.enabled },
     },
     result: undefined,
   }));

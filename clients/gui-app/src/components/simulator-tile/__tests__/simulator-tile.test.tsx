@@ -100,7 +100,7 @@ vi.mock("@/hooks/simulator/use-simulator-mutations", async () => {
   });
   return {
     useSimulatorConfigQuery: () => ({
-      data: { enabled: false, agentAccess: false },
+      data: { enabled: false },
     }),
     useSimulatorConfigSetMutation: () => gated(fakes.configSet),
     useSimulatorOpenMutation: () => ({
@@ -387,13 +387,10 @@ describe("SimulatorTile", () => {
     });
     renderTile();
     expect(screen.getByTestId("simulator-setup").textContent).toContain(
-      "Simulators are off on Studio Mac",
+      "Mobile simulators are off on Studio Mac",
     );
     fireEvent.click(screen.getByTestId("simulator-enable-switch"));
-    expect(fakes.configSet).toHaveBeenCalledWith({
-      enabled: true,
-      agentAccess: false,
-    });
+    expect(fakes.configSet).toHaveBeenCalledWith({ enabled: true });
   });
 
   it("shows download progress while the host installs the tools", () => {

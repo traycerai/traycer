@@ -277,9 +277,9 @@ export type SimulatorRemoveToolsResponse = z.infer<
 >;
 
 /**
- * `config.simulator.*`: the two machine-user-global switches. Both are stated
- * on every write - no implicit default on the wire, so a missing key is a
- * malformed peer rather than "leave that one alone".
+ * `config.simulator.*`: the one machine-user-global switch. On, the host
+ * installs the tools, runs the simulators in a tile and lets agents drive
+ * them; there is no separate agent switch.
  */
 export const configSimulatorGetRequestSchema = lazySchema(() => z.object({}));
 export type ConfigSimulatorGetRequest = z.infer<
@@ -288,7 +288,6 @@ export type ConfigSimulatorGetRequest = z.infer<
 export const configSimulatorResponseSchema = lazySchema(() =>
   z.object({
     enabled: z.boolean(),
-    agentAccess: z.boolean(),
   }),
 );
 export type ConfigSimulatorResponse = z.infer<
@@ -297,7 +296,6 @@ export type ConfigSimulatorResponse = z.infer<
 export const configSimulatorSetRequestSchema = lazySchema(() =>
   z.object({
     enabled: z.boolean(),
-    agentAccess: z.boolean(),
   }),
 );
 export type ConfigSimulatorSetRequest = z.infer<

@@ -104,9 +104,9 @@ export const configSimulatorGetV10 = defineRpcContract({
 });
 
 /**
- * Writes both simulator switches. `enabled: true` is the `simulator-tools`
- * pack's enablement; `enabled: false` disables it and closes this host's
- * sessions; `agentAccess: true` with `enabled: false` is refused.
+ * Writes the simulator switch. `enabled: true` is the `simulator-tools`
+ * pack's enablement and the agents' access in one; `enabled: false` disables
+ * it, closes this host's sessions and stops its helpers.
  */
 export const configSimulatorSetV10 = defineRpcContract({
   method: "config.simulator.set",

@@ -40,6 +40,7 @@ export const NO_HOST_OVERVIEW_TAB_BADGES: HostOverviewTabBadges = {
   updates: null,
   data: null,
   ports: null,
+  simulators: null,
 };
 
 /** The tab bodies, one per tab, rendered by `HostOverviewTabs`. */

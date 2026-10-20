@@ -122,8 +122,8 @@ export function SimulatorUnavailableView(props: {
 }
 
 /**
- * Simulators are off on this host. The switch is the one the Settings page
- * will carry too: turning it on downloads the simulator tools to THIS host
+ * Mobile simulators are off on this host. The switch is the one the Host
+ * panel carries too: turning it on downloads the simulator tools to THIS host
  * and starts them there; nothing is installed on any other machine.
  */
 export function SimulatorSetupView(props: {
@@ -146,7 +146,7 @@ export function SimulatorSetupView(props: {
       icon={
         <Smartphone className="size-8 text-muted-foreground/45" aria-hidden />
       }
-      title={`Simulators are off on ${props.hostLabel}`}
+      title={`Mobile simulators are off on ${props.hostLabel}`}
       testId="simulator-setup"
     >
       <p>
@@ -163,11 +163,11 @@ export function SimulatorSetupView(props: {
         <Switch
           checked={props.enabled}
           disabled={props.onEnabledChange === null || props.pending}
-          aria-label="Simulators"
+          aria-label="Mobile simulators"
           data-testid="simulator-enable-switch"
           onCheckedChange={(checked) => props.onEnabledChange?.(checked)}
         />
-        <span>Simulators on {props.hostLabel}</span>
+        <span>Mobile simulators on {props.hostLabel}</span>
         {props.pending ? (
           <AgentSpinningDots
             className="shrink-0"
@@ -179,7 +179,7 @@ export function SimulatorSetupView(props: {
       </label>
       {props.onEnabledChange === null ? (
         <p className="text-ui-xs">
-          This host needs an update before it can turn simulators on.
+          This host needs an update before it can turn mobile simulators on.
         </p>
       ) : null}
     </SimulatorStateFrame>
@@ -203,7 +203,7 @@ export function SimulatorInstallingView(props: {
           tone="muted"
         />
       }
-      title={`Setting up simulators on ${props.hostLabel}`}
+      title={`Setting up mobile simulators on ${props.hostLabel}`}
       testId="simulator-installing"
     >
       <p>

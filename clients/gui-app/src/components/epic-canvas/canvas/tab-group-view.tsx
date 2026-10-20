@@ -143,7 +143,7 @@ function panelIdForTabType(
   if (tabType === TILE_KIND_PR_DETAIL) return "pull-requests";
   if (tabType === TILE_KIND_PR_DIFF) return "pull-requests";
   if (tabType === TILE_KIND_BROWSER_SESSION) return "browsers";
-  // Simulators are listed as a group inside the Browsers panel.
+  // Mobile simulators are listed as a group inside the Browsers panel.
   if (tabType === TILE_KIND_SIMULATOR) return "browsers";
   return "artifacts";
 }
