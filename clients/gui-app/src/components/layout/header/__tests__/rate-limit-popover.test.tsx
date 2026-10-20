@@ -612,6 +612,8 @@ function authUserFixture(overrides: {
           },
         ]
       : [],
+    environments: { personal: null, teams: [] },
+    actingAs: null,
   };
 }
 

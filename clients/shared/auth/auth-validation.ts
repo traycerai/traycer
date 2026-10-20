@@ -96,12 +96,13 @@ type AuthenticatedUserResponseMajor =
  * fails a test instead of going silently unadvertised.
  *
  * The majors are the ENVELOPE's, not the nested `user` the header is named
- * after. Both move together by construction - an envelope gains a major
- * precisely because the user inside it did - and advertising what can
- * actually be PARSED is the safer of the two if they ever drift.
+ * after, because what this build can PARSE is the envelope. They have
+ * drifted once: major 3 adds the caller's environments to the envelope and
+ * leaves `user` at major 2. This build parses major 3 and reads none of its
+ * new fields.
  */
 export const SUPPORTED_USER_RECORD_MAJORS: readonly AuthenticatedUserResponseMajor[] =
-  [1, 2];
+  [1, 2, 3];
 
 const ADVERTISED_USER_RECORD_MAJORS = SUPPORTED_USER_RECORD_MAJORS.join(",");
 
@@ -288,8 +289,8 @@ async function validateAuthTokenIdentityFetch(
  *
  * The body is parsed against the version the SERVER said it served and then
  * migrated to this build's latest through the registry's upgrade chain, so a
- * major-1 body from the frozen route and a major-2 body from the negotiated
- * one reach `applySignedIn` as the same shape. A failure here is still a
+ * major-1 body from the frozen route and a major-2 or major-3 body from the
+ * negotiated one reach `applySignedIn` as the same shape. A failure here is still a
  * terminal `rejected`, exactly as a bad body always was: the version was
  * resolved to an installed one before the request's body was even read, so
  * what is left is a 2xx that does not match the contract it claims.

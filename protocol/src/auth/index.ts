@@ -24,6 +24,8 @@ export * from "./devices-sessions";
 export * from "./link-login";
 export type {
   AuthenticatedUser,
+  AuthenticatedUserActingAs,
+  AuthenticatedUserEnvironments,
   BundleSummary,
   ConnectMCPServerResponse,
   Credit,

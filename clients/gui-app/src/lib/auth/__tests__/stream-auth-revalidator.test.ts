@@ -205,6 +205,8 @@ describe("createStreamAuthRevalidator", () => {
         },
         payAsYouGoUsage: { allowPayAsYouGo: false },
         teamSubscriptions: [],
+        environments: { personal: null, teams: [] },
+        actingAs: null,
       },
     });
     const noteRefusal = vi.spyOn(service, "noteHostRefusedHeldBearer");

@@ -413,7 +413,9 @@ describe("negotiated user record route, and frozen-route recovery", () => {
    * round-trip through `JSON.stringify` as an ISO string too, but relying on
    * that would be testing `Date#toJSON`, not this file's wire contract.
    */
-  function authenticatedUserRawBody(providerType: "GITHUB" | "APPLE"): unknown {
+  function authenticatedUserRawBody(
+    providerType: "GITHUB" | "APPLE",
+  ): Record<string, unknown> {
     return {
       user: {
         id: "user-1",
@@ -460,7 +462,7 @@ describe("negotiated user record route, and frozen-route recovery", () => {
     vi.useRealTimers();
   });
 
-  it("1: negotiated success at major 2 is valid off a single request advertising both majors", async () => {
+  it("1: negotiated success at major 2 is valid off a single request advertising every major", async () => {
     installUrlKeyedMockFetch(
       new Map([
         [
@@ -490,8 +492,80 @@ describe("negotiated user record route, and frozen-route recovery", () => {
     expect(urlCalls).toHaveLength(1);
     expect(urlCalls[0].url).toBe(NEGOTIATED_URL);
     expect(urlCalls[0].headers.get(USER_RECORD_MAJORS_REQUEST_HEADER)).toBe(
-      "1,2",
+      "1,2,3",
     );
+  });
+
+  it("1a: negotiated success at major 3 is valid and keeps the served environments", async () => {
+    const environments = {
+      personal: "env-personal",
+      teams: [{ teamId: "team-1", environmentId: "env-team-1" }],
+    };
+    installUrlKeyedMockFetch(
+      new Map([
+        [
+          NEGOTIATED_URL,
+          [
+            {
+              status: 200,
+              headers: {
+                "content-type": "application/json",
+                [USER_RECORD_VERSION_RESPONSE_HEADER]: "3.0",
+              },
+              body: {
+                ...authenticatedUserRawBody("GITHUB"),
+                environments,
+                actingAs: { environmentId: "env-team-1" },
+              },
+            },
+          ],
+        ],
+      ]),
+    );
+
+    const result = await validateAuthTokenIdentityAccessOnly(
+      AUTHN_BASE_URL,
+      "token",
+    );
+
+    expect(result.kind).toBe("valid");
+    if (result.kind !== "valid") throw new Error("expected valid");
+    expect(result.user.environments).toEqual(environments);
+    expect(result.user.actingAs).toEqual({ environmentId: "env-team-1" });
+    expect(urlCalls).toHaveLength(1);
+    expect(urlCalls[0].headers.get(USER_RECORD_MAJORS_REQUEST_HEADER)).toBe(
+      "1,2,3",
+    );
+  });
+
+  it("1b: a served major-2 body still validates and reads as no environments", async () => {
+    installUrlKeyedMockFetch(
+      new Map([
+        [
+          NEGOTIATED_URL,
+          [
+            {
+              status: 200,
+              headers: {
+                "content-type": "application/json",
+                [USER_RECORD_VERSION_RESPONSE_HEADER]: "2.0",
+              },
+              body: authenticatedUserRawBody("GITHUB"),
+            },
+          ],
+        ],
+      ]),
+    );
+
+    const result = await validateAuthTokenIdentityAccessOnly(
+      AUTHN_BASE_URL,
+      "token",
+    );
+
+    expect(result.kind).toBe("valid");
+    if (result.kind !== "valid") throw new Error("expected valid");
+    expect(result.user.environments).toEqual({ personal: null, teams: [] });
+    expect(result.user.actingAs).toBeNull();
   });
 
   it("2: negotiated success at major 1 is valid off a single request", async () => {
@@ -720,7 +794,7 @@ describe("negotiated user record route, and frozen-route recovery", () => {
     );
     await validateAuthTokenIdentityAccessOnly(AUTHN_BASE_URL, "token");
     expect(urlCalls[0].headers.get(USER_RECORD_MAJORS_REQUEST_HEADER)).toBe(
-      "1,2",
+      "1,2,3",
     );
   });
 
