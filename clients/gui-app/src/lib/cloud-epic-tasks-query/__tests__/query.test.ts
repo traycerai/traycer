@@ -17,6 +17,7 @@ import {
 } from "@/lib/history-search";
 import {
   __resetCloudEpicTasksClientsForTests,
+  fetchCloudEpicTasksCursorPageByHostId,
   fetchCloudEpicTasksFirstPageByHostId,
   cloudEpicTasksFirstPageQueryOptions,
   cloudEpicTasksQueryKey,
@@ -32,6 +33,11 @@ import {
   unfilteredHistoryContribution,
 } from "@/lib/history-composition/history-local-contribution";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import {
+  cloudEpicTasksPageGeneration,
+  cloudEpicTasksPageIdentity,
+  useCloudEpicTasksPagesStore,
+} from "@/stores/epics/cloud-epic-tasks-pages-store";
 
 const USER_ID = "user-1";
 const USER_PROFILE = {
@@ -514,6 +520,193 @@ describe("the deletion fence after the pool's page", () => {
       ).toBe(settled);
     } finally {
       unsubscribe();
+      __resetCloudEpicTasksClientsForTests();
+      useAuthStore.getState().setSignedOut();
+    }
+  });
+});
+
+describe("the deletion fence after a cursor page's pool response", () => {
+  function row(id: string): ListTaskLight {
+    return {
+      epic: {
+        light: {
+          id,
+          title: id,
+          initialUserPrompt: "",
+          ticketCount: 0,
+          specCount: 0,
+          storyCount: 0,
+          reviewCount: 0,
+          status: "draft",
+          createdAt: 0,
+          updatedAt: 0,
+          createdBy: USER_ID,
+          version: "1.0.0",
+        },
+        permission: null,
+        repos: [],
+        workspaces: [],
+        roomInfo: null,
+      },
+      pinned: false,
+    };
+  }
+
+  function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
+    let resolve: (value: T) => void = () => undefined;
+    const promise = new Promise<T>((r) => {
+      resolve = r;
+    });
+    return { promise, resolve };
+  }
+
+  // The first-page read and its fence are reads 1 and 2; the cursor's own
+  // contribution is read 3 and its fence is read 4.
+  async function runCursorRace(goneId: string, holdFence: boolean) {
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    const poolCursor = deferred<ListTasksResponse>();
+    const fenceReply = deferred<LocalHistoryReadResponse>();
+    let reads = 0;
+    let tombstones: string[] = [];
+    const read = (): LocalHistoryReadResponse => ({
+      complete: true,
+      willComplete: true,
+      localHomeRows: [],
+      preservedRows: [],
+      tombstonedEpicIds: [...tombstones],
+      localRows: "none",
+    });
+    const messenger = new MockHostMessenger<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      requestId: () => "cursor-fence",
+      handlers: {
+        "epic.listTasks": (params) =>
+          params.cursor === undefined
+            ? { tasks: [row("kept")], hasMore: true, nextCursor: "c1" }
+            : poolCursor.promise,
+        "epic.localHistory.read": () => {
+          reads += 1;
+          if (reads === 4 && holdFence) return fenceReply.promise;
+          return read();
+        },
+      },
+    });
+    const spine = new HostClient<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      invalidator: createHostQueryInvalidator(queryClient),
+      findHostById: (hostId) =>
+        hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,
+      messenger,
+    });
+    spine.setRequestContext(requestContextFor(USER_ID));
+    useAuthStore.getState().setSignedIn(USER_PROFILE, USER_CONTEXT, []);
+    __resetCloudEpicTasksClientsForTests();
+    __resetHistoryContributionsForTests();
+    const hostId = mockLocalHostEntry.hostId;
+    registerCloudEpicTasksClient(
+      hostId,
+      spine.createRequester(mockLocalHostEntry),
+    );
+
+    const options = cloudEpicTasksFirstPageQueryOptions(
+      hostId,
+      USER_ID,
+      LIST_CLOUD_TASKS_REQUEST,
+    );
+    await queryClient.fetchQuery(options);
+    await waitFor(() => {
+      expect(reads).toBe(2);
+    });
+
+    const identity = cloudEpicTasksPageIdentity(
+      hostId,
+      USER_ID,
+      LIST_CLOUD_TASKS_REQUEST,
+    );
+    const generation = cloudEpicTasksPageGeneration(identity);
+    const cursorPage = fetchCloudEpicTasksCursorPageByHostId(hostId, USER_ID, {
+      request: LIST_CLOUD_TASKS_REQUEST,
+      cursor: "c1",
+      abortSignal: undefined,
+      queryClient,
+    });
+    await waitFor(() => {
+      expect(reads).toBe(3);
+    });
+    // The host deletes the task after the cursor's contribution was read, and
+    // the pool's response still lists it.
+    tombstones = [goneId];
+    poolCursor.resolve({
+      tasks: [row(goneId), row("also-kept")],
+      hasMore: false,
+    });
+    const page = await cursorPage;
+    return {
+      page,
+      identity,
+      generation,
+      fenceReply,
+      fenceBody: read,
+      retained: () =>
+        (useCloudEpicTasksPagesStore.getState().pagesByIdentity[identity] ?? [])
+          .flatMap((retainedPage) => retainedPage.tasks)
+          .map((task) => task.epic?.light?.id ?? ""),
+      reads: () => reads,
+    };
+  }
+
+  beforeEach(() => {
+    useCloudEpicTasksPagesStore.setState({
+      pagesByIdentity: {},
+      generationByIdentity: {},
+      deletedEpicIdsByScope: {},
+    });
+  });
+
+  it("keeps a deleted row out of the retained pages when the fence answers before the append", async () => {
+    const race = await runCursorRace("cursor-gone-before", false);
+    try {
+      await waitFor(() => {
+        expect(race.reads()).toBe(4);
+      });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      useCloudEpicTasksPagesStore
+        .getState()
+        .appendPage(race.identity, race.generation, race.page);
+
+      // The fence advanced the identity's generation, so the late append is
+      // refused whole rather than retained with the deleted row.
+      expect(race.retained()).not.toContain("cursor-gone-before");
+    } finally {
+      __resetCloudEpicTasksClientsForTests();
+      useAuthStore.getState().setSignedOut();
+    }
+  });
+
+  it("removes a deleted row from the retained pages when the fence answers after the append", async () => {
+    const race = await runCursorRace("cursor-gone-after", true);
+    try {
+      await waitFor(() => {
+        expect(race.reads()).toBe(4);
+      });
+      useCloudEpicTasksPagesStore
+        .getState()
+        .appendPage(race.identity, race.generation, race.page);
+      expect(race.retained()).toContain("cursor-gone-after");
+
+      race.fenceReply.resolve({
+        ...race.fenceBody(),
+        tombstonedEpicIds: ["cursor-gone-after"],
+      });
+
+      await waitFor(() => {
+        expect(race.retained()).not.toContain("cursor-gone-after");
+      });
+    } finally {
       __resetCloudEpicTasksClientsForTests();
       useAuthStore.getState().setSignedOut();
     }

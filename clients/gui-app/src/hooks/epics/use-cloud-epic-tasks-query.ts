@@ -406,6 +406,7 @@ export function useCloudEpicTasksQuery(
           request: variables.request,
           cursor: variables.cursor,
           abortSignal: variables.signal,
+          queryClient,
         },
       );
       const cursor = resolveNextCursor(page);

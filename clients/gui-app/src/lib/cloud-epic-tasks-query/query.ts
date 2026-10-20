@@ -219,7 +219,12 @@ export function fetchCloudEpicTasksFirstPageByHostId(
         hostId,
         userId,
       });
-      fenceDeletionsAfterPoolPage(hostId, userId, options, composition);
+      fenceDeletionsAfterPoolPage(hostId, userId, {
+        filters: options.request.filters,
+        abortSignal: options.abortSignal,
+        queryClient: options.queryClient,
+        firstRead: composition.contribution,
+      });
       rememberHistoryFirstPage({
         accountId: userId,
         hostId,
@@ -278,35 +283,40 @@ export class HostLocalHistoryUnavailableError extends Error {
 }
 
 /**
- * The deletion fence. The contribution is read beside the pool's page, so a
- * task the host deletes after its read and before the cloud learns of it is
- * on the pool's page with no tombstone to remove it. A second read,
- * dispatched only once the pool's page has arrived, sees every deletion up
- * to then; what it tombstones that the first did not leaves the History
- * caches and joins the deletion ledger, which also fences a cache write
- * still in flight. The page paints from the first read and never waits on
- * this one. A deletion after the fence is any later deletion.
+ * The deletion fence, run by every page that reads the host's contribution
+ * beside the pool's page. A task the host deletes after that read and before
+ * the cloud learns of it is on the pool's page with no tombstone to remove
+ * it. A second read, dispatched only once the pool's page has arrived, sees
+ * every deletion up to then; what it tombstones that the first did not goes
+ * through `removeDeletedEpicsFromCloudTaskCaches`, which edits the History
+ * caches and the retained cursor pages and records the deletion ledger, so a
+ * page still on its way to a cache is fenced too. The page never waits on
+ * this read. A deletion after the fence is any later deletion.
  */
 function fenceDeletionsAfterPoolPage(
   hostId: string,
   userId: string,
-  options: FetchCloudEpicTasksFirstPageOptions,
-  composition: Omit<ComposeHistoryPageInput, "page">,
+  input: {
+    readonly filters: ListCloudTasksRequest["filters"];
+    readonly abortSignal: AbortSignal | undefined;
+    readonly queryClient: QueryClient;
+    readonly firstRead: HistoryHostContribution;
+  },
 ): void {
   const applied = new Set(
-    composition.contribution.kind === "contributed"
-      ? composition.contribution.read.tombstonedEpicIds
+    input.firstRead.kind === "contributed"
+      ? input.firstRead.read.tombstonedEpicIds
       : [],
   );
   readHistoryContributionForPage(hostId, userId, {
-    filters: options.request.filters,
-    abortSignal: options.abortSignal,
+    filters: input.filters,
+    abortSignal: input.abortSignal,
     requestContextPolicy: "require-current",
   }).then(
     (fence) => {
       if (fence.kind !== "contributed") return;
       removeDeletedEpicsFromCloudTaskCaches(
-        options.queryClient,
+        input.queryClient,
         { hostId, userId },
         fence.read.tombstonedEpicIds.filter((id) => !applied.has(id)),
       );
@@ -374,6 +384,8 @@ interface FetchCloudEpicTasksCursorPageOptions {
   readonly request: ListCloudTasksRequest;
   readonly cursor: string;
   readonly abortSignal: AbortSignal | undefined;
+  /** The cache the deletion fence edits; see `fenceDeletionsAfterPoolPage`. */
+  readonly queryClient: QueryClient;
 }
 
 /**
@@ -403,8 +415,14 @@ export function fetchCloudEpicTasksCursorPageByHostId(
       requestContextPolicy: "require-current",
     }),
     contribution,
-  ]).then(([response, hostContribution]) =>
-    admitCloudEpicTasksFirstPage(
+  ]).then(([response, hostContribution]) => {
+    fenceDeletionsAfterPoolPage(hostId, userId, {
+      filters: options.request.filters,
+      abortSignal: options.abortSignal,
+      queryClient: options.queryClient,
+      firstRead: hostContribution,
+    });
+    return admitCloudEpicTasksFirstPage(
       composeHistoryPage({
         page: response,
         contribution: hostContribution,
@@ -413,8 +431,8 @@ export function fetchCloudEpicTasksCursorPageByHostId(
         placement: "cursor-page",
       }),
       { hostId, userId },
-    ),
-  );
+    );
+  });
 }
 
 export function cloudEpicTasksFirstPageQueryOptions(
