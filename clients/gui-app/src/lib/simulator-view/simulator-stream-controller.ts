@@ -238,6 +238,10 @@ export function createSimulatorStreamController(
   let stallTimer: number | null = null;
   let stallGapMs: number | null = null;
   let lastKeyframeRequestAt = Number.NEGATIVE_INFINITY;
+  // A request that fell inside the floor, held until the floor ends: the
+  // decoder asks once per gap and never again, so a dropped ask would leave
+  // the picture frozen until the hub sent a keyframe on its own.
+  let heldKeyframeRequest: number | null = null;
   let decodeErrorTimes: number[] = [];
   // Bumped on every open so a callback from a stream that was replaced
   // (a retry, a restart) cannot touch the one that replaced it.
@@ -289,9 +293,23 @@ export function createSimulatorStreamController(
     stream.sendClientFrame(frame);
   };
 
+  const clearHeldKeyframeRequest = (): void => {
+    if (heldKeyframeRequest !== null) window.clearTimeout(heldKeyframeRequest);
+    heldKeyframeRequest = null;
+  };
+
   const requestKeyframe = (): void => {
     const now = Date.now();
-    if (now - lastKeyframeRequestAt < KEYFRAME_REQUEST_FLOOR_MS) return;
+    const wait = lastKeyframeRequestAt + KEYFRAME_REQUEST_FLOOR_MS - now;
+    if (wait > 0) {
+      if (heldKeyframeRequest === null) {
+        heldKeyframeRequest = window.setTimeout(() => {
+          heldKeyframeRequest = null;
+          requestKeyframe();
+        }, wait);
+      }
+      return;
+    }
     lastKeyframeRequestAt = now;
     send({ kind: "requestKeyframe", hasBinaryPayload: false });
   };
@@ -316,6 +334,7 @@ export function createSimulatorStreamController(
     closeDecoder();
     clearWatchdog();
     clearStallTimer();
+    clearHeldKeyframeRequest();
   };
 
   const fail = (detail: string, terminal: boolean): void => {
