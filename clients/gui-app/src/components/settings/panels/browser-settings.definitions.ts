@@ -65,20 +65,6 @@ export const BROWSER = defineSettingsSection("browser", {
     availableWhen: alwaysAvailable,
     keywords: ["agent", "popup", "browser", "surface"],
   },
-  // Gated on the HOST: the row renders once the active host advertises
-  // `config.visualization.get` and `config.visualization.set`, so it folds into
-  // the page. Its description names the active host, so the rendered sentence
-  // is a `status` and this static copy is what search reads.
-  agentPages: {
-    kind: "row",
-    group: "agents",
-    search: { contributesTo: "page" },
-    label: "Let agents show artifacts in chat",
-    description:
-      "Show charts, tables and mockups in the reply. Applies to agents started after you change it.",
-    availableWhen: alwaysAvailable,
-    keywords: ["agent", "artifact", "chart", "visualization", "html"],
-  },
   // Not beside "Open browser tabs": the answer is whether the tile appears at
   // all, not where it lands, and next to the placement row it read as an
   // override of it.

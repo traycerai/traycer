@@ -49,8 +49,9 @@ const BULK_INPUT_FIELDS = new Set([
   // `browser-tools.ts` (which identifies the REPL by tool NAME). The call
   // still reads from `title` and the header summary.
   "code",
-  // The preview tool's HTML source (`traycer_preview_page`), up to 512,000
-  // characters. The tool detail never displays this source.
+  // An HTML document passed inline as a tool input. The tool detail never
+  // displays such a source, and one can run to hundreds of thousands of
+  // characters.
   "html",
   "edits",
   "patch",

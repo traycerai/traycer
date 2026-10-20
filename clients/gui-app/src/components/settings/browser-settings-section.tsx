@@ -31,19 +31,9 @@ import {
   type BrowserSaveLoginsController,
 } from "@/lib/browser-view/use-browser-save-logins";
 import { useBrowserSavedLoginSitesQuery } from "@/hooks/browser/use-browser-saved-login-sites-query";
-import { useAddressableHostId } from "@/hooks/host/use-addressable-host-id";
 import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
-import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
-import { useHostQuery } from "@/hooks/host/use-host-query";
-import { useHostScopedMutationForClient } from "@/hooks/host/use-host-scoped-mutation";
 import { useReactiveLocalHostId } from "@/hooks/host/use-reactive-local-host-id";
-import { trackSettingChanged } from "@/lib/analytics";
-import { configMutationKeys } from "@/lib/query-keys";
-import {
-  useHostBinding,
-  useHostClient,
-  type HostRpcRegistry,
-} from "@/lib/host";
+import { useHostBinding } from "@/lib/host";
 import { useRunnerHostOrNull } from "@/providers/use-runner-host";
 import { appLogger } from "@/lib/logger";
 import type { BrowserViewBridge } from "@traycer-clients/shared/platform/browser-view";
@@ -74,27 +64,6 @@ export function BrowserSettingsSection(props: {
   const removeBrowserDevOrigin = useSettingsStore(
     (s) => s.removeBrowserDevOrigin,
   );
-  // The ACTIVE host, like the sibling Website sessions group: Browser carries
-  // no host scope of its own, so this page's host IS the app-wide one.
-  const hostId = useAddressableHostId();
-  // `null` (no handshake yet) hides the row exactly as `false` does - the row
-  // reappears on its own once the host advertises the method, no reload.
-  //
-  // BOTH methods, because they negotiate independently: the row is an
-  // interactive switch, so a host that could answer `get` but not `set` would
-  // render a control whose every flip fails. Two statements, not one `&&`:
-  // short-circuiting a hook call is a rules-of-hooks violation.
-  const inlineArtifactsGetSupported = useHostMethodSupport(
-    hostId,
-    INLINE_ARTIFACTS_GET,
-  );
-  const inlineArtifactsSetSupported = useHostMethodSupport(
-    hostId,
-    INLINE_ARTIFACTS_SET,
-  );
-  const inlineArtifactsSupported =
-    inlineArtifactsGetSupported === true &&
-    inlineArtifactsSetSupported === true;
 
   return (
     <>
@@ -105,9 +74,6 @@ export function BrowserSettingsSection(props: {
         dataTestId="settings-browser-agents"
         fill={false}
       >
-        {inlineArtifactsSupported ? (
-          <InlineArtifactsRow hostId={hostId} />
-        ) : null}
         {props.agentOpenedTabsRow}
         {browserDevOrigins.length > 0 ? (
           <SettingsRow
@@ -136,56 +102,6 @@ function hostNameOf(
 ): string | null {
   const label = entry?.label.trim() ?? "";
   return label.length > 0 ? label : hostId;
-}
-
-const INLINE_ARTIFACTS_GET = "config.visualization.get";
-const INLINE_ARTIFACTS_SET = "config.visualization.set";
-
-function InlineArtifactsRow(props: {
-  readonly hostId: string | null;
-}): ReactNode {
-  const client = useHostClient();
-  const hostName = hostNameOf(
-    useHostDirectoryEntry(props.hostId),
-    props.hostId,
-  );
-  const query = useHostQuery<HostRpcRegistry, "config.visualization.get">({
-    cacheKeyIdentity: undefined,
-    client,
-    method: INLINE_ARTIFACTS_GET,
-    params: {},
-    options: { enabled: true },
-  });
-  const setInlineArtifacts = useHostScopedMutationForClient(client, {
-    method: INLINE_ARTIFACTS_SET,
-    mutationKey: configMutationKeys.visualizationSet(),
-    errorMessage: "Couldn't update inline artifacts",
-    invalidateMethods: [INLINE_ARTIFACTS_GET],
-  });
-
-  return (
-    <SettingsRow
-      row={BROWSER.definitions.agentPages}
-      status={
-        query.isError
-          ? "Couldn't read this host's inline artifact setting. Repair Traycer's config.json on that machine, or back it up before resetting it, then reopen Settings."
-          : `On ${hostName ?? "this host"}. ${BROWSER.definitions.agentPages.description}`
-      }
-      control={
-        <Switch
-          checked={query.data?.agentPages === true}
-          disabled={
-            query.isPending || query.isError || setInlineArtifacts.isPending
-          }
-          aria-label="Let agents show artifacts in chat"
-          onCheckedChange={(next) => {
-            trackSettingChanged("browser", "agentPages");
-            setInlineArtifacts.mutate({ agentPages: next });
-          }}
-        />
-      }
-    />
-  );
 }
 
 function BrowserDevOriginsControl(props: {
