@@ -10,6 +10,8 @@ import {
   simulatorListResponseSchema,
   simulatorOpenRequestSchema,
   simulatorOpenResponseSchema,
+  simulatorRemoveToolsRequestSchema,
+  simulatorRemoveToolsResponseSchema,
   simulatorScreenshotRequestSchema,
   simulatorScreenshotResponseSchema,
   simulatorShutdownRequestSchema,
@@ -79,6 +81,18 @@ export const simulatorStatusV10 = defineRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: simulatorStatusRequestSchema,
   responseSchema: simulatorStatusResponseSchema,
+});
+
+/**
+ * Removes the downloaded simulator tools from this host's managed store.
+ * Refused while the switch is on or the hub or agent daemon runs; the
+ * next `enabled: true` installs them again.
+ */
+export const simulatorRemoveToolsV10 = defineRpcContract({
+  method: "simulator.removeTools",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: simulatorRemoveToolsRequestSchema,
+  responseSchema: simulatorRemoveToolsResponseSchema,
 });
 
 /** Reads the machine-user-global simulator switches. */

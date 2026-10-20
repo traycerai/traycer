@@ -28,6 +28,7 @@ interface SectionFakes {
   config: { enabled: boolean; agentAccess: boolean };
   status: SimulatorStatusResponse;
   write: Mock;
+  remove: Mock;
 }
 
 const fakes = vi.hoisted((): SectionFakes => ({
@@ -37,8 +38,10 @@ const fakes = vi.hoisted((): SectionFakes => ({
     platforms: [],
     packState: { kind: "off", reason: null, progress: null },
     packVersion: null,
+    installed: null,
   },
   write: vi.fn(),
+  remove: vi.fn(),
 }));
 
 vi.mock("@/hooks/host/use-host-supports-method", () => ({
@@ -60,6 +63,13 @@ vi.mock("@/hooks/simulator/use-simulator-mutations", () => ({
     mutation: { mutate: fakes.write, isPending: false },
     supported: true,
   }),
+  useSimulatorRemoveToolsMutation: (
+    _client: unknown,
+    _hostId: string | null,
+  ) => ({
+    mutation: { mutate: fakes.remove, isPending: false },
+    supported: fakes.methodSupport["simulator.removeTools"] === true,
+  }),
 }));
 
 function withPack(
@@ -78,6 +88,7 @@ beforeEach(() => {
     "config.simulator.get": true,
     "config.simulator.set": true,
     "simulator.status": true,
+    "simulator.removeTools": true,
   };
   fakes.config = { enabled: true, agentAccess: false };
   fakes.status = {
@@ -87,6 +98,10 @@ beforeEach(() => {
     ],
     packState: { kind: "ready", reason: null, progress: null },
     packVersion: "0.15.3-0.21.25.22.23.3",
+    installed: {
+      version: "0.15.3-0.21.25.22.23.3",
+      sizeBytes: 216 * 1024 ** 2,
+    },
   };
 });
 
@@ -115,15 +130,57 @@ describe("SimulatorSettingsGroup", () => {
     expect(screen.queryByTestId("settings-browser-simulators")).toBeNull();
   });
 
-  it("says the tools are not downloaded while simulators are off", () => {
+  it("says the tools are not downloaded while simulators are off and the store is empty", () => {
+    fakes.config = { enabled: false, agentAccess: false };
+    fakes.status = {
+      ...withPack({ kind: "off", reason: null, progress: null }, null),
+      installed: null,
+    };
+    renderGroup();
+    expect(
+      screen.getByTestId("settings-simulator-tools-off").textContent,
+    ).toContain("Not downloaded");
+    expect(screen.queryByTestId("settings-simulators-remove-tools")).toBeNull();
+  });
+
+  it("offers Remove for downloaded tools while simulators are off, and sends it only after confirm", () => {
+    fakes.config = { enabled: false, agentAccess: false };
     fakes.status = withPack(
       { kind: "off", reason: null, progress: null },
       null,
     );
     renderGroup();
     expect(
-      screen.getByTestId("settings-simulator-tools-off").textContent,
-    ).toContain("Not downloaded");
+      screen.getByTestId("settings-simulator-tools-downloaded").textContent,
+    ).toBe("Downloaded, 216 MB. Simulators are off.");
+    fireEvent.click(screen.getByTestId("settings-simulators-remove-tools"));
+    expect(fakes.remove).not.toHaveBeenCalled();
+    const dialog = screen.getByTestId("confirm-destructive-dialog");
+    expect(dialog.textContent).toContain(
+      "Remove the simulator tools from Studio Mac?",
+    );
+    fireEvent.click(screen.getByTestId("confirm-action"));
+    expect(fakes.remove).toHaveBeenCalledTimes(1);
+    expect(fakes.remove).toHaveBeenCalledWith({});
+  });
+
+  it("never offers Remove while simulators are on, or when the host lacks the verb", () => {
+    // On: the tools are in use or about to be.
+    renderGroup();
+    expect(screen.queryByTestId("settings-simulators-remove-tools")).toBeNull();
+    cleanup();
+    // Off with bytes, but a host that predates the verb.
+    fakes.methodSupport["simulator.removeTools"] = false;
+    fakes.config = { enabled: false, agentAccess: false };
+    fakes.status = withPack(
+      { kind: "off", reason: null, progress: null },
+      null,
+    );
+    renderGroup();
+    expect(
+      screen.getByTestId("settings-simulator-tools-downloaded").textContent,
+    ).toContain("Downloaded");
+    expect(screen.queryByTestId("settings-simulators-remove-tools")).toBeNull();
   });
 
   it("shows download progress and a bar while the host installs the tools", () => {

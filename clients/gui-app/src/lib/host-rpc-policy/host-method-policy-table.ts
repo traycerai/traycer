@@ -2354,6 +2354,12 @@ export const HOST_METHOD_POLL_TABLE = {
       resetLaneIds: NO_RESET_LANES,
     }),
   },
+  // Settings' Remove: a mutation on the host's store, ordered like the rest.
+  "simulator.removeTools": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
   // The budget is a PERMISSION (see `providers.refreshPackDiscovery`): a cold
   // open answers after the boot, which the host bounds at three minutes, and
   // only `useSimulatorOpenMutation` passing this same constant makes it apply.

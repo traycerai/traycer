@@ -7,6 +7,7 @@ import {
   simulatorCloseV10,
   simulatorListV10,
   simulatorOpenV10,
+  simulatorRemoveToolsV10,
   simulatorScreenshotV10,
   simulatorShutdownV10,
   simulatorStatusV10,
@@ -23,6 +24,7 @@ const SIMULATOR_METHODS = {
   "simulator.shutdown": simulatorShutdownV10,
   "simulator.screenshot": simulatorScreenshotV10,
   "simulator.status": simulatorStatusV10,
+  "simulator.removeTools": simulatorRemoveToolsV10,
   "simulator.detail": simulatorDetailV10,
   "simulator.action": simulatorActionV10,
   "config.simulator.get": configSimulatorGetV10,
@@ -128,6 +130,41 @@ describe("simulator contracts", () => {
         height: 10,
       }),
     ).toThrow();
+  });
+
+  it("reports what the store holds beside the switch's pack state, and removal by version", () => {
+    const status = {
+      platforms: [],
+      packState: { kind: "off", reason: null, progress: null },
+      packVersion: null,
+    };
+    expect(
+      simulatorStatusV10.responseSchema.parse({
+        ...status,
+        installed: { version: "0.15.3-0.21.25.22.23.3", sizeBytes: 216 },
+      }).installed,
+    ).toEqual({ version: "0.15.3-0.21.25.22.23.3", sizeBytes: 216 });
+    expect(
+      simulatorStatusV10.responseSchema.parse({ ...status, installed: null })
+        .installed,
+    ).toBeNull();
+    // Bytes on disk are a whole count; a missing field is a malformed peer.
+    expect(() =>
+      simulatorStatusV10.responseSchema.parse({
+        ...status,
+        installed: { version: "1", sizeBytes: 1.5 },
+      }),
+    ).toThrow();
+    expect(() => simulatorStatusV10.responseSchema.parse(status)).toThrow();
+    expect(simulatorRemoveToolsV10.requestSchema.parse({})).toEqual({});
+    expect(
+      simulatorRemoveToolsV10.responseSchema.parse({
+        removed: ["0.15.3-0.21.25.22.23.3"],
+      }),
+    ).toEqual({ removed: ["0.15.3-0.21.25.22.23.3"] });
+    expect(
+      simulatorRemoveToolsV10.responseSchema.parse({ removed: [] }).removed,
+    ).toEqual([]);
   });
 
   it("reports a shutdown as the simulator no longer booted", () => {

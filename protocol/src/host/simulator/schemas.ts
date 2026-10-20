@@ -228,16 +228,52 @@ export const simulatorStatusRequestSchema = lazySchema(() => z.object({}));
 export type SimulatorStatusRequest = z.infer<
   typeof simulatorStatusRequestSchema
 >;
+/**
+ * What the host's managed store holds for the `simulator-tools` pack,
+ * whatever the switch says: the newest installed version and the bytes the
+ * pack occupies there (every installed version plus the cached archive).
+ * Null when nothing is installed or the store could not be read. A dev
+ * host's shared development copy is never reported here.
+ */
+export const simulatorInstalledToolsSchema = lazySchema(() =>
+  z.object({
+    version: z.string().min(1),
+    sizeBytes: z.number().int().nonnegative(),
+  }),
+);
+export type SimulatorInstalledTools = z.infer<
+  typeof simulatorInstalledToolsSchema
+>;
 export const simulatorStatusResponseSchema = lazySchema(() =>
   z.object({
     platforms: z.array(simulatorPlatformAvailabilitySchema),
     packState: simulatorPackStateSchema,
     /** The installed pack's version while `ready`; null otherwise. */
     packVersion: z.string().min(1).nullable(),
+    /** The pack's bytes in this host's managed store; see the schema. */
+    installed: simulatorInstalledToolsSchema.nullable(),
   }),
 );
 export type SimulatorStatusResponse = z.infer<
   typeof simulatorStatusResponseSchema
+>;
+
+/**
+ * `simulator.removeTools`: deletes every installed `simulator-tools` version
+ * and its cached archive from this host's managed store. Refused while the
+ * switch is on or a helper runs. `removed` names the versions deleted.
+ */
+export const simulatorRemoveToolsRequestSchema = lazySchema(() => z.object({}));
+export type SimulatorRemoveToolsRequest = z.infer<
+  typeof simulatorRemoveToolsRequestSchema
+>;
+export const simulatorRemoveToolsResponseSchema = lazySchema(() =>
+  z.object({
+    removed: z.array(z.string().min(1)),
+  }),
+);
+export type SimulatorRemoveToolsResponse = z.infer<
+  typeof simulatorRemoveToolsResponseSchema
 >;
 
 /**

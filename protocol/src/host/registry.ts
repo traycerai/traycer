@@ -913,6 +913,7 @@ import {
   simulatorCloseV10,
   simulatorListV10,
   simulatorOpenV10,
+  simulatorRemoveToolsV10,
   simulatorScreenshotV10,
   simulatorShutdownV10,
   simulatorStatusV10,
@@ -6269,6 +6270,19 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
       versions: {
         0: {
           contract: simulatorStatusV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "simulator.removeTools": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: simulatorRemoveToolsV10,
           upgradeFromPreviousVersion: null,
         },
       },

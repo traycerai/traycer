@@ -14,8 +14,12 @@ import type { SimulatorSessionsState } from "@/lib/simulator-view/simulator-sess
  * live on a host that can serve the list, with simulators turned on and the
  * tools installed - and asks again after every drop and resubscribe (a host
  * restart takes the stream down and brings it back under a panel that never
- * remounted), because the hub it started is gone with the host. A re-render
- * alone never asks: only the stream's own transition into `live` does.
+ * remounted), because the hub it started is gone with the host - and again
+ * whenever the pack stops being ready and becomes ready once more during one
+ * live episode (simulators turned off and on, the tools reinstalled): the
+ * published state says "no simulators" until something starts the hub again.
+ * A re-render alone never asks: only a transition into `live` and `ready`
+ * does.
  */
 export function useSimulatorInventoryRefreshOnMount(args: {
   readonly hostId: string | null;
@@ -26,15 +30,17 @@ export function useSimulatorInventoryRefreshOnMount(args: {
   const live = sessions.lifecycle === "live";
   const ready = supported && live && sessions.state?.packState.kind === "ready";
   const refresh = sessions.refresh;
-  // A refresh is owed for the current live episode until it is sent; the
-  // debt comes back whenever the stream leaves `live`.
+  // A refresh is owed until it is sent while live and ready; the debt comes
+  // back whenever either stops holding - the stream leaving `live`, or the
+  // pack leaving `ready` (off, installing, failed) - so the next time both
+  // hold again, one refresh goes out.
   const owed = useRef(true);
   useEffect(() => {
-    if (!live) {
+    if (!live || !ready) {
       owed.current = true;
       return;
     }
-    if (!owed.current || !ready) return;
+    if (!owed.current) return;
     owed.current = false;
     refresh();
   }, [live, ready, refresh]);

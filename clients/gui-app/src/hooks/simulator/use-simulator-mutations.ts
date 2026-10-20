@@ -89,6 +89,26 @@ export function useSimulatorConfigSetMutation(
 }
 
 /**
+ * Removes the downloaded simulator tools from `hostId`'s store. The host
+ * refuses while simulators are on or a helper still runs, and that refusal
+ * toasts like any other host error; Settings' status read is asked again
+ * either way so the row shows what is left on disk.
+ */
+export function useSimulatorRemoveToolsMutation(
+  client: HostClient<HostRpcRegistry> | null,
+  hostId: string | null,
+): GatedSimulatorMutation<"simulator.removeTools"> {
+  const supported = useHostSupportsMethod(hostId, "simulator.removeTools");
+  const mutation = useHostScopedMutationForClient(client, {
+    method: "simulator.removeTools",
+    mutationKey: simulatorMutationKeys.removeTools(hostId ?? ""),
+    errorMessage: "Couldn't remove the simulator tools.",
+    invalidateMethods: CONFIG_INVALIDATIONS,
+  });
+  return { mutation, supported };
+}
+
+/**
  * Boots (or attaches to) one simulator. Keyed by host alone: the host's own
  * `booting` list says which simulator is booting to every window.
  *

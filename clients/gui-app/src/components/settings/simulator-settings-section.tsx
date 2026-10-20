@@ -1,5 +1,7 @@
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
+import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type {
+  SimulatorInstalledTools,
   SimulatorPackState,
   SimulatorPlatformAvailability,
   SimulatorStatusResponse,
@@ -11,15 +13,18 @@ import { SettingsRow } from "@/components/settings/settings-row";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
 import { Switch } from "@/components/ui/switch";
 import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
 import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
 import {
   useSimulatorConfigQuery,
   useSimulatorConfigSetMutation,
+  useSimulatorRemoveToolsMutation,
   useSimulatorStatusQuery,
 } from "@/hooks/simulator/use-simulator-mutations";
-import { useHostClient } from "@/lib/host";
+import { useHostClient, type HostRpcRegistry } from "@/lib/host";
+import { formatHostProgressBytes } from "@/lib/host/host-progress-copy";
 
 /**
  * Settings > Browser > Simulators: the two switches of `config.simulator`,
@@ -90,6 +95,8 @@ function SimulatorSettingsRows(props: {
       <SimulatorAgentAccessRow switches={switches} />
       {statusSupported ? (
         <SimulatorStatusRows
+          client={client}
+          hostId={hostId}
           status={status.data ?? null}
           statusUnreadable={status.isError}
           switches={switches}
@@ -175,6 +182,8 @@ function SimulatorAgentAccessRow(props: {
 }
 
 function SimulatorStatusRows(props: {
+  readonly client: HostClient<HostRpcRegistry> | null;
+  readonly hostId: string | null;
   readonly status: SimulatorStatusResponse | null;
   readonly statusUnreadable: boolean;
   readonly switches: SimulatorSwitches;
@@ -182,6 +191,14 @@ function SimulatorStatusRows(props: {
 }): ReactNode {
   const { status, switches } = props;
   const packState = status?.packState ?? null;
+  const installed = status?.installed ?? null;
+  const remove = useSimulatorRemoveToolsMutation(props.client, props.hostId);
+  const [confirmingRemove, setConfirmingRemove] = useState(false);
+  // Remove is offered only for bytes the switch no longer needs: off, with
+  // the tools still in the host's store. On, and they are in use or about
+  // to be; the host refuses either way, so the button is not drawn.
+  const removable =
+    remove.supported && packState?.kind === "off" && installed !== null;
   return (
     <>
       <SettingsRow
@@ -201,40 +218,104 @@ function SimulatorStatusRows(props: {
             <SimulatorToolsStatus
               packState={packState}
               packVersion={status.packVersion}
+              installed={installed}
               hostName={props.hostName}
             />
           )
         }
         control={
-          packState?.kind === "failed" ? (
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              disabled={switches.locked}
-              data-testid="settings-simulators-retry"
-              // Re-asserting the switch is the install's retry: the host
-              // converges the tools again on every `enabled: true`.
-              onClick={() =>
-                switches.write({
-                  enabled: true,
-                  agentAccess: switches.agentAccess,
-                })
-              }
-            >
-              {switches.writing ? (
-                <AgentSpinningDots
-                  className={undefined}
-                  testId={undefined}
-                  variant={undefined}
-                />
-              ) : null}
-              Try again
-            </Button>
-          ) : null
+          <SimulatorToolsControl
+            packState={packState}
+            removable={removable}
+            removing={remove.mutation.isPending}
+            switches={switches}
+            onRemove={() => {
+              setConfirmingRemove(true);
+            }}
+          />
         }
       />
+      <ConfirmDestructiveDialog
+        open={confirmingRemove}
+        onOpenChange={setConfirmingRemove}
+        title="Remove simulator tools?"
+        description={`Remove the simulator tools from ${props.hostName}? Turning simulators on downloads them again.`}
+        // Nothing is nested under the tools; the cascade slot is for rows
+        // with descendants.
+        cascadeSummary={null}
+        actionLabel="Remove"
+        isPending={remove.mutation.isPending}
+        blockedReason={null}
+        onConfirm={() => {
+          // The row's button carries the pending state; a refusal toasts
+          // from the hook, and the status read is asked again either way.
+          setConfirmingRemove(false);
+          remove.mutation.mutate({});
+        }}
+      />
     </>
+  );
+}
+
+/**
+ * The Simulator tools row's one action: Try again after a failed install,
+ * Remove for downloaded tools the switch no longer needs, nothing otherwise.
+ */
+function SimulatorToolsControl(props: {
+  readonly packState: SimulatorPackState | null;
+  readonly removable: boolean;
+  readonly removing: boolean;
+  readonly switches: SimulatorSwitches;
+  readonly onRemove: () => void;
+}): ReactNode {
+  const { switches } = props;
+  if (props.packState?.kind === "failed") {
+    return (
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        disabled={switches.locked}
+        data-testid="settings-simulators-retry"
+        // Re-asserting the switch is the install's retry: the host
+        // converges the tools again on every `enabled: true`.
+        onClick={() =>
+          switches.write({
+            enabled: true,
+            agentAccess: switches.agentAccess,
+          })
+        }
+      >
+        {switches.writing ? (
+          <AgentSpinningDots
+            className={undefined}
+            testId={undefined}
+            variant={undefined}
+          />
+        ) : null}
+        Try again
+      </Button>
+    );
+  }
+  if (!props.removable) return null;
+  return (
+    <Button
+      type="button"
+      variant="outline"
+      size="sm"
+      disabled={switches.locked || props.removing}
+      data-testid="settings-simulators-remove-tools"
+      onClick={props.onRemove}
+    >
+      {props.removing ? (
+        <AgentSpinningDots
+          className={undefined}
+          testId={undefined}
+          variant={undefined}
+        />
+      ) : null}
+      Remove
+    </Button>
   );
 }
 
@@ -271,15 +352,22 @@ function SimulatorPlatformList(props: {
 function SimulatorToolsStatus(props: {
   readonly packState: SimulatorPackState;
   readonly packVersion: string | null;
+  /** What the host's store still holds, whatever the switch says. */
+  readonly installed: SimulatorInstalledTools | null;
   readonly hostName: string;
 }): ReactNode {
   const { packState } = props;
   switch (packState.kind) {
     case "off":
-      return (
+      return props.installed === null ? (
         <span data-testid="settings-simulator-tools-off">
           Not downloaded. Turning simulators on downloads them to{" "}
           {props.hostName}.
+        </span>
+      ) : (
+        <span data-testid="settings-simulator-tools-downloaded">
+          Downloaded, {formatHostProgressBytes(props.installed.sizeBytes)}.
+          Simulators are off.
         </span>
       );
     case "installing": {

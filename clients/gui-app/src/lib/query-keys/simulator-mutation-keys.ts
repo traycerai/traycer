@@ -18,4 +18,6 @@ export const simulatorMutationKeys = {
     ["simulator.action", hostId, simulatorId] as const,
   /** The machine-user-global switches; one pair per host. */
   configSet: (hostId: string) => ["config.simulator.set", hostId] as const,
+  /** Remove the downloaded tools from one host's store. */
+  removeTools: (hostId: string) => ["simulator.removeTools", hostId] as const,
 };

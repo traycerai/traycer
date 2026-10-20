@@ -243,6 +243,38 @@ describe("SimulatorsSidebarGroup", () => {
     expect(fakes.refresh).toHaveBeenCalledTimes(2);
   });
 
+  it("asks again when the pack becomes ready during a live episode, and not before", () => {
+    const rerender = renderGroup();
+    expect(fakes.refresh).toHaveBeenCalledTimes(1);
+    // Simulators turned off, then on: the stream stays live throughout, and
+    // the inventory it publishes says "none" until something starts the hub.
+    fakes.sessions = sessions(
+      {
+        ...STATE,
+        packState: { kind: "off", reason: null, progress: null },
+        simulators: [],
+      },
+      "live",
+    );
+    rerender();
+    expect(fakes.refresh).toHaveBeenCalledTimes(1);
+    fakes.sessions = sessions(
+      {
+        ...STATE,
+        packState: { kind: "installing", reason: null, progress: 0.5 },
+        simulators: [],
+      },
+      "live",
+    );
+    rerender();
+    expect(fakes.refresh).toHaveBeenCalledTimes(1);
+    fakes.sessions = sessions({ ...STATE, simulators: [] }, "live");
+    rerender();
+    expect(fakes.refresh).toHaveBeenCalledTimes(2);
+    rerender();
+    expect(fakes.refresh).toHaveBeenCalledTimes(2);
+  });
+
   it("offers Turn on while simulators are off, writing both switches", () => {
     fakes.sessions = sessions(
       {
