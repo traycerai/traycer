@@ -132,6 +132,13 @@ class WirePeer {
   readonly dialedUrls: string[] = [];
   /** Every `open` payload the client sent, decoded, in arrival order. */
   readonly opens: Record<string, unknown>[] = [];
+  /**
+   * The plaintext mux bytes (after Noise on the relay fake) of every client
+   * frame on the session control stream up to the first `openAck`: the OPEN,
+   * with its qos, streamId, seq and flags.
+   */
+  readonly openPhaseFrames: string[] = [];
+  private acked = false;
   /** Every text frame the client sent (keepalive pings, relay control). */
   readonly textFrames: string[] = [];
   readonly requests: { method: string; requestId: string }[] = [];
@@ -142,8 +149,6 @@ class WirePeer {
   dialPlan: DialStep[] = [];
   /** While set, every dial is refused (the socket closes without opening). */
   refuseAll = false;
-  /** A replica that is still draining answers the next `open` with the tombstone. */
-  drainOnNextOpen: string | null = null;
   openAckCapabilities: string[] = [];
   unaryError: { readonly code: string; readonly message: string } | null = null;
 
@@ -295,6 +300,9 @@ class WirePeer {
       muxBytes = await connection.noise.decrypt(data, EMPTY_AD);
     }
     const frame = decodeMuxFrame(muxBytes);
+    if (!this.acked && frame.streamId === SESSION_CONTROL_STREAM_ID) {
+      this.openPhaseFrames.push(Buffer.from(muxBytes).toString("hex"));
+    }
     const expectedSeq = connection.inboundSeqByStream.get(frame.streamId);
     if (
       !frame.chunked &&
@@ -347,18 +355,7 @@ class WirePeer {
       return;
     }
     this.opens.push(message.json ?? {});
-    const tombstoneId = this.drainOnNextOpen;
-    if (tombstoneId !== null) {
-      this.drainOnNextOpen = null;
-      await this.sendDrainFatal(connection, tombstoneId);
-      connection.closed = true;
-      connection.socket.onclose?.({
-        code: 1012,
-        reason: "service-restart",
-        wasClean: true,
-      });
-      return;
-    }
+    this.acked = true;
     await this.sendMux(connection, {
       type: MuxFrameType.OPEN_ACK,
       streamId: SESSION_CONTROL_STREAM_ID,
@@ -607,9 +604,8 @@ describe("a pool session on the one remote session wire", () => {
 
       expect(poolPeer.dialedUrls).toEqual([POOL_URL]);
       expect(poolPeer.opens).toHaveLength(1);
-      expect(JSON.stringify(poolPeer.opens[0])).toBe(
-        JSON.stringify(relayPeer.opens[0]),
-      );
+      expect(poolPeer.openPhaseFrames.length).toBeGreaterThan(0);
+      expect(poolPeer.openPhaseFrames).toEqual(relayPeer.openPhaseFrames);
       expect(poolPeer.errors).toEqual([]);
     } finally {
       relay.close();
@@ -653,7 +649,7 @@ describe("a pool session on the one remote session wire", () => {
     }
   });
 
-  it("mints no grant and runs no host-standing watchdog: an hour of quiet keeps the one connection ready", async () => {
+  it("runs no reauth loop and no host-standing watchdog: an hour of quiet keeps the one connection ready", async () => {
     vi.useFakeTimers();
     const peer = new WirePeer("pool");
     const pool = buildPoolSession(
@@ -733,7 +729,7 @@ describe("a pool session on the one remote session wire", () => {
 });
 
 describe("a pool replica draining under a session", () => {
-  it("reports restart intent before loss on every drain, never a dial indeterminate, and holds the announced restart through slow and refused redials until it lapses", async () => {
+  it("reports restart intent before loss on every drain, never a dial indeterminate, and holds the announced restart through a refused and a slow redial until it lapses", async () => {
     vi.useFakeTimers();
     const presence = new PoolSessionPresence(() => Date.now());
     const evidence = new RecordingPoolEvidence(presence);
@@ -748,36 +744,39 @@ describe("a pool replica draining under a session", () => {
       await advanceUntil(() => pool.isReady(), 5_000);
 
       // Drain 1: the next redial is refused, the one after is slow. The hold
-      // survives the refusal and ends only when the session is established.
+      // survives both and ends only when the session is established.
+      const countOf = (call: string): number =>
+        evidence.log.filter((entry) => entry === call).length;
       peer.dialPlan = ["refuse", { slowMs: 5_000 }];
       await peer.drain("t1");
       expect(presence.isRestartExpected("pool")).toBe(true);
-      await advanceUntil(() => peer.connectionCount >= 2, 5_000);
+      const refusalsAfterDrain = countOf("dialRefusal");
+      await advanceUntil(
+        () => countOf("dialRefusal") > refusalsAfterDrain,
+        5_000,
+      );
+      expect(pool.isReady()).toBe(false);
+      expect(presence.isRestartExpected("pool")).toBe(true);
+      // The slow dial is in flight: dialed, not yet open.
+      await advanceUntil(() => peer.connectionCount >= 3, 10_000);
+      expect(countOf("established")).toBe(1);
       expect(pool.isReady()).toBe(false);
       expect(presence.isRestartExpected("pool")).toBe(true);
       await advanceUntil(() => pool.isReady(), 60_000);
+      expect(countOf("established")).toBe(2);
       expect(presence.isRestartExpected("pool")).toBe(false);
 
-      // Drain 2 straight after, and the redial reaches a replica that is
-      // still draining: the same tombstone again.
-      peer.drainOnNextOpen = "t2";
+      // Drain 2 straight after, with the pool then refusing every redial: the
+      // hold lapses one episode after its first receipt and notifies.
+      peer.refuseAll = true;
       const drainedAt = Date.now();
       await peer.drain("t2");
       expect(presence.isRestartExpected("pool")).toBe(true);
-      await advanceUntil(
-        () => evidence.log.filter((c) => c === "restartIntent:t2").length === 2,
-        30_000,
-      );
-      peer.refuseAll = true;
-
-      // The repeat did not push the hold's end out: it lapses one episode
-      // after the FIRST receipt, with the pool still unreachable.
       const beforeLapse = notifications;
-      await vi.advanceTimersByTimeAsync(
-        drainedAt + RESTART_INTENT_EPISODE_MS - 1_000 - Date.now(),
-      );
+      await vi.advanceTimersByTimeAsync(RESTART_INTENT_EPISODE_MS - 1_000);
       expect(presence.isRestartExpected("pool")).toBe(true);
       await vi.advanceTimersByTimeAsync(2_000);
+      expect(Date.now() - drainedAt).toBeGreaterThan(RESTART_INTENT_EPISODE_MS);
       expect(presence.isRestartExpected("pool")).toBe(false);
       expect(notifications).toBeGreaterThan(beforeLapse);
       expect(pool.isReady()).toBe(false);
@@ -798,7 +797,6 @@ describe("a pool replica draining under a session", () => {
         "established",
         "restartIntent:t2",
         "lost",
-        "restartIntent:t2",
         "established",
       ]);
       expect(evidence.log).not.toContain("dialIndeterminate");

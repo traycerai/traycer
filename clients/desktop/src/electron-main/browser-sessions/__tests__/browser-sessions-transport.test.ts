@@ -102,39 +102,48 @@ function remoteEntry(kind: "personal" | "sandbox"): RemoteHostDirectoryEntry {
   return hostListItemToDirectoryEntry(item, "wss://relay.test/attach");
 }
 
-/**
- * A kind outside `HostKind`, the way a later build adds one. The guard is the
- * narrowing: it admits any non-empty string, so the entry below is typed
- * without a cast.
- */
-function isHostKind(kind: string): kind is HostKind {
-  return kind.length > 0;
-}
-
-function entryOfUnknownKind(kind: string): HostDirectoryEntry {
-  if (!isHostKind(kind)) {
-    throw new Error("a kind needs a name");
-  }
+function entryWithKind(
+  kind: Exclude<HostKind, "pool" | "remote">,
+): HostDirectoryEntry {
   return {
-    hostId: "host-x",
-    label: "Unknown",
+    hostId: `host-${kind}`,
+    label: kind,
     kind,
-    websocketUrl: "wss://unknown.test/session",
-    version: null,
-    transportDialability: "dialable",
-  };
-}
-
-function localEntry(): HostDirectoryEntry {
-  return {
-    hostId: "host-l",
-    label: "This machine",
-    kind: "local",
     websocketUrl: "ws://127.0.0.1:4455/ws",
     version: null,
     transportDialability: "dialable",
   };
 }
+
+function poolEntry(): HostDirectoryEntry {
+  const pool = poolHostDirectoryEntry("wss://pool.test/v1/session");
+  if (pool === null) {
+    throw new Error("a non-empty pool URL synthesizes an entry");
+  }
+  return pool;
+}
+
+const KINDS: readonly HostKind[] = ["local", "remote", "mock", "pool"];
+
+type JarTransport = "local-socket" | "personal-remote" | null;
+
+/**
+ * Exhaustive over `HostKind`: a kind added later fails to compile here until
+ * someone decides whether the cookie jar may ride it.
+ */
+const EXPECTED: Readonly<Record<HostKind, JarTransport>> = {
+  local: "local-socket",
+  remote: "personal-remote",
+  mock: null,
+  pool: null,
+};
+
+const ENTRY_OF_KIND: Readonly<Record<HostKind, () => HostDirectoryEntry>> = {
+  local: () => entryWithKind("local"),
+  remote: () => remoteEntry("personal"),
+  mock: () => entryWithKind("mock"),
+  pool: poolEntry,
+};
 
 beforeEach(() => {
   wsStream.constructed.mockClear();
@@ -179,48 +188,24 @@ describe("openBrowserSessionsTransport", () => {
     expect(remote.close).toHaveBeenCalledTimes(1);
   });
 
-  it("builds a local host's plain socket client", () => {
-    const transport = openBrowserSessionsTransport(
-      localEntry(),
-      "user-1",
-      DEPS,
-    );
+  it.each(KINDS)(
+    "gives a %s entry its allowlisted jar transport and no other",
+    (kind) => {
+      const transport = openBrowserSessionsTransport(
+        ENTRY_OF_KIND[kind](),
+        "user-1",
+        DEPS,
+      );
 
-    expect(transport).not.toBeNull();
-    expect(wsStream.constructed).toHaveBeenCalledTimes(1);
-    expect(wsStream.constructed).toHaveBeenCalledWith(
-      expect.objectContaining({ hostId: "host-l" }),
-    );
-    expect(remote.createRemoteHostTransport).not.toHaveBeenCalled();
-
-    transport?.close();
-    expect(wsStream.close).toHaveBeenCalledWith(
-      "browser-sessions-stream-closed",
-    );
-  });
-
-  it("builds nothing for the server pool, whose socket the cookie jar must never reach", () => {
-    const pool = poolHostDirectoryEntry("wss://pool.test/v1/session");
-    if (pool === null) {
-      throw new Error("a non-empty pool URL synthesizes an entry");
-    }
-
-    const transport = openBrowserSessionsTransport(pool, "user-1", DEPS);
-
-    expect(transport).toBeNull();
-    expect(wsStream.constructed).not.toHaveBeenCalled();
-    expect(remote.createRemoteHostTransport).not.toHaveBeenCalled();
-  });
-
-  it("builds nothing for a kind it does not know, with a dialable URL", () => {
-    const transport = openBrowserSessionsTransport(
-      entryOfUnknownKind("satellite"),
-      "user-1",
-      DEPS,
-    );
-
-    expect(transport).toBeNull();
-    expect(wsStream.constructed).not.toHaveBeenCalled();
-    expect(remote.createRemoteHostTransport).not.toHaveBeenCalled();
-  });
+      const expected = EXPECTED[kind];
+      expect(transport === null).toBe(expected === null);
+      expect(wsStream.constructed).toHaveBeenCalledTimes(
+        expected === "local-socket" ? 1 : 0,
+      );
+      expect(remote.createRemoteHostTransport).toHaveBeenCalledTimes(
+        expected === "personal-remote" ? 1 : 0,
+      );
+      transport?.close();
+    },
+  );
 });

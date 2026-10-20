@@ -20,10 +20,6 @@ import {
 } from "../config";
 import { InsecureRelaySchemeError } from "@traycer/protocol/host-transport/relay-attach-url";
 import { RelaySocket, type RelaySocketHandlers } from "../relay-socket";
-import {
-  SOCKET_KEEPALIVE_PING,
-  SOCKET_KEEPALIVE_PONG,
-} from "@traycer/protocol/framework/ws-protocol";
 // `RelaySocket.pokeKeepalive` runs the keepalive's staleness check off the
 // 25s interval schedule - the whole reason `RemoteSession.wake` can detect a
 // socket the runtime's frozen interval never got the chance to notice was
@@ -1020,12 +1016,7 @@ describe("RelaySocket direct leg", () => {
     loopback.close(1000, "test-teardown");
   });
 
-  it("keeps the exact keepalive strings the pool answers: it pings with relay-ping and answers a peer ping with relay-pong", () => {
-    // The pool server and every released client speak these literals, so the
-    // named constants are pinned to them rather than to each other.
-    expect(SOCKET_KEEPALIVE_PING).toBe("relay-ping");
-    expect(SOCKET_KEEPALIVE_PONG).toBe("relay-pong");
-
+  it("pings with exactly relay-ping, answers a peer relay-ping with exactly relay-pong, and passes a received relay-pong to no handler", () => {
     const handlers = makeHandlers({});
     const { socket, stream } = openDirect(handlers);
     stream.open();
@@ -1036,10 +1027,27 @@ describe("RelaySocket direct leg", () => {
     stream.emitText("relay-ping");
     expect(stream.sent).toEqual(["relay-ping", "relay-pong"]);
 
-    // A pong answers the ping: the socket stays healthy past the idle deadline.
     stream.emitPong();
-    vi.advanceTimersByTime(RELAY_PONG_TIMEOUT_MS - RELAY_PING_TICK_MS);
+    expect(handlers.onData).not.toHaveBeenCalled();
+    expect(handlers.onError).not.toHaveBeenCalled();
+    expect(handlers.onPeerGone).not.toHaveBeenCalled();
+    expect(handlers.onHostDetached).not.toHaveBeenCalled();
     expect(handlers.onClose).not.toHaveBeenCalled();
     socket.close(1000, "test-teardown");
+  });
+
+  it("closes at RELAY_PONG_TIMEOUT_MS when nothing at all comes back", () => {
+    const handlers = makeHandlers({});
+    const { stream } = openDirect(handlers);
+    stream.open();
+
+    vi.advanceTimersByTime(RELAY_PONG_TIMEOUT_MS - 1);
+    expect(handlers.onClose).not.toHaveBeenCalled();
+
+    vi.advanceTimersByTime(1);
+    expect(handlers.onClose).toHaveBeenCalledWith({
+      code: 4004,
+      reason: "relay-missed-pongs",
+    });
   });
 });

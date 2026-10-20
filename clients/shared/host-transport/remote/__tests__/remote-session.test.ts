@@ -2659,8 +2659,8 @@ describe("RemoteStreamClient dynamic subscribe params", () => {
         expect(streamClient.getMethodSupport("cursor.subscribe")).toBe(
           "supported",
         );
-        // `supportedMajors` rides the manifest entry the host published, so
-        // the version this republishes carries it too.
+        // A single-major entry carries no `supportedMajors` (absence means
+        // the entry's own major), so the republished version has none either.
         expect(streamClient.getMethodSchemaVersion("cursor.subscribe")).toEqual(
           { major: 1, minor: 0 },
         );
