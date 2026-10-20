@@ -927,10 +927,6 @@ describe("NewConversationModalBody mirror line", () => {
           {
             hostId: "host-1",
             label: "My laptop",
-            agentsLine: null,
-            unreachable: false,
-            state: "online",
-            openable: true,
           },
         ],
       },
@@ -941,10 +937,6 @@ describe("NewConversationModalBody mirror line", () => {
           {
             hostId: "host-sandbox",
             label: "Acme sandbox",
-            agentsLine: null,
-            unreachable: true,
-            state: null,
-            openable: false,
           },
         ],
       },
