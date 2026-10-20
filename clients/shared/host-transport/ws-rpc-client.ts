@@ -15,6 +15,7 @@ import {
 } from "@traycer/protocol/framework/index";
 import { RELEASED_FLOOR_METHOD_NAMES } from "@traycer/protocol/host/released-floor";
 import { CredentialLeaseReleasedError } from "@traycer/protocol/auth/request-context";
+import { markMayHaveReachedHost } from "@traycer/protocol/host-transport/remote/rpc-types";
 import type { OpenFrameBearerSource } from "@traycer-clients/shared/auth/bearer-source";
 import type { TransportEvidenceReporter } from "@traycer-clients/shared/host-selection/transport-evidence";
 import {
@@ -585,6 +586,52 @@ async function executeAvailableMethodRequest<Payload, Response>(
     idempotencyKey,
   });
 
+  // From here the request has been handed to the socket, so it may have
+  // reached the host and run. A failure this side detects - a fatal after the
+  // request, a malformed, mismatched or unreadable answer - is marked for
+  // `mayHaveReachedHost`. The host's own error envelope is its answer and
+  // stays unmarked.
+  let responseFrame: HostResponseFrame;
+  try {
+    responseFrame = await receiveResponseFrame(
+      session,
+      responseTimeoutMs,
+      requestId,
+      method,
+    );
+  } catch (cause) {
+    throw markedAfterSend(cause);
+  }
+  if (responseFrame.error !== null) {
+    throw HostRpcError.fromWireEnvelope(responseFrame.error, requestId, method);
+  }
+
+  try {
+    return decodeResponsePayloadWithContext<Response>(
+      methodRegistry,
+      clientCanonical,
+      hostCanonical,
+      responseFrame.result,
+      requestId,
+      method,
+      preparedRequest.onWirePayload,
+      hostId,
+    );
+  } catch (cause) {
+    throw markedAfterSend(cause);
+  }
+}
+
+/**
+ * The frame answering this request, or the failure that ends the wait. The
+ * host's error envelope is left on the frame for the caller to throw.
+ */
+async function receiveResponseFrame(
+  session: Session,
+  responseTimeoutMs: number,
+  requestId: string,
+  method: string,
+): Promise<HostResponseFrame> {
   const responseFrame = await session.next(responseTimeoutMs);
 
   if (responseFrame.kind === "fatalError") {
@@ -599,19 +646,41 @@ async function executeAvailableMethodRequest<Payload, Response>(
       fatalDetails: null,
     });
   }
+  if (responseFrame.requestId !== requestId) {
+    throw new HostRpcError({
+      code: "RPC_ERROR",
+      message: `Response requestId '${responseFrame.requestId}' does not match request '${requestId}'`,
+      requestId,
+      method,
+      fatalDetails: null,
+    });
+  }
+  if (responseFrame.method !== method) {
+    throw new HostRpcError({
+      code: "RPC_ERROR",
+      message: `Response method '${responseFrame.method}' does not match request method '${method}'`,
+      requestId,
+      method,
+      fatalDetails: null,
+    });
+  }
+  return responseFrame;
+}
 
-  const decodedResult = decodeResponseFrame(responseFrame, requestId, method);
-
-  return decodeResponsePayloadWithContext<Response>(
-    methodRegistry,
-    clientCanonical,
-    hostCanonical,
-    decodedResult,
-    requestId,
-    method,
-    preparedRequest.onWirePayload,
-    hostId,
-  );
+/**
+ * Marks a failure that ended a request after it was sent. A transport-class
+ * failure is left as it is: it states its own ground, and the host's
+ * no-dispatch attestation (a `RetryableTransportError` without a key) must
+ * keep reading as unsent.
+ */
+function markedAfterSend(cause: unknown): unknown {
+  if (
+    cause instanceof HostRpcError &&
+    !(cause instanceof HostTransportFailureError)
+  ) {
+    markMayHaveReachedHost(cause);
+  }
+  return cause;
 }
 
 async function executeUnavailableMethodDegrade<
@@ -978,38 +1047,6 @@ function isRpcRequestTimeout(details: FatalErrorDetails): boolean {
     details.code === "UNAUTHORIZED" &&
     LEGACY_RPC_REQUEST_TIMEOUT_REASON.test(details.reason)
   );
-}
-
-function decodeResponseFrame(
-  frame: HostResponseFrame,
-  requestId: string,
-  method: string,
-): unknown {
-  if (frame.requestId !== requestId) {
-    throw new HostRpcError({
-      code: "RPC_ERROR",
-      message: `Response requestId '${frame.requestId}' does not match request '${requestId}'`,
-      requestId,
-      method,
-      fatalDetails: null,
-    });
-  }
-
-  if (frame.method !== method) {
-    throw new HostRpcError({
-      code: "RPC_ERROR",
-      message: `Response method '${frame.method}' does not match request method '${method}'`,
-      requestId,
-      method,
-      fatalDetails: null,
-    });
-  }
-
-  if (frame.error !== null) {
-    throw HostRpcError.fromWireEnvelope(frame.error, requestId, method);
-  }
-
-  return frame.result;
 }
 
 /**

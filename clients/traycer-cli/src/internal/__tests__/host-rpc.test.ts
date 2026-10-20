@@ -15,6 +15,7 @@ import {
   HostTransportFailureError,
   RetryableTransportError,
 } from "../../../../shared/host-transport/host-messenger";
+import { RetryEpisodeOutcomeUnknownError } from "../../../../shared/host-transport/retrying-messenger";
 import { createCliCredentialsStore } from "../../store/credentials-store";
 import type { CredentialsMutationStore } from "@traycer/protocol/config/credentials-mutation";
 import { CLI_ERROR_CODES, EXPECTED_CLI_ERROR_CODES } from "../../runner/errors";
@@ -672,6 +673,34 @@ describe("callHostRpc", () => {
     ).rejects.toMatchObject({
       code: CLI_ERROR_CODES.UNEXPECTED,
       message: "agent not found",
+      details: null,
+    });
+  });
+
+  // A refusal that ended a retry episode after an earlier attempt may have
+  // reached the host arrives wrapped in an unknown-outcome transport failure.
+  // Its code still says what to do: an access denial, sanitized, not "host
+  // unreachable" with the wrapper's text.
+  it("maps a refusal that ended a retry episode by the refusal's code", async () => {
+    await expect(
+      toAgentCliError(
+        Promise.reject(
+          new RetryEpisodeOutcomeUnknownError(
+            new HostRpcError({
+              code: "FORBIDDEN",
+              message:
+                "user 00000000-0000-0000-0000-000000000000 has no role on task",
+              requestId: "r2",
+              method: METHOD,
+              fatalDetails: null,
+            }),
+          ),
+        ),
+      ),
+    ).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.FORBIDDEN,
+      message:
+        "traycer: access denied for this epic - check TRAYCER_EPIC_ID and that you're signed in to the account that owns it. An earlier attempt may have gone through. Check before repeating it.",
       details: null,
     });
   });

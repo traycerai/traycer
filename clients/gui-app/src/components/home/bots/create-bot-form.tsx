@@ -24,15 +24,13 @@ const BOT_TITLE_MAX = 500;
 
 /**
  * The form's line for every failed create. It makes no claim about whether
- * the create reached the host, because no error the form receives can prove
- * it: the auth-aware messenger can hide an earlier dispatch across both of its
- * recovery exits. When the authority is aborted during credential recovery it
- * rethrows a `mayHaveDispatched: false` abort; when it rotates the bearer and
- * retries, only the retry's failure comes back. Either can follow a session
- * fatal that rejected a create already sent. Until that messenger preserves
- * dispatch provenance across recovery, the line tells the person to check
- * before trying again. The error's own text is never shown; the mutation
- * cache logs it.
+ * the create reached the host. `mayHaveReachedHost` now says, across
+ * credential recovery too, whether a create may have reached the host; false
+ * means it never did or the host answered with its own error, and whether a
+ * host error followed a commit is `bot.create`'s contract, read from the code.
+ * The form reads neither yet, so the line tells the person to check before
+ * trying again. The error's own text is never shown; the mutation cache logs
+ * it.
  */
 const CREATE_FAILED =
   "Couldn't confirm the bot was created. Check your bots, and try again if it isn't there.";

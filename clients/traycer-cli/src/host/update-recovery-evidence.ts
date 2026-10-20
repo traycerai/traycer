@@ -12,6 +12,7 @@ import type { HostStampPolicy } from "@traycer-clients/shared/host-update";
 import { isValidHostVersion } from "@traycer-clients/shared/host-version/compare-host-versions";
 import type { InstallGenerationIdentity } from "@traycer-clients/shared/host-version/install-generation";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import { finalRefusalOf } from "@traycer-clients/shared/host-transport/retrying-messenger";
 import { callHostRpcAtEndpoint } from "../internal/host-rpc";
 import { readHostInstallRecord } from "../manifest/host-install";
 import { readHostStagedRecord } from "../manifest/host-staged";
@@ -774,7 +775,9 @@ function unreadableArtifact(): ArtifactObservation {
  * deadline cannot change the answer - and leaves every other RPC error on the
  * budgeted path, where a host that is still coming up belongs.
  */
-function authenticatedRefusalReason(err: unknown): string | null {
+function authenticatedRefusalReason(caught: unknown): string | null {
+  // A refusal that ended a retry episode is still the host's refusal.
+  const err = finalRefusalOf(caught);
   if (!(err instanceof HostRpcError)) return null;
   if (err.code !== "UNAUTHORIZED" && err.code !== "FORBIDDEN") return null;
   // The host's words, tagged with its own code so the operator can match the

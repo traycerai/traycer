@@ -319,3 +319,59 @@ export class HostRequestAbortedError extends HostTransportFailureError {
     this.mayHaveDispatched = details.mayHaveDispatched;
   }
 }
+
+/**
+ * Failures whose request was already handed to a live connection when the
+ * connection ended, so the host may have run it. Keyed by identity: the mark
+ * changes nothing about the error a consumer receives (class, fields, name),
+ * and a site that re-wraps or copies an error must carry the mark itself.
+ */
+const reachedHostFailures = new WeakSet<HostRpcError>();
+
+/**
+ * Records that `error` ended a request that had already been sent, for the
+ * failure shapes whose class alone cannot say so: a session that closes or
+ * goes terminally fatal with the request pending, a corrupt or undecodable
+ * answer, a per-stream fatal after the request. Each arrives as a plain
+ * `HostRpcError`, the same class a host refusal arrives as.
+ */
+export function markMayHaveReachedHost(error: HostRpcError): void {
+  reachedHostFailures.add(error);
+}
+
+/**
+ * Whether the request this failure ended may have reached the host, so the
+ * host may have run it: a caller reporting the outcome of a non-idempotent
+ * request must not say it was not done.
+ *
+ * True for a failure marked by {@link markMayHaveReachedHost}, an abort after
+ * dispatch, a keyed request dropped after it was sent, and a transport failure
+ * the host did not attest (the ambiguous post-send drop, and every retry
+ * episode whose earlier attempt was sent).
+ *
+ * It leans true wherever the transport cannot attest either way, and that
+ * includes some requests that provably never left: a `sendUnary` on a session
+ * already closed by its caller, or one closed while the call awaited
+ * readiness, fails with a `HostTransportFailureError` without `fatalDetails`
+ * before anything is enqueued, and reads true.
+ *
+ * False means one of two things, and the second is not "did not run": the
+ * transport attests the request never reached the host (a pre-send abort, an
+ * unkeyed retryable failure, a failure the host attested), or the host
+ * answered with its own error envelope. A host error can follow the method's
+ * run (a partial failure, a result rejected after the resolver completed, a
+ * response too large to send), and whether one did is the method's contract,
+ * judged by the caller from the error's code; the transport cannot know. Any
+ * value that is not a `HostRpcError` reads false too.
+ */
+export function mayHaveReachedHost(error: unknown): boolean {
+  if (!(error instanceof HostRpcError)) return false;
+  if (reachedHostFailures.has(error)) return true;
+  if (error instanceof HostRequestAbortedError) return error.mayHaveDispatched;
+  if (error instanceof RetryableTransportError) {
+    return error.replaySafetyFromKey;
+  }
+  return (
+    error instanceof HostTransportFailureError && error.fatalDetails === null
+  );
+}

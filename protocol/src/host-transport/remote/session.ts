@@ -51,6 +51,7 @@ import {
   HostRequestAbortedError,
   HostRpcError,
   HostTransportFailureError,
+  markMayHaveReachedHost,
   negotiatedVersionMeetsRequirement,
   RetryableTransportError,
   type RequestOfMethod,
@@ -4061,7 +4062,12 @@ export class RemoteSession<
       );
       entry.resolve(decoded);
     } catch (cause) {
-      entry.reject(asHostRpcError(cause, entry.requestId, entry.method));
+      // The host answered success, so it ran the call; only this side could
+      // not read the answer. Unlike the error envelope above, which is the
+      // host's own refusal, this one is marked.
+      const unreadable = asHostRpcError(cause, entry.requestId, entry.method);
+      markMayHaveReachedHost(unreadable);
+      entry.reject(unreadable);
     }
   }
 
@@ -5439,11 +5445,18 @@ export class RemoteSession<
     // still has a CLOSE to send on it. Each caller retires the counter itself.
   }
 
+  /**
+   * Every pending entry was enqueued for the wire, so the host may have run
+   * it whatever ended the wait - a timeout, a corrupt inbound frame, or the
+   * host's per-stream FATAL, which carries no attestation that the request was
+   * never dispatched - and the rejection is marked for `mayHaveReachedHost`.
+   */
   private rejectUnary(streamId: number, error: HostRpcError): void {
     const entry = this.pendingUnary.get(streamId);
     if (entry === undefined) {
       return;
     }
+    markMayHaveReachedHost(error);
     this.clearPendingUnary(streamId);
     this.traffic?.end(streamId, true);
     const nextSeq = this.retireOutboundSeq(streamId);
@@ -5496,7 +5509,13 @@ export class RemoteSession<
     }
   }
 
+  /**
+   * Every pending entry was enqueued for the wire, so the host may have run
+   * it: the rejection is marked so callers can tell it from a host refusal,
+   * which arrives as the same class.
+   */
   private rejectAllPendingUnary(error: HostRpcError): void {
+    markMayHaveReachedHost(error);
     for (const [streamId, entry] of Array.from(this.pendingUnary)) {
       this.traffic?.end(streamId, true);
       if (entry.timer !== null) {
