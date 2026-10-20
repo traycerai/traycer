@@ -170,7 +170,6 @@ export const SAMPLE_CHANGE_TOTALS = { additions: 47, deletions: 9 };
  */
 export const SAMPLE_RESTORE: ChatRestoreContextValue = {
   accessRole: "owner",
-  currentUserId: null,
   activeHostId: null,
   activeTurnStatus: null,
   localSnapshotsClearedAt: null,

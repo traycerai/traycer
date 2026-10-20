@@ -387,6 +387,7 @@ export function openEpicSession(): OpenedStoreForTest {
       createdAt: 1,
       updatedAt: 1,
       userId: null,
+      ownedByViewer: true,
       hostId: HARNESS_LOCAL_HOST.hostId,
       isTitleEditedByUser: false,
       docResident: false,

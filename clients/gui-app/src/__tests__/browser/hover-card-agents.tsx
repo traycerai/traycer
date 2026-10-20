@@ -109,6 +109,7 @@ function openSession() {
       createdAt: 1,
       updatedAt: 1,
       userId: null,
+      ownedByViewer: true,
       hostId: HOST_ID,
       isTitleEditedByUser: false,
       docResident: false,

@@ -174,7 +174,6 @@ const SETTINGS: ChatRunSettings = {
 
 const EMPTY_RESTORE: ChatRestoreContextValue = {
   accessRole: "owner",
-  currentUserId: "user-1",
   activeHostId: HOST_ID,
   activeTurnStatus: null,
   localSnapshotsClearedAt: null,

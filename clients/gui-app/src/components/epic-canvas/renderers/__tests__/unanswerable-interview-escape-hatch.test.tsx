@@ -52,7 +52,6 @@ const EMPTY_BACKGROUND_STOP_TASK_IDS: ReadonlySet<string> = new Set();
 
 const RESTORE_CONTEXT: ChatRestoreContextValue = {
   accessRole: "owner",
-  currentUserId: "user-1",
   activeHostId: "host-1",
   activeTurnStatus: null,
   localSnapshotsClearedAt: null,
