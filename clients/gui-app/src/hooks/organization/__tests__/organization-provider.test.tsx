@@ -964,6 +964,115 @@ describe("OrganizationProvider draft group intent", () => {
       expect(state.mutateAsync).toHaveBeenCalledTimes(1);
     });
 
+    /**
+     * Sends the test settles by hand, in the order they were made. `overlap`
+     * is the most that were ever unsettled at once.
+     */
+    function controlledSends(): {
+      readonly sends: Array<{
+        readonly acknowledge: () => void;
+        readonly refuse: () => void;
+      }>;
+      readonly overlap: () => number;
+    } {
+      const sends: Array<{
+        readonly acknowledge: () => void;
+        readonly refuse: () => void;
+      }> = [];
+      let unsettled = 0;
+      let mostUnsettled = 0;
+      state.mutateAsync.mockImplementation(
+        () =>
+          new Promise((resolve, reject) => {
+            unsettled += 1;
+            mostUnsettled = Math.max(mostUnsettled, unsettled);
+            sends.push({
+              acknowledge: () => {
+                unsettled -= 1;
+                resolve({
+                  commandId: `command-${sends.length}`,
+                  disposition: "durably-accepted",
+                });
+              },
+              refuse: () => {
+                unsettled -= 1;
+                reject(new Error("host refused"));
+              },
+            });
+          }),
+      );
+      return { sends, overlap: () => mostUnsettled };
+    }
+
+    it("acts on a recovery that landed while the send was in flight, once that send is refused, with nothing else to wake it", async () => {
+      const host = dialStream();
+      const taskTabId = startDraftInGroup("task-new", "group-1");
+      state.view = viewWithOnlyTheGroup();
+      const viewBeforeRecovery = state.view;
+      const held = controlledSends();
+      renderProvider(new QueryClient(), null);
+      await waitFor(() => expect(held.sends).toHaveLength(1));
+
+      host.recover();
+      await settleCommand();
+
+      // The guard: the first send has not come back, so no second one yet.
+      expect(state.view).toBe(viewBeforeRecovery);
+      expect(held.sends).toHaveLength(1);
+
+      await act(async () => {
+        held.sends[0]?.refuse();
+        await Promise.resolve();
+      });
+
+      // No further frame, no further recovery: the refusal alone wakes it.
+      await waitFor(() => expect(held.sends).toHaveLength(2));
+      expect(pendingGroupIdOf(taskTabId)).toBe("group-1");
+      await act(async () => {
+        held.sends[1]?.acknowledge();
+        await Promise.resolve();
+      });
+      await waitFor(() => expect(pendingGroupIdOf(taskTabId)).toBeNull());
+      expect(held.sends).toHaveLength(2);
+      expect(held.overlap()).toBe(1);
+    });
+
+    it("still stops at the cap after such a recovery, and never has two sends unsettled", async () => {
+      const MAX_ATTEMPTS = 3;
+      const host = dialStream();
+      const taskTabId = startDraftInGroup("task-new", "group-1");
+      state.view = viewWithOnlyTheGroup();
+      const held = controlledSends();
+      const queryClient = new QueryClient();
+      const rendered = renderProvider(queryClient, null);
+      await waitFor(() => expect(held.sends).toHaveLength(1));
+      const refuseLatest = async (): Promise<void> => {
+        await act(async () => {
+          held.sends.at(-1)?.refuse();
+          await Promise.resolve();
+        });
+      };
+      host.recover();
+      await refuseLatest();
+      // The recovery gave the budget back, so this send is the first of three.
+      await waitFor(() => expect(held.sends).toHaveLength(2));
+
+      for (let sent = 2; sent <= MAX_ATTEMPTS; sent++) {
+        await refuseLatest();
+        await settleCommand();
+        nextViewFrame(rendered, queryClient, `frame-${sent}`);
+        await waitFor(() => expect(held.sends).toHaveLength(sent + 1));
+      }
+      await refuseLatest();
+      await settleCommand();
+      nextViewFrame(rendered, queryClient, "frame-after-cap");
+      await settleCommand();
+
+      expect(held.sends).toHaveLength(MAX_ATTEMPTS + 1);
+      expect(pendingGroupIdOf(taskTabId)).toBe("group-1");
+      expect(held.overlap()).toBe(1);
+    });
+
     it("stops after three refusals and keeps the intent, then a recovery gives the attempts back", async () => {
       const MAX_ATTEMPTS = 3;
       const host = dialStream();

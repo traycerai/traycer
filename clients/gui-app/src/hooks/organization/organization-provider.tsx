@@ -223,6 +223,9 @@ export function OrganizationProvider({
   // the same data is structurally shared into the same object - no change,
   // no re-run. The epoch is that missing edge.
   const [recoveries, setRecoveries] = useState(0);
+  // The same count, readable from inside a send's settlement callback, which
+  // closes over the render it started in and cannot see the state.
+  const recoveryCount = useRef(0);
   useEffect(() => {
     draftIntentAttempts.current = new Map();
   }, [scope]);
@@ -230,6 +233,7 @@ export function OrganizationProvider({
     if (streamClient === null) return;
     return streamClient.subscribeAvailabilityRecovered(() => {
       draftIntentAttempts.current = new Map();
+      recoveryCount.current += 1;
       setRecoveries((seen) => seen + 1);
     });
   }, [streamClient]);
@@ -317,6 +321,8 @@ export function OrganizationProvider({
     consumeDraftGroupIntents(query.data, command, {
       attempts: draftIntentAttempts.current,
       inFlight: draftIntentsInFlight.current,
+      recoveries: recoveryCount,
+      wake: () => setRecoveries((seen) => seen + 1),
     });
     projectOrganizationToTabs(query.data, userId);
   }, [supported, query.data, openIds, command, lifecycle, userId, recoveries]);
@@ -543,9 +549,11 @@ function consumeDraftGroupIntents(
   tracking: {
     readonly attempts: Map<string, number>;
     readonly inFlight: Set<string>;
+    readonly recoveries: { current: number };
+    readonly wake: () => void;
   },
 ): void {
-  const { attempts, inFlight } = tracking;
+  const { attempts, inFlight, recoveries, wake } = tracking;
   const tabs = useEpicCanvasStore.getState();
   for (const tabId of tabs.openTabOrder) {
     const task = tabs.tabsById[tabId];
@@ -575,6 +583,13 @@ function consumeDraftGroupIntents(
     }
     attempts.set(tabId, spent + 1);
     inFlight.add(tabId);
+    // A recovery that lands WHILE this is in flight is skipped by the guard
+    // above, and the settlement below is the last thing that happens for
+    // this tab - no frame, no further recovery. So the send remembers how
+    // many recoveries it started after, and asks for one more pass if that
+    // moved while it was out. Without it a stream that reconnects faster
+    // than a unary request times out leaves the intent inert.
+    const startedAfter = recoveries.current;
     void command({
       kind: "groups",
       operations: [
@@ -590,7 +605,10 @@ function consumeDraftGroupIntents(
     })
       .then(clearIntent)
       .catch(() => undefined)
-      .finally(() => inFlight.delete(tabId));
+      .finally(() => {
+        inFlight.delete(tabId);
+        if (recoveries.current !== startedAfter) wake();
+      });
   }
 }
 
