@@ -61,7 +61,8 @@ const MAX_TEST_WORKERS = Math.min(
 //   never left pending (the shared entry's last frame).
 // - `use-host-client-for`, `use-host-stream-client-for`: a sign-in after mount
 //   never built the host's client (the context `setRequestContext` swaps
-//   inside the one spine client).
+//   inside the one spine client); `epic-tab-existence-reconciler`: a lease
+//   bound after mount never probed the hosts for local copies.
 // - `use-providers-login-ownership`: a host whose directory row landed after
 //   mount never got login ownership (a requester pinned by id answers `null`
 //   until its row lands).
@@ -80,7 +81,7 @@ const MAX_TEST_WORKERS = Math.min(
 // `sidebar-artwork` and `dock-modes` read the same kind of source and are
 // correct as they stand; their cases hold that once they run compiled.
 const REACT_COMPILER_REGRESSION_FILES =
-  /[/\\](?:composer-prompt-editor|use-workspace-file-list-subscription|shared-stream-subscription|use-header-tabs|use-pr-(?:list|detail)-subscription|auth-brand-splash|auth-landing-page|use-auth-splash-cover|relative-time|routing-card|use-environment-members-query|use-git-list-changed-files-subscription|workspace-file-tile|worktrees-enrichment|use-worktree-task-titles|teardown-agent-names|resource-monitor-popover|use-comm-graph-jump|comm-graph-agent-detail-surface|top-level-tab-host|split-slot-chooser|landing-terminal-tile|use-terminal-tile-bootstrap|use-host-terminal-bootstrap|terminal-tile|use-diff-highlight-ready|composer\.source|sidebar-artwork|dock-modes|use-host-client-for|use-host-stream-client-for|use-providers-login-ownership|react-compiler-harness-probe)\.(?:ts|tsx)$/;
+  /[/\\](?:composer-prompt-editor|use-workspace-file-list-subscription|shared-stream-subscription|use-header-tabs|use-pr-(?:list|detail)-subscription|auth-brand-splash|auth-landing-page|use-auth-splash-cover|relative-time|routing-card|use-environment-members-query|use-git-list-changed-files-subscription|workspace-file-tile|worktrees-enrichment|use-worktree-task-titles|teardown-agent-names|resource-monitor-popover|use-comm-graph-jump|comm-graph-agent-detail-surface|top-level-tab-host|split-slot-chooser|landing-terminal-tile|use-terminal-tile-bootstrap|use-host-terminal-bootstrap|terminal-tile|use-diff-highlight-ready|composer\.source|sidebar-artwork|dock-modes|use-host-client-for|use-host-stream-client-for|use-providers-login-ownership|epic-tab-existence-reconciler|react-compiler-harness-probe)\.(?:ts|tsx)$/;
 
 // The compiler runs after the JSX transform, and the suite's transform is the
 // development one: `jsxDEV(..., this)` passes `this`, the compiler bails on
