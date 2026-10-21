@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, render } from "@testing-library/react";
+import { useMemo } from "react";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { hostRpcRegistry } from "@traycer/protocol/host/index";
@@ -17,6 +18,7 @@ import {
   resetActiveDraftsControlForTests,
 } from "@/lib/commands/active-drafts-control-registry";
 import { composerSource } from "@/lib/commands/sources/composer.source";
+import { useRegisterActiveModelPicker } from "@/hooks/command-palette/use-register-active-model-picker";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useNewConversationModalStore } from "@/stores/epics/new-conversation-modal-store";
 import { useNewConversationModalOpenStore } from "@/stores/epics/new-conversation-modal-open-store";
@@ -469,30 +471,39 @@ describe("composerSource", () => {
   // selection moves (it reads the latest through a ref), so a row memoized on
   // the controller kept the summary it first read: an open palette kept
   // offering "Change model…" under the model the composer had already left.
+  // The picker lives in its own root here, as it does in the app, so only the
+  // registry's own announcement can reach the palette.
   it("follows the Change model… summary when the same picker's selection changes", () => {
     registerFocusedComposerControls(
       "landing",
       stubControls({}),
       TEST_HOST_CLIENT,
     );
-    let summary = "Claude Opus 4.8";
-    registerActiveModelPicker({
-      toggle: () => undefined,
-      getSelectionSummary: () => summary,
-    });
+    function ModelPicker(props: { readonly summary: string }) {
+      const { summary } = props;
+      const controller = useMemo(
+        () => ({
+          toggle: () => undefined,
+          getSelectionSummary: () => summary,
+        }),
+        [summary],
+      );
+      useRegisterActiveModelPicker(true, controller);
+      return null;
+    }
+    const picker = render(<ModelPicker summary="Claude Opus 4.8" />);
 
     let captured: ReadonlyArray<CommandItem> = [];
     function Probe() {
       captured = composerSource.useItems(ctx(null, "landing"));
       return null;
     }
-    const rendered = render(<Probe />);
+    render(<Probe />);
     const description = () =>
       captured.find((i) => i.id === "composer:open-model-picker")?.description;
     expect(description()).toBe("Claude Opus 4.8");
 
-    summary = "GPT-5.5";
-    rendered.rerender(<Probe />);
+    picker.rerender(<ModelPicker summary="GPT-5.5" />);
 
     expect(description()).toBe("GPT-5.5");
   });

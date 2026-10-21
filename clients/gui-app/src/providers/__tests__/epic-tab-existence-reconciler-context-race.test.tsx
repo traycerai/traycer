@@ -30,11 +30,13 @@ const directoryEntry: HostDirectoryEntry = {
 
 const fixture = vi.hoisted(() => {
   const requestContext = {};
+  // The user the spine's credential lease is bound to; `null` before it binds.
+  const lease: { userId: string | null } = { userId: "user-b" };
   const changeListeners = new Set<() => void>();
   const runtimeClient = {
     getActiveHostId: () => HOST_ID,
     getRequestContext: () => requestContext,
-    getRequestContextUserId: () => fixture.requestContextUserId,
+    getRequestContextUserId: () => lease.userId,
     onChange: (listener: () => void) => {
       changeListeners.add(listener);
       return () => changeListeners.delete(listener);
@@ -45,14 +47,14 @@ const fixture = vi.hoisted(() => {
         _params: object,
         _signal: AbortSignal | undefined,
       ): Promise<ListTasksResponse> => {
-        fixture.dispatchedAs.push(fixture.requestContextUserId);
+        fixture.dispatchedAs.push(lease.userId);
         return Promise.resolve({ tasks: [], hasMore: false });
       },
     ),
     createRequester: () => runtimeClient,
   };
   return {
-    requestContextUserId: "user-b" as string | null,
+    lease,
     dispatchedAs: new Array<string | null>(),
     emitChange: () => {
       for (const listener of [...changeListeners]) listener();
@@ -101,7 +103,7 @@ vi.mock("@/providers/windows-bridge-context", () => ({
 
 describe("EpicTabExistenceReconciler request-context race", () => {
   beforeEach(() => {
-    fixture.requestContextUserId = USER_B;
+    fixture.lease.userId = USER_B;
     fixture.dispatchedAs.length = 0;
     fixture.requestWithSignal.mockClear();
     useTabsStore.setState(useTabsStore.getInitialState(), true);
@@ -170,25 +172,23 @@ describe("EpicTabExistenceReconciler request-context race", () => {
   // its probes behind a memo on the directory alone, and kept "no probes" once
   // the lease bound: the run never asked the hosts for their local copies.
   it("probes the hosts once the spine's credential lease is bound", async () => {
-    fixture.requestContextUserId = null;
+    fixture.lease.userId = null;
     const queryClient = new QueryClient({
       defaultOptions: {
         queries: { retry: false },
         mutations: { retry: false },
       },
     });
-    const tree = (
+    render(
       <QueryClientProvider client={queryClient}>
         <EpicTabExistenceReconciler />
-      </QueryClientProvider>
+      </QueryClientProvider>,
     );
-    const rendered = render(tree);
 
     act(() => {
-      fixture.requestContextUserId = USER_A;
+      fixture.lease.userId = USER_A;
       fixture.emitChange();
     });
-    rendered.rerender(tree);
 
     await waitFor(() => {
       expect(fixture.dispatchedAs).toEqual([USER_A]);
