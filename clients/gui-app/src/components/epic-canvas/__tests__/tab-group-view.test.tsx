@@ -2415,6 +2415,8 @@ class FakeServingWitness implements RetainingChatServingWitness {
   retain(_chat: ChatServingKey): () => void {
     return () => undefined;
   }
+
+  reopen(_chat: ChatServingKey): void {}
 }
 
 describe("<TabGroupView /> published-copy fallback follows the chat's serving witness", () => {
