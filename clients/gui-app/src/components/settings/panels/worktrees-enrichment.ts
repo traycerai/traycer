@@ -944,6 +944,15 @@ export function useWorktreeActivityEnrichment(
         "worktree.listAllForHost",
       );
       return queryClient.getQueryCache().subscribe((event) => {
+        // Query-level events only: observer events fire on every render of
+        // the probe window and never move the states these snapshots read.
+        if (
+          event.type !== "added" &&
+          event.type !== "removed" &&
+          event.type !== "updated"
+        ) {
+          return;
+        }
         if (queryKeyHasPrefix(event.query.queryKey, scope)) onStoreChange();
       });
     },

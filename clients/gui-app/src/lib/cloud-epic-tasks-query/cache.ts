@@ -1,4 +1,8 @@
-import type { Query, QueryClient } from "@tanstack/react-query";
+import type {
+  Query,
+  QueryCacheNotifyEvent,
+  QueryClient,
+} from "@tanstack/react-query";
 import type {
   GetTaskContextsResponse,
   ListTaskLight,
@@ -159,6 +163,7 @@ export function subscribeToCloudTaskListCaches(
   onChange: () => void,
 ): () => void {
   return queryClient.getQueryCache().subscribe((event) => {
+    if (!movesQueryState(event)) return;
     const queryKey: unknown = event.query.queryKey;
     if (!Array.isArray(queryKey)) return;
     if (
@@ -338,10 +343,24 @@ export function subscribeToTaskContextsCaches(
   onChange: () => void,
 ): () => void {
   return queryClient.getQueryCache().subscribe((event) => {
+    if (!movesQueryState(event)) return;
     const queryKey: unknown = event.query.queryKey;
     if (!Array.isArray(queryKey)) return;
     if (epicTaskContextsQueryKeyMatchesScope(queryKey, scope)) onChange();
   });
+}
+
+/**
+ * A query added, removed or updated. Observer events (an observer mounting,
+ * its options or result moving) fire on ordinary renders and never change
+ * what a cache scan reads.
+ */
+function movesQueryState(event: QueryCacheNotifyEvent): boolean {
+  return (
+    event.type === "added" ||
+    event.type === "removed" ||
+    event.type === "updated"
+  );
 }
 
 export function setEpicPinnedInCloudTaskCaches(
