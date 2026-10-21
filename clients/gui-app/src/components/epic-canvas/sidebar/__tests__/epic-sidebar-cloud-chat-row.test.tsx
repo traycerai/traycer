@@ -19,6 +19,8 @@ import {
 } from "@/components/epic-canvas/sidebar/chat-tree-surface";
 import type { HostReachabilityStatus } from "@/hooks/agent/use-host-reachability";
 import { DEFAULT_EPIC_NODE_ICON_COLORS } from "@/lib/artifacts/node-display";
+import { ChatServingWitnessContext } from "@/lib/chats/chat-serving-witness";
+import type { RetainingChatServingWitness } from "@/lib/chats/pool-chat-serving-witness";
 import type { TileOpenIntent } from "@/lib/canvas/tile-open/intent";
 import { publishedChatTileId } from "@/stores/epics/canvas/tile-schema/published-chat-tile";
 import { useSettingsStore } from "@/stores/settings/settings-store";
@@ -38,11 +40,10 @@ import { useSettingsStore } from "@/stores/settings/settings-store";
  * elements, so the open path is verified in the live app instead.
  */
 
-// The serving boundary for a sandbox at rest: only a TEAM sandbox in a build
-// with a server pool is served, so the plan carries a pool unless a test turns
-// it off.
-const tier = vi.hoisted(() => ({ pool: true }));
-
+// The serving boundary for a sandbox at rest: only a TEAM sandbox with a
+// serving witness is served. The plan carries a pool throughout, so a null
+// witness is the negotiated absence (a pool whose handshake lacks
+// `chat.serving.subscribe`), the case a no-pool build shares.
 vi.mock(
   "@traycer-clients/shared/host-client/host-rpc-routing",
   async (importOriginal) => {
@@ -52,10 +53,7 @@ vi.mock(
       >();
     return {
       ...actual,
-      readProcessHostRpcTierPlan: () =>
-        tier.pool
-          ? actual.createHostRpcTierPlan(poolEntry)
-          : actual.NO_POOL_HOST_RPC_TIER_PLAN,
+      readProcessHostRpcTierPlan: () => actual.createHostRpcTierPlan(poolEntry),
     };
   },
 );
@@ -116,7 +114,6 @@ afterEach(() => {
   cleanup();
   resetHostConnectionRegistryForTest();
   reachability.status = "unreachable";
-  tier.pool = true;
   openedRefs.length = 0;
   openTile.mockClear();
   activeInTab.artifactId = null;
@@ -635,16 +632,27 @@ describe("EpicSidebarCloudChatRow for an owner sandbox at rest", () => {
     });
   }
 
-  function renderAndClick(): void {
+  /** A witness that has heard nothing: its presence is all the row reads. */
+  const WITNESS: RetainingChatServingWitness = {
+    verdictFor: () => "unknown",
+    subscribe: () => () => undefined,
+    retain: () => () => undefined,
+    reopen: () => undefined,
+    servingFor: () => null,
+  };
+
+  function renderAndClick(witness: RetainingChatServingWitness | null): void {
     render(
-      <EpicSidebarCloudChatRow
-        chat={CHAT}
-        childEntries={NO_CHILDREN}
-        expansion={LEAF_EXPANSION}
-        tabId="tab-1"
-        depth={0}
-        selectionMode={false}
-      />,
+      <ChatServingWitnessContext value={witness}>
+        <EpicSidebarCloudChatRow
+          chat={CHAT}
+          childEntries={NO_CHILDREN}
+          expansion={LEAF_EXPANSION}
+          tabId="tab-1"
+          depth={0}
+          selectionMode={false}
+        />
+      </ChatServingWitnessContext>,
     );
     clickRow();
   }
@@ -655,7 +663,7 @@ describe("EpicSidebarCloudChatRow for an owner sandbox at rest", () => {
     "shows no lock and opens LIVE, bound to the sandbox, when it is %s",
     (state) => {
       seedOwnerRow({ state, frozen: false }, "team-1");
-      renderAndClick();
+      renderAndClick(WITNESS);
 
       expect(screen.queryByTestId(lockTestId)).toBeNull();
       expect(openedRefs).toEqual([
@@ -674,7 +682,7 @@ describe("EpicSidebarCloudChatRow for an owner sandbox at rest", () => {
     ["a host that is not a sandbox", null],
   ] as const)("keeps the lock and the published copy for %s", (_name, row) => {
     seedOwnerRow(row, "team-1");
-    renderAndClick();
+    renderAndClick(WITNESS);
 
     expect(screen.getByTestId(lockTestId)).toBeTruthy();
     expect(openedRefs.map((ref) => ref.type)).toEqual(["published-chat"]);
@@ -684,19 +692,21 @@ describe("EpicSidebarCloudChatRow for an owner sandbox at rest", () => {
     "keeps the lock and the published copy for a %s PERSONAL sandbox",
     (state) => {
       seedOwnerRow({ state, frozen: false }, null);
-      renderAndClick();
+      renderAndClick(WITNESS);
 
       expect(screen.getByTestId(lockTestId)).toBeTruthy();
       expect(openedRefs.map((ref) => ref.type)).toEqual(["published-chat"]);
     },
   );
 
-  it("keeps the lock and the published copy for a suspended team sandbox when the build has no pool", () => {
-    tier.pool = false;
-    seedOwnerRow({ state: "suspended", frozen: false }, "team-1");
-    renderAndClick();
+  it.each(["suspended", "stopped"] as const)(
+    "keeps the lock and the published copy for a %s team sandbox when the pool serves no witness",
+    (state) => {
+      seedOwnerRow({ state, frozen: false }, "team-1");
+      renderAndClick(null);
 
-    expect(screen.getByTestId(lockTestId)).toBeTruthy();
-    expect(openedRefs.map((ref) => ref.type)).toEqual(["published-chat"]);
-  });
+      expect(screen.getByTestId(lockTestId)).toBeTruthy();
+      expect(openedRefs.map((ref) => ref.type)).toEqual(["published-chat"]);
+    },
+  );
 });

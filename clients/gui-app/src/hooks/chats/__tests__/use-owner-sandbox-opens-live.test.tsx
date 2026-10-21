@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { act, cleanup, renderHook } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { HostSandboxState } from "@traycer/protocol/host/host-status";
@@ -9,6 +10,8 @@ import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/hos
 import type { RemoteHostDirectoryEntry } from "@traycer-clients/shared/host-client/remote-fetcher";
 import { poolEntry } from "@traycer-clients/shared/host-client/__tests__/routing-entry-fixtures";
 import type { HostReachabilityStatus } from "@/hooks/agent/use-host-reachability";
+import { ChatServingWitnessContext } from "@/lib/chats/chat-serving-witness";
+import type { RetainingChatServingWitness } from "@/lib/chats/pool-chat-serving-witness";
 import type { EpicCanvasTileRef } from "@/stores/epics/canvas/types";
 
 /**
@@ -24,9 +27,12 @@ import type { EpicCanvasTileRef } from "@/stores/epics/canvas/types";
  * is the verdict a sleeping sandbox gets, and the whole point is that the
  * directory row, not that verdict, decides these cases.
  *
- * The serving boundary is the second seam: only a TEAM sandbox in a build with
- * a server pool is served at rest, so the process tier plan is stubbed with a
- * pool by default and switched off for the no-pool cases.
+ * The serving boundary is the second seam: only a TEAM sandbox with a serving
+ * WITNESS is served at rest. The process tier plan is stubbed with a pool
+ * throughout, so a no-witness case is the negotiated absence (a pool whose
+ * handshake lacks `chat.serving.subscribe`) and the provider's no-pool answer
+ * alike: both are a `null` witness context. The hooks render inside a
+ * witness, or inside a null one.
  */
 
 const OWNER_HOST_ID = "host-team-sandbox";
@@ -44,8 +50,6 @@ vi.mock("@/hooks/agent/use-host-reachability", () => ({
   }),
 }));
 
-const tier = vi.hoisted(() => ({ pool: true }));
-
 vi.mock(
   "@traycer-clients/shared/host-client/host-rpc-routing",
   async (importOriginal) => {
@@ -55,10 +59,7 @@ vi.mock(
       >();
     return {
       ...actual,
-      readProcessHostRpcTierPlan: () =>
-        tier.pool
-          ? actual.createHostRpcTierPlan(poolEntry)
-          : actual.NO_POOL_HOST_RPC_TIER_PLAN,
+      readProcessHostRpcTierPlan: () => actual.createHostRpcTierPlan(poolEntry),
     };
   },
 );
@@ -130,6 +131,39 @@ function personalSandboxEntry(
   return sandboxEntryOwnedBy(hostId, { state, frozen: false }, null);
 }
 
+/** A witness that has heard nothing: its presence is all the hooks read. */
+const WITNESS: RetainingChatServingWitness = {
+  verdictFor: () => "unknown",
+  subscribe: () => () => undefined,
+  retain: () => () => undefined,
+  reopen: () => undefined,
+  servingFor: () => null,
+};
+
+interface WrapperProps {
+  readonly children: ReactNode;
+}
+
+function WithWitness({ children }: WrapperProps): ReactNode {
+  return (
+    <ChatServingWitnessContext value={WITNESS}>
+      {children}
+    </ChatServingWitnessContext>
+  );
+}
+
+/**
+ * What the app provides when there is no pool, and when the pool's handshake
+ * does not serve `chat.serving.subscribe`.
+ */
+function WithoutWitness({ children }: WrapperProps): ReactNode {
+  return (
+    <ChatServingWitnessContext value={null}>
+      {children}
+    </ChatServingWitnessContext>
+  );
+}
+
 /** A one-row directory installed as the registry's source. */
 class FakeDirectory {
   private entry: HostDirectoryEntry | null = null;
@@ -162,7 +196,6 @@ afterEach(() => {
   cleanup();
   resetHostConnectionRegistryForTest();
   reachability.status = "unreachable";
-  tier.pool = true;
 });
 
 const SLEEPING_STATES = ["suspended", "stopped"] as const;
@@ -190,19 +223,21 @@ const PUBLISHED_COPY_OWNERS: readonly {
   { name: "an owner with no directory row", row: null },
 ];
 
-function renderChatRowRef(): {
+function renderChatRowRef(wrapper: typeof WithWitness): {
   readonly current: () => EpicCanvasTileRef;
 } {
-  return renderHook(() =>
-    useChatRowOpenRef({
-      epicId: "epic-1",
-      nodeId: "chat-1",
-      nodeName: "Team chat",
-      openableType: "chat",
-      ownerHostId: OWNER_HOST_ID,
-      ownerUserId: OWNER_USER_ID,
-      sessionHostId: SESSION_HOST_ID,
-    }),
+  return renderHook(
+    () =>
+      useChatRowOpenRef({
+        epicId: "epic-1",
+        nodeId: "chat-1",
+        nodeName: "Team chat",
+        openableType: "chat",
+        ownerHostId: OWNER_HOST_ID,
+        ownerUserId: OWNER_USER_ID,
+        sessionHostId: SESSION_HOST_ID,
+      }),
+    { wrapper },
   ).result;
 }
 
@@ -214,7 +249,7 @@ describe("a chat row whose owner host reads unreachable", () => {
         sandboxEntry(OWNER_HOST_ID, { state, frozen: false }),
       );
 
-      expect(renderChatRowRef().current()).toMatchObject({
+      expect(renderChatRowRef(WithWitness).current()).toMatchObject({
         type: "chat",
         id: "chat-1",
         hostId: OWNER_HOST_ID,
@@ -227,7 +262,7 @@ describe("a chat row whose owner host reads unreachable", () => {
     ({ row }) => {
       new FakeDirectory().publish(row);
 
-      expect(renderChatRowRef().current()).toMatchObject({
+      expect(renderChatRowRef(WithWitness).current()).toMatchObject({
         type: "published-chat",
         hostId: SESSION_HOST_ID,
         ownerHostId: OWNER_HOST_ID,
@@ -241,7 +276,7 @@ describe("a chat row whose owner host reads unreachable", () => {
     (state) => {
       new FakeDirectory().publish(personalSandboxEntry(OWNER_HOST_ID, state));
 
-      expect(renderChatRowRef().current()).toMatchObject({
+      expect(renderChatRowRef(WithWitness).current()).toMatchObject({
         type: "published-chat",
         hostId: SESSION_HOST_ID,
         ownerHostId: OWNER_HOST_ID,
@@ -250,14 +285,16 @@ describe("a chat row whose owner host reads unreachable", () => {
   );
 
   it.each(SLEEPING_STATES)(
-    "opens the published copy when the owner is a %s team sandbox in a build with no pool",
+    "opens the published copy when the owner is a %s team sandbox and no serving witness is provided",
     (state) => {
-      tier.pool = false;
+      // The pool is configured (the tier plan above carries one): the witness
+      // is absent because the handshake did not negotiate it, and the chat
+      // stays on its owner, so a live tile would show no Resume overlay.
       new FakeDirectory().publish(
         sandboxEntry(OWNER_HOST_ID, { state, frozen: false }),
       );
 
-      expect(renderChatRowRef().current()).toMatchObject({
+      expect(renderChatRowRef(WithoutWitness).current()).toMatchObject({
         type: "published-chat",
         hostId: SESSION_HOST_ID,
         ownerHostId: OWNER_HOST_ID,
@@ -270,7 +307,7 @@ describe("a chat row whose owner host reads unreachable", () => {
     directory.publish(
       sandboxEntry(OWNER_HOST_ID, { state: "failed", frozen: false }),
     );
-    const result = renderChatRowRef();
+    const result = renderChatRowRef(WithWitness);
     expect(result.current()).toMatchObject({ type: "published-chat" });
 
     act(() => {
@@ -287,14 +324,16 @@ describe("a chat row whose owner host reads unreachable", () => {
 });
 
 describe("an agent reference whose owner host reads unreachable", () => {
-  function renderAgentRef() {
-    return renderHook(() =>
-      useEpicAgentOpenRef({
-        epicId: "epic-1",
-        nodeId: "chat-1",
-        name: "Team chat",
-        type: "chat",
-      }),
+  function renderAgentRef(wrapper: typeof WithWitness) {
+    return renderHook(
+      () =>
+        useEpicAgentOpenRef({
+          epicId: "epic-1",
+          nodeId: "chat-1",
+          name: "Team chat",
+          type: "chat",
+        }),
+      { wrapper },
     ).result;
   }
 
@@ -303,7 +342,7 @@ describe("an agent reference whose owner host reads unreachable", () => {
       sandboxEntry(OWNER_HOST_ID, { state: "suspended", frozen: false }),
     );
 
-    expect(renderAgentRef().current()).toMatchObject({
+    expect(renderAgentRef(WithWitness).current()).toMatchObject({
       type: "chat",
       hostId: OWNER_HOST_ID,
     });
@@ -314,19 +353,18 @@ describe("an agent reference whose owner host reads unreachable", () => {
       personalSandboxEntry(OWNER_HOST_ID, "suspended"),
     );
 
-    expect(renderAgentRef().current()).toMatchObject({
+    expect(renderAgentRef(WithWitness).current()).toMatchObject({
       type: "published-chat",
       hostId: SESSION_HOST_ID,
     });
   });
 
-  it("opens the published copy when the owner is a suspended team sandbox and the build has no pool", () => {
-    tier.pool = false;
+  it("opens the published copy when the owner is a suspended team sandbox and no serving witness is provided", () => {
     new FakeDirectory().publish(
       sandboxEntry(OWNER_HOST_ID, { state: "suspended", frozen: false }),
     );
 
-    expect(renderAgentRef().current()).toMatchObject({
+    expect(renderAgentRef(WithoutWitness).current()).toMatchObject({
       type: "published-chat",
       hostId: SESSION_HOST_ID,
     });
@@ -337,7 +375,7 @@ describe("an agent reference whose owner host reads unreachable", () => {
       sandboxEntry(OWNER_HOST_ID, { state: "failed", frozen: false }),
     );
 
-    expect(renderAgentRef().current()).toMatchObject({
+    expect(renderAgentRef(WithWitness).current()).toMatchObject({
       type: "published-chat",
       hostId: SESSION_HOST_ID,
     });
@@ -382,7 +420,7 @@ describe("ownerSandboxOpensLive", () => {
   );
 
   it.each(["suspended", "stopped", "resuming"] as const)(
-    "is false for a %s team sandbox when the build has no pool",
+    "is false for a %s team sandbox when there is no serving witness",
     (state) => {
       expect(
         ownerSandboxOpensLive(
@@ -408,12 +446,31 @@ describe("ownerSandboxOpensLive", () => {
 });
 
 describe("useOwnerSandboxOpensLive", () => {
+  it("is true for a suspended team sandbox inside a serving witness, false inside a null one", () => {
+    new FakeDirectory().publish(
+      sandboxEntry(OWNER_HOST_ID, { state: "suspended", frozen: false }),
+    );
+
+    expect(
+      renderHook(() => useOwnerSandboxOpensLive(OWNER_HOST_ID), {
+        wrapper: WithWitness,
+      }).result.current,
+    ).toBe(true);
+    expect(
+      renderHook(() => useOwnerSandboxOpensLive(OWNER_HOST_ID), {
+        wrapper: WithoutWitness,
+      }).result.current,
+    ).toBe(false);
+  });
+
   it("is false with no owner host id, whatever the directory holds", () => {
     new FakeDirectory().publish(
       sandboxEntry(OWNER_HOST_ID, { state: "suspended", frozen: false }),
     );
 
-    const { result } = renderHook(() => useOwnerSandboxOpensLive(null));
+    const { result } = renderHook(() => useOwnerSandboxOpensLive(null), {
+      wrapper: WithWitness,
+    });
 
     expect(result.current).toBe(false);
   });

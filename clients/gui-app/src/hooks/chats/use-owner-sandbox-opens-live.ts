@@ -1,15 +1,13 @@
-import { useCallback, useSyncExternalStore } from "react";
+import { use, useCallback, useSyncExternalStore } from "react";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import {
   readHostDirectoryEntry,
   subscribeHostRowChanged,
 } from "@traycer-clients/shared/host-client/host-connection-registry";
-import {
-  isTeamSandboxHostDirectoryEntry,
-  readProcessHostRpcTierPlan,
-} from "@traycer-clients/shared/host-client/host-rpc-routing";
+import { isTeamSandboxHostDirectoryEntry } from "@traycer-clients/shared/host-client/host-rpc-routing";
 import { isRemoteHostDirectoryEntry } from "@traycer-clients/shared/host-client/remote-fetcher";
 import { sandboxTileOverlay } from "@/components/hosts/sandbox-card-model";
+import { ChatServingWitnessContext } from "@/lib/chats/chat-serving-witness";
 
 /**
  * Whether a chat whose owner host has this directory row opens LIVE although
@@ -17,9 +15,11 @@ import { sandboxTileOverlay } from "@/components/hosts/sandbox-card-model";
  * back.
  *
  * Only where the pool serves the chat at rest, the boundary `chatServingHostId`
- * routes by: a team's sandbox, in a build with a server pool (`poolPresent`).
- * A personal sandbox's chat is not served at rest, so a live tile on it would
- * fall back to the published copy anyway, without the overlay.
+ * routes by: a team's sandbox, with a serving witness (`witnessPresent`). The
+ * witness is absent in a build with no pool and when the pool's handshake
+ * says it does not serve `chat.serving.subscribe`. Outside that boundary a
+ * live tile would fall back to the published copy anyway, without the
+ * overlay.
  *
  * Wakeable is exactly what a live tile on that sandbox frames as asleep
  * (suspending, suspended, stopping, stopped, released) or moving (resuming,
@@ -30,9 +30,9 @@ import { sandboxTileOverlay } from "@/components/hosts/sandbox-card-model";
  */
 export function ownerSandboxOpensLive(
   entry: HostDirectoryEntry | null,
-  poolPresent: boolean,
+  witnessPresent: boolean,
 ): boolean {
-  if (!poolPresent || entry === null) return false;
+  if (!witnessPresent || entry === null) return false;
   if (!isTeamSandboxHostDirectoryEntry(entry)) return false;
   if (!isRemoteHostDirectoryEntry(entry) || entry.sandbox === null) {
     return false;
@@ -58,6 +58,7 @@ export function ownerSandboxOpensLive(
  * re-renders when this answer moves.
  */
 export function useOwnerSandboxOpensLive(ownerHostId: string | null): boolean {
+  const witnessPresent = use(ChatServingWitnessContext) !== null;
   const subscribe = useCallback(
     (listener: () => void) =>
       ownerHostId === null
@@ -71,9 +72,9 @@ export function useOwnerSandboxOpensLive(ownerHostId: string | null): boolean {
         ? false
         : ownerSandboxOpensLive(
             readHostDirectoryEntry(ownerHostId),
-            readProcessHostRpcTierPlan().pool !== null,
+            witnessPresent,
           ),
-    [ownerHostId],
+    [ownerHostId, witnessPresent],
   );
   return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
 }
