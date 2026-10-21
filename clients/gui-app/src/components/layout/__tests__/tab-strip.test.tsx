@@ -1467,7 +1467,15 @@ describe("<TabStrip />", () => {
     seedTabColor(beta, "#ff0000");
     // A commit drops a group with no members, so the group comes after.
     useTabsStore.setState({
-      groups: { g: { name: "Work", color: "#8ab4f8", collapsed: false } },
+      // The account's group: the strip draws no other kind.
+      groups: {
+        g: {
+          name: "Work",
+          color: "#8ab4f8",
+          collapsed: false,
+          organizationOwnerId: "user-1",
+        },
+      },
     });
     useTabsStore.getState().setTabGroup(beta, "g");
     render(<RouterProvider router={buildRouter("/epics/e-a/e-a")} />);

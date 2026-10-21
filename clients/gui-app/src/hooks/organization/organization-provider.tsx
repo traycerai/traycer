@@ -185,9 +185,13 @@ export function OrganizationProvider({
     },
   });
   const { mutateAsync } = mutation;
-  const commandWithId = useCallback(
-    async (commandId: string, action: OrganizationAction) => {
-      await mutateAsync({ command: { commandId, action }, userId, hostId });
+  const command = useCallback(
+    async (action: OrganizationAction) => {
+      await mutateAsync({
+        command: { commandId: crypto.randomUUID(), action },
+        userId,
+        hostId,
+      });
       if (
         client.getRequestContextUserId() !== userId ||
         client.getActiveHostId() !== hostId
@@ -195,10 +199,6 @@ export function OrganizationProvider({
         throw new Error("Organization account changed.");
     },
     [mutateAsync, client, userId, hostId],
-  );
-  const command = useCallback(
-    (action: OrganizationAction) => commandWithId(crypto.randomUUID(), action),
-    [commandWithId],
   );
   const lifecycle = useRef<OrganizationLifecycle | null>(null);
   // Tabs whose draft group intent this provider has already tried to send.
@@ -319,7 +319,6 @@ export function OrganizationProvider({
       view: ownAccount ? query.data : undefined,
       register,
       command,
-      commandWithId,
       refresh,
       openDialog,
     }),
@@ -332,7 +331,6 @@ export function OrganizationProvider({
       query.data,
       register,
       command,
-      commandWithId,
       refresh,
       openDialog,
     ],

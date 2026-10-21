@@ -12,7 +12,6 @@ import {
   type StateStorage,
 } from "zustand/middleware";
 import { basePersistOptions, persistKey, STORE_KEYS } from "@/lib/persist";
-import { rememberBrowserLegacySources } from "@/lib/organization/legacy-organization-import";
 import {
   isRegisteredTabKind,
   TAB_KIND_SPLIT_ELIGIBILITY,
@@ -117,12 +116,6 @@ export interface TabsStoreState extends PersistedTabsStoreState {
 }
 
 const TABS_PERSIST_KEY = persistKey(STORE_KEYS.tabs);
-
-// The last moment the persisted layout is still the one the previous session
-// left: creating the store below rehydrates it and writes the repaired result
-// straight back, taking any group whose tabs are no longer open with it. The
-// read is only into memory; nothing is recorded until an authority is chosen.
-rememberBrowserLegacySources();
 let tabsLocalPersistenceEnabled = true;
 let pendingLegacySourceActiveSelection = false;
 

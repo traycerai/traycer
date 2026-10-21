@@ -25,7 +25,7 @@ import {
 } from "@/components/epic-canvas/dnd/strip-drag-model";
 import { useTabsStore } from "@/stores/tabs/store";
 import { flattenStripItemRefs } from "@/stores/tabs/layout";
-import { stripItemGroupId } from "@/stores/tabs/tab-groups";
+import { drawnTabGroup, stripItemGroupId } from "@/stores/tabs/tab-groups";
 
 export const HEADER_STRIP_SCROLL_TEST_ID = "header-tab-strip-scroll";
 
@@ -213,8 +213,8 @@ function stripItemIsTasks(itemId: string): boolean {
  * nowhere else can see.
  */
 function groupIsLocked(groupId: string, sourceItemId: string): boolean {
-  const group = useTabsStore.getState().groups?.[groupId];
-  return !group?.organizationOwnerId || !stripItemIsTasks(sourceItemId);
+  const group = drawnTabGroup(useTabsStore.getState().groups, groupId);
+  return group === undefined || !stripItemIsTasks(sourceItemId);
 }
 
 /**

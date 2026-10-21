@@ -620,7 +620,15 @@ function openGroupWithTabAndSplit(): void {
     activeItemId: tabItemId(four),
     stripOrder: refs,
     systemTabs: { history: null, settings: null },
-    groups: { g: { name: "Work", color: "#8ab4f8", collapsed: false } },
+    // The account's group: the strip draws no other kind.
+    groups: {
+      g: {
+        name: "Work",
+        color: "#8ab4f8",
+        collapsed: false,
+        organizationOwnerId: "user-1",
+      },
+    },
     customizations: {
       [tabRefKey(one)]: member,
       [tabRefKey(two)]: member,

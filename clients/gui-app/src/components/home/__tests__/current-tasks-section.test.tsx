@@ -307,7 +307,6 @@ function renderSectionWithOrganization(view: OrganizationView) {
     view,
     register: registerOrganizationTasks,
     command: () => Promise.resolve(undefined),
-    commandWithId: () => Promise.resolve(undefined),
     refresh: () => Promise.resolve(undefined),
     openDialog: openOrganizationDialog,
   };

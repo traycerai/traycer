@@ -1,6 +1,6 @@
 import { useTabsStore } from "@/stores/tabs/store";
 import { tabRefKey } from "@/stores/tabs/layout";
-import { effectiveTabColor } from "@/stores/tabs/tab-groups";
+import { drawnTabGroup, effectiveTabColor } from "@/stores/tabs/tab-groups";
 import type { HeaderTab } from "@/stores/tabs/types";
 
 /**
@@ -29,9 +29,7 @@ export function useHeaderTabAppearance(
     tab === null ? undefined : state.customizations?.[tabRefKey(tab)],
   );
   const groupId = customization?.groupId ?? null;
-  const group = useTabsStore((state) =>
-    groupId === null ? undefined : state.groups?.[groupId],
-  );
+  const group = useTabsStore((state) => drawnTabGroup(state.groups, groupId));
   return tab === null
     ? null
     : {

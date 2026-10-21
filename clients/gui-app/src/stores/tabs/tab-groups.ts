@@ -45,6 +45,26 @@ export const DEFAULT_TAB_CUSTOMIZATION: TabCustomization = {
 };
 
 /**
+ * The group a tab is DRAWN in, which is only ever one of the account's.
+ *
+ * A group with no `organizationOwnerId` was made by the machine-local
+ * grouping this build retired: it exists on this computer, in this window,
+ * and nowhere else. Those entries are still in persisted layouts and are
+ * left exactly as they are, but nothing resolves one any more, so the strip
+ * draws one set of groups and it is the account's. Membership keeps the same
+ * rule by construction - a tab whose group does not resolve is drawn
+ * ungrouped.
+ */
+export function drawnTabGroup(
+  groups: TabGroups | undefined,
+  groupId: string | null,
+): TabGroup | undefined {
+  if (groupId === null) return undefined;
+  const group = groups?.[groupId];
+  return group?.organizationOwnerId ? group : undefined;
+}
+
+/**
  * The colour a tab draws: its group's while it is grouped, else its own. The
  * group's colour is read, never written into the tab's customization, so the
  * tab's own colour is what comes back when it leaves the group.

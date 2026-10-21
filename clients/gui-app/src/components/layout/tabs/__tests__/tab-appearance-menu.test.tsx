@@ -208,7 +208,6 @@ function organizationFixture(view: OrganizationView): OrganizationContextValue {
     view,
     register: () => () => undefined,
     command: () => Promise.resolve(undefined),
-    commandWithId: () => Promise.resolve(undefined),
     refresh: () => Promise.resolve(undefined),
     openDialog: vi.fn(),
   };

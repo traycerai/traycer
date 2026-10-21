@@ -266,16 +266,6 @@ export const PERSIST_STORES = [
   },
 
   // ── Static zustand stores (33) ───────────────────────────────────────────
-  // The machine-local tab groups and tab colours this build retired, lifted
-  // out of the authoritative layout before anything could prune them and
-  // held only until they are in the account. Not a store: one record per
-  // authoritative source, written once and deleted when that source's import
-  // settles (`lib/organization/legacy-organization-import.ts`).
-  {
-    camelName: "legacyOrganizationImport",
-    leaf: "legacy-organization-import",
-    kind: "static",
-  },
   { camelName: "onboarding", leaf: "onboarding", kind: "static" },
   { camelName: "commandPalette", leaf: "command-palette", kind: "static" },
   { camelName: "composerDraft", leaf: "composer-drafts", kind: "static" },

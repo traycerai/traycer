@@ -658,7 +658,6 @@ describe("RootDndProvider on a vertical strip", () => {
         },
         register: () => () => undefined,
         command,
-        commandWithId: (_commandId, action) => command(action),
         refresh: () => Promise.resolve(),
         openDialog: () => undefined,
       };
