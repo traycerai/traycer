@@ -202,6 +202,10 @@ const KEYBOARD_KEY_READS: Readonly<Record<string, number>> = {
   // only copy `key` into the forwarded payload beside it.
   "gui-app/src/lib/sandbox/canvas-bootstrap.ts": 1,
   "gui-app/src/lib/sandbox/sandbox-document.ts": 1,
+  // The simulator surface forwards keys to a device by the character they
+  // produce, and keeps Tab for the app's own focus order; both are reads of
+  // the key, not chords.
+  "gui-app/src/lib/simulator-view/simulator-input-encoding.ts": 2,
   "gui-app/src/lib/terminal-line-edit.ts": 6,
   "gui-app/src/providers/keybinding-provider.tsx": 2,
   // The mac/non-mac history-modifier check, kept separate from every

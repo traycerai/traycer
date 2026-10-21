@@ -48,6 +48,7 @@ describe("openSource", () => {
       "Agents",
       "Terminals",
       "Browser",
+      "Mobile simulators",
       "Artifacts",
       "Files",
       "Diff",
