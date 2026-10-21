@@ -1110,9 +1110,10 @@ describe("EpicAccessCoordinator", () => {
   });
 
   describe("FORBIDDEN recovery", () => {
-    async function openForbiddenEpic(
-      workState: { isDirty: boolean; unsyncedQueueSize: number },
-    ) {
+    async function openForbiddenEpic(workState: {
+      isDirty: boolean;
+      unsyncedQueueSize: number;
+    }) {
       const handle = registerSession("epic-1");
       handle.store.setState(workState);
       seedTabs(
