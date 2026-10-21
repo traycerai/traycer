@@ -984,7 +984,7 @@ describe("AuthService cloudAuthorized verdict propagation on in-place transition
     restoreFetch();
     restoreFetch = installFetch(() => okWithProfile());
     const outcome = await service.revalidateCurrentContext();
-    expect(outcome).toEqual({ kind: "deferred-under-attempt" });
+    expect(outcome).toEqual({ kind: "superseded" });
 
     expect(useAuthStore.getState().status).toBe("signing-in");
     expect(service.getDeviceProgress()?.phase).toBe("waiting-approval");
@@ -1139,6 +1139,7 @@ describe("AuthService cloudAuthorized verdict propagation on in-place transition
       maxBackoffMs: 1_000,
     });
     const statuses: StreamConnectionStatus[] = [];
+    const revalidation = vi.spyOn(service, "revalidateCurrentContext");
     const session = client.subscribe("epic.subscribe", { epicId: "e1" });
     session.onStatusChange((streamStatus) => statuses.push(streamStatus));
     await vi.advanceTimersByTimeAsync(0);
@@ -1168,6 +1169,120 @@ describe("AuthService cloudAuthorized verdict propagation on in-place transition
     expect(sockets).toHaveLength(2);
     expect(statuses).not.toContain("closed");
     expect(useAuthStore.getState().status).toBe("signing-in");
+    await expect(revalidation.mock.results[0]?.value).resolves.toEqual({
+      kind: "superseded",
+    });
+    session.close();
+  });
+
+  it("an unauthorized stream close whose check a completed same-user sign-in overtakes re-dials on the new bearer", async () => {
+    // The sign-in finishes while the recovery's check is still waiting on the
+    // held bearer's answer, so no attempt is running when that answer lands
+    // and the check is fenced as stale. The context is live on the new
+    // bearer, so `null` ("no context") would close the stream for good under
+    // a signed-in session; the check must answer "superseded" instead.
+    vi.useFakeTimers();
+    const { service, host } = makeService();
+    trackedServices.push(service);
+    await host.tokenStore.signIn(
+      { token: "stale-stored-token", refreshToken: "stale-stored-refresh" },
+      { id: "user-1", email: "test@example.com", name: "Test User" },
+    );
+    restoreFetch();
+    restoreFetch = installFetch(() =>
+      Promise.reject(new Error("connection refused")),
+    );
+    const start = service.start();
+    for (let retry = 1; retry < AUTH_FETCH_MAX_ATTEMPTS; retry += 1) {
+      await vi.advanceTimersByTimeAsync(authRetryDelayMs(retry));
+    }
+    await start;
+    expect(useAuthStore.getState().status).toBe("unverified");
+
+    let answerHeldCheck: (response: Response) => void = () => undefined;
+    const heldCheckAnswer = new Promise<Response>((resolve) => {
+      answerHeldCheck = resolve;
+    });
+    const validationRequests = { value: 0 };
+    restoreFetch();
+    restoreFetch = installFetch((input) => {
+      const url = typeof input === "string" ? input : String(input);
+      if (url !== VALIDATION_URL) {
+        return Promise.reject(new Error("connection refused"));
+      }
+      validationRequests.value += 1;
+      return validationRequests.value === 1 ? heldCheckAnswer : okWithProfile();
+    });
+
+    const sockets: ScriptedStreamSocket[] = [];
+    const factory: IStreamWebSocketFactory = {
+      create: () => {
+        const socket = new ScriptedStreamSocket();
+        sockets.push(socket);
+        return socket;
+      },
+    };
+    const requestContext = createRequestContextFixture({
+      origin: "renderer",
+      bearerToken: "stale-stored-token",
+    });
+    const client = new WsStreamClient({
+      clientIdentity: TEST_CLIENT_IDENTITY,
+      registry: hostStreamRpcRegistry,
+      endpoint: () => mockLocalHostEntry,
+      hostId: mockLocalHostEntry.hostId,
+      bearer: () => requestContext.credentials,
+      auth: createStreamAuthRevalidator(service),
+      clock: null,
+      hostCredentialMint: null,
+      onHostCredentialState: null,
+      evidence: NO_TRANSPORT_EVIDENCE,
+      webSocketFactory: factory,
+      dialTimeoutMs: 1_000,
+      openAckTimeoutMs: 1_000,
+      pingIntervalMs: 25_000,
+      pongTimeoutMs: 50_000,
+      initialBackoffMs: 5,
+      maxBackoffMs: 1_000,
+    });
+    const statuses: StreamConnectionStatus[] = [];
+    const revalidation = vi.spyOn(service, "revalidateCurrentContext");
+    const session = client.subscribe("epic.subscribe", { epicId: "e1" });
+    session.onStatusChange((streamStatus) => statuses.push(streamStatus));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(sockets).toHaveLength(1);
+
+    sockets[0].fireOpen();
+    sockets[0].fireText({
+      kind: "fatalError",
+      details: {
+        code: "UNAUTHORIZED",
+        reason: "bearer expired",
+        incompatibleMethods: null,
+        upgradeGuidance: null,
+      },
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    // Non-vacuity: the recovery's check really is in flight, undecided.
+    expect(validationRequests.value).toBe(1);
+    expect(sockets).toHaveLength(1);
+
+    await deviceSignIn(service, host, "fresh-token-b");
+    await vi.waitFor(() => {
+      expect(useAuthStore.getState().status).toBe("signed-in");
+    });
+    expect(service.getCurrentSessionSnapshot().token).toBe("fresh-token-b");
+
+    answerHeldCheck(await okWithProfile());
+    await vi.advanceTimersByTimeAsync(50);
+
+    expect(sockets).toHaveLength(2);
+    expect(statuses).not.toContain("closed");
+    expect(useAuthStore.getState().status).toBe("signed-in");
+    expect(service.getCurrentSessionSnapshot().token).toBe("fresh-token-b");
+    await expect(revalidation.mock.results[0]?.value).resolves.toEqual({
+      kind: "superseded",
+    });
     session.close();
   });
 

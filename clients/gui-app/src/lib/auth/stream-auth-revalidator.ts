@@ -41,13 +41,12 @@ export function createStreamAuthRevalidator(
         });
         return "rotated";
       }
-      if (outcome.kind === "deferred-under-attempt") {
-        // An interactive sign-in is settling the session. Stay in the
-        // reconnect backoff: the next re-dial revalidates against whatever
-        // the attempt leaves, where `rejected` would close this stream for good.
-        appLogger.debug("[stream-auth] reconnect revalidation deferred", {
-          reason: "interactive-attempt",
-        });
+      if (outcome.kind === "superseded") {
+        // The answer is stale under a live context: something newer overtook
+        // the check, or an interactive sign-in is settling the session. Stay
+        // in the reconnect backoff, where the next re-dial revalidates the
+        // live state; `rejected` would close this stream for good.
+        appLogger.debug("[stream-auth] reconnect revalidation superseded", {});
         return "network-error";
       }
       if (outcome.kind === "network-error") {

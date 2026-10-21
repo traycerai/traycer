@@ -440,19 +440,18 @@ export type LinkLoginProgressListener = (
 type ValidationOutcome = AuthIdentityValidationResult;
 
 /**
- * What a live revalidation of the current context answers. On top of a
- * validation's verdict, `deferred-under-attempt` says an interactive sign-in
- * is in flight with the context still present, so the check could not be
- * decided: ask again once the attempt has settled. That covers a check that
- * stood down on entry and one the attempt overtook while it was running.
- * `null` from {@link AuthService.revalidateCurrentContext} means the context
- * is absent or the service disposed. The internal stages return `null` for
- * "stale or absent" alike and drop their side effects; only that public
- * boundary tells the two apart.
+ * What a live revalidation of the current context answers. `null` means only
+ * that there is no live context, or the service is disposed. `superseded`
+ * means a live context exists but this check's answer is stale: a newer
+ * identity, credential, revalidation or interactive sign-in overtook it, or
+ * it stood down for an attempt in flight. Ask again, and the next check
+ * revalidates the live state. The internal stages return `null` for "stale
+ * or absent" alike and drop their side effects; only
+ * {@link AuthService.revalidateCurrentContext} tells the two apart.
  */
 export type LiveRevalidationOutcome =
   | ValidationOutcome
-  | { readonly kind: "deferred-under-attempt" };
+  | { readonly kind: "superseded" };
 
 /**
  * The result of applying a same-user `rotate` outcome to the live session:
@@ -2507,8 +2506,9 @@ export class AuthService {
    *                             signed-out.
    *   - `network-error`       → leaves auth state untouched; a transient
    *                             outage must not log the user out.
-   *   - `deferred-under-attempt` → an interactive sign-in is in flight; ask
-   *                             again once it settles.
+   *   - `superseded`          → stale under a live context (overtaken, or
+   *                             standing down for an interactive sign-in);
+   *                             ask again.
    *
    * `null` when there is no live context (or the service is disposed).
    */
@@ -2518,18 +2518,18 @@ export class AuthService {
       return null;
     }
     const outcome = await this.revalidateExpectedContext(expected);
-    // An internal fence's `null` is "stale or absent". A check that an
-    // interactive sign-in overtook while it ran is stale under a context that
-    // is still present, which is the same undecidable state the entry
-    // stand-down names; a consumer must not read it as the context being gone.
+    // An internal fence's `null` is "stale or absent". Under a live context
+    // every one of them is stale: a join on a different bearer, the check
+    // after a force refresh finding its credential no longer current,
+    // credentials released or no longer the expected ones, the identity
+    // fence, and `rotateLiveSession`'s fences. None is a case where the
+    // context is gone, so a consumer must not read it as one.
     if (
       outcome === null &&
       !this.isDisposed() &&
-      this.contextProvider.current() !== null &&
-      (this.activeAttempt !== null ||
-        useAuthStore.getState().status === "signing-in")
+      this.contextProvider.current() !== null
     ) {
-      return { kind: "deferred-under-attempt" };
+      return { kind: "superseded" };
     }
     return outcome;
   }
@@ -2556,10 +2556,9 @@ export class AuthService {
     if (!this.isIdentityCurrent(generation) || outcome === null) {
       return "superseded";
     }
-    if (outcome.kind === "deferred-under-attempt") {
-      // The interactive attempt overtook this authority's recovery, and its
-      // own result settles the session: the call fails once, with no latch
-      // and no refresh spent.
+    if (outcome.kind === "superseded") {
+      // Something newer overtook this authority's recovery, and that settles
+      // the session: the call fails once, with no latch and no refresh spent.
       return "superseded";
     }
     if (outcome.kind === "rejected") {
@@ -2638,9 +2637,9 @@ export class AuthService {
     if (outcome.kind === "valid") {
       return outcome.user;
     }
-    // An interactive sign-in is settling the session: no user to show until
-    // its result lands, which re-renders the panel.
-    if (outcome.kind === "deferred-under-attempt") {
+    // A stale answer describes a credential that is no longer the live one,
+    // so there is no user to show from it.
+    if (outcome.kind === "superseded") {
       return null;
     }
     // `network-error`: a transient outage that did NOT sign the user out. Throw
@@ -3285,7 +3284,7 @@ export class AuthService {
     // still to land. A check started before the attempt is fenced by the
     // identity generation the attempt advanced.
     if (this.activeAttempt !== null || status === "signing-in") {
-      return { kind: "deferred-under-attempt" };
+      return { kind: "superseded" };
     }
     const currentUserId = ctx.identity.userId;
     const currentToken = this.currentBearer;
