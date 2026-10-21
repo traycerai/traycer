@@ -152,6 +152,27 @@ describe("ViewReplicaStore: scope withdrawal", () => {
       "teams",
     ]);
   });
+
+  it("fences an answer observed in the same millisecond as the withdrawal", async () => {
+    const rig = await warmedWithPage(ACCOUNT);
+    await rig.store.evict({
+      kind: "scope-withdrawn",
+      accountId: ACCOUNT,
+      scope: organizationRowScope(TEAM),
+      at: 200,
+    });
+
+    // The request started in the millisecond the loss was confirmed, so the
+    // serving tier may have read the page after the loss: a tie fences.
+    rig.store.write(
+      historyReplicaService,
+      addressFor(ACCOUNT),
+      mixedPage(),
+      stamp(200),
+    );
+    const tied = readPage(rig.store, ACCOUNT);
+    expect(tied === null ? null : taskIds(tied)).toEqual(["mine"]);
+  });
 });
 
 describe("ViewReplicaStore: identity mismatch is a miss", () => {
@@ -289,6 +310,25 @@ describe("ViewReplicaStore: read-your-write floor", () => {
       stamp(400),
     );
     expect(readPage(rig.store, ACCOUNT)).not.toBeNull();
+  });
+
+  it("misses a page observed in the same millisecond as a floor that carries no sequence", async () => {
+    const rig = await warmedWithPage(ACCOUNT);
+    rig.store.write(
+      historyReplicaService,
+      addressFor(ACCOUNT),
+      mixedPage(),
+      stamp(300),
+    );
+    expect(readPage(rig.store, ACCOUNT)).not.toBeNull();
+
+    // The request started in the millisecond the write was confirmed, so the
+    // page may predate the write: a tie is a miss.
+    rig.store.noteConfirmedWrite(ACCOUNT, historyReplicaService.service, {
+      at: 300,
+      generation: null,
+    });
+    expect(readPage(rig.store, ACCOUNT)).toBeNull();
   });
 });
 

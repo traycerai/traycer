@@ -1248,15 +1248,20 @@ function NotificationsSessionBody(
           onAuthError,
         );
         openedCloudFeedClientRef.current = cloudFeedStreamClient;
+        // The account this feed opened under. Another window's sign-in
+        // projects a new user straight over this one, and this stream is
+        // torn down only by the effect that render runs: a frame delivered
+        // before then belongs to the account that left.
+        const openedAccountId =
+          useAuthStore.getState().contextMetadata?.userId ?? null;
         cloudDisposerRef.current = openCloudNotificationsStream(
           reconnect,
           cloudFeedStreamClient,
           onAuthError,
           ({ rows, arrivals }) => {
-            // Read at delivery: the snapshot belongs to the account signed in
-            // now, and this callback is deliberately not re-created per user.
             const accountId =
               useAuthStore.getState().contextMetadata?.userId ?? null;
+            if (accountId !== openedAccountId) return;
             const accepted = useCloudNotificationsStore.getState();
             if (
               accountId !== null &&

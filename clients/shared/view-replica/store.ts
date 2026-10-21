@@ -602,7 +602,9 @@ export interface ViewReplicaFloor {
 /**
  * Whether the page predates the write. The source's sequence decides when
  * both carry one - a snapshot that includes the write can arrive before its
- * acknowledgement - and the timestamps decide otherwise.
+ * acknowledgement - and the timestamps decide otherwise. A page observed in
+ * the write's own millisecond may have been read before it, so a tie counts
+ * as predating.
  */
 function belowFloor(
   record: ViewReplicaStoredRecord,
@@ -611,7 +613,7 @@ function belowFloor(
   if (floor.generation !== null && record.sourceGeneration !== null) {
     return record.sourceGeneration < floor.generation;
   }
-  return record.savedAt < floor.at;
+  return record.savedAt <= floor.at;
 }
 
 function higherFloor(
@@ -648,14 +650,16 @@ function withoutScope(
 
 /**
  * The record without the rows of any scope withdrawn after it was observed,
- * or the same record when nothing applies.
+ * or the same record when nothing applies. A withdrawal in the millisecond
+ * the page's request started may have landed before the page was read, so a
+ * tie counts as after.
  */
 export function fenceRecord(
   record: ViewReplicaStoredRecord,
   withdrawals: ViewReplicaAccountMeta["withdrawals"],
 ): ViewReplicaStoredRecord {
   const applicable = withdrawals.filter(
-    (withdrawal) => withdrawal.at > record.savedAt,
+    (withdrawal) => withdrawal.at >= record.savedAt,
   );
   const rows = record.rows.filter(
     (row) =>
