@@ -101,7 +101,7 @@ const STATE_LINE: Record<HostSandboxState, string> = {
   creating:
     "Provisioning and booting. This takes about 10 seconds once capacity is found.",
   awake: "Running. Billed at the awake rate.",
-  suspending: "Suspending. Saving its state; billing moves to storage.",
+  suspending: "Suspending. Billing moves to storage.",
   suspended:
     "Suspended, resumes on your next action. Billed at the storage rate.",
   resuming: "Resuming. Back in a few seconds.",

@@ -134,6 +134,7 @@ import {
   type SandboxCostsFetchResult,
   type SandboxCreateFetchResult,
   type SandboxListFetchResult,
+  type SandboxLifecycleVerbFetchResult,
   type SandboxVerbFetchResult,
 } from "@traycer-clients/shared/host-client/sandbox-control";
 import {
@@ -740,7 +741,7 @@ export class MobileRunnerHost implements IRunnerHost {
     sandboxId: string,
     verb: SandboxLifecycleVerb,
     timeoutMs: number,
-  ): Promise<SandboxVerbFetchResult> {
+  ): Promise<SandboxLifecycleVerbFetchResult> {
     return runSandboxVerbViaHttp(
       this.serverBaseUrl,
       bearerToken,

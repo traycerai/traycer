@@ -34,6 +34,7 @@ import type {
   SandboxCostsFetchResult,
   SandboxCreateFetchResult,
   SandboxListFetchResult,
+  SandboxLifecycleVerbFetchResult,
   SandboxVerbFetchResult,
 } from "../host-client/sandbox-control";
 import type {
@@ -400,7 +401,7 @@ export interface IRunnerHost {
     sandboxId: string,
     verb: SandboxLifecycleVerb,
     timeoutMs: number,
-  ): Promise<SandboxVerbFetchResult>;
+  ): Promise<SandboxLifecycleVerbFetchResult>;
   getSandboxAutomation(
     bearerToken: string,
     environmentId: string | null,

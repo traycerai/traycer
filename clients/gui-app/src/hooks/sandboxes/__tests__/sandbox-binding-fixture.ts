@@ -6,6 +6,7 @@ import type {
   SandboxControlFailure,
   SandboxCreateFetchResult,
   SandboxListFetchResult,
+  SandboxLifecycleVerbFetchResult,
   SandboxVerbFetchResult,
 } from "@traycer-clients/shared/host-client/sandbox-control";
 import type {
@@ -22,7 +23,7 @@ type RunSandboxVerb = (
   sandboxId: string,
   verb: SandboxLifecycleVerb,
   timeoutMs: number,
-) => Promise<SandboxVerbFetchResult>;
+) => Promise<SandboxLifecycleVerbFetchResult>;
 type GetSandboxAutomation = (
   environmentId: string | null,
 ) => Promise<SandboxAutomationFetchResult>;
@@ -66,7 +67,7 @@ export function createFakeSandboxBinding(): FakeSandboxBinding {
         }),
       ),
       runSandboxVerb: vi.fn<RunSandboxVerb>(() =>
-        Promise.resolve({ kind: "ok", settled: true }),
+        Promise.resolve({ kind: "ok", settled: true, state: null }),
       ),
       destroySandbox: vi.fn<DestroySandbox>(() =>
         Promise.resolve({ kind: "ok", settled: true }),
