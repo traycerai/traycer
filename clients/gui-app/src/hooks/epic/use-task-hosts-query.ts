@@ -63,7 +63,7 @@ export function useTaskHosts(
  * flight, which were dispatched before the verdict (the preflight gates
  * dispatch on it) and whose answer would land stale - a refusal settling
  * after this reset would stay terminal. The in-flight ones are cancelled
- * first so no late answer lands.
+ * first, silently and without reverting, so no late answer lands.
  *
  * Only reads keyed to the viewer the verdict names are touched. The reads are
  * ACL-filtered per viewer, so refetching another viewer's entry would store
@@ -80,9 +80,9 @@ export function subscribeTaskHostRefusalReset(args: {
   return args.requestContextProvider.onSessionVerified((era) => {
     const viewer = era.identity;
     if (viewer === null) return;
-    // Picked BEFORE the cancel and the reset: a cancelled read reverts, and
-    // `resetQueries` re-applies its filter to choose what to refetch, so a
-    // status filter would leave a read reset and idle.
+    // Picked BEFORE the cancel and the reset: `resetQueries` re-applies its
+    // filter to choose what to refetch, so a status filter would leave a read
+    // reset and idle.
     const stale = new Set(
       args.queryClient.getQueryCache().findAll({
         predicate: (query) =>
@@ -98,8 +98,14 @@ export function subscribeTaskHostRefusalReset(args: {
     );
     if (stale.size === 0) return;
     const picked = { predicate: (query: Query) => stale.has(query) };
-    void args.queryClient
-      .cancelQueries(picked)
-      .then(() => args.queryClient.resetQueries(picked));
+    // Cancel and reset in this one turn. The viewer is a fact about this
+    // moment: awaiting the cancel would let a newer viewer's credential commit
+    // before the refetch, which would then store that viewer's answer under
+    // this viewer's key.
+    void args.queryClient.cancelQueries(picked, {
+      revert: false,
+      silent: true,
+    });
+    void args.queryClient.resetQueries(picked);
   });
 }

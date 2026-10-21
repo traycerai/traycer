@@ -7,7 +7,10 @@ import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/moc
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { DefaultRequestContextProvider } from "@traycer-clients/shared/auth/request-context-provider";
 import { createAuthenticatedUserFixture } from "@traycer-clients/shared/test-fixtures/authenticated-user";
-import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import {
+  HostRpcError,
+  type HostRequestAuthority,
+} from "@traycer-clients/shared/host-transport/host-messenger";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
 import {
   subscribeTaskHostRefusalReset,
@@ -63,28 +66,49 @@ function refusal(requestId: string): HostRpcError {
   });
 }
 
-/** A real `HostClient` whose `epic.listTaskHosts` is the given handler. */
-function mountFixture(listTaskHosts: () => Promise<ListTaskHostsResponse>): {
+/**
+ * A real `HostClient` whose `epic.listTaskHosts` is the given handler, which
+ * is told the credential each request carries.
+ */
+function mountFixture(
+  listTaskHosts: (
+    bearer: HostRequestAuthority["bearer"],
+  ) => Promise<ListTaskHostsResponse>,
+): {
+  readonly spine: HostClient<HostRpcRegistry>;
   readonly client: HostClient<HostRpcRegistry>;
   readonly queryClient: QueryClient;
   readonly wrapper: (props: { readonly children: ReactNode }) => ReactNode;
 } {
   const queryClient = createAppQueryClient();
+  const messenger: MockHostMessenger<HostRpcRegistry> =
+    new MockHostMessenger<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      requestId: () => "task-hosts",
+      // The messenger records a call before it runs the handler, so the last
+      // one is the request being answered.
+      handlers: {
+        "epic.listTaskHosts": () => {
+          const call = messenger.calls.at(-1);
+          if (call === undefined) {
+            throw new Error("handler ran before the call was recorded");
+          }
+          return listTaskHosts(call.authority.bearer);
+        },
+      },
+    });
   const spine = new HostClient<HostRpcRegistry>({
     registry: hostRpcRegistry,
     invalidator: createHostQueryInvalidator(queryClient),
     findHostById: (hostId) =>
       hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,
-    messenger: new MockHostMessenger<HostRpcRegistry>({
-      registry: hostRpcRegistry,
-      requestId: () => "task-hosts",
-      handlers: { "epic.listTaskHosts": listTaskHosts },
-    }),
+    messenger,
   });
   spine.setRequestContext(
     createRequestContextFixture({ origin: "renderer", bearerToken: "tok-1" }),
   );
   return {
+    spine,
     client: spine.createRequester(mockLocalHostEntry),
     queryClient,
     wrapper: (props) =>
@@ -186,6 +210,104 @@ describe("subscribeTaskHostRefusalReset", () => {
       expect(mounted.result.current.data?.hosts[0]?.hostId).toBe("host-1");
     });
     expect(mounted.result.current.isError).toBe(false);
+
+    unsubscribe();
+    provider.dispose();
+  });
+
+  it("does not refetch a viewer's read under a newer viewer's credential that commits right after the verdict", async () => {
+    useAuthStore.setState({
+      contextMetadata: { userId: "viewer-a", username: "viewer-a" },
+    });
+    const viewerBContext = createRequestContextFixture({
+      origin: "renderer",
+      bearerToken: "tok-b",
+    });
+    const heldFirst = Promise.withResolvers<ListTaskHostsResponse>();
+    const requests = { value: 0, carryingViewerB: 0 };
+    const { spine, client, queryClient, wrapper } = mountFixture((bearer) => {
+      requests.value += 1;
+      if (bearer === viewerBContext.credentials) {
+        requests.carryingViewerB += 1;
+      }
+      if (requests.value === 1) return heldFirst.promise;
+      // The host answers for the credential the request carries.
+      return Promise.resolve(
+        hostsOf(
+          bearer === viewerBContext.credentials ? "viewer-b" : "viewer-a",
+        ),
+      );
+    });
+    const provider = signedInProvider("viewer-a");
+    const unsubscribe = subscribeTaskHostRefusalReset({
+      requestContextProvider: provider,
+      queryClient,
+    });
+
+    const mounted = renderHook(() => useTaskHosts(client, TASK_ID), {
+      wrapper,
+    });
+    await vi.waitFor(() => {
+      expect(requests.value).toBe(1);
+      expect(mounted.result.current.isFetching).toBe(true);
+    });
+
+    // The next viewer's credential commits in the same turn as the verdict,
+    // ahead of the store viewer the A observer is still keyed to.
+    act(() => {
+      provider.announceSessionVerified();
+      spine.setRequestContext(viewerBContext);
+    });
+    heldFirst.reject(refusal("task-hosts-1"));
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+
+    // The store still names viewer A, so no observer is keyed to B: a request
+    // carrying B's credential could only be a refetch of A's read.
+    expect(requests.carryingViewerB).toBe(0);
+    const viewerAReads = queryClient
+      .getQueryCache()
+      .findAll({ predicate: (query) => query.queryKey.at(-1) === "viewer-a" });
+    expect(viewerAReads).toHaveLength(1);
+    expect(viewerAReads[0]?.state.data).not.toEqual(hostsOf("viewer-b"));
+
+    unsubscribe();
+    provider.dispose();
+  });
+
+  it("resets a failed read in the turn the verdict is announced", async () => {
+    const requests = { value: 0 };
+    const { client, queryClient, wrapper } = mountFixture(() => {
+      requests.value += 1;
+      return requests.value === 1
+        ? Promise.reject(refusal("task-hosts-1"))
+        : Promise.resolve(hostsOf(VIEWER_ID));
+    });
+    const provider = signedInProvider(VIEWER_ID);
+    const unsubscribe = subscribeTaskHostRefusalReset({
+      requestContextProvider: provider,
+      queryClient,
+    });
+
+    const mounted = renderHook(() => useTaskHosts(client, TASK_ID), {
+      wrapper,
+    });
+    await vi.waitFor(() => {
+      expect(mounted.result.current.isError).toBe(true);
+    });
+
+    act(() => {
+      provider.announceSessionVerified();
+      const reads = queryClient.getQueryCache().findAll({
+        predicate: (query) => query.queryKey.at(-1) === VIEWER_ID,
+      });
+      expect(reads.map((read) => read.state.status)).toEqual(["pending"]);
+      expect(reads.map((read) => read.state.fetchStatus)).toEqual(["fetching"]);
+    });
+    await vi.waitFor(() => {
+      expect(mounted.result.current.data?.hosts[0]?.hostId).toBe("host-1");
+    });
 
     unsubscribe();
     provider.dispose();
