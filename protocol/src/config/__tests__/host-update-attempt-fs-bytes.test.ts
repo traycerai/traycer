@@ -140,23 +140,38 @@ describe.each(variants)("readRegularFileBytesNoFollow ($name)", ({ read }) => {
   });
 });
 
-describe("readRegularFileBytesNoFollow swap at open", () => {
-  it.skipIf(isWindows)(
-    "refuses a regular file replaced by a symlink just before the open",
-    async () => {
-      const dir = await freshDir();
-      const path = join(dir, "record.bin");
-      const other = join(dir, "other.bin");
-      await writeFile(path, Buffer.from([1, 2, 3]));
-      await writeFile(other, Buffer.from([4, 5, 6]));
-      __setBeforeRecordOpenHookForTest(async () => {
-        await rm(path);
-        await symlink(other, path);
-      });
+// Without the descriptor flags the open follows a link, so only the checks
+// around it can refuse one swapped in after the first lstat.
+describe.skipIf(isWindows)("readRegularFileBytesNoFollow swap at open", () => {
+  it("refuses a regular file replaced by a symlink to another regular file", async () => {
+    __setRecordOpenPlatformForTest({ noFollow: 0, nonBlock: 0 });
+    const dir = await freshDir();
+    const path = join(dir, "record.bin");
+    const other = join(dir, "other.bin");
+    await writeFile(path, Buffer.from([1, 2, 3]));
+    await writeFile(other, Buffer.from([4, 5, 6]));
+    __setBeforeRecordOpenHookForTest(async () => {
+      await rm(path);
+      await symlink(other, path);
+    });
 
-      expect(await readRegularFileBytesNoFollow(path)).toEqual({
-        kind: "not-regular",
-      });
-    },
-  );
+    expect(await readRegularFileBytesNoFollow(path)).toEqual({
+      kind: "not-regular",
+    });
+  });
+
+  it("refuses a regular file replaced by a dangling symlink, not as absent", async () => {
+    __setRecordOpenPlatformForTest({ noFollow: 0, nonBlock: 0 });
+    const dir = await freshDir();
+    const path = join(dir, "record.bin");
+    await writeFile(path, Buffer.from([1, 2, 3]));
+    __setBeforeRecordOpenHookForTest(async () => {
+      await rm(path);
+      await symlink(join(dir, "nowhere.bin"), path);
+    });
+
+    expect(await readRegularFileBytesNoFollow(path)).toEqual({
+      kind: "not-regular",
+    });
+  });
 });

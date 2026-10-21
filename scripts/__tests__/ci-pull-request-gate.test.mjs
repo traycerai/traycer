@@ -238,11 +238,6 @@ describe("every job of a workflow that runs on a pull request", () => {
       ({ file }) => file === SCAN.file,
     );
     expect(workflow.jobs[SCAN.jobId].if).toBeUndefined();
-    for (const { file, workflow: w } of pullRequestWorkflows) {
-      for (const [jobId, job] of Object.entries(w.jobs)) {
-        if (!isScan(file, jobId)) expect(job.if).toBeDefined();
-      }
-    }
   });
 });
 

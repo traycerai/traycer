@@ -160,7 +160,8 @@ export type RegularFileNoFollowRead =
 
 /**
  * A regular file's bytes, read through the same descriptor. `not-regular`: the
- * path is a link or a special file, or changed while it was opened.
+ * path is a link, opens as a directory or FIFO, or changed while it was
+ * opened. A special file `open` refuses outright (a socket) throws.
  */
 export type RegularFileBytesRead =
   | { readonly kind: "absent" }

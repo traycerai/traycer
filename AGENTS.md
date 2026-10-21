@@ -76,10 +76,11 @@ DCO (`git commit -s`).
 A team pull request into `main` (a branch in this repository) runs **no CI**
 but the CodeQL scan: every other job is skipped, so every required check
 reports as passed, and the merge button is available as soon as review passes.
-Nothing tests such a PR before it merges, so **the local commit hook is the
-only automatic check before merge**. The one exempt job is `codeql.yml`'s
-`analyze`: it shows a new security alert on the pull request that introduces
-it, and it is not a required check. Every other job is gated,
+Nothing tests such a PR before it merges, so **the local commit hook and the
+CodeQL scan are the only automatic checks before merge**. The scan
+(`codeql.yml`'s `analyze`) is the one exempt job: it shows a new security
+alert on the pull request that introduces it, and it is not a required check.
+Every other job is gated,
 `guarded-files-tripwire` in `protocol-compat.yml` included: it runs only on a
 pull request that runs CI, so a team edit to a guarded protocol file is not
 flagged before it merges, and the merge run
