@@ -1,13 +1,18 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { QueryClientProvider } from "@tanstack/react-query";
+import { QueryClientProvider, type QueryClient } from "@tanstack/react-query";
 import { cleanup, renderHook } from "@testing-library/react";
 import { createElement, type ReactNode } from "react";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
+import { DefaultRequestContextProvider } from "@traycer-clients/shared/auth/request-context-provider";
+import { createAuthenticatedUserFixture } from "@traycer-clients/shared/test-fixtures/authenticated-user";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
-import { useTaskHosts } from "@/hooks/epic/use-task-hosts-query";
+import {
+  subscribeTaskHostRefusalReset,
+  useTaskHosts,
+} from "@/hooks/epic/use-task-hosts-query";
 import type { ListTaskHostsResponse } from "@traycer/protocol/host/task-host-summary";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
@@ -34,6 +39,7 @@ function refusal(requestId: string): HostRpcError {
 /** A real `HostClient` whose `epic.listTaskHosts` is the given handler. */
 function mountFixture(listTaskHosts: () => Promise<ListTaskHostsResponse>): {
   readonly client: HostClient<HostRpcRegistry>;
+  readonly queryClient: QueryClient;
   readonly wrapper: (props: { readonly children: ReactNode }) => ReactNode;
 } {
   const queryClient = createAppQueryClient();
@@ -53,6 +59,7 @@ function mountFixture(listTaskHosts: () => Promise<ListTaskHostsResponse>): {
   );
   return {
     client: spine.createRequester(mockLocalHostEntry),
+    queryClient,
     wrapper: (props) =>
       createElement(
         QueryClientProvider,
@@ -98,13 +105,13 @@ describe("useTaskHosts after a refusal", () => {
     expect(requests.value).toBe(1);
   });
 
-  it("asks the host again on a remount once cloud authorization has returned", async () => {
+  it("asks the host again on a remount once the session is announced verified", async () => {
     // The refusal was cached while the session held no verdict. The consumer
-    // was unmounted when the verdict came back, so no mounted observer could
-    // refetch it: the cache itself has to drop the failure.
+    // was unmounted when the session was promoted, so no mounted observer
+    // could refetch it: the provider's announcement has to drop the failure.
     const hostRefuses = { value: true };
     const requests = { value: 0 };
-    const { client, wrapper } = mountFixture(() => {
+    const { client, queryClient, wrapper } = mountFixture(() => {
       requests.value += 1;
       return hostRefuses.value
         ? Promise.reject(refusal(`task-hosts-${String(requests.value)}`))
@@ -119,6 +126,17 @@ describe("useTaskHosts after a refusal", () => {
             ],
           });
     });
+    const provider = new DefaultRequestContextProvider({ origin: "renderer" });
+    provider.setSignedIn({
+      user: createAuthenticatedUserFixture(undefined),
+      bearerToken: "tok-1",
+      operationId: undefined,
+      externalAbortSignal: undefined,
+    });
+    const unsubscribe = subscribeTaskHostRefusalReset({
+      requestContextProvider: provider,
+      queryClient,
+    });
 
     const first = renderHook(() => useTaskHosts(client, TASK_ID), { wrapper });
     await vi.waitFor(() => {
@@ -126,15 +144,19 @@ describe("useTaskHosts after a refusal", () => {
     });
     first.unmount();
 
-    useAuthStore.setState({ status: "unverified" });
-    useAuthStore.setState({ status: "signed-in" });
     hostRefuses.value = false;
+    provider.announceSessionVerified();
 
     const second = renderHook(() => useTaskHosts(client, TASK_ID), { wrapper });
+    // Settled either way: on the fetch the reset allows, or on the cached
+    // refusal it would otherwise keep.
     await vi.waitFor(() => {
-      expect(second.result.current.isFetching).toBe(false);
+      expect(second.result.current.isPending).toBe(false);
     });
     expect(requests.value).toBe(2);
-    expect(second.result.current.data?.hosts).toHaveLength(1);
+    expect(second.result.current.data?.hosts[0]?.hostId).toBe("host-1");
+
+    unsubscribe();
+    provider.dispose();
   });
 });

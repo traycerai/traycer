@@ -1,7 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, renderHook } from "@testing-library/react";
-import { createElement, type ReactNode } from "react";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
@@ -64,22 +62,6 @@ function makeClient(): HostClient<HostRpcRegistry> {
   });
 }
 
-/** The hook reads the app's QueryClient; the query itself is mocked above. */
-function renderTaskHosts(
-  client: HostClient<HostRpcRegistry> | null,
-  taskId: string,
-): void {
-  const queryClient = createAppQueryClient();
-  renderHook(() => useTaskHosts(client, taskId), {
-    wrapper: (props: { readonly children: ReactNode }): ReactNode =>
-      createElement(
-        QueryClientProvider,
-        { client: queryClient },
-        props.children,
-      ),
-  });
-}
-
 function lastCall(): HostQueryCall {
   const call = mocks.calls.at(-1);
   if (call === undefined) throw new Error("useHostQuery was not called");
@@ -120,7 +102,7 @@ afterEach(() => {
 describe("useTaskHosts", () => {
   it("asks epic.listTaskHosts for the task, through the client it is given", () => {
     const client = makeClient();
-    renderTaskHosts(client, "epic-1");
+    renderHook(() => useTaskHosts(client, "epic-1"));
 
     const call = lastCall();
     expect(call.method).toBe("epic.listTaskHosts");
@@ -129,19 +111,19 @@ describe("useTaskHosts", () => {
   });
 
   it("keys the cache by the viewer, since the answer is filtered per viewer", () => {
-    renderTaskHosts(null, "epic-1");
+    renderHook(() => useTaskHosts(null, "epic-1"));
 
     expect(lastCall().cacheKeyIdentity).toEqual(["u-viewer"]);
   });
 
   it("re-reads the cloud verdict at dispatch with a preflight", () => {
-    renderTaskHosts(null, "epic-1");
+    renderHook(() => useTaskHosts(null, "epic-1"));
 
     expect(typeof lastCall().preflight).toBe("function");
   });
 
   it("refuses to dispatch when the session holds no cloud verdict, naming epic.listTaskHosts", () => {
-    renderTaskHosts(null, "epic-1");
+    renderHook(() => useTaskHosts(null, "epic-1"));
     const { preflight } = lastCall();
 
     for (const status of ["signed-out", "signing-in", "unverified"] as const) {
@@ -163,7 +145,7 @@ describe("useTaskHosts", () => {
   });
 
   it("lets the dispatch through while the session holds a cloud verdict", () => {
-    renderTaskHosts(null, "epic-1");
+    renderHook(() => useTaskHosts(null, "epic-1"));
     useAuthStore.setState({ status: "signed-in" });
 
     expect(() => lastCall().preflight()).not.toThrow();
@@ -171,7 +153,7 @@ describe("useTaskHosts", () => {
 
   it("reads the verdict live, at each call, not when the hook rendered", () => {
     useAuthStore.setState({ status: "signed-in" });
-    renderTaskHosts(null, "epic-1");
+    renderHook(() => useTaskHosts(null, "epic-1"));
     const { preflight } = lastCall();
     expect(() => preflight()).not.toThrow();
 
@@ -181,40 +163,40 @@ describe("useTaskHosts", () => {
   });
 
   it("is enabled when cloud is authorized and the task id and viewer id are present", () => {
-    renderTaskHosts(null, "epic-1");
+    renderHook(() => useTaskHosts(null, "epic-1"));
 
     expect(lastCall().options.enabled).toBe(true);
   });
 
   it("is disabled without cloud authorization", () => {
     mocks.cloudAuthorized = false;
-    renderTaskHosts(null, "epic-1");
+    renderHook(() => useTaskHosts(null, "epic-1"));
 
     expect(lastCall().options.enabled).toBe(false);
   });
 
   it("is disabled for an empty task id", () => {
-    renderTaskHosts(null, "");
+    renderHook(() => useTaskHosts(null, ""));
 
     expect(lastCall().options.enabled).toBe(false);
   });
 
   it("is disabled for an empty viewer id", () => {
     mocks.viewerId = "";
-    renderTaskHosts(null, "epic-1");
+    renderHook(() => useTaskHosts(null, "epic-1"));
 
     expect(lastCall().options.enabled).toBe(false);
   });
 
   it("passes a missing client on as null, still keyed by the viewer", () => {
-    renderTaskHosts(null, "epic-1");
+    renderHook(() => useTaskHosts(null, "epic-1"));
 
     expect(lastCall().client).toBeNull();
     expect(lastCall().cacheKeyIdentity).toEqual(["u-viewer"]);
   });
 
   it("retries a transport failure only: a missing method and a refusal are terminal", () => {
-    renderTaskHosts(null, "epic-1");
+    renderHook(() => useTaskHosts(null, "epic-1"));
     const { retry } = lastCall().options;
 
     expect(typeof retry).toBe("function");
