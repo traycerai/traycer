@@ -84,6 +84,8 @@ vi.mock("@/components/epic-canvas/mobile/tab-switcher-sheet", () => ({
 // "nothing special" default.
 vi.mock("@/hooks/agent/use-host-reachability", () => ({
   useHostReachability: () => ({ status: "reachable", hostLabel: "host-A" }),
+  resolvedHostLabel: (r: { status: string; hostLabel: string | null }) =>
+    r.status === "checking" ? null : r.hostLabel,
 }));
 
 // The canvas reads the chat host's directory row (the serving witness), which

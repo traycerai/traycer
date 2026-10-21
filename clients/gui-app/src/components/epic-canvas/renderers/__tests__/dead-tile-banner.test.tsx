@@ -717,5 +717,40 @@ describe("<ChatDeadTileBanner /> for a team environment's chat (environmentOwned
         screen.queryByRole("button", { name: "Continue here" }),
       ).toBeNull();
     });
+
+    it("opens with the agent's sandbox, not 'the host', while the host label is unresolved", () => {
+      for (const [cloneAllowed, sentence] of [
+        [
+          true,
+          "This agent's sandbox was removed. Continue this agent on l-e2e-team-e7, with its history.",
+        ],
+        [
+          false,
+          "This agent's sandbox was removed. You have view-only access to this task, so this agent can't be continued.",
+        ],
+      ] as const) {
+        const testId = `chat-dead-sandbox-removed-unlabelled-${String(cloneAllowed)}`;
+        const { unmount } = render(
+          <ChatDeadTileBanner
+            hostLabel={null}
+            reason="sandbox-removed"
+            ownedByViewer
+            environmentOwned
+            cloneAllowed={cloneAllowed}
+            showsPublishedCopy
+            cloning={false}
+            onClone={() => undefined}
+            continueTargetLabel="l-e2e-team-e7"
+            testId={testId}
+            className={undefined}
+          />,
+        );
+
+        const text = screen.getByTestId(testId).textContent;
+        expect(text).toContain(sentence);
+        expect(text).not.toContain("the host");
+        unmount();
+      }
+    });
   });
 });
