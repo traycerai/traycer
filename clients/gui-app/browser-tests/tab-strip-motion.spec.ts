@@ -121,6 +121,57 @@ async function expectResting(page: Page, frames: number): Promise<void> {
     .toBe(true);
 }
 
+const PENDING_FRAMES = "__pendingFrameCallbacks";
+
+/**
+ * Makes the page count the animation-frame callbacks it has asked for and not
+ * yet been given. It has to run before the page's own scripts: the library
+ * that drives the strip's motion captures `requestAnimationFrame` when it
+ * loads.
+ */
+async function countPendingFrames(page: Page): Promise<void> {
+  await page.addInitScript((key: string) => {
+    const pending = new Set<number>();
+    const request = window.requestAnimationFrame.bind(window);
+    const cancel = window.cancelAnimationFrame.bind(window);
+    window.requestAnimationFrame = (callback) => {
+      const handle = request((time) => {
+        pending.delete(handle);
+        callback(time);
+      });
+      pending.add(handle);
+      return handle;
+    };
+    window.cancelAnimationFrame = (handle) => {
+      pending.delete(handle);
+      cancel(handle);
+    };
+    Reflect.set(window, key, () => pending.size);
+  }, PENDING_FRAMES);
+}
+
+/**
+ * Waits for the page to stop asking for animation frames. A strip at rest by
+ * `expectResting`'s measure can still be running that frame loop for a few
+ * more frames (it only sees Web Animations), and a loop already running when
+ * the sampler starts is called ahead of it in every frame: the first frame
+ * after a close is then sampled with the spacer's first tick already applied.
+ */
+async function expectFrameLoopsIdle(page: Page): Promise<void> {
+  await expect
+    .poll(
+      () =>
+        page.evaluate((key: string): unknown => {
+          const count: unknown = Reflect.get(window, key);
+          return typeof count === "function"
+            ? Reflect.apply(count, window, [])
+            : undefined;
+        }, PENDING_FRAMES),
+      { message: "the page must stop asking for animation frames" },
+    )
+    .toBe(0);
+}
+
 /**
  * Samples the strip now and on every animation frame while `gesture` runs and
  * the strip comes to rest with `tabsAtRest` tabs. Sampling is page-side, so the
@@ -132,6 +183,7 @@ async function record(
   tabsAtRest: number,
   gesture: () => Promise<unknown>,
 ): Promise<Sample[]> {
+  await expectFrameLoopsIdle(page);
   const recorder = await page.evaluateHandle(
     (selectors: Selectors): { readonly stop: () => Sample[] } => {
       const strip = document.querySelector(selectors.strip);
@@ -228,6 +280,7 @@ async function callBridge(
 
 /** Loads the strip and opens `count` tasks, the last active; returns their tab ids. */
 async function openStrip(page: Page, count: number): Promise<string[]> {
+  await countPendingFrames(page);
   await page.goto(fixture("tab-recovery"));
   await page.waitForFunction(
     () => Reflect.get(window, "__traycerTabRecovery") !== undefined,
