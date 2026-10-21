@@ -25,11 +25,15 @@ import {
   listCloudTasksRequestForHistorySearch,
   registerCloudEpicTasksClient,
 } from "@/lib/cloud-epic-tasks-query";
+import { fetchHostLocalHistoryPageByHostId } from "@/lib/cloud-epic-tasks-query/query";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { LocalHistoryReadResponse } from "@traycer/protocol/host/epic/local-history";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
+import type { HistoryHostContribution } from "@/lib/history-composition/compose-history-page";
 import {
   __resetHistoryContributionsForTests,
+  noteUnfilteredHistoryContribution,
+  startUnfilteredHistoryContributionRead,
   unfilteredHistoryContribution,
 } from "@/lib/history-composition/history-local-contribution";
 import { useAuthStore } from "@/stores/auth/auth-store";
@@ -232,6 +236,15 @@ describe("listCloudTasksRequestForHistorySearch", () => {
 });
 
 describe("the unfiltered History read's contribution state", () => {
+  const EMPTY_COMPLETE_ANSWER: LocalHistoryReadResponse = {
+    complete: true,
+    willComplete: true,
+    localHomeRows: [],
+    preservedRows: [],
+    tombstonedEpicIds: [],
+    localRows: "none",
+  };
+
   beforeEach(() => {
     __resetHistoryContributionsForTests();
   });
@@ -291,6 +304,82 @@ describe("the unfiltered History read's contribution state", () => {
 
       expect(asked).toEqual([false, true]);
       expect(unfilteredHistoryContribution(USER_ID, hostId)).toBeUndefined();
+    } finally {
+      __resetCloudEpicTasksClientsForTests();
+      useAuthStore.getState().setSignedOut();
+    }
+  });
+
+  it("releases its own pending hold when its answer is older than one that settled meanwhile", async () => {
+    const asked: boolean[] = [];
+    let releaseIncomplete: () => void = () => undefined;
+    const incompleteGate = new Promise<void>((resolve) => {
+      releaseIncomplete = resolve;
+    });
+    const queryClient = new QueryClient();
+    const messenger = new MockHostMessenger<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      requestId: () => "history-contribution",
+      handlers: {
+        "epic.listTasks": () => ({ tasks: [], hasMore: false }),
+        "epic.localHistory.read": async (params) => {
+          asked.push(params.awaitComplete);
+          if (!params.awaitComplete) {
+            await incompleteGate;
+            return {
+              complete: false,
+              willComplete: true,
+              localHomeRows: [],
+              preservedRows: [],
+              tombstonedEpicIds: [],
+              localRows: "truncated",
+            };
+          }
+          return EMPTY_COMPLETE_ANSWER;
+        },
+      },
+    });
+    const spine = new HostClient<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      invalidator: createHostQueryInvalidator(queryClient),
+      findHostById: (hostId) =>
+        hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,
+      messenger,
+    });
+    spine.setRequestContext(requestContextFor(USER_ID));
+    const hostId = mockLocalHostEntry.hostId;
+    useAuthStore.getState().setSignedIn(USER_PROFILE, USER_CONTEXT, []);
+    __resetCloudEpicTasksClientsForTests();
+    registerCloudEpicTasksClient(
+      hostId,
+      spine.createRequester(mockLocalHostEntry),
+    );
+
+    try {
+      const read = fetchHostLocalHistoryPageByHostId(hostId, USER_ID, {
+        filters: null,
+        abortSignal: undefined,
+        requestContextPolicy: "wait",
+      });
+      await waitFor(() => {
+        expect(asked).toEqual([false]);
+      });
+
+      // A newer read settles while the first is still waiting on its
+      // incomplete answer, so no hold exists yet for it to clear.
+      const newer: HistoryHostContribution = { kind: "absent" };
+      noteUnfilteredHistoryContribution(
+        USER_ID,
+        hostId,
+        newer,
+        startUnfilteredHistoryContributionRead(),
+      );
+
+      releaseIncomplete();
+      await read;
+
+      expect(asked).toEqual([false, true]);
+      expect(unfilteredHistoryContribution(USER_ID, hostId)).toEqual(newer);
     } finally {
       __resetCloudEpicTasksClientsForTests();
       useAuthStore.getState().setSignedOut();

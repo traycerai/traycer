@@ -381,9 +381,11 @@ async function readHistoryContributionForPage(
       );
     }
     return contribution;
-  } catch (error) {
+  } finally {
+    // Its own hold only, whatever the outcome: an answer older than one that
+    // settled meanwhile is dropped without clearing a hold this read took
+    // after that settle.
     held.abandon?.();
-    throw error;
   }
 }
 
