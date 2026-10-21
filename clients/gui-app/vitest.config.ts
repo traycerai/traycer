@@ -59,10 +59,12 @@ const MAX_TEST_WORKERS = Math.min(
 // Each file's suite has a case that is red on the shape it used to have:
 // - `use-git-list-changed-files-subscription`: a git error or a closed stream
 //   never left pending (the shared entry's last frame).
-// - `use-host-client-for`, `use-host-stream-client-for`: a sign-in after mount
-//   never built the host's client (the context `setRequestContext` swaps
-//   inside the one spine client); `epic-tab-existence-reconciler`: a lease
-//   bound after mount never probed the hosts for local copies.
+// - `use-host-stream-client-for`: a sign-in after mount never built the
+//   host's stream client (the context `setRequestContext` swaps inside the one
+//   spine client); `use-host-client-for` reads it through the same subscribed
+//   hook and builds its client on the sign-in itself;
+//   `epic-tab-existence-reconciler`: a lease bound after mount never probed
+//   the hosts for local copies.
 // - `use-providers-login-ownership`: a host whose directory row landed after
 //   mount never got login ownership (a requester pinned by id answers `null`
 //   until its row lands).
@@ -77,11 +79,15 @@ const MAX_TEST_WORKERS = Math.min(
 // - `terminal-tile`, `landing-terminal-tile`, `use-terminal-tile-bootstrap`,
 //   `use-host-terminal-bootstrap`: a reopened terminal opened at the grid its
 //   engine had before the measure wait ended.
+// - `chat-routing-menu`: a tab menu opened before its chat's session kept the
+//   routing setting out for as long as it stayed up.
+// - `tab-appearance-menu`: a tab whose own task lookup was pending never took
+//   the strip's batch from the cache, so Labels and grouping stayed hidden.
 // `workspace-file-tile`, `split-slot-chooser`, `resource-monitor-popover`,
 // `sidebar-artwork` and `dock-modes` read the same kind of source and are
 // correct as they stand; their cases hold that once they run compiled.
 const REACT_COMPILER_REGRESSION_FILES =
-  /[/\\](?:composer-prompt-editor|use-workspace-file-list-subscription|shared-stream-subscription|use-header-tabs|use-pr-(?:list|detail)-subscription|auth-brand-splash|auth-landing-page|use-auth-splash-cover|relative-time|routing-card|use-environment-members-query|use-git-list-changed-files-subscription|workspace-file-tile|worktrees-enrichment|use-worktree-task-titles|teardown-agent-names|resource-monitor-popover|use-comm-graph-jump|comm-graph-agent-detail-surface|top-level-tab-host|split-slot-chooser|landing-terminal-tile|use-terminal-tile-bootstrap|use-host-terminal-bootstrap|terminal-tile|use-diff-highlight-ready|composer\.source|sidebar-artwork|dock-modes|use-host-client-for|use-host-stream-client-for|use-providers-login-ownership|epic-tab-existence-reconciler|react-compiler-harness-probe)\.(?:ts|tsx)$/;
+  /[/\\](?:composer-prompt-editor|use-workspace-file-list-subscription|shared-stream-subscription|use-header-tabs|use-pr-(?:list|detail)-subscription|auth-brand-splash|auth-landing-page|use-auth-splash-cover|relative-time|routing-card|use-environment-members-query|use-git-list-changed-files-subscription|workspace-file-tile|worktrees-enrichment|use-worktree-task-titles|teardown-agent-names|resource-monitor-popover|use-comm-graph-jump|comm-graph-agent-detail-surface|top-level-tab-host|split-slot-chooser|landing-terminal-tile|use-terminal-tile-bootstrap|use-host-terminal-bootstrap|terminal-tile|use-diff-highlight-ready|composer\.source|sidebar-artwork|dock-modes|use-host-client-for|use-host-stream-client-for|use-providers-login-ownership|epic-tab-existence-reconciler|chat-routing-menu|tab-appearance-menu|react-compiler-harness-probe)\.(?:ts|tsx)$/;
 
 // The compiler runs after the JSX transform, and the suite's transform is the
 // development one: `jsxDEV(..., this)` passes `this`, the compiler bails on

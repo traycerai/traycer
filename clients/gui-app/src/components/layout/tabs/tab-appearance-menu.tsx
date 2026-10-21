@@ -15,7 +15,7 @@ import { isEditableRole } from "@/lib/epic-permissions";
 import { Label } from "@/components/ui/label";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import type { CSSProperties } from "react";
-import { useId } from "react";
+import { useId, useSyncExternalStore } from "react";
 import { Check, Group, Palette, Pencil, Pipette } from "lucide-react";
 import {
   ContextMenuItem,
@@ -219,16 +219,29 @@ function useTabTaskContext(
   // Only the host this tab's own lookup asks, as the retry item below keys it:
   // another host's batch can disagree about whether the task is local-homed.
   const hostId = useRequesterHostId(organization?.client ?? null);
-  const standIn =
+  // The strip's batch is another cache entry that can land at any time while
+  // the own lookup is pending, so the stand-in is read through the cache's
+  // change channel, one stable value per store.
+  const readStandIn = () =>
     userId === null || hostId === null || !contexts.isPending
       ? null
       : findCachedTaskContext(queryClient, { hostId, userId }, epicId);
+  const subscribeToCache = (listener: () => void) =>
+    queryClient.getQueryCache().subscribe(listener);
+  const standInTask = useSyncExternalStore(
+    subscribeToCache,
+    () => readStandIn()?.task,
+  );
+  const standInLocalHomed = useSyncExternalStore(
+    subscribeToCache,
+    () => readStandIn()?.localHomed === true,
+  );
   const answered = contexts.tasksById.get(epicId);
   return {
-    task: answered ?? standIn?.task,
+    task: answered ?? standInTask,
     localHomed:
       contexts.localHomedTaskIds.has(epicId) ||
-      (answered === undefined && standIn?.localHomed === true),
+      (answered === undefined && standInLocalHomed),
     error: contexts.error,
     isFetching: contexts.isFetching,
   };
