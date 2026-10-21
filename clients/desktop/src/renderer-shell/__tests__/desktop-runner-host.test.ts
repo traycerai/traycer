@@ -570,6 +570,7 @@ function buildFakeBridge(
       },
       recentDocuments: { add: async () => undefined },
       window: {
+        captureRegion: async () => null,
         flashFrame: async () => undefined,
         setProgressBar: async () => undefined,
         setRepresentedFilename: async () => undefined,
@@ -727,6 +728,16 @@ function buildFakeBridge(
       onGuestViewportRequested: (_handler) => ({ dispose: () => undefined }),
       reportGuestViewportResult: async () => undefined,
       reportAnnotationAttachResult: async () => undefined,
+    },
+    sandboxArtifacts: {
+      policySource: "traycer-sandbox:",
+      artifactOrigin: ({ artifactId, mountId }) =>
+        `traycer-sandbox://artifact-${artifactId}--${mountId}`,
+      register: async () => undefined,
+      unregister: async () => undefined,
+      onRequest: (_handler) => ({ dispose: () => undefined }),
+      onCancel: (_handler) => ({ dispose: () => undefined }),
+      respond: async () => undefined,
     },
     hostManagement: {
       getHostControllerStatus: async () => {

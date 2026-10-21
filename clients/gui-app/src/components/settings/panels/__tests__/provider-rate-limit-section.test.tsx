@@ -18,6 +18,7 @@ import {
 import { DEFAULT_ACCOUNT_CONTEXT } from "@traycer/protocol/common/schemas";
 import type { ProviderRateLimits } from "@traycer/protocol/host";
 import type { ProviderRateLimitEnvelope } from "@/lib/rate-limits/rate-limit-envelope";
+import { NO_EPISODE } from "@/lib/rate-limits/rate-limit-envelope";
 import { envelopeFromRateLimits } from "@/lib/rate-limits/__tests__/rate-limit-envelope-fixtures";
 import { formatResetFullDateTime } from "@/lib/relative-time";
 import { useLayoutStore } from "@/stores/layout/layout-store";
@@ -464,6 +465,8 @@ describe("ProviderRateLimitForProvider", () => {
       lastGood: CODEX_RATE_LIMITS,
       lastGoodAt: Date.now(),
       lastFailureAt: Date.now(),
+      credentialGeneration: null,
+      episode: NO_EPISODE,
     };
     mocks.isError = false;
     render(

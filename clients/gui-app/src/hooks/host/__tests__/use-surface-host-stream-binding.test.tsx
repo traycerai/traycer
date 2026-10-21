@@ -58,15 +58,22 @@ vi.mock("@/lib/host/stream-auth-revalidator", () => ({
 }));
 
 vi.mock("@/lib/host", () => ({
-  // Only this object's IDENTITY matters here - it flows straight into the
-  // mocked `authenticatedOwnerIdentityKey` below, which this file also
-  // controls, so the real derivation is never exercised.
-  useHostClient: () => ({}),
+  useHostClient: () => null,
+}));
+
+// The owner identity is this file's to control, so the real derivation is
+// never exercised: the binding is published only when its key matches it.
+vi.mock("@/hooks/host/use-request-context-user-id", () => ({
+  useRequestContextUserId: () => "user-test",
+}));
+
+vi.mock("@/lib/host/transport-key", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/host/transport-key")>()),
+  remoteAwareOwnerIdentityKey: () => refs.expectedKey,
 }));
 
 vi.mock("@/hooks/host/use-host-stream-client-for", () => ({
   useHostStreamClientBindingFor: () => refs.binding,
-  authenticatedOwnerIdentityKey: () => refs.expectedKey,
   // The lease is the cache's business, not this hook's - these tests are about
   // WHICH binding is published, so the retain is a no-op here.
   streamTransportRetain: () => () => () => undefined,

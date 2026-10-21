@@ -8,6 +8,7 @@ import {
   createAgentRequestSchema,
   createAgentRequestSchemaV20,
   createAgentRequestSchemaV30,
+  createAgentRequestSchemaV31,
   createAgentResponseSchema,
   agentSelectionGuideRequestSchema,
   agentSelectionGuideResponseSchema,
@@ -49,6 +50,7 @@ import {
   agentSummarySchemaV80,
   agentSummarySchemaV92,
   sendAgentMessageRequestSchema,
+  sendAgentMessageRequestSchemaV11,
   sendAgentMessageResponseSchema,
   stopAgentRequestSchema,
   stopAgentResponseSchema,
@@ -86,6 +88,13 @@ export const agentCreateV30 = defineRpcContract({
   method: "agent.create",
   schemaVersion: { major: 3, minor: 0 } as const,
   requestSchema: createAgentRequestSchemaV30,
+  responseSchema: createAgentResponseSchema,
+});
+
+export const agentCreateV31 = defineRpcContract({
+  method: "agent.create",
+  schemaVersion: { major: 3, minor: 1 } as const,
+  requestSchema: createAgentRequestSchemaV31,
   responseSchema: createAgentResponseSchema,
 });
 
@@ -191,11 +200,25 @@ export const agentCreateUpgradeV20ToV30 = defineUpgradePath<
   upgradeResponse: (response) => response,
 });
 
-export const agentCreateDowngradeV30ToV20 = defineDowngradePath<
+/**
+ * A 3.0 caller did not carry a routing choice; upgrade it to "leave the agent
+ * on the default".
+ */
+export const agentCreateUpgradeV30ToV31 = defineUpgradePath<
   typeof agentCreateV30,
-  typeof agentCreateV20
+  typeof agentCreateV31
 >({
   from: { major: 3, minor: 0 },
+  to: { major: 3, minor: 1 },
+  upgradeRequest: (request) => ({ ...request, routing: null }),
+  upgradeResponse: (response) => response,
+});
+
+export const agentCreateDowngradeV31ToV20 = defineDowngradePath<
+  typeof agentCreateV31,
+  typeof agentCreateV20
+>({
+  from: { major: 3, minor: 1 },
   to: { major: 2, minor: 0 },
   downgradeRequest: () => ({
     ok: false,
@@ -208,11 +231,11 @@ export const agentCreateDowngradeV30ToV20 = defineDowngradePath<
   downgradeResponse: (response) => ({ ok: true, value: response }),
 });
 
-export const agentCreateDowngradeV30ToV10 = defineDowngradePath<
-  typeof agentCreateV30,
+export const agentCreateDowngradeV31ToV10 = defineDowngradePath<
+  typeof agentCreateV31,
   typeof agentCreateV10
 >({
-  from: { major: 3, minor: 0 },
+  from: { major: 3, minor: 1 },
   to: { major: 1, minor: 0 },
   downgradeRequest: () => ({
     ok: false,
@@ -1544,6 +1567,31 @@ export const agentSendMessageV10 = defineRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: sendAgentMessageRequestSchema,
   responseSchema: sendAgentMessageResponseSchema,
+});
+
+/**
+ * `agent.sendMessage@1.1` - the request gains `workspace` (see
+ * `sendAgentMessageRequestSchemaV11`); the response is unchanged. A `1.1`
+ * caller on a `1.0` host has `workspace` stripped by the `1.0` schema, so a
+ * caller that depends on it requires `1.1` before sending.
+ */
+export const agentSendMessageV11 = defineRpcContract({
+  method: "agent.sendMessage",
+  schemaVersion: { major: 1, minor: 1 } as const,
+  requestSchema: sendAgentMessageRequestSchemaV11,
+  responseSchema: sendAgentMessageResponseSchema,
+});
+
+// A `1.0` caller never names a workspace: its upgrade leaves the choice to the
+// host, exactly as a `1.0` host makes it.
+export const agentSendMessageUpgradeV10ToV11 = defineUpgradePath<
+  typeof agentSendMessageV10,
+  typeof agentSendMessageV11
+>({
+  from: agentSendMessageV10.schemaVersion,
+  to: agentSendMessageV11.schemaVersion,
+  upgradeRequest: (request) => ({ ...request, workspace: null }),
+  upgradeResponse: (response) => response,
 });
 
 export const agentGetTranscriptV10 = defineRpcContract({

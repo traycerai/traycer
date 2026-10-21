@@ -88,6 +88,8 @@ vi.mock(
   }),
 );
 
+import { __disposeAllXtermHostsForTests } from "@/components/epic-canvas/renderers/xterm-host-registry";
+import { acquireMountedXtermEngine } from "@/components/epic-canvas/renderers/__tests__/xterm-host-entry-fixture";
 import { useTerminalTileBootstrap } from "../use-terminal-tile-bootstrap";
 
 function wrapper({ children }: { children: ReactNode }) {
@@ -258,5 +260,53 @@ describe("useTerminalTileBootstrap handle gate across list refetches", () => {
       expect(lastHandleArgs().enabled).toBe(true);
     });
     expect(mockCreate.mutate).not.toHaveBeenCalled();
+  });
+});
+
+describe("useTerminalTileBootstrap opening grid of a reopened session", () => {
+  afterEach(() => {
+    __disposeAllXtermHostsForTests();
+    cleanup();
+    vi.useRealTimers();
+  });
+
+  // A reopened terminal in a pane that cannot measure itself falls back to the
+  // kept-alive engine's grid after the measure wait. The engine's grid moves
+  // while the tile waits (the host echoes a new effective size); a stale memo
+  // of the first peek subscribed the session at the old grid.
+  it("subscribes at the kept-alive engine's grid as it is when the measure wait ends", () => {
+    vi.useFakeTimers();
+    handleCalls = [];
+    mockList = {
+      data: {
+        sessions: [
+          { sessionId: "term-1", sessionKind: "terminal", status: "running" },
+        ],
+      },
+      isFetching: false,
+      isPending: false,
+      isError: false,
+      error: null,
+      refetch: () => Promise.resolve({}),
+    };
+    const term = acquireMountedXtermEngine({
+      instanceId: "warm-inst",
+      sessionId: "term-1",
+      hostId: "host-1",
+      cols: 100,
+      rows: 30,
+    });
+
+    runBootstrap();
+    term.resize(140, 45);
+    act(() => {
+      vi.advanceTimersByTime(2_000);
+    });
+
+    expect(lastHandleArgs()).toMatchObject({
+      enabled: true,
+      cols: 140,
+      rows: 45,
+    });
   });
 });

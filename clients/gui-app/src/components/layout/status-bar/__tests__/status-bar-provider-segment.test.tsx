@@ -2,7 +2,11 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { StatusBarProviderSegment } from "@/components/layout/status-bar/status-bar-provider-segment";
-import type { StatusBarUsageDisplay } from "@/components/layout/status-bar/status-bar-usage-display";
+import {
+  STATUS_BAR_TRANSIENT_LABEL,
+  STATUS_BAR_TRANSIENT_RUNNING_LABEL,
+  type StatusBarUsageDisplay,
+} from "@/components/layout/status-bar/status-bar-usage-display";
 import type {
   StatusBarProviderSegmentModel,
   StatusBarProviderSegmentState,
@@ -48,6 +52,8 @@ function segmentFixture(overrides: {
   readonly shown?: ReadonlyArray<StatusBarRateLimitWindow>;
   readonly profileId?: string | null;
   readonly account?: StatusBarProviderSegmentModel["account"];
+  readonly fetching?: boolean;
+  readonly retryOffered?: boolean;
 }): StatusBarProviderSegmentModel {
   const windows = overrides.windows ?? [];
   const tightest = windows.length > 0 ? windows[0] : null;
@@ -58,6 +64,8 @@ function segmentFixture(overrides: {
     hidden: false,
     state: overrides.state ?? "live",
     reason: overrides.reason ?? null,
+    fetching: overrides.fetching ?? false,
+    retryOffered: overrides.retryOffered ?? false,
     windows,
     shown: overrides.shown ?? windows,
     tightest,
@@ -90,6 +98,12 @@ function renderSegment(
       <StatusBarProviderSegment segment={segment} display={display} />
     </TooltipProvider>,
   );
+}
+
+/** The same specimen under a new model, so one row can walk a state's phases. */
+function redrawSegment(segment: StatusBarProviderSegmentModel): void {
+  cleanup();
+  renderSegment(segment, DISPLAY);
 }
 
 const DISPLAY: StatusBarUsageDisplay = {
@@ -622,6 +636,47 @@ describe("<StatusBarProviderSegment /> states", () => {
     expect(
       screen.getByTestId("status-bar-provider-unavailable"),
     ).not.toBeNull();
+  });
+
+  it("transient says it could not load, and underlines that only while a click would read again", () => {
+    renderSegment(
+      segmentFixture({
+        state: "transient",
+        reason: "timeout",
+        retryOffered: true,
+      }),
+      DISPLAY,
+    );
+
+    const offered = screen.getByTestId("status-bar-provider-transient");
+    expect(offered.textContent).toBe(STATUS_BAR_TRANSIENT_LABEL);
+    expect(offered.className).toContain("underline");
+    expect(screen.queryByTestId("status-bar-provider-unavailable")).toBeNull();
+
+    // Withheld: the same words, and nothing that says a click does anything.
+    redrawSegment(
+      segmentFixture({
+        state: "transient",
+        reason: "timeout",
+        retryOffered: false,
+      }),
+    );
+    const withheld = screen.getByTestId("status-bar-provider-transient");
+    expect(withheld.textContent).toBe(STATUS_BAR_TRANSIENT_LABEL);
+    expect(withheld.className).not.toContain("underline");
+
+    // Running: the words change, and the affordance is the read itself.
+    redrawSegment(
+      segmentFixture({
+        state: "transient",
+        reason: "timeout",
+        fetching: true,
+        retryOffered: false,
+      }),
+    );
+    expect(
+      screen.getByTestId("status-bar-provider-transient").textContent,
+    ).toBe(STATUS_BAR_TRANSIENT_RUNNING_LABEL);
   });
 
   it("degraded keeps the warning glyph and the last reading, undimmed", () => {

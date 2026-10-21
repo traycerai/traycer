@@ -1,0 +1,33 @@
+name: Gradle wrapper
+
+# Checks every committed gradle-wrapper.jar against the checksums Gradle
+# publishes, so a tampered wrapper (it runs on every `./gradlew`) fails CI. It
+# runs on every push to `main`, not only on pushes that touch the jar: the
+# Scorecard Binary-Artifacts check exempts the jar only when the latest commit
+# has a successful run of this workflow.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Validate gradle-wrapper.jar
+    # A team PR into `main` skips this job: the merge to `main` runs it once.
+    # A fork PR, a bot PR and a PR into any other branch run it in full.
+    if: >-
+      github.event_name != 'pull_request'
+      || github.base_ref != 'main'
+      || github.event.pull_request.head.repo.full_name != github.repository
+      || github.event.pull_request.user.type == 'Bot'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - uses: gradle/actions/wrapper-validation@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0

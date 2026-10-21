@@ -7,6 +7,44 @@
 export const EPHEMERAL_RATE_LIMIT_POLL_INTERVAL_MS = 15 * 60 * 1000;
 
 /**
+ * How long the strip waits before the ONE re-read it makes for an account whose
+ * latest attempt failed transiently with no reading retained behind it - the
+ * `transient` segment state, which says so and promises a retry.
+ *
+ * It exists because the next automatic attempt would otherwise be the poll's,
+ * up to `EPHEMERAL_RATE_LIMIT_POLL_INTERVAL_MS` away, and a segment that says
+ * it is retrying has to be retrying. One, not a loop: a re-read that fails
+ * again leaves the segment exactly as it was, and the poll owns the cadence
+ * from there.
+ *
+ * It travels as `force: false`, so the host's own read floors decide whether
+ * anything is actually read. That is the whole reason this needs no knowledge
+ * of them: a `timeout` is past the ephemeral floor by the time this fires and
+ * really reads again, while a Claude `usage_fetch_failed` is inside the long
+ * penalty window that floor applies to a 429 and is answered from the gauge.
+ */
+export const TRANSIENT_RATE_LIMIT_RETRY_DELAY_MS = 60 * 1000;
+
+/**
+ * How long the strip withholds a `transient` segment's retry affordance after a
+ * read of that account was asked for by hand.
+ *
+ * What protects a provider from a flood is the host: its per-scope single
+ * flight coalesces concurrent reads, its usage-probe gate caps how many run at
+ * once, and its read floors cover every automatic caller. A forced read is the
+ * one caller that passes those floors on purpose, because a person asking is
+ * not an automatic caller - so the bound on asking belongs here, where the
+ * asking happens.
+ *
+ * Deliberately a flat bound rather than a reading of the host's floors: those
+ * are per provider and per reason, and a second opinion about them here would
+ * drift from the first. 60s is the shortest floor the ephemeral lane puts on an
+ * automatic read, so a hand-driven retry is never more frequent than the
+ * background one.
+ */
+export const RATE_LIMIT_MANUAL_RETRY_WITHHOLD_MS = 60 * 1000;
+
+/**
  * How long the GUI waits for a `host.getRateLimitUsage` response frame on the
  * `ephemeralProcess` lane before abandoning the request. The transport's
  * default frame timeout is 30s, which is exactly the host's *default* probe

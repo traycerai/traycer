@@ -65,9 +65,7 @@ function fortyPages(): Map<string | null, EnvironmentMembersResponse> {
   );
 }
 
-function lastFortyUserId(): string {
-  return FORTY_USER_IDS[FORTY_USER_IDS.length - 1];
-}
+const LAST_FORTY_USER_ID = FORTY_USER_IDS[FORTY_USER_IDS.length - 1];
 
 function mountMembers(
   answerPage: (cursor: string | null) => EnvironmentMembersResponse,
@@ -303,17 +301,7 @@ describe("useEnvironmentMembers", () => {
   });
 
   it("follows a warm cache of more pages than React allows re-renders in one go", () => {
-    const pageCount = 40;
-    const userIds = Array.from(
-      { length: pageCount },
-      (_, index) => `user-${String(index).padStart(3, "0")}`,
-    );
-    const warm = new Map<string | null, EnvironmentMembersResponse>(
-      userIds.map((userId, index) => [
-        index === 0 ? null : userIds[index - 1],
-        page(userId, index === pageCount - 1 ? null : userId),
-      ]),
-    );
+    const warm = fortyPages();
 
     const mounted = mountMembers(
       (cursor) => warm.get(cursor) ?? page("unknown", null),
@@ -322,10 +310,10 @@ describe("useEnvironmentMembers", () => {
     );
 
     // Every cached page is followed on mount, without the re-render limit.
-    expect(mounted.resolver()(userIds[pageCount - 1])?.displayName).toBe(
-      `Name of ${userIds[pageCount - 1]}`,
+    expect(mounted.resolver()(LAST_FORTY_USER_ID)?.displayName).toBe(
+      `Name of ${LAST_FORTY_USER_ID}`,
     );
-    expect(mounted.pageQueries()).toHaveLength(pageCount);
+    expect(mounted.pageQueries()).toHaveLength(FORTY_USER_IDS.length);
   });
 
   it("follows a cached tail a terminal first page later names, in one go", async () => {
@@ -343,8 +331,8 @@ describe("useEnvironmentMembers", () => {
     await mounted.publish(new Map([[null, tail.get(null) ?? page("x", null)]]));
 
     await waitFor(() => {
-      expect(mounted.resolver()(lastFortyUserId())?.displayName).toBe(
-        `Name of ${lastFortyUserId()}`,
+      expect(mounted.resolver()(LAST_FORTY_USER_ID)?.displayName).toBe(
+        `Name of ${LAST_FORTY_USER_ID}`,
       );
     });
     expect(mounted.pageQueries()).toHaveLength(FORTY_USER_IDS.length);
@@ -363,8 +351,8 @@ describe("useEnvironmentMembers", () => {
       true,
       pages,
     );
-    expect(mounted.resolver()(lastFortyUserId())?.displayName).toBe(
-      `Name of ${lastFortyUserId()}`,
+    expect(mounted.resolver()(LAST_FORTY_USER_ID)?.displayName).toBe(
+      `Name of ${LAST_FORTY_USER_ID}`,
     );
     // The mount's own refetch of the stale cached pages has settled, so the
     // refetch below asks again rather than joining it.
@@ -385,8 +373,8 @@ describe("useEnvironmentMembers", () => {
       );
       expect(mounted.pageQueries()).toHaveLength(FORTY_USER_IDS.length + 1);
     });
-    expect(mounted.resolver()(lastFortyUserId())?.displayName).toBe(
-      `Name of ${lastFortyUserId()}`,
+    expect(mounted.resolver()(LAST_FORTY_USER_ID)?.displayName).toBe(
+      `Name of ${LAST_FORTY_USER_ID}`,
     );
   });
 
@@ -402,8 +390,8 @@ describe("useEnvironmentMembers", () => {
     await mounted.publish(pages);
 
     await waitFor(() => {
-      expect(mounted.resolver()(lastFortyUserId())?.displayName).toBe(
-        `Name of ${lastFortyUserId()}`,
+      expect(mounted.resolver()(LAST_FORTY_USER_ID)?.displayName).toBe(
+        `Name of ${LAST_FORTY_USER_ID}`,
       );
     });
     expect(mounted.pageQueries()).toHaveLength(FORTY_USER_IDS.length);

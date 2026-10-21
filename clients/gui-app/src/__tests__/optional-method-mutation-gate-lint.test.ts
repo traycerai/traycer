@@ -121,6 +121,8 @@ const DEFINITION_FILES = new Set(
  * string; every call site targeting it is treated as satisfied.
  */
 const VERIFIED_ALTERNATE_GATE: Readonly<Record<string, string>> = {
+  "epic.editArtboard":
+    "sibling-method proxy gate: an edit needs a selection on a served board (servedSha256), and board bytes come only from epic.readArtifactObject on the same tab-host client, which host-object-reader.ts degrades to 'missing' on E_HOST_UNSUPPORTED so no board renders and nothing can be selected (canvas-artifact-surface.tsx, canvas-selection-provider.tsx); both methods entered the registry together on html-artifacts, and refusals render inline in the properties panel (use-artboard-edit.ts)",
   "epic.updateChatRunSettings":
     'documented fire-and-forget: no onError, E_HOST_UNSUPPORTED degrades to "persists on next send" (use-epic-chat-mutations.ts)',
   "epic.updateChatProfile":

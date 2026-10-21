@@ -6,10 +6,7 @@ import {
   authRetryDelayMs,
 } from "@traycer-clients/shared/auth/auth-validation";
 import { authenticatedUserResponseRecordV100 } from "@traycer/protocol/auth/registry";
-import type {
-  AuthenticatedUser,
-  SubscriptionStatus,
-} from "@traycer/protocol/auth";
+import type { SubscriptionStatus } from "@traycer/protocol/auth";
 import { AuthService, AUTH_ERROR_LAUNCH_FAILED } from "@/lib/auth/auth-service";
 import { useAuthStore } from "@/stores/auth/auth-store";
 
@@ -146,11 +143,14 @@ function authenticatedUserRawPayload(
   };
 }
 
-/** The protocol-parsed value, for seeding a snapshot with a genuine `AuthenticatedUser`. */
+/** The major-1 value a snapshot persists - the record's frozen shape, not the latest. */
+type MajorOneUser = z.infer<typeof authenticatedUserResponseRecordV100.schema>;
+
+/** The protocol-parsed value, for seeding a snapshot with a genuine major-1 user. */
 function authenticatedUser(
   userId: string,
   subscriptionStatus: SubscriptionStatus,
-): AuthenticatedUser {
+): MajorOneUser {
   return authenticatedUserResponseRecordV100.schema.parse(
     authenticatedUserRawPayload(userId, subscriptionStatus),
   );
@@ -244,7 +244,7 @@ function authenticatedUserWithName(
   userId: string,
   subscriptionStatus: SubscriptionStatus,
   name: string,
-): AuthenticatedUser {
+): MajorOneUser {
   return authenticatedUserResponseRecordV100.schema.parse(
     authenticatedUserRawPayloadWithName(userId, subscriptionStatus, name),
   );
@@ -360,7 +360,7 @@ function authenticatedUserWithTeams(
   userId: string,
   subscriptionStatus: SubscriptionStatus,
   teams: readonly RawTeam[],
-): AuthenticatedUser {
+): MajorOneUser {
   return authenticatedUserResponseRecordV100.schema.parse(
     authenticatedUserRawPayloadWithTeams(userId, subscriptionStatus, teams),
   );
@@ -1095,6 +1095,34 @@ describe("AuthService provisional boot session", () => {
       // unconditional write, which would fire one `Analytics.identify` per
       // revalidation instead of only when identity actually moved.
       expect(useAuthStore.getState().profile).toBe(before);
+    });
+
+    it("C21: a valid verdict that lands after a revocation demoted the same bearer does not clear the revocation", async () => {
+      const { service, host } = makeService();
+      await signInStoredCredentials(host, "user-1", "persisted-token");
+      seedSnapshot(host, validSnapshotEnvelope("user-1", "FREE"));
+      const deferred = createDeferredResponse();
+      restoreFetch();
+      restoreFetch = installFetch(() => deferred.promise);
+
+      await service.start();
+      expect(useAuthStore.getState().status).toBe("signed-in");
+
+      // A sibling window learned the account was refused while this window's
+      // own check was still out. The demotion keeps the bearer and withdraws
+      // the verdict; the check was sent before any of that.
+      service.ingestCloudAuthorizationRevoked("persisted-token", null);
+      expect(useAuthStore.getState().status).toBe("unverified");
+
+      deferred.resolve(await okWithUser("user-1", "FREE"));
+      await flush();
+
+      // The newer revocation outranks the verdict that was in flight.
+      expect(useAuthStore.getState().status).toBe("unverified");
+      expect(useAuthStore.getState().cloudVerdictLoss).toBe("ended-elsewhere");
+      expect(
+        service.getRequestContextProvider().current()?.cloudAuthorized,
+      ).toBe(false);
     });
   });
 

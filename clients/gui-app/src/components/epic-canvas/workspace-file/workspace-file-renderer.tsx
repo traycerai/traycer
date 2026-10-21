@@ -262,7 +262,7 @@ export function WorkspaceFileRenderer(props: {
       <DiffEditProvider>
         <div className="grid">
           {highlightReady ? (
-            <div className="col-start-1 row-start-1">
+            <div className="col-start-1 row-start-1 min-w-0">
               <File
                 file={file}
                 edit={editing}

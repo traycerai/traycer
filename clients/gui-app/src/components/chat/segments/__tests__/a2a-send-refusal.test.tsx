@@ -29,6 +29,11 @@ import { ToolSegment } from "@/components/chat/segments/tool-segment";
 import { useSetA2ASendOpen } from "@/stores/chats/a2a-open-store-context";
 import { useToolOpenStore } from "@/stores/chats/tool-open-store";
 
+// The send card looks up its delivery's target host; these sends carry none.
+vi.mock("@/hooks/host/use-host-directory-entry", () => ({
+  useHostDirectoryEntry: () => null,
+}));
+
 vi.mock("@/hooks/host/use-host-query", () => ({
   useHostQuery: () => ({ data: undefined }),
 }));
@@ -188,9 +193,10 @@ function renderSend(error: string, variant: "card" | "row"): void {
           expectReply: false,
         }}
         managedCommand={null}
-        page={null}
+        artifact={null}
         mcpApp={null}
         agentMessageReceipt={null}
+        agentMessageDelivery={null}
         isStreaming={false}
         endState={null}
         stopped={false}

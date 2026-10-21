@@ -44,6 +44,7 @@ import type {
   AvailableProviderRateLimits,
   ProviderRateLimitEnvelope,
 } from "@/lib/rate-limits/rate-limit-envelope";
+import { NO_EPISODE } from "@/lib/rate-limits/rate-limit-envelope";
 import {
   accountContextValue,
   isCreditBasedPricing,
@@ -376,6 +377,8 @@ function envelopeFor(
       lastGood: providerRateLimits,
       lastGoodAt: NOW - 90_000,
       lastFailureAt: null,
+      credentialGeneration: null,
+      episode: NO_EPISODE,
     };
   }
   return {
@@ -383,6 +386,8 @@ function envelopeFor(
     lastGood: null,
     lastGoodAt: null,
     lastFailureAt: null,
+    credentialGeneration: null,
+    episode: NO_EPISODE,
   };
 }
 
@@ -413,6 +418,8 @@ function degradedRetainedResult(
       lastGood,
       lastGoodAt: NOW - 90_000,
       lastFailureAt: NOW - 1_000,
+      credentialGeneration: null,
+      episode: NO_EPISODE,
     },
     isPending: false,
     isFetching: false,
@@ -612,6 +619,8 @@ function authUserFixture(overrides: {
           },
         ]
       : [],
+    environments: { personal: null, teams: [] },
+    actingAs: null,
   };
 }
 
@@ -2624,6 +2633,8 @@ describe("<RateLimitPopover /> per-provider states", () => {
           lastGood: codexReady(),
           lastGoodAt: NOW - 90_000,
           lastFailureAt: NOW - 1_000,
+          credentialGeneration: null,
+          episode: NO_EPISODE,
         },
         isPending: false,
         isFetching: false,
@@ -3967,6 +3978,8 @@ describe("<RateLimitPopover /> limited profiles", () => {
       hidden: false,
       state: "live",
       reason: null,
+      fetching: false,
+      retryOffered: false,
       windows: [window],
       shown: [window],
       tightest: window,

@@ -15,7 +15,7 @@ export const chatSyncSchemaSurfaceBaseline = {
             },
             "minor": {
               "type": "number",
-              "const": 7
+              "const": 10
             }
           },
           "required": [
@@ -453,7 +453,7 @@ export const chatSyncSchemaSurfaceBaseline = {
             },
             "minor": {
               "type": "number",
-              "const": 7
+              "const": 10
             }
           },
           "required": [
@@ -1206,7 +1206,7 @@ export const chatSyncSchemaSurfaceBaseline = {
             },
             "minor": {
               "type": "number",
-              "const": 7
+              "const": 10
             }
           },
           "required": [
@@ -1281,7 +1281,7 @@ export const chatSyncSchemaSurfaceBaseline = {
             },
             "minor": {
               "type": "number",
-              "const": 7
+              "const": 10
             }
           },
           "required": [
@@ -1445,228 +1445,603 @@ export const chatSyncSchemaSurfaceBaseline = {
                                     "default": [],
                                     "type": "array",
                                     "items": {
-                                      "type": "object",
-                                      "properties": {
-                                        "kind": {
-                                          "type": "string",
-                                          "const": "browser-annotation"
-                                        },
-                                        "annotationId": {
-                                          "type": "string",
-                                          "minLength": 1
-                                        },
-                                        "tabId": {
-                                          "type": "string",
-                                          "minLength": 1
-                                        },
-                                        "sessionId": {
-                                          "type": "string",
-                                          "minLength": 1
-                                        },
-                                        "origin": {
-                                          "type": "string"
-                                        },
-                                        "pageUrl": {
-                                          "type": "string"
-                                        },
-                                        "pageTitle": {
-                                          "type": "string"
-                                        },
-                                        "capturedAt": {
-                                          "type": "number"
-                                        },
-                                        "comment": {
-                                          "type": "string"
-                                        },
-                                        "counts": {
+                                      "anyOf": [
+                                        {
                                           "type": "object",
                                           "properties": {
+                                            "kind": {
+                                              "type": "string",
+                                              "const": "browser-annotation"
+                                            },
+                                            "annotationId": {
+                                              "type": "string",
+                                              "minLength": 1
+                                            },
+                                            "tabId": {
+                                              "type": "string",
+                                              "minLength": 1
+                                            },
+                                            "sessionId": {
+                                              "type": "string",
+                                              "minLength": 1
+                                            },
+                                            "origin": {
+                                              "type": "string"
+                                            },
+                                            "pageUrl": {
+                                              "type": "string"
+                                            },
+                                            "pageTitle": {
+                                              "type": "string"
+                                            },
+                                            "capturedAt": {
+                                              "type": "number"
+                                            },
+                                            "comment": {
+                                              "type": "string"
+                                            },
+                                            "counts": {
+                                              "type": "object",
+                                              "properties": {
+                                                "elements": {
+                                                  "type": "integer",
+                                                  "minimum": 0,
+                                                  "maximum": 9007199254740991
+                                                },
+                                                "regions": {
+                                                  "type": "integer",
+                                                  "minimum": 0,
+                                                  "maximum": 9007199254740991
+                                                },
+                                                "strokes": {
+                                                  "type": "integer",
+                                                  "minimum": 0,
+                                                  "maximum": 9007199254740991
+                                                }
+                                              },
+                                              "required": [
+                                                "elements",
+                                                "regions",
+                                                "strokes"
+                                              ],
+                                              "additionalProperties": false
+                                            },
                                             "elements": {
+                                              "type": "array",
+                                              "items": {
+                                                "type": "object",
+                                                "properties": {
+                                                  "selector": {
+                                                    "type": "string"
+                                                  },
+                                                  "tagName": {
+                                                    "type": "string"
+                                                  },
+                                                  "elementId": {
+                                                    "anyOf": [
+                                                      {
+                                                        "type": "string"
+                                                      },
+                                                      {
+                                                        "type": "null"
+                                                      }
+                                                    ]
+                                                  },
+                                                  "classNames": {
+                                                    "type": "array",
+                                                    "items": {
+                                                      "type": "string"
+                                                    }
+                                                  },
+                                                  "textPreview": {
+                                                    "anyOf": [
+                                                      {
+                                                        "type": "string"
+                                                      },
+                                                      {
+                                                        "type": "null"
+                                                      }
+                                                    ]
+                                                  },
+                                                  "ariaRole": {
+                                                    "anyOf": [
+                                                      {
+                                                        "type": "string"
+                                                      },
+                                                      {
+                                                        "type": "null"
+                                                      }
+                                                    ]
+                                                  },
+                                                  "accessibleName": {
+                                                    "anyOf": [
+                                                      {
+                                                        "type": "string"
+                                                      },
+                                                      {
+                                                        "type": "null"
+                                                      }
+                                                    ]
+                                                  },
+                                                  "boundingBox": {
+                                                    "type": "object",
+                                                    "properties": {
+                                                      "x": {
+                                                        "type": "number"
+                                                      },
+                                                      "y": {
+                                                        "type": "number"
+                                                      },
+                                                      "width": {
+                                                        "type": "number"
+                                                      },
+                                                      "height": {
+                                                        "type": "number"
+                                                      },
+                                                      "top": {
+                                                        "type": "number"
+                                                      },
+                                                      "right": {
+                                                        "type": "number"
+                                                      },
+                                                      "bottom": {
+                                                        "type": "number"
+                                                      },
+                                                      "left": {
+                                                        "type": "number"
+                                                      }
+                                                    },
+                                                    "required": [
+                                                      "x",
+                                                      "y",
+                                                      "width",
+                                                      "height",
+                                                      "top",
+                                                      "right",
+                                                      "bottom",
+                                                      "left"
+                                                    ],
+                                                    "additionalProperties": false
+                                                  },
+                                                  "computedStyles": {
+                                                    "type": "array",
+                                                    "items": {
+                                                      "type": "object",
+                                                      "properties": {
+                                                        "property": {
+                                                          "type": "string"
+                                                        },
+                                                        "value": {
+                                                          "type": "string"
+                                                        }
+                                                      },
+                                                      "required": [
+                                                        "property",
+                                                        "value"
+                                                      ],
+                                                      "additionalProperties": false
+                                                    }
+                                                  }
+                                                },
+                                                "required": [
+                                                  "selector",
+                                                  "tagName",
+                                                  "elementId",
+                                                  "classNames",
+                                                  "textPreview",
+                                                  "ariaRole",
+                                                  "accessibleName",
+                                                  "boundingBox",
+                                                  "computedStyles"
+                                                ],
+                                                "additionalProperties": false
+                                              }
+                                            },
+                                            "imageFileName": {
+                                              "type": "string",
+                                              "minLength": 1
+                                            },
+                                            "imageHash": {
+                                              "type": "string",
+                                              "minLength": 1
+                                            },
+                                            "droppedElementCount": {
+                                              "default": 0,
                                               "type": "integer",
                                               "minimum": 0,
                                               "maximum": 9007199254740991
                                             },
-                                            "regions": {
-                                              "type": "integer",
-                                              "minimum": 0,
-                                              "maximum": 9007199254740991
+                                            "source": {
+                                              "type": "object",
+                                              "properties": {
+                                                "kind": {
+                                                  "type": "string",
+                                                  "const": "browser"
+                                                },
+                                                "tabId": {
+                                                  "type": "string",
+                                                  "minLength": 1
+                                                },
+                                                "sessionId": {
+                                                  "type": "string",
+                                                  "minLength": 1
+                                                },
+                                                "origin": {
+                                                  "type": "string"
+                                                },
+                                                "pageUrl": {
+                                                  "type": "string"
+                                                },
+                                                "pageTitle": {
+                                                  "type": "string"
+                                                }
+                                              },
+                                              "required": [
+                                                "kind",
+                                                "tabId",
+                                                "sessionId",
+                                                "origin",
+                                                "pageUrl",
+                                                "pageTitle"
+                                              ],
+                                              "additionalProperties": false
+                                            }
+                                          },
+                                          "required": [
+                                            "kind",
+                                            "annotationId",
+                                            "tabId",
+                                            "sessionId",
+                                            "origin",
+                                            "pageUrl",
+                                            "pageTitle",
+                                            "capturedAt",
+                                            "comment",
+                                            "counts",
+                                            "elements",
+                                            "imageFileName",
+                                            "imageHash",
+                                            "droppedElementCount",
+                                            "source"
+                                          ],
+                                          "additionalProperties": false
+                                        },
+                                        {
+                                          "type": "object",
+                                          "properties": {
+                                            "kind": {
+                                              "type": "string",
+                                              "const": "browser-annotation"
                                             },
-                                            "strokes": {
+                                            "annotationId": {
+                                              "type": "string",
+                                              "minLength": 1
+                                            },
+                                            "source": {
+                                              "type": "object",
+                                              "properties": {
+                                                "kind": {
+                                                  "type": "string",
+                                                  "const": "canvas"
+                                                },
+                                                "artifactId": {
+                                                  "type": "string",
+                                                  "minLength": 1
+                                                },
+                                                "boardPath": {
+                                                  "type": "string",
+                                                  "minLength": 1
+                                                },
+                                                "canvasPage": {
+                                                  "anyOf": [
+                                                    {
+                                                      "type": "string"
+                                                    },
+                                                    {
+                                                      "type": "null"
+                                                    }
+                                                  ]
+                                                },
+                                                "artifactTitle": {
+                                                  "type": "string"
+                                                }
+                                              },
+                                              "required": [
+                                                "kind",
+                                                "artifactId",
+                                                "boardPath",
+                                                "canvasPage",
+                                                "artifactTitle"
+                                              ],
+                                              "additionalProperties": false
+                                            },
+                                            "capturedAt": {
+                                              "type": "number"
+                                            },
+                                            "comment": {
+                                              "type": "string"
+                                            },
+                                            "counts": {
+                                              "type": "object",
+                                              "properties": {
+                                                "elements": {
+                                                  "type": "integer",
+                                                  "minimum": 0,
+                                                  "maximum": 9007199254740991
+                                                },
+                                                "regions": {
+                                                  "type": "integer",
+                                                  "minimum": 0,
+                                                  "maximum": 9007199254740991
+                                                },
+                                                "strokes": {
+                                                  "type": "integer",
+                                                  "minimum": 0,
+                                                  "maximum": 9007199254740991
+                                                }
+                                              },
+                                              "required": [
+                                                "elements",
+                                                "regions",
+                                                "strokes"
+                                              ],
+                                              "additionalProperties": false
+                                            },
+                                            "elements": {
+                                              "type": "array",
+                                              "items": {
+                                                "type": "object",
+                                                "properties": {
+                                                  "selector": {
+                                                    "type": "string"
+                                                  },
+                                                  "tagName": {
+                                                    "type": "string"
+                                                  },
+                                                  "elementId": {
+                                                    "anyOf": [
+                                                      {
+                                                        "type": "string"
+                                                      },
+                                                      {
+                                                        "type": "null"
+                                                      }
+                                                    ]
+                                                  },
+                                                  "classNames": {
+                                                    "type": "array",
+                                                    "items": {
+                                                      "type": "string"
+                                                    }
+                                                  },
+                                                  "textPreview": {
+                                                    "anyOf": [
+                                                      {
+                                                        "type": "string"
+                                                      },
+                                                      {
+                                                        "type": "null"
+                                                      }
+                                                    ]
+                                                  },
+                                                  "ariaRole": {
+                                                    "anyOf": [
+                                                      {
+                                                        "type": "string"
+                                                      },
+                                                      {
+                                                        "type": "null"
+                                                      }
+                                                    ]
+                                                  },
+                                                  "accessibleName": {
+                                                    "anyOf": [
+                                                      {
+                                                        "type": "string"
+                                                      },
+                                                      {
+                                                        "type": "null"
+                                                      }
+                                                    ]
+                                                  },
+                                                  "boundingBox": {
+                                                    "type": "object",
+                                                    "properties": {
+                                                      "x": {
+                                                        "type": "number"
+                                                      },
+                                                      "y": {
+                                                        "type": "number"
+                                                      },
+                                                      "width": {
+                                                        "type": "number"
+                                                      },
+                                                      "height": {
+                                                        "type": "number"
+                                                      },
+                                                      "top": {
+                                                        "type": "number"
+                                                      },
+                                                      "right": {
+                                                        "type": "number"
+                                                      },
+                                                      "bottom": {
+                                                        "type": "number"
+                                                      },
+                                                      "left": {
+                                                        "type": "number"
+                                                      }
+                                                    },
+                                                    "required": [
+                                                      "x",
+                                                      "y",
+                                                      "width",
+                                                      "height",
+                                                      "top",
+                                                      "right",
+                                                      "bottom",
+                                                      "left"
+                                                    ],
+                                                    "additionalProperties": false
+                                                  },
+                                                  "computedStyles": {
+                                                    "type": "array",
+                                                    "items": {
+                                                      "type": "object",
+                                                      "properties": {
+                                                        "property": {
+                                                          "type": "string"
+                                                        },
+                                                        "value": {
+                                                          "type": "string"
+                                                        }
+                                                      },
+                                                      "required": [
+                                                        "property",
+                                                        "value"
+                                                      ],
+                                                      "additionalProperties": false
+                                                    }
+                                                  },
+                                                  "sourceRange": {
+                                                    "default": null,
+                                                    "anyOf": [
+                                                      {
+                                                        "type": "object",
+                                                        "properties": {
+                                                          "start": {
+                                                            "type": "integer",
+                                                            "minimum": 0,
+                                                            "maximum": 9007199254740991
+                                                          },
+                                                          "end": {
+                                                            "type": "integer",
+                                                            "minimum": 0,
+                                                            "maximum": 9007199254740991
+                                                          },
+                                                          "line": {
+                                                            "type": "integer",
+                                                            "exclusiveMinimum": 0,
+                                                            "maximum": 9007199254740991
+                                                          }
+                                                        },
+                                                        "required": [
+                                                          "start",
+                                                          "end",
+                                                          "line"
+                                                        ],
+                                                        "additionalProperties": false
+                                                      },
+                                                      {
+                                                        "type": "null"
+                                                      }
+                                                    ]
+                                                  },
+                                                  "tid": {
+                                                    "default": null,
+                                                    "anyOf": [
+                                                      {
+                                                        "type": "string"
+                                                      },
+                                                      {
+                                                        "type": "null"
+                                                      }
+                                                    ]
+                                                  },
+                                                  "textRange": {
+                                                    "default": null,
+                                                    "anyOf": [
+                                                      {
+                                                        "type": "object",
+                                                        "properties": {
+                                                          "start": {
+                                                            "type": "integer",
+                                                            "minimum": 0,
+                                                            "maximum": 9007199254740991
+                                                          },
+                                                          "end": {
+                                                            "type": "integer",
+                                                            "minimum": 0,
+                                                            "maximum": 9007199254740991
+                                                          },
+                                                          "quote": {
+                                                            "type": "string"
+                                                          }
+                                                        },
+                                                        "required": [
+                                                          "start",
+                                                          "end",
+                                                          "quote"
+                                                        ],
+                                                        "additionalProperties": false
+                                                      },
+                                                      {
+                                                        "type": "null"
+                                                      }
+                                                    ]
+                                                  }
+                                                },
+                                                "required": [
+                                                  "selector",
+                                                  "tagName",
+                                                  "elementId",
+                                                  "classNames",
+                                                  "textPreview",
+                                                  "ariaRole",
+                                                  "accessibleName",
+                                                  "boundingBox",
+                                                  "computedStyles",
+                                                  "sourceRange",
+                                                  "tid",
+                                                  "textRange"
+                                                ],
+                                                "additionalProperties": false
+                                              }
+                                            },
+                                            "imageFileName": {
+                                              "anyOf": [
+                                                {
+                                                  "type": "string",
+                                                  "minLength": 1
+                                                },
+                                                {
+                                                  "type": "null"
+                                                }
+                                              ]
+                                            },
+                                            "imageHash": {
+                                              "anyOf": [
+                                                {
+                                                  "type": "string",
+                                                  "minLength": 1
+                                                },
+                                                {
+                                                  "type": "null"
+                                                }
+                                              ]
+                                            },
+                                            "droppedElementCount": {
+                                              "default": 0,
                                               "type": "integer",
                                               "minimum": 0,
                                               "maximum": 9007199254740991
                                             }
                                           },
                                           "required": [
+                                            "kind",
+                                            "annotationId",
+                                            "source",
+                                            "capturedAt",
+                                            "comment",
+                                            "counts",
                                             "elements",
-                                            "regions",
-                                            "strokes"
+                                            "imageFileName",
+                                            "imageHash",
+                                            "droppedElementCount"
                                           ],
                                           "additionalProperties": false
-                                        },
-                                        "elements": {
-                                          "type": "array",
-                                          "items": {
-                                            "type": "object",
-                                            "properties": {
-                                              "selector": {
-                                                "type": "string"
-                                              },
-                                              "tagName": {
-                                                "type": "string"
-                                              },
-                                              "elementId": {
-                                                "anyOf": [
-                                                  {
-                                                    "type": "string"
-                                                  },
-                                                  {
-                                                    "type": "null"
-                                                  }
-                                                ]
-                                              },
-                                              "classNames": {
-                                                "type": "array",
-                                                "items": {
-                                                  "type": "string"
-                                                }
-                                              },
-                                              "textPreview": {
-                                                "anyOf": [
-                                                  {
-                                                    "type": "string"
-                                                  },
-                                                  {
-                                                    "type": "null"
-                                                  }
-                                                ]
-                                              },
-                                              "ariaRole": {
-                                                "anyOf": [
-                                                  {
-                                                    "type": "string"
-                                                  },
-                                                  {
-                                                    "type": "null"
-                                                  }
-                                                ]
-                                              },
-                                              "accessibleName": {
-                                                "anyOf": [
-                                                  {
-                                                    "type": "string"
-                                                  },
-                                                  {
-                                                    "type": "null"
-                                                  }
-                                                ]
-                                              },
-                                              "boundingBox": {
-                                                "type": "object",
-                                                "properties": {
-                                                  "x": {
-                                                    "type": "number"
-                                                  },
-                                                  "y": {
-                                                    "type": "number"
-                                                  },
-                                                  "width": {
-                                                    "type": "number"
-                                                  },
-                                                  "height": {
-                                                    "type": "number"
-                                                  },
-                                                  "top": {
-                                                    "type": "number"
-                                                  },
-                                                  "right": {
-                                                    "type": "number"
-                                                  },
-                                                  "bottom": {
-                                                    "type": "number"
-                                                  },
-                                                  "left": {
-                                                    "type": "number"
-                                                  }
-                                                },
-                                                "required": [
-                                                  "x",
-                                                  "y",
-                                                  "width",
-                                                  "height",
-                                                  "top",
-                                                  "right",
-                                                  "bottom",
-                                                  "left"
-                                                ],
-                                                "additionalProperties": false
-                                              },
-                                              "computedStyles": {
-                                                "type": "array",
-                                                "items": {
-                                                  "type": "object",
-                                                  "properties": {
-                                                    "property": {
-                                                      "type": "string"
-                                                    },
-                                                    "value": {
-                                                      "type": "string"
-                                                    }
-                                                  },
-                                                  "required": [
-                                                    "property",
-                                                    "value"
-                                                  ],
-                                                  "additionalProperties": false
-                                                }
-                                              }
-                                            },
-                                            "required": [
-                                              "selector",
-                                              "tagName",
-                                              "elementId",
-                                              "classNames",
-                                              "textPreview",
-                                              "ariaRole",
-                                              "accessibleName",
-                                              "boundingBox",
-                                              "computedStyles"
-                                            ],
-                                            "additionalProperties": false
-                                          }
-                                        },
-                                        "imageFileName": {
-                                          "type": "string",
-                                          "minLength": 1
-                                        },
-                                        "imageHash": {
-                                          "type": "string",
-                                          "minLength": 1
-                                        },
-                                        "droppedElementCount": {
-                                          "default": 0,
-                                          "type": "integer",
-                                          "minimum": 0,
-                                          "maximum": 9007199254740991
                                         }
-                                      },
-                                      "required": [
-                                        "kind",
-                                        "annotationId",
-                                        "tabId",
-                                        "sessionId",
-                                        "origin",
-                                        "pageUrl",
-                                        "pageTitle",
-                                        "capturedAt",
-                                        "comment",
-                                        "counts",
-                                        "elements",
-                                        "imageFileName",
-                                        "imageHash",
-                                        "droppedElementCount"
-                                      ],
-                                      "additionalProperties": false
+                                      ]
                                     }
                                   }
                                 },
@@ -2574,6 +2949,40 @@ export const chatSyncSchemaSurfaceBaseline = {
                                                 }
                                               ]
                                             },
+                                            "agentMessageDelivery": {
+                                              "default": null,
+                                              "anyOf": [
+                                                {
+                                                  "type": "object",
+                                                  "properties": {
+                                                    "targetHostId": {
+                                                      "type": "string"
+                                                    },
+                                                    "eventId": {
+                                                      "type": "string"
+                                                    },
+                                                    "state": {
+                                                      "type": "string",
+                                                      "enum": [
+                                                        "queued",
+                                                        "delivered",
+                                                        "expired",
+                                                        "failed"
+                                                      ]
+                                                    }
+                                                  },
+                                                  "required": [
+                                                    "targetHostId",
+                                                    "eventId",
+                                                    "state"
+                                                  ],
+                                                  "additionalProperties": false
+                                                },
+                                                {
+                                                  "type": "null"
+                                                }
+                                              ]
+                                            },
                                             "managedCommand": {
                                               "default": null,
                                               "anyOf": [
@@ -2942,60 +3351,64 @@ export const chatSyncSchemaSurfaceBaseline = {
                                                 "additionalProperties": false
                                               }
                                             },
-                                            "page": {
+                                            "artifact": {
                                               "default": null,
                                               "anyOf": [
                                                 {
                                                   "type": "object",
                                                   "properties": {
-                                                    "path": {
+                                                    "artifactId": {
                                                       "type": "string",
                                                       "minLength": 1
-                                                    },
-                                                    "sha256": {
-                                                      "type": "string",
-                                                      "pattern": "^[0-9a-f]{64}$"
                                                     },
                                                     "title": {
                                                       "type": "string"
                                                     },
-                                                    "height": {
-                                                      "type": "integer",
-                                                      "minimum": 80,
-                                                      "maximum": 2000
-                                                    },
-                                                    "heights": {
-                                                      "type": "array",
-                                                      "items": {
-                                                        "type": "object",
-                                                        "properties": {
-                                                          "width": {
-                                                            "type": "integer",
-                                                            "exclusiveMinimum": 0,
-                                                            "maximum": 9007199254740991
+                                                    "manifest": {
+                                                      "type": "object",
+                                                      "properties": {
+                                                        "files": {
+                                                          "type": "object",
+                                                          "propertyNames": {
+                                                            "type": "string",
+                                                            "maxLength": 1024,
+                                                            "pattern": "^(?!\\.|__proto__(?:\\/|$))[^/\\\\\\p{Cc}]+(?:\\/(?!\\.|__proto__(?:\\/|$))[^/\\\\\\p{Cc}]+)*(?![\\s\\S])"
                                                           },
-                                                          "height": {
-                                                            "type": "integer",
-                                                            "minimum": 0,
-                                                            "maximum": 9007199254740991
+                                                          "additionalProperties": {
+                                                            "type": "object",
+                                                            "properties": {
+                                                              "sha256": {
+                                                                "type": "string",
+                                                                "pattern": "^[0-9a-f]{64}$"
+                                                              },
+                                                              "byteLength": {
+                                                                "type": "integer",
+                                                                "minimum": 0,
+                                                                "maximum": 9007199254740991
+                                                              },
+                                                              "mediaType": {
+                                                                "type": "string",
+                                                                "maxLength": 127,
+                                                                "pattern": "^[a-z0-9][a-z0-9!#$&^_.+-]*\\/[a-z0-9][a-z0-9!#$&^_.+-]*$"
+                                                              }
+                                                            },
+                                                            "required": [
+                                                              "sha256",
+                                                              "byteLength",
+                                                              "mediaType"
+                                                            ],
+                                                            "additionalProperties": false
                                                           }
                                                         },
-                                                        "required": [
-                                                          "width",
-                                                          "height"
-                                                        ],
-                                                        "additionalProperties": false
-                                                      }
-                                                    },
-                                                    "derivedFrom": {
-                                                      "anyOf": [
-                                                        {
-                                                          "type": "string"
-                                                        },
-                                                        {
-                                                          "type": "null"
+                                                        "capturedAt": {
+                                                          "type": "number"
                                                         }
-                                                      ]
+                                                      },
+                                                      "required": [
+                                                        "files",
+                                                        "capturedAt"
+                                                      ],
+                                                      "additionalProperties": false
                                                     },
                                                     "originChatId": {
                                                       "type": "string",
@@ -3003,12 +3416,9 @@ export const chatSyncSchemaSurfaceBaseline = {
                                                     }
                                                   },
                                                   "required": [
-                                                    "path",
-                                                    "sha256",
+                                                    "artifactId",
                                                     "title",
-                                                    "height",
-                                                    "heights",
-                                                    "derivedFrom",
+                                                    "manifest",
                                                     "originChatId"
                                                   ],
                                                   "additionalProperties": false
@@ -3223,6 +3633,7 @@ export const chatSyncSchemaSurfaceBaseline = {
                                             "error",
                                             "agentMessageSend",
                                             "agentMessageReceipt",
+                                            "agentMessageDelivery",
                                             "managedCommand",
                                             "progress",
                                             "backgroundOutput",
@@ -3231,7 +3642,7 @@ export const chatSyncSchemaSurfaceBaseline = {
                                             "backgroundTask",
                                             "stopped",
                                             "imageResults",
-                                            "page",
+                                            "artifact",
                                             "mcpApp"
                                           ],
                                           "additionalProperties": false
@@ -5354,12 +5765,7 @@ export const chatSyncSchemaSurfaceBaseline = {
                                             },
                                             "kind": {
                                               "type": "string",
-                                              "enum": [
-                                                "spec",
-                                                "ticket",
-                                                "story",
-                                                "review"
-                                              ]
+                                              "minLength": 1
                                             },
                                             "artifactId": {
                                               "type": "string"

@@ -1,3 +1,4 @@
+import { buildSandboxArtifactBridge } from "./sandbox-artifact-bridge";
 import { contextBridge } from "electron";
 import { RunnerHostSync } from "../ipc-contracts/ipc-channels";
 import { config } from "../config";
@@ -90,6 +91,7 @@ contextBridge.exposeInMainWorld("runnerHost", {
   power: buildPowerBridge(),
   ...buildZoomBridge(),
   ...buildBrowserViewBridge(),
+  sandboxArtifacts: buildSandboxArtifactBridge(),
   selectionAuthority: buildSelectionAuthorityBridge(),
   refreshSelectionFleet: buildSelectionFleetRefresh(),
   hostManagement: buildHostManagementBridge(),

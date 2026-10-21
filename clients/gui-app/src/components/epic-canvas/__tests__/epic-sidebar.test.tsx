@@ -154,6 +154,13 @@ vi.mock("@/components/epic-canvas/sidebar/epic-terminal-sidebar", () => ({
   TerminalsPanelBody: () => <div data-testid="epic-test-terminals-body" />,
 }));
 
+// The Simulators group under the browser rows reads its own host stream and
+// has its own suite (`epic-simulator-sidebar.test.tsx`); this one is about
+// the panels' mechanics, so the group renders nothing here.
+vi.mock("@/components/epic-canvas/sidebar/epic-simulator-sidebar", () => ({
+  SimulatorsSidebarGroup: () => null,
+}));
+
 vi.mock("@/components/epic-canvas/pr/pr-panel-body", () => ({
   PrPanelBody: () => <div data-testid="epic-test-pr-body" />,
 }));
@@ -338,7 +345,7 @@ describe("<EpicLeftPanelRail />", () => {
     ).not.toBeUndefined();
   });
 
-  it("draws the shipped rail as nine direct children - the chats/artifacts capsule plus eight icons - with no dividers", () => {
+  it("draws the shipped rail as eight direct children - the chats/artifacts capsule plus seven icons - with no dividers", () => {
     // "Every panel available": comments needs its own reveal + a commentable
     // artifact, same as `revealCommentsPanel` below.
     testState.activeArtifactId = "artifact-1";
@@ -355,15 +362,14 @@ describe("<EpicLeftPanelRail />", () => {
 
     const rail = screen.getByTestId("epic-sidebar-rail");
     // The shipped pair (chats + artifacts) draws as ONE capsule (L-166,
-    // L-167), so the rail's direct children are nine rather than ten: the
-    // capsule and the remaining eight panels.
+    // L-167), so the rail's direct children are eight rather than nine: the
+    // capsule and the remaining seven panels.
     expect(
       Array.from(rail.children).map((child) =>
         child.getAttribute("data-testid"),
       ),
     ).toEqual([
       "epic-rail-stack",
-      "epic-rail-files",
       "epic-rail-terminals",
       "epic-rail-browsers",
       "epic-rail-git-diff",
@@ -658,7 +664,6 @@ describe("<EpicLeftPanelRail />", () => {
       ),
     ).toEqual([
       "epic-rail-stack",
-      "epic-rail-files",
       "epic-rail-terminals",
       "epic-rail-panel-drop-line",
       "epic-rail-browsers",
@@ -1205,7 +1210,6 @@ describe("<EpicLeftPanelRail />", () => {
         "Terminals",
         "Browsers",
         "Artifacts",
-        "Files",
         "Git Diff",
         "Pull Requests",
         "File Tree",
@@ -1352,7 +1356,6 @@ describe("<EpicLeftPanelRail />", () => {
         "terminals",
         "browsers",
         "artifacts",
-        "files",
         "git-diff",
         "pull-requests",
         "file-tree",
@@ -1382,7 +1385,6 @@ describe("<EpicLeftPanelRail />", () => {
         "terminals",
         "browsers",
         "artifacts",
-        "files",
         "git-diff",
         "file-tree",
         "sharing",
@@ -1919,7 +1921,6 @@ describe("Browsers panel registration", () => {
     // (L-166, L-167), not two loose icons.
     expect(railIds).toEqual([
       "epic-rail-stack",
-      "epic-rail-files",
       "epic-rail-terminals",
       "epic-rail-browsers",
       "epic-rail-git-diff",

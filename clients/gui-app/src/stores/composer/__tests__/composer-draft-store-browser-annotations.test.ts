@@ -71,6 +71,10 @@ async function attachNamed(
   if (record === undefined) {
     throw new Error(`expected attached record ${input.annotationId}`);
   }
+  // A browser attach always stores a crop; only canvas records may omit one.
+  if (record.imageHash === null) {
+    throw new Error(`attached record ${input.annotationId} has no crop`);
+  }
   return {
     hash: record.imageHash,
     annotationId: record.annotationId,
@@ -158,6 +162,14 @@ describe("composer draft store browserAnnotations", () => {
       origin: stub.payload.origin,
       pageUrl: stub.payload.pageUrl,
       pageTitle: stub.payload.pageTitle,
+      source: {
+        kind: "browser" as const,
+        tabId: stub.payload.tabId,
+        sessionId: stub.payload.sessionId,
+        origin: stub.payload.origin,
+        pageUrl: stub.payload.pageUrl,
+        pageTitle: stub.payload.pageTitle,
+      },
       capturedAt: stub.payload.capturedAt,
       comment: stub.payload.comment,
       counts: stub.payload.counts,
@@ -254,6 +266,9 @@ describe("composer draft store browserAnnotations", () => {
     expect(shared).toHaveLength(2);
     expect(shared[0]?.imageHash).toBe(shared[1]?.imageHash);
     const sharedHash = shared[0].imageHash;
+    if (sharedHash === null) {
+      throw new Error("browser annotations always carry a crop");
+    }
 
     useComposerDraftStore
       .getState()
@@ -293,6 +308,14 @@ describe("composer draft store browserAnnotations", () => {
       origin: stub.payload.origin,
       pageUrl: stub.payload.pageUrl,
       pageTitle: stub.payload.pageTitle,
+      source: {
+        kind: "browser" as const,
+        tabId: stub.payload.tabId,
+        sessionId: stub.payload.sessionId,
+        origin: stub.payload.origin,
+        pageUrl: stub.payload.pageUrl,
+        pageTitle: stub.payload.pageTitle,
+      },
       capturedAt: stub.payload.capturedAt,
       comment: stub.payload.comment,
       counts: stub.payload.counts,

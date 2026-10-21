@@ -10,7 +10,7 @@ import {
   FakeStreamClient,
   PEEK_NODE,
   clearScreencastOwner,
-  hostStreamClientForWithAuthModule,
+  hostStreamClientForModule,
   liveStream as fixtureLiveStream,
   registeredHostsModule,
   runnerOpenExternalLinkModule,
@@ -48,7 +48,7 @@ vi.mock("@/hooks/auth/use-registered-hosts-query", () =>
   registeredHostsModule(),
 );
 vi.mock("@/hooks/host/use-host-stream-client-for", () =>
-  hostStreamClientForWithAuthModule(hookState),
+  hostStreamClientForModule(hookState),
 );
 vi.mock("@/lib/host/stream-auth-revalidator", () =>
   streamAuthRevalidatorModule(),

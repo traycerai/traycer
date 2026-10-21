@@ -13,9 +13,11 @@ import {
 } from "@/stores/epics/open-epic/test-support/open-store-for-test";
 import type { EpicStreamCallbacks } from "@traycer-clients/shared/host-transport/epic-stream-client";
 import type { SnapshotMetaEpic } from "@traycer/protocol/host/epic/snapshot-meta";
-import type { EpicArtifactKind } from "@traycer/protocol/common/registry";
+import type { MarkdownArtifactKind } from "@traycer/protocol/common/registry";
 import {
   DOC_IS_THE_ONLY_RECORD_SOURCE,
+  ensureMap,
+  getEpicMap,
   projectFullState,
 } from "@/stores/epics/open-epic/projection-helpers";
 import { EMPTY_PENDING_OVERLAY } from "@/stores/epics/open-epic/pending-metadata-overlay";
@@ -156,7 +158,7 @@ function makeRoleClaimEntry(args: {
  */
 function makeTombstone(args: {
   id: string;
-  kind: EpicArtifactKind;
+  kind: MarkdownArtifactKind;
   title: string;
   deletedAt: string;
   status: number | null;
@@ -321,6 +323,91 @@ describe("epic-projector", () => {
     expect(Number.isNaN(Date.parse(deletedAt as string))).toBe(false);
     handle.dispose();
   });
+
+  const SHA = "a".repeat(64);
+  const VALID_HEAD = {
+    files: {
+      "index.html": {
+        sha256: SHA,
+        byteLength: 10,
+        mediaType: "text/html",
+        status: "published",
+      },
+    },
+    capturedAt: 1,
+  };
+  const VALID_OBJECT = {
+    sha256: SHA,
+    byteLength: 10,
+    mediaType: "image/png",
+    status: "published",
+  };
+
+  /**
+   * `html`/`canvas`/`file` artifacts aren't in `AddableArtifactType`
+   * (they're agent-produced, never user-created locally), so unlike
+   * `createArtifactInDocForTests` this seeds the Y.Map entry directly with
+   * the `head`/`object` field `epicArtifactSchema` now requires for these
+   * kinds.
+   */
+  function seedArtifactObjectKindEntry(
+    doc: Y.Doc,
+    id: string,
+    kind: "html" | "canvas" | "file",
+  ): void {
+    doc.transact(() => {
+      const artifacts = ensureMap(getEpicMap(doc), "artifacts");
+      const entry = new Y.Map<unknown>();
+      entry.set("id", id);
+      entry.set("kind", kind);
+      entry.set("title", "Report");
+      entry.set("folderName", "folder");
+      entry.set("parentId", null);
+      entry.set("createdAt", 1);
+      entry.set("updatedAt", 2);
+      entry.set("createdManually", true);
+      if (kind === "canvas") entry.set("artifactRoomId", "artifact-room-1");
+      if (kind === "file") {
+        entry.set("object", VALID_OBJECT);
+      } else {
+        entry.set("head", VALID_HEAD);
+      }
+      artifacts.set(id, entry);
+    });
+  }
+
+  it.each(["html", "canvas", "file"] as const)(
+    "optimistic delete of a %s artifact tombstones with its own kind, not falling through to the markdown shape",
+    async (kind) => {
+      const { handle } = newSession();
+      const id = `artifact-${kind}`;
+      seedArtifactObjectKindEntry(handle.doc, id, kind);
+
+      // `writeDeletedArtifactTombstone` now parses the entry through the
+      // complete `epicArtifactSchema` (head/object included) before handing
+      // it to `buildDeletedEpicArtifact` - a kind this doesn't recognise
+      // would throw inside the delete transaction instead of merely
+      // dropping a field, so the delete succeeding at all is part of what
+      // this pins.
+      await handle.store.getState().deleteArtifact(id);
+
+      const root = handle.doc.getMap("epic");
+      const artifacts = root.get("artifacts");
+      const deleted = root.get("deletedArtifacts");
+      if (!(artifacts instanceof Y.Map) || !(deleted instanceof Y.Map)) {
+        throw new Error("artifact maps missing");
+      }
+      expect(artifacts.has(id)).toBe(false);
+      const tombstone: unknown = deleted.get(id);
+      if (!(tombstone instanceof Y.Map)) throw new Error("tombstone missing");
+      expect(tombstone.toJSON()).toMatchObject({
+        id,
+        kind,
+        title: "Report",
+      });
+      handle.dispose();
+    },
+  );
 
   it("chat creation populates chats slice and tree as a chat node", () => {
     const { handle } = newSession();

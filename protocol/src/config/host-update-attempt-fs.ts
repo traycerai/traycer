@@ -1,4 +1,11 @@
-import { constants } from "node:fs";
+import {
+  closeSync,
+  constants,
+  fstatSync,
+  lstatSync,
+  openSync,
+  readFileSync,
+} from "node:fs";
 import { lstat, open } from "node:fs/promises";
 import type { FileHandle } from "node:fs/promises";
 import type { Stats } from "node:fs";
@@ -73,17 +80,41 @@ export type PathKind =
   | { readonly kind: "other" }
   | { readonly kind: "stat-error"; readonly cause: string };
 
+type ObservedPathKind = Exclude<PathKind, { readonly kind: "stat-error" }>;
+
 // `lstat`, never `stat`: `stat` follows a link and reports the TARGET's type,
 // so a symlink planted at the record path would read as a perfectly ordinary
 // regular file.
-export async function classifyPath(path: string): Promise<PathKind> {
+function kindOf(stats: Stats): ObservedPathKind {
+  if (stats.isSymbolicLink()) return { kind: "symlink" };
+  if (stats.isFile()) return { kind: "regular-file", stats };
+  return { kind: "other" };
+}
+
+// The descriptor reads below throw a failure other than ENOENT as raised, so
+// a caller can report it as its own.
+async function lstatKind(path: string): Promise<ObservedPathKind> {
   try {
-    const stats = await lstat(path);
-    if (stats.isSymbolicLink()) return { kind: "symlink" };
-    if (stats.isFile()) return { kind: "regular-file", stats };
-    return { kind: "other" };
+    return kindOf(await lstat(path));
   } catch (err) {
     if (errorCode(err) === "ENOENT") return { kind: "absent" };
+    throw err;
+  }
+}
+
+function lstatKindSync(path: string): ObservedPathKind {
+  try {
+    return kindOf(lstatSync(path));
+  } catch (err) {
+    if (errorCode(err) === "ENOENT") return { kind: "absent" };
+    throw err;
+  }
+}
+
+export async function classifyPath(path: string): Promise<PathKind> {
+  try {
+    return await lstatKind(path);
+  } catch (err) {
     return { kind: "stat-error", cause: errorCode(err) ?? String(err) };
   }
 }
@@ -102,10 +133,20 @@ export function __setBeforeRecordOpenHookForTest(
   beforeRecordOpenHook = hook;
 }
 
-type RecordOpen =
-  | { readonly kind: "opened"; readonly handle: FileHandle }
-  | { readonly kind: "missing" }
-  | { readonly kind: "unreadable"; readonly cause: string };
+// ---- Descriptor open ------------------------------------------------------
+
+interface NotRegular {
+  readonly kind: "not-regular";
+  readonly cause:
+    | "attempt-record-is-symlink"
+    | "attempt-record-not-a-regular-file"
+    | "attempt-record-swapped-at-open";
+}
+
+type NoFollowOpen<Handle> =
+  | { readonly kind: "opened"; readonly handle: Handle }
+  | { readonly kind: "absent" }
+  | NotRegular;
 
 /**
  * Result of reading one security-sensitive sidecar through an opened,
@@ -117,10 +158,64 @@ export type RegularFileNoFollowRead =
   | { readonly kind: "text"; readonly text: string }
   | { readonly kind: "unreadable"; readonly cause: string };
 
-async function openRecordNoFollow(path: string): Promise<RecordOpen> {
+/**
+ * A regular file's bytes, read through the same descriptor. `not-regular`: the
+ * path names a link or another non-regular file when it is opened, or, on the
+ * fallback without the descriptor flags, was replaced around the open. With
+ * the flags the descriptor is bound at the open, so a later replacement still
+ * reads the file that was opened.
+ */
+export type RegularFileBytesRead =
+  | { readonly kind: "absent" }
+  | { readonly kind: "not-regular" }
+  | { readonly kind: "bytes"; readonly bytes: Buffer };
+
+function openFlags(): { readonly safe: boolean; readonly flags: number } {
   const platform = recordOpenPlatform();
-  const hasSafeDescriptorOpen =
-    platform.noFollow !== 0 && platform.nonBlock !== 0;
+  const safe = platform.noFollow !== 0 && platform.nonBlock !== 0;
+  return {
+    safe,
+    flags:
+      constants.O_RDONLY |
+      (safe ? platform.noFollow | platform.nonBlock : platform.nonBlock),
+  };
+}
+
+// A pathname that does not name the regular file a read may use: a link, a
+// special file, or - gone, or another regular file - one swapped at open.
+function notRegular(kind: ObservedPathKind): NotRegular {
+  if (kind.kind === "symlink") {
+    return { kind: "not-regular", cause: "attempt-record-is-symlink" };
+  }
+  if (kind.kind === "other") {
+    return { kind: "not-regular", cause: "attempt-record-not-a-regular-file" };
+  }
+  return { kind: "not-regular", cause: "attempt-record-swapped-at-open" };
+}
+
+// Validate the OPENED descriptor, not the path - it is the one the bytes will
+// actually come from. `null` admits it. `after` is the fallback's second
+// pathname observation; the POSIX descriptor path takes none.
+function openedVerdict(
+  opened: Stats,
+  priorStats: Stats | null,
+  after: ObservedPathKind | null,
+): NotRegular | null {
+  if (!opened.isFile()) {
+    return { kind: "not-regular", cause: "attempt-record-not-a-regular-file" };
+  }
+  if (priorStats === null || after === null) return null;
+  if (after.kind !== "regular-file") return notRegular(after);
+  // The fallback is valid only with positive proof that the descriptor and
+  // both pathname observations name one regular object.
+  return sameFileIdentity(priorStats, opened) &&
+    sameFileIdentity(opened, after.stats)
+    ? null
+    : { kind: "not-regular", cause: "attempt-record-swapped-at-open" };
+}
+
+async function openNoFollow(path: string): Promise<NoFollowOpen<FileHandle>> {
+  const { safe, flags } = openFlags();
 
   // Windows Node exposes neither flag. Its fallback admits only an existing
   // regular entry that has the same positive identity before, through, and
@@ -128,18 +223,10 @@ async function openRecordNoFollow(path: string): Promise<RecordOpen> {
   // reparse points, special files, zero-identity files, and swaps. If only
   // one POSIX flag is absent, take this conservative fallback as well.
   let priorStats: Stats | null = null;
-  if (!hasSafeDescriptorOpen) {
-    const kind = await classifyPath(path);
-    if (kind.kind === "absent") return { kind: "missing" };
-    if (kind.kind === "symlink") {
-      return { kind: "unreadable", cause: "attempt-record-is-symlink" };
-    }
-    if (kind.kind === "other") {
-      return { kind: "unreadable", cause: "attempt-record-not-a-regular-file" };
-    }
-    if (kind.kind === "stat-error") {
-      return { kind: "unreadable", cause: kind.cause };
-    }
+  if (!safe) {
+    const kind = await lstatKind(path);
+    if (kind.kind === "absent") return kind;
+    if (kind.kind !== "regular-file") return notRegular(kind);
     priorStats = kind.stats;
   }
 
@@ -147,13 +234,7 @@ async function openRecordNoFollow(path: string): Promise<RecordOpen> {
 
   let handle: FileHandle;
   try {
-    handle = await open(
-      path,
-      constants.O_RDONLY |
-        (hasSafeDescriptorOpen
-          ? platform.noFollow | platform.nonBlock
-          : platform.nonBlock),
-    );
+    handle = await open(path, flags);
   } catch (err) {
     const code = errorCode(err);
     if (code === "ENOENT") {
@@ -162,79 +243,91 @@ async function openRecordNoFollow(path: string): Promise<RecordOpen> {
       // this absence: only a second positive absence is safe to project as
       // missing. A visible replacement is unreadable evidence, never a
       // licence to continue as if no file existed.
-      const after = await classifyPath(path);
-      if (after.kind === "absent") return { kind: "missing" };
-      if (after.kind === "symlink") {
-        return { kind: "unreadable", cause: "attempt-record-is-symlink" };
-      }
-      if (after.kind === "other") {
-        return {
-          kind: "unreadable",
-          cause: "attempt-record-not-a-regular-file",
-        };
-      }
-      return {
-        kind: "unreadable",
-        cause:
-          after.kind === "stat-error"
-            ? after.cause
-            : "attempt-record-swapped-at-open",
-      };
+      const after = await lstatKind(path);
+      return after.kind === "absent" ? after : notRegular(after);
     }
     // `O_NOFOLLOW` reports a symlink as ELOOP on Linux and macOS; some
     // platforms use EMLINK. Either way the path IS a link and must not be
     // followed.
     if (code === "ELOOP" || code === "EMLINK") {
-      return { kind: "unreadable", cause: "attempt-record-is-symlink" };
+      return { kind: "not-regular", cause: "attempt-record-is-symlink" };
     }
-    return { kind: "unreadable", cause: code ?? String(err) };
+    // A special file can refuse the open itself: a socket fails it with ENXIO
+    // on Linux and an errno Node does not name on macOS. Report what the path
+    // is; a regular file's failure, or one lstat cannot see past, is thrown.
+    const at = await lstatKind(path).catch(() => null);
+    if (at?.kind === "symlink" || at?.kind === "other") return notRegular(at);
+    throw err;
   }
 
-  // Validate the OPENED handle, not the path - this is the descriptor the
-  // bytes will actually come from.
   try {
     const opened = await handle.stat();
-    if (!opened.isFile()) {
-      await handle.close().catch(() => undefined);
-      return { kind: "unreadable", cause: "attempt-record-not-a-regular-file" };
-    }
-    if (priorStats !== null) {
-      const after = await classifyPath(path);
-      if (after.kind === "symlink") {
-        await handle.close().catch(() => undefined);
-        return { kind: "unreadable", cause: "attempt-record-is-symlink" };
-      }
-      if (after.kind === "other") {
-        await handle.close().catch(() => undefined);
-        return {
-          kind: "unreadable",
-          cause: "attempt-record-not-a-regular-file",
-        };
-      }
-      if (after.kind === "absent" || after.kind === "stat-error") {
-        await handle.close().catch(() => undefined);
-        return {
-          kind: "unreadable",
-          cause:
-            after.kind === "stat-error"
-              ? after.cause
-              : "attempt-record-swapped-at-open",
-        };
-      }
-      if (
-        !sameFileIdentity(priorStats, opened) ||
-        !sameFileIdentity(opened, after.stats)
-      ) {
-        // The fallback is valid only with positive proof that the descriptor
-        // and both pathname observations name one regular object.
-        await handle.close().catch(() => undefined);
-        return { kind: "unreadable", cause: "attempt-record-swapped-at-open" };
-      }
-    }
-    return { kind: "opened", handle };
+    const after =
+      opened.isFile() && priorStats !== null ? await lstatKind(path) : null;
+    const refused = openedVerdict(opened, priorStats, after);
+    if (refused === null) return { kind: "opened", handle };
+    await handle.close().catch(() => undefined);
+    return refused;
   } catch (err) {
     await handle.close().catch(() => undefined);
-    return { kind: "unreadable", cause: errorCode(err) ?? String(err) };
+    throw err;
+  }
+}
+
+function closeQuietlySync(fd: number): void {
+  try {
+    closeSync(fd);
+  } catch {
+    // A failed close loses nothing: the read is already done or refused.
+  }
+}
+
+// `openNoFollow` for synchronous callers, edge for edge; the comments there
+// say why each one is there. It has no swap seam.
+function openNoFollowSync(path: string): NoFollowOpen<number> {
+  const { safe, flags } = openFlags();
+
+  let priorStats: Stats | null = null;
+  if (!safe) {
+    const kind = lstatKindSync(path);
+    if (kind.kind === "absent") return kind;
+    if (kind.kind !== "regular-file") return notRegular(kind);
+    priorStats = kind.stats;
+  }
+
+  let fd: number;
+  try {
+    fd = openSync(path, flags);
+  } catch (err) {
+    const code = errorCode(err);
+    if (code === "ENOENT") {
+      const after = lstatKindSync(path);
+      return after.kind === "absent" ? after : notRegular(after);
+    }
+    if (code === "ELOOP" || code === "EMLINK") {
+      return { kind: "not-regular", cause: "attempt-record-is-symlink" };
+    }
+    let at: ObservedPathKind | null = null;
+    try {
+      at = lstatKindSync(path);
+    } catch {
+      // The open's own failure is the one to report.
+    }
+    if (at?.kind === "symlink" || at?.kind === "other") return notRegular(at);
+    throw err;
+  }
+
+  try {
+    const opened = fstatSync(fd);
+    const after =
+      opened.isFile() && priorStats !== null ? lstatKindSync(path) : null;
+    const refused = openedVerdict(opened, priorStats, after);
+    if (refused === null) return { kind: "opened", handle: fd };
+    closeQuietlySync(fd);
+    return refused;
+  } catch (err) {
+    closeQuietlySync(fd);
+    throw err;
   }
 }
 
@@ -247,9 +340,14 @@ async function openRecordNoFollow(path: string): Promise<RecordOpen> {
 export async function readRegularFileNoFollow(
   path: string,
 ): Promise<RegularFileNoFollowRead> {
-  const opened = await openRecordNoFollow(path);
-  if (opened.kind === "missing") return { kind: "absent" };
-  if (opened.kind === "unreadable") {
+  let opened: NoFollowOpen<FileHandle>;
+  try {
+    opened = await openNoFollow(path);
+  } catch (err) {
+    return { kind: "unreadable", cause: errorCode(err) ?? String(err) };
+  }
+  if (opened.kind === "absent") return opened;
+  if (opened.kind === "not-regular") {
     return { kind: "unreadable", cause: opened.cause };
   }
   try {
@@ -261,6 +359,39 @@ export async function readRegularFileNoFollow(
     };
   } finally {
     await opened.handle.close().catch(() => undefined);
+  }
+}
+
+/**
+ * The same descriptor read, as bytes, for a caller that refuses a link or a
+ * special file where it expects a regular one. The check and the read are one
+ * object, so a link swapped in after a check is never followed. Any failure
+ * other than absence is thrown as raised.
+ */
+export async function readRegularFileBytesNoFollow(
+  path: string,
+): Promise<RegularFileBytesRead> {
+  const opened = await openNoFollow(path);
+  if (opened.kind === "absent") return opened;
+  if (opened.kind === "not-regular") return { kind: "not-regular" };
+  try {
+    return { kind: "bytes", bytes: await opened.handle.readFile() };
+  } finally {
+    await opened.handle.close().catch(() => undefined);
+  }
+}
+
+/** `readRegularFileBytesNoFollow` for synchronous callers. */
+export function readRegularFileBytesNoFollowSync(
+  path: string,
+): RegularFileBytesRead {
+  const opened = openNoFollowSync(path);
+  if (opened.kind === "absent") return opened;
+  if (opened.kind === "not-regular") return { kind: "not-regular" };
+  try {
+    return { kind: "bytes", bytes: readFileSync(opened.handle) };
+  } finally {
+    closeQuietlySync(opened.handle);
   }
 }
 

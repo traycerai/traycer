@@ -437,6 +437,7 @@ function ActivityChildRow(props: ActivityChildRowProps) {
           agentMessageSend={segment.agentMessageSend}
           managedCommand={segment.managedCommand}
           agentMessageReceipt={segment.agentMessageReceipt}
+          agentMessageDelivery={segment.agentMessageDelivery}
           isStreaming={segment.isStreaming}
           endState={segment.endState}
           stopped={segment.stopped}
@@ -446,7 +447,7 @@ function ActivityChildRow(props: ActivityChildRowProps) {
           startedAt={segment.startedAt}
           durationMs={segment.durationMs}
           imageResults={segment.imageResults}
-          page={segment.page}
+          artifact={segment.artifact}
           mcpApp={segment.mcpApp}
           variant="row"
           headerFindUnitId={

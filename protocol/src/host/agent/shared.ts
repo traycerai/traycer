@@ -10,7 +10,10 @@ import {
   agentSessionLastExitSchema,
   agentSessionStateSchema,
 } from "@traycer/protocol/host/agent-session-state";
-import { permissionModeSchema } from "@traycer/protocol/persistence/epic/foundation";
+import {
+  chatRoutingSchema,
+  permissionModeSchema,
+} from "@traycer/protocol/persistence/epic/foundation";
 import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 import { lastKnownConnectivitySchema } from "@traycer/protocol/host/last-known-connectivity";
 
@@ -732,6 +735,22 @@ export const createAgentRequestSchemaV30 = lazySchema(() =>
 );
 export type CreateAgentRequestV30 = z.infer<typeof createAgentRequestSchemaV30>;
 
+/**
+ * `agent.create@3.1` adds the new agent's routing choice - what it does on a
+ * usage limit or an error - the same field, with the same meaning, as
+ * `agent.configure@7.1`. `null` leaves the agent on the default (`policy`,
+ * following the device's routing); a concrete value is written into the
+ * record at creation. A request-only minor, so the released 3.0 line is
+ * untouched; a 3.0 host strips the field it does not know, which is why a
+ * caller that relies on it pins a 3.1 floor on the request.
+ */
+export const createAgentRequestSchemaV31 = lazySchema(() =>
+  createAgentRequestSchemaV30.extend({
+    routing: chatRoutingSchema.nullable(),
+  }),
+);
+export type CreateAgentRequestV31 = z.infer<typeof createAgentRequestSchemaV31>;
+
 export const agentSelectionGuideRequestSchema = lazySchema(() =>
   z.object({
     epicId: z.string(),
@@ -1438,9 +1457,8 @@ export type ListAgentsResponseV101 = z.infer<
  *   - When `expectReply=false`, a non-null `responseId` closes an open
  *     thread; a null `responseId` is a one-shot delivery the sender does
  *     not want correlated.
- *   - Cross-host receivers are rejected with `RECEIVER_NOT_LOCAL`. The
- *     epic Y.Doc already replicates artifact records cross-host, but
- *     the message-delivery transport does not.
+ *   - A receiver on another host is queued for that host through the
+ *     cloud rather than delivered while the call runs.
  */
 export const sendAgentMessageRequestSchema = lazySchema(() =>
   z.object({
@@ -1454,6 +1472,23 @@ export const sendAgentMessageRequestSchema = lazySchema(() =>
 );
 export type SendAgentMessageRequest = z.infer<
   typeof sendAgentMessageRequestSchema
+>;
+
+/**
+ * `agent.sendMessage@1.1` - adds `workspace`: an absolute folder path on the
+ * RECEIVING agent's host for it to run in. It binds a receiver that has no
+ * workspace yet, so the message can run, and is ignored when the receiver is
+ * already bound (a send never rebinds an agent). `null` leaves the choice to
+ * the host: an unbound receiver takes the local sender's primary workspace,
+ * and otherwise the send is refused with `WORKSPACE_BINDING_REQUIRED`.
+ */
+export const sendAgentMessageRequestSchemaV11 = lazySchema(() =>
+  sendAgentMessageRequestSchema.extend({
+    workspace: z.string().nullable().default(null),
+  }),
+);
+export type SendAgentMessageRequestV11 = z.infer<
+  typeof sendAgentMessageRequestSchemaV11
 >;
 
 /**

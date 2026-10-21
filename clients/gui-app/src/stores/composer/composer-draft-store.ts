@@ -22,6 +22,11 @@ import { registerExtraImageRootSource } from "@/lib/composer/landing-image-budge
 import { containsPendingInlineImageNode } from "@/lib/composer/image-atoms";
 import { scheduleLandingImageReconcile } from "@/lib/composer/landing-image-gc";
 import { stripBase64ImageNodesWithSelection } from "@/lib/composer/strip-base64-image-nodes";
+import {
+  persistWindowCanvasAnnotations,
+  readWindowCanvasAnnotations,
+  persistedCanvasAnnotationImageHashes,
+} from "./composer-canvas-persistence";
 
 export interface DraftSelection {
   readonly from: number;
@@ -585,77 +590,60 @@ export const useComposerDraftStore = create<ComposerDraftStore>()(
       // with every position after the removed image shifted. See
       // `stripBase64ImageNodesWithSelection` for why it is dropped rather than
       // rebased.
-      partialize: (state) => ({
-        pendingSubmittedDraftDeletes: state.pendingSubmittedDraftDeletes,
-        drafts: Object.fromEntries(
-          Object.entries(state.drafts).map(([chatId, draft]) => [
-            chatId,
-            draft === undefined
-              ? draft
-              : {
-                  ...draft,
-                  ...stripBase64ImageNodesWithSelection(
-                    draft.content,
-                    draft.selection,
-                  ),
-                },
-          ]),
-        ),
-      }),
+      partialize: (state) => {
+        // The shared draft bucket never carries canvas evidence. Native
+        // windows retain their own sidecars separately, including across reload.
+        persistWindowCanvasAnnotations(state.drafts);
+        return {
+          pendingSubmittedDraftDeletes: state.pendingSubmittedDraftDeletes,
+          drafts: Object.fromEntries(
+            Object.entries(state.drafts).map(([chatId, draft]) => [
+              chatId,
+              draft === undefined
+                ? draft
+                : {
+                    ...draft,
+                    browserAnnotations: draft.browserAnnotations.filter(
+                      (record) => record.source.kind === "browser",
+                    ),
+                    ...stripBase64ImageNodesWithSelection(
+                      draft.content,
+                      draft.selection,
+                    ),
+                  },
+            ]),
+          ),
+        };
+      },
       // Synchronous localStorage hydration can finish during `create(...)`,
       // before an `onFinishHydration` subscriber can be registered. Normalize
       // at the merge boundary so legacy revisions are safe on initial import.
       merge: (persistedState, currentState) => {
-        if (!hasDraftMap(persistedState)) return currentState;
-        const drafts: Partial<Record<string, DraftState>> = {};
-        for (const [taskId, value] of Object.entries(persistedState.drafts)) {
-          if (!isRecord(value)) continue;
-          if (!isJsonContent(value.content, 0)) continue;
-          if (value.selection !== null && !isDraftSelection(value.selection)) {
-            continue;
-          }
-          drafts[taskId] = {
-            content: value.content,
-            selection: value.selection,
-            browserAnnotations: parseBrowserAnnotationRecords(
-              value.browserAnnotations,
-            ),
-            resetEpoch: normalizedLegacyResetEpoch(value) + 1,
-            revision: normalizedLegacyRevision(value),
-            // Deterministic, not minted: this merged state is not persisted
-            // back by the hydration itself, so a second window hydrating the
-            // same legacy draft must arrive at the same id or both would
-            // publish. Only an ABSENT field is legacy - an explicit null is
-            // `detachSubmittedDraft`'s "mint fresh on the next edit", and
-            // re-deriving the old id here would publish new content under a
-            // row being tombstoned. An explicit id in the retired prefixed
-            // form IS persisted (the next edit or ACK writes the whole row),
-            // so it is mapped forward here to the id the host re-keyed its
-            // row to; left as is, the row would reject that document as
-            // foreign and re-send the long id.
-            draftId:
-              "draftId" in value
-                ? migratedNullableId(normalizedDraftId(value))
-                : legacyComposerDraftId(taskId),
-            hostRevision: normalizedNonNegative(value.hostRevision),
-            targetEpicId: normalizedNullableId(value.targetEpicId),
-            lastTouchedAt: normalizedNonNegative(value.lastTouchedAt),
-            generation: 1,
-            syncedGeneration: 0,
-            ownerHostId: normalizedNullableId(value.ownerHostId),
-            origin: normalizedOrigin(value.origin),
-            supersedes: migratedNullableId(
-              normalizedNullableId(value.supersedes),
-            ),
-            publication: null,
-            chatTitle: normalizedTitle(value.chatTitle),
-            epicTitle: normalizedTitle(value.epicTitle),
+        const windowAnnotations = readWindowCanvasAnnotations();
+        if (
+          !hasDraftMap(persistedState) &&
+          Object.keys(windowAnnotations).length === 0
+        )
+          return currentState;
+        const savedDrafts = hasDraftMap(persistedState)
+          ? persistedState.drafts
+          : {};
+        const drafts = parsePersistedComposerDrafts(savedDrafts);
+        for (const [chatId, annotations] of Object.entries(windowAnnotations)) {
+          if (annotations === undefined || annotations.length === 0) continue;
+          const draft = drafts[chatId] ?? EMPTY_COMPOSER_DRAFT;
+          drafts[chatId] = {
+            ...draft,
+            browserAnnotations: [...draft.browserAnnotations, ...annotations],
           };
         }
         const pendingSubmittedDraftDeletes: Partial<
           Record<string, PendingSubmittedDraftDelete>
         > = {};
-        if (isRecord(persistedState.pendingSubmittedDraftDeletes)) {
+        if (
+          isRecord(persistedState) &&
+          isRecord(persistedState.pendingSubmittedDraftDeletes)
+        ) {
           for (const [draftId, value] of Object.entries(
             persistedState.pendingSubmittedDraftDeletes,
           )) {
@@ -677,6 +665,55 @@ export const useComposerDraftStore = create<ComposerDraftStore>()(
     },
   ),
 );
+
+function parsePersistedComposerDrafts(
+  savedDrafts: Record<string, unknown>,
+): Partial<Record<string, DraftState>> {
+  const drafts: Partial<Record<string, DraftState>> = {};
+  for (const [taskId, value] of Object.entries(savedDrafts)) {
+    if (!isRecord(value)) continue;
+    if (!isJsonContent(value.content, 0)) continue;
+    if (value.selection !== null && !isDraftSelection(value.selection)) {
+      continue;
+    }
+    drafts[taskId] = {
+      content: value.content,
+      selection: value.selection,
+      browserAnnotations: parseBrowserAnnotationRecords(
+        value.browserAnnotations,
+      ).filter((record) => record.source.kind === "browser"),
+      resetEpoch: normalizedLegacyResetEpoch(value) + 1,
+      revision: normalizedLegacyRevision(value),
+      // Deterministic, not minted: this merged state is not persisted
+      // back by the hydration itself, so a second window hydrating the
+      // same legacy draft must arrive at the same id or both would
+      // publish. Only an ABSENT field is legacy - an explicit null is
+      // `detachSubmittedDraft`'s "mint fresh on the next edit", and
+      // re-deriving the old id here would publish new content under a
+      // row being tombstoned. An explicit id in the retired prefixed
+      // form IS persisted (the next edit or ACK writes the whole row),
+      // so it is mapped forward here to the id the host re-keyed its
+      // row to; left as is, the row would reject that document as
+      // foreign and re-send the long id.
+      draftId:
+        "draftId" in value
+          ? migratedNullableId(normalizedDraftId(value))
+          : legacyComposerDraftId(taskId),
+      hostRevision: normalizedNonNegative(value.hostRevision),
+      targetEpicId: normalizedNullableId(value.targetEpicId),
+      lastTouchedAt: normalizedNonNegative(value.lastTouchedAt),
+      generation: 1,
+      syncedGeneration: 0,
+      ownerHostId: normalizedNullableId(value.ownerHostId),
+      origin: normalizedOrigin(value.origin),
+      supersedes: migratedNullableId(normalizedNullableId(value.supersedes)),
+      publication: null,
+      chatTitle: normalizedTitle(value.chatTitle),
+      epicTitle: normalizedTitle(value.epicTitle),
+    };
+  }
+  return drafts;
+}
 
 function normalizedLegacyResetEpoch(rawDraft: Record<string, unknown>): number {
   const resetEpoch = rawDraft.resetEpoch;
@@ -1114,6 +1151,10 @@ function normalizedNonNegative(value: unknown): number {
 }
 
 registerExtraImageRootSource({
-  hashes: () =>
-    collectDraftAnnotationImageHashes(useComposerDraftStore.getState().drafts),
+  hashes: () => [
+    ...collectDraftAnnotationImageHashes(
+      useComposerDraftStore.getState().drafts,
+    ),
+    ...persistedCanvasAnnotationImageHashes(),
+  ],
 });

@@ -28,6 +28,8 @@ import {
 } from "@/lib/keybindings/dispatch";
 import { formatChordForDisplay } from "@/lib/keybindings/chord";
 import { RUNNING_LOW_TEXT_CLASS_NAME } from "@/lib/rate-limits/window-severity";
+import { STATUS_BAR_TRANSIENT_LABEL } from "@/components/layout/status-bar/status-bar-usage-display";
+import { UNAVAILABLE_DASH } from "@/lib/resources/memory-metric";
 import {
   DEFAULT_LAYOUT_SNAPSHOT,
   useLayoutStore,
@@ -207,6 +209,8 @@ function segmentFixture(overrides: {
     hidden: false,
     state: overrides.state ?? "live",
     reason: null,
+    fetching: false,
+    retryOffered: false,
     windows,
     shown: windows,
     tightest: windows.at(0) ?? null,
@@ -739,6 +743,24 @@ describe("<RateLimitIconButton />", () => {
           name: "Usage limits: Codex 30% remaining, Claude Code 60% remaining",
         }),
       ).toBeTruthy();
+    });
+
+    it("says a reading could not load, where a dash would be an answer", () => {
+      cluster = segmentsCluster([
+        segmentFixture({
+          providerId: "codex",
+          windows: [],
+          state: "transient",
+        }),
+      ]);
+      renderInline();
+
+      // The dash means the provider answered and cannot report usage. This
+      // state is the opposite - nothing is known about the account yet - and
+      // the reading here has no tooltip open to correct it, so the row says it.
+      const row = screen.getByTestId("usage-profile-codex:");
+      expect(row.textContent).toContain(STATUS_BAR_TRANSIENT_LABEL);
+      expect(row.textContent).not.toContain(UNAVAILABLE_DASH);
     });
   });
 

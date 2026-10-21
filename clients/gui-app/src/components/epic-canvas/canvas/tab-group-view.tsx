@@ -102,6 +102,7 @@ import {
   TILE_KIND_PUBLISHED_CHAT,
   TILE_KIND_PR_DETAIL,
   TILE_KIND_PR_DIFF,
+  TILE_KIND_SIMULATOR,
   TILE_KIND_SNAPSHOT_DIFF,
 } from "@/stores/epics/canvas/tile-kinds";
 import {
@@ -150,6 +151,8 @@ function panelIdForTabType(
   if (tabType === TILE_KIND_PR_DETAIL) return "pull-requests";
   if (tabType === TILE_KIND_PR_DIFF) return "pull-requests";
   if (tabType === TILE_KIND_BROWSER_SESSION) return "browsers";
+  // Mobile simulators are listed as a group inside the Browsers panel.
+  if (tabType === TILE_KIND_SIMULATOR) return "browsers";
   return "artifacts";
 }
 
@@ -175,6 +178,8 @@ function sidebarRevealNodeIdForTab(tab: EpicCanvasTileRef): string | null {
       });
     case TILE_KIND_GIT_DIFF:
       return tab.diff.kind === "file" ? tab.id : null;
+    case TILE_KIND_SIMULATOR:
+      return tab.id;
     default:
       return null;
   }
@@ -400,7 +405,12 @@ export const TabGroupView = memo(function TabGroupView(
       if (sidebarNodeId !== null) {
         requestSidebarNodeReveal(tabId, sidebarNodeId);
       }
-      if (tab?.type === TILE_KIND_BROWSER_SESSION) {
+      // The Browsers panel lists one host's sessions and simulators, so it is
+      // pinned to the tab's host or the row to reveal may not be listed.
+      if (
+        tab?.type === TILE_KIND_BROWSER_SESSION ||
+        tab?.type === TILE_KIND_SIMULATOR
+      ) {
         useSurfaceHostSelectionStore
           .getState()
           .setSelection(tabSurfaceKey("browsers", tabId), tab.hostId);

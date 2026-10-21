@@ -16,6 +16,7 @@ import {
   vi,
 } from "vitest";
 import { useLayoutEffect, type ReactNode } from "react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { CloudChatSummary } from "@traycer/protocol/host/epic/cloud-chat";
 import type { ChatServing } from "@traycer/protocol/host/chat-serving/index";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
@@ -47,6 +48,7 @@ import {
   type WorkspaceFileRef,
 } from "@/stores/epics/canvas/types";
 import { useFileTreeRevealStore } from "@/stores/file-tree/file-tree-reveal-store";
+import { makeSimulatorTileRef } from "@/stores/epics/canvas/tile-schema/simulator-tile";
 import { useSidebarNodeRevealStore } from "@/stores/epics/sidebar-node-reveal-store";
 import { useEpicLeftPanelStore } from "@/stores/epics/left-panel-store";
 import {
@@ -285,6 +287,8 @@ vi.mock("@/lib/epic-selectors", () => ({
 vi.mock("@/lib/registries/chat-session-registry", () => ({
   getChatSessionRegistry: () => ({
     listHandles: () => [],
+    // The chat tab's routing menu looks its chat up here; no session is open.
+    peek: () => null,
     subscribe: () => () => undefined,
   }),
   useExistingChatSessionHandle: () => null,
@@ -565,21 +569,26 @@ function seedCanvasWithActivePane(
   });
 }
 
+// The chat tab's routing menu mounts a mutation hook, which needs a client.
+const routingMenuQueryClient = new QueryClient();
+
 function groupView(
   tabs: ReadonlyArray<EpicCanvasTileRef>,
   activeTabId: string | null,
   paneVisible: boolean,
 ): ReactNode {
   return (
-    <TooltipProvider>
-      <PaneVisibilityContext.Provider value={paneVisible}>
-        <TabGroupView
-          epicId="epic-1"
-          tabId={VIEW_TAB_ID}
-          pane={pane(tabs, activeTabId)}
-        />
-      </PaneVisibilityContext.Provider>
-    </TooltipProvider>
+    <QueryClientProvider client={routingMenuQueryClient}>
+      <TooltipProvider>
+        <PaneVisibilityContext.Provider value={paneVisible}>
+          <TabGroupView
+            epicId="epic-1"
+            tabId={VIEW_TAB_ID}
+            pane={pane(tabs, activeTabId)}
+          />
+        </PaneVisibilityContext.Provider>
+      </TooltipProvider>
+    </QueryClientProvider>
   );
 }
 
@@ -2333,6 +2342,38 @@ describe("<TabGroupView /> Reveal in Sidebar", () => {
         tabSurfaceKey("browsers", VIEW_TAB_ID)
       ],
     ).toBe(BROWSER_TAB.hostId);
+  });
+
+  it("targets the simulator row, the Browsers panel, and the tile's host for a simulator tab", () => {
+    const simulatorTab = makeSimulatorTileRef({
+      hostId: "host-C",
+      simulatorId: "udid-1",
+      platform: "ios",
+      name: "iPhone 16",
+    });
+    // The spec tab stays active so the simulator tile's renderer never mounts.
+    const tabs = [SPEC, simulatorTab];
+    seedCanvas(tabs, SPEC.instanceId);
+    render(groupView(tabs, SPEC.instanceId, true));
+
+    fireEvent.contextMenu(
+      screen.getByTestId(`tab-item-${simulatorTab.instanceId}`),
+    );
+    fireEvent.click(
+      screen.getByRole("menuitem", { name: "Reveal in Sidebar" }),
+    );
+
+    expect(
+      useSidebarNodeRevealStore.getState().requestsByViewTabId[VIEW_TAB_ID],
+    ).toEqual({ nodeId: simulatorTab.id, nonce: 1 });
+    expect(useEpicLeftPanelStore.getState().getActivePanelId(VIEW_TAB_ID)).toBe(
+      "browsers",
+    );
+    expect(
+      useSurfaceHostSelectionStore.getState().selections[
+        tabSurfaceKey("browsers", VIEW_TAB_ID)
+      ],
+    ).toBe("host-C");
   });
 
   it("writes a node reveal request for an agent tab", () => {

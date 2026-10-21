@@ -208,6 +208,7 @@ function hostStatusResponse(
     storeFormats: null,
     install: null,
     processMemory: null,
+    crossHostMessaging: null,
     ...overrides,
   };
 }
@@ -1188,7 +1189,7 @@ describe("observeAttemptRecoveryEvidence - the running leg's DIAGNOSIS (Linux E1
       false,
       "host-rpc-unreachable",
     ],
-  ] as const)("Q19: %s", async (_label, code, endedRetryEpisode, diagnosis) => {
+  ] as const)("%s", async (_label, code, endedRetryEpisode, diagnosis) => {
     // The gate is the RPC error CODE, never the host's wording. `WORKTREE_BUSY`
     // is here as the negative: a host that answered with something that is not
     // about admission has not decided anything the next poll cannot change, so

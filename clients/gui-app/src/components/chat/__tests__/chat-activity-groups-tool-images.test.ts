@@ -4,20 +4,17 @@ import type { ChatActivityTimelineItem } from "@/components/chat/chat-activity-g
 import type { MessageSegment } from "@/stores/composer/chat-store";
 import type {
   ImageGenerationResult,
-  ToolCallPageStamp,
+  ToolCallArtifactStamp,
 } from "@traycer/protocol/persistence/epic/content-blocks";
 
 type ToolMessageSegment = Extract<MessageSegment, { kind: "tool" }>;
 
 const NO_PROMOTED_TOOL_BLOCKS: ReadonlySet<string> = new Set();
 
-const PAGE_STAMP: ToolCallPageStamp = {
-  path: "files/pages/report-1.html",
-  sha256: "a".repeat(64),
+const ARTIFACT_STAMP: ToolCallArtifactStamp = {
+  artifactId: "art-1",
   title: "Report",
-  height: 400,
-  heights: [],
-  derivedFrom: null,
+  manifest: { files: {}, capturedAt: 0 },
   originChatId: "chat-1",
 };
 
@@ -44,6 +41,7 @@ function toolSegment(id: string, toolName: string): ToolMessageSegment {
     agentMessageSend: null,
     managedCommand: null,
     agentMessageReceipt: null,
+    agentMessageDelivery: null,
     isStreaming: false,
     endState: null,
     stopped: false,
@@ -51,7 +49,7 @@ function toolSegment(id: string, toolName: string): ToolMessageSegment {
     backgroundOutput: null,
     backgroundTask: false,
     imageResults: [],
-    page: null,
+    artifact: null,
     mcpApp: null,
     startedAt: 0,
     durationMs: null,
@@ -103,9 +101,9 @@ describe("generic tool image results in the activity timeline", () => {
   });
 
   it("keeps specialized branches standalone when they also carry images", () => {
-    const page = {
-      ...toolSegment("page", "traycer_show_page"),
-      page: PAGE_STAMP,
+    const artifact = {
+      ...toolSegment("artifact", "traycer_render_inline"),
+      artifact: ARTIFACT_STAMP,
       imageResults: [IMAGE],
     };
     const a2a = {
@@ -132,12 +130,12 @@ describe("generic tool image results in the activity timeline", () => {
 
     const timeline = build([
       toolSegment("read", "read_file"),
-      page,
+      artifact,
       a2a,
       managed,
     ]);
 
-    expect(standsAlone(timeline, "page")).toBe(true);
+    expect(standsAlone(timeline, "artifact")).toBe(true);
     expect(standsAlone(timeline, "a2a")).toBe(true);
     expect(standsAlone(timeline, "shell")).toBe(true);
     expect(standsAlone(timeline, "read")).toBe(false);

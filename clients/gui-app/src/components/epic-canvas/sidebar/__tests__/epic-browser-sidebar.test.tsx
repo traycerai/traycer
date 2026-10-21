@@ -100,6 +100,13 @@ vi.mock("@/hooks/host/use-surface-host-pin", () => ({
   useSurfaceHostClient: () => null,
 }));
 
+// The Simulators group under the browser rows reads its own host stream and
+// has its own suite (`epic-simulator-sidebar.test.tsx`); this one is about the
+// browser rows, so the group renders nothing here.
+vi.mock("@/components/epic-canvas/sidebar/epic-simulator-sidebar", () => ({
+  SimulatorsSidebarGroup: () => null,
+}));
+
 vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
   useHostDirectoryEntryForHostId: (hostId: string | null) => ({
     label: hostId === "host-2" ? "Work Mac" : "Home Mac",

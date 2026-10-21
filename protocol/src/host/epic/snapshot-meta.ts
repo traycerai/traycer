@@ -15,7 +15,7 @@ import { z } from "zod";
 import { getRecordSchema } from "@traycer/protocol/framework/index";
 import { commonRecordRegistry } from "@traycer/protocol/common/registry";
 import {
-  epicLightSchema,
+  epicLightSchemaPreHtml,
   taskRepoIdentifierSchema,
   taskRepoAssociationSchema,
   userTaskWorkspaceSchema,
@@ -60,7 +60,7 @@ export type ResolvedWorkspaceFolder = z.infer<
  */
 export const snapshotMetaEpicSchemaV10 = lazySchema(() => z.object({
   schemaVersion: z.string(),
-  epicLight: epicLightSchema.nullable(),
+  epicLight: epicLightSchemaPreHtml.nullable(),
   permissionRole: permissionRoleSchema.nullable(),
   repos: z.array(taskRepoAssociationSchema),
   workspaces: z.array(userTaskWorkspaceSchema),
@@ -161,7 +161,7 @@ export type SnapshotMetaEpic = z.infer<typeof snapshotMetaEpicSchema>;
  * wrong placeholder values between the early frame and the real snapshot.
  */
 export const earlyMetaEpicSchema = lazySchema(() => z.object({
-  epicLight: epicLightSchema.nullable(),
+  epicLight: epicLightSchemaPreHtml.nullable(),
   permissionRole: permissionRoleSchema.nullable(),
   repos: z.array(taskRepoAssociationSchema),
   workspaces: z.array(userTaskWorkspaceSchema),

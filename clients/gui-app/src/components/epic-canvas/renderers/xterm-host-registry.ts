@@ -562,6 +562,23 @@ export function peekXtermHostGridForSession(
 }
 
 /**
+ * The grid a reopening terminal opens at when it could not measure itself:
+ * its own kept-alive engine's, else its session's (see the two peeks above).
+ *
+ * A render reads this only once the measure wait has ended, and with that
+ * moment as an input. The compiled renderer memoizes a render-time peek on its
+ * arguments, which do not move when the engine resizes, so a peek taken while
+ * the wait ran was the one the session later opened at - after the host had
+ * already moved the engine to another size.
+ */
+export function peekKeptAliveXtermHostGrid(
+  instanceId: string,
+  identity: TerminalWarmSessionIdentity,
+): { readonly cols: number; readonly rows: number } | null {
+  return peekXtermHostGrid(instanceId) ?? peekXtermHostGridForSession(identity);
+}
+
+/**
  * Reconcile a mounted terminal after an outer layout transition finishes.
  *
  * The landing terminal panel expands from zero width while its xterm engine

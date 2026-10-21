@@ -13,11 +13,12 @@ import {
 } from "@/stores/chats/rendered-messages";
 
 /**
- * A host older than agent pages stores tool calls without `page` / `mcpApp`.
- * Its snapshot reaches the GUI through a SHALLOW parse that runs no zod
- * defaults, so the field arrives `undefined` while typed `ToolCallPageStamp |
- * null` - and a `page !== null` classifier promoted every such tool to a page
- * row that threw on `page.path`.
+ * A host older than inline artifacts
+ * stores tool calls without `mcpApp` / `artifact`. Its snapshot
+ * reaches the GUI through a SHALLOW parse that runs no zod defaults, so each
+ * field arrives `undefined` while typed `... | null` - and a `!== null`
+ * classifier promoted every such tool to a app/artifact row that threw on
+ * its missing stamp fields.
  */
 
 const displayContext: RenderedMessagesDisplayContext = {
@@ -33,8 +34,8 @@ const displayContext: RenderedMessagesDisplayContext = {
   contentBlocksPreview: () => "",
 };
 
-/** A tool call exactly as a pre-pages host stores it: no `page`, no `mcpApp`. */
-function prePageToolCall(): Record<string, unknown> {
+/** A tool call exactly as a pre-artifact host stores it: no `artifact`, no `mcpApp`. */
+function preArtifactToolCall(): Record<string, unknown> {
   return {
     type: "tool_call",
     blockId: "tool-1",
@@ -51,6 +52,7 @@ function prePageToolCall(): Record<string, unknown> {
     agentMessageSend: null,
     managedCommand: null,
     agentMessageReceipt: null,
+    agentMessageDelivery: null,
     progress: null,
     backgroundOutput: null,
     backgroundTask: false,
@@ -88,7 +90,7 @@ function v16SnapshotEnvelope(): Record<string, unknown> {
               reply: { expectsReply: false },
               inReplyTo: null,
             },
-            blocks: [prePageToolCall()],
+            blocks: [preArtifactToolCall()],
             startedAt: 10,
             timestamp: 20,
             turnId: "turn-1",
@@ -130,8 +132,8 @@ function receiveV16SnapshotMessages(): ReadonlyArray<Message> {
     .snapshot.chat.messages;
 }
 
-describe("useRenderedMessages tool calls from a pre-pages host", () => {
-  it("projects a tool call without a page stamp as an ordinary tool", () => {
+describe("useRenderedMessages tool calls from a pre-artifact host", () => {
+  it("projects a tool call without an app or artifact stamp as an ordinary tool", () => {
     const input: RenderedMessagesInput = {
       messages: [...receiveV16SnapshotMessages()],
       events: [],
@@ -151,10 +153,16 @@ describe("useRenderedMessages tool calls from a pre-pages host", () => {
       useRenderedMessages(input, displayContext),
     );
 
-    // `null`, not `undefined`: every page classifier tests `page !== null`.
+    // `null`, not `undefined`: every app/artifact classifier tests
+    // `!== null`, and the artifact minor postdates this host just as much as
+    // the app one does, so the same shallow-parsed block normalizes both.
     const tool = result.current[0]?.segments.find(
       (segment) => segment.kind === "tool",
     );
-    expect(tool).toMatchObject({ kind: "tool", toolName: "Bash", page: null });
+    expect(tool).toMatchObject({
+      kind: "tool",
+      toolName: "Bash",
+      artifact: null,
+    });
   });
 });

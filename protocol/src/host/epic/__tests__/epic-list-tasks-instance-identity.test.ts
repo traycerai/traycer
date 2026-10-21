@@ -11,7 +11,7 @@ import {
   listTasksResponseSchemaPre15,
   listTasksResponseSchemaPre16,
   listTasksResponseSchemaPre17,
-  listTasksResponseSchemaPre18,
+  listTasksResponseSchemaPre19,
 } from "@traycer/protocol/host/epic/unary-schemas";
 
 /**
@@ -32,13 +32,13 @@ import {
  * protocol package.
  */
 describe("epic.listTasks instance identity", () => {
-  // The LATEST installed minor, which `@1.8` now is - bump alongside
+  // The LATEST installed minor, which `@1.9` now is - bump alongside
   // `latestMinor` in the registry. The index is spelled rather than derived
   // because the invariant is about the canonical contract specifically; a
   // derived lookup would keep passing while silently pointing at whatever
   // happened to be last.
   const hostContract =
-    hostRpcRegistry["epic.listTasks"][1].versions[8].contract;
+    hostRpcRegistry["epic.listTasks"][1].versions[9].contract;
 
   it("host request schema is the canonical listTasksRequestSchema instance", () => {
     expect(hostContract.requestSchema).toBe(listTasksRequestSchema);
@@ -48,9 +48,9 @@ describe("epic.listTasks instance identity", () => {
     expect(hostContract.responseSchema).toBe(listTasksResponseSchema);
   });
 
-  it("keeps the 1.7 response frozen before the owning-environment key", () => {
-    const v17 = hostRpcRegistry["epic.listTasks"][1].versions[7].contract;
-    expect(v17.responseSchema).toBe(listTasksResponseSchemaPre18);
+  it("keeps the 1.8 response frozen before the owning-environment key", () => {
+    const v18 = hostRpcRegistry["epic.listTasks"][1].versions[8].contract;
+    expect(v18.responseSchema).toBe(listTasksResponseSchemaPre19);
     const page = {
       tasks: [
         {
@@ -63,7 +63,7 @@ describe("epic.listTasks instance identity", () => {
       hasMore: false,
     };
     expect(
-      listTasksResponseSchemaPre18.parse(page).tasks[0],
+      listTasksResponseSchemaPre19.parse(page).tasks[0],
     ).not.toHaveProperty("ownerEnvironmentId");
     expect(
       listTasksResponseSchema.parse(page).tasks[0]?.ownerEnvironmentId,

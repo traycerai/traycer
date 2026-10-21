@@ -1,6 +1,10 @@
 import { useCallback } from "react";
+import type { CommentArtifactKind } from "@/lib/comments/artifact-comment-kind";
 import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
-import { revealCommentThreadAnchor } from "@/lib/comments/comment-editor-registry";
+import {
+  requestCommentThreadAnchorReveal,
+  revealCommentThreadAnchor,
+} from "@/lib/comments/comment-editor-registry";
 import { useCommentThreadsStore } from "@/stores/comments/comment-threads-store";
 import { useLeftPanelStore } from "@/stores/epics/left-panel-store";
 import { useMobileSwitcherStore } from "@/stores/epics/mobile-switcher-store";
@@ -11,6 +15,7 @@ export interface ActivateCommentThreadTarget {
   readonly artifactId: string;
   /** The epic view tab whose comments surface should come forward. */
   readonly viewTabId: string;
+  readonly artifactType?: CommentArtifactKind;
 }
 
 /**
@@ -30,7 +35,7 @@ export interface ActivateCommentThreadTarget {
 export function useActivateCommentThread(
   target: ActivateCommentThreadTarget,
 ): (threadId: string) => void {
-  const { epicId, artifactId, viewTabId } = target;
+  const { epicId, artifactId, viewTabId, artifactType } = target;
   const isMobileViewport = useIsMobileViewport();
   const setActiveThread = useCommentThreadsStore((s) => s.setActiveThread);
   const setFlashThread = useCommentThreadsStore((s) => s.setFlashThread);
@@ -45,6 +50,10 @@ export function useActivateCommentThread(
     (threadId: string) => {
       setActiveThread(epicId, threadId);
       setFlashThread(epicId, threadId);
+      if (artifactType === "html" || artifactType === "canvas") {
+        requestCommentThreadAnchorReveal(epicId, artifactId, threadId);
+        return;
+      }
       revealCommentsPanel(viewTabId);
       if (isMobileViewport) {
         setActivePanelId(viewTabId, "comments");
@@ -57,6 +66,7 @@ export function useActivateCommentThread(
     [
       epicId,
       artifactId,
+      artifactType,
       viewTabId,
       isMobileViewport,
       setActiveThread,

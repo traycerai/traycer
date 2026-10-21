@@ -4,13 +4,13 @@ import type {
   CommGraphTileRef,
   DeletedArtifactsTileRef,
   EpicArtifactRef,
-  EpicFileTileRef,
   EpicTerminalRef,
   GitDiffTileRef,
   ManagedCommandOutputTileRef,
   PrDetailTileRef,
   PrDiffTileRef,
   PublishedChatTileRef,
+  SimulatorTileRef,
   SnapshotDiffTileRef,
   WorkspaceFileRef,
 } from "./types";
@@ -31,6 +31,9 @@ export interface TileKindToRefMap {
   readonly ticket: EpicArtifactRef;
   readonly story: EpicArtifactRef;
   readonly review: EpicArtifactRef;
+  readonly html: EpicArtifactRef;
+  readonly canvas: EpicArtifactRef;
+  readonly file: EpicArtifactRef;
   readonly terminal: EpicTerminalRef;
   readonly "browser-session": BrowserSessionTileRef;
   readonly "workspace-file": WorkspaceFileRef;
@@ -42,7 +45,7 @@ export interface TileKindToRefMap {
   readonly "published-chat": PublishedChatTileRef;
   readonly "pr-detail": PrDetailTileRef;
   readonly "pr-diff": PrDiffTileRef;
-  readonly "epic-file": EpicFileTileRef;
+  readonly simulator: SimulatorTileRef;
   readonly blank: BlankTileRef;
 }
 

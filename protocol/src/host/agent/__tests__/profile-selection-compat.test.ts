@@ -156,6 +156,11 @@ const baseV3Request = {
   permissionMode: "full_access" as const,
 };
 
+const baseV31Request = {
+  ...baseV3Request,
+  routing: null,
+};
+
 describe("agent.create v1 <-> v2 profile-selection translation", () => {
   it("upgrades a v1.0 null profileId to inherit_sender", () => {
     const upgraded = agentCreateUpgradeV10ToV20.upgradeRequest({
@@ -248,7 +253,7 @@ describe("agent.create v1 <-> v2 profile-selection translation", () => {
       hostRpcRegistry["agent.create"],
       3,
       2,
-      baseV3Request,
+      baseV31Request,
     );
     expect(toV2).toMatchObject({
       ok: false,
@@ -258,7 +263,7 @@ describe("agent.create v1 <-> v2 profile-selection translation", () => {
       hostRpcRegistry["agent.create"],
       3,
       1,
-      baseV3Request,
+      baseV31Request,
     );
     expect(toV1).toMatchObject({
       ok: false,
@@ -607,9 +612,10 @@ describe("optional-method capability negotiation", () => {
     expect(
       split.optionalManifest["agent.getProviderProfileRateLimits"],
     ).toEqual({ major: 7, minor: 0, supportedMajors: [1, 2, 3, 4, 5, 6, 7] });
+    // `agent.configure@7.1` added the routing choice to the request.
     expect(split.optionalManifest["agent.configure"]).toEqual({
       major: 7,
-      minor: 0,
+      minor: 1,
       supportedMajors: [1, 2, 3, 4, 5, 6, 7],
     });
   });

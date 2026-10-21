@@ -40,6 +40,7 @@ export {
   editorQueryKeys,
 } from "@/lib/query-keys/editor-mutation-keys";
 export { portForwardMutationKeys } from "@/lib/query-keys/port-forward-mutation-keys";
+export { simulatorMutationKeys } from "@/lib/query-keys/simulator-mutation-keys";
 export { terminalMutationKeys } from "@/lib/query-keys/terminal-mutation-keys";
 export {
   browserMutationKeys,
@@ -52,7 +53,6 @@ export { managedCommandMutationKeys } from "@/lib/query-keys/managed-command-mut
 export { agentMutationKeys } from "@/lib/query-keys/agent-mutation-keys";
 export { worktreeMutationKeys } from "@/lib/query-keys/worktree-mutation-keys";
 export { snapshotsMutationKeys } from "@/lib/query-keys/snapshots-mutation-keys";
-export { epicFileMutationKeys } from "@/lib/query-keys/epic-file-mutation-keys";
 export { providersMutationKeys } from "@/lib/query-keys/providers-mutation-keys";
 export { profileSyncKeys } from "@/lib/query-keys/profile-sync-keys";
 export { fallbackPolicyWriteScope } from "@/lib/query-keys/providers-fallback-policy-scope";

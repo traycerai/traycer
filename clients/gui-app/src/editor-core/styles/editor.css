@@ -528,18 +528,18 @@
 }
 
 /*
- * An agent page in the chat (`page-row.tsx`) wears the same bar. A coarse
+ * An MCP App in the chat wears the same bar. A coarse
  * pointer has no hover to reveal it with, so there the row shows its own
  * always-visible actions button instead.
  */
-.tc-node-page:hover > .tc-node-block-toolbar,
-.tc-node-page:focus-within > .tc-node-block-toolbar {
+.tc-node-app:hover > .tc-node-block-toolbar,
+.tc-node-app:focus-within > .tc-node-block-toolbar {
   opacity: 1;
   pointer-events: auto;
 }
 
 @media (pointer: coarse) {
-  .tc-node-page > .tc-node-block-toolbar {
+  .tc-node-app > .tc-node-block-toolbar {
     display: none;
   }
 }
@@ -741,7 +741,7 @@
   animation: tc-thread-anchor-flash 1s ease-out;
 }
 
-[data-resolved="true"] {
+.thread-anchor [data-resolved="true"] {
   --tc-thread-anchor-fill: transparent;
   --tc-thread-anchor-line: transparent;
 

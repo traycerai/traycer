@@ -188,6 +188,19 @@ export class SupersededAuthEraError extends Error {
   }
 }
 
+/**
+ * Thrown by {@link AuthService.fetchAuthenticatedUser} when the check it ran
+ * was overtaken: its answer is about a credential that is no longer the live
+ * one (an account switch, an adoption) or it stood down for an interactive
+ * sign-in. Retryable: asking again revalidates the live credential.
+ */
+export class SupersededUserCheckError extends Error {
+  constructor() {
+    super("The user check was overtaken by a newer credential");
+    this.name = "SupersededUserCheckError";
+  }
+}
+
 // Stored-session recovery backoff bounds (see `sessionRecoveryTimer`).
 const SESSION_RECOVERY_INITIAL_DELAY_MS = 1_000;
 const SESSION_RECOVERY_MAX_DELAY_MS = 30_000;
@@ -440,6 +453,20 @@ export type LinkLoginProgressListener = (
 type ValidationOutcome = AuthIdentityValidationResult;
 
 /**
+ * What a live revalidation of the current context answers. `null` means only
+ * that there is no live context, or the service is disposed. `superseded`
+ * means a live context exists but this check's answer is stale: a newer
+ * identity, credential, revalidation or interactive sign-in overtook it, or
+ * it stood down for an attempt in flight. Ask again, and the next check
+ * revalidates the live state. The internal stages return `null` for "stale
+ * or absent" alike and drop their side effects; only
+ * {@link AuthService.revalidateCurrentContext} tells the two apart.
+ */
+export type LiveRevalidationOutcome =
+  | ValidationOutcome
+  | { readonly kind: "superseded" };
+
+/**
  * The result of applying a same-user `rotate` outcome to the live session:
  *   - `rotated`    → the lease was rotated in place to `token`;
  *   - `signed-out` → a terminal outcome cleared the UI session (file kept);
@@ -617,7 +644,8 @@ export class AuthService {
   // §4 owned-watcher subscription (tokenStore.subscribe); disposed on dispose().
   private tokenStoreChangeDisposable: Disposable | null = null;
   private pendingTimeoutHandle: number | null = null;
-  private currentRevalidation: Promise<ValidationOutcome | null> | null = null;
+  private currentRevalidation: Promise<LiveRevalidationOutcome | null> | null =
+    null;
   private currentRevalidationBearer: OpenFrameBearerSource | null = null;
   // Single-flight guard for the proactive force-refresh path so the refresh
   // scheduler can't stack overlapping `/api/v3/auth/refresh` rotations.
@@ -1211,6 +1239,7 @@ export class AuthService {
     provisional: AuthenticatedUser,
     startGeneration: number,
   ): Promise<void> {
+    const credentialGeneration = this.getCredentialGeneration();
     const outcome = await this.validateToken(stored.token);
     if (
       this.shouldStopStartFlow(startGeneration) ||
@@ -1227,6 +1256,14 @@ export class AuthService {
       // `revalidateLiveSession` already applies to a validated live session:
       // project the entitlement, and re-sign-in only when the bearer turns out
       // to name a different user.
+      // The same bearer can still have been demoted while authn answered (a
+      // revocation withdraws the verdict and latches without rotating), and
+      // that newer state outranks this verdict, which then writes nothing.
+      // Every bearer change advances the credential generation, a same-token
+      // demotion included.
+      if (this.getCredentialGeneration() !== credentialGeneration) {
+        return;
+      }
       this.commitSubscriptionStatus(
         outcome.user.userSubscription.subscriptionStatus,
       );
@@ -2482,15 +2519,32 @@ export class AuthService {
    *                             signed-out.
    *   - `network-error`       → leaves auth state untouched; a transient
    *                             outage must not log the user out.
+   *   - `superseded`          → stale under a live context (overtaken, or
+   *                             standing down for an interactive sign-in);
+   *                             ask again.
    *
-   * No-op when the user is not currently signed-in.
+   * `null` when there is no live context (or the service is disposed).
    */
-  async revalidateCurrentContext(): Promise<ValidationOutcome | null> {
+  async revalidateCurrentContext(): Promise<LiveRevalidationOutcome | null> {
     const expected = this.contextProvider.current()?.credentials ?? null;
     if (expected === null) {
       return null;
     }
-    return this.revalidateExpectedContext(expected);
+    const outcome = await this.revalidateExpectedContext(expected);
+    // An internal fence's `null` is "stale or absent". Under a live context
+    // every one of them is stale: a join on a different bearer, the check
+    // after a force refresh finding its credential no longer current,
+    // credentials released or no longer the expected ones, the identity
+    // fence, and `rotateLiveSession`'s fences. None is a case where the
+    // context is gone, so a consumer must not read it as one.
+    if (
+      outcome === null &&
+      !this.isDisposed() &&
+      this.contextProvider.current() !== null
+    ) {
+      return { kind: "superseded" };
+    }
+    return outcome;
   }
 
   /**
@@ -2515,6 +2569,11 @@ export class AuthService {
     if (!this.isIdentityCurrent(generation) || outcome === null) {
       return "superseded";
     }
+    if (outcome.kind === "superseded") {
+      // Something newer overtook this authority's recovery, and that settles
+      // the session: the call fails once, with no latch and no refresh spent.
+      return "superseded";
+    }
     if (outcome.kind === "rejected") {
       // This method's caller is a host that just refused `expected`.
       this.noteHostRefusedHeldBearer();
@@ -2530,7 +2589,7 @@ export class AuthService {
 
   private revalidateExpectedContext(
     expected: OpenFrameBearerSource,
-  ): Promise<ValidationOutcome | null> {
+  ): Promise<LiveRevalidationOutcome | null> {
     if (this.currentRevalidation !== null) {
       return this.currentRevalidationBearer === expected
         ? this.currentRevalidation
@@ -2560,7 +2619,7 @@ export class AuthService {
    */
   private async revalidateAfterPendingForceRefresh(
     expected: OpenFrameBearerSource,
-  ): Promise<ValidationOutcome | null> {
+  ): Promise<LiveRevalidationOutcome | null> {
     if (this.currentForceRefresh !== null) {
       await this.currentForceRefresh;
       if (this.isDisposed() || !this.isExpectedBearerCurrent(expected)) {
@@ -2576,7 +2635,9 @@ export class AuthService {
    * context against AuthnV3's `/api/v3/user`. Returns `null` when signed-out
    * or when validation does not yield a user (`rejected` / no live context).
    * Throws on `network-error` so a transient outage surfaces as a retryable
-   * query error instead of a misleading "no subscription" empty state.
+   * query error instead of a misleading "no subscription" empty state, and
+   * {@link SupersededUserCheckError} on `superseded` so the query asks again
+   * rather than caching "no user" for the live account.
    *
    * The Settings subscription panel consumes this through TanStack Query so
    * credits live only in the query cache - never duplicated into the store.
@@ -2590,6 +2651,13 @@ export class AuthService {
     }
     if (outcome.kind === "valid") {
       return outcome.user;
+    }
+    // A stale answer describes a credential that is no longer the live one,
+    // so there is no user to show from it - and "no user" would be cached as
+    // the live account's answer. Throw so the query asks again, against the
+    // live credential.
+    if (outcome.kind === "superseded") {
+      throw new SupersededUserCheckError();
     }
     // `network-error`: a transient outage that did NOT sign the user out. Throw
     // so TanStack Query surfaces a retryable error on the panel (refresh button)
@@ -3191,7 +3259,7 @@ export class AuthService {
 
   private async revalidateCurrentContextOnce(
     expected: OpenFrameBearerSource,
-  ): Promise<ValidationOutcome | null> {
+  ): Promise<LiveRevalidationOutcome | null> {
     if (this.isDisposed()) {
       return null;
     }
@@ -3208,30 +3276,58 @@ export class AuthService {
     ) {
       return null;
     }
-    // A session authn has already refused, held open for its local plane (or
-    // being replaced by a sign-in attempt, which validates its own token and
-    // never comes through here). Asking again cannot change the answer:
-    // `/api/v3/user` refuses the same bearer, and the rotate re-spends a
-    // refresh token authn has refused and re-raises "session expired". Every
-    // host request that failed on the held bearer used to run that round trip,
-    // so the toast came back after each one (a refresh every ~3 s, measured),
-    // and during an attempt the demotion it ended in overwrote `signing-in`.
-    // The wake nudge stands down on the same latch; a successful sign-in clears
-    // it. `signed-in` is excluded: it holds a verdict, whatever the latch says.
-    const status = useAuthStore.getState().status;
+    // An interactive sign-in owns the session while it runs, and this
+    // automatic check stands down for one as session recovery does, whatever
+    // authn would answer or the latch below holds: a refusal would demote
+    // `signing-in` to `unverified` under the running attempt, and a verdict
+    // would promote it, either way taking the approval screen away while the
+    // attempt's own result is still to land. A check started before the
+    // attempt is fenced by the identity generation the attempt advanced.
+    if (this.isInteractiveAttemptInFlight()) {
+      return { kind: "superseded" };
+    }
+    // A session authn has already refused, held open for its local plane.
+    // Asking again cannot change the answer: `/api/v3/user` refuses the same
+    // bearer, and the rotate re-spends a refresh token authn has refused and
+    // re-raises "session expired". Every host request that failed on the held
+    // bearer used to run that round trip, so the toast came back after each
+    // one (a refresh every ~3 s, measured). The wake nudge stands down on the
+    // same latch; a successful sign-in clears it. `signed-in` is excluded: it
+    // holds a verdict, whatever the latch says.
     if (
       this.sessionRecoveryTerminallyRejected &&
-      (status === "unverified" || status === "signing-in")
+      useAuthStore.getState().status === "unverified"
     ) {
       return { kind: "rejected" };
     }
     const currentUserId = ctx.identity.userId;
     const currentToken = this.currentBearer;
+    const credentialGeneration = this.getCredentialGeneration();
     // Access-only (§3): validate the live bearer without spending. A stale bearer
     // comes back `rejected`, and the spend routes through the locked `rotate`.
     const outcome = await this.validateToken(currentToken);
     if (!this.isIdentityCurrent(generation)) {
       return null;
+    }
+    // The stand-down again, after the await: a sibling window's `signing-in`
+    // arrives as a projection alone, with no attempt of ours and no identity
+    // generation advanced, so the fence above lets it through. Acting on the
+    // answer from here would spend the refresh token and could demote
+    // `unverified` over the projected attempt.
+    if (this.isInteractiveAttemptInFlight()) {
+      return { kind: "superseded" };
+    }
+    // The answer is about `currentToken` as it stood when the check was sent.
+    // Adoptions, demotions and a cross-window account switch leave the
+    // identity generation alone, so a credential that moved meanwhile (a
+    // reconcile adopting a bearer authn has refused, a demotion that withdrew
+    // the verdict, a sibling window signing in as someone else) is caught
+    // here, whatever the answer. A verdict would be written onto a credential
+    // it is not about, or name a user who may not be the live one; a refusal
+    // would rotate the previous credential, and against another account's
+    // stored pair that rotate signs the live session out.
+    if (this.getCredentialGeneration() !== credentialGeneration) {
+      return { kind: "superseded" };
     }
 
     if (outcome.kind === "valid") {
@@ -3252,11 +3348,12 @@ export class AuthService {
         // entitlement left every other field one launch stale. Projection plus
         // the service's own profile copy, gated on a real difference - see
         // `reprojectSameUserIdentity` for why re-entering `applySignedIn` is
-        // not available here.
+        // not available for a `signed-in` session, and why one that is not
+        // yet signed in is promoted through it.
         this.reprojectSameUserIdentity(outcome.user);
         // ...and DURABLY, which the projection alone is not. `applySignedIn`
-        // is the only other writer of this snapshot and this path deliberately
-        // avoids it, so nothing else on this branch persists anything: the
+        // is the only other writer of this snapshot and this path avoids it
+        // for a `signed-in` session, so nothing else there persists anything: the
         // next launch paints the cached identity again, and if that launch's
         // validation takes the accepted network-error path the stale name and
         // avatar stand for the whole session. `settleProvisionalSession` pairs
@@ -4366,6 +4463,18 @@ export class AuthService {
   }
 
   /**
+   * An interactive sign-in owns the session: one of this window's attempts, or
+   * a sibling window's `signing-in` projected here, which starts no attempt of
+   * ours. Read fresh after every await - the projection can land during one.
+   */
+  private isInteractiveAttemptInFlight(): boolean {
+    return (
+      this.activeAttempt !== null ||
+      useAuthStore.getState().status === "signing-in"
+    );
+  }
+
+  /**
    * Epoch-currency check used by async finalization paths. Returns true iff
    * the captured epoch still matches the live attempt's epoch. A finalizer that
    * captured epoch `E` no-ops once a newer `signIn()` has replaced the active
@@ -4977,9 +5086,12 @@ export class AuthService {
 
   /**
    * Re-projects a same-user verdict's person-facing identity into the auth
-   * store and the service's own live-credential copy - and nothing else.
+   * store and the service's own live-credential copy - and nothing else, for a
+   * session already `signed-in`. A session not yet `signed-in` is promoted
+   * through `applySignedIn` instead (see the first branch below).
    *
-   * Deliberately not `applySignedIn` / `applySessionProjection`. Those restart
+   * For a `signed-in` session, deliberately not `applySignedIn` /
+   * `applySessionProjection`. Those restart
    * the refresh scheduler and - the part that is load-bearing rather than
    * merely wasteful - would put the identity back through the context
    * provider, where "same user => same context object" is an invariant the
@@ -5002,10 +5114,34 @@ export class AuthService {
    * rather than trusted.
    */
   private reprojectSameUserIdentity(user: AuthenticatedUser): void {
+    const current = useAuthStore.getState();
+    // A session that is not yet `signed-in` (an `unverified` one whose bearer
+    // a reactive refresh swapped in place) holds a context with no cloud
+    // verdict, and a valid check for it IS the verdict. Writing the store
+    // alone here would show `signed-in` while every host call still carries
+    // `cloudAuthorized: false` and is refused, and recovery would stand down
+    // on the live bearer. `applySignedIn` restores the verdict on that same
+    // context, settles recovery and announces it, so the store reads
+    // `signed-in` only when the context holds the verdict. Without a live
+    // bearer there is nothing to authorize, and the store is left alone.
+    //
+    // An interactive sign-in is never raced, as session recovery never races
+    // one: promoting here would end its `signing-in` while the attempt still
+    // runs, and the attempt's own result would then land on the promoted
+    // session. Its success settles the session through `applySignedIn`.
+    if (current.status !== "signed-in") {
+      if (
+        this.currentBearer !== null &&
+        this.activeAttempt === null &&
+        current.status !== "signing-in"
+      ) {
+        this.applySignedIn(this.currentBearer, user, undefined);
+      }
+      return;
+    }
     const profile = this.profileFromUser(user);
     const contextMetadata = this.contextMetadataFromUser(user);
     const shareableTeams = projectShareableTeams(user);
-    const current = useAuthStore.getState();
     // Keyed by id, not by INDEX. `projectShareableTeams` preserves the server's
     // order verbatim, so an index-wise compare reads a pure reorder of an
     // identical team set as a change - which writes the store and fires an

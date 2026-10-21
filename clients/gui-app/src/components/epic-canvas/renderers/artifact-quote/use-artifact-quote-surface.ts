@@ -1,6 +1,6 @@
 import { useCallback, useMemo, useState } from "react";
 import type { Editor } from "@tiptap/core";
-import type { EpicArtifactKind } from "@traycer/protocol/common/registry";
+import type { MarkdownArtifactKind } from "@traycer/protocol/common/registry";
 
 import type { ArtifactQuoteAction } from "@/editor-core";
 
@@ -38,7 +38,7 @@ export function useArtifactQuoteSurface(args: {
   readonly viewTabId: string;
   readonly artifactId: string;
   /** `null` for a tile kind that cannot be quoted (chat). */
-  readonly artifactKind: EpicArtifactKind | null;
+  readonly artifactKind: MarkdownArtifactKind | null;
   readonly editor: Editor | null;
 }): ArtifactQuoteSurface {
   const { epicId, viewTabId, artifactId, artifactKind, editor } = args;

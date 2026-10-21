@@ -74,6 +74,7 @@ function status(
     storeFormats: null,
     install: null,
     processMemory: null,
+    crossHostMessaging: null,
   };
 }
 

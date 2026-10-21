@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginListenerHandle } from "@capacitor/core";
 import type { DeviceFlowResult } from "@traycer-clients/shared/platform/runner-host";
 import { MobileRunnerHost } from "../src/mobile-runner-host";
+import { MobileSandboxArtifacts } from "../src/sandbox-artifacts-plugin";
 import {
   MobileAuthSheet,
   type AppUrlOpenSlice,
@@ -36,6 +37,8 @@ const nativeMocks = vi.hoisted(() => ({
 const capacitorEventMocks = vi.hoisted(() => ({
   /** What `Capacitor.getPlatform()` reports; per-test overridable. */
   platform: "ios",
+  /** What `Capacitor.isNativePlatform()` reports; per-test overridable. */
+  native: true,
   pauseListeners: new Array<() => void>(),
   resumeListeners: new Array<() => void>(),
   appStateListeners: new Array<(state: { isActive: boolean }) => void>(),
@@ -105,6 +108,7 @@ vi.mock("@capacitor/core", async (importOriginal) => {
     Capacitor: {
       ...actual.Capacitor,
       getPlatform: () => capacitorEventMocks.platform,
+      isNativePlatform: () => capacitorEventMocks.native,
     },
   };
 });
@@ -469,6 +473,7 @@ describe("MobileRunnerHost", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     capacitorEventMocks.platform = "ios";
+    capacitorEventMocks.native = true;
     capacitorEventMocks.rejectAppListeners = false;
     capacitorEventMocks.pauseListeners.length = 0;
     capacitorEventMocks.resumeListeners.length = 0;
@@ -2317,6 +2322,33 @@ describe("MobileRunnerHost", () => {
       expect(nativeMocks.browserOpen).toHaveBeenCalledWith({
         url: session.authorization.verificationUriComplete,
       });
+    });
+  });
+
+  describe("sandboxArtifacts", () => {
+    it("wires the native artifact bridge on iOS, under iOS's own policy source", () => {
+      capacitorEventMocks.native = true;
+      capacitorEventMocks.platform = "ios";
+      const host = runner(null);
+
+      expect(host.sandboxArtifacts).toBeInstanceOf(MobileSandboxArtifacts);
+      expect(host.sandboxArtifacts?.policySource).toBe("traycer-artifact:");
+    });
+
+    it("wires the native artifact bridge on Android, which needs no extra CSP policy source", () => {
+      capacitorEventMocks.native = true;
+      capacitorEventMocks.platform = "android";
+      const host = runner(null);
+
+      expect(host.sandboxArtifacts).toBeInstanceOf(MobileSandboxArtifacts);
+      expect(host.sandboxArtifacts?.policySource).toBeNull();
+    });
+
+    it("serves no artifact bridge at all in the browser-tab build", () => {
+      capacitorEventMocks.native = false;
+      const host = runner(null);
+
+      expect(host.sandboxArtifacts).toBeNull();
     });
   });
 });

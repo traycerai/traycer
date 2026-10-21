@@ -109,4 +109,44 @@ describe("provisional session snapshot - pinned to record major 1", () => {
     );
     expect(read?.user.providerType).toBe("GITHUB");
   });
+
+  it("11: a major-3 user persists as a major-1 payload without environments or actingAs, and reads back with the empty environments", async () => {
+    const host = makeHost();
+    const base = createAppleAuthenticatedUserFixture(undefined);
+    const major3User: AuthenticatedUser = {
+      ...base,
+      user: { ...base.user, id: "user-env" },
+      environments: {
+        personal: "env-personal",
+        teams: [{ teamId: "team-1", environmentId: "env-team-1" }],
+      },
+      actingAs: { environmentId: "env-team-1" },
+    };
+
+    await writeProvisionalSessionSnapshot(host.secureStorage, major3User);
+
+    const raw = host.secureStorageEntries.get(SNAPSHOT_KEY);
+    if (raw === undefined) {
+      throw new Error("expected a snapshot to have been written");
+    }
+    const envelope = JSON.parse(raw) as RawSnapshotEnvelope & {
+      readonly user: Record<string, unknown>;
+    };
+    expect(envelope.schemaVersion).toEqual({ major: 1, minor: 0 });
+    expect(Object.hasOwn(envelope.user, "environments")).toBe(false);
+    expect(Object.hasOwn(envelope.user, "actingAs")).toBe(false);
+    expect(
+      authenticatedUserResponseRecordV100.schema.safeParse(envelope.user)
+        .success,
+    ).toBe(true);
+
+    const read = await readProvisionalSessionSnapshot(
+      host.secureStorage,
+      "user-env",
+    );
+    expect(read?.user.id).toBe("user-env");
+    expect(read?.user.providerType).toBe("EMAIL");
+    expect(read?.environments).toEqual({ personal: null, teams: [] });
+    expect(read?.actingAs).toBeNull();
+  });
 });

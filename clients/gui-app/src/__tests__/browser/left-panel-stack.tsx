@@ -61,7 +61,6 @@ const SEEDED_RAIL: ReadonlyArray<RailEntry> = [
   { kind: "panel", id: "railArtifacts" },
   { kind: "panel", id: "railSharing" },
   { kind: "panel", id: "railGitDiff" },
-  { kind: "panel", id: "railFiles" },
   { kind: "panel", id: "railTerminals" },
   { kind: "panel", id: "railBrowsers" },
   { kind: "panel", id: "railPullRequests" },
@@ -153,6 +152,7 @@ const messengerFactory: MessengerFactory<HostRpcRegistry> = ({ registry }) =>
         storeFormats: null,
         install: null,
         processMemory: null,
+        crossHostMessaging: null,
       }),
     },
   });

@@ -346,7 +346,7 @@ nested-focus dimension still bans the raw store actions underneath.
 
 ## Sandboxed pages and MCP Apps
 
-Agent pages, wireframes and MCP Apps all render in ONE frame component,
+Wireframes and MCP Apps render in ONE frame component,
 `components/sandbox/sandbox-frame.tsx`. Don't frame agent or app HTML any
 other way.
 
@@ -360,9 +360,7 @@ allow-forms"`, never `allow-same-origin`, on the loader's own origin
   and it fetches nothing: WebKit's `*` does not admit iOS's `capacitor:`
   scheme from an opaque frame, so a script or font file there never loads.
   `lib/sandbox/__tests__/sandbox-index.test.ts` holds this.
-- **Policies.** A page's network policy (`open` / `https-only`) comes from
-  the host's `epic.readFile` answer and is passed through unchanged. An app's
-  CSP is built deny-by-default from normalized metadata (`lib/sandbox/mcp-csp.ts`);
+- **Policies.** An app's CSP is built deny-by-default from normalized metadata (`lib/sandbox/mcp-csp.ts`);
   its `allow` attribute only from the `SANDBOX_PERMISSIONS` enum.
 - **Bridge** (`lib/sandbox/bridge-host.ts`). Trust is `event.source ===
 frame.contentWindow` (the origin is always `"null"`), armed by the loader's
@@ -381,9 +379,8 @@ frame.contentWindow` (the origin is always `"null"`), armed by the loader's
   An Escape pressed inside the app reaches it too: while the host context
   says `fullscreen`, the bootstrap forwards bare Escape on the shortcut
   channel, and the bridge accepts it only from the proven page in that mode.
-- **Phones.** An inline app row has a fixed height; a page reserves the
-  stamp's measured height nearest its width. A coarse pointer gets the "…"
-  sheet (`components/chat/segments/touch-actions-sheet.tsx`) instead of the
+- **Phones.** An inline app row has a fixed height. A coarse pointer gets
+  the "…" sheet (`components/chat/segments/touch-actions-sheet.tsx`) instead of the
   hover bar.
 - **Native guards** are a second layer behind the parent `frame-src`, not a
   substitute: desktop `will-frame-navigate` and the scheme handler
@@ -391,8 +388,9 @@ frame.contentWindow` (the origin is always `"null"`), armed by the loader's
   the main frame on the app origin reaches the Capacitor bridge), Android the
   `@capacitor/android` patch that removes the `addJavascriptInterface`
   fallbacks.
-- **Bytes** come only through `lib/files/epic-file-rpc.ts` (the tab host's
-  `epic.*File` methods) or a signed https URL. Never a host loopback URL.
+- **Bytes** for captured apps come through `hooks/files/use-artifact-object-text-query.ts`
+  by SHA. Inline artifacts use `lib/sandbox/artifact-serving/`. Never read
+  captured content through a task file path or host loopback URL.
 
 ## Routing
 

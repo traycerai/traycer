@@ -7,7 +7,8 @@ export interface SettingsSegmentedOption<Value extends string> {
 }
 
 interface SettingsSegmentedControlProps<Value extends string> {
-  readonly value: Value;
+  /** `null` presses no segment: the current value could not be read. */
+  readonly value: Value | null;
   readonly options: ReadonlyArray<SettingsSegmentedOption<Value>>;
   readonly onChange: (next: Value) => void;
   /** Names the CHOICE, not the option - the pressed state names the option. */

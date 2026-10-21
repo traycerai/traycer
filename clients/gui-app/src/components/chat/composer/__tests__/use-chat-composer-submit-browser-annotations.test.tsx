@@ -22,6 +22,13 @@ import {
 } from "@/components/chat/queued-message-stages";
 import type { StreamConnectionStatus } from "@traycer-clients/shared/host-transport/i-stream-session";
 import { useComposerDraftStore } from "@/stores/composer/composer-draft-store";
+import type { BrowserAnnotationSource } from "@traycer/protocol/persistence/epic/schemas";
+
+/** Flat test overrides: the browser source's fields sit beside the record's own. */
+type BrowserRecordOverrides = Partial<
+  Omit<BrowserAnnotationSource, "kind"> &
+    Omit<BrowserAnnotationRecord, "source">
+>;
 
 const imageStoreMocks = vi.hoisted(() => ({
   sessionImageBytes: vi.fn<(hash: string) => Uint8Array | null>(() => null),
@@ -69,17 +76,26 @@ const IMAGE_FILE_NAME = `browser-annotation-${ANNOTATION_ID}.png`;
 const IMAGE_HASH = "hash-ann-7f3a";
 
 function annotationRecord(
-  overrides: Partial<BrowserAnnotationRecord> | null,
+  overrides: BrowserRecordOverrides | null,
 ): BrowserAnnotationRecord {
   const input = overrides ?? {};
-  return {
-    kind: "browser-annotation",
-    annotationId: input.annotationId ?? ANNOTATION_ID,
+  const source: BrowserAnnotationSource = {
+    kind: "browser",
     tabId: input.tabId ?? "t-1",
     sessionId: input.sessionId ?? "s-1",
     origin: input.origin ?? "https://example.com",
     pageUrl: input.pageUrl ?? "https://example.com/",
     pageTitle: input.pageTitle ?? "Example Domain",
+  };
+  return {
+    kind: "browser-annotation",
+    annotationId: input.annotationId ?? ANNOTATION_ID,
+    tabId: source.tabId,
+    sessionId: source.sessionId,
+    origin: source.origin,
+    pageUrl: source.pageUrl,
+    pageTitle: source.pageTitle,
+    source,
     capturedAt: input.capturedAt ?? 1_700_000_000_000,
     comment: input.comment ?? "Make this hero section pop more",
     counts: input.counts ?? { elements: 1, regions: 0, strokes: 0 },

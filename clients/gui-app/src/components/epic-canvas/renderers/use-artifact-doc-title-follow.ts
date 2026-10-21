@@ -4,7 +4,7 @@ import { useEpicRenameArtifact } from "@/hooks/epic/use-epic-node-mutations";
 import { settleDetachedEpicMutation } from "@/lib/artifacts/detached-epic-mutation";
 import {
   DEFAULT_EPIC_NODE_NAMES,
-  isEpicArtifactKind,
+  isMarkdownArtifactKind,
 } from "@/lib/artifacts/node-display";
 import { useOpenEpicHandle } from "@/providers/use-open-epic-handle";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
@@ -143,7 +143,7 @@ export function useArtifactDocTitleFollow(params: {
 
   useEffect(() => {
     if (editor === null || !editable) return;
-    if (!isEpicArtifactKind(nodeType)) return;
+    if (!isMarkdownArtifactKind(nodeType)) return;
     const defaultTitle = DEFAULT_EPIC_NODE_NAMES[nodeType];
     let lastDocTitle = leadingDocTitle(editor);
     let pendingPersistTitle: string | null = null;

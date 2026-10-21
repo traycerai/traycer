@@ -137,16 +137,27 @@ import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 // `title` / `message` / `details` exactly as before, which is the divider that
 // notice was until this key existed.
 //
-// 1.7 carries `tool_call.page` and `tool_call.mcpApp` (an agent page and an MCP
-// App, stamped on the call that produced them - a `chat.subscribe@1.23` field
-// that lands in a publication). A NEW minor rather than riding 1.6:
-// `host-v1.4.2` shipped chat-sync 1.6. Defaulted `null`, so an older record
-// parses unchanged, and a content block's `raw` re-emission (§2 of
-// `COMPATIBILITY.md`) carries both keys through an older reader's
-// re-publication. No
-// reader floor: an older reader renders the call as the plain tool row it
-// always did, which is what that row was before these keys existed.
-export const CHAT_SYNC_SCHEMA_VERSION = { major: 1, minor: 7 } as const;
+// 1.7 carries `tool_call.mcpApp`, stamped on the call that produced the app
+// (`chat.subscribe@1.23`). A new minor because host-v1.4.2 shipped 1.6.
+// Defaulted null for older records. A block's raw re-emission carries the key
+// through older readers, which render the plain tool row. No reader floor.
+// 1.7 also carries `tool_call.agentMessageDelivery` (where a cross-host send
+// stands - a `chat.subscribe@1.29` field that lands in a publication), on the
+// still-unreleased-minor rule above: the newest release, `host-v1.5.1`, ships
+// chat-sync 1.6. Defaulted `null`, so an older record parses unchanged, and a
+// content block's `raw` re-emission carries the key through an older reader's
+// re-publication. No reader floor: an older reader renders the send as the
+// plain sent card it always did.
+// 1.8 reopens artifact_operation.kind to a checked string. An unknown kind
+// must not reject a whole shard; readers from this minor render no block for
+// a kind they do not know. No emission gate protects readers predating 1.8.
+// 1.9 adds the nullable artifact stamp. Older readers keep the plain tool row.
+// 1.10 adds canvas annotation sources and nullable crops. Legacy epic/draft
+// records stay browser-only. This nested union is not covered by message-role
+// passthrough: publishers MUST stamp a conditional 1.10 minReaderVersion when
+// any message carries canvas evidence. Older readers refuse at the head before
+// fetching a shard they cannot decode (no browser identity may be fabricated).
+export const CHAT_SYNC_SCHEMA_VERSION = { major: 1, minor: 10 } as const;
 
 export type ChatSyncSchemaVersion = typeof CHAT_SYNC_SCHEMA_VERSION;
 

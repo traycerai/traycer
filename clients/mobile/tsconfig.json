@@ -21,6 +21,7 @@
       "@traycer-clients/mobile/*": ["./src/*"],
       "@traycer/protocol/utils/*": ["../../protocol/utils/*"],
       "@traycer/protocol/*": ["../../protocol/src/*"],
+      "@traycer/html-source": ["../../packages/html-source/src/index.ts"],
       "@/*": ["../gui-app/src/*"]
     }
   },

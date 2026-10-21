@@ -19,6 +19,7 @@ import {
   FilePlus,
   GitPullRequest,
   Lock,
+  Smartphone,
   SplitSquareHorizontal,
   SplitSquareVertical,
   Trash2,
@@ -30,7 +31,6 @@ import { runTileStripCommitHandoff } from "@/components/epic-canvas/dnd/tile-str
 import { useTileTabDisplacement } from "@/components/epic-canvas/dnd/use-tile-tab-displacement";
 import { mergeRefs } from "@/lib/merge-refs";
 import { cn } from "@/lib/utils";
-import { epicFileViewer } from "@/lib/files/viewer-registry";
 import { Button } from "@/components/ui/button";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { ContextMenu, ContextMenuTrigger } from "@/components/ui/context-menu";
@@ -480,7 +480,11 @@ interface TabItemProps {
   readonly canRenameTabs: boolean;
   readonly menuProps: Omit<
     TabStripContextMenuProps,
-    "canRename" | "onCopyFilePath" | "onEditTitle" | "onOpenUsage"
+    | "canRename"
+    | "onCopyFilePath"
+    | "onEditTitle"
+    | "onOpenUsage"
+    | "chatRouting"
   >;
   readonly domRef: (el: HTMLElement | null) => void;
 }
@@ -902,6 +906,11 @@ function TabItemBody(
         onCopyFilePath={absoluteFilePath === null ? null : handleCopyFilePath}
         onEditTitle={rename.startEditing}
         onOpenUsage={onOpenUsage}
+        chatRouting={
+          tab.type === "chat"
+            ? { epicId, chatId: tab.id, hostId: tab.hostId }
+            : null
+        }
       />
     </ContextMenu>
   );
@@ -1276,14 +1285,8 @@ function renderFixedTabIcon(
       return <Lock className="size-3.5 shrink-0 text-muted-foreground" />;
     case "deleted-artifacts":
       return <Trash2 className="size-3.5 shrink-0 text-muted-foreground" />;
-    case "epic-file": {
-      const viewer = epicFileViewer(tab.path);
-      return (
-        <viewer.Icon
-          className={cn("size-3.5 shrink-0", viewer.iconClassName)}
-        />
-      );
-    }
+    case "simulator":
+      return <Smartphone className="size-3.5 shrink-0 text-muted-foreground" />;
     default:
       return null;
   }

@@ -1283,6 +1283,7 @@ export function AssistantSegment({
           agentMessageSend={segment.agentMessageSend}
           managedCommand={segment.managedCommand}
           agentMessageReceipt={segment.agentMessageReceipt}
+          agentMessageDelivery={segment.agentMessageDelivery}
           isStreaming={segment.isStreaming || isBackgroundRunning}
           endState={isBackgroundRunning ? null : segment.endState}
           stopped={segment.stopped}
@@ -1292,7 +1293,7 @@ export function AssistantSegment({
           startedAt={segment.startedAt}
           durationMs={segment.durationMs}
           imageResults={segment.imageResults}
-          page={segment.page}
+          artifact={segment.artifact}
           mcpApp={segment.mcpApp}
           variant="card"
           headerFindUnitId={

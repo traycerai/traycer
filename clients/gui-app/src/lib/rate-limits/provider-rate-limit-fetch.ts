@@ -45,6 +45,10 @@ import {
  *   from the host's gauge, and a person who clicked Refresh - or just spent a
  *   reset credit - must not be handed the reading from before it.
  *
+ * A third trigger reads through `collectProviderRateLimits` below: unforced on
+ * the wire like the automatic ones, and past the freshness skip, for a caller
+ * whose cache entry is fresh and still worth nothing (a transient failure).
+ *
  * `force` never enters the cache key, so every trigger reads and writes the one
  * `(host, provider, profile)` entry the surfaces observe. Those observers stay
  * disabled for this lane (`providerRateLimitQueryOptions`): an observer's own
@@ -120,6 +124,46 @@ export function fetchProviderRateLimits(
   target: ProviderRateLimitFetchTarget,
   opts: { readonly force: boolean },
 ): Promise<void> {
+  return readProviderRateLimits(scope, target, {
+    force: opts.force,
+    respectRendererFreshness: true,
+  });
+}
+
+/**
+ * One unforced read that skips THIS RENDERER's freshness guard, for the one
+ * answer where that guard is the wrong default.
+ *
+ * The guard exists so an automatic trigger cannot re-ask for a reading this
+ * renderer only just wrote. A transient failure is a reading by that measure -
+ * it is as young as any other - and it says nothing at all about the account,
+ * so the surface that promises to read it again (the strip's `transient`
+ * segment) cannot get past the guard to the host without this.
+ *
+ * It stays `force: false` on the wire, which is the whole point: the HOST's
+ * read floors still decide whether anything is read, per provider and per
+ * reason, with no second opinion about them here. A `timeout` is past that
+ * lane's floor and really reads again; a Claude `usage_fetch_failed` is inside
+ * the long penalty floor its 429 window earned and is answered from the gauge.
+ */
+export function collectProviderRateLimits(
+  scope: ProviderRateLimitFetchScope | null,
+  target: ProviderRateLimitFetchTarget,
+): Promise<void> {
+  return readProviderRateLimits(scope, target, {
+    force: false,
+    respectRendererFreshness: false,
+  });
+}
+
+function readProviderRateLimits(
+  scope: ProviderRateLimitFetchScope | null,
+  target: ProviderRateLimitFetchTarget,
+  opts: {
+    readonly force: boolean;
+    readonly respectRendererFreshness: boolean;
+  },
+): Promise<void> {
   if (scope === null) return Promise.resolve();
   const { hostId, queryClient, request } = scope;
   const params: RateLimitUsageParams = {
@@ -148,7 +192,7 @@ export function fetchProviderRateLimits(
     );
   }
 
-  if (!opts.force) {
+  if (!opts.force && opts.respectRendererFreshness) {
     const updatedAt = queryClient.getQueryState(queryKey)?.dataUpdatedAt ?? 0;
     if (Date.now() - updatedAt < PROVIDER_RATE_LIMITS_STALE_TIME_MS) {
       return Promise.resolve();

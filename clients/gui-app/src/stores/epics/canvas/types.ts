@@ -11,7 +11,7 @@ import type { DesktopJsonValue } from "@/lib/windows/types";
 import type { GitStage } from "@traycer/protocol/host";
 import type { TuiHarnessId } from "@traycer/protocol/persistence/epic/schemas";
 import type { BrowserViewViewportPresetId } from "@traycer-clients/shared/platform/browser-view";
-import type { EpicFileVia } from "@traycer/protocol/host/epic/files";
+import type { SimulatorPlatform } from "@traycer/protocol/host/simulator/schemas";
 import type {
   EdgeDropPosition,
   SizesByGroupId,
@@ -22,12 +22,12 @@ import {
   TILE_KIND_BROWSER_SESSION,
   TILE_KIND_COMM_GRAPH,
   TILE_KIND_DELETED_ARTIFACTS,
-  TILE_KIND_EPIC_FILE,
   TILE_KIND_GIT_DIFF,
   TILE_KIND_MANAGED_COMMAND_OUTPUT,
   TILE_KIND_PR_DETAIL,
   TILE_KIND_PR_DIFF,
   TILE_KIND_PUBLISHED_CHAT,
+  TILE_KIND_SIMULATOR,
   TILE_KIND_SNAPSHOT_DIFF,
 } from "./tile-kinds";
 
@@ -38,7 +38,15 @@ import {
  */
 export type OpenableEpicNodeKind = Extract<
   EpicNodeKind,
-  "chat" | "terminal-agent" | "spec" | "ticket" | "story" | "review"
+  | "chat"
+  | "terminal-agent"
+  | "spec"
+  | "ticket"
+  | "story"
+  | "review"
+  | "html"
+  | "canvas"
+  | "file"
 >;
 
 export const isOpenableEpicNodeKind = makeLiteralGuard<OpenableEpicNodeKind>({
@@ -48,6 +56,9 @@ export const isOpenableEpicNodeKind = makeLiteralGuard<OpenableEpicNodeKind>({
   ticket: true,
   story: true,
   review: true,
+  html: true,
+  canvas: true,
+  file: true,
 });
 
 /**
@@ -68,6 +79,9 @@ export const isRecordBackedEpicNodeKind =
     ticket: true,
     story: true,
     review: true,
+    html: true,
+    canvas: true,
+    file: true,
   });
 
 /**
@@ -722,22 +736,22 @@ export interface PrDiffTileRef {
 }
 
 /**
- * One epic file at one sha (`TILE_KIND_EPIC_FILE`). A pointer, never a copy:
- * the bytes are read by sha through `epic.readFile` on the tab's host. `id` IS
- * the path, so opening the same file again focuses its tab. `via` is the
- * transcript row it was expanded from, which the host decides a page's network
- * policy from; `null` when it was opened from the Files panel.
+ * One simulator on one host (`TILE_KIND_SIMULATOR`). A pointer, never a copy:
+ * the pixels arrive over `simulator.stream` on the tab's host, and the
+ * inventory the tile reads comes from that host's `simulator.sessions`.
+ * `simulatorId` is the iOS udid or the Android serial - never "deviceId",
+ * which this repo reserves for `hostId`'s UI copy. `id` is derived from the
+ * host and the simulator, so opening the same simulator again focuses its
+ * tab. `name` is the simulator's display name as the host last reported it.
  */
-export interface EpicFileTileRef {
+export interface SimulatorTileRef {
   readonly id: string;
   readonly instanceId: string;
-  readonly type: typeof TILE_KIND_EPIC_FILE;
-  /** The page title, or the file name. */
+  readonly type: typeof TILE_KIND_SIMULATOR;
   readonly name: string;
   readonly hostId: string;
-  readonly path: string;
-  readonly sha256: string;
-  readonly via: EpicFileVia | null;
+  readonly simulatorId: string;
+  readonly platform: SimulatorPlatform;
 }
 
 export type EpicCanvasTileRef =
@@ -751,19 +765,19 @@ export type EpicCanvasTileRef =
   | PublishedChatTileRef
   | PrDetailTileRef
   | PrDiffTileRef
-  | EpicFileTileRef
+  | SimulatorTileRef
   | BlankTileRef;
+
+export function isSimulatorTileRef(
+  value: EpicCanvasTileRef,
+): value is SimulatorTileRef {
+  return value.type === TILE_KIND_SIMULATOR;
+}
 
 export function isPublishedChatTileRef(
   value: EpicCanvasTileRef,
 ): value is PublishedChatTileRef {
   return value.type === TILE_KIND_PUBLISHED_CHAT;
-}
-
-export function isEpicFileTileRef(
-  value: EpicCanvasTileRef,
-): value is EpicFileTileRef {
-  return value.type === TILE_KIND_EPIC_FILE;
 }
 
 export function isBlankTileRef(

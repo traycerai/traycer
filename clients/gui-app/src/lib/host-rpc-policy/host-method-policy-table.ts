@@ -15,6 +15,7 @@ import { chatPublicationDefinitiveReason } from "@/lib/chats/chat-publication-de
 import { DRAFT_BLOB_PUT_RESPONSE_TIMEOUT_MS } from "@/lib/drafts/draft-blob-transport-budget";
 import { CATALOG_LIST_RESPONSE_TIMEOUT_MS } from "@/lib/host-rpc-policy/catalog-list-response-timeout";
 import { PROVIDER_PACK_DISCOVERY_CHECK_TIMEOUT_MS } from "@/lib/host-rpc-policy/provider-pack-discovery-check-timeout";
+import { SIMULATOR_OPEN_RESPONSE_TIMEOUT_MS } from "@/lib/host-rpc-policy/simulator-open-response-timeout";
 import { RATE_LIMIT_USAGE_RESPONSE_TIMEOUT_MS } from "@/lib/rate-limits/rate-limit-timing";
 import { USAGE_SUMMARY_RESPONSE_TIMEOUT_MS } from "@/lib/usage-analytics/usage-summary-timing";
 
@@ -83,14 +84,13 @@ export function defineConditionPolicy<
   };
 }
 
-/** An epic file the host cannot serve yet; it usually lands on its own. */
-const EPIC_FILE_UNAVAILABLE_POLL_LANE: ConditionPollLane = {
-  id: "epic.readFile.unavailable",
-  initialDelayMs: 15 * SECOND_MS,
-  maxDelayMs: 15 * SECOND_MS,
+const ARTIFACT_OBJECT_DOWNLOADING_POLL_LANE: ConditionPollLane = {
+  id: "epic.readArtifactObject.downloading",
+  initialDelayMs: 500,
+  maxDelayMs: 2 * SECOND_MS,
 };
-const EPIC_FILE_ERROR_POLL_LANE: ConditionPollLane = {
-  id: "epic.readFile.error",
+const ARTIFACT_OBJECT_ERROR_POLL_LANE: ConditionPollLane = {
+  id: "epic.readArtifactObject.error",
   initialDelayMs: 15 * SECOND_MS,
   maxDelayMs: MINUTE_MS,
 };
@@ -263,6 +263,24 @@ export const SPEECH_MODEL_STALE_ERROR_POLL_LANE: ConditionPollLane = {
   ...SPEECH_MODEL_DOWNLOADING_POLL_LANE,
   id: "speech-model.stale-error",
 };
+/**
+ * The simulator tools are downloading. `simulator.status` is Settings' only
+ * source of that progress, so its cadence is the progress bar's frame rate,
+ * as with the speech model above.
+ */
+const SIMULATOR_PACK_INSTALLING_POLL_LANE: ConditionPollLane = {
+  id: "simulator-pack.installing",
+  initialDelayMs: 1_500,
+  maxDelayMs: 5 * SECOND_MS,
+};
+const SIMULATOR_PACK_INITIAL_ERROR_POLL_LANE: ConditionPollLane = {
+  ...SIMULATOR_PACK_INSTALLING_POLL_LANE,
+  id: "simulator-pack.initial-error",
+};
+const SIMULATOR_PACK_STALE_ERROR_POLL_LANE: ConditionPollLane = {
+  ...SIMULATOR_PACK_INSTALLING_POLL_LANE,
+  id: "simulator-pack.stale-error",
+};
 export const WORKTREE_SETUP_IN_FLIGHT_POLL_LANE: ConditionPollLane = {
   id: "worktree-binding.setup-in-flight",
   initialDelayMs: 2 * SECOND_MS,
@@ -393,8 +411,10 @@ export const HOST_METHOD_POLL_TABLE = {
   // clears a row or a site writes a cookie, and the group refetches on the
   // former. Polling it would keep a settings page waking the host store.
   "browser.savedLoginSites": { ...LATEST_SCHEDULING, poll: null },
-  // Opt-in polling (`poll: true`), for one caller: the Overview's drain
-  // affordance. Its `busySessionCount` / `busyBreakdown` is what "Apply now
+  // Opt-in polling (`poll: true`), for two callers sharing one cache entry:
+  // the side strip's host indicator, which shows a host whose cross-host
+  // messages are paused (`crossHostMessaging`, @1.8) as degraded, and the
+  // Overview's drain affordance. Its `busySessionCount` / `busyBreakdown` is what "Apply now
   // — ends 2 agents and 1 terminal" (or "ends N sessions" on a @1.1 host)
   // promises and then destroys, so the question is not whether the
   // cached value may be reused but whether it is still TRUE. Going stale does
@@ -1142,6 +1162,24 @@ export const HOST_METHOD_POLL_TABLE = {
   },
   "epic.artifactVersions.list": { ...LATEST_SCHEDULING, poll: null },
   "epic.artifactVersions.getBlob": { ...LATEST_SCHEDULING, poll: null },
+  // An on-demand object copy can outlast the host's read deadline.
+  "epic.editArtboard": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "epic.readArtifactObject": {
+    ...LATEST_SCHEDULING,
+    poll: defineConditionPolicy("epic.readArtifactObject", {
+      classify: (data) =>
+        data?.kind === "downloading"
+          ? ARTIFACT_OBJECT_DOWNLOADING_POLL_LANE
+          : false,
+      initialErrorLane: ARTIFACT_OBJECT_ERROR_POLL_LANE,
+      staleDataErrorLane: ARTIFACT_OBJECT_ERROR_POLL_LANE,
+      resetLaneIds: new Set(),
+    }),
+  },
   "epic.artifactVersions.restore": {
     mode: "fifo",
     joinResponseTimeoutMs: null,
@@ -1456,41 +1494,6 @@ export const HOST_METHOD_POLL_TABLE = {
   // their content hash and the image cache owns retry after a transient miss.
   // Polling this unary method would only re-fetch immutable bytes.
   "epic.fetchArtifactAttachment": { ...LATEST_SCHEDULING, poll: null },
-  // Epic files are content-addressed too: a read names its sha. Download
-  // progress rides the files lane's `localState`, never a poll; only an
-  // unavailable answer is asked again, since an upload landing on another
-  // host reaches no lane here.
-  "epic.readFile": {
-    ...LATEST_SCHEDULING,
-    poll: defineConditionPolicy("epic.readFile", {
-      // Three caches share this method: the text and blob reads keep a
-      // `kind` at the top, the signed-URL read keeps it under `result`.
-      classify: (data) => {
-        if (data === undefined) return false;
-        if (data.kind === "unavailable") return EPIC_FILE_UNAVAILABLE_POLL_LANE;
-        if (!("result" in data)) return false;
-        const result = data.result;
-        return typeof result === "object" &&
-          result !== null &&
-          "kind" in result &&
-          result.kind === "unavailable"
-          ? EPIC_FILE_UNAVAILABLE_POLL_LANE
-          : false;
-      },
-      initialErrorLane: EPIC_FILE_ERROR_POLL_LANE,
-      staleDataErrorLane: EPIC_FILE_ERROR_POLL_LANE,
-      resetLaneIds: new Set(),
-    }),
-  },
-  "epic.fetchFile": { ...LATEST_SCHEDULING, poll: null },
-  // User actions: each one runs, in order.
-  "epic.cancelFetchFile": {
-    mode: "fifo",
-    joinResponseTimeoutMs: null,
-    poll: null,
-  },
-  "epic.deleteFile": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
-  "epic.restoreFile": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
   // An MCP App's reads answer from the harness's live server, on demand; the
   // app asks again when it wants a fresher answer, so nothing polls.
   "chat.mcpApp.describeTool": { ...LATEST_SCHEDULING, poll: null },
@@ -2463,6 +2466,54 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
+  "config.simulator.get": { ...LATEST_SCHEDULING, poll: null },
+  "config.simulator.set": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // The simulator verbs: reads coalesce to the latest ask, every mutation is
+  // ordered. `open` waits on a boot, so its row below carries a longer
+  // response budget.
+  "simulator.list": { ...LATEST_SCHEDULING, poll: null },
+  // Settings' machine-wide read; polled only while the tools download.
+  "simulator.status": {
+    ...LATEST_SCHEDULING,
+    poll: defineConditionPolicy("simulator.status", {
+      classify: (data) =>
+        data?.packState.kind === "installing"
+          ? SIMULATOR_PACK_INSTALLING_POLL_LANE
+          : false,
+      initialErrorLane: SIMULATOR_PACK_INITIAL_ERROR_POLL_LANE,
+      staleDataErrorLane: SIMULATOR_PACK_STALE_ERROR_POLL_LANE,
+      resetLaneIds: NO_RESET_LANES,
+    }),
+  },
+  // Settings' Remove: a mutation on the host's store, ordered like the rest.
+  "simulator.removeTools": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // The budget is a PERMISSION (see `providers.refreshPackDiscovery`): a cold
+  // open answers after the boot, which the host bounds at three minutes, and
+  // only `useSimulatorOpenMutation` passing this same constant makes it apply.
+  "simulator.open": {
+    mode: "fifo",
+    joinResponseTimeoutMs: SIMULATOR_OPEN_RESPONSE_TIMEOUT_MS,
+    poll: null,
+  },
+  "simulator.close": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
+  "simulator.shutdown": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "simulator.screenshot": { ...LATEST_SCHEDULING, poll: null },
+  // The settings drawer: a read coalesces to the latest ask; actions are
+  // ordered so two toggles land in the order the person made them.
+  "simulator.detail": { ...LATEST_SCHEDULING, poll: null },
+  "simulator.action": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
   "config.catalog.get": { ...LATEST_SCHEDULING, poll: null },
   "config.catalog.set": {
     mode: "fifo",

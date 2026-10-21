@@ -3,6 +3,7 @@ import os from "node:os";
 import babel from "@rolldown/plugin-babel";
 import tailwindcss from "@tailwindcss/vite";
 import react, { reactCompilerPreset } from "@vitejs/plugin-react";
+import { transformWithOxc } from "vite";
 import { defineConfig } from "vitest/config";
 
 const availableParallelism =
@@ -43,6 +44,10 @@ const MAX_TEST_WORKERS = Math.min(
 // were invisible for the same reason: the suite ran them uncompiled while the
 // desktop renderer compiles the whole tree, its dev server included (where
 // the freeze was seen).
+// `simulator-tile` keeps per-instance memory in render-time state writes
+// (whether its own `simulator.open` was answered, whether it has been live)
+// and reads a mutation's per-call callbacks; both are shapes the compiler
+// rewrites, so its suite runs compiled too.
 // `use-environment-members-query` read the query cache at render time to
 // walk its page chain; the compiler memoized that walk on the environment and
 // host alone, so a page that answered re-rendered the hook and got back the
@@ -52,8 +57,65 @@ const MAX_TEST_WORKERS = Math.min(
 // verdict and then memoized `chatServingHostId(..., witness, ...)` on the
 // witness's stable identity, so a frame that moved a chat from at rest to
 // live left the compiled hook on its first answer.
+// The rest are one class, swept together: a render read of something that
+// changes inside an object whose identity does not - a module registry entry,
+// a query cache, a host client, a requester, a kept-alive engine - which the
+// compiled renderer memoizes on that identity and answers from forever after.
+// Each file's suite has a case that is red on the shape it used to have:
+// - `use-git-list-changed-files-subscription`: a git error or a closed stream
+//   never left pending (the shared entry's last frame).
+// - `use-host-stream-client-for`: a sign-in after mount never built the
+//   host's stream client (the context `setRequestContext` swaps inside the one
+//   spine client); `use-host-client-for` reads it through the same subscribed
+//   hook and builds its client on the sign-in itself;
+//   `epic-tab-existence-reconciler`: a lease bound after mount never probed
+//   the hosts for local copies.
+// - `use-providers-login-ownership`: a host whose directory row landed after
+//   mount never got login ownership (a requester pinned by id answers `null`
+//   until its row lands).
+// - `worktrees-enrichment`, `use-worktree-task-titles`, `teardown-agent-names`,
+//   `use-diff-highlight-ready`: a `void tick;` trigger the compiler drops, so
+//   a row stayed on "Checking", a restored row stayed locked, a title or a
+//   rename never showed, a theme switch never re-primed highlighting.
+// - `composer.source`: the palette kept the model the composer had left.
+// - `top-level-tab-host`: a tab locked mid-drag kept its drop ring.
+// - `use-comm-graph-jump` with `comm-graph-agent-detail-surface`: a row kept
+//   its open-agent links after the host went offline.
+// - `terminal-tile`, `landing-terminal-tile`, `use-terminal-tile-bootstrap`,
+//   `use-host-terminal-bootstrap`: a reopened terminal opened at the grid its
+//   engine had before the measure wait ended.
+// - `chat-routing-menu`: a tab menu opened before its chat's session kept the
+//   routing setting out for as long as it stayed up.
+// - `tab-appearance-menu`: a tab whose own task lookup was pending never took
+//   the strip's batch from the cache, so Labels and grouping stayed hidden.
+// `workspace-file-tile`, `split-slot-chooser`, `resource-monitor-popover`,
+// `sidebar-artwork` and `dock-modes` read the same kind of source and are
+// correct as they stand; their cases hold that once they run compiled.
 const REACT_COMPILER_REGRESSION_FILES =
-  /[/\\](?:composer-prompt-editor|use-workspace-file-list-subscription|shared-stream-subscription|use-header-tabs|use-pr-(?:list|detail)-subscription|auth-brand-splash|auth-landing-page|use-auth-splash-cover|relative-time|routing-card|use-environment-members-query|chat-serving-witness|sandbox-tile-state-frame|use-chat-search-coverage)\.(?:ts|tsx)$/;
+  /[/\\](?:composer-prompt-editor|use-workspace-file-list-subscription|shared-stream-subscription|use-header-tabs|use-pr-(?:list|detail)-subscription|auth-brand-splash|auth-landing-page|use-auth-splash-cover|relative-time|routing-card|use-environment-members-query|use-git-list-changed-files-subscription|workspace-file-tile|worktrees-enrichment|use-worktree-task-titles|teardown-agent-names|resource-monitor-popover|use-comm-graph-jump|comm-graph-agent-detail-surface|top-level-tab-host|split-slot-chooser|landing-terminal-tile|use-terminal-tile-bootstrap|use-host-terminal-bootstrap|terminal-tile|use-diff-highlight-ready|composer\.source|sidebar-artwork|dock-modes|use-host-client-for|use-host-stream-client-for|use-providers-login-ownership|epic-tab-existence-reconciler|chat-routing-menu|tab-appearance-menu|react-compiler-harness-probe|chat-serving-witness|sandbox-tile-state-frame|use-chat-search-coverage)\.(?:ts|tsx)$/;
+
+// The compiler runs after the JSX transform, and the suite's transform is the
+// development one: `jsxDEV(..., this)` passes `this`, the compiler bails on
+// every function that returns JSX, and only hooks were ever compiled here - a
+// component on the list above ran exactly as uncompiled code, green whether or
+// not the bug shipped. The packaged renderer uses the production transform and
+// compiles components too, so the listed files get that transform before
+// anything else touches them; the rest of the suite keeps development JSX.
+// `react-compiler-harness.test.tsx` fails if a listed component stops compiling.
+const shippedJsxForCompilerRegressionFiles = {
+  name: "traycer:shipped-jsx-for-compiler-regression-files",
+  enforce: "pre" as const,
+  async transform(code: string, id: string) {
+    const file = id.split("?")[0];
+    if (!file.endsWith(".tsx") || !REACT_COMPILER_REGRESSION_FILES.test(file)) {
+      return null;
+    }
+    const result = await transformWithOxc(code, file, {
+      jsx: { runtime: "automatic", development: false },
+    });
+    return { code: result.code, map: result.map };
+  },
+};
 
 export default defineConfig({
   // Run the affected composer boundary through the packaged desktop
@@ -62,6 +124,7 @@ export default defineConfig({
   // React imperative-handle facade during an ordinary editor render. The filter
   // keeps unrelated GUI tests on their existing fast transform path.
   plugins: [
+    shippedJsxForCompilerRegressionFiles,
     react(),
     // This config is ALSO what the browser regressions serve their fixtures
     // from - every driver in `scripts/*-browser.mjs` spawns vite with
@@ -116,6 +179,18 @@ export default defineConfig({
           "protocol",
           "src",
           "$1",
+        ),
+      },
+      {
+        find: /^@traycer\/html-source$/,
+        replacement: path.resolve(
+          __dirname,
+          "..",
+          "..",
+          "packages",
+          "html-source",
+          "src",
+          "index.ts",
         ),
       },
     ],

@@ -1,4 +1,8 @@
-import type { Query, QueryClient } from "@tanstack/react-query";
+import type {
+  Query,
+  QueryCacheNotifyEvent,
+  QueryClient,
+} from "@tanstack/react-query";
 import type {
   GetTaskContextsResponse,
   ListTaskLight,
@@ -145,6 +149,31 @@ export function readEpicTitlesFromCloudTaskCaches(
     }
   }
   return titles;
+}
+
+/**
+ * Calls `onChange` for a cache event on a task list
+ * `readEpicTitlesFromCloudTaskCaches` reads for `scope`, and for no other: a
+ * render reading that scan through `useSyncExternalStore` re-runs it only when
+ * one of its own sources moved, not on every query in the app.
+ */
+export function subscribeToCloudTaskListCaches(
+  queryClient: QueryClient,
+  scope: CloudEpicTasksCacheScope,
+  onChange: () => void,
+): () => void {
+  return queryClient.getQueryCache().subscribe((event) => {
+    if (!movesQueryState(event)) return;
+    const queryKey: unknown = event.query.queryKey;
+    if (!Array.isArray(queryKey)) return;
+    if (
+      cloudEpicTasksQueryKeyMatchesScope(queryKey, scope) ||
+      epicPinReadingQueryKeyMatchesScope(queryKey, scope) ||
+      currentTasksPinTailQueryKeyMatchesScope(queryKey, scope)
+    ) {
+      onChange();
+    }
+  });
 }
 
 /**
@@ -302,6 +331,36 @@ export function findCachedTaskContext(
     };
   }
   return null;
+}
+
+/**
+ * Calls `onChange` for a cache event on an `epic.getTaskContexts` batch
+ * `findCachedTaskContext` reads for `scope`, and for no other.
+ */
+export function subscribeToTaskContextsCaches(
+  queryClient: QueryClient,
+  scope: CloudEpicTasksCacheScope,
+  onChange: () => void,
+): () => void {
+  return queryClient.getQueryCache().subscribe((event) => {
+    if (!movesQueryState(event)) return;
+    const queryKey: unknown = event.query.queryKey;
+    if (!Array.isArray(queryKey)) return;
+    if (epicTaskContextsQueryKeyMatchesScope(queryKey, scope)) onChange();
+  });
+}
+
+/**
+ * A query added, removed or updated. Observer events (an observer mounting,
+ * its options or result moving) fire on ordinary renders and never change
+ * what a cache scan reads.
+ */
+function movesQueryState(event: QueryCacheNotifyEvent): boolean {
+  return (
+    event.type === "added" ||
+    event.type === "removed" ||
+    event.type === "updated"
+  );
 }
 
 export function setEpicPinnedInCloudTaskCaches(

@@ -4,7 +4,8 @@
   "private": true,
   "workspaces": [
     "protocol",
-    "clients/*"
+    "clients/*",
+    "packages/*"
   ],
   "scripts": {
     "dev-desktop": "bun scripts/dev-desktop.js",

@@ -20,6 +20,7 @@ import {
   dataRootPlatformOf,
   type DataRootPlatform,
 } from "@traycer/protocol/config/data-root";
+import { readRegularFileBytesNoFollow } from "@traycer/protocol/config/host-update-attempt-fs";
 import { isErrnoException } from "../../runner/errors";
 import { runCommand, type RunResult } from "../../service/process-runner";
 import {
@@ -483,12 +484,14 @@ async function contentDigest(path: string): Promise<string | null> {
   try {
     const info = await lstat(path);
     if (info.isSymbolicLink()) return `link:${sha256Hex(await readlink(path))}`;
-    if (info.isFile()) return `file:${sha256Hex(await readFile(path))}`;
-    return "other";
+    if (!info.isFile()) return "other";
   } catch (cause) {
     if (isErrnoException(cause) && cause.code === "ENOENT") return null;
     throw cause;
   }
+  const read = await readRegularFileBytesNoFollow(path);
+  if (read.kind === "absent") return null;
+  return read.kind === "bytes" ? `file:${sha256Hex(read.bytes)}` : "other";
 }
 
 async function snapshotWorktree(
@@ -693,10 +696,14 @@ async function classifyWorktree(
     }
     return { kind: "none" };
   }
-  if (!info.isFile()) {
+  // Read through a descriptor that refuses a link: the `.git` checked above
+  // can have been replaced since.
+  const dotGitRead = await readRegularFileBytesNoFollow(dotGit);
+  if (dotGitRead.kind !== "bytes") {
     return blocked("git-link-unsupported", "the worktree's .git is not a file");
   }
-  const target = parseGitdirFile(await readFile(dotGit));
+  const dotGitBytes = dotGitRead.bytes;
+  const target = parseGitdirFile(dotGitBytes);
   if (target === null) {
     return blocked(
       "git-link-unsupported",
@@ -769,7 +776,7 @@ async function classifyWorktree(
   // Git 2.48+ rewrites the worktree's `.git` on repair, as the real path of
   // the admin entry. Only a link already in that form stays byte-identical.
   const canonicalDotGit = `gitdir: ${gitPath(await realpath(adminDir))}\n`;
-  if (!(await readFile(dotGit)).equals(Buffer.from(canonicalDotGit, "utf8"))) {
+  if (!dotGitBytes.equals(Buffer.from(canonicalDotGit, "utf8"))) {
     return blocked(
       "git-link-not-canonical",
       "the worktree's .git link is not in the form git worktree repair writes; run `git worktree repair` in the source worktree first",

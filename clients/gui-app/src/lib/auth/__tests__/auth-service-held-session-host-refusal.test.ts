@@ -1,6 +1,23 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import type { OpenFrameBearerSource } from "@traycer-clients/shared/auth/bearer-source";
+import { WsStreamClient } from "@traycer-clients/shared/host-transport/ws-stream-client";
+import type { StreamConnectionStatus } from "@traycer-clients/shared/host-transport/i-stream-session";
+import type {
+  WebSocketCloseEvent,
+  WebSocketErrorEvent,
+  WebSocketOpenEvent,
+} from "@traycer-clients/shared/host-transport/ws-factory";
+import type {
+  IStreamWebSocketFactory,
+  StreamWebSocketLike,
+  StreamWebSocketMessageEvent,
+} from "@traycer-clients/shared/host-transport/ws-stream-factory";
+import { NO_TRANSPORT_EVIDENCE } from "@traycer-clients/shared/host-selection/transport-evidence";
+import { TEST_CLIENT_IDENTITY } from "@traycer-clients/shared/test-fixtures/client-identity";
+import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
+import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
+import { hostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import {
   AUTH_FETCH_MAX_ATTEMPTS,
   authRetryDelayMs,
@@ -31,10 +48,11 @@ import { useAuthStore } from "@/stores/auth/auth-store";
  * Before the fix each of those asks re-ran `/api/v3/user` AND re-spent the
  * refresh token authn had already refused, then re-raised "session expired",
  * so the toast came back on every host request (a refresh roughly every three
- * seconds). Now the latch answers `rejected` without asking authn anything -
- * while the session is `unverified` AND while a sign-in attempt is replacing
- * it (`signing-in`; `signed-in` holds a verdict and is never answered from the
- * latch).
+ * seconds). Now the latch answers `rejected` without asking authn anything
+ * while the session is `unverified` (`signed-in` holds a verdict and is never
+ * answered from the latch). While a sign-in attempt is replacing the session
+ * (`signing-in`) the check stands down as `superseded` instead, asking authn
+ * nothing either: the attempt, not the refused session, decides what comes next.
  *
  * The shell is sent to the sign-in page (`hostRefusedHeldBearer`) only when
  * the held bearer has actually EXPIRED. A host also answers UNAUTHORIZED to
@@ -71,6 +89,29 @@ import { useAuthStore } from "@/stores/auth/auth-store";
 // `auth-validation.ts`); every fixture in this file answers this one.
 const VALIDATION_URL = "http://localhost:5005/api/v3/user/negotiated";
 const REFRESH_URL = "http://localhost:5005/api/v3/auth/refresh";
+
+/**
+ * A scriptable `/stream` socket: the test fires the host's side (open, then a
+ * fatal frame) and the real `WsStreamClient` reacts to it.
+ */
+class ScriptedStreamSocket implements StreamWebSocketLike {
+  onopen: ((event: WebSocketOpenEvent) => void) | null = null;
+  onmessage: ((event: StreamWebSocketMessageEvent) => void) | null = null;
+  onerror: ((event: WebSocketErrorEvent) => void) | null = null;
+  onclose: ((event: WebSocketCloseEvent) => void) | null = null;
+
+  send(): void {}
+
+  close(): void {}
+
+  fireOpen(): void {
+    this.onopen?.({ type: "open" });
+  }
+
+  fireText(data: unknown): void {
+    this.onmessage?.({ type: "text", data: JSON.stringify(data) });
+  }
+}
 
 /** How many host refusals the "it used to come back every time" tests replay. */
 const HOST_REFUSALS = 10;
@@ -789,7 +830,7 @@ describe("AuthService - a host refusing the bearer of a session authn refused", 
     ).toEqual({ admitted: false, refusal: "unverified-host-refused" });
   });
 
-  it("answers rejected without asking authn while a sign-in attempt is replacing the refused session, and keeps the attempt's status", async () => {
+  it("stands down without asking authn while a sign-in attempt is replacing the refused session, and keeps the attempt's status", async () => {
     useFakeClock();
     const { service, expiry } = await startRefusedSession(authn, EXPIRED_TOKEN);
     const validationAtVerdict = authn.validationCalls;
@@ -812,11 +853,88 @@ describe("AuthService - a host refusing the bearer of a session authn refused", 
     expect(authn.validationCalls).toBe(validationAtVerdict);
     expect(authn.refreshCalls).toBe(refreshAtVerdict);
     expect(expiry.count()).toBe(1);
-    expect(outcomes).toEqual(repeated(5, "rejected"));
+    // The attempt's stand-down answers before the latch is consulted, so the
+    // refused session's verdict is not repeated while the attempt replaces it.
+    expect(outcomes).toEqual(repeated(5, "superseded"));
     expect(useAuthStore.getState().status).toBe("signing-in");
     // The refusal is not recorded against a session that is no longer the one
     // being held: `signing-in` is not `unverified`.
     expect(useAuthStore.getState().hostRefusedHeldBearer).toBe(false);
+  });
+
+  it("re-dials a stream the host refuses under a sign-in attempt instead of closing it for good", async () => {
+    // The attempt's stand-down is consulted before the terminal latch. Were
+    // the latch to answer `rejected` here, the stream (which cannot admit the
+    // local plane while `signing-in`) would read it as a lost session and go
+    // terminal "closed" while the attempt is still deciding the session.
+    // `superseded` is a network error to the stream, so it re-dials.
+    useFakeClock();
+    // Not yet expired, so the flag read at the end is a real answer: it starts
+    // false and the refusal must not set it.
+    const { service } = await startRefusedSession(authn, SOON_EXPIRING_TOKEN);
+    expect(useAuthStore.getState().hostRefusedHeldBearer).toBe(false);
+    const validationAtVerdict = authn.validationCalls;
+    const refreshAtVerdict = authn.refreshCalls;
+
+    await service.signIn();
+    expect(useAuthStore.getState().status).toBe("signing-in");
+
+    const sockets: ScriptedStreamSocket[] = [];
+    const factory: IStreamWebSocketFactory = {
+      create: () => {
+        const socket = new ScriptedStreamSocket();
+        sockets.push(socket);
+        return socket;
+      },
+    };
+    const requestContext = createRequestContextFixture({
+      origin: "renderer",
+      bearerToken: SOON_EXPIRING_TOKEN,
+    });
+    const client = new WsStreamClient({
+      clientIdentity: TEST_CLIENT_IDENTITY,
+      registry: hostStreamRpcRegistry,
+      endpoint: () => mockLocalHostEntry,
+      hostId: mockLocalHostEntry.hostId,
+      bearer: () => requestContext.credentials,
+      auth: createStreamAuthRevalidator(service),
+      clock: null,
+      hostCredentialMint: null,
+      onHostCredentialState: null,
+      evidence: NO_TRANSPORT_EVIDENCE,
+      webSocketFactory: factory,
+      dialTimeoutMs: 1_000,
+      openAckTimeoutMs: 1_000,
+      pingIntervalMs: 25_000,
+      pongTimeoutMs: 50_000,
+      initialBackoffMs: 5,
+      maxBackoffMs: 1_000,
+    });
+    const statuses: StreamConnectionStatus[] = [];
+    const session = client.subscribe("epic.subscribe", { epicId: "e1" });
+    session.onStatusChange((streamStatus) => statuses.push(streamStatus));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(sockets).toHaveLength(1);
+
+    sockets[0].fireOpen();
+    sockets[0].fireText({
+      kind: "fatalError",
+      details: {
+        code: "UNAUTHORIZED",
+        reason: "bearer expired",
+        incompatibleMethods: null,
+        upgradeGuidance: null,
+      },
+    });
+    await vi.advanceTimersByTimeAsync(50);
+
+    expect(sockets).toHaveLength(2);
+    expect(statuses).not.toContain("closed");
+    expect(authn.validationCalls).toBe(validationAtVerdict);
+    expect(authn.refreshCalls).toBe(refreshAtVerdict);
+    expect(useAuthStore.getState().status).toBe("signing-in");
+    expect(useAuthStore.getState().hostRefusedHeldBearer).toBe(false);
+    session.close();
   });
 
   it("still asks authn, and records no host refusal, when the held session was only UNREACHABLE", async () => {

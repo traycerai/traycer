@@ -34,6 +34,11 @@ import {
   chatSubscribeV125,
   chatSubscribeV126,
   chatSubscribeV127,
+  chatSubscribeV128,
+  chatSubscribeV129,
+  chatSubscribeV130,
+  chatSubscribeV131,
+  chatSubscribeV132,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 
 function canonical(value: unknown): unknown {
@@ -174,15 +179,11 @@ function schemaDigest(schema: z.ZodType, io: "input" | "output"): string {
 // 1.22 is main's released line, frozen byte for byte: it reopens exactly those
 // heard-from leaves to a string (`open-harness-wire.ts`) and moves nothing
 // else, so the 1.0-1.21 digests above did not change when it opened. It does
-// NOT carry the tool-call `page` / `mcpApp` stamps.
+// NOT carry the tool-call MCP App stamp.
 //
-// 1.23 is the live line: the open-harness 1.22 plus the tool-call `page` /
-// `mcpApp` stamps (agent pages and MCP Apps). The stamps first reached
-// 1.13-1.22 by reference, through the live tool-call block and
-// `tool_call.completed` event; the hand-frozen `toolCallBlockSchemaPrePage` /
-// `toolCallCompletedEventSchemaPrePage` leaves, swapped into every historical
-// union, are what keep them off. Every digest below 1.23 is identical with
-// and without the stamps.
+// 1.23 adds the MCP App stamp. The PreMcpApp leaves keep it off older lines.
+// Entries 1.23–1.27 were regenerated when the never-released page stamp was
+// removed. The released 1.0–1.22 digests remain unchanged.
 const SERVER_FRAME_DIGESTS = {
   0: [
     "ca66e3d49016048e7390b4c9904f6978f7c31d9098dd2ce4369f51239d0f411e",
@@ -277,36 +278,78 @@ const SERVER_FRAME_DIGESTS = {
     "216acc0693d0dd96ad6ec383481ae964fdcd8392a20db3d3fcc005c48cebc5a6",
   ],
   23: [
-    "f5b56223b15cc20745f64c6fc12c12139770f769afd3ecb236db0a60b7577ff7",
-    "85f17a63cb8ad0aead1ae6d97ccbfb1b33d0b423c86415286cdaa876c3be52ff",
+    "6ee6e54ef947c26b327500a5dce73301225bb8d381e42b4261f6498e202433d4",
+    "72ad18dcc0f98875d15e6b70a028363b8000a86525abbddd84bf008da38180b4",
   ],
   // Captured from the live schema the moment before 1.25 opened above it: the
   // cron next-run line, with no bot-conversation request on a user row and no
   // conversation-message queue item.
   24: [
-    "76fd9f55395a8589fb22b18260e5c7e89a9978b2cdd27733c13d8403a4c071ff",
-    "dfd3fd0c3e80e407fa2a94754897c7a4108fd4d671c008d08ec9a44a3d860101",
+    "6bd517cccc89b55d199b1b04684bcb9a4dfb0976df5713f526c95057884016c4",
+    "d69be9a219041974792db9b829e15a065cd14aa6277094ded57144e909a532ca",
   ],
   // Captured from the live schema the moment before 1.26 opened above it: the
   // bot-conversation line, with no task-checkin queue item.
   25: [
-    "45696e34f99e3395c6ee65f36228a9afebe3cd42e2f6de0189e85d5cadc33a01",
-    "21d55b25706c2fc3ba1ee5dffe631e690632c8092fd8e35f9c6ee55b9e0d7f56",
+    "5b1da18bef40045085a300cc5fea108d905a5050455e0036bfa18d94288cef91",
+    "09a238299c28d95fefb692be421117e90931feab9747dd0abd2921eba9da3f1f",
   ],
   // Captured from the live schema the moment before 1.27 opened above it: the
   // task-checkin line, with no task-overdue queue item.
   26: [
-    "8f1526bc99e13c0e4f311bddb9dd60d4fa834717c8ae7723c199b91d547d8b38",
-    "e19f9e26679c833d184d861b3c1b271b321e411b5888f91fd13f09384fb2b14e",
+    "0f33bca3454931d146798b478578f8227e99789903397d204e955782cc6452e3",
+    "596e2ca8c513d6567ce12eac29e4906f82dcd13fd67d5d3813ebfa5f72d42fb7",
   ],
   // Captured from the live schema the moment before 1.28 opened above it: the
-  // task-overdue line, with no `signInParked` on a queued prompt.
+  // task-overdue line, with no `signInParked` on a queued prompt and operation
+  // blocks and events limited to the four markdown artifact kinds. Main pinned
+  // its own 1.27 with the page stamp this tree removed; the value here is the
+  // one this tree pinned before main's 1.28 landed, and the merged tree's
+  // frozen 1.27 reproduces it.
   27: [
-    "4e9bcb56f5427b4fe47487bcd73a7a3bf5a0eb903882a3e9a09d35b7291d49f7",
-    "30c937db5a5850bec9474b167d4bd7667e4fefb6f97559d3999dcbf03fec41e6",
+    "d6df6f1912889b4155848fb69ae29b6ee1548a2438fb37b58a9429a08fb32613",
+    "3f45918318363d45a7f488fbb88a37c13620a23b062e61b1df97fb9d3dd68c33",
+  ],
+  // The sign-in park line (main's 1.28): a queued prompt may carry
+  // `signInParked`; operation blocks and events keep the four markdown kinds.
+  // Captured from the merged tree when the artifact lines re-minted above it.
+  // With `signInParked` removed from the rendered schema, 1.28 reproduces
+  // 1.27 above, and 1.29–1.31 reproduce the values this tree pinned for them
+  // as 1.28–1.30, so the re-mint moved nothing else.
+  28: [
+    "8e6e17abe829c1d8f1a21cf23694c40f2c5d7542071674c00fdc6bd989630829",
+    "9b583c76f193f4e2aee4d64910f1d34f1037e3e8b0c3c10f79d9f75fdaeaddc1",
+  ],
+  // The delivery line (main's 1.29): a tool block may carry
+  // `agentMessageDelivery`; operation blocks and events keep the four markdown
+  // kinds, tool calls carry no `artifact` stamp. Captured from the merged tree
+  // when the artifact lines re-minted above it.
+  29: [
+    "daf34109602406fd0f52eda2937016e0083215a45f7dce98c712f760c6dcc700",
+    "a3bdf0cafacf2e0b7e6a16546da69af1d43c6e20deed479306cf1848aa9f6a3d",
+  ],
+  // The html/canvas/file artifact-kind line, with tool calls carrying no
+  // `artifact` stamp. Re-minted above main's 1.29.
+  30: [
+    "e8490a6ba909e849706660afd325b80c354d0e51c7dd9596225a2a04a3e4dddb",
+    "4f25b66a9c1663de211ddf8ff1c42741ee3cac2e3886f611b2b67f0e9b969f65",
+  ],
+  // The artifact-stamp line, with no canvas annotations. Re-minted above
+  // main's 1.29.
+  31: [
+    "690edf7e574cb38eabda1728abe4dbcac42012c704c37200222713bd1c141749",
+    "a7e354e6b628f8cf3f8a056f47d300ebd1d7979b7b06b5d2920f034834478876",
+  ],
+  // The canvas-annotation line, before 1.33 widened checkpoint artifact tags.
+  // Re-minted above main's 1.29.
+  32: [
+    "68463b44555e3eabf9c8919c4b1cfdf5a90f1a247096332bcfb1bc812e13c05e",
+    "89d1db7b9327db3798f374e81ec6bda81124baf32d1fa48d4dfd60a406d2f0f1",
   ],
 } as const;
 
+// 1.23–1.32 carry `routing` on the chat record (`agent.configure@7.1`); every
+// released line below 1.23 ships the record without it and is unchanged.
 const contracts = [
   chatSubscribeV10,
   chatSubscribeV11,
@@ -336,10 +379,15 @@ const contracts = [
   chatSubscribeV125,
   chatSubscribeV126,
   chatSubscribeV127,
+  chatSubscribeV128,
+  chatSubscribeV129,
+  chatSubscribeV130,
+  chatSubscribeV131,
+  chatSubscribeV132,
 ] as const;
 
 describe("chat.subscribe placement freeze", () => {
-  it("keeps every 1.0–1.27 server schema input/output surface byte-stable", () => {
+  it("keeps every 1.0–1.32 server schema input/output surface byte-stable", () => {
     for (const contract of contracts) {
       const minor = contract.schemaVersion.minor;
       expect([

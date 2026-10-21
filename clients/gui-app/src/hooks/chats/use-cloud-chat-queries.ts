@@ -46,6 +46,7 @@ import {
   authorizesCloudCapability,
   useAuthStore,
 } from "@/stores/auth/auth-store";
+import { useRequesterHostId } from "@/hooks/host/use-requester-host-id";
 
 /**
  * The cloud-chat read hooks.
@@ -380,7 +381,7 @@ export function useCloudChatRead(
   const viewerUserId = useCloudChatViewerId();
   const cloudAuthorized = useCloudChatHasCloudAuthorization();
   const { client, identity } = args;
-  const hostId = client?.getActiveHostId() ?? null;
+  const hostId = useRequesterHostId(client);
 
   // A named function rather than an inline arrow, matching `useHostQuery`'s own
   // construction: the whole point of this hook is that the read is a PIPELINE
@@ -659,7 +660,7 @@ export function useCloudChatPayload(args: {
   const viewerUserId = useCloudChatViewerId();
   const cloudAuthorized = useCloudChatHasCloudAuthorization();
   const { client, identity, ref } = args;
-  const hostId = client?.getActiveHostId() ?? null;
+  const hostId = useRequesterHostId(client);
 
   const run = async (): Promise<CloudChatPayloadBytes> => {
     if (client === null || identity === null || ref === null) {

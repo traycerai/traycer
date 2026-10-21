@@ -15,7 +15,7 @@ interface ChatTargetMenuProps {
   /** Chats this Task can send to, open ones first. Empty is a valid state. */
   readonly targets: ReadonlyArray<QuoteChatTarget>;
   readonly onSelectChat: (chatId: string) => void;
-  readonly onSelectNewChat: () => void;
+  readonly onSelectNewChat: (() => void) | null;
   readonly open: boolean;
   readonly onOpenChange: (open: boolean) => void;
   /**
@@ -86,9 +86,14 @@ export function ChatTargetMenu(props: ChatTargetMenuProps) {
             <DropdownMenuSeparator className="shrink-0" />
           </>
         ) : null}
-        <DropdownMenuItem className="shrink-0" onSelect={props.onSelectNewChat}>
-          New chat
-        </DropdownMenuItem>
+        {props.onSelectNewChat === null ? null : (
+          <DropdownMenuItem
+            className="shrink-0"
+            onSelect={props.onSelectNewChat}
+          >
+            New chat
+          </DropdownMenuItem>
+        )}
       </DropdownMenuContent>
     </DropdownMenu>
   );

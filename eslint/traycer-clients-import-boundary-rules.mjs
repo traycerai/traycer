@@ -19,7 +19,13 @@ export const traycerClientsImportBoundaryRestrictions = {
         "Use `@traycer/protocol/*` or `@traycer-clients/*` instead.",
     },
     {
-      group: ["@traycer/**", "!@traycer/protocol", "!@traycer/protocol/**"],
+      group: [
+        "@traycer/**",
+        "!@traycer/protocol",
+        "!@traycer/protocol/**",
+        // Browser-safe, source-preserving HTML edits shared by the GUI and host.
+        "!@traycer/html-source",
+      ],
       message:
         "Client packages may only import `@traycer` through `@traycer/protocol/*`. " +
         "Use the protocol path alias or `@traycer-clients/*` for other shared code.",

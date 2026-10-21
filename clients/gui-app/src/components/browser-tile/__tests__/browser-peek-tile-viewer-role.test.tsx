@@ -6,7 +6,7 @@ import {
   clearScreencastOwner,
   FakeStreamClient,
   hostDirectoryEntryModule,
-  hostStreamClientForWithAuthModule,
+  hostStreamClientForModule,
   liveStream as fixtureLiveStream,
   PEEK_NODE,
   runnerOpenExternalLinkModule,
@@ -45,7 +45,7 @@ vi.mock("@/hooks/host/use-host-directory-entry", () =>
 );
 
 vi.mock("@/hooks/host/use-host-stream-client-for", () =>
-  hostStreamClientForWithAuthModule(hookState),
+  hostStreamClientForModule(hookState),
 );
 
 vi.mock("@/lib/host/stream-auth-revalidator", () =>

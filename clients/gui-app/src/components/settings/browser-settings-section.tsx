@@ -31,19 +31,9 @@ import {
   type BrowserSaveLoginsController,
 } from "@/lib/browser-view/use-browser-save-logins";
 import { useBrowserSavedLoginSitesQuery } from "@/hooks/browser/use-browser-saved-login-sites-query";
-import { useAddressableHostId } from "@/hooks/host/use-addressable-host-id";
 import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
-import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
-import { useHostQuery } from "@/hooks/host/use-host-query";
-import { useHostScopedMutationForClient } from "@/hooks/host/use-host-scoped-mutation";
 import { useReactiveLocalHostId } from "@/hooks/host/use-reactive-local-host-id";
-import { trackSettingChanged } from "@/lib/analytics";
-import { configMutationKeys } from "@/lib/query-keys";
-import {
-  useHostBinding,
-  useHostClient,
-  type HostRpcRegistry,
-} from "@/lib/host";
+import { useHostBinding } from "@/lib/host";
 import { useRunnerHostOrNull } from "@/providers/use-runner-host";
 import { appLogger } from "@/lib/logger";
 import type { BrowserViewBridge } from "@traycer-clients/shared/platform/browser-view";
@@ -74,20 +64,6 @@ export function BrowserSettingsSection(props: {
   const removeBrowserDevOrigin = useSettingsStore(
     (s) => s.removeBrowserDevOrigin,
   );
-  // The ACTIVE host, like the sibling Website sessions group: Browser carries
-  // no host scope of its own, so this page's host IS the app-wide one.
-  const hostId = useAddressableHostId();
-  // `null` (no handshake yet) hides the row exactly as `false` does - the row
-  // reappears on its own once the host advertises the method, no reload.
-  //
-  // BOTH methods, because they negotiate independently: the row is an
-  // interactive switch, so a host that could answer `get` but not `set` would
-  // render a control whose every flip fails. Two statements, not one `&&`:
-  // short-circuiting a hook call is a rules-of-hooks violation.
-  const pagesGetSupported = useHostMethodSupport(hostId, AGENT_PAGES_GET);
-  const pagesSetSupported = useHostMethodSupport(hostId, AGENT_PAGES_SET);
-  const agentPagesSupported =
-    pagesGetSupported === true && pagesSetSupported === true;
 
   return (
     <>
@@ -98,7 +74,6 @@ export function BrowserSettingsSection(props: {
         dataTestId="settings-browser-agents"
         fill={false}
       >
-        {agentPagesSupported ? <AgentPagesRow hostId={hostId} /> : null}
         {props.agentOpenedTabsRow}
         {browserDevOrigins.length > 0 ? (
           <SettingsRow
@@ -127,59 +102,6 @@ function hostNameOf(
 ): string | null {
   const label = entry?.label.trim() ?? "";
   return label.length > 0 ? label : hostId;
-}
-
-const AGENT_PAGES_GET = "config.visualization.get";
-const AGENT_PAGES_SET = "config.visualization.set";
-
-/**
- * The host-wide "let agents show pages in chat" switch (D04): whether agents
- * are launched with `traycer_show_page` and `traycer_preview_page`. Read at
- * agent launch, so a flip applies to agents started after it. Gated on both
- * methods and scoped to the active host; `useHostClient()` is safe because the
- * row renders only once that host advertised them.
- */
-function AgentPagesRow(props: { readonly hostId: string | null }): ReactNode {
-  const client = useHostClient();
-  const hostName = hostNameOf(
-    useHostDirectoryEntry(props.hostId),
-    props.hostId,
-  );
-  const query = useHostQuery<HostRpcRegistry, "config.visualization.get">({
-    cacheKeyIdentity: undefined,
-    client,
-    method: AGENT_PAGES_GET,
-    params: {},
-    options: { enabled: true },
-  });
-  const setPages = useHostScopedMutationForClient(client, {
-    method: AGENT_PAGES_SET,
-    mutationKey: configMutationKeys.visualizationSet(),
-    errorMessage: "Couldn't update agent pages",
-    invalidateMethods: [AGENT_PAGES_GET],
-  });
-
-  return (
-    <SettingsRow
-      row={BROWSER.definitions.agentPages}
-      status={
-        query.isError
-          ? "Couldn't read this host's pages setting. Repair Traycer's config.json on that machine, or back it up before resetting it, then reopen Settings."
-          : `On ${hostName ?? "this host"}. ${BROWSER.definitions.agentPages.description}`
-      }
-      control={
-        <Switch
-          checked={query.data?.agentPages === true}
-          disabled={query.isPending || query.isError || setPages.isPending}
-          aria-label="Let agents show pages in chat"
-          onCheckedChange={(next) => {
-            trackSettingChanged("browser", "agentPages");
-            setPages.mutate({ agentPages: next });
-          }}
-        />
-      }
-    />
-  );
 }
 
 function BrowserDevOriginsControl(props: {

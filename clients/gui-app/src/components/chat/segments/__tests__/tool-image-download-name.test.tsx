@@ -140,12 +140,13 @@ function renderTool(
         inputSummary={null}
         inputDetail={null}
         imageResults={[imageResult]}
-        page={null}
+        artifact={null}
         mcpApp={null}
         error={null}
         agentMessageSend={null}
         managedCommand={null}
         agentMessageReceipt={null}
+        agentMessageDelivery={null}
         isStreaming={false}
         endState={null}
         stopped={false}

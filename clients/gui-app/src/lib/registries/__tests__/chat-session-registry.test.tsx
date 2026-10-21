@@ -27,7 +27,7 @@ import { FakeStreamClient } from "@traycer-clients/shared/host-transport/__testi
 
 // `useChatSessionHandle`'s own module state (the process-wide registry) is
 // exercised for real below - only its collaborators are mocked, so the
-// rotation drives the REAL `authenticatedOwnerIdentityKey` computation, not
+// rotation drives the REAL `remoteAwareOwnerIdentityKey` computation, not
 // the `__setChatStreamClientFactoryForTests` test seam (which collapses BOTH
 // `transportKey` and `ownerIdentityKey` to one hardcoded string, structurally
 // unable to prove this discriminator - see `chat-tile.test.tsx`).
@@ -42,7 +42,7 @@ vi.mock("@/hooks/host/use-host-directory-entry", () => ({
   useHostDirectoryEntry: () => hostEntryRef.value,
 }));
 
-// `hostTransportKey` (reached through `authenticatedHostStreamKey`, exercised
+// `hostTransportKey` (reached through `hostStreamTransportKeyFor`, exercised
 // for real below) asks this for live-session evidence. Unmocked, no test in
 // this file ever registers a real remote session, so it would always answer
 // `false` - fine for the "no ready session" direction, but unable to prove

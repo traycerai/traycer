@@ -135,8 +135,8 @@ function userMessageDisplayContent(
 ): JsonContent | null {
   if (message.structuredContent === null) return null;
   const hashes = new Set(
-    (message.browserAnnotations ?? []).map(
-      (annotation) => annotation.imageHash,
+    (message.browserAnnotations ?? []).flatMap((annotation) =>
+      annotation.imageHash === null ? [] : [annotation.imageHash],
     ),
   );
   return omitImageAtomsByHash(message.structuredContent, hashes);

@@ -121,7 +121,6 @@ const EVERY_REGION_HIDDEN: LayoutOverrides = {
   railArtifacts: { shown: "hidden" },
   railGitDiff: { shown: "hidden" },
   railPullRequests: { shown: "hidden" },
-  railFiles: { shown: "hidden" },
   railFileTree: { shown: "hidden" },
   railSharing: { shown: "hidden" },
   railComments: { shown: "hidden" },
@@ -171,9 +170,9 @@ function keysReachableFromRows(region: RegionId): ReadonlyArray<string> {
 }
 
 describe("the region registry covers every region", () => {
-  it("lists all twenty-six regions, grouped by surface", () => {
-    expect(LAYOUT_REGION_IDS).toHaveLength(26);
-    expect(new Set(LAYOUT_REGION_IDS).size).toBe(26);
+  it("lists all twenty-five regions, grouped by surface", () => {
+    expect(LAYOUT_REGION_IDS).toHaveLength(25);
+    expect(new Set(LAYOUT_REGION_IDS).size).toBe(25);
     const surfaceOrder = LAYOUT_REGION_IDS.map(
       (id) => regionFacts(id).surface,
     ).map((surface) =>

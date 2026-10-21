@@ -32,6 +32,9 @@ export function tileRenameKind(ref: EpicCanvasTileRef): SwitcherRowKind | null {
     case "ticket":
     case "story":
     case "review":
+    case "html":
+    case "canvas":
+    case "file":
       return "artifact";
     case "terminal":
       return "terminal";

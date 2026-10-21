@@ -1,3 +1,10 @@
+import {
+  ARTIFACT_FILE_OBJECT_FIELD,
+  artifactHeadSchema,
+  artifactObjectRefSchema,
+  type ArtifactHead,
+  type ArtifactObjectRef,
+} from "@traycer/protocol/persistence/epic/artifacts";
 /**
  * Pure projection + Y.Doc-mutation helpers shared between the projector
  * and the store's mutation actions. No React, no zustand, no module
@@ -191,7 +198,10 @@ export function readArtifactKind(map: Y.Map<unknown>): EpicArtifactKind | null {
     value === "spec" ||
     value === "ticket" ||
     value === "story" ||
-    value === "review"
+    value === "review" ||
+    value === "html" ||
+    value === "canvas" ||
+    value === "file"
   ) {
     return value;
   }
@@ -246,6 +256,55 @@ function isString(value: unknown): value is string {
 
 // ─── Per-entry projectors ─────────────────────────────────────────────────
 
+function projectArtifactObjectFields(
+  entry: Y.Map<unknown>,
+): Partial<ArtifactProjection> | null {
+  const layout = entry.get("layout");
+  const relativePath = entry.get("relativePath");
+  const rawHead = entry.get("head");
+  const head = artifactHeadSchema.safeParse(
+    rawHead instanceof Y.Map ? rawHead.toJSON() : rawHead,
+  );
+  const rawObject = entry.get(ARTIFACT_FILE_OBJECT_FIELD);
+  const object = artifactObjectRefSchema.safeParse(
+    rawObject instanceof Y.Map ? rawObject.toJSON() : rawObject,
+  );
+  const kind = entry.get("kind");
+  if ((kind === "html" || kind === "canvas") && !head.success) return null;
+  if (kind === "file" && !object.success) return null;
+  return {
+    layout:
+      layout === "file" || entry.get("kind") === "file" ? "file" : "folder",
+    ...(typeof relativePath === "string" ? { relativePath } : {}),
+    ...(head.success ? { head: head.data } : {}),
+    ...(object.success ? { object: object.data } : {}),
+  };
+}
+
+export function artifactHeadsEqual(
+  a: ArtifactHead | undefined,
+  b: ArtifactHead | undefined,
+): boolean {
+  if (a === b) return true;
+  if (a === undefined || b === undefined || a.capturedAt !== b.capturedAt)
+    return false;
+  const paths = Object.keys(a.files);
+  return (
+    paths.length === Object.keys(b.files).length &&
+    paths.every((path) => {
+      if (!Object.hasOwn(b.files, path)) return false;
+      const left = a.files[path];
+      const right = b.files[path];
+      return (
+        left.sha256 === right.sha256 &&
+        left.byteLength === right.byteLength &&
+        left.mediaType === right.mediaType &&
+        left.status === right.status
+      );
+    })
+  );
+}
+
 export function projectArtifact(
   id: string,
   entry: Y.Map<unknown>,
@@ -257,11 +316,14 @@ export function projectArtifact(
       ? readMaybeNumber(entry, "status")
       : null;
   const artifactRoomId = readMaybeNullableString(entry, "artifactRoomId");
+  const objectFields = projectArtifactObjectFields(entry);
+  if (objectFields === null) return null;
   return {
     id,
     kind,
     title: readMaybeString(entry, "title"),
     folderName: readMaybeString(entry, "folderName"),
+    ...objectFields,
     parentId: readMaybeNullableString(entry, "parentId"),
     artifactRoomId:
       artifactRoomId !== null && artifactRoomId.length > 0
@@ -418,6 +480,32 @@ export function messageRowId(message: OpenMessage, index: number): string {
 
 // ─── Equality short-circuits ──────────────────────────────────────────────
 
+function artifactObjectsEqual(
+  a: ArtifactObjectRef | undefined,
+  b: ArtifactObjectRef | undefined,
+): boolean {
+  if (a === b) return true;
+  if (a === undefined || b === undefined) return false;
+  return (
+    a.sha256 === b.sha256 &&
+    a.byteLength === b.byteLength &&
+    a.mediaType === b.mediaType &&
+    a.status === b.status
+  );
+}
+
+function artifactObjectFieldsEqual(
+  a: ArtifactProjection,
+  b: ArtifactProjection,
+): boolean {
+  return (
+    a.layout === b.layout &&
+    a.relativePath === b.relativePath &&
+    artifactObjectsEqual(a.object, b.object) &&
+    artifactHeadsEqual(a.head, b.head)
+  );
+}
+
 export function artifactProjectionsEq(
   a: ArtifactProjection,
   b: ArtifactProjection,
@@ -427,6 +515,7 @@ export function artifactProjectionsEq(
     a.kind === b.kind &&
     a.title === b.title &&
     a.folderName === b.folderName &&
+    artifactObjectFieldsEqual(a, b) &&
     a.parentId === b.parentId &&
     a.artifactRoomId === b.artifactRoomId &&
     a.createdAt === b.createdAt &&

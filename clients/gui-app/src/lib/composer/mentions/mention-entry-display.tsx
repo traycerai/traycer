@@ -24,7 +24,7 @@ import type {
   WorkspaceEntry,
 } from "@/lib/composer/types";
 import { dirnameOfPath, mentionPathTree } from "@/lib/path";
-import type { EpicArtifactKind } from "@traycer/protocol/common/registry";
+import type { MarkdownArtifactKind } from "@traycer/protocol/common/registry";
 
 /**
  * Row-display mapping for @mention suggestion entries: the picker's
@@ -304,7 +304,7 @@ export function epicIcon(): ReactElement {
   return <Layers className={MENU_ICON_CLASS} aria-hidden />;
 }
 
-export function artifactIcon(kind: EpicArtifactKind): ReactElement {
+export function artifactIcon(kind: MarkdownArtifactKind): ReactElement {
   return epicNodeIcon(kind);
 }
 
@@ -313,7 +313,7 @@ export function artifactsIcon(): ReactElement {
 }
 
 export function epicNodeIcon(
-  kind: "chat" | "terminal-agent" | "terminal" | EpicArtifactKind,
+  kind: "chat" | "terminal-agent" | "terminal" | MarkdownArtifactKind,
 ): ReactElement {
   const Icon: LucideIcon = EPIC_NODE_ICONS[kind];
   return <Icon className={MENU_ICON_CLASS} aria-hidden />;

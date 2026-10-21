@@ -43,7 +43,10 @@
  *   prompt, the thinking-tokens estimate and frame, the cron background item
  *   kind, and the approval card's display facts / cautious / rule-forced
  *   keys. Unlike `1.16` these are PROJECTED for an older peer, and the older
- *   lines bind frozen schemas without them, so needles do pin the boundary.
+ *   lines bind frozen schemas without them, so needles do pin the boundary;
+ * - `1.31` is the tool-call `artifact` stamp, minted above `1.30`: the
+ *   manifest an inline `traycer_render_inline` artifact showed. PROJECTED,
+ *   like `1.23`'s MCP App stamp, so a needle pins the boundary.
  *
  * The needles are searched in the whole stringified schema, both `io`
  * directions, so a leak through ANY binding shows up - a snapshot key, a
@@ -84,20 +87,41 @@ const CLAUDE_PARITY_MINOR = 20;
 // `1.21` is the Command Code line: it adds no key, only which harnesses the
 // shapes may name. `1.22` is the open-harness-id line: it adds no key either,
 // only reopens the heard-from harness leaves to a string. `1.23` adds the
-// tool-call `page` / `mcpApp` stamps (pinned below). `1.24` adds the cron
+// tool-call `mcpApp` stamp (pinned below). `1.24` adds the cron
 // next-run time, whose `scheduledFor` key already exists on other item kinds;
 // `chat-subscribe-cron-next-run-v124.test.ts` pins that arm directly. `1.25`
 // adds the bot-conversation request on a user row and the
 // `conversation-message` queue item (pinned below). `1.26` adds the
 // `task-checkin` queue item (pinned below). `1.27` adds the `task-overdue`
 // queue item (pinned below). `1.28` adds `signInParked` on a queued prompt
-// (pinned below). Every threshold above still reads `>=` against the live
-// line.
-const LIVE_MINOR = 28;
+// (pinned below). `1.29` adds the tool-call `agentMessageDelivery` stamp
+// (pinned below). `1.30` lets an `artifact_operation` block and event name
+// the html, canvas and file artifact kinds (pinned below). `1.31` adds the
+// tool-call `artifact` stamp (pinned below). `1.32` grows the browser
+// annotation record with the canvas arm (pinned by
+// `chat-subscribe-canvas-annotations-v132.test.ts`). `1.33` widens the
+// accumulated-change `artifact` tag to all seven artifact kinds (pinned by
+// `checkpoint-artifact-kinds.test.ts`). Every threshold above still reads
+// `>=` against the live line.
+const LIVE_MINOR = 33;
 // `1.28`: the host's sign-in park mark on a queued prompt, server frames only
 // (the host sets it; a client never sends a queue item).
 const SIGN_IN_PARK_MINOR = 28;
 const SIGN_IN_PARK_NEEDLES = ['"signInParked":'];
+// `1.31`: the tool-call `artifact` stamp - the manifest an inline
+// `traycer_render_inline` artifact showed. Found structurally
+// (`toolCallArtifactStampPresent`, defined below), not by a substring
+// needle: `'"artifact":'` already appears on every line via the unrelated
+// `checkpointArtifactTagSchema` field.
+const ARTIFACT_STAMP_MINOR = 31;
+// `1.30`: the html-artifacts surface - the artifact kinds an `artifact_operation`
+// block and event may name. Found structurally (`artifactOperationKinds`,
+// defined below), not by a `'"canvas"'` needle: from `1.32` a browser
+// annotation's `source` is the literal `"canvas"` too, which is a different
+// fact (where an annotation was captured, not which artifact kind an
+// operation touched) and must not read as the kind enum having grown.
+const HTML_ARTIFACTS_MINOR = 30;
+const HTML_ARTIFACT_KINDS = ["html", "canvas", "file"];
 // `1.27`: the task-overdue surface - the queue item's discriminant, its one
 // needle for the same reason as the check-in's.
 const TASK_OVERDUE_MINOR = 27;
@@ -113,6 +137,10 @@ const TASK_CHECKIN_NEEDLES = ['"task-checkin"'];
 // carried one since `1.8`.) All or none - a line that carried the queue item
 // without the row key would show a chip for a request it cannot name.
 const CONVERSATION_MINOR = 25;
+// `1.29`: the cross-host send state on a tool call, server frames only (the
+// host stamps it; a client never sends a body).
+const DELIVERY_MINOR = 29;
+const DELIVERY_NEEDLES = ['"agentMessageDelivery":'];
 const CONVERSATION_NEEDLES = [
   '"conversationRequest":',
   '"resolvedByMessageId":',
@@ -123,10 +151,10 @@ const CONVERSATION_NEEDLES = [
 // description that merely mentions the name; the two literals (`thinkingTokens`
 // frame kind, `cron` background kind) are matched with both quotes, which
 // `"thinkingTokensEstimate":` and `"cron..."` cannot satisfy by prefix.
-// `1.23`: the tool-call `page` / `mcpApp` stamps, server frames only (a client
-// never sends a body).
-const PAGE_STAMP_MINOR = 23;
-const PAGE_STAMP_NEEDLES = ['"page":', '"mcpApp":'];
+// `1.23`: the tool-call `mcpApp` stamp, server frames only (a client never
+// sends a body).
+const MCP_APP_STAMP_MINOR = 23;
+const MCP_APP_STAMP_NEEDLES = ['"mcpApp":'];
 const CLAUDE_PARITY_NEEDLES = [
   '"suggestedPrompt":',
   '"thinkingTokensEstimate":',
@@ -234,6 +262,87 @@ function shellShapes(schema: z.ZodType): {
   return tally;
 }
 
+// Whether any `tool_call` or `tool_call.completed` object node carries its
+// OWN `artifact` key, found structurally rather than by a `'"artifact":'`
+// needle - that substring already appears on every line via the unrelated,
+// much older `artifact: checkpointArtifactTagSchema` field (`subscribe.ts`,
+// `subscribe-windowed.ts`), so a plain needle cannot pin this boundary.
+function toolCallArtifactStampPresent(schema: z.ZodType): boolean {
+  let found = false;
+  const visit = (node: unknown): void => {
+    if (found || node === null || typeof node !== "object") return;
+    if (Array.isArray(node)) {
+      for (const item of node) visit(item);
+      return;
+    }
+    const record = node as Record<string, unknown>;
+    const properties = record.properties;
+    if (properties !== null && typeof properties === "object") {
+      const propertyKeys = properties as Record<string, unknown>;
+      const typeConst = literalSchema.safeParse(propertyKeys.type).data?.const;
+      if (
+        (typeConst === "tool_call" || typeConst === "tool_call.completed") &&
+        Object.hasOwn(propertyKeys, "artifact")
+      ) {
+        found = true;
+        return;
+      }
+    }
+    for (const value of Object.values(record)) visit(value);
+  };
+  for (const io of ["input", "output"] as const) {
+    visit(z.toJSONSchema(schema, { io, unrepresentable: "any" }));
+    if (found) return true;
+  }
+  return found;
+}
+
+function collectStrings(node: unknown, into: Set<string>): void {
+  if (typeof node === "string") {
+    into.add(node);
+    return;
+  }
+  if (node === null || typeof node !== "object") return;
+  if (Array.isArray(node)) {
+    for (const item of node) collectStrings(item, into);
+    return;
+  }
+  const record = node as Record<string, unknown>;
+  if (Array.isArray(record.enum)) collectStrings(record.enum, into);
+  if (typeof record.const === "string") into.add(record.const);
+  for (const [key, value] of Object.entries(record)) {
+    if (key !== "enum" && key !== "const") collectStrings(value, into);
+  }
+}
+
+// Every kind an `artifact_operation` block or event can name, read off the
+// `kind` property of the shapes whose `type` is that literal. Nothing else on
+// a frame, a browser annotation's `source` included, is looked at.
+function artifactOperationKinds(schema: z.ZodType): string[] {
+  const kinds = new Set<string>();
+  const visit = (node: unknown): void => {
+    if (node === null || typeof node !== "object") return;
+    if (Array.isArray(node)) {
+      for (const item of node) visit(item);
+      return;
+    }
+    const record = node as Record<string, unknown>;
+    const properties = record.properties;
+    if (properties !== null && typeof properties === "object") {
+      const propertyKeys = properties as Record<string, unknown>;
+      const typeConst = literalSchema.safeParse(propertyKeys.type).data?.const;
+      if (typeConst === "artifact_operation") {
+        collectStrings(propertyKeys.kind, kinds);
+      }
+    }
+    for (const value of Object.values(record)) visit(value);
+  };
+  for (const io of ["input", "output"] as const) {
+    visit(z.toJSONSchema(schema, { io, unrepresentable: "any" }));
+  }
+  return [...kinds];
+}
+
 const unionArmsSchema = z.object({
   oneOf: z
     .array(z.object({ properties: z.record(z.string(), z.unknown()) }))
@@ -262,13 +371,13 @@ function actionAckPropertyNames(serverFrameSchema: z.ZodType): string[] {
 }
 
 describe("chat.subscribe line surfaces", () => {
-  it("covers chat.subscribe@1.0 through @1.28 (a line added later cannot drop out)", () => {
+  it("covers chat.subscribe@1.0 through @1.33 (a line added later cannot drop out)", () => {
     // RESTATED on purpose: this is the change-detector for the line SET, so a
     // derived list would assert the registry against itself. When a new minor
     // lands, extending this by hand is the acknowledgement.
     expect(MINORS).toEqual([
       0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20,
-      21, 22, 23, 24, 25, 26, 27, 28,
+      21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33,
     ]);
     expect(chatSubscribeLine.latestMinor).toBe(LIVE_MINOR);
   });
@@ -293,9 +402,24 @@ describe("chat.subscribe line surfaces", () => {
       const carriesPlacement = minor >= 9;
       const carriesRefusalCause = minor >= DRAFT_IMAGE_CAUSE_MINOR;
       const carriesClaudeParity = minor >= CLAUDE_PARITY_MINOR;
-      const carriesPageStamps = minor >= PAGE_STAMP_MINOR;
+      const carriesMcpAppStamp = minor >= MCP_APP_STAMP_MINOR;
       const carriesConversation = minor >= CONVERSATION_MINOR;
       const carriesSignInPark = minor >= SIGN_IN_PARK_MINOR;
+      const carriesDelivery = minor >= DELIVERY_MINOR;
+
+      it(`server frames ${carriesDelivery ? "carry" : "hold back"} the cross-host send delivery state`, () => {
+        const text = schemaText(contract.serverFrameSchema);
+        expect(
+          DELIVERY_NEEDLES.filter((needle) => text.includes(needle)),
+        ).toEqual(carriesDelivery ? DELIVERY_NEEDLES : []);
+      });
+
+      it("client frames hold back the delivery state on every line", () => {
+        const text = schemaText(contract.clientFrameSchema);
+        expect(
+          DELIVERY_NEEDLES.filter((needle) => text.includes(needle)),
+        ).toEqual([]);
+      });
 
       it(`server frames ${carriesSignInPark ? "carry" : "hold back"} the sign-in park mark`, () => {
         const text = schemaText(contract.serverFrameSchema);
@@ -323,6 +447,37 @@ describe("chat.subscribe line surfaces", () => {
         const text = schemaText(contract.clientFrameSchema);
         expect(
           CONVERSATION_NEEDLES.filter((needle) => text.includes(needle)),
+        ).toEqual([]);
+      });
+
+      const carriesArtifactStamp = minor >= ARTIFACT_STAMP_MINOR;
+
+      it(`server frames ${carriesArtifactStamp ? "carry" : "hold back"} the tool-call artifact stamp`, () => {
+        expect(toolCallArtifactStampPresent(contract.serverFrameSchema)).toBe(
+          carriesArtifactStamp,
+        );
+      });
+
+      it("client frames hold back the artifact stamp on every line", () => {
+        expect(toolCallArtifactStampPresent(contract.clientFrameSchema)).toBe(
+          false,
+        );
+      });
+
+      const carriesHtmlArtifacts = minor >= HTML_ARTIFACTS_MINOR;
+
+      it(`server frames ${carriesHtmlArtifacts ? "carry" : "hold back"} the html, canvas and file artifact kinds`, () => {
+        const kinds = artifactOperationKinds(contract.serverFrameSchema);
+        const found = HTML_ARTIFACT_KINDS.filter((kind) =>
+          kinds.includes(kind),
+        );
+        expect(found).toEqual(carriesHtmlArtifacts ? HTML_ARTIFACT_KINDS : []);
+      });
+
+      it("client frames hold back the html, canvas and file artifact kinds on every line", () => {
+        const kinds = artifactOperationKinds(contract.clientFrameSchema);
+        expect(
+          HTML_ARTIFACT_KINDS.filter((kind) => kinds.includes(kind)),
         ).toEqual([]);
       });
 
@@ -368,18 +523,18 @@ describe("chat.subscribe line surfaces", () => {
         expect(found).toEqual(carriesClaudeParity ? CLAUDE_PARITY_NEEDLES : []);
       });
 
-      it(`server frames ${carriesPageStamps ? "carry" : "hold back"} the tool-call page and MCP App stamps`, () => {
+      it(`server frames ${carriesMcpAppStamp ? "carry" : "hold back"} the tool-call MCP App stamp`, () => {
         const text = schemaText(contract.serverFrameSchema);
-        const found = PAGE_STAMP_NEEDLES.filter((needle) =>
+        const found = MCP_APP_STAMP_NEEDLES.filter((needle) =>
           text.includes(needle),
         );
-        expect(found).toEqual(carriesPageStamps ? PAGE_STAMP_NEEDLES : []);
+        expect(found).toEqual(carriesMcpAppStamp ? MCP_APP_STAMP_NEEDLES : []);
       });
 
-      it("client frames hold back the page and MCP App stamps on every line", () => {
+      it("client frames hold back the MCP App stamp on every line", () => {
         const text = schemaText(contract.clientFrameSchema);
         expect(
-          PAGE_STAMP_NEEDLES.filter((needle) => text.includes(needle)),
+          MCP_APP_STAMP_NEEDLES.filter((needle) => text.includes(needle)),
         ).toEqual([]);
       });
 

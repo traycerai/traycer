@@ -13,6 +13,7 @@ import {
   epicArtifactKindSchema,
   harnessIdSchema,
   harnessIdSchemaPreReasonix,
+  markdownArtifactKindSchema,
   permissionRoleSchema,
   ticketStatusSchema,
 } from "@traycer/protocol/common/_internal/schemas";
@@ -107,7 +108,52 @@ export const ticketStatusRecordV100 = defineRecordContract({
 export const epicArtifactKindRecordV100 = defineRecordContract({
   name: "epic-artifact-kind",
   schemaVersion: { major: 1, minor: 0 } as const,
+  schema: markdownArtifactKindSchema,
+});
+
+// Kinds that carry a markdown body.
+export { markdownArtifactKindSchema };
+
+// Frozen copy for every released line. New lines read the latest record.
+// It shares the domain schema today; the two names can diverge if a markdown
+// kind is added. The released copy must keep its original four kinds.
+export const EpicArtifactKindSchemaPreHtml = epicArtifactKindRecordV100.schema;
+
+export const epicArtifactKindRecordV200 = defineRecordContract({
+  name: "epic-artifact-kind",
+  schemaVersion: { major: 2, minor: 0 } as const,
   schema: epicArtifactKindSchema,
+});
+
+const epicArtifactKindUpgradeV100ToV200 = defineRecordUpgradePath<
+  typeof epicArtifactKindRecordV100,
+  typeof epicArtifactKindRecordV200
+>({
+  from: epicArtifactKindRecordV100.schemaVersion,
+  to: epicArtifactKindRecordV200.schemaVersion,
+  upgradeRecord: (record) => record,
+});
+
+const epicArtifactKindDowngradeV200ToV100 = defineRecordDowngradePath<
+  typeof epicArtifactKindRecordV200,
+  typeof epicArtifactKindRecordV100
+>({
+  from: epicArtifactKindRecordV200.schemaVersion,
+  to: epicArtifactKindRecordV100.schemaVersion,
+  downgradeRecord: (record) => {
+    const parsed = epicArtifactKindRecordV100.schema.safeParse(record);
+    if (parsed.success) return { ok: true as const, value: parsed.data };
+    return {
+      ok: false as const,
+      error: {
+        code: "DOWNGRADE_UNSUPPORTED" as const,
+        // Naming the first new kind would misreport every kind added after it:
+        // all kinds absent from 1.0 take this same path.
+        message:
+          "This artifact kind cannot be represented by epic-artifact-kind record 1.0",
+      },
+    };
+  },
 });
 
 export const harnessIdRecordV100 = defineRecordContract({
@@ -225,6 +271,16 @@ export const commonRecordRegistry = defineVersionedRecordRegistry({
       },
       downgradePathsFromLatest: {},
     },
+    2: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: epicArtifactKindRecordV200,
+          upgradeFromPreviousVersion: epicArtifactKindUpgradeV100ToV200,
+        },
+      },
+      downgradePathsFromLatest: { 1: epicArtifactKindDowngradeV200ToV100 },
+    },
   },
   "harness-id": {
     1: {
@@ -273,4 +329,5 @@ export type EpicArtifactKind = RecordValue<
   CommonRecordRegistry,
   "epic-artifact-kind"
 >;
+export type MarkdownArtifactKind = z.infer<typeof markdownArtifactKindSchema>;
 export type HarnessId = RecordValue<CommonRecordRegistry, "harness-id">;

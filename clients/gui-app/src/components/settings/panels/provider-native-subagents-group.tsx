@@ -19,10 +19,7 @@ import {
 } from "@/hooks/host/use-host-supports-method";
 import { useProvidersSetNativeSubagents } from "@/hooks/providers/use-providers-set-native-subagents-mutation";
 import { useProvidersList } from "@/hooks/providers/use-providers-list-query";
-import {
-  providerNativeSubagentsFor,
-  providersListReportsNativeSubagents,
-} from "@/lib/providers/provider-native-subagents";
+import { providersListReportsNativeSubagents } from "@/lib/providers/provider-native-subagents";
 import { providerIdToGuiHarnessId } from "@/lib/provider-ordering";
 
 /**
@@ -54,7 +51,7 @@ export function ProviderNativeSubagentsGroup(props: {
   );
   const harnessId = providerIdToGuiHarnessId(providerId);
   const setNativeSubagents = useProvidersSetNativeSubagents(harnessId);
-  const stored = providerNativeSubagentsFor(props.state);
+  const stored = props.state.nativeSubagents ?? true;
   const [echo, setEcho] = useState<{
     readonly chosen: boolean;
     readonly against: boolean;

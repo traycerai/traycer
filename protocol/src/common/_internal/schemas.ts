@@ -46,8 +46,12 @@ export const ticketStatusSchema = lazySchema(() =>
   z.union([z.literal(0), z.literal(1), z.literal(2)]),
 );
 
-export const epicArtifactKindSchema = lazySchema(() =>
+export const markdownArtifactKindSchema = lazySchema(() =>
   z.enum(["spec", "ticket", "story", "review"]),
+);
+
+export const epicArtifactKindSchema = lazySchema(() =>
+  z.enum([...markdownArtifactKindSchema.options, "html", "canvas", "file"]),
 );
 
 export const harnessIdSchemaPreReasonix = lazySchema(() =>

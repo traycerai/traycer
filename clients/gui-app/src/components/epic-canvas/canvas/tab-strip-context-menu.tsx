@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 
 import type { SplitDirection } from "@/stores/epics/canvas/types";
+import { ChatRoutingTabMenu } from "@/components/epic-canvas/canvas/chat-routing-menu";
 
 export interface TabStripContextMenuProps {
   readonly groupId: string;
@@ -51,6 +52,15 @@ export interface TabStripContextMenuProps {
    * "unsupported chats show nothing" case - see `ChatUsageDialog`).
    */
   readonly onOpenUsage: (() => void) | null;
+  /**
+   * The chat this tab shows, for the per-agent "On a usage limit or error"
+   * setting. `null` for every non-chat tab.
+   */
+  readonly chatRouting: {
+    readonly epicId: string;
+    readonly chatId: string;
+    readonly hostId: string;
+  } | null;
 }
 
 /**
@@ -75,6 +85,7 @@ export function TabStripContextMenu(props: TabStripContextMenuProps) {
     canRename,
     onEditTitle,
     onOpenUsage,
+    chatRouting,
   } = props;
 
   return (
@@ -142,6 +153,12 @@ export function TabStripContextMenu(props: TabStripContextMenuProps) {
         <Eye className="size-4" />
         Reveal in Sidebar
       </ContextMenuItem>
+      {chatRouting === null ? null : (
+        <>
+          <ContextMenuSeparator />
+          <ChatRoutingTabMenu {...chatRouting} />
+        </>
+      )}
       {onOpenUsage === null ? null : (
         <>
           <ContextMenuSeparator />

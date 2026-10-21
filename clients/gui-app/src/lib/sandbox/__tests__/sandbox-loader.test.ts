@@ -1,4 +1,6 @@
+import { JSDOM, VirtualConsole } from "jsdom";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { buildDocument, type ArtifactPageRole } from "../sandbox-document";
 
 // The loader is a classic script with no exports (`vite/sandbox-assets.ts`
 // inlines it on its own), so it is run for its effect: importing it starts it,
@@ -121,5 +123,158 @@ describe("sandbox loader wheel", () => {
       wheel(unscrollable, { deltaY: 40, ctrlKey: true }).defaultPrevented,
     ).toBe(false);
     expect(post).not.toHaveBeenCalled();
+  });
+});
+
+describe("served artifact page links", () => {
+  /**
+   * Clicks a link in a page running the composed bootstrap, in a window of
+   * its own at a served page's address. `true` when the click was left to the
+   * browser, so the frame follows the link itself.
+   */
+  function clickFollows(
+    artifactPage: ArtifactPageRole,
+    href: string,
+    artifactRootPath: string | undefined,
+  ): boolean {
+    return clickLink({
+      artifactPage,
+      href,
+      artifactRootPath,
+      anchorTarget: null,
+      baseTarget: null,
+    }).followed;
+  }
+
+  /** The same click with the anchor's and the document's `target` settable. */
+  function clickLink(input: {
+    readonly artifactPage: ArtifactPageRole;
+    readonly href: string;
+    readonly artifactRootPath: string | undefined;
+    readonly anchorTarget: string | null;
+    readonly baseTarget: string | null;
+  }): {
+    readonly followed: boolean;
+    readonly target: string | null;
+    readonly linkRequests: readonly unknown[];
+  } {
+    const composed = buildDocument({
+      html: "",
+      csp: null,
+      nonce: "n-1",
+      theme: {
+        appliesToRoot: true,
+        colorScheme: "dark",
+        background: null,
+        variables: [],
+      },
+      shortcuts: [],
+      artifactPage: input.artifactPage,
+      ...(input.artifactRootPath === undefined
+        ? {}
+        : { artifactRootPath: input.artifactRootPath }),
+    });
+    const { window } = new JSDOM("<!doctype html><html><body></body></html>", {
+      runScripts: "dangerously",
+      url: "traycer-artifact://artifact-a1--m1/site/index.html",
+      // jsdom reports every followed link as an unimplemented navigation.
+      virtualConsole: new VirtualConsole(),
+    });
+    const posted: unknown[] = [];
+    window.postMessage = (message: unknown) => {
+      posted.push(message);
+    };
+    window.eval(between(composed, "<script>", "</script>"));
+    if (input.baseTarget !== null) {
+      const base = window.document.createElement("base");
+      base.setAttribute("target", input.baseTarget);
+      window.document.head.append(base);
+    }
+    const anchor = window.document.createElement("a");
+    anchor.setAttribute("href", input.href);
+    if (input.anchorTarget !== null)
+      anchor.setAttribute("target", input.anchorTarget);
+    window.document.body.append(anchor);
+    const followed = anchor.dispatchEvent(
+      new window.MouseEvent("click", { bubbles: true, cancelable: true }),
+    );
+    const target = anchor.getAttribute("target");
+    window.close();
+    // The bootstrap posts other notifications too; only link requests matter here.
+    const linkRequests = posted.filter(
+      (message) =>
+        typeof message === "object" &&
+        message !== null &&
+        "method" in message &&
+        message.method === "ui/open-link",
+    );
+    return { followed, target, linkRequests };
+  }
+
+  it.each([
+    ["an explicit target=_blank", "_blank", null],
+    ["a target=_blank inherited from <base>", null, "_blank"],
+  ])(
+    "keeps a link to another page of the artifact in its own frame despite %s",
+    (_label, anchorTarget, baseTarget) => {
+      const clicked = clickLink({
+        artifactPage: "found",
+        href: "about.html",
+        artifactRootPath: "/site/",
+        anchorTarget,
+        baseTarget,
+      });
+
+      // The sandbox has no popup permission, so a blank target would do nothing.
+      expect(clicked.followed).toBe(true);
+      expect(clicked.target).toBe("_self");
+      expect(clicked.linkRequests).toEqual([]);
+    },
+  );
+
+  it("still hands a link that leaves the artifact to the app, with its blank target untouched", () => {
+    const clicked = clickLink({
+      artifactPage: "found",
+      href: "https://example.com/docs",
+      artifactRootPath: "/site/",
+      anchorTarget: "_blank",
+      baseTarget: null,
+    });
+
+    expect(clicked.followed).toBe(false);
+    expect(clicked.target).toBe("_blank");
+    expect(clicked.linkRequests).toEqual([
+      expect.objectContaining({
+        method: "ui/open-link",
+        params: { url: "https://example.com/docs" },
+      }),
+    ]);
+  });
+
+  it("follows a link to another page of the artifact only on a served artifact page that knows its root", () => {
+    expect(clickFollows("found", "about.html", "/site/")).toBe(true);
+    expect(clickFollows("found", "logo.png", "/site/")).toBe(false);
+    expect(clickFollows(null, "about.html", "/site/")).toBe(false);
+    // Without the root there is nothing to confine the link to, so it is
+    // handed to the app rather than followed.
+    expect(clickFollows("found", "about.html", undefined)).toBe(false);
+  });
+
+  it("follows a link to a directory of the artifact, which the server answers with its index page", () => {
+    expect(clickFollows("found", "docs/", "/site/")).toBe(true);
+    expect(clickFollows("found", "/site/", "/site/")).toBe(true);
+    // A directory link is not an html page by its extension, so the trailing
+    // slash is what must carry it.
+    expect(clickFollows("found", "docs", "/site/")).toBe(false);
+  });
+
+  it("refuses a link that leaves the artifact's own folder, including a sibling that shares its name as a prefix", () => {
+    expect(clickFollows("found", "../other/page.htm", "/site/")).toBe(false);
+    expect(clickFollows("found", "/site-evil/page.html", "/site/")).toBe(false);
+    expect(clickFollows("found", "/site-evil/", "/site/")).toBe(false);
+  });
+
+  it("refuses a link whose path cannot be decoded instead of following it", () => {
+    expect(clickFollows("found", "%E0%A4%A.html", "/site/")).toBe(false);
   });
 });

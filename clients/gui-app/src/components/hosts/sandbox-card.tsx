@@ -291,7 +291,7 @@ function SandboxFacts(props: {
   const now = useSampledNow();
   const provider =
     useSandboxCatalogue(true).data?.providers.find(
-      (p) => p.provider === summary.provider,
+      (p) => p.provider === summary.provider && p.os.includes(summary.os),
     ) ?? null;
   const keeps =
     provider === null

@@ -5,12 +5,14 @@ import {
   chatEventSchemaPreReasonix,
 } from "@traycer/protocol/persistence/epic/chat-events";
 import {
+  chatRoutingSchema,
   chatRunSettingsSchema,
   chatRunSettingsSchemaPreAuto,
   chatRunSettingsSchemaPreReasonix,
 } from "@traycer/protocol/persistence/epic/foundation";
 import {
   messageSchema,
+  messageSchemaPreHtml,
   messageSchemaV18,
   messageSchemaPreImage,
   messageSchemaPreInReplyTo,
@@ -158,6 +160,16 @@ export const chatSchema = lazySchema(() =>
     // pre-`auto` because `chat.subscribe@1.7`/`@1.8` embed it and both shipped in
     // `cli-v1.3.0`; only the lines that bind THIS schema may carry the mode.
     settings: chatRunSettingsSchema.nullable().default(null),
+    /**
+     * What this chat does on a usage limit or an error: follow the device's
+     * routing policy (`policy`) or wait on its own account (`hold`). ABSENT
+     * reads as `policy` - records written before the field existed, and
+     * writers that never send it - so the key is optional rather than
+     * defaulted: a defaulted key would make every literal of the record type
+     * restate a value that almost every chat leaves unset. Lives only on the
+     * live record; the frozen wire copies above predate it.
+     */
+    routing: chatRoutingSchema.optional(),
   }),
 );
 export type Chat = z.infer<typeof chatSchema>;
@@ -235,11 +247,13 @@ export const chatSchemaPreInReplyTo = lazySchema(() =>
  * (see `chat-sync/version.ts`).
  *
  * Derived from `chatSchema` rather than hand-frozen, deliberately: only this
- * one enum is pinned, so the epic record keeps following every other chat
- * change exactly as it did before.
+ * event enum, the pre-HTML artifact-operation block and browser-only
+ * annotations are pinned; other chat fields keep following the live shape.
+ * Canvas annotations live in chat.db/chat-sync, never in this legacy Yjs map.
  */
 export const chatSchemaPreImported = lazySchema(() =>
   chatSchema.extend({
+    messages: z.array(messageSchemaPreHtml),
     events: z.array(chatEventSchemaPreImported).default([]),
   }),
 );

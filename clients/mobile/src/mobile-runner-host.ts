@@ -1,3 +1,7 @@
+import {
+  MobileSandboxArtifacts,
+  SandboxArtifacts,
+} from "./sandbox-artifacts-plugin";
 import { App } from "@capacitor/app";
 import {
   mintExecutableWriteGrantViaHttp,
@@ -326,6 +330,12 @@ export class MobileRunnerHost implements IRunnerHost {
   // No local host, so no lifecycle policy to configure.
   readonly hostLifecycle = null;
   readonly browserView = null;
+  readonly sandboxArtifacts = Capacitor.isNativePlatform()
+    ? new MobileSandboxArtifacts(
+        SandboxArtifacts,
+        Capacitor.getPlatform() === "android" ? "android" : "ios",
+      )
+    : null;
   readonly linkCodeScanner: ILinkCodeScanner | null;
   readonly deviceDescriber: IDeviceDescriber | null;
   readonly linkLoginDeepLinks: ILinkLoginDeepLinkSource | null;

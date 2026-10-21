@@ -328,6 +328,27 @@ describe("useHostStreamClientFor", () => {
     expect(result.current).toBeNull();
   });
 
+  // `setRequestContext` swaps the context inside the one spine client. The
+  // compiled hook memoized its read on that stable object, so a sign-in after
+  // mount left the host's stream client unbuilt until the host changed. The
+  // sign-in's own announcement is the only thing that re-renders the hook here.
+  it("builds the stream client once the spine signs in", () => {
+    const globalClient = buildGlobalClient(false);
+    globalClientRef.value = globalClient;
+    const { result } = renderHook(() => useHostStreamClientFor(TARGET_B, null));
+    expect(result.current).toBeNull();
+
+    act(() => {
+      globalClient.setRequestContext(
+        createRequestContextFixture({
+          origin: "renderer",
+          bearerToken: "tok-1",
+        }),
+      );
+    });
+    expect(result.current).toBeInstanceOf(WsStreamClient);
+  });
+
   it("builds a stream client for the chosen host without moving the global active host", () => {
     const globalClient = buildGlobalClient(true);
     globalClientRef.value = globalClient;
