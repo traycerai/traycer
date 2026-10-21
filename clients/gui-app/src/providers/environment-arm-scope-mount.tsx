@@ -48,9 +48,12 @@ function PoolEnvironmentArmScope(): null {
   const environments = useEnvironmentListQuery(useHostClient(), authorized);
   const environmentData = environments.data;
   const scope = useMemo(() => {
-    const environmentIds = (environmentData?.environments ?? [])
-      .filter((environment) => environment.ownerKind === "organization")
-      .map((environment) => environment.environmentId);
+    const teams = (environmentData?.environments ?? []).filter(
+      (environment) => environment.ownerKind === "organization",
+    );
+    const environmentIds = teams.map(
+      (environment) => environment.environmentId,
+    );
     if (
       pool === null ||
       !authorized ||
@@ -73,6 +76,13 @@ function PoolEnvironmentArmScope(): null {
       client,
       viewerId,
       environmentIds,
+      // An organization environment's `ownerId` is its team's id.
+      environmentIdByTeamId: new Map(
+        teams.map((environment) => [
+          environment.ownerId,
+          environment.environmentId,
+        ]),
+      ),
       supported,
     };
   }, [

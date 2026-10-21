@@ -3,6 +3,7 @@ import {
   cleanup,
   fireEvent,
   render,
+  renderHook,
   screen,
   waitFor,
 } from "@testing-library/react";
@@ -28,10 +29,17 @@ import {
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import { resetNegotiatedManifests } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
+import {
+  FakeStreamClient,
+  FakeStreamSession,
+} from "@traycer-clients/shared/host-transport/__testing__/fake-stream-client";
+import type { StatusChangeHandler } from "@traycer-clients/shared/host-transport/i-stream-session";
+import type { CloudChatSummary } from "@traycer/protocol/host/epic/cloud-chat";
 
 const TAB_HOST_ID = "tab-host-id";
 const TEAM_HOST_ID = "team-host-id";
 const TEAM_ID = "team-9";
+const TEAM_ENVIRONMENT_ID = "team-9-environment";
 
 const dialogMocks = vi.hoisted(() => ({
   /** Every `epic.createChat` the dialog sent, with the client it was sent on. */
@@ -240,8 +248,74 @@ vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
 import { ChatForkDialog, type ChatForkDialogTarget } from "../chat-fork-dialog";
 import { useWorktreeIntentStagingStore } from "@/stores/worktree/worktree-intent-staging-store";
 import { useSeededWorkspaceSnapshotStore } from "@/stores/worktree/seeded-workspace-snapshot-store";
+import {
+  publishEnvironmentArmScope,
+  useEnvironmentArmChats,
+} from "@/hooks/environment/use-environment-arms";
 
 const FORBIDDEN_COPY = "Ask the task's owner to continue it on a team host.";
+
+/** An arm stream the pool can end as it ends one for an unattached task. */
+class ArmSession extends FakeStreamSession {
+  private statusListener: StatusChangeHandler | null = null;
+
+  override onStatusChange(handler: StatusChangeHandler): void {
+    this.statusListener = handler;
+    super.onStatusChange(handler);
+  }
+
+  forbid(): void {
+    this.statusListener?.(
+      "closed",
+      {
+        kind: "fatalError",
+        details: {
+          code: "FORBIDDEN",
+          reason: "FORBIDDEN: access denied.",
+          incompatibleMethods: null,
+          upgradeGuidance: null,
+        },
+      },
+      null,
+    );
+  }
+}
+
+/** The pool's stream client: every subscription an open {@link ArmSession}. */
+class PoolArmClient extends FakeStreamClient {
+  readonly armSessions: ArmSession[] = [];
+
+  constructor() {
+    super(true);
+  }
+
+  override subscribe(method: string, params: unknown): ArmSession {
+    const session = new ArmSession();
+    this.armSessions.push(session);
+    this.subscribes.push({ method, params });
+    session.emitStatus("open");
+    return session;
+  }
+}
+
+function teamChat(chatId: string): CloudChatSummary {
+  return {
+    identity: { taskId: "epic-test", chatId, ownerUserId: TEAM_ENVIRONMENT_ID },
+    ownerHostId: TEAM_HOST_ID,
+    createdAt: 1,
+    visibility: "private",
+    title: chatId,
+    isTitleEditedByUser: false,
+    parentChatId: null,
+    isArchived: false,
+    runSettingsSummary: null,
+    metadataUpdatedAt: 1,
+    headSha256: null,
+    publishedAt: null,
+    throughRecordSeq: null,
+    isOwnedByViewer: false,
+  };
+}
 
 function personalEntry(hostId: string, label: string): HostDirectoryEntry {
   return {
@@ -498,6 +572,7 @@ describe("ChatForkDialog continuing a personal task on a team host", () => {
   });
 
   afterEach(() => {
+    publishEnvironmentArmScope(null);
     resetNegotiatedManifests();
     resetHostConnectionRegistryForTest();
     useWorktreeIntentStagingStore.getState().resetForTests();
@@ -591,5 +666,49 @@ describe("ChatForkDialog continuing a personal task on a team host", () => {
     });
     expect(dialogMocks.creates[0]?.client).toBe(TEAM_HOST_CLIENT);
     expect(dialogMocks.toastError).not.toHaveBeenCalled();
+  });
+
+  it("reopens the team environment's chat arm the pool ended before the attachment", async () => {
+    const pool = new PoolArmClient();
+    publishEnvironmentArmScope({
+      poolHostId: "pool-host-id",
+      client: pool,
+      viewerId: "viewer-1",
+      environmentIds: [TEAM_ENVIRONMENT_ID],
+      environmentIdByTeamId: new Map([[TEAM_ID, TEAM_ENVIRONMENT_ID]]),
+      supported: new Set(["environment.chats.subscribe"]),
+    });
+    const arm = renderHook(() => useEnvironmentArmChats("epic-test"));
+    expect(pool.armSessions).toHaveLength(1);
+    // The task is not attached to the team yet: the pool ends its arm.
+    act(() => {
+      pool.armSessions[0]?.forbid();
+    });
+
+    await startFork();
+    attachCalls[0]?.settle("resolve");
+    await waitFor(() => {
+      expect(dialogMocks.creates).toHaveLength(1);
+    });
+
+    expect(pool.armSessions).toHaveLength(2);
+    expect(pool.subscribes[1]).toEqual({
+      method: "environment.chats.subscribe",
+      params: { environmentId: TEAM_ENVIRONMENT_ID, taskId: "epic-test" },
+    });
+    act(() => {
+      pool.armSessions[1]?.emit(
+        {
+          kind: "snapshot",
+          hasBinaryPayload: false,
+          generation: 0,
+          chats: [teamChat("team-fork")],
+        },
+        null,
+      );
+    });
+    expect(arm.result.current.map((chat) => chat.identity.chatId)).toEqual([
+      "team-fork",
+    ]);
   });
 });

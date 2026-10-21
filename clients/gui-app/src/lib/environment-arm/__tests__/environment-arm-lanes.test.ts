@@ -192,6 +192,19 @@ describe("createEnvironmentArmLanes", () => {
     },
   );
 
+  it("reopens an ended arm when asked and leaves a live one as it is", () => {
+    lanes.acquire(spec("k"));
+    lanes.reopenEnded("k");
+    expect(sessions).toHaveLength(1);
+
+    sessions[0]?.closeWith(fatal("FORBIDDEN"));
+    lanes.reopenEnded("k");
+    sessions[1]?.emit(frameEnvelope(0, "a"), null);
+
+    expect(sessions).toHaveLength(2);
+    expect(lanes.read("k", [])).toEqual(["ended", "a"]);
+  });
+
   it("reopens after a retryable fatal close, resuming from the applied state", async () => {
     lanes.acquire(spec("k"));
     sessions[0]?.emit(frameEnvelope(1, "a"), null);

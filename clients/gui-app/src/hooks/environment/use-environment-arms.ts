@@ -41,6 +41,8 @@ export interface EnvironmentArmScope {
   readonly viewerId: string;
   /** The viewer's team environments: the only ones with an arm. */
   readonly environmentIds: readonly string[];
+  /** Each of those environments by the team that owns it. */
+  readonly environmentIdByTeamId: ReadonlyMap<string, string>;
   /** The arm methods the pool's session serves. */
   readonly supported: ReadonlySet<EnvironmentArmMethod>;
 }
@@ -142,6 +144,41 @@ function laneKey(
     environmentId,
     scopeId,
   ]);
+}
+
+/**
+ * Reopens the arms of `teamId`'s environment in `taskId` that ended, once the
+ * task is attached to that team. An arm a surface opened before the
+ * attachment ended with `FORBIDDEN`, and the attachment changes none of the
+ * ids its holders key on, so they would hold it ended until they remount.
+ */
+export function reopenEndedEnvironmentArms(
+  teamId: string,
+  taskId: string,
+): void {
+  const scope = publishedScope;
+  if (scope === null) return;
+  const environmentId = scope.environmentIdByTeamId.get(teamId);
+  if (environmentId === undefined) return;
+  chatLanes.reopenEnded(
+    laneKey("environment.chats.subscribe", scope, environmentId, taskId),
+  );
+  terminalLanes.reopenEnded(
+    laneKey(
+      "environment.plainTerminals.subscribe",
+      scope,
+      environmentId,
+      taskId,
+    ),
+  );
+  graphLanes.reopenEnded(
+    laneKey(
+      "environment.communicationGraph.subscribe",
+      scope,
+      environmentId,
+      taskId,
+    ),
+  );
 }
 
 // ---- chats ---------------------------------------------------------------- //
