@@ -1068,6 +1068,109 @@ describe("AuthService cloudAuthorized verdict propagation on in-place transition
     session.close();
   });
 
+  it("an unauthorized stream close whose check an interactive sign-in overtakes re-dials instead of going terminal", async () => {
+    // The other ordering: the stream's recovery has already sent
+    // `/api/v3/user` when the sign-in starts, so the check is fenced by the
+    // identity generation after its answer lands. That internal `null` means
+    // "stale", not "no context"; reading it as a rejection would close the
+    // stream for good under a session the attempt is still deciding.
+    vi.useFakeTimers();
+    const { service, host } = makeService();
+    trackedServices.push(service);
+    await host.tokenStore.signIn(
+      { token: "stale-stored-token", refreshToken: "stale-stored-refresh" },
+      { id: "user-1", email: "test@example.com", name: "Test User" },
+    );
+    restoreFetch();
+    restoreFetch = installFetch(() =>
+      Promise.reject(new Error("connection refused")),
+    );
+    const start = service.start();
+    for (let retry = 1; retry < AUTH_FETCH_MAX_ATTEMPTS; retry += 1) {
+      await vi.advanceTimersByTimeAsync(authRetryDelayMs(retry));
+    }
+    await start;
+    expect(useAuthStore.getState().status).toBe("unverified");
+
+    let answerHeldCheck: (response: Response) => void = () => undefined;
+    const heldCheckAnswer = new Promise<Response>((resolve) => {
+      answerHeldCheck = resolve;
+    });
+    const validationRequests = { value: 0 };
+    restoreFetch();
+    restoreFetch = installFetch((input) => {
+      const url = typeof input === "string" ? input : String(input);
+      if (url !== VALIDATION_URL) {
+        return Promise.reject(new Error("connection refused"));
+      }
+      validationRequests.value += 1;
+      return heldCheckAnswer;
+    });
+
+    const sockets: ScriptedStreamSocket[] = [];
+    const factory: IStreamWebSocketFactory = {
+      create: () => {
+        const socket = new ScriptedStreamSocket();
+        sockets.push(socket);
+        return socket;
+      },
+    };
+    const requestContext = createRequestContextFixture({
+      origin: "renderer",
+      bearerToken: "stale-stored-token",
+    });
+    const client = new WsStreamClient({
+      clientIdentity: TEST_CLIENT_IDENTITY,
+      registry: hostStreamRpcRegistry,
+      endpoint: () => mockLocalHostEntry,
+      hostId: mockLocalHostEntry.hostId,
+      bearer: () => requestContext.credentials,
+      auth: createStreamAuthRevalidator(service),
+      clock: null,
+      hostCredentialMint: null,
+      onHostCredentialState: null,
+      evidence: NO_TRANSPORT_EVIDENCE,
+      webSocketFactory: factory,
+      dialTimeoutMs: 1_000,
+      openAckTimeoutMs: 1_000,
+      pingIntervalMs: 25_000,
+      pongTimeoutMs: 50_000,
+      initialBackoffMs: 5,
+      maxBackoffMs: 1_000,
+    });
+    const statuses: StreamConnectionStatus[] = [];
+    const session = client.subscribe("epic.subscribe", { epicId: "e1" });
+    session.onStatusChange((streamStatus) => statuses.push(streamStatus));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(sockets).toHaveLength(1);
+
+    sockets[0].fireOpen();
+    sockets[0].fireText({
+      kind: "fatalError",
+      details: {
+        code: "UNAUTHORIZED",
+        reason: "bearer expired",
+        incompatibleMethods: null,
+        upgradeGuidance: null,
+      },
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    // Non-vacuity: the recovery's check really is in flight, undecided.
+    expect(validationRequests.value).toBe(1);
+    expect(sockets).toHaveLength(1);
+
+    await service.signIn();
+    expect(useAuthStore.getState().status).toBe("signing-in");
+
+    answerHeldCheck(await okWithProfile());
+    await vi.advanceTimersByTimeAsync(50);
+
+    expect(sockets).toHaveLength(2);
+    expect(statuses).not.toContain("closed");
+    expect(useAuthStore.getState().status).toBe("signing-in");
+    session.close();
+  });
+
   it("a refused live revalidation does not demote an interactive sign-in attempt or spend the refresh token", async () => {
     // The mirror of the case above: authn refuses the held bearer, which would
     // rotate it and land `unverified` over the running attempt.

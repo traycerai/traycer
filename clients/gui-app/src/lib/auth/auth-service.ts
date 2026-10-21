@@ -441,10 +441,14 @@ type ValidationOutcome = AuthIdentityValidationResult;
 
 /**
  * What a live revalidation of the current context answers. On top of a
- * validation's verdict, `deferred-under-attempt` says the check stood down
- * because an interactive sign-in is in flight: undecidable now, to be asked
- * again once the attempt has settled. It is not `null`, which every consumer
- * reads as "no live context to revalidate".
+ * validation's verdict, `deferred-under-attempt` says an interactive sign-in
+ * is in flight with the context still present, so the check could not be
+ * decided: ask again once the attempt has settled. That covers a check that
+ * stood down on entry and one the attempt overtook while it was running.
+ * `null` from {@link AuthService.revalidateCurrentContext} means the context
+ * is absent or the service disposed. The internal stages return `null` for
+ * "stale or absent" alike and drop their side effects; only that public
+ * boundary tells the two apart.
  */
 export type LiveRevalidationOutcome =
   ValidationOutcome | { readonly kind: "deferred-under-attempt" };
@@ -2502,15 +2506,31 @@ export class AuthService {
    *                             signed-out.
    *   - `network-error`       → leaves auth state untouched; a transient
    *                             outage must not log the user out.
+   *   - `deferred-under-attempt` → an interactive sign-in is in flight; ask
+   *                             again once it settles.
    *
-   * No-op when the user is not currently signed-in.
+   * `null` when there is no live context (or the service is disposed).
    */
   async revalidateCurrentContext(): Promise<LiveRevalidationOutcome | null> {
     const expected = this.contextProvider.current()?.credentials ?? null;
     if (expected === null) {
       return null;
     }
-    return this.revalidateExpectedContext(expected);
+    const outcome = await this.revalidateExpectedContext(expected);
+    // An internal fence's `null` is "stale or absent". A check that an
+    // interactive sign-in overtook while it ran is stale under a context that
+    // is still present, which is the same undecidable state the entry
+    // stand-down names; a consumer must not read it as the context being gone.
+    if (
+      outcome === null &&
+      !this.isDisposed() &&
+      this.contextProvider.current() !== null &&
+      (this.activeAttempt !== null ||
+        useAuthStore.getState().status === "signing-in")
+    ) {
+      return { kind: "deferred-under-attempt" };
+    }
+    return outcome;
   }
 
   /**
