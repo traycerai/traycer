@@ -19,6 +19,7 @@ import {
   wasEpicCreatedRecentlyThisSession,
 } from "@/lib/epics/session-created-epics";
 import { liveEpicTitleFromHandle } from "@/lib/epic-selectors";
+import { hostQueryKeys } from "@/lib/query-keys/host-query-keys";
 import { getOpenEpicRegistry } from "@/lib/registries/epic-session-registry";
 import { LANDING_ROUTE, readActiveEpicIdFromPath } from "@/lib/routes";
 import {
@@ -44,6 +45,10 @@ import type { OpenEpicState } from "@/stores/epics/open-epic/store";
  *    session reconnects or is opened offline). Because that signal cannot tell
  *    a delete apart from a revoke, it gets a neutral "no longer available"
  *    toast rather than asserting either cause.
+ *
+ * It also undoes one: a session whose stream the host closed `FORBIDDEN`
+ * re-opens once that epic's chat-records read succeeds again after failing,
+ * so a re-granted epic recovers without Retry.
  *
  * It generalizes the former `useCloseUnavailableEpicTab`: it observes EVERY
  * live session through the module-scoped session registry, not just the active
@@ -100,6 +105,72 @@ export function EpicAccessCoordinator() {
       if (timer === undefined) return;
       window.clearTimeout(timer);
       createGraceTimers.delete(epicId);
+    };
+    // An epic whose stream the host closed `FORBIDDEN` (access lost while it
+    // was open). The client never reopens that stream on its own, so a
+    // re-granted epic would hold the removal-time error until Retry. Its
+    // chat-records read keeps polling the same host, and the host answering
+    // it again after a failure is the proof access is back: on that first
+    // failure-to-success switch the session re-opens once. A real revoke never
+    // answers, and nothing new polls.
+    const forbiddenWatches = new Map<string, () => void>();
+    const disarmForbiddenRecovery = (epicId: string): void => {
+      const unsubscribe = forbiddenWatches.get(epicId);
+      if (unsubscribe === undefined) return;
+      unsubscribe();
+      forbiddenWatches.delete(epicId);
+    };
+    const armForbiddenRecovery = (epicId: string): void => {
+      if (queryClient === undefined || forbiddenWatches.has(epicId)) return;
+      const cache = queryClient.getQueryCache();
+      // Per query, whether it has failed since the error landed: a success
+      // already in flight when access went away proves nothing.
+      const failed = new Set<string>();
+      for (const query of cache.findAll({
+        predicate: (candidate) => {
+          const queryKey: unknown = candidate.queryKey;
+          return isEpicChatRecordsKey(queryKey, epicId);
+        },
+      })) {
+        if (query.state.status === "error") failed.add(query.queryHash);
+      }
+      const unsubscribe = cache.subscribe((event) => {
+        if (event.type !== "updated") return;
+        const queryKey: unknown = event.query.queryKey;
+        if (!isEpicChatRecordsKey(queryKey, epicId)) return;
+        const actionType = event.action.type;
+        if (actionType === "failed" || actionType === "error") {
+          failed.add(event.query.queryHash);
+          return;
+        }
+        if (actionType !== "success" || !failed.has(event.query.queryHash)) {
+          return;
+        }
+        disarmForbiddenRecovery(epicId);
+        // Out of the cache's notify: re-opening publishes into the store.
+        queueMicrotask(() => {
+          if (disposed) return;
+          const live = registry.peek(epicId);
+          if (live === null) return;
+          const liveState = live.store.getState();
+          if (liveState.snapshotFetchError?.code !== "FORBIDDEN") return;
+          // `requestFreshSnapshot` replaces the replica; local work the person
+          // has not synced stays theirs to keep, behind the banner's Retry.
+          if (holdsUnsyncedWork(liveState)) return;
+          live.requestFreshSnapshot();
+        });
+      });
+      forbiddenWatches.set(epicId, unsubscribe);
+    };
+    const syncForbiddenRecovery = (
+      epicId: string,
+      state: OpenEpicState,
+    ): void => {
+      if (state.snapshotFetchError?.code === "FORBIDDEN") {
+        armForbiddenRecovery(epicId);
+      } else {
+        disarmForbiddenRecovery(epicId);
+      }
     };
     // Last resident-set signature reconcile acted on, so the per-keystroke
     // eligibility emits the registry fires (which don't change membership)
@@ -334,11 +405,13 @@ export function EpicAccessCoordinator() {
           ) {
             return;
           }
+          syncForbiddenRecovery(epicId, state);
           evaluate(epicId);
         });
         perHandleUnsub.set(epicId, unsubscribe);
         // Catch a session already dead at subscribe time (signal landed before
         // this coordinator observed the session).
+        syncForbiddenRecovery(epicId, handle.store.getState());
         evaluate(epicId);
       }
       for (const [epicId, unsubscribe] of [...perHandleUnsub.entries()]) {
@@ -352,6 +425,7 @@ export function EpicAccessCoordinator() {
         // reopen starts the schedule over.
         clearCreateGraceTimer(epicId);
         createGraceAttempts.delete(epicId);
+        disarmForbiddenRecovery(epicId);
       }
     };
 
@@ -382,6 +456,8 @@ export function EpicAccessCoordinator() {
         window.clearTimeout(timer);
       }
       createGraceTimers.clear();
+      for (const unsubscribe of forbiddenWatches.values()) unsubscribe();
+      forbiddenWatches.clear();
     };
   }, [navigate, queryClient]);
 
@@ -425,6 +501,25 @@ function deadEpicReason(state: OpenEpicState): DeadEpicReason | null {
 function holdsUnsyncedWork(state: OpenEpicState | null): boolean {
   if (state === null) return false;
   return state.isDirty || state.unsyncedQueueSize > 0;
+}
+
+const CHAT_RECORDS_METHOD = "epic.listChatRecords";
+
+/** Whether `queryKey` is an `epic.listChatRecords` read of `epicId`, on any host. */
+function isEpicChatRecordsKey(queryKey: unknown, epicId: string): boolean {
+  if (
+    !Array.isArray(queryKey) ||
+    !hostQueryKeys.matchesMethodOnAnyHost(queryKey, CHAT_RECORDS_METHOD)
+  ) {
+    return false;
+  }
+  const params: unknown = queryKey[queryKey[1] === CHAT_RECORDS_METHOD ? 2 : 3];
+  return (
+    typeof params === "object" &&
+    params !== null &&
+    "epicId" in params &&
+    params.epicId === epicId
+  );
 }
 
 /**
