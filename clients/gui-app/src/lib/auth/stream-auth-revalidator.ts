@@ -41,6 +41,15 @@ export function createStreamAuthRevalidator(
         });
         return "rotated";
       }
+      if (outcome.kind === "deferred-under-attempt") {
+        // An interactive sign-in is settling the session. Stay in the
+        // reconnect backoff: the next re-dial revalidates against whatever
+        // the attempt leaves, where `rejected` would close this stream for good.
+        appLogger.debug("[stream-auth] reconnect revalidation deferred", {
+          reason: "interactive-attempt",
+        });
+        return "network-error";
+      }
       if (outcome.kind === "network-error") {
         appLogger.warn(
           "[stream-auth] reconnect revalidation network error",

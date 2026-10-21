@@ -440,6 +440,16 @@ export type LinkLoginProgressListener = (
 type ValidationOutcome = AuthIdentityValidationResult;
 
 /**
+ * What a live revalidation of the current context answers. On top of a
+ * validation's verdict, `deferred-under-attempt` says the check stood down
+ * because an interactive sign-in is in flight: undecidable now, to be asked
+ * again once the attempt has settled. It is not `null`, which every consumer
+ * reads as "no live context to revalidate".
+ */
+export type LiveRevalidationOutcome =
+  ValidationOutcome | { readonly kind: "deferred-under-attempt" };
+
+/**
  * The result of applying a same-user `rotate` outcome to the live session:
  *   - `rotated`    → the lease was rotated in place to `token`;
  *   - `signed-out` → a terminal outcome cleared the UI session (file kept);
@@ -617,7 +627,8 @@ export class AuthService {
   // §4 owned-watcher subscription (tokenStore.subscribe); disposed on dispose().
   private tokenStoreChangeDisposable: Disposable | null = null;
   private pendingTimeoutHandle: number | null = null;
-  private currentRevalidation: Promise<ValidationOutcome | null> | null = null;
+  private currentRevalidation: Promise<LiveRevalidationOutcome | null> | null =
+    null;
   private currentRevalidationBearer: OpenFrameBearerSource | null = null;
   // Single-flight guard for the proactive force-refresh path so the refresh
   // scheduler can't stack overlapping `/api/v3/auth/refresh` rotations.
@@ -1228,16 +1239,17 @@ export class AuthService {
       // `revalidateLiveSession` already applies to a validated live session:
       // project the entitlement, and re-sign-in only when the bearer turns out
       // to name a different user.
-      this.commitSubscriptionStatus(
-        outcome.user.userSubscription.subscriptionStatus,
-      );
       // The same bearer can still have been demoted while authn answered (a
       // revocation withdraws the verdict and latches without rotating), and
-      // that newer state outranks this verdict. Every bearer change advances
-      // the credential generation, a same-token demotion included.
+      // that newer state outranks this verdict, which then writes nothing.
+      // Every bearer change advances the credential generation, a same-token
+      // demotion included.
       if (this.getCredentialGeneration() !== credentialGeneration) {
         return;
       }
+      this.commitSubscriptionStatus(
+        outcome.user.userSubscription.subscriptionStatus,
+      );
       if (outcome.user.user.id !== provisional.user.id) {
         this.applySignedIn(stored.token, outcome.user, undefined);
         return;
@@ -2493,7 +2505,7 @@ export class AuthService {
    *
    * No-op when the user is not currently signed-in.
    */
-  async revalidateCurrentContext(): Promise<ValidationOutcome | null> {
+  async revalidateCurrentContext(): Promise<LiveRevalidationOutcome | null> {
     const expected = this.contextProvider.current()?.credentials ?? null;
     if (expected === null) {
       return null;
@@ -2523,6 +2535,12 @@ export class AuthService {
     if (!this.isIdentityCurrent(generation) || outcome === null) {
       return "superseded";
     }
+    if (outcome.kind === "deferred-under-attempt") {
+      // The interactive attempt overtook this authority's recovery, and its
+      // own result settles the session: the call fails once, with no latch
+      // and no refresh spent.
+      return "superseded";
+    }
     if (outcome.kind === "rejected") {
       // This method's caller is a host that just refused `expected`.
       this.noteHostRefusedHeldBearer();
@@ -2538,7 +2556,7 @@ export class AuthService {
 
   private revalidateExpectedContext(
     expected: OpenFrameBearerSource,
-  ): Promise<ValidationOutcome | null> {
+  ): Promise<LiveRevalidationOutcome | null> {
     if (this.currentRevalidation !== null) {
       return this.currentRevalidationBearer === expected
         ? this.currentRevalidation
@@ -2568,7 +2586,7 @@ export class AuthService {
    */
   private async revalidateAfterPendingForceRefresh(
     expected: OpenFrameBearerSource,
-  ): Promise<ValidationOutcome | null> {
+  ): Promise<LiveRevalidationOutcome | null> {
     if (this.currentForceRefresh !== null) {
       await this.currentForceRefresh;
       if (this.isDisposed() || !this.isExpectedBearerCurrent(expected)) {
@@ -2598,6 +2616,11 @@ export class AuthService {
     }
     if (outcome.kind === "valid") {
       return outcome.user;
+    }
+    // An interactive sign-in is settling the session: no user to show until
+    // its result lands, which re-renders the panel.
+    if (outcome.kind === "deferred-under-attempt") {
+      return null;
     }
     // `network-error`: a transient outage that did NOT sign the user out. Throw
     // so TanStack Query surfaces a retryable error on the panel (refresh button)
@@ -3199,7 +3222,7 @@ export class AuthService {
 
   private async revalidateCurrentContextOnce(
     expected: OpenFrameBearerSource,
-  ): Promise<ValidationOutcome | null> {
+  ): Promise<LiveRevalidationOutcome | null> {
     if (this.isDisposed()) {
       return null;
     }
@@ -3241,7 +3264,7 @@ export class AuthService {
     // still to land. A check started before the attempt is fenced by the
     // identity generation the attempt advanced.
     if (this.activeAttempt !== null || status === "signing-in") {
-      return null;
+      return { kind: "deferred-under-attempt" };
     }
     const currentUserId = ctx.identity.userId;
     const currentToken = this.currentBearer;
@@ -3254,20 +3277,20 @@ export class AuthService {
     }
 
     if (outcome.kind === "valid") {
+      // The verdict is about `currentToken` as it stood when the check was
+      // sent. Same-user adoptions and demotions leave the identity generation
+      // alone, so a credential that moved meanwhile (a reconcile adopting a
+      // bearer authn has refused, a demotion that withdrew the verdict) is
+      // caught here, and the verdict writes nothing onto it.
+      if (this.getCredentialGeneration() !== credentialGeneration) {
+        return outcome;
+      }
       // Subscription entitlement can change without a bearer rotation (for
       // example after a purchase or restore). Project every successful
       // validation so entitlement-gated surfaces react without an app restart.
       this.commitSubscriptionStatus(
         outcome.user.userSubscription.subscriptionStatus,
       );
-      // The verdict is about `currentToken` as it stood when the check was
-      // sent. Same-user adoptions and demotions leave the identity generation
-      // alone, so a credential that moved meanwhile (a reconcile adopting a
-      // bearer authn has refused, a demotion that withdrew the verdict) is
-      // caught here, and the verdict is not projected onto it.
-      if (this.getCredentialGeneration() !== credentialGeneration) {
-        return outcome;
-      }
       if (outcome.user.user.id !== currentUserId) {
         // The bearer now validates to a different user (a cross-user re-seed) -
         // treat as a fresh sign-in so the old context aborts cleanly.

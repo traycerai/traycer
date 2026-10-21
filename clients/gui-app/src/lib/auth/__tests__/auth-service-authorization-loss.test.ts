@@ -6,7 +6,26 @@ import type {
 } from "@traycer/protocol/framework/index";
 import type { VersionedStreamRpcRegistry } from "@traycer/protocol/framework/versioned-stream-rpc";
 import type { IRemoteSession } from "@traycer-clients/shared/host-transport/remote/remote-session";
-import type { StreamMethodSupport } from "@traycer-clients/shared/host-transport/ws-stream-client";
+import {
+  WsStreamClient,
+  type StreamMethodSupport,
+} from "@traycer-clients/shared/host-transport/ws-stream-client";
+import type { StreamConnectionStatus } from "@traycer-clients/shared/host-transport/i-stream-session";
+import type {
+  WebSocketCloseEvent,
+  WebSocketErrorEvent,
+  WebSocketOpenEvent,
+} from "@traycer-clients/shared/host-transport/ws-factory";
+import type {
+  IStreamWebSocketFactory,
+  StreamWebSocketLike,
+  StreamWebSocketMessageEvent,
+} from "@traycer-clients/shared/host-transport/ws-stream-factory";
+import { NO_TRANSPORT_EVIDENCE } from "@traycer-clients/shared/host-selection/transport-evidence";
+import { TEST_CLIENT_IDENTITY } from "@traycer-clients/shared/test-fixtures/client-identity";
+import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
+import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
+import { hostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import {
   acquireRemoteSession,
   remoteSessionRefCountForTest,
@@ -25,6 +44,7 @@ import {
   type ExternalSession,
   type RevokedCloudAuthorization,
 } from "@/lib/auth/auth-service";
+import { createStreamAuthRevalidator } from "@/lib/auth/stream-auth-revalidator";
 import { useAuthStore } from "@/stores/auth/auth-store";
 
 // Companion to `auth-service.test.ts`, isolated into its own file because it
@@ -357,6 +377,29 @@ function freshIdentity(): RemoteSessionIdentity {
     authEpoch: "authz-loss-lease-1",
     openAuth: "user-bearer",
   };
+}
+
+/**
+ * A scriptable `/stream` socket: the test fires the host's side (open, then a
+ * fatal frame) and the real `WsStreamClient` reacts to it.
+ */
+class ScriptedStreamSocket implements StreamWebSocketLike {
+  onopen: ((event: WebSocketOpenEvent) => void) | null = null;
+  onmessage: ((event: StreamWebSocketMessageEvent) => void) | null = null;
+  onerror: ((event: WebSocketErrorEvent) => void) | null = null;
+  onclose: ((event: WebSocketCloseEvent) => void) | null = null;
+
+  send(): void {}
+
+  close(): void {}
+
+  fireOpen(): void {
+    this.onopen?.({ type: "open" });
+  }
+
+  fireText(data: unknown): void {
+    this.onmessage?.({ type: "text", data: JSON.stringify(data) });
+  }
 }
 
 const trackedServices: AuthService[] = [];
@@ -941,10 +984,88 @@ describe("AuthService cloudAuthorized verdict propagation on in-place transition
     restoreFetch();
     restoreFetch = installFetch(() => okWithProfile());
     const outcome = await service.revalidateCurrentContext();
-    expect(outcome).toBeNull();
+    expect(outcome).toEqual({ kind: "deferred-under-attempt" });
 
     expect(useAuthStore.getState().status).toBe("signing-in");
     expect(service.getDeviceProgress()?.phase).toBe("waiting-approval");
+  });
+
+  it("an unauthorized stream close during an interactive sign-in re-dials instead of going terminal", async () => {
+    // The stream's UNAUTHORIZED recovery asks the live revalidation, which
+    // stands down under the attempt. Reading that as a rejection would close
+    // the stream for good while the sign-in is still deciding the session.
+    vi.useFakeTimers();
+    const { service, host } = makeService();
+    trackedServices.push(service);
+    await host.tokenStore.signIn(
+      { token: "stale-stored-token", refreshToken: "stale-stored-refresh" },
+      { id: "user-1", email: "test@example.com", name: "Test User" },
+    );
+    restoreFetch();
+    restoreFetch = installFetch(() =>
+      Promise.reject(new Error("connection refused")),
+    );
+    const start = service.start();
+    for (let retry = 1; retry < AUTH_FETCH_MAX_ATTEMPTS; retry += 1) {
+      await vi.advanceTimersByTimeAsync(authRetryDelayMs(retry));
+    }
+    await start;
+    await service.signIn();
+    expect(useAuthStore.getState().status).toBe("signing-in");
+
+    const sockets: ScriptedStreamSocket[] = [];
+    const factory: IStreamWebSocketFactory = {
+      create: () => {
+        const socket = new ScriptedStreamSocket();
+        sockets.push(socket);
+        return socket;
+      },
+    };
+    const requestContext = createRequestContextFixture({
+      origin: "renderer",
+      bearerToken: "stale-stored-token",
+    });
+    const client = new WsStreamClient({
+      clientIdentity: TEST_CLIENT_IDENTITY,
+      registry: hostStreamRpcRegistry,
+      endpoint: () => mockLocalHostEntry,
+      hostId: mockLocalHostEntry.hostId,
+      bearer: () => requestContext.credentials,
+      auth: createStreamAuthRevalidator(service),
+      clock: null,
+      hostCredentialMint: null,
+      onHostCredentialState: null,
+      evidence: NO_TRANSPORT_EVIDENCE,
+      webSocketFactory: factory,
+      dialTimeoutMs: 1_000,
+      openAckTimeoutMs: 1_000,
+      pingIntervalMs: 25_000,
+      pongTimeoutMs: 50_000,
+      initialBackoffMs: 5,
+      maxBackoffMs: 1_000,
+    });
+    const statuses: StreamConnectionStatus[] = [];
+    const session = client.subscribe("epic.subscribe", { epicId: "e1" });
+    session.onStatusChange((streamStatus) => statuses.push(streamStatus));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(sockets).toHaveLength(1);
+
+    sockets[0].fireOpen();
+    sockets[0].fireText({
+      kind: "fatalError",
+      details: {
+        code: "UNAUTHORIZED",
+        reason: "bearer expired",
+        incompatibleMethods: null,
+        upgradeGuidance: null,
+      },
+    });
+    await vi.advanceTimersByTimeAsync(50);
+
+    expect(sockets).toHaveLength(2);
+    expect(statuses).not.toContain("closed");
+    expect(useAuthStore.getState().status).toBe("signing-in");
+    session.close();
   });
 
   it("a refused live revalidation does not demote an interactive sign-in attempt or spend the refresh token", async () => {
