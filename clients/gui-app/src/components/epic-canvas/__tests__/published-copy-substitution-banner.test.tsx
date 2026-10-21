@@ -224,6 +224,7 @@ vi.mock("@/components/epic-canvas/renderers/chat-tile", async () => {
         cloneAllowed
         showsPublishedCopy={props.showsPublishedCopy}
         onClone={() => undefined}
+        continueTargetLabel={null}
         cloning={false}
         className={undefined}
         testId={props.testId}

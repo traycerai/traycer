@@ -127,6 +127,8 @@ const VERIFIED_ALTERNATE_GATE: Readonly<Record<string, string>> = {
     "documented fire-and-forget, same convention as epic.updateChatRunSettings (use-epic-chat-mutations.ts)",
   "epic.listChatRecords":
     "reachable only as a post-write consistency read inside the already-gated useEpicArchiveChatMutation (use-epic-chat-mutations.ts)",
+  "chat.continueHere":
+    "target-choice gate plus call-and-catch: continueTargetHostId skips a host whose negotiated manifest (getNegotiatedHostMethods) lacks the method, and onError turns E_HOST_UNSUPPORTED into the Clone fallback (use-chat-continue-here.ts)",
   "epic.recordViewed":
     "doc comment: the local-home arm exists on every host this client negotiates with, unlike epic.setPinned's cloud arm (use-epic-record-viewed-mutation.ts)",
   "epic.setPinned":

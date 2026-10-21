@@ -40,6 +40,12 @@ import {
   hostScopeOptionFixture,
 } from "@/components/settings/host-scope/host-scope-fixture";
 import type { HostOptions } from "@/components/settings/host-scope/use-host-options";
+import type { HostScopeOption } from "@/components/settings/host-scope/host-scope-model";
+import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
+import {
+  remoteEntry,
+  sandboxFacts,
+} from "@traycer-clients/shared/host-client/__tests__/routing-entry-fixtures";
 import { ACTIVATE_HOST_HINT } from "@/components/settings/host-scope/host-option-model";
 
 const hostOptionsRef = vi.hoisted((): { value: HostOptions } => ({
@@ -75,6 +81,50 @@ vi.mock("@/components/settings/host-scope/use-host-scope", () => ({
     activatingHostId: activatingHostRef.value,
   }),
 }));
+
+/**
+ * A sandbox row as the host list builds it: the directory entry carries the
+ * sandbox facts, and a team's row also carries the registry owner. A team
+ * row is the one `activate` refuses.
+ */
+function sandboxOption(hostId: string, teamId: string | null): HostScopeOption {
+  return hostScopeOptionFixture({
+    hostId,
+    name: hostId,
+    kind: "sandbox",
+    isLocalMachine: false,
+    isActive: false,
+    connectable: true,
+    entry: remoteEntry(hostId, sandboxFacts(teamId)),
+    item:
+      teamId === null
+        ? null
+        : {
+            hostId,
+            displayName: hostId,
+            platform: "linux-x64",
+            kind: "sandbox",
+            publicKey: "pk",
+            createdAt: new Date(0).toISOString(),
+            updatePolicy: "manual",
+            status: {
+              connectivity: "connectable",
+              viewerReachability: "unknown",
+              clientCloud: "ok",
+              updateState: "current",
+              appVersion: "1.4.2",
+              lastSeenAt: new Date(0).toISOString(),
+            },
+            owner: { kind: "team", id: teamId, name: "Alpha" },
+          },
+    sandbox: {
+      state: "awake",
+      frozen: false,
+      summary: sandboxSummaryFixture({ id: `sbx-${hostId}` }),
+      teamOwned: teamId !== null,
+    },
+  });
+}
 
 function buildHost(): MockRunnerHost {
   return new MockRunnerHost({
@@ -304,6 +354,64 @@ describe("<UserMenu /> host section", () => {
     expect(offlineRow.getAttribute("aria-checked")).toBe("false");
     expect(offlineRow.getAttribute("aria-disabled")).toBe("true");
     expect(offlineRow.textContent).toContain("offline");
+  });
+
+  it("leaves a team's sandbox out of the list, which activate would refuse, and keeps personal hosts and personal sandboxes", async () => {
+    const active = hostScopeOptionFixture({
+      hostId: "host-active",
+      isActive: true,
+      connectable: true,
+    });
+    hostOptionsRef.value = hostOptionsFixture({
+      hosts: [
+        active,
+        sandboxOption("sandbox-personal", null),
+        sandboxOption("sandbox-team", "team-a"),
+      ],
+      activeHostId: active.hostId,
+    });
+
+    await openMenu();
+
+    expect(
+      screen.getByTestId("user-menu-host-option-host-active"),
+    ).toBeTruthy();
+    expect(
+      screen.getByTestId("user-menu-host-option-sandbox-personal"),
+    ).toBeTruthy();
+    expect(
+      screen.queryByTestId("user-menu-host-option-sandbox-team"),
+    ).toBeNull();
+  });
+
+  it("leaves a team's sandbox out of the list while its registry row has not arrived", async () => {
+    const active = hostScopeOptionFixture({
+      hostId: "host-active",
+      isActive: true,
+      connectable: true,
+    });
+    hostOptionsRef.value = hostOptionsFixture({
+      hosts: [
+        active,
+        sandboxOption("sandbox-personal", null),
+        { ...sandboxOption("sandbox-team", "team-a"), item: null },
+      ],
+      activeHostId: active.hostId,
+    });
+
+    await openMenu();
+
+    expect(
+      screen.getByTestId("user-menu-host-option-sandbox-personal"),
+    ).toBeTruthy();
+    expect(
+      screen.queryByTestId("user-menu-host-option-sandbox-team"),
+    ).toBeNull();
+    expect(
+      screen
+        .getAllByRole("menuitemradio")
+        .some((row) => row.textContent.includes("sandbox-team")),
+    ).toBe(false);
   });
 
   it("switches to a different online host on click", async () => {

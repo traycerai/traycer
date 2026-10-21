@@ -847,13 +847,14 @@ function ChatDeadTileBannerWithOffer(
     sourceTitle: chatRecord?.title ?? "",
     sourceOwnerUserId,
   });
-  // A removed team sandbox's agent continues on the person's own team
-  // sandbox instead of being cloned; a refusal for another environment falls
+  // A removed team sandbox's agent continues on another awake sandbox of its
+  // team instead of being cloned; a refusal for another environment falls
   // back to the clone.
   const continueOffer = useChatContinueHere({
     epicId: props.epicId,
     chatId: props.chatId,
     sourceHostId: props.sourceHostId,
+    ownerUserId: sourceOwnerUserId,
     name: chatRecord?.title ?? "",
     fallback: offer.clone,
   });
@@ -867,6 +868,7 @@ function ChatDeadTileBannerWithOffer(
         environmentOwned={environmentOwned}
         cloneAllowed={props.cloneAllowed}
         showsPublishedCopy={props.showsPublishedCopy}
+        continueTargetLabel={continueOffer.targetLabel}
         onClone={continues ? continueOffer.continueHere : offer.clone}
         cloning={offer.cloning || continueOffer.continuing}
         className={undefined}

@@ -1,16 +1,37 @@
-import { useCallback } from "react";
+import { useCallback, useMemo, useSyncExternalStore } from "react";
+import { useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { isTeamSandboxHostDirectoryEntry } from "@traycer-clients/shared/host-client/host-rpc-routing";
+import {
+  isTeamSandboxHostDirectoryEntry,
+  readProcessHostRpcTierPlan,
+} from "@traycer-clients/shared/host-client/host-rpc-routing";
 import { isRemoteHostDirectoryEntry } from "@traycer-clients/shared/host-client/remote-fetcher";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
-import { useEffectiveHostId } from "@/hooks/host/use-effective-host-id";
+import {
+  getNegotiatedHostMethods,
+  subscribeNegotiatedManifests,
+} from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
+import type { EnvironmentListResponse } from "@traycer/protocol/host/environment/contracts";
+import { useEnvironmentListQuery } from "@/hooks/bots/use-environment-list-query";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
+import { useHostDirectoryList } from "@/hooks/host/use-host-directory-list-query";
 import { useHostMutation } from "@/hooks/host/use-host-query";
-import { useHostSupportsMethod } from "@/hooks/host/use-host-supports-method";
 import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
+import { useOptionalHostClient } from "@/lib/host";
 import { toastFromHostError } from "@/lib/host-error-toast";
-import { chatContinueMutationKeys } from "@/lib/query-keys";
+import { chatContinueMutationKeys, hostQueryKeys } from "@/lib/query-keys";
+import {
+  authorizesCloudCapability,
+  useAuthStore,
+} from "@/stores/auth/auth-store";
+
+const CONTINUE_METHOD = "chat.continueHere";
+
+/** The task lists that place a chat under its owning host. */
+const TASK_LIST_METHODS = ["epic.listCloudChats", "epic.listTaskHosts"];
+
+const NO_ENTRIES: readonly HostDirectoryEntry[] = [];
 
 /**
  * Whether the chat's own host is gone for good, as far as this device can
@@ -29,58 +50,157 @@ function sourceIsRemoved(entry: HostDirectoryEntry | null): boolean {
   );
 }
 
+/** The team that owns the environment `ownerUserId` names, or `null`. */
+function environmentTeamId(
+  environments: EnvironmentListResponse | undefined,
+  ownerUserId: string | null,
+): string | null {
+  if (environments === undefined || ownerUserId === null) return null;
+  const environment = environments.environments.find(
+    (candidate) =>
+      candidate.ownerKind === "organization" &&
+      candidate.environmentId === ownerUserId,
+  );
+  return environment === undefined ? null : environment.ownerId;
+}
+
 /**
- * Continue a removed team sandbox's chat on the person's own team sandbox
+ * Where a removed team sandbox's chat continues: the first awake sandbox of
+ * the same team, in directory order, other than the source, that is not
+ * known to lack the method. A host never dialed has no manifest yet, and
+ * counts: the press dials it, and a refusal falls back to the clone.
+ */
+function continueTargetHostId(
+  directory: readonly HostDirectoryEntry[],
+  teamId: string | null,
+  sourceHostId: string,
+): string | null {
+  if (teamId === null) return null;
+  const target = directory.find((entry) => {
+    if (
+      entry.hostId === sourceHostId ||
+      !isTeamSandboxHostDirectoryEntry(entry) ||
+      !isRemoteHostDirectoryEntry(entry) ||
+      entry.sandbox === null ||
+      entry.sandbox.ownerTeamId !== teamId ||
+      entry.sandbox.state !== "awake" ||
+      entry.sandbox.frozen
+    ) {
+      return false;
+    }
+    const methods = getNegotiatedHostMethods(entry.hostId);
+    return methods === null || methods.has(CONTINUE_METHOD);
+  });
+  return target === undefined ? null : target.hostId;
+}
+
+/**
+ * Re-reads the task's lists, so the chat is grouped under its new host.
+ * Cancels first: `invalidateQueries` joins an initial read still in flight
+ * (no data yet), and that read's pre-move answer would land after the move,
+ * clear the invalidation and keep the chat under its old host - the lists
+ * are not polled. See `useCloudChatPayloadList` for the same rule.
+ */
+function invalidateTaskLists(queryClient: QueryClient, epicId: string): void {
+  const filters = {
+    predicate: (query: { readonly queryKey: readonly unknown[] }) => {
+      const key = query.queryKey;
+      const method = TASK_LIST_METHODS.find((candidate) =>
+        hostQueryKeys.matchesMethodOnAnyHost(key, candidate),
+      );
+      if (method === undefined) return false;
+      const params = key[key[1] === method ? 2 : 3];
+      return (
+        typeof params === "object" &&
+        params !== null &&
+        "taskId" in params &&
+        params.taskId === epicId
+      );
+    },
+  };
+  void queryClient
+    .cancelQueries(filters)
+    .then(() => queryClient.invalidateQueries(filters));
+}
+
+/**
+ * Continue a removed team sandbox's chat on another sandbox of its team
  * (`chat.continueHere`), keeping the chat id: the server moves the chat's
  * authority there and the new host hydrates it from its published copy.
  *
- * Offered only when the person's host is a team sandbox that serves the
- * method and the chat's host is gone. The tab stays bound to its host for
- * life, so a continue opens a NEW tab on the new host, which says it is
- * catching up until the chat is live there; this tab stays as it is. A
- * refusal for another environment (or a chat that never was a team
- * sandbox's) falls back to `fallback`, the dead tile's Clone.
+ * The target is found from the chat's environment, not from the app-wide
+ * host, which is never a team's. The tab stays bound to its host for life,
+ * so a continue opens a NEW tab on the new host, which says it is catching up
+ * until the chat is live there; this tab stays as it is. A refusal for
+ * another environment, a target without the method, or a chat that never was
+ * a team sandbox's falls back to `fallback`, the dead tile's Clone.
  */
 export function useChatContinueHere(args: {
   readonly epicId: string;
   readonly chatId: string;
   readonly sourceHostId: string;
+  /** The chat's owner: for a team sandbox's chat, its environment. */
+  readonly ownerUserId: string | null;
   readonly name: string;
   readonly fallback: () => void;
 }): {
   readonly eligible: boolean;
+  /** The target sandbox's name, `null` when there is none. */
+  readonly targetLabel: string | null;
   readonly continueHere: () => void;
   readonly continuing: boolean;
 } {
-  const targetHostId = useEffectiveHostId();
-  const targetEntry = useHostDirectoryEntry(targetHostId ?? "");
+  const authorized = useAuthStore((state) =>
+    authorizesCloudCapability(state.status),
+  );
+  const listApplies = authorized && readProcessHostRpcTierPlan().pool !== null;
+  const environments = useEnvironmentListQuery(
+    useOptionalHostClient(),
+    listApplies,
+  ).data;
+  const teamId = environmentTeamId(environments, args.ownerUserId);
+  const directory = useHostDirectoryList().data ?? NO_ENTRIES;
+  const readTarget = useCallback(
+    () => continueTargetHostId(directory, teamId, args.sourceHostId),
+    [directory, teamId, args.sourceHostId],
+  );
+  const targetHostId = useSyncExternalStore(
+    subscribeNegotiatedManifests,
+    readTarget,
+    readTarget,
+  );
+  const targetLabel = useMemo(
+    () =>
+      directory.find((entry) => entry.hostId === targetHostId)?.label ?? null,
+    [directory, targetHostId],
+  );
   const sourceEntry = useHostDirectoryEntry(args.sourceHostId);
-  const supported = useHostSupportsMethod(targetHostId, "chat.continueHere");
-  const targetClient = useHostClientForHostId(targetHostId);
+  const namedClient = useHostClientForHostId(targetHostId);
+  const targetClient = targetHostId === null ? null : namedClient;
   const { openTile } = useEpicTileNavigation();
-  const eligible =
-    targetHostId !== null &&
-    targetHostId !== args.sourceHostId &&
-    targetEntry !== null &&
-    isTeamSandboxHostDirectoryEntry(targetEntry) &&
-    supported &&
-    sourceIsRemoved(sourceEntry);
+  const queryClient = useQueryClient();
+  const eligible = targetHostId !== null && sourceIsRemoved(sourceEntry);
+  const { epicId, chatId, name, fallback } = args;
   const mutation = useHostMutation({
     client: targetClient,
     method: "chat.continueHere",
     mapVariables: (variables: { readonly operationId: string }) => ({
-      epicId: args.epicId,
-      chatId: args.chatId,
+      epicId,
+      chatId,
       operationId: variables.operationId,
     }),
     options: {
-      mutationKey: chatContinueMutationKeys.continueHere(args.chatId),
-      onError: (error) =>
-        toastFromHostError(error, "Couldn't continue this agent here."),
+      mutationKey: chatContinueMutationKeys.continueHere(chatId),
+      onError: (error) => {
+        if (error.code === "E_HOST_UNSUPPORTED") {
+          fallback();
+          return;
+        }
+        toastFromHostError(error, "Couldn't continue this agent here.");
+      },
     },
   });
   const { mutate, isPending } = mutation;
-  const { epicId, chatId, name, fallback } = args;
   const continueHere = useCallback(() => {
     if (targetHostId === null) return;
     // One id per press: the mutation's own retry (and a lost answer) reuses
@@ -107,6 +227,7 @@ export function useChatContinueHere(args: {
           // chat where it now belongs.
           const ownerHostId = answer.ownerHostId;
           if (ownerHostId === null) return;
+          invalidateTaskLists(queryClient, epicId);
           openTile({
             node: {
               id: chatId,
@@ -127,6 +248,15 @@ export function useChatContinueHere(args: {
         },
       },
     );
-  }, [targetHostId, mutate, fallback, openTile, epicId, chatId, name]);
-  return { eligible, continueHere, continuing: isPending };
+  }, [
+    targetHostId,
+    mutate,
+    fallback,
+    openTile,
+    queryClient,
+    epicId,
+    chatId,
+    name,
+  ]);
+  return { eligible, targetLabel, continueHere, continuing: isPending };
 }

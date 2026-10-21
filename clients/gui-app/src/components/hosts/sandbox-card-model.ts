@@ -253,6 +253,17 @@ function memberWords(
     : words.named(member.displayName);
 }
 
+/** The control plane's code for a host that refused a newer `chat.db`. */
+const CHAT_STORE_NEWER_CODE = "chat-store-newer";
+
+/** Why a stopped sandbox's last start did not complete, in the person's terms. */
+function stoppedFailureLine(failureCode: string): string {
+  if (failureCode === CHAT_STORE_NEWER_CODE) {
+    return "This sandbox's data was saved by a newer version of Traycer, so it can't start yet. Start it again after the next Traycer update.";
+  }
+  return `The last start didn't finish (${failureCode}). Start tries again.`;
+}
+
 /** The card's one-line description of where the sandbox is. */
 export function sandboxStateLine(
   state: HostSandboxState | null,
@@ -263,6 +274,12 @@ export function sandboxStateLine(
   if (state === null) return "Sandbox";
   if (state === "failed" && summary !== null && summary.failureCode !== null) {
     return `Failed to start (${summary.failureCode}). Nothing is billed for a sandbox that never woke.`;
+  }
+  // The control plane clears the code only when the row next wakes, so on a
+  // stopped row it is a start (or stop) that did not complete: a rolled-back
+  // start lands here, and without the reason the person retries forever.
+  if (state === "stopped" && summary !== null && summary.failureCode !== null) {
+    return stoppedFailureLine(summary.failureCode);
   }
   // The Automations row is never metered.
   if (state === "awake" && summary?.kind === "automation") {
