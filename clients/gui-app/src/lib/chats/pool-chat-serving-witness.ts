@@ -22,9 +22,11 @@ export interface RetainingChatServingWitness extends ChatServingWitness {
    */
   retain(chat: ChatServingKey): () => void;
   /**
-   * Opens a fresh stream for a retained chat whose last one ended with a
-   * fatal close, keeping its holders and the state already heard; a no-op
-   * for a chat not retained or still subscribed.
+   * Reports the chat's publication: opens a fresh stream for a retained chat
+   * whose last one ended with a fatal close, keeping its holders and the
+   * state already heard. Acted on once per retained chat, so a second
+   * holder's report of the same publication is a no-op, as is one for a chat
+   * not retained.
    */
   reopen(chat: ChatServingKey): void;
   /** The server's last published state for the chat; null before the first. */
@@ -39,6 +41,11 @@ interface Watched {
   session: IStreamSession | null;
   /** Whether `session` has delivered a frame. */
   heard: boolean;
+  /**
+   * Whether the chat's publication was already acted on. Every holder reports
+   * the same transition, so only the first report opens or arms a stream.
+   */
+  publicationSeen: boolean;
   /**
    * The unanswered session the chat's publication arrived during, reopened
    * once if the pool still ends it `CHAT_NOT_VISIBLE`.
@@ -98,6 +105,7 @@ export class PoolChatServingWitness implements RetainingChatServingWitness {
         serving: null,
         session: null,
         heard: false,
+        publicationSeen: false,
         publishedDuring: null,
       };
       this.watched.set(key, watched);
@@ -120,7 +128,8 @@ export class PoolChatServingWitness implements RetainingChatServingWitness {
   reopen(chat: ChatServingKey): void {
     const key = watchKey(chat);
     const watched = this.watched.get(key);
-    if (watched === undefined) return;
+    if (watched === undefined || watched.publicationSeen) return;
+    watched.publicationSeen = true;
     if (watched.session === null) {
       this.open(key, watched);
       return;

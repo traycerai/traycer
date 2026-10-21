@@ -220,6 +220,27 @@ describe("a chat's serving witness across the chat reaching the environment arm"
     witness.dispose();
   });
 
+  it("does not open again from the same publication when the recovery after a pre-publication close is refused", () => {
+    const { client, witness, view } = setup();
+
+    act(() => {
+      client.drivable[0]?.closeWith(NOT_VISIBLE);
+    });
+    expect(client.subscribes).toHaveLength(1);
+
+    state.armChats = [armRow(CHAT.chatId)];
+    view.rerender(<Tree witness={witness} />);
+    expect(client.subscribes).toHaveLength(2);
+
+    act(() => {
+      client.drivable[1]?.closeWith(NOT_VISIBLE);
+    });
+
+    expect(client.subscribes).toHaveLength(2);
+    expect(readings.at(-1)?.settled).toBe(false);
+    witness.dispose();
+  });
+
   it("reopens when the row appears before the pool ends the pre-publication stream", () => {
     const { client, witness, view } = setup();
     expect(client.subscribes).toHaveLength(1);
