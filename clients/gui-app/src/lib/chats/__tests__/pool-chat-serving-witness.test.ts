@@ -150,23 +150,23 @@ describe("PoolChatServingWitness reopen after a final close", () => {
   }>([
     { name: "a caller close", status: "closed", reason: { kind: "caller" } },
     { name: "a reconnecting status", status: "reconnecting", reason: null },
-  ])("keeps the one stream across $name while another holder keeps it", ({
-    status,
-    reason,
-  }) => {
-    const client = new StatusDrivableClient(true);
-    const witness = new PoolChatServingWitness();
-    witness.setStreamClient(client);
+  ])(
+    "keeps the one stream across $name while another holder keeps it",
+    ({ status, reason }) => {
+      const client = new StatusDrivableClient(true);
+      const witness = new PoolChatServingWitness();
+      witness.setStreamClient(client);
 
-    const releaseFirst = witness.retain(CHAT);
-    witness.retain(CHAT);
+      const releaseFirst = witness.retain(CHAT);
+      witness.retain(CHAT);
 
-    client.drivable[0]?.emitStatusWithReason(status, reason);
+      client.drivable[0]?.emitStatusWithReason(status, reason);
 
-    releaseFirst();
-    witness.retain(CHAT);
+      releaseFirst();
+      witness.retain(CHAT);
 
-    expect(client.subscribes).toHaveLength(1);
-    witness.dispose();
-  });
+      expect(client.subscribes).toHaveLength(1);
+      witness.dispose();
+    },
+  );
 });
