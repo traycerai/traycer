@@ -1,5 +1,9 @@
 import type { ReactNode } from "react";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import {
+  QueryClient,
+  QueryClientProvider,
+  QueryObserver,
+} from "@tanstack/react-query";
 import {
   act,
   cleanup,
@@ -20,6 +24,10 @@ import {
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import { HostRpcError } from "@traycer/protocol/host-transport/remote/rpc-types";
 import type { ChatContinueHereResponse } from "@traycer/protocol/host/chat-serving/index";
+import type {
+  CloudChatSummary,
+  ListCloudChatsResponse,
+} from "@traycer/protocol/host/epic/cloud-chat";
 import type { EnvironmentListResponse } from "@traycer/protocol/host/environment/contracts";
 import type { HostRpcRegistry } from "@/lib/host";
 import type { TileOpenIntent } from "@/lib/canvas/tile-open/intent";
@@ -399,6 +407,64 @@ describe("useChatContinueHere list refresh", () => {
     expect(invalidated(taskHostsKey("epic-1"))).toBe(true);
     expect(invalidated(cloudChatsKey("epic-2"))).toBe(false);
     expect(invalidated(taskHostsKey("epic-2"))).toBe(false);
+  });
+
+  function cloudChatOwnedBy(ownerHostId: string): CloudChatSummary {
+    return {
+      identity: {
+        taskId: "epic-1",
+        chatId: "chat-1",
+        ownerUserId: ENVIRONMENT_ID,
+      },
+      ownerHostId,
+      createdAt: 1,
+      visibility: "task",
+      title: null,
+      isTitleEditedByUser: false,
+      parentChatId: null,
+      isArchived: false,
+      runSettingsSummary: null,
+      metadataUpdatedAt: 1,
+      headSha256: null,
+      publishedAt: null,
+      throughRecordSeq: null,
+      isOwnedByViewer: true,
+    };
+  }
+
+  it("ends with the target as the chat's owner when the first list read, still pending, answers with the source host after the move", async () => {
+    let releaseFirstRead: (answer: ListCloudChatsResponse) => void = () => {};
+    const firstRead = new Promise<ListCloudChatsResponse>((resolve) => {
+      releaseFirstRead = resolve;
+    });
+    let reads = 0;
+    const observer = new QueryObserver<ListCloudChatsResponse>(queryClient, {
+      queryKey: cloudChatsKey("epic-1"),
+      queryFn: () => {
+        reads += 1;
+        return reads === 1
+          ? firstRead
+          : Promise.resolve({ chats: [cloudChatOwnedBy(TARGET_HOST_ID)] });
+      },
+      staleTime: Infinity,
+    });
+    const unsubscribe = observer.subscribe(() => {});
+    expect(reads).toBe(1);
+
+    await pressContinue({
+      kind: "accepted",
+      operationId: OPERATION_ID,
+      ownerHostId: TARGET_HOST_ID,
+    });
+    releaseFirstRead({ chats: [cloudChatOwnedBy(SOURCE_HOST_ID)] });
+
+    await waitFor(() => {
+      expect(
+        observer.getCurrentResult().data?.chats.map((chat) => chat.ownerHostId),
+      ).toEqual([TARGET_HOST_ID]);
+    });
+    expect(reads).toBe(2);
+    unsubscribe();
   });
 
   it("refreshes the same lists when the chat is already moved", async () => {

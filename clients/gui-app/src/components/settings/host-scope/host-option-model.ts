@@ -661,12 +661,19 @@ export function pickableHostOptions(
  * The rows the app-wide host may be switched to (the account menu): personal
  * hosts, then the person's own pickable sandboxes. A team's sandbox is never
  * one - it serves its team's environment, and the selection authority refuses
- * it - so offering it would be a pick that does nothing.
+ * it - so offering it would be a pick that does nothing. A team sandbox whose
+ * registry row has not arrived lands in the own-sandbox group (grouping reads
+ * the row's owner), so the directory's `teamOwned` fact excludes it too.
  */
 export function appWideHostOptions(
   hosts: readonly HostScopeOption[],
   keepHostId: string | null,
 ): readonly HostScopeOption[] {
   const groups = groupHostOptions(hosts, false, false, keepHostId);
-  return [...groups.personal, ...groups.sandboxes];
+  return [
+    ...groups.personal,
+    ...groups.sandboxes.filter(
+      (host) => host.sandbox === null || !host.sandbox.teamOwned,
+    ),
+  ];
 }

@@ -94,10 +94,16 @@ function continueTargetHostId(
   return target === undefined ? null : target.hostId;
 }
 
-/** Re-reads the task's lists, so the chat is grouped under its new host. */
+/**
+ * Re-reads the task's lists, so the chat is grouped under its new host.
+ * Cancels first: `invalidateQueries` joins an initial read still in flight
+ * (no data yet), and that read's pre-move answer would land after the move,
+ * clear the invalidation and keep the chat under its old host - the lists
+ * are not polled. See `useCloudChatPayloadList` for the same rule.
+ */
 function invalidateTaskLists(queryClient: QueryClient, epicId: string): void {
-  void queryClient.invalidateQueries({
-    predicate: (query) => {
+  const filters = {
+    predicate: (query: { readonly queryKey: readonly unknown[] }) => {
       const key = query.queryKey;
       const method = TASK_LIST_METHODS.find((candidate) =>
         hostQueryKeys.matchesMethodOnAnyHost(key, candidate),
@@ -111,7 +117,10 @@ function invalidateTaskLists(queryClient: QueryClient, epicId: string): void {
         params.taskId === epicId
       );
     },
-  });
+  };
+  void queryClient
+    .cancelQueries(filters)
+    .then(() => queryClient.invalidateQueries(filters));
 }
 
 /**

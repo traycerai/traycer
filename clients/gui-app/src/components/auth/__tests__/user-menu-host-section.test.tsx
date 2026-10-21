@@ -383,6 +383,34 @@ describe("<UserMenu /> host section", () => {
     expect(screen.queryByTestId("user-menu-host-option-sandbox-team")).toBeNull();
   });
 
+  it("leaves a team's sandbox out of the list while its registry row has not arrived", async () => {
+    const active = hostScopeOptionFixture({
+      hostId: "host-active",
+      isActive: true,
+      connectable: true,
+    });
+    hostOptionsRef.value = hostOptionsFixture({
+      hosts: [
+        active,
+        sandboxOption("sandbox-personal", null),
+        { ...sandboxOption("sandbox-team", "team-a"), item: null },
+      ],
+      activeHostId: active.hostId,
+    });
+
+    await openMenu();
+
+    expect(
+      screen.getByTestId("user-menu-host-option-sandbox-personal"),
+    ).toBeTruthy();
+    expect(screen.queryByTestId("user-menu-host-option-sandbox-team")).toBeNull();
+    expect(
+      screen
+        .getAllByRole("menuitemradio")
+        .some((row) => row.textContent.includes("sandbox-team")),
+    ).toBe(false);
+  });
+
   it("switches to a different online host on click", async () => {
     const active = hostScopeOptionFixture({
       hostId: "host-active",
