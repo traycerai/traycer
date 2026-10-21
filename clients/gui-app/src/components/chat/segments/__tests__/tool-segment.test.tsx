@@ -887,6 +887,7 @@ describe("<ToolSegment /> cross-host send delivery", () => {
 
   function renderDelivery(
     state: "queued" | "delivered" | "expired" | "failed" | null,
+    targetHostOffline: boolean,
   ) {
     hostDirectoryMocks.labels = new Map([["host-2", "Work Laptop"]]);
     render(
@@ -907,7 +908,12 @@ describe("<ToolSegment /> cross-host send delivery", () => {
         agentMessageDelivery={
           state === null
             ? null
-            : { targetHostId: "host-2", eventId: "evt-1", state }
+            : {
+                targetHostId: "host-2",
+                eventId: "evt-1",
+                state,
+                targetHostOffline,
+              }
         }
         isStreaming={false}
         endState={null}
@@ -922,62 +928,68 @@ describe("<ToolSegment /> cross-host send delivery", () => {
     );
   }
 
-  it("renders a queued send as queued for the host, not a plain sent card", () => {
-    renderDelivery("queued");
-    expect(screen.getByText(/Queued for Work Laptop/)).toBeTruthy();
-    expect(screen.getByText("queued")).toBeTruthy();
-    // The badge paints its own fill: `bg-muted` collapses into raised surfaces.
-    const badge = screen.getByText("queued");
-    expect(badge.className).toContain("bg-foreground/8");
-    expect(badge.className).not.toContain("bg-muted");
-    expect(screen.getByText("Queued message").className).toContain("sr-only");
-    expect(screen.queryByText("Sent message")).toBeNull();
+  // The host reports failures only (traycer#2421): a send nothing has failed
+  // is the plain sent card, with no tag, whatever host build stamped it.
+  it.each(["queued", "delivered"] as const)(
+    "renders a %s send to a host not seen offline as the plain sent card",
+    (state) => {
+      renderDelivery(state, false);
+      expect(screen.getByText("Sent message").className).toContain("sr-only");
+      expect(screen.queryByText("queued")).toBeNull();
+      expect(screen.queryByText(/Queued for/)).toBeNull();
+      expect(screen.queryByText(/Delivered on/)).toBeNull();
+      expect(screen.queryByText(/looked offline/)).toBeNull();
+    },
+  );
+
+  it("renders a send to a host seen offline as sent, with the offline note and no tag", () => {
+    renderDelivery("queued", true);
+    expect(
+      screen.getByText(
+        "Sent. Work Laptop looked offline; if it is not back online within 24 hours, this expires.",
+      ).className,
+    ).toContain("text-muted-foreground");
+    expect(screen.getByText("Sent message").className).toContain("sr-only");
+    expect(screen.queryByText("queued")).toBeNull();
   });
 
   // The note is status copy, not the message: chat find indexes the message
-  // body, so a search for "queued" must not land on the card's note.
+  // body, so a search for "offline" must not land on the card's note.
   it("marks the delivery note as skipped by chat find, collapsed and open", () => {
-    renderDelivery("queued");
-    const collapsed = screen.getAllByText(/Queued for Work Laptop/);
+    renderDelivery("queued", true);
+    const collapsed = screen.getAllByText(/looked offline/);
     expect(collapsed.length).toBeGreaterThan(0);
     for (const note of collapsed) {
       expect(note.hasAttribute("data-find-skip")).toBe(true);
     }
 
-    fireEvent.click(screen.getByRole("button", { name: /Queued message/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Sent message/ }));
 
-    const open = screen.getAllByText(/Queued for Work Laptop/);
+    const open = screen.getAllByText(/looked offline/);
     expect(open.length).toBeGreaterThan(0);
     for (const note of open) {
       expect(note.hasAttribute("data-find-skip")).toBe(true);
     }
   });
 
-  it("renders a delivered send as delivered on the host", () => {
-    renderDelivery("delivered");
-    expect(screen.getByText(/Delivered on Work Laptop/)).toBeTruthy();
-    expect(screen.queryByText("queued")).toBeNull();
-    expect(screen.queryByText(/Not delivered/)).toBeNull();
-  });
-
   it.each(["expired", "failed"] as const)(
     "renders a %s send as not delivered with destructive styling",
     (state) => {
-      renderDelivery(state);
+      renderDelivery(state, true);
       const note = screen.getByText(/Not delivered: Work Laptop/);
       expect(note.className).toContain("text-destructive");
-      expect(screen.getByText("not delivered").className).toContain(
-        "text-destructive",
-      );
-      expect(screen.queryByText("queued")).toBeNull();
+      // The badge paints its own fill: `bg-muted` collapses into raised surfaces.
+      const badge = screen.getByText("not delivered");
+      expect(badge.className).toContain("text-destructive");
+      expect(badge.className).not.toContain("bg-muted");
+      expect(screen.queryByText(/looked offline/)).toBeNull();
     },
   );
 
   it("renders a null delivery exactly as the plain sent card", () => {
-    renderDelivery(null);
+    renderDelivery(null, false);
     expect(screen.getByText("Sent message")).toBeTruthy();
-    expect(screen.queryByText(/Queued for/)).toBeNull();
-    expect(screen.queryByText(/Delivered on/)).toBeNull();
+    expect(screen.queryByText(/looked offline/)).toBeNull();
     expect(screen.queryByText(/Not delivered/)).toBeNull();
     expect(screen.queryByText("queued")).toBeNull();
   });

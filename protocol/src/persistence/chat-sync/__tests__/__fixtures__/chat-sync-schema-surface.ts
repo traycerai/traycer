@@ -2969,12 +2969,17 @@ export const chatSyncSchemaSurfaceBaseline = {
                                                         "expired",
                                                         "failed"
                                                       ]
+                                                    },
+                                                    "targetHostOffline": {
+                                                      "default": false,
+                                                      "type": "boolean"
                                                     }
                                                   },
                                                   "required": [
                                                     "targetHostId",
                                                     "eventId",
-                                                    "state"
+                                                    "state",
+                                                    "targetHostOffline"
                                                   ],
                                                   "additionalProperties": false
                                                 },

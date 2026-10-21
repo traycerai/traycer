@@ -501,21 +501,24 @@ export type AgentMessageReceipt = z.infer<typeof agentMessageReceiptSchema>;
 
 // Where a cross-host `traycer_send_message` call stands. A send to an agent on
 // another host is queued through the cloud rather than delivered while the
-// call runs, so the sender's card cannot read "sent" off the call alone:
+// call runs, and the sending host learns only of a failure (traycer#2421):
 //
-// - `queued`: the cloud accepted it; the receiving host has not taken it yet.
-// - `delivered`: the receiving host durably accepted it. The host also stamps
-//   `agentMessageReceipt` from the receiving host's own delivered report at
-//   that point.
+// - `queued`: sent, and no failure has been reported for it.
+// - `delivered`: written only by hosts built between the stamp's arrival and
+//   traycer#2421, from the receiving host's delivered report. Current hosts
+//   never write it, and the card reads it as `queued`.
 // - `expired`: it waited past the delivery window and was dropped unread.
 // - `failed`: it will not be delivered for any other terminal reason: the
 //   receiving host refused it, or that host was removed and its queue purged.
 //
+// `targetHostOffline` is the host directory's last observation of the
+// receiving host, read once at send time: a hint, never a guarantee either
+// way. Defaulted `false`, so a stamp written before the field parses unchanged.
+//
 // Stamped at `tool_call.completed` from the queued result, then moved by the
-// sending host as the receiving host's delivered report, or a terminal failure
-// for `eventId`, arrives - after the turn has ended, as an ordinary row update.
-// Null for a send delivered on the same host and for every block persisted
-// before this field.
+// sending host as a terminal failure for `eventId` arrives - after the turn
+// has ended, as an ordinary row update. Null for a send delivered on the same
+// host and for every block persisted before this field.
 export const agentMessageDeliveryStateSchema = lazySchema(() =>
   z.enum(["queued", "delivered", "expired", "failed"]),
 );
@@ -528,6 +531,7 @@ export const agentMessageDeliverySchema = lazySchema(() =>
     targetHostId: z.string(),
     eventId: z.string(),
     state: agentMessageDeliveryStateSchema,
+    targetHostOffline: z.boolean().default(false),
   }),
 );
 export type AgentMessageDelivery = z.infer<typeof agentMessageDeliverySchema>;

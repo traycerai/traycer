@@ -80,8 +80,8 @@ interface ToolSegmentProps {
   // Where that send landed in the receiver's transcript, stamped at
   // completion. Non-null lets the receiver link jump to the exact row.
   agentMessageReceipt: AgentMessageReceipt | null;
-  // Where a cross-host send stands. Non-null turns the card from "sent" into
-  // queued / delivered / not-delivered for the receiving host.
+  // Where a cross-host send stands. Non-null adds the offline note or turns
+  // the card to not-delivered for the receiving host (`a2aSendDeliveryView`).
   agentMessageDelivery: AgentMessageDelivery | null;
   isStreaming: boolean;
   // Terminal outcome when the turn ended mid-call (else null): drives a neutral
@@ -926,7 +926,11 @@ function useA2ASendDeliveryPresentation(
   showsFault: boolean,
 ): A2ASendDeliveryPresentation {
   const hostEntry = useHostDirectoryEntry(delivery?.targetHostId ?? null);
-  if (delivery === null) {
+  const view =
+    delivery === null
+      ? null
+      : a2aSendDeliveryView(delivery, hostEntry?.label ?? null);
+  if (view === null) {
     return {
       undelivered: false,
       iconClassName: showsFault ? "text-destructive" : "text-primary",
@@ -935,7 +939,6 @@ function useA2ASendDeliveryPresentation(
       note: null,
     };
   }
-  const view = a2aSendDeliveryView(delivery, hostEntry?.label ?? null);
   const undelivered = view.tone === "undelivered";
   return {
     undelivered,
@@ -945,7 +948,7 @@ function useA2ASendDeliveryPresentation(
     // it. A refusal is not a fault (see `a2aSendRefusalSentence`).
     badge:
       view.badge === null || showsFault ? null : (
-        <A2ADeliveryBadge label={view.badge} undelivered={undelivered} />
+        <A2ADeliveryBadge label={view.badge} />
       ),
     note: <A2ADeliveryNote view={view} />,
   };
@@ -956,26 +959,14 @@ function deliveryIconClassName(
   showsFault: boolean,
 ): string {
   if (showsFault || view.tone === "undelivered") return "text-destructive";
-  if (view.tone === "pending") return "text-muted-foreground";
   return "text-primary";
 }
 
-// A foreground-alpha fill rather than `bg-muted`: the card this sits on is a
-// raised surface, where a muted fill collapses into the card in the preset
-// themes and the queued tag would vanish.
-function A2ADeliveryBadge(props: {
-  readonly label: string;
-  readonly undelivered: boolean;
-}) {
+// The one tag a send carries is "not delivered": a tinted destructive fill
+// rather than `bg-muted`, which collapses into the raised card surface.
+function A2ADeliveryBadge(props: { readonly label: string }) {
   return (
-    <span
-      className={cn(
-        "shrink-0 rounded border px-1 text-overline font-medium uppercase",
-        props.undelivered
-          ? "border-destructive/40 bg-destructive/10 text-destructive"
-          : "border-border bg-foreground/8 text-muted-foreground",
-      )}
-    >
+    <span className="shrink-0 rounded border border-destructive/40 bg-destructive/10 px-1 text-overline font-medium uppercase text-destructive">
       {props.label}
     </span>
   );

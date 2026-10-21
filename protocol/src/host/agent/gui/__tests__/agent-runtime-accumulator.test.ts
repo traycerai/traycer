@@ -473,6 +473,7 @@ describe("accumulateEvent", () => {
       targetHostId: "host-2",
       eventId: "evt-1",
       state: "queued" as const,
+      targetHostOffline: false,
     };
 
     it("tool_call.completed stamps the delivery onto the started block", () => {

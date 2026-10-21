@@ -4395,6 +4395,10 @@ export const epicSchemaSurfaceBaseline = {
                                             "expired",
                                             "failed"
                                           ]
+                                        },
+                                        "targetHostOffline": {
+                                          "default": false,
+                                          "type": "boolean"
                                         }
                                       },
                                       "required": [
@@ -14371,12 +14375,17 @@ export const epicSchemaSurfaceBaseline = {
                                             "expired",
                                             "failed"
                                           ]
+                                        },
+                                        "targetHostOffline": {
+                                          "default": false,
+                                          "type": "boolean"
                                         }
                                       },
                                       "required": [
                                         "targetHostId",
                                         "eventId",
-                                        "state"
+                                        "state",
+                                        "targetHostOffline"
                                       ],
                                       "additionalProperties": false
                                     },
