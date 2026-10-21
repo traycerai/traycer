@@ -451,7 +451,8 @@ type ValidationOutcome = AuthIdentityValidationResult;
  * boundary tells the two apart.
  */
 export type LiveRevalidationOutcome =
-  ValidationOutcome | { readonly kind: "deferred-under-attempt" };
+  | ValidationOutcome
+  | { readonly kind: "deferred-under-attempt" };
 
 /**
  * The result of applying a same-user `rotate` outcome to the live session:
