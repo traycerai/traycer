@@ -83,11 +83,27 @@ export function TaskOrganizationMenu(props: {
   const organization = useOrganization();
   const groupId = taskGroupIdOf(organization, props.taskId);
   const editGroup = useEditGroupAction(groupId, props.onEditGroup);
-  if (!organization?.supported) return null;
+  if (organization === null) return null;
   const view = organization.view;
+  // A host that has answered and does not have the RPC is the one case worth
+  // saying out loud. Everything else - no handshake yet, a readiness flap, a
+  // momentary loss of cloud authorization - keeps the account's cached groups
+  // on screen and only stops them being changed.
+  if (view === undefined)
+    return organization.hostSupport === false ? (
+      <>
+        <MenuItem disabled>
+          <Group />
+          Update this device to organize tasks
+        </MenuItem>
+        <MenuSeparator />
+      </>
+    ) : null;
+  const canEditOrganization = organization.supported;
   return (
     <>
       <MenuItem
+        disabled={!canEditOrganization}
         onSelect={() =>
           organization.openDialog({
             kind: "labels",
@@ -136,6 +152,7 @@ export function TaskOrganizationMenu(props: {
         </MenuSubTrigger>
         <MenuSubContent>
           <MenuItem
+            disabled={!canEditOrganization}
             onSelect={() =>
               organization.openDialog({
                 kind: "new-group",
@@ -146,13 +163,11 @@ export function TaskOrganizationMenu(props: {
             <Plus />
             New group…
           </MenuItem>
-          {view?.groups.groups.length ? <MenuSeparator /> : null}
-          {view?.groups.groups.map((group) => (
+          {view.groups.groups.length ? <MenuSeparator /> : null}
+          {view.groups.groups.map((group) => (
             <MenuItem
               key={group.groupId}
-              disabled={
-                !view.appearances.some((a) => a.taskId === props.taskId)
-              }
+              disabled={!canEditOrganization}
               onSelect={() => {
                 const canvas = useEpicCanvasStore.getState();
                 const openTasks = new Set(
@@ -203,6 +218,7 @@ export function TaskOrganizationMenu(props: {
       </MenuSub>
       {groupId ? (
         <MenuItem
+          disabled={!canEditOrganization}
           onSelect={() => {
             void organization
               .command({

@@ -149,24 +149,6 @@ describe("manual tab groups", () => {
     expect(result.groups?.g.collapsed).toBe(false);
   });
 
-  it("stores a manual color and icon customization by tab ref", () => {
-    useTabsStore.setState({
-      ...layout({}),
-      stripOrder: [a, b, c],
-    });
-    useTabsStore.getState().setTabCustomization(a, {
-      color: "#fdd663",
-      icon: "★",
-    });
-    expect(
-      useTabsStore.getState().customizations?.[tabRefKey(a)],
-    ).toMatchObject({
-      color: "#fdd663",
-      icon: "★",
-    });
-    useTabsStore.setState(useTabsStore.getInitialState(), true);
-  });
-
   it.each(["left", "right"] as const)(
     "preserves each member color when pairing on the %s side",
     (destinationSide) => {
@@ -244,41 +226,6 @@ describe("manual tab groups", () => {
       useTabsStore.setState(useTabsStore.getInitialState(), true);
     },
   );
-
-  it("changes only the customized split member while keeping icons independent", () => {
-    const split = {
-      kind: "split" as const,
-      id: "split-colors",
-      left: { kind: "tab" as const, ref: a },
-      right: { kind: "tab" as const, ref: b },
-      focusedSide: "left" as const,
-      routeBackingSide: "left" as const,
-      leftRatio: 0.5,
-    };
-    useTabsStore.setState({
-      ...layout({
-        items: [split],
-        customizations: {
-          [tabRefKey(a)]: { color: "#ef4444", icon: "A", groupId: null },
-          [tabRefKey(b)]: { color: "#ef4444", icon: "B", groupId: null },
-        },
-      }),
-      stripOrder: [a, b],
-    });
-
-    useTabsStore.getState().setTabCustomization(a, { color: "#3b82f6" });
-    expect(useTabsStore.getState().customizations).toMatchObject({
-      [tabRefKey(a)]: { color: "#3b82f6", icon: "A" },
-      [tabRefKey(b)]: { color: "#ef4444", icon: "B" },
-    });
-
-    useTabsStore.getState().setTabCustomization(b, { color: "#22c55e" });
-    expect(useTabsStore.getState().customizations).toMatchObject({
-      [tabRefKey(a)]: { color: "#3b82f6", icon: "A" },
-      [tabRefKey(b)]: { color: "#22c55e", icon: "B" },
-    });
-    useTabsStore.setState(useTabsStore.getInitialState(), true);
-  });
 
   it("keeps the populated member color when filling an empty split side", () => {
     const split = {

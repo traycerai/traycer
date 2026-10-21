@@ -942,6 +942,27 @@ const ACTIVE_SPLIT_CASES: ReadonlyArray<ActiveSplitCase> = [
 // production. Test mounts skip the provider, so install once here.
 installTabSyncCoordinator({ readyPromise: Promise.resolve() });
 
+/**
+ * A tab's colour as the organization projection writes it: straight onto the
+ * layout. There is no client action for it any more - colour belongs to the
+ * account's task appearance.
+ */
+function seedTabColor(ref: TabRef, color: string): void {
+  const key = `${ref.kind}:${ref.id}`;
+  const current = useTabsStore.getState().customizations?.[key];
+  useTabsStore.setState({
+    customizations: {
+      ...useTabsStore.getState().customizations,
+      [key]: {
+        color,
+        icon: current?.icon ?? null,
+        groupId: current?.groupId ?? null,
+      },
+    },
+  });
+  useTabsStore.getState().repair();
+}
+
 describe("<TabStrip />", () => {
   beforeEach(() => {
     queryClient = new QueryClient({
@@ -1443,7 +1464,7 @@ describe("<TabStrip />", () => {
 
   it("draws a grouped tab in its group's colour, and in its own again once it leaves the group", async () => {
     const { beta } = seedTwoEpicTabs();
-    useTabsStore.getState().setTabCustomization(beta, { color: "#ff0000" });
+    seedTabColor(beta, "#ff0000");
     // A commit drops a group with no members, so the group comes after.
     useTabsStore.setState({
       groups: { g: { name: "Work", color: "#8ab4f8", collapsed: false } },
@@ -1661,9 +1682,7 @@ describe("<TabStrip />", () => {
       ).toBe("top");
 
       act(() => {
-        useTabsStore
-          .getState()
-          .setTabCustomization(alpha, { color: "#12ab34" });
+        seedTabColor(alpha, "#12ab34");
       });
 
       const box = within(activeTab).getByTestId("tab-chrome-box");

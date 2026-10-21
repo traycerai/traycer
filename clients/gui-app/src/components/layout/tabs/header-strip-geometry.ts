@@ -24,7 +24,7 @@ import {
   type StripSlot,
 } from "@/components/epic-canvas/dnd/strip-drag-model";
 import { useTabsStore } from "@/stores/tabs/store";
-import { flattenStripItemRefs, tabRefKey } from "@/stores/tabs/layout";
+import { flattenStripItemRefs } from "@/stores/tabs/layout";
 import { stripItemGroupId } from "@/stores/tabs/tab-groups";
 
 export const HEADER_STRIP_SCROLL_TEST_ID = "header-tab-strip-scroll";
@@ -190,34 +190,31 @@ function mainAxisGap(element: HTMLElement, axis: StripAxis): number {
   );
 }
 
-/**
- * Whether the account's organization keeps every tab of a strip item: the
- * organization view has stamped it (a cloud task), so its group is one of the
- * organization's.
- */
-function stripItemInOrganization(itemId: string): boolean {
-  const { items, customizations } = useTabsStore.getState();
-  const item = items.find((candidate) => candidate.id === itemId);
+/** Whether every tab of a strip item is a task, open or still being composed. */
+function stripItemIsTasks(itemId: string): boolean {
+  const item = useTabsStore
+    .getState()
+    .items.find((candidate) => candidate.id === itemId);
   return (
     item !== undefined &&
-    flattenStripItemRefs(item).every((ref) =>
-      Boolean(customizations?.[tabRefKey(ref)]?.organizationOwnerId),
+    flattenStripItemRefs(item).every(
+      (ref) => ref.kind === "epic" || ref.kind === "draft",
     )
   );
 }
 
 /**
- * Whether dragging `sourceItemId` may not change a group's membership: the
- * group is the organization's and the tab is not, or the other way round. The
- * task's menu offers the same groups: a cloud task the organization's, any
- * other tab the local ones.
+ * Whether dragging `sourceItemId` may not change this group's membership.
+ *
+ * Groups belong to the account and hold tasks, so a strip item that is not
+ * all tasks has nothing to join one with. A group the account does not have
+ * is closed to every drop: it is residual data from the machine-local
+ * grouping this build retired, and joining it would write a membership
+ * nowhere else can see.
  */
 function groupIsLocked(groupId: string, sourceItemId: string): boolean {
   const group = useTabsStore.getState().groups?.[groupId];
-  return (
-    Boolean(group?.organizationOwnerId) !==
-    stripItemInOrganization(sourceItemId)
-  );
+  return !group?.organizationOwnerId || !stripItemIsTasks(sourceItemId);
 }
 
 /**

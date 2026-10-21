@@ -32,7 +32,7 @@ import {
 import { useHostClient } from "@/lib/host";
 import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
 import { useHostMutation, useHostQuery } from "@/hooks/host/use-host-query";
-import { useHostSupportsMethod } from "@/hooks/host/use-host-supports-method";
+import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
 import { useSurfaceHostStreamBinding } from "@/hooks/host/use-surface-host-stream-binding";
 import {
   authorizesCloudCapability,
@@ -85,9 +85,9 @@ export function OrganizationProvider({
     state.repair();
   }, [accountUserId]);
   const authorized = useAuthStore((s) => authorizesCloudCapability(s.status));
-  const supportsCommand = useHostSupportsMethod(hostId, "organization.command");
+  const hostSupport = useHostMethodSupport(hostId, "organization.command");
   const supported =
-    supportsCommand &&
+    hostSupport === true &&
     authorized &&
     userId !== null &&
     userId === accountUserId;
@@ -199,11 +199,14 @@ export function OrganizationProvider({
     [mutateAsync, client, userId, hostId],
   );
   const lifecycle = useRef<OrganizationLifecycle | null>(null);
+  // Tabs whose draft group intent this provider has already tried to send.
+  const attemptedDraftIntents = useRef(new Set<string>());
   // Opening is a local tab transition, independent of the selected host's
   // organization projection. Switching that host must not reopen closed siblings.
   const openedTasks = useRef(new Set<string>());
   useEffect(() => {
     lifecycle.current = createLifecycle();
+    attemptedDraftIntents.current = new Set();
   }, [scope]);
   const refresh = useCallback(async () => {
     const auth = useAuthStore.getState();
@@ -286,7 +289,11 @@ export function OrganizationProvider({
         }
       }
     }
-    consumeDraftGroupIntents(query.data, command);
+    consumeDraftGroupIntents(
+      query.data,
+      command,
+      attemptedDraftIntents.current,
+    );
     projectOrganizationToTabs(query.data, userId);
   }, [supported, query.data, openIds, command, lifecycle, userId]);
   const openDialog = useCallback(
@@ -304,9 +311,10 @@ export function OrganizationProvider({
   const value = useMemo(
     () => ({
       supported,
+      hostSupport,
       client,
       userId,
-      view: supported ? query.data : undefined,
+      view: query.data,
       register,
       command,
       refresh,
@@ -314,6 +322,7 @@ export function OrganizationProvider({
     }),
     [
       supported,
+      hostSupport,
       client,
       userId,
       query.data,
@@ -473,9 +482,26 @@ function organizationFiltersChanged(
   );
 }
 
+/**
+ * Sends the group a draft tab was started in, once that draft has become a
+ * task.
+ *
+ * The stored intent is the only record of the user's choice, so it is cleared
+ * when the command is ACKNOWLEDGED, never when it is sent: clearing first lost
+ * the choice outright whenever the send failed or the renderer reloaded while
+ * it was in flight. It is also no longer withheld until the task has cloud
+ * metadata - the host accepts the assignment for a task it can prove this
+ * account created here, and holds delivery itself.
+ *
+ * `attempted` keeps this to one send per tab for as long as the host and
+ * account stay the same; the provider clears it when either changes, so a
+ * refusal that was about the connection is retried then rather than on every
+ * view frame.
+ */
 function consumeDraftGroupIntents(
   view: OrganizationView,
   command: (action: OrganizationAction) => Promise<void>,
+  attempted: Set<string>,
 ): void {
   const tabs = useEpicCanvasStore.getState();
   for (const tabId of tabs.openTabOrder) {
@@ -483,20 +509,22 @@ function consumeDraftGroupIntents(
     const customization =
       useTabsStore.getState().customizations?.[`epic:${tabId}`];
     const pendingGroupId = customization?.pendingGroupId;
-    if (
-      !task ||
-      !pendingGroupId ||
-      !view.appearances.some((a) => a.taskId === task.epicId)
-    )
+    if (!task || !pendingGroupId || attempted.has(tabId)) continue;
+    const clearIntent = (): void => {
+      useTabsStore
+        .getState()
+        .setTabCustomization(
+          { kind: "epic", id: tabId },
+          { pendingGroupId: null },
+        );
+    };
+    if (!view.groups.groups.some((group) => group.groupId === pendingGroupId)) {
+      // The group the draft named is gone from the account. Nothing to send,
+      // and nothing left for the intent to mean.
+      clearIntent();
       continue;
-    useTabsStore
-      .getState()
-      .setTabCustomization(
-        { kind: "epic", id: tabId },
-        { pendingGroupId: null },
-      );
-    if (!view.groups.groups.some((group) => group.groupId === pendingGroupId))
-      continue;
+    }
+    attempted.add(tabId);
     void command({
       kind: "groups",
       operations: [
@@ -509,7 +537,9 @@ function consumeDraftGroupIntents(
           ).length,
         },
       ],
-    }).catch(() => undefined);
+    })
+      .then(clearIntent)
+      .catch(() => undefined);
   }
 }
 

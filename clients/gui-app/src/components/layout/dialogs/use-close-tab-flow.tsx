@@ -1,4 +1,7 @@
-import { useOrganization } from "@/hooks/organization/organization-context";
+import {
+  useOrganization,
+  type OrganizationContextValue,
+} from "@/hooks/organization/organization-context";
 import { batchHeaderTabRecovery } from "@/lib/tab-recovery/history";
 import { useCallback, useMemo, type ReactNode } from "react";
 import { useNavigate, useRouterState } from "@tanstack/react-router";
@@ -66,27 +69,14 @@ export function useCloseTabFlow(): CloseTabFlow {
   const requestCloseTab = useCallback(
     (tab: HeaderTab) => {
       const finalize = () => {
-        const canvas = useEpicCanvasStore.getState();
-        const hasAnotherTaskTab =
-          tab.kind === "epic" &&
-          canvas.openTabOrder.some(
-            (id) => id !== tab.id && canvas.tabsById[id]?.epicId === tab.epicId,
-          );
-        const grouped =
-          tab.kind === "epic" &&
-          !hasAnotherTaskTab &&
-          organization?.view?.groups.memberships.some(
-            (member) => member.taskId === tab.epicId,
-          );
-        if (grouped) {
-          void organization
-            ?.command({
-              kind: "groups",
-              operations: [{ operation: "removeTask", taskId: tab.epicId }],
-            })
-            .then(() => finalizeCloseTab(tab))
-            .catch(() => undefined);
-        } else finalizeCloseTab(tab);
+        const ungrouped = tasksUngroupedByClose([tab], organization);
+        if (ungrouped.length === 0) {
+          finalizeCloseTab(tab);
+          return;
+        }
+        void removeTasksFromGroups(organization, ungrouped).then(() =>
+          finalizeCloseTab(tab),
+        );
       };
       if (dialog.promptOrConfirm(tab, finalize)) return;
       finalize();
@@ -106,13 +96,17 @@ export function useCloseTabFlow(): CloseTabFlow {
       const preserved = new Set(
         flattenStripItemRefs(targetItem).map((ref) => `${ref.kind}:${ref.id}`),
       );
+      const closing: HeaderTab[] = [];
+      for (const other of getHeaderTabs()) {
+        if (preserved.has(`${other.kind}:${other.id}`)) continue;
+        if (tabRequiresCloseConfirm(other)) skipped.push(other.name);
+        else closing.push(other);
+      }
+      // Read before the closes: once the tabs are gone the strip cannot say
+      // which tasks they were.
+      const ungrouped = tasksUngroupedByClose(closing, organization);
       batchHeaderTabRecovery(() => {
-        for (const other of getHeaderTabs()) {
-          if (preserved.has(`${other.kind}:${other.id}`)) continue;
-          if (tabRequiresCloseConfirm(other)) {
-            skipped.push(other.name);
-            continue;
-          }
+        for (const other of closing) {
           closeTab(other);
           if (other.kind === "epic") {
             Analytics.getInstance().track(AnalyticsEvent.TabClosed, {
@@ -121,6 +115,7 @@ export function useCloseTabFlow(): CloseTabFlow {
           }
         }
       }, layout);
+      void removeTasksFromGroups(organization, ungrouped);
       if (skipped.length > 0) {
         const detail =
           skipped.length === 1 ? `"${skipped[0]}"` : `${skipped.length} tabs`;
@@ -130,7 +125,7 @@ export function useCloseTabFlow(): CloseTabFlow {
       }
       navigateToTabIntent(navigate, tabResolveIntent(target), undefined);
     },
-    [closeTab, navigate],
+    [closeTab, navigate, organization],
   );
 
   const closeGroup = useCallback(
@@ -141,16 +136,21 @@ export function useCloseTabFlow(): CloseTabFlow {
       );
       const active = members.find((tab) => tabMatchesPath(tab, activePathname));
       const finalize = () => {
-        let skipped = 0;
+        const held = members.filter(
+          (tab) => tab !== active && tabRequiresCloseConfirm(tab),
+        );
+        const skipped = held.length;
+        // Closing a task's last tab takes it out of the group, so closing the
+        // whole group empties it - of everything but the tabs held back.
+        const ungrouped = tasksUngroupedByClose(
+          members.filter((tab) => !held.includes(tab)),
+          organization,
+        );
         // Do not keep a global batch open while the dialog waits: unrelated
         // closes must stay separate. Only confirmed group closes run here.
         batchHeaderTabRecovery(() => {
           for (const tab of members) {
-            if (tab === active) continue;
-            if (tabRequiresCloseConfirm(tab)) {
-              skipped += 1;
-              continue;
-            }
+            if (tab === active || held.includes(tab)) continue;
             closeTab(tab);
           }
           if (
@@ -161,6 +161,7 @@ export function useCloseTabFlow(): CloseTabFlow {
             finalizeCloseTab(active);
           }
         }, readTabStripLayout());
+        void removeTasksFromGroups(organization, ungrouped);
         if (skipped > 0)
           toast.warning(`Kept ${skipped} tabs open with unsynced edits`, {
             description:
@@ -171,7 +172,7 @@ export function useCloseTabFlow(): CloseTabFlow {
         return;
       finalize();
     },
-    [activePathname, closeTab, dialog, finalizeCloseTab],
+    [activePathname, closeTab, dialog, finalizeCloseTab, organization],
   );
 
   const closeActiveTab = useCallback(() => {
@@ -209,6 +210,62 @@ export function useCloseTabFlow(): CloseTabFlow {
       requestCloseTab,
     ],
   );
+}
+
+/**
+ * The tasks this close takes out of their group.
+ *
+ * Closing a task's last open tab ungroups it - that is what a group means on
+ * the strip - so every close path answers the question the same way, and a
+ * task with another tab still open keeps its membership whichever path runs.
+ * Read before the tabs are closed: afterwards the strip cannot say which
+ * tasks they were.
+ */
+function tasksUngroupedByClose(
+  closing: readonly HeaderTab[],
+  organization: OrganizationContextValue | null,
+): string[] {
+  const memberships = organization?.view?.groups.memberships ?? [];
+  if (memberships.length === 0) return [];
+  const canvas = useEpicCanvasStore.getState();
+  const closingTabIds = new Set(
+    closing.flatMap((tab) => (tab.kind === "epic" ? [tab.id] : [])),
+  );
+  if (closingTabIds.size === 0) return [];
+  const taskOf = (tabId: string): string | undefined =>
+    canvas.tabsById[tabId]?.epicId;
+  const stillOpen = new Set(
+    canvas.openTabOrder
+      .filter((tabId) => !closingTabIds.has(tabId))
+      .flatMap((tabId) => {
+        const epicId = taskOf(tabId);
+        return epicId === undefined ? [] : [epicId];
+      }),
+  );
+  return [
+    ...new Set(
+      [...closingTabIds].flatMap((tabId) => {
+        const epicId = taskOf(tabId);
+        return epicId === undefined || stillOpen.has(epicId) ? [] : [epicId];
+      }),
+    ),
+  ].filter((taskId) => memberships.some((member) => member.taskId === taskId));
+}
+
+function removeTasksFromGroups(
+  organization: OrganizationContextValue | null,
+  taskIds: readonly string[],
+): Promise<void> {
+  if (organization === null || taskIds.length === 0) return Promise.resolve();
+  return organization
+    .command({
+      kind: "groups",
+      operations: taskIds.map((taskId) => ({
+        operation: "removeTask",
+        taskId,
+      })),
+    })
+    .catch(() => undefined);
 }
 
 function isOnlyBlankStartPage(tab: HeaderTab): boolean {

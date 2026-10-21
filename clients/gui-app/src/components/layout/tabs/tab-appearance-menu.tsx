@@ -12,33 +12,14 @@ import {
 import { TaskOrganizationMenu } from "@/components/organization/task-organization-menu";
 import { useEpicGetTaskContexts } from "@/hooks/epic/use-epic-get-task-contexts-query";
 import { isEditableRole } from "@/lib/epic-permissions";
-import { Label } from "@/components/ui/label";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import type { CSSProperties } from "react";
 import { useId } from "react";
-import { Check, Group, Palette, Pencil, Pipette } from "lucide-react";
-import {
-  ContextMenuItem,
-  ContextMenuSeparator,
-  ContextMenuSub,
-  ContextMenuSubContent,
-  ContextMenuSubTrigger,
-} from "@/components/ui/context-menu";
+import { Check, Pipette } from "lucide-react";
+import { ContextMenuItem } from "@/components/ui/context-menu";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
-import { Input } from "@/components/ui/input";
-import {
-  useGroupEditorStore,
-  useGroupEditorTarget,
-} from "@/stores/tabs/group-editor-store";
-import { GroupFollowNote } from "./group-follow-note";
-import { useTabsStore } from "@/stores/tabs/store";
-import { tabRefKey } from "@/stores/tabs/layout";
-import {
-  effectiveTabColor,
-  TAB_COLORS,
-  type TabCustomization,
-  type TabGroup,
-} from "@/stores/tabs/tab-groups";
+import { useGroupEditorStore } from "@/stores/tabs/group-editor-store";
+import { TAB_COLORS } from "@/stores/tabs/tab-groups";
 import type { HeaderTab } from "@/stores/tabs/types";
 import { cn } from "@/lib/utils";
 
@@ -161,6 +142,16 @@ export function TabAppearanceMenu(props: { readonly tab: HeaderTab }) {
   if (props.tab.kind !== "epic") return null;
   return <EpicOrganizationMenu tab={props.tab} />;
 }
+/**
+ * Every task tab's organization menu, whatever its task's cloud lookup says.
+ *
+ * The lookup used to choose between two menus, and a task whose context had
+ * not landed - or had landed as local-homed - got a separate menu over a
+ * separate, machine-local set of groups. There is one set of groups now, the
+ * account's, so the lookup decides nothing but whether the Labels window may
+ * be edited; a task created moments ago is offered the same groups as any
+ * other, and the host holds the assignment until the task reaches the cloud.
+ */
 function EpicOrganizationMenu(props: {
   readonly tab: Extract<HeaderTab, { kind: "epic" }>;
 }) {
@@ -168,36 +159,39 @@ function EpicOrganizationMenu(props: {
   const organization = useOrganization();
   const context = useTabTaskContext(epicId, organization);
   const task = context.task;
-  if (organization?.supported && !context.localHomed) {
-    if (task === undefined && context.error !== null)
-      return (
-        <OrganizationContextRetryMenu
-          organization={organization}
-          taskId={epicId}
-          isFetching={context.isFetching}
-        />
-      );
-    if (!task?.epic) return null;
+  if (organization === null) return null;
+  // A lookup that FAILED is worth a retry; one that has not answered yet, or
+  // answered local-homed, is not an error and must not displace the menu.
+  if (task === undefined && context.error !== null && !context.localHomed)
     return (
-      <TaskOrganizationMenu
+      <OrganizationContextRetryMenu
+        organization={organization}
         taskId={epicId}
-        title={props.tab.name}
-        canEdit={
-          task.epic.light?.createdBy === organization.userId ||
-          isEditableRole(task.epic.permission?.role ?? null)
-        }
-        onEditGroup={(anchorId) =>
-          useGroupEditorStore.getState().request(anchorId)
-        }
+        isFetching={context.isFetching}
       />
     );
-  }
-  return <LocalTabAppearanceMenu tab={props.tab} />;
+  return (
+    <TaskOrganizationMenu
+      taskId={epicId}
+      title={props.tab.name}
+      canEdit={
+        // A task still on this machine was created by this account here, so
+        // it is this account's to label. Anything the cloud knows about is
+        // the cloud's call.
+        context.localHomed ||
+        task?.epic?.light?.createdBy === organization.userId ||
+        isEditableRole(task?.epic?.permission?.role ?? null)
+      }
+      onEditGroup={(anchorId) =>
+        useGroupEditorStore.getState().request(anchorId)
+      }
+    />
+  );
 }
 
 /**
- * The tab's task context, which decides whether the menu offers task
- * organization and whether the Labels window is editable.
+ * The tab's task context, which decides whether the Labels window is
+ * editable.
  *
  * The tab strip already resolved every open tab's context when it mounted.
  * Standing in with that answer until this tab's own lookup first answers puts
@@ -272,148 +266,5 @@ function OrganizationContextRetryMenu(props: {
       ) : null}
       Couldn't load task organization. Retry
     </ContextMenuItem>
-  );
-}
-/**
- * A tab's colour swatches. A grouped tab draws its group's colour, so its own
- * is not offered: the swatches show the group's, disabled, beside whose it is
- * and a way to edit the group.
- */
-function TabColorSection(props: {
-  readonly tab: HeaderTab;
-  readonly ownColor: string | null;
-  readonly groupId: string | null;
-  readonly group: TabGroup | undefined;
-}) {
-  const { groupId, group } = props;
-  const editorAnchor = useGroupEditorTarget(groupId);
-  return (
-    <>
-      <fieldset disabled={group !== undefined} className="min-w-0">
-        <TabColorPicker
-          menu
-          color={effectiveTabColor(group, props.ownColor)}
-          onChange={(color) => {
-            useTabsStore.getState().setTabCustomization(props.tab, { color });
-          }}
-        />
-      </fieldset>
-      {groupId === null || group === undefined ? null : (
-        <>
-          <GroupFollowNote name={group.name} />
-          {editorAnchor === null ? null : (
-            <ContextMenuItem
-              className="mt-1"
-              onSelect={() =>
-                useGroupEditorStore.getState().request(editorAnchor)
-              }
-            >
-              <Pencil />
-              Edit group…
-            </ContextMenuItem>
-          )}
-        </>
-      )}
-    </>
-  );
-}
-/**
- * What "Reset tab appearance" clears, or `null` when there is nothing to reset.
- * A grouped tab's own colour is not shown or editable, so it is left stored.
- */
-function resetPatchOf(
-  customization: TabCustomization | undefined,
-  grouped: boolean,
-): Partial<Pick<TabCustomization, "color" | "icon">> | null {
-  const color = !grouped && Boolean(customization?.color);
-  const icon = Boolean(customization?.icon);
-  if (!color && !icon) return null;
-  return grouped ? { icon: null } : { color: null, icon: null };
-}
-function LocalTabAppearanceMenu(props: { readonly tab: HeaderTab }) {
-  const key = tabRefKey(props.tab);
-  const customization = useTabsStore((state) => state.customizations?.[key]);
-  const groups = useTabsStore((state) => state.groups);
-  const groupId = customization?.groupId ?? null;
-  const group = groupId === null ? undefined : groups?.[groupId];
-  const reset = resetPatchOf(customization, group !== undefined);
-  const actions = useTabsStore.getState();
-  return (
-    <>
-      <ContextMenuSub>
-        <ContextMenuSubTrigger>
-          <Palette />
-          Tab appearance
-        </ContextMenuSubTrigger>
-        <ContextMenuSubContent layout="panel" className="max-w-xs">
-          <TabColorSection
-            tab={props.tab}
-            ownColor={customization?.color ?? null}
-            groupId={groupId}
-            group={group}
-          />
-          <Label className="mt-3 mb-1.5">Icon</Label>
-          <Input
-            aria-label="Tab icon"
-            placeholder="Emoji or initials"
-            maxLength={32}
-            value={customization?.icon ?? ""}
-            onKeyDown={(event) => {
-              if (event.key !== "Escape") event.stopPropagation();
-            }}
-            onChange={(event) =>
-              actions.setTabCustomization(props.tab, {
-                icon: event.target.value || null,
-              })
-            }
-          />
-          <p className="mt-1 text-ui-xs text-muted-foreground">
-            Displays up to two characters.
-          </p>
-          {reset === null ? null : (
-            <>
-              <ContextMenuSeparator className="my-2" />
-              <ContextMenuItem
-                onSelect={() => actions.setTabCustomization(props.tab, reset)}
-              >
-                Reset tab appearance
-              </ContextMenuItem>
-            </>
-          )}
-        </ContextMenuSubContent>
-      </ContextMenuSub>
-      <ContextMenuSub>
-        <ContextMenuSubTrigger>
-          <Group />
-          Add tab to group
-        </ContextMenuSubTrigger>
-        <ContextMenuSubContent>
-          <ContextMenuItem onSelect={() => actions.createGroup(props.tab)}>
-            New group
-          </ContextMenuItem>
-          {Object.entries(groups ?? {})
-            .filter(([, entry]) => !entry.organizationOwnerId)
-            .map(([id, entry]) => (
-              <ContextMenuItem
-                key={id}
-                onSelect={() => actions.setTabGroup(props.tab, id)}
-              >
-                <span
-                  className="size-3 rounded-full bg-[var(--swatch)]"
-                  style={{ "--swatch": entry.color } as CSSProperties}
-                />
-                {entry.name || "Unnamed group"}
-                {id === groupId ? <Check className="ml-auto" /> : null}
-              </ContextMenuItem>
-            ))}
-        </ContextMenuSubContent>
-      </ContextMenuSub>
-      {groupId !== null ? (
-        <ContextMenuItem onSelect={() => actions.setTabGroup(props.tab, null)}>
-          Remove from group
-        </ContextMenuItem>
-      ) : null}
-      <ContextMenuSeparator />
-    </>
   );
 }
