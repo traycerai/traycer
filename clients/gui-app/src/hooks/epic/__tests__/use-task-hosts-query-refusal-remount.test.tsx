@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClientProvider, type QueryClient } from "@tanstack/react-query";
-import { cleanup, renderHook } from "@testing-library/react";
+import { act, cleanup, renderHook } from "@testing-library/react";
 import { createElement, type ReactNode } from "react";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
@@ -155,6 +155,65 @@ describe("useTaskHosts after a refusal", () => {
     });
     expect(requests.value).toBe(2);
     expect(second.result.current.data?.hosts[0]?.hostId).toBe("host-1");
+
+    unsubscribe();
+    provider.dispose();
+  });
+
+  it("refetches a still-mounted refused read when the session is announced verified", async () => {
+    // The verdict is withdrawn and returns inside one act, so the observer
+    // never renders disabled: the reset is the only thing that can start the
+    // refetch, and it must still reach a read it has just returned to pending.
+    const hostRefuses = { value: true };
+    const requests = { value: 0 };
+    const { client, queryClient, wrapper } = mountFixture(() => {
+      requests.value += 1;
+      return hostRefuses.value
+        ? Promise.reject(refusal(`task-hosts-${String(requests.value)}`))
+        : Promise.resolve({
+            hosts: [
+              {
+                hostId: "host-1",
+                label: null,
+                principal: { kind: "user", id: "viewer-1" },
+                reach: "same_principal",
+              },
+            ],
+          });
+    });
+    const provider = new DefaultRequestContextProvider({ origin: "renderer" });
+    provider.setSignedIn({
+      user: createAuthenticatedUserFixture(undefined),
+      bearerToken: "tok-1",
+      operationId: undefined,
+      externalAbortSignal: undefined,
+    });
+    const unsubscribe = subscribeTaskHostRefusalReset({
+      requestContextProvider: provider,
+      queryClient,
+    });
+
+    const mounted = renderHook(() => useTaskHosts(client, TASK_ID), {
+      wrapper,
+    });
+    await vi.waitFor(() => {
+      expect(mounted.result.current.isError).toBe(true);
+    });
+
+    hostRefuses.value = false;
+    act(() => {
+      useAuthStore.setState({ status: "unverified" });
+      useAuthStore.setState({ status: "signed-in" });
+      provider.announceSessionVerified();
+    });
+
+    // Settled either way: on the refetch the reset allows, or on the idle
+    // pending read it would otherwise leave behind.
+    await vi.waitFor(() => {
+      expect(mounted.result.current.isFetching).toBe(false);
+    });
+    expect(requests.value).toBe(2);
+    expect(mounted.result.current.data?.hosts[0]?.hostId).toBe("host-1");
 
     unsubscribe();
     provider.dispose();

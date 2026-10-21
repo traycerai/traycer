@@ -909,11 +909,11 @@ describe("AuthService cloudAuthorized verdict propagation on in-place transition
     expect(contextAfter?.cloudAuthorized).toBe(false);
   });
 
-  it("a valid revalidation does not end an interactive sign-in attempt on an unverified session", async () => {
+  it("a live revalidation stands down for an interactive sign-in attempt on an unverified session", async () => {
     // Session recovery never races an interactive attempt, and the live
-    // revalidation's promotion must not either: ending `signing-in` while the
-    // device flow still runs would leave the attempt's own result landing on
-    // a session the surface already reports as signed in.
+    // revalidation must not either: a verdict would end `signing-in` while the
+    // device flow still runs, leaving the attempt's own result landing on a
+    // session the surface already reports as signed in.
     vi.useFakeTimers();
     const { service, host } = makeService();
     trackedServices.push(service);
@@ -941,8 +941,49 @@ describe("AuthService cloudAuthorized verdict propagation on in-place transition
     restoreFetch();
     restoreFetch = installFetch(() => okWithProfile());
     const outcome = await service.revalidateCurrentContext();
-    expect(outcome?.kind).toBe("valid");
+    expect(outcome).toBeNull();
 
+    expect(useAuthStore.getState().status).toBe("signing-in");
+    expect(service.getDeviceProgress()?.phase).toBe("waiting-approval");
+  });
+
+  it("a refused live revalidation does not demote an interactive sign-in attempt or spend the refresh token", async () => {
+    // The mirror of the case above: authn refuses the held bearer, which would
+    // rotate it and land `unverified` over the running attempt.
+    vi.useFakeTimers();
+    const { service, host } = makeService();
+    trackedServices.push(service);
+    await host.tokenStore.signIn(
+      { token: "stale-stored-token", refreshToken: "stale-stored-refresh" },
+      { id: "user-1", email: "test@example.com", name: "Test User" },
+    );
+    restoreFetch();
+    restoreFetch = installFetch(() =>
+      Promise.reject(new Error("connection refused")),
+    );
+
+    const start = service.start();
+    for (let retry = 1; retry < AUTH_FETCH_MAX_ATTEMPTS; retry += 1) {
+      await vi.advanceTimersByTimeAsync(authRetryDelayMs(retry));
+    }
+    await start;
+    expect(useAuthStore.getState().status).toBe("unverified");
+
+    await service.signIn();
+    expect(useAuthStore.getState().status).toBe("signing-in");
+
+    const refreshRequests = { value: 0 };
+    restoreFetch();
+    restoreFetch = installFetch((input) => {
+      const url = typeof input === "string" ? input : String(input);
+      if (url === REFRESH_URL) {
+        refreshRequests.value += 1;
+      }
+      return status(401);
+    });
+    await service.revalidateCurrentContext();
+
+    expect(refreshRequests.value).toBe(0);
     expect(useAuthStore.getState().status).toBe("signing-in");
     expect(service.getDeviceProgress()?.phase).toBe("waiting-approval");
   });

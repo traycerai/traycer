@@ -73,13 +73,22 @@ export function subscribeTaskHostRefusalReset(args: {
   readonly queryClient: QueryClient;
 }): RequestContextSubscription {
   return args.requestContextProvider.onSessionVerified(() => {
+    // The failed reads are picked BEFORE the reset: `resetQueries` re-applies
+    // its filter to choose what to refetch, and a reset read is no longer in
+    // `error`, so a status filter would leave a mounted read reset and idle.
+    const failed = new Set(
+      args.queryClient.getQueryCache().findAll({
+        predicate: (query) =>
+          query.state.status === "error" &&
+          hostQueryKeys.matchesMethodOnAnyHost(
+            query.queryKey,
+            "epic.listTaskHosts",
+          ),
+      }),
+    );
+    if (failed.size === 0) return;
     void args.queryClient.resetQueries({
-      predicate: (query) =>
-        query.state.status === "error" &&
-        hostQueryKeys.matchesMethodOnAnyHost(
-          query.queryKey,
-          "epic.listTaskHosts",
-        ),
+      predicate: (query) => failed.has(query),
     });
   });
 }

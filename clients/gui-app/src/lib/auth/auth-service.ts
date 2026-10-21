@@ -3233,6 +3233,16 @@ export class AuthService {
     ) {
       return { kind: "rejected" };
     }
+    // An interactive sign-in owns the session while it runs, and this
+    // automatic check stands down for one as session recovery does, whatever
+    // authn would answer: a refusal would demote `signing-in` to `unverified`
+    // under the running attempt, and a verdict would promote it, either way
+    // taking the approval screen away while the attempt's own result is
+    // still to land. A check started before the attempt is fenced by the
+    // identity generation the attempt advanced.
+    if (this.activeAttempt !== null || status === "signing-in") {
+      return null;
+    }
     const currentUserId = ctx.identity.userId;
     const currentToken = this.currentBearer;
     const credentialGeneration = this.getCredentialGeneration();
