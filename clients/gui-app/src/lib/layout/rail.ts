@@ -43,7 +43,6 @@ export type RailEntry =
 export const RAIL_REGION_IDS: ReadonlyArray<RailRegionId> = [
   "railAgents",
   "railArtifacts",
-  "railFiles",
   "railTerminals",
   "railBrowsers",
   "railGitDiff",
@@ -63,7 +62,6 @@ export const RAIL_REGION_IDS: ReadonlyArray<RailRegionId> = [
 const PANEL_BY_RAIL_REGION: Readonly<Record<RailRegionId, LeftPanelId>> = {
   railAgents: "chats",
   railArtifacts: "artifacts",
-  railFiles: "files",
   railTerminals: "terminals",
   railBrowsers: "browsers",
   railGitDiff: "git-diff",
@@ -82,7 +80,6 @@ export const RAIL_REGION_BY_PANEL: Readonly<Record<LeftPanelId, RailRegionId>> =
   {
     chats: "railAgents",
     artifacts: "railArtifacts",
-    files: "railFiles",
     terminals: "railTerminals",
     browsers: "railBrowsers",
     "git-diff": "railGitDiff",
@@ -507,9 +504,7 @@ function railJoins(
 /**
  * Where a panel the stored rail never named may go: `at`, unless that would
  * land between two members of one stack the user made, in which case after the
- * run. A panel a build adds is never a reason to split a stack - without this a
- * stored Agents + Artifacts + Terminals stack came back as two pieces the day
- * Files appeared between Artifacts and Terminals.
+ * run. A panel added by a build must not split an existing stack.
  */
 function afterStackRun(
   entries: ReadonlyArray<RailEntry>,

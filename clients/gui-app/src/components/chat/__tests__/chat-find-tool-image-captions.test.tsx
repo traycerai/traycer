@@ -108,7 +108,7 @@ function toolSegment(
     backgroundOutput: null,
     backgroundTask: false,
     imageResults,
-    page: null,
+    artifact: null,
     mcpApp: null,
     startedAt: 0,
     durationMs: null,

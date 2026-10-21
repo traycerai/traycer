@@ -125,5 +125,12 @@ if (runsFirstShard) {
       "src/hooks/terminal/__tests__/use-epic-terminal-durable-create.test.tsx",
     ),
   );
+  exitCode = firstFailure(
+    exitCode,
+    runVitest(
+      "vitest.react-compiler.config.ts",
+      "src/components/canvas-artifact/__tests__/use-canvas-board-document.react-compiler.test.tsx",
+    ),
+  );
 }
 process.exit(exitCode);

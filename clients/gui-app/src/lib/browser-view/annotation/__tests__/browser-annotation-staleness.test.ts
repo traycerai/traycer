@@ -12,18 +12,32 @@ import {
 } from "@/lib/browser-view/sessions/__tests__/browser-session-test-kit";
 
 import { STUB_ANNOTATION_ELEMENT } from "./browser-annotation-fixtures";
+import type { BrowserAnnotationSource } from "@traycer/protocol/persistence/epic/schemas";
 
-function record(
-  overrides: Partial<BrowserAnnotationRecord>,
-): BrowserAnnotationRecord {
-  return {
-    kind: "browser-annotation",
-    annotationId: overrides.annotationId ?? "ann-1",
+/** Flat test overrides: the browser source's fields sit beside the record's own. */
+type BrowserRecordOverrides = Partial<
+  Omit<BrowserAnnotationSource, "kind"> &
+    Omit<BrowserAnnotationRecord, "source">
+>;
+
+function record(overrides: BrowserRecordOverrides): BrowserAnnotationRecord {
+  const source: BrowserAnnotationSource = {
+    kind: "browser",
     tabId: overrides.tabId ?? "tab-1",
     sessionId: overrides.sessionId ?? "session-1",
     origin: overrides.origin ?? "https://example.com",
     pageUrl: overrides.pageUrl ?? "https://example.com/",
     pageTitle: overrides.pageTitle ?? "Example",
+  };
+  return {
+    kind: "browser-annotation",
+    annotationId: overrides.annotationId ?? "ann-1",
+    tabId: source.tabId,
+    sessionId: source.sessionId,
+    origin: source.origin,
+    pageUrl: source.pageUrl,
+    pageTitle: source.pageTitle,
+    source,
     capturedAt: overrides.capturedAt ?? 1,
     comment: overrides.comment ?? "",
     counts: overrides.counts ?? { elements: 1, regions: 0, strokes: 0 },

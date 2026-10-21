@@ -28,13 +28,21 @@ import type {
   AgentSessionState,
 } from "@traycer/protocol/host/agent-session-state";
 import type { RoleClaim } from "@traycer/protocol/persistence/epic/role-claims";
-import type { EpicStateFileRecord } from "@traycer/protocol/host/epic/files";
 import type { CommentThreadWire } from "@traycer/protocol/host/epic/unary-schemas";
 import type { ChatRecordSummary } from "@traycer/protocol/host/epic/chat-records";
+
+import type {
+  ArtifactHead,
+  ArtifactObjectRef,
+} from "@traycer/protocol/persistence/epic/artifacts";
 
 export type EpicTreeNodeType = "chat" | "terminal-agent" | EpicArtifactKind;
 
 export interface ArtifactProjection {
+  readonly layout?: "folder" | "file";
+  readonly relativePath?: string;
+  readonly head?: ArtifactHead;
+  readonly object?: ArtifactObjectRef;
   readonly id: string;
   readonly kind: EpicArtifactKind;
   readonly title: string;
@@ -309,22 +317,6 @@ export interface CommentThreadsSlice {
   readonly byArtifactId: Readonly<Record<string, readonly CommentThreadWire[]>>;
 }
 
-/**
- * The epic's files as the records lane (`epic.state.subscribe@1.2`) serves them:
- * the manifest entries, tombstones included, each with whether THIS host holds
- * its bytes.
- *
- * `served` is the one bit a consumer cannot get from the records: `false` means
- * the lane has not carried a files set - the pre-snapshot state, and every host
- * older than `@1.2` - so an empty list there is "unknown", not "no files".
- * Hiding tombstones, grouping and version chains are the reader's job
- * (`lib/files/epic-files-model.ts`); this slice stays the wire's own shape.
- */
-export interface FilesSlice {
-  readonly served: boolean;
-  readonly records: readonly EpicStateFileRecord[];
-}
-
 export interface TreeNode {
   readonly id: string;
   readonly parentId: string | null;
@@ -467,12 +459,6 @@ export const EMPTY_TERMINAL_AGENTS_SLICE: TerminalAgentsSlice = Object.freeze({
 
 export const EMPTY_AGENT_ROLES_SLICE: AgentRolesSlice = Object.freeze({
   byAgentId: Object.freeze({} as Record<string, readonly RoleClaim[]>),
-});
-
-/** "The lane has not said anything about files" - see {@link FilesSlice}. */
-export const EMPTY_FILES_SLICE: FilesSlice = Object.freeze({
-  served: false,
-  records: Object.freeze([]),
 });
 
 /**

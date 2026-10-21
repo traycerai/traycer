@@ -3,18 +3,31 @@ import WebKit
 
 /// The storyboard's bridge controller. `cap sync` auto-registers only the npm
 /// plugins in `packageClassList`; a plugin that lives in this app target is
-/// registered here, and this is the only such plugin.
+/// registered here.
 ///
 /// It also fences the native bridge and Capacitor's native routes off from
 /// sandboxed agent pages and MCP Apps (`SandboxBridgeGuard.swift`). Every guard
 /// is installed before the first page loads; the two delegates are held here
 /// because WebKit keeps the navigation delegate weakly.
 class BridgeViewController: CAPBridgeViewController {
+    private let artifactHandler = ArtifactSchemeHandler()
     private var sandboxBridgeGuard: SandboxBridgeGuard?
     private var sandboxNavigationGuard: SandboxNavigationGuard?
     private var statusBarTapObserver: NSObjectProtocol?
 
+    override func webViewConfiguration(for instanceConfiguration: InstanceConfiguration) -> WKWebViewConfiguration {
+        let configuration = super.webViewConfiguration(for: instanceConfiguration)
+        // A handler must be present before WKWebView exists. Capacitor adds its
+        // app scheme afterwards; artifact bytes never enter that native router.
+        configuration.setURLSchemeHandler(artifactHandler, forURLScheme: ArtifactSchemeHandler.scheme)
+        return configuration
+    }
+
     override func capacitorDidLoad() {
+        let artifacts = SandboxArtifactsPlugin()
+        artifacts.handler = artifactHandler
+        artifactHandler.plugin = artifacts
+        bridge?.registerPluginInstance(artifacts)
         bridge?.registerPluginInstance(AuthSessionPlugin())
         installSandboxGuards()
         forwardStatusBarTaps()

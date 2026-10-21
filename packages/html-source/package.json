@@ -1,0 +1,30 @@
+{
+  "name": "@traycer/html-source",
+  "version": "0.1.0",
+  "license": "MIT",
+  "files": [
+    "src",
+    "README.md"
+  ],
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "compile": "tsc --noEmit --incremental --tsBuildInfoFile node_modules/.tmp/compile.tsbuildinfo",
+    "test": "vitest run",
+    "lint": "bun run lint:files .",
+    "lint:files": "eslint --cache --fix --max-warnings 0 --no-warn-ignored"
+  },
+  "dependencies": {
+    "parse5": "8.0.1"
+  },
+  "devDependencies": {
+    "@typescript-eslint/eslint-plugin": "catalog:",
+    "@typescript-eslint/parser": "catalog:",
+    "eslint": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  },
+  "nx": {}
+}

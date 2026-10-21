@@ -51,7 +51,6 @@ import {
 } from "@/components/epic-canvas/sidebar/epic-sidebar-filter-menu";
 import { CommGraphOpenMenuItem } from "@/components/epic-canvas/comm-graph/comm-graph-open-button";
 import { DeletedArtifactsOpenMenuItem } from "@/components/epic-canvas/deleted-artifacts/deleted-artifacts-open-menu-item";
-import { FilesPanelBody } from "@/components/epic-canvas/sidebar/files-panel";
 import { FileTreeWorkspacePicker } from "@/components/epic-canvas/sidebar/file-tree-workspace-picker";
 import { FileTreePanelBodyForWorkspace } from "@/components/epic-canvas/sidebar/epic-sidebar-file-tree";
 import { WorkspacePickerWithOpener } from "@/components/worktree/workspace-picker-with-opener";
@@ -193,7 +192,7 @@ import {
 import { useEpicDeleteTuiAgentInBatch } from "@/hooks/epic/use-epic-tui-agent-mutations";
 import {
   DEFAULT_EPIC_NODE_NAMES,
-  isEpicArtifactKind,
+  isMarkdownArtifactKind,
   type EpicNodeKind,
 } from "@/lib/artifacts/node-display";
 import { useArtifactReadStateStore } from "@/stores/epics/artifact-read-state-store";
@@ -554,14 +553,6 @@ const PANEL_SLOTS_BY_ID: Readonly<Record<LeftPanelId, LeftPanelModeSlots>> = {
     },
     loading: emptyLoadingSlots(ArtifactsLoadingPanelBody),
   },
-  files: {
-    live: {
-      Body: FilesPanelBody,
-      Actions: null,
-      Subtitle: null,
-    },
-    loading: emptyLoadingSlots(GenericLoadingPanelBody),
-  },
   "git-diff": {
     live: {
       Body: GitDiffPanelBody,
@@ -695,7 +686,9 @@ export function EpicLeftPanelHost(props: EpicLeftPanelHostProps) {
   const activeArtifactId = useActiveEpicArtifactId(tabId);
   const activeArtifact = useEpicArtifact(activeArtifactId);
   const hasActiveCommentableArtifact =
-    activeArtifact !== null && "kind" in activeArtifact;
+    activeArtifact !== null &&
+    "kind" in activeArtifact &&
+    isMarkdownArtifactKind(activeArtifact.kind);
   // Match the PR panel's pin, sole task-agent host, and canvas-host fallback.
   const canvasHostId = useCanvasHostId();
   const { resolvedHostId: hostId } = useSurfaceHostPinWithDefault(
@@ -2207,7 +2200,8 @@ function TreePanelActions(props: TreePanelActionsProps) {
   const addRoot = useCallback(
     (type: EpicNodeKind) => {
       if (!canMutate) return;
-      if (type === "chat" || type === "terminal" || type === "terminal-agent") {
+      // This create menu authors Markdown bodies only.
+      if (!isMarkdownArtifactKind(type)) {
         return;
       }
       const pendingName = DEFAULT_EPIC_NODE_NAMES[type];
@@ -2641,7 +2635,8 @@ function SidebarBulkSelectionActions() {
   );
   const selectedArtifacts = selection.selectedVisibleIds.flatMap((id) => {
     const record = recordById.get(id);
-    if (record === undefined || !isEpicArtifactKind(record.type)) return [];
+    // Bulk document export requires Markdown bodies.
+    if (record === undefined || !isMarkdownArtifactKind(record.type)) return [];
     return [{ id: record.id, title: record.name }];
   });
   const canExportSelected = selectedArtifacts.length >= 2;

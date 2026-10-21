@@ -1,3 +1,5 @@
+import type { WindowCaptureRect } from "../ipc-contracts/window-capture-types";
+import type { SandboxArtifactBridge } from "@traycer-clients/shared/platform/sandbox-artifacts";
 import type { NotificationFeedOccurrence } from "@traycer-clients/shared/notifications/feed-delivery";
 import type { DesktopMenuSnapshot } from "../ipc-contracts/window-types";
 import type {
@@ -370,6 +372,7 @@ export interface DesktopPreloadBridge {
   power: DesktopPowerBridge;
   zoom: DesktopZoomBridge;
   browserView: BrowserViewBridge;
+  sandboxArtifacts: SandboxArtifactBridge;
   hostManagement: DesktopHostManagementBridge;
   hostTray: DesktopHostTrayBridge;
   hostControllerStatus: DesktopHostControllerStatusBridge;
@@ -537,6 +540,7 @@ export interface DesktopPlatformBridge {
     add(path: string): Promise<void>;
   };
   window: {
+    captureRegion(rect: WindowCaptureRect): Promise<ArrayBuffer | null>;
     flashFrame(shouldFlash: boolean): Promise<void>;
     setProgressBar(value: number): Promise<void>;
     setRepresentedFilename(path: string): Promise<void>;
@@ -841,6 +845,7 @@ export class DesktopRunnerHost implements IRunnerHost {
   readonly power: DesktopPowerBridge;
   readonly zoom: IZoomHost;
   readonly browserView: BrowserViewBridge;
+  readonly sandboxArtifacts: SandboxArtifactBridge;
   readonly hostManagement: IHostManagement | null;
   readonly hostTray: IHostTray | null;
   // Present in every launch mode: in `none` it is the only way back.
@@ -883,6 +888,7 @@ export class DesktopRunnerHost implements IRunnerHost {
     this.crashTelemetry = options.bridge.platform.crashTelemetry;
     this.power = options.bridge.power;
     this.browserView = options.bridge.browserView;
+    this.sandboxArtifacts = options.bridge.sandboxArtifacts;
     // Passed straight through: the client instance, its issued attach
     // generation and its buffering all belong to the preload load, so
     // re-wrapping it here could only add a second identity for the same

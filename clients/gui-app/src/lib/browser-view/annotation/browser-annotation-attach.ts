@@ -50,6 +50,14 @@ export async function attachBrowserAnnotation(input: {
   const record: BrowserAnnotationRecord = {
     kind: "browser-annotation",
     ...input.payload,
+    source: {
+      kind: "browser",
+      tabId: input.payload.tabId,
+      sessionId: input.payload.sessionId,
+      origin: input.payload.origin,
+      pageUrl: input.payload.pageUrl,
+      pageTitle: input.payload.pageTitle,
+    },
     imageFileName: prepared.image.fileName,
     imageHash,
   };

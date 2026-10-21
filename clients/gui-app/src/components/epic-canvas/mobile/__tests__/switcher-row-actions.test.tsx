@@ -28,7 +28,10 @@ import {
   type OpenedStoreForTest,
 } from "@/stores/epics/open-epic/test-support/open-store-for-test";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
-import type { TuiAgentProjection } from "@/stores/epics/open-epic/types";
+import type {
+  ArtifactProjection,
+  TuiAgentProjection,
+} from "@/stores/epics/open-epic/types";
 
 vi.mock("sonner", () => ({
   toast: { error: vi.fn(), success: vi.fn() },
@@ -251,7 +254,35 @@ describe("SwitcherRowActions terminal-agent delete", () => {
 
 const ARTIFACT_NODE_ID = "artifact-1";
 
+function artifactProjection(
+  overrides: Partial<ArtifactProjection> &
+    Pick<ArtifactProjection, "id" | "kind">,
+): ArtifactProjection {
+  return {
+    title: "Artifact One",
+    folderName: "artifact-one",
+    parentId: null,
+    artifactRoomId: null,
+    createdAt: 1,
+    updatedAt: 2,
+    status: null,
+    createdManually: true,
+    ...overrides,
+  };
+}
+
+/** Export requires a Markdown body, resolved from the real projection. */
+function seedArtifact(artifact: ArtifactProjection): void {
+  handle.store.setState({
+    artifacts: { byId: { [artifact.id]: artifact }, allIds: [artifact.id] },
+  });
+}
+
 describe("artifact export", () => {
+  beforeEach(() => {
+    seedArtifact(artifactProjection({ id: ARTIFACT_NODE_ID, kind: "spec" }));
+  });
+
   it("lists both export items ahead of Rename on an artifact row, and exporting calls the mutation", () => {
     render(
       <SwitcherRowActions
@@ -351,4 +382,35 @@ describe("artifact export", () => {
     );
     expect(renameItem.hasAttribute("data-disabled")).toBe(true);
   });
+
+  it.each(["html", "canvas", "file"] as const)(
+    "has no export items on a %s artifact row - export requires a Markdown body",
+    (kind) => {
+      seedArtifact(artifactProjection({ id: ARTIFACT_NODE_ID, kind }));
+
+      render(
+        <SwitcherRowActions
+          epicId={EPIC_ID}
+          tabId={tabId}
+          kind="artifact"
+          nodeId={ARTIFACT_NODE_ID}
+          name="Artifact One"
+          cascadeSummary={null}
+        />,
+        { wrapper: Wrapper },
+      );
+
+      fireEvent.pointerDown(
+        screen.getByTestId(`switcher-more-${ARTIFACT_NODE_ID}`),
+        { button: 0 },
+      );
+
+      expect(
+        screen.queryByTestId(`switcher-export-markdown-${ARTIFACT_NODE_ID}`),
+      ).toBeNull();
+      expect(
+        screen.queryByTestId(`switcher-export-pdf-${ARTIFACT_NODE_ID}`),
+      ).toBeNull();
+    },
+  );
 });

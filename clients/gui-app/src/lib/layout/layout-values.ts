@@ -225,7 +225,6 @@ export interface LayoutValues {
   readonly railTerminals: ShownValues;
   readonly railBrowsers: ShownValues;
   readonly railArtifacts: ShownValues;
-  readonly railFiles: ShownValues;
   readonly railGitDiff: ShownValues;
   readonly railPullRequests: AutoRailValues;
   readonly railFileTree: ShownValues;

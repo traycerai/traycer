@@ -60,15 +60,18 @@ vi.mock("@/hooks/artifacts/use-artifact-image-operations", () => ({
   }),
 }));
 
+const artifactRecords = vi.hoisted(() => ({
+  current: [{ id: "artifact-a", name: "Spec A", type: "spec" }] as Array<{
+    readonly id: string;
+    readonly name: string;
+    readonly type: string;
+  }>,
+}));
+const DEFAULT_RECORDS = artifactRecords.current;
+
 vi.mock("@/lib/epic-selectors", () => ({
   useOpenEpicId: () => "epic-1",
-  useEpicArtifactRecords: () => [
-    {
-      id: "artifact-a",
-      name: "Spec A",
-      type: "spec",
-    },
-  ],
+  useEpicArtifactRecords: () => artifactRecords.current,
 }));
 
 vi.mock("@/providers/use-open-epic-handle", () => ({
@@ -82,8 +85,11 @@ vi.mock("@/providers/use-open-epic-handle", () => ({
   }),
 }));
 
-vi.mock("@/lib/artifacts/node-display", () => ({
-  isEpicArtifactKind: () => true,
+vi.mock("@/lib/artifacts/node-display", async (importOriginal) => ({
+  // The real guards: the component's own markdown-only filter is exactly
+  // what the mixed-fixture test below exercises, so faking it would test
+  // nothing.
+  ...(await importOriginal<typeof import("@/lib/artifacts/node-display")>()),
   // Read at module load by the settings store, which the link seam pulls in.
   DEFAULT_EPIC_NODE_ICON_COLORS: {
     chat: "#38bdf8",
@@ -155,6 +161,7 @@ afterEach(() => {
 });
 
 beforeEach(() => {
+  artifactRecords.current = DEFAULT_RECORDS;
   fragmentDoc = new Y.Doc();
   fragment = fragmentDoc.getXmlFragment("artifact-body");
   getArtifactFragment.mockImplementation(() => fragment);
@@ -210,6 +217,31 @@ describe("AddImageToArtifactButton", () => {
       "linger",
     );
     expect(releaseArtifactBody).toHaveBeenCalledTimes(1);
+  });
+
+  it("lists only the markdown records, dropping html/canvas/file ones from a mixed set", async () => {
+    artifactRecords.current = [
+      { id: "artifact-a", name: "Spec A", type: "spec" },
+      { id: "artifact-h", name: "Landing Page", type: "html" },
+      { id: "artifact-c", name: "Design Board", type: "canvas" },
+      { id: "artifact-f", name: "Report", type: "file" },
+    ];
+    renderWithQuery(
+      <AddImageToArtifactButton
+        source={{ kind: "client", url: "blob:http://localhost/img" }}
+        alt="from chat"
+        className={undefined}
+      />,
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", { name: /add image to artifact/i }),
+    );
+
+    expect(await screen.findByRole("button", { name: /spec a/i })).toBeTruthy();
+    expect(screen.queryByText("Landing Page")).toBeNull();
+    expect(screen.queryByText("Design Board")).toBeNull();
+    expect(screen.queryByText("Report")).toBeNull();
   });
 
   it("rolls back the Y node when finish rejects mid-sequence", async () => {

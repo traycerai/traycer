@@ -119,13 +119,13 @@ export interface ImagePreviewProps {
    */
   readonly onDecodeError: (() => void) | null;
   /**
-   * The host surface's own actions (an epic-file tile's Download and More),
+   * The host surface's own actions (such as Download and More),
    * drawn at the end of this instance's toolbar so the surface needs no second
    * bar. `null` adds nothing; ignored when `compact`.
    */
   readonly toolbarActions: ReactNode;
   /**
-   * What the file is called, drawn first in the toolbar (an epic-file tile's
+   * What the file is called, drawn first in the toolbar (the
    * title or name). `null` draws only the size caption; ignored when `compact`.
    */
   readonly toolbarLabel: ReactNode;

@@ -123,6 +123,8 @@ const ROUTE_TEMPLATE_LABELS: Readonly<
   "/settings/mcp-servers": "Settings - MCP servers",
   "/settings/skills": "Settings - Skills",
   "/settings/delete-account": "Settings - Delete account",
+  "/settings/dev-artifact-proof": "Settings - Artifact proof",
+  "/settings/dev-canvas-proof": "Settings - Canvas proof",
   "/settings/devices": "Settings - Devices",
   "/settings/diagnostics": "Settings - Host diagnostics",
   "/settings/fallback": "Settings - Model routing",

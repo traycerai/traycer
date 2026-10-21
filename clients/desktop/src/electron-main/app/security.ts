@@ -1,3 +1,4 @@
+import { normalizeSandboxArtifactPath } from "./sandbox-artifact-path";
 import { URL } from "node:url";
 import { shell, session, type Session, type WebContents } from "electron";
 import { log } from "./logger";
@@ -6,6 +7,7 @@ import { CONTENT_SECURITY_POLICY } from "../../shared/content-security-policy";
 import { isDevBuild } from "../../config";
 import { devRendererOriginFromEnv } from "../../ipc-contracts/dev-renderer-origin";
 import {
+  isSandboxArtifactUrl,
   isSandboxLoaderUrl,
   isSandboxUrl,
   sandboxDeclaredGrants,
@@ -292,7 +294,7 @@ const SANDBOX_NESTED_FRAME_SCHEMES: ReadonlySet<string> = new Set([
  * behind it.
  *
  * - A sandbox ROOT (a direct child of the app document) loads the loader
- *   page and nothing else - not another sandbox path, not the web.
+ *   page or an artifact document.
  * - A frame deeper in a sandbox tree (a page's own iframe, which only an
  *   `open` page can have) loads http(s), or an `about:` document.
  * - A same-document navigation (an in-page anchor) changes no document.
@@ -301,7 +303,12 @@ export function isAllowedAppSubframeNavigation(
   url: string,
   isSandboxRoot: boolean,
 ): boolean {
-  if (isSandboxRoot) return isSandboxLoaderUrl(url);
+  if (isSandboxRoot) {
+    if (isSandboxLoaderUrl(url)) return true;
+    if (!isSandboxArtifactUrl(url)) return false;
+    const path = normalizeSandboxArtifactPath(url);
+    return path !== null && /\.html?$/i.test(path);
+  }
   if (url === "about:blank" || url === "about:srcdoc") return true;
   try {
     return SANDBOX_NESTED_FRAME_SCHEMES.has(new URL(url).protocol);

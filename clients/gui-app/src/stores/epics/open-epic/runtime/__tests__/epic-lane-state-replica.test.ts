@@ -12,15 +12,21 @@
 import { describe, expect, it } from "vitest";
 import { epicStateSubscribeServerFrameSchemaV11 } from "@traycer/protocol/host/epic/state-subscribe";
 import type { EpicStateSubscribeServerFrameV11 } from "@traycer/protocol/host/epic/state-subscribe";
+import { epicStateSubscribeServerFrameSchemaV13 } from "@traycer/protocol/host/epic/state-subscribe";
+import type {
+  EpicArtifactRecord,
+  EpicDeletedArtifactRecord,
+  EpicStateSubscribeServerFrameV13,
+} from "@traycer/protocol/host/epic/state-subscribe";
 import type {
   EpicStateLaneEvent,
   EpicStateRow,
 } from "@traycer-clients/shared/epic-lanes";
+import type { RecordChange } from "@traycer-clients/shared/replica-runtime";
 import {
   ARTIFACT_TOMBSTONE_REMOVE_REASON,
   EPIC_META_ROW_ID,
   EPIC_STATE_LANE_ID,
-  FILES_ROW_ID,
   ROLE_CLAIMS_ROW_ID,
   artifactRowId,
   artifactTombstoneRowId,
@@ -35,8 +41,6 @@ import {
   type EpicLaneStateReplica,
 } from "../epic-lane-state-replica";
 import { selectLaneCommentThreads } from "@/hooks/comments/use-lane-comment-threads";
-import type { EpicStateFileRecord } from "@traycer/protocol/host/epic/files";
-import { fileRecord } from "@/lib/files/__tests__/epic-file-record-fixture";
 
 const EPOCH = "epoch-1";
 
@@ -106,7 +110,7 @@ function artifactRow(overrides: {
   return {
     rowId: artifactRowId(record.id),
     revision: record.revision,
-    row: { kind: "artifact", record },
+    row: { kind: "artifact", record: { ...record, layout: "folder" } },
   };
 }
 
@@ -818,144 +822,454 @@ describe("epic.state.subscribe read model - epoch and trust", () => {
   });
 });
 
-function filesRow(
-  revision: number,
-  files: readonly EpicStateFileRecord[],
-): RecordRow<EpicStateRow> {
-  return { rowId: FILES_ROW_ID, revision, row: { kind: "files", files } };
-}
+/**
+ * `epic.state.subscribe@1.3` carries html, canvas and file artifacts beside the
+ * four markdown kinds, and the GUI now has a presentation for all three (the
+ * object-artifact tile). The lane replica must project them exactly like the
+ * four markdown kinds - same populations, same tombstone handling, same
+ * change signal - because nothing downstream re-derives "renderable" from
+ * `kind` on its own.
+ *
+ * Frames go through the REAL `@1.3` schema, same standard as above: a wire
+ * shape that drifts fails construction here instead of passing for the wrong
+ * reason.
+ */
+describe("epic.state.subscribe read model - html, canvas and file artifacts", () => {
+  const SHA256 = "a".repeat(64);
+  const MARKDOWN_IDS = ["spec-1", "ticket-1"];
+  const NEW_KIND_IDS = ["html-1", "canvas-1", "file-1"];
+  const ALL_IDS = [...MARKDOWN_IDS, ...NEW_KIND_IDS];
 
-function filesTransaction(
-  position: number,
-  row: RecordRow<EpicStateRow>,
-): EpicStateLaneEvent {
-  return {
-    kind: "record-transaction",
-    cursor: cursorAt(position, EPOCH),
-    changes: [{ kind: "upsert", row }],
-    barrier: null,
+  function parseSnapshotFrameV13(
+    raw: unknown,
+  ): Extract<EpicStateSubscribeServerFrameV13, { kind: "snapshot" }> {
+    const frame = epicStateSubscribeServerFrameSchemaV13.parse(raw);
+    if (frame.kind !== "snapshot") {
+      throw new Error(`expected a snapshot frame, got ${frame.kind}`);
+    }
+    return frame;
+  }
+
+  function parseDeltaFrameV13(
+    raw: unknown,
+  ): Extract<EpicStateSubscribeServerFrameV13, { kind: "delta" }> {
+    const frame = epicStateSubscribeServerFrameSchemaV13.parse(raw);
+    if (frame.kind !== "delta") {
+      throw new Error(`expected a delta frame, got ${frame.kind}`);
+    }
+    return frame;
+  }
+
+  function baseWire(id: string, revision: number) {
+    return {
+      id,
+      folderName: `${id}-folder`,
+      title: `Title ${id}`,
+      createdAt: 1,
+      updatedAt: 2,
+      createdManually: true,
+      parentId: null,
+      revision,
+    };
+  }
+
+  const manifestHead = {
+    files: {
+      "index.html": {
+        sha256: SHA256,
+        byteLength: 12,
+        mediaType: "text/html",
+        status: "published",
+      },
+    },
+    capturedAt: 3,
   };
-}
 
-function snapshotWithFiles(
-  files: RecordRow<EpicStateRow> | null,
-): EpicStateLaneEvent {
-  return snapshotEvent({
-    rows: [
-      ...metaRows({ title: "Epic", updatedAt: 10, revision: 1 }),
-      ...(files === null ? [] : [files]),
-    ],
-    position: 1,
-    epoch: EPOCH,
-    trust: "reconciled-with-cloud",
-    cause: "initial",
-  });
-}
+  function specWire(id: string, revision: number, title: string) {
+    return { kind: "spec", ...baseWire(id, revision), title };
+  }
 
-describe("epic.state.subscribe read model - files", () => {
-  const downloading = (received: number): EpicStateFileRecord =>
-    fileRecord({
-      path: "files/big.mov",
-      localState: { kind: "downloading", received, total: 100 },
+  function ticketWire(id: string, revision: number) {
+    return {
+      kind: "ticket",
+      ...baseWire(id, revision),
+      assignee: "",
+      status: 0,
+    };
+  }
+
+  /** The three kinds that now share the markdown kinds' presentation; none of them has an `artifactRoomId` on the lane. */
+  function newKindWires(revision: number) {
+    return [
+      { kind: "html", ...baseWire("html-1", revision), head: manifestHead },
+      { kind: "canvas", ...baseWire("canvas-1", revision), head: manifestHead },
+      {
+        kind: "file",
+        ...baseWire("file-1", revision),
+        layout: "file",
+        object: {
+          sha256: SHA256,
+          byteLength: 12,
+          mediaType: "application/pdf",
+          status: "published",
+        },
+      },
+    ];
+  }
+
+  function deletedWire(kind: string, id: string, revision: number) {
+    return {
+      kind,
+      id,
+      title: `Deleted ${id}`,
+      deletedAt: "2026-01-01T00:00:00.000Z",
+      revision,
+    };
+  }
+
+  function newKindTombstoneWires(revision: number) {
+    return [
+      deletedWire("html", "html-1", revision),
+      deletedWire("canvas", "canvas-1", revision),
+      deletedWire("file", "file-1", revision),
+    ];
+  }
+
+  function snapshotWith(args: {
+    readonly artifactRecords: readonly unknown[];
+    readonly deletedArtifacts: readonly unknown[];
+    readonly position: number;
+    readonly cause: "initial" | "reseed";
+  }): EpicStateLaneEvent {
+    const frame = parseSnapshotFrameV13({
+      kind: "snapshot",
+      hasBinaryPayload: false,
+      authorityEpoch: EPOCH,
+      basis: "cold",
+      position: args.position,
+      reconciledWithCloud: true,
+      artifactRecords: args.artifactRecords,
+      deletedArtifacts: args.deletedArtifacts,
+      commentThreads: [],
+      roleClaims: { revision: 1, claims: [] },
+      epicMeta: { revision: 1, meta: { title: "Epic", updatedAt: 10 } },
     });
+    const rows: RecordRow<EpicStateRow>[] = [
+      ...frame.artifactRecords.map(
+        (record: EpicArtifactRecord): RecordRow<EpicStateRow> => ({
+          rowId: artifactRowId(record.id),
+          revision: record.revision,
+          row: { kind: "artifact", record },
+        }),
+      ),
+      ...frame.deletedArtifacts.map(
+        (record: EpicDeletedArtifactRecord): RecordRow<EpicStateRow> => ({
+          rowId: artifactTombstoneRowId(record.id),
+          revision: record.revision,
+          row: { kind: "artifact-tombstone", record },
+        }),
+      ),
+      ...metaRows({ title: "Epic", updatedAt: 10, revision: 1 }),
+    ];
+    return snapshotEvent({
+      rows,
+      position: args.position,
+      epoch: EPOCH,
+      trust: "reconciled-with-cloud",
+      cause: args.cause,
+    });
+  }
 
-  it("is served once the lane has stated a files set, and not before", () => {
+  /** The adapter's own delta mapping, so a tombstone is both halves in one envelope. */
+  function deltaWith(args: {
+    readonly artifactUpserts: readonly unknown[];
+    readonly artifactTombstones: readonly unknown[];
+    readonly position: number;
+  }): EpicStateLaneEvent {
+    const frame = parseDeltaFrameV13({
+      kind: "delta",
+      hasBinaryPayload: false,
+      authorityEpoch: EPOCH,
+      seq: args.position,
+      artifactUpserts: args.artifactUpserts,
+      artifactTombstones: args.artifactTombstones,
+      commentThreadUpserts: [],
+      commentThreadRemovals: [],
+      roleClaims: null,
+      epicMeta: null,
+    });
+    const changes: RecordChange<EpicStateRow>[] = [];
+    for (const record of frame.artifactUpserts) {
+      changes.push({
+        kind: "upsert",
+        row: {
+          rowId: artifactRowId(record.id),
+          revision: record.revision,
+          row: { kind: "artifact", record },
+        },
+      });
+    }
+    for (const record of frame.artifactTombstones) {
+      changes.push({
+        kind: "remove",
+        rowId: artifactRowId(record.id),
+        revision: record.revision,
+        reason: ARTIFACT_TOMBSTONE_REMOVE_REASON,
+      });
+      changes.push({
+        kind: "upsert",
+        row: {
+          rowId: artifactTombstoneRowId(record.id),
+          revision: record.revision,
+          row: { kind: "artifact-tombstone", record },
+        },
+      });
+    }
+    return {
+      kind: "record-transaction",
+      cursor: cursorAt(args.position, EPOCH),
+      changes,
+      barrier: null,
+    };
+  }
+
+  it("projects the html, canvas and file rows of a snapshot beside the markdown ones", () => {
     const { replica } = newReplica();
-    expect(replica.slices().files.served).toBe(false);
-
-    replica.apply(snapshotWithFiles(null));
-    expect(replica.slices().files.served).toBe(false);
-
     replica.apply(
-      snapshotEvent({
-        rows: [
-          ...metaRows({ title: "Epic", updatedAt: 10, revision: 1 }),
-          filesRow(1, []),
+      snapshotWith({
+        artifactRecords: [
+          specWire("spec-1", 1, "Spec"),
+          ...newKindWires(1),
+          ticketWire("ticket-1", 1),
         ],
-        position: 2,
-        epoch: EPOCH,
-        trust: "reconciled-with-cloud",
-        cause: "reseed",
+        deletedArtifacts: [],
+        position: 1,
+        cause: "initial",
       }),
     );
-    expect(replica.slices().files).toEqual({ served: true, records: [] });
+
+    expect(replica.slices().artifacts.allIds.slice().sort()).toEqual(
+      ALL_IDS.slice().sort(),
+    );
+    expect(Object.keys(replica.slices().artifacts.byId).sort()).toEqual(
+      ALL_IDS.slice().sort(),
+    );
+    expect(replica.slices().artifacts.byId["html-1"]).toEqual({
+      id: "html-1",
+      kind: "html",
+      title: "Title html-1",
+      folderName: "html-1-folder",
+      layout: "folder",
+      head: manifestHead,
+      parentId: null,
+      artifactRoomId: null,
+      createdAt: 1,
+      updatedAt: 2,
+      status: null,
+      createdManually: true,
+    });
+    expect(replica.slices().artifacts.byId["canvas-1"]).toEqual({
+      id: "canvas-1",
+      kind: "canvas",
+      title: "Title canvas-1",
+      folderName: "canvas-1-folder",
+      layout: "folder",
+      head: manifestHead,
+      parentId: null,
+      artifactRoomId: null,
+      createdAt: 1,
+      updatedAt: 2,
+      status: null,
+      createdManually: true,
+    });
+    expect(replica.slices().artifacts.byId["file-1"]).toEqual({
+      id: "file-1",
+      kind: "file",
+      title: "Title file-1",
+      folderName: "file-1-folder",
+      layout: "file",
+      object: {
+        sha256: SHA256,
+        byteLength: 12,
+        mediaType: "application/pdf",
+        status: "published",
+      },
+      parentId: null,
+      artifactRoomId: null,
+      createdAt: 1,
+      updatedAt: 2,
+      status: null,
+      createdManually: true,
+    });
   });
 
-  it("replaces the set only on a strictly greater revision", () => {
+  it("projects the html, canvas and file rows of a delta beside the markdown ones", () => {
     const { replica } = newReplica();
     replica.apply(
-      snapshotWithFiles(filesRow(5, [fileRecord({ path: "files/a.txt" })])),
+      snapshotWith({
+        artifactRecords: [specWire("spec-1", 1, "Spec")],
+        deletedArtifacts: [],
+        position: 1,
+        cause: "initial",
+      }),
     );
 
     replica.apply(
-      filesTransaction(
-        2,
-        filesRow(4, [fileRecord({ path: "files/stale.txt" })]),
-      ),
-    );
-    replica.apply(
-      filesTransaction(
-        3,
-        filesRow(5, [fileRecord({ path: "files/same.txt" })]),
-      ),
-    );
-    expect(replica.slices().files.records.map((record) => record.path)).toEqual(
-      ["files/a.txt"],
+      deltaWith({
+        artifactUpserts: [
+          ...newKindWires(1),
+          specWire("spec-1", 2, "Renamed spec"),
+          ticketWire("ticket-1", 1),
+        ],
+        artifactTombstones: [],
+        position: 2,
+      }),
     );
 
-    replica.apply(
-      filesTransaction(4, filesRow(6, [fileRecord({ path: "files/b.txt" })])),
+    expect(replica.slices().artifacts.allIds.slice().sort()).toEqual(
+      ALL_IDS.slice().sort(),
     );
-    expect(replica.slices().files.records.map((record) => record.path)).toEqual(
-      ["files/b.txt"],
+    expect(replica.slices().artifacts.byId["spec-1"].title).toBe(
+      "Renamed spec",
+    );
+    expect(replica.slices().artifacts.byId["html-1"].kind).toBe("html");
+    expect(replica.slices().artifacts.byId["canvas-1"].head).toEqual(
+      manifestHead,
+    );
+    expect(replica.slices().artifacts.byId["file-1"].object?.sha256).toBe(
+      SHA256,
     );
   });
 
-  it("publishes download progress, and stays quiet when a replacement restates the same set", () => {
+  it("projects the tombstones of html, canvas and file from a snapshot beside a markdown one", () => {
+    const { replica } = newReplica();
+    replica.apply(
+      snapshotWith({
+        artifactRecords: [],
+        deletedArtifacts: [
+          deletedWire("spec", "spec-gone", 4),
+          ...newKindTombstoneWires(4),
+        ],
+        position: 1,
+        cause: "initial",
+      }),
+    );
+
+    expect(replica.slices().deletedArtifacts.allIds.slice().sort()).toEqual([
+      "canvas-1",
+      "file-1",
+      "html-1",
+      "spec-gone",
+    ]);
+    expect(replica.slices().deletedArtifacts.byId["html-1"]).toEqual({
+      id: "html-1",
+      kind: "html",
+      title: "Deleted html-1",
+      deletedAt: "2026-01-01T00:00:00.000Z",
+      status: null,
+    });
+    expect(replica.slices().deletedArtifacts.byId["canvas-1"].kind).toBe(
+      "canvas",
+    );
+    expect(replica.slices().deletedArtifacts.byId["file-1"].kind).toBe("file");
+    expect(replica.slices().deletedArtifacts.byId["spec-gone"].title).toBe(
+      "Deleted spec-gone",
+    );
+  });
+
+  it("projects the tombstones of html, canvas and file from a delta beside a markdown one", () => {
+    const { replica } = newReplica();
+    replica.apply(
+      snapshotWith({
+        artifactRecords: [specWire("spec-1", 1, "Spec")],
+        deletedArtifacts: [],
+        position: 1,
+        cause: "initial",
+      }),
+    );
+
+    replica.apply(
+      deltaWith({
+        artifactUpserts: [],
+        artifactTombstones: [
+          ...newKindTombstoneWires(5),
+          deletedWire("spec", "spec-1", 5),
+        ],
+        position: 2,
+      }),
+    );
+
+    expect(replica.slices().deletedArtifacts.allIds.slice().sort()).toEqual([
+      "canvas-1",
+      "file-1",
+      "html-1",
+      "spec-1",
+    ]);
+    // The markdown artifact's other half: its live entry is gone now too.
+    expect(replica.slices().artifacts.allIds).toEqual([]);
+  });
+
+  it("changes the projection and signals a change for a delta that only upserts a new kind", () => {
     const { replica, changes } = newReplica();
-    replica.apply(snapshotWithFiles(filesRow(1, [downloading(10)])));
-    const afterSnapshot = changes();
+    replica.apply(
+      snapshotWith({
+        artifactRecords: [specWire("spec-1", 1, "Spec")],
+        deletedArtifacts: [],
+        position: 1,
+        cause: "initial",
+      }),
+    );
+    const slicesBefore = replica.slices();
+    const changesBefore = changes();
 
-    replica.apply(filesTransaction(2, filesRow(2, [downloading(40)])));
-    expect(replica.slices().files.records[0].localState).toEqual({
-      kind: "downloading",
-      received: 40,
-      total: 100,
-    });
-    expect(changes()).toBe(afterSnapshot + 1);
+    const outcome = replica.apply(
+      deltaWith({
+        artifactUpserts: newKindWires(1),
+        artifactTombstones: [],
+        position: 2,
+      }),
+    );
 
-    replica.apply(filesTransaction(3, filesRow(3, [downloading(40)])));
-    expect(changes()).toBe(afterSnapshot + 1);
+    expect(outcome.kind).toBe("applied");
+    expect(replica.appliedCursor()).toEqual(cursorAt(2, EPOCH));
+    // A rebuilt slice, not the same object: the new rows are renderable now,
+    // so every subscriber must see the update.
+    expect(replica.slices()).not.toBe(slicesBefore);
+    expect(replica.slices().artifacts.allIds.slice().sort()).toEqual(
+      NEW_KIND_IDS.concat("spec-1").slice().sort(),
+    );
+    expect(changes()).toBe(changesBefore + 1);
   });
 
-  describe("publishes a replacement that changes only one manifest field", () => {
-    const base = fileRecord({ path: "files/a.txt", title: "Report" });
-    const changed: ReadonlyArray<readonly [string, EpicStateFileRecord]> = [
-      ["title", fileRecord({ path: "files/a.txt", title: "Renamed" })],
-      [
-        "derivedFrom",
-        fileRecord({
-          path: "files/a.txt",
-          title: "Report",
-          replaces: "files/o",
-        }),
-      ],
-      ["kind", { ...base, entry: { ...base.entry, kind: "page" } }],
-      [
-        "mediaType",
-        { ...base, entry: { ...base.entry, mediaType: "application/pdf" } },
-      ],
-    ];
+  it("changes the projected deleted-artifact population for a delta that only tombstones a new kind", () => {
+    const { replica, changes } = newReplica();
+    replica.apply(
+      snapshotWith({
+        artifactRecords: [specWire("spec-1", 1, "Spec")],
+        deletedArtifacts: [],
+        position: 1,
+        cause: "initial",
+      }),
+    );
+    const slicesBefore = replica.slices();
+    const changesBefore = changes();
 
-    it.each(changed)("%s", (_field, record) => {
-      const { replica, changes } = newReplica();
-      replica.apply(snapshotWithFiles(filesRow(1, [base])));
-      const afterSnapshot = changes();
+    const outcome = replica.apply(
+      deltaWith({
+        artifactUpserts: [],
+        artifactTombstones: newKindTombstoneWires(5),
+        position: 2,
+      }),
+    );
 
-      replica.apply(filesTransaction(2, filesRow(2, [record])));
-
-      expect(replica.slices().files.records).toEqual([record]);
-      expect(changes()).toBe(afterSnapshot + 1);
-    });
+    expect(outcome.kind).toBe("applied");
+    expect(replica.appliedCursor()).toEqual(cursorAt(2, EPOCH));
+    expect(replica.slices().deletedArtifacts.allIds.slice().sort()).toEqual([
+      "canvas-1",
+      "file-1",
+      "html-1",
+    ]);
+    expect(replica.slices()).not.toBe(slicesBefore);
+    expect(changes()).toBe(changesBefore + 1);
   });
 });

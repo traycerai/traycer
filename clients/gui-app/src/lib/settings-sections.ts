@@ -31,6 +31,8 @@ import {
 import { isMobileApp } from "@/lib/mobile-app";
 
 export type SettingsSectionId =
+  | "dev-artifact-proof"
+  | "dev-canvas-proof"
   | "getting-started"
   | "general"
   | "browser"
@@ -324,6 +326,18 @@ export const SETTINGS_SECTIONS: ReadonlyArray<SettingsSection> = [
     group: "personal",
   },
   {
+    id: "dev-artifact-proof",
+    label: "Dev: artifact serving proof",
+    icon: Activity,
+    group: "app",
+  },
+  {
+    id: "dev-canvas-proof",
+    label: "Dev: canvas proof",
+    icon: Activity,
+    group: "app",
+  },
+  {
     id: "devices",
     label: "Sessions",
     icon: ShieldCheck,
@@ -450,6 +464,15 @@ const MOBILE_APP_ONLY_SECTION_IDS: ReadonlySet<SettingsSectionId> = new Set([
 ]);
 
 /**
+ * Proof pages for developers, offered in navigation by dev builds only. They
+ * stay in `SETTINGS_SECTIONS` so a production deep link still resolves and
+ * reaches its 404 panel, and they have no settings-search collection, since
+ * search would otherwise point production users at pages they cannot open.
+ */
+export const DEV_ONLY_SETTINGS_SECTION_IDS: ReadonlySet<SettingsSectionId> =
+  new Set(["dev-artifact-proof", "dev-canvas-proof"]);
+
+/**
  * Both offered lists, resolved once at module load.
  *
  * Precomputed rather than filtered per call so each build's list keeps ONE
@@ -461,13 +484,18 @@ const MOBILE_APP_ONLY_SECTION_IDS: ReadonlySet<SettingsSectionId> = new Set([
  * before the first render, which is not necessarily before this module is
  * evaluated.
  */
+const OFFERED_SECTIONS = SETTINGS_SECTIONS.filter(
+  (section) =>
+    import.meta.env.DEV || !DEV_ONLY_SETTINGS_SECTION_IDS.has(section.id),
+);
+
 const DESKTOP_SECTIONS: ReadonlyArray<SettingsSection> =
-  SETTINGS_SECTIONS.filter(
+  OFFERED_SECTIONS.filter(
     (section) => !MOBILE_APP_ONLY_SECTION_IDS.has(section.id),
   );
 
 const MOBILE_APP_SECTIONS: ReadonlyArray<SettingsSection> =
-  SETTINGS_SECTIONS.filter(
+  OFFERED_SECTIONS.filter(
     (section) => !MOBILE_APP_OMITTED_SECTION_IDS.has(section.id),
   );
 

@@ -134,7 +134,7 @@ function toolBlock(
     managedCommand: null,
     agentMessageReceipt: null,
     agentMessageDelivery: null,
-    page: null,
+    artifact: null,
     mcpApp: null,
     progress: null,
     backgroundOutput: null,

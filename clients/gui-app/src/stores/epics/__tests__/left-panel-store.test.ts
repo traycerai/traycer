@@ -505,7 +505,6 @@ describe("useLeftPanelStore", () => {
     expect(railPanelIds(currentRail())).toEqual([
       "artifacts",
       "chats",
-      "files",
       "terminals",
       "browsers",
       "git-diff",
@@ -548,7 +547,6 @@ describe("useLeftPanelStore", () => {
     expect(railPanelIds(currentRail())).toEqual([
       "chats",
       "artifacts",
-      "files",
       "terminals",
       "browsers",
       "git-diff",

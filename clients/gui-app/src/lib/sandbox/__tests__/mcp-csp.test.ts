@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  artifactContentPolicy,
   mcpAppContentPolicy,
   pageContentPolicy,
   type McpAppContentPolicyResult,
@@ -66,6 +67,71 @@ describe("pageContentPolicy", () => {
       expect(directives(policy).get("default-src")).toContain("data:");
     },
   );
+});
+
+describe("artifactContentPolicy", () => {
+  it("builds on the https-only page policy, adding the colon-bearing source to every directive but frame-src", () => {
+    const base = directives(pageContentPolicy("https-only"));
+    const parsed = directives(artifactContentPolicy("traycer-sandbox:"));
+    for (const [name, sources] of base) {
+      if (name === "frame-src") continue;
+      expect(parsed.get(name)).toBe(`${sources} traycer-sandbox:`);
+    }
+  });
+
+  it("keeps frame-src closed, same as the https-only page policy it is built from", () => {
+    expect(directives(pageContentPolicy("https-only")).get("frame-src")).toBe(
+      "'none'",
+    );
+    expect(
+      directives(artifactContentPolicy("traycer-sandbox:")).get("frame-src"),
+    ).toBe("'none'");
+  });
+
+  it("names the given source literally, not a fixed constant", () => {
+    const policy = directives(artifactContentPolicy("capacitor:"));
+    expect(policy.get("default-src")).toBe("https: data: blob: capacitor:");
+    expect(policy.get("default-src")).not.toContain("traycer-sandbox:");
+  });
+
+  it("falls back to the plain https-only page policy for a null source - Android's own serving scheme is https, already covered by it", () => {
+    expect(artifactContentPolicy(null)).toBe(pageContentPolicy("https-only"));
+  });
+
+  it.each([
+    "frame-src",
+    "connect-src",
+    "script-src",
+    "style-src",
+    "img-src",
+    "font-src",
+    "media-src",
+    "default-src",
+  ])("touches %s exactly once", (name) => {
+    const policy = artifactContentPolicy("traycer-sandbox:");
+    const directiveCount = policy
+      .split("; ")
+      .filter((directive) => directive.startsWith(`${name} `)).length;
+    expect(directiveCount).toBe(1);
+  });
+
+  it.each([
+    ["no trailing colon", "traycer-sandbox"],
+    ["a leading digit", "9bad:"],
+    ["a space", "has space:"],
+    ["an empty string", ""],
+    ["a semicolon", "traycer;sandbox:"],
+  ])("throws 'Invalid artifact policy source' on %s", (_label, source) => {
+    expect(() => artifactContentPolicy(source)).toThrow(
+      "Invalid artifact policy source",
+    );
+  });
+
+  it("accepts the scheme punctuation RFC 3986 allows (+, ., -), as long as it ends in a colon", () => {
+    expect(() =>
+      artifactContentPolicy("traycer-sandbox+beta.v1:"),
+    ).not.toThrow();
+  });
 });
 
 describe("mcpAppContentPolicy", () => {

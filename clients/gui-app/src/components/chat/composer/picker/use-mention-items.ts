@@ -1,3 +1,4 @@
+import { isMarkdownArtifactKind } from "@/lib/artifacts/node-display";
 import {
   useCallback,
   useEffect,
@@ -1284,7 +1285,9 @@ function localArtifactSuggestion(
   currentEpicId: string,
   epicTitle: string,
   label: string,
-): EpicMentionArtifactSuggestion {
+): EpicMentionArtifactSuggestion | null {
+  // The composer protocol still has mention arms only for Markdown artifacts.
+  if (!isMarkdownArtifactKind(artifact.kind)) return null;
   // Mirrors the host resolver's id/token format so a current-epic artifact
   // returned by BOTH the cloud list and the local store de-dupes to one entry.
   const common = {
@@ -1331,7 +1334,13 @@ export function buildCurrentEpicArtifactMentionEntries(
     const artifact = artifacts.byId[id];
     const label = displayTitle(artifact.title, artifact.kind);
     if (!matchesMentionQuery(label, normalizedQuery)) return [];
-    return [localArtifactSuggestion(artifact, currentEpicId, epicTitle, label)];
+    const entry = localArtifactSuggestion(
+      artifact,
+      currentEpicId,
+      epicTitle,
+      label,
+    );
+    return entry === null ? [] : [entry];
   });
   return entries.length === 0 ? EMPTY_ARTIFACT_ENTRIES : entries;
 }

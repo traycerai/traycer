@@ -1,3 +1,4 @@
+import type { SandboxArtifactServer } from "./sandbox-artifact-server";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { net, protocol, type CustomScheme } from "electron";
@@ -11,8 +12,8 @@ import { log } from "./logger";
  * `<iframe sandbox="allow-scripts allow-forms">`, and the loader there writes
  * the page over itself (gui-app `lib/sandbox/`).
  *
- * The scheme serves exactly one file, the loader page, and nothing else. It
- * fetches nothing: its script and the Figtree face pages are offered (as a
+ * The `page` host serves only the loader. Artifact hosts serve bounded spans
+ * supplied by the renderer that mounted them. The loader fetches nothing: its script and the Figtree face pages are offered (as a
  * `data:` URL) are inlined into it. It is the file gui-app's
  * `vite/sandbox-assets.ts` emits into `dist/renderer/sandbox/`; in dev it
  * comes from the Vite dev server that plugin also serves it from.
@@ -25,12 +26,19 @@ export const SANDBOX_LOADER_PATH = "/index.html";
  * Registered in the same `registerSchemesAsPrivileged` call as `app://`
  * (Electron keeps only the last raw call). `standard` gives the scheme
  * ordinary URL parsing and `secure` keeps pages a secure context. No
- * `corsEnabled`, `bypassCSP`, `supportFetchAPI` or service workers: a page has
- * nothing to fetch from this origin.
+ * `bypassCSP` or service workers. Ranges stream, and artifact pages fetch their
+ * own files from an opaque origin. The end-to-end proof must also check that
+ * these scheme-wide privileges leave the loader unchanged.
  */
 export const SANDBOX_SCHEME_PRIVILEGES: CustomScheme = {
   scheme: SANDBOX_SCHEME,
-  privileges: { standard: true, secure: true },
+  privileges: {
+    standard: true,
+    secure: true,
+    stream: true,
+    supportFetchAPI: true,
+    corsEnabled: true,
+  },
 };
 
 /**
@@ -59,7 +67,39 @@ export function isSandboxUrl(url: string): boolean {
   return url.startsWith(`${SANDBOX_SCHEME}:`);
 }
 
-/** The loader URL exactly, with any `?perm=` query: the one document a sandbox root may load. */
+export interface SandboxArtifactHost {
+  readonly artifactId: string;
+  readonly mountId: string;
+}
+
+export function parseSandboxArtifactHost(
+  host: string,
+): SandboxArtifactHost | null {
+  if (!host.startsWith("artifact-")) return null;
+  const separator = host.lastIndexOf("--");
+  if (separator < "artifact-".length) return null;
+  const artifactId = host.slice("artifact-".length, separator);
+  const mountId = host.slice(separator + 2);
+  return /^[a-z0-9_-]+$/.test(artifactId) && /^[a-z0-9]+$/.test(mountId)
+    ? { artifactId, mountId }
+    : null;
+}
+
+export function isSandboxArtifactUrl(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    return (
+      parsed.protocol === `${SANDBOX_SCHEME}:` &&
+      parsed.username === "" &&
+      parsed.password === "" &&
+      parseSandboxArtifactHost(parsed.host) !== null
+    );
+  } catch {
+    return false;
+  }
+}
+
+/** The loader URL exactly, with any `?perm=` query. */
 export function isSandboxLoaderUrl(url: string): boolean {
   let parsed: URL;
   try {
@@ -100,8 +140,10 @@ function sandboxFileUrl(fileName: string): string {
   ).toString();
 }
 
-/** Post-`whenReady`: serves the loader page, and 404 for anything else. */
-export function installSandboxProtocolHandler(): void {
+/** Post-`whenReady`: loader and mounted artifact files share the sandbox scheme. */
+export function installSandboxProtocolHandler(
+  server: SandboxArtifactServer,
+): void {
   protocol.handle(SANDBOX_SCHEME, async (request) => {
     let url: URL;
     try {
@@ -109,6 +151,7 @@ export function installSandboxProtocolHandler(): void {
     } catch {
       return new Response("bad request", { status: 400 });
     }
+    if (isSandboxArtifactUrl(request.url)) return server.fetch(request);
     if (url.host !== SANDBOX_HOST || url.pathname !== SANDBOX_LOADER_PATH) {
       return new Response("not found", { status: 404 });
     }

@@ -36,6 +36,10 @@ import {
   chatSubscribeV127,
   chatSubscribeV128,
   chatSubscribeV129,
+  chatSubscribeV130,
+  chatSubscribeV131,
+  chatSubscribeV132,
+  chatSubscribeV133,
   createImageResolutionUpdatedFrame,
   chatApprovalStateSchema,
   chatApprovalStateSchemaPreAuto,
@@ -1918,7 +1922,7 @@ describe("chat.subscribe@1.6 (image generation)", () => {
     backgroundTask: false,
     stopped: false,
     imageResults: [imageResultA, imageResultB],
-    page: null,
+    artifact: null,
     mcpApp: null,
   };
 
@@ -2297,7 +2301,7 @@ describe("chat.subscribe@1.6 (image generation)", () => {
 });
 
 describe("chat.subscribe registry membership", () => {
-  it("registers chat.subscribe major 1 latestMinor 29 as chatSubscribeV129", () => {
+  it("registers chat.subscribe major 1 latestMinor 33 as chatSubscribeV133", () => {
     const entry = hostStreamRpcRegistry["chat.subscribe"];
     expect(entry).toBeDefined();
     // Registering `8` was the switch to the windowed line: a stream minor
@@ -2352,8 +2356,8 @@ describe("chat.subscribe registry membership", () => {
     // `22` is the open-harness-id line: no new key either, only the heard-from
     // harness leaves reopened to a string; `21` stays the frozen union the
     // head has since moved off.
-    // `23` adds the agent-page / MCP App line: `page` and `mcpApp` on a tool
-    // call, projected away for every `<=1.22` peer.
+    // `23` adds the MCP App line: `mcpApp` on a tool call, projected away for
+    // every `<=1.22` peer.
     // `24` adds the CLI-reported next-run time to cron items, projected away
     // for every peer that can see cron but predates this key.
     // `25` is the bot-conversation line: `conversationRequest` on a user row
@@ -2368,7 +2372,15 @@ describe("chat.subscribe registry membership", () => {
     // optional key every `<=1.27` peer drops.
     // `29` is the cross-host send-state line: `agentMessageDelivery` on a
     // tool call, projected away for every `<=1.28` peer.
-    expect(entry[1].latestMinor).toBe(29);
+    // `30` is the html-artifacts line: operation blocks and events may name
+    // the html, canvas and file kinds (omitted for every `<=1.29` peer). `31`
+    // adds the tool-call `artifact` stamp: the manifest an inline
+    // `traycer_render_inline` artifact showed, projected away for every
+    // `<=1.30` peer. `32` grows the browser annotation record with the canvas
+    // arm, projected away for every `<=1.31` peer. `33` widens the
+    // accumulated-change `artifact` tag to all seven artifact kinds, blanked
+    // to `null` for every `<=1.32` peer.
+    expect(entry[1].latestMinor).toBe(33);
     expect(entry[1].versions[6].contract).toBe(chatSubscribeV16);
     expect(entry[1].versions[7].contract).toBe(chatSubscribeV17);
     expect(entry[1].versions[8].contract).toBe(chatSubscribeV18);
@@ -2393,6 +2405,10 @@ describe("chat.subscribe registry membership", () => {
     expect(entry[1].versions[27].contract).toBe(chatSubscribeV127);
     expect(entry[1].versions[28].contract).toBe(chatSubscribeV128);
     expect(entry[1].versions[29].contract).toBe(chatSubscribeV129);
+    expect(entry[1].versions[30].contract).toBe(chatSubscribeV130);
+    expect(entry[1].versions[31].contract).toBe(chatSubscribeV131);
+    expect(entry[1].versions[32].contract).toBe(chatSubscribeV132);
+    expect(entry[1].versions[33].contract).toBe(chatSubscribeV133);
     expect(chatSubscribeV17.schemaVersion).toEqual({ major: 1, minor: 7 });
     expect(chatSubscribeV18.schemaVersion).toEqual({ major: 1, minor: 8 });
     expect(chatSubscribeV19.schemaVersion).toEqual({ major: 1, minor: 9 });
@@ -2475,6 +2491,22 @@ describe("chat.subscribe registry membership", () => {
     expect(chatSubscribeV129.schemaVersion).toEqual({
       major: 1,
       minor: 29,
+    });
+    expect(chatSubscribeV130.schemaVersion).toEqual({
+      major: 1,
+      minor: 30,
+    });
+    expect(chatSubscribeV131.schemaVersion).toEqual({
+      major: 1,
+      minor: 31,
+    });
+    expect(chatSubscribeV132.schemaVersion).toEqual({
+      major: 1,
+      minor: 32,
+    });
+    expect(chatSubscribeV133.schemaVersion).toEqual({
+      major: 1,
+      minor: 33,
     });
   });
 

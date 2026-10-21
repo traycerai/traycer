@@ -144,7 +144,25 @@ describe("useBrowserAnnotationSession attach ack", () => {
     vi.mocked(attachBrowserAnnotation).mockImplementation((input) => {
       useComposerDraftStore.getState().addBrowserAnnotation(input.chatId, {
         kind: "browser-annotation",
-        ...input.payload,
+        annotationId: input.payload.annotationId,
+        tabId: input.payload.tabId,
+        sessionId: input.payload.sessionId,
+        origin: input.payload.origin,
+        pageUrl: input.payload.pageUrl,
+        pageTitle: input.payload.pageTitle,
+        source: {
+          kind: "browser",
+          tabId: input.payload.tabId,
+          sessionId: input.payload.sessionId,
+          origin: input.payload.origin,
+          pageUrl: input.payload.pageUrl,
+          pageTitle: input.payload.pageTitle,
+        },
+        capturedAt: input.payload.capturedAt,
+        comment: input.payload.comment,
+        counts: input.payload.counts,
+        droppedElementCount: input.payload.droppedElementCount,
+        elements: input.payload.elements,
         imageFileName: `browser-annotation-${input.payload.annotationId}.png`,
         imageHash: "hash-target",
       });
@@ -184,7 +202,25 @@ describe("useBrowserAnnotationSession attach ack", () => {
     vi.mocked(attachBrowserAnnotation).mockImplementation((input) => {
       useComposerDraftStore.getState().addBrowserAnnotation(input.chatId, {
         kind: "browser-annotation",
-        ...input.payload,
+        annotationId: input.payload.annotationId,
+        tabId: input.payload.tabId,
+        sessionId: input.payload.sessionId,
+        origin: input.payload.origin,
+        pageUrl: input.payload.pageUrl,
+        pageTitle: input.payload.pageTitle,
+        source: {
+          kind: "browser",
+          tabId: input.payload.tabId,
+          sessionId: input.payload.sessionId,
+          origin: input.payload.origin,
+          pageUrl: input.payload.pageUrl,
+          pageTitle: input.payload.pageTitle,
+        },
+        capturedAt: input.payload.capturedAt,
+        comment: input.payload.comment,
+        counts: input.payload.counts,
+        droppedElementCount: input.payload.droppedElementCount,
+        elements: input.payload.elements,
         imageFileName: `browser-annotation-${input.payload.annotationId}.png`,
         imageHash: "hash-ok",
       });

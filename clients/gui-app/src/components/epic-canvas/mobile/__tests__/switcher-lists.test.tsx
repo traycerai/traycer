@@ -92,7 +92,12 @@ const holder = vi.hoisted((): Holder => ({
   },
 }));
 
-vi.mock("@/lib/epic-selectors", () => ({
+vi.mock("@/lib/epic-selectors", async (importOriginal) => ({
+  // The row menu reads the artifact's kind to decide whether it offers export.
+  // Answer from the real projection this suite already renders inside.
+  useArtifactById: (
+    await importOriginal<typeof import("@/lib/epic-selectors")>()
+  ).useArtifactById,
   useEpicArtifactRecords: () => holder.records,
   useEpicActiveAgentIds: () => holder.workingAgentIds,
   useEpicAgentActivityTiers: () => holder.activityTiers,

@@ -14,6 +14,7 @@ import {
   DEFAULT_EPIC_NODE_NAMES,
   EPIC_NODE_ICONS,
   isEpicArtifactKind,
+  isMarkdownArtifactKind,
   type EpicNodeKind,
 } from "@/lib/artifacts/node-display";
 import { AddNodeDropdown } from "@/components/epic-canvas/add-node-dropdown";
@@ -876,6 +877,9 @@ const ArtifactNode = memo(function ArtifactNode(props: ArtifactNodeProps) {
     ),
   );
   const statusValue = useEpicArtifactStatus(nodeId);
+  const isFileLayout = useEpicStore(
+    (state) => state.artifacts.byId[nodeId]?.layout === "file",
+  );
 
   useEffect(() => {
     const pendingProjectedOpenCancel = pendingProjectedOpenCancelRef;
@@ -895,10 +899,8 @@ const ArtifactNode = memo(function ArtifactNode(props: ArtifactNodeProps) {
   )
     ? artifactType
     : null;
-  // Every artifact row can parent a child artifact (any kind ⊃ any kind), so
-  // the "+" shows on every row the user can edit - no per-kind gate. See the
-  // tech plan "Create affordance" section (decision 11).
-  const showAdd = canEdit;
+  // Record items 38/66: loose files must become folders before they can have children.
+  const showAdd = canEdit && !isFileLayout;
   // Per-node boolean subscription: re-renders this node only when ITS active
   // state flips, instead of receiving the tab-wide `activeArtifactId` (which
   // re-rendered the whole tree on every selection).
@@ -1044,8 +1046,9 @@ const ArtifactNode = memo(function ArtifactNode(props: ArtifactNodeProps) {
 
   const performAddChild = useCallback(
     (type: EpicNodeKind) => {
-      if (!canMutate) return;
-      if (type === "chat" || type === "terminal" || type === "terminal-agent") {
+      if (!canMutate || isFileLayout) return;
+      // The create menu still authors Markdown bodies only.
+      if (!isMarkdownArtifactKind(type)) {
         return;
       }
       ensureExpanded(nodeId);
@@ -1072,6 +1075,7 @@ const ArtifactNode = memo(function ArtifactNode(props: ArtifactNodeProps) {
     },
     [
       canMutate,
+      isFileLayout,
       clearPendingChildCreate,
       createArtifact,
       ensureExpanded,
@@ -1937,6 +1941,9 @@ function useArtifactRowMenuEntries(
   props: ArtifactRowMenuEntriesProps,
 ): ReadonlyArray<SidebarRowMenuEntry> {
   const exportArtifacts = useEpicExportArtifacts();
+  const markdown = useEpicStore((state) =>
+    isMarkdownArtifactKind(state.artifacts.byId[props.nodeId]?.kind),
+  );
   const { canMutate, nodeId, nodeName, onPerformDelete, onStartRename } = props;
   const copyIdEntry = useSidebarCopyIdMenuEntry(nodeId);
   const exportPending = exportArtifacts.isPending;
@@ -1965,7 +1972,7 @@ function useArtifactRowMenuEntries(
     ) : (
       <FileDown className="size-3.5" />
     );
-    return [
+    const entries: SidebarRowMenuEntry[] = [
       {
         kind: "item",
         id: "export-markdown",
@@ -2026,7 +2033,17 @@ function useArtifactRowMenuEntries(
         onSelect: onPerformDelete,
       },
     ];
+    // Markdown/PDF exports require a Markdown body.
+    return markdown
+      ? entries
+      : entries.filter(
+          (entry) =>
+            !["export-markdown", "export-pdf", "after-export"].includes(
+              entry.id,
+            ),
+        );
   }, [
+    markdown,
     canMutate,
     copyIdEntry,
     exportMutate,
