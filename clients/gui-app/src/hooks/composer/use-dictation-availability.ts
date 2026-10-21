@@ -4,6 +4,7 @@ import { useHostQuery, useHostMutation } from "@/hooks/host/use-host-query";
 import { useHostClient, type HostRpcRegistry } from "@/lib/host";
 import { isMobileApp } from "@/lib/mobile-app";
 import { hostQueryKeys, speechMutationKeys } from "@/lib/query-keys";
+import { useRequesterHostId } from "@/hooks/host/use-requester-host-id";
 
 // `modelId: null` selects the host's default dictation model.
 const SPEECH_MODEL_PARAMS = { modelId: null };
@@ -112,7 +113,7 @@ export function useDictationAvailability(
   const downloadProgress = statusQuery.data?.downloadProgress ?? null;
   const ensure = ensureMutation.mutate;
   const ensurePending = ensureMutation.isPending;
-  const activeHostId = client.getActiveHostId();
+  const activeHostId = useRequesterHostId(client);
   // The attempt budget is per-host: a different host has its own model on
   // disk, so switching hosts must reset it (otherwise host A exhausting the
   // budget would permanently disable auto-ensure for host B).

@@ -21,10 +21,17 @@ export function useTeardownAgentNames(
     (listener) => subscribeTeardownAgentNames(holders, listener),
     () => teardownAgentNamesSnapshot(holders),
   );
-  return useMemo(() => {
-    void titlesRevision;
-    return collectTeardownAgentNames(holders);
-  }, [holders, titlesRevision]);
+  return useMemo(() => namesFromSnapshot(titlesRevision), [titlesRevision]);
+}
+
+function namesFromSnapshot(snapshot: string): ReadonlyMap<string, string> {
+  if (snapshot.length === 0) return EMPTY_NAMES;
+  const names = new Map<string, string>();
+  for (const entry of snapshot.split("\u0001")) {
+    const separator = entry.indexOf("\u0000");
+    names.set(entry.slice(0, separator), entry.slice(separator + 1));
+  }
+  return names;
 }
 
 function subscribeTeardownAgentNames(

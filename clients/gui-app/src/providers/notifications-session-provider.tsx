@@ -18,6 +18,7 @@ import type { IHostStreamClient } from "@traycer-clients/shared/host-transport/h
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import { useHostStreamClientBindingFor } from "@/hooks/host/use-host-stream-client-for";
 import { useHostClientFor } from "@/hooks/host/use-host-client-for";
+import { useRequestContextUserId } from "@/hooks/host/use-request-context-user-id";
 import { remoteAwareOwnerIdentityKey } from "@/lib/host/transport-key";
 import { useStreamAuthRevalidator } from "@/lib/host/stream-auth-revalidator";
 import {
@@ -170,6 +171,7 @@ export function NotificationsSessionProvider(
 ): ReactNode {
   useEffect(() => installNotificationChimeAudioWarmup(), []);
   const hostClient = useHostClient();
+  const requestContextUserId = useRequestContextUserId(hostClient);
   const servingHostEntry = useNotificationsServingHostEntry();
   const streamAuth = useStreamAuthRevalidator();
   const streamBinding = useHostStreamClientBindingFor(
@@ -198,7 +200,7 @@ export function NotificationsSessionProvider(
   // opened on, so a stale binding must not reach either.
   const servingOwnerIdentity = remoteAwareOwnerIdentityKey(
     servingHostEntry,
-    hostClient.getRequestContextUserId(),
+    requestContextUserId,
   );
   const servingStreamClient =
     streamBinding !== null &&

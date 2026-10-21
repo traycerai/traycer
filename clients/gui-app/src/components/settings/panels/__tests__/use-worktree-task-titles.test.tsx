@@ -245,6 +245,36 @@ describe("useWorktreeTaskTitles", () => {
     );
   });
 
+  it("fills in a title when the cloud task list lands after the panel opened", async () => {
+    // The Worktrees panel opens before the shared cloud-tasks page has loaded.
+    // The compiled hook memoized the cache scan on inputs the page landing does
+    // not touch, so a worktree row kept saying "Owner unresolved" for a task
+    // whose title was already in the cache.
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    mockHostClient.request.mockImplementation((method: string) => {
+      if (method === "epic.listTasks") {
+        return Promise.resolve({
+          tasks: [listTaskLight("epic-cold", "From cloud")],
+          hasMore: false,
+        });
+      }
+      return Promise.reject(new Error(`unexpected method: ${method}`));
+    });
+
+    const worktrees = [worktreeWithOwners("/wt/a", ["epic-cold"])];
+    const { result } = renderHook(
+      () => useWorktreeTaskTitles(mockHostClient as never, worktrees, false),
+      { wrapper: makeWrapper(queryClient) },
+    );
+
+    expect(result.current.has("epic-cold")).toBe(false);
+    await waitFor(() => {
+      expect(result.current.get("epic-cold")).toBe("From cloud");
+    });
+  });
+
   it("keeps unknown batch entries unresolved (no title in the map)", async () => {
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false } },

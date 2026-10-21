@@ -22,6 +22,7 @@ import { resolveEffectiveBranchPrefix } from "@/lib/worktree/effective-branch-pr
 import { pickFriendlyBranchSuffix } from "@/lib/worktree/random-friendly-name";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import { cn } from "@/lib/utils";
+import { useRequesterHostId } from "@/hooks/host/use-requester-host-id";
 
 const SET_REPO_BRANCH_PREFIX_METHOD = "worktree.setRepoBranchPrefix";
 
@@ -108,7 +109,7 @@ export function RepoBranchPrefixSection(props: {
   ) => void;
 }): ReactNode {
   const globalPrefix = useSettingsStore((s) => s.worktreeBranchPrefix);
-  const hostId = props.hostClient?.getActiveHostId() ?? null;
+  const hostId = useRequesterHostId(props.hostClient);
   const supported = useHostSupportsMethod(
     hostId,
     SET_REPO_BRANCH_PREFIX_METHOD,

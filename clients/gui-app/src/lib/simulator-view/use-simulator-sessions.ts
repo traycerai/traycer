@@ -8,10 +8,9 @@ import {
 } from "react";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
-import {
-  authenticatedHostStreamKey,
-  authenticatedOwnerIdentityKey,
-} from "@/hooks/host/use-host-stream-client-for";
+import { hostStreamTransportKeyFor } from "@/hooks/host/use-host-stream-client-for";
+import { remoteAwareOwnerIdentityKey } from "@/lib/host/transport-key";
+import { useRequestContextUserId } from "@/hooks/host/use-request-context-user-id";
 import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
 import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
 import { useDurableStreamTransportFactory } from "@/lib/host/use-durable-stream-transport";
@@ -45,13 +44,13 @@ export function useSimulatorSessionsForHost(args: {
   const hostClient = useHostClientForHostId(hostId);
   const hostEntry = useHostDirectoryEntry(hostId ?? UNKNOWN_HOST_PLACEHOLDER);
   const methodSupport = useHostMethodSupport(hostId, "simulator.list");
+  const requestContextUserId = useRequestContextUserId(hostClient);
   const transportReady =
-    hostClient !== null &&
-    authenticatedHostStreamKey(hostClient, hostEntry) !== null;
-  const identityKey =
-    hostClient === null
-      ? null
-      : authenticatedOwnerIdentityKey(hostClient, hostEntry);
+    hostStreamTransportKeyFor(hostEntry, requestContextUserId) !== null;
+  const identityKey = remoteAwareOwnerIdentityKey(
+    hostEntry,
+    requestContextUserId,
+  );
   const openTransport = useDurableStreamTransportFactory();
   const ownerKey =
     hostId === null || identityKey === null

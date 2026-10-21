@@ -703,6 +703,41 @@ describe("useWorktreeActivityEnrichment (live fetch → cache → overlay)", () 
     expect(result.current.erroredPaths.size).toBe(0);
   });
 
+  it("marks an on-screen row unavailable once its first probe has failed", async () => {
+    // The row sat on "Checking" after its probe was rejected: the error landed
+    // in the query cache only, and the compiled memo behind `erroredPaths` was
+    // keyed on inputs a failed first probe does not touch.
+    vi.useFakeTimers();
+    const fixture = createFixture(
+      new Map(),
+      () => {
+        throw new Error("host unreachable");
+      },
+      null,
+      createAppQueryClient(),
+    );
+    const { result } = renderHook(
+      () =>
+        useWorktreeActivityEnrichment(
+          fixture.client,
+          true,
+          HOST_ID,
+          NO_SWEEP_PATHS,
+        ),
+      { wrapper: fixture.Wrapper },
+    );
+
+    await act(async () => {
+      result.current.reportVisiblePaths(["/wt/a"]);
+      await vi.advanceTimersByTimeAsync(WORKTREE_DEBOUNCE_SETTLE_MS);
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10_000);
+    });
+
+    expect(result.current.erroredPaths).toEqual(new Set(["/wt/a"]));
+  });
+
   it("stops cold PR refetching after the bounded retry budget", async () => {
     vi.useFakeTimers();
     const entriesByPath = new Map<string, WorktreeHostEntryV16>([
@@ -1700,6 +1735,44 @@ describe("useWorktreeActivityEnrichment (live fetch → cache → overlay)", () 
         },
         null,
         createAppQueryClient(),
+      );
+      const { result } = renderHook(
+        () =>
+          useWorktreeActivityEnrichment(fixture.client, true, HOST_ID, [
+            "/wt/a",
+          ]),
+        { wrapper: fixture.Wrapper },
+      );
+      expect(result.current.seededPaths.has("/wt/a")).toBe(true);
+
+      await waitFor(() => {
+        expect(requests).toHaveLength(1);
+        expect(fixture.queryClient.isFetching()).toBe(0);
+        expect(result.current.seededPaths.has("/wt/a")).toBe(false);
+      });
+    });
+
+    it("unlocks a restored row when the live probe answers exactly what was restored", async () => {
+      // A worktree that did not change since the last run: the probe lands
+      // data equal to the restored entry, so the overlay keeps its identity
+      // and only the query's own timestamp moves. The compiled memo behind
+      // `seededPaths` ignored that, so the row stayed "pending verification"
+      // and its delete button stayed locked until the next unrelated change.
+      const entry = warmEntry("/wt/a", "feat-a");
+      const qc = createAppQueryClient();
+      qc.setQueryData<WorktreeListAllForHostResponseV16>(
+        perPathKey("/wt/a"),
+        { worktrees: [entry], nextCursor: null },
+        { updatedAt: Date.now() - 60_000 },
+      );
+      const requests: string[] = [];
+      const fixture = createFixture(
+        new Map([["/wt/a", entry]]),
+        (path) => {
+          requests.push(path);
+        },
+        null,
+        qc,
       );
       const { result } = renderHook(
         () =>

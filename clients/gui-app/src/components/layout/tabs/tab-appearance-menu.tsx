@@ -41,6 +41,7 @@ import {
 } from "@/stores/tabs/tab-groups";
 import type { HeaderTab } from "@/stores/tabs/types";
 import { cn } from "@/lib/utils";
+import { useRequesterHostId } from "@/hooks/host/use-requester-host-id";
 
 export function TabColorPicker(props: {
   readonly menu: boolean;
@@ -217,7 +218,7 @@ function useTabTaskContext(
   });
   // Only the host this tab's own lookup asks, as the retry item below keys it:
   // another host's batch can disagree about whether the task is local-homed.
-  const hostId = organization?.client.getActiveHostId() ?? null;
+  const hostId = useRequesterHostId(organization?.client ?? null);
   const standIn =
     userId === null || hostId === null || !contexts.isPending
       ? null
@@ -239,7 +240,7 @@ function OrganizationContextRetryMenu(props: {
 }) {
   const queryClient = useQueryClient();
   const { client, userId } = props.organization;
-  const hostId = client.getActiveHostId();
+  const hostId = useRequesterHostId(client);
   return (
     <ContextMenuItem
       disabled={props.isFetching}

@@ -18,6 +18,7 @@ import {
   buildProviderRateLimitEnvelopeFromSnapshot,
   type ProviderRateLimitEnvelope,
 } from "@/lib/rate-limits/rate-limit-envelope";
+import { useRequesterHostId } from "@/hooks/host/use-requester-host-id";
 
 interface RefreshProfileStatusContext {
   readonly hostId: string | null;
@@ -32,6 +33,7 @@ export function useProvidersRefreshProfileStatusForClient(
   RefreshProfileStatusContext
 > {
   const queryClient = useQueryClient();
+  const requesterHostId = useRequesterHostId(client);
   return useHostMutation<
     HostRpcRegistry,
     "providers.refreshProfileStatus",
@@ -42,7 +44,7 @@ export function useProvidersRefreshProfileStatusForClient(
     mapVariables: (variables) => variables,
     options: {
       mutationKey: providersMutationKeys.refreshProfileStatus(
-        client?.getActiveHostId() ?? null,
+        requesterHostId,
       ),
       onMutate: () => ({
         hostId: client?.getActiveHostId() ?? null,

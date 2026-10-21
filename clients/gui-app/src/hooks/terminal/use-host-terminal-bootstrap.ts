@@ -5,6 +5,7 @@ import { useTerminalSessionHandle } from "@/lib/registries/terminal-session-regi
 import type { TerminalSessionStoreHandle } from "@/stores/terminals/terminal-session-store";
 import {
   adoptWarmSessionInstance,
+  peekKeptAliveXtermHostGrid,
   peekXtermHostGrid,
   peekXtermHostGridForSession,
 } from "@/components/epic-canvas/renderers/xterm-host-registry";
@@ -108,12 +109,14 @@ export function useHostTerminalBootstrap(args: {
     );
   }, [args.hostId, args.instanceId, args.terminalId]);
 
+  const peekedGrid = gridReady
+    ? peekKeptAliveXtermHostGrid(args.instanceId, {
+        hostId: args.hostId,
+        sessionId: args.terminalId,
+      })
+    : null;
   const openingGrid = measuredGrid ??
-    peekXtermHostGrid(args.instanceId) ??
-    peekXtermHostGridForSession({
-      hostId: args.hostId,
-      sessionId: args.terminalId,
-    }) ?? {
+    peekedGrid ?? {
       cols: DEFAULT_COLS,
       rows: DEFAULT_ROWS,
     };

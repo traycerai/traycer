@@ -15,6 +15,7 @@ import {
   authorizesCloudCapability,
   useAuthStore,
 } from "@/stores/auth/auth-store";
+import { useRequesterHostId } from "@/hooks/host/use-requester-host-id";
 
 /**
  * The route / modal entry point. `host.usage.summary` is an OPTIONAL RPC
@@ -207,7 +208,7 @@ function UsageSettingsPanelBody(props: {
 export function UsageSettingsPanelForClient(props: {
   readonly client: HostClient<HostRpcRegistry> | null;
 }): ReactNode {
-  const hostId = props.client?.getActiveHostId() ?? null;
+  const hostId = useRequesterHostId(props.client);
   const supported = useUsageSummarySupported(hostId);
   const usageVersion = useHostNegotiatedMethodVersion(
     props.client,

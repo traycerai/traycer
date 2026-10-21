@@ -18,6 +18,16 @@ import {
   screen,
   waitFor,
 } from "@testing-library/react";
+import { DndContext, useDraggable } from "@dnd-kit/core";
+import { useEpicDndStore } from "@/components/epic-canvas/dnd/dnd-store";
+import {
+  HEADER_TAB_DND_TYPE,
+  type HeaderTabDragData,
+} from "@/components/layout/tabs/header-tab-dnd";
+import {
+  registerTabStructuralLockPredicate,
+  resetTabStructuralLockForTesting,
+} from "@/stores/tabs/tab-structural-lock";
 import {
   LandingTerminalHost,
   LandingTerminalPaneAnchor,
@@ -379,6 +389,62 @@ const UNAVAILABLE_DEFAULT_HOST_CONTROLLER: HostReadinessController = {
   },
 };
 
+function rect(left: number, top: number, right: number, bottom: number) {
+  return {
+    x: left,
+    y: top,
+    left,
+    top,
+    right,
+    bottom,
+    width: right - left,
+    height: bottom - top,
+    toJSON: () => ({}),
+  };
+}
+
+/**
+ * Stands in for `RootDndProvider` (whose drag overlay needs a host runtime):
+ * a real dnd-kit context that records the dragged header tab the way the
+ * provider's drag start does.
+ */
+function HeaderTabDragHarness(props: {
+  readonly data: HeaderTabDragData;
+  readonly children: ReactNode;
+}): ReactNode {
+  return (
+    <DndContext
+      onDragStart={() => {
+        useEpicDndStore
+          .getState()
+          .headerTabDragStarted(props.data, null, null, null);
+      }}
+    >
+      <HeaderTabDragSource data={props.data} />
+      {props.children}
+    </DndContext>
+  );
+}
+
+function HeaderTabDragSource(props: {
+  readonly data: HeaderTabDragData;
+}): ReactNode {
+  const { listeners, setNodeRef } = useDraggable({
+    id: `header-tab:${props.data.tabId}`,
+    data: props.data,
+  });
+  return (
+    <button
+      type="button"
+      ref={setNodeRef}
+      data-testid="header-tab-drag-source"
+      {...listeners}
+    >
+      drag source
+    </button>
+  );
+}
+
 function surfaceRef(key: TabRef): HTMLElement {
   return screen.getByTestId(`top-level-surface-${key.kind}-${key.id}`);
 }
@@ -525,6 +591,8 @@ describe("<TopLevelTabHost />", () => {
     useLandingDraftStore.setState(useLandingDraftStore.getInitialState(), true);
     useAuthStore.setState(useAuthStore.getInitialState(), true);
     useLandingPanelStore.getState().resetForTests();
+    useEpicDndStore.setState(useEpicDndStore.getInitialState(), true);
+    resetTabStructuralLockForTesting();
     resetTerminalFocusRegistryForTests();
     resetPrimaryFocusCoordinatorForTests();
   });
@@ -814,6 +882,73 @@ describe("<TopLevelTabHost />", () => {
 
     expect(screen.getByTestId("top-level-fillable-slot-right")).not.toBeNull();
     expect(screen.getAllByTestId(/^top-level-surface-/)).toHaveLength(5);
+  });
+
+  // A tab locked while it is dragged over an empty split slot must stop the
+  // slot's drop ring: the ring stayed lit for a release that the live guard
+  // then refused, so the drop silently did nothing.
+  it("drops the fillable slot's drop ring when the dragged tab becomes structurally locked", () => {
+    seedSources([EPIC_A, EPIC_B]);
+    useTabsStore.setState((state) => ({
+      ...state,
+      items: [
+        {
+          kind: "split",
+          id: "chooser",
+          left: { kind: "tab", ref: EPIC_A },
+          right: { kind: "empty" },
+          focusedSide: "right",
+          routeBackingSide: "left",
+          leftRatio: 0.5,
+        },
+        { kind: "tab", id: "tab:epic:epic-b", ref: EPIC_B },
+      ],
+      activeItemId: "chooser",
+      stripOrder: [EPIC_A, EPIC_B],
+    }));
+    render(
+      <HeaderTabDragHarness
+        data={{
+          kind: HEADER_TAB_DND_TYPE,
+          stripItemId: "tab:epic:epic-b",
+          tabKind: "epic",
+          tabId: EPIC_B.id,
+          index: 1,
+        }}
+      >
+        <TopLevelTabHost />
+      </HeaderTabDragHarness>,
+    );
+    const slot = screen.getByTestId("top-level-fillable-slot-right");
+    vi.spyOn(slot, "getBoundingClientRect").mockReturnValue(
+      rect(200, 0, 400, 50),
+    );
+    const source = screen.getByTestId("header-tab-drag-source");
+    vi.spyOn(source, "getBoundingClientRect").mockReturnValue(
+      rect(0, 0, 50, 50),
+    );
+
+    act(() => {
+      fireEvent.pointerDown(source, {
+        pointerId: 2,
+        isPrimary: true,
+        button: 0,
+        clientX: 10,
+        clientY: 10,
+      });
+      fireEvent.pointerMove(source, { pointerId: 2, clientX: 30, clientY: 10 });
+      fireEvent.pointerMove(source, {
+        pointerId: 2,
+        clientX: 350,
+        clientY: 10,
+      });
+    });
+    expect(slot.dataset.dropActive).toBe("true");
+
+    act(() => {
+      registerTabStructuralLockPredicate((ref) => ref.id === EPIC_B.id);
+    });
+    expect(slot.dataset.dropActive).toBe("false");
   });
 
   it("focuses a maximized terminal when its draft is reconstructed after MRU eviction", async () => {

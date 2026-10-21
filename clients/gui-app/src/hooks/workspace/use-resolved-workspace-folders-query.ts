@@ -15,6 +15,7 @@ import {
   useWorkspaceFoldersStore,
   type WorkspaceFolderInfo,
 } from "@/stores/workspace/workspace-folders-store";
+import { useRequesterHostId } from "@/hooks/host/use-requester-host-id";
 export type { ResolvedFolder };
 
 export interface ResolvedWorkspaceFoldersQueryResult {
@@ -160,7 +161,7 @@ export function useResolvedWorkspaceFolders(
     return map;
   }, [query.data]);
 
-  const boundHostId = client?.getActiveHostId() ?? null;
+  const boundHostId = useRequesterHostId(client);
 
   const resolved = useMemo<ReadonlyArray<ResolvedFolder>>(
     () =>

@@ -86,6 +86,27 @@ describe("useProvidersLoginOwnershipForClient — both-minor gate", () => {
     expect(result.current).toBe(false);
   });
 
+  // A requester pinned by host id answers `null` until that host's directory
+  // row lands, and keeps its identity when it does. The compiled hook read the
+  // id off the requester and kept the first answer, so a host whose row
+  // arrived after the panel mounted never got login ownership.
+  it("follows the requester's host once its directory row lands", () => {
+    recordNegotiatedHostManifest(HOST_ID, manifestWith(4, 2));
+    let resolvedHostId: string | null = null;
+    const pinnedRequester = {
+      getActiveHostId: () => resolvedHostId,
+    } as HostClient<HostRpcRegistry>;
+    const { result, rerender } = renderHook(() =>
+      useProvidersLoginOwnershipForClient(pinnedRequester),
+    );
+    expect(result.current).toBe(false);
+
+    resolvedHostId = HOST_ID;
+    rerender();
+
+    expect(result.current).toBe(true);
+  });
+
   it("is false with no client, and false with no negotiated manifest yet", () => {
     const { result: noClient } = renderHook(() =>
       useProvidersLoginOwnershipForClient(null),

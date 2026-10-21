@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, renderHook } from "@testing-library/react";
+import { act, cleanup, renderHook } from "@testing-library/react";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
@@ -168,6 +168,27 @@ describe("useHostClientFor", () => {
     // SPINE an active host of its own (no global side effect) - it stays
     // unbound (redesign P4.2 deleted the active slot `.bind()` used to set).
     expect(globalClient.getActiveHostId()).toBeNull();
+  });
+
+  // `setRequestContext` swaps the context inside the one spine client. The
+  // compiled hook read it off that stable object, so a sign-in kept the
+  // signed-out answer and the host picked in Settings ▸ Worktrees had no client.
+  it("builds the client once the spine signs in", () => {
+    const globalClient = buildGlobalClient(false);
+    globalClientRef.value = globalClient;
+    const { result, rerender } = renderHook(() => useHostClientFor(TARGET_B));
+    expect(result.current).toBeNull();
+
+    act(() => {
+      globalClient.setRequestContext(
+        createRequestContextFixture({
+          origin: "renderer",
+          bearerToken: "tok-1",
+        }),
+      );
+    });
+    rerender();
+    expect(result.current?.getActiveHostId()).toBe("host-b");
   });
 
   it("memoizes for a stable target and rebuilds for a different host", () => {

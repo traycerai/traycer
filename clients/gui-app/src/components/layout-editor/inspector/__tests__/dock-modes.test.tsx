@@ -213,4 +213,30 @@ describe("dragging the panel by its header (L-38)", () => {
 
     expect(useLayoutEditorStore.getState().floatPosition).toBeNull();
   });
+
+  // While docked nothing listens for resize, so the window may have changed
+  // size long before Float is chosen. The panel opens clamped to the window as
+  // it is at that moment, not to the size it had when the inspector mounted.
+  it("opens a float against the window as it is when floating starts", () => {
+    useLayoutEditorStore.setState({ dockMode: "right", floatPosition: null });
+    const { result } = renderHook(() => useFloatingDock(null));
+    expect(result.current).toEqual(defaultFloatPosition(VIEWPORT));
+
+    const narrower = { width: 700, height: 600 };
+    Object.defineProperty(window, "innerWidth", {
+      configurable: true,
+      writable: true,
+      value: narrower.width,
+    });
+    Object.defineProperty(window, "innerHeight", {
+      configurable: true,
+      writable: true,
+      value: narrower.height,
+    });
+    act(() => {
+      useLayoutEditorStore.setState({ dockMode: "float" });
+    });
+
+    expect(result.current).toEqual(defaultFloatPosition(narrower));
+  });
 });

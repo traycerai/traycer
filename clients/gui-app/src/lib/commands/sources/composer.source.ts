@@ -34,6 +34,7 @@ import { useFocusedComposerEntry } from "@/hooks/command-palette/use-focused-com
 import { getFocusedComposerControls } from "@/lib/commands/composer-controls-registry";
 import {
   getActiveModelPicker,
+  getActiveModelPickerSummary,
   subscribeActiveModelPicker,
 } from "@/lib/commands/active-model-picker-registry";
 import type {
@@ -87,6 +88,11 @@ function useComposerItems(ctx: CommandContext): ReadonlyArray<CommandItem> {
     getActiveModelPicker,
     getActiveModelPicker,
   );
+  const selectionSummary = useSyncExternalStore(
+    subscribeActiveModelPicker,
+    getActiveModelPickerSummary,
+    getActiveModelPickerSummary,
+  );
 
   // Provider/model leaves fetch live host data only when their sub-pages
   // render, so opening the top-level palette does not eagerly hit SDKs.
@@ -100,7 +106,7 @@ function useComposerItems(ctx: CommandContext): ReadonlyArray<CommandItem> {
       items.push(
         buildChangeModelItem(
           modelPickerShortcut ?? null,
-          activeModelPicker.getSelectionSummary(),
+          selectionSummary,
         ),
       );
     }
@@ -125,6 +131,7 @@ function useComposerItems(ctx: CommandContext): ReadonlyArray<CommandItem> {
     draftsShortcut,
     draftsControlActive,
     activeModelPicker,
+    selectionSummary,
   ]);
 }
 

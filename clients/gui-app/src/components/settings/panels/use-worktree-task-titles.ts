@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useMemo, useSyncExternalStore } from "react";
 import { useQueryClient, type UseQueryResult } from "@tanstack/react-query";
 import type { WorktreeHostEntryV14 } from "@traycer/protocol/host/index";
 import {
@@ -63,19 +63,27 @@ export function useWorktreeTaskTitles(
     enabled: epicIds.length > 0,
   });
   const userId = cloud.currentUserId;
-  const cloudTasks = cloud.tasks;
 
-  const tier1Titles = useMemo(() => {
-    if (userId === null || epicIds.length === 0) return EMPTY_TITLE_RECORD;
-    // `cloudTasks` is a recompute trigger: the read scans the query cache
-    // directly, so we re-derive whenever a fetched page changes it.
-    void cloudTasks;
-    return readEpicTitlesFromCloudTaskCaches(
-      queryClient,
-      { hostId: null, userId },
-      epicIds,
-    );
-  }, [queryClient, userId, epicIds, cloudTasks]);
+  // The title scan reads the query cache directly, so it is read as a VALUE
+  // through the cache's own change channel rather than re-run behind a
+  // discarded trigger dependency.
+  const tier1Snapshot = useSyncExternalStore(
+    (listener) => queryClient.getQueryCache().subscribe(listener),
+    () =>
+      userId === null || epicIds.length === 0
+        ? ""
+        : serializeTitles(
+            readEpicTitlesFromCloudTaskCaches(
+              queryClient,
+              { hostId: null, userId },
+              epicIds,
+            ),
+          ),
+  );
+  const tier1Titles = useMemo(
+    () => parseTitles(tier1Snapshot),
+    [tier1Snapshot],
+  );
 
   const unresolvedIds = useMemo(
     () => epicIds.filter((id) => !Object.hasOwn(tier1Titles, id)),
@@ -121,6 +129,23 @@ export function useWorktreeTaskTitles(
     }
     return merged;
   }, [userId, epicIds, tier1Titles, tier2Titles]);
+}
+
+function serializeTitles(titles: Record<string, string>): string {
+  return Object.entries(titles)
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([id, title]) => `${id}\u0000${title}`)
+    .join("\u0001");
+}
+
+function parseTitles(snapshot: string): Record<string, string> {
+  if (snapshot.length === 0) return EMPTY_TITLE_RECORD;
+  const titles: Record<string, string> = {};
+  for (const entry of snapshot.split("\u0001")) {
+    const separator = entry.indexOf("\u0000");
+    titles[entry.slice(0, separator)] = entry.slice(separator + 1);
+  }
+  return titles;
 }
 
 function combineTaskContextTitleResults(

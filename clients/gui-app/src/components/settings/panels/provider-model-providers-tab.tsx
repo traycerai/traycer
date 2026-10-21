@@ -58,6 +58,7 @@ import { ProviderListSearchEmptyState } from "./provider-list-search";
 import { ProviderModelProviderConnectDialog } from "./provider-model-provider-connect-dialog";
 import { CredentialRefusalNote } from "@/components/providers/credential-refusal-note";
 import { useHostCredentialRefusal } from "@/hooks/host/use-host-credential-refusal";
+import { useRequesterHostId } from "@/hooks/host/use-requester-host-id";
 
 const EMPTY_ENTRIES: readonly ModelProviderEntry[] = [];
 
@@ -504,7 +505,7 @@ export function ProviderModelProvidersTab(props: {
   // from.
   const activeHostId = useAddressableHostId();
   const binding = useHostBinding();
-  const hostId = binding?.hostClient.getActiveHostId() ?? activeHostId;
+  const hostId = useRequesterHostId(binding?.hostClient ?? null) ?? activeHostId;
   // A sandbox never takes a model provider's key or sign-in: Connect, the
   // custom provider form and Re-enable are disabled, Disconnect stays.
   const credentialRefusal = useHostCredentialRefusal(hostId);

@@ -21,10 +21,9 @@ import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
 import { useReactiveLocalHostId } from "@/hooks/host/use-reactive-local-host-id";
-import {
-  authenticatedHostStreamKey,
-  authenticatedOwnerIdentityKey,
-} from "@/hooks/host/use-host-stream-client-for";
+import { hostStreamTransportKeyFor } from "@/hooks/host/use-host-stream-client-for";
+import { useRequestContextUserId } from "@/hooks/host/use-request-context-user-id";
+import { remoteAwareOwnerIdentityKey } from "@/lib/host/transport-key";
 import {
   acquireBrowserSessionsCoordinator,
   browserSessionsCoordinatorKey,
@@ -38,15 +37,6 @@ import {
 import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
 import { useDurableStreamTransportFactory } from "@/lib/host/use-durable-stream-transport";
 import { useRunnerHost } from "@/providers/use-runner-host";
-
-function browserSessionsOwnerIdentityKey(
-  hostClient: HostClient<HostRpcRegistry> | null,
-  hostEntry: HostDirectoryEntry | null,
-): string | null {
-  return hostClient === null
-    ? null
-    : authenticatedOwnerIdentityKey(hostClient, hostEntry);
-}
 
 /**
  * The browser inventory for an explicit host, sharing the same coordinator as
@@ -109,16 +99,11 @@ export function useBrowserSessions(
   );
   const hostEntry = useHostDirectoryEntry(hostId ?? UNKNOWN_HOST_PLACEHOLDER);
   const browserView = jarBridgeForHost(args.browserView, hostEntry);
-  const transportReady =
-    args.hostClient !== null &&
-    authenticatedHostStreamKey(args.hostClient, hostEntry) !== null;
-  const ownerIdentityKey = browserSessionsOwnerIdentityKey(
-    args.hostClient,
-    hostEntry,
-  );
   // Not sent to main, which reads the signed-in user from the desktop auth
   // session it owns; it only decides whether asking is worth an IPC.
-  const userId = args.hostClient?.getRequestContextUserId() ?? null;
+  const userId = useRequestContextUserId(args.hostClient);
+  const transportReady = hostStreamTransportKeyFor(hostEntry, userId) !== null;
+  const ownerIdentityKey = remoteAwareOwnerIdentityKey(hostEntry, userId);
   const openTransport = useDurableStreamTransportFactory();
   const owner = useMemo<BrowserSessionsOwner | null>(
     () =>

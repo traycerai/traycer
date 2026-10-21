@@ -465,6 +465,38 @@ describe("composerSource", () => {
     expect(description()).toBe("overlay");
   });
 
+  // The registered controller stays the same object while the picker's
+  // selection moves (it reads the latest through a ref), so a row memoized on
+  // the controller kept the summary it first read: an open palette kept
+  // offering "Change model…" under the model the composer had already left.
+  it("follows the Change model… summary when the same picker's selection changes", () => {
+    registerFocusedComposerControls(
+      "landing",
+      stubControls({}),
+      TEST_HOST_CLIENT,
+    );
+    let summary = "Claude Opus 4.8";
+    registerActiveModelPicker({
+      toggle: () => undefined,
+      getSelectionSummary: () => summary,
+    });
+
+    let captured: ReadonlyArray<CommandItem> = [];
+    function Probe() {
+      captured = composerSource.useItems(ctx(null, "landing"));
+      return null;
+    }
+    const rendered = render(<Probe />);
+    const description = () =>
+      captured.find((i) => i.id === "composer:open-model-picker")?.description;
+    expect(description()).toBe("Claude Opus 4.8");
+
+    summary = "GPT-5.5";
+    rendered.rerender(<Probe />);
+
+    expect(description()).toBe("GPT-5.5");
+  });
+
   it("chat-tile composer with an active epic shows the new-chat + terminal items; no Select PC", () => {
     registerFocusedComposerControls(
       "chat-tile",

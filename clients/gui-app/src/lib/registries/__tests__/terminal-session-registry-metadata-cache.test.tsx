@@ -33,7 +33,7 @@ vi.mock("@/hooks/host/use-host-directory-entry", () => ({
 }));
 
 vi.mock("@/hooks/host/use-host-stream-client-for", () => ({
-  authenticatedHostStreamKey: () => null,
+  hostStreamTransportKeyFor: () => null,
 }));
 
 // The acquire effect keys on `openTransport` identity, so the mocked factory

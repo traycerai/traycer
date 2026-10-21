@@ -29,7 +29,6 @@ import type { StreamAuthRevalidator } from "@traycer-clients/shared/auth/bearer-
 import type { BearerSourceProvider } from "@traycer-clients/shared/auth/bearer-source";
 import type { HostEndpointProvider } from "@traycer-clients/shared/host-transport/ws-rpc-client";
 import type { IHostStreamClient } from "@traycer-clients/shared/host-transport/host-stream-client";
-import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
 import {
   appHostCredentialMintFlow,
@@ -43,6 +42,7 @@ import {
   useAuthStore,
 } from "@/stores/auth/auth-store";
 import { useHostBinding } from "@/lib/host/runtime";
+import { useRequestContextUserId } from "@/hooks/host/use-request-context-user-id";
 import { processReconnectEngine } from "@traycer-clients/shared/host-client/host-connection-reconnect-engine";
 import { transportEvidenceRelay } from "@/lib/host/transport-evidence";
 import { appServerClock } from "@/lib/clock/app-server-clock";
@@ -52,7 +52,6 @@ import { useRunnerHost } from "@/providers/use-runner-host";
 import {
   hostTransportKey,
   remoteAwareOwnerIdentity,
-  remoteAwareOwnerIdentityKey,
 } from "@/lib/host/transport-key";
 import {
   DEFAULT_INITIAL_BACKOFF_MS,
@@ -184,51 +183,6 @@ export function hostStreamTransportKeyFor(
     return null;
   }
   return ["host-stream", userId, transport].join(TRANSPORT_KEY_SEPARATOR);
-}
-
-/**
- * Production transport key for a session-owned durable stream (chat / terminal):
- * `null` until there is BOTH an authenticated request context AND a dialable
- * host endpoint. Shared by the chat and terminal session registries so their
- * readiness gate cannot drift. Kept separate from each registry's test seam -
- * tests substitute their own key via the factory override and so never reach
- * (or need to mock) the real request context.
- */
-export function authenticatedHostStreamKey(
-  globalClient: HostClient<HostRpcRegistry>,
-  target: HostDirectoryEntry | null,
-): string | null {
-  if (globalClient.getRequestContext() === null) {
-    return null;
-  }
-  return hostStreamTransportKeyFor(
-    target,
-    globalClient.getRequestContextUserId(),
-  );
-}
-
-/**
- * Owner-identity counterpart to `authenticatedHostStreamKey` (R-1): same "no
- * auth" gate, but the value is the mode-aware `remoteAwareOwnerIdentity`
- * (hostId + userId, plus - for a remote host - its public key + relay attach
- * URL) rather than the dialability-only transport key. Durable owners
- * (chat/terminal session registries, the epic session mount) fold this into
- * their rebuild decision so a same-host remote public-key rotation - which
- * `hostTransportKey` cannot see, since every remote host shares one fixed
- * relay attach URL - closes the stale owner and acquires a fresh one instead
- * of leaving it pinned to the old key.
- */
-export function authenticatedOwnerIdentityKey(
-  globalClient: HostClient<HostRpcRegistry>,
-  target: HostDirectoryEntry | null,
-): string | null {
-  if (globalClient.getRequestContext() === null) {
-    return null;
-  }
-  return remoteAwareOwnerIdentityKey(
-    target,
-    globalClient.getRequestContextUserId(),
-  );
 }
 
 /**
@@ -452,10 +406,8 @@ export function useHostStreamClientBindingFor(
   const authnBaseUrl = useRunnerHost().authnBaseUrl;
   // `null` when signed out or the credential lease was released - the
   // "no bound user" / "no auth" gate.
-  const requestContext = globalClient.getRequestContext();
-  const userId = globalClient.getRequestContextUserId();
-  const transportKey =
-    requestContext === null ? null : hostStreamTransportKeyFor(target, userId);
+  const userId = useRequestContextUserId(globalClient);
+  const transportKey = hostStreamTransportKeyFor(target, userId);
   const endpointHostId = target?.hostId ?? null;
   const endpointWebsocketUrl = target?.websocketUrl ?? null;
   const endpointKind = target?.kind ?? null;

@@ -11,6 +11,7 @@ import {
   providerNativeSubagentsWriteScope,
   providersMutationKeys,
 } from "@/lib/query-keys";
+import { useRequesterHostId } from "@/hooks/host/use-requester-host-id";
 
 // The choice lands in `provider-overrides.json` and is echoed back by
 // `providers.list`, so that read is what needs refreshing and nothing else
@@ -39,13 +40,14 @@ export function useProvidersSetNativeSubagents(
   { readonly hostId: string | null }
 > {
   const client = useHostClient();
+  const requesterHostId = useRequesterHostId(client);
   return useHostScopedMutationForClient(client, {
     method: "providers.setNativeSubagents",
     mutationKey: providersMutationKeys.setNativeSubagents(),
     errorMessage: "Couldn't save the native subagents setting.",
     invalidateMethods: NATIVE_SUBAGENTS_INVALIDATIONS,
     scope: providerNativeSubagentsWriteScope(
-      client.getActiveHostId(),
+      requesterHostId,
       harnessId,
     ),
   });

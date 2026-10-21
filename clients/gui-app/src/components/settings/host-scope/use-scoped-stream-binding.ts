@@ -1,9 +1,10 @@
 import { useMemo } from "react";
 import {
-  authenticatedOwnerIdentityKey,
   streamTransportRetain,
   useHostStreamClientBindingFor,
 } from "@/hooks/host/use-host-stream-client-for";
+import { useRequestContextUserId } from "@/hooks/host/use-request-context-user-id";
+import { remoteAwareOwnerIdentityKey } from "@/lib/host/transport-key";
 import { useHostClient } from "@/lib/host";
 import { useStreamAuthRevalidator } from "@/lib/host/stream-auth-revalidator";
 import type { StreamRuntimeBinding } from "@/lib/host/stream-runtime-context";
@@ -55,7 +56,10 @@ export function useScopedStreamBinding(
   const auth = useStreamAuthRevalidator();
   const ambientClient = useHostClient();
   const binding = useHostStreamClientBindingFor(target, auth);
-  const expectedKey = authenticatedOwnerIdentityKey(ambientClient, target);
+  const expectedKey = remoteAwareOwnerIdentityKey(
+    target,
+    useRequestContextUserId(ambientClient),
+  );
   const matched =
     binding !== null && binding.transportKey === expectedKey ? binding : null;
   // Safe to read off `target` only BECAUSE the key matched: that comparison is
