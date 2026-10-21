@@ -607,9 +607,10 @@ describe("optional-method capability negotiation", () => {
     expect(
       split.optionalManifest["agent.getProviderProfileRateLimits"],
     ).toEqual({ major: 7, minor: 0, supportedMajors: [1, 2, 3, 4, 5, 6, 7] });
+    // `agent.configure@7.1` added the routing choice to the request.
     expect(split.optionalManifest["agent.configure"]).toEqual({
       major: 7,
-      minor: 0,
+      minor: 1,
       supportedMajors: [1, 2, 3, 4, 5, 6, 7],
     });
   });

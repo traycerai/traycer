@@ -284,6 +284,23 @@ export const permissionModeSchemaPreAuto = lazySchema(() =>
 );
 export type PermissionModePreAuto = z.infer<typeof permissionModeSchemaPreAuto>;
 
+/**
+ * What a chat does when a turn ends on a usage limit or an error.
+ *
+ * `policy` follows the device's routing policy (switch harness, model or
+ * account, or wait, as that policy's ladder says). `hold` ignores the ladder's
+ * switches: the chat waits for the limit to reset on its own account and
+ * resumes there, because what it carries (a harness's own memory, a session)
+ * does not move to another harness.
+ *
+ * A chat record without the key reads as `policy`, so every record written
+ * before this field existed and every peer that never sends it behave as they
+ * always did.
+ */
+export const CHAT_ROUTING_VALUES = ["policy", "hold"] as const;
+export const chatRoutingSchema = lazySchema(() => z.enum(CHAT_ROUTING_VALUES));
+export type ChatRouting = z.infer<typeof chatRoutingSchema>;
+
 // Canonical full set of permission modes, ordered most-restrictive to
 // most-permissive. Single source of truth shared by:
 //   - the host-RPC schema default for protocol skew (unary-schemas.ts)

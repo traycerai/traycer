@@ -384,6 +384,7 @@ describe("host-v1.1.7 permission-mode downgrade protection", () => {
         reasoningEffort: null,
         fastMode: false,
         permissionMode: "full_access",
+        routing: null,
       },
       {
         idempotencyKey: null,

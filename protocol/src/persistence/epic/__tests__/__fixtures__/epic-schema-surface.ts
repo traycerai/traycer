@@ -7417,6 +7417,13 @@ export const epicSchemaSurfaceBaseline = {
                   "type": "null"
                 }
               ]
+            },
+            "routing": {
+              "type": "string",
+              "enum": [
+                "policy",
+                "hold"
+              ]
             }
           },
           "required": [
@@ -17468,6 +17475,13 @@ export const epicSchemaSurfaceBaseline = {
                 {
                   "type": "null"
                 }
+              ]
+            },
+            "routing": {
+              "type": "string",
+              "enum": [
+                "policy",
+                "hold"
               ]
             }
           },

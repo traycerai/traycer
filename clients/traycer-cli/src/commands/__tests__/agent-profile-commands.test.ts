@@ -380,6 +380,7 @@ describe("agent configure", () => {
       reasoningEffort: "high",
       fastMode: false,
       permissionMode: "supervised",
+      routing: null,
     });
     expect(result.data).toEqual(response);
     expect(result.human).toContain("profile: --profile ambient");

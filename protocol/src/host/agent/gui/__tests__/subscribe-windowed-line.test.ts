@@ -275,7 +275,10 @@ describe("the chat.subscribe@1.6 freeze", () => {
 
   // Fields added to the live `chatSchema` AFTER `1.6` shipped.
   //
-  // Empty today, and appending to it is the whole point: this is the tripwire
+  // `routing` is the first: it arrived with `agent.configure@7.1`, and every
+  // released `chat.subscribe` line freezes the record without it.
+  //
+  // Appending to it is the whole point: this is the tripwire
   // that makes a new chat-record field a deliberate decision about the released
   // wire shape rather than something that happens to it. When the assertion
   // below fires, add the new field name HERE - never to
@@ -284,7 +287,7 @@ describe("the chat.subscribe@1.6 freeze", () => {
   // Deliberately not a plain equality check against `chatSchema`: an equality
   // that can only ever be "fixed" by deleting it teaches the next person to
   // delete it, and then nothing watches this again.
-  const CHAT_SCHEMA_FIELDS_ADDED_AFTER_V16: readonly string[] = [];
+  const CHAT_SCHEMA_FIELDS_ADDED_AFTER_V16: readonly string[] = ["routing"];
 
   it("accounts for every live chatSchema field as either frozen into 1.6 or explicitly post-1.6", () => {
     const accountedFor = [
