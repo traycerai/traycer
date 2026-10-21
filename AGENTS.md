@@ -73,13 +73,17 @@ DCO (`git commit -s`).
 
 ## When CI runs
 
-A team pull request into `main` (a branch in this repository) runs **no CI**:
-every job is skipped, so every required check reports as passed, and the merge
-button is available as soon as review passes. Nothing tests such a PR before
-it merges, so **the local commit hook is the only automatic check before
-merge**. No job is exempt, `guarded-files-tripwire` in `protocol-compat.yml`
-included: it runs only on a pull request that runs CI, so a team edit to a
-guarded protocol file is not flagged before it merges, and the merge run
+A team pull request into `main` (a branch in this repository) runs **no CI**
+but the CodeQL scan: every other job is skipped, so every required check
+reports as passed, and the merge button is available as soon as review passes.
+Nothing tests such a PR before it merges, so **the local commit hook and the
+CodeQL scan are the only automatic checks before merge**. The scan
+(`codeql.yml`'s `analyze`) is the one exempt job: it shows a new security
+alert on the pull request that introduces it, and it is not a required check.
+Every other job is gated,
+`guarded-files-tripwire` in `protocol-compat.yml` included: it runs only on a
+pull request that runs CI, so a team edit to a guarded protocol file is not
+flagged before it merges, and the merge run
 reports an edit only to `host-v1.1.5-mutation-v20.ts` (the regenerate-and-compare
 test in `test.yml`'s `@traycer/protocol` leg).
 
@@ -112,10 +116,10 @@ A red `main` also holds up releases: the internal repository's nightly staging
 train and its promotion to production both refuse a pinned commit of this
 repository whose push checks are not all green.
 
-The rule is one expression, copied into the `if:` of every job in the eight
-workflows that trigger on `pull_request` (`test`, `pre-commit`,
+The rule is one expression, copied into the `if:` of every job but `analyze`
+in the nine workflows that trigger on `pull_request` (`test`, `pre-commit`,
 `protocol-compat`, `browser-regressions`, `real-supervisor`, `codeql`,
-`secret-scan`, `dco`), and pinned by `scripts/__tests__/ci-pull-request-gate.test.mjs`:
+`secret-scan`, `dco`, `gradle-wrapper`), and pinned by `scripts/__tests__/ci-pull-request-gate.test.mjs`:
 
 ```
 github.event_name != 'pull_request'
@@ -126,8 +130,8 @@ github.event_name != 'pull_request'
 
 The gate asks "is the head repository this repository", not "is it a fork": a
 deleted fork reports no head repository, and that answer must fail toward
-running CI. No job is exempt: `guarded-files-tripwire`, which only makes sense
-on a pull request, is `github.event_name == 'pull_request' && (<expression>)`.
+running CI. Only `analyze` is exempt: `guarded-files-tripwire`, which only
+makes sense on a pull request, is `github.event_name == 'pull_request' && (<expression>)`.
 A new workflow with a `pull_request` trigger carries the
 gate on every job; an
 aggregator that uses `always()` is `always() && (<expression>)`, so it is
