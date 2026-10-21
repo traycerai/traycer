@@ -64,6 +64,7 @@ import {
   formatCredits,
   formatMemory,
   roundSandboxShape,
+  roundUpToStep,
   sandboxShapeProblem,
   type SandboxShape,
 } from "@/lib/sandboxes/sandbox-pricing";
@@ -236,31 +237,59 @@ interface SandboxFormState {
 /**
  * The size a create opens at: the provider's smallest for a personal
  * sandbox; for a team one, the smallest shape inside the provider's bounds
- * with at least 2 GB, taking a vCPU step where the memory per vCPU needs it.
+ * with at least 2 GB.
+ *
+ * The team shape walks the vCPU grid up from the minimum and, at each count,
+ * takes the smallest memory on the memory lattice that reaches 2 GB and that
+ * count's memory-per-vCPU range; the first count with one wins. Rounding the
+ * memory after picking the vCPU count instead can leave the pair outside the
+ * per-vCPU range. A provider that cannot reach 2 GB opens at its largest
+ * valid memory, on the fewest vCPUs that allow it.
  */
 function defaultShape(
   bounds: SandboxShapeBounds,
   belongsTo: SandboxCreateBelongsTo,
 ): SandboxShape {
-  const smallestMemoryMb = Math.max(
-    bounds.memoryMinMb,
-    bounds.cpuMin * bounds.memoryPerCpuMinMb,
-  );
-  if (belongsTo.kind === "personal") {
-    return { cpus: bounds.cpuMin, memoryMb: smallestMemoryMb };
-  }
-  const { memoryMb } = roundSandboxShape(bounds, {
+  const smallest = {
     cpus: bounds.cpuMin,
-    memoryMb: Math.max(TEAM_DEFAULT_MEMORY_MB, smallestMemoryMb),
-  });
-  const { cpus } = roundSandboxShape(bounds, {
-    cpus: memoryMb / bounds.memoryPerCpuMaxMb,
-    memoryMb,
-  });
-  return roundSandboxShape(bounds, {
-    cpus,
-    memoryMb: Math.max(memoryMb, cpus * bounds.memoryPerCpuMinMb),
-  });
+    memoryMb: Math.max(
+      bounds.memoryMinMb,
+      bounds.cpuMin * bounds.memoryPerCpuMinMb,
+    ),
+  };
+  if (belongsTo.kind === "personal") return smallest;
+  let largestValid: SandboxShape | null = null;
+  for (let step = 0; ; step += 1) {
+    // Two decimals, as `roundUpToStep` rounds: the server's `cpus` column.
+    const cpus =
+      Math.round((bounds.cpuMin + step * bounds.cpuStep) * 100) / 100;
+    if (cpus > bounds.cpuMax) break;
+    const floorMb = Math.max(
+      bounds.memoryMinMb,
+      cpus * bounds.memoryPerCpuMinMb,
+    );
+    const ceilingMb = Math.min(
+      bounds.memoryMaxMb,
+      cpus * bounds.memoryPerCpuMaxMb,
+    );
+    const memoryMb = roundUpToStep(
+      Math.max(TEAM_DEFAULT_MEMORY_MB, floorMb),
+      bounds.memoryStepMb,
+      bounds.memoryMinMb,
+    );
+    if (memoryMb <= ceilingMb) return { cpus, memoryMb };
+    const largestMb =
+      bounds.memoryMinMb +
+      Math.floor((ceilingMb - bounds.memoryMinMb) / bounds.memoryStepMb) *
+        bounds.memoryStepMb;
+    if (
+      largestMb >= floorMb &&
+      (largestValid === null || largestMb > largestValid.memoryMb)
+    ) {
+      largestValid = { cpus, memoryMb: largestMb };
+    }
+  }
+  return largestValid ?? smallest;
 }
 
 /** A shape as the form's vCPU and memory fields hold it. */

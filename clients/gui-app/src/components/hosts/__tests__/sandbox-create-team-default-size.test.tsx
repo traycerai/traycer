@@ -239,6 +239,45 @@ describe("<SandboxCreateDialog /> default size", () => {
     expectSize("1", "2");
   });
 
+  it("opens a team create at the first vCPU count whose memory is on the memory lattice", async () => {
+    // Memory is exactly 1 GB per vCPU and moves in 1.5 GB steps from 1 GB, so
+    // 2 GB is not on the lattice: 3 vCPU would need 3 GB, which is not either.
+    // 4 vCPU at 4 GB is the first count whose memory is a valid size.
+    openCatalogue(
+      provider("linux", {
+        cpuMin: 1,
+        cpuMax: 16,
+        cpuStep: 1,
+        memoryMinMb: 1024,
+        memoryMaxMb: 65536,
+        memoryStepMb: 1536,
+        memoryPerCpuMinMb: 1024,
+        memoryPerCpuMaxMb: 1024,
+      }),
+    );
+    await renderDialog(TEAM);
+
+    expectSize("4", "4");
+  });
+
+  it("opens a team create at the largest valid memory when the provider cannot reach 2 GB", async () => {
+    openCatalogue(
+      provider("linux", {
+        cpuMin: 1,
+        cpuMax: 2,
+        cpuStep: 1,
+        memoryMinMb: 512,
+        memoryMaxMb: 1536,
+        memoryStepMb: 512,
+        memoryPerCpuMinMb: 512,
+        memoryPerCpuMaxMb: 1536,
+      }),
+    );
+    await renderDialog(TEAM);
+
+    expectSize("1", "1.5");
+  });
+
   it("opens a personal create at the provider's smallest size", async () => {
     openCatalogue(provider("linux", ROOMY));
     await renderDialog(null);
