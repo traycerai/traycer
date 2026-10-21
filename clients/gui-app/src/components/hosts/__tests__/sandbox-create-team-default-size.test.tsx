@@ -278,6 +278,44 @@ describe("<SandboxCreateDialog /> default size", () => {
     expectSize("1", "1.5");
   });
 
+  it("opens a team create at the memory maximum the real rounding clamps to", async () => {
+    // 2 GB is above the 1.5 GB step grid's last point under a 2 GB maximum, so
+    // the create's own rounding clamps to the maximum itself, which is valid.
+    openCatalogue(
+      provider("linux", {
+        cpuMin: 1,
+        cpuMax: 16,
+        cpuStep: 1,
+        memoryMinMb: 1024,
+        memoryMaxMb: 2048,
+        memoryStepMb: 1536,
+        memoryPerCpuMinMb: 1024,
+        memoryPerCpuMaxMb: 8192,
+      }),
+    );
+    await renderDialog(TEAM);
+
+    expectSize("1", "2");
+  });
+
+  it("opens a team create at an off-grid vCPU maximum when only it allows 2 GB", async () => {
+    openCatalogue(
+      provider("linux", {
+        cpuMin: 1,
+        cpuMax: 1.5,
+        cpuStep: 1,
+        memoryMinMb: 1024,
+        memoryMaxMb: 65536,
+        memoryStepMb: 512,
+        memoryPerCpuMinMb: 1024,
+        memoryPerCpuMaxMb: 1536,
+      }),
+    );
+    await renderDialog(TEAM);
+
+    expectSize("1.5", "2");
+  });
+
   it("opens a personal create at the provider's smallest size", async () => {
     openCatalogue(provider("linux", ROOMY));
     await renderDialog(null);

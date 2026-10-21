@@ -236,15 +236,9 @@ interface SandboxFormState {
 
 /**
  * The size a create opens at: the provider's smallest for a personal
- * sandbox; for a team one, the smallest shape inside the provider's bounds
- * with at least 2 GB.
- *
- * The team shape walks the vCPU grid up from the minimum and, at each count,
- * takes the smallest memory on the memory lattice that reaches 2 GB and that
- * count's memory-per-vCPU range; the first count with one wins. Rounding the
- * memory after picking the vCPU count instead can leave the pair outside the
- * per-vCPU range. A provider that cannot reach 2 GB opens at its largest
- * valid memory, on the fewest vCPUs that allow it.
+ * sandbox. A team one opens at the smallest shape, under the same rounding
+ * and validation the create uses, that gives at least 2 GB; a provider that
+ * cannot reach 2 GB opens at its largest valid memory on the fewest vCPUs.
  */
 function defaultShape(
   bounds: SandboxShapeBounds,
@@ -259,37 +253,42 @@ function defaultShape(
   };
   if (belongsTo.kind === "personal") return smallest;
   let largestValid: SandboxShape | null = null;
-  for (let step = 0; ; step += 1) {
-    // Two decimals, as `roundUpToStep` rounds: the server's `cpus` column.
-    const cpus =
-      Math.round((bounds.cpuMin + step * bounds.cpuStep) * 100) / 100;
-    if (cpus > bounds.cpuMax) break;
-    const floorMb = Math.max(
-      bounds.memoryMinMb,
-      cpus * bounds.memoryPerCpuMinMb,
-    );
-    const ceilingMb = Math.min(
-      bounds.memoryMaxMb,
-      cpus * bounds.memoryPerCpuMaxMb,
-    );
-    const memoryMb = roundUpToStep(
-      Math.max(TEAM_DEFAULT_MEMORY_MB, floorMb),
-      bounds.memoryStepMb,
-      bounds.memoryMinMb,
-    );
-    if (memoryMb <= ceilingMb) return { cpus, memoryMb };
-    const largestMb =
-      bounds.memoryMinMb +
-      Math.floor((ceilingMb - bounds.memoryMinMb) / bounds.memoryStepMb) *
-        bounds.memoryStepMb;
-    if (
-      largestMb >= floorMb &&
-      (largestValid === null || largestMb > largestValid.memoryMb)
-    ) {
-      largestValid = { cpus, memoryMb: largestMb };
+  for (const cpus of cpuCandidates(bounds)) {
+    const shape = roundSandboxShape(bounds, {
+      cpus,
+      memoryMb: Math.max(
+        TEAM_DEFAULT_MEMORY_MB,
+        bounds.memoryMinMb,
+        cpus * bounds.memoryPerCpuMinMb,
+      ),
+    });
+    if (sandboxShapeProblem(bounds, shape) !== null) continue;
+    if (shape.memoryMb >= TEAM_DEFAULT_MEMORY_MB) return shape;
+    if (largestValid === null || shape.memoryMb > largestValid.memoryMb) {
+      largestValid = shape;
     }
   }
   return largestValid ?? smallest;
+}
+
+/**
+ * Every vCPU count a create can ask for, ascending: the grid from the
+ * minimum, and the maximum itself, which the rounding clamps to when it
+ * sits between steps.
+ */
+function cpuCandidates(bounds: SandboxShapeBounds): readonly number[] {
+  const candidates: number[] = [];
+  for (let step = 0; ; step += 1) {
+    const cpus = roundUpToStep(
+      bounds.cpuMin + step * bounds.cpuStep,
+      bounds.cpuStep,
+      bounds.cpuMin,
+    );
+    if (cpus > bounds.cpuMax) break;
+    candidates.push(cpus);
+  }
+  if (candidates.at(-1) !== bounds.cpuMax) candidates.push(bounds.cpuMax);
+  return candidates;
 }
 
 /** A shape as the form's vCPU and memory fields hold it. */
