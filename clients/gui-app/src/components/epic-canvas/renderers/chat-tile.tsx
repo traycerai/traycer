@@ -868,7 +868,7 @@ function ChatDeadTileBannerWithOffer(
         environmentOwned={environmentOwned}
         cloneAllowed={props.cloneAllowed}
         showsPublishedCopy={props.showsPublishedCopy}
-        continueTargetLabel={continues ? continueOffer.targetLabel : null}
+        continueTargetLabel={continueOffer.targetLabel}
         onClone={continues ? continueOffer.continueHere : offer.clone}
         cloning={offer.cloning || continueOffer.continuing}
         className={undefined}

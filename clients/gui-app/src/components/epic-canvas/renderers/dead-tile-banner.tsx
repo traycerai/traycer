@@ -447,7 +447,8 @@ export interface ChatDeadTileBannerProps {
   readonly showsPublishedCopy: boolean;
   /**
    * The sandbox a removed sandbox's agent continues on (`sandbox-removed`),
-   * by name; `null` for every other reason.
+   * by name, or `null` when there is none. Only the `sandbox-removed` copy
+   * reads it.
    */
   readonly continueTargetLabel: string | null;
   readonly onClone: () => void;
