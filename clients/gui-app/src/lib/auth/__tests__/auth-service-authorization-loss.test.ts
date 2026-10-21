@@ -1327,6 +1327,75 @@ describe("AuthService cloudAuthorized verdict propagation on in-place transition
     expect(service.getDeviceProgress()?.phase).toBe("waiting-approval");
   });
 
+  it("a refused live revalidation stands down for a sibling window's sign-in that lands while the check is in flight", async () => {
+    // The sibling's `signing-in` arrives as a projection only: it starts no
+    // attempt of ours and moves no identity generation, so the answer to the
+    // check already in flight still looks current. It must be read again after
+    // the await, or the refusal spends the refresh token and demotes the
+    // store over the projected attempt.
+    vi.useFakeTimers();
+    const { service, host } = makeService();
+    trackedServices.push(service);
+    await host.tokenStore.signIn(
+      { token: "stale-stored-token", refreshToken: "stale-stored-refresh" },
+      { id: "user-1", email: "test@example.com", name: "Test User" },
+    );
+    restoreFetch();
+    restoreFetch = installFetch(() =>
+      Promise.reject(new Error("connection refused")),
+    );
+
+    const start = service.start();
+    for (let retry = 1; retry < AUTH_FETCH_MAX_ATTEMPTS; retry += 1) {
+      await vi.advanceTimersByTimeAsync(authRetryDelayMs(retry));
+    }
+    await start;
+    expect(useAuthStore.getState().status).toBe("unverified");
+
+    const requests = { validation: 0, refresh: 0 };
+    let releaseValidation: (response: Response) => void = () => undefined;
+    const heldValidation = new Promise<Response>((resolve) => {
+      releaseValidation = resolve;
+    });
+    restoreFetch();
+    restoreFetch = installFetch((input) => {
+      const url = typeof input === "string" ? input : String(input);
+      if (url === VALIDATION_URL) {
+        requests.validation += 1;
+        return requests.validation === 1
+          ? heldValidation
+          : Promise.reject(new Error("unexpected second validation"));
+      }
+      if (url === REFRESH_URL) {
+        requests.refresh += 1;
+        return status(401);
+      }
+      return Promise.reject(new Error(`unexpected request to ${url}`));
+    });
+
+    const pending = service.revalidateCurrentContext();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(requests.validation).toBe(1);
+
+    await service.ingestProjectedSessionSnapshot({
+      status: "signing-in",
+      token: null,
+      profile: null,
+      contextMetadata: null,
+    });
+    expect(useAuthStore.getState().status).toBe("signing-in");
+
+    releaseValidation(new Response(null, { status: 401 }));
+    const outcome = await pending;
+
+    // The effects first: on the unfenced path these are the spend and the
+    // demotion, which the outcome alone would not show.
+    expect(requests.refresh).toBe(0);
+    expect(useAuthStore.getState().status).toBe("signing-in");
+    expect(service.getLastError()).toBeNull();
+    expect(outcome).toEqual({ kind: "superseded" });
+  });
+
   /**
    * `unverified` is a claim that there is a LOCAL PLANE worth holding the app
    * open for. A shell with no local host has none - and cannot substitute a

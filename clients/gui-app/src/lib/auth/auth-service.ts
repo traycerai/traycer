@@ -3266,8 +3266,7 @@ export class AuthService {
     // would promote it, either way taking the approval screen away while the
     // attempt's own result is still to land. A check started before the
     // attempt is fenced by the identity generation the attempt advanced.
-    const status = useAuthStore.getState().status;
-    if (this.activeAttempt !== null || status === "signing-in") {
+    if (this.isInteractiveAttemptInFlight()) {
       return { kind: "superseded" };
     }
     // A session authn has already refused, held open for its local plane.
@@ -3278,7 +3277,10 @@ export class AuthService {
     // one (a refresh every ~3 s, measured). The wake nudge stands down on the
     // same latch; a successful sign-in clears it. `signed-in` is excluded: it
     // holds a verdict, whatever the latch says.
-    if (this.sessionRecoveryTerminallyRejected && status === "unverified") {
+    if (
+      this.sessionRecoveryTerminallyRejected &&
+      useAuthStore.getState().status === "unverified"
+    ) {
       return { kind: "rejected" };
     }
     const currentUserId = ctx.identity.userId;
@@ -3289,6 +3291,14 @@ export class AuthService {
     const outcome = await this.validateToken(currentToken);
     if (!this.isIdentityCurrent(generation)) {
       return null;
+    }
+    // The stand-down again, after the await: a sibling window's `signing-in`
+    // arrives as a projection alone, with no attempt of ours and no identity
+    // generation advanced, so the fence above lets it through. Acting on the
+    // answer from here would spend the refresh token and could demote
+    // `unverified` over the projected attempt.
+    if (this.isInteractiveAttemptInFlight()) {
+      return { kind: "superseded" };
     }
 
     if (outcome.kind === "valid") {
@@ -4429,6 +4439,18 @@ export class AuthService {
       return { kind: "unauthorized" };
     }
     return this.runnerHost.respondLinkLogin(bearer, code, approve);
+  }
+
+  /**
+   * An interactive sign-in owns the session: one of this window's attempts, or
+   * a sibling window's `signing-in` projected here, which starts no attempt of
+   * ours. Read fresh after every await - the projection can land during one.
+   */
+  private isInteractiveAttemptInFlight(): boolean {
+    return (
+      this.activeAttempt !== null ||
+      useAuthStore.getState().status === "signing-in"
+    );
   }
 
   /**
