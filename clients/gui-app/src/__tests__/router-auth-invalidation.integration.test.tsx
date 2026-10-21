@@ -5,10 +5,9 @@ import {
   expect,
   it,
   onTestFinished,
-  vi,
-  type Mock,
 } from "vitest";
-import { act, cleanup, render, waitFor } from "@testing-library/react";
+import { Component, type ErrorInfo, type ReactNode } from "react";
+import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import {
   createMemoryHistory,
   createRootRoute,
@@ -17,29 +16,20 @@ import {
   RouterProvider,
   type AnyRouter,
 } from "@tanstack/react-router";
-import { bindAuthInvalidation, type AuthInvalidationRouter } from "@/router";
+import { bindAuthInvalidation } from "@/router";
 import { useAuthStore } from "@/stores/auth/auth-store";
 
 /**
- * Integration pin, against the REAL @tanstack/react-router, for the
- * cold-launch race `bindAuthInvalidation` exists to close: an auth flip that
- * lands while the router's very first load is still in flight (slow
- * `beforeLoad`, no match ever committed) must not strand the router at
- * `status: "pending"` forever.
- *
- * The fake-router unit tests in `router-auth-invalidation.test.ts` pin the
- * exact guard predicate and the coalescing behavior against a scripted
- * interface. This file instead drives the real router-core state machine
- * end to end, so a version bump that changes what `resolvedLocation` means
- * (or when provisional matches publish) fails here even if the fake stays
- * green.
+ * Integration pins, against the REAL @tanstack/react-router, for the auth
+ * flip that lands while the router's first load is still in flight. A second
+ * load started under that one either strands the router at `status:
+ * "pending"` (before anything commits) or crashes a rendered pending match
+ * with a falsy throw (once one has); see `bindAuthInvalidation`.
  *
  * The router is mounted for real via `<RouterProvider />` rather than driven
- * headlessly with `router.load()`. `resolvedLocation` is assigned by the
- * React `Transitioner` that `RouterProvider` renders (after render-ack, once
- * the match set commits) - a headless `router.load()` call never reaches
- * that code path, so this file's convergence assertion would hang forever
- * without a real mount.
+ * headlessly with `router.load()`: `onResolved` and `resolvedLocation` both
+ * come from the React `Transitioner` that `RouterProvider` renders, and a
+ * headless load never reaches it.
  */
 
 interface Deferred {
@@ -73,12 +63,18 @@ function TrivialPendingComponent(): null {
   return null;
 }
 
-function createTestRouter(beforeLoadGate: Deferred): AnyRouter {
+function createTestRouter(
+  beforeLoadGate: Deferred,
+  guardReads: Array<string | null>,
+): AnyRouter {
   const rootRoute = createRootRoute();
   const indexRoute = createRoute({
     getParentRoute: () => rootRoute,
     path: "/",
-    beforeLoad: () => beforeLoadGate.promise,
+    beforeLoad: () => {
+      guardReads.push(useAuthStore.getState().contextMetadata?.userId ?? null);
+      return beforeLoadGate.promise;
+    },
   });
   const routeTree = rootRoute.addChildren([indexRoute]);
   return createRouter({
@@ -93,41 +89,33 @@ function createTestRouter(beforeLoadGate: Deferred): AnyRouter {
   });
 }
 
-interface SpiedAdapter {
-  readonly adapter: AuthInvalidationRouter;
-  readonly load: Mock<() => Promise<void>>;
-  readonly invalidate: Mock<() => Promise<void>>;
+function IndexContent(): ReactNode {
+  return <p>index content</p>;
 }
 
 /**
- * Bridge to the narrowed `AuthInvalidationRouter` interface via an explicit
- * adapter (rather than passing `router` directly): the `state` getter below
- * re-reads `router.state` on every access, which matters because the guard
- * inspects the LATEST state at flip time, not a snapshot taken when the
- * adapter was constructed. `resolvedLocation` is optional on both the real
- * router-core type and this narrowed interface, so no bridging is required
- * there - the getter just forwards it as-is.
- *
- * `load` and `invalidate` are wrapped in spies (rather than passed through
- * directly) so the test can assert not just the router's eventual state but
- * WHICH of the two `bindAuthInvalidation` actually called, and in what order
- * - the guard's entire point is routing the auth change through `load()`
- * instead of `invalidate()` while the router is uncommitted.
+ * Stand-in for the app's root error boundary, above the router. React hands
+ * `componentDidCatch` whatever was thrown, falsy values included, so a route
+ * match that throws `undefined` is recorded as an `undefined` entry rather
+ * than being mistaken for "nothing was caught".
  */
-function toSpiedAuthInvalidationRouter(router: AnyRouter): SpiedAdapter {
-  const load = vi.fn<() => Promise<void>>(() => router.load());
-  const invalidate = vi.fn<() => Promise<void>>(() => router.invalidate());
-  const adapter: AuthInvalidationRouter = {
-    get state() {
-      return {
-        status: router.state.status,
-        resolvedLocation: router.state.resolvedLocation,
-      };
-    },
-    load,
-    invalidate,
-  };
-  return { adapter, load, invalidate };
+class CrashRecorder extends Component<
+  { readonly onCrash: (thrown: unknown) => void; readonly children: ReactNode },
+  { readonly crashed: boolean }
+> {
+  state = { crashed: false };
+
+  static getDerivedStateFromError(): { crashed: boolean } {
+    return { crashed: true };
+  }
+
+  componentDidCatch(thrown: unknown, _info: ErrorInfo): void {
+    this.props.onCrash(thrown);
+  }
+
+  render(): ReactNode {
+    return this.state.crashed ? null : this.props.children;
+  }
 }
 
 function resetAuthStore(): void {
@@ -150,38 +138,28 @@ describe("bindAuthInvalidation (real @tanstack/react-router)", () => {
     resetAuthStore();
   });
 
-  it("does not strand the router when an auth flip lands mid initial-load, and converges once the slow beforeLoad releases", async () => {
+  it("re-runs the guards once against the latest auth after the in-flight initial load resolves, however many flips landed in it", async () => {
     const beforeLoadGate = createDeferred();
-    const router = createTestRouter(beforeLoadGate);
-    const { adapter, load, invalidate } = toSpiedAuthInvalidationRouter(router);
-    const unsubscribe = bindAuthInvalidation(adapter);
+    const guardReads: Array<string | null> = [];
+    const router = createTestRouter(beforeLoadGate, guardReads);
+    const unsubscribe = bindAuthInvalidation(router);
     onTestFinished(() => unsubscribe());
 
-    // Mount the router for real. `<RouterProvider>`'s `Transitioner` kicks
-    // off the initial load itself on mount (straight against the router, not
-    // the adapter - see `toSpiedAuthInvalidationRouter` above, so it does not
-    // count toward the `load`/`invalidate` spy assertions below), and it is
-    // the only thing that ever assigns `resolvedLocation`. beforeLoad is
-    // blocked on the deferred, so this transaction never settles on its own,
-    // which keeps the first commit blocked for the assertions that follow.
+    // `<RouterProvider>`'s `Transitioner` starts the initial load on mount.
+    // beforeLoad is blocked on the deferred, so nothing commits until the
+    // gate is released.
     render(<RouterProvider router={router} />);
 
-    // Wait for router-core's pending-presentation timer (defaultPendingMs: 1)
-    // to fire. With `defaultPendingComponent` wired up, provisional matches
-    // are now non-empty - but the router has never committed, so
-    // `resolvedLocation` must still be undefined.
+    // Past `defaultPendingMs: 1` the provisional matches are published, but
+    // the router has never committed.
     await waitFor(() => {
       expect(router.state.status).toBe("pending");
       expect(router.state.matches.length).toBeGreaterThan(0);
       expect(router.state.resolvedLocation).toBeUndefined();
     });
+    expect(guardReads).toEqual([null]);
 
-    expect(load).not.toHaveBeenCalled();
-    expect(invalidate).not.toHaveBeenCalled();
-
-    // Drive a real auth flip while the router is in that uncommitted window.
-    // Without the fix this invalidate()s the in-flight load out of
-    // router-core's scheduler with nothing left to reschedule it.
+    // Two changes inside the same load: a sign-in, then a switch of user.
     act(() => {
       useAuthStore.setState({
         status: "signed-in",
@@ -193,30 +171,109 @@ describe("bindAuthInvalidation (real @tanstack/react-router)", () => {
         contextMetadata: { userId: "user-a", username: "user-a" },
       });
     });
+    act(() => {
+      useAuthStore.setState({
+        contextMetadata: { userId: "user-b", username: "user-b" },
+      });
+    });
+    // Neither started a load: the guard has still run only once.
+    expect(guardReads).toEqual([null]);
 
-    // zustand's `subscribe` listeners run synchronously inside `setState`,
-    // and the recovery path calls `router.load()` synchronously (before
-    // awaiting anything) - so by the time `setState` above returns, the
-    // guard has already routed the auth change through `load()`. The
-    // `beforeLoad` gate is still unresolved, so that load cannot have
-    // settled yet, which means `invalidate()` must not have been called.
-    expect(load).toHaveBeenCalledTimes(1);
-    expect(invalidate).not.toHaveBeenCalled();
-
-    // Release the slow beforeLoad now that the recovery has had a chance to
-    // route the auth change through load() instead of invalidate()ing the
-    // in-flight transaction directly.
     act(() => {
       beforeLoadGate.resolve();
     });
 
+    // The load converges, and the one follow-up invalidate re-runs the guard
+    // against the latest user.
     await waitFor(() => {
+      expect(guardReads).toEqual([null, "user-b"]);
       expect(router.state.status).toBe("idle");
       expect(router.state.resolvedLocation).not.toBeUndefined();
     });
+  });
 
-    // The recovery's post-settle invalidate has now had a chance to run -
-    // exactly once, per the coalescing guarantee in `bindAuthInvalidation`.
-    expect(invalidate).toHaveBeenCalledTimes(1);
+  it("starts no second load for an auth flip mid initial-load, so a match that finishes first never throws undefined", async () => {
+    const rootLoaderGate = createDeferred();
+    const indexLoaderGate = createDeferred();
+    const rootRoute = createRootRoute({ loader: () => rootLoaderGate.promise });
+    const indexRoute = createRoute({
+      getParentRoute: () => rootRoute,
+      path: "/",
+      loader: () => indexLoaderGate.promise,
+      component: IndexContent,
+    });
+    const router = createRouter({
+      routeTree: rootRoute.addChildren([indexRoute]),
+      history: createMemoryHistory({ initialEntries: ["/"] }),
+      // Cold-load shape: the pending UI is already committed when the flip
+      // lands, yet the flip and the first gate release both fall inside a
+      // second load's own `defaultPendingMs` window, before it commits.
+      defaultPendingMs: 50,
+      defaultPendingComponent: TrivialPendingComponent,
+      // The default 500ms hold on a pending UI would keep the loads running
+      // past that window and hide the race.
+      defaultPendingMinMs: 0,
+    });
+    const unsubscribe = bindAuthInvalidation(router);
+    onTestFinished(() => unsubscribe());
+
+    // `onBeforeLoad` fires once per `router.load()`, so this counts load
+    // starts from the router itself, whoever calls it.
+    let loadsStarted = 0;
+    onTestFinished(
+      router.subscribe("onBeforeLoad", () => {
+        loadsStarted += 1;
+      }),
+    );
+    const crashes: unknown[] = [];
+    render(
+      <CrashRecorder onCrash={(thrown) => crashes.push(thrown)}>
+        <RouterProvider router={router} />
+      </CrashRecorder>,
+    );
+
+    await waitFor(() => {
+      expect(router.state.status).toBe("pending");
+      expect(router.state.matches.length).toBeGreaterThan(0);
+      expect(router.state.resolvedLocation).toBeUndefined();
+    });
+    const loadsStartedBeforeFlip = loadsStarted;
+
+    act(() => {
+      useAuthStore.setState({
+        status: "signed-in",
+        profile: {
+          userId: "user-a",
+          userName: "user-a",
+          email: "user-a@example.com",
+        },
+        contextMetadata: { userId: "user-a", username: "user-a" },
+      });
+    });
+    const loadsStartedByFlip = loadsStarted - loadsStartedBeforeFlip;
+
+    // The root match finishes while the index match is still loading. Its
+    // suspended boundary retries against whatever the router left behind.
+    act(() => {
+      rootLoaderGate.resolve();
+    });
+    await waitFor(() => {
+      expect(router.getMatch("__root__/")?.status).toBe("success");
+    });
+    act(() => {
+      indexLoaderGate.resolve();
+    });
+
+    await waitFor(() => {
+      expect(
+        crashes.length > 0 || screen.queryByText("index content") !== null,
+      ).toBe(true);
+    });
+    expect(crashes).toEqual([]);
+    await waitFor(() => {
+      expect(router.state.status).toBe("idle");
+    });
+    expect(screen.getByText("index content")).toBeTruthy();
+    expect(loadsStartedByFlip).toBe(0);
   });
 });

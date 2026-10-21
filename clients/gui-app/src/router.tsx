@@ -68,71 +68,73 @@ export function createAppRouter(
 }
 
 export interface AuthInvalidationRouter {
-  readonly state: {
-    readonly status: "pending" | "idle";
-    /**
-     * Assigned once the first load's render is acknowledged (after its match
-     * set commits) and never cleared afterwards — `undefined` means no load
-     * has ever fully resolved, which conservatively includes the
-     * just-committed-but-unacknowledged instant. `matches` is NOT usable
-     * here: a cold load that outlives `defaultPendingMs` publishes
-     * provisional pending matches before anything commits.
-     */
-    readonly resolvedLocation?: unknown;
-  };
+  readonly state: { readonly status: "pending" | "idle" };
   invalidate: () => Promise<void> | void;
-  load: () => Promise<void> | void;
+  subscribe: (eventType: "onResolved", fn: () => void) => () => void;
 }
 
+/**
+ * Re-runs route guards when the auth status or the signed-in user changes,
+ * and never starts a router load while one is in flight.
+ *
+ * `router.invalidate()` is itself a `router.load()`, and a second load
+ * started under an in-flight one is unsafe on these router-core versions in
+ * both shapes it takes:
+ *
+ *  - Before anything commits (a cold launch, where stored tokens validate
+ *    while the initial load runs), the new load retires the in-flight one
+ *    inside router-core's scheduler and nothing reschedules it: the router
+ *    sits at `status: "pending"` forever behind a blank screen.
+ *  - Once a load has outlived `defaultPendingMs`, its pending matches are
+ *    rendered, and the second load's copies share `_nonReactive` with them.
+ *    The first match to finish resolves and clears the shared
+ *    `loadPromise`, a suspended match retries against the cleared promise
+ *    and throws `undefined`, and `CatchBoundary` lets a falsy error through
+ *    to the root error boundary. A fresh mobile install reaches this window
+ *    on nearly every launch.
+ *
+ * So an auth change that lands mid-load waits for the load to resolve and
+ * then invalidates once. Its guards read the auth snapshot that was current
+ * when they ran, possibly the stale one, and the follow-up invalidate corrects
+ * them against the latest. However many changes land in one load, they share
+ * that single invalidate.
+ */
 export function bindAuthInvalidation(
   router: AuthInvalidationRouter,
 ): () => void {
-  // At most one recovery load per uncommitted window, however many auth
-  // changes land inside it: `router.load()` on these router-core versions
-  // ABORTS its predecessor transaction rather than joining it, so issuing one
-  // per auth flip multiplies route passes (and each continuation's invalidate
-  // would fan out further).
-  let recovery: Promise<void> | null = null;
-  return useAuthStore.subscribe((state, prevState) => {
+  let disposed = false;
+  let disarm: (() => void) | null = null;
+  const invalidateWhenSettled = (): void => {
+    if (disposed) return;
+    if (router.state.status !== "pending") {
+      void router.invalidate();
+      return;
+    }
+    if (disarm !== null) return;
+    disarm = router.subscribe("onResolved", () => {
+      disarm?.();
+      disarm = null;
+      // The Transitioner emits `onResolved` BEFORE it sets `status: "idle"`,
+      // in the same layout effect. A load started inside this listener
+      // would be stamped idle while it runs, so it goes after that write.
+      queueMicrotask(invalidateWhenSettled);
+    });
+  };
+  const unsubscribe = useAuthStore.subscribe((state, prevState) => {
     if (
       state.status === prevState.status &&
       state.contextMetadata?.userId === prevState.contextMetadata?.userId
     ) {
       return;
     }
-    // On a cold launch the auth status flips (e.g. signed-out → signed-in as
-    // stored tokens validate) while the router's INITIAL load may still be in
-    // flight — no match set has ever committed. Invalidating in that window
-    // retires the in-flight load inside router-core's scheduler and nothing
-    // reschedules it: the router sits at `status: "pending"` forever and the
-    // app renders a permanently blank screen (no error, no pending component —
-    // there is no committed match to hang either on). A fresh mobile install
-    // hits this window on nearly every launch.
-    const uncommitted =
-      router.state.status === "pending" &&
-      router.state.resolvedLocation === undefined;
-    if (!uncommitted) {
-      void router.invalidate();
-      return;
-    }
-    if (recovery !== null) {
-      // The active recovery's post-settle invalidate re-runs route guards
-      // against the auth store's LATEST snapshot, so this later change is
-      // already covered.
-      return;
-    }
-    const invalidateAfterSettle = () => {
-      recovery = null;
-      // A rejected load still owes the auth change its recheck — invalidating
-      // on failure also gives the failed load a retry with the fresh auth
-      // snapshot.
-      void router.invalidate();
-    };
-    recovery = Promise.resolve(router.load()).then(
-      invalidateAfterSettle,
-      invalidateAfterSettle,
-    );
+    invalidateWhenSettled();
   });
+  return () => {
+    disposed = true;
+    unsubscribe();
+    disarm?.();
+    disarm = null;
+  };
 }
 
 function isElectronContext(): boolean {
@@ -193,10 +195,8 @@ function normalizeInitialRoute(initialRoute: string | null): string {
   return initialRoute;
 }
 
-export const router = createAppRouter(null, null);
-
 declare module "@tanstack/react-router" {
   interface Register {
-    router: typeof router;
+    router: AppRouter;
   }
 }
