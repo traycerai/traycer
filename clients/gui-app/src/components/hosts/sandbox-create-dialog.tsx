@@ -9,6 +9,7 @@ import {
   type SandboxCatalogueProvider,
   type SandboxCatalogueRegion,
   type SandboxOs,
+  type SandboxShapeBounds,
 } from "@traycer/protocol/host/sandbox-control";
 import {
   defaultBelongsTo,
@@ -75,6 +76,8 @@ import {
 } from "@/stores/settings/sandbox-create-dialog-store";
 
 const MB_PER_GIB = 1024;
+/** A team sandbox opens with at least this much memory. */
+const TEAM_DEFAULT_MEMORY_MB = 2 * MB_PER_GIB;
 const NAME_MAX_LENGTH = 191;
 
 /**
@@ -230,20 +233,55 @@ interface SandboxFormState {
   readonly idleMinutes: number;
 }
 
+/**
+ * The size a create opens at: the provider's smallest for a personal
+ * sandbox; for a team one, the smallest shape inside the provider's bounds
+ * with at least 2 GB, taking a vCPU step where the memory per vCPU needs it.
+ */
+function defaultShape(
+  bounds: SandboxShapeBounds,
+  belongsTo: SandboxCreateBelongsTo,
+): SandboxShape {
+  const smallestMemoryMb = Math.max(
+    bounds.memoryMinMb,
+    bounds.cpuMin * bounds.memoryPerCpuMinMb,
+  );
+  if (belongsTo.kind === "personal") {
+    return { cpus: bounds.cpuMin, memoryMb: smallestMemoryMb };
+  }
+  const { memoryMb } = roundSandboxShape(bounds, {
+    cpus: bounds.cpuMin,
+    memoryMb: Math.max(TEAM_DEFAULT_MEMORY_MB, smallestMemoryMb),
+  });
+  const { cpus } = roundSandboxShape(bounds, {
+    cpus: memoryMb / bounds.memoryPerCpuMaxMb,
+    memoryMb,
+  });
+  return roundSandboxShape(bounds, {
+    cpus,
+    memoryMb: Math.max(memoryMb, cpus * bounds.memoryPerCpuMinMb),
+  });
+}
+
+/** A shape as the form's vCPU and memory fields hold it. */
+function shapeFields(
+  shape: SandboxShape,
+): Pick<SandboxFormState, "cpus" | "memoryGb"> {
+  return {
+    cpus: String(shape.cpus),
+    memoryGb: String(shape.memoryMb / MB_PER_GIB),
+  };
+}
+
 function initialFormState(
   provider: SandboxCatalogueProvider,
   os: SandboxOs,
+  belongsTo: SandboxCreateBelongsTo,
 ): SandboxFormState {
-  const { shape } = provider;
-  const memoryMb = Math.max(
-    shape.memoryMinMb,
-    shape.cpuMin * shape.memoryPerCpuMinMb,
-  );
   return {
     name: "",
     os,
-    cpus: String(shape.cpuMin),
-    memoryGb: String(memoryMb / MB_PER_GIB),
+    ...shapeFields(defaultShape(provider.shape, belongsTo)),
     // The server's own default: its first priced region.
     region: provider.regions.at(0)?.id ?? "",
     idleMinutes: DEFAULT_IDLE_MINUTES,
@@ -258,6 +296,7 @@ function draftFormState(
   draft: SandboxCreateDraft | null,
   catalogue: SandboxCatalogue,
   initialOs: SandboxOs,
+  initialBelongsTo: SandboxCreateBelongsTo,
 ): SandboxFormState {
   if (draft !== null && offeredOses(catalogue).includes(draft.os)) {
     return {
@@ -269,7 +308,11 @@ function draftFormState(
       idleMinutes: draft.idleMinutes,
     };
   }
-  return initialFormState(providerFor(catalogue, initialOs), initialOs);
+  return initialFormState(
+    providerFor(catalogue, initialOs),
+    initialOs,
+    initialBelongsTo,
+  );
 }
 
 /**
@@ -293,7 +336,7 @@ function useSandboxCreateDraft(
     draft === null ? initialBelongsTo : draft.belongsTo,
   );
   const [form, setForm] = useState<SandboxFormState>(() =>
-    draftFormState(draft, catalogue, initialOs),
+    draftFormState(draft, catalogue, initialOs, initialBelongsTo),
   );
   useEffect(() => {
     setDraft({ ...form, belongsTo });
@@ -345,6 +388,7 @@ function submitHeld(
 interface SandboxOsSelectProps {
   readonly id: string;
   readonly catalogue: SandboxCatalogue;
+  readonly belongsTo: SandboxCreateBelongsTo;
   readonly form: SandboxFormState;
   readonly setForm: (form: SandboxFormState) => void;
 }
@@ -365,7 +409,11 @@ function SandboxOsSelect(props: SandboxOsSelectProps): ReactNode {
         const os = offeredOses(props.catalogue).find((o) => o === value);
         if (os === undefined) return;
         props.setForm({
-          ...initialFormState(providerFor(props.catalogue, os), os),
+          ...initialFormState(
+            providerFor(props.catalogue, os),
+            os,
+            props.belongsTo,
+          ),
           name: props.form.name,
           idleMinutes: props.form.idleMinutes,
         });
@@ -404,6 +452,7 @@ function formReplacement(
       <SandboxOsSelect
         id={osSelect.id}
         catalogue={osSelect.catalogue}
+        belongsTo={osSelect.belongsTo}
         form={osSelect.form}
         setForm={osSelect.setForm}
       />
@@ -500,6 +549,7 @@ function SandboxCreateForm(props: {
   const replacement = formReplacement(firstTeamTaskOffer, provider, {
     id: `${ids}-os`,
     catalogue: props.catalogue,
+    belongsTo,
     form,
     setForm,
     onDone: props.onDone,
@@ -545,7 +595,21 @@ function SandboxCreateForm(props: {
         teams={props.teams}
         team={team}
         target={target}
-        onChange={setBelongsTo}
+        onChange={(next) => {
+          setBelongsTo(next);
+          // An untouched size follows the new default; an edited one stays.
+          const previous = defaultShape(provider.shape, belongsTo);
+          if (
+            Number(form.cpus) !== previous.cpus ||
+            Number(form.memoryGb) * MB_PER_GIB !== previous.memoryMb
+          ) {
+            return;
+          }
+          setForm({
+            ...form,
+            ...shapeFields(defaultShape(provider.shape, next)),
+          });
+        }}
       />
       <div className="flex flex-col gap-1.5">
         <Label htmlFor={`${ids}-name`}>Name</Label>
@@ -562,6 +626,7 @@ function SandboxCreateForm(props: {
         <SandboxOsSelect
           id={`${ids}-os`}
           catalogue={props.catalogue}
+          belongsTo={belongsTo}
           form={form}
           setForm={setForm}
         />
