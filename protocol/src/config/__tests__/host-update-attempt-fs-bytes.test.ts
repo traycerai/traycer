@@ -3,6 +3,7 @@ import {
   chmod,
   mkdir,
   mkdtemp,
+  rename,
   rm,
   symlink,
   writeFile,
@@ -143,16 +144,17 @@ describe.each(variants)("readRegularFileBytesNoFollow ($name)", ({ read }) => {
 // Without the descriptor flags the open follows a link, so only the checks
 // around it can refuse one swapped in after the first lstat.
 describe.skipIf(isWindows)("readRegularFileBytesNoFollow swap at open", () => {
-  it("refuses a regular file replaced by a symlink to another regular file", async () => {
+  // The link names the same file, so the descriptor's identity matches the
+  // first lstat: only the lstat after the open sees the link.
+  it("refuses the same file moved aside and linked back in its place", async () => {
     __setRecordOpenPlatformForTest({ noFollow: 0, nonBlock: 0 });
     const dir = await freshDir();
     const path = join(dir, "record.bin");
-    const other = join(dir, "other.bin");
+    const moved = join(dir, "moved.bin");
     await writeFile(path, Buffer.from([1, 2, 3]));
-    await writeFile(other, Buffer.from([4, 5, 6]));
     __setBeforeRecordOpenHookForTest(async () => {
-      await rm(path);
-      await symlink(other, path);
+      await rename(path, moved);
+      await symlink(moved, path);
     });
 
     expect(await readRegularFileBytesNoFollow(path)).toEqual({

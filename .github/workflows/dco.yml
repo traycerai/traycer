@@ -14,9 +14,9 @@ permissions:
 jobs:
   dco:
     name: Signed-off-by
-    # A team PR into `main` runs no CI, and this workflow has no merge-time run
-    # (it reads a pull request's own commits), so a team commit's sign-off rests
-    # on the local commit hook. A fork PR, a bot PR and a PR into any other
+    # A team PR into `main` skips this job, and this workflow has no merge-time
+    # run (it reads a pull request's own commits), so a team commit's sign-off
+    # rests on the local commit hook. A fork PR, a bot PR and a PR into any other
     # branch are checked here in full.
     if: >-
       github.event_name != 'pull_request'
