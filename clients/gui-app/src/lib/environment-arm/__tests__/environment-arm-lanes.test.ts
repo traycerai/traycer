@@ -212,6 +212,27 @@ describe("createEnvironmentArmLanes", () => {
     expect(heard).toHaveBeenCalledTimes(1);
   });
 
+  it("lets a passive reader of held() subscribe before any lane exists and hear each change", () => {
+    const seen: Array<ReadonlyArray<readonly [string, State]>> = [];
+    const unsubscribe = lanes.subscribeHeld(() => {
+      seen.push(lanes.held());
+    });
+
+    const release = lanes.acquire(spec("k"));
+    expect(seen).toEqual([]);
+    sessions[0]?.emit(frameEnvelope(1, "a"), null);
+    expect(seen).toEqual([[["k", ["a"]]]]);
+
+    release();
+    expect(seen).toEqual([[["k", ["a"]]], []]);
+
+    unsubscribe();
+    lanes.acquire(spec("k"));
+    sessions[1]?.emit(frameEnvelope(1, "b"), null);
+    expect(seen).toEqual([[["k", ["a"]]], []]);
+    expect(lanes.held()).toEqual([["k", ["b"]]]);
+  });
+
   it("lists only the lanes someone holds", () => {
     const releaseA = lanes.acquire(spec("a"));
     lanes.acquire(spec("b"));
