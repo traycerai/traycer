@@ -154,6 +154,13 @@ vi.mock("@/components/epic-canvas/sidebar/epic-terminal-sidebar", () => ({
   TerminalsPanelBody: () => <div data-testid="epic-test-terminals-body" />,
 }));
 
+// The Simulators group under the browser rows reads its own host stream and
+// has its own suite (`epic-simulator-sidebar.test.tsx`); this one is about
+// the panels' mechanics, so the group renders nothing here.
+vi.mock("@/components/epic-canvas/sidebar/epic-simulator-sidebar", () => ({
+  SimulatorsSidebarGroup: () => null,
+}));
+
 vi.mock("@/components/epic-canvas/pr/pr-panel-body", () => ({
   PrPanelBody: () => <div data-testid="epic-test-pr-body" />,
 }));
