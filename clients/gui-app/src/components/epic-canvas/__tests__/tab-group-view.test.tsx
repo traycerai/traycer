@@ -185,6 +185,13 @@ vi.mock("@/components/epic-canvas/canvas/use-rename-canvas-tab", () => ({
   useRenameCanvasTab: () => () => undefined,
 }));
 
+// The tab menu's routing entry reads a chat session and mutates through a
+// QueryClient; this render-focused test provides neither, and the entry has its
+// own suite (chat-routing-menu.test.tsx).
+vi.mock("@/components/epic-canvas/canvas/chat-routing-menu", () => ({
+  ChatRoutingTabMenu: () => null,
+}));
+
 vi.mock("@/components/epic-canvas/canvas/browser-tab-presentation", () => ({
   useBrowserTabPresentation: () => null,
 }));
