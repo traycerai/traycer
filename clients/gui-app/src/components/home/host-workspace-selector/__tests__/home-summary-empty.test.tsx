@@ -718,6 +718,22 @@ describe("landing workspace summary empty state", () => {
     queryClient.clear();
   });
 
+  it("renders no Belongs to chip beside the host picker for a person in teams", () => {
+    useAuthStore
+      .getState()
+      .setSignedIn(
+        { userId: "user-landing", userName: "U", email: "u@example.com" },
+        { userId: "user-landing", username: "U" },
+        [{ teamId: "t1", slug: "acme", avatarUrl: null }],
+      );
+
+    const queryClient = renderControl("inline");
+
+    expect(screen.getByRole("button", { name: /^Host:/ })).toBeTruthy();
+    expect(screen.queryByTestId("landing-owner-chip")).toBeNull();
+    queryClient.clear();
+  });
+
   describe("inside a narrow composer workspace row", () => {
     afterEach(() => {
       vi.restoreAllMocks();

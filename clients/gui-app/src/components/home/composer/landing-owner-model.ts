@@ -6,15 +6,6 @@ import {
 import type { NegotiatedMethodVersion } from "@/lib/host/read-negotiated-method-version";
 import type { EpicShareableTeam } from "@/stores/auth/auth-store";
 
-/**
- * Who a new task belongs to, as the person picked it on the landing draft's
- * Belongs to chip. No pick yet is `null` in the store, and the owner then
- * follows the resolved host.
- */
-export type LandingOwnerChoice =
-  | { readonly kind: "personal" }
-  | { readonly kind: "team"; readonly teamId: string };
-
 /** A team a task can belong to, named by its slug. */
 export interface LandingOwnerTeam {
   readonly teamId: string;
@@ -22,18 +13,15 @@ export interface LandingOwnerTeam {
 }
 
 /**
- * The owner a create sends. An explicit pick wins; with none, the team that
- * owns the resolved host when it is one of the person's teams, else Personal.
- * A team the person is no longer in is Personal.
+ * The owner a create sends: the team that owns the resolved host when it is one
+ * of the person's teams, else Personal. A team the person is no longer in is
+ * Personal.
  */
 export function resolveLandingOwner(input: {
-  readonly choice: LandingOwnerChoice | null;
   readonly resolvedHostTeamId: string | null;
   readonly teams: ReadonlyArray<EpicShareableTeam>;
 }): LandingOwnerTeam | null {
-  if (input.choice?.kind === "personal") return null;
-  const teamId =
-    input.choice === null ? input.resolvedHostTeamId : input.choice.teamId;
+  const teamId = input.resolvedHostTeamId;
   if (teamId === null) return null;
   const team = input.teams.find((candidate) => candidate.teamId === teamId);
   return team === undefined ? null : { teamId, slug: team.slug };
@@ -68,12 +56,12 @@ export function teamCreateSignInLine(slug: string): string {
   return `Sign in to create a task for ${slug}.`;
 }
 
-/** The first-chat line under a team pick, verbatim. */
+/** The first-chat line under a team owner, verbatim. */
 export function teamFirstChatLine(slug: string): string {
   return `Chats here are visible to everyone in ${slug}`;
 }
 
-/** The `epic.create@1.3` `owner` for a pick: `null` is the person. */
+/** The `epic.create@1.3` `owner` for a resolved owner: `null` is the person. */
 export function epicCreateOwnerFor(
   owner: LandingOwnerTeam | null,
 ): EpicCreateOwner | null {
