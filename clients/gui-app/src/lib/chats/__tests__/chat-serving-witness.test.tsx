@@ -219,4 +219,50 @@ describe("a chat's serving witness across the chat reaching the environment arm"
     }
     witness.dispose();
   });
+
+  it("reopens when the row appears before the pool ends the pre-publication stream", () => {
+    const { client, witness, view } = setup();
+    expect(client.subscribes).toHaveLength(1);
+
+    state.armChats = [armRow(CHAT.chatId)];
+    view.rerender(<Tree witness={witness} />);
+    expect(client.subscribes).toHaveLength(1);
+
+    act(() => {
+      client.drivable[0]?.closeWith(NOT_VISIBLE);
+    });
+    expect(client.subscribes).toHaveLength(2);
+
+    readings.length = 0;
+    act(() => {
+      client.drivable[1]?.emit(servingFrame(LIVE), null);
+    });
+
+    const latest = new Map(readings.map((r) => [r.holder, r]));
+    expect([...latest.keys()].sort()).toEqual(["a", "b"]);
+    for (const reading of latest.values()) {
+      expect(reading.settled).toBe(true);
+      expect(reading.serving).toEqual(LIVE);
+    }
+    witness.dispose();
+  });
+
+  it("does not reopen again when the recovery stream is also refused", () => {
+    const { client, witness, view } = setup();
+
+    state.armChats = [armRow(CHAT.chatId)];
+    view.rerender(<Tree witness={witness} />);
+    act(() => {
+      client.drivable[0]?.closeWith(NOT_VISIBLE);
+    });
+    expect(client.subscribes).toHaveLength(2);
+
+    act(() => {
+      client.drivable[1]?.closeWith(NOT_VISIBLE);
+    });
+
+    expect(client.subscribes).toHaveLength(2);
+    expect(readings.at(-1)?.settled).toBe(false);
+    witness.dispose();
+  });
 });

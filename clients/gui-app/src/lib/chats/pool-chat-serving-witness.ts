@@ -37,7 +37,16 @@ interface Watched {
   refs: number;
   serving: ChatServing | null;
   session: IStreamSession | null;
+  /** Whether `session` has delivered a frame. */
+  heard: boolean;
+  /**
+   * The unanswered session the chat's publication arrived during, reopened
+   * once if the pool still ends it `CHAT_NOT_VISIBLE`.
+   */
+  publishedDuring: IStreamSession | null;
 }
+
+const CHAT_NOT_VISIBLE_CODE = "CHAT_NOT_VISIBLE";
 
 function watchKey(chat: ChatServingKey): string {
   return `${chat.epicId}\u0000${chat.chatId}`;
@@ -88,6 +97,8 @@ export class PoolChatServingWitness implements RetainingChatServingWitness {
         refs: 0,
         serving: null,
         session: null,
+        heard: false,
+        publishedDuring: null,
       };
       this.watched.set(key, watched);
     }
@@ -109,8 +120,15 @@ export class PoolChatServingWitness implements RetainingChatServingWitness {
   reopen(chat: ChatServingKey): void {
     const key = watchKey(chat);
     const watched = this.watched.get(key);
-    if (watched === undefined || watched.session !== null) return;
-    this.open(key, watched);
+    if (watched === undefined) return;
+    if (watched.session === null) {
+      this.open(key, watched);
+      return;
+    }
+    // The publication can arrive while the stream opened before it is still
+    // unanswered; that stream may yet end `CHAT_NOT_VISIBLE`, so the signal is
+    // kept for it. A stream that has delivered a frame is healthy and left alone.
+    if (!watched.heard) watched.publishedDuring = watched.session;
   }
 
   /**
@@ -146,23 +164,35 @@ export class PoolChatServingWitness implements RetainingChatServingWitness {
       chatId: watched.chatId,
     });
     watched.session = session;
+    watched.heard = false;
+    watched.publishedDuring = null;
     session.onServerFrame((envelope) => {
       const parsed =
         chatServingSubscribeV10.serverFrameSchema.safeParse(envelope);
       if (!parsed.success) return;
       const current = this.watched.get(key);
       if (current?.session !== session) return;
+      current.heard = true;
+      current.publishedDuring = null;
       current.serving = parsed.data.serving;
       this.notify();
     });
     // A fatal close is final: the pool ends the stream `CHAT_NOT_VISIBLE`
     // for a chat it cannot show yet, such as one a team host has not
     // published. The dead session is dropped so `reopen` (asked on
-    // publication) or the next first `retain` opens a fresh one.
+    // publication) or the next first `retain` opens a fresh one; a
+    // publication already heard while it was in flight reopens it here.
     session.onStatusChange((status, reason) => {
       if (status !== "closed" || reason?.kind !== "fatalError") return;
       const current = this.watched.get(key);
-      if (current?.session === session) current.session = null;
+      if (current?.session !== session) return;
+      current.session = null;
+      if (
+        current.publishedDuring === session &&
+        reason.details.code === CHAT_NOT_VISIBLE_CODE
+      ) {
+        this.open(key, current);
+      }
     });
   }
 
