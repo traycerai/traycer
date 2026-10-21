@@ -11,6 +11,7 @@ import type {
   PrDetailTileRef,
   PrDiffTileRef,
   PublishedChatTileRef,
+  SimulatorTileRef,
   SnapshotDiffTileRef,
   WorkspaceFileRef,
 } from "./types";
@@ -43,6 +44,7 @@ export interface TileKindToRefMap {
   readonly "pr-detail": PrDetailTileRef;
   readonly "pr-diff": PrDiffTileRef;
   readonly "epic-file": EpicFileTileRef;
+  readonly simulator: SimulatorTileRef;
   readonly blank: BlankTileRef;
 }
 

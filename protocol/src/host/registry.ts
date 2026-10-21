@@ -938,6 +938,25 @@ import {
 } from "@traycer/protocol/host/browser/contracts";
 import { browserDesktopControlV10 } from "@traycer/protocol/host/browser/desktop-control";
 import {
+  configSimulatorGetV10,
+  configSimulatorSetV10,
+  simulatorCloseV10,
+  simulatorListV10,
+  simulatorOpenV10,
+  simulatorRemoveToolsV10,
+  simulatorScreenshotV10,
+  simulatorShutdownV10,
+  simulatorStatusV10,
+} from "@traycer/protocol/host/simulator/contracts";
+import {
+  simulatorActionV10,
+  simulatorDetailV10,
+} from "@traycer/protocol/host/simulator/actions";
+import {
+  simulatorSessionsV10,
+  simulatorStreamV10,
+} from "@traycer/protocol/host/simulator/stream-contracts";
+import {
   sandboxEgressSubscribeV10,
   sandboxRepairGuestConfigurationV10,
 } from "@traycer/protocol/host/sandbox-egress";
@@ -6356,6 +6375,153 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
       versions: {
         0: {
           contract: configVisualizationSetV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  // The simulator domain (iOS Simulator / Android Emulator panel). Optional
+  // like `config.browser.*`: a host that predates it, or one whose machine
+  // can run neither platform, does not advertise these at all, and a client
+  // reads that absence as "no simulators here" rather than as a failure.
+  "config.simulator.get": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: configSimulatorGetV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "config.simulator.set": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: configSimulatorSetV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "simulator.list": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: simulatorListV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "simulator.open": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: simulatorOpenV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "simulator.close": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: simulatorCloseV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "simulator.shutdown": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: simulatorShutdownV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "simulator.screenshot": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: simulatorScreenshotV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "simulator.status": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: simulatorStatusV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "simulator.removeTools": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: simulatorRemoveToolsV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "simulator.detail": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: simulatorDetailV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "simulator.action": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: simulatorActionV10,
           upgradeFromPreviousVersion: null,
         },
       },
@@ -13837,6 +14003,30 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
         },
         1: {
           contract: browserScreencastV21,
+        },
+      },
+    },
+  },
+  // The simulator domain's two streams: the per-epic inventory and the
+  // per-viewer video and input relay. New names, never `browser.*` (that
+  // namespace is frozen); the released-stream-surface tests admit them under
+  // the subset rule, and the unary verbs stay off the released floor.
+  "simulator.sessions": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: simulatorSessionsV10,
+        },
+      },
+    },
+  },
+  "simulator.stream": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: simulatorStreamV10,
         },
       },
     },

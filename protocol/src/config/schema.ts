@@ -145,6 +145,36 @@ export const visualizationOnlyConfigSchema = lazySchema(() =>
 export type VisualizationConfig = z.infer<
   typeof visualizationOnlyConfigSchema
 >["visualization"];
+
+/**
+ * The `simulator` block in `~/.traycer/cli/config.json`: the one switch for
+ * mobile simulators (iOS Simulator / Android Emulator support). `enabled`
+ * installs the `simulator-tools` pack, runs the hub, shows the tile AND lets
+ * agents drive a simulator; there is no separate agent switch. It defaults
+ * OFF - unlike the browser switch this is a capability nobody had before the
+ * block existed, and turning it on installs software and grants agents the
+ * device, so an absent block must never read as on.
+ *
+ * Read and written on its own, never through `cliConfigSchema`, for the same
+ * reason the `visualization` block is: the top level of that schema is
+ * passthrough, so the block survives every other writer, and an unrelated
+ * defect elsewhere in the document cannot decide this gate.
+ */
+export const SIMULATOR_CONFIG_DEFAULT = {
+  enabled: false,
+} as const;
+export const simulatorOnlyConfigSchema = lazySchema(() =>
+  z.object({
+    simulator: z
+      .object({
+        enabled: z.boolean().default(false),
+      })
+      .default(SIMULATOR_CONFIG_DEFAULT),
+  }),
+);
+export type SimulatorConfig = z.infer<
+  typeof simulatorOnlyConfigSchema
+>["simulator"];
 /**
  * Bounds of `catalog.probeTimeoutSeconds`, in whole seconds. The default is
  * the bound the host used before the setting existed, so an install that has

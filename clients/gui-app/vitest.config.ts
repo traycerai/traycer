@@ -43,6 +43,10 @@ const MAX_TEST_WORKERS = Math.min(
 // were invisible for the same reason: the suite ran them uncompiled while the
 // desktop renderer compiles the whole tree, its dev server included (where
 // the freeze was seen).
+// `simulator-tile` keeps per-instance memory in render-time state writes
+// (whether its own `simulator.open` was answered, whether it has been live)
+// and reads a mutation's per-call callbacks; both are shapes the compiler
+// rewrites, so its suite runs compiled too.
 // `use-environment-members-query` read the query cache at render time to
 // walk its page chain; the compiler memoized that walk on the environment and
 // host alone, so a page that answered re-rendered the hook and got back the

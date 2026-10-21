@@ -15,6 +15,7 @@ import { chatPublicationDefinitiveReason } from "@/lib/chats/chat-publication-de
 import { DRAFT_BLOB_PUT_RESPONSE_TIMEOUT_MS } from "@/lib/drafts/draft-blob-transport-budget";
 import { CATALOG_LIST_RESPONSE_TIMEOUT_MS } from "@/lib/host-rpc-policy/catalog-list-response-timeout";
 import { PROVIDER_PACK_DISCOVERY_CHECK_TIMEOUT_MS } from "@/lib/host-rpc-policy/provider-pack-discovery-check-timeout";
+import { SIMULATOR_OPEN_RESPONSE_TIMEOUT_MS } from "@/lib/host-rpc-policy/simulator-open-response-timeout";
 import { RATE_LIMIT_USAGE_RESPONSE_TIMEOUT_MS } from "@/lib/rate-limits/rate-limit-timing";
 import { USAGE_SUMMARY_RESPONSE_TIMEOUT_MS } from "@/lib/usage-analytics/usage-summary-timing";
 
@@ -262,6 +263,24 @@ export const SPEECH_MODEL_INITIAL_ERROR_POLL_LANE: ConditionPollLane = {
 export const SPEECH_MODEL_STALE_ERROR_POLL_LANE: ConditionPollLane = {
   ...SPEECH_MODEL_DOWNLOADING_POLL_LANE,
   id: "speech-model.stale-error",
+};
+/**
+ * The simulator tools are downloading. `simulator.status` is Settings' only
+ * source of that progress, so its cadence is the progress bar's frame rate,
+ * as with the speech model above.
+ */
+export const SIMULATOR_PACK_INSTALLING_POLL_LANE: ConditionPollLane = {
+  id: "simulator-pack.installing",
+  initialDelayMs: 1_500,
+  maxDelayMs: 5 * SECOND_MS,
+};
+export const SIMULATOR_PACK_INITIAL_ERROR_POLL_LANE: ConditionPollLane = {
+  ...SIMULATOR_PACK_INSTALLING_POLL_LANE,
+  id: "simulator-pack.initial-error",
+};
+export const SIMULATOR_PACK_STALE_ERROR_POLL_LANE: ConditionPollLane = {
+  ...SIMULATOR_PACK_INSTALLING_POLL_LANE,
+  id: "simulator-pack.stale-error",
 };
 export const WORKTREE_SETUP_IN_FLIGHT_POLL_LANE: ConditionPollLane = {
   id: "worktree-binding.setup-in-flight",
@@ -2452,6 +2471,54 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
+  "config.simulator.get": { ...LATEST_SCHEDULING, poll: null },
+  "config.simulator.set": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // The simulator verbs: reads coalesce to the latest ask, every mutation is
+  // ordered. `open` waits on a boot, so its row below carries a longer
+  // response budget.
+  "simulator.list": { ...LATEST_SCHEDULING, poll: null },
+  // Settings' machine-wide read; polled only while the tools download.
+  "simulator.status": {
+    ...LATEST_SCHEDULING,
+    poll: defineConditionPolicy("simulator.status", {
+      classify: (data) =>
+        data?.packState.kind === "installing"
+          ? SIMULATOR_PACK_INSTALLING_POLL_LANE
+          : false,
+      initialErrorLane: SIMULATOR_PACK_INITIAL_ERROR_POLL_LANE,
+      staleDataErrorLane: SIMULATOR_PACK_STALE_ERROR_POLL_LANE,
+      resetLaneIds: NO_RESET_LANES,
+    }),
+  },
+  // Settings' Remove: a mutation on the host's store, ordered like the rest.
+  "simulator.removeTools": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // The budget is a PERMISSION (see `providers.refreshPackDiscovery`): a cold
+  // open answers after the boot, which the host bounds at three minutes, and
+  // only `useSimulatorOpenMutation` passing this same constant makes it apply.
+  "simulator.open": {
+    mode: "fifo",
+    joinResponseTimeoutMs: SIMULATOR_OPEN_RESPONSE_TIMEOUT_MS,
+    poll: null,
+  },
+  "simulator.close": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
+  "simulator.shutdown": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "simulator.screenshot": { ...LATEST_SCHEDULING, poll: null },
+  // The settings drawer: a read coalesces to the latest ask; actions are
+  // ordered so two toggles land in the order the person made them.
+  "simulator.detail": { ...LATEST_SCHEDULING, poll: null },
+  "simulator.action": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
   "config.catalog.get": { ...LATEST_SCHEDULING, poll: null },
   "config.catalog.set": {
     mode: "fifo",
