@@ -294,7 +294,7 @@ describe("<ArtifactFilterMenu />", () => {
     );
   });
 
-  // Page, Canvas and File are not in the create menu (they need a source file),
+  // HTML, Canvas and File are not in the create menu (they need a source file),
   // but they share the same per-kind icons the artifact rows draw.
   it("uses the artifact icon language in the Type filter detail", () => {
     renderMenu();
@@ -310,7 +310,7 @@ describe("<ArtifactFilterMenu />", () => {
       "Ticket",
       "Story",
       "Review",
-      "Page",
+      "HTML",
       "Canvas",
       "File",
     ]);
