@@ -16,8 +16,6 @@ import {
   hostRpcRouteOf,
   hostRpcServingTierHostId,
   type ChatServingKey,
-  type ChatServingVerdict,
-  type ChatServingWitness,
 } from "../host-rpc-routing";
 import {
   localEntry,
@@ -244,10 +242,6 @@ describe("chatServingHostId", () => {
     chatId: "chat-1",
   };
 
-  function witnessAnswering(verdict: ChatServingVerdict): ChatServingWitness {
-    return { verdictFor: () => verdict, subscribe: () => () => undefined };
-  }
-
   it("keeps the chat on its own host with no witness", () => {
     expect(chatServingHostId(chat, teamSandboxEntry, null, POOL_PLAN)).toBe(
       "chat-host",
@@ -259,50 +253,35 @@ describe("chatServingHostId", () => {
       chatServingHostId(
         chat,
         teamSandboxEntry,
-        witnessAnswering("at-rest"),
+        "at-rest",
         NO_POOL_HOST_RPC_TIER_PLAN,
       ),
     ).toBe("chat-host");
   });
 
-  it("never moves a personal host's chat, whatever the witness says", () => {
+  it("never moves a personal host's chat, whatever the verdict", () => {
     for (const host of [
       localEntry,
       personalRemoteEntry,
       personalSandboxEntry,
     ]) {
       for (const verdict of ["live", "at-rest", "unknown"] as const) {
-        expect(
-          chatServingHostId(chat, host, witnessAnswering(verdict), POOL_PLAN),
-        ).toBe("chat-host");
+        expect(chatServingHostId(chat, host, verdict, POOL_PLAN)).toBe(
+          "chat-host",
+        );
       }
     }
   });
 
   it("serves a team sandbox's chat from the sandbox while live and from the pool at rest or unknown", () => {
+    expect(chatServingHostId(chat, teamSandboxEntry, "live", POOL_PLAN)).toBe(
+      "chat-host",
+    );
     expect(
-      chatServingHostId(
-        chat,
-        teamSandboxEntry,
-        witnessAnswering("live"),
-        POOL_PLAN,
-      ),
-    ).toBe("chat-host");
-    expect(
-      chatServingHostId(
-        chat,
-        teamSandboxEntry,
-        witnessAnswering("at-rest"),
-        POOL_PLAN,
-      ),
+      chatServingHostId(chat, teamSandboxEntry, "at-rest", POOL_PLAN),
     ).toBe(POOL_HOST_ID);
     expect(
-      chatServingHostId(
-        chat,
-        teamSandboxEntry,
-        witnessAnswering("unknown"),
-        POOL_PLAN,
-      ),
+      chatServingHostId(chat, teamSandboxEntry, "unknown", POOL_PLAN),
     ).toBe(POOL_HOST_ID);
   });
 });

@@ -9,7 +9,10 @@ import type {
   StatusChangeHandler,
   StreamCloseReason,
 } from "@traycer-clients/shared/host-transport/i-stream-session";
-import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
+import {
+  POOL_HOST_ID,
+  type HostDirectoryEntry,
+} from "@traycer-clients/shared/host-client/host-directory";
 import type { ChatServingKey } from "@traycer-clients/shared/host-client/host-rpc-routing";
 import {
   poolEntry,
@@ -21,6 +24,7 @@ import type { ChatServing } from "@traycer/protocol/host/chat-serving/index";
 import {
   ChatServingWitnessContext,
   useChatServing,
+  useChatServingHostId,
   useChatServingSettled,
 } from "@/lib/chats/chat-serving-witness";
 import { PoolChatServingWitness } from "@/lib/chats/pool-chat-serving-witness";
@@ -284,6 +288,44 @@ describe("a chat's serving witness across the chat reaching the environment arm"
 
     expect(client.subscribes).toHaveLength(2);
     expect(readings.at(-1)?.settled).toBe(false);
+    witness.dispose();
+  });
+
+  it("moves the stream's host from the pool to the chat's host when a later frame says live", () => {
+    // The first render precedes every frame (unknown, read as at rest), and an
+    // at-rest frame follows; the live frame after both must still move it.
+    state.entry = remoteEntry(CHAT.hostId, sandboxFacts("team-1"));
+    const client = new StatusDrivableClient(true);
+    const witness = new PoolChatServingWitness();
+    witness.setStreamClient(client);
+    const peers: string[] = [];
+    function PeerProbe(): ReactNode {
+      peers.push(useChatServingHostId(CHAT));
+      return null;
+    }
+    render(
+      <ChatServingWitnessContext.Provider value={witness}>
+        <PeerProbe />
+      </ChatServingWitnessContext.Provider>,
+    );
+    expect(peers.at(-1)).toBe(POOL_HOST_ID);
+
+    act(() => {
+      client.drivable[0]?.emit(
+        servingFrame({
+          ownerHostId: CHAT.hostId,
+          state: "at-rest",
+          catchingUp: null,
+        }),
+        null,
+      );
+    });
+    expect(peers.at(-1)).toBe(POOL_HOST_ID);
+
+    act(() => {
+      client.drivable[0]?.emit(servingFrame(LIVE), null);
+    });
+    expect(peers.at(-1)).toBe(CHAT.hostId);
     witness.dispose();
   });
 });

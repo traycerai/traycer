@@ -10,6 +10,7 @@ import {
   isTeamSandboxHostDirectoryEntry,
   readProcessHostRpcTierPlan,
   type ChatServingKey,
+  type ChatServingVerdict,
 } from "@traycer-clients/shared/host-client/host-rpc-routing";
 import type { ChatServing } from "@traycer/protocol/host/chat-serving/index";
 import { useEnvironmentArmChats } from "@/hooks/environment/use-environment-arms";
@@ -95,19 +96,37 @@ export function useChatServingSettled(chat: ChatServingKey): boolean {
 }
 
 /**
+ * The witness's verdict for `chat` as a value, `null` in a build with no pool,
+ * re-read whenever the witness reports a change. Callers decide on this value
+ * and never on the witness, whose identity does not move with its verdicts.
+ */
+function useChatServingVerdict(
+  chat: ChatServingKey,
+): ChatServingVerdict | null {
+  const witness = use(ChatServingWitnessContext);
+  // Retains the chat while mounted, so the witness keeps hearing its state.
+  useChatServing(chat);
+  const subscribe = useCallback(
+    (listener: () => void): (() => void) =>
+      witness === null ? () => undefined : witness.subscribe(listener),
+    [witness],
+  );
+  return useSyncExternalStore(subscribe, () =>
+    witness === null ? null : witness.verdictFor(chat),
+  );
+}
+
+/**
  * The host id a chat's transcript stream is opened on (`chatServingHostId`),
  * re-read whenever the witness reports a change.
  */
 export function useChatServingHostId(chat: ChatServingKey): string {
-  const witness = use(ChatServingWitnessContext);
   const chatHost = useHostDirectoryEntry(chat.hostId);
-  // Subscribes (and retains the chat) only to re-render on a change; the pure
-  // decision below reads the verdict again.
-  useChatServing(chat);
+  const verdict = useChatServingVerdict(chat);
   return chatServingHostId(
     chat,
     chatHost,
-    witness,
+    verdict,
     readProcessHostRpcTierPlan(),
   );
 }

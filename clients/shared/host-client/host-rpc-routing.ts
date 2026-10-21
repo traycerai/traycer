@@ -257,22 +257,27 @@ export interface ChatServingWitness {
  * host holds the chat (D8), and cross-host continuation is a clone, never a
  * move. That is an invariant, not a default, and holds whatever the witness
  * says.
+ *
+ * `verdict` is the witness's answer for `chat`, `null` with no witness. It is
+ * the value and never the witness: a compiled caller memoizes on what it
+ * passes, and the witness keeps one identity while its verdicts move, so a
+ * caller handed the witness kept its first answer for good.
  */
 export function chatServingHostId(
   chat: ChatServingKey,
   chatHost: HostDirectoryEntry | null,
-  witness: ChatServingWitness | null,
+  verdict: ChatServingVerdict | null,
   plan: HostRpcTierPlan,
 ): string {
   if (
-    witness === null ||
+    verdict === null ||
     plan.pool === null ||
     chatHost === null ||
     !isTeamSandboxHostDirectoryEntry(chatHost)
   ) {
     return chat.hostId;
   }
-  return witness.verdictFor(chat) === "live" ? chat.hostId : POOL_HOST_ID;
+  return verdict === "live" ? chat.hostId : POOL_HOST_ID;
 }
 
 export const HOST_UNARY_RPC_ROUTES = {
