@@ -319,10 +319,13 @@ export const APPEARANCE = defineSettingsSection("appearance", {
     availableWhen: alwaysAvailable,
     keywords: ["diff", "changes", "git", "review", "patch", "file edit"],
   },
+  // A contributor, not an entry: the row is withheld in a narrow window
+  // (`DiffViewerSettingsSection`), so a search hit lands on the always-rendered
+  // group instead of waiting for an element that is not there.
   diffLayout: {
     kind: "row",
     group: "diffViewer",
-    search: { anchor: "appearance-diff-layout" },
+    search: { contributesTo: "diffViewer" },
     label: "Layout",
     description:
       "Old and new side by side, or in one column. File edits in chat always use one column.",
