@@ -1,4 +1,5 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { createStore } from "zustand/vanilla";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ChatRunSettings } from "@traycer/protocol/persistence/epic/schemas";
 import { chatRecordSchema } from "@traycer/protocol/host/agent/gui/subscribe-windowed";
@@ -7,12 +8,33 @@ import {
   ContextMenuContent,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
-import { ChatRoutingContextMenuGroup } from "@/components/epic-canvas/canvas/chat-routing-menu";
+import {
+  ChatRoutingContextMenuGroup,
+  ChatRoutingTabMenu,
+} from "@/components/epic-canvas/canvas/chat-routing-menu";
 import {
   agentConfigureCarriesRouting,
   buildRoutingConfigureRequest,
   chatRoutingOf,
 } from "@/lib/chat/chat-routing-setting";
+
+const hoisted = vi.hoisted(() => ({
+  session: { current: null as { store: unknown } | null },
+  mutate: vi.fn(),
+}));
+
+vi.mock("@/lib/registries/chat-session-registry", () => ({
+  getChatSessionRegistry: () => ({ peek: () => hoisted.session.current }),
+}));
+vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
+  useHostClientForHostId: () => null,
+}));
+vi.mock("@/hooks/host/use-host-supports-method", () => ({
+  useHostMethodSchemaVersion: () => ({ major: 7, minor: 1 }),
+}));
+vi.mock("@/hooks/agent/use-configure-agent-mutation", () => ({
+  useAgentConfigure: () => ({ mutate: hoisted.mutate, isPending: false }),
+}));
 
 const SETTINGS: ChatRunSettings = {
   harnessId: "claude",
@@ -159,5 +181,63 @@ describe("the setting in the tab menu", () => {
     );
 
     expect(onChange).toHaveBeenCalledWith("hold");
+  });
+});
+
+describe("the setting for an open chat", () => {
+  afterEach(() => {
+    cleanup();
+    hoisted.mutate.mockReset();
+    hoisted.session.current = null;
+  });
+
+  function openFor(role: "owner" | "viewer") {
+    hoisted.session.current = {
+      store: createStore(() => ({
+        chat: { id: "chat-1", settings: SETTINGS, routing: "policy" },
+        access: { role, canAct: role === "owner" },
+      })),
+    };
+    render(
+      <ContextMenu>
+        <ContextMenuTrigger>
+          <span data-testid="tab">tab</span>
+        </ContextMenuTrigger>
+        <ContextMenuContent>
+          <ChatRoutingTabMenu epicId="epic-1" chatId="chat-1" hostId="host-1" />
+        </ContextMenuContent>
+      </ContextMenu>,
+    );
+    fireEvent.contextMenu(screen.getByTestId("tab"));
+  }
+
+  it("sends the chat's own restated tuple with the new routing when its owner picks it", async () => {
+    openFor("owner");
+
+    const trigger = await screen.findByText("On a usage limit or error");
+    fireEvent.keyDown(trigger, { key: "ArrowRight" });
+    fireEvent.click(
+      await screen.findByRole("menuitemradio", { name: "Wait it out here" }),
+    );
+
+    expect(hoisted.mutate).toHaveBeenCalledWith({
+      epicId: "epic-1",
+      senderAgentId: "chat-1",
+      agentId: "chat-1",
+      harnessId: "claude",
+      model: "claude-sonnet-4-5",
+      profileSelection: { kind: "profile", profileId: "work" },
+      reasoningEffort: "high",
+      fastMode: false,
+      permissionMode: null,
+      routing: "hold",
+    });
+  });
+
+  it("cannot be changed from a chat shared with the person as a viewer", async () => {
+    openFor("viewer");
+
+    const trigger = await screen.findByText("On a usage limit or error");
+    expect(trigger.closest("[data-disabled]")).not.toBeNull();
   });
 });

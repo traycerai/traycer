@@ -65,9 +65,10 @@ interface ChatRoutingTabMenuProps {
 
 /**
  * The tab menu's entry for one chat. Reads the chat's record from the session
- * the tab already holds and offers nothing when there is none to read, the
- * host's `agent.configure` predates the field, or the chat has no run tuple
- * yet to restate.
+ * the tab already holds and offers nothing when there is none to read or the
+ * host's `agent.configure` predates the field. It is shown but not enabled for
+ * a chat the person does not own (the host refuses to configure one) and for
+ * a chat with no run tuple yet to restate.
  */
 export function ChatRoutingTabMenu(props: ChatRoutingTabMenuProps) {
   const { epicId, chatId, hostId } = props;
@@ -79,6 +80,11 @@ export function ChatRoutingTabMenu(props: ChatRoutingTabMenuProps) {
     handle === null ? NO_SUBSCRIBE : handle.store.subscribe,
     () => (handle === null ? null : handle.store.getState().chat),
   );
+  const role = useSyncExternalStore(
+    handle === null ? NO_SUBSCRIBE : handle.store.subscribe,
+    () =>
+      handle === null ? null : (handle.store.getState().access?.role ?? null),
+  );
   const client = useHostClientForHostId(hostId);
   const configure = useAgentConfigure(client);
   const version = useHostMethodSchemaVersion(hostId, "agent.configure");
@@ -87,7 +93,7 @@ export function ChatRoutingTabMenu(props: ChatRoutingTabMenuProps) {
   return (
     <ChatRoutingContextMenuGroup
       value={chatRoutingOf(chat)}
-      disabled={settings === null || configure.isPending}
+      disabled={role !== "owner" || settings === null || configure.isPending}
       onChange={(routing) => {
         const request = buildRoutingConfigureRequest({
           epicId,
