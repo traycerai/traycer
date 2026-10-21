@@ -402,7 +402,8 @@ export type ChatDeadTileBannerReason =
 export interface ChatDeadTileBannerProps {
   /**
    * The bound host's label, or `null` while the directory has not resolved
-   * one - the copy then says "the host" rather than printing a raw id.
+   * one - the copy then says "the host" (a removed sandbox, "This agent's
+   * sandbox") rather than printing a raw id.
    */
   readonly hostLabel: string | null;
   readonly reason: ChatDeadTileBannerReason;
@@ -473,7 +474,7 @@ export interface ChatDeadTileBannerProps {
  * promise rather than be handed it and have it taken back a sentence later.
  * Adding a fifth clone-offering reason cannot silently skip the variant.
  *
- * Each sentence takes the host as `tileHostName` names it: quoted, or "the
+ * Each sentence takes the host as `bannerHostName` names it: quoted, or "the
  * host" while no label has resolved; and the sandbox a removed sandbox's agent
  * continues on, which only that reason names.
  */
@@ -713,15 +714,29 @@ function foreignOwnerReport(reason: ChatDeadTileBannerReason): {
  */
 function ownChatMessage(
   copy: ChatDeadTileBannerCopy,
-  hostLabel: string | null,
+  host: string,
   target: string,
   cloneAllowed: boolean,
 ): ReactNode {
-  const host = tileHostName(hostLabel);
   if (copy.offersClone && !cloneAllowed) {
     return copy.messageWithoutClone(host);
   }
   return copy.message(host, target);
+}
+
+/**
+ * The host as the own-chat sentence names it. A removed sandbox opens its
+ * sentence, and "the host was removed" names no machine a person can find,
+ * so an unresolved label reads as the agent's sandbox there.
+ */
+function bannerHostName(
+  reason: ChatDeadTileBannerReason,
+  hostLabel: string | null,
+): string {
+  if (reason === "sandbox-removed" && hostLabel === null) {
+    return "This agent's sandbox";
+  }
+  return tileHostName(hostLabel);
 }
 
 /**
@@ -792,7 +807,12 @@ export function ChatDeadTileBanner(props: ChatDeadTileBannerProps): ReactNode {
     >
       <span className="min-w-0 flex-1">
         {swapped === null
-          ? ownChatMessage(copy, props.hostLabel, target, props.cloneAllowed)
+          ? ownChatMessage(
+              copy,
+              bannerHostName(props.reason, props.hostLabel),
+              target,
+              props.cloneAllowed,
+            )
           : swapped.message}
       </span>
       {copy.offersClone && props.cloneAllowed ? (

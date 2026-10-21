@@ -19,6 +19,7 @@ import { useHostReachability } from "@/hooks/agent/use-host-reachability";
 import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
 import { makePublishedChatTileRef } from "@/stores/epics/canvas/tile-schema/published-chat-tile";
 import { ChatDeadTileBannerContainer } from "@/components/epic-canvas/renderers/chat-tile";
+import { chatTileHostLabel } from "@/components/epic-canvas/renderers/chat-pre-content";
 import {
   ChatCatchingUpBanner,
   ChatDeadTileBanner,
@@ -831,7 +832,7 @@ function usePublishedChatFallbackRef(args: {
    * fail independently (cold-review finding).
    */
   readonly fallbackRef: PublishedChatTileRef | null;
-  readonly ownerHostLabel: string;
+  readonly ownerHostLabel: string | null;
   readonly bannerReason: ChatDeadTileBannerReason | null;
   readonly isCloudKnown: boolean;
   readonly cloudListAuthorizesChatAbsence: boolean;
@@ -941,7 +942,7 @@ function usePublishedChatFallbackRef(args: {
   );
   return {
     fallbackRef,
-    ownerHostLabel: reachability.hostLabel,
+    ownerHostLabel: chatTileHostLabel(reachability, activeTab.hostId),
     bannerReason,
     isCloudKnown: cloudChatRecord !== null,
     cloudListAuthorizesChatAbsence: cloudChatListAuthorizesRecordSweep(

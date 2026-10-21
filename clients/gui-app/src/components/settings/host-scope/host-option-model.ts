@@ -672,8 +672,22 @@ export function appWideHostOptions(
   const groups = groupHostOptions(hosts, false, false, keepHostId);
   return [
     ...groups.personal,
-    ...groups.sandboxes.filter(
-      (host) => host.sandbox === null || !host.sandbox.teamOwned,
-    ),
+    ...groups.sandboxes.filter((host) => !isTeamSandboxOption(host)),
   ];
+}
+
+/**
+ * The rows the Start Page composer offers: every row but a team's sandbox. A
+ * team sandbox's chats live in a cloud epic the team can read, and a task
+ * started from the Start Page is not one, so the team could read none of
+ * what an agent started there did.
+ */
+export function startPageHostOptions(
+  hosts: readonly HostScopeOption[],
+): readonly HostScopeOption[] {
+  return hosts.filter((host) => !isTeamSandboxOption(host));
+}
+
+function isTeamSandboxOption(host: HostScopeOption): boolean {
+  return host.sandbox !== null && host.sandbox.teamOwned;
 }

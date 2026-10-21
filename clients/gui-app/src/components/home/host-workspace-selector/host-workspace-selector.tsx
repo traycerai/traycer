@@ -20,9 +20,13 @@ import { HostSection, WorkspaceHostSwitcher } from "./host-section";
 import { useHostOptions } from "@/components/settings/host-scope/use-host-options";
 import {
   findHostOption,
+  type HostScopeOption,
   unavailableHostOption,
 } from "@/components/settings/host-scope/host-scope-model";
-import { NO_HOST_OPTION_REFUSALS } from "@/components/settings/host-scope/host-option-model";
+import {
+  NO_HOST_OPTION_REFUSALS,
+  startPageHostOptions,
+} from "@/components/settings/host-scope/host-option-model";
 import { activeRunNoticeFor } from "./active-run-notice";
 import type { PreparedWorkspaceFolder } from "@traycer/protocol/host/epic/unary-schemas";
 import type {
@@ -443,6 +447,13 @@ type ActiveHostWorkspaceControlsProps = {
   readonly disabled: boolean;
 };
 
+function hostsForStagingSurface(
+  stagingKey: WorktreeStagingKey,
+  hosts: readonly HostScopeOption[],
+): readonly HostScopeOption[] {
+  return stagingKey.surface === "landing" ? startPageHostOptions(hosts) : hosts;
+}
+
 export function ActiveHostWorkspaceControls(
   props: ActiveHostWorkspaceControlsProps,
 ) {
@@ -490,9 +501,14 @@ export function ActiveHostWorkspaceControls(
   //
   // A FIXED scope is pinned to one machine — the source agent's — so the list
   // is that host alone. It resolves out of the same merged list, and only falls
-  // back to a stand-in row when the list has never heard of it.
+  // back to a stand-in row when the list has never heard of it. The Start Page
+  // lists no team sandbox (`startPageHostOptions`).
   const hostOptions = useHostOptions();
-  const listedHostOption = findHostOption(hostOptions.hosts, activeHostId);
+  const listedHosts = hostsForStagingSurface(
+    props.stagingKey,
+    hostOptions.hosts,
+  );
+  const listedHostOption = findHostOption(listedHosts, activeHostId);
   const selectedHostOption =
     activeHostId === null
       ? null
@@ -501,7 +517,7 @@ export function ActiveHostWorkspaceControls(
     props.hostScope,
     selectedHostOption,
     listedHostOption,
-    hostOptions.hosts,
+    listedHosts,
   );
   const homeWorkspaceSource = useHomeWorkspaceSource(
     props.stagingKey,
