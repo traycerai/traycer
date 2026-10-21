@@ -51,8 +51,12 @@ const MAX_TEST_WORKERS = Math.min(
 // walk its page chain; the compiler memoized that walk on the environment and
 // host alone, so a page that answered re-rendered the hook and got back the
 // first render's cursors - a team's second page was never asked for.
+// `use-git-list-changed-files-subscription` read its shared entry's last
+// frame at render time and re-rendered through a discarded reducer, so the
+// compiled hook kept the entry's first answer: a git error or a closed stream
+// never reached the panel, which stayed pending.
 const REACT_COMPILER_REGRESSION_FILES =
-  /[/\\](?:composer-prompt-editor|use-workspace-file-list-subscription|shared-stream-subscription|use-header-tabs|use-pr-(?:list|detail)-subscription|auth-brand-splash|auth-landing-page|use-auth-splash-cover|relative-time|routing-card|use-environment-members-query)\.(?:ts|tsx)$/;
+  /[/\\](?:composer-prompt-editor|use-workspace-file-list-subscription|shared-stream-subscription|use-header-tabs|use-pr-(?:list|detail)-subscription|auth-brand-splash|auth-landing-page|use-auth-splash-cover|relative-time|routing-card|use-environment-members-query|use-git-list-changed-files-subscription)\.(?:ts|tsx)$/;
 
 export default defineConfig({
   // Run the affected composer boundary through the packaged desktop
