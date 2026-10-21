@@ -70,11 +70,23 @@ export function chatSearchCoverage(
       chat.ownerHostId !== searchHostId ||
       chat.identity.ownerUserId !== input.viewerId,
   ).length;
-  return count === 0 ? COMPLETE : { kind: "elsewhere", count };
+  return count === 0 ? COMPLETE : elsewhere(count);
 }
 
+// One object per answer, so an unchanged answer is the same value and can be
+// read as an external store's snapshot (`useChatSearchCoverage`).
 const UNKNOWN: ChatSearchCoverage = { kind: "unknown" };
 const COMPLETE: ChatSearchCoverage = { kind: "complete" };
+const ELSEWHERE = new Map<number, ChatSearchCoverage>();
+
+function elsewhere(count: number): ChatSearchCoverage {
+  let answer = ELSEWHERE.get(count);
+  if (answer === undefined) {
+    answer = { kind: "elsewhere", count };
+    ELSEWHERE.set(count, answer);
+  }
+  return answer;
+}
 
 const LIST_CLOUD_CHATS_METHOD = "epic.listCloudChats";
 const ENVIRONMENT_LIST_METHOD = "environment.list";

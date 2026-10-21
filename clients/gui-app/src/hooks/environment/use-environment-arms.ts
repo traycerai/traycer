@@ -244,6 +244,13 @@ export function heldEnvironmentArmChats(
   return { settledEnvironmentIds, chats };
 }
 
+/** Hears every change of the arm chats {@link heldEnvironmentArmChats} reads. */
+export function subscribeHeldEnvironmentArmChats(
+  listener: () => void,
+): () => void {
+  return chatLanes.subscribeHeld(listener);
+}
+
 // ---- plain terminals ------------------------------------------------------ //
 
 interface TerminalsState {

@@ -89,7 +89,7 @@ function useServedAtRest(
     chatServingHostId(
       { hostId, ...chat },
       entry,
-      witness,
+      verdict,
       readProcessHostRpcTierPlan(),
     ) !== hostId
   );
