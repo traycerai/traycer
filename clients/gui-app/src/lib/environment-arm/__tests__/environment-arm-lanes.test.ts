@@ -47,6 +47,14 @@ const fatal = (code: string): StreamCloseReason => ({
   },
 });
 
+/** A session whose fatal close is already terminal when the listener attaches. */
+class ClosedOnAttachSession extends ArmSession {
+  override onStatusChange(handler: StatusChangeHandler): void {
+    super.onStatusChange(handler);
+    this.closeWith(fatal("FORBIDDEN"));
+  }
+}
+
 const frameEnvelope = (
   generation: number,
   value: string,
@@ -231,6 +239,25 @@ describe("createEnvironmentArmLanes", () => {
     sessions[1]?.emit(frameEnvelope(1, "b"), null);
     expect(seen).toEqual([[["k", ["a"]]], []]);
     expect(lanes.held()).toEqual([["k", ["b"]]]);
+  });
+
+  it("shows an arm that ended while it opened in held() at the last notification", () => {
+    const seen: Array<ReadonlyArray<readonly [string, State]>> = [];
+    lanes.subscribeHeld(() => {
+      seen.push(lanes.held());
+    });
+
+    lanes.acquire({
+      ...spec("k"),
+      open: () => {
+        const session = new ClosedOnAttachSession();
+        sessions.push(session);
+        return session;
+      },
+    });
+
+    expect(seen.at(-1)).toEqual([["k", ["ended"]]]);
+    expect(lanes.read("k", [])).toEqual(["ended"]);
   });
 
   it("lists only the lanes someone holds", () => {

@@ -183,6 +183,9 @@ export function createEnvironmentArmLanes<State, Frame>(): EnvironmentArmLanes<
       if (lane === undefined) {
         lane = openLane(spec, () => notify(spec.key));
         lanes.set(spec.key, lane);
+        // A stream can end while it opens (a close replayed synchronously),
+        // publishing before the lane is in `held()`: told again once it is.
+        if (lane.state !== spec.initial) notify(spec.key);
       }
       lane.refs += 1;
       const held = lane;
