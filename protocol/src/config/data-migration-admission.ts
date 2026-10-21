@@ -1,11 +1,5 @@
 import { randomUUID } from "node:crypto";
-import {
-  lstatSync,
-  readdirSync,
-  readFileSync,
-  rmSync,
-  statSync,
-} from "node:fs";
+import { lstatSync, readdirSync, rmSync, statSync } from "node:fs";
 import { link, mkdir, open, rm, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import { z } from "zod";
@@ -36,6 +30,7 @@ import {
   type StartupGateInput,
 } from "./data-bootstrap-records";
 import type { DataRootPlatform, DataRootResolution } from "./data-root";
+import { readRegularFileBytesNoFollowSync } from "./host-update-attempt-fs";
 import {
   composeAttemptHolderVerdict,
   type AttemptHolderLivenessVerdict,
@@ -195,14 +190,10 @@ type LockRead =
     };
 
 function readLockFileSync(path: string): LockRead {
-  let raw: string;
-  try {
-    if (!lstatSync(path).isFile()) return { kind: "corrupt", raw: "" };
-    raw = readFileSync(path, "utf8");
-  } catch (error) {
-    if (errorCode(error) === "ENOENT") return { kind: "gone" };
-    throw error;
-  }
+  const read = readRegularFileBytesNoFollowSync(path);
+  if (read.kind === "absent") return { kind: "gone" };
+  if (read.kind === "not-regular") return { kind: "corrupt", raw: "" };
+  const raw = read.bytes.toString("utf8");
   try {
     return {
       kind: "held",
@@ -711,13 +702,14 @@ function listAdmissionEntryIds(bootstrapDir: string): string[] {
 
 function readAdmissionEntry(path: string): AdmissionEntry | null | "gone" {
   try {
-    if (!lstatSync(path).isFile()) return null;
+    const read = readRegularFileBytesNoFollowSync(path);
+    if (read.kind === "absent") return "gone";
+    if (read.kind === "not-regular") return null;
     const parsed = admissionEntrySchema.safeParse(
-      JSON.parse(readFileSync(path, "utf8")),
+      JSON.parse(read.bytes.toString("utf8")),
     );
     return parsed.success ? parsed.data : null;
-  } catch (error) {
-    if (errorCode(error) === "ENOENT") return "gone";
+  } catch {
     return null;
   }
 }

@@ -49,6 +49,7 @@ on:
       - Real supervisor (macOS launchd integration)
       - CodeQL
       - Secret scan
+      - Gradle wrapper
       - Scorecard supply-chain security
     types: [completed]
     branches: [main]

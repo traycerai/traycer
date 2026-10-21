@@ -1,11 +1,11 @@
 // Pins the contract of the pull-request gate: a team PR into `main` starts no
-// CI job (the merge to `main` runs everything once), and a fork PR, a bot PR
-// or a PR into any other branch runs every check. The workflows are PARSED,
-// never pattern-matched, so a reformat of the YAML cannot hide a job that
-// lost its gate. It also pins what keeps a merge run honest: no push run can
-// be cancelled by a later one, every push run narrows against the last GREEN
-// push (scripts/ci-last-green-sha.sh), and trunk-red watches every push
-// workflow.
+// CI job but the CodeQL scan (the merge to `main` runs everything once), and a
+// fork PR, a bot PR or a PR into any other branch runs every check. The
+// workflows are PARSED, never pattern-matched, so a reformat of the YAML
+// cannot hide a job that lost its gate. It also pins what keeps a merge run
+// honest: no push run can be cancelled by a later one, every push run narrows
+// against the last GREEN push (scripts/ci-last-green-sha.sh), and trunk-red
+// watches every push workflow.
 
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -29,12 +29,17 @@ const PR_KEYED =
 
 // A job that only makes sense on a pull request (a check of the PR's own diff
 // or labels) restricts itself to one, and still carries the gate: `PR_ONLY &&
-// (gate)`. No job is exempt from the gate.
+// (gate)`.
 const PR_ONLY = "github.event_name == 'pull_request'";
 const TRIPWIRE = {
   file: "protocol-compat.yml",
   jobId: "guarded-files-tripwire",
 };
+
+// The one job exempt from the gate: the CodeQL scan runs on every pull
+// request, so an alert shows on the PR that introduces it.
+const SCAN = { file: "codeql.yml", jobId: "analyze" };
+const isScan = (file, jobId) => file === SCAN.file && jobId === SCAN.jobId;
 
 // The workflows AGENTS.md says can be run on a branch.
 const DISPATCHABLE = [
@@ -203,11 +208,12 @@ describe("the gate expression", () => {
 });
 
 describe("every job of a workflow that runs on a pull request", () => {
-  it("covers the eight workflows the design names", () => {
+  it("covers the nine workflows the design names", () => {
     expect(pullRequestWorkflows.map(({ file }) => file).sort()).toEqual([
       "browser-regressions.yml",
       "codeql.yml",
       "dco.yml",
+      "gradle-wrapper.yml",
       "pre-commit.yml",
       "protocol-compat.yml",
       "real-supervisor.yml",
@@ -218,6 +224,7 @@ describe("every job of a workflow that runs on a pull request", () => {
 
   for (const { file, workflow } of pullRequestWorkflows) {
     for (const [jobId, job] of Object.entries(workflow.jobs)) {
+      if (isScan(file, jobId)) continue;
       describe(`${file} / ${jobId}`, () => {
         it("is gated: the gate is the whole if, an always() aggregator's only addition, or a top-level conjunct", () => {
           expect(gates(normalize(job.if ?? ""))).toBe(true);
@@ -226,15 +233,14 @@ describe("every job of a workflow that runs on a pull request", () => {
     }
   }
 
-  it("exempts no job: every job of these workflows was checked above", () => {
-    const jobCount = pullRequestWorkflows.reduce(
-      (total, { workflow }) => total + Object.keys(workflow.jobs).length,
-      0,
+  it("exempts only the CodeQL scan, which runs on every pull request", () => {
+    const { workflow } = pullRequestWorkflows.find(
+      ({ file }) => file === SCAN.file,
     );
-    expect(jobCount).toBeGreaterThan(0);
-    for (const { workflow } of pullRequestWorkflows) {
-      for (const job of Object.values(workflow.jobs)) {
-        expect(job.if).toBeDefined();
+    expect(workflow.jobs[SCAN.jobId].if).toBeUndefined();
+    for (const { file, workflow: w } of pullRequestWorkflows) {
+      for (const [jobId, job] of Object.entries(w.jobs)) {
+        if (!isScan(file, jobId)) expect(job.if).toBeDefined();
       }
     }
   });
