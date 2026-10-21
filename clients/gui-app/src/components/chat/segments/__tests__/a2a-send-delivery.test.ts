@@ -9,12 +9,25 @@ function delivery(state: AgentMessageDelivery["state"]): AgentMessageDelivery {
 describe("a2aSendDeliveryView", () => {
   it("queued: pending, badged, names the host", () => {
     const view = a2aSendDeliveryView(delivery("queued"), "Work Laptop");
-    expect(view).toMatchObject({
-      srLabel: "Queued message",
-      badge: "queued",
+    expect(view).toEqual({
+      srLabel: "Unconfirmed message",
+      badge: "unconfirmed",
+      note: "Sent to Work Laptop. Shows delivered once Work Laptop confirms it.",
       tone: "pending",
     });
-    expect(view.note).toContain("Queued for Work Laptop");
+  });
+
+  // A receiving host older than the delivered report accepts the message and
+  // never confirms it, so its sender's card stays in this state for good
+  // (traycerai/traycer#2421: a send from 1.5.2-staging.123 to a host on
+  // 1.5.2-staging.116 was taken at once and still read "Queued for Linux. It
+  // is delivered when Linux picks it up."). Nothing on the card may say the
+  // message still waits to be taken or that it will be.
+  it("queued: claims nothing an older receiving host never does", () => {
+    const view = a2aSendDeliveryView(delivery("queued"), "Linux");
+    for (const text of [view.srLabel, view.badge ?? "", view.note]) {
+      expect(text).not.toMatch(/queued|picks it up|is delivered when/i);
+    }
   });
 
   it("delivered: no badge, says where it landed", () => {

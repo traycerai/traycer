@@ -922,31 +922,35 @@ describe("<ToolSegment /> cross-host send delivery", () => {
     );
   }
 
-  it("renders a queued send as queued for the host, not a plain sent card", () => {
+  it("renders a queued send as sent to the host and unconfirmed, not a plain sent card", () => {
     renderDelivery("queued");
-    expect(screen.getByText(/Queued for Work Laptop/)).toBeTruthy();
-    expect(screen.getByText("queued")).toBeTruthy();
+    expect(screen.getByText(/Sent to Work Laptop/)).toBeTruthy();
+    expect(screen.getByText("unconfirmed")).toBeTruthy();
     // The badge paints its own fill: `bg-muted` collapses into raised surfaces.
-    const badge = screen.getByText("queued");
+    const badge = screen.getByText("unconfirmed");
     expect(badge.className).toContain("bg-foreground/8");
     expect(badge.className).not.toContain("bg-muted");
-    expect(screen.getByText("Queued message").className).toContain("sr-only");
+    expect(screen.getByText("Unconfirmed message").className).toContain(
+      "sr-only",
+    );
     expect(screen.queryByText("Sent message")).toBeNull();
   });
 
   // The note is status copy, not the message: chat find indexes the message
-  // body, so a search for "queued" must not land on the card's note.
+  // body, so a search for "sent" must not land on the card's note.
   it("marks the delivery note as skipped by chat find, collapsed and open", () => {
     renderDelivery("queued");
-    const collapsed = screen.getAllByText(/Queued for Work Laptop/);
+    const collapsed = screen.getAllByText(/Sent to Work Laptop/);
     expect(collapsed.length).toBeGreaterThan(0);
     for (const note of collapsed) {
       expect(note.hasAttribute("data-find-skip")).toBe(true);
     }
 
-    fireEvent.click(screen.getByRole("button", { name: /Queued message/ }));
+    fireEvent.click(
+      screen.getByRole("button", { name: /Unconfirmed message/ }),
+    );
 
-    const open = screen.getAllByText(/Queued for Work Laptop/);
+    const open = screen.getAllByText(/Sent to Work Laptop/);
     expect(open.length).toBeGreaterThan(0);
     for (const note of open) {
       expect(note.hasAttribute("data-find-skip")).toBe(true);
@@ -956,7 +960,7 @@ describe("<ToolSegment /> cross-host send delivery", () => {
   it("renders a delivered send as delivered on the host", () => {
     renderDelivery("delivered");
     expect(screen.getByText(/Delivered on Work Laptop/)).toBeTruthy();
-    expect(screen.queryByText("queued")).toBeNull();
+    expect(screen.queryByText("unconfirmed")).toBeNull();
     expect(screen.queryByText(/Not delivered/)).toBeNull();
   });
 
@@ -969,17 +973,17 @@ describe("<ToolSegment /> cross-host send delivery", () => {
       expect(screen.getByText("not delivered").className).toContain(
         "text-destructive",
       );
-      expect(screen.queryByText("queued")).toBeNull();
+      expect(screen.queryByText("unconfirmed")).toBeNull();
     },
   );
 
   it("renders a null delivery exactly as the plain sent card", () => {
     renderDelivery(null);
     expect(screen.getByText("Sent message")).toBeTruthy();
-    expect(screen.queryByText(/Queued for/)).toBeNull();
+    expect(screen.queryByText(/Sent to/)).toBeNull();
     expect(screen.queryByText(/Delivered on/)).toBeNull();
     expect(screen.queryByText(/Not delivered/)).toBeNull();
-    expect(screen.queryByText("queued")).toBeNull();
+    expect(screen.queryByText("unconfirmed")).toBeNull();
   });
 });
 

@@ -5,7 +5,7 @@ import type { AgentMessageDelivery } from "@traycer/protocol/persistence/epic/co
  *
  * A send to an agent on another host is queued, not delivered, when the call
  * returns, so the card must not read as an ordinary sent message until the
- * receiving host has taken it. `null` delivery (a same-host send, or a block
+ * receiving host confirms it. `null` delivery (a same-host send, or a block
  * persisted before the host carried the state) keeps the plain sent card.
  */
 export type A2ASendDeliveryView = {
@@ -28,11 +28,14 @@ export function a2aSendDeliveryView(
   const host =
     hostLabel !== null && hostLabel.length > 0 ? hostLabel : UNKNOWN_HOST_LABEL;
   switch (delivery.state) {
+    // Not yet confirmed, which is not the same as not yet taken: a receiving
+    // host older than the delivered report takes the message and never
+    // confirms it, so this state must read true for good.
     case "queued":
       return {
-        srLabel: "Queued message",
-        badge: "queued",
-        note: `Queued for ${host}. It is delivered when ${host} picks it up.`,
+        srLabel: "Unconfirmed message",
+        badge: "unconfirmed",
+        note: `Sent to ${host}. Shows delivered once ${host} confirms it.`,
         tone: "pending",
       };
     case "delivered":
