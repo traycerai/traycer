@@ -53,6 +53,10 @@ const testState = vi.hoisted((): TestState => ({
   cloudKnownChatIds: new Set(),
 }));
 
+vi.mock("@/hooks/bots/use-environment-list-query", () => ({
+  useEnvironmentListQuery: () => ({ data: undefined }),
+}));
+
 vi.mock("@/lib/epic-selectors", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/epic-selectors")>()),
   useEpicArtifact: (id: string) =>
@@ -216,6 +220,7 @@ vi.mock("@/components/epic-canvas/renderers/chat-tile", async () => {
         hostLabel={props.hostLabel}
         reason={props.reason}
         ownedByViewer
+        environmentOwned={false}
         cloneAllowed
         showsPublishedCopy={props.showsPublishedCopy}
         onClone={() => undefined}

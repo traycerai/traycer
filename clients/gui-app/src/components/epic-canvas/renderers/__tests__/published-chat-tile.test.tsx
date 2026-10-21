@@ -196,6 +196,7 @@ vi.mock("@/components/epic-canvas/renderers/chat-tile", async () => {
           // it forwards. The ownership wiring itself is pinned by
           // `dead-tile-banner-container.test.tsx` against the real container.
           ownedByViewer
+          environmentOwned={false}
           cloneAllowed
           showsPublishedCopy={props.showsPublishedCopy}
           onClone={() => undefined}

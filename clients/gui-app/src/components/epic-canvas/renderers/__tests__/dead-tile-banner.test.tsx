@@ -588,7 +588,9 @@ describe("<ChatDeadTileBanner /> for a team environment's chat (environmentOwned
       );
 
       const text = screen.getByTestId(testId).textContent;
-      expect(text).toContain(`${SANDBOX_FACT} Showing the last published copy.`);
+      expect(text).toContain(
+        `${SANDBOX_FACT} Showing the last published copy.`,
+      );
       expect(text).not.toContain("collaborator");
       expect(text).not.toContain("Cloning creates");
       expect(text).not.toContain("view-only access");

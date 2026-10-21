@@ -161,6 +161,10 @@ vi.mock("@/hooks/host/use-host-directory-list-query", async (importActual) => {
   };
 });
 
+vi.mock("@/hooks/bots/use-environment-list-query", () => ({
+  useEnvironmentListQuery: () => ({ data: undefined }),
+}));
+
 // ENUMERATES deliberately - do NOT convert to an `importOriginal` spread.
 // `@/lib/host` is a barrel of provider-coupled hooks, so the un-overridden
 // residue is not inert: spreading leaks the real `useAuthService` into
@@ -170,6 +174,7 @@ vi.mock("@/hooks/host/use-host-directory-list-query", async (importActual) => {
 // useful way instead: vitest names the missing export and the module.
 vi.mock("@/lib/host", () => ({
   useHostBinding: () => null,
+  useOptionalHostClient: () => null,
   useHostDirectory: () => MOCK_HOST_DIRECTORY,
   useAuthService: () => ({
     revalidateCurrentContext: () => Promise.resolve({ kind: "valid" as const }),
