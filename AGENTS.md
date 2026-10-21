@@ -210,6 +210,7 @@ ReturnType<typeof fn>          // name the concrete type
 | Repeat an assertion implied by an exact result check.          | Keep the exact check and assertions for distinct effects.                         |
 | Assert only that a required field exists.                      | Exercise its effect through the real consumer.                                    |
 | Keep comments that describe a retired contract.                | Update or remove stale claims when the contract changes.                          |
+| Assert only a test double's implementation.                    | Assert production behavior through the real consumer.                             |
 
 ## Skills
 
