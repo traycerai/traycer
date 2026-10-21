@@ -68,6 +68,10 @@ import type {
  * a worker that connects and then quietly ignores half its traffic. The
  * handshake turns that into one loud error at startup.
  *
+ * **15** adds `expire-pending-chat-creation-for-cloud-row`. A v14 worker
+ * throws on the unknown command after its handshake passed, which is fatal
+ * for the runtime.
+ *
  * **14** adds incremental replica-data settlements and provisional root
  * updates. A v13 worker leaves lane rows and post-snapshot root growth
  * invisible to the main accountant while the app appears to work.
@@ -147,7 +151,7 @@ import type {
  * that does not move with its contract is not a check; it is a comment that
  * looks like one.
  */
-export const RUNTIME_BRIDGE_PROTOCOL_VERSION = 14;
+export const RUNTIME_BRIDGE_PROTOCOL_VERSION = 15;
 
 /**
  * The runtime facts main's books read between settlements.

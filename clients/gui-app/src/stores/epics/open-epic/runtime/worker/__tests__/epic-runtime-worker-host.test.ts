@@ -135,6 +135,21 @@ describe("startEpicRuntimeWorkerHost", () => {
     main.dispose();
   });
 
+  it("refuses a bootstrap from a v14 peer, which cannot dispatch expire-pending-chat-creation-for-cloud-row", () => {
+    const { pair, main, host } = createFixture();
+
+    main.emit(bootstrap(14), []);
+
+    const events = workerEvents(pair);
+    const fatal = events.filter((event) => event.kind === "fatal");
+    expect(fatal).toHaveLength(1);
+    expect(events.filter((event) => event.kind === "ready")).toHaveLength(0);
+    expect(fatal[0].message).toContain("14");
+    expect(fatal[0].message).toContain(String(RUNTIME_BRIDGE_PROTOCOL_VERSION));
+    host.shutdown();
+    main.dispose();
+  });
+
   it("emits fatal and no ready event for a mismatched bootstrap", () => {
     const { pair, main, host } = createFixture();
 
