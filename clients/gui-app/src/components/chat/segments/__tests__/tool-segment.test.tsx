@@ -946,7 +946,7 @@ describe("<ToolSegment /> cross-host send delivery", () => {
     renderDelivery("queued", true);
     expect(
       screen.getByText(
-        "Sent. Work Laptop looked offline; it gets this if it is back online within 24 hours.",
+        "Sent. Work Laptop looked offline; if it is not back online within 24 hours, this expires.",
       ).className,
     ).toContain("text-muted-foreground");
     expect(screen.getByText("Sent message").className).toContain("sr-only");

@@ -26,7 +26,7 @@ describe("a2aSendDeliveryView", () => {
     expect(view).toEqual({
       srLabel: "Sent message",
       badge: null,
-      note: "Sent. Work Laptop looked offline; it gets this if it is back online within 24 hours.",
+      note: "Sent. Work Laptop looked offline; if it is not back online within 24 hours, this expires.",
       tone: "sent",
     });
   });

@@ -6,8 +6,8 @@ import type { AgentMessageDelivery } from "@traycer/protocol/persistence/epic/co
  * The sending host learns only of failures (traycer#2421), so a send nothing
  * has failed is the plain sent card: `null` here. The one exception is a send
  * to a host the directory saw offline at send time, which says so; the
- * observation is a hint, so the copy promises nothing past the delivery
- * window. A `delivered` stamp, written only by hosts that predate traycer#2421,
+ * observation is a hint, so the copy promises no pickup: it names the
+ * delivery window the message expires after. A `delivered` stamp, written only by hosts that predate traycer#2421,
  * reads as the plain sent card too.
  */
 export type A2ASendDeliveryView = {
@@ -35,7 +35,7 @@ export function a2aSendDeliveryView(
       return {
         srLabel: "Sent message",
         badge: null,
-        note: `Sent. ${host} looked offline; it gets this if it is back online within 24 hours.`,
+        note: `Sent. ${host} looked offline; if it is not back online within 24 hours, this expires.`,
         tone: "sent",
       };
     case "delivered":
