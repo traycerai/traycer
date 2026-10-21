@@ -52,6 +52,7 @@ import {
   selectHasActiveInitialChatHandoffForEpic,
   useInitialChatHandoffStore,
 } from "@/stores/epics/initial-chat-handoff-store";
+import { useRequestContextUserId } from "@/hooks/host/use-request-context-user-id";
 
 /**
  * Resolves existence for exactly the epic ids that have an open tab, via
@@ -198,6 +199,10 @@ function EpicTabReconciliationRun(props: { readonly seed: ReconcileSeed }) {
 function EpicTabExistenceProbe(props: { readonly run: ReconcileSeed }) {
   const client = useHostClient();
   const hostRuntimeClient = useHostRuntimeClient();
+  // The probes below can be built only under a bound credential lease. Read
+  // as a value so a lease that binds after mount rebuilds them: the builder's
+  // own check reads the spine client, whose identity a binding does not move.
+  const requestContextUserId = useRequestContextUserId(hostRuntimeClient);
   const hostDirectory = useHostDirectoryList();
   const completionAppliedRef = useRef(false);
   const openEpicIds = props.run.openEpicIds;
@@ -268,6 +273,7 @@ function EpicTabExistenceProbe(props: { readonly run: ReconcileSeed }) {
     // this authoritative snapshot. Otherwise the directory changed under the
     // run and the all-host protection proof no longer has a defined scope.
     if (!entriesByHostId.has(props.run.hostId)) return null;
+    if (requestContextUserId === null) return null;
 
     const probes: LocalHomeProbe[] = [];
     for (const entry of entriesByHostId.values()) {
@@ -284,6 +290,7 @@ function EpicTabExistenceProbe(props: { readonly run: ReconcileSeed }) {
     hostDirectory.isSuccess,
     hostRuntimeClient,
     props.run.hostId,
+    requestContextUserId,
   ]);
 
   // The list query reaches its host client through this registry. Register a

@@ -37,6 +37,7 @@ vi.mock("@/components/epics/epics-list-panel", () => ({
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -56,7 +57,10 @@ import {
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
 import { useTabsStore } from "@/stores/tabs/store";
-import { resetTabStructuralLockForTesting } from "@/stores/tabs/tab-structural-lock";
+import {
+  registerTabStructuralLockPredicate,
+  resetTabStructuralLockForTesting,
+} from "@/stores/tabs/tab-structural-lock";
 import { setTabSplitCompatibility } from "@/stores/tabs/tab-split-compatibility";
 import type { TabRef } from "@/stores/tabs/types";
 
@@ -221,6 +225,33 @@ describe("SplitSlotChooserContent grouped destinations", () => {
       left: { kind: "tab", ref: REUSABLE },
       right: { kind: "tab", ref: PARTNER },
     });
+  });
+
+  // A lock taken while the chooser is open must pull the tab out of the list:
+  // a stale list kept offering a tab whose click then resolved invalid.
+  it("stops offering an open tab once it becomes structurally locked", async () => {
+    seedSplitLayout(true);
+    await renderChooser({
+      splitId: "split-a",
+      side: "left",
+      slot: { kind: "empty" },
+      dropActive: false,
+      historyAvailable: true,
+    });
+    expect(screen.getByRole("button", { name: "Reusable Epic" })).toBeDefined();
+
+    let release = (): void => undefined;
+    act(() => {
+      release = registerTabStructuralLockPredicate(
+        (ref) => ref.id === REUSABLE.id,
+      );
+    });
+    expect(screen.queryByRole("button", { name: "Reusable Epic" })).toBeNull();
+
+    act(() => {
+      release();
+    });
+    expect(screen.getByRole("button", { name: "Reusable Epic" })).toBeDefined();
   });
 
   it("detects visible Start Page tabs from authoritative grouped items", async () => {

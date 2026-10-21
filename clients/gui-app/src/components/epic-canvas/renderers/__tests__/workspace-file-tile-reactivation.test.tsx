@@ -25,6 +25,9 @@ interface WorkspaceReactivationTestState {
   readContent: string;
   truncated: boolean;
   supportsWrite: boolean;
+  /** Bumped by `publishReadState`; the mocked query re-renders on it. */
+  revision: number;
+  readonly listeners: Set<() => void>;
   readonly writeFile: Mock;
   readonly refetch: Mock;
   readonly rendererContent: Mock;
@@ -34,6 +37,8 @@ const state = vi.hoisted((): WorkspaceReactivationTestState => ({
   readContent: "const value = 1;\n",
   truncated: false,
   supportsWrite: true,
+  revision: 0,
+  listeners: new Set<() => void>(),
   writeFile: vi.fn(),
   refetch: vi.fn(),
   rendererContent: vi.fn(),
@@ -56,19 +61,34 @@ vi.mock("@/hooks/host/use-host-supports-method", () => ({
   useHostSupportsMethod: () => state.supportsWrite,
 }));
 
-vi.mock("@/hooks/workspace/use-read-file-query", () => ({
-  useWorkspaceReadFile: () => ({
-    data: {
-      content: state.readContent,
-      error: null,
-      truncated: state.truncated,
+// Reactive like the real query: a result change re-renders the hook's own
+// consumer. The tile's parents are compiled and do not re-render it for an
+// unchanged node, so a parent re-render could never deliver a new result.
+vi.mock("@/hooks/workspace/use-read-file-query", async () => {
+  const { useSyncExternalStore } = await import("react");
+  return {
+    useWorkspaceReadFile: () => {
+      useSyncExternalStore(
+        (listener: () => void) => {
+          state.listeners.add(listener);
+          return () => state.listeners.delete(listener);
+        },
+        () => state.revision,
+      );
+      return {
+        data: {
+          content: state.readContent,
+          error: null,
+          truncated: state.truncated,
+        },
+        isLoading: false,
+        isError: false,
+        error: null,
+        refetch: state.refetch,
+      };
     },
-    isLoading: false,
-    isError: false,
-    error: null,
-    refetch: state.refetch,
-  }),
-}));
+  };
+});
 
 vi.mock("@/hooks/workspace/use-workspace-write-file-mutation", () => ({
   useWorkspaceWriteFile: () => ({ mutateAsync: state.writeFile }),
@@ -139,6 +159,8 @@ describe("<WorkspaceFileTile /> reactivation refresh", () => {
     state.readContent = "const value = 1;\n";
     state.truncated = false;
     state.supportsWrite = true;
+    state.revision = 0;
+    state.listeners.clear();
     state.rendererContent.mockReset();
     state.writeFile.mockReset();
     state.refetch.mockReset();
@@ -203,6 +225,8 @@ describe("<WorkspaceFileTile /> reactivation refresh", () => {
     // called `refetch`, not merely because the tile re-rendered.
     state.refetch.mockImplementation(() => {
       state.readContent = newContent;
+      state.revision += 1;
+      for (const listener of state.listeners) listener();
       return Promise.resolve({
         error: null,
         data: { content: newContent, error: null, truncated: false },
@@ -213,11 +237,7 @@ describe("<WorkspaceFileTile /> reactivation refresh", () => {
     await waitFor(() => {
       expect(state.refetch).toHaveBeenCalled();
     });
-    // The mocked hook has no real subscription, so re-render it manually to
-    // observe the post-refetch value - a real `useQuery` would do this via
-    // its own store subscription once `refetch` settles.
     await waitFor(() => {
-      harness.setActive(true);
       expect(state.rendererContent).toHaveBeenCalledWith(newContent);
     });
   });

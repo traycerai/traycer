@@ -8,6 +8,7 @@ import {
   dialableHostEndpointFor,
 } from "@/lib/host/transport-key";
 import { useRemoteSessionPollReadiness } from "@/hooks/agent/use-host-reachability";
+import { useRequestContextUserId } from "@/hooks/host/use-request-context-user-id";
 
 /**
  * Builds a stateless `HostRequester` facade that issues RPCs against `target`
@@ -73,20 +74,19 @@ export function useHostClientFor(
   // would make the memo churn on every activation and would resolve one host
   // through another host's routing view.
   const globalClient = useHostRuntimeClient();
-  const requestContext = globalClient.getRequestContext();
-  const userId = globalClient.getRequestContextUserId();
+  const userId = useRequestContextUserId(globalClient);
   // Remote-session readiness changes independently of directory rows. Thread
   // the subscribed answer into the canonical predicate instead of reading its
   // pull-only cache inside this memo.
   const hasReadySession = useRemoteSessionPollReadiness(target?.hostId ?? "");
 
   return useMemo(() => {
-    // Same gates the builder re-checks internally; read here so the memo
+    // Same gate the builder re-checks internally; read here so the memo
     // rebuilds the client when the auth identity changes (the builder reads
-    // both imperatively off `globalClient`).
-    if (target === null || requestContext === null || userId === null) {
+    // it imperatively off `globalClient`).
+    if (target === null || userId === null) {
       return null;
     }
     return buildDialableHostClientFor(globalClient, target, hasReadySession);
-  }, [target, globalClient, hasReadySession, requestContext, userId]);
+  }, [target, globalClient, hasReadySession, userId]);
 }

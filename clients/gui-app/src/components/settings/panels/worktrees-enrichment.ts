@@ -912,23 +912,15 @@ export function useWorktreeActivityEnrichment(
   // are built from the client's OWN readiness (`readiness.hostId`), so swept
   // entries land in precisely the scope the fold and the observers read.
   const [sweepTick, bumpSweepTick] = useReducer((tick: number) => tick + 1, 0);
-  const [seedTick, bumpSeedTick] = useReducer((tick: number) => tick + 1, 0);
-  const seedsOutstandingRef = useRef(false);
   const sweepLedgerRef = useRef<Map<string, SweepRetryState>>(new Map());
   const [sweepExhaustion, setSweepExhaustion] = useState<SweepExhaustionState>({
     hostId: null,
     paths: EMPTY_ERRORED,
   });
-  // Two wake signals the identity-stable fold deliberately does NOT carry:
-  //  - `invalidate` actions change no data, so the fold ignores them - but a
-  //    refresh marks observer-less swept entries invalidated WITHOUT
-  //    refetching, and the sweep must notice to re-probe them.
-  //  - a `success` that lands data IDENTICAL to a warm-open seed keeps the
-  //    fold identity (structural sharing preserves the entry), but the
-  //    query's `dataUpdatedAt` is now this session's - the seeded-paths
-  //    derivation below must re-run so the path flips seeded → live and the
-  //    delete gate unlocks. Only ticked while seeds are outstanding, so a
-  //    converged panel stays event-quiet.
+  // A wake signal the identity-stable fold deliberately does NOT carry:
+  // `invalidate` actions change no data, so the fold ignores them - but a
+  // refresh marks observer-less swept entries invalidated WITHOUT refetching,
+  // and the sweep must notice to re-probe them.
   useEffect(() => {
     if (hostId === null) return;
     const scope = hostQueryKeys.methodScope(hostId, "worktree.listAllForHost");
@@ -936,16 +928,36 @@ export function useWorktreeActivityEnrichment(
     return cache.subscribe((event) => {
       if (event.type !== "updated") return;
       if (!queryKeyHasPrefix(event.query.queryKey, scope)) return;
-      if (event.action.type === "invalidate") {
-        bumpSweepTick();
-      } else if (
-        event.action.type === "success" &&
-        seedsOutstandingRef.current
-      ) {
-        bumpSeedTick();
-      }
+      if (event.action.type === "invalidate") bumpSweepTick();
     });
   }, [queryClient, hostId]);
+  // The per-path states the error and seed derivations below read straight
+  // off the cache. They are read as values through this channel, never behind
+  // a trigger dependency: the compiled hook drops a `void tick;` and keyed
+  // those reads on inputs a failed probe or an identical revalidation never
+  // moves, which left a row on "Checking" and a restored row's delete locked.
+  const subscribeEnrichmentStates = useCallback(
+    (onStoreChange: () => void) => {
+      if (hostId === null) return () => undefined;
+      const scope = hostQueryKeys.methodScope(
+        hostId,
+        "worktree.listAllForHost",
+      );
+      return queryClient.getQueryCache().subscribe((event) => {
+        // Query-level events only: observer events fire on every render of
+        // the probe window and never move the states these snapshots read.
+        if (
+          event.type !== "added" &&
+          event.type !== "removed" &&
+          event.type !== "updated"
+        ) {
+          return;
+        }
+        if (queryKeyHasPrefix(event.query.queryKey, scope)) onStoreChange();
+      });
+    },
+    [queryClient, hostId],
+  );
   // One explicit refresh grants one new retry generation. Capture the ledger
   // BEFORE awaiting the listing RPC: a host/client switch replaces that map,
   // so a late completion can prove it belongs to an obsolete scope and no-op.
@@ -1134,51 +1146,47 @@ export function useWorktreeActivityEnrichment(
   // never-classified rows from the virtual window, after which only the
   // background sweep owns their queries. Reading every listed path's query
   // state lets an exhausted/failed sweep settle from Checking to unavailable.
-  // `sweepTick` is the sweep completion signal; `results` covers observer-owned
-  // transitions. A retry clears the error presentation while it is fetching.
-  const erroredPaths = useMemo(() => {
-    void results;
-    void sweepTick;
-    if (hostId === null) return EMPTY_ERRORED;
-    const errored = new Set<string>();
-    const viewportPaths = new Set(requestedPaths);
-    const candidatePaths = new Set([...worktreePaths, ...requestedPaths]);
-    for (const path of candidatePaths) {
-      const state =
-        queryClient.getQueryState<WorktreeListAllForHostResponseV14>(
-          perPathEnrichmentQueryKey(hostId, path),
-        );
-      const sweepExhausted =
-        sweepExhaustion.hostId === hostId && sweepExhaustion.paths.has(path);
-      const viewportExhausted =
-        viewportRetrySnapshot.get(path)?.terminal === true;
-      const hasColdData =
-        state?.data !== undefined && responseHasColdPrState(state.data);
-      if (
-        isTerminalEnrichmentError({
-          state,
-          viewportOwned: viewportPaths.has(path),
-          viewportExhausted,
-          sweepExhausted,
-          hasColdData,
-        })
-      ) {
-        errored.add(path);
+  // A retry clears the error presentation while it is fetching.
+  const erroredSnapshot = useSyncExternalStore(
+    subscribeEnrichmentStates,
+    () => {
+      if (hostId === null) return "";
+      const errored: string[] = [];
+      const viewportPaths = new Set(requestedPaths);
+      const candidatePaths = new Set([...worktreePaths, ...requestedPaths]);
+      for (const path of candidatePaths) {
+        const state =
+          queryClient.getQueryState<WorktreeListAllForHostResponseV14>(
+            perPathEnrichmentQueryKey(hostId, path),
+          );
+        const sweepExhausted =
+          sweepExhaustion.hostId === hostId && sweepExhaustion.paths.has(path);
+        const viewportExhausted =
+          viewportRetrySnapshot.get(path)?.terminal === true;
+        const hasColdData =
+          state?.data !== undefined && responseHasColdPrState(state.data);
+        if (
+          isTerminalEnrichmentError({
+            state,
+            viewportOwned: viewportPaths.has(path),
+            viewportExhausted,
+            sweepExhausted,
+            hasColdData,
+          })
+        ) {
+          errored.push(path);
+        }
       }
-    }
-    // The stable constant in the (overwhelmingly common) empty case, so this
-    // prop can't defeat downstream memoization on every `results` identity.
-    return errored.size === 0 ? EMPTY_ERRORED : errored;
-  }, [
-    hostId,
-    queryClient,
-    requestedPaths,
-    results,
-    sweepExhaustion,
-    sweepTick,
-    viewportRetrySnapshot,
-    worktreePaths,
-  ]);
+      return errored.join("\u0000");
+    },
+  );
+  const erroredPaths = useMemo(
+    () =>
+      erroredSnapshot.length === 0
+        ? EMPTY_ERRORED
+        : new Set(erroredSnapshot.split("\u0000")),
+    [erroredSnapshot],
+  );
 
   const enriching = results.some((result) => result.isFetching);
   // Settle telemetry describes this viewport's `results` window, so its error
@@ -1200,29 +1208,30 @@ export function useWorktreeActivityEnrichment(
   // `APP_SESSION_START_MS`): last-known display data this session has not yet
   // re-verified. The panel renders their restored tier but must gate
   // destructive flows (delete) on live data - a seeded "Landed" may have
-  // gained commits since the snapshot was written. Keyed on the fold PLUS
-  // `seedTick`: a data change or GC removal recomputes via the fold, and a
-  // revalidation that landed data IDENTICAL to the seed (fold identity
-  // deliberately unchanged) recomputes via the tick - either way a live
-  // fetch's fresh `dataUpdatedAt` drops the path immediately.
-  const seededPaths = useMemo(() => {
-    void seedTick;
-    if (hostId === null || enrichedByPath.size === 0) return EMPTY_SEEDED;
-    const seeded = new Set<string>();
+  // gained commits since the snapshot was written. A revalidation that landed
+  // data IDENTICAL to the seed keeps the fold's identity but moves the query's
+  // `dataUpdatedAt`, so a live fetch drops the path immediately.
+  const seededSnapshot = useSyncExternalStore(subscribeEnrichmentStates, () => {
+    if (hostId === null || enrichedByPath.size === 0) return "";
+    const seeded: string[] = [];
     for (const path of enrichedByPath.keys()) {
       const state =
         queryClient.getQueryState<WorktreeListAllForHostResponseV14>(
           perPathEnrichmentQueryKey(hostId, path),
         );
       if (state !== undefined && state.dataUpdatedAt < APP_SESSION_START_MS) {
-        seeded.add(path);
+        seeded.push(path);
       }
     }
-    return seeded.size === 0 ? EMPTY_SEEDED : seeded;
-  }, [enrichedByPath, hostId, queryClient, seedTick]);
-  useEffect(() => {
-    seedsOutstandingRef.current = seededPaths.size > 0;
-  }, [seededPaths]);
+    return seeded.join("\u0000");
+  });
+  const seededPaths = useMemo(
+    () =>
+      seededSnapshot.length === 0
+        ? EMPTY_SEEDED
+        : new Set(seededSnapshot.split("\u0000")),
+    [seededSnapshot],
+  );
 
   return {
     enrichedByPath,

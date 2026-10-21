@@ -1,11 +1,4 @@
-import {
-  useCallback,
-  useMemo,
-  useEffect,
-  useReducer,
-  useState,
-  useSyncExternalStore,
-} from "react";
+import { useCallback, useMemo, useEffect, useSyncExternalStore } from "react";
 import { queryOptions, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { QueryClient } from "@tanstack/react-query";
 import type { SchemaVersion } from "@traycer/protocol/framework/versioned-stream-rpc";
@@ -123,7 +116,8 @@ interface SharedSubscription {
    * cannot write, leaving the panel with no writer at all.
    */
   terminated: boolean;
-  consumers: Map<symbol, () => void>;
+  /** The entry's change channel; every mounted hook re-reads through it. */
+  readonly key: string;
   sessionGeneration: number;
   closeCurrentSession: () => void;
   isRefreshing: boolean;
@@ -175,27 +169,6 @@ function subscriptionKeyFor(
   args: ActiveSubscriptionArgs,
 ): string {
   return `${client.instanceId}|${args.hostId}|${args.runningDir}|${args.ignoreWhitespace ? "1" : "0"}`;
-}
-
-/** Render-time lookup of the shared entry this hook instance is attached to. */
-function activeSubscriptionFor(
-  client: IHostStreamClient<HostStreamRpcRegistry> | null,
-  args: {
-    readonly hostId: string | null;
-    readonly runningDir: string | null;
-    readonly ignoreWhitespace: boolean;
-  },
-): SharedSubscription | undefined {
-  if (client === null || args.hostId === null || args.runningDir === null) {
-    return undefined;
-  }
-  return subscriptions.get(
-    subscriptionKeyFor(client, {
-      hostId: args.hostId,
-      runningDir: args.runningDir,
-      ignoreWhitespace: args.ignoreWhitespace,
-    }),
-  );
 }
 
 // Test helper to reset module state.
@@ -393,13 +366,6 @@ export function useGitListChangedFilesSubscription(args: {
 }): GitListChangedFilesSubscriptionResult {
   const queryClient = useQueryClient();
   const wsStreamClient = useWsStreamClient();
-  // Re-render channel for subscription events that do NOT write the query
-  // cache (errors, terminal closes). Cache-writing events re-render through
-  // `useQuery` below; invalidating a disabled query does not reliably notify
-  // observers, so events must not lean on invalidation for visibility.
-  const [, forceRender] = useReducer((renderCount: number) => {
-    return renderCount + 1;
-  }, 0);
 
   // Memoize args to stabilize the reference for effect deps.
   // We reconstruct based on properties to avoid the linter complaint about args being a whole object.
@@ -411,11 +377,6 @@ export function useGitListChangedFilesSubscription(args: {
       enabled: args.enabled,
     }),
     [args.hostId, args.runningDir, args.ignoreWhitespace, args.enabled],
-  );
-
-  // Create a unique symbol for this hook instance to identify its consumer.
-  const [consumerId] = useState(() =>
-    Symbol("git-list-changed-files-consumer"),
   );
 
   // Local effect to manage this hook's subscription lifecycle.
@@ -447,9 +408,7 @@ export function useGitListChangedFilesSubscription(args: {
       notifyEntryChanged(key);
     }
 
-    // Increment ref count and register local consumer.
     shared.refCount += 1;
-    shared.consumers.set(consumerId, forceRender);
 
     // If we have a cached event, deliver it immediately - re-applying the
     // CACHE WRITES, not just re-rendering: an unobserved query slot may have
@@ -466,13 +425,11 @@ export function useGitListChangedFilesSubscription(args: {
         args: activeArgs,
         event: shared.lastEvent,
       });
-      forceRender();
     }
 
     // Cleanup on unmount.
     return () => {
       shared.refCount -= 1;
-      shared.consumers.delete(consumerId);
 
       // ADR-0003: no grace period - tear down immediately when ref count reaches 0.
       if (shared.refCount === 0) {
@@ -481,7 +438,7 @@ export function useGitListChangedFilesSubscription(args: {
         notifyEntryChanged(key);
       }
     };
-  }, [stableArgs, queryClient, wsStreamClient, consumerId]);
+  }, [stableArgs, queryClient, wsStreamClient]);
 
   // Read current cache state via useQuery with disabled fetching.
   // The subscription effect above feeds cache updates, so this renders
@@ -500,9 +457,35 @@ export function useGitListChangedFilesSubscription(args: {
     enabled: false,
   });
 
-  const subscription = activeSubscriptionFor(wsStreamClient, stableArgs);
+  // The entry's frame facts are read as VALUES through its change channel,
+  // never off the entry at render time: the entry keeps one identity while its
+  // frames move, so the compiled hook memoized a read of it on that identity
+  // and kept the first answer - an error or a closed stream never left pending.
+  // Events that do not write the query cache (errors, terminal closes) reach
+  // the render only through this channel.
+  const key = entryKeyFor({
+    wsStreamClient,
+    hostId: stableArgs.hostId,
+    runningDir: stableArgs.runningDir,
+    ignoreWhitespace: stableArgs.ignoreWhitespace,
+  });
+  const subscribe = useCallback(
+    (onStoreChange: () => void) => subscribeToEntry(key)(onStoreChange),
+    [key],
+  );
+  const lastEvent = useSyncExternalStore(
+    subscribe,
+    () => (key === null ? null : (subscriptions.get(key)?.lastEvent ?? null)),
+    () => null,
+  );
+  const lastWatcherStatus = useSyncExternalStore(
+    subscribe,
+    () =>
+      key === null ? null : (subscriptions.get(key)?.lastWatcherStatus ?? null),
+    () => null,
+  );
 
-  const frame = frameFacts(subscription);
+  const frame = frameFacts(lastEvent, lastWatcherStatus);
   const data = queryData ?? null;
 
   return {
@@ -517,26 +500,28 @@ export function useGitListChangedFilesSubscription(args: {
 }
 
 /**
- * The render-time reads off the shared entry, in one place.
+ * What the hook reports from the entry's last frames, in one place.
  *
  * Note the asymmetry, which is the point: `error` and `pollStartedAtMs` come
  * from the LAST frame, while `watcherStatus` comes from the last frame that
  * actually carried watcher health. Error frames carry none, and a git-compute
  * failure is not evidence about the watcher - see `lastWatcherStatus`.
  */
-function frameFacts(subscription: SharedSubscription | undefined): {
+function frameFacts(
+  lastEvent: GitSubscribeStatusStreamEvent | null,
+  lastWatcherStatus: GitWatcherStatus | null,
+): {
   readonly error: GitSubscribeStatusEvent | null;
   readonly pollStartedAtMs: number | null;
   readonly watcherStatus: GitWatcherStatus | null;
 } {
-  const lastEvent = subscription?.lastEvent ?? null;
   return {
     error: lastEvent?.type === "error" ? lastEvent : null,
     pollStartedAtMs:
       lastEvent !== null && lastEvent.type !== "error"
         ? lastEvent.pollStartedAtMs
         : null,
-    watcherStatus: subscription?.lastWatcherStatus ?? null,
+    watcherStatus: lastWatcherStatus,
   };
 }
 
@@ -553,7 +538,7 @@ function createSharedSubscription(
     negotiatedVersion: null,
     session: null,
     terminated: false,
-    consumers: new Map(),
+    key: subscriptionKeyFor(wsStreamClient, args),
     sessionGeneration: 0,
     closeCurrentSession: () => undefined,
     isRefreshing: false,
@@ -561,11 +546,10 @@ function createSharedSubscription(
     settleRefresh: null,
     refreshTimeout: null,
   };
-  const key = subscriptionKeyFor(wsStreamClient, args);
   shared.unsubscribeFromStream = () => {
     shared.sessionGeneration += 1;
     shared.closeCurrentSession();
-    settleSharedRefresh(shared, key);
+    settleSharedRefresh(shared, shared.key);
   };
   replaceStreamSession({
     shared,
@@ -717,7 +701,7 @@ function replaceStreamSession(opts: ReplaceStreamSessionArgs): void {
   // Clearing the field is not enough on its own - the render-time value is read
   // through the store snapshot, so without a notify the notice stays on screen
   // until some later frame happens to publish.
-  notifyConsumers(shared);
+  notifyEntryChanged(shared.key);
   shared.closeCurrentSession();
   const session = wsStreamClient.subscribe("git.subscribeStatus", {
     hostId: args.hostId,
@@ -771,7 +755,6 @@ function replaceStreamSession(opts: ReplaceStreamSessionArgs): void {
     shared.terminated = true;
     settleSharedRefresh(shared, entryKey);
     notifyEntryChanged(entryKey);
-    notifyConsumers(shared);
   };
 
   session.onServerFrame((envelope) => {
@@ -855,7 +838,7 @@ function replaceStreamSession(opts: ReplaceStreamSessionArgs): void {
         return;
       }
       recordDeliveredFrame(shared, event);
-      notifyConsumers(shared);
+      notifyEntryChanged(shared.key);
       writeRichEventIntoCache(queryClient, args, event, {
         parentSlotWrite: "always",
         richSlotWrite: "always",
@@ -876,7 +859,7 @@ function replaceStreamSession(opts: ReplaceStreamSessionArgs): void {
     }
 
     recordDeliveredFrame(shared, event);
-    notifyConsumers(shared);
+    notifyEntryChanged(shared.key);
 
     // Minor 0 / unknown: today's behavior verbatim - the frame writes ONLY
     // the v1.0 slot. It must never touch the rich slot: in this state the
@@ -917,7 +900,7 @@ function replaceStreamSession(opts: ReplaceStreamSessionArgs): void {
       // still the host's most recent word. A dead stream is not.
       if (shared.lastWatcherStatus !== null) {
         shared.lastWatcherStatus = null;
-        notifyConsumers(shared);
+        notifyEntryChanged(shared.key);
       }
       return;
     }
@@ -962,7 +945,7 @@ function handleNonceCorrelatedFrame(
     );
   }
   recordDeliveredFrame(args.shared, event);
-  notifyConsumers(args.shared);
+  notifyEntryChanged(args.shared.key);
   writeRichEventIntoCache(args.queryClient, args.args, event, {
     parentSlotWrite: "always",
     richSlotWrite: "always",
@@ -986,10 +969,6 @@ function settleSharedRefresh(shared: SharedSubscription, key: string): void {
 
 function notifyEntryChanged(key: string): void {
   for (const listener of entryListeners.get(key) ?? []) listener();
-}
-
-function notifyConsumers(shared: SharedSubscription): void {
-  for (const consumer of shared.consumers.values()) consumer();
 }
 
 function describeStreamClose(reason: StreamCloseReason | null): string | null {

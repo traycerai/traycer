@@ -14,11 +14,12 @@ import { useAuthService, useHostClient } from "@/lib/host";
 import { hostQueryKeys } from "@/lib/query-keys";
 import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
 import { useHostLease } from "@/hooks/host/use-host-lease";
+import { hostStreamTransportKeyFor } from "@/hooks/host/use-host-stream-client-for";
+import { useRequestContextUserId } from "@/hooks/host/use-request-context-user-id";
 import {
-  authenticatedHostStreamKey,
-  authenticatedOwnerIdentityKey,
-} from "@/hooks/host/use-host-stream-client-for";
-import { isLocalHostBootingEntry } from "@/lib/host/transport-key";
+  isLocalHostBootingEntry,
+  remoteAwareOwnerIdentityKey,
+} from "@/lib/host/transport-key";
 import { useDurableStreamTransportFactory } from "@/lib/host/use-durable-stream-transport";
 import { openOwnedDurableStreamClient } from "@/lib/host/owned-durable-stream-client";
 import { useOpenEpicId } from "@/lib/epic-selectors";
@@ -330,17 +331,18 @@ export function useChatSessionHandleForContainer(
   const userId = useAuthStore((state) => state.profile?.userId ?? null);
   const openTransport = useDurableStreamTransportFactory();
   const queryClient = useQueryClient();
+  const requestContextUserId = useRequestContextUserId(globalClient);
 
   // Dialability, for the gate below and never for the scope: null with no
   // request context, no websocket URL, or a CONFIRMED refusal. The test seam
-  // is a clearly separate top-level branch; the production value is derived by
-  // the shared `authenticatedHostStreamKey` ONLY when the factory is not
-  // overridden, so tests drive the stream through the override and never touch
-  // the real request context.
+  // is a clearly separate top-level branch; the production value is derived
+  // from the request context's user ONLY when the factory is not overridden,
+  // so tests drive the stream through the override and never touch the real
+  // request context.
   const transportKey =
     streamClientFactoryOverride !== null
       ? "test-stream-client-factory"
-      : authenticatedHostStreamKey(globalClient, hostEntry);
+      : hostStreamTransportKeyFor(hostEntry, requestContextUserId);
   // Owner identity (R-1), which with the host's kind is the whole of the
   // session's scope: `hostId + userId` for a local host, plus the public key
   // and relay attach URL for a remote one, so a remote public-key rotation
@@ -348,7 +350,7 @@ export function useChatSessionHandleForContainer(
   const ownerIdentityKey =
     streamClientFactoryOverride !== null
       ? "test-stream-client-factory"
-      : authenticatedOwnerIdentityKey(globalClient, hostEntry);
+      : remoteAwareOwnerIdentityKey(hostEntry, requestContextUserId);
   const hostKind = hostEntry?.kind ?? null;
   // Whether this chat may hold its session. A dialable host may. So may a host
   // that is coming back, which is what keeps the store and its transcript

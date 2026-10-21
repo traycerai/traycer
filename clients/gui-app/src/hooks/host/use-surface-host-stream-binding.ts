@@ -1,9 +1,10 @@
 import { use, useMemo } from "react";
 import {
-  authenticatedOwnerIdentityKey,
   streamTransportRetain,
   useHostStreamClientBindingFor,
 } from "@/hooks/host/use-host-stream-client-for";
+import { useRequestContextUserId } from "@/hooks/host/use-request-context-user-id";
+import { remoteAwareOwnerIdentityKey } from "@/lib/host/transport-key";
 import { useHostDirectoryEntryForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import { useEffectiveHostId } from "@/hooks/host/use-effective-host-id";
 import { useHostClient } from "@/lib/host";
@@ -88,7 +89,10 @@ export function useSurfaceHostStreamBinding(
   const auth = useStreamAuthRevalidator();
   const ambientClient = useHostClient();
   const binding = useHostStreamClientBindingFor(entry, auth);
-  const expectedKey = authenticatedOwnerIdentityKey(ambientClient, entry);
+  const expectedKey = remoteAwareOwnerIdentityKey(
+    entry,
+    useRequestContextUserId(ambientClient),
+  );
   const matched =
     binding !== null && binding.transportKey === expectedKey ? binding : null;
   // Safe to read off `entry` only BECAUSE the key matched: that comparison is

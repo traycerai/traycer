@@ -1,5 +1,5 @@
 import { act, renderHook } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PlainTerminalProjection } from "@traycer/protocol/host/terminal/plain-schemas";
 
 const mocks = vi.hoisted(() => ({
@@ -7,16 +7,30 @@ const mocks = vi.hoisted(() => ({
   adoptWarmSessionInstance: vi.fn(),
 }));
 
-vi.mock("@/lib/registries/terminal-session-registry", () => ({
-  useTerminalSessionHandle: mocks.useSessionHandle,
-}));
+vi.mock(
+  "@/lib/registries/terminal-session-registry",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@/lib/registries/terminal-session-registry")
+    >()),
+    useTerminalSessionHandle: mocks.useSessionHandle,
+  }),
+);
 
-vi.mock("@/components/epic-canvas/renderers/xterm-host-registry", () => ({
-  adoptWarmSessionInstance: mocks.adoptWarmSessionInstance,
-  peekXtermHostGrid: () => null,
-  peekXtermHostGridForSession: () => null,
-}));
+// The real engine registry, so a kept-alive engine's grid is what the
+// bootstrap peeks; only the warm-session adoption is stubbed.
+vi.mock(
+  "@/components/epic-canvas/renderers/xterm-host-registry",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@/components/epic-canvas/renderers/xterm-host-registry")
+    >()),
+    adoptWarmSessionInstance: mocks.adoptWarmSessionInstance,
+  }),
+);
 
+import { __disposeAllXtermHostsForTests } from "@/components/epic-canvas/renderers/xterm-host-registry";
+import { acquireMountedXtermEngine } from "@/components/epic-canvas/renderers/__tests__/xterm-host-entry-fixture";
 import {
   useHostTerminalBootstrap,
   type EnsureRunningMutation,
@@ -58,6 +72,11 @@ function mutation(): EnsureRunningMutation {
 beforeEach(() => {
   mocks.useSessionHandle.mockClear();
   mocks.adoptWarmSessionInstance.mockClear();
+});
+
+afterEach(() => {
+  __disposeAllXtermHostsForTests();
+  vi.useRealTimers();
 });
 
 describe("useHostTerminalBootstrap", () => {
@@ -165,6 +184,48 @@ describe("useHostTerminalBootstrap", () => {
         reattachMode: "live",
         sessionId: "terminal-1",
       }),
+    );
+  });
+
+  // A reopened terminal in a pane that cannot measure itself falls back to the
+  // kept-alive engine's grid after the measure wait. The engine's grid moves
+  // while the tile waits (the host echoes a new effective size); a stale memo
+  // of the first peek subscribed the session at the old grid.
+  it("subscribes at the kept-alive engine's grid as it is when the measure wait ends", () => {
+    vi.useFakeTimers();
+    const term = acquireMountedXtermEngine({
+      instanceId: "warm-instance",
+      sessionId: "terminal-1",
+      hostId: "host-1",
+      cols: 100,
+      rows: 30,
+    });
+
+    renderHook(() =>
+      useHostTerminalBootstrap({
+        hostId: "host-1",
+        epicId: "epic-1",
+        terminalId: "terminal-1",
+        instanceId: "reopened-instance",
+        projection: projection({
+          status: "running",
+          sessionId: "terminal-1",
+          currentCwd: "/repo/live",
+          activeProcessName: "bun",
+          cols: 100,
+          rows: 30,
+        }),
+        canMutate: true,
+        ensureRunning: mutation(),
+      }),
+    );
+    term.resize(140, 45);
+    act(() => {
+      vi.advanceTimersByTime(2_000);
+    });
+
+    expect(mocks.useSessionHandle).toHaveBeenLastCalledWith(
+      expect.objectContaining({ enabled: true, cols: 140, rows: 45 }),
     );
   });
 });

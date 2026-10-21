@@ -1,5 +1,10 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { createStore } from "zustand/vanilla";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+} from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ChatRunSettings } from "@traycer/protocol/persistence/epic/schemas";
 import { chatRecordSchema } from "@traycer/protocol/host/agent/gui/subscribe-windowed";
@@ -12,6 +17,10 @@ import {
   ChatRoutingContextMenuGroup,
   ChatRoutingTabMenu,
 } from "@/components/epic-canvas/canvas/chat-routing-menu";
+import { getChatSessionRegistry } from "@/lib/registries/chat-session-registry";
+import { createChatSessionStore } from "@/stores/chats/chat-session-store";
+import { IMMEDIATE_STREAM_FLUSH_COORDINATOR } from "@/stores/chats/stream-flush-coordinator";
+import { CHAT_STORE_TEST_ENVIRONMENT } from "@/stores/chats/test-support/chat-store-test-environment";
 import {
   agentConfigureCarriesRouting,
   buildRoutingConfigureRequest,
@@ -19,13 +28,9 @@ import {
 } from "@/lib/chat/chat-routing-setting";
 
 const hoisted = vi.hoisted(() => ({
-  session: { current: null as { store: unknown } | null },
   mutate: vi.fn(),
 }));
 
-vi.mock("@/lib/registries/chat-session-registry", () => ({
-  getChatSessionRegistry: () => ({ peek: () => hoisted.session.current }),
-}));
 vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
   useHostClientForHostId: () => null,
 }));
@@ -46,6 +51,25 @@ const SETTINGS: ChatRunSettings = {
   profileId: "work",
 };
 
+const CHAT_RECORD = {
+  id: "chat-1",
+  parentId: null,
+  userId: "user-1",
+  hostId: "host-1",
+  title: "A chat",
+  createdAt: 1,
+  updatedAt: 1,
+  isTitleEditedByUser: false,
+  settings: SETTINGS,
+  activeSessionChain: null,
+  claudePendingWakes: [],
+  messages: [],
+  events: [],
+  archivedAt: null,
+  pinnedUserProviderHandle: null,
+  lastDeliveredRolesDigest: null,
+};
+
 describe("the routing choice a chat carries", () => {
   it("reads an absent choice as following the device", () => {
     expect(chatRoutingOf({})).toBe("policy");
@@ -53,24 +77,7 @@ describe("the routing choice a chat carries", () => {
   });
 
   it("survives the chat record the host sends, and a record without it still parses", () => {
-    const base = {
-      id: "chat-1",
-      parentId: null,
-      userId: "user-1",
-      hostId: "host-1",
-      title: "A chat",
-      createdAt: 1,
-      updatedAt: 1,
-      isTitleEditedByUser: false,
-      settings: SETTINGS,
-      activeSessionChain: null,
-      claudePendingWakes: [],
-      messages: [],
-      events: [],
-      archivedAt: null,
-      pinnedUserProviderHandle: null,
-      lastDeliveredRolesDigest: null,
-    };
+    const base = CHAT_RECORD;
     const held = chatRecordSchema.parse({ ...base, routing: "hold" });
     expect(chatRoutingOf(held)).toBe("hold");
     expect(chatRoutingOf(chatRecordSchema.parse(base))).toBe("policy");
@@ -185,19 +192,50 @@ describe("the setting in the tab menu", () => {
 });
 
 describe("the setting for an open chat", () => {
+  const registry = getChatSessionRegistry();
   afterEach(() => {
     cleanup();
     hoisted.mutate.mockReset();
-    hoisted.session.current = null;
+    registry.disposeAll();
   });
 
-  function openFor(role: "owner" | "viewer") {
-    hoisted.session.current = {
-      store: createStore(() => ({
-        chat: { id: "chat-1", settings: SETTINGS, routing: "policy" },
-        access: { role, canAct: role === "owner" },
-      })),
-    };
+  /** A chat session the way the tab's tile holds it, over a stream that goes nowhere. */
+  function openSession(role: "owner" | "viewer"): void {
+    const handle = registry.acquire(
+      {
+        epicId: "epic-1",
+        chatId: "chat-1",
+        hostId: "host-1",
+        scopeKey: "routing-menu",
+      },
+      () =>
+        createChatSessionStore({
+          environment: CHAT_STORE_TEST_ENVIRONMENT,
+          hostId: "host-1",
+          epicId: "epic-1",
+          chatId: "chat-1",
+          userId: "user-1",
+          onAuthError: null,
+          onProviderAuthError: null,
+          wakeTransport: null,
+          streamFlushCoordinator: IMMEDIATE_STREAM_FLUSH_COORDINATOR,
+          streamClientFactory: () => ({
+            sendAction: () => undefined,
+            sameTurnSteeringProtocolSupported: () => true,
+            draftBlobBridgeSupported: () => true,
+            requestTranscriptRange: () => undefined,
+            requestResnapshot: () => undefined,
+            close: () => undefined,
+          }),
+        }),
+    );
+    handle.store.setState({
+      chat: chatRecordSchema.parse(CHAT_RECORD),
+      access: { role, ownerUserId: "user-1", canAct: role === "owner" },
+    });
+  }
+
+  function openMenu(): void {
     render(
       <ContextMenu>
         <ContextMenuTrigger>
@@ -212,7 +250,8 @@ describe("the setting for an open chat", () => {
   }
 
   it("sends the chat's own restated tuple with the new routing when its owner picks it", async () => {
-    openFor("owner");
+    openSession("owner");
+    openMenu();
 
     const trigger = await screen.findByText("On a usage limit or error");
     fireEvent.keyDown(trigger, { key: "ArrowRight" });
@@ -235,9 +274,21 @@ describe("the setting for an open chat", () => {
   });
 
   it("cannot be changed from a chat shared with the person as a viewer", async () => {
-    openFor("viewer");
+    openSession("viewer");
+    openMenu();
 
     const trigger = await screen.findByText("On a usage limit or error");
     expect(trigger.closest("[data-disabled]")).not.toBeNull();
+  });
+
+  // The menu was opened on a tab whose chat had no session yet; the stale peek
+  // memo left the setting out for as long as the menu stayed up.
+  it("offers the setting once the chat's session opens while the menu is up", () => {
+    openMenu();
+    expect(screen.queryByText("On a usage limit or error")).toBeNull();
+
+    act(() => openSession("owner"));
+
+    expect(screen.getByText("On a usage limit or error")).toBeDefined();
   });
 });

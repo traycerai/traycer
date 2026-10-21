@@ -12,6 +12,7 @@ import {
   queryOptions,
   useQuery,
 } from "@tanstack/react-query";
+import { useSyncExternalStore } from "react";
 import {
   afterEach,
   beforeEach,
@@ -54,6 +55,7 @@ import { useAuthStore } from "@/stores/auth/auth-store";
 
 interface OrganizationFixtureState {
   organization: OrganizationContextValue | null;
+  readonly listeners: Set<() => void>;
   loadTaskContext: Mock<() => Promise<GetTaskContextsResponse>>;
 }
 
@@ -69,11 +71,19 @@ vi.mock("@/lib/commands/actions/new-epic", () => ({
 }));
 const organizationState = vi.hoisted((): OrganizationFixtureState => ({
   organization: null,
+  listeners: new Set(),
   loadTaskContext: vi.fn<() => Promise<GetTaskContextsResponse>>(),
 }));
 vi.mock("@/hooks/organization/organization-context", async (load) => ({
   ...(await load<typeof import("@/hooks/organization/organization-context")>()),
-  useOrganization: () => organizationState.organization,
+  useOrganization: () =>
+    useSyncExternalStore(
+      (listener) => {
+        organizationState.listeners.add(listener);
+        return () => organizationState.listeners.delete(listener);
+      },
+      () => organizationState.organization,
+    ),
   useOrganizationTasks: () => organizationState.organization,
 }));
 vi.mock("@/hooks/epic/use-epic-get-task-contexts-query", () => ({
@@ -189,6 +199,14 @@ function organizationFixture(
     refresh: () => Promise.resolve(undefined),
     openDialog: () => undefined,
   };
+}
+
+/** The provider publishing a new context value, as it does when its view loads. */
+function publishOrganization(next: OrganizationContextValue): void {
+  act(() => {
+    organizationState.organization = next;
+    for (const listener of organizationState.listeners) listener();
+  });
 }
 
 function remoteTask(epicId: string): ListTaskLight {
@@ -334,6 +352,37 @@ describe("tab appearance and grouping controls", () => {
       ).toBeTruthy();
       expect(screen.queryByText("Tab appearance")).toBeNull();
       expect(organizationState.loadTaskContext).toHaveBeenCalledTimes(1);
+    });
+
+    // The batch is a different cache entry from the tab's own lookup. A render
+    // while the own lookup is pending (here the organization view loading)
+    // must find it; the compiled memo kept the stand-in empty until the own
+    // lookup answered.
+    it("picks up a batch that lands while the tab's own lookup is still pending", () => {
+      organizationState.organization = organizationFixture(undefined);
+      renderMenu(false);
+      expect(screen.queryByRole("menuitem", { name: "Labels" })).toBeNull();
+
+      act(() => {
+        queryClient.setQueryData(
+          stripBatchKey("user-1"),
+          taskContextsResponse({ found: ["epic-a", "epic-b"], localHomed: [] }),
+        );
+      });
+      publishOrganization(
+        organizationFixture({
+          catalog: [],
+          groups: { version: "0", groups: [], memberships: [] },
+          appearances: [],
+          taskLabels: {},
+          ready: true,
+          authenticationRequired: false,
+          pending: [],
+          failures: [],
+        }),
+      );
+
+      expect(screen.getByRole("menuitem", { name: "Labels" })).toBeTruthy();
     });
 
     it("shows the local tab appearance for a task the cached batch marks local-homed", () => {

@@ -35,7 +35,7 @@ export function useDurableStreamTransportFactory(): (
     const target = liveRef.current.directory.findById(hostId);
     if (target === null) {
       // The durable session registries only invoke this opener once their own
-      // readiness gate (`authenticatedHostStreamKey`) has already confirmed a
+      // readiness gate (`hostStreamTransportKeyFor`) has already confirmed a
       // dialable directory entry for `hostId` exists — an absent entry here
       // would mean that gate and the directory disagreed, which is a bug in
       // the caller, not a runtime condition to degrade gracefully from.
@@ -43,7 +43,7 @@ export function useDurableStreamTransportFactory(): (
     }
     const userId = liveRef.current.globalClient.getRequestContextUserId();
     if (userId === null) {
-      // Same gate as above (`authenticatedHostStreamKey`) also confirms a
+      // Same gate as above (`hostStreamTransportKeyFor`) also confirms a
       // bound user before this opener runs - a null here is likewise a
       // caller-gate bug, not a runtime condition to degrade from.
       throw new Error(`No signed-in user for host ${hostId}`);

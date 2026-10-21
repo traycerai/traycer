@@ -54,8 +54,7 @@ import {
 } from "@/lib/terminals/plain-terminal-authority";
 import {
   adoptWarmSessionInstance,
-  peekXtermHostGrid,
-  peekXtermHostGridForSession,
+  peekKeptAliveXtermHostGrid,
 } from "@/components/epic-canvas/renderers/xterm-host-registry";
 import { useTerminalSessionHandle } from "@/lib/registries/terminal-session-registry";
 
@@ -290,12 +289,14 @@ function LandingTerminalDurableBootstrap(
     return () => window.clearTimeout(timer);
   }, [measureTimedOut, measuredGrid]);
   const gridReady = measuredGrid !== null || measureTimedOut;
+  const peekedGrid = gridReady
+    ? peekKeptAliveXtermHostGrid(props.tab.instanceId, {
+        hostId: props.tab.hostId,
+        sessionId: props.tab.sessionId,
+      })
+    : null;
   const openingGrid = measuredGrid ??
-    peekXtermHostGrid(props.tab.instanceId) ??
-    peekXtermHostGridForSession({
-      hostId: props.tab.hostId,
-      sessionId: props.tab.sessionId,
-    }) ?? {
+    peekedGrid ?? {
       cols: TERMINAL_DEFAULT_COLS,
       rows: TERMINAL_DEFAULT_ROWS,
     };

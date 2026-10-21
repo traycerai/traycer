@@ -31,6 +31,7 @@ import { useTerminalSessionHandle } from "@/lib/registries/terminal-session-regi
 // chunk into the eager bundle.
 import {
   adoptWarmSessionInstance,
+  peekKeptAliveXtermHostGrid,
   peekXtermHostGrid,
   peekXtermHostGridForSession,
 } from "@/components/epic-canvas/renderers/xterm-host-registry";
@@ -427,13 +428,13 @@ export function useTerminalTileBootstrap(
   // only at store creation via a ref, so they are exactly as fresh as the
   // acquire that follows), then the defaults. The subscribe itself is held
   // behind `gridReady`, so a measured value is normally present here.
-  const openingGrid =
-    measuredGrid ??
-    peekXtermHostGrid(input.instanceId) ??
-    peekXtermHostGridForSession({
-      hostId: input.hostId,
-      sessionId: input.sessionId,
-    });
+  const peekedGrid = gridReady
+    ? peekKeptAliveXtermHostGrid(input.instanceId, {
+        hostId: input.hostId,
+        sessionId: input.sessionId,
+      })
+    : null;
+  const openingGrid = measuredGrid ?? peekedGrid;
   const handle = useTerminalSessionHandle({
     hostId: input.hostId,
     scope: input.scope,

@@ -13,6 +13,7 @@ import {
   useCanvasSelectionStore,
   type CanvasSelection,
 } from "./canvas-selection-store";
+import { useRequesterHostId } from "@/hooks/host/use-requester-host-id";
 
 export interface CanvasEditVariables {
   readonly selection: CanvasSelection;
@@ -52,6 +53,7 @@ function structureSelectionIsCurrent(
 export function useArtboardEdit(artifactId: string) {
   const client = useTabHostClient();
   const epicId = useEpicStore((state) => state.epicId);
+  const requesterHostId = useRequesterHostId(client);
   return useHostMutation<
     HostRpcRegistry,
     "epic.editArtboard",
@@ -104,7 +106,7 @@ export function useArtboardEdit(artifactId: string) {
     },
     options: {
       scope: {
-        id: `canvas-edit:${client?.getActiveHostId() ?? ""}:${epicId}:${artifactId}`,
+        id: `canvas-edit:${requesterHostId ?? ""}:${epicId}:${artifactId}`,
       },
       retry: false,
       onMutate: () => ({ hostId: client?.getActiveHostId() ?? null }),

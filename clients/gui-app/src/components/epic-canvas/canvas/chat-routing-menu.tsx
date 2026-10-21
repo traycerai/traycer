@@ -1,4 +1,4 @@
-import { useMemo, useSyncExternalStore } from "react";
+import { useSyncExternalStore } from "react";
 import { Route } from "lucide-react";
 import type { ChatRouting } from "@traycer/protocol/persistence/epic/foundation";
 import type { ChatRunSettings } from "@traycer/protocol/persistence/epic/schemas";
@@ -13,7 +13,7 @@ import {
 import { useAgentConfigure } from "@/hooks/agent/use-configure-agent-mutation";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import { useHostMethodSchemaVersion } from "@/hooks/host/use-host-supports-method";
-import { getChatSessionRegistry } from "@/lib/registries/chat-session-registry";
+import { useExistingChatSessionHandle } from "@/lib/registries/chat-session-registry";
 import {
   agentConfigureCarriesRouting,
   buildRoutingConfigureRequest,
@@ -72,10 +72,7 @@ interface ChatRoutingTabMenuProps {
  */
 export function ChatRoutingTabMenu(props: ChatRoutingTabMenuProps) {
   const { epicId, chatId, hostId } = props;
-  const handle = useMemo(
-    () => getChatSessionRegistry().peek(epicId, chatId, hostId),
-    [epicId, chatId, hostId],
-  );
+  const handle = useExistingChatSessionHandle(epicId, chatId, hostId);
   const chat = useSyncExternalStore(
     handle === null ? NO_SUBSCRIBE : handle.store.subscribe,
     () => (handle === null ? null : handle.store.getState().chat),

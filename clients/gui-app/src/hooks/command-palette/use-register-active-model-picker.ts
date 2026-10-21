@@ -9,6 +9,7 @@
  */
 import { useEffect, useRef } from "react";
 import {
+  notifyActiveModelPickerChanged,
   registerActiveModelPicker,
   type ActiveModelPickerController,
 } from "@/lib/commands/active-model-picker-registry";
@@ -21,6 +22,7 @@ export function useRegisterActiveModelPicker(
 
   useEffect(() => {
     controllerRef.current = controller;
+    notifyActiveModelPickerChanged();
   }, [controller]);
 
   useEffect(() => {
