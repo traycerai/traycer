@@ -12,6 +12,7 @@ import {
   type ChatServingKey,
 } from "@traycer-clients/shared/host-client/host-rpc-routing";
 import type { ChatServing } from "@traycer/protocol/host/chat-serving/index";
+import { useEnvironmentArmChats } from "@/hooks/environment/use-environment-arms";
 import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
 import type { RetainingChatServingWitness } from "@/lib/chats/pool-chat-serving-witness";
 
@@ -41,9 +42,16 @@ function useApplicableWitness(
       ? witness
       : null;
   const { hostId, epicId, chatId } = chat;
+  // A team host's chat is environment-owned, so its publication is the row
+  // appearing in the environment arm. Until then the pool ends the witness's
+  // stream `CHAT_NOT_VISIBLE`; the row's arrival retains again, which opens
+  // a fresh one.
+  const published = useEnvironmentArmChats(
+    applicable === null ? "" : epicId,
+  ).some((row) => row.identity.chatId === chatId);
   useEffect(
     () => applicable?.retain({ hostId, epicId, chatId }),
-    [applicable, hostId, epicId, chatId],
+    [applicable, hostId, epicId, chatId, published],
   );
   return applicable;
 }

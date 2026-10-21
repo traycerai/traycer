@@ -142,6 +142,15 @@ export class PoolChatServingWitness implements RetainingChatServingWitness {
       current.serving = parsed.data.serving;
       this.notify();
     });
+    // A fatal close is final: the pool ends the stream `CHAT_NOT_VISIBLE`
+    // for a chat it cannot show yet, such as one a team host has not
+    // published. The dead session is dropped so the next `retain` opens a
+    // fresh one; the caller's re-retain on publication is what asks.
+    session.onStatusChange((status, reason) => {
+      if (status !== "closed" || reason?.kind !== "fatalError") return;
+      const current = this.watched.get(key);
+      if (current?.session === session) current.session = null;
+    });
   }
 
   private notify(): void {
