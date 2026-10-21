@@ -3259,32 +3259,27 @@ export class AuthService {
     ) {
       return null;
     }
-    // A session authn has already refused, held open for its local plane (or
-    // being replaced by a sign-in attempt, which validates its own token and
-    // never comes through here). Asking again cannot change the answer:
-    // `/api/v3/user` refuses the same bearer, and the rotate re-spends a
-    // refresh token authn has refused and re-raises "session expired". Every
-    // host request that failed on the held bearer used to run that round trip,
-    // so the toast came back after each one (a refresh every ~3 s, measured),
-    // and during an attempt the demotion it ended in overwrote `signing-in`.
-    // The wake nudge stands down on the same latch; a successful sign-in clears
-    // it. `signed-in` is excluded: it holds a verdict, whatever the latch says.
-    const status = useAuthStore.getState().status;
-    if (
-      this.sessionRecoveryTerminallyRejected &&
-      (status === "unverified" || status === "signing-in")
-    ) {
-      return { kind: "rejected" };
-    }
     // An interactive sign-in owns the session while it runs, and this
     // automatic check stands down for one as session recovery does, whatever
-    // authn would answer: a refusal would demote `signing-in` to `unverified`
-    // under the running attempt, and a verdict would promote it, either way
-    // taking the approval screen away while the attempt's own result is
-    // still to land. A check started before the attempt is fenced by the
-    // identity generation the attempt advanced.
+    // authn would answer or the latch below holds: a refusal would demote
+    // `signing-in` to `unverified` under the running attempt, and a verdict
+    // would promote it, either way taking the approval screen away while the
+    // attempt's own result is still to land. A check started before the
+    // attempt is fenced by the identity generation the attempt advanced.
+    const status = useAuthStore.getState().status;
     if (this.activeAttempt !== null || status === "signing-in") {
       return { kind: "superseded" };
+    }
+    // A session authn has already refused, held open for its local plane.
+    // Asking again cannot change the answer: `/api/v3/user` refuses the same
+    // bearer, and the rotate re-spends a refresh token authn has refused and
+    // re-raises "session expired". Every host request that failed on the held
+    // bearer used to run that round trip, so the toast came back after each
+    // one (a refresh every ~3 s, measured). The wake nudge stands down on the
+    // same latch; a successful sign-in clears it. `signed-in` is excluded: it
+    // holds a verdict, whatever the latch says.
+    if (this.sessionRecoveryTerminallyRejected && status === "unverified") {
+      return { kind: "rejected" };
     }
     const currentUserId = ctx.identity.userId;
     const currentToken = this.currentBearer;
