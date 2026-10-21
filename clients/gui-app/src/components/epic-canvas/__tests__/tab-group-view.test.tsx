@@ -16,6 +16,7 @@ import {
   vi,
 } from "vitest";
 import { useLayoutEffect, type ReactNode } from "react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { CloudChatSummary } from "@traycer/protocol/host/epic/cloud-chat";
 import { TabGroupView } from "@/components/epic-canvas/canvas/tab-group-view";
 import { paneActivationDeferProps } from "@/components/epic-canvas/pane-activation";
@@ -239,6 +240,8 @@ vi.mock("@/lib/epic-selectors", () => ({
 vi.mock("@/lib/registries/chat-session-registry", () => ({
   getChatSessionRegistry: () => ({
     listHandles: () => [],
+    // The chat tab's routing menu looks its chat up here; no session is open.
+    peek: () => null,
     subscribe: () => () => undefined,
   }),
   useExistingChatSessionHandle: () => null,
@@ -517,21 +520,26 @@ function seedCanvasWithActivePane(
   });
 }
 
+// The chat tab's routing menu mounts a mutation hook, which needs a client.
+const routingMenuQueryClient = new QueryClient();
+
 function groupView(
   tabs: ReadonlyArray<EpicCanvasTileRef>,
   activeTabId: string | null,
   paneVisible: boolean,
 ): ReactNode {
   return (
-    <TooltipProvider>
-      <PaneVisibilityContext.Provider value={paneVisible}>
-        <TabGroupView
-          epicId="epic-1"
-          tabId={VIEW_TAB_ID}
-          pane={pane(tabs, activeTabId)}
-        />
-      </PaneVisibilityContext.Provider>
-    </TooltipProvider>
+    <QueryClientProvider client={routingMenuQueryClient}>
+      <TooltipProvider>
+        <PaneVisibilityContext.Provider value={paneVisible}>
+          <TabGroupView
+            epicId="epic-1"
+            tabId={VIEW_TAB_ID}
+            pane={pane(tabs, activeTabId)}
+          />
+        </PaneVisibilityContext.Provider>
+      </TooltipProvider>
+    </QueryClientProvider>
   );
 }
 
