@@ -645,13 +645,13 @@ describe("startLocalHostInventorySubscription", () => {
     // The late frame must not gain a `true` on top of the teardown's `false`:
     // arming coverage from a retired stream would leave the new account
     // believing its registry is covered when no usable snapshot for IT has
-    // ever arrived - the new account's poll must keep running.
+    // ever arrived.
     expect(harness.pushActiveCalls).toEqual([true, false]);
 
     subscription.dispose();
   });
 
-  it("B7: a late frame on the OLD session cannot arm coverage before the NEW stream has produced a snapshot of its own - the new account's poll keeps running", () => {
+  it("B7: a late frame on the OLD session cannot arm coverage before the NEW stream has produced a snapshot of its own", () => {
     const harness = buildHarness();
     harness.setLocalHost(HOST_1);
     const subscription = startLocalHostInventorySubscription(harness.deps);
@@ -675,8 +675,7 @@ describe("startLocalHostInventorySubscription", () => {
     firstSession.emitSnapshot([buildRow("host-1")], false, 9_000);
 
     // Coverage must still read false: the new account has no usable snapshot
-    // of its own, so its poll must still be the one serving the registry -
-    // arming here would strand it with neither a snapshot nor a poll.
+    // of its own, and arming here would report a push that covers nothing.
     expect(harness.pushActiveCalls).toEqual([true, false]);
     expect(harness.pushActiveCalls.at(-1)).toBe(false);
 

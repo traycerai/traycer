@@ -15,7 +15,10 @@
  * None of them is wire surface: they are constructor inputs to the engine.
  */
 import type { HostListFetchResult } from "@traycer-clients/shared/host-client/remote-fetcher";
-import type { HostListResponse } from "@traycer/protocol/host/host-status";
+import type {
+  HostListItem,
+  HostListResponse,
+} from "@traycer/protocol/host/host-status";
 import type {
   AuthorityIdentitySource,
   HostFleetEntry,
@@ -156,7 +159,9 @@ export interface DesktopHostFleetSourceOptions {
   ) => Promise<HostListFetchResult>;
   /**
    * Hands the FULL registry rows to whoever needs them for display, once per
-   * successful fetch.
+   * adopted read: the rows this port serves after it, every scope merged (see
+   * {@link RegistryScope}), so a push never shows windows a fleet without the
+   * team rows the last bearer read found.
    *
    * This is what makes main's cadence serve both consumers from ONE request.
    * The authority needs ids; every window needs the rows (names, connectivity,
@@ -206,6 +211,11 @@ export interface DesktopHostFleetSourceOptions {
  *  - Every snapshot is stamped with the identity generation captured when its
  *    FETCH STARTED, so a late account-A completion is rejected by the engine
  *    however high its revision is.
+ *  - Rows are held and ordered PER SCOPE ({@link RegistryScope}). The local
+ *    host's push speaks for the personal rows alone and replaces only those;
+ *    the user-bearer read is the one reader of the team rows, and speaks for
+ *    every row it returns. A push therefore never drops or freezes a team row,
+ *    and a read is declined only for the scopes a newer read already covers.
  *
  * The 60 s cadence that drives {@link DesktopHostFleetSource.refresh} lives in
  * `ipc/registered-hosts-broadcast.ts` rather than here, and that split is the
@@ -220,7 +230,11 @@ export class DesktopHostFleetSource implements HostFleetSource {
   private readonly options: DesktopHostFleetSourceOptions;
   private currentSnapshot: HostFleetSnapshot;
   private revisionCounter = 0;
-  private rows: readonly FleetRow[] = [];
+  /** The registry rows this port serves, held per scope. */
+  private readonly rows: Record<RegistryScope, readonly HostListItem[]> = {
+    personal: [],
+    team: [],
+  };
   private localHostId: string | null = null;
   /**
    * Monotonic refresh sequence (same-identity ordering). The generation stamp
@@ -240,19 +254,20 @@ export class DesktopHostFleetSource implements HostFleetSource {
    * following a number.
    *
    * What is actually paid, and what is not: the cost of no dedupe is a
-   * duplicate FETCH. It is never a duplicate ADOPTION - `adoptedSeq` below
-   * already guarantees at most one completion wins, in request order. So the
-   * bug the dedupe would prevent does not exist; only the network call does,
-   * bounded to roughly two in practice (the 60s poll racing a deregister).
+   * duplicate FETCH. It is never a duplicate ADOPTION - the per-scope
+   * `watermarks` below already guarantee at most one completion wins each
+   * scope, in request order. So the bug the dedupe would prevent does not
+   * exist; only the network call does, bounded to roughly two in practice (the
+   * 60s poll racing a deregister).
    *
    * What coalescing would cost is a correctness property, and it is one this
    * port has already been bitten by. Callers refresh BECAUSE something
    * changed - a registration, a deregistration, an identity change. Serving
    * such a caller from a fetch that started BEFORE the change it is reacting
    * to returns pre-change data, and the request that would have observed the
-   * change never happens. `adoptedSeq` cannot catch that: the stale completion
-   * genuinely IS the newest completion of the only in-flight fetch, so the
-   * guard agrees with it rather than declining it.
+   * change never happens. The seq watermark cannot catch that: the stale
+   * completion genuinely IS the newest completion of the only in-flight fetch,
+   * so the guard agrees with it rather than declining it.
    *
    * The proof that this is not hypothetical is the SECOND counter below.
    * `localIdentitySeq` exists because a local-identity change that landed
@@ -264,7 +279,6 @@ export class DesktopHostFleetSource implements HostFleetSource {
    * third counter to rescue it.
    */
   private refreshSeq = 0;
-  private adoptedSeq = 0;
   /**
    * Monotonic LOCAL-IDENTITY sequence, and deliberately not the same counter
    * as `refreshSeq`.
@@ -287,13 +301,7 @@ export class DesktopHostFleetSource implements HostFleetSource {
   private adoptedLocalIdentitySeq = 0;
   private readonly listeners = new Set<(snapshot: HostFleetSnapshot) => void>();
   /**
-   * Set only by the local-host inventory subscription; read only by the
-   * registry cadence. Not part of the snapshot and deliberately not published
-   * anywhere: it says who is READING the registry, which is nobody's business
-   * but the reader's.
-   */
-  /**
-   * The read TIME of the newest registry answer this port has adopted.
+   * The newest adopted read, PER SCOPE: its `refreshSeq` and its read TIME.
    *
    * `refreshSeq` orders answers by when they were REQUESTED here, which is the
    * right rule for two of this port's own fetches and the wrong one the moment
@@ -304,19 +312,27 @@ export class DesktopHostFleetSource implements HostFleetSource {
    * deregistered in between came back until the host's next read.
    *
    * So adoption is ordered by when the registry was OBSERVED, and both rules
-   * stand: this one rejects an older observation, `refreshSeq` still rejects
-   * an older request. Advanced only where rows are actually adopted.
+   * stand: `readAtMs` rejects an older observation, `seq` still rejects an
+   * older request. Advanced only where rows are actually adopted.
+   *
+   * Per scope because the two readers do not read the same rows. One
+   * watermark let whichever reader landed last fence out the other's scope: a
+   * bearer read that went out before a push landed was dropped whole, team
+   * rows included, though no push ever carries one - so while the push ran,
+   * the team rows were whatever the last bearer read to beat every push had
+   * said. Each scope is fenced only by the reads that speak for it.
    *
    * NOT reset on an identity change, deliberately. Resetting would re-open the
    * hole across an account switch - a push carrying rows read in the previous
    * account's era could win again - and what not resetting costs is bounded
    * and covered: a newly signed-in account whose host replays a snapshot older
-   * than the last adopted read is declined, and the poll, which is running
-   * precisely because that push is not covering anything yet, serves the fleet
-   * until the host's next read supersedes it.
+   * than the last adopted read is declined, and the bearer read serves the
+   * fleet until the host's next read supersedes it.
    */
-  private adoptedReadAtMs = Number.NEGATIVE_INFINITY;
-  private pushActive = false;
+  private readonly watermarks: Record<RegistryScope, ScopeWatermark> = {
+    personal: { seq: 0, readAtMs: Number.NEGATIVE_INFINITY },
+    team: { seq: 0, readAtMs: Number.NEGATIVE_INFINITY },
+  };
   private readonly identitySubscription: SelectionSubscription;
   private readonly onHostChange: () => void;
   private disposed = false;
@@ -337,7 +353,8 @@ export class DesktopHostFleetSource implements HostFleetSource {
       // the machine, but its MEMBERSHIP belongs to an account, and the new
       // one has not been read yet. The refresh that follows lands as an
       // ordinary fleet shift.
-      this.rows = [];
+      this.rows.personal = [];
+      this.rows.team = [];
       this.localHostId = null;
       this.publish();
       void this.refresh();
@@ -409,6 +426,11 @@ export class DesktopHostFleetSource implements HostFleetSource {
    * `refreshSeq` ordering against a poll that may be in flight, the same
    * signed-out and unverified branches, the same publish-then-adopt order.
    *
+   * What it does NOT share is reach. The host reads with its device
+   * credential, which authn scopes to the owner's personal hosts, so a push
+   * replaces the PERSONAL rows only and leaves the team rows to the bearer
+   * read, which keeps running beside it (`registered-hosts-broadcast.ts`).
+   *
    * TOTAL, like {@link refresh}: its caller is a stream callback with nobody
    * to reject to.
    */
@@ -421,24 +443,6 @@ export class DesktopHostFleetSource implements HostFleetSource {
         error: String(error),
       });
     }
-  }
-
-  /**
-   * Whether a push plane is currently covering the registry, for the cadence
-   * that would otherwise fetch it.
-   *
-   * Only the subscription may set this, and it says `false` for every way its
-   * stream can be less than healthy - including a snapshot the host itself
-   * marked stale. The poll reads it per tick rather than being stopped and
-   * restarted, so the failure mode of this flag getting stuck is a redundant
-   * read, never a fleet that stops being refreshed.
-   */
-  setPushActive(active: boolean): void {
-    this.pushActive = active;
-  }
-
-  isPushActive(): boolean {
-    return this.pushActive && !this.disposed;
   }
 
   private async refreshOrThrow(): Promise<void> {
@@ -502,13 +506,13 @@ export class DesktopHostFleetSource implements HostFleetSource {
       this.localIdentitySeq += 1;
       // `readAtMs` here is this observation's own time, not a registry read's:
       // signing out is a fact about the account learned right now, and it must
-      // supersede any read that observed the fleet before it.
+      // supersede any read that observed the fleet before it - in every scope.
       this.applyFetched(
         generation,
         seq,
         this.localIdentitySeq,
         null,
-        [],
+        { personal: [], team: [] },
         readAtMs,
       );
       return;
@@ -545,7 +549,8 @@ export class DesktopHostFleetSource implements HostFleetSource {
       // with no `kind` to check because a snapshot IS the host's successful
       // read - a host that could not read sends nothing, and a host serving
       // rows it could not refresh marks them stale, which the subscription
-      // handles by standing the poll back up rather than by withholding rows.
+      // forwards anyway: they are still the freshest personal rows anyone has.
+      // It speaks for the personal scope alone (see `RegistryScope`).
       this.publishAndAdopt(
         identity,
         generation,
@@ -553,6 +558,7 @@ export class DesktopHostFleetSource implements HostFleetSource {
         identitySeq,
         localHostId,
         pushed.response,
+        scopeRows(pushed.response, PUSH_SCOPES),
         readAtMs,
       );
       return;
@@ -590,6 +596,7 @@ export class DesktopHostFleetSource implements HostFleetSource {
       identitySeq,
       localHostId,
       result.response,
+      scopeRows(result.response, REGISTRY_SCOPES),
       readAtMs,
     );
   }
@@ -601,6 +608,12 @@ export class DesktopHostFleetSource implements HostFleetSource {
    * FETCHED under, so a renderer on another account drops it by the same
    * rule the engine rejects the snapshot by - one stamp, two readers, no
    * second staleness policy.
+   *
+   * Both fences run per scope, and a read is published when ANY scope it
+   * speaks for is admitted. What a current-identity publish carries is the
+   * merged fleet the adoption is about to serve - the admitted scopes from
+   * this read, every other scope as held - so windows and the authority see
+   * one fleet. A retired identity's read is published verbatim, as before.
    */
   private publishAndAdopt(
     identity: { readonly identityKey: string | null },
@@ -609,65 +622,91 @@ export class DesktopHostFleetSource implements HostFleetSource {
     identitySeq: number,
     localHostId: string | null,
     response: HostListResponse,
+    scoped: ScopedRows,
     readAtMs: number,
   ): void {
-    if (readAtMs < this.adoptedReadAtMs) {
-      // An answer that observed the registry EARLIER than one already adopted.
-      // Declined before the publish, not just before the adoption: the renderer
-      // push is the display half of the same fact, and showing windows a fleet
-      // the authority has refused is the same bug with a different surface.
-      this.options.log.debug(
-        "[selection-fleet] dropped an older registry read",
-        {
-          readAtMs,
-          adopted: this.adoptedReadAtMs,
-        },
-      );
-      return;
-    }
-    if (
-      generation === this.options.identity.current().generation &&
-      seq < this.adoptedSeq
-    ) {
-      // Same-identity ordering, applied to the PUBLISH as well as the
-      // adoption. `applyFetched` has always declined an older request, but it
-      // declines it after this method has already told every window what that
-      // request found - and read-time ordering made that reachable: a poll
-      // that STARTED before a push's read completes after it, passes the
-      // read-time check (it did observe the registry later), publishes its
-      // rows, and is then refused on seq. Windows would be showing a fleet the
-      // authority had just rejected.
-      //
-      // Gated on the generation matching, which is what keeps the retired-
-      // identity path below intact: a late completion for an account this
-      // process has left is still published, stamped with the generation it
-      // was fetched under, precisely so the renderer can drop it by the same
-      // rule the engine does.
-      this.options.log.debug(
-        "[selection-fleet] dropped a superseded registry read before publish",
-        {
-          seq,
-          adopted: this.adoptedSeq,
-        },
-      );
-      return;
-    }
+    const current = generation === this.options.identity.current().generation;
+    const admitted: ScopedRows = {
+      personal: this.admitScope("personal", scoped, current, seq, readAtMs),
+      team: this.admitScope("team", scoped, current, seq, readAtMs),
+    };
+    if (admitted.personal === null && admitted.team === null) return;
     this.options.publishRegistryResponse({
       identityKey: identity.identityKey,
-      response,
+      response: current
+        ? {
+            hosts: [
+              ...(admitted.personal ?? this.rows.personal),
+              ...(admitted.team ?? this.rows.team),
+            ],
+          }
+        : response,
     });
     this.applyFetched(
       generation,
       seq,
       identitySeq,
       localHostId,
-      response.hosts.map((row): FleetRow => ({
-        hostId: row.hostId,
-        sandbox: row.kind === "sandbox",
-        teamOwned: row.owner?.kind === "team",
-      })),
+      admitted,
       readAtMs,
     );
+  }
+
+  /**
+   * This read's rows for `scope`, or null when it does not speak for the
+   * scope or a newer read of the scope has already been adopted.
+   */
+  private admitScope(
+    scope: RegistryScope,
+    scoped: ScopedRows,
+    currentIdentity: boolean,
+    seq: number,
+    readAtMs: number,
+  ): readonly HostListItem[] | null {
+    const rows = scoped[scope];
+    if (rows === null) return null;
+    const watermark = this.watermarks[scope];
+    if (readAtMs < watermark.readAtMs) {
+      // An answer that observed the scope EARLIER than one already adopted.
+      // Declined before the publish, not just before the adoption: the renderer
+      // push is the display half of the same fact, and showing windows a fleet
+      // the authority has refused is the same bug with a different surface.
+      this.options.log.debug(
+        "[selection-fleet] dropped an older registry read",
+        {
+          scope,
+          readAtMs,
+          adopted: watermark.readAtMs,
+        },
+      );
+      return null;
+    }
+    if (currentIdentity && seq < watermark.seq) {
+      // Same-identity ordering, applied to the PUBLISH as well as the
+      // adoption. `applyFetched` has always declined an older request, but it
+      // declines it after `publishAndAdopt` has already told every window what
+      // that request found - and read-time ordering made that reachable: a
+      // poll that STARTED before a push's read completes after it, passes the
+      // read-time check (it did observe the registry later), publishes its
+      // rows, and is then refused on seq. Windows would be showing a fleet the
+      // authority had just rejected.
+      //
+      // Gated on the generation matching, which is what keeps the retired-
+      // identity path intact: a late completion for an account this process
+      // has left is still published, stamped with the generation it was
+      // fetched under, precisely so the renderer can drop it by the same rule
+      // the engine does.
+      this.options.log.debug(
+        "[selection-fleet] dropped a superseded registry read before publish",
+        {
+          scope,
+          seq,
+          adopted: watermark.seq,
+        },
+      );
+      return null;
+    }
+    return rows;
   }
 
   dispose(): void {
@@ -775,7 +814,7 @@ export class DesktopHostFleetSource implements HostFleetSource {
     seq: number,
     identitySeq: number,
     localHostId: string | null,
-    rows: readonly FleetRow[],
+    scoped: ScopedRows,
     readAtMs: number,
   ): void {
     if (this.disposed) return;
@@ -786,28 +825,37 @@ export class DesktopHostFleetSource implements HostFleetSource {
       // membership. Adopting it would be the subtle half of the bug: a later
       // local-host republish would carry the old account's rows under the
       // CURRENT generation and sail straight past the engine's guard.
-      this.publishSnapshot(generation, localHostId, rows);
+      this.publishSnapshot(
+        generation,
+        localHostId,
+        projectFleetRows([...(scoped.personal ?? []), ...(scoped.team ?? [])]),
+      );
       return;
     }
-    if (seq < this.adoptedSeq) {
-      // Same-identity ordering (see `refreshSeq`): a newer completion was
-      // adopted while this one awaited. Declining keeps request order - an
-      // older response landing last must not resurrect rows the newer one
-      // removed. Ordered AFTER the generation branch above on purpose: a
-      // retired identity's stale-stamped publish is a contract of its own.
+    // Same-identity ordering (see `refreshSeq`), per scope: a scope whose
+    // newer completion was adopted while this one awaited is declined, so an
+    // older response landing last cannot resurrect rows the newer one
+    // removed. Ordered AFTER the generation branch above on purpose: a
+    // retired identity's stale-stamped publish is a contract of its own.
+    const adopting = REGISTRY_SCOPES.filter(
+      (scope) => scoped[scope] !== null && seq >= this.watermarks[scope].seq,
+    );
+    if (adopting.length === 0) {
       this.options.log.debug("[selection-fleet] dropped a superseded refresh", {
         seq,
-        adopted: this.adoptedSeq,
       });
       return;
     }
-    this.adoptedSeq = seq;
-    // Advanced HERE and nowhere else: the watermark means "the newest read
-    // whose rows are the ones this port is serving", so a completion declined
-    // above - or one that never reached this method - must not raise it and
-    // lock out the read that should win.
-    this.adoptedReadAtMs = Math.max(this.adoptedReadAtMs, readAtMs);
-    this.rows = rows;
+    for (const scope of adopting) {
+      const watermark = this.watermarks[scope];
+      watermark.seq = seq;
+      // Advanced HERE and nowhere else: the watermark means "the newest read
+      // whose rows are the ones this port is serving for the scope", so a
+      // completion declined above - or one that never reached this method -
+      // must not raise it and lock out the read that should win.
+      watermark.readAtMs = Math.max(watermark.readAtMs, readAtMs);
+      this.rows[scope] = scoped[scope] ?? [];
+    }
     // The ID is fenced SEPARATELY from the rows: this refresh's row projection
     // can be the current one while the id it read before the fetch has since
     // been superseded by a local-identity change. Adopting the tuple wholesale
@@ -830,7 +878,11 @@ export class DesktopHostFleetSource implements HostFleetSource {
   }
 
   private publishAt(generation: number): void {
-    this.publishSnapshot(generation, this.localHostId, this.rows);
+    this.publishSnapshot(
+      generation,
+      this.localHostId,
+      projectFleetRows([...this.rows.personal, ...this.rows.team]),
+    );
   }
 
   private publishSnapshot(
@@ -860,6 +912,65 @@ interface FleetRow {
   readonly hostId: string;
   readonly sandbox: boolean;
   readonly teamOwned: boolean;
+}
+
+function projectFleetRows(rows: readonly HostListItem[]): readonly FleetRow[] {
+  return rows.map((row) => ({
+    hostId: row.hostId,
+    sandbox: row.kind === "sandbox",
+    teamOwned: registryScopeOf(row) === "team",
+  }));
+}
+
+/**
+ * Which reader may speak for a registry row, read off the row's own
+ * `owner.kind` (both readers ask with `include=owner`).
+ *
+ * The local host reads `GET /api/v3/hosts` with its DEVICE credential, which
+ * authn scopes to the owner's personal hosts: its push never carries a team's
+ * host. Only a person's bearer is also answered with the hosts of that
+ * person's teams. So the push speaks for `personal` alone, and the bearer read
+ * is the one reader of `team`. A row with no `owner` is personal - every team
+ * row carries one, a `team` arm being the only way a row says a team owns it.
+ */
+type RegistryScope = "personal" | "team";
+
+const REGISTRY_SCOPES: readonly RegistryScope[] = ["personal", "team"];
+const PUSH_SCOPES: readonly RegistryScope[] = ["personal"];
+
+function registryScopeOf(row: HostListItem): RegistryScope {
+  return row.owner?.kind === "team" ? "team" : "personal";
+}
+
+/** One read's rows per scope; null for a scope the read does not speak for. */
+type ScopedRows = Readonly<
+  Record<RegistryScope, readonly HostListItem[] | null>
+>;
+
+interface ScopeWatermark {
+  seq: number;
+  readAtMs: number;
+}
+
+/**
+ * Splits a response by scope. A scope outside `speaksFor` is null, and its
+ * rows are dropped rather than adopted: a push row that claimed a team would
+ * still be the host's word for something only the bearer read may say.
+ */
+function scopeRows(
+  response: HostListResponse,
+  speaksFor: readonly RegistryScope[],
+): ScopedRows {
+  const personal: HostListItem[] = [];
+  const team: HostListItem[] = [];
+  for (const row of response.hosts) {
+    if (registryScopeOf(row) === "team") team.push(row);
+    else personal.push(row);
+  }
+  return {
+    personal: speaksFor.includes("personal") ? personal : null,
+    team: speaksFor.includes("team") ? team : null,
+  };
 }
 
 /**
