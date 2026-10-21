@@ -75,7 +75,10 @@ export interface AuthInvalidationRouter {
 
 /**
  * Re-runs route guards when the auth status or the signed-in user changes,
- * and never starts a router load while one is in flight.
+ * and never starts a router load while a navigation or the initial load is in
+ * flight, which is what `status: "pending"` covers. Intent preloads and the
+ * background revalidation of successful matches do not set pending, so they
+ * are not waited for.
  *
  * `router.invalidate()` is itself a `router.load()`, and a second load
  * started under an in-flight one is unsafe on these router-core versions in
