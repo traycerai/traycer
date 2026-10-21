@@ -192,8 +192,13 @@ export function registerSelectionAuthorityIpc(bridge: RunnerIpcBridge): void {
     onRows: (read) => {
       void fleet.acceptPushedRows(read);
     },
+    // Coverage gates nothing: the registry cadence reads with the user's
+    // bearer whatever the push is doing, since only that read returns the
+    // account's team hosts. It is kept as a diagnostic of the push's health.
     onPushActiveChanged: (active) => {
-      fleet.setPushActive(active);
+      authorityLog.debug("[local-inventory] push coverage changed", {
+        active,
+      });
     },
     log: authorityLog,
   });

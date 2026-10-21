@@ -10,7 +10,11 @@ import type {
 } from "@traycer-clients/shared/host-selection/selection-authority-contract";
 import type { AuthorityLog } from "@traycer-clients/shared/host-selection/selection-authority-engine";
 import type { HostListFetchResult } from "@traycer-clients/shared/host-client/remote-fetcher";
-import type { HostListItem } from "@traycer/protocol/host/host-status";
+import type {
+  HostConnectivity,
+  HostListItem,
+  HostSandboxState,
+} from "@traycer/protocol/host/host-status";
 import type {
   IpcHostController,
   IpcHostLifecycle,
@@ -49,6 +53,10 @@ import {
   DesktopLocalHostOutageSignal,
 } from "../desktop-selection-ports";
 import { startLocalHostInventorySubscription } from "../local-host-inventory-subscription";
+import {
+  registerRegisteredHostsBroadcast,
+  type RegisteredHostsBroadcastBridge,
+} from "../../ipc/registered-hosts-broadcast";
 
 /**
  * Controllable stand-in for the fleet port's enrollment read. Default is the
@@ -1730,6 +1738,7 @@ describe("DesktopHostFleetSource acceptPushedRows", () => {
           .sort();
       expect(hostIds()).toEqual(["local-host", "sbx-1"]);
 
+      const coverage: boolean[] = [];
       const streamClient = new FakeStreamClient(true);
       const subscription = startLocalHostInventorySubscription({
         localHost: () => ({
@@ -1747,17 +1756,17 @@ describe("DesktopHostFleetSource acceptPushedRows", () => {
           void fleet.acceptPushedRows(read);
         },
         onPushActiveChanged: (active) => {
-          fleet.setPushActive(active);
+          coverage.push(active);
         },
         log: silentLog,
       });
       const session = streamClient.sessions[0];
       if (session === undefined) throw new Error("no session opened");
-      return { fleet, published, hostIds, subscription, session };
+      return { fleet, published, hostIds, subscription, session, coverage };
     }
 
-    it("a @1.0 snapshot (personal hosts only) leaves the sandbox in the fleet and leaves the poll running", async () => {
-      const { fleet, published, hostIds, subscription, session } =
+    it("a @1.0 snapshot (personal hosts without their sandboxes) leaves the sandbox in the fleet and is not reported as coverage", async () => {
+      const { fleet, published, hostIds, subscription, session, coverage } =
         await wired();
       const publishedBefore = published.length;
       session.negotiatedSchemaVersion = { major: 1, minor: 0 };
@@ -1777,14 +1786,14 @@ describe("DesktopHostFleetSource acceptPushedRows", () => {
 
       expect(hostIds()).toEqual(["local-host", "sbx-1"]);
       expect(published).toHaveLength(publishedBefore);
-      expect(fleet.isPushActive()).toBe(false);
+      expect(coverage).not.toContain(true);
 
       subscription.dispose();
       fleet.dispose();
     });
 
     it("control: the same personal-only snapshot on @1.1 IS adopted, so the wiring above is live", async () => {
-      const { fleet, published, hostIds, subscription, session } =
+      const { fleet, published, hostIds, subscription, session, coverage } =
         await wired();
       const publishedBefore = published.length;
       session.negotiatedSchemaVersion = { major: 1, minor: 1 };
@@ -1804,7 +1813,7 @@ describe("DesktopHostFleetSource acceptPushedRows", () => {
       });
 
       expect(hostIds()).toEqual(["local-host"]);
-      expect(fleet.isPushActive()).toBe(true);
+      expect(coverage).toEqual([true]);
 
       subscription.dispose();
       fleet.dispose();
@@ -2014,7 +2023,7 @@ describe("DesktopHostFleetSource acceptPushedRows", () => {
     fleet.dispose();
   });
 
-  it("T3: a poll that STARTS first but completes LAST is refused on seq before it ever publishes", async () => {
+  it("T3: a poll that STARTS first but completes LAST has its personal rows refused on seq before it ever publishes", async () => {
     // The bug this closes: the same-identity seq fence used to run only
     // inside `applyFetched`, AFTER `publishRegistryResponse` had already been
     // called from `publishAndAdopt`. A poll that starts before a push but
@@ -2070,21 +2079,23 @@ describe("DesktopHostFleetSource acceptPushedRows", () => {
 
     // d. The poll's promise resolves. Its readAtMs (T1_MS) is NEWER than the
     // read time already adopted (T0_MS), so the read-time check alone would
-    // let it through - but the same-identity seq fence (seq 1 < adoptedSeq 2)
-    // must refuse it BEFORE the publish. Resolved with a DIFFERENT row set -
-    // "host-a" only - so any leak of the poll's rows into the publisher or
-    // the snapshot is unmistakable.
+    // let it through - but the same-identity seq fence on the personal scope
+    // (seq 1 < the push's 2) must refuse its personal rows BEFORE the publish.
+    // Resolved with a DIFFERENT row set - "host-a" only - so any leak of the
+    // poll's personal rows into the publisher or the snapshot is unmistakable.
     poll.resolve({
       kind: "ok",
       response: { hosts: [rowA] },
     });
     await refreshing;
 
-    // The publisher was called exactly once IN TOTAL - only the push's
-    // publish. The push's rows are still what the fleet snapshot carries;
-    // the poll's [A]-only set never appeared in either place.
-    expect(published).toHaveLength(1);
+    // The poll still speaks for the team scope, which no push ever covers, so
+    // it is adopted for that scope alone and published once more: the merged
+    // fleet, whose personal rows are still the push's. The poll's [A]-only
+    // set never appeared in either place.
+    expect(published).toHaveLength(2);
     expect(published[0]?.response.hosts).toEqual([rowA, rowB, rowC]);
+    expect(published[1]?.response.hosts).toEqual([rowA, rowB, rowC]);
     expect(
       fleet
         .snapshot()
@@ -2178,6 +2189,370 @@ describe("DesktopHostFleetSource acceptPushedRows", () => {
     expect(fleet.snapshot().hosts.map((entry) => entry.hostId)).toEqual([
       "remote-host",
     ]);
+    fleet.dispose();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// DesktopHostFleetSource: the registry merged by scope (personal / team)
+// ---------------------------------------------------------------------------
+
+describe("DesktopHostFleetSource merges the registry by scope", () => {
+  /**
+   * A team's sandbox as the user-bearer read lists it. The local host's own
+   * read never returns one: authn scopes its device credential to the owner's
+   * personal hosts.
+   */
+  function teamSandbox(
+    hostId: string,
+    sandboxState: HostSandboxState,
+    connectivity: HostConnectivity,
+  ): HostListItem {
+    const base = buildHostListItem(hostId);
+    return {
+      ...base,
+      kind: "sandbox",
+      status: { ...base.status, connectivity },
+      sandboxState,
+      sandboxFrozen: false,
+      profile: "agent",
+      owner: { kind: "team", id: "team-1", name: "Platform" },
+    };
+  }
+
+  /** The row the windows were last handed for `hostId`. */
+  function lastPublishedRow(
+    published: readonly RegisteredHostsPush[],
+    hostId: string,
+  ): HostListItem | undefined {
+    return published
+      .at(-1)
+      ?.response.hosts.find((row) => row.hostId === hostId);
+  }
+
+  function hostIdsOf(fleet: DesktopHostFleetSource): string[] {
+    return fleet
+      .snapshot()
+      .hosts.map((entry) => entry.hostId)
+      .sort();
+  }
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  /**
+   * The real subscription feeding the real fleet source, with the real 60 s
+   * cadence driving it - wired as `selection-authority-ipc.ts` wires them.
+   * Only `setInterval` is faked, so the enrollment read and the adopt path run
+   * on real I/O.
+   */
+  async function wiredWithCadence(initialRegistry: readonly HostListItem[]) {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    const dir = await makeTempDir();
+    const enrollmentFile = await writeEnrollment(dir, "local-host");
+    const authSession = new DesktopAuthSession();
+    setVerifiedSession(authSession, signedInSnapshot("user-a", "token-1"));
+    const identity = new FakeIdentitySource("user-a", 0);
+    const host = new FakeHostLifecycle();
+    host.identityEnrollmentFile = enrollmentFile;
+    let registry: readonly HostListItem[] = initialRegistry;
+    let bearerReads = 0;
+    const { fleet, published, setNow } = buildFleetSourceWithPublisher({
+      identity,
+      authSession,
+      host,
+      listRegisteredHosts: async () => {
+        bearerReads += 1;
+        return { kind: "ok", response: { hosts: [...registry] } };
+      },
+    });
+    setNow(1_000);
+    await fleet.refresh();
+
+    const coverage: boolean[] = [];
+    const streamClient = new FakeStreamClient(true);
+    const subscription = startLocalHostInventorySubscription({
+      localHost: () => ({ hostId: "local-host", websocketUrl: "ws://local" }),
+      onLocalHostChanged: () => () => undefined,
+      identity: () => ({
+        userId: identity.current().identityKey,
+        generation: identity.current().generation,
+      }),
+      onAuthChanged: () => () => undefined,
+      openStreamClient: () => streamClient,
+      onRows: (read) => {
+        void fleet.acceptPushedRows(read);
+      },
+      onPushActiveChanged: (active) => {
+        coverage.push(active);
+      },
+      log: silentLog,
+    });
+    const bridge: RegisteredHostsBroadcastBridge = {
+      disposeFns: [],
+      fanOut: () => undefined,
+    };
+    registerRegisteredHostsBroadcast(bridge, fleet);
+    const session = streamClient.sessions[0];
+    if (session === undefined) throw new Error("no session opened");
+    session.negotiatedSchemaVersion = { major: 1, minor: 1 };
+
+    return {
+      fleet,
+      published,
+      coverage,
+      bearerReads: () => bearerReads,
+      setRegistry: (next: readonly HostListItem[]) => {
+        registry = next;
+      },
+      /** One healthy snapshot from the local host, read at `fetchedAtMs`. */
+      push: async (hosts: readonly HostListItem[], fetchedAtMs: number) => {
+        const before = published.length;
+        session.emit(
+          {
+            kind: "snapshot",
+            hasBinaryPayload: false,
+            hosts: [...hosts],
+            fetchedAtMs,
+            stale: false,
+          },
+          null,
+        );
+        await vi.waitFor(() => {
+          expect(published.length).toBeGreaterThan(before);
+        });
+      },
+      /** One 60 s tick of the cadence, its bearer read stamped at `nowMs`. */
+      tick: async (nowMs: number) => {
+        setNow(nowMs);
+        vi.advanceTimersByTime(60_000);
+        // The tick's refresh runs on real I/O; give it the time a push gets.
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      },
+      dispose: () => {
+        for (const dispose of bridge.disposeFns) dispose();
+        subscription.dispose();
+        fleet.dispose();
+      },
+    };
+  }
+
+  it("while the push covers the registry, the 60 s tick still runs the user-bearer read", async () => {
+    const wired = await wiredWithCadence([
+      buildHostListItem("local-host"),
+      teamSandbox("team-sbx", "awake", "connectable"),
+    ]);
+    await wired.push([buildHostListItem("local-host")], 2_000);
+    expect(wired.coverage.at(-1)).toBe(true);
+    const readsBefore = wired.bearerReads();
+
+    await wired.tick(3_000);
+
+    expect(wired.bearerReads()).toBe(readsBefore + 1);
+    wired.dispose();
+  });
+
+  it("a team row from a bearer read survives a later push, and the next bearer read takes it offline within one interval", async () => {
+    const wired = await wiredWithCadence([
+      buildHostListItem("local-host"),
+      teamSandbox("team-sbx", "awake", "connectable"),
+    ]);
+    expect(hostIdsOf(wired.fleet)).toEqual(["local-host", "team-sbx"]);
+
+    await wired.push([buildHostListItem("local-host")], 2_000);
+
+    expect(hostIdsOf(wired.fleet)).toEqual(["local-host", "team-sbx"]);
+    expect(lastPublishedRow(wired.published, "team-sbx")?.sandboxState).toBe(
+      "awake",
+    );
+
+    // The teammate suspends it.
+    wired.setRegistry([
+      buildHostListItem("local-host"),
+      teamSandbox("team-sbx", "suspended", "offline"),
+    ]);
+    await wired.tick(3_000);
+
+    await vi.waitFor(() => {
+      expect(lastPublishedRow(wired.published, "team-sbx")).toMatchObject({
+        sandboxState: "suspended",
+        status: { connectivity: "offline" },
+      });
+    });
+    expect(hostIdsOf(wired.fleet)).toEqual(["local-host", "team-sbx"]);
+    wired.dispose();
+  });
+
+  it("a team row created while the push covers the registry appears on the next bearer read", async () => {
+    const wired = await wiredWithCadence([buildHostListItem("local-host")]);
+    await wired.push([buildHostListItem("local-host")], 2_000);
+    expect(wired.coverage.at(-1)).toBe(true);
+
+    wired.setRegistry([
+      buildHostListItem("local-host"),
+      teamSandbox("team-new", "awake", "connectable"),
+    ]);
+    await wired.tick(3_000);
+
+    await vi.waitFor(() => {
+      expect(
+        wired.fleet
+          .snapshot()
+          .hosts.find((entry) => entry.hostId === "team-new"),
+      ).toEqual({ hostId: "team-new", kind: "sandbox", teamOwned: true });
+    });
+    wired.dispose();
+  });
+
+  it("a push still replaces the personal rows, and only those", async () => {
+    const wired = await wiredWithCadence([
+      buildHostListItem("local-host"),
+      buildHostListItem("old-personal"),
+      teamSandbox("team-sbx", "awake", "connectable"),
+    ]);
+
+    await wired.push(
+      [buildHostListItem("local-host"), buildHostListItem("new-personal")],
+      2_000,
+    );
+
+    expect(hostIdsOf(wired.fleet)).toEqual([
+      "local-host",
+      "new-personal",
+      "team-sbx",
+    ]);
+    expect(
+      wired.published
+        .at(-1)
+        ?.response.hosts.map((row) => row.hostId)
+        .sort(),
+    ).toEqual(["local-host", "new-personal", "team-sbx"]);
+    wired.dispose();
+  });
+
+  it("a bearer read that started before a newer push still updates the team rows, and leaves the push's personal rows", async () => {
+    const dir = await makeTempDir();
+    const enrollmentFile = await writeEnrollment(dir, "local-host");
+    const authSession = new DesktopAuthSession();
+    setVerifiedSession(authSession, signedInSnapshot("user-a", "token-1"));
+    const identity = new FakeIdentitySource("user-a", 0);
+    const host = new FakeHostLifecycle();
+    host.identityEnrollmentFile = enrollmentFile;
+    const registryFetch = recordingRegistryFetch();
+    const { fleet, published, setNow } = buildFleetSourceWithPublisher({
+      identity,
+      authSession,
+      host,
+      listRegisteredHosts: registryFetch.fetch,
+    });
+
+    setNow(1_000);
+    const first = fleet.refresh();
+    await registryFetch.started(0);
+    registryFetch.calls[0]?.resolve({
+      kind: "ok",
+      response: {
+        hosts: [
+          buildHostListItem("local-host"),
+          buildHostListItem("personal-a"),
+          teamSandbox("team-sbx", "awake", "connectable"),
+        ],
+      },
+    });
+    await first;
+
+    // The bearer read goes to the registry at 3 000 ...
+    setNow(3_000);
+    const inFlight = fleet.refresh();
+    await registryFetch.started(1);
+    // ... and a push the host read at 4 000 lands while it is out.
+    await fleet.acceptPushedRows({
+      response: {
+        hosts: [
+          buildHostListItem("local-host"),
+          buildHostListItem("personal-b"),
+        ],
+      },
+      readAtMs: 4_000,
+      openedAtGeneration: 0,
+    });
+    expect(hostIdsOf(fleet)).toEqual(["local-host", "personal-b", "team-sbx"]);
+
+    registryFetch.calls[1]?.resolve({
+      kind: "ok",
+      response: {
+        hosts: [
+          buildHostListItem("local-host"),
+          buildHostListItem("personal-a"),
+          teamSandbox("team-sbx", "suspended", "offline"),
+        ],
+      },
+    });
+    await inFlight;
+
+    // Its team rows are the newest anyone has read; its personal rows are
+    // older than the push's, which stay.
+    expect(hostIdsOf(fleet)).toEqual(["local-host", "personal-b", "team-sbx"]);
+    expect(lastPublishedRow(published, "team-sbx")?.sandboxState).toBe(
+      "suspended",
+    );
+    expect(lastPublishedRow(published, "personal-a")).toBeUndefined();
+    fleet.dispose();
+  });
+
+  it("an older bearer read cannot overwrite newer team rows", async () => {
+    const dir = await makeTempDir();
+    const enrollmentFile = await writeEnrollment(dir, "local-host");
+    const authSession = new DesktopAuthSession();
+    setVerifiedSession(authSession, signedInSnapshot("user-a", "token-1"));
+    const identity = new FakeIdentitySource("user-a", 0);
+    const host = new FakeHostLifecycle();
+    host.identityEnrollmentFile = enrollmentFile;
+    const registryFetch = recordingRegistryFetch();
+    const { fleet, published, setNow } = buildFleetSourceWithPublisher({
+      identity,
+      authSession,
+      host,
+      listRegisteredHosts: registryFetch.fetch,
+    });
+
+    setNow(2_000);
+    const older = fleet.refresh();
+    await registryFetch.started(0);
+    setNow(3_000);
+    const newer = fleet.refresh();
+    await registryFetch.started(1);
+
+    registryFetch.calls[1]?.resolve({
+      kind: "ok",
+      response: {
+        hosts: [
+          buildHostListItem("local-host"),
+          teamSandbox("team-sbx", "suspended", "offline"),
+        ],
+      },
+    });
+    await newer;
+    const publishedAfterNewer = published.length;
+
+    registryFetch.calls[0]?.resolve({
+      kind: "ok",
+      response: {
+        hosts: [
+          buildHostListItem("local-host"),
+          teamSandbox("team-sbx", "awake", "connectable"),
+          teamSandbox("team-gone", "awake", "connectable"),
+        ],
+      },
+    });
+    await older;
+
+    expect(published).toHaveLength(publishedAfterNewer);
+    expect(lastPublishedRow(published, "team-sbx")?.sandboxState).toBe(
+      "suspended",
+    );
+    expect(hostIdsOf(fleet)).toEqual(["local-host", "team-sbx"]);
     fleet.dispose();
   });
 });
