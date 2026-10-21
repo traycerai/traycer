@@ -8,6 +8,7 @@ import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
+import { SimulatorSessionBadge } from "@/components/simulator-tile/simulator-session-badge";
 import { UpdateProgressBar } from "@/components/host/update-progress-bar";
 import { simulatorVersionLabel } from "@/lib/simulator-view/simulator-labels";
 import { orderSimulators } from "@/lib/simulator-view/simulator-sessions-coordinator";
@@ -344,7 +345,11 @@ export function SimulatorInventoryView(props: {
                   <Badge variant="muted" size="xs" className="shrink-0">
                     {simulatorVersionLabel(simulator)}
                   </Badge>
-                  <InventoryRowTrailing busy={busy} booted={simulator.booted} />
+                  <SimulatorSessionBadge
+                    busy={busy}
+                    booted={simulator.booted}
+                    open={false}
+                  />
                 </button>
               </li>
             );
@@ -352,27 +357,5 @@ export function SimulatorInventoryView(props: {
         </ul>
       )}
     </div>
-  );
-}
-
-function InventoryRowTrailing(props: {
-  readonly busy: boolean;
-  readonly booted: boolean;
-}) {
-  if (props.busy) {
-    return (
-      <AgentSpinningDots
-        className="shrink-0"
-        testId={undefined}
-        variant={undefined}
-        tone="muted"
-      />
-    );
-  }
-  if (!props.booted) return null;
-  return (
-    <Badge variant="success" size="xs" className="shrink-0">
-      Running
-    </Badge>
   );
 }

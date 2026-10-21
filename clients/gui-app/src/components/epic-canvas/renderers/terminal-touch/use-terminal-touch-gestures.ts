@@ -27,7 +27,7 @@ import {
 export const SELECT_HOLD_MS = 200;
 
 /** Finger travel beyond this is a scroll gesture, not a tap-to-focus. */
-export const TOUCH_TAP_SLOP_PX = 10;
+const TOUCH_TAP_SLOP_PX = 10;
 
 type GesturePhase =
   /** Finger down, nothing decided. */

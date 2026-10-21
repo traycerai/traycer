@@ -68,15 +68,7 @@ export interface StatusBarResourceMetricView {
  * owns that step, and nothing here can tell a foreign projection from a local
  * one. Reading the registry's raw projection through this is the mistake the
  * attribution exists to prevent, so go through the views.
- */
-export function statusBarResourceReading(
-  projection: GlobalResourceProjection,
-  desktopApp: DesktopAppResourceUsage | null,
-): StatusBarResourceReading {
-  return hostTreeReading(projection, desktopApp);
-}
-
-/**
+ *
  * The watched host's whole process tree, with the desktop shell on top when
  * the caller says it belongs there.
  *
@@ -92,7 +84,7 @@ export function statusBarResourceReading(
  * Electron reports working-set memory, the same thing the host tree's
  * `rssBytes` is, which is why the two add (`selectResourceMemoryMetric`).
  */
-function hostTreeReading(
+export function statusBarResourceReading(
   projection: GlobalResourceProjection,
   desktopApp: DesktopAppResourceUsage | null,
 ): StatusBarResourceReading {
@@ -231,7 +223,7 @@ const METRIC_SUBJECTS: Record<ResourceMetric, string> = {
  *
  * On the host-tree side a sample can land with one field missing — `rssBytes`
  * is nullable on the wire from @1.5 on, and `hostTotalMemoryBytes` is `0` on a
- * host that never reported a total — and `hostTreeReading` resolves the fields
+ * host that never reported a total — and `statusBarResourceReading` resolves the fields
  * independently precisely so the two that did arrive still show. Telling
  * someone to wait for data, beside two numbers from the sample that already
  * came, names the one cause that is certainly not it.

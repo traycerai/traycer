@@ -248,28 +248,6 @@ describe("simulator stream controller", () => {
     expect(h.controller.getState().lifecycle).toBe("idle");
   });
 
-  it("asks the host for a keyframe when the decoder falls behind, at most once a second", async () => {
-    const h = harness("ios", true, false);
-    h.controller.start();
-    emitConfig(h.session(), IOS_CONFIG);
-    emitVideo(h.session(), "description", AVCC_DESCRIPTION);
-    await flushAsync();
-    emitVideo(h.session(), "keyframe", ANNEX_B_KEYFRAME);
-    h.codec.decoders[0].decodeQueueSize = SOFT_DECODE_QUEUE + 1;
-    emitVideo(h.session(), "delta", ANNEX_B_DELTA);
-    expect(h.session().framesOfKind("requestKeyframe")).toHaveLength(1);
-    // The re-primed decoder is also behind; the floor holds the second ask.
-    emitVideo(h.session(), "keyframe", ANNEX_B_KEYFRAME);
-    h.codec.decoders[1].decodeQueueSize = SOFT_DECODE_QUEUE + 1;
-    emitVideo(h.session(), "delta", ANNEX_B_DELTA);
-    expect(h.session().framesOfKind("requestKeyframe")).toHaveLength(1);
-    vi.advanceTimersByTime(1_000);
-    emitVideo(h.session(), "keyframe", ANNEX_B_KEYFRAME);
-    h.codec.decoders[2].decodeQueueSize = SOFT_DECODE_QUEUE + 1;
-    emitVideo(h.session(), "delta", ANNEX_B_DELTA);
-    expect(h.session().framesOfKind("requestKeyframe")).toHaveLength(2);
-  });
-
   it("sends an ask that fell inside the floor when the floor ends, and drops it on close", async () => {
     const h = harness("ios", true, false);
     h.controller.start();

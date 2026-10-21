@@ -1797,7 +1797,7 @@ const providerCliStateBaseShape = {
   // everywhere; written by `providers.setNativeSubagents`, first published by
   // `providers.list@10.5`. `.optional()` for the reasons `autoJudge` gives:
   // absent is "host too old to say", and readers spell the `true` default
-  // themselves (`providerNativeSubagentsFor`).
+  // themselves (`nativeSubagents ?? true`).
   nativeSubagents: lazySchema(() => z.boolean().optional()),
   // Per-provider environment overrides applied when the host spawns this
   // provider's harness. Sorted by key for stable rendering; `[]` when unset.

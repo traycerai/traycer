@@ -269,16 +269,16 @@ export const SPEECH_MODEL_STALE_ERROR_POLL_LANE: ConditionPollLane = {
  * source of that progress, so its cadence is the progress bar's frame rate,
  * as with the speech model above.
  */
-export const SIMULATOR_PACK_INSTALLING_POLL_LANE: ConditionPollLane = {
+const SIMULATOR_PACK_INSTALLING_POLL_LANE: ConditionPollLane = {
   id: "simulator-pack.installing",
   initialDelayMs: 1_500,
   maxDelayMs: 5 * SECOND_MS,
 };
-export const SIMULATOR_PACK_INITIAL_ERROR_POLL_LANE: ConditionPollLane = {
+const SIMULATOR_PACK_INITIAL_ERROR_POLL_LANE: ConditionPollLane = {
   ...SIMULATOR_PACK_INSTALLING_POLL_LANE,
   id: "simulator-pack.initial-error",
 };
-export const SIMULATOR_PACK_STALE_ERROR_POLL_LANE: ConditionPollLane = {
+const SIMULATOR_PACK_STALE_ERROR_POLL_LANE: ConditionPollLane = {
   ...SIMULATOR_PACK_INSTALLING_POLL_LANE,
   id: "simulator-pack.stale-error",
 };

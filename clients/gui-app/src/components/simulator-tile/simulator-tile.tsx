@@ -30,7 +30,6 @@ import {
   usePendingSimulatorConnectRequest,
 } from "@/lib/simulator-view/simulator-connect-requests";
 import { nextOrientation } from "@/lib/simulator-view/simulator-input-encoding";
-import type { SimulatorSessionsState } from "@/lib/simulator-view/simulator-sessions-coordinator";
 import { findSimulatorForTile } from "@/lib/simulator-view/simulator-tile-target";
 import { useSimulatorSessionsForHost } from "@/lib/simulator-view/use-simulator-sessions";
 import { makeSimulatorTileRef } from "@/stores/epics/canvas/tile-schema/simulator-tile";
@@ -56,7 +55,6 @@ export interface SimulatorTileProps {
   readonly viewTabId: string;
   readonly tileId: string;
   readonly epicId: string;
-  readonly isActive: boolean;
 }
 
 /**
@@ -192,8 +190,6 @@ export function SimulatorTile(props: SimulatorTileProps) {
     return (
       <SimulatorInventoryGate
         node={node}
-        viewTabId={viewTabId}
-        epicId={epicId}
         hostId={hostId}
         hostLabel={hostLabel}
         state={state}
@@ -212,7 +208,6 @@ export function SimulatorTile(props: SimulatorTileProps) {
       hostId={hostId}
       session={session}
       state={state}
-      sessions={sessions}
       closesSession={openedHere}
       onCloseTile={closeTile}
     />
@@ -381,8 +376,6 @@ function SimulatorSetupGate(props: {
  */
 function SimulatorInventoryGate(props: {
   readonly node: SimulatorTileRef;
-  readonly viewTabId: string;
-  readonly epicId: string;
   readonly hostId: string;
   readonly hostLabel: string;
   readonly state: SimulatorState;
@@ -453,7 +446,6 @@ function LiveSimulatorTile(props: {
   readonly hostId: string;
   readonly session: SimulatorSession;
   readonly state: SimulatorState;
-  readonly sessions: SimulatorSessionsState;
   /**
    * Whether closing the tile also ends the session: true for one this tile
    * opened, false for one it found (an agent's, another window's). A found

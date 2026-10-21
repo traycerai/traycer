@@ -219,7 +219,7 @@ describe("SwitcherSimulatorsSection", () => {
     expect(fakes.refresh).toHaveBeenCalledTimes(1);
   });
 
-  it("offers Turn on while simulators are off, writing both switches", () => {
+  it("offers Turn on while simulators are off, enabling them on the host", () => {
     fakes.sessions = sessions(
       {
         ...STATE,

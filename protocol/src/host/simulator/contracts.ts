@@ -27,9 +27,7 @@ import {
  * whose machine can run neither platform, reports the method as missing
  * rather than answering for it.
  *
- * Streams (`simulator.sessions`, `simulator.stream`), the typed settings
- * actions and the MCP tools are later tickets; this file carries only the
- * verbs the host domain needs to be driven and proven.
+ * Streams and typed settings actions have their own contract modules.
  */
 
 /** The machine's simulators, pack and hub state, and this epic's sessions. */
@@ -95,7 +93,7 @@ export const simulatorRemoveToolsV10 = defineRpcContract({
   responseSchema: simulatorRemoveToolsResponseSchema,
 });
 
-/** Reads the machine-user-global simulator switches. */
+/** Reads the machine-user-global simulator switch. */
 export const configSimulatorGetV10 = defineRpcContract({
   method: "config.simulator.get",
   schemaVersion: { major: 1, minor: 0 } as const,

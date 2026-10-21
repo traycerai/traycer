@@ -63,9 +63,6 @@ export interface TerminalTouchTarget {
       getLine(y: number): TerminalLineCells | undefined;
     };
   };
-  hasSelection(): boolean;
-  getSelection(): string;
-  clearSelection(): void;
   select(column: number, row: number, length: number): void;
   selectAll(): void;
   paste(data: string): void;
@@ -152,7 +149,7 @@ export function terminalWordAtColumn(args: {
  * (no element) or its screen is not laid out, in which case there is no cell
  * to resolve a point to.
  */
-export function terminalScreenBox(
+function terminalScreenBox(
   term: TerminalTouchTarget,
 ): TerminalScreenBox | null {
   const screen = term.element?.querySelector(".xterm-screen");

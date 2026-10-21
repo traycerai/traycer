@@ -263,7 +263,9 @@ describe("simulator sessions coordinator", () => {
       lifecycle: "unsupported",
       errorMessage: SIMULATORS_UNSUPPORTED_MESSAGE,
     });
-    expect(SIMULATORS_UNSUPPORTED_MESSAGE).toMatch(/update/);
+    expect(simulatorSessionsCoordinatorState(KEY)?.errorMessage).toMatch(
+      /update/,
+    );
     release();
   });
 

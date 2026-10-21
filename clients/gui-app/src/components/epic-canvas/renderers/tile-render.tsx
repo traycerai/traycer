@@ -183,13 +183,12 @@ const TILE_RENDERERS: TileRendererRegistry = {
   "epic-file": ({ node, epicId }) => (
     <EpicFileTile node={node} epicId={epicId} />
   ),
-  simulator: ({ node, viewTabId, tileId, epicId, isActive }) => (
+  simulator: ({ node, viewTabId, tileId, epicId }) => (
     <SimulatorTile
       node={node}
       viewTabId={viewTabId}
       tileId={tileId}
       epicId={epicId}
-      isActive={isActive}
     />
   ),
   // A blank tab's body IS the inline opener; picking content replaces it in

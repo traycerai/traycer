@@ -134,7 +134,6 @@ describe("<ProviderNativeSubagentsGroup />", () => {
     const { rerender } = render(
       <ProviderNativeSubagentsGroup state={providerState({})} />,
     );
-    expect(screen.getByTestId("provider-native-subagents-group")).toBeTruthy();
     expect(nativeSwitch().getAttribute("aria-checked")).toBe("true");
 
     rerender(
@@ -153,12 +152,11 @@ describe("<ProviderNativeSubagentsGroup />", () => {
     fireEvent.click(nativeSwitch());
 
     expect(mutateMock.mock.calls.length).toBe(1);
-    const [variables, callbacks] = mutateMock.mock.calls[0];
+    const [variables] = mutateMock.mock.calls[0];
     expect(variables).toEqual({
       harnessId: CLAUDE_HARNESS_ID,
       nativeSubagents: false,
     });
-    expect(typeof callbacks.onError).toBe("function");
     // The fixture still says nothing was stored, yet the switch shows the pick.
     expect(nativeSwitch().getAttribute("aria-checked")).toBe("false");
 

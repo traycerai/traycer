@@ -57,23 +57,6 @@ export const DEFAULT_DIFF_VIEWER_PREFERENCES: DiffViewerPreferences = {
   indicatorStyle: "bars",
 };
 
-/**
- * The preferences a diff renders with in a window NARROWER than the mobile
- * breakpoint: one column, whatever `mode` says. At that width a split leaves
- * each side a few words wide, so the stored choice has no usable rendering
- * there and the layout control is withheld (the Settings row, the tile
- * toolbar). The stored `mode` is untouched: a window widened back past the
- * breakpoint, or a tablet rotated to landscape, renders it again. Returns
- * the same object when nothing changes, so memos keyed on it hold.
- */
-export function phoneLayoutDiffViewerPreferences(
-  preferences: DiffViewerPreferences,
-): DiffViewerPreferences {
-  return preferences.mode === "unified"
-    ? preferences
-    : { ...preferences, mode: "unified" };
-}
-
 const isGitDiffViewMode = makeLiteralGuard<GitDiffViewMode>({
   split: true,
   unified: true,

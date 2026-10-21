@@ -1783,7 +1783,7 @@ export function HostOverviewPanel(props: {
     />
   );
 
-  // The five tab bodies, each handed what it draws. Built on every render
+  // The tab bodies, each handed what it draws. Built on every render
   // and cheap to build - a body MOUNTS only once its tab is first visited.
   const versionConnecting =
     scope.status === "connecting" ||

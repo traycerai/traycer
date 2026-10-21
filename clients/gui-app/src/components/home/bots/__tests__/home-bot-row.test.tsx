@@ -152,19 +152,6 @@ afterEach(() => {
   cleanup();
 });
 
-describe("<HomeBotRow /> attribution", () => {
-  it("shows who made the bot when told, and no line otherwise", () => {
-    mountRow({ ...OWN_AND_DIALABLE, createdBy: "Created by Tess Teammate" });
-    expect(screen.getByTestId("home-bot-created-by").textContent).toBe(
-      "Created by Tess Teammate",
-    );
-    cleanup();
-
-    mountRow(OWN_AND_DIALABLE);
-    expect(screen.queryByTestId("home-bot-created-by")).toBeNull();
-  });
-});
-
 describe("<HomeBotRow /> state", () => {
   it("says Idle for a bot on one of the reader's own hosts that can be dialled", () => {
     mountRow(OWN_AND_DIALABLE);

@@ -5,7 +5,7 @@ import type {
   SimulatorSummary,
 } from "@traycer/protocol/host/simulator/schemas";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
-import { Badge } from "@/components/ui/badge";
+import { SimulatorSessionBadge } from "@/components/simulator-tile/simulator-session-badge";
 import { Button } from "@/components/ui/button";
 import { SwitcherListRow } from "@/components/epic-canvas/mobile/switcher-list-row";
 import { useSwitcherActivate } from "@/components/epic-canvas/mobile/use-switcher-activate";
@@ -183,7 +183,7 @@ function SwitcherSimulatorRow(props: {
       label={simulator.name}
       secondaryLabel={simulatorVersionLabel(simulator)}
       badge={
-        <SwitcherSimulatorBadge
+        <SimulatorSessionBadge
           busy={busy}
           booted={simulator.booted}
           open={open}
@@ -244,36 +244,6 @@ function SwitcherSimulatorCloseAction(props: {
         <X className="size-4" aria-hidden />
       )}
     </Button>
-  );
-}
-
-function SwitcherSimulatorBadge(props: {
-  readonly busy: boolean;
-  readonly booted: boolean;
-  readonly open: boolean;
-}) {
-  if (props.busy) {
-    return (
-      <AgentSpinningDots
-        className="shrink-0"
-        testId={undefined}
-        variant={undefined}
-        tone="muted"
-      />
-    );
-  }
-  if (props.open) {
-    return (
-      <Badge variant="info" size="xs" className="shrink-0">
-        Open
-      </Badge>
-    );
-  }
-  if (!props.booted) return null;
-  return (
-    <Badge variant="success" size="xs" className="shrink-0">
-      Running
-    </Badge>
   );
 }
 

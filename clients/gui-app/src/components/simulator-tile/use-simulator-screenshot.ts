@@ -1,4 +1,5 @@
 import { useCallback } from "react";
+import { decodeBase64 } from "@traycer-clients/shared/cloud-chat/bytes";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcRegistry } from "@/lib/host";
 import { useSimulatorScreenshotMutation } from "@/hooks/simulator/use-simulator-mutations";
@@ -15,21 +16,14 @@ export interface SimulatorScreenshot {
   readonly isPending: boolean;
 }
 
-/** A file name a save dialog can show: letters, digits and dashes only. */
-export function screenshotFileName(simulatorName: string, at: Date): string {
+/** A simulator name and timestamp for the save dialog. */
+function screenshotFileName(simulatorName: string, at: Date): string {
   const slug = simulatorName
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "");
   const stamp = at.toISOString().replace(/[:.]/g, "-").slice(0, 19);
   return `${slug.length > 0 ? slug : "simulator"}-${stamp}.png`;
-}
-
-export function pngBlobFromBase64(pngBase64: string): Blob {
-  const binary = atob(pngBase64);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-  return new Blob([bytes], { type: "image/png" });
 }
 
 /**
@@ -60,7 +54,9 @@ export function useSimulatorScreenshot(args: {
       {
         onSuccess: (response) => {
           void saveBlobToDisk(
-            pngBlobFromBase64(response.pngBase64),
+            new Blob([decodeBase64(response.pngBase64).slice().buffer], {
+              type: "image/png",
+            }),
             screenshotFileName(simulatorName, new Date()),
             fileSave,
           )

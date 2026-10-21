@@ -93,7 +93,7 @@ export function applySimulatorStatePatch(
   };
 }
 
-export function reduceSimulatorSessionsFrame(
+function reduceSimulatorSessionsFrame(
   current: SimulatorState | null,
   frame: SimulatorSessionsServerFrame,
 ): SimulatorState | null {
