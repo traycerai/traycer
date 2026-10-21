@@ -2208,6 +2208,7 @@ describe("useRenderedMessages", () => {
       targetHostId: "host-b",
       eventId: "evt-1",
       state: "queued" as const,
+      targetHostOffline: false,
     };
     const RECEIPT = {
       receiverAgentId: "agent-receiver-1",

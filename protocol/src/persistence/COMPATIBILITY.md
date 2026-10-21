@@ -99,6 +99,19 @@ change (#6233) and its removal here. No release carried it: host-v1.5.1 cut
 epic 3.0 before that change, and epic 4.0 is uncut. The generated fixture removes
 only that property and its required-key entry; no released record changes.
 
+### Logged change: the delivery stamp's offline hint
+
+`tool_call.agentMessageDelivery` gained `targetHostOffline` (traycer#2421), a
+boolean defaulted `false`, in the epic chats leaf, chat-sync 1.7 and
+`chat.subscribe@1.29`. No stable release carries the stamp: host-v1.5.1 ships
+chat-sync 1.6 and a `chat.subscribe` line below 1.29. A stamp written before
+the key parses as `false`, and a reader built before it strips the key and
+renders the card it already did. The state enum keeps all four members:
+current hosts never write `delivered`, but staging hosts built before
+traycer#2421 did, and trimming the member would make every current reader
+reject their frames. The fixtures and the 1.29–1.32 frame digests move with
+it; every released line reproduces its value.
+
 ## Frozen epic-schema guard
 
 `epic-schema-surface-compat.test.ts` resolves the latest epic schema through the

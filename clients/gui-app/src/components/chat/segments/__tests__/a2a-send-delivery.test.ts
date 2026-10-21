@@ -2,61 +2,69 @@ import { describe, expect, it } from "vitest";
 import type { AgentMessageDelivery } from "@traycer/protocol/persistence/epic/content-blocks";
 import { a2aSendDeliveryView } from "@/components/chat/segments/a2a-send-delivery";
 
-function delivery(state: AgentMessageDelivery["state"]): AgentMessageDelivery {
-  return { targetHostId: "host-2", eventId: "evt-1", state };
+function delivery(
+  state: AgentMessageDelivery["state"],
+  targetHostOffline: boolean,
+): AgentMessageDelivery {
+  return { targetHostId: "host-2", eventId: "evt-1", state, targetHostOffline };
 }
 
 describe("a2aSendDeliveryView", () => {
-  it("queued: pending, badged, names the host", () => {
-    const view = a2aSendDeliveryView(delivery("queued"), "Work Laptop");
-    expect(view).toMatchObject({
-      srLabel: "Queued message",
-      badge: "queued",
-      tone: "pending",
-    });
-    expect(view.note).toContain("Queued for Work Laptop");
-  });
-
-  it("delivered: no badge, says where it landed", () => {
-    const view = a2aSendDeliveryView(delivery("delivered"), "Work Laptop");
-    expect(view).toMatchObject({
-      srLabel: "Delivered message",
-      badge: null,
-      tone: "delivered",
-    });
-    expect(view.note).toBe("Delivered on Work Laptop.");
-  });
-
-  it.each(["expired", "failed"] as const)(
-    "%s: undelivered, badged, names the host",
+  // The host reports failures only (traycer#2421): a send nothing has failed
+  // is the plain sent card, whatever host build stamped it.
+  it.each(["queued", "delivered"] as const)(
+    "%s to a host not seen offline: the plain sent card",
     (state) => {
-      const view = a2aSendDeliveryView(delivery(state), "Work Laptop");
-      expect(view).toMatchObject({
-        srLabel: "Undelivered message",
-        badge: "not delivered",
-        tone: "undelivered",
-      });
-      expect(view.note).toContain("Not delivered: Work Laptop");
+      expect(a2aSendDeliveryView(delivery(state, false), "Work Laptop")).toBe(
+        null,
+      );
+    },
+  );
+
+  it("queued to a host seen offline: sent, unbadged, says the host looked offline", () => {
+    const view = a2aSendDeliveryView(delivery("queued", true), "Work Laptop");
+    expect(view).toEqual({
+      srLabel: "Sent message",
+      badge: null,
+      note: "Sent. Work Laptop looked offline; it gets this if it is back online within 24 hours.",
+      tone: "sent",
+    });
+  });
+
+  it.each([false, true])(
+    "expired and failed read as not delivered whatever the offline hint (%s)",
+    (offline) => {
+      for (const state of ["expired", "failed"] as const) {
+        const view = a2aSendDeliveryView(
+          delivery(state, offline),
+          "Work Laptop",
+        );
+        expect(view).toMatchObject({
+          srLabel: "Undelivered message",
+          badge: "not delivered",
+          tone: "undelivered",
+        });
+        expect(view?.note).toContain("Not delivered: Work Laptop");
+      }
     },
   );
 
   it("expired and failed read differently", () => {
-    expect(a2aSendDeliveryView(delivery("expired"), "H").note).not.toBe(
-      a2aSendDeliveryView(delivery("failed"), "H").note,
+    expect(a2aSendDeliveryView(delivery("expired", false), "H")?.note).not.toBe(
+      a2aSendDeliveryView(delivery("failed", false), "H")?.note,
     );
   });
 
   it.each([null, ""])(
     "falls back to 'the other device' for host label %j",
     (label) => {
-      for (const state of [
-        "queued",
-        "delivered",
-        "expired",
-        "failed",
+      for (const [state, offline] of [
+        ["queued", true],
+        ["expired", false],
+        ["failed", false],
       ] as const) {
-        const view = a2aSendDeliveryView(delivery(state), label);
-        expect(view.note).toContain("the other device");
+        const view = a2aSendDeliveryView(delivery(state, offline), label);
+        expect(view?.note).toContain("the other device");
       }
     },
   );

@@ -3,10 +3,12 @@ import type { AgentMessageDelivery } from "@traycer/protocol/persistence/epic/co
 /**
  * What a "Sent message" card says about a cross-host send.
  *
- * A send to an agent on another host is queued, not delivered, when the call
- * returns, so the card must not read as an ordinary sent message until the
- * receiving host has taken it. `null` delivery (a same-host send, or a block
- * persisted before the host carried the state) keeps the plain sent card.
+ * The sending host learns only of failures (traycer#2421), so a send nothing
+ * has failed is the plain sent card: `null` here. The one exception is a send
+ * to a host the directory saw offline at send time, which says so; the
+ * observation is a hint, so the copy promises nothing past the delivery
+ * window. A `delivered` stamp, written only by hosts that predate traycer#2421,
+ * reads as the plain sent card too.
  */
 export type A2ASendDeliveryView = {
   /** The header's spoken label, in place of "Sent message". */
@@ -15,7 +17,7 @@ export type A2ASendDeliveryView = {
   readonly badge: string | null;
   /** One line under the header saying what happened and what it means. */
   readonly note: string;
-  readonly tone: "pending" | "delivered" | "undelivered";
+  readonly tone: "sent" | "undelivered";
 };
 
 /** The label for an unknown host: the directory has no row for it yet. */
@@ -24,24 +26,20 @@ const UNKNOWN_HOST_LABEL = "the other device";
 export function a2aSendDeliveryView(
   delivery: AgentMessageDelivery,
   hostLabel: string | null,
-): A2ASendDeliveryView {
+): A2ASendDeliveryView | null {
   const host =
     hostLabel !== null && hostLabel.length > 0 ? hostLabel : UNKNOWN_HOST_LABEL;
   switch (delivery.state) {
     case "queued":
+      if (!delivery.targetHostOffline) return null;
       return {
-        srLabel: "Queued message",
-        badge: "queued",
-        note: `Queued for ${host}. It is delivered when ${host} picks it up.`,
-        tone: "pending",
+        srLabel: "Sent message",
+        badge: null,
+        note: `Sent. ${host} looked offline; it gets this if it is back online within 24 hours.`,
+        tone: "sent",
       };
     case "delivered":
-      return {
-        srLabel: "Delivered message",
-        badge: null,
-        note: `Delivered on ${host}.`,
-        tone: "delivered",
-      };
+      return null;
     case "expired":
       return {
         srLabel: "Undelivered message",
