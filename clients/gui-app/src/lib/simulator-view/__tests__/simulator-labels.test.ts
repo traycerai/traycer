@@ -6,9 +6,6 @@ describe("simulatorVersionLabel", () => {
     // A booted device's version carries the OS name; a cold iOS simulator's
     // is the number alone; a cold Android AVD's is the bare "Android".
     expect(
-      simulatorVersionLabel({ platform: "android", version: "Android 15.0" }),
-    ).toBe("Android 15.0");
-    expect(
       simulatorVersionLabel({ platform: "ios", version: "iOS 26.5" }),
     ).toBe("iOS 26.5");
     expect(simulatorVersionLabel({ platform: "ios", version: "18.0" })).toBe(

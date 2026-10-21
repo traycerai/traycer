@@ -75,24 +75,28 @@ const fakes = vi.hoisted((): DrawerFakes => ({
   },
 }));
 
-vi.mock("@/hooks/simulator/use-simulator-mutations", () => ({
-  useSimulatorDetailQuery: () => ({
-    data: fakes.detail,
-    isFetching: false,
-    isError: false,
-    error: null,
-  }),
-  useSimulatorDrawerActionMutation: () => ({
-    mutation: { ...fakes.mutation, mutate: fakes.mutate },
-    supported: true,
-  }),
-  simulatorActionErrorText: (error: { readonly message: string }): string => {
-    const text = error.message
-      .replace(/^simulator action unavailable \([^)]*\): /, "")
-      .replace(/^simulator [A-Za-z]+ failed: /, "");
-    return text.charAt(0).toUpperCase() + text.slice(1);
-  },
-}));
+vi.mock("@/hooks/simulator/use-simulator-mutations", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("@/hooks/simulator/use-simulator-mutations")
+    >();
+  return {
+    ...actual,
+    useSimulatorDetailQuery: () => ({
+      data: fakes.detail,
+      isFetching: false,
+      isError: false,
+      error: null,
+    }),
+    useSimulatorDrawerActionMutation: () => ({
+      mutation: { ...fakes.mutation, mutate: fakes.mutate },
+      supported: true,
+    }),
+  };
+});
+
+/** `withSettings` replaces `fakes.detail` and never mutates it. */
+const BASELINE_DETAIL = fakes.detail;
 
 function withSettings(overrides: Partial<SimulatorSettings>): void {
   fakes.detail = {
@@ -130,6 +134,7 @@ function typeInto(name: string, value: string): void {
 }
 
 beforeEach(() => {
+  fakes.detail = BASELINE_DETAIL;
   fakes.mutation = {
     isPending: false,
     isError: false,
@@ -265,7 +270,6 @@ describe("SimulatorSettingsDrawer", () => {
     const reduceMotionRow = screen
       .getByTestId("simulator-toggle-reduceMotion")
       .closest("label")?.parentElement;
-    expect(reduceMotionRow).toBeTruthy();
     expect(reduceMotionRow?.contains(alerts[0])).toBe(true);
   });
 

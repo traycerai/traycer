@@ -302,7 +302,6 @@ function renderTileFor(node: SimulatorTileRef): () => void {
             viewTabId="tab-1"
             tileId="pane-1"
             epicId={EPIC}
-            isActive
           />
         </TooltipProvider>
       </QueryClientProvider>

@@ -126,19 +126,6 @@ export interface SimulatorStreamControllerArgs {
 }
 
 /**
- * The hub's longest normal gap between two video frames, in milliseconds, as
- * its `streamConfig` reports it - the hub keeps an idle floor (it re-sends a
- * frame of a still screen at a fixed rate), so a longer silence is the
- * capture standing still, not the screen. `null` when the hub does not say,
- * which turns the stall overlay off rather than guessing.
- */
-export function simulatorStreamFrameIntervalMs(
-  config: SimulatorStreamConfig,
-): number | null {
-  return config.frameIntervalMs;
-}
-
-/**
  * How many of the hub's frame intervals may pass in silence before the tile
  * says it is waiting. One missed interval is a dropped frame or a decoder
  * that is briefly behind, and must show nothing; five is a second at the
@@ -148,11 +135,12 @@ export function simulatorStreamFrameIntervalMs(
  */
 export const SIMULATOR_STALL_GAP_FRAME_INTERVALS = 5;
 
-/** The silence that reads as a stall for `config`, or null when unknown. */
-export function simulatorStallGapMs(
-  config: SimulatorStreamConfig,
-): number | null {
-  const interval = simulatorStreamFrameIntervalMs(config);
+/**
+ * The silence that reads as a stall for `config`, or null when its frame
+ * interval is unknown.
+ */
+function simulatorStallGapMs(config: SimulatorStreamConfig): number | null {
+  const interval = config.frameIntervalMs;
   if (interval === null || !(interval > 0)) return null;
   return interval * SIMULATOR_STALL_GAP_FRAME_INTERVALS;
 }
@@ -179,7 +167,7 @@ const KEYFRAME_REQUEST_FLOOR_MS = 1_000;
 const DECODE_ERROR_WINDOW_MS = 10_000;
 const DECODE_ERRORS_BEFORE_FALLBACK = 3;
 
-/** Stream error codes after which no reopen can help (T4's relay). */
+/** Stream error codes after which no reopen can help. */
 const TERMINAL_STREAM_CODES: ReadonlySet<string> = new Set([
   "UNAUTHORIZED",
   "SIMULATOR_SESSION_NOT_FOUND",

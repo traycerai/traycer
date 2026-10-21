@@ -2,13 +2,13 @@ import { alwaysAvailable } from "@/lib/settings/settings-availability";
 import { defineSettingsSection } from "@/lib/settings-search/settings-definitions";
 
 // No host-GATED element carries an anchor (SETTINGS.md § Search); a tab trigger
-// is not gated. The page's five tab triggers render for every host in every
+// is not gated. The page's tab triggers render for every host in every
 // state - connecting, restarting, unreachable, stopped - because the header and
 // the tab bar sit outside anything that withholds a body, and each tab body
 // decides for itself what it can show. So each tab anchors on its trigger (on a
 // phone, on the section Select, which carries the active tab's anchor), and a
 // search that lands there opens the tab. The page's own vocabulary is split
-// across the five tabs by the core flows' Search table; the words about the
+// across the tabs by the core flows' Search table; the words about the
 // header (the host itself, its name, its connection, Restart) stay on the page,
 // since the header is on every tab.
 //

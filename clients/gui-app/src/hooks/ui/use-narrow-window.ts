@@ -9,11 +9,11 @@ import * as React from "react";
  * the shell: a two-column diff is unreadable at a phone's width and fine on
  * an iPad in landscape, which runs the same phone-layout bundle.
  */
-export const MOBILE_BREAKPOINT = 768;
+const MOBILE_BREAKPOINT = 768;
 // Range syntax, because it is the exact complement of Tailwind's `md` and
 // `(max-width: 767px)` is not. `innerWidth` was an integer and `matches` is
 // not, so at 767.5px the prefixed form would have moved the shell.
-export const MOBILE_QUERY = `(width < ${MOBILE_BREAKPOINT}px)`;
+const MOBILE_QUERY = `(width < ${MOBILE_BREAKPOINT}px)`;
 
 export function subscribeToMobileQuery(onChange: () => void): () => void {
   const mql = window.matchMedia(MOBILE_QUERY);

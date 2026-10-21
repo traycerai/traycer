@@ -1135,7 +1135,6 @@ describe("simulator.open declared budget", () => {
     // up, or every long boot reads as a client-side failure while the host
     // goes on to boot the simulator.
     expect(SIMULATOR_OPEN_RESPONSE_TIMEOUT_MS).toBe(210_000);
-    expect(SIMULATOR_OPEN_RESPONSE_TIMEOUT_MS).toBeGreaterThan(3 * 60_000);
     expect(HOST_METHOD_POLL_TABLE["simulator.open"]).toEqual({
       mode: "fifo",
       joinResponseTimeoutMs: SIMULATOR_OPEN_RESPONSE_TIMEOUT_MS,

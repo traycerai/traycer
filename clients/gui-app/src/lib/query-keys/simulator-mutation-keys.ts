@@ -17,7 +17,7 @@ export const simulatorMutationKeys = {
     ["simulator.screenshot", hostId, simulatorId] as const,
   action: (hostId: string, simulatorId: string) =>
     ["simulator.action", hostId, simulatorId] as const,
-  /** The machine-user-global switches; one pair per host. */
+  /** The machine-user-global switch; one value per host. */
   configSet: (hostId: string) => ["config.simulator.set", hostId] as const,
   /** Remove the downloaded tools from one host's store. */
   removeTools: (hostId: string) => ["simulator.removeTools", hostId] as const,

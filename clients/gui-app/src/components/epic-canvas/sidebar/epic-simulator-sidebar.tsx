@@ -5,7 +5,7 @@ import type {
   SimulatorSummary,
 } from "@traycer/protocol/host/simulator/schemas";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
-import { Badge } from "@/components/ui/badge";
+import { SimulatorSessionBadge } from "@/components/simulator-tile/simulator-session-badge";
 import { Button } from "@/components/ui/button";
 import {
   SidebarGroup,
@@ -297,7 +297,7 @@ function SimulatorRow(props: {
           <span className="shrink-0 text-ui-xs text-muted-foreground">
             {versionLabel}
           </span>
-          <SimulatorRowTrailing
+          <SimulatorSessionBadge
             busy={props.busy}
             booted={simulator.booted}
             open={open}
@@ -342,34 +342,4 @@ function simulatorRowStateLabel(open: boolean, booted: boolean): string {
   if (open) return ", open in this task";
   if (booted) return ", running";
   return "";
-}
-
-function SimulatorRowTrailing(props: {
-  readonly busy: boolean;
-  readonly booted: boolean;
-  readonly open: boolean;
-}) {
-  if (props.busy) {
-    return (
-      <AgentSpinningDots
-        className="shrink-0"
-        testId={undefined}
-        variant={undefined}
-        tone="muted"
-      />
-    );
-  }
-  if (props.open) {
-    return (
-      <Badge variant="info" size="xs" className="shrink-0">
-        Open
-      </Badge>
-    );
-  }
-  if (!props.booted) return null;
-  return (
-    <Badge variant="success" size="xs" className="shrink-0">
-      Running
-    </Badge>
-  );
 }

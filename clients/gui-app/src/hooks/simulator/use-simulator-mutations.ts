@@ -56,7 +56,7 @@ const CONFIG_INVALIDATIONS: ReadonlyArray<keyof HostRpcRegistry & string> = [
 
 const NO_INVALIDATIONS: ReadonlyArray<keyof HostRpcRegistry & string> = [];
 
-/** The two machine-user-global switches on `hostId`. */
+/** The machine-user-global switch on `hostId`. */
 export function useSimulatorConfigQuery(
   client: HostClient<HostRpcRegistry> | null,
   hostId: string | null,

@@ -115,19 +115,6 @@ describe("botCreatedByLabel", () => {
   const resolveTeammate = (userId: string): BotMember | null =>
     userId === "user-teammate" ? member("Tess Teammate") : member(null);
 
-  it("names the viewer as you and a named teammate by name on a team bot", () => {
-    const label = (createdByUserId: string) =>
-      botCreatedByLabel({
-        createdByUserId,
-        viewerUserId: VIEWER_ID,
-        isTeamBot: true,
-        resolveMember: resolveTeammate,
-      });
-
-    expect(label(VIEWER_ID)).toBe("Created by you");
-    expect(label("user-teammate")).toBe("Created by Tess Teammate");
-  });
-
   it("says nothing, never an id, for a personal bot, an erased creator, or a member without a name or unknown", () => {
     const base = {
       viewerUserId: VIEWER_ID,

@@ -979,10 +979,6 @@ describe("<CreateBotForm /> failed create", () => {
   );
 
   describe("after an earlier submit under the same key", () => {
-    // A marked failure: the create was sent and its answer lost, so it may
-    // have made the bot.
-    const earlierSendLost = (): HostRpcError => sessionFatalError();
-
     async function settle(): Promise<void> {
       await act(async () => {
         await new Promise<void>((resolve) => {
@@ -1005,7 +1001,7 @@ describe("<CreateBotForm /> failed create", () => {
       async (code) => {
         const user = userEvent.setup();
         mocks.createAsync
-          .mockRejectedValueOnce(earlierSendLost())
+          .mockRejectedValueOnce(sessionFatalError())
           .mockRejectedValueOnce(hostRefusal(code));
         mountForm(TEAM_WITH_LOCAL);
 
@@ -1022,7 +1018,7 @@ describe("<CreateBotForm /> failed create", () => {
     it("says the key already made a bot when a later submit is refused for it", async () => {
       const user = userEvent.setup();
       mocks.createAsync
-        .mockRejectedValueOnce(earlierSendLost())
+        .mockRejectedValueOnce(sessionFatalError())
         .mockRejectedValueOnce(hostRefusal("E_BOT_REQUEST_KEY_REUSED"));
       mountForm(TEAM_WITH_LOCAL);
 
@@ -1054,7 +1050,7 @@ describe("<CreateBotForm /> failed create", () => {
     it("trusts a refusal again once a create succeeded", async () => {
       const user = userEvent.setup();
       mocks.createAsync
-        .mockRejectedValueOnce(earlierSendLost())
+        .mockRejectedValueOnce(sessionFatalError())
         .mockResolvedValueOnce(botCreateResponse())
         .mockRejectedValueOnce(hostRefusal("E_INVALID_ARGUMENT"));
       mountForm(TEAM_WITH_LOCAL);

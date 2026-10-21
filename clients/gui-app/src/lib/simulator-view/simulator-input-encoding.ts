@@ -169,7 +169,7 @@ export function hardwareButtonLabel(button: SimulatorHardwareButton): string {
   }
 }
 
-export function isLandscape(orientation: SimulatorOrientation): boolean {
+function isLandscape(orientation: SimulatorOrientation): boolean {
   return orientation === "landscape_left" || orientation === "landscape_right";
 }
 

@@ -1,15 +1,12 @@
 import { useMemo } from "react";
 import { useIsNarrowWindow } from "@/hooks/ui/use-narrow-window";
-import {
-  phoneLayoutDiffViewerPreferences,
-  type DiffViewerPreferences,
-} from "@/lib/diff/diff-viewer-preferences";
+import type { DiffViewerPreferences } from "@/lib/diff/diff-viewer-preferences";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 
 /**
  * The diff viewer preferences a tile RENDERS with: the stored ones, except
  * in a window narrower than the mobile breakpoint, where the layout is
- * always one column (`phoneLayoutDiffViewerPreferences`). Every git and
+ * always one column. Every git and
  * snapshot diff tile reads through here so the rendering and its toolbar
  * agree; the settings doors keep reading the store, because they edit the
  * stored choice.
@@ -22,8 +19,11 @@ import { useSettingsStore } from "@/stores/settings/settings-store";
 export function useDiffViewerPreferences(): DiffViewerPreferences {
   const stored = useSettingsStore((s) => s.diffViewerPreferences);
   const narrowWindow = useIsNarrowWindow();
-  return useMemo(
-    () => (narrowWindow ? phoneLayoutDiffViewerPreferences(stored) : stored),
+  return useMemo<DiffViewerPreferences>(
+    () =>
+      narrowWindow && stored.mode !== "unified"
+        ? { ...stored, mode: "unified" }
+        : stored,
     [narrowWindow, stored],
   );
 }

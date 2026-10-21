@@ -42,9 +42,7 @@ export function takeSimulatorConnectRequest(
   return true;
 }
 
-export function subscribeSimulatorConnectRequests(
-  listener: () => void,
-): () => void {
+function subscribeSimulatorConnectRequests(listener: () => void): () => void {
   listeners.add(listener);
   return () => {
     listeners.delete(listener);

@@ -189,13 +189,12 @@ const TILE_RENDERERS: TileRendererRegistry = {
       isActive={isActive}
     />
   ),
-  simulator: ({ node, viewTabId, tileId, epicId, isActive }) => (
+  simulator: ({ node, viewTabId, tileId, epicId }) => (
     <SimulatorTile
       node={node}
       viewTabId={viewTabId}
       tileId={tileId}
       epicId={epicId}
-      isActive={isActive}
     />
   ),
   // A blank tab renders the inline opener until content replaces it.

@@ -9,7 +9,7 @@ import { releasedStreamMethodNames } from "./__fixtures__/released-stream-method
 /**
  * The two simulator streams: one `@1.0` line each, new names outside the
  * frozen `browser.*` namespace, not yet in the released baseline (which the
- * subset rule allows), and frames shaped exactly as Plan 2's table.
+ * subset rule allows).
  */
 describe("simulator stream contracts", () => {
   it("registers both streams at @1.0 outside the browser namespace", () => {

@@ -49,7 +49,7 @@ export function semuPacket(
 }
 
 /** A drawable frame for the fake decoder to emit: an `<img>` is a `CanvasImageSource`. */
-export function decodedFrame(width: number, height: number): DecodedVideoFrame {
+function decodedFrame(width: number, height: number): DecodedVideoFrame {
   return Object.assign(document.createElement("img"), {
     displayWidth: width,
     displayHeight: height,
@@ -57,7 +57,7 @@ export function decodedFrame(width: number, height: number): DecodedVideoFrame {
   });
 }
 
-export class FakeVideoDecoder implements SimulatorVideoDecoder {
+class FakeVideoDecoder implements SimulatorVideoDecoder {
   state: CodecState = "unconfigured";
   decodeQueueSize = 0;
   readonly configs: VideoDecoderConfig[] = [];
@@ -96,22 +96,20 @@ export interface FakeCodecRuntime {
   readonly decoders: FakeVideoDecoder[];
   readonly probes: VideoDecoderConfig[];
   readonly bitmaps: Blob[];
-  supported: boolean;
 }
 
 export function fakeCodecRuntime(supported: boolean): FakeCodecRuntime {
   const decoders: FakeVideoDecoder[] = [];
   const probes: VideoDecoderConfig[] = [];
   const bitmaps: Blob[] = [];
-  const harness: FakeCodecRuntime = {
+  return {
     decoders,
     probes,
     bitmaps,
-    supported,
     runtime: {
       isConfigSupported: (config) => {
         probes.push(config);
-        return Promise.resolve(harness.supported);
+        return Promise.resolve(supported);
       },
       createDecoder: (init) => {
         const decoder = new FakeVideoDecoder(init);
@@ -129,27 +127,22 @@ export function fakeCodecRuntime(supported: boolean): FakeCodecRuntime {
       },
     },
   };
-  return harness;
 }
 
 export interface RecordingSink extends SimulatorFrameSink {
   readonly painted: Array<{ readonly width: number; readonly height: number }>;
   readonly jpegs: Uint8Array[];
-  accept: boolean;
 }
 
 export function recordingSink(): RecordingSink {
   const sink: RecordingSink = {
     painted: [],
     jpegs: [],
-    accept: true,
     present(_source, width, height) {
-      if (!sink.accept) return false;
       sink.painted.push({ width, height });
       return true;
     },
     presentJpeg(bytes) {
-      if (!sink.accept) return false;
       sink.jpegs.push(bytes);
       return true;
     },

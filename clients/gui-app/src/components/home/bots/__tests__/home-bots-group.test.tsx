@@ -1,5 +1,5 @@
 /**
- * Where Home's "Created by" rules meet (Tracy Bots T21): the group card asks
+ * Where Home's "Created by" rules meet (Tracy Bots): the group card asks
  * the member directory only for a TEAM environment and only when the band's
  * host answers `environment.members`, and hands each row the label built
  * from the signed-in viewer and that directory.
