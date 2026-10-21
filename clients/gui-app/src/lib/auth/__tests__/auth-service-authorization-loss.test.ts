@@ -944,12 +944,58 @@ describe("AuthService cloudAuthorized verdict propagation on in-place transition
 
     answerHeldBearer(await okWithProfile());
     const outcome = await revalidation;
-    expect(outcome?.kind).toBe("valid");
+    // The verdict is about a credential no longer held, so it is stale.
+    expect(outcome).toEqual({ kind: "superseded" });
 
     expect(useAuthStore.getState().status).toBe("unverified");
     const contextAfter = provider.current();
     expect(contextAfter).toBe(contextBefore);
     expect(contextAfter?.cloudAuthorized).toBe(false);
+  });
+
+  it("a user fetch started as one account does not return that account's user once a sibling window has signed in as another", async () => {
+    // The fetch is sent while this window is signed in as user-1. Before it
+    // answers, a sibling window switches accounts and the switch reaches this
+    // window as user-2. The switch moves the credential but not the identity
+    // generation, so user-1's late "valid" would pass the identity check; it
+    // must not be handed to the caller while the window is user-2's.
+    vi.useFakeTimers();
+    const { service, host } = makeService();
+    trackedServices.push(service);
+    await deviceSignIn(service, host, "token-a");
+    expect(useAuthStore.getState().status).toBe("signed-in");
+    expect(useAuthStore.getState().profile?.userId).toBe("user-1");
+
+    let answerHeldCheck: (response: Response) => void = () => undefined;
+    const heldCheckAnswer = new Promise<Response>((resolve) => {
+      answerHeldCheck = resolve;
+    });
+    let heldChecks = 0;
+    restoreFetch();
+    restoreFetch = installFetch((input) => {
+      const url = typeof input === "string" ? input : String(input);
+      if (url !== VALIDATION_URL) {
+        return status(500);
+      }
+      heldChecks += 1;
+      return heldChecks === 1 ? heldCheckAnswer : okWithProfile();
+    });
+
+    const pending = service.fetchAuthenticatedUser();
+    await vi.advanceTimersByTimeAsync(0);
+    // Non-vacuity: the check really is in flight and unanswered.
+    expect(heldChecks).toBe(1);
+
+    service.applyExternalSession(externalSessionForUser("user-2", "token-b"));
+    expect(useAuthStore.getState().profile?.userId).toBe("user-2");
+    expect(service.getCurrentSessionSnapshot().token).toBe("token-b");
+
+    answerHeldCheck(await okWithProfile());
+    await expect(pending).resolves.toBeNull();
+
+    expect(useAuthStore.getState().profile?.userId).toBe("user-2");
+    expect(useAuthStore.getState().status).toBe("signed-in");
+    expect(service.getCurrentSessionSnapshot().token).toBe("token-b");
   });
 
   it("a live revalidation stands down for an interactive sign-in attempt on an unverified session", async () => {

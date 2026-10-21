@@ -3303,12 +3303,14 @@ export class AuthService {
 
     if (outcome.kind === "valid") {
       // The verdict is about `currentToken` as it stood when the check was
-      // sent. Same-user adoptions and demotions leave the identity generation
-      // alone, so a credential that moved meanwhile (a reconcile adopting a
-      // bearer authn has refused, a demotion that withdrew the verdict) is
-      // caught here, and the verdict writes nothing onto it.
+      // sent. Adoptions, demotions and a cross-window account switch leave the
+      // identity generation alone, so a credential that moved meanwhile (a
+      // reconcile adopting a bearer authn has refused, a demotion that
+      // withdrew the verdict, a sibling window signing in as someone else) is
+      // caught here. The verdict writes nothing onto it, and is not handed on
+      // either: its user may not be the live one, so the answer is stale.
       if (this.getCredentialGeneration() !== credentialGeneration) {
-        return outcome;
+        return { kind: "superseded" };
       }
       // Subscription entitlement can change without a bearer rotation (for
       // example after a purchase or restore). Project every successful
