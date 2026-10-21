@@ -480,7 +480,11 @@ interface TabItemProps {
   readonly canRenameTabs: boolean;
   readonly menuProps: Omit<
     TabStripContextMenuProps,
-    "canRename" | "onCopyFilePath" | "onEditTitle" | "onOpenUsage"
+    | "canRename"
+    | "onCopyFilePath"
+    | "onEditTitle"
+    | "onOpenUsage"
+    | "chatRouting"
   >;
   readonly domRef: (el: HTMLElement | null) => void;
 }
@@ -902,6 +906,11 @@ function TabItemBody(
         onCopyFilePath={absoluteFilePath === null ? null : handleCopyFilePath}
         onEditTitle={rename.startEditing}
         onOpenUsage={onOpenUsage}
+        chatRouting={
+          tab.type === "chat"
+            ? { epicId, chatId: tab.id, hostId: tab.hostId }
+            : null
+        }
       />
     </ContextMenu>
   );

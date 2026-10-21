@@ -8,6 +8,7 @@ import {
   createAgentRequestSchema,
   createAgentRequestSchemaV20,
   createAgentRequestSchemaV30,
+  createAgentRequestSchemaV31,
   createAgentResponseSchema,
   agentSelectionGuideRequestSchema,
   agentSelectionGuideResponseSchema,
@@ -87,6 +88,13 @@ export const agentCreateV30 = defineRpcContract({
   method: "agent.create",
   schemaVersion: { major: 3, minor: 0 } as const,
   requestSchema: createAgentRequestSchemaV30,
+  responseSchema: createAgentResponseSchema,
+});
+
+export const agentCreateV31 = defineRpcContract({
+  method: "agent.create",
+  schemaVersion: { major: 3, minor: 1 } as const,
+  requestSchema: createAgentRequestSchemaV31,
   responseSchema: createAgentResponseSchema,
 });
 
@@ -192,11 +200,25 @@ export const agentCreateUpgradeV20ToV30 = defineUpgradePath<
   upgradeResponse: (response) => response,
 });
 
-export const agentCreateDowngradeV30ToV20 = defineDowngradePath<
+/**
+ * A 3.0 caller did not carry a routing choice; upgrade it to "leave the agent
+ * on the default".
+ */
+export const agentCreateUpgradeV30ToV31 = defineUpgradePath<
   typeof agentCreateV30,
-  typeof agentCreateV20
+  typeof agentCreateV31
 >({
   from: { major: 3, minor: 0 },
+  to: { major: 3, minor: 1 },
+  upgradeRequest: (request) => ({ ...request, routing: null }),
+  upgradeResponse: (response) => response,
+});
+
+export const agentCreateDowngradeV31ToV20 = defineDowngradePath<
+  typeof agentCreateV31,
+  typeof agentCreateV20
+>({
+  from: { major: 3, minor: 1 },
   to: { major: 2, minor: 0 },
   downgradeRequest: () => ({
     ok: false,
@@ -209,11 +231,11 @@ export const agentCreateDowngradeV30ToV20 = defineDowngradePath<
   downgradeResponse: (response) => ({ ok: true, value: response }),
 });
 
-export const agentCreateDowngradeV30ToV10 = defineDowngradePath<
-  typeof agentCreateV30,
+export const agentCreateDowngradeV31ToV10 = defineDowngradePath<
+  typeof agentCreateV31,
   typeof agentCreateV10
 >({
-  from: { major: 3, minor: 0 },
+  from: { major: 3, minor: 1 },
   to: { major: 1, minor: 0 },
   downgradeRequest: () => ({
     ok: false,

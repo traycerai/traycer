@@ -5861,6 +5861,14 @@ const chatRecordSchemaPreAuto = lazySchema(() =>
   }),
 );
 
+// The chat record as every windowed line through `1.22` ships it: the live
+// record without `routing`, which first rides `1.23`. `1.13`-`1.22` include
+// lines the 1.5.1 tags shipped, so they must not follow `chatRecordSchema` by
+// reference (`released-baseline-compat.test.ts` catches the leak).
+const chatRecordSchemaPreRouting = lazySchema(() =>
+  chatRecordSchema.omit({ routing: true }),
+);
+
 // Frozen windowed snapshot bound to `chat.subscribe@1.10`: provider fallback
 // on the V18 base, whose `chat`, `queue` and `pendingApprovals` are pre-`auto`
 // because `1.8` binds it and `1.8` shipped in `cli-v1.3.0`. The live shape
@@ -5932,7 +5940,7 @@ const chatWindowedSnapshotSchemaV111 = lazySchema(() =>
 // the card are frozen now.
 const chatWindowedSnapshotSchemaV113 = lazySchema(() =>
   chatWindowedSnapshotSchemaV111.extend({
-    chat: chatRecordSchema,
+    chat: chatRecordSchemaPreRouting,
     queue: chatQueueStateSchemaPrePortForward,
     // Pre-tier: `1.16` is where the card's reason gains its tier, and every
     // line from here to `1.15` inherits this binding.
@@ -6037,6 +6045,8 @@ const chatWindowedSnapshotSchemaV121 = lazySchema(() =>
 const chatWindowedSnapshotSchemaV123 = lazySchema(() =>
   chatWindowedSnapshotSchemaV121.extend({
     tail: chatTranscriptWindowSchema,
+    // The first line whose record may carry `routing`.
+    chat: chatRecordSchema,
   }),
 );
 // The windowed snapshot as `chat.subscribe@1.24` ships it: `1.23` with the

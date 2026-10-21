@@ -278,27 +278,27 @@ const SERVER_FRAME_DIGESTS = {
     "216acc0693d0dd96ad6ec383481ae964fdcd8392a20db3d3fcc005c48cebc5a6",
   ],
   23: [
-    "a9681170dd0204415e81fdfa3f0a9349042b6f744e4b7472948fcafea7e4bde2",
-    "6c440c7bd1cdddc71d5ad9243c80e4244e788628de8e4e69ab195da8283e04c4",
+    "6ee6e54ef947c26b327500a5dce73301225bb8d381e42b4261f6498e202433d4",
+    "72ad18dcc0f98875d15e6b70a028363b8000a86525abbddd84bf008da38180b4",
   ],
   // Captured from the live schema the moment before 1.25 opened above it: the
   // cron next-run line, with no bot-conversation request on a user row and no
   // conversation-message queue item.
   24: [
-    "df4a6c92a190a70c15ec9dd0c5213f2de6be0603a6019a497535700606c49caf",
-    "dffa1e3ba8e53a696b9683e7aa8df8361ddf11ad45f099a24fb4a2b31e5739e9",
+    "6bd517cccc89b55d199b1b04684bcb9a4dfb0976df5713f526c95057884016c4",
+    "d69be9a219041974792db9b829e15a065cd14aa6277094ded57144e909a532ca",
   ],
   // Captured from the live schema the moment before 1.26 opened above it: the
   // bot-conversation line, with no task-checkin queue item.
   25: [
-    "fb4f57ece103b2b0f1c09ce3cbb1337313475022e74aa047ab71a2363ce44393",
-    "a454bae64702f7f23ecb09f23f128a46a90297489c42d8f2ce6c69184c741c6f",
+    "5b1da18bef40045085a300cc5fea108d905a5050455e0036bfa18d94288cef91",
+    "09a238299c28d95fefb692be421117e90931feab9747dd0abd2921eba9da3f1f",
   ],
   // Captured from the live schema the moment before 1.27 opened above it: the
   // task-checkin line, with no task-overdue queue item.
   26: [
-    "217dedded3dc8f48540361498ac33cd5b74c87d834abf292627a65b45448e315",
-    "a41a8553d19255eb4dbb7334f5332134d9ed187f5f95d09c452f2c04b3005cff",
+    "0f33bca3454931d146798b478578f8227e99789903397d204e955782cc6452e3",
+    "596e2ca8c513d6567ce12eac29e4906f82dcd13fd67d5d3813ebfa5f72d42fb7",
   ],
   // Captured from the live schema the moment before 1.28 opened above it: the
   // task-overdue line, with no `signInParked` on a queued prompt and operation
@@ -307,8 +307,8 @@ const SERVER_FRAME_DIGESTS = {
   // one this tree pinned before main's 1.28 landed, and the merged tree's
   // frozen 1.27 reproduces it.
   27: [
-    "8d04e50cb1e605fa1ef204f057463add6d4075277016a2c23d38d8beb53fdc58",
-    "88da8359f5ee5a694a313c1be9f7223fd0e7681dc8dca2c0cfc1cd79031ccd03",
+    "d6df6f1912889b4155848fb69ae29b6ee1548a2438fb37b58a9429a08fb32613",
+    "3f45918318363d45a7f488fbb88a37c13620a23b062e61b1df97fb9d3dd68c33",
   ],
   // The sign-in park line (main's 1.28): a queued prompt may carry
   // `signInParked`; operation blocks and events keep the four markdown kinds.
@@ -317,37 +317,39 @@ const SERVER_FRAME_DIGESTS = {
   // 1.27 above, and 1.29–1.31 reproduce the values this tree pinned for them
   // as 1.28–1.30, so the re-mint moved nothing else.
   28: [
-    "2fa10fd797a2fa6ca24ba12dfbb9e094c02323be834289461d9da4c1e4af1825",
-    "9fa4bf2415eb41959bc60b2742dcdbe788b239f899636c42943bd391e0aecca2",
+    "8e6e17abe829c1d8f1a21cf23694c40f2c5d7542071674c00fdc6bd989630829",
+    "9b583c76f193f4e2aee4d64910f1d34f1037e3e8b0c3c10f79d9f75fdaeaddc1",
   ],
   // The delivery line (main's 1.29): a tool block may carry
   // `agentMessageDelivery`; operation blocks and events keep the four markdown
   // kinds, tool calls carry no `artifact` stamp. Captured from the merged tree
   // when the artifact lines re-minted above it.
   29: [
-    "ff80088af8d120e484edeebeb174b98edc0e835195485ed8da3882ce9cbc22ac",
-    "ae5c18eef8e54df29224a14c15dbde506fbae4b8280301c5c4117be7cfb03dc6",
+    "daf34109602406fd0f52eda2937016e0083215a45f7dce98c712f760c6dcc700",
+    "a3bdf0cafacf2e0b7e6a16546da69af1d43c6e20deed479306cf1848aa9f6a3d",
   ],
   // The html/canvas/file artifact-kind line, with tool calls carrying no
   // `artifact` stamp. Re-minted above main's 1.29.
   30: [
-    "ad28da595739a9b08eb8359900668ff5314956d59fe98f27c43a3b6776bff340",
-    "da1175d2e006b02071e5aad6e2e1e2cfd951797f3d8add9aa78830f776367ec3",
+    "e8490a6ba909e849706660afd325b80c354d0e51c7dd9596225a2a04a3e4dddb",
+    "4f25b66a9c1663de211ddf8ff1c42741ee3cac2e3886f611b2b67f0e9b969f65",
   ],
   // The artifact-stamp line, with no canvas annotations. Re-minted above
   // main's 1.29.
   31: [
-    "4ebde3e2196de26fc51f5916767dc4d08cd67d29575ddbb48eaf8de6c877584b",
-    "59f2036e7d30c9aa5e6cc38b60383021945a03ba46c050d961dd91192d34e946",
+    "690edf7e574cb38eabda1728abe4dbcac42012c704c37200222713bd1c141749",
+    "a7e354e6b628f8cf3f8a056f47d300ebd1d7979b7b06b5d2920f034834478876",
   ],
   // The canvas-annotation line, before 1.33 widened checkpoint artifact tags.
   // Re-minted above main's 1.29.
   32: [
-    "188ef3ce38e34bc9d68f4cd8c8b2c78d9f87994d3fa0e6c2c51b2c58b39e20a3",
-    "11b2fd7e7c917320e3081933b0f0eb493ca436750d4e3ab291bf9bfec0dd960a",
+    "68463b44555e3eabf9c8919c4b1cfdf5a90f1a247096332bcfb1bc812e13c05e",
+    "89d1db7b9327db3798f374e81ec6bda81124baf32d1fa48d4dfd60a406d2f0f1",
   ],
 } as const;
 
+// 1.23–1.32 carry `routing` on the chat record (`agent.configure@7.1`); every
+// released line below 1.23 ships the record without it and is unchanged.
 const contracts = [
   chatSubscribeV10,
   chatSubscribeV11,

@@ -1,6 +1,6 @@
 import { formatAgentConfigureResponse } from "@traycer/protocol/agent/agent-profile-format";
 import {
-  agentConfigureRequestSchemaV20,
+  agentConfigureRequestSchemaV71,
   agentConfigureResponseSchema,
 } from "@traycer/protocol/host/agent/profiles";
 import {
@@ -39,7 +39,7 @@ export function buildAgentConfigureCommand(opts: {
   readonly permissionMode: string | null;
 }): CommandFn {
   return async () => {
-    const request = parseUserInput(agentConfigureRequestSchemaV20, {
+    const request = parseUserInput(agentConfigureRequestSchemaV71, {
       epicId: resolveEpicId(opts.epicId),
       senderAgentId: resolveSenderAgentId(opts.senderAgentId),
       agentId: opts.agentId,
@@ -49,6 +49,8 @@ export function buildAgentConfigureCommand(opts: {
       reasoningEffort: opts.reasoningEffort,
       fastMode: opts.fast,
       permissionMode: opts.permissionMode ?? "full_access",
+      // The command does not choose routing: the agent keeps what it has.
+      routing: null,
     });
     const result = await toAgentCliError(
       callHostRpc("agent.configure", request),

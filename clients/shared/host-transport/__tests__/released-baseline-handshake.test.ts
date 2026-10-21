@@ -331,6 +331,7 @@ describe("host-v1.1.7 permission-mode downgrade protection", () => {
         reasoningEffort: null,
         fastMode: null,
         permissionMode: "full_access",
+        routing: null,
         workspace: null,
         profileSelection: { kind: "ambient" },
       },
@@ -384,6 +385,7 @@ describe("host-v1.1.7 permission-mode downgrade protection", () => {
         reasoningEffort: null,
         fastMode: false,
         permissionMode: "full_access",
+        routing: null,
       },
       {
         idempotencyKey: null,
