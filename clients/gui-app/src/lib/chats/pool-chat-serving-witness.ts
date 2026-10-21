@@ -21,6 +21,12 @@ export interface RetainingChatServingWitness extends ChatServingWitness {
    * not been called. Reference-counted per chat.
    */
   retain(chat: ChatServingKey): () => void;
+  /**
+   * Opens a fresh stream for a retained chat whose last one ended with a
+   * fatal close, keeping its holders and the state already heard; a no-op
+   * for a chat not retained or still subscribed.
+   */
+  reopen(chat: ChatServingKey): void;
   /** The server's last published state for the chat; null before the first. */
   servingFor(chat: ChatServingKey): ChatServing | null;
 }
@@ -100,6 +106,13 @@ export class PoolChatServingWitness implements RetainingChatServingWitness {
     };
   }
 
+  reopen(chat: ChatServingKey): void {
+    const key = watchKey(chat);
+    const watched = this.watched.get(key);
+    if (watched === undefined || watched.session !== null) return;
+    this.open(key, watched);
+  }
+
   /**
    * The pool's stream client, or null while it is not ready (not built yet,
    * or still the previous account's). A new client reopens every retained
@@ -144,8 +157,8 @@ export class PoolChatServingWitness implements RetainingChatServingWitness {
     });
     // A fatal close is final: the pool ends the stream `CHAT_NOT_VISIBLE`
     // for a chat it cannot show yet, such as one a team host has not
-    // published. The dead session is dropped so the next `retain` opens a
-    // fresh one; the caller's re-retain on publication is what asks.
+    // published. The dead session is dropped so `reopen` (asked on
+    // publication) or the next first `retain` opens a fresh one.
     session.onStatusChange((status, reason) => {
       if (status !== "closed" || reason?.kind !== "fatalError") return;
       const current = this.watched.get(key);

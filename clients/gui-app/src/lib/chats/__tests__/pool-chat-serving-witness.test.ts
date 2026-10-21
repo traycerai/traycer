@@ -56,26 +56,35 @@ const NOT_VISIBLE: StreamCloseReason = {
   },
 };
 
-describe("PoolChatServingWitness re-subscribe after a final close", () => {
-  it("opens a fresh stream on re-retain once the pool ended the old one with a fatal error", () => {
+describe("PoolChatServingWitness reopen after a final close", () => {
+  it("opens a fresh stream on reopen once the pool ended the old one with a fatal error, keeping the state heard", () => {
     const client = new StatusDrivableClient(true);
     const witness = new PoolChatServingWitness();
     witness.setStreamClient(client);
 
-    const releaseFirst = witness.retain(CHAT);
+    witness.retain(CHAT);
     const releaseSecond = witness.retain(CHAT);
     expect(client.subscribes).toHaveLength(1);
 
+    client.drivable[0]?.emit(
+      servingFrame({
+        ownerHostId: CHAT.hostId,
+        state: "at-rest",
+        catchingUp: null,
+      }),
+      null,
+    );
     client.drivable[0]?.emitStatusWithReason("closed", NOT_VISIBLE);
+    expect(witness.servingFor(CHAT)?.state).toBe("at-rest");
 
-    releaseFirst();
-    witness.retain(CHAT);
+    witness.reopen(CHAT);
 
     expect(client.subscribes).toHaveLength(2);
     expect(client.subscribes[1]).toEqual({
       method: "chat.serving.subscribe",
       params: { epicId: CHAT.epicId, chatId: CHAT.chatId },
     });
+    expect(witness.servingFor(CHAT)?.state).toBe("at-rest");
 
     client.drivable[1]?.emit(
       servingFrame({
@@ -98,6 +107,39 @@ describe("PoolChatServingWitness re-subscribe after a final close", () => {
     expect(witness.servingFor(CHAT)?.state).toBe("live");
 
     releaseSecond();
+    witness.dispose();
+  });
+
+  it("does nothing on a healthy stream", () => {
+    const client = new StatusDrivableClient(true);
+    const witness = new PoolChatServingWitness();
+    witness.setStreamClient(client);
+    witness.retain(CHAT);
+
+    witness.reopen(CHAT);
+
+    expect(client.subscribes).toHaveLength(1);
+    client.drivable[0]?.emit(
+      servingFrame({
+        ownerHostId: CHAT.hostId,
+        state: "live",
+        catchingUp: null,
+      }),
+      null,
+    );
+    expect(witness.servingFor(CHAT)?.state).toBe("live");
+    expect(client.drivable[0]?.closed).toBe(false);
+    witness.dispose();
+  });
+
+  it("does nothing for a chat that is not retained", () => {
+    const client = new StatusDrivableClient(true);
+    const witness = new PoolChatServingWitness();
+    witness.setStreamClient(client);
+
+    witness.reopen(CHAT);
+
+    expect(client.subscribes).toHaveLength(0);
     witness.dispose();
   });
 

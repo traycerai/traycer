@@ -42,17 +42,20 @@ function useApplicableWitness(
       ? witness
       : null;
   const { hostId, epicId, chatId } = chat;
+  useEffect(
+    () => applicable?.retain({ hostId, epicId, chatId }),
+    [applicable, hostId, epicId, chatId],
+  );
   // A team host's chat is environment-owned, so its publication is the row
   // appearing in the environment arm. Until then the pool ends the witness's
-  // stream `CHAT_NOT_VISIBLE`; the row's arrival retains again, which opens
-  // a fresh one.
+  // stream `CHAT_NOT_VISIBLE`; the row's arrival reopens it, leaving a
+  // healthy stream and every holder alone.
   const published = useEnvironmentArmChats(
     applicable === null ? "" : epicId,
   ).some((row) => row.identity.chatId === chatId);
-  useEffect(
-    () => applicable?.retain({ hostId, epicId, chatId }),
-    [applicable, hostId, epicId, chatId, published],
-  );
+  useEffect(() => {
+    if (published) applicable?.reopen({ hostId, epicId, chatId });
+  }, [applicable, hostId, epicId, chatId, published]);
   return applicable;
 }
 
