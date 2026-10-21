@@ -8,6 +8,7 @@ import {
   symlink,
   writeFile,
 } from "node:fs/promises";
+import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -106,6 +107,26 @@ describe.each(variants)("readRegularFileBytesNoFollow ($name)", ({ read }) => {
       expect(await read(path)).toEqual({ kind: "not-regular" });
     },
   );
+
+  // `open` on a socket fails (ENXIO on Linux, an unnamed errno on macOS), so
+  // only the classification after the failed open can report it. The name is
+  // short because a socket path is capped near 104 bytes.
+  it.skipIf(isWindows)("reports a Unix socket as not-regular", async () => {
+    const path = join(await freshDir(), "s.sock");
+    const server = createServer();
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(path, resolve);
+    });
+
+    try {
+      expect(await read(path)).toEqual({ kind: "not-regular" });
+    } finally {
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      });
+    }
+  });
 
   it.skipIf(isWindows || isRoot)(
     "throws a failure other than absence as Node raised it",

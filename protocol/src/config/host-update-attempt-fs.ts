@@ -160,8 +160,10 @@ export type RegularFileNoFollowRead =
 
 /**
  * A regular file's bytes, read through the same descriptor. `not-regular`: the
- * path is a link or another non-regular file, or changed while it was opened.
- * A special file that `open` itself refuses (a socket, on POSIX) throws.
+ * path names a link or another non-regular file when it is opened, or, on the
+ * fallback without the descriptor flags, was replaced around the open. With
+ * the flags the descriptor is bound at the open, so a later replacement still
+ * reads the file that was opened.
  */
 export type RegularFileBytesRead =
   | { readonly kind: "absent" }
@@ -250,6 +252,11 @@ async function openNoFollow(path: string): Promise<NoFollowOpen<FileHandle>> {
     if (code === "ELOOP" || code === "EMLINK") {
       return { kind: "not-regular", cause: "attempt-record-is-symlink" };
     }
+    // A special file can refuse the open itself: a socket fails it with ENXIO
+    // on Linux and an errno Node does not name on macOS. Report what the path
+    // is; a regular file's failure, or one lstat cannot see past, is thrown.
+    const at = await lstatKind(path).catch(() => null);
+    if (at?.kind === "symlink" || at?.kind === "other") return notRegular(at);
     throw err;
   }
 
@@ -300,6 +307,13 @@ function openNoFollowSync(path: string): NoFollowOpen<number> {
     if (code === "ELOOP" || code === "EMLINK") {
       return { kind: "not-regular", cause: "attempt-record-is-symlink" };
     }
+    let at: ObservedPathKind | null = null;
+    try {
+      at = lstatKindSync(path);
+    } catch {
+      // The open's own failure is the one to report.
+    }
+    if (at?.kind === "symlink" || at?.kind === "other") return notRegular(at);
     throw err;
   }
 
