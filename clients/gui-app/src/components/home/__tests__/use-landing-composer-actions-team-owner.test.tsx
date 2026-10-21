@@ -174,8 +174,7 @@ const SUBMITTED_PROMPT = "Plan the host chat bootstrap";
 const TEST_HOST_ID = "host-landing";
 const ACME_OWNER = { teamId: "t1", slug: "acme" } as const;
 
-const HOST_TOO_OLD =
-  "This host can't create team tasks yet. Update the host, or choose Personal.";
+const HOST_TOO_OLD = "This host can't create team tasks yet. Update the host.";
 const SIGN_IN_FOR_ACME = "Sign in to create a task for acme.";
 const NOT_ON_TEAM_SANDBOXES = "Not available on team sandboxes.";
 

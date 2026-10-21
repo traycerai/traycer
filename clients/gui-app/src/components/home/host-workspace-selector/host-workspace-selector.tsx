@@ -120,7 +120,6 @@ import {
   hostWorkspaceControlsScopeRefusals,
   type HostWorkspaceControlsHostScope,
 } from "./host-workspace-controls-scope";
-import { LandingOwnerChip } from "@/components/home/composer/landing-owner-chip";
 import { computeInEpicFolderMode } from "./compute-in-epic-folder-mode";
 import {
   type AddFolderHandler,
@@ -655,21 +654,7 @@ export function ActiveHostWorkspaceControls(
       seedIntent={props.seedIntent}
       seedIntentOverride={props.seedIntentOverride}
       restingMode="summary"
-      hostSlot={
-        // A new-task landing draft also says who the task belongs to, beside
-        // the host it will run on.
-        props.stagingKey.surface === "landing" ? (
-          <>
-            {deviceSelect}
-            <LandingOwnerChip
-              draftId={props.stagingKey.draftId}
-              resolvedHostId={activeHostId}
-            />
-          </>
-        ) : (
-          deviceSelect
-        )
-      }
+      hostSlot={deviceSelect}
       disabled={disabled}
     />
   );

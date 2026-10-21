@@ -60,7 +60,7 @@ export const EPIC_CREATE_TEAM_OWNER_MINOR = 3;
 
 /** Verbatim: the host predates `epic.create@1.3`. */
 export const TEAM_CREATE_HOST_TOO_OLD =
-  "This host can't create team tasks yet. Update the host, or choose Personal.";
+  "This host can't create team tasks yet. Update the host.";
 
 /** Verbatim: the cloud refused a team create (`FORBIDDEN`). */
 export function teamCreateForbiddenLine(slug: string): string {
