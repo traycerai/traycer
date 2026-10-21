@@ -4,6 +4,10 @@ import {
   readHostDirectoryEntry,
   subscribeHostRowChanged,
 } from "@traycer-clients/shared/host-client/host-connection-registry";
+import {
+  isTeamSandboxHostDirectoryEntry,
+  readProcessHostRpcTierPlan,
+} from "@traycer-clients/shared/host-client/host-rpc-routing";
 import { isRemoteHostDirectoryEntry } from "@traycer-clients/shared/host-client/remote-fetcher";
 import { sandboxTileOverlay } from "@/components/hosts/sandbox-card-model";
 
@@ -11,6 +15,11 @@ import { sandboxTileOverlay } from "@/components/hosts/sandbox-card-model";
  * Whether a chat whose owner host has this directory row opens LIVE although
  * the host reads unreachable: the owner is a sandbox at rest or on its way
  * back.
+ *
+ * Only where the pool serves the chat at rest, the boundary `chatServingHostId`
+ * routes by: a team's sandbox, in a build with a server pool (`poolPresent`).
+ * A personal sandbox's chat is not served at rest, so a live tile on it would
+ * fall back to the published copy anyway, without the overlay.
  *
  * Wakeable is exactly what a live tile on that sandbox frames as asleep
  * (suspending, suspended, stopping, stopped, released) or moving (resuming,
@@ -21,9 +30,13 @@ import { sandboxTileOverlay } from "@/components/hosts/sandbox-card-model";
  */
 export function ownerSandboxOpensLive(
   entry: HostDirectoryEntry | null,
+  poolPresent: boolean,
 ): boolean {
-  if (entry === null || !isRemoteHostDirectoryEntry(entry)) return false;
-  if (entry.sandbox === null) return false;
+  if (!poolPresent || entry === null) return false;
+  if (!isTeamSandboxHostDirectoryEntry(entry)) return false;
+  if (!isRemoteHostDirectoryEntry(entry) || entry.sandbox === null) {
+    return false;
+  }
   const overlay = sandboxTileOverlay(entry.sandbox.state, entry.sandbox.frozen);
   return (
     overlay !== null && (overlay.kind === "asleep" || overlay.kind === "moving")
@@ -56,7 +69,10 @@ export function useOwnerSandboxOpensLive(ownerHostId: string | null): boolean {
     () =>
       ownerHostId === null
         ? false
-        : ownerSandboxOpensLive(readHostDirectoryEntry(ownerHostId)),
+        : ownerSandboxOpensLive(
+            readHostDirectoryEntry(ownerHostId),
+            readProcessHostRpcTierPlan().pool !== null,
+          ),
     [ownerHostId],
   );
   return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);

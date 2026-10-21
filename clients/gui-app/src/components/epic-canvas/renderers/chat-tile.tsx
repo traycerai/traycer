@@ -181,8 +181,7 @@ import {
   type RenderedMessagesDisplayContext,
 } from "@/stores/chats/rendered-messages";
 import { useAuthStore } from "@/stores/auth/auth-store";
-import { useOwnedByViewer } from "@/hooks/chats/use-owned-by-viewer";
-import { useIsTeamEnvironmentOwner } from "@/hooks/environment/use-is-team-environment-owner";
+import { useChatOwnerCopyFacts } from "@/hooks/environment/use-team-environment-ownership";
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
 import type { TranscriptRowLocator } from "@traycer/protocol/host/agent/gui/subscribe-windowed";
 import {
@@ -830,10 +829,13 @@ function ChatDeadTileBannerWithOffer(
   // collaborators existed. Role: `epic.createChat` is editor-gated host-side,
   // so a known viewer gets the reason in the banner instead of a Clone button
   // that dies on a bare "You don't have permission" toast (`useChatCloneAllowed`).
-  const ownedByViewer = useOwnedByViewer(sourceOwnerUserId, props.chatId);
-  // A team sandbox's chat, whose copy names its sandbox rather than a
-  // collaborator or a machine.
-  const environmentOwned = useIsTeamEnvironmentOwner(sourceOwnerUserId);
+  // A team sandbox's chat names its sandbox rather than a collaborator or a
+  // machine; an owner not yet told apart stays on the own-chat sentences.
+  const { ownedByViewer, environmentOwned } = useChatOwnerCopyFacts(
+    sourceOwnerUserId,
+    props.sourceHostId,
+    props.chatId,
+  );
   const offer = useChatCloneOnHostSwitch({
     epicId: props.epicId,
     tabId: props.tabId,

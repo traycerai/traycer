@@ -7,6 +7,7 @@ import {
   resetHostConnectionRegistryForTest,
 } from "@traycer-clients/shared/host-client/host-connection-registry";
 import type { RemoteHostDirectoryEntry } from "@traycer-clients/shared/host-client/remote-fetcher";
+import { poolEntry } from "@traycer-clients/shared/host-client/__tests__/routing-entry-fixtures";
 import {
   EpicSidebarCloudChatRow,
   type CloudChatRowExpansion,
@@ -36,6 +37,28 @@ import { useSettingsStore } from "@/stores/settings/settings-store";
  * fails. Nothing here clicks anything - jsdom passes clicks on pointer-inert
  * elements, so the open path is verified in the live app instead.
  */
+
+// The serving boundary for a sandbox at rest: only a TEAM sandbox in a build
+// with a server pool is served, so the plan carries a pool unless a test turns
+// it off.
+const tier = vi.hoisted(() => ({ pool: true }));
+
+vi.mock(
+  "@traycer-clients/shared/host-client/host-rpc-routing",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@traycer-clients/shared/host-client/host-rpc-routing")
+      >();
+    return {
+      ...actual,
+      readProcessHostRpcTierPlan: () =>
+        tier.pool
+          ? actual.createHostRpcTierPlan(poolEntry)
+          : actual.NO_POOL_HOST_RPC_TIER_PLAN,
+    };
+  },
+);
 
 vi.mock("@/hooks/host/use-addressable-host-id", () => ({
   useAddressableHostId: () => "host-a",
@@ -93,6 +116,7 @@ afterEach(() => {
   cleanup();
   resetHostConnectionRegistryForTest();
   reachability.status = "unreachable";
+  tier.pool = true;
   openedRefs.length = 0;
   openTile.mockClear();
   activeInTab.artifactId = null;
@@ -573,6 +597,7 @@ describe("EpicSidebarCloudChatRow on a mounting surface", () => {
 describe("EpicSidebarCloudChatRow for an owner sandbox at rest", () => {
   function seedOwnerRow(
     sandbox: { state: HostSandboxState; frozen: boolean } | null,
+    ownerTeamId: string | null,
   ): void {
     const row: RemoteHostDirectoryEntry = {
       hostId: CHAT.ownerHostId,
@@ -589,8 +614,8 @@ describe("EpicSidebarCloudChatRow for an owner sandbox at rest", () => {
           : {
               ...sandbox,
               profile: null,
-              ownerTeamName: "acme",
-              ownerTeamId: "team-1",
+              ownerTeamName: ownerTeamId === null ? null : "acme",
+              ownerTeamId,
             },
       remoteStatus: {
         connectivity: "offline",
@@ -629,7 +654,7 @@ describe("EpicSidebarCloudChatRow for an owner sandbox at rest", () => {
   it.each(["suspended", "stopped"] as const)(
     "shows no lock and opens LIVE, bound to the sandbox, when it is %s",
     (state) => {
-      seedOwnerRow({ state, frozen: false });
+      seedOwnerRow({ state, frozen: false }, "team-1");
       renderAndClick();
 
       expect(screen.queryByTestId(lockTestId)).toBeNull();
@@ -648,7 +673,27 @@ describe("EpicSidebarCloudChatRow for an owner sandbox at rest", () => {
     ["a frozen suspended sandbox", { state: "suspended", frozen: true }],
     ["a host that is not a sandbox", null],
   ] as const)("keeps the lock and the published copy for %s", (_name, row) => {
-    seedOwnerRow(row);
+    seedOwnerRow(row, "team-1");
+    renderAndClick();
+
+    expect(screen.getByTestId(lockTestId)).toBeTruthy();
+    expect(openedRefs.map((ref) => ref.type)).toEqual(["published-chat"]);
+  });
+
+  it.each(["suspended", "stopped"] as const)(
+    "keeps the lock and the published copy for a %s PERSONAL sandbox",
+    (state) => {
+      seedOwnerRow({ state, frozen: false }, null);
+      renderAndClick();
+
+      expect(screen.getByTestId(lockTestId)).toBeTruthy();
+      expect(openedRefs.map((ref) => ref.type)).toEqual(["published-chat"]);
+    },
+  );
+
+  it("keeps the lock and the published copy for a suspended team sandbox when the build has no pool", () => {
+    tier.pool = false;
+    seedOwnerRow({ state: "suspended", frozen: false }, "team-1");
     renderAndClick();
 
     expect(screen.getByTestId(lockTestId)).toBeTruthy();
