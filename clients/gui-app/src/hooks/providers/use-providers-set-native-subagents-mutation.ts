@@ -46,9 +46,6 @@ export function useProvidersSetNativeSubagents(
     mutationKey: providersMutationKeys.setNativeSubagents(),
     errorMessage: "Couldn't save the native subagents setting.",
     invalidateMethods: NATIVE_SUBAGENTS_INVALIDATIONS,
-    scope: providerNativeSubagentsWriteScope(
-      requesterHostId,
-      harnessId,
-    ),
+    scope: providerNativeSubagentsWriteScope(requesterHostId, harnessId),
   });
 }

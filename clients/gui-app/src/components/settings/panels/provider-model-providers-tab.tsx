@@ -505,7 +505,8 @@ export function ProviderModelProvidersTab(props: {
   // from.
   const activeHostId = useAddressableHostId();
   const binding = useHostBinding();
-  const hostId = useRequesterHostId(binding?.hostClient ?? null) ?? activeHostId;
+  const hostId =
+    useRequesterHostId(binding?.hostClient ?? null) ?? activeHostId;
   // A sandbox never takes a model provider's key or sign-in: Connect, the
   // custom provider form and Re-enable are disabled, Disconnect stays.
   const credentialRefusal = useHostCredentialRefusal(hostId);

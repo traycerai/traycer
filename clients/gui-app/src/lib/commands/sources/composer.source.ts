@@ -104,10 +104,7 @@ function useComposerItems(ctx: CommandContext): ReadonlyArray<CommandItem> {
     if (kind === null) return items;
     if (activeModelPicker !== null) {
       items.push(
-        buildChangeModelItem(
-          modelPickerShortcut ?? null,
-          selectionSummary,
-        ),
+        buildChangeModelItem(modelPickerShortcut ?? null, selectionSummary),
       );
     }
     items.push(buildSwitchProviderItem());

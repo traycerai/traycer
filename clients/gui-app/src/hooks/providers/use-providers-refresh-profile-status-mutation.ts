@@ -43,9 +43,7 @@ export function useProvidersRefreshProfileStatusForClient(
     method: "providers.refreshProfileStatus",
     mapVariables: (variables) => variables,
     options: {
-      mutationKey: providersMutationKeys.refreshProfileStatus(
-        requesterHostId,
-      ),
+      mutationKey: providersMutationKeys.refreshProfileStatus(requesterHostId),
       onMutate: () => ({
         hostId: client?.getActiveHostId() ?? null,
       }),

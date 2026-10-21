@@ -34,9 +34,7 @@ import { openNewEpicIntent } from "@/lib/commands/actions/new-epic";
 import { draftTabIntent, navigateToTabIntent } from "@/lib/tab-navigation";
 import { newestLandingDraftId } from "@/stores/home/landing-draft-store";
 import { tabCommandCoordinator } from "@/stores/tabs/tab-command-coordinator";
-import {
-  subscribeTabStructuralLocks,
-} from "@/stores/tabs/tab-structural-lock";
+import { subscribeTabStructuralLocks } from "@/stores/tabs/tab-structural-lock";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 // Side-effect import: installs renderer parking's open-tab mirror (plan C, C1
 // fixup 1). Anchored HERE because this component is the retention pool - it is

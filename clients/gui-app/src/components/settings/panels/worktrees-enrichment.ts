@@ -1202,23 +1202,20 @@ export function useWorktreeActivityEnrichment(
   // gained commits since the snapshot was written. A revalidation that landed
   // data IDENTICAL to the seed keeps the fold's identity but moves the query's
   // `dataUpdatedAt`, so a live fetch drops the path immediately.
-  const seededSnapshot = useSyncExternalStore(
-    subscribeEnrichmentStates,
-    () => {
-      if (hostId === null || enrichedByPath.size === 0) return "";
-      const seeded: string[] = [];
-      for (const path of enrichedByPath.keys()) {
-        const state =
-          queryClient.getQueryState<WorktreeListAllForHostResponseV14>(
-            perPathEnrichmentQueryKey(hostId, path),
-          );
-        if (state !== undefined && state.dataUpdatedAt < APP_SESSION_START_MS) {
-          seeded.push(path);
-        }
+  const seededSnapshot = useSyncExternalStore(subscribeEnrichmentStates, () => {
+    if (hostId === null || enrichedByPath.size === 0) return "";
+    const seeded: string[] = [];
+    for (const path of enrichedByPath.keys()) {
+      const state =
+        queryClient.getQueryState<WorktreeListAllForHostResponseV14>(
+          perPathEnrichmentQueryKey(hostId, path),
+        );
+      if (state !== undefined && state.dataUpdatedAt < APP_SESSION_START_MS) {
+        seeded.push(path);
       }
-      return seeded.join("\u0000");
-    },
-  );
+    }
+    return seeded.join("\u0000");
+  });
   const seededPaths = useMemo(
     () =>
       seededSnapshot.length === 0

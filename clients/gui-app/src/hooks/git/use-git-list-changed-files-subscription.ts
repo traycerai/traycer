@@ -1,9 +1,4 @@
-import {
-  useCallback,
-  useMemo,
-  useEffect,
-  useSyncExternalStore,
-} from "react";
+import { useCallback, useMemo, useEffect, useSyncExternalStore } from "react";
 import { queryOptions, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { QueryClient } from "@tanstack/react-query";
 import type { SchemaVersion } from "@traycer/protocol/framework/versioned-stream-rpc";
@@ -486,9 +481,7 @@ export function useGitListChangedFilesSubscription(args: {
   const lastWatcherStatus = useSyncExternalStore(
     subscribe,
     () =>
-      key === null
-        ? null
-        : (subscriptions.get(key)?.lastWatcherStatus ?? null),
+      key === null ? null : (subscriptions.get(key)?.lastWatcherStatus ?? null),
     () => null,
   );
 
