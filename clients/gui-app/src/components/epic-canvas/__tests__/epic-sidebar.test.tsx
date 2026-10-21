@@ -153,6 +153,9 @@ vi.mock("@/components/epic-canvas/sidebar/epic-terminal-sidebar", () => ({
   TerminalsPanelActions: () => null,
   TerminalsPanelBody: () => <div data-testid="epic-test-terminals-body" />,
 }));
+vi.mock("@/components/epic-canvas/sidebar/epic-simulator-sidebar", () => ({
+  SimulatorsSidebarGroup: () => null,
+}));
 
 vi.mock("@/components/epic-canvas/pr/pr-panel-body", () => ({
   PrPanelBody: () => <div data-testid="epic-test-pr-body" />,
