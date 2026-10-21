@@ -1,4 +1,10 @@
-import { expect, test, type FrameLocator, type Page } from "@playwright/test";
+import {
+  expect,
+  test,
+  type FrameLocator,
+  type Locator,
+  type Page,
+} from "@playwright/test";
 
 import { fixture, nextFrames } from "./support/fixtures.ts";
 
@@ -115,22 +121,22 @@ async function shiftClick(page: Page, tid: string): Promise<void> {
   }
 }
 
-/** Picks `first`; the frame may still be starting, so the click is retried. */
+function selectedLayer(page: Page): Locator {
+  return page.getByLabel("Element properties").locator("span").first();
+}
+
+/** Opens the inspector and picks `first`; the frame may still be starting, so the click is retried. */
 async function selectFirst(page: Page): Promise<void> {
+  await page.getByRole("button", { name: "Inspector", exact: true }).click();
   await expect(async () => {
     await click(page, "first");
-    await expect(page.getByText("Arrange · 1 selected")).toBeVisible({
+    await expect(selectedLayer(page)).toHaveText("Paragraph", {
       timeout: 1000,
     });
   }).toPass();
-  // A hit on the container would also say "1 selected"; the paragraph is the
-  // element the click was aimed at.
-  await expect(
-    page.getByLabel("Element properties").locator("span").first(),
-  ).toHaveText("p");
 }
 
-test("a plain click selects the element and opens the arrange toolbar", async ({
+test("a plain click selects the element and shows it in the inspector", async ({
   page,
 }) => {
   await open(page);
@@ -173,7 +179,8 @@ test("a Shift-click on an element in another container says so and keeps the sel
   await expect(
     page.getByText("Select elements in the same container."),
   ).toBeVisible();
-  await expect(page.getByText("Arrange · 1 selected")).toBeVisible();
+  await expect(selectedLayer(page)).toHaveText("Paragraph");
+  await expect(page.getByText(/^Arrange ·/)).toHaveCount(0);
 });
 
 test("the two elements picked by Shift-click are arranged through the toolbar", async ({
