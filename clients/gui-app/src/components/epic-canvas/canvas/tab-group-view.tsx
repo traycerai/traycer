@@ -1142,6 +1142,7 @@ export function ActiveTabBody(props: ActiveTabBodyProps) {
           environmentOwned={false}
           cloneAllowed={false}
           showsPublishedCopy={false}
+          continueTargetLabel={null}
           onClone={noopClone}
           cloning={false}
           className={undefined}

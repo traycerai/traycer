@@ -642,9 +642,8 @@ export function credentialTargetHostOptions(
 
 /**
  * {@link groupHostOptions} flattened for a surface that draws one flat list
- * (the account menu, the browser sidebar): personal hosts first, then the
- * person's own pickable sandboxes, then each team's in team order, never a
- * burst one.
+ * (the browser sidebar, a sweep): personal hosts first, then the person's own
+ * pickable sandboxes, then each team's in team order, never a burst one.
  */
 export function pickableHostOptions(
   hosts: readonly HostScopeOption[],
@@ -656,4 +655,18 @@ export function pickableHostOptions(
     ...groups.sandboxes,
     ...groups.teams.flatMap((team) => team.sandboxes),
   ];
+}
+
+/**
+ * The rows the app-wide host may be switched to (the account menu): personal
+ * hosts, then the person's own pickable sandboxes. A team's sandbox is never
+ * one - it serves its team's environment, and the selection authority refuses
+ * it - so offering it would be a pick that does nothing.
+ */
+export function appWideHostOptions(
+  hosts: readonly HostScopeOption[],
+  keepHostId: string | null,
+): readonly HostScopeOption[] {
+  const groups = groupHostOptions(hosts, false, false, keepHostId);
+  return [...groups.personal, ...groups.sandboxes];
 }

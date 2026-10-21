@@ -100,6 +100,7 @@ describe("<ChatDeadTileBanner />", () => {
         environmentOwned={false}
         cloneAllowed
         showsPublishedCopy={false}
+        continueTargetLabel={null}
         cloning={false}
         onClone={() => undefined}
         testId="chat-dead"
@@ -133,6 +134,7 @@ describe("<ChatDeadTileBanner />", () => {
         environmentOwned={false}
         cloneAllowed={false}
         showsPublishedCopy={false}
+        continueTargetLabel={null}
         cloning={false}
         onClone={() => undefined}
         testId="chat-dead-viewer"
@@ -159,6 +161,7 @@ describe("<ChatDeadTileBanner />", () => {
           environmentOwned={false}
           cloneAllowed={cloneAllowed}
           showsPublishedCopy={false}
+          continueTargetLabel={null}
           cloning={false}
           onClone={() => undefined}
           testId={`chat-dead-null-${cloneAllowed}`}
@@ -188,6 +191,7 @@ describe("<ChatDeadTileBanner />", () => {
         environmentOwned={false}
         cloneAllowed
         showsPublishedCopy={false}
+        continueTargetLabel={null}
         cloning={false}
         onClone={() => undefined}
         testId="chat-dead-absent"
@@ -221,6 +225,7 @@ describe("<ChatDeadTileBanner />", () => {
         environmentOwned={false}
         cloneAllowed
         showsPublishedCopy={false}
+        continueTargetLabel={null}
         cloning={false}
         onClone={() => undefined}
         testId="chat-dead-here"
@@ -258,6 +263,7 @@ describe("<ChatDeadTileBanner />", () => {
         environmentOwned={false}
         cloneAllowed={false}
         showsPublishedCopy={false}
+        continueTargetLabel={null}
         cloning={false}
         onClone={() => undefined}
         testId="chat-dead-revoked"
@@ -296,6 +302,7 @@ describe("<ChatDeadTileBanner />", () => {
           environmentOwned={false}
           cloneAllowed
           showsPublishedCopy={false}
+          continueTargetLabel={null}
           cloning={false}
           onClone={() => undefined}
           testId={`chat-dead-${reason}`}
@@ -323,6 +330,7 @@ describe("<ChatDeadTileBanner />", () => {
           environmentOwned={false}
           cloneAllowed
           showsPublishedCopy
+          continueTargetLabel={null}
           cloning={false}
           onClone={() => undefined}
           testId="chat-dead-foreign"
@@ -351,6 +359,7 @@ describe("<ChatDeadTileBanner />", () => {
           environmentOwned={false}
           cloneAllowed={false}
           showsPublishedCopy
+          continueTargetLabel={null}
           cloning={false}
           onClone={() => undefined}
           testId="chat-dead-foreign-viewer"
@@ -380,6 +389,7 @@ describe("<ChatDeadTileBanner />", () => {
           environmentOwned={false}
           cloneAllowed
           showsPublishedCopy={false}
+          continueTargetLabel={null}
           cloning={false}
           onClone={() => undefined}
           testId="chat-dead-foreign-no-copy"
@@ -410,6 +420,7 @@ describe("<ChatDeadTileBanner />", () => {
             environmentOwned={false}
             cloneAllowed
             showsPublishedCopy
+            continueTargetLabel={null}
             cloning={false}
             onClone={() => undefined}
             testId={`chat-dead-foreign-${reason}`}
@@ -437,6 +448,7 @@ describe("<ChatDeadTileBanner />", () => {
           environmentOwned={false}
           cloneAllowed={false}
           showsPublishedCopy={false}
+          continueTargetLabel={null}
           cloning={false}
           onClone={() => undefined}
           testId="chat-dead-foreign-revoked"
@@ -462,6 +474,7 @@ describe("<ChatDeadTileBanner />", () => {
         environmentOwned={false}
         cloneAllowed={false}
         showsPublishedCopy={false}
+        continueTargetLabel={null}
         cloning={false}
         onClone={() => undefined}
         testId="chat-dead-own-viewer"
@@ -493,6 +506,7 @@ describe("<ChatDeadTileBanner />", () => {
           environmentOwned={false}
           cloneAllowed={false}
           showsPublishedCopy={false}
+          continueTargetLabel={null}
           cloning={false}
           onClone={() => undefined}
           testId={`chat-dead-no-clone-${reason}`}
@@ -527,6 +541,7 @@ describe("<ChatDeadTileBanner />", () => {
           environmentOwned={false}
           cloneAllowed
           showsPublishedCopy
+          continueTargetLabel={null}
           cloning={false}
           onClone={() => undefined}
           testId={`chat-dead-report-${reason}`}
@@ -551,6 +566,7 @@ describe("<ChatDeadTileBanner />", () => {
         environmentOwned={false}
         cloneAllowed
         showsPublishedCopy
+        continueTargetLabel={null}
         cloning={false}
         onClone={() => undefined}
         testId="chat-dead-report-offline"
@@ -580,6 +596,7 @@ describe("<ChatDeadTileBanner /> for a team environment's chat (environmentOwned
           environmentOwned
           cloneAllowed={cloneAllowed}
           showsPublishedCopy
+          continueTargetLabel={null}
           cloning={false}
           onClone={() => undefined}
           testId={testId}
@@ -608,6 +625,7 @@ describe("<ChatDeadTileBanner /> for a team environment's chat (environmentOwned
         environmentOwned
         cloneAllowed
         showsPublishedCopy={false}
+        continueTargetLabel={null}
         cloning={false}
         onClone={() => undefined}
         testId="chat-dead-env-live"
@@ -630,6 +648,7 @@ describe("<ChatDeadTileBanner /> for a team environment's chat (environmentOwned
         environmentOwned
         cloneAllowed
         showsPublishedCopy
+        continueTargetLabel={null}
         cloning={false}
         onClone={() => undefined}
         testId="chat-dead-env-report"
@@ -655,6 +674,7 @@ describe("<ChatDeadTileBanner /> for a team environment's chat (environmentOwned
         environmentOwned
         cloneAllowed
         showsPublishedCopy
+        continueTargetLabel={null}
         cloning={false}
         onClone={() => undefined}
         testId="chat-dead-env-revoked"
@@ -665,5 +685,35 @@ describe("<ChatDeadTileBanner /> for a team environment's chat (environmentOwned
     const text = screen.getByTestId("chat-dead-env-revoked").textContent;
     expect(text).toContain("no longer shared with you");
     expect(text).not.toContain("sandbox isn't available");
+  });
+  describe("removed sandbox continue target", () => {
+    it("names the sandbox the agent continues on, in the sentence and on the button", () => {
+      render(
+        <ChatDeadTileBanner
+          hostLabel="l-e2e-team-f11"
+          reason="sandbox-removed"
+          ownedByViewer
+          environmentOwned
+          cloneAllowed
+          showsPublishedCopy
+          cloning={false}
+          onClone={() => undefined}
+          continueTargetLabel="l-e2e-team-e7"
+          testId="chat-dead-sandbox-removed"
+          className={undefined}
+        />,
+      );
+
+      const banner = screen.getByTestId("chat-dead-sandbox-removed");
+      expect(banner.textContent).toContain("l-e2e-team-f11");
+      expect(banner.textContent).toContain(
+        "was removed. Continue this agent on l-e2e-team-e7, with its history.",
+      );
+      expect(banner.textContent).not.toContain("your sandbox");
+      expect(
+        screen.getByRole("button", { name: "Continue on l-e2e-team-e7" }),
+      ).toBeTruthy();
+      expect(screen.queryByRole("button", { name: "Continue here" })).toBeNull();
+    });
   });
 });

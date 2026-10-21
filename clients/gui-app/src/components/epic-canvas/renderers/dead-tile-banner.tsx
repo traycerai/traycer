@@ -445,6 +445,11 @@ export interface ChatDeadTileBannerProps {
    * the reason copy and do not read this.
    */
   readonly showsPublishedCopy: boolean;
+  /**
+   * The sandbox a removed sandbox's agent continues on (`sandbox-removed`),
+   * by name; `null` for every other reason.
+   */
+  readonly continueTargetLabel: string | null;
   readonly onClone: () => void;
   readonly cloning: boolean;
   readonly className: string | undefined;
@@ -468,24 +473,25 @@ export interface ChatDeadTileBannerProps {
  * Adding a fifth clone-offering reason cannot silently skip the variant.
  *
  * Each sentence takes the host as `tileHostName` names it: quoted, or "the
- * host" while no label has resolved.
+ * host" while no label has resolved; and the sandbox a removed sandbox's agent
+ * continues on, which only that reason names.
  */
 type ChatDeadTileBannerCopy =
   | {
-      readonly message: (host: string) => ReactNode;
+      readonly message: (host: string, target: string) => ReactNode;
       readonly reportTitle: string;
       readonly reportMessage: string;
       readonly offersClone: false;
     }
   | {
-      readonly message: (host: string) => ReactNode;
+      readonly message: (host: string, target: string) => ReactNode;
       /** The same fact, stated without the clone promise. */
       readonly messageWithoutClone: (host: string) => ReactNode;
       readonly reportTitle: string;
       readonly reportMessage: string;
       readonly offersClone: true;
-      /** The button: "Clone agent", or "Continue here" for a removed sandbox. */
-      readonly actionLabel: string;
+      /** The button: "Clone agent", or where a removed sandbox's agent goes. */
+      readonly actionLabel: (target: string) => string;
     };
 
 const CHAT_DEAD_TILE_BANNER_COPY: Record<
@@ -513,7 +519,7 @@ const CHAT_DEAD_TILE_BANNER_COPY: Record<
     reportTitle: "Agent host is offline",
     reportMessage: "The agent's bound host is offline.",
     offersClone: true,
-    actionLabel: "Clone agent",
+    actionLabel: () => "Clone agent",
   },
   "chat-not-visible": {
     message: (host) => (
@@ -533,7 +539,7 @@ const CHAT_DEAD_TILE_BANNER_COPY: Record<
     reportTitle: "Agent history unavailable",
     reportMessage: "The agent's history could not be found on its bound host.",
     offersClone: true,
-    actionLabel: "Clone agent",
+    actionLabel: () => "Clone agent",
   },
   // Deliberately names no host: the one it would name is the machine the
   // reader is looking at, and every label this device could print for it
@@ -559,7 +565,7 @@ const CHAT_DEAD_TILE_BANNER_COPY: Record<
     reportMessage:
       "The connected host answered that it no longer has this agent's history.",
     offersClone: true,
-    actionLabel: "Clone agent",
+    actionLabel: () => "Clone agent",
   },
   // Names no host on purpose, like the arm above it, but for the opposite
   // reason: there is nothing wrong with any host here. Saying "on <label>"
@@ -579,10 +585,9 @@ const CHAT_DEAD_TILE_BANNER_COPY: Record<
     offersClone: false,
   },
   "sandbox-removed": {
-    message: (host) => (
+    message: (host, target) => (
       <>
-        {host} was removed. Continue this agent on your sandbox, with its
-        history.
+        {host} was removed. Continue this agent on {target}, with its history.
       </>
     ),
     messageWithoutClone: (host) => (
@@ -594,7 +599,7 @@ const CHAT_DEAD_TILE_BANNER_COPY: Record<
     reportTitle: "Agent sandbox was removed",
     reportMessage: "The agent's sandbox was removed.",
     offersClone: true,
-    actionLabel: "Continue here",
+    actionLabel: (target) => `Continue on ${target}`,
   },
 };
 
@@ -708,13 +713,23 @@ function foreignOwnerReport(reason: ChatDeadTileBannerReason): {
 function ownChatMessage(
   copy: ChatDeadTileBannerCopy,
   hostLabel: string | null,
+  target: string,
   cloneAllowed: boolean,
 ): ReactNode {
   const host = tileHostName(hostLabel);
   if (copy.offersClone && !cloneAllowed) {
     return copy.messageWithoutClone(host);
   }
-  return copy.message(host);
+  return copy.message(host, target);
+}
+
+/**
+ * Where a removed sandbox's agent continues, by name. The tile offers the
+ * continue only once it has a target, so the fallback is never shown in
+ * practice; it keeps the sentence true if the name has not resolved.
+ */
+function continueTargetName(label: string | null): string {
+  return label ?? "another sandbox of the team";
 }
 
 /**
@@ -757,6 +772,7 @@ export function ChatDeadTileBanner(props: ChatDeadTileBannerProps): ReactNode {
   const copy = CHAT_DEAD_TILE_BANNER_COPY[props.reason];
   const swapped = ownerSwappedCopy(props);
   const report = swapped === null ? copy : swapped.report;
+  const target = continueTargetName(props.continueTargetLabel);
   return (
     // A live region, like the other two chat banners: which of the three
     // truths above is on screen is carried ONLY by this sentence, and the
@@ -775,7 +791,7 @@ export function ChatDeadTileBanner(props: ChatDeadTileBannerProps): ReactNode {
     >
       <span className="min-w-0 flex-1">
         {swapped === null
-          ? ownChatMessage(copy, props.hostLabel, props.cloneAllowed)
+          ? ownChatMessage(copy, props.hostLabel, target, props.cloneAllowed)
           : swapped.message}
       </span>
       {copy.offersClone && props.cloneAllowed ? (
@@ -786,7 +802,7 @@ export function ChatDeadTileBanner(props: ChatDeadTileBannerProps): ReactNode {
           disabled={props.cloning}
           onClick={props.onClone}
         >
-          {copy.actionLabel}
+          {copy.actionLabel(target)}
         </Button>
       ) : null}
       <ReportIssueAction
