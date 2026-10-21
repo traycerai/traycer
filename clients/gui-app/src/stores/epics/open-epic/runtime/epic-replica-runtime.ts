@@ -62,7 +62,10 @@ import type { EpicRuntimeAccountingPort } from "./epic-runtime-accounting-port";
 import { artifactBodyFragmentName } from "@traycer/protocol/persistence/epic/artifacts";
 import type { EpicDocRecordArms } from "../projection-helpers";
 import type { EpicArtifactRoomAvailability } from "../types";
-import type { PendingChatCreation } from "../pending-chat-creations";
+import type {
+  PendingChatCreation,
+  PendingChatCreationCloudRow,
+} from "../pending-chat-creations";
 import type {
   EarlyMetaEpic,
   SnapshotMetaEpic,
@@ -349,6 +352,7 @@ export interface EpicReplicaRuntime {
   reprojectForViewerChange(): void;
   beginPendingChatCreation(pending: PendingChatCreation): void;
   clearPendingChatCreation(chatId: string): void;
+  expirePendingChatCreationForCloudRow(row: PendingChatCreationCloudRow): void;
 
   // ── Doc mutations and the optimistic overlay ────────────────────────────
   renameArtifact(artifactId: string, nextTitle: string): boolean;
@@ -1669,6 +1673,9 @@ export function createEpicReplicaRuntime(
     },
     clearPendingChatCreation: (chatId) => {
       records.clearPendingChatCreation(chatId);
+    },
+    expirePendingChatCreationForCloudRow: (row) => {
+      records.expirePendingChatCreationForCloudRow(row);
     },
 
     renameArtifact: (artifactId, nextTitle) =>

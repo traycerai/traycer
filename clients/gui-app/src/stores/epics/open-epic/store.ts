@@ -78,7 +78,10 @@ import type {
   TerminalAgentsSlice,
   TreeSlice,
 } from "./types";
-import type { PendingChatCreation } from "./pending-chat-creations";
+import type {
+  PendingChatCreation,
+  PendingChatCreationCloudRow,
+} from "./pending-chat-creations";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { appLogger } from "@/lib/logger";
 import { createMainProjectionAccount } from "@/stores/replica-memory/main-projection-account";
@@ -847,6 +850,15 @@ export interface OpenEpicState {
    * first, so the row never blinks out between the two.
    */
   clearPendingChatCreation: (chatId: string) => void;
+  /**
+   * Retires a retained creation whose chat a published cloud row now serves,
+   * matched on `(chatId, ownerHostId)` - see
+   * `ChatRecordTable.expirePendingCreationForCloudRow`. A no-op when nothing
+   * this session created matches.
+   */
+  expirePendingChatCreationForCloudRow: (
+    row: PendingChatCreationCloudRow,
+  ) => void;
   /** Forcibly closes the underlying stream session. Idempotent. */
   dispose: () => void;
   /**
@@ -2204,6 +2216,12 @@ export function createOpenEpicStore(
             runtime.command({
               kind: "clear-pending-chat-creation",
               payload: { chatId },
+            });
+          },
+          expirePendingChatCreationForCloudRow: (row) => {
+            runtime.command({
+              kind: "expire-pending-chat-creation-for-cloud-row",
+              payload: { chatId: row.chatId, ownerHostId: row.ownerHostId },
             });
           },
 

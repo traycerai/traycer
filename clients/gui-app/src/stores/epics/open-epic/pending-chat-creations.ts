@@ -63,6 +63,16 @@ export interface PendingChatCreation {
   readonly ownerUserId: string | null;
 }
 
+/**
+ * A published cloud row for a chat, by the two facts that name the chat a
+ * stand-in was created as: the host mints its chat ids, so `(chatId,
+ * ownerHostId)` is one chat whoever the row is filed under.
+ */
+export interface PendingChatCreationCloudRow {
+  readonly chatId: string;
+  readonly ownerHostId: string;
+}
+
 /** A pending creation as retained: the caller's facts plus the store's stamp. */
 export interface RetainedChatCreation {
   readonly pending: PendingChatCreation;

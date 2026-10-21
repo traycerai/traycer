@@ -28,6 +28,7 @@ import {
 import {
   unionPendingChatCreations,
   type PendingChatCreation,
+  type PendingChatCreationCloudRow,
   type RetainedChatCreation,
 } from "../pending-chat-creations";
 import {
@@ -111,6 +112,13 @@ export interface ChatRecordTable {
     pending: PendingChatCreation,
   ): ChatRecordPublication | null;
   clearPendingCreation(chatId: string): ChatRecordPublication | null;
+  /**
+   * Retires the stand-in for a chat a PUBLISHED cloud row now serves, on the
+   * row's `(chatId, ownerHostId)`. `null` when no stand-in matched.
+   */
+  expirePendingCreationForCloudRow(
+    row: PendingChatCreationCloudRow,
+  ): ChatRecordPublication | null;
   /**
    * Rebuild for the CURRENTLY signed-in user from the retained raw rows.
    *
@@ -245,12 +253,18 @@ export function createChatRecordTable(
    * Drops this session's creations of `chatId` on `hostId`, whoever they were
    * filed under. A host mints its chat ids, so the pair names one chat.
    */
-  const dropPendingCreationsOnHost = (chatId: string, hostId: string): void => {
+  const dropPendingCreationsOnHost = (
+    chatId: string,
+    hostId: string,
+  ): boolean => {
+    let dropped = false;
     for (const [key, retained] of pendingCreations) {
       if (retained.pending.chatId !== chatId) continue;
       if (retained.pending.hostId !== hostId) continue;
       pendingCreations.delete(key);
+      dropped = true;
     }
+    return dropped;
   };
 
   /**
@@ -274,6 +288,19 @@ export function createChatRecordTable(
     if (record.origin !== "own") return;
     dropPendingCreationsOnHost(record.chatId, record.originHostId);
   };
+
+  /**
+   * Retires the stand-in a PUBLISHED cloud row has made redundant, for the
+   * chat whose record never reaches this table: a team host's
+   * environment-owned chat, which a member's client sees only as the
+   * environment arm's cloud row. The row is filed under the environment and
+   * the stand-in under the creator, so the owner cannot match; a host mints
+   * its chat ids, so `(chatId, ownerHostId)` is the same chat, the same
+   * argument as the `own` arm of {@link expirePendingCreationForRecord}.
+   */
+  const expirePendingCreationForCloudRow = (
+    row: PendingChatCreationCloudRow,
+  ): boolean => dropPendingCreationsOnHost(row.chatId, row.ownerHostId);
 
   /**
    * Drops every retained creation for `chatId`, whoever it was registered for.
@@ -594,6 +621,11 @@ export function createChatRecordTable(
 
     clearPendingCreation(chatId) {
       if (!dropPendingCreationsForChat(chatId)) return null;
+      return published(table.republish());
+    },
+
+    expirePendingCreationForCloudRow(row) {
+      if (!expirePendingCreationForCloudRow(row)) return null;
       return published(table.republish());
     },
 
