@@ -13,7 +13,6 @@ import { useSandboxCreateDialogStore } from "@/stores/settings/sandbox-create-di
 import { useProvidersFocusStore } from "@/stores/settings/providers-focus-store";
 import { useProfileSyncModalStore } from "@/stores/settings/profile-sync-modal-store";
 import { useProviderLinkDialogStore } from "@/stores/providers/provider-link-dialog-store";
-import { useLandingOwnerStore } from "@/stores/home/landing-owner-store";
 import { useWatchHostStore } from "@/stores/host-scope/watch-host-store";
 import { dismissRetainedDraftToasts } from "@/lib/toast/retained-draft-toasts";
 import { clearImagePathForIdentityTeardown } from "@/lib/attachments/image-path-identity-teardown";
@@ -128,10 +127,6 @@ export function EpicSessionLifecycleBridge(
       // profiles; left set, account B's Providers would mount A's dialog and
       // send A's profile id through B's host.
       useProviderLinkDialogStore.getState().close();
-      // A landing Belongs to pick names one of the outgoing account's teams,
-      // and a pick made before the draft existed sits under the shared
-      // no-draft key, where account B's first task would read it.
-      useLandingOwnerStore.getState().clearAll();
       // A last-copy draft toast is minted with NO duration, and the app-level
       // `<Toaster />` is mounted outside this tree - so it is the one piece of
       // renderer state that survives everything disposed above and keeps the

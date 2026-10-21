@@ -16,8 +16,7 @@ import {
  * what a rejected team create says.
  */
 
-const HOST_TOO_OLD =
-  "This host can't create team tasks yet. Update the host, or choose Personal.";
+const HOST_TOO_OLD = "This host can't create team tasks yet. Update the host.";
 
 function floorRefusal(minor: number): HostMethodVersionUnsatisfiedError {
   return new HostMethodVersionUnsatisfiedError({

@@ -25,68 +25,25 @@ const BETA: EpicShareableTeam = {
 };
 const TEAMS: ReadonlyArray<EpicShareableTeam> = [ACME, BETA];
 
-const HOST_TOO_OLD =
-  "This host can't create team tasks yet. Update the host, or choose Personal.";
+const HOST_TOO_OLD = "This host can't create team tasks yet. Update the host.";
 const OWNER = { teamId: "t1", slug: "acme" } as const;
 
 describe("resolveLandingOwner", () => {
-  it("is Personal for an explicit Personal pick, even on a team's host", () => {
+  it("is the team that owns the resolved host, with its slug, when the person is in it", () => {
     expect(
-      resolveLandingOwner({
-        choice: { kind: "personal" },
-        resolvedHostTeamId: "t1",
-        teams: TEAMS,
-      }),
-    ).toBeNull();
-  });
-
-  it("is the picked team, with its slug, when the person is in it", () => {
-    expect(
-      resolveLandingOwner({
-        choice: { kind: "team", teamId: "t2" },
-        resolvedHostTeamId: "t1",
-        teams: TEAMS,
-      }),
-    ).toEqual({ teamId: "t2", slug: "beta" });
-  });
-
-  it("is Personal when the picked team is not among the person's teams", () => {
-    expect(
-      resolveLandingOwner({
-        choice: { kind: "team", teamId: "t-gone" },
-        resolvedHostTeamId: "t1",
-        teams: TEAMS,
-      }),
-    ).toBeNull();
-  });
-
-  it("follows the resolved host's team when nothing is picked", () => {
-    expect(
-      resolveLandingOwner({
-        choice: null,
-        resolvedHostTeamId: "t1",
-        teams: TEAMS,
-      }),
+      resolveLandingOwner({ resolvedHostTeamId: "t1", teams: TEAMS }),
     ).toEqual({ teamId: "t1", slug: "acme" });
   });
 
   it("is Personal when the host's team is not among the person's teams", () => {
     expect(
-      resolveLandingOwner({
-        choice: null,
-        resolvedHostTeamId: "t-other",
-        teams: TEAMS,
-      }),
+      resolveLandingOwner({ resolvedHostTeamId: "t-gone", teams: TEAMS }),
     ).toBeNull();
   });
 
   it("is Personal when the host belongs to no team", () => {
     expect(
-      resolveLandingOwner({
-        choice: null,
-        resolvedHostTeamId: null,
-        teams: TEAMS,
-      }),
+      resolveLandingOwner({ resolvedHostTeamId: null, teams: TEAMS }),
     ).toBeNull();
   });
 });
