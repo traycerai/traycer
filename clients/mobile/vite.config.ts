@@ -153,6 +153,7 @@ const clientsRoot = resolve(mobileRoot, "..");
 const guiAppRoot = resolve(clientsRoot, "gui-app");
 const sharedRoot = resolve(clientsRoot, "shared");
 const protocolRoot = resolve(clientsRoot, "..", "protocol");
+const htmlSourceRoot = resolve(clientsRoot, "..", "packages", "html-source");
 
 function requiredEnv(name: string): string {
   const value = process.env[name];
@@ -515,6 +516,7 @@ export default defineConfig(async (): Promise<UserConfig> => {
       alias: {
         "@traycer/protocol/utils": resolve(protocolRoot, "utils"),
         "@traycer/protocol": resolve(protocolRoot, "src"),
+        "@traycer/html-source": resolve(htmlSourceRoot, "src", "index.ts"),
         "@traycer-clients/gui-app": guiAppRoot,
         "@traycer-clients/shared": sharedRoot,
         "@": resolve(guiAppRoot, "src"),

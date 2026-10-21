@@ -81,6 +81,7 @@ export interface CommentComposerProps {
 export interface CommentComposerHandle {
   /** Empty the editor doc back to a single empty paragraph. */
   reset(): void;
+  isDirty(): boolean;
   /** Imperatively focus the editor (used after Submit so the user can keep
    *  typing in the next reply slot without click-fishing). */
   focus(): void;
@@ -340,6 +341,9 @@ export function CommentComposer(props: CommentComposerProps) {
   useImperativeHandle(
     ref,
     () => ({
+      isDirty() {
+        return editor !== null && !editor.isEmpty;
+      },
       reset() {
         if (editor === null) return;
         editor.commands.clearContent();

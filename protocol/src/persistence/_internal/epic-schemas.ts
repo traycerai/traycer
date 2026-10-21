@@ -3,7 +3,9 @@ import {
   chatSchemaPreImported,
   chatSchemaPreReasonix,
   deletedEpicArtifactSchema,
+  deletedEpicArtifactSchemaPreHtml,
   epicArtifactSchema,
+  epicArtifactSchemaPreHtml,
   roleClaimsSchema,
   tuiAgentSchema,
 } from "@traycer/protocol/persistence/epic/schemas";
@@ -26,12 +28,29 @@ const epicNonChatFields = {
   roleClaims: lazySchema(() => roleClaimsSchema.default({})),
 };
 
+const epicNonChatFieldsPreHtml = {
+  ...epicNonChatFields,
+  artifacts: lazySchema(() => z.record(z.string(), epicArtifactSchemaPreHtml)),
+  deletedArtifacts: lazySchema(() =>
+    z.record(z.string(), deletedEpicArtifactSchemaPreHtml),
+  ),
+};
+
 /** Epic 2.0 as shipped before the Reasonix persisted enum/union variants. */
 export const epicSchemaPreReasonix = lazySchema(() =>
   z.object({
     ...epicIdentityFields,
     chats: z.record(z.string(), chatSchemaPreReasonix),
-    ...epicNonChatFields,
+    ...epicNonChatFieldsPreHtml,
+  }),
+);
+
+/** Epic 3.0 keeps the four markdown artifact variants. */
+export const epicSchemaPreHtml = lazySchema(() =>
+  z.object({
+    ...epicIdentityFields,
+    chats: z.record(z.string(), chatSchemaPreImported),
+    ...epicNonChatFieldsPreHtml,
   }),
 );
 

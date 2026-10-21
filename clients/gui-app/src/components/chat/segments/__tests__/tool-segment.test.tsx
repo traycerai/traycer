@@ -8,6 +8,7 @@ import type { ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { deriveToolInputDetail } from "@traycer/protocol/host/agent/gui/tool-input-detail";
 import { deriveToolInputSummary } from "@traycer/protocol/host/agent/gui/tool-input-summary";
+import type { ToolCallArtifactStamp } from "@traycer/protocol/persistence/epic/content-blocks";
 import { ChatExpansionTestProviders } from "@/components/chat/__tests__/chat-expansion-test-providers";
 import { deriveA2ASendCollapsibleKey } from "@/components/chat/chat-collapsible-key";
 import { ToolSegment } from "@/components/chat/segments/tool-segment";
@@ -44,7 +45,7 @@ function inputProps(toolName: string, input: unknown) {
     inputSummary: deriveToolInputSummary(toolName, input),
     inputDetail: deriveToolInputDetail(toolName, input),
     imageResults: [],
-    page: null,
+    artifact: null,
     mcpApp: null,
   };
 }
@@ -195,6 +196,21 @@ vi.mock("@/hooks/host/use-host-directory-entry", () => ({
     const label = hostDirectoryMocks.labels.get(hostId);
     return label === undefined ? null : { hostId, label };
   },
+}));
+
+// The row-routing suite below stubs the stamp-driven row so it can
+// assert the SELECTION (which row, with which stamp/fallback) without
+// standing up each row's own scope/store dependencies - those are each
+// row's own test file's job. No other test in this file stamps `artifact`, so these stubs never engage outside that suite.
+vi.mock("@/components/chat/segments/artifact-row", () => ({
+  // Deliberately renders neither the stamp nor the fallback: the routing
+  // suite below asserts SELECTION, and a stub that painted its fallback
+  // (the real generic row) would make "which row rendered" indistinguishable
+  // from "the fallback's own content happens to be present".
+  ArtifactRow: (_props: {
+    readonly artifact: ToolCallArtifactStamp | null;
+    readonly fallback: ReactNode;
+  }) => <div data-testid="artifact-row-stub" />,
 }));
 
 interface OpenA2ASendButtonProps {
@@ -1546,5 +1562,59 @@ describe("<ToolSegment /> streaming heartbeat", () => {
       />,
     );
     expect(screen.getByText("superseded")).toBeTruthy();
+  });
+});
+
+describe("<ToolSegment /> row routing", () => {
+  afterEach(() => {
+    useToolOpenStore.getState().reset("default");
+    cleanup();
+  });
+
+  const ARTIFACT_STAMP: ToolCallArtifactStamp = {
+    artifactId: "art-1",
+    title: "My Artifact",
+    manifest: { files: {}, capturedAt: 0 },
+    originChatId: "chat-1",
+  };
+
+  function renderRouted(artifact: ToolCallArtifactStamp | null) {
+    return render(
+      <ToolSegment
+        headerFindUnitId={null}
+        id="routing-1"
+        toolName="Bash"
+        {...inputProps("Bash", { command: "echo hi" })}
+        artifact={artifact}
+        error={null}
+        agentMessageSend={null}
+        managedCommand={null}
+        agentMessageReceipt={null}
+        agentMessageDelivery={null}
+        isStreaming={false}
+        endState={null}
+        stopped={false}
+        progress={null}
+        backgroundOutput={null}
+        backgroundTask={false}
+        startedAt={0}
+        durationMs={null}
+        variant="card"
+      />,
+    );
+  }
+
+  it("routes a stamped artifact call to the artifact row", () => {
+    renderRouted(ARTIFACT_STAMP);
+
+    expect(screen.getByTestId("artifact-row-stub")).toBeTruthy();
+    expect(screen.queryByText("Bash")).toBeNull();
+  });
+
+  it("falls through to the generic tool row when no artifact stamp is set", () => {
+    renderRouted(null);
+
+    expect(screen.queryByTestId("artifact-row-stub")).toBeNull();
+    expect(screen.getByText("Bash")).toBeTruthy();
   });
 });

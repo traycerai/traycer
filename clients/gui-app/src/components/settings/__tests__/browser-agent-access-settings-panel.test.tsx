@@ -17,7 +17,6 @@ import {
 } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
-import { BrowserSettingsSection } from "@/components/settings/browser-settings-section";
 import { BrowserAgentAccessSettingsPanel } from "@/components/settings/panels/browser-agent-access-settings-panel";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
@@ -37,14 +36,6 @@ const support = vi.hoisted(
     set: true,
   }),
 );
-// The agent-pages row gates on its own pair of methods; off by default so the
-// browser-access cases above it stay about the browser.
-const pagesSupport = vi.hoisted(
-  (): { get: boolean | null; set: boolean | null } => ({
-    get: false,
-    set: false,
-  }),
-);
 const tracked = vi.hoisted(() => vi.fn());
 /** A label to report for every host in place of its own; `null` keeps it. */
 const labelOverride = vi.hoisted((): { current: string | null } => ({
@@ -57,8 +48,6 @@ vi.mock("@/hooks/host/use-addressable-host-id", () => ({
 
 vi.mock("@/hooks/host/use-host-supports-method", () => ({
   useHostMethodSupport: (_hostId: string | null, method: string) => {
-    if (method === "config.visualization.get") return pagesSupport.get;
-    if (method === "config.visualization.set") return pagesSupport.set;
     return method === "config.browser.set" ? support.set : support.current;
   },
   useHostSupportsMethod: () => support.current === true,
@@ -92,11 +81,6 @@ interface Fixture {
   readonly Wrapper: (props: { readonly children: ReactNode }) => ReactNode;
   readonly gets: () => ReadonlyArray<string>;
   readonly sets: () => ReadonlyArray<boolean>;
-  readonly pagesGets: () => ReadonlyArray<string>;
-  readonly pagesSets: () => ReadonlyArray<{
-    readonly hostId: string;
-    readonly agentPages: boolean;
-  }>;
   readonly activate: (entry: { readonly hostId: string }) => void;
   readonly failReads: () => void;
 }
@@ -108,9 +92,6 @@ function createFixture(seed: Readonly<Record<string, boolean>>): Fixture {
   const access: Record<string, boolean> = { ...seed };
   const gets: string[] = [];
   const sets: boolean[] = [];
-  const pages: Record<string, boolean> = {};
-  const pagesGets: string[] = [];
-  const pagesSets: Array<{ hostId: string; agentPages: boolean }> = [];
   let failing = false;
   // The host the request was ADDRESSED to, read off the call the messenger
   // records before it runs the handler. The config store is per machine, so
@@ -134,17 +115,6 @@ function createFixture(seed: Readonly<Record<string, boolean>>): Fixture {
           sets.push(params.agentAccess);
           access[addressedHostId()] = params.agentAccess;
           return Promise.resolve({ agentAccess: params.agentAccess });
-        },
-        "config.visualization.get": () => {
-          const hostId = addressedHostId();
-          pagesGets.push(hostId);
-          return Promise.resolve({ agentPages: pages[hostId] ?? true });
-        },
-        "config.visualization.set": (params) => {
-          const hostId = addressedHostId();
-          pagesSets.push({ hostId, agentPages: params.agentPages });
-          pages[hostId] = params.agentPages;
-          return Promise.resolve({ agentPages: params.agentPages });
         },
       },
     });
@@ -171,8 +141,6 @@ function createFixture(seed: Readonly<Record<string, boolean>>): Fixture {
     ),
     gets: () => gets,
     sets: () => sets,
-    pagesGets: () => pagesGets,
-    pagesSets: () => pagesSets,
     activate: (entry) => {
       // "The active host moved" is a NEW pinned requester plus the new id, the
       // same pair every app-wide surface re-renders with.
@@ -191,15 +159,6 @@ function createFixture(seed: Readonly<Record<string, boolean>>): Fixture {
 
 function agentAccessPanel(): ReactNode {
   return <BrowserAgentAccessSettingsPanel />;
-}
-
-function agentOpenedTabsStub(): ReactNode {
-  return <div data-testid="agent-opened-tabs-stub">Agent-opened tabs stub</div>;
-}
-
-/** Settings > Browser, where the agent-pages row lives. */
-function browserSettingsSection(): ReactNode {
-  return <BrowserSettingsSection agentOpenedTabsRow={agentOpenedTabsStub()} />;
 }
 
 function row(): HTMLElement {
@@ -229,8 +188,6 @@ afterEach(() => {
   cleanup();
   support.current = true;
   support.set = true;
-  pagesSupport.get = false;
-  pagesSupport.set = false;
   active.hostId = null;
   client.current = null;
   labelOverride.current = null;
@@ -390,70 +347,6 @@ describe("<BrowserAgentAccessSettingsPanel />", () => {
     // separates the two.
     expect(row().getAttribute("data-disabled")).not.toBeNull();
     fireEvent.click(row());
-    expect(fixture.sets()).toEqual([]);
-  });
-});
-
-describe("<BrowserSettingsSection /> agent pages", () => {
-  const PAGES_SWITCH = "Let agents show pages in chat";
-
-  it("shows the switch only when the host serves both visualization methods", async () => {
-    const cases: ReadonlyArray<readonly [boolean | null, boolean | null]> = [
-      [false, false],
-      [true, false],
-      [false, true],
-      [null, null],
-    ];
-    for (const [get, set] of cases) {
-      pagesSupport.get = get;
-      pagesSupport.set = set;
-      const fixture = createFixture({});
-      const view = render(browserSettingsSection(), {
-        wrapper: fixture.Wrapper,
-      });
-
-      await settleQueries();
-      expect(screen.queryByRole("switch", { name: PAGES_SWITCH })).toBeNull();
-      // Hidden means not asked.
-      expect(fixture.pagesGets()).toEqual([]);
-      view.unmount();
-    }
-
-    pagesSupport.get = true;
-    pagesSupport.set = true;
-    const fixture = createFixture({});
-    render(browserSettingsSection(), { wrapper: fixture.Wrapper });
-
-    expect(
-      await screen.findByRole("switch", { name: PAGES_SWITCH }),
-    ).not.toBeNull();
-  });
-
-  it("writes {agentPages} to the active host, then settles on what the host answers", async () => {
-    pagesSupport.get = true;
-    pagesSupport.set = true;
-    const fixture = createFixture({});
-    render(browserSettingsSection(), { wrapper: fixture.Wrapper });
-    const pagesSwitch = await screen.findByRole("switch", {
-      name: PAGES_SWITCH,
-    });
-    await waitFor(() => {
-      expect(pagesSwitch.getAttribute("data-state")).toBe("checked");
-    });
-
-    fireEvent.click(pagesSwitch);
-
-    await waitFor(() => {
-      expect(fixture.pagesSets()).toEqual([
-        { hostId: mockLocalHostEntry.hostId, agentPages: false },
-      ]);
-    });
-    await waitFor(() => {
-      expect(pagesSwitch.getAttribute("data-state")).toBe("unchecked");
-    });
-    expect(fixture.pagesGets().length).toBeGreaterThan(1);
-    expect(tracked).toHaveBeenCalledWith("browser", "agentPages");
-    // The browser switch is a different setting; it was not touched.
     expect(fixture.sets()).toEqual([]);
   });
 });

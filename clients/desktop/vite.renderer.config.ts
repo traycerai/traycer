@@ -37,6 +37,13 @@ export default defineConfig((): UserConfig => {
   const guiAppRoot = resolve(__dirname, "..", "gui-app");
   const sharedRoot = resolve(__dirname, "..", "shared");
   const protocolRoot = resolve(__dirname, "..", "..", "protocol");
+  const htmlSourceRoot = resolve(
+    __dirname,
+    "..",
+    "..",
+    "packages",
+    "html-source",
+  );
 
   return {
     root: resolve(__dirname, "src", "renderer-shell"),
@@ -106,6 +113,7 @@ export default defineConfig((): UserConfig => {
         // entry so vite matches the longer prefix first.
         "@traycer/protocol/utils": resolve(protocolRoot, "utils"),
         "@traycer/protocol": resolve(protocolRoot, "src"),
+        "@traycer/html-source": resolve(htmlSourceRoot, "src", "index.ts"),
       },
     },
     build: {

@@ -4,9 +4,11 @@
  * so Providers - the first Personal entry - is the tenth desktop entry and
  * takes leader digit 0; everything after it (the rest of Personal, all of
  * Account, the host group) has no digit, Sessions included. Desktop's Host
- * ("Overview") is the twenty-fifth entry. Mobile omits Keybindings and Link
+ * ("Overview") is the twenty-seventh entry. Mobile omits Keybindings and Link
  * mobile app. This suite pins the positions against `visibleSettingsSections()`,
- * the same list the leader-digit dispatcher walks.
+ * the same list the leader-digit dispatcher walks. Vitest runs as a dev build,
+ * so that list includes the two dev-only proof pages, which sit after Personal
+ * and ahead of Sessions.
  */
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -60,8 +62,8 @@ describe("Layout section placement and digit reassignment", () => {
       (section) => section.id === "devices",
     );
     // Four Personal pages (MCP servers, Skills, Agent definitions, Machine
-    // setup) sit ahead of Sessions.
-    expect(devicesIndex).toBe(19);
+    // setup) and the two dev-only proof pages sit ahead of Sessions.
+    expect(devicesIndex).toBe(21);
     for (const id of [
       "mcp-servers",
       "skills",
@@ -104,11 +106,11 @@ describe("Layout section placement and digit reassignment", () => {
     ]);
   });
 
-  it("pushes host (Overview) to index 24, past the single-digit leader limit", () => {
+  it("pushes host (Overview) to index 26, past the single-digit leader limit", () => {
     setMobileApp(false);
     const sections = visibleSettingsSections();
     const hostIndex = sections.findIndex((section) => section.id === "host");
-    expect(hostIndex).toBe(24);
+    expect(hostIndex).toBe(26);
     expect(hostIndex).toBeGreaterThan(SINGLE_DIGIT_LEADER_INDEX_LIMIT);
     expect(hostIndex).toBeGreaterThanOrEqual(SINGLE_DIGIT_LEADER_INDEX_LIMIT);
   });

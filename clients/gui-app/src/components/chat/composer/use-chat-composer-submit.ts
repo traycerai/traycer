@@ -1309,6 +1309,7 @@ async function resolveAnnotationImageAtoms(
 ): Promise<ReadonlyArray<AnnotationImageAtom> | null> {
   const atoms: AnnotationImageAtom[] = [];
   for (const record of records) {
+    if (record.imageHash === null || record.imageFileName === null) continue;
     const sessionBytes = sessionImageBytes(record.imageHash);
     const bytes =
       sessionBytes ??

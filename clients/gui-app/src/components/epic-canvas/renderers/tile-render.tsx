@@ -21,6 +21,7 @@ import { TileErrorBoundary } from "./tile-error-boundary";
 import { BrowserSessionsHostBoundary } from "./browser-sessions-provider";
 import { BrowserSessionTile } from "./browser-session-tile";
 import { ChatTile } from "./chat-tile";
+import { ObjectArtifactTile } from "./object-artifact-tile";
 import { ReviewTile } from "./review-tile";
 import { SpecTile } from "./spec-tile";
 import { StoryTile } from "./story-tile";
@@ -37,7 +38,6 @@ import { PublishedChatTile } from "./published-chat-tile";
 import { PrDetailTile } from "./pr-detail-tile";
 import { PrDiffTile } from "./pr-diff-tile";
 import { PaneOpener } from "@/components/epic-canvas/canvas/pane-opener";
-import { EpicFileTile } from "@/components/files/epic-file-tile";
 import { SimulatorTile } from "@/components/simulator-tile/simulator-tile";
 
 export interface TileRenderArgs<R extends EpicCanvasTileRef> {
@@ -73,6 +73,15 @@ const TILE_RENDERERS: TileRendererRegistry = {
       tileId={tileId}
       isActive={isActive}
     />
+  ),
+  html: ({ node, epicId }) => (
+    <ObjectArtifactTile node={node} epicId={epicId} />
+  ),
+  canvas: ({ node, epicId }) => (
+    <ObjectArtifactTile node={node} epicId={epicId} />
+  ),
+  file: ({ node, epicId }) => (
+    <ObjectArtifactTile node={node} epicId={epicId} />
   ),
   spec: ({ node, viewTabId, tileId, isActive }) => (
     <SpecTile
@@ -180,9 +189,6 @@ const TILE_RENDERERS: TileRendererRegistry = {
       isActive={isActive}
     />
   ),
-  "epic-file": ({ node, epicId }) => (
-    <EpicFileTile node={node} epicId={epicId} />
-  ),
   simulator: ({ node, viewTabId, tileId, epicId, isActive }) => (
     <SimulatorTile
       node={node}
@@ -192,9 +198,7 @@ const TILE_RENDERERS: TileRendererRegistry = {
       isActive={isActive}
     />
   ),
-  // A blank tab's body IS the inline opener; picking content replaces it in
-  // place (via openTileInPane). `tileId` is the group id; `isActive` drives
-  // the opener's autofocus.
+  // A blank tab renders the inline opener until content replaces it.
   blank: ({ viewTabId, tileId, epicId, isActive }) => (
     <PaneOpener
       epicId={epicId}

@@ -10,6 +10,7 @@ import {
   batchUpdateEpicRolesRequestSchema,
   batchUpdateEpicRolesResponseSchema,
   createArtifactRequestSchema,
+  createArtifactRequestSchemaPreHtml,
   createArtifactResponseSchema,
   createChatRequestSchema,
   createChatRequestSchemaV11,
@@ -19,6 +20,8 @@ import {
   continueSubagentRequestSchema,
   continueSubagentResponseSchema,
   createCommentThreadRequestSchema,
+  createCommentThreadRequestSchemaPreAnchor,
+  createCommentThreadRequestSchemaPreHtml,
   createCommentThreadResponseSchema,
   createEpicRequestSchema,
   createEpicRequestSchemaV12,
@@ -36,13 +39,16 @@ import {
   deleteChatResponseSchemaV10,
   deleteChatResponseSchemaV11,
   deleteCommentRequestSchema,
+  deleteCommentRequestSchemaPreHtml,
   deleteCommentResponseSchema,
   deleteCommentThreadRequestSchema,
+  deleteCommentThreadRequestSchemaPreHtml,
   deleteCommentThreadResponseSchema,
   deleteTuiAgentRequestSchema,
   deleteTuiAgentResponseSchema,
   deleteTuiAgentResponseSchemaV10,
   editCommentRequestSchema,
+  editCommentRequestSchemaPreHtml,
   editCommentResponseSchema,
   epicMentionArtifactsRequestSchema,
   epicMentionEpicsRequestSchema,
@@ -56,7 +62,9 @@ import {
   grantEpicAccessRequestSchema,
   grantEpicAccessResponseSchema,
   listCommentThreadsRequestSchema,
+  listCommentThreadsRequestSchemaPreHtml,
   listCommentThreadsResponseSchema,
+  listCommentThreadsResponseSchemaPreAnchor,
   listEpicCollaboratorsRequestSchema,
   listEpicCollaboratorsResponseSchema,
   listEpicCollaboratorsResponseSchemaPre11,
@@ -72,6 +80,7 @@ import {
   listTasksRequestSchemaV11,
   listTasksRequestSchemaPre13,
   listTasksResponseSchema,
+  listTasksResponseSchemaPre18,
   listTasksResponseSchemaV10,
   listTasksResponseSchemaPre13,
   listTasksResponseSchemaPre14,
@@ -84,8 +93,11 @@ import {
   removeEpicRepoResponseSchema,
   resolveArtifactByPathRequestSchema,
   resolveArtifactByPathResponseSchema,
+  resolveArtifactByPathResponseSchemaPreHtml,
   searchArtifactsRequestSchema,
+  searchArtifactsRequestSchemaPreHtml,
   searchArtifactsResponseSchema,
+  searchArtifactsResponseSchemaPreHtml,
   renameArtifactRequestSchema,
   renameArtifactResponseSchema,
   renameChatRequestSchema,
@@ -97,6 +109,7 @@ import {
   reparentChatRequestSchema,
   reparentChatResponseSchema,
   replyToCommentThreadRequestSchema,
+  replyToCommentThreadRequestSchemaPreHtml,
   replyToCommentThreadResponseSchema,
   recordEpicViewedRequestSchema,
   recordEpicViewedResponseSchema,
@@ -108,6 +121,7 @@ import {
   setChatArchivedResponseSchema,
   setChatArchivedResponseSchemaV10,
   setCommentThreadResolvedRequestSchema,
+  setCommentThreadResolvedRequestSchemaPreHtml,
   setCommentThreadResolvedResponseSchema,
   setEpicPinnedRequestSchema,
   setEpicPinnedResponseSchema,
@@ -386,7 +400,7 @@ export const epicListTasksV17 = defineRpcContract({
   method: "epic.listTasks",
   schemaVersion: { major: 1, minor: 7 } as const,
   requestSchema: listTasksRequestSchema,
-  responseSchema: listTasksResponseSchema,
+  responseSchema: listTasksResponseSchemaPre18,
 });
 
 export const epicListTasksUpgradeV16ToV17 = defineUpgradePath<
@@ -864,8 +878,25 @@ export const epicListCollaboratorsUpgradeV10ToV11 = defineUpgradePath<
 export const epicCreateArtifactV10 = defineRpcContract({
   method: "epic.createArtifact",
   schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: createArtifactRequestSchemaPreHtml,
+  responseSchema: createArtifactResponseSchema,
+});
+
+/** 1.1 adds the new artifact kinds; 1.0 keeps its frozen schemas. */
+export const epicCreateArtifactV11 = defineRpcContract({
+  method: "epic.createArtifact",
+  schemaVersion: { major: 1, minor: 1 } as const,
   requestSchema: createArtifactRequestSchema,
   responseSchema: createArtifactResponseSchema,
+});
+export const epicCreateArtifactUpgradeV10ToV11 = defineUpgradePath<
+  typeof epicCreateArtifactV10,
+  typeof epicCreateArtifactV11
+>({
+  from: epicCreateArtifactV10.schemaVersion,
+  to: epicCreateArtifactV11.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
 });
 
 export const epicDeleteArtifactV10 = defineRpcContract({
@@ -1314,50 +1345,201 @@ export const epicRevokeCollaboratorUpgradeV10ToV11 = defineUpgradePath<
 export const epicCreateCommentThreadV10 = defineRpcContract({
   method: "epic.createCommentThread",
   schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: createCommentThreadRequestSchemaPreHtml,
+  responseSchema: createCommentThreadResponseSchema,
+});
+
+/** 1.1 adds the new artifact kinds; 1.0 keeps its frozen schemas. */
+export const epicCreateCommentThreadV11 = defineRpcContract({
+  method: "epic.createCommentThread",
+  schemaVersion: { major: 1, minor: 1 } as const,
+  requestSchema: createCommentThreadRequestSchemaPreAnchor,
+  responseSchema: createCommentThreadResponseSchema,
+});
+export const epicCreateCommentThreadUpgradeV10ToV11 = defineUpgradePath<
+  typeof epicCreateCommentThreadV10,
+  typeof epicCreateCommentThreadV11
+>({
+  from: epicCreateCommentThreadV10.schemaVersion,
+  to: epicCreateCommentThreadV11.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
+});
+
+export const epicCreateCommentThreadV12 = defineRpcContract({
+  method: "epic.createCommentThread",
+  schemaVersion: { major: 1, minor: 2 } as const,
   requestSchema: createCommentThreadRequestSchema,
   responseSchema: createCommentThreadResponseSchema,
+});
+export const epicCreateCommentThreadUpgradeV11ToV12 = defineUpgradePath<
+  typeof epicCreateCommentThreadV11,
+  typeof epicCreateCommentThreadV12
+>({
+  from: epicCreateCommentThreadV11.schemaVersion,
+  to: epicCreateCommentThreadV12.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
 });
 
 export const epicReplyToCommentThreadV10 = defineRpcContract({
   method: "epic.replyToCommentThread",
   schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: replyToCommentThreadRequestSchemaPreHtml,
+  responseSchema: replyToCommentThreadResponseSchema,
+});
+
+/** 1.1 adds the new artifact kinds; 1.0 keeps its frozen schemas. */
+export const epicReplyToCommentThreadV11 = defineRpcContract({
+  method: "epic.replyToCommentThread",
+  schemaVersion: { major: 1, minor: 1 } as const,
   requestSchema: replyToCommentThreadRequestSchema,
   responseSchema: replyToCommentThreadResponseSchema,
+});
+export const epicReplyToCommentThreadUpgradeV10ToV11 = defineUpgradePath<
+  typeof epicReplyToCommentThreadV10,
+  typeof epicReplyToCommentThreadV11
+>({
+  from: epicReplyToCommentThreadV10.schemaVersion,
+  to: epicReplyToCommentThreadV11.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
 });
 
 export const epicEditCommentV10 = defineRpcContract({
   method: "epic.editComment",
   schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: editCommentRequestSchemaPreHtml,
+  responseSchema: editCommentResponseSchema,
+});
+
+/** 1.1 adds the new artifact kinds; 1.0 keeps its frozen schemas. */
+export const epicEditCommentV11 = defineRpcContract({
+  method: "epic.editComment",
+  schemaVersion: { major: 1, minor: 1 } as const,
   requestSchema: editCommentRequestSchema,
   responseSchema: editCommentResponseSchema,
+});
+export const epicEditCommentUpgradeV10ToV11 = defineUpgradePath<
+  typeof epicEditCommentV10,
+  typeof epicEditCommentV11
+>({
+  from: epicEditCommentV10.schemaVersion,
+  to: epicEditCommentV11.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
 });
 
 export const epicDeleteCommentV10 = defineRpcContract({
   method: "epic.deleteComment",
   schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: deleteCommentRequestSchemaPreHtml,
+  responseSchema: deleteCommentResponseSchema,
+});
+
+/** 1.1 adds the new artifact kinds; 1.0 keeps its frozen schemas. */
+export const epicDeleteCommentV11 = defineRpcContract({
+  method: "epic.deleteComment",
+  schemaVersion: { major: 1, minor: 1 } as const,
   requestSchema: deleteCommentRequestSchema,
   responseSchema: deleteCommentResponseSchema,
+});
+export const epicDeleteCommentUpgradeV10ToV11 = defineUpgradePath<
+  typeof epicDeleteCommentV10,
+  typeof epicDeleteCommentV11
+>({
+  from: epicDeleteCommentV10.schemaVersion,
+  to: epicDeleteCommentV11.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
 });
 
 export const epicSetCommentThreadResolvedV10 = defineRpcContract({
   method: "epic.setCommentThreadResolved",
   schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: setCommentThreadResolvedRequestSchemaPreHtml,
+  responseSchema: setCommentThreadResolvedResponseSchema,
+});
+
+/** 1.1 adds the new artifact kinds; 1.0 keeps its frozen schemas. */
+export const epicSetCommentThreadResolvedV11 = defineRpcContract({
+  method: "epic.setCommentThreadResolved",
+  schemaVersion: { major: 1, minor: 1 } as const,
   requestSchema: setCommentThreadResolvedRequestSchema,
   responseSchema: setCommentThreadResolvedResponseSchema,
+});
+export const epicSetCommentThreadResolvedUpgradeV10ToV11 = defineUpgradePath<
+  typeof epicSetCommentThreadResolvedV10,
+  typeof epicSetCommentThreadResolvedV11
+>({
+  from: epicSetCommentThreadResolvedV10.schemaVersion,
+  to: epicSetCommentThreadResolvedV11.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
 });
 
 export const epicDeleteCommentThreadV10 = defineRpcContract({
   method: "epic.deleteCommentThread",
   schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: deleteCommentThreadRequestSchemaPreHtml,
+  responseSchema: deleteCommentThreadResponseSchema,
+});
+
+/** 1.1 adds the new artifact kinds; 1.0 keeps its frozen schemas. */
+export const epicDeleteCommentThreadV11 = defineRpcContract({
+  method: "epic.deleteCommentThread",
+  schemaVersion: { major: 1, minor: 1 } as const,
   requestSchema: deleteCommentThreadRequestSchema,
   responseSchema: deleteCommentThreadResponseSchema,
+});
+export const epicDeleteCommentThreadUpgradeV10ToV11 = defineUpgradePath<
+  typeof epicDeleteCommentThreadV10,
+  typeof epicDeleteCommentThreadV11
+>({
+  from: epicDeleteCommentThreadV10.schemaVersion,
+  to: epicDeleteCommentThreadV11.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
 });
 
 export const epicListCommentThreadsV10 = defineRpcContract({
   method: "epic.listCommentThreads",
   schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: listCommentThreadsRequestSchemaPreHtml,
+  responseSchema: listCommentThreadsResponseSchemaPreAnchor,
+});
+
+/** 1.1 adds the new artifact kinds; 1.0 keeps its frozen schemas. */
+export const epicListCommentThreadsV11 = defineRpcContract({
+  method: "epic.listCommentThreads",
+  schemaVersion: { major: 1, minor: 1 } as const,
+  requestSchema: listCommentThreadsRequestSchema,
+  responseSchema: listCommentThreadsResponseSchemaPreAnchor,
+});
+export const epicListCommentThreadsUpgradeV10ToV11 = defineUpgradePath<
+  typeof epicListCommentThreadsV10,
+  typeof epicListCommentThreadsV11
+>({
+  from: epicListCommentThreadsV10.schemaVersion,
+  to: epicListCommentThreadsV11.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
+});
+
+export const epicListCommentThreadsV12 = defineRpcContract({
+  method: "epic.listCommentThreads",
+  schemaVersion: { major: 1, minor: 2 } as const,
   requestSchema: listCommentThreadsRequestSchema,
   responseSchema: listCommentThreadsResponseSchema,
+});
+export const epicListCommentThreadsUpgradeV11ToV12 = defineUpgradePath<
+  typeof epicListCommentThreadsV11,
+  typeof epicListCommentThreadsV12
+>({
+  from: epicListCommentThreadsV11.schemaVersion,
+  to: epicListCommentThreadsV12.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
 });
 
 // `epic.resolveArtifactByPath@1.0` - read-only local Y.Doc index walk mapping an
@@ -1367,7 +1549,24 @@ export const epicResolveArtifactByPathV10 = defineRpcContract({
   method: "epic.resolveArtifactByPath",
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: resolveArtifactByPathRequestSchema,
+  responseSchema: resolveArtifactByPathResponseSchemaPreHtml,
+});
+
+/** 1.1 adds the new artifact kinds; 1.0 keeps its frozen schemas. */
+export const epicResolveArtifactByPathV11 = defineRpcContract({
+  method: "epic.resolveArtifactByPath",
+  schemaVersion: { major: 1, minor: 1 } as const,
+  requestSchema: resolveArtifactByPathRequestSchema,
   responseSchema: resolveArtifactByPathResponseSchema,
+});
+export const epicResolveArtifactByPathUpgradeV10ToV11 = defineUpgradePath<
+  typeof epicResolveArtifactByPathV10,
+  typeof epicResolveArtifactByPathV11
+>({
+  from: epicResolveArtifactByPathV10.schemaVersion,
+  to: epicResolveArtifactByPathV11.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
 });
 
 // `epic.searchArtifacts@1.0` - Epic-scoped artifact title/path/body search over
@@ -1377,8 +1576,25 @@ export const epicResolveArtifactByPathV10 = defineRpcContract({
 export const epicSearchArtifactsV10 = defineRpcContract({
   method: "epic.searchArtifacts",
   schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: searchArtifactsRequestSchemaPreHtml,
+  responseSchema: searchArtifactsResponseSchemaPreHtml,
+});
+
+/** 1.1 adds the new artifact kinds; 1.0 keeps its frozen schemas. */
+export const epicSearchArtifactsV11 = defineRpcContract({
+  method: "epic.searchArtifacts",
+  schemaVersion: { major: 1, minor: 1 } as const,
   requestSchema: searchArtifactsRequestSchema,
   responseSchema: searchArtifactsResponseSchema,
+});
+export const epicSearchArtifactsUpgradeV10ToV11 = defineUpgradePath<
+  typeof epicSearchArtifactsV10,
+  typeof epicSearchArtifactsV11
+>({
+  from: epicSearchArtifactsV10.schemaVersion,
+  to: epicSearchArtifactsV11.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
 });
 
 // ---- Cloud chat reads (host as byte pipe) ------------------------------ //
@@ -2069,3 +2285,20 @@ export {
   epicSubscribeV15,
   epicSubscribeV16,
 };
+
+/** listTasks 1.8 adds optional counts; 1.7 keeps its frozen response. */
+export const epicListTasksV18 = defineRpcContract({
+  method: "epic.listTasks",
+  schemaVersion: { major: 1, minor: 8 } as const,
+  requestSchema: listTasksRequestSchema,
+  responseSchema: listTasksResponseSchema,
+});
+export const epicListTasksUpgradeV17ToV18 = defineUpgradePath<
+  typeof epicListTasksV17,
+  typeof epicListTasksV18
+>({
+  from: epicListTasksV17.schemaVersion,
+  to: epicListTasksV18.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
+});

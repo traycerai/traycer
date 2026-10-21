@@ -1,0 +1,20 @@
+[data-canvas-inline-text-editor] {
+  left: var(--text-x);
+  top: var(--text-y);
+  width: var(--text-width);
+  height: var(--text-height);
+}
+[data-canvas-inline-text-input] {
+  box-sizing: border-box;
+  margin: 0;
+  border: 0;
+  padding: var(--text-padding-top) var(--text-padding-right)
+    var(--text-padding-bottom) var(--text-padding-left);
+  font-family: var(--text-font);
+  font-size: var(--text-size);
+  font-weight: var(--text-weight);
+  line-height: var(--text-leading);
+  text-align: var(--text-align);
+  color: var(--text-color);
+  background-color: var(--text-background);
+}

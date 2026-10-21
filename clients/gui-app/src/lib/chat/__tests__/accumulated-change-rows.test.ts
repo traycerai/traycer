@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { ChatAccumulatedFileChange } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { ChatAccumulatedFileChangeSummary } from "@traycer/protocol/host/agent/gui/subscribe-windowed";
+import type { CheckpointArtifactTag } from "@traycer/protocol/persistence/epic/checkpoint-manifests";
 import {
   accumulatedChangeRows,
   hostAccumulatedChangeRows,
@@ -339,6 +340,28 @@ describe("rowFromAccumulatedChange", () => {
       }),
     ).toMatchObject({ counts: null, hasContents: false });
   });
+
+  it("carries a new-kind (html/canvas/file) artifact tag through unchanged", () => {
+    // The mapper never branches on `kind` - it copies the tag wholesale - so
+    // widening `CheckpointArtifactTag["kind"]` needs no change here. This
+    // proves the new kinds keep their row (and so their grouping and their
+    // bulk-revert opt-out, both of which key off `artifact !== null`).
+    const artifact: CheckpointArtifactTag = {
+      artifactId: "artifact-1",
+      kind: "html",
+      title: "Page",
+    };
+    expect(
+      rowFromAccumulatedChange({
+        ...accumulatedChange({
+          filePath: "/repo/.traycer/epics/e1/artifacts/a/index.html",
+          beforeContent: "one\n",
+          afterContent: "two\n",
+        }),
+        artifact,
+      }),
+    ).toMatchObject({ artifact });
+  });
 });
 
 describe("rowFromAccumulatedChangeSummary", () => {
@@ -375,6 +398,23 @@ describe("rowFromAccumulatedChangeSummary", () => {
         hasContents: false,
       }),
     ).toMatchObject({ counts: null, hasContents: false });
+  });
+
+  it("carries a new-kind (html/canvas/file) artifact tag through unchanged", () => {
+    const artifact: CheckpointArtifactTag = {
+      artifactId: "artifact-1",
+      kind: "canvas",
+      title: "Board",
+    };
+    expect(
+      rowFromAccumulatedChangeSummary({
+        ...summary({
+          filePath: "/repo/.traycer/epics/e1/artifacts/a/index.md",
+          counts: { additions: 1, deletions: 0 },
+        }),
+        artifact,
+      }),
+    ).toMatchObject({ artifact });
   });
 });
 

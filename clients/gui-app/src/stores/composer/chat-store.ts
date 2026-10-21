@@ -43,7 +43,7 @@ import type {
   ProviderNoticeTone,
   ToolCallManagedCommand,
   ToolCallMcpAppStamp,
-  ToolCallPageStamp,
+  ToolCallArtifactStamp,
   ToolInputDetail,
   WorkflowMeta,
 } from "@traycer/protocol/persistence/epic/content-blocks";
@@ -192,10 +192,7 @@ export interface ToolSegment {
   parentId: string | null;
   /** Generated images carried by chat.subscribe@1.6. Normalized at projection. */
   imageResults: ReadonlyArray<ImageGenerationResult>;
-  // The page a `traycer_show_page` call showed, stamped by the host when the
-  // call completes (`chat.subscribe@1.22`). Null for every other call, and for
-  // a show-page call that is still running or failed.
-  page: ToolCallPageStamp | null;
+  artifact: ToolCallArtifactStamp | null;
   // The MCP App the call rendered, stamped by the host (`chat.subscribe@1.22`).
   // Null for every other call, and on a harness without app support.
   mcpApp: ToolCallMcpAppStamp | null;

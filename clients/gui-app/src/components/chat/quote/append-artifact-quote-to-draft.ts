@@ -1,5 +1,5 @@
 import type { JsonContent } from "@traycer/protocol/common/registry";
-import type { EpicArtifactKind } from "@traycer/protocol/common/registry";
+import type { MarkdownArtifactKind } from "@traycer/protocol/common/registry";
 import { epicArtifactMentionToken } from "@traycer/protocol/host/epic/unary-schemas";
 
 import { mentionAttrsFromAttachment } from "@/lib/composer/tiptap-json-content";
@@ -18,7 +18,7 @@ import { appendBlocks } from "./append-quote-to-draft";
 export interface ArtifactQuote {
   readonly epicId: string;
   readonly artifactId: string;
-  readonly artifactKind: EpicArtifactKind;
+  readonly artifactKind: MarkdownArtifactKind;
   /** Artifact title, as the sidebar and the mention picker both show it. */
   readonly artifactTitle: string;
   /** Ticket/story status code, `null` for kinds that have none. */

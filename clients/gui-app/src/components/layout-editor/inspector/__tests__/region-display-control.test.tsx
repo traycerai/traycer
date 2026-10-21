@@ -225,7 +225,6 @@ describe("the last rail panel shown cannot be switched off (T3)", () => {
     "railTerminals",
     "railBrowsers",
     "railGitDiff",
-    "railFiles",
     "railFileTree",
     "railSharing",
   ] as const;

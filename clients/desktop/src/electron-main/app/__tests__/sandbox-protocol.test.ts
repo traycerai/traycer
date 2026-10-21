@@ -1,3 +1,4 @@
+import { SandboxArtifactServer } from "../sandbox-artifact-server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   installSandboxProtocolHandler,
@@ -45,7 +46,7 @@ beforeEach(() => {
   state.handler = null;
   state.fetchCalls = 0;
   state.upstreamOk = true;
-  installSandboxProtocolHandler();
+  installSandboxProtocolHandler(new SandboxArtifactServer(() => false));
 });
 
 describe("sandbox protocol handler", () => {

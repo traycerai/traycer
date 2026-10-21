@@ -390,6 +390,9 @@ describe("nodeFamilyOf", () => {
     ticket: true,
     story: true,
     review: true,
+    canvas: true,
+    file: true,
+    html: true,
   };
 
   it("maps chat and terminal-agent to the agent family, everything else to artifact", () => {

@@ -320,7 +320,6 @@ describe("root dnd commits - left panel", () => {
       visibleRailPanelIds(currentLayoutArrangement().rail, () => true),
     ).toEqual([
       "chats",
-      "files",
       "terminals",
       "browsers",
       "git-diff",
@@ -378,7 +377,6 @@ describe("root dnd commits - left panel", () => {
     ).toEqual([
       "chats",
       "artifacts",
-      "files",
       "file-tree",
       "terminals",
       "browsers",
@@ -449,7 +447,6 @@ describe("root dnd commits - left panel", () => {
     ).toEqual([
       "chats",
       "artifacts",
-      "files",
       "terminals",
       "file-tree",
       "browsers",
@@ -490,7 +487,6 @@ describe("root dnd commits - left panel", () => {
       "stack:railAgents+railArtifacts+railTerminals",
       "railArtifacts",
       "railTerminals",
-      "railFiles",
       "railBrowsers",
       "railGitDiff",
       "railPullRequests",
@@ -511,7 +507,6 @@ describe("root dnd commits - left panel", () => {
       { kind: "panel" as const, id: "railTerminals" as const },
       { kind: "panel" as const, id: "railBrowsers" as const },
       { kind: "panel" as const, id: "railGitDiff" as const },
-      { kind: "panel" as const, id: "railFiles" as const },
       { kind: "panel" as const, id: "railPullRequests" as const },
       { kind: "panel" as const, id: "railFileTree" as const },
       { kind: "panel" as const, id: "railSharing" as const },
@@ -546,7 +541,6 @@ describe("root dnd commits - left panel", () => {
       "railTerminals",
       "railBrowsers",
       "railGitDiff",
-      "railFiles",
       "railPullRequests",
       "railFileTree",
       "railSharing",
@@ -583,7 +577,6 @@ describe("root dnd commits - left panel", () => {
       { kind: "panel", id: "railTerminals" },
       { kind: "stack", id: "stack:railTerminals+railBrowsers" },
       { kind: "panel", id: "railBrowsers" },
-      { kind: "panel", id: "railFiles" },
       { kind: "panel", id: "railGitDiff" },
       { kind: "panel", id: "railPullRequests" },
       { kind: "panel", id: "railFileTree" },
@@ -613,7 +606,6 @@ describe("root dnd commits - left panel", () => {
       "railArtifacts",
       "railTerminals",
       "railBrowsers",
-      "railFiles",
       "railGitDiff",
       "railPullRequests",
       "railFileTree",
@@ -679,7 +671,6 @@ describe("root dnd commits - left panel drop resolver", () => {
       { kind: "panel", id: "railArtifacts" },
       { kind: "stack", id: "stack:railArtifacts+railAgents" },
       { kind: "panel", id: "railAgents" },
-      { kind: "panel", id: "railFiles" },
       { kind: "panel", id: "railTerminals" },
       { kind: "panel", id: "railBrowsers" },
       { kind: "panel", id: "railGitDiff" },
@@ -712,7 +703,6 @@ describe("root dnd commits - left panel drop resolver", () => {
       ),
     ).toEqual([
       { kind: "panel", id: "railAgents" },
-      { kind: "panel", id: "railFiles" },
       { kind: "panel", id: "railTerminals" },
       { kind: "panel", id: "railBrowsers" },
       { kind: "panel", id: "railGitDiff" },
@@ -743,7 +733,6 @@ describe("root dnd commits - left panel drop resolver", () => {
         DEFAULT_ARRANGEMENT,
       ),
     ).toEqual([
-      { kind: "panel", id: "railFiles" },
       { kind: "panel", id: "railTerminals" },
       { kind: "panel", id: "railBrowsers" },
       { kind: "panel", id: "railGitDiff" },
@@ -764,7 +753,6 @@ describe("root dnd commits - left panel drop resolver", () => {
       ),
     ).toEqual([
       { kind: "panel", id: "railAgents" },
-      { kind: "panel", id: "railFiles" },
       { kind: "panel", id: "railTerminals" },
       { kind: "panel", id: "railBrowsers" },
       { kind: "panel", id: "railGitDiff" },
@@ -791,7 +779,6 @@ describe("root dnd commits - left panel drop resolver", () => {
       { kind: "panel", id: "railAgents" },
       { kind: "stack", id: "stack:railAgents+railArtifacts" },
       { kind: "panel", id: "railArtifacts" },
-      { kind: "panel", id: "railFiles" },
       { kind: "panel", id: "railBrowsers" },
       { kind: "stack", id: "stack:railBrowsers+railTerminals" },
       { kind: "panel", id: "railTerminals" },
@@ -814,7 +801,7 @@ describe("root dnd commits - left panel drop resolver", () => {
     expect(after?.filter((entry) => entry.kind === "stack")).toEqual([
       { kind: "stack", id: "stack:railAgents+railArtifacts" },
     ]);
-    expect(after?.map((entry) => entry.id).slice(4, 6)).toEqual([
+    expect(after?.map((entry) => entry.id).slice(3, 5)).toEqual([
       "railBrowsers",
       "railTerminals",
     ]);
@@ -832,7 +819,6 @@ describe("root dnd commits - left panel drop resolver", () => {
     );
 
     expect(next?.map((entry) => entry.id)).toEqual([
-      "railFiles",
       "railTerminals",
       "stack:railTerminals+railAgents+railArtifacts",
       "railAgents",
@@ -858,7 +844,6 @@ describe("root dnd commits - left panel drop resolver", () => {
 
     expect(next?.map((entry) => entry.id)).toEqual([
       "railArtifacts",
-      "railFiles",
       "railTerminals",
       "stack:railTerminals+railAgents",
       "railAgents",
@@ -890,7 +875,6 @@ describe("root dnd commits - left panel drop resolver", () => {
       { kind: "stack", id: "stack:railAgents+railArtifacts+railTerminals" },
       { kind: "panel", id: "railArtifacts" },
       { kind: "panel", id: "railTerminals" },
-      { kind: "panel", id: "railFiles" },
       { kind: "panel", id: "railBrowsers" },
       { kind: "panel", id: "railGitDiff" },
       { kind: "panel", id: "railPullRequests" },

@@ -314,7 +314,7 @@ function laneSnapshotRows(
     rows.push({
       rowId: artifactRowId(record.id),
       revision: record.revision,
-      row: { kind: "artifact", record },
+      row: { kind: "artifact", record: { ...record, layout: "folder" } },
     });
   }
   for (const record of parsed.deletedArtifacts) {

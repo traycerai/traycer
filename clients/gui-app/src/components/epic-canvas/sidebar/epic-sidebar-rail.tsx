@@ -1,3 +1,4 @@
+import { isMarkdownArtifactKind } from "@/lib/artifacts/node-display";
 import { railContentWidthPx } from "@/lib/layout/rail-content-width";
 import {
   Fragment,
@@ -190,7 +191,9 @@ export function EpicLeftPanelRail(props: EpicLeftPanelRailProps) {
   const activeArtifactId = useActiveEpicArtifactId(tabId);
   const activeArtifact = useEpicArtifact(activeArtifactId);
   const hasActiveCommentableArtifact =
-    activeArtifact !== null && "kind" in activeArtifact;
+    activeArtifact !== null &&
+    "kind" in activeArtifact &&
+    isMarkdownArtifactKind(activeArtifact.kind);
 
   return (
     <EpicLeftPanelRailContent

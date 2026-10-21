@@ -11,6 +11,7 @@ import {
 } from "@traycer/protocol/persistence/epic/foundation";
 import {
   messageSchema,
+  messageSchemaPreHtml,
   messageSchemaV18,
   messageSchemaPreImage,
   messageSchemaPreInReplyTo,
@@ -235,11 +236,13 @@ export const chatSchemaPreInReplyTo = lazySchema(() =>
  * (see `chat-sync/version.ts`).
  *
  * Derived from `chatSchema` rather than hand-frozen, deliberately: only this
- * one enum is pinned, so the epic record keeps following every other chat
- * change exactly as it did before.
+ * event enum, the pre-HTML artifact-operation block and browser-only
+ * annotations are pinned; other chat fields keep following the live shape.
+ * Canvas annotations live in chat.db/chat-sync, never in this legacy Yjs map.
  */
 export const chatSchemaPreImported = lazySchema(() =>
   chatSchema.extend({
+    messages: z.array(messageSchemaPreHtml),
     events: z.array(chatEventSchemaPreImported).default([]),
   }),
 );

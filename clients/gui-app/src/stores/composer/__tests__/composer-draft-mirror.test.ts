@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { JsonContent } from "@traycer/protocol/common/registry";
+import { canvasAnnotationRecordSchema } from "@traycer/protocol/persistence/epic/schemas";
 import {
   bindComposerDraftHost,
   collectDraftMirrorDirtyWrites,
@@ -55,6 +56,43 @@ describe("composer draft host-mirror bookkeeping", () => {
     expect(dirty[0]?.write.target.epicId).toBe("epic-1");
     expect(dirty[0]?.write.target.chatId).toBe("chat-1");
     expect(collectComposerDirtyWrites()[0]?.chatId).toBe("chat-1");
+  });
+
+  it("mirrors a draft carrying a canvas annotation without the annotation, which stays in the local store", () => {
+    bindComposerDraftHost("chat-canvas", "host-a");
+    const canvasAnnotation = canvasAnnotationRecordSchema.parse({
+      kind: "browser-annotation",
+      annotationId: "canvas-ann-1",
+      source: {
+        kind: "canvas",
+        artifactId: "artifact-1",
+        boardPath: "boards/hero.html",
+        canvasPage: null,
+        artifactTitle: "Hero",
+      },
+      capturedAt: 1,
+      comment: "canvas-only comment",
+      counts: { elements: 1, regions: 0, strokes: 0 },
+      elements: [],
+      imageFileName: null,
+      imageHash: null,
+    });
+    const store = useComposerDraftStore.getState();
+    store.setSnapshot("chat-canvas", TYPED, null);
+    store.bindTarget("chat-canvas", "epic-1");
+    store.addBrowserAnnotation("chat-canvas", canvasAnnotation);
+
+    const dirty = collectDraftMirrorDirtyWrites("host-a");
+
+    expect(dirty).toHaveLength(1);
+    const serialized = JSON.stringify(dirty[0]?.write);
+    expect(serialized).toContain("keep me");
+    expect(serialized).not.toContain("canvas-ann-1");
+    expect(serialized).not.toContain("canvas-only comment");
+    expect(
+      useComposerDraftStore.getState().drafts["chat-canvas"]
+        ?.browserAnnotations,
+    ).toEqual([canvasAnnotation]);
   });
 
   it("does not clear typed content when another host's list omits the draft", () => {

@@ -60,6 +60,10 @@ jobs:
             name: "test (@traycer/protocol)"
             test_args: ""
             cache_key: "@traycer/protocol"
+          - project: "@traycer/html-source"
+            name: "test (@traycer/html-source)"
+            test_args: ""
+            cache_key: "@traycer/html-source"
           # `test (traycer-clients-gui-app)` is the one gui-app context the
           # `main` ruleset requires, so shard 1 keeps that name. The other
           # shards carry no ruleset name of their own; the historical

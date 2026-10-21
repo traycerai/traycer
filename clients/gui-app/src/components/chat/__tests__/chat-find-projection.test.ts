@@ -455,7 +455,7 @@ describe("chat find projection", () => {
         backgroundOutput: null,
         backgroundTask: false,
         imageResults: [],
-        page: null,
+        artifact: null,
         mcpApp: null,
         durationMs: null,
         startedAt: 0,
@@ -494,13 +494,13 @@ describe("chat find projection", () => {
     expect(rowSearchText(row)).not.toContain("No diff available");
   });
 
-  it("indexes nothing for a stamped page whatever its tool is called", () => {
-    // The page row renders off the stamp, not the name, so find must skip it
-    // on the same test or it indexes a header that never paints.
-    const page: MessageSegment = {
-      id: "page-1",
+  it("indexes nothing for a stamped inline artifact whatever its tool is called", () => {
+    // The artifact row renders off the stamp and carries
+    // no distinguished tool-name spelling to key a classifier on.
+    const artifact: MessageSegment = {
+      id: "artifact-1",
       kind: "tool",
-      toolName: "some_other_page_tool",
+      toolName: "some_other_artifact_tool",
       inputSummary: "quarterly-report",
       inputDetail: null,
       taskTodoItems: null,
@@ -516,13 +516,10 @@ describe("chat find projection", () => {
       backgroundOutput: null,
       backgroundTask: false,
       imageResults: [],
-      page: {
-        path: "files/pages/report.html",
-        sha256: "a".repeat(64),
-        title: "Report",
-        height: 400,
-        heights: [],
-        derivedFrom: null,
+      artifact: {
+        artifactId: "art-1",
+        title: "Quarterly Report",
+        manifest: { files: {}, capturedAt: 0 },
         originChatId: "chat-1",
       },
       mcpApp: null,
@@ -532,7 +529,7 @@ describe("chat find projection", () => {
     };
     const assistant: ChatMessageModel = {
       ...makeMessage(3, "assistant"),
-      segments: [page],
+      segments: [artifact],
     };
 
     const rows = buildChatFindRows([assistant], TILE_INSTANCE_ID, new Set(), {
@@ -541,8 +538,9 @@ describe("chat find projection", () => {
     });
 
     const joined = rows.map((row) => rowSearchText(row)).join("\n");
-    expect(joined).not.toContain("some_other_page_tool");
+    expect(joined).not.toContain("some_other_artifact_tool");
     expect(joined).not.toContain("quarterly-report");
+    expect(joined).not.toContain("Quarterly Report");
   });
 
   it("does not index completed reasoning body text hidden behind the collapsed summary", () => {
@@ -654,7 +652,7 @@ describe("chat find projection", () => {
           // No durable marker - promotion is visible ONLY through the live set.
           backgroundTask: false,
           imageResults: [],
-          page: null,
+          artifact: null,
           mcpApp: null,
           durationMs: null,
           startedAt: 0,
@@ -2147,7 +2145,7 @@ describe("buildSubagentChatFindRows", () => {
       backgroundOutput: null,
       backgroundTask: false,
       imageResults: [],
-      page: null,
+      artifact: null,
       mcpApp: null,
       startedAt: 0,
       durationMs: null,

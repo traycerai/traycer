@@ -21,6 +21,7 @@ import {
   settingsSearchResultKey,
 } from "@/lib/settings-search/settings-search";
 import {
+  DEV_ONLY_SETTINGS_SECTION_IDS,
   SETTINGS_SECTIONS,
   type SettingsSectionGroupId,
   type SettingsSectionId,
@@ -55,6 +56,12 @@ const DEFINITION_MODULES = import.meta.glob<Record<string, unknown>>(
   "/src/components/settings/**/*.definitions.ts",
   { eager: true },
 );
+
+// The dev-only proof pages carry no collection: search runs in production
+// builds too, where navigation does not offer them.
+const SEARCHABLE_SECTION_IDS = SETTINGS_SECTIONS.map(
+  (section) => section.id,
+).filter((id) => !DEV_ONLY_SETTINGS_SECTION_IDS.has(id));
 
 const indexedAnchors = SETTINGS_SEARCH_ENTRIES.flatMap((entry) =>
   entry.anchor === null ? [] : [entry.anchor],
@@ -166,9 +173,7 @@ describe("settings search assembly", () => {
       (collection) => collection.section,
     );
     expect(duplicates(assembled)).toEqual([]);
-    expect([...assembled].sort()).toEqual(
-      SETTINGS_SECTIONS.map((section) => section.id).sort(),
-    );
+    expect([...assembled].sort()).toEqual([...SEARCHABLE_SECTION_IDS].sort());
   });
 
   it("assembles every collection a definitions module exports", () => {
@@ -180,7 +185,7 @@ describe("settings search assembly", () => {
     );
     // The glob found the modules at all — an empty match would pass the
     // membership checks below vacuously.
-    expect(exported.length).toBe(SETTINGS_SECTIONS.length);
+    expect(exported.length).toBe(SEARCHABLE_SECTION_IDS.length);
     const unassembled = exported
       .filter(({ value }) => !SETTINGS_SEARCH_COLLECTIONS.includes(value))
       .map(({ label }) => label);

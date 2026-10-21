@@ -7,7 +7,11 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import {
+  focusManager,
+  QueryClient,
+  QueryClientProvider,
+} from "@tanstack/react-query";
 import { useEffect, useLayoutEffect, type ReactNode } from "react";
 import {
   afterEach,
@@ -18,7 +22,10 @@ import {
   vi,
   type Mock,
 } from "vitest";
-import type { EpicReadFileResponse } from "@traycer/protocol/host/epic/files";
+import type {
+  EpicReadArtifactObjectRequest,
+  EpicReadArtifactObjectResponse,
+} from "@traycer/protocol/host/epic/artifact-objects";
 import type {
   ChatMcpAppCallToolRequest,
   ChatMcpAppCallToolResponse,
@@ -41,16 +48,19 @@ import { McpAppRow } from "@/components/chat/segments/mcp-app-row";
 import { blockingLayerClaimed } from "@/components/layout/shell/blocking-layer-claim";
 import { setPhoneLayoutOnly } from "@/lib/mobile-app";
 import {
-  EpicFileRpcContext,
-  type EpicFileRpc,
-} from "@/lib/files/epic-file-rpc";
-import {
   SandboxBridgeHost,
   type SandboxAppRequestHandler,
   type SandboxSize,
   type SandboxStatus,
 } from "@/lib/sandbox/bridge-host";
+import { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import type { HostRequester } from "@traycer-clients/shared/host-client/host-client";
+import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
+import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
+import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
+import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import { McpAppRpcContext, type McpAppRpc } from "@/lib/sandbox/mcp-app-rpc";
 import {
   readComposerDraftSnapshot,
@@ -62,7 +72,7 @@ import {
 } from "@/providers/use-resolved-theme";
 
 interface FrameProps {
-  readonly html: string;
+  readonly source: { readonly kind: "html"; readonly html: string };
   readonly kind: string;
   readonly title: string;
   readonly networkPolicy: string;
@@ -84,11 +94,22 @@ const mocks = vi.hoisted(() => {
     openLink:
       vi.fn<(url: string, kind: string, event: null) => Promise<void>>(),
     frame,
+    // The one host-transport boundary this suite stands in for: which
+    // `HostRequester` a hostId resolves to for the artifact-object read.
+    // `useHostQuery`, the query cache and the condition-poll coordinator
+    // underneath it all run for real against a mock transport.
+    artifactObject: {
+      requester: null as HostRequester<HostRpcRegistry> | null,
+    },
   };
 });
 
 vi.mock("@/lib/links/open-link", () => ({
   useOpenLink: () => mocks.openLink,
+}));
+
+vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
+  useHostClientForHostId: () => mocks.artifactObject.requester,
 }));
 
 // jsdom has no iframe document to run an app in; the frame is stood in by a
@@ -99,21 +120,24 @@ function ignore(): void {}
 /** A real bridge with nothing behind it, as a new frame document hands over. */
 function detachedBridge(): SandboxBridgeHost {
   return new SandboxBridgeHost({
-    resource: {
-      html: "",
-      kind: "app",
-      networkPolicy: "https-only",
-      csp: null,
-      permissions: [],
-      theme: {
-        appliesToRoot: false,
-        colorScheme: "dark",
-        background: null,
-        variables: {},
+    document: {
+      kind: "loader",
+      resource: {
+        html: "",
+        kind: "app",
+        networkPolicy: "https-only",
+        csp: null,
+        permissions: [],
+        theme: {
+          appliesToRoot: false,
+          colorScheme: "dark",
+          background: null,
+          variables: {},
+        },
+        forwardedShortcuts: [],
       },
-      forwardedShortcuts: [],
+      nonce: "nonce",
     },
-    nonce: "nonce",
     hostContext: {
       theme: "dark",
       styles: { variables: {} },
@@ -154,7 +178,7 @@ function FrameDocument(props: FrameProps) {
   }, []);
   return (
     <div data-testid="sandbox-frame" data-kind={props.kind}>
-      {props.html}
+      {props.source.html}
     </div>
   );
 }
@@ -206,31 +230,58 @@ const STAMP: ToolCallMcpAppStamp = {
 
 const TOOL_RESULT = { content: [{ type: "text", text: "42" }] };
 
-const HTML_RESPONSE: EpicReadFileResponse = {
+const ARTIFACT_HOST_ENTRY: HostDirectoryEntry = {
+  hostId: HOST_ID,
+  label: "Test host",
+  kind: "local",
+  websocketUrl: "ws://127.0.0.1:4917/rpc",
+  version: "0.0.0-mock",
+  transportDialability: "dialable",
+};
+
+/** The stamped object is unavailable. */
+const ARTIFACT_OBJECT_UNAVAILABLE: EpicReadArtifactObjectResponse = {
+  kind: "unavailable",
+  reason: "missing",
+};
+
+const ARTIFACT_OBJECT_HTML_RESPONSE: EpicReadArtifactObjectResponse = {
   kind: "text",
   text: APP_HTML,
   mediaType: "text/html",
   networkPolicy: "https-only",
 };
 
-interface FakeFileRpc extends EpicFileRpc {
-  readonly readFile: Mock<EpicFileRpc["readFile"]>;
-}
+type ArtifactObjectHandler = (
+  params: EpicReadArtifactObjectRequest,
+) => Promise<EpicReadArtifactObjectResponse> | EpicReadArtifactObjectResponse;
 
-function makeFileRpc(
-  read: EpicReadFileResponse | Promise<EpicReadFileResponse>,
-): FakeFileRpc {
-  return {
-    readFile: vi
-      .fn<EpicFileRpc["readFile"]>()
-      .mockImplementation(() => Promise.resolve(read)),
-    fetchFile: vi
-      .fn<EpicFileRpc["fetchFile"]>()
-      .mockResolvedValue({ kind: "downloading" }),
-    cancelFetchFile: vi
-      .fn<EpicFileRpc["cancelFetchFile"]>()
-      .mockResolvedValue({ cancelled: true }),
-  };
+/**
+ * Stands in for the `epic.readArtifactObject` RPC: a real `HostClient` over a
+ * mock transport, so `useArtifactObjectTextQuery`'s own query/cache/poll
+ * wiring (the 500ms-to-2s downloading lane, the terminal unavailable lane)
+ * runs for real underneath the row. Installs itself as the row's resolved
+ * host client immediately; call again mid-test to change the answer.
+ */
+function makeArtifactObjectRpc(handler: ArtifactObjectHandler): {
+  readonly messenger: MockHostMessenger<HostRpcRegistry>;
+} {
+  const messenger = new MockHostMessenger<HostRpcRegistry>({
+    registry: hostRpcRegistry,
+    requestId: () => "req-artifact-object",
+    handlers: { "epic.readArtifactObject": handler },
+  });
+  const spine = new HostClient<HostRpcRegistry>({
+    registry: hostRpcRegistry,
+    invalidator: createHostQueryInvalidator(new QueryClient()),
+    findHostById: (hostId) => (hostId === HOST_ID ? ARTIFACT_HOST_ENTRY : null),
+    messenger,
+  });
+  spine.setRequestContext(
+    createRequestContextFixture({ origin: "renderer", bearerToken: "tok-1" }),
+  );
+  mocks.artifactObject.requester = spine.createRequester(ARTIFACT_HOST_ENTRY);
+  return { messenger };
 }
 
 interface FakeMcpRpc extends McpAppRpc {
@@ -270,12 +321,12 @@ const THEME: ResolvedThemeContextValue = {
   themePreset: "traycer-green",
 };
 
+/** Returns the row's own `QueryClient` so a test can drive it directly. */
 function renderRow(
-  fileRpc: EpicFileRpc,
   mcpRpc: McpAppRpc,
   scope: ChatAttachmentScopeValue | null,
   app: ToolCallMcpAppStamp,
-): void {
+): QueryClient {
   const client = new QueryClient({
     defaultOptions: { queries: { gcTime: Infinity } },
   });
@@ -283,11 +334,9 @@ function renderRow(
     <QueryClientProvider client={client}>
       <ResolvedThemeContext.Provider value={THEME}>
         <ChatAttachmentScopeContext.Provider value={scope}>
-          <EpicFileRpcContext.Provider value={fileRpc}>
-            <McpAppRpcContext.Provider value={mcpRpc}>
-              {children}
-            </McpAppRpcContext.Provider>
-          </EpicFileRpcContext.Provider>
+          <McpAppRpcContext.Provider value={mcpRpc}>
+            {children}
+          </McpAppRpcContext.Provider>
         </ChatAttachmentScopeContext.Provider>
       </ResolvedThemeContext.Provider>
     </QueryClientProvider>
@@ -304,6 +353,7 @@ function renderRow(
       </>,
     ),
   );
+  return client;
 }
 
 /** What the app inside the frame does: one JSON-RPC request to the host. */
@@ -316,11 +366,9 @@ function askAsApp(method: string, params: unknown): Promise<unknown> {
 async function renderRunningApp(
   mcpRpc: McpAppRpc,
   app: ToolCallMcpAppStamp,
-): Promise<FakeFileRpc> {
-  const fileRpc = makeFileRpc(HTML_RESPONSE);
-  renderRow(fileRpc, mcpRpc, SCOPE, app);
+): Promise<void> {
+  renderRow(mcpRpc, SCOPE, app);
   await screen.findByTestId("sandbox-frame");
-  return fileRpc;
 }
 
 function paragraph(text: string): JsonContent {
@@ -341,6 +389,7 @@ beforeEach(() => {
   mocks.frame.props = null;
   mocks.frame.mounts = 0;
   mocks.openLink.mockResolvedValue(undefined);
+  makeArtifactObjectRpc(() => ARTIFACT_OBJECT_HTML_RESPONSE);
   useComposerDraftStore.setState({ drafts: {} });
 });
 
@@ -348,14 +397,16 @@ afterEach(() => {
   cleanup();
   setPhoneLayoutOnly(false);
   vi.useRealTimers();
+  focusManager.setFocused(undefined);
   vi.restoreAllMocks();
   mocks.openLink.mockReset();
+  mocks.artifactObject.requester = null;
   useComposerDraftStore.setState({ drafts: {} });
 });
 
 describe("<McpAppRow /> running the app", () => {
   it("reads the stamped snapshot for this block and runs it in an app frame", async () => {
-    const fileRpc = await renderRunningApp(makeMcpRpc(), STAMP);
+    await renderRunningApp(makeMcpRpc(), STAMP);
 
     const frame = screen.getByTestId("sandbox-frame");
     expect(frame.getAttribute("data-kind")).toBe("app");
@@ -364,16 +415,6 @@ describe("<McpAppRow /> running the app", () => {
       networkPolicy: "https-only",
       appCsp: CSP,
     });
-    expect(fileRpc.readFile).toHaveBeenCalledWith(
-      {
-        epicId: EPIC_ID,
-        path: STAMP.snapshot.path,
-        sha256: STAMP.snapshot.sha256,
-        via: { chatId: CHAT_ID, blockId: BLOCK_ID },
-        want: { kind: "text" },
-      },
-      expect.any(AbortSignal),
-    );
     const row = screen.getByTestId("mcp-app-row");
     expect(row.textContent).toContain(SERVER);
     expect(row.textContent).toContain("open_budget");
@@ -545,7 +586,7 @@ describe("<McpAppRow /> full screen from the keyboard", () => {
 
 describe("<McpAppRow /> when the app cannot run here", () => {
   it("shows the ordinary tool row to a reader with no chat scope", () => {
-    renderRow(makeFileRpc(HTML_RESPONSE), makeMcpRpc(), null, STAMP);
+    renderRow(makeMcpRpc(), null, STAMP);
 
     expect(screen.getByTestId("ordinary-tool-row")).toBeTruthy();
     expect(screen.queryByTestId("mcp-app-row")).toBeNull();
@@ -554,7 +595,7 @@ describe("<McpAppRow /> when the app cannot run here", () => {
   it.each([
     [
       "the snapshot is not on this host",
-      { kind: "unavailable", reason: "upload-pending" } as const,
+      { kind: "unavailable", reason: "missing" } as const,
     ],
     [
       "the snapshot is not text",
@@ -567,18 +608,173 @@ describe("<McpAppRow /> when the app cannot run here", () => {
       } as const,
     ],
   ])("shows the ordinary tool row when %s", async (_name, response) => {
-    renderRow(makeFileRpc(response), makeMcpRpc(), SCOPE, STAMP);
+    makeArtifactObjectRpc(() => response);
+    renderRow(makeMcpRpc(), SCOPE, STAMP);
 
     expect(await screen.findByTestId("ordinary-tool-row")).toBeTruthy();
     expect(screen.queryByTestId("sandbox-frame")).toBeNull();
   });
 
   it("shows the ordinary tool row when reading the snapshot fails", async () => {
-    const fileRpc = makeFileRpc(HTML_RESPONSE);
-    fileRpc.readFile.mockRejectedValue(new Error("host went away"));
-    renderRow(fileRpc, makeMcpRpc(), SCOPE, STAMP);
+    makeArtifactObjectRpc(() => {
+      throw new Error("host went away");
+    });
+    renderRow(makeMcpRpc(), SCOPE, STAMP);
 
     expect(await screen.findByTestId("ordinary-tool-row")).toBeTruthy();
+  });
+});
+
+describe("<McpAppRow /> reading the stamped snapshot by sha", () => {
+  it("renders from the artifact-object store on a sha hit", async () => {
+    const { messenger } = makeArtifactObjectRpc(
+      () => ARTIFACT_OBJECT_HTML_RESPONSE,
+    );
+    renderRow(makeMcpRpc(), SCOPE, STAMP);
+
+    const frame = await screen.findByTestId("sandbox-frame");
+    expect(frame.textContent).toBe(APP_HTML);
+    expect(messenger.calls).toHaveLength(1);
+    expect(messenger.calls[0]).toMatchObject({
+      method: "epic.readArtifactObject",
+      params: {
+        epicId: EPIC_ID,
+        sha256: STAMP.snapshot.sha256,
+        want: { kind: "text" },
+      },
+    });
+  });
+
+  it("shows the loading placeholder while the object is downloading, then the app once it lands", async () => {
+    vi.useFakeTimers();
+    focusManager.setFocused(true);
+    let call = 0;
+    makeArtifactObjectRpc(() => {
+      call += 1;
+      return call === 1
+        ? { kind: "downloading", receivedBytes: 10, totalBytes: 100 }
+        : ARTIFACT_OBJECT_HTML_RESPONSE;
+    });
+    renderRow(makeMcpRpc(), SCOPE, STAMP);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(call).toBe(1);
+    expect(screen.queryByTestId("sandbox-frame")).toBeNull();
+    expect(screen.queryByTestId("ordinary-tool-row")).toBeNull();
+
+    // The downloading lane's own cadence.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(500);
+    });
+    // The refetch settles exactly on the timer boundary, and the coordinator's
+    // own render from that settlement is itself a nested fake-timer callback
+    // scheduled one tick later (t+1), past what a 0ms advance drains. 1ms
+    // reaches it without weakening what the test is actually asserting.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1);
+    });
+    expect(call).toBe(2);
+    expect(screen.getByTestId("sandbox-frame").textContent).toBe(APP_HTML);
+  });
+
+  it("shows the ordinary tool row when the sha object is unavailable", async () => {
+    makeArtifactObjectRpc(() => ARTIFACT_OBJECT_UNAVAILABLE);
+    renderRow(makeMcpRpc(), SCOPE, STAMP);
+
+    expect(await screen.findByTestId("ordinary-tool-row")).toBeTruthy();
+    expect(screen.queryByTestId("sandbox-frame")).toBeNull();
+  });
+});
+
+describe("<McpAppRow /> cached-state precedence under a later host RPC error", () => {
+  it("falls to the ordinary tool row when a downloading answer's own poll rejects", async () => {
+    vi.useFakeTimers();
+    focusManager.setFocused(true);
+    let call = 0;
+    makeArtifactObjectRpc(() => {
+      call += 1;
+      if (call === 1) {
+        return { kind: "downloading", receivedBytes: 10, totalBytes: 100 };
+      }
+      throw new Error("host went away mid-download");
+    });
+    renderRow(makeMcpRpc(), SCOPE, STAMP);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(call).toBe(1);
+    expect(screen.queryByTestId("sandbox-frame")).toBeNull();
+    expect(screen.queryByTestId("ordinary-tool-row")).toBeNull();
+
+    // The downloading lane's own 500ms poll, now answered with a rejection
+    // instead of more progress or text.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(500);
+    });
+    // The settlement's own render is a nested fake-timer tick past the
+    // timer boundary itself, as with the sibling downloading test above.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1);
+    });
+
+    expect(call).toBe(2);
+    expect(screen.getByTestId("ordinary-tool-row")).toBeTruthy();
+    expect(screen.queryByTestId("sandbox-frame")).toBeNull();
+  });
+
+  it("keeps showing the served text through a background sweep refetch that errors, rather than resetting to pending or the fallback", async () => {
+    vi.useFakeTimers();
+    focusManager.setFocused(true);
+    let call = 0;
+    makeArtifactObjectRpc(() => {
+      call += 1;
+      if (call === 1) return ARTIFACT_OBJECT_HTML_RESPONSE;
+      throw new Error("host went away mid-sweep");
+    });
+    const queryClient = renderRow(makeMcpRpc(), SCOPE, STAMP);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(call).toBe(1);
+    const frame = screen.getByTestId("sandbox-frame");
+    expect(frame.textContent).toBe(APP_HTML);
+    expect(mocks.frame.mounts).toBe(1);
+
+    // The production invalidator, driven exactly as `HostClient` drives it
+    // on a real reconnect sweep - not a stand-in for it.
+    const invalidator = createHostQueryInvalidator(queryClient);
+    await act(async () => {
+      invalidator.invalidateHostScope(HOST_ID, {
+        refetchActive: true,
+        recovery: "reconnect",
+      });
+      // The invalidator's own cancel-then-invalidate is async, and the
+      // refetch it starts settles on the next fake-timer tick.
+      await vi.advanceTimersByTimeAsync(1);
+    });
+
+    expect(call).toBe(2);
+    const query = queryClient
+      .getQueryCache()
+      .getAll()
+      .find((entry) => entry.queryKey.includes("epic.readArtifactObject"));
+    if (query === undefined) {
+      throw new Error("expected a cached query for epic.readArtifactObject");
+    }
+    // The sweep's refetch really failed - this is not a test that merely
+    // never observed an error.
+    expect(query.state.status).toBe("error");
+
+    // The row still shows the SAME frame mount with the SAME served text:
+    // a cached text answer is never demoted by a later error.
+    expect(screen.getByTestId("sandbox-frame")).toBe(frame);
+    expect(screen.getByTestId("sandbox-frame").textContent).toBe(APP_HTML);
+    expect(mocks.frame.mounts).toBe(1);
+    expect(screen.queryByTestId("ordinary-tool-row")).toBeNull();
   });
 });
 
@@ -1015,7 +1211,7 @@ describe("<McpAppRow /> when the agent session cannot be reached", () => {
       readResource: () => unsupported("chat.mcpApp.readResource"),
       updateModelContext: () => unsupported("chat.mcpApp.updateModelContext"),
     };
-    renderRow(makeFileRpc(HTML_RESPONSE), unserved, SCOPE, STAMP);
+    renderRow(unserved, SCOPE, STAMP);
     await screen.findByTestId("sandbox-frame");
 
     await act(async () => {

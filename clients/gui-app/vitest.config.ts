@@ -117,6 +117,18 @@ export default defineConfig({
           "$1",
         ),
       },
+      {
+        find: /^@traycer\/html-source$/,
+        replacement: path.resolve(
+          __dirname,
+          "..",
+          "..",
+          "packages",
+          "html-source",
+          "src",
+          "index.ts",
+        ),
+      },
     ],
   },
   test: {

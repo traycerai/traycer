@@ -23,6 +23,10 @@ import type {
 import type { EpicCanvasStore } from "@/stores/epics/canvas/store";
 import { getCurrentNestedFocusTarget } from "@/lib/epic-nested-focus-route";
 import { useCommentThreadsStore } from "@/stores/comments/comment-threads-store";
+import {
+  clearCommentEditorRegistryForTests,
+  registerCommentEditor,
+} from "@/lib/comments/comment-editor-registry";
 import { useLeftPanelStore } from "@/stores/epics/left-panel-store";
 import {
   DEFAULT_LAYOUT_SNAPSHOT,
@@ -76,7 +80,7 @@ interface TestState {
   canvasActivePaneId: string | null;
   canvasRoot: TileLayoutNode | null;
   canvasTiles: Readonly<Record<string, EpicCanvasTileRef>>;
-  records: ReadonlyArray<{ readonly id: string }>;
+  records: ReadonlyArray<{ readonly id: string; readonly type?: string }>;
   /** Chat ids the `useCloudChatList` mock answers as present
    * (chat-sync-v2 ticket 36's same-host cloud-known reap exemption). */
   cloudChatIds: ReadonlySet<string>;
@@ -362,6 +366,7 @@ const THREAD_FOCUS_INTENT: EpicRouteFocusIntent = {
 };
 
 function resetStores(): void {
+  clearCommentEditorRegistryForTests();
   resetNestedRouteDomFocusForTests();
   resetNestedFocusNavigationIntentsForTests();
   resetPaneActivationFocusIntentsForTests();
@@ -1017,6 +1022,114 @@ describe("useEpicRouteSynchronization", () => {
       );
       expect(useCommentThreadsStore.getState().activeByEpicId[EPIC_ID]).toBe(
         "thread-1",
+      );
+    });
+  });
+
+  it.each(["html", "canvas"] as const)(
+    "activates a focused thread deep link on a %s artifact without opening the comments sidebar",
+    async (type) => {
+      // Their threads open in place on the frame, so there is no comments panel
+      // to bring forward.
+      testState.autoOpenTarget = null;
+      testState.activeArtifactId = "artifact-1";
+      testState.records = [{ id: "artifact-1", type }];
+      renderHook(
+        (intent: EpicRouteFocusIntent) => useEpicRouteSynchronization(intent),
+        { initialProps: THREAD_FOCUS_INTENT },
+      );
+
+      await waitFor(() => {
+        expect(useCommentThreadsStore.getState().activeByEpicId[EPIC_ID]).toBe(
+          "thread-1",
+        );
+      });
+      const leftPanel = useLeftPanelStore.getState();
+      expect(leftPanel.isCommentsPanelRevealed(TAB_ID)).toBe(false);
+      expect(leftPanel.activePanelIdByTabId[TAB_ID]).toBeUndefined();
+      expect(leftPanel.mainCollapsedByTabId[TAB_ID]).toBeUndefined();
+    },
+  );
+
+  it("reveals a deep-linked html thread when its view registers after the link landed", async () => {
+    testState.autoOpenTarget = null;
+    testState.activeArtifactId = "artifact-1";
+    testState.records = [{ id: "artifact-1", type: "html" }];
+    renderHook(
+      (intent: EpicRouteFocusIntent) => useEpicRouteSynchronization(intent),
+      { initialProps: THREAD_FOCUS_INTENT },
+    );
+    await waitFor(() => {
+      expect(useCommentThreadsStore.getState().activeByEpicId[EPIC_ID]).toBe(
+        "thread-1",
+      );
+    });
+    expect(
+      useCommentThreadsStore.getState().flashByEpicId[EPIC_ID]?.threadId,
+    ).toBe("thread-1");
+
+    // The frame's bridge is not ready on first registration, ready on the next.
+    const reveal = vi.fn((_threadId: string) => reveal.mock.calls.length > 1);
+    registerCommentEditor({
+      epicId: EPIC_ID,
+      artifactId: "artifact-1",
+      tileId: "tile-1",
+      isActive: true,
+      reveal,
+    });
+    registerCommentEditor({
+      epicId: EPIC_ID,
+      artifactId: "artifact-1",
+      tileId: "tile-1",
+      isActive: true,
+      reveal,
+    });
+
+    expect(reveal).toHaveBeenCalledTimes(2);
+    expect(reveal).toHaveBeenLastCalledWith("thread-1");
+  });
+
+  it("does not queue an anchor reveal for a spec deep link", async () => {
+    testState.autoOpenTarget = null;
+    testState.activeArtifactId = "artifact-1";
+    testState.records = [{ id: "artifact-1", type: "spec" }];
+    renderHook(
+      (intent: EpicRouteFocusIntent) => useEpicRouteSynchronization(intent),
+      { initialProps: THREAD_FOCUS_INTENT },
+    );
+    await waitFor(() => {
+      expect(useCommentThreadsStore.getState().activeByEpicId[EPIC_ID]).toBe(
+        "thread-1",
+      );
+    });
+
+    const reveal = vi.fn(() => true);
+    registerCommentEditor({
+      epicId: EPIC_ID,
+      artifactId: "artifact-1",
+      tileId: "tile-1",
+      isActive: true,
+      reveal,
+    });
+
+    expect(reveal).not.toHaveBeenCalled();
+  });
+
+  it("still reveals the comments sidebar for a focused thread on a spec artifact record", async () => {
+    testState.autoOpenTarget = null;
+    testState.activeArtifactId = "artifact-1";
+    testState.records = [{ id: "artifact-1", type: "spec" }];
+    renderHook(
+      (intent: EpicRouteFocusIntent) => useEpicRouteSynchronization(intent),
+      { initialProps: THREAD_FOCUS_INTENT },
+    );
+
+    await waitFor(() => {
+      expect(useLeftPanelStore.getState().isCommentsPanelRevealed(TAB_ID)).toBe(
+        true,
+      );
+      expect(useLeftPanelStore.getState().getActivePanelId(TAB_ID)).toBe(
+        "comments",
       );
     });
   });

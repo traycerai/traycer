@@ -33,6 +33,7 @@ import { chatSchema } from "@traycer/protocol/persistence/epic/chat";
 import {
   approvalBlockSchema,
   artifactOperationBlockSchema,
+  artifactOperationBlockSchemaPreHtml,
   autonomousResumeBlockSchema,
   commandBlockSchema,
   compactionBlockSchema,
@@ -48,11 +49,13 @@ import {
   textBlockSchema,
   todoBlockSchema,
   toolCallBlockSchema,
+  toolCallBlockSchemaPreArtifact,
   toolCallBlockSchemaPreDelivery,
 } from "@traycer/protocol/persistence/epic/content-blocks";
 import {
   assistantMessageSchema,
   userMessageSchema,
+  userMessageSchemaPreCanvas,
   userMessageSchemaPreConversation,
 } from "@traycer/protocol/persistence/epic/messages";
 import {
@@ -146,6 +149,45 @@ export type OpenSteerBlock = z.infer<typeof openSteerBlockSchema>;
  * Every other member is the live schema; a NEW member has to be added here,
  * which `open-harness-wire.test.ts` enforces by comparing member sets.
  */
+export const openContentBlockSchemaPreHtml = lazySchema(() =>
+  z.discriminatedUnion("type", [
+    openTextBlockSchema,
+    reasoningBlockSchema,
+    toolCallBlockSchemaPreArtifact,
+    fileChangeBlockSchema,
+    commandBlockSchema,
+    subAgentBlockSchema,
+    approvalBlockSchema,
+    todoBlockSchema,
+    openPlanBlockSchema,
+    errorBlockSchema,
+    compactionBlockSchema,
+    autonomousResumeBlockSchema,
+    openSteerBlockSchema,
+    interviewBlockSchema,
+    artifactOperationBlockSchemaPreHtml,
+  ]),
+);
+
+export const openContentBlockSchemaPreArtifact = lazySchema(() =>
+  z.discriminatedUnion("type", [
+    openTextBlockSchema,
+    reasoningBlockSchema,
+    toolCallBlockSchemaPreArtifact,
+    fileChangeBlockSchema,
+    commandBlockSchema,
+    subAgentBlockSchema,
+    approvalBlockSchema,
+    todoBlockSchema,
+    openPlanBlockSchema,
+    errorBlockSchema,
+    compactionBlockSchema,
+    autonomousResumeBlockSchema,
+    openSteerBlockSchema,
+    interviewBlockSchema,
+    artifactOperationBlockSchema,
+  ]),
+);
 export const openContentBlockSchema = lazySchema(() =>
   z.discriminatedUnion("type", [
     openTextBlockSchema,
@@ -189,7 +231,7 @@ export const openContentBlockSchemaPreDelivery = lazySchema(() =>
     autonomousResumeBlockSchema,
     openSteerBlockSchema,
     interviewBlockSchema,
-    artifactOperationBlockSchema,
+    artifactOperationBlockSchemaPreHtml,
   ]),
 );
 
@@ -198,6 +240,21 @@ export const openContentBlockSchemaPreDelivery = lazySchema(() =>
 // A spread of the live shape with the `sender.type === message.kind` check
 // re-applied, for the reason the notice gives. `sessionAnchor` is KEPT, closed:
 // see the module note.
+export const openUserMessageSchemaPreCanvas = lazySchema(() =>
+  z
+    .object({
+      ...userMessageSchemaPreCanvas.shape,
+      sender: openUserMessageSenderSchema,
+    })
+    .superRefine((message, ctx) => {
+      if (message.sender.type === message.message.kind) return;
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["message", "kind"],
+        message: "User message sender.type must match message.kind.",
+      });
+    }),
+);
 export const openUserMessageSchema = lazySchema(() =>
   z
     .object({
@@ -257,13 +314,39 @@ export const openMessageSchema = lazySchema(() =>
     openAssistantMessageSchema,
   ]),
 );
+export const openMessageSchemaPreCanvas = lazySchema(() =>
+  z.discriminatedUnion("role", [
+    openUserMessageSchemaPreCanvas,
+    openAssistantMessageSchema,
+  ]),
+);
 export type OpenMessage = z.infer<typeof openMessageSchema>;
 
-/**
- * The open message union `chat.subscribe@1.23` and `@1.24` ship: the user row
- * without `1.25`'s `conversationRequest`, the assistant row without `1.29`'s
- * `agentMessageDelivery`.
- */
+export const openAssistantMessageSchemaPreArtifact = lazySchema(() =>
+  openAssistantMessageSchema.extend({
+    blocks: z.array(openContentBlockSchemaPreArtifact),
+  }),
+);
+export const openMessageSchemaPreArtifact = lazySchema(() =>
+  z.discriminatedUnion("role", [
+    openUserMessageSchemaPreCanvas,
+    openAssistantMessageSchemaPreArtifact,
+  ]),
+);
+
+export const openAssistantMessageSchemaPreHtml = lazySchema(() =>
+  openAssistantMessageSchema.extend({
+    blocks: z.array(openContentBlockSchemaPreHtml),
+  }),
+);
+export const openMessageSchemaPreHtml = lazySchema(() =>
+  z.discriminatedUnion("role", [
+    openUserMessageSchemaPreCanvas,
+    openAssistantMessageSchemaPreHtml,
+  ]),
+);
+
+/** The open message union `chat.subscribe@1.23` and `@1.24` ship. */
 export const openMessageSchemaPreConversation = lazySchema(() =>
   z.discriminatedUnion("role", [
     openUserMessageSchemaPreConversation,
@@ -277,7 +360,7 @@ export const openMessageSchemaPreConversation = lazySchema(() =>
  */
 export const openMessageSchemaPreDelivery = lazySchema(() =>
   z.discriminatedUnion("role", [
-    openUserMessageSchema,
+    openUserMessageSchemaPreCanvas,
     openAssistantMessageSchemaPreDelivery,
   ]),
 );

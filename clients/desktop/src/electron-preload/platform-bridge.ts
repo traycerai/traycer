@@ -1,3 +1,4 @@
+import type { WindowCaptureRect } from "../ipc-contracts/window-capture-types";
 import { ipcRenderer } from "electron";
 import {
   RunnerHostEvent,
@@ -51,6 +52,7 @@ export interface PlatformBridgeSurface {
     add(path: string): Promise<void>;
   };
   window: {
+    captureRegion(rect: WindowCaptureRect): Promise<ArrayBuffer | null>;
     flashFrame(shouldFlash: boolean): Promise<void>;
     setProgressBar(value: number): Promise<void>;
     setRepresentedFilename(path: string): Promise<void>;
@@ -167,6 +169,11 @@ export function buildPlatformBridge(): PlatformBridgeSurface {
         ipcRenderer.invoke(RunnerHostInvoke.recentDocumentAdd, path),
     },
     window: {
+      captureRegion: (rect) =>
+        ipcRenderer.invoke(
+          RunnerHostInvoke.windowCaptureRegion,
+          rect,
+        ) as Promise<ArrayBuffer | null>,
       flashFrame: (shouldFlash) =>
         ipcRenderer.invoke(RunnerHostInvoke.windowFlashFrame, shouldFlash),
       setProgressBar: (value) =>

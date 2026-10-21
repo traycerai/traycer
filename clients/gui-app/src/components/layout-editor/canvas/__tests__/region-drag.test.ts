@@ -383,12 +383,12 @@ const FLAT_RAIL: ReadonlyArray<RailEntry> = DEFAULT_RAIL.filter(
 
 describe("dragging in the sidebar rail", () => {
   it("moves a panel past its neighbour, placed by id", () => {
-    // Artifacts sits at 40..76 and Files at 80..116 (centre 98). A slot is
+    // Artifacts sits at 40..76 and Terminals at 80..116 (centre 98). A slot is
     // claimed when the leading edge passes the neighbour's centre (L-143).
     // The engine's grab point is the move that crosses the 6px activation
     // distance, which this helper sends at clientY:8, so a final clientY:40
     // travels 32 past that grab point - carrying Artifacts' bottom edge to
-    // 40 + 32 + 36 = 108, past Files' centre at 98 and short of Terminals'
+    // 40 + 32 + 36 = 108, past Terminals' centre at 98 and short of Browsers'
     // at 138.
     setRail(FLAT_RAIL);
     const nodes = mountRail(FLAT_RAIL);
@@ -397,9 +397,8 @@ describe("dragging in the sidebar rail", () => {
 
     expect(railOrder()).toEqual([
       "chats",
-      "files",
-      "artifacts",
       "terminals",
+      "artifacts",
       "browsers",
       "git-diff",
       "pull-requests",
@@ -445,7 +444,6 @@ describe("dragging in the sidebar rail", () => {
       "railAgents",
       "stack:railAgents+railArtifacts",
       "railArtifacts",
-      "railFiles",
       "railGitDiff",
       "railPullRequests",
       "railFileTree",
@@ -475,7 +473,6 @@ describe("dragging in the sidebar rail", () => {
       "chats",
       "artifacts",
       railDividerId(1),
-      "files",
       "terminals",
       "browsers",
       "git-diff",

@@ -48,6 +48,13 @@ export default defineConfig({
         find: /^@traycer\/protocol\/(.*)$/,
         replacement: path.resolve(__dirname, "../../protocol/src/$1"),
       },
+      {
+        find: /^@traycer\/html-source$/,
+        replacement: path.resolve(
+          __dirname,
+          "../../packages/html-source/src/index.ts",
+        ),
+      },
     ],
   },
   test: {

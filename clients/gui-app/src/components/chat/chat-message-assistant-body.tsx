@@ -1293,7 +1293,7 @@ export function AssistantSegment({
           startedAt={segment.startedAt}
           durationMs={segment.durationMs}
           imageResults={segment.imageResults}
-          page={segment.page}
+          artifact={segment.artifact}
           mcpApp={segment.mcpApp}
           variant="card"
           headerFindUnitId={

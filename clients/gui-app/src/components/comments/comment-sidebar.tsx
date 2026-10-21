@@ -1,6 +1,6 @@
 import { useCallback, useMemo, useState } from "react";
 import { MessageSquarePlus, MessageSquareWarning } from "lucide-react";
-import { type EpicArtifactKind } from "@traycer/protocol/common/registry";
+import { type CommentArtifactKind } from "@/lib/comments/artifact-comment-kind";
 import { cn } from "@/lib/utils";
 import { shortcutHintsVisible } from "@/lib/keybindings/shortcut-hints";
 import { formatChordForDisplay } from "@/lib/keybindings/chord";
@@ -34,7 +34,7 @@ export interface CommentSidebarProps {
    *  renders A's threads. Passed rather than read here so the same surface
    *  stays mountable from a tile (D15). */
   readonly hostClient: HostClient<HostRpcRegistry> | null;
-  readonly artifactType: EpicArtifactKind;
+  readonly artifactType: CommentArtifactKind;
   readonly artifactId: string;
   /** The state lane's comment records for this artifact, or `null` when the
    *  lane has said nothing about it - which is every artifact on a legacy
@@ -225,7 +225,7 @@ interface SidebarBodyProps {
   readonly filter: CommentThreadStatusFilter;
   readonly epicId: string;
   readonly hostClient: HostClient<HostRpcRegistry> | null;
-  readonly artifactType: EpicArtifactKind;
+  readonly artifactType: CommentArtifactKind;
   readonly artifactId: string;
   readonly activeThreadId: string | null;
   readonly currentUserId: string | null;

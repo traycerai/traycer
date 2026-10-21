@@ -241,13 +241,21 @@ export function ArtifactSearchBox(props: ArtifactSearchBoxProps) {
 
   const {
     searchActive,
-    results,
+    results: allResults,
     response,
     isUnsupported,
     isError,
     isFetching,
     refetch,
   } = useArtifactSearchResults({ epicId, debouncedQuery });
+
+  const results = useMemo(
+    () =>
+      allResults.filter((hit): hit is SearchArtifactHit =>
+        isEpicArtifactKind(hit.kind),
+      ),
+    [allResults],
+  );
 
   // ── Opening a hit (authoritative selection route) ─────────────────────────
   const handle = useOpenEpicHandle();
@@ -580,9 +588,7 @@ const ArtifactSearchResultRow = memo(function ArtifactSearchResultRow(
   props: ArtifactSearchResultRowProps,
 ) {
   const { hit, active, stale, onActivate, onHover } = props;
-  const Icon = isEpicArtifactKind(hit.kind)
-    ? EPIC_NODE_ICONS[hit.kind]
-    : FileText;
+  const Icon = EPIC_NODE_ICONS[hit.kind];
   const title = displayTitle(hit.title, hit.kind);
   // The RPC breadcrumb includes the artifact's own folder slug last; drop it so
   // only the ancestor trail shows (the title already names the artifact) -
