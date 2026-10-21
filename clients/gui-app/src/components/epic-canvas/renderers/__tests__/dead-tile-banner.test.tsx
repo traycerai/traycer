@@ -713,7 +713,9 @@ describe("<ChatDeadTileBanner /> for a team environment's chat (environmentOwned
       expect(
         screen.getByRole("button", { name: "Continue on l-e2e-team-e7" }),
       ).toBeTruthy();
-      expect(screen.queryByRole("button", { name: "Continue here" })).toBeNull();
+      expect(
+        screen.queryByRole("button", { name: "Continue here" }),
+      ).toBeNull();
     });
   });
 });

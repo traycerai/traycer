@@ -87,10 +87,7 @@ vi.mock("@/components/settings/host-scope/use-host-scope", () => ({
  * sandbox facts, and a team's row also carries the registry owner. A team
  * row is the one `activate` refuses.
  */
-function sandboxOption(
-  hostId: string,
-  teamId: string | null,
-): HostScopeOption {
+function sandboxOption(hostId: string, teamId: string | null): HostScopeOption {
   return hostScopeOptionFixture({
     hostId,
     name: hostId,
@@ -376,11 +373,15 @@ describe("<UserMenu /> host section", () => {
 
     await openMenu();
 
-    expect(screen.getByTestId("user-menu-host-option-host-active")).toBeTruthy();
+    expect(
+      screen.getByTestId("user-menu-host-option-host-active"),
+    ).toBeTruthy();
     expect(
       screen.getByTestId("user-menu-host-option-sandbox-personal"),
     ).toBeTruthy();
-    expect(screen.queryByTestId("user-menu-host-option-sandbox-team")).toBeNull();
+    expect(
+      screen.queryByTestId("user-menu-host-option-sandbox-team"),
+    ).toBeNull();
   });
 
   it("leaves a team's sandbox out of the list while its registry row has not arrived", async () => {
@@ -403,7 +404,9 @@ describe("<UserMenu /> host section", () => {
     expect(
       screen.getByTestId("user-menu-host-option-sandbox-personal"),
     ).toBeTruthy();
-    expect(screen.queryByTestId("user-menu-host-option-sandbox-team")).toBeNull();
+    expect(
+      screen.queryByTestId("user-menu-host-option-sandbox-team"),
+    ).toBeNull();
     expect(
       screen
         .getAllByRole("menuitemradio")

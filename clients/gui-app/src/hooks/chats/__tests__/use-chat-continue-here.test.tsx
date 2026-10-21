@@ -90,7 +90,9 @@ vi.mock("@/hooks/epic/use-epic-tile-navigation", () => ({
 }));
 
 vi.mock("@/hooks/bots/use-environment-list-query", () => ({
-  useEnvironmentListQuery: () => ({ data: { environments: harness.environments } }),
+  useEnvironmentListQuery: () => ({
+    data: { environments: harness.environments },
+  }),
 }));
 
 vi.mock("@/hooks/host/use-host-directory-list-query", () => ({
@@ -142,7 +144,9 @@ function clientFailing(error: HostRpcError): HostClient<HostRpcRegistry> {
 }
 
 function wrapper({ children }: { readonly children: ReactNode }): ReactNode {
-  return <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>;
+  return (
+    <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+  );
 }
 
 function renderContinue(): RenderHookResult<ContinueHere, undefined> {
