@@ -17,6 +17,7 @@ import {
 } from "@/hooks/git/use-git-list-changed-files-subscription";
 import { gitQueryKeys } from "@/lib/query-keys/git-query-keys";
 import { useSettingsStore } from "@/stores/settings/settings-store";
+import { useDiffViewerPreferences } from "@/hooks/ui/use-diff-viewer-preferences";
 import { StreamRuntimeContext } from "@/lib/host/stream-runtime-context";
 import { useSurfaceHostStreamBinding } from "@/hooks/host/use-surface-host-stream-binding";
 import type { DiffViewerPreferences } from "@/lib/diff/diff-viewer-preferences";
@@ -283,9 +284,7 @@ function GitDiffTileToolbar(props: GitDiffTileToolbarProps): ReactNode {
   const effectiveEditor = useEffectiveDefaultEditor(tabHostId);
   const showNoEditorInstalledNotice = useNoEditorInstalledNotice(tabHostId);
   const canOpenHostPaths = useHostPathOpenAvailability(tabHostId);
-  const diffViewerPreferences = useSettingsStore(
-    (s) => s.diffViewerPreferences,
-  );
+  const diffViewerPreferences = useDiffViewerPreferences();
   const patchDiffViewerPreferences = useSettingsStore(
     (s) => s.patchDiffViewerPreferences,
   );
@@ -426,9 +425,7 @@ interface GitFileDiffTileBodyProps {
 }
 
 function GitFileDiffTileBody(props: GitFileDiffTileBodyProps): ReactNode {
-  const diffViewerPreferences = useSettingsStore(
-    (s) => s.diffViewerPreferences,
-  );
+  const diffViewerPreferences = useDiffViewerPreferences();
   if (props.subscription.error !== null) {
     return (
       <>
@@ -948,9 +945,7 @@ interface GitBundleDiffTileBodyProps {
 
 function GitBundleDiffTileBody(props: GitBundleDiffTileBodyProps): ReactNode {
   const bundleTabHostId = useTabHostId();
-  const diffViewerPreferences = useSettingsStore(
-    (s) => s.diffViewerPreferences,
-  );
+  const diffViewerPreferences = useDiffViewerPreferences();
   const bundleGroup = props.node.diff.bundleGroup;
   // Derive content before any early return so the restoration hooks run
   // unconditionally (React rules of hooks).

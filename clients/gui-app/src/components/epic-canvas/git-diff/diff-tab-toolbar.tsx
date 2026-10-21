@@ -10,6 +10,7 @@ import {
   Settings2,
 } from "lucide-react";
 import { RefreshIcon } from "@/components/refresh-icon";
+import { useIsNarrowWindow } from "@/hooks/ui/use-narrow-window";
 import { DiffSplitIcon, DiffUnifiedIcon } from "./diff-mode-icons";
 import type { GitDiffTileViewState } from "@/stores/epics/canvas/types";
 import {
@@ -100,6 +101,11 @@ export function DiffTabToolbar(props: DiffTabToolbarProps) {
   const openFile = props.openFile;
   const view = props.view;
   const isSplit = view.mode === "split";
+  // A narrow window renders one column whatever the stored mode
+  // (`useDiffViewerPreferences`), so a toggle here would flip a choice the
+  // tile cannot show. Width, not the phone-layout policy: an iPad in
+  // landscape gets the toggle back.
+  const narrowWindow = useIsNarrowWindow();
 
   const collapseAll = props.collapseAll;
   const settings: ReadonlyArray<{
@@ -162,30 +168,32 @@ export function DiffTabToolbar(props: DiffTabToolbarProps) {
         </TooltipWrapper>
       ) : null}
 
-      <TooltipWrapper
-        label={isSplit ? "Split view" : "Unified view"}
-        side="top"
-        sideOffset={undefined}
-        align={undefined}
-      >
-        <Button
-          type="button"
-          onClick={() =>
-            props.onViewPatch({ mode: isSplit ? "unified" : "split" })
-          }
-          variant="muted"
-          size="icon-sm"
-          aria-label={
-            isSplit ? "Switch to unified view" : "Switch to split view"
-          }
+      {narrowWindow ? null : (
+        <TooltipWrapper
+          label={isSplit ? "Split view" : "Unified view"}
+          side="top"
+          sideOffset={undefined}
+          align={undefined}
         >
-          {isSplit ? (
-            <DiffSplitIcon className="size-4" />
-          ) : (
-            <DiffUnifiedIcon className="size-4" />
-          )}
-        </Button>
-      </TooltipWrapper>
+          <Button
+            type="button"
+            onClick={() =>
+              props.onViewPatch({ mode: isSplit ? "unified" : "split" })
+            }
+            variant="muted"
+            size="icon-sm"
+            aria-label={
+              isSplit ? "Switch to unified view" : "Switch to split view"
+            }
+          >
+            {isSplit ? (
+              <DiffSplitIcon className="size-4" />
+            ) : (
+              <DiffUnifiedIcon className="size-4" />
+            )}
+          </Button>
+        </TooltipWrapper>
+      )}
 
       {props.onRefresh !== null ? (
         <TooltipWrapper

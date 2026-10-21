@@ -4,6 +4,7 @@ import { APPEARANCE } from "@/components/settings/panels/appearance-settings.def
 import { SettingsGroup } from "@/components/settings/settings-group";
 import { SettingsRow } from "@/components/settings/settings-row";
 import { Switch } from "@/components/ui/switch";
+import { useIsNarrowWindow } from "@/hooks/ui/use-narrow-window";
 import { trackSettingChanged } from "@/lib/analytics";
 import {
   GIT_DIFF_INDICATOR_STYLE_LABELS,
@@ -36,6 +37,14 @@ const INDICATOR_OPTIONS: ReadonlyArray<{
  * change in either shows in both and in every open diff.
  */
 export function DiffViewerSettingsSection(): ReactNode {
+  // The stored choice, not the rendered one: this door edits what a window
+  // wide enough for two columns shows. The Layout row is withheld while the
+  // window is narrower than that, where every diff renders one column
+  // regardless (`useDiffViewerPreferences`). Width is read here rather than
+  // through the row's `availableWhen`, which keys on shell facts: the row
+  // stays searchable, and it is back the moment the window is widened or
+  // the device rotated.
+  const narrowWindow = useIsNarrowWindow();
   const preferences = useSettingsStore((state) => state.diffViewerPreferences);
   const patchPreferences = useSettingsStore(
     (state) => state.patchDiffViewerPreferences,
@@ -53,20 +62,22 @@ export function DiffViewerSettingsSection(): ReactNode {
       dataTestId={undefined}
       fill={false}
     >
-      <SettingsRow
-        row={APPEARANCE.definitions.diffLayout}
-        control={
-          <SettingsSegmentedControl
-            value={preferences.mode}
-            options={MODE_OPTIONS}
-            onChange={(mode) => {
-              patch({ mode });
-            }}
-            ariaLabel="Diff layout"
-            disabled={false}
-          />
-        }
-      />
+      {narrowWindow ? null : (
+        <SettingsRow
+          row={APPEARANCE.definitions.diffLayout}
+          control={
+            <SettingsSegmentedControl
+              value={preferences.mode}
+              options={MODE_OPTIONS}
+              onChange={(mode) => {
+                patch({ mode });
+              }}
+              ariaLabel="Diff layout"
+              disabled={false}
+            />
+          }
+        />
+      )}
       <SettingsRow
         row={APPEARANCE.definitions.diffLineNumbers}
         control={
