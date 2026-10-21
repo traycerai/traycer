@@ -54,8 +54,8 @@ interface Lane<State> {
   refs: number;
   state: State;
   readonly dispose: () => void;
-  /** Opens the arm again if it has ended; nothing otherwise. */
-  readonly reopenIfEnded: () => void;
+  /** Replaces the arm's stream with a fresh one; the old one's closes stop counting. */
+  readonly replaceSession: () => void;
 }
 
 /**
@@ -63,7 +63,7 @@ interface Lane<State> {
  * environment, the task is not attached to it, or the pool cannot serve the
  * method. The arm then holds nothing - the member's own rows stand alone -
  * and is not reopened until a consumer acquires it again or something that
- * changes the answer reopens it (`reopenEnded`).
+ * changes the answer reopens it (`reopen`).
  */
 function endsTheArm(reason: StreamCloseReason | null): boolean {
   if (reason === null || reason.kind !== "fatalError") return false;
@@ -85,7 +85,6 @@ function openLane<State, Frame>(
   // numbers each stream from 0, so every (re)subscribe - a redial of this
   // session or a reopened one - starts the comparison over.
   let newestGeneration = -1;
-  let ended = false;
   const reopen = connection.reconnect.openReopenLane(
     () => {
       session?.close();
@@ -104,10 +103,13 @@ function openLane<State, Frame>(
       session = null;
       connection.release();
     },
-    reopenIfEnded: () => {
-      if (disposed || !ended) return;
-      session?.close();
+    replaceSession: () => {
+      if (disposed) return;
+      // Cleared before the close, so neither this close nor a refusal the old
+      // stream was already carrying can end or reschedule the lane.
+      const previous = session;
       session = null;
+      previous?.close();
       openSession();
     },
   };
@@ -121,7 +123,6 @@ function openLane<State, Frame>(
     const current = spec.open(spec.client, () => lane.state);
     session = current;
     newestGeneration = -1;
-    ended = false;
     current.onServerFrame((envelope, binaryPayload) => {
       if (session !== current) return;
       const parsed = binaryPayload === null ? spec.parse(envelope) : null;
@@ -143,7 +144,6 @@ function openLane<State, Frame>(
       }
       if (status !== "closed") return;
       if (endsTheArm(reason)) {
-        ended = true;
         publish(spec.ended);
         return;
       }
@@ -162,12 +162,13 @@ export interface EnvironmentArmLanes<State, Frame> {
    */
   readonly acquire: (spec: EnvironmentArmLaneSpec<State, Frame>) => () => void;
   /**
-   * Opens the lane `key` names again when someone holds it and it has ended.
-   * What changes an ended arm's answer - the task attached to the environment
-   * - moves nothing its holders key on, so they keep the ended lane until it
-   * is reopened.
+   * Opens the lane `key` names on a fresh stream when someone holds it, ended
+   * or not. What changes an arm's answer - the task attached to the
+   * environment - moves nothing its holders key on, and a refusal the pool
+   * decided before that change may still be on its way; the old stream's
+   * closes no longer count once it is replaced.
    */
-  readonly reopenEnded: (key: string) => void;
+  readonly reopen: (key: string) => void;
   /** The lane's state, or `initial` while no one holds it. */
   readonly read: (key: string, initial: State) => State;
   /**
@@ -219,8 +220,8 @@ export function createEnvironmentArmLanes<State, Frame>(): EnvironmentArmLanes<
         if (held.state !== spec.initial) notify(spec.key);
       };
     },
-    reopenEnded: (key) => {
-      lanes.get(key)?.reopenIfEnded();
+    reopen: (key) => {
+      lanes.get(key)?.replaceSession();
     },
     read: (key, initial) => lanes.get(key)?.state ?? initial,
     held: () => [...lanes].map(([key, lane]) => [key, lane.state] as const),

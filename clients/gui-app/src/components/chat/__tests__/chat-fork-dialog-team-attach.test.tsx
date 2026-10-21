@@ -711,4 +711,44 @@ describe("ChatForkDialog continuing a personal task on a team host", () => {
       "team-fork",
     ]);
   });
+
+  it("reopens the team environment's chat arm when the pool's refusal arrives after the attachment answered", async () => {
+    const pool = new PoolArmClient();
+    publishEnvironmentArmScope({
+      poolHostId: "pool-host-id",
+      client: pool,
+      viewerId: "viewer-1",
+      environmentIds: [TEAM_ENVIRONMENT_ID],
+      environmentIdByTeamId: new Map([[TEAM_ID, TEAM_ENVIRONMENT_ID]]),
+      supported: new Set(["environment.chats.subscribe"]),
+    });
+    const arm = renderHook(() => useEnvironmentArmChats("epic-test"));
+    expect(pool.armSessions).toHaveLength(1);
+
+    await startFork();
+    attachCalls[0]?.settle("resolve");
+    await waitFor(() => {
+      expect(dialogMocks.creates).toHaveLength(1);
+    });
+    // The refusal the pool decided before the attachment lands only now.
+    act(() => {
+      pool.armSessions[0]?.forbid();
+    });
+
+    expect(pool.armSessions).toHaveLength(2);
+    act(() => {
+      pool.armSessions[1]?.emit(
+        {
+          kind: "snapshot",
+          hasBinaryPayload: false,
+          generation: 0,
+          chats: [teamChat("team-fork")],
+        },
+        null,
+      );
+    });
+    expect(arm.result.current.map((chat) => chat.identity.chatId)).toEqual([
+      "team-fork",
+    ]);
+  });
 });

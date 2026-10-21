@@ -192,17 +192,24 @@ describe("createEnvironmentArmLanes", () => {
     },
   );
 
-  it("reopens an ended arm when asked and leaves a live one as it is", () => {
+  it("reopens an ended arm when asked", () => {
     lanes.acquire(spec("k"));
-    lanes.reopenEnded("k");
-    expect(sessions).toHaveLength(1);
-
     sessions[0]?.closeWith(fatal("FORBIDDEN"));
-    lanes.reopenEnded("k");
+    lanes.reopen("k");
     sessions[1]?.emit(frameEnvelope(0, "a"), null);
 
     expect(sessions).toHaveLength(2);
     expect(lanes.read("k", [])).toEqual(["ended", "a"]);
+  });
+
+  it("replaces a live arm's stream when asked, so a refusal the old stream still carried does not end it", () => {
+    lanes.acquire(spec("k"));
+    lanes.reopen("k");
+    sessions[0]?.closeWith(fatal("FORBIDDEN"));
+    sessions[1]?.emit(frameEnvelope(0, "a"), null);
+
+    expect(sessions).toHaveLength(2);
+    expect(lanes.read("k", [])).toEqual(["a"]);
   });
 
   it("reopens after a retryable fatal close, resuming from the applied state", async () => {

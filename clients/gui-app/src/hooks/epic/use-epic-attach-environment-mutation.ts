@@ -2,7 +2,7 @@ import { toast } from "sonner";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
-import { reopenEndedEnvironmentArms } from "@/hooks/environment/use-environment-arms";
+import { reopenEnvironmentArms } from "@/hooks/environment/use-environment-arms";
 import { useHostMutation } from "@/hooks/host/use-host-query";
 import { toastFromHostError } from "@/lib/host-error-toast";
 import { epicMutationKeys } from "@/lib/query-keys/epic-mutation-keys";
@@ -39,10 +39,10 @@ export function useEpicAttachEnvironment(
     mapVariables: (variables) => variables,
     options: {
       mutationKey: epicMutationKeys.attachEnvironment(),
-      // The team's arms for this task, ended while it was not attached,
+      // The team's arms for this task, refused while it was not attached,
       // answer now.
       onSuccess: (_response, variables) => {
-        reopenEndedEnvironmentArms(variables.teamId, variables.epicId);
+        reopenEnvironmentArms(variables.teamId, variables.epicId);
       },
       onError: (error) => {
         if (isAttachEnvironmentUnsupported(error)) return;

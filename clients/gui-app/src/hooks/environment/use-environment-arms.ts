@@ -147,23 +147,21 @@ function laneKey(
 }
 
 /**
- * Reopens the arms of `teamId`'s environment in `taskId` that ended, once the
- * task is attached to that team. An arm a surface opened before the
- * attachment ended with `FORBIDDEN`, and the attachment changes none of the
- * ids its holders key on, so they would hold it ended until they remount.
+ * Reopens the held arms of `teamId`'s environment in `taskId` once the task is
+ * attached to that team. An arm opened before the attachment ends with
+ * `FORBIDDEN` - possibly after the attachment has answered - and the
+ * attachment changes none of the ids its holders key on, so they would hold
+ * it ended until they remount.
  */
-export function reopenEndedEnvironmentArms(
-  teamId: string,
-  taskId: string,
-): void {
+export function reopenEnvironmentArms(teamId: string, taskId: string): void {
   const scope = publishedScope;
   if (scope === null) return;
   const environmentId = scope.environmentIdByTeamId.get(teamId);
   if (environmentId === undefined) return;
-  chatLanes.reopenEnded(
+  chatLanes.reopen(
     laneKey("environment.chats.subscribe", scope, environmentId, taskId),
   );
-  terminalLanes.reopenEnded(
+  terminalLanes.reopen(
     laneKey(
       "environment.plainTerminals.subscribe",
       scope,
@@ -171,7 +169,7 @@ export function reopenEndedEnvironmentArms(
       taskId,
     ),
   );
-  graphLanes.reopenEnded(
+  graphLanes.reopen(
     laneKey(
       "environment.communicationGraph.subscribe",
       scope,
