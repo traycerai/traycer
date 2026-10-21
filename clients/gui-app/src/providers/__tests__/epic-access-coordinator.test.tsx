@@ -14,6 +14,8 @@ import type {
   TaskLight,
 } from "@traycer/protocol/host/epic/unary-schemas";
 import { EpicAccessCoordinator } from "@/providers/epic-access-coordinator";
+import type { HostRpcRegistry } from "@/lib/host";
+import { hostQueryKeys } from "@/lib/query-keys/host-query-keys";
 import {
   LIST_CLOUD_TASKS_REQUEST,
   cloudEpicTasksQueryKey,
@@ -158,6 +160,53 @@ function seedSplitOfEpics(
     activeItemId: "split-shared",
     stripOrder: [left, right],
     systemTabs: { history: null, settings: null },
+  });
+}
+
+/**
+ * The key `useEpicChatRecords` reads an epic's chat records under: the host
+ * method key plus the viewer and session-generation identity elements the hook
+ * appends after it.
+ */
+function chatRecordsQueryKey(epicId: string) {
+  return [
+    ...hostQueryKeys.method<HostRpcRegistry, "epic.listChatRecords">(
+      TEST_HOST_ID,
+      "epic.listChatRecords",
+      { epicId, hasDocReplica: false, knownRevision: null },
+    ),
+    "user-1",
+    1,
+  ] as const;
+}
+
+const FORBIDDEN_ERROR = {
+  code: "FORBIDDEN" as const,
+  message: "access to this epic was removed",
+  upgradeGuidance: null,
+};
+
+async function failChatRecordsRead(
+  queryClient: QueryClient,
+  epicId: string,
+): Promise<void> {
+  await expect(
+    queryClient.fetchQuery({
+      queryKey: chatRecordsQueryKey(epicId),
+      queryFn: () => Promise.reject(new Error("host unreachable")),
+      retry: false,
+    }),
+  ).rejects.toThrow("host unreachable");
+}
+
+async function succeedChatRecordsRead(
+  queryClient: QueryClient,
+  epicId: string,
+): Promise<void> {
+  await queryClient.fetchQuery({
+    queryKey: chatRecordsQueryKey(epicId),
+    queryFn: () => Promise.resolve([]),
+    retry: false,
   });
 }
 
@@ -1058,6 +1107,116 @@ describe("EpicAccessCoordinator", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  describe("FORBIDDEN recovery", () => {
+    async function openForbiddenEpic(
+      workState: { isDirty: boolean; unsyncedQueueSize: number },
+    ) {
+      const handle = registerSession("epic-1");
+      handle.store.setState(workState);
+      seedTabs(
+        [{ tabId: "tab-1", epicId: "epic-1", name: "Epic One" }],
+        "tab-1",
+      );
+      const requestFreshSnapshotSpy = vi.spyOn(handle, "requestFreshSnapshot");
+      const { queryClient, router } = renderCoordinatorAt(
+        "/epics/epic-1/tab-1",
+      );
+      await waitFor(() =>
+        expect(router.state.location.pathname).toBe("/epics/epic-1/tab-1"),
+      );
+      act(() => {
+        handle.store.setState({ snapshotFetchError: FORBIDDEN_ERROR });
+      });
+      // Flush the coordinator's store subscription.
+      await act(async () => {
+        await Promise.resolve();
+      });
+      return { queryClient, requestFreshSnapshotSpy };
+    }
+
+    it("re-opens the session once when the epic's chat-records read succeeds after failing", async () => {
+      const { queryClient, requestFreshSnapshotSpy } = await openForbiddenEpic({
+        isDirty: false,
+        unsyncedQueueSize: 0,
+      });
+
+      await act(async () => {
+        await failChatRecordsRead(queryClient, "epic-1");
+      });
+      expect(requestFreshSnapshotSpy).not.toHaveBeenCalled();
+      await act(async () => {
+        await succeedChatRecordsRead(queryClient, "epic-1");
+      });
+      // Flush the microtask the coordinator defers the re-open to.
+      await act(async () => {
+        await Promise.resolve();
+      });
+
+      expect(requestFreshSnapshotSpy).toHaveBeenCalledTimes(1);
+
+      // The watch disarmed on that first recovery: a later fail-then-succeed
+      // cycle does not re-open again.
+      await act(async () => {
+        await failChatRecordsRead(queryClient, "epic-1");
+        await succeedChatRecordsRead(queryClient, "epic-1");
+      });
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(requestFreshSnapshotSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not re-open when the read succeeds without having failed since the error landed", async () => {
+      const { queryClient, requestFreshSnapshotSpy } = await openForbiddenEpic({
+        isDirty: false,
+        unsyncedQueueSize: 0,
+      });
+
+      await act(async () => {
+        await succeedChatRecordsRead(queryClient, "epic-1");
+      });
+      await act(async () => {
+        await Promise.resolve();
+      });
+
+      expect(requestFreshSnapshotSpy).not.toHaveBeenCalled();
+    });
+
+    it("does not re-open a replica that holds unsynced work", async () => {
+      const { queryClient, requestFreshSnapshotSpy } = await openForbiddenEpic({
+        isDirty: true,
+        unsyncedQueueSize: 0,
+      });
+
+      await act(async () => {
+        await failChatRecordsRead(queryClient, "epic-1");
+        await succeedChatRecordsRead(queryClient, "epic-1");
+      });
+      await act(async () => {
+        await Promise.resolve();
+      });
+
+      expect(requestFreshSnapshotSpy).not.toHaveBeenCalled();
+    });
+
+    it("does not re-open on another epic's chat-records recovery", async () => {
+      const { queryClient, requestFreshSnapshotSpy } = await openForbiddenEpic({
+        isDirty: false,
+        unsyncedQueueSize: 0,
+      });
+
+      await act(async () => {
+        await failChatRecordsRead(queryClient, "epic-2");
+        await succeedChatRecordsRead(queryClient, "epic-2");
+      });
+      await act(async () => {
+        await Promise.resolve();
+      });
+
+      expect(requestFreshSnapshotSpy).not.toHaveBeenCalled();
+    });
   });
 });
 
