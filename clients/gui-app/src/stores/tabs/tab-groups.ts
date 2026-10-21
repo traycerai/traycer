@@ -65,6 +65,22 @@ export function drawnTabGroup(
 }
 
 /**
+ * A tab's own colour and icon as the ACCOUNT has them, or nothing.
+ *
+ * The sibling of {@link drawnTabGroup}, and for the same reason: a
+ * customization with no `organizationOwnerId` was written by the retired
+ * machine-local appearance controls, and a colour that exists on one
+ * computer is not what a task looks like. Unstamped entries stay in
+ * persisted layouts and are not drawn, so a tab falls back to what its kind
+ * ships until the account's projection says otherwise.
+ */
+export function drawnTabCustomization(
+  customization: TabCustomization | undefined,
+): TabCustomization | undefined {
+  return customization?.organizationOwnerId ? customization : undefined;
+}
+
+/**
  * The colour a tab draws: its group's while it is grouped, else its own. The
  * group's colour is read, never written into the tab's customization, so the
  * tab's own colour is what comes back when it leaves the group.

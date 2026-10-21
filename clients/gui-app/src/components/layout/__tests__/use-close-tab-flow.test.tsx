@@ -738,7 +738,7 @@ describe("useCloseTabFlow", () => {
       };
     }
 
-    it("Close group sends one command removing every member task from the group", () => {
+    it("Close group sends one command removing every member task from the group", async () => {
       const { refC } = seedGroupedTabs();
       organizationState.setView(
         organizationView([
@@ -755,7 +755,10 @@ describe("useCloseTabFlow", () => {
       expect(organizationState.command).toHaveBeenCalledExactlyOnceWith(
         removeTasks(["epic-a", "epic-b"]),
       );
-      expect(useTabsStore.getState().stripOrder).toEqual([refC]);
+      // The tabs close only once that removal is accepted.
+      await waitFor(() =>
+        expect(useTabsStore.getState().stripOrder).toEqual([refC]),
+      );
     });
 
     it("Close group keeps a task in its group while another of its tabs stays open", () => {
@@ -801,7 +804,7 @@ describe("useCloseTabFlow", () => {
       expect(useEpicCanvasStore.getState().openTabOrder).toContain(b);
     });
 
-    it("Close other tabs removes only the closed tasks from their group, not the kept tab's", () => {
+    it("Close other tabs removes only the closed tasks from their group, not the kept tab's", async () => {
       const { a } = seedGroupedTabs();
       organizationState.setView(
         organizationView([
@@ -818,10 +821,12 @@ describe("useCloseTabFlow", () => {
       expect(organizationState.command).toHaveBeenCalledExactlyOnceWith(
         removeTask("epic-b"),
       );
-      expect(useEpicCanvasStore.getState().openTabOrder).toEqual([a]);
+      await waitFor(() =>
+        expect(useEpicCanvasStore.getState().openTabOrder).toEqual([a]),
+      );
     });
 
-    it("Close other tabs keeps a task in its group while another of its tabs is the one kept", () => {
+    it("Close other tabs keeps a task in its group while another of its tabs is the one kept", async () => {
       const keptTab = useEpicCanvasStore
         .getState()
         .openEpicTab("epic-x", "X, first view");
@@ -861,9 +866,11 @@ describe("useCloseTabFlow", () => {
         );
       });
 
-      expect(useEpicCanvasStore.getState().openTabOrder).toEqual([keptTab]);
       expect(organizationState.command).toHaveBeenCalledExactlyOnceWith(
         removeTask("epic-y"),
+      );
+      await waitFor(() =>
+        expect(useEpicCanvasStore.getState().openTabOrder).toEqual([keptTab]),
       );
     });
   });

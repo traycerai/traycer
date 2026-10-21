@@ -208,8 +208,15 @@ export function OrganizationProvider({
   const openedTasks = useRef(new Set<string>());
   useEffect(() => {
     lifecycle.current = createLifecycle();
-    attemptedDraftIntents.current = new Set();
   }, [scope]);
+  // A draft intent whose send was refused is tried again when the thing that
+  // refused it recovers - the host or account changing, or organization
+  // support coming back after a lost handshake or authorization - and never
+  // on an ordinary view frame, which would retry it several times a second
+  // and toast each time.
+  useEffect(() => {
+    attemptedDraftIntents.current = new Set();
+  }, [scope, supported]);
   const refresh = useCallback(async () => {
     const auth = useAuthStore.getState();
     if (

@@ -105,25 +105,37 @@ export function useCloseTabFlow(): CloseTabFlow {
       // Read before the closes: once the tabs are gone the strip cannot say
       // which tasks they were.
       const ungrouped = tasksUngroupedByClose(closing, organization);
-      batchHeaderTabRecovery(() => {
-        for (const other of closing) {
-          closeTab(other);
-          if (other.kind === "epic") {
-            Analytics.getInstance().track(AnalyticsEvent.TabClosed, {
-              target: "task",
-            });
+      const commit = (): void => {
+        batchHeaderTabRecovery(() => {
+          for (const other of closing) {
+            closeTab(other);
+            if (other.kind === "epic") {
+              Analytics.getInstance().track(AnalyticsEvent.TabClosed, {
+                target: "task",
+              });
+            }
           }
+        }, layout);
+        if (skipped.length > 0) {
+          const detail =
+            skipped.length === 1 ? `"${skipped[0]}"` : `${skipped.length} tabs`;
+          toast.warning(`Kept ${detail} open with unsynced edits`, {
+            description: "Close those tabs individually to discard their edits.",
+          });
         }
-      }, layout);
-      void removeTasksFromGroups(organization, ungrouped).catch(() => undefined);
-      if (skipped.length > 0) {
-        const detail =
-          skipped.length === 1 ? `"${skipped[0]}"` : `${skipped.length} tabs`;
-        toast.warning(`Kept ${detail} open with unsynced edits`, {
-          description: "Close those tabs individually to discard their edits.",
-        });
+        navigateToTabIntent(navigate, tabResolveIntent(target), undefined);
+      };
+      // The ungroup is accepted before anything closes, exactly as it is for
+      // a single tab: a refused removal would otherwise leave the account
+      // holding memberships whose tabs are gone, and reopening one of them
+      // would bring its siblings back with it.
+      if (ungrouped.length === 0) {
+        commit();
+        return;
       }
-      navigateToTabIntent(navigate, tabResolveIntent(target), undefined);
+      void removeTasksFromGroups(organization, ungrouped)
+        .then(commit)
+        .catch(() => undefined);
     },
     [closeTab, navigate, organization],
   );
@@ -146,27 +158,37 @@ export function useCloseTabFlow(): CloseTabFlow {
           members.filter((tab) => !held.includes(tab)),
           organization,
         );
-        // Do not keep a global batch open while the dialog waits: unrelated
-        // closes must stay separate. Only confirmed group closes run here.
-        batchHeaderTabRecovery(() => {
-          for (const tab of members) {
-            if (tab === active || held.includes(tab)) continue;
-            closeTab(tab);
-          }
-          if (
-            active !== undefined &&
-            getHeaderTabs().some((tab) => tabRefKey(tab) === tabRefKey(active))
-          ) {
-            // Capture the neighbor after the other group members are gone.
-            finalizeCloseTab(active);
-          }
-        }, readTabStripLayout());
-        void removeTasksFromGroups(organization, ungrouped).catch(() => undefined);
-        if (skipped > 0)
-          toast.warning(`Kept ${skipped} tabs open with unsynced edits`, {
-            description:
-              "Close those tabs individually to discard their edits.",
-          });
+        const commit = (): void => {
+          // Do not keep a global batch open while the dialog waits: unrelated
+          // closes must stay separate. Only confirmed group closes run here.
+          batchHeaderTabRecovery(() => {
+            for (const tab of members) {
+              if (tab === active || held.includes(tab)) continue;
+              closeTab(tab);
+            }
+            if (
+              active !== undefined &&
+              getHeaderTabs().some(
+                (tab) => tabRefKey(tab) === tabRefKey(active),
+              )
+            ) {
+              // Capture the neighbor after the other group members are gone.
+              finalizeCloseTab(active);
+            }
+          }, readTabStripLayout());
+          if (skipped > 0)
+            toast.warning(`Kept ${skipped} tabs open with unsynced edits`, {
+              description:
+                "Close those tabs individually to discard their edits.",
+            });
+        };
+        if (ungrouped.length === 0) {
+          commit();
+          return;
+        }
+        void removeTasksFromGroups(organization, ungrouped)
+          .then(commit)
+          .catch(() => undefined);
       };
       if (active !== undefined && dialog.promptOrConfirm(active, finalize))
         return;

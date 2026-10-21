@@ -186,6 +186,8 @@ function seedTabColor(ref: TabRef, color: string): void {
         color,
         icon: current?.icon ?? null,
         groupId: current?.groupId ?? null,
+        // Stamped, because only the account's projection writes a colour.
+        organizationOwnerId: "user-1",
       },
     },
   });
