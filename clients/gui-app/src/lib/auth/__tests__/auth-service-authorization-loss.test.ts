@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
+import type { AuthenticatedUser } from "@traycer/protocol/auth";
 import type {
   SchemaVersion,
   VersionedRpcRegistry,
@@ -45,6 +46,9 @@ import {
   type RevokedCloudAuthorization,
 } from "@/lib/auth/auth-service";
 import { createStreamAuthRevalidator } from "@/lib/auth/stream-auth-revalidator";
+import { authUserQueryOptions } from "@/hooks/auth/use-auth-user-query";
+import { createAppQueryClient } from "@/lib/query-client";
+import { authQueryKeys } from "@/lib/query-keys";
 import { useAuthStore } from "@/stores/auth/auth-store";
 
 // Companion to `auth-service.test.ts`, isolated into its own file because it
@@ -94,12 +98,12 @@ function installFetch(handler: FetchHandler): () => void {
   };
 }
 
-function okWithProfile(): Promise<Response> {
+function okWithProfileFor(userId: string): Promise<Response> {
   return Promise.resolve(
     new Response(
       JSON.stringify({
         user: {
-          id: "user-1",
+          id: userId,
           name: "Test User",
           providerId: "gh-1",
           providerHandle: "test-user",
@@ -115,7 +119,7 @@ function okWithProfile(): Promise<Response> {
         },
         userSubscription: {
           id: "sub-1",
-          userID: "user-1",
+          userID: userId,
           orgID: null,
           teamID: null,
           customerId: "cus-1",
@@ -140,6 +144,10 @@ function okWithProfile(): Promise<Response> {
       },
     ),
   );
+}
+
+function okWithProfile(): Promise<Response> {
+  return okWithProfileFor("user-1");
 }
 
 function status(code: number): Promise<Response> {
@@ -953,13 +961,15 @@ describe("AuthService cloudAuthorized verdict propagation on in-place transition
     expect(contextAfter?.cloudAuthorized).toBe(false);
   });
 
-  it("a user fetch started as one account does not return that account's user once a sibling window has signed in as another", async () => {
+  it("a user fetch started as one account is retried against the live account once a sibling window has signed in as another", async () => {
     // The fetch is sent while this window is signed in as user-1. Before it
     // answers, a sibling window switches accounts and the switch reaches this
     // window as user-2. The switch moves the credential but not the identity
-    // generation, so user-1's late "valid" would pass the identity check; it
-    // must not be handed to the caller while the window is user-2's.
+    // generation, so user-1's late "valid" would pass the identity check; the
+    // query must retry against user-2 rather than cache user-1's answer or "no
+    // user" for the live account.
     vi.useFakeTimers();
+    const queryClient = createAppQueryClient();
     const { service, host } = makeService();
     trackedServices.push(service);
     await deviceSignIn(service, host, "token-a");
@@ -970,32 +980,92 @@ describe("AuthService cloudAuthorized verdict propagation on in-place transition
     const heldCheckAnswer = new Promise<Response>((resolve) => {
       answerHeldCheck = resolve;
     });
-    let heldChecks = 0;
+    let validationRequests = 0;
     restoreFetch();
     restoreFetch = installFetch((input) => {
       const url = typeof input === "string" ? input : String(input);
       if (url !== VALIDATION_URL) {
         return status(500);
       }
-      heldChecks += 1;
-      return heldChecks === 1 ? heldCheckAnswer : okWithProfile();
+      validationRequests += 1;
+      return validationRequests === 1
+        ? heldCheckAnswer
+        : okWithProfileFor("user-2");
     });
 
-    const pending = service.fetchAuthenticatedUser();
+    const pending = queryClient.fetchQuery(authUserQueryOptions(service, true));
     await vi.advanceTimersByTimeAsync(0);
     // Non-vacuity: the check really is in flight and unanswered.
-    expect(heldChecks).toBe(1);
+    expect(validationRequests).toBe(1);
 
     service.applyExternalSession(externalSessionForUser("user-2", "token-b"));
     expect(useAuthStore.getState().profile?.userId).toBe("user-2");
     expect(service.getCurrentSessionSnapshot().token).toBe("token-b");
 
     answerHeldCheck(await okWithProfile());
-    await expect(pending).resolves.toBeNull();
+    await vi.advanceTimersByTimeAsync(1_100);
+    const user = await pending;
 
+    expect(user?.user.id).toBe("user-2");
+    expect(validationRequests).toBe(2);
+    const cached = queryClient.getQueryData<AuthenticatedUser | null>(
+      authQueryKeys.user(service),
+    );
+    expect(cached?.user.id).toBe("user-2");
     expect(useAuthStore.getState().profile?.userId).toBe("user-2");
     expect(useAuthStore.getState().status).toBe("signed-in");
     expect(service.getCurrentSessionSnapshot().token).toBe("token-b");
+    queryClient.clear();
+  });
+
+  it("a refusal of a credential no longer held neither rotates it nor signs out the account that replaced it", async () => {
+    // The check on user-1's bearer is refused after a sibling window has
+    // already signed in as user-2. The refusal is about a credential this
+    // window no longer holds, so it is dropped before any rotation: rotating
+    // user-1's pair against the pair the shared store now holds for user-2
+    // would be answered as a mismatch and sign the live session out.
+    vi.useFakeTimers();
+    const { service, host } = makeService();
+    trackedServices.push(service);
+    await deviceSignIn(service, host, "token-a");
+
+    let answerHeldCheck: (response: Response) => void = () => undefined;
+    const heldCheckAnswer = new Promise<Response>((resolve) => {
+      answerHeldCheck = resolve;
+    });
+    let validationRequests = 0;
+    let refreshRequests = 0;
+    restoreFetch();
+    restoreFetch = installFetch((input) => {
+      const url = typeof input === "string" ? input : String(input);
+      if (url === REFRESH_URL) {
+        refreshRequests += 1;
+        return status(401);
+      }
+      if (url !== VALIDATION_URL) {
+        return status(500);
+      }
+      validationRequests += 1;
+      return validationRequests === 1 ? heldCheckAnswer : status(500);
+    });
+
+    const pending = service.revalidateCurrentContext();
+    await vi.advanceTimersByTimeAsync(0);
+    // Non-vacuity: the check really is in flight and unanswered.
+    expect(validationRequests).toBe(1);
+
+    service.applyExternalSession(externalSessionForUser("user-2", "token-b"));
+    expect(useAuthStore.getState().profile?.userId).toBe("user-2");
+    expect(service.getCurrentSessionSnapshot().token).toBe("token-b");
+
+    answerHeldCheck(await status(401));
+    const outcome = await pending;
+
+    expect(refreshRequests).toBe(0);
+    expect(useAuthStore.getState().status).toBe("signed-in");
+    expect(useAuthStore.getState().profile?.userId).toBe("user-2");
+    expect(service.getCurrentSessionSnapshot().token).toBe("token-b");
+    expect(outcome).toEqual({ kind: "superseded" });
   });
 
   it("a live revalidation stands down for an interactive sign-in attempt on an unverified session", async () => {

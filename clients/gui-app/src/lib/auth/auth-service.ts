@@ -188,6 +188,19 @@ export class SupersededAuthEraError extends Error {
   }
 }
 
+/**
+ * Thrown by {@link AuthService.fetchAuthenticatedUser} when the check it ran
+ * was overtaken: its answer is about a credential that is no longer the live
+ * one (an account switch, an adoption) or it stood down for an interactive
+ * sign-in. Retryable: asking again revalidates the live credential.
+ */
+export class SupersededUserCheckError extends Error {
+  constructor() {
+    super("The user check was overtaken by a newer credential");
+    this.name = "SupersededUserCheckError";
+  }
+}
+
 // Stored-session recovery backoff bounds (see `sessionRecoveryTimer`).
 const SESSION_RECOVERY_INITIAL_DELAY_MS = 1_000;
 const SESSION_RECOVERY_MAX_DELAY_MS = 30_000;
@@ -2622,7 +2635,9 @@ export class AuthService {
    * context against AuthnV3's `/api/v3/user`. Returns `null` when signed-out
    * or when validation does not yield a user (`rejected` / no live context).
    * Throws on `network-error` so a transient outage surfaces as a retryable
-   * query error instead of a misleading "no subscription" empty state.
+   * query error instead of a misleading "no subscription" empty state, and
+   * {@link SupersededUserCheckError} on `superseded` so the query asks again
+   * rather than caching "no user" for the live account.
    *
    * The Settings subscription panel consumes this through TanStack Query so
    * credits live only in the query cache - never duplicated into the store.
@@ -2638,9 +2653,11 @@ export class AuthService {
       return outcome.user;
     }
     // A stale answer describes a credential that is no longer the live one,
-    // so there is no user to show from it.
+    // so there is no user to show from it - and "no user" would be cached as
+    // the live account's answer. Throw so the query asks again, against the
+    // live credential.
     if (outcome.kind === "superseded") {
-      return null;
+      throw new SupersededUserCheckError();
     }
     // `network-error`: a transient outage that did NOT sign the user out. Throw
     // so TanStack Query surfaces a retryable error on the panel (refresh button)
@@ -3300,18 +3317,20 @@ export class AuthService {
     if (this.isInteractiveAttemptInFlight()) {
       return { kind: "superseded" };
     }
+    // The answer is about `currentToken` as it stood when the check was sent.
+    // Adoptions, demotions and a cross-window account switch leave the
+    // identity generation alone, so a credential that moved meanwhile (a
+    // reconcile adopting a bearer authn has refused, a demotion that withdrew
+    // the verdict, a sibling window signing in as someone else) is caught
+    // here, whatever the answer. A verdict would be written onto a credential
+    // it is not about, or name a user who may not be the live one; a refusal
+    // would rotate the previous credential, and against another account's
+    // stored pair that rotate signs the live session out.
+    if (this.getCredentialGeneration() !== credentialGeneration) {
+      return { kind: "superseded" };
+    }
 
     if (outcome.kind === "valid") {
-      // The verdict is about `currentToken` as it stood when the check was
-      // sent. Adoptions, demotions and a cross-window account switch leave the
-      // identity generation alone, so a credential that moved meanwhile (a
-      // reconcile adopting a bearer authn has refused, a demotion that
-      // withdrew the verdict, a sibling window signing in as someone else) is
-      // caught here. The verdict writes nothing onto it, and is not handed on
-      // either: its user may not be the live one, so the answer is stale.
-      if (this.getCredentialGeneration() !== credentialGeneration) {
-        return { kind: "superseded" };
-      }
       // Subscription entitlement can change without a bearer rotation (for
       // example after a purchase or restore). Project every successful
       // validation so entitlement-gated surfaces react without an app restart.
