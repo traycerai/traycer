@@ -170,13 +170,14 @@ describe("useHostClientFor", () => {
     expect(globalClient.getActiveHostId()).toBeNull();
   });
 
-  // `setRequestContext` swaps the context inside the one spine client. The
-  // compiled hook read it off that stable object, so a sign-in kept the
-  // signed-out answer and the host picked in Settings ▸ Worktrees had no client.
+  // `setRequestContext` swaps the context inside the one spine client and
+  // announces it. The hook used to read the context off that object only when
+  // something else re-rendered it, so the host picked in Settings ▸ Worktrees
+  // had no client after a sign-in until an unrelated render came along.
   it("builds the client once the spine signs in", () => {
     const globalClient = buildGlobalClient(false);
     globalClientRef.value = globalClient;
-    const { result, rerender } = renderHook(() => useHostClientFor(TARGET_B));
+    const { result } = renderHook(() => useHostClientFor(TARGET_B));
     expect(result.current).toBeNull();
 
     act(() => {
@@ -187,7 +188,6 @@ describe("useHostClientFor", () => {
         }),
       );
     });
-    rerender();
     expect(result.current?.getActiveHostId()).toBe("host-b");
   });
 
