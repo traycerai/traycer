@@ -34,6 +34,16 @@ export interface OrganizationContextValue {
   readonly register: (key: string, taskIds: readonly string[]) => () => void;
   readonly openDialog: (dialog: OrganizationDialog) => void;
   readonly command: (action: OrganizationAction) => Promise<void>;
+  /**
+   * {@link command} under a command id the caller chooses, for work that is
+   * replayed from a durable record: the host's receipt dedupes a repeat of
+   * the same id, and refuses it outright if the bytes differ. An edit a
+   * person just made has nothing to replay and uses `command`.
+   */
+  readonly commandWithId: (
+    commandId: string,
+    action: OrganizationAction,
+  ) => Promise<void>;
   readonly refresh: () => Promise<void>;
 }
 export const OrganizationContext =

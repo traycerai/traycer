@@ -10,6 +10,8 @@ import {
   organizationRefreshV11,
   organizationRefreshUpgradeV10ToV11,
   organizationCommandV10,
+  organizationCommandV11,
+  organizationCommandUpgradeV10ToV11,
   organizationHistoryV10,
   organizationHistoryV11,
   organizationHistoryUpgradeV10ToV11,
@@ -5874,11 +5876,15 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
   "organization.command": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: organizationCommandV10,
           upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: organizationCommandV11,
+          upgradeFromPreviousVersion: organizationCommandUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},

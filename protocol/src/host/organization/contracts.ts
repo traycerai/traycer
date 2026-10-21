@@ -3,6 +3,8 @@ import { defineStreamRpcContract } from "../../framework/versioned-stream-rpc";
 import { z } from "zod";
 import { defineRpcContract, defineUpgradePath } from "../../framework/index";
 import {
+  applyGroupOperationsRequestSchema,
+  patchPersonalAppearanceRequestSchema,
   labelCatalogCommandSchema,
   groupOperationSchema,
   organizationColorSchema,
@@ -30,7 +32,7 @@ const catalogAction = lazySchema(() =>
     labelCatalogCommandSchema.options[3],
   ]),
 );
-export const organizationActionSchema = lazySchema(() =>
+export const organizationActionSchemaV10 = lazySchema(() =>
   z.discriminatedUnion("kind", [
     z.object({ kind: z.literal("catalog"), command: catalogAction }),
     z.object({
@@ -62,9 +64,46 @@ export const organizationActionSchema = lazySchema(() =>
     }),
   ]),
 );
+/**
+ * Every v1.0 action, plus the two whose cloud request the CALLER has already
+ * prepared and frozen.
+ *
+ * An ordinary action is a wish: the host decides the operation id, reads the
+ * version to send it against, and may fold the operations into a batch
+ * already waiting. That is right for an edit a person just made, and wrong
+ * for one replayed from a durable record - a second attempt would be prepared
+ * against whatever the account looks like then, which is not the request the
+ * record says was sent.
+ *
+ * A `prepared*` action carries the delivery request itself. The host sends
+ * exactly what it is given, against exactly the version it names, in a batch
+ * of its own; it refuses the command outright when its own confirmed version
+ * is no longer that one, so the frozen request is either applied as prepared
+ * or refused, never rebuilt. The caller persists the request before the first
+ * attempt and resends the identical bytes afterwards.
+ */
+export const organizationActionSchema = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    ...organizationActionSchemaV10.options,
+    z.object({
+      kind: z.literal("preparedGroups"),
+      request: applyGroupOperationsRequestSchema,
+    }),
+    z.object({
+      kind: z.literal("preparedAppearance"),
+      request: patchPersonalAppearanceRequestSchema,
+    }),
+  ]),
+);
 export type OrganizationAction = z.infer<typeof organizationActionSchema>;
 // Stable across transport retries for 30 days; do not retry an older command.
 // Reusing a retained command id with different data is invalid.
+export const organizationCommandSchemaV10 = lazySchema(() =>
+  z.object({
+    commandId: id,
+    action: organizationActionSchemaV10,
+  }),
+);
 export const organizationCommandSchema = lazySchema(() =>
   z.object({
     commandId: id,
@@ -162,16 +201,32 @@ export const organizationRefreshUpgradeV10ToV11 = defineUpgradePath<
   upgradeRequest: (request) => request,
   upgradeResponse: (response) => organizationViewSchema.parse(response),
 });
+const organizationCommandResponseSchema = lazySchema(() =>
+  z.object({
+    commandId: id,
+    disposition: z.literal("durably-accepted"),
+  }),
+);
 export const organizationCommandV10 = defineRpcContract({
   method: "organization.command",
   schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: organizationCommandSchemaV10,
+  responseSchema: organizationCommandResponseSchema,
+});
+export const organizationCommandV11 = defineRpcContract({
+  method: "organization.command",
+  schemaVersion: { major: 1, minor: 1 } as const,
   requestSchema: organizationCommandSchema,
-  responseSchema: lazySchema(() =>
-    z.object({
-      commandId: id,
-      disposition: z.literal("durably-accepted"),
-    }),
-  ),
+  responseSchema: organizationCommandResponseSchema,
+});
+export const organizationCommandUpgradeV10ToV11 = defineUpgradePath<
+  typeof organizationCommandV10,
+  typeof organizationCommandV11
+>({
+  from: organizationCommandV10.schemaVersion,
+  to: organizationCommandV11.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
 });
 // Cloud filtering only sees confirmed state. Organization reads overlay local pending work.
 export const organizationHistoryV10 = defineRpcContract({

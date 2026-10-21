@@ -41,6 +41,10 @@ import {
   isDesktopTabsCapabilitySupported,
   shouldApplyDesktopTabsSnapshot,
 } from "@/stores/tabs/desktop-tabs-persistence";
+import {
+  captureBrowserLegacyOrganization,
+  captureDesktopLegacyOrganization,
+} from "@/lib/organization/legacy-organization-import";
 import { readPersistedCurrentRoute } from "@/lib/persistent-history";
 import { installTabSyncCoordinator } from "@/lib/tab-sync/tab-sync-coordinator";
 import type {
@@ -187,6 +191,9 @@ export function WindowsBridgeProvider(
 function installMissingDesktopWindowsBridge(): () => void {
   clearDesktopWindowsBridge();
   configureBrowserTabsPersistence();
+  // The browser is this renderer's tab authority, so its persisted layout is
+  // the one whose retired machine-local groups are worth keeping.
+  captureBrowserLegacyOrganization();
   // No desktop bridge here (web/browser path), so `installDesktopWindowsBridge`
   // below never runs and its `pagehide`/`beforeunload` flush never installs
   // either. File-edit drafts still need that flush independent of the bridge:
@@ -272,6 +279,14 @@ function installDesktopWindowsBridge(
       return;
     }
     snapshotObservation.latest = snapshot;
+    // Before hydration: the snapshot is this window's authoritative layout
+    // and carries its own tab-to-task mapping, and hydration repairs the
+    // layout in place. Only the first snapshot is recorded.
+    captureDesktopLegacyOrganization({
+      windowId: bridge.windowId,
+      tabStripLayout: snapshot.tabStripLayout ?? null,
+      epicTabs: snapshot.epicTabs,
+    });
     applyPerWindowSnapshot(snapshot);
     if (tabsCompatible && shouldApplyDesktopTabsSnapshot(snapshot)) {
       hydrateDesktopTabs(snapshot, true, null);
