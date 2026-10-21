@@ -41,7 +41,13 @@ import type {
 } from "@traycer/protocol/host/worktree-schemas";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcRegistry } from "@/lib/host";
-import { useComposerSurfaceHostPin } from "@/hooks/host/use-composer-surface-host-pin";
+import {
+  startPageHostPin,
+  useComposerSurfaceHostPin,
+  useIsTeamOwnedHost,
+  useStartPageComposerHostPin,
+} from "@/hooks/host/use-composer-surface-host-pin";
+import type { SurfaceHostPin } from "@/hooks/host/use-surface-host-pin";
 import { useAddressableHostId } from "@/hooks/host/use-addressable-host-id";
 import { useHostClientFor } from "@/hooks/host/use-host-client-for";
 import { useHostDirectoryList } from "@/hooks/host/use-host-directory-list-query";
@@ -383,7 +389,7 @@ function HomeSurface(props: HomeSurfaceProps) {
   // "active" scope below - the staged slot and the folder rows it stages into
   // have to agree on which machine they describe. That resolution is the
   // composer surface pin (pin ?? effective), so read the same primitive.
-  const landingHostId = useComposerSurfaceHostPin().resolvedHostId;
+  const landingHostId = useStartPageComposerHostPin().resolvedHostId;
   const stagingKey = useMemo<WorktreeStagingKey>(
     () => ({
       surface: "landing",
@@ -447,6 +453,20 @@ type ActiveHostWorkspaceControlsProps = {
   readonly disabled: boolean;
 };
 
+/**
+ * The window pin as this surface acts on it: the Start Page honors no team
+ * sandbox's pin (`startPageHostPin`), every other surface honors it as is.
+ */
+function composerPinForStagingSurface(
+  stagingKey: WorktreeStagingKey,
+  pin: SurfaceHostPin,
+  isTeamOwnedHost: (hostId: string) => boolean,
+): SurfaceHostPin {
+  return stagingKey.surface === "landing"
+    ? startPageHostPin(pin, isTeamOwnedHost)
+    : pin;
+}
+
 function hostsForStagingSurface(
   stagingKey: WorktreeStagingKey,
   hosts: readonly HostScopeOption[],
@@ -466,7 +486,13 @@ export function ActiveHostWorkspaceControls(
   // #1227's dialog-local `selected`) wins outright; the follow arm resolves
   // the composer's own pin - `pin ?? effective` - and the picker below writes
   // the pin. Nothing here moves the window.
-  const composerPin = useComposerSurfaceHostPin();
+  const windowPin = useComposerSurfaceHostPin();
+  const isTeamOwnedHost = useIsTeamOwnedHost();
+  const composerPin = composerPinForStagingSurface(
+    props.stagingKey,
+    windowPin,
+    isTeamOwnedHost,
+  );
   const scopeHostId = hostWorkspaceControlsScopeHostId(props.hostScope);
   const activeHostId = scopeHostId ?? composerPin.resolvedHostId;
   const activeEntry =

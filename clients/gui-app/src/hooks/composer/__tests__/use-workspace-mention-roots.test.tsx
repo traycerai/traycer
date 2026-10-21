@@ -25,16 +25,22 @@ const HOST_A = "host-a";
 // `null` (empty global folders). Mock the narrow leaf hook module so the
 // landing composer suite below can seed and read the SAME host's bucket the
 // hook resolves against.
-vi.mock("@/hooks/host/use-composer-surface-host-pin", () => ({
-  useComposerSurfaceHostPin: () => ({
+vi.mock("@/hooks/host/use-composer-surface-host-pin", () => {
+  const pin = () => ({
     selection: null,
     honoredSelection: null,
     setSelection: () => undefined,
     resolvedHostId: "host-a",
     isPinned: false,
     latchOnFirstUse: () => undefined,
-  }),
-}));
+  });
+  return {
+    useComposerSurfaceHostPin: pin,
+    useStartPageComposerHostPin: pin,
+    useIsTeamOwnedHost: () => () => false,
+    startPageHostPin: <T,>(value: T): T => value,
+  };
+});
 
 // `useLandingDraftStore.createDraft` separately snapshots the workspace of the
 // app-wide host, resolved imperatively rather than through a hook (see

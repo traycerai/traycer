@@ -3,7 +3,7 @@ import { FirstTaskCoachmark } from "./first-task-coachmark";
 import { SessionImportOpenTaskButton } from "@/components/session-import/session-import-open-task-button";
 import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
-import { useComposerSurfaceHostPin } from "@/hooks/host/use-composer-surface-host-pin";
+import { useStartPageComposerHostPin } from "@/hooks/host/use-composer-surface-host-pin";
 import { useAmbientHistorySearchState } from "@/hooks/home/use-history-search-state";
 import { useHistoryQuery } from "@/hooks/home/use-history-query";
 import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
@@ -22,7 +22,7 @@ export function FirstTaskLandingGuide(props: {
   readonly rootRef: RefObject<HTMLElement | null>;
   readonly workspaceFolders: readonly string[] | null;
 }) {
-  const hostId = useComposerSurfaceHostPin().resolvedHostId;
+  const hostId = useStartPageComposerHostPin().resolvedHostId;
   // Mounted by form factor, matching the shell: `AppShell` renders the
   // navigation drawer this branch is about on the mobile VIEWPORT, so a narrow
   // desktop window is on this branch too, and the installed app is not a

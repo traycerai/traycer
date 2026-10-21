@@ -311,6 +311,8 @@ vi.mock("@/hooks/agent/use-host-reachability", () => ({
       : "reachable",
     hostLabel: hostId,
   }),
+  resolvedHostLabel: (r: { status: string; hostLabel: string | null }) =>
+    r.status === "checking" ? null : r.hostLabel,
 }));
 
 // The host whose PROJECTION the record gate judges refs against - the Epic

@@ -10,10 +10,15 @@ import {
   type SurfaceHostPin,
 } from "@/hooks/host/use-surface-host-pin";
 import { useWindowsBridge } from "@/providers/windows-bridge-context";
+import { useRegisteredHosts } from "@/hooks/auth/use-registered-hosts-query";
+import { useHostDirectoryList } from "@/hooks/host/use-host-directory-list-query";
+import { isTeamOwnedHostId } from "@/components/settings/host-scope/host-scope-model";
 import {
   browserTabId,
   subscribeBrowserTabId,
 } from "@/lib/browser-tab-identity";
+import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
+import type { HostListItem } from "@traycer/protocol/host/host-status";
 import {
   composerSurfaceKey,
   useSurfaceHostSelectionStore,
@@ -97,4 +102,45 @@ export function useComposerSurfaceHostKey(): string {
 export function useComposerSurfaceHostPin(): SurfaceHostPin {
   const surfaceKey = useComposerSurfaceHostKey();
   return useSurfaceHostPin(surfaceKey);
+}
+
+/**
+ * The Start Page's composer pin: the window pin, except that a pin naming a
+ * team's sandbox is not honored. A team sandbox's chats live in a cloud epic
+ * the team can read, and a Start Page task is not one, so the Start Page
+ * resolves as if unpinned - onto the effective host, which is never a team's
+ * (Activate refuses one). Whatever wrote the pin (the in-epic launcher, a
+ * pick saved before the Start Page chip stopped offering team sandboxes),
+ * the pin itself is kept, so the surface that chose it still has it.
+ */
+export function useStartPageComposerHostPin(): SurfaceHostPin {
+  const pin = useComposerSurfaceHostPin();
+  const isTeamOwnedHost = useIsTeamOwnedHost();
+  return startPageHostPin(pin, isTeamOwnedHost);
+}
+
+export function startPageHostPin(
+  pin: SurfaceHostPin,
+  isTeamOwnedHost: (hostId: string) => boolean,
+): SurfaceHostPin {
+  if (pin.honoredSelection === null || !isTeamOwnedHost(pin.honoredSelection)) {
+    return pin;
+  }
+  return {
+    ...pin,
+    honoredSelection: null,
+    resolvedHostId: pin.followingHostId,
+  };
+}
+
+const NO_REGISTRY_ROWS: readonly HostListItem[] = [];
+const NO_DIRECTORY_ENTRIES: readonly HostDirectoryEntry[] = [];
+
+export function useIsTeamOwnedHost(): (hostId: string) => boolean {
+  const registry = useRegisteredHosts().data?.hosts ?? NO_REGISTRY_ROWS;
+  const directory = useHostDirectoryList().data ?? NO_DIRECTORY_ENTRIES;
+  return useCallback(
+    (hostId: string) => isTeamOwnedHostId(hostId, registry, directory),
+    [registry, directory],
+  );
 }

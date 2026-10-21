@@ -39,16 +39,22 @@ vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
   useHostClientForHostId: (hostId: string | null) => hostId,
 }));
 
-vi.mock("@/hooks/host/use-composer-surface-host-pin", () => ({
-  useComposerSurfaceHostPin: () => ({
+vi.mock("@/hooks/host/use-composer-surface-host-pin", () => {
+  const pin = () => ({
     selection: null,
     honoredSelection: null,
     setSelection: () => undefined,
     resolvedHostId: "active-host",
     isPinned: false,
     latchOnFirstUse: () => undefined,
-  }),
-}));
+  });
+  return {
+    useComposerSurfaceHostPin: pin,
+    useStartPageComposerHostPin: pin,
+    useIsTeamOwnedHost: () => () => false,
+    startPageHostPin: <T,>(value: T): T => value,
+  };
+});
 
 vi.mock("@/components/home/hooks/use-composer-toolbar-store", async () => {
   const { createStore } = await import("zustand/vanilla");

@@ -25,16 +25,22 @@ const TEST_HOST_ID = "host-a";
 // A partial module mock is how the previous one rotted: it satisfies today's
 // consumer and silently hands `undefined` to tomorrow's, and vitest type-checks
 // none of it.
-vi.mock("@/hooks/host/use-composer-surface-host-pin", () => ({
-  useComposerSurfaceHostPin: () => ({
+vi.mock("@/hooks/host/use-composer-surface-host-pin", () => {
+  const pin = () => ({
     selection: { kind: "pinned", hostId: TEST_HOST_ID },
     honoredSelection: { kind: "pinned", hostId: TEST_HOST_ID },
     setSelection: () => undefined,
     resolvedHostId: TEST_HOST_ID,
     isPinned: true,
     latchOnFirstUse: () => undefined,
-  }),
-}));
+  });
+  return {
+    useComposerSurfaceHostPin: pin,
+    useStartPageComposerHostPin: pin,
+    useIsTeamOwnedHost: () => () => false,
+    startPageHostPin: <T,>(value: T): T => value,
+  };
+});
 
 function setGlobalFolders(folders: ReadonlyArray<string>): void {
   useWorkspaceFoldersStore.setState({

@@ -1,5 +1,5 @@
 import { useCallback, useMemo } from "react";
-import { useComposerSurfaceHostPin } from "@/hooks/host/use-composer-surface-host-pin";
+import { useStartPageComposerHostPin } from "@/hooks/host/use-composer-surface-host-pin";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import { useHostDirectoryList } from "@/hooks/host/use-host-directory-list-query";
 import { useHostLeases } from "@/hooks/host/use-host-lease";
@@ -52,7 +52,8 @@ export interface ComposerPlacement {
  * `overrideHostId` is a caller-supplied host that outranks the pin: the
  * new-conversation modal's row-scoped request names one, and the picker goes
  * inert for it (§55). `null` means "this surface owns its placement": the
- * landing composer resolves its WINDOW-keyed pin ?? effective (this hook);
+ * landing composer resolves its WINDOW-keyed pin ?? effective (this hook,
+ * through `useStartPageComposerHostPin`, which honors no team sandbox's pin);
  * the in-Epic new-conversation modal resolves its per-EPIC pin ?? the Epic
  * session's host ?? effective (`useEpicConversationPlacement` below).
  *
@@ -79,7 +80,7 @@ export interface ComposerPlacement {
 export function useComposerPlacement(
   overrideHostId: string | null,
 ): ComposerPlacement {
-  const pin = useComposerSurfaceHostPin();
+  const pin = useStartPageComposerHostPin();
   return useComposerPlacementForPin(
     pin,
     overrideHostId,

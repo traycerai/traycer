@@ -89,6 +89,8 @@ vi.mock("@/hooks/agent/use-host-reachability", () => ({
     status: "reachable",
     hostLabel: hostId,
   }),
+  resolvedHostLabel: (r: { status: string; hostLabel: string | null }) =>
+    r.status === "checking" ? null : r.hostLabel,
 }));
 
 vi.mock("@/hooks/chats/use-cloud-chat-queries", () => ({

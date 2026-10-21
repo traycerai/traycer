@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { landingPrompt } from "@/components/home/landing-prompt";
-import { useComposerSurfaceHostPin } from "@/hooks/host/use-composer-surface-host-pin";
+import { useStartPageComposerHostPin } from "@/hooks/host/use-composer-surface-host-pin";
 import { basenameOfPath } from "@/lib/path";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import {
@@ -36,7 +36,7 @@ export function HomeHero({ workspaceFolders }: HomeHeroProps) {
   // The hero is a landing surface: its folder fallback follows the landing
   // composer's own placement (pin ?? effective) - the bucket must describe
   // the machine the composer beside it will actually create on.
-  const activeHostId = useComposerSurfaceHostPin().resolvedHostId;
+  const activeHostId = useStartPageComposerHostPin().resolvedHostId;
   const globalFolders = useWorkspaceFoldersStore(
     (state) => selectWorkspaceFoldersBucket(state, activeHostId).folders,
   );

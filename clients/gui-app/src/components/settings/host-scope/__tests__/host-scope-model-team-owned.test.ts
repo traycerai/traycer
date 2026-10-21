@@ -6,6 +6,7 @@ import type {
 import { hostListItemToDirectoryEntry } from "@traycer-clients/shared/host-client/remote-fetcher";
 import {
   buildHostScopeOptions,
+  isTeamOwnedHostId,
   type HostScopeOption,
 } from "@/components/settings/host-scope/host-scope-model";
 
@@ -114,5 +115,42 @@ describe("buildHostScopeOptions teamOwned", () => {
     const row = item("host-p", "personal", TEAM);
     const option = build({ registry: [row], directory: [row] }).get("host-p");
     expect(option?.sandbox).toBeNull();
+  });
+});
+
+describe("isTeamOwnedHostId", () => {
+  const RELAY = "wss://relay.example.test";
+
+  it("is true for a host whose registry row names a team owner", () => {
+    const row = item("sbx", "sandbox", TEAM);
+    expect(
+      isTeamOwnedHostId(
+        "sbx",
+        [row],
+        [hostListItemToDirectoryEntry(row, RELAY)],
+      ),
+    ).toBe(true);
+  });
+
+  it("is false for a host the person owns", () => {
+    const row = item("sbx-own", "sandbox", ME);
+    expect(
+      isTeamOwnedHostId(
+        "sbx-own",
+        [row],
+        [hostListItemToDirectoryEntry(row, RELAY)],
+      ),
+    ).toBe(false);
+  });
+
+  it("is true for a host absent from the registry whose directory entry names a team", () => {
+    const row = item("sbx-dir", "sandbox", TEAM);
+    expect(
+      isTeamOwnedHostId(
+        "sbx-dir",
+        [],
+        [hostListItemToDirectoryEntry(row, RELAY)],
+      ),
+    ).toBe(true);
   });
 });
