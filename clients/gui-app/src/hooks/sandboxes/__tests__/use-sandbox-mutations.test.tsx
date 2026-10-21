@@ -10,6 +10,7 @@ import {
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactNode } from "react";
+import type { HostSandboxState } from "@traycer/protocol/host/host-status";
 import type { SandboxCreateRequest } from "@traycer/protocol/host/sandbox-control";
 import {
   SANDBOX_VERB_FETCH_TIMEOUT_MS,
@@ -93,7 +94,7 @@ describe("useSandboxVerb", () => {
     const { wrapper } = setup();
     const { result } = renderHook(() => useSandboxVerb("sbx_1"), { wrapper });
 
-    let outcome: string | null = null;
+    let outcome: SandboxVerbOutcome | null = null;
     await act(async () => {
       outcome = await result.current.mutateAsync("suspend");
     });
@@ -103,22 +104,23 @@ describe("useSandboxVerb", () => {
       "suspend",
       SANDBOX_VERB_FETCH_TIMEOUT_MS,
     );
-    expect(outcome).toBe("settled");
+    expect(outcome).toEqual({ kind: "settled", state: null });
   });
 
   it("resolves moving on 202", async () => {
     state.binding?.auth.runSandboxVerb.mockResolvedValue({
       kind: "ok",
       settled: false,
+      state: "resuming",
     });
     const { wrapper } = setup();
     const { result } = renderHook(() => useSandboxVerb("sbx_1"), { wrapper });
 
-    let outcome: string | null = null;
+    let outcome: SandboxVerbOutcome | null = null;
     await act(async () => {
       outcome = await result.current.mutateAsync("resume");
     });
-    expect(outcome).toBe("moving");
+    expect(outcome).toEqual({ kind: "moving" });
     expect(state.toastFromAuthError).not.toHaveBeenCalled();
   });
 
@@ -129,12 +131,12 @@ describe("useSandboxVerb", () => {
     const { wrapper, invalidate } = setup();
     const { result } = renderHook(() => useSandboxVerb("sbx_1"), { wrapper });
 
-    let outcome: string | null = null;
+    let outcome: SandboxVerbOutcome | null = null;
     await act(async () => {
       outcome = await result.current.mutateAsync("suspend");
     });
 
-    expect(outcome).toBe("gone");
+    expect(outcome).toEqual({ kind: "gone" });
     expect(state.toastFromAuthError).not.toHaveBeenCalled();
     expect(state.binding?.directory.refresh).toHaveBeenCalledTimes(1);
     expect(state.requestFleetRefresh).toHaveBeenCalledTimes(1);
@@ -899,7 +901,11 @@ describe("settling under another account", () => {
     function startVerb() {
       signInAs("user-a");
       const { queryClient, invalidate, wrapper } = setup();
-      const pending = deferred<{ kind: "ok"; settled: boolean }>();
+      const pending = deferred<{
+        kind: "ok";
+        settled: boolean;
+        state: HostSandboxState | null;
+      }>();
       state.binding?.auth.runSandboxVerb.mockImplementation(
         () => pending.promise,
       );
@@ -930,7 +936,7 @@ describe("settling under another account", () => {
       });
 
       signInAs("user-b");
-      pending.resolve({ kind: "ok", settled: true });
+      pending.resolve({ kind: "ok", settled: true, state: "suspended" });
       await mutationEnded(queryClient);
 
       expectNothingMoved(invalidate);
@@ -939,7 +945,11 @@ describe("settling under another account", () => {
     it("runs no per-call onSuccess when a suspend started as A succeeds under B", async () => {
       signInAs("user-a");
       const { queryClient, wrapper } = setup();
-      const pending = deferred<{ kind: "ok"; settled: boolean }>();
+      const pending = deferred<{
+        kind: "ok";
+        settled: boolean;
+        state: HostSandboxState | null;
+      }>();
       state.binding?.auth.runSandboxVerb.mockImplementation(
         () => pending.promise,
       );
@@ -953,7 +963,7 @@ describe("settling under another account", () => {
       });
 
       signInAs("user-b");
-      pending.resolve({ kind: "ok", settled: true });
+      pending.resolve({ kind: "ok", settled: true, state: "suspended" });
       await mutationEnded(queryClient);
 
       expect(onSuccess).not.toHaveBeenCalled();

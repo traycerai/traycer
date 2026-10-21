@@ -46,6 +46,7 @@ import type {
   SandboxCostsFetchResult,
   SandboxCreateFetchResult,
   SandboxListFetchResult,
+  SandboxLifecycleVerbFetchResult,
   SandboxVerbFetchResult,
 } from "@traycer-clients/shared/host-client/sandbox-control";
 import type {
@@ -3141,7 +3142,7 @@ export class AuthService {
     sandboxId: string,
     verb: SandboxLifecycleVerb,
     timeoutMs: number,
-  ): Promise<SandboxVerbFetchResult> {
+  ): Promise<SandboxLifecycleVerbFetchResult> {
     const refusal = this.sandboxControlRefusal();
     if (refusal !== null) return refusal;
     const bearer = this.cloudBearer();

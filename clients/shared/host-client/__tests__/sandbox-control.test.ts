@@ -148,7 +148,35 @@ describe("runSandboxVerbViaHttp", () => {
         "suspend",
         VERB_TIMEOUT_MS,
       ),
-    ).toEqual({ kind: "ok", settled: true });
+    ).toEqual({ kind: "ok", settled: true, state: SUMMARY.state });
+  });
+
+  it("a verb's 200 carries the row's state", async () => {
+    stubFetch(async () =>
+      jsonResponse(200, { sandbox: { ...SUMMARY, state: "stopped" } }),
+    );
+    expect(
+      await runSandboxVerbViaHttp(
+        BASE,
+        BEARER,
+        "sbx_1",
+        "suspend",
+        VERB_TIMEOUT_MS,
+      ),
+    ).toEqual({ kind: "ok", settled: true, state: "stopped" });
+  });
+
+  it("a verb's 2xx with a body that does not parse still succeeds, with no state", async () => {
+    stubFetch(async () => jsonResponse(200, {}));
+    expect(
+      await runSandboxVerbViaHttp(
+        BASE,
+        BEARER,
+        "sbx_1",
+        "suspend",
+        VERB_TIMEOUT_MS,
+      ),
+    ).toEqual({ kind: "ok", settled: true, state: null });
   });
 
   it("reads 202 as ok but not settled", async () => {
@@ -161,7 +189,7 @@ describe("runSandboxVerbViaHttp", () => {
         "suspend",
         VERB_TIMEOUT_MS,
       ),
-    ).toEqual({ kind: "ok", settled: false });
+    ).toEqual({ kind: "ok", settled: false, state: SUMMARY.state });
   });
 
   it("reads 402 sandbox_frozen as a typed refusal carrying the code and status", async () => {
@@ -368,7 +396,7 @@ describe("runSandboxVerbViaHttp request deadline", () => {
 
     await expect(
       runSandboxVerbViaHttp(BASE, BEARER, "sbx_1", "resume", -5_000),
-    ).resolves.toEqual({ kind: "ok", settled: true });
+    ).resolves.toEqual({ kind: "ok", settled: true, state: SUMMARY.state });
   });
 
   it("leaves no timer behind once the request has answered", async () => {

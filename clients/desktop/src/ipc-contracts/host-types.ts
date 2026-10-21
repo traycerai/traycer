@@ -105,6 +105,7 @@ export type {
   SandboxCreateFetchResult,
   SandboxListFetchResult,
   SandboxCostsFetchResult,
+  SandboxLifecycleVerbFetchResult,
   SandboxVerbFetchResult,
 } from "@traycer-clients/shared/host-client/sandbox-control";
 export type {

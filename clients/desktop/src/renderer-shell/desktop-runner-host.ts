@@ -150,6 +150,7 @@ import {
   type SandboxCreateFetchResult,
   type SandboxListFetchResult,
   type SandboxCostsFetchResult,
+  type SandboxLifecycleVerbFetchResult,
   type SandboxVerbFetchResult,
 } from "@traycer-clients/shared/host-client/sandbox-control";
 import type {
@@ -246,7 +247,7 @@ export interface DesktopPreloadBridge {
     sandboxId: string,
     verb: SandboxLifecycleVerb,
     timeoutMs: number,
-  ): Promise<SandboxVerbFetchResult>;
+  ): Promise<SandboxLifecycleVerbFetchResult>;
   getSandboxAutomation(
     bearerToken: string,
     environmentId: string | null,
@@ -1221,7 +1222,7 @@ export class DesktopRunnerHost implements IRunnerHost {
     sandboxId: string,
     verb: SandboxLifecycleVerb,
     timeoutMs: number,
-  ): Promise<SandboxVerbFetchResult> {
+  ): Promise<SandboxLifecycleVerbFetchResult> {
     return this.bridge.runSandboxVerb(bearerToken, sandboxId, verb, timeoutMs);
   }
 

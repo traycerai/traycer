@@ -163,6 +163,13 @@ describe("sandboxStateLine", () => {
     expect(new Set(lines).size).toBe(HOST_SANDBOX_STATES.length);
   });
 
+  it("the suspending line claims no saved state", () => {
+    expect(sandboxStateLine("suspending", false, null)).not.toContain("Saving");
+    expect(sandboxStateLine("suspending", false, null)).toBe(
+      "Suspending. Billing moves to storage.",
+    );
+  });
+
   it("states what awake and suspended are billed at", () => {
     expect(sandboxStateLine("awake", false, null)).toContain("awake rate");
     expect(sandboxStateLine("suspended", false, null)).toContain(

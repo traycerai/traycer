@@ -866,6 +866,25 @@ const VERB_DONE_TOAST: Record<SandboxLifecycleVerb, string> = {
   start: "Started",
 };
 
+/**
+ * The verb whose done word names the state the server's row reached, which
+ * need not be the one pressed: a suspend whose purge found the guest
+ * unreachable lands `stopped`.
+ */
+function verbReached(
+  pressed: SandboxLifecycleVerb,
+  state: HostSandboxState | null,
+): SandboxLifecycleVerb {
+  switch (state) {
+    case "suspended":
+      return "suspend";
+    case "stopped":
+      return "stop";
+    default:
+      return pressed;
+  }
+}
+
 /** A `202`: the server's deadline passed with the row still moving. */
 const VERB_MOVING_TOAST: Record<SandboxLifecycleVerb, string> = {
   suspend: "Suspending",
@@ -957,11 +976,11 @@ function SandboxActions(props: {
               const run = (): void => {
                 verb.mutate(action, {
                   onSuccess: (outcome) => {
-                    if (outcome === "settled") {
+                    if (outcome.kind === "settled") {
                       toast.success(
-                        `${VERB_DONE_TOAST[action]} ${summary.displayName}`,
+                        `${VERB_DONE_TOAST[verbReached(action, outcome.state)]} ${summary.displayName}`,
                       );
-                    } else if (outcome === "moving") {
+                    } else if (outcome.kind === "moving") {
                       toast.info(
                         `${VERB_MOVING_TOAST[action]} ${summary.displayName}…`,
                       );

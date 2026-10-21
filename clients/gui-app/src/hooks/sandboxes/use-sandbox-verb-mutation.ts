@@ -3,6 +3,7 @@ import {
   useQueryClient,
   type UseMutationResult,
 } from "@tanstack/react-query";
+import type { HostSandboxState } from "@traycer/protocol/host/host-status";
 import {
   SANDBOX_REFUSAL_CODE_NOT_FOUND,
   type SandboxLifecycleVerb,
@@ -25,12 +26,17 @@ import {
 } from "@/lib/sandboxes/sandbox-account-fence";
 
 /**
- * How a verb ended: `settled` (`200`, at rest), `moving` (`202`, still
- * moving at the server's deadline), or `gone` (`404 sandbox_not_found`: the
- * row was destroyed while the verb waited, typically by the card's own
- * Destroy - nothing to report, the destroy already said it).
+ * How a verb ended: `settled` (`200`, at rest, with the state the row reached,
+ * which need not be the verb's own: a suspend can land `stopped`), `moving`
+ * (`202`, still moving at the server's deadline), or `gone`
+ * (`404 sandbox_not_found`: the row was destroyed while the verb waited,
+ * typically by the card's own Destroy - nothing to report, the destroy
+ * already said it).
  */
-export type SandboxVerbOutcome = "settled" | "moving" | "gone";
+export type SandboxVerbOutcome =
+  | { readonly kind: "settled"; readonly state: HostSandboxState | null }
+  | { readonly kind: "moving" }
+  | { readonly kind: "gone" };
 
 interface SandboxVerbContext {
   readonly directory: HostDirectoryService | null;
@@ -86,12 +92,16 @@ export function useSandboxVerb(
         verb,
         SANDBOX_VERB_FETCH_TIMEOUT_MS,
       );
-      if (result.kind === "ok") return result.settled ? "settled" : "moving";
+      if (result.kind === "ok") {
+        return result.settled
+          ? { kind: "settled", state: result.state }
+          : { kind: "moving" };
+      }
       if (
         result.kind === "refused" &&
         result.code === SANDBOX_REFUSAL_CODE_NOT_FOUND
       ) {
-        return "gone";
+        return { kind: "gone" };
       }
       throw new Error(sandboxFailureMessage(result));
     },

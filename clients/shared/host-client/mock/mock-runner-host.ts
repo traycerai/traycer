@@ -13,6 +13,7 @@ import {
   type SandboxCostsFetchResult,
   type SandboxCreateFetchResult,
   type SandboxListFetchResult,
+  type SandboxLifecycleVerbFetchResult,
   type SandboxVerbFetchResult,
 } from "../sandbox-control";
 import {
@@ -668,7 +669,7 @@ export class MockRunnerHost implements IRunnerHost {
     sandboxId: string,
     verb: SandboxLifecycleVerb,
     timeoutMs: number,
-  ): Promise<SandboxVerbFetchResult> {
+  ): Promise<SandboxLifecycleVerbFetchResult> {
     return runSandboxVerbViaHttp(
       this.serverBaseUrl,
       bearerToken,
