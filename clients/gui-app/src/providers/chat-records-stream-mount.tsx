@@ -123,6 +123,7 @@ export function ChatRecordsStreamMount(): ReactNode {
     const applyDelta = (
       delta: ChatRecordsStreamDelta,
       listRevision: RecordListRevision | null,
+      answeredForViewer: string | null,
     ): void => {
       // The stream also carries own-row changes for closed tasks. History
       // needs that edge even when there is no epic session to route into.
@@ -132,15 +133,15 @@ export function ChatRecordsStreamMount(): ReactNode {
           // A chat row asks the one helper, so a team host's
           // environment-owned `own` row counts as the viewer's; a terminal
           // agent stays member-owned and answers by owner equality. The frame
-          // was answered on this connection's stream for the identity signed
-          // in now, so that is the identity its `own` word is trusted for.
+          // was answered for the identity its stream session opened under,
+          // so its `own` word is trusted only while that is still the viewer.
           const viewersRow =
             delta.kind === "upsert"
               ? isChatVisibleToUser(
                   delta.record.origin,
                   delta.record.ownerUserId,
                   userId,
-                  userId,
+                  answeredForViewer,
                 )
               : delta.record.ownerUserId === userId;
           if (viewersRow) {
@@ -200,6 +201,9 @@ export function ChatRecordsStreamMount(): ReactNode {
       if (disposed) return;
       let client: ChatRecordsStreamClient | null = null;
       let openedAtMs = 0;
+      // The identity this session subscribes as: whom its frames answer for.
+      const answeredForViewer =
+        useAuthStore.getState().contextMetadata?.userId ?? null;
       client = new ChatRecordsStreamClient({
         wsStreamClient: streamClient,
         callbacks: {
@@ -208,7 +212,7 @@ export function ChatRecordsStreamMount(): ReactNode {
             // A delivered delta is the usable-session proof for this stream
             // (it has no initial state frame to reset on).
             reopenScheduler.resetBackoff();
-            applyDelta(delta, listRevision);
+            applyDelta(delta, listRevision, answeredForViewer);
           },
           onConnectionStatus: (status, reason) => {
             if (currentClient !== client) return;

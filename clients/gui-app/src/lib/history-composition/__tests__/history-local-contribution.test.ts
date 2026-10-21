@@ -19,6 +19,7 @@ import {
   __resetHistoryContributionsForTests,
   applyHistoryContributionToCachedPage,
   noteUnfilteredHistoryContribution,
+  startUnfilteredHistoryContributionRead,
   noteUnfilteredHistoryContributionPending,
   readHistoryHostContribution,
   unfilteredHistoryContribution,
@@ -238,7 +239,12 @@ describe("applyHistoryContributionToCachedPage", () => {
       applyHistoryContributionToCachedPage(page, address("{}"), "host-1"),
     ).toBeNull();
 
-    noteUnfilteredHistoryContribution(ACCOUNT, "host-1", { kind: "absent" });
+    noteUnfilteredHistoryContribution(
+      ACCOUNT,
+      "host-1",
+      { kind: "absent" },
+      startUnfilteredHistoryContributionRead(),
+    );
     const abandon = noteUnfilteredHistoryContributionPending(ACCOUNT, "host-1");
     expect(
       applyHistoryContributionToCachedPage(page, address("{}"), "host-1"),
@@ -247,14 +253,19 @@ describe("applyHistoryContributionToCachedPage", () => {
   });
 
   it("applies a learned contribution with the sort parsed from the request scope", () => {
-    noteUnfilteredHistoryContribution(ACCOUNT, "host-1", {
-      kind: "contributed",
-      read: response({
-        localHomeRows: [task("local", 7)],
-        tombstonedEpicIds: ["a"],
-        localRows: "present",
-      }),
-    });
+    noteUnfilteredHistoryContribution(
+      ACCOUNT,
+      "host-1",
+      {
+        kind: "contributed",
+        read: response({
+          localHomeRows: [task("local", 7)],
+          tombstonedEpicIds: ["a"],
+          localRows: "present",
+        }),
+      },
+      startUnfilteredHistoryContributionRead(),
+    );
 
     const composed = applyHistoryContributionToCachedPage(
       page,
@@ -273,13 +284,18 @@ describe("applyHistoryContributionToCachedPage", () => {
   });
 
   it("does not order by recency when the scope's sort is not recent, or is unparseable", () => {
-    noteUnfilteredHistoryContribution(ACCOUNT, "host-1", {
-      kind: "contributed",
-      read: response({
-        localHomeRows: [task("local", 1)],
-        localRows: "present",
-      }),
-    });
+    noteUnfilteredHistoryContribution(
+      ACCOUNT,
+      "host-1",
+      {
+        kind: "contributed",
+        read: response({
+          localHomeRows: [task("local", 1)],
+          localRows: "present",
+        }),
+      },
+      startUnfilteredHistoryContributionRead(),
+    );
 
     const byTitle = applyHistoryContributionToCachedPage(
       page,
@@ -308,11 +324,21 @@ describe("applyHistoryContributionToCachedPage", () => {
     const listener = vi.fn();
     const unsubscribe = subscribeUnfilteredHistoryContributions(listener);
 
-    noteUnfilteredHistoryContribution(ACCOUNT, "host-1", { kind: "absent" });
+    noteUnfilteredHistoryContribution(
+      ACCOUNT,
+      "host-1",
+      { kind: "absent" },
+      startUnfilteredHistoryContributionRead(),
+    );
     expect(listener).toHaveBeenCalledTimes(1);
 
     unsubscribe();
-    noteUnfilteredHistoryContribution(ACCOUNT, "host-1", { kind: "absent" });
+    noteUnfilteredHistoryContribution(
+      ACCOUNT,
+      "host-1",
+      { kind: "absent" },
+      startUnfilteredHistoryContributionRead(),
+    );
     expect(listener).toHaveBeenCalledTimes(1);
   });
 });
@@ -338,7 +364,12 @@ describe("noteUnfilteredHistoryContributionPending", () => {
   });
 
   it("restores the previous learned state when abandoned", () => {
-    noteUnfilteredHistoryContribution(ACCOUNT, "host-1", { kind: "absent" });
+    noteUnfilteredHistoryContribution(
+      ACCOUNT,
+      "host-1",
+      { kind: "absent" },
+      startUnfilteredHistoryContributionRead(),
+    );
 
     const abandon = noteUnfilteredHistoryContributionPending(ACCOUNT, "host-1");
     abandon();
@@ -354,7 +385,12 @@ describe("noteUnfilteredHistoryContributionPending", () => {
       kind: "contributed",
       read: response({ tombstonedEpicIds: ["gone"] }),
     };
-    noteUnfilteredHistoryContribution(ACCOUNT, "host-1", learned);
+    noteUnfilteredHistoryContribution(
+      ACCOUNT,
+      "host-1",
+      learned,
+      startUnfilteredHistoryContributionRead(),
+    );
     const listener = vi.fn();
     subscribeUnfilteredHistoryContributions(listener);
 
@@ -393,7 +429,12 @@ describe("noteUnfilteredHistoryContributionPending", () => {
   );
 
   it("falls back to the earlier settled answer once overlapping reads are abandoned", () => {
-    noteUnfilteredHistoryContribution(ACCOUNT, "host-1", { kind: "absent" });
+    noteUnfilteredHistoryContribution(
+      ACCOUNT,
+      "host-1",
+      { kind: "absent" },
+      startUnfilteredHistoryContributionRead(),
+    );
     const abandonA = noteUnfilteredHistoryContributionPending(
       ACCOUNT,
       "host-1",
@@ -424,7 +465,12 @@ describe("noteUnfilteredHistoryContributionPending", () => {
       kind: "contributed",
       read: response({ tombstonedEpicIds: ["gone"] }),
     };
-    noteUnfilteredHistoryContribution(ACCOUNT, "host-1", learned);
+    noteUnfilteredHistoryContribution(
+      ACCOUNT,
+      "host-1",
+      learned,
+      startUnfilteredHistoryContributionRead(),
+    );
     const listener = vi.fn();
     subscribeUnfilteredHistoryContributions(listener);
 
@@ -433,5 +479,34 @@ describe("noteUnfilteredHistoryContributionPending", () => {
 
     expect(unfilteredHistoryContribution(ACCOUNT, "host-1")).toBe(learned);
     expect(listener).not.toHaveBeenCalled();
+  });
+});
+
+describe("noteUnfilteredHistoryContribution read ordering", () => {
+  afterEach(() => {
+    __resetHistoryContributionsForTests();
+  });
+
+  const older: HistoryHostContribution = {
+    kind: "contributed",
+    read: response({ localRows: "present" }),
+  };
+  const newer: HistoryHostContribution = {
+    kind: "contributed",
+    read: response({ tombstonedEpicIds: ["gone"] }),
+  };
+
+  it("drops an answer whose read started before the settled answer's read, though it resolved later", () => {
+    noteUnfilteredHistoryContribution(ACCOUNT, "host-1", newer, 2);
+    noteUnfilteredHistoryContribution(ACCOUNT, "host-1", older, 1);
+
+    expect(unfilteredHistoryContribution(ACCOUNT, "host-1")).toBe(newer);
+  });
+
+  it("replaces the settled answer with one whose read started later", () => {
+    noteUnfilteredHistoryContribution(ACCOUNT, "host-1", older, 1);
+    noteUnfilteredHistoryContribution(ACCOUNT, "host-1", newer, 2);
+
+    expect(unfilteredHistoryContribution(ACCOUNT, "host-1")).toBe(newer);
   });
 });

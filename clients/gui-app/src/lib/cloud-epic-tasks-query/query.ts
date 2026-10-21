@@ -50,6 +50,7 @@ import {
   noteUnfilteredHistoryContribution,
   noteUnfilteredHistoryContributionPending,
   readHistoryHostContribution,
+  startUnfilteredHistoryContributionRead,
 } from "@/lib/history-composition/history-local-contribution";
 import type { HistorySearchState } from "@/lib/history-search";
 import { dedupSortWorkspaces } from "@/components/home/data/home-page.data";
@@ -356,6 +357,7 @@ async function readHistoryContributionForPage(
   }
   const unfiltered = options.filters === null;
   const held: { abandon: (() => void) | null } = { abandon: null };
+  const readStartedAt = startUnfilteredHistoryContributionRead();
   try {
     const contribution = await readHistoryHostContribution({
       client,
@@ -371,7 +373,12 @@ async function readHistoryContributionForPage(
         : null,
     });
     if (unfiltered) {
-      noteUnfilteredHistoryContribution(userId, hostId, contribution);
+      noteUnfilteredHistoryContribution(
+        userId,
+        hostId,
+        contribution,
+        readStartedAt,
+      );
     }
     return contribution;
   } catch (error) {

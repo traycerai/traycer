@@ -8,6 +8,7 @@ import {
   noteUnfilteredHistoryContribution,
   noteUnfilteredHistoryContributionPending,
   readHistoryHostContribution,
+  startUnfilteredHistoryContributionRead,
   subscribeUnfilteredHistoryContributions,
   unfilteredHistoryContribution,
 } from "@/lib/history-composition/history-local-contribution";
@@ -72,6 +73,7 @@ export function HistoryLocalContributionMount(): null {
       accountId,
       hostId,
     );
+    const readStartedAt = startUnfilteredHistoryContributionRead();
     void readHistoryHostContribution({
       client,
       filters: null,
@@ -79,7 +81,12 @@ export function HistoryLocalContributionMount(): null {
       onIncomplete: null,
     }).then(
       (contribution) =>
-        noteUnfilteredHistoryContribution(accountId, hostId, contribution),
+        noteUnfilteredHistoryContribution(
+          accountId,
+          hostId,
+          contribution,
+          readStartedAt,
+        ),
       abandonPending,
     );
     // An unanswered read gives its scope back, so the next mount of this

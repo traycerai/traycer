@@ -223,6 +223,11 @@ interface HostNotificationMutationContext {
 interface CloudFeedMutationContext {
   readonly hostId: string | null;
   readonly sessionEpoch: number;
+  /**
+   * The account the write was made as: feed versions are per account, so a
+   * result that resolves after a switch is not the new account's.
+   */
+  readonly accountId: string | null;
 }
 
 export function hostFeedId(id: string): string {
@@ -915,6 +920,7 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
     (): CloudFeedMutationContext => ({
       hostId: client?.getActiveHostId() ?? null,
       sessionEpoch: useCloudNotificationsStore.getState().sessionEpoch,
+      accountId: useAuthStore.getState().contextMetadata?.userId ?? null,
     }),
     [client],
   );
@@ -922,7 +928,9 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
     (context: CloudFeedMutationContext): boolean =>
       client?.getActiveHostId() === context.hostId &&
       useCloudNotificationsStore.getState().sessionEpoch ===
-        context.sessionEpoch,
+        context.sessionEpoch &&
+      (useAuthStore.getState().contextMetadata?.userId ?? null) ===
+        context.accountId,
     [client],
   );
   const cloudMarkRead = useHostMutation<

@@ -68,6 +68,10 @@ const ABSENT: HistoryHostContribution = { kind: "absent" };
 
 /** The last answer learned for each (account, host) scope. */
 const settled = new Map<string, HistoryHostContribution>();
+/** When the read behind each scope's settled answer started. */
+const settledReadStartedAt = new Map<string, number>();
+/** Orders reads by when they started; see {@link startUnfilteredHistoryContributionRead}. */
+let readSequence = 0;
 /**
  * The reads of each scope still in flight. A scope is `pending` while any is,
  * so one reader giving up never releases the paint another still holds, in
@@ -85,17 +89,35 @@ function notify(): void {
 }
 
 /**
+ * Stamps an unfiltered read as it starts, for
+ * {@link noteUnfilteredHistoryContribution}: two reads of a scope can finish
+ * in either order, and only their start says which snapshot is newer.
+ */
+export function startUnfilteredHistoryContributionRead(): number {
+  readSequence += 1;
+  return readSequence;
+}
+
+/**
  * Records what the host contributes to the unfiltered listing. An answer
  * supersedes every read still in flight for the scope: the paint has what it
- * waited for.
+ * waited for. An answer whose read started before the settled one's is older
+ * than what the scope holds (it can predate a local delete the settled answer
+ * tombstones), so it is dropped.
  */
 export function noteUnfilteredHistoryContribution(
   accountId: string,
   hostId: string,
   contribution: HistoryHostContribution,
+  readStartedAt: number,
 ): void {
   const key = scopeKey(accountId, hostId);
+  const settledStartedAt = settledReadStartedAt.get(key);
+  if (settledStartedAt !== undefined && readStartedAt < settledStartedAt) {
+    return;
+  }
   settled.set(key, contribution);
+  settledReadStartedAt.set(key, readStartedAt);
   holds.delete(key);
   notify();
 }
@@ -146,6 +168,7 @@ export function subscribeUnfilteredHistoryContributions(
 /** Test-only: forget every recorded contribution. */
 export function __resetHistoryContributionsForTests(): void {
   settled.clear();
+  settledReadStartedAt.clear();
   holds.clear();
 }
 

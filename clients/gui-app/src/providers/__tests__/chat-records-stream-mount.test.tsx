@@ -764,6 +764,54 @@ describe("<ChatRecordsStreamMount /> the History edge of a team host's chat", ()
     );
   });
 
+  it("does not attribute a team row the stream answered for the previous account to the account signed in at delivery", () => {
+    signedInAs("user-a");
+    render(<ChatRecordsStreamMount />);
+
+    // Control: with the opening account still signed in, the same shape of
+    // frame is the viewer's own and is observed for them.
+    emit(
+      {
+        kind: "upsert",
+        epicId: "epic-1",
+        record: record({
+          chatId: "env-chat",
+          ownerUserId: "env_team",
+          updatedAt: 77,
+        }),
+      },
+      null,
+    );
+    expect(observeOwnHistoryRecordChange).toHaveBeenCalledTimes(1);
+    expect(observeOwnHistoryRecordChange).toHaveBeenCalledWith(
+      "user-a",
+      "epic-1",
+      77,
+    );
+
+    // The cross-window projection swaps the account with no remount: the
+    // stream session opened as user-a is still the one delivering.
+    signedInAs("user-b");
+    emit(
+      {
+        kind: "upsert",
+        epicId: "epic-1",
+        record: record({
+          chatId: "env-chat",
+          ownerUserId: "env_team",
+          updatedAt: 88,
+        }),
+      },
+      null,
+    );
+
+    expect(observeOwnHistoryRecordChange).not.toHaveBeenCalledWith(
+      "user-b",
+      "epic-1",
+      88,
+    );
+  });
+
   it("does not bump for a collaborator's `foreign` row", () => {
     signedInAs("user-b");
     render(<ChatRecordsStreamMount />);

@@ -36,6 +36,8 @@ import {
   useAttentionNotificationIds,
   useMergedNotificationRow,
   useMergedNotificationsActions,
+  type MergedNotificationRow,
+  type MergedNotificationsActions,
 } from "@/stores/notifications/merged-notifications";
 import {
   __resetNotificationsStoreForTests,
@@ -159,6 +161,32 @@ vi.mock("@/hooks/notifications/use-notification-host", () => ({
     client: hostBindingState.current?.hostClient ?? null,
   }),
 }));
+
+const confirmedWriteSpy = vi.hoisted(() =>
+  vi.fn<(accountId: string, writeVersion: number | null) => void>(),
+);
+
+// The real module with its one recording edge spied, so the floor a cloud
+// write leaves is read off the call the subject actually makes.
+vi.mock(
+  "@/lib/view-replica/notification-feed-replica",
+  async (importActual) => {
+    const actual =
+      await importActual<
+        typeof import("@/lib/view-replica/notification-feed-replica")
+      >();
+    return {
+      ...actual,
+      noteNotificationFeedConfirmedWrite: (
+        accountId: string,
+        writeVersion: number | null,
+      ): void => {
+        confirmedWriteSpy(accountId, writeVersion);
+        actual.noteNotificationFeedConfirmedWrite(accountId, writeVersion);
+      },
+    };
+  },
+);
 
 vi.mock("sonner", () => ({
   toast: {
@@ -467,6 +495,7 @@ describe("useMergedNotificationsActions markAllAsRead composition", () => {
     notificationFeedModeSettling.value = false;
     negotiatedMinors.byMethod.clear();
     floorsRequested.calls.length = 0;
+    confirmedWriteSpy.mockClear();
     // The cloud-feed mutations re-read the live verdict at dispatch; a
     // `cloud` feed mode below stands for a session that holds one.
     signInForActions();
@@ -710,6 +739,149 @@ describe("useMergedNotificationsActions markAllAsRead composition", () => {
       ),
     ).toBe(false);
   });
+
+  describe("a cloud write that resolves after the account changed", () => {
+    function signInAs(userId: string): void {
+      useAuthStore
+        .getState()
+        .setSignedIn(
+          { userId, userName: "U", email: `${userId}@example.com` },
+          { userId, username: "U" },
+          [],
+        );
+    }
+
+    /** A host answer the test releases by hand, so the account can change
+     * while the write is in flight. */
+    function holdCloudAnswer(
+      method:
+        | "host.notifications.cloudFeed.markRead"
+        | "host.notifications.cloudFeed.markAllRead",
+    ): { readonly release: (version: number) => void } {
+      let resolveAnswer: (answer: unknown) => void = () => undefined;
+      const answer = new Promise<unknown>((resolve) => {
+        resolveAnswer = resolve;
+      });
+      hostRequestMock.mockImplementation((requested: string) =>
+        requested === method ? answer : defaultHostRequest(requested),
+      );
+      return {
+        release: (version) => {
+          resolveAnswer({ status: "applied", version });
+        },
+      };
+    }
+
+    function useCloudActionsAndRow(): {
+      readonly actions: MergedNotificationsActions;
+      readonly row: MergedNotificationRow | null;
+    } {
+      return {
+        actions: useMergedNotificationsActions(),
+        row: useMergedNotificationRow(cloudNotificationFeedId("entry-a")),
+      };
+    }
+
+    function seedCloudFeed(): void {
+      useCloudNotificationsStore.getState().applySnapshot({
+        rows: [cloudDone("entry-a", 1, null)],
+        summary: { totalCount: 1, unreadCount: 1, attentionCount: 0 },
+        version: 10,
+      });
+    }
+
+    it("records the confirmed-write floor for the account that wrote it while that account is still signed in", async () => {
+      bindHostClient();
+      notificationFeedMode.value = "cloud";
+      const held = holdCloudAnswer("host.notifications.cloudFeed.markRead");
+      seedCloudFeed();
+      const { result } = renderHook(() => useCloudActionsAndRow(), {
+        wrapper: createWrapper(),
+      });
+      const row = result.current.row;
+      if (row === null) throw new Error("expected cloud row");
+
+      act(() => {
+        result.current.actions.markAsRead(row);
+      });
+      await waitFor(() => {
+        expect(hostRequestMock).toHaveBeenCalledWith(
+          "host.notifications.cloudFeed.markRead",
+          { entryId: "entry-a" },
+        );
+      });
+      act(() => {
+        held.release(41);
+      });
+
+      await waitFor(() => {
+        expect(confirmedWriteSpy).toHaveBeenCalledWith("user-actions", 41);
+      });
+    });
+
+    it.each([
+      {
+        name: "markRead",
+        method: "host.notifications.cloudFeed.markRead" as const,
+        gesture: (
+          actions: MergedNotificationsActions,
+          row: MergedNotificationRow | null,
+        ): void => {
+          if (row === null) throw new Error("expected cloud row");
+          actions.markAsRead(row);
+        },
+      },
+      {
+        name: "markAllRead",
+        method: "host.notifications.cloudFeed.markAllRead" as const,
+        gesture: (
+          actions: MergedNotificationsActions,
+          _row: MergedNotificationRow | null,
+        ): void => {
+          actions.markAllAsRead();
+        },
+      },
+    ])(
+      "does not record account A's $name version as account B's floor when the auth store switches straight to B first",
+      async ({ method, gesture }) => {
+        bindHostClient();
+        notificationFeedMode.value = "cloud";
+        const held = holdCloudAnswer(method);
+        seedCloudFeed();
+        const { result } = renderHook(() => useCloudActionsAndRow(), {
+          wrapper: createWrapper(),
+        });
+
+        act(() => {
+          gesture(result.current.actions, result.current.row);
+        });
+        await waitFor(() => {
+          expect(hostRequestMock).toHaveBeenCalledWith(
+            method,
+            expect.anything(),
+          );
+        });
+        // The cross-window projection: one `setSignedIn`, no signed-out gap,
+        // so the cloud store's `sessionEpoch` has not moved.
+        const epochBefore = useCloudNotificationsStore.getState().sessionEpoch;
+        act(() => {
+          signInAs("user-b");
+        });
+        expect(useCloudNotificationsStore.getState().sessionEpoch).toBe(
+          epochBefore,
+        );
+        act(() => {
+          held.release(41);
+        });
+        // Let the settled mutation's success handler run before reading.
+        await act(async () => {
+          await Promise.resolve();
+        });
+
+        expect(confirmedWriteSpy).not.toHaveBeenCalledWith("user-b", 41);
+      },
+    );
+  });
 });
 
 describe("useMergedNotificationsActions indicator invalidation", () => {
@@ -721,6 +893,7 @@ describe("useMergedNotificationsActions indicator invalidation", () => {
     notificationFeedModeSettling.value = false;
     negotiatedMinors.byMethod.clear();
     floorsRequested.calls.length = 0;
+    confirmedWriteSpy.mockClear();
     // The cloud-feed mutations re-read the live verdict at dispatch; a
     // `cloud` feed mode below stands for a session that holds one.
     signInForActions();
