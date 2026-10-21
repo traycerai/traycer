@@ -30,6 +30,7 @@ import {
   TASK_HOST_UNREACHABLE_LINE,
 } from "@/components/epic-canvas/sidebar/task-host-groups-model";
 import { useHostRefusesEpicStore } from "@/hooks/chats/use-host-refuses-epic-store";
+import { useOwnerSandboxOpensLive } from "@/hooks/chats/use-owner-sandbox-opens-live";
 import { settleDetachedEpicMutation } from "@/lib/artifacts/detached-epic-mutation";
 import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
 import { chatOpensPublishedCopy } from "@/lib/chats/chat-open-tile-ref";
@@ -3188,13 +3189,18 @@ function ChatRowButton(props: ChatRowButtonProps) {
   // The reachable-but-too-old owner (`HOST_OLDER_THAN_DATA`), read from the
   // same registry `ChatNode` builds the click's ref from.
   const ownerRefusesStore = useHostRefusesEpicStore(ownerHostId, epicId);
+  // A CHAT whose owner is a sandbox at rest opens live (the pool serves it),
+  // so its lock reads the same narrowed verdict the click does. A terminal
+  // agent has no at-rest serving and keeps the raw one below.
+  const ownerSandboxOpensLive = useOwnerSandboxOpensLive(ownerHostId);
+  const chatOwnerIsUnreachable = ownerIsUnreachable && !ownerSandboxOpensLive;
   const offlineLock = useMemo<OfflineRowLock | null>(() => {
     if (
       chatOpensPublishedCopy({
         isChat: artifactType === "chat",
         ownerHostId,
         ownerUserId: rowOwnerUserId,
-        ownerIsUnreachable,
+        ownerIsUnreachable: chatOwnerIsUnreachable,
         ownerRefusesStore,
       })
     ) {
@@ -3204,7 +3210,9 @@ function ChatRowButton(props: ChatRowButtonProps) {
         // Offline outranks the store verdict: a host that is not answering
         // is the fact a reader can act on now, and the refusal is only
         // known to hold for a build that is currently running.
-        reason: ownerIsUnreachable ? "owner-offline" : "host-older-than-data",
+        reason: chatOwnerIsUnreachable
+          ? "owner-offline"
+          : "host-older-than-data",
       };
     }
     // The terminal-agent sibling. It needs no owner-user check where the chat
@@ -3221,6 +3229,7 @@ function ChatRowButton(props: ChatRowButtonProps) {
     };
   }, [
     artifactType,
+    chatOwnerIsUnreachable,
     ownerHostId,
     ownerIsUnreachable,
     ownerReachability.hostLabel,
@@ -3487,10 +3496,12 @@ function ChatRowButton(props: ChatRowButtonProps) {
       nodeId={nodeId}
       nodeName={nodeName}
       hostId={ownerHostId}
-      // THE SAME verdict the offline lock above reads, from the same call.
-      // Two subscriptions on one host id could momentarily disagree, and this
-      // row would then show a lock while its hover promised live worktree
-      // metadata from the machine that lock says is gone.
+      // THE SAME reachability call the offline lock above reads. Two
+      // subscriptions on one host id could momentarily disagree, and this row
+      // would then show a lock while its hover promised live worktree
+      // metadata from the machine that lock says is gone. The raw verdict,
+      // not the chat lock's narrowed one: a sandbox at rest cannot answer a
+      // metadata read.
       ownerHostUnreachable={ownerIsUnreachable}
       ownerKind={ownerKind}
       roleClaims={roleClaims}

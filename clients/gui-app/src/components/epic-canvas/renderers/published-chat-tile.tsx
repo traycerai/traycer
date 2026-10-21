@@ -37,7 +37,7 @@ import {
   type PublishedCopyRefresh,
 } from "@/components/epic-canvas/renderers/published-chat-lock-reason";
 import { useHostRefusesEpicStore } from "@/hooks/chats/use-host-refuses-epic-store";
-import { useOwnedByViewer } from "@/hooks/chats/use-owned-by-viewer";
+import { useChatOwnerCopyFacts } from "@/hooks/environment/use-team-environment-ownership";
 
 /**
  * A chat whose owning host is out of reach, rendered through the ORDINARY chat
@@ -215,7 +215,15 @@ export function PublishedChatTile(props: PublishedChatTileProps): ReactNode {
   // (and, in the child banner, the clone copy) for the foreign-owner arm -
   // the offline/back-soon vocabulary below is about the viewer's own fleet
   // and cannot be honestly said about a machine this account never sees.
-  const ownedByViewer = useOwnedByViewer(node.ownerUserId, node.chatId);
+  // A team sandbox's chat: the lock sentence says its sandbox is out, rather
+  // than naming a collaborator or a machine. While that cannot be told yet,
+  // the owner is not called a collaborator: an unresolved owner stays on the
+  // own-chat sentences, as `useOwnedByViewer` keeps an unresolved one.
+  const { ownedByViewer, environmentOwned } = useChatOwnerCopyFacts(
+    node.ownerUserId,
+    node.ownerHostId,
+    node.chatId,
+  );
   // Whether this copy is on screen because the owner, though reachable, is a
   // build too old for the epic's store. Read live rather than off the ref so
   // the lock sentence follows the host: an update retires the verdict and
@@ -395,6 +403,7 @@ export function PublishedChatTile(props: PublishedChatTileProps): ReactNode {
             ownerRefusesStore,
             ownerIsThisHost,
             ownedByViewer,
+            environmentOwned,
             ownerLabel,
             unreadableCount: replicaConversion.unreadableCount,
           })}
@@ -461,6 +470,7 @@ export function PublishedChatTile(props: PublishedChatTileProps): ReactNode {
             ownerRefusesStore,
             ownerIsThisHost,
             ownedByViewer,
+            environmentOwned,
             ownerLabel,
             unreadableCount: applied.unreadableCount,
             fidelityNotice: applied.fidelityNotice,

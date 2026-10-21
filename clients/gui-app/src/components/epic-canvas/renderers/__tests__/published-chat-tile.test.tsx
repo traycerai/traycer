@@ -24,6 +24,18 @@ import {
   servingBehaviour,
 } from "@traycer-clients/shared/cloud-chat/__tests__/__fixtures__/published-cloud-chat";
 import type { ChatReplicaReadResponse } from "@traycer/protocol/host/epic/chat-replica-read";
+import type { EnvironmentListResponse } from "@traycer/protocol/host/environment/contracts";
+import {
+  installHostConnectionRegistrySource,
+  resetHostConnectionRegistryForTest,
+} from "@traycer-clients/shared/host-client/host-connection-registry";
+import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
+import {
+  poolEntry,
+  remoteEntry,
+  sandboxFacts,
+} from "@traycer-clients/shared/host-client/__tests__/routing-entry-fixtures";
+import { useAuthStore } from "@/stores/auth/auth-store";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { RpcErrorCode } from "@traycer/protocol/framework/index";
 import { TILE_KIND_PUBLISHED_CHAT } from "@/stores/epics/canvas/tile-kinds";
@@ -93,6 +105,42 @@ const mockUseChatReplicaRead =
 const mockUseHostReachability =
   vi.fn<(hostId: string) => MockHostReachability>();
 
+// The two facts a chat's owner is told apart by: whether the build has a server
+// pool (the team environment list exists at all) and what that list answers.
+// The list query is stubbed at its own seam so the REAL ownership hook, the
+// REAL directory-row read and the REAL lock sentences are what the footer
+// cases exercise.
+const environments = vi.hoisted(
+  (): { pool: boolean; list: EnvironmentListResponse | undefined } => ({
+    pool: false,
+    list: undefined,
+  }),
+);
+
+vi.mock(
+  "@traycer-clients/shared/host-client/host-rpc-routing",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@traycer-clients/shared/host-client/host-rpc-routing")
+      >();
+    return {
+      ...actual,
+      readProcessHostRpcTierPlan: () =>
+        environments.pool
+          ? actual.createHostRpcTierPlan(poolEntry)
+          : actual.NO_POOL_HOST_RPC_TIER_PLAN,
+    };
+  },
+);
+vi.mock("@/hooks/bots/use-environment-list-query", () => ({
+  useEnvironmentListQuery: () => ({ data: environments.list }),
+}));
+vi.mock("@/lib/host", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/host")>()),
+  useOptionalHostClient: () => null,
+}));
+
 vi.mock("@/hooks/host/use-tab-host-client", () => ({
   useTabHostClient: () => ({ getActiveHostId: () => "host-1" }),
 }));
@@ -148,6 +196,7 @@ vi.mock("@/components/epic-canvas/renderers/chat-tile", async () => {
           // it forwards. The ownership wiring itself is pinned by
           // `dead-tile-banner-container.test.tsx` against the real container.
           ownedByViewer
+          environmentOwned={false}
           cloneAllowed
           showsPublishedCopy={props.showsPublishedCopy}
           onClone={() => undefined}
@@ -329,6 +378,10 @@ afterEach(() => {
   vi.clearAllMocks();
   deadTileBannerContainerProps.length = 0;
   chatTileSessionViewCalls.length = 0;
+  environments.pool = false;
+  environments.list = undefined;
+  resetHostConnectionRegistryForTest();
+  useAuthStore.setState(useAuthStore.getInitialState(), true);
 });
 
 describe("PublishedChatTile - doc-replica fallback", () => {
@@ -907,5 +960,110 @@ describe("PublishedChatTile - head-keyed refresh", () => {
     expect(mockUseChatReplicaRead).toHaveBeenLastCalledWith(
       expect.objectContaining({ enabled: false }),
     );
+  });
+});
+
+/**
+ * Who the footer says the chat belongs to, with the REAL ownership hook under
+ * the tile. A signed-in viewer who is not the ref's owner, in a build with a
+ * pool: whether the owner is a collaborator or a team's sandbox is what the
+ * environment list and the owner host's row say, and while neither has
+ * answered the footer must not name a collaborator.
+ */
+describe("PublishedChatTile - footer ownership", () => {
+  const TEAM_ENVIRONMENTS: EnvironmentListResponse = {
+    environments: [
+      {
+        environmentId: NODE.ownerUserId,
+        ownerKind: "organization",
+        ownerId: "org-1",
+        roomId: "room-team",
+        label: "acme",
+      },
+    ],
+  };
+  const PERSONAL_ONLY_ENVIRONMENTS: EnvironmentListResponse = {
+    environments: [
+      {
+        environmentId: "viewer-user",
+        ownerKind: "user",
+        ownerId: "viewer-user",
+        roomId: "room-personal",
+        label: "Personal",
+      },
+    ],
+  };
+
+  function signInAsAnotherUser(): void {
+    environments.pool = true;
+    useAuthStore.setState({
+      status: "signed-in",
+      profile: {
+        userId: "viewer-user",
+        userName: "Viewer",
+        email: "viewer@example.com",
+      },
+      contextMetadata: { userId: "viewer-user", username: "Viewer" },
+    });
+  }
+
+  function seedOwnerHostRow(row: HostDirectoryEntry): void {
+    installHostConnectionRegistrySource({
+      directory: {
+        findById: (hostId) => (hostId === row.hostId ? { ...row } : null),
+        onDirectoryChanged: () => ({ dispose: () => undefined }),
+      },
+      leases: null,
+    });
+  }
+
+  function renderFooter(): string | null {
+    mockUseCloudChatTranscript.mockReturnValue(refusedUnpublished());
+    mockUseChatReplicaRead.mockReturnValue(replicaOk());
+    render(
+      <PublishedChatTile
+        node={NODE}
+        viewTabId="tab-1"
+        tileId="pane-1"
+        isActive
+        epicId="epic-1"
+      />,
+    );
+    return screen.getByTestId("chat-tile-session-view").textContent;
+  }
+
+  it("keeps the own-chat sentence, never a collaborator's, while the environment list has not answered", () => {
+    signInAsAnotherUser();
+    environments.list = undefined;
+
+    const footer = renderFooter();
+
+    expect(footer).toContain("This agent lives on Ada's Mac, which is offline");
+    expect(footer).not.toContain("belongs to another collaborator");
+  });
+
+  it("names another collaborator once the list has answered without the owner", () => {
+    signInAsAnotherUser();
+    environments.list = PERSONAL_ONLY_ENVIRONMENTS;
+
+    expect(renderFooter()).toContain("belongs to another collaborator");
+  });
+
+  it("says the sandbox is out when the owner host's row is a team sandbox, before the list answers", () => {
+    signInAsAnotherUser();
+    environments.list = undefined;
+    seedOwnerHostRow(remoteEntry("owner-host-1", sandboxFacts("team-1")));
+
+    const footer = renderFooter();
+
+    expect(footer).toContain("This chat's sandbox isn't available");
+    expect(footer).not.toContain("belongs to another collaborator");
+  });
+
+  it("says the sandbox is out when the answered list holds the owner as a team environment", () => {
+    signInAsAnotherUser();
+    environments.list = TEAM_ENVIRONMENTS;
+
+    expect(renderFooter()).toContain("This chat's sandbox isn't available");
   });
 });

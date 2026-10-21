@@ -97,6 +97,7 @@ describe("<ChatDeadTileBanner />", () => {
         hostLabel="mac-mini"
         reason="host-offline"
         ownedByViewer
+        environmentOwned={false}
         cloneAllowed
         showsPublishedCopy={false}
         cloning={false}
@@ -129,6 +130,7 @@ describe("<ChatDeadTileBanner />", () => {
         hostLabel="mac-mini"
         reason="host-offline"
         ownedByViewer
+        environmentOwned={false}
         cloneAllowed={false}
         showsPublishedCopy={false}
         cloning={false}
@@ -154,6 +156,7 @@ describe("<ChatDeadTileBanner />", () => {
           hostLabel={null}
           reason="host-offline"
           ownedByViewer
+          environmentOwned={false}
           cloneAllowed={cloneAllowed}
           showsPublishedCopy={false}
           cloning={false}
@@ -182,6 +185,7 @@ describe("<ChatDeadTileBanner />", () => {
         hostLabel="mac-mini"
         reason="chat-not-visible"
         ownedByViewer
+        environmentOwned={false}
         cloneAllowed
         showsPublishedCopy={false}
         cloning={false}
@@ -214,6 +218,7 @@ describe("<ChatDeadTileBanner />", () => {
         hostLabel="mac-mini"
         reason="chat-not-on-this-host"
         ownedByViewer
+        environmentOwned={false}
         cloneAllowed
         showsPublishedCopy={false}
         cloning={false}
@@ -250,6 +255,7 @@ describe("<ChatDeadTileBanner />", () => {
         hostLabel="mac-mini"
         reason="chat-no-longer-shared"
         ownedByViewer
+        environmentOwned={false}
         cloneAllowed={false}
         showsPublishedCopy={false}
         cloning={false}
@@ -287,6 +293,7 @@ describe("<ChatDeadTileBanner />", () => {
           hostLabel="mac-mini"
           reason={reason}
           ownedByViewer
+          environmentOwned={false}
           cloneAllowed
           showsPublishedCopy={false}
           cloning={false}
@@ -313,6 +320,7 @@ describe("<ChatDeadTileBanner />", () => {
           hostLabel="085b919a-f0a6-42e5-b05e-241738d3dd6a"
           reason="host-offline"
           ownedByViewer={false}
+          environmentOwned={false}
           cloneAllowed
           showsPublishedCopy
           cloning={false}
@@ -340,6 +348,7 @@ describe("<ChatDeadTileBanner />", () => {
           hostLabel="085b919a-f0a6-42e5-b05e-241738d3dd6a"
           reason="host-offline"
           ownedByViewer={false}
+          environmentOwned={false}
           cloneAllowed={false}
           showsPublishedCopy
           cloning={false}
@@ -368,6 +377,7 @@ describe("<ChatDeadTileBanner />", () => {
           hostLabel="some-host-id"
           reason="host-offline"
           ownedByViewer={false}
+          environmentOwned={false}
           cloneAllowed
           showsPublishedCopy={false}
           cloning={false}
@@ -397,6 +407,7 @@ describe("<ChatDeadTileBanner />", () => {
             hostLabel="mac-mini"
             reason={reason}
             ownedByViewer={false}
+            environmentOwned={false}
             cloneAllowed
             showsPublishedCopy
             cloning={false}
@@ -423,6 +434,7 @@ describe("<ChatDeadTileBanner />", () => {
           hostLabel="mac-mini"
           reason="chat-no-longer-shared"
           ownedByViewer={false}
+          environmentOwned={false}
           cloneAllowed={false}
           showsPublishedCopy={false}
           cloning={false}
@@ -447,6 +459,7 @@ describe("<ChatDeadTileBanner />", () => {
         hostLabel="mac-mini"
         reason="host-offline"
         ownedByViewer
+        environmentOwned={false}
         cloneAllowed={false}
         showsPublishedCopy={false}
         cloning={false}
@@ -477,6 +490,7 @@ describe("<ChatDeadTileBanner />", () => {
           hostLabel="mac-mini"
           reason={reason}
           ownedByViewer
+          environmentOwned={false}
           cloneAllowed={false}
           showsPublishedCopy={false}
           cloning={false}
@@ -510,6 +524,7 @@ describe("<ChatDeadTileBanner />", () => {
           hostLabel="mac-mini"
           reason={reason}
           ownedByViewer={false}
+          environmentOwned={false}
           cloneAllowed
           showsPublishedCopy
           cloning={false}
@@ -533,6 +548,7 @@ describe("<ChatDeadTileBanner />", () => {
         hostLabel="mac-mini"
         reason="host-offline"
         ownedByViewer={false}
+        environmentOwned={false}
         cloneAllowed
         showsPublishedCopy
         cloning={false}
@@ -544,5 +560,110 @@ describe("<ChatDeadTileBanner />", () => {
     expect(
       screen.getByTestId("report-context").getAttribute("data-message"),
     ).toContain("isn't connected here");
+  });
+});
+
+describe("<ChatDeadTileBanner /> for a team environment's chat (environmentOwned)", () => {
+  const SANDBOX_FACT = "This chat's sandbox isn't available.";
+
+  it("says the sandbox is out and the copy shown, with no clone clause and no collaborator", () => {
+    for (const [reason, cloneAllowed] of [
+      ["host-offline", true],
+      ["chat-not-visible", false],
+    ] as const) {
+      const testId = `chat-dead-env-${reason}`;
+      const { unmount } = render(
+        <ChatDeadTileBanner
+          hostLabel="team-sandbox"
+          reason={reason}
+          ownedByViewer={false}
+          environmentOwned
+          cloneAllowed={cloneAllowed}
+          showsPublishedCopy
+          cloning={false}
+          onClone={() => undefined}
+          testId={testId}
+          className={undefined}
+        />,
+      );
+
+      const text = screen.getByTestId(testId).textContent;
+      expect(text).toContain(
+        `${SANDBOX_FACT} Showing the last published copy.`,
+      );
+      expect(text).not.toContain("collaborator");
+      expect(text).not.toContain("Cloning creates");
+      expect(text).not.toContain("view-only access");
+      expect(text).not.toContain("team-sandbox");
+      unmount();
+    }
+  });
+
+  it("claims no published copy when the mounting surface shows none, and outranks the own-chat copy", () => {
+    render(
+      <ChatDeadTileBanner
+        hostLabel="mac-mini"
+        reason="host-offline"
+        ownedByViewer
+        environmentOwned
+        cloneAllowed
+        showsPublishedCopy={false}
+        cloning={false}
+        onClone={() => undefined}
+        testId="chat-dead-env-live"
+        className={undefined}
+      />,
+    );
+
+    const text = screen.getByTestId("chat-dead-env-live").textContent;
+    expect(text).toContain(SANDBOX_FACT);
+    expect(text).not.toContain("published copy");
+    expect(text).not.toContain("mac-mini");
+  });
+
+  it("files a report that names the sandbox, not a collaborator's machine", () => {
+    render(
+      <ChatDeadTileBanner
+        hostLabel="team-sandbox"
+        reason="host-offline"
+        ownedByViewer={false}
+        environmentOwned
+        cloneAllowed
+        showsPublishedCopy
+        cloning={false}
+        onClone={() => undefined}
+        testId="chat-dead-env-report"
+        className={undefined}
+      />,
+    );
+
+    const report = screen.getByTestId("report-context");
+    expect(report.getAttribute("data-title")).toBe(
+      "Chat sandbox isn't available",
+    );
+    expect(report.getAttribute("data-message")).toBe(
+      "The chat's team sandbox isn't available.",
+    );
+  });
+
+  it("keeps the revoked-access copy, which is about the viewer and not about any host", () => {
+    render(
+      <ChatDeadTileBanner
+        hostLabel="team-sandbox"
+        reason="chat-no-longer-shared"
+        ownedByViewer={false}
+        environmentOwned
+        cloneAllowed
+        showsPublishedCopy
+        cloning={false}
+        onClone={() => undefined}
+        testId="chat-dead-env-revoked"
+        className={undefined}
+      />,
+    );
+
+    const text = screen.getByTestId("chat-dead-env-revoked").textContent;
+    expect(text).toContain("no longer shared with you");
+    expect(text).not.toContain("sandbox isn't available");
   });
 });
