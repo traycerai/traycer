@@ -148,6 +148,30 @@ export function readEpicTitlesFromCloudTaskCaches(
 }
 
 /**
+ * Calls `onChange` for a cache event on a task list
+ * `readEpicTitlesFromCloudTaskCaches` reads for `scope`, and for no other: a
+ * render reading that scan through `useSyncExternalStore` re-runs it only when
+ * one of its own sources moved, not on every query in the app.
+ */
+export function subscribeToCloudTaskListCaches(
+  queryClient: QueryClient,
+  scope: CloudEpicTasksCacheScope,
+  onChange: () => void,
+): () => void {
+  return queryClient.getQueryCache().subscribe((event) => {
+    const queryKey: unknown = event.query.queryKey;
+    if (!Array.isArray(queryKey)) return;
+    if (
+      cloudEpicTasksQueryKeyMatchesScope(queryKey, scope) ||
+      epicPinReadingQueryKeyMatchesScope(queryKey, scope) ||
+      currentTasksPinTailQueryKeyMatchesScope(queryKey, scope)
+    ) {
+      onChange();
+    }
+  });
+}
+
+/**
  * The team that owns `epicId` as the cached task lists read it: the first
  * cached row's `taskOwningTeamId`. `null` when no cached row names the epic, or
  * the row names no team.
@@ -302,6 +326,22 @@ export function findCachedTaskContext(
     };
   }
   return null;
+}
+
+/**
+ * Calls `onChange` for a cache event on an `epic.getTaskContexts` batch
+ * `findCachedTaskContext` reads for `scope`, and for no other.
+ */
+export function subscribeToTaskContextsCaches(
+  queryClient: QueryClient,
+  scope: CloudEpicTasksCacheScope,
+  onChange: () => void,
+): () => void {
+  return queryClient.getQueryCache().subscribe((event) => {
+    const queryKey: unknown = event.query.queryKey;
+    if (!Array.isArray(queryKey)) return;
+    if (epicTaskContextsQueryKeyMatchesScope(queryKey, scope)) onChange();
+  });
 }
 
 export function setEpicPinnedInCloudTaskCaches(

@@ -1,4 +1,4 @@
-import { useMemo, useSyncExternalStore } from "react";
+import { useCallback, useMemo, useSyncExternalStore } from "react";
 import { useQueryClient, type UseQueryResult } from "@tanstack/react-query";
 import type { WorktreeHostEntryV14 } from "@traycer/protocol/host/index";
 import {
@@ -14,10 +14,16 @@ import { useHostQueries } from "@/hooks/host/use-host-queries";
 import { cloudVerdictPreflight } from "@/lib/host/cloud-verdict-preflight";
 import { TASK_CONTEXT_TITLE_STALE_TIME_MS } from "@/hooks/epic/use-epic-get-task-contexts-query";
 import { useCloudEpicTasksQuery } from "@/hooks/epics/use-cloud-epic-tasks-query";
-import { readEpicTitlesFromCloudTaskCaches } from "@/lib/cloud-epic-tasks-query/cache";
+import {
+  readEpicTitlesFromCloudTaskCaches,
+  subscribeToCloudTaskListCaches,
+} from "@/lib/cloud-epic-tasks-query/cache";
+import {
+  decodeStringMapSnapshot,
+  encodeStringMapSnapshot,
+} from "@/lib/string-map-snapshot";
 
 const EMPTY_TASK_TITLES: ReadonlyMap<string, string> = new Map();
-const EMPTY_TITLE_RECORD: Record<string, string> = {};
 
 /**
  * Resolves each owner `epicId` on the listing to its Task title in two tiers:
@@ -65,28 +71,42 @@ export function useWorktreeTaskTitles(
   const userId = cloud.currentUserId;
 
   // The title scan reads the query cache directly, so it is read as a VALUE
-  // through the cache's own change channel rather than re-run behind a
-  // discarded trigger dependency.
-  const tier1Snapshot = useSyncExternalStore(
-    (listener) => queryClient.getQueryCache().subscribe(listener),
-    () =>
-      userId === null || epicIds.length === 0
-        ? ""
-        : serializeTitles(
+  // through the change channel of the task lists it scans rather than re-run
+  // behind a discarded trigger dependency.
+  const subscribeToTitleSources = useCallback(
+    (onStoreChange: () => void) =>
+      userId === null
+        ? () => undefined
+        : subscribeToCloudTaskListCaches(
+            queryClient,
+            { hostId: null, userId },
+            onStoreChange,
+          ),
+    [queryClient, userId],
+  );
+  const tier1Snapshot = useSyncExternalStore(subscribeToTitleSources, () =>
+    userId === null || epicIds.length === 0
+      ? ""
+      : encodeStringMapSnapshot(
+          Object.entries(
             readEpicTitlesFromCloudTaskCaches(
               queryClient,
               { hostId: null, userId },
               epicIds,
             ),
           ),
+        ),
   );
   const tier1Titles = useMemo(
-    () => parseTitles(tier1Snapshot),
+    () =>
+      tier1Snapshot.length === 0
+        ? EMPTY_TASK_TITLES
+        : decodeStringMapSnapshot(tier1Snapshot),
     [tier1Snapshot],
   );
 
   const unresolvedIds = useMemo(
-    () => epicIds.filter((id) => !Object.hasOwn(tier1Titles, id)),
+    () => epicIds.filter((id) => !tier1Titles.has(id)),
     [epicIds, tier1Titles],
   );
 
@@ -120,32 +140,13 @@ export function useWorktreeTaskTitles(
 
   return useMemo(() => {
     if (userId === null || epicIds.length === 0) return EMPTY_TASK_TITLES;
-    if (tier2Titles.size === 0) {
-      return new Map(Object.entries(tier1Titles));
-    }
-    const merged = new Map(Object.entries(tier1Titles));
+    if (tier2Titles.size === 0) return tier1Titles;
+    const merged = new Map(tier1Titles);
     for (const [id, title] of tier2Titles) {
       if (!merged.has(id)) merged.set(id, title);
     }
     return merged;
   }, [userId, epicIds, tier1Titles, tier2Titles]);
-}
-
-function serializeTitles(titles: Record<string, string>): string {
-  return Object.entries(titles)
-    .sort(([left], [right]) => left.localeCompare(right))
-    .map(([id, title]) => `${id}\u0000${title}`)
-    .join("\u0001");
-}
-
-function parseTitles(snapshot: string): Record<string, string> {
-  if (snapshot.length === 0) return EMPTY_TITLE_RECORD;
-  const titles: Record<string, string> = {};
-  for (const entry of snapshot.split("\u0001")) {
-    const separator = entry.indexOf("\u0000");
-    titles[entry.slice(0, separator)] = entry.slice(separator + 1);
-  }
-  return titles;
 }
 
 function combineTaskContextTitleResults(

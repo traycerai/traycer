@@ -275,6 +275,30 @@ describe("useWorktreeTaskTitles", () => {
     });
   });
 
+  it("keeps a title intact whatever characters it holds", () => {
+    // A title is any string. The cached titles cross into render as one
+    // string snapshot, so a snapshot split on a separator character cut a
+    // title holding that character and invented an entry from its tail.
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    seedTier1Cache(queryClient, [
+      listTaskLight("epic-a", "Alpha\u0001Beta\u0000Gamma"),
+      listTaskLight("epic-b", 'Quote " and [brackets]'),
+    ]);
+
+    const worktrees = [worktreeWithOwners("/wt/a", ["epic-a", "epic-b"])];
+    const { result } = renderHook(
+      () => useWorktreeTaskTitles(mockHostClient as never, worktrees, false),
+      { wrapper: makeWrapper(queryClient) },
+    );
+
+    expect([...result.current]).toEqual([
+      ["epic-a", "Alpha\u0001Beta\u0000Gamma"],
+      ["epic-b", 'Quote " and [brackets]'],
+    ]);
+  });
+
   it("keeps unknown batch entries unresolved (no title in the map)", async () => {
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false } },

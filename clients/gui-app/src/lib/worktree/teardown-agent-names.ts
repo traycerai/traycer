@@ -1,6 +1,10 @@
 import { useMemo, useSyncExternalStore } from "react";
 import type { WorktreeBusyHolder } from "@traycer/protocol/framework/worktree-busy-holders";
 import { getOpenEpicRegistry } from "@/lib/registries/epic-session-registry";
+import {
+  decodeStringMapSnapshot,
+  encodeStringMapSnapshot,
+} from "@/lib/string-map-snapshot";
 
 const EMPTY_NAMES: ReadonlyMap<string, string> = new Map();
 
@@ -21,17 +25,10 @@ export function useTeardownAgentNames(
     (listener) => subscribeTeardownAgentNames(holders, listener),
     () => teardownAgentNamesSnapshot(holders),
   );
-  return useMemo(() => namesFromSnapshot(titlesRevision), [titlesRevision]);
-}
-
-function namesFromSnapshot(snapshot: string): ReadonlyMap<string, string> {
-  if (snapshot.length === 0) return EMPTY_NAMES;
-  const names = new Map<string, string>();
-  for (const entry of snapshot.split("\u0001")) {
-    const separator = entry.indexOf("\u0000");
-    names.set(entry.slice(0, separator), entry.slice(separator + 1));
-  }
-  return names;
+  return useMemo(() => {
+    const names = decodeStringMapSnapshot(titlesRevision);
+    return names.size === 0 ? EMPTY_NAMES : names;
+  }, [titlesRevision]);
 }
 
 function subscribeTeardownAgentNames(
@@ -60,11 +57,7 @@ function subscribeTeardownAgentNames(
 function teardownAgentNamesSnapshot(
   holders: readonly WorktreeBusyHolder[],
 ): string {
-  const names = collectTeardownAgentNames(holders);
-  return [...names.entries()]
-    .sort(([left], [right]) => left.localeCompare(right))
-    .map(([key, title]) => `${key}\u0000${title}`)
-    .join("\u0001");
+  return encodeStringMapSnapshot(collectTeardownAgentNames(holders));
 }
 
 export function collectTeardownAgentNames(

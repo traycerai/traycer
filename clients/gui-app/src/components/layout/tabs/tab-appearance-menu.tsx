@@ -4,7 +4,10 @@ import {
 } from "@/hooks/organization/organization-context";
 import { useQueryClient } from "@tanstack/react-query";
 import { hostQueryKeys } from "@/lib/query-keys/host-query-keys";
-import { findCachedTaskContext } from "@/lib/cloud-epic-tasks-query/cache";
+import {
+  findCachedTaskContext,
+  subscribeToTaskContextsCaches,
+} from "@/lib/cloud-epic-tasks-query/cache";
 import {
   authorizesCloudCapability,
   useAuthStore,
@@ -15,7 +18,7 @@ import { isEditableRole } from "@/lib/epic-permissions";
 import { Label } from "@/components/ui/label";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import type { CSSProperties } from "react";
-import { useId, useSyncExternalStore } from "react";
+import { useCallback, useId, useSyncExternalStore } from "react";
 import { Check, Group, Palette, Pencil, Pipette } from "lucide-react";
 import {
   ContextMenuItem,
@@ -220,20 +223,29 @@ function useTabTaskContext(
   // another host's batch can disagree about whether the task is local-homed.
   const hostId = useRequesterHostId(organization?.client ?? null);
   // The strip's batch is another cache entry that can land at any time while
-  // the own lookup is pending, so the stand-in is read through the cache's
-  // change channel, one stable value per store.
+  // the own lookup is pending, so the stand-in is read through the change
+  // channel of the batches it scans, one stable value per store.
   const readStandIn = () =>
     userId === null || hostId === null || !contexts.isPending
       ? null
       : findCachedTaskContext(queryClient, { hostId, userId }, epicId);
-  const subscribeToCache = (listener: () => void) =>
-    queryClient.getQueryCache().subscribe(listener);
+  const subscribeToBatches = useCallback(
+    (onStoreChange: () => void) =>
+      userId === null || hostId === null
+        ? () => undefined
+        : subscribeToTaskContextsCaches(
+            queryClient,
+            { hostId, userId },
+            onStoreChange,
+          ),
+    [queryClient, hostId, userId],
+  );
   const standInTask = useSyncExternalStore(
-    subscribeToCache,
+    subscribeToBatches,
     () => readStandIn()?.task,
   );
   const standInLocalHomed = useSyncExternalStore(
-    subscribeToCache,
+    subscribeToBatches,
     () => readStandIn()?.localHomed === true,
   );
   const answered = contexts.tasksById.get(epicId);
