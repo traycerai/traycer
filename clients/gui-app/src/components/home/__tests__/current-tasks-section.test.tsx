@@ -302,10 +302,12 @@ function renderSectionWithOrganization(view: OrganizationView) {
   const organization: OrganizationContextValue = {
     client: organizationClient,
     supported: true,
+    hostSupport: true,
     userId: "user-1",
     view,
     register: registerOrganizationTasks,
     command: () => Promise.resolve(undefined),
+    commandWithId: () => Promise.resolve(undefined),
     refresh: () => Promise.resolve(undefined),
     openDialog: openOrganizationDialog,
   };

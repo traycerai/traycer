@@ -557,11 +557,22 @@ describe("RootDndProvider on a vertical strip", () => {
 
   describe("group membership by drop position", () => {
     const inBand = BAND.left.start + STRIP_WIDTH / 2;
-    /** The strip's rows stacked 100..268; the group block reaches 4px past its rows. */
+    /**
+     * The strip's rows stacked 100..268; the group block reaches 4px past its
+     * rows. The group is the account's: a group the account does not have is
+     * closed to every drop.
+     */
     function seedGroup(members: ReadonlyArray<TabRef>, collapsed: boolean) {
       act(() => {
         useTabsStore.setState({
-          groups: { g: { name: "Work", color: "#8ab4f8", collapsed } },
+          groups: {
+            g: {
+              name: "Work",
+              color: "#8ab4f8",
+              collapsed,
+              organizationOwnerId: "user-1",
+            },
+          },
           customizations: Object.fromEntries(
             members.map((ref) => [
               tabRefKey(ref),
@@ -623,6 +634,7 @@ describe("RootDndProvider on a vertical strip", () => {
           }),
         }),
         supported: true,
+        hostSupport: true,
         userId: "user-1",
         view: {
           catalog: [],
@@ -646,13 +658,27 @@ describe("RootDndProvider on a vertical strip", () => {
         },
         register: () => () => undefined,
         command,
+        commandWithId: (_commandId, action) => command(action),
         refresh: () => Promise.resolve(),
         openDialog: () => undefined,
       };
     }
 
-    it("never joins an organization's group with a tab the organization does not keep, and goes past it whole", async () => {
-      seedOrganizationGroup([B, X, Y], [B, X, Y]);
+    it("never joins a group with a tab that is not a task, and goes past it whole", async () => {
+      seedOrganizationGroup([B, X, Y], [A, B, X, Y]);
+      // The dragged row is a bot's tab: groups hold tasks.
+      const botTab: TabRef = { kind: "bot", id: A.id };
+      act(() => {
+        const state = useTabsStore.getState();
+        useTabsStore.setState({
+          items: state.items.map((item) =>
+            item.id === itemIdOf(A) ? { ...item, ref: botTab } : item,
+          ),
+          stripOrder: state.stripOrder.map((ref) =>
+            tabRefKey(ref) === tabRefKey(A) ? botTab : ref,
+          ),
+        });
+      });
       const view = await mountStrip("left", ROWS, organizationBlock, null);
       const drag = pressAndActivate(view, ROW_A, inBand, 25);
       // Over the group's block, short of its centre: next to it, not in it.
@@ -666,31 +692,34 @@ describe("RootDndProvider on a vertical strip", () => {
 
       releaseAt(drag, inBand, 200);
 
-      expect(groupOf(A)).toBeNull();
+      expect(groupOf(botTab)).toBeNull();
       expect(stripItemIds()).toEqual([
         ROW_B.stripItemId,
         SPLIT_ID,
-        ROW_A.stripItemId,
+        itemIdOf(botTab),
         ROW_C.stripItemId,
       ]);
     });
 
-    it("keeps a tab the organization does not keep in an organization's group, moving it to the run's nearest edge when it is dropped outside", async () => {
-      seedOrganizationGroup([B, X, Y], [X, Y]);
+    it("never joins a group the account does not have, though its tabs are tasks", async () => {
+      // Residual machine-local data: no organization owner on the group.
+      seedGroup([B, X, Y], false);
+      act(() => {
+        useTabsStore.setState({
+          groups: { g: { name: "Work", color: "#8ab4f8", collapsed: false } },
+        });
+      });
       const view = await mountStrip("left", ROWS, organizationBlock, null);
-      const drag = pressAndActivate(view, ROW_B, inBand, 26);
-      // Below the block, past C: out of the group's run.
-      moveTo(drag, inBand, 300);
+      const drag = pressAndActivate(view, ROW_A, inBand, 26);
+      moveTo(drag, inBand, 170);
+      expect(useEpicDndStore.getState().headerStripDragState).toMatchObject({
+        groupId: null,
+        joinsGroup: false,
+      });
 
-      releaseAt(drag, inBand, 300);
+      releaseAt(drag, inBand, 170);
 
-      expect(groupOf(B)).toBe("g");
-      expect(stripItemIds()).toEqual([
-        ROW_A.stripItemId,
-        SPLIT_ID,
-        ROW_B.stripItemId,
-        ROW_C.stripItemId,
-      ]);
+      expect(groupOf(A)).toBeNull();
     });
 
     it("joins an organization's group with a task the organization keeps, and saves it with the menu's command at its place among all members", async () => {

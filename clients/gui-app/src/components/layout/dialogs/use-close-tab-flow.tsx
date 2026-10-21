@@ -74,9 +74,9 @@ export function useCloseTabFlow(): CloseTabFlow {
           finalizeCloseTab(tab);
           return;
         }
-        void removeTasksFromGroups(organization, ungrouped).then(() =>
-          finalizeCloseTab(tab),
-        );
+        void removeTasksFromGroups(organization, ungrouped)
+          .then(() => finalizeCloseTab(tab))
+          .catch(() => undefined);
       };
       if (dialog.promptOrConfirm(tab, finalize)) return;
       finalize();
@@ -115,7 +115,7 @@ export function useCloseTabFlow(): CloseTabFlow {
           }
         }
       }, layout);
-      void removeTasksFromGroups(organization, ungrouped);
+      void removeTasksFromGroups(organization, ungrouped).catch(() => undefined);
       if (skipped.length > 0) {
         const detail =
           skipped.length === 1 ? `"${skipped[0]}"` : `${skipped.length} tabs`;
@@ -161,7 +161,7 @@ export function useCloseTabFlow(): CloseTabFlow {
             finalizeCloseTab(active);
           }
         }, readTabStripLayout());
-        void removeTasksFromGroups(organization, ungrouped);
+        void removeTasksFromGroups(organization, ungrouped).catch(() => undefined);
         if (skipped > 0)
           toast.warning(`Kept ${skipped} tabs open with unsynced edits`, {
             description:
@@ -252,20 +252,23 @@ function tasksUngroupedByClose(
   ].filter((taskId) => memberships.some((member) => member.taskId === taskId));
 }
 
+/**
+ * Takes the tasks out of their groups. The rejection is NOT swallowed here:
+ * an individual close waits for this and must not close the tab when the
+ * membership could not be removed, which would lose the group it was in.
+ */
 function removeTasksFromGroups(
   organization: OrganizationContextValue | null,
   taskIds: readonly string[],
 ): Promise<void> {
   if (organization === null || taskIds.length === 0) return Promise.resolve();
-  return organization
-    .command({
-      kind: "groups",
-      operations: taskIds.map((taskId) => ({
-        operation: "removeTask",
-        taskId,
-      })),
-    })
-    .catch(() => undefined);
+  return organization.command({
+    kind: "groups",
+    operations: taskIds.map((taskId) => ({
+      operation: "removeTask",
+      taskId,
+    })),
+  });
 }
 
 function isOnlyBlankStartPage(tab: HeaderTab): boolean {

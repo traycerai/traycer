@@ -720,45 +720,151 @@ describe("useCloseTabFlow", () => {
     expect(useEpicCanvasStore.getState().openTabOrder).toContain(tabId);
   });
 
-  it("keeps cloud membership unchanged for group and close-other-tabs actions", () => {
-    const { refC } = seedGroupedTabs();
-    organizationState.setView(
-      organizationView([
-        { taskId: "epic-a", groupId: "group-a", position: 0 },
-        { taskId: "epic-b", groupId: "group-a", position: 1 },
-      ]),
-    );
-    const firstHook = renderHook(() => useCloseTabFlow());
-    act(() => {
-      firstHook.result.current.closeGroup("group-a");
+  describe("taking the closed tasks out of their group", () => {
+    function removeTask(taskId: string): OrganizationAction {
+      return {
+        kind: "groups",
+        operations: [{ operation: "removeTask", taskId }],
+      };
+    }
+
+    function removeTasks(taskIds: readonly string[]): OrganizationAction {
+      return {
+        kind: "groups",
+        operations: taskIds.map((taskId) => ({
+          operation: "removeTask",
+          taskId,
+        })),
+      };
+    }
+
+    it("Close group sends one command removing every member task from the group", () => {
+      const { refC } = seedGroupedTabs();
+      organizationState.setView(
+        organizationView([
+          { taskId: "epic-a", groupId: "group-a", position: 0 },
+          { taskId: "epic-b", groupId: "group-a", position: 1 },
+        ]),
+      );
+
+      const { result } = renderHook(() => useCloseTabFlow());
+      act(() => {
+        result.current.closeGroup("group-a");
+      });
+
+      expect(organizationState.command).toHaveBeenCalledExactlyOnceWith(
+        removeTasks(["epic-a", "epic-b"]),
+      );
+      expect(useTabsStore.getState().stripOrder).toEqual([refC]);
     });
 
-    expect(organizationState.command).not.toHaveBeenCalled();
-    expect(organizationState.context.view.groups.memberships).toEqual([
-      { taskId: "epic-a", groupId: "group-a", position: 0 },
-      { taskId: "epic-b", groupId: "group-a", position: 1 },
-    ]);
-    expect(useTabsStore.getState().stripOrder).toEqual([refC]);
+    it("Close group keeps a task in its group while another of its tabs stays open", () => {
+      const { a } = seedGroupedTabs();
+      // A second tab for epic-b that is not part of the group being closed.
+      useEpicCanvasStore.getState().openEpicTab("epic-b", "Beta, other view");
+      routerState.pathname = `/epics/epic-a/${a}`;
+      organizationState.setView(
+        organizationView([
+          { taskId: "epic-a", groupId: "group-a", position: 0 },
+          { taskId: "epic-b", groupId: "group-a", position: 1 },
+        ]),
+      );
 
-    firstHook.unmount();
-    resetStores();
-    resetOrganization();
-    const next = seedGroupedTabs();
-    organizationState.setView(
-      organizationView([
-        { taskId: "epic-a", groupId: "group-a", position: 0 },
-        { taskId: "epic-b", groupId: "group-a", position: 1 },
-      ]),
-    );
-    const nextHook = renderHook(() => useCloseTabFlow());
-    act(() => {
-      nextHook.result.current.closeOtherTabs(
-        epicHeaderTab("epic-a", next.a, "Alpha"),
+      const { result } = renderHook(() => useCloseTabFlow());
+      act(() => {
+        result.current.closeGroup("group-a");
+      });
+
+      expect(organizationState.command).toHaveBeenCalledExactlyOnceWith(
+        removeTask("epic-a"),
       );
     });
 
-    expect(organizationState.command).not.toHaveBeenCalled();
-    expect(organizationState.context.view.groups.memberships).toHaveLength(2);
-    expect(useEpicCanvasStore.getState().openTabOrder).toEqual([next.a]);
+    it("Close group keeps a task in its group when its tab is held back by unsynced edits", () => {
+      const { b } = seedGroupedTabs();
+      mockUnsynced.epicIds.add("epic-b");
+      organizationState.setView(
+        organizationView([
+          { taskId: "epic-a", groupId: "group-a", position: 0 },
+          { taskId: "epic-b", groupId: "group-a", position: 1 },
+        ]),
+      );
+
+      const { result } = renderHook(() => useCloseTabFlow());
+      act(() => {
+        result.current.closeGroup("group-a");
+      });
+
+      expect(organizationState.command).toHaveBeenCalledExactlyOnceWith(
+        removeTask("epic-a"),
+      );
+      expect(useEpicCanvasStore.getState().openTabOrder).toContain(b);
+    });
+
+    it("Close other tabs removes only the closed tasks from their group, not the kept tab's", () => {
+      const { a } = seedGroupedTabs();
+      organizationState.setView(
+        organizationView([
+          { taskId: "epic-a", groupId: "group-a", position: 0 },
+          { taskId: "epic-b", groupId: "group-a", position: 1 },
+        ]),
+      );
+
+      const { result } = renderHook(() => useCloseTabFlow());
+      act(() => {
+        result.current.closeOtherTabs(epicHeaderTab("epic-a", a, "Alpha"));
+      });
+
+      expect(organizationState.command).toHaveBeenCalledExactlyOnceWith(
+        removeTask("epic-b"),
+      );
+      expect(useEpicCanvasStore.getState().openTabOrder).toEqual([a]);
+    });
+
+    it("Close other tabs keeps a task in its group while another of its tabs is the one kept", () => {
+      const keptTab = useEpicCanvasStore
+        .getState()
+        .openEpicTab("epic-x", "X, first view");
+      const closedTab = useEpicCanvasStore
+        .getState()
+        .openEpicTab("epic-x", "X, second view");
+      const otherTask = useEpicCanvasStore
+        .getState()
+        .openEpicTab("epic-y", "Y");
+      const refs = [keptTab, closedTab, otherTask].map((id) => ({
+        kind: "epic" as const,
+        id,
+      }));
+      useTabsStore.setState({
+        version: 2,
+        items: refs.map((ref) => ({
+          kind: "tab" as const,
+          id: tabItemId(ref),
+          ref,
+        })),
+        activeItemId: tabItemId(refs[0]),
+        stripOrder: refs,
+        systemTabs: { history: null, settings: null },
+      });
+      routerState.pathname = `/epics/epic-x/${keptTab}`;
+      organizationState.setView(
+        organizationView([
+          { taskId: "epic-x", groupId: "group-a", position: 0 },
+          { taskId: "epic-y", groupId: "group-a", position: 1 },
+        ]),
+      );
+
+      const { result } = renderHook(() => useCloseTabFlow());
+      act(() => {
+        result.current.closeOtherTabs(
+          epicHeaderTab("epic-x", keptTab, "X, first view"),
+        );
+      });
+
+      expect(useEpicCanvasStore.getState().openTabOrder).toEqual([keptTab]);
+      expect(organizationState.command).toHaveBeenCalledExactlyOnceWith(
+        removeTask("epic-y"),
+      );
+    });
   });
 });

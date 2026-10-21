@@ -15,7 +15,10 @@ import {
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
-import type { OrganizationView } from "@traycer/protocol/host/organization/contracts";
+import type {
+  OrganizationAction,
+  OrganizationView,
+} from "@traycer/protocol/host/organization/contracts";
 import { OrganizationProvider } from "@/hooks/organization/organization-provider";
 import { useOrganization } from "@/hooks/organization/organization-context";
 import {
@@ -51,7 +54,17 @@ const state = vi.hoisted(() => {
     getActiveHostId: () => identity.hostId,
     getRequestContextUserId: () => identity.userId,
   };
-  return { client, identity, view };
+  // What the host answered at its last handshake: `null` before any.
+  const support: { current: boolean | null } = { current: true };
+  const mutateAsync = vi.fn<
+    (variables: {
+      readonly command: {
+        readonly commandId: string;
+        readonly action: OrganizationAction;
+      };
+    }) => Promise<unknown>
+  >();
+  return { client, identity, view, support, mutateAsync };
 });
 
 vi.mock("@/lib/host", () => ({
@@ -66,7 +79,8 @@ vi.mock("@/hooks/host/use-reactive-host-readiness", () => ({
 }));
 
 vi.mock("@/hooks/host/use-host-supports-method", () => ({
-  useHostSupportsMethod: () => true,
+  useHostMethodSupport: () => state.support.current,
+  useHostSupportsMethod: () => state.support.current === true,
 }));
 
 vi.mock("@/stores/auth/auth-store", () => ({
@@ -104,14 +118,7 @@ vi.mock("@/hooks/host/use-surface-host-stream-binding", () => ({
 
 vi.mock("@/hooks/host/use-host-query", () => ({
   useHostQuery: () => ({ data: state.view }),
-  useHostMutation: () => ({
-    mutateAsync: vi.fn(() =>
-      Promise.resolve({
-        commandId: "command-1",
-        disposition: "durably-accepted",
-      }),
-    ),
-  }),
+  useHostMutation: () => ({ mutateAsync: state.mutateAsync }),
 }));
 
 vi.mock("@/components/organization/organization-dialogs", () => ({
@@ -169,6 +176,14 @@ function resetStores(): void {
   state.identity.hostId = "host-1";
   state.identity.userId = "user-1";
   state.identity.authUserId = "user-1";
+  state.support.current = true;
+  state.mutateAsync.mockReset();
+  state.mutateAsync.mockImplementation(() =>
+    Promise.resolve({
+      commandId: "command-1",
+      disposition: "durably-accepted",
+    }),
+  );
   state.view = emptyView();
 }
 
@@ -735,4 +750,151 @@ describe("OrganizationProvider lifecycle projection", () => {
       expect(customization?.organizationOwnerId).toBeUndefined();
     });
   });
+});
+
+describe("OrganizationProvider draft group intent", () => {
+  function startDraftInGroup(taskId: string, groupId: string): string {
+    const tabId = openTask(taskId);
+    useTabsStore.setState({
+      customizations: {
+        [`epic:${tabId}`]: {
+          color: null,
+          icon: null,
+          groupId: null,
+          pendingGroupId: groupId,
+        },
+      },
+    });
+    return tabId;
+  }
+
+  function pendingGroupIdOf(tabId: string): string | null | undefined {
+    return useTabsStore.getState().customizations?.[`epic:${tabId}`]
+      ?.pendingGroupId;
+  }
+
+  /** The account has the group, and has nothing yet for the task. */
+  function viewWithOnlyTheGroup(): OrganizationView {
+    return {
+      ...emptyView(),
+      groups: {
+        version: "0",
+        groups: [
+          {
+            groupId: "group-1",
+            name: "Project",
+            color: "#8ab4f8",
+            position: 0,
+          },
+        ],
+        memberships: [],
+      },
+    };
+  }
+
+  it("sends the intent for a task with no cloud metadata yet, and keeps it until the host acknowledges", async () => {
+    const taskTabId = startDraftInGroup("task-new", "group-1");
+    state.view = viewWithOnlyTheGroup();
+    let acknowledge: () => void = () => undefined;
+    state.mutateAsync.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          acknowledge = () =>
+            resolve({
+              commandId: "command-1",
+              disposition: "durably-accepted",
+            });
+        }),
+    );
+
+    renderProvider(new QueryClient(), null);
+
+    await waitFor(() => expect(state.mutateAsync).toHaveBeenCalledTimes(1));
+    expect(state.mutateAsync.mock.calls[0]?.[0].command.action).toEqual({
+      kind: "groups",
+      operations: [
+        {
+          operation: "moveTask",
+          taskId: "task-new",
+          groupId: "group-1",
+          position: 0,
+        },
+      ],
+    });
+    expect(pendingGroupIdOf(taskTabId)).toBe("group-1");
+
+    await act(async () => {
+      acknowledge();
+      await Promise.resolve();
+    });
+
+    await waitFor(() => expect(pendingGroupIdOf(taskTabId)).toBeNull());
+  });
+
+  it("keeps the intent when the send is rejected, and does not resend it on the next view frame", async () => {
+    const taskTabId = startDraftInGroup("task-new", "group-1");
+    state.view = viewWithOnlyTheGroup();
+    state.mutateAsync.mockImplementation(() =>
+      Promise.reject(new Error("host refused")),
+    );
+    const queryClient = new QueryClient();
+    const rendered = renderProvider(queryClient, null);
+    await waitFor(() => expect(state.mutateAsync).toHaveBeenCalledTimes(1));
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(pendingGroupIdOf(taskTabId)).toBe("group-1");
+
+    state.view = { ...state.view, historyInvalidation: "next-frame" };
+    act(() => {
+      rendered.rerender(
+        <QueryClientProvider client={queryClient}>
+          <OrganizationProvider>{null}</OrganizationProvider>
+        </QueryClientProvider>,
+      );
+    });
+
+    expect(state.mutateAsync).toHaveBeenCalledTimes(1);
+    expect(pendingGroupIdOf(taskTabId)).toBe("group-1");
+  });
+
+  it("drops an intent whose group is gone from the account, and sends nothing", async () => {
+    const taskTabId = startDraftInGroup("task-new", "deleted-group");
+    state.view = viewWithOnlyTheGroup();
+
+    renderProvider(new QueryClient(), null);
+
+    await waitFor(() => expect(pendingGroupIdOf(taskTabId)).toBeNull());
+    expect(state.mutateAsync).not.toHaveBeenCalled();
+  });
+});
+
+describe("OrganizationProvider host support", () => {
+  function SupportProbe() {
+    const organization = useOrganization();
+    return (
+      <output data-testid="support">
+        {`${String(organization?.hostSupport)} ${String(organization?.supported)} ${organization?.view === undefined ? "no-view" : "view"}`}
+      </output>
+    );
+  }
+
+  it.each([
+    { hostSupport: true, expected: "true true view" },
+    { hostSupport: false, expected: "false false view" },
+    { hostSupport: null, expected: "null false view" },
+  ])(
+    "reports $hostSupport as the host's answer and keeps the cached view on screen",
+    ({ hostSupport, expected }) => {
+      state.support.current = hostSupport;
+      state.view = viewWithGroup([
+        { taskId: "task-1", groupId: "group-1", position: 0 },
+      ]);
+
+      renderProvider(new QueryClient(), <SupportProbe />);
+
+      expect(screen.getByTestId("support").textContent).toBe(expected);
+    },
+  );
 });

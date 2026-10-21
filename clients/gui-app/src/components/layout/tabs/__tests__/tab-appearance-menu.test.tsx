@@ -176,22 +176,56 @@ vi.spyOn(organizationClient, "getRequestContextUserId").mockReturnValue(
   "user-1",
 );
 
-function organizationFixture(
-  view: OrganizationView | undefined,
-): OrganizationContextValue {
+const WORK_GROUP = {
+  groupId: "work",
+  name: "Work",
+  color: "#81c995",
+  position: 0,
+} as const;
+
+/** The account's view: it has a group, and nothing yet for the task. */
+function accountView(
+  memberships: OrganizationView["groups"]["memberships"],
+): OrganizationView {
+  return {
+    catalog: [],
+    groups: { version: "0", groups: [WORK_GROUP], memberships },
+    appearances: [],
+    taskLabels: {},
+    ready: true,
+    authenticationRequired: false,
+    pending: [],
+    failures: [],
+  };
+}
+
+function organizationFixture(view: OrganizationView): OrganizationContextValue {
   return {
     client: organizationClient,
     supported: true,
+    hostSupport: true,
     userId: "user-1",
     view,
     register: () => () => undefined,
     command: () => Promise.resolve(undefined),
+    commandWithId: () => Promise.resolve(undefined),
     refresh: () => Promise.resolve(undefined),
-    openDialog: () => undefined,
+    openDialog: vi.fn(),
   };
 }
 
-function remoteTask(epicId: string): ListTaskLight {
+/** What the Labels item asks the Labels window to allow, once clicked. */
+function labelsCanEdit(): boolean {
+  const organization = organizationState.organization;
+  if (organization === null) throw new Error("no organization fixture");
+  fireEvent.click(screen.getByRole("menuitem", { name: "Labels" }));
+  const opened = vi.mocked(organization.openDialog).mock.calls.at(-1)?.[0];
+  if (opened?.kind !== "labels")
+    throw new Error("Labels did not open the Labels window");
+  return opened.canEdit;
+}
+
+function remoteTask(epicId: string, createdBy: string): ListTaskLight {
   return {
     epic: {
       light: {
@@ -205,7 +239,7 @@ function remoteTask(epicId: string): ListTaskLight {
         status: "draft",
         createdAt: 1,
         updatedAt: 1,
-        createdBy: "user-1",
+        createdBy,
         version: "1.0.0",
       },
       permission: null,
@@ -217,15 +251,41 @@ function remoteTask(epicId: string): ListTaskLight {
   };
 }
 
+/** Tasks the signed-in account (`user-1`) created, which it may label. */
 function taskContextsResponse(resolutions: {
   readonly found: readonly string[];
   readonly localHomed: readonly string[];
 }): GetTaskContextsResponse {
   const tasks: GetTaskContextsResponse["tasks"] = {};
   for (const epicId of resolutions.found) {
-    tasks[epicId] = { status: "found", task: remoteTask(epicId) };
+    tasks[epicId] = { status: "found", task: remoteTask(epicId, "user-1") };
   }
   return { tasks, localHomedTaskIds: [...resolutions.localHomed] };
+}
+
+/** Tasks someone else created and gave this account no editing role on. */
+function sharedTaskContextsResponse(
+  found: readonly string[],
+): GetTaskContextsResponse {
+  const tasks: GetTaskContextsResponse["tasks"] = {};
+  for (const epicId of found) {
+    tasks[epicId] = {
+      status: "found",
+      task: remoteTask(epicId, "someone-else"),
+    };
+  }
+  return { tasks, localHomedTaskIds: [] };
+}
+
+/** The menu's rows that every task tab gets, whatever its lookup says. */
+function expectAccountMenu(): void {
+  expect(screen.getByRole("menuitem", { name: "Labels" })).toBeTruthy();
+  expect(
+    screen.getByRole("menuitem", { name: "Task appearance" }),
+  ).toBeTruthy();
+  expect(screen.getByRole("menuitem", { name: "Add to group" })).toBeTruthy();
+  expect(screen.queryByText("Tab appearance")).toBeNull();
+  expect(screen.queryByRole("menuitem", { name: /Retry/i })).toBeNull();
 }
 
 describe("tab appearance and grouping controls", () => {
@@ -260,7 +320,7 @@ describe("tab appearance and grouping controls", () => {
   });
 
   it("shows retry for task-context errors and restores authorized controls after recovery", async () => {
-    organizationState.organization = organizationFixture(undefined);
+    organizationState.organization = organizationFixture(accountView([]));
     let resolveRecovery: (response: GetTaskContextsResponse) => void = () =>
       undefined;
     const recovery = new Promise<GetTaskContextsResponse>((resolve) => {
@@ -300,43 +360,24 @@ describe("tab appearance and grouping controls", () => {
     refetchQueries.mockRestore();
   });
 
-  describe("task context already cached by another surface", () => {
-    // The tab strip resolves every open tab's context in one batch, which is a
-    // different cache entry from this tab's own single-task lookup.
-    const stripBatchKeyOnHost = (hostId: string, userId: string) =>
-      hostQueryKeys.epicTaskContexts(hostId, userId, ["epic-a", "epic-b"]);
+  describe("the account's groups, whatever the task's lookup says", () => {
     const stripBatchKey = (userId: string) =>
-      stripBatchKeyOnHost("host-1", userId);
+      hostQueryKeys.epicTaskContexts("host-1", userId, ["epic-a", "epic-b"]);
 
     beforeEach(() => {
       activeHostId.mockReturnValue("host-1");
-      organizationState.organization = organizationFixture(undefined);
-      // This tab's own lookup never answers, so whatever the menu shows comes
-      // from the other batch.
+      organizationState.organization = organizationFixture(accountView([]));
       organizationState.loadTaskContext.mockReturnValue(
         new Promise<GetTaskContextsResponse>(() => undefined),
       );
     });
 
-    it("shows the organization controls at once, before the tab's own lookup answers", () => {
-      queryClient.setQueryData(
-        stripBatchKey("user-1"),
-        taskContextsResponse({ found: ["epic-a", "epic-b"], localHomed: [] }),
-      );
-      renderMenu(false);
+    async function chooseWorkGroup(): Promise<HTMLElement> {
+      fireEvent.click(screen.getByRole("menuitem", { name: "Add to group" }));
+      return screen.findByRole("menuitem", { name: "Work" });
+    }
 
-      expect(screen.getByRole("menuitem", { name: "Labels" })).toBeTruthy();
-      expect(
-        screen.getByRole("menuitem", { name: "Task appearance" }),
-      ).toBeTruthy();
-      expect(
-        screen.getByRole("menuitem", { name: "Add to group" }),
-      ).toBeTruthy();
-      expect(screen.queryByText("Tab appearance")).toBeNull();
-      expect(organizationState.loadTaskContext).toHaveBeenCalledTimes(1);
-    });
-
-    it("shows the local tab appearance for a task the cached batch marks local-homed", () => {
+    it("offers the account's groups, enabled, to a task whose lookup says it is still local-homed", async () => {
       queryClient.setQueryData(
         stripBatchKey("user-1"),
         taskContextsResponse({
@@ -346,14 +387,67 @@ describe("tab appearance and grouping controls", () => {
       );
       renderMenu(false);
 
-      expect(screen.getByText("Tab appearance")).toBeTruthy();
-      expect(screen.queryByRole("menuitem", { name: "Labels" })).toBeNull();
+      expectAccountMenu();
+      const work = await chooseWorkGroup();
+      expect(work.getAttribute("aria-disabled")).toBeNull();
+      expect(
+        screen
+          .getByRole("menuitem", { name: "New group…" })
+          .getAttribute("aria-disabled"),
+      ).toBeNull();
     });
 
-    it("lets the tab's own lookup take over once it answers", async () => {
+    it("moves a task with no cloud appearance yet into the chosen group", async () => {
+      // The account's view has no appearance row for this task: the menu once
+      // waited for one before it let the task join a group.
+      const organization = organizationFixture(accountView([]));
+      const command = vi.spyOn(organization, "command");
+      organizationState.organization = organization;
+      queryClient.setQueryData(
+        stripBatchKey("user-1"),
+        taskContextsResponse({
+          found: ["epic-a", "epic-b"],
+          localHomed: ["epic-a"],
+        }),
+      );
+      renderMenu(false);
+
+      fireEvent.click(await chooseWorkGroup());
+
+      expect(command).toHaveBeenCalledExactlyOnceWith({
+        kind: "groups",
+        operations: [
+          {
+            operation: "moveTask",
+            taskId: "epic-a",
+            groupId: "work",
+            position: 0,
+          },
+        ],
+      });
+    });
+
+    it("offers the same menu to a task whose lookup has not answered", () => {
+      renderMenu(false);
+
+      expectAccountMenu();
+    });
+
+    it("shows the organization controls at once from a batch another surface cached", () => {
       queryClient.setQueryData(
         stripBatchKey("user-1"),
         taskContextsResponse({ found: ["epic-a", "epic-b"], localHomed: [] }),
+      );
+      renderMenu(false);
+
+      expectAccountMenu();
+      expect(organizationState.loadTaskContext).toHaveBeenCalledTimes(1);
+    });
+
+    it("takes a task's own answer over the cached batch's when it comes: local-homed means the account's own task", async () => {
+      queryClient.setQueryData(
+        stripBatchKey("user-1"),
+        sharedTaskContextsResponse(["epic-a", "epic-b"]),
       );
       let answerOwnLookup: (response: GetTaskContextsResponse) => void = () =>
         undefined;
@@ -362,7 +456,7 @@ describe("tab appearance and grouping controls", () => {
       });
       organizationState.loadTaskContext.mockReturnValue(ownLookup);
       renderMenu(false);
-      expect(screen.getByRole("menuitem", { name: "Labels" })).toBeTruthy();
+      expect(labelsCanEdit()).toBe(false);
 
       await act(async () => {
         answerOwnLookup(
@@ -371,18 +465,19 @@ describe("tab appearance and grouping controls", () => {
         await ownLookup;
       });
 
-      expect(await screen.findByText("Tab appearance")).toBeTruthy();
-      expect(screen.queryByRole("menuitem", { name: "Labels" })).toBeNull();
+      await waitFor(() => expect(labelsCanEdit()).toBe(true));
+      expectAccountMenu();
     });
 
     // A task deleted (or no longer visible) since the strip's batch was cached
-    // must not keep its controls once the tab's own, fresher lookup says so.
+    // must not keep editing rights once the tab's own, fresher lookup says so.
+    // It keeps its menu: the groups are the account's, not the task's.
     const unresolvedResolutions: readonly TaskContextResolution[] = [
       { status: "confirmed-absent" },
       { status: "unknown", reason: "not-found-or-not-permitted" },
     ];
     it.each(unresolvedResolutions)(
-      "drops the stand-in controls when the tab's own lookup settles as $status",
+      "keeps the menu but drops the stand-in's editing rights when the tab's own lookup settles as $status",
       async (resolution) => {
         queryClient.setQueryData(
           stripBatchKey("user-1"),
@@ -395,7 +490,7 @@ describe("tab appearance and grouping controls", () => {
         });
         organizationState.loadTaskContext.mockReturnValue(ownLookup);
         renderMenu(false);
-        expect(screen.getByRole("menuitem", { name: "Labels" })).toBeTruthy();
+        expect(labelsCanEdit()).toBe(true);
 
         await act(async () => {
           answerOwnLookup({
@@ -405,22 +500,13 @@ describe("tab appearance and grouping controls", () => {
           await ownLookup;
         });
 
-        await waitFor(() =>
-          expect(screen.queryByRole("menuitem", { name: "Labels" })).toBeNull(),
-        );
-        expect(
-          screen.queryByRole("menuitem", { name: "Task appearance" }),
-        ).toBeNull();
-        expect(
-          screen.queryByRole("menuitem", { name: "Add to group" }),
-        ).toBeNull();
-        expect(screen.queryByText("Tab appearance")).toBeNull();
-        expect(screen.queryByRole("menuitem", { name: /Retry/i })).toBeNull();
+        await waitFor(() => expect(labelsCanEdit()).toBe(false));
+        expectAccountMenu();
       },
     );
 
     it.each(unresolvedResolutions)(
-      "keeps the controls away while the tab's own lookup refetches after settling as $status",
+      "does not bring the stand-in's editing rights back while the tab's own lookup refetches after settling as $status",
       async (resolution) => {
         queryClient.setQueryData(
           stripBatchKey("user-1"),
@@ -437,9 +523,7 @@ describe("tab appearance and grouping controls", () => {
             new Promise<GetTaskContextsResponse>(() => undefined),
           );
         renderMenu(false);
-        await waitFor(() =>
-          expect(screen.queryByRole("menuitem", { name: "Labels" })).toBeNull(),
-        );
+        await waitFor(() => expect(labelsCanEdit()).toBe(false));
         const ownLookupKey = hostQueryKeys.epicTaskContexts(
           "host-1",
           "user-1",
@@ -457,75 +541,69 @@ describe("tab appearance and grouping controls", () => {
           expect(organizationState.loadTaskContext).toHaveBeenCalledTimes(2),
         );
         expect(queryClient.isFetching({ queryKey: ownLookupKey })).toBe(1);
-        expect(screen.queryByRole("menuitem", { name: "Labels" })).toBeNull();
-        expect(
-          screen.queryByRole("menuitem", { name: "Task appearance" }),
-        ).toBeNull();
-        expect(
-          screen.queryByRole("menuitem", { name: "Add to group" }),
-        ).toBeNull();
-        expect(screen.queryByText("Tab appearance")).toBeNull();
+        expect(labelsCanEdit()).toBe(false);
+        expectAccountMenu();
       },
     );
 
-    it("offers no organization controls from a batch that did not resolve the task", () => {
+    it("keeps the menu, view-only, when the cached batch did not resolve the task", () => {
       queryClient.setQueryData(
         stripBatchKey("user-1"),
         taskContextsResponse({ found: ["epic-b"], localHomed: [] }),
       );
       renderMenu(false);
 
-      expect(screen.queryByRole("menuitem", { name: "Labels" })).toBeNull();
-      expect(screen.queryByText("Tab appearance")).toBeNull();
+      expectAccountMenu();
+      expect(labelsCanEdit()).toBe(false);
     });
 
-    it("ignores a batch cached for another account", () => {
+    it("does not let a batch cached for another account grant editing rights", () => {
       queryClient.setQueryData(
         stripBatchKey("user-2"),
         taskContextsResponse({ found: ["epic-a", "epic-b"], localHomed: [] }),
       );
       renderMenu(false);
 
-      expect(screen.queryByRole("menuitem", { name: "Labels" })).toBeNull();
-      expect(screen.queryByText("Tab appearance")).toBeNull();
+      expectAccountMenu();
+      expect(labelsCanEdit()).toBe(false);
     });
 
     // Hosts can disagree about a task (whether it is local-homed, who can
     // edit it), so only the host this tab's own lookup asks may stand in for it.
-    it("ignores a batch cached for another host", () => {
+    it("does not let a batch cached for another host grant editing rights", () => {
       queryClient.setQueryData(
-        stripBatchKeyOnHost("host-2", "user-1"),
+        hostQueryKeys.epicTaskContexts("host-2", "user-1", [
+          "epic-a",
+          "epic-b",
+        ]),
         taskContextsResponse({ found: ["epic-a", "epic-b"], localHomed: [] }),
       );
       renderMenu(false);
 
-      expect(screen.queryByRole("menuitem", { name: "Labels" })).toBeNull();
-      expect(
-        screen.queryByRole("menuitem", { name: "Task appearance" }),
-      ).toBeNull();
-      expect(
-        screen.queryByRole("menuitem", { name: "Add to group" }),
-      ).toBeNull();
-      expect(screen.queryByText("Tab appearance")).toBeNull();
+      expectAccountMenu();
+      expect(labelsCanEdit()).toBe(false);
     });
 
     it("takes the tab's own host's answer when another host's batch disagrees", () => {
       // Cached first, so a lookup that ignored the host would meet it first.
       queryClient.setQueryData(
-        stripBatchKeyOnHost("host-2", "user-1"),
+        hostQueryKeys.epicTaskContexts("host-2", "user-1", [
+          "epic-a",
+          "epic-b",
+        ]),
         taskContextsResponse({
           found: ["epic-a", "epic-b"],
           localHomed: ["epic-a"],
         }),
       );
       queryClient.setQueryData(
-        stripBatchKeyOnHost("host-1", "user-1"),
-        taskContextsResponse({ found: ["epic-a", "epic-b"], localHomed: [] }),
+        stripBatchKey("user-1"),
+        sharedTaskContextsResponse(["epic-a", "epic-b"]),
       );
       renderMenu(false);
 
-      expect(screen.getByRole("menuitem", { name: "Labels" })).toBeTruthy();
-      expect(screen.queryByText("Tab appearance")).toBeNull();
+      expectAccountMenu();
+      expect(labelsCanEdit()).toBe(false);
     });
 
     it("stands in with nothing while the client has no active host", () => {
@@ -536,62 +614,56 @@ describe("tab appearance and grouping controls", () => {
       );
       renderMenu(false);
 
-      expect(screen.queryByRole("menuitem", { name: "Labels" })).toBeNull();
-      expect(screen.queryByText("Tab appearance")).toBeNull();
+      expectAccountMenu();
+      expect(labelsCanEdit()).toBe(false);
     });
   });
 
-  it("shows the appearance submenu and stores a color and manual icon", () => {
-    renderMenu(false);
-    fireEvent.click(screen.getByText("Tab appearance"));
-    fireEvent.click(screen.getByRole("menuitemradio", { name: "Blue" }));
-    fireEvent.change(screen.getByRole("textbox", { name: "Tab icon" }), {
-      target: { value: "★" },
+  describe("the account's group commands from the menu", () => {
+    function groupedMenu(): OrganizationContextValue {
+      const organization = organizationFixture(
+        accountView([{ taskId: "epic-a", groupId: "work", position: 0 }]),
+      );
+      organizationState.organization = organization;
+      organizationState.loadTaskContext.mockResolvedValue(
+        taskContextsResponse({ found: ["epic-a"], localHomed: [] }),
+      );
+      return organization;
+    }
+
+    it("removes a grouped task from its group", async () => {
+      const command = vi.spyOn(groupedMenu(), "command");
+      renderMenu(false);
+
+      expect(
+        await screen.findByRole("menuitem", { name: "Move to group" }),
+      ).toBeTruthy();
+      fireEvent.click(
+        screen.getByRole("menuitem", { name: "Remove from group" }),
+      );
+
+      expect(command).toHaveBeenCalledExactlyOnceWith({
+        kind: "groups",
+        operations: [{ operation: "removeTask", taskId: "epic-a" }],
+      });
     });
-    const customization =
-      useTabsStore.getState().customizations?.["epic:tab-a"];
-    expect(customization).toMatchObject({ color: "#8ab4f8", icon: "★" });
-  });
 
-  it("stores a custom tab color from the appearance submenu", () => {
-    renderMenu(false);
-    fireEvent.click(screen.getByText("Tab appearance"));
-    fireEvent.change(screen.getByLabelText("Custom tab color"), {
-      target: { value: "#123456" },
+    it("opens the new-group window for the task", async () => {
+      const organization = groupedMenu();
+      renderMenu(false);
+
+      fireEvent.click(
+        await screen.findByRole("menuitem", { name: "Move to group" }),
+      );
+      fireEvent.click(
+        await screen.findByRole("menuitem", { name: "New group…" }),
+      );
+
+      expect(organization.openDialog).toHaveBeenCalledExactlyOnceWith({
+        kind: "new-group",
+        taskId: "epic-a",
+      });
     });
-
-    expect(useTabsStore.getState().customizations?.["epic:tab-a"]?.color).toBe(
-      "#123456",
-    );
-  });
-
-  it("shows a grouped tab's group colour on disabled swatches, with the group's name and a way to edit it, and keeps the icon editable", () => {
-    useTabsStore.setState({
-      customizations: {
-        "epic:tab-a": { color: "#fdd663", icon: null, groupId: "existing" },
-      },
-    });
-    renderMenu(true);
-    fireEvent.click(screen.getByText("Tab appearance"));
-
-    const green = screen.getByRole("menuitemradio", { name: "Green" });
-    expect(green.getAttribute("aria-checked")).toBe("true");
-    expect(
-      screen
-        .getAllByRole("menuitemradio")
-        .every((swatch) => swatch.matches(":disabled")),
-    ).toBe(true);
-    expect(
-      screen.getByText("Follows the group Existing. Change it on the group."),
-    ).toBeTruthy();
-    expect(
-      screen.getByRole("textbox", { name: "Tab icon" }).matches(":disabled"),
-    ).toBe(false);
-    fireEvent.click(screen.getByRole("menuitem", { name: "Edit group…" }));
-
-    // The menu only asks: the strip opens it once the menu has closed.
-    expect(requestedGroup()).toBe("existing");
-    expect(useGroupEditorStore.getState().anchorId).toBeNull();
   });
 
   it("locks an organized task's swatches to its group's colour, keeping its own cloud colour, and offers Edit group", async () => {
@@ -646,90 +718,180 @@ describe("tab appearance and grouping controls", () => {
     expect(command).not.toHaveBeenCalled();
   });
 
-  it("offers no Edit group while the group has no header or chip to open its editor on", () => {
-    useTabsStore.setState({
-      customizations: {
-        "epic:tab-a": { color: null, icon: null, groupId: "existing" },
+  it("offers no Edit group while the group has no header or chip to open its editor on", async () => {
+    organizationState.organization = organizationFixture({
+      ...accountView([{ taskId: "epic-a", groupId: "existing", position: 0 }]),
+      groups: {
+        version: "0",
+        groups: [
+          {
+            groupId: "existing",
+            name: "Existing",
+            color: "#81c995",
+            position: 0,
+          },
+        ],
+        memberships: [{ taskId: "epic-a", groupId: "existing", position: 0 }],
       },
     });
+    organizationState.loadTaskContext.mockResolvedValue(
+      taskContextsResponse({ found: ["epic-a"], localHomed: [] }),
+    );
     renderMenu(false);
-    fireEvent.click(screen.getByText("Tab appearance"));
+
+    fireEvent.click(await screen.findByText("Task appearance"));
 
     expect(
-      screen.getByText("Follows the group Existing. Change it on the group."),
+      await screen.findByText(
+        "Follows the group Existing. Change it on the group.",
+      ),
     ).toBeTruthy();
     expect(screen.queryByRole("menuitem", { name: "Edit group…" })).toBeNull();
   });
 
-  it("offers an ungrouped tab its own colours", () => {
-    renderMenu(false);
-    fireEvent.click(screen.getByText("Tab appearance"));
-
-    expect(screen.queryByText(/Follows the group/)).toBeNull();
-    expect(screen.queryByRole("menuitem", { name: "Edit group…" })).toBeNull();
-    fireEvent.click(screen.getByRole("menuitemradio", { name: "Blue" }));
-    expect(useTabsStore.getState().customizations?.["epic:tab-a"]?.color).toBe(
-      "#8ab4f8",
-    );
-  });
-
-  it("creates a group and supports removing the tab from it", () => {
-    renderMenu(false);
-    fireEvent.click(screen.getByText("Add tab to group"));
-    fireEvent.click(screen.getByText("New group"));
-    const groupId =
-      useTabsStore.getState().customizations?.["epic:tab-a"]?.groupId;
-    expect(groupId).toBeTruthy();
-    fireEvent.click(screen.getByText("Remove from group"));
-    expect(
-      useTabsStore.getState().customizations?.["epic:tab-a"]?.groupId,
-    ).toBeNull();
-  });
-
-  it("adds a tab to an existing group", () => {
-    renderMenu(false);
-    fireEvent.click(screen.getByText("Add tab to group"));
-    fireEvent.click(screen.getByText("Existing"));
-    expect(
-      useTabsStore.getState().customizations?.["epic:tab-a"]?.groupId,
-    ).toBe("existing");
-  });
-
-  it("collapses and edits a group, including group actions", () => {
+  describe("a group's chip", () => {
     const group = {
       name: "Alpha",
       color: "#8ab4f8",
       collapsed: false,
     } as const;
-    useTabsStore.setState({
-      groups: { group },
-      customizations: {
-        "epic:tab-a": { color: null, icon: null, groupId: "group" },
-      },
+
+    beforeEach(() => {
+      useTabsStore.setState({
+        groups: { group },
+        customizations: {
+          "epic:tab-a": { color: null, icon: null, groupId: "group" },
+        },
+      });
     });
-    const close = vi.fn();
-    render(<TabGroupChip groupId="group" group={group} onClose={close} />);
-    const chip = screen.getByRole("button", { name: /Alpha: collapse group/ });
-    fireEvent.click(chip);
-    expect(useTabsStore.getState().groups?.group.collapsed).toBe(true);
-    fireEvent.contextMenu(chip);
-    const groupName = screen.getByRole("textbox", { name: "Group name" });
-    fireEvent.change(groupName, {
-      target: { value: "Renamed" },
+
+    /** The account has the group, so the editor can change it. */
+    function accountHasTheGroup(): OrganizationContextValue {
+      const organization = organizationFixture({
+        ...accountView([]),
+        groups: {
+          version: "0",
+          groups: [
+            { groupId: "group", name: "Alpha", color: "#8ab4f8", position: 0 },
+          ],
+          memberships: [{ taskId: "epic-a", groupId: "group", position: 0 }],
+        },
+      });
+      organizationState.organization = organization;
+      return organization;
+    }
+
+    function openEditor(): void {
+      render(<TabGroupChip groupId="group" group={group} onClose={vi.fn()} />);
+      fireEvent.contextMenu(
+        screen.getByRole("button", { name: /Alpha: collapse group/ }),
+      );
+    }
+
+    it("folds and unfolds the group in this window only", () => {
+      const organization = accountHasTheGroup();
+      const command = vi.spyOn(organization, "command");
+      render(<TabGroupChip groupId="group" group={group} onClose={vi.fn()} />);
+
+      fireEvent.click(
+        screen.getByRole("button", { name: /Alpha: collapse group/ }),
+      );
+
+      expect(useTabsStore.getState().groups?.group.collapsed).toBe(true);
+      expect(command).not.toHaveBeenCalled();
     });
-    fireEvent.keyDown(groupName, { key: "Enter" });
-    expect(useTabsStore.getState().groups?.group.name).toBe("Renamed");
-    fireEvent.contextMenu(chip);
-    fireEvent.click(screen.getByRole("button", { name: "Ungroup" }));
-    expect(
-      useTabsStore.getState().customizations?.["epic:tab-a"]?.groupId,
-    ).toBeNull();
-    fireEvent.contextMenu(chip);
-    fireEvent.click(screen.getByRole("button", { name: "New tab in group" }));
-    expect(navigation.open).toHaveBeenCalled();
-    fireEvent.contextMenu(chip);
-    fireEvent.click(screen.getByRole("button", { name: "Close group" }));
-    expect(close).toHaveBeenCalledWith("group");
+
+    it("renames the account's group through the account, not in a local copy", () => {
+      const command = vi.spyOn(accountHasTheGroup(), "command");
+      openEditor();
+
+      const name = screen.getByRole("textbox", { name: "Group name" });
+      fireEvent.change(name, { target: { value: "Renamed" } });
+      fireEvent.keyDown(name, { key: "Enter" });
+
+      expect(command).toHaveBeenCalledExactlyOnceWith({
+        kind: "groups",
+        operations: [
+          {
+            operation: "update",
+            groupId: "group",
+            name: "Renamed",
+            color: "#8ab4f8",
+          },
+        ],
+      });
+      expect(useTabsStore.getState().groups?.group.name).toBe("Alpha");
+    });
+
+    it("recolours the account's group through the account, from the custom picker too", () => {
+      const command = vi.spyOn(accountHasTheGroup(), "command");
+      openEditor();
+
+      fireEvent.change(screen.getByLabelText("Custom tab color"), {
+        target: { value: "#123456" },
+      });
+
+      expect(command).toHaveBeenCalledExactlyOnceWith({
+        kind: "groups",
+        operations: [
+          {
+            operation: "update",
+            groupId: "group",
+            name: "Alpha",
+            color: "#123456",
+          },
+        ],
+      });
+      expect(useTabsStore.getState().groups?.group.color).toBe("#8ab4f8");
+    });
+
+    it("deletes the account's group with Ungroup", () => {
+      const command = vi.spyOn(accountHasTheGroup(), "command");
+      openEditor();
+
+      fireEvent.click(screen.getByRole("button", { name: "Ungroup" }));
+
+      expect(command).toHaveBeenCalledExactlyOnceWith({
+        kind: "groups",
+        operations: [{ operation: "delete", groupId: "group" }],
+      });
+    });
+
+    it("opens a new tab in the group, and closes the group, from the editor", () => {
+      accountHasTheGroup();
+      const close = vi.fn();
+      render(<TabGroupChip groupId="group" group={group} onClose={close} />);
+      fireEvent.contextMenu(
+        screen.getByRole("button", { name: /Alpha: collapse group/ }),
+      );
+
+      fireEvent.click(screen.getByRole("button", { name: "New tab in group" }));
+      expect(navigation.open).toHaveBeenCalled();
+      fireEvent.contextMenu(
+        screen.getByRole("button", { name: /Alpha: collapse group/ }),
+      );
+      fireEvent.click(screen.getByRole("button", { name: "Close group" }));
+
+      expect(close).toHaveBeenCalledWith("group");
+    });
+
+    it("leaves a group the account does not have exactly as it is: nothing to edit, nothing to ungroup", () => {
+      const organization = organizationFixture(accountView([]));
+      const command = vi.spyOn(organization, "command");
+      organizationState.organization = organization;
+      openEditor();
+
+      const name = screen.getByRole("textbox", { name: "Group name" });
+      expect(name.matches(":disabled")).toBe(true);
+      expect(
+        screen
+          .getAllByRole("button", { name: /^(Blue|Green|Red)$/ })
+          .every((swatch) => swatch.matches(":disabled")),
+      ).toBe(true);
+      expect(screen.queryByRole("button", { name: "Ungroup" })).toBeNull();
+      expect(command).not.toHaveBeenCalled();
+      expect(useTabsStore.getState().groups?.group).toEqual(group);
+    });
   });
 
   it("closes a group's editor with its chip, so the chip does not come back with it open", () => {
@@ -747,29 +909,5 @@ describe("tab appearance and grouping controls", () => {
     render(chip);
 
     expect(screen.queryByRole("textbox", { name: "Group name" })).toBeNull();
-  });
-
-  it("stores a custom color from the group color picker", () => {
-    const group = {
-      name: "Alpha",
-      color: "#8ab4f8",
-      collapsed: false,
-    } as const;
-    useTabsStore.setState({
-      groups: { group },
-      customizations: {
-        "epic:tab-a": { color: null, icon: null, groupId: "group" },
-      },
-    });
-    const close = vi.fn();
-    render(<TabGroupChip groupId="group" group={group} onClose={close} />);
-    fireEvent.contextMenu(
-      screen.getByRole("button", { name: /Alpha: collapse group/ }),
-    );
-    fireEvent.change(screen.getByLabelText("Custom tab color"), {
-      target: { value: "#123456" },
-    });
-
-    expect(useTabsStore.getState().groups?.group.color).toBe("#123456");
   });
 });

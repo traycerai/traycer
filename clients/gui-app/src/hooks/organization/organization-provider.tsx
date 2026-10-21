@@ -86,11 +86,13 @@ export function OrganizationProvider({
   }, [accountUserId]);
   const authorized = useAuthStore((s) => authorizesCloudCapability(s.status));
   const hostSupport = useHostMethodSupport(hostId, "organization.command");
-  const supported =
-    hostSupport === true &&
-    authorized &&
-    userId !== null &&
-    userId === accountUserId;
+  // The projection is this account's or it is nobody's. Identity is the only
+  // part of `supported` that governs whether the cached view may be SHOWN:
+  // losing cloud authorization, or a handshake that has not landed, must not
+  // empty a menu whose groups are still the signed-in account's, but a host
+  // whose request context belongs to someone else must never be drawn.
+  const ownAccount = userId !== null && userId === accountUserId;
+  const supported = hostSupport === true && authorized && ownAccount;
   const queryClient = useQueryClient();
   const key = useMemo(
     () => organizationKeys.view(hostId, userId),
@@ -314,7 +316,7 @@ export function OrganizationProvider({
       hostSupport,
       client,
       userId,
-      view: query.data,
+      view: ownAccount ? query.data : undefined,
       register,
       command,
       commandWithId,
@@ -324,6 +326,7 @@ export function OrganizationProvider({
     [
       supported,
       hostSupport,
+      ownAccount,
       client,
       userId,
       query.data,
