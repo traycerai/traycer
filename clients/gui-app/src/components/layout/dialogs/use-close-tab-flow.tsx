@@ -120,7 +120,8 @@ export function useCloseTabFlow(): CloseTabFlow {
           const detail =
             skipped.length === 1 ? `"${skipped[0]}"` : `${skipped.length} tabs`;
           toast.warning(`Kept ${detail} open with unsynced edits`, {
-            description: "Close those tabs individually to discard their edits.",
+            description:
+              "Close those tabs individually to discard their edits.",
           });
         }
         navigateToTabIntent(navigate, tabResolveIntent(target), undefined);

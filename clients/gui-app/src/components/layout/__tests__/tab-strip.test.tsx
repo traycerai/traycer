@@ -1496,6 +1496,32 @@ describe("<TabStrip />", () => {
     expect(edge()).toBe("#ff0000");
   });
 
+  it("draws no colour from a customization the account did not write, and draws it once it is stamped", async () => {
+    const { beta } = seedTwoEpicTabs();
+    // No `organizationOwnerId`: the retired machine-local colour and icon.
+    useTabsStore.setState({
+      customizations: {
+        ...useTabsStore.getState().customizations,
+        [`epic:${beta.id}`]: { color: "#ff0000", icon: "🚀", groupId: null },
+      },
+    });
+    render(<RouterProvider router={buildRouter("/epics/e-a/e-a")} />);
+    const tab = await screen.findByTestId("tab-epic-e-b");
+
+    expect(within(tab).queryByTestId("tab-color-edge-line")).toBeNull();
+    expect(tab.querySelector('[data-slot="tab-custom-icon"]')).toBeNull();
+
+    act(() => {
+      seedTabColor(beta, "#ff0000");
+    });
+
+    expect(
+      within(tab)
+        .getByTestId("tab-color-edge-line")
+        .style.getPropertyValue("--swatch"),
+    ).toBe("#ff0000");
+  });
+
   describe("the task tray join (top strip)", () => {
     it("joins the active tab's chrome box to the tray, and draws no chrome box at all on the inactive one", async () => {
       seedTwoEpicTabs();

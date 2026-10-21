@@ -826,6 +826,126 @@ describe("useCloseTabFlow", () => {
       );
     });
 
+    describe("until the account has accepted the ungroup", () => {
+      /** The macrotask turn in which a rejected command has been handled. */
+      async function settleCommand(): Promise<void> {
+        await act(async () => {
+          await new Promise<void>((resolve) => setTimeout(resolve, 0));
+        });
+      }
+
+      function holdCommand(): { readonly accept: () => void } {
+        let accept: (() => void) | undefined;
+        organizationState.command.mockImplementation(
+          () =>
+            new Promise<void>((resolve) => {
+              accept = resolve;
+            }),
+        );
+        return {
+          accept: () => {
+            if (accept === undefined)
+              throw new Error("Expected a pending organization command");
+            accept();
+          },
+        };
+      }
+
+      function groupedMemberships(): void {
+        organizationState.setView(
+          organizationView([
+            { taskId: "epic-a", groupId: "group-a", position: 0 },
+            { taskId: "epic-b", groupId: "group-a", position: 1 },
+          ]),
+        );
+      }
+
+      it("Close group closes no tab while the command is pending, then closes them", async () => {
+        const { refA, refB, refC } = seedGroupedTabs();
+        groupedMemberships();
+        const held = holdCommand();
+
+        const { result } = renderHook(() => useCloseTabFlow());
+        act(() => {
+          result.current.closeGroup("group-a");
+        });
+        await settleCommand();
+
+        expect(organizationState.command).toHaveBeenCalledOnce();
+        expect(useTabsStore.getState().stripOrder).toEqual([refA, refB, refC]);
+        expect(useTabRecoveryHistory.getState().entries).toEqual([]);
+
+        await act(async () => {
+          held.accept();
+          await Promise.resolve();
+        });
+        await waitFor(() =>
+          expect(useTabsStore.getState().stripOrder).toEqual([refC]),
+        );
+      });
+
+      it("Close group closes nothing when the command is rejected", async () => {
+        const { a, b, c, refA, refB, refC } = seedGroupedTabs();
+        groupedMemberships();
+        organizationState.command.mockImplementation(() =>
+          Promise.reject(new Error("ungroup rejected")),
+        );
+
+        const { result } = renderHook(() => useCloseTabFlow());
+        act(() => {
+          result.current.closeGroup("group-a");
+        });
+        await settleCommand();
+
+        expect(organizationState.command).toHaveBeenCalledOnce();
+        expect(useTabsStore.getState().stripOrder).toEqual([refA, refB, refC]);
+        expect(useEpicCanvasStore.getState().openTabOrder).toEqual([a, b, c]);
+        expect(useTabRecoveryHistory.getState().entries).toEqual([]);
+      });
+
+      it("Close other tabs closes no tab while the command is pending, then closes them", async () => {
+        const { a, b, c } = seedGroupedTabs();
+        groupedMemberships();
+        const held = holdCommand();
+
+        const { result } = renderHook(() => useCloseTabFlow());
+        act(() => {
+          result.current.closeOtherTabs(epicHeaderTab("epic-a", a, "Alpha"));
+        });
+        await settleCommand();
+
+        expect(organizationState.command).toHaveBeenCalledOnce();
+        expect(useEpicCanvasStore.getState().openTabOrder).toEqual([a, b, c]);
+
+        await act(async () => {
+          held.accept();
+          await Promise.resolve();
+        });
+        await waitFor(() =>
+          expect(useEpicCanvasStore.getState().openTabOrder).toEqual([a]),
+        );
+      });
+
+      it("Close other tabs closes nothing when the command is rejected", async () => {
+        const { a, b, c, refA, refB, refC } = seedGroupedTabs();
+        groupedMemberships();
+        organizationState.command.mockImplementation(() =>
+          Promise.reject(new Error("ungroup rejected")),
+        );
+
+        const { result } = renderHook(() => useCloseTabFlow());
+        act(() => {
+          result.current.closeOtherTabs(epicHeaderTab("epic-a", a, "Alpha"));
+        });
+        await settleCommand();
+
+        expect(organizationState.command).toHaveBeenCalledOnce();
+        expect(useTabsStore.getState().stripOrder).toEqual([refA, refB, refC]);
+        expect(useEpicCanvasStore.getState().openTabOrder).toEqual([a, b, c]);
+        expect(useTabRecoveryHistory.getState().entries).toEqual([]);
+      });
+    });
+
     it("Close other tabs keeps a task in its group while another of its tabs is the one kept", async () => {
       const keptTab = useEpicCanvasStore
         .getState()

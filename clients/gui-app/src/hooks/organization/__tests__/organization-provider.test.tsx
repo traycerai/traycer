@@ -10,6 +10,7 @@ import {
   cleanup,
   fireEvent,
   render,
+  type RenderResult,
   screen,
   waitFor,
 } from "@testing-library/react";
@@ -64,7 +65,22 @@ const state = vi.hoisted(() => {
       };
     }) => Promise<unknown>
   >();
-  return { client, identity, view, support, mutateAsync };
+  // The stream transport the surface binding hands out: `null` until a test
+  // dials one. The host's recovery evidence is its availability listeners.
+  const stream: {
+    current: {
+      readonly wsStreamClient: {
+        readonly subscribe: () => {
+          readonly onServerFrame: () => void;
+          readonly close: () => void;
+        };
+        readonly subscribeAvailabilityRecovered: (
+          listener: () => void,
+        ) => () => void;
+      };
+    } | null;
+  } = { current: null };
+  return { client, identity, view, support, mutateAsync, stream };
 });
 
 vi.mock("@/lib/host", () => ({
@@ -113,7 +129,7 @@ function authSnapshot(): {
 }
 
 vi.mock("@/hooks/host/use-surface-host-stream-binding", () => ({
-  useSurfaceHostStreamBinding: () => null,
+  useSurfaceHostStreamBinding: () => state.stream.current,
 }));
 
 vi.mock("@/hooks/host/use-host-query", () => ({
@@ -171,6 +187,7 @@ function renderProvider(queryClient: QueryClient, children: ReactNode) {
 }
 
 function resetStores(): void {
+  state.stream.current = null;
   useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
   useTabsStore.setState(useTabsStore.getInitialState(), true);
   state.identity.hostId = "host-1";
@@ -831,32 +848,156 @@ describe("OrganizationProvider draft group intent", () => {
     await waitFor(() => expect(pendingGroupIdOf(taskTabId)).toBeNull());
   });
 
-  it("keeps the intent when the send is rejected, and does not resend it on the next view frame", async () => {
-    const taskTabId = startDraftInGroup("task-new", "group-1");
-    state.view = viewWithOnlyTheGroup();
-    state.mutateAsync.mockImplementation(() =>
-      Promise.reject(new Error("host refused")),
-    );
-    const queryClient = new QueryClient();
-    const rendered = renderProvider(queryClient, null);
-    await waitFor(() => expect(state.mutateAsync).toHaveBeenCalledTimes(1));
-    await act(async () => {
-      await Promise.resolve();
-    });
+  describe("after a refused send", () => {
+    function nextViewFrame(
+      rendered: RenderResult,
+      queryClient: QueryClient,
+      frame: string,
+    ): void {
+      state.view = { ...state.view, historyInvalidation: frame };
+      act(() => {
+        rendered.rerender(
+          <QueryClientProvider client={queryClient}>
+            <OrganizationProvider>{null}</OrganizationProvider>
+          </QueryClientProvider>,
+        );
+      });
+    }
 
-    expect(pendingGroupIdOf(taskTabId)).toBe("group-1");
+    /** A turn in which a settled command has been handled by the provider. */
+    async function settleCommand(): Promise<void> {
+      await act(async () => {
+        await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      });
+    }
 
-    state.view = { ...state.view, historyInvalidation: "next-frame" };
-    act(() => {
-      rendered.rerender(
-        <QueryClientProvider client={queryClient}>
-          <OrganizationProvider>{null}</OrganizationProvider>
-        </QueryClientProvider>,
+    /**
+     * The one transport the window keeps for the whole test: a recovery does
+     * not rebuild it. `recover` is the host reporting that a session reopened
+     * after a drop or a stall.
+     */
+    function dialStream(): { readonly recover: () => void } {
+      const listeners = new Set<() => void>();
+      state.stream.current = {
+        wsStreamClient: {
+          subscribe: () => ({
+            onServerFrame: () => undefined,
+            close: () => undefined,
+          }),
+          subscribeAvailabilityRecovered: (listener) => {
+            listeners.add(listener);
+            return () => {
+              listeners.delete(listener);
+            };
+          },
+        },
+      };
+      return {
+        recover: () => {
+          act(() => {
+            for (const listener of [...listeners]) listener();
+          });
+        },
+      };
+    }
+
+    it("keeps the intent when the send is rejected, then a recovery sends it again on the very same view and the acknowledgement clears it", async () => {
+      const host = dialStream();
+      const taskTabId = startDraftInGroup("task-new", "group-1");
+      state.view = viewWithOnlyTheGroup();
+      const viewBeforeRecovery = state.view;
+      state.mutateAsync.mockImplementationOnce(() =>
+        Promise.reject(new Error("host refused")),
       );
+      state.mutateAsync.mockImplementationOnce(() =>
+        Promise.resolve({
+          commandId: "command-2",
+          disposition: "durably-accepted",
+        }),
+      );
+      renderProvider(new QueryClient(), null);
+      await waitFor(() => expect(state.mutateAsync).toHaveBeenCalledTimes(1));
+      await settleCommand();
+      expect(pendingGroupIdOf(taskTabId)).toBe("group-1");
+
+      host.recover();
+
+      // No new data came with the recovery: the resend is the wake alone.
+      expect(state.view).toBe(viewBeforeRecovery);
+      await waitFor(() => expect(state.mutateAsync).toHaveBeenCalledTimes(2));
+      await waitFor(() => expect(pendingGroupIdOf(taskTabId)).toBeNull());
     });
 
-    expect(state.mutateAsync).toHaveBeenCalledTimes(1);
-    expect(pendingGroupIdOf(taskTabId)).toBe("group-1");
+    it("starts no second command for a send that has not come back, whatever frames or recoveries arrive meanwhile", async () => {
+      const host = dialStream();
+      const taskTabId = startDraftInGroup("task-new", "group-1");
+      state.view = viewWithOnlyTheGroup();
+      let acknowledge: () => void = () => undefined;
+      state.mutateAsync.mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            acknowledge = () =>
+              resolve({
+                commandId: "command-1",
+                disposition: "durably-accepted",
+              });
+          }),
+      );
+      const queryClient = new QueryClient();
+      const rendered = renderProvider(queryClient, null);
+      await waitFor(() => expect(state.mutateAsync).toHaveBeenCalledTimes(1));
+
+      nextViewFrame(rendered, queryClient, "frame-1");
+      host.recover();
+      nextViewFrame(rendered, queryClient, "frame-2");
+      host.recover();
+      await settleCommand();
+
+      expect(state.mutateAsync).toHaveBeenCalledTimes(1);
+      expect(pendingGroupIdOf(taskTabId)).toBe("group-1");
+
+      await act(async () => {
+        acknowledge();
+        await Promise.resolve();
+      });
+      await waitFor(() => expect(pendingGroupIdOf(taskTabId)).toBeNull());
+      expect(state.mutateAsync).toHaveBeenCalledTimes(1);
+    });
+
+    it("stops after three refusals and keeps the intent, then a recovery gives the attempts back", async () => {
+      const MAX_ATTEMPTS = 3;
+      const host = dialStream();
+      const taskTabId = startDraftInGroup("task-new", "group-1");
+      state.view = viewWithOnlyTheGroup();
+      state.mutateAsync.mockImplementation(() =>
+        Promise.reject(new Error("host refused")),
+      );
+      const queryClient = new QueryClient();
+      const rendered = renderProvider(queryClient, null);
+      await waitFor(() => expect(state.mutateAsync).toHaveBeenCalledTimes(1));
+
+      for (let attempt = 2; attempt <= MAX_ATTEMPTS; attempt++) {
+        await settleCommand();
+        nextViewFrame(rendered, queryClient, `frame-${attempt}`);
+        await waitFor(() =>
+          expect(state.mutateAsync).toHaveBeenCalledTimes(attempt),
+        );
+      }
+      await settleCommand();
+      nextViewFrame(rendered, queryClient, "frame-after-last-attempt");
+      nextViewFrame(rendered, queryClient, "another-frame");
+      await settleCommand();
+
+      expect(state.mutateAsync).toHaveBeenCalledTimes(MAX_ATTEMPTS);
+      expect(pendingGroupIdOf(taskTabId)).toBe("group-1");
+
+      host.recover();
+
+      await waitFor(() =>
+        expect(state.mutateAsync).toHaveBeenCalledTimes(MAX_ATTEMPTS + 1),
+      );
+      expect(pendingGroupIdOf(taskTabId)).toBe("group-1");
+    });
   });
 
   it("drops an intent whose group is gone from the account, and sends nothing", async () => {

@@ -63,6 +63,10 @@ export function OrganizationProvider({
     returnFocusTo: HTMLElement | null;
   } | null>(null);
   const client = useHostClient();
+  // Read here as well as in the subscription below: a rebuilt transport is
+  // what gives a refused draft group intent its attempts back.
+  const streamClient =
+    useSurfaceHostStreamBinding(null)?.wsStreamClient ?? null;
   const readiness = useReactiveHostReadiness(client);
   const { hostId, requestContextUserId: userId } = readiness;
   const accountUserId = useAuthStore(
@@ -201,22 +205,34 @@ export function OrganizationProvider({
     [mutateAsync, client, userId, hostId],
   );
   const lifecycle = useRef<OrganizationLifecycle | null>(null);
-  // Tabs whose draft group intent this provider has already tried to send.
-  const attemptedDraftIntents = useRef(new Set<string>());
+  // How many times this provider has tried each tab's draft group intent,
+  // and which of those sends has not come back.
+  const draftIntentAttempts = useRef(new Map<string, number>());
+  const draftIntentsInFlight = useRef(new Set<string>());
   // Opening is a local tab transition, independent of the selected host's
   // organization projection. Switching that host must not reopen closed siblings.
   const openedTasks = useRef(new Set<string>());
   useEffect(() => {
     lifecycle.current = createLifecycle();
   }, [scope]);
-  // A draft intent whose send was refused is tried again when the thing that
-  // refused it recovers - the host or account changing, or organization
-  // support coming back after a lost handshake or authorization - and never
-  // on an ordinary view frame, which would retry it several times a second
-  // and toast each time.
+  // The host's own recovery evidence, and the only thing that reports a
+  // session reopening after a drop or a stall: the client is NOT rebuilt for
+  // either, so its identity cannot stand in for this. It both gives a
+  // refused draft intent its attempts back and WAKES the send, because the
+  // consuming effect is keyed on the view and a recovery frame that carries
+  // the same data is structurally shared into the same object - no change,
+  // no re-run. The epoch is that missing edge.
+  const [recoveries, setRecoveries] = useState(0);
   useEffect(() => {
-    attemptedDraftIntents.current = new Set();
-  }, [scope, supported]);
+    draftIntentAttempts.current = new Map();
+  }, [scope]);
+  useEffect(() => {
+    if (streamClient === null) return;
+    return streamClient.subscribeAvailabilityRecovered(() => {
+      draftIntentAttempts.current = new Map();
+      setRecoveries((seen) => seen + 1);
+    });
+  }, [streamClient]);
   const refresh = useCallback(async () => {
     const auth = useAuthStore.getState();
     if (
@@ -298,13 +314,12 @@ export function OrganizationProvider({
         }
       }
     }
-    consumeDraftGroupIntents(
-      query.data,
-      command,
-      attemptedDraftIntents.current,
-    );
+    consumeDraftGroupIntents(query.data, command, {
+      attempts: draftIntentAttempts.current,
+      inFlight: draftIntentsInFlight.current,
+    });
     projectOrganizationToTabs(query.data, userId);
-  }, [supported, query.data, openIds, command, lifecycle, userId]);
+  }, [supported, query.data, openIds, command, lifecycle, userId, recoveries]);
   const openDialog = useCallback(
     (value: OrganizationDialog) => {
       const opener = captureOrganizationDialogOpener();
@@ -493,6 +508,25 @@ function organizationFiltersChanged(
 }
 
 /**
+ * How many times one tab's draft group intent is sent before this provider
+ * leaves it alone.
+ *
+ * The retry rides the thing that already proves the transport is alive: a
+ * view frame. Frames are host snapshots, so while the connection is down
+ * none arrive and no attempt is spent; when it comes back the fresh snapshot
+ * IS the recovery event and the next attempt goes out on it. That is why
+ * there is no timer and no backoff here - there is nothing to wait for that
+ * the frame does not already say.
+ *
+ * The count is what stops a host that is reachable and REFUSING from being
+ * asked on every frame. It resets when the stream transport is rebuilt, or
+ * when the host or account changes, so a long-lived window that used up its
+ * attempts on one bad connection gets them back on the next. An intent that
+ * runs out stays in the layout, and the next launch picks it up.
+ */
+const DRAFT_INTENT_MAX_ATTEMPTS = 3;
+
+/**
  * Sends the group a draft tab was started in, once that draft has become a
  * task.
  *
@@ -502,24 +536,29 @@ function organizationFiltersChanged(
  * it was in flight. It is also no longer withheld until the task has cloud
  * metadata - the host accepts the assignment for a task it can prove this
  * account created here, and holds delivery itself.
- *
- * `attempted` keeps this to one send per tab for as long as the host and
- * account stay the same; the provider clears it when either changes, so a
- * refusal that was about the connection is retried then rather than on every
- * view frame.
  */
 function consumeDraftGroupIntents(
   view: OrganizationView,
   command: (action: OrganizationAction) => Promise<void>,
-  attempted: Set<string>,
+  tracking: {
+    readonly attempts: Map<string, number>;
+    readonly inFlight: Set<string>;
+  },
 ): void {
+  const { attempts, inFlight } = tracking;
   const tabs = useEpicCanvasStore.getState();
   for (const tabId of tabs.openTabOrder) {
     const task = tabs.tabsById[tabId];
     const customization =
       useTabsStore.getState().customizations?.[`epic:${tabId}`];
     const pendingGroupId = customization?.pendingGroupId;
-    if (!task || !pendingGroupId || attempted.has(tabId)) continue;
+    if (!task || !pendingGroupId) continue;
+    // A send that has not come back is still this tab's send. Frames keep
+    // arriving while it is in flight, and without this each one would start
+    // another command for the same assignment.
+    if (inFlight.has(tabId)) continue;
+    const spent = attempts.get(tabId) ?? 0;
+    if (spent >= DRAFT_INTENT_MAX_ATTEMPTS) continue;
     const clearIntent = (): void => {
       useTabsStore
         .getState()
@@ -534,7 +573,8 @@ function consumeDraftGroupIntents(
       clearIntent();
       continue;
     }
-    attempted.add(tabId);
+    attempts.set(tabId, spent + 1);
+    inFlight.add(tabId);
     void command({
       kind: "groups",
       operations: [
@@ -549,7 +589,8 @@ function consumeDraftGroupIntents(
       ],
     })
       .then(clearIntent)
-      .catch(() => undefined);
+      .catch(() => undefined)
+      .finally(() => inFlight.delete(tabId));
   }
 }
 
