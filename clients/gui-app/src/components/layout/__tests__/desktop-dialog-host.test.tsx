@@ -587,6 +587,7 @@ function createDirtyEpicHandle(
     republishChatRecordsForCurrentUser: () => undefined,
     beginPendingChatCreation: () => undefined,
     clearPendingChatCreation: () => undefined,
+    expirePendingChatCreationForCloudRow: () => undefined,
     dispose: () => undefined,
     createArtifact: () => "fake-id",
     createTerminalChat: () => null,

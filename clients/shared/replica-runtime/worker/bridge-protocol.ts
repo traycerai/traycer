@@ -565,6 +565,10 @@ export interface RuntimeCommandMap {
    */
   "begin-pending-chat-creation": { readonly pending: unknown };
   "clear-pending-chat-creation": { readonly chatId: string };
+  "expire-pending-chat-creation-for-cloud-row": {
+    readonly chatId: string;
+    readonly ownerHostId: string;
+  };
   "republish-records-for-current-user": Record<string, never>;
   "reproject-for-viewer-change": Record<string, never>;
   "discard-unsynced-edits": Record<string, never>;
@@ -618,6 +622,7 @@ const RUNTIME_COMMAND_COVERAGE: {
   "mark-chat-records-not-authoritative": true,
   "begin-pending-chat-creation": true,
   "clear-pending-chat-creation": true,
+  "expire-pending-chat-creation-for-cloud-row": true,
   "republish-records-for-current-user": true,
   "reproject-for-viewer-change": true,
   "discard-unsynced-edits": true,
