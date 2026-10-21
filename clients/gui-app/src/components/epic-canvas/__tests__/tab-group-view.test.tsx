@@ -195,6 +195,12 @@ vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
   useHostClientForHostId: () => null,
 }));
 
+// The chat routing menu calls this hook before its no-session return; these
+// render tests have no QueryClientProvider.
+vi.mock("@/hooks/agent/use-configure-agent-mutation", () => ({
+  useAgentConfigure: () => ({ mutate: () => undefined, isPending: false }),
+}));
+
 vi.mock("@/hooks/terminal/use-terminal-rename-for-mutation", () => ({
   useTerminalRenameFor: () => ({ mutate: () => undefined }),
 }));
@@ -239,6 +245,7 @@ vi.mock("@/lib/epic-selectors", () => ({
 vi.mock("@/lib/registries/chat-session-registry", () => ({
   getChatSessionRegistry: () => ({
     listHandles: () => [],
+    peek: () => null,
     subscribe: () => () => undefined,
   }),
   useExistingChatSessionHandle: () => null,
