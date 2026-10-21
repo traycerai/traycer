@@ -85,15 +85,9 @@ vi.mock("@/hooks/home/use-history-search-state", () => ({
     clear: () => undefined,
   }),
 }));
-vi.mock("@/hooks/host/use-composer-surface-host-pin", () => {
-  const pin = () => ({ resolvedHostId: null });
-  return {
-    useComposerSurfaceHostPin: pin,
-    useStartPageComposerHostPin: pin,
-    useIsTeamOwnedHost: () => () => false,
-    startPageHostPin: <T,>(value: T): T => value,
-  };
-});
+vi.mock("@/hooks/host/use-composer-surface-host-pin", () => ({
+  useComposerSurfaceHostPin: () => ({ resolvedHostId: null }),
+}));
 
 const positioned = vi.mocked(computePosition);
 

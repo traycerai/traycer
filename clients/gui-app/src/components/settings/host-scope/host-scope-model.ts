@@ -324,23 +324,6 @@ function transitDestinationOf(
 }
 
 /**
- * Whether a team owns the host `hostId` names, read off the same two lists
- * `HostScopeOption.sandbox.teamOwned` is: for a surface that holds a host id
- * rather than a picker row.
- */
-export function isTeamOwnedHostId(
-  hostId: string,
-  registry: readonly HostListItem[],
-  directory: readonly HostDirectoryEntry[],
-): boolean {
-  const item = registry.find((row) => row.hostId === hostId) ?? null;
-  const entry = directory.find((row) => row.hostId === hostId) ?? null;
-  const entryFacts =
-    entry !== null && isRemoteHostDirectoryEntry(entry) ? entry.sandbox : null;
-  return isTeamOwned(item, entryFacts);
-}
-
-/**
  * Whether a team owns the row: the registry row's `owner`, or the directory
  * entry's copy for a row the registry has not answered for yet.
  */

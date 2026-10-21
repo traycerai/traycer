@@ -56,22 +56,16 @@ const composerPinMock = vi.hoisted(() => ({
   honoredSelection: null as string | null,
 }));
 
-vi.mock("@/hooks/host/use-composer-surface-host-pin", () => {
-  const pin = () => ({
+vi.mock("@/hooks/host/use-composer-surface-host-pin", () => ({
+  useComposerSurfaceHostPin: () => ({
     selection: composerPinMock.selection,
     honoredSelection: composerPinMock.honoredSelection,
     setSelection: () => undefined,
     resolvedHostId: "active-host",
     isPinned: composerPinMock.selection !== null,
     latchOnFirstUse: () => undefined,
-  });
-  return {
-    useComposerSurfaceHostPin: pin,
-    useStartPageComposerHostPin: pin,
-    useIsTeamOwnedHost: () => () => false,
-    startPageHostPin: <T,>(value: T): T => value,
-  };
-});
+  }),
+}));
 
 vi.mock("@/components/home/hooks/use-composer-toolbar-store", async () => {
   const { createStore } = await import("zustand/vanilla");

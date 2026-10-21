@@ -47,22 +47,16 @@ vi.mock("@/lib/host", () => ({
 
 // The active-scope arm resolves the composer surface pin now (pin ??
 // effective) - the reactive-active module died with the redesign.
-vi.mock("@/hooks/host/use-composer-surface-host-pin", () => {
-  const pin = () => ({
+vi.mock("@/hooks/host/use-composer-surface-host-pin", () => ({
+  useComposerSurfaceHostPin: () => ({
     selection: null,
     honoredSelection: null,
     setSelection: mocks.pinSetSelection,
     resolvedHostId: "tab-host-id",
     isPinned: false,
     latchOnFirstUse: () => undefined,
-  });
-  return {
-    useComposerSurfaceHostPin: pin,
-    useStartPageComposerHostPin: pin,
-    useIsTeamOwnedHost: () => () => false,
-    startPageHostPin: <T,>(value: T): T => value,
-  };
-});
+  }),
+}));
 
 vi.mock("@/hooks/host/use-host-directory-list-query", () => ({
   useHostDirectoryList: () => ({

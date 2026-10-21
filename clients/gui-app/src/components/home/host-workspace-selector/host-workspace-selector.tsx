@@ -20,13 +20,9 @@ import { HostSection, WorkspaceHostSwitcher } from "./host-section";
 import { useHostOptions } from "@/components/settings/host-scope/use-host-options";
 import {
   findHostOption,
-  type HostScopeOption,
   unavailableHostOption,
 } from "@/components/settings/host-scope/host-scope-model";
-import {
-  NO_HOST_OPTION_REFUSALS,
-  startPageHostOptions,
-} from "@/components/settings/host-scope/host-option-model";
+import { NO_HOST_OPTION_REFUSALS } from "@/components/settings/host-scope/host-option-model";
 import { activeRunNoticeFor } from "./active-run-notice";
 import type { PreparedWorkspaceFolder } from "@traycer/protocol/host/epic/unary-schemas";
 import type {
@@ -41,13 +37,7 @@ import type {
 } from "@traycer/protocol/host/worktree-schemas";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcRegistry } from "@/lib/host";
-import {
-  startPageHostPin,
-  useComposerSurfaceHostPin,
-  useIsTeamOwnedHost,
-  useStartPageComposerHostPin,
-} from "@/hooks/host/use-composer-surface-host-pin";
-import type { SurfaceHostPin } from "@/hooks/host/use-surface-host-pin";
+import { useComposerSurfaceHostPin } from "@/hooks/host/use-composer-surface-host-pin";
 import { useAddressableHostId } from "@/hooks/host/use-addressable-host-id";
 import { useHostClientFor } from "@/hooks/host/use-host-client-for";
 import { useHostDirectoryList } from "@/hooks/host/use-host-directory-list-query";
@@ -389,7 +379,7 @@ function HomeSurface(props: HomeSurfaceProps) {
   // "active" scope below - the staged slot and the folder rows it stages into
   // have to agree on which machine they describe. That resolution is the
   // composer surface pin (pin ?? effective), so read the same primitive.
-  const landingHostId = useStartPageComposerHostPin().resolvedHostId;
+  const landingHostId = useComposerSurfaceHostPin().resolvedHostId;
   const stagingKey = useMemo<WorktreeStagingKey>(
     () => ({
       surface: "landing",
@@ -453,27 +443,6 @@ type ActiveHostWorkspaceControlsProps = {
   readonly disabled: boolean;
 };
 
-/**
- * The window pin as this surface acts on it: the Start Page honors no team
- * sandbox's pin (`startPageHostPin`), every other surface honors it as is.
- */
-function composerPinForStagingSurface(
-  stagingKey: WorktreeStagingKey,
-  pin: SurfaceHostPin,
-  isTeamOwnedHost: (hostId: string) => boolean,
-): SurfaceHostPin {
-  return stagingKey.surface === "landing"
-    ? startPageHostPin(pin, isTeamOwnedHost)
-    : pin;
-}
-
-function hostsForStagingSurface(
-  stagingKey: WorktreeStagingKey,
-  hosts: readonly HostScopeOption[],
-): readonly HostScopeOption[] {
-  return stagingKey.surface === "landing" ? startPageHostOptions(hosts) : hosts;
-}
-
 export function ActiveHostWorkspaceControls(
   props: ActiveHostWorkspaceControlsProps,
 ) {
@@ -486,13 +455,7 @@ export function ActiveHostWorkspaceControls(
   // #1227's dialog-local `selected`) wins outright; the follow arm resolves
   // the composer's own pin - `pin ?? effective` - and the picker below writes
   // the pin. Nothing here moves the window.
-  const windowPin = useComposerSurfaceHostPin();
-  const isTeamOwnedHost = useIsTeamOwnedHost();
-  const composerPin = composerPinForStagingSurface(
-    props.stagingKey,
-    windowPin,
-    isTeamOwnedHost,
-  );
+  const composerPin = useComposerSurfaceHostPin();
   const scopeHostId = hostWorkspaceControlsScopeHostId(props.hostScope);
   const activeHostId = scopeHostId ?? composerPin.resolvedHostId;
   const activeEntry =
@@ -527,14 +490,9 @@ export function ActiveHostWorkspaceControls(
   //
   // A FIXED scope is pinned to one machine — the source agent's — so the list
   // is that host alone. It resolves out of the same merged list, and only falls
-  // back to a stand-in row when the list has never heard of it. The Start Page
-  // lists no team sandbox (`startPageHostOptions`).
+  // back to a stand-in row when the list has never heard of it.
   const hostOptions = useHostOptions();
-  const listedHosts = hostsForStagingSurface(
-    props.stagingKey,
-    hostOptions.hosts,
-  );
-  const listedHostOption = findHostOption(listedHosts, activeHostId);
+  const listedHostOption = findHostOption(hostOptions.hosts, activeHostId);
   const selectedHostOption =
     activeHostId === null
       ? null
@@ -543,7 +501,7 @@ export function ActiveHostWorkspaceControls(
     props.hostScope,
     selectedHostOption,
     listedHostOption,
-    listedHosts,
+    hostOptions.hosts,
   );
   const homeWorkspaceSource = useHomeWorkspaceSource(
     props.stagingKey,

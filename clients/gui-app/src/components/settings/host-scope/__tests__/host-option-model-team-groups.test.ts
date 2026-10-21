@@ -7,7 +7,6 @@ import type { SandboxSummary } from "@traycer/protocol/host/sandbox-control";
 import {
   groupHostOptions,
   pickableHostOptions,
-  startPageHostOptions,
 } from "@/components/settings/host-scope/host-option-model";
 import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
 import type { HostScopeOption } from "@/components/settings/host-scope/host-scope-model";
@@ -363,26 +362,5 @@ describe("pickableHostOptions teams", () => {
       "bravo-1",
       "bravo-2",
     ]);
-  });
-});
-
-describe("startPageHostOptions", () => {
-  it("drops a team's sandbox and keeps every other row, in input order", () => {
-    const flat = startPageHostOptions([
-      sandboxRow("team-a-1", TEAM_A, {}),
-      personalRow("p1", ME),
-      sandboxRow("own-1", ME, {}),
-      sandboxRow("team-b-1", TEAM_B, {}),
-      sandboxRow("own-2", undefined, {}),
-    ]);
-    expect(ids(flat)).toEqual(["p1", "own-1", "own-2"]);
-  });
-
-  it("keeps a personal host whatever its owner says", () => {
-    const flat = startPageHostOptions([
-      personalRow("p-team", TEAM_A),
-      personalRow("p-me", ME),
-    ]);
-    expect(ids(flat)).toEqual(["p-team", "p-me"]);
   });
 });
