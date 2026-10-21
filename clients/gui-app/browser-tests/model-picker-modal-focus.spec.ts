@@ -97,6 +97,9 @@ test("pointer Speed selection and Escape keep the model picker open", async ({
     page.getByRole("button", { name: /Speed: Ultrafast/ }),
   ).toBeVisible();
   await expect(picker).toBeVisible();
+  // The chosen menu fades out before it unmounts, and a click on the trigger
+  // meanwhile opens it only for it to close again.
+  await expect(ultrafast).not.toBeVisible();
 
   await page.getByRole("button", { name: /Speed: Ultrafast/ }).click();
   await expect(ultrafast).toBeVisible();

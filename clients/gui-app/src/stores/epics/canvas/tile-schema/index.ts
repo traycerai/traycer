@@ -26,6 +26,7 @@ import { deletedArtifactsTileSchema } from "./deleted-artifacts-tile";
 import { publishedChatTileSchema } from "./published-chat-tile";
 import { prDetailTileSchema } from "./pr-detail-tile";
 import { prDiffTileSchema } from "./pr-diff-tile";
+import { simulatorTileSchema } from "./simulator-tile";
 import { blankTileSchema } from "./blank-tile";
 
 export interface TileSchema<R extends EpicCanvasTileRef> {
@@ -59,6 +60,7 @@ const TILE_SCHEMAS: TileSchemaRegistry = {
   "published-chat": publishedChatTileSchema,
   "pr-detail": prDetailTileSchema,
   "pr-diff": prDiffTileSchema,
+  simulator: simulatorTileSchema,
   blank: blankTileSchema,
 };
 

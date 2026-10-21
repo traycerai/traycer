@@ -14,6 +14,7 @@ import {
   SwitcherListRow,
 } from "@/components/epic-canvas/mobile/switcher-list-row";
 import { SwitcherSearchField } from "@/components/epic-canvas/mobile/switcher-search-field";
+import { SwitcherSimulatorsSection } from "@/components/epic-canvas/mobile/switcher-simulators-section";
 import { useSwitcherActivate } from "@/components/epic-canvas/mobile/use-switcher-activate";
 import { browserTabDriverNames } from "@/components/epic-canvas/sidebar/browser-driver-coalescing";
 import { browserTabOrigin } from "@/lib/browser-view/browser-tab-display";
@@ -52,6 +53,7 @@ import { useEpicChatRecords } from "@/lib/epic-selectors";
 import { makeBrowserSessionTileRef } from "@/stores/epics/canvas/tile-schema/browser-tile";
 import { useIsActiveTile } from "@/stores/epics/canvas/store";
 import { makeOpenableNodeRef } from "@/stores/epics/canvas/types";
+import { cn } from "@/lib/utils";
 
 interface SwitcherListProps {
   readonly epicId: string;
@@ -219,23 +221,41 @@ function SwitcherBrowsersBody(props: {
         />
       ) : null}
       {hasNoResults ? <BrowsersPanelNoResultsState /> : null}
-      {filteredTabs.length > 0 ? (
-        <div className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-x-hidden overflow-y-auto overscroll-contain p-1 pb-safe-bottom">
-          {filteredTabs.map((row) => (
-            <SwitcherBrowserRow
-              key={row.key}
-              row={row}
-              secondaryLabel={props.secondaryByKey.get(row.key) ?? null}
-              isDuplicateTitle={props.duplicateTitles.has(row.identity.title)}
-              chatById={props.chatById}
-              epicId={props.epicId}
-              tabId={props.tabId}
-              onClose={props.onClose}
-              onCloseTab={sessions.closeTab}
-            />
-          ))}
-        </div>
-      ) : null}
+      {/* One scroller for the browser rows and the Simulators section under
+          them, as the desktop panel stacks its two groups. It only takes the
+          sheet's remaining height when there are rows; otherwise it is as
+          tall as the section, so the empty and no-results states above keep
+          the space they centre in. */}
+      <div
+        className={cn(
+          "flex min-h-0 flex-col overflow-x-hidden overflow-y-auto overscroll-contain p-1 pb-safe-bottom",
+          filteredTabs.length > 0 && "flex-1",
+        )}
+      >
+        {filteredTabs.length > 0 ? (
+          <div className="flex flex-col gap-0.5">
+            {filteredTabs.map((row) => (
+              <SwitcherBrowserRow
+                key={row.key}
+                row={row}
+                secondaryLabel={props.secondaryByKey.get(row.key) ?? null}
+                isDuplicateTitle={props.duplicateTitles.has(row.identity.title)}
+                chatById={props.chatById}
+                epicId={props.epicId}
+                tabId={props.tabId}
+                onClose={props.onClose}
+                onCloseTab={sessions.closeTab}
+              />
+            ))}
+          </div>
+        ) : null}
+        <SwitcherSimulatorsSection
+          epicId={props.epicId}
+          tabId={props.tabId}
+          hostId={hostPin.resolvedHostId}
+          onClose={props.onClose}
+        />
+      </div>
     </>
   );
 }

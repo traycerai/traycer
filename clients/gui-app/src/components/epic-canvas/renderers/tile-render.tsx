@@ -38,6 +38,7 @@ import { PublishedChatTile } from "./published-chat-tile";
 import { PrDetailTile } from "./pr-detail-tile";
 import { PrDiffTile } from "./pr-diff-tile";
 import { PaneOpener } from "@/components/epic-canvas/canvas/pane-opener";
+import { SimulatorTile } from "@/components/simulator-tile/simulator-tile";
 
 export interface TileRenderArgs<R extends EpicCanvasTileRef> {
   readonly node: R;
@@ -185,6 +186,15 @@ const TILE_RENDERERS: TileRendererRegistry = {
       node={node}
       epicId={epicId}
       viewTabId={viewTabId}
+      isActive={isActive}
+    />
+  ),
+  simulator: ({ node, viewTabId, tileId, epicId, isActive }) => (
+    <SimulatorTile
+      node={node}
+      viewTabId={viewTabId}
+      tileId={tileId}
+      epicId={epicId}
       isActive={isActive}
     />
   ),

@@ -195,6 +195,9 @@ const TILE_CATEGORY_BY_KIND: Record<TileKindId, TileCategory> = {
   "pr-detail": "content",
   "pr-diff": "content",
   "deleted-artifacts": "content",
+  // A device viewer, placed where browsers are: the two are the same kind of
+  // surface to a person laying out a canvas.
+  simulator: "browser",
   blank: "content",
 };
 

@@ -58,6 +58,12 @@ vi.mock(
       ...actual,
       useConfiguredRateLimitProviders: () => configuredProviders,
       useVisibleRateLimitProviders: () => configuredProviders,
+      // The inventory above IS this host's answer in these rows, which is what
+      // the real hook reads the host's own account list for.
+      useRateLimitAccountInventory: () => ({
+        answered: true,
+        providers: configuredProviders,
+      }),
     };
   },
 );
@@ -150,6 +156,7 @@ function useLaneProbe(mode: StatusBarRateLimitMode, editing: boolean) {
     mode,
     editing,
     sample: false,
+    retryHostId: "host-a",
   });
 }
 

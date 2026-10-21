@@ -11,10 +11,9 @@
  *
  * The local-row cases use the real `ChatTreePanelBody` over a real epic store
  * (`openStoreForTest`, the harness `sidebar-chat-row-node-churn.test.tsx`
- * proves), with exactly four seams replaced: the task's hosts view, host
- * reachability, the hosts section (a sibling of the rows, not under test) and
- * the agent hover card (replaced by a stand-in that renders `extraContent`
- * inline, because the real card opens on hover only).
+ * proves), with exactly three seams replaced: the task's hosts view, host
+ * reachability and the agent hover card (replaced by a stand-in that renders
+ * `extraContent` inline, because the real card opens on hover only).
  */
 import {
   act,
@@ -144,19 +143,6 @@ vi.mock(
 vi.mock("@/hooks/epic/use-task-hosts-view", () => ({
   useTaskHostsView: (): TaskHostsView => hostState.view.current,
 }));
-
-// The hosts section follows the rows; it is not what this suite is about and
-// it reads the person's teams, collaborators and host directory.
-vi.mock(
-  "@/components/epic-canvas/sidebar/task-host-groups",
-  async (importOriginal) => {
-    const actual =
-      await importOriginal<
-        typeof import("@/components/epic-canvas/sidebar/task-host-groups")
-      >();
-    return { ...actual, TaskHostGroupsSection: (): ReactNode => null };
-  },
-);
 
 // The real card opens on hover only; this one puts `extraContent` where a
 // test can read it, per node.

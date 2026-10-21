@@ -156,6 +156,9 @@ describe("validateVersionedStreamRpcRegistry", () => {
     expect(
       hostStreamRpcRegistry["notifications.subscribe"][1].latestMinor,
     ).toBe(1);
+    // The simulator domain's two streams opened at @1.0 together.
+    expect(hostStreamRpcRegistry["simulator.sessions"][1].latestMinor).toBe(0);
+    expect(hostStreamRpcRegistry["simulator.stream"][1].latestMinor).toBe(0);
   });
 
   it("rejects a minor that drops a server-frame field from an earlier minor", () => {

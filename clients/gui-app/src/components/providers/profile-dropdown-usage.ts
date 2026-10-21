@@ -7,6 +7,7 @@ import type {
 } from "@/lib/rate-limits/profile-usage-comparison-state";
 import { PROVIDER_RATE_LIMITS_STALE_TIME_MS } from "@/lib/rate-limit-providers";
 import type { ProviderRateLimitEnvelope } from "@/lib/rate-limits/rate-limit-envelope";
+import { NO_EPISODE } from "@/lib/rate-limits/rate-limit-envelope";
 
 export interface ProfileDropdownUsageEntry {
   readonly profileId: string | null;
@@ -50,6 +51,11 @@ function envelopeFromDetail(
         lastGood: detail.usage,
         lastGoodAt: detail.asOf,
         lastFailureAt: null,
+        // No run of failures, and no credential remembered: this is a
+        // projection of one dropdown row, and nothing schedules a read from it
+        // or compares what it was read with.
+        credentialGeneration: null,
+        episode: NO_EPISODE,
       };
     case "failed-with-last-good":
       return {
@@ -57,6 +63,8 @@ function envelopeFromDetail(
         lastGood: detail.usage,
         lastGoodAt: detail.asOf,
         lastFailureAt: detail.failedAt,
+        credentialGeneration: null,
+        episode: NO_EPISODE,
       };
     case "unavailable":
       return {
@@ -64,6 +72,8 @@ function envelopeFromDetail(
         lastGood: null,
         lastGoodAt: null,
         lastFailureAt: null,
+        credentialGeneration: null,
+        episode: NO_EPISODE,
       };
     case "never-checked":
     case "semantic-only":

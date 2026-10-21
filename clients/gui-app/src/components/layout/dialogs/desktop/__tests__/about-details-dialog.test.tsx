@@ -170,7 +170,15 @@ describe("<AboutDetailsDialog />", () => {
     act(() => {
       useDesktopDialogStore.setState({ reportIssueAvailable: true });
     });
-    fireEvent.click(screen.getByRole("button", { name: "Report issue" }));
+    // Awaited rather than read synchronously: the `unavailable` commit happens
+    // outside `act` (the snapshot promise rejects while `waitFor` polls), so
+    // the `ReportIssueAction`'s store subscription is a passive effect React
+    // may not have flushed yet. A store write before that lands notifies no one
+    // and the button only appears on the effect's catch-up render, which a
+    // slow runner can put after a synchronous `getByRole`.
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Report issue" }),
+    );
     expect(useDesktopDialogStore.getState()).toMatchObject({
       activeDialog: "report-issue",
       reportIssueContext: {

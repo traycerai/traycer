@@ -72,7 +72,9 @@ type NonDurableTileType =
   // A sandboxed document: its scroll lives inside the frame, out of reach.
   | "html"
   | "canvas"
-  | "file";
+  | "file"
+  // A live video surface: nothing scrolls, so there is no position to keep.
+  | "simulator";
 
 /**
  * Compile-time proof that {@link durableContentParts}' `default` branch really

@@ -16,6 +16,7 @@ import {
   GitPullRequest,
   Globe,
   Lock,
+  Smartphone,
   Trash2,
 } from "lucide-react";
 import { LeftPanelRailIcon } from "@/components/epic-canvas/sidebar/left-panel-rail-icon";
@@ -57,6 +58,7 @@ import {
   isManagedCommandOutputTileRef,
   isPrDetailTileRef,
   isPrDiffTileRef,
+  isSimulatorTileRef,
   type BlankTileRef,
   type BrowserSessionTileRef,
   type ManagedCommandOutputTileRef,
@@ -321,6 +323,14 @@ function EpicCanvasNodeDragOverlay(props: {
     return (
       <m.div {...CHIP_MOTION} className={cn(CHIP_CLASS)}>
         <Lock className="size-3.5 shrink-0 text-muted-foreground" />
+        <span className="min-w-0 truncate font-medium">{props.node.name}</span>
+      </m.div>
+    );
+  }
+  if (isSimulatorTileRef(props.node)) {
+    return (
+      <m.div {...CHIP_MOTION} className={cn(CHIP_CLASS)}>
+        <Smartphone className="size-3.5 shrink-0 text-muted-foreground" />
         <span className="min-w-0 truncate font-medium">{props.node.name}</span>
       </m.div>
     );

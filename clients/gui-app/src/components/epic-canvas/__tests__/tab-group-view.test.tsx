@@ -34,6 +34,7 @@ import {
   type WorkspaceFileRef,
 } from "@/stores/epics/canvas/types";
 import { useFileTreeRevealStore } from "@/stores/file-tree/file-tree-reveal-store";
+import { makeSimulatorTileRef } from "@/stores/epics/canvas/tile-schema/simulator-tile";
 import { useSidebarNodeRevealStore } from "@/stores/epics/sidebar-node-reveal-store";
 import { useEpicLeftPanelStore } from "@/stores/epics/left-panel-store";
 import {
@@ -2284,6 +2285,38 @@ describe("<TabGroupView /> Reveal in Sidebar", () => {
         tabSurfaceKey("browsers", VIEW_TAB_ID)
       ],
     ).toBe(BROWSER_TAB.hostId);
+  });
+
+  it("targets the simulator row, the Browsers panel, and the tile's host for a simulator tab", () => {
+    const simulatorTab = makeSimulatorTileRef({
+      hostId: "host-C",
+      simulatorId: "udid-1",
+      platform: "ios",
+      name: "iPhone 16",
+    });
+    // The spec tab stays active so the simulator tile's renderer never mounts.
+    const tabs = [SPEC, simulatorTab];
+    seedCanvas(tabs, SPEC.instanceId);
+    render(groupView(tabs, SPEC.instanceId, true));
+
+    fireEvent.contextMenu(
+      screen.getByTestId(`tab-item-${simulatorTab.instanceId}`),
+    );
+    fireEvent.click(
+      screen.getByRole("menuitem", { name: "Reveal in Sidebar" }),
+    );
+
+    expect(
+      useSidebarNodeRevealStore.getState().requestsByViewTabId[VIEW_TAB_ID],
+    ).toEqual({ nodeId: simulatorTab.id, nonce: 1 });
+    expect(useEpicLeftPanelStore.getState().getActivePanelId(VIEW_TAB_ID)).toBe(
+      "browsers",
+    );
+    expect(
+      useSurfaceHostSelectionStore.getState().selections[
+        tabSurfaceKey("browsers", VIEW_TAB_ID)
+      ],
+    ).toBe("host-C");
   });
 
   it("writes a node reveal request for an agent tab", () => {

@@ -19,7 +19,7 @@ import {
  * The mirror line: starting an agent on a host whose owner differs from a host
  * already working in the task says, once per task, that the two cannot work
  * with each other. Owners come from the task's host rows, and the other host
- * is named as the Hosts section names it; a start host that is not one of them
+ * is named by its task-host group; a start host that is not one of them
  * yet is its registry owner's when that is a team, and otherwise the person's
  * own.
  */

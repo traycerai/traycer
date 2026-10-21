@@ -7,6 +7,7 @@ import {
   statusBarSegmentKey,
   statusBarSegmentSeverity,
   statusBarSegmentTooltip,
+  statusBarTransientLabel,
   useStatusBarUsageDisplay,
   type StatusBarUsageDisplay,
 } from "@/components/layout/status-bar/status-bar-usage-display";
@@ -69,6 +70,17 @@ function useProfileReading(
   const countdown = useResetCountdown(
     display.showTimer && window !== null ? window.resetsAt : null,
   );
+  // The words, not the dash: this form has no tooltip of its own open, so a
+  // dash here is the same answer an account that really cannot report usage
+  // gives. The click does not read in a header placement, so the sentence is
+  // the resting one the poll makes true, with nothing inviting a click.
+  if (segment.state === "transient") {
+    return {
+      value: statusBarTransientLabel(segment),
+      reset: null,
+      valueClassName: "text-warning-foreground",
+    };
+  }
   if (window === null || segment.state === "unavailable") {
     return {
       value: UNAVAILABLE_DASH,
@@ -188,7 +200,9 @@ function TopStripProfile(props: {
           usedPercent={segment.tightest?.usedPercent ?? 0}
           severity={statusBarSegmentSeverity(segment)}
         />
-        <span className={reading.valueClassName}>{reading.value}</span>
+        <span className={cn("min-w-0 truncate", reading.valueClassName)}>
+          {reading.value}
+        </span>
         {reading.reset === null ? null : (
           <span className="text-muted-foreground">{reading.reset}</span>
         )}

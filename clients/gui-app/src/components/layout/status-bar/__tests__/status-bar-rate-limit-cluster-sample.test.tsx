@@ -57,7 +57,9 @@ vi.mock(
         return {
           cluster: mocks.cluster,
           mountTargets: [],
+          retryTargets: [],
           refresh: mocks.refresh,
+          recordManualRetry: () => undefined,
         };
       },
     };
@@ -98,6 +100,8 @@ function segment(
     hidden: false,
     state,
     reason: null,
+    fetching: false,
+    retryOffered: false,
     windows: live ? [reading] : [],
     shown: live ? [reading] : [],
     tightest: live ? reading : null,

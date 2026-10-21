@@ -38,6 +38,10 @@ import {
 import { worktreeListAllForHostResponseSchemaV16 } from "@traycer/protocol/host";
 import { listTerminalsResponseSchemaV23 } from "@traycer/protocol/host/terminal/unary-schemas";
 import { worktreeDeleteByPathServerFrameSchemaV13 } from "@traycer/protocol/host/worktree-delete-stream";
+import {
+  simulatorSessionsServerFrameSchemaV10,
+  simulatorStreamServerFrameSchemaV10,
+} from "@traycer/protocol/host/simulator/stream-contracts";
 
 /**
  * Mirrors `getLatestContract`'s traversal (highest major -> its
@@ -908,5 +912,25 @@ describe("canonical stream frame pairing (worktree.deleteByPath)", () => {
         "stream method (see the identity assertion above) or justify the " +
         "addition in this allowlist.",
     ).toEqual([]);
+  });
+});
+
+describe("canonical stream frame pairing (simulator streams)", () => {
+  // The shared `simulator-*-stream-client.ts` wrappers parse with these two
+  // explicit `V10` schemas; a later minor that leaves them behind would
+  // silently strip its new keys (`protocol/README.md`, "Opening a new minor
+  // on a stream"), so the pin is held here by identity.
+  it("simulatorSessionsServerFrameSchemaV10 is the canonical serverFrameSchema for simulator.sessions", () => {
+    expect(
+      latestStreamServerFrameSchema(
+        hostStreamRpcRegistry["simulator.sessions"],
+      ),
+    ).toBe(simulatorSessionsServerFrameSchemaV10);
+  });
+
+  it("simulatorStreamServerFrameSchemaV10 is the canonical serverFrameSchema for simulator.stream", () => {
+    expect(
+      latestStreamServerFrameSchema(hostStreamRpcRegistry["simulator.stream"]),
+    ).toBe(simulatorStreamServerFrameSchemaV10);
   });
 });

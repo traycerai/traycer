@@ -19,6 +19,7 @@ import {
   FilePlus,
   GitPullRequest,
   Lock,
+  Smartphone,
   SplitSquareHorizontal,
   SplitSquareVertical,
   Trash2,
@@ -1275,6 +1276,8 @@ function renderFixedTabIcon(
       return <Lock className="size-3.5 shrink-0 text-muted-foreground" />;
     case "deleted-artifacts":
       return <Trash2 className="size-3.5 shrink-0 text-muted-foreground" />;
+    case "simulator":
+      return <Smartphone className="size-3.5 shrink-0 text-muted-foreground" />;
     default:
       return null;
   }

@@ -4,8 +4,6 @@ import type { TaskHostRow } from "@traycer/protocol/host/task-host-summary";
 export const TASK_HOST_UNREACHABLE_LINE = "not reachable from this host";
 export const TASK_HOST_UNNAMED_LABEL = "Unnamed host";
 
-export type TaskHostState = "online" | "offline";
-
 /**
  * The task's hosts that this host's principal does not reach, from the server's
  * `reach` alone: the Agents tree marks the agents on them.
@@ -20,15 +18,6 @@ export function otherPrincipalHostIds(
   );
 }
 
-/**
- * A host in the person's own host directory: its label, and its state or
- * `null` when the directory cannot say.
- */
-export interface TaskHostDirectoryFact {
-  readonly label: string;
-  readonly state: TaskHostState | null;
-}
-
 export interface TaskHostGroupsInput {
   readonly hosts: readonly TaskHostRow[];
   readonly viewerUserId: string;
@@ -36,22 +25,13 @@ export interface TaskHostGroupsInput {
   readonly teams: readonly { readonly teamId: string; readonly name: string }[];
   /** A collaborator's display name by user id. */
   readonly collaboratorNames: ReadonlyMap<string, string>;
-  /** The person's host directory, by host id. */
-  readonly directory: ReadonlyMap<string, TaskHostDirectoryFact>;
-  /** The task's published chats per owning host. */
-  readonly agentCountByHostId: ReadonlyMap<string, number>;
+  /** The label the person's host directory gives a host, by host id. */
+  readonly directoryLabels: ReadonlyMap<string, string>;
 }
 
 export interface TaskHostGroupRow {
   readonly hostId: string;
   readonly label: string;
-  readonly agentsLine: string | null;
-  /** From the server's `reach` alone, never from connectivity. */
-  readonly unreachable: boolean;
-  /** Only from the person's directory; `null` is unknown and shows nothing. */
-  readonly state: TaskHostState | null;
-  /** The person can open it: it is in their host directory. */
-  readonly openable: boolean;
 }
 
 export interface TaskHostGroup {
@@ -78,11 +58,6 @@ interface GroupHead {
   readonly title: string;
   readonly rank: GroupRank;
   readonly id: string;
-}
-
-export function taskHostAgentsLine(count: number): string | null {
-  if (count <= 0) return null;
-  return count === 1 ? "1 agent" : `${count} agents`;
 }
 
 /** The group a host's owner puts it in: Personal, a team, or a collaborator. */
@@ -114,12 +89,9 @@ function groupHead(row: TaskHostRow, input: TaskHostGroupsInput): GroupHead {
  * reaches the directory labelled with its own id, which names nothing a person
  * would recognise, so it reads as unnamed.
  */
-function directoryName(
-  hostId: string,
-  fact: TaskHostDirectoryFact | null,
-): string | null {
-  if (fact === null || fact.label === hostId) return null;
-  return fact.label;
+function directoryName(hostId: string, label: string | null): string | null {
+  if (label === null || label === hostId) return null;
+  return label;
 }
 
 function groupRow(
@@ -128,21 +100,17 @@ function groupRow(
   input: TaskHostGroupsInput,
 ): TaskHostGroupRow {
   // A collaborator's host carries the summary only, whatever the person's
-  // directory says: no state, and nothing to open.
-  const fact =
+  // directory says.
+  const directoryLabel =
     head.rank === COLLABORATOR_RANK
       ? null
-      : (input.directory.get(row.hostId) ?? null);
+      : (input.directoryLabels.get(row.hostId) ?? null);
   return {
     hostId: row.hostId,
     label:
-      row.label ?? directoryName(row.hostId, fact) ?? TASK_HOST_UNNAMED_LABEL,
-    agentsLine: taskHostAgentsLine(
-      input.agentCountByHostId.get(row.hostId) ?? 0,
-    ),
-    unreachable: row.reach === "other_principal",
-    state: fact === null ? null : fact.state,
-    openable: fact !== null,
+      row.label ??
+      directoryName(row.hostId, directoryLabel) ??
+      TASK_HOST_UNNAMED_LABEL,
   };
 }
 
@@ -153,7 +121,7 @@ function compareText(a: string, b: string): number {
 /**
  * The task's hosts grouped by owner: Personal first, then each team, then each
  * collaborator, each by name; rows by label. A foreign row carries only the
- * task-authorized summary: state and opening come from the person's own
+ * task-authorized summary: a directory label comes from the person's own
  * directory and nowhere else.
  */
 export function taskHostGroups(

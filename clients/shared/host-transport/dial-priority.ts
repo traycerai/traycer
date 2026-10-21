@@ -103,7 +103,7 @@ const BACKGROUND_METHODS: ReadonlySet<string> = new Set([
   "browser.sessions",
   "epic.listCollaborators",
   "epic.listCommentThreads",
-  // The Agents panel's Hosts section: decorates the panel, answers second.
+  // Decorates the agent rows' reach marks and the composer's mirror line; answers second.
   "epic.listTaskHosts",
   "worktree.listBindingsForEpic",
 ]);

@@ -11,6 +11,7 @@ import type { DesktopJsonValue } from "@/lib/windows/types";
 import type { GitStage } from "@traycer/protocol/host";
 import type { TuiHarnessId } from "@traycer/protocol/persistence/epic/schemas";
 import type { BrowserViewViewportPresetId } from "@traycer-clients/shared/platform/browser-view";
+import type { SimulatorPlatform } from "@traycer/protocol/host/simulator/schemas";
 import type {
   EdgeDropPosition,
   SizesByGroupId,
@@ -26,6 +27,7 @@ import {
   TILE_KIND_PR_DETAIL,
   TILE_KIND_PR_DIFF,
   TILE_KIND_PUBLISHED_CHAT,
+  TILE_KIND_SIMULATOR,
   TILE_KIND_SNAPSHOT_DIFF,
 } from "./tile-kinds";
 
@@ -733,6 +735,25 @@ export interface PrDiffTileRef {
   readonly view: PrDiffTileViewState;
 }
 
+/**
+ * One simulator on one host (`TILE_KIND_SIMULATOR`). A pointer, never a copy:
+ * the pixels arrive over `simulator.stream` on the tab's host, and the
+ * inventory the tile reads comes from that host's `simulator.sessions`.
+ * `simulatorId` is the iOS udid or the Android serial - never "deviceId",
+ * which this repo reserves for `hostId`'s UI copy. `id` is derived from the
+ * host and the simulator, so opening the same simulator again focuses its
+ * tab. `name` is the simulator's display name as the host last reported it.
+ */
+export interface SimulatorTileRef {
+  readonly id: string;
+  readonly instanceId: string;
+  readonly type: typeof TILE_KIND_SIMULATOR;
+  readonly name: string;
+  readonly hostId: string;
+  readonly simulatorId: string;
+  readonly platform: SimulatorPlatform;
+}
+
 export type EpicCanvasTileRef =
   | EpicNodeRef
   | BrowserSessionTileRef
@@ -744,7 +765,14 @@ export type EpicCanvasTileRef =
   | PublishedChatTileRef
   | PrDetailTileRef
   | PrDiffTileRef
+  | SimulatorTileRef
   | BlankTileRef;
+
+export function isSimulatorTileRef(
+  value: EpicCanvasTileRef,
+): value is SimulatorTileRef {
+  return value.type === TILE_KIND_SIMULATOR;
+}
 
 export function isPublishedChatTileRef(
   value: EpicCanvasTileRef,
