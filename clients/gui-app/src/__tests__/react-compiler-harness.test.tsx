@@ -7,16 +7,17 @@ import { CompilerHarnessProbe } from "./react-compiler-harness-probe";
 // refuses, and every component-site regression test on the list then runs
 // uncompiled and passes whether or not the bug ships.
 describe("React Compiler test harness", () => {
-  it("compiles a listed component: its child element is memoized across a same-props render", () => {
-    const onChildRender = vi.fn();
+  it("compiles a listed component: its child is not rendered again for unchanged props", () => {
+    const onChildCommit = vi.fn();
     const { rerender } = render(
-      <CompilerHarnessProbe label="probe" onChildRender={onChildRender} />,
+      <CompilerHarnessProbe label="probe" onChildCommit={onChildCommit} />,
     );
     rerender(
-      <CompilerHarnessProbe label="probe" onChildRender={onChildRender} />,
+      <CompilerHarnessProbe label="probe" onChildCommit={onChildCommit} />,
     );
     // Uncompiled, the parent builds a fresh child element and the child
-    // renders again; compiled, the element is cached on unchanged props.
-    expect(onChildRender).toHaveBeenCalledTimes(1);
+    // renders and commits again; compiled, the element is cached on
+    // unchanged props and React skips the child.
+    expect(onChildCommit).toHaveBeenCalledTimes(1);
   });
 });

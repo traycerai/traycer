@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 // Compiled by the suite (it is on `REACT_COMPILER_REGRESSION_FILES`) so
 // `react-compiler-harness.test.tsx` can tell whether a listed component
@@ -8,21 +8,24 @@ import { useState } from "react";
 
 export function CompilerHarnessProbe(props: {
   readonly label: string;
-  readonly onChildRender: () => void;
+  readonly onChildCommit: () => void;
 }) {
   const [suffix] = useState("");
   return (
     <CompilerHarnessChild
       label={props.label + suffix}
-      onRender={props.onChildRender}
+      onCommit={props.onChildCommit}
     />
   );
 }
 
 function CompilerHarnessChild(props: {
   readonly label: string;
-  readonly onRender: () => void;
+  readonly onCommit: () => void;
 }) {
-  props.onRender();
+  // Every committed render of the child, and only those.
+  useEffect(() => {
+    props.onCommit();
+  });
   return <span>{props.label}</span>;
 }
