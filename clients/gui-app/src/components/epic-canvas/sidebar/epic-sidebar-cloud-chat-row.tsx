@@ -9,6 +9,7 @@ import { useCompactRelativeTime } from "@/lib/relative-time";
 import { useHostReachability } from "@/hooks/agent/use-host-reachability";
 import { useOwnerHostNotReachable } from "@/hooks/epic/use-task-host-reach";
 import { useEpicChatRecordHead } from "@/hooks/chats/use-epic-chat-record-head";
+import { useOwnerSandboxOpensLive } from "@/hooks/chats/use-owner-sandbox-opens-live";
 import { EpicSessionContext } from "@/lib/registries/epic-session-registry";
 import { useEpicSessionHostId } from "@/hooks/epic/use-epic-session-host-id";
 import {
@@ -137,8 +138,11 @@ export function EpicSidebarCloudChatRow(
   // owning host is reachable is an ordinary chat that simply is not on this
   // device's tree yet - it opens live, against the host that owns it, exactly
   // as a tree row would. Only an unreachable owner produces a locked row and
-  // the published-copy surface behind it.
-  const ownerReachable = ownerReachability.status === "reachable";
+  // the published-copy surface behind it. An owner sandbox at rest counts as
+  // openable live: the pool serves its chat, and the live tile shows Resume.
+  const ownerSandboxOpensLive = useOwnerSandboxOpensLive(chat.ownerHostId);
+  const ownerReachable =
+    ownerReachability.status === "reachable" || ownerSandboxOpensLive;
   // Reach, not connectivity: the owner host belongs to another principal, so
   // agents here cannot work with it. Independent of the lock - a host can be
   // online and out of reach, or offline and not.

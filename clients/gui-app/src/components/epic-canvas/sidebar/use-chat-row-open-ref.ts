@@ -2,6 +2,7 @@ import { useCallback } from "react";
 import { v4 as uuidv4 } from "uuid";
 import { useHostReachability } from "@/hooks/agent/use-host-reachability";
 import { useHostRefusesEpicStore } from "@/hooks/chats/use-host-refuses-epic-store";
+import { useOwnerSandboxOpensLive } from "@/hooks/chats/use-owner-sandbox-opens-live";
 import { makeChatOpenTileRef } from "@/lib/chats/chat-open-tile-ref";
 import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
 import type {
@@ -58,6 +59,11 @@ export function useChatRowOpenRef(args: {
   // is older than this epic's store. Same source `ChatRowButton`'s lock reads,
   // so the row never promises a published copy the click will not open.
   const ownerRefusesStore = useHostRefusesEpicStore(ownerHostId, epicId);
+  // An owner sandbox at rest is unreachable and still opens live: the pool
+  // serves its chat, and the live tile shows the Resume state.
+  const ownerSandboxOpensLive = useOwnerSandboxOpensLive(ownerHostId);
+  const ownerIsUnreachable =
+    ownerReachability.status === "unreachable" && !ownerSandboxOpensLive;
   return useCallback(
     () =>
       openableType === "chat"
@@ -66,7 +72,7 @@ export function useChatRowOpenRef(args: {
             chatId: nodeId,
             ownerHostId,
             ownerUserId,
-            ownerIsUnreachable: ownerReachability.status === "unreachable",
+            ownerIsUnreachable,
             ownerRefusesStore,
             name: nodeName,
             sessionHostId: readingHostId,
@@ -82,7 +88,7 @@ export function useChatRowOpenRef(args: {
       openableType,
       ownerHostId,
       ownerUserId,
-      ownerReachability.status,
+      ownerIsUnreachable,
       ownerRefusesStore,
       epicId,
       nodeId,

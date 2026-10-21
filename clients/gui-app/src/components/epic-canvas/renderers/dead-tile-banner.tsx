@@ -419,6 +419,14 @@ export interface ChatDeadTileBannerProps {
    */
   readonly ownedByViewer: boolean;
   /**
+   * Whether the source chat's owner is one of the viewer's team environments:
+   * a team sandbox's chat. Outranks `ownedByViewer` on the same reasons: the
+   * foreign-owner sentence would call a team chat another collaborator's, and
+   * the own-chat ones name a machine. Those reasons swap to the environment
+   * sentence instead.
+   */
+  readonly environmentOwned: boolean;
+  /**
    * Whether the viewer's epic role can create agents (editor/owner - the same
    * gate `epic.createChat` enforces host-side). `false` withholds the Clone
    * button that role's refusal would otherwise turn into a bare
@@ -634,14 +642,42 @@ function foreignOwnerMessage(input: {
   const fact = hostAnsweredForReason(input.reason)
     ? "This agent belongs to another collaborator, and its history isn't available here."
     : "This agent belongs to another collaborator and lives on their machine, which isn't connected here.";
+  return `${fact}${copyClauses(input)}`;
+}
+
+/**
+ * A team environment's chat: what is out is its sandbox, whichever reason
+ * brought the banner up, and whether this is the last published copy. Nothing
+ * else: the clone clause's "your own agent" may be false when the active host
+ * is itself a team's.
+ */
+function environmentOwnerMessage(input: {
+  readonly showsPublishedCopy: boolean;
+}): string {
+  const copyClause = input.showsPublishedCopy
+    ? " Showing the last published copy."
+    : "";
+  return `This chat's sandbox isn't available.${copyClause}`;
+}
+
+/** The published-copy and clone clauses both non-own sentences end with. */
+function copyClauses(input: {
+  readonly showsPublishedCopy: boolean;
+  readonly cloneAllowed: boolean;
+}): string {
   const copyClause = input.showsPublishedCopy
     ? " Showing the last published copy."
     : "";
   const cloneClause = input.cloneAllowed
     ? " Cloning creates your own agent on the active host."
     : " You have view-only access to this task, so it can't be cloned.";
-  return `${fact}${copyClause}${cloneClause}`;
+  return `${copyClause}${cloneClause}`;
 }
+
+const ENVIRONMENT_OWNER_REPORT = {
+  reportTitle: "Chat sandbox isn't available",
+  reportMessage: "The chat's team sandbox isn't available.",
+};
 
 const FOREIGN_OWNER_UNREACHABLE_REPORT = {
   reportTitle: "Shared agent isn't available live",
@@ -681,15 +717,46 @@ function ownChatMessage(
   return copy.message(host);
 }
 
+/**
+ * The sentence and report for a chat that is not the viewer's own - a team
+ * environment's, then a collaborator's - or `null` for the own-chat copy.
+ *
+ * The revoked and removed-sandbox reasons keep their own copy for either
+ * owner: the first is already about this viewer's entitlement, not about any
+ * host, and the second is the same sentence whoever created the agent.
+ */
+function ownerSwappedCopy(props: ChatDeadTileBannerProps): {
+  readonly message: string;
+  readonly report: {
+    readonly reportTitle: string;
+    readonly reportMessage: string;
+  };
+} | null {
+  if (
+    props.reason === "chat-no-longer-shared" ||
+    props.reason === "sandbox-removed"
+  ) {
+    return null;
+  }
+  if (props.environmentOwned) {
+    return {
+      message: environmentOwnerMessage(props),
+      report: ENVIRONMENT_OWNER_REPORT,
+    };
+  }
+  if (!props.ownedByViewer) {
+    return {
+      message: foreignOwnerMessage(props),
+      report: foreignOwnerReport(props.reason),
+    };
+  }
+  return null;
+}
+
 export function ChatDeadTileBanner(props: ChatDeadTileBannerProps): ReactNode {
   const copy = CHAT_DEAD_TILE_BANNER_COPY[props.reason];
-  // The revoked reason keeps its own copy for a foreign owner: it is already
-  // about this viewer's entitlement, not about any host.
-  const foreignOwned =
-    !props.ownedByViewer &&
-    props.reason !== "chat-no-longer-shared" &&
-    props.reason !== "sandbox-removed";
-  const report = foreignOwned ? foreignOwnerReport(props.reason) : copy;
+  const swapped = ownerSwappedCopy(props);
+  const report = swapped === null ? copy : swapped.report;
   return (
     // A live region, like the other two chat banners: which of the three
     // truths above is on screen is carried ONLY by this sentence, and the
@@ -707,13 +774,9 @@ export function ChatDeadTileBanner(props: ChatDeadTileBannerProps): ReactNode {
       )}
     >
       <span className="min-w-0 flex-1">
-        {foreignOwned
-          ? foreignOwnerMessage({
-              reason: props.reason,
-              showsPublishedCopy: props.showsPublishedCopy,
-              cloneAllowed: props.cloneAllowed,
-            })
-          : ownChatMessage(copy, props.hostLabel, props.cloneAllowed)}
+        {swapped === null
+          ? ownChatMessage(copy, props.hostLabel, props.cloneAllowed)
+          : swapped.message}
       </span>
       {copy.offersClone && props.cloneAllowed ? (
         <Button
