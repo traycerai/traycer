@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Command } from "commander";
 import { A2A_PERMISSION_MODE_INSTRUCTION } from "@traycer/protocol/agent/agent-selection-guide-format";
-import { agentCreateDowngradeV30ToV20 } from "@traycer/protocol/host/agent/contracts";
-import { createAgentRequestSchemaV30 } from "@traycer/protocol/host/agent/shared";
+import { agentCreateDowngradeV31ToV20 } from "@traycer/protocol/host/agent/contracts";
+import { createAgentRequestSchemaV31 } from "@traycer/protocol/host/agent/shared";
 import { buildProgram } from "../../index";
 import { buildAgentConfigureCommand } from "../agent-configure";
 import { buildAgentCreateCommand } from "../agent-create";
@@ -496,7 +496,7 @@ describe("version skew", () => {
   // downgrade a host-v1.1.7 manifest triggers in the transport. Every profile
   // selection must fail because released v2.0 cannot carry permission intent.
   function cliCreateRequest(profile: string | null) {
-    return createAgentRequestSchemaV30.parse({
+    return createAgentRequestSchemaV31.parse({
       senderAgentId: "agent_parent",
       epicId: "epic_1",
       name: null,
@@ -510,11 +510,12 @@ describe("version skew", () => {
       permissionMode: "full_access",
       workspace: null,
       profileSelection: parseCreateProfileSelection(profile),
+      routing: null,
     });
   }
 
   it("refuses to downgrade an omitted --profile onto an old host", () => {
-    const downgraded = agentCreateDowngradeV30ToV20.downgradeRequest(
+    const downgraded = agentCreateDowngradeV31ToV20.downgradeRequest(
       cliCreateRequest(null),
     );
 
@@ -525,7 +526,7 @@ describe("version skew", () => {
   });
 
   it("refuses to downgrade an explicit --profile ambient onto an old host", () => {
-    const downgraded = agentCreateDowngradeV30ToV20.downgradeRequest(
+    const downgraded = agentCreateDowngradeV31ToV20.downgradeRequest(
       cliCreateRequest("ambient"),
     );
 
@@ -535,7 +536,7 @@ describe("version skew", () => {
   });
 
   it("refuses to drop full-access permissions on an old host even for a managed profile", () => {
-    const downgraded = agentCreateDowngradeV30ToV20.downgradeRequest(
+    const downgraded = agentCreateDowngradeV31ToV20.downgradeRequest(
       cliCreateRequest("prof_work"),
     );
 
