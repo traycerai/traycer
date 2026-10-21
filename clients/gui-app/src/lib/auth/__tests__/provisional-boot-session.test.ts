@@ -1096,6 +1096,34 @@ describe("AuthService provisional boot session", () => {
       // revalidation instead of only when identity actually moved.
       expect(useAuthStore.getState().profile).toBe(before);
     });
+
+    it("C21: a valid verdict that lands after a revocation demoted the same bearer does not clear the revocation", async () => {
+      const { service, host } = makeService();
+      await signInStoredCredentials(host, "user-1", "persisted-token");
+      seedSnapshot(host, validSnapshotEnvelope("user-1", "FREE"));
+      const deferred = createDeferredResponse();
+      restoreFetch();
+      restoreFetch = installFetch(() => deferred.promise);
+
+      await service.start();
+      expect(useAuthStore.getState().status).toBe("signed-in");
+
+      // A sibling window learned the account was refused while this window's
+      // own check was still out. The demotion keeps the bearer and withdraws
+      // the verdict; the check was sent before any of that.
+      service.ingestCloudAuthorizationRevoked("persisted-token", null);
+      expect(useAuthStore.getState().status).toBe("unverified");
+
+      deferred.resolve(await okWithUser("user-1", "FREE"));
+      await flush();
+
+      // The newer revocation outranks the verdict that was in flight.
+      expect(useAuthStore.getState().status).toBe("unverified");
+      expect(useAuthStore.getState().cloudVerdictLoss).toBe("ended-elsewhere");
+      expect(
+        service.getRequestContextProvider().current()?.cloudAuthorized,
+      ).toBe(false);
+    });
   });
 
   describe("D - snapshot lifecycle", () => {

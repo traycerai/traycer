@@ -1211,6 +1211,7 @@ export class AuthService {
     provisional: AuthenticatedUser,
     startGeneration: number,
   ): Promise<void> {
+    const credentialGeneration = this.getCredentialGeneration();
     const outcome = await this.validateToken(stored.token);
     if (
       this.shouldStopStartFlow(startGeneration) ||
@@ -1230,6 +1231,13 @@ export class AuthService {
       this.commitSubscriptionStatus(
         outcome.user.userSubscription.subscriptionStatus,
       );
+      // The same bearer can still have been demoted while authn answered (a
+      // revocation withdraws the verdict and latches without rotating), and
+      // that newer state outranks this verdict. Every bearer change advances
+      // the credential generation, a same-token demotion included.
+      if (this.getCredentialGeneration() !== credentialGeneration) {
+        return;
+      }
       if (outcome.user.user.id !== provisional.user.id) {
         this.applySignedIn(stored.token, outcome.user, undefined);
         return;
@@ -3227,6 +3235,7 @@ export class AuthService {
     }
     const currentUserId = ctx.identity.userId;
     const currentToken = this.currentBearer;
+    const credentialGeneration = this.getCredentialGeneration();
     // Access-only (§3): validate the live bearer without spending. A stale bearer
     // comes back `rejected`, and the spend routes through the locked `rotate`.
     const outcome = await this.validateToken(currentToken);
@@ -3241,6 +3250,14 @@ export class AuthService {
       this.commitSubscriptionStatus(
         outcome.user.userSubscription.subscriptionStatus,
       );
+      // The verdict is about `currentToken` as it stood when the check was
+      // sent. Same-user adoptions and demotions leave the identity generation
+      // alone, so a credential that moved meanwhile (a reconcile adopting a
+      // bearer authn has refused, a demotion that withdrew the verdict) is
+      // caught here, and the verdict is not projected onto it.
+      if (this.getCredentialGeneration() !== credentialGeneration) {
+        return outcome;
+      }
       if (outcome.user.user.id !== currentUserId) {
         // The bearer now validates to a different user (a cross-user re-seed) -
         // treat as a fresh sign-in so the old context aborts cleanly.
@@ -5016,8 +5033,17 @@ export class AuthService {
     // context, settles recovery and announces it, so the store reads
     // `signed-in` only when the context holds the verdict. Without a live
     // bearer there is nothing to authorize, and the store is left alone.
+    //
+    // An interactive sign-in is never raced, as session recovery never races
+    // one: promoting here would end its `signing-in` while the attempt still
+    // runs, and the attempt's own result would then land on the promoted
+    // session. Its success settles the session through `applySignedIn`.
     if (current.status !== "signed-in") {
-      if (this.currentBearer !== null) {
+      if (
+        this.currentBearer !== null &&
+        this.activeAttempt === null &&
+        current.status !== "signing-in"
+      ) {
         this.applySignedIn(this.currentBearer, user, undefined);
       }
       return;

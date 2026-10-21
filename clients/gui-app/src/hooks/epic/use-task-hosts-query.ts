@@ -1,5 +1,9 @@
-import { useMemo } from "react";
-import type { UseQueryResult } from "@tanstack/react-query";
+import { useEffect, useMemo } from "react";
+import {
+  useQueryClient,
+  type QueryClient,
+  type UseQueryResult,
+} from "@tanstack/react-query";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import {
   isTransientHostRpcFailure,
@@ -14,6 +18,43 @@ import {
 import { useHostQuery } from "@/hooks/host/use-host-query";
 import { cloudChatListCacheKeyIdentity } from "@/lib/chats/cloud-chat-list-cache";
 import { cloudVerdictPreflight } from "@/lib/host/cloud-verdict-preflight";
+import { hostQueryKeys } from "@/lib/query-keys/host-query-keys";
+import {
+  authorizesCloudCapability,
+  useAuthStore,
+} from "@/stores/auth/auth-store";
+
+const TASK_HOSTS_METHOD = "epic.listTaskHosts";
+const refusalResetInstalled = new WeakSet<QueryClient>();
+
+/**
+ * Clears every failed task-host read, mounted or not, when cloud
+ * authorization returns. A failure is kept across mounts (`retryOnMount:
+ * false`), so one cached under a withdrawn verdict would otherwise outlive
+ * the verdict's return and leave the task's hosts empty until the cache
+ * drops it. A mounted read refetches; an unmounted one fetches on its next
+ * mount.
+ *
+ * Installed once per client, from the first mount: a failure can only be
+ * cached by a read that mounted.
+ */
+function installRefusalResetOnCloudRestore(queryClient: QueryClient): void {
+  if (refusalResetInstalled.has(queryClient)) return;
+  refusalResetInstalled.add(queryClient);
+  useAuthStore.subscribe((state, previous) => {
+    if (
+      authorizesCloudCapability(previous.status) ||
+      !authorizesCloudCapability(state.status)
+    ) {
+      return;
+    }
+    void queryClient.resetQueries({
+      predicate: (query) =>
+        query.state.status === "error" &&
+        hostQueryKeys.matchesMethodOnAnyHost(query.queryKey, TASK_HOSTS_METHOD),
+    });
+  });
+}
 
 /**
  * `epic.listTaskHosts`: the task's hosts with their
@@ -31,12 +72,16 @@ export function useTaskHosts(
   const viewerUserId = useCloudChatViewerId();
   const cloudAuthorized = useCloudChatHasCloudAuthorization();
   const params = useMemo(() => ({ taskId }), [taskId]);
-  return useHostQuery<HostRpcRegistry, "epic.listTaskHosts">({
+  const queryClient = useQueryClient();
+  useEffect(() => {
+    installRefusalResetOnCloudRestore(queryClient);
+  }, [queryClient]);
+  return useHostQuery<HostRpcRegistry, typeof TASK_HOSTS_METHOD>({
     cacheKeyIdentity: cloudChatListCacheKeyIdentity(viewerUserId),
     client,
-    method: "epic.listTaskHosts",
+    method: TASK_HOSTS_METHOD,
     params,
-    preflight: cloudVerdictPreflight("epic.listTaskHosts"),
+    preflight: cloudVerdictPreflight(TASK_HOSTS_METHOD),
     options: {
       enabled: cloudAuthorized && taskId.length > 0 && viewerUserId.length > 0,
       staleTime: 30_000,
@@ -46,6 +91,8 @@ export function useTaskHosts(
       // A refusal is just as terminal for a consumer that mounts again on
       // it: one that unmounts on the error and remounts would otherwise ask
       // the host on every mount, a refusal and an authn check each time.
+      // Only cloud authorization returning clears it (see
+      // `installRefusalResetOnCloudRestore`).
       retryOnMount: false,
     },
   });

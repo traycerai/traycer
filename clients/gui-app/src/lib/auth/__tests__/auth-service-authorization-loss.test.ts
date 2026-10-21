@@ -842,6 +842,111 @@ describe("AuthService cloudAuthorized verdict propagation on in-place transition
     expect(contextAfter?.cloudAuthorized).toBe(true);
   });
 
+  it("a valid verdict for the bearer a check was sent with is not projected onto a bearer a reconcile adopted meanwhile", async () => {
+    // The verdict names the token that was sent. A reconcile that adopts a
+    // same-user bearer authn refuses lands `unverified` on the new token
+    // without moving the identity generation, so only the credential
+    // generation tells the late verdict that its token is no longer the one
+    // held. Authorizing the adopted bearer would give a token authn has just
+    // refused a cloud verdict.
+    vi.useFakeTimers();
+    const { service, host } = makeService();
+    trackedServices.push(service);
+    await host.tokenStore.signIn(
+      { token: "stale-stored-token", refreshToken: "stale-stored-refresh" },
+      { id: "user-1", email: "test@example.com", name: "Test User" },
+    );
+    restoreFetch();
+    restoreFetch = installFetch(() =>
+      Promise.reject(new Error("connection refused")),
+    );
+
+    const start = service.start();
+    for (let retry = 1; retry < AUTH_FETCH_MAX_ATTEMPTS; retry += 1) {
+      await vi.advanceTimersByTimeAsync(authRetryDelayMs(retry));
+    }
+    await start;
+    expect(useAuthStore.getState().status).toBe("unverified");
+
+    const provider = service.getRequestContextProvider();
+    const contextBefore = provider.current();
+    expect(contextBefore?.cloudAuthorized).toBe(false);
+
+    // The check on the held bearer is left pending; authn refuses the bearer
+    // the reconcile is about to read off disk.
+    let answerHeldBearer: (response: Response) => void = () => undefined;
+    const heldBearerAnswer = new Promise<Response>((resolve) => {
+      answerHeldBearer = resolve;
+    });
+    restoreFetch();
+    restoreFetch = installFetch((input, init) => {
+      const url = typeof input === "string" ? input : String(input);
+      if (url !== VALIDATION_URL) {
+        return status(500);
+      }
+      return init?.headers?.Authorization === "Bearer stale-stored-token"
+        ? heldBearerAnswer
+        : status(401);
+    });
+    const revalidation = service.revalidateCurrentContext();
+    await vi.advanceTimersByTimeAsync(0);
+
+    await host.tokenStore.signIn(
+      { token: "adopted-token", refreshToken: "adopted-refresh" },
+      { id: "user-1", email: "test@example.com", name: "Test User" },
+    );
+    await vi.advanceTimersByTimeAsync(0);
+    // Non-vacuity: the reconcile really did adopt the second bearer.
+    expect(service.getCurrentSessionSnapshot().token).toBe("adopted-token");
+
+    answerHeldBearer(await okWithProfile());
+    const outcome = await revalidation;
+    expect(outcome?.kind).toBe("valid");
+
+    expect(useAuthStore.getState().status).toBe("unverified");
+    const contextAfter = provider.current();
+    expect(contextAfter).toBe(contextBefore);
+    expect(contextAfter?.cloudAuthorized).toBe(false);
+  });
+
+  it("a valid revalidation does not end an interactive sign-in attempt on an unverified session", async () => {
+    // Session recovery never races an interactive attempt, and the live
+    // revalidation's promotion must not either: ending `signing-in` while the
+    // device flow still runs would leave the attempt's own result landing on
+    // a session the surface already reports as signed in.
+    vi.useFakeTimers();
+    const { service, host } = makeService();
+    trackedServices.push(service);
+    await host.tokenStore.signIn(
+      { token: "stale-stored-token", refreshToken: "stale-stored-refresh" },
+      { id: "user-1", email: "test@example.com", name: "Test User" },
+    );
+    restoreFetch();
+    restoreFetch = installFetch(() =>
+      Promise.reject(new Error("connection refused")),
+    );
+
+    const start = service.start();
+    for (let retry = 1; retry < AUTH_FETCH_MAX_ATTEMPTS; retry += 1) {
+      await vi.advanceTimersByTimeAsync(authRetryDelayMs(retry));
+    }
+    await start;
+    expect(useAuthStore.getState().status).toBe("unverified");
+
+    await service.signIn();
+    expect(useAuthStore.getState().status).toBe("signing-in");
+    expect(service.getDeviceProgress()?.phase).toBe("waiting-approval");
+
+    // Authn is reachable again and accepts the bearer the session still holds.
+    restoreFetch();
+    restoreFetch = installFetch(() => okWithProfile());
+    const outcome = await service.revalidateCurrentContext();
+    expect(outcome?.kind).toBe("valid");
+
+    expect(useAuthStore.getState().status).toBe("signing-in");
+    expect(service.getDeviceProgress()?.phase).toBe("waiting-approval");
+  });
+
   /**
    * `unverified` is a claim that there is a LOCAL PLANE worth holding the app
    * open for. A shell with no local host has none - and cannot substitute a
