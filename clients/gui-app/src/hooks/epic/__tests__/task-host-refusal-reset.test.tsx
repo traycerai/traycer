@@ -23,6 +23,35 @@ import { useAuthStore } from "@/stores/auth/auth-store";
 // with the handler counting how often the host is asked.
 
 const TASK_ID = "task-refused";
+const VIEWER_ID = createAuthenticatedUserFixture(undefined).user.id;
+
+function hostsOf(principalId: string): ListTaskHostsResponse {
+  return {
+    hosts: [
+      {
+        hostId: "host-1",
+        label: null,
+        principal: { kind: "user", id: principalId },
+        reach: "same_principal",
+      },
+    ],
+  };
+}
+
+/** A provider signed in as the given user, the viewer a verdict will name. */
+function signedInProvider(userId: string): DefaultRequestContextProvider {
+  const provider = new DefaultRequestContextProvider({ origin: "renderer" });
+  const fixture = createAuthenticatedUserFixture(undefined);
+  provider.setSignedIn({
+    user: createAuthenticatedUserFixture({
+      user: { ...fixture.user, id: userId },
+    }),
+    bearerToken: "tok-1",
+    operationId: undefined,
+    externalAbortSignal: undefined,
+  });
+  return provider;
+}
 
 function refusal(requestId: string): HostRpcError {
   return new HostRpcError({
@@ -71,7 +100,7 @@ describe("subscribeTaskHostRefusalReset", () => {
   beforeEach(() => {
     useAuthStore.setState({
       status: "signed-in",
-      contextMetadata: { userId: "viewer-1", username: "viewer-1" },
+      contextMetadata: { userId: VIEWER_ID, username: VIEWER_ID },
     });
   });
 
@@ -90,24 +119,9 @@ describe("subscribeTaskHostRefusalReset", () => {
       requests.value += 1;
       return hostRefuses.value
         ? Promise.reject(refusal(`task-hosts-${String(requests.value)}`))
-        : Promise.resolve({
-            hosts: [
-              {
-                hostId: "host-1",
-                label: null,
-                principal: { kind: "user", id: "viewer-1" },
-                reach: "same_principal",
-              },
-            ],
-          });
+        : Promise.resolve(hostsOf(VIEWER_ID));
     });
-    const provider = new DefaultRequestContextProvider({ origin: "renderer" });
-    provider.setSignedIn({
-      user: createAuthenticatedUserFixture(undefined),
-      bearerToken: "tok-1",
-      operationId: undefined,
-      externalAbortSignal: undefined,
-    });
+    const provider = signedInProvider(VIEWER_ID);
     const unsubscribe = subscribeTaskHostRefusalReset({
       requestContextProvider: provider,
       queryClient,
@@ -127,13 +141,87 @@ describe("subscribeTaskHostRefusalReset", () => {
       provider.announceSessionVerified();
     });
 
-    // Settled either way: on the refetch the reset allows, or on the idle
-    // pending read it would otherwise leave behind.
+    // The reset runs once the cancel of the picked reads resolves, so wait for
+    // its outcome: the refetch it allows, not an idle pending read.
     await vi.waitFor(() => {
-      expect(mounted.result.current.isFetching).toBe(false);
+      expect(requests.value).toBe(2);
+      expect(mounted.result.current.data?.hosts[0]?.hostId).toBe("host-1");
     });
-    expect(requests.value).toBe(2);
-    expect(mounted.result.current.data?.hosts[0]?.hostId).toBe("host-1");
+    expect(mounted.result.current.isError).toBe(false);
+
+    unsubscribe();
+    provider.dispose();
+  });
+
+  it("re-asks a read still in flight when the verdict returns, so a refusal that settles afterwards does not stay terminal", async () => {
+    const heldRefusal = Promise.withResolvers<ListTaskHostsResponse>();
+    const requests = { value: 0 };
+    const { client, queryClient, wrapper } = mountFixture(() => {
+      requests.value += 1;
+      return requests.value === 1
+        ? heldRefusal.promise
+        : Promise.resolve(hostsOf(VIEWER_ID));
+    });
+    const provider = signedInProvider(VIEWER_ID);
+    const unsubscribe = subscribeTaskHostRefusalReset({
+      requestContextProvider: provider,
+      queryClient,
+    });
+
+    const mounted = renderHook(() => useTaskHosts(client, TASK_ID), {
+      wrapper,
+    });
+    await vi.waitFor(() => {
+      expect(requests.value).toBe(1);
+      expect(mounted.result.current.isFetching).toBe(true);
+    });
+
+    act(() => {
+      provider.announceSessionVerified();
+    });
+    heldRefusal.reject(refusal("task-hosts-1"));
+
+    await vi.waitFor(() => {
+      expect(requests.value).toBe(2);
+      expect(mounted.result.current.data?.hosts[0]?.hostId).toBe("host-1");
+    });
+    expect(mounted.result.current.isError).toBe(false);
+
+    unsubscribe();
+    provider.dispose();
+  });
+
+  it("leaves another viewer's failed read alone when the verdict names a different viewer", async () => {
+    useAuthStore.setState({
+      contextMetadata: { userId: "viewer-a", username: "viewer-a" },
+    });
+    const requests = { value: 0 };
+    const { client, queryClient, wrapper } = mountFixture(() => {
+      requests.value += 1;
+      return Promise.reject(refusal(`task-hosts-${String(requests.value)}`));
+    });
+    const provider = signedInProvider("viewer-b");
+    const unsubscribe = subscribeTaskHostRefusalReset({
+      requestContextProvider: provider,
+      queryClient,
+    });
+
+    const mounted = renderHook(() => useTaskHosts(client, TASK_ID), {
+      wrapper,
+    });
+    await vi.waitFor(() => {
+      expect(mounted.result.current.isError).toBe(true);
+    });
+
+    act(() => {
+      provider.announceSessionVerified();
+    });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    });
+
+    expect(requests.value).toBe(1);
+    expect(mounted.result.current.isError).toBe(true);
 
     unsubscribe();
     provider.dispose();

@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import type { QueryClient, UseQueryResult } from "@tanstack/react-query";
+import type { Query, QueryClient, UseQueryResult } from "@tanstack/react-query";
 import type {
   RequestContextProvider,
   RequestContextSubscription,
@@ -53,11 +53,22 @@ export function useTaskHosts(
 }
 
 /**
- * Resets every failed task-host read, mounted or not, each time a session is
- * promoted to a cloud verdict. A refusal is terminal (`retry` above), so a
+ * Re-asks the task-host reads a returning cloud verdict can change, each time
+ * a session is promoted to one. A refusal is terminal (`retry` above), so a
  * consumer that stays mounted on one would otherwise never ask again after
  * the verdict that was missing returns. A mounted read fetches again; an
  * unmounted one fetches on its next mount.
+ *
+ * Two kinds of read are re-asked: those that failed, and those still in
+ * flight, which were dispatched before the verdict (the preflight gates
+ * dispatch on it) and whose answer would land stale - a refusal settling
+ * after this reset would stay terminal. The in-flight ones are cancelled
+ * first so no late answer lands.
+ *
+ * Only reads keyed to the viewer the verdict names are touched. The reads are
+ * ACL-filtered per viewer, so refetching another viewer's entry would store
+ * this viewer's answer under that viewer's key and serve it fresh when they
+ * return; their entries wait for their own verdict.
  */
 export function subscribeTaskHostRefusalReset(args: {
   readonly requestContextProvider: Pick<
@@ -66,23 +77,29 @@ export function subscribeTaskHostRefusalReset(args: {
   >;
   readonly queryClient: QueryClient;
 }): RequestContextSubscription {
-  return args.requestContextProvider.onSessionVerified(() => {
-    // The failed reads are picked BEFORE the reset: `resetQueries` re-applies
-    // its filter to choose what to refetch, and a reset read is no longer in
-    // `error`, so a status filter would leave a mounted read reset and idle.
-    const failed = new Set(
+  return args.requestContextProvider.onSessionVerified((era) => {
+    const viewer = era.identity;
+    if (viewer === null) return;
+    // Picked BEFORE the cancel and the reset: a cancelled read reverts, and
+    // `resetQueries` re-applies its filter to choose what to refetch, so a
+    // status filter would leave a read reset and idle.
+    const stale = new Set(
       args.queryClient.getQueryCache().findAll({
         predicate: (query) =>
-          query.state.status === "error" &&
+          (query.state.status === "error" ||
+            query.state.fetchStatus === "fetching") &&
           hostQueryKeys.matchesMethodOnAnyHost(
             query.queryKey,
             "epic.listTaskHosts",
-          ),
+          ) &&
+          // `useTaskHosts` keys the viewer as the last segment.
+          query.queryKey.at(-1) === viewer,
       }),
     );
-    if (failed.size === 0) return;
-    void args.queryClient.resetQueries({
-      predicate: (query) => failed.has(query),
-    });
+    if (stale.size === 0) return;
+    const picked = { predicate: (query: Query) => stale.has(query) };
+    void args.queryClient
+      .cancelQueries(picked)
+      .then(() => args.queryClient.resetQueries(picked));
   });
 }
