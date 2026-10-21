@@ -17,6 +17,7 @@ import type {
 } from "@/stores/epics/canvas/types";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useSettingsStore } from "@/stores/settings/settings-store";
+import { useDiffViewerPreferences } from "@/hooks/ui/use-diff-viewer-preferences";
 import type { DiffViewerPreferences } from "@/lib/diff/diff-viewer-preferences";
 import {
   resolveHashBackedEndpoints,
@@ -140,9 +141,7 @@ const SnapshotDiffTileShell = memo(function SnapshotDiffTileShell(
   props: SnapshotDiffTileShellProps,
 ) {
   const { node, viewTabId, children } = props;
-  const diffViewerPreferences = useSettingsStore(
-    (s) => s.diffViewerPreferences,
-  );
+  const diffViewerPreferences = useDiffViewerPreferences();
   const patchDiffViewerPreferences = useSettingsStore(
     (s) => s.patchDiffViewerPreferences,
   );
@@ -208,9 +207,7 @@ function SnapshotDiffTileResolved(props: {
 }): ReactNode {
   const { node, handle, viewTabId } = props;
   const tabHostClient = useTabHostClient();
-  const diffViewerPreferences = useSettingsStore(
-    (s) => s.diffViewerPreferences,
-  );
+  const diffViewerPreferences = useDiffViewerPreferences();
   const source = useStore(
     handle.store,
     useShallow(
@@ -652,7 +649,7 @@ function snapshotDiffFindKindLabel(diff: SnapshotDiffTilePayload): string {
 function SnapshotDiffLoading(props: {
   readonly node: SnapshotDiffTileRef;
 }): ReactNode {
-  const mode = useSettingsStore((s) => s.diffViewerPreferences.mode);
+  const { mode } = useDiffViewerPreferences();
   if (props.node.diff.kind === "snapshot-cumulative-bundle") {
     return <DiffBundleLoadingSkeleton mode={mode} />;
   }

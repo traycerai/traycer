@@ -6,8 +6,16 @@ import {
   screen,
   within,
 } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DiffViewerSettingsSection } from "@/components/settings/diff-viewer-settings-section";
+
+// Partial: `useIsMobileViewport` subscribes through this module's real query
+// plumbing and must keep it.
+const viewport = vi.hoisted(() => ({ narrow: false }));
+vi.mock(import("@/hooks/ui/use-narrow-window"), async (importOriginal) => ({
+  ...(await importOriginal()),
+  useIsNarrowWindow: () => viewport.narrow,
+}));
 import {
   DEFAULT_DIFF_VIEWER_PREFERENCES,
   type DiffViewerPreferences,
@@ -39,12 +47,27 @@ function resetPreferences(): void {
 
 describe("DiffViewerSettingsSection", () => {
   beforeEach(() => {
+    viewport.narrow = false;
     resetPreferences();
   });
 
   afterEach(() => {
     cleanup();
     resetPreferences();
+  });
+
+  it("withholds the Layout row in a narrow window, which renders one column regardless", () => {
+    viewport.narrow = true;
+    renderSection();
+
+    expect(screen.queryByRole("group", { name: "Diff layout" })).toBeNull();
+    expect(rowLabels()).toEqual([
+      "Line numbers",
+      "Backgrounds",
+      "Gutter marks",
+      "Word wrap",
+      "Ignore whitespace",
+    ]);
   });
 
   it("renders every Diff viewer row in order without a group heading", () => {
