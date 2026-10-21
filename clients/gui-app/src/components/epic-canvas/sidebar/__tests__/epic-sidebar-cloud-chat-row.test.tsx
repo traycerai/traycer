@@ -1,6 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import type { CloudChatSummary } from "@traycer/protocol/host/epic/cloud-chat";
+import type { HostSandboxState } from "@traycer/protocol/host/host-status";
+import {
+  installHostConnectionRegistrySource,
+  resetHostConnectionRegistryForTest,
+} from "@traycer-clients/shared/host-client/host-connection-registry";
+import type { RemoteHostDirectoryEntry } from "@traycer-clients/shared/host-client/remote-fetcher";
 import {
   EpicSidebarCloudChatRow,
   type CloudChatRowExpansion,
@@ -85,6 +91,7 @@ vi.mock("@/stores/epics/canvas/store", () => ({
 
 afterEach(() => {
   cleanup();
+  resetHostConnectionRegistryForTest();
   reachability.status = "unreachable";
   openedRefs.length = 0;
   openTile.mockClear();
@@ -554,5 +561,97 @@ describe("EpicSidebarCloudChatRow on a mounting surface", () => {
     expect(
       screen.getByTestId(`epic-sidebar-cloud-item-${CHAT.identity.chatId}`),
     ).toBeTruthy();
+  });
+});
+
+/**
+ * A chat whose owner is a team sandbox at rest. The owner reads "unreachable"
+ * (the stand-in above), so the directory row is what decides: the pool serves
+ * a sleeping sandbox's chat, and the live tile it opens shows Resume. The
+ * registry is the real one, seeded with the owner's row.
+ */
+describe("EpicSidebarCloudChatRow for an owner sandbox at rest", () => {
+  function seedOwnerRow(
+    sandbox: { state: HostSandboxState; frozen: boolean } | null,
+  ): void {
+    const row: RemoteHostDirectoryEntry = {
+      hostId: CHAT.ownerHostId,
+      label: "Team sandbox",
+      kind: "remote",
+      websocketUrl: "wss://sandbox.traycer.invalid/rpc",
+      version: "0.0.0-mock",
+      transportDialability: "dialable",
+      publicKey: "public-key",
+      relayFuseGrace: false,
+      sandbox:
+        sandbox === null
+          ? null
+          : {
+              ...sandbox,
+              profile: null,
+              ownerTeamName: "acme",
+              ownerTeamId: "team-1",
+            },
+      remoteStatus: {
+        connectivity: "offline",
+        viewerReachability: "ok",
+        clientCloud: "ok",
+        updateState: "current",
+        appVersion: null,
+        lastSeenAt: null,
+      },
+    };
+    installHostConnectionRegistrySource({
+      directory: {
+        findById: (hostId) => (hostId === row.hostId ? { ...row } : null),
+        onDirectoryChanged: () => ({ dispose: () => undefined }),
+      },
+      leases: null,
+    });
+  }
+
+  function renderAndClick(): void {
+    render(
+      <EpicSidebarCloudChatRow
+        chat={CHAT}
+        childEntries={NO_CHILDREN}
+        expansion={LEAF_EXPANSION}
+        tabId="tab-1"
+        depth={0}
+        selectionMode={false}
+      />,
+    );
+    clickRow();
+  }
+
+  const lockTestId = `epic-sidebar-cloud-lock-${CHAT.identity.chatId}`;
+
+  it.each(["suspended", "stopped"] as const)(
+    "shows no lock and opens LIVE, bound to the sandbox, when it is %s",
+    (state) => {
+      seedOwnerRow({ state, frozen: false });
+      renderAndClick();
+
+      expect(screen.queryByTestId(lockTestId)).toBeNull();
+      expect(openedRefs).toEqual([
+        {
+          type: "chat",
+          id: CHAT.identity.chatId,
+          hostId: CHAT.ownerHostId,
+        },
+      ]);
+    },
+  );
+
+  it.each([
+    ["a failed sandbox", { state: "failed", frozen: false }],
+    ["a frozen suspended sandbox", { state: "suspended", frozen: true }],
+    ["a host that is not a sandbox", null],
+  ] as const)("keeps the lock and the published copy for %s", (_name, row) => {
+    seedOwnerRow(row);
+    renderAndClick();
+
+    expect(screen.getByTestId(lockTestId)).toBeTruthy();
+    expect(openedRefs.map((ref) => ref.type)).toEqual(["published-chat"]);
   });
 });
