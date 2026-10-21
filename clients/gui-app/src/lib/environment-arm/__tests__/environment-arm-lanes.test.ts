@@ -35,6 +35,13 @@ class ArmSession extends FakeStreamSession {
   closeWith(reason: StreamCloseReason): void {
     this.closeHandler?.("closed", reason, null);
   }
+
+  /** Closes as a real logical stream does: the caller's close is reported at once. */
+  override close(): void {
+    if (this.closed) return;
+    super.close();
+    this.closeHandler?.("closed", { kind: "caller" }, null);
+  }
 }
 
 const fatal = (code: string): StreamCloseReason => ({
@@ -200,6 +207,16 @@ describe("createEnvironmentArmLanes", () => {
 
     expect(sessions).toHaveLength(2);
     expect(lanes.read("k", [])).toEqual(["ended", "a"]);
+  });
+
+  it("keeps the replacement open when a reopen scheduled for the stream it replaced comes due", async () => {
+    lanes.acquire(spec("k"));
+    sessions[0]?.closeWith(fatal("UNAUTHORIZED"));
+    lanes.reopen("k");
+    await vi.advanceTimersByTimeAsync(600_000);
+
+    expect(sessions).toHaveLength(2);
+    expect(sessions[1]?.closed).toBe(false);
   });
 
   it("replaces a live arm's stream when asked, so a refusal the old stream still carried does not end it", () => {

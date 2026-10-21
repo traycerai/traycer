@@ -85,10 +85,16 @@ function openLane<State, Frame>(
   // numbers each stream from 0, so every (re)subscribe - a redial of this
   // session or a reopened one - starts the comparison over.
   let newestGeneration = -1;
+  // The stream a scheduled reopen replaces. One that fires after that stream
+  // was already replaced (`replaceSession`) would close a healthy one.
+  let reopenFor: IStreamSession | null = null;
   const reopen = connection.reconnect.openReopenLane(
     () => {
-      session?.close();
+      if (session === null || session !== reopenFor) return;
+      // Cleared before the close, whose own status must not count.
+      const previous = session;
       session = null;
+      previous.close();
       openSession();
     },
     (reason) => !endsTheArm(reason),
@@ -147,6 +153,7 @@ function openLane<State, Frame>(
         publish(spec.ended);
         return;
       }
+      reopenFor = current;
       reopen.scheduleAfterClose(reason);
     });
   }
