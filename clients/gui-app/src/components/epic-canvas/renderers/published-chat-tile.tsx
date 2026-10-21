@@ -29,6 +29,7 @@ import {
   type PublishedChatSessionHandle,
 } from "@/lib/chats/published-chat-session";
 import { ChatDeadTileBannerContainer, ChatTileSessionView } from "./chat-tile";
+import { chatTileHostLabel } from "./chat-pre-content";
 import { PublishedChatNotice } from "./published-chat-notice";
 import { PublishedChatSourceProvider } from "@/lib/chats/published-chat-source-provider";
 import {
@@ -249,7 +250,11 @@ export function PublishedChatTile(props: PublishedChatTileProps): ReactNode {
       epicId={props.epicId}
       tabId={props.viewTabId}
       ownerStatus={ownerReachability.status}
-      ownerLabel={ownerLabel}
+      hostLabel={
+        node.ownerHostId.length > 0
+          ? chatTileHostLabel(ownerReachability, node.ownerHostId)
+          : ownerLabel
+      }
       showsPublishedCopy={showsPublishedCopy}
     />
   );
@@ -643,7 +648,11 @@ function PublishedChatDeadTileBanner(props: {
   readonly epicId: string;
   readonly tabId: string;
   readonly ownerStatus: HostReachabilityStatus;
-  readonly ownerLabel: string;
+  /**
+   * The owner as the banner names it: `chatTileHostLabel`, so a host the
+   * directory has no name for reads as no name rather than as its raw id.
+   */
+  readonly hostLabel: string | null;
   /** See `ChatDeadTileBannerProps.showsPublishedCopy`. */
   readonly showsPublishedCopy: boolean;
 }): ReactNode {
@@ -656,7 +665,7 @@ function PublishedChatDeadTileBanner(props: {
       tabId={props.tabId}
       chatId={props.node.chatId}
       sourceHostId={props.node.ownerHostId}
-      hostLabel={props.ownerLabel}
+      hostLabel={props.hostLabel}
       reason="host-offline"
       showsPublishedCopy={props.showsPublishedCopy}
       testId={`published-chat-dead-tile-${props.node.chatId}`}

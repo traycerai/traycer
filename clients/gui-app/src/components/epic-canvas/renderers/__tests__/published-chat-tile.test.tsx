@@ -79,7 +79,7 @@ interface DeadTileBannerContainerProps {
   readonly tabId: string;
   readonly chatId: string;
   readonly sourceHostId: string;
-  readonly hostLabel: string;
+  readonly hostLabel: string | null;
   readonly reason: ChatDeadTileBannerReason;
   readonly showsPublishedCopy: boolean;
   readonly testId: string;
@@ -687,6 +687,32 @@ describe("PublishedChatTile - dead-tile clone banner", () => {
       // answer the lookup, and the ref knew the owner the whole time.
       sourceOwnerUserId: "user-1",
     });
+  });
+
+  it("hands the banner no host name when the directory only knows the owner by its id", () => {
+    mockUseCloudChatTranscript.mockReturnValue(refusedUnpublished());
+    mockUseChatReplicaRead.mockReturnValue(replicaOk());
+    // `useHostReachability` falls back to the raw host id when the directory
+    // has no label; NODE's `ownerHostId` is that id.
+    mockUseHostReachability.mockReturnValue({
+      status: "unreachable",
+      hostLabel: "owner-host-1",
+    });
+
+    render(
+      <PublishedChatTile
+        node={NODE}
+        viewTabId="tab-1"
+        tileId="pane-1"
+        isActive
+        epicId="epic-1"
+      />,
+    );
+
+    expect(deadTileBannerContainerProps).toHaveLength(1);
+    expect(deadTileBannerContainerProps[0]?.hostLabel).toBeNull();
+    const banner = screen.getByTestId("published-chat-dead-tile-chat-1");
+    expect(banner.textContent).not.toContain("owner-host-1");
   });
 
   it("mounts no banner once the owner is reachable", () => {
