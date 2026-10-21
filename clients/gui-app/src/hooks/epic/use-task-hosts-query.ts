@@ -43,6 +43,10 @@ export function useTaskHosts(
       // An older host's E_HOST_UNSUPPORTED and every refusal are terminal;
       // only a transport failure heals without the person.
       retry: (_failureCount, error) => isTransientHostRpcFailure(error),
+      // A refusal is just as terminal for a consumer that mounts again on
+      // it: one that unmounts on the error and remounts would otherwise ask
+      // the host on every mount, a refusal and an authn check each time.
+      retryOnMount: false,
     },
   });
 }

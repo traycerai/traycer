@@ -777,6 +777,71 @@ describe("AuthService cloudAuthorized verdict propagation on in-place transition
     expect(contextAfter?.cloudAuthorized).toBe(false);
   });
 
+  it("a valid revalidation after a reactive rotate on an unverified session restores the verdict with the store's signed-in", async () => {
+    // The step after the case above: the rotated bearer validates on the NEXT
+    // check for the same user. That is a verdict, and the store goes
+    // `signed-in` on it - here because the account was renamed since the stored
+    // snapshot, so the identity reads as changed. The context every host call
+    // socket reads (`cloudAuthorized: () => context.cloudAuthorized`) must go
+    // with it, or the host refuses each call of a session the UI shows as
+    // signed in.
+    vi.useFakeTimers();
+    const { service, host } = makeService();
+    trackedServices.push(service);
+    await host.tokenStore.signIn(
+      { token: "stale-stored-token", refreshToken: "stale-stored-refresh" },
+      { id: "user-1", email: "test@example.com", name: "Old Name" },
+    );
+    restoreFetch();
+    restoreFetch = installFetch(() =>
+      Promise.reject(new Error("connection refused")),
+    );
+
+    const start = service.start();
+    for (let retry = 1; retry < AUTH_FETCH_MAX_ATTEMPTS; retry += 1) {
+      await vi.advanceTimersByTimeAsync(authRetryDelayMs(retry));
+    }
+    await start;
+    expect(useAuthStore.getState().status).toBe("unverified");
+
+    const provider = service.getRequestContextProvider();
+    const contextBefore = provider.current();
+    expect(contextBefore?.cloudAuthorized).toBe(false);
+
+    restoreFetch();
+    restoreFetch = installFetch((input, init) => {
+      const url = typeof input === "string" ? input : String(input);
+      if (
+        url === VALIDATION_URL &&
+        init?.headers?.Authorization === "Bearer post-demotion-token"
+      ) {
+        return okWithProfile();
+      }
+      if (url === VALIDATION_URL) {
+        return status(401);
+      }
+      if (url === REFRESH_URL) {
+        return okWithRefreshToken("post-demotion-token");
+      }
+      return status(500);
+    });
+
+    // The reactive rotate: a bearer swap, still no verdict (see above).
+    const rotateOutcome = await service.revalidateCurrentContext();
+    expect(rotateOutcome?.kind).toBe("valid");
+    expect(useAuthStore.getState().status).toBe("unverified");
+    expect(provider.current()?.cloudAuthorized).toBe(false);
+
+    // The next check validates the held bearer outright.
+    const verdictOutcome = await service.revalidateCurrentContext();
+    expect(verdictOutcome?.kind).toBe("valid");
+
+    expect(useAuthStore.getState().status).toBe("signed-in");
+    const contextAfter = provider.current();
+    expect(contextAfter).toBe(contextBefore);
+    expect(contextAfter?.cloudAuthorized).toBe(true);
+  });
+
   /**
    * `unverified` is a claim that there is a LOCAL PLANE worth holding the app
    * open for. A shell with no local host has none - and cannot substitute a

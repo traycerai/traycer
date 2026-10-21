@@ -3252,11 +3252,12 @@ export class AuthService {
         // entitlement left every other field one launch stale. Projection plus
         // the service's own profile copy, gated on a real difference - see
         // `reprojectSameUserIdentity` for why re-entering `applySignedIn` is
-        // not available here.
+        // not available for a `signed-in` session, and why one that is not
+        // yet signed in is promoted through it.
         this.reprojectSameUserIdentity(outcome.user);
         // ...and DURABLY, which the projection alone is not. `applySignedIn`
-        // is the only other writer of this snapshot and this path deliberately
-        // avoids it, so nothing else on this branch persists anything: the
+        // is the only other writer of this snapshot and this path avoids it
+        // for a `signed-in` session, so nothing else there persists anything: the
         // next launch paints the cached identity again, and if that launch's
         // validation takes the accepted network-error path the stale name and
         // avatar stand for the whole session. `settleProvisionalSession` pairs
@@ -4977,9 +4978,12 @@ export class AuthService {
 
   /**
    * Re-projects a same-user verdict's person-facing identity into the auth
-   * store and the service's own live-credential copy - and nothing else.
+   * store and the service's own live-credential copy - and nothing else, for a
+   * session already `signed-in`. A session not yet `signed-in` is promoted
+   * through `applySignedIn` instead (see the first branch below).
    *
-   * Deliberately not `applySignedIn` / `applySessionProjection`. Those restart
+   * For a `signed-in` session, deliberately not `applySignedIn` /
+   * `applySessionProjection`. Those restart
    * the refresh scheduler and - the part that is load-bearing rather than
    * merely wasteful - would put the identity back through the context
    * provider, where "same user => same context object" is an invariant the
@@ -5002,10 +5006,25 @@ export class AuthService {
    * rather than trusted.
    */
   private reprojectSameUserIdentity(user: AuthenticatedUser): void {
+    const current = useAuthStore.getState();
+    // A session that is not yet `signed-in` (an `unverified` one whose bearer
+    // a reactive refresh swapped in place) holds a context with no cloud
+    // verdict, and a valid check for it IS the verdict. Writing the store
+    // alone here would show `signed-in` while every host call still carries
+    // `cloudAuthorized: false` and is refused, and recovery would stand down
+    // on the live bearer. `applySignedIn` restores the verdict on that same
+    // context, settles recovery and announces it, so the store reads
+    // `signed-in` only when the context holds the verdict. Without a live
+    // bearer there is nothing to authorize, and the store is left alone.
+    if (current.status !== "signed-in") {
+      if (this.currentBearer !== null) {
+        this.applySignedIn(this.currentBearer, user, undefined);
+      }
+      return;
+    }
     const profile = this.profileFromUser(user);
     const contextMetadata = this.contextMetadataFromUser(user);
     const shareableTeams = projectShareableTeams(user);
-    const current = useAuthStore.getState();
     // Keyed by id, not by INDEX. `projectShareableTeams` preserves the server's
     // order verbatim, so an index-wise compare reads a pure reorder of an
     // identical team set as a change - which writes the store and fires an
