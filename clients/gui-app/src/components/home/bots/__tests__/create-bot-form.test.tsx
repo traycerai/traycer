@@ -979,8 +979,6 @@ describe("<CreateBotForm /> failed create", () => {
   );
 
   describe("after an earlier submit under the same key", () => {
-    // A marked failure: the create was sent and its answer lost, so it may
-    // have made the bot.
     async function settle(): Promise<void> {
       await act(async () => {
         await new Promise<void>((resolve) => {
