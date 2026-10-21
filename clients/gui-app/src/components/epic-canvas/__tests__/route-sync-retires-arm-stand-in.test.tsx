@@ -212,7 +212,12 @@ function signedInAs(userId: string): void {
 }
 
 function armRow(
-  overrides: Partial<Pick<CloudChatSummary, "ownerHostId">>,
+  overrides: Partial<
+    Pick<
+      CloudChatSummary,
+      "ownerHostId" | "headSha256" | "publishedAt" | "throughRecordSeq"
+    >
+  >,
 ): CloudChatSummary {
   return {
     identity: { taskId: EPIC_ID, chatId: CHAT_ID, ownerUserId: ENV },
@@ -277,6 +282,45 @@ function mountRouteSync(handle: OpenedStoreForTest) {
     },
     { initialProps: INTENT, wrapper },
   );
+}
+
+/** What the arm serves for a chat whose host has not published a head yet. */
+const NOT_PUBLISHED = {
+  headSha256: null,
+  publishedAt: null,
+  throughRecordSeq: null,
+} as const;
+
+const SIBLING_ID = "chat-sibling";
+
+/** A published arm row for a second chat, on the team host. */
+function publishedSiblingRow(): CloudChatSummary {
+  return {
+    ...armRow({ ownerHostId: TEAM_HOST }),
+    identity: { taskId: EPIC_ID, chatId: SIBLING_ID, ownerUserId: ENV },
+  };
+}
+
+function fileSiblingStandIn(handle: OpenedStoreForTest): void {
+  handle.store.getState().beginPendingChatCreation({
+    chatId: SIBLING_ID,
+    hostId: TEAM_HOST,
+    parentChatId: null,
+    title: "",
+    ownerUserId: CREATOR,
+  });
+}
+
+function siblingIsRetired(handle: OpenedStoreForTest): boolean {
+  const chats = handle.store.getState().chats;
+  return (
+    !Object.hasOwn(chats.byId, SIBLING_ID) ||
+    chats.byId[SIBLING_ID].userId !== CREATOR
+  );
+}
+
+function standInSurvives(handle: OpenedStoreForTest): boolean {
+  return !standInIsGone(handle);
 }
 
 function standInIsGone(handle: OpenedStoreForTest): boolean {
@@ -358,6 +402,47 @@ describe("route sync and the environment arm's copy of a just-created chat", () 
       type: "chat",
       id: CHAT_ID,
       hostId: TEAM_HOST,
+    });
+  });
+
+  it("a metadata-only arm row (no published head) does not retire the stand-in", async () => {
+    beginStandIn(handle);
+    fileSiblingStandIn(handle);
+    harness.armChats = [
+      armRow({ ownerHostId: TEAM_HOST, ...NOT_PUBLISHED }),
+      publishedSiblingRow(),
+    ];
+
+    mountRouteSync(handle);
+
+    // The published sibling retiring proves the effect ran over this arm.
+    await waitFor(() => {
+      expect(siblingIsRetired(handle)).toBe(true);
+    });
+    expect(standInSurvives(handle)).toBe(true);
+  });
+
+  it("the first published head retires it", async () => {
+    beginStandIn(handle);
+    fileSiblingStandIn(handle);
+    harness.armChats = [
+      armRow({ ownerHostId: TEAM_HOST, ...NOT_PUBLISHED }),
+      publishedSiblingRow(),
+    ];
+    const view = mountRouteSync(handle);
+    await waitFor(() => {
+      expect(siblingIsRetired(handle)).toBe(true);
+    });
+    expect(standInSurvives(handle)).toBe(true);
+
+    harness.armChats = [
+      armRow({ ownerHostId: TEAM_HOST }),
+      publishedSiblingRow(),
+    ];
+    view.rerender(INTENT);
+
+    await waitFor(() => {
+      expect(standInIsGone(handle)).toBe(true);
     });
   });
 
