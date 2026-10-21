@@ -48,22 +48,16 @@ export function useTaskHosts(
       // An older host's E_HOST_UNSUPPORTED and every refusal are terminal;
       // only a transport failure heals without the person.
       retry: (_failureCount, error) => isTransientHostRpcFailure(error),
-      // A refusal is just as terminal for a consumer that mounts again on
-      // it: one that unmounts on the error and remounts would otherwise ask
-      // the host on every mount, a refusal and an authn check each time. A
-      // verdict that returns clears it (`subscribeTaskHostRefusalReset`).
-      retryOnMount: false,
     },
   });
 }
 
 /**
  * Resets every failed task-host read, mounted or not, each time a session is
- * promoted to a cloud verdict. A failure is kept across mounts (`retryOnMount:
- * false` above), so one cached while the verdict was withdrawn would
- * otherwise outlive the verdict's return and leave the task's hosts empty
- * until the cache dropped it. A mounted read fetches again; an unmounted one
- * fetches on its next mount.
+ * promoted to a cloud verdict. A refusal is terminal (`retry` above), so a
+ * consumer that stays mounted on one would otherwise never ask again after
+ * the verdict that was missing returns. A mounted read fetches again; an
+ * unmounted one fetches on its next mount.
  */
 export function subscribeTaskHostRefusalReset(args: {
   readonly requestContextProvider: Pick<

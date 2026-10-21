@@ -19,10 +19,8 @@ import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import { createAppQueryClient } from "@/lib/query-client";
 import { useAuthStore } from "@/stores/auth/auth-store";
 
-// The real `useTaskHosts` over the real `useHostQuery` and a real `HostClient`:
-// the count that matters is how often the host is asked, so it is read off the
-// handler. A consumer that unmounts on an error and mounts again (the venue's
-// section did) re-enters the query's mount path each time.
+// The real `useTaskHosts` over the real `useHostQuery` and a real `HostClient`,
+// with the handler counting how often the host is asked.
 
 const TASK_ID = "task-refused";
 
@@ -69,7 +67,7 @@ function mountFixture(listTaskHosts: () => Promise<ListTaskHostsResponse>): {
   };
 }
 
-describe("useTaskHosts after a refusal", () => {
+describe("subscribeTaskHostRefusalReset", () => {
   beforeEach(() => {
     useAuthStore.setState({
       status: "signed-in",
@@ -80,84 +78,6 @@ describe("useTaskHosts after a refusal", () => {
   afterEach(() => {
     cleanup();
     useAuthStore.setState(useAuthStore.getInitialState(), true);
-  });
-
-  it("does not ask the host again when the consumer remounts on the refused answer", async () => {
-    const requests = { value: 0 };
-    const { client, wrapper } = mountFixture(() => {
-      requests.value += 1;
-      return Promise.reject(refusal(`task-hosts-${String(requests.value)}`));
-    });
-
-    const first = renderHook(() => useTaskHosts(client, TASK_ID), { wrapper });
-    await vi.waitFor(() => {
-      expect(first.result.current.isError).toBe(true);
-    });
-    expect(requests.value).toBe(1);
-
-    first.unmount();
-    const second = renderHook(() => useTaskHosts(client, TASK_ID), { wrapper });
-    // Let the remounted observer's refetch, if it starts one, reach the host.
-    await vi.waitFor(() => {
-      expect(second.result.current.isFetching).toBe(false);
-    });
-
-    expect(requests.value).toBe(1);
-  });
-
-  it("asks the host again on a remount once the session is announced verified", async () => {
-    // The refusal was cached while the session held no verdict. The consumer
-    // was unmounted when the session was promoted, so no mounted observer
-    // could refetch it: the provider's announcement has to drop the failure.
-    const hostRefuses = { value: true };
-    const requests = { value: 0 };
-    const { client, queryClient, wrapper } = mountFixture(() => {
-      requests.value += 1;
-      return hostRefuses.value
-        ? Promise.reject(refusal(`task-hosts-${String(requests.value)}`))
-        : Promise.resolve({
-            hosts: [
-              {
-                hostId: "host-1",
-                label: null,
-                principal: { kind: "user", id: "viewer-1" },
-                reach: "same_principal",
-              },
-            ],
-          });
-    });
-    const provider = new DefaultRequestContextProvider({ origin: "renderer" });
-    provider.setSignedIn({
-      user: createAuthenticatedUserFixture(undefined),
-      bearerToken: "tok-1",
-      operationId: undefined,
-      externalAbortSignal: undefined,
-    });
-    const unsubscribe = subscribeTaskHostRefusalReset({
-      requestContextProvider: provider,
-      queryClient,
-    });
-
-    const first = renderHook(() => useTaskHosts(client, TASK_ID), { wrapper });
-    await vi.waitFor(() => {
-      expect(first.result.current.isError).toBe(true);
-    });
-    first.unmount();
-
-    hostRefuses.value = false;
-    provider.announceSessionVerified();
-
-    const second = renderHook(() => useTaskHosts(client, TASK_ID), { wrapper });
-    // Settled either way: on the fetch the reset allows, or on the cached
-    // refusal it would otherwise keep.
-    await vi.waitFor(() => {
-      expect(second.result.current.isPending).toBe(false);
-    });
-    expect(requests.value).toBe(2);
-    expect(second.result.current.data?.hosts[0]?.hostId).toBe("host-1");
-
-    unsubscribe();
-    provider.dispose();
   });
 
   it("refetches a still-mounted refused read when the session is announced verified", async () => {

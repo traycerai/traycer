@@ -430,8 +430,8 @@ export function createHostRuntime<Registry extends VersionedRpcRegistry>(
           sweepRetiredSessions: sweepRetiredContextSessions,
         }),
       );
-      // A task-host refusal is kept across mounts, so the verdict's return
-      // is what clears it; see `subscribeTaskHostRefusalReset`.
+      // A task-host refusal is terminal, so the verdict's return is what
+      // clears it; see `subscribeTaskHostRefusalReset`.
       const taskHostRefusalResetSubscription = subscribeTaskHostRefusalReset({
         requestContextProvider,
         queryClient,
