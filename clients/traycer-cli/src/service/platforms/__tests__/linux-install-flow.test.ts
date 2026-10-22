@@ -1530,3 +1530,110 @@ describe("install — spawn-edge placement", () => {
     }
   });
 });
+
+// traycer#1628, item 5. A headless Linux host with no user manager (no session
+// bus, no XDG_RUNTIME_DIR) answers every `systemctl --user` call with "Failed
+// to connect to bus". Install already proves the manager reachable first;
+// restart did not, so it stopped the host through a kill that fails quietly,
+// waited out the signal ladder, and then surfaced systemctl's raw text.
+describe("linux restart without a reachable user manager", () => {
+  /**
+   * The real runner's contract: a tolerated non-zero exit RESOLVES with the
+   * exit code, an untolerated one rejects. `show-environment` is the
+   * reachability probe, so it carries `tolerateNonZeroExit: false`.
+   */
+  function headlessRunner(): {
+    readonly calls: RecordedCall[];
+    readonly runner: ProcessRunner;
+  } {
+    const calls: RecordedCall[] = [];
+    const runner: ProcessRunner = (command, args, options: RunOptions) => {
+      calls.push({ command, args });
+      if (options.tolerateNonZeroExit) {
+        return Promise.resolve({
+          stdout: "",
+          stderr: "Failed to connect to bus: No medium found",
+          exitCode: 1,
+        });
+      }
+      return Promise.reject(busError(command, args));
+    };
+    return { calls, runner };
+  }
+
+  /** What `restartWithActuators` does with the controller, in order. */
+  async function restartSequence(
+    runner: ProcessRunner,
+    force: boolean,
+  ): Promise<void> {
+    const controller = createLinuxController(runner);
+    const stopped = await controller.stopForRestart(label, { force });
+    await controller.relaunchAfterRestart(label, stopped);
+  }
+
+  beforeEach(() => {
+    MOCKS.forceStopHostProcess.mockReset();
+    // The terminal-started host a `--force` restart reaches directly, outside
+    // the unit: with no user manager, that kill is all it would have done.
+    MOCKS.forceStopHostProcess.mockResolvedValue({ kind: "stopped" });
+    PID.evidence = { kind: "absent" };
+    PID.evidenceReads = [];
+    PID.gone = false;
+    PID.goneFn = null;
+    PID.goneCalls = 0;
+    setRestartStopGracesForTests({ sigtermMs: 5, sigkillMs: 5 });
+  });
+
+  afterEach(() => {
+    setRestartStopGracesForTests(null);
+  });
+
+  it.each([false, true])(
+    "refuses before signalling anything, with the same guidance install gives (force: %s)",
+    async (force) => {
+      const { calls, runner } = headlessRunner();
+
+      await expect(restartSequence(runner, force)).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+        message: expect.stringMatching(
+          /systemd user manager is not reachable.*cannot be restarted.*WSL.*systemd session or enable lingering.*Nothing was stopped/s,
+        ),
+        details: expect.objectContaining({ userManagerReachable: false }),
+      });
+      // Only the probe ran: no `kill` of the unit, no `restart`, and no
+      // escalation to the published host (`--force`'s last resort).
+      expect(calls.map(verbOf)).toEqual(["show-environment"]);
+      expect(MOCKS.forceStopHostProcess).not.toHaveBeenCalled();
+    },
+  );
+
+  it("never surfaces systemctl's own failure text for the restart job", async () => {
+    const { runner } = headlessRunner();
+
+    const message = await createLinuxController(runner)
+      .restart(label)
+      .then(
+        () => "",
+        (error: { readonly message: string }) => error.message,
+      );
+
+    expect(message).toContain("systemd user manager is not reachable");
+    expect(message).not.toContain("systemctl restart failed");
+  });
+
+  it("leaves a reachable manager's restart exactly as it was", async () => {
+    const { calls, runner } = recordingRunner(() => false);
+
+    await restartSequence(runner, false);
+
+    // The probe now fronts each of the two legs; the signal ladder and the
+    // single `restart` job between them are untouched.
+    expect(calls.map(verbOf)).toEqual([
+      "show-environment",
+      "kill",
+      "kill",
+      "show-environment",
+      "restart",
+    ]);
+  });
+});

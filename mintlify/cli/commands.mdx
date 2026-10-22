@@ -96,7 +96,7 @@ The host is the background process that runs agents, terminals, and Tasks on a m
 | `traycer host logs --follow` | Keep printing new lines as they are written. Ignored with `--json`. |
 | `traycer host start` | Run the host in the foreground until you press Ctrl-C. To start it in the background instead, use `traycer host service start`. |
 | `traycer host start --cwd <path>` | Run the host with a specific working directory. The default is the install directory. |
-| `traycer host restart` | Restart the host service. If a CLI upgrade is waiting to be applied, the restart also tries to apply it, which can replace the `traycer` binary. |
+| `traycer host restart` | Restart the host service. If a CLI upgrade is waiting to be applied, the restart also tries to apply it, which can replace the `traycer` binary. On Linux, it stops with an error and changes nothing when there is no systemd user session to restart the host in. |
 | `traycer host stop` | Stop the host service. |
 | `traycer host restart --force`, `traycer host stop --force` | Restart or stop even when the host is busy. Running terminal sessions and agent work are killed. |
 | `traycer host free-port-and-restart --pid <pid> --port <port>` | Stop the process that holds the host's port, then restart the host. This is the fix `host doctor` prints for a port conflict. Nothing is stopped if that process no longer holds the port. |
