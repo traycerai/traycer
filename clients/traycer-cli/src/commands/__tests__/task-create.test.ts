@@ -38,14 +38,55 @@ vi.mock("../../store/paths", async (importOriginal) => {
 
 vi.mock("../../internal/host-auth", () => ({ resolveHostAuth: vi.fn() }));
 
+// The real send path, kept so a test can run a create through the real
+// retrying and auth-aware messengers with only the socket mocked.
+const realSend = vi.hoisted(() => ({
+  call: null as
+    | null
+    | typeof import("../../internal/host-rpc").callHostRpcAtResolvedEndpoint,
+}));
+
 vi.mock("../../internal/host-rpc", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("../../internal/host-rpc")>();
+  realSend.call = actual.callHostRpcAtResolvedEndpoint;
   return {
     ...actual,
     resolveEndpoint: vi.fn(),
     callHostRpcAtResolvedEndpoint: vi.fn(),
   };
+});
+
+const socketRequest = vi.hoisted(() => vi.fn());
+
+vi.mock(
+  "../../../../shared/host-transport/ws-rpc-client",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("../../../../shared/host-transport/ws-rpc-client")
+      >();
+    return {
+      ...actual,
+      WsRpcClient: class {
+        request = socketRequest;
+      },
+    };
+  },
+);
+
+vi.mock("../../store/credentials-store", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../store/credentials-store")>();
+  return {
+    ...actual,
+    createCliCredentialsStore: () => ({ dispose: () => undefined }),
+  };
+});
+
+vi.mock("../../logger", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../logger")>();
+  return { ...actual, createCliLogger: () => actual.noopLogger };
 });
 
 vi.mock("../../store/task-create-keys", async (importOriginal) => {
@@ -209,8 +250,7 @@ describe("task create: the request", () => {
       },
     });
     // Refused before any frame by a host whose create is not the local-first
-    // one, and keyed by the Task id it mints so a transport retry inside this
-    // run replays the same create.
+    // one, sent as one transport attempt, and keyed by the Task id it mints.
     expect(dispatch).toEqual({
       responseTimeoutMs: null,
       requiredHostMethodVersion: {
@@ -218,7 +258,7 @@ describe("task create: the request", () => {
         version: { major: 1, minor: 1 },
       },
       signal: null,
-      failFast: false,
+      failFast: true,
       idempotencyKey: request.epic.id,
     });
     expect(result).toEqual({
@@ -507,5 +547,58 @@ describe("task create --idempotency-key", () => {
     writeKeyMock.mockRejectedValueOnce(new Error("EROFS"));
     await expect(run({ idempotencyKey: "slot-1" })).rejects.toThrow();
     expect(rpcMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("task create: a refusal answered after an earlier send", () => {
+  it("keeps the intent when the send's first attempt may have committed and a retry is refused", async () => {
+    const send = realSend.call;
+    if (send === null) throw new Error("real send path not captured");
+    rpcMock.mockImplementationOnce(send);
+    // Attempt A went out under the negotiated key and its answer was lost:
+    // the host may have committed the Task. A retry, if one is made, finds
+    // the host's store unavailable and answers the typed refusal as data.
+    socketRequest
+      .mockRejectedValueOnce(
+        new RetryableTransportError({
+          code: "RPC_ERROR",
+          message: "connection closed after the request was sent",
+          requestId: "req-a",
+          method: "epic.create",
+          fatalDetails: null,
+          replaySafetyFromKey: true,
+        }),
+      )
+      .mockResolvedValueOnce({
+        roomInfo: null,
+        refusal: {
+          kind: "local-store-unavailable",
+          message: "Another Traycer host holds this store.",
+          remedy: "Stop the other host, then try again.",
+        },
+      });
+
+    await rejection(run({ idempotencyKey: "slot-1" }));
+
+    const path = taskCreateKeyRecordPath(keysDir.current, "u1", "slot-1");
+    const written = JSON.parse(await readFile(path, "utf8")) as {
+      state: string;
+    };
+    expect(written.state).toBe("intent");
+    const retry = await rejection(run({ idempotencyKey: "slot-1" }));
+    expect(retry.code).toBe(CLI_ERROR_CODES.HOST_REQUEST_OUTCOME_UNKNOWN);
+  });
+});
+
+describe("task create: input errors name the flag, never echo the value", () => {
+  it.each([
+    ["--workspace", { workspaces: ["relative/private-token\n[INFO] forged"] }],
+    ["--repo", { repos: ["acme/private-token/x\n[INFO] forged"] }],
+  ] as const)("does not echo a raw %s value", async (flag, overrides) => {
+    const error = await rejection(run(overrides));
+    expect(error.code).toBe(CLI_ERROR_CODES.INVALID_ARGUMENT);
+    expect(error.message).toContain(flag);
+    expect(error.message).not.toContain("private-token");
+    expect(error.message).not.toContain("\n");
   });
 });

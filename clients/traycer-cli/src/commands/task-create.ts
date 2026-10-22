@@ -12,12 +12,8 @@ import {
   type HostTransportEndpoint,
   type RequestOfMethod,
 } from "../../../shared/host-transport/host-messenger";
-import {
-  DEFAULT_TRANSPORT_RETRY_POLICY,
-  RetryEpisodeOutcomeUnknownError,
-} from "../../../shared/host-transport/retrying-messenger";
+import { RetryEpisodeOutcomeUnknownError } from "../../../shared/host-transport/retrying-messenger";
 import { DEFAULT_DIAL_TIMEOUT_MS } from "../../../shared/host-transport/transport-config";
-import { HOST_POST_OPEN_ATTESTATION_WINDOW_MS } from "../../../shared/host-transport/ws-rpc-client";
 import { config } from "../config";
 import { readEpicId, readTuiAgentId } from "../internal/agent-context";
 import { resolveHostAuth, type HostAuth } from "../internal/host-auth";
@@ -81,23 +77,16 @@ const LOCAL_FIRST_CREATE_FLOOR = {
 } as const;
 
 /**
- * The longest one create can hold its key's lock: every attempt the retry
- * policy makes, each of which can dial, wait out its response and the host's
- * attestation window, then do it once more after the one refreshed sign-in
- * (whose refresh waits on the credentials lock), plus the backoff between
- * attempts. A second run of the key waits this long before it gives up having
- * created nothing. Read when the command runs, not at import.
+ * The longest one create can hold its key's lock: its single attempt can dial
+ * and wait out its response, then do it once more after the one refreshed
+ * sign-in (whose refresh waits on the credentials lock). A single attempt has
+ * no attestation window to wait. A second run of the key waits this long
+ * before it gives up having created nothing. Read when the command runs, not
+ * at import.
  */
 function keyLockWaitMs(): number {
-  const oneSendMs =
-    DEFAULT_DIAL_TIMEOUT_MS +
-    FRAME_TIMEOUT_MS +
-    HOST_POST_OPEN_ATTESTATION_WINDOW_MS;
   return (
-    (DEFAULT_TRANSPORT_RETRY_POLICY.maxRetries + 1) *
-      (2 * oneSendMs + CREDENTIALS_LOCK_WAIT_MS) +
-    DEFAULT_TRANSPORT_RETRY_POLICY.maxRetries *
-      DEFAULT_TRANSPORT_RETRY_POLICY.maxDelayMs
+    2 * (DEFAULT_DIAL_TIMEOUT_MS + FRAME_TIMEOUT_MS) + CREDENTIALS_LOCK_WAIT_MS
   );
 }
 
@@ -270,12 +259,12 @@ function parseTaskCreateInput(opts: TaskCreateOptions): TaskCreateInput {
 }
 
 // Not trimmed: a folder name may end in whitespace. The host is this
-// machine's, so the path means a folder on this machine.
+// machine's, so the path means a folder on this machine. The refusals below
+// name the flag and never echo the value: it is printed and logged as is, and
+// a value carrying a line break would forge a line there.
 function requireAbsoluteWorkspace(rawPath: string): string {
   if (!path.isAbsolute(rawPath)) {
-    throw invalid(
-      `task create: --workspace must be an absolute path: ${rawPath}`,
-    );
+    throw invalid("task create: every --workspace must be an absolute path.");
   }
   return path.resolve(rawPath);
 }
@@ -283,7 +272,7 @@ function requireAbsoluteWorkspace(rawPath: string): string {
 function parseRepo(raw: string): { owner: string; repo: string } {
   const parts = raw.split("/");
   if (parts.length !== 2 || parts[0].length === 0 || parts[1].length === 0) {
-    throw invalid(`task create: --repo must be owner/repo: ${raw}`);
+    throw invalid("task create: every --repo must be owner/repo.");
   }
   return { owner: parts[0], repo: parts[1] };
 }
@@ -368,10 +357,16 @@ async function sendCreate(
     responseTimeoutMs: null,
     requiredHostMethodVersion: LOCAL_FIRST_CREATE_FLOOR,
     signal: null,
-    failFast: false,
-    // The Task id this run minted: a transport retry inside the run replays
-    // byte-identical params under it. A second RUN mints new ids, so this is
-    // not the dedupe across runs; the key record is.
+    // One transport attempt. A retry after a send whose answer was lost can
+    // come back as the typed refusal, which is DATA, and data carries no
+    // trace of the earlier send: read as "nothing was created", it would
+    // clear the key record of a create the first attempt may have committed.
+    // With one attempt, a refusal answers the only request that went out.
+    failFast: true,
+    // The Task id this run minted, so any replay below this call (the auth
+    // layer's one retry after a refreshed sign-in) is the same create. A
+    // second RUN mints new ids, so this is not the dedupe across runs; the
+    // key record is.
     idempotencyKey: ids.taskId,
   };
   let response: unknown;
