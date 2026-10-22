@@ -36,6 +36,17 @@ export function readTuiAgentId(flag: string | null): string | null {
   return readEnvOrFlag(flag, "TRAYCER_AGENT_ID");
 }
 
+/**
+ * The `TRAYCER_TERMINAL_SPAWN_TOKEN` the host put in this terminal agent's
+ * environment when it started the process (for Codex, its app-server's), or
+ * `null` when there is none. Hook reports carry it so the host can tell this
+ * process's reports from a late one of a process it already replaced.
+ */
+export function readTerminalSpawnToken(): string | null {
+  const value = process.env.TRAYCER_TERMINAL_SPAWN_TOKEN?.trim() ?? "";
+  return value.length === 0 ? null : value;
+}
+
 export function resolveEpicId(flag: string | null): string {
   return requireValue(
     readEpicId(flag),
