@@ -223,15 +223,6 @@ export const openSteerSubmittedEventSchema = lazySchema(() =>
   }),
 );
 
-/**
- * The runtime-event union with its seven harness-bearing members reopened.
- * `user_message.anchor_resolved` is NOT among them: its `anchor` is the same
- * per-harness union a row's `sessionAnchor` is, so it stays closed and the host
- * keeps dropping it for a peer that cannot decode the arm. Listed explicitly
- * rather than mapped over the live union, as every frozen copy is, so a member
- * joins this line by a visible edit; the member-set test says when one is
- * missing.
- */
 export const openRuntimeEventSchemaPreHtml = lazySchema(() =>
   z.discriminatedUnion("type", [
     textDeltaEventSchema,
@@ -329,6 +320,15 @@ export const openRuntimeEventSchemaPreArtifact = lazySchema(() =>
     userMessageAnchorTailUpdatedEventSchema,
   ]),
 );
+/**
+ * The runtime-event union with its seven harness-bearing members reopened.
+ * `user_message.anchor_resolved` is NOT among them: its `anchor` is the same
+ * per-harness union a row's `sessionAnchor` is, so it stays closed and the host
+ * keeps dropping it for a peer that cannot decode the arm. Listed explicitly
+ * rather than mapped over the live union, as every frozen copy is, so a member
+ * joins this line by a visible edit; the member-set test says when one is
+ * missing.
+ */
 export const openRuntimeEventSchema = lazySchema(() =>
   z.discriminatedUnion("type", [
     textDeltaEventSchema,

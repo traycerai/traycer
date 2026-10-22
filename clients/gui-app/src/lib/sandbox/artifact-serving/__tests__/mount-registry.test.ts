@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
 import type {
   SandboxArtifactBridge,
@@ -15,6 +15,12 @@ import {
 } from "../artifact-server";
 import type { ArtifactManifest } from "../artifact-manifest";
 import { mountArtifact } from "../mount-registry";
+
+// The serve spies below wrap per-test servers; restoring them here keeps a
+// failed assertion from leaving one behind.
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 const THEME: SandboxTheme = {
   appliesToRoot: true,
@@ -293,9 +299,9 @@ describe("mountArtifact", () => {
   });
 
   it("aborts the in-flight request's own signal on dispose and never delivers its (now stale) response", async () => {
-    // `ArtifactServer` coalesces reads behind its own internal signal, which
-    // intentionally stays alive for any other caller sharing the same block
-    // - so the signal to assert on is the one `serve()` was actually called
+    // `ArtifactServer` coalesces reads behind its own server-lifetime signal,
+    // which an individual request never aborts because other callers share the
+    // same block (only the server's dispose does) - so the signal to assert on is the one `serve()` was actually called
     // with (the dispatcher's own per-request controller), not whatever
     // signal `readSpan` itself happens to receive.
     let settle: (result: ArtifactReadSpanResult) => void = () => undefined;
@@ -336,8 +342,17 @@ describe("mountArtifact", () => {
       totalBytes: 5,
       mediaType: "text/plain",
     });
-    await Promise.resolve();
-    await Promise.resolve();
+    // The dispatcher awaited this serve() promise before this wait does, so by
+    // the time it settles the dispatcher has taken the aborted request's
+    // outcome and decided not to reply.
+    await Promise.allSettled(
+      serveSpy.mock.results.map((call) => {
+        if (call.type !== "return")
+          throw new Error("serve did not return a promise");
+        return call.value;
+      }),
+    );
+    expect(serveSpy).toHaveBeenCalledTimes(1);
     expect(bridge.responses).toEqual([]);
   });
 
@@ -528,8 +543,8 @@ describe("request cancellation (onCancel)", () => {
   it("aborts the in-flight request's own signal when the frame cancels it, and never delivers the (now stale) response", async () => {
     // Same reasoning as the dispose-time abort tests above: assert on the
     // signal `serve()` was actually called with, not on whatever signal
-    // `readSpan` receives (now always the server's own, permanently-live
-    // coalescing signal).
+    // `readSpan` receives (always the server-lifetime coalescing signal:
+    // dispose aborts it, an individual cancellation does not).
     let settle: (result: ArtifactReadSpanResult) => void = () => undefined;
     const readSpan: ArtifactReadSpan = () =>
       new Promise((resolve) => {
@@ -567,8 +582,16 @@ describe("request cancellation (onCancel)", () => {
       totalBytes: 5,
       mediaType: "text/plain",
     });
-    await Promise.resolve();
-    await Promise.resolve();
+    // Same ordering as the dispose case: the dispatcher awaited this serve()
+    // promise first, so it has decided on the reply once the promise settles.
+    await Promise.allSettled(
+      serveSpy.mock.results.map((call) => {
+        if (call.type !== "return")
+          throw new Error("serve did not return a promise");
+        return call.value;
+      }),
+    );
+    expect(serveSpy).toHaveBeenCalledTimes(1);
     expect(bridge.responses).toEqual([]);
   });
 
@@ -592,7 +615,6 @@ describe("request cancellation (onCancel)", () => {
     // response count alone can't distinguish "removed" from "harmlessly
     // ignored while still tracked".
     expect(requestSignal.aborted).toBe(false);
-    await Promise.resolve();
     expect(bridge.responses).toHaveLength(1);
     expect(bridge.responses[0]).toMatchObject({
       requestId: "req-done",

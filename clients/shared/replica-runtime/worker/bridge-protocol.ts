@@ -68,6 +68,10 @@ import type {
  * a worker that connects and then quietly ignores half its traffic. The
  * handshake turns that into one loud error at startup.
  *
+ * **15** adds `expire-pending-chat-creation-for-cloud-row`. A v14 worker
+ * throws on the unknown command after its handshake passed, which is fatal
+ * for the runtime.
+ *
  * **14** adds incremental replica-data settlements and provisional root
  * updates. A v13 worker leaves lane rows and post-snapshot root growth
  * invisible to the main accountant while the app appears to work.
@@ -147,7 +151,7 @@ import type {
  * that does not move with its contract is not a check; it is a comment that
  * looks like one.
  */
-export const RUNTIME_BRIDGE_PROTOCOL_VERSION = 14;
+export const RUNTIME_BRIDGE_PROTOCOL_VERSION = 15;
 
 /**
  * The runtime facts main's books read between settlements.
@@ -565,6 +569,10 @@ export interface RuntimeCommandMap {
    */
   "begin-pending-chat-creation": { readonly pending: unknown };
   "clear-pending-chat-creation": { readonly chatId: string };
+  "expire-pending-chat-creation-for-cloud-row": {
+    readonly chatId: string;
+    readonly ownerHostId: string;
+  };
   "republish-records-for-current-user": Record<string, never>;
   "reproject-for-viewer-change": Record<string, never>;
   "discard-unsynced-edits": Record<string, never>;
@@ -618,6 +626,7 @@ const RUNTIME_COMMAND_COVERAGE: {
   "mark-chat-records-not-authoritative": true,
   "begin-pending-chat-creation": true,
   "clear-pending-chat-creation": true,
+  "expire-pending-chat-creation-for-cloud-row": true,
   "republish-records-for-current-user": true,
   "reproject-for-viewer-change": true,
   "discard-unsynced-edits": true,

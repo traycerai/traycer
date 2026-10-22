@@ -1,7 +1,6 @@
 /**
  * Source of truth for epic node kinds, display registries, and tree
- * conversion. The GUI treats chat + the four Markdown artifact kinds
- * (spec, ticket, story, review) as a single "EpicNode" concept.
+ * conversion for chats, terminals, Markdown artifacts and object artifacts.
  * `Record<EpicNodeKind, …>` tables below fail compilation until every
  * key is filled in when a kind is added.
  */
@@ -60,7 +59,7 @@ export function isEpicArtifactKind(
   );
 }
 
-// Editing, comments and composer mentions still require a Markdown body.
+// Markdown editing, sidebar comments and composer mentions require a Markdown body.
 export function isMarkdownArtifactKind(
   value: string | null | undefined,
 ): value is MarkdownArtifactKind {

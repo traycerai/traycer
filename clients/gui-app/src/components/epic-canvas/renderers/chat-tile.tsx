@@ -180,7 +180,7 @@ import {
   type RenderedMessagesDisplayContext,
 } from "@/stores/chats/rendered-messages";
 import { useAuthStore } from "@/stores/auth/auth-store";
-import { useOwnedByViewer } from "@/hooks/chats/use-owned-by-viewer";
+import { useChatOwnerCopyFacts } from "@/hooks/environment/use-team-environment-ownership";
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
 import type { TranscriptRowLocator } from "@traycer/protocol/host/agent/gui/subscribe-windowed";
 import {
@@ -206,6 +206,11 @@ import {
 } from "@/hooks/agent/use-host-reachability";
 import { useHostLease } from "@/hooks/host/use-host-lease";
 import {
+  useChatServing,
+  useChatServingHostId,
+} from "@/lib/chats/chat-serving-witness";
+import { useChatContinueHere } from "@/hooks/chats/use-chat-continue-here";
+import {
   useEpicCreateChatForHost,
   useEpicUpdateChatRunSettings,
 } from "@/hooks/epic/use-epic-chat-mutations";
@@ -223,6 +228,7 @@ import {
 import { chatTileActivationQueryPolicy } from "./chat-tile-activation-query-policy";
 import {
   ChatDeadTileBanner,
+  ChatCatchingUpBanner,
   ChatHostStartingBanner,
   type ChatDeadTileBannerReason,
 } from "./dead-tile-banner";
@@ -429,6 +435,13 @@ interface ChatTileSessionViewProps {
  * inheriting them. Tiles are one chat for life today; the key keeps that
  * true by construction rather than by a property of the surface host.
  */
+/**
+ * The composer lock on a team sandbox's chat the pool serves at rest: the
+ * pool never carries a turn, so the reason is the sandbox, not the viewer.
+ */
+const CHAT_AT_REST_NOTICE =
+  "No sandbox is running this agent. You can read it, but not send.";
+
 export function ChatTile(props: ChatTileProps) {
   return (
     <ChatTileForChat
@@ -600,9 +613,17 @@ function ChatTileForChat(props: ChatTileProps) {
       );
     }
   }, [handle, epicId, tabHostId, node.id, node.instanceId]);
-  const reachability = useHostReachability(tabHostId);
-  const lease = useHostLease(tabHostId);
-  const hasReadySession = useRemoteSessionPollReadiness(tabHostId);
+  // The peer serving this chat's stream (`useChatServingHostId`): the tab's
+  // host, or the pool for a team sandbox's chat at rest. The strip and the
+  // wait below read THAT peer, so a sandbox asleep under a chat the pool
+  // serves never reads as an offline tile.
+  const servingKey = { hostId: tabHostId, epicId, chatId: node.id };
+  const servingHostId = useChatServingHostId(servingKey);
+  const serving = useChatServing(servingKey);
+  const servedAtRest = servingHostId !== tabHostId;
+  const reachability = useHostReachability(servingHostId);
+  const lease = useHostLease(servingHostId);
+  const hasReadySession = useRemoteSessionPollReadiness(servingHostId);
   // The chat's own bounded load (invariant 6), for both halves of the wait:
   // while `handle === null`, and after it until the first snapshot. The
   // handle-pending half has THREE causes that look identical from here: the
@@ -675,6 +696,13 @@ function ChatTileForChat(props: ChatTileProps) {
     }
     return null;
   })();
+  const catchingUpBanner =
+    serving?.state === "catching-up" && serving.catchingUp !== null ? (
+      <ChatCatchingUpBanner
+        reason={serving.catchingUp}
+        testId={`chat-catching-up-${node.id}`}
+      />
+    ) : null;
 
   if (handle === null) {
     return (
@@ -684,6 +712,7 @@ function ChatTileForChat(props: ChatTileProps) {
         className="flex h-full min-h-0 flex-col"
       >
         {deadTileBanner}
+        {catchingUpBanner}
         <ChatTilePreContent
           testId={`chat-tile-pre-content-${node.id}`}
           frame={preContentFrame}
@@ -696,6 +725,7 @@ function ChatTileForChat(props: ChatTileProps) {
   return (
     <div className="flex h-full min-h-0 flex-col" data-node-id={node.id}>
       {deadTileBanner}
+      {catchingUpBanner}
       <TombstonedProfileProvider
         providers={providersList.data?.providers ?? []}
         hostId={tabHostId}
@@ -707,7 +737,7 @@ function ChatTileForChat(props: ChatTileProps) {
           tileId={props.tileId}
           isActive={isActive}
           currentEpicId={epicId}
-          readOnlyNotice={null}
+          readOnlyNotice={servedAtRest ? CHAT_AT_REST_NOTICE : null}
           isLiveSession
           preContent={preContentFrame}
         />
@@ -797,7 +827,13 @@ function ChatDeadTileBannerWithOffer(
   // collaborators existed. Role: `epic.createChat` is editor-gated host-side,
   // so a known viewer gets the reason in the banner instead of a Clone button
   // that dies on a bare "You don't have permission" toast (`useChatCloneAllowed`).
-  const ownedByViewer = useOwnedByViewer(sourceOwnerUserId);
+  // A team sandbox's chat names its sandbox rather than a collaborator or a
+  // machine; an owner not yet told apart stays on the own-chat sentences.
+  const { ownedByViewer, environmentOwned } = useChatOwnerCopyFacts(
+    sourceOwnerUserId,
+    props.sourceHostId,
+    props.chatId,
+  );
   const offer = useChatCloneOnHostSwitch({
     epicId: props.epicId,
     tabId: props.tabId,
@@ -809,16 +845,30 @@ function ChatDeadTileBannerWithOffer(
     sourceTitle: chatRecord?.title ?? "",
     sourceOwnerUserId,
   });
+  // A removed team sandbox's agent continues on another awake sandbox of its
+  // team instead of being cloned; a refusal for another environment falls
+  // back to the clone.
+  const continueOffer = useChatContinueHere({
+    epicId: props.epicId,
+    chatId: props.chatId,
+    sourceHostId: props.sourceHostId,
+    ownerUserId: sourceOwnerUserId,
+    name: chatRecord?.title ?? "",
+    fallback: offer.clone,
+  });
+  const continues = continueOffer.eligible && props.reason === "host-offline";
   return (
     <>
       <ChatDeadTileBanner
         hostLabel={props.hostLabel}
-        reason={props.reason}
+        reason={continues ? "sandbox-removed" : props.reason}
         ownedByViewer={ownedByViewer}
+        environmentOwned={environmentOwned}
         cloneAllowed={props.cloneAllowed}
         showsPublishedCopy={props.showsPublishedCopy}
-        onClone={offer.clone}
-        cloning={offer.cloning}
+        continueTargetLabel={continueOffer.targetLabel}
+        onClone={continues ? continueOffer.continueHere : offer.clone}
+        cloning={offer.cloning || continueOffer.continuing}
         className={undefined}
         testId={props.testId}
       />
@@ -2434,7 +2484,6 @@ function useChatTileSessionViewModel(
   const restoreContext = useMemo(
     () => ({
       accessRole: state.access?.role ?? null,
-      currentUserId,
       activeHostId,
       // Restoring/reverting files while a turn is actively writing is unsafe,
       // but that's a turn-scoped concern, same as the composer's Stop button -
@@ -2462,7 +2511,6 @@ function useChatTileSessionViewModel(
       composerActiveTurnStatus,
       chatActions.restoreCheckpoint,
       chatActions.revertFileChanges,
-      currentUserId,
       localSnapshotClearMarker,
       restoreActionPending,
       state.access?.role,

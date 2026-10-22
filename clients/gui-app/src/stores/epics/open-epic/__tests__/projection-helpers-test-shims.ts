@@ -11,7 +11,6 @@ import {
   getChatsMap,
   getEpicMap,
   getTerminalAgentsMap,
-  isChatVisibleToUser,
   isTerminalAgentVisibleToUser,
   NEW_ARTIFACT_TITLES,
   projectArtifact,
@@ -55,8 +54,8 @@ export function projectChatsSliceForTests(
   const allIds: string[] = [];
   for (const [id, entry] of map.entries()) {
     if (!(entry instanceof Y.Map)) continue;
-    const projected = projectChat(id, entry as Y.Map<unknown>);
-    if (!isChatVisibleToUser(projected.userId, currentUserId)) continue;
+    const projected = projectChat(id, entry as Y.Map<unknown>, currentUserId);
+    if (!projected.ownedByViewer) continue;
     byId[id] = projected;
     allIds.push(id);
   }

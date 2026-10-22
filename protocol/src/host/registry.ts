@@ -3,6 +3,11 @@ import { PROFILE_SYNC_LINK_RPC_METHODS } from "./profile-sync-link-contracts";
 import { ENVIRONMENT_RPC_METHODS } from "./environment-contracts";
 import type { NativeListResult } from "./provider-native-schemas";
 import {
+  environmentChatsSubscribeV10,
+  environmentCommunicationGraphSubscribeV10,
+  environmentPlainTerminalsSubscribeV10,
+} from "@traycer/protocol/host/environment/arm-streams";
+import {
   organizationReadV10,
   organizationReadV11,
   organizationReadUpgradeV10ToV11,
@@ -602,6 +607,10 @@ import { hostRebindLocalStoreV10 } from "@traycer/protocol/host/local-store/cont
 import { chatForkGetV10 } from "@traycer/protocol/host/chat-fork/contracts";
 import { chatSearchV10 } from "@traycer/protocol/host/chat-search/contracts";
 import {
+  chatContinueHereV10,
+  chatServingSubscribeV10,
+} from "@traycer/protocol/host/chat-serving/contracts";
+import {
   botClaimAuthorityV10,
   botConversationListV10,
   botConversationSendV10,
@@ -805,7 +814,7 @@ import {
   epicListTasksV16,
   epicListTasksV17,
   epicListTasksV18,
-  epicListTasksUpgradeV17ToV18,
+  epicListTasksV19,
   epicListTasksUpgradeV10ToV11,
   epicListTasksUpgradeV11ToV12,
   epicListTasksUpgradeV12ToV13,
@@ -813,6 +822,8 @@ import {
   epicListTasksUpgradeV14ToV15,
   epicListTasksUpgradeV15ToV16,
   epicListTasksUpgradeV16ToV17,
+  epicListTasksUpgradeV17ToV18,
+  epicListTasksUpgradeV18ToV19,
   epicMentionEpicsV10,
   epicMentionReviewsV10,
   epicMentionSpecsV10,
@@ -843,6 +854,8 @@ import {
   epicRevokeCollaboratorV11,
   epicRevokeCollaboratorUpgradeV10ToV11,
   epicChatPublicationStateV10,
+  epicAttachEnvironmentV10,
+  epicLocalHistoryReadV10,
   epicSetChatArchivedV10,
   epicSetChatArchivedV11,
   epicSetChatArchivedUpgradeV10ToV11,
@@ -1065,6 +1078,7 @@ import {
   hostNotificationsFeedSubscribeV12,
   hostNotificationsFeedSubscribeV13,
   hostNotificationsFeedSubscribeV14,
+  hostNotificationsFeedSubscribeV15,
   hostNotificationsCloudFeedSubscribeV10,
   hostNotificationsCloudFeedSubscribeV11,
   hostNotificationsCloudFeedSubscribeV12,
@@ -1138,6 +1152,7 @@ import {
   chatAutoArchiveSetV10,
 } from "@traycer/protocol/host/chat-auto-archive/contracts";
 import {
+  environmentBindingReadV10,
   environmentHostBindV10,
   environmentHostListV10,
   environmentHostReadV10,
@@ -6125,6 +6140,21 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
       downgradePathsFromLatest: {},
     },
   },
+  // A named host's binding, served by the server pool from the account's
+  // binding records; `environment.host.read` stays the host's own answer.
+  "environment.binding.read": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: environmentBindingReadV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
   "environment.host.bind": {
     degrade: { kind: "unsupported" },
     1: {
@@ -7542,6 +7572,19 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
       downgradePathsFromLatest: {},
     },
   },
+  // Continue a removed team sandbox's chat on this sandbox host. Off-floor: a
+  // personal host, or one that predates it, does not advertise it, and the
+  // client offers Clone instead.
+  "chat.continueHere": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: { contract: chatContinueHereV10, upgradeFromPreviousVersion: null },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
   // The five external fallback actions. All off-floor: a client meeting a host
   // without the fallback engine must simply not render the affordance, which is
   // exactly what `unsupported` degradation gives it. Unary rather than stream
@@ -8129,7 +8172,7 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
   },
   "epic.listTasks": {
     1: {
-      latestMinor: 8,
+      latestMinor: 9,
       versions: {
         0: {
           contract: epicListTasksV10,
@@ -8170,6 +8213,10 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
         8: {
           contract: epicListTasksV18,
           upgradeFromPreviousVersion: epicListTasksUpgradeV17ToV18,
+        },
+        9: {
+          contract: epicListTasksV19,
+          upgradeFromPreviousVersion: epicListTasksUpgradeV18ToV19,
         },
       },
       downgradePathsFromLatest: {},
@@ -8986,6 +9033,38 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
       versions: {
         0: {
           contract: epicChatPublicationStateV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+    degrade: { kind: "unsupported" },
+  },
+  // Optional (non-floor) capability: attaching a task to a team environment
+  // before a chat continues on that team's host. A host that predates it
+  // answers E_HOST_UNSUPPORTED for this call alone.
+  "epic.attachEnvironment": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: epicAttachEnvironmentV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+    degrade: { kind: "unsupported" },
+  },
+  // Optional (non-floor): the host's local History contribution, which the app
+  // composes into the server pool's History pages. A host that predates it
+  // refuses this call alone; the app then states reduced coverage.
+  "epic.localHistory.read": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: epicLocalHistoryReadV10,
           upgradeFromPreviousVersion: null,
         },
       },
@@ -13683,6 +13762,122 @@ export const hostRpcRegistry: VersionedRpcRegistry<HostRpcRegistryDefinition> =
 
 export type HostRpcRegistry = typeof hostRpcRegistry;
 
+// The notification streams, cut out of `HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION`
+// for `.d.ts` emission only: with them, that one literal crosses TS7056's
+// declaration-serialization ceiling. Two nodes, each under it, keep every
+// slot precise (the same cut as `HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION`).
+// Where the cut falls carries no meaning; `HostStreamRpcMethodMap` refuses a
+// method held by both.
+// The environment arm (`environment/arm-streams.ts`): a team environment's
+// own rows in one task, served to its members by the server pool. Cut apart
+// for the same `.d.ts` emission reason as the notification literal below.
+const HOST_STREAM_RPC_REGISTRY_ENVIRONMENT_ARM_DEFINITION = {
+  "environment.chats.subscribe": {
+    1: {
+      latestMinor: 0,
+      versions: { 0: { contract: environmentChatsSubscribeV10 } },
+    },
+  },
+  "environment.plainTerminals.subscribe": {
+    1: {
+      latestMinor: 0,
+      versions: { 0: { contract: environmentPlainTerminalsSubscribeV10 } },
+    },
+  },
+  "environment.communicationGraph.subscribe": {
+    1: {
+      latestMinor: 0,
+      versions: { 0: { contract: environmentCommunicationGraphSubscribeV10 } },
+    },
+  },
+} as const;
+
+const HOST_STREAM_RPC_REGISTRY_NOTIFICATIONS_DEFINITION = {
+  "notifications.subscribe": {
+    1: {
+      // @1.1 adds the additive, server-only `awareness` frame (agent-activity
+      // presence on the per-user notification room). @1.0 stays installed and
+      // FROZEN: a client that negotiated it must never receive the new kind -
+      // the emitting resolver MUST gate on the negotiated version rather than
+      // assuming the peer will tolerate an unknown frame.
+      latestMinor: 1,
+      versions: {
+        0: {
+          contract: notificationsSubscribeV10,
+        },
+        1: {
+          contract: notificationsSubscribeV11,
+        },
+      },
+    },
+  },
+  "host.notifications.subscribe": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: hostNotificationsSubscribeV10,
+        },
+      },
+    },
+  },
+  // `@1.2` shipped in cli-v1.3.0 and is frozen there. The `partitionSnapshot`
+  // frame this branch adds therefore lives at `@1.3`: a frame KIND is the one
+  // growth a released peer cannot absorb, since it strict-decodes the server
+  // union and fails closed on a kind it does not know. The host gates emission
+  // on the negotiated minor rather than assuming tolerance.
+  "host.notifications.feed.subscribe": {
+    1: {
+      latestMinor: 5,
+      versions: {
+        0: {
+          contract: hostNotificationsFeedSubscribeV10,
+        },
+        1: {
+          contract: hostNotificationsFeedSubscribeV11,
+        },
+        2: {
+          contract: hostNotificationsFeedSubscribeV12,
+        },
+        3: {
+          contract: hostNotificationsFeedSubscribeV13,
+        },
+        // `@1.3` has shipped (`host-v1.5.1`), so the two secrets arms of the
+        // entry union ride `@1.4`. The host gates which rows a subscriber
+        // sees on the negotiated minor (`visibleHostNotificationKinds`).
+        4: {
+          contract: hostNotificationsFeedSubscribeV14,
+        },
+        // `@1.4` has shipped, so the `cloudLanePresence` client frame rides
+        // `@1.5`: negotiated, so a client never sends it to an older host.
+        5: {
+          contract: hostNotificationsFeedSubscribeV15,
+        },
+      },
+    },
+  },
+  "host.notifications.cloudFeed.subscribe": {
+    1: {
+      latestMinor: 3,
+      versions: {
+        0: {
+          contract: hostNotificationsCloudFeedSubscribeV10,
+        },
+        1: {
+          contract: hostNotificationsCloudFeedSubscribeV11,
+        },
+        2: {
+          contract: hostNotificationsCloudFeedSubscribeV12,
+        },
+        // The two secrets arms of the entry union; `@1.2` has shipped.
+        3: {
+          contract: hostNotificationsCloudFeedSubscribeV13,
+        },
+      },
+    },
+  },
+} as const;
+
 /**
  * Combined streaming-RPC registry for the `/stream` WS manifest.
  *
@@ -13732,6 +13927,14 @@ export type HostRpcRegistry = typeof hostRpcRegistry;
 // of `chat.subscribe` means `typeof HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION`
 // never has to expand it (see `HostStreamRpcMethodMap` below).
 const HOST_STREAM_RPC_REGISTRY_CORE_DEFINITION = {
+  "chat.serving.subscribe": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: { contract: chatServingSubscribeV10 },
+      },
+    },
+  },
   "organization.subscribe": {
     1: {
       latestMinor: 1,
@@ -13887,84 +14090,6 @@ const HOST_STREAM_RPC_REGISTRY_CORE_DEFINITION = {
         },
         1: {
           contract: artifactSubscribeV11,
-        },
-      },
-    },
-  },
-  "notifications.subscribe": {
-    1: {
-      // @1.1 adds the additive, server-only `awareness` frame (agent-activity
-      // presence on the per-user notification room). @1.0 stays installed and
-      // FROZEN: a client that negotiated it must never receive the new kind -
-      // the emitting resolver MUST gate on the negotiated version rather than
-      // assuming the peer will tolerate an unknown frame.
-      latestMinor: 1,
-      versions: {
-        0: {
-          contract: notificationsSubscribeV10,
-        },
-        1: {
-          contract: notificationsSubscribeV11,
-        },
-      },
-    },
-  },
-  "host.notifications.subscribe": {
-    1: {
-      latestMinor: 0,
-      versions: {
-        0: {
-          contract: hostNotificationsSubscribeV10,
-        },
-      },
-    },
-  },
-  // `@1.2` shipped in cli-v1.3.0 and is frozen there. The `partitionSnapshot`
-  // frame this branch adds therefore lives at `@1.3`: a frame KIND is the one
-  // growth a released peer cannot absorb, since it strict-decodes the server
-  // union and fails closed on a kind it does not know. The host gates emission
-  // on the negotiated minor rather than assuming tolerance.
-  "host.notifications.feed.subscribe": {
-    1: {
-      latestMinor: 4,
-      versions: {
-        0: {
-          contract: hostNotificationsFeedSubscribeV10,
-        },
-        1: {
-          contract: hostNotificationsFeedSubscribeV11,
-        },
-        2: {
-          contract: hostNotificationsFeedSubscribeV12,
-        },
-        3: {
-          contract: hostNotificationsFeedSubscribeV13,
-        },
-        // `@1.3` has shipped (`host-v1.5.1`), so the two secrets arms of the
-        // entry union ride `@1.4`. The host gates which rows a subscriber
-        // sees on the negotiated minor (`visibleHostNotificationKinds`).
-        4: {
-          contract: hostNotificationsFeedSubscribeV14,
-        },
-      },
-    },
-  },
-  "host.notifications.cloudFeed.subscribe": {
-    1: {
-      latestMinor: 3,
-      versions: {
-        0: {
-          contract: hostNotificationsCloudFeedSubscribeV10,
-        },
-        1: {
-          contract: hostNotificationsCloudFeedSubscribeV11,
-        },
-        2: {
-          contract: hostNotificationsCloudFeedSubscribeV12,
-        },
-        // The two secrets arms of the entry union; `@1.2` has shipped.
-        3: {
-          contract: hostNotificationsCloudFeedSubscribeV13,
         },
       },
     },
@@ -14688,6 +14813,8 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION: typeof HOST_STREAM_RPC_REGISTRY
 };
 
 const HOST_STREAM_RPC_REGISTRY_DEFINITION = {
+  ...HOST_STREAM_RPC_REGISTRY_ENVIRONMENT_ARM_DEFINITION,
+  ...HOST_STREAM_RPC_REGISTRY_NOTIFICATIONS_DEFINITION,
   ...HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION,
   "chat.subscribe": {
     1: {
@@ -14902,10 +15029,24 @@ const HOST_STREAM_RPC_REGISTRY_DEFINITION = {
 // directly-imported contract const (`chatSubscribeV15`), so this is a
 // narrow, intentional trade-off - confirmed by a full workspace
 // compile+build with this annotation in place.
-type HostStreamRpcMethodMap =
-  typeof HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION & {
+type HostStreamRpcMethodMap = typeof HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION &
+  typeof HOST_STREAM_RPC_REGISTRY_NOTIFICATIONS_DEFINITION &
+  typeof HOST_STREAM_RPC_REGISTRY_ENVIRONMENT_ARM_DEFINITION & {
     readonly "chat.subscribe": UncheckedStreamMethodVersionRegistry;
-  };
+  } & Record<
+    AssertNever<
+      | Extract<
+          keyof typeof HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION,
+          keyof typeof HOST_STREAM_RPC_REGISTRY_NOTIFICATIONS_DEFINITION
+        >
+      | Extract<
+          keyof typeof HOST_STREAM_RPC_REGISTRY_ENVIRONMENT_ARM_DEFINITION,
+          | keyof typeof HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION
+          | keyof typeof HOST_STREAM_RPC_REGISTRY_NOTIFICATIONS_DEFINITION
+        >
+    >,
+    never
+  >;
 
 export type HostStreamRpcRegistry =
   VersionedStreamRpcRegistry<HostStreamRpcMethodMap>;

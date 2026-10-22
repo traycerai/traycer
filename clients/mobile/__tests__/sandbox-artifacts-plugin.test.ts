@@ -40,6 +40,41 @@ class Deferred<T> {
 }
 
 /**
+ * A promise that reports when production attaches a reaction to it. It is a
+ * subclass because `await` of a native promise attaches without ever looking
+ * up `then`, while it assimilates a subclass instance by calling `then`.
+ */
+class AwaitObservedPromise<T> extends Promise<T> {
+  onAwaited: (() => void) | null = null;
+
+  override then<TResult1 = T, TResult2 = never>(
+    onfulfilled:
+      | ((value: T) => TResult1 | PromiseLike<TResult1>)
+      | null
+      | undefined,
+    onrejected:
+      | ((reason: unknown) => TResult2 | PromiseLike<TResult2>)
+      | null
+      | undefined,
+  ): Promise<TResult1 | TResult2> {
+    this.onAwaited?.();
+    return super.then(onfulfilled, onrejected);
+  }
+}
+
+/** `source`, handed on in a form that calls `onAwaited` once something awaits it. */
+function awaitObserved<T>(
+  source: Promise<T>,
+  onAwaited: () => void,
+): Promise<T> {
+  const observed = new AwaitObservedPromise<T>((resolve, reject) => {
+    source.then(resolve, reject);
+  });
+  observed.onAwaited = onAwaited;
+  return observed;
+}
+
+/**
  * A class rather than an object literal: `addListener`'s single broad-param
  * implementation satisfies the slice's overloads only under method-position
  * bivariance, which strictFunctionTypes reserves for method declarations
@@ -77,6 +112,10 @@ class FakeNativePlugin implements SandboxArtifactsPlugin {
   requestAttachCount = 0;
   cancelAttachCount = 0;
   readyCallCount = 0;
+  /** `true` once production has awaited the held cancel attach it was handed. */
+  cancelAttachAwaited = false;
+  /** `true` once production has awaited the held ready ack it was handed. */
+  readyAwaited = false;
   /** Set to hold the next addListener("request"/"cancel") call open. */
   pendingRequestAttach: Deferred<PluginListenerHandle> | null = null;
   pendingCancelAttach: Deferred<PluginListenerHandle> | null = null;
@@ -97,7 +136,12 @@ class FakeNativePlugin implements SandboxArtifactsPlugin {
     if (this.pendingReady !== null) {
       // Activate only once the held ack actually resolves, never earlier -
       // and never on a rejection, which `.then` here forwards untouched.
-      return this.pendingReady.promise.then(() => this.activate());
+      return awaitObserved(
+        this.pendingReady.promise.then(() => this.activate()),
+        () => {
+          this.readyAwaited = true;
+        },
+      );
     }
     if (this.rejectNextReady !== null) {
       const error = this.rejectNextReady;
@@ -147,7 +191,9 @@ class FakeNativePlugin implements SandboxArtifactsPlugin {
       cancel: SandboxArtifactCancel,
     ) => void;
     if (this.pendingCancelAttach !== null)
-      return this.pendingCancelAttach.promise;
+      return awaitObserved(this.pendingCancelAttach.promise, () => {
+        this.cancelAttachAwaited = true;
+      });
     if (this.rejectNextCancelAttach !== null) {
       const error = this.rejectNextCancelAttach;
       this.rejectNextCancelAttach = null;
@@ -175,12 +221,6 @@ class FakeNativePlugin implements SandboxArtifactsPlugin {
       throw new Error("native cancel listener is not active yet");
     }
     this.activeCancelHandler(cancel);
-  }
-}
-
-async function flush(): Promise<void> {
-  for (let i = 0; i < 4; i++) {
-    await Promise.resolve();
   }
 }
 
@@ -250,9 +290,13 @@ describe("MobileSandboxArtifacts.register", () => {
       resolved = true;
     });
 
-    await flush();
+    // register() has awaited the held cancel attach, after the request attach.
+    // It can only go on once that promise settles, so it is parked on it; had
+    // the await been dropped, nothing would ever attach and this would time out.
+    await vi.waitFor(() => expect(plugin.cancelAttachAwaited).toBe(true));
     expect(plugin.requestAttachCount).toBe(1);
     expect(plugin.cancelAttachCount).toBe(1);
+    expect(plugin.readyCallCount).toBe(0);
     expect(resolved).toBe(false);
 
     cancelAttach.resolve({ remove: plugin.removeCancelListener });
@@ -276,7 +320,9 @@ describe("MobileSandboxArtifacts.register", () => {
     // Capacitor's addListener promise acknowledges a callback id, not native
     // registration: both settle right away while the readiness ack is held,
     // and register() must not treat that as "live" yet.
-    await flush();
+    // register() has attached both listeners and awaited the held ack, so it
+    // is parked on it; had that await been dropped, this would time out.
+    await vi.waitFor(() => expect(plugin.readyAwaited).toBe(true));
     expect(plugin.requestAttachCount).toBe(1);
     expect(plugin.cancelAttachCount).toBe(1);
     expect(plugin.readyCallCount).toBe(1);
@@ -357,16 +403,17 @@ describe("MobileSandboxArtifacts.register", () => {
     expect(plugin.readyCallCount).toBe(2);
   });
 
-  it("removes the failed mount id, so a request for it is never dispatched even after a later successful register", async () => {
+  it("dispatches a request for the same mount id after a failed register is retried successfully, with no auto-404", async () => {
     const plugin = new FakeNativePlugin();
     plugin.rejectNextRequestAttach = new Error("no plugin bridge");
     const bridge = new MobileSandboxArtifacts(plugin, "ios");
 
     await expect(bridge.register("mount1")).rejects.toThrow("no plugin bridge");
 
-    // Retry succeeds and re-mounts "mount1" for real this time.
+    // Retry succeeds and mounts "mount1" for real this time.
     await bridge.register("mount1");
-    bridge.onRequest(() => undefined);
+    const received: SandboxArtifactRequest[] = [];
+    bridge.onRequest((request) => received.push(request));
     plugin.emitRequest({
       requestId: "req-1",
       mountId: "mount1",
@@ -374,8 +421,10 @@ describe("MobileSandboxArtifacts.register", () => {
       offset: 0,
       length: 1,
     });
-    // Reaches the (now live) handler, not an auto-404 - proof the earlier
-    // failed attempt left no stale "mounted" state behind either way.
+    // The retried mount reaches the live handler and is not auto-404'd. This
+    // does not show the failed attempt's mount was removed: the retry
+    // registers the same id again either way.
+    expect(received).toHaveLength(1);
     expect(plugin.respond).not.toHaveBeenCalled();
   });
 });
@@ -786,7 +835,9 @@ describe("MobileSandboxArtifacts, late and cancelled responses", () => {
 
   it("ignores a cancel that arrives after the reply already went out, since tracking was removed before the reply was sent", async () => {
     const { plugin, bridge } = await registeredBridge("mount1", "ios");
+    const cancelled: SandboxArtifactCancel[] = [];
     bridge.onRequest(() => undefined);
+    bridge.onCancel((cancel) => cancelled.push(cancel));
     plugin.emitRequest({
       requestId: "req-done",
       mountId: "mount1",
@@ -804,5 +855,19 @@ describe("MobileSandboxArtifacts, late and cancelled responses", () => {
     });
 
     expect(() => plugin.emitCancel({ requestId: "req-done" })).not.toThrow();
+    // No handler hears of a request that was already answered...
+    expect(cancelled).toEqual([]);
+
+    // ...while a request still awaiting its reply is announced, so the silence
+    // above is the guard and not a handler that never fires.
+    plugin.emitRequest({
+      requestId: "req-live",
+      mountId: "mount1",
+      path: "a.txt",
+      offset: 0,
+      length: 1,
+    });
+    plugin.emitCancel({ requestId: "req-live" });
+    expect(cancelled).toEqual([{ requestId: "req-live" }]);
   });
 });

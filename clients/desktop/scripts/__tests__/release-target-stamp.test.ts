@@ -177,6 +177,32 @@ describe("readClientTargetStamp", () => {
     ).toThrow("relayAttachUrl");
   });
 
+  it("carries an optional cloud.poolUrl through when it is a wss: URL", () => {
+    const stamp = cliStamp();
+    (stamp.cloud as Stamp).poolUrl = "wss://pool.staging.example/v1/session";
+    expect(
+      stampModule.readClientTargetStamp(writeStamp(stamp), "staging", "cli"),
+    ).toMatchObject({
+      cloud: { poolUrl: "wss://pool.staging.example/v1/session" },
+    });
+  });
+
+  it.each([
+    ["an empty string", ""],
+    ["a whitespace string", "   "],
+    ["a cleartext ws: URL", "ws://pool.staging.example/v1/session"],
+    ["an https: URL", "https://pool.staging.example/v1/session"],
+    ["a bare host", "pool.staging.example"],
+    ["a number", 443],
+    ["null", null],
+  ])("refuses cloud.poolUrl when it is %s", (_label, poolUrl) => {
+    const stamp = cliStamp();
+    (stamp.cloud as Stamp).poolUrl = poolUrl;
+    expect(() =>
+      stampModule.readClientTargetStamp(writeStamp(stamp), "staging", "cli"),
+    ).toThrow("poolUrl");
+  });
+
   it.each(["mac", "windows", "linux"])(
     "refuses a desktop stamp missing %s",
     (key) => {

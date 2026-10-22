@@ -13,6 +13,7 @@ import {
   type SandboxCostsFetchResult,
   type SandboxCreateFetchResult,
   type SandboxListFetchResult,
+  type SandboxLifecycleVerbFetchResult,
   type SandboxVerbFetchResult,
 } from "../sandbox-control";
 import {
@@ -201,6 +202,8 @@ export class MockRunnerHost implements IRunnerHost {
   // this mock (remote hosts flow through `hosts`/`HostDirectoryEntry` fixtures
   // instead), so this never needs to vary per test the way `authnBaseUrl` does.
   readonly relayBaseUrl: string = "wss://relay.test.invalid/attach";
+  // No pool: nothing in the mock dials one.
+  readonly poolBaseUrl: string = "";
   // Fixed for the same reason as `relayBaseUrl`: the sandbox control-plane
   // calls below go to the shared helpers, and no test points them at a server.
   private readonly serverBaseUrl: string = "https://server.test.invalid";
@@ -668,7 +671,7 @@ export class MockRunnerHost implements IRunnerHost {
     sandboxId: string,
     verb: SandboxLifecycleVerb,
     timeoutMs: number,
-  ): Promise<SandboxVerbFetchResult> {
+  ): Promise<SandboxLifecycleVerbFetchResult> {
     return runSandboxVerbViaHttp(
       this.serverBaseUrl,
       bearerToken,

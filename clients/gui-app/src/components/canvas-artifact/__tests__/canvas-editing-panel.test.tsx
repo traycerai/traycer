@@ -33,6 +33,7 @@ import {
   selectionFor,
   selectOnly,
   settleLayout,
+  startedSaves,
   structureDocument,
   structureHarness,
 } from "./canvas-structure-test-support";
@@ -263,9 +264,8 @@ describe("CanvasElementEditingPanel structure controls", () => {
       expect(screen.queryByRole("button", { name })).toBeNull();
 
     fireEvent.click(screen.getByRole("button", { name: "Ungroup" }));
-    await settleLayout();
+    await startedSaves(1);
 
-    expect(pendingSaves).toHaveLength(1);
     expect(pendingSaves[0].variables.edit).toEqual({ kind: "unwrap-element" });
     expect(pendingSaves[0].variables.selection.element.tid).toBe("wrap");
   });

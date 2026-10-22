@@ -150,6 +150,7 @@ import {
   type SandboxCreateFetchResult,
   type SandboxListFetchResult,
   type SandboxCostsFetchResult,
+  type SandboxLifecycleVerbFetchResult,
   type SandboxVerbFetchResult,
 } from "@traycer-clients/shared/host-client/sandbox-control";
 import type {
@@ -210,6 +211,7 @@ import { config } from "../config";
 export interface DesktopPreloadBridge {
   readonly authnBaseUrl: string;
   readonly relayBaseUrl: string;
+  readonly poolBaseUrl: string;
   // Runtime redirect_uri from main (dev loopback). Empty string when the build
   // uses the compile-time custom-scheme redirect (staging/prod).
   readonly authRedirectUri: string;
@@ -246,7 +248,7 @@ export interface DesktopPreloadBridge {
     sandboxId: string,
     verb: SandboxLifecycleVerb,
     timeoutMs: number,
-  ): Promise<SandboxVerbFetchResult>;
+  ): Promise<SandboxLifecycleVerbFetchResult>;
   getSandboxAutomation(
     bearerToken: string,
     environmentId: string | null,
@@ -814,6 +816,7 @@ export class DesktopRunnerHost implements IRunnerHost {
   readonly signInUrl: string;
   readonly authnBaseUrl: string;
   readonly relayBaseUrl: string;
+  readonly poolBaseUrl: string;
   // False for a launch booted in the `none` lifecycle mode: main runs no
   // local-host lanes, so nothing may wait on, provision or manage one.
   readonly hasLocalHost: boolean;
@@ -878,6 +881,7 @@ export class DesktopRunnerHost implements IRunnerHost {
     this.signInUrl = options.signInUrl;
     this.authnBaseUrl = options.bridge.authnBaseUrl;
     this.relayBaseUrl = options.bridge.relayBaseUrl;
+    this.poolBaseUrl = options.bridge.poolBaseUrl;
     this.hasLocalHost = options.bridge.localHostCapability !== "none";
     this.windows = options.bridge.windows;
     this.menu = options.bridge.menu;
@@ -1221,7 +1225,7 @@ export class DesktopRunnerHost implements IRunnerHost {
     sandboxId: string,
     verb: SandboxLifecycleVerb,
     timeoutMs: number,
-  ): Promise<SandboxVerbFetchResult> {
+  ): Promise<SandboxLifecycleVerbFetchResult> {
     return this.bridge.runSandboxVerb(bearerToken, sandboxId, verb, timeoutMs);
   }
 

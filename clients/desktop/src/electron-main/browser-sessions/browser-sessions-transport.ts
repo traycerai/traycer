@@ -17,6 +17,7 @@ import {
   hostListItemToDirectoryEntry,
   isRemoteHostDirectoryEntry,
   isSandboxHostDirectoryEntry,
+  type RemoteHostDirectoryEntry,
 } from "@traycer-clients/shared/host-client/remote-fetcher";
 import { NO_TRANSPORT_EVIDENCE } from "@traycer-clients/shared/host-selection/transport-evidence";
 import type { IHostStreamClient } from "@traycer-clients/shared/host-transport/host-stream-client";
@@ -268,17 +269,20 @@ export function openBrowserSessionsTransport(
     compatibilityEpoch: CURRENT_CLIENT_COMPATIBILITY_EPOCH,
     appVersion: deps.appVersion,
   };
-  if (target.kind === "remote") {
-    if (!isRemoteHostDirectoryEntry(target) || target.websocketUrl === null) {
-      return null;
-    }
-    // This stream carries the desktop's whole cookie jar (snapshots, deltas,
-    // host-requested captures), and a sandbox's kernel would hold the Noise
-    // session before any application-level refusal could run. So no jar
-    // transport is ever built for one: the renderer reads a sandbox's
-    // browser sessions over its own jar-free stream instead
-    // (`useBrowserSessions`).
-    if (isSandboxHostDirectoryEntry(target)) return null;
+  // This stream carries the desktop's whole cookie jar (snapshots, deltas,
+  // host-requested captures), so it is built only for a target PROVEN to be
+  // one of the person's own hosts - an allowlist, never a fall-through, since
+  // a fall-through hands the jar to every kind nobody thought about. A
+  // sandbox's kernel would hold the Noise session before any
+  // application-level refusal could run, so no jar transport is ever built
+  // for one: the renderer reads a sandbox's browser sessions over its own
+  // jar-free stream instead (`useBrowserSessions`). The server pool serves no
+  // `browser.*` at all.
+  const lane = jarTransportLane(target);
+  if (lane === null || target.websocketUrl === null) {
+    return null;
+  }
+  if (lane.kind === "personal-remote") {
     const remote = createRemoteHostTransport<
       HostRpcRegistry,
       HostStreamRpcRegistry
@@ -287,10 +291,10 @@ export function openBrowserSessionsTransport(
       userId,
       relayAttachUrl: target.websocketUrl,
       authnBaseUrl: deps.authnBaseUrl(),
-      hostPublicKey: target.publicKey,
+      hostPublicKey: lane.entry.publicKey,
       bearer: deps.bearer,
-      // A sandbox never reaches here (above), so this is always a personal
-      // host's user-bearer OPEN.
+      // The lane excludes a sandbox, so this is always a personal host's
+      // user-bearer OPEN.
       openAuth: "user-bearer",
       cloudAuthorized: deps.cloudAuthorized,
       auth: null,
@@ -316,7 +320,6 @@ export function openBrowserSessionsTransport(
       },
     };
   }
-  if (target.websocketUrl === null) return null;
   const client = new WsStreamClient<HostStreamRpcRegistry>({
     registry: hostStreamRpcRegistry,
     hostId: target.hostId,
@@ -342,4 +345,29 @@ export function openBrowserSessionsTransport(
       client.close("browser-sessions-stream-closed");
     },
   };
+}
+
+/**
+ * Which jar transport `target` may have, or `null` for none. The two lanes
+ * are the whole allowlist: this machine's own host, and a registry host that
+ * is a well-formed personal (non-sandbox) remote.
+ */
+function jarTransportLane(target: HostDirectoryEntry):
+  | { readonly kind: "local" }
+  | {
+      readonly kind: "personal-remote";
+      readonly entry: RemoteHostDirectoryEntry;
+    }
+  | null {
+  if (target.kind === "local") {
+    return { kind: "local" };
+  }
+  if (
+    target.kind === "remote" &&
+    isRemoteHostDirectoryEntry(target) &&
+    !isSandboxHostDirectoryEntry(target)
+  ) {
+    return { kind: "personal-remote", entry: target };
+  }
+  return null;
 }

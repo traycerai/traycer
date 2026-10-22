@@ -18,8 +18,8 @@ import type { HostScopeOption } from "@/components/settings/host-scope/host-scop
 import {
   ACTIVATE_HOST_HINT,
   AVAILABLE_HOST_ROW_SURFACE_STATE,
+  appWideHostOptions,
   isHostOptionSelectable,
-  pickableHostOptions,
 } from "@/components/settings/host-scope/host-option-model";
 import { useHostOptions } from "@/components/settings/host-scope/use-host-options";
 import { useMakeActiveHost } from "@/components/settings/host-scope/use-host-scope";
@@ -343,9 +343,10 @@ function UserMenuHostSection(props: {
     listsFailed,
     retryLists,
   } = useHostOptions();
-  // A picker: no burst sandbox, and no sandbox the control plane has not yet
-  // confirmed is not one. The active host always keeps its row.
-  const hosts = pickableHostOptions(allHosts, activeHostId);
+  // A picker of the app-wide host: no team's sandbox (the selection authority
+  // refuses one), no burst sandbox, and no sandbox the control plane has not
+  // yet confirmed is not one. The active host always keeps its row.
+  const hosts = appWideHostOptions(allHosts, activeHostId);
   const { makeActive, activatingHostId } = useMakeActiveHost(hosts);
   // A failed list (a sandbox list included, which hides every sandbox here)
   // is said, with the retry, rather than shown as the whole account.

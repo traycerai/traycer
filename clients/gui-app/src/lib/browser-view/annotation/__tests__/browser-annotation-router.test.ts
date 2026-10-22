@@ -20,6 +20,7 @@ function chat(title: string, hostId: string | null): ChatProjection {
     createdAt: 1,
     updatedAt: 1,
     userId: null,
+    ownedByViewer: true,
     hostId,
     isTitleEditedByUser: false,
     // Neutral scaffolding: this suite exercises route resolution, not doc

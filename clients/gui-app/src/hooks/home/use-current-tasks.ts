@@ -5,6 +5,7 @@ import {
   skipToken,
   useQuery,
   useQueryClient,
+  type QueryClient,
 } from "@tanstack/react-query";
 import type {
   ListTaskLight,
@@ -324,8 +325,16 @@ function currentTaskPinTailQueryOptions(scope: PinTailScope, enabled: boolean) {
       scope.userId,
       scope.firstPageCursor,
     ),
-    queryFn: ({ signal }) =>
-      fetchPinTail(scope.hostId, scope.userId, scope.firstPageCursor, signal),
+    queryFn: ({ signal, client }) =>
+      fetchPinTail(
+        {
+          hostId: scope.hostId,
+          userId: scope.userId,
+          firstPageCursor: scope.firstPageCursor,
+        },
+        signal,
+        client,
+      ),
     enabled,
     staleTime: Infinity,
     gcTime: Infinity,
@@ -357,11 +366,11 @@ function isPinTailResult(value: unknown): value is PinTailResult {
 }
 
 async function fetchPinTail(
-  hostId: string,
-  userId: string,
-  firstPageCursor: string,
+  scope: PinTailScope,
   abortSignal: AbortSignal,
+  queryClient: QueryClient,
 ): Promise<PinTailResult> {
+  const { hostId, userId, firstPageCursor } = scope;
   const tasks: ListTaskLight[] = [];
   let cursor = firstPageCursor;
   for (
@@ -376,6 +385,7 @@ async function fetchPinTail(
         request: LIST_CLOUD_TASKS_REQUEST,
         cursor,
         abortSignal,
+        queryClient,
       },
     );
     abortSignal.throwIfAborted();

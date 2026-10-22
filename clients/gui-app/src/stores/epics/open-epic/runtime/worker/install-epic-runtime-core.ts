@@ -178,6 +178,8 @@ export function epicRuntimeCorePortSourceOf(
       runtime.beginPendingChatCreation(pending),
     clearPendingChatCreation: (chatId) =>
       runtime.clearPendingChatCreation(chatId),
+    expirePendingChatCreationForCloudRow: (row) =>
+      runtime.expirePendingChatCreationForCloudRow(row),
     republishRecordsForCurrentUser: () =>
       runtime.republishRecordsForCurrentUser(),
     reprojectForViewerChange: () => runtime.reprojectForViewerChange(),

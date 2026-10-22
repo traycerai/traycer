@@ -18,6 +18,19 @@ import {
 import { useLayoutEffect, type ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { CloudChatSummary } from "@traycer/protocol/host/epic/cloud-chat";
+import type { ChatServing } from "@traycer/protocol/host/chat-serving/index";
+import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
+import type {
+  ChatServingKey,
+  ChatServingVerdict,
+} from "@traycer-clients/shared/host-client/host-rpc-routing";
+import {
+  poolEntry,
+  remoteEntry,
+  sandboxFacts,
+} from "@traycer-clients/shared/host-client/__tests__/routing-entry-fixtures";
+import { ChatServingWitnessContext } from "@/lib/chats/chat-serving-witness";
+import type { RetainingChatServingWitness } from "@/lib/chats/pool-chat-serving-witness";
 import { TabGroupView } from "@/components/epic-canvas/canvas/tab-group-view";
 import { paneActivationDeferProps } from "@/components/epic-canvas/pane-activation";
 import { PaneVisibilityContext } from "@/components/epic-tabs/pane-visibility-context";
@@ -142,6 +155,11 @@ interface TestState {
    * fixture in this file.
    */
   readonly chatRetractionByChatId: Map<string, "deleted" | "revoked">;
+  /** Directory rows the `useHostDirectoryEntry` mock answers; unlisted hosts
+   * answer `null`, as a suite with no host runtime has always seen. */
+  readonly directoryEntries: Map<string, HostDirectoryEntry>;
+  /** Whether this process's tier plan names a pool (a team build). */
+  poolConfigured: boolean;
 }
 
 const testState = vi.hoisted((): TestState => ({
@@ -159,7 +177,36 @@ const testState = vi.hoisted((): TestState => ({
   cloudListState: "success",
   chatRecordListAuthoritative: true,
   chatRetractionByChatId: new Map(),
+  directoryEntries: new Map(),
+  poolConfigured: false,
 }));
+
+// This suite renders without a host runtime, which the real hook requires:
+// the serving witness reads the chat host's row through it.
+vi.mock("@/hooks/host/use-host-directory-entry", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/hooks/host/use-host-directory-entry")
+  >()),
+  useHostDirectoryEntry: (hostId: string | null) =>
+    hostId === null ? null : (testState.directoryEntries.get(hostId) ?? null),
+}));
+
+vi.mock(
+  "@traycer-clients/shared/host-client/host-rpc-routing",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@traycer-clients/shared/host-client/host-rpc-routing")
+      >();
+    return {
+      ...actual,
+      readProcessHostRpcTierPlan: () =>
+        testState.poolConfigured
+          ? actual.createHostRpcTierPlan(poolEntry)
+          : actual.readProcessHostRpcTierPlan(),
+    };
+  },
+);
 
 vi.mock(
   "@/components/epic-canvas/surface-host/stable-tile-surface-host-switch",
@@ -240,8 +287,6 @@ vi.mock("@/lib/epic-selectors", () => ({
 vi.mock("@/lib/registries/chat-session-registry", () => ({
   getChatSessionRegistry: () => ({
     listHandles: () => [],
-    // The chat tab's routing menu looks its chat up here; no session is open.
-    peek: () => null,
     subscribe: () => () => undefined,
   }),
   useExistingChatSessionHandle: () => null,
@@ -268,6 +313,8 @@ vi.mock("@/hooks/agent/use-host-reachability", () => ({
       : "reachable",
     hostLabel: hostId,
   }),
+  resolvedHostLabel: (r: { status: string; hostLabel: string | null }) =>
+    r.status === "checking" ? null : r.hostLabel,
 }));
 
 // The host whose PROJECTION the record gate judges refs against - the Epic
@@ -2370,5 +2417,192 @@ describe("<TabGroupView /> Reveal in Sidebar", () => {
     expect(useEpicLeftPanelStore.getState().getActivePanelId(VIEW_TAB_ID)).toBe(
       "terminals",
     );
+  });
+});
+
+// A team sandbox's chat is served by its own host while it is live and by the
+// pool otherwise (`chatServingHostId`), so the canvas fallback has to judge
+// the PEER the witness names rather than the tab's bound host. The witness is
+// the one stub: the hooks, the routing decision and the substitution all run
+// for real.
+class FakeServingWitness implements RetainingChatServingWitness {
+  private serving: ChatServing | null = null;
+  private readonly listeners = new Set<() => void>();
+
+  set(serving: ChatServing | null): void {
+    this.serving = serving;
+    for (const listener of this.listeners) listener();
+  }
+
+  verdictFor(chat: ChatServingKey): ChatServingVerdict {
+    if (this.serving === null) return "unknown";
+    return this.serving.state === "live" &&
+      this.serving.ownerHostId === chat.hostId
+      ? "live"
+      : "at-rest";
+  }
+
+  servingFor(_chat: ChatServingKey): ChatServing | null {
+    return this.serving;
+  }
+
+  subscribe(listener: () => void): () => void {
+    this.listeners.add(listener);
+    return () => {
+      this.listeners.delete(listener);
+    };
+  }
+
+  retain(_chat: ChatServingKey): () => void {
+    return () => undefined;
+  }
+
+  reopen(_chat: ChatServingKey): void {}
+}
+
+describe("<TabGroupView /> published-copy fallback follows the chat's serving witness", () => {
+  const PUBLISHED_COPY_TILE_ID = "published-chat:epic-1:user-1:chat-1";
+  let witness: FakeServingWitness;
+
+  function witnessedGroupView(): ReactNode {
+    return (
+      <ChatServingWitnessContext.Provider value={witness}>
+        {groupView([CHAT], CHAT.instanceId, true)}
+      </ChatServingWitnessContext.Provider>
+    );
+  }
+
+  beforeEach(() => {
+    witness = new FakeServingWitness();
+    testState.poolConfigured = true;
+    testState.directoryEntries.set(
+      CHAT.hostId,
+      remoteEntry(CHAT.hostId, sandboxFacts("team-1")),
+    );
+    testState.sessionHostId = "host-B";
+  });
+
+  afterEach(() => {
+    cleanup();
+    testState.mounts.clear();
+    testState.unmounts.clear();
+    testState.unreachableHostIds.clear();
+    testState.fatalCloseCodeByChatId.clear();
+    testState.directoryEntries.clear();
+    testState.poolConfigured = false;
+    testState.sessionHostId = null;
+    useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
+    useTabsStore.setState(useTabsStore.getInitialState(), true);
+    tabCommandCoordinator.resetReconciliationForTesting();
+    resetChatRemoteDeletionRegistryForTesting();
+    resetTileSurfaceMembershipForTesting();
+    resetTileSurfaceEnvironmentRegistryForTesting();
+  });
+
+  it("keeps the live surface for a sleeping sandbox whose chat the pool serves", async () => {
+    witness.set({
+      ownerHostId: CHAT.hostId,
+      state: "at-rest",
+      catchingUp: null,
+    });
+    testState.unreachableHostIds.add(CHAT.hostId);
+    seedCanvas([CHAT], CHAT.instanceId);
+    const { container } = render(witnessedGroupView());
+
+    await waitFor(() => {
+      expect(
+        container.querySelector(`[data-testid="tile-${CHAT.id}"]`),
+      ).not.toBeNull();
+    });
+    expect(
+      container.querySelector(`[data-testid="tile-${PUBLISHED_COPY_TILE_ID}"]`),
+    ).toBeNull();
+    expect(
+      container.querySelector(`[data-testid="chat-dead-tile-${CHAT.id}"]`),
+    ).toBeNull();
+  });
+
+  it("substitutes the copy for a sandbox that is unreachable while it still holds the chat live", async () => {
+    witness.set({ ownerHostId: CHAT.hostId, state: "live", catchingUp: null });
+    testState.unreachableHostIds.add(CHAT.hostId);
+    seedCanvas([CHAT], CHAT.instanceId);
+    const { container } = render(witnessedGroupView());
+
+    await waitFor(() => {
+      expect(
+        container.querySelector(
+          `[data-testid="tile-${PUBLISHED_COPY_TILE_ID}"]`,
+        ),
+      ).not.toBeNull();
+    });
+    expect(
+      container.querySelector(`[data-testid="tile-${CHAT.id}"]`),
+    ).toBeNull();
+  });
+
+  it("holds the copy with the catching-up banner while the pool serves a chat whose index is unavailable, and gives the tab back when the chat goes live there", async () => {
+    witness.set({
+      ownerHostId: CHAT.hostId,
+      state: "catching-up",
+      catchingUp: "indexing",
+    });
+    testState.fatalCloseCodeByChatId.set(CHAT.id, "CHAT_INDEX_UNAVAILABLE");
+    seedCanvas([CHAT], CHAT.instanceId);
+    const { container } = render(witnessedGroupView());
+
+    await waitFor(() => {
+      expect(
+        container.querySelector(
+          `[data-testid="tile-${PUBLISHED_COPY_TILE_ID}"]`,
+        ),
+      ).not.toBeNull();
+    });
+    const banner = container.querySelector(
+      `[data-testid="chat-catching-up-${CHAT.id}"]`,
+    );
+    expect(banner).not.toBeNull();
+    expect(banner?.getAttribute("data-reason")).toBe("indexing");
+    // Not an absence: no "gone from this host" banner rides with it.
+    expect(
+      container.querySelector(`[data-testid="chat-dead-tile-${CHAT.id}"]`),
+    ).toBeNull();
+
+    // The same terminate is still on the session, but the chat is live on the
+    // tab's own host now, so the live tile opens a fresh stream there.
+    act(() => {
+      witness.set({
+        ownerHostId: CHAT.hostId,
+        state: "live",
+        catchingUp: null,
+      });
+    });
+
+    await waitFor(() => {
+      expect(
+        container.querySelector(`[data-testid="tile-${CHAT.id}"]`),
+      ).not.toBeNull();
+    });
+    expect(
+      container.querySelector(`[data-testid="tile-${PUBLISHED_COPY_TILE_ID}"]`),
+    ).toBeNull();
+    expect(
+      container.querySelector(`[data-testid="chat-catching-up-${CHAT.id}"]`),
+    ).toBeNull();
+  });
+
+  it("does not substitute for an index-unavailable terminate when no witness applies (a chat its own host serves)", async () => {
+    testState.directoryEntries.clear();
+    testState.fatalCloseCodeByChatId.set(CHAT.id, "CHAT_INDEX_UNAVAILABLE");
+    seedCanvas([CHAT], CHAT.instanceId);
+    const { container } = render(witnessedGroupView());
+
+    await waitFor(() => {
+      expect(
+        container.querySelector(`[data-testid="tile-${CHAT.id}"]`),
+      ).not.toBeNull();
+    });
+    expect(
+      container.querySelector(`[data-testid="tile-${PUBLISHED_COPY_TILE_ID}"]`),
+    ).toBeNull();
   });
 });

@@ -129,6 +129,8 @@ const VERIFIED_ALTERNATE_GATE: Readonly<Record<string, string>> = {
     "documented fire-and-forget, same convention as epic.updateChatRunSettings (use-epic-chat-mutations.ts)",
   "epic.listChatRecords":
     "reachable only as a post-write consistency read inside the already-gated useEpicArchiveChatMutation (use-epic-chat-mutations.ts)",
+  "chat.continueHere":
+    "target-choice gate plus call-and-catch: continueTargetHostId skips a host whose negotiated manifest (getNegotiatedHostMethods) lacks the method, and onError turns E_HOST_UNSUPPORTED into the Clone fallback (use-chat-continue-here.ts)",
   "epic.recordViewed":
     "doc comment: the local-home arm exists on every host this client negotiates with, unlike epic.setPinned's cloud arm (use-epic-record-viewed-mutation.ts)",
   "epic.setPinned":
@@ -169,6 +171,8 @@ const VERIFIED_ALTERNATE_GATE: Readonly<Record<string, string>> = {
     "same proxy and inline refusal as bot.delete (bot-settings-panel.tsx)",
   "bot.conversation.send":
     "same bot.list proxy as bot.delete; documented no-toast: the composer states the refusal inline under the field (use-bot-mutations.ts, bot-conversation-view.tsx)",
+  "epic.attachEnvironment":
+    "call-and-catch degrade: a host that predates it answers E_HOST_UNSUPPORTED, which the hook does not toast and the fork dialog answers by forking as it did before the method existed (use-epic-attach-environment-mutation.ts, chat-fork-dialog.tsx)",
   "environment.host.bind":
     "sibling-method proxy gate: host-environment-section.tsx renders the picker only under useHostMethodSupport(hostId, 'environment.host.read'), registered in the same block as bind; the refusal is the picker's inline notice (use-environment-host-bind-mutation.ts)",
 };

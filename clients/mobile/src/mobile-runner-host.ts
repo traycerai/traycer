@@ -134,6 +134,7 @@ import {
   type SandboxCostsFetchResult,
   type SandboxCreateFetchResult,
   type SandboxListFetchResult,
+  type SandboxLifecycleVerbFetchResult,
   type SandboxVerbFetchResult,
 } from "@traycer-clients/shared/host-client/sandbox-control";
 import {
@@ -294,6 +295,8 @@ export class MobileRunnerHost implements IRunnerHost {
   private readonly serverBaseUrl: string;
   readonly sandboxControlUnavailableReason: string | null;
   readonly relayBaseUrl: string;
+  // The mobile app has not adopted the server pool yet.
+  readonly poolBaseUrl = "";
   readonly hasLocalHost = false;
   readonly secureStorage: ISecureStorage = buildSecureStorage();
   readonly tokenStore: ITokenStore;
@@ -740,7 +743,7 @@ export class MobileRunnerHost implements IRunnerHost {
     sandboxId: string,
     verb: SandboxLifecycleVerb,
     timeoutMs: number,
-  ): Promise<SandboxVerbFetchResult> {
+  ): Promise<SandboxLifecycleVerbFetchResult> {
     return runSandboxVerbViaHttp(
       this.serverBaseUrl,
       bearerToken,

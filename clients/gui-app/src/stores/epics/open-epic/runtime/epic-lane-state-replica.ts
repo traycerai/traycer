@@ -322,7 +322,7 @@ function laneSlicesEq(a: EpicLaneStateSlices, b: EpicLaneStateSlices): boolean {
  */
 function projectTombstone(
   record: EpicDeletedArtifactRecord,
-): DeletedArtifactProjection | null {
+): DeletedArtifactProjection {
   return {
     id: record.id,
     kind: record.kind,
@@ -335,9 +335,7 @@ function projectTombstone(
   };
 }
 
-function projectArtifact(
-  record: EpicArtifactRecord,
-): ArtifactProjection | null {
+function projectArtifact(record: EpicArtifactRecord): ArtifactProjection {
   return {
     id: record.id,
     kind: record.kind,
@@ -399,7 +397,6 @@ function buildLaneSlices(rows: readonly HeldLaneRow[]): EpicLaneStateSlices {
       case "artifact": {
         const record = row.record;
         const artifact = projectArtifact(record);
-        if (artifact === null) break;
         artifactsById[record.id] = artifact;
         artifactIds.push(record.id);
         break;
@@ -407,7 +404,6 @@ function buildLaneSlices(rows: readonly HeldLaneRow[]): EpicLaneStateSlices {
       case "artifact-tombstone": {
         const record = row.record;
         const tombstone = projectTombstone(record);
-        if (tombstone === null) break;
         deletedById[record.id] = tombstone;
         deletedIds.push(record.id);
         break;

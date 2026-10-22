@@ -13,10 +13,7 @@ import {
 } from "@/components/sandbox/sandbox-frame";
 import type { SandboxBridgeHost } from "@/lib/sandbox/bridge-host";
 import { artifactContentPolicy } from "@/lib/sandbox/mcp-csp";
-import {
-  sandboxArtifactPolicySource,
-  sandboxLoaderBaseUrl,
-} from "@/lib/sandbox/sandbox-url";
+import { sandboxLoaderBaseUrl } from "@/lib/sandbox/sandbox-url";
 import {
   buildArtifactAddress,
   type ArtifactManifest,
@@ -509,7 +506,6 @@ describe("<SandboxFrame /> artifact source, served over iOS's own scheme", () =>
       </RunnerHostContext.Provider>,
     );
 
-    expect(sandboxArtifactPolicySource(host)).toBe(IOS_POLICY_SOURCE);
     const iframe = await screen.findByTitle("Artifact page");
     const [mountId] = bridge.registered;
     expect(iframe.getAttribute("src")).toBe(
@@ -559,7 +555,6 @@ describe("<SandboxFrame /> artifact source, served over Android's reserved https
       </RunnerHostContext.Provider>,
     );
 
-    expect(sandboxArtifactPolicySource(host)).toBeNull();
     const iframe = await screen.findByTitle("Artifact page");
     const [mountId] = bridge.registered;
     const expectedOrigin = originFor(ANDROID_POLICY_SOURCE, {

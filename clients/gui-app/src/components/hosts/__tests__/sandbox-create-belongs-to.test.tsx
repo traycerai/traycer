@@ -258,11 +258,18 @@ function submit(): HTMLElement {
   return screen.getByTestId("sandbox-create-submit");
 }
 
-function request(environmentId: string | null): SandboxCreateRequest {
+/** A personal create opens at 1 GB; a team create opens at 2 GB. */
+const PERSONAL_MEMORY_MB = 1024;
+const TEAM_MEMORY_MB = 2048;
+
+function request(
+  environmentId: string | null,
+  memoryMb: number,
+): SandboxCreateRequest {
   return {
     os: "linux",
     cpus: 1,
-    memoryMb: 1024,
+    memoryMb,
     diskMb: null,
     region: "us-east",
     displayName: "build-box",
@@ -368,7 +375,7 @@ describe("<SandboxCreateDialog /> belongs to", () => {
 
     expect(mocks.mutate).toHaveBeenCalledTimes(1);
     expect(mocks.mutate.mock.calls[0][0]).toEqual({
-      request: request(null),
+      request: request(null, PERSONAL_MEMORY_MB),
       teamName: null,
       teamId: null,
     });
@@ -386,7 +393,7 @@ describe("<SandboxCreateDialog /> belongs to", () => {
 
     expect(mocks.mutate).toHaveBeenCalledTimes(1);
     expect(mocks.mutate.mock.calls[0][0]).toEqual({
-      request: request("env-acme"),
+      request: request("env-acme", TEAM_MEMORY_MB),
       teamName: "acme",
       teamId: ACME_ID,
     });
@@ -616,7 +623,7 @@ describe("<SandboxCreateDialog /> belongs to", () => {
     ): void {
       mocks.create.error = new SandboxCreateError("refused", code, reason);
       mocks.create.variables = {
-        request: request(environmentId),
+        request: request(environmentId, TEAM_MEMORY_MB),
         teamName: "acme",
         teamId: ACME_ID,
       };
@@ -680,7 +687,7 @@ describe("<SandboxCreateDialog /> belongs to", () => {
       expect(screen.getByTestId("sandbox-create-ask-admin")).toBeDefined();
       expect(screen.queryByTestId("sandbox-create-submit")).toBeNull();
 
-      type("sandbox-create-memory", "2");
+      type("sandbox-create-memory", "3");
       expect(screen.queryByTestId("sandbox-create-ask-admin")).toBeNull();
       expect(screen.getByTestId("sandbox-create-submit")).toBeDefined();
     });

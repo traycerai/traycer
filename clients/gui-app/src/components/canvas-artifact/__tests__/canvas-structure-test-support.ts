@@ -1,5 +1,5 @@
-import { act } from "@testing-library/react";
-import { vi } from "vitest";
+import { act, waitFor } from "@testing-library/react";
+import { expect, vi } from "vitest";
 import type { HtmlElement } from "@traycer/html-source";
 import type { SandboxBridgeHost } from "@/lib/sandbox/bridge-host";
 import type { CanvasElement } from "@/lib/sandbox/canvas-bridge";
@@ -18,6 +18,7 @@ import {
   BOARD_PATH,
   boardDocument,
   canvasElement,
+  pendingSaves,
   realBridge,
   registryServing,
 } from "./canvas-edit-test-support";
@@ -216,6 +217,9 @@ export function installPointerCapture(): void {
   });
 }
 
+/** Every read of the page's sibling layout the current harness was asked for. */
+const layoutReads: Promise<unknown>[] = [];
+
 export interface StructureHarness {
   readonly bridge: SandboxBridgeHost;
   readonly registry: CanvasFrameRegistry;
@@ -237,10 +241,15 @@ export function structureHarness(
   let current: CanvasSiblingLayout | null = layout;
   let gate: Promise<void> | null = null;
   const asked: unknown[] = [];
-  vi.spyOn(bridge, "siblingLayout").mockImplementation(async (locator) => {
+  layoutReads.length = 0;
+  vi.spyOn(bridge, "siblingLayout").mockImplementation((locator) => {
     asked.push(locator);
-    if (gate !== null) await gate;
-    return current;
+    const read = (async (): Promise<CanvasSiblingLayout | null> => {
+      if (gate !== null) await gate;
+      return current;
+    })();
+    layoutReads.push(read);
+    return read;
   });
   const registry = registryServing(bridge, SERVED_SHA);
   const frame = frameWith(geometry);
@@ -301,9 +310,20 @@ export function selectSet(
   });
 }
 
-/** Lets the sibling-layout reader and any pending save requests run. */
+/**
+ * Waits, inside act, for every read of the page's layout asked so far to be
+ * answered. The component that asked is already waiting on the same promise,
+ * ahead of this wait, so what it does with the answer (its state, and the save
+ * request it may end in) has run when this returns. A read held by `hold` must
+ * be released first.
+ */
 export async function settleLayout(): Promise<void> {
   await act(async () => {
-    await new Promise<void>((resolve) => setTimeout(resolve, 20));
+    await Promise.all(layoutReads);
   });
+}
+
+/** The component has handed `count` edits to the save. */
+export function startedSaves(count: number): Promise<void> {
+  return waitFor(() => expect(pendingSaves).toHaveLength(count));
 }

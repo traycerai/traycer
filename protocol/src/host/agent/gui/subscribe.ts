@@ -3855,7 +3855,7 @@ const chatSubscribeSharedServerFrameSchemasOpenHarnessPreTaskOverdue = [
   ...chatSubscribeCommonServerFrameSchemasOpenHarnessPreTaskOverdue,
   blockDeltaServerFrameSchema(openRuntimeEventSchemaPreDelivery),
 ];
-// The live shared frames (`chat.subscribe@1.31`): the live open-harness common
+// The live shared frames (`chat.subscribe@1.33`): the live open-harness common
 // set over the same `blockDelta`.
 const chatSubscribeSharedServerFrameSchemasOpenHarness = [
   messageDeliveryChangedServerFrameSchema,
@@ -6776,7 +6776,7 @@ const chatSubscribeServerFrameSchemaV130 = lazySchema(() =>
   ]),
 );
 
-/** Frozen 1.31: no canvas annotations or new-kind checkpoint tags (`1.32`). */
+/** Frozen 1.31: no canvas annotations (`1.32`) or new-kind checkpoint tags (`1.33`). */
 const chatSubscribeServerFrameSchemaV131 = lazySchema(() =>
   z.discriminatedUnion("kind", [
     chatSubscribeWindowedSnapshotServerFrameSchemaOpenHarness.extend({
@@ -7848,7 +7848,7 @@ export const chatSubscribeV129 = defineStreamRpcContract({
   clientFrameSchema: chatSubscribeWindowedClientFrameSchemaPreCanvas,
 });
 
-/** 1.30 carries HTML, canvas and file operation kinds; 1.28 stays frozen. */
+/** 1.30 carries HTML, canvas and file operation kinds. */
 export const chatSubscribeV130 = defineStreamRpcContract({
   method: "chat.subscribe",
   schemaVersion: { major: 1, minor: 30 } as const,

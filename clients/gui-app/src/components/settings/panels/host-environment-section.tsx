@@ -42,7 +42,11 @@ import { cn } from "@/lib/utils";
  *
  * Reads and writes go through the Settings scope's client, the host the
  * sidebar has selected, never the app-wide one. `following` (the scope is
- * the active host, through the ambient client) is as usable as `ready`.
+ * the active host, through the ambient client) is as usable as `ready`. In a
+ * build with a pool the binding is the pool's answer for this host
+ * (`useEnvironmentHostReadQuery`); the bind still goes to the host, so the
+ * section stays gated on the host's own environment block, whose
+ * `environment.host.read` ships with `environment.host.bind`.
  */
 export function HostEnvironmentSection(props: {
   readonly scope: HostScope;
@@ -54,7 +58,11 @@ export function HostEnvironmentSection(props: {
   const support = useHostMethodSupport(scope.hostId, "environment.host.read");
   const enabled = usable && !sandbox && support === true;
   const environments = useEnvironmentListQuery(scope.client, enabled);
-  const binding = useEnvironmentHostReadQuery(scope.client, enabled);
+  const binding = useEnvironmentHostReadQuery(
+    scope.client,
+    scope.hostId,
+    enabled,
+  );
   const hostListSupport = useHostMethodSupport(
     scope.hostId,
     "environment.host.list",

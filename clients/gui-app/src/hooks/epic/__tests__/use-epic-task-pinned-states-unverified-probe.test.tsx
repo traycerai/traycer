@@ -4,9 +4,9 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import type {
   ListTaskLight,
-  ListTasksRequest,
   ListTasksResponse,
 } from "@traycer/protocol/host/epic/unary-schemas";
+import type { LocalHistoryReadRequest } from "@traycer/protocol/host/epic/local-history";
 
 /**
  * R1 - a COLD unverified tab obtains a pin reading.
@@ -48,8 +48,8 @@ const WINDOW_HOST_ID = "host-window";
 const USER_ID = "user-1";
 
 interface DispatchedRequest {
-  readonly params: ListTasksRequest;
-  readonly withVersionFloor: boolean;
+  readonly method: string;
+  readonly params: LocalHistoryReadRequest;
 }
 
 const registryState = vi.hoisted(() => {
@@ -64,8 +64,8 @@ const transport = vi.hoisted(() => {
   const state: {
     dispatched: Array<{
       hostId: string;
+      method: string;
       params: unknown;
-      withVersionFloor: boolean;
     }>;
     responseByHostId: Map<string, unknown>;
     /** Host ids the binding is willing to build a requester for. */
@@ -172,9 +172,19 @@ function makeClient(hostId: string) {
         listeners.delete(listener);
       };
     },
-    requestWithSignal: (_method: string, params: unknown) => {
-      transport.dispatched.push({ hostId, params, withVersionFloor: false });
-      return listResponseFor(hostId);
+    // The host's local History contribution: the pin reading's only read.
+    // The fake answers it from the same stored page the write path updates,
+    // as the rows the host holds locally.
+    requestWithSignal: (method: string, params: unknown) => {
+      transport.dispatched.push({ hostId, method, params });
+      return listResponseFor(hostId).then((response) => ({
+        complete: true,
+        willComplete: true,
+        localHomeRows: (response as ListTasksResponse).tasks,
+        preservedRows: [],
+        tombstonedEpicIds: [],
+        localRows: "present",
+      }));
     },
     // The real `useHostMutation` dispatches here when no version requirement is
     // attached, which is the case for `epic.setPinned`.
@@ -199,13 +209,6 @@ function makeClient(hostId: string) {
         });
       }
       return Promise.resolve({ pinned });
-    },
-    requestWithSignalRequiringHostMethodVersion: (
-      _method: string,
-      params: unknown,
-    ) => {
-      transport.dispatched.push({ hostId, params, withVersionFloor: true });
-      return listResponseFor(hostId);
     },
   };
 }
@@ -291,8 +294,8 @@ function dispatchesTo(hostId: string): ReadonlyArray<DispatchedRequest> {
   return transport.dispatched
     .filter((call) => call.hostId === hostId)
     .map((call) => ({
-      params: call.params as ListTasksRequest,
-      withVersionFloor: call.withVersionFloor,
+      method: call.method,
+      params: call.params as LocalHistoryReadRequest,
     }));
 }
 
@@ -645,7 +648,7 @@ describe("useEpicTaskPinnedStates - the unverified pin reading (R1)", () => {
     useAuthStore.getState().setSignedOut();
   });
 
-  it("dispatches to the OWNER with the local-first directive and the version floor", async () => {
+  it("reads the OWNER's local History contribution, and nothing cloud-backed", async () => {
     useAuthStore.setState({ status: "unverified" });
 
     const { result } = renderPinnedStates([EPIC_LOCAL]);
@@ -662,14 +665,10 @@ describe("useEpicTaskPinnedStates - the unverified pin reading (R1)", () => {
 
     const dispatches = ownerDispatches();
     expect(dispatches).toHaveLength(1);
-    // R1 failure 1: `undefined` here is REFUSED before any transport call, so a
-    // reading that does not carry the directive never reaches the host at all.
-    expect(dispatches[0]?.params.localFirstPhase).toBe("initial");
-    // ...and an unverified dispatch must carry the `@1.6` floor, so a host that
-    // restarted below it refuses rather than running the released cloud list on
-    // a retained credential.
-    expect(dispatches[0]?.withVersionFloor).toBe(true);
-    expect(dispatches[0]?.params.cursor).toBeUndefined();
+    // The reading is the host's own local History read: no list call, no
+    // local-first directive and no version floor exist to carry.
+    expect(dispatches[0]?.method).toBe("epic.localHistory.read");
+    expect(dispatches[0]?.params.awaitComplete).toBe(false);
     // Nothing went to the window's host.
     expect(transport.dispatched.every((c) => c.hostId === OWNER_HOST_ID)).toBe(
       true,
@@ -792,6 +791,19 @@ describe("useEpicTaskPinnedStates - the unverified pin reading (R1)", () => {
     expect(result.current.get(EPIC_LOCAL)?.pinned).toBe(false);
   });
 
+  it("stays unknown when the owner's local History read rejects", async () => {
+    useAuthStore.setState({ status: "unverified" });
+    transport.failingHostIds.add(OWNER_HOST_ID);
+
+    const { result } = renderPinnedStates([EPIC_LOCAL]);
+
+    await waitFor(() => {
+      expect(ownerDispatches()).toHaveLength(1);
+    });
+    expect(result.current.get(EPIC_LOCAL)?.pinnedKnown).toBe(false);
+    transport.failingHostIds.clear();
+  });
+
   it("control - the same read works for a verified session", async () => {
     const { result } = renderPinnedStates([EPIC_LOCAL]);
 
@@ -799,10 +811,8 @@ describe("useEpicTaskPinnedStates - the unverified pin reading (R1)", () => {
       expect(result.current.get(EPIC_LOCAL)?.pinnedKnown).toBe(true);
     });
     expect(result.current.get(EPIC_LOCAL)?.pinned).toBe(true);
-    // A verified dispatch is `authorized`, so it needs no floor - the directive
-    // still rides along, which is what keeps one code path for both verdicts.
-    expect(ownerDispatches()[0]?.withVersionFloor).toBe(false);
-    expect(ownerDispatches()[0]?.params.localFirstPhase).toBe("initial");
+    // One code path for both verdicts: the same local read.
+    expect(ownerDispatches()[0]?.method).toBe("epic.localHistory.read");
   });
 
   it("control - a cloud-homed row stays unknown, with no host named", async () => {
@@ -915,6 +925,9 @@ describe("useLocalHomedOpenTaskRows reads each open epic from its owner", () => 
   });
 
   it("reports hasError, not an empty answer, when an owner host's read rejects; the other host's rows still arrive", async () => {
+    // A host that cannot answer its local History read rejects the query
+    // (`HostLocalHistoryUnavailableError`): reading it as an empty complete
+    // answer would hide that this host's tasks are missing.
     transport.failingHostIds.add(OWNER_HOST_ID);
     const { result } = renderRows(USER_ID);
 

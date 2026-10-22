@@ -8,7 +8,8 @@ export type BotCreateHostChoice =
 /**
  * Where a new bot is created (Tracy Bots). The person never picks: the app
  * walks this order and takes the first host that runs the bot's environment
- * (`environment.host.read` names it) and advertises `bot.create` -
+ * (its binding, `useHostEnvironmentBindings`, names it) and advertises
+ * `bot.create` -
  *
  * 1. this machine (the app's local host);
  * 2. the app's active host, which is "this machine" where the app has no

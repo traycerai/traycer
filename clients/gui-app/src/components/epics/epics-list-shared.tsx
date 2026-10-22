@@ -276,6 +276,23 @@ export function EpicsListHostRequiresCloudToList(): ReactNode {
   );
 }
 
+/**
+ * The line above a listing whose coverage is reduced. It says only that some
+ * tasks may be missing: where a task lives is not something the person asked
+ * about, and the list is still worth reading.
+ */
+export function EpicsListReducedCoverage(): ReactNode {
+  return (
+    <p
+      className="mb-2 text-ui-xs text-muted-foreground"
+      role="status"
+      data-testid="epics-list-reduced-coverage"
+    >
+      Some tasks may be missing from this list.
+    </p>
+  );
+}
+
 export function EpicsListEmpty(): ReactNode {
   return (
     <div

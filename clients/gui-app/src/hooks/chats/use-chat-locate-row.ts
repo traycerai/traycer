@@ -1,7 +1,9 @@
+import { useMemo } from "react";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { TranscriptRowLocator } from "@traycer/protocol/host/agent/gui/subscribe-windowed";
 import type { HostRpcRegistry } from "@/lib/host";
 import { useHostQuery } from "@/hooks/host/use-host-query";
+import { useChatServingHostId } from "@/lib/chats/chat-serving-witness";
 
 /**
  * The ordinal a cross-tile jump target sits at, when only the host can say.
@@ -88,7 +90,22 @@ const MISSING: ChatLocateRowAnswer = { status: "missing" };
 export function useChatLocateRowAnswer(
   args: ChatLocateRowArgs,
 ): ChatLocateRowAnswer {
-  const { chatId, client, epicId, epoch, target } = args;
+  const { chatId, client: chatHostClient, epicId, epoch, target } = args;
+  // Asked of the peer that serves this chat's transcript, the same one its
+  // stream is open on: an ordinal is only meaningful in that peer's window.
+  const servingHostId = useChatServingHostId({
+    hostId: chatHostClient?.getActiveHostId() ?? "",
+    epicId,
+    chatId,
+  });
+  const client = useMemo(
+    () =>
+      chatHostClient === null ||
+      servingHostId === chatHostClient.getActiveHostId()
+        ? chatHostClient
+        : chatHostClient.createRequesterForHostId(servingHostId),
+    [chatHostClient, servingHostId],
+  );
   const query = useHostQuery<HostRpcRegistry, "chat.locateRow">({
     client,
     method: "chat.locateRow",

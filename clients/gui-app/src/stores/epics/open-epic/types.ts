@@ -104,6 +104,20 @@ export interface ChatProjection {
   readonly updatedAt: number;
   readonly userId: string | null;
   /**
+   * Whether this is the signed-in viewer's own chat, as decided ONCE by
+   * `isChatVisibleToUser` when the projection was built. Client-only: no plane
+   * ships it.
+   *
+   * Not `userId === viewer`. A team host keys its task chats by its
+   * environment id, so an admitted member's own chat carries a `userId` that is
+   * not theirs; the serving host says so with `origin: "own"` on the record
+   * row, and this field is where that fact survives into the slice. Every site
+   * that asks "is this the viewer's chat" reads this, never `userId`. A doc
+   * entry has no `origin` and answers by owner equality; a pending stand-in is
+   * the viewer's by construction.
+   */
+  readonly ownedByViewer: boolean;
+  /**
    * Host hosting this chat. `null` for legacy chats that predate the
    * field and for the optimistic overlay (where the active host is the
    * implied host). Real projections carry the persisted `Chat.hostId`.

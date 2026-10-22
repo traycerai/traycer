@@ -128,11 +128,12 @@ describe("artifactManifestsEqual", () => {
       },
     },
   };
+  // Differs from FILES_A in sha256 alone: same path, length, type and count.
   const FILES_B: ArtifactManifest = {
     files: {
       "index.html": {
         sha256: HEAD_SHA,
-        byteLength: 120,
+        byteLength: 100,
         mediaType: "text/html",
       },
     },

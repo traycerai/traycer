@@ -315,8 +315,12 @@ persistability filter, the purge) counts segments from that layout — add a
 segment and both must move with it.
 
 **Deliberate exception — dictation.** `useDictationAvailability` /
-`useVoiceDictation` stay on the app-wide host (`useHostClient()`) even inside a
-host-pinned composer. They describe the person at the keyboard, not the run:
+`useVoiceDictation` stay on the person's selected host (the effective host,
+resolved explicitly, never a scoped subtree's or an Epic tab's ambient stream)
+even inside a host-pinned composer, and refuse a selected host that is a
+sandbox. The routing table's `selected-host` route
+(`clients/shared/host-client/host-rpc-routing.ts`) enforces the unary half
+for every requester. They describe the person at the keyboard, not the run:
 `speech.dictate` streams live microphone audio and `speech.ensureModel`
 downloads an on-device model, so following a remote run target would ship a
 user's audio to a machine they only picked to execute a turn on, and drop a

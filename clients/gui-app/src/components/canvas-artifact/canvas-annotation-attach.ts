@@ -13,13 +13,6 @@ import { putImage } from "@/lib/composer/landing-image-store";
 import { useComposerDraftStore } from "@/stores/composer/composer-draft-store";
 import type { CanvasSelection } from "./canvas-selection-store";
 
-/**
- * Canvas cards remain in memory and in a separate window-scoped sidecar bucket
- * until sent. The shared composer-drafts localStorage bucket excludes them.
- * The mirrored composer draft contains content only; draft-head@1.0's legacy
- * stash annotation leaf remains browser-only. Sending carries the complete
- * sidecar through chat.subscribe@1.31 and chat-sync@1.10.
- */
 export function canvasAnnotationElement(
   selection: CanvasSelection,
   source: string | null,
@@ -94,6 +87,13 @@ export function canvasWindowCaptureBridge(): WindowCaptureBridge | null {
     : null;
 }
 
+/**
+ * Canvas cards remain in memory and in a separate window-scoped sidecar bucket
+ * until sent. The shared composer-drafts localStorage bucket excludes them.
+ * The mirrored composer draft contains content only; draft-head@1.0's legacy
+ * stash annotation leaf remains browser-only. Sending carries the complete
+ * sidecar through chat.subscribe@1.32 and chat-sync@1.10.
+ */
 export async function attachCanvasAnnotation(input: {
   readonly chatId: string;
   readonly record: CanvasAnnotationRecord;

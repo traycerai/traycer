@@ -48,7 +48,6 @@ import {
 } from "@/lib/sandbox/mcp-csp";
 import {
   sandboxAllowAttribute,
-  sandboxArtifactPolicySource,
   sandboxLoaderBaseUrl,
   sandboxLoaderUrl,
   type SandboxPermission,
@@ -321,7 +320,9 @@ export function SandboxFrame(props: SandboxFrameProps) {
   } = props;
   const runnerHost = useRunnerHostOrNull();
   const artifact = source.kind === "artifact";
-  const artifactPolicySource = sandboxArtifactPolicySource(runnerHost);
+  const artifactPolicySource = runnerHost?.sandboxArtifacts
+    ? runnerHost.sandboxArtifacts.policySource
+    : null;
 
   const [servedFrame, setServedFrame] = useState<ServedFrame | null>(null);
   const openLink = useOpenLink();

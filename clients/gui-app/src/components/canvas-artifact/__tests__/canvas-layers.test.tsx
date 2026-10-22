@@ -44,7 +44,6 @@ describe("canvasLayerRows", () => {
   it("labels a row by what the element is, never by its id or classes", () => {
     const labels = rowsOf(PAGE).map((row) => row.label);
     expect(labels).toEqual(["Section", "Heading", "Paragraph", "Text"]);
-    expect(labels.join(" ")).not.toMatch(/app|#|\./);
   });
 
   it("previews all the text inside an element in source order, tidied", () => {

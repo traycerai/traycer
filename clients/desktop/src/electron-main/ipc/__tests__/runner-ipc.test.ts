@@ -71,6 +71,7 @@ const runSandboxVerbViaHttpMock = vi.hoisted(() =>
   vi.fn<typeof runSandboxVerbViaHttp>(async () => ({
     kind: "ok",
     settled: true,
+    state: "awake",
   })),
 );
 /** The Automations read and open the two new handlers make, observed. */
@@ -1021,7 +1022,7 @@ describe("RunnerIpcBridge", () => {
 
     await expect(
       handler(bareEvent(), "bearer-1", "sbx_1", "resume", 119_000),
-    ).resolves.toEqual({ kind: "ok", settled: true });
+    ).resolves.toEqual({ kind: "ok", settled: true, state: "awake" });
     expect(runSandboxVerbViaHttpMock).toHaveBeenCalledTimes(1);
     expect(runSandboxVerbViaHttpMock).toHaveBeenCalledWith(
       config.serverBaseUrl,

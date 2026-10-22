@@ -36,6 +36,7 @@
 import {
   DEV_AUTHN_BASE_URL_ENV,
   DEV_CLOUD_UI_BASE_URL_ENV,
+  DEV_POOL_BASE_URL_ENV,
   DEV_RELAY_BASE_URL_ENV,
   DEV_SERVER_BASE_URL_ENV,
   devBackendUrlFromEnv,
@@ -69,6 +70,12 @@ const bakedConfig = {
   // GCP Cloud DNS (CNAME into the helper zone) and a per-hostname Worker
   // route delivers the traffic to the relay worker.
   relayBaseUrl: "wss://relay.traycer.ai/attach",
+  // The server pool's session socket, dialed directly. Empty means this build
+  // has no pool, and no pool entry is ever synthesized (production, until the
+  // pool's production address is published). Release builds stamp the
+  // target's `cloud.poolUrl`; overridable in dev via
+  // `TRAYCER_DEV_POOL_BASE_URL`.
+  poolBaseUrl: "",
   // Sentry crash-reporting DSN for the main process. Empty for local
   // (reporting disabled); the deploy script bakes the staging/production DSN.
   sentryDsn: "",
@@ -119,6 +126,12 @@ export const config = {
     bakedConfig.environment,
     DEV_RELAY_BASE_URL_ENV,
     bakedConfig.relayBaseUrl,
+    process.env,
+  ),
+  poolBaseUrl: devRelayBaseUrlFromEnv(
+    bakedConfig.environment,
+    DEV_POOL_BASE_URL_ENV,
+    bakedConfig.poolBaseUrl,
     process.env,
   ),
 };

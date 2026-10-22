@@ -1115,16 +1115,39 @@ export const listTaskLightSchemaPre17 = lazySchema(() =>
 export type ListTaskLightPre17 = z.infer<typeof listTaskLightSchemaPre17>;
 
 // `epic.listTasks@1.7` adds the per-viewer activity key. `updatedAt` inside
-// the Epic/Phase light remains the task document edit time.
+// the Epic/Phase light remains the task document edit time. FROZEN - `@1.8`
+// adds a row key this schema would strip.
 export const listTaskLightSchemaPre18 = lazySchema(() =>
   listTaskLightSchemaPre17.extend({
     recentAt: z.number().optional(),
   }),
 );
-/** Optional counts for HTML, canvas and file artifacts on the new line. */
-export const listTaskLightSchema = lazySchema(() =>
+export type ListTaskLightPre18 = z.infer<typeof listTaskLightSchemaPre18>;
+
+/**
+ * `epic.listTasks@1.8`: optional counts for HTML, canvas and file artifacts on
+ * the new line. FROZEN - `@1.9` adds `ownerEnvironmentId` to the row.
+ */
+export const listTaskLightSchemaPre19 = lazySchema(() =>
   listTaskLightSchemaPre18.extend({
     epic: epicLightWithPermissionSchema.nullable().optional(),
+  }),
+);
+export type ListTaskLightPre19 = z.infer<typeof listTaskLightSchemaPre19>;
+
+/**
+ * `epic.listTasks@1.9` names the environment that owns the task, when one
+ * does: a task a team's environment created rather than a person. DISPLAY
+ * metadata only, so a row can say whose it is. It is never an authorization
+ * input: what the viewer may do with the row is its `permission`, which the
+ * server computed under the viewer's own bearer.
+ *
+ * Absent, not `null`, for a task no environment owns and on a row from a
+ * peer that predates the key - both read as "no environment to name".
+ */
+export const listTaskLightSchema = lazySchema(() =>
+  listTaskLightSchemaPre19.extend({
+    ownerEnvironmentId: z.string().optional(),
   }),
 );
 export type ListTaskLight = z.infer<typeof listTaskLightSchema>;
@@ -1389,14 +1412,30 @@ export type ListTasksResponsePre17 = z.infer<
   typeof listTasksResponseSchemaPre17
 >;
 
+// `epic.listTasks@1.7` response: the per-viewer activity key. FROZEN - `@1.8`
+// adds a row key.
 export const listTasksResponseSchemaPre18 = lazySchema(() =>
   listTasksResponseSchemaPre17.extend({
     tasks: z.array(listTaskLightSchemaPre18),
   }),
 );
-/** Optional counts for HTML, canvas and file artifacts on the new line. */
-export const listTasksResponseSchema = lazySchema(() =>
+export type ListTasksResponsePre18 = z.infer<
+  typeof listTasksResponseSchemaPre18
+>;
+
+// `epic.listTasks@1.8` response: optional artifact counts on the row. FROZEN -
+// `@1.9` adds `ownerEnvironmentId` to the row.
+export const listTasksResponseSchemaPre19 = lazySchema(() =>
   listTasksResponseSchemaPre18.extend({
+    tasks: z.array(listTaskLightSchemaPre19),
+  }),
+);
+export type ListTasksResponsePre19 = z.infer<
+  typeof listTasksResponseSchemaPre19
+>;
+
+export const listTasksResponseSchema = lazySchema(() =>
+  listTasksResponseSchemaPre19.extend({
     tasks: z.array(listTaskLightSchema),
   }),
 );

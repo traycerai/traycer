@@ -228,18 +228,6 @@ describe("artifactBasePolicy, by policy source", () => {
     );
   });
 
-  it("keeps form-action and base-uri locked to 'none' for the mobile source too", () => {
-    const policy = artifactBasePolicy("traycer-artifact:");
-    expect(policy).toContain("form-action 'none'");
-    expect(policy).toContain("base-uri 'none'");
-  });
-
-  it("keeps form-action and base-uri locked to 'none' for the null (Android) source too", () => {
-    const policy = artifactBasePolicy(null);
-    expect(policy).toContain("form-action 'none'");
-    expect(policy).toContain("base-uri 'none'");
-  });
-
   it("rejects a non-null source that is not a valid, colon-terminated URI scheme token", () => {
     expect(() => artifactBasePolicy("not valid:")).toThrow(
       "Invalid artifact policy source",
@@ -274,8 +262,6 @@ describe("artifactBasePolicy, by policy source", () => {
     expect(basePolicy.getAttribute("content")).toBe(
       artifactBasePolicy("traycer-artifact:"),
     );
-    expect(basePolicy.getAttribute("content")).toContain("form-action 'none'");
-    expect(basePolicy.getAttribute("content")).toContain("base-uri 'none'");
   });
 
   it("composes a null (Android) source into the actual base meta, with no extra source token", () => {

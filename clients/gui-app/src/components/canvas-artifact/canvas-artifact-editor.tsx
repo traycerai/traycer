@@ -106,13 +106,6 @@ export interface CanvasArtifactEditorProps {
   readonly frameEvents: CanvasFrameEvents | null;
   readonly liveFrameLimit: number;
 }
-function CanvasPaneComments({
-  events,
-}: {
-  readonly events: CanvasFrameEvents | null;
-}) {
-  return events?.renderPaneOverlay?.();
-}
 function canvasToolAllowed(
   tool: CanvasTool | null,
   events: CanvasFrameEvents | null,
@@ -800,7 +793,6 @@ export function CanvasArtifactEditor({
                 onCreate={createNote}
               />
             ) : null}
-            <CanvasPaneComments events={frameEvents} />
             <CanvasCursors
               awareness={awareness}
               artifactId={artifactId}

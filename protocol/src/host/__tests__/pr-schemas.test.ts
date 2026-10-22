@@ -1617,12 +1617,10 @@ describe("pr split RPC contracts", () => {
     expect(split.optionalManifest["pr.getLocalDiffSummary"]).toEqual({
       major: 1,
       minor: 0,
-      supportedMajors: [1],
     });
     expect(split.optionalManifest["pr.getLocalFileDiff"]).toEqual({
       major: 1,
       minor: 0,
-      supportedMajors: [1],
     });
   });
 });

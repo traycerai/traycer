@@ -4,6 +4,7 @@ import {
   fireEvent,
   render,
   screen,
+  waitFor,
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Fragment, type ComponentType, type ReactNode } from "react";
@@ -296,13 +297,12 @@ function homeFrame(): SandboxFrameProps {
   return found;
 }
 
-async function settle(): Promise<void> {
-  await act(async () => {
-    await new Promise<void>((resolve) => setTimeout(resolve, 20));
-  });
-}
-
-/** The page loads: it hands over its bridge and reports it is ready. */
+/**
+ * The page loads: it hands over its bridge and reports it is ready. Ready asks
+ * the page to describe the selected element; the page answers with an already
+ * settled promise, so that answer's continuation is the first microtask the
+ * call queued and has run when the awaited act resumes.
+ */
 async function loadPage(bridge: SandboxBridgeHost): Promise<void> {
   await act(async () => {
     homeFrame().onBridge?.(bridge);
@@ -312,7 +312,6 @@ async function loadPage(bridge: SandboxBridgeHost): Promise<void> {
     homeFrame().onStatus("ready");
     await Promise.resolve();
   });
-  await settle();
 }
 
 function select(selection: CanvasSelection | null): void {
@@ -365,7 +364,7 @@ describe("the editing stack over a real canvas document", () => {
     await loadPage(bridge);
 
     select(null);
-    await settle();
+    // Dropping the selection tells the page synchronously, inside the act.
     expect(setTextTarget).toHaveBeenLastCalledWith(null);
   });
 
@@ -381,7 +380,6 @@ describe("the editing stack over a real canvas document", () => {
         homeFrame().onDoubleClick?.(element);
         await Promise.resolve();
       });
-      await settle();
     };
 
     it("opens the text editor over the selected element, filled with its text", async () => {
@@ -408,12 +406,9 @@ describe("the editing stack over a real canvas document", () => {
       });
       fireEvent.change(field, { target: { value: "Hello there" } });
       // The editor asks the page for the live text before it saves.
-      await act(async () => {
-        fireEvent.keyDown(field, { code: "Enter" });
-        await new Promise<void>((resolve) => setTimeout(resolve, 20));
-      });
+      fireEvent.keyDown(field, { code: "Enter" });
+      await waitFor(() => expect(pendingSaves).toHaveLength(1));
 
-      expect(pendingSaves).toHaveLength(1);
       expect(pendingSaves[0].variables.edit).toEqual({
         kind: "set-text-node",
         index: 0,
@@ -464,12 +459,9 @@ describe("the editing stack over a real canvas document", () => {
         name: "Edit element text",
       });
       fireEvent.change(field, { target: { value: "Plain MIXED text" } });
-      await act(async () => {
-        fireEvent.keyDown(field, { code: "Enter" });
-        await new Promise<void>((resolve) => setTimeout(resolve, 20));
-      });
+      fireEvent.keyDown(field, { code: "Enter" });
+      await waitFor(() => expect(pendingSaves).toHaveLength(1));
 
-      expect(pendingSaves).toHaveLength(1);
       expect(pendingSaves[0].variables.edit).toEqual({
         kind: "set-text-node",
         index: 0,
@@ -491,17 +483,15 @@ describe("the editing stack over a real canvas document", () => {
         name: "Edit element text",
       });
       fireEvent.change(field, { target: { value: "Plain text" } });
-      await act(async () => {
-        fireEvent.keyDown(field, { code: "Enter" });
-        await new Promise<void>((resolve) => setTimeout(resolve, 20));
-      });
+      fireEvent.keyDown(field, { code: "Enter" });
 
-      expect(pendingSaves).toHaveLength(0);
+      // The refusal is shown once the editor has read the live text.
       expect(
-        screen.getByText(
+        await screen.findByText(
           "This change crosses formatted text. Ask the agent to change it.",
         ),
       ).toBeDefined();
+      expect(pendingSaves).toHaveLength(0);
       expect(field).toHaveProperty("value", "Plain text");
     });
 
@@ -511,7 +501,6 @@ describe("the editing stack over a real canvas document", () => {
       await screen.findByRole("textbox", { name: "Edit element text" });
 
       select(selectionOf(paragraph()));
-      await settle();
       expect(
         screen.queryByRole("textbox", { name: "Edit element text" }),
       ).toBeNull();
@@ -559,18 +548,16 @@ describe("the editing stack over a real canvas document", () => {
       const row = await screen.findByRole("button", {
         name: /^Paragraph Plain/,
       });
-      await act(async () => {
-        fireEvent.click(row);
-        await Promise.resolve();
-      });
-      await settle();
+      fireEvent.click(row);
+      await waitFor(() =>
+        expect(useCanvasSelectionStore.getState().selection).toMatchObject({
+          boardPath: HOME,
+          servedSha256: SHA,
+          element: { marker: P_MARKER, tagName: "p" },
+        }),
+      );
 
       expect(describeElement).toHaveBeenCalledWith({ marker: P_MARKER });
-      expect(useCanvasSelectionStore.getState().selection).toMatchObject({
-        boardPath: HOME,
-        servedSha256: SHA,
-        element: { marker: P_MARKER, tagName: "p" },
-      });
     });
 
     it("lists the layers of the document's content, not its html, head or body", async () => {
@@ -597,7 +584,6 @@ describe("the editing stack over a real canvas document", () => {
         homeFrame().onDoubleClick?.(element);
         await Promise.resolve();
       });
-      await settle();
     };
     async function editorOpen() {
       const view = mountEditing();
@@ -612,7 +598,6 @@ describe("the editing stack over a real canvas document", () => {
         homeFrame().onBridge?.(bridge);
         await Promise.resolve();
       });
-      await settle();
     };
 
     it("closes the editor when the page's bridge goes away", async () => {
@@ -673,7 +658,6 @@ describe("the editing stack over a real canvas document", () => {
       act(() => {
         ref(document.createElement("iframe"));
       });
-      await settle();
       expect(editor()).toBeNull();
     });
   });
@@ -686,7 +670,6 @@ describe("the editing stack over a real canvas document", () => {
         homeFrame().onDoubleClick?.(element);
         await Promise.resolve();
       });
-      await settle();
     };
 
     it("says so, and opens no editor, when the live text differs from the source", async () => {
@@ -743,13 +726,11 @@ describe("the editing stack over a real canvas document", () => {
         );
       });
       fireEvent.change(field, { target: { value: "Hello there" } });
-      await act(async () => {
-        fireEvent.keyDown(field, { code: "Enter" });
-        await new Promise<void>((resolve) => setTimeout(resolve, 20));
-      });
+      fireEvent.keyDown(field, { code: "Enter" });
 
+      // The refusal is shown once the editor has read the rewritten text.
+      expect(await screen.findByText(CHANGED)).toBeDefined();
       expect(pendingSaves).toHaveLength(0);
-      expect(screen.getByText(CHANGED)).toBeDefined();
       expect(field).toHaveProperty("value", "Hello there");
     });
   });

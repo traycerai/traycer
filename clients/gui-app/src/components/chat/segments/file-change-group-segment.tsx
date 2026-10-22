@@ -260,7 +260,10 @@ function restoreBlockedByLocalSnapshotClear(
   restore: ChatRestoreContextValue,
 ): boolean {
   return (
-    restore.currentUserId === manifest.capturingUserId &&
+    // The host stamps `capturingUserId` with the chat's owner key, which on a
+    // team host's environment-owned chat is the environment, not the viewer -
+    // so the viewer's own chat is asked of the session's access role.
+    restore.accessRole === "owner" &&
     restore.localSnapshotsClearedAt !== null &&
     manifest.capturedAt <= restore.localSnapshotsClearedAt
   );

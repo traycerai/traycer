@@ -34,6 +34,7 @@ import type {
   SandboxCostsFetchResult,
   SandboxCreateFetchResult,
   SandboxListFetchResult,
+  SandboxLifecycleVerbFetchResult,
   SandboxVerbFetchResult,
 } from "../host-client/sandbox-control";
 import type {
@@ -179,6 +180,14 @@ export interface IRunnerHost {
    * inside the CS-minted attach grant, so this URL never varies per host.
    */
   readonly relayBaseUrl: string;
+
+  /**
+   * The server pool's session socket (`wss://…/v1/session`), from this
+   * build's own configuration, or `""` when the build has no pool. The only
+   * input `poolHostDirectoryEntry` takes, so the pool entry is never a claim a
+   * peer made.
+   */
+  readonly poolBaseUrl: string;
 
   /**
    * Validates a Traycer bearer token and returns the full AuthnV3 identity
@@ -400,7 +409,7 @@ export interface IRunnerHost {
     sandboxId: string,
     verb: SandboxLifecycleVerb,
     timeoutMs: number,
-  ): Promise<SandboxVerbFetchResult>;
+  ): Promise<SandboxLifecycleVerbFetchResult>;
   getSandboxAutomation(
     bearerToken: string,
     environmentId: string | null,

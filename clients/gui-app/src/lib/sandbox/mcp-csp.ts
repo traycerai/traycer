@@ -8,11 +8,11 @@
 export type SandboxNetworkPolicy = "open" | "https-only";
 
 /**
- * Artifact policy deliberately names the desktop serving scheme: it serves
+ * Artifact policy names the shell's dedicated serving scheme, which serves
  * only sandbox documents and artifact files. Never name the mobile app origin:
  * it also serves Capacitor native routes (`/_capacitor_*`, including its HTTP
- * proxy). Mobile artifacts will need a separate serving scheme. Loader pages
- * keep their existing policy and receive the Figtree face as a `data:` font.
+ * proxy). Loader pages keep their existing policy and receive the Figtree face
+ * as a `data:` font.
  *
  * An `open` page reaches the web, localhost and the LAN. It names its schemes
  * rather than relying on the base policy's `*`, which also admits the

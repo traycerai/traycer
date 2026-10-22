@@ -58,6 +58,13 @@ vi.mock("@/lib/host", () => ({
   useHostClient: () => state.client,
 }));
 
+// The no-pool plan's answer: the surface client itself. These suites test the
+// organization projection, not the serving tier.
+vi.mock("@/hooks/host/use-pool-tier", () => ({
+  usePoolTierHostClient: <T,>(client: T): T => client,
+  usePoolTierStreamClient: <T,>(client: T): T => client,
+}));
+
 vi.mock("@/hooks/host/use-reactive-host-readiness", () => ({
   useReactiveHostReadiness: () => ({
     hostId: state.identity.hostId,

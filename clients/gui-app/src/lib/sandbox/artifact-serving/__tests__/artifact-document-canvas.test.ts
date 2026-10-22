@@ -1112,7 +1112,7 @@ describe("the canvas bootstrap in a running page", () => {
       ).toBe(BUDGET);
     });
 
-    it("sends null, not a truncation, one byte over the budget", () => {
+    it("sends null, not a truncation, over the budget", () => {
       const page = loadedPage(HERO);
       heroOf(page).textContent = "a".repeat(BUDGET / 2 + 1);
       const described = describeHero(page);

@@ -188,14 +188,6 @@ interface LiveMcpAppProps {
   readonly hostId: string;
 }
 
-function useMcpAppSnapshotQuery(props: LiveMcpAppProps) {
-  const { app, epicId, hostId } = props;
-  return useArtifactObjectTextQuery(hostId, {
-    epicId,
-    sha256: app.snapshot.sha256,
-  });
-}
-
 type SnapshotContent =
   | { readonly kind: "pending" }
   | { readonly kind: "unavailable" }
@@ -218,12 +210,17 @@ function snapshotContent(query: {
 }
 
 function LiveMcpApp(props: LiveMcpAppProps) {
-  const { id, app, epicId, chatId } = props;
+  const { id, app, epicId, chatId, hostId } = props;
   const rpc = useMcpAppRpc();
   const openLink = useOpenLink();
   const fileSave = useFileSaveHost();
   const openSaved = useOpenSavedFile();
-  const snapshot = snapshotContent(useMcpAppSnapshotQuery(props));
+  const snapshot = snapshotContent(
+    useArtifactObjectTextQuery(hostId, {
+      epicId,
+      sha256: app.snapshot.sha256,
+    }),
+  );
 
   const [displayMode, setDisplayMode] = useState<SandboxDisplayMode>("inline");
   const [height, setHeight] = useState(INITIAL_APP_HEIGHT_PX);

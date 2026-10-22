@@ -6,6 +6,7 @@ import {
   type NoiseHandshakeState,
 } from "@traycer/protocol/crypto/noise";
 import { NOISE_PROLOGUE } from "@traycer/protocol/host-transport/mux";
+import type { MuxChannel, MuxChannelHandshake } from "./mux-channel";
 
 /**
  * The client's end-to-end Noise-NK channel (T8 crypto; Architecture §4). A fresh
@@ -32,12 +33,17 @@ const EMPTY_ASSOCIATED_DATA = new Uint8Array(0);
 /** The handshake carries no payload; kept distinct from the AD on transport frames. */
 const EMPTY_HANDSHAKE_PAYLOAD = new Uint8Array(0);
 
-export class NoiseChannel {
-  private readonly handshake: NoiseHandshakeState;
+export class NoiseChannel implements MuxChannel, MuxChannelHandshake {
+  private readonly noiseHandshake: NoiseHandshakeState;
   private session: NoiseSession | null = null;
 
   private constructor(handshake: NoiseHandshakeState) {
-    this.handshake = handshake;
+    this.noiseHandshake = handshake;
+  }
+
+  /** The NK initiator half is this channel's own. */
+  get handshake(): MuxChannelHandshake {
+    return this;
   }
 
   /** Begins an NK handshake against the host's registry-published static key. */
@@ -51,14 +57,14 @@ export class NoiseChannel {
 
   /** Produces the initiator's `msg0` to forward to the host through the relay. */
   writeInitiatorMessage(): Promise<Uint8Array> {
-    return this.handshake.writeMessage(EMPTY_HANDSHAKE_PAYLOAD);
+    return this.noiseHandshake.writeMessage(EMPTY_HANDSHAKE_PAYLOAD);
   }
 
   /** Consumes the responder's `msg1`, completing the handshake + deriving keys. */
   async readResponderMessage(msg1: Uint8Array): Promise<void> {
-    await this.handshake.readMessage(msg1);
+    await this.noiseHandshake.readMessage(msg1);
     this.session = NoiseSession.fromHandshake(
-      this.handshake,
+      this.noiseHandshake,
       DEFAULT_REPLAY_WINDOW_SIZE,
     );
   }

@@ -124,6 +124,7 @@ function buildFakeBridge(
   const bridge: DesktopPreloadBridge = {
     authnBaseUrl: "http://localhost:5005",
     relayBaseUrl: "ws://localhost:8787/attach",
+    poolBaseUrl: "",
     authRedirectUri: "",
     initialRoute: "/",
     sentryRendererDsn: "",
@@ -921,7 +922,7 @@ describe("DesktopRunnerHost.sandboxControlUnavailableReason", () => {
 describe("DesktopRunnerHost.runSandboxVerb", () => {
   it("hands the preload bridge the bearer, the sandbox, the verb and the timeout, and returns its answer", async () => {
     const runSandboxVerb = vi.fn<DesktopPreloadBridge["runSandboxVerb"]>(
-      async () => ({ kind: "ok", settled: false }),
+      async () => ({ kind: "ok", settled: false, state: "starting" }),
     );
     const host = new DesktopRunnerHost({
       bridge: { ...buildFakeBridge(null).bridge, runSandboxVerb },
@@ -930,7 +931,7 @@ describe("DesktopRunnerHost.runSandboxVerb", () => {
 
     await expect(
       host.runSandboxVerb("bearer-1", "sbx_1", "start", 87_000),
-    ).resolves.toEqual({ kind: "ok", settled: false });
+    ).resolves.toEqual({ kind: "ok", settled: false, state: "starting" });
 
     expect(runSandboxVerb).toHaveBeenCalledTimes(1);
     expect(runSandboxVerb).toHaveBeenCalledWith(

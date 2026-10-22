@@ -1,6 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { renderHook } from "@testing-library/react";
 import type { SchemaVersion } from "@traycer/protocol/framework/index";
+import type { ParamsOf } from "@traycer-clients/shared/host-transport/ws-stream-client";
+import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
+import type { IHostStreamClient } from "@traycer-clients/shared/host-transport/host-stream-client";
+import type { IStreamSession } from "@traycer-clients/shared/host-transport/i-stream-session";
+import type { StreamParamsProvider } from "@traycer-clients/shared/host-transport/i-stream-client";
 import type { StreamMethodSupport } from "@traycer-clients/shared/host-transport/ws-stream-client";
 import { useNotificationFeedModeFor } from "@/lib/notifications/notification-feed-mode";
 import { useAuthStore } from "@/stores/auth/auth-store";
@@ -10,6 +15,7 @@ const HOST_ID = "host-1";
 const cloudFeedSupport = vi.hoisted<{ value: StreamMethodSupport | null }>(
   () => ({ value: null }),
 );
+const readsByMethod = vi.hoisted(() => new Map<string, string>());
 const feedVersions = vi.hoisted(() => ({
   cloud: { major: 1, minor: 2 },
   local: { major: 1, minor: 2 },
@@ -43,12 +49,70 @@ vi.mock("@/lib/host/stream-runtime-context", () => ({
     method === "host.notifications.cloudFeed.subscribe"
       ? feedVersions.cloud
       : feedVersions.local,
-  useStreamMethodSupportFor: () => cloudFeedSupport.value,
-  useStreamMethodSchemaVersionFor: (_client: unknown, method: string) =>
-    method === "host.notifications.cloudFeed.subscribe"
+  useStreamMethodSupportFor: (
+    client: { readonly instanceId: string } | null,
+    method: string,
+  ) => {
+    readsByMethod.set(method, client?.instanceId ?? "none");
+    return cloudFeedSupport.value;
+  },
+  useStreamMethodSchemaVersionFor: (
+    client: { readonly instanceId: string } | null,
+    method: string,
+  ) => {
+    readsByMethod.set(method, client?.instanceId ?? "none");
+    return method === "host.notifications.cloudFeed.subscribe"
       ? feedVersions.cloud
-      : feedVersions.local,
+      : feedVersions.local;
+  },
 }));
+
+/** A client the hook only ever identifies by `instanceId`; the rest is inert. */
+class IdentifiedStreamClient implements IHostStreamClient<HostStreamRpcRegistry> {
+  constructor(readonly instanceId: string) {}
+  isReady(): boolean {
+    return true;
+  }
+  subscribe<Method extends keyof HostStreamRpcRegistry & string>(
+    _method: Method,
+    _params: ParamsOf<HostStreamRpcRegistry, Method>,
+  ): IStreamSession {
+    throw new Error("not exercised by this test");
+  }
+  subscribeWithParamsProvider<
+    Method extends keyof HostStreamRpcRegistry & string,
+  >(
+    _method: Method,
+    _paramsProvider: StreamParamsProvider<HostStreamRpcRegistry, Method>,
+  ): IStreamSession {
+    throw new Error("not exercised by this test");
+  }
+  getMethodSchemaVersion(): SchemaVersion | null {
+    return null;
+  }
+  close(): void {}
+  isClosed(): boolean {
+    return false;
+  }
+  getClosedReason(): string | null {
+    return null;
+  }
+  onClosed(): () => void {
+    return () => {};
+  }
+  notifyBearerRotated(): void {}
+  notifyCloudVerdictChanged(): void {}
+  reconnectAll(): void {}
+  getMethodSupport(): "unknown" {
+    return "unknown";
+  }
+  subscribeMethodSupport(): () => void {
+    return () => {};
+  }
+  subscribeAvailabilityRecovered(): () => void {
+    return () => {};
+  }
+}
 
 /**
  * Deliberately HOOK-SHAPED. The real `useHostNegotiatedMethodVersions` consumes
@@ -95,6 +159,7 @@ describe("useNotificationFeedMode", () => {
   afterEach(() => {
     useAuthStore.setState({ subscriptionStatus: null });
     cloudFeedSupport.value = null;
+    readsByMethod.clear();
     feedVersions.cloud = { major: 1, minor: 2 };
     feedVersions.local = { major: 1, minor: 2 };
     unaryVersions.list = { major: 2, minor: 2 };
@@ -108,14 +173,16 @@ describe("useNotificationFeedMode", () => {
     cloudFeedSupport.value = "supported";
 
     expect(
-      renderHook(() => useNotificationFeedModeFor(null, HOST_ID)).result
-        .current,
+      renderHook(() => useNotificationFeedModeFor(null, null, HOST_ID, null))
+        .result.current,
     ).toBe("cloud");
   });
 
   it("keeps methodless and pending capability local and upgrades only after confirmed support", () => {
     cloudFeedSupport.value = null;
-    const hook = renderHook(() => useNotificationFeedModeFor(null, HOST_ID));
+    const hook = renderHook(() =>
+      useNotificationFeedModeFor(null, null, HOST_ID, null),
+    );
 
     expect(hook.result.current).toBe("local");
     cloudFeedSupport.value = "unknown";
@@ -140,24 +207,24 @@ describe("useNotificationFeedMode", () => {
     feedVersions.cloud = { major: 1, minor: 0 };
     feedVersions.local = { major: 1, minor: 2 };
     expect(
-      renderHook(() => useNotificationFeedModeFor(null, HOST_ID)).result
-        .current,
+      renderHook(() => useNotificationFeedModeFor(null, null, HOST_ID, null))
+        .result.current,
     ).toBe("local");
 
     // Local feed present but pre-partition (pre-1.2), cloud at its floor.
     feedVersions.cloud = { major: 1, minor: 2 };
     feedVersions.local = { major: 1, minor: 1 };
     expect(
-      renderHook(() => useNotificationFeedModeFor(null, HOST_ID)).result
-        .current,
+      renderHook(() => useNotificationFeedModeFor(null, null, HOST_ID, null))
+        .result.current,
     ).toBe("local");
 
     // Both projection minors present → mixed (named "cloud" feed mode).
     feedVersions.cloud = { major: 1, minor: 2 };
     feedVersions.local = { major: 1, minor: 2 };
     expect(
-      renderHook(() => useNotificationFeedModeFor(null, HOST_ID)).result
-        .current,
+      renderHook(() => useNotificationFeedModeFor(null, null, HOST_ID, null))
+        .result.current,
     ).toBe("cloud");
   });
 
@@ -181,14 +248,14 @@ describe("useNotificationFeedMode", () => {
 
     feedVersions.cloud = { major: 1, minor: 1 };
     expect(
-      renderHook(() => useNotificationFeedModeFor(null, HOST_ID)).result
-        .current,
+      renderHook(() => useNotificationFeedModeFor(null, null, HOST_ID, null))
+        .result.current,
     ).toBe("local");
 
     feedVersions.cloud = { major: 1, minor: 2 };
     expect(
-      renderHook(() => useNotificationFeedModeFor(null, HOST_ID)).result
-        .current,
+      renderHook(() => useNotificationFeedModeFor(null, null, HOST_ID, null))
+        .result.current,
     ).toBe("cloud");
   });
 
@@ -215,14 +282,14 @@ describe("useNotificationFeedMode", () => {
 
     unaryVersions.indicatorState = { major: 1, minor: 0 };
     expect(
-      renderHook(() => useNotificationFeedModeFor(null, HOST_ID)).result
-        .current,
+      renderHook(() => useNotificationFeedModeFor(null, null, HOST_ID, null))
+        .result.current,
     ).toBe("local");
 
     unaryVersions.indicatorState = { major: 1, minor: 1 };
     expect(
-      renderHook(() => useNotificationFeedModeFor(null, HOST_ID)).result
-        .current,
+      renderHook(() => useNotificationFeedModeFor(null, null, HOST_ID, null))
+        .result.current,
     ).toBe("cloud");
   });
 
@@ -241,23 +308,23 @@ describe("useNotificationFeedMode", () => {
     // `host.notifications.list` one minor short of the partition selector.
     unaryVersions.list = { major: 2, minor: 1 };
     expect(
-      renderHook(() => useNotificationFeedModeFor(null, HOST_ID)).result
-        .current,
+      renderHook(() => useNotificationFeedModeFor(null, null, HOST_ID, null))
+        .result.current,
     ).toBe("local");
 
     // ...and on the wrong major line entirely, which is not a scale.
     unaryVersions.list = { major: 1, minor: 9 };
     expect(
-      renderHook(() => useNotificationFeedModeFor(null, HOST_ID)).result
-        .current,
+      renderHook(() => useNotificationFeedModeFor(null, null, HOST_ID, null))
+        .result.current,
     ).toBe("local");
 
     // `markAllRead` short instead, with `list` at its floor.
     unaryVersions.list = { major: 2, minor: 2 };
     unaryVersions.markAllRead = { major: 1, minor: 0 };
     expect(
-      renderHook(() => useNotificationFeedModeFor(null, HOST_ID)).result
-        .current,
+      renderHook(() => useNotificationFeedModeFor(null, null, HOST_ID, null))
+        .result.current,
     ).toBe("local");
 
     // `clearAll` short, with every other floor met. The least recoverable of
@@ -268,16 +335,16 @@ describe("useNotificationFeedMode", () => {
     unaryVersions.markAllRead = { major: 1, minor: 1 };
     unaryVersions.clearAll = { major: 1, minor: 0 };
     expect(
-      renderHook(() => useNotificationFeedModeFor(null, HOST_ID)).result
-        .current,
+      renderHook(() => useNotificationFeedModeFor(null, null, HOST_ID, null))
+        .result.current,
     ).toBe("local");
     unaryVersions.clearAll = { major: 1, minor: 1 };
 
     // Both unary floors met, with the stream minors already there → mixed.
     unaryVersions.markAllRead = { major: 1, minor: 1 };
     expect(
-      renderHook(() => useNotificationFeedModeFor(null, HOST_ID)).result
-        .current,
+      renderHook(() => useNotificationFeedModeFor(null, null, HOST_ID, null))
+        .result.current,
     ).toBe("cloud");
   });
 
@@ -290,15 +357,15 @@ describe("useNotificationFeedMode", () => {
     // unary ack.
     unaryVersions.list = null;
     expect(
-      renderHook(() => useNotificationFeedModeFor(null, HOST_ID)).result
-        .current,
+      renderHook(() => useNotificationFeedModeFor(null, null, HOST_ID, null))
+        .result.current,
     ).toBe("local");
 
     // `false` is a completed handshake that did not advertise the method.
     unaryVersions.list = false;
     expect(
-      renderHook(() => useNotificationFeedModeFor(null, HOST_ID)).result
-        .current,
+      renderHook(() => useNotificationFeedModeFor(null, null, HOST_ID, null))
+        .result.current,
     ).toBe("local");
 
     // No host to read a manifest from at all - the provider passes `null` when
@@ -306,7 +373,63 @@ describe("useNotificationFeedMode", () => {
     // withheld rather than assumed.
     unaryVersions.list = { major: 2, minor: 2 };
     expect(
-      renderHook(() => useNotificationFeedModeFor(null, null)).result.current,
+      renderHook(() => useNotificationFeedModeFor(null, null, null, null))
+        .result.current,
+    ).toBe("local");
+  });
+  it("reads the cloud projection from the cloud feed client and the local projection from the serving client", () => {
+    cloudFeedSupport.value = "supported";
+    const serving = new IdentifiedStreamClient("serving-host");
+    const cloudFeed = new IdentifiedStreamClient("pool");
+
+    expect(
+      renderHook(() =>
+        useNotificationFeedModeFor(serving, cloudFeed, HOST_ID, null),
+      ).result.current,
+    ).toBe("cloud");
+
+    expect(readsByMethod.get("host.notifications.cloudFeed.subscribe")).toBe(
+      "pool",
+    );
+    expect(readsByMethod.get("host.notifications.feed.subscribe")).toBe(
+      "serving-host",
+    );
+  });
+
+  it("answers the cloud-projection floor from the replica's cached version while the live negotiation is unknown", () => {
+    cloudFeedSupport.value = "unknown";
+    // The live read is a version the floor refuses: only the cache can make
+    // this resolve to the cloud projection.
+    feedVersions.cloud = { major: 1, minor: 0 };
+
+    expect(
+      renderHook(() =>
+        useNotificationFeedModeFor(null, null, HOST_ID, { major: 1, minor: 2 }),
+      ).result.current,
+    ).toBe("cloud");
+    expect(
+      renderHook(() => useNotificationFeedModeFor(null, null, HOST_ID, null))
+        .result.current,
+    ).toBe("local");
+  });
+
+  it("ignores the replica's cached version once the live negotiation says unsupported", () => {
+    cloudFeedSupport.value = "unsupported";
+
+    expect(
+      renderHook(() =>
+        useNotificationFeedModeFor(null, null, HOST_ID, { major: 1, minor: 2 }),
+      ).result.current,
+    ).toBe("local");
+  });
+
+  it("does not let a cached version below the floor select the cloud projection", () => {
+    cloudFeedSupport.value = "unknown";
+
+    expect(
+      renderHook(() =>
+        useNotificationFeedModeFor(null, null, HOST_ID, { major: 1, minor: 0 }),
+      ).result.current,
     ).toBe("local");
   });
 });

@@ -8,7 +8,10 @@ import { SpeechStreamClient } from "@traycer-clients/shared/host-transport/speec
 import type { StreamConnectionStatus } from "@traycer-clients/shared/host-transport/i-stream-session";
 import type { MicrophoneAccessStatus } from "@traycer-clients/shared/platform/runner-host";
 import { dictationCaptureConstraints } from "@/hooks/composer/dictation-capture-constraints";
-import { useWsStreamClient } from "@/lib/host/stream-runtime-context";
+import { servesInputDevices } from "@traycer-clients/shared/host-client/host-rpc-routing";
+import { useEffectiveHostId } from "@/hooks/host/use-effective-host-id";
+import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
+import { useSurfaceHostStreamBinding } from "@/hooks/host/use-surface-host-stream-binding";
 import { appLogger, describeLogError, type AppLogFields } from "@/lib/logger";
 import { useRunnerHost } from "@/providers/use-runner-host";
 import { useSettingsStore } from "@/stores/settings/settings-store";
@@ -179,7 +182,18 @@ export function useVoiceDictation(
   args: UseVoiceDictationArgs,
 ): UseVoiceDictation {
   const { language, onText, draftIdentity } = args;
-  const wsStreamClient = useWsStreamClient();
+  // The person's selected host, never the surface's: an Epic tab's ambient
+  // stream names the Epic's host, and audio must never leave the person's own
+  // machines (`selected-host` in the routing table). A selected host that is
+  // not one of them (a sandbox) gets no stream, so dictation reports itself
+  // not connected rather than streaming the microphone to it.
+  const selectedHostId = useEffectiveHostId();
+  const selectedHostEntry = useHostDirectoryEntry(selectedHostId);
+  const selectedStream = useSurfaceHostStreamBinding(selectedHostId);
+  const wsStreamClient =
+    selectedHostEntry !== null && servesInputDevices(selectedHostEntry)
+      ? (selectedStream?.wsStreamClient ?? null)
+      : null;
   const runnerHost = useRunnerHost();
   const [state, setState] = useState<VoiceDictationState>("idle");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
