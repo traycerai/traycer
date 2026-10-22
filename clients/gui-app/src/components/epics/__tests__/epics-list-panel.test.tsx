@@ -1576,10 +1576,18 @@ describe("<EpicsListPanel />", () => {
 
     const rows = await screen.findByTestId("epics-list-rows");
     expect(rows.textContent).toContain("Local");
-    // The scope bar's own count line is allowed; a completeness notice is not.
-    expect(screen.queryByRole("status")?.textContent ?? "").not.toMatch(
-      /cloud|device|partial|truncated/i,
+    // The scope bar's count line and the reduced-coverage note are the two
+    // status regions. The note says THAT tasks may be missing, never which
+    // source did not answer.
+    const coverageNote = screen.getByTestId("epics-list-reduced-coverage");
+    expect(coverageNote.textContent).toBe(
+      "Some tasks may be missing from this list.",
     );
+    const statusText = screen
+      .getAllByRole("status")
+      .map((region) => region.textContent)
+      .join(" ");
+    expect(statusText).not.toMatch(/cloud|device|partial|truncated/i);
     // Scoped to the list body's own container rather than the whole
     // document: unrelated chrome (a filter chip label, for example) could
     // otherwise fail this assertion for a reason that has nothing to do with
@@ -1588,6 +1596,29 @@ describe("<EpicsListPanel />", () => {
     expect(listBody).not.toBeNull();
     expect(listBody?.textContent ?? "").not.toMatch(/cloud/i);
     expect(listBody?.textContent ?? "").not.toMatch(/device/i);
+  });
+
+  it("states that tasks may be missing for a host-only page when the pool did not answer", async () => {
+    // The host-only page shape (composeHistoryPageWithoutPool): the host
+    // answered completely, the pool did not.
+    testState.items = [
+      historyItem({ id: "history-local", epicId: "local", title: "Local" }),
+    ];
+    testState.completeness = {
+      cloudPage: "unavailable",
+      facets: "partial",
+      localRows: "present",
+      sort: "loaded-union",
+    };
+    renderPanel("page", "/");
+
+    const rows = await screen.findByTestId("epics-list-rows");
+    expect(rows.textContent).toContain("Local");
+    const coverageNote = screen.getByTestId("epics-list-reduced-coverage");
+    expect(coverageNote.textContent).toBe(
+      "Some tasks may be missing from this list.",
+    );
+    expect(coverageNote.getAttribute("role")).toBe("status");
   });
 
   it("disables pin mutation for a local-home epic and names the cloud-sync boundary", async () => {

@@ -1463,7 +1463,12 @@ describe("toolCallBlockSchema agentMessageDelivery (cross-host send state)", () 
   it.each(["queued", "delivered", "expired", "failed"] as const)(
     "keeps agentMessageDelivery in state %s",
     (state) => {
-      const delivery = { targetHostId: "host-2", eventId: "evt-1", state };
+      const delivery = {
+        targetHostId: "host-2",
+        eventId: "evt-1",
+        state,
+        targetHostOffline: true,
+      };
       const block = toolCallBlockSchema.parse({
         ...base,
         agentMessageDelivery: delivery,
@@ -1471,6 +1476,23 @@ describe("toolCallBlockSchema agentMessageDelivery (cross-host send state)", () 
       expect(block.agentMessageDelivery).toEqual(delivery);
     },
   );
+
+  it("reads a stamp written before targetHostOffline as not offline", () => {
+    const block = toolCallBlockSchema.parse({
+      ...base,
+      agentMessageDelivery: {
+        targetHostId: "host-2",
+        eventId: "evt-1",
+        state: "queued",
+      },
+    });
+    expect(block.agentMessageDelivery).toEqual({
+      targetHostId: "host-2",
+      eventId: "evt-1",
+      state: "queued",
+      targetHostOffline: false,
+    });
+  });
 
   it("defaults to null when absent", () => {
     expect(toolCallBlockSchema.parse(base).agentMessageDelivery).toBeNull();

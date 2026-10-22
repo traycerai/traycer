@@ -57,6 +57,7 @@ function chatProjection(
     createdAt: 1,
     updatedAt: 1,
     userId: null,
+    ownedByViewer: true,
     hostId,
     isTitleEditedByUser: false,
     // Neutral scaffolding: this suite exercises annotation-route resolution,

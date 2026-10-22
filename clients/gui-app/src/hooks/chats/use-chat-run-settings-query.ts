@@ -12,6 +12,7 @@ import { useHostQueries } from "@/hooks/host/use-host-queries";
 import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
 import { useCloudChatViewerId } from "@/hooks/chats/use-cloud-chat-queries";
 import { hostQueryKeys } from "@/lib/query-keys";
+import { useRequesterHostId } from "@/hooks/host/use-requester-host-id";
 
 type GetChatRunSettingsResponse = ResponseOfMethod<
   HostRpcRegistry,
@@ -125,7 +126,7 @@ export function useChatRunSettingsBatch(args: {
   readonly enabled: boolean;
 }): ReadonlyArray<ChatRunSettingsBatchRead> {
   const viewerUserId = useCloudChatViewerId();
-  const hostId = args.client?.getActiveHostId() ?? null;
+  const hostId = useRequesterHostId(args.client);
   const batchSupported = useHostMethodSupport(
     hostId,
     "epic.getChatRunSettingsBatch",

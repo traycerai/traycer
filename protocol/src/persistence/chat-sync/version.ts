@@ -147,7 +147,9 @@ import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 // chat-sync 1.6. Defaulted `null`, so an older record parses unchanged, and a
 // content block's `raw` re-emission carries the key through an older reader's
 // re-publication. No reader floor: an older reader renders the send as the
-// plain sent card it always did.
+// plain sent card it always did. The stamp's `targetHostOffline` (the host
+// directory's view of the receiver at send time, traycer#2421) rides the same
+// unreleased line, defaulted `false`; COMPATIBILITY.md logs it.
 // 1.8 reopens artifact_operation.kind to a checked string. An unknown kind
 // must not reject a whole shard; readers from this minor render no block for
 // a kind they do not know. No emission gate protects readers predating 1.8.

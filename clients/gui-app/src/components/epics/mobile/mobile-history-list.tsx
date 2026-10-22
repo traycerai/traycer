@@ -1,3 +1,4 @@
+import { historyCoverageIsReduced } from "@/lib/history-composition/compose-history-page";
 import { useCallback, useRef, useState, type ReactNode } from "react";
 import { ArrowDown, RefreshCwIcon } from "lucide-react";
 import {
@@ -12,6 +13,7 @@ import {
   EpicsListHostRequiresCloudToList,
   EpicsListLoading,
   EpicsListNoRows,
+  EpicsListReducedCoverage,
   EpicsListShowMore,
 } from "@/components/epics/epics-list-shared";
 import { MobileHistoryRow } from "@/components/epics/mobile/mobile-history-row";
@@ -296,6 +298,9 @@ function MobileHistoryListBody(props: MobileHistoryListBodyProps): ReactNode {
   }
   return (
     <>
+      {historyCoverageIsReduced(props.completeness) ? (
+        <EpicsListReducedCoverage />
+      ) : null}
       <ul className="flex flex-col gap-2" data-testid="epics-list-rows">
         {props.items.map((item) => (
           <MobileHistoryRow

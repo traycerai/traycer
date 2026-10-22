@@ -72,6 +72,7 @@ import {
   useRemoteFolderPickerStore,
   type FolderPickerIntent,
 } from "@/stores/workspace/remote-folder-picker-store";
+import { useRequesterHostId } from "@/hooks/host/use-requester-host-id";
 
 /**
  * Folder picker for hosts the client cannot open a native OS dialog for
@@ -1108,7 +1109,7 @@ function useKeyboardDirectoryAim(args: {
   const [keyboardAim, setKeyboardAim] = useState<KeyboardDirectoryAim | null>(
     null,
   );
-  const hostId = args.client?.getActiveHostId() ?? null;
+  const hostId = useRequesterHostId(args.client);
   const aimedAddTarget =
     keyboardAim !== null &&
     args.pathInput.source === "navigation" &&

@@ -177,7 +177,11 @@ async function mountBindScenario(scenario: BindScenario): Promise<{
         OBSERVED.map((environment) => environment.environmentId),
         true,
       ),
-      read: useEnvironmentHostReadQuery(hostB, scenario.readCached),
+      read: useEnvironmentHostReadQuery(
+        hostB,
+        BOUND_HOST_ID,
+        scenario.readCached,
+      ),
       bind: useEnvironmentHostBindMutation(hostB, BOUND_HOST_ID),
     }),
     { wrapper },

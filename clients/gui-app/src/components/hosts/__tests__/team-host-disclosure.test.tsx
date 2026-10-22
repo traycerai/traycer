@@ -678,7 +678,7 @@ function registryItem(input: {
 
 function renderFrame(): void {
   render(
-    <SandboxTileStateFrame>
+    <SandboxTileStateFrame chat={null}>
       <textarea data-testid="tile-body" />
     </SandboxTileStateFrame>,
   );

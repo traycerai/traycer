@@ -18,7 +18,7 @@ import {
 import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
 import type {
   SandboxListFetchResult,
-  SandboxVerbFetchResult,
+  SandboxLifecycleVerbFetchResult,
 } from "@traycer-clients/shared/host-client/sandbox-control";
 import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
 import type { HostScopeOption } from "@/components/settings/host-scope/host-scope-model";
@@ -375,6 +375,7 @@ describe("wakeSandboxOnPick", () => {
     binding.auth.runSandboxVerb.mockResolvedValue({
       kind: "ok",
       settled: true,
+      state: "awake",
     });
     wakeSandboxOnPick(sandboxOption("suspended", false));
     await settleWake();
@@ -616,7 +617,7 @@ describe("wakeSandboxOnPick across accounts", () => {
     binding.auth.listSandboxes.mockImplementation(
       listOf({ state: "suspended" }),
     );
-    const verb = deferred<SandboxVerbFetchResult>();
+    const verb = deferred<SandboxLifecycleVerbFetchResult>();
     binding.auth.runSandboxVerb.mockImplementation(() => verb.promise);
 
     wakeSandboxOnPick(sandboxOption("suspended", false));

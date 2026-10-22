@@ -22,7 +22,7 @@ import type { DurableStreamTransport } from "@/lib/host/durable-stream-transport
 
 // `useTerminalSessionHandle`'s own module state (the process-wide registry) is
 // exercised for real below - only its collaborators are mocked, so the
-// rotation drives the REAL `authenticatedOwnerIdentityKey` computation, not a
+// rotation drives the REAL `remoteAwareOwnerIdentityKey` computation, not a
 // test-seam override (`__setTerminalStreamClientFactoryForTests` collapses
 // BOTH `transportKey` and `ownerIdentityKey` to one hardcoded string,
 // structurally unable to prove this discriminator).

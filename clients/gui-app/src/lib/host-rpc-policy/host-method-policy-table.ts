@@ -956,6 +956,13 @@ export const HOST_METHOD_POLL_TABLE = {
   "agent.stop": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
   // Forking an agent persists a new collaboration record, like agent.create.
   "agent.fork": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
+  // Continuing a chat here moves its authority to this host; fifo so a press
+  // is never coalesced into another chat's.
+  "chat.continueHere": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
   // Archiving retires the agent record; fifo so a tap is not coalesced away.
   "agent.archive": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
   "host.resolveRepoPaths": { ...LATEST_SCHEDULING, poll: null },
@@ -1093,6 +1100,7 @@ export const HOST_METHOD_POLL_TABLE = {
   // so the only reader of this is the Settings entry, which asks on mount.
   "sessionImport.status": { ...LATEST_SCHEDULING, poll: null },
   "epic.listTasks": { ...LATEST_SCHEDULING, poll: null },
+  "epic.localHistory.read": { ...LATEST_SCHEDULING, poll: null },
   // Recording a view updates the user's central task ordering preference.
   "epic.recordViewed": {
     mode: "fifo",
@@ -1366,6 +1374,11 @@ export const HOST_METHOD_POLL_TABLE = {
   },
   // Granting access changes the epic's collaborator set.
   "epic.grantAccess": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
+  "epic.attachEnvironment": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
   // Updating roles changes collaborator permissions.
   "epic.batchUpdateRoles": {
     mode: "fifo",
@@ -2566,6 +2579,7 @@ export const HOST_METHOD_POLL_TABLE = {
   // session; no GUI reads them yet.
   "environment.list": { ...LATEST_SCHEDULING, poll: null },
   "environment.host.read": { ...LATEST_SCHEDULING, poll: null },
+  "environment.binding.read": { ...LATEST_SCHEDULING, poll: null },
   "environment.host.bind": {
     mode: "fifo",
     joinResponseTimeoutMs: null,

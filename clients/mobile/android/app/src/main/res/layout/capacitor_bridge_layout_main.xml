@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Overrides @capacitor/android's layout of the same name (an app resource wins
+  over a library's), swapping its CapacitorWebView for the app's subclass that
+  adds "Quote" to the text-selection toolbar. Everything else is the
+  library's layout verbatim; the id is the one Bridge looks up.
+-->
+<androidx.coordinatorlayout.widget.CoordinatorLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    tools:context="com.getcapacitor.BridgeActivity"
+    >
+
+    <com.traycer.app.QuoteActionModeWebView
+        android:id="@+id/webview"
+        android:layout_width="fill_parent"
+        android:layout_height="fill_parent" />
+
+</androidx.coordinatorlayout.widget.CoordinatorLayout>

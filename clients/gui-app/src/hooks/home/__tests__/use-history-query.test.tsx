@@ -91,6 +91,9 @@ const testState = vi.hoisted(() => {
     // pass whether or not the hook's own `!initialLegRefused && ...` guard
     // existed at all.
     queryIsPending: false,
+    // The serving query has no answer, and the replica's cached page stands
+    // in for it: `query.isPending` stays true while `firstPagePending` is not.
+    presentsCachedPage: false,
     // T12: the `enabled` argument `useEpicGetTaskContexts` was actually
     // called with, most-recent last. The mock below otherwise ignores it (it
     // always returns `taskContexts` regardless), so asserting on the mock's
@@ -124,10 +127,19 @@ vi.mock("@/hooks/epics/use-cloud-epic-tasks-query", () => ({
               .toLowerCase()
               .includes(query),
           );
+    const firstPage: ListTasksResponse =
+      query.length === 0
+        ? testState.response
+        : { tasks, hasMore: false, facets: testState.response.facets };
     return {
       hostId: "host-test",
       currentUserId: "user-1",
       tasks,
+      firstPage,
+      presentsCachedPage: testState.presentsCachedPage,
+      firstPagePending:
+        testState.queryIsPending && !testState.presentsCachedPage,
+      firstPageError: null,
       query: {
         // Facets ride along even on the query branch: the real server computes
         // them for every FIRST page regardless of filters, and this query
@@ -272,6 +284,7 @@ describe("useHistoryQuery", () => {
     testState.fetchAllPages.mockReset();
     testState.isCloudPagePending = false;
     testState.completenessOverride = null;
+    testState.presentsCachedPage = false;
     testState.initialLegRefused = false;
     testState.queryIsPending = false;
     testState.taskContextsEnabledCalls = [];
@@ -1086,6 +1099,34 @@ describe("useHistoryQuery", () => {
       );
     });
 
+    it("carries a cached empty page's unavailable statement and is not pending", () => {
+      testState.response = {
+        tasks: testState.tasks,
+        hasMore: false,
+        completeness: {
+          cloudPage: "unavailable",
+          facets: "server",
+          localRows: "present",
+          sort: "server",
+        },
+      };
+      testState.queryIsPending = true;
+      testState.presentsCachedPage = true;
+      testState.completenessOverride = {
+        cloudPage: "unavailable",
+        facets: "server",
+        localRows: "present",
+        sort: "server",
+      };
+
+      render(<HistoryQueryHarness search={DEFAULT_HISTORY_SEARCH} />);
+
+      expect(screen.getByTestId("pending").textContent).toBe("false");
+      expect(screen.getByTestId("completeness").textContent).toBe(
+        "unavailable|server|present|server",
+      );
+    });
+
     it("unions a locally-held workspace and repo into the available filter options when the union reports partial facets", () => {
       testState.tasks = [
         taskLight("epic-alpha", "Alpha workbench", "traycer/gui-app"),
@@ -1368,6 +1409,36 @@ describe("useHistoryQuery", () => {
     // reports `status: "pending"` forever, which the render sites read as a
     // permanent skeleton.
     expect(screen.getByTestId("pending").textContent).toBe("false");
+    expect(
+      screen.getByRole("status", { name: "History titles" }).textContent,
+    ).toBe("");
+  });
+
+  it("shows the cached page when the initial leg is refused, and still refuses without one", () => {
+    testState.initialLegRefused = true;
+    testState.queryIsPending = true;
+    testState.presentsCachedPage = true;
+    testState.tasks = [taskLight("cached-epic", "Cached title", "traycer/app")];
+    testState.response = { tasks: testState.tasks, hasMore: false };
+
+    const { unmount } = render(
+      <HistoryQueryHarness search={DEFAULT_HISTORY_SEARCH} />,
+    );
+
+    expect(screen.getByTestId("host-requires-cloud-to-list").textContent).toBe(
+      "false",
+    );
+    expect(
+      screen.getByRole("status", { name: "History titles" }).textContent,
+    ).toBe("Cached title");
+    unmount();
+
+    testState.presentsCachedPage = false;
+    render(<HistoryQueryHarness search={DEFAULT_HISTORY_SEARCH} />);
+
+    expect(screen.getByTestId("host-requires-cloud-to-list").textContent).toBe(
+      "true",
+    );
     expect(
       screen.getByRole("status", { name: "History titles" }).textContent,
     ).toBe("");

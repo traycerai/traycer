@@ -12,6 +12,7 @@ import {
   queryOptions,
   useQuery,
 } from "@tanstack/react-query";
+import { useSyncExternalStore } from "react";
 import {
   afterEach,
   beforeEach,
@@ -54,6 +55,7 @@ import { useAuthStore } from "@/stores/auth/auth-store";
 
 interface OrganizationFixtureState {
   organization: OrganizationContextValue | null;
+  readonly listeners: Set<() => void>;
   loadTaskContext: Mock<() => Promise<GetTaskContextsResponse>>;
 }
 
@@ -69,11 +71,19 @@ vi.mock("@/lib/commands/actions/new-epic", () => ({
 }));
 const organizationState = vi.hoisted((): OrganizationFixtureState => ({
   organization: null,
+  listeners: new Set(),
   loadTaskContext: vi.fn<() => Promise<GetTaskContextsResponse>>(),
 }));
 vi.mock("@/hooks/organization/organization-context", async (load) => ({
   ...(await load<typeof import("@/hooks/organization/organization-context")>()),
-  useOrganization: () => organizationState.organization,
+  useOrganization: () =>
+    useSyncExternalStore(
+      (listener) => {
+        organizationState.listeners.add(listener);
+        return () => organizationState.listeners.delete(listener);
+      },
+      () => organizationState.organization,
+    ),
   useOrganizationTasks: () => organizationState.organization,
 }));
 vi.mock("@/hooks/epic/use-epic-get-task-contexts-query", () => ({
@@ -199,7 +209,9 @@ function accountView(
   };
 }
 
-function organizationFixture(view: OrganizationView): OrganizationContextValue {
+function organizationFixture(
+  view: OrganizationView | undefined,
+): OrganizationContextValue {
   return {
     client: organizationClient,
     supported: true,
@@ -222,6 +234,14 @@ function labelsCanEdit(): boolean {
   if (opened?.kind !== "labels")
     throw new Error("Labels did not open the Labels window");
   return opened.canEdit;
+}
+
+/** The provider publishing a new context value, as it does when its view loads. */
+function publishOrganization(next: OrganizationContextValue): void {
+  act(() => {
+    organizationState.organization = next;
+    for (const listener of organizationState.listeners) listener();
+  });
 }
 
 function remoteTask(epicId: string, createdBy: string): ListTaskLight {
@@ -376,6 +396,37 @@ describe("tab appearance and grouping controls", () => {
       return screen.findByRole("menuitem", { name: "Work" });
     }
 
+    // The batch is a different cache entry from the tab's own lookup. A render
+    // while the own lookup is pending (here the organization view loading)
+    // must find it; the compiled memo kept the stand-in empty until the own
+    // lookup answered.
+    it("picks up a batch that lands while the tab's own lookup is still pending", () => {
+      organizationState.organization = organizationFixture(undefined);
+      renderMenu(false);
+      expect(screen.queryByRole("menuitem", { name: "Labels" })).toBeNull();
+
+      act(() => {
+        queryClient.setQueryData(
+          stripBatchKey("user-1"),
+          taskContextsResponse({ found: ["epic-a", "epic-b"], localHomed: [] }),
+        );
+      });
+      publishOrganization(
+        organizationFixture({
+          catalog: [],
+          groups: { version: "0", groups: [], memberships: [] },
+          appearances: [],
+          taskLabels: {},
+          ready: true,
+          authenticationRequired: false,
+          pending: [],
+          failures: [],
+        }),
+      );
+
+      expect(screen.getByRole("menuitem", { name: "Labels" })).toBeTruthy();
+    });
+
     it("offers the account's groups, enabled, to a task whose lookup says it is still local-homed", async () => {
       queryClient.setQueryData(
         stripBatchKey("user-1"),
@@ -424,6 +475,30 @@ describe("tab appearance and grouping controls", () => {
           },
         ],
       });
+    });
+
+    it("takes Task appearance under the same edit gate as Labels: both are disabled while the host cannot take organization commands, both enabled when it can", () => {
+      queryClient.setQueryData(
+        stripBatchKey("user-1"),
+        taskContextsResponse({ found: ["epic-a", "epic-b"], localHomed: [] }),
+      );
+      const rowIsDisabled = (name: string): boolean =>
+        screen.getByRole("menuitem", { name }).getAttribute("aria-disabled") ===
+        "true";
+
+      // The view is present, so the rows stay on screen with the account's
+      // cached groups; only the right to change them is withdrawn.
+      organizationState.organization = {
+        ...organizationFixture(accountView([])),
+        supported: false,
+      };
+      renderMenu(false);
+      expect(rowIsDisabled("Labels")).toBe(true);
+      expect(rowIsDisabled("Task appearance")).toBe(true);
+
+      publishOrganization(organizationFixture(accountView([])));
+      expect(rowIsDisabled("Labels")).toBe(false);
+      expect(rowIsDisabled("Task appearance")).toBe(false);
     });
 
     it("offers the same menu to a task whose lookup has not answered", () => {

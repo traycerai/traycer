@@ -47,6 +47,16 @@ export function getActiveModelPicker(): ActiveModelPickerController | null {
   return top();
 }
 
+/** The top picker's current selection summary, read fresh on every call. */
+export function getActiveModelPickerSummary(): string | null {
+  return top()?.getSelectionSummary() ?? null;
+}
+
+/** Tell subscribers the top picker's summary may have moved. */
+export function notifyActiveModelPickerChanged(): void {
+  notify();
+}
+
 export function subscribeActiveModelPicker(listener: () => void): () => void {
   listeners.add(listener);
   return () => {

@@ -97,23 +97,6 @@ export function hostStreamClientForModule(hookState: PeekHookState): {
 }
 
 /**
- * The toolbar/input-capture suites additionally read the authenticated-key
- * helpers off this module (armed-store ownership keys); the WebRTC suites
- * never touch them.
- */
-export function hostStreamClientForWithAuthModule(hookState: PeekHookState): {
-  useHostStreamClientFor: () => FakeStreamClient | null;
-  authenticatedHostStreamKey: () => string;
-  authenticatedOwnerIdentityKey: () => string;
-} {
-  return {
-    useHostStreamClientFor: () => hookState.streamClient,
-    authenticatedHostStreamKey: () => "authenticated-host-test",
-    authenticatedOwnerIdentityKey: () => "local\u0000host-test\u0000user-test",
-  };
-}
-
-/**
  * The `tile` control tier. `screencastRoleForShell` reads `browserView` off
  * the runner host and a bare test tree has no `RunnerHostProvider` at all, so
  * without this a peek suite renders the read-only `viewer` presentation (H12)

@@ -347,10 +347,10 @@ function blockContentVersion(block: OpenContentBlock): number {
 
 /**
  * A sent-message card keeps changing after its call settles: the host stamps
- * `agentMessageDelivery` (queued, then delivered, expired or failed) and, once
- * delivered, `agentMessageReceipt`, as an ordinary row update that leaves the
- * block's status and timestamp alone. Without `blocksVersion` those are all
- * `turnSignature` sees, so a card would keep its cached "queued" segment; both
+ * `agentMessageDelivery` (queued, then possibly expired or failed) and
+ * `agentMessageReceipt` as an ordinary row update that leaves the block's
+ * status and timestamp alone. Without `blocksVersion` those are all
+ * `turnSignature` sees, so a card would keep its cached sent segment; both
  * stamps are hashed here. Every other tool call keeps the cheap `0`.
  */
 function toolCallBlockContentVersion(

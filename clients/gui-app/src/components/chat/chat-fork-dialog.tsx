@@ -40,6 +40,12 @@ import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/hos
 import { useCoarsePointer } from "@/hooks/ui/use-coarse-pointer";
 import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
 import { useEpicCreateChatForHostClient } from "@/hooks/epic/use-epic-chat-mutations";
+import {
+  isAttachEnvironmentUnsupported,
+  toastAttachEnvironmentNeedsOwnHost,
+  useEpicAttachEnvironment,
+} from "@/hooks/epic/use-epic-attach-environment-mutation";
+import { useHostOwnerTeamId } from "@/hooks/sandboxes/use-on-team-sandbox";
 import { useCloneSourceOwnerUserId } from "@/hooks/chats/use-clone-source-owner";
 import { useChatPublicationState } from "@/hooks/chats/use-chat-publication-state-query";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
@@ -547,6 +553,26 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
   // `null` when this client genuinely does not know, never a guess, because the
   // host TRUSTS a value it is given.
   const appWideClient = useHostClient();
+  // A fork onto a team's host first attaches the task to that team, so the
+  // team's host may serve it: the person's own act, sent on the person's own
+  // (app-wide) host with their bearer. Not when the source already runs on a
+  // host of that team - the task is that team's to serve already.
+  const selectedHostTeamId = useHostOwnerTeamId(selectedHostId);
+  const tabHostTeamId = useHostOwnerTeamId(tabHostId);
+  const attachTeamId =
+    selectedHostTeamId !== null && selectedHostTeamId !== tabHostTeamId
+      ? selectedHostTeamId
+      : null;
+  // The attachment is the person's act, so it travels on a host no team owns:
+  // the source tab's, else the app-wide one. A team's host would send it with
+  // a member's credential, which the cloud refuses. With neither, there is no
+  // host to send it from.
+  const appWideHostTeamId = useHostOwnerTeamId(appWideClient.getActiveHostId());
+  const personalAppWideClient =
+    appWideHostTeamId === null ? appWideClient : null;
+  const attachClient =
+    tabHostTeamId === null ? tabHostClient : personalAppWideClient;
+  const attachEnvironment = useEpicAttachEnvironment(attachClient);
   const sourceOwnerUserId = useCloneSourceOwnerUserId({
     client: appWideClient,
     epicId,
@@ -623,7 +649,7 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
     sourceUntitled,
     modelResolved,
     hasStagedPreselection: stagedIntentForKey !== null,
-    createPending: createChat.isPending,
+    createPending: createChat.isPending || attachEnvironment.isPending,
     hostClientResolved: selectedHostClient !== null,
     teamSandboxHarnessBlocked,
     // Not a host-build fact any more, and the name says so. This one boolean
@@ -744,70 +770,93 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
       reasoning: toolbar.reasoning,
       serviceTier: toolbar.serviceTier,
     });
-    createChat.mutate(
-      {
-        epicId,
-        // The host the user picked in THIS dialog, which is the machine the
-        // fork is created on and the one the forked chat is bound to for life.
-        hostId,
-        parentId: target.parentId,
-        title: trimmedTitle,
-        chatId,
-        settings,
-        workspaceMode,
-        worktreeIntent,
-        initialMessage: null,
-        // Both fork shapes carry the rendered source owner so a destination
-        // with no local chat record can verify the cloud publication's owner.
-        forkSource:
-          target.assistantMessageId === null
-            ? {
-                boundary: "latest",
-                sourceChatId: target.sourceChatId,
-                sourceOwnerUserId,
-              }
-            : {
-                boundary: "assistantMessage",
-                sourceChatId: target.sourceChatId,
-                assistantMessageId: target.assistantMessageId,
-                interviewBlockId: target.interviewBlockId,
-                carriedInterviews: target.carriedInterviews,
-                sourceOwnerUserId,
-              },
-      },
-      {
-        onSuccess: (result) => {
-          Analytics.getInstance().track(AnalyticsEvent.ChatForked, {
-            source: "direct_ui",
-            include_history: true,
-          });
-          clearForkWorkspaces();
-          const cancel = openCreatedChatWhenProjectedWithNavigation({
-            intent: {
-              epicId,
-              tabId,
-              chatId: result.chatId,
-              // The host the fork was actually created on. Binding the new tab
-              // to the ACTIVE host instead would leave it addressing a machine
-              // that has never heard of this chat, and waiting out the whole
-              // cross-host replication before anything appeared.
-              hostId,
-              placement: null,
+    const createForkChat = (): void => {
+      createChat.mutate(
+        {
+          epicId,
+          // The host the user picked in THIS dialog, which is the machine the
+          // fork is created on and the one the forked chat is bound to for life.
+          hostId,
+          parentId: target.parentId,
+          title: trimmedTitle,
+          chatId,
+          settings,
+          workspaceMode,
+          worktreeIntent,
+          initialMessage: null,
+          // Both fork shapes carry the rendered source owner so a destination
+          // with no local chat record can verify the cloud publication's owner.
+          forkSource:
+            target.assistantMessageId === null
+              ? {
+                  boundary: "latest",
+                  sourceChatId: target.sourceChatId,
+                  sourceOwnerUserId,
+                }
+              : {
+                  boundary: "assistantMessage",
+                  sourceChatId: target.sourceChatId,
+                  assistantMessageId: target.assistantMessageId,
+                  interviewBlockId: target.interviewBlockId,
+                  carriedInterviews: target.carriedInterviews,
+                  sourceOwnerUserId,
+                },
+        },
+        {
+          onSuccess: (result) => {
+            Analytics.getInstance().track(AnalyticsEvent.ChatForked, {
               source: "direct_ui",
-            },
-            navigateNestedFocus,
-          });
-          const openCancels = openCancelsRef.current;
-          if (openCancels === null) {
-            cancel();
-          } else {
-            openCancels.add(cancel);
-          }
-          onOpenChange(false);
+              include_history: true,
+            });
+            clearForkWorkspaces();
+            const cancel = openCreatedChatWhenProjectedWithNavigation({
+              intent: {
+                epicId,
+                tabId,
+                chatId: result.chatId,
+                // The host the fork was actually created on. Binding the new tab
+                // to the ACTIVE host instead would leave it addressing a machine
+                // that has never heard of this chat, and waiting out the whole
+                // cross-host replication before anything appeared.
+                hostId,
+                placement: null,
+                source: "direct_ui",
+              },
+              navigateNestedFocus,
+            });
+            const openCancels = openCancelsRef.current;
+            if (openCancels === null) {
+              cancel();
+            } else {
+              openCancels.add(cancel);
+            }
+            onOpenChange(false);
+          },
+        },
+      );
+    };
+    if (attachTeamId === null) {
+      createForkChat();
+      return;
+    }
+    if (attachClient === null) {
+      toastAttachEnvironmentNeedsOwnHost();
+      return;
+    }
+    attachEnvironment.mutate(
+      { epicId, teamId: attachTeamId },
+      {
+        onSuccess: createForkChat,
+        // A host that predates the attachment creates as it always has.
+        onError: (error) => {
+          if (isAttachEnvironmentUnsupported(error)) createForkChat();
         },
       },
     );
   }, [
+    attachClient,
+    attachEnvironment,
+    attachTeamId,
     canSubmit,
     clearForkWorkspaces,
     createChat,

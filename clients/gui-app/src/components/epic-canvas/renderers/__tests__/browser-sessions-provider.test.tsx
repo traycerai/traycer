@@ -76,17 +76,32 @@ vi.mock("@/hooks/host/use-host-directory-entry", () => ({
     (hostId === hookState.hostEntry.hostId ? hookState.hostEntry : null),
 }));
 
+// The owner identity is this file's to choose per client: the client's
+// request-context user stands in for it, and the key derivation hands it back.
+vi.mock("@/hooks/host/use-request-context-user-id", () => ({
+  useRequestContextUserId: (hostClient: object | null) =>
+    hostClient === null
+      ? null
+      : (hookState.ownerIdentityKeysByClient.get(hostClient) ??
+        hookState.ownerIdentityKey),
+}));
+
+vi.mock("@/lib/host/transport-key", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/host/transport-key")>()),
+  remoteAwareOwnerIdentityKey: (
+    _hostEntry: HostDirectoryEntry | null,
+    userId: string | null,
+  ) => userId,
+}));
+
 vi.mock("@/hooks/host/use-host-stream-client-for", () => ({
-  authenticatedHostStreamKey: (
-    _hostClient: object,
+  hostStreamTransportKeyFor: (
     hostEntry: HostDirectoryEntry | null,
+    userId: string | null,
   ) =>
-    hostEntry?.websocketUrl === null || hostEntry === null
+    hostEntry?.websocketUrl === null || hostEntry === null || userId === null
       ? null
       : hookState.transportKey,
-  authenticatedOwnerIdentityKey: (hostClient: object) =>
-    hookState.ownerIdentityKeysByClient.get(hostClient) ??
-    hookState.ownerIdentityKey,
 }));
 
 vi.mock("@/hooks/epic/use-epic-session-host-client", () => ({

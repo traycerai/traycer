@@ -8,6 +8,7 @@ import type {
 } from "@traycer-clients/shared/host-selection/selection-authority-contract";
 import { toast } from "sonner";
 import { useHostClientFor } from "@/hooks/host/use-host-client-for";
+import { useRequestContextUserId } from "@/hooks/host/use-request-context-user-id";
 import { useHostClient, type HostRpcRegistry } from "@/lib/host";
 import { useRunnerHost } from "@/providers/use-runner-host";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
@@ -193,9 +194,7 @@ export function useHostScopeFor(selection: HostScopeSelection): HostScope {
   // so for a connectable host the only reason one comes back null is a missing
   // request context or unbound user. That is a credential gap, not a connection
   // in progress, and it must not render as a spinner that can never resolve.
-  const hasRequestAuthority =
-    ambientClient.getRequestContext() !== null &&
-    ambientClient.getRequestContextUserId() !== null;
+  const hasRequestAuthority = useRequestContextUserId(ambientClient) !== null;
 
   const status = deriveHostScopeStatus({
     isFollowing,

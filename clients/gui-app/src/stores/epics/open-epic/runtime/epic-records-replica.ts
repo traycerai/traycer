@@ -74,7 +74,10 @@ import {
   readMaybeString,
 } from "../projection-helpers";
 import type { EpicDocRecordArms } from "../projection-helpers";
-import type { PendingChatCreation } from "../pending-chat-creations";
+import type {
+  PendingChatCreation,
+  PendingChatCreationCloudRow,
+} from "../pending-chat-creations";
 import { createEpicProjector, type EpicProjector } from "./epic-projector";
 import type { EpicRootEvent, EpicOutboundRequest } from "./epic-runtime-events";
 import type { EpicRecordsProjection } from "./epic-runtime-projection";
@@ -292,6 +295,7 @@ export interface EpicRecordsReplica extends Replica<
   peekTuiAgentIngestSeq(): number;
   beginPendingChatCreation(pending: PendingChatCreation): void;
   clearPendingChatCreation(chatId: string): void;
+  expirePendingChatCreationForCloudRow(row: PendingChatCreationCloudRow): void;
   republishRecordsForCurrentUser(): void;
 
   // ── Doc reads and writes ────────────────────────────────────────────────
@@ -1671,6 +1675,13 @@ export function createEpicRecordsReplica(
     clearPendingChatCreation(chatId): void {
       if (isDisposed()) return;
       const publication = chatTable.clearPendingCreation(chatId);
+      if (publication === null) return;
+      publishRecordSlice({ chatRecords: publication.chatRecords });
+    },
+
+    expirePendingChatCreationForCloudRow(row): void {
+      if (isDisposed()) return;
+      const publication = chatTable.expirePendingCreationForCloudRow(row);
       if (publication === null) return;
       publishRecordSlice({ chatRecords: publication.chatRecords });
     },

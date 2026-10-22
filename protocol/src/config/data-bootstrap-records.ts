@@ -1,10 +1,14 @@
 import { randomUUID } from "node:crypto";
-import { lstatSync, readdirSync, readFileSync } from "node:fs";
+import { lstatSync, readdirSync } from "node:fs";
 import { open, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { z } from "zod";
 import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 import { renameWithWindowsRetry } from "./credentials-fs";
+import {
+  readRegularFileBytesNoFollowSync,
+  type RegularFileBytesRead,
+} from "./host-update-attempt-fs";
 import {
   canonicalJson,
   checkJournalSuccessor,
@@ -137,26 +141,20 @@ type Decoder = (
 ) => { ok: true; body: unknown } | { ok: false; reason: string };
 
 function readRecordFileSync(path: string, decode: Decoder): FileRead {
-  let isFile: boolean;
+  let read: RegularFileBytesRead;
   try {
-    isFile = lstatSync(path).isFile();
-  } catch (error) {
-    if (errorCode(error) === "ENOENT") return { kind: "absent" };
-    return {
-      kind: "damaged",
-      reason: `cannot inspect (${errorCode(error) ?? "unknown error"})`,
-    };
-  }
-  if (!isFile) return { kind: "damaged", reason: "not a regular file" };
-  let raw: string;
-  try {
-    raw = readFileSync(path, "utf8");
+    read = readRegularFileBytesNoFollowSync(path);
   } catch (error) {
     return {
       kind: "damaged",
       reason: `cannot read (${errorCode(error) ?? "unknown error"})`,
     };
   }
+  if (read.kind === "absent") return { kind: "absent" };
+  if (read.kind === "not-regular") {
+    return { kind: "damaged", reason: "not a regular file" };
+  }
+  const raw = read.bytes.toString("utf8");
   const decoded = decode(raw);
   return decoded.ok
     ? { kind: "valid", raw, body: decoded.body }
@@ -1030,9 +1028,9 @@ function readEvidenceFiles(
   try {
     for (const name of readdirSync(bootstrapDir).sort()) {
       if (!STARTUP_GATE_EVIDENCE_FILE.test(name)) continue;
-      const path = join(bootstrapDir, name);
-      if (!lstatSync(path).isFile()) return null;
-      files.push({ name, content: readFileSync(path, "utf8") });
+      const read = readRegularFileBytesNoFollowSync(join(bootstrapDir, name));
+      if (read.kind !== "bytes") return null;
+      files.push({ name, content: read.bytes.toString("utf8") });
     }
   } catch {
     return null;

@@ -1,9 +1,10 @@
 name: Trunk red
 
-# A team PR into `main` runs no CI (see the `if:` on every job in the workflows
-# below); the full suite runs once, on the merged commit. That moves the first
-# sight of a break from the pull request to `main`, so a red merge run has to
-# be noticed by something other than whoever happens to look.
+# A team PR into `main` runs no CI but the CodeQL scan (see the `if:` on the
+# jobs of the workflows below); the full suite runs once, on the merged
+# commit. That moves the first sight of a break from the pull request to
+# `main`, so a red merge run has to be noticed by something other than whoever
+# happens to look.
 #
 # When a push run on `main` fails, its failed jobs are re-run once, and only a
 # second failure is reported. The test suites have known flakes, and one retry
@@ -49,6 +50,7 @@ on:
       - Real supervisor (macOS launchd integration)
       - CodeQL
       - Secret scan
+      - Gradle wrapper
       - Scorecard supply-chain security
     types: [completed]
     branches: [main]

@@ -1,10 +1,18 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { renderHook } from "@testing-library/react";
+import { act, cleanup, renderHook } from "@testing-library/react";
 import {
   recordNegotiatedHostManifest,
   resetNegotiatedManifests,
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
-import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import {
+  installHostConnectionRegistrySource,
+  resetHostConnectionRegistryForTest,
+} from "@traycer-clients/shared/host-client/host-connection-registry";
+import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
+import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
+import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
+import { hostRpcRegistry } from "@traycer/protocol/host/index";
 import type { HostRpcRegistry } from "@/lib/host";
 import { useProvidersLoginOwnershipForClient } from "@/hooks/providers/use-providers-login-ownership";
 
@@ -41,7 +49,29 @@ function manifestWith(
   return manifest;
 }
 
+/** A directory whose row for the host lands after the requester was made. */
+class LateRowDirectory {
+  private entry: HostDirectoryEntry | null = null;
+  private readonly listeners = new Set<() => void>();
+
+  findById(hostId: string): HostDirectoryEntry | null {
+    return this.entry?.hostId === hostId ? this.entry : null;
+  }
+
+  onDirectoryChanged(listener: () => void): { dispose: () => void } {
+    this.listeners.add(listener);
+    return { dispose: () => this.listeners.delete(listener) };
+  }
+
+  publish(entry: HostDirectoryEntry): void {
+    this.entry = entry;
+    for (const listener of [...this.listeners]) listener();
+  }
+}
+
 afterEach(() => {
+  cleanup();
+  resetHostConnectionRegistryForTest();
   resetNegotiatedManifests();
 });
 
@@ -84,6 +114,37 @@ describe("useProvidersLoginOwnershipForClient — both-minor gate", () => {
     );
 
     expect(result.current).toBe(false);
+  });
+
+  // A requester pinned by host id answers `null` until that host's directory
+  // row lands, and keeps its identity when it does. The compiled hook read the
+  // id off the requester and kept the first answer, so a host whose row
+  // arrived after the panel mounted never got login ownership.
+  it("follows the requester's host once its directory row lands", () => {
+    recordNegotiatedHostManifest(HOST_ID, manifestWith(4, 2));
+    const directory = new LateRowDirectory();
+    installHostConnectionRegistrySource({ directory, leases: null });
+    const spine = new HostClient<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      invalidator: { invalidateHostScope: () => {} },
+      findHostById: (hostId) => directory.findById(hostId),
+      messenger: new MockHostMessenger<HostRpcRegistry>({
+        registry: hostRpcRegistry,
+        requestId: () => "req-1",
+        handlers: {},
+      }),
+    });
+    const pinnedRequester = spine.createRequesterForHostId(HOST_ID);
+    const { result } = renderHook(() =>
+      useProvidersLoginOwnershipForClient(pinnedRequester),
+    );
+    expect(result.current).toBe(false);
+
+    act(() => {
+      directory.publish({ ...mockLocalHostEntry, hostId: HOST_ID });
+    });
+
+    expect(result.current).toBe(true);
   });
 
   it("is false with no client, and false with no negotiated manifest yet", () => {

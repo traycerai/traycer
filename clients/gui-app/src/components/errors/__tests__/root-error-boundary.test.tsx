@@ -6,9 +6,11 @@ import { RootErrorBoundary } from "@/components/errors/root-error-boundary";
 import { ReportIssueDialogHost } from "@/components/layout/dialogs/report-issue-dialog-host";
 import { Toaster } from "@/components/ui/sonner";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
-import { router } from "@/router";
+import { createAppRouter } from "@/router";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 import type { RendererCrashTelemetryInput } from "@traycer-clients/shared/platform/runner-host";
+
+const router = createAppRouter(null, null);
 
 function Boom(): never {
   throw new Error("boom from a provider");

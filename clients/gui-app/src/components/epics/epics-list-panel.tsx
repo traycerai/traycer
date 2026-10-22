@@ -1,3 +1,4 @@
+import { historyCoverageIsReduced } from "@/lib/history-composition/compose-history-page";
 import { HistoryTaskOrganizationMenu } from "@/components/organization/task-organization-menu";
 import {
   memo,
@@ -78,6 +79,7 @@ import {
   EpicsListHostRequiresCloudToList,
   EpicsListLoading,
   EpicsListNoRows,
+  EpicsListReducedCoverage,
   EpicsListShowMore,
 } from "@/components/epics/epics-list-shared";
 import { HistoryTaskRow } from "@/components/epics/history-task-row";
@@ -1745,6 +1747,9 @@ function EpicsListBody(props: EpicsListBodyProps): ReactNode {
   };
   return (
     <>
+      {historyCoverageIsReduced(completeness) ? (
+        <EpicsListReducedCoverage />
+      ) : null}
       {preservedItems.length > 0 ? (
         <section
           className="mb-3 flex flex-col gap-2"

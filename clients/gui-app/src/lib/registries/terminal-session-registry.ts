@@ -3,10 +3,9 @@ import { useEffect, useLayoutEffect, useMemo, useReducer, useRef } from "react";
 import { TerminalStreamClient } from "@traycer-clients/shared/host-transport/terminal-stream-client";
 import { useHostClient } from "@/lib/host";
 import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
-import {
-  authenticatedHostStreamKey,
-  authenticatedOwnerIdentityKey,
-} from "@/hooks/host/use-host-stream-client-for";
+import { hostStreamTransportKeyFor } from "@/hooks/host/use-host-stream-client-for";
+import { remoteAwareOwnerIdentityKey } from "@/lib/host/transport-key";
+import { useRequestContextUserId } from "@/hooks/host/use-request-context-user-id";
 import { useDurableStreamTransportFactory } from "@/lib/host/use-durable-stream-transport";
 import { openOwnedDurableStreamClient } from "@/lib/host/owned-durable-stream-client";
 import { hostQueryKeys } from "@/lib/query-keys";
@@ -96,6 +95,7 @@ export function useTerminalSessionHandle(
 ): TerminalSessionStoreHandle | null {
   const hostEntry = useHostDirectoryEntry(args.hostId);
   const globalClient = useHostClient();
+  const requestContextUserId = useRequestContextUserId(globalClient);
   // Terminal is a DURABLE per-tab stream: its `WsStreamClient` is OWNED by the
   // session store for the session's warm lifetime (live sessions are kept warm
   // across tile unmount - agents indefinitely, plain terminals for the
@@ -115,12 +115,12 @@ export function useTerminalSessionHandle(
   // Readiness gate: authenticated request context + dialable endpoint (or the
   // test seam). A non-null `transportKey` is the terminal's "ready to acquire"
   // signal, replacing the old per-tile `wsStreamClient !== null` check. The
-  // shared `authenticatedHostStreamKey` derives the production identity only
-  // when the factory is not overridden, matching chat.
+  // request context's user derives the production identity only when the
+  // factory is not overridden, matching chat.
   const transportKey =
     streamClientFactoryOverride !== null
       ? "test-stream-client-factory"
-      : authenticatedHostStreamKey(globalClient, hostEntry);
+      : hostStreamTransportKeyFor(hostEntry, requestContextUserId);
   // Owner-identity discriminator (R-1): `transportKey` deliberately omits a
   // remote host's public key (dialability, not identity). `args.hostId` is
   // stable for a terminal tab's whole lifetime by design (bound for life -
@@ -129,7 +129,7 @@ export function useTerminalSessionHandle(
   const ownerIdentityKey =
     streamClientFactoryOverride !== null
       ? "test-stream-client-factory"
-      : authenticatedOwnerIdentityKey(globalClient, hostEntry);
+      : remoteAwareOwnerIdentityKey(hostEntry, requestContextUserId);
 
   const [handle, setHandle] = useReducer(
     (

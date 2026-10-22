@@ -37,11 +37,6 @@ import {
   landingOwnerRefusal,
   type LandingOwnerTeam,
 } from "@/components/home/composer/landing-owner-model";
-import {
-  NO_DRAFT_OWNER_KEY,
-  landingOwnerDraftKey,
-  useLandingOwnerStore,
-} from "@/stores/home/landing-owner-store";
 import { TEAM_SANDBOX_HARNESS_UNAVAILABLE } from "@/lib/sandboxes/team-sandbox-harness";
 import { readNegotiatedMethodVersion } from "@/lib/host/read-negotiated-method-version";
 import {
@@ -181,7 +176,7 @@ export interface LandingComposerSubmitArgs {
     readonly permission: PermissionMode;
   };
   /**
-   * Who the new task belongs to: the draft's Belongs to owner, read by the
+   * Who the new task belongs to: the resolved host's owner, read by the
    * caller at submit; `null` is Personal.
    */
   readonly owner: LandingOwnerTeam | null;
@@ -1533,7 +1528,6 @@ export function useLandingComposerActions(
       );
       if (workspaceContext.worktreeIntentSuspended) return null;
       dispatchSubmission(args, workspaceContext, placement.hostId);
-      clearLandingOwnerChoice(args.draftId);
       return null;
     },
     [dispatchSubmission, queryClient, resolveAdmittedPlacement],
@@ -1562,7 +1556,6 @@ export function useLandingComposerActions(
       );
       if (workspaceContext.worktreeIntentSuspended) return null;
       dispatchTerminalAgent(launch, workspaceContext, placement.hostId, owner);
-      clearLandingOwnerChoice(draftId);
       return null;
     },
     [dispatchTerminalAgent, queryClient, resolveAdmittedPlacement],
@@ -1591,17 +1584,6 @@ export function useLandingComposerActions(
       terminalAgentCreate.isPending,
     ],
   );
-}
-
-/**
- * Forgets the Belongs to pick once its create is sent, under the draft's key
- * and the not-yet-a-draft key, so the next task starts from the host's team
- * again.
- */
-function clearLandingOwnerChoice(draftId: string | null): void {
-  const store = useLandingOwnerStore.getState();
-  store.clearChoice(landingOwnerDraftKey(draftId));
-  store.clearChoice(NO_DRAFT_OWNER_KEY);
 }
 
 function ensureSubmissionDraft(

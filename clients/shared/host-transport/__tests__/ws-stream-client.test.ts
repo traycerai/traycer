@@ -366,12 +366,18 @@ async function flush(): Promise<void> {
  * minor here would make every future `git.subscribeStatus` bump fail a test
  * that is about per-session ROUTING, not about any particular version.
  */
+const GIT_STATUS_INSTALLED_MAJORS = Object.keys(
+  hostStreamRpcRegistry["git.subscribeStatus"],
+)
+  .map(Number)
+  .sort((left, right) => left - right);
 const GIT_STATUS_VERSION = {
   major: 1,
   minor: hostStreamRpcRegistry["git.subscribeStatus"][1].latestMinor,
-  supportedMajors: Object.keys(hostStreamRpcRegistry["git.subscribeStatus"])
-    .map(Number)
-    .sort((left, right) => left - right),
+  // Omitted for a single installed major: absence already means that.
+  ...(GIT_STATUS_INSTALLED_MAJORS.length > 1
+    ? { supportedMajors: GIT_STATUS_INSTALLED_MAJORS }
+    : {}),
 };
 
 function completeHandshake(socket: StubStreamWebSocket): void {
@@ -668,7 +674,7 @@ describe("WsStreamClient", () => {
       // This literal is the point of the fixture: it pins the version the
       // client *declares*, which is a distinct fact from the manifest it
       // advertises, so a bump has to be stated here too.
-      schemaVersion: { major: 1, minor: 6, supportedMajors: [1] },
+      schemaVersion: { major: 1, minor: 6 },
       params: { epicId: "epic-1" },
     });
 
@@ -743,7 +749,7 @@ describe("WsStreamClient", () => {
     expect(parseText(stub.textSent[1])).toEqual({
       kind: "subscribe",
       method: "epic.subscribe",
-      schemaVersion: { major: 1, minor: 6, supportedMajors: [1] },
+      schemaVersion: { major: 1, minor: 6 },
       params: { epicId: "epic-1" },
     });
 
@@ -816,7 +822,7 @@ describe("WsStreamClient", () => {
     expect(parseText(stub.textSent[1])).toEqual({
       kind: "subscribe",
       method: "epic.subscribe",
-      schemaVersion: { major: 1, minor: 6, supportedMajors: [1] },
+      schemaVersion: { major: 1, minor: 6 },
       params: { epicId: "epic-1" },
     });
 
@@ -1730,7 +1736,7 @@ describe("WsStreamClient", () => {
     expect(parseText(terminalSocket.textSent[1])).toEqual({
       kind: "subscribe",
       method: "terminal.subscribe",
-      schemaVersion: { major: 1, minor: 7, supportedMajors: [1] },
+      schemaVersion: { major: 1, minor: 7 },
       params: {
         sessionId: "terminal-session-1",
         cols: 80,
@@ -2055,7 +2061,7 @@ describe("WsStreamClient", () => {
     expect(firstSubscribe).toEqual({
       kind: "subscribe",
       method: "epic.subscribe",
-      schemaVersion: { major: 1, minor: 6, supportedMajors: [1] },
+      schemaVersion: { major: 1, minor: 6 },
       params: { epicId: "epic-42" },
     });
 
@@ -2075,7 +2081,7 @@ describe("WsStreamClient", () => {
     expect(secondSubscribe).toEqual({
       kind: "subscribe",
       method: "epic.subscribe",
-      schemaVersion: { major: 1, minor: 6, supportedMajors: [1] },
+      schemaVersion: { major: 1, minor: 6 },
       params: { epicId: "epic-42" },
     });
 
@@ -2455,7 +2461,7 @@ describe("WsStreamClient", () => {
     expect(parseText(sockets[1].socket.textSent[1])).toEqual({
       kind: "subscribe",
       method: "epic.subscribe",
-      schemaVersion: { major: 1, minor: 6, supportedMajors: [1] },
+      schemaVersion: { major: 1, minor: 6 },
       params: { epicId: "epic-42" },
     });
     expect(statuses.at(-1)).toBe("open");
@@ -3918,7 +3924,6 @@ describe("WsStreamClient UNAUTHORIZED auth recovery", () => {
       schemaVersion: {
         major: 1,
         minor: FEED_LATEST_MINOR,
-        supportedMajors: [1],
       },
       params: {
         initialAttentionLimit: 50,
@@ -3960,7 +3965,6 @@ describe("WsStreamClient UNAUTHORIZED auth recovery", () => {
       schemaVersion: {
         major: 1,
         minor: FEED_LATEST_MINOR,
-        supportedMajors: [1],
       },
       params: {
         initialAttentionLimit: 50,

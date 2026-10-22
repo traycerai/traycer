@@ -2,6 +2,7 @@ import "../../../../../__tests__/test-browser-apis";
 import type { ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -29,6 +30,9 @@ interface ReadValidityTestState {
   isError: boolean;
   error: Error | null;
   readonly rendererContent: Mock;
+  /** Bumped by `publishReadState`; the mocked query re-renders on it. */
+  revision: number;
+  readonly listeners: Set<() => void>;
 }
 
 const state = vi.hoisted((): ReadValidityTestState => ({
@@ -37,6 +41,8 @@ const state = vi.hoisted((): ReadValidityTestState => ({
   isError: false,
   error: null,
   rendererContent: vi.fn(),
+  revision: 0,
+  listeners: new Set<() => void>(),
 }));
 
 vi.mock("@/components/diff/diff-edit-provider-loader", () => ({
@@ -56,15 +62,30 @@ vi.mock("@/hooks/host/use-host-supports-method", () => ({
   useHostSupportsMethod: () => true,
 }));
 
-vi.mock("@/hooks/workspace/use-read-file-query", () => ({
-  useWorkspaceReadFile: () => ({
-    data: state.data,
-    isLoading: state.isLoading,
-    isError: state.isError,
-    error: state.error,
-    refetch: vi.fn(),
-  }),
-}));
+// Reactive like the real query: a result change re-renders the hook's own
+// consumer. The tile's parents are compiled and do not re-render it for an
+// unchanged node, so a parent re-render could never deliver a new result.
+vi.mock("@/hooks/workspace/use-read-file-query", async () => {
+  const { useSyncExternalStore } = await import("react");
+  return {
+    useWorkspaceReadFile: () => {
+      useSyncExternalStore(
+        (listener: () => void) => {
+          state.listeners.add(listener);
+          return () => state.listeners.delete(listener);
+        },
+        () => state.revision,
+      );
+      return {
+        data: state.data,
+        isLoading: state.isLoading,
+        isError: state.isError,
+        error: state.error,
+        refetch: vi.fn(),
+      };
+    },
+  };
+});
 
 vi.mock("@/hooks/workspace/use-workspace-write-file-mutation", () => ({
   useWorkspaceWriteFile: () => ({ mutateAsync: vi.fn() }),
@@ -137,6 +158,8 @@ describe("<WorkspaceFileTile /> read validity", () => {
     state.isError = false;
     state.error = null;
     state.rendererContent.mockReset();
+    state.revision = 0;
+    state.listeners.clear();
   });
 
   afterEach(() => {
@@ -168,7 +191,7 @@ describe("<WorkspaceFileTile /> read validity", () => {
       error: null,
       truncated: false,
     };
-    const harness = renderTile();
+    renderTile();
     fireEvent.click(screen.getByRole("button", { name: "Click source" }));
     await waitFor(() => {
       expect(currentRuntimeState()?.ownerSurfaceId).not.toBeNull();
@@ -181,7 +204,7 @@ describe("<WorkspaceFileTile /> read validity", () => {
     // flip. This must not be conflated with a payload error.
     state.isError = true;
     state.error = new Error("network unreachable");
-    harness.rerender();
+    publishReadState();
 
     expect(
       screen.getByRole("button", { name: "Type without blur" }),
@@ -196,7 +219,7 @@ describe("<WorkspaceFileTile /> read validity", () => {
       error: null,
       truncated: false,
     };
-    const harness = renderTile();
+    renderTile();
     fireEvent.click(screen.getByRole("button", { name: "Click source" }));
     fireEvent.click(
       await screen.findByRole("button", { name: "Type without blur" }),
@@ -216,7 +239,7 @@ describe("<WorkspaceFileTile /> read validity", () => {
       error: "Could not read /work/repo/src/index.ts",
       truncated: false,
     };
-    harness.rerender();
+    publishReadState();
 
     // Draft is untouched - never replaced by the error screen.
     expect(state.rendererContent).toHaveBeenCalledWith("X");
@@ -244,27 +267,22 @@ function currentRuntimeState() {
     ?.store.getState();
 }
 
-function renderTile() {
+function publishReadState(): void {
+  act(() => {
+    state.revision += 1;
+    for (const listener of state.listeners) listener();
+  });
+}
+
+function renderTile(): void {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   });
-  const result = render(
+  render(
     <QueryClientProvider client={queryClient}>
       <TabHostProvider hostId="host-A">
         <WorkspaceFileTile node={NODE} viewTabId="view-1" isActive />
       </TabHostProvider>
     </QueryClientProvider>,
   );
-  return {
-    ...result,
-    rerender: (): void => {
-      result.rerender(
-        <QueryClientProvider client={queryClient}>
-          <TabHostProvider hostId="host-A">
-            <WorkspaceFileTile node={NODE} viewTabId="view-1" isActive />
-          </TabHostProvider>
-        </QueryClientProvider>,
-      );
-    },
-  };
 }

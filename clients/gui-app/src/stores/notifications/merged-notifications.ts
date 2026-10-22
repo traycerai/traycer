@@ -66,6 +66,7 @@ import {
   useCloudNotificationsStore,
 } from "@/stores/notifications/cloud-notifications-store";
 import { requestCloudEntityRead } from "@/lib/notifications/cloud-entity-read-driver";
+import { noteNotificationFeedConfirmedWrite } from "@/lib/view-replica/notification-feed-replica";
 import {
   NOTIFICATIONS_PARTITIONED_CLEAR_ALL_MINOR,
   NOTIFICATIONS_PARTITIONED_LIST_MAJOR,
@@ -222,6 +223,11 @@ interface HostNotificationMutationContext {
 interface CloudFeedMutationContext {
   readonly hostId: string | null;
   readonly sessionEpoch: number;
+  /**
+   * The account the write was made as: feed versions are per account, so a
+   * result that resolves after a switch is not the new account's.
+   */
+  readonly accountId: string | null;
 }
 
 export function hostFeedId(id: string): string {
@@ -897,13 +903,24 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
   };
   const handleCloudMutationResult = (data: {
     readonly status: "applied" | "unavailable";
+    readonly version: number | null;
   }): void => {
-    if (data.status === "unavailable") markCloudUnavailable();
+    if (data.status === "unavailable") {
+      markCloudUnavailable();
+      return;
+    }
+    // A cached feed from before this write would show it undone on the next
+    // cold open.
+    const accountId = useAuthStore.getState().contextMetadata?.userId ?? null;
+    if (accountId !== null) {
+      noteNotificationFeedConfirmedWrite(accountId, data.version);
+    }
   };
   const captureCloudMutationContext = useCallback(
     (): CloudFeedMutationContext => ({
       hostId: client?.getActiveHostId() ?? null,
       sessionEpoch: useCloudNotificationsStore.getState().sessionEpoch,
+      accountId: useAuthStore.getState().contextMetadata?.userId ?? null,
     }),
     [client],
   );
@@ -911,7 +928,9 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
     (context: CloudFeedMutationContext): boolean =>
       client?.getActiveHostId() === context.hostId &&
       useCloudNotificationsStore.getState().sessionEpoch ===
-        context.sessionEpoch,
+        context.sessionEpoch &&
+      (useAuthStore.getState().contextMetadata?.userId ?? null) ===
+        context.accountId,
     [client],
   );
   const cloudMarkRead = useHostMutation<
@@ -953,9 +972,12 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
       onSuccess: (data, _variables, context) => {
         if (!isCurrentCloudMutation(context)) return;
         if (data.status === "applied") {
-          handleCloudMutationResult({ status: "applied" });
+          handleCloudMutationResult({
+            status: "applied",
+            version: data.version,
+          });
         } else if (data.status === "unavailable") {
-          handleCloudMutationResult({ status: "unavailable" });
+          handleCloudMutationResult({ status: "unavailable", version: null });
         }
       },
       onError: (error, _variables, context) => {

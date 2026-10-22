@@ -8,6 +8,7 @@ import type {
   ListTasksRequest,
   ListTasksResponse,
 } from "@traycer/protocol/host/epic/unary-schemas";
+import type { LocalHistoryReadResponse } from "@traycer/protocol/host/epic/local-history";
 import { hostRpcRegistry } from "@traycer/protocol/host/registry";
 import type { ConnectionManifest } from "@traycer/protocol/framework/index";
 import {
@@ -37,6 +38,7 @@ const USER_ID = "user-test";
 type MockHostRequest = ListTasksRequest & { readonly pinned?: boolean };
 type MockHostResponse =
   | ListTasksResponse
+  | LocalHistoryReadResponse
   | { readonly pinned: boolean }
   | Record<string, never>;
 type MockHostRequestFunction = (
@@ -62,6 +64,17 @@ function createDeferred<T>(): Deferred<T> {
   return { promise, resolve: resolvePromise };
 }
 
+function emptyLocalHistory(): LocalHistoryReadResponse {
+  return {
+    complete: true,
+    willComplete: true,
+    localHomeRows: [],
+    preservedRows: [],
+    tombstonedEpicIds: [],
+    localRows: "none",
+  };
+}
+
 const mockHostClient = {
   getActiveHostId: vi.fn(() => HOST_ID),
   getRequestContextUserId: vi.fn(() => USER_ID),
@@ -72,7 +85,10 @@ const mockHostClient = {
       method: string,
       params: MockHostRequest,
       _signal: AbortSignal | undefined,
-    ): Promise<MockHostResponse> => mockHostClient.request(method, params),
+    ): Promise<MockHostResponse> =>
+      method === "epic.localHistory.read"
+        ? Promise.resolve(mockHostClient.localHistory.current)
+        : mockHostClient.request(method, params),
   ),
   // The entry point an UNVERIFIED local-first leg dispatches on: it carries a
   // floor the real transport answers from its own handshake. Delegating to the
@@ -92,6 +108,9 @@ const mockHostClient = {
     },
   ),
   floorsRequested: new Array<RequiredHostMethodVersion>(),
+  // What the host's `epic.localHistory.read` answers: by default a complete
+  // contribution with nothing in it, so a page composes with no local rows.
+  localHistory: { current: emptyLocalHistory() },
 };
 
 vi.mock("@/lib/host", () => ({
@@ -177,6 +196,7 @@ describe("useCloudEpicTasksQuery", () => {
     // is asserted by exact contents - left accumulating, a later case reads an
     // earlier one's dispatch as its own.
     mockHostClient.floorsRequested.length = 0;
+    mockHostClient.localHistory.current = emptyLocalHistory();
     mockHostClient.getActiveHostId.mockReturnValue(HOST_ID);
     mockHostClient.getRequestContextUserId.mockReturnValue(USER_ID);
     mockHostClient.onChange.mockImplementation(() => () => undefined);
@@ -363,17 +383,14 @@ describe("useCloudEpicTasksQuery", () => {
     // authn could not confirm. `root-landing-page.tsx` renders `/epics` for it,
     // so it reaches History - and every gate below here has to agree that it
     // did, or it arrives to "No tasks yet" over its own rows.
-    const localPage: ListTasksResponse = {
-      tasks: [taskLight("unverified-local", "Served from this disk")],
-      hasMore: false,
-      completeness: {
-        cloudPage: "pending",
-        facets: "partial",
-        localRows: "present",
-        sort: "loaded-union",
-      },
+    // An unverified session sends no cloud read: its first page is the host's
+    // own contribution (`epic.localHistory.read`), stated as a page whose
+    // cloud half is unavailable.
+    mockHostClient.localHistory.current = {
+      ...emptyLocalHistory(),
+      localHomeRows: [taskLight("unverified-local", "Served from this disk")],
+      localRows: "present",
     };
-    mockHostClient.request.mockResolvedValue(localPage);
     useAuthStore.setState({
       status: "unverified",
       profile: {
@@ -404,13 +421,9 @@ describe("useCloudEpicTasksQuery", () => {
         "unverified-local",
       ]);
     });
-    // An unverified initial leg is preceded by the live-host probe
-    // (`host.status`), whose handshake is what the admission trusts; the
-    // list call itself is still exactly one.
-    expect(listTasksCalls()).toHaveLength(1);
-    expect(listTasksCalls()[0]?.[1]).toMatchObject({
-      localFirstPhase: "initial",
-    });
+    // The cloud leg is refused at dispatch without a verdict: no
+    // `epic.listTasks` leaves.
+    expect(listTasksCalls()).toHaveLength(0);
 
     // The OTHER half of the split, and the reason widening the gate is safe:
     // the local leg went out, the cloud leg did not. `unverified` holds no
@@ -622,12 +635,14 @@ describe("useCloudEpicTasksQuery", () => {
         sort: "server",
       },
     };
-    mockHostClient.request.mockImplementation(
-      (_method: string, params: { readonly localFirstPhase?: string }) =>
-        params.localFirstPhase === "revalidate"
-          ? Promise.resolve(revalidatedPage)
-          : Promise.resolve(localPage),
-    );
+    // The unverified first page is the host's contribution alone; once the
+    // session holds a verdict the pool's page is composed with it.
+    mockHostClient.localHistory.current = {
+      ...emptyLocalHistory(),
+      localHomeRows: [...localPage.tasks],
+      localRows: "present",
+    };
+    mockHostClient.request.mockResolvedValue(revalidatedPage);
     useAuthStore.setState({
       status: "unverified",
       profile: {
@@ -732,12 +747,14 @@ describe("useCloudEpicTasksQuery", () => {
         sort: "server",
       },
     };
-    mockHostClient.request.mockImplementation(
-      (_method: string, params: { readonly localFirstPhase?: string }) =>
-        params.localFirstPhase === "revalidate"
-          ? Promise.resolve(revalidatedPage)
-          : Promise.resolve(localPage),
-    );
+    // The unverified first page is the host's contribution alone; once the
+    // session holds a verdict the pool's page is composed with it.
+    mockHostClient.localHistory.current = {
+      ...emptyLocalHistory(),
+      localHomeRows: [...localPage.tasks],
+      localRows: "present",
+    };
+    mockHostClient.request.mockResolvedValue(revalidatedPage);
     useAuthStore.setState({
       status: "unverified",
       profile: {
@@ -1318,7 +1335,8 @@ describe("useCloudEpicTasksQuery", () => {
         expect(taskLightIds(result.current.tasks)).toEqual([]);
       });
       expect(earlyAdmissionObserved).toBe(true);
-      expect(admissionSpy).toHaveBeenCalledTimes(2);
+      // The serving tier's page, the composed page, and TanStack's own write.
+      expect(admissionSpy).toHaveBeenCalledTimes(3);
       expect(
         queryClient
           .getQueryData<ListTasksResponse>(
@@ -1490,11 +1508,13 @@ describe("useCloudEpicTasksQuery", () => {
       ]);
     });
     await waitFor(() => {
+      // The last-known page is the composed page: the pool's rows, with the
+      // completeness the composition states.
       expect(
         queryClient.getQueryData<ListTasksResponse>(
           cloudEpicTasksLastKnownQueryKey(HOST_ID, USER_ID),
-        ),
-      ).toBe(settledFirstPage);
+        )?.tasks,
+      ).toEqual(settledFirstPage.tasks);
     });
 
     // Promote: the modal's observer unmounts, and a brand-new observer
@@ -1716,18 +1736,24 @@ describe("useCloudEpicTasksQuery", () => {
       nextCursor: "cursor-union",
       completeness: {
         cloudPage: "unavailable",
-        facets: "partial",
-        localRows: "present",
+        facets: "server",
+        localRows: "none",
         sort: "server",
       },
+    };
+    // The composition states local rows from the host's own contribution on a
+    // first page, and none on a cursor page, whatever the pool said.
+    mockHostClient.localHistory.current = {
+      ...emptyLocalHistory(),
+      localRows: "present",
     };
     const tailPage: ListTasksResponse = {
       tasks: [taskLight("union-tail", "Tail page")],
       hasMore: false,
       completeness: {
         cloudPage: "settled",
-        facets: "server",
-        localRows: "truncated",
+        facets: "partial",
+        localRows: "none",
         sort: "loaded-union",
       },
     };
@@ -1751,7 +1777,10 @@ describe("useCloudEpicTasksQuery", () => {
     });
     // With no tail loaded the union is exactly the first page's own statement,
     // so the change below is attributable to the tail and nothing else.
-    expect(result.current.completeness).toEqual(firstPage.completeness);
+    expect(result.current.completeness).toEqual({
+      ...firstPage.completeness,
+      localRows: "present",
+    });
 
     act(() => {
       result.current.fetchNextPage();
@@ -1762,13 +1791,13 @@ describe("useCloudEpicTasksQuery", () => {
         "union-tail",
       ]);
     });
-    // `unavailable` and `partial` come from the first page, `truncated` and
+    // `unavailable` and `present` come from the first page, `partial` and
     // `loaded-union` from the tail. `tasks` above is the union of both, so the
     // statement describing it has to carry all four.
     expect(result.current.completeness).toEqual({
       cloudPage: "unavailable",
       facets: "partial",
-      localRows: "truncated",
+      localRows: "present",
       sort: "loaded-union",
     });
   });
@@ -1787,6 +1816,10 @@ describe("useCloudEpicTasksQuery", () => {
         localRows: "present",
         sort: "loaded-union",
       },
+    };
+    mockHostClient.localHistory.current = {
+      ...emptyLocalHistory(),
+      localRows: "present",
     };
     const silentTail: ListTasksResponse = {
       tasks: [taskLight("silent-tail", "Tail with no statement")],
@@ -1819,7 +1852,10 @@ describe("useCloudEpicTasksQuery", () => {
         "silent-tail",
       ]);
     });
-    expect(result.current.completeness).toEqual(firstPage.completeness);
+    expect(result.current.completeness).toEqual({
+      ...firstPage.completeness,
+      localRows: "present",
+    });
   });
 
   describe("T18: the negotiated epic.listTasks version gates an unverified session's initial leg", () => {
@@ -1904,16 +1940,19 @@ describe("useCloudEpicTasksQuery", () => {
       },
     );
 
-    it("enables the initial leg for an unverified session once the negotiated version is 1.6", async () => {
+    it("serves an unverified session its first page from the host's contribution once the negotiated version is 1.6, sending no cloud read", async () => {
       setUnverified();
       resetNegotiatedManifests();
       recordNegotiatedHostManifest(HOST_ID, {
         "epic.listTasks": { major: 1, minor: 6 },
       });
-      mockHostClient.request.mockResolvedValue({
-        tasks: [taskLight("unverified-1-6", "Local-first serving host")],
-        hasMore: false,
-      });
+      mockHostClient.localHistory.current = {
+        ...emptyLocalHistory(),
+        localHomeRows: [
+          taskLight("unverified-1-6", "Local-first serving host"),
+        ],
+        localRows: "present",
+      };
       const queryClient = new QueryClient({
         defaultOptions: {
           queries: { retry: false },
@@ -1929,27 +1968,10 @@ describe("useCloudEpicTasksQuery", () => {
       await waitFor(() => {
         expect(taskLightIds(result.current.tasks)).toEqual(["unverified-1-6"]);
       });
-      // No probe first. There used to be a `host.status` here, dispatched to
-      // force a handshake so the admission could be decided on what it wrote -
-      // and it was removed because it decides nothing about the connection the
-      // LIST then rides: every local unary dials afresh, so probe and request
-      // are two handshakes. The floor travels on the list request itself now,
-      // and the transport answers it from the connection carrying the frame.
-      expect(
-        mockHostClient.request.mock.calls.some(
-          ([method]) => method === "host.status",
-        ),
-      ).toBe(false);
-      // The list IS the first dispatch, and it carries the floor - which is
-      // what "the admission was decided for an unverified session" looks like
-      // from here.
-      expect(mockHostClient.request.mock.calls[0]?.[0]).toBe("epic.listTasks");
-      expect(mockHostClient.floorsRequested).toEqual([
-        { method: "epic.listTasks", version: { major: 1, minor: 6 } },
-      ]);
-      expect(listTasksCalls()[0]?.[1]).toMatchObject({
-        localFirstPhase: "initial",
-      });
+      // The cloud leg is refused at dispatch without a verdict, so no
+      // `epic.listTasks` leaves and no version floor travels.
+      expect(listTasksCalls()).toHaveLength(0);
+      expect(mockHostClient.floorsRequested).toEqual([]);
       expect(result.current.initialLegRefused).toBe(false);
       unmount();
     });

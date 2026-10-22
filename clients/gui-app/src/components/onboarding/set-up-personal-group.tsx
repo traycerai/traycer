@@ -15,6 +15,7 @@ import { useProvidersListForClient } from "@/hooks/providers/use-providers-list-
 import { useOptionalHostClient, type HostRpcRegistry } from "@/lib/host";
 import { navigateToSettingsSection } from "@/lib/settings-navigation";
 import { cn } from "@/lib/utils";
+import { useRequesterHostId } from "@/hooks/host/use-requester-host-id";
 
 /**
  * The checklist's "Set up Personal" group, under the guide cards on Settings
@@ -27,7 +28,7 @@ export function SetUpPersonalGroup(props: {
 }): ReactNode {
   const client = useOptionalHostClient();
   // The host the client reaches: the window's own.
-  const hostId = client?.getActiveHostId() ?? null;
+  const hostId = useRequesterHostId(client);
   const providers = useProvidersListForClient(client, {
     enabled: client !== null,
     subscribed: true,

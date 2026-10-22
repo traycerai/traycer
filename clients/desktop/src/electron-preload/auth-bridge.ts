@@ -27,6 +27,7 @@ import type {
   TeamEnvironmentFetchResult,
   SandboxLifecycleVerb,
   SandboxListFetchResult,
+  SandboxLifecycleVerbFetchResult,
   SandboxVerbFetchResult,
   SecretRequestDecideFetchResult,
   SecretRequestDecision,
@@ -140,7 +141,7 @@ export interface AuthBridgeSurface {
     sandboxId: string,
     verb: SandboxLifecycleVerb,
     timeoutMs: number,
-  ): Promise<SandboxVerbFetchResult>;
+  ): Promise<SandboxLifecycleVerbFetchResult>;
   getSandboxAutomation(
     bearerToken: string,
     environmentId: string | null,
@@ -288,7 +289,7 @@ export function buildAuthBridge(): AuthBridgeSurface {
         sandboxId,
         verb,
         timeoutMs,
-      ) as Promise<SandboxVerbFetchResult>,
+      ) as Promise<SandboxLifecycleVerbFetchResult>,
 
     getSandboxAutomation: (bearerToken, environmentId) =>
       ipcRenderer.invoke(

@@ -106,6 +106,13 @@ have to move together or the app half-changes shell:
   live-reload launchers (Android adds `adb reverse` tunnels).
 - `ios/`, `android/` — generated Capacitor projects: keep the generated
   structure authoritative; reapply only small reviewed native deltas.
+- Quote from the selection menu — `ios/App/App/QuoteEditMenuWebView.swift`
+  (the edit menu, iOS 16+) and
+  `android/.../QuoteActionModeWebView.java` (the selection action mode,
+  installed by the app's override of `capacitor_bridge_layout_main.xml`).
+  Both raise the `traycerQuoteSelection` window event; gui-app's
+  `use-native-quote-request.ts` reads the selection and quotes it under the
+  desktop button's rules. The native side never sees the selected text.
 
 ## Commands
 

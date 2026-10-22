@@ -356,6 +356,23 @@ export const sandboxAutomationOpenResponseSchema: z.ZodType<SandboxAutomationOpe
   );
 
 /**
+ * `POST /api/sandboxes/:id/{suspend,resume,stop,start}` (`200` at rest,
+ * `202` still moving): the row where the operation left it, which need not be
+ * the verb's own state (a suspend whose purge found the guest unreachable
+ * lands `stopped`).
+ */
+export interface SandboxLifecycleVerbResponse {
+  readonly sandbox: SandboxSummary;
+}
+
+export const sandboxLifecycleVerbResponseSchema: z.ZodType<SandboxLifecycleVerbResponse> =
+  lazySchema(() =>
+    z.object({
+      sandbox: sandboxSummarySchema,
+    }),
+  );
+
+/**
  * Free-form shape bounds of one provider. The server rounds a request UP to
  * `cpuStep` / `memoryStepMb` from the minimums, then checks the memory per
  * vCPU of the ROUNDED shape against the ratio range.

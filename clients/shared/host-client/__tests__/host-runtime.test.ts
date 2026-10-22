@@ -198,6 +198,7 @@ function buildRuntime(options: {
     invalidator,
     schedulingPolicy,
     requestCoordinator: null,
+    selectedHostId: () => null,
     // No registry in this harness: these cases drive the runtime's auth and
     // directory lifecycle in isolation, and none of them resolves a client.
     connectionRegistry: null,

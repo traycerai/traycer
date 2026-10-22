@@ -19,6 +19,7 @@ import {
   providersListQueryKey,
   providersMutationKeys,
 } from "@/lib/query-keys";
+import { useRequesterHostId } from "@/hooks/host/use-requester-host-id";
 
 interface SetProfileEnabledContext {
   readonly hostId: string | null;
@@ -35,7 +36,7 @@ export function useProvidersSetProfileEnabledForClient(
   SetProfileEnabledContext
 > {
   const queryClient = useQueryClient();
-  const hostId = client?.getActiveHostId() ?? null;
+  const hostId = useRequesterHostId(client);
   return useHostMutation<
     HostRpcRegistry,
     "providers.setProfileEnabled",
@@ -97,7 +98,7 @@ export function useProviderProfileEnablementPending(
   client: HostClient<HostRpcRegistry> | null,
   providerId: string | null,
 ): (profileId: string | null) => boolean {
-  const hostId = client?.getActiveHostId() ?? null;
+  const hostId = useRequesterHostId(client);
   const pendingVariables = useMutationState({
     filters: {
       mutationKey: providersMutationKeys.setProfileEnabled(hostId, providerId),

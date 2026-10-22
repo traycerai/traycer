@@ -11,6 +11,7 @@ import {
   providerAutoJudgeWriteScope,
   providersMutationKeys,
 } from "@/lib/query-keys";
+import { useRequesterHostId } from "@/hooks/host/use-requester-host-id";
 
 // The choice lands in `provider-overrides.json` beside `terminalAgentArgs` and
 // is echoed back by `providers.list`, so that read is what needs refreshing -
@@ -54,11 +55,12 @@ export function useProvidersSetAutoJudge(
   { readonly hostId: string | null }
 > {
   const client = useHostClient();
+  const requesterHostId = useRequesterHostId(client);
   return useHostScopedMutationForClient(client, {
     method: "providers.setAutoJudge",
     mutationKey: providersMutationKeys.setAutoJudge(),
     errorMessage: "Couldn't save the Auto mode judge.",
     invalidateMethods: AUTO_JUDGE_INVALIDATIONS,
-    scope: providerAutoJudgeWriteScope(client.getActiveHostId(), harnessId),
+    scope: providerAutoJudgeWriteScope(requesterHostId, harnessId),
   });
 }

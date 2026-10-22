@@ -7,6 +7,7 @@ import {
   getEpicAgentActivity,
   useAgentActivityStore,
 } from "@/stores/agent-activity-store";
+import type { ChatAccess } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { ChatSessionStoreHandle } from "@/stores/chats/chat-session-store";
 import type {
   OpenEpicState,
@@ -22,19 +23,37 @@ const cachedByUser = new Map<
   { key: string; ids: ReadonlySet<string> }
 >();
 
+/** A live session's owner, the viewer when the host says `role: "owner"`. */
+function sessionOwnerOf(
+  access: ChatAccess | null,
+  userId: string,
+): string | null {
+  if (access === null) return null;
+  return access.role === "owner" ? userId : access.ownerUserId;
+}
+
+/**
+ * The owner an agent's evidence names, with the VIEWER standing in for every
+ * piece of evidence that says the agent is the viewer's: a chat projection's
+ * `ownedByViewer` and a live session's `role: "owner"`. A team host's
+ * environment-owned chat names the environment as its owner and is still the
+ * viewer's own. A terminal agent stays member-owned and answers by its owner.
+ */
 function knownOwnerOfAgent(
   agentId: string,
+  userId: string,
   epicState: OpenEpicState | null,
   warm: readonly ChatSessionStoreHandle[],
 ): string | null {
   const owners = new Set<string>();
-  const chatOwner = epicState?.chats.byId[agentId]?.userId;
+  const chat = epicState?.chats.byId[agentId];
+  const chatOwner = chat?.ownedByViewer === true ? userId : chat?.userId;
   const terminalOwner = epicState?.tuiAgents.byId[agentId]?.userId;
   if (chatOwner) owners.add(chatOwner);
   if (terminalOwner) owners.add(terminalOwner);
   for (const handle of warm) {
     if (handle.chatId !== agentId) continue;
-    const owner = handle.store.getState().access?.ownerUserId;
+    const owner = sessionOwnerOf(handle.store.getState().access, userId);
     if (owner) owners.add(owner);
   }
   // A chat id may be shared by two owners. Ambiguous evidence must not
@@ -56,8 +75,9 @@ function ownedWarmTiers(
     // The shell tier can arrive before chat access hydrates. It still
     // suppresses this id's unclassified host turn; it never proves ownership.
     if (activity === "background") background.add(handle.chatId);
-    if (state.access?.ownerUserId !== userId) continue;
-    if (knownOwnerOfAgent(handle.chatId, epicState, warm) !== userId) continue;
+    if (state.access?.role !== "owner") continue;
+    if (knownOwnerOfAgent(handle.chatId, userId, epicState, warm) !== userId)
+      continue;
     if (activity === "turn") return { turn: true, background };
   }
   return { turn: false, background };
@@ -78,7 +98,8 @@ function hasOwnedTurn(
   for (const agentId of getEpicAgentActivity(epicId).turn) {
     if (liveIds !== null && !liveIds.has(agentId)) continue;
     if (warmTiers.background.has(agentId)) continue;
-    if (knownOwnerOfAgent(agentId, epicState, warm) === userId) return true;
+    if (knownOwnerOfAgent(agentId, userId, epicState, warm) === userId)
+      return true;
   }
   return false;
 }
@@ -152,6 +173,7 @@ function subscribeOwnTurnEpicIds(
         handle.store.subscribe((state, previous) => {
           if (
             state.access?.ownerUserId !== previous.access?.ownerUserId ||
+            state.access?.role !== previous.access?.role ||
             chatSessionActivity(state) !== chatSessionActivity(previous)
           ) {
             emitIfChanged();

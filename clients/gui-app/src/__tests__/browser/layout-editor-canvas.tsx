@@ -1364,6 +1364,7 @@ function openEpicSurfaceSession() {
         // Six minutes ago, so a running agent's row reads "6m", not an epoch.
         updatedAt: EPIC_SURFACE_AGENT_UPDATED_AT,
         userId: null,
+        ownedByViewer: true,
         hostId: "test-local-host",
         isTitleEditedByUser: false,
         docResident: false,

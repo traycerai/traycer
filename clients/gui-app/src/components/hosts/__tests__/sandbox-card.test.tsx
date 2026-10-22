@@ -721,10 +721,25 @@ describe("<SandboxCard /> verbs", () => {
     expect(mocks.toastInfo).not.toHaveBeenCalled();
   });
 
+  it("a Suspend the server answers with a stopped row toasts Stopped, not Suspended", async () => {
+    mocks.binding?.auth.runSandboxVerb.mockResolvedValue({
+      kind: "ok",
+      settled: true,
+      state: "stopped",
+    });
+    renderCard(sandboxOf("awake", false, {}));
+    suspend();
+    await waitFor(() => {
+      expect(mocks.toastSuccess).toHaveBeenCalledWith(`Stopped ${NAME}`);
+    });
+    expect(mocks.toastSuccess).not.toHaveBeenCalledWith(`Suspended ${NAME}`);
+  });
+
   it("toasts info, not success, when the server's deadline passed with the row still moving (202)", async () => {
     mocks.binding?.auth.runSandboxVerb.mockResolvedValue({
       kind: "ok",
       settled: false,
+      state: "suspending",
     });
     renderCard(sandboxOf("awake", false, {}));
     suspend();
@@ -758,7 +773,8 @@ describe("<SandboxCard /> verbs", () => {
     mocks.binding?.auth.runSandboxVerb.mockImplementation(
       () =>
         new Promise((resolve) => {
-          gate.finish = () => resolve({ kind: "ok", settled: true });
+          gate.finish = () =>
+            resolve({ kind: "ok", settled: true, state: "suspended" });
         }),
     );
     renderCard(sandboxOf("awake", false, {}));

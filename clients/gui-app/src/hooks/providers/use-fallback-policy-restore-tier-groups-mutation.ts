@@ -12,6 +12,7 @@ import {
   hostQueryKeys,
   providersMutationKeys,
 } from "@/lib/query-keys";
+import { useRequesterHostId } from "@/hooks/host/use-requester-host-id";
 
 interface FallbackRestoreContext {
   readonly hostId: string | null;
@@ -41,6 +42,7 @@ export function useFallbackPolicyRestoreTierGroupsMutation(): UseMutationResult<
 > {
   const client = useHostClient();
   const queryClient = useQueryClient();
+  const requesterHostId = useRequesterHostId(client);
   return useHostMutation<
     HostRpcRegistry,
     "providers.fallbackPolicy.restoreTierGroups",
@@ -55,7 +57,7 @@ export function useFallbackPolicyRestoreTierGroupsMutation(): UseMutationResult<
       // `fallbackPolicyWriteScope`. This one writes the get-cache in place
       // like the save does, so an unordered restore and save simply overwrite
       // each other's `policy` with whichever answer arrived second.
-      scope: fallbackPolicyWriteScope(client.getActiveHostId()),
+      scope: fallbackPolicyWriteScope(requesterHostId),
       onMutate: () => ({ hostId: client.getActiveHostId() ?? null }),
       onSuccess: (data, _variables, ctx) => {
         if (ctx.hostId === null) return;

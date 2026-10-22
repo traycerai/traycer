@@ -1,4 +1,6 @@
 import { QuoteSelectionPopover } from "@/components/chat/quote/quote-selection-popover";
+import { quoteSnapshotIntoDraft } from "@/components/chat/quote/quote-snapshot-into-draft";
+import { useNativeQuoteRequest } from "@/components/chat/quote/use-native-quote-request";
 import { useQuoteSelection } from "@/components/chat/quote/use-quote-selection";
 import { useChatFindController } from "@/components/chat/use-chat-find-controller";
 import { type ChatMessageActions } from "@/components/chat/chat-message";
@@ -2998,9 +3000,22 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   // (L-14). It is a pure view over rows the transcript already has, so
   // drawing one costs nothing the chat was not already paying.
   const minimapShown = useRegionShown("minimap") || minimapGhost;
+  const quoteEnabled = quoteReplyEnabled && visible && !systemOverlayActive;
   const quoteSelection = useQuoteSelection({
     containerRef: transcriptContainerRef,
-    enabled: quoteReplyEnabled && visible && !systemOverlayActive,
+    enabled: quoteEnabled,
+  });
+  // The phone's path to the same draft: a native shell's edit-menu "Quote"
+  // item, where no mouseup ever arms the popover. Same gate, same draft, and
+  // the same return from an open-as-chat view the popover's quote makes.
+  useNativeQuoteRequest({
+    containerRef: transcriptContainerRef,
+    enabled: quoteEnabled,
+    onQuote: (snapshot) => {
+      quoteSnapshotIntoDraft(taskId, snapshot);
+      subagentDrillIn.close();
+      quoteSelection.dismiss();
+    },
   });
 
   // Ticket 5: registry-backed, keyed by tile instance id, so expanded

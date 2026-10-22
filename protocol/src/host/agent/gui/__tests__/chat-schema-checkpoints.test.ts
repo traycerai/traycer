@@ -323,28 +323,30 @@ const SERVER_FRAME_DIGESTS = {
   // The delivery line (main's 1.29): a tool block may carry
   // `agentMessageDelivery`; operation blocks and events keep the four markdown
   // kinds, tool calls carry no `artifact` stamp. Captured from the merged tree
-  // when the artifact lines re-minted above it.
+  // when the artifact lines re-minted above it. 1.29–1.32 re-minted when the
+  // stamp gained `targetHostOffline` (traycer#2421): no stable release carries
+  // 1.29 or above, and every line through 1.28 reproduces its value.
   29: [
-    "daf34109602406fd0f52eda2937016e0083215a45f7dce98c712f760c6dcc700",
-    "a3bdf0cafacf2e0b7e6a16546da69af1d43c6e20deed479306cf1848aa9f6a3d",
+    "f90aab817c8d8a149345fb2b7b1eda3a9485f11e8798c7c81ba45a9d6901ae20",
+    "45b4372bf99d86244db391d4425aac1391a65b9d3044d602608f7daff2879b68",
   ],
   // The html/canvas/file artifact-kind line, with tool calls carrying no
   // `artifact` stamp. Re-minted above main's 1.29.
   30: [
-    "e8490a6ba909e849706660afd325b80c354d0e51c7dd9596225a2a04a3e4dddb",
-    "4f25b66a9c1663de211ddf8ff1c42741ee3cac2e3886f611b2b67f0e9b969f65",
+    "526fe4d8653f4bcd66f191fe665b0507f3a5e3a6e32b549c1ce47c5fd60a3c7e",
+    "564f4a1af8826888d0e5731dc1fba4fef1b12ab494b2ee8ae9eda942dddd0e9c",
   ],
   // The artifact-stamp line, with no canvas annotations. Re-minted above
   // main's 1.29.
   31: [
-    "690edf7e574cb38eabda1728abe4dbcac42012c704c37200222713bd1c141749",
-    "a7e354e6b628f8cf3f8a056f47d300ebd1d7979b7b06b5d2920f034834478876",
+    "d96aba9e1bd5bb7dfe582631b325a37ff445a3419e143c21909d8f213b772dc3",
+    "51193ee43a19ba88802239366b1a561cb234d3c5ec6889718e0e61c0411d0503",
   ],
   // The canvas-annotation line, before 1.33 widened checkpoint artifact tags.
   // Re-minted above main's 1.29.
   32: [
-    "68463b44555e3eabf9c8919c4b1cfdf5a90f1a247096332bcfb1bc812e13c05e",
-    "89d1db7b9327db3798f374e81ec6bda81124baf32d1fa48d4dfd60a406d2f0f1",
+    "d0ed585c61c7d62f27d03075a5f1ac280f7a32447c49bf107b8a8b22975b2569",
+    "31be09830683722e13037f4783d4a57d65a14474d76b076959228dae57e553fd",
   ],
 } as const;
 

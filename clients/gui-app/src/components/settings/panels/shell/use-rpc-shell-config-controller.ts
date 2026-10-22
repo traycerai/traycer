@@ -20,6 +20,7 @@ import type {
   ShellConfigController,
   ShellProbeSource,
 } from "@/components/settings/panels/shell/shell-config-controller";
+import { useRequesterHostId } from "@/hooks/host/use-requester-host-id";
 
 /**
  * Detected shells barely change; the picker always accepts a typed path. The
@@ -56,7 +57,7 @@ export function useRpcShellConfigController(props: {
   // null-gated, so a shell with no runtime renders the page inert rather than
   // crashing it.
   const client = useHostBinding()?.hostClient ?? null;
-  const hostId = client?.getActiveHostId() ?? null;
+  const hostId = useRequesterHostId(client);
 
   const configQuery = useHostQuery<HostRpcRegistry, "config.shell.get">({
     cacheKeyIdentity: undefined,

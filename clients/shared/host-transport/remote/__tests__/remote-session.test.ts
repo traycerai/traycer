@@ -2659,10 +2659,10 @@ describe("RemoteStreamClient dynamic subscribe params", () => {
         expect(streamClient.getMethodSupport("cursor.subscribe")).toBe(
           "supported",
         );
-        // `supportedMajors` rides the manifest entry the host published, so
-        // the version this republishes carries it too.
+        // A single-major entry carries no `supportedMajors` (absence means
+        // the entry's own major), so the republished version has none either.
         expect(streamClient.getMethodSchemaVersion("cursor.subscribe")).toEqual(
-          { major: 1, minor: 0, supportedMajors: [1] },
+          { major: 1, minor: 0 },
         );
 
         relay.dropCurrentConnection();
@@ -2718,7 +2718,7 @@ describe("RemoteStreamClient dynamic subscribe params", () => {
         session.start();
         await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
         const version = streamClient.getMethodSchemaVersion("cursor.subscribe");
-        expect(version).toEqual({ major: 1, minor: 0, supportedMajors: [1] });
+        expect(version).toEqual({ major: 1, minor: 0 });
         expect(streamClient.getMethodSchemaVersion("cursor.subscribe")).toBe(
           version,
         );
@@ -2765,7 +2765,7 @@ describe("RemoteStreamClient dynamic subscribe params", () => {
           () =>
             expect(
               streamClient.getMethodSchemaVersion("cursor.subscribe"),
-            ).toEqual({ major: 1, minor: 0, supportedMajors: [1] }),
+            ).toEqual({ major: 1, minor: 0 }),
           WAIT,
         );
         const reacked = streamClient.getMethodSchemaVersion("cursor.subscribe");
@@ -2975,7 +2975,7 @@ describe("RemoteStreamClient dynamic subscribe params", () => {
         );
         expect(
           getNegotiatedStreamMethodVersion("host-1", "cursor.subscribe"),
-        ).toEqual({ major: 1, minor: 0, supportedMajors: [1] });
+        ).toEqual({ major: 1, minor: 0 });
       } finally {
         session.close();
         resetNegotiatedStreamVersions();

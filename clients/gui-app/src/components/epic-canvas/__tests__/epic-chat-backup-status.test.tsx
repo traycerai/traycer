@@ -410,6 +410,7 @@ function chatProjection(id: string, updatedAt: number): ChatProjection {
     createdAt: updatedAt,
     updatedAt,
     userId: null,
+    ownedByViewer: true,
     hostId: "host-session",
     isTitleEditedByUser: false,
     // Neutral scaffolding: this suite exercises backup-status derivation,

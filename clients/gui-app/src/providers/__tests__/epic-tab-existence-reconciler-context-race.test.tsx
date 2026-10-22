@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, waitFor } from "@testing-library/react";
+import { act, cleanup, render, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ListTasksResponse } from "@traycer/protocol/host/epic/unary-schemas";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
@@ -30,26 +30,35 @@ const directoryEntry: HostDirectoryEntry = {
 
 const fixture = vi.hoisted(() => {
   const requestContext = {};
+  // The user the spine's credential lease is bound to; `null` before it binds.
+  const lease: { userId: string | null } = { userId: "user-b" };
+  const changeListeners = new Set<() => void>();
   const runtimeClient = {
     getActiveHostId: () => HOST_ID,
     getRequestContext: () => requestContext,
-    getRequestContextUserId: () => fixture.requestContextUserId,
-    onChange: () => () => undefined,
+    getRequestContextUserId: () => lease.userId,
+    onChange: (listener: () => void) => {
+      changeListeners.add(listener);
+      return () => changeListeners.delete(listener);
+    },
     requestWithSignal: vi.fn(
       (
         _method: string,
         _params: object,
         _signal: AbortSignal | undefined,
       ): Promise<ListTasksResponse> => {
-        fixture.dispatchedAs.push(fixture.requestContextUserId);
+        fixture.dispatchedAs.push(lease.userId);
         return Promise.resolve({ tasks: [], hasMore: false });
       },
     ),
     createRequester: () => runtimeClient,
   };
   return {
-    requestContextUserId: "user-b",
-    dispatchedAs: new Array<string>(),
+    lease,
+    dispatchedAs: new Array<string | null>(),
+    emitChange: () => {
+      for (const listener of [...changeListeners]) listener();
+    },
     requestWithSignal: runtimeClient.requestWithSignal,
     runtimeClient,
   };
@@ -94,7 +103,7 @@ vi.mock("@/providers/windows-bridge-context", () => ({
 
 describe("EpicTabExistenceReconciler request-context race", () => {
   beforeEach(() => {
-    fixture.requestContextUserId = USER_B;
+    fixture.lease.userId = USER_B;
     fixture.dispatchedAs.length = 0;
     fixture.requestWithSignal.mockClear();
     useTabsStore.setState(useTabsStore.getInitialState(), true);
@@ -155,6 +164,35 @@ describe("EpicTabExistenceReconciler request-context race", () => {
       throw new Error("Expected the local-home query to remain cached.");
     }
     expect(localHomeQuery.state.status).toBe("error");
+    queryClient.clear();
+  });
+
+  // The run's user is signed in, but the spine client's lease is not bound
+  // yet, so no pinned requester can be built. The compiled reconciler built
+  // its probes behind a memo on the directory alone, and kept "no probes" once
+  // the lease bound: the run never asked the hosts for their local copies.
+  it("probes the hosts once the spine's credential lease is bound", async () => {
+    fixture.lease.userId = null;
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+        mutations: { retry: false },
+      },
+    });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <EpicTabExistenceReconciler />
+      </QueryClientProvider>,
+    );
+
+    act(() => {
+      fixture.lease.userId = USER_A;
+      fixture.emitChange();
+    });
+
+    await waitFor(() => {
+      expect(fixture.dispatchedAs).toEqual([USER_A]);
+    });
     queryClient.clear();
   });
 });

@@ -3,6 +3,7 @@ import {
   queryOptions,
   useQuery,
   useQueryClient,
+  type QueryObserverRefetchErrorResult,
   type UseQueryResult,
 } from "@tanstack/react-query";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
@@ -29,6 +30,8 @@ import type { ListCloudChatsResponse } from "@traycer/protocol/host/epic/cloud-c
 import type { CloudChatIdentity } from "@traycer/protocol/host/epic/cloud-chat";
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
 import { useHostQuery } from "@/hooks/host/use-host-query";
+import { useEnvironmentArmChats } from "@/hooks/environment/use-environment-arms";
+import { uniteTaskChats } from "@/lib/chats/compose-task-chat-list";
 import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
 import { cloudChatListCacheKeyIdentity } from "@/lib/chats/cloud-chat-list-cache";
 import { hostQueryKeys } from "@/lib/query-keys/host-query-keys";
@@ -43,6 +46,7 @@ import {
   authorizesCloudCapability,
   useAuthStore,
 } from "@/stores/auth/auth-store";
+import { useRequesterHostId } from "@/hooks/host/use-requester-host-id";
 
 /**
  * The cloud-chat read hooks.
@@ -114,7 +118,9 @@ export interface UseCloudChatListArgs {
 
 /**
  * A task's cloud chats: every `task`-visible chat plus the viewer's OWN private
- * ones, from every host they have ever used.
+ * ones, from every host they have ever used - and, for a member of a team
+ * environment the task is attached to, the chats that environment owns
+ * (`TASK_CHAT_LIST_COMPOSED_VIEW`), united by identity triple.
  *
  * Not polled after success. A published head changes only when its owning host
  * publishes again and this reader has no signal for that, so a success cadence
@@ -135,14 +141,16 @@ export function useCloudChatList(
   const cloudAuthorized = useCloudChatHasCloudAuthorization();
   const params = useMemo(() => ({ taskId: args.taskId }), [args.taskId]);
   const deletions = useCloudChatDeletions();
+  const armChats = useEnvironmentArmChats(args.enabled ? args.taskId : "");
   const select = useCallback(
     (data: ListCloudChatsResponse): ListCloudChatsResponse => {
-      const chats = filterDeletedCloudChats(data.chats, deletions);
+      const united = uniteTaskChats(data.chats, armChats);
+      const chats = filterDeletedCloudChats(united, deletions);
       return chats === data.chats ? data : { ...data, chats: [...chats] };
     },
-    [deletions],
+    [armChats, deletions],
   );
-  return useHostQuery<HostRpcRegistry, "epic.listCloudChats">({
+  const viewerList = useHostQuery<HostRpcRegistry, "epic.listCloudChats">({
     // The one shared spelling of this key's viewer component -
     // `cloudChatListQueryKey` (the imperative reader's builder) appends the
     // same call to the same base, which is what keeps the two sides of that
@@ -171,6 +179,33 @@ export function useCloudChatList(
       retry: (_failureCount, error) => isTransientHostRpcFailure(error),
     },
   });
+  // The arm is its own source: when the viewer's list failed (this host
+  // cannot serve it, or it gave up), the team environments' chats still show.
+  // The result stays an error, so nothing that waits on the viewer's own
+  // answer - the record sweep above all - reads the arm rows as that answer.
+  const armOnly = useMemo(
+    () => filterDeletedCloudChats(armChats, deletions),
+    [armChats, deletions],
+  );
+  return useMemo(() => {
+    if (
+      !viewerList.isError ||
+      viewerList.data !== undefined ||
+      armOnly.length === 0
+    ) {
+      return viewerList;
+    }
+    const withArm: QueryObserverRefetchErrorResult<
+      ListCloudChatsResponse,
+      HostRpcError
+    > = {
+      ...viewerList,
+      data: { chats: [...armOnly] },
+      isLoadingError: false,
+      isRefetchError: true,
+    };
+    return withArm;
+  }, [viewerList, armOnly]);
 }
 
 /**
@@ -346,7 +381,7 @@ export function useCloudChatRead(
   const viewerUserId = useCloudChatViewerId();
   const cloudAuthorized = useCloudChatHasCloudAuthorization();
   const { client, identity } = args;
-  const hostId = client?.getActiveHostId() ?? null;
+  const hostId = useRequesterHostId(client);
 
   // A named function rather than an inline arrow, matching `useHostQuery`'s own
   // construction: the whole point of this hook is that the read is a PIPELINE
@@ -625,7 +660,7 @@ export function useCloudChatPayload(args: {
   const viewerUserId = useCloudChatViewerId();
   const cloudAuthorized = useCloudChatHasCloudAuthorization();
   const { client, identity, ref } = args;
-  const hostId = client?.getActiveHostId() ?? null;
+  const hostId = useRequesterHostId(client);
 
   const run = async (): Promise<CloudChatPayloadBytes> => {
     if (client === null || identity === null || ref === null) {

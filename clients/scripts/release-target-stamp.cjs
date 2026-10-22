@@ -462,6 +462,17 @@ function readClientTargetStamp(inputPath, expectedTarget, component) {
     ["traycerServerBaseUrl", "authnApiUrl", "cloudUiBaseUrl", "relayAttachUrl"],
     "client target stamp.cloud",
   );
+  // Optional: a target with no server pool omits it. When present it is baked
+  // as the pool's session socket, which carries the user bearer under TLS
+  // alone, so it must be `wss:`.
+  if ("poolUrl" in stamp.cloud) {
+    requireString(stamp.cloud.poolUrl, "client target stamp.cloud.poolUrl");
+    if (!stamp.cloud.poolUrl.startsWith("wss://")) {
+      throw new ClientTargetStampError(
+        `client target stamp.cloud.poolUrl ${JSON.stringify(stamp.cloud.poolUrl)} is not a wss: URL`,
+      );
+    }
+  }
   if (component === "desktop") {
     // `releaseChannel` is the one stamped value the updater compares against a
     // LITERAL rather than merely carrying: `effectiveChannelMode()` returns

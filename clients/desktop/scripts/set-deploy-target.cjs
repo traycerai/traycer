@@ -132,6 +132,13 @@ runConfigTargetCli({
       staging: targetInput === null ? "" : targetInput.cloud.relayAttachUrl,
       production: production.cloud.relayAttachUrl,
     },
+    // Empty for a target with no pool (production, until its address is
+    // published), which synthesizes no pool entry.
+    poolBaseUrl: {
+      dev: "",
+      staging: targetInput === null ? "" : (targetInput.cloud.poolUrl ?? ""),
+      production: "",
+    },
     releaseRepo: {
       dev: "traycerai/traycer",
       staging: releaseRepo ?? "",

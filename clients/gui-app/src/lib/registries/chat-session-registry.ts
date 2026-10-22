@@ -14,11 +14,12 @@ import { useAuthService, useHostClient } from "@/lib/host";
 import { hostQueryKeys } from "@/lib/query-keys";
 import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
 import { useHostLease } from "@/hooks/host/use-host-lease";
+import { hostStreamTransportKeyFor } from "@/hooks/host/use-host-stream-client-for";
+import { useRequestContextUserId } from "@/hooks/host/use-request-context-user-id";
 import {
-  authenticatedHostStreamKey,
-  authenticatedOwnerIdentityKey,
-} from "@/hooks/host/use-host-stream-client-for";
-import { isLocalHostBootingEntry } from "@/lib/host/transport-key";
+  isLocalHostBootingEntry,
+  remoteAwareOwnerIdentityKey,
+} from "@/lib/host/transport-key";
 import { useDurableStreamTransportFactory } from "@/lib/host/use-durable-stream-transport";
 import { openOwnedDurableStreamClient } from "@/lib/host/owned-durable-stream-client";
 import { useOpenEpicId } from "@/lib/epic-selectors";
@@ -53,6 +54,10 @@ import { setEpicChatWorkProbe } from "@/stores/epics/open-epic/session-registry"
 import { subscribeAgentActivity } from "@/stores/agent-activity-store";
 import { getRetentionProfile } from "@/stores/replica-memory/retention-profile";
 import { getOpenEpicRegistry } from "@/lib/registries/epic-session-registry";
+import {
+  useChatServingHostId,
+  useChatServingSettled,
+} from "@/lib/chats/chat-serving-witness";
 import { createManagedDataByteBudget } from "@/stores/replica-memory/managed-data-byte-budget";
 import {
   readProcessMemoryRuntime,
@@ -316,8 +321,18 @@ export function useChatSessionHandleForContainer(
   hostId: string,
   enabled: boolean,
 ): ChatSessionStoreHandle | null {
-  const hostEntry = useHostDirectoryEntry(hostId);
-  const lease = useHostLease(hostId);
+  // The peer that serves this chat's stream: its own host, or - for a team
+  // sandbox's chat at rest - the server pool (`useChatServingHostId`). The
+  // registry still files the session under the chat's own host, so every
+  // reader finds it wherever it is served from; the transport and the
+  // session's scope follow the serving peer, so a change of peer is a fresh
+  // subscribe on the other one.
+  const servingHostId = useChatServingHostId({ hostId, epicId, chatId });
+  // A team sandbox's chat waits for the server's first serving state, so a
+  // live chat is never first subscribed on the pool and then moved.
+  const servingSettled = useChatServingSettled({ hostId, epicId, chatId });
+  const hostEntry = useHostDirectoryEntry(servingHostId);
+  const lease = useHostLease(servingHostId);
   // Chat is a DURABLE per-tab stream: its `WsStreamClient` is OWNED by the
   // session store for the session's warm lifetime, NOT by this tile, so closing
   // the tab (tile unmount) no longer `.close()`s the socket and strands the warm
@@ -330,17 +345,18 @@ export function useChatSessionHandleForContainer(
   const userId = useAuthStore((state) => state.profile?.userId ?? null);
   const openTransport = useDurableStreamTransportFactory();
   const queryClient = useQueryClient();
+  const requestContextUserId = useRequestContextUserId(globalClient);
 
   // Dialability, for the gate below and never for the scope: null with no
   // request context, no websocket URL, or a CONFIRMED refusal. The test seam
-  // is a clearly separate top-level branch; the production value is derived by
-  // the shared `authenticatedHostStreamKey` ONLY when the factory is not
-  // overridden, so tests drive the stream through the override and never touch
-  // the real request context.
+  // is a clearly separate top-level branch; the production value is derived
+  // from the request context's user ONLY when the factory is not overridden,
+  // so tests drive the stream through the override and never touch the real
+  // request context.
   const transportKey =
     streamClientFactoryOverride !== null
       ? "test-stream-client-factory"
-      : authenticatedHostStreamKey(globalClient, hostEntry);
+      : hostStreamTransportKeyFor(hostEntry, requestContextUserId);
   // Owner identity (R-1), which with the host's kind is the whole of the
   // session's scope: `hostId + userId` for a local host, plus the public key
   // and relay attach URL for a remote one, so a remote public-key rotation
@@ -348,7 +364,7 @@ export function useChatSessionHandleForContainer(
   const ownerIdentityKey =
     streamClientFactoryOverride !== null
       ? "test-stream-client-factory"
-      : authenticatedOwnerIdentityKey(globalClient, hostEntry);
+      : remoteAwareOwnerIdentityKey(hostEntry, requestContextUserId);
   const hostKind = hostEntry?.kind ?? null;
   // Whether this chat may hold its session. A dialable host may. So may a host
   // that is coming back, which is what keeps the store and its transcript
@@ -359,6 +375,7 @@ export function useChatSessionHandleForContainer(
   // releases: identity loss, a missing entry, and a confirmed refusal with no
   // restart episode vouching for the host.
   const sessionAllowed =
+    servingSettled &&
     ownerIdentityKey !== null &&
     (transportKey !== null ||
       isLocalHostBootingEntry(hostEntry) ||
@@ -401,7 +418,7 @@ export function useChatSessionHandleForContainer(
       epicId,
       chatId,
       userId,
-      hostId,
+      hostId: servingHostId,
       hostKind,
       ownerIdentityKey,
     });
@@ -438,7 +455,7 @@ export function useChatSessionHandleForContainer(
       // the half-built transport so its socket and wake listeners never leak.
       const result = openOwnedDurableStreamClient(
         openTransport,
-        hostId,
+        servingHostId,
         (ws) => {
           boundStreamClient = ws;
           return new ChatStreamClient({
@@ -551,6 +568,7 @@ export function useChatSessionHandleForContainer(
   }, [
     chatId,
     hostId,
+    servingHostId,
     hostKind,
     epicId,
     sessionAllowed,

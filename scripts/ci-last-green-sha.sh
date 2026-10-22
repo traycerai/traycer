@@ -3,7 +3,7 @@
 # What should a push run compare itself against? Not the push before it: the
 # last push this workflow PASSED on.
 #
-# A team pull request runs no check before it merges (AGENTS.md, "When CI
+# A team pull request is not tested before it merges (AGENTS.md, "When CI
 # runs"), and a push run tests only what its range changed: `nx affected` in
 # `pre-commit.yml` and the `changes` job of `browser-regressions.yml` both
 # narrow to it. With the previous push as the base, a red merge is forgotten by

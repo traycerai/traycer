@@ -7,6 +7,7 @@ import {
   sandboxAutomationResponseSchema,
   sandboxCatalogueSchema,
   sandboxCreateAcceptedSchema,
+  sandboxLifecycleVerbResponseSchema,
   sandboxListResponseSchema,
   sandboxRefusalBodySchema,
   userSandboxCostSchema,
@@ -125,13 +126,27 @@ export type SandboxAutomationOpenFetchResult =
   | SandboxControlFailure;
 
 /**
- * `destroy` and the lifecycle verbs answer with a body the client does not
- * read: the sandbox list is what every surface renders the row from.
- * `settled` is the status the server chose: `true` for `200` (the row is at
- * rest), `false` for `202` (still moving at the server's deadline).
+ * `destroy` answers with a body the client does not read: the sandbox list is
+ * what every surface renders the row from. `settled` is the status the server
+ * chose: `true` for `200` (the row is at rest), `false` for `202` (still
+ * moving at the server's deadline).
  */
 export type SandboxVerbFetchResult =
   | { readonly kind: "ok"; readonly settled: boolean }
+  | SandboxControlFailure;
+
+/**
+ * A lifecycle verb's answer: {@link SandboxVerbFetchResult}, plus the state
+ * the server's row reached, which need not be the verb's own (a suspend whose
+ * purge found the guest unreachable lands `stopped`). `state` is `null` when
+ * the body did not parse: the verb still succeeded.
+ */
+export type SandboxLifecycleVerbFetchResult =
+  | {
+      readonly kind: "ok";
+      readonly settled: boolean;
+      readonly state: HostSandboxState | null;
+    }
   | SandboxControlFailure;
 
 /** The two lifecycle verbs a client calls to wake a sandbox before dialing. */
@@ -488,7 +503,7 @@ export async function runSandboxVerbViaHttp(
   sandboxId: string,
   verb: SandboxLifecycleVerb,
   timeoutMs: number,
-): Promise<SandboxVerbFetchResult> {
+): Promise<SandboxLifecycleVerbFetchResult> {
   if (!SANDBOX_ID_PATTERN.test(sandboxId)) return INVALID_SANDBOX_ID;
   const raw = await call(
     sandboxesUrl(serverBaseUrl, `/${sandboxId}/${verb}`),
@@ -504,7 +519,12 @@ export async function runSandboxVerbViaHttp(
   );
   if (raw.kind === "network-error") return raw;
   if (!isSuccess(raw.status)) return failureOf(raw.status, raw.body);
-  return { kind: "ok", settled: raw.status !== 202 };
+  const parsed = sandboxLifecycleVerbResponseSchema.safeParse(raw.body);
+  return {
+    kind: "ok",
+    settled: raw.status !== 202,
+    state: parsed.success ? parsed.data.sandbox.state : null,
+  };
 }
 
 // -----------------------------------------------------------------------------

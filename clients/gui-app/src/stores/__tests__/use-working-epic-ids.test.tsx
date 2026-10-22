@@ -77,6 +77,7 @@ function chatProjection(id: string, userId: string): ChatProjection {
     createdAt: 1,
     updatedAt: 1,
     userId,
+    ownedByViewer: userId === "viewer",
     hostId: "host-a",
     isTitleEditedByUser: false,
     docResident: false,

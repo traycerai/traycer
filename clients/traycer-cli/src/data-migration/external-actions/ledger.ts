@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { lstat, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { rename, rm, writeFile } from "node:fs/promises";
 import { posix, win32 } from "node:path";
 import {
   sha256Digest,
@@ -10,7 +10,7 @@ import {
   traycerDataRoot,
   type DataRootPlatform,
 } from "@traycer/protocol/config/data-root";
-import { isErrnoException } from "../../runner/errors";
+import { readRegularFileBytesNoFollow } from "@traycer/protocol/config/host-update-attempt-fs";
 
 /**
  * Shared vocabulary of the data-root migration's external-action adapters
@@ -181,20 +181,15 @@ export function layoutUnderRoot(
 
 /** A regular file's bytes, `null` when absent; anything else is refused. */
 export async function readFileImage(path: string): Promise<Buffer | null> {
-  let isFile: boolean;
-  try {
-    isFile = (await lstat(path)).isFile();
-  } catch (cause) {
-    if (isErrnoException(cause) && cause.code === "ENOENT") return null;
-    throw cause;
-  }
-  if (!isFile) {
+  const read = await readRegularFileBytesNoFollow(path);
+  if (read.kind === "absent") return null;
+  if (read.kind === "not-regular") {
     throw new ExternalActionConflictError(
       path,
       "the object is not a regular file",
     );
   }
-  return readFile(path);
+  return read.bytes;
 }
 
 export function fileImageFingerprint(bytes: Buffer | null): ObjectFingerprint {

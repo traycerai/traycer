@@ -11,6 +11,7 @@ import {
   hostQueryKeys,
   providersMutationKeys,
 } from "@/lib/query-keys";
+import { useRequesterHostId } from "@/hooks/host/use-requester-host-id";
 
 interface FallbackPolicyResetContext {
   readonly hostId: string | null;
@@ -66,6 +67,7 @@ export function useFallbackPolicyResetMutation(): UseMutationResult<
 > {
   const client = useHostClient();
   const queryClient = useQueryClient();
+  const requesterHostId = useRequesterHostId(client);
   return useHostMutation<
     HostRpcRegistry,
     "providers.fallbackPolicy.reset",
@@ -81,7 +83,7 @@ export function useFallbackPolicyResetMutation(): UseMutationResult<
       // against each other at all. It matters most on this one: a reset
       // INVALIDATES where the save writes in place, so a save landing after a
       // reset leaves the panel showing a policy the row no longer holds.
-      scope: fallbackPolicyWriteScope(client.getActiveHostId()),
+      scope: fallbackPolicyWriteScope(requesterHostId),
       // Captured before dispatch, as on the save: the host can change under a
       // slow call, and writing the result into the new host's cache slot would
       // show one machine's policy under another's name.

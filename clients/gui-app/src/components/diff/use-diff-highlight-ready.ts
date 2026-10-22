@@ -76,9 +76,11 @@ function useInitialHighlightReady(props: {
   readonly hasWork: boolean;
   readonly onScreen: boolean;
   readonly prepare: (() => Promise<unknown>) | null;
+  readonly theme: DiffsThemeNames;
   readonly poolAvailability: DiffWorkerPoolAvailability;
 }): boolean {
-  const { enabled, hasWork, onScreen, prepare, poolAvailability } = props;
+  const { enabled, hasWork, onScreen, prepare, theme, poolAvailability } =
+    props;
   // A gate that mounts with nothing to wait for is released for the surface's
   // life. `WorkspaceFileRenderer` mounted mid-edit and `DiffContentPrimitive`
   // mounted with an edit session both start disabled and enable later; without
@@ -93,17 +95,21 @@ function useInitialHighlightReady(props: {
   // the same content again would only respawn released isolates to rebuild a
   // cache that body does not read.
   const settledPrepare = useRef<(() => Promise<unknown>) | null>(null);
+  const settledTheme = useRef<DiffsThemeNames | null>(null);
 
   useEffect(() => {
     // Not while off screen: a prime is a task, and a task is what brings
     // released isolates back. A surface first mounted hidden keeps its loader
     // until it is shown; one already released keeps its body regardless.
     if (!enabled || !hasWork || !onScreen || prepare === null) return;
-    if (settledPrepare.current === prepare) return;
+    if (settledPrepare.current === prepare && settledTheme.current === theme) {
+      return;
+    }
     let cancelled = false;
     const settle = () => {
       if (cancelled) return;
       settledPrepare.current = prepare;
+      settledTheme.current = theme;
       setReleased(true);
     };
     // Diffs can fall back to its main-thread renderer on a rejection. A
@@ -112,7 +118,7 @@ function useInitialHighlightReady(props: {
     return () => {
       cancelled = true;
     };
-  }, [enabled, hasWork, onScreen, prepare]);
+  }, [enabled, hasWork, onScreen, prepare, theme]);
 
   if (!hasWork) return true;
   // No pool in context to prewarm with. "unavailable" means no provider at
@@ -136,16 +142,14 @@ export function useDiffsFileHighlightReady(props: {
   const poolAvailability = useDiffWorkerPoolAvailability(true, onScreen);
   const { file, theme } = props;
   const prepareHighlight = useCallback(async (): Promise<void> => {
-    // The provider owns render options; theme makes this callback a distinct
-    // cache-prewarm generation when that provider changes its namespace.
-    void theme;
     await pool?.primeFileHighlightCache(file);
-  }, [file, pool, theme]);
+  }, [file, pool]);
   return useInitialHighlightReady({
     enabled: props.enabled,
     hasWork: true,
     onScreen,
     prepare: pool === undefined ? null : prepareHighlight,
+    theme,
     poolAvailability,
   });
 }
@@ -164,16 +168,16 @@ export function useDiffsDiffHighlightReady(props: {
   const { fileDiffs, theme } = props;
   const prepareHighlight = useCallback(async (): Promise<void> => {
     if (pool === undefined) return;
-    void theme;
     await Promise.all(
       fileDiffs.map((fileDiff) => pool.primeDiffHighlightCache(fileDiff)),
     );
-  }, [fileDiffs, pool, theme]);
+  }, [fileDiffs, pool]);
   return useInitialHighlightReady({
     enabled: props.enabled,
     hasWork: props.fileDiffs.length > 0,
     onScreen,
     prepare: pool === undefined ? null : prepareHighlight,
+    theme,
     poolAvailability,
   });
 }

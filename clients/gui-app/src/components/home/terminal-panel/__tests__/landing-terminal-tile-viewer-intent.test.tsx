@@ -39,6 +39,8 @@ import {
   useLandingPanelStore,
   type LandingTerminalTabRef,
 } from "@/stores/home/landing-panel-store";
+import { __disposeAllXtermHostsForTests } from "@/components/epic-canvas/renderers/xterm-host-registry";
+import { acquireMountedXtermEngine } from "@/components/epic-canvas/renderers/__tests__/xterm-host-entry-fixture";
 import { LandingTerminalTile } from "../landing-terminal-tile";
 import type { LandingTerminalAuthorityEntry } from "../landing-terminal-authority-fleet";
 
@@ -218,6 +220,9 @@ const resolveNoOwnerClient = (): null => null;
 
 interface RecordedTerminalStream {
   readonly viewer: TerminalSubscribeViewer;
+  /** The grid the stream was opened with. */
+  readonly cols: number;
+  readonly rows: number;
   /** Every client frame the store handed this stream, in order. */
   readonly frames: TerminalSubscribeClientFrameV17[];
   closeCount: number;
@@ -234,6 +239,8 @@ function installRecordingStreamFactory(): {
   __setTerminalStreamClientFactoryForTests((args) => {
     const record: RecordedTerminalStream = {
       viewer: args.viewer,
+      cols: args.cols,
+      rows: args.rows,
       frames: [],
       closeCount: 0,
     };
@@ -342,6 +349,7 @@ describe("<LandingTerminalTile /> viewer intent", () => {
 
   afterEach(() => {
     cleanup();
+    __disposeAllXtermHostsForTests();
     disposeAllTerminalSessions();
     __setTerminalStreamClientFactoryForTests(null);
     globalClientRef.value = null;
@@ -512,6 +520,28 @@ describe("<LandingTerminalTile /> viewer intent", () => {
         viewer: "cache",
       },
     ]);
+  });
+
+  // A reopened terminal in a pane that cannot measure itself falls back to the
+  // kept-alive engine's grid after the measure wait. The engine's grid moves
+  // while the tile waits (the host echoes a new effective size); a stale memo
+  // of the first peek opened the stream at the old grid.
+  it("opens its stream at the kept-alive engine's grid as it is when the measure wait ends", async () => {
+    const recorded = installRecordingStreamFactory();
+    const term = acquireMountedXtermEngine({
+      instanceId: "inst-landing-viewer-previous",
+      sessionId: TAB.sessionId,
+      hostId: HOST_ID,
+      cols: 110,
+      rows: 35,
+    });
+
+    render(tileTree({ panelOpen: true, paneVisible: true, active: true }));
+    term.resize(140, 45);
+    await settleGridMeasure();
+
+    expect(recorded.streams()).toHaveLength(1);
+    expect(recorded.streams()[0]).toMatchObject({ cols: 140, rows: 45 });
   });
 
   // The legacy bootstrap (`terminal.list` / `terminal.create`) and the provider

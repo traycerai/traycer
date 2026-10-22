@@ -85,13 +85,9 @@ import { ComposerModeSwitcher } from "@/components/home/composer/composer-mode-s
 import { useComposerPlacement } from "@/hooks/host/use-composer-placement";
 import { subscribeFollowingSurfaceReset } from "@/stores/host/surface-host-selection-store";
 import { ComposerHostNotice } from "@/components/home/composer/composer-host-notice";
-import { LandingTeamChatLine } from "@/components/home/composer/landing-owner-chip";
+import { LandingTeamChatLine } from "@/components/home/composer/landing-team-chat-line";
 import { useLandingOwner } from "@/hooks/home/use-landing-owner";
 import { useTeamSandboxHarnessGate } from "@/hooks/sandboxes/use-team-sandbox-harness-blocked";
-import {
-  NO_DRAFT_OWNER_KEY,
-  useLandingOwnerStore,
-} from "@/stores/home/landing-owner-store";
 import { ComposerUploadProgressNotice } from "@/components/home/composer/composer-upload-progress-notice";
 import { toggleActiveModelPicker } from "@/lib/commands/active-model-picker-registry";
 import { useComposerHostNotice } from "@/hooks/composer/use-composer-host-notice";
@@ -156,7 +152,7 @@ export function LandingComposer(props: LandingComposerProps) {
   const hostLabelFromDirectory = placement.hostLabelFor;
   const resolvedHostId = placementTarget.resolvedHostId;
   // Who the task belongs to, read at submit.
-  const owner = useLandingOwner(props.draftId, resolvedHostId);
+  const owner = useLandingOwner(resolvedHostId);
   const hostClient = placementTarget.client;
   // A harness a team sandbox does not offer is refused at submit and at a
   // terminal launch.
@@ -583,10 +579,6 @@ export function LandingComposer(props: LandingComposerProps) {
         { surface: "landing", hostId: activeHostId, draftId: null },
         { surface: "landing", hostId: activeHostId, draftId: createdDraftId },
       );
-    // The Belongs to pick made before the draft existed moves with it.
-    useLandingOwnerStore
-      .getState()
-      .migrateChoice(NO_DRAFT_OWNER_KEY, createdDraftId);
     return createdDraftId;
   }, [activeHostId, draftId, props.pendingCreateId]);
 
@@ -771,10 +763,7 @@ export function LandingComposer(props: LandingComposerProps) {
             notice={hostNotice}
             onDismiss={dismissHostNotice}
           />
-          <LandingTeamChatLine
-            draftId={draftId}
-            resolvedHostId={resolvedHostId}
-          />
+          <LandingTeamChatLine owner={owner} />
           <ComposerUploadProgressNotice progress={actions.attachmentUpload} />
           {profileEligibility.disabled ? (
             <ProfileDisabledBanner

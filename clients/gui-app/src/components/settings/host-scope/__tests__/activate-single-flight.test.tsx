@@ -52,8 +52,8 @@ vi.mock("@/components/settings/host-scope/use-host-options", () => ({
 // suite is about the WRITE, so the stub answers "signed in" and nothing else.
 vi.mock("@/lib/host", () => ({
   useHostClient: () => ({
-    getRequestContext: () => ({}),
     getRequestContextUserId: () => "user-1",
+    onChange: () => () => undefined,
   }),
 }));
 

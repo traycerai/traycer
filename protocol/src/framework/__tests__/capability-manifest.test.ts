@@ -14,6 +14,8 @@ import {
   validateVersionedRpcRegistryDegrades,
   type ServedMajorsByMethod,
 } from "@traycer/protocol/framework/index";
+import { advertisedMajors } from "@traycer/protocol/framework/compat-helpers";
+import type { ManifestRegistry } from "@traycer/protocol/framework/capability-manifest";
 import { releasedMethodNames } from "@traycer/protocol/host/__tests__/__fixtures__/released-method-names";
 import { hostRpcRegistry } from "@traycer/protocol/host/registry";
 
@@ -123,15 +125,15 @@ describe("capability manifest helpers", () => {
 
     expect(split).toEqual({
       manifest: {
-        "floor.method": { major: 1, minor: 0, supportedMajors: [1] },
+        "floor.method": { major: 1, minor: 0 },
       },
       optionalManifest: {
-        "optional.method": { major: 1, minor: 0, supportedMajors: [1] },
+        "optional.method": { major: 1, minor: 0 },
       },
     });
   });
 
-  it("emits every installed major in ascending order, including single-major methods", () => {
+  it("emits every installed major in ascending order, and omits the list for a single-major method", () => {
     expect(
       buildConnectionManifest(
         UNSORTED_MAJOR_MANIFEST_REGISTRY,
@@ -139,7 +141,7 @@ describe("capability manifest helpers", () => {
       ),
     ).toEqual({
       echo: { major: 3, minor: 2, supportedMajors: [1, 2, 3] },
-      single: { major: 4, minor: 0, supportedMajors: [4] },
+      single: { major: 4, minor: 0 },
     });
 
     expect(
@@ -153,7 +155,7 @@ describe("capability manifest helpers", () => {
         echo: { major: 3, minor: 2, supportedMajors: [1, 2, 3] },
       },
       optionalManifest: {
-        single: { major: 4, minor: 0, supportedMajors: [4] },
+        single: { major: 4, minor: 0 },
       },
     });
   });
@@ -259,7 +261,7 @@ describe("capability manifest helpers", () => {
         echo: { major: 3, minor: 0, supportedMajors: [3] },
       }),
     ).toEqual({
-      echo: { major: 1, minor: 1, supportedMajors: [1] },
+      echo: { major: 1, minor: 1 },
     });
   });
 
@@ -339,14 +341,10 @@ describe("floor-aware RPC registry validation", () => {
       ),
     ).toEqual({
       manifest: {
-        "floor.method": { major: 1, minor: 0, supportedMajors: [1] },
+        "floor.method": { major: 1, minor: 0 },
       },
       optionalManifest: {
-        "optional.method": {
-          major: 1,
-          minor: 0,
-          supportedMajors: [1],
-        },
+        "optional.method": { major: 1, minor: 0 },
       },
     });
   });
@@ -442,7 +440,7 @@ describe("served-majors restriction", () => {
     expect(
       buildConnectionManifest(MULTI_MAJOR_MANIFEST_REGISTRY, served),
     ).toEqual({
-      echo: { major: 1, minor: 1, supportedMajors: [1] },
+      echo: { major: 1, minor: 1 },
     });
   });
 
@@ -465,11 +463,7 @@ describe("served-majors restriction", () => {
     const restricted = buildConnectionManifest(MULTI_MAJOR_MANIFEST_REGISTRY, {
       echo: [1],
     });
-    expect(restricted.echo).toEqual({
-      major: 1,
-      minor: 1,
-      supportedMajors: [1],
-    });
+    expect(restricted.echo).toEqual({ major: 1, minor: 1 });
   });
 
   it("advertises every installed major for a method absent from the served map", () => {
@@ -480,11 +474,7 @@ describe("served-majors restriction", () => {
 
     const manifest = buildConnectionManifest(registry, { echo: [1] });
 
-    expect(manifest.unrestricted).toEqual({
-      major: 1,
-      minor: 0,
-      supportedMajors: [1],
-    });
+    expect(manifest.unrestricted).toEqual({ major: 1, minor: 0 });
   });
 
   it("SERVES_EVERY_INSTALLED_MAJOR reproduces the old unrestricted output", () => {
@@ -534,6 +524,49 @@ describe("served-majors restriction", () => {
         MULTI_MAJOR_MANIFEST_REGISTRY,
         hostManifest,
         clientManifest,
+      ),
+    ).toEqual({
+      echo: { major: 1, minor: 1, supportedMajors: [1, 2] },
+    });
+  });
+});
+
+describe("supportedMajors on the wire", () => {
+  it("omits the list for every single-major method of the host registry and keeps it only where several majors are installed", () => {
+    const registry: ManifestRegistry = hostRpcRegistry;
+    const manifest = buildConnectionManifest(
+      registry,
+      SERVES_EVERY_INSTALLED_MAJOR,
+    );
+
+    for (const [method, entry] of Object.entries(manifest)) {
+      const installedMajors = Object.keys(registry[method]).filter((key) =>
+        Number.isInteger(Number(key)),
+      ).length;
+      expect(
+        "supportedMajors" in entry,
+        `${method} installs ${installedMajors} major(s)`,
+      ).toBe(installedMajors > 1);
+    }
+  });
+
+  it("negotiates an omitted list as the entry's own major, as the explicit list did", () => {
+    expect(advertisedMajors({ major: 3, minor: 1 })).toEqual([3]);
+
+    const hostManifest = buildConnectionManifest(
+      MULTI_MAJOR_MANIFEST_REGISTRY,
+      SERVES_EVERY_INSTALLED_MAJOR,
+    );
+    const singleMajorPeer = buildConnectionManifest(
+      MULTI_MAJOR_MANIFEST_REGISTRY,
+      { echo: [1] },
+    );
+    expect(singleMajorPeer.echo).not.toHaveProperty("supportedMajors");
+    expect(
+      selectConnectionManifestForPeer(
+        MULTI_MAJOR_MANIFEST_REGISTRY,
+        hostManifest,
+        singleMajorPeer,
       ),
     ).toEqual({
       echo: { major: 1, minor: 1, supportedMajors: [1, 2] },
