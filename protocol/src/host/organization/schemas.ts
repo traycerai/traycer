@@ -310,7 +310,9 @@ export const cloudListTasksResponseSchemaV10 = lazySchema(() =>
   }),
 );
 
-// The current cloud row is also the `organization.history@1.1` response.
+// The current cloud row is also the `organization.history@1.1` response,
+// pinned to the `epic.listTasks@1.7` row: a released response must not follow
+// the moving `listTaskLightSchema`.
 export const cloudListTaskLightSchema = lazySchema(() =>
   listTaskLightSchemaPre18.extend({
     organization: taskOrganizationSchema.optional(),

@@ -6025,8 +6025,10 @@ set-state-in-effect` forbids the effect form, and an effect would also
        the scope's host, the one the picker names, never the window's. A
        sandbox shows nothing: a team's sandbox is placed in the team's
        environment when it is created, and a person's sandbox runs that
-       person's bots. Any other host reads `environment.list` and
-       `environment.host.read` through the scope's client and is offered the
+       person's bots. Any other host reads `environment.list` and its binding
+       through the scope's client (the pool's `environment.binding.read
+{ hostId }` in a build with a pool, the host's own
+       `environment.host.read` without one) and is offered the
        personal environment, plus the one it reports now so the marked row
        is never hidden (`aria-pressed`), with one line saying a team's bots
        run on the team's machines. A click binds through
@@ -6049,10 +6051,12 @@ set-state-in-effect` forbids the effect form, and an effect would also
        The create-bot form's "Set one up in Settings" link opens this
        page. The sidebar's host list shows each host's environment label
        beside its name (`HostOptionRow`'s `environmentLabel`, resolved by
-       `useHostEnvironmentLabelResolver` in `settings-sidebar.tsx`), read under
-       the same rule as the update badges: only over a session this client
-       already holds (the local host, the scoped host, a remote host with a
-       borrowable session); any other row says nothing. Every other host
+       `useHostEnvironmentLabelResolver` in `settings-sidebar.tsx`), read
+       without a connection to the host: from the pool for every row in a
+       build with a pool, and otherwise under the same rule as the update
+       badges, only over a session this client already holds (the local host,
+       the scoped host, a remote host with a borrowable session); any other
+       row says nothing. Every other host
        picker passes `environmentLabelForHost={null}` and shows no label.
   - **The destructive rule.** Force update…, Force restart… and Apply now end
     running work, so they are destructive-styled wherever they appear: the

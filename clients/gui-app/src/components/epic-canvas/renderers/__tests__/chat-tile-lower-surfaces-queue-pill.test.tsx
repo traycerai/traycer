@@ -135,7 +135,6 @@ const TAB_HOST: HostDirectoryEntry = {
 
 const EMPTY_RESTORE: ChatRestoreContextValue = {
   accessRole: "owner",
-  currentUserId: "user-1",
   activeHostId: TAB_HOST.hostId,
   activeTurnStatus: null,
   localSnapshotsClearedAt: null,

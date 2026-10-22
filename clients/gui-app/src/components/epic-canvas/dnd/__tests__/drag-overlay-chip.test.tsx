@@ -1092,6 +1092,7 @@ describe("<EpicRootDragOverlayContent />", () => {
             createdAt: 1,
             updatedAt: 1,
             userId: null,
+            ownedByViewer: true,
             hostId: "host-a",
             isTitleEditedByUser: false,
             docResident: null,

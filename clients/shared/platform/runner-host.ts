@@ -182,6 +182,14 @@ export interface IRunnerHost {
   readonly relayBaseUrl: string;
 
   /**
+   * The server pool's session socket (`wss://…/v1/session`), from this
+   * build's own configuration, or `""` when the build has no pool. The only
+   * input `poolHostDirectoryEntry` takes, so the pool entry is never a claim a
+   * peer made.
+   */
+  readonly poolBaseUrl: string;
+
+  /**
    * Validates a Traycer bearer token and returns the full AuthnV3 identity
    * shape required to mint a client `RequestContext`. ACCESS-ONLY (tech plan
    * §3): a single identity lookup with NO refresh-on-401 fallback, so it

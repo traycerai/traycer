@@ -2,6 +2,7 @@ import { useCallback } from "react";
 import { v4 as uuidv4 } from "uuid";
 import { useHostReachability } from "@/hooks/agent/use-host-reachability";
 import { useHostRefusesEpicStore } from "@/hooks/chats/use-host-refuses-epic-store";
+import { useOwnerSandboxOpensLive } from "@/hooks/chats/use-owner-sandbox-opens-live";
 import { useEpicSessionHostId } from "@/hooks/epic/use-epic-session-host-id";
 import { makeChatOpenTileRef } from "@/lib/chats/chat-open-tile-ref";
 import {
@@ -45,6 +46,10 @@ export function useEpicAgentOpenRef(
     projectedOwnerHostId,
     epicId,
   );
+  // An owner sandbox at rest still opens live, as the sidebar row does.
+  const ownerSandboxOpensLive = useOwnerSandboxOpensLive(projectedOwnerHostId);
+  const ownerIsUnreachable =
+    ownerReachability.status === "unreachable" && !ownerSandboxOpensLive;
 
   return useCallback(
     () =>
@@ -55,7 +60,7 @@ export function useEpicAgentOpenRef(
             name,
             ownerHostId: projectedOwnerHostId,
             ownerUserId,
-            ownerIsUnreachable: ownerReachability.status === "unreachable",
+            ownerIsUnreachable,
             ownerRefusesStore,
             sessionHostId,
           })
@@ -71,7 +76,7 @@ export function useEpicAgentOpenRef(
       nodeId,
       name,
       type,
-      ownerReachability.status,
+      ownerIsUnreachable,
       ownerRefusesStore,
       ownerUserId,
       projectedOwnerHostId,

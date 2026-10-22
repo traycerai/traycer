@@ -106,13 +106,18 @@ describe("useCloudChatList recovery", () => {
 
   it("refetches immediately when the host transport reports recovery", async () => {
     const fixture = createFixture(2);
+    // `data` is read DURING render: the hook's own reads narrow the query's
+    // tracked props (`isError`, and `data` while errored), so a result that
+    // nothing reads in render is not re-rendered when the refetch succeeds.
     const rendered = renderHook(
-      () =>
-        useCloudChatList({
+      () => {
+        const query = useCloudChatList({
           client: fixture.client,
           taskId: TASK_ID,
           enabled: true,
-        }),
+        });
+        return { data: query.data };
+      },
       { wrapper: fixture.Wrapper },
     );
 

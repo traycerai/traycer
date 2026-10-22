@@ -49,6 +49,7 @@ function chatProjection(overrides: Partial<ChatProjection>): ChatProjection {
     createdAt: 1,
     updatedAt: 1,
     userId: "user-a",
+    ownedByViewer: true,
     hostId: "host-1",
     isTitleEditedByUser: false,
     // Neutral scaffolding for the "already served" side of the union - no
@@ -92,6 +93,7 @@ describe("chatProjectionFromPendingCreation", () => {
       createdAt: 5_000,
       updatedAt: 5_000,
       userId: "user-a",
+      ownedByViewer: true,
       hostId: "h",
       isTitleEditedByUser: false,
       // A creation THIS client made through `epic.createChat`, which writes the

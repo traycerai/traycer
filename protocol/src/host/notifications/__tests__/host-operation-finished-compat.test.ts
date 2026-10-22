@@ -25,6 +25,7 @@ import {
   hostNotificationsFeedSubscribeV12,
   hostNotificationsFeedSubscribeV13,
   hostNotificationsFeedSubscribeV14,
+  hostNotificationsFeedSubscribeV15,
   hostNotificationsSubscribeServerFrameSchemaV12,
   hostNotificationsSubscribeServerFrameSchemaV13,
   HOST_NOTIFICATIONS_FEED_PARTITION_SNAPSHOT_MINOR,
@@ -274,9 +275,10 @@ describe("registry wiring", () => {
     );
   });
 
-  it("advertises feed @1.4 with @1.0-@1.3 still installed for older peers", () => {
+  it("advertises feed @1.5 with @1.0-@1.4 still installed for older peers", () => {
     const line = hostStreamRpcRegistry["host.notifications.feed.subscribe"][1];
-    expect(line.latestMinor).toBe(4);
+    expect(line.latestMinor).toBe(5);
+    expect(line.versions[5].contract).toBe(hostNotificationsFeedSubscribeV15);
     expect(line.versions[4].contract).toBe(hostNotificationsFeedSubscribeV14);
     expect(line.versions[0].contract).toBe(hostNotificationsFeedSubscribeV10);
     expect(line.versions[1].contract).toBe(hostNotificationsFeedSubscribeV11);
@@ -284,8 +286,9 @@ describe("registry wiring", () => {
     expect(line.versions[3].contract).toBe(hostNotificationsFeedSubscribeV13);
     // The emission gate and the union are one fact: a floor pointing at a
     // minor this line does not install would refuse `partitionSnapshot` to
-    // every peer, silently and forever. `@1.3` is that floor; `@1.4` above it
-    // keeps the frame and widens only the entry union.
+    // every peer, silently and forever. `@1.3` is that floor; `@1.4` and `@1.5`
+    // above it keep the frame (`@1.4` widens the entry union, `@1.5` adds a
+    // client frame).
     expect(HOST_NOTIFICATIONS_FEED_PARTITION_SNAPSHOT_MINOR).toBe(3);
     expect(line.latestMinor).toBeGreaterThanOrEqual(
       HOST_NOTIFICATIONS_FEED_PARTITION_SNAPSHOT_MINOR,

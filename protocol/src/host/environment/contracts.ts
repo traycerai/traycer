@@ -110,6 +110,30 @@ export const environmentHostReadV10 = defineRpcContract({
 });
 
 /**
+ * The environment the named host is bound to, as the signed-in user sees it:
+ * the same answer `environment.host.read` gives on that host, read from the
+ * account's binding records instead of asking the host. Served by the server
+ * pool, so a list of hosts reads every row's binding without a connection to
+ * each host. A host the user cannot see a binding for answers the personal
+ * environment (`explicit` false), exactly as an unbound host does.
+ */
+export const environmentBindingReadRequestSchema = lazySchema(() =>
+  z.object({
+    hostId: z.string().min(1),
+  }),
+);
+export type EnvironmentBindingReadRequest = z.infer<
+  typeof environmentBindingReadRequestSchema
+>;
+
+export const environmentBindingReadV10 = defineRpcContract({
+  method: "environment.binding.read",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: environmentBindingReadRequestSchema,
+  responseSchema: environmentHostBindingSchema,
+});
+
+/**
  * Binds the serving host to one of the signed-in user's environments.
  * Binding to the personal environment removes the binding (`explicit`
  * false). Refused for an environment the user does not belong to, and while

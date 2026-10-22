@@ -3,7 +3,10 @@ import { v4 as uuidv4 } from "uuid";
 import { WsStreamClient } from "@traycer-clients/shared/host-transport/ws-stream-client";
 import { DEFAULT_DIAL_TIMEOUT_MS } from "@traycer-clients/shared/host-transport/transport-config";
 import { createWhatwgStreamWebSocketFactory } from "@traycer-clients/shared/host-transport/whatwg-stream-ws-factory";
-import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
+import {
+  isPoolHostDirectoryEntry,
+  type HostDirectoryEntry,
+} from "@traycer-clients/shared/host-client/host-directory";
 import {
   terminalFatalCodeOf,
   useFrozenSandboxRebuildPark,
@@ -15,6 +18,7 @@ import {
   type RemoteHostSandboxFacts,
 } from "@traycer-clients/shared/host-client/remote-fetcher";
 import {
+  createPoolHostTransport,
   createRemoteHostTransport,
   remoteOpenAuthFor,
   type RemoteOpenAuth,
@@ -218,8 +222,8 @@ export function buildHostStreamClient(params: {
    * Gates the remote session's attach-grant MINT only - see
    * `CreateRemoteTransportOptions.cloudAuthorized`. A parameter rather than an
    * ambient store read for the same reason as the messenger builder's: this is
-   * the seam tests construct through. Only consulted on the
-   * `target.kind === "remote"` branch, so local hosts are unaffected.
+   * the seam tests construct through. Only consulted on the remote and pool
+   * branches, so local hosts are unaffected.
    */
   readonly cloudAuthorized: () => boolean;
   readonly authnBaseUrl: string;
@@ -227,12 +231,12 @@ export function buildHostStreamClient(params: {
   /**
    * The signed-in user this transport is built for. Part of the shared
    * `(hostId, userId)` remote-session cache key (Architecture §4 / S1) - only
-   * consulted on the `target.kind === "remote"` branch.
+   * consulted on the remote and pool branches.
    */
   readonly userId: string;
   /**
    * Whether the process-wide wake sweep may proactively poke or force-drop
-   * the shared session behind this client (remote branch only). The caller's
+   * the shared session behind this client (remote and pool branches only). The caller's
    * statement that a reconnect's subscribe replay is safe for the streams it
    * will open: durable/warm transports pass `true`; the one-shot
    * side-effecting transport passes `false`, because a forced replay would
@@ -252,6 +256,32 @@ export function buildHostStreamClient(params: {
   // connects on first use.
   readonly autoStart: boolean;
 }): IHostStreamClient<HostStreamRpcRegistry> | null {
+  if (isPoolHostDirectoryEntry(params.target)) {
+    // The server pool: the remote session on a direct leg, never the plain
+    // per-socket client below. Its credentials are fixed by the entry's kind.
+    const poolTransport = createPoolHostTransport<
+      HostRpcRegistry,
+      HostStreamRpcRegistry
+    >({
+      entry: params.target,
+      userId: params.userId,
+      bearer: params.bearer,
+      cloudAuthorized: params.cloudAuthorized,
+      auth: params.auth,
+      clock: appServerClock,
+      rpcRegistry: hostRpcRegistry,
+      streamRegistry: hostStreamRpcRegistry,
+      webSocketFactory: browserStreamWebSocketFactory,
+      requestId: uuidv4,
+      clientIdentity: getGuiClientIdentity(),
+      proactiveWakeEligible: params.proactiveWakeEligible,
+    });
+    if (poolTransport === null) return null;
+    if (params.autoStart) {
+      poolTransport.session.start();
+    }
+    return poolTransport.streamClient;
+  }
   if (params.target.kind === "remote") {
     // Fail closed: an incomplete remote row (no public key / no relay url)
     // must never fall through to the plain-WS branch below - that would dial
@@ -298,6 +328,12 @@ export function buildHostStreamClient(params: {
       remoteTransport.session.start();
     }
     return remoteTransport.streamClient;
+  }
+  // An allowlist, not a fall-through: the plain per-socket client presents
+  // the user bearer to whatever endpoint it is given, so only the kinds that
+  // ARE a local socket reach it.
+  if (params.target.kind !== "local" && params.target.kind !== "mock") {
+    return null;
   }
 
   return new WsStreamClient<HostStreamRpcRegistry>({

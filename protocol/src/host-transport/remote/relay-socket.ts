@@ -8,6 +8,10 @@ import type { TimerHandle, IntervalHandle } from "../timers";
 import { assertRelayAttachUrlSecure } from "@traycer/protocol/host-transport/relay-attach-url";
 import { createRelayPathEstimator } from "@traycer/protocol/host-transport/relay-liveness";
 import {
+  SOCKET_KEEPALIVE_PING,
+  SOCKET_KEEPALIVE_PONG,
+} from "@traycer/protocol/framework/ws-protocol";
+import {
   RELAY_DIAL_TIMEOUT_MS,
   RELAY_AWAITING_PING_INTERVAL_MS,
   RELAY_AWAITING_PONG_TIMEOUT_MS,
@@ -34,11 +38,16 @@ import {
  * The grant rides the `?grant=<jws>` query fallback (the relay also accepts the
  * preferred `Sec-WebSocket-Protocol: …, grant.<jws>` header, but the shared
  * `IStreamWebSocketFactory` only takes a URL, so the client uses the query form).
+ *
+ * The same socket also serves a DIRECT leg (`directUrl`): the server pool,
+ * dialed with no relay in between. There is no grant and no relay to attach
+ * to, so the socket's own open is the attach (`onAttachAck` fires then), and
+ * relay CONTROL frames are dropped: only a relay may say a host detached or a
+ * peer is gone, and a direct peer claiming either would park or kill a
+ * session on words it has no standing to speak. The keepalive is kept as is -
+ * the peer answers `relay-ping` with `relay-pong` - so half-open detection and
+ * the wake probe behave exactly as they do on the relay leg.
  */
-
-// Kept in lockstep with workers/relay-do/src/config.ts (relay-owned constants).
-const KEEPALIVE_PING = "relay-ping";
-const KEEPALIVE_PONG = "relay-pong";
 
 /**
  * The close code+reason a failed wake probe reports, exported so the session
@@ -97,15 +106,26 @@ export interface RelaySocketHandlers {
   }) => void;
 }
 
-export interface RelaySocketOptions {
+interface RelayLegOptions {
   readonly attachBaseUrl: string;
   readonly grantJws: string;
   readonly webSocketFactory: IStreamWebSocketFactory;
   readonly handlers: RelaySocketHandlers;
 }
 
+interface DirectLegOptions {
+  /** The peer's own `wss:` URL; no grant rides on it. */
+  readonly directUrl: string;
+  readonly webSocketFactory: IStreamWebSocketFactory;
+  readonly handlers: RelaySocketHandlers;
+}
+
+export type RelaySocketOptions = RelayLegOptions | DirectLegOptions;
+
 export class RelaySocket {
   private readonly handlers: RelaySocketHandlers;
+  /** A direct leg: the socket's open is the attach, and control frames are dropped. */
+  private readonly direct: boolean;
   private socket: StreamWebSocketLike | null;
   private opened = false;
   private closed = false;
@@ -160,12 +180,21 @@ export class RelaySocket {
 
   constructor(options: RelaySocketOptions) {
     this.handlers = options.handlers;
+    this.direct = "directUrl" in options;
     this.lastInboundAt = Date.now();
     // Before the URL is built, let alone dialed: the grant goes into the query
-    // string on the next line. `beginConnectGuarded` catches a synchronous
-    // throw out of this constructor and re-arms the backoff loop.
-    assertRelayAttachUrlSecure(options.attachBaseUrl);
-    const dialUrl = withGrantQuery(options.attachBaseUrl, options.grantJws);
+    // string below. `beginConnectGuarded` catches a synchronous throw out of
+    // this constructor and re-arms the backoff loop. A direct leg carries no
+    // grant, but its mux frames - the bearer in `open` included - are not
+    // sealed by anything but TLS, so it passes the same gate.
+    let dialUrl: string;
+    if ("directUrl" in options) {
+      assertRelayAttachUrlSecure(options.directUrl);
+      dialUrl = options.directUrl;
+    } else {
+      assertRelayAttachUrlSecure(options.attachBaseUrl);
+      dialUrl = withGrantQuery(options.attachBaseUrl, options.grantJws);
+    }
     // Not a host method, and not classifiable as one: this is the single
     // durable leg that MULTIPLEXES every unary call and every stream for a
     // remote host, so anything queued behind it is queued behind all of them.
@@ -389,6 +418,9 @@ export class RelaySocket {
       this.awaitingSince = 0;
       this.lastPingSentAt = now;
       this.startKeepalive();
+      if (this.direct) {
+        this.handlers.onAttachAck(0);
+      }
     };
     socket.onmessage = (event: StreamWebSocketMessageEvent) => {
       if (socket !== this.socket) {
@@ -421,7 +453,7 @@ export class RelaySocket {
   }
 
   private handleTextFrame(raw: string): void {
-    if (raw === KEEPALIVE_PONG) {
+    if (raw === SOCKET_KEEPALIVE_PONG) {
       // `noteInbound` already stamped it (and disarmed any wake probe); a pong
       // carries no extra liveness meaning now that every inbound frame counts
       // as proof the socket carries traffic. It is still the ONLY frame whose
@@ -430,17 +462,20 @@ export class RelaySocket {
       this.path.notePongReceived(Date.now());
       return;
     }
-    if (raw === KEEPALIVE_PING) {
+    if (raw === SOCKET_KEEPALIVE_PING) {
       // The relay auto-responds to pings; a relay-originated ping is not
       // expected, but answer it symmetrically to be safe.
       const socket = this.socket;
       if (socket !== null) {
         try {
-          socket.send(KEEPALIVE_PONG);
+          socket.send(SOCKET_KEEPALIVE_PONG);
         } catch {
           // ignore
         }
       }
+      return;
+    }
+    if (this.direct) {
       return;
     }
     const control = parseRelayControl(raw);
@@ -562,7 +597,7 @@ export class RelaySocket {
       }
       this.lastPingSentAt = now;
       try {
-        socket.send(KEEPALIVE_PING);
+        socket.send(SOCKET_KEEPALIVE_PING);
         this.path.notePingSent(now);
       } catch {
         this.fail(4005, "relay-ping-send-failed");
@@ -599,7 +634,7 @@ export class RelaySocket {
     this.path.retireRun();
     this.lastPingSentAt = Date.now();
     try {
-      socket.send(KEEPALIVE_PING);
+      socket.send(SOCKET_KEEPALIVE_PING);
     } catch {
       this.fail(4005, "relay-ping-send-failed");
     }

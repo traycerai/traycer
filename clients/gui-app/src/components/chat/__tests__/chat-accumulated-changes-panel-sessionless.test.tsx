@@ -69,7 +69,6 @@ function baseRestore(
 ): ChatRestoreContextValue {
   return {
     accessRole: "owner",
-    currentUserId: "owner-1",
     activeHostId: "host-1",
     activeTurnStatus: null,
     accumulatedSetComplete: true,

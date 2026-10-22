@@ -29,6 +29,7 @@ import {
 import { historyPinUnavailableTooltip } from "@/components/epics/history-pin-availability";
 import { negotiatedSetPinnedServesLocalHome } from "@/lib/epic-pin-admission";
 import { readNegotiatedMethodVersion } from "@/lib/host/read-negotiated-method-version";
+import { noteHistoryConfirmedWrite } from "@/lib/view-replica/history-replica";
 import {
   authorizesCloudCapability,
   useAuthStore,
@@ -205,6 +206,9 @@ export function useEpicSetPinned() {
       ) => {
         if (ctx.hostId === null || ctx.userId === null) return;
         const scope = { hostId: ctx.hostId, userId: ctx.userId };
+        // A cached History page from before this pin would put the old bit
+        // back on the next cold open.
+        noteHistoryConfirmedWrite(ctx.userId);
         // `epic.getTaskContexts` is the one pin source this handler does not
         // invalidate - a refetch there is a cloud batch of up to 50 ids - so a
         // read that was issued before the write and lands after it would put

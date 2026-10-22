@@ -50,6 +50,7 @@ function chatProjection(
     createdAt: 0,
     updatedAt: 0,
     userId: null,
+    ownedByViewer: true,
     hostId: "host-a",
     isTitleEditedByUser: false,
     docResident: false,

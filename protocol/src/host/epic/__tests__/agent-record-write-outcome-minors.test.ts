@@ -78,7 +78,6 @@ describe("agent-record write outcome minors", () => {
     expect(split.optionalManifest["epic.setChatArchived"]).toEqual({
       major: 1,
       minor: 1,
-      supportedMajors: [1],
     });
     expect(hostRpcRegistry["epic.setChatArchived"].degrade).toEqual({
       kind: "unsupported",

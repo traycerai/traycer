@@ -112,8 +112,12 @@ export interface RemoteSessionIdentity {
    * machine whose kernel the user does not own. A host's kind is fixed for
    * its life, so a mismatch means the other entry came from a stale read, and
    * it is superseded like a rotated key.
+   *
+   * `pool-bearer` is a session to the server pool (`createPoolHostTransport`):
+   * the user bearer on a direct leg with no grant behind it. It never shares a
+   * connection with a host's session, whatever else matches.
    */
-  readonly openAuth: "user-bearer" | "session-grant";
+  readonly openAuth: "user-bearer" | "session-grant" | "pool-bearer";
 }
 
 interface CacheEntry {

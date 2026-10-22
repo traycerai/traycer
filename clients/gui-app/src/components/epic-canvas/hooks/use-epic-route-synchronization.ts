@@ -24,7 +24,9 @@ import {
   useCloudChatHasCloudAuthorization,
   useCloudChatList,
 } from "@/hooks/chats/use-cloud-chat-queries";
+import { useEnvironmentArmChats } from "@/hooks/environment/use-environment-arms";
 import { cloudRowIsViewersOwn } from "@/lib/chats/unified-chat-list";
+import type { OpenEpicState } from "@/stores/epics/open-epic/store";
 import { collectPanes } from "@/stores/epics/canvas/tile-tree";
 import {
   epicNodeRecency,
@@ -114,6 +116,40 @@ export function useEpicRouteSynchronization(
   // second opinion about authorization, it is the one answer travelling to both
   // halves of a read/destroy pair that must not disagree.
   const cloudChatsCloudAuthorized = useCloudChatHasCloudAuthorization();
+  // The arm rows alone, from the lanes `useCloudChatList` above already holds
+  // for this task, so this read opens no stream of its own.
+  const armChats = useEnvironmentArmChats(epicId);
+  // A chat a member creates on a team host is environment-owned, so its row
+  // reaches this client only as the arm's published cloud row - never as a
+  // record that would retire the stand-in filed under the creator. The arm
+  // row names the same chat by `(chatId, ownerHostId)`, so a PUBLISHED one
+  // retires it, and the click opens the environment's chat. The arm also
+  // serves metadata-only rows, with no head: before first publication there
+  // is no published row, so the stand-in stays and the click stays live.
+  //
+  // Re-checked when the store's chats move as well as when the arm does: a
+  // create's answer can land after the arm row.
+  useEffect(() => {
+    if (armChats.length === 0) return;
+    const retire = (chats: OpenEpicState["chats"]): void => {
+      for (const row of armChats) {
+        if (row.headSha256 === null) continue;
+        const { chatId } = row.identity;
+        if (!Object.hasOwn(chats.byId, chatId)) continue;
+        const held = chats.byId[chatId];
+        if (held.hostId !== row.ownerHostId) continue;
+        if (held.userId === row.identity.ownerUserId) continue;
+        handle.store.getState().expirePendingChatCreationForCloudRow({
+          chatId,
+          ownerHostId: row.ownerHostId,
+        });
+      }
+    };
+    retire(handle.store.getState().chats);
+    return handle.store.subscribe((state, previous) => {
+      if (state.chats !== previous.chats) retire(state.chats);
+    });
+  }, [armChats, handle]);
   const applyNestedRouteFocus = useEpicCanvasStore(
     (s) => s.applyNestedRouteFocus,
   );

@@ -295,6 +295,8 @@ export class MobileRunnerHost implements IRunnerHost {
   private readonly serverBaseUrl: string;
   readonly sandboxControlUnavailableReason: string | null;
   readonly relayBaseUrl: string;
+  // The mobile app has not adopted the server pool yet.
+  readonly poolBaseUrl = "";
   readonly hasLocalHost = false;
   readonly secureStorage: ISecureStorage = buildSecureStorage();
   readonly tokenStore: ITokenStore;

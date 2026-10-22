@@ -213,6 +213,52 @@ describe("sandboxStateLine", () => {
     expect(sandboxStateLine("failed", false, null)).not.toContain("(");
   });
 
+  it("says a newer-saved sandbox can't start until the next Traycer update", () => {
+    expect(
+      sandboxStateLine(
+        "stopped",
+        false,
+        summaryOf({ failureCode: "chat-store-newer" }),
+      ),
+    ).toBe(
+      "This sandbox's data was saved by a newer version of Traycer, so it can't start yet. Start it again after the next Traycer update.",
+    );
+  });
+
+  it("names the code of a start that did not finish on a stopped row", () => {
+    expect(
+      sandboxStateLine(
+        "stopped",
+        false,
+        summaryOf({ failureCode: "wake-timeout:no-phase" }),
+      ),
+    ).toBe(
+      "The last start didn't finish (wake-timeout:no-phase). Start tries again.",
+    );
+  });
+
+  it("keeps the plain stopped line for a stopped row with no failure code", () => {
+    const plain = sandboxStateLine("stopped", false, null);
+    expect(plain).toBe(
+      "Stopped. Disk kept, processes ended. Start boots it again; shells marked relaunch-on-restart come back.",
+    );
+    expect(
+      sandboxStateLine("stopped", false, summaryOf({ failureCode: null })),
+    ).toBe(plain);
+  });
+
+  it("keeps the failed-to-start sentence for a failed row with a code", () => {
+    expect(
+      sandboxStateLine(
+        "failed",
+        false,
+        summaryOf({ failureCode: "chat-store-newer" }),
+      ),
+    ).toBe(
+      "Failed to start (chat-store-newer). Nothing is billed for a sandbox that never woke.",
+    );
+  });
+
   it("says just Sandbox for a state it does not know", () => {
     expect(sandboxStateLine(null, false, null)).toBe("Sandbox");
   });

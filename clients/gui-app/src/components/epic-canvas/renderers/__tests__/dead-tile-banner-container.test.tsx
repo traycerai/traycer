@@ -14,6 +14,16 @@ import {
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { __getOpenEpicRegistryForTests } from "@/lib/registries/epic-session-registry";
 import type { PermissionRole } from "@traycer/protocol/host/epic/unary-schemas";
+import type { EnvironmentListResponse } from "@traycer/protocol/host/environment/contracts";
+import {
+  installHostConnectionRegistrySource,
+  resetHostConnectionRegistryForTest,
+} from "@traycer-clients/shared/host-client/host-connection-registry";
+import {
+  poolEntry,
+  remoteEntry,
+  sandboxFacts,
+} from "@traycer-clients/shared/host-client/__tests__/routing-entry-fixtures";
 
 /**
  * THE OWNERSHIP WIRING, against the REAL container (cold-review P3).
@@ -45,8 +55,41 @@ const MOCK_HOST_DIRECTORY = {
   findById: () => null,
 };
 
+// What tells a team sandbox's chat from a collaborator's: whether the build has
+// a server pool, and what the team environment list answers. The list query is
+// stubbed at its own seam; the ownership hook, the owner host's directory row
+// and the banner copy stay real.
+const environments = vi.hoisted(
+  (): { pool: boolean; list: EnvironmentListResponse | undefined } => ({
+    pool: false,
+    list: undefined,
+  }),
+);
+
+vi.mock(
+  "@traycer-clients/shared/host-client/host-rpc-routing",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@traycer-clients/shared/host-client/host-rpc-routing")
+      >();
+    return {
+      ...actual,
+      readProcessHostRpcTierPlan: () =>
+        environments.pool
+          ? actual.createHostRpcTierPlan(poolEntry)
+          : actual.NO_POOL_HOST_RPC_TIER_PLAN,
+    };
+  },
+);
+
+vi.mock("@/hooks/bots/use-environment-list-query", () => ({
+  useEnvironmentListQuery: () => ({ data: environments.list }),
+}));
+
 vi.mock("@/lib/host", () => ({
   useHostBinding: () => null,
+  useOptionalHostClient: () => null,
   useHostDirectory: () => MOCK_HOST_DIRECTORY,
   useAuthService: () => ({
     revalidateCurrentContext: () => Promise.resolve({ kind: "valid" as const }),
@@ -213,6 +256,9 @@ afterEach(() => {
   activeHarness?.teardown();
   activeHarness = null;
   __getOpenEpicRegistryForTests().disposeAll();
+  environments.pool = false;
+  environments.list = undefined;
+  resetHostConnectionRegistryForTest();
 });
 
 describe("ChatDeadTileBannerContainer - ownership + role resolution", () => {
@@ -296,5 +342,67 @@ describe("ChatDeadTileBannerContainer - ownership + role resolution", () => {
     const text = screen.getByTestId("banner-under-test").textContent;
     expect(text).toContain("belongs to another collaborator");
     expect(text).not.toContain("published copy");
+  });
+});
+
+describe("ChatDeadTileBannerContainer - an owner not yet told apart", () => {
+  const OWNER_HOST_ID = "owner-host-1";
+
+  it("keeps the own-chat copy, never a collaborator's, while the team environment list has not answered", async () => {
+    environments.pool = true;
+    environments.list = undefined;
+    renderContainer({
+      ownerUserId: COLLABORATOR_USER_ID,
+      providedOwnerUserId: COLLABORATOR_USER_ID,
+      permissionRole: "editor",
+      showsPublishedCopy: false,
+    });
+    await settleEpicSession();
+
+    const text = screen.getByTestId("banner-under-test").textContent;
+    expect(text).not.toContain("belongs to another collaborator");
+    expect(text).toContain(
+      'Clone this agent to continue while "owner-host-1" is offline; the original stays there.',
+    );
+  });
+
+  it("names the collaborator once the list has answered without the owner", async () => {
+    environments.pool = true;
+    environments.list = { environments: [] };
+    renderContainer({
+      ownerUserId: COLLABORATOR_USER_ID,
+      providedOwnerUserId: COLLABORATOR_USER_ID,
+      permissionRole: "editor",
+      showsPublishedCopy: false,
+    });
+    await settleEpicSession();
+
+    expect(screen.getByTestId("banner-under-test").textContent).toContain(
+      "belongs to another collaborator",
+    );
+  });
+
+  it("says the sandbox is out when the owner host's row is a team sandbox, before the list answers", async () => {
+    environments.pool = true;
+    environments.list = undefined;
+    const row = remoteEntry(OWNER_HOST_ID, sandboxFacts("team-1"));
+    installHostConnectionRegistrySource({
+      directory: {
+        findById: (hostId) => (hostId === row.hostId ? { ...row } : null),
+        onDirectoryChanged: () => ({ dispose: () => undefined }),
+      },
+      leases: null,
+    });
+    renderContainer({
+      ownerUserId: COLLABORATOR_USER_ID,
+      providedOwnerUserId: COLLABORATOR_USER_ID,
+      permissionRole: "editor",
+      showsPublishedCopy: true,
+    });
+    await settleEpicSession();
+
+    const text = screen.getByTestId("banner-under-test").textContent;
+    expect(text).toContain("This chat's sandbox isn't available");
+    expect(text).not.toContain("belongs to another collaborator");
   });
 });

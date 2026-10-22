@@ -147,7 +147,7 @@ function renderFrame(withWake: boolean) {
   const tree = (): ReactNode => (
     <QueryClientProvider client={queryClient}>
       {withWake ? <WakeInFlight /> : null}
-      <SandboxTileStateFrame>
+      <SandboxTileStateFrame chat={null}>
         <textarea data-testid="tile-body" />
       </SandboxTileStateFrame>
     </QueryClientProvider>

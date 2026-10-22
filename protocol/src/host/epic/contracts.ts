@@ -81,6 +81,7 @@ import {
   listTasksRequestSchemaPre13,
   listTasksResponseSchema,
   listTasksResponseSchemaPre18,
+  listTasksResponseSchemaPre19,
   listTasksResponseSchemaV10,
   listTasksResponseSchemaPre13,
   listTasksResponseSchemaPre14,
@@ -228,6 +229,14 @@ import {
   fetchArtifactAttachmentRequestSchema,
   fetchArtifactAttachmentResponseSchema,
 } from "@traycer/protocol/host/epic/artifact-attachment";
+import {
+  attachEnvironmentRequestSchema,
+  attachEnvironmentResponseSchema,
+} from "@traycer/protocol/host/epic/environment-attachment";
+import {
+  localHistoryReadRequestSchema,
+  localHistoryReadResponseSchema,
+} from "@traycer/protocol/host/epic/local-history";
 
 // `epic.listTasks@1.0` - frozen pre-pinning host entry point for the CloudData
 // task-list query. Both request and response preserve the released wire shape.
@@ -409,6 +418,44 @@ export const epicListTasksUpgradeV16ToV17 = defineUpgradePath<
 >({
   from: epicListTasksV16.schemaVersion,
   to: epicListTasksV17.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
+});
+
+/** listTasks 1.8 adds optional counts; 1.7 keeps its frozen response. */
+export const epicListTasksV18 = defineRpcContract({
+  method: "epic.listTasks",
+  schemaVersion: { major: 1, minor: 8 } as const,
+  requestSchema: listTasksRequestSchema,
+  responseSchema: listTasksResponseSchemaPre19,
+});
+
+export const epicListTasksUpgradeV17ToV18 = defineUpgradePath<
+  typeof epicListTasksV17,
+  typeof epicListTasksV18
+>({
+  from: epicListTasksV17.schemaVersion,
+  to: epicListTasksV18.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
+});
+
+// The owning environment is display metadata and optional. A 1.8 peer keeps
+// its frozen row, so an upgraded row names no environment rather than a
+// guessed one.
+export const epicListTasksV19 = defineRpcContract({
+  method: "epic.listTasks",
+  schemaVersion: { major: 1, minor: 9 } as const,
+  requestSchema: listTasksRequestSchema,
+  responseSchema: listTasksResponseSchema,
+});
+
+export const epicListTasksUpgradeV18ToV19 = defineUpgradePath<
+  typeof epicListTasksV18,
+  typeof epicListTasksV19
+>({
+  from: epicListTasksV18.schemaVersion,
+  to: epicListTasksV19.schemaVersion,
   upgradeRequest: (request) => request,
   upgradeResponse: (response) => response,
 });
@@ -1180,6 +1227,29 @@ export const epicChatPublicationStateV10 = defineRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: chatPublicationStateRequestSchema,
   responseSchema: chatPublicationStateResponseSchema,
+});
+
+/**
+ * Optional (non-floor) capability: a new method NAME rides the optional
+ * channel, so a host that predates it answers `E_HOST_UNSUPPORTED` for this
+ * call alone and the handshake is untouched.
+ */
+export const epicAttachEnvironmentV10 = defineRpcContract({
+  method: "epic.attachEnvironment",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: attachEnvironmentRequestSchema,
+  responseSchema: attachEnvironmentResponseSchema,
+});
+
+/**
+ * Optional (non-floor): the host's local History contribution, read with no
+ * cloud call. See `local-history.ts`.
+ */
+export const epicLocalHistoryReadV10 = defineRpcContract({
+  method: "epic.localHistory.read",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: localHistoryReadRequestSchema,
+  responseSchema: localHistoryReadResponseSchema,
 });
 
 export const epicPrepareArtifactImageV10 = defineRpcContract({
@@ -2285,20 +2355,3 @@ export {
   epicSubscribeV15,
   epicSubscribeV16,
 };
-
-/** listTasks 1.8 adds optional counts; 1.7 keeps its frozen response. */
-export const epicListTasksV18 = defineRpcContract({
-  method: "epic.listTasks",
-  schemaVersion: { major: 1, minor: 8 } as const,
-  requestSchema: listTasksRequestSchema,
-  responseSchema: listTasksResponseSchema,
-});
-export const epicListTasksUpgradeV17ToV18 = defineUpgradePath<
-  typeof epicListTasksV17,
-  typeof epicListTasksV18
->({
-  from: epicListTasksV17.schemaVersion,
-  to: epicListTasksV18.schemaVersion,
-  upgradeRequest: (request) => request,
-  upgradeResponse: (response) => response,
-});

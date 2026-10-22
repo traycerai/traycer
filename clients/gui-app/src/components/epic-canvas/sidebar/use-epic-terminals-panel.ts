@@ -53,6 +53,8 @@ import {
   type TerminalSidebarSessionRow,
 } from "@/lib/terminals/reconcile-terminal-sidebar-sessions";
 import { useResolvePlainTerminalOwnerHostClient } from "@/lib/terminals/resolve-plain-terminal-owner-client";
+import { withEnvironmentArmTerminals } from "@/lib/terminals/compose-epic-terminal-list";
+import { useEnvironmentArmTerminals } from "@/hooks/environment/use-environment-arms";
 
 export type TerminalCloseCapability = "unknown" | "legacy" | "capable";
 
@@ -251,7 +253,11 @@ export function useEpicTerminalsPanel(args: {
       list.data?.sessions,
     ],
   );
-  const rows = reconciled.rows;
+  const armTerminals = useEnvironmentArmTerminals(epicId);
+  const rows = useMemo(
+    () => withEnvironmentArmTerminals(reconciled.rows, armTerminals),
+    [armTerminals, reconciled.rows],
+  );
   const incompleteFleet = reconciled.incompleteFleet;
   // The list no longer captions partial fleet coverage - the epic status
   // pill owns that signal (one amber light, the sentence on hover). The grace

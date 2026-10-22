@@ -30,7 +30,10 @@ import type {
   TuiAgentRecordDelta,
 } from "@traycer-clients/shared/host-transport/chat-records-stream-client";
 import type { ArtifactRoomColdState } from "../artifact-room-tier";
-import type { PendingChatCreation } from "../../pending-chat-creations";
+import type {
+  PendingChatCreation,
+  PendingChatCreationCloudRow,
+} from "../../pending-chat-creations";
 import type { RuntimeCommand } from "@traycer-clients/shared/replica-runtime/worker/bridge-protocol";
 import type { EpicWriteCommandIntent } from "../epic-write-command";
 import type { EpicRuntimeCorePorts } from "./epic-runtime-core";
@@ -163,6 +166,7 @@ export interface EpicRuntimeCorePortSource {
   markChatRecordListNotAuthoritative(): void;
   beginPendingChatCreation(pending: PendingChatCreation): void;
   clearPendingChatCreation(chatId: string): void;
+  expirePendingChatCreationForCloudRow(row: PendingChatCreationCloudRow): void;
   republishRecordsForCurrentUser(): void;
   reprojectForViewerChange(): void;
   discardUnsyncedEdits(): void;
@@ -905,6 +909,9 @@ function applyArgumentCommand(
     }
     case "clear-pending-chat-creation":
       source.clearPendingChatCreation(command.payload.chatId);
+      return;
+    case "expire-pending-chat-creation-for-cloud-row":
+      source.expirePendingChatCreationForCloudRow(command.payload);
       return;
     case "retry-write-command":
       source.retryWriteCommand(command.payload.commandId);

@@ -56,7 +56,6 @@ describe("chat.search is optional, not floor", () => {
     expect(split.optionalManifest[METHOD]).toEqual({
       major: 1,
       minor: 0,
-      supportedMajors: [1],
     });
     expect(split.manifest[METHOD]).toBeUndefined();
   });

@@ -9,10 +9,11 @@ import type {
   ListTasksRequest,
   ListTasksResponse,
 } from "@traycer/protocol/host/epic/unary-schemas";
+import type { LocalHistoryReadResponse } from "@traycer/protocol/host/epic/local-history";
 import { registerCloudEpicTasksClient } from "@/lib/cloud-epic-tasks-query";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import { epicTabLocalHomeListQueryOptions } from "@/lib/cloud-epic-tasks-query/reconciler-local-home-query";
-import { CloudEpicTasksVerdictWithdrawnError } from "@/lib/cloud-epic-tasks-query/verdict-withdrawn-error";
+import { HostLocalHistoryUnavailableError } from "@/lib/cloud-epic-tasks-query/query";
 import { useAuthStore } from "@/stores/auth/auth-store";
 
 const USER_A = "user-a";
@@ -39,7 +40,7 @@ function requestContextFor(userId: string) {
   });
 }
 
-function createFixture() {
+function createFixture(readsLocalHistory: boolean) {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   });
@@ -53,9 +54,17 @@ function createFixture() {
       registry: hostRpcRegistry,
       requestId: () => "reconciler-local-home",
       handlers: {
-        "epic.listTasks": (): ListTasksResponse => {
+        "epic.localHistory.read": (): LocalHistoryReadResponse => {
           dispatchCount += 1;
-          return { tasks: [], hasMore: false };
+          if (!readsLocalHistory) throw new Error("local History unreadable");
+          return {
+            complete: true,
+            willComplete: true,
+            localHomeRows: [],
+            preservedRows: [],
+            tombstonedEpicIds: [],
+            localRows: "none",
+          };
         },
       },
     }),
@@ -88,17 +97,21 @@ describe("epicTabLocalHomeListQueryOptions", () => {
   });
 
   it("dispatches a current reconciliation run through the shared scoped primitive", async () => {
-    const fixture = createFixture();
+    const fixture = createFixture(true);
 
     await expect(
       fixture.queryClient.fetchQuery(fixture.options),
-    ).resolves.toEqual({ tasks: [], hasMore: false });
+    ).resolves.toMatchObject({
+      tasks: [],
+      hasMore: false,
+      completeness: { localRows: "none" },
+    });
 
     expect(fixture.dispatchCount()).toBe(1);
   });
 
   it("cannot dispatch or cache B's local-home page under an A reconciliation key", async () => {
-    const fixture = createFixture();
+    const fixture = createFixture(true);
     // The reconciliation run already captured A's cache identity. The live
     // requester rotates before TanStack invokes its query function: generic
     // useHostQuery used to send B's result into that A-keyed cache slot.
@@ -119,22 +132,31 @@ describe("epicTabLocalHomeListQueryOptions", () => {
     ).toBe("error");
   });
 
-  it("refuses the probe without dispatching once the cloud verdict is withdrawn mid-run", async () => {
-    const fixture = createFixture();
+  it("still reads the host's local rows once the cloud verdict is withdrawn mid-run", async () => {
+    const fixture = createFixture(true);
     // The run was seeded under `signed-in`; the session demotes before
-    // TanStack invokes the query function. The probe carries no local-first
-    // directive, so without a verdict it would be the cloud-backed list on
-    // the retained bearer. The reconciler's combiner reads the error as
-    // "close nothing", which is the fail-closed outcome this path wants.
+    // TanStack invokes the query function. The probe is the host's own local
+    // History contribution, a read of its disk that spends no cloud verdict,
+    // so the exemption it supplies stays available.
     useAuthStore
       .getState()
       .setUnverifiedSession(USER_A_PROFILE, USER_A_CONTEXT);
 
     await expect(
       fixture.queryClient.fetchQuery(fixture.options),
-    ).rejects.toBeInstanceOf(CloudEpicTasksVerdictWithdrawnError);
+    ).resolves.toMatchObject({ tasks: [], hasMore: false });
 
-    expect(fixture.dispatchCount()).toBe(0);
+    expect(fixture.dispatchCount()).toBe(1);
+  });
+
+  it("rejects, rather than reading as an empty answer, when the host's local History cannot be read", async () => {
+    const fixture = createFixture(false);
+
+    await expect(
+      fixture.queryClient.fetchQuery(fixture.options),
+    ).rejects.toBeInstanceOf(HostLocalHistoryUnavailableError);
+
+    expect(fixture.dispatchCount()).toBe(1);
     expect(
       fixture.queryClient.getQueryState(fixture.options.queryKey)?.status,
     ).toBe("error");

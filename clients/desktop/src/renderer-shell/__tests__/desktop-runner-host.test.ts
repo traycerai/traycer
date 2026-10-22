@@ -124,6 +124,7 @@ function buildFakeBridge(
   const bridge: DesktopPreloadBridge = {
     authnBaseUrl: "http://localhost:5005",
     relayBaseUrl: "ws://localhost:8787/attach",
+    poolBaseUrl: "",
     authRedirectUri: "",
     initialRoute: "/",
     sentryRendererDsn: "",
