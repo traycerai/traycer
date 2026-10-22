@@ -39,6 +39,7 @@ import { buildCliMarkSourceCommand } from "./commands/cli-mark-source";
 import { buildCliReAnchorCommand } from "./commands/cli-re-anchor";
 import { buildCliUpgradeCommand } from "./commands/cli-upgrade";
 import { buildAgentArchiveCommand } from "./commands/agent-archive";
+import { buildAgentRenameCommand } from "./commands/agent-rename";
 import { buildAgentConfigureCommand } from "./commands/agent-configure";
 import { buildAgentCreateCommand } from "./commands/agent-create";
 import { buildAgentForkCommand } from "./commands/agent-fork";
@@ -3456,6 +3457,29 @@ function registerAgentCommands(
         epicId: null,
         agentId: typeof opts.agentId === "string" ? opts.agentId : "",
         unarchive: opts.unarchive === true,
+      }),
+  );
+
+  withRunner(
+    agent
+      .command("rename", readonlyHidden)
+      .description(
+        "Set the display name of a GUI chat or terminal agent on this host. The name is marked as user-set, so automatic titles never replace it.",
+      )
+      .argument(
+        "<id>",
+        "Full id of the chat or terminal agent to rename. No prefix resolution - the id must be exact.",
+      )
+      .argument(
+        "<name>",
+        "The new display name. Surrounding whitespace is trimmed; a blank name is refused.",
+      ),
+    (_opts, args) =>
+      buildAgentRenameCommand({
+        epicId: null,
+        senderAgentId: null,
+        agentId: expectRequiredPositional(args[0], "agent id"),
+        name: expectRequiredPositional(args[1], "name"),
       }),
   );
 
