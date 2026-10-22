@@ -144,11 +144,6 @@ export const openSteerBlockSchema = lazySchema(() =>
 );
 export type OpenSteerBlock = z.infer<typeof openSteerBlockSchema>;
 
-/**
- * The content-block union with its three harness-bearing members reopened.
- * Every other member is the live schema; a NEW member has to be added here,
- * which `open-harness-wire.test.ts` enforces by comparing member sets.
- */
 export const openContentBlockSchemaPreHtml = lazySchema(() =>
   z.discriminatedUnion("type", [
     openTextBlockSchema,
@@ -188,6 +183,11 @@ export const openContentBlockSchemaPreArtifact = lazySchema(() =>
     artifactOperationBlockSchema,
   ]),
 );
+/**
+ * The content-block union with its three harness-bearing members reopened.
+ * Every other member is the live schema; a NEW member has to be added here,
+ * which `open-harness-wire.test.ts` enforces by comparing member sets.
+ */
 export const openContentBlockSchema = lazySchema(() =>
   z.discriminatedUnion("type", [
     openTextBlockSchema,

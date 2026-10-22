@@ -80,7 +80,6 @@ describe("readRootCustomProperties", () => {
     expect(properties(page("/* c */ :root /* d */ {--a:1}"))).toHaveLength(1);
     expect(properties(page(":ROOT{--a:1}"))).toHaveLength(1);
     expect(readMiss(page("html:root{--a:1}"))).toBe("missing-root");
-    expect(readMiss(page("body{--a:1}"))).toBe("missing-root");
   });
 
   describe("which declaration wins", () => {

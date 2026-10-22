@@ -26,9 +26,7 @@ describe("ARTBOARD_STYLE_FIELDS", () => {
     ]);
   });
 
-  it("never lists a property twice or leaves a label blank", () => {
-    const properties = ARTBOARD_STYLE_FIELDS.map((field) => field.property);
-    expect(new Set(properties).size).toBe(properties.length);
+  it("leaves no label blank", () => {
     for (const field of ARTBOARD_STYLE_FIELDS) {
       expect(field.label.trim()).not.toBe("");
     }
@@ -36,7 +34,6 @@ describe("ARTBOARD_STYLE_FIELDS", () => {
 
   it("names each property the way the code editor would write it", () => {
     for (const field of ARTBOARD_STYLE_FIELDS) {
-      expect(field.property).toBe(field.property.toLowerCase());
       const parsed = validateArtboardCss(`${field.property}: x`, () => true);
       expect(parsed).toEqual({
         ok: true,

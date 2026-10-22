@@ -784,7 +784,7 @@ export interface ProjectedChatSubscribeServerFrame {
   readonly [key: string]: unknown;
 }
 
-/** Canvas annotations first ride 1.31; older lines carry browser evidence only. */
+/** Canvas annotations first ride 1.32; older lines carry browser evidence only. */
 export const CHAT_SUBSCRIBE_CANVAS_ANNOTATIONS_MINOR = 32;
 
 function supportsCanvasAnnotations(negotiated: SchemaVersion | null): boolean {
@@ -1566,7 +1566,7 @@ function projectChatEvents(value: unknown): unknown {
   return changed ? projected : value;
 }
 
-/** Below 1.29 the host omits operation blocks/events for non-markdown kinds. */
+/** Below 1.30 the host omits operation blocks/events for non-markdown kinds. */
 export const CHAT_SUBSCRIBE_HTML_ARTIFACTS_MINOR = 30;
 
 /** Older peers receive the tool row without its inline artifact stamp. */

@@ -1,5 +1,5 @@
 import { cleanup, render, screen } from "@testing-library/react";
-import { useEffect, type ReactNode } from "react";
+import { useEffect, useRef, type ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SandboxSource } from "@/components/sandbox/sandbox-frame";
 import type {
@@ -67,9 +67,12 @@ vi.mock("@/components/epic-canvas/renderers/file-artifact-viewer", () => ({
       name: props.name,
       sha256: props.object.sha256,
     });
+    // One entry per instance, recorded when it mounts with the sha it first
+    // rendered. A changed sha prop on the same instance records nothing.
+    const mountedWith = useRef(props.object.sha256);
     useEffect(() => {
-      mocks.fileViewerMounts.push(props.object.sha256);
-    }, [props.object.sha256]);
+      mocks.fileViewerMounts.push(mountedWith.current);
+    }, []);
     return <div data-testid="file-viewer" />;
   },
 }));

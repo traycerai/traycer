@@ -4,6 +4,8 @@ import {
   fireEvent,
   render,
   screen,
+  waitFor,
+  within,
 } from "@testing-library/react";
 import {
   afterEach,
@@ -96,11 +98,33 @@ function selectElement(overrides: Partial<CanvasElement>): CanvasSelection {
   return selection;
 }
 
-/** Blob and FileReader answers arrive on a later task than a microtask. */
-async function flush(): Promise<void> {
-  await act(async () => {
-    await new Promise<void>((resolve) => setTimeout(resolve, 20));
-  });
+/** The edit is handed to the save the moment the component applies it. */
+function startedSaves(count: number): Promise<void> {
+  return waitFor(() => expect(pendingSaves).toHaveLength(count));
+}
+
+/**
+ * Follows the file the component reads with a FileReader; the spy calls
+ * through, and records the reader each call ran on. `finished` waits for a read
+ * to have started, then for that reader to be done: the component's own
+ * continuation was queued on its `load` before `loadend` reaches here, so it
+ * has run once `finished` resolves. A reader already done was observed in a
+ * later task than the one that ended it, so its continuation has run too.
+ */
+function trackReads(): { readonly finished: () => Promise<void> } {
+  const read = vi.spyOn(FileReader.prototype, "readAsDataURL");
+  return {
+    finished: async () => {
+      await waitFor(() => expect(read.mock.contexts).toHaveLength(1));
+      const [reader] = read.mock.contexts;
+      if (!(reader instanceof FileReader))
+        throw new Error("readAsDataURL ran on something that is not a reader");
+      if (reader.readyState === FileReader.DONE) return;
+      await new Promise<void>((resolve) => {
+        reader.addEventListener("loadend", () => resolve(), { once: true });
+      });
+    },
+  };
 }
 
 beforeEach(() => {
@@ -169,9 +193,8 @@ describe("CanvasImageControls", () => {
     const selection = selectElement({ tagName: "img" });
     mount(selection);
     choose(imageFile("photo.png", "image/png"));
-    await waitForSave();
+    await startedSaves(1);
 
-    expect(pendingSaves).toHaveLength(1);
     expect(pendingSaves[0].variables.selection).toBe(selection);
     expect(pendingSaves[0].variables.edit).toEqual({
       kind: "write-asset",
@@ -183,8 +206,6 @@ describe("CanvasImageControls", () => {
     await settleSave(0, SAVED);
   });
 
-  const waitForSave = flush;
-
   it.each([
     ["image/png"],
     ["image/jpeg"],
@@ -194,8 +215,7 @@ describe("CanvasImageControls", () => {
   ])("accepts %s", async (type) => {
     mount(selectElement({ tagName: "img" }));
     choose(imageFile("pic", type));
-    await waitForSave();
-    expect(pendingSaves).toHaveLength(1);
+    await startedSaves(1);
     expect(pendingSaves[0].variables.edit).toMatchObject({ mediaType: type });
   });
 
@@ -204,11 +224,10 @@ describe("CanvasImageControls", () => {
     ["a text file", "text/plain"],
     ["a file with no type", ""],
     ["a PDF", "application/pdf"],
-  ])("refuses %s before reading or uploading it", async (_label, type) => {
+  ])("refuses %s before reading or uploading it", (_label, type) => {
     const reads = vi.spyOn(FileReader.prototype, "readAsDataURL");
     mount(selectElement({ tagName: "img" }));
     choose(imageFile("file", type));
-    await waitForSave();
 
     expect(pendingSaves).toHaveLength(0);
     expect(reads).not.toHaveBeenCalled();
@@ -217,10 +236,9 @@ describe("CanvasImageControls", () => {
     );
   });
 
-  it("refuses an empty file", async () => {
+  it("refuses an empty file", () => {
     mount(selectElement({ tagName: "img" }));
     choose(imageFileOf("empty.png", "image/png", new Uint8Array(0)));
-    await waitForSave();
     expect(pendingSaves).toHaveLength(0);
     expect(screen.getByRole("status").textContent).toBe("This image is empty.");
   });
@@ -234,7 +252,6 @@ describe("CanvasImageControls", () => {
       value: CANVAS_IMAGE_MAX_BYTES + 1,
     });
     choose(tooBig);
-    await waitForSave();
     expect(pendingSaves).toHaveLength(0);
     expect(reads).not.toHaveBeenCalled();
     expect(screen.getByRole("status").textContent).toBe(
@@ -244,24 +261,24 @@ describe("CanvasImageControls", () => {
     const exact = imageFile("exact.png", "image/png");
     Object.defineProperty(exact, "size", { value: CANVAS_IMAGE_MAX_BYTES });
     choose(exact);
-    await waitForSave();
-    expect(pendingSaves).toHaveLength(1);
+    await startedSaves(1);
   });
 
   it("uploads nothing if the selection moved on while the file was being read", async () => {
+    const reads = trackReads();
     mount(selectElement({ tagName: "img" }));
     choose(imageFile("photo.png", "image/png"));
     act(() => {
       useCanvasSelectionStore.getState().clear();
     });
-    await waitForSave();
+    await reads.finished();
     expect(pendingSaves).toHaveLength(0);
   });
 
   it("shows the host's reason when it refuses the upload", async () => {
     mount(selectElement({ tagName: "img" }));
     choose(imageFile("photo.png", "image/png"));
-    await waitForSave();
+    await startedSaves(1);
     await settleSave(0, REFUSED);
     expect(screen.getByRole("status").textContent).toBe(
       REFUSED.ok ? "" : REFUSED.detail,
@@ -271,7 +288,7 @@ describe("CanvasImageControls", () => {
   it("disables the buttons and shows progress while uploading", async () => {
     mount(selectElement({ tagName: "img" }));
     choose(imageFile("photo.png", "image/png"));
-    await waitForSave();
+    expect(await screen.findByTestId("saving-spinner")).toBeDefined();
 
     expect(
       screen.getByRole("button", { name: "Replace image" }),
@@ -280,7 +297,6 @@ describe("CanvasImageControls", () => {
       "disabled",
       true,
     );
-    expect(screen.getByTestId("saving-spinner")).toBeDefined();
     await settleSave(0, SAVED);
   });
 
@@ -290,12 +306,12 @@ describe("CanvasImageControls", () => {
       readItem({ "text/html": "<p>copied</p>" }),
     ]);
     fireEvent.click(screen.getByRole("button", { name: "Paste image" }));
-    await waitForSave();
 
-    expect(pendingSaves).toHaveLength(0);
-    expect(screen.getByRole("status").textContent).toBe(
+    // The message is what the finished clipboard read reports.
+    expect((await screen.findByRole("status")).textContent).toBe(
       "Copy an element or image first.",
     );
+    expect(pendingSaves).toHaveLength(0);
   });
 
   it("finds an image on any clipboard item, not only the first", async () => {
@@ -305,7 +321,7 @@ describe("CanvasImageControls", () => {
       readItem({ "image/png": PNG_BYTES }),
     ]);
     fireEvent.click(screen.getByRole("button", { name: "Paste image" }));
-    await waitForSave();
+    await startedSaves(1);
 
     expect(pendingSaves[0].variables.edit).toMatchObject({
       kind: "write-asset",
@@ -317,7 +333,7 @@ describe("CanvasImageControls", () => {
     mount(selectElement({ tagName: "img" }));
     clipboard.read.mockResolvedValue([readItem({ "image/png": PNG_BYTES })]);
     fireEvent.click(screen.getByRole("button", { name: "Paste image" }));
-    await waitForSave();
+    await startedSaves(1);
 
     expect(pendingSaves[0].variables.edit).toEqual({
       kind: "write-asset",
@@ -355,7 +371,6 @@ describe("CanvasClipboardBoundary pasting", () => {
   }
   const board = (): HTMLElement =>
     screen.getByRole("button", { name: "board" });
-  const waitForRead = flush;
 
   it("replaces the selected image with a pasted image and keeps the browser from pasting it", async () => {
     mount();
@@ -363,7 +378,7 @@ describe("CanvasClipboardBoundary pasting", () => {
     const notPrevented = paste(board(), {
       files: [imageFile("shot.png", "image/png")],
     });
-    await waitForRead();
+    await startedSaves(1);
 
     expect(notPrevented).toBe(false);
     expect(pendingSaves[0].variables.edit).toMatchObject({
@@ -374,33 +389,36 @@ describe("CanvasClipboardBoundary pasting", () => {
     });
   });
 
-  it("says so, and uploads nothing, when an image is pasted with no image selected", async () => {
+  it("says so, and uploads nothing, when an image is pasted with no image selected", () => {
     mount();
     paste(board(), { files: [imageFile("shot.png", "image/png")] });
-    await waitForRead();
     expect(pendingSaves).toHaveLength(0);
     expect(screen.getByRole("status").textContent).toContain(
       "Select an image to replace.",
     );
   });
 
-  it("says so when an image is pasted while some other kind of element is selected", async () => {
+  it("says so when an image is pasted while some other kind of element is selected", () => {
     mount();
     selectElement({ tagName: "p" });
     paste(board(), { files: [imageFile("shot.png", "image/png")] });
-    await waitForRead();
     expect(pendingSaves).toHaveLength(0);
     expect(screen.getByRole("status").textContent).toContain(
       "Select an image to replace.",
     );
   });
 
-  it("refuses a pasted file that is not a supported image without uploading it", async () => {
+  it("refuses a pasted file that is not a supported image without uploading it", () => {
     mount();
     selectElement({ tagName: "img" });
     paste(board(), { files: [imageFile("shot.svg", "image/svg+xml")] });
-    await waitForRead();
     expect(pendingSaves).toHaveLength(0);
+    // The status holds the message beside its Dismiss button.
+    expect(
+      within(screen.getByRole("status")).getByText(
+        "Choose a PNG, JPEG, GIF, WebP or AVIF image.",
+      ),
+    ).toBeDefined();
   });
 
   it("inserts pasted element markup after the selected element", () => {
@@ -422,11 +440,10 @@ describe("CanvasClipboardBoundary pasting", () => {
       files: [imageFile("shot.png", "image/png")],
       html: '<img src="x">',
     });
-    await waitForRead();
+    await startedSaves(1);
     expect(pendingSaves[0].variables.edit).toMatchObject({
       kind: "write-asset",
     });
-    expect(pendingSaves).toHaveLength(1);
   });
 
   it("asks for an element to paste after when none is selected", () => {
@@ -575,9 +592,8 @@ describe("CanvasClipboardMenuItems", () => {
       outerHtml: '<p data-tid="t">live</p>',
     });
     fireEvent.click(item("Copy element"));
-    await flush();
+    await waitFor(() => expect(clipboard.write).toHaveBeenCalledOnce());
 
-    expect(clipboard.write).toHaveBeenCalledOnce();
     expect(await written(0)).toEqual({
       "text/html": '<p data-tid="t">live</p>',
       "text/plain": '<p data-tid="t">live</p>',
@@ -591,7 +607,7 @@ describe("CanvasClipboardMenuItems", () => {
       outerHtml: MARKUP,
     });
     fireEvent.click(item("Copy element"));
-    await flush();
+    await waitFor(() => expect(clipboard.write).toHaveBeenCalledTimes(1));
     expect(byTid.described).toHaveBeenCalledWith({ tid: "t" });
     cleanup();
 
@@ -601,7 +617,7 @@ describe("CanvasClipboardMenuItems", () => {
       outerHtml: MARKUP,
     });
     fireEvent.click(item("Copy element"));
-    await flush();
+    await waitFor(() => expect(clipboard.write).toHaveBeenCalledTimes(2));
     expect(byMarker.described).toHaveBeenCalledWith({ marker: 5 });
   });
 
@@ -612,7 +628,7 @@ describe("CanvasClipboardMenuItems", () => {
       outerHtml: null,
     });
     fireEvent.click(item("Copy element"));
-    await flush();
+    await waitFor(() => expect(clipboard.write).toHaveBeenCalledOnce());
     expect((await written(0))["text/html"]).toBe(MARKUP);
   });
 
@@ -623,12 +639,12 @@ describe("CanvasClipboardMenuItems", () => {
       outerHtml: null,
     });
     fireEvent.click(item("Copy element"));
-    await flush();
 
-    expect(clipboard.write).not.toHaveBeenCalled();
-    expect(screen.getByRole("status").textContent).toBe(
+    // The message is what the finished copy reports.
+    expect((await screen.findByRole("status")).textContent).toBe(
       "This element is too large or unavailable to copy.",
     );
+    expect(clipboard.write).not.toHaveBeenCalled();
   });
 
   it("says so when there is no markup and no source", async () => {
@@ -638,11 +654,10 @@ describe("CanvasClipboardMenuItems", () => {
       outerHtml: undefined,
     });
     fireEvent.click(item("Copy element"));
-    await flush();
-    expect(clipboard.write).not.toHaveBeenCalled();
-    expect(screen.getByRole("status").textContent).toBe(
+    expect((await screen.findByRole("status")).textContent).toBe(
       "This element is too large or unavailable to copy.",
     );
+    expect(clipboard.write).not.toHaveBeenCalled();
   });
 
   it("copies nothing if the selection moved while the page was answering", async () => {
@@ -679,8 +694,13 @@ describe("CanvasClipboardMenuItems", () => {
       view.registry.update(BOARD_PATH, { bridge: realBridge() });
       return Promise.resolve({ ...canvasElement({}), outerHtml: MARKUP });
     });
-    fireEvent.click(item("Copy element"));
-    await flush();
+    // describeElement has already answered, so the copy's continuation is the
+    // first microtask the click queued: it runs, and returns without writing,
+    // before the awaited act resumes.
+    await act(() => {
+      fireEvent.click(item("Copy element"));
+      return Promise.resolve();
+    });
     expect(clipboard.write).not.toHaveBeenCalled();
   });
 
@@ -692,8 +712,7 @@ describe("CanvasClipboardMenuItems", () => {
       outerHtml: MARKUP,
     });
     fireEvent.click(item("Copy element"));
-    await flush();
-    expect(screen.getByRole("status").textContent).toBe(
+    expect((await screen.findByRole("status")).textContent).toBe(
       "The element could not be copied. Try again.",
     );
   });
@@ -718,8 +737,7 @@ describe("CanvasClipboardMenuItems", () => {
       readItem({ "text/html": "<p>copied</p>" }),
     ]);
     fireEvent.click(item("Paste after"));
-    await flush();
-    await flush();
+    await startedSaves(1);
 
     expect(pendingSaves[0].variables.edit).toEqual({
       kind: "insert-html-after",
@@ -737,7 +755,7 @@ describe("CanvasClipboardMenuItems", () => {
       readItem({ "image/png": PNG_BYTES, "text/html": "<img>" }),
     ]);
     fireEvent.click(item("Paste after"));
-    await flush();
+    await startedSaves(1);
 
     expect(pendingSaves[0].variables.edit).toMatchObject({
       kind: "write-asset",
@@ -754,12 +772,10 @@ describe("CanvasClipboardMenuItems", () => {
     });
     clipboard.read.mockResolvedValue([readItem({ "text/plain": "just text" })]);
     fireEvent.click(item("Paste after"));
-    await flush();
-    await flush();
-    expect(pendingSaves).toHaveLength(0);
-    expect(screen.getByRole("status").textContent).toBe(
+    expect((await screen.findByRole("status")).textContent).toBe(
       "Copy an element or image first.",
     );
+    expect(pendingSaves).toHaveLength(0);
   });
 
   it("points to the keyboard shortcut when the browser will not let the clipboard be read", async () => {
@@ -770,8 +786,7 @@ describe("CanvasClipboardMenuItems", () => {
     });
     clipboard.read.mockRejectedValue(new Error("denied"));
     fireEvent.click(item("Paste after"));
-    await flush();
-    expect(screen.getByRole("status").textContent).toBe(
+    expect((await screen.findByRole("status")).textContent).toBe(
       "The clipboard could not be read. Use the Paste keyboard shortcut.",
     );
   });
@@ -783,6 +798,13 @@ describe("CanvasClipboardMenuItems", () => {
       });
       return { promise, resolve };
     }
+    // The markup is read out of its Blob once getType answers; a paste that
+    // has gone stale ends when that read does.
+    const markupRead = async (): Promise<void> => {
+      const text = vi.spyOn(Blob.prototype, "text");
+      await waitFor(() => expect(text).toHaveBeenCalledOnce());
+      await text.mock.results[0].value;
+    };
     const moveSelection = (): void => {
       act(() => {
         useCanvasSelectionStore
@@ -799,11 +821,11 @@ describe("CanvasClipboardMenuItems", () => {
       });
       const read = deferred<FakeReadItem[]>();
       clipboard.read.mockReturnValue(read.promise);
+      const markup = markupRead();
       fireEvent.click(item("Paste after"));
       moveSelection();
       read.resolve([readItem({ "text/html": "<p>copied</p>" })]);
-      await flush();
-      await flush();
+      await markup;
       expect(pendingSaves).toHaveLength(0);
     });
 
@@ -814,14 +836,14 @@ describe("CanvasClipboardMenuItems", () => {
         outerHtml: MARKUP,
       });
       const contents = deferred<Blob>();
-      clipboard.read.mockResolvedValue([
-        { types: ["text/html"], getType: () => contents.promise },
-      ]);
+      const getType = vi.fn(() => contents.promise);
+      clipboard.read.mockResolvedValue([{ types: ["text/html"], getType }]);
+      const markup = markupRead();
       fireEvent.click(item("Paste after"));
-      await flush();
+      await waitFor(() => expect(getType).toHaveBeenCalledOnce());
       moveSelection();
       contents.resolve(new Blob(["<p>copied</p>"], { type: "text/html" }));
-      await flush();
+      await markup;
       expect(pendingSaves).toHaveLength(0);
     });
 
@@ -832,14 +854,14 @@ describe("CanvasClipboardMenuItems", () => {
         outerHtml: MARKUP,
       });
       const contents = deferred<Blob>();
-      clipboard.read.mockResolvedValue([
-        { types: ["image/png"], getType: () => contents.promise },
-      ]);
+      const getType = vi.fn(() => contents.promise);
+      clipboard.read.mockResolvedValue([{ types: ["image/png"], getType }]);
+      const reads = trackReads();
       fireEvent.click(item("Paste after"));
-      await flush();
+      await waitFor(() => expect(getType).toHaveBeenCalledOnce());
       moveSelection();
       contents.resolve(new Blob([PNG_BYTES], { type: "image/png" }));
-      await flush();
+      await reads.finished();
       expect(pendingSaves).toHaveLength(0);
     });
 
@@ -854,10 +876,8 @@ describe("CanvasClipboardMenuItems", () => {
         readItem({ "image/png": PNG_BYTES }),
       ]);
       fireEvent.click(item("Paste after"));
-      await flush();
-      await flush();
+      await startedSaves(1);
 
-      expect(pendingSaves).toHaveLength(1);
       expect(pendingSaves[0].variables.edit).toMatchObject({
         kind: "write-asset",
         mediaType: "image/png",

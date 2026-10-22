@@ -42,7 +42,6 @@ export function HtmlArtifactFrame(props: {
   ) => ReactNode;
   readonly renderComments?: (context: HtmlArtifactFrameContext) => ReactNode;
   readonly toolbarControls?: ReactNode;
-  readonly overlay?: ReactNode;
 }) {
   const { source } = props;
   const artifactId = source.artifactId;
@@ -110,7 +109,6 @@ export function HtmlArtifactFrame(props: {
           actionControls={(selection) =>
             props.actionControls?.(selection, context)
           }
-          overlay={props.overlay}
           toolbarControls={props.toolbarControls}
         />
       ) : null}

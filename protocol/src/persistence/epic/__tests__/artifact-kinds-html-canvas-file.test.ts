@@ -291,7 +291,6 @@ describe("artifactManifestPathSchema", () => {
     expect(artifactManifestPathSchema.safeParse(path).success).toBe(false);
   });
 
-  // These two depend on the path rule being tightened by the schema agent.
   it("rejects a backslash", () => {
     expect(artifactManifestPathSchema.safeParse("a\\b").success).toBe(false);
   });

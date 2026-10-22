@@ -3,7 +3,7 @@ import { parseHtmlSource } from "@traycer/html-source";
 import type { CanvasElement } from "@/lib/sandbox/canvas-bridge";
 import type { CanvasSelection } from "../canvas-selection-store";
 import type { CanvasBoardDocument } from "../canvas-board-document";
-import { canvasRangeTags, canvasToolbarPosition } from "../canvas-text-tools";
+import { canvasRangeTags } from "../canvas-text-tools";
 
 const BOX = { x: 40, y: 100, width: 60, height: 20 };
 
@@ -45,35 +45,6 @@ function selectionOf(
     textRange: { element: target, start, end, quote: "q", rects: [BOX] },
   };
 }
-
-describe("canvasToolbarPosition", () => {
-  it("floats above the first selected rectangle", () => {
-    expect(
-      canvasToolbarPosition(
-        [
-          { x: 40, y: 100, width: 5, height: 5 },
-          { x: 0, y: 300, width: 5, height: 5 },
-        ],
-        BOX,
-      ),
-    ).toEqual({ x: 40, y: 64 });
-  });
-
-  it("falls back to the element's own box when the selection has no rectangles", () => {
-    expect(
-      canvasToolbarPosition([], { x: 10, y: 80, width: 5, height: 5 }),
-    ).toEqual({
-      x: 10,
-      y: 44,
-    });
-  });
-
-  it("never leaves the frame's top or left edge", () => {
-    expect(
-      canvasToolbarPosition([{ x: -30, y: 10, width: 5, height: 5 }], BOX),
-    ).toEqual({ x: 0, y: 0 });
-  });
-});
 
 describe("canvasRangeTags", () => {
   // Text offsets by node: "Hello " 0-6, "big " 6-10, "deep" 10-14,

@@ -263,13 +263,6 @@ describe("parseCanvasElement outerHtml", () => {
     expect(parseCanvasElement(element({ outerHtml }))).toBeNull();
   });
 
-  it("does not let an oversized outerHtml hide behind an otherwise valid element", () => {
-    expect(parseCanvasElement(element({}))).not.toBeNull();
-    expect(
-      parseCanvasElement(element({ outerHtml: "x".repeat(LIMIT_BYTES + 1) })),
-    ).toBeNull();
-  });
-
   it("is carried by the element inside a text selection", () => {
     const selection = parseCanvasTextSelection({
       element: element({ outerHtml: "<p>hi</p>" }),

@@ -31,7 +31,6 @@ export interface HtmlSelectionLayerProps {
   /** Only the current document's ready bridge may answer selection requests. */
   readonly bridge: SandboxBridgeHost | null;
   readonly actionControls?: (selection: HtmlSelection) => ReactNode;
-  readonly overlay?: ReactNode;
   readonly toolbarControls?: ReactNode;
 }
 
@@ -128,7 +127,6 @@ export function HtmlSelectionLayer({
   frame,
   bridge,
   actionControls,
-  overlay,
   toolbarControls,
 }: HtmlSelectionLayerProps) {
   const { enabled, selection, generation } =
@@ -343,7 +341,6 @@ export function HtmlSelectionLayer({
           dimensions={dimensions}
         />
       ) : null}
-      <div className="absolute inset-0 z-10">{overlay}</div>
       {enabled ? (
         <HtmlSelectionActions
           selection={selection}

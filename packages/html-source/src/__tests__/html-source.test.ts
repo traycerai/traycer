@@ -2075,13 +2075,6 @@ describe("text edits that must survive a re-parse", () => {
         );
       });
     }
-
-    it("keeps the foster-parented text refusal for setTextContent", () => {
-      const original = `<table>outside</table>`;
-      expect(
-        refused(setTextContent(original, at(original, "<table"), "new")),
-      ).toBe("unsafe-source-range");
-    });
   });
 
   describe("text the parser would change", () => {

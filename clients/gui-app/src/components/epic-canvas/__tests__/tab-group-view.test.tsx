@@ -287,8 +287,6 @@ vi.mock("@/lib/epic-selectors", () => ({
 vi.mock("@/lib/registries/chat-session-registry", () => ({
   getChatSessionRegistry: () => ({
     listHandles: () => [],
-    // The chat tab's routing menu looks its chat up here; no session is open.
-    peek: () => null,
     subscribe: () => () => undefined,
   }),
   useExistingChatSessionHandle: () => null,

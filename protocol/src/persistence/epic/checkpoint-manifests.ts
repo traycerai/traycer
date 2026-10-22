@@ -39,7 +39,7 @@ export const checkpointArtifactTagSchemaPreHtml = lazySchema(() =>
   }),
 );
 // Manifest events carry this tag in opaque metadata. Typed stream frames bind
-// the frozen copy through 1.31 and the live copy from 1.32.
+// the frozen copy through 1.32 and the live copy from 1.33.
 export const checkpointArtifactTagSchema = lazySchema(() =>
   checkpointArtifactTagSchemaPreHtml.extend({
     kind: checkpointArtifactKindSchema.nullable(),

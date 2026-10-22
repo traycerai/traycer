@@ -791,13 +791,6 @@ export const chatTranscriptWindowSchema = lazySchema(() =>
 );
 export type ChatTranscriptWindow = z.infer<typeof chatTranscriptWindowSchema>;
 
-/**
- * The live tail (`chat.subscribe@1.22`): the `1.21` tail with its rows'
- * senders, actors, notices, plans and steer blocks reopened to the open
- * harness id (`open-harness-wire.ts`). `rowContext` keeps the live anchor
- * union: an anchor is a per-harness payload, so the host withholds one the
- * peer cannot decode rather than this schema widening it.
- */
 export const openChatTranscriptWindowSchemaPreHtml = lazySchema(() =>
   chatTranscriptWindowSchema.extend({
     messages: z.array(openMessageSchemaPreHtml),
@@ -819,6 +812,12 @@ export const openChatTranscriptWindowSchemaPreCanvas = lazySchema(() =>
   }),
 );
 
+/**
+ * The live tail with senders, actors, notices, plans and steer blocks reopened
+ * to the open harness id (`open-harness-wire.ts`). `rowContext` keeps the live
+ * anchor union: the host withholds an anchor the peer cannot decode rather
+ * than this schema widening it.
+ */
 export const openChatTranscriptWindowSchema = lazySchema(() =>
   chatTranscriptWindowSchema.extend({
     messages: z.array(openMessageSchema),
@@ -1179,11 +1178,6 @@ export const chatRangeResponseSchemaPreMcpApp = lazySchema(() =>
   }),
 );
 
-/**
- * The live range response (`chat.subscribe@1.22`): the `1.21` response with
- * its rows reopened, for the reason {@link openChatTranscriptWindowSchema}
- * gives.
- */
 export const openChatRangeResponseSchemaPreHtml = lazySchema(() =>
   chatRangeResponseSchema.extend({
     messages: z.array(openMessageSchemaPreHtml),
@@ -1205,6 +1199,10 @@ export const openChatRangeResponseSchemaPreCanvas = lazySchema(() =>
   }),
 );
 
+/**
+ * The live range response with its rows reopened, for the reason
+ * {@link openChatTranscriptWindowSchema} gives.
+ */
 export const openChatRangeResponseSchema = lazySchema(() =>
   chatRangeResponseSchema.extend({
     messages: z.array(openMessageSchema),

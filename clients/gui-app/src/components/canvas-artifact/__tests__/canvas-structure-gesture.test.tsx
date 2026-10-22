@@ -4,6 +4,7 @@ import {
   fireEvent,
   render,
   screen,
+  waitFor,
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CanvasSiblingLayout } from "@/lib/sandbox/canvas-layout-bridge";
@@ -28,6 +29,7 @@ import {
   selectOnly,
   selectSet,
   settleLayout,
+  startedSaves,
   structureDocument,
   structureHarness,
   type FrameGeometry,
@@ -145,9 +147,8 @@ describe("resizing at canvas zoom", () => {
       startDrag(corner, { x: 100, y: 100 });
       dragTo(corner, { x: 140, y: 120 });
       release(corner, { x: 140, y: 120 });
-      await settleLayout();
+      await startedSaves(1);
 
-      expect(pendingSaves).toHaveLength(1);
       expect(pendingSaves[0].variables.edit).toEqual({
         kind: "set-box",
         width,
@@ -172,8 +173,8 @@ describe("resizing at canvas zoom", () => {
     await mountOverlay(rowLayout(), FRAME_ACTUAL);
     const corner = handle("Resize element bottom right");
     startDrag(corner, { x: 100, y: 100 });
+    // A click ends in the release itself; no layout read is started for it.
     release(corner, { x: 101, y: 101 });
-    await settleLayout();
     expect(pendingSaves).toHaveLength(0);
   });
 });
@@ -196,9 +197,8 @@ describe("reordering", () => {
       startDrag(edge, { x: 20 * zoom, y: 5 * zoom });
       dragTo(edge, drop);
       release(edge, drop);
-      await settleLayout();
+      await startedSaves(1);
 
-      expect(pendingSaves).toHaveLength(1);
       const edit = pendingSaves[0].variables.edit;
       expect(edit.kind).toBe("move-element");
       if (edit.kind !== "move-element") return;
@@ -239,8 +239,8 @@ describe("Escape cancels a gesture", () => {
 
     pressEscape();
     expect(insertionMarker(container)).toBeNull();
+    // The gesture is gone, so the release ends without reading the layout.
     release(edge, BEFORE_C);
-    await settleLayout();
     expect(pendingSaves).toHaveLength(0);
   });
 
@@ -251,14 +251,12 @@ describe("Escape cancels a gesture", () => {
     dragTo(edge, BEFORE_C);
     pressEscape();
     release(edge, BEFORE_C);
-    await settleLayout();
     expect(pendingSaves).toHaveLength(0);
 
     startDrag(edge, { x: 20, y: 5 });
     dragTo(edge, BEFORE_C);
     release(edge, BEFORE_C);
-    await settleLayout();
-    expect(pendingSaves).toHaveLength(1);
+    await startedSaves(1);
   });
 
   it("after release, while the layout is being re-read", async () => {
@@ -269,10 +267,7 @@ describe("Escape cancels a gesture", () => {
     const answer = harness.hold();
     release(edge, BEFORE_C);
     pressEscape();
-    await act(async () => {
-      answer();
-      await Promise.resolve();
-    });
+    answer();
     await settleLayout();
     expect(pendingSaves).toHaveLength(0);
   });
@@ -302,17 +297,14 @@ describe("something changes while the layout is being re-read", () => {
   }
 
   async function answerAndSettle(answer: () => void): Promise<void> {
-    await act(async () => {
-      answer();
-      await Promise.resolve();
-    });
+    answer();
     await settleLayout();
   }
 
   it("saves when nothing changed", async () => {
     const { answer } = await dragWhileHeld();
     await answerAndSettle(answer);
-    expect(pendingSaves).toHaveLength(1);
+    await startedSaves(1);
   });
 
   it("saves nothing when the page moved the siblings", async () => {
@@ -326,7 +318,7 @@ describe("something changes while the layout is being re-read", () => {
     );
     await answerAndSettle(answer);
     expect(pendingSaves).toHaveLength(0);
-    expect(screen.getByRole("status").textContent).toBe(CHANGED);
+    expect((await screen.findByRole("status")).textContent).toBe(CHANGED);
   });
 
   it("saves nothing when the page can no longer answer for the element", async () => {
@@ -396,7 +388,6 @@ describe("the frame moves during a gesture", () => {
     expect(insertionMarker(container)).toBeNull();
     expect(screen.getByRole("status").textContent).toBe(CHANGED);
     release(edge, BEFORE_C);
-    await settleLayout();
     expect(pendingSaves).toHaveLength(0);
   });
 });
@@ -483,13 +474,13 @@ describe("a save that comes back", () => {
     const corner = handle("Resize element bottom right");
     startDrag(corner, { x: 100, y: 100 });
     release(corner, { x: 140, y: 120 });
-    await settleLayout();
-    expect(pendingSaves).toHaveLength(1);
+    await startedSaves(1);
     await settleSave(0, SAVED);
+    // The handle is usable again once the answered save has been cleared.
+    await waitFor(() => expect(corner).toHaveProperty("disabled", false));
 
     startDrag(corner, { x: 100, y: 100 });
     release(corner, { x: 130, y: 110 });
-    await settleLayout();
-    expect(pendingSaves).toHaveLength(2);
+    await startedSaves(2);
   });
 });

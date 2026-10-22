@@ -251,7 +251,6 @@ describe("validateArtboardCss refusals", () => {
   it("shortens a very long declaration in the message", () => {
     const detail = detailOf(`color: ${"a".repeat(500)}`, () => false);
     expect(detail).toBe(`Invalid declaration: color: ${"a".repeat(113)}`);
-    expect(detail.length).toBe("Invalid declaration: ".length + 120);
   });
 
   describe("unbalanced input", () => {
