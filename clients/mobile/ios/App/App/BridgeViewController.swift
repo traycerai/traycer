@@ -31,6 +31,24 @@ class BridgeViewController: CAPBridgeViewController {
         bridge?.registerPluginInstance(AuthSessionPlugin())
         installSandboxGuards()
         forwardStatusBarTaps()
+        forwardQuoteRequests()
+    }
+
+    /// The web view with "Quote" in its text-selection edit menu
+    /// (`QuoteEditMenuWebView.swift`); Capacitor hands it the frame and the
+    /// configuration it would have given a plain `WKWebView`.
+    override func webView(with frame: CGRect, configuration: WKWebViewConfiguration) -> WKWebView {
+        return QuoteEditMenuWebView(frame: frame, configuration: configuration)
+    }
+
+    /// Forwarded like the status-bar tap: the edit menu's item raises the
+    /// `traycerQuoteSelection` window event, and the GUI's own listener reads
+    /// the selection and quotes it. The event reaches the app's document
+    /// only, never a sandboxed page.
+    private func forwardQuoteRequests() {
+        (webView as? QuoteEditMenuWebView)?.onQuoteRequested = { [weak self] in
+            self?.bridge?.triggerWindowJSEvent(eventName: "traycerQuoteSelection")
+        }
     }
 
     deinit {

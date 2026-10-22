@@ -4,4 +4,6 @@
     <string name="title_activity_main">Traycer</string>
     <string name="package_name">ai.traycer.app.android</string>
     <string name="custom_url_scheme">ai.traycer.app.android</string>
+    <!-- Text-selection toolbar item quoting the selected text into the reply. -->
+    <string name="quote_selection">Quote</string>
 </resources>
