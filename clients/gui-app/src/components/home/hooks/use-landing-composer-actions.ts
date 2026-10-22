@@ -155,7 +155,10 @@ import {
   buildDefaultBranchByPath,
   EMPTY_DEFAULT_BRANCH,
 } from "@/lib/worktree/default-branch-name";
-import { defaultFolderIntent } from "@/lib/worktree/worktree-intent-seeding";
+import {
+  defaultFolderIntent,
+  mainCheckoutHasCommit,
+} from "@/lib/worktree/worktree-intent-seeding";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 
 export interface LandingComposerSubmitArgs {
@@ -1890,7 +1893,10 @@ function readCachedDefaultWorktreeIntent(
       return [];
     }
     const currentBranch = branchForCachedSummary(summary);
-    return currentBranch === null ? [] : [{ summary, currentBranch }];
+    // A detached HEAD or a branch with no commit has no fork source: no default.
+    return currentBranch === null || !mainCheckoutHasCommit(summary)
+      ? []
+      : [{ summary, currentBranch }];
   });
   if (worktreeDefaults.length === 0) return null;
 
@@ -1910,6 +1916,7 @@ function readCachedDefaultWorktreeIntent(
         repoIdentifier: summary.repoIdentifier,
         isPrimary: summary.workspacePath === primaryPath,
         isGitRepo: true,
+        hasCommit: true,
         currentBranch,
         defaultNewBranchName: (
           defaultBranchByPath[summary.workspacePath] ?? EMPTY_DEFAULT_BRANCH
