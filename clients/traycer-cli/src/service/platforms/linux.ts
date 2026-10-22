@@ -149,8 +149,11 @@ export type ProcessRunner = typeof runCommand;
  * so on a box with no user manager it waited out the whole ladder (and with
  * `--force` killed the host process directly) before the relaunch's
  * `systemctl --user restart` surfaced the raw bus error as
- * `E_SERVICE_CONTROL_FAILED`. Nothing could have restarted that host, so
- * nothing is stopped.
+ * `E_SERVICE_CONTROL_FAILED`. Nothing could have restarted that host, so the
+ * unit is not signalled. The restart message makes no claim about processes
+ * a caller stopped before reaching here (`host free-port-and-restart` ends
+ * the port owner first), or about a manager lost between the stop leg and the
+ * relaunch.
  */
 async function assertSystemdUserReachable(
   label: ServiceLabel,
@@ -174,7 +177,7 @@ async function assertSystemdUserReachable(
         message:
           `the systemd user manager is not reachable, so the ${unitName(label)} service cannot be restarted: ${describeCause(cause)}. ` +
           wslGuidance +
-          `On a headless machine, log in through a systemd session or enable lingering ('loginctl enable-linger'). Nothing was stopped.`,
+          `On a headless machine, log in through a systemd session or enable lingering ('loginctl enable-linger').`,
         details: {
           unit: unitName(label),
           cause: describeCause(cause),

@@ -1596,7 +1596,7 @@ describe("linux restart without a reachable user manager", () => {
       await expect(restartSequence(runner, force)).rejects.toMatchObject({
         code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
         message: expect.stringMatching(
-          /systemd user manager is not reachable.*cannot be restarted.*WSL.*systemd session or enable lingering.*Nothing was stopped/s,
+          /systemd user manager is not reachable.*cannot be restarted.*WSL.*systemd session or enable lingering/s,
         ),
         details: expect.objectContaining({ userManagerReachable: false }),
       });
@@ -1619,6 +1619,10 @@ describe("linux restart without a reachable user manager", () => {
 
     expect(message).toContain("systemd user manager is not reachable");
     expect(message).not.toContain("systemctl restart failed");
+    // A caller can reach this after it already ended another process
+    // (`host free-port-and-restart`), so the refusal claims nothing about
+    // what was or was not stopped.
+    expect(message).not.toContain("Nothing was stopped");
   });
 
   it("leaves a reachable manager's restart exactly as it was", async () => {
