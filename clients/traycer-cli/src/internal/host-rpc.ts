@@ -191,6 +191,14 @@ export interface HostRpcDispatch {
    * single re-authentication on UNAUTHORIZED still happens.
    */
   readonly failFast: boolean;
+  /**
+   * The key a host that negotiated it deduplicates this call by, or null.
+   * Without one the retrying messenger may not replay a mutation after a
+   * failure that followed the send, so a keyed create is the only one a
+   * transport retry can finish. Byte-identical params under one key replay;
+   * different params under it are refused.
+   */
+  readonly idempotencyKey: string | null;
 }
 
 export const PLAIN_DISPATCH: HostRpcDispatch = {
@@ -198,6 +206,7 @@ export const PLAIN_DISPATCH: HostRpcDispatch = {
   requiredHostMethodVersion: null,
   signal: null,
   failFast: false,
+  idempotencyKey: null,
 };
 
 /**
@@ -232,6 +241,31 @@ export async function callHostRpcWithDispatch<
     });
   }
   const endpoint = await resolveEndpoint();
+  return callHostRpcAtResolvedEndpoint(
+    method,
+    params,
+    endpoint,
+    auth,
+    dispatch,
+  );
+}
+
+/**
+ * Like {@link callHostRpcWithDispatch}, on a sign-in and endpoint the caller
+ * already resolved. For a command that preflights both before it records
+ * anything (`task create` writes its key record between the two), so nothing
+ * is re-read after that point: a host restarted in between fails this call
+ * instead of receiving it.
+ */
+export async function callHostRpcAtResolvedEndpoint<
+  Method extends keyof HostRpcRegistry & string,
+>(
+  method: Method,
+  params: RequestOfMethod<HostRpcRegistry, Method>,
+  endpoint: HostTransportEndpoint,
+  auth: HostAuth,
+  dispatch: HostRpcDispatch,
+): Promise<ResponseOfMethod<HostRpcRegistry, Method>> {
   return requestAtEndpoint(
     method,
     params,
@@ -346,7 +380,7 @@ async function requestAtEndpoint<Method extends keyof HostRpcRegistry & string>(
     abortSignal: callLifetime.signal,
   };
   const options: HostRequestOptions = {
-    idempotencyKey: null,
+    idempotencyKey: dispatch.idempotencyKey,
     authority,
     // A caller's FIRST attempt. The replay requirement is raised by the
     // `createRetryingMessenger` wrapper above, per failure, not here.
@@ -649,7 +683,12 @@ function assertCanonicalResponseSchema(
 const EARLIER_ATTEMPT_MAY_HAVE_RUN =
   "An earlier attempt may have gone through. Check before repeating it.";
 
-function hostRpcToCliError(err: unknown): unknown {
+/**
+ * The mapping {@link toAgentCliError} applies, for a caller that has to read
+ * the raw transport error itself before it is mapped (`task create` decides
+ * from it whether its request frame was ever written).
+ */
+export function hostRpcToCliError(err: unknown): unknown {
   // Classified by the refusal that ended a retry episode, not by its
   // unknown-outcome wrapper: "sign in again" stays true about the retry
   // whatever an earlier attempt did. The outcome stays unknown, and the

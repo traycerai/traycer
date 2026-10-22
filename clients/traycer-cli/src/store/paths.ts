@@ -186,6 +186,15 @@ export function cliChatPartCacheDir(): string {
   return join(cliHome(), "chat-parts");
 }
 
+/**
+ * `traycer task create --idempotency-key` records, one file per signed-in
+ * person and key (`store/task-create-keys.ts`). Per environment, because a
+ * key names a create on that environment's host.
+ */
+export function cliTaskCreateKeysDir(environment: Environment): string {
+  return join(cliHomeDir(environment), "task-create-keys");
+}
+
 export function cliManifestPath(environment: Environment): string {
   return sharedCliManifestPath(environment);
 }

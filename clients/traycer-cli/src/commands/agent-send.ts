@@ -34,6 +34,7 @@ const SEND_MESSAGE_DISPATCH: HostRpcDispatch = {
   requiredHostMethodVersion: null,
   signal: null,
   failFast: false,
+  idempotencyKey: null,
 };
 
 /**

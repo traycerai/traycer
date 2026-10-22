@@ -684,6 +684,7 @@ describe("follow-up inactivity notices (negotiated @1.3)", () => {
             requiredHostMethodVersion: null,
             signal: null,
             failFast: false,
+            idempotencyKey: null,
           },
         );
         expect(output).toContain("omit --response-id for this follow-up");

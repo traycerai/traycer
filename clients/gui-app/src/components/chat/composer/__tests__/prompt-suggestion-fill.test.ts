@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, type Mock } from "vitest";
-import { plainTextPromptContent } from "@/components/epic-canvas/renderers/chat-tile-session-state";
+import { plainTextPromptContent } from "@traycer-clients/shared/epic/plain-text-content";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import {
   fillComposerWithSuggestion,

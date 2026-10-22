@@ -249,7 +249,22 @@ const REQUIRED_ARGS: Readonly<Record<string, readonly string[]>> = {
   // host call - refused where stdin is not a terminal, and waiting on a
   // person where it is.
   "profile remove": ["claude", "profile-1", "--yes"],
+  "task create": [
+    "--message",
+    "hi",
+    "--harness",
+    "claude",
+    "--model",
+    "model-1",
+  ],
 };
+
+// Commands that refuse inside ANY agent session on their own, readonly or
+// not: `task create` is the person's command (an agent starts a Task with its
+// `traycer_create_task` tool). This suite runs with `TRAYCER_AGENT_ID` set, so
+// on the full surface such a command's body is proven reached by that refusal
+// rather than by the sign-in read behind it.
+const AGENT_SESSION_REFUSED: ReadonlySet<string> = new Set(["task create"]);
 
 // Reads that stay runnable on the readonly surface: hidden from `--help`
 // (a WIDER set than the capability boundary - see `agent-surface.ts`) but
@@ -289,6 +304,24 @@ describe("readonly-surface gate: table coverage is complete", () => {
   });
 });
 
+describe("readonly-surface gate: task create", () => {
+  it("refuses 'task create' on the readonly surface before the sign-in is read", async () => {
+    await withEnvSurface("readonly", async () => {
+      const program = buildProgramWithAgentRoles(true);
+      const thrown = await parseAndCapture(program, [
+        "task",
+        "create",
+        ...REQUIRED_ARGS["task create"],
+      ]);
+      expect(thrown).toMatchObject({
+        code: CLI_ERROR_CODES.FORBIDDEN,
+        message: expect.stringContaining("cannot start Tasks"),
+      });
+      expect(mocks.resolveHostAuthMock).not.toHaveBeenCalled();
+    });
+  });
+});
+
 describe("readonly-surface gate: refuses every table entry before the body runs", () => {
   for (const commandPath of Object.keys(READONLY_REFUSED_COMMANDS)) {
     it(`refuses '${commandPath}' with E_FORBIDDEN under the readonly surface, before the body runs`, async () => {
@@ -309,6 +342,13 @@ describe("readonly-surface gate: refuses every table entry before the body runs"
         const program = buildProgramWithAgentRoles(true);
         const argv = [...commandPath.split(" "), ...REQUIRED_ARGS[commandPath]];
         const thrown = await parseAndCapture(program, argv);
+        if (AGENT_SESSION_REFUSED.has(commandPath)) {
+          expect(thrown).toMatchObject({
+            code: CLI_ERROR_CODES.INVALID_ARGUMENT,
+            message: expect.stringContaining("traycer_create_task"),
+          });
+          return;
+        }
         // Every gated command bottoms out in the mocked `resolveHostAuth`
         // returning null, which throws AUTH_NO_CREDENTIALS - proof the body
         // was reached rather than refused. Assert on "not E_FORBIDDEN" (per

@@ -33,6 +33,7 @@ const PROFILE_ACTION_DISPATCH: HostRpcDispatch = {
   },
   signal: null,
   failFast: false,
+  idempotencyKey: null,
 };
 
 async function applyProfileAction(

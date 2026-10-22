@@ -116,6 +116,7 @@ describe("agent send --workspace", () => {
         requiredHostMethodVersion: null,
         signal: null,
         failFast: false,
+        idempotencyKey: null,
       },
     );
     expect(result.exitCode).toBe(0);
@@ -131,6 +132,7 @@ describe("agent send --workspace", () => {
         responseTimeoutMs: 60_000,
         signal: null,
         failFast: false,
+        idempotencyKey: null,
         requiredHostMethodVersion: {
           method: "agent.sendMessage",
           version: { major: 1, minor: 1 },

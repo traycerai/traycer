@@ -102,6 +102,7 @@ const PROFILE_ACTION_DISPATCH: HostRpcDispatch = {
   },
   signal: null,
   failFast: false,
+  idempotencyKey: null,
 };
 
 const PLAIN_DISPATCH: HostRpcDispatch = {
@@ -109,6 +110,7 @@ const PLAIN_DISPATCH: HostRpcDispatch = {
   requiredHostMethodVersion: null,
   signal: null,
   failFast: false,
+  idempotencyKey: null,
 };
 
 async function failureOf(run: Promise<unknown>): Promise<CliError> {
