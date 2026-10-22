@@ -221,6 +221,41 @@ describe("Reasonix usage consumers", () => {
       throw new Error("chat store did not create callbacks");
 
     try {
+      callbacks.onTurnStateChanged({
+        kind: "turnStateChanged",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ID,
+        runStatus: "running",
+        activeTurn: {
+          agentMode: "regular",
+          sameTurnSteeringSupported: false,
+          turnId: "turn-stop",
+          status: "running",
+          harnessId: "reasonix",
+          model: "reasonix/model",
+          profileId: null,
+          userMessageId: "message-stop",
+          startedAt: 2_001,
+          updatedAt: 2_001,
+          reasoningEffort: null,
+          serviceTier: null,
+        },
+      });
+      callbacks.onBlockDelta({
+        kind: "blockDelta",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ID,
+        event: {
+          type: "tool_call.started",
+          blockId: "tool-stop-in-flight",
+          timestamp: 2_002,
+          toolName: "read_file",
+          input: {},
+          agentMessageSend: null,
+        },
+      });
       callbacks.onBlockDelta({
         kind: "blockDelta",
         hasBinaryPayload: false,
@@ -235,6 +270,9 @@ describe("Reasonix usage consumers", () => {
         },
       });
       expect(handle.store.getState().liveTurnUsage).toEqual(M1_USAGE);
+      expect(
+        handle.store.getState().liveAssistantMessage?.blocks[0]?.status,
+      ).toBe("streaming");
 
       callbacks.onBlockDelta({
         kind: "blockDelta",
@@ -249,7 +287,11 @@ describe("Reasonix usage consumers", () => {
           reason: "cancelled",
         },
       });
-      expect(handle.store.getState().liveTurnUsage).toEqual(M1_USAGE);
+      const stoppedState = handle.store.getState();
+      expect(stoppedState.liveAssistantMessage?.blocks[0]?.status).toBe(
+        "interrupted",
+      );
+      expect(stoppedState.liveTurnUsage).toEqual(M1_USAGE);
     } finally {
       handle.dispose();
     }
@@ -284,7 +326,7 @@ describe("Reasonix usage consumers", () => {
     ]);
     expect(selected).toEqual(M4_USAGE);
     renderChip(selected);
-    expect(screen.queryByTestId("context-usage-chip")).toBeNull();
+    expect(screen.queryByRole("button", { name: /Context window/ })).toBeNull();
   });
 
   it("C4: the newest M5 tokens-only row replaces the previous window gauge", () => {
@@ -294,7 +336,7 @@ describe("Reasonix usage consumers", () => {
     ]);
     expect(selected).toEqual(M5_USAGE);
     renderChip(selected);
-    expect(screen.queryByTestId("context-usage-chip")).toBeNull();
+    expect(screen.queryByRole("button", { name: /Context window/ })).toBeNull();
   });
 
   it.each([
