@@ -300,11 +300,12 @@ function splitByUnsyncedEdits(
 /**
  * What the user is told about tabs kept open.
  *
- * `afterRemoval` is the honest part: those tasks were taken out of their
- * group before the edits appeared, and this host is not going to put them
- * back - guessing at that could undo a move made in the meantime. It says
- * what happened, and does not claim anything about the cloud beyond the
- * removal having been accepted.
+ * `afterRemoval` says a removal went out for this close, not that it named
+ * every held tab: it is one answer for the whole batch, and the held set is
+ * whichever tabs gained edits during the wait. So the copy speaks of some
+ * tasks rather than theirs. This host is not putting any of them back -
+ * guessing at that could undo a move made in the meantime - and it claims
+ * nothing about the cloud beyond the removal having been accepted.
  */
 function warnAboutHeldTabs(
   held: readonly HeaderTab[],
@@ -315,7 +316,7 @@ function warnAboutHeldTabs(
     held.length === 1 ? `"${held[0]?.name ?? ""}"` : `${held.length} tabs`;
   toast.warning(`Kept ${detail} open with unsynced edits`, {
     description: afterRemoval
-      ? "Their tasks were taken out of their group before the edits arrived. Add them back if you still want them grouped."
+      ? "Some tasks were taken out of their groups during this close. Add them back if you still want them grouped."
       : "Close those tabs individually to discard their edits.",
   });
 }
