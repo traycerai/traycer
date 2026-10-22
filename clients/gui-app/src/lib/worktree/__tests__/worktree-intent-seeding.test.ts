@@ -6,19 +6,24 @@ import type {
   WorktreeWorkspaceSummary,
 } from "@traycer/protocol/host/worktree-schemas";
 import {
+  applySeedIntentOverride,
   defaultFolderIntent,
+  mainCheckoutHasCommit,
   rememberedNeedsBranchValidation,
   resolveRememberedFolderIntent,
   seedEntryForFolder,
   type SeedFolderContext,
 } from "@/lib/worktree/worktree-intent-seeding";
 
+const UNBORN_HEAD = "0000000000000000000000000000000000000000";
+
 function worktreeEntry(
   worktreePath: string,
   branch: string | null,
   isMain: boolean,
+  head: string | null,
 ): DiskWorktreeEntry {
-  return { worktreePath, branch, head: null, isMain, isLocked: false };
+  return { worktreePath, branch, head, isMain, isLocked: false };
 }
 
 function summary(input: {
@@ -32,7 +37,7 @@ function summary(input: {
     isGitRepo: input.isGitRepo ?? true,
     repoIdentifier: null,
     mainBranch: input.mainBranch ?? "main",
-    worktrees: input.worktrees ?? [worktreeEntry("/a", "main", true)],
+    worktrees: input.worktrees ?? [worktreeEntry("/a", "main", true, null)],
     scripts: null,
   };
 }
@@ -45,6 +50,7 @@ function folderContext(
     repoIdentifier: null,
     isPrimary: true,
     isGitRepo: true,
+    hasCommit: true,
     currentBranch: "main",
     defaultNewBranchName: "traycer/swift-otter",
     summary: summary({}),
@@ -118,6 +124,7 @@ describe("defaultFolderIntent", () => {
         repoIdentifier: null,
         isPrimary: true,
         isGitRepo: true,
+        hasCommit: true,
         currentBranch: "main",
         defaultNewBranchName: "traycer/swift-otter",
       }),
@@ -145,6 +152,7 @@ describe("defaultFolderIntent", () => {
         repoIdentifier: null,
         isPrimary: true,
         isGitRepo: false,
+        hasCommit: true,
         currentBranch: null,
         defaultNewBranchName: "x",
       }).kind,
@@ -158,10 +166,90 @@ describe("defaultFolderIntent", () => {
         repoIdentifier: null,
         isPrimary: true,
         isGitRepo: true,
+        hasCommit: true,
         currentBranch: null,
         defaultNewBranchName: "x",
       }).kind,
     ).toBe("local");
+  });
+
+  it("degrades a repo whose branch has no commit to local instead of forking from a branch git cannot resolve", () => {
+    expect(
+      defaultFolderIntent({
+        workspacePath: "/a",
+        repoIdentifier: null,
+        isPrimary: true,
+        isGitRepo: true,
+        hasCommit: false,
+        currentBranch: "dev",
+        defaultNewBranchName: "traycer/civic-quiet-raccoon",
+      }),
+    ).toEqual({
+      kind: "local",
+      workspacePath: "/a",
+      repoIdentifier: null,
+      isPrimary: true,
+    });
+  });
+});
+
+describe("mainCheckoutHasCommit", () => {
+  it("is false only when the main checkout's head is the all-zero id", () => {
+    expect(
+      mainCheckoutHasCommit(
+        summary({
+          mainBranch: "dev",
+          worktrees: [worktreeEntry("/a", "dev", true, UNBORN_HEAD)],
+        }),
+      ),
+    ).toBe(false);
+    expect(
+      mainCheckoutHasCommit(
+        summary({
+          worktrees: [worktreeEntry("/a", "main", true, "d9ad5de7f5e7")],
+        }),
+      ),
+    ).toBe(true);
+    expect(
+      mainCheckoutHasCommit(
+        summary({ worktrees: [worktreeEntry("/a", "main", true, null)] }),
+      ),
+    ).toBe(true);
+  });
+
+  it("ignores a linked worktree's head", () => {
+    expect(
+      mainCheckoutHasCommit(
+        summary({
+          worktrees: [
+            worktreeEntry("/a", "main", true, "d9ad5de7f5e7"),
+            worktreeEntry("/b", "x", false, UNBORN_HEAD),
+          ],
+        }),
+      ),
+    ).toBe(true);
+  });
+});
+
+describe("applySeedIntentOverride", () => {
+  it("keeps the seed entry for a repo with no commit instead of forking a worktree off it", () => {
+    const seedEntry = rememberedLocal;
+    expect(
+      applySeedIntentOverride({
+        override: "worktree-carry",
+        seedEntry,
+        folder: folderContext({ hasCommit: false, currentBranch: "dev" }),
+      }),
+    ).toBe(seedEntry);
+  });
+
+  it("forks a worktree carrying the working tree when the repo has a commit", () => {
+    const entry = applySeedIntentOverride({
+      override: "worktree-carry",
+      seedEntry: rememberedLocal,
+      folder: folderContext({}),
+    });
+    expect(entry?.kind).toBe("worktree");
   });
 });
 
@@ -218,8 +306,8 @@ describe("resolveRememberedFolderIntent", () => {
   it("keeps an adopted worktree that still exists and drops one that is gone", () => {
     const live = summary({
       worktrees: [
-        worktreeEntry("/a", "main", true),
-        worktreeEntry("/wt/x", "feat/x", false),
+        worktreeEntry("/a", "main", true, null),
+        worktreeEntry("/wt/x", "feat/x", false, null),
       ],
     });
     expect(
@@ -299,8 +387,8 @@ describe("resolveRememberedFolderIntent", () => {
     // Checked out in a worktree already -> null (no double checkout).
     const checkedOut = summary({
       worktrees: [
-        worktreeEntry("/a", "main", true),
-        worktreeEntry("/wt/y", "feat/y", false),
+        worktreeEntry("/a", "main", true, null),
+        worktreeEntry("/wt/y", "feat/y", false, null),
       ],
     });
     expect(
@@ -429,6 +517,27 @@ describe("seedEntryForFolder", () => {
       alreadyStaged: false,
     });
     expect(entry?.kind).toBe("worktree");
+  });
+
+  it("defaults a repo with no commit to local, never a fork off its unborn branch", () => {
+    const unborn = summary({
+      mainBranch: "dev",
+      worktrees: [worktreeEntry("/a", "dev", true, UNBORN_HEAD)],
+    });
+    expect(
+      seedEntryForFolder({
+        seedFolderIntent: null,
+        epicIntentEntry: null,
+        rememberedFolderIntent: null,
+        branches: [],
+        folder: folderContext({
+          currentBranch: "dev",
+          hasCommit: mainCheckoutHasCommit(unborn),
+          summary: unborn,
+        }),
+        alreadyStaged: false,
+      })?.kind,
+    ).toBe("local");
   });
 
   it("defaults a non-git folder to local", () => {
