@@ -268,7 +268,7 @@ describe("task create: the request", () => {
       },
       signal: null,
       failFast: true,
-      reauthenticate: false,
+      reauthenticate: "before-request",
       idempotencyKey: request.epic.id,
     });
     expect(result).toEqual({
@@ -609,6 +609,25 @@ describe("task create --idempotency-key", () => {
     expect(rpcMock).toHaveBeenCalledTimes(1);
   });
 
+  it("clears an intent the failed write already made visible, so the rerun creates", async () => {
+    const { writeTaskCreateKey: realWrite } = await vi.importActual<
+      typeof import("../../store/task-create-keys")
+    >("../../store/task-create-keys");
+    // The atomic write renames the intent into place, then fails the folder
+    // fsync: the command stops before any send.
+    writeKeyMock.mockImplementationOnce(async (path, record) => {
+      await realWrite(path, record);
+      throw new Error("EIO");
+    });
+    await expect(run({ idempotencyKey: "slot-1" })).rejects.toThrow("EIO");
+    expect(rpcMock).not.toHaveBeenCalled();
+    expect(await recordFiles()).toEqual([]);
+
+    const rerun = await run({ idempotencyKey: "slot-1" });
+    expect(rerun.data).toMatchObject({ alreadyCreated: false });
+    expect(rpcMock).toHaveBeenCalledTimes(1);
+  });
+
   it("does not tell the user to delete a record it cannot read back after a failed done write", async () => {
     const { writeTaskCreateKey: realWrite } = await vi.importActual<
       typeof import("../../store/task-create-keys")
@@ -662,6 +681,44 @@ describe("task create: a refusal answered after an earlier send", () => {
     expect(written.state).toBe("intent");
     const retry = await rejection(run({ idempotencyKey: "slot-1" }));
     expect(retry.code).toBe(CLI_ERROR_CODES.HOST_REQUEST_OUTCOME_UNKNOWN);
+  });
+
+  it("refreshes an expired sign-in the host refused before the request frame, and creates", async () => {
+    const send = realSend.call;
+    if (send === null) throw new Error("real send path not captured");
+    rpcMock.mockImplementationOnce(send);
+    storeRotate.mockResolvedValueOnce({
+      outcome: "applied",
+      credentials: { token: "tok-2" },
+    });
+    // The host refused the open frame's bearer: nothing was dispatched.
+    socketRequest
+      .mockRejectedValueOnce(
+        new HostRpcError({
+          code: "UNAUTHORIZED",
+          message: "bearer expired",
+          requestId: "req-a",
+          method: "epic.create",
+          fatalDetails: {
+            code: "UNAUTHORIZED",
+            reason: "bearer expired",
+            incompatibleMethods: null,
+            upgradeGuidance: null,
+          },
+        }),
+      )
+      .mockResolvedValueOnce(CREATED);
+
+    const result = await run({ idempotencyKey: "slot-1" });
+
+    expect(result.data).toMatchObject({ alreadyCreated: false });
+    expect(socketRequest).toHaveBeenCalledTimes(2);
+    expect(storeRotate).toHaveBeenCalledTimes(1);
+    const path = taskCreateKeyRecordPath(keysDir.current, "u1", "slot-1");
+    const written = JSON.parse(await readFile(path, "utf8")) as {
+      state: string;
+    };
+    expect(written.state).toBe("done");
   });
 
   it("keeps the intent when a sent attempt ends UNAUTHORIZED, and sends nothing after a refreshed sign-in", async () => {

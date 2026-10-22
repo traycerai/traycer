@@ -102,7 +102,7 @@ const PROFILE_ACTION_DISPATCH: HostRpcDispatch = {
   },
   signal: null,
   failFast: false,
-  reauthenticate: true,
+  reauthenticate: "always",
   idempotencyKey: null,
 };
 
@@ -111,7 +111,7 @@ const PLAIN_DISPATCH: HostRpcDispatch = {
   requiredHostMethodVersion: null,
   signal: null,
   failFast: false,
-  reauthenticate: true,
+  reauthenticate: "always",
   idempotencyKey: null,
 };
 

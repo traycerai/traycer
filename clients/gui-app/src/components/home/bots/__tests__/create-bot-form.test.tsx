@@ -334,12 +334,16 @@ function composedMessenger(
   const controller = new AbortController();
   const lease = new MutableBearerLease("token", "user-1");
   const messenger = createRetryingMessenger(
-    createAuthAwareMessenger(inner, {
-      revalidateExpectedBearer: () => {
-        recover(controller, lease);
-        return Promise.resolve("rotated");
+    createAuthAwareMessenger(
+      inner,
+      {
+        revalidateExpectedBearer: () => {
+          recover(controller, lease);
+          return Promise.resolve("rotated");
+        },
       },
-    }),
+      "always",
+    ),
     FAST_RETRY_POLICY,
   );
   return {

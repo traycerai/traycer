@@ -778,7 +778,7 @@ describe("callHostRpcAtResolvedEndpoint", () => {
         requiredHostMethodVersion: floor,
         signal: null,
         failFast: false,
-        reauthenticate: true,
+        reauthenticate: "always",
         idempotencyKey: "task-1",
       },
     );

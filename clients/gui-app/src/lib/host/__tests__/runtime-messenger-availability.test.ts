@@ -919,17 +919,21 @@ describe("RuntimeHostMessenger availability forwarding", () => {
         onRemoteAvailabilityRecovered: () => undefined,
         onRemoteSessionTerminal: () => undefined,
       });
-      const recovering = createAuthAwareMessenger(binding.messenger, {
-        revalidateExpectedBearer: () => {
-          revalidations += 1;
-          return new Promise((resolve) => {
-            gate.open = () => {
-              lease.rotate("fresh");
-              resolve("rotated");
-            };
-          });
+      const recovering = createAuthAwareMessenger(
+        binding.messenger,
+        {
+          revalidateExpectedBearer: () => {
+            revalidations += 1;
+            return new Promise((resolve) => {
+              gate.open = () => {
+                lease.rotate("fresh");
+                resolve("rotated");
+              };
+            });
+          },
         },
-      });
+        "always",
+      );
       return {
         callRemote: () =>
           recovering

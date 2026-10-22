@@ -285,12 +285,16 @@ async function expectPostOpenTimeoutRecovery(fatal: HostFrame): Promise<void> {
     evidence: NO_TRANSPORT_EVIDENCE,
   });
   const authCalls = { count: 0 };
-  const authAware = createAuthAwareMessenger<typeof testRegistry>(raw, {
-    revalidateExpectedBearer: async () => {
-      authCalls.count += 1;
-      return "rotated";
+  const authAware = createAuthAwareMessenger<typeof testRegistry>(
+    raw,
+    {
+      revalidateExpectedBearer: async () => {
+        authCalls.count += 1;
+        return "rotated";
+      },
     },
-  });
+    "always",
+  );
   const client = createRetryingMessenger<typeof testRegistry>(authAware, {
     maxRetries: 1,
     initialDelayMs: 0,
@@ -2295,12 +2299,16 @@ describe("WsRpcClient", () => {
         evidence: NO_TRANSPORT_EVIDENCE,
       });
       const authCalls = { count: 0 };
-      const authAware = createAuthAwareMessenger<typeof testRegistry>(raw, {
-        revalidateExpectedBearer: async () => {
-          authCalls.count += 1;
-          return "rotated";
+      const authAware = createAuthAwareMessenger<typeof testRegistry>(
+        raw,
+        {
+          revalidateExpectedBearer: async () => {
+            authCalls.count += 1;
+            return "rotated";
+          },
         },
-      });
+        "always",
+      );
       const client: IHostMessenger<typeof testRegistry> =
         createRetryingMessenger<typeof testRegistry>(authAware, {
           maxRetries: 1,

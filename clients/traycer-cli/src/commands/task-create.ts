@@ -12,6 +12,7 @@ import {
   type HostTransportEndpoint,
   type RequestOfMethod,
 } from "../../../shared/host-transport/host-messenger";
+import { hostRejectedBeforeRequest } from "../../../shared/host-transport/auth-aware-messenger";
 import { RetryEpisodeOutcomeUnknownError } from "../../../shared/host-transport/retrying-messenger";
 import { DEFAULT_DIAL_TIMEOUT_MS } from "../../../shared/host-transport/transport-config";
 import { config } from "../config";
@@ -187,13 +188,20 @@ export function buildTaskCreateCommand(opts: TaskCreateOptions): CommandFn {
       const ids = mintIds();
       // Durable before the request goes out, so a run that dies after the
       // send leaves a record the next run refuses on. If this write fails the
-      // command stops here having sent nothing.
-      await writeTaskCreateKey(recordPath, {
-        state: "intent",
-        ...ids,
-        fingerprint,
-        writtenAt: Date.now(),
-      });
+      // command stops here having sent nothing, and removes the record: the
+      // atomic write renames before it flushes the folder, so a late failure
+      // can leave an intent the next run would read as a send.
+      try {
+        await writeTaskCreateKey(recordPath, {
+          state: "intent",
+          ...ids,
+          fingerprint,
+          writtenAt: Date.now(),
+        });
+      } catch (error) {
+        await clearTaskCreateKey(recordPath).catch(() => undefined);
+        throw error;
+      }
       const outcome = await sendCreate(input, ids, auth, endpoint);
       if (outcome.kind === "not-created") {
         await clearTaskCreateKey(recordPath);
@@ -395,10 +403,11 @@ async function sendCreate(
     // clear the key record of a create the first attempt may have committed.
     // With one attempt, a refusal answers the only request that went out.
     failFast: true,
-    // No resend after a refreshed sign-in either, for the same reason: the
-    // first send may have reached the host before its session went fatal
-    // UNAUTHORIZED. The UNAUTHORIZED comes back here and keeps the record.
-    reauthenticate: false,
+    // A refreshed sign-in is sent again only when the host refused the open
+    // frame, before any request went out: a send that ended UNAUTHORIZED may
+    // have reached the host, so that UNAUTHORIZED comes back here and keeps
+    // the record.
+    reauthenticate: "before-request",
     // The Task id this run minted. A second RUN mints new ids, so this is not
     // the dedupe across runs; the key record is.
     idempotencyKey: ids.taskId,
@@ -459,6 +468,9 @@ function requestFrameNeverWritten(error: unknown): boolean {
   if (error instanceof RetryableTransportError) {
     return !error.replaySafetyFromKey;
   }
+  // The host refused the open frame (a sign-in the refresh could not fix);
+  // a host error envelope carries no fatal details and is not on this list.
+  if (hostRejectedBeforeRequest(error)) return true;
   // Request projection fails while the request is being prepared.
   return isRequestVersionProjectionError(error);
 }

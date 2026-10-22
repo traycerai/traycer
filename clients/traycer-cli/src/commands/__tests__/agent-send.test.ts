@@ -116,7 +116,7 @@ describe("agent send --workspace", () => {
         requiredHostMethodVersion: null,
         signal: null,
         failFast: false,
-        reauthenticate: true,
+        reauthenticate: "always",
         idempotencyKey: null,
       },
     );
@@ -133,7 +133,7 @@ describe("agent send --workspace", () => {
         responseTimeoutMs: 60_000,
         signal: null,
         failFast: false,
-        reauthenticate: true,
+        reauthenticate: "always",
         idempotencyKey: null,
         requiredHostMethodVersion: {
           method: "agent.sendMessage",

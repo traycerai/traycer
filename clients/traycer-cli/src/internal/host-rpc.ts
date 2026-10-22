@@ -7,7 +7,10 @@ import {
 } from "@traycer/protocol/host/registry";
 import { getLatestContract } from "@traycer/protocol/framework/versioned-rpc";
 import { MutableBearerLease } from "../../../shared/auth/bearer-source";
-import { createAuthAwareMessenger } from "../../../shared/host-transport/auth-aware-messenger";
+import {
+  createAuthAwareMessenger,
+  type AuthRecoveryScope,
+} from "../../../shared/host-transport/auth-aware-messenger";
 import {
   createRetryingMessenger,
   DEFAULT_TRANSPORT_RETRY_POLICY,
@@ -188,18 +191,18 @@ export interface HostRpcDispatch {
    * One attempt, with no transport retry, for a best-effort call made while
    * the user is waiting to leave (a release after Ctrl+C): the retrying
    * policy can spend a dial timeout per attempt against a wedged host. The
-   * single re-authentication on UNAUTHORIZED still happens unless
-   * `reauthenticate` turns it off.
+   * single re-authentication on UNAUTHORIZED still happens, within
+   * `reauthenticate`.
    */
   readonly failFast: boolean;
   /**
-   * Whether a host UNAUTHORIZED refreshes the sign-in and sends the request
-   * once more. False hands the UNAUTHORIZED to the caller instead, for a
-   * create that must read a refusal as proof that nothing was created: an
-   * answer to the second send carries no trace of the first, which may have
-   * reached the host before its session went fatal.
+   * Which host UNAUTHORIZED refreshes the sign-in and sends the request once
+   * more. `"before-request"` limits it to the host's refusal of the open
+   * frame, for a create that must read a refusal as proof that nothing was
+   * created: an answer to the second send carries no trace of a first that
+   * may have reached the host before its session went fatal.
    */
-  readonly reauthenticate: boolean;
+  readonly reauthenticate: AuthRecoveryScope;
   /**
    * The key a host that negotiated it deduplicates this call by, or null.
    * Without one the retrying messenger may not replay a mutation after a
@@ -215,7 +218,7 @@ export const PLAIN_DISPATCH: HostRpcDispatch = {
   requiredHostMethodVersion: null,
   signal: null,
   failFast: false,
-  reauthenticate: true,
+  reauthenticate: "always",
   idempotencyKey: null,
 };
 
@@ -359,22 +362,23 @@ async function requestAtEndpoint<Method extends keyof HostRpcRegistry & string>(
     signal: null,
   });
 
-  const client = new WsRpcClient<HostRpcRegistry>({
-    registry: hostRpcRegistry,
-    requestId: () => randomUUID(),
-    webSocketFactory: createWhatwgWebSocketFactory(),
-    dialTimeoutMs: DEFAULT_DIAL_TIMEOUT_MS,
-    frameTimeoutMs: FRAME_TIMEOUT_MS,
-    hostAttestationWindowMs: attestationWindowForPolicy(retryPolicy),
-    // The CLI has no selection authority to feed: there is no window, no
-    // kernel, and nothing that could act on a failover verdict.
-    evidence: NO_TRANSPORT_EVIDENCE,
-    clientIdentity: CLI_CLIENT_IDENTITY,
-  });
   const messenger = createRetryingMessenger<HostRpcRegistry>(
-    dispatch.reauthenticate
-      ? createAuthAwareMessenger<HostRpcRegistry>(client, revalidator)
-      : client,
+    createAuthAwareMessenger<HostRpcRegistry>(
+      new WsRpcClient<HostRpcRegistry>({
+        registry: hostRpcRegistry,
+        requestId: () => randomUUID(),
+        webSocketFactory: createWhatwgWebSocketFactory(),
+        dialTimeoutMs: DEFAULT_DIAL_TIMEOUT_MS,
+        frameTimeoutMs: FRAME_TIMEOUT_MS,
+        hostAttestationWindowMs: attestationWindowForPolicy(retryPolicy),
+        // The CLI has no selection authority to feed: there is no window, no
+        // kernel, and nothing that could act on a failover verdict.
+        evidence: NO_TRANSPORT_EVIDENCE,
+        clientIdentity: CLI_CLIENT_IDENTITY,
+      }),
+      revalidator,
+      dispatch.reauthenticate,
+    ),
     retryPolicy,
   );
 

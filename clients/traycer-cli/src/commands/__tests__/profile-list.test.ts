@@ -46,7 +46,7 @@ const LIST_DISPATCH: HostRpcDispatch = {
   requiredHostMethodVersion: null,
   signal: null,
   failFast: false,
-  reauthenticate: true,
+  reauthenticate: "always",
   idempotencyKey: null,
 };
 
