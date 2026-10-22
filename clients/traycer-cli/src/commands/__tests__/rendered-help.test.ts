@@ -1050,6 +1050,18 @@ const EXPECTED_PUBLIC_SURFACE: readonly ExpectedSurfaceEntry[] = [
     args: [],
   },
   {
+    path: "agent rename",
+    options: [
+      { flags: "--json", mandatory: false },
+      { flags: "--no-progress", mandatory: false },
+      { flags: "--quiet", mandatory: false },
+    ],
+    args: [
+      { name: "id", required: true, variadic: false },
+      { name: "name", required: true, variadic: false },
+    ],
+  },
+  {
     path: "agent send",
     options: [
       { flags: "--expect-reply", mandatory: false },

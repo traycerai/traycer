@@ -228,6 +228,7 @@ const REQUIRED_ARGS: Readonly<Record<string, readonly string[]>> = {
   ],
   "agent stop": ["--agent-id", "agent-1"],
   "agent archive": ["--agent-id", "agent-1"],
+  "agent rename": ["agent-1", "New name"],
   "agent send": ["--to", "agent-1", "--message", "hi"],
   "agent role claim": ["--role", "role-1", "--scope", "scope-1"],
   // `claimId` is validated as a UUID by the protocol request schema before
