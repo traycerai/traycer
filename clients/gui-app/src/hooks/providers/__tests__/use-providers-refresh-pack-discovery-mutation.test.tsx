@@ -161,10 +161,11 @@ describe("useProvidersRefreshPackDiscovery response budget", () => {
     // This pins the FLOOR, not the derivation: gui-app is OSS and cannot
     // import the internal `PROVIDERS.json` pack count or the host's registry
     // timeout constant, so the factors below are forced literals, fixed at the
-    // 15 packs that existed when this pin was written. That is now 16
-    // (antigravity), and the literal deliberately did NOT move with it: a new
-    // pack raises the correct value past this floor rather than invalidating
-    // it, which is exactly why this stays `toBeGreaterThanOrEqual`. The
+    // 15 packs that existed when this pin was written. That is now 17
+    // (antigravity, then opencode2), and the literal deliberately did NOT move
+    // with either: a new pack raises the correct value past this floor
+    // rather than invalidating it, which is exactly why this stays
+    // `toBeGreaterThanOrEqual`. The
     // internal repo pins the other half - that `PROVIDERS.json` still has
     // exactly the count the budget was derived from - at
     // `traycer-host/src/domain/providers/__tests__/provider-pack-count-fits-gui-discovery-check-budget.test.ts`.
