@@ -189,7 +189,7 @@ test("opens the group's editor from a grouped task's menu and keeps it open once
 }) => {
   await openStrip(page, LAYERED, "dark");
   await page.getByTestId("tab-epic-fixture-alpha").click({ button: "right" });
-  await page.getByText("Tab appearance").click();
+  await page.getByText("Task appearance").click();
 
   await page.getByRole("menuitem", { name: "Edit group…" }).click();
 
