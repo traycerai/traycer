@@ -571,7 +571,7 @@ function promptQueueItems(itemCount: number): OpenChatQueuedPromptItem[] {
   }));
 }
 
-function runnableQueue(itemCount: number): ChatQueueState {
+function runnableQueue(itemCount: number): ChatSessionState["queue"] {
   return { status: "running", items: promptQueueItems(itemCount) };
 }
 

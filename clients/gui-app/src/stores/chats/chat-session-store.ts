@@ -1144,6 +1144,13 @@ export interface ChatSessionState {
   readonly heldStop?: {
     readonly messageId: string;
     readonly clientActionId: string;
+    /** One cancellation attempt; the Stop still owns this message until it settles. */
+    readonly queueCancellation?: {
+      readonly clientActionId: string;
+      readonly queueItemId: string;
+      readonly connectionEpoch: number;
+    };
+    readonly savedRevision?: number;
   } | null;
   readonly pendingTurnEvidence?: {
     readonly messageId: string;
@@ -3905,6 +3912,67 @@ export function createChatSessionStoreWithNotificationDependencies(
       pendingUserMessage: null,
     });
 
+  const sendQueueCancelFrame = (input: {
+    readonly set: SendActionInput["set"];
+    readonly get: SendActionInput["get"];
+    readonly clientActionId: string;
+    readonly queueItemId: string;
+  }): string | null => {
+    const { set, get, clientActionId, queueItemId } = input;
+    const frame: ChatOwnerActionFrame = {
+      kind: "queueCancel",
+      hasBinaryPayload: false,
+      epicId: options.epicId,
+      chatId: options.chatId,
+      clientActionId,
+      queueItemId,
+    };
+    // RETURN-TO-COMPOSER FOR A ROW WHOSE PROVISIONING FAILED.
+    //
+    // `takeSetupFailedRestoration` deliberately declines while the row is
+    // still queued - the prompt is visible and editable in the dock, so
+    // handing a second copy to the composer would fork it. But the driver's
+    // `eventId` dedupe consumes the `setup.failed` either way, so once the
+    // user cancels the row, that copy was the last one and it goes with it.
+    // Cancel is therefore where the prompt has to come back, and the only
+    // place it still exists to be read.
+    //
+    // Captured here, released at the ack. Deliberately NOT written into
+    // `failedSendRestoration` yet: the host materializes the worktree
+    // before it honours a cancel and REJECTS with `WORKTREE_CREATE_FAILED`
+    // when that fails, leaving the row exactly where it was. Restoring
+    // optimistically would flash the prompt into a composer that still has
+    // its row in the dock, then have to take it back.
+    const cancelRestore = setupFailedQueueRowRestore(
+      get(),
+      options.epicId,
+      options.chatId,
+      queueItemId,
+    );
+    const sent = sendAction({
+      set,
+      get,
+      frame,
+      pending: {
+        ...basicPending(clientActionId, "queueCancel"),
+        queueItemId,
+      },
+      pendingUserMessage: null,
+    });
+    // Only for a cancel that actually reached the wire: a frame that never
+    // left has no ack coming, so an entry recorded here would never be
+    // consumed by either arm.
+    if (sent !== null && cancelRestore !== null) {
+      set((state) => ({
+        pendingCancelRestorations: {
+          ...state.pendingCancelRestorations,
+          [clientActionId]: { queueItemId, restore: cancelRestore },
+        },
+      }));
+    }
+    return sent;
+  };
+
   // Phase two of the session-scoped background stop: the actual frame. Split
   // from the store method because it has two dispatch moments - immediately
   // when no turn is running, or from `onTurnStateChanged` once a stopped
@@ -4200,27 +4268,73 @@ export function createChatSessionStoreWithNotificationDependencies(
         const next = { ...state, ...patch };
         return { ...patch, ...reconcileSendState(state, next) };
       });
+      flushHeldStop();
+    };
+
+    function flushHeldStop(): void {
       const state = get();
       const held = state.heldStop;
-      if (held === undefined || held === null) return;
-      if (state.activeTurn?.userMessageId === held.messageId) {
-        rawSet({ heldStop: null });
-        sendTurnStopFrame({
+      if (
+        !held ||
+        !canSendAction(get) ||
+        state.transcriptBaselineEpoch !== state.connectionEpoch
+      )
+        return;
+      if (state.activeTurn?.userMessageId !== held.messageId) {
+        cancelHeldQueuedPrompt(held, state);
+        return;
+      }
+      rawSet({ heldStop: null });
+      const sent = sendTurnStopFrame({
+        set,
+        get,
+        clientActionId: held.clientActionId,
+        turnId: state.activeTurn.turnId,
+      });
+      if (sent === null && get().heldStop === null) rawSet({ heldStop: held });
+    }
+
+    function cancelHeldQueuedPrompt(
+      held: NonNullable<ChatSessionState["heldStop"]>,
+      state: ChatSessionState,
+    ): void {
+      const queued = state.queue.items.find(
+        (item) => item.kind === "prompt" && item.messageId === held.messageId,
+      );
+      if (queued !== undefined && !isOptimisticQueuedItem(queued)) {
+        const attempt = held.queueCancellation;
+        if (
+          attempt !== undefined &&
+          attempt.queueItemId === queued.queueItemId &&
+          attempt.connectionEpoch === state.connectionEpoch
+        )
+          return;
+        const clientActionId = uuidv4();
+        // Bind before dispatch: sendAction publishes its pending record
+        // synchronously and re-enters this wrapper.
+        rawSet({
+          heldStop: {
+            ...held,
+            queueCancellation: {
+              clientActionId,
+              queueItemId: queued.queueItemId,
+              connectionEpoch: state.connectionEpoch,
+            },
+          },
+        });
+        const sent = sendQueueCancelFrame({
           set,
           get,
-          clientActionId: held.clientActionId,
-          turnId: state.activeTurn.turnId,
+          clientActionId,
+          queueItemId: queued.queueItemId,
         });
-      } else {
-        const queued = state.queue.items.find(
-          (item) => item.kind === "prompt" && item.messageId === held.messageId,
-        );
-        if (queued !== undefined && !isOptimisticQueuedItem(queued)) {
-          rawSet({ heldStop: null });
-          get().queueCancel(queued.queueItemId);
-        }
+        if (
+          sent === null &&
+          get().heldStop?.queueCancellation?.clientActionId === clientActionId
+        )
+          rawSet({ heldStop: held });
       }
-    };
+    }
     // `blockDelta` coalescing. Deltas accumulate here and are folded into a
     // single `set()` per coordinator tick (one animation frame in production)
     // instead of one `set()` per token. Every non-delta frame that consumes
@@ -8761,6 +8875,7 @@ export function createChatSessionStoreWithNotificationDependencies(
             state.fallbackChoiceLease,
             frame,
           );
+          const nextHeldStop = heldStopAfterActionAck(state, frame);
           const nextSessionStop = reconcileSessionStopAck(
             state.pendingBackgroundSessionStop,
             frame,
@@ -8810,6 +8925,7 @@ export function createChatSessionStoreWithNotificationDependencies(
                 pendingBackgroundStops: backgroundStopAck.pendingStops,
                 pendingBackgroundStopAll: backgroundStopAck.pendingStopAll,
                 pendingBackgroundSessionStop: nextSessionStop,
+                heldStop: nextHeldStop,
                 fallbackChoiceLease: choiceLease,
                 pendingCancelRestorations: nextCancelRestorations,
                 failedSendRestoration: nextFailedSendRestoration,
@@ -8863,6 +8979,7 @@ export function createChatSessionStoreWithNotificationDependencies(
               pendingBackgroundStops: backgroundStopAck.pendingStops,
               pendingBackgroundStopAll: backgroundStopAck.pendingStopAll,
               pendingBackgroundSessionStop: nextSessionStop,
+              heldStop: nextHeldStop,
               fallbackChoiceLease: choiceLease,
             };
           }
@@ -8880,6 +8997,7 @@ export function createChatSessionStoreWithNotificationDependencies(
             pendingBackgroundStops: backgroundStopAck.pendingStops,
             pendingBackgroundStopAll: backgroundStopAck.pendingStopAll,
             pendingBackgroundSessionStop: nextSessionStop,
+            heldStop: nextHeldStop,
             fallbackChoiceLease: choiceLease,
             queue: removeOptimisticQueuedItemByClientActionId(
               state.queue,
@@ -10203,6 +10321,7 @@ export function createChatSessionStoreWithNotificationDependencies(
       sendHostFrameRevision: 0,
       lastSendSnapshotRevision: 0,
       pendingTurn: null,
+      turnObservedAt: undefined,
       queueTurnContinuity: false,
       pendingTurnEvidence: null,
       heldStop: null,
@@ -11320,61 +11439,13 @@ export function createChatSessionStoreWithNotificationDependencies(
         }
         requestResnapshotOnceForEpoch(get().transcriptWindow.epoch);
       },
-      queueCancel: (queueItemId) => {
-        const clientActionId = uuidv4();
-        const frame: ChatOwnerActionFrame = {
-          kind: "queueCancel",
-          hasBinaryPayload: false,
-          epicId: options.epicId,
-          chatId: options.chatId,
-          clientActionId,
-          queueItemId,
-        };
-        // RETURN-TO-COMPOSER FOR A ROW WHOSE PROVISIONING FAILED.
-        //
-        // `takeSetupFailedRestoration` deliberately declines while the row is
-        // still queued - the prompt is visible and editable in the dock, so
-        // handing a second copy to the composer would fork it. But the driver's
-        // `eventId` dedupe consumes the `setup.failed` either way, so once the
-        // user cancels the row, that copy was the last one and it goes with it.
-        // Cancel is therefore where the prompt has to come back, and the only
-        // place it still exists to be read.
-        //
-        // Captured here, released at the ack. Deliberately NOT written into
-        // `failedSendRestoration` yet: the host materializes the worktree
-        // before it honours a cancel and REJECTS with `WORKTREE_CREATE_FAILED`
-        // when that fails, leaving the row exactly where it was. Restoring
-        // optimistically would flash the prompt into a composer that still has
-        // its row in the dock, then have to take it back.
-        const cancelRestore = setupFailedQueueRowRestore(
-          get(),
-          options.epicId,
-          options.chatId,
-          queueItemId,
-        );
-        const sent = sendAction({
+      queueCancel: (queueItemId) =>
+        sendQueueCancelFrame({
           set,
           get,
-          frame,
-          pending: {
-            ...basicPending(clientActionId, "queueCancel"),
-            queueItemId,
-          },
-          pendingUserMessage: null,
-        });
-        // Only for a cancel that actually reached the wire: a frame that never
-        // left has no ack coming, so an entry recorded here would never be
-        // consumed by either arm.
-        if (sent !== null && cancelRestore !== null) {
-          set((state) => ({
-            pendingCancelRestorations: {
-              ...state.pendingCancelRestorations,
-              [clientActionId]: { queueItemId, restore: cancelRestore },
-            },
-          }));
-        }
-        return sent;
-      },
+          clientActionId: uuidv4(),
+          queueItemId,
+        }),
       queueReorder: (queueItemId, beforeQueueItemId) => {
         const clientActionId = uuidv4();
         const frame: ChatOwnerActionFrame = {
@@ -11890,6 +11961,7 @@ export function createChatSessionStoreWithNotificationDependencies(
         // nulled - so downstream ack/accept reconciliation continues to
         // work.
         set({
+          ...restoredSendOwnership(state, messageId),
           pendingUserMessages:
             pendingUserMatch === undefined
               ? state.pendingUserMessages
@@ -12718,6 +12790,58 @@ function queueEditSurfacesForAck(
       state.deliveredNoticeActionIds,
     ),
   };
+}
+
+/** A setup-failed hand-back releases only that message's local ownership. */
+function restoredSendOwnership(
+  state: ChatSessionState,
+  messageId: string,
+): Pick<
+  ChatSessionState,
+  "pendingTurn" | "pendingTurnEvidence" | "heldStop" | "drainingQueueItems"
+> {
+  return {
+    // The composer now owns this failed send again. Retained action
+    // metadata is correlation history, not an outstanding local turn.
+    pendingTurn:
+      state.pendingTurn?.messageId === messageId ? null : state.pendingTurn,
+    pendingTurnEvidence:
+      state.pendingTurnEvidence?.messageId === messageId
+        ? null
+        : state.pendingTurnEvidence,
+    heldStop: state.heldStop?.messageId === messageId ? null : state.heldStop,
+    drainingQueueItems: state.drainingQueueItems?.some(
+      (item) => item.messageId === messageId,
+    )
+      ? state.drainingQueueItems.filter((item) => item.messageId !== messageId)
+      : state.drainingQueueItems,
+  };
+}
+
+/** Cancel success or a terminal send refusal discharges only its own Stop. */
+function heldStopAfterActionAck(
+  state: ChatSessionState,
+  frame: ChatActionAckFrame,
+): ChatSessionState["heldStop"] {
+  const held = state.heldStop;
+  if (
+    frame.status === "accepted" &&
+    held?.queueCancellation?.clientActionId === frame.clientActionId
+  )
+    return null;
+  const accepted = Object.hasOwn(state.acceptedActions, frame.clientActionId)
+    ? state.acceptedActions[frame.clientActionId]
+    : null;
+  const action =
+    pendingActionForId(state.pendingActions, frame.clientActionId) ?? accepted;
+  // Silent hash-only recovery intercepts its refusal before this ACK fold.
+  if (
+    frame.status === "rejected" &&
+    action?.action === "send" &&
+    action.messageId === held?.messageId
+  )
+    return null;
+  return held;
 }
 
 /**

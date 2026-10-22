@@ -431,8 +431,16 @@ class SendStateReconciler {
     )
       return false;
     return (
-      this.next.activeTurn?.userMessageId === action.messageId ||
-      this.newlySaved(action.messageId)
+      this.newlyNamedTurn(action.messageId) || this.newlySaved(action.messageId)
+    );
+  }
+
+  private newlyNamedTurn(messageId: string): boolean {
+    const turn = this.next.activeTurn;
+    return (
+      turn?.userMessageId === messageId &&
+      (this.previous.activeTurn?.userMessageId !== messageId ||
+        this.previous.activeTurn.turnId !== turn.turnId)
     );
   }
 
@@ -444,7 +452,7 @@ class SendStateReconciler {
     const item = items.find(
       (candidate) =>
         candidate.kind === "prompt" &&
-        (this.next.activeTurn?.userMessageId === candidate.messageId ||
+        (this.newlyNamedTurn(candidate.messageId) ||
           this.newlySaved(candidate.messageId)),
     );
     if (item?.kind !== "prompt") return null;
@@ -495,14 +503,72 @@ class SendStateReconciler {
       Object.assign(this.patch, { pendingTurn: turn });
     if (!sameEvidence(evidence, this.next.pendingTurnEvidence))
       Object.assign(this.patch, { pendingTurnEvidence: evidence });
+    this.reconcileHeldStop(turn);
+  }
+
+  private reconcileHeldStop(turn: PendingTurn | null): void {
     const held = this.next.heldStop;
+    if (!held) return;
+    const named = this.next.activeTurn?.userMessageId === held.messageId;
     if (
-      held &&
-      turn?.messageId !== held.messageId &&
-      !this.queued(held.messageId)
+      this.withdrawn(held.messageId) ||
+      (named && isTerminalTurn(this.next.activeTurn))
     ) {
       Object.assign(this.patch, { heldStop: null });
+      return;
     }
+    if (held.queueCancellation !== undefined) {
+      const id = held.messageId;
+      const savedRevision = held.savedRevision ?? null;
+      if (
+        this.settledUnseen(
+          id,
+          { messageId: id, turnSeen: false, savedRevision },
+          named,
+        ) ||
+        this.cancelledBeforeSnapshot(held)
+      ) {
+        Object.assign(this.patch, { heldStop: null });
+      } else if (savedRevision === null && this.hasSavedRow(id)) {
+        Object.assign(this.patch, {
+          heldStop: { ...held, savedRevision: this.revision },
+        });
+      }
+      return;
+    }
+    if (turn?.messageId !== held.messageId && !this.queued(held.messageId)) {
+      Object.assign(this.patch, { heldStop: null });
+    }
+  }
+
+  private cancelledBeforeSnapshot(
+    held: NonNullable<ChatSessionState["heldStop"]>,
+  ): boolean {
+    const id = held.messageId;
+    const attempt = held.queueCancellation;
+    // Only a newer connection's complete baseline can settle a cancellation
+    // whose ACK was lost. Prunable action history and a same-epoch snapshot
+    // are not evidence that an in-flight Stop obligation has ended.
+    return (
+      attempt !== undefined &&
+      this.hostFrame &&
+      this.next.lastSendSnapshotRevision === this.revision &&
+      this.next.transcriptBaselineEpoch === this.next.connectionEpoch &&
+      attempt.connectionEpoch < this.next.connectionEpoch &&
+      this.next.sendWouldQueue === false &&
+      this.next.activeTurn?.userMessageId !== id &&
+      !this.queued(id) &&
+      !this.hasSavedRow(id) &&
+      !this.actions.some(
+        (action) =>
+          action.action === "send" &&
+          action.messageId === id &&
+          action.connectionEpoch >= this.next.connectionEpoch,
+      ) &&
+      !Object.values(this.next.hashOnlyRecoveries).some(
+        (recovery) => recovery.messageId === id,
+      )
+    );
   }
 
   private pendingTurnEnded(

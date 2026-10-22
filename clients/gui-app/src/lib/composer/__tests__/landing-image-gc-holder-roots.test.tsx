@@ -326,6 +326,31 @@ function emitQueue(
   });
 }
 
+/**
+ * The saved row of a prompt the host drained from its queue: it replaces the
+ * dock's draining carry, which is what stops rooting the prompt's images.
+ */
+function emitSavedRow(
+  harness: Harness,
+  messageId: string,
+  content: JsonContent,
+): void {
+  harness.callbacks().onMessageAccepted({
+    kind: "messageAccepted",
+    hasBinaryPayload: false,
+    epicId: EPIC_ID,
+    chatId: CHAT_ID,
+    message: {
+      role: "user",
+      messageId,
+      sender: { type: "user", userId: OWNER_ID },
+      message: { kind: "user", content, browserAnnotations: [] },
+      timestamp: 10,
+      sessionAnchor: null,
+    },
+  });
+}
+
 let urlCounter = 0;
 
 beforeEach(() => {
@@ -405,15 +430,31 @@ describe("landing image GC: a QUEUED prompt roots its images", () => {
     expect(await m.store.imageHashKeys()).toContain(hash);
   });
 
-  it("control: the same hash is collected once the item leaves the queue", async () => {
+  it("control: the same hash is collected once the item's saved row replaces the dock's carry", async () => {
     const m = await loadModules();
     const harness = createHarness(m.session);
     emitSnapshot(harness);
     const hash = await m.store.putImage(bytesOf([7, 8, 9]));
-    emitQueue(harness, [queuedPromptItem("q-1", hashOnlyImageDoc(hash))]);
+    const content = hashOnlyImageDoc(hash);
+    emitQueue(harness, [queuedPromptItem("q-1", content)]);
     m.store.releaseSession(hash);
     emitQueue(harness, []);
 
+    // The item left the host queue for activation: until its saved row lands,
+    // the draining carry is the only local holder, so the bytes must survive.
+    expect(
+      harness.handle.store
+        .getState()
+        .drainingQueueItems?.map((item) => item.queueItemId),
+    ).toEqual(["q-1"]);
+    await m.gc.reconcile();
+    await flush();
+    expect(await m.store.imageHashKeys()).toContain(hash);
+
+    emitSavedRow(harness, "m-q-1", content);
+    expect(harness.handle.store.getState().drainingQueueItems ?? []).toEqual(
+      [],
+    );
     await m.gc.reconcile();
     await flush();
 
@@ -460,13 +501,17 @@ describe("landing image GC: a CANCEL awaiting its ack roots its images", () => {
     emitQueue(harness, [queuedPromptItem("q-1", hashOnlyImageDoc(hash))]);
     emitFailedSetupFor(harness, "m-q-1");
 
-    // The row leaves the queue with NO cancel parked behind it, so nothing in
-    // this store names the hash once the queue is empty.
+    // The row leaves the queue with NO cancel parked behind it. Only the
+    // draining carry names the hash now, and it is released with the saved row.
     emitQueue(harness, []);
     expect(
       Object.keys(harness.handle.store.getState().pendingCancelRestorations),
     ).toHaveLength(0);
     m.store.releaseSession(hash);
+    emitSavedRow(harness, "m-q-1", hashOnlyImageDoc(hash));
+    expect(harness.handle.store.getState().drainingQueueItems ?? []).toEqual(
+      [],
+    );
 
     await m.gc.reconcile();
     await flush();

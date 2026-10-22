@@ -940,7 +940,18 @@ describe("Stop while the send owns its turn", () => {
       queueItemId: `queue-${sent.messageId}`,
     });
     expect(stopFrames(opened)).toEqual([]);
+    // The intent is retained until the host accepts the cancel: a stale
+    // cancel can still lose to the activation it raced.
+    expect(stateOf(opened).heldStop?.messageId).toBe(sent.messageId);
+    const cancel = cancels[0];
+    if (cancel.kind !== "queueCancel") {
+      throw new Error("Expected the queueCancel frame");
+    }
+
+    emitAck(opened, cancel.clientActionId, "accepted");
+
     expect(stateOf(opened).heldStop).toBeNull();
+    expect(stopFrames(opened)).toEqual([]);
   });
 
   it("is dropped, and nothing is sent, when the host rejects the send", () => {
@@ -984,6 +995,287 @@ describe("Stop while the send owns its turn", () => {
     expect(stops).toHaveLength(1);
     expect(stops[0]).toMatchObject({ kind: "stop", turnId: null });
     expect(stateOf(opened).heldStop).toBeNull();
+  });
+});
+
+describe("a held Stop whose send the host queues and then starts before the cancel is processed", () => {
+  const FATAL: Parameters<ChatStreamCallbacks["onConnectionStatus"]>[1] = {
+    kind: "fatalError",
+    details: {
+      code: "UNAUTHORIZED",
+      reason: "test close",
+      incompatibleMethods: null,
+      upgradeGuidance: null,
+    },
+  };
+
+  function stopFrames(opened: Harness) {
+    return framesOfKind(opened, "stop");
+  }
+
+  /** Send B, hold Stop, let the host queue B: the automatic cancel goes out. */
+  function cancelOutstanding(): {
+    readonly opened: Harness;
+    readonly sent: {
+      readonly clientActionId: string;
+      readonly messageId: string;
+    };
+    readonly cancelActionId: string;
+  } {
+    const opened = openHarness(IDLE_HOST);
+    const sent = sendPrompt(opened);
+    stateOf(opened).stopTurn();
+    emitQueueChanged(opened.callbacks(), [queuedPromptItem(sent.messageId)]);
+    const cancels = framesOfKind(opened, "queueCancel");
+    expect(cancels).toHaveLength(1);
+    const cancel = cancels[0];
+    if (cancel.kind !== "queueCancel") {
+      throw new Error("Expected the queueCancel frame");
+    }
+    expect(stateOf(opened).heldStop?.messageId).toBe(sent.messageId);
+    return { opened, sent, cancelActionId: cancel.clientActionId };
+  }
+
+  function startTurn(opened: Harness, messageId: string, turnId: string): void {
+    emitTurnState(opened.callbacks(), {
+      runStatus: "running",
+      activeTurn: turnFor(messageId, turnId),
+      turnInProgress: true,
+      sendWouldQueue: false,
+    });
+  }
+
+  it("stops the send's turn when the turn is named first and the stale cancel is rejected after", () => {
+    const { opened, sent, cancelActionId } = cancelOutstanding();
+
+    startTurn(opened, sent.messageId, "turn-b");
+    emitAck(opened, cancelActionId, "rejected");
+
+    const stops = stopFrames(opened);
+    expect(stops).toHaveLength(1);
+    expect(stops[0]).toMatchObject({ kind: "stop", turnId: "turn-b" });
+  });
+
+  it("stops the send's turn when the stale cancel is rejected first and the turn is named after", () => {
+    const { opened, sent, cancelActionId } = cancelOutstanding();
+
+    emitAck(opened, cancelActionId, "rejected");
+    startTurn(opened, sent.messageId, "turn-b");
+
+    const stops = stopFrames(opened);
+    expect(stops).toHaveLength(1);
+    expect(stops[0]).toMatchObject({ kind: "stop", turnId: "turn-b" });
+  });
+
+  it("sends no stop when the cancel is accepted and the prompt leaves the queue", () => {
+    const { opened, cancelActionId } = cancelOutstanding();
+
+    emitAck(opened, cancelActionId, "accepted");
+    emitQueueChanged(opened.callbacks(), []);
+    startTurn(opened, "message-later", "turn-later");
+
+    expect(stopFrames(opened)).toEqual([]);
+  });
+
+  it("never stops an unrelated turn after the cancel is rejected", () => {
+    const { opened, cancelActionId } = cancelOutstanding();
+
+    emitAck(opened, cancelActionId, "rejected");
+    startTurn(opened, "message-unrelated", "turn-unrelated");
+
+    expect(stopFrames(opened)).toEqual([]);
+  });
+
+  it("sends no stop for a send the host rejected", () => {
+    const { opened, sent, cancelActionId } = cancelOutstanding();
+
+    emitAck(opened, sent.clientActionId, "rejected");
+    emitAck(opened, cancelActionId, "rejected");
+    startTurn(opened, sent.messageId, "turn-b");
+
+    expect(stopFrames(opened)).toEqual([]);
+  });
+
+  it("stops the send's turn when the queue row is removed before the cancel ack and the matching turn then activates", () => {
+    const { opened, sent } = cancelOutstanding();
+
+    emitQueueChanged(opened.callbacks(), []);
+    expect(stopFrames(opened)).toEqual([]);
+    startTurn(opened, sent.messageId, "turn-b");
+
+    const stops = stopFrames(opened);
+    expect(stops).toHaveLength(1);
+    expect(stops[0]).toMatchObject({ kind: "stop", turnId: "turn-b" });
+  });
+
+  it("releases the intent on a fresh idle host frame when the saved row arrived without any turn naming it", () => {
+    const { opened, sent } = cancelOutstanding();
+
+    emitQueueChanged(opened.callbacks(), []);
+    emitMessageAccepted(
+      opened.callbacks(),
+      acceptedMessage(sent.messageId, 10),
+    );
+    expect(stateOf(opened).heldStop).not.toBeNull();
+    emitTurnState(opened.callbacks(), {
+      runStatus: "idle",
+      activeTurn: null,
+      turnInProgress: false,
+      sendWouldQueue: false,
+    });
+
+    expect(stateOf(opened).heldStop).toBeNull();
+    expect(stopFrames(opened)).toEqual([]);
+  });
+
+  it("discharges the intent when the cancel is accepted before the queue row is removed", () => {
+    const { opened, cancelActionId } = cancelOutstanding();
+
+    emitAck(opened, cancelActionId, "accepted");
+    expect(stateOf(opened).heldStop).toBeNull();
+    emitQueueChanged(opened.callbacks(), []);
+
+    expect(stateOf(opened).heldStop).toBeNull();
+    expect(stopFrames(opened)).toEqual([]);
+  });
+
+  it("sends no stop when the matching turn is already terminal, even with the stale raw queue row still present", () => {
+    const { opened, sent } = cancelOutstanding();
+
+    emitTurnState(opened.callbacks(), {
+      runStatus: "idle",
+      activeTurn: {
+        ...turnFor(sent.messageId, "turn-b"),
+        status: "completed",
+      },
+      turnInProgress: false,
+      sendWouldQueue: false,
+    });
+
+    expect(stopFrames(opened)).toEqual([]);
+  });
+
+  it("still stops the send's turn after the confirmed original send's history is legitimately pruned before the queue row is removed", () => {
+    const opened = openHarness(IDLE_HOST);
+    const sent = sendPrompt(opened);
+    stateOf(opened).stopTurn();
+    emitAck(opened, sent.clientActionId, "accepted");
+    emitQueueChanged(opened.callbacks(), [queuedPromptItem(sent.messageId)]);
+    const cancels = framesOfKind(opened, "queueCancel");
+    expect(cancels).toHaveLength(1);
+    const cancel = cancels[0];
+    if (cancel.kind !== "queueCancel") {
+      throw new Error("Expected the queueCancel frame");
+    }
+
+    // Deliberate bookkeeping simulation: accepted-action history is bounded and
+    // prunable. Only the history goes; the linked pending cancel stays.
+    expect(stateOf(opened).acceptedActions[sent.clientActionId]).toBeDefined();
+    opened.handle.store.setState({ acceptedActions: {} });
+    expect(stateOf(opened).acceptedActions).toEqual({});
+    expect(stateOf(opened).pendingActions[cancel.clientActionId]?.action).toBe(
+      "queueCancel",
+    );
+    expect(stateOf(opened).heldStop?.messageId).toBe(sent.messageId);
+
+    emitQueueChanged(opened.callbacks(), []);
+    emitAck(opened, cancel.clientActionId, "rejected");
+    startTurn(opened, sent.messageId, "turn-b");
+
+    const stops = stopFrames(opened);
+    expect(stops).toHaveLength(1);
+    expect(stops[0]).toMatchObject({ kind: "stop", turnId: "turn-b" });
+  });
+
+  it("keeps the intent when the transport cannot carry the cancel, and retries once on the fresh reconnect baseline", () => {
+    const opened = openHarness(IDLE_HOST);
+    const sent = sendPrompt(opened);
+    stateOf(opened).stopTurn();
+    opened.callbacks().onConnectionStatus("reconnecting", null, null);
+
+    emitQueueChanged(opened.callbacks(), [queuedPromptItem(sent.messageId)]);
+
+    expect(framesOfKind(opened, "queueCancel")).toEqual([]);
+    expect(stateOf(opened).heldStop?.messageId).toBe(sent.messageId);
+
+    emitSnapshotWithQueue(opened.callbacks(), IDLE_HOST, {
+      savedMessageIds: [],
+      activeTurn: null,
+      queuedMessageIds: [sent.messageId],
+    });
+
+    expect(framesOfKind(opened, "queueCancel")).toHaveLength(1);
+    expect(stateOf(opened).heldStop?.messageId).toBe(sent.messageId);
+  });
+
+  it("keeps the intent through a same-epoch empty idle snapshot with a cancel in flight, and a later own activation still stops", () => {
+    const { opened, sent } = cancelOutstanding();
+
+    emitSnapshotWithQueue(opened.callbacks(), IDLE_HOST, {
+      savedMessageIds: [],
+      activeTurn: null,
+      queuedMessageIds: [],
+    });
+    expect(stateOf(opened).heldStop?.messageId).toBe(sent.messageId);
+    expect(stopFrames(opened)).toEqual([]);
+
+    startTurn(opened, sent.messageId, "turn-b");
+
+    const stops = stopFrames(opened);
+    expect(stops).toHaveLength(1);
+    expect(stops[0]).toMatchObject({ kind: "stop", turnId: "turn-b" });
+  });
+
+  it("releases an un-acked intent without a stop once a newer epoch's fresh empty idle baseline arrives", () => {
+    const { opened, sent } = cancelOutstanding();
+
+    opened.callbacks().onConnectionStatus("reconnecting", null, null);
+    emitSnapshotWithQueue(opened.callbacks(), IDLE_HOST, {
+      savedMessageIds: [],
+      activeTurn: null,
+      queuedMessageIds: [],
+    });
+
+    expect(stateOf(opened).heldStop).toBeNull();
+    expect(stopFrames(opened)).toEqual([]);
+
+    startTurn(opened, sent.messageId, "turn-b");
+
+    expect(stopFrames(opened)).toEqual([]);
+  });
+
+  it("does not let the stale ack of a prior cancel attempt clear a newer attempt's intent", () => {
+    const { opened, sent, cancelActionId } = cancelOutstanding();
+    opened.callbacks().onConnectionStatus("reconnecting", null, null);
+    emitSnapshotWithQueue(opened.callbacks(), IDLE_HOST, {
+      savedMessageIds: [],
+      activeTurn: null,
+      queuedMessageIds: [sent.messageId],
+    });
+    const cancels = framesOfKind(opened, "queueCancel");
+    expect(cancels).toHaveLength(2);
+    const newer = cancels[1];
+    if (newer.kind !== "queueCancel") {
+      throw new Error("Expected the second queueCancel frame");
+    }
+    expect(newer.clientActionId).not.toBe(cancelActionId);
+
+    emitAck(opened, cancelActionId, "accepted");
+    expect(stateOf(opened).heldStop?.messageId).toBe(sent.messageId);
+
+    emitAck(opened, newer.clientActionId, "accepted");
+    expect(stateOf(opened).heldStop).toBeNull();
+    expect(stopFrames(opened)).toEqual([]);
+  });
+
+  it("drops the intent on a fatal close", () => {
+    const { opened, sent, cancelActionId } = cancelOutstanding();
+
+    opened.callbacks().onConnectionStatus("closed", FATAL, null);
+    emitAck(opened, cancelActionId, "rejected");
+    startTurn(opened, sent.messageId, "turn-b");
+
+    expect(stopFrames(opened)).toEqual([]);
   });
 });
 
@@ -1410,6 +1702,89 @@ describe("rapid sends before any host frame answers the first", () => {
 
     expect(promptIds(opened)).toEqual([]);
     expect(stateOf(opened).pendingTurn?.messageId).toBe(next.messageId);
+  });
+});
+
+describe("a setup-failed handback of the send that owns the turn", () => {
+  it("clears the pendingTurn, its evidence and a held Stop when the prompt goes back to the composer", () => {
+    const opened = openHarness(IDLE_HOST);
+    const sent = sendPrompt(opened);
+    stateOf(opened).stopTurn();
+    emitAck(opened, sent.clientActionId, "accepted");
+    expect(stateOf(opened).pendingTurn?.messageId).toBe(sent.messageId);
+    expect(stateOf(opened).heldStop?.messageId).toBe(sent.messageId);
+
+    const restored = stateOf(opened).takeSetupFailedRestoration(sent.messageId);
+
+    expect(restored).not.toBeNull();
+    const state = stateOf(opened);
+    expect(state.pendingTurn).toBeNull();
+    expect(state.pendingTurnEvidence ?? null).toBeNull();
+    expect(state.heldStop).toBeNull();
+    expect(chatActivityIndicator(state)).toBeNull();
+  });
+
+  it("is not undone by the accepted ack that arrives after the handback", () => {
+    const opened = openHarness(IDLE_HOST);
+    const sent = sendPrompt(opened);
+    expect(stateOf(opened).takeSetupFailedRestoration(sent.messageId)).not.toBe(
+      null,
+    );
+    expect(stateOf(opened).pendingTurn).toBeNull();
+
+    emitAck(opened, sent.clientActionId, "accepted");
+
+    expect(stateOf(opened).pendingTurn).toBeNull();
+    expect(stateOf(opened).pendingTurnEvidence ?? null).toBeNull();
+    expect(chatActivityIndicator(stateOf(opened))).toBeNull();
+  });
+
+  it("is not recreated by a later host frame that names the handed-back message's turn", () => {
+    const opened = openHarness(IDLE_HOST);
+    const sent = sendPrompt(opened);
+    emitAck(opened, sent.clientActionId, "accepted");
+    emitTurnState(opened.callbacks(), {
+      runStatus: "running",
+      activeTurn: turnFor(sent.messageId, "turn-restored"),
+      turnInProgress: true,
+      sendWouldQueue: false,
+    });
+    expect(
+      stateOf(opened).takeSetupFailedRestoration(sent.messageId),
+    ).not.toBeNull();
+    expect(stateOf(opened).pendingTurn).toBeNull();
+
+    emitTurnState(opened.callbacks(), {
+      runStatus: "running",
+      activeTurn: turnFor(sent.messageId, "turn-restored"),
+      turnInProgress: true,
+      sendWouldQueue: false,
+    });
+
+    expect(stateOf(opened).pendingTurn).toBeNull();
+  });
+
+  it("keeps another send's pendingTurn and held Stop when a different message is handed back", () => {
+    const opened = openHarness({ ...IDLE_HOST, sendWouldQueue: true });
+    const other = sendPrompt(opened);
+    emitQueueChanged(opened.callbacks(), [queuedPromptItem(other.messageId)]);
+    emitQueueChanged(opened.callbacks(), []);
+    emitAck(opened, other.clientActionId, "accepted");
+    emitTurnState(opened.callbacks(), {
+      runStatus: "idle",
+      activeTurn: null,
+      turnInProgress: false,
+      sendWouldQueue: false,
+    });
+    const own = sendPrompt(opened);
+    stateOf(opened).stopTurn();
+    expect(stateOf(opened).pendingTurn?.messageId).toBe(own.messageId);
+    expect(stateOf(opened).heldStop?.messageId).toBe(own.messageId);
+
+    stateOf(opened).takeSetupFailedRestoration(other.messageId);
+
+    expect(stateOf(opened).pendingTurn?.messageId).toBe(own.messageId);
+    expect(stateOf(opened).heldStop?.messageId).toBe(own.messageId);
   });
 });
 
@@ -1916,7 +2291,7 @@ describe("the host turn clock on a host that publishes turnInProgress but no sen
     const state = stateOf(opened);
     return resolveTurnPresentation({
       chatId: CHAT_ID,
-      pendingTurn: state.pendingTurn,
+      pendingTurn: state.pendingTurn ?? null,
       activeTurn: state.activeTurn,
       observedAt: state.turnObservedAt ?? -1,
       localMessageCreatedAt: null,

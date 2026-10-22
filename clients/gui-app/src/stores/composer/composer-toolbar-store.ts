@@ -417,7 +417,11 @@ export function createComposerToolbarStore(
           // Only an emit clears the deferred flag; a silent push leaves it as-is.
           pendingSettingsEmit: emit ? false : state.pendingSettingsEmit,
         });
-        if (emit) state.onSettingsChange?.(settingsFromDerived(derived));
+        if (emit) {
+          const settings = settingsFromDerived(derived);
+          state.onSettingsChange?.(settings);
+          state.onUserSettingsChange?.(settings);
+        }
       },
 
       setOnSettingsChange: (onSettingsChange) => {

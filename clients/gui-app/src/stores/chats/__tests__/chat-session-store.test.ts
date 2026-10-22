@@ -7876,7 +7876,11 @@ describe("createChatSessionStore", () => {
     expect(harness.handle.store.getState().queue.status).toBe("idle");
   });
 
-  it("clears an active-turn pending send when reconnect snapshot remints the queued message id", () => {
+  // Identity is the message id alone: a queued prompt with the same content under
+  // a different id is another send, never this one's confirmation (the retired
+  // content-equality fallback). A local send the reconnect snapshot does not
+  // name is recovered to the composer, not silently erased.
+  it("recovers an active-turn pending send to the composer when the reconnect snapshot names a different message id with the same content", () => {
     const harness = createHarness();
     const callbacks = harness.callbacks();
     emitSnapshot(callbacks, "owner");
@@ -7933,9 +7937,19 @@ describe("createChatSessionStore", () => {
       pendingFileEditApprovals: [],
     });
 
-    expect(harness.handle.store.getState().pendingActions).toEqual({});
-    expect(harness.handle.store.getState().pendingUserMessages).toEqual([]);
-    expect(harness.handle.store.getState().failedSendRestoration).toBeNull();
+    const state = harness.handle.store.getState();
+    expect(state.pendingActions).toEqual({});
+    expect(state.pendingUserMessages).toEqual([]);
+    expect(state.failedSendRestoration?.messageId).toBe(frame.messageId);
+    expect(state.failedSendRestoration?.clientActionId).toBe(
+      frame.clientActionId,
+    );
+    expect(state.failedSendRestoration?.content).toEqual(CONTENT);
+    expect(
+      state.queue.items.map((item) =>
+        item.kind === "prompt" ? item.messageId : null,
+      ),
+    ).toEqual(["reminted-message"]);
   });
 
   it("keeps active-turn sends out of optimistic transcript rows", () => {
@@ -8020,7 +8034,7 @@ describe("createChatSessionStore", () => {
     });
   });
 
-  it("clears a pending send when queue updates remint the message id", () => {
+  it("does not confirm a pending send from a queue update that names a different message id with the same content", () => {
     const harness = createHarness();
     const callbacks = harness.callbacks();
     emitSnapshot(callbacks, "owner");
@@ -8076,8 +8090,14 @@ describe("createChatSessionStore", () => {
       },
     });
 
-    expect(harness.handle.store.getState().pendingActions).toEqual({});
-    expect(harness.handle.store.getState().pendingUserMessages).toEqual([]);
+    const state = harness.handle.store.getState();
+    expect(Object.keys(state.pendingActions)).toEqual([frame.clientActionId]);
+    expect(state.acceptedActions[frame.clientActionId]).toBeUndefined();
+    expect(
+      state.queue.items.map((item) =>
+        item.kind === "prompt" ? item.messageId : null,
+      ),
+    ).toEqual(expect.arrayContaining(["reminted-message", frame.messageId]));
   });
 
   it("restores rejected sends only through the initiating store", () => {
