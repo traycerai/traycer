@@ -1064,7 +1064,7 @@ describe("useCloseTabFlow", () => {
           expect(useEpicCanvasStore.getState().openTabOrder).toEqual([b, c]),
         );
         expect(warn.mock.calls.map(([message]) => message)).toEqual([
-          "Kept 1 tabs open with unsynced edits",
+          'Kept "Beta" open with unsynced edits',
         ]);
       });
 
@@ -1094,7 +1094,7 @@ describe("useCloseTabFlow", () => {
           expect(useEpicCanvasStore.getState().openTabOrder).toEqual([a, c]),
         );
         expect(warn.mock.calls.map(([message]) => message)).toEqual([
-          "Kept 1 tabs open with unsynced edits",
+          'Kept "Alpha" open with unsynced edits',
         ]);
       });
 
@@ -1123,7 +1123,7 @@ describe("useCloseTabFlow", () => {
           expect(useEpicCanvasStore.getState().openTabOrder).toEqual([b, c]),
         );
         expect(warn.mock.calls.map(([message]) => message)).toEqual([
-          "Kept 1 tabs open with unsynced edits",
+          'Kept "Beta" open with unsynced edits',
         ]);
       });
     });

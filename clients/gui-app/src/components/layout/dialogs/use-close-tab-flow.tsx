@@ -68,14 +68,30 @@ export function useCloseTabFlow(): CloseTabFlow {
 
   const requestCloseTab = useCallback(
     (tab: HeaderTab) => {
+      // Read before the prompt, because the prompt is what turns a dirty tab
+      // into a confirmed one.
+      const confirmed = tabRequiresCloseConfirm(tab)
+        ? new Set([tabRefKey(tab)])
+        : new Set<string>();
       const finalize = () => {
+        if (splitByUnsyncedEdits([tab], confirmed).held.length > 0) {
+          warnAboutHeldTabs([tab], false);
+          return;
+        }
         const ungrouped = tasksUngroupedByClose([tab], organization);
         if (ungrouped.length === 0) {
           finalizeCloseTab(tab);
           return;
         }
         void removeTasksFromGroups(organization, ungrouped)
-          .then(() => finalizeCloseTab(tab))
+          .then(() => {
+            const { held } = splitByUnsyncedEdits([tab], confirmed);
+            if (held.length > 0) {
+              warnAboutHeldTabs(held, true);
+              return;
+            }
+            finalizeCloseTab(tab);
+          })
           .catch(() => undefined);
       };
       if (dialog.promptOrConfirm(tab, finalize)) return;
@@ -86,7 +102,7 @@ export function useCloseTabFlow(): CloseTabFlow {
 
   const closeOtherTabs = useCallback(
     (target: HeaderTab) => {
-      const skipped: string[] = [];
+      const skipped: HeaderTab[] = [];
       const layout = readTabStripLayout();
       const targetItem = findStripItemForRef(layout, {
         kind: target.kind,
@@ -96,25 +112,22 @@ export function useCloseTabFlow(): CloseTabFlow {
       const preserved = new Set(
         flattenStripItemRefs(targetItem).map((ref) => `${ref.kind}:${ref.id}`),
       );
-      const closing: HeaderTab[] = [];
-      for (const other of getHeaderTabs()) {
-        if (preserved.has(`${other.kind}:${other.id}`)) continue;
-        if (tabRequiresCloseConfirm(other)) skipped.push(other.name);
-        else closing.push(other);
-      }
+      const candidates = getHeaderTabs().filter(
+        (other) => !preserved.has(`${other.kind}:${other.id}`),
+      );
+      // Nothing here is ever prompted, so nothing here is ever confirmed.
+      const confirmed = new Set<string>();
+      const first = splitByUnsyncedEdits(candidates, confirmed);
+      skipped.push(...first.held);
       // Read before the closes: once the tabs are gone the strip cannot say
-      // which tasks they were.
-      const ungrouped = tasksUngroupedByClose(closing, organization);
+      // which tasks they were. Read from the tabs that will ACTUALLY close,
+      // so a tab already holding edits produces no removal at all.
+      const ungrouped = tasksUngroupedByClose(first.closing, organization);
       const commit = (): void => {
-        // Asked again HERE, not only when `closing` was built: the ungroup
-        // is awaited in between, and a tab the user typed into during that
-        // wait would otherwise be closed without the confirmation its new
-        // edits have earned.
-        for (const other of [...closing]) {
-          if (!tabRequiresCloseConfirm(other)) continue;
-          closing.splice(closing.indexOf(other), 1);
-          skipped.push(other.name);
-        }
+        const { closing, held } = splitByUnsyncedEdits(
+          first.closing,
+          confirmed,
+        );
         batchHeaderTabRecovery(() => {
           for (const other of closing) {
             closeTab(other);
@@ -125,14 +138,10 @@ export function useCloseTabFlow(): CloseTabFlow {
             }
           }
         }, layout);
-        if (skipped.length > 0) {
-          const detail =
-            skipped.length === 1 ? `"${skipped[0]}"` : `${skipped.length} tabs`;
-          toast.warning(`Kept ${detail} open with unsynced edits`, {
-            description:
-              "Close those tabs individually to discard their edits.",
-          });
-        }
+        warnAboutHeldTabs(skipped, false);
+        // Separate, because the reason differs: these lost their group
+        // before their edits appeared.
+        warnAboutHeldTabs(held, ungrouped.length > 0);
         navigateToTabIntent(navigate, tabResolveIntent(target), undefined);
       };
       // The ungroup is accepted before anything closes, exactly as it is for
@@ -161,18 +170,15 @@ export function useCloseTabFlow(): CloseTabFlow {
       // dirty active tab into a confirmed one. A tab that is clean here was
       // never asked about, so edits it gains later have been confirmed by
       // nobody.
-      const activeWasDirty =
-        active !== undefined && tabRequiresCloseConfirm(active);
+      const confirmed =
+        active !== undefined && tabRequiresCloseConfirm(active)
+          ? new Set([tabRefKey(active)])
+          : new Set<string>();
       const finalize = () => {
-        const held = members.filter(
-          (tab) => tab !== active && tabRequiresCloseConfirm(tab),
-        );
+        const first = splitByUnsyncedEdits(members, confirmed);
         // Closing a task's last tab takes it out of the group, so closing the
         // whole group empties it - of everything but the tabs held back.
-        const ungrouped = tasksUngroupedByClose(
-          members.filter((tab) => !held.includes(tab)),
-          organization,
-        );
+        const ungrouped = tasksUngroupedByClose(first.closing, organization);
         const commit = (): void => {
           // Asked again after the awaited ungroup, for the reason the single
           // and the other bulk path share: edits made while that request was
@@ -183,21 +189,20 @@ export function useCloseTabFlow(): CloseTabFlow {
           // and refusing that close would override an answer they gave. A
           // clean one was never asked, so edits it gained while the ungroup
           // was out are nobody's decision to discard.
-          const stillHeld = members.filter(
-            (tab) =>
-              tabRequiresCloseConfirm(tab) &&
-              (tab !== active || !activeWasDirty),
+          const { closing, held } = splitByUnsyncedEdits(
+            first.closing,
+            confirmed,
           );
           // Do not keep a global batch open while the dialog waits: unrelated
           // closes must stay separate. Only confirmed group closes run here.
           batchHeaderTabRecovery(() => {
-            for (const tab of members) {
-              if (tab === active || stillHeld.includes(tab)) continue;
+            for (const tab of closing) {
+              if (tab === active) continue;
               closeTab(tab);
             }
             if (
               active !== undefined &&
-              !stillHeld.includes(active) &&
+              closing.includes(active) &&
               getHeaderTabs().some(
                 (tab) => tabRefKey(tab) === tabRefKey(active),
               )
@@ -206,14 +211,8 @@ export function useCloseTabFlow(): CloseTabFlow {
               finalizeCloseTab(active);
             }
           }, readTabStripLayout());
-          if (stillHeld.length > 0)
-            toast.warning(
-              `Kept ${stillHeld.length} tabs open with unsynced edits`,
-              {
-                description:
-                  "Close those tabs individually to discard their edits.",
-              },
-            );
+          warnAboutHeldTabs(first.held, false);
+          warnAboutHeldTabs(held, ungrouped.length > 0);
         };
         if (ungrouped.length === 0) {
           commit();
@@ -265,6 +264,60 @@ export function useCloseTabFlow(): CloseTabFlow {
       requestCloseTab,
     ],
   );
+}
+
+/**
+ * Splits a close into the tabs it may take and the tabs their own unsynced
+ * edits hold back.
+ *
+ * Asked TWICE on every path, which is the whole of the rule. Once before the
+ * membership removal is computed, so a tab already carrying edits produces
+ * no removal at all. Once again at the close, because the removal is awaited
+ * in between and a tab typed into during that wait has edits nobody agreed
+ * to discard.
+ *
+ * `confirmed` is the tabs that were already dirty when the gesture began and
+ * whose discard the user then confirmed. They are never held: refusing those
+ * would overrule the answer they just gave. A tab that was CLEAN at the
+ * gesture was never asked about, so edits it gains later belong to no
+ * answer at all - which is the case the single and group paths each missed,
+ * in their own way, before this was one rule.
+ */
+function splitByUnsyncedEdits(
+  tabs: readonly HeaderTab[],
+  confirmed: ReadonlySet<string>,
+): { readonly closing: HeaderTab[]; readonly held: HeaderTab[] } {
+  const closing: HeaderTab[] = [];
+  const held: HeaderTab[] = [];
+  for (const tab of tabs) {
+    if (confirmed.has(tabRefKey(tab)) || !tabRequiresCloseConfirm(tab))
+      closing.push(tab);
+    else held.push(tab);
+  }
+  return { closing, held };
+}
+
+/**
+ * What the user is told about tabs kept open.
+ *
+ * `afterRemoval` is the honest part: those tasks were taken out of their
+ * group before the edits appeared, and this host is not going to put them
+ * back - guessing at that could undo a move made in the meantime. It says
+ * what happened, and does not claim anything about the cloud beyond the
+ * removal having been accepted.
+ */
+function warnAboutHeldTabs(
+  held: readonly HeaderTab[],
+  afterRemoval: boolean,
+): void {
+  if (held.length === 0) return;
+  const detail =
+    held.length === 1 ? `"${held[0]?.name ?? ""}"` : `${held.length} tabs`;
+  toast.warning(`Kept ${detail} open with unsynced edits`, {
+    description: afterRemoval
+      ? "Their tasks were taken out of their group before the edits arrived. Add them back if you still want them grouped."
+      : "Close those tabs individually to discard their edits.",
+  });
 }
 
 /**
