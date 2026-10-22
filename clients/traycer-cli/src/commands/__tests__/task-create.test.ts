@@ -4,7 +4,7 @@
  * or doubled run from starting a second Task.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createEpicRequestSchemaV13 } from "@traycer/protocol/host/epic/unary-schemas";
@@ -576,6 +576,52 @@ describe("task create --idempotency-key", () => {
       taskCreateKeyRecordPath(keysDir.current, "u1", "slot-1"),
     );
     expect(error.details).toMatchObject({ taskId: sent.epic.id });
+  });
+
+  it("does not tell the user to delete a done record the failed write already made visible", async () => {
+    const { writeTaskCreateKey: realWrite } = await vi.importActual<
+      typeof import("../../store/task-create-keys")
+    >("../../store/task-create-keys");
+    // The atomic write renames the done record into place, then fails the
+    // folder fsync, as EIO or ENOSPC can.
+    writeKeyMock
+      .mockImplementationOnce(realWrite)
+      .mockImplementationOnce(async (path, record) => {
+        await realWrite(path, record);
+        throw new Error("EIO");
+      });
+    const error = await rejection(run({ idempotencyKey: "slot-1" }));
+    const sent = sentRequest(0);
+    expect(error.message).toContain(sent.epic.id);
+    expect(error.message).not.toMatch(/delete/i);
+    expect(error.details).toMatchObject({ taskId: sent.epic.id });
+
+    const path = taskCreateKeyRecordPath(keysDir.current, "u1", "slot-1");
+    const written = JSON.parse(await readFile(path, "utf8")) as {
+      state: string;
+    };
+    expect(written.state).toBe("done");
+    const rerun = await run({ idempotencyKey: "slot-1" });
+    expect(rerun.data).toMatchObject({
+      taskId: sent.epic.id,
+      alreadyCreated: true,
+    });
+    expect(rpcMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not tell the user to delete a record it cannot read back after a failed done write", async () => {
+    const { writeTaskCreateKey: realWrite } = await vi.importActual<
+      typeof import("../../store/task-create-keys")
+    >("../../store/task-create-keys");
+    writeKeyMock
+      .mockImplementationOnce(realWrite)
+      .mockImplementationOnce(async (path) => {
+        await writeFile(path, "{torn");
+        throw new Error("EIO");
+      });
+    const error = await rejection(run({ idempotencyKey: "slot-1" }));
+    expect(error.message).toContain(sentRequest(0).epic.id);
+    expect(error.message).not.toMatch(/delete/i);
   });
 });
 

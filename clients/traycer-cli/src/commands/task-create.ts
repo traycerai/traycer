@@ -210,11 +210,33 @@ export function buildTaskCreateCommand(opts: TaskCreateOptions): CommandFn {
           writtenAt: Date.now(),
         });
       } catch {
-        // The host answered created, so the ids are the result; the record
-        // still reads intent, and every rerun of the key refuses on it.
+        // The host answered created, so the ids are the result. The atomic
+        // write renames the record into place before it flushes the folder,
+        // so a write that failed late may already read done: read it back
+        // rather than send the person to delete a record a rerun reports.
+        const after = await readTaskCreateKey(recordPath, Date.now()).catch(
+          () => null,
+        );
+        if (after?.kind === "done") {
+          throw cliError({
+            code: CLI_ERROR_CODES.UNEXPECTED,
+            message: `traycer: Task ${ids.taskId} (first agent ${ids.agentId}) was created; a rerun with this --idempotency-key reports it.`,
+            details: { taskId: ids.taskId, agentId: ids.agentId },
+            exitCode: 1,
+          });
+        }
+        if (after?.kind === "intent") {
+          throw cliError({
+            code: CLI_ERROR_CODES.UNEXPECTED,
+            message: `traycer: Task ${ids.taskId} (first agent ${ids.agentId}) was created, but the record for this --idempotency-key could not be updated. A rerun with this key refuses until you delete ${recordPath}.`,
+            details: { taskId: ids.taskId, agentId: ids.agentId },
+            exitCode: 1,
+          });
+        }
+        // Unreadable: it may read done, so deleting it is not advice.
         throw cliError({
           code: CLI_ERROR_CODES.UNEXPECTED,
-          message: `traycer: Task ${ids.taskId} (first agent ${ids.agentId}) was created, but the record for this --idempotency-key could not be updated. A rerun with this key refuses until you delete ${recordPath}.`,
+          message: `traycer: Task ${ids.taskId} (first agent ${ids.agentId}) was created, but the record for this --idempotency-key at ${recordPath} could not be read back. Do not start this Task again.`,
           details: { taskId: ids.taskId, agentId: ids.agentId },
           exitCode: 1,
         });
