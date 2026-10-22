@@ -13,6 +13,7 @@ import {
 } from "@/lib/cloud-epic-tasks-query";
 import { useEpicCreateForClient } from "@/hooks/epic/use-epic-create-mutation";
 import { useHostClient } from "@/lib/host";
+import { createWithoutCloudVerdictMessage } from "@/lib/composer/landing-placement";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import { toast } from "sonner";
 import { hostQueryKeys } from "@/lib/query-keys";
@@ -105,6 +106,7 @@ const testState = vi.hoisted(() => ({
   activeHostId: "host-1",
   requestContextUserId: "user-1",
   capturedOptions: null as CapturedCreateOptions | null,
+  capturedMapDispatchError: null as ((cause: unknown) => unknown) | null,
 }));
 
 vi.mock("@/lib/host", () => ({
@@ -115,8 +117,12 @@ vi.mock("@/lib/host", () => ({
 }));
 
 vi.mock("@/hooks/host/use-host-query", () => ({
-  useHostMutation: (args: { readonly options: CapturedCreateOptions }) => {
+  useHostMutation: (args: {
+    readonly options: CapturedCreateOptions;
+    readonly mapDispatchError: (cause: unknown) => unknown;
+  }) => {
     testState.capturedOptions = args.options;
+    testState.capturedMapDispatchError = args.mapDispatchError;
     return { mutate: vi.fn(), isPending: false };
   },
 }));
@@ -944,6 +950,62 @@ describe("useEpicCreateForClient seed hold", () => {
       );
       // Never the definite failure: nobody verified the create did not run.
       expect(toastText()).not.toContain("Couldn't create epic.");
+    });
+
+    function createFloorRefusal(): HostMethodVersionUnsatisfiedError {
+      return new HostMethodVersionUnsatisfiedError({
+        requirement: {
+          method: "epic.create",
+          version: { major: 1, minor: 1 },
+        },
+        negotiated: { major: 1, minor: 0 },
+        requestId: "req-floor",
+        method: "epic.create",
+        hostId: "host-1",
+      });
+    }
+
+    it("gives a create refused at the epic.create@1.1 floor the composer's remedy as the toast description", () => {
+      const options = renderOptions();
+      const mapDispatchError = testState.capturedMapDispatchError;
+      if (mapDispatchError === null) {
+        throw new Error("expected the dispatch error mapper");
+      }
+      const refused = mapDispatchError(createFloorRefusal());
+      if (!(refused instanceof HostRpcError)) {
+        throw new Error("expected the mapper to return a HostRpcError");
+      }
+
+      options.onError(refused, chatVariables, {
+        hostId: "host-1",
+        userId: "user-1",
+      });
+
+      expect(toast.error).toHaveBeenCalledWith(
+        "Couldn't create epic.",
+        expect.objectContaining({
+          description: createWithoutCloudVerdictMessage("this device"),
+        }),
+      );
+      expect(pollMocks.pollEpicExistence).not.toHaveBeenCalled();
+    });
+
+    it("says the sign-in remedy beside the uncertainty when the retry was refused at the epic.create@1.1 floor", async () => {
+      pollMocks.pollEpicExistence.mockResolvedValue("absent");
+      const episodeError = await episodeEndedByRefusal(createFloorRefusal());
+      const options = renderOptions();
+
+      options.onError(episodeError, chatVariables, {
+        hostId: "host-1",
+        userId: "user-1",
+      });
+
+      await vi.waitFor(() => {
+        expect(toastText()).toContain("may or may not have gone through");
+      });
+      expect(toastText()).toContain(
+        "The retry was refused: Traycer couldn't confirm your sign-in on the device that answered. Sign in again, or update that device, then check your epics before trying again.",
+      );
     });
 
     it("says the uncertainty alone when the retry's refusal is itself an unknown outcome", async () => {

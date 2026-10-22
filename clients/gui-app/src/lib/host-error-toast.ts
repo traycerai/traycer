@@ -248,14 +248,52 @@ export function toastUnknownOutcomeAfterRefusedRetry(
     finalRefusal.code === "E_IDEMPOTENCY_OUTCOME_UNKNOWN"
       ? fallback
       : hostErrorToastMessage(finalRefusal, fallback);
+  showUnknownOutcomeAfterRefusedRetry(guidance === fallback ? null : guidance);
+}
+
+/**
+ * {@link toastUnknownOutcomeAfterRefusedRetry} for a refusal the caller
+ * recognised itself from the refusal's type and has client-owned guidance
+ * for, which the code mapper cannot give: the code on the wire is shared by
+ * unrelated refusals. The caller's `guidance` is the only text said; the
+ * refusal's own message never is.
+ */
+export function toastUnknownOutcomeWithRetryGuidance(guidance: string): void {
+  showUnknownOutcomeAfterRefusedRetry(guidance);
+}
+
+function showUnknownOutcomeAfterRefusedRetry(guidance: string | null): void {
   // The description is always stated, `undefined` included: Sonner merges an
   // update into the toast already under this id, so an omitted one would
   // keep an earlier notice's line.
   toast(HOST_UNKNOWN_OUTCOME_MAY_STILL_APPEAR_NOTICE, {
     id: TRANSPORT_UNKNOWN_OUTCOME_TOAST_ID,
     description:
-      guidance === fallback ? undefined : `The retry was refused: ${guidance}`,
+      guidance === null ? undefined : `The retry was refused: ${guidance}`,
   });
+}
+
+/**
+ * The red toast for a refusal the caller recognised itself from the refusal's
+ * type and has client-owned guidance for. The headline is the caller's
+ * `fallback` and the description is the caller's `guidance`; the refusal's own
+ * message is never rendered.
+ */
+export function toastHostRefusalWithGuidance(
+  error: HostRpcError,
+  fallback: string,
+  guidance: string,
+): void {
+  reportableErrorToast(
+    fallback,
+    { description: guidance },
+    createReportIssueContext({
+      title: "Host operation failed",
+      message: null,
+      code: error.code,
+      source: "Host",
+    }),
+  );
 }
 
 export function toastFromHostError(
