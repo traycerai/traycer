@@ -4,6 +4,7 @@ import {
   fireEvent,
   render,
   screen,
+  waitFor,
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { parseHtmlSource } from "@traycer/html-source";
@@ -87,12 +88,28 @@ function type(value: string): void {
   fireEvent.change(textarea(), { target: { value } });
 }
 
-/** Lets the read of the page's live text and the save that follows it run. */
+/**
+ * Runs `action` inside an awaited act. It does not wait for a read the editor
+ * is still waiting on, so an Enter whose read is held open returns at once.
+ * A read that is already answered has its continuation queued by `action`
+ * itself and so runs before the act resumes; a test that needs the save or
+ * the refusal that follows waits for that outcome.
+ */
 async function settled(action: () => void): Promise<void> {
-  await act(async () => {
+  await act(() => {
     action();
-    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    return Promise.resolve();
   });
+}
+
+/** The editor has handed `count` edits to the save. */
+function startedSaves(count: number): Promise<void> {
+  return waitFor(() => expect(pendingSaves).toHaveLength(count));
+}
+
+/** The editor's message, once the commit that produced it has finished. */
+async function message(): Promise<string> {
+  return (await screen.findByRole("status")).textContent;
 }
 const enter = (): Promise<void> =>
   settled(() => fireEvent.keyDown(textarea(), { code: "Enter" }));
@@ -137,8 +154,8 @@ describe("CanvasInlineTextEditor committing", () => {
     const { onClose } = mount(null);
     type("Hello world");
     await enter();
+    await startedSaves(1);
 
-    expect(pendingSaves).toHaveLength(1);
     expect(pendingSaves[0].variables.selection).toBe(SELECTION);
     expect(pendingSaves[0].variables.edit).toEqual({
       kind: "set-text-content",
@@ -154,6 +171,7 @@ describe("CanvasInlineTextEditor committing", () => {
     const { onClose } = mount(2);
     type("Changed");
     await enter();
+    await startedSaves(1);
 
     expect(pendingSaves[0].variables.edit).toEqual({
       kind: "set-text-node",
@@ -169,8 +187,8 @@ describe("CanvasInlineTextEditor committing", () => {
     const { onClose } = mount(null);
     type("Elsewhere");
     await leave();
+    await startedSaves(1);
 
-    expect(pendingSaves).toHaveLength(1);
     expect(pendingSaves[0].variables.edit).toMatchObject({ text: "Elsewhere" });
     await settleSave(0, SAVED);
     expect(onClose).toHaveBeenCalledOnce();
@@ -205,6 +223,7 @@ describe("CanvasInlineTextEditor committing", () => {
     const { onClose } = mount(null);
     type("Once");
     await enter();
+    await startedSaves(1);
     await enter();
     await leave();
 
@@ -260,6 +279,7 @@ describe("CanvasInlineTextEditor when the host says no", () => {
     const { onClose } = mount(null);
     type("Draft that was refused");
     await enter();
+    await startedSaves(1);
     await settleSave(0, REFUSED);
 
     expect(onClose).not.toHaveBeenCalled();
@@ -275,10 +295,11 @@ describe("CanvasInlineTextEditor when the host says no", () => {
     const { onClose } = mount(null);
     type("Try twice");
     await enter();
+    await startedSaves(1);
     await settleSave(0, REFUSED);
 
     await enter();
-    expect(pendingSaves).toHaveLength(2);
+    await startedSaves(2);
     expect(pendingSaves[1].variables.edit).toMatchObject({ text: "Try twice" });
 
     await settleSave(1, SAVED);
@@ -289,6 +310,7 @@ describe("CanvasInlineTextEditor when the host says no", () => {
     mount(null);
     type("First");
     await enter();
+    await startedSaves(1);
     await settleSave(0, REFUSED);
     type("First, then more");
     expect(textarea().value).toBe("First, then more");
@@ -298,6 +320,7 @@ describe("CanvasInlineTextEditor when the host says no", () => {
     const { onClose } = mount(null);
     type("Unlucky");
     await enter();
+    await startedSaves(1);
     await failSave(0);
 
     expect(onClose).not.toHaveBeenCalled();
@@ -311,10 +334,12 @@ describe("CanvasInlineTextEditor when the host says no", () => {
     mount(null);
     type("Retry");
     await enter();
+    await startedSaves(1);
     await settleSave(0, REFUSED);
     expect(screen.getByRole("status")).toBeDefined();
 
     await enter();
+    await startedSaves(2);
     expect(screen.queryByRole("status")).toBeNull();
   });
 });
@@ -331,15 +356,27 @@ describe("CanvasInlineTextEditor when the page's text may have changed", () => {
     });
     return { promise, resolve };
   }
+  /** Answers a read held open; the commit waiting on it resumes before act does. */
+  async function answer(
+    read: { readonly resolve: (value: string | null) => void },
+    value: string | null,
+  ): Promise<void> {
+    await act(() => {
+      read.resolve(value);
+      return Promise.resolve();
+    });
+  }
 
   it("asks the page for the live text each time it is about to save", async () => {
     const readText = vi.fn<ReadText>(readsHello);
     mountReading(null, readText);
     type("First");
     await enter();
+    await startedSaves(1);
     await settleSave(0, REFUSED);
     type("Second");
     await enter();
+    await startedSaves(2);
 
     expect(readText).toHaveBeenCalledTimes(2);
   });
@@ -348,6 +385,7 @@ describe("CanvasInlineTextEditor when the page's text may have changed", () => {
     mountReading(2, () => Promise.resolve("Hello"));
     type("Hi");
     await enter();
+    await startedSaves(1);
     expect(pendingSaves[0].variables.edit).toMatchObject({
       kind: "set-text-node",
       index: 2,
@@ -359,6 +397,7 @@ describe("CanvasInlineTextEditor when the page's text may have changed", () => {
     mountReading(null, readsHello);
     type("Hi");
     await enter();
+    await startedSaves(1);
     expect(pendingSaves[0].variables.edit).toEqual({
       kind: "set-text-content",
       text: "Hi",
@@ -370,15 +409,17 @@ describe("CanvasInlineTextEditor when the page's text may have changed", () => {
     type("Mine");
     await enter();
 
+    expect(await message()).toBe(CHANGED);
     expect(pendingSaves).toHaveLength(0);
     expect(onClose).not.toHaveBeenCalled();
-    expect(screen.getByRole("status").textContent).toBe(CHANGED);
   });
 
   it("keeps the draft and focus when it refuses, so nothing typed is lost", async () => {
     mountReading(2, drifted);
     type("Mine, kept");
     await enter();
+    // The refusal keeps the draft and focuses the field, then shows its message.
+    await message();
 
     expect(textarea().value).toBe("Mine, kept");
     expect(textarea().disabled).toBe(false);
@@ -390,9 +431,9 @@ describe("CanvasInlineTextEditor when the page's text may have changed", () => {
     type("Mine");
     await enter();
 
+    expect(await message()).toBe(CHANGED);
     expect(pendingSaves).toHaveLength(0);
     expect(onClose).not.toHaveBeenCalled();
-    expect(screen.getByRole("status").textContent).toBe(CHANGED);
     expect(textarea().value).toBe("Mine");
   });
 
@@ -400,9 +441,9 @@ describe("CanvasInlineTextEditor when the page's text may have changed", () => {
     const { onClose } = mountReading(null, drifted);
     type("Mine");
     await leave();
+    expect(await message()).toBe(CHANGED);
     expect(pendingSaves).toHaveLength(0);
     expect(onClose).not.toHaveBeenCalled();
-    expect(screen.getByRole("status").textContent).toBe(CHANGED);
   });
 
   it("lets a retry go through once the text on the page is back to what it was", async () => {
@@ -410,11 +451,12 @@ describe("CanvasInlineTextEditor when the page's text may have changed", () => {
     mountReading(2, () => Promise.resolve(live));
     type("Mine");
     await enter();
+    await message();
     expect(pendingSaves).toHaveLength(0);
 
     live = "Hello";
     await enter();
-    expect(pendingSaves).toHaveLength(1);
+    await startedSaves(1);
     expect(pendingSaves[0].variables.edit).toMatchObject({
       text: "Mine",
       expectedText: "Hello",
@@ -432,12 +474,9 @@ describe("CanvasInlineTextEditor when the page's text may have changed", () => {
         .getState()
         .select(textSelection(null, { tid: "other" }));
     });
-    await act(async () => {
-      read.resolve("Hello");
-      await new Promise<void>((resolve) => setTimeout(resolve, 0));
-    });
+    await answer(read, "Hello");
+    await startedSaves(1);
 
-    expect(pendingSaves).toHaveLength(1);
     expect(pendingSaves[0].variables.edit).toMatchObject({
       kind: "set-text-node",
       text: "Mine",
@@ -457,10 +496,9 @@ describe("CanvasInlineTextEditor when the page's text may have changed", () => {
 
     // More typing arrives while the bridge round-trip is outstanding.
     type("Mine, and more");
-    await act(async () => {
-      read.resolve("Hello");
-      await new Promise<void>((resolve) => setTimeout(resolve, 0));
-    });
+    // The answered read clears the commit in flight, so the Enter below is
+    // only taken if its continuation has run.
+    await answer(read, "Hello");
 
     expect(pendingSaves).toHaveLength(0);
     expect(onClose).not.toHaveBeenCalled();
@@ -469,7 +507,7 @@ describe("CanvasInlineTextEditor when the page's text may have changed", () => {
 
     // The same text can be sent again, and it is the newer text that goes.
     await enter();
-    expect(pendingSaves).toHaveLength(1);
+    await startedSaves(1);
     expect(pendingSaves[0].variables.edit).toMatchObject({
       kind: "set-text-node",
       index: 2,
@@ -484,10 +522,7 @@ describe("CanvasInlineTextEditor when the page's text may have changed", () => {
     type("Mine");
     await enter();
     await settled(() => fireEvent.keyDown(textarea(), { code: "Escape" }));
-    await act(async () => {
-      read.resolve("Hello");
-      await new Promise<void>((resolve) => setTimeout(resolve, 0));
-    });
+    await answer(read, "Hello");
     expect(pendingSaves).toHaveLength(0);
   });
 
@@ -497,11 +532,8 @@ describe("CanvasInlineTextEditor when the page's text may have changed", () => {
     type("Mine");
     await enter();
     cleanup();
-    await act(async () => {
-      read.resolve("Hello");
-      await new Promise<void>((resolve) => setTimeout(resolve, 0));
-    });
-    expect(pendingSaves).toHaveLength(1);
+    await answer(read, "Hello");
+    await startedSaves(1);
     expect(pendingSaves[0].variables.edit).toMatchObject({ text: "Mine" });
   });
 
@@ -510,19 +542,16 @@ describe("CanvasInlineTextEditor when the page's text may have changed", () => {
     const readText = vi.fn<ReadText>(() => read.promise);
     mountReading(2, readText);
     type("Mine");
-    await act(async () => {
+    await act(() => {
       fireEvent.keyDown(textarea(), { code: "Enter" });
       fireEvent.keyDown(textarea(), { code: "Enter" });
       fireEvent.blur(textarea());
-      await Promise.resolve();
+      return Promise.resolve();
     });
     expect(readText).toHaveBeenCalledOnce();
 
-    await act(async () => {
-      read.resolve("Hello");
-      await new Promise<void>((resolve) => setTimeout(resolve, 0));
-    });
-    expect(pendingSaves).toHaveLength(1);
+    await answer(read, "Hello");
+    await startedSaves(1);
   });
 });
 
@@ -553,8 +582,8 @@ describe("CanvasInlineTextEditor retyping a whole block", () => {
     const { onClose } = mountTarget(blockTarget(), readsBlock);
     type("Howdy big world");
     await enter();
+    await startedSaves(1);
 
-    expect(pendingSaves).toHaveLength(1);
     expect(pendingSaves[0].variables.edit).toEqual({
       kind: "set-text-node",
       index: 0,
@@ -570,6 +599,7 @@ describe("CanvasInlineTextEditor retyping a whole block", () => {
     mountTarget(blockTarget(), readsBlock);
     type("Hello bag world");
     await enter();
+    await startedSaves(1);
 
     expect(pendingSaves[0].variables.edit).toEqual({
       kind: "set-text-node",
@@ -588,7 +618,7 @@ describe("CanvasInlineTextEditor retyping a whole block", () => {
     type("Hello bag world");
     await leave();
 
-    expect(pendingSaves).toHaveLength(1);
+    await startedSaves(1);
   });
 
   it("closes without saving when nothing changed", async () => {
@@ -610,11 +640,11 @@ describe("CanvasInlineTextEditor retyping a whole block", () => {
       type(value);
       await enter();
 
-      expect(pendingSaves).toHaveLength(0);
-      expect(onClose).not.toHaveBeenCalled();
-      expect(screen.getByRole("status").textContent).toBe(
+      expect(await message()).toBe(
         "This change crosses formatted text. Ask the agent to change it.",
       );
+      expect(pendingSaves).toHaveLength(0);
+      expect(onClose).not.toHaveBeenCalled();
       expect(textarea().value).toBe(value);
       expect(textarea().disabled).toBe(false);
       expect(document.activeElement).toBe(textarea());
@@ -625,12 +655,13 @@ describe("CanvasInlineTextEditor retyping a whole block", () => {
     mountTarget(blockTarget(), readsBlock);
     type("Bye");
     await enter();
+    await message();
     expect(pendingSaves).toHaveLength(0);
 
     type("Hello bag world");
     await enter();
+    await startedSaves(1);
 
-    expect(pendingSaves).toHaveLength(1);
     expect(screen.queryByRole("status")).toBeNull();
   });
 
@@ -641,11 +672,11 @@ describe("CanvasInlineTextEditor retyping a whole block", () => {
     type("Hello bag world");
     await enter();
 
-    expect(pendingSaves).toHaveLength(0);
-    expect(onClose).not.toHaveBeenCalled();
-    expect(screen.getByRole("status").textContent).toBe(
+    expect(await message()).toBe(
       "This text was changed by a script. Ask the agent to change it.",
     );
+    expect(pendingSaves).toHaveLength(0);
+    expect(onClose).not.toHaveBeenCalled();
   });
 });
 

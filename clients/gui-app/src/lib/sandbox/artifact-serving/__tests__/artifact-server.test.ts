@@ -521,6 +521,7 @@ describe("ArtifactServer.serve — raw bytes", () => {
       signal: signal(),
     });
     expect(readSpan).toHaveBeenCalledTimes(1); // same block already cached
+    expect(smaller.kind).toBe("bytes");
     if (smaller.kind === "bytes") expect(smaller.bytes.length).toBe(500);
 
     const bigger = await server.serve({
@@ -530,6 +531,7 @@ describe("ArtifactServer.serve — raw bytes", () => {
       signal: signal(),
     });
     expect(readSpan).toHaveBeenCalledTimes(1); // still the same cached block
+    expect(bigger.kind).toBe("bytes");
     if (bigger.kind === "bytes") expect(bigger.bytes.length).toBe(FOUR_MIB);
 
     // Crossing into the second block needs exactly one more read, for that
@@ -547,6 +549,7 @@ describe("ArtifactServer.serve — raw bytes", () => {
       FOUR_MIB,
       expect.anything(),
     );
+    expect(crossing.kind).toBe("bytes");
     if (crossing.kind === "bytes") expect(crossing.bytes.length).toBe(20);
 
     // The second block is cached too now; revisiting it needs no more reads.

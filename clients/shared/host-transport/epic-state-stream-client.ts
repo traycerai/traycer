@@ -144,9 +144,9 @@ export class EpicStateStreamClient {
     if (this.closed) return;
     // Text-only by contract; see the module doc.
     if (binaryPayload !== null) return;
-    // `@1.3` first: it accepts the new artifact kinds and preserves readable
-    // file updates. Trying an older schema first can reject new kinds or
-    // silently strip their metadata.
+    // `@1.4` first: it accepts the new artifact kinds and preserves comment
+    // anchors. Trying an older schema first can reject new kinds or silently
+    // strip their metadata.
     const latest = epicStateSubscribeServerFrameSchemaV14.safeParse(envelope);
     const parsed = latest.success
       ? latest

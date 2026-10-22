@@ -28,7 +28,10 @@ import type {
 } from "@traycer-clients/shared/platform/sandbox-artifacts";
 import type { EpicReadArtifactObjectResponse } from "@traycer/protocol/host/epic/artifact-objects";
 import type { ArtifactObjectRef } from "@traycer/protocol/persistence/epic/artifacts";
-import type { ArtifactReadSpan } from "@/lib/sandbox/artifact-serving/artifact-server";
+import {
+  ArtifactServer,
+  type ArtifactReadSpan,
+} from "@/lib/sandbox/artifact-serving/artifact-server";
 import { FileArtifactViewer } from "@/components/epic-canvas/renderers/file-artifact-viewer";
 
 const DOCX_MEDIA_TYPE =
@@ -660,50 +663,67 @@ describe("<FileArtifactViewer /> media in the native shell", () => {
     const bridge = mediaBridge(false);
     mocks.runnerHost = nativeHostWith(bridge);
     const release = Promise.withResolvers<void>();
-    // The signal the mount hands every read: it must end with the mount.
-    const consumed: { signal: AbortSignal | null } = { signal: null };
-    const slowRead: ArtifactReadSpan = async (
-      _sha,
-      _offset,
-      length,
-      signal,
-    ) => {
-      consumed.signal = signal;
-      await release.promise;
-      return {
-        bytes: new Uint8Array(length),
-        totalBytes: HUGE_MEDIA_BYTES,
-        mediaType: "video/mp4",
+    // Passes through to the real server; keeps the promise of the request the
+    // mount dispatches, which its dispatcher is awaiting.
+    const served = vi.spyOn(ArtifactServer.prototype, "serve");
+    try {
+      // The signal the mount hands every read: it must end with the mount.
+      const consumed: { signal: AbortSignal | null } = { signal: null };
+      const slowRead: ArtifactReadSpan = async (
+        _sha,
+        _offset,
+        length,
+        signal,
+      ) => {
+        consumed.signal = signal;
+        await release.promise;
+        return {
+          bytes: new Uint8Array(length),
+          totalBytes: HUGE_MEDIA_BYTES,
+          mediaType: "video/mp4",
+        };
       };
-    };
-    const { container, unmount } = renderViewer(
-      "clip.mp4",
-      mediaObject("published", "video/mp4"),
-      slowRead,
-    );
-    await waitFor(() =>
-      expect(container.querySelector("video")).not.toBeNull(),
-    );
-    bridge.emit({
-      requestId: "in-flight",
-      mountId: bridge.registered[0],
-      path: "media",
-      offset: 0,
-      length: 4,
-    });
+      const { container, unmount } = renderViewer(
+        "clip.mp4",
+        mediaObject("published", "video/mp4"),
+        slowRead,
+      );
+      await waitFor(() =>
+        expect(container.querySelector("video")).not.toBeNull(),
+      );
+      bridge.emit({
+        requestId: "in-flight",
+        mountId: bridge.registered[0],
+        path: "media",
+        offset: 0,
+        length: 4,
+      });
 
-    await waitFor(() => expect(consumed.signal).not.toBeNull());
-    expect(consumed.signal?.aborted).toBe(false);
+      await waitFor(() => expect(consumed.signal).not.toBeNull());
+      expect(consumed.signal?.aborted).toBe(false);
 
-    unmount();
-    release.resolve();
+      unmount();
+      release.resolve();
 
-    expect(consumed.signal?.aborted).toBe(true);
-    await waitFor(() =>
-      expect(bridge.unregistered).toEqual([bridge.registered[0]]),
-    );
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    expect(bridge.responses).toEqual([]);
+      expect(consumed.signal?.aborted).toBe(true);
+      await waitFor(() =>
+        expect(bridge.unregistered).toEqual([bridge.registered[0]]),
+      );
+      // The dispatcher was already waiting on this promise, ahead of this wait,
+      // so it has read the aborted request's result and decided on a reply by the
+      // time it settles.
+      await Promise.allSettled(
+        served.mock.results.map((call) => {
+          if (call.type !== "return")
+            throw new Error("serve did not return a promise");
+          return call.value;
+        }),
+      );
+      expect(served).toHaveBeenCalledOnce();
+      expect(bridge.responses).toEqual([]);
+    } finally {
+      served.mockRestore();
+    }
   });
 
   it("offers Retry after a playback error and brings back the same player, resuming where it was", async () => {
@@ -813,7 +833,8 @@ describe("<FileArtifactViewer /> media in a browser", () => {
       readSpan,
     );
 
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    // The viewer has rendered with its URL query disabled, waiting on the publish.
+    await screen.findByText("Loading media…");
     // Nothing is published to sign yet, so asking would be answered with an
     // unavailable result that a later publish would not refresh.
     expect(mocks.urlRequests).toEqual([]);

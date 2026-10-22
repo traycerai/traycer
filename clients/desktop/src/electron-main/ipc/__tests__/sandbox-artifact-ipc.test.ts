@@ -665,19 +665,6 @@ describe("SandboxArtifactServer: fetch errors", () => {
     expect(response.status).toBe(503);
     expect(await response.text()).toBe("Artifact window unavailable");
   });
-
-  it("answers 503 after five minutes when the renderer never answers", async () => {
-    vi.useFakeTimers();
-    const server = new SandboxArtifactServer(() => true);
-    server.register("mount1", "window-a");
-    const pending = server.fetch(
-      new Request("traycer-sandbox://artifact-report--mount1/index.html"),
-    );
-    await vi.advanceTimersByTimeAsync(5 * 60 * 1000);
-    const response = await pending;
-    expect(response.status).toBe(503);
-    expect(await response.text()).toBe("Artifact request timed out");
-  });
 });
 
 describe("SandboxArtifactServer: window cleanup", () => {

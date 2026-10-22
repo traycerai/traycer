@@ -233,7 +233,7 @@ describe("epic V200 Yjs → JSON → protocol round-trip (metadata-only artifact
     // `artifacts` map with the right discriminator, parent wiring, and
     // artifact-room reference.
     const epic = parsed.data;
-    // Markdown and canvas artifacts expose `artifactRoomId`; html and file
+    // Markdown, HTML and canvas artifacts expose `artifactRoomId`; file
     // artifacts carry no artifact room.
     const artifactRoomIdOf = (
       artifact: (typeof epic.artifacts)[string],

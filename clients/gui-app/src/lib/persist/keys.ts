@@ -248,7 +248,7 @@ export const PERSIST_STORES = [
   },
   { camelName: "readingPosition", leaf: "reading-position", kind: "scoped" },
 
-  // ── Scoped non-zustand key families (2) ──────────────────────────────────
+  // ── Scoped non-zustand key families ──────────────────────────────────────
   {
     camelName: "composerCanvasAnnotations",
     leaf: "composer-canvas-annotations",

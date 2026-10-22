@@ -34,10 +34,6 @@ import { useStableOutsideReferenceResolver } from "@/lib/artifacts/use-stable-ou
 import { createHostObjectReader } from "@/lib/sandbox/artifact-serving/host-object-reader";
 import type { EpicArtifactRef } from "@/stores/epics/canvas/types";
 
-function canCommentOnHtml(enabled: boolean, viewTabId: string | null): boolean {
-  return enabled && viewTabId !== null;
-}
-
 export function ObjectArtifactTile(props: {
   readonly node: EpicArtifactRef;
   readonly epicId: string;
@@ -164,7 +160,7 @@ export function ObjectArtifactTile(props: {
         source={source}
         title={artifact.title}
         selectable={!isMobileApp() && desktop}
-        commentsEnabled={canCommentOnHtml(commentsEnabled, viewTabId)}
+        commentsEnabled={commentsEnabled ? viewTabId !== null : false}
         actionControls={commentActions}
         renderComments={renderComments}
         toolbarControls={<HtmlArtifactCommentsToolbar scope={commentScope} />}

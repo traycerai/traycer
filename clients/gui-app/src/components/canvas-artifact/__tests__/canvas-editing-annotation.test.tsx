@@ -4,6 +4,7 @@ import {
   fireEvent,
   render,
   screen,
+  waitFor,
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
@@ -320,21 +321,35 @@ describe("a selected range's action bar", () => {
   it("attaches nothing until a chat is chosen from the popover", async () => {
     mountOverlay();
     select(LITERAL);
-    fireEvent.click(await screen.findByRole("button", { name: "Add to chat" }));
-    await act(async () => {
-      await new Promise<void>((resolve) => setTimeout(resolve, 20));
+    const button = await screen.findByRole("button", { name: "Add to chat" });
+    // An attach started by opening would run through the mutation's promise
+    // chain, so the click is awaited inside act to flush that interaction's work.
+    // The opened roster is the phase observed; this does not bound later
+    // scheduled work.
+    await act(() => {
+      fireEvent.click(button);
+      return Promise.resolve();
     });
+    expect(
+      await screen.findByRole("menuitem", { name: "Chat one" }),
+    ).toBeDefined();
 
     expect(outside.attach).not.toHaveBeenCalled();
   });
 });
 
 describe("attaching a selected range to a chat", () => {
-  async function addToChat(): Promise<void> {
+  function chooseChatOne(): void {
     fireEvent.click(screen.getByRole("button", { name: "Add to chat" }));
-    await act(async () => {
-      fireEvent.click(screen.getByRole("menuitem", { name: "Chat one" }));
-      await new Promise<void>((resolve) => setTimeout(resolve, 20));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Chat one" }));
+  }
+  // A successful attach ends in onSuccess, which reveals the chat and closes
+  // the popover; wait for that outcome, not for elapsed time.
+  async function addToChat(): Promise<void> {
+    chooseChatOne();
+    await waitFor(() => {
+      expect(outside.reveal).toHaveBeenCalledWith("chat-1");
+      expect(screen.queryByRole("menuitem", { name: "Chat one" })).toBeNull();
     });
   }
   function attachedRecord(): CanvasAnnotationRecord {
@@ -387,12 +402,13 @@ describe("attaching a selected range to a chat", () => {
     mountOverlay();
     select(LITERAL);
     await screen.findByRole("button", { name: "Add to chat" });
-    await addToChat();
+    chooseChatOne();
 
-    expect(outside.attach).not.toHaveBeenCalled();
+    // The refusal never reveals or closes the popover; its completion is the alert.
     expect((await screen.findByRole("alert")).textContent).toBe(
       "The artboard source is still loading. Try again.",
     );
+    expect(outside.attach).not.toHaveBeenCalled();
   });
 
   it("attaches a generated range without a tid or a source position, and without the source", async () => {

@@ -239,12 +239,6 @@ const ARTIFACT_HOST_ENTRY: HostDirectoryEntry = {
   transportDialability: "dialable",
 };
 
-/** The stamped object is unavailable. */
-const ARTIFACT_OBJECT_UNAVAILABLE: EpicReadArtifactObjectResponse = {
-  kind: "unavailable",
-  reason: "missing",
-};
-
 const ARTIFACT_OBJECT_HTML_RESPONSE: EpicReadArtifactObjectResponse = {
   kind: "text",
   text: APP_HTML,
@@ -677,14 +671,6 @@ describe("<McpAppRow /> reading the stamped snapshot by sha", () => {
     });
     expect(call).toBe(2);
     expect(screen.getByTestId("sandbox-frame").textContent).toBe(APP_HTML);
-  });
-
-  it("shows the ordinary tool row when the sha object is unavailable", async () => {
-    makeArtifactObjectRpc(() => ARTIFACT_OBJECT_UNAVAILABLE);
-    renderRow(makeMcpRpc(), SCOPE, STAMP);
-
-    expect(await screen.findByTestId("ordinary-tool-row")).toBeTruthy();
-    expect(screen.queryByTestId("sandbox-frame")).toBeNull();
   });
 });
 

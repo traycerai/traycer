@@ -4,6 +4,7 @@ import {
   fireEvent,
   render,
   screen,
+  waitFor,
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CanvasSiblingLayout } from "@/lib/sandbox/canvas-layout-bridge";
@@ -26,6 +27,7 @@ import {
   selectionFor,
   selectSet,
   settleLayout,
+  startedSaves,
   structureDocument,
   structureHarness,
   type StructureHarness,
@@ -82,10 +84,7 @@ async function clickWhileHeld(
   const answer = harness.hold();
   fireEvent.click(alignLeft());
   whileWaiting();
-  await act(async () => {
-    answer();
-    await Promise.resolve();
-  });
+  answer();
   await settleLayout();
 }
 
@@ -113,10 +112,9 @@ describe("CanvasStructureToolbar applying an arrangement", () => {
     const askedBefore = harness.asked().length;
 
     fireEvent.click(alignLeft());
-    await settleLayout();
+    await startedSaves(1);
 
     expect(harness.asked().length).toBeGreaterThan(askedBefore);
-    expect(pendingSaves).toHaveLength(1);
     expect(pendingSaves[0].variables.edit).toMatchObject({
       kind: "align-elements",
       mode: "left",
@@ -132,7 +130,7 @@ describe("CanvasStructureToolbar applying an arrangement", () => {
       harness.report(stageLayout({ bLeft: 90 }));
     });
     expect(pendingSaves).toHaveLength(0);
-    expect(screen.getByText(CHANGED).textContent).toBe(CHANGED);
+    expect((await screen.findByText(CHANGED)).textContent).toBe(CHANGED);
   });
 
   it("saves nothing when the page stopped answering for the element", async () => {
@@ -141,7 +139,7 @@ describe("CanvasStructureToolbar applying an arrangement", () => {
       harness.report(null);
     });
     expect(pendingSaves).toHaveLength(0);
-    expect(screen.getByText(CHANGED).textContent).toBe(CHANGED);
+    expect((await screen.findByText(CHANGED)).textContent).toBe(CHANGED);
   });
 
   it("saves nothing when another element was picked in the meantime", async () => {
@@ -193,10 +191,7 @@ describe("CanvasStructureToolbar applying an arrangement", () => {
     const answer = harness.hold();
     fireEvent.click(alignLeft());
     fireEvent.click(alignLeft());
-    await act(async () => {
-      answer();
-      await Promise.resolve();
-    });
+    answer();
     await settleLayout();
     expect(pendingSaves).toHaveLength(1);
   });
@@ -204,13 +199,13 @@ describe("CanvasStructureToolbar applying an arrangement", () => {
   it("can arrange again after a save is answered", async () => {
     await mountToolbar();
     fireEvent.click(alignLeft());
-    await settleLayout();
+    await startedSaves(1);
     await settleSave(0, SAVED);
-    await settleLayout();
+    // The buttons come back once the answered save has been cleared.
+    await waitFor(() => expect(alignLeft()).toHaveProperty("disabled", false));
 
     fireEvent.click(alignLeft());
-    await settleLayout();
-    expect(pendingSaves).toHaveLength(2);
+    await startedSaves(2);
   });
 });
 
@@ -262,9 +257,8 @@ describe("CanvasStructureToolbar for one element", () => {
       expect(screen.queryByRole("button", { name })).toBeNull();
     expect(screen.queryByText(/Arrange/)).toBeNull();
     fireEvent.click(ungroup());
-    await settleLayout();
+    await startedSaves(1);
 
-    expect(pendingSaves).toHaveLength(1);
     expect(pendingSaves[0].variables.edit).toEqual({ kind: "unwrap-element" });
     expect(pendingSaves[0].variables.selection.element.tid).toBe("wrap");
   });
@@ -287,14 +281,11 @@ describe("CanvasStructureToolbar for one element", () => {
     const answer = harness.hold();
     fireEvent.click(ungroup());
     harness.report(null);
-    await act(async () => {
-      answer();
-      await Promise.resolve();
-    });
+    answer();
     await settleLayout();
 
     expect(pendingSaves).toHaveLength(0);
-    expect(screen.getByText(CHANGED)).toBeDefined();
+    expect(await screen.findByText(CHANGED)).toBeDefined();
   });
 });
 

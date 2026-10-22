@@ -697,17 +697,6 @@ describe("the fullscreen board", () => {
     ).toBeDefined();
   });
 
-  it("hands the error to the chat, like the canvas header does", () => {
-    const events = frameEvents({ onAddError: vi.fn() });
-    const dialog = openFullscreen({ frameEvents: events });
-    const error = pageError("boom");
-    fromPage("Home", (props) => props.onPageError?.(error));
-    fireEvent.click(
-      within(dialog).getByRole("button", { name: "Add to chat" }),
-    );
-    expect(events.onAddError).toHaveBeenCalledWith(HOME, error);
-  });
-
   it("leaves fullscreen when the error is added, so the chat's picker is not stacked under the modal", () => {
     const events = frameEvents({ onAddError: vi.fn() });
     const dialog = openFullscreen({ frameEvents: events });

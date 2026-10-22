@@ -5,13 +5,13 @@ import { imageSha256HexSchema } from "./images";
 import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 
 /**
- * Artifact metadata and tombstones. Markdown and canvas bodies have a Yjs
- * artifact room; HTML and file entries have no Yjs body and no room id.
+ * Artifact metadata and tombstones. Markdown, HTML and canvas entries carry
+ * an artifact-room reference; file entries carry one object.
  */
 
 /**
  * POSIX path within an artifact folder: no leading ./ or /, no empty segment,
- * no .. segment, and no dot-prefixed segment. Track C resolves
+ * no .. segment, and no dot-prefixed segment. Artifact serving resolves
  * artifact-<id>/<path> against these manifest keys. Reject backslashes
  * and all Unicode control characters (C0,
  * DEL and C1). Windows hosts would read a backslash as a separator; the manifest

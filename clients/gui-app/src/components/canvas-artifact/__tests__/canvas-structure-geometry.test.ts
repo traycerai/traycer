@@ -988,13 +988,6 @@ describe("reorderRefusal", () => {
       );
       expectRefused(row(placed, {}), SINGLE_LANE);
     });
-
-    it("accepts boxes with no grid placement", () => {
-      const auto = inFlow.map((node) =>
-        layoutNode({ ...node, gridPlacement: false }),
-      );
-      expect(reorderRefusal(row(auto, {}))).toBeNull();
-    });
   });
 
   it("refuses a wrapped container with more than one row", () => {

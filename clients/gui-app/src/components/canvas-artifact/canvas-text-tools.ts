@@ -1,17 +1,9 @@
 import type { HtmlChild } from "@traycer/html-source";
-import type { CanvasBox } from "@/lib/sandbox/canvas-bridge";
 import type { CanvasSelection } from "./canvas-selection-store";
 import {
   canvasSourceElement,
   type CanvasBoardDocument,
 } from "./canvas-board-document";
-export function canvasToolbarPosition(
-  rects: readonly CanvasBox[],
-  fallback: CanvasBox,
-): { x: number; y: number } {
-  const box = rects[0] ?? fallback;
-  return { x: Math.max(0, box.x), y: Math.max(0, box.y - 36) };
-}
 export function canvasRangeTags(
   document: CanvasBoardDocument,
   selection: CanvasSelection,

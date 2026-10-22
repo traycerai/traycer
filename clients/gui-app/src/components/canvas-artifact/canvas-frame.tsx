@@ -35,7 +35,6 @@ export interface CanvasFrameEvents {
     readonly x: number;
     readonly y: number;
   }) => void;
-  readonly renderPaneOverlay?: () => ReactNode;
   readonly onSource?: (path: string, source: SandboxSource | null) => void;
   readonly onDoubleClick?: (path: string, element: CanvasElement) => void;
   readonly onBridge: (path: string, bridge: SandboxBridgeHost | null) => void;

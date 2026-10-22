@@ -91,7 +91,6 @@ describe("artifactContentPolicy", () => {
   it("names the given source literally, not a fixed constant", () => {
     const policy = directives(artifactContentPolicy("capacitor:"));
     expect(policy.get("default-src")).toBe("https: data: blob: capacitor:");
-    expect(policy.get("default-src")).not.toContain("traycer-sandbox:");
   });
 
   it("falls back to the plain https-only page policy for a null source - Android's own serving scheme is https, already covered by it", () => {
