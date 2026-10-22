@@ -652,6 +652,7 @@ export const HOST_METHOD_POLL_TABLE = {
   // Search as you type: a newer query supersedes an older one, and never
   // polled - the caller asks again when the query changes.
   "chat.search": { ...LATEST_SCHEDULING, poll: null },
+  "chat.prestartRuntime": { ...LATEST_SCHEDULING, poll: null },
   // The external fallback actions. All `fifo`, and none polled.
   //
   // `fifo` because each carries the traversal revision it expects, so two rapid

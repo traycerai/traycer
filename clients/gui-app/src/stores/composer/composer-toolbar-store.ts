@@ -157,6 +157,7 @@ interface ComposerToolbarDerived {
 }
 
 export interface ComposerToolbarState extends ComposerToolbarDerived {
+  readonly onUserSettingsChange?: (settings: ChatRunSettings) => void;
   readonly seedKey: string;
   readonly values: ComposerToolbarValues;
   readonly catalog: ComposerToolbarCatalog;
@@ -308,6 +309,7 @@ export function createComposerToolbarStore(
       }
       set({ values, ...derived, pendingSettingsEmit: false });
       state.onSettingsChange?.(settings);
+      state.onUserSettingsChange?.(settings);
     };
 
     return {
@@ -426,7 +428,9 @@ export function createComposerToolbarStore(
   });
 }
 
-function settingsFromDerived(derived: ComposerToolbarDerived): ChatRunSettings {
+export function settingsFromDerived(
+  derived: ComposerToolbarDerived,
+): ChatRunSettings {
   return buildChatRunSettings({
     selection: derived.selection,
     permission: derived.permission,

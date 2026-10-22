@@ -336,6 +336,7 @@ export const HOST_UNARY_RPC_ROUTES = {
   "browser.savedLoginSites": "target-host",
   // The sandbox host the person continues a removed sandbox's chat on.
   "chat.continueHere": "target-host",
+  "chat.prestartRuntime": "target-host",
   "chat.fallback.cancel": "target-host",
   "chat.fallback.chooseTarget": "target-host",
   "chat.fallback.listTargets": "target-host",

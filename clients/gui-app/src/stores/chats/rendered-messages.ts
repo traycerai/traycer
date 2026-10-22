@@ -2,7 +2,12 @@ import {
   codexRetryVisibility,
   codexRetryTitle,
 } from "@traycer/protocol/host/agent/gui/retry-feedback";
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
+import {
+  resolveTurnPresentation,
+  type PendingTurn,
+  type TurnPresentation,
+} from "@/stores/chats/chat-send-state";
 import type {
   AssistantTurnProfile,
   ChatSessionAnchor,
@@ -143,6 +148,7 @@ function isRenderablePlanBlock(block: PlanContentBlock): boolean {
 }
 
 export interface RenderedMessagesDisplayContext {
+  readonly resolveProfileLabel?: (profileId: string | null) => string | null;
   readonly resolveUserSenderLabel: (sender: OpenUserMessageSender) => string;
   /** The sender's picture, or null to show none (every chat but a bot's). */
   readonly resolveUserSenderAvatarUrl: (
@@ -189,6 +195,8 @@ export interface RenderedMessagesInput {
    */
   readonly setupCardWindows: ReadonlyArray<SetupCardWindowIdentity>;
   readonly pendingUserMessages: ReadonlyArray<PendingUserMessage>;
+  readonly pendingTurn?: PendingTurn | null;
+  readonly turnObservedAt?: number;
   /**
    * Prompt ids the host still has in the queue. An optimistic row with one of
    * these ids is bookkeeping for a send that already has a queue row, so the
@@ -646,11 +654,6 @@ interface PendingTurnMetaInput {
   readonly profileLabel: string | null;
   readonly reasoningEffort: string | null;
   readonly serviceTier: string | null;
-}
-
-interface ActiveTurnProjection {
-  readonly turnId: string | null;
-  readonly metaInput: PendingTurnMetaInput;
 }
 
 const NO_TURN_PAUSE: TurnPauseAccounting = {
@@ -1123,17 +1126,12 @@ function isInterviewWaitEndEvent(event: OpenChatEvent): boolean {
  * values: a per-field `activeTurn?.x ?? null` at the call site is five
  * branches in the hook body for no gain, and the absent turn is one decision,
  * not five.
- *
- * `startedAt` is the turn's real wall-clock start. The pre-turn indicator is
- * synthesized with a `createdAt` that is a list anchor rather than an instant,
- * so this is the only place that row can learn when its turn actually began.
  */
 function activeTurnPrimitives(activeTurn: ChatActiveTurn | null): {
   readonly turnId: string | null;
   readonly userMessageId: string | null;
   readonly harnessId: ChatActiveTurn["harnessId"] | null;
   readonly profileId: string | null;
-  readonly startedAt: number | null;
 } {
   if (activeTurn === null) {
     return {
@@ -1141,7 +1139,6 @@ function activeTurnPrimitives(activeTurn: ChatActiveTurn | null): {
       userMessageId: null,
       harnessId: null,
       profileId: null,
-      startedAt: null,
     };
   }
   return {
@@ -1149,7 +1146,6 @@ function activeTurnPrimitives(activeTurn: ChatActiveTurn | null): {
     userMessageId: activeTurn.userMessageId,
     harnessId: activeTurn.harnessId,
     profileId: activeTurn.profileId,
-    startedAt: activeTurn.startedAt,
   };
 }
 
@@ -1166,7 +1162,6 @@ export function useRenderedMessages(
     userMessageId: activeTurnUserMessageId,
     harnessId: activeTurnHarnessId,
     profileId: activeTurnProfileId,
-    startedAt: activeTurnStartedAt,
   } = activeTurnPrimitives(input.activeTurn);
   // Re-keyed from ROW ids to TURN keys once per publish. Every row of a turn
   // carries the same context object, so the map is at most one entry per
@@ -1201,16 +1196,37 @@ export function useRenderedMessages(
       activeTurnProfileId,
     ],
   );
-  const activeTurnProjection = projectActiveTurn(
-    input.activeTurn,
-    profileLabelsByTurnKey,
+  const pendingTurn = input.pendingTurn ?? null;
+  const [firstObservedAt] = useState(() => Date.now());
+  const observedAt = input.turnObservedAt ?? firstObservedAt;
+  const localPrompt = localPromptForPresentation(input, pendingTurn);
+  const presentation = resolveTurnPresentation({
+    chatId: input.ownerId,
+    pendingTurn,
+    activeTurn: input.activeTurn,
+    observedAt,
+    localMessageCreatedAt: localPrompt?.timestamp ?? null,
+    hostAnchorAt: input.activeTurn?.startedAt ?? null,
+  });
+  const activeTurnMetaInput = useMemo(
+    () =>
+      presentationTurnMeta(
+        presentation.settings,
+        profileLabelsByTurnKey.get(activeTurnId ?? ""),
+        displayContext.resolveProfileLabel,
+      ),
+    [
+      presentation.settings,
+      profileLabelsByTurnKey,
+      activeTurnId,
+      displayContext.resolveProfileLabel,
+    ],
   );
-  const activeTurnMetaInput = activeTurnProjection.metaInput;
-  const runStatus = input.runStatus;
-  // The run-state indicator belongs to the single active turn; `idle`
-  // surfaces no indicator on any row.
-  const activeRunState: ChatMessageRunState | null =
-    runStatus === "idle" ? null : runStatus;
+  const activeRunMeta = useMemo(
+    () => pendingTurnMeta(activeTurnMetaInput, displayContext),
+    [activeTurnMetaInput, displayContext],
+  );
+  const activeRunState = pendingRunState(input.runStatus, pendingTurn);
   const pendingApprovals = input.pendingApprovals ?? NO_PENDING_APPROVALS;
   const pendingFileEditApprovals =
     input.pendingFileEditApprovals ?? NO_PENDING_FILE_EDIT_APPROVALS;
@@ -1546,14 +1562,9 @@ export function useRenderedMessages(
       withdrawnMessageId,
     );
     const shownPending = withoutWithdrawnUserRow(pending, withdrawnMessageId);
-    // Pre-turn window: the host reports `running`/`stopping` (a send was
-    // accepted) but no assistant row exists yet - provider-session/worktree
-    // setup runs before the turn materializes. Synthesize a pending-assistant
-    // row so the response area shows "Working…" immediately. It shares the live
-    // row's key, so when the real turn arrives it swaps in place (no flicker).
-    // `pending` (the optimistic user messages, timestamped `Date.now()`) is
-    // included so the indicator's `createdAt` floor sits above them and the row
-    // sorts BELOW the just-sent message instead of jumping above it.
+    // A transcript send owns its working row from Enter. The host turn later
+    // replaces the placeholder id; its presentation keeps the same send origin.
+    // Local message timestamps also floor the row's position below its prompt.
     // Suppress the pre-turn "Working…" indicator only while the LIVE setup
     // lifecycle is in flight: the open (current) window has a workspace still
     // `setting-up`, so the card itself stands in for the awaited turn. Two
@@ -1575,21 +1586,22 @@ export function useRenderedMessages(
             workspace.state === "creating" || workspace.state === "setting-up",
         ),
     );
-    const trailing = setupGating
-      ? []
-      : renderPendingRunIndicator({
-          activeRunState,
-          activeTurnId,
-          activeTurnStartedAt,
-          activeTurnMeta: pendingTurnMeta(activeTurnMetaInput, displayContext),
-          turnPauseAccounting,
-          rendered: [
-            ...shownPersisted,
-            ...shownActiveTurn,
-            ...shownPending,
-            ...live,
-          ],
-        });
+    const trailing =
+      setupGating && pendingTurn === null
+        ? []
+        : renderPendingRunIndicator({
+            activeRunState,
+            activeTurnId,
+            activeTurnStartedAt: presentation.elapsedStartedAt,
+            activeTurnMeta: activeRunMeta,
+            turnPauseAccounting,
+            rendered: [
+              ...shownPersisted,
+              ...shownActiveTurn,
+              ...shownPending,
+              ...live,
+            ],
+          });
 
     // A prompt is drawn in one place.
     //
@@ -1626,7 +1638,16 @@ export function useRenderedMessages(
       ...autoJudgeUnattendedDenialMessages,
       ...autoJudgeNoticeMessages,
       ...trailing,
-    ];
+    ].map((row) =>
+      row.role === "assistant" &&
+      row.runState !== null &&
+      localPrompt !== undefined
+        ? {
+            ...row,
+            createdAt: Math.max(row.createdAt, localPrompt.timestamp + 1),
+          }
+        : row,
+    );
 
     // Overwhelmingly common case - this chat has no worktree setup card: a plain
     // `createdAt` sort. Skips the per-render anchor Set/Map/weave entirely. This
@@ -1711,18 +1732,100 @@ export function useRenderedMessages(
     withdrawnMessageId,
     activeRunState,
     activeTurnId,
-    activeTurnStartedAt,
-    activeTurnMetaInput,
+    activeRunMeta,
+    pendingTurn,
+    localPrompt,
+    presentation.elapsedStartedAt,
     turnPauseAccounting,
-    displayContext,
   ]);
   // A memo of its own, off the one above: `chatWorking` flips with every
   // background edge and must not rebuild the row list to restamp one row.
   const chatWorking = input.chatWorking ?? false;
   return useMemo(
-    () => withOwedAutonomousResume(rows, chatWorking),
-    [rows, chatWorking],
+    () =>
+      withOwedAutonomousResume(
+        presentActiveRows({
+          rows,
+          input: { ownerId: input.ownerId, activeTurn: input.activeTurn },
+          pendingTurn,
+          observedAt,
+          localPrompt,
+          meta: activeRunMeta,
+        }),
+        chatWorking,
+      ),
+    [
+      rows,
+      input.ownerId,
+      input.activeTurn,
+      pendingTurn,
+      observedAt,
+      localPrompt,
+      activeRunMeta,
+      chatWorking,
+    ],
   );
+}
+
+function pendingRunState(
+  runStatus: ChatRunStatus,
+  pendingTurn: PendingTurn | null,
+): ChatMessageRunState | null {
+  if (runStatus !== "idle") return runStatus;
+  return pendingTurn === null ? null : "running";
+}
+
+function localPromptForPresentation(
+  input: RenderedMessagesInput,
+  pendingTurn: PendingTurn | null,
+): PendingUserMessage | undefined {
+  const id = input.activeTurn?.userMessageId ?? pendingTurn?.messageId;
+  if (
+    id === undefined ||
+    input.messages.some((message) => message.messageId === id)
+  )
+    return undefined;
+  return input.pendingUserMessages.find((message) => message.messageId === id);
+}
+
+function activePresentationMeta(
+  resolved: AssistantTurnMeta | null,
+  recorded: AssistantTurnMeta | null,
+): AssistantTurnMeta | null {
+  if (resolved === null) return recorded;
+  const envCredentialVar = recorded?.envCredentialVar ?? null;
+  const costUsd = recorded?.costUsd ?? null;
+  if (envCredentialVar === null && costUsd === null) return resolved;
+  return { ...resolved, envCredentialVar, costUsd };
+}
+
+function presentActiveRows(args: {
+  readonly rows: ReadonlyArray<ChatMessageModel>;
+  readonly input: Pick<RenderedMessagesInput, "ownerId" | "activeTurn">;
+  readonly pendingTurn: PendingTurn | null;
+  readonly observedAt: number;
+  readonly localPrompt: PendingUserMessage | undefined;
+  readonly meta: AssistantTurnMeta | null;
+}): ReadonlyArray<ChatMessageModel> {
+  const { rows, input, pendingTurn, observedAt, localPrompt, meta } = args;
+  return rows.map((row) => {
+    if (row.role !== "assistant" || row.runState === null) return row;
+    const resolved = resolveTurnPresentation({
+      chatId: input.ownerId,
+      pendingTurn,
+      activeTurn: input.activeTurn,
+      observedAt,
+      localMessageCreatedAt: localPrompt?.timestamp ?? null,
+      hostAnchorAt: row.createdAt,
+    });
+    return {
+      ...row,
+      createdAt: resolved.rowAnchorAt,
+      elapsedStartedAt: resolved.elapsedStartedAt,
+      workingVerbSeed: resolved.verbSeed,
+      assistantMeta: activePresentationMeta(meta, row.assistantMeta),
+    };
+  });
 }
 
 /**
@@ -1787,22 +1890,19 @@ export function transcriptShowsSetupCard(
   );
 }
 
-function projectActiveTurn(
-  activeTurn: ChatActiveTurn | null,
-  profileLabelsByTurnKey: ReadonlyMap<string, string>,
-): ActiveTurnProjection {
-  if (activeTurn === null) {
-    return { turnId: null, metaInput: NO_PENDING_TURN_META_INPUT };
-  }
+function presentationTurnMeta(
+  settings: TurnPresentation["settings"],
+  recordedProfile: string | undefined,
+  resolveProfileLabel: RenderedMessagesDisplayContext["resolveProfileLabel"],
+): PendingTurnMetaInput {
+  if (settings === null) return NO_PENDING_TURN_META_INPUT;
   return {
-    turnId: activeTurn.turnId,
-    metaInput: {
-      harnessId: activeTurn.harnessId,
-      model: activeTurn.model,
-      profileLabel: profileLabelsByTurnKey.get(activeTurn.turnId) ?? null,
-      reasoningEffort: activeTurn.reasoningEffort,
-      serviceTier: activeTurn.serviceTier,
-    },
+    harnessId: settings.harnessId,
+    model: settings.model,
+    profileLabel:
+      recordedProfile ?? resolveProfileLabel?.(settings.profileId) ?? null,
+    reasoningEffort: settings.reasoningEffort,
+    serviceTier: settings.serviceTier,
   };
 }
 
@@ -2144,7 +2244,7 @@ function buildAutoJudgeNoticeMessages(
  * Build the run-metadata for the pre-turn pending indicator from the active
  * turn's primitive fields, mirroring what `renderAssistantTurnSlice` derives
  * for the live/persisted row so the provider icon + hover tooltip are present
- * during setup too. `null` when no active turn is known yet.
+ * during setup too. The pending send supplies these values before activation.
  */
 function pendingTurnMeta(
   turn: PendingTurnMetaInput,

@@ -106,6 +106,7 @@ const CHAT_MESSAGE_FIELD_UNCHANGED: {
     b: ChatMessage,
   ) => boolean;
 } = {
+  workingVerbSeed: (a, b) => a.workingVerbSeed === b.workingVerbSeed,
   role: (a, b) => a.role === b.role,
   content: (a, b) => a.content === b.content,
   segments: (a, b) => a.segments === b.segments,

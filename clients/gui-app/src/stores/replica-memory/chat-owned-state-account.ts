@@ -95,7 +95,7 @@ function crossesSurrogateBoundary(previous: string, delta: string): boolean {
 }
 
 type ChatSessionDataKey = {
-  [Key in keyof ChatSessionState]: ChatSessionState[Key] extends (
+  [Key in keyof ChatSessionState]-?: ChatSessionState[Key] extends (
     ...args: never[]
   ) => unknown
     ? never
@@ -130,6 +130,16 @@ export const CHAT_STATE_FIELD_ACCOUNTING = {
   events:
     "records alias transcriptWindow on the windowed line; legacy transcript charge covers them",
   queue: "charged by chatWholeSetSliceBytes",
+  drainingQueueItems: "charged with queue through queueWithDrainingPrompts",
+  sendWouldQueue: "optional boolean included in the fixed store charge",
+  pendingTurn: true,
+  heldStop: true,
+  pendingTurnEvidence: true,
+  unplacedSendIds: true,
+  sendHostFrameRevision: "scalar included in the fixed store charge",
+  lastSendSnapshotRevision: "scalar included in the fixed store charge",
+  turnObservedAt: "timestamp included in the fixed store charge",
+  queueTurnContinuity: "boolean included in the fixed store charge",
   messageDelivery: true,
   unacknowledgedDeliveryRestore: true,
   runStatus: "small scalar included in the fixed store charge",
