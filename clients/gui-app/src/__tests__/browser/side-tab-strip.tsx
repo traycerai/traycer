@@ -13,6 +13,7 @@ import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import { useEpicDndStore } from "@/components/epic-canvas/dnd/dnd-store";
 import { RootDndProvider } from "@/components/epic-canvas/dnd/root-dnd-provider";
+import { FixtureOrganizationContext } from "./organization-fixture-context";
 import { TabNavigationRouteBridge } from "@/components/layout/bridges/tab-navigation-route-bridge";
 import { SideTabStrip } from "@/components/layout/tabs/side-strip/side-tab-strip";
 import { publishTabDetachHandler } from "@/components/layout/tabs/tab-detach-channel";
@@ -264,11 +265,15 @@ export function StripFixture(): ReactNode {
   const shell = (
     <div className="flex h-dvh bg-canvas text-canvas-foreground md:bg-shell-ground">
       <TabNavigationRouteBridge />
-      <RootDndProvider>
-        {EDGE === "left" ? margin : content}
-        <SideTabStrip edge={EDGE} ownsTitleBar={false} />
-        {EDGE === "left" ? content : margin}
-      </RootDndProvider>
+      {/* The drivers here drag rows into and out of the seeded group, which
+          the drop refuses to write unless the account can be told. */}
+      <FixtureOrganizationContext>
+        <RootDndProvider>
+          {EDGE === "left" ? margin : content}
+          <SideTabStrip edge={EDGE} ownsTitleBar={false} />
+          {EDGE === "left" ? content : margin}
+        </RootDndProvider>
+      </FixtureOrganizationContext>
     </div>
   );
   // The sections scene's prompts and finished tasks are cloud-feed rows.
