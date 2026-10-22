@@ -4,7 +4,7 @@ import {
   queryOptions,
   useQuery,
 } from "@tanstack/react-query";
-import type { ReactNode } from "react";
+import { useEffect, type ReactNode } from "react";
 import {
   act,
   cleanup,
@@ -30,6 +30,15 @@ import { hostQueryKeys } from "@/lib/query-keys/host-query-keys";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { tabItemId } from "@/stores/tabs/layout";
 import { useTabsStore } from "@/stores/tabs/store";
+
+/** The stream transport as the provider uses it: frames, and recovery evidence. */
+interface FakeStreamClient {
+  readonly subscribe: () => {
+    readonly onServerFrame: () => void;
+    readonly close: () => void;
+  };
+  readonly subscribeAvailabilityRecovered: (listener: () => void) => () => void;
+}
 
 const state = vi.hoisted(() => {
   const identity: {
@@ -68,19 +77,12 @@ const state = vi.hoisted(() => {
   // The stream transport the surface binding hands out: `null` until a test
   // dials one. The host's recovery evidence is its availability listeners.
   const stream: {
-    current: {
-      readonly wsStreamClient: {
-        readonly subscribe: () => {
-          readonly onServerFrame: () => void;
-          readonly close: () => void;
-        };
-        readonly subscribeAvailabilityRecovered: (
-          listener: () => void,
-        ) => () => void;
-      };
-    } | null;
+    current: { readonly wsStreamClient: FakeStreamClient } | null;
   } = { current: null };
-  return { client, identity, view, support, mutateAsync, stream };
+  // What the pool tier resolves the surface's stream to. `null` is the
+  // no-pool plan, where the answer is the surface's own stream.
+  const poolStream: { current: FakeStreamClient | null } = { current: null };
+  return { client, identity, view, support, mutateAsync, stream, poolStream };
 });
 
 vi.mock("@/lib/host", () => ({
@@ -88,10 +90,12 @@ vi.mock("@/lib/host", () => ({
 }));
 
 // The no-pool plan's answer: the surface client itself. These suites test the
-// organization projection, not the serving tier.
+// organization projection, not the serving tier - except where a test dials a
+// pool stream, which is what a pool build resolves the surface's stream to.
 vi.mock("@/hooks/host/use-pool-tier", () => ({
   usePoolTierHostClient: <T,>(client: T): T => client,
-  usePoolTierStreamClient: <T,>(client: T): T => client,
+  usePoolTierStreamClient: (client: FakeStreamClient | null) =>
+    state.poolStream.current ?? client,
 }));
 
 vi.mock("@/hooks/host/use-reactive-host-readiness", () => ({
@@ -195,6 +199,7 @@ function renderProvider(queryClient: QueryClient, children: ReactNode) {
 
 function resetStores(): void {
   state.stream.current = null;
+  state.poolStream.current = null;
   useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
   useTabsStore.setState(useTabsStore.getInitialState(), true);
   state.identity.hostId = "host-1";
@@ -883,10 +888,13 @@ describe("OrganizationProvider draft group intent", () => {
      * not rebuild it. `recover` is the host reporting that a session reopened
      * after a drop or a stall.
      */
-    function dialStream(): { readonly recover: () => void } {
+    function fakeStream(): {
+      readonly client: FakeStreamClient;
+      readonly recover: () => void;
+    } {
       const listeners = new Set<() => void>();
-      state.stream.current = {
-        wsStreamClient: {
+      return {
+        client: {
           subscribe: () => ({
             onServerFrame: () => undefined,
             close: () => undefined,
@@ -898,14 +906,18 @@ describe("OrganizationProvider draft group intent", () => {
             };
           },
         },
-      };
-      return {
         recover: () => {
           act(() => {
             for (const listener of [...listeners]) listener();
           });
         },
       };
+    }
+
+    function dialStream(): { readonly recover: () => void } {
+      const stream = fakeStream();
+      state.stream.current = { wsStreamClient: stream.client };
+      return { recover: stream.recover };
     }
 
     it("keeps the intent when the send is rejected, then a recovery sends it again on the very same view and the acknowledgement clears it", async () => {
@@ -933,6 +945,193 @@ describe("OrganizationProvider draft group intent", () => {
       expect(state.view).toBe(viewBeforeRecovery);
       await waitFor(() => expect(state.mutateAsync).toHaveBeenCalledTimes(2));
       await waitFor(() => expect(pendingGroupIdOf(taskTabId)).toBeNull());
+    });
+
+    it("waits on a recovery from the pool's stream, the one its commands ride, and ignores one from the surface's own", async () => {
+      const surface = fakeStream();
+      const pool = fakeStream();
+      state.stream.current = { wsStreamClient: surface.client };
+      state.poolStream.current = pool.client;
+      const taskTabId = startDraftInGroup("task-new", "group-1");
+      state.view = viewWithOnlyTheGroup();
+      state.mutateAsync.mockImplementationOnce(() =>
+        Promise.reject(new Error("host refused")),
+      );
+      renderProvider(new QueryClient(), null);
+      await waitFor(() => expect(state.mutateAsync).toHaveBeenCalledTimes(1));
+      await settleCommand();
+
+      // A host the commands do not go to has recovered: that says nothing
+      // about the one the refused intent is waiting on.
+      surface.recover();
+      await settleCommand();
+      expect(state.mutateAsync).toHaveBeenCalledTimes(1);
+      expect(pendingGroupIdOf(taskTabId)).toBe("group-1");
+
+      pool.recover();
+
+      await waitFor(() => expect(state.mutateAsync).toHaveBeenCalledTimes(2));
+      await waitFor(() => expect(pendingGroupIdOf(taskTabId)).toBeNull());
+    });
+
+    describe("when the user decides the same task's group in the meantime", () => {
+      /** Hands the test the provider's own command, the one every menu and drag goes through. */
+      function CommandProbe(props: {
+        readonly capture: (
+          command: (action: OrganizationAction) => Promise<void>,
+        ) => void;
+      }) {
+        const organization = useOrganization();
+        const command = organization?.command;
+        const { capture } = props;
+        useEffect(() => {
+          if (command !== undefined) capture(command);
+        }, [command, capture]);
+        return null;
+      }
+
+      function moveTaskTo(taskId: string, groupId: string): OrganizationAction {
+        return {
+          kind: "groups",
+          operations: [{ operation: "moveTask", taskId, groupId, position: 0 }],
+        };
+      }
+
+      /** The group of every move the provider has sent, in order. */
+      function groupsMovedTo(): string[] {
+        return state.mutateAsync.mock.calls.flatMap(([variables]) => {
+          const { action } = variables.command;
+          return action.kind === "groups"
+            ? action.operations.flatMap((operation) =>
+                operation.operation === "moveTask" ? [operation.groupId] : [],
+              )
+            : [];
+        });
+      }
+
+      /** Renders the provider, lets the draft's automatic move be refused, and returns the user's own command. */
+      async function refuseTheAutomaticMove(): Promise<{
+        readonly choose: (action: OrganizationAction) => Promise<void>;
+        readonly rendered: RenderResult;
+        readonly queryClient: QueryClient;
+      }> {
+        let choose: (action: OrganizationAction) => Promise<void> = () =>
+          Promise.reject(new Error("the provider has not rendered"));
+        const queryClient = new QueryClient();
+        const rendered = renderProvider(
+          queryClient,
+          <CommandProbe
+            capture={(command) => {
+              choose = command;
+            }}
+          />,
+        );
+        await waitFor(() => expect(state.mutateAsync).toHaveBeenCalledTimes(1));
+        await settleCommand();
+        return {
+          choose: (action) => choose(action),
+          rendered,
+          queryClient,
+        };
+      }
+
+      it("forgets the intent when the host accepts that choice, so a recovery never sends the old group back", async () => {
+        const host = dialStream();
+        const taskTabId = startDraftInGroup("task-new", "group-1");
+        state.view = viewWithOnlyTheGroup();
+        state.mutateAsync.mockImplementationOnce(() =>
+          Promise.reject(new Error("host refused")),
+        );
+        const { choose } = await refuseTheAutomaticMove();
+        expect(pendingGroupIdOf(taskTabId)).toBe("group-1");
+
+        await act(async () => {
+          await choose(moveTaskTo("task-new", "group-2"));
+        });
+        host.recover();
+        await settleCommand();
+
+        expect(groupsMovedTo()).toEqual(["group-1", "group-2"]);
+        expect(pendingGroupIdOf(taskTabId)).toBeNull();
+      });
+
+      it("forgets the intent when the host accepts the task leaving every group", async () => {
+        const host = dialStream();
+        const taskTabId = startDraftInGroup("task-new", "group-1");
+        state.view = viewWithOnlyTheGroup();
+        state.mutateAsync.mockImplementationOnce(() =>
+          Promise.reject(new Error("host refused")),
+        );
+        const { choose } = await refuseTheAutomaticMove();
+
+        await act(async () => {
+          await choose({
+            kind: "groups",
+            operations: [{ operation: "removeTask", taskId: "task-new" }],
+          });
+        });
+        host.recover();
+        await settleCommand();
+
+        expect(groupsMovedTo()).toEqual(["group-1"]);
+        expect(pendingGroupIdOf(taskTabId)).toBeNull();
+      });
+
+      it("keeps the intent when that choice is refused too, and a recovery still sends the old group", async () => {
+        const host = dialStream();
+        const taskTabId = startDraftInGroup("task-new", "group-1");
+        state.view = viewWithOnlyTheGroup();
+        state.mutateAsync.mockImplementationOnce(() =>
+          Promise.reject(new Error("host refused")),
+        );
+        state.mutateAsync.mockImplementationOnce(() =>
+          Promise.reject(new Error("host refused")),
+        );
+        const { choose } = await refuseTheAutomaticMove();
+
+        await act(async () => {
+          await choose(moveTaskTo("task-new", "group-2")).catch(
+            () => undefined,
+          );
+        });
+        expect(pendingGroupIdOf(taskTabId)).toBe("group-1");
+
+        host.recover();
+
+        await waitFor(() =>
+          expect(groupsMovedTo()).toEqual(["group-1", "group-2", "group-1"]),
+        );
+        await waitFor(() => expect(pendingGroupIdOf(taskTabId)).toBeNull());
+      });
+
+      it("does not read a membership in the view as that choice: the intent outlives a frame that already shows the task in a group", async () => {
+        const taskTabId = startDraftInGroup("task-new", "group-1");
+        state.view = viewWithOnlyTheGroup();
+        state.mutateAsync.mockImplementation(() =>
+          Promise.reject(new Error("host refused")),
+        );
+        const queryClient = new QueryClient();
+        const rendered = renderProvider(queryClient, null);
+        await waitFor(() => expect(state.mutateAsync).toHaveBeenCalledTimes(1));
+        await settleCommand();
+
+        // The host's own projection carries the optimistic edit, so this is
+        // the frame the very next send is drawn from.
+        state.view = {
+          ...state.view,
+          groups: {
+            ...state.view.groups,
+            memberships: [
+              { taskId: "task-new", groupId: "group-1", position: 0 },
+            ],
+          },
+        };
+        nextViewFrame(rendered, queryClient, "frame-with-membership");
+        await waitFor(() => expect(state.mutateAsync).toHaveBeenCalledTimes(2));
+        await settleCommand();
+
+        expect(pendingGroupIdOf(taskTabId)).toBe("group-1");
+      });
     });
 
     it("starts no second command for a send that has not come back, whatever frames or recoveries arrive meanwhile", async () => {

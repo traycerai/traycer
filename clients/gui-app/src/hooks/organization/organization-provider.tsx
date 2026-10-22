@@ -68,12 +68,17 @@ export function OrganizationProvider({
   } | null>(null);
   // Organization is account-wide: the pool's family (see `usePoolTierHostClient`).
   const client = usePoolTierHostClient(useHostClient());
-  // Read here as well as in the subscription below: a rebuilt transport is
-  // what gives a refused draft group intent its attempts back.
-  const streamClient =
-    useSurfaceHostStreamBinding(null)?.wsStreamClient ?? null;
+  const binding = useSurfaceHostStreamBinding(null);
   const readiness = useReactiveHostReadiness(client);
   const { hostId, requestContextUserId: userId } = readiness;
+  // The SAME stream the subscription below rides, not the surface's own. In a
+  // pool build those are different hosts: commands and frames would go to the
+  // pool while a refused draft intent waited on a recovery from somewhere
+  // else, and the recovery that actually concerns it would never arrive.
+  const streamClient = usePoolTierStreamClient(
+    binding?.wsStreamClient ?? null,
+    userId,
+  );
   const accountUserId = useAuthStore(
     (state) => state.contextMetadata?.userId ?? null,
   );
@@ -206,6 +211,7 @@ export function OrganizationProvider({
         client.getActiveHostId() !== hostId
       )
         throw new Error("Organization account changed.");
+      retireSupersededDraftIntents(action);
     },
     [mutateAsync, client, userId, hostId],
   );
@@ -617,6 +623,48 @@ function consumeDraftGroupIntents(
         inFlight.delete(tabId);
         if (recoveries.current !== startedAfter) wake();
       });
+  }
+}
+
+/**
+ * Forgets a draft's group intent once the account has DURABLY accepted a
+ * later choice for the same task.
+ *
+ * The intent deliberately survives a refusal - that is what it is for - so
+ * the only thing allowed to retire it is a newer decision that actually
+ * landed. A membership in the view is NOT that: the view is this host's own
+ * projection and carries the optimistic edit, so retiring on it would throw
+ * the intent away on the first frame after the send it was meant to outlive.
+ * An accepted `moveTask` or `removeTask` naming the task is a newer
+ * decision, and by the time this runs it has been written durably and the
+ * account and host have been checked. Reordering is not: it moves a task
+ * inside the group it is already in, and decides nothing about joining one.
+ *
+ * Every route - the menu, a new group, a drag - reaches this through the
+ * same command, so there is nothing per-route to keep in step.
+ */
+function retireSupersededDraftIntents(action: OrganizationAction): void {
+  if (action.kind !== "groups") return;
+  const decided = new Set(
+    action.operations.flatMap((operation) =>
+      operation.operation === "moveTask" || operation.operation === "removeTask"
+        ? [operation.taskId]
+        : [],
+    ),
+  );
+  if (decided.size === 0) return;
+  const tabs = useEpicCanvasStore.getState();
+  const customizations = useTabsStore.getState().customizations;
+  for (const tabId of tabs.openTabOrder) {
+    const task = tabs.tabsById[tabId];
+    if (!task || !decided.has(task.epicId)) continue;
+    if (!customizations?.[`epic:${tabId}`]?.pendingGroupId) continue;
+    useTabsStore
+      .getState()
+      .setTabCustomization(
+        { kind: "epic", id: tabId },
+        { pendingGroupId: null },
+      );
   }
 }
 

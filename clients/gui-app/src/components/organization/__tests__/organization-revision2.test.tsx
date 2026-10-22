@@ -574,6 +574,40 @@ describe("organization Revision 2", () => {
     });
   });
 
+  it("stops every edit in a picker that is already open when the host stops taking organization commands", async () => {
+    const user = userEvent.setup();
+    const rendered = render(<TaskAppearancePicker taskId="task-1" />);
+    const icon = screen.getByLabelText("Icon");
+    // An edit begun while the host could take it, and not yet saved.
+    await user.clear(icon);
+    await user.type(icon, "UI");
+    expect(icon.hasAttribute("disabled")).toBe(false);
+
+    // Radix keeps an open submenu mounted when its trigger is disabled, so
+    // the picker sees only the new context, with the same cached view.
+    state.override.current = { ...state.organization, supported: false };
+    rendered.rerender(
+      withQueryClient(<TaskAppearancePicker taskId="task-1" />),
+    );
+
+    expect(screen.getByLabelText("Icon").hasAttribute("disabled")).toBe(true);
+    const colorControls = screen
+      .getByRole("button", { name: "Default" })
+      .closest("fieldset");
+    expect(colorControls?.hasAttribute("disabled")).toBe(true);
+    expect(
+      screen.getByRole("button", { name: "Reset" }).hasAttribute("disabled"),
+    ).toBe(true);
+
+    // And nothing gets through when it is tried: the drafted icon's save, the
+    // colour buttons, and Reset.
+    fireEvent.submit(screen.getByRole("form", { name: "Task appearance" }));
+    await user.click(screen.getByRole("button", { name: "Default" }));
+    await user.click(screen.getByRole("button", { name: "Choose color" }));
+    await user.click(screen.getByRole("button", { name: "Reset" }));
+    expect(state.command).not.toHaveBeenCalled();
+  });
+
   it("does not offer Reset when the task has no personal override", () => {
     state.organization.view.appearances = [
       { taskId: "task-1", version: "0", color: null, icon: null },
