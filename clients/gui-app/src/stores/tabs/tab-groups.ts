@@ -45,6 +45,42 @@ export const DEFAULT_TAB_CUSTOMIZATION: TabCustomization = {
 };
 
 /**
+ * The group a tab is DRAWN in, which is only ever one of the account's.
+ *
+ * A group with no `organizationOwnerId` was made by the machine-local
+ * grouping this build retired: it exists on this computer, in this window,
+ * and nowhere else. Those entries are still in persisted layouts and are
+ * left exactly as they are, but nothing resolves one any more, so the strip
+ * draws one set of groups and it is the account's. Membership keeps the same
+ * rule by construction - a tab whose group does not resolve is drawn
+ * ungrouped.
+ */
+export function drawnTabGroup(
+  groups: TabGroups | undefined,
+  groupId: string | null,
+): TabGroup | undefined {
+  if (groupId === null) return undefined;
+  const group = groups?.[groupId];
+  return group?.organizationOwnerId ? group : undefined;
+}
+
+/**
+ * A tab's own colour and icon as the ACCOUNT has them, or nothing.
+ *
+ * The sibling of {@link drawnTabGroup}, and for the same reason: a
+ * customization with no `organizationOwnerId` was written by the retired
+ * machine-local appearance controls, and a colour that exists on one
+ * computer is not what a task looks like. Unstamped entries stay in
+ * persisted layouts and are not drawn, so a tab falls back to what its kind
+ * ships until the account's projection says otherwise.
+ */
+export function drawnTabCustomization(
+  customization: TabCustomization | undefined,
+): TabCustomization | undefined {
+  return customization?.organizationOwnerId ? customization : undefined;
+}
+
+/**
  * The colour a tab draws: its group's while it is grouped, else its own. The
  * group's colour is read, never written into the tab's customization, so the
  * tab's own colour is what comes back when it leaves the group.

@@ -822,11 +822,14 @@ describe("tab recovery through the command coordinator", () => {
     });
 
     expect(tabCommandCoordinator.closeRefAfterConfirmed(refA)).toBe(true);
-    useTabsStore.getState().updateGroup("renamed-group", {
-      name: "After",
-      color: "#c58af9",
-      collapsed: false,
+    // The organization projection is what renames a group now, and it writes
+    // the store directly; this stands in for one of its frames.
+    useTabsStore.setState({
+      groups: {
+        "renamed-group": { name: "After", color: "#c58af9", collapsed: false },
+      },
     });
+    useTabsStore.getState().repair();
     const entry = useTabRecoveryHistory.getState().entries.at(0);
     if (entry === undefined) {
       throw new Error("expected a renamed-group recovery entry");
@@ -998,8 +1001,14 @@ describe("tab recovery through the command coordinator", () => {
     });
 
     expect(tabCommandCoordinator.closeRefAfterConfirmed(refA)).toBe(true);
-    const newGroupId = useTabsStore.getState().createGroup(refB);
-    if (newGroupId === null) throw new Error("expected a new group");
+    const newGroupId = "new-group";
+    useTabsStore.setState({
+      groups: {
+        ...useTabsStore.getState().groups,
+        [newGroupId]: { name: "New", color: "#81c995", collapsed: false },
+      },
+    });
+    useTabsStore.getState().setTabGroup(refB, newGroupId);
     const entry = useTabRecoveryHistory.getState().entries.at(0);
     if (entry === undefined) {
       throw new Error("expected a changed-group recovery entry");

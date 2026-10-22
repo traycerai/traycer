@@ -1,11 +1,9 @@
 import {
   DEFAULT_TAB_CUSTOMIZATION,
-  TAB_COLORS,
   parseTabCustomizations,
   parseTabGroups,
   setLayoutTabGroup,
   type TabCustomization,
-  type TabGroup,
 } from "./tab-groups";
 import { create } from "zustand";
 import {
@@ -101,14 +99,19 @@ export interface TabsStoreState extends PersistedTabsStoreState {
   separateSplit: (splitId: string) => void;
   replaceRef: (args: ReplaceRefArgs) => void;
   reorderItem: (args: ReorderItemArgs) => void;
+  /**
+   * The only tab customization a client writes. Colour, icon and group
+   * membership are the account's and arrive through the organization
+   * projection; this is the draft tab's unsent choice of group, which has no
+   * task to name yet.
+   */
   setTabCustomization: (
     ref: TabRef,
-    patch: Partial<Pick<TabCustomization, "color" | "icon" | "pendingGroupId">>,
+    patch: Pick<TabCustomization, "pendingGroupId">,
   ) => void;
-  createGroup: (ref: TabRef) => string | null;
   setTabGroup: (ref: TabRef, groupId: string | null) => void;
-  updateGroup: (groupId: string, patch: Partial<TabGroup>) => void;
-  ungroup: (groupId: string) => void;
+  /** Folding a group is this window's display choice, not organization data. */
+  setGroupCollapsed: (groupId: string, collapsed: boolean) => void;
   repair: () => void;
 }
 
@@ -459,7 +462,7 @@ function isValidSystemTabPath(
 
 export const useTabsStore = create<TabsStoreState>()(
   persist(
-    (set, get) => ({
+    (set) => ({
       ...committedLayout(emptyTabStripLayout()),
 
       replaceLayoutForTransaction: (layout) => {
@@ -673,34 +676,6 @@ export const useTabsStore = create<TabsStoreState>()(
         });
       },
 
-      createGroup: (ref) => {
-        const layout = layoutFromState(get());
-        const item = findStripItemForRef(layout, ref);
-        if (item === null || itemContainsStructurallyLockedRef(item))
-          return null;
-        const groupId = crypto.randomUUID();
-        const color =
-          TAB_COLORS[
-            Object.keys(layout.groups ?? {}).length % TAB_COLORS.length
-          ].value;
-        set(
-          committedLayout(
-            setLayoutTabGroup(
-              {
-                ...layout,
-                groups: {
-                  ...layout.groups,
-                  [groupId]: { name: "", color, collapsed: false },
-                },
-              },
-              ref,
-              groupId,
-            ),
-          ),
-        );
-        return groupId;
-      },
-
       setTabGroup: (ref, groupId) => {
         set((state) => {
           const layout = layoutFromState(state);
@@ -711,26 +686,14 @@ export const useTabsStore = create<TabsStoreState>()(
         });
       },
 
-      updateGroup: (groupId, patch) => {
+      setGroupCollapsed: (groupId, collapsed) => {
         set((state) => {
           const group = state.groups?.[groupId];
           if (group === undefined) return state;
           return committedLayout({
             ...layoutFromState(state),
-            groups: { ...state.groups, [groupId]: { ...group, ...patch } },
+            groups: { ...state.groups, [groupId]: { ...group, collapsed } },
           });
-        });
-      },
-
-      ungroup: (groupId) => {
-        set((state) => {
-          const customizations = Object.fromEntries(
-            Object.entries(state.customizations ?? {}).map(([key, value]) => [
-              key,
-              value.groupId === groupId ? { ...value, groupId: null } : value,
-            ]),
-          );
-          return committedLayout({ ...layoutFromState(state), customizations });
         });
       },
 

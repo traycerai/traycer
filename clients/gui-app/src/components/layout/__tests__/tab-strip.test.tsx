@@ -942,6 +942,29 @@ const ACTIVE_SPLIT_CASES: ReadonlyArray<ActiveSplitCase> = [
 // production. Test mounts skip the provider, so install once here.
 installTabSyncCoordinator({ readyPromise: Promise.resolve() });
 
+/**
+ * A tab's colour as the organization projection writes it: straight onto the
+ * layout. There is no client action for it any more - colour belongs to the
+ * account's task appearance.
+ */
+function seedTabColor(ref: TabRef, color: string): void {
+  const key = `${ref.kind}:${ref.id}`;
+  const current = useTabsStore.getState().customizations?.[key];
+  useTabsStore.setState({
+    customizations: {
+      ...useTabsStore.getState().customizations,
+      [key]: {
+        color,
+        icon: current?.icon ?? null,
+        groupId: current?.groupId ?? null,
+        // Stamped, because only the account's projection writes a colour.
+        organizationOwnerId: "user-1",
+      },
+    },
+  });
+  useTabsStore.getState().repair();
+}
+
 describe("<TabStrip />", () => {
   beforeEach(() => {
     queryClient = new QueryClient({
@@ -1443,10 +1466,18 @@ describe("<TabStrip />", () => {
 
   it("draws a grouped tab in its group's colour, and in its own again once it leaves the group", async () => {
     const { beta } = seedTwoEpicTabs();
-    useTabsStore.getState().setTabCustomization(beta, { color: "#ff0000" });
+    seedTabColor(beta, "#ff0000");
     // A commit drops a group with no members, so the group comes after.
     useTabsStore.setState({
-      groups: { g: { name: "Work", color: "#8ab4f8", collapsed: false } },
+      // The account's group: the strip draws no other kind.
+      groups: {
+        g: {
+          name: "Work",
+          color: "#8ab4f8",
+          collapsed: false,
+          organizationOwnerId: "user-1",
+        },
+      },
     });
     useTabsStore.getState().setTabGroup(beta, "g");
     render(<RouterProvider router={buildRouter("/epics/e-a/e-a")} />);
@@ -1463,6 +1494,32 @@ describe("<TabStrip />", () => {
     });
 
     expect(edge()).toBe("#ff0000");
+  });
+
+  it("draws no colour from a customization the account did not write, and draws it once it is stamped", async () => {
+    const { beta } = seedTwoEpicTabs();
+    // No `organizationOwnerId`: the retired machine-local colour and icon.
+    useTabsStore.setState({
+      customizations: {
+        ...useTabsStore.getState().customizations,
+        [`epic:${beta.id}`]: { color: "#ff0000", icon: "🚀", groupId: null },
+      },
+    });
+    render(<RouterProvider router={buildRouter("/epics/e-a/e-a")} />);
+    const tab = await screen.findByTestId("tab-epic-e-b");
+
+    expect(within(tab).queryByTestId("tab-color-edge-line")).toBeNull();
+    expect(tab.querySelector('[data-slot="tab-custom-icon"]')).toBeNull();
+
+    act(() => {
+      seedTabColor(beta, "#ff0000");
+    });
+
+    expect(
+      within(tab)
+        .getByTestId("tab-color-edge-line")
+        .style.getPropertyValue("--swatch"),
+    ).toBe("#ff0000");
   });
 
   describe("the task tray join (top strip)", () => {
@@ -1661,9 +1718,7 @@ describe("<TabStrip />", () => {
       ).toBe("top");
 
       act(() => {
-        useTabsStore
-          .getState()
-          .setTabCustomization(alpha, { color: "#12ab34" });
+        seedTabColor(alpha, "#12ab34");
       });
 
       const box = within(activeTab).getByTestId("tab-chrome-box");

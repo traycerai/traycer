@@ -6,7 +6,6 @@ import { Plus, Ungroup, X } from "lucide-react";
 import { useNavigate } from "@tanstack/react-router";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { useTabsStore } from "@/stores/tabs/store";
 import type { TabGroup } from "@/stores/tabs/tab-groups";
 import { TabColorPicker } from "./tab-appearance-menu";
 import { navigateToTabIntent } from "@/lib/tab-navigation";
@@ -25,27 +24,29 @@ export function TabGroupEditor(props: {
 }): ReactNode {
   const navigate = useNavigate();
   const { group, groupId, onDone } = props;
-  const actions = useTabsStore.getState();
   const organization = useOrganization();
   const cloudGroup = organization?.view?.groups.groups.find(
     (candidate) => candidate.groupId === groupId,
   );
+  // A group's name and colour belong to the account, so they are editable
+  // only through the account's command. A group the account does not have is
+  // left exactly as it is rather than edited somewhere else.
+  const editable = cloudGroup !== undefined && organization?.supported === true;
   const [name, setName] = useState(group.name);
   const saveGroup = (nextName: string, color: string) => {
-    if (cloudGroup && organization) {
-      if (!nextName.trim()) {
-        setName(group.name);
-        return;
-      }
-      void organization
-        .command({
-          kind: "groups",
-          operations: [
-            { operation: "update", groupId, name: nextName.trim(), color },
-          ],
-        })
-        .catch(() => undefined);
-    } else actions.updateGroup(groupId, { name: nextName, color });
+    if (!editable) return;
+    if (!nextName.trim()) {
+      setName(group.name);
+      return;
+    }
+    void organization
+      .command({
+        kind: "groups",
+        operations: [
+          { operation: "update", groupId, name: nextName.trim(), color },
+        ],
+      })
+      .catch(() => undefined);
   };
   return (
     <>
@@ -53,6 +54,7 @@ export function TabGroupEditor(props: {
         aria-label="Group name"
         placeholder="Name this group"
         maxLength={80}
+        disabled={!editable}
         value={name}
         onChange={(event) => setName(event.target.value)}
         onBlur={() => {
@@ -65,11 +67,13 @@ export function TabGroupEditor(props: {
           }
         }}
       />
-      <TabColorPicker
-        menu={false}
-        color={group.color}
-        onChange={(color) => saveGroup(name, color)}
-      />
+      <fieldset disabled={!editable} className="min-w-0">
+        <TabColorPicker
+          menu={false}
+          color={group.color}
+          onChange={(color) => saveGroup(name, color)}
+        />
+      </fieldset>
       <OrganizationSyncNote taskId={null} labels={[]} includeGroups />
       <div className="flex flex-col border-t pt-2">
         <Button
@@ -98,24 +102,24 @@ export function TabGroupEditor(props: {
           <X />
           Close group
         </Button>
-        <Button
-          variant="ghost"
-          className="justify-start"
-          onClick={() => {
-            onDone();
-            if (cloudGroup && organization)
+        {editable ? (
+          <Button
+            variant="ghost"
+            className="justify-start"
+            onClick={() => {
+              onDone();
               void organization
                 .command({
                   kind: "groups",
                   operations: [{ operation: "delete", groupId }],
                 })
                 .catch(() => undefined);
-            else actions.ungroup(groupId);
-          }}
-        >
-          <Ungroup />
-          Ungroup
-        </Button>
+            }}
+          >
+            <Ungroup />
+            Ungroup
+          </Button>
+        ) : null}
       </div>
     </>
   );

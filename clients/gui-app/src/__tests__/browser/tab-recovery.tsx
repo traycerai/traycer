@@ -298,15 +298,27 @@ function installBridge(reopen: () => Promise<void>): void {
     seedNamedGroup: (firstTaskId: string, secondTaskId: string) => {
       const first: TabRef = { kind: "epic", id: firstTaskId };
       const second: TabRef = { kind: "epic", id: secondTaskId };
-      const store = useTabsStore.getState();
-      const groupId = store.createGroup(first);
-      if (groupId === null) throw new Error("tab group was not created");
-      store.setTabGroup(second, groupId);
-      store.updateGroup(groupId, {
-        name: "Recovery group",
-        color: "#8ab4f8",
-        collapsed: false,
+      const groupId = "recovery-group";
+      // A group is the account's now, and the organization projection writes
+      // it straight onto the layout; this fixture stands in for one frame of
+      // that projection.
+      useTabsStore.setState({
+        groups: {
+          ...useTabsStore.getState().groups,
+          [groupId]: {
+            name: "Recovery group",
+            color: "#8ab4f8",
+            collapsed: false,
+            // The stamp is what makes a group the account's, and only a
+            // stamped group is drawn - so a fixture without it seeds a group
+            // the strip never shows.
+            organizationOwnerId: "browser-recovery-user",
+          },
+        },
       });
+      const store = useTabsStore.getState();
+      store.setTabGroup(first, groupId);
+      store.setTabGroup(second, groupId);
       return groupId;
     },
     reopen: async () => {
