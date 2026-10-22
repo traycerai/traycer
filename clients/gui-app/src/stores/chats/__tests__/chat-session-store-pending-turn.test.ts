@@ -22,6 +22,7 @@ import {
   createChatSessionStore,
   type ChatSessionStoreHandle,
 } from "@/stores/chats/chat-session-store";
+import { resolveTurnPresentation } from "@/stores/chats/chat-send-state";
 import { IMMEDIATE_STREAM_FLUSH_COORDINATOR } from "@/stores/chats/stream-flush-coordinator";
 import { CHAT_STORE_TEST_ENVIRONMENT } from "@/stores/chats/test-support/chat-store-test-environment";
 
@@ -1805,5 +1806,106 @@ describe("no frame order draws one prompt in the transcript and the dock at once
     );
     expectNoDoubleDrawn(opened, "second saved", pairObserved);
     expect(dockedIds(opened).size).toBe(0);
+  });
+});
+
+describe("the host turn clock on a host that publishes turnInProgress but no sendWouldQueue (1.33)", () => {
+  const T1 = 2_000_000;
+  const T2 = 2_600_000;
+  const T3 = 3_200_000;
+
+  function runningTurn(userMessageId: string | null, turnId: string) {
+    return { ...turnFor(userMessageId, turnId), status: "running" as const };
+  }
+
+  function hostFrame(opened: Harness, activeTurn: ChatActiveTurn | null): void {
+    emitTurnState(opened.callbacks(), {
+      runStatus: "running",
+      activeTurn,
+      turnInProgress: true,
+      sendWouldQueue: undefined,
+    });
+  }
+
+  function clockOf(opened: Harness): number {
+    const state = stateOf(opened);
+    return resolveTurnPresentation({
+      chatId: CHAT_ID,
+      pendingTurn: state.pendingTurn,
+      activeTurn: state.activeTurn,
+      observedAt: state.turnObservedAt ?? -1,
+      localMessageCreatedAt: null,
+      hostAnchorAt: null,
+    }).elapsedStartedAt;
+  }
+
+  function openAtTurnA(): Harness {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(T1);
+    const opened = openHarness({
+      runStatus: "idle",
+      turnInProgress: false,
+      sendWouldQueue: undefined,
+    });
+    hostFrame(opened, runningTurn("message-a", "turn-a"));
+    expect(stateOf(opened).turnObservedAt).toBe(T1);
+    return opened;
+  }
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("restarts the clock when a queued prompt's activation gap (turnInProgress, no activeTurn) follows turn A", () => {
+    const opened = openAtTurnA();
+
+    vi.setSystemTime(T2);
+    hostFrame(opened, null);
+
+    expect(stateOf(opened).turnObservedAt).toBe(T2);
+    expect(clockOf(opened)).toBe(T2);
+  });
+
+  it("restarts the observation when turn B replaces turn A without a gap", () => {
+    const opened = openAtTurnA();
+
+    vi.setSystemTime(T2);
+    hostFrame(opened, runningTurn("message-b", "turn-b"));
+
+    expect(stateOf(opened).turnObservedAt).toBe(T2);
+  });
+
+  it("does not restart on a repeated frame of the same turn A", () => {
+    const opened = openAtTurnA();
+
+    vi.setSystemTime(T2);
+    hostFrame(opened, runningTurn("message-a", "turn-a"));
+    vi.setSystemTime(T3);
+    hostFrame(opened, runningTurn("message-a", "turn-a"));
+
+    expect(stateOf(opened).turnObservedAt).toBe(T1);
+  });
+
+  it("keeps the send's own timer origin (Enter) across the host's handoff frames", () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(T1);
+    const opened = openHarness(OLDER_HOST_IDLE);
+    const sent = sendPrompt(opened);
+    const enter = stateOf(opened).pendingTurn?.sentAt;
+    expect(enter).toBe(T1);
+    expect(clockOf(opened)).toBe(T1);
+
+    vi.setSystemTime(T2);
+    emitTurnState(opened.callbacks(), {
+      runStatus: "running",
+      activeTurn: null,
+      turnInProgress: true,
+      sendWouldQueue: undefined,
+    });
+    expect(clockOf(opened)).toBe(T1);
+
+    vi.setSystemTime(T3);
+    hostFrame(opened, runningTurn(sent.messageId, "turn-own"));
+    expect(clockOf(opened)).toBe(T1);
   });
 });

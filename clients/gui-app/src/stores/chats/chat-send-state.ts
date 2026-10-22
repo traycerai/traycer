@@ -19,6 +19,7 @@ import {
   isOptimisticQueuedItem,
   optimisticQueuedItemId,
 } from "@/stores/chats/optimistic-queue";
+import { drainingQueuePrompt } from "@/lib/chat/draining-queue-item";
 
 type PresentationSettings = Pick<
   ChatRunSettings,
@@ -122,7 +123,10 @@ export function queueWithDrainingPrompts(
   }
   const cached = byHeld.get(held);
   if (cached !== undefined) return cached;
-  const queue = { ...state.queue, items: [...state.queue.items, ...held] };
+  const queue = {
+    ...state.queue,
+    items: [...state.queue.items, ...held.map(drainingQueuePrompt)],
+  };
   byHeld.set(held, queue);
   return queue;
 }
@@ -205,7 +209,13 @@ class SendStateReconciler {
   private observeTurn(): void {
     const wasActive = hostTurnInProgress(this.previous);
     const active = hostTurnInProgress(this.next);
-    if (active && !wasActive)
+    // Older hosts can move straight from a named turn into the next turn's
+    // activation gap without lowering turnInProgress between them.
+    const previousTurnId = this.previous.activeTurn?.turnId;
+    const changedTurn =
+      previousTurnId !== undefined &&
+      previousTurnId !== this.next.activeTurn?.turnId;
+    if (active && (!wasActive || changedTurn))
       Object.assign(this.patch, { turnObservedAt: Date.now() });
   }
 

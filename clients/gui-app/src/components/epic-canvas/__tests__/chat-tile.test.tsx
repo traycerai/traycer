@@ -2311,6 +2311,111 @@ describe("<ChatTile />", () => {
       );
     }
 
+    it("a carried dock row is display-only while the host's own queued row stays actionable", async () => {
+      const hostItem: ChatQueuedItem = {
+        kind: "prompt",
+        queueItemId: "queue-host-queued",
+        messageId: "message-host-queued",
+        message: {
+          kind: "user",
+          content: QUEUED_CONTENT,
+          browserAnnotations: [],
+        },
+        sender: { type: "user", userId: "owner-1" },
+        settings: SESSION_SETTINGS,
+        accountContext: { type: "PERSONAL" },
+        sentFromHostId: null,
+        delivery: "next_turn",
+        status: "pending",
+        targetTurnId: null,
+        steerRequest: null,
+        fallbackReason: null,
+        createdAt: 1,
+        updatedAt: 1,
+      };
+      chatHarness.installWithSettings("owner", [hostItem], SESSION_SETTINGS);
+      renderChatTile();
+      await waitForChatTileLoaded();
+      act(() => {
+        chatHarness.callbacks().onTurnStateChanged({
+          kind: "turnStateChanged",
+          hasBinaryPayload: false,
+          epicId: EPIC_ID,
+          chatId: CHAT_ARTIFACT.id,
+          runStatus: "running",
+          activeTurn: runningActiveTurn(),
+        });
+      });
+      const handle = __getChatSessionRegistryForTests().peek(
+        EPIC_ID,
+        CHAT_ARTIFACT.id,
+        HOST_ID,
+      );
+      if (handle === null) throw new Error("expected chat session handle");
+      const sent = await captureSentPrompt(() => {
+        act(() => {
+          handle.store.getState().sendMessage({
+            content: PENDING_DRAFT_CONTENT,
+            sender: { type: "user", userId: "owner-1" },
+            settings: SESSION_SETTINGS,
+            attachments: [],
+            deliveryPolicy: "auto",
+            restore: { content: PENDING_DRAFT_CONTENT, browserAnnotations: [] },
+          });
+        });
+      });
+      const rowWith = (text: string): HTMLElement => {
+        const row = screen
+          .getAllByTestId("queued-message-row")
+          .find((candidate) => candidate.textContent.includes(text));
+        if (row === undefined) throw new Error(`expected a row with ${text}`);
+        return row;
+      };
+      const buttonOrNull = (
+        row: HTMLElement,
+        label: string,
+      ): HTMLButtonElement | null => {
+        const found = row.querySelector(`button[aria-label="${label}"]`);
+        return found instanceof HTMLButtonElement ? found : null;
+      };
+      const button = (row: HTMLElement, label: string): HTMLButtonElement => {
+        const found = buttonOrNull(row, label);
+        if (found === null) throw new Error(`expected a ${label} button`);
+        return found;
+      };
+      /** A display-only row either hides the control or leaves it disabled. */
+      const actionable = (row: HTMLElement, label: string): boolean => {
+        const found = buttonOrNull(row, label);
+        return found !== null && !found.disabled;
+      };
+
+      queue([hostItem, sent.queued]);
+      await frames();
+      const confirmed = rowWith("pending message");
+      expect(button(confirmed, "Edit queued message").disabled).toBe(false);
+      expect(button(confirmed, "Delete queued message").disabled).toBe(false);
+
+      queue([hostItem]);
+      await frames();
+
+      expect(screen.getAllByTestId("queued-message-row")).toHaveLength(2);
+      const carried = rowWith("pending message");
+      expect(actionable(carried, "Edit queued message")).toBe(false);
+      expect(actionable(carried, "Delete queued message")).toBe(false);
+      expect(actionable(carried, "Steer queued message now")).toBe(false);
+      const carriedHandle = carried.querySelector(
+        '[data-testid="queued-message-drag-handle"]',
+      );
+      expect(
+        carriedHandle === null ||
+          carriedHandle.getAttribute("data-disabled") === "true",
+      ).toBe(true);
+      const own = rowWith("Queued prompt");
+      expect(button(own, "Edit queued message").disabled).toBe(false);
+      expect(button(own, "Delete queued message").disabled).toBe(false);
+      expect(button(own, "Steer queued message now").disabled).toBe(false);
+    });
+
     it("ack first, then the queue add, the removal while carried, and the saved row", async () => {
       const sent = await mounted();
       ack(sent);

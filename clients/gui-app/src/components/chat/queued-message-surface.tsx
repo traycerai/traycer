@@ -93,6 +93,7 @@ import {
 } from "@/stores/chats/queue-edit-custody";
 import { QueuedMessageStagesContext } from "@/components/chat/queued-message-stages";
 import { formatClockTime } from "@/lib/relative-time";
+import { isDrainingQueueItem } from "@/lib/chat/draining-queue-item";
 import { mergeRefs } from "@/lib/merge-refs";
 import { cn } from "@/lib/utils";
 import {
@@ -209,9 +210,13 @@ export function QueuedMessagePanel(props: QueuedMessagePanelProps) {
   // alike. Received items render read-only (see QueuedMessageRow) - the user
   // can reorder them but cannot edit, delete, or hand-steer them.
   const items = props.queue.items;
-  const reorderableCount = useMemo(
-    () => items.filter(queueItemAllowsReorder).length,
+  const actionableItems = useMemo(
+    () => items.filter((item) => !isDrainingQueueItem(item)),
     [items],
+  );
+  const reorderableCount = useMemo(
+    () => actionableItems.filter(queueItemAllowsReorder).length,
+    [actionableItems],
   );
   const agentCount = useMemo(
     () => items.filter(isReceivedAgentResponse).length,
@@ -221,17 +226,18 @@ export function QueuedMessagePanel(props: QueuedMessagePanelProps) {
   const pausedAfterErrorTooltip = queuePausedAfterErrorTooltip(props.queue);
   const hasSteerRestartPending = useMemo(
     () =>
-      items.some(
+      actionableItems.some(
         (item) =>
           item.kind === "prompt" &&
           item.status === "steer_requested" &&
           item.steerRequest?.mode === "interrupt_restart",
       ),
-    [items],
+    [actionableItems],
   );
-  const { hasPausableHumanItems, hasPausedItems } = useQueuePauseState(items);
+  const { hasPausableHumanItems, hasPausedItems } =
+    useQueuePauseState(actionableItems);
   const reorderDnd = useQueuedMessageReorderDnd({
-    items,
+    items: actionableItems,
     onReorder: props.onReorder,
   });
   const sensors = useSensors(
@@ -738,7 +744,7 @@ const QueuedMessageRow = memo(function QueuedMessageRow(props: {
     pausedAfterErrorTooltip,
     canReorder,
     canAct,
-    readOnly,
+    readOnly: panelReadOnly,
     activeTurnStatus,
     hasSteerRestartPending,
     editing,
@@ -752,6 +758,7 @@ const QueuedMessageRow = memo(function QueuedMessageRow(props: {
     onAbortSteer,
     onSteerNow,
   } = props;
+  const readOnly = panelReadOnly || isDrainingQueueItem(item);
   const stages = use(QueuedMessageStagesContext);
   const inFlight = stages.inFlight.get(item.queueItemId) ?? null;
   const optimisticActionId = optimisticQueuedItemClientActionId(
@@ -1653,6 +1660,7 @@ function queuedMessageStatusLabel(
     readonly queuePaused: boolean;
   },
 ): string | null {
+  if (isDrainingQueueItem(item)) return "Starting";
   const pausedLabel = pausedAfterError
     ? QUEUE_PAUSED_AFTER_ERROR_LABEL
     : "Paused";
@@ -1725,6 +1733,9 @@ function queuedMessageStatusTooltip(
     readonly pausedAfterErrorTooltip: string | null;
   },
 ): string | null {
+  if (isDrainingQueueItem(item)) {
+    return "The host has taken this prompt out of the queue to start it.";
+  }
   // Ahead of the paused reason, to match the pill: a paused row with an
   // unanswered save says "Saving", and its tooltip has to explain that.
   if (input.inFlight !== null && !isOptimisticQueuedItem(item)) {
