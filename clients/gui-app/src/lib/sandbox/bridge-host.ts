@@ -103,6 +103,7 @@ const MAX_WHEEL_DELTA_PX = 4000;
 const WHEEL_LINE_PX = 16;
 
 export interface SandboxBridgeEvents {
+  readonly onHtmlZoom?: (scale: number) => void;
   readonly onDoubleClick?: (element: CanvasElement) => void;
   readonly onTextSelection?: (selection: CanvasTextSelection | null) => void;
   readonly onPageError?: (error: CanvasPageError) => void;
@@ -333,6 +334,12 @@ function parseInbound(data: unknown): InboundMessage | null {
     return { method: null, id, params: null, isResponse: true };
   }
   return null;
+}
+
+function parseHtmlZoom(params: unknown): number | null {
+  if (!isRecord(params) || typeof params.scale !== "number") return null;
+  const { scale } = params;
+  return Number.isFinite(scale) && scale >= 0.25 && scale <= 4 ? scale : null;
 }
 
 function finiteSize(value: unknown): number | null {
@@ -779,6 +786,21 @@ export class SandboxBridgeHost {
     });
   }
 
+  /** Plain HTML proves readiness without an MCP App's initialized handshake. */
+  setHtmlView(enabled: boolean, scale: number): void {
+    if (
+      this.phase !== "ready" ||
+      this.options.document.kind !== "served" ||
+      this.options.document.canvas === true
+    )
+      return;
+    this.post({
+      jsonrpc: "2.0",
+      method: "traycer/html/view",
+      params: { enabled, scale },
+    });
+  }
+
   /**
    * An app → page notification (`ui/notifications/tool-input`, …). Held until
    * the page says `initialized`, as the spec requires.
@@ -912,6 +934,11 @@ export class SandboxBridgeHost {
     }
   }
 
+  private relayHtmlZoom(params: unknown): void {
+    const scale = parseHtmlZoom(params);
+    if (scale !== null) this.options.events.onHtmlZoom?.(scale);
+  }
+
   private dispatch(message: InboundMessage): void {
     const { method, id, params } = message;
     switch (method) {
@@ -935,6 +962,9 @@ export class SandboxBridgeHost {
             height: finiteSize(params.height),
           });
         }
+        return;
+      case "traycer/notifications/html-view":
+        this.relayHtmlZoom(params);
         return;
       case "ui/notifications/initialized":
         this.onInitialized();

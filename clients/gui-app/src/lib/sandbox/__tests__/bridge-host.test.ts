@@ -627,6 +627,17 @@ describe("app-to-page notifications", () => {
   });
 });
 
+describe("html view state", () => {
+  it("is never sent to an MCP App or loader-delivered page", () => {
+    const harness = ready(null, OPENS);
+    harness.host.receive(notification("ui/notifications/initialized", {}));
+
+    harness.host.setHtmlView(true, 1.5);
+
+    expect(harness.all("traycer/html/view")).toEqual([]);
+  });
+});
+
 describe("host context changes", () => {
   it("sends only the keys that changed", () => {
     const harness = ready(null, OPENS);

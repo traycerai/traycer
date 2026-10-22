@@ -463,6 +463,7 @@ export const HOST_UNARY_RPC_ROUTES = {
   "epic.listCloudChats": "target-host",
   "epic.listCollaborators": "target-host",
   "epic.listCommentThreads": "target-host",
+  "epic.listHtmlArtifactVersions": "target-host",
   "epic.listTaskHosts": "target-host",
   // History: the server pool's pages. What only a host knows - its
   // local-homed rows, preserved orphans and tombstones - comes from that

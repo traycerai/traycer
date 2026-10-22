@@ -6,6 +6,7 @@ import {
   buildArtifactDocument,
   type ArtifactDocumentOptions,
 } from "../artifact-document";
+import { buildHtmlViewerPrelude } from "../../html-viewer-bootstrap";
 
 const NONCE = "canvas-doc-nonce";
 const STAMP = "data-traycer-pos";
@@ -121,13 +122,14 @@ describe("the canvas bootstrap is a separate script", () => {
     const canvas = buildArtifactDocument(html, optionsFor(true));
     const [, canvasScript] = scriptsOf(canvas);
     // A board is not a page the frame navigates between, so its bootstrap
-    // carries no page role where the ordinary document carries "found".
+    // carries no page role where the ordinary document carries "found", and
+    // the viewer prelude only plain pages get is replaced by the canvas channel.
     expect(
       canvas
         .replace(canvasScript, "")
         .replace(STAMP_PATTERN, "")
         .replace('"artifactPage":null', '"artifactPage":"found"'),
-    ).toBe(ordinary);
+    ).toBe(ordinary.replace(buildHtmlViewerPrelude(), ""));
   });
 });
 
@@ -148,10 +150,12 @@ describe("an ordinary document is untouched by the canvas option", () => {
   );
 
   it.each(pages)(
-    "carries one script, no stamps and no canvas channel: %s",
+    "carries only the viewer prelude after the bootstrap, no stamps and no canvas channel: %s",
     (html) => {
       const composed = buildArtifactDocument(html, optionsFor(undefined));
-      expect(scriptsOf(composed)).toHaveLength(1);
+      const scripts = scriptsOf(composed);
+      expect(scripts).toHaveLength(2);
+      expect(scripts[1]).toBe(buildHtmlViewerPrelude());
       expect(composed).not.toContain(STAMP);
       expect(composed).not.toContain("traycer/canvas/");
       expect(composed).not.toContain("canvasBootstrap");
