@@ -302,6 +302,7 @@ function renderSectionWithOrganization(view: OrganizationView) {
   const organization: OrganizationContextValue = {
     client: organizationClient,
     supported: true,
+    hostSupport: true,
     userId: "user-1",
     view,
     register: registerOrganizationTasks,

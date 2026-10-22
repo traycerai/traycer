@@ -1,5 +1,7 @@
-import { useState, type ReactNode } from "react";
-import { ArrowLeft, House } from "lucide-react";
+import { useRef, useState, type ReactNode } from "react";
+import { ArrowLeft, House, Minus, Plus } from "lucide-react";
+import { ActualSizeGlyph } from "@/components/epic-canvas/zoom-controls/zoom-controls";
+import { useCoarsePointer } from "@/hooks/ui/use-coarse-pointer";
 import {
   SandboxFrame,
   type SandboxPageNavigation,
@@ -64,6 +66,7 @@ export function ArtifactPagesFrame(props: {
    * entry page's bytes, so they are told when another page is showing.
    */
   readonly renderOverlay: ((onEntryPage: boolean) => ReactNode) | null;
+  readonly toolbarControls?: ReactNode;
 }) {
   const {
     source,
@@ -78,6 +81,15 @@ export function ArtifactPagesFrame(props: {
     renderOverlay,
   } = props;
   const entryPath = source.entryPath === "" ? "index.html" : source.entryPath;
+  const bridgeRef = useRef<SandboxBridgeHost | null>(null);
+  const scaleRef = useRef(1);
+  const [scale, setScale] = useState(1);
+  const [ready, setReady] = useState(false);
+  const coarsePointer = useCoarsePointer();
+  const controlSize = coarsePointer ? "icon-touch" : "icon-sm";
+  const changeScale = (next: number): void => {
+    bridgeRef.current?.setHtmlView(height === null, next);
+  };
   const [history, setHistory] = useState(() => freshHistory(entryPath));
   let current = history;
   if (history.entryPath !== entryPath) {
@@ -130,54 +142,63 @@ export function ArtifactPagesFrame(props: {
 
   const fills = height === null;
   return (
-    <div className={cn("flex w-full flex-col", fills && "h-full")}>
-      {currentPath !== entryPath || backStack.length > 0 ? (
-        <div
-          role="toolbar"
-          aria-label="Artifact pages"
-          className="flex h-8 shrink-0 items-center gap-1 border-b border-border px-2"
-        >
-          <TooltipWrapper
-            label="Back"
-            side="top"
-            sideOffset={undefined}
-            align={undefined}
+    <div className={cn("relative flex w-full flex-col", fills && "h-full")}>
+      {fills ||
+      currentPath !== entryPath ||
+      backStack.length > 0 ||
+      props.toolbarControls ? (
+        <div className="pointer-events-none absolute top-2 right-2 z-30 flex max-w-[calc(100%-1rem)] items-start">
+          <div
+            role="toolbar"
+            aria-label="HTML artifact controls"
+            className="pointer-events-auto flex flex-wrap items-center justify-end gap-1 rounded-md border border-border/60 bg-canvas p-0.5 shadow-sm"
           >
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon-sm"
-              aria-label="Back"
-              disabled={backStack.length === 0}
-              onClick={goBack}
-            >
-              <ArrowLeft className="size-4" />
-            </Button>
-          </TooltipWrapper>
-          <TooltipWrapper
-            label="Home"
-            side="top"
-            sideOffset={undefined}
-            align={undefined}
-          >
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon-sm"
-              aria-label="Home"
-              onClick={goHome}
-            >
-              <House className="size-4" />
-            </Button>
-          </TooltipWrapper>
-          <div className="flex min-w-0 flex-1 items-center gap-1.5 pl-1 text-ui-xs">
-            <span className="max-w-1/2 shrink-0 truncate">{title}</span>
-            <span aria-hidden="true" className="text-muted-foreground">
-              ›
-            </span>
-            <span className="min-w-0 truncate font-mono text-muted-foreground">
-              {currentPath}
-            </span>
+            {currentPath !== entryPath || backStack.length > 0 ? (
+              <>
+                <TooltipWrapper
+                  label="Back"
+                  side="top"
+                  sideOffset={undefined}
+                  align={undefined}
+                >
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size={controlSize}
+                    aria-label="Back"
+                    disabled={backStack.length === 0}
+                    onClick={goBack}
+                  >
+                    <ArrowLeft className="size-4" />
+                  </Button>
+                </TooltipWrapper>
+                <TooltipWrapper
+                  label="Home"
+                  side="top"
+                  sideOffset={undefined}
+                  align={undefined}
+                >
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size={controlSize}
+                    aria-label="Home"
+                    onClick={goHome}
+                  >
+                    <House className="size-4" />
+                  </Button>
+                </TooltipWrapper>
+              </>
+            ) : null}
+            {fills ? (
+              <HtmlPageZoomControls
+                ready={ready}
+                scale={scale}
+                onScale={changeScale}
+                controlSize={controlSize}
+              />
+            ) : null}
+            {props.toolbarControls}
           </div>
         </div>
       ) : null}
@@ -194,17 +215,30 @@ export function ArtifactPagesFrame(props: {
           className={className}
           height={height}
           onSize={onSize}
-          onStatus={onStatus}
+          onStatus={(status) => {
+            setReady(status === "ready");
+            if (status === "ready")
+              bridgeRef.current?.setHtmlView(fills, scaleRef.current);
+            onStatus(status);
+          }}
           onRequestTeardown={noop}
           displayMode="inline"
-          onBridge={onBridge}
+          onBridge={(bridge) => {
+            bridgeRef.current = bridge;
+            if (bridge === null) setReady(false);
+            onBridge?.(bridge);
+          }}
+          onHtmlZoom={(next) => {
+            scaleRef.current = next;
+            setScale(next);
+          }}
           onTextSelection={(selection) => onTextSelection?.(selection)}
           pageNavigation={pageNavigation}
           ref={onFrame}
         />
         {renderOverlay?.(currentPath === entryPath && !missing)}
         {missing ? (
-          <div className="absolute inset-0 z-40 flex flex-col items-center justify-center gap-2 bg-background p-4 text-ui-sm text-muted-foreground">
+          <div className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-2 bg-background p-4 text-ui-sm text-muted-foreground">
             <span>This page is not in the artifact.</span>
             <Button type="button" variant="outline" size="sm" onClick={goHome}>
               Go home
@@ -213,5 +247,76 @@ export function ArtifactPagesFrame(props: {
         ) : null}
       </div>
     </div>
+  );
+}
+
+function HtmlPageZoomControls(props: {
+  readonly ready: boolean;
+  readonly scale: number;
+  readonly onScale: (scale: number) => void;
+  readonly controlSize: "icon-touch" | "icon-sm";
+}) {
+  const { ready, scale, onScale, controlSize } = props;
+  return (
+    <>
+      <TooltipWrapper
+        label="Zoom out"
+        side="bottom"
+        sideOffset={undefined}
+        align={undefined}
+      >
+        <Button
+          type="button"
+          variant="muted"
+          size={controlSize}
+          aria-label="Zoom out"
+          disabled={!ready || scale <= 0.25}
+          onClick={() => onScale(Math.max(0.25, scale / 1.2))}
+        >
+          <Minus className="size-3.5" />
+        </Button>
+      </TooltipWrapper>
+      <span
+        role="status"
+        aria-label="Zoom level"
+        className="min-w-9 text-center text-ui-xs tabular-nums"
+      >
+        {ready ? `${Math.round(scale * 100)}%` : "–"}
+      </span>
+      <TooltipWrapper
+        label="Zoom in"
+        side="bottom"
+        sideOffset={undefined}
+        align={undefined}
+      >
+        <Button
+          type="button"
+          variant="muted"
+          size={controlSize}
+          aria-label="Zoom in"
+          disabled={!ready || scale >= 4}
+          onClick={() => onScale(Math.min(4, scale * 1.2))}
+        >
+          <Plus className="size-3.5" />
+        </Button>
+      </TooltipWrapper>
+      <TooltipWrapper
+        label="Actual size"
+        side="bottom"
+        sideOffset={undefined}
+        align={undefined}
+      >
+        <Button
+          type="button"
+          variant="muted"
+          size={controlSize}
+          aria-label="Actual size"
+          disabled={!ready}
+          onClick={() => onScale(1)}
+        >
+          <ActualSizeGlyph />
+        </Button>
+      </TooltipWrapper>
+    </>
   );
 }

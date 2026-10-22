@@ -397,9 +397,13 @@ import {
   agentTuiPromptSubmittedV10,
   agentTuiPromptSubmittedV11,
   agentTuiPromptSubmittedUpgradeV10ToV11,
+  agentTuiPromptSubmittedV12,
+  agentTuiPromptSubmittedUpgradeV11ToV12,
   agentTuiRecordActivityV10,
   agentTuiRecordActivityV11,
   agentTuiRecordActivityUpgradeV10ToV11,
+  agentTuiRecordActivityV12,
+  agentTuiRecordActivityUpgradeV11ToV12,
   agentTuiValidateForkProfileV10,
 } from "@traycer/protocol/host/agent/tui/contracts";
 import {
@@ -693,6 +697,7 @@ import {
   providersRefreshProfileStatusDowngradeV20ToV10,
 } from "@traycer/protocol/host/rate-limit/contracts";
 import { epicEditArtboardV10 } from "@traycer/protocol/host/epic/artboard-edit";
+import { epicListHtmlArtifactVersionsV10 } from "@traycer/protocol/host/epic/html-artifact-versions";
 import { epicReadArtifactObjectV10 } from "@traycer/protocol/host/epic/artifact-objects";
 import {
   chatMcpAppCallToolV10,
@@ -7817,7 +7822,7 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
   },
   "agent.tui.recordActivity": {
     1: {
-      latestMinor: 1,
+      latestMinor: 2,
       versions: {
         0: {
           contract: agentTuiRecordActivityV10,
@@ -7826,6 +7831,10 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
         1: {
           contract: agentTuiRecordActivityV11,
           upgradeFromPreviousVersion: agentTuiRecordActivityUpgradeV10ToV11,
+        },
+        2: {
+          contract: agentTuiRecordActivityV12,
+          upgradeFromPreviousVersion: agentTuiRecordActivityUpgradeV11ToV12,
         },
       },
       downgradePathsFromLatest: {},
@@ -7841,7 +7850,7 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
   // Mirrors `agent.tui.validateForkProfile`'s degrade strategy above.
   "agent.tui.promptSubmitted": {
     1: {
-      latestMinor: 1,
+      latestMinor: 2,
       versions: {
         0: {
           contract: agentTuiPromptSubmittedV10,
@@ -7850,6 +7859,10 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
         1: {
           contract: agentTuiPromptSubmittedV11,
           upgradeFromPreviousVersion: agentTuiPromptSubmittedUpgradeV10ToV11,
+        },
+        2: {
+          contract: agentTuiPromptSubmittedV12,
+          upgradeFromPreviousVersion: agentTuiPromptSubmittedUpgradeV11ToV12,
         },
       },
       downgradePathsFromLatest: {},
@@ -9869,6 +9882,19 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
       latestMinor: 0,
       versions: {
         0: { contract: epicEditArtboardV10, upgradeFromPreviousVersion: null },
+      },
+      downgradePathsFromLatest: {},
+    },
+    degrade: { kind: "unsupported" },
+  },
+  "epic.listHtmlArtifactVersions": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: epicListHtmlArtifactVersionsV10,
+          upgradeFromPreviousVersion: null,
+        },
       },
       downgradePathsFromLatest: {},
     },

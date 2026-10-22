@@ -620,7 +620,15 @@ function openGroupWithTabAndSplit(): void {
     activeItemId: tabItemId(four),
     stripOrder: refs,
     systemTabs: { history: null, settings: null },
-    groups: { g: { name: "Work", color: "#8ab4f8", collapsed: false } },
+    // The account's group: the strip draws no other kind.
+    groups: {
+      g: {
+        name: "Work",
+        color: "#8ab4f8",
+        collapsed: false,
+        organizationOwnerId: "user-1",
+      },
+    },
     customizations: {
       [tabRefKey(one)]: member,
       [tabRefKey(two)]: member,
@@ -706,6 +714,29 @@ function installRevealGeometry(
       }
     },
   };
+}
+
+/**
+ * A tab's colour as the organization projection writes it: straight onto the
+ * layout. There is no client action for it any more - colour belongs to the
+ * account's task appearance.
+ */
+function seedTabColor(ref: TabRef, color: string): void {
+  const key = `${ref.kind}:${ref.id}`;
+  const current = useTabsStore.getState().customizations?.[key];
+  useTabsStore.setState({
+    customizations: {
+      ...useTabsStore.getState().customizations,
+      [key]: {
+        color,
+        icon: current?.icon ?? null,
+        groupId: current?.groupId ?? null,
+        // Stamped, because only the account's projection writes a colour.
+        organizationOwnerId: "user-1",
+      },
+    },
+  });
+  useTabsStore.getState().repair();
 }
 
 describe("<SideTabStrip />", () => {
@@ -1813,9 +1844,7 @@ describe("<SideTabStrip />", () => {
   it("draws a group holding a tab and a split as one block with its header and no colour bars, and folds", async () => {
     openGroupWithTabAndSplit();
     // A member's own colour is kept but not drawn while it is grouped.
-    useTabsStore
-      .getState()
-      .setTabCustomization({ kind: "epic", id: "e-one" }, { color: "#ff0000" });
+    seedTabColor({ kind: "epic", id: "e-one" }, "#ff0000");
     // Two flagged members, so the folded badge has to pick the worst:
     // waiting outranks a failure (S-17).
     indicatorState.value = {
@@ -1876,13 +1905,8 @@ describe("<SideTabStrip />", () => {
   it("draws the rail's group as one column around its header tile and its tiles, with no rings, and leaves an ungrouped tile its ring", async () => {
     openGroupWithTabAndSplit();
     const own = { kind: "epic", id: "e-one" } as const;
-    useTabsStore.getState().setTabCustomization(own, { color: "#ff0000" });
-    useTabsStore
-      .getState()
-      .setTabCustomization(
-        { kind: "epic", id: "e-four" },
-        { color: "#00aa00" },
-      );
+    seedTabColor(own, "#ff0000");
+    seedTabColor({ kind: "epic", id: "e-four" }, "#00aa00");
     useSideTabStripStore.setState({ collapsed: true });
     await renderStrip("/elsewhere", LEFT_STRIP);
 
@@ -1903,7 +1927,7 @@ describe("<SideTabStrip />", () => {
 
   it("keeps a folded group's header tile and badge inside its column", async () => {
     openGroupWithTabAndSplit();
-    useTabsStore.getState().updateGroup("g", { collapsed: true });
+    useTabsStore.getState().setGroupCollapsed("g", true);
     indicatorState.value = {
       epics: { "e-one": { ...NO_FLAGS, pendingApproval: true } },
       chats: {},
@@ -2380,7 +2404,7 @@ describe("<SideTabStrip />", () => {
 
     it("counts a prompt of a task in a collapsed group as that task's own, not a row of its own", async () => {
       openGroupWithTabAndSplit();
-      useTabsStore.getState().updateGroup("g", { collapsed: true });
+      useTabsStore.getState().setGroupCollapsed("g", true);
       indicatorState.value = {
         epics: { "e-one": { ...NO_FLAGS, pendingApproval: true } },
         chats: {},
@@ -2456,12 +2480,7 @@ describe("<SideTabStrip />", () => {
     it("draws the rail's group runs as a column in each section, with no rings, and no column for an ungrouped tile", async () => {
       openGroupWithTabAndSplit();
       isWorking("e-one", "c-one");
-      useTabsStore
-        .getState()
-        .setTabCustomization(
-          { kind: "epic", id: "e-four" },
-          { color: "#00aa00" },
-        );
+      seedTabColor({ kind: "epic", id: "e-four" }, "#00aa00");
       useSideTabStripStore.setState({ collapsed: true });
       await renderStrip("/elsewhere", LEFT_STRIP);
 
@@ -2483,7 +2502,7 @@ describe("<SideTabStrip />", () => {
 
     it("keeps a collapsed group's members in their sections", async () => {
       openGroupWithTabAndSplit();
-      useTabsStore.getState().updateGroup("g", { collapsed: true });
+      useTabsStore.getState().setGroupCollapsed("g", true);
       await renderStrip("/elsewhere", LEFT_STRIP);
 
       expect(screen.getAllByRole("tab")).toHaveLength(4);

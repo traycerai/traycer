@@ -159,6 +159,7 @@ function artifactUnavailable(
 }
 
 export interface SandboxFrameProps {
+  readonly onHtmlZoom?: (scale: number) => void;
   readonly onDoubleClick?: (element: CanvasElement) => void;
   readonly onTextSelection?: (selection: CanvasTextSelection | null) => void;
   readonly onPageError?: (error: CanvasPageError) => void;
@@ -477,6 +478,9 @@ export function SandboxFrame(props: SandboxFrameProps) {
       behavior: "instant",
     });
   });
+  const onHtmlZoom = useEffectEvent((scale: number) =>
+    props.onHtmlZoom?.(scale),
+  );
   const initialInputs = useEffectEvent(() => ({
     source,
     kind,
@@ -634,6 +638,7 @@ export function SandboxFrame(props: SandboxFrameProps) {
       hostVersion: getClientAppVersionLabel(),
       post: (message) => iframe.contentWindow?.postMessage(message, "*"),
       events: {
+        onHtmlZoom,
         onDoubleClick,
         onTextSelection,
         onPageError,

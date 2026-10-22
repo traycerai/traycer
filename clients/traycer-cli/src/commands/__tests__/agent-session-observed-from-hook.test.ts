@@ -77,6 +77,9 @@ describe("buildAgentSessionObservedFromHookCommand", () => {
       harnessId: "claude",
       event: "resync",
       observedHarnessSessionId: "sess-fresh-1",
+      spawnToken: null,
+      turnId: null,
+      inFlight: null,
     });
     expect(result.exitCode).toBe(0);
     expect(result.data).toEqual({ accepted: true, reason: null });
@@ -101,6 +104,9 @@ describe("buildAgentSessionObservedFromHookCommand", () => {
       harnessId: "claude",
       event: "resync",
       observedHarnessSessionId: "sess-flag",
+      spawnToken: null,
+      turnId: null,
+      inFlight: null,
     });
   });
 
@@ -150,6 +156,9 @@ describe("buildAgentSessionObservedFromHookCommand", () => {
       harnessId: "opencode",
       event: "resync",
       observedHarnessSessionId: "ses-oc-fresh-1",
+      spawnToken: null,
+      turnId: null,
+      inFlight: null,
     });
     expect(result.exitCode).toBe(0);
     expect(result.data).toEqual({ accepted: true, reason: null });

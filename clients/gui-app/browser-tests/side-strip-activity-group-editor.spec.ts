@@ -108,7 +108,7 @@ test("opens a task's Edit group… at the label of that task's own block", async
   await openStrip(page, ACTIVITY);
   const block = blockIn(page, "idle");
   await block.getByTestId("tab-epic-fixture-launch").click({ button: "right" });
-  await page.getByText("Tab appearance").click();
+  await page.getByText("Task appearance").click();
 
   await page.getByRole("menuitem", { name: "Edit group…" }).click();
 
@@ -142,7 +142,7 @@ test("opens a rail tile's Edit group… at that tile's own column", async ({
   await column
     .getByTestId("tab-epic-fixture-launch")
     .click({ button: "right" });
-  await page.getByText("Tab appearance").click();
+  await page.getByText("Task appearance").click();
 
   await page.getByRole("menuitem", { name: "Edit group…" }).click();
 

@@ -39,6 +39,7 @@ import { buildCliMarkSourceCommand } from "./commands/cli-mark-source";
 import { buildCliReAnchorCommand } from "./commands/cli-re-anchor";
 import { buildCliUpgradeCommand } from "./commands/cli-upgrade";
 import { buildAgentArchiveCommand } from "./commands/agent-archive";
+import { buildAgentRenameCommand } from "./commands/agent-rename";
 import { buildAgentConfigureCommand } from "./commands/agent-configure";
 import { buildAgentCreateCommand } from "./commands/agent-create";
 import { buildAgentForkCommand } from "./commands/agent-fork";
@@ -3461,6 +3462,29 @@ function registerAgentCommands(
 
   withRunner(
     agent
+      .command("rename", readonlyHidden)
+      .description(
+        "Set the display name of a GUI chat or terminal agent on this host. The name is marked as user-set, so automatic titles never replace it.",
+      )
+      .argument(
+        "<id>",
+        "Full id of the chat or terminal agent to rename. No prefix resolution - the id must be exact.",
+      )
+      .argument(
+        "<name>",
+        "The new display name. Surrounding whitespace is trimmed; a blank name is refused.",
+      ),
+    (_opts, args) =>
+      buildAgentRenameCommand({
+        epicId: null,
+        senderAgentId: null,
+        agentId: expectRequiredPositional(args[0], "agent id"),
+        name: expectRequiredPositional(args[1], "name"),
+      }),
+  );
+
+  withRunner(
+    agent
       .command("send", readonlyHidden)
       .description("Send a prompt to another agent")
       .requiredOption("--to <agentId>", "Receiver agent id")
@@ -3629,14 +3653,21 @@ function registerAgentCommands(
       )
       // Codex's `notify` (the only turn-end edge it exposes) invokes this as the
       // `stop` program and appends its `agent-turn-complete` JSON as a trailing
-      // argv. The stop edge is keyed entirely on the bound agent env, so that
-      // payload is ignored - tolerate it instead of erroring on the extra arg.
+      // argv. The stop reads its `turn-id` from it; anything past it is
+      // tolerated rather than an error.
+      .argument(
+        "[notify-payload]",
+        "Codex notify payload (JSON) appended to the stop program",
+      )
       .allowExcessArguments(true)
       .requiredOption(
         "--provider <provider>",
         "Provider hook firing this call: 'claude', 'codex', or 'opencode'",
       )
-      .requiredOption("--event <event>", "Lifecycle event: 'start' or 'stop'")
+      .requiredOption(
+        "--event <event>",
+        "Lifecycle event: 'start', 'stop', 'idle' or 'started'",
+      )
       .option(
         "--agent-id <id>",
         "TUI agent id whose activity changed (defaults to $TRAYCER_AGENT_ID)",
@@ -3645,7 +3676,7 @@ function registerAgentCommands(
         "--harness-session-id <id>",
         "Provider session id for hooks that run outside per-agent env",
       ),
-    (opts) =>
+    (opts, args) =>
       buildAgentActivityFromHookCommand({
         provider: typeof opts.provider === "string" ? opts.provider : "",
         event: typeof opts.event === "string" ? opts.event : "",
@@ -3655,6 +3686,7 @@ function registerAgentCommands(
           typeof opts.harnessSessionId === "string"
             ? opts.harnessSessionId
             : null,
+        notifyPayload: args[0] ?? null,
       }),
   );
 

@@ -1,5 +1,6 @@
 import type { StripItem } from "@/stores/tabs/layout";
 import {
+  drawnTabGroup,
   stripItemGroupId,
   type TabCustomizations,
   type TabGroup,
@@ -49,7 +50,7 @@ export function stripRowsOf(
       layoutItem === undefined
         ? null
         : stripItemGroupId(layoutItem, customizations);
-    const group = groupId === null ? undefined : groups?.[groupId];
+    const group = drawnTabGroup(groups, groupId);
     const firstInGroup = groupId !== null && previousGroupId !== groupId;
     const membership =
       groupId !== null && group !== undefined ? { groupId, group } : null;

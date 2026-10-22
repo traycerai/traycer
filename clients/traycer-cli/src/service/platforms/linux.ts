@@ -133,7 +133,7 @@ export function createLinuxController(
 export type ProcessRunner = typeof runCommand;
 
 /**
- * Proves the user systemd instance is reachable BEFORE anything is written.
+ * Proves the user systemd instance is reachable BEFORE anything is changed.
  *
  * `systemctl --user` needs a per-user service manager on a session bus, and
  * that is exactly what does not exist on a WSL distro without systemd
@@ -143,10 +143,22 @@ export type ProcessRunner = typeof runCommand;
  * orphan unit file left behind, and a stack trace naming neither systemd
  * nor WSL. Failing here fails with nothing installed and an error that
  * says what to do.
+ *
+ * A restart needs the same proof for the same reason, and had none: its
+ * signal ladder is `systemctl --user kill`, which tolerates a non-zero exit,
+ * so on a box with no user manager it waited out the whole ladder (and with
+ * `--force` killed the host process directly) before the relaunch's
+ * `systemctl --user restart` surfaced the raw bus error as
+ * `E_SERVICE_CONTROL_FAILED`. Nothing could have restarted that host, so the
+ * unit is not signalled. The restart message makes no claim about processes
+ * a caller stopped before reaching here (`host free-port-and-restart` ends
+ * the port owner first), or about a manager lost between the stop leg and the
+ * relaunch.
  */
 async function assertSystemdUserReachable(
   label: ServiceLabel,
   run: ProcessRunner,
+  operation: "install" | "restart",
 ): Promise<void> {
   try {
     await run("systemctl", ["--user", "show-environment"], {
@@ -157,11 +169,28 @@ async function assertSystemdUserReachable(
     });
   } catch (cause) {
     if (isServiceMutationAuthorityError(cause)) throw cause;
+    const wslGuidance =
+      "If this is WSL, enable systemd ('[boot]' / 'systemd=true' in /etc/wsl.conf, then 'wsl --shutdown' from Windows). ";
+    if (operation === "restart") {
+      throw cliError({
+        code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+        message:
+          `the systemd user manager is not reachable, so the ${unitName(label)} service cannot be restarted: ${describeCause(cause)}. ` +
+          wslGuidance +
+          `On a headless machine, log in through a systemd session or enable lingering ('loginctl enable-linger').`,
+        details: {
+          unit: unitName(label),
+          cause: describeCause(cause),
+          userManagerReachable: false,
+        },
+        exitCode: 1,
+      });
+    }
     throw cliError({
       code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
       message:
         `the systemd user manager is not reachable, so the ${unitName(label)} service cannot be installed: ${describeCause(cause)}. ` +
-        `If this is WSL, enable systemd ('[boot]' / 'systemd=true' in /etc/wsl.conf, then 'wsl --shutdown' from Windows). ` +
+        wslGuidance +
         `On a headless machine, log in through a systemd session first. Nothing was installed.`,
       details: { unit: unitName(label), cause: describeCause(cause) },
       exitCode: 1,
@@ -173,7 +202,7 @@ async function installService(
   options: InstallServiceOptions,
   run: ProcessRunner,
 ): Promise<void> {
-  await assertSystemdUserReachable(options.label, run);
+  await assertSystemdUserReachable(options.label, run, "install");
   // Linger BEFORE the install edge, not after the start it outlives. It is
   // the one step here that neither the unit nor its launch depends on, and it
   // can run for its whole 30s: issued after `enable --now`, it held the
@@ -448,6 +477,10 @@ async function stopForRestartService(
   run: ProcessRunner,
   force: boolean,
 ): Promise<RestartStop> {
+  // Before the evidence read and before any signal, `--force` included: its
+  // escalation reaches the host process directly, and a restart that has no
+  // user manager to relaunch it would only leave that host down.
+  await assertSystemdUserReachable(label, run, "restart");
   const graces = restartStopGraces();
   // BEFORE the signal. Captured afterwards, this would read whatever the
   // armed manager has started since, and confirm the death of a process that
@@ -1015,6 +1048,9 @@ async function restartService(
   label: ServiceLabel,
   run: ProcessRunner,
 ): Promise<void> {
+  // Ahead of the spawn edge: a restart job that cannot reach the manager must
+  // not be admitted as a spawn, nor surface the raw bus error.
+  await assertSystemdUserReachable(label, run, "restart");
   // A spawn edge. The restart job's stop half runs AFTER it, so it is inside
   // `SYSTEMCTL_JOB_TIMEOUT_MS` - which is why that, and not the start alone,
   // is this path's spawn-edge bound.

@@ -44,7 +44,7 @@ export function TabGroupChip(props: {
           style={{ "--swatch": group.color } as CSSProperties}
           onClick={(event) => {
             event.preventDefault();
-            actions.updateGroup(groupId, { collapsed: !group.collapsed });
+            actions.setGroupCollapsed(groupId, !group.collapsed);
           }}
         >
           <ChevronRight

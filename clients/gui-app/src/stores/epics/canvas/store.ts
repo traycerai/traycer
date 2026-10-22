@@ -1,3 +1,4 @@
+import type { HtmlArtifactVersionSelection } from "@traycer/protocol/host/epic/html-artifact-versions";
 import { readTabStripLayout } from "@/stores/tabs/store";
 import { captureHeaderLocation } from "@/lib/tab-recovery/header-layout";
 import {
@@ -99,6 +100,7 @@ import {
   toggleSnapshotDiffBundleFileCollapsed,
   rebindPendingBrowserTile,
   updateBrowserTileViewportPreset,
+  updateHtmlArtifactVersion,
   updateCommGraphTileCamera,
   updateCommGraphTileOfficeCamera,
   updateCommGraphTileView,
@@ -566,6 +568,11 @@ export interface EpicCanvasStore {
     requestId: string,
     opened: { readonly sessionId: string; readonly tabId: string },
   ) => boolean;
+  updateHtmlArtifactVersionInTab: (
+    tabId: string,
+    tileInstanceId: string,
+    selection: HtmlArtifactVersionSelection | null,
+  ) => void;
   updateBrowserTileViewportPresetInTab: (
     tabId: string,
     tileInstanceId: string,
@@ -814,6 +821,8 @@ export interface EpicCanvasStore {
 export { createEpicName } from "@/lib/epic-name";
 
 let localPersistenceEnabled = true;
+let browserPersistenceStorage: StateStorage | null = null;
+let browserPersistenceHydrating = false;
 let desktopProjectionBridge: DesktopPerWindowProjectionBridge | null = null;
 let applyingDesktopProjection = false;
 const serializedCanvasByReference = new WeakMap<
@@ -845,15 +854,38 @@ function serializeCanvasByTabIdForLocalPersist(
 }
 
 const epicCanvasStorage: StateStorage = {
-  getItem: (name) => window.localStorage.getItem(name),
+  getItem: (name) =>
+    browserPersistenceStorage === null
+      ? window.localStorage.getItem(name)
+      : browserPersistenceStorage.getItem(name),
   setItem: (name, value) => {
-    if (!localPersistenceEnabled) return;
-    window.localStorage.setItem(name, value);
+    if (!localPersistenceEnabled || browserPersistenceHydrating) return;
+    if (browserPersistenceStorage === null) {
+      window.localStorage.setItem(name, value);
+    } else {
+      return browserPersistenceStorage.setItem(name, value);
+    }
   },
   removeItem: (name) => {
-    window.localStorage.removeItem(name);
+    if (browserPersistenceStorage === null) {
+      window.localStorage.removeItem(name);
+    } else {
+      return browserPersistenceStorage.removeItem(name);
+    }
   },
 };
+
+export function setEpicCanvasBrowserPersistenceStorage(
+  storage: StateStorage | null,
+): void {
+  browserPersistenceStorage = storage;
+}
+
+export function setEpicCanvasBrowserPersistenceHydrating(
+  hydrating: boolean,
+): void {
+  browserPersistenceHydrating = hydrating;
+}
 
 export function setEpicCanvasLocalPersistenceEnabled(enabled: boolean): void {
   localPersistenceEnabled = enabled;
@@ -863,6 +895,10 @@ export function setEpicCanvasDesktopProjectionBridge(
   bridge: DesktopPerWindowProjectionBridge | null,
 ): void {
   desktopProjectionBridge = bridge;
+  if (bridge !== null) {
+    browserPersistenceStorage = null;
+    browserPersistenceHydrating = false;
+  }
   setEpicCanvasLocalPersistenceEnabled(bridge === null);
 }
 
@@ -2186,6 +2222,14 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
             return rebound ? { canvasByTabId } : state;
           });
           return rebound;
+        },
+
+        updateHtmlArtifactVersionInTab: (tabId, tileInstanceId, selection) => {
+          set((state) =>
+            updateTabCanvas(state, tabId, (canvas) =>
+              updateHtmlArtifactVersion(canvas, tileInstanceId, selection),
+            ),
+          );
         },
 
         updateBrowserTileViewportPresetInTab: (

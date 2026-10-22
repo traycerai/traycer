@@ -1,15 +1,20 @@
 import { useCallback, useMemo, useState, type ReactNode } from "react";
+import { Expand } from "lucide-react";
 import type { ToolCallArtifactStamp } from "@traycer/protocol/persistence/epic/content-blocks";
 import {
   useChatAttachmentScope,
   type ChatAttachmentScopeValue,
 } from "@/components/chat/chat-attachment-scope-context";
 import { ArtifactPagesFrame } from "@/components/html-artifact/artifact-pages-frame";
+import { HtmlArtifactDownloadButton } from "@/components/html-artifact/html-artifact-download-button";
 import type { SandboxSource } from "@/components/sandbox/sandbox-frame";
 import { useEpicStore } from "@/hooks/use-epic-store";
+import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
+import { useCoarsePointer } from "@/hooks/ui/use-coarse-pointer";
 import { artifactSourcePathsFor } from "@/lib/artifacts/artifact-object-paths";
 import { useStableOutsideReferenceResolver } from "@/lib/artifacts/use-stable-outside-reference-resolver";
 import { Button } from "@/components/ui/button";
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import type {
   ArtifactProjection,
   ArtifactsSlice,
@@ -18,6 +23,7 @@ import type {
   ArtifactManifest,
   ArtifactReadSpan,
 } from "@/lib/sandbox/artifact-serving";
+import { NO_OUTSIDE_REFERENCE } from "@/lib/sandbox/artifact-serving";
 import { createHostObjectReader } from "@/lib/sandbox/artifact-serving/host-object-reader";
 import type { SandboxSize, SandboxStatus } from "@/lib/sandbox/bridge-host";
 import {
@@ -141,6 +147,7 @@ function ShownArtifact(props: {
     };
   }, [scope.client, scope.epicId, stampedManifest]);
   const resolveOutsideReference = useStableOutsideReferenceResolver(artifacts);
+  const stamped = state.kind === "stamped";
   const treePath = resolved?.treePath;
   const entryPath = resolved?.entryPath;
   const source = useMemo<Extract<
@@ -156,7 +163,9 @@ function ShownArtifact(props: {
       treePath,
       entryPath,
       readSpan,
-      resolveOutsideReference,
+      resolveOutsideReference: stamped
+        ? NO_OUTSIDE_REFERENCE
+        : resolveOutsideReference,
     };
   }, [
     treePath,
@@ -165,6 +174,7 @@ function ShownArtifact(props: {
     manifest,
     readSpan,
     resolveOutsideReference,
+    stamped,
   ]);
   const handleStatus = useCallback(
     (status: SandboxStatus): void => {
@@ -235,6 +245,18 @@ function ShownArtifact(props: {
           onTextSelection={null}
           onFrame={null}
           renderOverlay={null}
+          toolbarControls={
+            <InlineArtifactActions
+              source={source}
+              scope={scope}
+              title={stamp.title}
+              capturedAt={inlineCaptureTime(
+                state.kind === "latest",
+                resolved,
+                stamp,
+              )}
+            />
+          }
         />
       </>
     );
@@ -250,5 +272,75 @@ function ShownArtifact(props: {
     >
       {content}
     </figure>
+  );
+}
+
+function inlineCaptureTime(
+  latest: boolean,
+  location: ArtifactLocation | null,
+  stamp: ToolCallArtifactStamp,
+): number {
+  return latest
+    ? (location?.artifact.head?.capturedAt ?? stamp.manifest.capturedAt)
+    : stamp.manifest.capturedAt;
+}
+
+function InlineArtifactActions(props: {
+  readonly source: Extract<SandboxSource, { kind: "artifact" }>;
+  readonly scope: ChatAttachmentScopeValue;
+  readonly title: string;
+  readonly capturedAt: number;
+}) {
+  const { openTile } = useEpicTileNavigation();
+  const coarsePointer = useCoarsePointer();
+  return (
+    <>
+      <HtmlArtifactDownloadButton
+        source={props.source}
+        title={props.title}
+        hostId={props.scope.hostId}
+      />
+      <TooltipWrapper
+        label="Expand"
+        side="top"
+        sideOffset={undefined}
+        align={undefined}
+      >
+        <Button
+          type="button"
+          variant="ghost"
+          size={coarsePointer ? "icon-touch" : "icon-sm"}
+          aria-label="Expand"
+          onClick={() => {
+            openTile({
+              node: {
+                id: props.source.artifactId,
+                instanceId: crypto.randomUUID(),
+                type: "html",
+                name: props.title,
+                hostId: props.scope.hostId,
+                htmlVersion: {
+                  manifest: {
+                    files: props.source.manifest.files,
+                    capturedAt: props.capturedAt,
+                  },
+                  entryPath: props.source.entryPath,
+                },
+              },
+              target: { epicId: props.scope.epicId },
+              gesture: "explicit",
+              modifiers: null,
+              placement: null,
+              // An existing tile may show another version. Keep this captured
+              // preview intact instead of focusing that tile unchanged.
+              dedupe: false,
+              source: "direct_ui",
+            });
+          }}
+        >
+          <Expand className="size-4" />
+        </Button>
+      </TooltipWrapper>
+    </>
   );
 }

@@ -20,6 +20,13 @@ import { tabItemId, tabRefKey } from "@/stores/tabs/layout";
 import { useTabsStore } from "@/stores/tabs/store";
 import type { TabGroup } from "@/stores/tabs/tab-groups";
 import type { TabRef } from "@/stores/tabs/types";
+import {
+  OrganizationContext,
+  type OrganizationContextValue,
+} from "@/hooks/organization/organization-context";
+import { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
+import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 
 // The editor's "New tab in group" navigates; nothing here is about routing.
 vi.mock("@tanstack/react-router", async (importOriginal) => {
@@ -29,6 +36,7 @@ vi.mock("@tanstack/react-router", async (importOriginal) => {
 });
 
 const GROUP_ID = "g";
+const ORGANIZATION_OWNER_ID = "user-1";
 const QUIET = {
   pendingApproval: false,
   pendingInterview: false,
@@ -37,9 +45,55 @@ const QUIET = {
   pendingFork: false,
 };
 
+/**
+ * The organization this header's group belongs to. A group is the account's -
+ * the editor names and repaints it through the account's command, and offers
+ * Ungroup only for a group the account has - so a header on screen always
+ * has one of these behind it.
+ */
+const ORGANIZATION: OrganizationContextValue = {
+  client: new HostClient<HostRpcRegistry>({
+    registry: hostRpcRegistry,
+    invalidator: { invalidateHostScope: () => undefined },
+    messenger: new MockHostMessenger<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      requestId: () => "request-1",
+      handlers: {},
+    }),
+  }),
+  supported: true,
+  hostSupport: true,
+  userId: ORGANIZATION_OWNER_ID,
+  view: {
+    catalog: [],
+    groups: {
+      version: "1",
+      groups: [
+        { groupId: GROUP_ID, name: "Work", color: "#8ab4f8", position: 0 },
+      ],
+      memberships: [{ taskId: "e-1", groupId: GROUP_ID, position: 0 }],
+    },
+    appearances: [],
+    taskLabels: {},
+    ready: true,
+    authenticationRequired: false,
+    pending: [],
+    failures: [],
+  },
+  register: () => () => undefined,
+  command: () => Promise.resolve(undefined),
+  refresh: () => Promise.resolve(undefined),
+  openDialog: () => undefined,
+};
+
 /** A group with one member tab: the store drops a group that has none. */
 function seedGroup(collapsed: boolean): TabGroup {
-  const group: TabGroup = { name: "Work", color: "#8ab4f8", collapsed };
+  const group: TabGroup = {
+    name: "Work",
+    color: "#8ab4f8",
+    collapsed,
+    organizationOwnerId: ORGANIZATION_OWNER_ID,
+  };
   const member: TabRef = { kind: "epic", id: "e-1" };
   useTabsStore.setState({
     version: 2,
@@ -64,20 +118,22 @@ function renderHeader(input: {
   readonly columnSide: EdgeSide | null;
 }): void {
   render(
-    <ColumnEdgeContext.Provider value={input.columnSide}>
-      <TooltipProvider>
-        <NotificationIndicatorsContext.Provider value={input.indicators}>
-          <SideTabGroupHeader
-            groupId={GROUP_ID}
-            group={input.group}
-            variant={input.variant}
-            memberCount={3}
-            memberEntities={input.memberEntities}
-            onClose={() => undefined}
-          />
-        </NotificationIndicatorsContext.Provider>
-      </TooltipProvider>
-    </ColumnEdgeContext.Provider>,
+    <OrganizationContext.Provider value={ORGANIZATION}>
+      <ColumnEdgeContext.Provider value={input.columnSide}>
+        <TooltipProvider>
+          <NotificationIndicatorsContext.Provider value={input.indicators}>
+            <SideTabGroupHeader
+              groupId={GROUP_ID}
+              group={input.group}
+              variant={input.variant}
+              memberCount={3}
+              memberEntities={input.memberEntities}
+              onClose={() => undefined}
+            />
+          </NotificationIndicatorsContext.Provider>
+        </TooltipProvider>
+      </ColumnEdgeContext.Provider>
+    </OrganizationContext.Provider>,
   );
 }
 
@@ -183,7 +239,12 @@ describe("SideTabGroupHeader", () => {
   });
 
   it("leaves out the name of an unnamed group, keeping the chevron", () => {
-    const group: TabGroup = { name: "", color: "#8ab4f8", collapsed: false };
+    const group: TabGroup = {
+      name: "",
+      color: "#8ab4f8",
+      collapsed: false,
+      organizationOwnerId: ORGANIZATION_OWNER_ID,
+    };
     const member: TabRef = { kind: "epic", id: "e-1" };
     useTabsStore.setState({
       version: 2,

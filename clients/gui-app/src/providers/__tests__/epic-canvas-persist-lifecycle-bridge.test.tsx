@@ -1,9 +1,19 @@
+import "fake-indexeddb/auto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, render, waitFor } from "@testing-library/react";
 import { EpicCanvasPersistLifecycleBridge } from "@/providers/epic-canvas-persist-lifecycle-bridge";
 import { useAuthStore } from "@/stores/auth/auth-store";
-import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
+import {
+  setEpicCanvasBrowserPersistenceHydrating,
+  setEpicCanvasBrowserPersistenceStorage,
+  useEpicCanvasStore,
+} from "@/stores/epics/canvas/store";
 import { epicCanvasKey } from "@/lib/persist";
+import { clear, createStore } from "idb-keyval";
+import {
+  CANVAS_BROWSER_DB_NAME,
+  drainCanvasBrowserStorage,
+} from "@/stores/epics/canvas/canvas-browser-storage";
 
 const markBrowserCanvasHydrated = vi.hoisted(() => vi.fn());
 const browserCanvasHydrated = vi.hoisted(() => ({ value: false }));
@@ -11,6 +21,9 @@ vi.mock("@/lib/tab-sync/browser-canvas-hydration", () => ({
   markBrowserCanvasHydrated: () => {
     browserCanvasHydrated.value = true;
     markBrowserCanvasHydrated();
+  },
+  markBrowserCanvasHydrating: () => {
+    browserCanvasHydrated.value = false;
   },
   isBrowserCanvasHydrated: () => browserCanvasHydrated.value,
 }));
@@ -101,6 +114,8 @@ function persistedEpicTab(
 
 describe("<EpicCanvasPersistLifecycleBridge />", () => {
   beforeEach(() => {
+    // Saved layouts live in IndexedDB; the legacy localStorage seeds below are
+    // adopted into it through the real browser storage.
     window.localStorage.clear();
     browserCanvasHydrated.value = false;
     markBrowserCanvasHydrated.mockClear();
@@ -108,11 +123,18 @@ describe("<EpicCanvasPersistLifecycleBridge />", () => {
     resetEpicCanvasStore();
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     cleanup();
-    window.localStorage.clear();
+    // The adapter keeps one connection for the module's life, so the database
+    // is emptied between tests instead of swapped. Stop routing saves into it
+    // first, so the resets below cannot queue a write that lands in the next test.
+    setEpicCanvasBrowserPersistenceStorage(null);
+    setEpicCanvasBrowserPersistenceHydrating(false);
+    await drainCanvasBrowserStorage();
+    await clear(createStore(CANVAS_BROWSER_DB_NAME, "canvases"));
     resetAuth("signed-out", null);
     resetEpicCanvasStore();
+    window.localStorage.clear();
   });
 
   it("starts on the anonymous persist bucket", () => {
@@ -259,7 +281,9 @@ describe("<EpicCanvasPersistLifecycleBridge />", () => {
 
     await waitFor(() => {
       expect(clearStorageSpy).toHaveBeenCalledTimes(1);
-      expect(setOptionsSpy).toHaveBeenCalledWith({ name: epicCanvasKey(null) });
+      expect(setOptionsSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ name: epicCanvasKey(null) }),
+      );
       expect(window.localStorage.getItem(epicCanvasKey(ALICE_ID))).toBeNull();
       expect(useEpicCanvasStore.persist.getOptions().name).toBe(
         epicCanvasKey(null),

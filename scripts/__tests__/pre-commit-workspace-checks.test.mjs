@@ -70,7 +70,9 @@ function createStub(name, body) {
   return { directory, file };
 }
 
-function runHook({ ci, base, head, affected }) {
+// `githubActions` unset follows `ci`: a real runner sets both, and an agent's
+// laptop shell may set CI alone.
+function runHook({ ci, githubActions, base, head, affected }) {
   const fixture = mkdtempSync(join(tmpdir(), "oss-workspace-checks-root-"));
   const slotDir = mkdtempSync(join(tmpdir(), "oss-workspace-checks-slot-"));
   const callsFile = join(fixture, "calls.bin");
@@ -88,6 +90,8 @@ function runHook({ ci, base, head, affected }) {
   else delete env.WORKSPACE_CHECK_AFFECTED;
   if (ci) env.CI = "true";
   else delete env.CI;
+  if (githubActions ?? ci) env.GITHUB_ACTIONS = "true";
+  else delete env.GITHUB_ACTIONS;
   if (base === undefined) delete env.NX_BASE;
   else env.NX_BASE = base;
   if (head === undefined) delete env.NX_HEAD;
@@ -228,5 +232,20 @@ describe("pre_commit_workspace_checks.sh (OSS, local lane)", () => {
 
     // CI never sources machine-slot.sh, so no lock file is created.
     expect(slotLockFiles).toEqual([]);
+  });
+
+  it("takes the local path when CI is set without GITHUB_ACTIONS", () => {
+    const { result, calls, slotLockFiles } = runHook({
+      ci: true,
+      githubActions: false,
+    });
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(
+      hasArgs(calls, "scripts/lint-changed-files.mjs", "origin/main"),
+    ).toBe(true);
+    expect(hasArgs(calls, "run", "format")).toBe(true);
+    expect(hasArgs(calls, "run", "format:check")).toBe(false);
+    expect(slotLockFiles).toContain("traycer-slot-commit-checks.0.lock");
   });
 });
