@@ -2,8 +2,10 @@ import { describe, expect, it } from "vitest";
 import {
   recordTuiAgentActivityRequestSchema,
   recordTuiAgentActivityRequestSchemaV11,
+  recordTuiAgentActivityRequestSchemaV12,
   type RecordTuiAgentActivityRequestV11,
 } from "@traycer/protocol/host/agent/tui/unary-schemas";
+import { agentTuiRecordActivityUpgradeV11ToV12 } from "@traycer/protocol/host/agent/tui/contracts";
 
 /**
  * Same-major minor projection: when a newer client (canonical @1.1) talks to a
@@ -70,4 +72,87 @@ describe("recordActivity@1.1 → @1.0 request projection", () => {
     );
     expect(result.success).toBe(false);
   });
+});
+
+/**
+ * Same projection one minor up: the idle-evidence fields (`spawnToken`,
+ * `turnId`, `inFlight`) and the `started` / `idle-confirmed` edges arrive in
+ * @1.2. A 1.2 client talking to a 1.1 host strips the fields (projection
+ * succeeds); a 1.2-only edge cannot be represented by the 1.1 event enum
+ * (projection fails, which the CLI turns into a quiet `host-too-old` no-op).
+ */
+function canonicalV12(
+  overrides: Partial<{
+    event: "start" | "stop" | "resync" | "started" | "idle-confirmed";
+    spawnToken: string | null;
+    turnId: string | null;
+    inFlight: { count: number } | null;
+  }>,
+) {
+  return recordTuiAgentActivityRequestSchemaV12.parse({
+    epicId: "epic-1",
+    tuiAgentId: "agent-1",
+    harnessSessionId: null,
+    harnessId: "claude",
+    event: "stop",
+    observedHarnessSessionId: "sess-observed-1",
+    spawnToken: "spawn-1",
+    turnId: "turn-1",
+    inFlight: { count: 2 },
+    ...overrides,
+  });
+}
+
+describe("recordActivity@1.1 → @1.2 upgrade", () => {
+  it("fills spawnToken, turnId and inFlight with null", () => {
+    const upgraded = agentTuiRecordActivityUpgradeV11ToV12.upgradeRequest(
+      canonical({ event: "stop" }),
+    );
+    expect(upgraded).toEqual({
+      epicId: "epic-1",
+      tuiAgentId: "agent-1",
+      harnessSessionId: null,
+      harnessId: "claude",
+      event: "stop",
+      observedHarnessSessionId: "sess-observed-1",
+      spawnToken: null,
+      turnId: null,
+      inFlight: null,
+    });
+  });
+});
+
+describe("recordActivity@1.2 → @1.1 request projection", () => {
+  it.each(["start", "stop"] as const)(
+    "strips spawnToken, turnId and inFlight from a %s edge (projection succeeds)",
+    (event) => {
+      const result = recordTuiAgentActivityRequestSchemaV11.safeParse(
+        canonicalV12({ event }),
+      );
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data).toEqual({
+          epicId: "epic-1",
+          tuiAgentId: "agent-1",
+          harnessSessionId: null,
+          harnessId: "claude",
+          event,
+          observedHarnessSessionId: "sess-observed-1",
+        });
+        expect(result.data).not.toHaveProperty("spawnToken");
+        expect(result.data).not.toHaveProperty("turnId");
+        expect(result.data).not.toHaveProperty("inFlight");
+      }
+    },
+  );
+
+  it.each(["started", "idle-confirmed"] as const)(
+    "rejects the %s edge - a v1.1 host cannot represent it (projection fails)",
+    (event) => {
+      const result = recordTuiAgentActivityRequestSchemaV11.safeParse(
+        canonicalV12({ event }),
+      );
+      expect(result.success).toBe(false);
+    },
+  );
 });
