@@ -65,6 +65,7 @@ import {
   NO_LOCAL_SLASH_COMMANDS,
   useSlashCommands,
 } from "@/hooks/composer/use-slash-commands";
+import { ChatOpencodeLineContext } from "@/hooks/harnesses/chat-opencode-line-context";
 import { createComposerPickerStore } from "@/components/chat/composer/picker/composer-picker-store";
 import { useComposerPickerItems } from "@/components/chat/composer/picker/use-composer-picker-items";
 import {
@@ -221,7 +222,12 @@ interface CatalogFixture {
 function createCatalogFixture(
   handlers: Partial<{
     readonly "agent.gui.listHarnesses": () => ListGuiHarnessesResponse;
-    readonly "agent.gui.listModels": () => ListGuiAgentModelsResponse;
+    readonly "agent.gui.listModels": (
+      params: RequestOfMethod<HostRpcRegistry, "agent.gui.listModels">,
+    ) => ListGuiAgentModelsResponse;
+    readonly "agent.gui.listCommands": (
+      params: RequestOfMethod<HostRpcRegistry, "agent.gui.listCommands">,
+    ) => ListGuiAgentCommandsResponse;
   }>,
 ): CatalogFixture {
   const queryClient = createAppQueryClient();
@@ -2376,5 +2382,120 @@ describe("agent.gui.listCommands is keyed by the selected profile (real hook -> 
       paramsFor("profile-b"),
     ]);
     expect(commandQueries(fixture.queryClient)).toHaveLength(2);
+  });
+});
+
+describe("catalog hooks inside a ChatOpencodeLineContext", () => {
+  afterEach(() => {
+    hostBindingMock.current = null;
+    useSelectionAuthorityStore.getState().reset();
+    cleanup();
+  });
+
+  function lineFixture(): {
+    readonly Wrapper: (props: { readonly children: ReactNode }) => ReactNode;
+    readonly modelParams: Array<
+      RequestOfMethod<HostRpcRegistry, "agent.gui.listModels">
+    >;
+    readonly commandParams: Array<
+      RequestOfMethod<HostRpcRegistry, "agent.gui.listCommands">
+    >;
+    readonly client: HostClient<HostRpcRegistry> | null;
+  } {
+    const modelParams: Array<
+      RequestOfMethod<HostRpcRegistry, "agent.gui.listModels">
+    > = [];
+    const commandParams: Array<
+      RequestOfMethod<HostRpcRegistry, "agent.gui.listCommands">
+    > = [];
+    const fixture = createCatalogFixture({
+      "agent.gui.listModels": (params) => {
+        modelParams.push(params);
+        return modelsResponse(1);
+      },
+      "agent.gui.listCommands": (params) => {
+        commandParams.push(params);
+        return { harnessId: params.harnessId, commands: [] };
+      },
+    });
+    const Wrapper = (props: { readonly children: ReactNode }): ReactNode => (
+      <QueryClientProvider client={fixture.queryClient}>
+        <ChatOpencodeLineContext value={2}>
+          {props.children}
+        </ChatOpencodeLineContext>
+      </QueryClientProvider>
+    );
+    const bound = hostBindingMock.current?.hostClient;
+    return {
+      Wrapper,
+      modelParams,
+      commandParams,
+      client: bound instanceof HostClient ? bound : null,
+    };
+  }
+
+  const ACTIVE = { enabled: true, subscribed: true } as const;
+
+  it("sends the chat's line on listModels and listCommands for opencode", async () => {
+    const fixture = lineFixture();
+    renderHook(
+      () => {
+        useGuiHarnessModelsQuery("opencode", null, ACTIVE);
+        useGuiHarnessCommandsQuery(fixture.client, "opencode", [], {
+          ...ACTIVE,
+          profileId: null,
+        });
+      },
+      { wrapper: fixture.Wrapper },
+    );
+    await waitFor(() => {
+      expect(fixture.modelParams).toHaveLength(1);
+      expect(fixture.commandParams).toHaveLength(1);
+    });
+    expect(fixture.modelParams[0]?.opencodeLine).toBe(2);
+    expect(fixture.commandParams[0]?.opencodeLine).toBe(2);
+  });
+
+  it("sends no line for any other harness", async () => {
+    const fixture = lineFixture();
+    renderHook(
+      () => {
+        useGuiHarnessModelsQuery("claude", null, ACTIVE);
+        useGuiHarnessCommandsQuery(fixture.client, "claude", [], {
+          ...ACTIVE,
+          profileId: null,
+        });
+      },
+      { wrapper: fixture.Wrapper },
+    );
+    await waitFor(() => {
+      expect(fixture.modelParams).toHaveLength(1);
+      expect(fixture.commandParams).toHaveLength(1);
+    });
+    expect(Object.hasOwn(fixture.modelParams[0] ?? {}, "opencodeLine")).toBe(
+      false,
+    );
+    expect(Object.hasOwn(fixture.commandParams[0] ?? {}, "opencodeLine")).toBe(
+      false,
+    );
+  });
+
+  it("sends no line outside a ChatOpencodeLineContext", async () => {
+    const modelParams: Array<
+      RequestOfMethod<HostRpcRegistry, "agent.gui.listModels">
+    > = [];
+    const fixture = createCatalogFixture({
+      "agent.gui.listModels": (params) => {
+        modelParams.push(params);
+        return modelsResponse(1);
+      },
+    });
+    renderHook(() => useGuiHarnessModelsQuery("opencode", null, ACTIVE), {
+      wrapper: fixture.Wrapper,
+    });
+    await waitFor(() => {
+      expect(modelParams).toHaveLength(1);
+    });
+    expect(Object.hasOwn(modelParams[0] ?? {}, "opencodeLine")).toBe(false);
   });
 });

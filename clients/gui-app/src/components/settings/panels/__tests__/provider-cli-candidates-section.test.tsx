@@ -5,6 +5,7 @@ import type {
   ProviderCliCandidate,
   ProviderCliState,
   ProviderManagedInstallState,
+  ProviderManagedLine,
   ProviderManagedVersions,
   ProviderNextRunBinary,
   ProviderSelection,
@@ -1699,5 +1700,157 @@ describe("ProviderCliCandidatesSection: macOS requirement", () => {
       refusedVersions,
     );
     expect(mocks.lastVersionManagerProps?.runningMacos).toBe("14.2");
+  });
+});
+
+describe("ProviderCliCandidatesSection: OpenCode Managed lines", () => {
+  function managedLine(line: 1 | 2): ProviderManagedLine {
+    return {
+      line,
+      candidate: bundledCandidate({
+        path: `/store/opencode${String(line)}/bin`,
+        version: line === 1 ? "1.14.0" : "2.1.2",
+        available: true,
+      }),
+      packId: line === 1 ? "opencode" : "opencode2",
+      managedInstallState: { status: "installed", version: "x" },
+      managedVersions: null,
+      managedVersionsUnavailable: null,
+    };
+  }
+
+  function opencodeState(args: {
+    readonly selected: ProviderSelection;
+    readonly withLines: boolean;
+    readonly candidates: readonly ProviderCliCandidate[];
+  }): ProviderCliState {
+    const base = providerState({
+      providerId: "opencode",
+      selected: args.selected,
+      candidates: args.candidates,
+    });
+    return args.withLines
+      ? { ...base, managedLines: [managedLine(1), managedLine(2)] }
+      : base;
+  }
+
+  function radios(): readonly HTMLInputElement[] {
+    return screen.getAllByRole("radio");
+  }
+
+  it("lists Managed 2.x first with the Default badge and Managed 1.x second", () => {
+    renderSection(
+      opencodeState({
+        selected: { kind: "bundled" },
+        withLines: true,
+        candidates: [bundledCandidate({ available: true })],
+      }),
+    );
+    expect(radios().map((radio) => radio.getAttribute("aria-label"))).toEqual([
+      "Select Managed 2.x",
+      "Select Managed 1.x",
+    ]);
+    expect(screen.getAllByText("Default")).toHaveLength(1);
+    const defaultRow = screen.getByText("Managed 2.x").parentElement;
+    expect(defaultRow?.textContent).toContain("Default");
+    expect(
+      screen.getByText("Managed 1.x").parentElement?.textContent,
+    ).not.toContain("Default");
+  });
+
+  it("selects Managed 2.x for a stored plain bundled selection", () => {
+    renderSection(
+      opencodeState({
+        selected: { kind: "bundled" },
+        withLines: true,
+        candidates: [bundledCandidate({ available: true })],
+      }),
+    );
+    expect(radios().map((radio) => radio.checked)).toEqual([true, false]);
+  });
+
+  it("selects the line a stored selection names", () => {
+    renderSection(
+      opencodeState({
+        selected: { kind: "bundled", line: 1 },
+        withLines: true,
+        candidates: [bundledCandidate({ available: true })],
+      }),
+    );
+    expect(radios().map((radio) => radio.checked)).toEqual([false, true]);
+  });
+
+  it("sends the line when a Managed row is picked", () => {
+    renderSection(
+      opencodeState({
+        selected: { kind: "bundled" },
+        withLines: true,
+        candidates: [bundledCandidate({ available: true })],
+      }),
+    );
+    fireEvent.click(screen.getByLabelText("Select Managed 1.x"));
+    expect(mocks.setSelectionMutate).toHaveBeenCalledTimes(1);
+    expect(mocks.setSelectionMutate.mock.calls[0]?.[0]).toEqual({
+      providerId: "opencode",
+      selection: { kind: "bundled", line: 1 },
+    });
+  });
+
+  it("keeps a single row without managedLines (an older host)", () => {
+    renderSection(
+      opencodeState({
+        selected: { kind: "bundled" },
+        withLines: false,
+        candidates: [bundledCandidate({ available: true })],
+      }),
+    );
+    expect(radios()).toHaveLength(1);
+    expect(screen.queryByText("Default")).toBeNull();
+    expect(screen.queryByText(/existing chats keep the line/u)).toBeNull();
+  });
+
+  it("keeps a single row for a sibling provider", () => {
+    renderSection(
+      providerState({
+        providerId: "traycer",
+        selected: { kind: "bundled" },
+        candidates: [bundledCandidate({ available: true })],
+      }),
+    );
+    expect(radios()).toHaveLength(1);
+    expect(screen.queryByText("Default")).toBeNull();
+  });
+
+  it("says a PATH 2.x binary runs through Managed 2.x", () => {
+    renderSection(
+      opencodeState({
+        selected: { kind: "bundled" },
+        withLines: true,
+        candidates: [
+          pathCandidate({ path: "/usr/local/bin/opencode", version: "2.0.5" }),
+        ],
+      }),
+    );
+    const info = screen.getByLabelText(
+      "Why this PATH binary is not used automatically",
+    );
+    expect(tooltipTextNear(info)).toContain(
+      "Traycer runs OpenCode 2 through Managed 2.x.",
+    );
+  });
+
+  it("says nothing about a PATH 1.x binary", () => {
+    renderSection(
+      opencodeState({
+        selected: { kind: "bundled" },
+        withLines: true,
+        candidates: [
+          pathCandidate({ path: "/usr/local/bin/opencode", version: "1.14.0" }),
+        ],
+      }),
+    );
+    expect(
+      screen.queryByLabelText("Why this PATH binary is not used automatically"),
+    ).toBeNull();
   });
 });

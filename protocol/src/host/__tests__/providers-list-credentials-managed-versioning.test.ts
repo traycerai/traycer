@@ -3,6 +3,7 @@ import {
   hostRpcRegistry,
   providersListV104,
   providersListV105,
+  providersListV106,
 } from "@traycer/protocol/host/registry";
 import {
   providersListResponseSchema,
@@ -54,5 +55,80 @@ describe("providers.list frozen 10.4 response", () => {
     });
     expect(Object.hasOwn(parsed, "credentialsManagedInAccount")).toBe(false);
     expect(parsed.providers).toEqual([]);
+  });
+});
+
+const managedLine = {
+  line: 1,
+  candidate: {
+    kind: "bundled",
+    path: "",
+    version: null,
+    available: true,
+    versionPending: false,
+  },
+  packId: "opencode",
+  managedInstallState: null,
+  managedVersions: null,
+  managedVersionsUnavailable: null,
+};
+
+function opencodeRow(extra: Record<string, unknown>) {
+  return {
+    providerId: "opencode",
+    enabled: true,
+    disabledBy: null,
+    selected: { kind: "bundled", line: 1 },
+    candidates: [],
+    auth: { status: "unknown", badgeText: null, label: null, detail: null },
+    authPending: false,
+    checkedAt: null,
+    apiKey: { supported: false, configured: false, source: null },
+    terminalAgentArgs: "",
+    envOverrides: [],
+    loginCapability: null,
+    availabilityPending: false,
+    nativeCapabilities: {
+      supportedTabs: ["general", "env", "usage"],
+      mcp: null,
+      plugins: null,
+      skills: null,
+    },
+    ...extra,
+  };
+}
+
+describe("providers.list@10.6 managedLines and selected.line", () => {
+  const payload = {
+    providers: [
+      opencodeRow({
+        managedLines: [managedLine, { ...managedLine, line: 2 }],
+      }),
+    ],
+  };
+
+  it("registers 10.6 over the 10.5 preimage", () => {
+    const line = hostRpcRegistry["providers.list"][10];
+    expect(line.versions[6].contract).toBe(providersListV106);
+    expect(line.versions[5].contract).toBe(providersListV105);
+  });
+
+  it("keeps managedLines and selected.line at 10.6", () => {
+    const row = providersListV106.responseSchema.parse(payload).providers[0];
+    expect(row?.managedLines?.map((entry) => entry.line)).toEqual([1, 2]);
+    expect(row?.selected).toEqual({ kind: "bundled", line: 1 });
+  });
+
+  it("strips both at the 10.5 re-parse", () => {
+    const row = providersListV105.responseSchema.parse(payload).providers[0];
+    expect(row !== undefined && Object.hasOwn(row, "managedLines")).toBe(false);
+    expect(row?.selected).toEqual({ kind: "bundled" });
+  });
+
+  it("reads a malformed managedLines as empty", () => {
+    const row = providersListV106.responseSchema.parse({
+      providers: [opencodeRow({ managedLines: "nope" })],
+    }).providers[0];
+    expect(row?.managedLines).toEqual([]);
   });
 });
