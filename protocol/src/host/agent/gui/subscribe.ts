@@ -6162,15 +6162,15 @@ const chatSubscribeWindowedSnapshotServerFrameSchemaOpenHarness = lazySchema(
     }),
 );
 
-const chatSubscribeWindowedSnapshotServerFrameSchemaOpenHarnessV134 = lazySchema(
-  () =>
+const chatSubscribeWindowedSnapshotServerFrameSchemaOpenHarnessV134 =
+  lazySchema(() =>
     z.object({
       kind: z.literal("snapshot"),
       ...textFrameFields,
       ...chatReferenceFields,
       snapshot: openChatWindowedSnapshotSchema,
     }),
-);
+  );
 
 const chatSubscribeAccumulatedChangesServerFrameSchema = lazySchema(() =>
   z.object({

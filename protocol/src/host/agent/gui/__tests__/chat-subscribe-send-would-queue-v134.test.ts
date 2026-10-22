@@ -160,7 +160,10 @@ function withBit(
   if (surface.name === "snapshot") {
     return {
       ...frame,
-      snapshot: { ...asRecord(frame.snapshot, "snapshot"), sendWouldQueue: bit },
+      snapshot: {
+        ...asRecord(frame.snapshot, "snapshot"),
+        sendWouldQueue: bit,
+      },
     };
   }
   return { ...frame, sendWouldQueue: bit };
@@ -209,19 +212,22 @@ describe("chat.subscribe@1.34 carries sendWouldQueue", () => {
 });
 
 describe("the live full snapshot type", () => {
-  it.each([true, false])("keeps %s on chatSnapshotSchema and its frame", (bit) => {
-    expect(
-      chatSnapshotSchema.parse({ ...fullSnapshot, sendWouldQueue: bit })
-        .sendWouldQueue,
-    ).toBe(bit);
-    const frame = chatSubscribeServerFrameSchema.parse({
-      kind: "snapshot",
-      ...envelope,
-      snapshot: { ...fullSnapshot, sendWouldQueue: bit },
-    });
-    if (frame.kind !== "snapshot") throw new Error("expected snapshot");
-    expect(frame.snapshot.sendWouldQueue).toBe(bit);
-  });
+  it.each([true, false])(
+    "keeps %s on chatSnapshotSchema and its frame",
+    (bit) => {
+      expect(
+        chatSnapshotSchema.parse({ ...fullSnapshot, sendWouldQueue: bit })
+          .sendWouldQueue,
+      ).toBe(bit);
+      const frame = chatSubscribeServerFrameSchema.parse({
+        kind: "snapshot",
+        ...envelope,
+        snapshot: { ...fullSnapshot, sendWouldQueue: bit },
+      });
+      if (frame.kind !== "snapshot") throw new Error("expected snapshot");
+      expect(frame.snapshot.sendWouldQueue).toBe(bit);
+    },
+  );
 
   it("parses without the key", () => {
     expect(chatSnapshotSchema.parse(fullSnapshot).sendWouldQueue).toBe(
