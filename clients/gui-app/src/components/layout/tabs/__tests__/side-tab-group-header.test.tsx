@@ -21,6 +21,26 @@ import { useTabsStore } from "@/stores/tabs/store";
 import type { TabGroup } from "@/stores/tabs/tab-groups";
 import type { TabRef } from "@/stores/tabs/types";
 
+vi.mock("@/hooks/organization/organization-context", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("@/hooks/organization/organization-context")
+    >();
+  return {
+    ...actual,
+    useOrganization: () => ({
+      supported: true,
+      view: {
+        groups: {
+          groups: [{ groupId: GROUP_ID, name: "Work", color: "#8ab4f8" }],
+        },
+        pending: [],
+      },
+      command: vi.fn(),
+    }),
+  };
+});
+
 // The editor's "New tab in group" navigates; nothing here is about routing.
 vi.mock("@tanstack/react-router", async (importOriginal) => {
   const actual =
@@ -39,7 +59,12 @@ const QUIET = {
 
 /** A group with one member tab: the store drops a group that has none. */
 function seedGroup(collapsed: boolean): TabGroup {
-  const group: TabGroup = { name: "Work", color: "#8ab4f8", collapsed };
+  const group: TabGroup = {
+    name: "Work",
+    color: "#8ab4f8",
+    collapsed,
+    organizationOwnerId: "user-test",
+  };
   const member: TabRef = { kind: "epic", id: "e-1" };
   useTabsStore.setState({
     version: 2,

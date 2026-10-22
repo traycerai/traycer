@@ -333,7 +333,14 @@ describe("<TabStrip /> - Home placement", () => {
       activeItemId: tabItemId(refEpic),
       stripOrder: [refEpic, refDraft],
       systemTabs: { history: null, settings: null },
-      groups: { g1: { name: "Work", color: "#336699", collapsed: false } },
+      groups: {
+        g1: {
+          name: "Work",
+          color: "#336699",
+          collapsed: false,
+          organizationOwnerId: "user-test",
+        },
+      },
       customizations: {
         "epic:e-a": { groupId: "g1", color: null, icon: null },
         "draft:draft-1": { groupId: "g1", color: null, icon: null },

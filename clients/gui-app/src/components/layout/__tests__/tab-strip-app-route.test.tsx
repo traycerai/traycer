@@ -79,7 +79,16 @@ vi.mock("@/hooks/chats/use-chat-fork-queries", () => ({
 // This navigation fixture has no live host transport.
 vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
   useHostClientForHostId: () => null,
+  useHostDirectoryEntryForHostId: () => null,
 }));
+vi.mock("@/hooks/host/use-surface-host-stream-binding", () => ({
+  useSurfaceHostStreamBinding: () => null,
+}));
+vi.mock("@/hooks/host/use-pool-tier", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@/hooks/host/use-pool-tier")>();
+  return { ...actual, usePoolTierStreamClient: () => null };
+});
 vi.mock("@/hooks/epic/use-epic-task-pinned-states-query", () => ({
   useEpicTaskPinnedStates: () => new Map(),
   useRetryUnansweredTaskPinReading: () => () => undefined,

@@ -305,7 +305,12 @@ describe("useStripSections", () => {
       splitItem(splitIdle, splitFailed),
     ];
     const groups: TabGroups = {
-      "group-1": { name: "Later", color: "#8ab4f8", collapsed: true },
+      "group-1": {
+        name: "Later",
+        color: "#8ab4f8",
+        collapsed: true,
+        organizationOwnerId: "user-test",
+      },
     };
     __setAgentActivityStateForTests(
       {

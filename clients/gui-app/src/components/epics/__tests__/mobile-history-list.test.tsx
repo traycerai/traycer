@@ -68,6 +68,7 @@ import {
 } from "@/lib/tab-navigation";
 import type { WorktreeHostEntryV12 } from "@traycer/protocol/host/worktree-schemas";
 import type { TaskOrganization } from "@traycer/protocol/host/organization/schemas";
+import type { OrganizationView } from "@traycer/protocol/host/organization/contracts";
 import type { OrganizationDialog } from "@/components/organization/organization-dialogs";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { holdEpicBatchDelete } from "@/hooks/epic/__tests__/hold-epic-batch-delete";
@@ -122,7 +123,7 @@ interface SetEpicPinnedVariables {
 interface StagedOrganization {
   readonly supported: boolean;
   readonly userId: string | null;
-  readonly view: undefined;
+  readonly view: OrganizationView | undefined;
   readonly openDialog: (dialog: OrganizationDialog) => void;
 }
 
@@ -304,11 +305,22 @@ function historyItem(overrides: Partial<HistoryItem>): HistoryItem {
   };
 }
 
-function supportedOrganization(): StagedOrganization {
+function supportedOrganization(withView: boolean): StagedOrganization {
   return {
     supported: true,
     userId: "user-test",
-    view: undefined,
+    view: withView
+      ? {
+          catalog: [],
+          groups: { version: "0", groups: [], memberships: [] },
+          appearances: [],
+          taskLabels: {},
+          ready: true,
+          authenticationRequired: false,
+          pending: [],
+          failures: [],
+        }
+      : undefined,
     openDialog: testState.openOrganizationDialog,
   };
 }
@@ -1220,7 +1232,7 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
 
     it("offers no organization dropdown, and keeps the other rows' controls", async () => {
       seedDeletingAndLiveRows();
-      testState.organization = supportedOrganization();
+      testState.organization = supportedOrganization(true);
       holdEpicBatchDelete(queryClient, ["epic-from-history"]);
       renderPanel("page", "/");
       await screen.findAllByTestId("epics-list-row-card");
@@ -1285,7 +1297,7 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
     });
 
     it("opens its organization chip read-only, and a live row's editable, until the delete settles", async () => {
-      testState.organization = supportedOrganization();
+      testState.organization = supportedOrganization(false);
       testState.items = [
         historyItem({ organization: groupedOrganization("epic-from-history") }),
         historyItem({

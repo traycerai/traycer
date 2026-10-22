@@ -53,7 +53,12 @@ function grouped(
 }
 
 function group(collapsed: boolean): TabGroup {
-  return { name: "Work", color: "#8ab4f8", collapsed };
+  return {
+    name: "Work",
+    color: "#8ab4f8",
+    collapsed,
+    organizationOwnerId: "user-test",
+  };
 }
 
 function ids(items: ReadonlyArray<StripItem>): ReadonlyArray<string> {
