@@ -132,7 +132,7 @@ describe("useProvidersRefreshPackDiscovery response budget", () => {
     // It is not. Edit the row to `12 * 60 * 1000` - a plausible "give it more
     // room" change that forgets the shared constant - and without this line
     // EVERY suite stays green while EVERY real click rejects with "does not
-    // permit response timeout 700000": the mocked-client test still sees the
+    // permit response timeout 740000": the mocked-client test still sees the
     // hook pass the constant, the floor below still passes (720000 > 30000),
     // and the sizing test reads the constant, not the row. Do not remove it
     // again on the grounds that it cannot fail.
