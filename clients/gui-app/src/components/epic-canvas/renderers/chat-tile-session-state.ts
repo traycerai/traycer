@@ -461,18 +461,6 @@ export function userMessageSenderForProfile(
   };
 }
 
-export function plainTextPromptContent(prompt: string): JsonContent {
-  return {
-    type: "doc",
-    content: [
-      {
-        type: "paragraph",
-        content: prompt.length === 0 ? [] : [{ type: "text", text: prompt }],
-      },
-    ],
-  };
-}
-
 function isPendingSendOrHistoryMutation(action: PendingChatAction): boolean {
   return (
     action.action === "send" ||

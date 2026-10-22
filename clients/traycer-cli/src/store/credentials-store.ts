@@ -35,7 +35,7 @@ import { cliCredentialsPath } from "./paths";
 // Lock hold time includes at most one bounded in-lock refresh (~10s, see
 // `refreshOnceAbortable`); the wait budget sits just above it so a competing
 // mutation waits it out rather than failing (matches the desktop store).
-const LOCK_WAIT_MS = 12_000;
+export const CREDENTIALS_LOCK_WAIT_MS = 12_000;
 const LOCK_POLL_INTERVAL_MS = 50;
 const CONTINUATION_RETRY_MS = 1_000;
 // Bounded synchronous re-drive of a commit-failed continuation before exit.
@@ -58,7 +58,7 @@ export function createCliCredentialsStore(): CredentialsMutationStore {
         authnBaseUrl: config.authnBaseUrl,
         clientKind: "cli",
       }),
-    lockWaitMs: LOCK_WAIT_MS,
+    lockWaitMs: CREDENTIALS_LOCK_WAIT_MS,
     lockPollIntervalMs: LOCK_POLL_INTERVAL_MS,
     continuationRetryMs: CONTINUATION_RETRY_MS,
   });

@@ -370,6 +370,8 @@ const LIST_DISPATCH: HostRpcDispatch = {
   requiredHostMethodVersion: null,
   signal: null,
   failFast: false,
+  reauthenticate: "always",
+  idempotencyKey: null,
 };
 
 const AWAIT_DISPATCH_FLOOR: HostRpcDispatch["requiredHostMethodVersion"] = {
@@ -386,6 +388,8 @@ const CANCEL_DISPATCH: HostRpcDispatch = {
   },
   signal: null,
   failFast: true,
+  reauthenticate: "always",
+  idempotencyKey: null,
 };
 
 /** How long a release may hold the command once the sign-in has ended. */
@@ -411,6 +415,8 @@ const RENAME_DISPATCH: HostRpcDispatch = {
   },
   signal: null,
   failFast: false,
+  reauthenticate: "always",
+  idempotencyKey: null,
 };
 
 // ---------------------------------------------------------------------------

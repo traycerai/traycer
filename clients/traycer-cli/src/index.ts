@@ -79,6 +79,7 @@ import {
 } from "./commands/profile-mutations";
 import { buildWorkspaceListCommand } from "./commands/workspace-list";
 import { buildWorktreeCreateCommand } from "./commands/worktree-create";
+import { buildTaskCreateCommand } from "./commands/task-create";
 import { buildWorktreeListCommand } from "./commands/worktree-list";
 import { buildWorktreeDeleteCommand } from "./commands/worktree-delete";
 import {
@@ -919,6 +920,7 @@ function registerCommands(program: Command, agentRolesEnabled: boolean): void {
   registerProfileCommands(program);
   registerWorkspaceCommands(program);
   registerWorktreeCommands(program);
+  registerTaskCommands(program);
   registerAgentCommands(program, agentRolesEnabled);
   registerBotCommands(program);
   registerMonitorCommand(program);
@@ -3120,6 +3122,88 @@ function registerWorktreeCommands(program: Command): void {
         carryUncommittedChanges: opts.carryUncommitted === true,
       }),
   );
+}
+
+// For a person at a shell or a scheduled job: an agent starts a Task with
+// its `traycer_create_task` tool, and the command refuses inside an agent
+// session. Hidden on the readonly surface, where `READONLY_REFUSED_COMMANDS`
+// refuses it too.
+function registerTaskCommands(program: Command): void {
+  const task = program
+    .command("task")
+    .description("Start Tasks from a shell or a scheduled job");
+
+  withRunner(
+    task
+      .command("create", {
+        hidden: resolveAgentCliSurface(readonlyEnv()) === "readonly",
+      })
+      .description(
+        "Start a Task and send its first message. The first agent starts working at once and uses your provider plan.",
+      )
+      .requiredOption("--message <text>", "The first agent's first message")
+      .requiredOption(
+        "--harness <id>",
+        `Harness for the first agent: ${AGENT_FACING_HARNESS_ID_LIST}`,
+      )
+      .requiredOption(
+        "--model <id>",
+        "Model for the first agent. Use 'traycer agent list-harness-models <harness>' to find one.",
+      )
+      .option("--title <title>", "Task title. Omit to have one generated.")
+      .option(
+        "--workspace <path>",
+        "Absolute path of a folder on this machine the Task works in. Repeatable.",
+        collectRepeatedOption,
+        [],
+      )
+      .option(
+        "--repo <owner/repo>",
+        "Repository the Task is about. Repeatable.",
+        collectRepeatedOption,
+        [],
+      )
+      .option(
+        "--reasoning-effort <effort>",
+        "Reasoning effort for supported models",
+      )
+      .option(
+        "--permission-mode <mode>",
+        "Permission mode for the first agent. Omit to use `full_access`.",
+      )
+      .option(
+        "--profile <ambient|id>",
+        "Provider profile: 'ambient' for the provider's CLI login, or a managed profile id from 'traycer profile list'. Omit to use 'ambient'.",
+      )
+      .option(
+        "--idempotency-key <key>",
+        "Start at most one Task for this key within 24 hours: a rerun prints the same ids. Build it from the schedule slot.",
+      ),
+    (opts) =>
+      buildTaskCreateCommand({
+        title: typeof opts.title === "string" ? opts.title : null,
+        message: typeof opts.message === "string" ? opts.message : "",
+        workspaces: stringValues(opts.workspace),
+        repos: stringValues(opts.repo),
+        harness: typeof opts.harness === "string" ? opts.harness : null,
+        model: typeof opts.model === "string" ? opts.model : null,
+        reasoningEffort:
+          typeof opts.reasoningEffort === "string"
+            ? opts.reasoningEffort
+            : null,
+        permissionMode:
+          typeof opts.permissionMode === "string" ? opts.permissionMode : null,
+        profile: typeof opts.profile === "string" ? opts.profile : null,
+        idempotencyKey:
+          typeof opts.idempotencyKey === "string" ? opts.idempotencyKey : null,
+      }),
+  );
+}
+
+function stringValues(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((entry): entry is string => typeof entry === "string")
+    : [];
 }
 
 function registerAgentCommands(

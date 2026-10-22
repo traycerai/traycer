@@ -35,6 +35,30 @@ function readBearer(source: OpenFrameBearerSource): string | null {
 }
 
 /**
+ * Which UNAUTHORIZED failures a recovery refreshes and sends again after.
+ * `"always"`: every one that is not a retryable transient. `"before-request"`:
+ * only a host fatal that ended the call before its request frame (see
+ * {@link hostRejectedBeforeRequest}), for a caller that reads a refusal as
+ * proof that nothing was done - the second send's answer carries no trace of
+ * a first that went out.
+ */
+export type AuthRecoveryScope = "always" | "before-request";
+
+/**
+ * True for a host fatal that ended the call before its request frame was
+ * written, such as the host's refusal of the open frame's bearer. A fatal
+ * after the send carries the same details but is marked as possibly reaching
+ * the host, and a host error envelope carries no fatal details.
+ */
+export function hostRejectedBeforeRequest(error: unknown): boolean {
+  return (
+    error instanceof HostRpcError &&
+    error.fatalDetails !== null &&
+    !mayHaveReachedHost(error)
+  );
+}
+
+/**
  * Wraps an `IHostMessenger` so a `HostRpcError` with `code ===
  * "UNAUTHORIZED"` triggers `auth.revalidateExpectedBearer(authority.bearer)`
  * before the error propagates. The host never refreshes tokens itself - it
@@ -66,6 +90,7 @@ function readBearer(source: OpenFrameBearerSource): string | null {
 export function createAuthAwareMessenger<Registry extends VersionedRpcRegistry>(
   inner: IHostMessenger<Registry>,
   auth: AuthorityBoundAuthRevalidator,
+  scope: AuthRecoveryScope,
 ): IHostMessenger<Registry> {
   const runWithAuthRecovery = async <Response>(
     authority: HostRequestAuthority,
@@ -83,6 +108,9 @@ export function createAuthAwareMessenger<Registry extends VersionedRpcRegistry>(
       // bearer is fine, so revalidating it can't help - rethrow the transient
       // failure and let the caller retry the request instead of churning authn.
       if (cause.fatalDetails?.retryable === true) {
+        throw cause;
+      }
+      if (scope === "before-request" && !hostRejectedBeforeRequest(cause)) {
         throw cause;
       }
       // Every exit below that rethrows `cause` hands on this same object, so
