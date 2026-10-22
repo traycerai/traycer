@@ -8,6 +8,7 @@ import {
   renameTuiAgentRequestSchema,
   renameTuiAgentResponseSchema,
 } from "@traycer/protocol/host/epic/unary-schemas";
+import { isLegacyHost } from "@traycer/protocol/persistence/epic/chat";
 import {
   callHostRpc,
   parseCanonicalHostResponse,
@@ -78,7 +79,10 @@ export function buildAgentRenameCommand(opts: {
         exitCode: 1,
       });
     }
-    if (!target.isLocal) {
+    // A chat migrated from v1.0.0 names the `legacy` sentinel as its origin and
+    // reads `isLocal: false`; the host's rename paths admit it, so only a row
+    // bound to a real other host is refused here.
+    if (!target.isLocal && !isLegacyHost(target.hostId)) {
       throw notLocalError(opts.agentId);
     }
 

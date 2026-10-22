@@ -11,6 +11,7 @@ import { buildAgentRenameCommand } from "../agent-rename";
 import { callHostRpc } from "../../internal/host-rpc";
 import { HostRpcError } from "../../../../shared/host-transport/host-messenger";
 import type { ListAgentsResponse } from "@traycer/protocol/host/agent/shared";
+import { LEGACY_HOST_ID } from "@traycer/protocol/persistence/epic/chat";
 import { noopLogger } from "../../logger";
 import { CLI_ERROR_CODES, CliError } from "../../runner/errors";
 import type { CommandContext } from "../../runner/runner";
@@ -232,6 +233,38 @@ describe("agent rename command function", () => {
     expect(error.message).toContain("chat_1");
     expect(rpcMock).toHaveBeenCalledTimes(1);
     expect(rpcMock).toHaveBeenCalledWith("agent.list", expect.anything());
+  });
+
+  // A chat migrated from v1.0.0 carries `originHostId: "legacy"`, which
+  // `agent.list` reports as `isLocal: false`; the host's own rename paths admit
+  // that sentinel, so the CLI must not read it as another machine.
+  it("renames a legacy-origin chat that agent.list reports as not local", async () => {
+    rpcMock.mockImplementation((method: string) => {
+      if (method === "agent.list") {
+        return Promise.resolve(
+          listResponse([
+            {
+              ...agentRow({
+                id: "chat-legacy",
+                surface: "gui",
+                isLocal: false,
+              }),
+              hostId: LEGACY_HOST_ID,
+            },
+          ]),
+        );
+      }
+      return Promise.resolve({ updated: true });
+    });
+
+    const result = await command({ agentId: "chat-legacy", name: "New" });
+
+    expect(rpcMock).toHaveBeenCalledWith("epic.renameChat", {
+      epicId: "epic_1",
+      chatId: "chat-legacy",
+      title: "New",
+    });
+    expect(result.exitCode).toBe(0);
   });
 
   it("remaps the host's TARGET_NOT_LOCAL refusal to E_AGENT_NOT_LOCAL", async () => {
