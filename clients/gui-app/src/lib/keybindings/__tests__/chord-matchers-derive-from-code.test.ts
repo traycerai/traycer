@@ -201,6 +201,10 @@ const KEYBOARD_KEY_READS: Readonly<Record<string, number>> = {
   // The sandboxed pages forward a press to the app. Both MATCH on `code` and
   // only copy `key` into the forwarded payload beside it.
   "gui-app/src/lib/sandbox/canvas-bootstrap.ts": 1,
+  // A plain page's focused scrollbar thumb scrolls on the named navigation
+  // keys (arrows and Page Up/Down). These are platform navigation keys,
+  // not registered app shortcuts.
+  "gui-app/src/lib/sandbox/html-viewer-bootstrap.ts": 6,
   "gui-app/src/lib/sandbox/sandbox-document.ts": 1,
   // The simulator surface forwards keys to a device by the character they
   // produce, and keeps Tab for the app's own focus order; both are reads of
