@@ -279,12 +279,28 @@ function tasksUngroupedByClose(
  * Takes the tasks out of their groups. The rejection is NOT swallowed here:
  * an individual close waits for this and must not close the tab when the
  * membership could not be removed, which would lose the group it was in.
+ *
+ * An account that cannot take edits at all is refused before anything is
+ * sent. Closing anyway would leave the account believing the task is still
+ * grouped, and sending anyway would wait out a request the preflight is
+ * certain to reject - so the close is held and SAYS why, rather than
+ * borrowing the command's own "couldn't save" toast for a command that was
+ * never attempted.
  */
 function removeTasksFromGroups(
   organization: OrganizationContextValue | null,
   taskIds: readonly string[],
 ): Promise<void> {
   if (organization === null || taskIds.length === 0) return Promise.resolve();
+  if (!organization.supported) {
+    toast.error("This tab can't be closed right now", {
+      description:
+        "Closing it takes the task out of its group, and your account's organization can't be reached from this device yet.",
+    });
+    return Promise.reject(
+      new Error("Organization edits are unavailable on this device."),
+    );
+  }
   return organization.command({
     kind: "groups",
     operations: taskIds.map((taskId) => ({

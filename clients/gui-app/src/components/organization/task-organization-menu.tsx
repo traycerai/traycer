@@ -117,6 +117,7 @@ export function TaskOrganizationMenu(props: {
       </MenuItem>
       <MenuSub>
         <MenuSubTrigger
+          disabled={!canEditOrganization}
           onPointerLeave={(event) => {
             // A form keeps focus while the pointer crosses from its launcher.
             // Radix's normal row-leave behavior focuses the parent menu and

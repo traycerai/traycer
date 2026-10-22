@@ -309,6 +309,10 @@ function installBridge(reopen: () => Promise<void>): void {
             name: "Recovery group",
             color: "#8ab4f8",
             collapsed: false,
+            // The stamp is what makes a group the account's, and only a
+            // stamped group is drawn - so a fixture without it seeds a group
+            // the strip never shows.
+            organizationOwnerId: "browser-recovery-user",
           },
         },
       });

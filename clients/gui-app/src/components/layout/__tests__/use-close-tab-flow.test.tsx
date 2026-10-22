@@ -8,6 +8,7 @@ import {
   waitFor,
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { toast } from "sonner";
 import { useCloseTabFlow } from "@/components/layout/dialogs/use-close-tab-flow";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
@@ -138,6 +139,7 @@ function organizationView(
 }
 
 function resetOrganization(): void {
+  organizationState.context.supported = true;
   organizationState.command.mockReset();
   organizationState.command.mockImplementation(() => Promise.resolve());
   organizationState.setView(organizationView([]));
@@ -718,6 +720,42 @@ describe("useCloseTabFlow", () => {
     });
 
     expect(useEpicCanvasStore.getState().openTabOrder).toContain(tabId);
+  });
+
+  it("holds a grouped task's tab open and says why when the account's organization cannot take the removal", async () => {
+    const tabId = useEpicCanvasStore
+      .getState()
+      .openEpicTab("epic-unreachable", "Unreachable task");
+    organizationState.setView(
+      organizationView([
+        { taskId: "epic-unreachable", groupId: "group-a", position: 0 },
+      ]),
+    );
+    organizationState.context.supported = false;
+    const errorToast = vi.spyOn(toast, "error").mockReturnValue("toast-id");
+
+    try {
+      const { result } = renderHook(() => useCloseTabFlow());
+      act(() => {
+        result.current.requestCloseTab(
+          epicHeaderTab("epic-unreachable", tabId, "Unreachable task"),
+        );
+      });
+      await act(async () => {
+        await Promise.resolve();
+      });
+
+      // Closing anyway would leave the account believing the task is still
+      // grouped, so the tab stays and the removal is never attempted.
+      expect(organizationState.command).not.toHaveBeenCalled();
+      expect(useEpicCanvasStore.getState().openTabOrder).toContain(tabId);
+      expect(errorToast).toHaveBeenCalledOnce();
+      const [title, options] = errorToast.mock.calls[0] ?? [];
+      expect(title).toBe("This tab can't be closed right now");
+      expect(typeof options?.description).toBe("string");
+    } finally {
+      errorToast.mockRestore();
+    }
   });
 
   describe("taking the closed tasks out of their group", () => {
