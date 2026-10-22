@@ -244,7 +244,15 @@ export function TaskOrganizationDropdown(props: {
   readonly title: string;
 }) {
   const organization = useOrganization();
-  if (!organization?.supported) return null;
+  // The same availability question the menu inside answers, asked the same
+  // way. Hiding the trigger on `supported` alone threw away everything that
+  // change was for: a readiness or authorization flap would take the
+  // account's cached groups off screen, and a host too old for the RPC
+  // would show nothing at all rather than saying so. The trigger appears
+  // when the menu has something to put behind it, and not otherwise.
+  if (organization === null) return null;
+  if (organization.view === undefined && organization.hostSupport !== false)
+    return null;
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
