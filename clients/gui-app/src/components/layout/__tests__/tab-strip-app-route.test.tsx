@@ -80,6 +80,21 @@ vi.mock("@/hooks/chats/use-chat-fork-queries", () => ({
 vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
   useHostClientForHostId: () => null,
 }));
+
+/**
+ * The organization provider the shell mounts rides a host stream, to hear a
+ * recovered host and resend a draft tab's group. Resolving either binding
+ * reaches the auth service, which needs the `<HostRuntimeProvider>` this tree
+ * does not build; with no transport there is no stream to report, and the
+ * pool tier resolves to the surface's own client.
+ */
+vi.mock("@/hooks/host/use-surface-host-stream-binding", () => ({
+  useSurfaceHostStreamBinding: () => null,
+}));
+vi.mock("@/hooks/host/use-pool-tier", () => ({
+  usePoolTierHostClient: (surfaceClient: unknown) => surfaceClient,
+  usePoolTierStreamClient: () => null,
+}));
 vi.mock("@/hooks/epic/use-epic-task-pinned-states-query", () => ({
   useEpicTaskPinnedStates: () => new Map(),
   useRetryUnansweredTaskPinReading: () => () => undefined,

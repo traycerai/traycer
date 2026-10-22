@@ -57,8 +57,8 @@ for (const scheme of ["dark", "light"] as const) {
 
     for (const color of palette) {
       await page.evaluate(`(async () => {
-        const { useTabsStore } = await import("/src/stores/tabs/store.ts");
-        useTabsStore.getState().updateGroup("fixture-group", { color: ${JSON.stringify(color)} });
+        const { recolourOrganizationGroup } = await import("/src/__tests__/browser/organization-seed.ts");
+        recolourOrganizationGroup("fixture-group", ${JSON.stringify(color)});
       })()`);
       // The name is set in the same commit as the fill, before paint.
       await expect
@@ -155,11 +155,14 @@ test("seats a collapsed group's status inside its header row, at the trailing ed
   // Delta carries an unread failure; folding a group of it puts that status
   // on the header.
   await page.evaluate(`(async () => {
-    const { useTabsStore } = await import("/src/stores/tabs/store.ts");
-    const actions = useTabsStore.getState();
-    const id = actions.createGroup({ kind: "epic", id: "fixture-delta" });
-    if (id === null) throw new Error("no group");
-    actions.updateGroup(id, { name: "Reading", collapsed: true });
+    const { seedOrganizationGroup } = await import("/src/__tests__/browser/organization-seed.ts");
+    seedOrganizationGroup({
+      groupId: "fixture-reading-group",
+      name: "Reading",
+      color: "#8ab4f8",
+      collapsed: true,
+      refs: [{ kind: "epic", id: "fixture-delta" }],
+    });
   })()`);
   const header = page.locator(
     '[data-testid^="side-tab-group-header-"][data-collapsed="true"]',

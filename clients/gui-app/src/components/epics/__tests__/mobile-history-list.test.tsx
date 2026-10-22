@@ -69,6 +69,7 @@ import {
 import type { WorktreeHostEntryV12 } from "@traycer/protocol/host/worktree-schemas";
 import type { TaskOrganization } from "@traycer/protocol/host/organization/schemas";
 import type { OrganizationDialog } from "@/components/organization/organization-dialogs";
+import type { OrganizationView } from "@traycer/protocol/host/organization/contracts";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { holdEpicBatchDelete } from "@/hooks/epic/__tests__/hold-epic-batch-delete";
 
@@ -121,8 +122,14 @@ interface SetEpicPinnedVariables {
 /** What `useOrganization()` answers while a case has staged a context. */
 interface StagedOrganization {
   readonly supported: boolean;
+  readonly hostSupport: boolean | null;
   readonly userId: string | null;
-  readonly view: undefined;
+  /**
+   * The account's projection. A row's organization controls appear because
+   * the account has an answer to put behind them, so a staged context that
+   * carries no view is one that draws nothing.
+   */
+  readonly view: OrganizationView;
   readonly openDialog: (dialog: OrganizationDialog) => void;
 }
 
@@ -304,11 +311,38 @@ function historyItem(overrides: Partial<HistoryItem>): HistoryItem {
   };
 }
 
-function supportedOrganization(): StagedOrganization {
+const GROUP = { groupId: "group-1", name: "Backend", color: "#445566" };
+
+/**
+ * A signed-in account that takes organization edits, holding `groupedTaskIds`
+ * in one group. The view is what the account answers, so it says the same
+ * thing about those tasks as the rows' own `groupedOrganization` does.
+ */
+function supportedOrganization(
+  groupedTaskIds: ReadonlyArray<string>,
+): StagedOrganization {
   return {
     supported: true,
+    hostSupport: true,
     userId: "user-test",
-    view: undefined,
+    view: {
+      catalog: [],
+      groups: {
+        version: "1",
+        groups: [{ ...GROUP, position: 0 }],
+        memberships: groupedTaskIds.map((taskId, position) => ({
+          taskId,
+          groupId: GROUP.groupId,
+          position,
+        })),
+      },
+      appearances: [],
+      taskLabels: {},
+      ready: true,
+      authenticationRequired: false,
+      pending: [],
+      failures: [],
+    },
     openDialog: testState.openOrganizationDialog,
   };
 }
@@ -318,7 +352,7 @@ function groupedOrganization(taskId: string): TaskOrganization {
   return {
     labels: [],
     appearance: { taskId, version: "0", color: null, icon: null },
-    group: { groupId: "group-1", name: "Backend", color: "#445566" },
+    group: GROUP,
   };
 }
 
@@ -1220,7 +1254,7 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
 
     it("offers no organization dropdown, and keeps the other rows' controls", async () => {
       seedDeletingAndLiveRows();
-      testState.organization = supportedOrganization();
+      testState.organization = supportedOrganization([]);
       holdEpicBatchDelete(queryClient, ["epic-from-history"]);
       renderPanel("page", "/");
       await screen.findAllByTestId("epics-list-row-card");
@@ -1285,7 +1319,10 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
     });
 
     it("opens its organization chip read-only, and a live row's editable, until the delete settles", async () => {
-      testState.organization = supportedOrganization();
+      testState.organization = supportedOrganization([
+        "epic-from-history",
+        "epic-two",
+      ]);
       testState.items = [
         historyItem({ organization: groupedOrganization("epic-from-history") }),
         historyItem({
