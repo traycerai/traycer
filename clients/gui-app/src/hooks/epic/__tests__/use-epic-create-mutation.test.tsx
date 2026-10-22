@@ -13,6 +13,10 @@ import {
 } from "@/lib/cloud-epic-tasks-query";
 import { useEpicCreateForClient } from "@/hooks/epic/use-epic-create-mutation";
 import { useHostClient } from "@/lib/host";
+import {
+  composerHostLabel,
+  createWithoutCloudVerdictMessage,
+} from "@/lib/composer/landing-placement";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import { toast } from "sonner";
 import { hostQueryKeys } from "@/lib/query-keys";
@@ -35,6 +39,7 @@ import {
   defineRpcContract,
   defineVersionedRpcRegistry,
 } from "@traycer/protocol/framework/index";
+import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import type { EpicExistenceVerdict } from "@/lib/epics/epic-existence-poll";
 
 const pollMocks = vi.hoisted(() => ({
@@ -105,6 +110,8 @@ const testState = vi.hoisted(() => ({
   activeHostId: "host-1",
   requestContextUserId: "user-1",
   capturedOptions: null as CapturedCreateOptions | null,
+  directoryEntries: [] as readonly HostDirectoryEntry[],
+  capturedMapDispatchError: null as ((cause: unknown) => unknown) | null,
 }));
 
 vi.mock("@/lib/host", () => ({
@@ -115,10 +122,18 @@ vi.mock("@/lib/host", () => ({
 }));
 
 vi.mock("@/hooks/host/use-host-query", () => ({
-  useHostMutation: (args: { readonly options: CapturedCreateOptions }) => {
+  useHostMutation: (args: {
+    readonly options: CapturedCreateOptions;
+    readonly mapDispatchError: (cause: unknown) => unknown;
+  }) => {
     testState.capturedOptions = args.options;
+    testState.capturedMapDispatchError = args.mapDispatchError;
     return { mutate: vi.fn(), isPending: false };
   },
+}));
+
+vi.mock("@/hooks/host/use-host-directory-list-query", () => ({
+  useHostDirectoryList: () => ({ data: testState.directoryEntries }),
 }));
 
 vi.mock("sonner", () => {
@@ -944,6 +959,94 @@ describe("useEpicCreateForClient seed hold", () => {
       );
       // Never the definite failure: nobody verified the create did not run.
       expect(toastText()).not.toContain("Couldn't create epic.");
+    });
+
+    function createFloorRefusal(): HostMethodVersionUnsatisfiedError {
+      return new HostMethodVersionUnsatisfiedError({
+        requirement: {
+          method: "epic.create",
+          version: { major: 1, minor: 1 },
+        },
+        negotiated: { major: 1, minor: 0 },
+        requestId: "req-floor",
+        method: "epic.create",
+        hostId: "host-1",
+      });
+    }
+
+    function toastFloorRefusal(ctxHostId: string | null): void {
+      const options = renderOptions();
+      const mapDispatchError = testState.capturedMapDispatchError;
+      if (mapDispatchError === null) {
+        throw new Error("expected the dispatch error mapper");
+      }
+      const refused = mapDispatchError(createFloorRefusal());
+      if (!(refused instanceof HostRpcError)) {
+        throw new Error("expected the mapper to return a HostRpcError");
+      }
+      options.onError(refused, chatVariables, {
+        hostId: ctxHostId,
+        userId: "user-1",
+      });
+    }
+
+    it("gives a create refused at the epic.create@1.1 floor the composer's sentence for that device as the toast description", () => {
+      testState.directoryEntries = [
+        {
+          hostId: "host-1",
+          label: "Work Mac",
+          kind: "local",
+          websocketUrl: "ws://127.0.0.1:1/rpc",
+          version: null,
+          transportDialability: "dialable",
+        },
+      ];
+      toastFloorRefusal("host-1");
+
+      expect(toast.error).toHaveBeenCalledWith(
+        "Couldn't create epic.",
+        expect.objectContaining({
+          description: createWithoutCloudVerdictMessage(
+            composerHostLabel(testState.directoryEntries, "host-1"),
+          ),
+        }),
+      );
+      expect(JSON.stringify(vi.mocked(toast.error).mock.calls)).toContain(
+        "Work Mac can't create epics",
+      );
+      expect(pollMocks.pollEpicExistence).not.toHaveBeenCalled();
+    });
+
+    it("names the device the composer's way when the create was dispatched without a host id", () => {
+      testState.directoryEntries = [];
+      toastFloorRefusal(null);
+
+      expect(toast.error).toHaveBeenCalledWith(
+        "Couldn't create epic.",
+        expect.objectContaining({
+          description: createWithoutCloudVerdictMessage(
+            composerHostLabel([], null),
+          ),
+        }),
+      );
+    });
+
+    it("says the sign-in remedy beside the uncertainty when the retry was refused at the epic.create@1.1 floor", async () => {
+      pollMocks.pollEpicExistence.mockResolvedValue("absent");
+      const episodeError = await episodeEndedByRefusal(createFloorRefusal());
+      const options = renderOptions();
+
+      options.onError(episodeError, chatVariables, {
+        hostId: "host-1",
+        userId: "user-1",
+      });
+
+      await vi.waitFor(() => {
+        expect(toastText()).toContain("may or may not have gone through");
+      });
+      expect(toastText()).toContain(
+        "The retry was refused: Traycer couldn't confirm your sign-in on the device that answered. Sign in again, or update that device, then check your epics before trying again.",
+      );
     });
 
     it("says the uncertainty alone when the retry's refusal is itself an unknown outcome", async () => {

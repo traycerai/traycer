@@ -29,13 +29,17 @@ import {
   listTasksRequestSchema,
 } from "@traycer/protocol/host/epic/unary-schemas";
 import type { HostRpcRegistry } from "@/lib/host";
+import { useHostDirectoryList } from "@/hooks/host/use-host-directory-list-query";
 import { useHostMutation } from "@/hooks/host/use-host-query";
 import {
   EPIC_CREATE_TEAM_OWNER_MINOR,
   epicCreateFloor,
   teamCreateRejectionMessage,
 } from "@/lib/epic-create-admission";
-import { createWithoutCloudVerdictMessage } from "@/lib/composer/landing-placement";
+import {
+  composerHostLabel,
+  createWithoutCloudVerdictMessage,
+} from "@/lib/composer/landing-placement";
 import {
   authorizesCloudCapability,
   useAuthStore,
@@ -45,7 +49,9 @@ import type { ListCloudTasksRequest } from "@/lib/cloud-epic-tasks-query";
 import { toast } from "sonner";
 import {
   toastFromHostError,
+  toastHostRefusalWithGuidance,
   toastUnknownOutcomeAfterRefusedRetry,
+  toastUnknownOutcomeWithRetryGuidance,
 } from "@/lib/host-error-toast";
 import {
   createOutcomeIsDecidable,
@@ -110,6 +116,9 @@ export function useEpicCreateForClient(
   CreateEpicMutationContext
 > {
   const queryClient = useQueryClient();
+  // The label the composer's own inline refusal names the device by, so the
+  // toast says the sentence the composer shows for that device.
+  const hostEntries = useHostDirectoryList().data ?? null;
   return useHostMutation<
     HostRpcRegistry,
     "epic.create",
@@ -276,6 +285,16 @@ export function useEpicCreateForClient(
           toast.error(teamRejection);
           return;
         }
+        if (error instanceof CreateWithoutCloudVerdictError) {
+          toastHostRefusalWithGuidance(
+            error,
+            "Couldn't create epic.",
+            createWithoutCloudVerdictMessage(
+              composerHostLabel(hostEntries, ctx?.hostId ?? null),
+            ),
+          );
+          return;
+        }
         // NO LONGER UNCONDITIONAL. "May or may not have gone through" is the
         // right sentence only where the outcome is genuinely unknowable, and
         // now that this create carries `idempotencyKey = epicId` a dropped
@@ -340,6 +359,13 @@ export function useEpicCreateForClient(
  * retry's: the refusal stays true about the retry whatever the poll saw.
  */
 function toastCreateOutcomeUnknown(error: HostRpcError): void {
+  if (
+    error instanceof RetryEpisodeOutcomeUnknownError &&
+    isCreateWithoutCloudVerdictRefusal(error.finalRefusal)
+  ) {
+    toastUnknownOutcomeWithRetryGuidance(CREATE_FLOOR_RETRY_REFUSED_GUIDANCE);
+    return;
+  }
   if (error instanceof RetryEpisodeOutcomeUnknownError) {
     toastUnknownOutcomeAfterRefusedRetry(
       error.finalRefusal,
@@ -922,24 +948,52 @@ function createFloorFor(
 }
 
 /**
+ * The guidance for a retry that reached an older host below the create floor,
+ * said in the outcome-unknown notice's "The retry was refused" line.
+ */
+const CREATE_FLOOR_RETRY_REFUSED_GUIDANCE =
+  "Traycer couldn't confirm your sign-in on the device that answered. Sign in again, or update that device, then check your epics before trying again.";
+
+/**
+ * The transport's pre-send refusal of a create below the cloud-verdict floor.
+ * The team-owner floor is not this one: its line is the one which
+ * `teamCreateRejectionMessage` reads off the same error type.
+ */
+function isCreateWithoutCloudVerdictRefusal(
+  cause: unknown,
+): cause is HostMethodVersionUnsatisfiedError {
+  return (
+    cause instanceof HostMethodVersionUnsatisfiedError &&
+    cause.requirement.version.minor < EPIC_CREATE_TEAM_OWNER_MINOR
+  );
+}
+
+/**
+ * A create refused at the `epic.create@1.1` floor, typed so the toast
+ * recognises it from the refusal itself and says the composer's remedy
+ * ({@link createWithoutCloudVerdictMessage}) rather than the host's message.
+ */
+class CreateWithoutCloudVerdictError extends HostRpcError {
+  constructor(cause: HostMethodVersionUnsatisfiedError) {
+    super({
+      code: "RPC_ERROR",
+      message: cause.message,
+      requestId: cause.requestId,
+      method: "epic.create",
+      fatalDetails: null,
+    });
+    this.name = "CreateWithoutCloudVerdictError";
+  }
+}
+
+/**
  * Re-shapes the transport's pre-send refusal into the copy the composer
  * already shows inline for this condition, so where the refusal is DECIDED
  * moved but what the user reads did not.
  */
 function asCreateWithoutCloudVerdictError(cause: unknown): unknown {
-  if (!(cause instanceof HostMethodVersionUnsatisfiedError)) return cause;
-  // The team-owner floor is not the cloud-verdict one: its line is the one
-  // which `teamCreateRejectionMessage` reads off this same error.
-  if (cause.requirement.version.minor >= EPIC_CREATE_TEAM_OWNER_MINOR) {
-    return cause;
-  }
-  return new HostRpcError({
-    code: "RPC_ERROR",
-    message: createWithoutCloudVerdictMessage("this device"),
-    requestId: cause.requestId,
-    method: "epic.create",
-    fatalDetails: null,
-  });
+  if (!isCreateWithoutCloudVerdictRefusal(cause)) return cause;
+  return new CreateWithoutCloudVerdictError(cause);
 }
 
 /** The slug of a team owner among the person's teams, or `null`. */
