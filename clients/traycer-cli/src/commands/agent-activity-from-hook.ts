@@ -77,8 +77,8 @@ const NO_REPORT: HookActivityReport = { turnId: null, inFlight: null };
  *     start-up): a process start report carrying how much work the new
  *     process already has scheduled - Claude's durable crons in
  *     `<cwd>/.claude/scheduled_tasks.json`, OpenCode's non-idle sessions. A
- *     Claude `SessionStart` that is not a `startup` or `resume` (`/clear`,
- *     `compact`) is no new process and exits quietly.
+ *     Claude `SessionStart` that is not a `startup`, `resume` or `fork`
+ *     (`/clear`, `compact`) is no new process and exits quietly.
  *
  * Every request carries the PTY's `TRAYCER_TERMINAL_SPAWN_TOKEN`, so the host
  * can tell this process's reports from a late one of a process it already
@@ -361,6 +361,12 @@ const claudeNotificationSchema = z.looseObject({
   notification_type: z.string(),
 });
 
+const CLAUDE_PROCESS_START_SOURCES: ReadonlySet<string> = new Set([
+  "startup",
+  "resume",
+  "fork",
+]);
+
 const claudeSessionStartSchema = z.looseObject({
   source: z.string(),
   cwd: z.string().optional(),
@@ -445,12 +451,12 @@ async function processStartReport(
     return { turnId: null, inFlight: openCodeInFlight(payload) };
   }
   // `SessionStart` also fires for `/clear` and `compact`, which start no new
-  // process: only a `startup` or `resume` is a process start.
+  // process: only a `startup`, a `resume` or a `fork` (`--fork-session`, how
+  // a terminal agent is forked) is a process start.
   const sessionStart = claudeSessionStartSchema.safeParse(payload);
   if (
     !sessionStart.success ||
-    (sessionStart.data.source !== "startup" &&
-      sessionStart.data.source !== "resume")
+    !CLAUDE_PROCESS_START_SOURCES.has(sessionStart.data.source)
   ) {
     return "not-a-start";
   }

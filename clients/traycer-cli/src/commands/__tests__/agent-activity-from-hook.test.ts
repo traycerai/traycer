@@ -852,7 +852,7 @@ describe("claude --event started (SessionStart hook)", () => {
     });
   }
 
-  it.each(["startup", "resume"])(
+  it.each(["startup", "resume", "fork"])(
     "counts 0 scheduled tasks when the file is absent (source %s)",
     async (source) => {
       await started(source);
