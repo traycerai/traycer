@@ -3244,7 +3244,9 @@ function collectPendingAnnotationImageHashes(): ReadonlyArray<string> {
     //
     // A managed-command item carries no message at all, and an AGENT-authored
     // prompt carries content but no annotation sidecar - hence both guards.
-    for (const item of state.queue.items) {
+    // The carry owns these crops until the transcript row takes over, even
+    // though the host has already removed the item from its queue.
+    for (const item of queueWithDrainingPrompts(state).items) {
       if (item.kind !== "prompt") continue;
       if (item.message.kind !== "user") continue;
       records.push(...item.message.browserAnnotations);
@@ -3341,7 +3343,8 @@ function collectPendingRestoreContentImageHashes(): ReadonlyArray<string> {
     // images are ordinarily the host's to resolve, so rooting them looks
     // redundant; but a hash whose bytes were never local roots nothing, while
     // guessing wrong the other way deletes bytes a drain still needs.
-    for (const item of state.queue.items) {
+    // A drain releases host queue membership before it releases local bytes.
+    for (const item of queueWithDrainingPrompts(state).items) {
       if (item.kind !== "prompt") continue;
       hashes.push(...blobHashesFromContent(item.message.content));
     }
@@ -3879,6 +3882,29 @@ export function createChatSessionStoreWithNotificationDependencies(
     });
   };
 
+  // The target is chosen by the caller: an owned send's named turn, or the
+  // host turn explicitly targeted by a session-scoped background stop.
+  const sendTurnStopFrame = (input: {
+    readonly set: SendActionInput["set"];
+    readonly get: SendActionInput["get"];
+    readonly clientActionId: string;
+    readonly turnId: string | null;
+  }): string | null =>
+    sendAction({
+      set: input.set,
+      get: input.get,
+      frame: {
+        kind: "stop",
+        hasBinaryPayload: false,
+        epicId: options.epicId,
+        chatId: options.chatId,
+        clientActionId: input.clientActionId,
+        turnId: input.turnId,
+      },
+      pending: basicPending(input.clientActionId, "stop"),
+      pendingUserMessage: null,
+    });
+
   // Phase two of the session-scoped background stop: the actual frame. Split
   // from the store method because it has two dispatch moments - immediately
   // when no turn is running, or from `onTurnStateChanged` once a stopped
@@ -4179,19 +4205,11 @@ export function createChatSessionStoreWithNotificationDependencies(
       if (held === undefined || held === null) return;
       if (state.activeTurn?.userMessageId === held.messageId) {
         rawSet({ heldStop: null });
-        sendAction({
+        sendTurnStopFrame({
           set,
           get,
-          frame: {
-            kind: "stop",
-            hasBinaryPayload: false,
-            epicId: options.epicId,
-            chatId: options.chatId,
-            clientActionId: held.clientActionId,
-            turnId: state.activeTurn.turnId,
-          },
-          pending: basicPending(held.clientActionId, "stop"),
-          pendingUserMessage: null,
+          clientActionId: held.clientActionId,
+          turnId: state.activeTurn.turnId,
         });
       } else {
         const queued = state.queue.items.find(
@@ -10897,42 +10915,11 @@ export function createChatSessionStoreWithNotificationDependencies(
           set({ heldStop: { messageId: pending.messageId, clientActionId } });
           return clientActionId;
         }
-        const frame: ChatOwnerActionFrame = {
-          kind: "stop",
-          hasBinaryPayload: false,
-          epicId: options.epicId,
-          chatId: options.chatId,
-          clientActionId,
-          turnId: get().activeTurn?.turnId ?? null,
-        };
-        return sendAction({
+        return sendTurnStopFrame({
           set,
           get,
-          frame,
-          pending: {
-            clientActionId,
-            action: "stop",
-            queueItemId: null,
-            checkpointId: null,
-            revertArtifacts: null,
-            interviewBlockId: null,
-            interviewDeliveryRetry: null,
-            messageId: null,
-            restore: null,
-            sender: null,
-            settings: null,
-            sentContentHashes: null,
-            restoreWorktreeIntent: null,
-            displayWorktreeIntent: null,
-            messageConfirmedByHost: false,
-            accountContext: null,
-            sentFromHostId: null,
-            deliveryPolicy: null,
-            hashOnlyRetry: false,
-            wireContent: null,
-            createdAt: Date.now(),
-          },
-          pendingUserMessage: null,
+          clientActionId,
+          turnId: state.activeTurn?.turnId ?? null,
         });
       },
       fallbackHoldForChoice: (traversalId) => {
@@ -11147,7 +11134,15 @@ export function createChatSessionStoreWithNotificationDependencies(
           // stop under a live turn (killing the provider mid-turn reads as a
           // crash), so the session-stop frame waits for the turn-settled
           // frame - see `onTurnStateChanged`.
-          const stopSent = get().stopTurn();
+          // This confirmation names the current HOST turn. A separate local
+          // send may still be waiting for admission; its held Stop must not
+          // intercept this session-scoped action.
+          const stopSent = sendTurnStopFrame({
+            set,
+            get,
+            clientActionId: uuidv4(),
+            turnId: state.activeTurn?.turnId ?? null,
+          });
           if (stopSent === null) return null;
           set(() => ({
             pendingBackgroundSessionStop: {

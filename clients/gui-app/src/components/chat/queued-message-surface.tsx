@@ -240,6 +240,24 @@ export function QueuedMessagePanel(props: QueuedMessagePanelProps) {
     items: actionableItems,
     onReorder: props.onReorder,
   });
+  const sortableIndexById = useMemo(
+    () =>
+      new Map<string, number>(
+        reorderDnd.sortableItemIds.map((id, index) => [id, index]),
+      ),
+    [reorderDnd.sortableItemIds],
+  );
+  const displayDropPreview = useMemo(() => {
+    const preview = reorderDnd.dropPreview;
+    if (preview === null) return null;
+    const index =
+      preview.beforeQueueItemId === null
+        ? items.length
+        : items.findIndex(
+            (item) => item.queueItemId === preview.beforeQueueItemId,
+          );
+    return index < 0 ? null : { ...preview, index };
+  }, [items, reorderDnd.dropPreview]);
   const sensors = useSensors(
     useSensor(PointerSensor, {
       activationConstraint: { distance: 5 },
@@ -293,6 +311,7 @@ export function QueuedMessagePanel(props: QueuedMessagePanelProps) {
                 key={item.queueItemId}
                 item={item}
                 index={index}
+                sortableIndex={sortableIndexById.get(item.queueItemId) ?? -1}
                 orderKey={reorderDnd.orderKey}
                 queueStatus={queueStatus}
                 pausedAfterErrorTooltip={pausedAfterErrorTooltip}
@@ -304,7 +323,7 @@ export function QueuedMessagePanel(props: QueuedMessagePanelProps) {
                 editing={props.editingQueueItemId === item.queueItemId}
                 expanded={expandedQueueItemIds.has(item.queueItemId)}
                 onToggleExpanded={toggleExpanded}
-                dropPreview={reorderDnd.dropPreview}
+                dropPreview={displayDropPreview}
                 itemCount={items.length}
                 registerRowElement={registerRowElement}
                 onEdit={props.onEdit}
@@ -709,6 +728,8 @@ export function QueuedMessageHeader(props: {
 const QueuedMessageRow = memo(function QueuedMessageRow(props: {
   readonly item: OpenChatQueuedItem;
   readonly index: number;
+  /** Host-actionable order, excluding display-only carry rows. */
+  readonly sortableIndex: number;
   readonly orderKey: string;
   readonly queueStatus: ChatSessionState["queue"]["status"];
   /**
@@ -739,6 +760,7 @@ const QueuedMessageRow = memo(function QueuedMessageRow(props: {
   const {
     item,
     index,
+    sortableIndex,
     orderKey,
     queueStatus,
     pausedAfterErrorTooltip,
@@ -779,7 +801,7 @@ const QueuedMessageRow = memo(function QueuedMessageRow(props: {
   });
   const rowSortable = useQueuedMessageRowSortable({
     queueItemId: item.queueItemId,
-    index,
+    index: sortableIndex,
     orderKey,
     disabled: !actionState.canReorder,
   });

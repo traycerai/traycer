@@ -2079,6 +2079,105 @@ describe("<ChatTile />", () => {
       expect(workspaceSelectorTestState.hasActiveTurn).toBe(true);
     });
 
+    describe("a docked send the host queues", () => {
+      async function mountDocked() {
+        renderChatTile();
+        await waitForChatTileLoaded();
+        act(() => {
+          chatHarness.callbacks().onTurnStateChanged({
+            kind: "turnStateChanged",
+            hasBinaryPayload: false,
+            epicId: EPIC_ID,
+            chatId: CHAT_ARTIFACT.id,
+            runStatus: "idle",
+            activeTurn: null,
+            turnInProgress: false,
+            sendWouldQueue: true,
+          });
+        });
+        const handle = __getChatSessionRegistryForTests().peek(
+          EPIC_ID,
+          CHAT_ARTIFACT.id,
+          HOST_ID,
+        );
+        if (handle === null) throw new Error("expected chat session handle");
+        act(() => {
+          handle.store.getState().sendMessage({
+            content: PENDING_DRAFT_CONTENT,
+            sender: { type: "user", userId: "owner-1" },
+            settings: SESSION_SETTINGS,
+            attachments: [],
+            deliveryPolicy: "auto",
+            restore: { content: PENDING_DRAFT_CONTENT, browserAnnotations: [] },
+          });
+        });
+        const frame = chatHarness.sent.at(-1);
+        if (frame === undefined || frame.kind !== "send") {
+          throw new Error("expected a send frame");
+        }
+        const item: ChatQueuedItem = {
+          kind: "prompt",
+          queueItemId: `queue-${frame.messageId}`,
+          messageId: frame.messageId,
+          message: {
+            kind: "user",
+            content: PENDING_DRAFT_CONTENT,
+            browserAnnotations: [],
+          },
+          sender: frame.sender,
+          settings: frame.settings,
+          accountContext: frame.accountContext,
+          sentFromHostId: null,
+          delivery: "next_turn",
+          status: "pending",
+          targetTurnId: null,
+          steerRequest: null,
+          fallbackReason: null,
+          createdAt: 1,
+          updatedAt: 1,
+        };
+        const emitQueue = (items: ReadonlyArray<ChatQueuedItem>): void => {
+          act(() => {
+            chatHarness.callbacks().onQueueChanged({
+              kind: "queueChanged",
+              hasBinaryPayload: false,
+              epicId: EPIC_ID,
+              chatId: CHAT_ARTIFACT.id,
+              queue: { status: "running", items: [...items] },
+            });
+          });
+        };
+        return { handle, item, emitQueue };
+      }
+
+      it("stays owner-active while only the draining carry holds the prompt, with no turn named", async () => {
+        const { handle, item, emitQueue } = await mountDocked();
+        emitQueue([item]);
+        emitQueue([]);
+        const state = handle.store.getState();
+        expect(state.drainingQueueItems?.length).toBe(1);
+        expect(state.queue.items).toEqual([]);
+        expect(state.runStatus).toBe("idle");
+        expect(state.pendingTurn).toBeNull();
+        expect(state.activeTurn).toBeNull();
+        expect(state.queueTurnContinuity ?? false).toBe(false);
+
+        await waitFor(() => {
+          expect(workspaceSelectorTestState.isOwnerActive).toBe(true);
+        });
+      });
+
+      it("is not owner-active for a raw queued prompt parked in the dock with no carry", async () => {
+        const { handle, item, emitQueue } = await mountDocked();
+        emitQueue([item]);
+        expect(handle.store.getState().drainingQueueItems ?? []).toEqual([]);
+        expect(handle.store.getState().pendingTurn).toBeNull();
+        await advanceLegendListTime(0);
+
+        expect(workspaceSelectorTestState.isOwnerActive).toBe(false);
+      });
+    });
+
     it("stays locked for visible background work with no turn, without claiming a turn", async () => {
       renderChatTile();
       await waitForChatTileLoaded();
@@ -2414,6 +2513,76 @@ describe("<ChatTile />", () => {
       expect(button(own, "Edit queued message").disabled).toBe(false);
       expect(button(own, "Delete queued message").disabled).toBe(false);
       expect(button(own, "Steer queued message now").disabled).toBe(false);
+    });
+
+    it("lists the activated front prompt above the prompt still queued behind it", async () => {
+      const behind: ChatQueuedItem = {
+        kind: "prompt",
+        queueItemId: "queue-behind",
+        messageId: "message-behind",
+        message: {
+          kind: "user",
+          content: QUEUED_CONTENT,
+          browserAnnotations: [],
+        },
+        sender: { type: "user", userId: "owner-1" },
+        settings: SESSION_SETTINGS,
+        accountContext: { type: "PERSONAL" },
+        sentFromHostId: null,
+        delivery: "next_turn",
+        status: "pending",
+        targetTurnId: null,
+        steerRequest: null,
+        fallbackReason: null,
+        createdAt: 2,
+        updatedAt: 2,
+      };
+      renderChatTile();
+      await waitForChatTileLoaded();
+      act(() => {
+        chatHarness.callbacks().onTurnStateChanged({
+          kind: "turnStateChanged",
+          hasBinaryPayload: false,
+          epicId: EPIC_ID,
+          chatId: CHAT_ARTIFACT.id,
+          runStatus: "running",
+          activeTurn: runningActiveTurn(),
+        });
+      });
+      const handle = __getChatSessionRegistryForTests().peek(
+        EPIC_ID,
+        CHAT_ARTIFACT.id,
+        HOST_ID,
+      );
+      if (handle === null) throw new Error("expected chat session handle");
+      const front = await captureSentPrompt(() => {
+        act(() => {
+          handle.store.getState().sendMessage({
+            content: PENDING_DRAFT_CONTENT,
+            sender: { type: "user", userId: "owner-1" },
+            settings: SESSION_SETTINGS,
+            attachments: [],
+            deliveryPolicy: "auto",
+            restore: { content: PENDING_DRAFT_CONTENT, browserAnnotations: [] },
+          });
+        });
+      });
+      const rowTexts = (): string[] =>
+        screen
+          .getAllByTestId("queued-message-row")
+          .map((row) => row.textContent)
+          .map((text) =>
+            text.includes("pending message") ? "front" : "behind",
+          );
+
+      queue([front.queued, behind]);
+      await frames();
+      expect(rowTexts()).toEqual(["front", "behind"]);
+
+      queue([behind]);
+      await frames();
+
+      expect(rowTexts()).toEqual(["front", "behind"]);
     });
 
     it("ack first, then the queue add, the removal while carried, and the saved row", async () => {

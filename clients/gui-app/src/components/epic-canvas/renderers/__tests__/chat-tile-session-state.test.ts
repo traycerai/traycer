@@ -6,6 +6,7 @@ import type {
   ChatActiveTurn,
   ChatQueueState,
   ChatRunSettings,
+  OpenChatQueuedPromptItem,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { ManagedCommand } from "@traycer/protocol/host/managed-command/unary-schemas";
 import type { AccountContext } from "@traycer/protocol/common/schemas";
@@ -546,31 +547,32 @@ const ACTIVE_TURN: ChatActiveTurn = {
 
 const EMPTY_QUEUE: ChatQueueState = { status: "idle", items: [] };
 
+function promptQueueItems(itemCount: number): OpenChatQueuedPromptItem[] {
+  return Array.from({ length: itemCount }, (_, index) => ({
+    kind: "prompt" as const,
+    queueItemId: `item-${index}`,
+    messageId: `message-${index}`,
+    message: {
+      kind: "user" as const,
+      content: CONTENT,
+      browserAnnotations: [],
+    },
+    sender: { type: "user" as const, userId: "owner-1" },
+    settings: SETTINGS,
+    accountContext: { type: "PERSONAL" as const },
+    sentFromHostId: null,
+    delivery: "next_turn" as const,
+    status: "pending" as const,
+    targetTurnId: null,
+    steerRequest: null,
+    fallbackReason: null,
+    createdAt: 0,
+    updatedAt: 0,
+  }));
+}
+
 function runnableQueue(itemCount: number): ChatQueueState {
-  return {
-    status: "running",
-    items: Array.from({ length: itemCount }, (_, index) => ({
-      kind: "prompt" as const,
-      queueItemId: `item-${index}`,
-      messageId: `message-${index}`,
-      message: {
-        kind: "user" as const,
-        content: CONTENT,
-        browserAnnotations: [],
-      },
-      sender: { type: "user" as const, userId: "owner-1" },
-      settings: SETTINGS,
-      accountContext: { type: "PERSONAL" as const },
-      sentFromHostId: null,
-      delivery: "next_turn" as const,
-      status: "pending" as const,
-      targetTurnId: null,
-      steerRequest: null,
-      fallbackReason: null,
-      createdAt: 0,
-      updatedAt: 0,
-    })),
-  };
+  return { status: "running", items: promptQueueItems(itemCount) };
 }
 
 describe("resolvedTurnStatus - no turnInProgress from the host (older-host fallback heuristic)", () => {
@@ -799,6 +801,7 @@ describe("chatActivityIndicator", () => {
       backgroundItems: [],
       turnInProgress: false,
       managedCommands: [],
+      fatalClose: null,
       ...overrides,
     };
   }
@@ -909,6 +912,83 @@ describe("chatActivityIndicator", () => {
         activityState({ runStatus: "running", queue: runnableQueue(1) }),
       ),
     ).toBe("turn");
+  });
+
+  it("reads turn from Enter on an idle host: a local send owns a turn before any host frame", () => {
+    expect(
+      chatActivityIndicator(
+        activityState({
+          pendingTurn: {
+            messageId: "message-1",
+            sentAt: 1,
+            settings: SETTINGS,
+          },
+        }),
+      ),
+    ).toBe("turn");
+  });
+
+  it("reads turn on an idle host while a Stop is held", () => {
+    expect(
+      chatActivityIndicator(
+        activityState({
+          heldStop: { messageId: "message-1", clientActionId: "stop-1" },
+        }),
+      ),
+    ).toBe("turn");
+  });
+
+  it("reads turn on an idle host across a queue-drain gap (continuity)", () => {
+    expect(
+      chatActivityIndicator(
+        activityState({ queueTurnContinuity: true, queue: runnableQueue(1) }),
+      ),
+    ).toBe("turn");
+  });
+
+  it("reads turn on an idle host for an actual draining carry with no pendingTurn, held Stop or continuity", () => {
+    expect(
+      chatActivityIndicator(
+        activityState({
+          drainingQueueItems: promptQueueItems(1),
+          pendingTurn: null,
+          heldStop: null,
+          queueTurnContinuity: false,
+        }),
+      ),
+    ).toBe("turn");
+  });
+
+  it("reads turn for a carry that sits ahead of a queued prompt on an idle host", () => {
+    expect(
+      chatActivityIndicator(
+        activityState({
+          drainingQueueItems: promptQueueItems(1),
+          queue: runnableQueue(1),
+        }),
+      ),
+    ).toBe("turn");
+  });
+
+  it("still reads null for an idle host whose only queued work is raw and parked in the dock", () => {
+    expect(
+      chatActivityIndicator(
+        activityState({ queue: runnableQueue(1), drainingQueueItems: [] }),
+      ),
+    ).toBeNull();
+  });
+
+  it("still reads null for an idle host with only a parked queue, no continuity and no local obligation", () => {
+    expect(
+      chatActivityIndicator(
+        activityState({
+          queue: { status: "paused", items: runnableQueue(1).items },
+          pendingTurn: null,
+          heldStop: null,
+          queueTurnContinuity: false,
+        }),
+      ),
+    ).toBeNull();
   });
 
   it("keeps the stopping phase on the turn tier", () => {
@@ -1145,6 +1225,55 @@ describe("canModifyChatMessages", () => {
         canAct: true,
         state: gateState({
           pendingUserMessages: [PENDING_USER_MESSAGE],
+        }),
+      }),
+    ).toBe(false);
+  });
+
+  it("denies while a prompt is draining (carried) and another stays queued, before any turn frame names it", () => {
+    expect(
+      canModifyChatMessages({
+        canAct: true,
+        state: gateState({
+          runStatus: "running",
+          turnInProgress: false,
+          pendingTurn: null,
+          heldStop: null,
+          queueTurnContinuity: true,
+          drainingQueueItems: promptQueueItems(1),
+          queue: runnableQueue(1),
+        }),
+      }),
+    ).toBe(false);
+  });
+
+  it("denies an actual draining carry with no continuity latch and a queued prompt behind it", () => {
+    expect(
+      canModifyChatMessages({
+        canAct: true,
+        state: gateState({
+          runStatus: "running",
+          turnInProgress: false,
+          pendingTurn: null,
+          heldStop: null,
+          queueTurnContinuity: false,
+          drainingQueueItems: promptQueueItems(1),
+          queue: runnableQueue(1),
+        }),
+      }),
+    ).toBe(false);
+  });
+
+  it("denies an actual draining carry that is alone (empty raw queue) with no latch", () => {
+    expect(
+      canModifyChatMessages({
+        canAct: true,
+        state: gateState({
+          runStatus: "idle",
+          pendingTurn: null,
+          heldStop: null,
+          queueTurnContinuity: false,
+          drainingQueueItems: promptQueueItems(1),
         }),
       }),
     ).toBe(false);

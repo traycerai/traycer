@@ -328,6 +328,7 @@ import {
 import { FallbackRetryRow } from "@/components/chat/fallback/fallback-retry-row";
 import type { ChatProviderFallbackState } from "@/components/chat/fallback/fallback-state";
 import { composerHasBlockingApprovals } from "./chat-approval-visibility";
+import { chatActivityIndicator } from "@/stores/chats/chat-run-activity";
 import {
   chatTileUiReducer,
   createInitialChatTileUiState,
@@ -2266,6 +2267,12 @@ function useChatTileSessionViewModel(
     }),
     [displayContext, resolveRunProfileLabel],
   );
+  // Read from the full store: its effective activity includes the handoff
+  // carry, even before the next host turn is named.
+  const hasTurnActivity = useStore(
+    handle.store,
+    (session) => chatActivityIndicator(session) === "turn",
+  );
   const activeTurnId = state.activeTurn?.turnId ?? null;
   // The host's run status is narrowed to actual turn work, then augmented
   // with the local send and the composer's queue-drain continuity.
@@ -3482,14 +3489,15 @@ function useChatTileSessionViewModel(
           ownerId: node.id,
           binding: state.worktreeBinding,
           isOwnerActive:
-            activeTurnStatus !== null || composerActiveTurnStatus !== null,
+            activeTurnStatus !== null ||
+            composerActiveTurnStatus !== null ||
+            hasTurnActivity,
           // Distinguishes WHY the owner reads active, for the disabled-remove
           // tooltip wording only (the disable decision itself stays on the
           // broader `isOwnerActive` - a live background Bash/Monitor
           // could still be reading or writing in the folder even with no
-          // foreground turn active). `false` here means it's active purely
-          // because of visible background work, not a turn the "stop" wording
-          // would make sense for.
+          // foreground turn active). A drain handoff can also keep the owner
+          // active before there is an owned turn for the "stop" wording.
           hasActiveTurn: composerActiveTurnStatus !== null,
           ownerLabel: node.name,
           inFlightWorktreeIntent: inFlightChatWorktreeIntent,
@@ -3511,6 +3519,7 @@ function useChatTileSessionViewModel(
       state.snapshotLoaded,
       activeTurnStatus,
       composerActiveTurnStatus,
+      hasTurnActivity,
       clearMissingPathsAfterBindingCommit,
       forkChatOnHost,
       viewTabId,

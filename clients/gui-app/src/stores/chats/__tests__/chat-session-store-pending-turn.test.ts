@@ -6,6 +6,7 @@
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  chatActivityIndicator,
   composerTurnStatus,
   resolvedTurnStatus,
 } from "@/stores/chats/chat-run-activity";
@@ -22,7 +23,10 @@ import {
   createChatSessionStore,
   type ChatSessionStoreHandle,
 } from "@/stores/chats/chat-session-store";
-import { resolveTurnPresentation } from "@/stores/chats/chat-send-state";
+import {
+  queueWithDrainingPrompts,
+  resolveTurnPresentation,
+} from "@/stores/chats/chat-send-state";
 import { IMMEDIATE_STREAM_FLUSH_COORDINATOR } from "@/stores/chats/stream-flush-coordinator";
 import { CHAT_STORE_TEST_ENVIRONMENT } from "@/stores/chats/test-support/chat-store-test-environment";
 
@@ -528,6 +532,49 @@ describe("a send's placement on an older host", () => {
     expect(stateOf(opened).queue.items).toHaveLength(1);
     expect(stateOf(opened).pendingUserMessages).toEqual([]);
     expect(stateOf(opened).pendingTurn).toBeNull();
+  });
+});
+
+describe("a send on an older host while another sender's prompt is carried", () => {
+  function carryRemotePrompt(): Harness {
+    const opened = openHarness(OLDER_HOST_IDLE);
+    emitQueueChanged(opened.callbacks(), [queuedPromptItem("remote-a")]);
+    emitQueueChanged(opened.callbacks(), []);
+    expect(
+      stateOf(opened).drainingQueueItems?.map((item) => item.messageId),
+    ).toEqual(["remote-a"]);
+    expect(stateOf(opened).pendingTurn).toBeNull();
+    expect(stateOf(opened).activeTurn).toBeNull();
+    expect(Object.keys(stateOf(opened).pendingActions)).toEqual([]);
+    return opened;
+  }
+
+  it("docks the send while the carry is the only evidence of the host's turn", () => {
+    const opened = carryRemotePrompt();
+
+    const sent = sendPrompt(opened);
+
+    expect(promptIds(opened)).toEqual([sent.messageId]);
+    expect(stateOf(opened).pendingUserMessages).toEqual([]);
+    expect(stateOf(opened).pendingTurn).toBeNull();
+  });
+
+  it("places the send in the transcript with its own pendingTurn once the host says sendWouldQueue is false", () => {
+    const opened = carryRemotePrompt();
+    emitTurnState(opened.callbacks(), {
+      runStatus: "idle",
+      activeTurn: null,
+      turnInProgress: undefined,
+      sendWouldQueue: false,
+    });
+
+    const sent = sendPrompt(opened);
+
+    expect(stateOf(opened).pendingUserMessages.map((m) => m.messageId)).toEqual(
+      [sent.messageId],
+    );
+    expect(promptIds(opened)).toEqual([]);
+    expectPendingTurn(opened, sent.messageId, null);
   });
 });
 
@@ -1440,6 +1487,44 @@ describe("a fatal stream close with a send still in custody", () => {
     expect(stateOf(opened).pendingTurn).not.toBeNull();
     expect(statusOf(opened)).toBe("running");
   });
+
+  function carriedSend(): { opened: Harness; messageId: string } {
+    const opened = openHarness({ ...IDLE_HOST, sendWouldQueue: true });
+    const sent = sendPrompt(opened);
+    emitQueueChanged(opened.callbacks(), [queuedPromptItem(sent.messageId)]);
+    emitQueueChanged(opened.callbacks(), []);
+    expect(
+      stateOf(opened).drainingQueueItems?.map((item) => item.messageId),
+    ).toEqual([sent.messageId]);
+    return { opened, messageId: sent.messageId };
+  }
+
+  it("a fatal close clears the activity of a carried prompt while the carry stays as custody", () => {
+    const { opened, messageId } = carriedSend();
+    expect(chatActivityIndicator(stateOf(opened))).toBe("turn");
+
+    opened.callbacks().onConnectionStatus("closed", FATAL, null);
+
+    const state = stateOf(opened);
+    expect(state.fatalClose).not.toBeNull();
+    expect(state.pendingTurn).toBeNull();
+    expect(state.heldStop).toBeNull();
+    expect(state.queueTurnContinuity ?? false).toBe(false);
+    expect(state.drainingQueueItems?.map((item) => item.messageId)).toEqual([
+      messageId,
+    ]);
+    expect(chatActivityIndicator(state)).toBeNull();
+  });
+
+  it("a non-fatal reconnect keeps a carried prompt busy", () => {
+    const { opened } = carriedSend();
+
+    opened.callbacks().onConnectionStatus("reconnecting", null, null);
+
+    expect(stateOf(opened).fatalClose).toBeNull();
+    expect(stateOf(opened).drainingQueueItems).toHaveLength(1);
+    expect(chatActivityIndicator(stateOf(opened))).toBe("turn");
+  });
 });
 
 describe("sends buffered across a reconnect, before the first host frame places them", () => {
@@ -1907,5 +1992,131 @@ describe("the host turn clock on a host that publishes turnInProgress but no sen
     vi.setSystemTime(T3);
     hostFrame(opened, runningTurn(sent.messageId, "turn-own"));
     expect(clockOf(opened)).toBe(T1);
+  });
+});
+
+describe("the dock keeps queue order while the front prompt is carried", () => {
+  function displayedIds(opened: Harness): string[] {
+    return queueWithDrainingPrompts(stateOf(opened)).items.flatMap((item) =>
+      item.kind === "prompt" ? [item.messageId] : [],
+    );
+  }
+
+  it("shows the activated front prompt A ahead of the remaining queue [B]", () => {
+    const opened = openHarness({ ...IDLE_HOST, sendWouldQueue: true });
+    const a = sendPrompt(opened);
+    const b = sendPrompt(opened);
+    emitQueueChanged(opened.callbacks(), [
+      queuedPromptItem(a.messageId),
+      queuedPromptItem(b.messageId),
+    ]);
+    expect(displayedIds(opened)).toEqual([a.messageId, b.messageId]);
+
+    emitQueueChanged(opened.callbacks(), [queuedPromptItem(b.messageId)]);
+
+    expect(promptIds(opened)).toEqual([b.messageId]);
+    expect(stateOf(opened).drainingQueueItems?.map((i) => i.messageId)).toEqual(
+      [a.messageId],
+    );
+    expect(displayedIds(opened)).toEqual([a.messageId, b.messageId]);
+  });
+});
+
+describe("the activity indicator from Enter, through the real store", () => {
+  it("reads turn the moment a send owns its turn, with the host still idle, and null before", () => {
+    const opened = openHarness(IDLE_HOST);
+    expect(chatActivityIndicator(stateOf(opened))).toBeNull();
+
+    sendPrompt(opened);
+
+    expect(stateOf(opened).runStatus).toBe("idle");
+    expect(chatActivityIndicator(stateOf(opened))).toBe("turn");
+  });
+
+  it("keeps turn while a Stop is held on an idle host", () => {
+    const opened = openHarness(IDLE_HOST);
+    sendPrompt(opened);
+    stateOf(opened).stopTurn();
+
+    expect(stateOf(opened).heldStop).not.toBeNull();
+    expect(chatActivityIndicator(stateOf(opened))).toBe("turn");
+  });
+});
+
+describe("a session stop while a local send is pending behind another host turn", () => {
+  const GATED_COMMAND = {
+    taskId: "task-gated",
+    kind: "command" as const,
+    title: "codex exec",
+    blockId: "tool-1",
+    parentTaskId: null,
+    scheduledFor: null,
+    individualStopUnavailable: {
+      providerLabel: "Codex",
+      minVersion: "0.146.0",
+    },
+  };
+
+  function turnA(): ChatActiveTurn {
+    return {
+      ...turnFor("message-a", "turn-a"),
+      status: "running",
+    };
+  }
+
+  function hostTurnWithBackground(
+    opened: Harness,
+    activeTurn: ChatActiveTurn | null,
+  ): void {
+    opened.callbacks().onTurnStateChanged({
+      kind: "turnStateChanged",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      runStatus: activeTurn === null ? "idle" : "running",
+      activeTurn,
+      turnInProgress: activeTurn !== null,
+      sendWouldQueue: false,
+      backgroundItems: [GATED_COMMAND],
+    });
+  }
+
+  function pendingBehindTurnA(): { opened: Harness; localMessageId: string } {
+    const opened = openHarness(IDLE_HOST);
+    const local = sendPrompt(opened);
+    hostTurnWithBackground(opened, turnA());
+    expect(stateOf(opened).pendingTurn?.messageId).toBe(local.messageId);
+    expect(stateOf(opened).activeTurn?.userMessageId).toBe("message-a");
+    return { opened, localMessageId: local.messageId };
+  }
+
+  it("stops the current host turn directly, holds nothing for the pending send, and waits for the turn to end before the session stop", () => {
+    const { opened } = pendingBehindTurnA();
+
+    const sent = stateOf(opened).stopBackgroundSession();
+
+    expect(sent).not.toBeNull();
+    const stops = framesOfKind(opened, "stop");
+    expect(stops).toHaveLength(1);
+    expect(stops[0]).toMatchObject({ kind: "stop", turnId: "turn-a" });
+    expect(stateOf(opened).heldStop).toBeNull();
+    expect(stateOf(opened).pendingBackgroundSessionStop).toMatchObject({
+      awaitingTurnEnd: true,
+      turnId: "turn-a",
+    });
+    expect(framesOfKind(opened, "stopBackgroundSession")).toEqual([]);
+
+    hostTurnWithBackground(opened, null);
+
+    expect(framesOfKind(opened, "stopBackgroundSession")).toHaveLength(1);
+  });
+
+  it("the generic Stop in the same state still holds for the pending send and never names turn A", () => {
+    const { opened, localMessageId } = pendingBehindTurnA();
+
+    stateOf(opened).stopTurn();
+
+    expect(framesOfKind(opened, "stop")).toEqual([]);
+    expect(stateOf(opened).heldStop?.messageId).toBe(localMessageId);
   });
 });

@@ -2,11 +2,11 @@ import {
   composerTurnStatus,
   resolvedHostTurnStatus,
 } from "@/stores/chats/chat-run-activity";
+import { hasDrainingQueueItems } from "@/stores/chats/chat-effective-queue";
 import type {
   ChatActiveTurn,
   ChatRunSettings,
   OpenChatQueuedPromptItem,
-  OpenChatQueueState,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import type {
   AcceptedChatAction,
@@ -19,7 +19,7 @@ import {
   isOptimisticQueuedItem,
   optimisticQueuedItemId,
 } from "@/stores/chats/optimistic-queue";
-import { drainingQueuePrompt } from "@/lib/chat/draining-queue-item";
+export { queueWithDrainingPrompts } from "@/stores/chats/chat-effective-queue";
 
 type PresentationSettings = Pick<
   ChatRunSettings,
@@ -38,7 +38,12 @@ export interface PendingTurn {
 export function sendPlacement(
   state: Pick<
     ChatSessionState,
-    "activeTurn" | "turnInProgress" | "queue" | "sendWouldQueue" | "pendingTurn"
+    | "activeTurn"
+    | "turnInProgress"
+    | "queue"
+    | "sendWouldQueue"
+    | "pendingTurn"
+    | "drainingQueueItems"
   >,
 ): "transcript" | "queue" {
   // Local sends can be newer than the host's admission frame. Their custody
@@ -50,7 +55,8 @@ export function sendPlacement(
   }
   return state.activeTurn !== null ||
     state.turnInProgress === true ||
-    state.queue.items.length > 0
+    state.queue.items.length > 0 ||
+    hasDrainingQueueItems(state)
     ? "queue"
     : "transcript";
 }
@@ -103,32 +109,6 @@ function presentationMessageId(
   pending: PendingTurn | null,
 ): string {
   return active?.userMessageId ?? pending?.messageId ?? active?.turnId ?? "";
-}
-
-const dockQueueCache = new WeakMap<
-  OpenChatQueueState,
-  WeakMap<ReadonlyArray<OpenChatQueuedPromptItem>, OpenChatQueueState>
->();
-
-/** The display carry also stays charged to the queue's memory budget. */
-export function queueWithDrainingPrompts(
-  state: Pick<ChatSessionState, "queue" | "drainingQueueItems">,
-): OpenChatQueueState {
-  const held = state.drainingQueueItems;
-  if (held === undefined || held.length === 0) return state.queue;
-  let byHeld = dockQueueCache.get(state.queue);
-  if (byHeld === undefined) {
-    byHeld = new WeakMap();
-    dockQueueCache.set(state.queue, byHeld);
-  }
-  const cached = byHeld.get(held);
-  if (cached !== undefined) return cached;
-  const queue = {
-    ...state.queue,
-    items: [...state.queue.items, ...held.map(drainingQueuePrompt)],
-  };
-  byHeld.set(held, queue);
-  return queue;
 }
 
 type SendAction = PendingChatAction | AcceptedChatAction;

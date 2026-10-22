@@ -16,6 +16,7 @@ import {
   type PendingChatAction,
 } from "@/stores/chats/chat-session-store";
 import { userRowPresence } from "@/stores/chats/transcript-window";
+import { hasDrainingQueueItems } from "@/stores/chats/chat-effective-queue";
 import {
   composerTurnStatus,
   resolvedTurnStatus,
@@ -319,10 +320,14 @@ export function canModifyChatMessages(input: {
     | "pendingTurn"
     | "heldStop"
     | "queueTurnContinuity"
+    | "drainingQueueItems"
     | "pendingActions"
   >;
 }): boolean {
   if (!input.canAct) return false;
+  // A removed prompt has already left queue custody to start its turn. A
+  // later prompt still parked behind it cannot make this a queue-only chat.
+  if (hasDrainingQueueItems(input.state)) return false;
   // Narrowed via `resolvedTurnStatus`, not the raw `runStatus`: the raw value
   // also reads "running" while visible background work outlives the settled
   // turn (Bash `run_in_background` / a subagent / Monitor), which would keep

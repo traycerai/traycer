@@ -1,5 +1,6 @@
 import type { ChatRunStatus } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { ChatSessionState } from "@/stores/chats/chat-session-store";
+import { hasDrainingQueueItems } from "@/stores/chats/chat-effective-queue";
 
 // Pure readings of a chat's run state: whether a turn is genuinely in progress,
 // and whether what keeps the chat non-idle is the agent or only background
@@ -81,11 +82,11 @@ export function resolvedHostTurnStatus(
  * spinner for both left users unable to see whether the agent was really
  * running.
  *
- * `"turn"` wins whenever a genuine turn is active or activating (the host's
- * `turnInProgress`, via {@link resolvedTurnStatus}) — background work running
- * alongside a turn is subsumed by it. A runnable queue also reads `"turn"`:
- * the next prompt is imminent, and the momentary turn-boundary gaps while a
- * queue drains must not flicker the indicator through the background style.
+ * `"turn"` wins for the host's active turn and the local obligations read by
+ * {@link resolvedTurnStatus}. A draining prompt keeps that tier until its
+ * saved row arrives, even if the host's run frame has not caught up. A
+ * runnable queue on a non-idle host also reads `"turn"`: the next prompt is
+ * imminent, so the boundary must not flicker through the background style.
  *
  * Native agent work — a spawned subagent or a workflow fleet still running
  * after the turn ended — also reads `"turn"`: it IS the agent working, just
@@ -109,15 +110,27 @@ export function chatActivityIndicator(
     | "backgroundItems"
     | "turnInProgress"
     | "managedCommands"
+    | "pendingTurn"
+    | "heldStop"
+    | "queueTurnContinuity"
+    | "drainingQueueItems"
+    | "fatalClose"
   >,
 ): ChatActivityIndicator {
   const turnStatus = composerTurnStatus(state.runStatus);
+  // Local custody is newer than the host frame. A draining prompt also keeps
+  // the session warm until its transcript row takes over that custody. A fatal
+  // stream retains the data but cannot make progress until an explicit retry.
+  if (
+    resolvedTurnStatus(state, turnStatus) !== null ||
+    (hasDrainingQueueItems(state) && state.fatalClose === null)
+  )
+    return "turn";
   if (turnStatus === null) {
     return hasRunningManagedCommand(state.managedCommands)
       ? "background"
       : null;
   }
-  if (resolvedTurnStatus(state, turnStatus) !== null) return "turn";
   const isQueueRunnable =
     state.queue.status !== "paused" && state.queue.items.length > 0;
   if (isQueueRunnable) return "turn";
