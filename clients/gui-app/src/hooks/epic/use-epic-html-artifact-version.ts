@@ -4,6 +4,7 @@ import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-m
 import {
   htmlArtifactVersionSelectionSchema,
   htmlArtifactVersionIdentity,
+  type EpicListHtmlArtifactVersionsResponse,
   type HtmlArtifactVersion,
   type HtmlArtifactVersionSelection,
 } from "@traycer/protocol/host/epic/html-artifact-versions";
@@ -22,15 +23,15 @@ export interface HtmlArtifactVersionState {
   /** null means use the live artifact's entry path. */
   readonly entryPath: string | null;
   readonly selectedVersion: HtmlArtifactVersionSelection | null;
+  readonly selectedVersionNumber: number | null;
+  readonly currentVersionNumber: number | null;
+  readonly selectionAvailable: boolean;
   readonly selectVersion: (
     version: HtmlArtifactVersionSelection | null,
   ) => void;
   readonly supported: boolean;
   readonly history: UseQueryResult<
-    {
-      versions: HtmlArtifactVersion[];
-      nextCursor: string | null;
-    },
+    EpicListHtmlArtifactVersionsResponse,
     HostRpcError
   >;
   readonly showOlder: () => void;
@@ -52,6 +53,7 @@ export function useEpicHtmlArtifactVersion(props: {
   );
   const [before, setBefore] = useState<string | undefined>(undefined);
   const selectedVersion = props.node.htmlVersion ?? null;
+  const liveSelection = liveHtmlArtifactSelection(props.artifact);
   const history = useHostQuery({
     client,
     method: "epic.listHtmlArtifactVersions",
@@ -62,18 +64,19 @@ export function useEpicHtmlArtifactVersion(props: {
       limit: 20,
     },
     cacheKeyIdentity: [
-      props.artifact?.head === undefined
+      liveSelection === null
         ? null
-        : htmlArtifactVersionIdentity({
-            manifest: props.artifact.head,
-            entryPath:
-              props.artifact.layout === "file"
-                ? (props.artifact.relativePath ?? props.artifact.folderName)
-                : "index.html",
-          }),
+        : htmlArtifactVersionIdentity(liveSelection),
     ],
-    options: { enabled: supported && props.artifact?.kind === "html" },
+    options: {
+      enabled:
+        supported && viewTabId !== null && props.artifact?.kind === "html",
+    },
   });
+  const selectedVersionNumber = numberForHtmlSelection(
+    selectedVersion,
+    history.data?.versions ?? [],
+  );
   const selectVersion = useCallback(
     (selection: HtmlArtifactVersionSelection | null): void => {
       if (viewTabId === null) return;
@@ -91,11 +94,12 @@ export function useEpicHtmlArtifactVersion(props: {
   );
 
   return {
-    manifest:
-      selectedVersion?.manifest ??
-      (props.artifact?.kind === "html" ? (props.artifact.head ?? null) : null),
+    manifest: selectedVersion?.manifest ?? liveSelection?.manifest ?? null,
     entryPath: selectedVersion?.entryPath ?? null,
     selectedVersion,
+    selectedVersionNumber,
+    currentVersionNumber: history.data?.currentVersionNumber ?? null,
+    selectionAvailable: viewTabId !== null,
     selectVersion,
     supported,
     history,
@@ -107,4 +111,30 @@ export function useEpicHtmlArtifactVersion(props: {
         setBefore(nextCursor);
     },
   };
+}
+
+function liveHtmlArtifactSelection(
+  artifact: ArtifactProjection | null,
+): HtmlArtifactVersionSelection | null {
+  if (artifact?.kind !== "html" || artifact.head === undefined) return null;
+  return {
+    manifest: artifact.head,
+    entryPath:
+      artifact.layout === "file"
+        ? (artifact.relativePath ?? artifact.folderName)
+        : "index.html",
+  };
+}
+
+function numberForHtmlSelection(
+  selection: HtmlArtifactVersionSelection | null,
+  versions: readonly HtmlArtifactVersion[],
+): number | null {
+  if (selection === null) return null;
+  if (selection.versionNumber !== undefined) return selection.versionNumber;
+  const identity = htmlArtifactVersionIdentity(selection);
+  return (
+    versions.find((item) => htmlArtifactVersionIdentity(item) === identity)
+      ?.versionNumber ?? null
+  );
 }

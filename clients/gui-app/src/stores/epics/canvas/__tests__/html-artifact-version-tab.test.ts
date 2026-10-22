@@ -52,6 +52,43 @@ describe("an html tile's pinned version", () => {
     expect(parseTileRef(serializeTileRef(pinned))).toEqual(pinned);
   });
 
+  it("keeps the pinned version's number, so a restart reopens the same numbered version", () => {
+    const numbered: EpicArtifactRef = {
+      ...htmlTile("inst-1"),
+      htmlVersion: { ...PINNED, versionNumber: 2 },
+    };
+
+    expect(parseTileRef(serializeTileRef(numbered))).toEqual(numbered);
+  });
+
+  it("still restores a pin saved before versions were numbered", () => {
+    const legacy: EpicArtifactRef = {
+      ...htmlTile("inst-1"),
+      htmlVersion: PINNED,
+    };
+
+    const restored = parseTileRef(serializeTileRef(legacy));
+
+    expect(restored).toEqual(legacy);
+    expect(restored).not.toHaveProperty("htmlVersion.versionNumber");
+  });
+
+  it.each([0, -1, 1.5])(
+    "refuses a saved pin whose number is %s instead of reopening it on the live head",
+    (versionNumber) => {
+      const saved = serializeTileRef({
+        ...htmlTile("inst-1"),
+        htmlVersion: PINNED,
+      });
+      const damaged = {
+        ...(saved as Record<string, unknown>),
+        htmlVersion: { ...PINNED, versionNumber },
+      };
+
+      expect(parseTileRef(damaged)).toBeNull();
+    },
+  );
+
   it("restores a tile saved without a pin as Latest", () => {
     const restored = parseTileRef(serializeTileRef(htmlTile("inst-1")));
 

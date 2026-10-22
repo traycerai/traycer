@@ -156,8 +156,6 @@ const KEYBOARD_KEY_READS: Readonly<Record<string, number>> = {
   "gui-app/src/components/epic-canvas/zoom-controls/zoom-controls.tsx": 7,
   // The search box's Escape (clears a non-empty query; not a registered chord).
   "gui-app/src/components/epics/epics-list-panel.tsx": 1,
-  // Bare Escape leaves the HTML artifact's edit selection. A named key.
-  "gui-app/src/components/html-artifact/html-selection-layer.tsx": 1,
   // The layout editor's sortable list: Space grabs a row (or activates it in
   // an unordered list), Enter activates, arrows move a grabbed row or, with
   // Alt, reorder it (L-31), and Escape cancels a grab. All named keys, none of

@@ -20,20 +20,19 @@ export function HtmlArtifactVersionPicker({
   readonly version: HtmlArtifactVersionState;
 }) {
   const coarsePointer = useCoarsePointer();
-  const { selectedVersion } = version;
+  const { selectedVersion, selectedVersionNumber, currentVersionNumber } =
+    version;
+  if (!version.selectionAvailable) return null;
   if (!version.supported && selectedVersion === null) return null;
-  const label =
-    selectedVersion === null
-      ? "Latest"
-      : new Date(selectedVersion.manifest.capturedAt).toLocaleString(
-          undefined,
-          {
-            month: "short",
-            day: "numeric",
-            hour: "numeric",
-            minute: "2-digit",
-          },
-        );
+  let label = "Latest";
+  if (selectedVersion !== null) {
+    label =
+      selectedVersionNumber === null
+        ? "Saved version"
+        : `Version ${selectedVersionNumber}`;
+  } else if (currentVersionNumber !== null) {
+    label = `Latest · v${currentVersionNumber}`;
+  }
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
@@ -61,7 +60,12 @@ function HtmlArtifactVersionChoices({
 }: {
   readonly version: HtmlArtifactVersionState;
 }) {
-  const { selectedVersion, history } = version;
+  const {
+    selectedVersion,
+    selectedVersionNumber,
+    currentVersionNumber,
+    history,
+  } = version;
   const selectedIdentity =
     selectedVersion === null
       ? null
@@ -73,6 +77,9 @@ function HtmlArtifactVersionChoices({
       : (versions.find(
           (item) => htmlArtifactVersionIdentity(item) === selectedIdentity,
         )?.id ?? "selected");
+  const currentCapture = versions.find(
+    (item) => item.versionNumber === currentVersionNumber,
+  );
   return (
     <DropdownMenuRadioGroup
       value={selectedId}
@@ -84,18 +91,64 @@ function HtmlArtifactVersionChoices({
         }
       }}
     >
-      <DropdownMenuRadioItem value="latest">Latest</DropdownMenuRadioItem>
+      <DropdownMenuRadioItem value="latest">
+        <HtmlArtifactVersionLabel
+          versionNumber={currentVersionNumber}
+          capturedAt={currentCapture?.manifest.capturedAt ?? null}
+          latest
+        />
+      </DropdownMenuRadioItem>
       {selectedId === "selected" && selectedVersion !== null ? (
         <DropdownMenuRadioItem value="selected">
-          {new Date(selectedVersion.manifest.capturedAt).toLocaleString()}
+          <HtmlArtifactVersionLabel
+            versionNumber={selectedVersionNumber}
+            capturedAt={selectedVersion.manifest.capturedAt}
+            latest={false}
+          />
         </DropdownMenuRadioItem>
       ) : null}
-      {versions.map((item) => (
-        <DropdownMenuRadioItem key={item.id} value={item.id}>
-          {new Date(item.manifest.capturedAt).toLocaleString()}
-        </DropdownMenuRadioItem>
-      ))}
+      {versions
+        .filter(
+          (item) =>
+            item.versionNumber !== currentVersionNumber ||
+            item.id === selectedId,
+        )
+        .map((item) => (
+          <DropdownMenuRadioItem key={item.id} value={item.id}>
+            <HtmlArtifactVersionLabel
+              versionNumber={item.versionNumber}
+              capturedAt={item.manifest.capturedAt}
+              latest={false}
+            />
+          </DropdownMenuRadioItem>
+        ))}
     </DropdownMenuRadioGroup>
+  );
+}
+
+function HtmlArtifactVersionLabel(props: {
+  readonly versionNumber: number | null;
+  readonly capturedAt: number | null;
+  readonly latest: boolean;
+}) {
+  let label = props.latest ? "Latest" : "Saved version";
+  if (props.versionNumber !== null) {
+    label = `Version ${props.versionNumber}${props.latest ? " · Latest" : ""}`;
+  }
+  return (
+    <span className="flex flex-col items-start">
+      <span>{label}</span>
+      {props.capturedAt === null ? null : (
+        <span className="text-ui-xs text-muted-foreground">
+          {new Date(props.capturedAt).toLocaleString(undefined, {
+            month: "short",
+            day: "numeric",
+            hour: "numeric",
+            minute: "2-digit",
+          })}
+        </span>
+      )}
+    </span>
   );
 }
 

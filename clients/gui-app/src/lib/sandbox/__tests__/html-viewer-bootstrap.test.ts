@@ -16,6 +16,8 @@ interface Page {
   readonly deliver: (data: unknown, source: unknown) => void;
   /** Dispatches a wheel event on the page and returns it. */
   readonly wheel: (init: WheelEventInit) => WheelEvent;
+  /** How many distinct listeners of this type the page holds on its window. */
+  readonly listenerCount: (type: string) => number;
 }
 
 const windows: DOMWindow[] = [];
@@ -47,6 +49,26 @@ function runViewerPage(): Page {
   window.postMessage = (message: Posted) => {
     posted.push(message);
   };
+  // Net registrations per event type, so attach and detach are observable.
+  const held = new Map<string, Set<EventListenerOrEventListenerObject>>();
+  const addListener = window.addEventListener.bind(window);
+  const removeListener = window.removeEventListener.bind(window);
+  window.addEventListener = (
+    type: string,
+    listener: EventListenerOrEventListenerObject,
+    options: boolean | AddEventListenerOptions | undefined,
+  ): void => {
+    held.set(type, (held.get(type) ?? new Set()).add(listener));
+    addListener(type, listener, options);
+  };
+  window.removeEventListener = (
+    type: string,
+    listener: EventListenerOrEventListenerObject,
+    options: boolean | EventListenerOptions | undefined,
+  ): void => {
+    held.get(type)?.delete(listener);
+    removeListener(type, listener, options);
+  };
   const prelude = buildHtmlViewerPrelude();
   window.eval(prelude.slice("<script>".length, -"</script>".length));
   return {
@@ -64,6 +86,7 @@ function runViewerPage(): Page {
       Object.defineProperty(event, "source", { value: source });
       window.dispatchEvent(event);
     },
+    listenerCount: (type) => held.get(type)?.size ?? 0,
     wheel: (init) => {
       const event = new window.WheelEvent("wheel", {
         cancelable: true,
@@ -141,5 +164,32 @@ describe("the plain-page viewer prelude", () => {
 
     expect(event.defaultPrevented).toBe(false);
     expect(page.zoomReports()).toEqual([]);
+  });
+
+  it("holds its wheel and touch-move listeners only while zoom is enabled, however often the host repeats itself", () => {
+    const page = runViewerPage();
+    const held = () => [
+      page.listenerCount("wheel"),
+      page.listenerCount("touchmove"),
+    ];
+    expect(held()).toEqual([0, 0]);
+
+    page.deliver(viewMessage(true, 1), page.window);
+    // A reloaded page is told its view state again on every ready.
+    page.deliver(viewMessage(true, 1.5), page.window);
+    expect(held()).toEqual([1, 1]);
+
+    page.deliver(viewMessage(false, 1.5), page.window);
+    page.deliver(viewMessage(false, 1.5), page.window);
+    expect(held()).toEqual([0, 0]);
+    expect(page.wheel({ ctrlKey: true, deltaY: -100 }).defaultPrevented).toBe(
+      false,
+    );
+
+    page.deliver(viewMessage(true, 1.5), page.window);
+    expect(held()).toEqual([1, 1]);
+    expect(page.wheel({ ctrlKey: true, deltaY: -100 }).defaultPrevented).toBe(
+      true,
+    );
   });
 });

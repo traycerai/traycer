@@ -1,3 +1,4 @@
+import "fake-indexeddb/auto";
 import { useEffect } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
@@ -23,9 +24,16 @@ import {
   setActiveDesktopPerWindowProjectionBridge,
 } from "@/lib/windows/per-window-projection-debounce";
 import {
+  setEpicCanvasBrowserPersistenceHydrating,
+  setEpicCanvasBrowserPersistenceStorage,
   setEpicCanvasDesktopProjectionBridge,
   useEpicCanvasStore,
 } from "@/stores/epics/canvas/store";
+import {
+  CANVAS_BROWSER_DB_NAME,
+  drainCanvasBrowserStorage,
+} from "@/stores/epics/canvas/canvas-browser-storage";
+import { clear, createStore } from "idb-keyval";
 import {
   emptyLandingDraftWorkspaceSnapshot,
   EMPTY_LANDING_DRAFT_CONTENT,
@@ -259,11 +267,18 @@ describe("<WindowsBridgeProvider />", () => {
     resetStores();
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     cleanup();
+    vi.useRealTimers();
+    // The browser canvas adapter keeps one IndexedDB connection for the
+    // module's life: empty the database between tests rather than swapping it,
+    // and stop routing saves into it before the store reset below queues one.
+    setEpicCanvasBrowserPersistenceStorage(null);
+    setEpicCanvasBrowserPersistenceHydrating(false);
+    await drainCanvasBrowserStorage();
+    await clear(createStore(CANVAS_BROWSER_DB_NAME, "canvases"));
     resetStores();
     window.localStorage.clear();
-    vi.useRealTimers();
   });
 
   it("keeps browser tab reconciliation pending until the account canvas hydrates", async () => {

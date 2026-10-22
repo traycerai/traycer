@@ -6,6 +6,9 @@ import {
   artifactObjectRefSchema,
 } from "@traycer/protocol/persistence/epic/artifacts";
 
+const versionIdSchema = lazySchema(() => z.string().regex(/^[0-9a-f]{64}$/));
+const versionNumberSchema = lazySchema(() => z.number().int().positive());
+
 /** Captured bytes, without the live head's mutable upload status. */
 export const htmlArtifactVersionSelectionSchema = lazySchema(() =>
   z
@@ -36,6 +39,7 @@ export const htmlArtifactVersionSelectionSchema = lazySchema(() =>
         capturedAt: z.number().finite(),
       }),
       entryPath: artifactManifestPathSchema,
+      versionNumber: versionNumberSchema.optional(),
     })
     .refine((value) => Object.hasOwn(value.manifest.files, value.entryPath), {
       message: "The captured entry page must be present in its manifest",
@@ -48,12 +52,13 @@ export type HtmlArtifactVersionSelection = z.infer<
 
 export const htmlArtifactVersionSchema = lazySchema(() =>
   htmlArtifactVersionSelectionSchema.safeExtend({
-    id: z.string().regex(/^[0-9a-f]{64}$/),
+    id: versionIdSchema,
+    versionNumber: versionNumberSchema,
   }),
 );
 export type HtmlArtifactVersion = z.infer<typeof htmlArtifactVersionSchema>;
 
-/** Stable across upload-status changes and manifest key ordering. */
+/** Stable across upload-status changes, manifest key ordering and version numbering. */
 export function htmlArtifactVersionIdentity(
   version: HtmlArtifactVersionSelection,
 ): string {
@@ -73,7 +78,8 @@ export function htmlArtifactVersionIdentity(
 export const epicListHtmlArtifactVersionsResponseSchema = lazySchema(() =>
   z.object({
     versions: z.array(htmlArtifactVersionSchema),
-    nextCursor: z.string().nullable(),
+    nextCursor: versionIdSchema.nullable(),
+    currentVersionNumber: versionNumberSchema.nullable(),
   }),
 );
 export type EpicListHtmlArtifactVersionsResponse = z.infer<
@@ -87,10 +93,7 @@ export const epicListHtmlArtifactVersionsV10 = defineRpcContract({
     z.object({
       epicId: z.string().min(1),
       artifactId: z.string().min(1),
-      before: z
-        .string()
-        .regex(/^[0-9a-f]{64}$/)
-        .optional(),
+      before: versionIdSchema.optional(),
       limit: z.number().int().min(1).max(50).default(20),
     }),
   ),

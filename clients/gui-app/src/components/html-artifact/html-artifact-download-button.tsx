@@ -20,36 +20,39 @@ export function HtmlArtifactDownloadButton(props: {
   const fileSave = useFileSaveHost();
   const coarsePointer = useCoarsePointer();
   const available = canDownloadToDevice(fileSave);
+  const label = available
+    ? "Download ZIP"
+    : "Downloads are unavailable on this device";
   return (
     <TooltipWrapper
-      label={
-        available ? "Download ZIP" : "Downloads are unavailable on this device"
-      }
+      label={label}
       side="top"
       sideOffset={undefined}
       align={undefined}
     >
-      <Button
-        type="button"
-        variant="ghost"
-        size={coarsePointer ? "icon-touch" : "icon-sm"}
-        aria-label="Download ZIP"
-        aria-busy={download.isPending}
-        disabled={!available || download.isPending}
-        onClick={() =>
-          download.mutate({ source: props.source, title: props.title })
-        }
-      >
-        {download.isPending ? (
-          <AgentSpinningDots
-            className={undefined}
-            testId={undefined}
-            variant={undefined}
-          />
-        ) : (
-          <Download className="size-4" />
-        )}
-      </Button>
+      <span className="inline-flex">
+        <Button
+          type="button"
+          variant="ghost"
+          size={coarsePointer ? "icon-touch" : "icon-sm"}
+          aria-label={label}
+          aria-busy={download.isPending}
+          disabled={!available || download.isPending}
+          onClick={() =>
+            download.mutate({ source: props.source, title: props.title })
+          }
+        >
+          {download.isPending ? (
+            <AgentSpinningDots
+              className={undefined}
+              testId={undefined}
+              variant={undefined}
+            />
+          ) : (
+            <Download className="size-4" />
+          )}
+        </Button>
+      </span>
     </TooltipWrapper>
   );
 }

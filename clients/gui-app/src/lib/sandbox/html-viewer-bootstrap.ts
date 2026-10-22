@@ -80,31 +80,16 @@ function htmlViewerBootstrap(): void {
     showScrollbars();
     notifyZoom();
   };
-  window.addEventListener("message", (event: MessageEvent<unknown>) => {
-    if (event.source !== host || !isRecord(event.data)) return;
-    const data = event.data;
-    if (data.method !== "traycer/html/view" || !isRecord(data.params)) return;
-    const params = data.params;
-    zoomEnabled = params.enabled === true;
-    if (typeof params.scale === "number" && Number.isFinite(params.scale)) {
-      setScale(params.scale, window.innerWidth / 2, window.innerHeight / 2);
-    }
-    notifyZoom();
-  });
-  window.addEventListener(
-    "wheel",
-    (event) => {
-      if (!zoomEnabled || !event.ctrlKey || event.defaultPrevented) return;
-      event.preventDefault();
-      // Trackpad pinch arrives as fine-grained Ctrl-wheel on Chromium.
-      let unit = 1;
-      if (event.deltaMode === 1) unit = 16;
-      else if (event.deltaMode === 2) unit = window.innerHeight;
-      const pixels = event.deltaY * unit;
-      setScale(scale * Math.exp(-pixels * 0.005), event.clientX, event.clientY);
-    },
-    { passive: false },
-  );
+  const onWheel = (event: WheelEvent): void => {
+    if (!zoomEnabled || !event.ctrlKey || event.defaultPrevented) return;
+    event.preventDefault();
+    // Trackpad pinch arrives as fine-grained Ctrl-wheel on Chromium.
+    let unit = 1;
+    if (event.deltaMode === 1) unit = 16;
+    else if (event.deltaMode === 2) unit = window.innerHeight;
+    const pixels = event.deltaY * unit;
+    setScale(scale * Math.exp(-pixels * 0.005), event.clientX, event.clientY);
+  };
 
   let pinch: { distance: number; scale: number; x: number; y: number } | null =
     null;
@@ -132,26 +117,45 @@ function htmlViewerBootstrap(): void {
     },
     { passive: true },
   );
-  window.addEventListener(
-    "touchmove",
-    (event) => {
-      const geometry = touchGeometry(event.touches);
-      if (!zoomEnabled || pinch === null || geometry === null) return;
-      if (event.cancelable) event.preventDefault();
-      setScale(
-        (pinch.scale * geometry.distance) / pinch.distance,
-        geometry.x,
-        geometry.y,
-      );
-      window.scrollBy({
-        left: pinch.x - geometry.x,
-        top: pinch.y - geometry.y,
-        behavior: "instant",
-      });
-      pinch = { ...pinch, x: geometry.x, y: geometry.y };
-    },
-    { passive: false },
-  );
+  const onTouchMove = (event: TouchEvent): void => {
+    const geometry = touchGeometry(event.touches);
+    if (!zoomEnabled || pinch === null || geometry === null) return;
+    if (event.cancelable) event.preventDefault();
+    setScale(
+      (pinch.scale * geometry.distance) / pinch.distance,
+      geometry.x,
+      geometry.y,
+    );
+    window.scrollBy({
+      left: pinch.x - geometry.x,
+      top: pinch.y - geometry.y,
+      behavior: "instant",
+    });
+    pinch = { ...pinch, x: geometry.x, y: geometry.y };
+  };
+  const setZoomEnabled = (enabled: boolean): void => {
+    if (zoomEnabled === enabled) return;
+    zoomEnabled = enabled;
+    pinch = null;
+    if (enabled) {
+      window.addEventListener("wheel", onWheel, { passive: false });
+      window.addEventListener("touchmove", onTouchMove, { passive: false });
+    } else {
+      window.removeEventListener("wheel", onWheel);
+      window.removeEventListener("touchmove", onTouchMove);
+    }
+  };
+  window.addEventListener("message", (event: MessageEvent<unknown>) => {
+    if (event.source !== host || !isRecord(event.data)) return;
+    const data = event.data;
+    if (data.method !== "traycer/html/view" || !isRecord(data.params)) return;
+    const params = data.params;
+    setZoomEnabled(params.enabled === true);
+    if (typeof params.scale === "number" && Number.isFinite(params.scale)) {
+      setScale(params.scale, window.innerWidth / 2, window.innerHeight / 2);
+    }
+    notifyZoom();
+  });
   const endPinch = (): void => {
     pinch = null;
   };
