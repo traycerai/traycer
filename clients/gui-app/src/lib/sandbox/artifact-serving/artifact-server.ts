@@ -84,7 +84,9 @@ const CACHE_MAX_BYTES = 64 * 1024 * 1024;
 // Empty and tiny objects still retain map entries, keys and byte-array objects.
 const CACHE_MAX_ENTRIES = 1024;
 const BLOCK_BYTES = EPIC_READ_ARTIFACT_OBJECT_RANGE_MAX_BYTES;
-const NO_OUTSIDE_REFERENCE: ArtifactOutsideReferenceResolver = () => null;
+/** Captured versions must not fill missing paths from the live artifacts tree. */
+export const NO_OUTSIDE_REFERENCE: ArtifactOutsideReferenceResolver = () =>
+  null;
 
 function unavailable(reason: string, status: 404 | 503): Unavailable {
   return { kind: "unavailable", reason, status };

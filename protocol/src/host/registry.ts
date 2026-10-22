@@ -682,6 +682,7 @@ import {
   providersRefreshProfileStatusDowngradeV20ToV10,
 } from "@traycer/protocol/host/rate-limit/contracts";
 import { epicEditArtboardV10 } from "@traycer/protocol/host/epic/artboard-edit";
+import { epicListHtmlArtifactVersionsV10 } from "@traycer/protocol/host/epic/html-artifact-versions";
 import { epicReadArtifactObjectV10 } from "@traycer/protocol/host/epic/artifact-objects";
 import {
   chatMcpAppCallToolV10,
@@ -9775,6 +9776,19 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
       latestMinor: 0,
       versions: {
         0: { contract: epicEditArtboardV10, upgradeFromPreviousVersion: null },
+      },
+      downgradePathsFromLatest: {},
+    },
+    degrade: { kind: "unsupported" },
+  },
+  "epic.listHtmlArtifactVersions": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: epicListHtmlArtifactVersionsV10,
+          upgradeFromPreviousVersion: null,
+        },
       },
       downgradePathsFromLatest: {},
     },

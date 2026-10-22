@@ -1,3 +1,4 @@
+import type { HtmlArtifactVersionSelection } from "@traycer/protocol/host/epic/html-artifact-versions";
 import { readTabStripLayout } from "@/stores/tabs/store";
 import { captureHeaderLocation } from "@/lib/tab-recovery/header-layout";
 import {
@@ -99,6 +100,7 @@ import {
   toggleSnapshotDiffBundleFileCollapsed,
   rebindPendingBrowserTile,
   updateBrowserTileViewportPreset,
+  updateHtmlArtifactVersion,
   updateCommGraphTileCamera,
   updateCommGraphTileOfficeCamera,
   updateCommGraphTileView,
@@ -566,6 +568,11 @@ export interface EpicCanvasStore {
     requestId: string,
     opened: { readonly sessionId: string; readonly tabId: string },
   ) => boolean;
+  updateHtmlArtifactVersionInTab: (
+    tabId: string,
+    tileInstanceId: string,
+    selection: HtmlArtifactVersionSelection | null,
+  ) => void;
   updateBrowserTileViewportPresetInTab: (
     tabId: string,
     tileInstanceId: string,
@@ -2186,6 +2193,14 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
             return rebound ? { canvasByTabId } : state;
           });
           return rebound;
+        },
+
+        updateHtmlArtifactVersionInTab: (tabId, tileInstanceId, selection) => {
+          set((state) =>
+            updateTabCanvas(state, tabId, (canvas) =>
+              updateHtmlArtifactVersion(canvas, tileInstanceId, selection),
+            ),
+          );
         },
 
         updateBrowserTileViewportPresetInTab: (

@@ -8,6 +8,8 @@ export const epicMutationKeys = {
   createChat: () => ["epic.createChat"] as const,
   continueSubagent: () => ["epic.continueSubagent"] as const,
   exportArtifacts: () => ["epic.exportArtifacts"] as const,
+  downloadHtmlArtifact: (hostId: string, artifactId: string) =>
+    ["epic.downloadHtmlArtifact", hostId, artifactId] as const,
   updateChatRunSettings: () => ["epic.updateChatRunSettings"] as const,
   updateChatProfile: () => ["epic.updateChatProfile"] as const,
   setChatArchived: () => ["epic.setChatArchived"] as const,

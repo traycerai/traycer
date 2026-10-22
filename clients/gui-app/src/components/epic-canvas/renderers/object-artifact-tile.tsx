@@ -1,28 +1,19 @@
 import { FileArtifactViewer } from "./file-artifact-viewer";
-import type { HtmlSelection } from "@/components/html-artifact/html-selection-store";
-
-import {
-  HtmlArtifactCommentAction,
-  HtmlArtifactCommentsToolbar,
-  HtmlArtifactComments,
-} from "@/components/comments/html-artifact-comments";
 import { CanvasSelectionProvider } from "@/components/canvas-artifact/canvas-selection-provider";
 import { useEpicViewTabId } from "@/components/epic-canvas/view-tab-context";
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
 import type { ArtifactProjection } from "@/stores/epics/open-epic/types";
 import { CanvasArtifactSurface } from "@/components/canvas-artifact/canvas-artifact-surface";
-import {
-  HtmlArtifactFrame,
-  type HtmlArtifactFrameContext,
-} from "@/components/html-artifact/html-artifact-frame";
+import { HtmlArtifactDownloadButton } from "@/components/html-artifact/html-artifact-download-button";
+import { HtmlArtifactVersionPicker } from "@/components/html-artifact/html-artifact-version-picker";
+import { useEpicHtmlArtifactVersion } from "@/hooks/epic/use-epic-html-artifact-version";
+import { HtmlArtifactFrame } from "@/components/html-artifact/html-artifact-frame";
 import { isMobileApp } from "@/lib/mobile-app";
 import { resolveDesktopPlatform } from "@/lib/windows/desktop-capabilities";
 import { useRunnerHostOrNull } from "@/providers/use-runner-host";
-import { useCallback, useMemo, useState } from "react";
+import { useMemo } from "react";
 import type { SandboxSource } from "@/components/sandbox/sandbox-frame";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
-import { useFrameCommentsEnabled } from "@/hooks/comments/use-frame-comments-enabled";
-import { htmlCommentRootArtboard } from "@/lib/comments/frame-comment-anchor";
 import { useEpicStore } from "@/hooks/use-epic-store";
 import {
   useArtifactById,
@@ -32,24 +23,23 @@ import { EPIC_NODE_LABELS } from "@/lib/artifacts/node-display";
 import { artifactSourcePathsFor } from "@/lib/artifacts/artifact-object-paths";
 import { useStableOutsideReferenceResolver } from "@/lib/artifacts/use-stable-outside-reference-resolver";
 import { createHostObjectReader } from "@/lib/sandbox/artifact-serving/host-object-reader";
+import { NO_OUTSIDE_REFERENCE } from "@/lib/sandbox/artifact-serving";
 import type { EpicArtifactRef } from "@/stores/epics/canvas/types";
-
-function canCommentOnHtml(enabled: boolean, viewTabId: string | null): boolean {
-  return enabled && viewTabId !== null;
-}
 
 export function ObjectArtifactTile(props: {
   readonly node: EpicArtifactRef;
   readonly epicId: string;
 }) {
   const runnerHost = useRunnerHostOrNull();
-  const commentsEnabled = useFrameCommentsEnabled();
   const hostId = useTabHostId();
-  const viewTabId = useEpicViewTabId();
-  const [commentTileId] = useState(() => crypto.randomUUID());
   const desktop =
     runnerHost !== null && resolveDesktopPlatform(runnerHost) !== null;
   const artifact = useArtifactById(props.node.id);
+  const version = useEpicHtmlArtifactVersion({
+    epicId: props.epicId,
+    node: props.node,
+    artifact,
+  });
   // An open html tile holds the same body lease a markdown tile holds, even
   // though it reads no body document: on the host that lease is the demand
   // that runs the epic's file work, so the folder on disk is captured and a
@@ -71,60 +61,31 @@ export function ObjectArtifactTile(props: {
     [client, props.epicId],
   );
   const resolveOutsideReference = useStableOutsideReferenceResolver(artifacts);
+  const latest = version.selectedVersion === null;
   const source = useMemo<SandboxSource | null>(() => {
-    if (artifact?.kind !== "html" || artifact.head === undefined) return null;
+    if (artifact?.kind !== "html" || version.manifest === null) return null;
     const paths = artifactSourcePathsFor(artifact, artifacts);
     if (paths === null) return null;
     return {
       kind: "artifact",
-      canvas: true,
-      canvasLinks: "native",
       artifactId: artifact.id,
-      manifest: artifact.head,
+      manifest: version.manifest,
       readSpan,
-      resolveOutsideReference,
+      resolveOutsideReference: latest
+        ? resolveOutsideReference
+        : NO_OUTSIDE_REFERENCE,
       ...paths,
+      entryPath: version.entryPath ?? paths.entryPath,
     };
-  }, [artifact, artifacts, readSpan, resolveOutsideReference]);
-  const commentScope = useMemo(
-    () =>
-      artifact === null || source?.kind !== "artifact" || viewTabId === null
-        ? null
-        : {
-            epicId: props.epicId,
-            artifactId: artifact.id,
-            viewTabId,
-            tileId: commentTileId,
-            hostId,
-            rootPath: source.entryPath,
-            rootArtboard: htmlCommentRootArtboard(artifact),
-            source,
-          },
-    [artifact, source, viewTabId, props.epicId, commentTileId, hostId],
-  );
-  const commentActions = useCallback(
-    (selection: HtmlSelection, context: HtmlArtifactFrameContext) =>
-      commentScope === null ? null : (
-        <HtmlArtifactCommentAction
-          scope={commentScope}
-          context={context}
-          selection={selection}
-        />
-      ),
-    [commentScope],
-  );
-  const renderComments = useCallback(
-    (context: HtmlArtifactFrameContext) =>
-      commentScope === null || artifact === null ? null : (
-        <HtmlArtifactComments
-          scope={commentScope}
-          artifact={artifact}
-          context={context}
-          viewOnly={isMobileApp() || !desktop}
-        />
-      ),
-    [commentScope, artifact, desktop],
-  );
+  }, [
+    artifact,
+    artifacts,
+    readSpan,
+    resolveOutsideReference,
+    version.manifest,
+    version.entryPath,
+    latest,
+  ]);
   if (artifact === null)
     return (
       <div className="p-4 text-muted-foreground">Artifact unavailable.</div>
@@ -163,11 +124,16 @@ export function ObjectArtifactTile(props: {
         key={artifact.id}
         source={source}
         title={artifact.title}
-        selectable={!isMobileApp() && desktop}
-        commentsEnabled={canCommentOnHtml(commentsEnabled, viewTabId)}
-        actionControls={commentActions}
-        renderComments={renderComments}
-        toolbarControls={<HtmlArtifactCommentsToolbar scope={commentScope} />}
+        toolbarControls={
+          <>
+            <HtmlArtifactVersionPicker version={version} />
+            <HtmlArtifactDownloadButton
+              source={source}
+              title={artifact.title}
+              hostId={hostId}
+            />
+          </>
+        }
       />
     );
   }

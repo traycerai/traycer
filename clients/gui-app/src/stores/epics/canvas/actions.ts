@@ -1,3 +1,4 @@
+import type { HtmlArtifactVersionSelection } from "@traycer/protocol/host/epic/html-artifact-versions";
 import { browserSessionTileId } from "./tile-schema/browser-tile";
 /**
  * Pure actions over `EpicCanvasState` (the N-ary split tree + decoupled tile
@@ -1570,6 +1571,23 @@ export function rebindPendingBrowserTile(
       return { ...ref, ...opened, pending: undefined };
     },
   );
+}
+
+export function updateHtmlArtifactVersion(
+  state: EpicCanvasState,
+  tileInstanceId: string,
+  htmlVersion: HtmlArtifactVersionSelection | null,
+): EpicCanvasState {
+  const current = state.tilesByInstanceId[tileInstanceId];
+  if (current?.type !== "html") return state;
+  if ((current.htmlVersion ?? null) === htmlVersion) return state;
+  return {
+    ...state,
+    tilesByInstanceId: {
+      ...state.tilesByInstanceId,
+      [tileInstanceId]: { ...current, htmlVersion: htmlVersion ?? undefined },
+    },
+  };
 }
 
 export function updateBrowserTileViewportPreset(

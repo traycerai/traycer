@@ -1,3 +1,7 @@
+import {
+  htmlArtifactVersionSelectionSchema,
+  type HtmlArtifactVersionSelection,
+} from "@traycer/protocol/host/epic/html-artifact-versions";
 /**
  * Schema for artifact-backed (`EpicArtifactRef`) and renderer-local
  * terminal (`EpicTerminalRef`) / file-preview (`WorkspaceFileRef`) tiles -
@@ -187,6 +191,14 @@ function parseEpicTerminalNodeRef(
   };
 }
 
+function parseHtmlVersion(
+  value: unknown,
+): HtmlArtifactVersionSelection | null | undefined {
+  if (value === undefined) return undefined;
+  const parsed = htmlArtifactVersionSelectionSchema.safeParse(value);
+  return parsed.success ? parsed.data : null;
+}
+
 export function parseEpicNodeRef(value: unknown): EpicNodeRef | null {
   if (!isRecord(value)) return null;
   if (typeof value.id !== "string" || typeof value.name !== "string") {
@@ -226,12 +238,17 @@ export function parseEpicNodeRef(value: unknown): EpicNodeRef | null {
   if (!isRecordBackedEpicNodeKind(value.type)) {
     return null;
   }
+  const htmlVersion =
+    value.type === "html" ? parseHtmlVersion(value.htmlVersion) : undefined;
+  // A damaged pinned capture must never reopen as a live Latest view.
+  if (htmlVersion === null) return null;
   return {
     id: value.id,
     instanceId,
     type: value.type,
     name: value.name,
     hostId: value.hostId,
+    ...(htmlVersion === undefined ? {} : { htmlVersion }),
   };
 }
 
@@ -314,6 +331,9 @@ function serializeEpicNodeRef(node: EpicNodeRef): DesktopJsonValue {
     type: node.type,
     name: node.name,
     hostId: node.hostId,
+    ...(node.type === "html" && node.htmlVersion !== undefined
+      ? { htmlVersion: node.htmlVersion }
+      : {}),
   };
 }
 

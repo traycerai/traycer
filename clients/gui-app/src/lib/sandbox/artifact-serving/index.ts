@@ -17,6 +17,7 @@ export {
 } from "./artifact-document";
 export {
   ArtifactServer,
+  NO_OUTSIDE_REFERENCE,
   type ArtifactReadSpan,
   type ArtifactReadSpanResult,
   type ArtifactOutsideReferenceResolver,

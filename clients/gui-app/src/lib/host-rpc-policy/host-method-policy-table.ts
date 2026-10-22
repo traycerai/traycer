@@ -1160,6 +1160,7 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
+  "epic.listHtmlArtifactVersions": { ...LATEST_SCHEDULING, poll: null },
   "epic.readArtifactObject": {
     ...LATEST_SCHEDULING,
     poll: defineConditionPolicy("epic.readArtifactObject", {
