@@ -7,6 +7,8 @@ import {
 import { createRoot } from "react-dom/client";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import { RootDndProvider } from "@/components/epic-canvas/dnd/root-dnd-provider";
+import { FixtureOrganizationContext } from "./organization-fixture-context";
+import { FIXTURE_ORGANIZATION_OWNER_ID } from "./organization-seed";
 import {
   createMemoryHistory,
   createRootRoute,
@@ -134,12 +136,12 @@ export function SignedInFixture(props: {
     if (authStatus === "signed-in") return;
     useAuthStore.getState().setSignedIn(
       {
-        userId: "browser-recovery-user",
+        userId: FIXTURE_ORGANIZATION_OWNER_ID,
         userName: "Tab Recovery User",
         email: "tab-recovery@example.invalid",
       },
       {
-        userId: "browser-recovery-user",
+        userId: FIXTURE_ORGANIZATION_OWNER_ID,
         username: "Tab Recovery User",
       },
       [],
@@ -312,7 +314,7 @@ function installBridge(reopen: () => Promise<void>): void {
             // The stamp is what makes a group the account's, and only a
             // stamped group is drawn - so a fixture without it seeds a group
             // the strip never shows.
-            organizationOwnerId: "browser-recovery-user",
+            organizationOwnerId: FIXTURE_ORGANIZATION_OWNER_ID,
           },
         },
       });
@@ -396,9 +398,13 @@ export function RecoverySurface(): ReactElement {
             Reopen closed tab
           </button>
         </div>
-        <RootDndProvider>
-          <TabStrip />
-        </RootDndProvider>
+        {/* The top bar's drivers drop tabs into the seeded group, which the
+            drop refuses to write unless the account can be told. */}
+        <FixtureOrganizationContext>
+          <RootDndProvider>
+            <TabStrip />
+          </RootDndProvider>
+        </FixtureOrganizationContext>
       </div>
     </SignedInFixture>
   );

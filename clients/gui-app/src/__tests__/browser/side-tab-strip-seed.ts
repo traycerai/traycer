@@ -14,6 +14,11 @@ import { tabItemId, tabRefKey, type StripItem } from "@/stores/tabs/layout";
 import { useTabsStore } from "@/stores/tabs/store";
 import type { TabCustomizations } from "@/stores/tabs/tab-groups";
 import type { TabRef } from "@/stores/tabs/types";
+import {
+  FIXTURE_ORGANIZATION_OWNER_ID,
+  organizationCustomization,
+  organizationGroup,
+} from "./organization-seed";
 
 /**
  * The tabs the real-Chrome side-strip fixtures open, written through the
@@ -21,7 +26,9 @@ import type { TabRef } from "@/stores/tabs/types";
  * one of them a split pair, three of them in one named group, three with a
  * tab colour, and one with an unread failure so a status badge sits on its
  * tile. The canvas fixture adds the layout session's own tab and makes it the
- * active one, which is what a session holds.
+ * active one, which is what a session holds. The group and every appearance
+ * are the account's, stamped as the organization projection stamps them
+ * (`organization-seed.ts`), because that is the only kind the strip draws.
  *
  * Nothing here draws a row: every row, tile, badge and group block the drivers
  * measure is the real `SideTabStrip` reading these stores.
@@ -77,18 +84,26 @@ export function seedSideStripTabs(sessionTab: boolean): void {
   ];
   if (sessionTab) items.push(loneItem(SAMPLE_WORKSPACE_REF));
   const customizations: TabCustomizations = {
-    [tabRefKey(alpha)]: {
+    [tabRefKey(alpha)]: organizationCustomization({
       color: "#81c995",
       icon: null,
       groupId: SEED_GROUP_ID,
-    },
-    [tabRefKey(beta)]: { color: null, icon: null, groupId: SEED_GROUP_ID },
-    [tabRefKey(gamma)]: {
+    }),
+    [tabRefKey(beta)]: organizationCustomization({
+      color: null,
+      icon: null,
+      groupId: SEED_GROUP_ID,
+    }),
+    [tabRefKey(gamma)]: organizationCustomization({
       color: "#c58af9",
       icon: null,
       groupId: SEED_GROUP_ID,
-    },
-    [tabRefKey(delta)]: { color: "#fcad70", icon: null, groupId: null },
+    }),
+    [tabRefKey(delta)]: organizationCustomization({
+      color: "#fcad70",
+      icon: null,
+      groupId: null,
+    }),
   };
   useTabsStore.setState({
     version: 2,
@@ -97,11 +112,11 @@ export function seedSideStripTabs(sessionTab: boolean): void {
     stripOrder: sessionTab ? [...refs, SAMPLE_WORKSPACE_REF] : refs,
     systemTabs: { history: null, settings: null },
     groups: {
-      [SEED_GROUP_ID]: {
+      [SEED_GROUP_ID]: organizationGroup({
         name: "Work",
         color: SEED_GROUP_COLOR,
         collapsed: false,
-      },
+      }),
     },
     customizations,
   });
@@ -115,7 +130,7 @@ export function seedSideStripTabs(sessionTab: boolean): void {
  */
 function seedFailureBadge(): void {
   const notifications = useAppLocalNotificationsStore.getState();
-  notifications.activateIdentity("fixture-user");
+  notifications.activateIdentity(FIXTURE_ORGANIZATION_OWNER_ID);
   notifications.upsert({
     id: "fixture-delta-failure",
     originHostId: null,
@@ -248,18 +263,26 @@ export function seedSideStripSections(): void {
     react,
   ];
   const customizations: TabCustomizations = {
-    [tabRefKey(gui)]: { color: "#f07a6a", icon: null, groupId: null },
-    [tabRefKey(hostWatcher)]: {
+    [tabRefKey(gui)]: organizationCustomization({
+      color: "#f07a6a",
+      icon: null,
+      groupId: null,
+    }),
+    [tabRefKey(hostWatcher)]: organizationCustomization({
       color: null,
       icon: null,
       groupId: SEED_GROUP_ID,
-    },
-    [tabRefKey(layout)]: { color: null, icon: null, groupId: SEED_GROUP_ID },
-    [tabRefKey(launch)]: {
+    }),
+    [tabRefKey(layout)]: organizationCustomization({
+      color: null,
+      icon: null,
+      groupId: SEED_GROUP_ID,
+    }),
+    [tabRefKey(launch)]: organizationCustomization({
       color: "#3fb8a8",
       icon: "🚀",
       groupId: SEED_GROUP_ID,
-    },
+    }),
   };
   useTabsStore.setState({
     version: 2,
@@ -268,11 +291,11 @@ export function seedSideStripSections(): void {
     stripOrder: refs,
     systemTabs: { history: null, settings: null },
     groups: {
-      [SEED_GROUP_ID]: {
+      [SEED_GROUP_ID]: organizationGroup({
         name: "Work",
         color: SEED_GROUP_COLOR,
         collapsed: false,
-      },
+      }),
     },
     customizations,
   });
@@ -320,9 +343,7 @@ export function seedSideStripSections(): void {
  * The owner's grouping report: the Activity view with only Idle, holding
  * Cookie sync perf, a group of one (GUI sidebar redesign, the current task),
  * React UI performance and Start page, in that order. No task is working or
- * waiting, so every one is idle. Signed in, the group is the account
- * organization's and so is every task, stamped the way the organization view's
- * projection stamps them.
+ * waiting, so every one is idle.
  */
 export function seedSideStripIdleGroup(): void {
   const refs = [
@@ -332,7 +353,6 @@ export function seedSideStripIdleGroup(): void {
     epicRef("Start page"),
   ];
   const gui = refs[1];
-  const owner = "fixture-user";
   useTabsStore.setState({
     version: 2,
     items: refs.map(loneItem),
@@ -340,22 +360,20 @@ export function seedSideStripIdleGroup(): void {
     stripOrder: refs,
     systemTabs: { history: null, settings: null },
     groups: {
-      [SEED_GROUP_ID]: {
+      [SEED_GROUP_ID]: organizationGroup({
         name: "group",
         color: "#ff8bcb",
         collapsed: false,
-        organizationOwnerId: owner,
-      },
+      }),
     },
     customizations: Object.fromEntries(
       refs.map((ref) => [
         tabRefKey(ref),
-        {
+        organizationCustomization({
           color: null,
           icon: null,
           groupId: ref === gui ? SEED_GROUP_ID : null,
-          organizationOwnerId: owner,
-        },
+        }),
       ]),
     ),
   });

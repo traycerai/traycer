@@ -52,8 +52,18 @@ function grouped(
   );
 }
 
+/**
+ * A group as the account's projection holds it. Only a group stamped with its
+ * owner is drawn (`drawnTabGroup`), so an unstamped one here would test the
+ * strip's behaviour for residual local data, not for a group.
+ */
 function group(collapsed: boolean): TabGroup {
-  return { name: "Work", color: "#8ab4f8", collapsed };
+  return {
+    name: "Work",
+    color: "#8ab4f8",
+    collapsed,
+    organizationOwnerId: "user-1",
+  };
 }
 
 function ids(items: ReadonlyArray<StripItem>): ReadonlyArray<string> {

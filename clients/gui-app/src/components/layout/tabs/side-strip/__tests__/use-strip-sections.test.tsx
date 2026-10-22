@@ -304,8 +304,14 @@ describe("useStripSections", () => {
       tabItem(needsReply),
       splitItem(splitIdle, splitFailed),
     ];
+    // The account's group: only a stamped one is drawn (`drawnTabGroup`).
     const groups: TabGroups = {
-      "group-1": { name: "Later", color: "#8ab4f8", collapsed: true },
+      "group-1": {
+        name: "Later",
+        color: "#8ab4f8",
+        collapsed: true,
+        organizationOwnerId: "user-1",
+      },
     };
     __setAgentActivityStateForTests(
       {
