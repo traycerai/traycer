@@ -31,6 +31,11 @@ import { useHostQueries } from "@/hooks/host/use-host-queries";
 import { getConditionPollEpisodeCoordinator } from "@/lib/query/condition-poll-episode-coordinator";
 import { automaticJudgeInputs } from "@/lib/auto-mode/auto-judge-billing";
 import { COMMAND_CATALOG_COMPOSER_STALE_MS } from "@traycer/protocol/host/agent/gui/command-catalog-policy";
+import type { OpencodeLine } from "@traycer/protocol/common/opencode-line";
+import {
+  catalogOpencodeLineParam,
+  useChatOpencodeLine,
+} from "@/hooks/harnesses/chat-opencode-line-context";
 
 // Model catalogs are CACHE-ONLY: `staleTime: Infinity` on every model query -
 // the batched fan-out in `useGuiHarnessCatalog` and the standalone
@@ -186,6 +191,7 @@ const EMPTY_GUI_MODEL_REQUESTS: ReadonlyArray<{
   readonly params: {
     readonly harnessId: GuiHarnessId;
     readonly workingDirectory: string | null;
+    readonly opencodeLine?: OpencodeLine;
   };
 }> = [];
 
@@ -400,9 +406,14 @@ export function useGuiHarnessModelsQueryForClient(
   workingDirectory: string | null,
   activity: QueryActivityOptions,
 ): UseQueryResult<ListGuiAgentModelsResponse, HostRpcError> {
+  const opencodeLine = useChatOpencodeLine();
   const params = useMemo(
-    () => ({ harnessId, workingDirectory }),
-    [harnessId, workingDirectory],
+    () => ({
+      harnessId,
+      workingDirectory,
+      ...catalogOpencodeLineParam(harnessId, opencodeLine),
+    }),
+    [harnessId, workingDirectory, opencodeLine],
   );
   return useHostQuery<HostRpcRegistry, "agent.gui.listModels">({
     cacheKeyIdentity: undefined,
@@ -454,15 +465,20 @@ export function useGuiHarnessModelsWarmup(
   harnessId: GuiHarnessId | null,
   activity: QueryActivityOptions,
 ): Array<UseQueryResult<ListGuiAgentModelsResponse, HostRpcError>> {
+  const opencodeLine = useChatOpencodeLine();
   const requests = useMemo(() => {
     if (harnessId === null) return EMPTY_GUI_MODEL_REQUESTS;
     return [
       {
         method: "agent.gui.listModels" as const,
-        params: { harnessId, workingDirectory: null },
+        params: {
+          harnessId,
+          workingDirectory: null,
+          ...catalogOpencodeLineParam(harnessId, opencodeLine),
+        },
       },
     ];
-  }, [harnessId]);
+  }, [harnessId, opencodeLine]);
   return useHostQueries<HostRpcRegistry, "agent.gui.listModels">({
     client,
     responseTimeoutMs: CATALOG_LIST_RESPONSE_TIMEOUT_MS,
@@ -483,14 +499,17 @@ export function useGuiHarnessCommandsQuery(
   workingDirectories: ReadonlyArray<string>,
   activity: QueryActivityOptions & { readonly profileId: string | null },
 ): UseQueryResult<ListGuiAgentCommandsResponse, HostRpcError> {
+  const opencodeLine = useChatOpencodeLine();
   const params = useMemo(
-    () =>
-      guiHarnessCommandsQueryParams(
+    () => ({
+      ...guiHarnessCommandsQueryParams(
         harnessId,
         workingDirectories,
         activity.profileId,
       ),
-    [harnessId, workingDirectories, activity.profileId],
+      ...catalogOpencodeLineParam(harnessId, opencodeLine),
+    }),
+    [harnessId, workingDirectories, activity.profileId, opencodeLine],
   );
   return useHostQuery<HostRpcRegistry, "agent.gui.listCommands">({
     cacheKeyIdentity: undefined,
@@ -550,13 +569,18 @@ export function useGuiHarnessCatalogForClient(
     );
   }, [attached, harnessesQuery.data?.harnesses]);
 
+  const opencodeLine = useChatOpencodeLine();
   const requests = useMemo(() => {
     if (harnessIds.length === 0) return EMPTY_GUI_MODEL_REQUESTS;
     return harnessIds.map((harnessId) => ({
       method: "agent.gui.listModels" as const,
-      params: { harnessId, workingDirectory },
+      params: {
+        harnessId,
+        workingDirectory,
+        ...catalogOpencodeLineParam(harnessId, opencodeLine),
+      },
     }));
-  }, [harnessIds, workingDirectory]);
+  }, [harnessIds, workingDirectory, opencodeLine]);
 
   const modelQueries = useHostQueries<HostRpcRegistry, "agent.gui.listModels">({
     client,
@@ -596,13 +620,17 @@ export function useGuiHarnessCatalogForClient(
               ? [
                   {
                     method: "agent.gui.listModels" as const,
-                    params: { harnessId: harness.id, workingDirectory },
+                    params: {
+                      harnessId: harness.id,
+                      workingDirectory,
+                      ...catalogOpencodeLineParam(harness.id, opencodeLine),
+                    },
                   },
                 ]
               : [],
           ) ?? EMPTY_GUI_MODEL_REQUESTS)
         : EMPTY_GUI_MODEL_REQUESTS,
-    [attached, harnessesQuery.data?.harnesses, workingDirectory],
+    [attached, harnessesQuery.data?.harnesses, workingDirectory, opencodeLine],
   );
   const pendingModelQueries = useHostQueries<
     HostRpcRegistry,

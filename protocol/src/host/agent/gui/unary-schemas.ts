@@ -12,6 +12,7 @@ import {
   guiHarnessIdSchemaV90,
 } from "@traycer/protocol/host/agent/shared";
 import { PROVIDER_AUTH_STATUS_SCHEMA } from "@traycer/protocol/host/provider-schemas";
+import { opencodeLineSchema } from "@traycer/protocol/common/opencode-line";
 import {
   ALL_PERMISSION_MODES,
   ALL_PERMISSION_MODES_PRE_AUTO,
@@ -802,6 +803,18 @@ export type ListGuiAgentModelsRequest = z.infer<
   typeof listGuiAgentModelsRequestSchema
 >;
 
+/**
+ * 1.1 carries the OpenCode line of the chat the picker belongs to, so a chat
+ * bound to OpenCode 2 lists OpenCode 2's models. Absent (and every 1.0
+ * caller) means "a chat that has no line yet": the host answers with the line
+ * that chat's first send would record.
+ */
+export const listGuiAgentModelsRequestSchemaV11 = lazySchema(() =>
+  listGuiAgentModelsRequestSchema.extend({
+    opencodeLine: opencodeLineSchema.optional(),
+  }),
+);
+
 export const listGuiAgentModelsResponseSchema = lazySchema(() =>
   z.object({
     harnessId: guiHarnessIdSchema,
@@ -827,6 +840,16 @@ export type ListGuiAgentCommandsRequest = z.infer<
 export const listGuiAgentCommandsRequestSchemaV11 = lazySchema(() =>
   listGuiAgentCommandsRequestSchema.extend({
     profileId: z.string().nullable().default(null),
+  }),
+);
+
+/**
+ * 1.2 carries the chat's OpenCode line, with the meaning (and the absence) of
+ * `listGuiAgentModelsRequestSchemaV11`'s.
+ */
+export const listGuiAgentCommandsRequestSchemaV12 = lazySchema(() =>
+  listGuiAgentCommandsRequestSchemaV11.extend({
+    opencodeLine: opencodeLineSchema.optional(),
   }),
 );
 

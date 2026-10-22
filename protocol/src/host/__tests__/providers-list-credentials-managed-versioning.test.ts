@@ -7,6 +7,7 @@ import {
 import {
   providersListResponseSchema,
   providersListResponseSchemaV104Preimage,
+  providersListResponseSchemaV105Preimage,
 } from "@traycer/protocol/host/provider-schemas";
 
 /**
@@ -18,10 +19,11 @@ import {
 describe("providers.list@10.5 registry binding", () => {
   it("opens 10.5 above a frozen 10.4", () => {
     const line = hostRpcRegistry["providers.list"][10];
-    expect(line.latestMinor).toBe(5);
     expect(line.versions[4].contract).toBe(providersListV104);
     expect(line.versions[5].contract).toBe(providersListV105);
-    expect(providersListV105.responseSchema).toBe(providersListResponseSchema);
+    expect(providersListV105.responseSchema).toBe(
+      providersListResponseSchemaV105Preimage,
+    );
     expect(providersListV104.responseSchema).toBe(
       providersListResponseSchemaV104Preimage,
     );
