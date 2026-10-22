@@ -261,6 +261,7 @@ Agent commands are for agents that Traycer launches. They read the Task and the 
 | `traycer agent stop --agent-id <id>` | Stop an agent's current turn. The agent is not deleted; a later message wakes it again. Add `--cascade` to also stop the agents it delegated to. |
 | `traycer agent archive --agent-id <id>` | Archive an agent. A working agent cannot be archived; stop it first. A later message to the agent unarchives it. |
 | `traycer agent archive --agent-id <id> --unarchive` | Unarchive an agent. |
+| `traycer agent rename <id> <name>` | Set an agent's display name. It needs the full agent id, and the agent must run on this host. |
 | `traycer agent send --to <id> --message <text>` | Send a message to another agent. |
 | `traycer agent send ... --expect-reply` | Ask for a reply. Without it, the other agent never reports back. |
 | `traycer agent send ... --response-id <id>` | Answer a request you received from that agent. |
@@ -341,7 +342,7 @@ There is no flag for the Task. Commands that need these values read them from th
 | Needs | Commands |
 | --- | --- |
 | `TRAYCER_EPIC_ID` | `workspace list`, `terminal list`, `terminal output`, `comments list`, `comments set-status`, `agent stop`, `agent archive`, `agent transcript`, and `agent role list` |
-| `TRAYCER_EPIC_ID` and `TRAYCER_AGENT_ID` | `agent list`, `create`, `fork`, `configure`, `send`, `selection-guide`, `list-profiles`, and `profile-rate-limits` |
+| `TRAYCER_EPIC_ID` and `TRAYCER_AGENT_ID` | `agent list`, `create`, `fork`, `configure`, `rename`, `send`, `selection-guide`, `list-profiles`, and `profile-rate-limits` |
 | `TRAYCER_EPIC_ID`, and `TRAYCER_AGENT_ID` or `--agent-id` | `agent inbox`, `agent role claim`, `agent role relinquish`, and `monitor` |
 | Neither | `agent list-harnesses` and `agent list-harness-models` |
 
@@ -349,7 +350,7 @@ Run outside an agent, these commands fail with "epic id required - set TRAYCER_E
 
 ### Read-Only Agents
 
-Traycer sets `TRAYCER_AGENT_CLI_SURFACE=readonly` for Codex and OpenCode agents on the Terminal interface. These agents can list agents and read transcripts, but these commands are hidden from their help and refused if they run them: `agent create`, `agent fork`, `agent configure`, `agent stop`, `agent archive`, `agent send`, `agent role claim`, `agent role relinquish`, and `worktree delete`. The `profile` commands that change a profile (`add`, `login`, `rename`, `enable`, `disable`, `remove`) are refused too; `profile list` still works.
+Traycer sets `TRAYCER_AGENT_CLI_SURFACE=readonly` for Codex and OpenCode agents on the Terminal interface. These agents can list agents and read transcripts, but these commands are hidden from their help and refused if they run them: `agent create`, `agent fork`, `agent configure`, `agent rename`, `agent stop`, `agent archive`, `agent send`, `agent role claim`, `agent role relinquish`, and `worktree delete`. The `profile` commands that change a profile (`add`, `login`, `rename`, `enable`, `disable`, `remove`) are refused too; `profile list` still works.
 
 ## JSON Output
 
