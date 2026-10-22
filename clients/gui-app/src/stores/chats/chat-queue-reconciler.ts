@@ -1368,7 +1368,7 @@ const NO_SETTLED_ACCEPTED_IDS: ReadonlySet<string> = new Set();
  *
  * A send dispatched while a turn is running (or with anything already queued)
  * is rendered as a QUEUED item, not a `pendingUserMessage` - so
- * `shouldRenderSendAsPendingUserMessage` is false and its recovery fields live
+ * `sendPlacement` selects the queue and its recovery fields live
  * only on the pending action. The accepted ack then moves that record to
  * `acceptedActions`, and until this pass existed that was a one-way door: the
  * snapshot pass above walks `pendingActions`, {@link reconcileTurnSettled}
@@ -2003,6 +2003,7 @@ export function addAcceptedAction(
         interviewDeliveryRetry: pending.interviewDeliveryRetry,
         messageId: pending.messageId,
         acceptedAt: now,
+        sentAt: pending.createdAt,
         restore: pending.restore,
         // The recovery tuple travels with the record now - see
         // `AcceptedChatAction`. A queued send's ONLY copy lives here between

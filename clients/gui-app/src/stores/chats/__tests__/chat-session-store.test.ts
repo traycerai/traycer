@@ -688,10 +688,11 @@ function startTurn(callbacks: ChatStreamCallbacks): void {
     hasBinaryPayload: false,
     epicId: EPIC_ID,
     chatId: CHAT_ID,
-    // `isChatSessionSettled` is false as soon as the run is not idle, which
-    // is all this needs - no activeTurn literal to keep in sync.
+    // An activating turn (the host's own bit) is what docks the next send;
+    // a bare `running` is background work, which no longer decides placement.
     runStatus: "running",
     activeTurn: null,
+    turnInProgress: true,
   });
 }
 

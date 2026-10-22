@@ -316,6 +316,7 @@ export function canModifyChatMessages(input: {
     | "backgroundItems"
     | "turnInProgress"
     | "pendingUserMessages"
+    | "pendingTurn"
     | "pendingActions"
   >;
 }): boolean {
@@ -329,7 +330,9 @@ export function canModifyChatMessages(input: {
   // pre-turn `turnActivating` phase (provider/worktree setup) and
   // stop-during-activation both keep the host's `turnInProgress` true until
   // the run truly unwinds.
+  const queueOnly = historyHasOnlyQueuedWork(input.state);
   if (
+    !queueOnly &&
     resolvedTurnStatus(
       input.state,
       composerTurnStatus(input.state.runStatus),
@@ -346,6 +349,20 @@ export function canModifyChatMessages(input: {
   if (input.state.pendingUserMessages.length > 0) return false;
   return !Object.values(input.state.pendingActions).some(
     isPendingSendOrHistoryMutation,
+  );
+}
+
+function historyHasOnlyQueuedWork(
+  state: Pick<
+    ChatSessionState,
+    "activeTurn" | "turnInProgress" | "pendingTurn" | "queue"
+  >,
+): boolean {
+  return (
+    state.activeTurn === null &&
+    state.turnInProgress !== true &&
+    !state.pendingTurn &&
+    state.queue.items.length > 0
   );
 }
 

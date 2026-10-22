@@ -201,6 +201,7 @@ export interface ComposerPromptEditorProps {
    * typing, pasting, an image insert/remove, or a programmatic `setContent`).
    * Never fired for a caret-only move; see `onSelectionChange`.
    */
+  readonly onUserInput?: (wasEmpty: boolean) => void;
   readonly onDocumentChange: (
     content: JsonContent,
     selection: { readonly from: number; readonly to: number },
@@ -300,6 +301,7 @@ function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
     hasPastedImageBytes,
     ingestPastedComposerImages,
     onDocumentChange,
+    onUserInput,
     onSelectionChange,
     onSubmit,
     onPaste,
@@ -330,6 +332,8 @@ function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
   );
   const onSubmitRef = useRef(onSubmit);
   const onDocumentChangeRef = useRef(onDocumentChange);
+  const onUserInputRef = useRef(onUserInput);
+  const applyingContentRef = useRef(false);
   const onSelectionChangeRef = useRef(onSelectionChange);
   const onEditorReadyRef = useRef(onEditorReady);
   const initialSelectionRef = useRef(normalizedInitial.selection);
@@ -337,6 +341,7 @@ function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
   useEffect(() => {
     onSubmitRef.current = onSubmit;
     onDocumentChangeRef.current = onDocumentChange;
+    onUserInputRef.current = onUserInput;
     onSelectionChangeRef.current = onSelectionChange;
     onEditorReadyRef.current = onEditorReady;
   });
@@ -394,7 +399,17 @@ function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
       editorProps: {
         attributes: editorAttributesObject,
       },
-      onUpdate({ editor: updatedEditor }) {
+      onUpdate({ editor: updatedEditor, transaction }) {
+        // setContent can emit an update depending on emitUpdate; it is not user input.
+        if (!applyingContentRef.current && updatedEditor.isFocused) {
+          const before = transaction.before;
+          const wasEmpty =
+            before.childCount === 0 ||
+            (before.childCount === 1 &&
+              before.firstChild?.isTextblock === true &&
+              before.firstChild.content.size === 0);
+          onUserInputRef.current?.(wasEmpty);
+        }
         // Tiptap only fires `update` when a transaction actually changed the
         // document (gated internally on `docChanged` plus a structural
         // doc-equality check) - so every call here is a real mutation, never
@@ -579,7 +594,12 @@ function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
         selection,
       );
       bumpComposerDraftGeneration(editor);
-      editor.commands.setContent(normalized.content, { emitUpdate });
+      setProgrammaticContent({
+        editor,
+        content: normalized.content,
+        emitUpdate,
+        applyingContent: applyingContentRef,
+      });
       if (normalized.selection !== null) {
         editor.commands.setTextSelection({
           from: normalized.selection.from,
@@ -707,6 +727,9 @@ function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
         // Editor has the caret: insert there so segments append in order.
         editor.chain().focus().insertContent(node).run();
       } else {
+        // Keyboard dictation controls can own focus while this composer stays
+        // active. The dictated insert is still the person's input.
+        onUserInputRef.current?.(editor.isEmpty);
         // Don't steal focus (e.g. user clicked Stop/another field, or a mid-
         // utterance auto-commit landed) - append at the end of the last text
         // block. Inserting at `doc.content.size` lands *after* the final
@@ -802,6 +825,23 @@ function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
       onBlur={onBlur}
     />
   );
+}
+
+// Keep try/finally outside the component: React Compiler cannot lower it yet.
+function setProgrammaticContent(input: {
+  readonly editor: Editor;
+  readonly content: JsonContent;
+  readonly emitUpdate: boolean;
+  readonly applyingContent: { current: boolean };
+}): void {
+  input.applyingContent.current = true;
+  try {
+    input.editor.commands.setContent(input.content, {
+      emitUpdate: input.emitUpdate,
+    });
+  } finally {
+    input.applyingContent.current = false;
+  }
 }
 
 function editorAttributes(

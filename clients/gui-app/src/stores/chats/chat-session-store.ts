@@ -1,4 +1,10 @@
 import { SendTimings } from "@traycer/protocol/host/agent/gui/send-timing";
+import {
+  sendPlacement,
+  reconcileSendState,
+  queueWithDrainingPrompts,
+  type PendingTurn,
+} from "@/stores/chats/chat-send-state";
 import type { ChatMessageDelivery } from "@traycer/protocol/host/agent/gui/message-delivery";
 import {
   addAcceptedAction,
@@ -42,6 +48,7 @@ import {
 } from "@/stores/chats/chat-queue-reconciler";
 import {
   appendOptimisticQueuedItem,
+  isOptimisticQueuedItem,
   mergeQueueWithOptimisticQueuedItems,
   optimisticQueuedItemId,
   removeOptimisticQueuedItemByClientActionId,
@@ -499,6 +506,7 @@ type DeferredWindowedSnapshotAux = Pick<
   | "runStatus"
   | "activeTurn"
   | "turnInProgress"
+  | "sendWouldQueue"
   | "backgroundItems"
   | "pendingApprovals"
   | "pendingFileEditApprovals"
@@ -540,6 +548,7 @@ function deferredWindowedSnapshotAuxOf(
     runStatus: snapshot.runStatus,
     activeTurn: snapshot.activeTurn,
     turnInProgress: snapshot.turnInProgress,
+    sendWouldQueue: snapshot.sendWouldQueue,
     backgroundItems: snapshot.backgroundItems,
     pendingApprovals: snapshot.pendingApprovals,
     pendingFileEditApprovals: snapshot.pendingFileEditApprovals,
@@ -908,6 +917,8 @@ export interface AcceptedChatAction {
   readonly interviewDeliveryRetry: InterviewDeliveryRetryIdentity | null;
   readonly messageId: string | null;
   readonly acceptedAt: number;
+  /** Original Enter time, retained across acknowledgement. */
+  readonly sentAt?: number;
   /**
    * Structured prompt content carried over from the originating
    * `PendingChatAction` when the host accepts a `send`. The content survives
@@ -1126,6 +1137,23 @@ function countPreSnapshotRetry(
 }
 
 export interface ChatSessionState {
+  readonly sendWouldQueue?: boolean;
+  readonly pendingTurn?: PendingTurn | null;
+  readonly turnObservedAt?: number;
+  readonly queueTurnContinuity?: boolean;
+  readonly heldStop?: {
+    readonly messageId: string;
+    readonly clientActionId: string;
+  } | null;
+  readonly pendingTurnEvidence?: {
+    readonly messageId: string;
+    readonly turnSeen: boolean;
+    readonly savedRevision: number | null;
+  } | null;
+  readonly sendHostFrameRevision?: number;
+  readonly lastSendSnapshotRevision?: number;
+  readonly unplacedSendIds?: ReadonlySet<string>;
+  readonly drainingQueueItems?: ReadonlyArray<OpenChatQueuedPromptItem>;
   readonly epicId: string;
   readonly chatId: string;
   readonly connectionStatus: StreamConnectionStatus;
@@ -3398,7 +3426,7 @@ export interface ChatSessionNotificationDependencies {
  */
 function chatSlicesOf(state: ChatSessionState): ChatWholeSetSlices {
   return {
-    queue: state.queue,
+    queue: queueWithDrainingPrompts(state),
     pendingApprovals: state.pendingApprovals,
     pendingFileEditApprovals: state.pendingFileEditApprovals,
     pendingInterviews: state.pendingInterviews,
@@ -4136,7 +4164,45 @@ export function createChatSessionStoreWithNotificationDependencies(
     client.close();
   };
 
-  const store = create<ChatSessionState>()((set, get) => {
+  const store = create<ChatSessionState>()((rawSet, get) => {
+    // Keep send custody and its presentation in the same publication. Host
+    // frames can move a prompt between surfaces before the action ack arrives.
+    const set: SendActionInput["set"] = (update) => {
+      rawSet((state) => {
+        const patch = typeof update === "function" ? update(state) : update;
+        if (patch === state) return state;
+        const next = { ...state, ...patch };
+        return { ...patch, ...reconcileSendState(state, next) };
+      });
+      const state = get();
+      const held = state.heldStop;
+      if (held === undefined || held === null) return;
+      if (state.activeTurn?.userMessageId === held.messageId) {
+        rawSet({ heldStop: null });
+        sendAction({
+          set,
+          get,
+          frame: {
+            kind: "stop",
+            hasBinaryPayload: false,
+            epicId: options.epicId,
+            chatId: options.chatId,
+            clientActionId: held.clientActionId,
+            turnId: state.activeTurn.turnId,
+          },
+          pending: basicPending(held.clientActionId, "stop"),
+          pendingUserMessage: null,
+        });
+      } else {
+        const queued = state.queue.items.find(
+          (item) => item.kind === "prompt" && item.messageId === held.messageId,
+        );
+        if (queued !== undefined && !isOptimisticQueuedItem(queued)) {
+          rawSet({ heldStop: null });
+          get().queueCancel(queued.queueItemId);
+        }
+      }
+    };
     // `blockDelta` coalescing. Deltas accumulate here and are folded into a
     // single `set()` per coordinator tick (one animation frame in production)
     // instead of one `set()` per token. Every non-delta frame that consumes
@@ -4682,6 +4748,9 @@ export function createChatSessionStoreWithNotificationDependencies(
           messages,
           events: frame.snapshot.chat.events,
           queue,
+          sendWouldQueue: frame.snapshot.sendWouldQueue,
+          sendHostFrameRevision: (state.sendHostFrameRevision ?? 0) + 1,
+          lastSendSnapshotRevision: (state.sendHostFrameRevision ?? 0) + 1,
           runStatus: frame.snapshot.runStatus,
           activeTurn: frame.snapshot.activeTurn,
           turnInProgress: frame.snapshot.turnInProgress,
@@ -4820,6 +4889,7 @@ export function createChatSessionStoreWithNotificationDependencies(
           liveAssistantMessage: liveAssistantForTurnStateFrame({
             current: state.liveAssistantMessage,
             previousTurnId,
+            previousTurnStatus: activeTurnStatusOf(state.activeTurn),
             activeTurn: frame.snapshot.activeTurn,
             messages,
           }),
@@ -7477,7 +7547,7 @@ export function createChatSessionStoreWithNotificationDependencies(
           // this record surfaces instead of retrying again.
           hashOnlyRetry: true,
           wireContent: content,
-          createdAt: Date.now(),
+          createdAt: recovery.sentAt,
         },
         // Re-keyed to the NEW action id. Carrying the original echo through
         // unchanged registered it under the SETTLED id, which the cleanup
@@ -8945,6 +9015,7 @@ export function createChatSessionStoreWithNotificationDependencies(
             nowMs: now,
           });
           return {
+            sendWouldQueue: frame.sendWouldQueue ?? state.sendWouldQueue,
             queue: mergeQueueWithOptimisticQueuedItems(
               frame.queue,
               state.queue,
@@ -8983,7 +9054,10 @@ export function createChatSessionStoreWithNotificationDependencies(
         // handing it a list the optimistic items are already in would keep an
         // item whose pending action has since settled.
         commitWholeSetSliceBudget();
-        advanceDeferredSnapshotAux(() => ({ queue: frame.queue }));
+        advanceDeferredSnapshotAux((held) => ({
+          queue: frame.queue,
+          sendWouldQueue: frame.sendWouldQueue ?? held.sendWouldQueue,
+        }));
         reviewUnconfirmedQueueEdits();
       },
       onTurnStateChanged: (frame) => {
@@ -9007,6 +9081,7 @@ export function createChatSessionStoreWithNotificationDependencies(
             state.messages,
             state.liveAssistantMessage,
             {
+              previousActiveTurnStatus: activeTurnStatusOf(state.activeTurn),
               previousActiveTurnId: previousTurnId,
               nextActiveTurnId: nextTurnId,
             },
@@ -9119,6 +9194,8 @@ export function createChatSessionStoreWithNotificationDependencies(
             // subscribers that compare by identity see no change on the
             // ordinary turn transition.
             transcriptWindow: nextWindow,
+            sendWouldQueue: frame.sendWouldQueue ?? state.sendWouldQueue,
+            sendHostFrameRevision: (state.sendHostFrameRevision ?? 0) + 1,
             runStatus: frame.runStatus,
             activeTurn: frame.activeTurn,
             turnInProgress: frame.turnInProgress ?? state.turnInProgress,
@@ -9166,6 +9243,7 @@ export function createChatSessionStoreWithNotificationDependencies(
             liveAssistantMessage: liveAssistantForTurnStateFrame({
               current: state.liveAssistantMessage,
               previousTurnId,
+              previousTurnStatus: activeTurnStatusOf(state.activeTurn),
               activeTurn: frame.activeTurn,
               messages: nextMessages,
             }),
@@ -9211,6 +9289,7 @@ export function createChatSessionStoreWithNotificationDependencies(
         // snapshot's own baseline rather than the store's: an older host omits
         // both fields, and "omitted" means "unchanged", not "cleared".
         advanceDeferredSnapshotAux((held) => ({
+          sendWouldQueue: frame.sendWouldQueue ?? held.sendWouldQueue,
           runStatus: frame.runStatus,
           activeTurn: frame.activeTurn,
           turnInProgress: frame.turnInProgress ?? held.turnInProgress,
@@ -10101,6 +10180,15 @@ export function createChatSessionStoreWithNotificationDependencies(
       autoPermissionModeProtocolSupported: null,
       queuePauseReasonProtocolSupported: null,
       turnInProgress: undefined,
+      sendWouldQueue: undefined,
+      sendHostFrameRevision: 0,
+      lastSendSnapshotRevision: 0,
+      pendingTurn: null,
+      queueTurnContinuity: false,
+      pendingTurnEvidence: null,
+      heldStop: null,
+      unplacedSendIds: new Set<string>(),
+      drainingQueueItems: [],
       pendingApprovals: [],
       pendingFileEditApprovals: [],
       pendingInterviews: [],
@@ -10315,14 +10403,23 @@ export function createChatSessionStoreWithNotificationDependencies(
         // can put back what this consume displaces - see `rollBackDispatch`.
         const displaced = stagedDispatchDisplacement(stagedKey);
         stagingStore.consumeForDispatch(stagedKey, clientActionId);
-        // Captured once, before dispatch, and reused for the optimistic echo
-        // below - a queued send (this false) gets NO optimistic transcript
-        // row today. Re-deriving this condition after dispatch instead of
-        // reusing it would risk it reading post-dispatch state (e.g. the
-        // just-appended optimistic queue item) and disagreeing with what
-        // `pendingUserMessage` below actually decided.
-        const rendersAsPendingUserMessage =
-          shouldRenderSendAsPendingUserMessage(get());
+        const placementState = get();
+        const snapshotCurrent =
+          placementState.transcriptBaselineEpoch ===
+          placementState.connectionEpoch;
+        const placement = snapshotCurrent
+          ? sendPlacement(placementState)
+          : "transcript";
+        const sentAt = Date.now();
+        const rendersAsPendingUserMessage = placement === "transcript";
+        if (!snapshotCurrent) {
+          set({
+            unplacedSendIds: new Set([
+              ...(placementState.unplacedSendIds ?? []),
+              messageId,
+            ]),
+          });
+        }
         const sentClientActionId = sendAction({
           set,
           get,
@@ -10353,7 +10450,7 @@ export function createChatSessionStoreWithNotificationDependencies(
             // document. A retry rebuilt from the restore document delivered
             // the prompt with the annotation screenshot silently missing.
             wireContent: frame.content,
-            createdAt: Date.now(),
+            createdAt: sentAt,
           },
           // Echo the user message optimistically so it paints INSTANTLY on send -
           // including a worktree-creating send. The host announces the setup
@@ -10373,7 +10470,7 @@ export function createChatSessionStoreWithNotificationDependencies(
                 attachments: input.attachments,
                 sender: input.sender,
                 settings: input.settings,
-                timestamp: Date.now(),
+                timestamp: sentAt,
                 restore: input.restore,
                 accountContext: frame.accountContext,
                 deliveryPolicy: frame.deliveryPolicy,
@@ -10392,12 +10489,17 @@ export function createChatSessionStoreWithNotificationDependencies(
           return null;
         }
         const optimisticQueuedItem = optimisticQueuedItemForSend({
-          state: get(),
+          placement,
           clientActionId,
           messageId,
           content: input.content,
           sender: input.sender,
           settings: input.settings,
+          browserAnnotations,
+          deliveryPolicy: frame.deliveryPolicy,
+          accountContext: frame.accountContext,
+          sentFromHostId: frame.sentFromHostId,
+          sentAt,
         });
         if (optimisticQueuedItem !== null) {
           set((state) => ({
@@ -10783,6 +10885,17 @@ export function createChatSessionStoreWithNotificationDependencies(
       },
       stopTurn: () => {
         const clientActionId = uuidv4();
+        const state = get();
+        const pending = state.pendingTurn;
+        if (
+          state.sendWouldQueue !== undefined &&
+          pending !== null &&
+          pending !== undefined &&
+          state.activeTurn?.userMessageId !== pending.messageId
+        ) {
+          set({ heldStop: { messageId: pending.messageId, clientActionId } });
+          return clientActionId;
+        }
         const frame: ChatOwnerActionFrame = {
           kind: "stop",
           hasBinaryPayload: false,
@@ -13267,6 +13380,7 @@ export interface SendChatSessionMessageInput {
 }
 
 interface HashOnlyRecoveryState {
+  readonly sentAt: number;
   /** The settled action this replaces, still owning its queue row until dispatch. */
   readonly clientActionId: string;
   /** Reused by the retry, so the optimistic transcript row never moves. */
@@ -13487,6 +13601,7 @@ function hashOnlyRetryForRejection(
   }
   return {
     clientActionId: frame.clientActionId,
+    sentAt: pending.createdAt,
     messageId,
     wireContent,
     restore,
@@ -13808,45 +13923,25 @@ function findRestorableSendByMessageId<
   return null;
 }
 
-/**
- * A chat session is "fully settled" when no turn is running, none is active,
- * and the queue is empty/idle. Used only by the render-send-as-pending check
- * below - the turn-completion refresh subscribers
- * (`lib/chats/chat-turn-completions.ts`) intentionally use their own looser
- * `turnEnded` (idle + no active turn; the queue may still be paused), so an
- * errored turn's parked queue still drives a completion refresh.
- */
-export function isChatSessionSettled(
-  state: Pick<ChatSessionState, "runStatus" | "activeTurn" | "queue">,
-): boolean {
-  return (
-    state.runStatus === "idle" &&
-    state.activeTurn === null &&
-    state.queue.status === "idle" &&
-    state.queue.items.length === 0
-  );
-}
-
-function shouldRenderSendAsPendingUserMessage(
-  state: ChatSessionState,
-): boolean {
-  return isChatSessionSettled(state);
-}
-
 type OptimisticQueuedItemForSendInput = {
-  readonly state: ChatSessionState;
+  readonly placement: "transcript" | "queue";
   readonly clientActionId: string;
   readonly messageId: string;
   readonly content: JsonContent;
   readonly sender: UserMessageSender;
   readonly settings: ChatRunSettings;
+  readonly browserAnnotations: ReadonlyArray<BrowserAnnotationRecord>;
+  readonly deliveryPolicy: ChatQueueDeliveryPolicy | null;
+  readonly accountContext: AccountContext;
+  readonly sentFromHostId: string | null;
+  readonly sentAt: number;
 };
 
 /**
  * Put the retry's optimistic queue row where the settled send's used to be.
  *
- * Only when the original had one. `shouldRenderSendAsOptimisticQueuedItem`
- * reads LIVE state, and by now the turn it was queued behind may have ended -
+ * Only when the original had one. Placement reads live state, and by now
+ * the turn it was queued behind may have ended -
  * asking it again would invent a row for a send that never showed one, or drop
  * one the user has been looking at since before the refusal. What the original
  * did is the fact worth reproducing, so it is recorded on the recovery.
@@ -13858,7 +13953,7 @@ function repaintOptimisticQueueRowForRetry(input: {
   readonly content: JsonContent;
 }): ChatSessionState["queue"] {
   if (!input.recovery.hadOptimisticQueueRow) return input.queue;
-  const now = Date.now();
+  const now = input.recovery.sentAt;
   return appendOptimisticQueuedItem(input.queue, {
     kind: "prompt",
     queueItemId: optimisticQueuedItemId(input.clientActionId),
@@ -13870,7 +13965,7 @@ function repaintOptimisticQueueRowForRetry(input: {
       content: input.content,
       // Optimistic local echo only, exactly as the original row was built -
       // the host's `queue.added` reconciles it once it arrives.
-      browserAnnotations: [],
+      browserAnnotations: [...input.recovery.restore.browserAnnotations],
     },
     sender: input.recovery.sender,
     settings: input.recovery.settings,
@@ -13879,7 +13974,10 @@ function repaintOptimisticQueueRowForRetry(input: {
     // move.
     accountContext: input.recovery.accountContext,
     sentFromHostId: input.recovery.sentFromHostId,
-    delivery: "next_turn",
+    delivery:
+      input.recovery.deliveryPolicy === "after_safe_point"
+        ? "same_turn"
+        : "next_turn",
     status: "pending",
     targetTurnId: null,
     steerRequest: null,
@@ -13892,8 +13990,8 @@ function repaintOptimisticQueueRowForRetry(input: {
 function optimisticQueuedItemForSend(
   input: OptimisticQueuedItemForSendInput,
 ): OpenChatQueuedPromptItem | null {
-  if (!shouldRenderSendAsOptimisticQueuedItem(input.state)) return null;
-  const now = Date.now();
+  if (input.placement !== "queue") return null;
+  const now = input.sentAt;
   return {
     kind: "prompt",
     queueItemId: optimisticQueuedItemId(input.clientActionId),
@@ -13903,13 +14001,14 @@ function optimisticQueuedItemForSend(
       content: input.content,
       // Optimistic local echo only - the real `queue.added` event reconciles
       // this row once it arrives.
-      browserAnnotations: [],
+      browserAnnotations: [...input.browserAnnotations],
     },
     sender: input.sender,
     settings: input.settings,
-    accountContext: useAccountContextStore.getState().accountContext,
-    sentFromHostId: sentFromHostIdSnapshot(),
-    delivery: "next_turn",
+    accountContext: input.accountContext,
+    sentFromHostId: input.sentFromHostId,
+    delivery:
+      input.deliveryPolicy === "after_safe_point" ? "same_turn" : "next_turn",
     status: "pending",
     targetTurnId: null,
     steerRequest: null,
@@ -13917,12 +14016,6 @@ function optimisticQueuedItemForSend(
     createdAt: now,
     updatedAt: now,
   };
-}
-
-function shouldRenderSendAsOptimisticQueuedItem(
-  state: ChatSessionState,
-): boolean {
-  return state.activeTurn !== null || state.queue.items.length > 0;
 }
 
 function messageExists(
@@ -15390,10 +15483,16 @@ function materializedLiveAssistant(
   liveAssistant: LiveAssistantMessage | null,
   turnIds: {
     readonly previousActiveTurnId: string | null;
+    readonly previousActiveTurnStatus?: ChatActiveTurn["status"];
     readonly nextActiveTurnId: string | null;
   },
 ): OpenMessage | null {
   if (liveAssistant === null) return null;
+  if (
+    liveAssistant.blocks.length === 0 &&
+    turnIds.previousActiveTurnStatus === "starting"
+  )
+    return null;
   if (liveAssistantCoveredByMessages(liveAssistant, messages)) return null;
   if (
     turnIds.nextActiveTurnId !== null &&
@@ -15506,11 +15605,17 @@ function liveAssistantForActiveTurnState(input: {
 function liveAssistantForTurnStateFrame(input: {
   readonly current: LiveAssistantMessage | null;
   readonly previousTurnId: string | null;
+  readonly previousTurnStatus?: ChatActiveTurn["status"];
   readonly activeTurn: ChatActiveTurn | null;
   readonly messages: ReadonlyArray<OpenMessage>;
 }): LiveAssistantMessage | null {
   if (input.activeTurn === null) {
-    if (liveAssistantCoveredByMessages(input.current, input.messages)) {
+    if (
+      liveAssistantCoveredByMessages(input.current, input.messages) ||
+      (input.previousTurnStatus === "starting" &&
+        input.current !== null &&
+        input.current.blocks.length === 0)
+    ) {
       return null;
     }
     return input.current;
@@ -15563,4 +15668,10 @@ function liveAssistantCoveredByMessages(
     (message) =>
       message.role === "assistant" && message.turnId === liveAssistant.turnId,
   );
+}
+
+function activeTurnStatusOf(
+  turn: ChatActiveTurn | null,
+): ChatActiveTurn["status"] | undefined {
+  return turn?.status;
 }

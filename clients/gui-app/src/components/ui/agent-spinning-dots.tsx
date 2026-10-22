@@ -604,6 +604,7 @@ const AGENT_SPINNER_PRESETS: AgentSpinnerPresets = {
 };
 
 export interface AgentSpinningDotsProps {
+  readonly animationOrigin?: number;
   readonly className: string | undefined;
   readonly testId: string | undefined;
   readonly variant: AgentSpinnerVariant | undefined;
@@ -654,23 +655,31 @@ function dotLift(elapsedMs: number, index: number): number {
  * animation).
  */
 function WorkingDots(props: {
+  readonly animationOrigin?: number;
   readonly className: string | undefined;
   readonly testId: string | undefined;
   readonly tone: "inherit" | "muted";
 }) {
   const ref = useRef<HTMLSpanElement | null>(null);
-  const write = useCallback((element: HTMLSpanElement, elapsedMs: number) => {
-    const dots = element.children;
-    for (let index = 0; index < dots.length; index++) {
-      const dot = dots[index];
-      if (!(dot instanceof HTMLElement)) continue;
-      const lift = dotLift(elapsedMs, index);
-      dot.style.opacity = String(
-        WORKING_DOTS_REST_OPACITY + (1 - WORKING_DOTS_REST_OPACITY) * lift,
-      );
-      dot.style.transform = `translateY(${(-lift).toFixed(3)}px)`;
-    }
-  }, []);
+  const write = useCallback(
+    (element: HTMLSpanElement, elapsedMs: number) => {
+      const elapsed =
+        props.animationOrigin === undefined
+          ? elapsedMs
+          : Math.max(0, Date.now() - props.animationOrigin);
+      const dots = element.children;
+      for (let index = 0; index < dots.length; index++) {
+        const dot = dots[index];
+        if (!(dot instanceof HTMLElement)) continue;
+        const lift = dotLift(elapsed, index);
+        dot.style.opacity = String(
+          WORKING_DOTS_REST_OPACITY + (1 - WORKING_DOTS_REST_OPACITY) * lift,
+        );
+        dot.style.transform = `translateY(${(-lift).toFixed(3)}px)`;
+      }
+    },
+    [props.animationOrigin],
+  );
   const clear = useCallback((element: HTMLSpanElement) => {
     for (const dot of element.children) {
       if (!(dot instanceof HTMLElement)) continue;
@@ -746,6 +755,7 @@ export function AgentSpinningDots(props: AgentSpinningDotsProps) {
   if (preset === null) {
     return (
       <WorkingDots
+        animationOrigin={props.animationOrigin}
         className={props.className}
         testId={props.testId}
         tone={tone}
