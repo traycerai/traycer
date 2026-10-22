@@ -1484,6 +1484,7 @@ import {
   providersSetSelectionRequestSchemaV21,
   providersSetSelectionResponseSchema,
   providersSetSelectionResponseSchemaV10,
+  providersSetSelectionResponseSchemaV21,
   providersSetSelectionResponseSchemaV20,
   providersSetTerminalAgentArgsRequestSchema,
   providersSetTerminalAgentArgsRequestSchemaV10,
@@ -4065,7 +4066,7 @@ export const providersSetSelectionV21 = defineRpcContract({
   method: "providers.setSelection",
   schemaVersion: { major: 2, minor: 1 } as const,
   requestSchema: providersSetSelectionRequestSchemaV21,
-  responseSchema: providersSetSelectionResponseSchema,
+  responseSchema: providersSetSelectionResponseSchemaV21,
 });
 
 export const providersSetSelectionUpgradeV20ToV21 = defineUpgradePath<

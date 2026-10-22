@@ -125,6 +125,22 @@ describe("providers.list@10.6 managedLines and selected.line", () => {
     expect(row?.selected).toEqual({ kind: "bundled" });
   });
 
+  it("refuses a managed line whose candidate is not the bundled one", () => {
+    const row = providersListV106.responseSchema.parse({
+      providers: [
+        opencodeRow({
+          managedLines: [
+            {
+              ...managedLine,
+              candidate: { ...managedLine.candidate, kind: "path" },
+            },
+          ],
+        }),
+      ],
+    }).providers[0];
+    expect(row?.managedLines).toEqual([]);
+  });
+
   it("reads a malformed managedLines as empty", () => {
     const row = providersListV106.responseSchema.parse({
       providers: [opencodeRow({ managedLines: "nope" })],

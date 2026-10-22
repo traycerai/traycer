@@ -14,7 +14,10 @@ import { IMMEDIATE_STREAM_FLUSH_COORDINATOR } from "@/stores/chats/stream-flush-
 import { CHAT_STORE_TEST_ENVIRONMENT } from "@/stores/chats/test-support/chat-store-test-environment";
 
 const hoisted = vi.hoisted(() => ({
-  mutate: vi.fn(),
+  mutateAsync: vi.fn(),
+  openWhenProjected: vi.fn(
+    (_args: { readonly intent: unknown }) => () => undefined,
+  ),
   createChatVersion: null as { major: number; minor: number } | null,
 }));
 
@@ -27,9 +30,13 @@ vi.mock("@/hooks/host/use-host-supports-method", () => ({
 }));
 vi.mock("@/hooks/epic/use-epic-chat-mutations", () => ({
   useEpicCreateChatForHostClient: () => ({
-    mutate: hoisted.mutate,
+    mutateAsync: hoisted.mutateAsync,
     isPending: false,
   }),
+}));
+vi.mock("@/lib/commands/actions/new-chat", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/commands/actions/new-chat")>()),
+  openCreatedChatWhenProjectedWithNavigation: hoisted.openWhenProjected,
 }));
 vi.mock("@/hooks/epic/use-epic-nested-focus-navigation", () => ({
   useEpicNestedFocusNavigation: () => vi.fn(),
@@ -125,7 +132,8 @@ describe("ContinueOnOpencodeTwoTabMenu", () => {
   });
   afterEach(() => {
     cleanup();
-    hoisted.mutate.mockReset();
+    hoisted.mutateAsync.mockReset();
+    hoisted.openWhenProjected.mockClear();
     registry.disposeAll();
   });
 
@@ -182,13 +190,15 @@ describe("ContinueOnOpencodeTwoTabMenu", () => {
     expect(screen.queryByText("Continue on OpenCode 2")).toBeNull();
   });
 
-  it("creates a clone from the latest boundary on line 2 and keeps the source", async () => {
+  it("creates a clone from the latest boundary on line 2, and opens it after the menu has closed", async () => {
+    const created = Promise.withResolvers<{ chatId: string }>();
+    hoisted.mutateAsync.mockReturnValue(created.promise);
     openSession({ opencodeLine: 1 });
     await openMenu();
     fireEvent.click(screen.getByText("Continue on OpenCode 2"));
 
-    expect(hoisted.mutate).toHaveBeenCalledTimes(1);
-    expect(hoisted.mutate.mock.calls[0]?.[0]).toMatchObject({
+    expect(hoisted.mutateAsync).toHaveBeenCalledTimes(1);
+    expect(hoisted.mutateAsync.mock.calls[0]?.[0]).toMatchObject({
       epicId: "epic-1",
       hostId: "host-1",
       title: "A chat (OpenCode 2)",
@@ -199,5 +209,15 @@ describe("ContinueOnOpencodeTwoTabMenu", () => {
       },
       opencodeLine: 2,
     });
+
+    // The menu is gone before the host answers, as it is in the app.
+    cleanup();
+    created.resolve({ chatId: "chat-2" });
+    await created.promise;
+    await Promise.resolve();
+    expect(hoisted.openWhenProjected).toHaveBeenCalledTimes(1);
+    expect(hoisted.openWhenProjected.mock.calls[0]).toMatchObject([
+      { intent: { chatId: "chat-2", hostId: "host-1" } },
+    ]);
   });
 });

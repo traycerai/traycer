@@ -1776,12 +1776,14 @@ export type ProviderMacosRequirement = z.infer<
  * One Managed row of a provider that ships more than one managed line. Each
  * line is its own pack, so the install state and the version panel are the
  * line's own, with the same meanings (and the same tolerant decoding) as the
- * provider-level fields of those names. `candidate.kind` is always `bundled`.
+ * provider-level fields of those names.
  */
 export const providerManagedLineSchema = lazySchema(() =>
   z.object({
     line: opencodeLineSchema,
-    candidate: providerCliCandidateSchema,
+    candidate: providerCliCandidateSchema.extend({
+      kind: z.literal("bundled"),
+    }),
     packId: z.string().nullable().catch(null),
     managedInstallState: providerManagedInstallStateSchema
       .nullable()
@@ -3214,7 +3216,20 @@ export type ProvidersSetSelectionRequest = z.infer<
   typeof providersSetSelectionRequestSchema
 >;
 
+/**
+ * Live response: `providers.setSelection@2.2` echoes the selection it just
+ * stored, `line` included, so a caller reading the echo sees the Managed row it
+ * chose rather than a plain `bundled` (which reads as Managed 2.x).
+ */
 export const providersSetSelectionResponseSchema = lazySchema(() =>
+  z.object({
+    state: providerMutationCliStateSchemaV21.extend({
+      selected: providerSelectionSchema,
+    }),
+  }),
+);
+/** Frozen `providers.setSelection@2.1` response: the selection before `line`. */
+export const providersSetSelectionResponseSchemaV21 = lazySchema(() =>
   z.object({
     state: providerMutationCliStateSchemaV21,
   }),

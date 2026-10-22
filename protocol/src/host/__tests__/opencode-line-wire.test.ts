@@ -55,6 +55,39 @@ describe("providers.setSelection line", () => {
   });
 });
 
+describe("providers.setSelection echo", () => {
+  const response = {
+    state: {
+      providerId: "opencode",
+      enabled: true,
+      disabledBy: null,
+      selected: { kind: "bundled", line: 1 },
+      candidates: [],
+      auth: { status: "unknown", badgeText: null, label: null, detail: null },
+      authPending: false,
+      checkedAt: null,
+      apiKey: { supported: false, configured: false, source: null },
+      terminalAgentArgs: "",
+      envOverrides: [],
+      loginCapability: null,
+      availabilityPending: false,
+      profiles: [],
+    },
+  };
+
+  it("echoes the chosen line at 2.2", () => {
+    expect(
+      providersSetSelectionV22.responseSchema.parse(response).state.selected,
+    ).toEqual({ kind: "bundled", line: 1 });
+  });
+
+  it("strips it at 2.1", () => {
+    expect(
+      providersSetSelectionV21.responseSchema.parse(response).state.selected,
+    ).toEqual({ kind: "bundled" });
+  });
+});
+
 describe("epic.createChat opencodeLine", () => {
   const request = {
     epicId: "epic-1",

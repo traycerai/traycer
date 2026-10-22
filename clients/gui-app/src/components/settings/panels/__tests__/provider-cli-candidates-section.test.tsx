@@ -1707,11 +1707,14 @@ describe("ProviderCliCandidatesSection: OpenCode Managed lines", () => {
   function managedLine(line: 1 | 2): ProviderManagedLine {
     return {
       line,
-      candidate: bundledCandidate({
-        path: `/store/opencode${String(line)}/bin`,
-        version: line === 1 ? "1.14.0" : "2.1.2",
-        available: true,
-      }),
+      candidate: {
+        ...bundledCandidate({
+          path: `/store/opencode${String(line)}/bin`,
+          version: line === 1 ? "1.14.0" : "2.1.2",
+          available: true,
+        }),
+        kind: "bundled",
+      },
       packId: line === 1 ? "opencode" : "opencode2",
       managedInstallState: { status: "installed", version: "x" },
       managedVersions: null,

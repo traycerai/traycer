@@ -74,7 +74,17 @@ export function ContinueOnOpencodeTwoTabMenu(
           },
           source: "direct_ui",
           createChat: (request, callbacks) => {
-            createChat.mutate({ ...request, opencodeLine: 2 }, callbacks);
+            // `mutateAsync`, not `mutate`: picking the item closes the menu
+            // and unmounts this component, and TanStack drops `mutate`'s
+            // per-call callbacks then, so the clone would be made but never
+            // opened. A refusal resolves, and the mutation's own `onSuccess`
+            // already reported it, so it is never opened.
+            createChat
+              .mutateAsync({ ...request, opencodeLine: 2 })
+              .then((response) => {
+                if (response.refusal === undefined)
+                  callbacks.onSuccess(response);
+              }, callbacks.onError);
           },
           openWhenProjected: (intent) =>
             openCreatedChatWhenProjectedWithNavigation({

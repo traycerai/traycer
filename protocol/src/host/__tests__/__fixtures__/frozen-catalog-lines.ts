@@ -43263,11 +43263,7 @@ export const FROZEN_CATALOG_LINE_SNAPSHOTS = {
                       "properties": {
                         "kind": {
                           "type": "string",
-                          "enum": [
-                            "bundled",
-                            "path",
-                            "custom"
-                          ]
+                          "const": "bundled"
                         },
                         "path": {
                           "type": "string"
