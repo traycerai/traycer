@@ -77,12 +77,11 @@ const LOCAL_FIRST_CREATE_FLOOR = {
 } as const;
 
 /**
- * The longest one create can hold its key's lock: its single attempt can dial
- * and wait out its response, then do it once more after the one refreshed
- * sign-in (whose refresh waits on the credentials lock). A single attempt has
- * no attestation window to wait. A second run of the key waits this long
- * before it gives up having created nothing. Read when the command runs, not
- * at import.
+ * How long a second run of a key waits on its lock before it gives up having
+ * created nothing. One create holds the lock for a single attempt, a dial and
+ * its response wait, with no attestation window and no resend after a
+ * refreshed sign-in; the wait allows twice that plus the credentials lock
+ * wait. Read when the command runs, not at import.
  */
 function keyLockWaitMs(): number {
   return (
@@ -203,12 +202,23 @@ export function buildTaskCreateCommand(opts: TaskCreateOptions): CommandFn {
       if (outcome.kind === "unknown") {
         throw failureFor(outcome, ids, recordPath);
       }
-      await writeTaskCreateKey(recordPath, {
-        state: "done",
-        ...ids,
-        fingerprint,
-        writtenAt: Date.now(),
-      });
+      try {
+        await writeTaskCreateKey(recordPath, {
+          state: "done",
+          ...ids,
+          fingerprint,
+          writtenAt: Date.now(),
+        });
+      } catch {
+        // The host answered created, so the ids are the result; the record
+        // still reads intent, and every rerun of the key refuses on it.
+        throw cliError({
+          code: CLI_ERROR_CODES.UNEXPECTED,
+          message: `traycer: Task ${ids.taskId} (first agent ${ids.agentId}) was created, but the record for this --idempotency-key could not be updated. A rerun with this key refuses until you delete ${recordPath}.`,
+          details: { taskId: ids.taskId, agentId: ids.agentId },
+          exitCode: 1,
+        });
+      }
       return created(ids, false);
     });
   };
@@ -363,10 +373,12 @@ async function sendCreate(
     // clear the key record of a create the first attempt may have committed.
     // With one attempt, a refusal answers the only request that went out.
     failFast: true,
-    // The Task id this run minted, so any replay below this call (the auth
-    // layer's one retry after a refreshed sign-in) is the same create. A
-    // second RUN mints new ids, so this is not the dedupe across runs; the
-    // key record is.
+    // No resend after a refreshed sign-in either, for the same reason: the
+    // first send may have reached the host before its session went fatal
+    // UNAUTHORIZED. The UNAUTHORIZED comes back here and keeps the record.
+    reauthenticate: false,
+    // The Task id this run minted. A second RUN mints new ids, so this is not
+    // the dedupe across runs; the key record is.
     idempotencyKey: ids.taskId,
   };
   let response: unknown;

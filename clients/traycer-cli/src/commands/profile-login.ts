@@ -146,6 +146,7 @@ const AWAIT_LOGIN_DISPATCH: HostRpcDispatch = {
   },
   signal: null,
   failFast: false,
+  reauthenticate: true,
   idempotencyKey: null,
 };
 
@@ -169,6 +170,7 @@ const START_LOGIN_DISPATCH: HostRpcDispatch = {
   },
   signal: null,
   failFast: false,
+  reauthenticate: true,
   idempotencyKey: null,
 };
 const CANCEL_LOGIN_DISPATCH: HostRpcDispatch = {
@@ -181,6 +183,7 @@ const CANCEL_LOGIN_DISPATCH: HostRpcDispatch = {
   // One attempt: a retry would spend the release's whole bound on a host
   // that already failed to answer once.
   failFast: true,
+  reauthenticate: true,
   idempotencyKey: null,
 };
 /** How long a release may hold the command after the sign-in has ended. */

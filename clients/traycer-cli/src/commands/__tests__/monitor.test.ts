@@ -684,6 +684,7 @@ describe("follow-up inactivity notices (negotiated @1.3)", () => {
             requiredHostMethodVersion: null,
             signal: null,
             failFast: false,
+            reauthenticate: true,
             idempotencyKey: null,
           },
         );

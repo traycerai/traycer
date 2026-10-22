@@ -146,6 +146,7 @@ describe("readProviderStates", () => {
         requiredHostMethodVersion: null,
         signal: null,
         failFast: false,
+        reauthenticate: true,
         idempotencyKey: null,
       },
     );

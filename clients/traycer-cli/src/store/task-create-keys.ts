@@ -88,7 +88,7 @@ export async function withTaskCreateKeyLock<T>(
       message:
         "traycer: another run with this --idempotency-key is still creating its Task. This run created nothing; run it again to read that run's result.",
       details: null,
-      exitCode: 1,
+      exitCode: 75, // EX_TEMPFAIL - caller may retry
     });
   }
   return outcome.result;

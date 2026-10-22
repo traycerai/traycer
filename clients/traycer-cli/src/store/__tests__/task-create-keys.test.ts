@@ -120,6 +120,10 @@ describe("task create key lock", () => {
     await first;
     expect(secondRan).toBe(false);
     expect(error).toBeInstanceOf(CliError);
-    expect(error).toMatchObject({ code: CLI_ERROR_CODES.CLI_LOCK_BUSY });
+    // 75 (EX_TEMPFAIL), the documented exit for a run another one holds up.
+    expect(error).toMatchObject({
+      code: CLI_ERROR_CODES.CLI_LOCK_BUSY,
+      exitCode: 75,
+    });
   });
 });

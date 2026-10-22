@@ -8,6 +8,7 @@ import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createEpicRequestSchemaV13 } from "@traycer/protocol/host/epic/unary-schemas";
+import { markMayHaveReachedHost } from "@traycer/protocol/host-transport/remote/rpc-types";
 import { buildTaskCreateCommand } from "../task-create";
 import { resolveHostAuth } from "../../internal/host-auth";
 import {
@@ -75,12 +76,17 @@ vi.mock(
   },
 );
 
+const storeRotate = vi.hoisted(() => vi.fn());
+
 vi.mock("../../store/credentials-store", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("../../store/credentials-store")>();
   return {
     ...actual,
-    createCliCredentialsStore: () => ({ dispose: () => undefined }),
+    createCliCredentialsStore: () => ({
+      dispose: () => undefined,
+      rotate: storeRotate,
+    }),
   };
 });
 
@@ -187,6 +193,9 @@ beforeEach(async () => {
 afterEach(async () => {
   vi.unstubAllEnvs();
   vi.clearAllMocks();
+  // A one-attempt send leaves a queued socket answer unread.
+  socketRequest.mockReset();
+  storeRotate.mockReset();
   await rm(keysDir.current, { recursive: true, force: true });
 });
 
@@ -259,6 +268,7 @@ describe("task create: the request", () => {
       },
       signal: null,
       failFast: true,
+      reauthenticate: false,
       idempotencyKey: request.epic.id,
     });
     expect(result).toEqual({
@@ -548,6 +558,25 @@ describe("task create --idempotency-key", () => {
     await expect(run({ idempotencyKey: "slot-1" })).rejects.toThrow();
     expect(rpcMock).not.toHaveBeenCalled();
   });
+
+  it("names the created Task and the record when the done record cannot be written", async () => {
+    writeKeyMock
+      .mockImplementationOnce(
+        (
+          await vi.importActual<typeof import("../../store/task-create-keys")>(
+            "../../store/task-create-keys",
+          )
+        ).writeTaskCreateKey,
+      )
+      .mockRejectedValueOnce(new Error("ENOSPC"));
+    const error = await rejection(run({ idempotencyKey: "slot-1" }));
+    const sent = sentRequest(0);
+    expect(error.message).toContain(sent.epic.id);
+    expect(error.message).toContain(
+      taskCreateKeyRecordPath(keysDir.current, "u1", "slot-1"),
+    );
+    expect(error.details).toMatchObject({ taskId: sent.epic.id });
+  });
 });
 
 describe("task create: a refusal answered after an earlier send", () => {
@@ -587,6 +616,45 @@ describe("task create: a refusal answered after an earlier send", () => {
     expect(written.state).toBe("intent");
     const retry = await rejection(run({ idempotencyKey: "slot-1" }));
     expect(retry.code).toBe(CLI_ERROR_CODES.HOST_REQUEST_OUTCOME_UNKNOWN);
+  });
+
+  it("keeps the intent when a sent attempt ends UNAUTHORIZED, and sends nothing after a refreshed sign-in", async () => {
+    const send = realSend.call;
+    if (send === null) throw new Error("real send path not captured");
+    rpcMock.mockImplementationOnce(send);
+    storeRotate.mockResolvedValueOnce({
+      outcome: "applied",
+      credentials: { token: "tok-2" },
+    });
+    // The session went fatal UNAUTHORIZED with the request pending, so the
+    // host may have committed the Task. A send after a refreshed sign-in
+    // would find the store unavailable and answer the typed refusal.
+    const unauthorized = new HostRpcError({
+      code: "UNAUTHORIZED",
+      message: "session expired with the request pending",
+      requestId: "req-a",
+      method: "epic.create",
+      fatalDetails: null,
+    });
+    markMayHaveReachedHost(unauthorized);
+    socketRequest.mockRejectedValueOnce(unauthorized).mockResolvedValueOnce({
+      roomInfo: null,
+      refusal: {
+        kind: "local-store-unavailable",
+        message: "Another Traycer host holds this store.",
+        remedy: "Stop the other host, then try again.",
+      },
+    });
+
+    const error = await rejection(run({ idempotencyKey: "slot-1" }));
+
+    const path = taskCreateKeyRecordPath(keysDir.current, "u1", "slot-1");
+    expect(error.message).toContain(path);
+    expect(socketRequest).toHaveBeenCalledTimes(1);
+    const written = JSON.parse(await readFile(path, "utf8")) as {
+      state: string;
+    };
+    expect(written.state).toBe("intent");
   });
 });
 

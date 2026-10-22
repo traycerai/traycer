@@ -269,7 +269,9 @@ Exit code 0 means the Task and its first agent exist and the host accepted the m
 | `--profile <profile>` | Account: `ambient` for the coding agent's own CLI sign-in (the default), or a profile id from `traycer profile list`. |
 | `--idempotency-key <key>` | Start at most one Task for this key within 24 hours. A rerun with the same key and options prints the first run's ids with `alreadyCreated: true`; the same key with different options is refused. Build the key from the schedule slot, such as `nightly-$(date +%F)`. |
 
-If a run with a key sends the request and cannot tell whether the Task was created, it exits non-zero naming the Task id and the key's record file, and later runs with that key refuse instead of starting a second Task. Check your Task list, then delete that file to use the key again.
+If a run with a key sends the request and cannot tell whether the Task was created, it exits non-zero naming the Task id and the key's record file, and later runs with that key refuse instead of starting a second Task. A sign-in that expires while the request is in flight is one such case: the run does not refresh it and send again. Check your Task list, then delete that file to use the key again.
+
+A run that finds a run with the same key still creating its Task waits for it, and exits `75` having created nothing if that run takes too long. Run it again to read that run's result.
 
 ## Agent Commands
 

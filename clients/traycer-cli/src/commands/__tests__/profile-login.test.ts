@@ -370,6 +370,7 @@ const LIST_DISPATCH: HostRpcDispatch = {
   requiredHostMethodVersion: null,
   signal: null,
   failFast: false,
+  reauthenticate: true,
   idempotencyKey: null,
 };
 
@@ -387,6 +388,7 @@ const CANCEL_DISPATCH: HostRpcDispatch = {
   },
   signal: null,
   failFast: true,
+  reauthenticate: true,
   idempotencyKey: null,
 };
 
@@ -413,6 +415,7 @@ const RENAME_DISPATCH: HostRpcDispatch = {
   },
   signal: null,
   failFast: false,
+  reauthenticate: true,
   idempotencyKey: null,
 };
 
