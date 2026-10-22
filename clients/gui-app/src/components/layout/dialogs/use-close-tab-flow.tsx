@@ -106,6 +106,15 @@ export function useCloseTabFlow(): CloseTabFlow {
       // which tasks they were.
       const ungrouped = tasksUngroupedByClose(closing, organization);
       const commit = (): void => {
+        // Asked again HERE, not only when `closing` was built: the ungroup
+        // is awaited in between, and a tab the user typed into during that
+        // wait would otherwise be closed without the confirmation its new
+        // edits have earned.
+        for (const other of [...closing]) {
+          if (!tabRequiresCloseConfirm(other)) continue;
+          closing.splice(closing.indexOf(other), 1);
+          skipped.push(other.name);
+        }
         batchHeaderTabRecovery(() => {
           for (const other of closing) {
             closeTab(other);
@@ -148,11 +157,16 @@ export function useCloseTabFlow(): CloseTabFlow {
         (tab) => layout.customizations?.[tabRefKey(tab)]?.groupId === groupId,
       );
       const active = members.find((tab) => tabMatchesPath(tab, activePathname));
+      // Read BEFORE the prompt below, because the prompt is what turns a
+      // dirty active tab into a confirmed one. A tab that is clean here was
+      // never asked about, so edits it gains later have been confirmed by
+      // nobody.
+      const activeWasDirty =
+        active !== undefined && tabRequiresCloseConfirm(active);
       const finalize = () => {
         const held = members.filter(
           (tab) => tab !== active && tabRequiresCloseConfirm(tab),
         );
-        const skipped = held.length;
         // Closing a task's last tab takes it out of the group, so closing the
         // whole group empties it - of everything but the tabs held back.
         const ungrouped = tasksUngroupedByClose(
@@ -160,15 +174,30 @@ export function useCloseTabFlow(): CloseTabFlow {
           organization,
         );
         const commit = (): void => {
+          // Asked again after the awaited ungroup, for the reason the single
+          // and the other bulk path share: edits made while that request was
+          // out must hold their tab back too.
+          //
+          // The active tab is in that too, but only when it was CLEAN at the
+          // gesture - a dirty one was prompted and the user chose to discard,
+          // and refusing that close would override an answer they gave. A
+          // clean one was never asked, so edits it gained while the ungroup
+          // was out are nobody's decision to discard.
+          const stillHeld = members.filter(
+            (tab) =>
+              tabRequiresCloseConfirm(tab) &&
+              (tab !== active || !activeWasDirty),
+          );
           // Do not keep a global batch open while the dialog waits: unrelated
           // closes must stay separate. Only confirmed group closes run here.
           batchHeaderTabRecovery(() => {
             for (const tab of members) {
-              if (tab === active || held.includes(tab)) continue;
+              if (tab === active || stillHeld.includes(tab)) continue;
               closeTab(tab);
             }
             if (
               active !== undefined &&
+              !stillHeld.includes(active) &&
               getHeaderTabs().some(
                 (tab) => tabRefKey(tab) === tabRefKey(active),
               )
@@ -177,11 +206,14 @@ export function useCloseTabFlow(): CloseTabFlow {
               finalizeCloseTab(active);
             }
           }, readTabStripLayout());
-          if (skipped > 0)
-            toast.warning(`Kept ${skipped} tabs open with unsynced edits`, {
-              description:
-                "Close those tabs individually to discard their edits.",
-            });
+          if (stillHeld.length > 0)
+            toast.warning(
+              `Kept ${stillHeld.length} tabs open with unsynced edits`,
+              {
+                description:
+                  "Close those tabs individually to discard their edits.",
+              },
+            );
         };
         if (ungrouped.length === 0) {
           commit();

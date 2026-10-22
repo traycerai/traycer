@@ -984,6 +984,150 @@ describe("useCloseTabFlow", () => {
       });
     });
 
+    describe("a tab that gains unsynced edits while the ungroup is in flight", () => {
+      async function settleCommand(): Promise<void> {
+        await act(async () => {
+          await new Promise<void>((resolve) => setTimeout(resolve, 0));
+        });
+      }
+
+      /** The ungroup stays out until the returned function answers it. */
+      function holdCommand(): () => void {
+        let accept: (() => void) | undefined;
+        organizationState.command.mockImplementation(
+          () =>
+            new Promise<void>((resolve) => {
+              accept = resolve;
+            }),
+        );
+        return () => {
+          if (accept === undefined)
+            throw new Error("Expected a pending organization command");
+          accept();
+        };
+      }
+
+      function groupedMemberships(): void {
+        organizationState.setView(
+          organizationView([
+            { taskId: "epic-a", groupId: "group-a", position: 0 },
+            { taskId: "epic-b", groupId: "group-a", position: 1 },
+          ]),
+        );
+      }
+
+      it("Close other tabs keeps it open and counts it in the toast, while the clean tab closes", async () => {
+        const { a, b } = seedGroupedTabs();
+        groupedMemberships();
+        const warn = vi.spyOn(toast, "warning").mockReturnValue("toast-id");
+        const answerUngroup = holdCommand();
+
+        const { result } = renderHook(() => useCloseTabFlow());
+        act(() => {
+          result.current.closeOtherTabs(epicHeaderTab("epic-a", a, "Alpha"));
+        });
+        await settleCommand();
+        // The user types into Beta while the request is out.
+        mockUnsynced.epicIds.add("epic-b");
+        await act(async () => {
+          answerUngroup();
+          await Promise.resolve();
+        });
+
+        await waitFor(() =>
+          expect(useEpicCanvasStore.getState().openTabOrder).toEqual([a, b]),
+        );
+        expect(warn.mock.calls.map(([message]) => message)).toEqual([
+          'Kept "Beta" open with unsynced edits',
+        ]);
+      });
+
+      it("Close group keeps it open and counts it in the toast, while the clean tab closes", async () => {
+        const { b, c } = seedGroupedTabs();
+        groupedMemberships();
+        const warn = vi.spyOn(toast, "warning").mockReturnValue("toast-id");
+        const answerUngroup = holdCommand();
+
+        const { result } = renderHook(() => useCloseTabFlow());
+        act(() => {
+          result.current.closeGroup("group-a");
+        });
+        await settleCommand();
+        mockUnsynced.epicIds.add("epic-b");
+        await act(async () => {
+          answerUngroup();
+          await Promise.resolve();
+        });
+
+        // Alpha (the active tab) closes with the group; Beta stays.
+        await waitFor(() =>
+          expect(useEpicCanvasStore.getState().openTabOrder).toEqual([b, c]),
+        );
+        expect(warn.mock.calls.map(([message]) => message)).toEqual([
+          "Kept 1 tabs open with unsynced edits",
+        ]);
+      });
+
+      it("Close group keeps the active tab open and counts it when it was clean at the gesture and gained edits during the wait", async () => {
+        const { a, c } = seedGroupedTabs();
+        groupedMemberships();
+        const warn = vi.spyOn(toast, "warning").mockReturnValue("toast-id");
+        const answerUngroup = holdCommand();
+
+        // No dialog: nothing is dirty when the gesture starts.
+        const { result } = renderHook(() => useCloseTabFlow());
+        act(() => {
+          result.current.closeGroup("group-a");
+        });
+        await settleCommand();
+        expect(organizationState.command).toHaveBeenCalledOnce();
+
+        // The user types into the active tab, which nobody asked about.
+        mockUnsynced.epicIds.add("epic-a");
+        await act(async () => {
+          answerUngroup();
+          await Promise.resolve();
+        });
+
+        // Beta closes; Alpha stays, along with the tab outside the group.
+        await waitFor(() =>
+          expect(useEpicCanvasStore.getState().openTabOrder).toEqual([a, c]),
+        );
+        expect(warn.mock.calls.map(([message]) => message)).toEqual([
+          "Kept 1 tabs open with unsynced edits",
+        ]);
+      });
+
+      it("Close group still closes the active tab whose discard the user confirmed, while a sibling that went dirty in the wait is kept", async () => {
+        const { b, c } = seedGroupedTabs();
+        groupedMemberships();
+        const warn = vi.spyOn(toast, "warning").mockReturnValue("toast-id");
+        const answerUngroup = holdCommand();
+        // The active tab is dirty from the start, so the dialog asks.
+        mockUnsynced.epicIds.add("epic-a");
+
+        render(<CloseGroupHarness groupId="group-a" unrelatedTab={null} />);
+        fireEvent.click(screen.getByTestId("close-group"));
+        fireEvent.click(screen.getByTestId("epic-tab-unsynced-discard"));
+        await settleCommand();
+        expect(organizationState.command).toHaveBeenCalledOnce();
+
+        mockUnsynced.epicIds.add("epic-b");
+        await act(async () => {
+          answerUngroup();
+          await Promise.resolve();
+        });
+
+        // Alpha is still dirty, and still closes: the user confirmed that.
+        await waitFor(() =>
+          expect(useEpicCanvasStore.getState().openTabOrder).toEqual([b, c]),
+        );
+        expect(warn.mock.calls.map(([message]) => message)).toEqual([
+          "Kept 1 tabs open with unsynced edits",
+        ]);
+      });
+    });
+
     it("Close other tabs keeps a task in its group while another of its tabs is the one kept", async () => {
       const keptTab = useEpicCanvasStore
         .getState()

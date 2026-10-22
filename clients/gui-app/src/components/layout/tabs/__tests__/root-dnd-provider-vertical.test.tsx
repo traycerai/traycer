@@ -1040,6 +1040,97 @@ describe("RootDndProvider on a vertical strip", () => {
         expect(command).not.toHaveBeenCalled();
       });
     });
+
+    describe("while the account is ready but its first view has not arrived", () => {
+      const ORIGINAL_ORDER = [
+        ROW_A.stripItemId,
+        ROW_B.stripItemId,
+        SPLIT_ID,
+        ROW_C.stripItemId,
+      ];
+      /**
+       * A handshake and an account that are ready, with no projection yet: the
+       * stamped layout of the last session is on screen, and a saved
+       * membership would send no command.
+       */
+      const viewlessOrganization = (
+        command: OrganizationContextValue["command"],
+      ): OrganizationContextValue => ({
+        ...organizationOf(command),
+        supported: true,
+        view: undefined,
+      });
+
+      it("refuses a drop that would join an account group, leaving membership and order as they were", async () => {
+        seedOrganizationGroup([B, X, Y], [A, B, X, Y]);
+        const command = vi.fn(() => Promise.resolve());
+        const view = await mountStrip(
+          "left",
+          ROWS,
+          organizationBlock,
+          viewlessOrganization(command),
+        );
+        const drag = pressAndActivate(view, ROW_A, inBand, 33);
+        moveTo(drag, inBand, 170);
+        expect(useEpicDndStore.getState().headerStripDragState).toMatchObject({
+          kind: "reorder",
+          groupId: "g",
+          joinsGroup: true,
+        });
+
+        releaseAt(drag, inBand, 170);
+
+        expect(groupOf(A)).toBeNull();
+        expect(stripItemIds()).toEqual(ORIGINAL_ORDER);
+        expect(command).not.toHaveBeenCalled();
+      });
+
+      it("refuses a drop that would take a task out of an account group, leaving membership and order as they were", async () => {
+        seedOrganizationGroup([B, X, Y], [A, B, X, Y]);
+        const command = vi.fn(() => Promise.resolve());
+        const view = await mountStrip(
+          "left",
+          ROWS,
+          organizationBlock,
+          viewlessOrganization(command),
+        );
+        const drag = pressAndActivate(view, ROW_B, inBand, 34);
+        moveTo(drag, inBand, 106);
+        expect(useEpicDndStore.getState().headerStripDragState).toMatchObject({
+          kind: "reorder",
+          groupId: null,
+          joinsGroup: false,
+        });
+
+        releaseAt(drag, inBand, 106);
+
+        expect(groupOf(B)).toBe("g");
+        expect(stripItemIds()).toEqual(ORIGINAL_ORDER);
+        expect(command).not.toHaveBeenCalled();
+      });
+
+      it("still reorders ungrouped tabs, as that changes no group", async () => {
+        const command = vi.fn(() => Promise.resolve());
+        const view = await mountStrip(
+          "left",
+          ROWS,
+          [],
+          viewlessOrganization(command),
+        );
+        const drag = pressAndActivate(view, ROW_A, inBand, 35);
+        moveTo(drag, inBand, 170);
+
+        releaseAt(drag, inBand, 170);
+
+        expect(stripItemIds()).toEqual([
+          ROW_B.stripItemId,
+          ROW_A.stripItemId,
+          SPLIT_ID,
+          ROW_C.stripItemId,
+        ]);
+        expect(command).not.toHaveBeenCalled();
+      });
+    });
   });
 
   describe("tear-off", () => {

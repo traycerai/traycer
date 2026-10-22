@@ -1137,6 +1137,13 @@ function commitHeaderStripReorder(move: {
  * persist a membership that no command carries and no projection confirms,
  * and show it until the next frame quietly took it away. A reorder that
  * joins no group and leaves none is local, and stays allowed.
+ *
+ * Both halves of what the save needs, not just the first. `supported` can be
+ * true before the first projection has arrived - a handshake and an account
+ * that are ready while the view is still undefined, with a stamped layout
+ * from the last session on screen - and the save returns without sending in
+ * exactly that state. Asking only about `supported` would write the move and
+ * send nothing.
  */
 function groupDropCannotBeSaved(
   organization: OrganizationContextValue | null,
@@ -1144,7 +1151,7 @@ function groupDropCannotBeSaved(
   to: string | null,
 ): boolean {
   if (!leavesOrganization && !isOrganizationGroup(to)) return false;
-  return organization?.supported !== true;
+  return organization?.supported !== true || organization.view === undefined;
 }
 
 function isOrganizationGroup(groupId: string | null): groupId is string {
