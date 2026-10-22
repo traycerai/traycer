@@ -157,7 +157,8 @@ export function rememberedNeedsBranchValidation(
  *
  *  - `local`    - always valid (the checkout always exists).
  *  - `import`   - valid iff the adopted worktree path still exists on disk.
- *  - `worktree` `new`      - valid iff the fork source branch still exists; the
+ *  - `worktree` `new`      - valid iff the fork source branch still exists and is
+ *    not the folder's own branch while that branch has no commit; the
  *    branch name is regenerated fresh (a remembered name is one-shot and would
  *    collide), keeping the remembered source.
  *  - `worktree` `existing` - valid iff the branch still exists AND isn't checked
@@ -232,6 +233,9 @@ function isSourceValid(
   folder: SeedFolderContext,
   branches: ReadonlyArray<WorktreeBranch> | null,
 ): boolean {
+  // The unborn branch is listed by name but names no commit to fork from, so a
+  // remembered fork off it can only fail at the host.
+  if (!folder.hasCommit && source === folder.currentBranch) return false;
   if (source === folder.currentBranch) return true;
   if (source === folder.summary.mainBranch) return true;
   if (folder.summary.worktrees.some((w) => w.branch === source)) return true;

@@ -540,6 +540,63 @@ describe("seedEntryForFolder", () => {
     ).toBe("local");
   });
 
+  describe("a repo with no commit and a remembered worktree off its branch", () => {
+    const unborn = summary({
+      mainBranch: "dev",
+      worktrees: [worktreeEntry("/a", "dev", true, UNBORN_HEAD)],
+    });
+    const unbornFolder = folderContext({
+      currentBranch: "dev",
+      hasCommit: mainCheckoutHasCommit(unborn),
+      summary: unborn,
+    });
+
+    it("seeds local over a remembered per-epic worktree forked from the unborn branch", () => {
+      expect(
+        seedEntryForFolder({
+          seedFolderIntent: null,
+          epicIntentEntry: rememberedNew("dev"),
+          rememberedFolderIntent: null,
+          branches: [],
+          folder: unbornFolder,
+          alreadyStaged: false,
+        })?.kind,
+      ).toBe("local");
+    });
+
+    it("seeds local over a remembered per-folder worktree forked from the unborn branch", () => {
+      expect(
+        seedEntryForFolder({
+          seedFolderIntent: null,
+          epicIntentEntry: null,
+          rememberedFolderIntent: rememberedNew("dev"),
+          branches: [],
+          folder: unbornFolder,
+          alreadyStaged: false,
+        })?.kind,
+      ).toBe("local");
+    });
+
+    it("still replays a remembered fork from a different branch that has commits", () => {
+      const entry = seedEntryForFolder({
+        seedFolderIntent: null,
+        epicIntentEntry: null,
+        rememberedFolderIntent: rememberedNew("release"),
+        branches: [branch("release")],
+        folder: unbornFolder,
+        alreadyStaged: false,
+      });
+      expect(entry?.kind === "worktree" && entry.branch.type === "new").toBe(
+        true,
+      );
+      expect(
+        entry?.kind === "worktree" && entry.branch.type === "new"
+          ? entry.branch.source
+          : null,
+      ).toBe("release");
+    });
+  });
+
   it("defaults a non-git folder to local", () => {
     expect(
       seedEntryForFolder({
