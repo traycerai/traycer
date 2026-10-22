@@ -82,8 +82,11 @@ function organizationViewOf(
   items: ReadonlyArray<StripItem>,
   tabsById: CanvasTabs,
 ): OrganizationView {
+  // Equality, not truthiness: the account this context reports is the one
+  // the fixtures sign in as and stamp with, so a row owned by anyone else is
+  // not this account's to show. Truthiness would quietly adopt it.
   const drawn = Object.entries(groups ?? {}).filter(
-    ([, group]) => group.organizationOwnerId,
+    ([, group]) => group.organizationOwnerId === FIXTURE_ORGANIZATION_OWNER_ID,
   );
   const isDrawn = (groupId: string): boolean =>
     drawn.some(([id]) => id === groupId);
@@ -115,7 +118,10 @@ function organizationViewOf(
     },
     appearances: Object.entries(customizations ?? {}).flatMap(
       ([key, customization]) => {
-        if (!key.startsWith("epic:") || !customization.organizationOwnerId)
+        if (
+          !key.startsWith("epic:") ||
+          customization.organizationOwnerId !== FIXTURE_ORGANIZATION_OWNER_ID
+        )
           return [];
         const taskId = taskIdOf(key.slice("epic:".length));
         return taskId === undefined
