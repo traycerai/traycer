@@ -1,10 +1,12 @@
 package com.traycer.app;
 
 import android.content.Context;
+import android.graphics.Rect;
 import android.util.AttributeSet;
 import android.view.ActionMode;
 import android.view.Menu;
 import android.view.MenuItem;
+import android.view.View;
 import com.getcapacitor.Bridge;
 import com.getcapacitor.CapacitorWebView;
 
@@ -26,8 +28,14 @@ import com.getcapacitor.CapacitorWebView;
  * overrides the library's layout of the same name with this class.
  */
 public class QuoteActionModeWebView extends CapacitorWebView {
-    /** The page's quote request event (use-native-quote-request.ts in gui-app). */
-    private static final String QUOTE_REQUEST_EVENT = "traycerQuoteSelection";
+    /**
+     * Raises the page's quote request event (use-native-quote-request.ts in
+     * gui-app): the script Bridge.triggerWindowJSEvent builds, spelled here
+     * because that method takes no completion, and the action mode must
+     * outlive the page's read of the selection (below).
+     */
+    private static final String QUOTE_REQUEST_SCRIPT =
+        "window.Capacitor.triggerEvent(\"traycerQuoteSelection\", \"window\")";
     private static final int QUOTE_ITEM_ID = Menu.FIRST;
 
     private Bridge quoteBridge;
@@ -52,11 +60,19 @@ public class QuoteActionModeWebView extends CapacitorWebView {
         return super.startActionMode(withQuoteItem(callback), type);
     }
 
+    /**
+     * A Callback2, whatever the inner callback is: the selection toolbar is a
+     * floating action mode, which the system positions through
+     * onGetContentRect so it never covers the selected text. The WebView's
+     * own callback is a Callback2 that reports the selection bounds; wrapping
+     * it in a plain Callback would drop that and leave the toolbar on the
+     * default (whole-view) rect.
+     */
     private ActionMode.Callback withQuoteItem(ActionMode.Callback inner) {
         if (inner == null) {
             return null;
         }
-        return new ActionMode.Callback() {
+        return new ActionMode.Callback2() {
             @Override
             public boolean onCreateActionMode(ActionMode mode, Menu menu) {
                 boolean created = inner.onCreateActionMode(mode, menu);
@@ -78,16 +94,31 @@ public class QuoteActionModeWebView extends CapacitorWebView {
                     return inner.onActionItemClicked(mode, item);
                 }
                 Bridge bridge = quoteBridge;
-                if (bridge != null) {
-                    bridge.triggerWindowJSEvent(QUOTE_REQUEST_EVENT);
+                if (bridge == null) {
+                    mode.finish();
+                    return true;
                 }
-                mode.finish();
+                // Finish only once the page has handled the event: the
+                // evaluation is posted, and finishing the mode first could
+                // clear the selection before the listener reads it. The event
+                // dispatch is synchronous inside the evaluated script, so the
+                // completion callback runs after the quote is in the draft.
+                bridge.eval(QUOTE_REQUEST_SCRIPT, value -> mode.finish());
                 return true;
             }
 
             @Override
             public void onDestroyActionMode(ActionMode mode) {
                 inner.onDestroyActionMode(mode);
+            }
+
+            @Override
+            public void onGetContentRect(ActionMode mode, View view, Rect outRect) {
+                if (inner instanceof ActionMode.Callback2) {
+                    ((ActionMode.Callback2) inner).onGetContentRect(mode, view, outRect);
+                } else {
+                    super.onGetContentRect(mode, view, outRect);
+                }
             }
         };
     }
