@@ -1086,25 +1086,65 @@ function commitHeaderTabDrop(input: {
     ),
   );
   if (targetIndex === null) return;
-  // Arm BEFORE the move is written: the strip items re-base their transform
-  // against the new baseline in the layout effect of the render this causes, so
-  // the flag has to be set by the time that render commits.
-  armHeaderStripCommitHandoff();
+  commitHeaderStripReorder({
+    stripItemId: headerTab.stripItemId,
+    geometry: input.geometry,
+    dragState: input.dragState,
+    organization: input.organization,
+    targetIndex,
+  });
+}
+
+/** Writes the reorder, and tells the account about any group it changed. */
+function commitHeaderStripReorder(move: {
+  readonly stripItemId: string;
+  readonly geometry: StripDragGeometry;
+  readonly dragState: StripDragState;
+  readonly organization: OrganizationContextValue | null;
+  readonly targetIndex: number;
+}): void {
+  const { stripItemId, geometry, dragState, organization, targetIndex } = move;
   // Read before the move: it repairs the layout, which drops a group left with
   // no tab, and an organization's group emptied by this very drop is still the
   // one the task is leaving.
   const leavesOrganization = isOrganizationGroup(
-    input.geometry.slots[input.geometry.sourceIndex]?.groupId ?? null,
+    geometry.slots[geometry.sourceIndex]?.groupId ?? null,
   );
+  if (
+    groupDropCannotBeSaved(organization, leavesOrganization, dragState.groupId)
+  )
+    return;
+  // Arm BEFORE the move is written: the strip items re-base their transform
+  // against the new baseline in the layout effect of the render this causes, so
+  // the flag has to be set by the time that render commits.
+  armHeaderStripCommitHandoff();
   tabCommandCoordinator.moveStripItem({
-    itemId: headerTab.stripItemId,
+    itemId: stripItemId,
     targetIndex,
-    groupId: input.dragState.groupId,
+    groupId: dragState.groupId,
   });
-  saveOrganizationGroupMove(input.organization, headerTab.stripItemId, {
+  saveOrganizationGroupMove(organization, stripItemId, {
     leavesOrganization,
-    to: input.dragState.groupId,
+    to: dragState.groupId,
   });
+}
+
+/**
+ * Whether a drop would change an account group's membership at a moment the
+ * account cannot be told about it.
+ *
+ * Such a drop is refused BEFORE the layout is written. Writing it would
+ * persist a membership that no command carries and no projection confirms,
+ * and show it until the next frame quietly took it away. A reorder that
+ * joins no group and leaves none is local, and stays allowed.
+ */
+function groupDropCannotBeSaved(
+  organization: OrganizationContextValue | null,
+  leavesOrganization: boolean,
+  to: string | null,
+): boolean {
+  if (!leavesOrganization && !isOrganizationGroup(to)) return false;
+  return organization?.supported !== true;
 }
 
 function isOrganizationGroup(groupId: string | null): groupId is string {

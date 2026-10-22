@@ -1279,6 +1279,53 @@ describe("OrganizationProvider draft group intent", () => {
       expect(held.overlap()).toBe(1);
     });
 
+    it("tracks a send under the scope it started in: a new scope sends its own, and the old send's settlement neither frees nor strands it", async () => {
+      const host = dialStream();
+      const taskTabId = startDraftInGroup("task-new", "group-1");
+      state.view = viewWithOnlyTheGroup();
+      const held = controlledSends();
+      const queryClient = new QueryClient();
+      const rendered = renderProvider(queryClient, null);
+      await waitFor(() => expect(held.sends).toHaveLength(1));
+
+      // The device changes while the first scope's send is still out. The new
+      // scope has not sent for this tab, so it must send, not skip it as
+      // "in flight".
+      state.identity.hostId = "host-2";
+      nextViewFrame(rendered, queryClient, "frame-on-the-new-device");
+      await waitFor(() => expect(held.sends).toHaveLength(2));
+
+      // The old scope's send comes back late. Its command finds the account's
+      // device changed and fails, which must not free the tab the new scope's
+      // send is holding.
+      await act(async () => {
+        held.sends[0]?.acknowledge();
+        await Promise.resolve();
+      });
+      await settleCommand();
+      nextViewFrame(rendered, queryClient, "frame-after-the-old-settlement");
+      await settleCommand();
+      expect(held.sends).toHaveLength(2);
+      expect(pendingGroupIdOf(taskTabId)).toBe("group-1");
+
+      // A recovery lands while the new send is out, and that send is refused:
+      // the new scope's tracking still works as it does for any scope.
+      host.recover();
+      await settleCommand();
+      expect(held.sends).toHaveLength(2);
+      await act(async () => {
+        held.sends[1]?.refuse();
+        await Promise.resolve();
+      });
+      await waitFor(() => expect(held.sends).toHaveLength(3));
+      await act(async () => {
+        held.sends[2]?.acknowledge();
+        await Promise.resolve();
+      });
+      await waitFor(() => expect(pendingGroupIdOf(taskTabId)).toBeNull());
+      expect(held.sends).toHaveLength(3);
+    });
+
     it("stops after three refusals and keeps the intent, then a recovery gives the attempts back", async () => {
       const MAX_ATTEMPTS = 3;
       const host = dialStream();

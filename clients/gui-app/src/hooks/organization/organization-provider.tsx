@@ -217,9 +217,11 @@ export function OrganizationProvider({
   );
   const lifecycle = useRef<OrganizationLifecycle | null>(null);
   // How many times this provider has tried each tab's draft group intent,
-  // and which of those sends has not come back.
-  const draftIntentAttempts = useRef(new Map<string, number>());
-  const draftIntentsInFlight = useRef(new Set<string>());
+  // and which of those sends has not come back - owned by one scope, and
+  // replaced wholesale when the host or account changes. A send closes over
+  // the object it started under, so a reply from the old scope settles that
+  // object and can neither free nor strand a tab the new one is tracking.
+  const draftTracking = useRef<DraftIntentTracking>(newDraftTracking());
   // Opening is a local tab transition, independent of the selected host's
   // organization projection. Switching that host must not reopen closed siblings.
   const openedTasks = useRef(new Set<string>());
@@ -238,12 +240,12 @@ export function OrganizationProvider({
   // closes over the render it started in and cannot see the state.
   const recoveryCount = useRef(0);
   useEffect(() => {
-    draftIntentAttempts.current = new Map();
+    draftTracking.current = newDraftTracking();
   }, [scope]);
   useEffect(() => {
     if (streamClient === null) return;
     return streamClient.subscribeAvailabilityRecovered(() => {
-      draftIntentAttempts.current = new Map();
+      draftTracking.current.attempts.clear();
       recoveryCount.current += 1;
       setRecoveries((seen) => seen + 1);
     });
@@ -330,12 +332,14 @@ export function OrganizationProvider({
       }
     }
     consumeDraftGroupIntents(query.data, command, {
-      attempts: draftIntentAttempts.current,
-      inFlight: draftIntentsInFlight.current,
+      tracking: draftTracking.current,
       recoveries: recoveryCount,
       wake: () => setRecoveries((seen) => seen + 1),
     });
     projectOrganizationToTabs(query.data, userId);
+    // No `scope` here: `command` is rebuilt from `hostId` and `userId`, so a
+    // scope change already re-runs this, and a dependency no test can
+    // distinguish is one that will be wrong later without anyone noticing.
   }, [supported, query.data, openIds, command, lifecycle, userId, recoveries]);
   const openDialog = useCallback(
     (value: OrganizationDialog) => {
@@ -560,14 +564,14 @@ const DRAFT_INTENT_MAX_ATTEMPTS = 3;
 function consumeDraftGroupIntents(
   view: OrganizationView,
   command: (action: OrganizationAction) => Promise<void>,
-  tracking: {
-    readonly attempts: Map<string, number>;
-    readonly inFlight: Set<string>;
+  context: {
+    readonly tracking: DraftIntentTracking;
     readonly recoveries: { current: number };
     readonly wake: () => void;
   },
 ): void {
-  const { attempts, inFlight, recoveries, wake } = tracking;
+  const { attempts, inFlight } = context.tracking;
+  const { recoveries, wake } = context;
   const tabs = useEpicCanvasStore.getState();
   for (const tabId of tabs.openTabOrder) {
     const task = tabs.tabsById[tabId];
@@ -666,6 +670,16 @@ function retireSupersededDraftIntents(action: OrganizationAction): void {
         { pendingGroupId: null },
       );
   }
+}
+
+/** One scope's draft-intent bookkeeping: attempts spent, and sends still out. */
+interface DraftIntentTracking {
+  readonly attempts: Map<string, number>;
+  readonly inFlight: Set<string>;
+}
+
+function newDraftTracking(): DraftIntentTracking {
+  return { attempts: new Map(), inFlight: new Set() };
 }
 
 function createLifecycle(): OrganizationLifecycle {
