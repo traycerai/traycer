@@ -119,13 +119,38 @@ function savedLayout(
   });
 }
 
-/** Lets a settled read run through zustand's promise chain and the bridge. */
-async function flush(): Promise<void> {
-  for (let turn = 0; turn < 3; turn += 1) {
-    await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 0));
-    });
-  }
+/**
+ * The promise each real `persist.rehydrate()` call returned, by the saved-layout
+ * key it was reading. The bridge starts a rehydration right after pointing the
+ * store at the account's key, so the key is read at call time.
+ */
+const rehydrations = new Map<string, Promise<void>>();
+
+function trackRehydrations(): void {
+  const persist = useEpicCanvasStore.persist;
+  const rehydrate = persist.rehydrate.bind(persist);
+  // Hands the bridge the very promise it records, so a test awaiting it runs
+  // after the bridge's own continuation on that rehydration.
+  vi.spyOn(persist, "rehydrate").mockImplementation(() => {
+    const key = persist.getOptions().name ?? "";
+    const running = Promise.resolve(rehydrate());
+    rehydrations.set(key, running);
+    return running;
+  });
+}
+
+/** Settles a held read, then waits for that account's whole rehydration chain to finish. */
+async function resolveAndSettle(
+  key: string,
+  resolve: (value: string | null) => void,
+  layout: string | null,
+): Promise<void> {
+  const running = rehydrations.get(key);
+  if (running === undefined) throw new Error(`No rehydration read ${key}.`);
+  await act(async () => {
+    resolve(layout);
+    await running;
+  });
 }
 
 function renderBridge() {
@@ -137,6 +162,8 @@ function renderBridge() {
 }
 
 beforeEach(() => {
+  rehydrations.clear();
+  trackRehydrations();
   control.reads.clear();
   control.writes.length = 0;
   control.removes.length = 0;
@@ -148,6 +175,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.restoreAllMocks();
   cleanup();
   signOut();
   setEpicCanvasBrowserPersistenceStorage(null);
@@ -171,8 +199,11 @@ describe("browser canvas hydration through the lifecycle bridge", () => {
       signIn(BOB_EMAIL);
     });
 
-    resolveAlice(savedLayout("epic-alice", "tab-alice", null));
-    await flush();
+    await resolveAndSettle(
+      ALICE_KEY,
+      resolveAlice,
+      savedLayout("epic-alice", "tab-alice", null),
+    );
 
     expect(useEpicCanvasStore.getState().openTabOrder).toEqual([]);
     expect(control.hydrated).toBe(false);
@@ -197,8 +228,11 @@ describe("browser canvas hydration through the lifecycle bridge", () => {
       signOut();
     });
     await waitFor(() => expect(control.hydrated).toBe(true));
-    resolveAlice(savedLayout("epic-alice", "tab-alice", null));
-    await flush();
+    await resolveAndSettle(
+      ALICE_KEY,
+      resolveAlice,
+      savedLayout("epic-alice", "tab-alice", null),
+    );
 
     const state = useEpicCanvasStore.getState();
     expect(state.openTabOrder).toEqual([]);
@@ -222,8 +256,11 @@ describe("browser canvas hydration through the lifecycle bridge", () => {
     act(() => {
       signIn(BOB_EMAIL);
     });
-    resolveAlice(savedLayout("epic-alice", "tab-alice", null));
-    await flush();
+    await resolveAndSettle(
+      ALICE_KEY,
+      resolveAlice,
+      savedLayout("epic-alice", "tab-alice", null),
+    );
     resolveBob(savedLayout("epic-bob", "tab-bob", null));
     await waitFor(() => expect(control.hydrated).toBe(true));
 
