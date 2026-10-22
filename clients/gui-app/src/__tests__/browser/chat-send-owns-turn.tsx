@@ -44,7 +44,10 @@ import { openStoreForTest } from "@/stores/epics/open-epic/test-support/open-sto
 import { ChatDockCompactStripProvider } from "@/components/chat/chat-dock-compact-strip";
 import { ChatDiffTargetContext } from "@/components/chat/chat-diff-target";
 import { ChatLowerDock } from "@/components/chat/chat-lower-dock";
-import { queueWithoutPersistedPrompts } from "@/components/chat/chat-queue-utils";
+import {
+  queuedPromptMessageIds,
+  queueWithoutPersistedPrompts,
+} from "@/components/chat/chat-queue-utils";
 import { useSubagentDrillIn } from "@/components/chat/segments/subagent-open-as-chat";
 import { TabHostContext } from "@/components/epic-canvas/hooks/use-tab-host-id";
 import {
@@ -524,11 +527,7 @@ export function Fixture(): ReactElement {
     ),
     state.messages,
   );
-  const queuedPromptIds = new Set(
-    queueWithDrainingPrompts(state).items.flatMap((item) =>
-      item.kind === "prompt" ? [item.messageId] : [],
-    ),
-  );
+  const queuedPromptIds = queuedPromptMessageIds(state.queue.items);
   const rendered = useRenderedMessages(
     {
       messages: state.messages,

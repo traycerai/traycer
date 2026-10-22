@@ -2163,6 +2163,250 @@ describe("<ChatTile />", () => {
     });
   });
 
+  describe("frame orders of a transcript-first send that the host queues", () => {
+    interface SentPrompt {
+      readonly messageId: string;
+      readonly clientActionId: string;
+      readonly queued: ChatQueuedItem;
+    }
+
+    function drawn(): number {
+      return screen.queryAllByText("pending message").length;
+    }
+
+    function expectDrawnAtMostOnce(when: string): void {
+      expect(drawn(), when).toBeLessThanOrEqual(1);
+    }
+
+    async function captureSentPrompt(submit: () => void): Promise<SentPrompt> {
+      const before = chatHarness.sent.length;
+      submit();
+      const frame = chatHarness.sent[before];
+      if (frame.kind !== "send") {
+        throw new Error("expected a send frame");
+      }
+      await waitFor(() => {
+        expect(drawn()).toBeGreaterThanOrEqual(1);
+      });
+      return {
+        messageId: frame.messageId,
+        clientActionId: frame.clientActionId,
+        queued: {
+          kind: "prompt",
+          queueItemId: `queue-${frame.messageId}`,
+          messageId: frame.messageId,
+          message: {
+            kind: "user",
+            content: PENDING_DRAFT_CONTENT,
+            browserAnnotations: [],
+          },
+          sender: frame.sender,
+          settings: frame.settings,
+          accountContext: frame.accountContext,
+          sentFromHostId: null,
+          delivery: "next_turn",
+          status: "pending",
+          targetTurnId: null,
+          steerRequest: null,
+          fallbackReason: null,
+          createdAt: 1,
+          updatedAt: 1,
+        },
+      };
+    }
+
+    function ack(sent: SentPrompt): void {
+      act(() => {
+        chatHarness.callbacks().onActionAck({
+          kind: "actionAck",
+          hasBinaryPayload: false,
+          epicId: EPIC_ID,
+          chatId: CHAT_ARTIFACT.id,
+          clientActionId: sent.clientActionId,
+          action: "send",
+          status: "accepted",
+          reason: null,
+          code: null,
+          backgroundStopTaskIds: [],
+          token: null,
+        });
+      });
+    }
+
+    function queue(items: ReadonlyArray<ChatQueuedItem>): void {
+      act(() => {
+        chatHarness.callbacks().onQueueChanged({
+          kind: "queueChanged",
+          hasBinaryPayload: false,
+          epicId: EPIC_ID,
+          chatId: CHAT_ARTIFACT.id,
+          queue: { status: "running", items: [...items] },
+        });
+      });
+    }
+
+    function saved(sent: SentPrompt, timestamp: number): void {
+      act(() => {
+        chatHarness.callbacks().onMessageAccepted({
+          kind: "messageAccepted",
+          hasBinaryPayload: false,
+          epicId: EPIC_ID,
+          chatId: CHAT_ARTIFACT.id,
+          message: {
+            role: "user",
+            messageId: sent.messageId,
+            sender: { type: "user", userId: "owner-1" },
+            message: {
+              kind: "user",
+              content: PENDING_DRAFT_CONTENT,
+              browserAnnotations: [],
+            },
+            timestamp,
+            sessionAnchor: null,
+          },
+        });
+      });
+    }
+
+    function snapshot(
+      queueItems: ReadonlyArray<ChatQueuedItem>,
+      savedPrompts: ReadonlyArray<SentPrompt>,
+    ): void {
+      act(() => {
+        chatHarness.callbacks().onConnectionStatus("reconnecting", null, null);
+        emitChatSnapshotWithMessages({
+          callbacks: chatHarness.callbacks(),
+          access: "owner",
+          queueItems,
+          settings: SESSION_SETTINGS,
+          messages: [
+            hostUserMessage(),
+            ...savedPrompts.map((prompt): Message => ({
+              role: "user",
+              messageId: prompt.messageId,
+              sender: { type: "user", userId: "owner-1" },
+              message: {
+                kind: "user",
+                content: PENDING_DRAFT_CONTENT,
+                browserAnnotations: [],
+              },
+              timestamp: 20,
+              sessionAnchor: null,
+            })),
+          ],
+          activeTurn: null,
+        });
+      });
+    }
+
+    async function frames(): Promise<void> {
+      await advanceLegendListTime(0);
+    }
+
+    async function mounted(): Promise<SentPrompt> {
+      renderChatTile();
+      await waitForChatTileLoaded();
+      return captureSentPrompt(() =>
+        fireEvent.click(screen.getByRole("button", { name: "Send" })),
+      );
+    }
+
+    it("ack first, then the queue add, the removal while carried, and the saved row", async () => {
+      const sent = await mounted();
+      ack(sent);
+      expectDrawnAtMostOnce("after ack");
+      queue([sent.queued]);
+      expectDrawnAtMostOnce("after queue add");
+      await frames();
+      queue([]);
+      expectDrawnAtMostOnce("carried, before messageAccepted");
+      await frames();
+      expectDrawnAtMostOnce("carried, after frames");
+      expect(drawn()).toBe(1);
+      saved(sent, 10);
+      expectDrawnAtMostOnce("after messageAccepted");
+      expect(drawn()).toBe(1);
+    });
+
+    it("queue add first, then the ack, the removal while carried, and the saved row", async () => {
+      const sent = await mounted();
+      queue([sent.queued]);
+      expectDrawnAtMostOnce("after queue add");
+      ack(sent);
+      expectDrawnAtMostOnce("after ack");
+      queue([]);
+      expectDrawnAtMostOnce("carried, before messageAccepted");
+      await frames();
+      expect(drawn()).toBe(1);
+      saved(sent, 10);
+      expect(drawn()).toBe(1);
+    });
+
+    it("a reconnect snapshot between the frames never doubles the prompt", async () => {
+      const sent = await mounted();
+      queue([sent.queued]);
+      snapshot([sent.queued], []);
+      expectDrawnAtMostOnce("snapshot with the item queued");
+      queue([]);
+      expectDrawnAtMostOnce("carried after the snapshot");
+      snapshot([], []);
+      expectDrawnAtMostOnce("snapshot after the removal, row not yet saved");
+      saved(sent, 10);
+      expectDrawnAtMostOnce("after messageAccepted");
+      snapshot([], [sent]);
+      expectDrawnAtMostOnce("snapshot carrying the saved row");
+      await frames();
+      expect(drawn()).toBe(1);
+    });
+
+    it("the saved row landing before the queue item leaves never shows both", async () => {
+      const sent = await mounted();
+      queue([sent.queued]);
+      saved(sent, 10);
+      expectDrawnAtMostOnce("saved while still queued");
+      queue([]);
+      expectDrawnAtMostOnce("removed after the saved row");
+      await frames();
+      expect(drawn()).toBe(1);
+    });
+
+    it("two sends with equal text and distinct ids each draw once through the same drain", async () => {
+      const first = await mounted();
+      const handle = __getChatSessionRegistryForTests().peek(
+        EPIC_ID,
+        CHAT_ARTIFACT.id,
+        HOST_ID,
+      );
+      if (handle === null) throw new Error("expected chat session handle");
+      const second = await captureSentPrompt(() => {
+        act(() => {
+          handle.store.getState().sendMessage({
+            content: PENDING_DRAFT_CONTENT,
+            sender: { type: "user", userId: "owner-1" },
+            settings: SESSION_SETTINGS,
+            attachments: [],
+            deliveryPolicy: "auto",
+            restore: { content: PENDING_DRAFT_CONTENT, browserAnnotations: [] },
+          });
+        });
+      });
+      expect(second.messageId).not.toBe(first.messageId);
+      expect(drawn()).toBeLessThanOrEqual(2);
+
+      queue([first.queued, second.queued]);
+      expect(drawn()).toBeLessThanOrEqual(2);
+      queue([second.queued]);
+      expect(drawn()).toBeLessThanOrEqual(2);
+      saved(first, 10);
+      expect(drawn()).toBeLessThanOrEqual(2);
+      queue([]);
+      expect(drawn()).toBeLessThanOrEqual(2);
+      saved(second, 11);
+      await frames();
+      expect(drawn()).toBe(2);
+    });
+  });
+
   it("on a phone keeps a Queue button beside Stop and queues through it", async () => {
     // Return is a newline on a phone-width viewport, so this button is the
     // only way to queue a message while a turn runs.

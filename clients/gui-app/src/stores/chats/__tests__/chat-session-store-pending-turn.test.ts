@@ -1610,3 +1610,200 @@ describe("the drain carry keeps its identity across unrelated updates", () => {
     expect(stateOf(opened).drainingQueueItems).toBe(empty);
   });
 });
+
+describe("no frame order draws one prompt in the transcript and the dock at once", () => {
+  type Step = "ack" | "add" | "remove" | "accepted" | "snap";
+
+  function permutations<T>(items: ReadonlyArray<T>): T[][] {
+    if (items.length <= 1) return [[...items]];
+    return items.flatMap((item, index) =>
+      permutations([...items.slice(0, index), ...items.slice(index + 1)]).map(
+        (rest) => [item, ...rest],
+      ),
+    );
+  }
+
+  function dockedIds(opened: Harness): Set<string> {
+    const state = stateOf(opened);
+    return new Set([
+      ...state.queue.items.flatMap((item) =>
+        item.kind === "prompt" ? [item.messageId] : [],
+      ),
+      ...(state.drainingQueueItems ?? []).map((item) => item.messageId),
+    ]);
+  }
+
+  interface Observed {
+    carried: boolean;
+    pendingCopy: boolean;
+    docked: boolean;
+  }
+
+  /**
+   * Custody action records survive a queue add on purpose; the invariant is
+   * about what is DRAWN: a pending transcript copy against the queue or its
+   * carry, and a saved row against the carry.
+   */
+  function expectNoDoubleDrawn(
+    opened: Harness,
+    when: string,
+    observed: Observed,
+  ): void {
+    const state = stateOf(opened);
+    if ((state.drainingQueueItems ?? []).length > 0) observed.carried = true;
+    if (state.pendingUserMessages.length > 0) observed.pendingCopy = true;
+    if (state.queue.items.length > 0) observed.docked = true;
+    const docked = dockedIds(opened);
+    const carried = new Set(
+      (state.drainingQueueItems ?? []).map((item) => item.messageId),
+    );
+    for (const pending of state.pendingUserMessages) {
+      expect(
+        docked.has(pending.messageId),
+        `${when}: ${pending.messageId} is a pending transcript copy and docked`,
+      ).toBe(false);
+    }
+    for (const message of state.messages) {
+      expect(
+        carried.has(message.messageId),
+        `${when}: ${message.messageId} is saved and still carried`,
+      ).toBe(false);
+    }
+  }
+
+  function play(
+    host: HostFacts,
+    steps: ReadonlyArray<Step>,
+    observed: Observed,
+  ): void {
+    harness?.handle.dispose();
+    const opened = openHarness(host);
+    const sent = sendPrompt(opened);
+    const label = steps.join(" > ");
+    expectNoDoubleDrawn(opened, `${label} @send`, observed);
+    let queued = false;
+    let saved = false;
+    for (const step of steps) {
+      if (step === "ack") {
+        emitAck(opened, sent.clientActionId, "accepted");
+      } else if (step === "add") {
+        queued = true;
+        emitQueueChanged(opened.callbacks(), [
+          queuedPromptItem(sent.messageId),
+        ]);
+      } else if (step === "remove") {
+        queued = false;
+        emitQueueChanged(opened.callbacks(), []);
+      } else if (step === "accepted") {
+        saved = true;
+        emitMessageAccepted(
+          opened.callbacks(),
+          acceptedMessage(sent.messageId, 10),
+        );
+      } else {
+        opened.callbacks().onConnectionStatus("reconnecting", null, null);
+        emitSnapshotWithQueue(opened.callbacks(), host, {
+          savedMessageIds: saved ? [sent.messageId] : [],
+          activeTurn: null,
+          queuedMessageIds: queued ? [sent.messageId] : [],
+        });
+      }
+      expectNoDoubleDrawn(opened, `${label} @${step}`, observed);
+    }
+  }
+
+  function freshObserved(): Observed {
+    return { carried: false, pendingCopy: false, docked: false };
+  }
+
+  const HOSTS: ReadonlyArray<readonly [string, HostFacts]> = [
+    ["idle new host", IDLE_HOST],
+    ["new host that queues", { ...IDLE_HOST, sendWouldQueue: true }],
+    ["older host", OLDER_HOST_IDLE],
+  ];
+
+  const QUEUED_ORDERS = permutations<Step>([
+    "ack",
+    "add",
+    "remove",
+    "accepted",
+    "snap",
+  ]).filter(
+    (order) =>
+      order.indexOf("add") < order.indexOf("remove") &&
+      order.indexOf("add") < order.indexOf("accepted"),
+  );
+  const DIRECT_ORDERS = permutations<Step>(["ack", "accepted", "snap"]);
+
+  it.each(HOSTS)(
+    "a queued send, every order of ack, queue add, queue removal, saved row and a reconnect snapshot (%s)",
+    (_name, host) => {
+      expect(QUEUED_ORDERS).toHaveLength(40);
+      const observed = freshObserved();
+      for (const order of QUEUED_ORDERS) play(host, order, observed);
+      afterEachHarness();
+    },
+  );
+
+  it.each(HOSTS)(
+    "a send the host never queues, every order of ack, saved row and a reconnect snapshot (%s)",
+    (_name, host) => {
+      expect(DIRECT_ORDERS).toHaveLength(6);
+      const observed = freshObserved();
+      for (const order of DIRECT_ORDERS) play(host, order, observed);
+      afterEachHarness();
+    },
+  );
+
+  function afterEachHarness(): void {
+    harness?.handle.dispose();
+    harness = null;
+  }
+
+  it("the queued orders did reach a carried dock row, a pending transcript copy and a queued row", () => {
+    const observed = freshObserved();
+    for (const order of QUEUED_ORDERS) {
+      play({ ...IDLE_HOST, sendWouldQueue: true }, order, observed);
+      play(IDLE_HOST, order, observed);
+    }
+    expect(observed).toEqual({
+      carried: true,
+      pendingCopy: true,
+      docked: true,
+    });
+  });
+
+  it("two sends with equal text and distinct ids keep their own custody through a drain", () => {
+    const pairObserved = freshObserved();
+    const opened = openHarness({ ...IDLE_HOST, sendWouldQueue: true });
+    const first = sendPrompt(opened);
+    const second = sendPrompt(opened);
+    emitQueueChanged(opened.callbacks(), [
+      queuedPromptItem(first.messageId),
+      queuedPromptItem(second.messageId),
+    ]);
+    expectNoDoubleDrawn(opened, "both queued", pairObserved);
+
+    emitQueueChanged(opened.callbacks(), [queuedPromptItem(second.messageId)]);
+    expectNoDoubleDrawn(opened, "first drained", pairObserved);
+    expect(dockedIds(opened)).toEqual(
+      new Set([first.messageId, second.messageId]),
+    );
+
+    emitMessageAccepted(
+      opened.callbacks(),
+      acceptedMessage(first.messageId, 10),
+    );
+    expectNoDoubleDrawn(opened, "first saved", pairObserved);
+    expect(dockedIds(opened)).toEqual(new Set([second.messageId]));
+
+    emitQueueChanged(opened.callbacks(), []);
+    expectNoDoubleDrawn(opened, "second drained", pairObserved);
+    emitMessageAccepted(
+      opened.callbacks(),
+      acceptedMessage(second.messageId, 11),
+    );
+    expectNoDoubleDrawn(opened, "second saved", pairObserved);
+    expect(dockedIds(opened).size).toBe(0);
+  });
+});
