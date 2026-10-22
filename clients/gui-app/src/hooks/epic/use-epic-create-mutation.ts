@@ -29,13 +29,17 @@ import {
   listTasksRequestSchema,
 } from "@traycer/protocol/host/epic/unary-schemas";
 import type { HostRpcRegistry } from "@/lib/host";
+import { useHostDirectoryList } from "@/hooks/host/use-host-directory-list-query";
 import { useHostMutation } from "@/hooks/host/use-host-query";
 import {
   EPIC_CREATE_TEAM_OWNER_MINOR,
   epicCreateFloor,
   teamCreateRejectionMessage,
 } from "@/lib/epic-create-admission";
-import { createWithoutCloudVerdictMessage } from "@/lib/composer/landing-placement";
+import {
+  composerHostLabel,
+  createWithoutCloudVerdictMessage,
+} from "@/lib/composer/landing-placement";
 import {
   authorizesCloudCapability,
   useAuthStore,
@@ -112,6 +116,9 @@ export function useEpicCreateForClient(
   CreateEpicMutationContext
 > {
   const queryClient = useQueryClient();
+  // The label the composer's own inline refusal names the device by, so the
+  // toast says the sentence the composer shows for that device.
+  const hostEntries = useHostDirectoryList().data ?? null;
   return useHostMutation<
     HostRpcRegistry,
     "epic.create",
@@ -282,7 +289,9 @@ export function useEpicCreateForClient(
           toastHostRefusalWithGuidance(
             error,
             "Couldn't create epic.",
-            createWithoutCloudVerdictMessage(CREATE_FLOOR_HOST_LABEL),
+            createWithoutCloudVerdictMessage(
+              composerHostLabel(hostEntries, ctx?.hostId ?? null),
+            ),
           );
           return;
         }
@@ -938,9 +947,6 @@ function createFloorFor(
   });
 }
 
-/** The label the dispatch-time refusal names its host by. */
-const CREATE_FLOOR_HOST_LABEL = "this device";
-
 /**
  * The guidance for a retry that reached an older host below the create floor,
  * said in the outcome-unknown notice's "The retry was refused" line.
@@ -971,7 +977,7 @@ class CreateWithoutCloudVerdictError extends HostRpcError {
   constructor(cause: HostMethodVersionUnsatisfiedError) {
     super({
       code: "RPC_ERROR",
-      message: createWithoutCloudVerdictMessage(CREATE_FLOOR_HOST_LABEL),
+      message: cause.message,
       requestId: cause.requestId,
       method: "epic.create",
       fatalDetails: null,
