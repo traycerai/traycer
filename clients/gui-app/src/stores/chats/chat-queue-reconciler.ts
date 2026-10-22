@@ -25,7 +25,6 @@ import type {
   PendingUserMessage,
   StagedWorktreeIntentSource,
 } from "@/stores/chats/chat-session-store";
-import { buildAttachmentsFromJSONContent } from "@/lib/composer/tiptap-json-content";
 import { queueItemCanPauseFromQueueHeader } from "@/lib/chat/queue-item-predicates";
 
 import type {
@@ -1101,7 +1100,7 @@ function confirmAcceptedSendsInQueue(
     ) {
       return confirmed;
     }
-    if (!queueContainsPendingSend(input.queue, accepted.messageId, undefined)) {
+    if (!queueContainsPendingSend(input.queue, accepted.messageId)) {
       return confirmed;
     }
     confirmed[accepted.clientActionId] = {
@@ -1192,12 +1191,6 @@ export function reconcileSnapshotChange(
   input: ReconcileSnapshotInput,
 ): ReconcileSnapshotPatch {
   const acceptedMessageIds = confirmedMessageIdsForMessages(input.messages);
-  const pendingUsersByAction = new Map(
-    input.pendingUserMessages.map((message) => [
-      message.clientActionId,
-      message,
-    ]),
-  );
   const initial: ReconcileSnapshotPatch = {
     pendingActions: input.pendingActions,
     acceptedActions: {},
@@ -1217,11 +1210,10 @@ export function reconcileSnapshotChange(
       ) {
         return next;
       }
-      const pendingUser = resolvePendingUser(pendingUsersByAction, pending);
       if (
         acceptedMessageIds.has(pending.messageId) ||
         (pending.action === "send" &&
-          queueContainsPendingSend(input.queue, pending.messageId, pendingUser))
+          queueContainsPendingSend(input.queue, pending.messageId))
       ) {
         return {
           ...next,
@@ -1420,7 +1412,7 @@ function reconcileAcceptedSends(
       // rather than dropped: `takeSetupFailedRestoration` still needs it.
       if (
         acceptedMessageIds.has(accepted.messageId) ||
-        queueContainsPendingSend(input.queue, accepted.messageId, undefined)
+        queueContainsPendingSend(input.queue, accepted.messageId)
       ) {
         if (
           accepted.confirmedByHost &&
@@ -1651,7 +1643,7 @@ export function reconcileTurnSettled(
       // design; the recovery record owns it until the retry dispatches or the
       // prompt is handed back, and exactly one of those will happen.
       !input.recoveringActionIds.has(message.clientActionId) &&
-      !queueContainsPendingSend(input.queue, message.messageId, message) &&
+      !queueContainsPendingSend(input.queue, message.messageId) &&
       // Not recorded is not stranded when the host's delivery view names the
       // message: the view restores it, and a row it already confirmed is still
       // dropped below like any other.
@@ -1825,112 +1817,30 @@ function pendingActionIdsForQueuedMessages(
   pendingUserMessages: ReadonlyArray<PendingUserMessage>,
   queue: OpenChatQueueState,
 ): Set<string> {
-  const pendingUsersByAction = new Map(
-    pendingUserMessages.map((message) => [message.clientActionId, message]),
-  );
   return new Set([
     ...Object.values(pendingActions).flatMap((action) =>
       action.action === "send" &&
       action.messageId !== null &&
-      queueContainsPendingSend(
-        queue,
-        action.messageId,
-        resolvePendingUser(pendingUsersByAction, action),
-      )
+      queueContainsPendingSend(queue, action.messageId)
         ? [action.clientActionId]
         : [],
     ),
     ...pendingUserMessages.flatMap((message) =>
-      queueContainsPendingSend(queue, message.messageId, message)
+      queueContainsPendingSend(queue, message.messageId)
         ? [message.clientActionId]
         : [],
     ),
   ]);
 }
 
-/**
- * Resolve the pending user message associated with a pending action,
- * either from the live array or reconstructed from the action fields.
- */
-function resolvePendingUser(
-  pendingUsersByAction: ReadonlyMap<string, PendingUserMessage>,
-  action: PendingChatAction,
-): PendingUserMessage | undefined {
-  return (
-    pendingUsersByAction.get(action.clientActionId) ??
-    pendingUserMessageFromPendingAction(action)
-  );
-}
-
-/**
- * Reconstruct a pending user message from a pending action's fields.
- * Returns undefined if the action lacks the required fields.
- */
-function pendingUserMessageFromPendingAction(
-  action: PendingChatAction,
-): PendingUserMessage | undefined {
-  if (
-    action.messageId === null ||
-    action.restore === null ||
-    action.sender === null ||
-    action.settings === null ||
-    // Joined the guard rather than being defaulted. A synthesized
-    // `{ type: "PERSONAL" }` is a CLAIM about which account a send was
-    // dispatched under, and this module turns that claim into a drift
-    // statement about which account a resend would charge - so inventing one
-    // is how the notice comes to name an account the send never used.
-    // `sendSeededUserMessage` was changed for exactly this reason; this is the
-    // same rule at the site that reconstructs rather than the one that seeds.
-    // A send always carries both fields, so nothing real is excluded here.
-    action.accountContext === null
-  ) {
-    return undefined;
-  }
-  return {
-    clientActionId: action.clientActionId,
-    messageId: action.messageId,
-    content: action.restore.content,
-    attachments: buildAttachmentsFromJSONContent(action.restore.content),
-    sender: action.sender,
-    settings: action.settings,
-    accountContext: action.accountContext,
-    deliveryPolicy: action.deliveryPolicy,
-    timestamp: action.createdAt,
-    restore: action.restore,
-    restoreWorktreeIntent: action.restoreWorktreeIntent,
-  };
-}
-
-/**
- * Check if a queue contains a send matching the given pending message id
- * or content. Matches by message id first, then falls back to content
- * equality for pending messages not yet assigned an id by the host.
- */
+/** A queued row confirms only the send whose client-minted id it carries. */
 function queueContainsPendingSend(
   queue: OpenChatQueueState,
   pendingMessageId: string,
-  pendingUser: PendingUserMessage | undefined,
 ): boolean {
-  const pendingUserMessageId = pendingUser?.messageId ?? null;
-  let targetContent: string | null = null;
-  let targetSender: string | null = null;
-  let targetSettings: string | null = null;
-  return queue.items.some((item) => {
-    // A managed-command item is host-authored and content-free; it can never be
-    // the queue's echo of the user's pending send.
-    if (item.kind !== "prompt") return false;
-    if (item.messageId === pendingMessageId) return true;
-    if (pendingUser === undefined) return false;
-    if (item.messageId === pendingUserMessageId) return true;
-    if (targetContent === null) {
-      targetContent = JSON.stringify(pendingUser.content);
-      targetSender = JSON.stringify(pendingUser.sender);
-      targetSettings = JSON.stringify(pendingUser.settings);
-    }
-    if (JSON.stringify(item.message.content) !== targetContent) return false;
-    if (JSON.stringify(item.sender) !== targetSender) return false;
-    return JSON.stringify(item.settings) === targetSettings;
-  });
+  return queue.items.some(
+    (item) => item.kind === "prompt" && item.messageId === pendingMessageId,
+  );
 }
 
 /**

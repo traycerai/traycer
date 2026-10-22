@@ -144,17 +144,13 @@ function queueContainsQueuedSend(
   queue: OpenChatQueueState,
   item: OpenChatQueuedPromptItem,
 ): boolean {
-  const content = JSON.stringify(item.message.content);
-  const sender = JSON.stringify(item.sender);
-  const settings = JSON.stringify(item.settings);
   return queue.items.some((candidate) => {
     if (candidate.queueItemId === item.queueItemId) return true;
     // A managed-command item carries no message/sender/settings, so it can
     // never be the host's echo of this send.
     if (candidate.kind !== "prompt") return false;
-    if (candidate.messageId === item.messageId) return true;
-    if (JSON.stringify(candidate.message.content) !== content) return false;
-    if (JSON.stringify(candidate.sender) !== sender) return false;
-    return JSON.stringify(candidate.settings) === settings;
+    // Equal text can be a separate send. Only an echo of this message may
+    // replace its optimistic row.
+    return candidate.messageId === item.messageId;
   });
 }

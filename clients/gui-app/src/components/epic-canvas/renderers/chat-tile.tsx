@@ -3481,10 +3481,11 @@ function useChatTileSessionViewModel(
           tabId: viewTabId,
           ownerId: node.id,
           binding: state.worktreeBinding,
-          isOwnerActive: activeTurnStatus !== null,
+          isOwnerActive:
+            activeTurnStatus !== null || composerActiveTurnStatus !== null,
           // Distinguishes WHY the owner reads active, for the disabled-remove
           // tooltip wording only (the disable decision itself stays on the
-          // broader `isOwnerActive`, unchanged - a live background Bash/Monitor
+          // broader `isOwnerActive` - a live background Bash/Monitor
           // could still be reading or writing in the folder even with no
           // foreground turn active). `false` here means it's active purely
           // because of visible background work, not a turn the "stop" wording
@@ -4126,7 +4127,7 @@ function ContextUsageChipForChat(props: {
 export function ChatSessionMessagesSurface(
   props: ChatSessionMessagesSurfaceProps,
 ): ReactNode {
-  const workingRow = props.messages.find(
+  const workingRow = props.messages.findLast(
     (message) => message.role === "assistant" && message.runState !== null,
   );
   const workingVerb = useWorkingVerb(

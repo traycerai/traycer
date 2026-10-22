@@ -1292,3 +1292,321 @@ describe("an older host's activation with no turn id", () => {
     vi.useRealTimers();
   });
 });
+
+describe("rapid sends before any host frame answers the first", () => {
+  function expectSecondAndThirdDock(opened: Harness): void {
+    const first = sendPrompt(opened);
+    const firstTurn = stateOf(opened).pendingTurn;
+    expect(firstTurn?.messageId).toBe(first.messageId);
+
+    const second = sendPrompt(opened);
+    expect(promptIds(opened)).toEqual([second.messageId]);
+    expect(stateOf(opened).pendingUserMessages.map((m) => m.messageId)).toEqual(
+      [first.messageId],
+    );
+    expect(stateOf(opened).pendingTurn).toBe(firstTurn);
+
+    const third = sendPrompt(opened);
+    expect(promptIds(opened)).toEqual([second.messageId, third.messageId]);
+    expect(stateOf(opened).pendingUserMessages.map((m) => m.messageId)).toEqual(
+      [first.messageId],
+    );
+    expect(stateOf(opened).pendingTurn).toBe(firstTurn);
+  }
+
+  it("the first owns the transcript; the second and third dock without replacing its pendingTurn (new host, stale sendWouldQueue:false)", () => {
+    expectSecondAndThirdDock(openHarness(IDLE_HOST));
+  });
+
+  it("does the same on an older host that publishes no sendWouldQueue", () => {
+    expectSecondAndThirdDock(openHarness(OLDER_HOST_IDLE));
+  });
+
+  it("a later send owns the transcript again once the first was rejected and the host reads idle", () => {
+    const opened = openHarness(IDLE_HOST);
+    const first = sendPrompt(opened);
+    emitAck(opened, first.clientActionId, "rejected");
+    expect(stateOf(opened).pendingTurn).toBeNull();
+    emitTurnState(opened.callbacks(), {
+      runStatus: "idle",
+      activeTurn: null,
+      turnInProgress: false,
+      sendWouldQueue: false,
+    });
+
+    const next = sendPrompt(opened);
+
+    expect(promptIds(opened)).toEqual([]);
+    expect(stateOf(opened).pendingTurn?.messageId).toBe(next.messageId);
+    expect(
+      stateOf(opened).pendingUserMessages.map((m) => m.messageId),
+    ).toContain(next.messageId);
+  });
+
+  it("a later send owns the transcript again once the first settled and a fresh idle frame arrived", () => {
+    const opened = openHarness(IDLE_HOST);
+    const first = sendPrompt(opened);
+    emitMessageAccepted(
+      opened.callbacks(),
+      acceptedMessage(first.messageId, 10),
+    );
+    emitTurnState(opened.callbacks(), {
+      runStatus: "idle",
+      activeTurn: null,
+      turnInProgress: false,
+      sendWouldQueue: false,
+    });
+    expect(stateOf(opened).pendingTurn).toBeNull();
+
+    const next = sendPrompt(opened);
+
+    expect(promptIds(opened)).toEqual([]);
+    expect(stateOf(opened).pendingTurn?.messageId).toBe(next.messageId);
+  });
+});
+
+describe("a fatal stream close with a send still in custody", () => {
+  const FATAL: Parameters<ChatStreamCallbacks["onConnectionStatus"]>[1] = {
+    kind: "fatalError",
+    details: {
+      code: "UNAUTHORIZED",
+      reason: "test close",
+      incompatibleMethods: null,
+      upgradeGuidance: null,
+    },
+  };
+
+  function statusOf(opened: Harness) {
+    return resolvedTurnStatus(
+      stateOf(opened),
+      composerTurnStatus(stateOf(opened).runStatus),
+    );
+  }
+
+  it("drops pendingTurn, evidence, held Stop and continuity but keeps the send's recovery records", () => {
+    const opened = openHarness(IDLE_HOST);
+    const sent = sendPrompt(opened);
+    stateOf(opened).stopTurn();
+    expect(stateOf(opened).heldStop).not.toBeNull();
+    expect(statusOf(opened)).toBe("stopping");
+
+    opened.callbacks().onConnectionStatus("closed", FATAL, null);
+
+    const state = stateOf(opened);
+    expect(state.fatalClose).not.toBeNull();
+    expect(state.pendingTurn).toBeNull();
+    expect(state.pendingTurnEvidence ?? null).toBeNull();
+    expect(state.heldStop).toBeNull();
+    expect(state.queueTurnContinuity ?? false).toBe(false);
+    expect(Object.values(state.pendingActions).map((a) => a.messageId)).toEqual(
+      [sent.messageId],
+    );
+    expect(state.pendingUserMessages.map((m) => m.messageId)).toEqual([
+      sent.messageId,
+    ]);
+    expect(statusOf(opened)).toBeNull();
+  });
+
+  it("shows no Stop after a fatal close for an un-held send either", () => {
+    const opened = openHarness(IDLE_HOST);
+    sendPrompt(opened);
+    expect(statusOf(opened)).toBe("running");
+
+    opened.callbacks().onConnectionStatus("closed", FATAL, null);
+
+    expect(statusOf(opened)).toBeNull();
+  });
+
+  it("a non-fatal reconnect keeps the pendingTurn, held Stop and their presentation", () => {
+    const opened = openHarness(IDLE_HOST);
+    const sent = sendPrompt(opened);
+    stateOf(opened).stopTurn();
+
+    opened.callbacks().onConnectionStatus("reconnecting", null, null);
+
+    expect(stateOf(opened).fatalClose).toBeNull();
+    expect(stateOf(opened).pendingTurn?.messageId).toBe(sent.messageId);
+    expect(stateOf(opened).heldStop?.messageId).toBe(sent.messageId);
+    expect(statusOf(opened)).toBe("stopping");
+  });
+
+  it("a non-fatal reconnect with no held Stop still reads running", () => {
+    const opened = openHarness(IDLE_HOST);
+    sendPrompt(opened);
+
+    opened.callbacks().onConnectionStatus("reconnecting", null, null);
+
+    expect(stateOf(opened).pendingTurn).not.toBeNull();
+    expect(statusOf(opened)).toBe("running");
+  });
+});
+
+describe("sends buffered across a reconnect, before the first host frame places them", () => {
+  it("admits the first buffered prompt on an idle baseline and queues the second", () => {
+    const opened = openHarness(IDLE_HOST);
+    opened.callbacks().onConnectionStatus("reconnecting", null, null);
+    opened.callbacks().onConnectionStatus("open", null, null);
+    const first = sendPrompt(opened);
+    const second = sendPrompt(opened);
+    expect(stateOf(opened).unplacedSendIds?.size ?? 0).toBeGreaterThan(0);
+
+    emitSnapshot(opened.callbacks(), IDLE_HOST);
+
+    expect(stateOf(opened).pendingUserMessages.map((m) => m.messageId)).toEqual(
+      [first.messageId],
+    );
+    expect(promptIds(opened)).toEqual([second.messageId]);
+    expect(stateOf(opened).pendingTurn?.messageId).toBe(first.messageId);
+  });
+});
+
+describe("a host frame that retains our own terminal activeTurn metadata", () => {
+  const TERMINAL = ["completed", "stopped", "interrupted", "errored"] as const;
+
+  function terminalTurn(
+    messageId: string,
+    status: (typeof TERMINAL)[number],
+  ): ChatActiveTurn {
+    return { ...turnFor(messageId, "turn-terminal"), status };
+  }
+
+  function emitTerminal(
+    opened: Harness,
+    messageId: string,
+    status: (typeof TERMINAL)[number],
+  ): void {
+    emitTurnState(opened.callbacks(), {
+      runStatus: "idle",
+      activeTurn: terminalTurn(messageId, status),
+      turnInProgress: false,
+      sendWouldQueue: false,
+    });
+  }
+
+  it.each(TERMINAL)(
+    "ends the pendingTurn of a seen turn that reads %s, with no queue",
+    (status) => {
+      const opened = openHarness(IDLE_HOST);
+      const sent = sendPrompt(opened);
+      emitTurnState(opened.callbacks(), {
+        runStatus: "running",
+        activeTurn: turnFor(sent.messageId, "turn-terminal"),
+        turnInProgress: true,
+        sendWouldQueue: false,
+      });
+      expect(stateOf(opened).pendingTurn?.messageId).toBe(sent.messageId);
+
+      emitTerminal(opened, sent.messageId, status);
+
+      expect(stateOf(opened).pendingTurn).toBeNull();
+      expect(
+        resolvedTurnStatus(
+          stateOf(opened),
+          composerTurnStatus(stateOf(opened).runStatus),
+        ),
+      ).toBeNull();
+    },
+  );
+
+  it.each(TERMINAL)(
+    "drops a Stop held before the first observed frame, which already reads %s, and dispatches nothing",
+    (status) => {
+      const opened = openHarness(IDLE_HOST);
+      const sent = sendPrompt(opened);
+      stateOf(opened).stopTurn();
+      expect(stateOf(opened).heldStop).not.toBeNull();
+
+      emitTerminal(opened, sent.messageId, status);
+
+      expect(stateOf(opened).heldStop).toBeNull();
+      expect(stateOf(opened).pendingTurn).toBeNull();
+      expect(framesOfKind(opened, "stop")).toEqual([]);
+      expect(framesOfKind(opened, "queueCancel")).toEqual([]);
+    },
+  );
+
+  it("does not recreate the pendingTurn when the send's accepted ack lands after the terminal frame", () => {
+    const opened = openHarness(IDLE_HOST);
+    const sent = sendPrompt(opened);
+    emitTurnState(opened.callbacks(), {
+      runStatus: "running",
+      activeTurn: turnFor(sent.messageId, "turn-terminal"),
+      turnInProgress: true,
+      sendWouldQueue: false,
+    });
+    emitTerminal(opened, sent.messageId, "completed");
+    expect(stateOf(opened).pendingTurn).toBeNull();
+
+    emitAck(opened, sent.clientActionId, "accepted");
+
+    expect(stateOf(opened).pendingTurn).toBeNull();
+    expect(stateOf(opened).heldStop).toBeNull();
+    expect(
+      resolvedTurnStatus(
+        stateOf(opened),
+        composerTurnStatus(stateOf(opened).runStatus),
+      ),
+    ).toBeNull();
+
+    const next = sendPrompt(opened);
+
+    expect(promptIds(opened)).toEqual([]);
+    expect(stateOf(opened).pendingTurn?.messageId).toBe(next.messageId);
+  });
+});
+
+describe("the drain carry keeps its identity across unrelated updates", () => {
+  function unrelatedEvent(opened: Harness, eventId: string): void {
+    opened.callbacks().onEventAppended({
+      kind: "eventAppended",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      event: {
+        eventId,
+        type: "turn.started",
+        timestamp: 30,
+        clientActionId: null,
+        actor: null,
+        message: null,
+        turnId: "turn-unrelated",
+        messageId: null,
+        queueItemId: null,
+        approvalId: null,
+        blockId: null,
+        severity: "info",
+        metadata: {},
+      },
+    });
+  }
+
+  it("keeps the same nonempty array and item objects while the carried prompt is still owed", () => {
+    const opened = openHarness({ ...IDLE_HOST, sendWouldQueue: true });
+    const sent = sendPrompt(opened);
+    emitQueueChanged(opened.callbacks(), [queuedPromptItem(sent.messageId)]);
+    emitQueueChanged(opened.callbacks(), []);
+    const carried = stateOf(opened).drainingQueueItems;
+    expect(carried?.map((item) => item.messageId)).toEqual([sent.messageId]);
+
+    unrelatedEvent(opened, "event-unrelated-1");
+    unrelatedEvent(opened, "event-unrelated-2");
+
+    expect(stateOf(opened).drainingQueueItems).toBe(carried);
+    expect(stateOf(opened).drainingQueueItems?.[0]).toBe(carried?.[0]);
+  });
+
+  it("keeps the same empty array when nothing is carried", () => {
+    const opened = openHarness(IDLE_HOST);
+    unrelatedEvent(opened, "event-unrelated-1");
+    const empty = stateOf(opened).drainingQueueItems;
+    expect(empty ?? []).toEqual([]);
+
+    unrelatedEvent(opened, "event-unrelated-2");
+    emitMessageAccepted(
+      opened.callbacks(),
+      acceptedMessage("other-message", 10),
+    );
+
+    expect(stateOf(opened).drainingQueueItems).toBe(empty);
+  });
+});

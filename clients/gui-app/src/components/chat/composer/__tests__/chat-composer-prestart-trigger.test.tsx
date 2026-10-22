@@ -78,10 +78,14 @@ vi.mock("../picker/use-composer-picker-items", () => ({
   useComposerPickerItems: () => undefined,
 }));
 
-vi.mock("@/components/home/hooks/use-composer-toolbar-store", async () => {
+vi.mock("@/components/home/hooks/use-composer-toolbar-store", () => ({
+  useComposerToolbarStore: () => captured.toolbarStore,
+}));
+
+async function createToolbarStore(modelSlug: string) {
   const { createComposerToolbarStore } =
     await import("@/stores/composer/composer-toolbar-store");
-  const store = createComposerToolbarStore({
+  return createComposerToolbarStore({
     purpose: "run",
     reasoningFallback: "model-default",
     seedKey: "chat-composer-picker-profile-test",
@@ -89,7 +93,7 @@ vi.mock("@/components/home/hooks/use-composer-toolbar-store", async () => {
       permission: "supervised",
       selection: {
         harnessId: "claude",
-        modelSlug: "claude-sonnet",
+        modelSlug,
         profileId: "profile-a",
       },
       reasoning: "medium",
@@ -100,9 +104,7 @@ vi.mock("@/components/home/hooks/use-composer-toolbar-store", async () => {
     chatLineCarriesAutoMode: null,
     hostId: null,
   });
-  captured.toolbarStore = store;
-  return { useComposerToolbarStore: () => store };
-});
+}
 
 vi.mock("@/lib/layout-overrides", () => ({
   useReadingWidthStyle: () => ({ className: "", maxWidth: "100%" }),
@@ -290,7 +292,8 @@ vi.mock("@/components/chat/segments/steer-settings-conflict-dialog", () => ({
   SteerSettingsConflictDialog: () => null,
 }));
 
-beforeEach(() => {
+beforeEach(async () => {
+  captured.toolbarStore = await createToolbarStore("claude-sonnet");
   captured.mutate.mockClear();
   captured.onUserInput = null;
   captured.support = true;
@@ -369,6 +372,15 @@ describe("ChatComposer fires chat.prestartRuntime", () => {
     expect(request.chatId).toBe("chat-1");
     expect(request.settings.harnessId).toBe("claude");
     expect(request.settings.model).toBe("claude-sonnet");
+  });
+
+  it("not while the model catalog has not resolved a model: an empty slug never reaches the host", async () => {
+    captured.toolbarStore = await createToolbarStore("");
+    mountComposer();
+
+    userInput(true);
+
+    expect(captured.mutate).not.toHaveBeenCalled();
   });
 
   it("not on input into a draft that already had content", () => {
@@ -453,5 +465,16 @@ describe("ChatComposer fires chat.prestartRuntime", () => {
     });
 
     expect(captured.mutate).not.toHaveBeenCalled();
+  });
+
+  it("a test after the model-picking tests still starts from the default model", () => {
+    expect(captured.toolbarStore?.getState()).toBeDefined();
+    mountComposer();
+
+    userInput(true);
+
+    expect(captured.mutate.mock.calls[0][0].settings.model).toBe(
+      "claude-sonnet",
+    );
   });
 });

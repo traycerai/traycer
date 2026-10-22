@@ -37,9 +37,13 @@ export interface PendingTurn {
 export function sendPlacement(
   state: Pick<
     ChatSessionState,
-    "activeTurn" | "turnInProgress" | "queue" | "sendWouldQueue"
+    "activeTurn" | "turnInProgress" | "queue" | "sendWouldQueue" | "pendingTurn"
   >,
 ): "transcript" | "queue" {
+  // Local sends can be newer than the host's admission frame. Their custody
+  // must take precedence until the host has placed or settled them.
+  if (state.pendingTurn || state.queue.items.some(isOptimisticQueuedItem))
+    return "queue";
   if (state.sendWouldQueue !== undefined) {
     return state.sendWouldQueue ? "queue" : "transcript";
   }
@@ -143,6 +147,7 @@ const SEND_STATE_KEYS: ReadonlyArray<keyof ChatSessionState> = [
   "sendWouldQueue",
   "runStatus",
   "backgroundItems",
+  "fatalClose",
 ];
 
 /** Fold local send identity alongside the existing custody reducers. */
@@ -151,6 +156,16 @@ export function reconcileSendState(
   next: ChatSessionState,
 ): Partial<ChatSessionState> {
   if (SEND_STATE_KEYS.every((key) => previous[key] === next[key])) return {};
+  // A terminal stream cannot finish an optimistic turn. Keep send custody for
+  // recovery, but release its presentation and any Stop that cannot be sent.
+  if (next.fatalClose !== null) {
+    return {
+      pendingTurn: null,
+      pendingTurnEvidence: null,
+      heldStop: null,
+      queueTurnContinuity: false,
+    };
+  }
   return new SendStateReconciler(previous, next).reconcile();
 }
 
@@ -215,19 +230,34 @@ class SendStateReconciler {
     const ids = this.next.unplacedSendIds;
     if (!this.hostFrame || ids === undefined || ids.size === 0) return;
     if (this.next.transcriptBaselineEpoch !== this.next.connectionEpoch) return;
-    if (sendPlacement(this.next) === "queue") {
-      for (const message of this.pendingUsers) {
-        if (ids.has(message.messageId)) {
-          this.queue = appendOptimisticQueuedItem(
-            this.queue,
-            this.optimisticItem(message),
-          );
-        }
+    const pendingTurn = this.next.pendingTurn;
+    let placement = sendPlacement({
+      ...this.next,
+      // Buffered sends have only tentative transcript ownership. The fresh
+      // baseline places the first one; the remaining sends follow it in FIFO.
+      pendingTurn:
+        pendingTurn && ids.has(pendingTurn.messageId) ? null : pendingTurn,
+    });
+    const docked = new Set<string>();
+    for (const message of this.pendingUsers) {
+      if (!ids.has(message.messageId)) continue;
+      if (
+        this.next.activeTurn?.userMessageId === message.messageId ||
+        this.hasSavedRow(message.messageId)
+      )
+        continue;
+      if (placement === "queue") {
+        this.queue = appendOptimisticQueuedItem(
+          this.queue,
+          this.optimisticItem(message),
+        );
+        docked.add(message.messageId);
       }
-      this.pendingUsers = this.pendingUsers.filter(
-        (message) => !ids.has(message.messageId),
-      );
+      placement = "queue";
     }
+    this.pendingUsers = this.pendingUsers.filter(
+      (message) => !docked.has(message.messageId),
+    );
     Object.assign(this.patch, {
       unplacedSendIds: new Set<string>(),
       queue: this.queue,
@@ -359,6 +389,12 @@ class SendStateReconciler {
         !this.withdrawn(item.messageId) &&
         !this.cancelled(item),
     );
+    const current = this.next.drainingQueueItems ?? [];
+    if (
+      drainingQueueItems.length === current.length &&
+      drainingQueueItems.every((item, index) => item === current[index])
+    )
+      return;
     Object.assign(this.patch, { drainingQueueItems });
   }
 
@@ -486,6 +522,7 @@ class SendStateReconciler {
     const id = turn.messageId;
     if (this.withdrawn(id)) return true;
     const named = this.next.activeTurn?.userMessageId === id;
+    if (named && isTerminalTurn(this.next.activeTurn)) return true;
     if (this.queued(id) && !named && !this.hasSavedRow(id)) return true;
     if (this.hostFrame && seen?.turnSeen === true && !named) return true;
     if (this.settledUnseen(id, seen, named)) return true;
@@ -531,6 +568,16 @@ class SendStateReconciler {
         : null,
     };
   }
+}
+
+function isTerminalTurn(turn: ChatActiveTurn | null): boolean {
+  if (turn === null) return false;
+  return (
+    turn.status === "completed" ||
+    turn.status === "stopped" ||
+    turn.status === "interrupted" ||
+    turn.status === "errored"
+  );
 }
 
 function sameEvidence(

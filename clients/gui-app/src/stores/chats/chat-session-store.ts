@@ -6612,6 +6612,7 @@ export function createChatSessionStoreWithNotificationDependencies(
           heldUpdates: current.heldUpdates,
           portForwards: current.portForwards,
           turnInProgress: current.turnInProgress,
+          sendWouldQueue: current.sendWouldQueue,
           pendingFallback: current.pendingFallback,
           pendingReturn: current.pendingReturn,
           lastFailedAttempt: current.lastFailedAttempt,

@@ -223,6 +223,13 @@ async function firstFrameAfterEnter(
   return { messageId, frames: await stopWatching(page) };
 }
 
+/** No frame may draw the prompt twice: the dock, its carry and the transcript hand over. */
+function expectNeverDuplicated(frames: ReadonlyArray<Frame>): void {
+  expect(frames.map((frame) => frame.promptDrawn).filter((n) => n > 1)).toEqual(
+    [],
+  );
+}
+
 /** From the first frame that draws the prompt, no frame may lose it. */
 function expectNeverUndrawn(frames: ReadonlyArray<Frame>): void {
   const start = frames.findIndex((frame) => frame.promptDrawn >= 1);
@@ -405,6 +412,7 @@ for (const kind of ["activating", "running"] as const) {
     const frames = await stopWatching(page);
 
     expectNeverUndrawn(frames);
+    expectNeverDuplicated(frames);
     expect(frames.at(-1)?.working).not.toBeNull();
   });
 
@@ -423,6 +431,26 @@ for (const kind of ["activating", "running"] as const) {
     const frames = await stopWatching(page);
 
     expectNeverUndrawn(frames);
+    expectNeverDuplicated(frames);
     expect(frames.at(-1)?.working).not.toBeNull();
   });
 }
+
+test("a send that took the transcript and was then queued by the host is drawn once through the drain", async ({
+  page,
+}) => {
+  await openScenario(page, "idle");
+  const messageId = await typeAndPressEnter(page);
+  await startWatching(page, PROMPT);
+
+  await host(page, { kind: "queueAdded", messageId });
+  await nextFrames(page, 2);
+  await host(page, { kind: "queueRemoved" });
+  await host(page, { kind: "accept", messageId });
+  await host(page, { kind: "turnStarted", messageId });
+  const frames = await stopWatching(page);
+
+  expectNeverUndrawn(frames);
+  expectNeverDuplicated(frames);
+  expect(frames.at(-1)?.working).not.toBeNull();
+});

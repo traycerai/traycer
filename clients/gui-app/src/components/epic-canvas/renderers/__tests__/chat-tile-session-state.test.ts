@@ -1149,6 +1149,37 @@ describe("canModifyChatMessages", () => {
       }),
     ).toBe(false);
   });
+
+  it("denies a held Stop whose send is still queued: pendingTurn is gone but the stop is not dispatched", () => {
+    expect(
+      canModifyChatMessages({
+        canAct: true,
+        state: gateState({
+          runStatus: "running",
+          turnInProgress: false,
+          pendingTurn: null,
+          heldStop: { messageId: "message-1", clientActionId: "stop-1" },
+          queue: runnableQueue(1),
+        }),
+      }),
+    ).toBe(false);
+  });
+
+  it("still allows queue-only continuity with no held Stop: the next prompt waits in the dock, no turn is running", () => {
+    expect(
+      canModifyChatMessages({
+        canAct: true,
+        state: gateState({
+          runStatus: "running",
+          turnInProgress: false,
+          pendingTurn: null,
+          heldStop: null,
+          queueTurnContinuity: true,
+          queue: runnableQueue(1),
+        }),
+      }),
+    ).toBe(true);
+  });
 });
 
 // ── Escape hatch: host-pending interviews with no answerable card ────────────

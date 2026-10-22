@@ -525,7 +525,7 @@ export function Fixture(): ReactElement {
     state.messages,
   );
   const queuedPromptIds = new Set(
-    queue.items.flatMap((item) =>
+    queueWithDrainingPrompts(state).items.flatMap((item) =>
       item.kind === "prompt" ? [item.messageId] : [],
     ),
   );
@@ -537,6 +537,7 @@ export function Fixture(): ReactElement {
       setupCardWindows: state.transcriptDerived?.setupCardWindows ?? [],
       pendingUserMessages: state.pendingUserMessages,
       pendingTurn: state.pendingTurn,
+      turnObservedAt: state.turnObservedAt,
       queuedPromptMessageIds: queuedPromptIds,
       withdrawnMessageId: null,
       liveAssistantMessage: state.liveAssistantMessage,

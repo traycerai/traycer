@@ -201,11 +201,15 @@ export interface ComposerPromptEditorProps {
    * typing, pasting, an image insert/remove, or a programmatic `setContent`).
    * Never fired for a caret-only move; see `onSelectionChange`.
    */
-  readonly onUserInput?: (wasEmpty: boolean) => void;
   readonly onDocumentChange: (
     content: JsonContent,
     selection: { readonly from: number; readonly to: number },
   ) => void;
+  /**
+   * Input in the focused editor, or unfocused dictation; reports whether the
+   * document was empty beforehand. Excludes programmatic setContent/syncContent.
+   */
+  readonly onUserInput?: (wasEmpty: boolean) => void;
   /**
    * Caret/selection moved with no document mutation. Deliberately carries no
    * `content` - a selection-only event must never serialize the document (it

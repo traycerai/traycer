@@ -469,7 +469,12 @@ function ChatComposerImpl(props: ChatComposerProps) {
   );
   const requestPrestart = useCallback(
     (settings: ChatRunSettings) => {
-      if (!focused || currentEpicId === null || prestartSupport !== true)
+      if (
+        !focused ||
+        currentEpicId === null ||
+        prestartSupport !== true ||
+        settings.model.length === 0
+      )
         return;
       if (
         readStagedWorktreeIntent({

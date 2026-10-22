@@ -317,6 +317,8 @@ export function canModifyChatMessages(input: {
     | "turnInProgress"
     | "pendingUserMessages"
     | "pendingTurn"
+    | "heldStop"
+    | "queueTurnContinuity"
     | "pendingActions"
   >;
 }): boolean {
@@ -355,13 +357,14 @@ export function canModifyChatMessages(input: {
 function historyHasOnlyQueuedWork(
   state: Pick<
     ChatSessionState,
-    "activeTurn" | "turnInProgress" | "pendingTurn" | "queue"
+    "activeTurn" | "turnInProgress" | "pendingTurn" | "heldStop" | "queue"
   >,
 ): boolean {
   return (
     state.activeTurn === null &&
     state.turnInProgress !== true &&
     !state.pendingTurn &&
+    !state.heldStop &&
     state.queue.items.length > 0
   );
 }

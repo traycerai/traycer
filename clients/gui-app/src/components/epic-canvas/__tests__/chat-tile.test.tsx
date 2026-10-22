@@ -41,8 +41,12 @@ const loadingSurfaceTestState = vi.hoisted(() => ({
 }));
 const workspaceSelectorTestState = vi.hoisted<{
   inFlightWorktreeIntent: WorktreeIntent | null;
+  isOwnerActive: boolean | null;
+  hasActiveTurn: boolean | null;
 }>(() => ({
   inFlightWorktreeIntent: null,
+  isOwnerActive: null,
+  hasActiveTurn: null,
 }));
 const forkCreateTestState = vi.hoisted(() => ({
   mutate: vi.fn<(input: ForkCreateRequest, options: object) => void>(),
@@ -97,10 +101,14 @@ vi.mock(
       readonly surface: {
         readonly bindingResolved: boolean;
         readonly inFlightWorktreeIntent: WorktreeIntent | null;
+        readonly isOwnerActive: boolean;
+        readonly hasActiveTurn: boolean;
       };
     }) => {
       workspaceSelectorTestState.inFlightWorktreeIntent =
         props.surface.inFlightWorktreeIntent;
+      workspaceSelectorTestState.isOwnerActive = props.surface.isOwnerActive;
+      workspaceSelectorTestState.hasActiveTurn = props.surface.hasActiveTurn;
       if (!props.surface.bindingResolved) {
         loadingSurfaceTestState.unresolvedWorkspaceRenderCount += 1;
       }
@@ -1585,6 +1593,8 @@ describe("<ChatTile />", () => {
     useComposerHarnessMemoryStore.getState().resetForTests();
     loadingSurfaceTestState.unresolvedWorkspaceRenderCount = 0;
     workspaceSelectorTestState.inFlightWorktreeIntent = null;
+    workspaceSelectorTestState.isOwnerActive = null;
+    workspaceSelectorTestState.hasActiveTurn = null;
     forkCreateTestState.mutate.mockReset();
     forkCreateTestState.reset.mockReset();
     // The composer gates Send on a resolved (non-empty) model slug. Without a
@@ -2040,6 +2050,117 @@ describe("<ChatTile />", () => {
     const frame = chatHarness.sent[0];
     if (frame.kind !== "stop") throw new Error("expected stop frame");
     expect(frame.turnId).toBe("turn-1");
+  });
+
+  describe("the workspace selector's owner-active guard", () => {
+    function sendFromComposer(): void {
+      const sendButton = screen.getByRole("button", { name: "Send" });
+      fireEvent.click(sendButton);
+    }
+
+    it("is idle on an idle chat", async () => {
+      renderChatTile();
+      await waitForChatTileLoaded();
+
+      expect(workspaceSelectorTestState.isOwnerActive).toBe(false);
+      expect(workspaceSelectorTestState.hasActiveTurn).toBe(false);
+    });
+
+    it("locks from Enter, before any host frame answers the send", async () => {
+      renderChatTile();
+      await waitForChatTileLoaded();
+
+      sendFromComposer();
+
+      expect(chatHarness.sent).toHaveLength(1);
+      await waitFor(() => {
+        expect(workspaceSelectorTestState.isOwnerActive).toBe(true);
+      });
+      expect(workspaceSelectorTestState.hasActiveTurn).toBe(true);
+    });
+
+    it("stays locked for visible background work with no turn, without claiming a turn", async () => {
+      renderChatTile();
+      await waitForChatTileLoaded();
+
+      act(() => {
+        chatHarness.callbacks().onTurnStateChanged({
+          kind: "turnStateChanged",
+          hasBinaryPayload: false,
+          epicId: EPIC_ID,
+          chatId: CHAT_ARTIFACT.id,
+          runStatus: "running",
+          activeTurn: null,
+          turnInProgress: false,
+        });
+      });
+
+      await waitFor(() => {
+        expect(workspaceSelectorTestState.isOwnerActive).toBe(true);
+      });
+      expect(workspaceSelectorTestState.hasActiveTurn).toBe(false);
+    });
+  });
+
+  describe("a queued send that took the transcript first", () => {
+    it("is drawn once while the host queues it, and once while its dock row is carried", async () => {
+      renderChatTile();
+      await waitForChatTileLoaded();
+      fireEvent.click(screen.getByRole("button", { name: "Send" }));
+      const frame = chatHarness.sent[0];
+      if (frame.kind !== "send") throw new Error("expected send frame");
+      const drawn = (): number =>
+        screen.queryAllByText("pending message").length;
+      await waitFor(() => {
+        expect(drawn()).toBe(1);
+      });
+
+      const queued = {
+        kind: "prompt" as const,
+        queueItemId: "queue-sent",
+        messageId: frame.messageId,
+        message: {
+          kind: "user" as const,
+          content: PENDING_DRAFT_CONTENT,
+          browserAnnotations: [],
+        },
+        sender: frame.sender,
+        settings: frame.settings,
+        accountContext: frame.accountContext,
+        sentFromHostId: null,
+        delivery: "next_turn" as const,
+        status: "pending" as const,
+        targetTurnId: null,
+        steerRequest: null,
+        fallbackReason: null,
+        createdAt: 1,
+        updatedAt: 1,
+      };
+      const emitQueue = (items: ReadonlyArray<typeof queued>): void => {
+        act(() => {
+          chatHarness.callbacks().onQueueChanged({
+            kind: "queueChanged",
+            hasBinaryPayload: false,
+            epicId: EPIC_ID,
+            chatId: CHAT_ARTIFACT.id,
+            queue: { status: "running", items: [...items] },
+          });
+        });
+      };
+
+      emitQueue([queued]);
+      await waitFor(() => {
+        expect(drawn()).toBe(1);
+      });
+      expect(screen.getAllByTestId("queued-message-row")).toHaveLength(1);
+
+      emitQueue([]);
+      await waitFor(() => {
+        expect(drawn()).toBe(1);
+      });
+      const scroll = screen.getByTestId("chat-messages-scroll");
+      expect(scroll.textContent).not.toContain("pending message");
+    });
   });
 
   it("on a phone keeps a Queue button beside Stop and queues through it", async () => {
