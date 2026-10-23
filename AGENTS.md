@@ -9,8 +9,9 @@ toolchain and pre-commit hooks: [`CONTRIBUTING.md`](CONTRIBUTING.md).
 
 ## Nested docs (read when editing there)
 
-- [`.github/AGENTS.md`](.github/AGENTS.md) — the pull-request CI gate and how
-  a workflow carries it
+- [`.github/AGENTS.md`](.github/AGENTS.md) — the pull-request CI gate and the
+  merge run. Read it before editing a workflow or a CI script
+  (`scripts/ci-*`, `scripts/__tests__/ci-pull-request-gate.test.mjs`)
 - [`clients/gui-app/AGENTS.md`](clients/gui-app/AGENTS.md)
 - [`clients/desktop/AGENTS.md`](clients/desktop/AGENTS.md)
 - [`clients/mobile/AGENTS.md`](clients/mobile/AGENTS.md)
