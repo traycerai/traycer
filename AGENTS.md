@@ -71,10 +71,11 @@ the commit hook is the only other check before merge. Pull requests from
 forks and bots, and into any other branch, run every check; watch them with
 `gh pr checks --watch` and fix what they report.
 
-**Don't dispatch workflows on your branch: the merge run is the test.**
-Dispatch only for a risky change the hook does not cover (packaging, the
-protocol, the CLI's launchd path):
-`gh workflow run <test.yml | pre-commit.yml | protocol-compat.yml | browser-regressions.yml | real-supervisor.yml> --ref <branch>`.
+**No CI runs on a branch.** Never dispatch a workflow on a branch
+(`gh workflow run … --ref <branch>`), whatever the change: packaging, the
+protocol and the CLI's launchd path included. What needs checking before the
+merge is checked locally with the narrow checks above (one package's `build`
+for packaging). Everything else runs on the merge.
 
 The full suite runs once on every push to `main`. `trunk-red.yml` re-runs
 failed jobs once; a failed `trunk-red` run means `main` is really red, a break
