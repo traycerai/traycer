@@ -42,10 +42,6 @@ import {
 } from "@/lib/sandboxes/sandbox-row-lines";
 import { DETAILS, alreadyDestroyedLine } from "@/lib/sandboxes/sandbox-strings";
 import { useRunnerHost } from "@/providers/use-runner-host";
-import {
-  confirmTeamWake,
-  teamWakeAsks,
-} from "@/stores/hosts/team-wake-confirm-store";
 import { openSandboxDetails } from "@/stores/sandboxes/sandbox-details-store";
 import { useSystemTabModalActions } from "@/stores/tabs/use-system-tab-modal";
 
@@ -91,27 +87,19 @@ export function SandboxRowActions(props: {
   const busy =
     verb.isPending || patch.isPending || create.isPending || repair.isPending;
 
-  const wake = (pressed: SandboxLifecycleVerb, asks: boolean): void => {
-    const run = (): void => {
-      verb.mutate(pressed, {
-        onSuccess: (outcome) =>
-          toastSandboxVerbOutcome(pressed, outcome, summary.displayName),
-      });
-    };
-    confirmTeamWake(asks, run);
+  // A team wake no longer asks first: its payer is said where it is picked.
+  const wake = (pressed: SandboxLifecycleVerb): void => {
+    verb.mutate(pressed, {
+      onSuccess: (outcome) =>
+        toastSandboxVerbOutcome(pressed, outcome, summary.displayName),
+    });
   };
-
-  const teamAsks = teamWakeAsks(
-    configuration.kind === "team",
-    summary.kind,
-    summary.frozen,
-  );
   // The actions that act at once; the rest open their dialog.
   const immediate: Partial<Record<SandboxRowAction, () => void>> = {
-    resume: () => wake("resume", teamAsks),
-    start: () => wake("start", teamAsks),
+    resume: () => wake("resume"),
+    start: () => wake("start"),
     // The person chose to pay; the button said so.
-    "resume-paying": () => wake("resume", false),
+    "resume-paying": () => wake("resume"),
     "add-credits": () =>
       void openLink(
         sandboxAddCreditsUrl(runnerHost.signInUrl, configuration),
@@ -139,7 +127,6 @@ export function SandboxRowActions(props: {
           },
           teamName:
             configuration.kind === "team" ? configuration.teamName : null,
-          teamId: configuration.kind === "team" ? configuration.teamId : null,
         },
         { onSuccess: () => toast.info(`Starting ${summary.displayName}…`) },
       ),

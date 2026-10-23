@@ -719,6 +719,7 @@ const EXPECTED_SECTION_GROUPS: ReadonlyArray<
   ["agents", "personal"],
   ["browser-agent-access", "personal"],
   ["secrets", "personal"],
+  ["sandboxes", "personal"],
   ["agent-definitions", "personal"],
   ["machine-setup", "personal"],
   // Dev-only proof pages: offered whenever `import.meta.env.DEV` holds, which

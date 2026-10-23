@@ -1,3 +1,4 @@
+import { useSandboxesPageStore } from "@/stores/sandboxes/sandboxes-page-store";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useEffect } from "react";
 import { act, cleanup, render } from "@testing-library/react";
@@ -411,12 +412,33 @@ describe("useSandboxStaging surfaces", () => {
     expect(latest).toBeNull();
   });
 
-  it("opens Settings from Manage sandboxes in Settings", () => {
+  it("opens Settings › Sandboxes on Personal when nothing is staged", () => {
+    useSandboxesPageStore.setState({
+      configurationId: { kind: "team", teamId: "stale-team" },
+    });
     const { composer } = mount([LAPTOP]);
 
     composer.onManage();
 
     expect(mocks.openSettings).toHaveBeenCalledTimes(1);
-    expect(mocks.openSettings.mock.calls[0][0].section).toBe("host");
+    expect(mocks.openSettings.mock.calls[0][0].section).toBe("sandboxes");
+    expect(useSandboxesPageStore.getState().configurationId).toEqual({
+      kind: "personal",
+    });
+  });
+
+  it("opens Settings › Sandboxes on the staged configuration", () => {
+    mount([LAPTOP, TEAM_SUSPENDED]);
+    act(() => staging().composer.onPickHost(TEAM_SUSPENDED));
+    const staged = readStagedSandbox(SURFACE)?.target.configuration;
+    if (staged?.kind !== "team") throw new Error("expected a team stage");
+
+    act(() => staging().composer.onManage());
+
+    expect(mocks.openSettings.mock.calls[0][0].section).toBe("sandboxes");
+    expect(useSandboxesPageStore.getState().configurationId).toEqual({
+      kind: "team",
+      teamId: staged.teamId,
+    });
   });
 });

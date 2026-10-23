@@ -10,6 +10,7 @@ import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope
 import { useWatchHostStore } from "@/stores/host-scope/watch-host-store";
 import { useAddHostDialogStore } from "@/stores/settings/add-host-dialog-store";
 import { useProvidersFocusStore } from "@/stores/settings/providers-focus-store";
+import { useStagedSandboxStore } from "@/stores/composer/staged-sandbox-store";
 import { useProviderLinkDialogStore } from "@/stores/providers/provider-link-dialog-store";
 import {
   createChatSessionStore,
@@ -302,6 +303,31 @@ describe("<EpicSessionLifecycleBridge />", () => {
     });
 
     expect(useWatchHostStore.getState().scopedHostId).toBeNull();
+  });
+
+  it("drops every staged sandbox on user-switch", () => {
+    // Persisted per device: left standing, the next account would send into
+    // the outgoing account's team, or resubmit its create key.
+    useStagedSandboxStore.getState().stage("composer:w1", {
+      kind: "existing",
+      hostId: "host-owned-by-alice",
+      sandboxId: "sbx-alice",
+      name: "alice-box",
+      configuration: { kind: "team", teamId: "team-alice", teamName: "Acme" },
+      verb: "resume",
+    });
+
+    render(
+      <EpicSessionLifecycleBridge>
+        <div />
+      </EpicSessionLifecycleBridge>,
+    );
+
+    act(() => {
+      resetAuth("signed-in", "bob@example.com", "user-bob");
+    });
+
+    expect(useStagedSandboxStore.getState().bySurface).toEqual({});
   });
 
   it("drops the shared watch-host pick on sign-out", () => {

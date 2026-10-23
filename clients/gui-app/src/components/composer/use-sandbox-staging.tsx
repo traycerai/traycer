@@ -70,6 +70,10 @@ import {
   type StagedSandbox,
   type StagedSandboxTarget,
 } from "@/stores/composer/staged-sandbox-store";
+import {
+  setSandboxesPageConfiguration,
+  type SandboxesPageConfigurationId,
+} from "@/stores/sandboxes/sandboxes-page-store";
 import { useSystemTabModalActions } from "@/stores/tabs/use-system-tab-modal";
 
 /**
@@ -348,8 +352,11 @@ export function useSandboxStaging(input: {
       },
       onOpenShape: setSheetKey,
       onManage: () => {
+        setSandboxesPageConfiguration(
+          managedConfiguration(stage, input.hosts, memoryHostId),
+        );
         openSettings({
-          section: "host",
+          section: "sandboxes",
           resetToGeneral: false,
           tab: null,
           draft: null,
@@ -552,6 +559,35 @@ function restingTargetFor(host: HostScopeOption): StagedSandboxTarget | null {
         : { kind: "team", teamId: owner.teamId, teamName: owner.teamName },
     verb,
   };
+}
+
+/**
+ * The configuration `Manage sandboxes in Settings` opens on: the staged
+ * one, else the team of the sandbox the surface is on, else Personal.
+ */
+function managedConfiguration(
+  stage: StagedSandbox | null,
+  hosts: readonly HostScopeOption[],
+  activeHostId: string | null,
+): SandboxesPageConfigurationId {
+  const configuration =
+    stage === null
+      ? activeHostConfiguration(hosts, activeHostId)
+      : stage.target.configuration;
+  return configuration.kind === "team"
+    ? { kind: "team", teamId: configuration.teamId }
+    : { kind: "personal" };
+}
+
+function activeHostConfiguration(
+  hosts: readonly HostScopeOption[],
+  activeHostId: string | null,
+): StageConfiguration {
+  const host = hosts.find((option) => option.hostId === activeHostId);
+  const owner = host === undefined ? null : hostOptionTeamOwner(host);
+  return owner === null
+    ? { kind: "personal" }
+    : { kind: "team", teamId: owner.teamId, teamName: owner.teamName };
 }
 
 function configurationPrincipal(

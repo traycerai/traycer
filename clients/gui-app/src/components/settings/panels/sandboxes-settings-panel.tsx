@@ -42,7 +42,6 @@ import { useRefreshSandboxCosts } from "@/hooks/sandboxes/use-refresh-sandbox-co
 import { useSandboxSessionReport } from "@/hooks/sandboxes/use-sandbox-session-report";
 import { useOpenLink } from "@/lib/links/open-link";
 import { useSampledNow } from "@/lib/relative-time";
-import { formatMemory } from "@/lib/sandboxes/sandbox-pricing";
 import {
   SANDBOX_DEFAULT_IDLE_MINUTES,
   SANDBOX_DEFAULT_RESTING_MINUTES,
@@ -76,7 +75,23 @@ import {
   type SandboxStarterFilter,
   type SandboxStateFilter,
 } from "@/lib/sandboxes/sandbox-row-lines";
-import { shortPriceLabel, wakeString } from "@/lib/sandboxes/sandbox-strings";
+import {
+  KEPT_UNTIL_YOU_DESTROY_IT,
+  sandboxShapeLabel,
+  shortPriceLabel,
+  wakeString,
+} from "@/lib/sandboxes/sandbox-strings";
+import {
+  rememberedOrDefaultStageShape,
+  stagePrice,
+  stageProviderFor,
+  type StageShape,
+} from "@/lib/sandboxes/sandbox-stage-model";
+import { useEffectiveHostId } from "@/hooks/host/use-effective-host-id";
+import {
+  rememberedSandboxShape,
+  useSandboxShapeMemoryStore,
+} from "@/stores/composer/sandbox-shape-memory-store";
 import { cn } from "@/lib/utils";
 import { useRunnerHost } from "@/providers/use-runner-host";
 import { useAuthStore } from "@/stores/auth/auth-store";
@@ -212,30 +227,24 @@ function ConfigurationPicker(props: {
 
 // ── Defaults ────────────────────────────────────────────────────────────────
 
-/** The spec's default shape: Linux, 2 vCPU, 4 GB. */
-const DEFAULT_CPUS = 2;
-const DEFAULT_MEMORY_MB = 4096;
-
 /**
- * The default shape as the catalogue offers it: the first Linux provider that
- * can create sandboxes, with its class's wake string and the region's `from`
- * price, or `null` before the catalogue answers.
+ * A New row's shape as the catalogue offers it, with its class's wake string
+ * and its price (`from` unless it is the region's smallest, the one shape the
+ * catalogue prices), or `null` before the catalogue answers.
  */
-function defaultShapeLine(catalogue: SandboxCatalogue | null): string | null {
-  const provider =
-    catalogue?.providers.find(
-      (candidate) =>
-        candidate.creatable &&
-        candidate.os.includes("linux") &&
-        candidate.regions.length > 0,
-    ) ?? null;
-  if (provider === null) return null;
-  // The first region is the server's default; the find above required one.
-  const region = provider.regions[0];
+function defaultShapeLine(
+  catalogue: SandboxCatalogue | null,
+  shape: StageShape | null,
+): string | null {
+  if (catalogue === null || shape === null) return null;
+  const provider = stageProviderFor(catalogue, shape.os);
+  const price = stagePrice(catalogue, shape);
+  const priceLabel =
+    price === null ? null : shortPriceLabel(price.awakeMcPerHour);
   return [
-    `Linux · ${DEFAULT_CPUS} vCPU · ${formatMemory(DEFAULT_MEMORY_MB)}`,
-    `from ${shortPriceLabel(region.fromPriceMcPerHour.awakeMc)}`,
-    wakeString(provider.suspendFidelity),
+    `${shape.os === "linux" ? "Linux" : "Windows"} · ${sandboxShapeLabel(shape.cpus, shape.memoryMb)}`,
+    price === null || price.exact ? priceLabel : `from ${priceLabel}`,
+    provider === null ? null : wakeString(provider.suspendFidelity),
   ]
     .filter((part): part is string => part !== null)
     .join(" · ");
@@ -251,8 +260,28 @@ function SandboxDefaultsSection(props: {
   readonly configuration: SandboxPageConfiguration;
 }): ReactNode {
   const catalogue = useSandboxCatalogue(true).data ?? null;
-  const shape = defaultShapeLine(catalogue);
   const { configuration } = props;
+  // The person's own pick behind this configuration's gear, remembered
+  // under the host their composer follows; the spec's defaults until then.
+  const memoryHostId = useEffectiveHostId();
+  const remembered = useSandboxShapeMemoryStore((s) =>
+    rememberedSandboxShape(
+      s.byHost,
+      memoryHostId,
+      configuration.kind === "team" ? configuration.teamId : "personal",
+    ),
+  );
+  const stageShape =
+    catalogue === null
+      ? null
+      : rememberedOrDefaultStageShape(catalogue, remembered);
+  const shape = defaultShapeLine(catalogue, stageShape);
+  const idleMinutes =
+    stageShape === null ? SANDBOX_DEFAULT_IDLE_MINUTES : stageShape.idleMinutes;
+  const restingMinutes =
+    stageShape === null
+      ? SANDBOX_DEFAULT_RESTING_MINUTES
+      : stageShape.destroyAfterRestingMinutes;
   return (
     <section
       aria-label="Defaults for new sandboxes"
@@ -277,11 +306,17 @@ function SandboxDefaultsSection(props: {
         <dt className="text-muted-foreground">
           Suspend when idle for (at least 2 minutes)
         </dt>
-        <dd>{sandboxPeriodLabel(SANDBOX_DEFAULT_IDLE_MINUTES)}</dd>
+        <dd data-testid="sandboxes-defaults-idle">
+          {sandboxPeriodLabel(idleMinutes)}
+        </dd>
         <dt className="text-muted-foreground">
           Destroy after resting for (empty: never)
         </dt>
-        <dd>{sandboxPeriodLabel(SANDBOX_DEFAULT_RESTING_MINUTES)}</dd>
+        <dd data-testid="sandboxes-defaults-resting">
+          {restingMinutes === null
+            ? KEPT_UNTIL_YOU_DESTROY_IT
+            : sandboxPeriodLabel(restingMinutes)}
+        </dd>
       </dl>
     </section>
   );

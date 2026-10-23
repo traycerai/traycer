@@ -6,16 +6,58 @@ import {
   screen,
   within,
 } from "@testing-library/react";
-import type { SandboxSummary } from "@traycer/protocol/host/sandbox-control";
+import type {
+  SandboxCatalogue,
+  SandboxSummary,
+} from "@traycer/protocol/host/sandbox-control";
 import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
 import {
+  sandboxPeriodLabel,
   sandboxRowActionLabel,
   sandboxRowActions,
   type SandboxPageConfiguration,
 } from "@/lib/sandboxes/sandbox-row-lines";
+import { KEPT_UNTIL_YOU_DESTROY_IT } from "@/lib/sandboxes/sandbox-strings";
+import { useSandboxShapeMemoryStore } from "@/stores/composer/sandbox-shape-memory-store";
+
+const CATALOGUE: SandboxCatalogue = {
+  providers: [
+    {
+      provider: "tensorlake",
+      os: ["linux"],
+      shape: {
+        cpuMin: 1,
+        cpuMax: 16,
+        cpuStep: 1,
+        memoryPerCpuMinMb: 1024,
+        memoryPerCpuMaxMb: 8192,
+        memoryMinMb: 1024,
+        memoryMaxMb: 65536,
+        memoryStepMb: 512,
+        diskMinMb: 10240,
+        diskMaxMb: 102400,
+        diskDefaultMb: 20480,
+      },
+      suspendFidelity: "memory",
+      stoppedStorage: "snapshot",
+      wakeClass: "resume",
+      dockerInGuest: true,
+      creatable: true,
+      notCreatableReason: null,
+      regions: [
+        {
+          id: "us-east",
+          label: "US East",
+          fromPriceMcPerHour: { awakeMc: 120, suspendedMc: 4, stoppedMc: 2 },
+        },
+      ],
+    },
+  ],
+};
 
 const mocks = vi.hoisted(() => ({
   sandboxes: [] as readonly SandboxSummary[],
+  catalogue: null as SandboxCatalogue | null,
 }));
 
 vi.mock("@tanstack/react-router", () => ({
@@ -44,7 +86,10 @@ vi.mock("@/hooks/sandboxes/use-refresh-sandbox-costs", () => ({
   useRefreshSandboxCosts: () => undefined,
 }));
 vi.mock("@/hooks/sandboxes/use-sandbox-catalogue-query", () => ({
-  useSandboxCatalogue: () => ({ data: null }),
+  useSandboxCatalogue: () => ({ data: mocks.catalogue }),
+}));
+vi.mock("@/hooks/host/use-effective-host-id", () => ({
+  useEffectiveHostId: () => "laptop",
 }));
 vi.mock("@/hooks/sandboxes/use-sandbox-control-unavailable-reason", () => ({
   useSandboxControlUnavailableReason: () => null,
@@ -123,6 +168,47 @@ function names(): string[] {
 describe("<SandboxesSettingsPanel />", () => {
   beforeEach(() => {
     mocks.sandboxes = [];
+    mocks.catalogue = null;
+    useSandboxShapeMemoryStore.setState({
+      byHost: {},
+      lastConfigurationByHost: {},
+    });
+  });
+
+  it("shows the person's remembered pick in the defaults, else the spec's", () => {
+    mocks.catalogue = CATALOGUE;
+    renderPanel([]);
+    expect(
+      screen.getByTestId("sandboxes-defaults-shape").textContent,
+    ).toContain("2 vCPU");
+    expect(screen.getByTestId("sandboxes-defaults-idle").textContent).toBe(
+      sandboxPeriodLabel(30),
+    );
+    expect(screen.getByTestId("sandboxes-defaults-resting").textContent).toBe(
+      sandboxPeriodLabel(7 * 24 * 60),
+    );
+    cleanup();
+
+    useSandboxShapeMemoryStore.getState().remember("laptop", "personal", {
+      os: "linux",
+      cpus: 4,
+      memoryMb: 8192,
+      diskMb: null,
+      region: "us-east",
+      idleMinutes: 45,
+      destroyAfterRestingMinutes: null,
+    });
+    renderPanel([]);
+
+    expect(
+      screen.getByTestId("sandboxes-defaults-shape").textContent,
+    ).toContain("4 vCPU");
+    expect(screen.getByTestId("sandboxes-defaults-idle").textContent).toBe(
+      sandboxPeriodLabel(45),
+    );
+    expect(screen.getByTestId("sandboxes-defaults-resting").textContent).toBe(
+      KEPT_UNTIL_YOU_DESTROY_IT,
+    );
   });
   afterEach(() => cleanup());
 
