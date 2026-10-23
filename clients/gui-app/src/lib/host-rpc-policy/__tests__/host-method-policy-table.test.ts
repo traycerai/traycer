@@ -439,15 +439,12 @@ describe("host method poll policy table", () => {
     expect(intervalMs).toBe(10_000);
   });
 
-  // The channel on screen opts into `bot.thread.list` with `poll: true` so a
-  // thread's reply count moves while the person watches; the cadence is the
-  // one `host.status` already uses, not a number of its own.
-  it("polls bot.thread.list on host.status's fixed cadence", () => {
+  // The bot's subscription reads `bot.thread.list` again when its
+  // conversations move, so nothing reads it on a timer.
+  it("never polls bot.thread.list", () => {
     const entry = HOST_METHOD_POLL_TABLE["bot.thread.list"];
-    const status = HOST_METHOD_POLL_TABLE["host.status"].poll;
     expect(entry.mode).toBe("latest");
-    expect(entry.poll.kind).toBe("fixed");
-    expect(entry.poll.intervalMs).toBe(status.intervalMs);
+    expect(entry.poll).toBeNull();
   });
 
   // A send mints a request: two identical sends must stay two messages, never

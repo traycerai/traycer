@@ -153,6 +153,7 @@ function snapshotFrame(
   readonly bot: object;
   readonly tasks: readonly BotTaskEntry[];
   readonly openRequestCount: number | null;
+  readonly conversationsRevision: number | null;
   readonly boundHost: object;
   readonly hasBinaryPayload: false;
 } {
@@ -177,6 +178,7 @@ function snapshotFrame(
     },
     tasks,
     openRequestCount,
+    conversationsRevision: 0,
     boundHost: { hostId: "host-1", epoch: 0, isThisHost: true },
     hasBinaryPayload: false,
   };

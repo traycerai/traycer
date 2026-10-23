@@ -120,7 +120,10 @@ describe("bot threads", () => {
   const tracy = botRecord({ botId: BOT_ID_A, title: "Tracy" });
 
   it("lists each thread with its post, replies, open requests and cost, in the host's order", async () => {
-    stage({ bot: tracy, threads: () => ({ threads: THREADS }) });
+    stage({
+      bot: tracy,
+      threads: () => ({ threads: THREADS, trunkCostUsd: null }),
+    });
 
     const result = await threads("tracy");
 
@@ -137,7 +140,7 @@ describe("bot threads", () => {
   });
 
   it("says when the bot has no threads", async () => {
-    stage({ bot: tracy, threads: () => ({ threads: [] }) });
+    stage({ bot: tracy, threads: () => ({ threads: [], trunkCostUsd: null }) });
 
     const result = await threads(BOT_ID_A);
 
@@ -150,6 +153,7 @@ describe("bot threads", () => {
       bot: tracy,
       threads: () => ({
         threads: [{ ...THREADS[0], openRequestCount: -1 }],
+        trunkCostUsd: null,
       }),
     });
 
@@ -161,7 +165,7 @@ describe("bot threads", () => {
   it("refuses a bot bound to another host before asking for its threads", async () => {
     stage({
       bot: botRecord({ botId: BOT_ID_A, boundHostId: OTHER_HOST_ID }),
-      threads: () => ({ threads: THREADS }),
+      threads: () => ({ threads: THREADS, trunkCostUsd: null }),
     });
 
     const error = await rejection(threads(BOT_ID_A));
@@ -177,7 +181,7 @@ describe("bot threads", () => {
   it("refuses a bot no host runs", async () => {
     stage({
       bot: botRecord({ botId: BOT_ID_A, boundHostId: null }),
-      threads: () => ({ threads: THREADS }),
+      threads: () => ({ threads: THREADS, trunkCostUsd: null }),
     });
 
     const error = await rejection(threads(BOT_ID_A));
