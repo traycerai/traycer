@@ -14,6 +14,8 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import type { HostRpcRegistry } from "@/lib/host";
+import { useConfigurationEnvironmentId } from "@/components/settings/environment/configuration-source";
+import { cloudVerdictPreflight } from "@/lib/host/cloud-verdict-preflight";
 import { replaceOutcome } from "@/lib/sandboxes/secret-replace-outcome";
 import {
   SECRET_CUSTODY_SENTENCE,
@@ -36,6 +38,7 @@ export function ReplaceSecretValueDialog(props: {
   /** Changed elsewhere: the list is re-read before another try. */
   readonly onStale: () => void;
 }): ReactNode {
+  const environmentId = useConfigurationEnvironmentId();
   const { secret } = props;
   const [value, setValue] = useState("");
   const [busy, setBusy] = useState(false);
@@ -88,15 +91,24 @@ export function ReplaceSecretValueDialog(props: {
     setBusy(true);
     setNote(null);
     try {
-      const answer = await props.client.request(
-        "environment.secrets.replaceValue",
-        {
-          secretId: secret.secretId,
-          value,
-          expectedVersionId,
-          environmentId: null,
-        },
-      );
+      const method = "environment.secrets.replaceValue";
+      const request = {
+        secretId: secret.secretId,
+        value,
+        expectedVersionId,
+        environmentId,
+      };
+      if (environmentId !== null) cloudVerdictPreflight(method)();
+      const answer =
+        environmentId === null
+          ? await props.client.request(method, request)
+          : await props.client.requestWithSignalRequiringHostMethodVersion(
+              method,
+              { ...request, environmentId },
+              undefined,
+              { method, version: { major: 1, minor: 1 } },
+            );
+
       const outcome = replaceOutcome(answer);
       // The row and the list follow the server whichever open is showing.
       if (outcome.kind === "accepted") props.onReplaced();

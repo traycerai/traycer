@@ -24,6 +24,9 @@ import {
   type HostScope,
 } from "@/components/settings/host-scope/use-host-scope";
 
+import { useConfigurationSource } from "@/components/settings/environment/configuration-source";
+import { TeamGuide } from "@/components/settings/environment/team-guide";
+
 const SAVE_DEBOUNCE_MS = 600;
 
 type AgentsGuideEditorState = {
@@ -102,6 +105,15 @@ function agentsGuideEditorReducer(
 }
 
 export function AgentSelectionGuideSection() {
+  const source = useConfigurationSource();
+  return source.kind === "pool" ? (
+    <TeamGuide />
+  ) : (
+    <HostAgentSelectionGuideSection />
+  );
+}
+
+function HostAgentSelectionGuideSection() {
   const scope = usePersonalHostScope();
   const realBinding = useHostBinding();
 

@@ -11,7 +11,7 @@ export function PlanUnlinkPreview(props: {
   readonly onClose: () => void;
   readonly onConfirm: () => void;
 }): ReactNode {
-  const name = `${props.plan.linkedBy}'s ${props.plan.providerLabel} plan`;
+  const name = `${props.plan.linkedBy === null ? "" : `${props.plan.linkedBy}’s `}${props.plan.providerLabel} plan`;
   return (
     <ConfirmDestructiveDialog
       open

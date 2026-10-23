@@ -13,6 +13,8 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import type { HostRpcRegistry } from "@/lib/host";
+import { useConfigurationEnvironmentId } from "@/components/settings/environment/configuration-source";
+import { cloudVerdictPreflight } from "@/lib/host/cloud-verdict-preflight";
 import { secretChangeRefusalLine } from "@/lib/sandboxes/secret-change-refusal-copy";
 import {
   DESKTOP_SECRET_KINDS,
@@ -174,12 +176,18 @@ function Busy(props: { readonly busy: boolean }): ReactNode {
 
 export function AddSecretDialog(props: {
   readonly open: boolean;
+  readonly initialKind?: DesktopSecretKind;
   readonly client: HostClient<HostRpcRegistry>;
   readonly onOpenChange: (open: boolean) => void;
   /** A secret was saved: re-read the list. */
   readonly onSaved: () => void;
 }): ReactNode {
-  const [step, setStep] = useState<Step>(PICK);
+  const environmentId = useConfigurationEnvironmentId();
+  const initialStep: Step =
+    props.initialKind === undefined
+      ? PICK
+      : { kind: "form", form: initialSecretForm(props.initialKind) };
+  const [step, setStep] = useState<Step>(initialStep);
   const [busy, setBusy] = useState<"verify" | "save" | null>(null);
   const [verifyNote, setVerifyNote] = useState<SecretVerifyLine | null>(null);
   const [saveNote, setSaveNote] = useState<SecretVerifyLine | null>(null);
@@ -192,7 +200,7 @@ export function AddSecretDialog(props: {
     if (open) return;
     openGeneration.current += 1;
     // Closing drops the typed value with the rest of the form.
-    setStep(PICK);
+    setStep(initialStep);
     setVerifyNote(null);
     setSaveNote(null);
     setBusy(null);
@@ -213,10 +221,18 @@ export function AddSecretDialog(props: {
     setBusy("verify");
     setVerifyNote(null);
     try {
-      const result = await props.client.request(
-        "environment.secrets.verify",
-        secretVerifyCandidateRequest(form),
-      );
+      const method = "environment.secrets.verify";
+      const request = secretVerifyCandidateRequest(form);
+      if (environmentId !== null) cloudVerdictPreflight(method)();
+      const result =
+        environmentId === null
+          ? await props.client.request(method, request)
+          : await props.client.requestWithSignalRequiringHostMethodVersion(
+              method,
+              { ...request, environmentId },
+              undefined,
+              { method, version: { major: 1, minor: 1 } },
+            );
       if (openGeneration.current !== sentFrom) return;
       setVerifyNote(secretVerifyLine(result, form.protocol, "dialog"));
     } catch (error) {
@@ -235,10 +251,18 @@ export function AddSecretDialog(props: {
     setBusy("save");
     setSaveNote(null);
     try {
-      const outcome = await props.client.request(
-        "environment.secrets.create",
-        secretCreateRequest(form),
-      );
+      const method = "environment.secrets.create";
+      const request = secretCreateRequest(form);
+      if (environmentId !== null) cloudVerdictPreflight(method)();
+      const outcome =
+        environmentId === null
+          ? await props.client.request(method, request)
+          : await props.client.requestWithSignalRequiringHostMethodVersion(
+              method,
+              { ...request, environmentId },
+              undefined,
+              { method, version: { major: 1, minor: 1 } },
+            );
       const note = createOutcomeNote(outcome);
       // The list is re-read whichever open is showing: the secret is saved.
       if (outcome.outcome !== "refused") props.onSaved();

@@ -8,6 +8,14 @@ import { useEnvironmentStatusRead } from "@/hooks/environment/use-environment-re
 import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
 import { TEAM_SECRETS_LINE } from "@/lib/sandboxes/secrets-page-copy";
 
+import {
+  useCanEditConfiguration,
+  useConfigurationSource,
+} from "@/components/settings/environment/configuration-source";
+import { usePoolTierHostClient } from "@/hooks/host/use-pool-tier";
+import { useHostClient } from "@/lib/host";
+import { useTeamViewingHost } from "@/hooks/environment/team/use-team-viewing-host";
+
 /**
  * Settings > Personal > Secrets, read through the window's own host:
  *
@@ -18,6 +26,42 @@ import { TEAM_SECRETS_LINE } from "@/lib/sandboxes/secrets-page-copy";
  *   your secrets here."
  */
 export function SecretsSettingsPanel(): ReactNode {
+  const source = useConfigurationSource();
+  return source.kind === "pool" ? (
+    <TeamSecretsSettingsPanel />
+  ) : (
+    <HostSecretsSettingsPanel />
+  );
+}
+
+function TeamSecretsSettingsPanel(): ReactNode {
+  const client = usePoolTierHostClient(useHostClient());
+  const canEdit = useCanEditConfiguration();
+  const scope = useTeamViewingHost();
+  return (
+    <SettingsPanelShell
+      title={SECRETS.page.label}
+      description={SECRETS.page.description}
+      headerAction={
+        canEdit ? undefined : (
+          <span className="text-ui-xs text-muted-foreground">Read-only</span>
+        )
+      }
+      bodyClassName="overflow-visible rounded-none border-none bg-transparent"
+    >
+      <SecretsPage
+        client={client}
+        hostId={client.getActiveHostId()}
+        hostName={(hostId) =>
+          scope.hosts.data?.hosts.find((host) => host.hostId === hostId)
+            ?.hostLabel ?? "a host"
+        }
+      />
+    </SettingsPanelShell>
+  );
+}
+
+function HostSecretsSettingsPanel(): ReactNode {
   const scope = usePersonalHostScope();
   const supported = useHostMethodSupport(
     scope.hostId,

@@ -1,4 +1,6 @@
 import { useState, type ReactNode } from "react";
+import { AppliedProviderItemDetails } from "@/components/settings/environment/applied-provider-item-details";
+import { providerIdToGuiHarnessId } from "@/lib/provider-ordering";
 import {
   AlertTriangle,
   Eye,
@@ -394,6 +396,11 @@ export function ProviderProfileScopedSection(
           // instead, keeping every chip whole.
           className="flex min-w-0 flex-wrap items-center justify-end gap-2"
         >
+          <AppliedProviderItemDetails
+            kind="managed_profile"
+            itemKey={`${providerIdToGuiHarnessId(state.providerId)}:${selectedProfile.profileId}`}
+            title={selectedProfile.label}
+          />
           <ProfileSummary
             key={selectedProfile.profileId}
             profile={selectedProfile}

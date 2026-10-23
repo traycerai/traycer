@@ -128,6 +128,11 @@ import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { useHostCredentialRefusal } from "@/hooks/host/use-host-credential-refusal";
 
 type ProviderId = ProviderCliState["providerId"];
+import { useConfigurationSource } from "@/components/settings/environment/configuration-source";
+import { TeamProviders } from "@/components/settings/environment/team-providers";
+import { TeamMcpServers } from "@/components/settings/environment/team-mcp-servers";
+import { TeamSkillsPage } from "@/components/settings/environment/team-skills";
+
 type ProviderProfile = ProviderCliState["profiles"][number];
 type ProvidersListQuery = UseQueryResult<
   ResponseOfMethod<HostRpcRegistry, "providers.list">,
@@ -400,6 +405,17 @@ function ProviderCheckedTimestamp({
 }
 
 export function ProvidersSettingsPanel() {
+  const source = useConfigurationSource();
+  const view = useContext(ProvidersPanelViewContext);
+  if (source.kind === "pool") {
+    if (view === "mcp-servers") return <TeamMcpServers />;
+    if (view === "skills") return <TeamSkillsPage />;
+    return <TeamProviders />;
+  }
+  return <HostProvidersSettingsPanel />;
+}
+
+function HostProvidersSettingsPanel() {
   const scope = usePersonalHostScope();
   const setHostId = scope.setHostId;
   // A deep link that already knows which machine needs attention — the

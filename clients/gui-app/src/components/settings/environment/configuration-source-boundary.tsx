@@ -29,11 +29,7 @@ export function ConfigurationSourceBoundary(props: {
       kind: "pool",
       environmentId: descriptor.environmentId,
       roomId: descriptor.roomId,
-      providerHandle:
-        "providerHandle" in descriptor &&
-        typeof descriptor.providerHandle === "string"
-          ? descriptor.providerHandle
-          : null,
+      providerHandle: descriptor.providerHandle,
       effectiveRole: configurationRoleOf(descriptor),
     };
   }, [descriptor]);

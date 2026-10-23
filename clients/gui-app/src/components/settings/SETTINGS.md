@@ -839,6 +839,44 @@ Supporting pieces, all viewport-agnostic where possible:
   multi-card gaps. Out of scope: the Worktrees toolbar/list rows, which stay
   unchanged regardless of density.
 
+## Team configuration sources
+
+The Environment dropdown uses `useEnvironmentPick()`. Personal and Local
+keep the existing host reads. A team mounts `ConfigurationSourceBoundary`
+before its page, resolves its descriptor through `environment.list@1.1`, and
+provides `ConfigurationSourceContext` with the team id, room id, provider
+handle and effective role. An unresolved or unavailable team never mounts a
+page with the host source. The boundary is keyed by team id so unsent edits
+and secret input do not cross team selections.
+
+Team hooks live under `hooks/environment/team/`. Variables, provider env
+overrides, shell, managed profiles, pack policies, MCP tool toggles, agent
+definitions, browser access and model routing read revisioned configuration
+items through the pool requester. Saves quote the displayed revision; conflicts
+reread the row and show who changed it. Approval policy reads its item and
+writes through the dedicated policy method. Editors can change configuration;
+plan linking and approval/browser policy changes require an admin. Viewers get
+read-only values, with secret names and read-access Details entries only.
+
+Secrets and plan sign-in requests carry the source environment id and require
+the addressing minor before dispatch. Raw secret values and sign-in codes stay
+in local component state and direct requests. Pool query caches include the
+signed-in viewer's identity. Generic item mutations also retain environmentId
+in their variables so paused-save status belongs to the picked team.
+
+Live facts, native skills and the guide share `useTeamViewingHost()`: an
+explicit reachable host registered to that team, or no host. Picking it does
+not activate or wake it. Skills and the guide use the team's room through
+that host; no-host states offer the common picker. Skill writes and the guide editor are held until their addressed host methods
+are available. First edits of an absent model-routing item
+start from the named host's seeded policy; Reset and Restore default tiers
+delete the team item. Host-source panels preserve their existing behavior.
+
+Only controls with a persisted team store are rendered. MCP rows expose the
+server id and tool toggles; declarations and Add are absent. Provider Details
+uses the persisted kind and key. Personal rows offer it only when applied-item
+metadata proves the address.
+
 ## Scope: the organising idea
 
 Settings is grouped by WHAT A SETTING BELONGS TO, and the grouping is

@@ -10,22 +10,27 @@ import { SettingsPanelShell } from "@/components/settings/settings-panel-shell";
 import { useExecutableWriteGrant } from "@/hooks/environment/use-executable-write-grant";
 import { useAddressableHostId } from "@/hooks/host/use-addressable-host-id";
 import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
-import { useHostQuery } from "@/hooks/host/use-host-query";
 import { useHostScopedMutationForClient } from "@/hooks/host/use-host-scoped-mutation";
 import { noticeWriteOutcome } from "@/lib/environment/write-outcome";
-import { useHostClient, type HostRpcRegistry } from "@/lib/host";
+import { useHostClient } from "@/lib/host";
 import { environmentMutationKeys } from "@/lib/query-keys";
+
+import { ConfigurationWriteFeedback } from "@/components/settings/environment/configuration-write-feedback";
+import {
+  configurationWriteIssue,
+  type ConfigurationWriteIssue,
+} from "@/components/settings/environment/configuration-write-issue";
+import {
+  useCanEditConfiguration,
+  useConfigurationSource,
+} from "@/components/settings/environment/configuration-source";
+import { useEnvironmentAgentDefinitionsQuery } from "@/hooks/environment/team/use-agent-definitions-query";
+import { useConfigurationItemMutations } from "@/hooks/environment/team/use-configuration-item-mutations";
 
 const LIST = "environment.agentDefinitions.list";
 
-/**
- * Settings > Personal > Agent definitions: the agent definition files every
- * host the person uses gets. Read and written through the window's own host,
- * which forwards each save to the person's settings; a save is compare-and-set
- * on the revision it was edited from, so one that lost to a change made
- * elsewhere says so and the page re-reads (`useRereadOnStaleWrite`).
- */
 export function AgentDefinitionsSettingsPanel(): ReactNode {
+  const source = useConfigurationSource();
   const hostId = useAddressableHostId();
   const supported = useHostMethodSupport(hostId, LIST);
   return (
@@ -34,8 +39,10 @@ export function AgentDefinitionsSettingsPanel(): ReactNode {
       description={AGENT_DEFINITIONS.page.description}
       bodyClassName="overflow-visible rounded-none border-none bg-transparent"
     >
-      {supported === true ? <AgentDefinitionsBody /> : null}
-      {supported === false ? (
+      {source.kind === "pool" || supported === true ? (
+        <AgentDefinitionsBody />
+      ) : null}
+      {source.kind === "host" && supported === false ? (
         <p className="text-ui-sm text-muted-foreground">
           Update this host to use agent definitions.
         </p>
@@ -67,13 +74,9 @@ function useAgentDefinitionWrites() {
 }
 
 function AgentDefinitionsBody(): ReactNode {
-  const query = useHostQuery<HostRpcRegistry, typeof LIST>({
-    cacheKeyIdentity: undefined,
-    client: useHostClient(),
-    method: LIST,
-    params: {},
-    options: { enabled: true },
-  });
+  const query = useEnvironmentAgentDefinitionsQuery(true);
+  const canEdit = useCanEditConfiguration();
+  const [conflict, setConflict] = useState<ConfigurationWriteIssue>(null);
   if (query.isPending) {
     return (
       <AgentSpinningDots
@@ -87,13 +90,14 @@ function AgentDefinitionsBody(): ReactNode {
   if (query.isError) {
     return (
       <p className="text-ui-sm text-muted-foreground">
-        Couldn't read your agent definitions from this host.
+        Couldn't read these agent definitions.
       </p>
     );
   }
   const definitions = query.data.definitions;
   return (
     <div className="flex flex-col gap-4" data-testid="agent-definitions">
+      <ConfigurationWriteFeedback issue={conflict} />
       {definitions.length === 0 ? (
         <p className="text-ui-sm text-muted-foreground">
           No agent definitions yet.
@@ -105,24 +109,85 @@ function AgentDefinitionsBody(): ReactNode {
           <AgentDefinitionEditor
             key={`${definition.name}:${definition.revision}`}
             definition={definition}
+            onOutcome={setConflict}
           />
         ))
       )}
-      <NewAgentDefinition
-        existingNames={definitions.map((definition) => definition.name)}
-      />
+      {canEdit ? (
+        <NewAgentDefinition
+          existingNames={definitions.map((definition) => definition.name)}
+          onOutcome={setConflict}
+        />
+      ) : null}
     </div>
   );
 }
 
 function AgentDefinitionEditor(props: {
   readonly definition: AgentDefinition;
+  readonly onOutcome: (conflict: ConfigurationWriteIssue) => void;
 }): ReactNode {
   const { definition } = props;
+  const source = useConfigurationSource();
+  const canEdit = useCanEditConfiguration();
+  const team = useConfigurationItemMutations();
   const [text, setText] = useState(definition.text);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const { put, remove } = useAgentDefinitionWrites();
   const changed = text !== definition.text;
+  const saving = source.kind === "pool" ? team.put.isPending : put.isPending;
+  const deleting =
+    source.kind === "pool" ? team.remove.isPending : remove.isPending;
+  const save = (): void => {
+    props.onOutcome(null);
+    if (source.kind === "pool") {
+      team.put.mutate(
+        {
+          environmentId: source.environmentId,
+          kind: "agent_definition",
+          key: definition.name,
+          os: null,
+          value: { text },
+          revision: definition.revision,
+        },
+        {
+          onSuccess: (result) =>
+            props.onOutcome(configurationWriteIssue(result)),
+        },
+      );
+    } else {
+      put.mutate({
+        name: definition.name,
+        text,
+        expectedRevision: definition.revision,
+        executableWriteGrant: null,
+      });
+    }
+  };
+  const deleteDefinition = (): void => {
+    props.onOutcome(null);
+    if (source.kind === "pool") {
+      team.remove.mutate(
+        {
+          environmentId: source.environmentId,
+          kind: "agent_definition",
+          key: definition.name,
+          os: null,
+          revision: definition.revision,
+        },
+        {
+          onSuccess: (result) =>
+            props.onOutcome(configurationWriteIssue(result)),
+          onSettled: () => setConfirmDelete(false),
+        },
+      );
+    } else {
+      remove.mutate(
+        { name: definition.name, expectedRevision: definition.revision },
+        { onSettled: () => setConfirmDelete(false) },
+      );
+    }
+  };
   return (
     <section
       className="flex flex-col gap-2 rounded-lg border border-border/60 p-3"
@@ -135,56 +200,51 @@ function AgentDefinitionEditor(props: {
         aria-label={`${definition.name} text`}
         value={text}
         onChange={(event) => setText(event.target.value)}
+        readOnly={!canEdit}
         rows={8}
       />
-      <div className="flex justify-end gap-2">
-        <Button
-          type="button"
-          variant="ghost"
-          size="sm"
-          onClick={() => setConfirmDelete(true)}
-        >
-          Delete
-        </Button>
-        <Button
-          type="button"
-          size="sm"
-          disabled={!changed || put.isPending}
-          onClick={() =>
-            put.mutate({
-              name: definition.name,
-              text,
-              expectedRevision: definition.revision,
-              executableWriteGrant: null,
-            })
-          }
-        >
-          Save
-          {put.isPending ? (
-            <AgentSpinningDots
-              className={undefined}
-              testId={undefined}
-              variant={undefined}
-              tone="muted"
-            />
-          ) : null}
-        </Button>
-      </div>
+      {canEdit ? (
+        <div className="flex justify-end gap-2">
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            onClick={() => setConfirmDelete(true)}
+          >
+            Delete
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            disabled={!changed || saving}
+            onClick={save}
+          >
+            Save
+            {saving ? (
+              <AgentSpinningDots
+                className={undefined}
+                testId={undefined}
+                variant={undefined}
+                tone="muted"
+              />
+            ) : null}
+          </Button>
+        </div>
+      ) : null}
       <ConfirmDestructiveDialog
         open={confirmDelete}
         onOpenChange={setConfirmDelete}
         title="Delete agent definition"
-        description={`Delete “${definition.name}” from every host you use?`}
+        description={
+          source.kind === "pool"
+            ? `Delete “${definition.name}” from this team?`
+            : `Delete “${definition.name}” from every host you use?`
+        }
         cascadeSummary={null}
         actionLabel="Delete"
-        isPending={remove.isPending}
+        isPending={deleting}
         blockedReason={null}
-        onConfirm={() =>
-          remove.mutate(
-            { name: definition.name, expectedRevision: definition.revision },
-            { onSettled: () => setConfirmDelete(false) },
-          )
-        }
+        onConfirm={deleteDefinition}
       />
     </section>
   );
@@ -192,12 +252,51 @@ function AgentDefinitionEditor(props: {
 
 function NewAgentDefinition(props: {
   readonly existingNames: readonly string[];
+  readonly onOutcome: (conflict: ConfigurationWriteIssue) => void;
 }): ReactNode {
+  const source = useConfigurationSource();
+  const team = useConfigurationItemMutations();
   const [name, setName] = useState("");
   const [text, setText] = useState("");
   const { put } = useAgentDefinitionWrites();
   const trimmed = name.trim();
   const taken = props.existingNames.includes(trimmed);
+  const saving = source.kind === "pool" ? team.put.isPending : put.isPending;
+  const clear = (): void => {
+    setName("");
+    setText("");
+  };
+  const add = (): void => {
+    props.onOutcome(null);
+    if (source.kind === "pool") {
+      team.put.mutate(
+        {
+          environmentId: source.environmentId,
+          kind: "agent_definition",
+          key: trimmed,
+          os: null,
+          value: { text },
+          revision: null,
+        },
+        {
+          onSuccess: (result) => {
+            if (result.outcome === "saved") clear();
+            props.onOutcome(configurationWriteIssue(result));
+          },
+        },
+      );
+    } else {
+      put.mutate(
+        {
+          name: trimmed,
+          text,
+          expectedRevision: null,
+          executableWriteGrant: null,
+        },
+        { onSuccess: clear },
+      );
+    }
+  };
   return (
     <section
       className="flex flex-col gap-2 rounded-lg border border-dashed border-border/60 p-3"
@@ -227,26 +326,11 @@ function NewAgentDefinition(props: {
         <Button
           type="button"
           size="sm"
-          disabled={trimmed.length === 0 || taken || put.isPending}
-          onClick={() =>
-            put.mutate(
-              {
-                name: trimmed,
-                text,
-                expectedRevision: null,
-                executableWriteGrant: null,
-              },
-              {
-                onSuccess: () => {
-                  setName("");
-                  setText("");
-                },
-              },
-            )
-          }
+          disabled={trimmed.length === 0 || taken || saving}
+          onClick={add}
         >
           Add
-          {put.isPending ? (
+          {saving ? (
             <AgentSpinningDots
               className={undefined}
               testId={undefined}

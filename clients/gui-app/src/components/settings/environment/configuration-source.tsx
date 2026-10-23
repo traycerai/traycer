@@ -1,5 +1,5 @@
 import { createContext, useContext } from "react";
-import type { EnvironmentDescriptor } from "@traycer/protocol/host/environment/contracts";
+import type { EnvironmentDescriptorV11 } from "@traycer/protocol/host/environment/contracts";
 
 export type ConfigurationSource =
   | { readonly kind: "host" }
@@ -43,10 +43,9 @@ export function useCanAdministerConfiguration(): boolean {
 
 /** An older inventory cannot authorize edits to a team. */
 export function configurationRoleOf(
-  descriptor: EnvironmentDescriptor,
+  descriptor: EnvironmentDescriptorV11,
 ): "owner" | "admin" | "editor" | "viewer" {
   if (descriptor.ownerKind === "user") return "owner";
-  if (!("effectiveRole" in descriptor)) return "viewer";
   const role = descriptor.effectiveRole;
   return role === "admin" || role === "editor" ? role : "viewer";
 }

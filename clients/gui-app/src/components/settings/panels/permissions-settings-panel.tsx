@@ -40,6 +40,9 @@ import {
   useSettingsOpenIntent,
 } from "@/stores/tabs/settings-open-intent-store";
 
+import { useConfigurationSource } from "@/components/settings/environment/configuration-source";
+import { TeamPermissions } from "@/components/settings/environment/team-permissions";
+
 /**
  * Settings ▸ Permissions: which mode, who reviews, what rules, what happened -
  * one tab per question, in that order.
@@ -69,6 +72,15 @@ import {
  * account, Discard, or closing Settings drops it.
  */
 export function PermissionsSettingsPanel(): ReactNode {
+  const source = useConfigurationSource();
+  return source.kind === "pool" ? (
+    <TeamPermissions />
+  ) : (
+    <HostPermissionsSettingsPanel />
+  );
+}
+
+function HostPermissionsSettingsPanel(): ReactNode {
   const scope = usePersonalHostScope();
   const isMobile = useIsMobileViewport();
   const intent = useSettingsOpenIntent("permissions");

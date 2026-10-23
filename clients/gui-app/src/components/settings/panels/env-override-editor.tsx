@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Check, Plus, Trash2, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -202,6 +202,7 @@ export function EnvOverrideEditor(props: {
     value: string | null,
   ) => void;
   readonly onDelete: (key: string) => void;
+  readonly renderDetails?: (key: string) => ReactNode;
 }) {
   const {
     overrides,
@@ -249,6 +250,7 @@ export function EnvOverrideEditor(props: {
               disabled={disabled}
               credentialRefusal={credentialRefusal}
               note={props.rowNotes.get(entry.key) ?? null}
+              details={props.renderDetails?.(entry.key) ?? null}
               staleRefusal={props.staleRefusal}
               onCommit={onCommit}
               onDelete={onDelete}
@@ -292,6 +294,7 @@ function EnvOverrideRow(props: {
   readonly disabled: boolean;
   readonly credentialRefusal: string | null;
   readonly note: string | null;
+  readonly details: ReactNode;
   readonly staleRefusal: EnvStaleRefusal | null;
   readonly onCommit: (
     oldKey: string,
@@ -448,6 +451,9 @@ function EnvOverrideRow(props: {
         </p>
       )}
       <EnvRowFooter draft={draft} disabled={disabled} onTrim={trimValue} />
+      {props.details === null ? null : (
+        <div className="flex justify-end">{props.details}</div>
+      )}
     </li>
   );
 }
