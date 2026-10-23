@@ -37,6 +37,8 @@ import { BotChannelView } from "@/components/bots/bot-channel-view";
 import { BotChannelSidebar } from "@/components/bots/bot-channel-sidebar";
 import { BotUnderTheHoodPanel } from "@/components/bots/bot-under-the-hood-panel";
 import { BotSettingsPanel } from "@/components/bots/bot-settings-panel";
+import { MainBotBadge } from "@/components/bots/main-bot-badge";
+import { isMainBot, type MainBotIds } from "@/lib/bots/bot-main";
 import {
   botPausedCopy,
   botTabMoveTarget,
@@ -264,6 +266,7 @@ function BotTabBody(props: {
       onRetry={resubscribe}
       view={view}
       onViewChange={setView}
+      mainBotIds={botList.data?.mainBotIds}
     />
   );
 }
@@ -281,6 +284,8 @@ function BotTabContent(props: {
   readonly onRetry: () => void;
   readonly view: BotTabView;
   readonly onViewChange: (view: BotTabView) => void;
+  /** `bot.list`'s main bots; `undefined` until the list answers. */
+  readonly mainBotIds: MainBotIds | undefined;
 }): ReactNode {
   const {
     botId,
@@ -293,8 +298,10 @@ function BotTabContent(props: {
     onRetry,
     view,
     onViewChange,
+    mainBotIds,
   } = props;
   const client = useTabHostClient();
+  const isMain = isMainBot(mainBotIds, snapshot.bot);
   const environments = useEnvironmentListQuery(client, true);
   const environmentLabel = useMemo(() => {
     const match = environments.data?.environments.find(
@@ -349,6 +356,7 @@ function BotTabContent(props: {
           <BotChannelHeader
             snapshot={snapshot}
             environmentLabel={environmentLabel}
+            isMain={isMain === true}
           />
           {streamError === null ? null : (
             // A fatal close AFTER a snapshot: the last reading stays on
@@ -410,7 +418,7 @@ function BotTabContent(props: {
             value="settings"
             className="flex min-h-0 flex-1 flex-col"
           >
-            <BotSettingsPanel bot={snapshot.bot} />
+            <BotSettingsPanel bot={snapshot.bot} isMain={isMain} />
           </TabsContent>
         </Tabs>
       </div>
@@ -459,8 +467,9 @@ function ErrorNotice(props: {
 function BotChannelHeader(props: {
   readonly snapshot: BotSubscriptionSnapshot;
   readonly environmentLabel: string;
+  readonly isMain: boolean;
 }): ReactNode {
-  const { snapshot, environmentLabel } = props;
+  const { snapshot, environmentLabel, isMain } = props;
   const openRequests = snapshot.openRequestCount;
   return (
     <header className="flex shrink-0 flex-col gap-1 px-4 pt-3">
@@ -472,6 +481,7 @@ function BotChannelHeader(props: {
           <Hash className="size-4 shrink-0" aria-hidden="true" />
           <span className="truncate">{snapshot.bot.title}</span>
         </h1>
+        {isMain ? <MainBotBadge testId="bot-tab-main" /> : null}
         <span className="truncate text-ui-xs text-muted-foreground">
           {environmentLabel}
         </span>

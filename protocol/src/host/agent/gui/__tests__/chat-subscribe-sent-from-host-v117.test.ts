@@ -25,6 +25,7 @@ import {
   chatSubscribeV132,
   chatSubscribeV133,
   chatSubscribeV134,
+  chatSubscribeV135,
   chatSubscribeWindowedClientFrameSchema,
   chatSubscribeWindowedClientFrameSchemaPreCanvas,
   chatSubscribeWindowedServerFrameSchema,
@@ -60,9 +61,9 @@ const PRE_KEY_LINES = [
 ] as const;
 
 describe("chat.subscribe registry: 1.17 installed below the 1.18 through 1.22 lines, 1.16 still installed", () => {
-  it("binds 1.17 and 1.16 to their own contracts - the head has since moved to 1.34", () => {
+  it("binds 1.17 and 1.16 to their own contracts - the head has since moved to 1.35", () => {
     const line = hostStreamRpcRegistry["chat.subscribe"][1];
-    expect(line.latestMinor).toBe(34);
+    expect(line.latestMinor).toBe(35);
     expect(line.versions[23].contract).toBe(chatSubscribeV123);
     expect(line.versions[22].contract).toBe(chatSubscribeV122);
     expect(line.versions[21].contract).toBe(chatSubscribeV121);
@@ -157,12 +158,16 @@ describe("chat.subscribe registry: 1.17 installed below the 1.18 through 1.22 li
     expect(chatSubscribeV132.serverFrameSchema).not.toBe(
       openChatSubscribeWindowedServerFrameSchema,
     );
-    // 1.33 froze when 1.34 added `sendWouldQueue` above it; 1.34 binds the
-    // live windowed schema.
+    // 1.33 froze when 1.34 added `sendWouldQueue` above it; 1.34 froze when
+    // 1.35 added the memory-curation queue item above it; 1.35 binds the live
+    // windowed schema.
     expect(chatSubscribeV133.serverFrameSchema).not.toBe(
       openChatSubscribeWindowedServerFrameSchema,
     );
-    expect(chatSubscribeV134.serverFrameSchema).toBe(
+    expect(chatSubscribeV134.serverFrameSchema).not.toBe(
+      openChatSubscribeWindowedServerFrameSchema,
+    );
+    expect(chatSubscribeV135.serverFrameSchema).toBe(
       openChatSubscribeWindowedServerFrameSchema,
     );
   });

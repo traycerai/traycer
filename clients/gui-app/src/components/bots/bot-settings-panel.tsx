@@ -15,6 +15,8 @@ import { useComposerToolbarStore } from "@/components/home/hooks/use-composer-to
 import { fallbackSeedSource } from "@/lib/composer/composer-seed-source";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
+import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
+import { useEnvironmentSetMainBotMutation } from "@/hooks/bots/use-environment-set-main-bot-mutation";
 import {
   useBotDeleteMutation,
   useBotUpdateRunSettingsMutation,
@@ -26,7 +28,7 @@ const BOT_TITLE_MAX = 500;
 
 /**
  * A bot's own settings (Tracy Bots): its name, the model its trunk runs on,
- * and deletion. Every write goes through the tab host's client - the host
+ * whether it is its environment's main bot, and deletion. Every write goes through the tab host's client - the host
  * `bot.open` chose to serve the tab - with nothing gated on which host that
  * is: a host that cannot make the change refuses it, and the refusal is shown
  * in place, under the control. The stream snapshot, not the mutation's
@@ -34,14 +36,17 @@ const BOT_TITLE_MAX = 500;
  */
 export function BotSettingsPanel(props: {
   readonly bot: BotRecord;
+  /** Whether the bot is its environment's main bot; `null` when not known. */
+  readonly isMain: boolean | null;
 }): ReactNode {
-  const { bot } = props;
+  const { bot, isMain } = props;
   return (
     <div className="flex flex-col gap-6 overflow-y-auto p-4">
       {/* Keyed by the stream's title: a rename made elsewhere remounts the
           form on the new name instead of leaving the field on the old one. */}
       <BotTitleForm key={bot.title} bot={bot} />
       <BotRunSettingsForm bot={bot} />
+      {isMain === null ? null : <BotMainSection bot={bot} isMain={isMain} />}
       <BotDeleteSection bot={bot} />
     </div>
   );
@@ -226,6 +231,67 @@ function BotRunSettingsForm(props: { readonly bot: BotRecord }): ReactNode {
       </div>
       <BotSettingsRefusal
         message={update.error === null ? null : update.error.message}
+      />
+    </section>
+  );
+}
+
+/**
+ * Making the bot its environment's main bot: one click, no confirmation,
+ * since another bot is made main the same way. Drawn only where the main bot
+ * is known and the tab's host can write it.
+ */
+function BotMainSection(props: {
+  readonly bot: BotRecord;
+  readonly isMain: boolean;
+}): ReactNode {
+  const { bot, isMain } = props;
+  const client = useTabHostClient();
+  const hostId = useTabHostId();
+  const supported =
+    useHostMethodSupport(hostId, "environment.setMainBot") === true;
+  const setMain = useEnvironmentSetMainBotMutation(client);
+  if (!supported) return null;
+  return (
+    <section
+      className="flex flex-col gap-2"
+      aria-label="Main bot"
+      data-testid="bot-settings-main"
+    >
+      <span className="text-ui-sm font-medium text-foreground">Main bot</span>
+      <p className="text-ui-xs text-muted-foreground">
+        {isMain
+          ? "This is the main bot: it tidies the shared memory when it runs over its limit. To hand that over, make another bot main."
+          : "The main bot tidies the shared memory when it runs over its limit."}
+      </p>
+      {isMain ? null : (
+        <div>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            disabled={setMain.isPending}
+            data-testid="bot-settings-make-main"
+            onClick={() =>
+              setMain.mutate({
+                environmentId: bot.environmentId,
+                botId: bot.botId,
+              })
+            }
+          >
+            Make main
+            {setMain.isPending ? (
+              <AgentSpinningDots
+                className="ml-1"
+                testId={undefined}
+                variant={undefined}
+              />
+            ) : null}
+          </Button>
+        </div>
+      )}
+      <BotSettingsRefusal
+        message={setMain.error === null ? null : setMain.error.message}
       />
     </section>
   );

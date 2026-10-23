@@ -107,6 +107,7 @@ describe("buildHomeBotsModel", () => {
   it("makes every environment a group in list order, even with zero bots", () => {
     const model = buildHomeBotsModel({
       environments: [PERSONAL, TEAM],
+      mainBotIds: null,
       bots: [],
     });
     expect(model.groups.map((g) => g.environmentId)).toEqual([
@@ -123,6 +124,7 @@ describe("buildHomeBotsModel", () => {
   it("skips archived bots", () => {
     const model = buildHomeBotsModel({
       environments: [PERSONAL],
+      mainBotIds: null,
       bots: [
         bot(BOT_A, "env-personal", "Live", null),
         bot(BOT_B, "env-personal", "Gone", 5_000),
@@ -135,6 +137,7 @@ describe("buildHomeBotsModel", () => {
   it("keeps a bot whose environment is not listed in a trailing group labelled by its id", () => {
     const model = buildHomeBotsModel({
       environments: [PERSONAL, TEAM],
+      mainBotIds: null,
       bots: [
         bot(BOT_A, "env-left", "Orphan", null),
         bot(BOT_B, "env-team", "Member", null),
@@ -156,6 +159,7 @@ describe("buildHomeBotsModel", () => {
   it("does not create an orphan group for an unlisted environment holding only archived bots", () => {
     const model = buildHomeBotsModel({
       environments: [PERSONAL],
+      mainBotIds: null,
       bots: [bot(BOT_A, "env-left", "Old", 9_000)],
     });
     expect(model.groups.map((g) => g.environmentId)).toEqual(["env-personal"]);
@@ -165,6 +169,7 @@ describe("buildHomeBotsModel", () => {
   it("sorts bots by title, then by bot id", () => {
     const model = buildHomeBotsModel({
       environments: [PERSONAL],
+      mainBotIds: null,
       bots: [
         bot(BOT_C, "env-personal", "Zed", null),
         bot(BOT_B, "env-personal", "Alpha", null),
@@ -181,6 +186,7 @@ describe("buildHomeBotsModel", () => {
   it("places each bot in its own environment's group and counts them all", () => {
     const model = buildHomeBotsModel({
       environments: [PERSONAL, TEAM],
+      mainBotIds: null,
       bots: [
         bot(BOT_A, "env-team", "T", null),
         bot(BOT_B, "env-personal", "P", null),
@@ -189,6 +195,39 @@ describe("buildHomeBotsModel", () => {
     expect(model.groups[0]?.bots.map((b) => b.botId)).toEqual([BOT_B]);
     expect(model.groups[1]?.bots.map((b) => b.botId)).toEqual([BOT_A]);
     expect(model.botCount).toBe(2);
+  });
+
+  it("names each group's main bot from mainBotIds", () => {
+    const model = buildHomeBotsModel({
+      environments: [PERSONAL, TEAM],
+      bots: [
+        bot(BOT_A, "env-personal", "P", null),
+        bot(BOT_B, "env-team", "T", null),
+      ],
+      mainBotIds: { "env-team": BOT_B },
+    });
+    expect(model.groups.map((g) => g.mainBotId)).toEqual([null, BOT_B]);
+  });
+
+  it("names no main bot in any group when mainBotIds is null", () => {
+    const model = buildHomeBotsModel({
+      environments: [PERSONAL, TEAM],
+      bots: [bot(BOT_A, "env-team", "T", null)],
+      mainBotIds: null,
+    });
+    expect(model.groups.map((g) => g.mainBotId)).toEqual([null, null]);
+  });
+
+  it("names the main bot of the trailing unlisted-environment group too", () => {
+    const model = buildHomeBotsModel({
+      environments: [PERSONAL],
+      bots: [bot(BOT_A, "env-left", "Orphan", null)],
+      mainBotIds: { "env-left": BOT_A },
+    });
+    expect(model.groups.map((g) => [g.environmentId, g.mainBotId])).toEqual([
+      ["env-personal", null],
+      ["env-left", BOT_A],
+    ]);
   });
 });
 

@@ -41,6 +41,7 @@ import {
   chatSubscribeV132,
   chatSubscribeV133,
   chatSubscribeV134,
+  chatSubscribeV135,
   createImageResolutionUpdatedFrame,
   chatApprovalStateSchema,
   chatApprovalStateSchemaPreAuto,
@@ -2302,7 +2303,7 @@ describe("chat.subscribe@1.6 (image generation)", () => {
 });
 
 describe("chat.subscribe registry membership", () => {
-  it("registers chat.subscribe major 1 latestMinor 34 as chatSubscribeV134", () => {
+  it("registers chat.subscribe major 1 latestMinor 35 as chatSubscribeV135", () => {
     const entry = hostStreamRpcRegistry["chat.subscribe"];
     expect(entry).toBeDefined();
     // Registering `8` was the switch to the windowed line: a stream minor
@@ -2381,8 +2382,9 @@ describe("chat.subscribe registry membership", () => {
     // arm, projected away for every `<=1.31` peer. `33` widens the
     // accumulated-change `artifact` tag to all seven artifact kinds, blanked
     // to `null` for every `<=1.32` peer. `34` adds the optional
-    // `sendWouldQueue` bit, which every `<=1.33` peer drops as unknown.
-    expect(entry[1].latestMinor).toBe(34);
+    // `sendWouldQueue` bit, which every `<=1.33` peer drops as unknown. `35`
+    // adds the `memory-curation` queue item, omitted for every `<=1.34` peer.
+    expect(entry[1].latestMinor).toBe(35);
     expect(entry[1].versions[6].contract).toBe(chatSubscribeV16);
     expect(entry[1].versions[7].contract).toBe(chatSubscribeV17);
     expect(entry[1].versions[8].contract).toBe(chatSubscribeV18);
@@ -2412,6 +2414,7 @@ describe("chat.subscribe registry membership", () => {
     expect(entry[1].versions[32].contract).toBe(chatSubscribeV132);
     expect(entry[1].versions[33].contract).toBe(chatSubscribeV133);
     expect(entry[1].versions[34].contract).toBe(chatSubscribeV134);
+    expect(entry[1].versions[35].contract).toBe(chatSubscribeV135);
     expect(chatSubscribeV17.schemaVersion).toEqual({ major: 1, minor: 7 });
     expect(chatSubscribeV18.schemaVersion).toEqual({ major: 1, minor: 8 });
     expect(chatSubscribeV19.schemaVersion).toEqual({ major: 1, minor: 9 });
@@ -2514,6 +2517,10 @@ describe("chat.subscribe registry membership", () => {
     expect(chatSubscribeV134.schemaVersion).toEqual({
       major: 1,
       minor: 34,
+    });
+    expect(chatSubscribeV135.schemaVersion).toEqual({
+      major: 1,
+      minor: 35,
     });
   });
 

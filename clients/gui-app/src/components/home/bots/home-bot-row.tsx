@@ -4,6 +4,7 @@ import { Bot } from "lucide-react";
 import type { BotRecord } from "@traycer/protocol/host/bot/schemas";
 import type { EnvironmentDescriptor } from "@traycer/protocol/host/environment/contracts";
 import { Badge } from "@/components/ui/badge";
+import { MainBotBadge } from "@/components/bots/main-bot-badge";
 import { useEffectiveHostId } from "@/hooks/host/use-effective-host-id";
 import { useBotSubscription } from "@/hooks/bots/use-bot-subscription";
 import { lookupBotTab, useBotTabsStore } from "@/stores/bots/bot-tabs-store";
@@ -64,6 +65,8 @@ export function HomeBotRow(props: {
   readonly environmentOwnerKind: EnvironmentDescriptor["ownerKind"] | null;
   /** Who made the bot ("Created by …"), or null to say nothing. */
   readonly createdBy: string | null;
+  /** Whether the bot is its environment's main bot (decision 30). */
+  readonly isMain: boolean;
 }): ReactNode {
   const {
     bot,
@@ -71,6 +74,7 @@ export function HomeBotRow(props: {
     environmentHostIds,
     environmentOwnerKind,
     createdBy,
+    isMain,
   } = props;
   const hostId = useEffectiveHostId();
   const subscription = useBotSubscription({
@@ -132,7 +136,12 @@ export function HomeBotRow(props: {
         <Bot className="size-4" aria-hidden="true" />
       </span>
       <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-        <span className="truncate text-ui-sm text-foreground">{row.title}</span>
+        <span className="flex min-w-0 items-center gap-2">
+          <span className="truncate text-ui-sm text-foreground">
+            {row.title}
+          </span>
+          {isMain ? <MainBotBadge testId="home-bot-main" /> : null}
+        </span>
         <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5 text-ui-xs text-muted-foreground">
           <Badge
             variant={STATE_BADGE_VARIANTS[state]}

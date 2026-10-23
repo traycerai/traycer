@@ -94,6 +94,8 @@ interface Mount {
   readonly personal: ReadonlyArray<string> | null;
   /** The row's "Created by …" line; null for none. */
   readonly createdBy: string | null;
+  /** Whether the bot is its environment's main bot. */
+  readonly isMain: boolean;
 }
 
 function reach(input: Mount): HomeBotHostReach {
@@ -114,6 +116,7 @@ const OWN_AND_DIALABLE: Mount = {
   environmentOwnerKind: "organization",
   personal: [],
   createdBy: null,
+  isMain: false,
 };
 
 function mountRow(input: Mount): void {
@@ -125,6 +128,7 @@ function mountRow(input: Mount): void {
         environmentHostIds={input.environmentHostIds}
         environmentOwnerKind={input.environmentOwnerKind}
         createdBy={input.createdBy}
+        isMain={input.isMain}
       />
     </StrictMode>,
   );
@@ -359,5 +363,19 @@ describe("<HomeBotRow /> open", () => {
 
     expect(tabHostId()).toBeNull();
     expect(mocks.navigateToTabIntent).not.toHaveBeenCalled();
+  });
+});
+
+describe("<HomeBotRow /> main bot", () => {
+  it("shows the Main badge beside the title of the environment's main bot", () => {
+    mountRow({ ...OWN_AND_DIALABLE, isMain: true });
+
+    expect(screen.getByTestId("home-bot-main").textContent).toBe("Main");
+  });
+
+  it("shows no Main badge for any other bot", () => {
+    mountRow(OWN_AND_DIALABLE);
+
+    expect(screen.queryByTestId("home-bot-main")).toBeNull();
   });
 });
