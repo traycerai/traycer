@@ -539,8 +539,9 @@ export type EnvironmentHistoryEntry = z.infer<
 
 /**
  * How one host of the configuration stands on the subject: `state` an open
- * code with its `reason`, as of `at`, and when the host last reported (null
- * before it ever did).
+ * code with its `reason`, as of `at`, and when the host last reported. Both
+ * times are null for a host that has not reported yet; neither is ever
+ * filled in for it.
  */
 export const environmentHistoryHostStateSchema = lazySchema(() =>
   z.object({
@@ -548,7 +549,7 @@ export const environmentHistoryHostStateSchema = lazySchema(() =>
     hostName: z.string(),
     state: z.string().min(1).max(32),
     reason: z.string().min(1).max(64).nullable(),
-    at: z.number().int().nonnegative(),
+    at: z.number().int().nonnegative().nullable(),
     lastReportedAt: z.number().int().nonnegative().nullable(),
   }),
 );
