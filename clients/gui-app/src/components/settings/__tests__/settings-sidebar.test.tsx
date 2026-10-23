@@ -712,7 +712,7 @@ describe("<SettingsSidebar /> new sandbox entry", () => {
     expect(screen.queryByTestId("automations-entry-probe")).toBeNull();
   });
 
-  it("offers Secrets and GitHub to a signed-in user and opens the account's Secrets page", async () => {
+  it("offers no Secrets and GitHub row to a signed-in user", async () => {
     runnerHostStub.current = {
       signInUrl: "https://platform.example.dev/sign-in",
       browserView: null,
@@ -720,53 +720,10 @@ describe("<SettingsSidebar /> new sandbox entry", () => {
     useAuthStore.setState({ status: "signed-in" });
     renderSidebar();
 
-    const entry = await screen.findByTestId("settings-secrets-and-github");
-    expect(entry.textContent).toContain("Secrets and GitHub");
-
-    fireEvent.click(entry);
-
-    expect(openLinkMock.open).toHaveBeenCalledTimes(1);
-    expect(openLinkMock.open).toHaveBeenCalledWith(
-      "https://platform.example.dev/environments/personal/secrets",
-      "account",
-      expect.anything(),
-    );
-  });
-
-  it("offers no Secrets and GitHub when signed out", async () => {
-    runnerHostStub.current = {
-      signInUrl: "https://platform.example.dev/sign-in",
-      browserView: null,
-    };
-    useAuthStore.setState({ status: "signed-out" });
-    renderSidebar();
-
-    // The rest of the rail rendered, so the entry's absence is the assertion.
-    expect(await screen.findByRole("link", { name: "General" })).toBeDefined();
-    expect(screen.queryByTestId("settings-secrets-and-github")).toBeNull();
-  });
-
-  it("offers no Secrets and GitHub on a build that cannot reach the control plane", async () => {
-    runnerHostStub.current = {
-      signInUrl: "https://platform.example.dev/sign-in",
-      browserView: null,
-    };
-    sandboxControl.reason = "Sandboxes aren't available in staging builds.";
-    useAuthStore.setState({ status: "signed-in" });
-    renderSidebar();
-
-    expect(
-      await screen.findByTestId("settings-sandboxes-unavailable"),
-    ).toBeDefined();
-    expect(screen.queryByTestId("settings-secrets-and-github")).toBeNull();
-  });
-
-  it("offers no Secrets and GitHub when there is no runner host to name a platform origin", async () => {
-    useAuthStore.setState({ status: "signed-in" });
-    renderSidebar();
-
+    // The rest of the rail rendered, so the row's absence is the assertion.
     expect(await screen.findByTestId("settings-new-sandbox")).toBeDefined();
     expect(screen.queryByTestId("settings-secrets-and-github")).toBeNull();
+    expect(screen.queryByText("Secrets and GitHub")).toBeNull();
   });
 });
 

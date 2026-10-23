@@ -280,6 +280,37 @@ async function openVersions(): Promise<HTMLElement[]> {
   return screen.findAllByTestId("secret-version");
 }
 
+describe("the Replace dialog's copy", () => {
+  it("says who holds the value and that running tools keep the old one", async () => {
+    renderPage(buildRotationHost({ rotation: enforcingRotation() }));
+    await openReplaceDialog();
+
+    expect(screen.getByTestId("secret-replace-custody").textContent).toBe(
+      "Stored encrypted in Traycer's cloud. Computers running Personal receive the value, readable by their tools and agents; sandboxes use it through the broker.",
+    );
+    expect(screen.getByTestId("secret-replace-restart").textContent).toBe(
+      SECRET_RESTART_LINE,
+    );
+  });
+});
+
+describe("Remove", () => {
+  it("previews what Remove does, with the current version, and names no web page", async () => {
+    renderPage(buildRotationHost({ rotation: enforcingRotation() }));
+
+    fireEvent.click(await screen.findByTestId("secret-row-remove"));
+
+    const dialog = await screen.findByTestId("confirm-destructive-dialog");
+    await waitFor(() => {
+      expect(dialog.textContent).toContain("Current version 3.");
+    });
+    expect(dialog.textContent).toContain(
+      "Came from unknown. Current version 3. Held on unknown. Tools already running keep it until they restart.",
+    );
+    expect(dialog.textContent).not.toMatch(/on the web|dashboard/i);
+  });
+});
+
 describe("Replace value", () => {
   it("sends the typed value against the version the list showed, then shows the rotation and the restart line", async () => {
     const host = buildRotationHost({ rotation: enforcingRotation() });

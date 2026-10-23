@@ -22,6 +22,12 @@ vi.mock("@/lib/host", async (importOriginal) => {
   return { ...actual, useHostBinding: () => hostBindingMock.current };
 });
 
+// Where "Make it a secret" asks Settings to go.
+const navigateToSettingsSectionMock = vi.hoisted(() => vi.fn());
+vi.mock("@/lib/settings-navigation", () => ({
+  navigateToSettingsSection: navigateToSettingsSectionMock,
+}));
+
 vi.mock("@/hooks/host/use-host-credential-refusal", () => ({
   useHostCredentialRefusal: () => null,
 }));
@@ -66,10 +72,10 @@ const READY_STATUS: EnvironmentStatusResponseV11 = environmentStatusFixture({
 });
 /** `sk-` and a long run: a known token shape, whatever the variable is called. */
 const API_KEY_VALUE = "sk-9fA3kLm2Qx7ZpR4tVb8NcW1yHd6Je5Gs";
-const SECRETS_PATH = "/environments/personal/secrets";
 
 afterEach(() => {
   cleanup();
+  navigateToSettingsSectionMock.mockReset();
   resetNegotiatedManifests();
   scopeOverrides.current = {};
   hostBindingMock.current = null;
@@ -233,12 +239,9 @@ describe("the credential question in the shell panel (Personal host, ready statu
       within(dialog).getByRole("button", { name: "Make it a secret" }),
     );
 
-    await waitFor(() => {
-      expect(runnerHost.openedExternalLinks).toHaveLength(1);
-    });
-    expect(runnerHost.openedExternalLinks[0]).toMatch(
-      new RegExp(`${SECRETS_PATH}$`),
-    );
+    expect(navigateToSettingsSectionMock).toHaveBeenCalledTimes(1);
+    expect(navigateToSettingsSectionMock).toHaveBeenCalledWith("secrets");
+    expect(runnerHost.openedExternalLinks).toEqual([]);
     await waitFor(() => {
       expect(screen.queryByTestId("credential-choice-dialog")).toBeNull();
     });

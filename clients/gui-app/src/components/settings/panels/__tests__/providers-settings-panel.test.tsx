@@ -740,9 +740,13 @@ vi.mock("@/lib/links/open-link", () => ({
 // no `<RunnerHostProvider>` above it.
 vi.mock("@/providers/use-runner-host", () => ({
   useRunnerHost: () => ({ signInUrl: "https://auth.example/sign-in" }),
-  // The account-managed line's Secrets link is null-tolerant; null renders the
-  // line without it, which is all these cases need.
   useRunnerHostOrNull: () => null,
+}));
+
+// Where the account-managed line's Secrets button asks Settings to go.
+const navigateToSettingsSectionMock = vi.hoisted(() => vi.fn());
+vi.mock("@/lib/settings-navigation", () => ({
+  navigateToSettingsSection: navigateToSettingsSectionMock,
 }));
 
 // MCP Project scope resolves workspaces via host query; this harness has no
@@ -1688,6 +1692,7 @@ describe("<ProvidersSettingsPanel />", () => {
     providerMocks.listResult.error = undefined;
     providerMocks.listResult.refetch.mockClear();
     providerMocks.setSelectionMutate.mockClear();
+    navigateToSettingsSectionMock.mockClear();
     providerMocks.setEnabledMutate.mockClear();
     providerMocks.setEnvOverrideMutate.mockClear();
     providerMocks.deleteEnvOverrideMutate.mockClear();
@@ -3329,6 +3334,10 @@ describe("<ProvidersSettingsPanel />", () => {
       const panel = within(screen.getByRole("tabpanel"));
       expect(panel.getByTestId("credentials-managed-in-account")).toBeDefined();
       expect(panel.queryByLabelText("API key")).toBeNull();
+
+      fireEvent.click(panel.getByTestId("credentials-managed-in-account-link"));
+      expect(navigateToSettingsSectionMock).toHaveBeenCalledTimes(1);
+      expect(navigateToSettingsSectionMock).toHaveBeenCalledWith("secrets");
     });
 
     it("renders the API key controls and no line when the flag is false", () => {
