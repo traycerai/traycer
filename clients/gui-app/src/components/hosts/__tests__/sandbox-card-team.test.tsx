@@ -5,7 +5,6 @@ import {
   render,
   screen,
   waitFor,
-  within,
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type {
@@ -83,6 +82,33 @@ vi.mock("@/hooks/sandboxes/use-refresh-sandbox-costs", () => ({
 vi.mock("@/hooks/sandboxes/use-sandbox-catalogue-query", () => ({
   useSandboxCatalogue: () => ({ data: null }),
 }));
+vi.mock("@/hooks/sandboxes/use-sandbox-session-report", () => ({
+  useSandboxSessionReport: () => ({
+    report: { kind: "unknown" },
+    failed: false,
+  }),
+}));
+vi.mock(
+  "@/hooks/sandboxes/use-sandbox-configurations",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@/hooks/sandboxes/use-sandbox-configurations")
+    >()),
+    useSandboxConfigurations: () => ({
+      configurations: [
+        { kind: "personal" },
+        {
+          kind: "team",
+          teamId: "team-acme",
+          teamName: "Acme",
+          environmentId: "env_team",
+        },
+      ],
+      teamEnvironmentIds: new Set(["env_team"]),
+      complete: true,
+    }),
+  }),
+);
 vi.mock("@/hooks/sandboxes/use-sandbox-costs-query", () => ({
   useSandboxCosts: () => ({ data: mocks.costs, isError: false }),
 }));
@@ -485,19 +511,18 @@ describe("<SandboxCard /> team destroy", () => {
     fireEvent.click(screen.getByTestId("sandbox-card-destroy"));
   }
 
-  it("asks for the typed name on a team card that is not frozen, and says it ends others' sessions", async () => {
-    renderCard(sandboxOf("suspended", false, {}), true);
+  it("asks for the typed name on a team card, and says it ends others' sessions", async () => {
+    renderCard(sandboxOf("suspended", false, { environmentId: ENV }), true);
     openDestroy();
 
     const dialog = await screen.findByTestId("confirm-destructive-dialog");
-    expect(
-      within(dialog).getByTestId("sandbox-card-destroy-team"),
-    ).toBeDefined();
-    expect(text("sandbox-card-destroy-team")).toContain(
-      "other members' running agents",
+    expect(dialog.textContent).toContain(
+      "Destroying ends every running session, including other members' running agents.",
     );
-    const input = screen.getByTestId("sandbox-card-destroy-typed");
-    expect(input).toBeDefined();
+    expect(dialog.textContent).toContain(
+      "Affected members are told who destroyed it.",
+    );
+    expect(screen.getByTestId("sandbox-confirm-destroy-typed")).toBeDefined();
     expect(screen.getByTestId("confirm-action").hasAttribute("disabled")).toBe(
       true,
     );
@@ -505,11 +530,11 @@ describe("<SandboxCard /> team destroy", () => {
   });
 
   it("destroys only once the exact name is typed", async () => {
-    renderCard(sandboxOf("suspended", false, {}), true);
+    renderCard(sandboxOf("suspended", false, { environmentId: ENV }), true);
     openDestroy();
     await screen.findByTestId("confirm-destructive-dialog");
 
-    const input = screen.getByTestId("sandbox-card-destroy-typed");
+    const input = screen.getByTestId("sandbox-confirm-destroy-typed");
     fireEvent.change(input, { target: { value: "build" } });
     expect(text("confirm-blocked-reason")).toBe(
       `Type ${NAME} below to destroy it.`,
@@ -534,25 +559,20 @@ describe("<SandboxCard /> team destroy", () => {
       true,
     );
     openDestroy();
-    await screen.findByTestId("confirm-destructive-dialog");
-    expect(screen.getByTestId("sandbox-card-destroy-typed")).toBeDefined();
-    expect(screen.getByTestId("sandbox-card-destroy-team")).toBeDefined();
+    const dialog = await screen.findByTestId("confirm-destructive-dialog");
+    expect(screen.getByTestId("sandbox-confirm-destroy-typed")).toBeDefined();
+    expect(dialog.textContent).toContain(
+      "Affected members are told who destroyed it.",
+    );
   });
 
-  it("keeps a personal card's destroy as it was: no typed name, no team sentence", async () => {
+  it("asks for the name on a personal card as well, without the team sentences", async () => {
     renderCard(sandboxOf("suspended", false, {}), false);
     openDestroy();
-    await screen.findByTestId("confirm-destructive-dialog");
-    expect(screen.queryByTestId("sandbox-card-destroy-typed")).toBeNull();
-    expect(screen.queryByTestId("sandbox-card-destroy-team")).toBeNull();
-  });
-
-  it("words the typed field for a team card as its own, not as a frozen one", async () => {
-    renderCard(sandboxOf("suspended", false, {}), true);
-    openDestroy();
     const dialog = await screen.findByTestId("confirm-destructive-dialog");
-    expect(dialog.textContent).toContain("Type its name to confirm.");
-    expect(dialog.textContent).not.toContain("This sandbox is frozen.");
+    expect(screen.getByTestId("sandbox-confirm-destroy-typed")).toBeDefined();
+    expect(dialog.textContent).not.toContain("other members");
+    expect(dialog.textContent).not.toContain("Affected members");
   });
 });
 
