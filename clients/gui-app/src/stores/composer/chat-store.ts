@@ -1,7 +1,10 @@
 import { v4 as uuidv4 } from "uuid";
 import { create } from "zustand";
 import type { AutoJudgeNoticeMarker } from "@traycer/protocol/persistence/chat-transcript/row-order";
-import type { ConversationRequest } from "@traycer/protocol/persistence/epic/messages";
+import type {
+  BotAnnouncement,
+  ConversationRequest,
+} from "@traycer/protocol/persistence/epic/messages";
 import type {
   ChatQueueSteerMode,
   ChatRunSettings,
@@ -748,6 +751,11 @@ export interface ChatMessage {
    * reads it.
    */
   conversationRequest?: ConversationRequest;
+  /**
+   * The announcement this assistant row is, on a bot channel (Tracy Bots):
+   * its kind and the one thing it points at. Absent on every other row.
+   */
+  announcement?: BotAnnouncement;
   /**
    * The picture of the member who wrote this user row, in a bot
    * conversation whose member directory knows one. Absent on every other

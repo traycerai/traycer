@@ -109,6 +109,7 @@ export function HomeBotsGroupCard(props: {
                 hostReach={hostReach}
                 environmentHostIds={environmentHostIds}
                 environmentOwnerKind={group.ownerKind}
+                isMain={group.mainBotId === bot.botId}
                 createdBy={botCreatedByLabel({
                   createdByUserId: bot.createdByUserId,
                   viewerUserId,

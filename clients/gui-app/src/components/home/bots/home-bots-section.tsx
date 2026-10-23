@@ -112,7 +112,11 @@ export function HomeBotsSection(): ReactNode {
     () =>
       environments.data === undefined && bots.data === undefined
         ? EMPTY_HOME_BOTS_MODEL
-        : buildHomeBotsModel({ environments: environmentList, bots: botList }),
+        : buildHomeBotsModel({
+            environments: environmentList,
+            bots: botList,
+            mainBotIds: bots.data?.mainBotIds ?? null,
+          }),
     [bots.data, environmentList, environments.data, botList],
   );
 

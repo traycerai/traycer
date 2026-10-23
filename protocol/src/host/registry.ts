@@ -386,6 +386,7 @@ import {
   chatSubscribeV132,
   chatSubscribeV133,
   chatSubscribeV134,
+  chatSubscribeV135,
 } from "@traycer/protocol/host/agent/gui/contracts";
 import {
   agentTuiGenerateTitleV10,
@@ -625,6 +626,8 @@ import {
   botDeleteV10,
   botListChangedV10,
   botListV10,
+  botListV11,
+  botListUpgradeV10ToV11,
   botOpenV10,
   botReadV10,
   botSubscribeV10,
@@ -1169,6 +1172,7 @@ import {
   environmentHostReadV10,
   environmentListV10,
   environmentMembersV10,
+  environmentSetMainBotV10,
 } from "@traycer/protocol/host/environment/contracts";
 import {
   sessionImportRunV10,
@@ -6209,6 +6213,19 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
       downgradePathsFromLatest: {},
     },
   },
+  "environment.setMainBot": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: environmentSetMainBotV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
   "config.shell.get": {
     degrade: { kind: "unsupported" },
     1: {
@@ -8870,9 +8887,14 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
   "bot.list": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: { contract: botListV10, upgradeFromPreviousVersion: null },
+        // @1.1 carries each environment's main bot (`mainBotIds`, T44b).
+        1: {
+          contract: botListV11,
+          upgradeFromPreviousVersion: botListUpgradeV10ToV11,
+        },
       },
       downgradePathsFromLatest: {},
     },
@@ -14897,7 +14919,7 @@ const HOST_STREAM_RPC_REGISTRY_DEFINITION = {
   ...HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION,
   "chat.subscribe": {
     1: {
-      latestMinor: 34,
+      latestMinor: 35,
       versions: {
         0: {
           contract: chatSubscribeV10,
@@ -15091,6 +15113,11 @@ const HOST_STREAM_RPC_REGISTRY_DEFINITION = {
         32: { contract: chatSubscribeV132 },
         33: { contract: chatSubscribeV133 },
         34: { contract: chatSubscribeV134 },
+        // @1.35 is the memory-curation line: the `memory-curation` queue item
+        // on the main bot's trunk (projection: the host omits it below @1.35,
+        // as it omits the task-overdue item below @1.27). @1.34 is frozen at
+        // its six-arm queue.
+        35: { contract: chatSubscribeV135 },
       },
     },
   },

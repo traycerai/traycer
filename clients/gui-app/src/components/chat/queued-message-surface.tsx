@@ -11,6 +11,7 @@ import {
 } from "@dnd-kit/sortable";
 import {
   AlarmClock,
+  Brain,
   Cable,
   ClipboardList,
   GripVertical,
@@ -1246,6 +1247,7 @@ function queuedMessageProvenanceBadge(item: OpenChatQueuedItem): ReactNode {
   if (item.kind === "conversation-message") return <ConversationMessageBadge />;
   if (item.kind === "task-checkin") return <TaskCheckinBadge />;
   if (item.kind === "task-overdue") return <TaskOverdueBadge />;
+  if (item.kind === "memory-curation") return <MemoryCurationBadge />;
   return null;
 }
 
@@ -1413,12 +1415,35 @@ function TaskOverdueBadge() {
   );
 }
 
+/**
+ * The ask that the main bot tidy the environment's shared memory, waiting for
+ * its next turn (a `memory-curation` item on the main bot's trunk).
+ * Content-free like the check-in chip: how far over the memory is is read
+ * when the item is delivered.
+ */
+function MemoryCurationBadge() {
+  return (
+    <TooltipWrapper
+      label="The shared memory is over its limit; the bot is asked to tidy it on its next turn."
+      side="top"
+      sideOffset={6}
+      align={undefined}
+    >
+      <Badge variant="muted" data-testid="queued-memory-curation-badge">
+        <Brain aria-hidden />
+        Memory
+      </Badge>
+    </TooltipWrapper>
+  );
+}
+
 type CancelOnlyKind =
   | "shell"
   | "port-forward"
   | "conversation-message"
   | "task-checkin"
   | "task-overdue"
+  | "memory-curation"
   | "sign-in-park";
 
 const CANCEL_COPY: Record<
@@ -1448,6 +1473,10 @@ const CANCEL_COPY: Record<
     ariaLabel: "Dismiss overdue notice",
     tooltip: "Dismiss this notice — the bot won't see it",
   },
+  "memory-curation": {
+    ariaLabel: "Dismiss memory notice",
+    tooltip: "Dismiss this notice — the bot won't be asked to tidy the memory",
+  },
   "sign-in-park": {
     ariaLabel: "Cancel agent message waiting for sign-in",
     tooltip: "Cancel this message — it won't run when you sign back in",
@@ -1464,6 +1493,7 @@ function cancelOnlyKind(item: OpenChatQueuedItem): CancelOnlyKind {
     case "conversation-message":
     case "task-checkin":
     case "task-overdue":
+    case "memory-curation":
       return item.kind;
     case "prompt":
       return "sign-in-park";

@@ -8,6 +8,7 @@ import {
   environmentHostReadV10,
   environmentListV10,
   environmentMembersV10,
+  environmentSetMainBotV10,
 } from "@traycer/protocol/host/environment/contracts";
 
 const PERSONAL = {
@@ -228,5 +229,48 @@ describe("environment.members protocol contract", () => {
         false,
       );
     }
+  });
+});
+
+describe("environment.setMainBot protocol contract", () => {
+  const BOT_ID = "bot_01ARZ3NDEKTSV4RRFFQ69G5FAV";
+
+  it("round-trips a request and the response naming the main bot", () => {
+    const request = { environmentId: TEAM.environmentId, botId: BOT_ID };
+    expect(environmentSetMainBotV10.requestSchema.parse(request)).toEqual(
+      request,
+    );
+    const response = { environmentId: TEAM.environmentId, mainBotId: BOT_ID };
+    expect(environmentSetMainBotV10.responseSchema.parse(response)).toEqual(
+      response,
+    );
+  });
+
+  it("rejects an environment id over 36 characters, an empty one, and a bot id of the wrong shape", () => {
+    for (const bad of [
+      { environmentId: "e".repeat(37), botId: BOT_ID },
+      { environmentId: "", botId: BOT_ID },
+      { environmentId: TEAM.environmentId, botId: "not-a-bot" },
+      { botId: BOT_ID },
+    ]) {
+      expect(
+        environmentSetMainBotV10.requestSchema.safeParse(bad).success,
+      ).toBe(false);
+    }
+    expect(
+      environmentSetMainBotV10.requestSchema.safeParse({
+        environmentId: "e".repeat(36),
+        botId: BOT_ID,
+      }).success,
+    ).toBe(true);
+  });
+
+  it("registers off the released floor with unsupported degrade", () => {
+    expect(() => validateVersionedRpcRegistry(hostRpcRegistry)).not.toThrow();
+    expect(RELEASED_FLOOR_METHOD_NAMES).not.toContain("environment.setMainBot");
+    const entry = hostRpcRegistry["environment.setMainBot"];
+    expect(entry.degrade).toEqual({ kind: "unsupported" });
+    expect(entry[1].latestMinor).toBe(0);
+    expect(entry[1].versions[0].contract).toBe(environmentSetMainBotV10);
   });
 });
