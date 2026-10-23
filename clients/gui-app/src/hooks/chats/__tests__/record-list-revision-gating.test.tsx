@@ -275,7 +275,7 @@ function wrapperFor(
  */
 function wrapperForHandleBox(
   queryClient: QueryClient,
-  box: { current: OpenedStoreForTest },
+  box: { current: OpenedStoreForTest | null },
   client: HostClient<HostRpcRegistry>,
 ): (props: { readonly children: ReactNode }) => ReactNode {
   return (props) =>
@@ -1631,5 +1631,75 @@ describe("R11 - a delta that introduces an unstated row declines the stamp", () 
     ).toBe(false);
 
     view.unmount();
+  });
+
+  // A session's FIRST observed counter is its baseline, not a move. A tab can
+  // render before its epic session exists (counter `null`); when the store
+  // arrives already carrying a non-zero counter, the null -> N step is the
+  // first sighting and must not be read as a delta that introduced an
+  // unstated row. TanStack only CANCELS a read to refetch when the entry
+  // already holds data, so the case needs the arriving store's entry warm: a
+  // sibling consumer of the same session has already read it, and its fresh
+  // answer needs no read at all.
+  it("a store that arrives under a mounted hook with a non-zero counter costs no read over a fresh answer", async () => {
+    // The store the session will arrive with, already past one unstated
+    // create: its delta counter is non-zero before the late hook ever sees it.
+    const arriving = newSession();
+    const { docResident: _home, ...streamRow } = chatRow({
+      chatId: "chat-early",
+      revision: 9,
+    });
+    arriving.store.getState().applyChatRecordDelta({
+      kind: "upsert",
+      epicId: EPIC_ID,
+      record: streamRow,
+    });
+    await waitFor(() => {
+      expect(arriving.store.getState().chatDeltaIncompleteSeq).toBeGreaterThan(
+        0,
+      );
+    });
+
+    // The sibling consumer: mounted on the store from its first render, so it
+    // seeds the counter as its baseline, reads the list once and warms the
+    // entry.
+    fixture.chatHandler.impl = () => ({
+      kind: "snapshot",
+      listStamp: { epoch: "E", revision: 5, touchRevision: 1 },
+      chats: [chatRow({ chatId: "chat-early", docResident: false })],
+    });
+    const sibling = renderHook(() => useEpicSyncChatRecords(EPIC_ID), {
+      wrapper: wrapperFor(fixture.queryClient, arriving, fixture.client),
+    });
+    await waitFor(() => {
+      expect(
+        arriving.store.getState().chats.byId["chat-early"]?.docResident,
+      ).toBe(false);
+    });
+    expect(chatCalls(fixture.messenger)).toHaveLength(1);
+
+    // The late hook renders with no session first, then the store arrives.
+    const handleBox: { current: OpenedStoreForTest | null } = {
+      current: null,
+    };
+    const late = renderHook(() => useEpicSyncChatRecords(EPIC_ID), {
+      wrapper: wrapperForHandleBox(
+        fixture.queryClient,
+        handleBox,
+        fixture.client,
+      ),
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const dispatchedBefore = chatCalls(fixture.messenger).length;
+    handleBox.current = arriving;
+    late.rerender();
+
+    // Time for a counter-driven refetch to dispatch, were one going to happen.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(chatCalls(fixture.messenger)).toHaveLength(dispatchedBefore);
+
+    late.unmount();
+    sibling.unmount();
+    arriving.store.getState().dispose();
   });
 });

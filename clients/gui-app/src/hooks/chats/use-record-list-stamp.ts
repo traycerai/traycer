@@ -334,9 +334,20 @@ export function useRecordListStreamStamp(
   // so there is nothing here for that mechanism to be the repair of.
   const seenDeltaIncompleteSeq = useRef(deltaIncompleteSeq);
   useEffect(() => {
-    if (deltaIncompleteSeq === null) return;
-    // Also the mount case: the ref seeds from the first render's value, so a
-    // session that already has a non-zero counter does not re-read on mount.
+    // A session's FIRST observed counter is its baseline, not a move. The ref
+    // seeds from the first render's value, so a session that already has a
+    // non-zero counter does not re-read on mount; with no session (`null`) it
+    // forgets the baseline, so a store that arrives under a mounted hook seeds
+    // it the same way instead of dropping a valid stamp and re-reading a fresh
+    // answer.
+    if (deltaIncompleteSeq === null) {
+      seenDeltaIncompleteSeq.current = null;
+      return;
+    }
+    if (seenDeltaIncompleteSeq.current === null) {
+      seenDeltaIncompleteSeq.current = deltaIncompleteSeq;
+      return;
+    }
     if (seenDeltaIncompleteSeq.current === deltaIncompleteSeq) return;
     // Marked seen first, so one counter move costs exactly one re-read.
     seenDeltaIncompleteSeq.current = deltaIncompleteSeq;
