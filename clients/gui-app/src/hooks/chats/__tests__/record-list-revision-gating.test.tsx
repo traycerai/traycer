@@ -270,8 +270,11 @@ function wrapperFor(
  * on every render instead of closing over a fixed one - so a caller can swap
  * `box.current` and `rerender()` the SAME mounted hook instance onto a new
  * store, exactly as a mid-life session rebuild (self-heal, clone-not-migrate)
- * re-points a mounted tab without unmounting its consumers. R7 is the one
- * case that needs this; every other case mounts once and never swaps.
+ * re-points a mounted tab without unmounting its consumers. The box may also
+ * hold no session at all (`null`), as for a tab that renders before its epic
+ * session exists. Two cases need this: R7 (one store to another) and the
+ * late-session case at the end of R11 (no store to a store). Every other case
+ * mounts once and never swaps.
  */
 function wrapperForHandleBox(
   queryClient: QueryClient,
@@ -1689,13 +1692,21 @@ describe("R11 - a delta that introduces an unstated row declines the stamp", () 
         fixture.client,
       ),
     });
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    // Its no-session read settles before the count is taken.
+    await waitFor(() => {
+      expect(fixture.queryClient.isFetching()).toBe(0);
+    });
     const dispatchedBefore = chatCalls(fixture.messenger).length;
     handleBox.current = arriving;
     late.rerender();
 
-    // Time for a counter-driven refetch to dispatch, were one going to happen.
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    // The barrier is the query client going idle, not elapsed time. A
+    // counter-driven `refetch()` would run in the effect `rerender` flushes,
+    // and it marks the entry fetching synchronously. So by the time nothing is
+    // fetching, any such read has dispatched and settled.
+    await waitFor(() => {
+      expect(fixture.queryClient.isFetching()).toBe(0);
+    });
     expect(chatCalls(fixture.messenger)).toHaveLength(dispatchedBefore);
 
     late.unmount();
