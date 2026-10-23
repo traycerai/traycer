@@ -60,6 +60,7 @@ import type {
   SandboxAutomationOpenTarget,
   SandboxCreateRequest,
   SandboxLifecycleVerb,
+  SandboxPatchRequest,
 } from "@traycer/protocol/host/sandbox-control";
 import type { AuthIdentityValidationResult } from "@traycer-clients/shared/auth/auth-validation";
 import { credentialsIdentityFromAuthenticatedUser } from "@traycer-clients/shared/auth/auth-validation";
@@ -3131,6 +3132,29 @@ export class AuthService {
       throw new Error("Sign in to destroy this sandbox.");
     }
     return this.runnerHost.destroySandbox(bearer, sandboxId);
+  }
+
+  async patchSandbox(
+    sandboxId: string,
+    request: SandboxPatchRequest,
+  ): Promise<SandboxVerbFetchResult> {
+    const refusal = this.sandboxControlRefusal();
+    if (refusal !== null) return refusal;
+    const bearer = this.cloudBearer();
+    if (bearer === null) {
+      throw new Error("Sign in to change this sandbox.");
+    }
+    return this.runnerHost.patchSandbox(bearer, sandboxId, request);
+  }
+
+  async keepSandbox(sandboxId: string): Promise<SandboxVerbFetchResult> {
+    const refusal = this.sandboxControlRefusal();
+    if (refusal !== null) return refusal;
+    const bearer = this.cloudBearer();
+    if (bearer === null) {
+      throw new Error("Sign in to keep this sandbox.");
+    }
+    return this.runnerHost.keepSandbox(bearer, sandboxId);
   }
 
   /**

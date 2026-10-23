@@ -43,6 +43,7 @@ import type {
   SandboxAutomationOpenTarget,
   SandboxCreateRequest,
   SandboxLifecycleVerb,
+  SandboxPatchRequest,
 } from "@traycer/protocol/host/sandbox-control";
 import {
   SECRET_REQUEST_DECISIONS,
@@ -573,6 +574,45 @@ export function parseSandboxCreateRequest(
     environmentId: nullOr(obj.environmentId, (v) =>
       requireNonEmptyString(v, "createSandbox.request.environmentId"),
     ),
+    destroyAfterRestingMinutes: nullOr(obj.destroyAfterRestingMinutes, (v) =>
+      requirePositiveInteger(
+        v,
+        "createSandbox.request.destroyAfterRestingMinutes",
+      ),
+    ),
+    createdByTaskId: nullOr(obj.createdByTaskId, (v) =>
+      requireNonEmptyString(v, "createSandbox.request.createdByTaskId"),
+    ),
+    clientRequestId: nullOr(obj.clientRequestId, (v) =>
+      requireNonEmptyString(v, "createSandbox.request.clientRequestId"),
+    ),
+  };
+}
+
+/**
+ * Parses the renderer-supplied `PATCH /api/sandboxes/:id` body. Each key must
+ * be present: `null` leaves that setting unchanged, so a missing key is a
+ * renderer bug, not a default. `destroyAfterRestingMinutes` takes `0` for
+ * never.
+ */
+export function parseSandboxPatchRequest(value: unknown): SandboxPatchRequest {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("patchSandbox.request must be an object");
+  }
+  const obj = value as Record<string, unknown>;
+  return {
+    displayName: nullOr(obj.displayName, (v) =>
+      requireNonEmptyString(v, "patchSandbox.request.displayName"),
+    ),
+    idleMinutes: nullOr(obj.idleMinutes, (v) =>
+      requirePositiveInteger(v, "patchSandbox.request.idleMinutes"),
+    ),
+    destroyAfterRestingMinutes: nullOr(obj.destroyAfterRestingMinutes, (v) =>
+      requireNonNegativeInteger(
+        v,
+        "patchSandbox.request.destroyAfterRestingMinutes",
+      ),
+    ),
   };
 }
 
@@ -642,6 +682,13 @@ function requireNonEmptyString(value: unknown, name: string): string {
 function requirePositiveInteger(value: unknown, name: string): number {
   if (typeof value !== "number" || !Number.isInteger(value) || value <= 0) {
     throw new Error(`${name} must be a positive integer`);
+  }
+  return value;
+}
+
+function requireNonNegativeInteger(value: unknown, name: string): number {
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 0) {
+    throw new Error(`${name} must be a non-negative integer`);
   }
   return value;
 }

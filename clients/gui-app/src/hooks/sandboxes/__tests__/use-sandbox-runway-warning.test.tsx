@@ -35,7 +35,11 @@ function userWithCredits(credits: number): AuthenticatedUser {
 }
 
 function burning(mcPerHour: number): UserSandboxCost {
-  return { sandboxes: [], awakeBurnMillicreditsPerHour: mcPerHour };
+  return {
+    sandboxes: [],
+    awakeBurnMillicreditsPerHour: mcPerHour,
+    todayYoursMillicredits: 0,
+  };
 }
 
 beforeEach(() => {

@@ -230,6 +230,9 @@ describe("<SandboxCreateDialog />", () => {
       createdByHostId: null,
       createdByAgentId: null,
       environmentId: null,
+      destroyAfterRestingMinutes: null,
+      createdByTaskId: null,
+      clientRequestId: null,
     });
     await waitFor(() => {
       expect(mocks.toastSuccess).toHaveBeenCalledWith("Created build-box");
