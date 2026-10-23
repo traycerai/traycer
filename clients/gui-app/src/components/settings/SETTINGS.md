@@ -867,11 +867,12 @@ in their variables so paused-save status belongs to the picked team.
 Live facts, native skills and the guide share `useTeamViewingHost()`: an
 explicit reachable host registered to that team, or no host. Picking it does
 not activate or wake it. Skills and the guide use the team's room through
-that host; no-host states offer the common picker. Skill writes and the guide editor are held until their addressed host methods
-are available. First edits of an absent model-routing item
+that host; no-host states offer the common picker. Skill edits and removal stay read-only until the addressed native write
+method is available. First edits of an absent model-routing item
 start from the named host's seeded policy; Reset and Restore default tiers
 delete the team item. Host-source panels preserve their existing behavior.
 
+Providers renders Plans in place of Add a profile, with an unlink preview.
 Only controls with a persisted team store are rendered. MCP rows expose the
 server id and tool toggles; declarations and Add are absent. Provider Details
 uses the persisted kind and key. Personal rows offer it only when applied-item

@@ -33,12 +33,15 @@ import { TeamTextItems } from "./team-text-items";
 import { TeamProfileItem, TeamPackItem } from "./team-provider-items";
 import { TeamMcpItems } from "./team-mcp-servers";
 import { TeamProviderLiveFacts } from "./team-provider-live-facts";
+import { TeamPlans } from "./team-plans";
 import { TeamProviderKeys } from "./team-provider-keys";
 import { ProviderRowDetails } from "@/components/settings/details/provider-row-details";
+import { useConfigurationAdminNames } from "@/hooks/environment/team/use-admin-names";
 import { TeamSkills } from "./team-skills";
 
 export function TeamProviders(): ReactNode {
   const query = useConfigurationProviderItemsQuery();
+  const members = useConfigurationAdminNames();
   const scope = useTeamViewingHost();
   const catalog = useProvidersListForClient(scope.client, {
     enabled: scope.client !== null,
@@ -147,6 +150,10 @@ export function TeamProviders(): ReactNode {
                 ) : null}
               </TabsList>
               <TabsContent value="plans" className="flex flex-col gap-4">
+                <TeamPlans
+                  providerId={providerId}
+                  adminNames={members.adminNames}
+                />
                 {profiles.map((item) => (
                   <TeamProfileItem
                     key={`${item.key}:${item.revision}`}
@@ -219,9 +226,9 @@ function providerState(
   const count = items.filter((item) => {
     if (item.kind !== "managed_profile") return false;
     const profile = configurationProfileValueSchema.parse(item.value);
-    return profile.harnessId === harnessId && profile.enabled;
+    return profile.harnessId === harnessId;
   }).length;
   return count === 0
-    ? "off"
+    ? "No profiles"
     : `${count} ${count === 1 ? "profile" : "profiles"}`;
 }

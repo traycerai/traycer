@@ -86,6 +86,7 @@ describe("SecretsPage on a team", () => {
     return {
       "environment.secrets.list": () => ({
         secrets: [secret("OPENAI_API_KEY", false), secret("OLD_TOKEN", true)],
+        removed: [],
       }),
       "environment.list": () => environments,
     } as const;

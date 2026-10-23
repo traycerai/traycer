@@ -1,4 +1,5 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { HostMethodVersionUnsatisfiedError } from "@traycer-clients/shared/host-transport/host-messenger";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { providerIdSchema } from "@traycer/protocol/host/provider-ids";
 import { usePersonalHostName } from "@/components/settings/personal/personal-page-context";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
@@ -13,6 +14,11 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { useHostClient } from "@/lib/host/runtime";
+import { useConfigurationEnvironmentId } from "@/components/settings/environment/configuration-source";
+import { usePoolTierHostClient } from "@/hooks/host/use-pool-tier";
+import { cloudVerdictPreflight } from "@/lib/host/cloud-verdict-preflight";
+import { useQueryClient } from "@tanstack/react-query";
+import { hostQueryKeys } from "@/lib/query-keys";
 import { useOpenLink } from "@/lib/links/open-link";
 import {
   LINK_DEVICE_LINE,
@@ -58,13 +64,58 @@ const INTRO: LinkDialogState = { kind: "intro" };
 export function ProviderLinkDialog(): ReactNode {
   const target = useProviderLinkDialogStore((state) => state.target);
   const close = useProviderLinkDialogStore((state) => state.close);
-  if (target === null) return null;
+  const environmentId = useConfigurationEnvironmentId();
+  if (target === null || (target.environmentId ?? null) !== environmentId)
+    return null;
   // Keyed by the target, so a new target starts from the intro.
+  if (environmentId !== null)
+    return (
+      <TeamProviderLinkDialogFor
+        key={`${environmentId}:${target.providerId}:${target.profileId ?? "new"}`}
+        target={target}
+        environmentId={environmentId}
+        onClose={close}
+      />
+    );
   return (
     <ProviderLinkDialogFor
-      key={`${target.providerId}:${target.profileId ?? "new"}`}
+      key={`${environmentId}:${target.providerId}:${target.profileId ?? "new"}`}
       target={target}
       onClose={close}
+      onLinked={null}
+    />
+  );
+}
+
+function TeamProviderLinkDialogFor(props: {
+  readonly target: ProviderLinkTarget;
+  readonly environmentId: string;
+  readonly onClose: () => void;
+}): ReactNode {
+  const queries = useQueryClient();
+  const environmentId = props.environmentId;
+  const onLinked = useCallback(
+    (hostId: string | null): void => {
+      void queries.invalidateQueries({
+        queryKey: hostQueryKeys.method(hostId, "environment.plans.list", {
+          environmentId,
+        }),
+      });
+      void queries.invalidateQueries({
+        queryKey: hostQueryKeys.method(
+          hostId,
+          "environment.configuration.items",
+          { environmentId },
+        ),
+      });
+    },
+    [queries, environmentId],
+  );
+  return (
+    <ProviderLinkDialogFor
+      target={props.target}
+      onClose={props.onClose}
+      onLinked={onLinked}
     />
   );
 }
@@ -72,8 +123,33 @@ export function ProviderLinkDialog(): ReactNode {
 function ProviderLinkDialogFor(props: {
   readonly target: ProviderLinkTarget;
   readonly onClose: () => void;
+  readonly onLinked: ((hostId: string | null) => void) | null;
 }): ReactNode {
-  const client = useHostClient();
+  const hostClient = useHostClient();
+  const poolClient = usePoolTierHostClient(hostClient);
+  const environmentId = props.target.environmentId ?? null;
+  const client = environmentId === null ? hostClient : poolClient;
+  const onLinked = props.onLinked;
+  const complete = useCallback(
+    async (linkId: string, code: string | null) => {
+      const hostId = client.getActiveHostId();
+      const method = "providers.linkComplete";
+      const request = { linkId, code, environmentId };
+      if (environmentId !== null) cloudVerdictPreflight(method)();
+      const response =
+        environmentId === null
+          ? await client.request(method, request)
+          : await client.requestWithSignalRequiringHostMethodVersion(
+              method,
+              request,
+              undefined,
+              { method, version: { major: 1, minor: 1 } },
+            );
+      if (response.state === "linked") onLinked?.(hostId);
+      return response;
+    },
+    [client, environmentId, onLinked],
+  );
   const openLink = useOpenLink();
   const hostName = usePersonalHostName() ?? "this host";
   const [target, setTarget] = useState<ProviderLinkTarget>(props.target);
@@ -94,14 +170,25 @@ function ProviderLinkDialogFor(props: {
       return;
     }
     try {
-      const response = await client.request("providers.link", {
+      const method = "providers.link";
+      const request = {
         providerId: providerId.data,
         profileId: linkTarget.profileId,
-        environmentId: null,
-      });
+        environmentId,
+      };
+      if (environmentId !== null) cloudVerdictPreflight(method)();
+      const response =
+        environmentId === null
+          ? await client.request(method, request)
+          : await client.requestWithSignalRequiringHostMethodVersion(
+              method,
+              request,
+              undefined,
+              { method, version: { major: 1, minor: 1 } },
+            );
       setState(stateOfLinkStart(response));
     } catch (error) {
-      setState(stateOfLinkError(error));
+      setState(sourceLinkError(error, environmentId));
     }
   };
 
@@ -110,15 +197,11 @@ function ProviderLinkDialogFor(props: {
   ): Promise<void> => {
     setSubmitting(true);
     try {
-      const response = await client.request("providers.linkComplete", {
-        linkId: current.linkId,
-        code: code.trim(),
-        environmentId: null,
-      });
+      const response = await complete(current.linkId, code.trim());
       setCode("");
       setState((latest) => stateOfLinkComplete(latest, response));
     } catch (error) {
-      setState(stateOfLinkError(error));
+      setState(sourceLinkError(error, environmentId));
     } finally {
       setSubmitting(false);
     }
@@ -132,26 +215,21 @@ function ProviderLinkDialogFor(props: {
     if (pollLinkId === null) return;
     let cancelled = false;
     const timer = setTimeout(() => {
-      void client
-        .request("providers.linkComplete", {
-          linkId: pollLinkId,
-          code: null,
-          environmentId: null,
-        })
+      void complete(pollLinkId, null)
         .then((response) => {
           if (cancelled) return;
           setState((latest) => stateOfLinkComplete(latest, response));
           setPollTick((tick) => tick + 1);
         })
         .catch((error: unknown) => {
-          if (!cancelled) setState(stateOfLinkError(error));
+          if (!cancelled) setState(sourceLinkError(error, environmentId));
         });
     }, pollMs);
     return () => {
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [client, pollLinkId, pollMs, pollTick]);
+  }, [complete, environmentId, pollLinkId, pollMs, pollTick]);
 
   const onOpenChange = (open: boolean): void => {
     if (!open) props.onClose();
@@ -166,7 +244,9 @@ function ProviderLinkDialogFor(props: {
         data-state={state.kind}
       >
         <DialogHeader className="gap-1.5">
-          <DialogTitle>Link to your plan</DialogTitle>
+          <DialogTitle>
+            {environmentId === null ? "Link to your plan" : "Link a plan"}
+          </DialogTitle>
           <DialogDescription>{LINK_INTRO}</DialogDescription>
         </DialogHeader>
         <div className="flex min-h-0 flex-col gap-3 overflow-y-auto px-5 pb-5 text-ui-sm">
@@ -400,11 +480,14 @@ function LinkActions(props: {
               props.onStart({
                 providerId: props.target.providerId,
                 profileId: null,
+                environmentId: props.target.environmentId,
               })
             }
             data-testid="provider-link-add-new"
           >
-            Add as a new profile
+            {(props.target.environmentId ?? null) === null
+              ? "Add as a new profile"
+              : "Link another plan"}
           </Button>
           <Button
             type="button"
@@ -452,4 +535,16 @@ function LinkActions(props: {
     case "not_offered":
       return closeButton("Close");
   }
+}
+
+function sourceLinkError(
+  error: unknown,
+  environmentId: string | null,
+): LinkDialogState {
+  if (
+    environmentId !== null &&
+    error instanceof HostMethodVersionUnsatisfiedError
+  )
+    return { kind: "failed", line: "Linking a plan needs an updated host." };
+  return stateOfLinkError(error);
 }

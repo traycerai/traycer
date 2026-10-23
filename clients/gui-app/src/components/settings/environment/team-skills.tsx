@@ -17,11 +17,15 @@ import {
 } from "@/components/ui/select";
 import { providerDisplayName } from "@/lib/provider-ordering";
 import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
-import { useConfigurationSource } from "./configuration-source";
+import {
+  useConfigurationSource,
+  useCanEditConfiguration,
+} from "./configuration-source";
 import { usePickedTeamLabel } from "./team-pick-label";
 import { TeamViewingHostBinding } from "./team-viewing-host-binding";
 import { TeamViewingHostPicker } from "./team-viewing-host-picker";
 import { TeamContentNeedsHost } from "./team-content-needs-host";
+import { TeamSkillUpload } from "./team-skill-upload";
 
 export function TeamSkillsPage(): ReactNode {
   return (
@@ -39,6 +43,7 @@ export function TeamSkills(props: {
   readonly providerId: ProviderId | null;
 }): ReactNode {
   const source = useConfigurationSource();
+  const canEdit = useCanEditConfiguration();
   const scope = useTeamViewingHost();
   const name =
     usePickedTeamLabel(source.kind === "pool" ? source.environmentId : "") ??
@@ -48,6 +53,7 @@ export function TeamSkills(props: {
     subscribed: true,
   });
   const [picking, setPicking] = useState(false);
+  const [notServed, setNotServed] = useState(false);
   const [picked, setPicked] = useState<ProviderId>("claude-code");
   const providers =
     query.data?.providers.filter(
@@ -70,48 +76,56 @@ export function TeamSkills(props: {
         open={picking}
         onOpenChange={(open) => {
           setPicking(open);
+          if (open) setNotServed(false);
         }}
       />
-      <TeamViewingHostBinding unavailable={noHost}>
-        {query.isPending ? <MutedAgentSpinner /> : null}
-        {query.isError ? (
-          <p role="status" className="text-ui-sm text-muted-foreground">
-            Couldn't read these skills.
-          </p>
-        ) : null}
-        {props.providerId === null && providers.length > 0 ? (
-          <Select
-            value={state?.providerId ?? ""}
-            onValueChange={(value) => {
-              const parsed = providerIdSchema.safeParse(value);
-              if (parsed.success) setPicked(parsed.data);
-            }}
-          >
-            <SelectTrigger
-              aria-label="Provider for skills"
-              className="max-w-sm"
+      {notServed ? (
+        noHost
+      ) : (
+        <TeamViewingHostBinding unavailable={noHost}>
+          {query.isPending ? <MutedAgentSpinner /> : null}
+          {query.isError ? (
+            <p role="status" className="text-ui-sm text-muted-foreground">
+              Couldn't read these skills.
+            </p>
+          ) : null}
+          {props.providerId === null && providers.length > 0 ? (
+            <Select
+              value={state?.providerId ?? ""}
+              onValueChange={(value) => {
+                const parsed = providerIdSchema.safeParse(value);
+                if (parsed.success) setPicked(parsed.data);
+              }}
             >
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {providers.map((provider) => (
-                <SelectItem
-                  key={provider.providerId}
-                  value={provider.providerId}
-                >
-                  {providerDisplayName(provider.providerId)}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        ) : null}
-        {state === undefined ? null : (
-          <ProviderSkillsTab
-            key={`${scope.viewingHost?.hostId}:${state.providerId}`}
-            state={state}
-          />
-        )}
-      </TeamViewingHostBinding>
+              <SelectTrigger
+                aria-label="Provider for skills"
+                className="max-w-sm"
+              >
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {providers.map((provider) => (
+                  <SelectItem
+                    key={provider.providerId}
+                    value={provider.providerId}
+                  >
+                    {providerDisplayName(provider.providerId)}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          ) : null}
+          {state === undefined ? null : (
+            <ProviderSkillsTab
+              key={`${scope.viewingHost?.hostId}:${state.providerId}`}
+              state={state}
+            />
+          )}
+          {canEdit ? (
+            <TeamSkillUpload onNotServed={() => setNotServed(true)} />
+          ) : null}
+        </TeamViewingHostBinding>
+      )}
     </section>
   );
 }

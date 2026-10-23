@@ -6,6 +6,7 @@ export function PlanUnlinkPreview(props: {
   readonly teamName: string;
   readonly plan: ConfigurationPlan;
   readonly activeTurns: number | null;
+  readonly activeHostName?: string | null;
   readonly remainingAccess: readonly string[];
   readonly isPending: boolean;
   readonly onClose: () => void;
@@ -33,6 +34,9 @@ export function PlanUnlinkPreview(props: {
             {props.activeTurns === null
               ? "Active turns could not be counted."
               : `${props.activeTurns} active turns.`}{" "}
+            {(props.activeHostName ?? null) === null
+              ? null
+              : `On ${props.activeHostName} only. `}
             Each finishes its current step, then stops. No new turn can use the
             unlinked plan.
           </dd>
