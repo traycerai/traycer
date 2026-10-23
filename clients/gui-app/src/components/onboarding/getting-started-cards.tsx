@@ -1,16 +1,14 @@
 import { ArrowRight, Check } from "lucide-react";
 import { useNavigate, type UseNavigateResult } from "@tanstack/react-router";
-import { useFirstTaskGuideStore } from "@/stores/onboarding/first-task-guide-store";
 import { openNewEpicIntent } from "@/lib/commands/actions/new-epic";
 import { activateTabIntent } from "@/lib/tab-navigation";
 import { navigateToSettingsSection } from "@/lib/settings-navigation";
-import { useOnboardingStore } from "@/stores/onboarding/onboarding-store";
-import { setupGuideStepSection } from "@/stores/onboarding/setup-guides";
-import { isMobileApp } from "@/lib/mobile-app";
+import { ignoreError } from "@/lib/browser-view/ignore-error";
+import { resolvePlatformBaseUrl } from "@/lib/auth/platform-base-url";
+import { useOpenLink, type OpenLink } from "@/lib/links/open-link";
 import { cn } from "@/lib/utils";
+import { useRunnerHostOrNull } from "@/providers/use-runner-host";
 import {
-  MOBILE_APP_TOUR_DESCRIPTION,
-  MOBILE_APP_TOUR_LABEL,
   type GettingStartedCardId,
   type GettingStartedEntry,
 } from "@/components/onboarding/getting-started-checklist";
@@ -28,6 +26,9 @@ export function GettingStartedCards(props: {
   readonly surface: CardSurface;
 }) {
   const navigate = useNavigate();
+  const openLink = useOpenLink();
+  const signInUrl = useRunnerHostOrNull()?.signInUrl;
+  const downloadUrl = `${resolvePlatformBaseUrl(signInUrl === undefined || signInUrl.length === 0 ? "https://traycer.ai/sign-in" : signInUrl)}/download`;
   return (
     <div
       className={cn(
@@ -40,8 +41,13 @@ export function GettingStartedCards(props: {
           key={entry.card.id}
           entry={entry}
           surface={props.surface}
-          onOpen={() => {
-            openGettingStartedCard(entry.card.id, navigate);
+          onOpen={(event) => {
+            openGettingStartedCard(entry.card.id, {
+              navigate,
+              openLink,
+              downloadUrl,
+              event,
+            });
           }}
         />
       ))}
@@ -51,34 +57,42 @@ export function GettingStartedCards(props: {
 
 function openGettingStartedCard(
   id: GettingStartedCardId,
-  navigate: UseNavigateResult<string>,
+  ctx: {
+    readonly navigate: UseNavigateResult<string>;
+    readonly openLink: OpenLink;
+    readonly downloadUrl: string;
+    readonly event: {
+      readonly altKey: boolean;
+      readonly ctrlKey: boolean;
+      readonly metaKey: boolean;
+      readonly shiftKey: boolean;
+      readonly button: number;
+    };
+  },
 ): void {
-  if (id === "tour") {
-    if (isMobileApp()) {
-      // The phone's tour is the guided one on the start page, so the card
-      // starts THAT rather than replaying a welcome that only leads back to
-      // it. A tab intent, not a route navigation: Settings is a tab here, and
-      // a bare navigate to the draft route leaves the user looking at
-      // Settings. Armed only once the tab has actually changed: a refused
-      // activation would otherwise leave a live guide running behind a
-      // Settings page that never went away.
-      const guide = useFirstTaskGuideStore.getState();
-      guide.prepare();
-      if (activateTabIntent(navigate, openNewEpicIntent(), undefined))
-        guide.activate();
+  switch (id) {
+    case "provider":
+      navigateToSettingsSection("providers");
       return;
-    }
-    useOnboardingStore.getState().restart();
-    void navigate({ to: "/onboarding", search: { replay: true } });
-    return;
+    case "task":
+      activateTabIntent(ctx.navigate, openNewEpicIntent(), undefined);
+      return;
+    case "secret":
+      navigateToSettingsSection("secrets");
+      return;
+    case "install":
+      void (async () => {
+        try {
+          await ctx.openLink(ctx.downloadUrl, "app", ctx.event);
+        } catch (error) {
+          ignoreError(error);
+        }
+      })();
+      return;
+    case "credits":
+      navigateToSettingsSection("credits");
+      return;
   }
-  useOnboardingStore.getState().startSetup(id);
-  navigateToSettingsSection(
-    setupGuideStepSection(
-      id,
-      useOnboardingStore.getState().activeSetup?.step ?? 0,
-    ),
-  );
 }
 
 type CardSurface = "settings" | "home";
@@ -93,9 +107,9 @@ type CardSurface = "settings" | "home";
 function cardGridColumns(surface: CardSurface, count: number): string {
   if (surface === "settings")
     return "grid-cols-[repeat(auto-fit,minmax(min(100%,12rem),1fr))]";
-  return count === 4
-    ? "grid-cols-1 @xs:grid-cols-2 @2xl:grid-cols-4"
-    : "grid-cols-1 @lg:grid-cols-3";
+  if (count === 4) return "grid-cols-1 @xs:grid-cols-2 @2xl:grid-cols-4";
+  if (count === 5) return "grid-cols-1 @xs:grid-cols-2 @2xl:grid-cols-5";
+  return "grid-cols-1 @lg:grid-cols-3";
 }
 
 /** How much air a card has, the other thing the two surfaces draw differently. */
@@ -105,55 +119,48 @@ const CARD_SPACING: Record<
     readonly card: string;
     readonly header: string;
     readonly footer: string;
-    readonly meter: string;
   }
 > = {
   settings: {
     card: "p-5",
     header: "mb-6",
     footer: "pt-7",
-    meter: "-mx-5 -mb-5 mt-4",
   },
   home: {
     card: "p-4",
     header: "mb-3",
     footer: "pt-4",
-    meter: "-mx-4 -mb-4 mt-3",
   },
 };
 
 function GettingStartedCardButton(props: {
   readonly entry: GettingStartedEntry;
   readonly surface: CardSurface;
-  readonly onOpen: () => void;
+  readonly onOpen: (event: {
+    readonly altKey: boolean;
+    readonly ctrlKey: boolean;
+    readonly metaKey: boolean;
+    readonly shiftKey: boolean;
+    readonly button: number;
+  }) => void;
 }) {
   const { card, presentation } = props.entry;
   const spacing = CARD_SPACING[props.surface];
   const anchored = props.surface === "settings";
-  const { done, started, completed, total, status, action, unavailableReason } =
-    presentation;
-  const unavailable = unavailableReason !== null;
-  const mobileTour = card.id === "tour" && isMobileApp();
-  const label = mobileTour ? MOBILE_APP_TOUR_LABEL : card.row.label;
-  const description = mobileTour
-    ? MOBILE_APP_TOUR_DESCRIPTION
-    : card.row.description;
+  const { done, status, action } = presentation;
+  const label = card.row.label;
+  const description = card.row.description ?? "";
   return (
     <button
       type="button"
-      disabled={unavailable}
-      data-settings-anchor={anchored ? card.row.anchor : undefined}
-      data-testid={
-        anchored && card.id === "tour"
-          ? "settings-replay-onboarding"
-          : undefined
+      data-settings-anchor={
+        anchored ? (card.row.anchor ?? undefined) : undefined
       }
+      data-testid={`getting-started-card-${card.id}`}
       onClick={props.onOpen}
-      aria-label={[label, status, unavailableReason]
-        .filter((part) => part !== null)
-        .join(", ")}
+      aria-label={[label, status].join(", ")}
       className={cn(
-        "settings-setup-card group flex min-w-0 flex-col items-start overflow-hidden rounded-xl border border-border/60 bg-card/40 text-left transition-[background-color,border-color] duration-150 hover:border-border hover:bg-accent/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-default disabled:opacity-55 motion-reduce:transition-none",
+        "settings-setup-card group flex min-w-0 flex-col items-start overflow-hidden rounded-xl border border-border/60 bg-card/40 text-left transition-[background-color,border-color] duration-150 hover:border-border hover:bg-accent/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring motion-reduce:transition-none",
         spacing.card,
         done && "border-primary/20",
       )}
@@ -193,27 +200,9 @@ function GettingStartedCardButton(props: {
           spacing.footer,
         )}
       >
-        {unavailableReason ?? action}
-        {unavailable ? null : (
-          <ArrowRight className="size-3.5" aria-hidden="true" />
-        )}
+        {action}
+        <ArrowRight className="size-3.5" aria-hidden="true" />
       </span>
-      {started && !done ? (
-        // COMPLETED steps, not the one being shown: the status line above
-        // already reads "Step n of total", and a full bar beside "Step 5 of 5 ·
-        // Resume" would claim a finish that has not happened. The element
-        // computes its own fill, so no fraction needs writing out. Decoration
-        // for that line rather than a second reading of it, hence aria-hidden.
-        <progress
-          aria-hidden="true"
-          value={completed}
-          max={total}
-          className={cn(
-            "settings-setup-meter h-0.5 self-stretch",
-            spacing.meter,
-          )}
-        />
-      ) : null}
     </button>
   );
 }

@@ -117,16 +117,13 @@ describe("settings search", () => {
     expect(labelsFor("proxy", DESKTOP)).toContain("Variables and shells");
   });
 
-  it("reaches the replay card by the words the old General row owned", () => {
-    // The tour's replay moved out of General, and its vocabulary moved with
-    // it: these queries appear in no label anywhere and must still land on
-    // the card, anchor included, rather than at the top of a page.
-    expect(landingFor("walkthrough", DESKTOP)).toBe(
-      "getting-started#getting-started-product-tour",
+  it("reaches Start a task and the download card on Getting started", () => {
+    expect(landingFor("start a task", DESKTOP)).toBe(
+      "getting-started#getting-started-start-task",
     );
-    for (const query of ["product tour", "first run", "intro"]) {
-      expect(labelsFor(query, DESKTOP)).toContain("Initial tour");
-    }
+    expect(landingFor("another computer", DESKTOP)).toBe(
+      "getting-started#getting-started-install",
+    );
   });
 
   it("reaches the Notifications page by its former name, Inbox", () => {
