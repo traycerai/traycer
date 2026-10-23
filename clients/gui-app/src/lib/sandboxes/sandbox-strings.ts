@@ -388,7 +388,6 @@ export function paidByLine(name: string): string {
 
 export const AGENT_SANDBOX = "Agent sandbox";
 export const KEEP_THIS_SANDBOX = "Keep this sandbox";
-export const KEEP_STOPS_DELETING = "Stops deleting itself when idle.";
 export const GIVE_IT_ANOTHER_7_DAYS = "Give it another 7 days";
 
 /** `Agent sandbox · created by Planner`. */
