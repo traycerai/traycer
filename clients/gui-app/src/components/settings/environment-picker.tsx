@@ -31,7 +31,10 @@ import { navigateToSettingsSection } from "@/lib/settings-navigation";
 import type { SettingsSectionId } from "@/lib/settings-sections";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
 import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope-store";
-import { useMoveSheetStore } from "@/stores/settings/move-sheet-store";
+import {
+  useMoveSheetStore,
+  type MoveSheetTarget,
+} from "@/stores/settings/move-sheet-store";
 
 /**
  * The model the Environment dropdown draws, from every registered computer's
@@ -168,14 +171,14 @@ export function EnvironmentPicker(props: {
 
 function localRowVerb(
   row: LocalPickerRow,
-  openMoveSheet: (hostId: string) => void,
+  openMoveSheet: (target: MoveSheetTarget) => void,
   finishMoving: (hostId: string) => void,
 ): { label: string; testId: string; onSelect: () => void } | null {
   if (row.verb === "move_to_personal") {
     return {
       label: "Move to Personal",
       testId: `environment-picker-move-${row.hostId}`,
-      onSelect: () => openMoveSheet(row.hostId),
+      onSelect: () => openMoveSheet({ hostId: row.hostId, hostName: row.name }),
     };
   }
   if (row.verb === "finish_moving") {

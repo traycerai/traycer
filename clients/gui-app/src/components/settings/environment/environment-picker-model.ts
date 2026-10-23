@@ -1,4 +1,4 @@
-import type { EnvironmentStatusResponse } from "@traycer/protocol/host/environment-schemas";
+import type { EnvironmentStatusResponseV11 } from "@traycer/protocol/host/environment-schemas";
 import {
   localRowCohort,
   type LocalRowVerb,
@@ -54,7 +54,7 @@ export interface EnvironmentPickerModel {
  */
 export function localPickerRow(
   host: EnvironmentPickerHost,
-  status: EnvironmentStatusResponse | null,
+  status: EnvironmentStatusResponseV11 | null,
   version: NegotiatedMethodVersion,
 ): LocalPickerRow | null {
   if (isBeforeConsentGate(version)) {
@@ -99,7 +99,7 @@ export function localPickerRow(
 
 /** An old host that has not reached `applying`: it has not moved. */
 function isUnmovedOldHost(
-  status: EnvironmentStatusResponse | null,
+  status: EnvironmentStatusResponseV11 | null,
   version: NegotiatedMethodVersion,
 ): boolean {
   if (version === false || status === null || status.setup === null) {
@@ -130,9 +130,12 @@ function isBeforeConsentGate(version: NegotiatedMethodVersion): boolean {
   return version.major < 1 || (version.major === 1 && version.minor < 1);
 }
 
-/** The person accepted the move and its upload has not finished. */
-function hasUploadPastAccept(status: EnvironmentStatusResponse): boolean {
-  return status.pendingUploads.length > 0;
+/**
+ * The person accepted the move (`consent` is recorded) and setup is still
+ * at `moving_settings`: the upload stopped or has not finished.
+ */
+function hasUploadPastAccept(status: EnvironmentStatusResponseV11): boolean {
+  return status.consent !== null;
 }
 
 /**
@@ -151,7 +154,7 @@ export function personalSubtitle(names: readonly string[]): string {
 
 export function environmentPickerModel(input: {
   readonly hosts: readonly EnvironmentPickerHost[];
-  readonly statuses: ReadonlyMap<string, EnvironmentStatusResponse | null>;
+  readonly statuses: ReadonlyMap<string, EnvironmentStatusResponseV11 | null>;
   readonly versions: ReadonlyMap<string, NegotiatedMethodVersion>;
   /** This window's own host, whose Local row is the default pick. */
   readonly windowHostId: string | null;
@@ -192,7 +195,7 @@ export function environmentPickerModel(input: {
 export function isStaleLocalPick(
   pick: EnvironmentPick | null,
   model: EnvironmentPickerModel,
-  statuses: ReadonlyMap<string, EnvironmentStatusResponse | null>,
+  statuses: ReadonlyMap<string, EnvironmentStatusResponseV11 | null>,
 ): boolean {
   if (pick === null || pick.kind !== "local") return false;
   if ((statuses.get(pick.hostId) ?? null) === null) return false;

@@ -1,5 +1,5 @@
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
-import type { EnvironmentStatusResponse } from "@traycer/protocol/host/environment-schemas";
+import type { EnvironmentStatusResponseV11 } from "@traycer/protocol/host/environment-schemas";
 import type { HostRpcRegistry } from "@/lib/host";
 
 /**
@@ -10,5 +10,5 @@ export interface OverviewCardLineProps {
   readonly client: HostClient<HostRpcRegistry>;
   readonly hostId: string;
   readonly hostName: string;
-  readonly status: EnvironmentStatusResponse;
+  readonly status: EnvironmentStatusResponseV11;
 }

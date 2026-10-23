@@ -27,7 +27,9 @@ export function LocalRowNote(): ReactNode {
         size="sm"
         variant="outline"
         data-testid="local-row-note-move"
-        onClick={() => openMoveSheet(pick.hostId)}
+        onClick={() =>
+          openMoveSheet({ hostId: pick.hostId, hostName: pick.hostName })
+        }
       >
         Move to Personal
       </Button>

@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
-import type { EnvironmentStatusResponse } from "@traycer/protocol/host/environment-schemas";
+import type { EnvironmentStatusResponseV11 } from "@traycer/protocol/host/environment-schemas";
 import { OverviewCardDetailsLine } from "@/components/settings/details/overview-card-details-line";
 import { OverviewCardDatedLines } from "@/components/settings/environment/overview-card-dated-lines";
 import { hostSettingsCardState } from "@/components/settings/panels/host-overview-settings-card-model";
@@ -19,7 +19,7 @@ export function HostOverviewSettingsCard(props: {
   readonly client: HostClient<HostRpcRegistry>;
   readonly hostId: string;
   readonly hostName: string;
-  readonly status: EnvironmentStatusResponse;
+  readonly status: EnvironmentStatusResponseV11;
 }): ReactNode {
   const lineProps = {
     client: props.client,
@@ -44,7 +44,9 @@ export function HostOverviewSettingsCard(props: {
             size="sm"
             variant="outline"
             data-testid="host-settings-card-move"
-            onClick={() => openMoveSheet(props.hostId)}
+            onClick={() =>
+              openMoveSheet({ hostId: props.hostId, hostName: props.hostName })
+            }
           >
             Move to Personal
           </Button>
@@ -54,6 +56,15 @@ export function HostOverviewSettingsCard(props: {
         <p data-testid="host-settings-card-progress">
           Moving this computer's settings to Personal · {state.applied} of{" "}
           {state.total} items applied
+        </p>
+      ) : null}
+      {state.kind === "moved" ? (
+        <p data-testid="host-settings-card-moved">
+          Moved to Personal on{" "}
+          {new Date(state.acceptedAt).toLocaleDateString(undefined, {
+            day: "numeric",
+            month: "short",
+          })}
         </p>
       ) : null}
       <OverviewCardDatedLines {...lineProps} />

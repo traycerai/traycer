@@ -48,6 +48,8 @@ import { isSettingsSearchActive } from "@/lib/settings-search/settings-search";
 import { useSettingsSearchStore } from "@/stores/settings/settings-search-store";
 import { useRunnerHostOrNull } from "@/providers/use-runner-host";
 import { EnvironmentPicker } from "@/components/settings/environment-picker";
+import { MoveSheet } from "@/components/settings/move-sheet";
+import { HostPickerSandboxesLink } from "@/components/settings/environment/host-picker-sandboxes-link";
 import { environmentSectionShown } from "@/lib/settings-environment-pages";
 import { useEnvironmentPick } from "@/stores/settings/settings-environment-pick-store";
 import { useSandboxControlUnavailableReason } from "@/hooks/sandboxes/use-sandbox-control-unavailable-reason";
@@ -178,6 +180,7 @@ export function SettingsSidebar(props: SettingsSidebarProps) {
           down a dialog that is open. */}
       <AddHostDialog />
       <SandboxCreateDialog />
+      <MoveSheet />
     </aside>
   );
 }
@@ -313,6 +316,7 @@ function SettingsSidebarHostPicker(props: {
       {signedIn && sandboxesUnavailable === null ? (
         <AutomationsHostEntry />
       ) : null}
+      {signedIn ? <HostPickerSandboxesLink scope={scope} /> : null}
       {/* The host list's balance banner: the two-hour and thirty-minute
           warnings for the account's awake sandboxes. Nothing for a user with
           none. */}

@@ -7,7 +7,7 @@ import { AlertTriangle, Check, Circle } from "lucide-react";
 import { toast } from "sonner";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type {
-  EnvironmentStatusResponse,
+  EnvironmentStatusResponseV11,
   LocalOverride,
 } from "@traycer/protocol/host/environment-schemas";
 import {
@@ -153,7 +153,7 @@ function AccessSections(props: {
   readonly client: HostClient<HostRpcRegistry>;
   readonly hostId: string | null;
   readonly hostName: string;
-  readonly status: EnvironmentStatusResponse;
+  readonly status: EnvironmentStatusResponseV11;
 }): ReactNode {
   const { hostId } = props;
   return (
@@ -192,7 +192,7 @@ function AccessSections(props: {
 function MovedNotice(props: {
   readonly client: HostClient<HostRpcRegistry>;
   readonly hostId: string | null;
-  readonly status: EnvironmentStatusResponse;
+  readonly status: EnvironmentStatusResponseV11;
 }): ReactNode {
   const setupDone =
     props.status.setup !== null &&

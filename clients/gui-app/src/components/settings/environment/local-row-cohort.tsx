@@ -1,4 +1,4 @@
-import type { EnvironmentStatusResponse } from "@traycer/protocol/host/environment-schemas";
+import type { EnvironmentStatusResponseV11 } from "@traycer/protocol/host/environment-schemas";
 
 /**
  * The verb at the end of a Local row: `Move to Personal` opens the move
@@ -29,7 +29,7 @@ export type LocalRowCohort =
     };
 
 export function localRowCohort(
-  _status: EnvironmentStatusResponse,
+  _status: EnvironmentStatusResponseV11,
 ): LocalRowCohort | null {
   return null;
 }
