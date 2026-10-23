@@ -613,6 +613,28 @@ function confirmChatMessageAccepted(
   });
 }
 
+/**
+ * The host's genuine terminal evidence for the turn a send owns: idle, no
+ * turn, nothing it would queue. The accepted ack and the saved row alone do not
+ * settle that turn.
+ */
+function emitIdleHostEvidence(
+  callbacks: () => ChatStreamCallbacks,
+  epicId: string,
+  chatId: string,
+): void {
+  callbacks().onTurnStateChanged({
+    kind: "turnStateChanged",
+    hasBinaryPayload: false,
+    epicId,
+    chatId,
+    runStatus: "idle",
+    activeTurn: null,
+    turnInProgress: false,
+    sendWouldQueue: false,
+  });
+}
+
 function startChatRestore(
   callbacks: () => ChatStreamCallbacks,
   epicId: string,
@@ -2328,6 +2350,10 @@ describe("epic-parking - fine-grained chat settlement states (pins 6-9)", () => 
       CHAT_ID,
       retryFrame.messageId,
     );
+    // The saved row alone leaves the retry's turn owned.
+    expect(chatRegistry.unsettledWorkForEpic(EPIC).unsettled).toBe(true);
+    emitIdleHostEvidence(chat.callbacks, EPIC, CHAT_ID);
+    expect(chatRegistry.unsettledWorkForEpic(EPIC).unsettled).toBe(false);
 
     openEpicTab(TAB, EPIC);
     try {
@@ -2481,6 +2507,10 @@ describe("epic-parking - fine-grained chat settlement states (pins 6-9)", () => 
       chat.handle.store.getState().acceptedActions[clientActionId]
         ?.confirmedByHost,
     ).toBe(true);
+    // The saved row alone leaves the send's turn owned.
+    expect(chatRegistry.unsettledWorkForEpic(EPIC).unsettled).toBe(true);
+    emitIdleHostEvidence(chat.callbacks, EPIC, CHAT_ID);
+    expect(chatRegistry.unsettledWorkForEpic(EPIC).unsettled).toBe(false);
 
     openEpicTab(TAB, EPIC);
     try {
@@ -4060,6 +4090,10 @@ describe("epic-parking - P1/P2 regression pins: history pruning is not settlemen
       status: "idle",
       items: [],
     });
+    // The saved row alone leaves the send's turn owned.
+    expect(chatRegistry.unsettledWorkForEpic(EPIC).unsettled).toBe(true);
+    emitIdleHostEvidence(chat.callbacks, EPIC, CHAT_ID);
+    expect(chatRegistry.unsettledWorkForEpic(EPIC).unsettled).toBe(false);
 
     openEpicTab(TAB, EPIC);
     try {
@@ -4168,6 +4202,10 @@ describe("epic-parking - P1/P2 regression pins: history pruning is not settlemen
       vi.advanceTimersByTime(1);
       sendAndConfirmFillerMessage(chat, EPIC, CHAT_ID);
     }
+    // The saved rows alone leave the sends' turn owned.
+    expect(chatRegistry.unsettledWorkForEpic(EPIC).unsettled).toBe(true);
+    emitIdleHostEvidence(chat.callbacks, EPIC, CHAT_ID);
+    expect(chatRegistry.unsettledWorkForEpic(EPIC).unsettled).toBe(false);
 
     openEpicTab(TAB, EPIC);
     try {

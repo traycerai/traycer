@@ -734,6 +734,7 @@ export interface ChatMessageStoppedInfo {
 }
 
 export interface ChatMessage {
+  readonly workingVerbSeed?: string;
   id: string;
   role: ChatMessageRole;
   content: string;

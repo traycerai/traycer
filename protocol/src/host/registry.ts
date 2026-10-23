@@ -1,4 +1,5 @@
 import type { RequiredHostMethodVersion } from "../host-transport/remote/rpc-types";
+import { chatPrestartRuntimeV10 } from "./agent/gui/prestart-runtime";
 import { PROFILE_SYNC_LINK_RPC_METHODS } from "./profile-sync-link-contracts";
 import { ENVIRONMENT_RPC_METHODS } from "./environment-contracts";
 import type { NativeListResult } from "./provider-native-schemas";
@@ -384,6 +385,7 @@ import {
   chatSubscribeV131,
   chatSubscribeV132,
   chatSubscribeV133,
+  chatSubscribeV134,
 } from "@traycer/protocol/host/agent/gui/contracts";
 import {
   agentTuiGenerateTitleV10,
@@ -8834,6 +8836,19 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
 // `_NoOverlappingHostRpcMethods` assertion below is what keeps a method from
 // silently existing in more than one of them.
 const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
+  "chat.prestartRuntime": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: chatPrestartRuntimeV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+    degrade: { kind: "unsupported" },
+  },
   // The `bot.*` namespace (Tracy Bots): optional capabilities, every one
   // `degrade: { kind: "unsupported" }` - a host that predates bots advertises
   // none of them and the client hides the surface. See `bot/contracts.ts`.
@@ -14830,7 +14845,7 @@ const HOST_STREAM_RPC_REGISTRY_DEFINITION = {
   ...HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION,
   "chat.subscribe": {
     1: {
-      latestMinor: 33,
+      latestMinor: 34,
       versions: {
         0: {
           contract: chatSubscribeV10,
@@ -15023,6 +15038,7 @@ const HOST_STREAM_RPC_REGISTRY_DEFINITION = {
         31: { contract: chatSubscribeV131 },
         32: { contract: chatSubscribeV132 },
         33: { contract: chatSubscribeV133 },
+        34: { contract: chatSubscribeV134 },
       },
     },
   },

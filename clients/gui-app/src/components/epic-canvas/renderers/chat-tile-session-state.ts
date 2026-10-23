@@ -16,6 +16,7 @@ import {
   type PendingChatAction,
 } from "@/stores/chats/chat-session-store";
 import { userRowPresence } from "@/stores/chats/transcript-window";
+import { hasDrainingQueueItems } from "@/stores/chats/chat-effective-queue";
 import {
   composerTurnStatus,
   resolvedTurnStatus,
@@ -316,10 +317,17 @@ export function canModifyChatMessages(input: {
     | "backgroundItems"
     | "turnInProgress"
     | "pendingUserMessages"
+    | "pendingTurn"
+    | "heldStop"
+    | "queueTurnContinuity"
+    | "drainingQueueItems"
     | "pendingActions"
   >;
 }): boolean {
   if (!input.canAct) return false;
+  // A removed prompt has already left queue custody to start its turn. A
+  // later prompt still parked behind it cannot make this a queue-only chat.
+  if (hasDrainingQueueItems(input.state)) return false;
   // Narrowed via `resolvedTurnStatus`, not the raw `runStatus`: the raw value
   // also reads "running" while visible background work outlives the settled
   // turn (Bash `run_in_background` / a subagent / Monitor), which would keep
@@ -329,7 +337,9 @@ export function canModifyChatMessages(input: {
   // pre-turn `turnActivating` phase (provider/worktree setup) and
   // stop-during-activation both keep the host's `turnInProgress` true until
   // the run truly unwinds.
+  const queueOnly = historyHasOnlyQueuedWork(input.state);
   if (
+    !queueOnly &&
     resolvedTurnStatus(
       input.state,
       composerTurnStatus(input.state.runStatus),
@@ -346,6 +356,21 @@ export function canModifyChatMessages(input: {
   if (input.state.pendingUserMessages.length > 0) return false;
   return !Object.values(input.state.pendingActions).some(
     isPendingSendOrHistoryMutation,
+  );
+}
+
+function historyHasOnlyQueuedWork(
+  state: Pick<
+    ChatSessionState,
+    "activeTurn" | "turnInProgress" | "pendingTurn" | "heldStop" | "queue"
+  >,
+): boolean {
+  return (
+    state.activeTurn === null &&
+    state.turnInProgress !== true &&
+    !state.pendingTurn &&
+    !state.heldStop &&
+    state.queue.items.length > 0
   );
 }
 

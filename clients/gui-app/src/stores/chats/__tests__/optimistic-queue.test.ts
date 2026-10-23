@@ -290,6 +290,52 @@ describe("optimistic-queue clears pausedReason when it leaves paused", () => {
   });
 });
 
+describe("optimistic-queue sends with distinct message ids and equal content", () => {
+  it("appends a second optimistic send whose text, sender and settings equal the first", () => {
+    const queue: ChatQueueState = {
+      status: "running",
+      items: [optimisticPromptItem("action-1")],
+    };
+
+    const next = appendOptimisticQueuedItem(
+      queue,
+      optimisticPromptItem("action-2"),
+    );
+
+    expect(next.items.map((item) => item.queueItemId)).toEqual([
+      optimisticQueuedItemId("action-1"),
+      optimisticQueuedItemId("action-2"),
+    ]);
+  });
+
+  it("keeps an optimistic send when the host queued a different send with equal content", () => {
+    const hostItem: ChatQueuedPromptItem = {
+      ...optimisticPromptItem("other"),
+      queueItemId: "queue-host-other",
+      messageId: "message-from-another-send",
+    };
+    const authoritative: ChatQueueState = {
+      status: "running",
+      items: [hostItem],
+    };
+    const current: ChatQueueState = {
+      status: "running",
+      items: [optimisticPromptItem("action-1")],
+    };
+
+    const merged = mergeQueueWithOptimisticQueuedItems(
+      authoritative,
+      current,
+      new Set(["action-1"]),
+    );
+
+    expect(merged.items.map((item) => item.queueItemId)).toEqual([
+      "queue-host-other",
+      optimisticQueuedItemId("action-1"),
+    ]);
+  });
+});
+
 function managedCommandItem(queueItemId: string): ChatQueuedManagedCommandItem {
   return {
     kind: "managed-command",

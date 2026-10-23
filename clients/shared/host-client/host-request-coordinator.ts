@@ -14,6 +14,7 @@ import type {
 
 export type HostRequestControlFlowReason =
   | "waiter-cancelled"
+  | "request-superseded"
   | "authority-superseded"
   | "coordinator-disposed";
 
@@ -79,6 +80,7 @@ interface HostRequestWaiter<Response> {
 
 interface HostRequestJob {
   readonly mode: RpcSchedulingMode;
+  readonly requestKey: string;
   readonly authority: HostRequestAuthority;
   readonly authorityDomain: HostRequestAuthorityDomain;
   readonly controller: AbortController;
@@ -128,16 +130,14 @@ export class HostRequestCoordinator<Registry extends VersionedRpcRegistry> {
       );
     }
 
-    const key = this.keyFor(
+    const keys = this.keysFor(
       submission.method,
       submission.params,
       submission.hostId,
       submission.userId,
     );
-    const mode = this.schedulingPolicy.modeFor(
-      submission.method,
-      submission.params,
-    );
+    const key = keys.queueKey;
+    const mode = keys.mode;
     const waiter = createWaiter<ResponseOfMethod<Registry, Method>>(
       submission.signal,
     );
@@ -147,13 +147,18 @@ export class HostRequestCoordinator<Registry extends VersionedRpcRegistry> {
 
     const queue = this.queues.get(key) ?? { active: null, queued: [] };
     this.queues.set(key, queue);
-    const job = this.selectJob(queue, mode, submission.authorityDomain);
+    const job = this.selectJob(
+      queue,
+      mode,
+      submission.authorityDomain,
+      keys.requestKey,
+    );
     if (job !== null) {
       this.attachWaiter(key, queue, job, waiter);
       return waiter.promise;
     }
 
-    const next = this.createJob(mode, submission);
+    const next = this.createJob(mode, submission, keys.requestKey);
     this.attachWaiter(key, queue, next, waiter);
     this.enqueue(queue, next);
     this.drain(key, queue);
@@ -286,15 +291,46 @@ export class HostRequestCoordinator<Registry extends VersionedRpcRegistry> {
     hostId: string,
     userId: string,
   ): string {
+    return this.keysFor(method, params, hostId, userId).queueKey;
+  }
+
+  private keysFor<Method extends keyof Registry & string>(
+    method: Method,
+    params: RequestOfMethod<Registry, Method>,
+    hostId: string,
+    userId: string,
+  ): {
+    readonly queueKey: string;
+    readonly requestKey: string;
+    readonly mode: RpcSchedulingMode;
+  } {
     const contract = getLatestContract(this.registry[method], undefined);
     const parsed = contract.requestSchema.parse(params);
-    return JSON.stringify([hostId, userId, method, stableWireJson(parsed)]);
+    const requestKey = stableWireJson(parsed);
+    const mode = this.schedulingPolicy.modeFor(method, params);
+    const scope =
+      mode === "latest"
+        ? this.schedulingPolicy.latestScopeFor?.(method, params)
+        : undefined;
+    return {
+      queueKey: JSON.stringify([
+        hostId,
+        userId,
+        method,
+        scope === undefined
+          ? requestKey
+          : { latestScope: stableWireJson(scope) },
+      ]),
+      requestKey,
+      mode,
+    };
   }
 
   private selectJob(
     queue: HostRequestQueue,
     mode: RpcSchedulingMode,
     domain: HostRequestAuthorityDomain,
+    requestKey: string,
   ): HostRequestJob | null {
     if (mode === "fifo") {
       return null;
@@ -304,10 +340,14 @@ export class HostRequestCoordinator<Registry extends VersionedRpcRegistry> {
       if (tail === undefined) {
         return null;
       }
-      if (sameAuthorityDomain(tail.authorityDomain, domain)) {
+      const sameDomain = sameAuthorityDomain(tail.authorityDomain, domain);
+      if (sameDomain && tail.requestKey === requestKey) {
         return tail;
       }
-      this.settleJobControlFlow(tail, "authority-superseded");
+      this.settleJobControlFlow(
+        tail,
+        sameDomain ? "request-superseded" : "authority-superseded",
+      );
       queue.queued.length = 0;
       return null;
     }
@@ -338,9 +378,11 @@ export class HostRequestCoordinator<Registry extends VersionedRpcRegistry> {
   private createJob<Method extends keyof Registry & string>(
     mode: RpcSchedulingMode,
     submission: HostRequestSubmission<Registry, Method>,
+    requestKey: string,
   ): HostRequestJob {
     return {
       mode,
+      requestKey,
       authority: submission.authority,
       authorityDomain: submission.authorityDomain,
       controller: new AbortController(),

@@ -1,4 +1,4 @@
-import { createContext } from "react";
+import { createContext, useState } from "react";
 
 /**
  * Present-tense "thinking" verbs shown while a turn is live (Claude-CLI style),
@@ -38,14 +38,33 @@ export function pickWorkingVerb(seed: string): string {
   return WORKING_VERBS[index] ?? WORKING_VERBS[0];
 }
 
-/**
- * The active run's working verb, resolved once per turn by the chat tile and
- * read by the in-progress indicator. Seeding the verb here - rather than off
- * the indicator row's `messageId` - keeps the word fixed for the whole turn:
- * the pre-turn placeholder row swaps its id from `assistant:live` to
- * `assistant:<turnId>` when the host exposes the turn (~seconds in), which
- * would otherwise reshuffle a `messageId`-seeded verb mid-turn. `null` outside
- * a chat (e.g. isolated component tests) - the indicator then falls back to a
- * `messageId` seed.
- */
+/** The tile owns the verb across the placeholder-to-host row remount. */
 export const WorkingVerbContext = createContext<string | null>(null);
+
+export function useWorkingVerb(
+  seed: string,
+  active: boolean,
+  turnId: string | null,
+): string {
+  const [latched, setLatched] = useState(() => ({
+    active,
+    turnId,
+    verb: pickWorkingVerb(seed),
+  }));
+  const newTurn =
+    active &&
+    (!latched.active ||
+      (latched.turnId !== null &&
+        turnId !== null &&
+        latched.turnId !== turnId));
+  if (latched.active !== active || latched.turnId !== turnId) {
+    const next = {
+      active,
+      turnId,
+      verb: newTurn ? pickWorkingVerb(seed) : latched.verb,
+    };
+    setLatched(next);
+    return next.verb;
+  }
+  return latched.verb;
+}

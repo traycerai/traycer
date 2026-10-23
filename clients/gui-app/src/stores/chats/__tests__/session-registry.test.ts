@@ -3,6 +3,8 @@ import {
   createChatSessionStore,
   type ChatSessionStoreHandle,
 } from "@/stores/chats/chat-session-store";
+import type { ChatStreamCallbacks } from "@traycer-clients/shared/host-transport/chat-stream-client";
+import type { Chat } from "@traycer/protocol/persistence/epic/schemas";
 import { IMMEDIATE_STREAM_FLUSH_COORDINATOR } from "@/stores/chats/stream-flush-coordinator";
 import {
   ChatSessionRegistry,
@@ -563,6 +565,205 @@ describe("ChatSessionRegistry", () => {
     expect(registry.peek("epic-1", "chat-1", HOST)).toBe(acquired);
     expect(owned.closeCount()).toBe(0);
     expect(idle.closeCount()).toBe(1);
+  });
+
+  describe("a docked send that the host queues, through real frames", () => {
+    const DOCKED_SETTINGS = {
+      harnessId: "claude" as const,
+      model: "claude-sonnet-4-5",
+      permissionMode: "supervised" as const,
+      reasoningEffort: null,
+      serviceTier: null,
+      agentMode: "epic" as const,
+      profileId: null,
+    };
+
+    function openDocked(chatId: string) {
+      const captured: { callbacks: ChatStreamCallbacks | null } = {
+        callbacks: null,
+      };
+      const handle = createChatSessionStore({
+        environment: CHAT_STORE_TEST_ENVIRONMENT,
+        hostId: "host-a",
+        epicId: "epic-1",
+        chatId,
+        userId: "owner-1",
+        onAuthError: null,
+        onProviderAuthError: null,
+        wakeTransport: null,
+        streamFlushCoordinator: IMMEDIATE_STREAM_FLUSH_COORDINATOR,
+        streamClientFactory: (_epicId, _chatId, nextCallbacks) => {
+          captured.callbacks = nextCallbacks;
+          return {
+            sendAction: () => undefined,
+            sameTurnSteeringProtocolSupported: () => true,
+            draftBlobBridgeSupported: () => false,
+            requestTranscriptRange: () => undefined,
+            requestResnapshot: () => undefined,
+            close: () => undefined,
+          };
+        },
+      });
+      if (captured.callbacks === null) throw new Error("expected callbacks");
+      const stream: ChatStreamCallbacks = captured.callbacks;
+      const chat: Chat = {
+        id: chatId,
+        parentId: null,
+        userId: "owner-1",
+        hostId: "host-a",
+        title: "Chat",
+        createdAt: 1,
+        updatedAt: 1,
+        isTitleEditedByUser: false,
+        settings: null,
+        activeSessionChain: null,
+        claudePendingWakes: [],
+        messages: [],
+        events: [],
+        archivedAt: null,
+        pinnedUserProviderHandle: null,
+        lastDeliveredRolesDigest: null,
+      };
+      stream.onConnectionStatus("open", null, null);
+      stream.onSnapshot({
+        kind: "snapshot",
+        hasBinaryPayload: false,
+        epicId: "epic-1",
+        chatId,
+        snapshot: {
+          chat,
+          access: { role: "owner", ownerUserId: "owner-1", canAct: true },
+          queue: { status: "idle", items: [] },
+          runStatus: "idle",
+          turnInProgress: false,
+          sendWouldQueue: true,
+          activeTurn: null,
+          pendingApprovals: [],
+          pendingInterviews: [],
+          worktreeBinding: null,
+          missingWorktreePaths: [],
+          pendingFileEditApprovals: [],
+          accumulatedFileChanges: [],
+          managedCommands: [],
+          heldUpdates: [],
+          portForwards: [],
+        },
+      });
+      const content = {
+        type: "doc" as const,
+        content: [
+          { type: "paragraph", content: [{ type: "text", text: "queued" }] },
+        ],
+      };
+      const action = handle.store.getState().sendMessage({
+        content,
+        sender: { type: "user", userId: "owner-1" },
+        settings: DOCKED_SETTINGS,
+        attachments: [],
+        deliveryPolicy: "auto",
+        restore: { content, browserAnnotations: [] },
+      });
+      if (action === null) throw new Error("sendMessage was refused");
+      const item = {
+        kind: "prompt" as const,
+        queueItemId: `queue-${action.messageId}`,
+        messageId: action.messageId,
+        message: { kind: "user" as const, content, browserAnnotations: [] },
+        sender: { type: "user" as const, userId: "owner-1" },
+        settings: DOCKED_SETTINGS,
+        accountContext: { type: "PERSONAL" as const },
+        sentFromHostId: null,
+        delivery: "next_turn" as const,
+        status: "pending" as const,
+        targetTurnId: null,
+        steerRequest: null,
+        fallbackReason: null,
+        createdAt: 1,
+        updatedAt: 1,
+      };
+      const emitQueue = (items: ReadonlyArray<typeof item>): void => {
+        stream.onQueueChanged({
+          kind: "queueChanged",
+          hasBinaryPayload: false,
+          epicId: "epic-1",
+          chatId,
+          queue: { status: "running", items: [...items] },
+        });
+      };
+      return { handle, item, emitQueue };
+    }
+
+    function overflowWarmPool(registry: ChatSessionRegistry) {
+      const idle = createHandle("epic-1", "chat-idle");
+      registry.acquire(
+        {
+          epicId: "epic-1",
+          chatId: "chat-idle",
+          hostId: HOST,
+          scopeKey: SCOPE,
+        },
+        () => idle.handle,
+      );
+      registry.release("epic-1", "chat-idle", HOST);
+      return idle;
+    }
+
+    it("keeps a carry-only, raw-idle session warm: no named turn, no pendingTurn, no latch", () => {
+      const registry = new ChatSessionRegistry({
+        idleTtlMs: TTL_MS,
+        maxWarmSessions: 1,
+      });
+      const docked = openDocked("chat-docked");
+      const acquired = registry.acquire(
+        {
+          epicId: "epic-1",
+          chatId: "chat-docked",
+          hostId: HOST,
+          scopeKey: SCOPE,
+        },
+        () => docked.handle,
+      );
+      setLocalActivity(HOST, "epic-1", "chat-docked", false);
+      docked.emitQueue([docked.item]);
+      docked.emitQueue([]);
+      const state = acquired.store.getState();
+      expect(state.drainingQueueItems?.length).toBe(1);
+      expect(state.queue.items).toEqual([]);
+      expect(state.runStatus).toBe("idle");
+      expect(state.pendingTurn).toBeNull();
+      expect(state.queueTurnContinuity ?? false).toBe(false);
+
+      registry.release("epic-1", "chat-docked", HOST);
+      const idle = overflowWarmPool(registry);
+
+      expect(registry.peek("epic-1", "chat-docked", HOST)).toBe(acquired);
+      expect(idle.closeCount()).toBe(1);
+    });
+
+    it("does not keep a raw idle session whose only queued prompt is parked in the dock", () => {
+      const registry = new ChatSessionRegistry({
+        idleTtlMs: TTL_MS,
+        maxWarmSessions: 1,
+      });
+      const docked = openDocked("chat-parked");
+      const acquired = registry.acquire(
+        {
+          epicId: "epic-1",
+          chatId: "chat-parked",
+          hostId: HOST,
+          scopeKey: SCOPE,
+        },
+        () => docked.handle,
+      );
+      setLocalActivity(HOST, "epic-1", "chat-parked", false);
+      docked.emitQueue([docked.item]);
+      expect(acquired.store.getState().drainingQueueItems ?? []).toEqual([]);
+
+      registry.release("epic-1", "chat-parked", HOST);
+      overflowWarmPool(registry);
+
+      expect(registry.peek("epic-1", "chat-parked", HOST)).toBeNull();
+    });
   });
 
   it("keeps a shared viewer's native work when their activity plane cannot see the owner", () => {

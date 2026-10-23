@@ -2750,6 +2750,8 @@ export const chatSnapshotSchema = lazySchema(() =>
     // deletes both from every snapshot it sends on one.
     suggestedPrompt: chatSuggestedPromptSchema.optional(),
     thinkingTokensEstimate: chatThinkingTokensEstimateSchema.optional(),
+    // Absent on older hosts; clients then approximate queue admission locally.
+    sendWouldQueue: z.boolean().optional(),
   }),
 );
 export type ChatSnapshot = z.infer<typeof chatSnapshotSchema>;
@@ -2853,6 +2855,14 @@ const chatSubscribeTurnStateChangedServerFrameSchema = lazySchema(() =>
     // Same rule as the fallback keys: an absent key CLEARS the chip - see
     // `chatSuggestedPromptSchema`.
     suggestedPrompt: chatSuggestedPromptSchema.optional(),
+  }),
+);
+
+// `1.34` also licenses publishing an activation's starting turn before the
+// provider turn exists. Older subscribers keep the pre-activation projection.
+const chatSubscribeTurnStateChangedServerFrameSchemaV134 = lazySchema(() =>
+  chatSubscribeTurnStateChangedServerFrameSchema.extend({
+    sendWouldQueue: z.boolean().optional(),
   }),
 );
 
@@ -3146,6 +3156,7 @@ function buildChatSubscribeCommonServerFrameSchemas<
   InterviewAnsweredSchema extends z.ZodType,
   InterviewErroredSchema extends z.ZodType,
   ExtraActionAckFields extends z.ZodRawShape,
+  ExtraQueueChangedFields extends z.ZodRawShape,
 >(schemas: {
   readonly message: MessageSchema;
   readonly queue: QueueSchema;
@@ -3174,6 +3185,7 @@ function buildChatSubscribeCommonServerFrameSchemas<
    * emits it and a consumer that assumes it is populated reads undefined.
    */
   readonly extraActionAckFields: ExtraActionAckFields;
+  readonly extraQueueChangedFields: ExtraQueueChangedFields;
 }) {
   return [
     lazySchema(() =>
@@ -3211,6 +3223,7 @@ function buildChatSubscribeCommonServerFrameSchemas<
         ...textFrameFields,
         ...chatReferenceFields,
         queue: schemas.queue,
+        ...schemas.extraQueueChangedFields,
       }),
     ),
     lazySchema(() =>
@@ -3340,6 +3353,7 @@ const chatSubscribeCommonServerFrameSchemasV18 =
     fileEditApproval: chatFileEditApprovalStateSchemaPreCautious,
     interviewAnswered: interviewAnsweredServerFrameSchema,
     interviewErrored: interviewErroredServerFrameSchema,
+    extraQueueChangedFields: {},
     extraActionAckFields: {},
   });
 
@@ -3386,6 +3400,7 @@ const chatSubscribeCommonServerFrameSchemasV110 =
     fileEditApproval: chatFileEditApprovalStateSchemaPreCautious,
     interviewAnswered: interviewAnsweredServerFrameSchema,
     interviewErrored: interviewErroredServerFrameSchema,
+    extraQueueChangedFields: {},
     extraActionAckFields: fallbackGraceHoldLeaseFields,
   });
 
@@ -3405,6 +3420,7 @@ const chatSubscribeCommonServerFrameSchemasV111 =
     fileEditApproval: chatFileEditApprovalStateSchemaPreCautious,
     interviewAnswered: interviewAnsweredServerFrameSchema,
     interviewErrored: interviewErroredServerFrameSchema,
+    extraQueueChangedFields: {},
     extraActionAckFields: fallbackGraceHoldLeaseFields,
   });
 
@@ -3427,6 +3443,7 @@ const chatSubscribeCommonServerFrameSchemasV112 =
     fileEditApproval: chatFileEditApprovalStateSchemaPreCautious,
     interviewAnswered: interviewAnsweredServerFrameSchema,
     interviewErrored: interviewErroredServerFrameSchema,
+    extraQueueChangedFields: {},
     extraActionAckFields: {
       ...fallbackGraceHoldLeaseFields,
       ...draftImageAckCauseFields,
@@ -3447,6 +3464,7 @@ const chatSubscribeCommonServerFrameSchemasV113 =
     fileEditApproval: chatFileEditApprovalStateSchemaPreCautious,
     interviewAnswered: interviewAnsweredServerFrameSchema,
     interviewErrored: interviewErroredServerFrameSchema,
+    extraQueueChangedFields: {},
     extraActionAckFields: {
       ...fallbackGraceHoldLeaseFields,
       ...draftImageAckCauseFields,
@@ -3466,6 +3484,7 @@ const chatSubscribeCommonServerFrameSchemasV114 =
     fileEditApproval: chatFileEditApprovalStateSchemaPreCautious,
     interviewAnswered: interviewAnsweredServerFrameSchema,
     interviewErrored: interviewErroredServerFrameSchema,
+    extraQueueChangedFields: {},
     extraActionAckFields: {
       ...fallbackGraceHoldLeaseFields,
       ...draftImageAckCauseFields,
@@ -3485,6 +3504,7 @@ const chatSubscribeCommonServerFrameSchemasV115 =
     fileEditApproval: chatFileEditApprovalStateSchemaPreCautious,
     interviewAnswered: interviewAnsweredServerFrameSchema,
     interviewErrored: interviewErroredServerFrameSchema,
+    extraQueueChangedFields: {},
     extraActionAckFields: {
       ...fallbackGraceHoldLeaseFields,
       ...draftImageAckCauseFields,
@@ -3504,6 +3524,7 @@ const chatSubscribeCommonServerFrameSchemasV116 =
     fileEditApproval: chatFileEditApprovalStateSchemaPreCautious,
     interviewAnswered: interviewAnsweredServerFrameSchema,
     interviewErrored: interviewErroredServerFrameSchema,
+    extraQueueChangedFields: {},
     extraActionAckFields: {
       ...fallbackGraceHoldLeaseFields,
       ...draftImageAckCauseFields,
@@ -3524,6 +3545,7 @@ const chatSubscribeCommonServerFrameSchemasV117 =
     fileEditApproval: chatFileEditApprovalStateSchemaPreCautious,
     interviewAnswered: interviewAnsweredServerFrameSchema,
     interviewErrored: interviewErroredServerFrameSchema,
+    extraQueueChangedFields: {},
     extraActionAckFields: {
       ...fallbackGraceHoldLeaseFields,
       ...draftImageAckCauseFields,
@@ -3542,6 +3564,7 @@ const chatSubscribeCommonServerFrameSchemasV118 =
     fileEditApproval: chatFileEditApprovalStateSchemaPreCautious,
     interviewAnswered: interviewAnsweredServerFrameSchema,
     interviewErrored: interviewErroredServerFrameSchema,
+    extraQueueChangedFields: {},
     extraActionAckFields: {
       ...fallbackGraceHoldLeaseFields,
       ...draftImageAckCauseFields,
@@ -3562,6 +3585,7 @@ const chatSubscribeCommonServerFrameSchemasV121 =
     fileEditApproval: chatFileEditApprovalStateSchema,
     interviewAnswered: interviewAnsweredServerFrameSchema,
     interviewErrored: interviewErroredServerFrameSchema,
+    extraQueueChangedFields: {},
     extraActionAckFields: {
       ...fallbackGraceHoldLeaseFields,
       ...draftImageAckCauseFields,
@@ -3581,6 +3605,7 @@ const chatSubscribeCommonServerFrameSchemas =
     fileEditApproval: chatFileEditApprovalStateSchema,
     interviewAnswered: interviewAnsweredServerFrameSchema,
     interviewErrored: interviewErroredServerFrameSchema,
+    extraQueueChangedFields: { sendWouldQueue: z.boolean().optional() },
     extraActionAckFields: {
       ...fallbackGraceHoldLeaseFields,
       ...draftImageAckCauseFields,
@@ -3596,6 +3621,24 @@ const chatSubscribeCommonServerFrameSchemasOpenHarness =
     fileEditApproval: chatFileEditApprovalStateSchema,
     interviewAnswered: interviewAnsweredServerFrameSchema,
     interviewErrored: interviewErroredServerFrameSchema,
+    extraQueueChangedFields: {},
+    extraActionAckFields: {
+      ...fallbackGraceHoldLeaseFields,
+      ...draftImageAckCauseFields,
+    },
+  });
+
+const chatSubscribeCommonServerFrameSchemasOpenHarnessV134 =
+  buildChatSubscribeCommonServerFrameSchemas({
+    message: openUserMessageSchema,
+    queue: openChatQueueStateSchema,
+    event: openChatEventSchema,
+    action: chatActionSchema,
+    approval: chatApprovalStateSchema,
+    fileEditApproval: chatFileEditApprovalStateSchema,
+    interviewAnswered: interviewAnsweredServerFrameSchema,
+    interviewErrored: interviewErroredServerFrameSchema,
+    extraQueueChangedFields: { sendWouldQueue: z.boolean().optional() },
     extraActionAckFields: {
       ...fallbackGraceHoldLeaseFields,
       ...draftImageAckCauseFields,
@@ -3616,6 +3659,7 @@ const chatSubscribeCommonServerFrameSchemasOpenHarnessPreConversation =
     fileEditApproval: chatFileEditApprovalStateSchema,
     interviewAnswered: interviewAnsweredServerFrameSchema,
     interviewErrored: interviewErroredServerFrameSchema,
+    extraQueueChangedFields: {},
     extraActionAckFields: {
       ...fallbackGraceHoldLeaseFields,
       ...draftImageAckCauseFields,
@@ -3635,6 +3679,7 @@ const chatSubscribeCommonServerFrameSchemasOpenHarnessPreTaskCheckin =
     fileEditApproval: chatFileEditApprovalStateSchema,
     interviewAnswered: interviewAnsweredServerFrameSchema,
     interviewErrored: interviewErroredServerFrameSchema,
+    extraQueueChangedFields: {},
     extraActionAckFields: {
       ...fallbackGraceHoldLeaseFields,
       ...draftImageAckCauseFields,
@@ -3654,6 +3699,7 @@ const chatSubscribeCommonServerFrameSchemasOpenHarnessPreTaskOverdue =
     fileEditApproval: chatFileEditApprovalStateSchema,
     interviewAnswered: interviewAnsweredServerFrameSchema,
     interviewErrored: interviewErroredServerFrameSchema,
+    extraQueueChangedFields: {},
     extraActionAckFields: {
       ...fallbackGraceHoldLeaseFields,
       ...draftImageAckCauseFields,
@@ -3673,6 +3719,7 @@ const chatSubscribeCommonServerFrameSchemasOpenHarnessPreSignInParked =
     fileEditApproval: chatFileEditApprovalStateSchema,
     interviewAnswered: interviewAnsweredServerFrameSchema,
     interviewErrored: interviewErroredServerFrameSchema,
+    extraQueueChangedFields: {},
     extraActionAckFields: {
       ...fallbackGraceHoldLeaseFields,
       ...draftImageAckCauseFields,
@@ -3694,6 +3741,7 @@ const chatSubscribeCommonServerFrameSchemasOpenHarnessPreCanvas =
     fileEditApproval: chatFileEditApprovalStateSchema,
     interviewAnswered: interviewAnsweredServerFrameSchema,
     interviewErrored: interviewErroredServerFrameSchema,
+    extraQueueChangedFields: {},
     extraActionAckFields: {
       ...fallbackGraceHoldLeaseFields,
       ...draftImageAckCauseFields,
@@ -3711,6 +3759,7 @@ const chatSubscribeCommonServerFrameSchemasPreInReplyTo =
     fileEditApproval: chatFileEditApprovalStateSchemaPreCautious,
     interviewAnswered: interviewAnsweredServerFrameSchemaPreSettlement,
     interviewErrored: interviewErroredServerFrameSchemaPreSettlement,
+    extraQueueChangedFields: {},
     extraActionAckFields: {},
   });
 
@@ -3732,6 +3781,7 @@ const chatSubscribeCommonServerFrameSchemasPreManagedCommand =
     fileEditApproval: chatFileEditApprovalStateSchemaPreCautious,
     interviewAnswered: interviewAnsweredServerFrameSchemaPreSettlement,
     interviewErrored: interviewErroredServerFrameSchemaPreSettlement,
+    extraQueueChangedFields: {},
     extraActionAckFields: {},
   });
 
@@ -3855,11 +3905,19 @@ const chatSubscribeSharedServerFrameSchemasOpenHarnessPreTaskOverdue = [
   ...chatSubscribeCommonServerFrameSchemasOpenHarnessPreTaskOverdue,
   blockDeltaServerFrameSchema(openRuntimeEventSchemaPreDelivery),
 ];
-// The live shared frames (`chat.subscribe@1.33`): the live open-harness common
+// The shared frames frozen at `chat.subscribe@1.33`: the live open-harness common
 // set over the same `blockDelta`.
 const chatSubscribeSharedServerFrameSchemasOpenHarness = [
   messageDeliveryChangedServerFrameSchema,
   ...chatSubscribeCommonServerFrameSchemasOpenHarness,
+  blockDeltaServerFrameSchema(openRuntimeEventSchema),
+];
+
+// The live shared frames (`chat.subscribe@1.34`): the live open-harness common
+// set over the same `blockDelta`.
+const chatSubscribeSharedServerFrameSchemasOpenHarnessV134 = [
+  messageDeliveryChangedServerFrameSchema,
+  ...chatSubscribeCommonServerFrameSchemasOpenHarnessV134,
   blockDeltaServerFrameSchema(openRuntimeEventSchema),
 ];
 
@@ -3873,7 +3931,7 @@ const chatSubscribeSharedServerFrameSchemasPreInReplyTo = [
 export const chatSubscribeServerFrameSchema = lazySchema(() =>
   z.discriminatedUnion("kind", [
     chatSubscribeSnapshotServerFrameSchema,
-    chatSubscribeTurnStateChangedServerFrameSchema,
+    chatSubscribeTurnStateChangedServerFrameSchemaV134,
     chatSubscribeManagedCommandsChangedServerFrameSchema,
     chatSubscribePortForwardsChangedServerFrameSchema,
     chatSubscribeHeldUpdatesChangedServerFrameSchema,
@@ -5523,6 +5581,7 @@ const chatSubscribeCommonServerFrameSchemasV16 =
     fileEditApproval: chatFileEditApprovalStateSchemaPreCautious,
     interviewAnswered: interviewAnsweredServerFrameSchemaPreSettlement,
     interviewErrored: interviewErroredServerFrameSchemaPreSettlement,
+    extraQueueChangedFields: {},
     extraActionAckFields: {},
   });
 
@@ -6063,6 +6122,7 @@ const chatWindowedSnapshotSchemaV124 = lazySchema(() =>
 export const chatWindowedSnapshotSchema = lazySchema(() =>
   chatWindowedSnapshotSchemaV124.extend({
     queue: chatQueueStateSchema,
+    sendWouldQueue: z.boolean().optional(),
   }),
 );
 export type ChatWindowedSnapshot = z.infer<typeof chatWindowedSnapshotSchema>;
@@ -6098,9 +6158,19 @@ const chatSubscribeWindowedSnapshotServerFrameSchemaOpenHarness = lazySchema(
       kind: z.literal("snapshot"),
       ...textFrameFields,
       ...chatReferenceFields,
-      snapshot: openChatWindowedSnapshotSchema,
+      snapshot: openChatWindowedSnapshotSchema.omit({ sendWouldQueue: true }),
     }),
 );
+
+const chatSubscribeWindowedSnapshotServerFrameSchemaOpenHarnessV134 =
+  lazySchema(() =>
+    z.object({
+      kind: z.literal("snapshot"),
+      ...textFrameFields,
+      ...chatReferenceFields,
+      snapshot: openChatWindowedSnapshotSchema,
+    }),
+  );
 
 const chatSubscribeAccumulatedChangesServerFrameSchema = lazySchema(() =>
   z.object({
@@ -6517,7 +6587,7 @@ export const chatSubscribeWindowedServerFrameSchema = lazySchema(() =>
     chatSubscribeAccumulatedChangesServerFrameSchema,
     chatSubscribeIndexChangedServerFrameSchema,
     chatSubscribeRangeServerFrameSchema,
-    chatSubscribeTurnStateChangedServerFrameSchema,
+    chatSubscribeTurnStateChangedServerFrameSchemaV134,
     chatSubscribeManagedCommandsChangedServerFrameSchema,
     chatSubscribePortForwardsChangedServerFrameSchema,
     chatSubscribeHeldUpdatesChangedServerFrameSchema,
@@ -6820,7 +6890,7 @@ const chatSubscribeServerFrameSchemaV132 = lazySchema(() =>
 );
 
 /**
- * The live windowed union as a READER decodes it (`chat.subscribe@1.33`): the
+ * The reader union frozen at `chat.subscribe@1.33`: the
  * union above with the snapshot, the `range` response, the three
  * sender-bearing common frames and the `blockDelta` bound to their
  * open-harness copies. The frames a peer DRIVES through - `turnStateChanged`
@@ -6828,7 +6898,7 @@ const chatSubscribeServerFrameSchemaV132 = lazySchema(() =>
  * the closed enum; see `open-harness-wire.ts`. Every frame the writer builds
  * is assignable to this type; the client parses with this schema.
  */
-export const openChatSubscribeWindowedServerFrameSchema = lazySchema(() =>
+const chatSubscribeServerFrameSchemaV133 = lazySchema(() =>
   z.discriminatedUnion("kind", [
     chatSubscribeWindowedSnapshotServerFrameSchemaOpenHarness,
     chatSubscribeSkeletonChunkServerFrameSchemaV119,
@@ -6841,6 +6911,30 @@ export const openChatSubscribeWindowedServerFrameSchema = lazySchema(() =>
     chatSubscribeHeldUpdatesChangedServerFrameSchema,
     chatSubscribeThinkingTokensServerFrameSchema,
     ...chatSubscribeSharedServerFrameSchemasOpenHarness,
+  ]),
+);
+/**
+ * The live windowed union as a READER decodes it (`chat.subscribe@1.34`): the
+ * union above with the snapshot, the `range` response, the three
+ * sender-bearing common frames and the `blockDelta` bound to their
+ * open-harness copies. The frames a peer DRIVES through - `turnStateChanged`
+ * (the active turn, the fallback tuples) and the snapshot's record head - keep
+ * the closed enum; see `open-harness-wire.ts`. Every frame the writer builds
+ * is assignable to this type; the client parses with this schema.
+ */
+export const openChatSubscribeWindowedServerFrameSchema = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    chatSubscribeWindowedSnapshotServerFrameSchemaOpenHarnessV134,
+    chatSubscribeSkeletonChunkServerFrameSchemaV119,
+    chatSubscribeAccumulatedChangesServerFrameSchema,
+    chatSubscribeIndexChangedServerFrameSchema,
+    chatSubscribeRangeServerFrameSchemaOpenHarness,
+    chatSubscribeTurnStateChangedServerFrameSchemaV134,
+    chatSubscribeManagedCommandsChangedServerFrameSchema,
+    chatSubscribePortForwardsChangedServerFrameSchema,
+    chatSubscribeHeldUpdatesChangedServerFrameSchema,
+    chatSubscribeThinkingTokensServerFrameSchema,
+    ...chatSubscribeSharedServerFrameSchemasOpenHarnessV134,
   ]),
 );
 export type OpenChatSubscribeWindowedServerFrame = z.infer<
@@ -7879,6 +7973,20 @@ export const chatSubscribeV132 = defineStreamRpcContract({
 export const chatSubscribeV133 = defineStreamRpcContract({
   method: "chat.subscribe",
   schemaVersion: { major: 1, minor: 33 } as const,
+  openRequestSchema: chatSubscribeOpenRequestSchemaV119,
+  serverFrameSchema: chatSubscribeServerFrameSchemaV133,
+  clientFrameSchema: chatSubscribeWindowedClientFrameSchema,
+});
+
+/**
+ * `1.34` carries queue admission and licenses `activeTurn.status: "starting"`
+ * during activation, before the provider turn exists. Hosts emit the bit and
+ * the activation projection only to subscribers negotiated on this minor.
+ * Absent `sendWouldQueue` means an older host; clients approximate locally.
+ */
+export const chatSubscribeV134 = defineStreamRpcContract({
+  method: "chat.subscribe",
+  schemaVersion: { major: 1, minor: 34 } as const,
   openRequestSchema: chatSubscribeOpenRequestSchemaV119,
   serverFrameSchema: openChatSubscribeWindowedServerFrameSchema,
   clientFrameSchema: chatSubscribeWindowedClientFrameSchema,

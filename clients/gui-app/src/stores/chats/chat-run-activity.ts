@@ -1,5 +1,6 @@
 import type { ChatRunStatus } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { ChatSessionState } from "@/stores/chats/chat-session-store";
+import { hasDrainingQueueItems } from "@/stores/chats/chat-effective-queue";
 
 // Pure readings of a chat's run state: whether a turn is genuinely in progress,
 // and whether what keeps the chat non-idle is the agent or only background
@@ -31,34 +32,32 @@ export function composerTurnStatus(
 }
 
 /**
- * Narrows {@link composerTurnStatus} to the question every turn-scoped
- * consumer actually needs - the composer's Stop/Send toggle, restore/revert
- * gating, and the per-row "Working…"/"Stopping…" indicator: is there a turn
- * genuinely active or activating right now? `runStatus` also reads "running"
- * while a queued item is pending or visible background work outlives the
- * turn (Bash `run_in_background` / a subagent / Monitor) - neither of which
- * corresponds to an active turn. Background work already has its own
- * "stop all background" control, so rather than show a Stop button that
- * would fail, block a restore that isn't actually unsafe, or duplicate the
- * row indicator after the real turn already settled, this falls back to
- * `null` - exactly as if the chat were idle.
- *
- * Two layers, in priority order:
- *  1. `state.turnInProgress`, when present - the host's own
- *     `isTurnInProgress()`, sent verbatim. Exact, no known gaps.
- *  2. A local approximation, for an older host that predates the field:
- *     `activeTurn !== null` covers a genuinely running (or stopping) turn
- *     directly. When it's null but `runStatus` still reads "running",
- *     process of elimination against the queue/background signals is the
- *     only way to tell a pre-turn "activating" window (active) apart from a
- *     queue-only or background-only one (not active) - both look identical
- *     on the wire otherwise. Known gap: if a turn is still activating AND
- *     another item is queued behind it, the queue signal is also "runnable",
- *     so this can't distinguish that from a queue-only state and will
- *     (narrowly, incorrectly) fall back to `null` during that brief pre-turn
- *     window. Layer 1 closes this gap whenever the host supports it.
+ * Local transcript sends show Stop from Enter. Runnable queue items keep it
+ * across a drain boundary; paused queues and background work do not. Once
+ * those local obligations are absent, prefer the host's exact turn bit and
+ * retain the older-host approximation for an activation without a turn id.
  */
 export function resolvedTurnStatus(
+  state: Pick<
+    ChatSessionState,
+    | "activeTurn"
+    | "queue"
+    | "backgroundItems"
+    | "turnInProgress"
+    | "pendingTurn"
+    | "heldStop"
+    | "queueTurnContinuity"
+  >,
+  turnStatus: ComposerTurnStatus,
+): ComposerTurnStatus {
+  if (state.heldStop) return "stopping";
+  if (state.pendingTurn) return turnStatus ?? "running";
+  if (state.queueTurnContinuity) return turnStatus ?? "running";
+  return resolvedHostTurnStatus(state, turnStatus);
+}
+
+/** Host turn work, excluding a local send and the composer's drain latch. */
+export function resolvedHostTurnStatus(
   state: Pick<
     ChatSessionState,
     "activeTurn" | "queue" | "backgroundItems" | "turnInProgress"
@@ -66,14 +65,13 @@ export function resolvedTurnStatus(
   turnStatus: ComposerTurnStatus,
 ): ComposerTurnStatus {
   if (turnStatus === null) return null;
-  if (state.turnInProgress !== undefined) {
+  if (state.turnInProgress !== undefined)
     return state.turnInProgress ? turnStatus : null;
-  }
   if (state.activeTurn !== null) return turnStatus;
-  const isQueueRunnable =
+  const runnableQueue =
     state.queue.status !== "paused" && state.queue.items.length > 0;
-  const hasVisibleBackgroundWork = (state.backgroundItems?.length ?? 0) > 0;
-  return isQueueRunnable || hasVisibleBackgroundWork ? null : turnStatus;
+  const background = (state.backgroundItems?.length ?? 0) > 0;
+  return runnableQueue || background ? null : turnStatus;
 }
 
 /**
@@ -84,11 +82,11 @@ export function resolvedTurnStatus(
  * spinner for both left users unable to see whether the agent was really
  * running.
  *
- * `"turn"` wins whenever a genuine turn is active or activating (the host's
- * `turnInProgress`, via {@link resolvedTurnStatus}) — background work running
- * alongside a turn is subsumed by it. A runnable queue also reads `"turn"`:
- * the next prompt is imminent, and the momentary turn-boundary gaps while a
- * queue drains must not flicker the indicator through the background style.
+ * `"turn"` wins for the host's active turn and the local obligations read by
+ * {@link resolvedTurnStatus}. A draining prompt keeps that tier until its
+ * saved row arrives, even if the host's run frame has not caught up. A
+ * runnable queue on a non-idle host also reads `"turn"`: the next prompt is
+ * imminent, so the boundary must not flicker through the background style.
  *
  * Native agent work — a spawned subagent or a workflow fleet still running
  * after the turn ended — also reads `"turn"`: it IS the agent working, just
@@ -98,12 +96,8 @@ export function resolvedTurnStatus(
  * {@link resolvedTurnStatus}, which keeps reporting no active turn for the
  * same state: a detached subagent must not surface a Stop-turn affordance.
  *
- * A running shell counts as `"background"` too, and it is the one source that
- * `runStatus` cannot speak for at all: a shell outlives the turn that started
- * it, so a chat whose only live thing is a shell reads `runStatus: "idle"` and
- * would otherwise present as fully idle while a process of its own is still
- * printing. Only `"running"` shells count - a shell that exited, was stopped,
- * or was interrupted by a host restart is a durable record, not activity.
+ * Running shells also count as `"background"`. Only running records count;
+ * exited, stopped or interrupted shells are history rather than activity.
  */
 export type ChatActivityIndicator = "turn" | "background" | null;
 
@@ -116,15 +110,27 @@ export function chatActivityIndicator(
     | "backgroundItems"
     | "turnInProgress"
     | "managedCommands"
+    | "pendingTurn"
+    | "heldStop"
+    | "queueTurnContinuity"
+    | "drainingQueueItems"
+    | "fatalClose"
   >,
 ): ChatActivityIndicator {
   const turnStatus = composerTurnStatus(state.runStatus);
+  // Local custody is newer than the host frame. A draining prompt also keeps
+  // the session warm until its transcript row takes over that custody. A fatal
+  // stream retains the data but cannot make progress until an explicit retry.
+  if (
+    resolvedTurnStatus(state, turnStatus) !== null ||
+    (hasDrainingQueueItems(state) && state.fatalClose === null)
+  )
+    return "turn";
   if (turnStatus === null) {
     return hasRunningManagedCommand(state.managedCommands)
       ? "background"
       : null;
   }
-  if (resolvedTurnStatus(state, turnStatus) !== null) return "turn";
   const isQueueRunnable =
     state.queue.status !== "paused" && state.queue.items.length > 0;
   if (isQueueRunnable) return "turn";

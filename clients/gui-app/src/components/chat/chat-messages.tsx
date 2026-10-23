@@ -4237,7 +4237,9 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     lastAssistantMessage !== undefined &&
     lastAssistantMessage.completedAt === null;
   const contextWorkingVerb = use(WorkingVerbContext);
-  const workingVerb = contextWorkingVerb ?? pickWorkingVerb(taskId);
+  const workingVerb =
+    contextWorkingVerb ??
+    pickWorkingVerb(lastAssistantMessage?.workingVerbSeed ?? taskId);
   // Behavior contract: pill visibility mirrors the latch's single live
   // follow authority: immediate hide at the edge and immediate show on the
   // first confirmed reader departure.

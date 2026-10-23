@@ -26,6 +26,7 @@ import {
   chatSubscribeV131,
   chatSubscribeV132,
   chatSubscribeV133,
+  chatSubscribeV134,
   chatSubscribeWindowedServerFrameSchema,
   openChatSubscribeWindowedServerFrameSchema,
 } from "@traycer/protocol/host/agent/gui/subscribe";
@@ -58,9 +59,9 @@ function approvalRequestedFrame(
 }
 
 describe("chat.subscribe registry: 1.16 installed below the 1.17 through 1.22 lines, 1.15 still installed", () => {
-  it("binds 1.16 and 1.15 to their own contracts - the head has since moved to 1.33", () => {
+  it("binds 1.16 and 1.15 to their own contracts - the head has since moved to 1.34", () => {
     const line = hostStreamRpcRegistry["chat.subscribe"][1];
-    expect(line.latestMinor).toBe(33);
+    expect(line.latestMinor).toBe(34);
     expect(line.versions[23].contract).toBe(chatSubscribeV123);
     expect(line.versions[22].contract).toBe(chatSubscribeV122);
     expect(line.versions[21].contract).toBe(chatSubscribeV121);
@@ -72,7 +73,7 @@ describe("chat.subscribe registry: 1.16 installed below the 1.17 through 1.22 li
     expect(line.versions[15].contract).toBe(chatSubscribeV115);
   });
 
-  it("1.33's server frame is the open windowed schema; older lines are frozen", () => {
+  it("1.34's server frame is the open windowed schema; older lines are frozen", () => {
     expect(chatSubscribeV124.serverFrameSchema).not.toBe(
       openChatSubscribeWindowedServerFrameSchema,
     );
@@ -108,7 +109,12 @@ describe("chat.subscribe registry: 1.16 installed below the 1.17 through 1.22 li
     expect(chatSubscribeV132.serverFrameSchema).not.toBe(
       openChatSubscribeWindowedServerFrameSchema,
     );
-    expect(chatSubscribeV133.serverFrameSchema).toBe(
+    // 1.33 froze when 1.34 added `sendWouldQueue` above it; 1.34 binds the
+    // live windowed schema.
+    expect(chatSubscribeV133.serverFrameSchema).not.toBe(
+      openChatSubscribeWindowedServerFrameSchema,
+    );
+    expect(chatSubscribeV134.serverFrameSchema).toBe(
       openChatSubscribeWindowedServerFrameSchema,
     );
     expect(chatSubscribeV123.serverFrameSchema).not.toBe(
