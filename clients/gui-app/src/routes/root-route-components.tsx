@@ -8,6 +8,7 @@ import { HostLifecycleAnalyticsBridge } from "@/components/layout/bridges/host-l
 import { HostQuitDecisionBridge } from "@/components/layout/bridges/host-quit-decision-bridge";
 import { DesktopDialogHost } from "@/components/layout/dialogs/desktop-dialog-host";
 import { TeamWakeConfirmDialogHost } from "@/components/hosts/team-wake-confirm-dialog";
+import { SandboxDetailsDrawerHost } from "@/components/hosts/sandbox-details-drawer";
 import { HostReadyGate } from "@/components/layout/host-ready-gate";
 import { GATE_BYPASS_PATH_PREFIX } from "@/lib/host/gate-bypass-path";
 import { HostScopeReady } from "@/components/layout/host-readiness-controller";
@@ -108,6 +109,7 @@ export function RootComponent() {
       {/* The question in front of a team sandbox's wake, from any wake path:
           a picker that closes on pick has no surface left to ask it from. */}
       <TeamWakeConfirmDialogHost />
+      <SandboxDetailsDrawerHost />
       {/* The host quit modal: on every route, signed in or not, so a quit is
           always answered in-window rather than by main's native prompt. */}
       <HostQuitDecisionBridge />
