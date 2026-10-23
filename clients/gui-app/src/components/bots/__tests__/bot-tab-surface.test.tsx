@@ -202,6 +202,7 @@ const BOT: BotRecord = {
   hostEpoch: 1,
   createdAt: 1_000,
   archivedAt: null,
+  directive: null,
 };
 
 function snapshot(): BotSubscriptionSnapshot {

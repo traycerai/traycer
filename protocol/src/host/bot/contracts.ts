@@ -21,6 +21,7 @@ import {
   botSubscribeServerFrameSchema,
   botUpdateResponseSchema,
   botUpdateRunSettingsRequestSchema,
+  botUpdateDirectiveRequestSchema,
   botUpdateTitleRequestSchema,
 } from "./schemas";
 import {
@@ -77,6 +78,13 @@ export const botUpdateRunSettingsV10 = defineRpcContract({
   method: "bot.updateRunSettings",
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: botUpdateRunSettingsRequestSchema,
+  responseSchema: botUpdateResponseSchema,
+});
+
+export const botUpdateDirectiveV10 = defineRpcContract({
+  method: "bot.updateDirective",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: botUpdateDirectiveRequestSchema,
   responseSchema: botUpdateResponseSchema,
 });
 

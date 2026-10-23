@@ -5,6 +5,7 @@ import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 import { HarnessModelPicker } from "@/components/home/pickers/harness-model-picker";
 import { chatMaxModeContextForToolbar } from "@/components/home/data/model-max-mode";
 import { useComposerToolbarStore } from "@/components/home/hooks/use-composer-toolbar-store";
@@ -26,6 +27,8 @@ import {
 import { finalRefusalOf } from "@traycer-clients/shared/host-transport/retrying-messenger";
 
 const BOT_TITLE_MAX = 500;
+/** `bot.create`'s directive bound (`BOT_DIRECTIVE_MAX_LENGTH`). */
+const BOT_DIRECTIVE_MAX = 8_000;
 
 /**
  * The form's line for a failed create. Every create carries one request key
@@ -99,8 +102,8 @@ function createFailureLine(
 
 /**
  * Creates a bot INTO one environment (Tracy Bots). The environment is the
- * card's and is sent explicitly; what the reader chooses here is the title
- * and the model. Never the machine: the app picks the host the bot starts on
+ * card's and is sent explicitly; what the reader chooses here is the title,
+ * the model and, optionally, the bot's directive. Never the machine: the app picks the host the bot starts on
  * (`chooseBotCreateHost`, which documents the order), and the form names no
  * host - when none qualifies it says the bot needs a machine that runs bots,
  * and where to set one up.
@@ -125,6 +128,7 @@ export function CreateBotForm(props: {
     onDone,
   } = props;
   const [title, setTitle] = useState("");
+  const [directive, setDirective] = useState("");
   const localHostId = useReactiveLocalHostId();
   const effectiveHostId = useEffectiveHostId();
   const creatingHostIds = useHostsAdvertisingMethod(
@@ -177,12 +181,15 @@ export function CreateBotForm(props: {
   const openBotTab = useBotTabsStore((s) => s.openBotTab);
   const navigate = useNavigate();
   const titleId = useId();
+  const directiveId = useId();
 
   const trimmedTitle = title.trim();
+  const trimmedDirective = directive.trim();
   const canSubmit =
     hostId !== null &&
     trimmedTitle.length > 0 &&
     trimmedTitle.length <= BOT_TITLE_MAX &&
+    trimmedDirective.length <= BOT_DIRECTIVE_MAX &&
     modelSlug.length > 0 &&
     !create.isPending;
 
@@ -209,6 +216,7 @@ export function CreateBotForm(props: {
         effort: toolbar.reasoning.length === 0 ? null : toolbar.reasoning,
         profile: toolbar.selection.profileId,
         requestKey,
+        directive: trimmedDirective.length === 0 ? null : trimmedDirective,
       })
       .then(
         (response) => {
@@ -255,6 +263,20 @@ export function CreateBotForm(props: {
           disabled={create.isPending}
           data-testid="create-bot-title"
           onChange={(event) => setTitle(event.target.value)}
+        />
+      </div>
+      <div className="flex flex-col gap-1">
+        <Label htmlFor={directiveId}>Directive</Label>
+        <Textarea
+          id={directiveId}
+          value={directive}
+          size="sm"
+          rows={3}
+          maxLength={BOT_DIRECTIVE_MAX}
+          placeholder="What this bot owns and how it should work (optional)"
+          disabled={create.isPending}
+          data-testid="create-bot-directive"
+          onChange={(event) => setDirective(event.target.value)}
         />
       </div>
       {choice.kind === "chosen" ? null : (
