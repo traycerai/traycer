@@ -449,8 +449,15 @@ export function hoverTodayCost(mc: number): string {
   return mc < 5 ? "so far" : `${formatSandboxDollars(mc)} today`;
 }
 
-export function hoverSandboxIdentity(creator: string, payer: string): string {
-  return `Sandbox · started by ${creator} · paid by ${payer}`;
+export function hoverSandboxIdentity(args: {
+  readonly shape: string;
+  readonly creator: string | null;
+  readonly payer: string | null;
+}): string {
+  const parts = ["Sandbox", args.shape];
+  if (args.creator !== null) parts.push(`started by ${args.creator}`);
+  if (args.payer !== null) parts.push(`paid by ${args.payer}`);
+  return parts.join(" · ");
 }
 
 export function hoverAgentIdentity(agent: string, payer: string): string {
