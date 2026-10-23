@@ -2076,6 +2076,13 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
+  // Copies that document aside, then drops one provider's unreadable row.
+  // Persisted and not idempotent, so it is queued, never merged.
+  "providers.settingsFile.resetProvider": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
   // Setting an environment override changes persisted provider configuration.
   "providers.setEnvOverride": {
     mode: "fifo",
