@@ -240,7 +240,8 @@ const REQUIRED_ARGS: Readonly<Record<string, readonly string[]>> = {
     "11111111-1111-4111-8111-111111111111",
   ],
   "worktree delete": ["--path", "/tmp/some-worktree"],
-  "bot send": ["Tracy", "hi"],
+  "bot post": ["Tracy", "hi"],
+  "bot reply": ["Tracy", "thread-1", "hi"],
   "profile add": ["claude"],
   "profile login": ["claude", "ambient"],
   "profile rename": ["claude", "profile-1", "Work"],
@@ -280,6 +281,7 @@ const UNGATED_READS: ReadonlyArray<{
   { path: ["agent", "role", "list"], args: [] },
   { path: ["worktree", "list"], args: [] },
   { path: ["bot", "list"], args: [] },
+  { path: ["bot", "threads"], args: ["Tracy"] },
   { path: ["bot", "checkins"], args: ["Tracy"] },
 ];
 
@@ -317,6 +319,25 @@ describe("readonly-surface gate: task create", () => {
       expect(thrown).toMatchObject({
         code: CLI_ERROR_CODES.FORBIDDEN,
         message: expect.stringContaining("cannot start Tasks"),
+      });
+      expect(mocks.resolveHostAuthMock).not.toHaveBeenCalled();
+    });
+  });
+});
+
+// Driven from argv rather than from the table, so dropping either entry
+// from `READONLY_REFUSED_COMMANDS` fails here: both message a bot.
+describe("readonly-surface gate: posting to and replying in a bot", () => {
+  it.each([
+    ["bot", "post", "Tracy", "hi"],
+    ["bot", "reply", "Tracy", "thread-1", "hi"],
+  ])("refuses '%s %s' before the body runs", async (...argv) => {
+    await withEnvSurface("readonly", async () => {
+      const program = buildProgramWithAgentRoles(true);
+      const thrown = await parseAndCapture(program, argv);
+      expect(thrown).toMatchObject({
+        code: CLI_ERROR_CODES.FORBIDDEN,
+        message: expect.stringContaining("cannot message them"),
       });
       expect(mocks.resolveHostAuthMock).not.toHaveBeenCalled();
     });

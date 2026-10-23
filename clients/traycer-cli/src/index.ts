@@ -59,7 +59,8 @@ import { buildAgentSelectionGuideCommand } from "./commands/agent-selection-guid
 import { buildAgentSendCommand } from "./commands/agent-send";
 import { buildBotCheckinsCommand } from "./commands/bot-checkins";
 import { buildBotListCommand } from "./commands/bot-list";
-import { buildBotSendCommand } from "./commands/bot-send";
+import { buildBotThreadsCommand } from "./commands/bot-threads";
+import { buildBotPostCommand, buildBotReplyCommand } from "./commands/bot-post";
 import { buildAgentTitleFromHookCommand } from "./commands/agent-title-from-hook";
 import { buildAgentTurnEndedFromHookCommand } from "./commands/agent-turn-ended-from-hook";
 import { buildAgentSessionObservedFromHookCommand } from "./commands/agent-session-observed-from-hook";
@@ -3822,7 +3823,9 @@ function registerAgentCommands(
 function registerBotCommands(program: Command): void {
   const bot = program
     .command("bot")
-    .description("List your bots, message them, and see what they follow");
+    .description(
+      "List your bots, post to them, follow their threads, and see what they follow",
+    );
   const botArgument = "Bot id, or its title";
 
   withRunner(
@@ -3834,32 +3837,56 @@ function registerBotCommands(program: Command): void {
     () => buildBotListCommand(),
   );
 
-  // Sending is hidden and refused on the readonly surface (see
-  // `READONLY_REFUSED_COMMANDS`); the two reads stay offered.
+  // Posting and replying are hidden and refused on the readonly surface (see
+  // `READONLY_REFUSED_COMMANDS`); the reads stay offered.
+  const hideSends = resolveAgentCliSurface(readonlyEnv()) === "readonly";
+  const waitOption =
+    "Wait up to this long for the bot to answer, e.g. 30s, 5m or 2h. Works only on the host the bot runs on.";
   withRunner(
     bot
-      .command("send", {
-        hidden: resolveAgentCliSurface(readonlyEnv()) === "readonly",
-      })
+      .command("post", { hidden: hideSends })
       .description(
-        "Message a bot and print the request it opens. The bot answers in a turn of its own, which counts toward your usage like any other agent turn.",
+        "Post to a bot and print the request it opens. The bot answers in a new thread, in turns that count toward your usage like any other agent's.",
       )
       .argument("<bot>", botArgument)
-      .argument("<text>", "The message")
-      .option(
-        "--conversation <id>",
-        "Conversation to write to (defaults to the bot's first conversation, the one the app shows)",
-      )
-      .option(
-        "--wait <duration>",
-        "Wait up to this long for the bot to answer, e.g. 30s, 5m or 2h. Works only on the host the bot runs on.",
-      ),
+      .argument("<text>", "The post")
+      .option("--wait <duration>", waitOption),
     (opts, args) =>
-      buildBotSendCommand({
+      buildBotPostCommand({
         bot: expectRequiredPositional(args[0], "bot"),
         text: expectRequiredPositional(args[1], "text"),
-        conversationId:
-          typeof opts.conversation === "string" ? opts.conversation : null,
+        wait: typeof opts.wait === "string" ? opts.wait : null,
+      }),
+  );
+
+  withRunner(
+    bot
+      .command("threads")
+      .description(
+        "List a bot's threads with the post each answers, its replies, open requests and cost. Works only on the host the bot runs on.",
+      )
+      .argument("<bot>", botArgument),
+    (_opts, args) =>
+      buildBotThreadsCommand({
+        bot: expectRequiredPositional(args[0], "bot"),
+      }),
+  );
+
+  withRunner(
+    bot
+      .command("reply", { hidden: hideSends })
+      .description(
+        "Write in one of a bot's threads and print the request it opens. The bot answers there, in turns that count toward your usage like any other agent's.",
+      )
+      .argument("<bot>", botArgument)
+      .argument("<thread>", "Thread id, from `traycer bot threads`")
+      .argument("<text>", "The message")
+      .option("--wait <duration>", waitOption),
+    (opts, args) =>
+      buildBotReplyCommand({
+        bot: expectRequiredPositional(args[0], "bot"),
+        threadId: expectRequiredPositional(args[1], "thread"),
+        text: expectRequiredPositional(args[2], "text"),
         wait: typeof opts.wait === "string" ? opts.wait : null,
       }),
   );

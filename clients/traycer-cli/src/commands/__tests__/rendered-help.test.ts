@@ -1140,9 +1140,8 @@ const EXPECTED_PUBLIC_SURFACE: readonly ExpectedSurfaceEntry[] = [
     args: [],
   },
   {
-    path: "bot send",
+    path: "bot post",
     options: [
-      { flags: "--conversation <id>", mandatory: false },
       { flags: "--json", mandatory: false },
       { flags: "--no-progress", mandatory: false },
       { flags: "--quiet", mandatory: false },
@@ -1150,6 +1149,29 @@ const EXPECTED_PUBLIC_SURFACE: readonly ExpectedSurfaceEntry[] = [
     ],
     args: [
       { name: "bot", required: true, variadic: false },
+      { name: "text", required: true, variadic: false },
+    ],
+  },
+  {
+    path: "bot threads",
+    options: [
+      { flags: "--json", mandatory: false },
+      { flags: "--no-progress", mandatory: false },
+      { flags: "--quiet", mandatory: false },
+    ],
+    args: [{ name: "bot", required: true, variadic: false }],
+  },
+  {
+    path: "bot reply",
+    options: [
+      { flags: "--json", mandatory: false },
+      { flags: "--no-progress", mandatory: false },
+      { flags: "--quiet", mandatory: false },
+      { flags: "--wait <duration>", mandatory: false },
+    ],
+    args: [
+      { name: "bot", required: true, variadic: false },
+      { name: "thread", required: true, variadic: false },
       { name: "text", required: true, variadic: false },
     ],
   },

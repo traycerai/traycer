@@ -91,8 +91,10 @@ import { FallbackCrossLinkRow } from "./fallback/fallback-cross-link-row";
 import { ProviderUsageLimitsSection } from "./provider-usage-limits-section";
 import {
   PROVIDER_SETTINGS_UNUSABLE_COPY,
+  ProviderRowResetAction,
   ProviderSettingsResetAction,
 } from "./provider-settings-reset-action";
+import { providerRowUnreadableCopy } from "./provider-row-reset-copy";
 import {
   defaultSelectedProfileId,
   profileCommitId,
@@ -647,21 +649,8 @@ function ProvidersPanelBody({
   readonly isSelectedHostLocal: boolean;
 }): ReactNode {
   const view = useContext(ProvidersPanelViewContext);
-  // The reset is offered only by a host that has it, and only where that host
-  // says the WHOLE settings document is unusable: a read fault fails the list
-  // (below), while a document that does not parse is answered normally - every
-  // provider at its default - so only the status read can tell that apart from
-  // a user who switched them off.
-  const supportsReset = useHostSupportsMethod(
-    hostId,
-    "providers.settingsFile.reset",
-  );
-  const supportsStatus = useHostSupportsMethod(
-    hostId,
-    "providers.settingsFile.status",
-  );
-  const canReset = supportsReset && supportsStatus;
-  const settingsFileStatus = useProvidersSettingsFileStatus(canReset);
+  const { canReset, wholeFileUnreadable, unreadableProviderIds } =
+    useProviderSettingsFileResets(hostId);
   if (query.isPending) {
     return (
       <div className="flex items-center gap-2 px-6 py-8 text-ui-sm text-muted-foreground">
@@ -793,7 +782,15 @@ function ProvidersPanelBody({
       isSelectedHostLocal={isSelectedHostLocal}
     />
   );
-  if (!canReset || settingsFileStatus.data?.unreadable !== true) return rail;
+  if (!canReset || !wholeFileUnreadable) {
+    return (
+      <UnreadableProviderRows
+        providers={query.data.providers}
+        unreadableProviderIds={unreadableProviderIds}
+        rail={rail}
+      />
+    );
+  }
   return (
     <div className="flex flex-col gap-3 md:h-full md:min-h-0">
       <div
@@ -805,6 +802,100 @@ function ProvidersPanelBody({
         </span>
         <ProviderSettingsResetAction />
       </div>
+      <div className="flex-1 md:min-h-0">{rail}</div>
+    </div>
+  );
+}
+
+const NO_UNREADABLE_PROVIDER_IDS: readonly string[] = [];
+
+/**
+ * Which of the two settings-file resets the scoped host offers, and the status
+ * read both hang off.
+ *
+ * The whole-document reset is offered only by a host that has it, and only
+ * where that host says the WHOLE settings document is unusable: a read fault
+ * fails the list, while a document that does not parse is answered normally -
+ * every provider at its default - so only the status read can tell that apart
+ * from a user who switched them off.
+ *
+ * The per-provider reset of one unreadable row rides on the same read (1.1
+ * names the rows; an older host's answer is upgraded to an empty list), so the
+ * read runs when either reset is available, and the rows it names count only
+ * where `resetProvider` does.
+ */
+function useProviderSettingsFileResets(hostId: string | null): {
+  readonly canReset: boolean;
+  /** The status read says the WHOLE document is unusable. */
+  readonly wholeFileUnreadable: boolean;
+  readonly unreadableProviderIds: readonly string[];
+} {
+  const supportsReset = useHostSupportsMethod(
+    hostId,
+    "providers.settingsFile.reset",
+  );
+  const supportsStatus = useHostSupportsMethod(
+    hostId,
+    "providers.settingsFile.status",
+  );
+  const supportsRowReset = useHostSupportsMethod(
+    hostId,
+    "providers.settingsFile.resetProvider",
+  );
+  const canReset = supportsReset && supportsStatus;
+  const canResetRow = supportsRowReset && supportsStatus;
+  const settingsFileStatus = useProvidersSettingsFileStatus(
+    canReset || canResetRow,
+  );
+  const listed = settingsFileStatus.data?.unreadableProviderIds;
+  return {
+    canReset,
+    wholeFileUnreadable: settingsFileStatus.data?.unreadable === true,
+    unreadableProviderIds:
+      canResetRow && listed !== undefined ? listed : NO_UNREADABLE_PROVIDER_IDS,
+  };
+}
+
+/**
+ * One warning banner per provider whose own row the host cannot read, each with
+ * that provider's reset, above the rail. Only providers this list names: an id
+ * the host reports that this build has no provider for has no row here to
+ * reset either.
+ */
+function UnreadableProviderRows({
+  providers,
+  unreadableProviderIds,
+  rail,
+}: {
+  readonly providers: readonly ProviderCliState[];
+  readonly unreadableProviderIds: readonly string[];
+  readonly rail: ReactNode;
+}): ReactNode {
+  const unreadableIds = new Set(unreadableProviderIds);
+  const unreadableRows = providers.filter((state) =>
+    unreadableIds.has(state.providerId),
+  );
+  if (unreadableRows.length === 0) return rail;
+  return (
+    <div className="flex flex-col gap-3 md:h-full md:min-h-0">
+      {unreadableRows.map((state) => {
+        const label = PROVIDER_DISPLAY_NAMES[state.providerId];
+        return (
+          <div
+            key={state.providerId}
+            role="alert"
+            className="mx-6 mt-4 flex flex-wrap items-center gap-2 rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-ui-sm text-warning-foreground"
+          >
+            <span className="min-w-0 flex-1">
+              {providerRowUnreadableCopy(label)}
+            </span>
+            <ProviderRowResetAction
+              providerId={state.providerId}
+              providerLabel={label}
+            />
+          </div>
+        );
+      })}
       <div className="flex-1 md:min-h-0">{rail}</div>
     </div>
   );

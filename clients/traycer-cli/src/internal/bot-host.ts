@@ -116,6 +116,28 @@ export function findBot(bots: readonly BotRecord[], ref: string): BotRecord {
   });
 }
 
+/**
+ * Refuses unless `bot` runs on `hostId`, for what only the bot's own host can
+ * do: list its threads, or follow one. `elsewhere` finishes the sentence for
+ * a bot on another of the person's hosts.
+ */
+export function refuseUnlessBoundHere(
+  bot: BotRecord,
+  hostId: string,
+  elsewhere: string,
+): void {
+  if (bot.boundHostId === hostId) return;
+  throw cliError({
+    code: CLI_ERROR_CODES.INVALID_ARGUMENT,
+    message:
+      bot.boundHostId === null
+        ? `traycer: no host runs ${bot.title}; move it to a host first.`
+        : `traycer: ${bot.title} runs on another of your hosts; ${elsewhere}`,
+    details: null,
+    exitCode: 1,
+  });
+}
+
 /** What the bot commands use of the stream client; a test passes a fake. */
 export type BotStreamClient = Pick<
   WsStreamClient<HostStreamRpcRegistry>,

@@ -46,6 +46,9 @@ vi.mock("../../cli/traycer-cli", () => ({
 vi.mock("../../cli/cli-discovery", () => ({
   resolveBundledCliPath: vi.fn(async () => null),
   readCliManifest: vi.fn(async () => null),
+  // No version metadata, as in a local build: no supervisor predates it.
+  BUNDLED_CLI_LOCAL_VERSION: "0.0.0-local",
+  readBundledCliVersion: vi.fn(async () => "0.0.0-local"),
 }));
 
 vi.mock("../../app/host-login-item", () => ({
@@ -148,6 +151,7 @@ const NO_SUPERVISOR_RUN: HostControllerSupervisorRun = {
     state: "not-running",
     supervisorPid: null,
     admittedAs: null,
+    cliVersion: null,
   }),
 };
 

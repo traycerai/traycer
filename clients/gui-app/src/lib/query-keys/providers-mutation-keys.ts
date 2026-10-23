@@ -21,6 +21,8 @@ export const providersMutationKeys = {
   setAutoJudge: () => ["providers.setAutoJudge"] as const,
   setNativeSubagents: () => ["providers.setNativeSubagents"] as const,
   resetSettingsFile: () => ["providers.settingsFile.reset"] as const,
+  resetProviderSettings: () =>
+    ["providers.settingsFile.resetProvider"] as const,
   setEnvOverride: () => ["providers.setEnvOverride"] as const,
   deleteEnvOverride: () => ["providers.deleteEnvOverride"] as const,
   startLogin: () => ["providers.startLogin"] as const,

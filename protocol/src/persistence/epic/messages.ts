@@ -542,6 +542,25 @@ export const assistantTurnProfileSchema = lazySchema(() =>
 );
 export type AssistantTurnProfile = z.infer<typeof assistantTurnProfileSchema>;
 
+/** What a bot announces at its channel's top level (Tracy Bots, decision 41). */
+export const botAnnouncementKindSchema = lazySchema(() =>
+  z.enum(["proposal", "automation", "bot-created", "policy"]),
+);
+export type BotAnnouncementKind = z.infer<typeof botAnnouncementKindSchema>;
+
+/**
+ * A channel bot row's announcement: its kind, and the one thing it points
+ * at - an http(s) URL or an epic-relative path - or `null`. The host's
+ * writer bounds and checks `link`; a reader renders it as a link.
+ */
+export const botAnnouncementSchema = lazySchema(() =>
+  z.object({
+    kind: botAnnouncementKindSchema,
+    link: z.string().min(1).nullable(),
+  }),
+);
+export type BotAnnouncement = z.infer<typeof botAnnouncementSchema>;
+
 // Historical message fields; newer blocks are selected only by the live
 // extension below. Unchanged nested leaves follow the existing freeze pattern.
 export const assistantMessageSchemaV18 = lazySchema(() =>
@@ -642,6 +661,13 @@ export const assistantMessageSchema = lazySchema(() =>
      * this schema happens to extend.
      */
     turnProfile: assistantTurnProfileSchema.optional(),
+    /**
+     * The bot's announcement this row is (Tracy Bots, decision 41). Present
+     * only on a bot row at a bot channel's top level, where it is the only
+     * kind of bot row; absent on every other assistant row. Optional for the
+     * `turnProfile` reason above, and live line only for the same reason.
+     */
+    announcement: botAnnouncementSchema.optional(),
   }),
 );
 export type AssistantMessage = z.infer<typeof assistantMessageSchema>;
