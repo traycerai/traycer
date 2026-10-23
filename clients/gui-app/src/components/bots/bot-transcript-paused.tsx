@@ -19,7 +19,7 @@ export function BotTranscriptPaused(): ReactNode {
         <CloudOff className="size-4.5" aria-hidden="true" />
       </span>
       <p className="max-w-[48ch] text-ui-sm text-muted-foreground">
-        The conversation shows here once the bot can be reached.
+        This shows here once the bot can be reached.
       </p>
     </div>
   );

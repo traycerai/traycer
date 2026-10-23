@@ -7,7 +7,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { Bot } from "lucide-react";
+import { Hash } from "lucide-react";
 import type { BotOpenResponse } from "@traycer/protocol/host/bot/schemas";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Badge } from "@/components/ui/badge";
@@ -27,12 +27,14 @@ import {
   type BotSubscriptionSnapshot,
 } from "@/hooks/bots/use-bot-subscription";
 import { useBotListQuery } from "@/hooks/bots/use-bot-list-query";
+import type { BotRecord } from "@traycer/protocol/host/bot/schemas";
 import { useBotListChangedSubscriptionForHost } from "@/hooks/bots/use-bot-list-changed-subscription";
 import { useEnvironmentListQuery } from "@/hooks/bots/use-environment-list-query";
 import { useEnvironmentMembers } from "@/hooks/bots/use-environment-members-query";
 import { useBotOpenMutation } from "@/hooks/bots/use-bot-mutations";
 import { useBotTabsStore } from "@/stores/bots/bot-tabs-store";
-import { BotConversationView } from "@/components/bots/bot-conversation-view";
+import { BotChannelView } from "@/components/bots/bot-channel-view";
+import { BotChannelSidebar } from "@/components/bots/bot-channel-sidebar";
 import { BotUnderTheHoodPanel } from "@/components/bots/bot-under-the-hood-panel";
 import { BotSettingsPanel } from "@/components/bots/bot-settings-panel";
 import { MainBotBadge } from "@/components/bots/main-bot-badge";
@@ -45,13 +47,11 @@ import {
 } from "@/components/bots/bot-tab-open-state";
 import { cn } from "@/lib/utils";
 
-type BotTabView = "conversation" | "under-the-hood" | "settings";
+type BotTabView = "messages" | "under-the-hood" | "settings";
 
 function isBotTabView(value: string): value is BotTabView {
   return (
-    value === "conversation" ||
-    value === "under-the-hood" ||
-    value === "settings"
+    value === "messages" || value === "under-the-hood" || value === "settings"
   );
 }
 
@@ -64,7 +64,11 @@ function isBotTabView(value: string): value is BotTabView {
  * - this host serves it (bound here, or claimed here because its host was
  *   away): the full tab;
  * - nobody can serve it from here: the paused state, which names no machine;
- *   the conversation list and a queued send keep working through this host.
+ *   the channel list and a queued post keep working through this host.
+ *
+ * Laid out as Slack is (decision 41): the person's environments and their
+ * bots as channels down the side, and the bot's channel beside them, with
+ * its under-the-hood view and its settings as the channel's tabs.
  *
  * Bound to ONE host at a time through `TabHostProvider`; everything below
  * reads that host - the stream, the conversation list, every write. A tab
@@ -118,7 +122,7 @@ function BotTabBody(props: {
   const closeBotTab = useBotTabsStore((s) => s.closeBotTab);
   const setBotTabTitle = useBotTabsStore((s) => s.setBotTabTitle);
   const rebindBotTab = useBotTabsStore((s) => s.rebindBotTab);
-  const [view, setView] = useState<BotTabView>("conversation");
+  const [view, setView] = useState<BotTabView>("messages");
 
   // Open once per (bot, tab host) - this body remounts with the host - and
   // again on Retry or when the tab comes back into view. A mutation, not a
@@ -305,9 +309,18 @@ function BotTabContent(props: {
     );
     return match?.label ?? snapshot.bot.environmentId;
   }, [environments.data, snapshot.bot.environmentId]);
+  const botList = useBotListQuery(client, true);
+  const environmentBotIds = useMemo(
+    () =>
+      environmentBotIdsOf(
+        botList.data?.bots ?? NO_BOTS,
+        snapshot.bot.environmentId,
+      ),
+    [botList.data, snapshot.bot.environmentId],
+  );
   const paused = pausedReason !== null;
-  // Who wrote each conversation row. A host without the method shows the
-  // other members by id.
+  // Who wrote each channel row. A host without the method shows the other
+  // members by id.
   const membersSupported =
     useHostMethodSupport(hostId, "environment.members") === true;
   const resolveMember = useEnvironmentMembers(
@@ -315,93 +328,114 @@ function BotTabContent(props: {
     snapshot.bot.environmentId,
     membersSupported,
   );
+  // Held here, above the views, so the open thread and the session shown
+  // under the hood survive a switch between the channel's tabs.
+  const [openThreadPostId, setOpenThreadPostId] = useState<string | null>(null);
+  const [sessionChatId, setSessionChatId] = useState<string | null>(null);
+  const openUnderTheHood = useCallback(
+    (threadSessionChatId: string) => {
+      setSessionChatId(threadSessionChatId);
+      onViewChange("under-the-hood");
+    },
+    [onViewChange],
+  );
 
   return (
-    <div className="flex h-full min-h-0 flex-col" data-testid="bot-tab">
-      <BotTabHeader
-        snapshot={snapshot}
-        environmentLabel={environmentLabel}
-        isMain={isMain === true}
-      />
-      {streamError === null ? null : (
-        // A fatal close AFTER a snapshot: the last reading stays on screen,
-        // marked as such, and the retry sits on top of it.
-        <ErrorNotice
-          text={`Couldn't reach this bot: ${streamError}`}
-          onRetry={onRetry}
-          className="mx-4 mb-2"
-        />
-      )}
-      {reopenError === null ? null : (
-        <ErrorNotice
-          text={`Couldn't open this bot: ${reopenError}`}
-          onRetry={onReopen}
-          className="mx-4 mb-2"
-        />
-      )}
-      {pausedReason === null ? null : (
-        <PausedBanner
-          reason={pausedReason}
-          environmentLabel={environmentLabel}
-          onRetry={onReopen}
-        />
-      )}
-      <Tabs
-        value={view}
-        onValueChange={(next) => {
-          if (isBotTabView(next)) onViewChange(next);
-        }}
-        className="flex min-h-0 flex-1 flex-col"
-      >
-        <TabsList aria-label="Bot view" className="mx-4 self-start">
-          <TabsTrigger
-            value="conversation"
-            data-testid="bot-tab-view-conversation"
+    <div className="@container flex h-full min-h-0" data-testid="bot-tab">
+      <aside className="hidden min-h-0 w-1/5 max-w-64 shrink-0 flex-col border-r border-border/60 @3xl:flex">
+        <BotChannelSidebar activeBotId={botId} hostId={hostId} />
+      </aside>
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+        <Tabs
+          value={view}
+          onValueChange={(next) => {
+            if (isBotTabView(next)) onViewChange(next);
+          }}
+          className="flex min-h-0 flex-1 flex-col gap-0"
+        >
+          <BotChannelHeader
+            snapshot={snapshot}
+            environmentLabel={environmentLabel}
+            isMain={isMain === true}
+          />
+          {streamError === null ? null : (
+            // A fatal close AFTER a snapshot: the last reading stays on
+            // screen, marked as such, and the retry sits on top of it.
+            <ErrorNotice
+              text={`Couldn't reach this bot: ${streamError}`}
+              onRetry={onRetry}
+              className="mx-4 mt-2"
+            />
+          )}
+          {reopenError === null ? null : (
+            <ErrorNotice
+              text={`Couldn't open this bot: ${reopenError}`}
+              onRetry={onReopen}
+              className="mx-4 mt-2"
+            />
+          )}
+          {pausedReason === null ? null : (
+            <PausedBanner
+              reason={pausedReason}
+              environmentLabel={environmentLabel}
+              onRetry={onReopen}
+            />
+          )}
+          <TabsContent
+            value="messages"
+            className="flex min-h-0 flex-1 flex-col"
           >
-            Conversation
-          </TabsTrigger>
-          <TabsTrigger
+            <BotChannelView
+              botId={botId}
+              hostId={hostId}
+              botTitle={snapshot.bot.title}
+              paused={paused}
+              resolveMember={resolveMember}
+              openThreadPostId={openThreadPostId}
+              onOpenThread={setOpenThreadPostId}
+              onOpenUnderTheHood={openUnderTheHood}
+            />
+          </TabsContent>
+          <TabsContent
             value="under-the-hood"
-            data-testid="bot-tab-view-under-the-hood"
+            className="flex min-h-0 flex-1 flex-col"
           >
-            Under the hood
-          </TabsTrigger>
-          <TabsTrigger value="settings" data-testid="bot-tab-view-settings">
-            Settings
-          </TabsTrigger>
-        </TabsList>
-        <TabsContent
-          value="conversation"
-          className="flex min-h-0 flex-1 flex-col"
-        >
-          <BotConversationView
-            botId={botId}
-            hostId={hostId}
-            botTitle={snapshot.bot.title}
-            paused={paused}
-            resolveMember={resolveMember}
-          />
-        </TabsContent>
-        <TabsContent
-          value="under-the-hood"
-          className="flex min-h-0 flex-1 flex-col"
-        >
-          <BotUnderTheHoodPanel
-            botId={botId}
-            hostId={hostId}
-            botTitle={snapshot.bot.title}
-            trunkChatId={snapshot.bot.trunkChatId}
-            tasks={snapshot.tasks}
-            openRequestCount={snapshot.openRequestCount}
-            paused={paused}
-          />
-        </TabsContent>
-        <TabsContent value="settings" className="flex min-h-0 flex-1 flex-col">
-          <BotSettingsPanel bot={snapshot.bot} isMain={isMain} />
-        </TabsContent>
-      </Tabs>
+            <BotUnderTheHoodPanel
+              botId={botId}
+              hostId={hostId}
+              botTitle={snapshot.bot.title}
+              trunkChatId={snapshot.bot.trunkChatId}
+              tasks={snapshot.tasks}
+              openRequestCount={snapshot.openRequestCount}
+              paused={paused}
+              environmentLabel={environmentLabel}
+              environmentBotIds={environmentBotIds}
+              sessionChatId={sessionChatId}
+              onSelectSession={setSessionChatId}
+            />
+          </TabsContent>
+          <TabsContent
+            value="settings"
+            className="flex min-h-0 flex-1 flex-col"
+          >
+            <BotSettingsPanel bot={snapshot.bot} isMain={isMain} />
+          </TabsContent>
+        </Tabs>
+      </div>
     </div>
   );
+}
+
+const NO_BOTS: ReadonlyArray<BotRecord> = [];
+
+/** The bots of one environment, by id, as the list names them. */
+function environmentBotIdsOf(
+  bots: ReadonlyArray<BotRecord>,
+  environmentId: string,
+): ReadonlyArray<string> {
+  return bots
+    .filter((bot) => bot.environmentId === environmentId)
+    .map((bot) => bot.botId);
 }
 
 function ErrorNotice(props: {
@@ -426,7 +460,11 @@ function ErrorNotice(props: {
   );
 }
 
-function BotTabHeader(props: {
+/**
+ * Slack's channel header: `# name`, the environment it belongs to, the
+ * open-request hint, and the channel's tabs under it.
+ */
+function BotChannelHeader(props: {
   readonly snapshot: BotSubscriptionSnapshot;
   readonly environmentLabel: string;
   readonly isMain: boolean;
@@ -434,31 +472,45 @@ function BotTabHeader(props: {
   const { snapshot, environmentLabel, isMain } = props;
   const openRequests = snapshot.openRequestCount;
   return (
-    <header className="flex flex-wrap items-center gap-3 px-4 pt-4 pb-3">
-      <span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-foreground/6 text-muted-foreground">
-        <Bot className="size-4.5" aria-hidden="true" />
-      </span>
-      <div className="flex min-w-0 flex-1 flex-col">
-        <div className="flex min-w-0 items-center gap-2">
-          <h1
-            className="truncate text-ui-md font-semibold text-foreground"
-            data-testid="bot-tab-title"
-          >
-            {snapshot.bot.title}
-          </h1>
-          {isMain ? <MainBotBadge testId="bot-tab-main" /> : null}
-        </div>
-        <p className="truncate text-ui-xs text-muted-foreground">
+    <header className="flex shrink-0 flex-col gap-1 px-4 pt-3">
+      <div className="flex flex-wrap items-center gap-2">
+        <h1
+          className="flex min-w-0 items-center gap-1 text-ui-md font-bold text-foreground"
+          data-testid="bot-tab-title"
+        >
+          <Hash className="size-4 shrink-0" aria-hidden="true" />
+          <span className="truncate">{snapshot.bot.title}</span>
+        </h1>
+        {isMain ? <MainBotBadge testId="bot-tab-main" /> : null}
+        <span className="truncate text-ui-xs text-muted-foreground">
           {environmentLabel}
-        </p>
+        </span>
+        {openRequests !== null && openRequests > 0 ? (
+          <Badge
+            variant="warning"
+            size="sm"
+            data-testid="bot-tab-open-requests"
+          >
+            {openRequests === 1
+              ? "1 open request"
+              : `${openRequests} open requests`}
+          </Badge>
+        ) : null}
       </div>
-      {openRequests !== null && openRequests > 0 ? (
-        <Badge variant="warning" size="sm" data-testid="bot-tab-open-requests">
-          {openRequests === 1
-            ? "1 open request"
-            : `${openRequests} open requests`}
-        </Badge>
-      ) : null}
+      <TabsList variant="line" aria-label="Channel view">
+        <TabsTrigger value="messages" data-testid="bot-tab-view-messages">
+          Messages
+        </TabsTrigger>
+        <TabsTrigger
+          value="under-the-hood"
+          data-testid="bot-tab-view-under-the-hood"
+        >
+          Under the hood
+        </TabsTrigger>
+        <TabsTrigger value="settings" data-testid="bot-tab-view-settings">
+          Settings
+        </TabsTrigger>
+      </TabsList>
     </header>
   );
 }
@@ -478,7 +530,7 @@ function PausedBanner(props: {
       role="status"
       data-testid="bot-tab-paused"
       data-reason={props.reason}
-      className="mx-4 mb-2 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-info/30 bg-info/10 px-4 py-3 text-ui-sm text-info-foreground"
+      className="mx-4 mt-2 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-info/30 bg-info/10 px-4 py-3 text-ui-sm text-info-foreground"
     >
       <span>{copy.text}</span>
       {copy.retry ? (

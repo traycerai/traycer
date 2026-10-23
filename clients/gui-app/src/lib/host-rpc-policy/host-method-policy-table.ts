@@ -388,6 +388,16 @@ const LATEST_SCHEDULING = {
   joinResponseTimeoutMs: null,
 } as const;
 
+/**
+ * The fixed cadence a surface opts into with `poll: true` while it is on
+ * screen: `host.status`'s, shared so a second opt-in read does not mint a
+ * number of its own.
+ */
+const ON_SCREEN_FIXED_POLL = {
+  kind: "fixed",
+  intervalMs: 10 * SECOND_MS,
+} as const;
+
 export const HOST_METHOD_POLL_TABLE = {
   "organization.read": {
     mode: "latest",
@@ -429,7 +439,7 @@ export const HOST_METHOD_POLL_TABLE = {
   // two numbers are one mechanism and must move together.
   "host.status": {
     ...LATEST_SCHEDULING,
-    poll: { kind: "fixed", intervalMs: 10_000 },
+    poll: ON_SCREEN_FIXED_POLL,
   },
   // Restart commits host admission state before its deferred teardown.
   "host.restart": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
@@ -1639,15 +1649,19 @@ export const HOST_METHOD_POLL_TABLE = {
   "bot.open": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
   // The conversation list is a cloud list like `bot.list`. A send is a
   // mutation that mints a request: `fifo` keeps two identical sends from
-  // coalescing into one message.
+  // coalescing into one message - a post, or a reply whose `threadId` names
+  // the thread; the same text into two threads is two params, never joined.
   "bot.conversation.list": { ...LATEST_SCHEDULING, poll: null },
   "bot.conversation.send": {
     mode: "fifo",
     joinResponseTimeoutMs: null,
     poll: null,
   },
-  // A read of the bound host's thread records, like the conversation list.
-  "bot.thread.list": { ...LATEST_SCHEDULING, poll: null },
+  // A read of the bound host's thread records. Polled (`poll: true`) only by
+  // the channel on screen, so a thread's reply count and last reply move
+  // while the person watches; a `bot.subscribe` signal on thread replies,
+  // once the host sends one, replaces the poll.
+  "bot.thread.list": { ...LATEST_SCHEDULING, poll: ON_SCREEN_FIXED_POLL },
   // Unary byte channel, same posture as `epic.readChatAttachment` - but the
   // only one of the drafts methods whose BODY is megabytes rather than KB, so
   // it is also the only one that declares a budget. The value is declared once

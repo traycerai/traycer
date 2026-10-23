@@ -30,15 +30,27 @@ const userSender = (userId: string): OpenUserMessageSender => ({
 });
 
 describe("botUserSenderLabel", () => {
-  it("labels the viewer's own message You without asking the resolver", () => {
+  it("labels the viewer's own message with their account name without asking the resolver", () => {
     const asked: string[] = [];
     const label = botUserSenderLabel(userSender(VIEWER_ID), context, (id) => {
       asked.push(id);
       return member("Someone Else");
     });
 
-    expect(label).toBe("You");
+    expect(label).toBe("Viewer");
     expect(asked).toEqual([]);
+  });
+
+  it("labels the viewer You when their account has no name", () => {
+    const unnamed: SenderDisplayContext = {
+      ...context,
+      profile: { userId: VIEWER_ID, userName: " ", email: "v@example.com" },
+    };
+    expect(
+      botUserSenderLabel(userSender(VIEWER_ID), unnamed, () =>
+        member("Someone Else"),
+      ),
+    ).toBe("You");
   });
 
   it("labels another member with the name the resolver gives", () => {
