@@ -15,6 +15,7 @@ import {
 } from "@/components/providers/provider-pack-readiness";
 import { providerDisplayName } from "@/lib/provider-ordering";
 import { guiHarnessIdToProviderId } from "@/lib/provider-ordering";
+import { useChatOpencodeLine } from "@/hooks/harnesses/chat-opencode-line-context";
 
 export interface ProviderPackGate {
   /**
@@ -105,10 +106,13 @@ function usePackGateFromProviders(
   providers: ReadonlyArray<ProviderCliState> | undefined,
   harnessId: GuiHarnessId | null,
 ): ProviderPackGate {
+  const opencodeLine = useChatOpencodeLine();
   return useMemo(() => {
     if (providers === undefined || harnessId === null) return NOT_BLOCKED;
-    const preparing =
-      providerPackPreparingByHarnessId(providers).get(harnessId);
+    const preparing = providerPackPreparingByHarnessId(
+      providers,
+      opencodeLine,
+    ).get(harnessId);
     if (preparing === undefined) return NOT_BLOCKED;
     // Reported, not hidden: the caller still gets `preparing` so a surface that
     // wants to show background install progress can, without any of them
@@ -124,5 +128,5 @@ function usePackGateFromProviders(
       hint: providerPackPreparingLabel(preparing, label),
       preparing,
     };
-  }, [harnessId, providers]);
+  }, [harnessId, opencodeLine, providers]);
 }

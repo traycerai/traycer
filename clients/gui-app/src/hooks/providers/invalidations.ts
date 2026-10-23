@@ -44,6 +44,19 @@ export const PROVIDER_INVALIDATIONS: ReadonlyArray<
 ];
 
 /**
+ * Selecting, adding or removing a CLI can change the default model and command
+ * catalogs. Provider-change events cover writes from another renderer too;
+ * ordinary provider-list refreshes keep the narrower invalidation set above.
+ */
+export const PROVIDER_SELECTION_INVALIDATIONS: ReadonlyArray<
+  keyof HostRpcRegistry & string
+> = [
+  ...PROVIDER_INVALIDATIONS,
+  "agent.gui.listModels",
+  "agent.gui.listCommands",
+];
+
+/**
  * Shared mutation SCOPE for the per-profile API-key pair.
  *
  * TanStack runs mutations sharing a scope id one at a time, in the order they

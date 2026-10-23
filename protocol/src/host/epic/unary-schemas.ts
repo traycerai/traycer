@@ -21,6 +21,7 @@ import {
   EpicArtifactKindSchemaPreHtml,
 } from "@traycer/protocol/common/registry";
 import { accountContextSchema } from "@traycer/protocol/common/schemas";
+import { opencodeLineSchema } from "@traycer/protocol/common/opencode-line";
 import {
   agentModeSchema,
   tuiHarnessIdSchema,
@@ -2235,6 +2236,19 @@ export const createChatRequestSchemaV12 = lazySchema(() =>
   }),
 );
 export type CreateChatRequestV12 = z.infer<typeof createChatRequestSchemaV12>;
+
+/**
+ * v1.3 request: the OpenCode line the new chat is bound to from birth, for
+ * "Continue on OpenCode 2". Absent means the chat binds at its first send from
+ * the selection then, like every other new chat. A new optional key, so a host
+ * below `@1.3` strips it on the within-major re-parse.
+ */
+export const createChatRequestSchemaV13 = lazySchema(() =>
+  createChatRequestSchemaV12.extend({
+    opencodeLine: opencodeLineSchema.optional(),
+  }),
+);
+export type CreateChatRequestV13 = z.infer<typeof createChatRequestSchemaV13>;
 
 export const createChatResponseSchema = lazySchema(() =>
   z.object({

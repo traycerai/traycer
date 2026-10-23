@@ -266,11 +266,14 @@ describe("fallback awareness: preparing vs unable to run", () => {
 
 describe("providerPackPreparingByHarnessId", () => {
   it("keys by GUI harness id, not provider id, and omits ready providers", () => {
-    const map = providerPackPreparingByHarnessId([
-      providerState("claude-code", { status: "downloading", percent: 10 }),
-      providerState("codex", { status: "installed" }),
-      providerState("amp", null),
-    ]);
+    const map = providerPackPreparingByHarnessId(
+      [
+        providerState("claude-code", { status: "downloading", percent: 10 }),
+        providerState("codex", { status: "installed" }),
+        providerState("amp", null),
+      ],
+      null,
+    );
 
     // `claude-code` (wire) -> `claude` (GUI). A map keyed by the wire id would
     // silently never match the rail, which reads harness ids.
@@ -508,5 +511,306 @@ describe("the retryable `live-owner-stalled` reason", () => {
         blockingFailure("live-owner-stalled", 1_700_000_000_000),
       ),
     ).toBe(true);
+  });
+});
+
+// OpenCode ships two Managed lines, each its own pack. The provider-level
+// `managedInstallState` and bundled candidate describe the 1.x line only, so
+// readiness has to follow the line the selection names: a plain `bundled` is
+// the 2.x row, `line: 1` the 1.x row.
+describe("OpenCode managed lines: readiness follows the selected line", () => {
+  const installed: ProviderManagedInstallState = { status: "installed" };
+  const failed: ProviderManagedInstallState = {
+    status: "error",
+    reason: "network",
+    message: "Download failed",
+    retryAtMs: null,
+  };
+  const downloading: ProviderManagedInstallState = {
+    status: "downloading",
+    percent: 40,
+  };
+
+  function managedLine(
+    line: 1 | 2,
+    managedInstallState: ProviderManagedInstallState,
+    available: boolean,
+  ): NonNullable<ProviderCliState["managedLines"]>[number] {
+    return {
+      line,
+      candidate: { ...candidate("bundled", available), kind: "bundled" },
+      packId: `opencode-${line}`,
+      managedInstallState,
+      managedVersions: null,
+      managedVersionsUnavailable: null,
+    };
+  }
+
+  function opencode(args: {
+    readonly selected: ProviderCliState["selected"];
+    readonly legacy: ProviderManagedInstallState;
+    readonly legacyBundledAvailable: boolean;
+    readonly lines: NonNullable<ProviderCliState["managedLines"]>;
+    readonly path: boolean;
+  }): ProviderCliState {
+    return {
+      ...providerStateWith("opencode", args.legacy, {
+        candidates: [
+          candidate("bundled", args.legacyBundledAvailable),
+          ...(args.path ? [candidate("path", true)] : []),
+        ],
+        availabilityPending: false,
+      }),
+      selected: args.selected,
+      managedLines: args.lines,
+    };
+  }
+
+  function blocked(provider: ProviderCliState): boolean | "quiet" {
+    const preparing = providerPackPreparingForProvider(provider);
+    return preparing === null
+      ? "quiet"
+      : providerPackBlocksExecution(preparing);
+  }
+
+  it("a plain bundled selection reads the 2.x row, not the broken 1.x pack", () => {
+    const provider = opencode({
+      selected: { kind: "bundled" },
+      legacy: failed,
+      legacyBundledAvailable: false,
+      lines: [managedLine(1, failed, false), managedLine(2, installed, true)],
+      path: false,
+    });
+    expect(blocked(provider)).toBe("quiet");
+  });
+
+  it("an explicit line 1 selection reads the 1.x row, whose failure blocks", () => {
+    const provider = opencode({
+      selected: { kind: "bundled", line: 1 },
+      legacy: failed,
+      legacyBundledAvailable: false,
+      lines: [managedLine(1, failed, false), managedLine(2, installed, true)],
+      path: false,
+    });
+    expect(blocked(provider)).toBe(true);
+  });
+
+  it("a plain bundled selection blocks on a 2.x download even when the 1.x pack is installed", () => {
+    const provider = opencode({
+      selected: { kind: "bundled" },
+      legacy: installed,
+      legacyBundledAvailable: true,
+      lines: [
+        managedLine(1, installed, true),
+        managedLine(2, downloading, false),
+      ],
+      path: false,
+    });
+    expect(blocked(provider)).toBe(true);
+  });
+
+  it("an explicit line 1 selection ignores the 2.x download", () => {
+    const provider = opencode({
+      selected: { kind: "bundled", line: 1 },
+      legacy: installed,
+      legacyBundledAvailable: true,
+      lines: [
+        managedLine(1, installed, true),
+        managedLine(2, downloading, false),
+      ],
+      path: false,
+    });
+    expect(blocked(provider)).toBe("quiet");
+  });
+
+  it("the other line's runnable bundled binary does not rescue the selected line", () => {
+    const provider = opencode({
+      selected: { kind: "bundled" },
+      legacy: installed,
+      legacyBundledAvailable: true,
+      lines: [managedLine(1, installed, true), managedLine(2, failed, false)],
+      path: false,
+    });
+    expect(blocked(provider)).toBe(true);
+  });
+
+  it("an error on the selected line informs without blocking when that line has a runnable candidate", () => {
+    const provider = opencode({
+      selected: { kind: "bundled" },
+      legacy: installed,
+      legacyBundledAvailable: false,
+      lines: [managedLine(1, installed, false), managedLine(2, failed, true)],
+      path: false,
+    });
+    expect(blocked(provider)).toBe(false);
+  });
+
+  it("keeps the external PATH fallback: a PATH selection is not gated by a broken managed row", () => {
+    const provider = opencode({
+      selected: { kind: "path" },
+      legacy: failed,
+      legacyBundledAvailable: false,
+      lines: [managedLine(1, failed, false), managedLine(2, failed, false)],
+      path: true,
+    });
+    expect(blocked(provider)).toBe(false);
+  });
+
+  it("line 1 still falls back to an available PATH binary; line 2 has no external fallback", () => {
+    const provider = (
+      selected: ProviderCliState["selected"],
+    ): ProviderCliState =>
+      opencode({
+        selected,
+        legacy: failed,
+        legacyBundledAvailable: false,
+        lines: [managedLine(1, failed, false), managedLine(2, failed, false)],
+        path: true,
+      });
+    expect(blocked(provider({ kind: "bundled", line: 1 }))).toBe(false);
+    expect(blocked(provider({ kind: "bundled" }))).toBe(true);
+  });
+
+  it("a bound chat's line overrides a plain bundled selection in the by-harness map", () => {
+    const provider = opencode({
+      selected: { kind: "bundled" },
+      legacy: failed,
+      legacyBundledAvailable: false,
+      lines: [managedLine(1, failed, false), managedLine(2, installed, true)],
+      path: false,
+    });
+    expect(providerPackPreparingByHarnessId([provider], null).size).toBe(0);
+    expect(providerPackPreparingByHarnessId([provider], 2).size).toBe(0);
+    expect(
+      providerPackPreparingByHarnessId([provider], 1).get("opencode")?.kind,
+    ).toBe("error");
+  });
+
+  it("a bound chat's line does not override a PATH selection", () => {
+    const provider = opencode({
+      selected: { kind: "path" },
+      legacy: failed,
+      legacyBundledAvailable: false,
+      lines: [managedLine(1, failed, false), managedLine(2, failed, false)],
+      path: true,
+    });
+    const preparing = providerPackPreparingByHarnessId([provider], 2).get(
+      "opencode",
+    );
+    if (preparing === undefined) throw new Error("expected a state");
+    expect(providerPackBlocksExecution(preparing)).toBe(false);
+  });
+
+  // A bound line-2 chat keeps running on 2.x whatever the new-chat selection
+  // is, so a PATH or custom selection that has nothing runnable must not hide
+  // line 2's pack state, and the provider-level state (line 1's) is no
+  // evidence either way.
+  describe("a bound line 2 chat under an external selection", () => {
+    function externalSelection(args: {
+      readonly selected: ProviderCliState["selected"];
+      readonly externalKind: "path" | "custom";
+      readonly externalAvailable: boolean;
+      readonly legacy: ProviderManagedInstallState;
+      readonly lines: NonNullable<ProviderCliState["managedLines"]>;
+    }): ProviderCliState {
+      const { selected, externalKind, externalAvailable, legacy, lines } = args;
+      return {
+        ...providerStateWith("opencode", legacy, {
+          candidates: [
+            candidate("bundled", false),
+            candidate(externalKind, externalAvailable),
+          ],
+          availabilityPending: false,
+        }),
+        selected,
+        managedLines: lines,
+      };
+    }
+
+    function boundLine2Blocks(provider: ProviderCliState): boolean | "quiet" {
+      const preparing = providerPackPreparingByHarnessId([provider], 2).get(
+        "opencode",
+      );
+      return preparing === undefined
+        ? "quiet"
+        : providerPackBlocksExecution(preparing);
+    }
+
+    it.each([
+      ["path", { kind: "path" as const }],
+      ["custom", { kind: "custom" as const, path: "/usr/local/bin/custom" }],
+    ])(
+      "blocks on line 2's download when the %s selection has no runnable binary",
+      (kind, selected) => {
+        const provider = externalSelection({
+          selected,
+          externalKind: kind === "path" ? "path" : "custom",
+          externalAvailable: false,
+          legacy: installed,
+          lines: [
+            managedLine(1, installed, true),
+            managedLine(2, downloading, false),
+          ],
+        });
+        expect(boundLine2Blocks(provider)).toBe(true);
+      },
+    );
+
+    it("blocks the direct provider readiness on line 2 when the PATH selection has no runnable binary and no chat is bound", () => {
+      const provider = externalSelection({
+        selected: { kind: "path" },
+        externalKind: "path",
+        externalAvailable: false,
+        legacy: installed,
+        lines: [
+          managedLine(1, installed, true),
+          managedLine(2, downloading, false),
+        ],
+      });
+      const preparing = providerPackPreparingForProvider(provider);
+      if (preparing === null) throw new Error("expected a preparing state");
+      expect(preparing.kind).toBe("downloading");
+      expect(providerPackBlocksExecution(preparing)).toBe(true);
+    });
+
+    it.each([
+      ["path", { kind: "path" as const }],
+      ["custom", { kind: "custom" as const, path: "/usr/local/bin/custom" }],
+    ])(
+      "is ready when line 2 is installed although line 1 is downloading (%s selection, nothing runnable)",
+      (kind, selected) => {
+        const provider = externalSelection({
+          selected,
+          externalKind: kind === "path" ? "path" : "custom",
+          externalAvailable: false,
+          legacy: downloading,
+          lines: [
+            managedLine(1, downloading, false),
+            managedLine(2, installed, true),
+          ],
+        });
+        expect(boundLine2Blocks(provider)).toBe("quiet");
+      },
+    );
+
+    it.each([
+      ["path", { kind: "path" as const }],
+      ["custom", { kind: "custom" as const, path: "/usr/local/bin/custom" }],
+    ])(
+      "a runnable %s binary keeps precedence over line 2's download",
+      (kind, selected) => {
+        const provider = externalSelection({
+          selected,
+          externalKind: kind === "path" ? "path" : "custom",
+          externalAvailable: true,
+          legacy: installed,
+          lines: [
+            managedLine(1, installed, true),
+            managedLine(2, downloading, false),
+          ],
+        });
+        expect(boundLine2Blocks(provider)).not.toBe(true);
+      },
+    );
   });
 });

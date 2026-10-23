@@ -41,6 +41,7 @@ import {
   providersListResponseSchemaV102Preimage,
   providersListResponseSchemaV103Preimage,
   providersListResponseSchemaV104Preimage,
+  providersListResponseSchemaV105Preimage,
   providersUsePackVersionResponseSchema,
   providersUsePackVersionResponseSchemaV10,
   providersListResponseSchemaV70,
@@ -290,9 +291,12 @@ const LIVE_FROZEN_EXPORTS = {
   // opened 10.5: its envelope is the two-key shape. Its dump did not change by
   // the freeze.
   "providers.list@10.4": providersListResponseSchemaV104Preimage,
+  // 10.5 froze when `managedLines` and the selection's `line` opened 10.6. Its
+  // dump did not change by the freeze.
+  "providers.list@10.5": providersListResponseSchemaV105Preimage,
   // The head line: it names the LIVE schema, so the next growth of the provider
   // state fails here first.
-  "providers.list@10.5": providersListResponseSchema,
+  "providers.list@10.6": providersListResponseSchema,
   // 1.0 is hand-frozen at the three-code failure arm when `macos-ineligible`
   // opened 1.1; its dump did not change by the freeze.
   "providers.usePackVersion@1.0": providersUsePackVersionResponseSchemaV10,
