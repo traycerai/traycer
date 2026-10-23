@@ -33,6 +33,7 @@ import {
 } from "@/stores/workspace/workspace-folders-store";
 import { useWorktreeIntentMemoryStore } from "@/stores/worktree/worktree-intent-memory-store";
 import { hostQueryKeys } from "@/lib/query-keys";
+import { useStagedSandboxStore } from "@/stores/composer/staged-sandbox-store";
 import type { HostRpcRegistry } from "@/lib/host";
 import {
   readStagedWorktreeIntent,
@@ -727,6 +728,56 @@ describe("landing workspace summary empty state", () => {
     fireEvent.click(screen.getByTestId("folder-add"));
     expect(mocks.pickAndPrepareFolders).toHaveBeenCalledTimes(1);
 
+    queryClient.clear();
+  });
+
+  it("reads Empty sandbox in the workspace slot while a sandbox is staged", () => {
+    const surfaceKey = "landing:window-test";
+    useStagedSandboxStore.getState().stage(surfaceKey, {
+      kind: "new",
+      configuration: { kind: "personal" },
+      shape: {
+        os: "linux",
+        cpus: 2,
+        memoryMb: 4096,
+        diskMb: null,
+        region: "us-east",
+        idleMinutes: 30,
+        destroyAfterRestingMinutes: 10_080,
+      },
+      name: "",
+      wakeString: null,
+    });
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: 0 } },
+    });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <TooltipProvider>
+          <ActiveHostWorkspaceControls
+            sandboxStaging={{ surfaceKey, task: null }}
+            disabled={false}
+            stagingKey={{
+              surface: "landing",
+              hostId: "host-home",
+              draftId: null,
+            }}
+            workspaceSeed={null}
+            seedIntent={null}
+            seedIntentOverride={null}
+            layout="inline"
+            hostScope={{ kind: "active" }}
+          />
+        </TooltipProvider>
+      </QueryClientProvider>,
+    );
+
+    expect(
+      screen.getByTestId("workspace-summary-empty-sandbox").textContent,
+    ).toBe("Empty sandbox");
+    expect(screen.queryByTestId("folder-add")).toBeNull();
+
+    useStagedSandboxStore.setState({ bySurface: {} });
     queryClient.clear();
   });
 

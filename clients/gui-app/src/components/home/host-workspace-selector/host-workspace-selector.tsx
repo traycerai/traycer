@@ -169,6 +169,7 @@ import {
   type SandboxStaging,
   type SandboxStagingSurface,
 } from "@/components/composer/use-sandbox-staging";
+import { EMPTY_SANDBOX } from "@/lib/sandboxes/sandbox-strings";
 import type { HostSwitcherComposerMode } from "@/components/settings/host-scope/host-switcher";
 /**
  *
@@ -638,19 +639,21 @@ export function ActiveHostWorkspaceControls(
           className="w-full max-w-full min-w-0"
         >
           <DropdownMenuLabel>Workspaces</DropdownMenuLabel>
-          <HomeWorkspaceRows
-            workspaceSource={workspaceSource}
-            resolvedFolders={resolved.folders}
-            activeHostClient={activeHostClient}
-            activeHostId={activeHostId}
-            hostLabel={hostLabel}
-            stagingKey={props.stagingKey}
-            seedIntent={props.seedIntent}
-            seedIntentOverride={props.seedIntentOverride}
-            restingMode="rows"
-            hostSlot={null}
-            disabled={disabled}
-          />
+          <SandboxWorkspaceSlot staging={staging} hostSlot={null}>
+            <HomeWorkspaceRows
+              workspaceSource={workspaceSource}
+              resolvedFolders={resolved.folders}
+              activeHostClient={activeHostClient}
+              activeHostId={activeHostId}
+              hostLabel={hostLabel}
+              stagingKey={props.stagingKey}
+              seedIntent={props.seedIntent}
+              seedIntentOverride={props.seedIntentOverride}
+              restingMode="rows"
+              hostSlot={null}
+              disabled={disabled}
+            />
+          </SandboxWorkspaceSlot>
         </section>
       </div>
     );
@@ -691,7 +694,9 @@ export function ActiveHostWorkspaceControls(
   );
   return (
     <>
-      {rows}
+      <SandboxWorkspaceSlot staging={staging} hostSlot={deviceSelect}>
+        {rows}
+      </SandboxWorkspaceSlot>
       <SandboxStagingExtras staging={staging} />
     </>
   );
@@ -701,6 +706,39 @@ function stagingComposer(
   staging: SandboxStaging | null,
 ): HostSwitcherComposerMode | null {
   return staging === null ? null : staging.composer;
+}
+
+/**
+ * The workspace slot: `Empty sandbox` while a sandbox is staged, since its
+ * workspace is the new host's, which holds no folder until the agent or the
+ * terminal fetches one; else the surface's own folder rows.
+ */
+function SandboxWorkspaceSlot(props: {
+  readonly staging: SandboxStaging | null;
+  readonly hostSlot: ReactNode;
+  readonly children: ReactNode;
+}): ReactNode {
+  if (props.staging === null || props.staging.stage === null) {
+    return props.children;
+  }
+  return (
+    <div
+      className="flex w-full max-w-full min-w-0 flex-nowrap items-center gap-2 overflow-hidden"
+      data-testid="home-workspace-summary-control"
+    >
+      {props.hostSlot === null ? null : (
+        <div className="w-fit min-w-0 flex-[0_1_auto] max-w-[min(50%,50vw)] overflow-hidden">
+          {props.hostSlot}
+        </div>
+      )}
+      <span
+        className="min-w-0 truncate px-1.5 py-1 text-ui-sm text-muted-foreground opacity-70"
+        data-testid="workspace-summary-empty-sandbox"
+      >
+        {EMPTY_SANDBOX}
+      </span>
+    </div>
+  );
 }
 
 /** The consequences block under the staged host, and the shape sheet. */

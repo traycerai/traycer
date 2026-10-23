@@ -7,10 +7,9 @@ import type {
 import type { TaskHostRow } from "@traycer/protocol/host/task-host-summary";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { mintNewEpicTerminalTile } from "@/components/epic-canvas/sidebar/new-terminal-tile-ref";
+import { useOpenFolderlessEpicTerminal } from "@/components/epic-canvas/sidebar/use-folderless-terminal-target";
 import { useEpicViewTabId } from "@/components/epic-canvas/view-tab-context";
 import { useRegisteredHosts } from "@/hooks/auth/use-registered-hosts-query";
-import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
 import type { AgentHostProjection } from "@/hooks/epic/use-agent-host-projection";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import { useHostQuery } from "@/hooks/host/use-host-query";
@@ -19,7 +18,6 @@ import { useDeadlineReached } from "@/hooks/use-deadline-reached";
 import { useRefreshSandboxCosts } from "@/hooks/sandboxes/use-refresh-sandbox-costs";
 import { useSandboxCatalogue } from "@/hooks/sandboxes/use-sandbox-catalogue-query";
 import { useSandboxCosts } from "@/hooks/sandboxes/use-sandbox-costs-query";
-import { tileIntent } from "@/lib/canvas/tile-open/intent";
 import { useSampledNow } from "@/lib/relative-time";
 import {
   AGENT_SANDBOX,
@@ -277,28 +275,23 @@ function HostActions(props: {
     sandbox.state !== "destroyed" &&
     sandbox.state !== "destroying" &&
     sandbox.state !== "failed";
-  const { openTile } = useEpicTileNavigation();
+  // A resting sandbox has no cwd to open in until it wakes and answers.
+  const openTerminal = useOpenFolderlessEpicTerminal(
+    props.epicId,
+    sandbox.hostId,
+  );
   return (
     <div className="flex flex-wrap items-center gap-1">
       <Button
         type="button"
         size="xs"
         variant="ghost"
-        disabled={!canOpen || (props.awake && props.ownerHostUnreachable)}
-        onClick={() => {
-          openTile(
-            tileIntent(
-              mintNewEpicTerminalTile({
-                hostId: sandbox.hostId,
-                epicId: props.epicId,
-                cwd: "",
-              }),
-              { epicId: props.epicId },
-              "explicit",
-              "direct_ui",
-            ),
-          );
-        }}
+        disabled={
+          !canOpen ||
+          (props.awake && props.ownerHostUnreachable) ||
+          openTerminal === null
+        }
+        onClick={openTerminal ?? undefined}
       >
         {OPEN_TERMINAL}
       </Button>

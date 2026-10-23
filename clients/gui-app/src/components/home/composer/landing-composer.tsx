@@ -502,6 +502,9 @@ export function LandingComposer(props: LandingComposerProps) {
     canSubmit,
     submit: submitOnSandbox,
     prepareHandoff: prepareSandboxHandoff,
+    // No epic before the send: the landing panel's terminals follow the
+    // composer's host, which phase 2 pins to the new one.
+    terminal: null,
   });
 
   // Submit-time refusal copy (selection model §54). The G4 re-point used to

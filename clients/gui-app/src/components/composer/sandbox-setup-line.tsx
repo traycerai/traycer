@@ -24,6 +24,7 @@ import {
   MESSAGE_STILL_PENDING,
   NOTHING_BILLED_NEVER_WOKE,
   NOTHING_CHARGED_FOR_WAKE,
+  OPEN_TERMINAL,
   OPEN_TERMINAL_INSTEAD,
   RESUMING_SANDBOX,
   RESUMING_TAKING_LONGER,
@@ -70,10 +71,15 @@ export interface SandboxSetupLineActions {
   readonly onRetry: () => void;
   /** The shape sheet: Change shape or region, Choose a smaller shape. */
   readonly onChangeShape: () => void;
+  /** Repairs the settings on the new host, then waits again. */
   readonly onRetryApplying: () => void;
   readonly onStop: () => void;
-  /** `null` where the surface cannot open a terminal. */
-  readonly onOpenTerminalInstead: (() => void) | null;
+  /**
+   * A folderless terminal on the new host: Open terminal on the Booting step
+   * and the settings branch, Open terminal instead on the no-provider
+   * refusal. `null` until the host can open one, or where the surface cannot.
+   */
+  readonly onOpenTerminal: (() => void) | null;
   readonly onOpenProviders: (() => void) | null;
 }
 
@@ -253,11 +259,11 @@ function SandboxRefusalLine(props: {
               onClick={actions.onOpenProviders}
             />
           )}
-          {actions.onOpenTerminalInstead === null ? null : (
+          {actions.onOpenTerminal === null ? null : (
             <LineButton
               label={OPEN_TERMINAL_INSTEAD}
               testId="sandbox-refusal-open-terminal"
-              onClick={actions.onOpenTerminalInstead}
+              onClick={actions.onOpenTerminal}
             />
           )}
         </>
@@ -442,6 +448,7 @@ function ProgressDetail(props: {
         failure={failure}
         resuming={resuming}
         configuration={configuration}
+        onOpenTerminal={props.actions.onOpenTerminal}
       />
       <div className="flex flex-wrap gap-2">
         <ProgressBranchButtons view={props.view} actions={props.actions} />
@@ -493,6 +500,13 @@ function ProgressBranchButtons(props: {
           testId="sandbox-setup-retry-applying"
           onClick={actions.onRetryApplying}
         />
+        {actions.onOpenTerminal === null ? null : (
+          <LineButton
+            label={OPEN_TERMINAL}
+            testId="sandbox-setup-open-terminal"
+            onClick={actions.onOpenTerminal}
+          />
+        )}
         <LineButton
           label={STOP}
           testId="sandbox-setup-stop"
@@ -633,6 +647,7 @@ function SetupSteps(props: {
   readonly failure: StagedSandboxFailure | null;
   readonly resuming: boolean;
   readonly configuration: string;
+  readonly onOpenTerminal: (() => void) | null;
 }): ReactNode {
   // A wake has no create step.
   const steps = props.resuming
@@ -678,6 +693,13 @@ function SetupSteps(props: {
               <span aria-hidden className="size-3.5 shrink-0" />
             ) : null}
             {stepLabel(step, props.resuming, props.configuration)}
+            {step === "booting" && props.onOpenTerminal !== null ? (
+              <LineButton
+                label={OPEN_TERMINAL}
+                testId="sandbox-setup-booting-open-terminal"
+                onClick={props.onOpenTerminal}
+              />
+            ) : null}
           </li>
         );
       })}

@@ -49,7 +49,10 @@ import {
 import { useHostOptions } from "@/components/settings/host-scope/use-host-options";
 import { OPEN_TERMINAL } from "@/lib/sandboxes/sandbox-strings";
 import type { ConsequencesInput } from "@/lib/sandboxes/sandbox-stage-model";
-import type { StagedSandbox } from "@/stores/composer/staged-sandbox-store";
+import {
+  useStagedSandboxStore,
+  type StagedSandbox,
+} from "@/stores/composer/staged-sandbox-store";
 import { PrimaryActionShortcutHint } from "@/components/ui/primary-action-shortcut-hint";
 
 export interface NewTerminalPickerBodyProps {
@@ -330,12 +333,25 @@ function useTerminalStagedLaunch(input: {
     onLaunch(sandboxTarget);
     return true;
   }, [onLaunch, sandboxTarget]);
+  // Opened from the line before the handoff, the terminal is the one this
+  // stage was for: the stage ends so the handoff opens no second one.
+  const stagedTerminal = useMemo(
+    () => ({
+      epicId: input.epicId,
+      open: (target: TerminalLaunchTarget) => {
+        onLaunch(target);
+        useStagedSandboxStore.getState().clear(surfaceKey);
+      },
+    }),
+    [input.epicId, onLaunch, surfaceKey],
+  );
   const stagedSend = useStagedSandboxSend({
     surfaceKey,
     resolvedHostId: input.resolvedHostId,
     canSubmit: sandboxTarget !== null,
     submit: launchOnSandbox,
     prepareHandoff: noopPrepareHandoff,
+    terminal: stagedTerminal,
   });
   return {
     staging,

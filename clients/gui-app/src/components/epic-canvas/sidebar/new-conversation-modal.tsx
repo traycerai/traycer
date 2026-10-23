@@ -9,6 +9,11 @@ import {
   type RefObject,
 } from "react";
 import { useQueryClient } from "@tanstack/react-query";
+import {
+  mintNewEpicTerminalTile,
+  type TerminalLaunchTarget,
+} from "@/components/epic-canvas/sidebar/new-terminal-tile-ref";
+import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
 import { useStore } from "zustand";
 import { useShallow } from "zustand/react/shallow";
 import { v4 as uuidv4 } from "uuid";
@@ -167,7 +172,10 @@ import {
   type NewConversationModalSeed,
 } from "@/stores/epics/new-conversation-modal-store";
 import { useNewConversationModalOpenStore } from "@/stores/epics/new-conversation-modal-open-store";
-import type { ExplicitTilePlacement } from "@/lib/canvas/tile-open/intent";
+import {
+  tileIntent,
+  type ExplicitTilePlacement,
+} from "@/lib/canvas/tile-open/intent";
 import type { LandingDraftWorkspaceSnapshot } from "@/stores/home/landing-draft-store";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import {
@@ -934,6 +942,23 @@ export function NewConversationModalBody(props: {
     newConversationSurfaceKey(epicId),
     hostId,
   );
+  const { openTile } = useEpicTileNavigation();
+  const stagedTerminal = useMemo(
+    () => ({
+      epicId,
+      open: (target: TerminalLaunchTarget) => {
+        openTile(
+          tileIntent(
+            mintNewEpicTerminalTile({ ...target, epicId }),
+            { tabId },
+            "explicit",
+            "direct_ui",
+          ),
+        );
+      },
+    }),
+    [epicId, openTile, tabId],
+  );
   const stagedSubmitRef = useRef<() => void>(() => undefined);
   const submitOnSandbox = useCallback((): boolean => {
     stagedSubmitRef.current();
@@ -945,6 +970,7 @@ export function NewConversationModalBody(props: {
     canSubmit,
     submit: submitOnSandbox,
     prepareHandoff: noopPrepareHandoff,
+    terminal: stagedTerminal,
   });
   const composerDisabledHint =
     mutationDisabledHint(permissionRole, isDisconnected, "make changes") ??

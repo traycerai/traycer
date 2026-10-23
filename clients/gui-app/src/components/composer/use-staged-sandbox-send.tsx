@@ -2,7 +2,10 @@ import { useCallback, useEffect, useMemo, useRef, type ReactNode } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { SandboxSetupLine } from "@/components/composer/sandbox-setup-line";
 import { openStagedShapeSheet } from "@/components/composer/use-sandbox-staging";
+import type { TerminalLaunchTarget } from "@/components/epic-canvas/sidebar/new-terminal-tile-ref";
+import { useFolderlessTerminalTarget } from "@/components/epic-canvas/sidebar/use-folderless-terminal-target";
 import { useAuthUser } from "@/hooks/auth/use-auth-user-query";
+import { useSandboxRepairGuestConfigurationOnHost } from "@/hooks/sandboxes/use-sandbox-repair-guest-configuration-mutation";
 import { useSandboxCatalogue } from "@/hooks/sandboxes/use-sandbox-catalogue-query";
 import { useSandboxVerb } from "@/hooks/sandboxes/use-sandbox-verb-mutation";
 import { useHostBinding } from "@/lib/host";
@@ -59,6 +62,9 @@ export interface StagedSandboxSend {
  * composer resets its workspace to the new host's empty one).
  *
  * `surfaceKey` `null` stages nothing (a request that named its host).
+ *
+ * `terminal` opens a folderless terminal on the new host from the line, in
+ * the surface's epic; `null` where the surface has no epic to open it in.
  */
 export function useStagedSandboxSend(input: {
   readonly surfaceKey: string | null;
@@ -66,9 +72,16 @@ export function useStagedSandboxSend(input: {
   readonly canSubmit: boolean;
   readonly submit: () => boolean;
   readonly prepareHandoff: (hostId: string) => void;
+  readonly terminal: StagedSandboxTerminal | null;
 }): StagedSandboxSend {
-  const { surfaceKey, resolvedHostId, canSubmit, submit, prepareHandoff } =
-    input;
+  const {
+    surfaceKey,
+    resolvedHostId,
+    canSubmit,
+    submit,
+    prepareHandoff,
+    terminal,
+  } = input;
   const binding = useHostBinding();
   const queryClient = useQueryClient();
   const stage = useStagedSandbox(surfaceKey ?? "");
@@ -100,6 +113,11 @@ export function useStagedSandboxSend(input: {
       );
     },
     [binding, queryClient, surfaceKey],
+  );
+  const newHost = useNewHostActions(
+    stage?.createdHostId ?? null,
+    terminal,
+    run,
   );
 
   const intercept = useCallback(
@@ -211,18 +229,52 @@ export function useStagedSandboxSend(input: {
             useStagedSandboxStore.getState().cancel(surfaceKey);
             openStagedShapeSheet(surfaceKey);
           },
-          // The verdict is read again; the repair itself is the sandbox's
-          // own, on its card.
-          onRetryApplying: () => run(false),
+          onRetryApplying: newHost.onRetryApplying,
           onStop: () => {
             if (stage.createdSandboxId !== null) verb.mutate("stop");
             useStagedSandboxStore.getState().clear(surfaceKey);
           },
-          onOpenTerminalInstead: null,
+          onOpenTerminal: newHost.onOpenTerminal,
           onOpenProviders: null,
         }}
       />
     );
 
   return { intercept, line };
+}
+
+/** Where the surface opens a terminal on the new host, in its epic. */
+interface StagedSandboxTerminal {
+  readonly epicId: string;
+  readonly open: (target: TerminalLaunchTarget) => void;
+}
+
+/**
+ * The line's actions on the created host: `Retry applying` repairs the
+ * settings there, then the wait resumes on the new verdict; `Open terminal`
+ * opens a folderless one there once the host can.
+ */
+function useNewHostActions(
+  createdHostId: string | null,
+  terminal: StagedSandboxTerminal | null,
+  run: (fresh: boolean) => void,
+): {
+  readonly onRetryApplying: () => void;
+  readonly onOpenTerminal: (() => void) | null;
+} {
+  const repair = useSandboxRepairGuestConfigurationOnHost(createdHostId ?? "");
+  const terminalTarget = useFolderlessTerminalTarget(
+    terminal === null ? "" : terminal.epicId,
+    terminal === null ? null : createdHostId,
+  );
+  return {
+    onRetryApplying: () => {
+      if (createdHostId === null) return;
+      repair.mutate({}, { onSuccess: () => run(false) });
+    },
+    onOpenTerminal:
+      terminal === null || terminalTarget === null
+        ? null
+        : () => terminal.open(terminalTarget),
+  };
 }
