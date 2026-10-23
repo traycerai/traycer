@@ -105,6 +105,8 @@ function personalPage(children: ReactNode): ReactNode {
   return (
     <PersonalPageContext.Provider
       value={{
+        section: "providers",
+        pick: { kind: "personal" },
         state: { kind: "ready", status: environmentStatusFixture({}) },
         line: null,
         hostName: HOST_NAME,

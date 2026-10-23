@@ -38,9 +38,13 @@ import { PermissionsSettingsPanel } from "@/components/settings/panels/permissio
 import { FallbackSettingsPanel } from "@/components/settings/panels/fallback-settings-panel";
 import { NotificationsSettingsPanel } from "@/components/settings/panels/notifications-settings-panel";
 import { UsageSettingsPanel } from "@/components/settings/panels/usage-settings-panel";
+import { CreditsSettingsPanel } from "@/components/settings/environment/credits-panel-placeholder";
+import { SandboxesSettingsPanel } from "@/components/settings/environment/sandboxes-page-slot";
+import { MembersSettingsPanel } from "@/components/settings/environment/members-settings-panel";
 import { useSystemTabModalActions } from "@/stores/tabs/use-system-tab-modal";
 import { useSettingsAnchorReveal } from "@/components/settings/use-settings-anchor-reveal";
 import { PersonalPageFrame } from "@/components/settings/personal/personal-page-frame";
+import { EnvironmentHostBinding } from "@/components/settings/environment/environment-host-binding";
 import "./settings-search.css";
 
 export interface SettingsModalContentProps {
@@ -126,7 +130,18 @@ const SETTINGS_PANELS = {
   "app-diagnostics": AppDiagnosticsSettingsPanel,
   diagnostics: DiagnosticsSettingsPanel,
   usage: UsageSettingsPanel,
+  credits: CreditsSettingsPanel,
+  sandboxes: SandboxesSettingsPanel,
+  members: MembersSettingsPanel,
 } satisfies Record<SettingsSectionId, () => ReactNode>;
+
+/**
+ * Environment pages that read the ambient host binding directly rather than
+ * through `usePersonalHostScope`: they get the one re-provider, so a Local
+ * row's pick reaches them too.
+ */
+const AMBIENT_BINDING_ENVIRONMENT_SECTIONS: ReadonlySet<SettingsSectionId> =
+  new Set(["agent-definitions", "browser-agent-access"]);
 
 export function SettingsPanelForSection(props: {
   readonly section: SettingsSectionId;
@@ -141,7 +156,13 @@ export function SettingsPanelForSection(props: {
   return (
     <div ref={rootRef} className="contents">
       <PersonalPageFrame section={props.section}>
-        <Panel />
+        {AMBIENT_BINDING_ENVIRONMENT_SECTIONS.has(props.section) ? (
+          <EnvironmentHostBinding>
+            <Panel />
+          </EnvironmentHostBinding>
+        ) : (
+          <Panel />
+        )}
       </PersonalPageFrame>
       <SettingsSetupGuide section={props.section} rootRef={rootRef} />
     </div>

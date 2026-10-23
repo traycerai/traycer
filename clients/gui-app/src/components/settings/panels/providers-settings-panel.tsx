@@ -64,6 +64,7 @@ import {
   usePersonalHostScope,
   type HostScope,
 } from "@/components/settings/host-scope/use-host-scope";
+import { LocalRowNote } from "@/components/settings/environment/local-row-note";
 import type { HostRpcRegistry } from "@/lib/host";
 import { HostRuntimeContext } from "@/lib/host/runtime";
 import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
@@ -1470,13 +1471,15 @@ function ProviderDetail({
         }
       />
       <div className="flex flex-1 flex-col md:min-h-0">
-        {/* Nothing renders between the provider header and the tab rail. The
+        {/* Nothing renders between the provider header and the tab rail but
+            the Local row's note, which says whose settings these are. The
             API-key card used to sit here, above the bar, so a provider's only
             real setting appeared outside the tabs that were supposed to hold
             its settings; it is now the whole body of the `account` tab. That
             matters more now that the rail is PINNED: anything parked here would
             occupy fixed height at the top of the pane forever, not just until
             you scrolled past it. */}
+        <LocalRowNote />
         <Tabs
           value={activeTab}
           onValueChange={(value) => {

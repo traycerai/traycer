@@ -12,6 +12,8 @@ import {
   PersonalPageContext,
 } from "@/components/settings/personal/personal-page-context";
 import { PersonalPageNotices } from "@/components/settings/personal/personal-page-notices";
+import { PageChip } from "@/components/settings/personal/page-chip";
+import { useEnvironmentPick } from "@/stores/settings/settings-environment-pick-store";
 import { TeamOwnedLine } from "@/components/settings/host-scope/team-owned-line";
 import { usePersonalHostScope } from "@/components/settings/host-scope/use-host-scope";
 import {
@@ -117,16 +119,18 @@ export function PersonalPageFrame(props: {
   const kinds = personalPageItemKinds(props.section);
   if (kinds === null) return props.children;
   return (
-    <PersonalPageFrameForKinds kinds={kinds}>
+    <PersonalPageFrameForKinds section={props.section} kinds={kinds}>
       {props.children}
     </PersonalPageFrameForKinds>
   );
 }
 
 function PersonalPageFrameForKinds(props: {
+  readonly section: SettingsSectionId;
   readonly kinds: ReadonlySet<string>;
   readonly children: ReactNode;
 }): ReactNode {
+  const pick = useEnvironmentPick();
   const environment = useWindowHostEnvironmentState(props.kinds);
   const { state, hostName } = environment;
   // A save on this page that lost to a change made elsewhere re-reads it.
@@ -136,7 +140,9 @@ function PersonalPageFrameForKinds(props: {
   // team's host, whose settings are the team's.
   const readOnly = state.kind === "unsupported" || teamNameOf(state) !== null;
   return (
-    <PersonalPageContext.Provider value={{ ...environment, line }}>
+    <PersonalPageContext.Provider
+      value={{ ...environment, line, section: props.section, pick }}
+    >
       {readOnly ? (
         <div className="contents">
           <PersonalPageReadOnlyLine />
@@ -204,6 +210,7 @@ export function PersonalPageHeaderStatus(): ReactNode {
   }
   return (
     <>
+      <PageChip section={value.section} pick={value.pick} />
       {value.line === null ? null : (
         <PersonalPageStatusBanner line={value.line} />
       )}

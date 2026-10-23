@@ -4,6 +4,8 @@ import { Plus } from "lucide-react";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { AddSecretDialog } from "@/components/settings/secrets/add-secret-dialog";
 import { SecretRow } from "@/components/settings/secrets/secret-row";
+import { SecretsHeaderDetails } from "@/components/settings/secrets/secrets-header-details";
+import { HeldItemsLine } from "@/components/settings/secrets/held-items-line";
 import { Button } from "@/components/ui/button";
 import { useHostQuery } from "@/hooks/host/use-host-query";
 import type { HostRpcRegistry } from "@/lib/host";
@@ -50,6 +52,8 @@ export function SecretsPage(props: {
   const secrets = list.data?.secrets ?? null;
   return (
     <section className="flex flex-col gap-3" data-testid="secrets-page">
+      <SecretsHeaderDetails client={props.client} hostId={props.hostId} />
+      <HeldItemsLine client={props.client} hostId={props.hostId} />
       {list.isError ? (
         <div
           role="status"
