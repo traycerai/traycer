@@ -1,11 +1,8 @@
 import { defineRpcContract } from "@traycer/protocol/framework/index";
 import {
-  environmentReviewHeldApplyRequestSchema,
-  environmentReviewHeldApplyResponseSchema,
-  environmentReviewRecordRequestSchema,
-  environmentReviewRecordResponseSchema,
-} from "@traycer/protocol/host/environment-schemas";
-import {
+  environmentConfigurationGuideGetV10,
+  environmentConfigurationGuideResetV10,
+  environmentConfigurationGuideSetV10,
   environmentConfigurationItemsDeleteV10,
   environmentConfigurationItemsPutV10,
   environmentConfigurationItemsV10,
@@ -13,7 +10,16 @@ import {
   environmentConfigurationPolicyPutV10,
   environmentConfigurationSkillsUploadV10,
   environmentHistoryV10,
+  environmentPlansListV10,
+  environmentPlansUnlinkPreviewV10,
+  environmentPlansUnlinkV10,
 } from "@traycer/protocol/host/environment/configuration-contracts";
+import {
+  environmentReviewHeldApplyRequestSchema,
+  environmentReviewHeldApplyResponseSchema,
+  environmentReviewRecordRequestSchema,
+  environmentReviewRecordResponseSchema,
+} from "@traycer/protocol/host/environment-schemas";
 import {
   environmentMembersInviteV10,
   environmentMembersNoticeSeenV10,
@@ -290,6 +296,84 @@ export const ENVIRONMENT_REDESIGN_RPC_METHODS = {
       versions: {
         0: {
           contract: environmentReviewRecordV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "environment.plans.list": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: environmentPlansListV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "environment.plans.unlinkPreview": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: environmentPlansUnlinkPreviewV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "environment.plans.unlink": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: environmentPlansUnlinkV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "environment.configuration.guide.get": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: environmentConfigurationGuideGetV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "environment.configuration.guide.set": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: environmentConfigurationGuideSetV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "environment.configuration.guide.reset": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: environmentConfigurationGuideResetV10,
           upgradeFromPreviousVersion: null,
         },
       },

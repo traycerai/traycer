@@ -300,6 +300,8 @@ export const environmentHostListV10 = defineRpcContract({
  * How one host took one item of the configuration: `received` it, `applied`
  * it, `not_applied` with the `reason` code, or `waiting_resume` until a
  * stopped sandbox resumes. `reason` is null unless `not_applied`.
+ * `itemKey` is `${kind}:${key}`, split at the first colon: the remainder is
+ * the item's key untouched, with no OS segment.
  */
 export const environmentHostItemApplySchema = lazySchema(() =>
   z.object({

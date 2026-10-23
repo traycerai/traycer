@@ -9,6 +9,9 @@
  * `environment.configuration.mcpServers.put` - an MCP server with its
  * credential. `environment.configuration.skills.upload` - a skill folder.
  * `environment.configuration.policy.put` - the approval policy.
+ * `environment.configuration.guide.get` / `.set` / `.reset` - the agent
+ * selection guide. `environment.plans.list` / `.unlinkPreview` / `.unlink` -
+ * the plans linked into a configuration.
  * `environment.history` - what happened to a configuration, or to one thing
  * in it.
  *
@@ -257,11 +260,26 @@ export type EnvironmentConfigurationSkillUploadRequest = z.infer<
   typeof environmentConfigurationSkillUploadRequestSchema
 >;
 
+/**
+ * A skill upload's answer: the write answer, plus `not_served` when the asked
+ * host does not serve that environment's room (the client asks one that does).
+ */
+export const environmentConfigurationSkillUploadResponseSchema = lazySchema(
+  () =>
+    z.object({
+      outcome: z.enum(["saved", "forbidden", "refused", "not_served"]),
+      reason: z.string().min(1).max(64).nullable(),
+    }),
+);
+export type EnvironmentConfigurationSkillUploadResponse = z.infer<
+  typeof environmentConfigurationSkillUploadResponseSchema
+>;
+
 export const environmentConfigurationSkillsUploadV10 = defineRpcContract({
   method: "environment.configuration.skills.upload",
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: environmentConfigurationSkillUploadRequestSchema,
-  responseSchema: environmentConfigurationWriteResponseSchema,
+  responseSchema: environmentConfigurationSkillUploadResponseSchema,
 });
 
 /** authn's cap on a team policy document, in bytes. */
@@ -291,6 +309,188 @@ export const environmentConfigurationPolicyPutV10 = defineRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: environmentConfigurationPolicyPutRequestSchema,
   responseSchema: environmentConfigurationWriteResponseSchema,
+});
+
+// ── environment.plans.* ─────────────────────────────────────────────────────
+
+/**
+ * One plan linked into a configuration: the profile it signs in, the harness
+ * it is for, its state, and who linked it (`you` when the reader did), null
+ * when nobody is on record. Never a token.
+ */
+export const environmentPlanSchema = lazySchema(() =>
+  z.object({
+    profileId: z.string().min(1),
+    harness: z.string().min(1).max(64),
+    status: z.enum(["linked", "pending", "expired", "empty"]),
+    linkedBy: z.object({ name: z.string(), you: z.boolean() }).nullable(),
+  }),
+);
+export type EnvironmentPlan = z.infer<typeof environmentPlanSchema>;
+
+export const environmentPlansListRequestSchema = lazySchema(() =>
+  z.object({ environmentId: environmentIdSchema }),
+);
+export type EnvironmentPlansListRequest = z.infer<
+  typeof environmentPlansListRequestSchema
+>;
+
+export const environmentPlansListResponseSchema = lazySchema(() =>
+  z.object({ plans: z.array(environmentPlanSchema) }),
+);
+export type EnvironmentPlansListResponse = z.infer<
+  typeof environmentPlansListResponseSchema
+>;
+
+export const environmentPlansListV10 = defineRpcContract({
+  method: "environment.plans.list",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: environmentPlansListRequestSchema,
+  responseSchema: environmentPlansListResponseSchema,
+});
+
+const environmentPlanTargetRequestSchema = lazySchema(() =>
+  z.object({
+    environmentId: environmentIdSchema,
+    profileId: z.string().min(1),
+  }),
+);
+
+/**
+ * `environment.plans.unlinkPreview@1.0`: what unlinking a plan stops, for the
+ * confirm: the turns running on it on `localHostId`, the serving host (both
+ * null when it holds no facts for that configuration), and the names of what
+ * keeps working without it.
+ */
+export const environmentPlansUnlinkPreviewRequestSchema =
+  environmentPlanTargetRequestSchema;
+export type EnvironmentPlansUnlinkPreviewRequest = z.infer<
+  typeof environmentPlansUnlinkPreviewRequestSchema
+>;
+
+export const environmentPlansUnlinkPreviewResponseSchema = lazySchema(() =>
+  z.object({
+    activeTurns: z.number().int().nonnegative().nullable(),
+    localHostId: z.string().min(1).nullable(),
+    keepsWorking: z.array(z.string()),
+  }),
+);
+export type EnvironmentPlansUnlinkPreviewResponse = z.infer<
+  typeof environmentPlansUnlinkPreviewResponseSchema
+>;
+
+export const environmentPlansUnlinkPreviewV10 = defineRpcContract({
+  method: "environment.plans.unlinkPreview",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: environmentPlansUnlinkPreviewRequestSchema,
+  responseSchema: environmentPlansUnlinkPreviewResponseSchema,
+});
+
+/** `environment.plans.unlink@1.0`: `not_linked` is a profile with no plan. */
+export const environmentPlansUnlinkRequestSchema =
+  environmentPlanTargetRequestSchema;
+export type EnvironmentPlansUnlinkRequest = z.infer<
+  typeof environmentPlansUnlinkRequestSchema
+>;
+
+export const environmentPlansUnlinkResponseSchema = lazySchema(() =>
+  z.object({ outcome: z.enum(["unlinked", "forbidden", "not_linked"]) }),
+);
+export type EnvironmentPlansUnlinkResponse = z.infer<
+  typeof environmentPlansUnlinkResponseSchema
+>;
+
+export const environmentPlansUnlinkV10 = defineRpcContract({
+  method: "environment.plans.unlink",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: environmentPlansUnlinkRequestSchema,
+  responseSchema: environmentPlansUnlinkResponseSchema,
+});
+
+// ── environment.configuration.guide.* ───────────────────────────────────────
+
+/**
+ * A team's agent selection guide, held in its configuration's room.
+ * `revision` is the room's opaque version of the text, quoted back by a set.
+ */
+export const environmentConfigurationGuideGetRequestSchema = lazySchema(() =>
+  z.object({ environmentId: environmentIdSchema }),
+);
+export type EnvironmentConfigurationGuideGetRequest = z.infer<
+  typeof environmentConfigurationGuideGetRequestSchema
+>;
+
+/**
+ * `not_served` on every guide method: the asked host does not serve that
+ * environment's room, so the client asks a host that does.
+ */
+export const environmentConfigurationGuideGetResponseSchema = lazySchema(() =>
+  z.discriminatedUnion("outcome", [
+    z.object({
+      outcome: z.literal("ok"),
+      text: z.string(),
+      revision: z.string().min(1),
+    }),
+    z.object({ outcome: z.literal("not_served") }),
+  ]),
+);
+export type EnvironmentConfigurationGuideGetResponse = z.infer<
+  typeof environmentConfigurationGuideGetResponseSchema
+>;
+
+export const environmentConfigurationGuideGetV10 = defineRpcContract({
+  method: "environment.configuration.guide.get",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: environmentConfigurationGuideGetRequestSchema,
+  responseSchema: environmentConfigurationGuideGetResponseSchema,
+});
+
+/** `set` against the revision read; `conflict` when the text moved since. */
+export const environmentConfigurationGuideSetRequestSchema = lazySchema(() =>
+  z.object({
+    environmentId: environmentIdSchema,
+    text: z.string(),
+    revision: z.string().min(1),
+  }),
+);
+export type EnvironmentConfigurationGuideSetRequest = z.infer<
+  typeof environmentConfigurationGuideSetRequestSchema
+>;
+
+export const environmentConfigurationGuideSetResponseSchema = lazySchema(() =>
+  z.object({ outcome: z.enum(["set", "conflict", "not_served"]) }),
+);
+export type EnvironmentConfigurationGuideSetResponse = z.infer<
+  typeof environmentConfigurationGuideSetResponseSchema
+>;
+
+export const environmentConfigurationGuideSetV10 = defineRpcContract({
+  method: "environment.configuration.guide.set",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: environmentConfigurationGuideSetRequestSchema,
+  responseSchema: environmentConfigurationGuideSetResponseSchema,
+});
+
+/** Back to the default guide. */
+export const environmentConfigurationGuideResetRequestSchema = lazySchema(() =>
+  z.object({ environmentId: environmentIdSchema }),
+);
+export type EnvironmentConfigurationGuideResetRequest = z.infer<
+  typeof environmentConfigurationGuideResetRequestSchema
+>;
+
+export const environmentConfigurationGuideResetResponseSchema = lazySchema(() =>
+  z.object({ outcome: z.enum(["reset", "not_served"]) }),
+);
+export type EnvironmentConfigurationGuideResetResponse = z.infer<
+  typeof environmentConfigurationGuideResetResponseSchema
+>;
+
+export const environmentConfigurationGuideResetV10 = defineRpcContract({
+  method: "environment.configuration.guide.reset",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: environmentConfigurationGuideResetRequestSchema,
+  responseSchema: environmentConfigurationGuideResetResponseSchema,
 });
 
 // ── environment.history ─────────────────────────────────────────────────────
@@ -323,8 +523,7 @@ export type EnvironmentHistoryRequest = z.infer<
 /**
  * One event. `actor` is who did it, `tombstoned` once that person's account
  * is gone (the label is then what remains of them), null for the system;
- * `operation` and `outcome` are open codes; `hostStates` is how each host of
- * the configuration took it, `state` an open code with its `reason`.
+ * `operation` and `outcome` are open codes.
  */
 export const environmentHistoryEntrySchema = lazySchema(() =>
   z.object({
@@ -332,15 +531,6 @@ export const environmentHistoryEntrySchema = lazySchema(() =>
     actor: z.object({ label: z.string(), tombstoned: z.boolean() }).nullable(),
     operation: z.string().min(1).max(64),
     outcome: z.string().min(1).max(64),
-    hostStates: z.array(
-      z.object({
-        hostId: z.string().min(1),
-        name: z.string(),
-        state: z.string().min(1).max(32),
-        reason: z.string().min(1).max(64).nullable(),
-        at: z.number().int().nonnegative(),
-      }),
-    ),
   }),
 );
 export type EnvironmentHistoryEntry = z.infer<
@@ -348,14 +538,35 @@ export type EnvironmentHistoryEntry = z.infer<
 >;
 
 /**
- * Newest first. `readerScope` is how much of it this reader may see: `full`,
- * `own` (only the reader's own events), or `status_only` (no entries; the
- * client draws no history).
+ * How one host of the configuration stands on the subject: `state` an open
+ * code with its `reason`, as of `at`, and when the host last reported (null
+ * before it ever did).
+ */
+export const environmentHistoryHostStateSchema = lazySchema(() =>
+  z.object({
+    hostId: z.string().min(1),
+    hostName: z.string(),
+    state: z.string().min(1).max(32),
+    reason: z.string().min(1).max(64).nullable(),
+    at: z.number().int().nonnegative(),
+    lastReportedAt: z.number().int().nonnegative().nullable(),
+  }),
+);
+export type EnvironmentHistoryHostState = z.infer<
+  typeof environmentHistoryHostStateSchema
+>;
+
+/**
+ * `entries` newest first; `readerScope` is how much of them this reader may
+ * see: `full`, `own` (only the reader's own events), or `status_only` (no
+ * entries; the client draws no history). `hostStates` is one row per host of
+ * the configuration, for every scope.
  */
 export const environmentHistoryResponseSchema = lazySchema(() =>
   z.object({
     entries: z.array(environmentHistoryEntrySchema),
     readerScope: z.enum(["full", "own", "status_only"]),
+    hostStates: z.array(environmentHistoryHostStateSchema),
   }),
 );
 export type EnvironmentHistoryResponse = z.infer<

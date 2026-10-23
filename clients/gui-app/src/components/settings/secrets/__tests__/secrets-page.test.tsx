@@ -90,7 +90,7 @@ function buildSecretsHost(overrides: Partial<SecretsHostState>): SecretsHost {
       "environment.secrets.list": () => {
         reads.list += 1;
         if (state.listError !== null) throw state.listError;
-        return { secrets: [...state.secrets] };
+        return { removed: [], secrets: [...state.secrets] };
       },
       "environment.secrets.verify": (request) => {
         verifyRequests.push(request);
@@ -256,7 +256,7 @@ describe("a row's Verify", () => {
       "Nothing answered on that port. Check the port this secret is set to.",
     );
     expect(host.verifyRequests).toEqual([
-      { target: "secret", secretId: "sec-1" },
+      { target: "secret", secretId: "sec-1", environmentId: null },
     ]);
   });
 
@@ -414,6 +414,7 @@ describe("saving a secret", () => {
         exportPolicy: null,
         sandboxesByDefault: true,
         plaintextConsent: null,
+        environmentId: null,
       },
     ]);
     await waitFor(() => {

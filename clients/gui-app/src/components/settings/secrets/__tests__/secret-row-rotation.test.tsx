@@ -186,7 +186,7 @@ function buildRotationHost(
     handlers: {
       "environment.secrets.list": () => {
         reads.list += 1;
-        return { secrets: [...state.secrets] };
+        return { removed: [], secrets: [...state.secrets] };
       },
       "environment.secrets.rotation": () => {
         reads.rotation += 1;
@@ -322,7 +322,12 @@ describe("Replace value", () => {
       expect(screen.queryByTestId("replace-secret-dialog")).toBeNull();
     });
     expect(host.replaceRequests).toEqual([
-      { secretId: "sec-1", value: TYPED_VALUE, expectedVersionId: "ver-3" },
+      {
+        secretId: "sec-1",
+        value: TYPED_VALUE,
+        expectedVersionId: "ver-3",
+        environmentId: null,
+      },
     ]);
     const headline = await screen.findByTestId("secret-rotation-headline");
     expect(headline.textContent).toBe(
@@ -532,7 +537,12 @@ describe("a secret's versions", () => {
 
     await waitFor(() => {
       expect(host.undoRequests).toEqual([
-        { secretId: "sec-1", versionId: "ver-2", regrant: false },
+        {
+          secretId: "sec-1",
+          versionId: "ver-2",
+          regrant: false,
+          environmentId: null,
+        },
       ]);
     });
     await waitFor(() => {
@@ -554,7 +564,12 @@ describe("a secret's versions", () => {
 
     await waitFor(() => {
       expect(host.undoRequests).toEqual([
-        { secretId: "sec-1", versionId: "ver-2", regrant: true },
+        {
+          secretId: "sec-1",
+          versionId: "ver-2",
+          regrant: true,
+          environmentId: null,
+        },
       ]);
     });
   });
@@ -588,7 +603,7 @@ describe("a secret's versions", () => {
 
     await waitFor(() => {
       expect(host.destroyRequests).toEqual([
-        { secretId: "sec-1", versionId: "ver-2" },
+        { secretId: "sec-1", versionId: "ver-2", environmentId: null },
       ]);
     });
     await waitFor(() => {

@@ -21,7 +21,9 @@ import * as schemas from "./environment-schemas";
  * `environment.secrets.*` request names the environment it addresses (null
  * for the host's own) and `versions` answers a secret's removal;
  * `environment.status` answers the move's consent and planes;
- * `environment.review` answers the retrospective sheet's record. Neither
+ * `environment.review` answers the retrospective sheet's record;
+ * `providers.link` and `providers.linkComplete` name the environment whose
+ * plan they link. Neither
  * line has shipped, so none is a MAJOR.
  */
 export const environmentSecretsListV10 = defineRpcContract({
@@ -35,7 +37,7 @@ export const environmentSecretsListV11 = defineRpcContract({
   method: "environment.secrets.list",
   schemaVersion: { major: 1, minor: 1 } as const,
   requestSchema: schemas.environmentSecretsListRequestSchemaV11,
-  responseSchema: schemas.environmentSecretsListResponseSchema,
+  responseSchema: schemas.environmentSecretsListResponseSchemaV11,
 });
 
 export const environmentSecretsListUpgradeV10ToV11 = defineUpgradePath<
@@ -45,7 +47,7 @@ export const environmentSecretsListUpgradeV10ToV11 = defineUpgradePath<
   from: environmentSecretsListV10.schemaVersion,
   to: environmentSecretsListV11.schemaVersion,
   upgradeRequest: (request) => ({ ...request, environmentId: null }),
-  upgradeResponse: (response) => response,
+  upgradeResponse: (response) => ({ ...response, removed: [] }),
 });
 
 export const environmentSecretsCreateV10 = defineRpcContract({
@@ -298,20 +300,67 @@ export const environmentSecretsConsentUpgradeV10ToV11 = defineUpgradePath<
   upgradeResponse: (response) => response,
 });
 
+export const providersLinkV10 = defineRpcContract({
+  method: "providers.link",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: schemas.providersLinkRequestSchema,
+  responseSchema: schemas.providersLinkResponseSchema,
+});
+
+export const providersLinkV11 = defineRpcContract({
+  method: "providers.link",
+  schemaVersion: { major: 1, minor: 1 } as const,
+  requestSchema: schemas.providersLinkRequestSchemaV11,
+  responseSchema: schemas.providersLinkResponseSchema,
+});
+
+export const providersLinkUpgradeV10ToV11 = defineUpgradePath<
+  typeof providersLinkV10,
+  typeof providersLinkV11
+>({
+  from: providersLinkV10.schemaVersion,
+  to: providersLinkV11.schemaVersion,
+  upgradeRequest: (request) => ({ ...request, environmentId: null }),
+  upgradeResponse: (response) => response,
+});
+
+export const providersLinkCompleteV10 = defineRpcContract({
+  method: "providers.linkComplete",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: schemas.providersLinkCompleteRequestSchema,
+  responseSchema: schemas.providersLinkCompleteResponseSchema,
+});
+
+export const providersLinkCompleteV11 = defineRpcContract({
+  method: "providers.linkComplete",
+  schemaVersion: { major: 1, minor: 1 } as const,
+  requestSchema: schemas.providersLinkCompleteRequestSchemaV11,
+  responseSchema: schemas.providersLinkCompleteResponseSchema,
+});
+
+export const providersLinkCompleteUpgradeV10ToV11 = defineUpgradePath<
+  typeof providersLinkCompleteV10,
+  typeof providersLinkCompleteV11
+>({
+  from: providersLinkCompleteV10.schemaVersion,
+  to: providersLinkCompleteV11.schemaVersion,
+  upgradeRequest: (request) => ({ ...request, environmentId: null }),
+  upgradeResponse: (response) => response,
+});
+
 export const ENVIRONMENT_RPC_METHODS = {
   "providers.link": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
-          contract: defineRpcContract({
-            method: "providers.link",
-            schemaVersion: { major: 1, minor: 0 },
-            requestSchema: schemas.providersLinkRequestSchema,
-            responseSchema: schemas.providersLinkResponseSchema,
-          }),
+          contract: providersLinkV10,
           upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: providersLinkV11,
+          upgradeFromPreviousVersion: providersLinkUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},
@@ -320,16 +369,15 @@ export const ENVIRONMENT_RPC_METHODS = {
   "providers.linkComplete": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
-          contract: defineRpcContract({
-            method: "providers.linkComplete",
-            schemaVersion: { major: 1, minor: 0 },
-            requestSchema: schemas.providersLinkCompleteRequestSchema,
-            responseSchema: schemas.providersLinkCompleteResponseSchema,
-          }),
+          contract: providersLinkCompleteV10,
           upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: providersLinkCompleteV11,
+          upgradeFromPreviousVersion: providersLinkCompleteUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},

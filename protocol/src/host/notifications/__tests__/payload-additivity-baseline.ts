@@ -747,6 +747,10 @@ export const PAYLOAD_FINGERPRINT_BASELINE = {
         type: "string",
         const: "environment_move_stalled",
       },
+      environmentId: {
+        type: "string",
+        minLength: 1,
+      },
       hostId: {
         type: "string",
         minLength: 1,
@@ -764,7 +768,14 @@ export const PAYLOAD_FINGERPRINT_BASELINE = {
         minLength: 1,
       },
     },
-    required: ["kind", "hostId", "hostName", "remaining", "reason"],
+    required: [
+      "kind",
+      "environmentId",
+      "hostId",
+      "hostName",
+      "remaining",
+      "reason",
+    ],
   },
   environment_apply_failed: {
     type: "object",
@@ -772,6 +783,10 @@ export const PAYLOAD_FINGERPRINT_BASELINE = {
       kind: {
         type: "string",
         const: "environment_apply_failed",
+      },
+      environmentId: {
+        type: "string",
+        minLength: 1,
       },
       hostId: {
         type: "string",
@@ -789,7 +804,14 @@ export const PAYLOAD_FINGERPRINT_BASELINE = {
         minLength: 1,
       },
     },
-    required: ["kind", "hostId", "hostName", "itemKey", "reason"],
+    required: [
+      "kind",
+      "environmentId",
+      "hostId",
+      "hostName",
+      "itemKey",
+      "reason",
+    ],
   },
   team_role_changed: {
     type: "object",

@@ -2487,6 +2487,9 @@ export const HOST_METHOD_POLL_TABLE = {
   "environment.configuration.items": { ...LATEST_SCHEDULING, poll: null },
   "environment.history": { ...LATEST_SCHEDULING, poll: null },
   "environment.members.removePreview": { ...LATEST_SCHEDULING, poll: null },
+  "environment.plans.list": { ...LATEST_SCHEDULING, poll: null },
+  "environment.plans.unlinkPreview": { ...LATEST_SCHEDULING, poll: null },
+  "environment.configuration.guide.get": { ...LATEST_SCHEDULING, poll: null },
   "environment.move.accept": {
     mode: "fifo",
     joinResponseTimeoutMs: null,
@@ -2548,6 +2551,21 @@ export const HOST_METHOD_POLL_TABLE = {
     poll: null,
   },
   "environment.review.record": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "environment.plans.unlink": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "environment.configuration.guide.set": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "environment.configuration.guide.reset": {
     mode: "fifo",
     joinResponseTimeoutMs: null,
     poll: null,

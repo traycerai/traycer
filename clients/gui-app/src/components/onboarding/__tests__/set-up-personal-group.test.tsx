@@ -136,7 +136,7 @@ function renderGroup(
     },
     "environment.secrets.list": () => {
       calls.secrets += 1;
-      return { secrets: [...facts.secrets] };
+      return { removed: [], secrets: [...facts.secrets] };
     },
     "environment.status": () => {
       calls.status += 1;

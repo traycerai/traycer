@@ -97,6 +97,7 @@ function ProviderLinkDialogFor(props: {
       const response = await client.request("providers.link", {
         providerId: providerId.data,
         profileId: linkTarget.profileId,
+        environmentId: null,
       });
       setState(stateOfLinkStart(response));
     } catch (error) {
@@ -112,6 +113,7 @@ function ProviderLinkDialogFor(props: {
       const response = await client.request("providers.linkComplete", {
         linkId: current.linkId,
         code: code.trim(),
+        environmentId: null,
       });
       setCode("");
       setState((latest) => stateOfLinkComplete(latest, response));
@@ -131,7 +133,11 @@ function ProviderLinkDialogFor(props: {
     let cancelled = false;
     const timer = setTimeout(() => {
       void client
-        .request("providers.linkComplete", { linkId: pollLinkId, code: null })
+        .request("providers.linkComplete", {
+          linkId: pollLinkId,
+          code: null,
+          environmentId: null,
+        })
         .then((response) => {
           if (cancelled) return;
           setState((latest) => stateOfLinkComplete(latest, response));

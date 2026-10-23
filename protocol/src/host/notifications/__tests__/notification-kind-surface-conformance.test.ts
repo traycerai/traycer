@@ -230,6 +230,7 @@ const REPRESENTATIVE_ENTRIES: Readonly<
     outcome: "errored",
     payload: {
       kind: "environment_move_stalled",
+      environmentId: "env-1",
       hostId: "host-1",
       hostName: "MacBook Pro",
       remaining: 3,
@@ -243,6 +244,7 @@ const REPRESENTATIVE_ENTRIES: Readonly<
     outcome: "errored",
     payload: {
       kind: "environment_apply_failed",
+      environmentId: "env-1",
       hostId: "host-1",
       hostName: "dev-box",
       itemKey: "PATH",

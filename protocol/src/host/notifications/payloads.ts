@@ -849,6 +849,7 @@ export const hostNotificationEnvironmentMoveStalledPayloadSchema = lazySchema(
     z
       .object({
         kind: z.literal("environment_move_stalled"),
+        environmentId: idSchema,
         hostId: z.string().min(1),
         hostName: z.string(),
         remaining: z.number().int().nonnegative(),
@@ -870,6 +871,7 @@ export const hostNotificationEnvironmentApplyFailedPayloadSchema = lazySchema(
     z
       .object({
         kind: z.literal("environment_apply_failed"),
+        environmentId: idSchema,
         hostId: z.string().min(1),
         hostName: z.string(),
         itemKey: z.string().min(1),

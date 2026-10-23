@@ -640,6 +640,30 @@ export type ProvidersLinkCompleteResponse = z.infer<
   typeof providersLinkCompleteResponseSchema
 >;
 
+/**
+ * The `@1.1` requests of `providers.link` and `providers.linkComplete`:
+ * `@1.0`'s plus the environment whose plan is linked, so a team's plan links
+ * through the same host. Null is the serving host's own environment, which is
+ * what every `@1.0` request meant. The responses are `@1.0`'s.
+ */
+const providersLinkEnvironmentIdField = {
+  environmentId: lazySchema(() => z.string().min(1).nullable().default(null)),
+};
+
+export const providersLinkRequestSchemaV11 = lazySchema(() =>
+  providersLinkRequestSchema.extend(providersLinkEnvironmentIdField),
+);
+export type ProvidersLinkRequestV11 = z.infer<
+  typeof providersLinkRequestSchemaV11
+>;
+
+export const providersLinkCompleteRequestSchemaV11 = lazySchema(() =>
+  providersLinkCompleteRequestSchema.extend(providersLinkEnvironmentIdField),
+);
+export type ProvidersLinkCompleteRequestV11 = z.infer<
+  typeof providersLinkCompleteRequestSchemaV11
+>;
+
 // ── environment.agentDefinitions.* ──────────────────────────────────────────
 
 /** An `agent_definition` item: file name and text. */
@@ -1213,7 +1237,8 @@ export type EnvironmentSecretsConsentResponse = z.infer<
  * the environment whose secrets they address, so a team's secrets read and
  * write through the same forwarder. Null is the serving host's own
  * environment, which is what every `@1.0` request meant. The responses are
- * `@1.0`'s, but for `versions`, which gains `removal`.
+ * `@1.0`'s, but for `versions`, which gains `removal`, and `list`, which gains
+ * `removed`.
  */
 const secretsEnvironmentIdField = {
   environmentId: lazySchema(() => z.string().min(1).nullable().default(null)),
@@ -1317,6 +1342,29 @@ export const environmentSecretRemovalSchema = lazySchema(() =>
 );
 export type EnvironmentSecretRemoval = z.infer<
   typeof environmentSecretRemovalSchema
+>;
+
+/**
+ * `list@1.1`'s answer: `@1.0`'s rows unchanged, plus the secrets removed in
+ * the last 30 days, kept as metadata: id, name and how far the removal
+ * reached. A `@1.0` answer upgrades with none.
+ */
+export const environmentSecretsListResponseSchemaV11 = lazySchema(() =>
+  z.object({
+    secrets: z.array(environmentSecretSchema),
+    removed: z
+      .array(
+        z.object({
+          id: z.string().min(1),
+          name: z.string().min(1),
+          removal: environmentSecretRemovalSchema,
+        }),
+      )
+      .default([]),
+  }),
+);
+export type EnvironmentSecretsListResponseV11 = z.infer<
+  typeof environmentSecretsListResponseSchemaV11
 >;
 
 export const environmentSecretsVersionsResponseSchemaV11 = lazySchema(() =>
