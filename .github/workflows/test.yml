@@ -9,8 +9,8 @@ on:
   pull_request:
   push:
     branches: [main]
-  # Test a branch before merging it: the Actions tab, or
-  # `gh workflow run test.yml --ref <branch>`.
+  # A manual trigger for a sparing branch run, when a check is actually
+  # needed before the merge (AGENTS.md, "When CI runs").
   workflow_dispatch:
 
 permissions:

@@ -17,7 +17,12 @@ import {
   type ParkedRegistrationTakeover,
   type RegisterHostLoginItemResult,
 } from "../app/host-login-item";
-import { readCliManifest, resolveBundledCliPath } from "../cli/cli-discovery";
+import {
+  BUNDLED_CLI_LOCAL_VERSION,
+  readBundledCliVersion,
+  readCliManifest,
+  resolveBundledCliPath,
+} from "../cli/cli-discovery";
 import {
   runBundledTraycerCliJson,
   spawnDetachedBundledTraycerCliJson,
@@ -874,6 +879,14 @@ interface AvailableSnapshotShape {
     readonly available: boolean;
   }>;
 }
+
+/**
+ * Why `applyPendingLoginItemRevisionIfIdle` owes the running service a
+ * refresh: the installer's marker, or a supervisor from a replaced bundle.
+ */
+type LaunchAgentRefreshCause =
+  | "pending-revision-marker"
+  | "supervisor-predates-bundle";
 
 // One attempt of the locked macOS activation cycle. The extra arm marks
 // the one failure class the wrapper may repair by re-running the cycle:
@@ -3136,7 +3149,10 @@ export class HostController {
   // running host instead of booting it out, so its LaunchAgent keeps the
   // launchd registration it had before the bundle swap - the freshly
   // written plist (e.g. a new descriptor limit) sits inert until something
-  // re-runs the SMAppService cycle. Two callers drive this opportunistically,
+  // re-runs the SMAppService cycle. Every other bundle swap - an auto-update
+  // above all - leaves the same debt with no marker, and a worse one: the
+  // service's supervisor keeps running from the deleted bundle (see
+  // `serviceSupervisorPredatesBundle`). Two callers drive this opportunistically,
   // ONLY when the host is idle, so the refresh never interrupts in-progress
   // work: `convergeReadyPackagedMac`'s already-reachable branch (a renderer-
   // triggered ensure), and `PendingLoginItemRevisionMonitor`'s poll loop (the
@@ -3152,7 +3168,7 @@ export class HostController {
   // would deadlock that caller against its own tail. Returns the converged
   // result when this path fully handled the call (refreshed, removed-by-
   // user, or a terminal refresh failure), or `null` when there was nothing
-  // to do (not reachable, no marker, quarantined, or the host is busy).
+  // to do (not reachable, nothing owed, quarantined, or the host is busy).
   //
   // Fixup D1: the monitor's tick and the reentrant `convergeReadyPackagedMac`
   // caller used to each independently pass every pre-check and run their own
@@ -3241,8 +3257,8 @@ export class HostController {
       this.reachabilityProbe,
     );
     if (currentVersion === null) return null;
-    if (!(await hasUnappliedPendingLoginItemRevision(this.environment)))
-      return null;
+    const cause = await this.owedLaunchAgentRefresh();
+    if (cause === null) return null;
     if ((await probeHostBusyVerdict(this.layout)) !== "idle") {
       log.debug(
         "[host-controller] pending LaunchAgent revision deferred - host busy",
@@ -3296,14 +3312,77 @@ export class HostController {
     // the same lock, and land right after the cycle it was told nothing about.
     this.pendingRevisionCycleDisruptive = true;
     try {
-      return await this.runPendingLoginItemRevisionCycle(currentVersion);
+      return await this.runPendingLoginItemRevisionCycle(currentVersion, cause);
     } finally {
       this.pendingRevisionCycleDisruptive = false;
     }
   }
 
+  /**
+   * What the running service owes the refresh cycle, or `null` for nothing:
+   * the installer's pending-revision marker, or a supervisor started from a
+   * bundle that has since been replaced. Re-read under the lock, so it is one
+   * function rather than two checks that could drift apart.
+   */
+  private async owedLaunchAgentRefresh(): Promise<LaunchAgentRefreshCause | null> {
+    if (await hasUnappliedPendingLoginItemRevision(this.environment)) {
+      return "pending-revision-marker";
+    }
+    return (await this.serviceSupervisorPredatesBundle())
+      ? "supervisor-predates-bundle"
+      : null;
+  }
+
+  /**
+   * Whether the live service supervisor was started from a bundle this app
+   * has since replaced.
+   *
+   * An app update swaps the bundle out from under the service (ShipIt moves
+   * the old app aside and deletes it), and nothing in the update stops the
+   * launchd job: the relaunched app's ensure finds the host reachable and
+   * keeps it. The supervisor then runs from a deleted executable until the
+   * host next restarts, and macOS privacy checks charge every file access by
+   * the host's tree - its agents' shells included - to that supervisor. tccd
+   * cannot open the executable ("Failed to fetch responsible file descriptor:
+   * ENOENT") and denies Desktop, Documents and Downloads without prompting.
+   *
+   * The helper's executable IS the bundled CLI (`inject-host-launch-agent.cjs`
+   * copies it, and the release verifies its `--version` against
+   * `version.json`), so a service supervisor recording any other CLI version
+   * came from an earlier bundle. Only a supervisor this app's login item
+   * launched runs from the bundle at all: a terminal run is never touched, and
+   * a CLI-owned LaunchAgent runs its own installed CLI. A bundle with no
+   * version metadata cannot say which CLI it carries, and no restart could
+   * make the two agree, so it owes nothing.
+   */
+  private async serviceSupervisorPredatesBundle(): Promise<boolean> {
+    const bundledCliVersion = await readBundledCliVersion();
+    if (bundledCliVersion === BUNDLED_CLI_LOCAL_VERSION) return false;
+    const run = await this.supervisorRun.readSupervisorRun();
+    if (
+      run.admittedAs !== "service" ||
+      run.cliVersion === null ||
+      run.cliVersion === bundledCliVersion
+    ) {
+      return false;
+    }
+    const label = labelForEnvironment(this.environment);
+    const owner = await readHostServiceOwner(
+      this.layout,
+      {
+        cliLabelId: label.id,
+        agentLabelId: smAppServiceAgentLabelId(label.id),
+      },
+      // See `routeForceRestartContinuation`: the running host's own label is
+      // not observable from this process.
+      { kind: "unavailable" },
+    );
+    return owner.kind === "owned" && owner.substrate === "smappservice";
+  }
+
   private async runPendingLoginItemRevisionCycle(
     currentVersion: string,
+    cause: LaunchAgentRefreshCause,
   ): Promise<MutationOutcome<ConvergeReadyOk> | null> {
     const outcome = await withDesktopUpdateContender(
       {
@@ -3347,12 +3426,13 @@ export class HostController {
         // `applyPendingLoginItemRevisionIfIdle` is the primary fix for two
         // concurrent callers double-cycling SMAppService, but this closure
         // only runs once per acquisition regardless of how many callers are
-        // waiting on the desktop lock - re-check the marker itself here,
-        // under the lock, the same lock-rule-3 discipline B12 applies to
-        // the install record above. Catches the marker resolving through
-        // any OTHER path between the pre-lock check and acquisition, not
+        // waiting on the desktop lock - re-check what is owed here, under
+        // the lock, the same lock-rule-3 discipline B12 applies to the
+        // install record above. Catches the debt resolving through any
+        // OTHER path between the pre-lock check and acquisition (a marker
+        // cleared, a supervisor already restarted from this bundle), not
         // just the specific race the coalescing gate closes.
-        if (!(await hasUnappliedPendingLoginItemRevision(this.environment))) {
+        if ((await this.owedLaunchAgentRefresh()) === null) {
           return {
             status: "no-longer-pending" as const,
             prePid,
@@ -3410,7 +3490,7 @@ export class HostController {
     }
     if (status === "no-longer-pending") {
       log.debug(
-        "[host-controller] pending LaunchAgent revision skipped - marker resolved before this cycle acquired the lock",
+        "[host-controller] pending LaunchAgent revision skipped - nothing owed once this cycle acquired the lock",
       );
       return null;
     }
@@ -3512,6 +3592,7 @@ export class HostController {
       return this.failedAfterServiceCycle(err);
     }
     log.info("[host-controller] pending LaunchAgent revision applied", {
+      cause,
       version: readiness.version ?? currentVersion,
       pid: readiness.pid,
     });

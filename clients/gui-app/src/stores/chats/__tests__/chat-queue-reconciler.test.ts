@@ -249,6 +249,32 @@ describe("chat-queue-reconciler", () => {
       expect(result.pendingUserMessages).toEqual([]);
     });
 
+    it("a host queued send does not confirm a different pending send with identical content", () => {
+      const action1 = createPendingAction("action-1", "msg-1", "send");
+      const action2 = createPendingAction("action-2", "msg-2", "send");
+      const input: ReconcileQueueInput = {
+        acceptedActions: {},
+        pendingActions: { "action-1": action1, "action-2": action2 },
+        pendingUserMessages: [
+          createPendingUserMessage("action-1", "msg-1"),
+          createPendingUserMessage("action-2", "msg-2"),
+        ],
+        queue: {
+          status: "running",
+          items: [createQueueItem("msg-1", CONTENT)],
+        },
+        nowMs: 5000,
+      };
+
+      const result = reconcileQueueChange(input);
+
+      expect(Object.keys(result.acceptedActions)).toEqual(["action-1"]);
+      expect(Object.keys(result.pendingActions)).toEqual(["action-2"]);
+      expect(result.pendingUserMessages.map((m) => m.messageId)).toEqual([
+        "msg-2",
+      ]);
+    });
+
     it("filters pending user messages when their actions are queued", () => {
       const action1 = createPendingAction("action-1", "msg-1", "send");
       const action2: PendingChatAction = {

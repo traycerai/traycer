@@ -61,6 +61,7 @@ vi.mock("@/hooks/host/use-reactive-host-readiness", () => ({
 }));
 
 vi.mock("@/hooks/host/use-host-supports-method", () => ({
+  useHostMethodSupport: () => true,
   useHostSupportsMethod: () => true,
 }));
 

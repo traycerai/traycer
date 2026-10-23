@@ -33,6 +33,7 @@ import type { ChatStreamCallbacks } from "@traycer-clients/shared/host-transport
 import type { Chat } from "@traycer/protocol/persistence/epic/schemas";
 import {
   createChatSessionStore,
+  type ChatSessionState,
   type ChatSessionStoreHandle,
 } from "@/stores/chats/chat-session-store";
 import { SEND_RESTORED_NOTICE_CODE } from "@/stores/chats/chat-queue-reconciler";
@@ -301,6 +302,12 @@ afterEach(() => {
   window.localStorage.clear();
 });
 
+function queuedMessageIds(state: ChatSessionState): string[] {
+  return state.queue.items.flatMap((item) =>
+    item.kind === "prompt" ? [item.messageId] : [],
+  );
+}
+
 describe("chat-session-store messageDelivery: synchronous drop", () => {
   it("onMessageDeliveryChanged drops every local copy of the withdrawn message in the SAME update, leaving another message's copies untouched", () => {
     harness = createHarness();
@@ -315,9 +322,12 @@ describe("chat-session-store messageDelivery: synchronous drop", () => {
     expect(
       before.pendingUserMessages.some((m) => m.messageId === first.messageId),
     ).toBe(true);
+    // The second send meets the first's turn in custody, so it docks: its
+    // local copy is an optimistic queue row, not a transcript echo.
     expect(
       before.pendingUserMessages.some((m) => m.messageId === second.messageId),
-    ).toBe(true);
+    ).toBe(false);
+    expect(queuedMessageIds(before)).toEqual([second.messageId]);
 
     emitMessageDeliveryChanged(
       callbacks,
@@ -336,7 +346,8 @@ describe("chat-session-store messageDelivery: synchronous drop", () => {
     ).toBe(false);
     expect(
       after.pendingUserMessages.some((m) => m.messageId === second.messageId),
-    ).toBe(true);
+    ).toBe(false);
+    expect(queuedMessageIds(after)).toEqual([second.messageId]);
   });
 
   it("an ordinary onSnapshot fold drops every local copy of the withdrawn message it seats, in that same fold", () => {

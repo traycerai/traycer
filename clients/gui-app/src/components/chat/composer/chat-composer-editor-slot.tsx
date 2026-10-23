@@ -54,6 +54,7 @@ interface ChatComposerEditorSlotProps {
     | null;
   readonly isActive: boolean;
   readonly disabled: boolean;
+  readonly onUserInput?: (wasEmpty: boolean) => void;
   readonly onDocumentChange: (
     content: JsonContent,
     selection: { from: number; to: number },
@@ -100,6 +101,7 @@ export function ChatComposerEditorSlot(props: ChatComposerEditorSlotProps) {
     isActive,
     disabled,
     onDocumentChange,
+    onUserInput,
     onSelectionChange,
     onSubmit,
     steerHintActive,
@@ -186,6 +188,7 @@ export function ChatComposerEditorSlot(props: ChatComposerEditorSlotProps) {
         )}
         stabilizeImageAttachmentCaret
         onDocumentChange={onDocumentChange}
+        onUserInput={onUserInput}
         onSelectionChange={onSelectionChange}
         onSubmit={onSubmit}
         onPaste={onPaste}

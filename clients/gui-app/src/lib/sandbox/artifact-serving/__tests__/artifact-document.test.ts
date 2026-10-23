@@ -7,6 +7,7 @@ import {
   buildArtifactDocument,
   type ArtifactDocumentOptions,
 } from "../artifact-document";
+import { buildHtmlViewerPrelude } from "../../html-viewer-bootstrap";
 
 // The loader is a classic script with no exports, run for its effect: it
 // waits, in a jsdom window that is its own parent, for a resource message.
@@ -170,11 +171,16 @@ describe("buildArtifactDocument / sandbox loader parity", () => {
       // origin's own base policy). A served document is a page of its
       // artifact, so its bootstrap carries the "found" role and follows
       // sibling html links; the loader's inline document has no pages, so it
-      // carries null. With those two deliberate differences taken out, the
-      // composed document must reproduce the loader's output byte for byte.
+      // carries null. A plain page also carries the viewer prelude that
+      // the loader's document lacks. With those three deliberate differences
+      // taken out, the composed document must reproduce the loader's output
+      // byte for byte.
+      const prelude = buildHtmlViewerPrelude();
+      expect(composed.split(prelude)).toHaveLength(2);
       expect(
         composed
           .replace(BASE_META, "")
+          .replace(prelude, "")
           .replace('"artifactPage":"found"', '"artifactPage":null'),
       ).toBe(fromLoader);
     },

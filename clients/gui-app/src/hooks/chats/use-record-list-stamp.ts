@@ -297,45 +297,20 @@ export function useRecordListStreamStamp(
    */
   refetch: () => Promise<unknown>,
   /**
-   * This plane's live repair inputs, as ONE argument rather than two - they
-   * are read together by the single effect below, and a fifth positional
-   * parameter is over this package's `max-params` ceiling.
+   * This plane's projected `deltaIncompleteSeq`, or `null` with no session.
+   *
+   * A move in it means a delta INTRODUCED a row the store cannot fully
+   * state - a chat with no home, an agent with no session facet - so the
+   * rows this client holds are not the rows the host's list describes, and
+   * the stamp the same delta advanced is a claim to hold them.
+   *
+   * Read as a value rather than through the stamp's own getter, because
+   * this is the one input that has to drive a RENDER: the counter crosses
+   * the runtime worker's command bridge long after the delta was
+   * announced, so there is no callback to hang the repair off.
    */
-  incomplete: {
-    /**
-     * This plane's projected `deltaIncompleteSeq`, or `null` with no session.
-     *
-     * A move in it means a delta INTRODUCED a row the store cannot fully
-     * state - a chat with no home, an agent with no session facet - so the
-     * rows this client holds are not the rows the host's list describes, and
-     * the stamp the same delta advanced is a claim to hold them.
-     *
-     * Read as a value rather than through the stamp's own getter, because
-     * this is the one input that has to drive a RENDER: the counter crosses
-     * the runtime worker's command bridge long after the delta was
-     * announced, so there is no callback to hang the repair off.
-     */
-    readonly deltaIncompleteSeq: number | null;
-    /**
-     * Whether this plane's list read is in flight right now.
-     *
-     * The division of labour between the two incomplete-apply clauses, and
-     * the reason they compose instead of overlapping. A read already on the
-     * wire is a repair already happening: its answer either states the field
-     * the delta could not - and there is nothing left to do - or it cannot,
-     * in which case the row it was dispatched before is held back by the
-     * request-time fence, `snapshotIncompleteSeq` moves, and the DISPATCH
-     * comparison declines its stamp. Either way the snapshot clause owns it.
-     *
-     * Re-reading over the top would not merely be wasteful: it replaces the
-     * in-flight answer, so the fence skip that is the snapshot clause's whole
-     * trigger never happens and that repair path is disabled by the one meant
-     * to complement it.
-     */
-    readonly listIsFetching: boolean;
-  },
+  deltaIncompleteSeq: number | null,
 ): void {
-  const { deltaIncompleteSeq, listIsFetching } = incomplete;
   // Through a ref so the subscription survives re-renders: `refetch` is read
   // at NOTIFICATION time, and re-subscribing whenever the query result object
   // is rebuilt (every render) would churn the channel for nothing.
@@ -358,30 +333,38 @@ export function useRecordListStreamStamp(
   // and delete closed on it. A delta has no dispatch of its own to bind to,
   // so there is nothing here for that mechanism to be the repair of.
   const seenDeltaIncompleteSeq = useRef(deltaIncompleteSeq);
-  // Synced in an effect rather than written during render, and DECLARED
-  // ABOVE the one that reads it so effect order makes it current: when this
-  // value and the counter move in the same commit, this runs first.
-  const listIsFetchingRef = useRef(listIsFetching);
   useEffect(() => {
-    listIsFetchingRef.current = listIsFetching;
-  }, [listIsFetching]);
-  useEffect(() => {
-    if (deltaIncompleteSeq === null) return;
-    // Also the mount case: the ref seeds from the first render's value, so a
-    // session that already has a non-zero counter does not re-read on mount.
+    // A session's FIRST observed counter is its baseline, not a move. The ref
+    // seeds from the first render's value, so a session that already has a
+    // non-zero counter does not re-read on mount; with no session (`null`) it
+    // forgets the baseline, so a store that arrives under a mounted hook seeds
+    // it the same way instead of dropping a valid stamp and re-reading a fresh
+    // answer.
+    if (deltaIncompleteSeq === null) {
+      seenDeltaIncompleteSeq.current = null;
+      return;
+    }
+    if (seenDeltaIncompleteSeq.current === null) {
+      seenDeltaIncompleteSeq.current = deltaIncompleteSeq;
+      return;
+    }
     if (seenDeltaIncompleteSeq.current === deltaIncompleteSeq) return;
-    // Marked seen even when the read below is skipped, so one counter move
-    // costs at most one action. Not marking it would re-read the moment the
-    // in-flight answer settled, which is the one point at which a re-read is
-    // guaranteed to be redundant.
+    // Marked seen first, so one counter move costs exactly one re-read.
     seenDeltaIncompleteSeq.current = deltaIncompleteSeq;
     // The stamp goes regardless. It was advanced by a delta whose apply this
     // client cannot describe, so it may not be sent whatever repairs it.
     stamp.hold(null, null);
-    // Read through a ref rather than a dependency: this is a decision about
-    // the instant the counter moved, and re-running the effect when the
-    // query later settles would act on a world that has already changed.
-    if (listIsFetchingRef.current) return;
+    // Re-read EVEN WITH A READ IN FLIGHT - `refetch` cancels that read and
+    // re-dispatches. A read already on the wire cannot be trusted to state
+    // the field: one dispatched after the delta's announcement carried the
+    // stamp that announcement advanced, so the host answers `unchanged`, no
+    // row reaches the store, and that answer's own `hold` re-arms the stamp
+    // dropped above. Every later poll is then `unchanged` too, and the row
+    // stays unstated until the session is rebuilt. This is the create-then-
+    // act path: a fork's own `invalidateEpicChatRecords` dispatches exactly
+    // that read, and the fork's reparent, rename, archive and delete stay
+    // closed until a reload. The re-dispatch reads the dropped stamp, so it
+    // asks for a snapshot, fenced after the delta it repairs.
     void refetchRef.current();
   }, [deltaIncompleteSeq, stamp]);
   useEffect(

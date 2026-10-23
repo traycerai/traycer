@@ -29,6 +29,7 @@ import {
 } from "@/stores/epics/open-epic/test-support/open-store-for-test";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useTabsStore } from "@/stores/tabs/store";
+import type { TabRef } from "@/stores/tabs/types";
 import { tabAutoTint } from "@/components/layout/tabs/tab-identity";
 import { useSidebarRailWidthStore } from "@/stores/epics/sidebar-rail-width-store";
 
@@ -168,6 +169,29 @@ function renderColumnWithSession(handle: OpenedStoreForTest) {
     </TooltipProvider>,
     { wrapper: QueryWrapper },
   );
+}
+
+/**
+ * A tab's colour as the organization projection writes it: straight onto the
+ * layout. There is no client action for it any more - colour belongs to the
+ * account's task appearance.
+ */
+function seedTabColor(ref: TabRef, color: string): void {
+  const key = `${ref.kind}:${ref.id}`;
+  const current = useTabsStore.getState().customizations?.[key];
+  useTabsStore.setState({
+    customizations: {
+      ...useTabsStore.getState().customizations,
+      [key]: {
+        color,
+        icon: current?.icon ?? null,
+        groupId: current?.groupId ?? null,
+        // Stamped, because only the account's projection writes a colour.
+        organizationOwnerId: "user-1",
+      },
+    },
+  });
+  useTabsStore.getState().repair();
 }
 
 describe("<EpicSidebarColumn />", () => {
@@ -599,13 +623,11 @@ describe("<EpicSidebarColumn /> panel task header", () => {
     useEpicCanvasStore
       .getState()
       .openEpicTabWithId(TAB_ID, EPIC_ID, "Header Task");
-    // `setTabCustomization` writes onto the strip's own layout item, so the
-    // ref has to be present in it first - unlike the epic-canvas tab record,
-    // this store has no seed for a ref that was never opened through it.
+    // The colour is written onto the strip's own layout item, so the ref has
+    // to be present in it first - unlike the epic-canvas tab record, this
+    // store has no seed for a ref that was never opened through it.
     useTabsStore.getState().ensurePresent({ kind: "epic", id: TAB_ID });
-    useTabsStore
-      .getState()
-      .setTabCustomization({ kind: "epic", id: TAB_ID }, { color: "#3355ee" });
+    seedTabColor({ kind: "epic", id: TAB_ID }, "#3355ee");
 
     renderColumn();
 

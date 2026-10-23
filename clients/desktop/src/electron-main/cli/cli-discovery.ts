@@ -167,7 +167,7 @@ export function bundledCliArchDir(): string {
 }
 
 const BUNDLED_CLI_VERSION_FILENAME = "version.json";
-const BUNDLED_CLI_LOCAL_VERSION = "0.0.0-local";
+export const BUNDLED_CLI_LOCAL_VERSION = "0.0.0-local";
 
 /**
  * Read the bundled CLI version metadata staged next to the CLI binary.

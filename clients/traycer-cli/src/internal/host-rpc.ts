@@ -7,7 +7,10 @@ import {
 } from "@traycer/protocol/host/registry";
 import { getLatestContract } from "@traycer/protocol/framework/versioned-rpc";
 import { MutableBearerLease } from "../../../shared/auth/bearer-source";
-import { createAuthAwareMessenger } from "../../../shared/host-transport/auth-aware-messenger";
+import {
+  createAuthAwareMessenger,
+  type AuthRecoveryScope,
+} from "../../../shared/host-transport/auth-aware-messenger";
 import {
   createRetryingMessenger,
   DEFAULT_TRANSPORT_RETRY_POLICY,
@@ -188,9 +191,26 @@ export interface HostRpcDispatch {
    * One attempt, with no transport retry, for a best-effort call made while
    * the user is waiting to leave (a release after Ctrl+C): the retrying
    * policy can spend a dial timeout per attempt against a wedged host. The
-   * single re-authentication on UNAUTHORIZED still happens.
+   * single re-authentication on UNAUTHORIZED still happens, within
+   * `reauthenticate`.
    */
   readonly failFast: boolean;
+  /**
+   * Which host UNAUTHORIZED refreshes the sign-in and sends the request once
+   * more. `"before-request"` limits it to the host's refusal of the open
+   * frame, for a create that must read a refusal as proof that nothing was
+   * created: an answer to the second send carries no trace of a first that
+   * may have reached the host before its session went fatal.
+   */
+  readonly reauthenticate: AuthRecoveryScope;
+  /**
+   * The key a host that negotiated it deduplicates this call by, or null.
+   * Without one the retrying messenger may not replay a mutation after a
+   * failure that followed the send, so a keyed create is the only one a
+   * transport retry can finish. Byte-identical params under one key replay;
+   * different params under it are refused.
+   */
+  readonly idempotencyKey: string | null;
 }
 
 export const PLAIN_DISPATCH: HostRpcDispatch = {
@@ -198,6 +218,8 @@ export const PLAIN_DISPATCH: HostRpcDispatch = {
   requiredHostMethodVersion: null,
   signal: null,
   failFast: false,
+  reauthenticate: "always",
+  idempotencyKey: null,
 };
 
 /**
@@ -232,6 +254,31 @@ export async function callHostRpcWithDispatch<
     });
   }
   const endpoint = await resolveEndpoint();
+  return callHostRpcAtResolvedEndpoint(
+    method,
+    params,
+    endpoint,
+    auth,
+    dispatch,
+  );
+}
+
+/**
+ * Like {@link callHostRpcWithDispatch}, on a sign-in and endpoint the caller
+ * already resolved. For a command that preflights both before it records
+ * anything (`task create` writes its key record between the two), so nothing
+ * is re-read after that point: a host restarted in between fails this call
+ * instead of receiving it.
+ */
+export async function callHostRpcAtResolvedEndpoint<
+  Method extends keyof HostRpcRegistry & string,
+>(
+  method: Method,
+  params: RequestOfMethod<HostRpcRegistry, Method>,
+  endpoint: HostTransportEndpoint,
+  auth: HostAuth,
+  dispatch: HostRpcDispatch,
+): Promise<ResponseOfMethod<HostRpcRegistry, Method>> {
   return requestAtEndpoint(
     method,
     params,
@@ -330,6 +377,7 @@ async function requestAtEndpoint<Method extends keyof HostRpcRegistry & string>(
         clientIdentity: CLI_CLIENT_IDENTITY,
       }),
       revalidator,
+      dispatch.reauthenticate,
     ),
     retryPolicy,
   );
@@ -346,7 +394,7 @@ async function requestAtEndpoint<Method extends keyof HostRpcRegistry & string>(
     abortSignal: callLifetime.signal,
   };
   const options: HostRequestOptions = {
-    idempotencyKey: null,
+    idempotencyKey: dispatch.idempotencyKey,
     authority,
     // A caller's FIRST attempt. The replay requirement is raised by the
     // `createRetryingMessenger` wrapper above, per failure, not here.
@@ -649,7 +697,12 @@ function assertCanonicalResponseSchema(
 const EARLIER_ATTEMPT_MAY_HAVE_RUN =
   "An earlier attempt may have gone through. Check before repeating it.";
 
-function hostRpcToCliError(err: unknown): unknown {
+/**
+ * The mapping {@link toAgentCliError} applies, for a caller that has to read
+ * the raw transport error itself before it is mapped (`task create` decides
+ * from it whether its request frame was ever written).
+ */
+export function hostRpcToCliError(err: unknown): unknown {
   // Classified by the refusal that ended a retry episode, not by its
   // unknown-outcome wrapper: "sign in again" stays true about the retry
   // whatever an earlier attempt did. The outcome stays unknown, and the
@@ -704,6 +757,8 @@ function hostRpcToCliError(err: unknown): unknown {
  *   - every other `HostTransportFailureError` → `HOST_UNREACHABLE`: the
  *     connection failed before the request went out, or the failure is
  *     replayable, so nothing below applies and a retry is safe.
+ *   - the exact `RPC_ERROR` shutdown refusal → `HOST_BUSY`: the host is
+ *     stopping and refused this request; its message is preserved.
  *   - everything else, including `RPC_ERROR` → `UNEXPECTED`: `RPC_ERROR` is the
  *     host's catch-all for any resolver error (e.g. "agent not found"), so it
  *     must NOT be reported as "host not running" - the host answered. A
@@ -876,6 +931,14 @@ function mapHostRpcError(err: HostRpcError): CliError {
       exitCode: 1,
     });
   }
+  if (isHostShuttingDown(err)) {
+    return cliError({
+      code: CLI_ERROR_CODES.HOST_BUSY,
+      message: err.message,
+      details: null,
+      exitCode: 1,
+    });
+  }
   const code =
     err.code === "UNAUTHORIZED"
       ? CLI_ERROR_CODES.AUTH_REJECTED
@@ -886,6 +949,16 @@ function mapHostRpcError(err: HostRpcError): CliError {
     details: null,
     exitCode: 1,
   });
+}
+
+// The host's admission latch refuses work during shutdown with this fixed
+// message under its generic wire code. Match both exactly so other resolver
+// failures remain unexpected; classification does not retry the request.
+function isHostShuttingDown(err: HostRpcError): boolean {
+  return (
+    err.code === "RPC_ERROR" &&
+    err.message === "EntityMemoryManager is shutting down"
+  );
 }
 
 // Best-effort fallback: an `RPC_ERROR` whose message still indicates an access

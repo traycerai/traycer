@@ -95,6 +95,7 @@ import { usePrimaryChangeAnnouncement } from "./use-primary-change-announcement"
 import {
   applySeedIntentOverride,
   defaultFolderIntent,
+  mainCheckoutHasCommit,
   rememberedNeedsBranchValidation,
   seedEntryForFolder,
   type SeedFolderContext,
@@ -1024,6 +1025,7 @@ function HomeWorkspaceRows(props: {
         // summary primary and contradict the badge.
         isPrimary: summary.workspacePath === resolvedPrimaryPath,
         isGitRepo: summary.isGitRepo,
+        hasCommit: mainCheckoutHasCommit(summary),
         currentBranch,
         defaultNewBranchName: (
           defaultBranchByPath[summary.workspacePath] ?? EMPTY_DEFAULT_BRANCH
@@ -1448,6 +1450,7 @@ function workspaceRunItemForResolvedFolder(input: {
         currentIntent: capturedEntry,
         defaultNewBranchName,
         emit,
+        hasCommit: summary === null || mainCheckoutHasCommit(summary),
         isGitRepo,
         isPrimary,
         mode,
@@ -1596,6 +1599,7 @@ function emitRowMode(input: {
   readonly currentIntent: WorktreeFolderIntent | null;
   readonly defaultNewBranchName: string;
   readonly emit: (intent: WorktreeFolderIntent) => void;
+  readonly hasCommit: boolean;
   readonly isGitRepo: boolean;
   readonly isPrimary: boolean;
   readonly mode: WorkspaceRunMode;
@@ -1623,6 +1627,7 @@ function emitRowMode(input: {
       repoIdentifier: input.repoIdentifier,
       isPrimary: input.isPrimary,
       isGitRepo: input.isGitRepo,
+      hasCommit: input.hasCommit,
       currentBranch: input.currentBranch,
       defaultNewBranchName: input.defaultNewBranchName,
     }),
@@ -2593,6 +2598,7 @@ function InEpicSurface(props: InEpicSurfaceProps) {
         repoIdentifier: summary.repoIdentifier,
         isPrimary: bindingEntry?.isPrimary ?? false,
         isGitRepo: true,
+        hasCommit: mainCheckoutHasCommit(summary),
         currentBranch: branchForSummary(summary),
         defaultNewBranchName: (
           defaultBranchByPath[path] ?? EMPTY_DEFAULT_BRANCH
@@ -3049,6 +3055,7 @@ function InEpicSurface(props: InEpicSurfaceProps) {
                 currentIntent,
                 defaultNewBranchName,
                 emit,
+                hasCommit: mainCheckoutHasCommit(ws),
                 isGitRepo: rowIsGitRepo,
                 isPrimary,
                 mode: currentMode,

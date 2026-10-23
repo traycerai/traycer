@@ -327,6 +327,7 @@ export const HOST_UNARY_RPC_ROUTES = {
   "bot.list": "target-host",
   "bot.open": "target-host",
   "bot.read": "target-host",
+  "bot.thread.list": "target-host",
   "bot.updateRunSettings": "target-host",
   "bot.updateTitle": "target-host",
   "browser.repl.releaseRealm": "target-host",
@@ -336,6 +337,7 @@ export const HOST_UNARY_RPC_ROUTES = {
   "browser.savedLoginSites": "target-host",
   // The sandbox host the person continues a removed sandbox's chat on.
   "chat.continueHere": "target-host",
+  "chat.prestartRuntime": "target-host",
   "chat.fallback.cancel": "target-host",
   "chat.fallback.chooseTarget": "target-host",
   "chat.fallback.listTargets": "target-host",
@@ -463,6 +465,7 @@ export const HOST_UNARY_RPC_ROUTES = {
   "epic.listCloudChats": "target-host",
   "epic.listCollaborators": "target-host",
   "epic.listCommentThreads": "target-host",
+  "epic.listHtmlArtifactVersions": "target-host",
   "epic.listTaskHosts": "target-host",
   // History: the server pool's pages. What only a host knows - its
   // local-homed rows, preserved orphans and tombstones - comes from that

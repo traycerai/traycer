@@ -49,6 +49,9 @@ type HostMethodScheduling<Method extends keyof HostRpcRegistry & string> = {
     | RpcSchedulingMode
     | ((params: RequestOfMethod<HostRpcRegistry, Method>) => RpcSchedulingMode);
   readonly joinResponseTimeoutMs: number | null;
+  readonly latestScope?: (
+    params: RequestOfMethod<HostRpcRegistry, Method>,
+  ) => ReadonlyArray<unknown>;
   readonly poll: HostMethodPollPolicy<Method>;
 };
 
@@ -652,6 +655,13 @@ export const HOST_METHOD_POLL_TABLE = {
   // Search as you type: a newer query supersedes an older one, and never
   // polled - the caller asks again when the query changes.
   "chat.search": { ...LATEST_SCHEDULING, poll: null },
+  // Settings are successive intents for one chat's runtime. Keep one active
+  // request and replace its waiting tail with the newest complete payload.
+  "chat.prestartRuntime": {
+    ...LATEST_SCHEDULING,
+    latestScope: (params) => [params.epicId, params.chatId],
+    poll: null,
+  },
   // The external fallback actions. All `fifo`, and none polled.
   //
   // `fifo` because each carries the traversal revision it expects, so two rapid
@@ -665,8 +675,8 @@ export const HOST_METHOD_POLL_TABLE = {
   // `traversal_advanced` for its trouble, which the menu renders as "this chat
   // already resumed" - a poll would manufacture that message out of nothing.
   //
-  // What `fifo` does NOT buy, because the mode is the only thing this table
-  // gets to say: it does not order these four against ONE ANOTHER, nor two
+  // FIFO keeps full request identity; the latest-only scope above does not
+  // apply here. It does not order these four against ONE ANOTHER, nor two
   // sends of one verb naming different revisions. `HostRequestCoordinator`
   // keys its queues by `[hostId, userId, method, params]`, so each of those is
   // a separate queue and they race. Nothing here needs them not to - every
@@ -676,8 +686,7 @@ export const HOST_METHOD_POLL_TABLE = {
   // only decide WHICH concurrent press wins, and the argument above says the
   // later one carries the newer intent. A surface that does need arrival order
   // has to ask for it where the ordering primitive lives - a shared
-  // `MutationScope` on the hooks in `use-fallback-actions.ts` - since a
-  // scheduling policy answers `modeFor` and never supplies the queue key.
+  // `MutationScope` on the hooks in `use-fallback-actions.ts`.
   "chat.fallback.cancel": {
     mode: "fifo",
     joinResponseTimeoutMs: null,
@@ -1168,6 +1177,7 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
+  "epic.listHtmlArtifactVersions": { ...LATEST_SCHEDULING, poll: null },
   "epic.readArtifactObject": {
     ...LATEST_SCHEDULING,
     poll: defineConditionPolicy("epic.readArtifactObject", {
@@ -1636,6 +1646,8 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
+  // A read of the bound host's thread records, like the conversation list.
+  "bot.thread.list": { ...LATEST_SCHEDULING, poll: null },
   // Unary byte channel, same posture as `epic.readChatAttachment` - but the
   // only one of the drafts methods whose BODY is megabytes rather than KB, so
   // it is also the only one that declares a budget. The value is declared once
@@ -2107,8 +2119,8 @@ export const HOST_METHOD_POLL_TABLE = {
   // response into the `…fallbackPolicy.get` cache with `setQueriesData` - so
   // the cached policy is whichever response lands LAST, not whichever save was
   // pressed last. Ordering has to come from a shared `MutationScope` on that
-  // hook, or from a host-side revision check; this table cannot supply it,
-  // because a scheduling policy answers `modeFor` and never the queue key.
+  // hook, or from a host-side revision check; FIFO does not opt into the
+  // latest-only resource scope.
   "providers.fallbackPolicy.set": {
     mode: "fifo",
     joinResponseTimeoutMs: null,
@@ -2541,8 +2553,8 @@ export const HOST_METHOD_POLL_TABLE = {
   // folds each response into the `autoJudge.get` cache with `setQueriesData`, so
   // an unordered pair leaves the cache holding whichever response landed last.
   // `fifo` cannot supply that ordering - the queue key carries the params, so
-  // two clicks naming two different judges are two queues - and a scheduling
-  // policy answers `modeFor`, never the queue key. `autoJudgeWriteScope` is
+  // two clicks naming two different judges are two queues. The latest-only
+  // scope cannot coalesce these writes. `autoJudgeWriteScope` is
   // where the order comes from, exactly as for `providers.fallbackPolicy.set`.
   "autoJudge.set": {
     mode: "fifo",
@@ -2608,6 +2620,9 @@ export const hostRpcSchedulingPolicy: RpcSchedulingPolicy<HostRpcRegistry> = {
   modeFor(method, params) {
     const mode = hostMethodPolicyTable[method].mode;
     return typeof mode === "function" ? mode(params) : mode;
+  },
+  latestScopeFor(method, params) {
+    return hostMethodPolicyTable[method].latestScope?.(params);
   },
   joinResponseTimeoutMs(method) {
     return hostMethodPolicyTable[method].joinResponseTimeoutMs;

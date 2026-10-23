@@ -6,6 +6,7 @@ import { stampPositions } from "@traycer/html-source";
 import type { ForwardedShortcut } from "../forwarded-shortcuts";
 import { buildDocument, type ArtifactPageRole } from "../sandbox-document";
 import type { SandboxTheme } from "../theme-map";
+import { buildHtmlViewerPrelude } from "../html-viewer-bootstrap";
 
 // Every intersecting policy must name the scheme: WebKit's wildcard does
 // not admit custom-scheme subresources from an opaque sandbox document.
@@ -68,6 +69,8 @@ function composeArtifactDocument(
       options.canvasLinks === "native"
         ? buildHtmlSelectionPrelude(options.nonce)
         : buildCanvasPrelude(options.nonce);
+  } else {
+    extraScript = buildHtmlViewerPrelude();
   }
   const document = buildDocument({
     html:

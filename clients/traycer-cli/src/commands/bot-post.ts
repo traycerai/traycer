@@ -34,6 +34,7 @@ import {
   type BotStreamClient,
   listBots,
   openLocalStreamClient,
+  refuseUnlessBoundHere,
   toBotCliError,
   unreadableStreamError,
 } from "../internal/bot-host";
@@ -58,24 +59,49 @@ export type BotReplyOutcome =
   | { readonly kind: "timed-out" };
 
 /**
- * `traycer bot send <bot> <text>` - write a message into a bot's conversation
- * (`bot.conversation.send`). Every message opens a request the bot answers;
- * the command prints its id and whether the message reached the bot now
- * (`written`) or waits for the bot's host to come back (`queued`).
+ * `traycer bot post <bot> <text>` - a top-level post in the bot's channel
+ * (`bot.conversation.send` with no thread). Every post opens a request and a
+ * thread the bot answers in; the command prints both ids and whether the post
+ * reached the bot now (`written`) or waits for the bot's host to come back
+ * (`queued`).
  *
- * The conversation is `--conversation <id>` when given, otherwise the bot's
- * first conversation - the one created with it, which the app shows. A bot
- * with no conversation is refused; this command never creates one.
- *
- * `--wait <duration>` then follows the conversation until the bot answers the
- * request, for at most that long. Only the host the bot runs on can follow
- * its conversations, so on any other host `--wait` is refused before
- * anything is sent.
+ * `--wait <duration>` then follows the post until the thread's verdict
+ * resolves its request, for at most that long: the channel for the post's
+ * resolution, and the thread for the reply's text.
  */
-export function buildBotSendCommand(opts: {
+export function buildBotPostCommand(opts: {
   readonly bot: string;
   readonly text: string;
-  readonly conversationId: string | null;
+  readonly wait: string | null;
+}): CommandFn {
+  return sendToBot({ ...opts, threadId: null });
+}
+
+/**
+ * `traycer bot reply <bot> <thread> <text>` - a message in one of the bot's
+ * threads (`bot.conversation.send` with `threadId`). It opens a request of its
+ * own, whose id the command prints; `--wait <duration>` follows the thread
+ * until that request is resolved, and prints the reply.
+ */
+export function buildBotReplyCommand(opts: {
+  readonly bot: string;
+  readonly threadId: string;
+  readonly text: string;
+  readonly wait: string | null;
+}): CommandFn {
+  return sendToBot(opts);
+}
+
+/**
+ * The send both commands share. The message goes to the bot's channel - its
+ * first conversation, the one created with it - or to `threadId` in it. Only
+ * the host the bot runs on can follow its threads, so on any other host
+ * `--wait` is refused before anything is sent.
+ */
+function sendToBot(opts: {
+  readonly bot: string;
+  readonly threadId: string | null;
+  readonly text: string;
   readonly wait: string | null;
 }): CommandFn {
   return async () => {
@@ -83,49 +109,53 @@ export function buildBotSendCommand(opts: {
     const bot = findBot(await listBots(), opts.bot);
     if (waitMs !== null) {
       const endpoint = await resolveEndpoint();
-      if (bot.boundHostId !== endpoint.hostId) {
-        throw cliError({
-          code: CLI_ERROR_CODES.INVALID_ARGUMENT,
-          message:
-            bot.boundHostId === null
-              ? `traycer: no host runs ${bot.title}; move it to a host first.`
-              : `traycer: ${bot.title} runs on another of your hosts; --wait works only there. Send without --wait to queue it.`,
-          details: null,
-          exitCode: 1,
-        });
-      }
+      refuseUnlessBoundHere(
+        bot,
+        endpoint.hostId,
+        `--wait works only there. ${opts.threadId === null ? "Post" : "Reply"} without --wait to queue it.`,
+      );
     }
-    const conversationId = await chooseConversation(bot, opts.conversationId);
+    const conversationId = await channelOf(bot);
     const request = parseUserInput(botConversationSendRequestSchema, {
       botId: bot.botId,
       conversationId,
       text: opts.text,
+      threadId: opts.threadId,
     });
     const sent = parseCanonicalHostResponse(
       "bot.conversation.send",
       botConversationSendResponseSchema,
       await toBotCliError(callHostRpc("bot.conversation.send", request)),
     );
-    const sentLine = `Sent to ${bot.title} (request ${sent.requestId}, ${describeDelivery(sent.delivery)}).`;
+    const delivery = describeDelivery(sent.delivery);
+    const sentLine =
+      opts.threadId === null
+        ? `Posted to ${bot.title} (request ${sent.requestId}, thread ${sent.threadId}, ${delivery}).`
+        : `Replied in ${bot.title}'s thread ${sent.threadId} (request ${sent.requestId}, ${delivery}).`;
     const sentData = {
       botId: bot.botId,
       conversationId,
       messageId: sent.messageId,
       requestId: sent.requestId,
+      threadId: sent.threadId,
       delivery: sent.delivery,
     };
     if (waitMs === null) {
       return { data: sentData, human: sentLine, exitCode: 0 };
     }
     const { client } = await openLocalStreamClient();
+    // A post's request is its row on the channel and its answer is on the
+    // thread it opened; a thread message's request and answer are both on
+    // the thread.
     const outcome = await waitForBotReply({
       client,
       botId: bot.botId,
-      conversationId,
+      requestChatId: opts.threadId === null ? conversationId : sent.threadId,
+      replyChatId: opts.threadId === null ? sent.threadId : null,
       requestId: sent.requestId,
       timeoutMs: waitMs,
     }).finally(() => {
-      client.close("bot-send-wait-settled");
+      client.close("bot-wait-settled");
     });
     return {
       data: { ...sentData, outcome },
@@ -158,14 +188,8 @@ function describeOutcome(
   }
 }
 
-/**
- * The named conversation, or the bot's first one by creation time (the app
- * conversation every bot is created with).
- */
-async function chooseConversation(
-  bot: BotRecord,
-  named: string | null,
-): Promise<string> {
+/** The bot's channel: its first conversation by creation time. */
+async function channelOf(bot: BotRecord): Promise<string> {
   const { conversations } = parseCanonicalHostResponse(
     "bot.conversation.list",
     botConversationListResponseSchema,
@@ -173,20 +197,11 @@ async function chooseConversation(
       callHostRpc("bot.conversation.list", { botId: bot.botId }),
     ),
   );
-  if (named !== null) {
-    if (conversations.some((c) => c.conversationId === named)) return named;
-    throw cliError({
-      code: CLI_ERROR_CODES.NOT_FOUND,
-      message: `traycer: ${bot.title} has no conversation ${named}.`,
-      details: null,
-      exitCode: 1,
-    });
-  }
   const first = firstConversation(conversations);
   if (first === null) {
     throw cliError({
       code: CLI_ERROR_CODES.NOT_FOUND,
-      message: `traycer: ${bot.title} has no conversation yet - open it in the Traycer app first.`,
+      message: `traycer: ${bot.title} has no channel yet - open it in the Traycer app first.`,
       details: null,
       exitCode: 1,
     });
@@ -233,11 +248,15 @@ export function parseWaitDuration(value: string): number {
 }
 
 /**
- * Follows one conversation over `chat.subscribe` until the user row holding
- * `requestId` is resolved, or `timeoutMs` passes.
+ * Follows the chat holding a request over `chat.subscribe` until the user row
+ * holding `requestId` is resolved, or `timeoutMs` passes.
  *
  * Resolution is recorded on the user row (`conversationRequest.resolvedAt`,
- * and `resolvedByMessageId` naming the reply). The follower keeps the part of
+ * and `resolvedByMessageId` naming the reply). A post's reply is written to
+ * the thread the post opened (`replyChatId`), not to the channel holding the
+ * post: once the channel says which reply resolved it, the thread is followed
+ * for that reply's row, within what is left of the timeout, and a reply not
+ * read back by then is reported by its id. Each follower keeps the part of
  * the windowed index it needs - epoch, revision, row count and the skeleton's
  * row ids and roles - so it can tell which rows it has read:
  *
@@ -254,17 +273,79 @@ export function parseWaitDuration(value: string): number {
  * A reconnect re-subscribes on its own; the host then sends a fresh snapshot
  * and skeleton, and the follower starts over within the person's timeout.
  */
-export function waitForBotReply(input: {
+export async function waitForBotReply(input: {
   readonly client: BotStreamClient;
   readonly botId: string;
-  readonly conversationId: string;
+  /** The chat holding the request's user row: the channel, or a thread. */
+  readonly requestChatId: string;
+  /** The chat the reply is written to; `null` when it is `requestChatId`. */
+  readonly replyChatId: string | null;
   readonly requestId: string;
   readonly timeoutMs: number;
 }): Promise<BotReplyOutcome> {
-  return new Promise<BotReplyOutcome>((resolve, reject) => {
+  const deadline = Date.now() + input.timeoutMs;
+  const onRequest = await follow({
+    client: input.client,
+    botId: input.botId,
+    chatId: input.requestChatId,
+    requestId: input.requestId,
+    timeoutMs: input.timeoutMs,
+    target: { kind: "request", replyElsewhere: input.replyChatId !== null },
+  });
+  if (onRequest.kind !== "resolved-by" || input.replyChatId === null) {
+    return onRequest.kind === "resolved-by"
+      ? {
+          kind: "replied",
+          replyMessageId: onRequest.replyMessageId,
+          text: null,
+        }
+      : onRequest;
+  }
+  const { replyMessageId } = onRequest;
+  const onReply = await follow({
+    client: input.client,
+    botId: input.botId,
+    chatId: input.replyChatId,
+    requestId: input.requestId,
+    timeoutMs: Math.max(1, deadline - Date.now()),
+    target: { kind: "reply", replyMessageId },
+  });
+  // The request is answered either way; only the text can be missing.
+  return onReply.kind === "replied"
+    ? onReply
+    : { kind: "replied", replyMessageId, text: null };
+}
+
+/**
+ * What one follower looks for: the request row (and, unless the reply is on
+ * another chat, the reply that resolved it), or one known reply row.
+ */
+type FollowTarget =
+  | { readonly kind: "request"; readonly replyElsewhere: boolean }
+  | { readonly kind: "reply"; readonly replyMessageId: string };
+
+/** A follower's end: an outcome, or the reply id to read from the thread. */
+type FollowOutcome =
+  | BotReplyOutcome
+  | { readonly kind: "resolved-by"; readonly replyMessageId: string };
+
+function follow(input: {
+  readonly client: BotStreamClient;
+  readonly botId: string;
+  readonly chatId: string;
+  readonly requestId: string;
+  readonly timeoutMs: number;
+  readonly target: FollowTarget;
+}): Promise<FollowOutcome> {
+  return new Promise<FollowOutcome>((resolve, reject) => {
     new ReplyFollower(input, resolve, reject).start();
   });
 }
+
+type RequestState =
+  | { readonly kind: "unseen" }
+  | { readonly kind: "open" }
+  | { readonly kind: "resolved"; readonly by: string | null };
 
 /** What the follower knows about one row of the current index. */
 interface KnownRow {
@@ -307,13 +388,11 @@ class ReplyFollower {
   // ---- what the rows read so far say ------------------------------------ //
   /** Reply text by message id. */
   private readonly replies = new Map<string, string>();
-  /** The request row as last read: open, or resolved by a reply (or none). */
-  private request:
-    | { readonly kind: "unseen" }
-    | { readonly kind: "open" }
-    | { readonly kind: "resolved"; readonly by: string | null } = {
-    kind: "unseen",
-  };
+  /**
+   * The request row as last read: open, or resolved by a reply (or none). A
+   * follower of a known reply starts, and starts over, at that reply.
+   */
+  private request: RequestState;
   /** One fresh snapshot is spent looking for a reply row before giving up. */
   private replyResnapshotSpent = false;
 
@@ -321,18 +400,27 @@ class ReplyFollower {
     private readonly input: {
       readonly client: BotStreamClient;
       readonly botId: string;
-      readonly conversationId: string;
+      readonly chatId: string;
       readonly requestId: string;
       readonly timeoutMs: number;
+      readonly target: FollowTarget;
     },
-    private readonly resolve: (outcome: BotReplyOutcome) => void,
+    private readonly resolve: (outcome: FollowOutcome) => void,
     private readonly reject: (error: unknown) => void,
-  ) {}
+  ) {
+    this.request = this.initialRequest();
+  }
+
+  private initialRequest(): RequestState {
+    return this.input.target.kind === "reply"
+      ? { kind: "resolved", by: this.input.target.replyMessageId }
+      : { kind: "unseen" };
+  }
 
   start(): void {
     const session = this.input.client.subscribe("chat.subscribe", {
       epicId: this.input.botId,
-      chatId: this.input.conversationId,
+      chatId: this.input.chatId,
       resume: null,
     });
     this.session = session;
@@ -365,7 +453,7 @@ class ReplyFollower {
         this.reject(
           cliError({
             code: CLI_ERROR_CODES.HOST_UNREACHABLE,
-            message: `traycer: stopped following the conversation - ${reason.details.reason}. The message was sent; the request stays open.`,
+            message: `traycer: stopped waiting for the answer - ${reason.details.reason}. The message was sent; the request stays open.`,
             details: null,
             exitCode: 1,
           }),
@@ -551,6 +639,7 @@ class ReplyFollower {
         this.replies.set(message.messageId, replyText(message));
         continue;
       }
+      if (this.input.target.kind === "reply") continue;
       const request = message.conversationRequest;
       if (request === undefined || request.requestId !== this.input.requestId)
         continue;
@@ -575,6 +664,16 @@ class ReplyFollower {
       if (text !== undefined) {
         this.finish(() =>
           this.resolve({ kind: "replied", replyMessageId, text }),
+        );
+        return;
+      }
+      // The reply is the thread's row: the thread's follower reads it.
+      if (
+        this.input.target.kind === "request" &&
+        this.input.target.replyElsewhere
+      ) {
+        this.finish(() =>
+          this.resolve({ kind: "resolved-by", replyMessageId }),
         );
         return;
       }
@@ -633,7 +732,7 @@ class ReplyFollower {
       kind: "loadRange",
       hasBinaryPayload: false,
       epicId: this.input.botId,
-      chatId: this.input.conversationId,
+      chatId: this.input.chatId,
       request: {
         requestId,
         epoch: this.epoch,
@@ -656,7 +755,7 @@ class ReplyFollower {
       kind: "resnapshot",
       hasBinaryPayload: false,
       epicId: this.input.botId,
-      chatId: this.input.conversationId,
+      chatId: this.input.chatId,
     });
   }
 
@@ -667,7 +766,7 @@ class ReplyFollower {
    */
   private startOver(epoch: number | null): void {
     this.replies.clear();
-    this.request = { kind: "unseen" };
+    this.request = this.initialRequest();
     this.epoch = epoch;
     this.revision = null;
     this.rowCount = 0;

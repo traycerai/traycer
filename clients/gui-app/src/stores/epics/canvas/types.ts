@@ -1,3 +1,4 @@
+import type { HtmlArtifactVersionSelection } from "@traycer/protocol/host/epic/html-artifact-versions";
 import type { PendingBrowserTabRequest } from "@/lib/browser-view/sessions/browser-sessions-coordinator";
 import type { ProviderId } from "@traycer/protocol/host/provider-schemas";
 import type { EpicNodeKind } from "@/lib/artifacts/node-display";
@@ -119,6 +120,8 @@ export type TerminalTitleSource = "default" | "manual";
  * may share an `id` (same content) while holding distinct `instanceId`s.
  */
 export interface EpicArtifactRef {
+  /** A chosen immutable HTML bundle; absent means follow Latest. Per tab instance. */
+  readonly htmlVersion?: HtmlArtifactVersionSelection;
   readonly id: string;
   readonly instanceId: string;
   readonly type: RecordBackedEpicNodeKind;

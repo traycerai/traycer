@@ -12,7 +12,24 @@ import type { OrganizationDialog } from "@/components/organization/organization-
 export interface OrganizationContextValue {
   readonly client: HostClient<HostRpcRegistry>;
   readonly supported: boolean;
+  /**
+   * Whether this host advertised `organization.command` at its last
+   * handshake, with `null` for "no handshake yet".
+   *
+   * Separate from {@link supported}, which also folds in the account's cloud
+   * authorization and identity. Only a positive `false` means the host is too
+   * old to organize tasks; `null` is a transient unknown, and offering an
+   * update on it would name a problem the user does not have.
+   */
+  readonly hostSupport: boolean | null;
   readonly userId: string | null;
+  /**
+   * The host's projection for this host and account, from cache when the
+   * subscription is between frames. It is deliberately NOT cleared while
+   * {@link supported} is false: a readiness or authorization flap must not
+   * empty a menu whose groups are still this account's. Use `supported` to
+   * decide whether an edit may be sent, never to decide what to show.
+   */
   readonly view: OrganizationView | undefined;
   readonly register: (key: string, taskIds: readonly string[]) => () => void;
   readonly openDialog: (dialog: OrganizationDialog) => void;

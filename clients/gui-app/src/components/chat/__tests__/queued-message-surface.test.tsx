@@ -25,6 +25,15 @@ import { QUEUE_PAUSED_AFTER_ERROR_TOOLTIP } from "@/components/chat/fallback/fal
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { ChatSessionState } from "@/stores/chats/chat-session-store";
 import { optimisticQueuedItemId } from "@/stores/chats/optimistic-queue";
+import {
+  createChatSessionStore,
+  type ChatSessionStoreHandle,
+} from "@/stores/chats/chat-session-store";
+import { queueWithDrainingPrompts } from "@/stores/chats/chat-send-state";
+import { IMMEDIATE_STREAM_FLUSH_COORDINATOR } from "@/stores/chats/stream-flush-coordinator";
+import { CHAT_STORE_TEST_ENVIRONMENT } from "@/stores/chats/test-support/chat-store-test-environment";
+import type { ChatStreamCallbacks } from "@traycer-clients/shared/host-transport/chat-stream-client";
+import type { Chat } from "@traycer/protocol/persistence/epic/schemas";
 
 import { tooltipTextNear } from "@/components/ui/__tests__/tooltip-probe";
 interface TestDndEvent {
@@ -93,6 +102,7 @@ interface CapturedSortableContextProps {
 
 const testState = vi.hoisted(() => ({
   providerProps: null as CapturedDndContextProps | null,
+  sortableData: new Map<string, unknown>(),
 }));
 
 vi.mock("@dnd-kit/core", () => ({
@@ -115,32 +125,35 @@ vi.mock("@dnd-kit/sortable", () => ({
   ),
   sortableKeyboardCoordinates: () => null,
   verticalListSortingStrategy: () => [],
-  useSortable: () => ({
-    setNodeRef: () => null,
-    setActivatorNodeRef: () => null,
-    // These are the attributes the REAL `useSortable` returns, and they must be
-    // here or the AX7 pin below is vacuous. That is not hypothetical: this mock
-    // returned `attributes: {}`, and under an ablation that re-threaded
-    // `{...attributes}` onto the handle the pin stayed GREEN - spreading an
-    // empty object changes no markup, so the cell asserting those attributes
-    // are ABSENT could not fail whatever production did.
-    //
-    // An under-provisioned mock reads as a missing feature. The pin's subject
-    // is "the handle does not carry dnd-kit's keyboard advertisement", so the
-    // fixture has to be able to supply that advertisement.
-    attributes: {
-      role: "button",
-      tabIndex: 0,
-      "aria-disabled": false,
-      "aria-roledescription": "sortable",
-      "aria-describedby": "DndDescribedBy-0",
-    },
-    listeners: {},
-    transform: null,
-    transition: undefined,
-    isDragging: false,
-    isOver: false,
-  }),
+  useSortable: (options: { readonly id: string; readonly data: unknown }) => {
+    testState.sortableData.set(options.id, options.data);
+    return {
+      setNodeRef: () => null,
+      setActivatorNodeRef: () => null,
+      // These are the attributes the REAL `useSortable` returns, and they must be
+      // here or the AX7 pin below is vacuous. That is not hypothetical: this mock
+      // returned `attributes: {}`, and under an ablation that re-threaded
+      // `{...attributes}` onto the handle the pin stayed GREEN - spreading an
+      // empty object changes no markup, so the cell asserting those attributes
+      // are ABSENT could not fail whatever production did.
+      //
+      // An under-provisioned mock reads as a missing feature. The pin's subject
+      // is "the handle does not carry dnd-kit's keyboard advertisement", so the
+      // fixture has to be able to supply that advertisement.
+      attributes: {
+        role: "button",
+        tabIndex: 0,
+        "aria-disabled": false,
+        "aria-roledescription": "sortable",
+        "aria-describedby": "DndDescribedBy-0",
+      },
+      listeners: {},
+      transform: null,
+      transition: undefined,
+      isDragging: false,
+      isOver: false,
+    };
+  },
 }));
 
 const SETTINGS: ChatRunSettings = {
@@ -161,6 +174,7 @@ describe("<QueuedMessagePanel />", () => {
     cleanup();
     vi.clearAllMocks();
     testState.providerProps = null;
+    testState.sortableData.clear();
   });
 
   it("renders drag handles for movable queued rows and removes arrow actions", () => {
@@ -2230,3 +2244,165 @@ function makeClientRect(input: {
     right: input.left + input.width,
   };
 }
+
+describe("<QueuedMessagePanel /> with a carried front row from the real store", () => {
+  afterEach(() => {
+    cleanup();
+    testState.providerProps = null;
+    testState.sortableData.clear();
+  });
+
+  function carriedFrontProjection() {
+    const captured: { callbacks: ChatStreamCallbacks | null } = {
+      callbacks: null,
+    };
+    const handle: ChatSessionStoreHandle = createChatSessionStore({
+      environment: CHAT_STORE_TEST_ENVIRONMENT,
+      hostId: "host-carry-dnd",
+      epicId: "epic-carry-dnd",
+      chatId: "chat-carry-dnd",
+      userId: "owner-carry-dnd",
+      onAuthError: null,
+      onProviderAuthError: null,
+      wakeTransport: null,
+      streamFlushCoordinator: IMMEDIATE_STREAM_FLUSH_COORDINATOR,
+      streamClientFactory: (_epicId, _chatId, nextCallbacks) => {
+        captured.callbacks = nextCallbacks;
+        return {
+          sendAction: () => undefined,
+          sameTurnSteeringProtocolSupported: () => true,
+          draftBlobBridgeSupported: () => false,
+          requestTranscriptRange: () => undefined,
+          requestResnapshot: () => undefined,
+          close: () => undefined,
+        };
+      },
+    });
+    if (captured.callbacks === null) throw new Error("expected callbacks");
+    const stream: ChatStreamCallbacks = captured.callbacks;
+    const chat: Chat = {
+      id: "chat-carry-dnd",
+      parentId: null,
+      userId: "owner-carry-dnd",
+      hostId: "host-carry-dnd",
+      title: "Chat",
+      createdAt: 1,
+      updatedAt: 1,
+      isTitleEditedByUser: false,
+      settings: null,
+      activeSessionChain: null,
+      claudePendingWakes: [],
+      messages: [],
+      events: [],
+      archivedAt: null,
+      pinnedUserProviderHandle: null,
+      lastDeliveredRolesDigest: null,
+    };
+    stream.onConnectionStatus("open", null, null);
+    stream.onSnapshot({
+      kind: "snapshot",
+      hasBinaryPayload: false,
+      epicId: "epic-carry-dnd",
+      chatId: "chat-carry-dnd",
+      snapshot: {
+        chat,
+        access: {
+          role: "owner",
+          ownerUserId: "owner-carry-dnd",
+          canAct: true,
+        },
+        queue: { status: "idle", items: [] },
+        runStatus: "idle",
+        sendWouldQueue: true,
+        activeTurn: null,
+        pendingApprovals: [],
+        pendingInterviews: [],
+        worktreeBinding: null,
+        missingWorktreePaths: [],
+        pendingFileEditApprovals: [],
+        accumulatedFileChanges: [],
+        managedCommands: [],
+        heldUpdates: [],
+        portForwards: [],
+      },
+    });
+    const sendOne = (): string => {
+      const action = handle.store.getState().sendMessage({
+        content: content("carried drag prompt"),
+        sender: { type: "user", userId: "owner-carry-dnd" },
+        settings: SETTINGS,
+        attachments: [],
+        deliveryPolicy: "auto",
+        restore: {
+          content: content("carried drag prompt"),
+          browserAnnotations: [],
+        },
+      });
+      if (action === null) throw new Error("sendMessage was refused");
+      return action.messageId;
+    };
+    const ids = [sendOne(), sendOne(), sendOne()];
+    const hostItem = (messageId: string): OpenChatQueuedItem => ({
+      ...queuedItem(`queue-${messageId}`, "carried drag prompt", "pending"),
+      messageId,
+    });
+    stream.onQueueChanged({
+      kind: "queueChanged",
+      hasBinaryPayload: false,
+      epicId: "epic-carry-dnd",
+      chatId: "chat-carry-dnd",
+      queue: { status: "running", items: ids.map(hostItem) },
+    });
+    stream.onQueueChanged({
+      kind: "queueChanged",
+      hasBinaryPayload: false,
+      epicId: "epic-carry-dnd",
+      chatId: "chat-carry-dnd",
+      queue: { status: "running", items: ids.slice(1).map(hostItem) },
+    });
+    return {
+      handle,
+      ids,
+      queue: queueWithDrainingPrompts(handle.store.getState()),
+    };
+  }
+
+  it("keeps sortable targets relative to the actionable rows and reorders the raw rows through the real drag handlers", () => {
+    const { handle, ids, queue } = carriedFrontProjection();
+    try {
+      expect(queue.items.length).toBe(3);
+      const onReorder = vi.fn();
+      renderPanel({ queue, readOnly: false, canAct: true, onReorder });
+      const second = `queue-${ids[1]}`;
+      const third = `queue-${ids[2]}`;
+      const orderKey = buildQueuedMessageOrderKey([second, third]);
+      const secondData = testState.sortableData.get(second);
+      const thirdData = testState.sortableData.get(third);
+      expect(secondData).toEqual(queuedDndData(second, 0, orderKey));
+      expect(thirdData).toEqual(queuedDndData(third, 1, orderKey));
+
+      const provider = testState.providerProps;
+      if (provider === null) throw new Error("expected the dnd provider");
+      act(() => {
+        provider.onDragStart(
+          makeDndEvent({ sourceData: thirdData, target: null }),
+        );
+        provider.collisionDetection({ pointerCoordinates: { x: 0, y: 101 } });
+        provider.onDragEnd(
+          makeDndEvent({
+            sourceData: thirdData,
+            target: { data: secondData, top: 100, height: 40 },
+          }),
+        );
+      });
+
+      expect(onReorder).toHaveBeenCalledTimes(1);
+      expect(onReorder).toHaveBeenCalledWith(
+        expect.objectContaining({ queueItemId: third }),
+        second,
+      );
+    } finally {
+      handle.dispose();
+    }
+  });
+});

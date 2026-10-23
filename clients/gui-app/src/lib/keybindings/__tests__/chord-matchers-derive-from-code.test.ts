@@ -156,8 +156,6 @@ const KEYBOARD_KEY_READS: Readonly<Record<string, number>> = {
   "gui-app/src/components/epic-canvas/zoom-controls/zoom-controls.tsx": 7,
   // The search box's Escape (clears a non-empty query; not a registered chord).
   "gui-app/src/components/epics/epics-list-panel.tsx": 1,
-  // Bare Escape leaves the HTML artifact's edit selection. A named key.
-  "gui-app/src/components/html-artifact/html-selection-layer.tsx": 1,
   // The layout editor's sortable list: Space grabs a row (or activates it in
   // an unordered list), Enter activates, arrows move a grabbed row or, with
   // Alt, reorder it (L-31), and Escape cancels a grab. All named keys, none of
@@ -201,6 +199,10 @@ const KEYBOARD_KEY_READS: Readonly<Record<string, number>> = {
   // The sandboxed pages forward a press to the app. Both MATCH on `code` and
   // only copy `key` into the forwarded payload beside it.
   "gui-app/src/lib/sandbox/canvas-bootstrap.ts": 1,
+  // A plain page's focused scrollbar thumb scrolls on the named navigation
+  // keys (arrows and Page Up/Down). These are platform navigation keys,
+  // not registered app shortcuts.
+  "gui-app/src/lib/sandbox/html-viewer-bootstrap.ts": 6,
   "gui-app/src/lib/sandbox/sandbox-document.ts": 1,
   // The simulator surface forwards keys to a device by the character they
   // produce, and keeps Tab for the app's own focus order; both are reads of

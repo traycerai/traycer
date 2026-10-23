@@ -70,6 +70,7 @@ const handleCopyError = (): void => {
 };
 
 interface AssistantBodyProps {
+  workingVerbSeed?: string;
   segments: ReadonlyArray<MessageSegment>;
   backgroundToolBlockIds: ReadonlySet<string>;
   /**
@@ -232,6 +233,7 @@ export function AssistantMessageBody({
   backgroundToolBlockIds,
   runState,
   messageId,
+  workingVerbSeed,
   elapsedStartedAt,
   turnHasOnlyAutonomousResumeSegments,
   autonomousResumeOwed,
@@ -350,7 +352,7 @@ export function AssistantMessageBody({
           createdAt={elapsedStartedAt}
           pausedDurationMs={pausedDurationMs}
           pausedSinceMs={pausedSinceMs}
-          messageId={messageId}
+          messageId={indicatorMessageId({ workingVerbSeed, messageId })}
           meta={meta}
         />
       );
@@ -453,7 +455,7 @@ export function AssistantMessageBody({
           createdAt={elapsedStartedAt}
           pausedDurationMs={pausedDurationMs}
           pausedSinceMs={pausedSinceMs}
-          messageId={messageId}
+          messageId={indicatorMessageId({ workingVerbSeed, messageId })}
           meta={meta}
         />
       ) : null}
@@ -1086,11 +1088,7 @@ function AssistantRunIndicator({
   messageId: string;
   meta: AssistantTurnMeta | null;
 }) {
-  // Resolved once per turn by the chat tile (seeded on the chat + turn ordinal,
-  // not the row id) so the word stays fixed for the whole turn even as the
-  // pre-turn placeholder swaps to the real turn id. Freeze on "Stopping" the
-  // moment a stop is requested. Falls back to a `messageId` seed outside a chat
-  // (isolated component tests).
+  // The tile latches the send-seeded verb across the host row remount.
   const runVerb = use(WorkingVerbContext);
   const verb =
     runState === "stopping"
@@ -1109,13 +1107,16 @@ function AssistantRunIndicator({
         <HarnessIcon harnessId={meta.provider} className="size-3.5" />
       )}
       <span className="inline-flex items-baseline gap-1">
-        <WorkingShimmerText className="text-ui-sm">{verb}</WorkingShimmerText>
+        <WorkingShimmerText className="text-ui-sm" animationOrigin={createdAt}>
+          {verb}
+        </WorkingShimmerText>
         {/* 3-dot typing loader rather than the braille spinner: three steady,
             sequentially-pulsing dots instead of a morphing glyph. */}
         <AgentSpinningDots
           className={undefined}
           testId="assistant-run-dots"
           variant="typing"
+          animationOrigin={createdAt}
         />
       </span>
       {/* Separate node so the once-per-second tick re-renders ONLY the timer,
@@ -1474,4 +1475,11 @@ export function AssistantSegment({
       return null;
     }
   }
+}
+
+function indicatorMessageId(input: {
+  readonly workingVerbSeed: string | undefined;
+  readonly messageId: string;
+}): string {
+  return input.workingVerbSeed ?? input.messageId;
 }

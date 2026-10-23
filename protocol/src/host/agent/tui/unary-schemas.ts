@@ -387,6 +387,57 @@ export type RecordTuiAgentActivityRequestV11 = z.infer<
   typeof recordTuiAgentActivityRequestSchemaV11
 >;
 
+// ─── `agent.tui.recordActivity@1.2` - + idle evidence ─────────────────────
+//
+// Additive minor bump over v1.1 for the host's terminal-agent reap, which
+// ends an unwatched agent's process only while it holds positive evidence that
+// the agent is idle, bound to the process that reported it:
+//
+//   • `spawnToken` - the `TRAYCER_TERMINAL_SPAWN_TOKEN` the host put in the
+//     agent's PTY env (for Codex, its app-server's env). A report carrying
+//     another process's token is ignored; `null` (an older CLI) still moves
+//     the activity state and never forms evidence.
+//   • `turnId` - the provider's id of the turn a start or stop belongs to
+//     (Claude `prompt_id`, Codex `turn_id`, the OpenCode plugin's own id), so
+//     a stop is matched to the start it ends.
+//   • `inFlight` - on a stop or a `started` report, how much work the
+//     provider says is still running or scheduled (`null` = not reported).
+//   • `event: "started"` - a process start report (Claude `SessionStart` of a
+//     startup or resume, OpenCode plugin start-up) carrying `inFlight`.
+//   • `event: "idle-confirmed"` - Claude's own report that it is waiting for
+//     input (`Notification` `idle_prompt`) for the turn `turnId`.
+//
+// A v1.1 request upgrades with the three fields `null`: no evidence, so the
+// host keeps the agent. A v1.2 start or stop projects onto a v1.1 host by the
+// non-strict re-parse, which strips the fields; `started` and
+// `idle-confirmed` cannot be represented there and fail projection, which the
+// CLI turns into a quiet no-op.
+
+export const recordTuiAgentActivityRequestSchemaV12 = lazySchema(() =>
+  recordTuiAgentActivityRequestSchemaV11.extend({
+    event: z.enum(["start", "stop", "resync", "started", "idle-confirmed"]),
+    spawnToken: z.string().nullable().default(null),
+    turnId: z.string().nullable().default(null),
+    inFlight: z
+      .object({ count: z.number().int().nonnegative() })
+      .nullable()
+      .default(null),
+  }),
+);
+export type RecordTuiAgentActivityRequestV12 = z.infer<
+  typeof recordTuiAgentActivityRequestSchemaV12
+>;
+
+/**
+ * The description of Traycer's own inbox monitor in the host's Claude Code
+ * plugin (`monitors.json`). Claude lists that monitor among a Stop's
+ * `background_tasks` for the session's whole life; it is a helper, not work,
+ * so the CLI leaves the entry carrying this description out of the stop's
+ * `inFlight` count.
+ */
+export const TRAYCER_INBOX_MONITOR_DESCRIPTION =
+  "Inter-agent inbox messages from other Traycer agents";
+
 // ─── `agent.tui.promptSubmitted@1.0` - prompt-submit activity + roles pull ─
 //
 // New optional unary method (roles-snapshot-delivery pull point 1): the
@@ -442,6 +493,21 @@ export const tuiAgentPromptSubmittedRequestSchemaV11 = lazySchema(() =>
 );
 export type TuiAgentPromptSubmittedRequestV11 = z.infer<
   typeof tuiAgentPromptSubmittedRequestSchemaV11
+>;
+
+/**
+ * `agent.tui.promptSubmitted@1.2` - the start edge's `spawnToken` and
+ * `turnId`, with the meaning `recordActivity@1.2` gives them. A 1.1 request
+ * upgrades with both `null` (no evidence); a 1.1 host strips them.
+ */
+export const tuiAgentPromptSubmittedRequestSchemaV12 = lazySchema(() =>
+  tuiAgentPromptSubmittedRequestSchemaV11.extend({
+    spawnToken: z.string().nullable().default(null),
+    turnId: z.string().nullable().default(null),
+  }),
+);
+export type TuiAgentPromptSubmittedRequestV12 = z.infer<
+  typeof tuiAgentPromptSubmittedRequestSchemaV12
 >;
 
 export const tuiAgentPromptSubmittedResponseSchema = lazySchema(() =>

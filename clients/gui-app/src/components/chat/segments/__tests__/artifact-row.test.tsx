@@ -30,6 +30,7 @@ import type {
   DeletedArtifactsSlice,
 } from "@/stores/epics/open-epic/types";
 import { ArtifactRow } from "@/components/chat/segments/artifact-row";
+import type { TileOpenIntent } from "@/lib/canvas/tile-open/intent";
 
 const STAMP_SHA = "a".repeat(64);
 const HEAD_SHA = "b".repeat(64);
@@ -105,6 +106,36 @@ const storeMocks = vi.hoisted(() => {
 vi.mock("@/hooks/use-epic-store", () => ({
   useEpicStore: (selector: (state: FakeEpicRowState) => unknown) =>
     selector(storeMocks.current),
+}));
+
+const expandMocks = vi.hoisted(() => ({
+  openTile: vi.fn<(intent: TileOpenIntent) => null>(() => null),
+  coarsePointer: { current: false },
+}));
+
+vi.mock("@/hooks/epic/use-epic-tile-navigation", () => ({
+  useEpicTileNavigation: () => ({ openTile: expandMocks.openTile }),
+}));
+
+vi.mock("@/hooks/ui/use-coarse-pointer", () => ({
+  useCoarsePointer: () => expandMocks.coarsePointer.current,
+}));
+
+// The real button drives a mutation over the file-save host; this suite only
+// needs to know which bundle and host the row binds it to.
+vi.mock("@/components/html-artifact/html-artifact-download-button", () => ({
+  HtmlArtifactDownloadButton: (props: {
+    source: { artifactId: string; manifest: unknown };
+    title: string;
+    hostId: string;
+  }) => (
+    <button
+      type="button"
+      data-testid="download-stub"
+      data-host-id={props.hostId}
+      data-artifact-id={props.source.artifactId}
+    />
+  ),
 }));
 
 interface CapturedFrame {
@@ -300,6 +331,8 @@ beforeEach(() => {
   };
   sandboxFrameMocks.renders = [];
   sandboxFrameMocks.mounts = 0;
+  expandMocks.openTile.mockClear();
+  expandMocks.coarsePointer.current = false;
 });
 
 afterEach(() => {
@@ -712,5 +745,110 @@ describe("<ArtifactRow />", () => {
     // instance) - the `key={generation}` bump proven by lifecycle, not by
     // the mock function having been called again.
     expect(sandboxFrameMocks.mounts).toBe(2);
+  });
+  describe("inline Expand", () => {
+    function lastOpenedIntent(): TileOpenIntent {
+      const intent = expandMocks.openTile.mock.calls.at(-1)?.[0];
+      if (intent === undefined)
+        throw new Error("Expected Expand to open a tile.");
+      return intent;
+    }
+
+    it("opens the stamped snapshot, bound to the chat's host, without reusing an existing tile", () => {
+      storeMocks.current = {
+        artifacts: {
+          byId: { [ARTIFACT_ID]: PROJECTION_WITH_HEAD },
+          allIds: [ARTIFACT_ID],
+        },
+        deletedArtifacts: EMPTY_DELETED,
+      };
+      renderRow(scopeWithClient(makeArtifactReadClient(neverRespond)), STAMP);
+
+      fireEvent.click(screen.getByRole("button", { name: "Expand" }));
+      fireEvent.click(screen.getByRole("button", { name: "Expand" }));
+
+      expect(expandMocks.openTile).toHaveBeenCalledTimes(2);
+      const [first, second] = expandMocks.openTile.mock.calls.map(
+        ([intent]) => intent,
+      );
+      expect(first).toMatchObject({
+        node: {
+          id: ARTIFACT_ID,
+          type: "html",
+          name: "My Artifact",
+          hostId: "host-1",
+          htmlVersion: {
+            manifest: { files: STAMP.manifest.files, capturedAt: 1_000 },
+            entryPath: "index.html",
+          },
+        },
+        target: { epicId: "epic-1" },
+        dedupe: false,
+        source: "direct_ui",
+      });
+      // Each Expand is its own tile, so a second version never replaces a
+      // tile that is already showing another one.
+      expect(first.node.instanceId).not.toBe(second.node.instanceId);
+    });
+
+    it("opens the live head with its own capture time after the stamped object is evicted", async () => {
+      storeMocks.current = {
+        artifacts: {
+          byId: { [ARTIFACT_ID]: PROJECTION_WITH_HEAD },
+          allIds: [ARTIFACT_ID],
+        },
+        deletedArtifacts: EMPTY_DELETED,
+      };
+      renderRow(scopeWithClient(makeEvictionClient()), STAMP);
+      await act(async () => {
+        await latestArtifactFrame().source.readSpan(
+          STAMP_SHA,
+          0,
+          10,
+          new AbortController().signal,
+        );
+      });
+      expect(screen.getByText("Showing latest")).toBeTruthy();
+
+      fireEvent.click(screen.getByRole("button", { name: "Expand" }));
+
+      expect(lastOpenedIntent()).toMatchObject({
+        node: {
+          hostId: "host-1",
+          htmlVersion: {
+            manifest: {
+              files: {
+                "index.html": {
+                  sha256: HEAD_SHA,
+                  byteLength: HEAD_BYTES_LENGTH,
+                  mediaType: "text/html",
+                },
+              },
+              capturedAt: 2_000,
+            },
+            entryPath: "index.html",
+          },
+        },
+      });
+    });
+
+    it("hands the download the same host and artifact, and grows its touch target on a coarse pointer", () => {
+      storeMocks.current = {
+        artifacts: {
+          byId: { [ARTIFACT_ID]: PROJECTION },
+          allIds: [ARTIFACT_ID],
+        },
+        deletedArtifacts: EMPTY_DELETED,
+      };
+      expandMocks.coarsePointer.current = true;
+      renderRow(scopeWithClient(makeArtifactReadClient(neverRespond)), STAMP);
+
+      const download = screen.getByTestId("download-stub");
+      expect(download.dataset.hostId).toBe("host-1");
+      expect(download.dataset.artifactId).toBe(ARTIFACT_ID);
+      expect(screen.getByRole("button", { name: "Expand" }).dataset.size).toBe(
+        "icon-touch",
+      );
+    });
   });
 });

@@ -24,10 +24,12 @@ import type {
 import type { MessageSegment } from "@/stores/composer/chat-store";
 import { collectAssistantReplyText } from "@/lib/chat/collect-assistant-reply-text";
 import {
+  transcriptShowsWorkingRow,
   useRenderedMessages,
   type RenderedMessagesDisplayContext,
   type RenderedMessagesInput,
 } from "@/stores/chats/rendered-messages";
+import type { PendingTurn } from "@/stores/chats/chat-send-state";
 import type {
   ChatMessage,
   SubagentSegment,
@@ -4775,19 +4777,18 @@ describe("useRenderedMessages setup card integration", () => {
     expect(indicator?.elapsedStartedAt).not.toBe(indicator?.createdAt);
   });
 
-  it("omits elapsedStartedAt from the pre-turn indicator when no active turn exists yet", () => {
+  it("times the pre-turn indicator from the send's own sentAt when no active turn exists yet", () => {
     const { result } = renderRenderedMessages({
       activeTurn: null,
       runStatus: "running",
+      pendingTurn: { messageId: "m-sent", sentAt: 4200, settings: SETTINGS },
     });
 
     const indicator = result.current.find(
       (message) => message.role === "assistant",
     );
-    // Same list anchor as the active-turn case above - only the presence of
-    // `elapsedStartedAt` differs, since there is genuinely no known start.
     expect(indicator?.createdAt).toBe(1);
-    expect(indicator?.elapsedStartedAt).toBeUndefined();
+    expect(indicator?.elapsedStartedAt).toBe(4200);
   });
 
   it("still shows the Working indicator when setup has already completed", () => {
@@ -7669,5 +7670,187 @@ describe("useRenderedMessages: a subagent's own conversation nests under its car
           segment.kind === "text" && segment.markdown === "final answer",
       ),
     ).toBe(true);
+  });
+});
+
+describe("useRenderedMessages: the working row is built from the pending turn", () => {
+  const SENT_AT = 5000;
+  const pendingTurn: PendingTurn = {
+    messageId: "m-sent",
+    sentAt: SENT_AT,
+    settings: SETTINGS,
+  };
+  const sentMessage = withdrawnPendingMessage("action-sent", "m-sent", SENT_AT);
+
+  function workingRow(
+    rows: ReadonlyArray<ChatMessage>,
+  ): ChatMessage | undefined {
+    return rows.find((row) => row.role === "assistant");
+  }
+
+  it("draws the message and a fully populated working row on the first frame of a send into an idle chat", () => {
+    const { result } = renderRenderedMessages({
+      pendingUserMessages: [sentMessage],
+      pendingTurn,
+      runStatus: "idle",
+      activeTurn: null,
+    });
+
+    expect(result.current.map((row) => row.role)).toEqual([
+      "user",
+      "assistant",
+    ]);
+    const working = workingRow(result.current);
+    expect(working?.runState).toBe("running");
+    expect(working?.elapsedStartedAt).toBe(SENT_AT);
+    expect(working?.assistantMeta?.provider).toBe(SETTINGS.harnessId);
+    expect(working?.createdAt).toBeGreaterThan(SENT_AT);
+  });
+
+  it("transcriptShowsWorkingRow reads true with the trailing working row and false without it", () => {
+    const withRow = renderRenderedMessages({
+      pendingUserMessages: [sentMessage],
+      pendingTurn,
+      runStatus: "idle",
+      activeTurn: null,
+    });
+    expect(workingRow(withRow.result.current)).toBeDefined();
+    expect(transcriptShowsWorkingRow(withRow.result.current)).toBe(true);
+
+    const withoutRow = renderRenderedMessages({
+      pendingUserMessages: [sentMessage],
+      pendingTurn: null,
+      runStatus: "idle",
+      activeTurn: null,
+    });
+    expect(workingRow(withoutRow.result.current)).toBeUndefined();
+    expect(transcriptShowsWorkingRow(withoutRow.result.current)).toBe(false);
+  });
+
+  it("shows no working row for the same pending message once there is no pendingTurn and the chat is idle", () => {
+    const { result } = renderRenderedMessages({
+      pendingUserMessages: [sentMessage],
+      pendingTurn: null,
+      runStatus: "idle",
+      activeTurn: null,
+    });
+
+    expect(workingRow(result.current)).toBeUndefined();
+  });
+
+  it("keeps the timer origin and provider when the host's activeTurn arrives naming the send", () => {
+    const driver = renderRenderedMessages({
+      pendingUserMessages: [sentMessage],
+      pendingTurn,
+      runStatus: "idle",
+      activeTurn: null,
+    });
+    const before = workingRow(driver.result.current);
+
+    driver.patch({
+      runStatus: "running",
+      activeTurn: {
+        ...RUNNING_ACTIVE_TURN,
+        turnId: "turn-1",
+        userMessageId: "m-sent",
+        harnessId: SETTINGS.harnessId,
+        startedAt: SENT_AT + 40,
+      },
+    });
+    const after = workingRow(driver.result.current);
+
+    expect(after?.elapsedStartedAt).toBe(before?.elapsedStartedAt);
+    expect(after?.assistantMeta?.provider).toBe(
+      before?.assistantMeta?.provider,
+    );
+    expect(driver.result.current.map((row) => row.role)).toEqual([
+      "user",
+      "assistant",
+    ]);
+  });
+
+  it("switches the icon only when the host really started a different provider", () => {
+    const driver = renderRenderedMessages({
+      pendingUserMessages: [sentMessage],
+      pendingTurn,
+      runStatus: "idle",
+      activeTurn: null,
+    });
+
+    driver.patch({
+      runStatus: "running",
+      activeTurn: {
+        ...RUNNING_ACTIVE_TURN,
+        userMessageId: "m-sent",
+        harnessId: "codex",
+        startedAt: SENT_AT + 40,
+      },
+    });
+
+    expect(workingRow(driver.result.current)?.assistantMeta?.provider).toBe(
+      "codex",
+    );
+  });
+
+  it("orders the working row below its own local message even when the host's start predates the local clock", () => {
+    const { result } = renderRenderedMessages({
+      pendingUserMessages: [sentMessage],
+      pendingTurn,
+      runStatus: "running",
+      activeTurn: {
+        ...RUNNING_ACTIVE_TURN,
+        userMessageId: "m-sent",
+        startedAt: SENT_AT - 3000,
+      },
+    });
+
+    expect(result.current.map((row) => row.role)).toEqual([
+      "user",
+      "assistant",
+    ]);
+  });
+
+  it("times a send that waited in the dock from its drain instant, unchanged when activeTurn arrives", () => {
+    const drained: PendingTurn = {
+      ...pendingTurn,
+      timerOrigin: SENT_AT + 300_000,
+    };
+    const driver = renderRenderedMessages({
+      pendingUserMessages: [sentMessage],
+      pendingTurn: drained,
+      runStatus: "idle",
+      activeTurn: null,
+    });
+    expect(workingRow(driver.result.current)?.elapsedStartedAt).toBe(
+      SENT_AT + 300_000,
+    );
+
+    driver.patch({
+      runStatus: "running",
+      activeTurn: {
+        ...RUNNING_ACTIVE_TURN,
+        userMessageId: "m-sent",
+        startedAt: SENT_AT + 300_040,
+      },
+    });
+
+    expect(workingRow(driver.result.current)?.elapsedStartedAt).toBe(
+      SENT_AT + 300_000,
+    );
+  });
+
+  it("times a turn that is not this send's from the host's start, not from the pending send", () => {
+    const { result } = renderRenderedMessages({
+      pendingUserMessages: [sentMessage],
+      pendingTurn,
+      runStatus: "running",
+      activeTurn: {
+        ...RUNNING_ACTIVE_TURN,
+        userMessageId: "someone-elses-message",
+        startedAt: 1234,
+      },
+    });
+
+    expect(workingRow(result.current)?.elapsedStartedAt).toBe(1234);
   });
 });

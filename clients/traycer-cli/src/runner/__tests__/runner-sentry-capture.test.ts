@@ -137,6 +137,81 @@ describe("runner Sentry capture", () => {
     );
   }
 
+  async function runMappedHostRpcError(
+    code: "RPC_ERROR" | "VERB_NOT_ALLOWED",
+    message: string,
+  ): Promise<void> {
+    const { HostRpcError } =
+      await import("../../../../shared/host-transport/host-messenger");
+    const { toAgentCliError } = await import("../../internal/host-rpc");
+    const { runCommand } = await import("../runner");
+    const err = new HostRpcError({
+      code,
+      message,
+      requestId: "r1",
+      method: "agent.list",
+      fatalDetails: null,
+    });
+
+    await runCommand(() => toAgentCliError(Promise.reject(err)), {
+      json: true,
+      quiet: null,
+      noProgress: null,
+      noBootstrap: null,
+    });
+  }
+
+  it("maps the EntityMemoryManager shutdown refusal to expected host-busy output", async () => {
+    const message = "EntityMemoryManager is shutting down";
+
+    await runMappedHostRpcError("RPC_ERROR", message);
+
+    expect(sentryMocks.captureException).not.toHaveBeenCalled();
+    expect(sentryMocks.addBreadcrumb).toHaveBeenCalledTimes(1);
+    const crumb = sentryMocks.addBreadcrumb.mock.calls[0][0] as Breadcrumb;
+    expect(crumb.category).toBe("cli");
+    expect(crumb.data.code).toBe("E_HOST_BUSY");
+    const terminal = terminalEnvelope();
+    expect(terminal?.status).toBe("error");
+    const reported = terminal?.error as Record<string, unknown>;
+    expect(reported.code).toBe("E_HOST_BUSY");
+    expect(reported.message).toBe(message);
+    expect(process.exitCode).toBe(1);
+  });
+
+  it.each([
+    "unrelated resolver failure",
+    "EntityMemoryManager is shutting down unexpectedly",
+  ])(
+    "captures RPC_ERROR message %j and leaves no expected-code breadcrumb",
+    async (message) => {
+      await runMappedHostRpcError("RPC_ERROR", message);
+
+      expect(sentryMocks.captureException).toHaveBeenCalledTimes(1);
+      expect(sentryMocks.addBreadcrumb).not.toHaveBeenCalled();
+      const reported = terminalEnvelope()?.error as Record<string, unknown>;
+      expect(reported.code).toBe("E_UNEXPECTED");
+      expect(reported.message).toBe(message);
+      expect(process.exitCode).toBe(1);
+    },
+  );
+
+  it("captures the shutdown message when the wire code is unrelated", async () => {
+    const message = "EntityMemoryManager is shutting down";
+
+    await runMappedHostRpcError("VERB_NOT_ALLOWED", message);
+
+    expect(sentryMocks.captureException).toHaveBeenCalledTimes(1);
+    expect(sentryMocks.captureException.mock.calls[0][0]).toMatchObject({
+      code: "E_UNEXPECTED",
+    });
+    expect(sentryMocks.addBreadcrumb).not.toHaveBeenCalled();
+    const reported = terminalEnvelope()?.error as Record<string, unknown>;
+    expect(reported.code).toBe("E_UNEXPECTED");
+    expect(reported.message).toBe(message);
+    expect(process.exitCode).toBe(1);
+  });
+
   it("does not capture an expected code, and still answers the caller", async () => {
     const { CLI_ERROR_CODES, CliError } = await import("../errors");
 

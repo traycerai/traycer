@@ -232,10 +232,12 @@ export function useEpicSyncTuiAgentRecords(epicId: string): void {
   // every applied delta for the epic, INCLUDING a chat one: both lists are
   // answered from the same per-(viewer, epic) composite, so a chat write moves
   // this list's revision even though no terminal-agent row changed.
-  useRecordListStreamStamp(epicId, stamp, query.refetch, {
-    deltaIncompleteSeq: tuiAgentDeltaIncompleteSeq,
-    listIsFetching: query.isFetching,
-  });
+  useRecordListStreamStamp(
+    epicId,
+    stamp,
+    query.refetch,
+    tuiAgentDeltaIncompleteSeq,
+  );
 
   const answer = query.data ?? null;
   useEffect(() => {

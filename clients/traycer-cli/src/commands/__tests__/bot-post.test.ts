@@ -20,6 +20,7 @@ import {
   REPLY_MESSAGE_ID,
   REQUEST_ID,
   THIS_HOST_ID,
+  THREAD_ID,
   FakeStreamClient,
   type FakeStreamSession,
   assistantRow,
@@ -38,13 +39,14 @@ import {
   userRow,
 } from "./bot-test-support";
 import {
-  buildBotSendCommand,
+  buildBotPostCommand,
+  buildBotReplyCommand,
   firstConversation,
   parseWaitDuration,
   touchedOrdinals,
   waitForBotReply,
   type BotReplyOutcome,
-} from "../bot-send";
+} from "../bot-post";
 
 const loggerMock = vi.hoisted(() => ({
   debug: vi.fn(),
@@ -98,7 +100,7 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-// ---- command: choosing the bot and conversation ------------------------- //
+// ---- commands: choosing the bot and its channel ------------------------- //
 
 function stageSend(input: {
   readonly bots: readonly BotRecord[];
@@ -112,6 +114,7 @@ function stageSend(input: {
       "bot.conversation.send": () => ({
         messageId: "msg-sent",
         requestId: REQUEST_ID,
+        threadId: THREAD_ID,
         delivery: input.delivery,
       }),
     }),
@@ -125,15 +128,26 @@ function paramsOfCalls(method: string): unknown[] {
     .map((call) => call[1]);
 }
 
-function send(input: {
+function post(input: {
   readonly bot: string;
-  readonly conversationId: string | null;
   readonly wait: string | null;
 }): Promise<CommandResult> {
-  return buildBotSendCommand({
+  return buildBotPostCommand({
     bot: input.bot,
     text: "ship it",
-    conversationId: input.conversationId,
+    wait: input.wait,
+  })(makeCtx());
+}
+
+function reply(input: {
+  readonly bot: string;
+  readonly threadId: string;
+  readonly wait: string | null;
+}): Promise<CommandResult> {
+  return buildBotReplyCommand({
+    bot: input.bot,
+    threadId: input.threadId,
+    text: "and the docs?",
     wait: input.wait,
   })(makeCtx());
 }
@@ -149,10 +163,10 @@ async function rejection(run: Promise<CommandResult>): Promise<CliError> {
   return error;
 }
 
-describe("bot send", () => {
+describe("bot post", () => {
   const tracy = botRecord({ botId: BOT_ID_A, title: "Tracy" });
 
-  it("sends into the conversation with the smallest createdAt when none is named", async () => {
+  it("posts at the top level of the channel, the conversation with the smallest createdAt, and prints the request and its thread", async () => {
     stageSend({
       bots: [tracy],
       conversations: [
@@ -163,102 +177,59 @@ describe("bot send", () => {
       delivery: "written",
     });
 
-    const result = await send({
-      bot: BOT_ID_A,
-      conversationId: null,
-      wait: null,
-    });
+    const result = await post({ bot: BOT_ID_A, wait: null });
 
     expect(paramsOfCalls("bot.conversation.list")).toEqual([
       { botId: BOT_ID_A },
     ]);
     expect(paramsOfCalls("bot.conversation.send")).toEqual([
-      { botId: BOT_ID_A, conversationId: "conv-first", text: "ship it" },
+      {
+        botId: BOT_ID_A,
+        conversationId: "conv-first",
+        text: "ship it",
+        threadId: null,
+      },
     ]);
     expect(result.human).toBe(
-      `Sent to Tracy (request ${REQUEST_ID}, delivered).`,
+      `Posted to Tracy (request ${REQUEST_ID}, thread ${THREAD_ID}, delivered).`,
     );
     expect(result.data).toEqual({
       botId: BOT_ID_A,
       conversationId: "conv-first",
       messageId: "msg-sent",
       requestId: REQUEST_ID,
+      threadId: THREAD_ID,
       delivery: "written",
     });
     expect(result.exitCode).toBe(0);
-    // Without --wait nothing follows the conversation.
+    // Without --wait nothing follows the post.
     expect(hoisted.openLocalStreamClient).not.toHaveBeenCalled();
   });
 
-  it("sends into the named conversation, even when it is not the first", async () => {
-    stageSend({
-      bots: [tracy],
-      conversations: [
-        conversationRecord({ conversationId: "conv-first", createdAt: 1_000 }),
-        conversationRecord({ conversationId: "conv-named", createdAt: 9_000 }),
-      ],
-      delivery: "written",
-    });
-
-    const result = await send({
-      bot: BOT_ID_A,
-      conversationId: "conv-named",
-      wait: null,
-    });
-
-    expect(paramsOfCalls("bot.conversation.send")).toEqual([
-      { botId: BOT_ID_A, conversationId: "conv-named", text: "ship it" },
-    ]);
-    expect(result.data).toMatchObject({ conversationId: "conv-named" });
-  });
-
-  it("refuses a named conversation the bot does not have, and sends nothing", async () => {
-    stageSend({
-      bots: [tracy],
-      conversations: [conversationRecord({ conversationId: "conv-first" })],
-      delivery: "written",
-    });
-
-    const error = await rejection(
-      send({ bot: BOT_ID_A, conversationId: "conv-nope", wait: null }),
-    );
-
-    expect(error.code).toBe(CLI_ERROR_CODES.NOT_FOUND);
-    expect(error.exitCode).toBe(1);
-    expect(error.message).toBe("traycer: Tracy has no conversation conv-nope.");
-    expect(paramsOfCalls("bot.conversation.send")).toEqual([]);
-  });
-
-  it("refuses a bot with no conversations, and sends nothing", async () => {
+  it("refuses a bot with no channel, and sends nothing", async () => {
     stageSend({ bots: [tracy], conversations: [], delivery: "written" });
 
-    const error = await rejection(
-      send({ bot: BOT_ID_A, conversationId: null, wait: null }),
-    );
+    const error = await rejection(post({ bot: BOT_ID_A, wait: null }));
 
     expect(error.code).toBe(CLI_ERROR_CODES.NOT_FOUND);
     expect(error.exitCode).toBe(1);
     expect(error.message).toBe(
-      "traycer: Tracy has no conversation yet - open it in the Traycer app first.",
+      "traycer: Tracy has no channel yet - open it in the Traycer app first.",
     );
     expect(paramsOfCalls("bot.conversation.send")).toEqual([]);
   });
 
-  it("says a queued message waits for the bot's host", async () => {
+  it("says a queued post waits for the bot's host", async () => {
     stageSend({
       bots: [tracy],
       conversations: [conversationRecord({})],
       delivery: "queued",
     });
 
-    const result = await send({
-      bot: BOT_ID_A,
-      conversationId: null,
-      wait: null,
-    });
+    const result = await post({ bot: BOT_ID_A, wait: null });
 
     expect(result.human).toBe(
-      `Sent to Tracy (request ${REQUEST_ID}, queued until the bot's host is back).`,
+      `Posted to Tracy (request ${REQUEST_ID}, thread ${THREAD_ID}, queued until the bot's host is back).`,
     );
     expect(result.data).toMatchObject({ delivery: "queued" });
   });
@@ -273,16 +244,12 @@ describe("bot send", () => {
       delivery: "written",
     });
 
-    const result = await send({
-      bot: BOT_ID_B,
-      conversationId: null,
-      wait: null,
-    });
+    const result = await post({ bot: BOT_ID_B, wait: null });
 
     expect(paramsOfCalls("bot.conversation.send")).toMatchObject([
       { botId: BOT_ID_B },
     ]);
-    expect(result.human).toMatch(/^Sent to Scout /);
+    expect(result.human).toMatch(/^Posted to Scout /);
   });
 
   it("finds the bot by its title, ignoring case", async () => {
@@ -295,16 +262,12 @@ describe("bot send", () => {
       delivery: "written",
     });
 
-    const result = await send({
-      bot: "sCoUt",
-      conversationId: null,
-      wait: null,
-    });
+    const result = await post({ bot: "sCoUt", wait: null });
 
     expect(paramsOfCalls("bot.conversation.list")).toEqual([
       { botId: BOT_ID_B },
     ]);
-    expect(result.human).toMatch(/^Sent to Scout /);
+    expect(result.human).toMatch(/^Posted to Scout /);
   });
 
   it("refuses an ambiguous title and lists both ids", async () => {
@@ -317,9 +280,7 @@ describe("bot send", () => {
       delivery: "written",
     });
 
-    const error = await rejection(
-      send({ bot: "TWIN", conversationId: null, wait: null }),
-    );
+    const error = await rejection(post({ bot: "TWIN", wait: null }));
 
     expect(error.code).toBe(CLI_ERROR_CODES.INVALID_ARGUMENT);
     expect(error.exitCode).toBe(1);
@@ -332,9 +293,7 @@ describe("bot send", () => {
   it("refuses a bot nobody has by that name", async () => {
     stageSend({ bots: [tracy], conversations: [], delivery: "written" });
 
-    const error = await rejection(
-      send({ bot: "Nobody", conversationId: null, wait: null }),
-    );
+    const error = await rejection(post({ bot: "Nobody", wait: null }));
 
     expect(error.code).toBe(CLI_ERROR_CODES.NOT_FOUND);
     expect(error.message).toBe(
@@ -346,64 +305,160 @@ describe("bot send", () => {
   it("rejects an invalid --wait before any host call", async () => {
     stageSend({ bots: [tracy], conversations: [], delivery: "written" });
 
-    const error = await rejection(
-      send({ bot: BOT_ID_A, conversationId: null, wait: "5" }),
-    );
+    const error = await rejection(post({ bot: BOT_ID_A, wait: "5" }));
 
     expect(error.code).toBe(CLI_ERROR_CODES.INVALID_ARGUMENT);
     expect(hoisted.callHostRpc).not.toHaveBeenCalled();
   });
 });
 
-describe("bot send --wait on a bot bound to another host", () => {
-  it("refuses with the exact copy and never calls bot.conversation.send", async () => {
-    const away = botRecord({
-      botId: BOT_ID_A,
-      title: "Tracy",
-      boundHostId: OTHER_HOST_ID,
-    });
+describe("bot reply", () => {
+  const tracy = botRecord({ botId: BOT_ID_A, title: "Tracy" });
+
+  it("writes into the named thread of the bot's channel and prints the request it opens", async () => {
     stageSend({
-      bots: [away],
-      conversations: [conversationRecord({})],
-      delivery: "queued",
+      bots: [tracy],
+      conversations: [
+        conversationRecord({ conversationId: "conv-late", createdAt: 3_000 }),
+        conversationRecord({ conversationId: "conv-first", createdAt: 1_000 }),
+      ],
+      delivery: "written",
     });
 
-    const error = await rejection(
-      send({ bot: BOT_ID_A, conversationId: null, wait: "30s" }),
-    );
+    const result = await reply({
+      bot: "Tracy",
+      threadId: THREAD_ID,
+      wait: null,
+    });
 
-    expect(error.code).toBe(CLI_ERROR_CODES.INVALID_ARGUMENT);
-    expect(error.exitCode).toBe(1);
-    expect(error.message).toBe(
-      "traycer: Tracy runs on another of your hosts; --wait works only there. Send without --wait to queue it.",
+    expect(paramsOfCalls("bot.conversation.send")).toEqual([
+      {
+        botId: BOT_ID_A,
+        conversationId: "conv-first",
+        text: "and the docs?",
+        threadId: THREAD_ID,
+      },
+    ]);
+    expect(result.human).toBe(
+      `Replied in Tracy's thread ${THREAD_ID} (request ${REQUEST_ID}, delivered).`,
     );
-    expect(paramsOfCalls("bot.conversation.send")).toEqual([]);
+    expect(result.data).toEqual({
+      botId: BOT_ID_A,
+      conversationId: "conv-first",
+      messageId: "msg-sent",
+      requestId: REQUEST_ID,
+      threadId: THREAD_ID,
+      delivery: "written",
+    });
+    expect(result.exitCode).toBe(0);
     expect(hoisted.openLocalStreamClient).not.toHaveBeenCalled();
   });
 
-  it("still sends without --wait, queued for the bot's host", async () => {
-    const away = botRecord({ botId: BOT_ID_A, boundHostId: OTHER_HOST_ID });
+  it("refuses a thread id the request schema rejects, and sends nothing", async () => {
+    stageSend({
+      bots: [tracy],
+      conversations: [conversationRecord({})],
+      delivery: "written",
+    });
+
+    const error = await rejection(
+      reply({ bot: BOT_ID_A, threadId: "t".repeat(37), wait: null }),
+    );
+
+    expect(error.code).toBe(CLI_ERROR_CODES.INVALID_ARGUMENT);
+    expect(paramsOfCalls("bot.conversation.send")).toEqual([]);
+  });
+});
+
+describe("--wait on a bot bound to another host", () => {
+  const away = botRecord({
+    botId: BOT_ID_A,
+    title: "Tracy",
+    boundHostId: OTHER_HOST_ID,
+  });
+
+  it.each([
+    {
+      command: "post",
+      run: () => post({ bot: BOT_ID_A, wait: "30s" }),
+      message:
+        "traycer: Tracy runs on another of your hosts; --wait works only there. Post without --wait to queue it.",
+    },
+    {
+      command: "reply",
+      run: () => reply({ bot: BOT_ID_A, threadId: THREAD_ID, wait: "30s" }),
+      message:
+        "traycer: Tracy runs on another of your hosts; --wait works only there. Reply without --wait to queue it.",
+    },
+  ])(
+    "$command refuses with the exact copy and never sends",
+    async ({ run, message }) => {
+      stageSend({
+        bots: [away],
+        conversations: [conversationRecord({})],
+        delivery: "queued",
+      });
+
+      const error = await rejection(run());
+
+      expect(error.code).toBe(CLI_ERROR_CODES.INVALID_ARGUMENT);
+      expect(error.exitCode).toBe(1);
+      expect(error.message).toBe(message);
+      expect(paramsOfCalls("bot.conversation.send")).toEqual([]);
+      expect(hoisted.openLocalStreamClient).not.toHaveBeenCalled();
+    },
+  );
+
+  it("refuses a bot no host runs", async () => {
+    stageSend({
+      bots: [botRecord({ botId: BOT_ID_A, boundHostId: null })],
+      conversations: [conversationRecord({})],
+      delivery: "queued",
+    });
+
+    const error = await rejection(post({ bot: BOT_ID_A, wait: "30s" }));
+
+    expect(error.message).toBe(
+      "traycer: no host runs Tracy; move it to a host first.",
+    );
+    expect(paramsOfCalls("bot.conversation.send")).toEqual([]);
+  });
+
+  it("still posts without --wait, queued for the bot's host", async () => {
     stageSend({
       bots: [away],
       conversations: [conversationRecord({})],
       delivery: "queued",
     });
 
-    const result = await send({
-      bot: BOT_ID_A,
-      conversationId: null,
-      wait: null,
-    });
+    const result = await post({ bot: BOT_ID_A, wait: null });
 
     expect(paramsOfCalls("bot.conversation.send")).toHaveLength(1);
     expect(result.exitCode).toBe(0);
   });
 });
 
-describe("bot send on a host without bots", () => {
-  it.each(["bot.list", "bot.conversation.list", "bot.conversation.send"])(
-    "rejects with the update message when %s is unsupported",
-    async (missing) => {
+describe("post and reply on a host without bots", () => {
+  const commands = [
+    { command: "post", run: () => post({ bot: BOT_ID_A, wait: null }) },
+    {
+      command: "reply",
+      run: () => reply({ bot: BOT_ID_A, threadId: THREAD_ID, wait: null }),
+    },
+  ];
+  const methods = [
+    "bot.list",
+    "bot.conversation.list",
+    "bot.conversation.send",
+  ] as const;
+
+  it.each(
+    commands.flatMap(({ command, run }) =>
+      methods.map((missing) => ({ command, run, missing })),
+    ),
+  )(
+    "$command prints the update line when $missing is unsupported",
+    async ({ run, missing }) => {
       hoisted.callHostRpc.mockImplementation(
         routeRpc({
           "bot.list": () => {
@@ -422,9 +477,7 @@ describe("bot send on a host without bots", () => {
         }),
       );
 
-      const error = await rejection(
-        send({ bot: BOT_ID_A, conversationId: null, wait: null }),
-      );
+      const error = await rejection(run());
 
       expect(error.message).toBe(BOT_HOST_UPDATE_MESSAGE);
       expect(error.code).toBe(CLI_ERROR_CODES.HOST_UNSUPPORTED);
@@ -433,10 +486,10 @@ describe("bot send on a host without bots", () => {
   );
 });
 
-// ---- command: --wait, end to end ---------------------------------------- //
+// ---- commands: --wait, end to end --------------------------------------- //
 
-/** Starts a `--wait` run and returns once it is following the conversation. */
-async function startWaitingSend(wait: string): Promise<{
+/** Starts a `--wait` run and returns once it is following the request. */
+async function startWaiting(run: () => Promise<CommandResult>): Promise<{
   readonly run: Promise<CommandResult>;
   readonly client: FakeStreamClient;
   readonly session: FakeStreamSession;
@@ -451,12 +504,16 @@ async function startWaitingSend(wait: string): Promise<{
     client,
     endpoint: ENDPOINT,
   });
-  const run = send({ bot: BOT_ID_A, conversationId: null, wait });
+  const running = run();
   // Let the command get through its RPCs and subscribe.
   await vi.advanceTimersByTimeAsync(0);
   const session = client.sessions[0];
   if (session === undefined) throw new Error("the command never subscribed");
-  return { run, client, session };
+  return { run: running, client, session };
+}
+
+function startWaitingPost(wait: string) {
+  return startWaiting(() => post({ bot: BOT_ID_A, wait }));
 }
 
 function resolvedSnapshot(
@@ -482,13 +539,47 @@ function resolvedSnapshot(
   });
 }
 
-describe("bot send --wait", () => {
+/** The thread's frames: the same shapes as the channel's, on `THREAD_ID`. */
+function threadSnapshot(messages: readonly Record<string, unknown>[]) {
+  return chatSnapshotFrame({
+    botId: BOT_ID_A,
+    conversationId: THREAD_ID,
+    epoch: 1,
+    rowCount: messages.length,
+    indexRevision: null,
+    tailFromOrdinal: 0,
+    messages,
+  });
+}
+
+function threadSkeleton(entries: readonly Record<string, unknown>[]) {
+  return skeletonChunkFrame({
+    botId: BOT_ID_A,
+    conversationId: THREAD_ID,
+    epoch: 1,
+    fromOrdinal: 0,
+    entries,
+    isFinal: true,
+  });
+}
+
+/** The second subscription: opened once the channel names the reply. */
+async function threadSessionOf(
+  client: FakeStreamClient,
+): Promise<FakeStreamSession> {
+  await vi.advanceTimersByTimeAsync(0);
+  const session = client.sessions[1];
+  if (session === undefined) throw new Error("the thread was never followed");
+  return session;
+}
+
+describe("bot post --wait", () => {
   beforeEach(() => {
     vi.useFakeTimers();
   });
 
-  it("prints the reply and exits 0 once the request is resolved", async () => {
-    const { run, client, session } = await startWaitingSend("30s");
+  it("follows the channel until the verdict resolves the post, then the thread for the reply, and exits 0", async () => {
+    const { run, client, session } = await startWaitingPost("30s");
 
     expect(session.method).toBe("chat.subscribe");
     expect(session.params).toEqual({
@@ -496,8 +587,16 @@ describe("bot send --wait", () => {
       chatId: CONVERSATION_ID,
       resume: null,
     });
-    session.pushFrame(
-      resolvedSnapshot(REPLY_MESSAGE_ID, [
+    // The channel names the reply; the reply row itself is on the thread.
+    session.pushFrame(resolvedSnapshot(REPLY_MESSAGE_ID, []));
+    const threadSession = await threadSessionOf(client);
+    expect(threadSession.params).toEqual({
+      epicId: BOT_ID_A,
+      chatId: THREAD_ID,
+      resume: null,
+    });
+    threadSession.pushFrame(
+      threadSnapshot([
         assistantRow({
           messageId: REPLY_MESSAGE_ID,
           texts: ["All shipped."],
@@ -507,13 +606,14 @@ describe("bot send --wait", () => {
     const result = await run;
 
     expect(result.human).toBe(
-      `Sent to Tracy (request ${REQUEST_ID}, delivered).\nTracy replied:\nAll shipped.`,
+      `Posted to Tracy (request ${REQUEST_ID}, thread ${THREAD_ID}, delivered).\nTracy replied:\nAll shipped.`,
     );
     expect(result.data).toEqual({
       botId: BOT_ID_A,
       conversationId: CONVERSATION_ID,
       messageId: "msg-sent",
       requestId: REQUEST_ID,
+      threadId: THREAD_ID,
       delivery: "written",
       outcome: {
         kind: "replied",
@@ -523,23 +623,26 @@ describe("bot send --wait", () => {
     });
     expect(result.exitCode).toBe(0);
     expect(session.closeCount).toBe(1);
-    expect(client.closeReasons).toEqual(["bot-send-wait-settled"]);
+    expect(threadSession.closeCount).toBe(1);
+    expect(client.closeReasons).toEqual(["bot-wait-settled"]);
   });
 
   it("names the reply message when its text could not be read back", async () => {
-    const { run, session } = await startWaitingSend("30s");
+    const { run, client, session } = await startWaitingPost("30s");
 
     session.pushFrame(resolvedSnapshot(REPLY_MESSAGE_ID, []));
-    session.pushFrame(skeletonOf(1, [skeletonEntry("r0", "user")]));
-    // No assistant row is left to read: the command asks for a fresh
-    // snapshot, which also lacks the reply.
-    expect(resnapshots(session)).toHaveLength(1);
-    session.pushFrame(resolvedSnapshot(REPLY_MESSAGE_ID, []));
-    session.pushFrame(skeletonOf(1, [skeletonEntry("r0", "user")]));
+    const threadSession = await threadSessionOf(client);
+    threadSession.pushFrame(threadSnapshot([]));
+    threadSession.pushFrame(threadSkeleton([]));
+    // No assistant row is left to read on the thread: the command asks for a
+    // fresh snapshot, which also lacks the reply.
+    expect(resnapshots(threadSession)).toHaveLength(1);
+    threadSession.pushFrame(threadSnapshot([]));
+    threadSession.pushFrame(threadSkeleton([]));
     const result = await run;
 
     expect(result.human).toBe(
-      `Sent to Tracy (request ${REQUEST_ID}, delivered).\nTracy replied (message ${REPLY_MESSAGE_ID}).`,
+      `Posted to Tracy (request ${REQUEST_ID}, thread ${THREAD_ID}, delivered).\nTracy replied (message ${REPLY_MESSAGE_ID}).`,
     );
     expect(result.data).toMatchObject({
       outcome: {
@@ -552,13 +655,13 @@ describe("bot send --wait", () => {
   });
 
   it("says the bot closed the request without a reply, and exits 0", async () => {
-    const { run, session } = await startWaitingSend("30s");
+    const { run, session } = await startWaitingPost("30s");
 
     session.pushFrame(resolvedSnapshot(null, []));
     const result = await run;
 
     expect(result.human).toBe(
-      `Sent to Tracy (request ${REQUEST_ID}, delivered).\nTracy closed the request without a reply.`,
+      `Posted to Tracy (request ${REQUEST_ID}, thread ${THREAD_ID}, delivered).\nTracy closed the request without a reply.`,
     );
     expect(result.data).toMatchObject({
       outcome: { kind: "resolved-without-reply" },
@@ -567,22 +670,22 @@ describe("bot send --wait", () => {
   });
 
   it("exits 1 and leaves the request open when the wait runs out", async () => {
-    const { run, client, session } = await startWaitingSend("30s");
+    const { run, client, session } = await startWaitingPost("30s");
 
     await vi.advanceTimersByTimeAsync(30_000);
     const result = await run;
 
     expect(result.human).toBe(
-      `Sent to Tracy (request ${REQUEST_ID}, delivered).\nNo reply from Tracy within 30s. The request stays open.`,
+      `Posted to Tracy (request ${REQUEST_ID}, thread ${THREAD_ID}, delivered).\nNo reply from Tracy within 30s. The request stays open.`,
     );
     expect(result.data).toMatchObject({ outcome: { kind: "timed-out" } });
     expect(result.exitCode).toBe(1);
     expect(session.closeCount).toBe(1);
-    expect(client.closeReasons).toEqual(["bot-send-wait-settled"]);
+    expect(client.closeReasons).toEqual(["bot-wait-settled"]);
   });
 
-  it("closes the stream client when following the conversation fails", async () => {
-    const { run, client, session } = await startWaitingSend("30s");
+  it("closes the stream client when following the post fails", async () => {
+    const { run, client, session } = await startWaitingPost("30s");
 
     session.pushStatus(
       "closed",
@@ -595,11 +698,11 @@ describe("bot send --wait", () => {
 
     const error = await rejection(run);
     expect(error.code).toBe(CLI_ERROR_CODES.HOST_UNREACHABLE);
-    expect(client.closeReasons).toEqual(["bot-send-wait-settled"]);
+    expect(client.closeReasons).toEqual(["bot-wait-settled"]);
   });
 
   it("prints the host-update line when chat.subscribe closes as incompatible during the wait", async () => {
-    const { run, client, session } = await startWaitingSend("30s");
+    const { run, client, session } = await startWaitingPost("30s");
 
     session.pushStatus(
       "closed",
@@ -614,7 +717,71 @@ describe("bot send --wait", () => {
     expect(error.code).toBe(CLI_ERROR_CODES.HOST_UNSUPPORTED);
     expect(error.message).toBe(BOT_HOST_UPDATE_MESSAGE);
     expect(error.exitCode).toBe(1);
-    expect(client.closeReasons).toEqual(["bot-send-wait-settled"]);
+    expect(client.closeReasons).toEqual(["bot-wait-settled"]);
+  });
+});
+
+describe("bot reply --wait", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  /** The thread holding the message's resolved request and the reply. */
+  function answeredThread(resolvedBy: string | null) {
+    return threadSnapshot([
+      userRow({
+        messageId: "msg-sent",
+        requestId: REQUEST_ID,
+        resolvedAt: 5_000,
+        resolvedByMessageId: resolvedBy,
+      }),
+      assistantRow({ messageId: REPLY_MESSAGE_ID, texts: ["Docs too."] }),
+    ]);
+  }
+
+  it("follows only the thread, where both the request and its reply are, and prints the reply", async () => {
+    const { run, client, session } = await startWaiting(() =>
+      reply({ bot: BOT_ID_A, threadId: THREAD_ID, wait: "30s" }),
+    );
+
+    expect(session.params).toEqual({
+      epicId: BOT_ID_A,
+      chatId: THREAD_ID,
+      resume: null,
+    });
+    session.pushFrame(answeredThread(REPLY_MESSAGE_ID));
+    const result = await run;
+
+    expect(client.sessions).toHaveLength(1);
+    expect(result.human).toBe(
+      `Replied in Tracy's thread ${THREAD_ID} (request ${REQUEST_ID}, delivered).\nTracy replied:\nDocs too.`,
+    );
+    expect(result.data).toMatchObject({
+      threadId: THREAD_ID,
+      outcome: {
+        kind: "replied",
+        replyMessageId: REPLY_MESSAGE_ID,
+        text: "Docs too.",
+      },
+    });
+    expect(result.exitCode).toBe(0);
+    expect(session.closeCount).toBe(1);
+    expect(client.closeReasons).toEqual(["bot-wait-settled"]);
+  });
+
+  it("exits 1 and leaves the request open when the wait runs out", async () => {
+    const { run, session } = await startWaiting(() =>
+      reply({ bot: BOT_ID_A, threadId: THREAD_ID, wait: "45s" }),
+    );
+
+    await vi.advanceTimersByTimeAsync(45_000);
+    const result = await run;
+
+    expect(result.human).toBe(
+      `Replied in Tracy's thread ${THREAD_ID} (request ${REQUEST_ID}, delivered).\nNo reply from Tracy within 45s. The request stays open.`,
+    );
+    expect(result.exitCode).toBe(1);
+    expect(session.closeCount).toBe(1);
   });
 });
 
@@ -809,18 +976,30 @@ function resnapshots(session: FakeStreamSession) {
   return sentFrames(session).filter((frame) => frame.kind === "resnapshot");
 }
 
-function startWait(timeoutMs: number): {
+interface StartedWait {
   readonly session: FakeStreamSession;
   readonly client: FakeStreamClient;
   readonly outcome: Promise<BotReplyOutcome>;
   readonly settled: () => boolean;
-} {
+}
+
+/** Follows a request that opened no thread: the reply is on the same chat. */
+function startWait(timeoutMs: number): StartedWait {
+  return startWaitIn(timeoutMs, null);
+}
+
+/** Follows a request on the channel whose reply is written to `replyChatId`. */
+function startWaitIn(
+  timeoutMs: number,
+  replyChatId: string | null,
+): StartedWait {
   const client = new FakeStreamClient(() => undefined);
   let done = false;
   const outcome = waitForBotReply({
     client,
     botId: BOT_ID_A,
-    conversationId: CONVERSATION_ID,
+    requestChatId: CONVERSATION_ID,
+    replyChatId,
     requestId: REQUEST_ID,
     timeoutMs,
   }).finally(() => {
@@ -1094,6 +1273,109 @@ describe("waitForBotReply", () => {
     await expect(outcome).resolves.toEqual({ kind: "resolved-without-reply" });
     expect(session.closeCount).toBe(1);
     expect(session.sent).toEqual([]);
+  });
+
+  describe("a request that opened a thread", () => {
+    const THREAD_REPLY_TEXT = "THE-ANSWER-9d1c0e";
+    const threadReplyRow = assistantRow({
+      messageId: REPLY_MESSAGE_ID,
+      texts: [THREAD_REPLY_TEXT],
+    });
+
+    /** The channel holds the resolved anchor and no reply row. */
+    function resolveChannel(session: FakeStreamSession): void {
+      session.pushFrame(
+        snapshotAt({
+          epoch: 1,
+          rowCount: 1,
+          indexRevision: null,
+          tailFromOrdinal: 1,
+          messages: [],
+        }),
+      );
+      session.pushFrame(skeletonOf(1, [skeletonEntry("u0", "user")]));
+      expect(loadSpans(session)).toEqual([[0, 0]]);
+      serveWhole(
+        session,
+        newestLoad(session),
+        ["u0"],
+        [resolvedUserRow(REPLY_MESSAGE_ID)],
+      );
+    }
+
+    it("reads the reply from the thread the channel's resolution names", async () => {
+      const { session, client, outcome } = startWaitIn(60_000, THREAD_ID);
+
+      resolveChannel(session);
+      // The channel has said which reply resolved the request; it is closed
+      // and the thread is followed for that row.
+      expect(session.closeCount).toBe(1);
+      const threadSession = await threadSessionOf(client);
+      expect(client.sessions).toHaveLength(2);
+      expect(
+        client.sessions.map((followed) => [followed.method, followed.params]),
+      ).toEqual([
+        [
+          "chat.subscribe",
+          { epicId: BOT_ID_A, chatId: CONVERSATION_ID, resume: null },
+        ],
+        [
+          "chat.subscribe",
+          { epicId: BOT_ID_A, chatId: THREAD_ID, resume: null },
+        ],
+      ]);
+      expect(threadSession.closeCount).toBe(0);
+
+      threadSession.pushFrame(threadSnapshot([threadReplyRow]));
+      threadSession.pushFrame(
+        threadSkeleton([skeletonEntry("a0", "assistant")]),
+      );
+
+      await expect(outcome).resolves.toEqual({
+        kind: "replied",
+        replyMessageId: REPLY_MESSAGE_ID,
+        text: THREAD_REPLY_TEXT,
+      });
+      expect(session.closeCount).toBe(1);
+      expect(threadSession.closeCount).toBe(1);
+      expect(threadSession.sent).toEqual([]);
+    });
+
+    it("reports the reply by its id when the thread never shows it within the time left", async () => {
+      const { session, client, outcome, settled } = startWaitIn(
+        30_000,
+        THREAD_ID,
+      );
+
+      await vi.advanceTimersByTimeAsync(10_000);
+      resolveChannel(session);
+      const threadSession = await threadSessionOf(client);
+
+      // The thread follower gets what is left of the wait, not a fresh one.
+      await vi.advanceTimersByTimeAsync(19_999);
+      expect(settled()).toBe(false);
+      expect(threadSession.closeCount).toBe(0);
+
+      await vi.advanceTimersByTimeAsync(1);
+      await expect(outcome).resolves.toEqual({
+        kind: "replied",
+        replyMessageId: REPLY_MESSAGE_ID,
+        text: null,
+      });
+      expect(session.closeCount).toBe(1);
+      expect(threadSession.closeCount).toBe(1);
+    });
+
+    it("stays timed out when the channel never resolves the request", async () => {
+      const { session, client, outcome } = startWaitIn(30_000, THREAD_ID);
+
+      session.pushFrame(snapshotOf([openUserRow], 1));
+      await vi.advanceTimersByTimeAsync(30_000);
+
+      await expect(outcome).resolves.toEqual({ kind: "timed-out" });
+      expect(client.sessions).toHaveLength(1);
+      expect(session.closeCount).toBe(1);
+    });
   });
 
   it("keeps waiting while the request is open, and while another request is the resolved one", async () => {
@@ -2275,7 +2557,7 @@ describe("waitForBotReply", () => {
         code: CLI_ERROR_CODES.HOST_UNREACHABLE,
         exitCode: 1,
         message:
-          "traycer: stopped following the conversation - lost the host. The message was sent; the request stays open.",
+          "traycer: stopped waiting for the answer - lost the host. The message was sent; the request stays open.",
       });
       expect(session.closeCount).toBe(1);
     });

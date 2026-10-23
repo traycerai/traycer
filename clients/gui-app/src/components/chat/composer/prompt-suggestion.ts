@@ -1,7 +1,7 @@
 import type { ComposerTopBannerKind } from "./chat-composer-top-banner";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { ComposerPromptEditorHandle } from "./composer-prompt-editor";
-import { plainTextPromptContent } from "@/components/epic-canvas/renderers/chat-tile-session-state";
+import { plainTextPromptContent } from "@traycer-clients/shared/epic/plain-text-content";
 import type { PendingChatAction } from "@/stores/chats/chat-session-store";
 
 /**

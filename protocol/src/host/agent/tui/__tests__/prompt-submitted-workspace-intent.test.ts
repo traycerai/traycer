@@ -34,8 +34,8 @@ const worktreeIntent = {
 describe("agent.tui.promptSubmitted@1.1 workspace intent", () => {
   const registry = hostRpcRegistry["agent.tui.promptSubmitted"];
 
-  it("is registered as latest minor 1", () => {
-    expect(registry[1].latestMinor).toBe(1);
+  it("is registered with 1.2 (spawn token and turn id) as its latest minor", () => {
+    expect(registry[1].latestMinor).toBe(2);
   });
 
   it("leaves absent worktreeIntent undefined (binding-as-stored)", () => {

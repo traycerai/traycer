@@ -1,4 +1,5 @@
 import type {
+  DiskWorktreeEntry,
   WorktreeBranch,
   WorktreeFolderIntent,
   WorktreeWorkspaceSummary,
@@ -12,6 +13,12 @@ export interface DefaultFolderInput {
   readonly repoIdentifier: RepoIdentifier;
   readonly isPrimary: boolean;
   readonly isGitRepo: boolean;
+  /**
+   * Whether the main checkout's branch points at a commit. A repo with no
+   * commit yet still names its branch (`dev`), but git cannot fork a worktree
+   * from it; see {@link mainCheckoutHasCommit}.
+   */
+  readonly hasCommit: boolean;
   readonly currentBranch: string | null;
   readonly defaultNewBranchName: string;
 }
@@ -21,16 +28,30 @@ export interface SeedFolderContext extends DefaultFolderInput {
 }
 
 /**
+ * Whether the main checkout's branch points at a commit. A repo that has never
+ * committed lists its branch (`dev`) with the all-zero head, and
+ * `git worktree add -b <new> <path> -- dev` fails on it. An unknown head (`null`)
+ * counts as a commit: only the all-zero id proves the branch is unborn.
+ */
+export function mainCheckoutHasCommit(summary: {
+  readonly worktrees: ReadonlyArray<Pick<DiskWorktreeEntry, "isMain" | "head">>;
+}): boolean {
+  const head = summary.worktrees.find((worktree) => worktree.isMain)?.head;
+  return head === undefined || head === null || !/^0+$/u.test(head);
+}
+
+/**
  * The default a freshly-added folder seeds to: a new worktree forking a fresh
- * branch off the working tree (the folder's current branch). A non-git folder or
- * a git repo with no resolvable current branch (detached HEAD) has no valid fork
- * source, so it degrades to `local` rather than emitting a structurally invalid
- * `{ source: "" }` worktree entry that would only fail at send/setup.
+ * branch off the working tree (the folder's current branch). A non-git folder, a
+ * git repo with no resolvable current branch (detached HEAD) and a repo whose
+ * branch has no commit yet have no valid fork source, so they degrade to `local`
+ * rather than emitting a structurally invalid `{ source: "" }` worktree entry, or
+ * a source git cannot resolve, that would only fail at send/setup.
  */
 export function defaultFolderIntent(
   folder: DefaultFolderInput,
 ): WorktreeFolderIntent {
-  if (!folder.isGitRepo || folder.currentBranch === null) {
+  if (!folder.isGitRepo || folder.currentBranch === null || !folder.hasCommit) {
     return {
       kind: "local",
       workspacePath: folder.workspacePath,
@@ -81,8 +102,8 @@ export type SeedIntentOverride = "worktree-carry";
  * already rebased each folder to the source chat's actual working-copy
  * directory (`buildAbForkWorkspaceSeed`) — for a worktree-bound chat the
  * folder IS the origin worktree — so the current branch here is the origin
- * working copy's branch. When no valid fork source exists (non-git folder or
- * detached HEAD) the seed entry passes through untouched: staying on the
+ * working copy's branch. When no valid fork source exists (non-git folder,
+ * detached HEAD or a repo with no commit) the seed entry passes through untouched: staying on the
  * origin working copy beats silently forking the wrong one.
  */
 export function applySeedIntentOverride(input: {
@@ -92,7 +113,9 @@ export function applySeedIntentOverride(input: {
 }): WorktreeFolderIntent | null {
   const { override, seedEntry, folder } = input;
   if (override === null || seedEntry === null) return seedEntry;
-  if (!folder.isGitRepo || folder.currentBranch === null) return seedEntry;
+  if (!folder.isGitRepo || folder.currentBranch === null || !folder.hasCommit) {
+    return seedEntry;
+  }
   return {
     kind: "worktree",
     scripts: null,
@@ -134,7 +157,8 @@ export function rememberedNeedsBranchValidation(
  *
  *  - `local`    - always valid (the checkout always exists).
  *  - `import`   - valid iff the adopted worktree path still exists on disk.
- *  - `worktree` `new`      - valid iff the fork source branch still exists; the
+ *  - `worktree` `new`      - valid iff the fork source branch still exists and is
+ *    not the folder's own branch while that branch has no commit; the
  *    branch name is regenerated fresh (a remembered name is one-shot and would
  *    collide), keeping the remembered source.
  *  - `worktree` `existing` - valid iff the branch still exists AND isn't checked
@@ -209,6 +233,9 @@ function isSourceValid(
   folder: SeedFolderContext,
   branches: ReadonlyArray<WorktreeBranch> | null,
 ): boolean {
+  // The unborn branch is listed by name but names no commit to fork from, so a
+  // remembered fork off it can only fail at the host.
+  if (!folder.hasCommit && source === folder.currentBranch) return false;
   if (source === folder.currentBranch) return true;
   if (source === folder.summary.mainBranch) return true;
   if (folder.summary.worktrees.some((w) => w.branch === source)) return true;

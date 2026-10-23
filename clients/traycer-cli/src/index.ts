@@ -39,6 +39,7 @@ import { buildCliMarkSourceCommand } from "./commands/cli-mark-source";
 import { buildCliReAnchorCommand } from "./commands/cli-re-anchor";
 import { buildCliUpgradeCommand } from "./commands/cli-upgrade";
 import { buildAgentArchiveCommand } from "./commands/agent-archive";
+import { buildAgentRenameCommand } from "./commands/agent-rename";
 import { buildAgentConfigureCommand } from "./commands/agent-configure";
 import { buildAgentCreateCommand } from "./commands/agent-create";
 import { buildAgentForkCommand } from "./commands/agent-fork";
@@ -58,7 +59,8 @@ import { buildAgentSelectionGuideCommand } from "./commands/agent-selection-guid
 import { buildAgentSendCommand } from "./commands/agent-send";
 import { buildBotCheckinsCommand } from "./commands/bot-checkins";
 import { buildBotListCommand } from "./commands/bot-list";
-import { buildBotSendCommand } from "./commands/bot-send";
+import { buildBotThreadsCommand } from "./commands/bot-threads";
+import { buildBotPostCommand, buildBotReplyCommand } from "./commands/bot-post";
 import { buildAgentTitleFromHookCommand } from "./commands/agent-title-from-hook";
 import { buildAgentTurnEndedFromHookCommand } from "./commands/agent-turn-ended-from-hook";
 import { buildAgentSessionObservedFromHookCommand } from "./commands/agent-session-observed-from-hook";
@@ -78,6 +80,7 @@ import {
 } from "./commands/profile-mutations";
 import { buildWorkspaceListCommand } from "./commands/workspace-list";
 import { buildWorktreeCreateCommand } from "./commands/worktree-create";
+import { buildTaskCreateCommand } from "./commands/task-create";
 import { buildWorktreeListCommand } from "./commands/worktree-list";
 import { buildWorktreeDeleteCommand } from "./commands/worktree-delete";
 import {
@@ -918,6 +921,7 @@ function registerCommands(program: Command, agentRolesEnabled: boolean): void {
   registerProfileCommands(program);
   registerWorkspaceCommands(program);
   registerWorktreeCommands(program);
+  registerTaskCommands(program);
   registerAgentCommands(program, agentRolesEnabled);
   registerBotCommands(program);
   registerMonitorCommand(program);
@@ -3121,6 +3125,88 @@ function registerWorktreeCommands(program: Command): void {
   );
 }
 
+// For a person at a shell or a scheduled job: an agent starts a Task with
+// its `traycer_create_task` tool, and the command refuses inside an agent
+// session. Hidden on the readonly surface, where `READONLY_REFUSED_COMMANDS`
+// refuses it too.
+function registerTaskCommands(program: Command): void {
+  const task = program
+    .command("task")
+    .description("Start Tasks from a shell or a scheduled job");
+
+  withRunner(
+    task
+      .command("create", {
+        hidden: resolveAgentCliSurface(readonlyEnv()) === "readonly",
+      })
+      .description(
+        "Start a Task and send its first message. The first agent starts working at once and uses your provider plan.",
+      )
+      .requiredOption("--message <text>", "The first agent's first message")
+      .requiredOption(
+        "--harness <id>",
+        `Harness for the first agent: ${AGENT_FACING_HARNESS_ID_LIST}`,
+      )
+      .requiredOption(
+        "--model <id>",
+        "Model for the first agent. Use 'traycer agent list-harness-models <harness>' to find one.",
+      )
+      .option("--title <title>", "Task title. Omit to have one generated.")
+      .option(
+        "--workspace <path>",
+        "Absolute path of a folder on this machine the Task works in. Repeatable.",
+        collectRepeatedOption,
+        [],
+      )
+      .option(
+        "--repo <owner/repo>",
+        "Repository the Task is about. Repeatable.",
+        collectRepeatedOption,
+        [],
+      )
+      .option(
+        "--reasoning-effort <effort>",
+        "Reasoning effort for supported models",
+      )
+      .option(
+        "--permission-mode <mode>",
+        "Permission mode for the first agent. Omit to use `full_access`.",
+      )
+      .option(
+        "--profile <ambient|id>",
+        "Provider profile: 'ambient' for the provider's CLI login, or a managed profile id from 'traycer profile list'. Omit to use 'ambient'.",
+      )
+      .option(
+        "--idempotency-key <key>",
+        "Start at most one Task for this key within 24 hours: a rerun prints the same ids. Build it from the schedule slot.",
+      ),
+    (opts) =>
+      buildTaskCreateCommand({
+        title: typeof opts.title === "string" ? opts.title : null,
+        message: typeof opts.message === "string" ? opts.message : "",
+        workspaces: stringValues(opts.workspace),
+        repos: stringValues(opts.repo),
+        harness: typeof opts.harness === "string" ? opts.harness : null,
+        model: typeof opts.model === "string" ? opts.model : null,
+        reasoningEffort:
+          typeof opts.reasoningEffort === "string"
+            ? opts.reasoningEffort
+            : null,
+        permissionMode:
+          typeof opts.permissionMode === "string" ? opts.permissionMode : null,
+        profile: typeof opts.profile === "string" ? opts.profile : null,
+        idempotencyKey:
+          typeof opts.idempotencyKey === "string" ? opts.idempotencyKey : null,
+      }),
+  );
+}
+
+function stringValues(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((entry): entry is string => typeof entry === "string")
+    : [];
+}
+
 function registerAgentCommands(
   program: Command,
   agentRolesEnabled: boolean,
@@ -3461,6 +3547,29 @@ function registerAgentCommands(
 
   withRunner(
     agent
+      .command("rename", readonlyHidden)
+      .description(
+        "Set the display name of a GUI chat or terminal agent on this host. The name is marked as user-set, so automatic titles never replace it.",
+      )
+      .argument(
+        "<id>",
+        "Full id of the chat or terminal agent to rename. No prefix resolution - the id must be exact.",
+      )
+      .argument(
+        "<name>",
+        "The new display name. Surrounding whitespace is trimmed; a blank name is refused.",
+      ),
+    (_opts, args) =>
+      buildAgentRenameCommand({
+        epicId: null,
+        senderAgentId: null,
+        agentId: expectRequiredPositional(args[0], "agent id"),
+        name: expectRequiredPositional(args[1], "name"),
+      }),
+  );
+
+  withRunner(
+    agent
       .command("send", readonlyHidden)
       .description("Send a prompt to another agent")
       .requiredOption("--to <agentId>", "Receiver agent id")
@@ -3629,14 +3738,21 @@ function registerAgentCommands(
       )
       // Codex's `notify` (the only turn-end edge it exposes) invokes this as the
       // `stop` program and appends its `agent-turn-complete` JSON as a trailing
-      // argv. The stop edge is keyed entirely on the bound agent env, so that
-      // payload is ignored - tolerate it instead of erroring on the extra arg.
+      // argv. The stop reads its `turn-id` from it; anything past it is
+      // tolerated rather than an error.
+      .argument(
+        "[notify-payload]",
+        "Codex notify payload (JSON) appended to the stop program",
+      )
       .allowExcessArguments(true)
       .requiredOption(
         "--provider <provider>",
         "Provider hook firing this call: 'claude', 'codex', or 'opencode'",
       )
-      .requiredOption("--event <event>", "Lifecycle event: 'start' or 'stop'")
+      .requiredOption(
+        "--event <event>",
+        "Lifecycle event: 'start', 'stop', 'idle' or 'started'",
+      )
       .option(
         "--agent-id <id>",
         "TUI agent id whose activity changed (defaults to $TRAYCER_AGENT_ID)",
@@ -3645,7 +3761,7 @@ function registerAgentCommands(
         "--harness-session-id <id>",
         "Provider session id for hooks that run outside per-agent env",
       ),
-    (opts) =>
+    (opts, args) =>
       buildAgentActivityFromHookCommand({
         provider: typeof opts.provider === "string" ? opts.provider : "",
         event: typeof opts.event === "string" ? opts.event : "",
@@ -3655,6 +3771,7 @@ function registerAgentCommands(
           typeof opts.harnessSessionId === "string"
             ? opts.harnessSessionId
             : null,
+        notifyPayload: args[0] ?? null,
       }),
   );
 
@@ -3706,7 +3823,9 @@ function registerAgentCommands(
 function registerBotCommands(program: Command): void {
   const bot = program
     .command("bot")
-    .description("List your bots, message them, and see what they follow");
+    .description(
+      "List your bots, post to them, follow their threads, and see what they follow",
+    );
   const botArgument = "Bot id, or its title";
 
   withRunner(
@@ -3718,32 +3837,56 @@ function registerBotCommands(program: Command): void {
     () => buildBotListCommand(),
   );
 
-  // Sending is hidden and refused on the readonly surface (see
-  // `READONLY_REFUSED_COMMANDS`); the two reads stay offered.
+  // Posting and replying are hidden and refused on the readonly surface (see
+  // `READONLY_REFUSED_COMMANDS`); the reads stay offered.
+  const hideSends = resolveAgentCliSurface(readonlyEnv()) === "readonly";
+  const waitOption =
+    "Wait up to this long for the bot to answer, e.g. 30s, 5m or 2h. Works only on the host the bot runs on.";
   withRunner(
     bot
-      .command("send", {
-        hidden: resolveAgentCliSurface(readonlyEnv()) === "readonly",
-      })
+      .command("post", { hidden: hideSends })
       .description(
-        "Message a bot and print the request it opens. The bot answers in a turn of its own, which counts toward your usage like any other agent turn.",
+        "Post to a bot and print the request it opens. The bot answers in a new thread, in turns that count toward your usage like any other agent's.",
       )
       .argument("<bot>", botArgument)
-      .argument("<text>", "The message")
-      .option(
-        "--conversation <id>",
-        "Conversation to write to (defaults to the bot's first conversation, the one the app shows)",
-      )
-      .option(
-        "--wait <duration>",
-        "Wait up to this long for the bot to answer, e.g. 30s, 5m or 2h. Works only on the host the bot runs on.",
-      ),
+      .argument("<text>", "The post")
+      .option("--wait <duration>", waitOption),
     (opts, args) =>
-      buildBotSendCommand({
+      buildBotPostCommand({
         bot: expectRequiredPositional(args[0], "bot"),
         text: expectRequiredPositional(args[1], "text"),
-        conversationId:
-          typeof opts.conversation === "string" ? opts.conversation : null,
+        wait: typeof opts.wait === "string" ? opts.wait : null,
+      }),
+  );
+
+  withRunner(
+    bot
+      .command("threads")
+      .description(
+        "List a bot's threads with the post each answers, its replies, open requests and cost. Works only on the host the bot runs on.",
+      )
+      .argument("<bot>", botArgument),
+    (_opts, args) =>
+      buildBotThreadsCommand({
+        bot: expectRequiredPositional(args[0], "bot"),
+      }),
+  );
+
+  withRunner(
+    bot
+      .command("reply", { hidden: hideSends })
+      .description(
+        "Write in one of a bot's threads and print the request it opens. The bot answers there, in turns that count toward your usage like any other agent's.",
+      )
+      .argument("<bot>", botArgument)
+      .argument("<thread>", "Thread id, from `traycer bot threads`")
+      .argument("<text>", "The message")
+      .option("--wait <duration>", waitOption),
+    (opts, args) =>
+      buildBotReplyCommand({
+        bot: expectRequiredPositional(args[0], "bot"),
+        threadId: expectRequiredPositional(args[1], "thread"),
+        text: expectRequiredPositional(args[2], "text"),
         wait: typeof opts.wait === "string" ? opts.wait : null,
       }),
   );

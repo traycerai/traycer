@@ -1,3 +1,5 @@
+import { queueWithDrainingPrompts } from "@/stores/chats/chat-send-state";
+import { useFallbackProfileLabels } from "@/components/chat/fallback/fallback-identity";
 import {
   useCallback,
   useEffect,
@@ -61,7 +63,7 @@ import {
 } from "@/components/chat/chat-attachment-scope-context";
 import {
   WorkingVerbContext,
-  pickWorkingVerb,
+  useWorkingVerb,
 } from "@/components/chat/working-verb";
 import {
   ThinkingTokensSourceContext,
@@ -176,6 +178,7 @@ import {
 import { useToolOpenStore } from "@/stores/chats/tool-open-store";
 import {
   transcriptShowsSetupCard,
+  transcriptShowsWorkingRow,
   useRenderedMessages,
   type RenderedMessagesDisplayContext,
 } from "@/stores/chats/rendered-messages";
@@ -318,6 +321,7 @@ import { ChatTileRestoreResultToasts } from "./chat-tile-restore-result-toasts";
 import { HostWorkspaceSelector } from "@/components/home/host-workspace-selector/host-workspace-selector";
 import type { FatalErrorDetails } from "@traycer/protocol/framework/ws-protocol";
 import type { StreamConnectionStatus } from "@traycer-clients/shared/host-transport/i-stream-session";
+import { plainTextPromptContent } from "@traycer-clients/shared/epic/plain-text-content";
 import type { TraycerNextStepOption } from "@/markdown/traycer-next-steps";
 import {
   ChatDockWorkspaceControls,
@@ -326,6 +330,7 @@ import {
 import { FallbackRetryRow } from "@/components/chat/fallback/fallback-retry-row";
 import type { ChatProviderFallbackState } from "@/components/chat/fallback/fallback-state";
 import { composerHasBlockingApprovals } from "./chat-approval-visibility";
+import { chatActivityIndicator } from "@/stores/chats/chat-run-activity";
 import {
   chatTileUiReducer,
   createInitialChatTileUiState,
@@ -333,7 +338,6 @@ import {
   canModifyChatMessages,
   shouldGenerateChatTitleForSubmittedMessage,
   userMessageSenderForProfile,
-  plainTextPromptContent,
   composerTurnStatus,
   resolvedTurnStatus,
   chatTileCanAct,
@@ -2061,6 +2065,11 @@ function useChatTileSessionViewModel(
       unconfirmedSendActionIds: s.unconfirmedSendActionIds,
       acceptedActions: s.acceptedActions,
       pendingUserMessages: s.pendingUserMessages,
+      pendingTurn: s.pendingTurn,
+      turnObservedAt: s.turnObservedAt,
+      queueTurnContinuity: s.queueTurnContinuity,
+      heldStop: s.heldStop,
+      drainingQueueItems: s.drainingQueueItems,
       currentComposerSettings: s.currentComposerSettings,
       liveAssistantMessage: s.liveAssistantMessage,
       worktreeBinding: s.worktreeBinding,
@@ -2072,13 +2081,22 @@ function useChatTileSessionViewModel(
     () =>
       queueWithoutPersistedPrompts(
         projectQueueWithPendingCancellations(
-          state.queue,
+          queueWithDrainingPrompts({
+            queue: state.queue,
+            drainingQueueItems: state.drainingQueueItems,
+          }),
           state.pendingActions,
           state.acceptedActions,
         ),
         state.messages,
       ),
-    [state.acceptedActions, state.messages, state.pendingActions, state.queue],
+    [
+      state.acceptedActions,
+      state.messages,
+      state.pendingActions,
+      state.queue,
+      state.drainingQueueItems,
+    ],
   );
   // The raw queue, including a row a pending cancel has hidden from the panel.
   // The optimistic chat row yields to any host queue item for the same prompt.
@@ -2230,8 +2248,13 @@ function useChatTileSessionViewModel(
       profile,
     ],
   );
+  const resolveRunProfileLabel = useFallbackProfileLabels(
+    tabHostCatalogClient,
+    surfaceVisible,
+  );
   const renderedDisplayContext = useMemo<RenderedMessagesDisplayContext>(
     () => ({
+      resolveProfileLabel: resolveRunProfileLabel,
       resolveUserSenderLabel: (sender) =>
         resolveSenderLabel(sender, displayContext),
       resolveUserSenderAvatarUrl: () => null,
@@ -2243,15 +2266,17 @@ function useChatTileSessionViewModel(
         resolveAgentServiceTierLabel(sender, serviceTier, displayContext),
       contentBlocksPreview,
     }),
-    [displayContext],
+    [displayContext, resolveRunProfileLabel],
+  );
+  // Read from the full store: its effective activity includes the handoff
+  // carry, even before the next host turn is named.
+  const hasTurnActivity = useStore(
+    handle.store,
+    (session) => chatActivityIndicator(session) === "turn",
   );
   const activeTurnId = state.activeTurn?.turnId ?? null;
-  // In-progress UI (restore gating, owner-active, the per-row "Working…" /
-  // "Stopping…" indicator below) is driven by the host-owned chat
-  // `runStatus` - the single source of truth that covers the first turn and
-  // every multi-turn send and flips to `stopping` the moment a stop is
-  // requested. We map it onto the composer's turn-status prop shape
-  // (`running`/`stopping`/null).
+  // The host's run status is narrowed to actual turn work, then augmented
+  // with the local send and the composer's queue-drain continuity.
   const activeTurnStatus = composerTurnStatus(state.runStatus);
   // Several consumers below (the row indicator, the composer Stop/Send
   // toggle, restore gating) need a narrower question than the label above:
@@ -2261,6 +2286,10 @@ function useChatTileSessionViewModel(
   // they can act on or attribute an indicator to. See
   // `resolvedTurnStatus`'s doc comment for the exact derivation.
   const composerActiveTurnStatus = resolvedTurnStatus(state, activeTurnStatus);
+  const workingRowStatus = resolvedTurnStatus(
+    { ...state, queueTurnContinuity: false },
+    activeTurnStatus,
+  );
   const renderedMessages = useRenderedMessages(
     {
       messages: state.messages,
@@ -2274,6 +2303,8 @@ function useChatTileSessionViewModel(
       setupCardWindows:
         state.transcriptDerived?.setupCardWindows ?? EMPTY_SETUP_CARD_WINDOWS,
       pendingUserMessages: state.pendingUserMessages,
+      pendingTurn: state.pendingTurn,
+      turnObservedAt: state.turnObservedAt,
       queuedPromptMessageIds: queuedPromptIds,
       withdrawnMessageId: withdrawnMessageDeliveryId(state.messageDelivery),
       liveAssistantMessage: state.liveAssistantMessage,
@@ -2286,7 +2317,7 @@ function useChatTileSessionViewModel(
       // active turn - passing the raw value synthesizes a duplicate, live
       // indicator row during background-only phase (no active turn) even
       // after the real row has already settled to its "done" footer.
-      runStatus: composerActiveTurnStatus ?? "idle",
+      runStatus: workingRowStatus ?? "idle",
       // The raw value this time, and for the one reader that wants it: a
       // background-outcome note holds back its ending while the host still
       // counts the chat as working.
@@ -2814,6 +2845,10 @@ function useChatTileSessionViewModel(
     () => transcriptShowsSetupCard(renderedMessages),
     [renderedMessages],
   );
+  const workingRowShown = useMemo(
+    () => transcriptShowsWorkingRow(renderedMessages),
+    [renderedMessages],
+  );
   const { messageActionsFor, forkAtAssistantMessage, revertOnEdit } =
     useChatMessageActions({
       dispatchUi,
@@ -2834,6 +2869,7 @@ function useChatTileSessionViewModel(
       messages: state.messages,
       messageDelivery: state.messageDelivery,
       setupCardShown,
+      workingRowShown,
       events: state.events,
       // `transcriptDerived !== null` is the line discriminator: on the legacy
       // line the window is an inert empty value and `messages`/`events` are
@@ -3458,14 +3494,16 @@ function useChatTileSessionViewModel(
           tabId: viewTabId,
           ownerId: node.id,
           binding: state.worktreeBinding,
-          isOwnerActive: activeTurnStatus !== null,
+          isOwnerActive:
+            activeTurnStatus !== null ||
+            composerActiveTurnStatus !== null ||
+            hasTurnActivity,
           // Distinguishes WHY the owner reads active, for the disabled-remove
           // tooltip wording only (the disable decision itself stays on the
-          // broader `isOwnerActive`, unchanged - a live background Bash/Monitor
+          // broader `isOwnerActive` - a live background Bash/Monitor
           // could still be reading or writing in the folder even with no
-          // foreground turn active). `false` here means it's active purely
-          // because of visible background work, not a turn the "stop" wording
-          // would make sense for.
+          // foreground turn active). A drain handoff can also keep the owner
+          // active before there is an owned turn for the "stop" wording.
           hasActiveTurn: composerActiveTurnStatus !== null,
           ownerLabel: node.name,
           inFlightWorktreeIntent: inFlightChatWorktreeIntent,
@@ -3487,6 +3525,7 @@ function useChatTileSessionViewModel(
       state.snapshotLoaded,
       activeTurnStatus,
       composerActiveTurnStatus,
+      hasTurnActivity,
       clearMissingPathsAfterBindingCommit,
       forkChatOnHost,
       viewTabId,
@@ -4003,7 +4042,7 @@ function useChatTileSessionViewModel(
   };
 }
 
-interface ChatSessionMessagesSurfaceProps {
+export interface ChatSessionMessagesSurfaceProps {
   readonly snapshotLoaded: boolean;
   /**
    * The chat session store, handed to the streaming "Thinking" label so it can
@@ -4100,9 +4139,18 @@ function ContextUsageChipForChat(props: {
   return <ContextUsageChip usage={usage} onCompact={onCompact} />;
 }
 
-function ChatSessionMessagesSurface(
+export function ChatSessionMessagesSurface(
   props: ChatSessionMessagesSurfaceProps,
 ): ReactNode {
+  const workingRow = props.messages.findLast(
+    (message) => message.role === "assistant" && message.runState !== null,
+  );
+  const workingVerb = useWorkingVerb(
+    workingRow?.workingVerbSeed ??
+      `${props.node.id}:${props.activeTurnId ?? ""}`,
+    workingRow !== undefined,
+    props.activeTurnId,
+  );
   // Until the real `chat.subscribe` snapshot lands (~0.5s - the host is
   // local-first) the pre-content body owns this surface: the wait, the fatal
   // close the host will never follow with a snapshot, and the streak of failed
@@ -4127,21 +4175,6 @@ function ChatSessionMessagesSurface(
       />
     );
   }
-  // Pick the in-progress "thinking" verb once per turn, seeded on the chat plus
-  // the RUNNING TURN's id - NOT the indicator row id, which flips from
-  // `assistant:live` to `assistant:<turnId>` mid-turn and would otherwise
-  // reshuffle the word.
-  //
-  // And not a completed-turn count over `messages` either, which is what this
-  // was. On the windowed line `messages` is a bounded, evictable slice rather
-  // than the transcript, so that count moved as the reader scrolled through
-  // cold history and the verb changed underneath a running turn - against this
-  // component's own stability guarantee, and visibly. The turn id is stable
-  // for the turn by construction, needs no latch, and keeps the
-  // "different verb per turn" property the count was there to provide.
-  const workingVerb = pickWorkingVerb(
-    `${props.node.id}:${props.activeTurnId ?? ""}`,
-  );
   return (
     <ChatRestoreProvider value={props.restoreContext}>
       <MobileDrawerVisibleTilePaintReporter ready />

@@ -50,6 +50,9 @@ vi.mock("../../cli/traycer-cli", () => ({
 vi.mock("../../cli/cli-discovery", () => ({
   resolveBundledCliPath: vi.fn(async () => null),
   readCliManifest: vi.fn(async () => null),
+  // No version metadata, as in a local build: no supervisor predates it.
+  BUNDLED_CLI_LOCAL_VERSION: "0.0.0-local",
+  readBundledCliVersion: vi.fn(async () => "0.0.0-local"),
 }));
 
 // The macOS SMAppService bindings - the one genuinely OS-native surface this
@@ -341,6 +344,7 @@ describe("#2267: registering the login item as a restart fallback must mint a ho
           state: "not-running",
           supervisorPid: null,
           admittedAs: null,
+          cliVersion: null,
         }),
       },
     });

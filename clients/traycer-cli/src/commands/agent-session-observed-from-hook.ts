@@ -1,5 +1,5 @@
 import {
-  recordTuiAgentActivityRequestSchemaV11,
+  recordTuiAgentActivityRequestSchemaV12,
   recordTuiAgentActivityResponseSchema,
 } from "@traycer/protocol/host/agent/tui/unary-schemas";
 import { tuiHarnessIdSchema } from "@traycer/protocol/host/agent/shared";
@@ -74,13 +74,17 @@ export function buildAgentSessionObservedFromHookCommand(opts: {
       return noop("no-session");
     }
 
-    const request = parseUserInput(recordTuiAgentActivityRequestSchemaV11, {
+    const request = parseUserInput(recordTuiAgentActivityRequestSchemaV12, {
       epicId,
       tuiAgentId,
       harnessSessionId: null,
       harnessId,
       event: "resync",
       observedHarnessSessionId,
+      // A resync is no activity edge and carries no idle evidence.
+      spawnToken: null,
+      turnId: null,
+      inFlight: null,
     });
 
     // Two benign version-skew / liveness conditions degrade to a quiet no-op;

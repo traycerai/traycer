@@ -3,6 +3,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   callHostRpc,
+  callHostRpcAtResolvedEndpoint,
   callHostRpcFastFail,
   canonicalResponseSchemaFor,
   parseCanonicalHostResponse,
@@ -754,6 +755,54 @@ describe("callHostRpc", () => {
 });
 
 const COMMANDS_DIR = join(__dirname, "..", "..", "commands");
+
+describe("callHostRpcAtResolvedEndpoint", () => {
+  it("sends on the endpoint and sign-in it is handed, with the dispatch's key and floor", async () => {
+    requestMock.mockResolvedValue({ agents: [] });
+    const params = {
+      epicId: "e",
+      senderAgentId: "agent-1",
+      scope: "user" as const,
+    };
+    const floor = {
+      method: "epic.create",
+      version: { major: 1, minor: 1 },
+    };
+    await callHostRpcAtResolvedEndpoint(
+      METHOD,
+      params,
+      { hostId: "preflighted", websocketUrl: "ws://127.0.0.1:7/rpc" },
+      { token: "tok-p", authnBaseUrl: "https://authn.test", userId: "u-p" },
+      {
+        responseTimeoutMs: null,
+        requiredHostMethodVersion: floor,
+        signal: null,
+        failFast: false,
+        reauthenticate: "always",
+        idempotencyKey: "task-1",
+      },
+    );
+    // Nothing is re-resolved: a host restarted after the caller's preflight
+    // fails this call rather than receiving it under a fresh read.
+    expect(resolveAuthMock).not.toHaveBeenCalled();
+    expect(pidMock).not.toHaveBeenCalled();
+    expect(requestMock).toHaveBeenCalledWith(
+      METHOD,
+      params,
+      expect.objectContaining({
+        idempotencyKey: "task-1",
+        requiredHostMethodVersion: floor,
+        authority: expect.objectContaining({
+          endpoint: {
+            hostId: "preflighted",
+            websocketUrl: "ws://127.0.0.1:7/rpc",
+          },
+          bearer: expect.objectContaining({ identity: { userId: "u-p" } }),
+        }),
+      }),
+    );
+  });
+});
 
 describe("canonicalResponseSchemaFor", () => {
   it("returns exactly the registry's latest contract response schema for a spread of methods", () => {

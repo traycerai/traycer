@@ -84,12 +84,15 @@ export const READONLY_REFUSED_COMMANDS: Readonly<Record<string, string>> = {
   "agent stop": "this session can inspect agents but cannot stop their work.",
   "agent archive":
     "this session can inspect agents but cannot change their archive state.",
+  "agent rename": "this session can inspect agents but cannot rename them.",
   "agent send":
     "this session can inspect agents but cannot message them - report the message to the user instead.",
   "agent role claim": "this session can list role claims but cannot make one.",
   "agent role relinquish":
     "this session can list role claims but cannot release one.",
-  "bot send":
+  "bot post":
+    "this session can read bots but cannot message them - report the message to the user instead.",
+  "bot reply":
     "this session can read bots but cannot message them - report the message to the user instead.",
   "worktree delete":
     "remove worktrees from Settings ▸ Worktrees, or run this from a full-surface session.",
@@ -99,6 +102,7 @@ export const READONLY_REFUSED_COMMANDS: Readonly<Record<string, string>> = {
   "profile enable": PROFILE_CHANGE_REFUSAL,
   "profile disable": PROFILE_CHANGE_REFUSAL,
   "profile remove": PROFILE_CHANGE_REFUSAL,
+  "task create": "this session cannot start Tasks.",
 };
 
 /**

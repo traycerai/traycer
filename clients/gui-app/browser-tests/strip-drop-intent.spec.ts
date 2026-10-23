@@ -393,12 +393,18 @@ test.describe("the top bar", () => {
         z.string().parse(await bridge(page, "createTask", [`Task ${number}`])),
       );
     }
+    // The account's group, holding the second task: a client cannot create
+    // one, so the fixture seeds what the organization projection writes
+    // (`organization-seed.ts`).
     await page.evaluate(`(async () => {
-      const { useTabsStore } = await import("/src/stores/tabs/store.ts");
-      const actions = useTabsStore.getState();
-      const id = actions.createGroup({ kind: "epic", id: ${JSON.stringify(tabIds[1])} });
-      if (id === null) throw new Error("no group");
-      actions.updateGroup(id, { name: "Group" });
+      const { seedOrganizationGroup } = await import("/src/__tests__/browser/organization-seed.ts");
+      seedOrganizationGroup({
+        groupId: "fixture-top-bar-group",
+        name: "Group",
+        color: "#c4c7c5",
+        collapsed: false,
+        refs: [{ kind: "epic", id: ${JSON.stringify(tabIds[1])} }],
+      });
     })()`);
     await expect(page.locator("[data-strip-group-chip]")).toBeVisible();
     await nextFrames(page, 4);
@@ -496,21 +502,6 @@ test.describe("the top bar", () => {
     page,
   }) => {
     const tabIds = await openTopBar(page);
-    // Signed in, the group and every task are the account organization's.
-    await page.evaluate(`(async () => {
-      const { useTabsStore } = await import("/src/stores/tabs/store.ts");
-      const { groups, customizations } = useTabsStore.getState();
-      const stamp = (entry) => ({ ...entry, organizationOwnerId: "fixture-user" });
-      useTabsStore.setState({
-        groups: Object.fromEntries(Object.entries(groups).map(([id, g]) => [id, stamp(g)])),
-        customizations: Object.fromEntries(
-          ${JSON.stringify(tabIds)}.map((id) => {
-            const key = "epic:" + id;
-            return [key, stamp(customizations[key] ?? { color: null, icon: null, groupId: null })];
-          }),
-        ),
-      });
-    })()`);
     await nextFrames(page, 4);
     const third = await centreOf(page.getByTestId(`tab-epic-${tabIds[2]}`));
     const second = await page

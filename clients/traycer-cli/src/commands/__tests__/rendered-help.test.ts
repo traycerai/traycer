@@ -255,6 +255,7 @@ const NAMED_PARENT_PATHS: ReadonlyArray<readonly string[]> = [
   ["profile"],
   ["workspace"],
   ["worktree"],
+  ["task"],
   ["agent"],
   ["agent", "role"],
 ];
@@ -895,6 +896,26 @@ const EXPECTED_PUBLIC_SURFACE: readonly ExpectedSurfaceEntry[] = [
     ],
     args: [],
   },
+  { path: "task", options: [], args: [] },
+  {
+    path: "task create",
+    options: [
+      { flags: "--harness <id>", mandatory: true },
+      { flags: "--idempotency-key <key>", mandatory: false },
+      { flags: "--json", mandatory: false },
+      { flags: "--message <text>", mandatory: true },
+      { flags: "--model <id>", mandatory: true },
+      { flags: "--no-progress", mandatory: false },
+      { flags: "--permission-mode <mode>", mandatory: false },
+      { flags: "--profile <ambient|id>", mandatory: false },
+      { flags: "--quiet", mandatory: false },
+      { flags: "--reasoning-effort <effort>", mandatory: false },
+      { flags: "--repo <owner/repo>", mandatory: false },
+      { flags: "--title <title>", mandatory: false },
+      { flags: "--workspace <path>", mandatory: false },
+    ],
+    args: [],
+  },
   { path: "agent", options: [], args: [] },
   {
     path: "agent list",
@@ -1029,6 +1050,18 @@ const EXPECTED_PUBLIC_SURFACE: readonly ExpectedSurfaceEntry[] = [
     args: [],
   },
   {
+    path: "agent rename",
+    options: [
+      { flags: "--json", mandatory: false },
+      { flags: "--no-progress", mandatory: false },
+      { flags: "--quiet", mandatory: false },
+    ],
+    args: [
+      { name: "id", required: true, variadic: false },
+      { name: "name", required: true, variadic: false },
+    ],
+  },
+  {
     path: "agent send",
     options: [
       { flags: "--expect-reply", mandatory: false },
@@ -1107,9 +1140,8 @@ const EXPECTED_PUBLIC_SURFACE: readonly ExpectedSurfaceEntry[] = [
     args: [],
   },
   {
-    path: "bot send",
+    path: "bot post",
     options: [
-      { flags: "--conversation <id>", mandatory: false },
       { flags: "--json", mandatory: false },
       { flags: "--no-progress", mandatory: false },
       { flags: "--quiet", mandatory: false },
@@ -1117,6 +1149,29 @@ const EXPECTED_PUBLIC_SURFACE: readonly ExpectedSurfaceEntry[] = [
     ],
     args: [
       { name: "bot", required: true, variadic: false },
+      { name: "text", required: true, variadic: false },
+    ],
+  },
+  {
+    path: "bot threads",
+    options: [
+      { flags: "--json", mandatory: false },
+      { flags: "--no-progress", mandatory: false },
+      { flags: "--quiet", mandatory: false },
+    ],
+    args: [{ name: "bot", required: true, variadic: false }],
+  },
+  {
+    path: "bot reply",
+    options: [
+      { flags: "--json", mandatory: false },
+      { flags: "--no-progress", mandatory: false },
+      { flags: "--quiet", mandatory: false },
+      { flags: "--wait <duration>", mandatory: false },
+    ],
+    args: [
+      { name: "bot", required: true, variadic: false },
+      { name: "thread", required: true, variadic: false },
       { name: "text", required: true, variadic: false },
     ],
   },

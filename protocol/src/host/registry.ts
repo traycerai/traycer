@@ -1,4 +1,5 @@
 import type { RequiredHostMethodVersion } from "../host-transport/remote/rpc-types";
+import { chatPrestartRuntimeV10 } from "./agent/gui/prestart-runtime";
 import { PROFILE_SYNC_LINK_RPC_METHODS } from "./profile-sync-link-contracts";
 import { ENVIRONMENT_RPC_METHODS } from "./environment-contracts";
 import type { NativeListResult } from "./provider-native-schemas";
@@ -384,6 +385,7 @@ import {
   chatSubscribeV131,
   chatSubscribeV132,
   chatSubscribeV133,
+  chatSubscribeV134,
 } from "@traycer/protocol/host/agent/gui/contracts";
 import {
   agentTuiGenerateTitleV10,
@@ -395,9 +397,13 @@ import {
   agentTuiPromptSubmittedV10,
   agentTuiPromptSubmittedV11,
   agentTuiPromptSubmittedUpgradeV10ToV11,
+  agentTuiPromptSubmittedV12,
+  agentTuiPromptSubmittedUpgradeV11ToV12,
   agentTuiRecordActivityV10,
   agentTuiRecordActivityV11,
   agentTuiRecordActivityUpgradeV10ToV11,
+  agentTuiRecordActivityV12,
+  agentTuiRecordActivityUpgradeV11ToV12,
   agentTuiValidateForkProfileV10,
 } from "@traycer/protocol/host/agent/tui/contracts";
 import {
@@ -614,6 +620,7 @@ import {
   botClaimAuthorityV10,
   botConversationListV10,
   botConversationSendV10,
+  botThreadListV10,
   botCreateV10,
   botDeleteV10,
   botListChangedV10,
@@ -691,6 +698,7 @@ import {
   providersRefreshProfileStatusDowngradeV20ToV10,
 } from "@traycer/protocol/host/rate-limit/contracts";
 import { epicEditArtboardV10 } from "@traycer/protocol/host/epic/artboard-edit";
+import { epicListHtmlArtifactVersionsV10 } from "@traycer/protocol/host/epic/html-artifact-versions";
 import { epicReadArtifactObjectV10 } from "@traycer/protocol/host/epic/artifact-objects";
 import {
   chatMcpAppCallToolV10,
@@ -7815,7 +7823,7 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
   },
   "agent.tui.recordActivity": {
     1: {
-      latestMinor: 1,
+      latestMinor: 2,
       versions: {
         0: {
           contract: agentTuiRecordActivityV10,
@@ -7824,6 +7832,10 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
         1: {
           contract: agentTuiRecordActivityV11,
           upgradeFromPreviousVersion: agentTuiRecordActivityUpgradeV10ToV11,
+        },
+        2: {
+          contract: agentTuiRecordActivityV12,
+          upgradeFromPreviousVersion: agentTuiRecordActivityUpgradeV11ToV12,
         },
       },
       downgradePathsFromLatest: {},
@@ -7839,7 +7851,7 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
   // Mirrors `agent.tui.validateForkProfile`'s degrade strategy above.
   "agent.tui.promptSubmitted": {
     1: {
-      latestMinor: 1,
+      latestMinor: 2,
       versions: {
         0: {
           contract: agentTuiPromptSubmittedV10,
@@ -7848,6 +7860,10 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
         1: {
           contract: agentTuiPromptSubmittedV11,
           upgradeFromPreviousVersion: agentTuiPromptSubmittedUpgradeV10ToV11,
+        },
+        2: {
+          contract: agentTuiPromptSubmittedV12,
+          upgradeFromPreviousVersion: agentTuiPromptSubmittedUpgradeV11ToV12,
         },
       },
       downgradePathsFromLatest: {},
@@ -8821,6 +8837,19 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
 // `_NoOverlappingHostRpcMethods` assertion below is what keeps a method from
 // silently existing in more than one of them.
 const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
+  "chat.prestartRuntime": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: chatPrestartRuntimeV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+    degrade: { kind: "unsupported" },
+  },
   // The `bot.*` namespace (Tracy Bots): optional capabilities, every one
   // `degrade: { kind: "unsupported" }` - a host that predates bots advertises
   // none of them and the client hides the surface. See `bot/contracts.ts`.
@@ -8937,6 +8966,20 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
       versions: {
         0: {
           contract: botConversationSendV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  // The threads of a bot's channel (T41), answered by its bound host.
+  "bot.thread.list": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: botThreadListV10,
           upgradeFromPreviousVersion: null,
         },
       },
@@ -9854,6 +9897,19 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
       latestMinor: 0,
       versions: {
         0: { contract: epicEditArtboardV10, upgradeFromPreviousVersion: null },
+      },
+      downgradePathsFromLatest: {},
+    },
+    degrade: { kind: "unsupported" },
+  },
+  "epic.listHtmlArtifactVersions": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: epicListHtmlArtifactVersionsV10,
+          upgradeFromPreviousVersion: null,
+        },
       },
       downgradePathsFromLatest: {},
     },
@@ -14804,7 +14860,7 @@ const HOST_STREAM_RPC_REGISTRY_DEFINITION = {
   ...HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION,
   "chat.subscribe": {
     1: {
-      latestMinor: 33,
+      latestMinor: 34,
       versions: {
         0: {
           contract: chatSubscribeV10,
@@ -14997,6 +15053,7 @@ const HOST_STREAM_RPC_REGISTRY_DEFINITION = {
         31: { contract: chatSubscribeV131 },
         32: { contract: chatSubscribeV132 },
         33: { contract: chatSubscribeV133 },
+        34: { contract: chatSubscribeV134 },
       },
     },
   },

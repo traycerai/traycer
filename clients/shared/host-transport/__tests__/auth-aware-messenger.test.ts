@@ -112,7 +112,7 @@ describe("createAuthAwareMessenger", () => {
     };
 
     const lease = defaultLease();
-    const wrapped = createAuthAwareMessenger(inner, auth);
+    const wrapped = createAuthAwareMessenger(inner, auth, "always");
     await wrapped.request(METHOD, PARAMS, {
       replayMustBeKeyed: false,
       requiredHostMethodVersion: null,
@@ -132,7 +132,7 @@ describe("createAuthAwareMessenger", () => {
     };
 
     const lease = defaultLease();
-    const wrapped = createAuthAwareMessenger(inner, auth);
+    const wrapped = createAuthAwareMessenger(inner, auth, "always");
     await expect(
       wrapped.request(METHOD, PARAMS, {
         replayMustBeKeyed: false,
@@ -155,7 +155,7 @@ describe("createAuthAwareMessenger", () => {
     };
 
     const lease = defaultLease();
-    const wrapped = createAuthAwareMessenger(inner, auth);
+    const wrapped = createAuthAwareMessenger(inner, auth, "always");
     const thrown = await wrapped
       .request(METHOD, PARAMS, {
         replayMustBeKeyed: false,
@@ -185,7 +185,7 @@ describe("createAuthAwareMessenger", () => {
     );
 
     const lease = defaultLease();
-    const wrapped = createAuthAwareMessenger(inner, auth);
+    const wrapped = createAuthAwareMessenger(inner, auth, "always");
     const thrown = await wrapped
       .request(METHOD, PARAMS, {
         replayMustBeKeyed: false,
@@ -208,7 +208,7 @@ describe("createAuthAwareMessenger", () => {
     };
 
     const lease = defaultLease();
-    const wrapped = createAuthAwareMessenger(inner, auth);
+    const wrapped = createAuthAwareMessenger(inner, auth, "always");
     await expect(
       wrapped.request(METHOD, PARAMS, {
         replayMustBeKeyed: false,
@@ -238,7 +238,7 @@ describe("createAuthAwareMessenger", () => {
       });
     const auth = authRevalidator(revalidate);
 
-    const wrapped = createAuthAwareMessenger(inner, auth);
+    const wrapped = createAuthAwareMessenger(inner, auth, "always");
     await wrapped.request(METHOD, PARAMS, {
       replayMustBeKeyed: false,
       requiredHostMethodVersion: null,
@@ -259,7 +259,7 @@ describe("createAuthAwareMessenger", () => {
     const revalidate = vi.fn().mockResolvedValue("rejected");
     const auth = authRevalidator(revalidate);
 
-    const wrapped = createAuthAwareMessenger(inner, auth);
+    const wrapped = createAuthAwareMessenger(inner, auth, "always");
     await expect(
       wrapped.request(METHOD, PARAMS, {
         replayMustBeKeyed: false,
@@ -289,6 +289,7 @@ describe("createAuthAwareMessenger", () => {
     const wrapped = createAuthAwareMessenger(
       inner,
       authRevalidator(revalidateExpectedBearer),
+      "always",
     );
     await expect(
       wrapped.request(METHOD, PARAMS, {
@@ -365,7 +366,7 @@ async function failureOf(
   authority: HostRequestAuthority,
   revalidate: AuthorityBoundAuthRevalidator["revalidateExpectedBearer"],
 ): Promise<unknown> {
-  return createAuthAwareMessenger(inner, authRevalidator(revalidate))
+  return createAuthAwareMessenger(inner, authRevalidator(revalidate), "always")
     .request(METHOD, PARAMS, requestOptions(authority))
     .then(
       () => null,
@@ -537,6 +538,7 @@ describe("createAuthAwareMessenger dispatch provenance", () => {
         createAuthAwareMessenger(
           { request, requestWithResponseTimeout: uncalledLongPoll() },
           authRevalidator(rotateTo(lease)),
+          "always",
         ),
         {
           maxRetries: 1,
@@ -556,5 +558,54 @@ describe("createAuthAwareMessenger dispatch provenance", () => {
 
     expect(await replayRequirementsFor(true)).toEqual([false, false, true]);
     expect(await replayRequirementsFor(false)).toEqual([false, false, false]);
+  });
+});
+
+// A create whose refusal must prove nothing was made: the second send's answer
+// carries no trace of the first, so only a call the host refused at its open
+// frame is refreshed and sent again.
+describe("createAuthAwareMessenger before-request recovery", () => {
+  it.each([
+    [
+      "a session fatal after the request was sent",
+      () => sessionFatalError(true),
+    ],
+    ["the host's own error envelope", unauthorizedError],
+  ])("does not refresh or resend after %s", async (_label, failure) => {
+    const lease = new MutableBearerLease("stale", "u1");
+    const first = failure();
+    const inner = innerFailing(first);
+    const revalidate = vi.fn(rotateTo(lease));
+    const thrown = await createAuthAwareMessenger(
+      inner,
+      authRevalidator(revalidate),
+      "before-request",
+    )
+      .request(METHOD, PARAMS, requestOptions(authorityFor(lease)))
+      .then(
+        () => null,
+        (reason: unknown) => reason,
+      );
+    expect(thrown).toBe(first);
+    expect(revalidate).not.toHaveBeenCalled();
+    expect(inner.request).toHaveBeenCalledTimes(1);
+  });
+
+  it("refreshes and resends after the host refused the open frame", async () => {
+    const lease = new MutableBearerLease("stale", "u1");
+    const request = vi.fn();
+    request.mockRejectedValueOnce(sessionFatalError(false));
+    request.mockResolvedValueOnce(undefined);
+    const inner: IHostMessenger<Registry> = {
+      request,
+      requestWithResponseTimeout: uncalledLongPoll(),
+    };
+    await createAuthAwareMessenger(
+      inner,
+      authRevalidator(rotateTo(lease)),
+      "before-request",
+    ).request(METHOD, PARAMS, requestOptions(authorityFor(lease)));
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(lease.getBearerToken()).toBe("fresh");
   });
 });

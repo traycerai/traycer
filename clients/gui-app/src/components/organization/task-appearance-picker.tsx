@@ -39,13 +39,22 @@ export function TaskAppearancePicker({ taskId }: { readonly taskId: string }) {
     },
   });
   const savingIcon = saveIconMutation.isPending;
+  // The submenu's trigger refuses to OPEN while edits cannot be sent, which
+  // does nothing for a picker already open when support drops - Radix keeps
+  // an open submenu mounted on its own. Every control that mutates is gated
+  // here instead, where the edit actually leaves.
+  const canEdit = organization?.supported === true;
+  // One name for "an edit made here can actually land": the account takes
+  // commands, and there is a row to edit. Every control below reads it, so
+  // they cannot drift apart.
+  const editable = canEdit && appearance !== undefined;
   const id = useId();
   const icon = draftIcon ?? appearance?.icon ?? "";
   const reset = resetActionOf(appearance, taskId, group !== null);
 
   function saveIcon() {
-    if (!organization || !appearance || savingIcon || draftIcon === null)
-      return;
+    if (!organization || !editable || savingIcon) return;
+    if (draftIcon === null) return;
     saveIconMutation.mutate(draftIcon);
   }
 
@@ -73,7 +82,7 @@ export function TaskAppearancePicker({ taskId }: { readonly taskId: string }) {
             size="sm"
             placeholder="Emoji or initials"
             maxLength={32}
-            disabled={!appearance}
+            disabled={!editable}
             readOnly={savingIcon}
             value={icon}
             onChange={(event) => setDraftIcon(event.target.value)}
@@ -83,7 +92,7 @@ export function TaskAppearancePicker({ taskId }: { readonly taskId: string }) {
         <div className="space-y-1.5">
           <Label>Color</Label>
           <fieldset
-            disabled={!appearance || group !== null}
+            disabled={!editable || group !== null}
             className="flex flex-wrap items-center gap-1"
           >
             <TabColorPicker
@@ -108,6 +117,7 @@ export function TaskAppearancePicker({ taskId }: { readonly taskId: string }) {
             type="button"
             size="xs"
             variant="ghost"
+            disabled={!canEdit}
             onClick={() => {
               void organization
                 ?.command(reset)

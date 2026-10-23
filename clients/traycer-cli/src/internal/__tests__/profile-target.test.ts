@@ -146,6 +146,8 @@ describe("readProviderStates", () => {
         requiredHostMethodVersion: null,
         signal: null,
         failFast: false,
+        reauthenticate: "always",
+        idempotencyKey: null,
       },
     );
   });

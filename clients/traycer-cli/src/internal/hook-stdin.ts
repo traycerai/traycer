@@ -76,9 +76,25 @@ const observedSessionSchema = z.looseObject({ session_id: z.string() });
  * quiet no-op, never a failed hook.
  */
 export async function readObservedHarnessSessionId(): Promise<string | null> {
+  return observedSessionIdFromPayload(await readHookStdinPayload());
+}
+
+/**
+ * The hook's stdin JSON payload, or `null` for any benign condition (empty,
+ * TTY or timed-out stdin, unparsable JSON). Never throws. For a hook command
+ * that reads several fields of one payload: stdin can be read only once.
+ */
+export async function readHookStdinPayload(): Promise<unknown> {
   const stdin = await readStdinJson();
-  if (stdin === "timeout" || stdin === null) return null;
-  const parsed = observedSessionSchema.safeParse(stdin);
+  return stdin === "timeout" ? null : stdin;
+}
+
+/**
+ * The trimmed non-empty `session_id` of a hook payload, or `null` when it is
+ * missing, blank or the payload is not an object.
+ */
+export function observedSessionIdFromPayload(payload: unknown): string | null {
+  const parsed = observedSessionSchema.safeParse(payload);
   if (!parsed.success) return null;
   const sessionId = parsed.data.session_id.trim();
   return sessionId.length === 0 ? null : sessionId;

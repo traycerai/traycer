@@ -1198,3 +1198,49 @@ describe("canvas double-click", () => {
     expect(harness.onRelativeLink).toHaveBeenCalledWith("a.html");
   });
 });
+
+// A plain HTML page never sends `initialized`, so the queueing `notify` would
+// hold its zoom state forever; the view message goes out once readiness is
+// proven instead.
+describe("html view state", () => {
+  function viewMessages(harness: Harness): Sent[] {
+    return harness.sent.filter(
+      (message) => message.method === "traycer/html/view",
+    );
+  }
+
+  it("reaches a plain page as soon as it is ready, without an initialized handshake", () => {
+    const harness = createHarness({ canvas: false, ready: true });
+
+    harness.host.setHtmlView(true, 1.5);
+
+    expect(viewMessages(harness)).toEqual([
+      {
+        jsonrpc: "2.0",
+        method: "traycer/html/view",
+        params: { enabled: true, scale: 1.5 },
+      },
+    ]);
+  });
+
+  it("is dropped, not queued, before the page has proven itself", () => {
+    const harness = createHarness({ canvas: false, ready: false });
+
+    harness.host.setHtmlView(true, 2);
+    harness.host.receive({
+      jsonrpc: "2.0",
+      method: "traycer/notifications/document-ready",
+      params: { nonce: NONCE, height: 120 },
+    });
+
+    expect(viewMessages(harness)).toEqual([]);
+  });
+
+  it("is never sent to a canvas board", () => {
+    const harness = createHarness({ canvas: true, ready: true });
+
+    harness.host.setHtmlView(true, 1.5);
+
+    expect(viewMessages(harness)).toEqual([]);
+  });
+});

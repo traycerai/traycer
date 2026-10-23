@@ -1,3 +1,4 @@
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, cleanup, render } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -263,39 +264,42 @@ afterEach(() => {
 });
 
 function mountComposer() {
+  const queryClient = new QueryClient();
   return render(
-    <ChatComposer
-      taskId="chat-1"
-      isActive
-      sendDisabled={false}
-      sendDisabledHint={null}
-      mentionRoots={["/repo"]}
-      fallbackToGlobalMentionRoots={false}
-      currentEpicId={null}
-      viewTabId={null}
-      settingsSeed={null}
-      fallbackSettingsSeed={null}
-      providerFallback={NO_PROVIDER_FALLBACK}
-      onSubmitMessage={null}
-      onSideChat={null}
-      onSettingsChange={null}
-      activeTurnStatus={null}
-      steerCapable={false}
-      steerProtocolSupported={false}
-      autoPermissionModeProtocolSupported={null}
-      getDraftBlobBridgeSupported={() => false}
-      getActiveTurnForSteer={() => null}
-      editingQueueItemId={null}
-      onCancelQueueEdit={null}
-      hasPendingApprovals={false}
-      stopDisabled={false}
-      onStopTurn={null}
-      workspaceControls={null}
-      workspaceAvailability={{ status: "ready", disabledHint: null }}
-      topSpacing="normal"
-      topSlot={null}
-      suggestedPrompt={undefined}
-    />,
+    <QueryClientProvider client={queryClient}>
+      <ChatComposer
+        taskId="chat-1"
+        isActive
+        sendDisabled={false}
+        sendDisabledHint={null}
+        mentionRoots={["/repo"]}
+        fallbackToGlobalMentionRoots={false}
+        currentEpicId={null}
+        viewTabId={null}
+        settingsSeed={null}
+        fallbackSettingsSeed={null}
+        providerFallback={NO_PROVIDER_FALLBACK}
+        onSubmitMessage={null}
+        onSideChat={null}
+        onSettingsChange={null}
+        activeTurnStatus={null}
+        steerCapable={false}
+        steerProtocolSupported={false}
+        autoPermissionModeProtocolSupported={null}
+        getDraftBlobBridgeSupported={() => false}
+        getActiveTurnForSteer={() => null}
+        editingQueueItemId={null}
+        onCancelQueueEdit={null}
+        hasPendingApprovals={false}
+        stopDisabled={false}
+        onStopTurn={null}
+        workspaceControls={null}
+        workspaceAvailability={{ status: "ready", disabledHint: null }}
+        topSpacing="normal"
+        topSlot={null}
+        suggestedPrompt={undefined}
+      />
+    </QueryClientProvider>,
   );
 }
 

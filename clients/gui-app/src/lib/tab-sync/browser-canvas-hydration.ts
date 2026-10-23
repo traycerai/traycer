@@ -26,3 +26,9 @@ export function markBrowserCanvasHydrated(): void {
   resolveHydration = null;
   for (const listener of listeners) listener();
 }
+
+export function markBrowserCanvasHydrating(): void {
+  if (!hydrated) return;
+  hydrated = false;
+  for (const listener of listeners) listener();
+}
