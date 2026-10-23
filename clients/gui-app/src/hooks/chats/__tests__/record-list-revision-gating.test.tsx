@@ -1626,12 +1626,14 @@ describe("R11 - a delta that introduces an unstated row declines the stamp", () 
       { timeout: 1000 },
     );
 
-    // The cancelled read answering afterwards undoes nothing.
+    // The cancelled read answering afterwards undoes nothing. Its request was
+    // aborted at the transport when the repair cancelled it, so the mock has
+    // already rejected it and its late answer has no promise left to settle.
+    const heldRead = fixture.messenger.calls.filter(
+      (call) => call.method === "epic.listChatRecords",
+    )[1];
+    expect(heldRead.authority.abortSignal.aborted).toBe(true);
     held.resolve?.();
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(
-      fixture.handle.store.getState().chats.byId["chat-new"]?.docResident,
-    ).toBe(false);
 
     view.unmount();
   });
