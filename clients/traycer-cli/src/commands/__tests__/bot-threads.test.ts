@@ -89,7 +89,7 @@ function stage(input: {
 }): void {
   hoisted.callHostRpc.mockImplementation(
     routeRpc({
-      "bot.list": () => ({ bots: [input.bot] }),
+      "bot.list": () => ({ bots: [input.bot], mainBotIds: null }),
       "bot.thread.list": () => input.threads(),
     }),
   );
@@ -197,7 +197,7 @@ describe("bot threads on a host without them", () => {
         routeRpc({
           "bot.list": () => {
             if (missing === "bot.list") throw unsupportedRpcError(missing);
-            return { bots: [botRecord({ botId: BOT_ID_A })] };
+            return { bots: [botRecord({ botId: BOT_ID_A })], mainBotIds: null };
           },
           "bot.thread.list": () => {
             throw unsupportedRpcError(missing);

@@ -55,6 +55,7 @@ export function botRecord(overrides: Partial<BotRecord>): BotRecord {
     hostEpoch: 0,
     createdAt: 1_000,
     archivedAt: null,
+    directive: null,
     ...overrides,
   };
 }

@@ -32,11 +32,16 @@ const mocks = vi.hoisted(() => ({
   updateRunSettings: vi.fn<(variables: object) => void>(),
   updateTitle: vi.fn<(variables: object) => void>(),
   deleteBot: vi.fn<(variables: object) => void>(),
+  setMainBot: vi.fn<(variables: object) => void>(),
+  // What `useHostMethodSupport` answers for `environment.setMainBot`.
+  setMainBotSupport: true as boolean | null,
+  supportQueries: [] as Array<{ hostId: string | null; method: string }>,
   // What each write's mutation reports as its error; `null` = no refusal.
   refusal: {
     title: null as string | null,
     runSettings: null as string | null,
     remove: null as string | null,
+    setMainBot: null as string | null,
   },
 }));
 
@@ -49,6 +54,19 @@ vi.mock("@/hooks/host/use-tab-host-client", () => ({
 }));
 vi.mock("@/components/epic-canvas/hooks/use-tab-host-id", () => ({
   useTabHostId: () => "host-1",
+}));
+vi.mock("@/hooks/host/use-host-supports-method", () => ({
+  useHostMethodSupport: (hostId: string | null, method: string) => {
+    mocks.supportQueries.push({ hostId, method });
+    return mocks.setMainBotSupport;
+  },
+}));
+vi.mock("@/hooks/bots/use-environment-set-main-bot-mutation", () => ({
+  useEnvironmentSetMainBotMutation: () => ({
+    isPending: false,
+    error: refusalOf(mocks.refusal.setMainBot),
+    mutate: mocks.setMainBot,
+  }),
 }));
 vi.mock("@/components/home/pickers/harness-model-picker", () => ({
   HarnessModelPicker: (props: { maxModeContext: MaxModeContext }) => {
@@ -131,12 +149,13 @@ const BOT: BotRecord = {
   hostEpoch: 1,
   createdAt: 1_000,
   archivedAt: null,
+  directive: null,
 };
 
-function mountPanel(bot: BotRecord): void {
+function mountPanel(bot: BotRecord, isMain: boolean | null): void {
   render(
     <StrictMode>
-      <BotSettingsPanel bot={bot} />
+      <BotSettingsPanel bot={bot} isMain={isMain} />
     </StrictMode>,
   );
 }
@@ -163,6 +182,9 @@ beforeEach(() => {
   mocks.refusal.title = null;
   mocks.refusal.runSettings = null;
   mocks.refusal.remove = null;
+  mocks.refusal.setMainBot = null;
+  mocks.setMainBotSupport = true;
+  mocks.supportQueries.length = 0;
 });
 
 afterEach(() => {
@@ -171,7 +193,7 @@ afterEach(() => {
 
 describe("<BotSettingsPanel /> model", () => {
   it("seeds the picker with what the bot runs and leaves Apply disabled", () => {
-    mountPanel(BOT);
+    mountPanel(BOT, null);
 
     const seed = mocks.seeds.at(-1);
     expect(seed).toEqual({
@@ -192,7 +214,7 @@ describe("<BotSettingsPanel /> model", () => {
 
   it("enables Apply once the person picks another model, and applies exactly that", async () => {
     const user = userEvent.setup();
-    mountPanel(BOT);
+    mountPanel(BOT, null);
     expect(applyButton().disabled).toBe(true);
 
     act(() => {
@@ -216,7 +238,7 @@ describe("<BotSettingsPanel /> model", () => {
   });
 
   it("disables Apply again when the person picks the bot's own model back", () => {
-    mountPanel(BOT);
+    mountPanel(BOT, null);
 
     act(() => {
       liveStore().getState().setSelection({
@@ -238,7 +260,7 @@ describe("<BotSettingsPanel /> model", () => {
   });
 
   it("seeds nothing when the bot's harness is not one this client can pick", () => {
-    mountPanel({ ...BOT, harness: "not-a-harness" });
+    mountPanel({ ...BOT, harness: "not-a-harness" }, null);
 
     expect(mocks.seeds.at(-1)).toEqual({ kind: "none" });
   });
@@ -247,7 +269,7 @@ describe("<BotSettingsPanel /> model", () => {
 describe("<BotSettingsPanel /> controls", () => {
   it("renames through the tab host with the trimmed name", async () => {
     const user = userEvent.setup();
-    mountPanel(BOT);
+    mountPanel(BOT, null);
 
     const name = screen.getByRole("textbox", { name: "Name" });
     await user.clear(name);
@@ -264,14 +286,14 @@ describe("<BotSettingsPanel /> controls", () => {
 
 describe("<BotSettingsPanel /> refusals", () => {
   it("shows no refusal line while every write is accepted", () => {
-    mountPanel(BOT);
+    mountPanel(BOT, null);
 
     expect(screen.queryByTestId("bot-settings-refusal")).toBeNull();
   });
 
   it("states a rename refusal under the name field, and nowhere else", () => {
     mocks.refusal.title = "Only the bot's owner can rename it";
-    mountPanel(BOT);
+    mountPanel(BOT, null);
 
     const refusals = screen.getAllByTestId("bot-settings-refusal");
     expect(refusals).toHaveLength(1);
@@ -284,7 +306,7 @@ describe("<BotSettingsPanel /> refusals", () => {
 
   it("states a model refusal inside the model section, and nowhere else", () => {
     mocks.refusal.runSettings = "This machine cannot change the model";
-    mountPanel(BOT);
+    mountPanel(BOT, null);
 
     const refusals = screen.getAllByTestId("bot-settings-refusal");
     expect(refusals).toHaveLength(1);
@@ -299,7 +321,7 @@ describe("<BotSettingsPanel /> refusals", () => {
   it("states a delete refusal inside the confirm dialog, not on the panel", async () => {
     const user = userEvent.setup();
     mocks.refusal.remove = "Only the bot's owner can delete it";
-    mountPanel(BOT);
+    mountPanel(BOT, null);
     // Closed: the refusal lives in the dialog, which is not rendered yet.
     expect(screen.queryByTestId("bot-settings-refusal")).toBeNull();
 
@@ -314,7 +336,7 @@ describe("<BotSettingsPanel /> refusals", () => {
 
   it("deletes the bot when the confirm dialog is confirmed", async () => {
     const user = userEvent.setup();
-    mountPanel(BOT);
+    mountPanel(BOT, null);
 
     await user.click(screen.getByRole("button", { name: "Delete bot" }));
     const dialog = await screen.findByRole("dialog");
@@ -324,6 +346,71 @@ describe("<BotSettingsPanel /> refusals", () => {
 
     expect(mocks.deleteBot).toHaveBeenCalledTimes(1);
     expect(mocks.deleteBot.mock.calls[0][0]).toEqual({ botId: BOT.botId });
+  });
+});
+
+describe("<BotSettingsPanel /> main bot", () => {
+  it("offers Make main on a bot that is not main, asking the tab's host whether it can write it", () => {
+    mountPanel(BOT, false);
+
+    expect(screen.getByTestId("bot-settings-main")).toBeTruthy();
+    expect(screen.getByTestId("bot-settings-make-main").textContent).toContain(
+      "Make main",
+    );
+    expect(mocks.supportQueries).toContainEqual({
+      hostId: "host-1",
+      method: "environment.setMainBot",
+    });
+  });
+
+  it("makes the bot main in one click, with its environment and id, and no confirmation", async () => {
+    const user = userEvent.setup();
+    mountPanel(BOT, false);
+
+    await user.click(screen.getByTestId("bot-settings-make-main"));
+
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(mocks.setMainBot).toHaveBeenCalledTimes(1);
+    expect(mocks.setMainBot.mock.calls[0][0]).toEqual({
+      environmentId: BOT.environmentId,
+      botId: BOT.botId,
+    });
+  });
+
+  it("states that the bot is main and offers no button to a bot that already is", () => {
+    mountPanel(BOT, true);
+
+    expect(screen.getByTestId("bot-settings-main")).toBeTruthy();
+    expect(screen.queryByTestId("bot-settings-make-main")).toBeNull();
+  });
+
+  it.each([false, null])(
+    "draws nothing for a host whose support for environment.setMainBot is %s",
+    (support) => {
+      mocks.setMainBotSupport = support;
+      mountPanel(BOT, false);
+
+      expect(screen.queryByTestId("bot-settings-main")).toBeNull();
+      expect(screen.queryByTestId("bot-settings-make-main")).toBeNull();
+    },
+  );
+
+  it("draws nothing while the main bot is not known", () => {
+    mountPanel(BOT, null);
+
+    expect(screen.queryByTestId("bot-settings-main")).toBeNull();
+  });
+
+  it("states a refusal inside the main bot section, and nowhere else", () => {
+    mocks.refusal.setMainBot = "That bot is not in this environment";
+    mountPanel(BOT, false);
+
+    const refusals = screen.getAllByTestId("bot-settings-refusal");
+    expect(refusals).toHaveLength(1);
+    expect(refusals[0].textContent).toBe("That bot is not in this environment");
+    expect(screen.getByTestId("bot-settings-main").contains(refusals[0])).toBe(
+      true,
+    );
   });
 });
 
@@ -370,7 +457,7 @@ describe("<BotSettingsPanel /> Max Mode label", () => {
   }
 
   it("hands the picker the bot's own tuple: its effort and Fast off, never the none context", () => {
-    mountPanel(CURSOR_BOT);
+    mountPanel(CURSOR_BOT, null);
 
     expect(lastContext()).toEqual({
       kind: "chat",
@@ -379,7 +466,7 @@ describe("<BotSettingsPanel /> Max Mode label", () => {
   });
 
   it("lists Max at the bot's selected effort with Fast off", () => {
-    mountPanel(CURSOR_BOT);
+    mountPanel(CURSOR_BOT, null);
 
     expect(
       maxModeListedFor(
@@ -390,7 +477,7 @@ describe("<BotSettingsPanel /> Max Mode label", () => {
   });
 
   it("does not list Max when only another effort is Max-only", () => {
-    mountPanel(CURSOR_BOT);
+    mountPanel(CURSOR_BOT, null);
 
     expect(
       maxModeListedFor(
@@ -401,7 +488,7 @@ describe("<BotSettingsPanel /> Max Mode label", () => {
   });
 
   it("does not list Max when only the Fast-on selection is Max-only", () => {
-    mountPanel(CURSOR_BOT);
+    mountPanel(CURSOR_BOT, null);
 
     expect(
       maxModeListedFor(
@@ -412,7 +499,7 @@ describe("<BotSettingsPanel /> Max Mode label", () => {
   });
 
   it("does not re-render the owner (and so the picker) when only the catalog moves", () => {
-    mountPanel(CURSOR_BOT);
+    mountPanel(CURSOR_BOT, null);
     const apply = () =>
       act(() => {
         liveStore().getState().setCatalog({

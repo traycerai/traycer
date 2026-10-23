@@ -16,6 +16,7 @@ import {
 } from "@legendapp/list/react";
 import { cn } from "@/lib/utils";
 import { ChatEmptyState } from "@/components/chat/chat-empty-state";
+import { ChatBotPresentationContext } from "@/components/chat/chat-bot-presentation-context";
 import {
   ChatMessage,
   type ChatMessageActions,
@@ -675,6 +676,9 @@ const ChatTimelineRow = memo(function ChatTimelineRow({
   message: ChatMessageModel;
 }) {
   const ctx = use(ChatTimelineRowCtx);
+  // A bot's channel or thread stacks its rows as tightly as Slack does; each
+  // row's own frame carries its padding.
+  const compact = use(ChatBotPresentationContext) !== null;
   const readingWidth = useReadingWidthStyle();
   const highlightStore = use(NavigationHighlightStoreContext);
   const navigationHighlight = useRowNavigationHighlight(
@@ -699,7 +703,8 @@ const ChatTimelineRow = memo(function ChatTimelineRow({
       data-message-id={message.id}
       data-navigation-highlighted={highlightRow ? "true" : undefined}
       className={cn(
-        "mx-auto w-full rounded-lg px-6 pb-6 transition-[background-color,box-shadow] duration-300 [contain:layout_paint_style] [.traycer-panel-resizing_&:not([data-panel-resize-visible])]:[content-visibility:hidden]",
+        "mx-auto w-full rounded-lg transition-[background-color,box-shadow] duration-300 [contain:layout_paint_style] [.traycer-panel-resizing_&:not([data-panel-resize-visible])]:[content-visibility:hidden]",
+        compact ? "px-4 pb-0.5" : "px-6 pb-6",
         readingWidth.className,
         highlightRow && CHAT_NAVIGATION_HIGHLIGHT_CLASSNAME,
         chatTimelineRowSizeHintClassName(message.role),

@@ -80,7 +80,7 @@ function stage(input: {
   hoisted.callHostRpc.mockImplementation(
     routeRpc({
       "environment.list": () => ({ environments: input.environments }),
-      "bot.list": () => ({ bots: input.bots }),
+      "bot.list": () => ({ bots: input.bots, mainBotIds: null }),
     }),
   );
   hoisted.openLocalStreamClient.mockResolvedValue({
@@ -697,7 +697,7 @@ describe("bot list on a host without bots", () => {
           },
           "bot.list": () => {
             if (missing === "bot.list") throw unsupportedRpcError("bot.list");
-            return { bots: [] };
+            return { bots: [], mainBotIds: null };
           },
         }),
       );

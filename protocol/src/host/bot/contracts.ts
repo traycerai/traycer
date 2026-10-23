@@ -1,4 +1,7 @@
-import { defineRpcContract } from "@traycer/protocol/framework/index";
+import {
+  defineRpcContract,
+  defineUpgradePath,
+} from "@traycer/protocol/framework/index";
 import { defineStreamRpcContract } from "@traycer/protocol/framework/versioned-stream-rpc";
 import {
   botClaimAuthorityRequestSchema,
@@ -12,6 +15,7 @@ import {
   botListChangedServerFrameSchema,
   botListRequestSchema,
   botListResponseSchema,
+  botListResponseSchemaV10,
   botOpenRequestSchema,
   botOpenResponseSchema,
   botReadRequestSchema,
@@ -21,6 +25,7 @@ import {
   botSubscribeServerFrameSchema,
   botUpdateResponseSchema,
   botUpdateRunSettingsRequestSchema,
+  botUpdateDirectiveRequestSchema,
   botUpdateTitleRequestSchema,
 } from "./schemas";
 import {
@@ -56,7 +61,24 @@ export const botListV10 = defineRpcContract({
   method: "bot.list",
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: botListRequestSchema,
+  responseSchema: botListResponseSchemaV10,
+});
+
+/** `bot.list@1.1` (T44b): the rows and each environment's main bot. */
+export const botListV11 = defineRpcContract({
+  method: "bot.list",
+  schemaVersion: { major: 1, minor: 1 } as const,
+  requestSchema: botListRequestSchema,
   responseSchema: botListResponseSchema,
+});
+export const botListUpgradeV10ToV11 = defineUpgradePath<
+  typeof botListV10,
+  typeof botListV11
+>({
+  from: botListV10.schemaVersion,
+  to: botListV11.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => ({ ...response, mainBotIds: null }),
 });
 
 export const botReadV10 = defineRpcContract({
@@ -77,6 +99,13 @@ export const botUpdateRunSettingsV10 = defineRpcContract({
   method: "bot.updateRunSettings",
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: botUpdateRunSettingsRequestSchema,
+  responseSchema: botUpdateResponseSchema,
+});
+
+export const botUpdateDirectiveV10 = defineRpcContract({
+  method: "bot.updateDirective",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: botUpdateDirectiveRequestSchema,
   responseSchema: botUpdateResponseSchema,
 });
 

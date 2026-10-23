@@ -34,6 +34,33 @@ const botProfileSchema = lazySchema(() =>
 );
 
 /**
+ * A bot's standing directive: what its trunk and thread sessions are told as
+ * "your directive". At most 8,000 UTF-16 units of plain text - lines and
+ * tabs, no other control character, no line or paragraph separator and no
+ * bidirectional override, since the text reaches a model prompt the person
+ * reading the form does not see. Mirrored by the cloud's request schema.
+ */
+export const BOT_DIRECTIVE_MAX_LENGTH = 8_000;
+const botDirectiveSchema = lazySchema(() =>
+  z
+    .string()
+    .max(BOT_DIRECTIVE_MAX_LENGTH)
+    .refine((directive) => directive.trim().length > 0, {
+      message: "a directive needs text",
+    })
+    .refine(
+      (directive) =>
+        !/[\p{Zl}\p{Zp}\u202A-\u202E\u2066-\u2069]|(?![\n\t])\p{Cc}/u.test(
+          directive,
+        ),
+      {
+        message:
+          "a directive is plain text: lines and tabs, no other control characters",
+      },
+    ),
+);
+
+/**
  * `bot.create`'s request key: a lowercase UUID, and only that spelling - not
  * `z.uuid()`, which admits uppercase. No database compares the key (the cloud
  * hashes it into the bot's id), so collation never folds two spellings
@@ -74,6 +101,8 @@ export const botRecordSchema = lazySchema(() =>
     hostEpoch: z.number().int().nonnegative(),
     createdAt: z.number().int(),
     archivedAt: z.number().int().nullable(),
+    /** The bot's standing directive; `null` for none. */
+    directive: z.string().nullable(),
   }),
 );
 export type BotRecord = z.infer<typeof botRecordSchema>;
@@ -103,6 +132,8 @@ export const botCreateRequestSchema = lazySchema(() =>
     effort: botEffortSchema,
     profile: botProfileSchema,
     requestKey: botRequestKeySchema,
+    /** The bot's standing directive, `null` for none. */
+    directive: botDirectiveSchema.nullable(),
   }),
 );
 export type BotCreateRequest = z.infer<typeof botCreateRequestSchema>;
@@ -126,9 +157,23 @@ export type BotCreateResponse = z.infer<typeof botCreateResponseSchema>;
 export const botListRequestSchema = lazySchema(() => z.object({}));
 export type BotListRequest = z.infer<typeof botListRequestSchema>;
 
+/** `bot.list@1.0`'s response, frozen: the rows alone. */
+export const botListResponseSchemaV10 = lazySchema(() =>
+  z.object({
+    bots: z.array(botRecordSchema),
+  }),
+);
+
+/**
+ * `bot.list@1.1` adds each environment's main bot (decision 30): environment
+ * id to bot id, for every listed environment with a live bot. `null` when the
+ * answering host predates it (a `1.0` response upgraded), which says nothing
+ * about which bot is main.
+ */
 export const botListResponseSchema = lazySchema(() =>
   z.object({
     bots: z.array(botRecordSchema),
+    mainBotIds: z.record(z.string().min(1), botIdSchema).nullable(),
   }),
 );
 export type BotListResponse = z.infer<typeof botListResponseSchema>;
@@ -145,7 +190,7 @@ export const botReadResponseSchema = lazySchema(() =>
 );
 export type BotReadResponse = z.infer<typeof botReadResponseSchema>;
 
-// ---- bot.updateTitle / bot.updateRunSettings --------------------------- //
+// ---- bot.updateTitle / bot.updateRunSettings / bot.updateDirective ------ //
 
 /**
  * Narrow updates, one method per field group - the `epic.updateChatProfile`
@@ -168,6 +213,17 @@ export const botUpdateRunSettingsRequestSchema = lazySchema(() =>
 );
 export type BotUpdateRunSettingsRequest = z.infer<
   typeof botUpdateRunSettingsRequestSchema
+>;
+
+/** The directive, or `null` to clear it. */
+export const botUpdateDirectiveRequestSchema = lazySchema(() =>
+  z.object({
+    botId: botIdSchema,
+    directive: botDirectiveSchema.nullable(),
+  }),
+);
+export type BotUpdateDirectiveRequest = z.infer<
+  typeof botUpdateDirectiveRequestSchema
 >;
 
 export const botUpdateResponseSchema = lazySchema(() =>

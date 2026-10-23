@@ -2743,6 +2743,24 @@ window`, recorded in the type as `coverage.browsersAreMountedOnly` -
       invalidated - the Providers refresh, the providers-changed stream and
       every provider mutation - so a file that goes bad while the panel is
       open, or a first status read that failed, still brings the reset back.
+  - **"Reset <provider> settings" is the way out of one unreadable provider
+    row.** Every write to a provider whose own row cannot be read is refused
+    (its key, switch and CLI choice cannot change), while the rest of the file
+    works. `providers.settingsFile.status` 1.1 names those rows
+    (`unreadableProviderIds`), and `providers.settingsFile.resetProvider`
+    (optional, `degrade: unsupported`) resets one.
+    - Offered as one warning banner per named provider above the rail
+      (`providerRowUnreadableCopy`), only while the whole document is usable;
+      an id this build has no provider for is not shown.
+    - The consent (`providerRowResetConsent`) says a copy of the whole file is
+      kept, which settings stop being used, and that the provider may be
+      turned off, so the user turns it on and enters its key again.
+    - Every answer names every backup the host wrote (`backupFileNames`):
+      `reset`, `readable` (the row reads again), `document-unreadable` (use
+      the whole-document reset; the re-read status shows it), `changed`
+      (another writer kept changing the file) and `failed`. The toasts are
+      `describeResetProviderOutcome`. Success invalidates
+      `PROVIDER_INVALIDATIONS`.
   - **The detail pane is tabbed, and the tab RAIL is the only thing between the
     provider header and its config.** Order is `account` · `usage` · `general` ·
     `env` · `modelProviders` · `mcp` · `plugins` · `skills`, filtered per provider through
