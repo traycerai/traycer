@@ -59,6 +59,11 @@ function summaryOf(overrides: Partial<SandboxSummary>): SandboxSummary {
     environmentId: null,
     createdBy: null,
     wakePayer: null,
+    keptBy: null,
+    restingSince: null,
+    destroyAfterRestingMinutes: null,
+    destroyAt: null,
+    createdByTaskId: null,
     ...overrides,
   };
 }

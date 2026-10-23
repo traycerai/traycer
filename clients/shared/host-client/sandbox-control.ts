@@ -18,6 +18,7 @@ import {
   type SandboxCreateRequest,
   type SandboxLifecycleVerb,
   type SandboxListResponse,
+  type SandboxPatchRequest,
   type SandboxSummary,
   type UserSandboxCost,
 } from "@traycer/protocol/host/sandbox-control";
@@ -126,8 +127,8 @@ export type SandboxAutomationOpenFetchResult =
   | SandboxControlFailure;
 
 /**
- * `destroy` answers with a body the client does not read: the sandbox list is
- * what every surface renders the row from. `settled` is the status the server
+ * `destroy`, `patch` and `keep` answer with a body the client does not read:
+ * the sandbox list is what every surface renders the row from. `settled` is the status the server
  * chose: `true` for `200` (the row is at rest), `false` for `202` (still
  * moving at the server's deadline).
  */
@@ -478,6 +479,58 @@ export async function destroySandboxViaHttp(
       method: "DELETE",
       body: null,
       timeoutMs: SANDBOX_DESTROY_FETCH_TIMEOUT_MS,
+    },
+    bearerToken,
+  );
+  if (raw.kind === "network-error") return raw;
+  if (!isSuccess(raw.status)) return failureOf(raw.status, raw.body);
+  return { kind: "ok", settled: raw.status !== 202 };
+}
+
+/**
+ * `PATCH /api/sandboxes/:id`: rename the row and change its idle and resting
+ * periods (each `null` in `request` leaves that setting as it is). The answer's
+ * row is not read: the sandbox list is what every surface renders from.
+ */
+export async function patchSandboxViaHttp(
+  serverBaseUrl: string,
+  bearerToken: string,
+  sandboxId: string,
+  request: SandboxPatchRequest,
+): Promise<SandboxVerbFetchResult> {
+  if (!SANDBOX_ID_PATTERN.test(sandboxId)) return INVALID_SANDBOX_ID;
+  const raw = await call(
+    sandboxesUrl(serverBaseUrl, `/${sandboxId}`),
+    {
+      method: "PATCH",
+      body: JSON.stringify(request),
+      timeoutMs: SANDBOX_CONTROL_FETCH_TIMEOUT_MS,
+    },
+    bearerToken,
+  );
+  if (raw.kind === "network-error") return raw;
+  if (!isSuccess(raw.status)) return failureOf(raw.status, raw.body);
+  return { kind: "ok", settled: raw.status !== 202 };
+}
+
+/**
+ * `POST /api/sandboxes/:id/keep`: turn a sandbox an agent created into one
+ * that waits for its owner. `404 sandbox_not_found` when the row is already
+ * destroyed, including one its idle timer destroyed while the keep was on its
+ * way.
+ */
+export async function keepSandboxViaHttp(
+  serverBaseUrl: string,
+  bearerToken: string,
+  sandboxId: string,
+): Promise<SandboxVerbFetchResult> {
+  if (!SANDBOX_ID_PATTERN.test(sandboxId)) return INVALID_SANDBOX_ID;
+  const raw = await call(
+    sandboxesUrl(serverBaseUrl, `/${sandboxId}/keep`),
+    {
+      method: "POST",
+      body: null,
+      timeoutMs: SANDBOX_CONTROL_FETCH_TIMEOUT_MS,
     },
     bearerToken,
   );

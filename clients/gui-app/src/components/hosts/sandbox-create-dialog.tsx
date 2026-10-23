@@ -612,6 +612,9 @@ function SandboxCreateForm(props: {
             createdByAgentId: null,
             // Personal stays `null`, the request as it always was.
             environmentId: target.environmentId,
+            destroyAfterRestingMinutes: null,
+            createdByTaskId: null,
+            clientRequestId: null,
           },
           teamName: target.teamName,
           teamId: target.teamId,

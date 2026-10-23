@@ -278,6 +278,9 @@ function request(
     createdByHostId: null,
     createdByAgentId: null,
     environmentId,
+    destroyAfterRestingMinutes: null,
+    createdByTaskId: null,
+    clientRequestId: null,
   };
 }
 

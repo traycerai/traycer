@@ -121,6 +121,7 @@ const COST: SandboxCost = {
   },
   pendingMillicredits: 500,
   segments: [],
+  todayMillicredits: 0,
 };
 
 const TEAM_ID = "team-acme";
@@ -334,7 +335,11 @@ describe("<SandboxCard /> frozen team destroy date", () => {
 
 describe("<SandboxCard /> team cost view", () => {
   it("mounts no cost view on a team card, and the personal view on a personal one", () => {
-    mocks.costs = { sandboxes: [COST], awakeBurnMillicreditsPerHour: 120 };
+    mocks.costs = {
+      sandboxes: [COST],
+      awakeBurnMillicreditsPerHour: 120,
+      todayYoursMillicredits: 0,
+    };
 
     renderCard(sandboxOf("awake", false, {}), true);
     expect(screen.queryByTestId("sandbox-card-cost")).toBeNull();
@@ -345,7 +350,11 @@ describe("<SandboxCard /> team cost view", () => {
   });
 
   it("mounts no cost view on a team pod either", () => {
-    mocks.costs = { sandboxes: [COST], awakeBurnMillicreditsPerHour: 120 };
+    mocks.costs = {
+      sandboxes: [COST],
+      awakeBurnMillicreditsPerHour: 120,
+      todayYoursMillicredits: 0,
+    };
     renderCard(
       sandboxOf("awake", false, { kind: "automation", environmentId: ENV }),
       true,
