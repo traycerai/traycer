@@ -151,4 +151,7 @@ export const sandboxMutationKeys = {
   // A host RPC, not a control-plane call: the sandbox host repairs itself.
   repairGuestConfiguration: () =>
     ["host.sandbox.repairGuestConfiguration"] as const,
+  // Per account: Settings' `Destroy all idle` over the filtered rows.
+  destroyBatch: (userId: string | null) =>
+    ["auth", "sandbox", "destroy-batch", userId] as const,
 };

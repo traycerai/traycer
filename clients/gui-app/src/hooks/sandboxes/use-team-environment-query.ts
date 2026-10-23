@@ -1,5 +1,7 @@
+import { useCallback } from "react";
 import {
   queryOptions,
+  useQueries,
   useQuery,
   type UseQueryResult,
 } from "@tanstack/react-query";
@@ -54,4 +56,47 @@ export function useTeamEnvironment(
   const signedIn = useAuthStore((s) => s.status === "signed-in");
   const userId = useAuthStore((s) => s.contextMetadata?.userId ?? null);
   return useQuery(teamEnvironmentQueryOptions(auth, userId, teamId, signedIn));
+}
+
+/**
+ * Every listed team's environment id, for a surface that sorts sandbox rows
+ * by configuration (Settings › Sandboxes): a team's rows carry its
+ * environment id, and Personal's are the rest. `complete` is false until
+ * every team has answered, so a team pod is never filed under Personal while
+ * its team is unread.
+ */
+export function useTeamEnvironmentIds(teamIds: readonly string[]): {
+  readonly byTeamId: ReadonlyMap<string, string>;
+  readonly complete: boolean;
+} {
+  const binding = useHostBinding();
+  const auth = binding === null ? null : binding.auth;
+  const signedIn = useAuthStore((s) => s.status === "signed-in");
+  const userId = useAuthStore((s) => s.contextMetadata?.userId ?? null);
+  // Stable while the team list is, so the combined answer keeps its identity
+  // between renders (TanStack re-runs `combine` when its reference changes).
+  const combine = useCallback(
+    (results: ReadonlyArray<UseQueryResult<TeamEnvironmentFetchResult>>) => {
+      const byTeamId = new Map<string, string>();
+      let complete = true;
+      results.forEach((result, index) => {
+        const teamId = teamIds[index];
+        if (result.data === undefined) {
+          complete = false;
+          return;
+        }
+        if (result.data.kind === "ok") {
+          byTeamId.set(teamId, result.data.environmentId);
+        }
+      });
+      return { byTeamId, complete };
+    },
+    [teamIds],
+  );
+  return useQueries({
+    queries: teamIds.map((teamId) =>
+      teamEnvironmentQueryOptions(auth, userId, teamId, signedIn),
+    ),
+    combine,
+  });
 }
