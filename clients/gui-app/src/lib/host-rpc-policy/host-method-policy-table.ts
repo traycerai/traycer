@@ -1646,6 +1646,8 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
+  // A read of the bound host's thread records, like the conversation list.
+  "bot.thread.list": { ...LATEST_SCHEDULING, poll: null },
   // Unary byte channel, same posture as `epic.readChatAttachment` - but the
   // only one of the drafts methods whose BODY is megabytes rather than KB, so
   // it is also the only one that declares a budget. The value is declared once

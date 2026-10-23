@@ -28,6 +28,8 @@ import {
   botConversationListResponseSchema,
   botConversationSendRequestSchema,
   botConversationSendResponseSchema,
+  botThreadListRequestSchema,
+  botThreadListResponseSchema,
 } from "./conversation-schemas";
 
 /**
@@ -123,6 +125,19 @@ export const botConversationSendV10 = defineRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: botConversationSendRequestSchema,
   responseSchema: botConversationSendResponseSchema,
+});
+
+/**
+ * `bot.thread.list@1.0` (T41): the threads of a bot's channel, each with its
+ * anchor post, reply count, last reply, open requests and cost. Answered by
+ * the bot's bound host from its own store (the thread records live there);
+ * any other host refuses it. Same optional posture as the namespace.
+ */
+export const botThreadListV10 = defineRpcContract({
+  method: "bot.thread.list",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: botThreadListRequestSchema,
+  responseSchema: botThreadListResponseSchema,
 });
 
 /**

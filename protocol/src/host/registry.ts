@@ -620,6 +620,7 @@ import {
   botClaimAuthorityV10,
   botConversationListV10,
   botConversationSendV10,
+  botThreadListV10,
   botCreateV10,
   botDeleteV10,
   botListChangedV10,
@@ -8965,6 +8966,20 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
       versions: {
         0: {
           contract: botConversationSendV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  // The threads of a bot's channel (T41), answered by its bound host.
+  "bot.thread.list": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: botThreadListV10,
           upgradeFromPreviousVersion: null,
         },
       },

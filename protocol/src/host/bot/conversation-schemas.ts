@@ -64,8 +64,16 @@ export type BotConversationListResponse = z.infer<
 export const botConversationSendRequestSchema = lazySchema(() =>
   z.object({
     botId: botIdSchema,
+    /** The bot's channel: the conversation record the post or its thread hangs off. */
     conversationId: z.string().min(1).max(255),
     text: z.string().min(1).max(100_000),
+    /**
+     * `null` (or absent) posts at the channel's top level, which opens a
+     * thread run by a thread session of the bot (T41); a thread id puts the
+     * message in that thread of `conversationId`, delivered to the thread's
+     * session.
+     */
+    threadId: z.string().min(1).max(36).nullable().default(null),
   }),
 );
 export type BotConversationSendRequest = z.infer<
@@ -84,8 +92,67 @@ export const botConversationSendResponseSchema = lazySchema(() =>
     messageId: z.string().min(1),
     requestId: z.string().min(1),
     delivery: botConversationSendDeliverySchema,
+    /**
+     * The thread the message is in: the request's own thread when it was a
+     * top-level post (derived from the message, so it is known even while
+     * the message waits in the mailbox), the named one otherwise.
+     */
+    threadId: z.string().min(1),
   }),
 );
 export type BotConversationSendResponse = z.infer<
   typeof botConversationSendResponseSchema
 >;
+
+// ---- bot.thread.list (T41) --------------------------------------------- //
+
+/** The post a thread hangs off, as its list row shows it. */
+export const botThreadAnchorSchema = lazySchema(() =>
+  z.object({
+    messageId: z.string().min(1),
+    requestId: z.string().min(1),
+    /** The member who posted it. */
+    senderUserId: z.string().min(1).nullable(),
+    text: z.string(),
+    sentAt: z.number().int(),
+    /** When the thread's verdict resolved the post's request; `null` while open. */
+    resolvedAt: z.number().int().nullable(),
+  }),
+);
+export type BotThreadAnchor = z.infer<typeof botThreadAnchorSchema>;
+
+/**
+ * One thread of a bot's channel: the thread record (`tenant_kind =
+ * "thread"`) that holds its messages and replies, and the bot's thread
+ * session that runs it.
+ */
+export const botThreadSummarySchema = lazySchema(() =>
+  z.object({
+    threadId: z.string().min(1),
+    conversationId: z.string().min(1),
+    sessionChatId: z.string().min(1),
+    /** The post the thread answers; `null` once it is gone from the channel. */
+    anchor: botThreadAnchorSchema.nullable(),
+    /** Rows of the thread record: members' messages and the bot's replies. */
+    replyCount: z.number().int().nonnegative(),
+    lastReplyAt: z.number().int().nullable(),
+    /** Open requests of the thread, the anchor's included while it is open. */
+    openRequestCount: z.number().int().nonnegative(),
+    /** The thread session's cost in USD; `null` when this host cannot say. */
+    costUsd: z.number().nonnegative().nullable(),
+  }),
+);
+export type BotThreadSummary = z.infer<typeof botThreadSummarySchema>;
+
+/** Answered by the bot's bound host, from its own store; most recent activity first. */
+export const botThreadListRequestSchema = lazySchema(() =>
+  z.object({ botId: botIdSchema }),
+);
+export type BotThreadListRequest = z.infer<typeof botThreadListRequestSchema>;
+
+export const botThreadListResponseSchema = lazySchema(() =>
+  z.object({
+    threads: z.array(botThreadSummarySchema),
+  }),
+);
+export type BotThreadListResponse = z.infer<typeof botThreadListResponseSchema>;

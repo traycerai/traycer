@@ -243,6 +243,7 @@ export function botDeletedFrame(): StreamFrameEnvelope {
 
 export const CONVERSATION_ID = "conv-1";
 export const REQUEST_ID = "req-1";
+export const THREAD_ID = "thread-1";
 export const REPLY_MESSAGE_ID = "msg-reply";
 
 type Row = Record<string, unknown>;

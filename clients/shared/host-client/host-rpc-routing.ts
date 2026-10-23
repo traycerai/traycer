@@ -327,6 +327,7 @@ export const HOST_UNARY_RPC_ROUTES = {
   "bot.list": "target-host",
   "bot.open": "target-host",
   "bot.read": "target-host",
+  "bot.thread.list": "target-host",
   "bot.updateRunSettings": "target-host",
   "bot.updateTitle": "target-host",
   "browser.repl.releaseRealm": "target-host",

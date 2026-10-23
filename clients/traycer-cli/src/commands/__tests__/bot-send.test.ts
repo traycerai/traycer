@@ -20,6 +20,7 @@ import {
   REPLY_MESSAGE_ID,
   REQUEST_ID,
   THIS_HOST_ID,
+  THREAD_ID,
   FakeStreamClient,
   type FakeStreamSession,
   assistantRow,
@@ -112,6 +113,7 @@ function stageSend(input: {
       "bot.conversation.send": () => ({
         messageId: "msg-sent",
         requestId: REQUEST_ID,
+        threadId: THREAD_ID,
         delivery: input.delivery,
       }),
     }),
@@ -173,7 +175,12 @@ describe("bot send", () => {
       { botId: BOT_ID_A },
     ]);
     expect(paramsOfCalls("bot.conversation.send")).toEqual([
-      { botId: BOT_ID_A, conversationId: "conv-first", text: "ship it" },
+      {
+        botId: BOT_ID_A,
+        conversationId: "conv-first",
+        text: "ship it",
+        threadId: null,
+      },
     ]);
     expect(result.human).toBe(
       `Sent to Tracy (request ${REQUEST_ID}, delivered).`,
@@ -183,6 +190,7 @@ describe("bot send", () => {
       conversationId: "conv-first",
       messageId: "msg-sent",
       requestId: REQUEST_ID,
+      threadId: THREAD_ID,
       delivery: "written",
     });
     expect(result.exitCode).toBe(0);
@@ -207,7 +215,12 @@ describe("bot send", () => {
     });
 
     expect(paramsOfCalls("bot.conversation.send")).toEqual([
-      { botId: BOT_ID_A, conversationId: "conv-named", text: "ship it" },
+      {
+        botId: BOT_ID_A,
+        conversationId: "conv-named",
+        text: "ship it",
+        threadId: null,
+      },
     ]);
     expect(result.data).toMatchObject({ conversationId: "conv-named" });
   });
@@ -482,6 +495,40 @@ function resolvedSnapshot(
   });
 }
 
+/** The thread's frames: the same shapes as the channel's, on `THREAD_ID`. */
+function threadSnapshot(messages: readonly Record<string, unknown>[]) {
+  return chatSnapshotFrame({
+    botId: BOT_ID_A,
+    conversationId: THREAD_ID,
+    epoch: 1,
+    rowCount: messages.length,
+    indexRevision: null,
+    tailFromOrdinal: 0,
+    messages,
+  });
+}
+
+function threadSkeleton(entries: readonly Record<string, unknown>[]) {
+  return skeletonChunkFrame({
+    botId: BOT_ID_A,
+    conversationId: THREAD_ID,
+    epoch: 1,
+    fromOrdinal: 0,
+    entries,
+    isFinal: true,
+  });
+}
+
+/** The second subscription: opened once the channel names the reply. */
+async function threadSessionOf(
+  client: FakeStreamClient,
+): Promise<FakeStreamSession> {
+  await vi.advanceTimersByTimeAsync(0);
+  const session = client.sessions[1];
+  if (session === undefined) throw new Error("the thread was never followed");
+  return session;
+}
+
 describe("bot send --wait", () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -496,8 +543,16 @@ describe("bot send --wait", () => {
       chatId: CONVERSATION_ID,
       resume: null,
     });
-    session.pushFrame(
-      resolvedSnapshot(REPLY_MESSAGE_ID, [
+    // The channel names the reply; the reply row itself is on the thread.
+    session.pushFrame(resolvedSnapshot(REPLY_MESSAGE_ID, []));
+    const threadSession = await threadSessionOf(client);
+    expect(threadSession.params).toEqual({
+      epicId: BOT_ID_A,
+      chatId: THREAD_ID,
+      resume: null,
+    });
+    threadSession.pushFrame(
+      threadSnapshot([
         assistantRow({
           messageId: REPLY_MESSAGE_ID,
           texts: ["All shipped."],
@@ -514,6 +569,7 @@ describe("bot send --wait", () => {
       conversationId: CONVERSATION_ID,
       messageId: "msg-sent",
       requestId: REQUEST_ID,
+      threadId: THREAD_ID,
       delivery: "written",
       outcome: {
         kind: "replied",
@@ -523,19 +579,22 @@ describe("bot send --wait", () => {
     });
     expect(result.exitCode).toBe(0);
     expect(session.closeCount).toBe(1);
+    expect(threadSession.closeCount).toBe(1);
     expect(client.closeReasons).toEqual(["bot-send-wait-settled"]);
   });
 
   it("names the reply message when its text could not be read back", async () => {
-    const { run, session } = await startWaitingSend("30s");
+    const { run, client, session } = await startWaitingSend("30s");
 
     session.pushFrame(resolvedSnapshot(REPLY_MESSAGE_ID, []));
-    session.pushFrame(skeletonOf(1, [skeletonEntry("r0", "user")]));
-    // No assistant row is left to read: the command asks for a fresh
-    // snapshot, which also lacks the reply.
-    expect(resnapshots(session)).toHaveLength(1);
-    session.pushFrame(resolvedSnapshot(REPLY_MESSAGE_ID, []));
-    session.pushFrame(skeletonOf(1, [skeletonEntry("r0", "user")]));
+    const threadSession = await threadSessionOf(client);
+    threadSession.pushFrame(threadSnapshot([]));
+    threadSession.pushFrame(threadSkeleton([]));
+    // No assistant row is left to read on the thread: the command asks for a
+    // fresh snapshot, which also lacks the reply.
+    expect(resnapshots(threadSession)).toHaveLength(1);
+    threadSession.pushFrame(threadSnapshot([]));
+    threadSession.pushFrame(threadSkeleton([]));
     const result = await run;
 
     expect(result.human).toBe(
@@ -809,18 +868,26 @@ function resnapshots(session: FakeStreamSession) {
   return sentFrames(session).filter((frame) => frame.kind === "resnapshot");
 }
 
-function startWait(timeoutMs: number): {
+interface StartedWait {
   readonly session: FakeStreamSession;
   readonly client: FakeStreamClient;
   readonly outcome: Promise<BotReplyOutcome>;
   readonly settled: () => boolean;
-} {
+}
+
+/** Follows a request that opened no thread: the reply is on the same chat. */
+function startWait(timeoutMs: number): StartedWait {
+  return startWaitIn(timeoutMs, null);
+}
+
+function startWaitIn(timeoutMs: number, threadId: string | null): StartedWait {
   const client = new FakeStreamClient(() => undefined);
   let done = false;
   const outcome = waitForBotReply({
     client,
     botId: BOT_ID_A,
     conversationId: CONVERSATION_ID,
+    threadId,
     requestId: REQUEST_ID,
     timeoutMs,
   }).finally(() => {
@@ -1094,6 +1161,109 @@ describe("waitForBotReply", () => {
     await expect(outcome).resolves.toEqual({ kind: "resolved-without-reply" });
     expect(session.closeCount).toBe(1);
     expect(session.sent).toEqual([]);
+  });
+
+  describe("a request that opened a thread", () => {
+    const THREAD_REPLY_TEXT = "THE-ANSWER-9d1c0e";
+    const threadReplyRow = assistantRow({
+      messageId: REPLY_MESSAGE_ID,
+      texts: [THREAD_REPLY_TEXT],
+    });
+
+    /** The channel holds the resolved anchor and no reply row. */
+    function resolveChannel(session: FakeStreamSession): void {
+      session.pushFrame(
+        snapshotAt({
+          epoch: 1,
+          rowCount: 1,
+          indexRevision: null,
+          tailFromOrdinal: 1,
+          messages: [],
+        }),
+      );
+      session.pushFrame(skeletonOf(1, [skeletonEntry("u0", "user")]));
+      expect(loadSpans(session)).toEqual([[0, 0]]);
+      serveWhole(
+        session,
+        newestLoad(session),
+        ["u0"],
+        [resolvedUserRow(REPLY_MESSAGE_ID)],
+      );
+    }
+
+    it("reads the reply from the thread the channel's resolution names", async () => {
+      const { session, client, outcome } = startWaitIn(60_000, THREAD_ID);
+
+      resolveChannel(session);
+      // The channel has said which reply resolved the request; it is closed
+      // and the thread is followed for that row.
+      expect(session.closeCount).toBe(1);
+      const threadSession = await threadSessionOf(client);
+      expect(client.sessions).toHaveLength(2);
+      expect(
+        client.sessions.map((followed) => [followed.method, followed.params]),
+      ).toEqual([
+        [
+          "chat.subscribe",
+          { epicId: BOT_ID_A, chatId: CONVERSATION_ID, resume: null },
+        ],
+        [
+          "chat.subscribe",
+          { epicId: BOT_ID_A, chatId: THREAD_ID, resume: null },
+        ],
+      ]);
+      expect(threadSession.closeCount).toBe(0);
+
+      threadSession.pushFrame(threadSnapshot([threadReplyRow]));
+      threadSession.pushFrame(
+        threadSkeleton([skeletonEntry("a0", "assistant")]),
+      );
+
+      await expect(outcome).resolves.toEqual({
+        kind: "replied",
+        replyMessageId: REPLY_MESSAGE_ID,
+        text: THREAD_REPLY_TEXT,
+      });
+      expect(session.closeCount).toBe(1);
+      expect(threadSession.closeCount).toBe(1);
+      expect(threadSession.sent).toEqual([]);
+    });
+
+    it("reports the reply by its id when the thread never shows it within the time left", async () => {
+      const { session, client, outcome, settled } = startWaitIn(
+        30_000,
+        THREAD_ID,
+      );
+
+      await vi.advanceTimersByTimeAsync(10_000);
+      resolveChannel(session);
+      const threadSession = await threadSessionOf(client);
+
+      // The thread follower gets what is left of the wait, not a fresh one.
+      await vi.advanceTimersByTimeAsync(19_999);
+      expect(settled()).toBe(false);
+      expect(threadSession.closeCount).toBe(0);
+
+      await vi.advanceTimersByTimeAsync(1);
+      await expect(outcome).resolves.toEqual({
+        kind: "replied",
+        replyMessageId: REPLY_MESSAGE_ID,
+        text: null,
+      });
+      expect(session.closeCount).toBe(1);
+      expect(threadSession.closeCount).toBe(1);
+    });
+
+    it("stays timed out when the channel never resolves the request", async () => {
+      const { session, client, outcome } = startWaitIn(30_000, THREAD_ID);
+
+      session.pushFrame(snapshotOf([openUserRow], 1));
+      await vi.advanceTimersByTimeAsync(30_000);
+
+      await expect(outcome).resolves.toEqual({ kind: "timed-out" });
+      expect(client.sessions).toHaveLength(1);
+      expect(session.closeCount).toBe(1);
+    });
   });
 
   it("keeps waiting while the request is open, and while another request is the resolved one", async () => {
