@@ -6112,6 +6112,36 @@ export const chatSyncSchemaSurfaceBaseline = {
                               "labelSnapshot"
                             ],
                             "additionalProperties": false
+                          },
+                          "announcement": {
+                            "type": "object",
+                            "properties": {
+                              "kind": {
+                                "type": "string",
+                                "enum": [
+                                  "proposal",
+                                  "automation",
+                                  "bot-created",
+                                  "policy"
+                                ]
+                              },
+                              "link": {
+                                "anyOf": [
+                                  {
+                                    "type": "string",
+                                    "minLength": 1
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              }
+                            },
+                            "required": [
+                              "kind",
+                              "link"
+                            ],
+                            "additionalProperties": false
                           }
                         },
                         "required": [
