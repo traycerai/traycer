@@ -16,11 +16,14 @@ import type { BotOnboardingReadResponse } from "@traycer/protocol/host/bot/onboa
  * - `locked`: the onboarding applies and the set holds no repository yet, or
  *   the read has not answered for a team with no bots: no bot is added and
  *   no channel is entered until it does.
+ * - `pending`: the read has not answered for a team that has bots, which
+ *   may be locked or may pre-date onboarding. Where a channel would open
+ *   now, it waits for the answer; elsewhere it reads as not locked.
  *
  * A team is told apart from one that pre-dates onboarding by its record: the
  * first tick of a box keeps one, and a new team has no bots without one.
  */
-export type TeamOnboardingGate = "none" | "open" | "locked";
+export type TeamOnboardingGate = "none" | "open" | "locked" | "pending";
 
 export function teamOnboardingGate(input: {
   readonly isTeam: boolean;
@@ -35,7 +38,7 @@ export function teamOnboardingGate(input: {
   const { isTeam, supported, read, botCount } = input;
   if (!isTeam || !supported || read.status === "error") return "none";
   const data = read.data;
-  if (data === undefined) return botCount === 0 ? "locked" : "none";
+  if (data === undefined) return botCount === 0 ? "locked" : "pending";
   const choice = data.choice;
   if (choice !== null && choice.completedAt !== null) return "none";
   if (choice === null && botCount > 0) return "none";

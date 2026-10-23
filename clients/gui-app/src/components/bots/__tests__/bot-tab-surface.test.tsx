@@ -163,6 +163,7 @@ vi.mock("@/hooks/host/use-host-directory-list-query", () => ({
 }));
 vi.mock("@/hooks/bots/use-bot-list-query", () => ({
   useBotListQuery: () => ({
+    status: mocks.state.listedBotIds === undefined ? "pending" : "success",
     data:
       mocks.state.listedBotIds === undefined
         ? undefined
@@ -182,6 +183,7 @@ vi.mock("@/hooks/bots/use-bot-list-changed-subscription", () => ({
 }));
 vi.mock("@/hooks/bots/use-environment-list-query", () => ({
   useEnvironmentListQuery: () => ({
+    status: "success",
     data: {
       environments: [
         { environmentId: "env-team", label: "Acme", ownerKind: "organization" },
@@ -313,11 +315,14 @@ beforeEach(() => {
   mocks.state.error = null;
   mocks.state.paneVisible = true;
   mocks.state.connectable = { hostIds: [TAB_HOST, BOUND_HOST], resolved: true };
-  mocks.state.listedBotIds = undefined;
+  // The bot is listed, and its team has answered with no onboarding: a team
+  // from before onboarding, never locked.
+  mocks.state.listedBotIds = [BOT_ID];
   mocks.state.mainBotIds = null;
   mocks.state.support = true;
   mocks.state.openResult = answer({ kind: "serve-here", claimed: null });
   onboardingReads.clear();
+  onboardingReads.set("env-team", noOnboardingRead());
   useBotTabsStore.setState({ tabs: {} });
   useBotTabsStore
     .getState()
@@ -361,6 +366,23 @@ describe("<BotTabSurface /> on a host without bot.open", () => {
     expect(mocks.open).not.toHaveBeenCalled();
   });
 });
+
+/** A team's onboarding read with no record: the team pre-dates onboarding. */
+function noOnboardingRead(): BotOnboardingReadResponse {
+  return {
+    github: {
+      state: "ok",
+      installingAdmin: null,
+      repositories: [
+        { repositoryId: "11", fullName: "acme/web", permission: "write" },
+      ],
+      callerCanConnect: false,
+    },
+    unlocked: true,
+    choice: null,
+    catalog: [],
+  };
+}
 
 /** A team's onboarding read: `repositories` empty locks its chat. */
 function onboardingRead(
@@ -417,6 +439,43 @@ describe("<BotTabSurface /> while the team's onboarding locks its chat", () => {
     expect(screen.queryByTestId("stub-onboarding-card")).toBeNull();
     expect(screen.getByTestId("stub-channel")).toBeTruthy();
     expect(mocks.open).toHaveBeenCalledWith({ botId: BOT_ID });
+  });
+
+  it("opens nothing and shows no channel while the onboarding read is held, then shows the onboarding when it answers locked", () => {
+    onboardingReads.clear();
+    const view = render(surface());
+
+    expect(mocks.open).not.toHaveBeenCalled();
+    expect(screen.queryByTestId("stub-channel")).toBeNull();
+    expect(screen.queryByTestId("stub-sidebar")).toBeNull();
+    expect(screen.getByTestId("bot-tab-connecting")).toBeTruthy();
+
+    onboardingReads.set("env-team", onboardingRead([]));
+    view.rerender(surface());
+
+    expect(screen.getByTestId("stub-onboarding-card")).toBeTruthy();
+    expect(screen.queryByTestId("stub-channel")).toBeNull();
+    expect(mocks.open).not.toHaveBeenCalled();
+  });
+
+  it("opens the channel of a team with no onboarding once its read answers", () => {
+    onboardingReads.clear();
+    const view = render(surface());
+    expect(mocks.open).not.toHaveBeenCalled();
+
+    onboardingReads.set("env-team", noOnboardingRead());
+    view.rerender(surface());
+
+    expect(mocks.open).toHaveBeenCalledWith({ botId: BOT_ID });
+    expect(screen.getByTestId("stub-channel")).toBeTruthy();
+  });
+
+  it("opens nothing until bot.list names the bot's team", () => {
+    mocks.state.listedBotIds = undefined;
+    render(surface());
+
+    expect(mocks.open).not.toHaveBeenCalled();
+    expect(screen.queryByTestId("stub-channel")).toBeNull();
   });
 });
 
