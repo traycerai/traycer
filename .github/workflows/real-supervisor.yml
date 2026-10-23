@@ -37,8 +37,8 @@ on:
   pull_request:
   push:
     branches: [main]
-  # Run the launchd rows on a branch before merging it:
-  # `gh workflow run real-supervisor.yml --ref <branch>`.
+  # A manual trigger, not a pre-merge path: no CI runs on a branch
+  # (AGENTS.md, "When CI runs").
   workflow_dispatch:
 
 permissions:

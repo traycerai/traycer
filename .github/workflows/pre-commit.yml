@@ -8,8 +8,8 @@ on:
   pull_request:
   push:
     branches: [main]
-  # Check a branch before merging it: the Actions tab, or
-  # `gh workflow run pre-commit.yml --ref <branch>`.
+  # A manual trigger, not a pre-merge path: no CI runs on a branch
+  # (AGENTS.md, "When CI runs").
   workflow_dispatch:
 
 permissions:
