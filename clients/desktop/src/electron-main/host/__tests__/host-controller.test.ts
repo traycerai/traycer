@@ -83,6 +83,9 @@ vi.mock("../../cli/cli-discovery", () => ({
   // elsewhere on `PATH` - so this stub leaves the fence open and the rows
   // that exercise it keep testing what they were written to test.
   readCliManifest: vi.fn(async () => null),
+  // No version metadata, as in a local build: no supervisor predates it.
+  BUNDLED_CLI_LOCAL_VERSION: "0.0.0-local",
+  readBundledCliVersion: vi.fn(async () => "0.0.0-local"),
 }));
 
 // Mirrors exactly what production imports from this module across
@@ -293,7 +296,10 @@ import {
   registerHostLoginItem,
   unregisterHostLoginItemGuarded,
 } from "../../app/host-login-item";
-import { resolveBundledCliPath } from "../../cli/cli-discovery";
+import {
+  readBundledCliVersion,
+  resolveBundledCliPath,
+} from "../../cli/cli-discovery";
 import { waitForHostReady } from "../host-readiness";
 import {
   publishLocalHostUnresponsive,
@@ -428,6 +434,7 @@ beforeEach(() => {
     state: "not-running",
     supervisorPid: null,
     admittedAs: null,
+    cliVersion: null,
   });
 });
 
@@ -5986,6 +5993,7 @@ describe("RM: Remove Traycer and uninstall --all refuse first over a terminal-st
       state: "enforcing",
       supervisorPid: 4242,
       admittedAs: "foreground",
+      cliVersion: null,
     });
     const controller = newController("production");
 
@@ -6005,6 +6013,7 @@ describe("RM: Remove Traycer and uninstall --all refuse first over a terminal-st
       state: "enforcing",
       supervisorPid: 4242,
       admittedAs: "foreground",
+      cliVersion: null,
     });
     const controller = newController("production");
 
@@ -6026,11 +6035,13 @@ describe("RM: Remove Traycer and uninstall --all refuse first over a terminal-st
         state: "enforcing",
         supervisorPid: 9001,
         admittedAs: "service",
+        cliVersion: null,
       })
       .mockResolvedValue({
         state: "enforcing",
         supervisorPid: 4242,
         admittedAs: "foreground",
+        cliVersion: null,
       });
     const controller = newController("production");
     expect(await isHostRemovedByUser()).toBe(false);
@@ -6051,6 +6062,7 @@ describe("RM: Remove Traycer and uninstall --all refuse first over a terminal-st
       state: "enforcing",
       supervisorPid: 9001,
       admittedAs: "service",
+      cliVersion: null,
     });
     vi.mocked(streamBundledTraycerCliJson).mockRejectedValueOnce(
       new TraycerCliError("E_HOST_NOT_SERVICE_RUN", "not a service-run host"),
@@ -6073,6 +6085,7 @@ describe("RM: Remove Traycer and uninstall --all refuse first over a terminal-st
       state: "enforcing",
       supervisorPid: 4242,
       admittedAs: "foreground",
+      cliVersion: null,
     });
     const controller = newController("production");
 
@@ -6091,6 +6104,7 @@ describe("RM: Remove Traycer and uninstall --all refuse first over a terminal-st
       state: "not-running",
       supervisorPid: null,
       admittedAs: null,
+      cliVersion: null,
     });
     vi.mocked(streamBundledTraycerCliJson).mockResolvedValue({
       data: { removedInstallDir: true, serviceUninstalled: true },
@@ -6116,6 +6130,7 @@ describe("RM: Remove Traycer and uninstall --all refuse first over a terminal-st
       state: "not-running",
       supervisorPid: null,
       admittedAs: null,
+      cliVersion: null,
     });
     vi.mocked(streamBundledTraycerCliJson).mockRejectedValueOnce(
       new TraycerCliError(
@@ -6166,6 +6181,7 @@ describe("RM: Remove Traycer and uninstall --all refuse first over a terminal-st
       state: "not-running",
       supervisorPid: null,
       admittedAs: null,
+      cliVersion: null,
     });
     vi.mocked(streamBundledTraycerCliJson).mockRejectedValueOnce(
       new TraycerCliError("E_HOST_BUSY", "host busy"),
@@ -6204,6 +6220,7 @@ describe("RM: Remove Traycer and uninstall --all refuse first over a terminal-st
       state: "enforcing",
       supervisorPid: 9001,
       admittedAs: "service",
+      cliVersion: null,
     });
     vi.mocked(streamBundledTraycerCliJson).mockRejectedValueOnce(
       new TraycerCliError("E_CLI_LOCK_BUSY", "cli lock busy"),
@@ -6226,6 +6243,7 @@ describe("RM: Remove Traycer and uninstall --all refuse first over a terminal-st
       state: "enforcing",
       supervisorPid: 9001,
       admittedAs: "service",
+      cliVersion: null,
     });
     vi.mocked(streamBundledTraycerCliJson).mockRejectedValueOnce(
       new TraycerCliError("E_CLI_LOCK_BUSY", "cli lock busy"),
@@ -6249,6 +6267,7 @@ describe("RM: Remove Traycer and uninstall --all refuse first over a terminal-st
       state: "not-running",
       supervisorPid: null,
       admittedAs: null,
+      cliVersion: null,
     });
     vi.mocked(streamBundledTraycerCliJson).mockRejectedValueOnce(
       new TraycerCliError("E_CLI_LOCK_BUSY", "cli lock busy"),
@@ -6309,6 +6328,7 @@ describe("RM: Remove Traycer and uninstall --all refuse first over a terminal-st
       state: "enforcing",
       supervisorPid: 9001,
       admittedAs: "service",
+      cliVersion: null,
     });
     vi.mocked(streamBundledTraycerCliJson).mockRejectedValueOnce(
       new TraycerCliError("E_HOST_BUSY", "host busy"),
@@ -6331,6 +6351,7 @@ describe("RM: Remove Traycer and uninstall --all refuse first over a terminal-st
       state: "enforcing",
       supervisorPid: 9001,
       admittedAs: "service",
+      cliVersion: null,
     });
     vi.mocked(streamBundledTraycerCliJson).mockRejectedValueOnce(
       new TraycerCliError("E_HOST_BUSY", "host busy"),
@@ -6370,6 +6391,7 @@ describe("RM: Remove Traycer and uninstall --all refuse first over a terminal-st
       state: "enforcing",
       supervisorPid: 9001,
       admittedAs: "service",
+      cliVersion: null,
     });
     vi.mocked(streamBundledTraycerCliJson).mockResolvedValue({
       data: { removedInstallDir: true, serviceUninstalled: true },
@@ -6390,6 +6412,7 @@ describe("RM: Remove Traycer and uninstall --all refuse first over a terminal-st
       state: "enforcing",
       supervisorPid: 9001,
       admittedAs: "service",
+      cliVersion: null,
     });
     vi.mocked(streamBundledTraycerCliJson).mockResolvedValue({
       data: { removedInstallDir: true, serviceUninstalled: true },
@@ -6408,6 +6431,7 @@ describe("RM: Remove Traycer and uninstall --all refuse first over a terminal-st
       state: "enforcing",
       supervisorPid: 4242,
       admittedAs: null,
+      cliVersion: null,
     });
     vi.mocked(streamBundledTraycerCliJson).mockResolvedValue({
       data: { removedInstallDir: true, serviceUninstalled: true },
@@ -6425,6 +6449,7 @@ describe("RM: Remove Traycer and uninstall --all refuse first over a terminal-st
       state: "enforcing",
       supervisorPid: 9001,
       admittedAs: "service",
+      cliVersion: null,
     });
     vi.mocked(streamBundledTraycerCliJson).mockRejectedValueOnce(
       new TraycerCliError("E_HOST_NOT_SERVICE_RUN", "not a service-run host"),
@@ -7955,6 +7980,129 @@ describe("applyPendingLoginItemRevisionIfIdle", () => {
       value: { running: true, version: "1.7.0" },
     });
     expect(registerHostLoginItem).toHaveBeenCalledTimes(1);
+  });
+
+  // No marker: the debt is a service supervisor still running from a bundle
+  // an auto-update replaced.
+  describe("supervisor predating the bundle (no pending marker)", () => {
+    function arrange(input: {
+      bundled: string;
+      admittedAs: "service" | "foreground";
+      cliVersion: string;
+      substrate: "smappservice" | "raw-fallback";
+    }): HostController {
+      vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
+      const controller = newController("production");
+      writeInstallRecord("production", {
+        version: "1.7.0",
+        runtimeVersion: "1.7.0",
+      });
+      writePidMetadata("production", { version: "1.7.0", pid: process.pid });
+      vi.mocked(hasUnappliedPendingLoginItemRevision).mockResolvedValue(false);
+      vi.mocked(registerHostLoginItem).mockResolvedValue("enabled");
+      vi.mocked(waitForHostReady).mockResolvedValue({
+        ready: true,
+        version: "1.7.0",
+        pid: process.pid,
+        startedAt: "2026-01-01T00:00:00.000Z",
+        reason: "ready",
+      });
+      vi.mocked(readBundledCliVersion).mockResolvedValue(input.bundled);
+      readSupervisorRunMock.mockResolvedValue({
+        state: "enforcing",
+        supervisorPid: process.pid,
+        admittedAs: input.admittedAs,
+        cliVersion: input.cliVersion,
+      });
+      const layout = getHostFsLayout("production");
+      mkdirSync(layout.rootDir, { recursive: true });
+      writeFileSync(
+        layout.substrateFile,
+        JSON.stringify({
+          v: 1,
+          active: input.substrate,
+          since: "2026-01-01T00:00:00.000Z",
+          reason: "stale-bundle-test",
+          attestation: null,
+        }),
+      );
+      return controller;
+    }
+
+    const stale = {
+      bundled: "2.0.0",
+      admittedAs: "service",
+      cliVersion: "1.0.0",
+      substrate: "smappservice",
+    } as const;
+
+    afterEach(() => {
+      vi.mocked(readBundledCliVersion).mockResolvedValue("0.0.0-local");
+    });
+
+    it("an idle smappservice supervisor from an older bundle runs the refresh cycle", async () => {
+      const controller = arrange(stale);
+      expect(
+        await controller.applyPendingLoginItemRevisionIfIdle("outside-lane"),
+      ).toEqual({
+        kind: "ok",
+        value: { running: true, version: "1.7.0" },
+      });
+      expect(registerHostLoginItem).toHaveBeenCalledTimes(1);
+    });
+
+    it("a supervisor already on the bundled CLI version owes nothing", async () => {
+      const controller = arrange({ ...stale, cliVersion: "2.0.0" });
+      expect(
+        await controller.applyPendingLoginItemRevisionIfIdle("outside-lane"),
+      ).toBeNull();
+      expect(registerHostLoginItem).not.toHaveBeenCalled();
+    });
+
+    it("a foreground-admitted supervisor is left alone", async () => {
+      const controller = arrange({ ...stale, admittedAs: "foreground" });
+      expect(
+        await controller.applyPendingLoginItemRevisionIfIdle("outside-lane"),
+      ).toBeNull();
+      expect(registerHostLoginItem).not.toHaveBeenCalled();
+    });
+
+    it("a raw-fallback substrate is left alone", async () => {
+      const controller = arrange({ ...stale, substrate: "raw-fallback" });
+      expect(
+        await controller.applyPendingLoginItemRevisionIfIdle("outside-lane"),
+      ).toBeNull();
+      expect(registerHostLoginItem).not.toHaveBeenCalled();
+    });
+
+    it("a bundle without version metadata owes nothing", async () => {
+      const controller = arrange({ ...stale, bundled: "0.0.0-local" });
+      expect(
+        await controller.applyPendingLoginItemRevisionIfIdle("outside-lane"),
+      ).toBeNull();
+      expect(registerHostLoginItem).not.toHaveBeenCalled();
+    });
+
+    it("skips the cycle when the supervisor was restarted from this bundle before the lock was held", async () => {
+      const controller = arrange(stale);
+      readSupervisorRunMock
+        .mockResolvedValueOnce({
+          state: "enforcing",
+          supervisorPid: process.pid,
+          admittedAs: "service",
+          cliVersion: "1.0.0",
+        })
+        .mockResolvedValue({
+          state: "enforcing",
+          supervisorPid: process.pid,
+          admittedAs: "service",
+          cliVersion: "2.0.0",
+        });
+      expect(
+        await controller.applyPendingLoginItemRevisionIfIdle("outside-lane"),
+      ).toBeNull();
+      expect(registerHostLoginItem).not.toHaveBeenCalled();
+    });
   });
 
   it("removed-by-user mid-refresh short-circuits to an ok/not-running result without quarantining", async () => {

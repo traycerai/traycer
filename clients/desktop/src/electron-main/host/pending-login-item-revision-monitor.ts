@@ -15,7 +15,9 @@ import type {
 // user asks for by hand. So a marker left behind because the host was busy at
 // that single startup check sits inert for the rest of the session; the user
 // would need to fully relaunch the app before the refreshed plist (e.g. the
-// 8,192 descriptor limit) ever takes effect.
+// 8,192 descriptor limit) ever takes effect. The same holds for a supervisor
+// an auto-update left running from the replaced bundle, which the controller
+// owes the same refresh.
 //
 // This monitor closes that gap: it ticks on a bounded interval and hands off
 // to `HostController.applyPendingLoginItemRevisionIfIdle()` directly -
