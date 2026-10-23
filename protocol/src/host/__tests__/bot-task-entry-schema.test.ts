@@ -173,6 +173,7 @@ function snapshotFrame(
       createdAt: 1_760_000_000_000,
       archivedAt: null,
       directive: null,
+      appConversationChatId: null,
     },
     tasks,
     openRequestCount,

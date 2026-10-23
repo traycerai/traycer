@@ -210,6 +210,7 @@ vi.mock("@/components/bots/bot-channel-view", () => ({
     botId: string;
     hostId: string;
     botTitle: string;
+    appConversationChatId: string | null;
     paused: boolean;
     resolveMember: (
       userId: string,
@@ -219,6 +220,7 @@ vi.mock("@/components/bots/bot-channel-view", () => ({
       data-testid="stub-channel"
       data-host-id={props.hostId}
       data-bot-title={props.botTitle}
+      data-app-conversation-chat-id={props.appConversationChatId ?? "none"}
       data-paused={String(props.paused)}
       data-teammate-name={
         props.resolveMember("user-teammate")?.displayName ?? "unresolved"
@@ -267,6 +269,7 @@ const BOT: BotRecord = {
   createdAt: 1_000,
   archivedAt: null,
   directive: null,
+  appConversationChatId: "conversation-app",
 };
 
 function snapshot(): BotSubscriptionSnapshot {
@@ -649,6 +652,16 @@ describe("<BotTabSurface /> paused", () => {
     expect(screen.getByTestId("stub-channel").getAttribute("data-paused")).toBe(
       "true",
     );
+  });
+
+  it("hands the channel view the conversation the bot record names as its channel", () => {
+    render(surface());
+
+    expect(
+      screen
+        .getByTestId("stub-channel")
+        .getAttribute("data-app-conversation-chat-id"),
+    ).toBe("conversation-app");
   });
 
   it("names the channel's members from the bot's environment when the tab's host lists them", () => {

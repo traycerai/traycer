@@ -103,6 +103,14 @@ export const botRecordSchema = lazySchema(() =>
     archivedAt: z.number().int().nullable(),
     /** The bot's standing directive; `null` for none. */
     directive: z.string().nullable(),
+    /**
+     * The app conversation `bot.create` made with the bot: the bot's
+     * channel. Derived from the bot id, so no conversation filed under the
+     * bot later, whatever its timestamp, can stand in for it. `null` (or
+     * absent) from a host that predates the field; a client then falls back
+     * to the bot's earliest conversation.
+     */
+    appConversationChatId: z.string().min(1).nullable().default(null),
   }),
 );
 export type BotRecord = z.infer<typeof botRecordSchema>;
