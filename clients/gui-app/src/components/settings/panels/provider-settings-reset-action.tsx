@@ -3,6 +3,11 @@ import { Button } from "@/components/ui/button";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
 import { useProvidersSettingsFileReset } from "@/hooks/providers/use-providers-settings-file-reset-mutation";
+import { useProvidersSettingsFileResetProvider } from "@/hooks/providers/use-providers-settings-file-reset-provider-mutation";
+import {
+  providerRowResetConsent,
+  providerRowResetLabel,
+} from "./provider-row-reset-copy";
 
 export const PROVIDER_SETTINGS_RESET_LABEL = "Reset provider settings";
 
@@ -62,6 +67,62 @@ export function ProviderSettingsResetAction(): ReactNode {
         blockedReason={null}
         onConfirm={() => {
           reset.mutate({}, { onSettled: () => setOpen(false) });
+        }}
+      />
+    </>
+  );
+}
+
+/**
+ * "Reset <provider> settings" and the dialog that asks for consent first.
+ *
+ * Rendered by the Providers panel only for a provider the host names in
+ * `providers.settingsFile.status`'s `unreadableProviderIds`: its own row
+ * cannot be read, so every write to it is refused, while the rest of the
+ * document works. Named and scoped apart from "Reset provider settings",
+ * which is the whole-document reset.
+ *
+ * The caller has already checked the host supports
+ * `providers.settingsFile.resetProvider`.
+ */
+export function ProviderRowResetAction({
+  providerId,
+  providerLabel,
+}: {
+  readonly providerId: string;
+  readonly providerLabel: string;
+}): ReactNode {
+  const [open, setOpen] = useState(false);
+  const reset = useProvidersSettingsFileResetProvider(providerLabel);
+  const label = providerRowResetLabel(providerLabel);
+  return (
+    <>
+      <Button
+        variant="outline"
+        size="sm"
+        onClick={() => setOpen(true)}
+        disabled={reset.isPending}
+      >
+        {label}
+        {reset.isPending ? (
+          <AgentSpinningDots
+            className={undefined}
+            testId={undefined}
+            variant={undefined}
+          />
+        ) : null}
+      </Button>
+      <ConfirmDestructiveDialog
+        open={open}
+        onOpenChange={setOpen}
+        title={`${label}?`}
+        description={providerRowResetConsent(providerLabel)}
+        cascadeSummary={null}
+        actionLabel={label}
+        isPending={reset.isPending}
+        blockedReason={null}
+        onConfirm={() => {
+          reset.mutate({ providerId }, { onSettled: () => setOpen(false) });
         }}
       />
     </>
