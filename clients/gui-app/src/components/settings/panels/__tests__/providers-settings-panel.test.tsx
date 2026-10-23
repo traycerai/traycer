@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import {
+  PROVIDER_DISPLAY_NAMES,
   PROVIDER_PROFILE_ACCENT_COLORS,
   type ProviderProfileAccentColor,
   type ProviderAuth,
@@ -234,12 +235,23 @@ type ResetSettingsFileMutate = (
   options: { readonly onSettled: () => void },
 ) => void;
 
+type ResetProviderSettingsMutate = (
+  variables: { readonly providerId: string },
+  options: { readonly onSettled: () => void },
+) => void;
+
 const settingsFileMocks = vi.hoisted(() => ({
   unsupportedMethods: new Set<string>(),
-  statusData: undefined as { readonly unreadable: boolean } | undefined,
+  statusData: undefined as
+    | {
+        readonly unreadable: boolean;
+        readonly unreadableProviderIds: readonly string[];
+      }
+    | undefined,
   /** The `enabled` argument of every `useProvidersSettingsFileStatus` call. */
   statusEnabledArgs: [] as boolean[],
   resetMutate: vi.fn<ResetSettingsFileMutate>(),
+  resetProviderMutate: vi.fn<ResetProviderSettingsMutate>(),
 }));
 
 vi.mock("@/hooks/providers/use-providers-settings-file-status-query", () => ({
@@ -255,6 +267,16 @@ vi.mock("@/hooks/providers/use-providers-settings-file-reset-mutation", () => ({
     isPending: false,
   }),
 }));
+
+vi.mock(
+  "@/hooks/providers/use-providers-settings-file-reset-provider-mutation",
+  () => ({
+    useProvidersSettingsFileResetProvider: () => ({
+      mutate: settingsFileMocks.resetProviderMutate,
+      isPending: false,
+    }),
+  }),
+);
 
 // The auto-judge row the panel now renders reaches TanStack Query for the
 // harness catalog and the set-judge mutation. This suite renders the panel
@@ -1035,6 +1057,10 @@ import {
   PROVIDER_SETTINGS_RESET_TITLE,
   PROVIDER_SETTINGS_UNUSABLE_COPY,
 } from "@/components/settings/panels/provider-settings-reset-action";
+import {
+  providerRowResetLabel,
+  providerRowUnreadableCopy,
+} from "@/components/settings/panels/provider-row-reset-copy";
 import { ProviderProfileScopedSection } from "@/components/settings/panels/provider-profile-scoped-section";
 import {
   AMBIENT_AUTH_PENDING_REPOLL_CAP,
@@ -1701,6 +1727,7 @@ describe("<ProvidersSettingsPanel />", () => {
     settingsFileMocks.statusData = undefined;
     settingsFileMocks.statusEnabledArgs.length = 0;
     settingsFileMocks.resetMutate.mockReset();
+    settingsFileMocks.resetProviderMutate.mockReset();
     vi.mocked(toast.success).mockClear();
     hostScopeMocks.setHostId.mockClear();
     hostScopeMocks.hostId = "host-a";
@@ -2097,7 +2124,10 @@ describe("<ProvidersSettingsPanel />", () => {
     }
 
     it("offers the reset above the providers when the host reports the whole settings file unreadable", () => {
-      settingsFileMocks.statusData = { unreadable: true };
+      settingsFileMocks.statusData = {
+        unreadable: true,
+        unreadableProviderIds: [],
+      };
 
       renderPanel();
 
@@ -2118,7 +2148,10 @@ describe("<ProvidersSettingsPanel />", () => {
     });
 
     it("offers no reset when the status answer is not unreadable (one malformed row, or a healthy file)", () => {
-      settingsFileMocks.statusData = { unreadable: false };
+      settingsFileMocks.statusData = {
+        unreadable: false,
+        unreadableProviderIds: [],
+      };
 
       renderPanel();
 
@@ -2142,13 +2175,23 @@ describe("<ProvidersSettingsPanel />", () => {
     });
 
     it.each([
-      ["providers.settingsFile.status"],
-      ["providers.settingsFile.reset"],
+      [["providers.settingsFile.status"]],
+      [
+        [
+          "providers.settingsFile.reset",
+          "providers.settingsFile.resetProvider",
+        ],
+      ],
     ])(
-      "offers no reset and never asks for the status when the host does not advertise %s",
+      "offers no reset and never asks for the status when the host does not advertise %j",
       (missing) => {
-        settingsFileMocks.unsupportedMethods.add(missing);
-        settingsFileMocks.statusData = { unreadable: true };
+        for (const method of missing) {
+          settingsFileMocks.unsupportedMethods.add(method);
+        }
+        settingsFileMocks.statusData = {
+          unreadable: true,
+          unreadableProviderIds: [],
+        };
 
         renderPanel();
 
@@ -2163,6 +2206,9 @@ describe("<ProvidersSettingsPanel />", () => {
     it("offers no reset on the read-fault card when the host does not advertise the methods", () => {
       settingsFileMocks.unsupportedMethods.add("providers.settingsFile.status");
       settingsFileMocks.unsupportedMethods.add("providers.settingsFile.reset");
+      settingsFileMocks.unsupportedMethods.add(
+        "providers.settingsFile.resetProvider",
+      );
       failListWithReadFault();
 
       renderPanel();
@@ -2176,7 +2222,10 @@ describe("<ProvidersSettingsPanel />", () => {
     });
 
     it("asks for consent in a dialog and sends nothing until it is confirmed", () => {
-      settingsFileMocks.statusData = { unreadable: true };
+      settingsFileMocks.statusData = {
+        unreadable: true,
+        unreadableProviderIds: [],
+      };
       renderPanel();
 
       const dialog = openResetDialog();
@@ -2188,7 +2237,10 @@ describe("<ProvidersSettingsPanel />", () => {
     });
 
     it("sends nothing when the dialog is cancelled", () => {
-      settingsFileMocks.statusData = { unreadable: true };
+      settingsFileMocks.statusData = {
+        unreadable: true,
+        unreadableProviderIds: [],
+      };
       renderPanel();
 
       const dialog = openResetDialog();
@@ -2201,7 +2253,10 @@ describe("<ProvidersSettingsPanel />", () => {
     });
 
     it("sends exactly one reset with empty params on confirm, and closes the dialog once it settles", () => {
-      settingsFileMocks.statusData = { unreadable: true };
+      settingsFileMocks.statusData = {
+        unreadable: true,
+        unreadableProviderIds: [],
+      };
       renderPanel();
 
       const dialog = openResetDialog();
@@ -2236,6 +2291,130 @@ describe("<ProvidersSettingsPanel />", () => {
 
       expect(settingsFileMocks.resetMutate).toHaveBeenCalledTimes(1);
       expect(settingsFileMocks.resetMutate.mock.calls.at(0)?.[0]).toEqual({});
+    });
+
+    describe("one unreadable provider row", () => {
+      const LABEL = PROVIDER_DISPLAY_NAMES.opencode;
+
+      it("offers that provider's own reset above the providers, and not the whole-file reset", () => {
+        settingsFileMocks.statusData = {
+          unreadable: false,
+          unreadableProviderIds: ["opencode"],
+        };
+
+        renderPanel();
+
+        const alert = screen.getByRole("alert");
+        expect(
+          within(alert).getByText(providerRowUnreadableCopy(LABEL)),
+        ).toBeDefined();
+        expect(
+          within(alert).getByRole("button", {
+            name: providerRowResetLabel(LABEL),
+          }),
+        ).toBeDefined();
+        expect(
+          screen.queryByRole("button", { name: PROVIDER_SETTINGS_RESET_LABEL }),
+        ).toBeNull();
+        const providers = screen.getByRole("navigation", { name: "Providers" });
+        expect(
+          alert.compareDocumentPosition(providers) &
+            Node.DOCUMENT_POSITION_FOLLOWING,
+        ).toBeTruthy();
+      });
+
+      it("sends one reset naming only that provider on confirm, and closes the dialog once it settles", () => {
+        settingsFileMocks.statusData = {
+          unreadable: false,
+          unreadableProviderIds: ["opencode"],
+        };
+        renderPanel();
+
+        fireEvent.click(
+          screen.getByRole("button", { name: providerRowResetLabel(LABEL) }),
+        );
+        const dialog = screen.getByRole("dialog", {
+          name: `${providerRowResetLabel(LABEL)}?`,
+        });
+        expect(settingsFileMocks.resetProviderMutate).not.toHaveBeenCalled();
+        fireEvent.click(
+          within(dialog).getByRole("button", {
+            name: providerRowResetLabel(LABEL),
+          }),
+        );
+
+        expect(settingsFileMocks.resetProviderMutate).toHaveBeenCalledTimes(1);
+        const call = settingsFileMocks.resetProviderMutate.mock.calls.at(0);
+        if (call === undefined) throw new Error("Expected a reset request.");
+        expect(call[0]).toEqual({ providerId: "opencode" });
+        act(() => {
+          call[1].onSettled();
+        });
+        expect(
+          screen.queryByRole("dialog", {
+            name: `${providerRowResetLabel(LABEL)}?`,
+          }),
+        ).toBeNull();
+        expect(settingsFileMocks.resetMutate).not.toHaveBeenCalled();
+      });
+
+      it("shows only the whole-file reset while the whole document is unusable", () => {
+        settingsFileMocks.statusData = {
+          unreadable: true,
+          unreadableProviderIds: ["opencode"],
+        };
+
+        renderPanel();
+
+        expect(
+          screen.getByRole("button", { name: PROVIDER_SETTINGS_RESET_LABEL }),
+        ).toBeDefined();
+        expect(
+          screen.queryByRole("button", { name: providerRowResetLabel(LABEL) }),
+        ).toBeNull();
+      });
+
+      it("shows nothing for an id the host names that this list has no provider for", () => {
+        settingsFileMocks.statusData = {
+          unreadable: false,
+          unreadableProviderIds: ["some-future-provider"],
+        };
+
+        renderPanel();
+
+        expect(screen.queryByRole("alert")).toBeNull();
+      });
+
+      it("offers no per-provider reset, but still reads the status, when the host lacks only resetProvider", () => {
+        settingsFileMocks.unsupportedMethods.add(
+          "providers.settingsFile.resetProvider",
+        );
+        settingsFileMocks.statusData = {
+          unreadable: false,
+          unreadableProviderIds: ["opencode"],
+        };
+
+        renderPanel();
+
+        expect(screen.queryByRole("alert")).toBeNull();
+        expect(settingsFileMocks.statusEnabledArgs).toContain(true);
+      });
+
+      it("reads the status for the per-provider reset alone when the host lacks the whole-file reset", () => {
+        settingsFileMocks.unsupportedMethods.add(
+          "providers.settingsFile.reset",
+        );
+        settingsFileMocks.statusData = {
+          unreadable: false,
+          unreadableProviderIds: ["opencode"],
+        };
+
+        renderPanel();
+
+        expect(
+          screen.getByRole("button", { name: providerRowResetLabel(LABEL) }),
+        ).toBeDefined();
+      });
     });
   });
 

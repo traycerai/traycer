@@ -637,6 +637,7 @@ export const HOST_UNARY_RPC_ROUTES = {
   "providers.setSelection": "target-host",
   "providers.setTerminalAgentArgs": "target-host",
   "providers.settingsFile.reset": "target-host",
+  "providers.settingsFile.resetProvider": "target-host",
   "providers.settingsFile.status": "target-host",
   "providers.startLogin": "target-host",
   "providers.startTerminalLogin": "target-host",

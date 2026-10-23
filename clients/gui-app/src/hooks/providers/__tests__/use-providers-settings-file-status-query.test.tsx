@@ -51,7 +51,7 @@ function createFixture(): Fixture {
       handlers: {
         "providers.settingsFile.status": () => {
           requestCount.value += 1;
-          return { unreadable };
+          return { unreadable, unreadableProviderIds: [] };
         },
       },
     }),
@@ -110,7 +110,10 @@ describe("useProvidersSettingsFileStatus", () => {
       wrapper: fixture.Wrapper,
     });
     await waitFor(() => {
-      expect(result.current.data).toEqual({ unreadable: false });
+      expect(result.current.data).toEqual({
+        unreadable: false,
+        unreadableProviderIds: [],
+      });
     });
     expect(fixture.requestCount.value).toBe(1);
 
@@ -135,7 +138,10 @@ describe("useProvidersSettingsFileStatus", () => {
       wrapper: fixture.Wrapper,
     });
     await waitFor(() => {
-      expect(result.current.data).toEqual({ unreadable: false });
+      expect(result.current.data).toEqual({
+        unreadable: false,
+        unreadableProviderIds: [],
+      });
     });
     expect(fixture.requestCount.value).toBe(1);
 

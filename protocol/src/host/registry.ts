@@ -1151,8 +1151,11 @@ import {
   providersSetAutoJudgeV10,
 } from "@traycer/protocol/host/auto-mode/contracts";
 import {
+  providersSettingsFileResetProviderV10,
   providersSettingsFileResetV10,
+  providersSettingsFileStatusUpgradeV10ToV11,
   providersSettingsFileStatusV10,
+  providersSettingsFileStatusV11,
 } from "@traycer/protocol/host/provider-settings-file/contracts";
 import {
   chatAutoArchiveGetV10,
@@ -12444,17 +12447,24 @@ const HOST_RPC_PROVIDERS_REGISTRY_DEFINITION = {
       downgradePathsFromLatest: {},
     },
   },
-  // Whether the whole provider settings document is unreadable, and the
-  // explicit reset that sets it aside unchanged. Optional capabilities: a host
-  // without them offers no reset (see `provider-settings-file/contracts.ts`).
+  // Whether the whole provider settings document is unreadable (and, from
+  // 1.1, which single provider rows are), the explicit reset that sets it
+  // aside unchanged, and the per-provider reset of one unreadable row.
+  // Optional capabilities: a host without them offers no reset (see
+  // `provider-settings-file/contracts.ts`).
   "providers.settingsFile.status": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: providersSettingsFileStatusV10,
           upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: providersSettingsFileStatusV11,
+          upgradeFromPreviousVersion:
+            providersSettingsFileStatusUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},
@@ -12467,6 +12477,19 @@ const HOST_RPC_PROVIDERS_REGISTRY_DEFINITION = {
       versions: {
         0: {
           contract: providersSettingsFileResetV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "providers.settingsFile.resetProvider": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: providersSettingsFileResetProviderV10,
           upgradeFromPreviousVersion: null,
         },
       },
