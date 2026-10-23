@@ -123,6 +123,8 @@ export interface SupervisorRunRead {
    * record written before the field existed.
    */
   readonly admittedAs: HostLifecycleRunAdmission | null;
+  /** The live supervisor's CLI version; `null` unless `state` is `enforcing`. */
+  readonly cliVersion: string | null;
 }
 
 /** A full identity probe's verdict on the process a supervisor record names. */
@@ -220,10 +222,10 @@ export class HostLifecyclePolicyStore {
   }
 
   /**
-   * `readSupervisorState`, with the live supervisor's pid and how its run was
-   * started (`admittedAs`) read from the same record. Both are `null` unless
-   * the state is `enforcing`; `admittedAs` is `null` too for a record written
-   * before the field existed. Never throws.
+   * `readSupervisorState`, with the live supervisor's pid, how its run was
+   * started (`admittedAs`) and its CLI version read from the same record. All
+   * three are `null` unless the state is `enforcing`; `admittedAs` is `null`
+   * too for a record written before the field existed. Never throws.
    */
   async readSupervisorRun(): Promise<SupervisorRunRead> {
     const record = await this.readLiveSupervisorRecord();
@@ -232,6 +234,7 @@ export class HostLifecyclePolicyStore {
         state: "enforcing",
         supervisorPid: record.pid,
         admittedAs: record.admittedAs,
+        cliVersion: record.cliVersion,
       };
     }
     const pid = await readPidMetadataState(this.pidMetadataFile);
@@ -239,6 +242,7 @@ export class HostLifecyclePolicyStore {
       state: pid.kind === "absent" ? "not-running" : "not-enforcing",
       supervisorPid: null,
       admittedAs: null,
+      cliVersion: null,
     };
   }
 
