@@ -1,18 +1,194 @@
-import type { ReactNode } from "react";
+import { useMemo, useState, type ReactNode } from "react";
+import { useQueryClient } from "@tanstack/react-query";
+import { useHostClient, type HostRpcRegistry } from "@/lib/host";
+import { resolvePoolTierHostClient } from "@/lib/host/binding-host-client";
+import { useHostQuery } from "@/hooks/host/use-host-query";
+import { useCloudChatViewerId } from "@/hooks/chats/use-cloud-chat-queries";
+import { useHostScope } from "@/components/settings/host-scope/use-host-scope";
+import { useRegisteredHostEnvironmentStatuses } from "@/hooks/environment/use-registered-host-environment-statuses";
+import { useHostNegotiatedMethodVersions } from "@/hooks/host/use-host-negotiated-method-version";
+import { localPickerRow } from "@/components/settings/environment/environment-picker-model";
+import { ConfigurationStatusChip } from "@/components/settings/environment/status-chip";
+import type { ConfigurationChipHost } from "@/components/settings/environment/status-chip-model";
+import { hostConfigurationChip } from "@/components/settings/environment/status-chip-hosts";
+import { poolConfigurationChip } from "@/components/settings/environment/status-chip-pool-hosts";
+import { chipPageKinds } from "@/components/settings/environment/status-chip-page-kinds";
+import { useConfigurationSavingOffline } from "@/components/settings/environment/status-chip-mutations";
+import { useDetailsRecovery } from "@/components/settings/details/use-details-recovery";
+import { useDetailsEnvironmentId } from "@/components/settings/details/use-details-environment-id";
+import { SettingsDetailsDialog } from "@/components/settings/details/settings-details-button";
+import { hostQueryKeys } from "@/lib/query-keys";
 import type { EnvironmentPick } from "@/lib/settings-environment-pages";
 import type { SettingsSectionId } from "@/lib/settings-sections";
+import { Button } from "@/components/ui/button";
 
-/**
- * STUB (P3 replaces its body): the status chip
- * under an Environment page's title, for the configuration `pick` names.
- * Drawn by the page frame on every Environment page. Renders nothing until
- * filled.
- */
 export interface PageChipProps {
   readonly section: SettingsSectionId;
   readonly pick: EnvironmentPick;
 }
 
-export function PageChip(_props: PageChipProps): ReactNode {
-  return null;
+function PageChipContent(props: {
+  readonly section: SettingsSectionId;
+  readonly environmentId: string;
+  readonly hosts: readonly ConfigurationChipHost[];
+}): ReactNode {
+  const [detailsOpen, setDetailsOpen] = useState(false);
+  const hostIds = useMemo(
+    () => new Set(props.hosts.map((host) => host.hostId)),
+    [props.hosts],
+  );
+  const savingOffline = useConfigurationSavingOffline(
+    props.environmentId,
+    hostIds,
+  );
+  const recovery = useDetailsRecovery();
+  return (
+    <>
+      <ConfigurationStatusChip
+        hosts={props.hosts}
+        savingOffline={savingOffline}
+        local={false}
+        onDetails={() => setDetailsOpen(true)}
+        onRecover={recovery.recover}
+        recoveryPending={recovery.pending}
+      />
+      <SettingsDetailsDialog
+        subject={{
+          environmentId: props.environmentId,
+          kind: "chip",
+          key: props.section,
+        }}
+        title="Settings delivery"
+        open={detailsOpen}
+        onOpenChange={setDetailsOpen}
+      />
+    </>
+  );
+}
+
+function PersonalPageChip(props: {
+  readonly section: SettingsSectionId;
+}): ReactNode {
+  const scope = useHostScope();
+  const client = useHostClient();
+  const environmentId = useDetailsEnvironmentId(client);
+  const queryClient = useQueryClient();
+  const hosts = useMemo(
+    () =>
+      scope.hosts.filter((host) => host.registered && host.sandbox === null),
+    [scope.hosts],
+  );
+  const hostIds = useMemo(() => hosts.map((host) => host.hostId), [hosts]);
+  const statuses = useRegisteredHostEnvironmentStatuses(hosts);
+  const versions = useHostNegotiatedMethodVersions(
+    hostIds,
+    "environment.status",
+  );
+  const kinds = chipPageKinds(props.section);
+  const participants = hosts.filter((host) => {
+    const status = statuses.get(host.hostId) ?? null;
+    return (
+      status?.principal?.kind === "personal" &&
+      localPickerRow(host, status, versions.get(host.hostId) ?? null) === null
+    );
+  });
+  const chips = participants.map((host) => {
+    const status = statuses.get(host.hostId) ?? null;
+    const readAt =
+      queryClient.getQueryState(
+        hostQueryKeys.method<HostRpcRegistry, "environment.status">(
+          host.hostId,
+          "environment.status",
+          {},
+        ),
+      )?.dataUpdatedAt ?? null;
+    const lastReportedAt =
+      readAt === null || status?.receiptAgeMs === null || status === null
+        ? null
+        : readAt - status.receiptAgeMs;
+    return hostConfigurationChip({
+      host,
+      status,
+      version: versions.get(host.hostId) ?? null,
+      kinds,
+      lastReportedAt,
+    });
+  });
+  if (environmentId === null || scope.listsFailed || scope.isLoading)
+    return null;
+  if (
+    chips.length === 0 &&
+    hosts.some((host) => (statuses.get(host.hostId) ?? null) === null)
+  )
+    return null;
+  return (
+    <PageChipContent
+      section={props.section}
+      environmentId={environmentId}
+      hosts={chips}
+    />
+  );
+}
+
+function TeamPageChip(props: {
+  readonly section: SettingsSectionId;
+  readonly environmentId: string;
+}): ReactNode {
+  const surfaceClient = useHostClient();
+  const client = useMemo(
+    () => resolvePoolTierHostClient(surfaceClient),
+    [surfaceClient],
+  );
+  const viewerUserId = useCloudChatViewerId();
+  const hosts = useHostQuery<HostRpcRegistry, "environment.host.list">({
+    client,
+    method: "environment.host.list",
+    params: { environmentId: props.environmentId },
+    cacheKeyIdentity: [viewerUserId],
+    options: { enabled: viewerUserId.length > 0 },
+  });
+  const hostIds = useMemo(
+    () => hosts.data?.hosts.map((host) => host.hostId) ?? [],
+    [hosts.data],
+  );
+  const versions = useHostNegotiatedMethodVersions(
+    hostIds,
+    "environment.status",
+  );
+  if (hosts.isError)
+    return (
+      <Button
+        type="button"
+        variant="ghost"
+        size="sm"
+        onClick={() => void hosts.refetch()}
+      >
+        Retry
+      </Button>
+    );
+  if (hosts.data === undefined) return null;
+  const kinds = chipPageKinds(props.section);
+  const chips = hosts.data.hosts.map((host) =>
+    poolConfigurationChip(host, kinds, versions.get(host.hostId) ?? null),
+  );
+  return (
+    <PageChipContent
+      section={props.section}
+      environmentId={props.environmentId}
+      hosts={chips}
+    />
+  );
+}
+
+/** One delivery status for the page's configuration; Local has no delivery. */
+export function PageChip(props: PageChipProps): ReactNode {
+  if (props.pick.kind === "local" || props.section === "sandboxes") return null;
+  if (props.pick.kind === "team")
+    return (
+      <TeamPageChip
+        section={props.section}
+        environmentId={props.pick.environmentId}
+      />
+    );
+  return <PersonalPageChip section={props.section} />;
 }

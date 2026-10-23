@@ -99,3 +99,20 @@ export type DetailsProvider = (
   subject: DetailsSubject,
   context: DetailsProviderContext,
 ) => Promise<DetailsEntry>;
+
+const providers = new Map<string, DetailsProvider>();
+
+/** Register a provider of authorized, value-free evidence for one kind. */
+export function registerDetailsProvider(
+  kind: string,
+  provider: DetailsProvider,
+): () => void {
+  providers.set(kind, provider);
+  return () => {
+    if (providers.get(kind) === provider) providers.delete(kind);
+  };
+}
+
+export function getDetailsProvider(kind: string): DetailsProvider | null {
+  return providers.get(kind) ?? null;
+}
