@@ -308,10 +308,12 @@ export function useEpicSyncChatRecords(epicId: string): void {
   // polls, so an ordinary record change costs one delta instead of one
   // snapshot per open tab. `query.refetch` is what a GAP falls back to - see
   // {@link useRecordListStreamStamp}.
-  useRecordListStreamStamp(epicId, stamp, query.refetch, {
-    deltaIncompleteSeq: chatDeltaIncompleteSeq,
-    listIsFetching: query.isFetching,
-  });
+  useRecordListStreamStamp(
+    epicId,
+    stamp,
+    query.refetch,
+    chatDeltaIncompleteSeq,
+  );
 
   const answer = query.data ?? null;
   const recordListAuthoritative =
