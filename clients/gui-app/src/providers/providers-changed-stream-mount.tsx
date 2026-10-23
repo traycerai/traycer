@@ -3,7 +3,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { ProvidersChangedStreamClient } from "@traycer-clients/shared/host-transport/providers-changed-stream-client";
 import { acquireHostConnection } from "@traycer-clients/shared/host-client/host-connection-registry";
 import { isReopenableHostStreamClose } from "@traycer-clients/shared/host-client/host-connection-reconnect-engine";
-import { PROVIDER_INVALIDATIONS } from "@/hooks/providers/invalidations";
+import { PROVIDER_SELECTION_INVALIDATIONS } from "@/hooks/providers/invalidations";
 import {
   useStreamHostId,
   useStreamMethodSupport,
@@ -37,7 +37,7 @@ export function ProvidersChangedStreamMount(): ReactNode {
       openClient();
     }, isReopenableHostStreamClose);
     const invalidateProviderQueries = (): void => {
-      for (const method of PROVIDER_INVALIDATIONS) {
+      for (const method of PROVIDER_SELECTION_INVALIDATIONS) {
         void queryClient.invalidateQueries({
           queryKey: hostQueryKeys.methodScope(hostId, method),
         });

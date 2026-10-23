@@ -69,6 +69,22 @@ function providerHasRunnableFallback(provider: ProviderCliState): boolean {
   return provider.candidates.some((candidate) => candidate.available);
 }
 
+function selectedExternalCandidateRunnable(
+  provider: ProviderCliState,
+): boolean {
+  const selected = provider.selected;
+  if (selected.kind === "bundled") return false;
+  // A PATH probe that has not settled cannot yet rule out the selected binary.
+  if (selected.kind === "path" && provider.availabilityPending) return true;
+  return provider.candidates.some(
+    (candidate) =>
+      candidate.available &&
+      (selected.kind === "path"
+        ? candidate.kind === "path"
+        : candidate.kind === "custom" && candidate.path === selected.path),
+  );
+}
+
 /**
  * The single mapping from a provider row to "is there a managed-pack state
  * worth saying anything about".
@@ -91,10 +107,11 @@ function providerHasRunnableFallback(provider: ProviderCliState): boolean {
  * `managedInstallState` for exactly that reason: the row is the only place the
  * fallback candidates live, and a caller holding the state alone cannot answer
  * the question that matters.
- * OpenCode's managed selections use that line's state and candidate; the
+ * OpenCode's managed fallbacks use that line's state and candidate; the
  * legacy provider-level candidate describes line 1 and cannot make line 2
  * runnable. Line 1 retains its PATH fallback; line 2 runs from its managed
- * pack. PATH and custom selections keep the existing fallback check.
+ * pack. A runnable external selection keeps precedence; a missing one falls
+ * back to the managed line.
  *
  * The host resolver remains the authoritative backstop throughout (it throws a
  * typed `preparing` outcome); this is UX, so it fails OPEN - an unrecognized
@@ -106,11 +123,11 @@ export function providerPackPreparingForProvider(
   provider: ProviderCliState,
 ): ProviderPackPreparing | null {
   const selected = provider.selected;
+  const line = selected.kind === "bundled" ? (selected.line ?? 2) : 2;
   const managedLine =
-    provider.providerId === "opencode" && selected.kind === "bundled"
-      ? provider.managedLines?.find(
-          (entry) => entry.line === (selected.line ?? 2),
-        )
+    provider.providerId === "opencode" &&
+    !selectedExternalCandidateRunnable(provider)
+      ? provider.managedLines?.find((entry) => entry.line === line)
       : undefined;
   const state =
     managedLine === undefined
@@ -179,8 +196,8 @@ export function providerPackPreparingByHarnessId(
   for (const provider of providers) {
     const preparing = providerPackPreparingForProvider(
       provider.providerId === "opencode" &&
-        provider.selected.kind === "bundled" &&
-        opencodeLine !== null
+        opencodeLine !== null &&
+        !selectedExternalCandidateRunnable(provider)
         ? { ...provider, selected: { kind: "bundled", line: opencodeLine } }
         : provider,
     );

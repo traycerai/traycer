@@ -700,4 +700,117 @@ describe("OpenCode managed lines: readiness follows the selected line", () => {
     if (preparing === undefined) throw new Error("expected a state");
     expect(providerPackBlocksExecution(preparing)).toBe(false);
   });
+
+  // A bound line-2 chat keeps running on 2.x whatever the new-chat selection
+  // is, so a PATH or custom selection that has nothing runnable must not hide
+  // line 2's pack state, and the provider-level state (line 1's) is no
+  // evidence either way.
+  describe("a bound line 2 chat under an external selection", () => {
+    function externalSelection(args: {
+      readonly selected: ProviderCliState["selected"];
+      readonly externalKind: "path" | "custom";
+      readonly externalAvailable: boolean;
+      readonly legacy: ProviderManagedInstallState;
+      readonly lines: NonNullable<ProviderCliState["managedLines"]>;
+    }): ProviderCliState {
+      const { selected, externalKind, externalAvailable, legacy, lines } = args;
+      return {
+        ...providerStateWith("opencode", legacy, {
+          candidates: [
+            candidate("bundled", false),
+            candidate(externalKind, externalAvailable),
+          ],
+          availabilityPending: false,
+        }),
+        selected,
+        managedLines: lines,
+      };
+    }
+
+    function boundLine2Blocks(provider: ProviderCliState): boolean | "quiet" {
+      const preparing = providerPackPreparingByHarnessId([provider], 2).get(
+        "opencode",
+      );
+      return preparing === undefined
+        ? "quiet"
+        : providerPackBlocksExecution(preparing);
+    }
+
+    it.each([
+      ["path", { kind: "path" as const }],
+      ["custom", { kind: "custom" as const, path: "/usr/local/bin/custom" }],
+    ])(
+      "blocks on line 2's download when the %s selection has no runnable binary",
+      (kind, selected) => {
+        const provider = externalSelection({
+          selected,
+          externalKind: kind === "path" ? "path" : "custom",
+          externalAvailable: false,
+          legacy: installed,
+          lines: [
+            managedLine(1, installed, true),
+            managedLine(2, downloading, false),
+          ],
+        });
+        expect(boundLine2Blocks(provider)).toBe(true);
+      },
+    );
+
+    it("blocks the direct provider readiness on line 2 when the PATH selection has no runnable binary and no chat is bound", () => {
+      const provider = externalSelection({
+        selected: { kind: "path" },
+        externalKind: "path",
+        externalAvailable: false,
+        legacy: installed,
+        lines: [
+          managedLine(1, installed, true),
+          managedLine(2, downloading, false),
+        ],
+      });
+      const preparing = providerPackPreparingForProvider(provider);
+      if (preparing === null) throw new Error("expected a preparing state");
+      expect(preparing.kind).toBe("downloading");
+      expect(providerPackBlocksExecution(preparing)).toBe(true);
+    });
+
+    it.each([
+      ["path", { kind: "path" as const }],
+      ["custom", { kind: "custom" as const, path: "/usr/local/bin/custom" }],
+    ])(
+      "is ready when line 2 is installed although line 1 is downloading (%s selection, nothing runnable)",
+      (kind, selected) => {
+        const provider = externalSelection({
+          selected,
+          externalKind: kind === "path" ? "path" : "custom",
+          externalAvailable: false,
+          legacy: downloading,
+          lines: [
+            managedLine(1, downloading, false),
+            managedLine(2, installed, true),
+          ],
+        });
+        expect(boundLine2Blocks(provider)).toBe("quiet");
+      },
+    );
+
+    it.each([
+      ["path", { kind: "path" as const }],
+      ["custom", { kind: "custom" as const, path: "/usr/local/bin/custom" }],
+    ])(
+      "a runnable %s binary keeps precedence over line 2's download",
+      (kind, selected) => {
+        const provider = externalSelection({
+          selected,
+          externalKind: kind === "path" ? "path" : "custom",
+          externalAvailable: true,
+          legacy: installed,
+          lines: [
+            managedLine(1, installed, true),
+            managedLine(2, downloading, false),
+          ],
+        });
+        expect(boundLine2Blocks(provider)).not.toBe(true);
+      },
+    );
+  });
 });
