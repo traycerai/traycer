@@ -4,6 +4,7 @@ import {
   Bell,
   Bot,
   Boxes,
+  Cloud,
   FileText,
   GitBranch,
   ListChecks,
@@ -43,6 +44,7 @@ export type SettingsSectionId =
   | "app-notifications"
   | "providers"
   | "secrets"
+  | "sandboxes"
   | "mcp-servers"
   | "skills"
   | "agent-definitions"
@@ -308,6 +310,16 @@ export const SETTINGS_SECTIONS: ReadonlyArray<SettingsSection> = [
     id: "secrets",
     label: "Secrets",
     icon: LockKeyhole,
+    group: "personal",
+  },
+  // Every sandbox on one configuration's settings (Personal or a team, picked
+  // at the top of the page), whoever started it. Sits after Secrets as the
+  // Environment group orders it; moves into that group's page registry once
+  // it lands.
+  {
+    id: "sandboxes",
+    label: "Sandboxes",
+    icon: Cloud,
     group: "personal",
   },
   // The agent definition files every host gets ("Agent definitions", never

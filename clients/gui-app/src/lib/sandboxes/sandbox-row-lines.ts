@@ -4,6 +4,7 @@ import type {
   SandboxMember,
   SandboxSummary,
 } from "@traycer/protocol/host/sandbox-control";
+import { resolvePlatformBaseUrl } from "@/lib/auth/platform-base-url";
 import { frozenDestroyAt } from "@/lib/sandboxes/sandbox-balance";
 import { formatMemory } from "@/lib/sandboxes/sandbox-pricing";
 import {
@@ -918,4 +919,25 @@ export function sandboxRestingRefusal(minutes: number | null): string | null {
   return minutes !== null && Number.isNaN(minutes)
     ? "Enter a whole number, or leave it empty for never."
     : null;
+}
+
+// ── Links out ───────────────────────────────────────────────────────────────
+
+/** The credits top-up page: the team's billing for a team row, never Personal's. */
+export function sandboxAddCreditsUrl(
+  signInUrl: string,
+  configuration: SandboxPageConfiguration,
+): string {
+  const base = resolvePlatformBaseUrl(signInUrl);
+  return configuration.kind === "team"
+    ? `${base}/team/${encodeURIComponent(configuration.teamName)}/billing`
+    : `${base}/billing`;
+}
+
+/** `Team usage and credits ↗`: the dashboard's team usage page. */
+export function sandboxTeamUsageUrl(
+  signInUrl: string,
+  teamName: string,
+): string {
+  return `${resolvePlatformBaseUrl(signInUrl)}/team/${encodeURIComponent(teamName)}/usage`;
 }

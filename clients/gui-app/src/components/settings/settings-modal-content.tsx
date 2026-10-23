@@ -12,6 +12,7 @@ import {
 import { BrowserSettingsPanel } from "@/components/settings/panels/browser-settings-panel";
 import { BrowserAgentAccessSettingsPanel } from "@/components/settings/panels/browser-agent-access-settings-panel";
 import { SecretsSettingsPanel } from "@/components/settings/panels/secrets-settings-panel";
+import { SandboxesSettingsPanel } from "@/components/settings/panels/sandboxes-settings-panel";
 import { GeneralSettingsPanel } from "@/components/settings/panels/general-settings-panel";
 import { AppearanceSettingsPanel } from "@/components/settings/panels/appearance-settings-panel";
 import { LayoutSettingsPanel } from "@/components/settings/panels/layout-settings-panel";
@@ -108,6 +109,7 @@ const SETTINGS_PANELS = {
   "app-notifications": AppNotificationsSettingsPanel,
   providers: ProvidersSettingsPanel,
   secrets: SecretsSettingsPanel,
+  sandboxes: SandboxesSettingsPanel,
   "mcp-servers": McpServersSettingsPanel,
   skills: SkillsSettingsPanel,
   "agent-definitions": AgentDefinitionsSettingsPanel,

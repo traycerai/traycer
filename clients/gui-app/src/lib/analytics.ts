@@ -127,6 +127,7 @@ export type AnalyticsSettingsSection =
   | "opening-behavior"
   | "permissions"
   | "providers"
+  | "sandboxes"
   | "secrets"
   | "shell"
   | "usage"
@@ -1412,6 +1413,7 @@ const ANALYTICS_SETTINGS_SECTIONS = new Set<string>(
     "opening-behavior": true,
     permissions: true,
     providers: true,
+    sandboxes: true,
     secrets: true,
     shell: true,
     usage: true,

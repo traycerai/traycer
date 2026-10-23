@@ -27,6 +27,7 @@ import { OPENING_BEHAVIOR } from "@/components/settings/panels/opening-behavior.
 import { PERMISSIONS } from "@/components/settings/panels/permissions-settings.definitions";
 import { PROVIDERS } from "@/components/settings/panels/providers-settings.definitions";
 import { SECRETS } from "@/components/settings/panels/secrets.definitions";
+import { SANDBOXES } from "@/components/settings/panels/sandboxes-settings.definitions";
 import { AGENT_DEFINITIONS } from "@/components/settings/panels/agent-definitions.definitions";
 import { MACHINE_SETUP } from "@/components/settings/panels/machine-setup.definitions";
 import { MCP_SERVERS } from "@/components/settings/panels/mcp-servers.definitions";
@@ -61,6 +62,7 @@ export const SETTINGS_SEARCH_COLLECTIONS: ReadonlyArray<AnySettingsSectionCollec
     AGENT_SELECTION,
     BROWSER_AGENT_ACCESS,
     SECRETS,
+    SANDBOXES,
     AGENT_DEFINITIONS,
     MACHINE_SETUP,
     DEVICES,

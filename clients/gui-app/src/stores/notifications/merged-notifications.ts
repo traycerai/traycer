@@ -168,6 +168,23 @@ export interface MergedNotificationRow {
   readonly category: NotificationCategory;
 }
 
+/**
+ * The sandbox a sandbox push names, from its per-occurrence entry key
+ * (`sandbox-<kind>:<sandboxId>:<stage>`, and the older
+ * `sandbox-day-30:<sandboxId>:<days>`), or `null` for any other row. The push
+ * carries nothing else about the sandbox, so its destination is found from
+ * this id: Settings › Sandboxes with that row revealed.
+ */
+export function sandboxIdOfNotificationRow(
+  row: Pick<MergedNotificationRow, "source" | "sourceId">,
+): string | null {
+  if (row.source !== "cloud" || !row.sourceId.startsWith("sandbox-")) {
+    return null;
+  }
+  const id = row.sourceId.split(":")[1] ?? "";
+  return id.length === 0 ? null : id;
+}
+
 function isHostUnsupportedError(error: unknown): boolean {
   return error instanceof HostRpcError && error.code === "E_HOST_UNSUPPORTED";
 }
