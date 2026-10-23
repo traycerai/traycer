@@ -36,8 +36,8 @@ on:
     types: [opened, synchronize, reopened, labeled]
   push:
     branches: [main]
-  # A manual trigger, not a pre-merge path: no CI runs on a branch
-  # (AGENTS.md, "When CI runs").
+  # A manual trigger for a sparing branch run, when a check is actually
+  # needed before the merge (AGENTS.md, "When CI runs").
   workflow_dispatch:
 
 permissions:

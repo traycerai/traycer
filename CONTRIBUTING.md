@@ -84,8 +84,9 @@ development loop; the full suite does not need to run before each commit.
 A pull request from a fork runs every CI check, and so does a pull request
 from a bot or into any branch other than `main`. A pull request into `main`
 from a branch in this repository (maintainers') runs none, the protocol
-governance tripwire included: the full suite runs on the merged commit instead. No workflow is dispatched on
-the branch: what needs checking before the merge is checked locally.
+governance tripwire included: the full suite runs on the merged commit instead. Maintainers check locally
+what they can, and dispatch a workflow on a branch only when a check is
+actually needed before the merge.
 
 ## Pull requests
 
