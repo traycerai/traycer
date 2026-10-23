@@ -1,4 +1,5 @@
 import { useStore } from "zustand";
+import { useChatOpencodeLine } from "@/hooks/harnesses/chat-opencode-line-context";
 import {
   maxModeTooltipCopy,
   type MaxModeContext,
@@ -486,12 +487,16 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
   );
   // Managed-pack readiness, from the SAME `providers.list` response the rail
   // already reads for degraded/profile state - no extra query, no extra poll.
+  const opencodeLine = useChatOpencodeLine();
   const preparingByHarnessId = useMemo(
     () =>
       providersQuery.data === undefined
         ? EMPTY_PREPARING_BY_HARNESS_ID
-        : providerPackPreparingByHarnessId(providersQuery.data.providers),
-    [providersQuery.data],
+        : providerPackPreparingByHarnessId(
+            providersQuery.data.providers,
+            opencodeLine,
+          ),
+    [opencodeLine, providersQuery.data],
   );
   // Client-scoped on purpose: the rail renders the RUN-TARGET host's providers
   // (`providersQuery` above), so the retry must reach that same host. Going

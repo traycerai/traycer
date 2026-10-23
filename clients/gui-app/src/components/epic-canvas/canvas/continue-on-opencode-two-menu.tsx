@@ -1,4 +1,5 @@
 import { useSyncExternalStore } from "react";
+import { useIsMutating } from "@tanstack/react-query";
 import { ArrowRightLeft } from "lucide-react";
 import { toast } from "sonner";
 import { ContextMenuItem } from "@/components/ui/context-menu";
@@ -16,6 +17,7 @@ import {
   openNewChatInActiveTile,
 } from "@/lib/commands/actions/new-chat";
 import { useExistingChatSessionHandle } from "@/lib/registries/chat-session-registry";
+import { epicMutationKeys } from "@/lib/query-keys";
 
 const NO_SUBSCRIBE = (): (() => void) => () => {};
 
@@ -43,6 +45,28 @@ export function ContinueOnOpencodeTwoTabMenu(
   );
   const client = useHostClientForHostId(hostId);
   const createChat = useEpicCreateChatForHostClient(client);
+  const creatingContinuation =
+    useIsMutating({
+      mutationKey: epicMutationKeys.createChat(),
+      predicate: (mutation) => {
+        const variables = mutation.state.variables;
+        return (
+          typeof variables === "object" &&
+          variables !== null &&
+          "epicId" in variables &&
+          variables.epicId === epicId &&
+          "hostId" in variables &&
+          variables.hostId === hostId &&
+          "opencodeLine" in variables &&
+          variables.opencodeLine === 2 &&
+          "forkSource" in variables &&
+          typeof variables.forkSource === "object" &&
+          variables.forkSource !== null &&
+          "sourceChatId" in variables.forkSource &&
+          variables.forkSource.sourceChatId === chatId
+        );
+      },
+    }) > 0;
   const navigateNestedFocus = useEpicNestedFocusNavigation();
   const version = useHostMethodSchemaVersion(hostId, "epic.createChat");
   if (
@@ -54,8 +78,9 @@ export function ContinueOnOpencodeTwoTabMenu(
   }
   return (
     <ContextMenuItem
-      disabled={createChat.isPending}
+      disabled={createChat.isPending || creatingContinuation}
       onSelect={() => {
+        if (createChat.isPending || creatingContinuation) return;
         // The projection wait cancels itself on its own timeout; the menu
         // unmounts as soon as this item is picked, so nothing here could
         // hold the cancel.

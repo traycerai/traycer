@@ -1,4 +1,5 @@
 import type { GuiHarnessId } from "@traycer/protocol/host/index";
+import type { OpencodeLine } from "@traycer/protocol/common/opencode-line";
 import type {
   ProviderCliState,
   ProviderManagedInstallState,
@@ -90,6 +91,10 @@ function providerHasRunnableFallback(provider: ProviderCliState): boolean {
  * `managedInstallState` for exactly that reason: the row is the only place the
  * fallback candidates live, and a caller holding the state alone cannot answer
  * the question that matters.
+ * OpenCode's managed selections use that line's state and candidate; the
+ * legacy provider-level candidate describes line 1 and cannot make line 2
+ * runnable. Line 1 retains its PATH fallback; line 2 runs from its managed
+ * pack. PATH and custom selections keep the existing fallback check.
  *
  * The host resolver remains the authoritative backstop throughout (it throws a
  * typed `preparing` outcome); this is UX, so it fails OPEN - an unrecognized
@@ -100,9 +105,27 @@ function providerHasRunnableFallback(provider: ProviderCliState): boolean {
 export function providerPackPreparingForProvider(
   provider: ProviderCliState,
 ): ProviderPackPreparing | null {
-  const state = provider.managedInstallState;
+  const selected = provider.selected;
+  const managedLine =
+    provider.providerId === "opencode" && selected.kind === "bundled"
+      ? provider.managedLines?.find(
+          (entry) => entry.line === (selected.line ?? 2),
+        )
+      : undefined;
+  const state =
+    managedLine === undefined
+      ? provider.managedInstallState
+      : managedLine.managedInstallState;
   if (state === null || state === undefined) return null;
-  const fallbackRunnable = providerHasRunnableFallback(provider);
+  const fallbackRunnable =
+    managedLine === undefined
+      ? providerHasRunnableFallback(provider)
+      : managedLine.candidate.available ||
+        (managedLine.line === 1 &&
+          (provider.availabilityPending ||
+            provider.candidates.some(
+              (candidate) => candidate.kind === "path" && candidate.available,
+            )));
   if (state.status === "downloading") {
     return {
       kind: "downloading",
@@ -145,13 +168,22 @@ export function providerPackBlocksExecution(
  * Preparing state per harness id, for the surfaces that hold a provider list
  * (picker rail, composer gates). Providers that are ready simply have no
  * entry, so a `.get()` miss is the common, cheap "not gated" answer.
+ * A bound chat keeps its own OpenCode line even when the new-chat selection
+ * changes. Other surfaces pass `null` to follow the provider selection.
  */
 export function providerPackPreparingByHarnessId(
   providers: ReadonlyArray<ProviderCliState>,
+  opencodeLine: OpencodeLine | null,
 ): ReadonlyMap<GuiHarnessId, ProviderPackPreparing> {
   const entries = new Map<GuiHarnessId, ProviderPackPreparing>();
   for (const provider of providers) {
-    const preparing = providerPackPreparingForProvider(provider);
+    const preparing = providerPackPreparingForProvider(
+      provider.providerId === "opencode" &&
+        provider.selected.kind === "bundled" &&
+        opencodeLine !== null
+        ? { ...provider, selected: { kind: "bundled", line: opencodeLine } }
+        : provider,
+    );
     if (preparing === null) continue;
     entries.set(providerIdToGuiHarnessId(provider.providerId), preparing);
   }

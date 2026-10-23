@@ -19,6 +19,10 @@ export function useProvidersSetSelection(): UseMutationResult<
     method: "providers.setSelection",
     mutationKey: providersMutationKeys.setSelection(),
     errorMessage: "Couldn't switch provider CLI.",
-    invalidateMethods: PROVIDER_INVALIDATIONS,
+    invalidateMethods: [
+      ...PROVIDER_INVALIDATIONS,
+      "agent.gui.listModels",
+      "agent.gui.listCommands",
+    ],
   });
 }

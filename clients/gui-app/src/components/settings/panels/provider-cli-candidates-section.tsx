@@ -321,7 +321,7 @@ function managedLineRowsFor(args: {
       managedInstallState: entry.managedInstallState,
       packPreparing: providerPackPreparingForProvider({
         ...args.state,
-        managedInstallState: entry.managedInstallState,
+        selected: { kind: "bundled", line: entry.line },
       }),
       versionMenu: versionManagerPanelDataFor({
         hostId: args.hostId,
