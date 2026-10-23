@@ -163,6 +163,16 @@ export const CHAT_SUBSCRIBE_TASK_CHECKIN_MINOR = 26;
 export const CHAT_SUBSCRIBE_TASK_OVERDUE_MINOR = 27;
 
 /**
+ * The first minor whose queue may carry a `memory-curation` item (the ask
+ * that the environment's main bot curate its shared memory, waiting on its
+ * trunk, Tracy Bots T44b). Same posture as the constants above: the host
+ * omits the item, and the queue events that name it, from every peer below
+ * this minor; a `1.35` peer parses with the union its line binds and needs
+ * no predicate.
+ */
+export const CHAT_SUBSCRIBE_MEMORY_CURATION_MINOR = 35;
+
+/**
  * The first minor whose `tool_call` block and `tool_call.completed` event may
  * carry `agentMessageDelivery` (where a cross-host send stands). A literal for
  * the reason the constants above are. The host deletes the key by name from

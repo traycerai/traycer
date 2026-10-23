@@ -5,6 +5,7 @@
  * `environment.host.list` - the hosts of a team environment the caller may see.
  * `environment.members` - the people in an environment, by name and avatar,
  * so a client can name the member who wrote a message.
+ * `environment.setMainBot` - which of an environment's bots is its main bot.
  *
  * An environment is the cloud container a team shares: skills, the shared
  * notes block, the agent selection guide and the bot list, all held in one
@@ -22,6 +23,7 @@
 import { z } from "zod";
 import { defineRpcContract } from "@traycer/protocol/framework/index";
 import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
+import { botIdSchema } from "@traycer/protocol/host/bot/schemas";
 
 /**
  * Who owns an environment: an authn organization (team), or a single user.
@@ -264,4 +266,43 @@ export const environmentMembersV10 = defineRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: environmentMembersRequestSchema,
   responseSchema: environmentMembersResponseSchema,
+});
+
+export const environmentSetMainBotRequestSchema = lazySchema(() =>
+  z.object({
+    environmentId: z.string().min(1).max(36),
+    botId: botIdSchema,
+  }),
+);
+export type EnvironmentSetMainBotRequest = z.infer<
+  typeof environmentSetMainBotRequestSchema
+>;
+
+/**
+ * The environment's main bot once the choice is written: the named bot. A
+ * member of an object root so the response can grow additively.
+ */
+export const environmentSetMainBotResponseSchema = lazySchema(() =>
+  z.object({
+    environmentId: z.string().min(1),
+    mainBotId: botIdSchema,
+  }),
+);
+export type EnvironmentSetMainBotResponse = z.infer<
+  typeof environmentSetMainBotResponseSchema
+>;
+
+/**
+ * Makes a bot its environment's main bot (decision 30): the bot that curates
+ * the environment's shared memory and is told when it passes its ceiling. Any
+ * member may set it, and set it back. Refused for an environment the caller
+ * does not belong to exactly as for one that does not exist, and for a bot
+ * that is not a live bot of that environment. Cloud-backed: any host answers
+ * the same.
+ */
+export const environmentSetMainBotV10 = defineRpcContract({
+  method: "environment.setMainBot",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: environmentSetMainBotRequestSchema,
+  responseSchema: environmentSetMainBotResponseSchema,
 });

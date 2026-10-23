@@ -79,7 +79,7 @@ function stage(input: {
   readonly client: FakeStreamClient;
 }): void {
   hoisted.callHostRpc.mockImplementation(
-    routeRpc({ "bot.list": () => ({ bots: input.bots }) }),
+    routeRpc({ "bot.list": () => ({ bots: input.bots, mainBotIds: null }) }),
   );
   hoisted.openLocalStreamClient.mockResolvedValue({
     client: input.client,

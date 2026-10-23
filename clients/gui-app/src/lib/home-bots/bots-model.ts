@@ -4,6 +4,7 @@ import type {
 } from "@traycer/protocol/host/bot/schemas";
 import type { EnvironmentDescriptor } from "@traycer/protocol/host/environment/contracts";
 import type { BotSubscriptionSnapshot } from "@/hooks/bots/use-bot-subscription";
+import { mainBotIdOf, type MainBotIds } from "@/lib/bots/bot-main";
 
 /**
  * The Home bots section's data contract (Tracy Bots), built by pure functions
@@ -52,6 +53,9 @@ export interface HomeBotsGroup {
   readonly canCreate: boolean;
   /** Live (unarchived) bots of this environment, by title. */
   readonly bots: ReadonlyArray<BotRecord>;
+  /** The environment's main bot, `null` when the list names none (its host
+   * predates the field). */
+  readonly mainBotId: string | null;
 }
 
 export interface HomeBotsModel {
@@ -62,6 +66,7 @@ export interface HomeBotsModel {
 export interface HomeBotsModelInput {
   readonly environments: ReadonlyArray<EnvironmentDescriptor>;
   readonly bots: ReadonlyArray<BotRecord>;
+  readonly mainBotIds: MainBotIds;
 }
 
 export const EMPTY_HOME_BOTS_MODEL: HomeBotsModel = Object.freeze({
@@ -221,6 +226,7 @@ export function buildHomeBotsModel(input: HomeBotsModelInput): HomeBotsModel {
     bots: (botsByEnvironment.get(environment.environmentId) ?? []).sort(
       compareBots,
     ),
+    mainBotId: mainBotIdOf(input.mainBotIds, environment.environmentId),
   }));
   const listed = new Set(input.environments.map((e) => e.environmentId));
   for (const [environmentId, bots] of botsByEnvironment) {
@@ -231,6 +237,7 @@ export function buildHomeBotsModel(input: HomeBotsModelInput): HomeBotsModel {
       ownerKind: null,
       canCreate: false,
       bots: bots.sort(compareBots),
+      mainBotId: mainBotIdOf(input.mainBotIds, environmentId),
     });
   }
   let botCount = 0;
