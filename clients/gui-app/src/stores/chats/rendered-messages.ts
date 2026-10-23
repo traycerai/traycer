@@ -1890,6 +1890,18 @@ export function transcriptShowsSetupCard(
   );
 }
 
+/**
+ * Whether the rendered transcript carries an in-progress assistant row: the
+ * trailing pre-turn "Working…" row `renderPendingRunIndicator` adds, or the
+ * turn's own row once it has one. While it does, an unstarted opening prompt
+ * drops its own "Setting up" status, because that row already shows the wait.
+ */
+export function transcriptShowsWorkingRow(
+  rows: ReadonlyArray<ChatMessageModel>,
+): boolean {
+  return rows.some((row) => row.role === "assistant" && row.runState !== null);
+}
+
 function presentationTurnMeta(
   settings: TurnPresentation["settings"],
   recordedProfile: string | undefined,
@@ -4201,10 +4213,7 @@ function renderPendingRunIndicator(input: {
     rendered,
   } = input;
   if (activeRunState === null) return [];
-  const hasInProgressAssistant = rendered.some(
-    (message) => message.role === "assistant" && message.runState !== null,
-  );
-  if (hasInProgressAssistant) return [];
+  if (transcriptShowsWorkingRow(rendered)) return [];
   const latestCreatedAt = rendered.reduce(
     (max, message) => Math.max(max, message.createdAt),
     0,
