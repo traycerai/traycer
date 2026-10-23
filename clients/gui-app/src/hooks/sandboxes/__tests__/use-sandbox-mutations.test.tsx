@@ -57,6 +57,8 @@ import {
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useSandboxAutomationOpen } from "@/hooks/sandboxes/use-sandbox-automation-open-mutation";
 import { useSandboxDestroy } from "@/hooks/sandboxes/use-sandbox-destroy-mutation";
+import { useSandboxKeep } from "@/hooks/sandboxes/use-sandbox-keep-mutation";
+import { useSandboxPatch } from "@/hooks/sandboxes/use-sandbox-patch-mutation";
 import {
   useSandboxVerb,
   type SandboxVerbOutcome,
@@ -427,6 +429,126 @@ describe("useSandboxAutomationOpen", () => {
   });
 });
 
+describe("useSandboxPatch", () => {
+  beforeEach(() => {
+    state.binding = createFakeSandboxBinding();
+    state.requestFleetRefresh.mockClear();
+    state.toastFromAuthError.mockClear();
+  });
+  afterEach(cleanup);
+
+  const REQUEST = {
+    displayName: null,
+    idleMinutes: 45,
+    destroyAfterRestingMinutes: 0,
+  };
+
+  it("saves the request for its own sandbox and refreshes the lists and the cost view", async () => {
+    const { wrapper, invalidate } = setup();
+    const { result } = renderHook(() => useSandboxPatch("sbx_1"), {
+      wrapper,
+    });
+
+    let outcome: string | null = null;
+    await act(async () => {
+      outcome = await result.current.mutateAsync(REQUEST);
+    });
+
+    expect(state.binding?.auth.patchSandbox).toHaveBeenCalledWith(
+      "sbx_1",
+      REQUEST,
+    );
+    expect(outcome).toBe("saved");
+    expect(state.binding?.directory.refresh).toHaveBeenCalledTimes(1);
+    expect(state.requestFleetRefresh).toHaveBeenCalledTimes(1);
+    expect(invalidatedKeys(invalidate)).toEqual([
+      REGISTERED_HOSTS_KEY,
+      COSTS_KEY,
+    ]);
+  });
+
+  it("resolves gone on a 404 sandbox_not_found, with no toast", async () => {
+    state.binding?.auth.patchSandbox.mockResolvedValue(
+      refusal(404, "sandbox_not_found"),
+    );
+    const { wrapper } = setup();
+    const { result } = renderHook(() => useSandboxPatch("sbx_1"), {
+      wrapper,
+    });
+
+    let outcome: string | null = null;
+    await act(async () => {
+      outcome = await result.current.mutateAsync(REQUEST);
+    });
+    expect(outcome).toBe("gone");
+    expect(state.toastFromAuthError).not.toHaveBeenCalled();
+  });
+
+  it("toasts any other refusal under its own title", async () => {
+    state.binding?.auth.patchSandbox.mockResolvedValue(
+      refusal(409, "sandbox_transition_conflict"),
+    );
+    const { wrapper } = setup();
+    const { result } = renderHook(() => useSandboxPatch("sbx_1"), {
+      wrapper,
+    });
+
+    await act(async () => {
+      await expect(result.current.mutateAsync(REQUEST)).rejects.toThrow();
+    });
+    expect(state.toastFromAuthError.mock.lastCall?.[1]).toBe(
+      "Couldn't save the sandbox's settings.",
+    );
+  });
+});
+
+describe("useSandboxKeep", () => {
+  beforeEach(() => {
+    state.binding = createFakeSandboxBinding();
+    state.requestFleetRefresh.mockClear();
+    state.toastFromAuthError.mockClear();
+  });
+  afterEach(cleanup);
+
+  it("keeps its own sandbox and refreshes the lists and the cost view", async () => {
+    const { wrapper, invalidate } = setup();
+    const { result } = renderHook(() => useSandboxKeep("sbx_1"), {
+      wrapper,
+    });
+
+    let outcome: string | null = null;
+    await act(async () => {
+      outcome = await result.current.mutateAsync();
+    });
+
+    expect(state.binding?.auth.keepSandbox).toHaveBeenCalledWith("sbx_1");
+    expect(outcome).toBe("kept");
+    expect(state.binding?.directory.refresh).toHaveBeenCalledTimes(1);
+    expect(state.requestFleetRefresh).toHaveBeenCalledTimes(1);
+    expect(invalidatedKeys(invalidate)).toEqual([
+      REGISTERED_HOSTS_KEY,
+      COSTS_KEY,
+    ]);
+  });
+
+  it("resolves gone when the idle timer destroyed the row first, with no toast", async () => {
+    state.binding?.auth.keepSandbox.mockResolvedValue(
+      refusal(404, "sandbox_not_found"),
+    );
+    const { wrapper } = setup();
+    const { result } = renderHook(() => useSandboxKeep("sbx_1"), {
+      wrapper,
+    });
+
+    let outcome: string | null = null;
+    await act(async () => {
+      outcome = await result.current.mutateAsync();
+    });
+    expect(outcome).toBe("gone");
+    expect(state.toastFromAuthError).not.toHaveBeenCalled();
+  });
+});
+
 describe("useSandboxDestroy", () => {
   beforeEach(() => {
     state.binding = createFakeSandboxBinding();
@@ -572,6 +694,9 @@ const CREATE_REQUEST: SandboxCreateRequest = {
   createdByHostId: null,
   createdByAgentId: null,
   environmentId: null,
+  destroyAfterRestingMinutes: null,
+  createdByTaskId: null,
+  clientRequestId: null,
 };
 
 const CREATE_OK: SandboxCreateFetchResult = {

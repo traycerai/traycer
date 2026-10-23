@@ -21,6 +21,7 @@ function costRow(
     },
     pendingMillicredits: 0,
     segments: [],
+    todayMillicredits: 0,
     ...overrides,
   };
 }
@@ -29,7 +30,7 @@ function costsOf(
   awakeBurnMillicreditsPerHour: number,
   ...sandboxes: readonly SandboxCost[]
 ): UserSandboxCost {
-  return { sandboxes, awakeBurnMillicreditsPerHour };
+  return { sandboxes, awakeBurnMillicreditsPerHour, todayYoursMillicredits: 0 };
 }
 
 describe("sandboxCostsRefetchInterval", () => {

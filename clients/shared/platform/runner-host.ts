@@ -49,6 +49,7 @@ import type {
   SandboxAutomationOpenTarget,
   SandboxCreateRequest,
   SandboxLifecycleVerb,
+  SandboxPatchRequest,
 } from "@traycer/protocol/host/sandbox-control";
 import type { SelectionAuthorityClient } from "../host-selection/selection-authority-contract";
 import type { StoredCredentials } from "@traycer/protocol/config/credentials";
@@ -401,6 +402,15 @@ export interface IRunnerHost {
     request: SandboxCreateRequest,
   ): Promise<SandboxCreateFetchResult>;
   destroySandbox(
+    bearerToken: string,
+    sandboxId: string,
+  ): Promise<SandboxVerbFetchResult>;
+  patchSandbox(
+    bearerToken: string,
+    sandboxId: string,
+    request: SandboxPatchRequest,
+  ): Promise<SandboxVerbFetchResult>;
+  keepSandbox(
     bearerToken: string,
     sandboxId: string,
   ): Promise<SandboxVerbFetchResult>;
