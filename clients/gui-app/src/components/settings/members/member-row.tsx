@@ -1,0 +1,105 @@
+import type { ReactNode } from "react";
+import {
+  GAINED_EDITING_TAG,
+  PENDING_REMOVAL_LABEL,
+  REMOVE_LABEL,
+  REVOKE_LABEL,
+  ROLE_LABELS,
+  YOU_TAG,
+  memberDetailLine,
+  memberDisplayName,
+  memberRoleAriaLabel,
+} from "@/components/settings/members/copy";
+import type {
+  MembersListMember,
+  TeamRole,
+} from "@/components/settings/members/types";
+import { isTeamRole } from "@/components/settings/members/types";
+import { EnumSelect } from "@/components/settings/settings-enum-select";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+
+export function MemberRow(props: {
+  readonly member: MembersListMember;
+  readonly isSelf: boolean;
+  readonly isLastAdmin: boolean;
+  readonly viewerIsAdmin: boolean;
+  readonly gainedEditing: boolean;
+  readonly details: ReactNode;
+  readonly onRoleChange: (role: TeamRole) => void;
+  readonly onRemove: () => void;
+}): ReactNode {
+  const name = memberDisplayName(props.member);
+  const pending = props.member.inviteState === "pending";
+  const showRoleSelect = props.viewerIsAdmin && !props.isLastAdmin;
+  const showRemove =
+    props.viewerIsAdmin &&
+    !props.isLastAdmin &&
+    props.member.removalState !== "pending";
+  const actionLabel = pending ? REVOKE_LABEL : REMOVE_LABEL;
+  const detail = memberDetailLine(props.member, {
+    isSelf: props.isSelf,
+    isLastAdmin: props.isLastAdmin,
+    viewerIsAdmin: props.viewerIsAdmin,
+  });
+
+  return (
+    <li
+      className="flex flex-wrap items-center justify-between gap-2 border-b border-border/60 px-3 py-2 last:border-b-0"
+      data-testid="members-row"
+      data-member-id={props.member.userId}
+      data-invite-state={props.member.inviteState ?? "accepted"}
+      data-removal-state={props.member.removalState}
+    >
+      <div className="min-w-0">
+        <div className="flex flex-wrap items-center gap-1.5">
+          <span className="font-medium text-ui-sm">{name}</span>
+          {props.isSelf ? <Badge variant="muted">{YOU_TAG}</Badge> : null}
+          {props.gainedEditing ? (
+            <Badge variant="muted">{GAINED_EDITING_TAG}</Badge>
+          ) : null}
+          {props.member.removalState === "pending" ? (
+            <Badge variant="muted">{PENDING_REMOVAL_LABEL}</Badge>
+          ) : null}
+        </div>
+        {detail.length === 0 ? null : (
+          <p
+            className="max-w-[72ch] text-ui-xs text-muted-foreground"
+            data-testid={
+              props.isLastAdmin ? "members-last-admin-refusal" : undefined
+            }
+          >
+            {detail}
+          </p>
+        )}
+      </div>
+      <div className="flex flex-wrap items-center gap-2">
+        {showRoleSelect ? (
+          <EnumSelect
+            labels={ROLE_LABELS}
+            value={props.member.effectiveRole}
+            isValue={isTeamRole}
+            onValueChange={props.onRoleChange}
+            ariaLabel={memberRoleAriaLabel(name)}
+          />
+        ) : (
+          <span className="text-ui-sm text-muted-foreground">
+            {ROLE_LABELS[props.member.effectiveRole]}
+          </span>
+        )}
+        {showRemove ? (
+          <Button
+            type="button"
+            variant="muted-destructive"
+            size="sm"
+            onClick={props.onRemove}
+            data-testid={pending ? "members-revoke" : "members-remove"}
+          >
+            {actionLabel}
+          </Button>
+        ) : null}
+        {props.details}
+      </div>
+    </li>
+  );
+}

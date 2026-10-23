@@ -114,6 +114,10 @@ import {
   secretsNotificationDetail,
   type SecretsNotificationDetail,
 } from "@/lib/notifications/secrets-notification-detail";
+import {
+  environmentNotificationDetail,
+  type EnvironmentNotificationDetail,
+} from "@/lib/notifications/environment-notification-detail";
 import { useRunnerHostOrNull } from "@/providers/use-runner-host";
 
 export type MergedNotificationSource =
@@ -139,6 +143,8 @@ export interface MergedNotificationRow {
    * expiry), read from its typed payload. Absent or `null` on every other
    * row, and on a secrets row whose payload this build cannot read. */
   readonly secrets?: SecretsNotificationDetail | null;
+  /** Extra content for P2's five environment / team / secret-removed rows. */
+  readonly environmentDetail?: EnvironmentNotificationDetail | null;
   readonly hostKind: HostNotificationFeedEntry["kind"] | null;
   readonly appLocalKind: AppLocalNotificationEntry["kind"] | null;
   readonly globalEntry: NotificationEntry | null;
@@ -1762,6 +1768,7 @@ function rowFromHostEntryForOrigin(
     payload: payloadFromHostEntry(entry),
     agentSurface: agentSurfaceFromHostEntry(entry),
     secrets: secretsNotificationDetail(entry.kind, entry.payload),
+    environmentDetail: environmentNotificationDetail(entry.kind, entry.payload),
     hostKind: entry.kind,
     appLocalKind: null,
     globalEntry: null,
@@ -1787,6 +1794,7 @@ export function rowFromAppLocalEntry(
     title: entry.message,
     body: entry.detail ?? "Traycer notification",
     payload: entry.payload,
+    environmentDetail: null,
     hostKind: null,
     appLocalKind: entry.kind,
     globalEntry: null,
@@ -1812,6 +1820,7 @@ export function rowFromGlobalEntry(
     title: formatNotification(entry.event, undefined),
     body: "Collaboration",
     payload: buildPayloadFromEvent(entry.event),
+    environmentDetail: null,
     hostKind: null,
     appLocalKind: null,
     globalEntry: entry,
@@ -1848,6 +1857,10 @@ export function rowFromCloudFeedRow(
     payload: payloadFromHostEntry(row.entry),
     agentSurface: agentSurfaceFromHostEntry(row.entry),
     secrets: secretsNotificationDetail(row.entry.kind, row.entry.payload),
+    environmentDetail: environmentNotificationDetail(
+      row.entry.kind,
+      row.entry.payload,
+    ),
     hostKind: row.entry.kind,
     appLocalKind: null,
     globalEntry: null,

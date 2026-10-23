@@ -27,6 +27,7 @@ import {
   isTeamHostNotificationKind,
   type TeamHostNotificationKind,
 } from "@traycer/protocol/host/notifications/host-notifications";
+import { EnvironmentNotificationExtra } from "@/components/notifications/environment-notification-extra";
 import { SecretExportNoticeLine } from "@/components/notifications/secret-export-notice-line";
 import { SecretGrantRequestCard } from "@/components/notifications/secret-grant-request-card";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
@@ -312,10 +313,10 @@ export function NotificationRow(props: NotificationRowProps): ReactNode {
 }
 
 /**
- * A secrets row carries more than a title and a body: a grant request's
- * details and its three answers, or an export's expiry. They sit UNDER the
- * row's main area and never inside it, because that area is one button when
- * the row is navigable and the answers are buttons of their own.
+ * Extra content sits UNDER the row's main area and never inside it, because
+ * that area is one button when the row is navigable and the extra controls
+ * are buttons of their own. Secrets (grant / export) and P2's five
+ * environment rows share this wrapper.
  *
  * Every other row gets its main area back untouched, with no wrapper.
  */
@@ -324,20 +325,34 @@ function NotificationRowWithSecrets(props: {
   readonly children: ReactNode;
 }): ReactNode {
   const secrets = props.row.secrets ?? null;
-  if (secrets === null) return props.children;
+  const environmentDetail = props.row.environmentDetail ?? null;
+  if (secrets === null && environmentDetail === null) return props.children;
   return (
     <div className="flex min-w-0 flex-1 flex-col gap-1.5">
       {props.children}
-      {secrets.kind === "grant-request" ? (
-        <SecretGrantRequestCard
-          detail={secrets}
-          resolved={props.row.resolvedAt !== null}
-        />
-      ) : (
-        <SecretExportNoticeLine detail={secrets} />
+      <NotificationSecretsExtra
+        secrets={secrets}
+        resolved={props.row.resolvedAt !== null}
+      />
+      {environmentDetail === null ? null : (
+        <EnvironmentNotificationExtra detail={environmentDetail} />
       )}
     </div>
   );
+}
+
+function NotificationSecretsExtra(props: {
+  readonly secrets: MergedNotificationRow["secrets"];
+  readonly resolved: boolean;
+}): ReactNode {
+  const secrets = props.secrets ?? null;
+  if (secrets === null) return null;
+  if (secrets.kind === "grant-request") {
+    return (
+      <SecretGrantRequestCard detail={secrets} resolved={props.resolved} />
+    );
+  }
+  return <SecretExportNoticeLine detail={secrets} />;
 }
 
 function resolvePackRowPresentation(options: {

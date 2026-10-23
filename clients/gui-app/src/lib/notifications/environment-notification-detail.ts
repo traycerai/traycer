@@ -1,0 +1,109 @@
+import { parseKnownHostNotificationPayloadForKind } from "@traycer/protocol/host/notifications/payloads";
+import type { HostNotificationKind } from "@traycer/protocol/host/notifications/host-notifications";
+
+/**
+ * What a P2 environment / team / secret-removed row says beyond its title
+ * and body. Parsed once where the row is built, from the row's own typed
+ * payload. A payload this build cannot read has no detail and renders as
+ * any other row.
+ *
+ * `environmentId` on move.stalled / apply.failed is null until E3p's second
+ * commit puts it on those payloads; when the field is present it is kept.
+ */
+export type EnvironmentNotificationDetail =
+  | {
+      readonly kind: "team_role_changed";
+      readonly environmentId: string;
+      readonly teamName: string;
+      readonly from: string;
+      readonly to: string;
+    }
+  | {
+      readonly kind: "team_host_returned";
+      readonly environmentId: string;
+      readonly teamName: string;
+      readonly hostName: string;
+    }
+  | {
+      readonly kind: "environment_move_stalled";
+      readonly environmentId: string | null;
+      readonly hostId: string;
+      readonly hostName: string;
+      readonly remaining: number;
+      readonly reason: string;
+    }
+  | {
+      readonly kind: "environment_apply_failed";
+      readonly environmentId: string | null;
+      readonly hostId: string;
+      readonly hostName: string;
+      readonly itemKey: string;
+      readonly reason: string;
+    }
+  | {
+      readonly kind: "secret_removed";
+      readonly environmentId: string;
+      readonly secretName: string;
+      readonly outcome: "revoked" | "cleanup_requested" | "destroyed";
+    };
+
+export function environmentNotificationDetail(
+  kind: HostNotificationKind,
+  payload: unknown,
+): EnvironmentNotificationDetail | null {
+  const known = parseKnownHostNotificationPayloadForKind(kind, payload);
+  if (known === null) return null;
+  if (known.kind === "team_role_changed") {
+    return {
+      kind: "team_role_changed",
+      environmentId: known.environmentId,
+      teamName: known.teamName,
+      from: known.from,
+      to: known.to,
+    };
+  }
+  if (known.kind === "team_host_returned") {
+    return {
+      kind: "team_host_returned",
+      environmentId: known.environmentId,
+      teamName: known.teamName,
+      hostName: known.hostName,
+    };
+  }
+  if (known.kind === "environment_move_stalled") {
+    return {
+      kind: "environment_move_stalled",
+      environmentId: extraEnvironmentId(known),
+      hostId: known.hostId,
+      hostName: known.hostName,
+      remaining: known.remaining,
+      reason: known.reason,
+    };
+  }
+  if (known.kind === "environment_apply_failed") {
+    return {
+      kind: "environment_apply_failed",
+      environmentId: extraEnvironmentId(known),
+      hostId: known.hostId,
+      hostName: known.hostName,
+      itemKey: known.itemKey,
+      reason: known.reason,
+    };
+  }
+  if (known.kind === "secret_removed") {
+    return {
+      kind: "secret_removed",
+      environmentId: known.environmentId,
+      secretName: known.secretName,
+      outcome: known.outcome,
+    };
+  }
+  return null;
+}
+
+function extraEnvironmentId(known: object): string | null {
+  if (!("environmentId" in known)) return null;
+  const value = known.environmentId;
+  if (typeof value !== "string" || value.length === 0) return null;
+  return value;
+}
