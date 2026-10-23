@@ -346,6 +346,8 @@ function createBaseRunnerHost(): IRunnerHost {
       Promise.resolve({ kind: "unauthorized" as const }),
     createSandbox: () => Promise.resolve({ kind: "unauthorized" as const }),
     destroySandbox: () => Promise.resolve({ kind: "unauthorized" as const }),
+    patchSandbox: () => Promise.resolve({ kind: "unauthorized" as const }),
+    keepSandbox: () => Promise.resolve({ kind: "unauthorized" as const }),
     runSandboxVerb: () => Promise.resolve({ kind: "unauthorized" as const }),
     getSandboxAutomation: () =>
       Promise.resolve({ kind: "unauthorized" as const }),
