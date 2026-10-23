@@ -173,7 +173,8 @@ function BotConversationComposer(props: {
   const submit = (): void => {
     if (!canSend) return;
     send.mutate(
-      { botId, conversationId, text: trimmed },
+      // A top-level post: the host opens its thread (T41).
+      { botId, conversationId, text: trimmed, threadId: null },
       {
         onSuccess: (response) => {
           setText("");

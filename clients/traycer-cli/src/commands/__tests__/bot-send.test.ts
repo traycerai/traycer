@@ -20,6 +20,7 @@ import {
   REPLY_MESSAGE_ID,
   REQUEST_ID,
   THIS_HOST_ID,
+  THREAD_ID,
   FakeStreamClient,
   type FakeStreamSession,
   assistantRow,
@@ -112,6 +113,7 @@ function stageSend(input: {
       "bot.conversation.send": () => ({
         messageId: "msg-sent",
         requestId: REQUEST_ID,
+        threadId: THREAD_ID,
         delivery: input.delivery,
       }),
     }),
@@ -183,6 +185,7 @@ describe("bot send", () => {
       conversationId: "conv-first",
       messageId: "msg-sent",
       requestId: REQUEST_ID,
+      threadId: THREAD_ID,
       delivery: "written",
     });
     expect(result.exitCode).toBe(0);
@@ -514,6 +517,7 @@ describe("bot send --wait", () => {
       conversationId: CONVERSATION_ID,
       messageId: "msg-sent",
       requestId: REQUEST_ID,
+      threadId: THREAD_ID,
       delivery: "written",
       outcome: {
         kind: "replied",

@@ -100,6 +100,7 @@ export function buildBotSendCommand(opts: {
       botId: bot.botId,
       conversationId,
       text: opts.text,
+      threadId: null,
     });
     const sent = parseCanonicalHostResponse(
       "bot.conversation.send",
@@ -112,6 +113,7 @@ export function buildBotSendCommand(opts: {
       conversationId,
       messageId: sent.messageId,
       requestId: sent.requestId,
+      threadId: sent.threadId,
       delivery: sent.delivery,
     };
     if (waitMs === null) {

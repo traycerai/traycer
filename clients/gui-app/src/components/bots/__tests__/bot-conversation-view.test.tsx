@@ -20,6 +20,7 @@ const mocks = vi.hoisted(() => {
         botId: string;
         conversationId: string;
         text: string;
+        threadId: string | null;
       }) => void
     >(),
     state: {
@@ -53,11 +54,17 @@ vi.mock("@/hooks/bots/use-bot-mutations", () => ({
     isPending: false,
     error: null,
     mutate: (
-      variables: { botId: string; conversationId: string; text: string },
+      variables: {
+        botId: string;
+        conversationId: string;
+        text: string;
+        threadId: string | null;
+      },
       options: {
         onSuccess: (response: {
           messageId: string;
           requestId: string;
+          threadId: string;
           delivery: BotConversationSendDelivery;
         }) => void;
       },
@@ -66,6 +73,7 @@ vi.mock("@/hooks/bots/use-bot-mutations", () => ({
       options.onSuccess({
         messageId: "message-1",
         requestId: "request-1",
+        threadId: "thread-1",
         delivery: mocks.state.delivery,
       });
     },
@@ -153,6 +161,7 @@ describe("<BotConversationView /> composer", () => {
       botId: BOT_ID,
       conversationId: "conversation-app",
       text: "Please check the release",
+      threadId: null,
     });
     const input = screen.getByTestId("bot-conversation-input");
     if (!(input instanceof HTMLTextAreaElement)) {
