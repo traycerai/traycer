@@ -90,7 +90,9 @@ export const READONLY_REFUSED_COMMANDS: Readonly<Record<string, string>> = {
   "agent role claim": "this session can list role claims but cannot make one.",
   "agent role relinquish":
     "this session can list role claims but cannot release one.",
-  "bot send":
+  "bot post":
+    "this session can read bots but cannot message them - report the message to the user instead.",
+  "bot reply":
     "this session can read bots but cannot message them - report the message to the user instead.",
   "worktree delete":
     "remove worktrees from Settings ▸ Worktrees, or run this from a full-surface session.",
