@@ -157,9 +157,23 @@ export type BotCreateResponse = z.infer<typeof botCreateResponseSchema>;
 export const botListRequestSchema = lazySchema(() => z.object({}));
 export type BotListRequest = z.infer<typeof botListRequestSchema>;
 
+/** `bot.list@1.0`'s response, frozen: the rows alone. */
+export const botListResponseSchemaV10 = lazySchema(() =>
+  z.object({
+    bots: z.array(botRecordSchema),
+  }),
+);
+
+/**
+ * `bot.list@1.1` adds each environment's main bot (decision 30): environment
+ * id to bot id, for every listed environment with a live bot. `null` when the
+ * answering host predates it (a `1.0` response upgraded), which says nothing
+ * about which bot is main.
+ */
 export const botListResponseSchema = lazySchema(() =>
   z.object({
     bots: z.array(botRecordSchema),
+    mainBotIds: z.record(z.string().min(1), botIdSchema).nullable(),
   }),
 );
 export type BotListResponse = z.infer<typeof botListResponseSchema>;

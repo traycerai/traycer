@@ -15,6 +15,7 @@ import type {
   ChatQueuedManagedCommandItem,
   ChatQueuedPortForwardItem,
   ChatQueuedTaskCheckinItem,
+  ChatQueuedMemoryCurationItem,
   ChatQueuedTaskOverdueItem,
   ChatRunSettings,
 } from "@traycer/protocol/host/agent/gui/subscribe";
@@ -1432,6 +1433,121 @@ describe("<QueuedMessagePanel />", () => {
     ).toBeNull();
   });
 
+  it("renders a memory-curation item as a describable, dismissable Memory chip", () => {
+    renderPanel({
+      queue: queueState([
+        queuedItem("queue-user", "User prompt", "pending"),
+        memoryCurationQueuedItem("queue-memory", "Memory over its limit"),
+      ]),
+      readOnly: false,
+      canAct: true,
+      onReorder: null,
+    });
+
+    const memoryRow = screen.getAllByTestId("queued-message-row")[1];
+
+    expect(within(memoryRow).getByText("Memory over its limit")).not.toBeNull();
+    expect(
+      within(memoryRow).getByTestId("queued-memory-curation-badge").textContent,
+    ).toBe("Memory");
+
+    // Never editable, never hand-steerable.
+    expect(
+      within(memoryRow).queryByRole("button", { name: "Edit queued message" }),
+    ).toBeNull();
+    expect(
+      within(memoryRow).queryByRole("button", {
+        name: "Steer queued message now",
+      }),
+    ).toBeNull();
+
+    fireEvent.click(
+      within(memoryRow).getByRole("button", { name: "Dismiss memory notice" }),
+    );
+    expect(onCancelSpy).toHaveBeenCalledTimes(1);
+    expect(onCancelSpy.mock.calls[0]?.[0]).toMatchObject({
+      queueItemId: "queue-memory",
+      kind: "memory-curation",
+    });
+  });
+
+  it("keeps the Memory chip off the other host-authored rows, and theirs off its row", () => {
+    renderPanel({
+      queue: queueState([
+        taskCheckinQueuedItem("queue-checkin", "Check-in on 2 tasks"),
+        taskOverdueQueuedItem("queue-overdue", "Task overdue notice"),
+        memoryCurationQueuedItem("queue-memory", "Memory over its limit"),
+      ]),
+      readOnly: false,
+      canAct: true,
+      onReorder: null,
+    });
+
+    const [checkinRow, overdueRow, memoryRow] =
+      screen.getAllByTestId("queued-message-row");
+    expect(screen.getAllByTestId("queued-memory-curation-badge")).toHaveLength(
+      1,
+    );
+    expect(
+      within(memoryRow).getByTestId("queued-memory-curation-badge"),
+    ).not.toBeNull();
+    expect(
+      within(checkinRow).queryByRole("button", {
+        name: "Dismiss memory notice",
+      }),
+    ).toBeNull();
+    expect(
+      within(overdueRow).queryByRole("button", {
+        name: "Dismiss memory notice",
+      }),
+    ).toBeNull();
+    expect(
+      within(memoryRow).queryByTestId("queued-task-checkin-badge"),
+    ).toBeNull();
+    expect(
+      within(memoryRow).queryByTestId("queued-task-overdue-badge"),
+    ).toBeNull();
+  });
+
+  it("labels a steering memory-curation item Delivering and closes its dismiss lever", () => {
+    renderPanel({
+      queue: queueState([
+        {
+          ...memoryCurationQueuedItem("queue-memory", "Memory over its limit"),
+          status: "steering",
+        },
+      ]),
+      readOnly: false,
+      canAct: true,
+      onReorder: null,
+    });
+
+    const memoryRow = screen.getByTestId("queued-message-row");
+    expect(within(memoryRow).getByText("Delivering")).not.toBeNull();
+    expect(
+      within(memoryRow).queryByRole("button", { name: /cancel|dismiss/i }),
+    ).toBeNull();
+  });
+
+  it.each([
+    ["read-only mode", { readOnly: true, canAct: true }],
+    ["a viewer who cannot act", { readOnly: false, canAct: false }],
+  ])("hides the memory-curation dismiss action in %s", (_name, access) => {
+    renderPanel({
+      queue: queueState([
+        memoryCurationQueuedItem("queue-memory", "Memory over its limit"),
+      ]),
+      ...access,
+      onReorder: null,
+    });
+
+    expect(
+      within(screen.getByTestId("queued-message-row")).queryByRole("button", {
+        name: "Dismiss memory notice",
+      }),
+    ).toBeNull();
+  });
+
   it("does not label a received A2A response with the user steer affordance", () => {
     renderPanel({
       queue: queueState([
@@ -2102,6 +2218,22 @@ function taskOverdueQueuedItem(
 ): ChatQueuedTaskOverdueItem {
   return {
     kind: "task-overdue",
+    queueItemId,
+    description,
+    delivery: "next_turn",
+    targetTurnId: null,
+    status: "pending",
+    createdAt: 1,
+    updatedAt: 1,
+  };
+}
+
+function memoryCurationQueuedItem(
+  queueItemId: string,
+  description: string,
+): ChatQueuedMemoryCurationItem {
+  return {
+    kind: "memory-curation",
     queueItemId,
     description,
     delivery: "next_turn",

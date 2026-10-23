@@ -50,9 +50,15 @@ export function BotChannelSidebar(props: {
   const bindings = useHostEnvironmentBindings(connectable.hostIds, true);
   const environmentList = environments.data?.environments ?? EMPTY_ENVIRONMENTS;
   const botList = bots.data?.bots ?? EMPTY_BOTS;
+  const mainBotIds = bots.data?.mainBotIds ?? null;
   const model = useMemo(
-    () => buildHomeBotsModel({ environments: environmentList, bots: botList }),
-    [botList, environmentList],
+    () =>
+      buildHomeBotsModel({
+        environments: environmentList,
+        bots: botList,
+        mainBotIds,
+      }),
+    [botList, environmentList, mainBotIds],
   );
   const botIds = useMemo(() => botList.map((bot) => bot.botId), [botList]);
   // A bot's id is its container's, a shared cloud entity, so the
