@@ -122,12 +122,17 @@ function selectedExternalCandidateRunnable(
 export function providerPackPreparingForProvider(
   provider: ProviderCliState,
 ): ProviderPackPreparing | null {
-  const selected = provider.selected;
-  const line = selected.kind === "bundled" ? (selected.line ?? 2) : 2;
   const managedLine =
     provider.providerId === "opencode" &&
+    provider.managedLines !== undefined &&
     !selectedExternalCandidateRunnable(provider)
-      ? provider.managedLines?.find((entry) => entry.line === line)
+      ? provider.managedLines.find(
+          (entry) =>
+            entry.line ===
+            (provider.selected.kind === "bundled"
+              ? (provider.selected.line ?? 2)
+              : 2),
+        )
       : undefined;
   const state =
     managedLine === undefined
@@ -196,6 +201,7 @@ export function providerPackPreparingByHarnessId(
   for (const provider of providers) {
     const preparing = providerPackPreparingForProvider(
       provider.providerId === "opencode" &&
+        provider.managedLines !== undefined &&
         opencodeLine !== null &&
         !selectedExternalCandidateRunnable(provider)
         ? { ...provider, selected: { kind: "bundled", line: opencodeLine } }

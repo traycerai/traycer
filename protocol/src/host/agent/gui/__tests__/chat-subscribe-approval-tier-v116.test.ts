@@ -27,6 +27,7 @@ import {
   chatSubscribeV132,
   chatSubscribeV133,
   chatSubscribeV134,
+  chatSubscribeV135,
   chatSubscribeWindowedServerFrameSchema,
   openChatSubscribeWindowedServerFrameSchema,
 } from "@traycer/protocol/host/agent/gui/subscribe";
@@ -59,9 +60,11 @@ function approvalRequestedFrame(
 }
 
 describe("chat.subscribe registry: 1.16 installed below the 1.17 through 1.22 lines, 1.15 still installed", () => {
-  it("binds 1.16 and 1.15 to their own contracts - the head has since moved to 1.34", () => {
+  it("binds 1.16 and 1.15 to their own contracts - the head has since moved to 1.35", () => {
     const line = hostStreamRpcRegistry["chat.subscribe"][1];
-    expect(line.latestMinor).toBe(34);
+    expect(line.latestMinor).toBe(35);
+    expect(line.versions[35].contract).toBe(chatSubscribeV135);
+    expect(line.versions[34].contract).toBe(chatSubscribeV134);
     expect(line.versions[23].contract).toBe(chatSubscribeV123);
     expect(line.versions[22].contract).toBe(chatSubscribeV122);
     expect(line.versions[21].contract).toBe(chatSubscribeV121);
@@ -73,7 +76,7 @@ describe("chat.subscribe registry: 1.16 installed below the 1.17 through 1.22 li
     expect(line.versions[15].contract).toBe(chatSubscribeV115);
   });
 
-  it("1.34's server frame is the open windowed schema; older lines are frozen", () => {
+  it("1.34's and 1.35's server frames are the open windowed schema; older lines are frozen", () => {
     expect(chatSubscribeV124.serverFrameSchema).not.toBe(
       openChatSubscribeWindowedServerFrameSchema,
     );
@@ -115,6 +118,10 @@ describe("chat.subscribe registry: 1.16 installed below the 1.17 through 1.22 li
       openChatSubscribeWindowedServerFrameSchema,
     );
     expect(chatSubscribeV134.serverFrameSchema).toBe(
+      openChatSubscribeWindowedServerFrameSchema,
+    );
+    // 1.35 has 1.34's frames and binds the same live windowed schema.
+    expect(chatSubscribeV135.serverFrameSchema).toBe(
       openChatSubscribeWindowedServerFrameSchema,
     );
     expect(chatSubscribeV123.serverFrameSchema).not.toBe(

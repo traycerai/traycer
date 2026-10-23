@@ -820,6 +820,22 @@ describe("downgradeProviderCliStateToV10 strips every later-than-v1.0 field", ()
       cliBinaryResolved: false,
       autoJudge: "traycer",
       nativeSubagents: true,
+      managedLines: [
+        {
+          line: 1,
+          candidate: {
+            kind: "bundled",
+            path: "",
+            version: null,
+            available: false,
+            versionPending: false,
+          },
+          packId: null,
+          managedInstallState: null,
+          managedVersions: null,
+          managedVersionsUnavailable: null,
+        },
+      ],
       macosRequirement: {
         runningMacos: "13.6",
         managed: { requiredMacos: "14.0" },

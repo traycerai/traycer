@@ -5152,6 +5152,8 @@ export type DowngradableToV10ProviderState = (
   macosRequirement?: ProviderCliState["macosRequirement"];
   // (v10.5) per-provider native subagent setting, absent from earlier rows.
   nativeSubagents?: ProviderCliState["nativeSubagents"];
+  // (v10.6) OpenCode's per-line managed packs, absent from earlier rows.
+  managedLines?: ProviderCliState["managedLines"];
   // `V70` is named explicitly rather than left to ride the `V10` arm on the
   // strength of structural width: the v7.0 and v8.0 list lines are pinned to
   // `providerLoginCapabilitySchemaV70`, so that is the concrete shape those
@@ -5184,6 +5186,7 @@ export function downgradeProviderCliStateToV10(
   // - `cliBinaryResolved` — the binary-absent explanation field.
   // - `macosRequirement` (v10.2) — list-only host macOS requirements.
   // - `nativeSubagents` (v10.5) — the per-provider native subagent setting.
+  // - `managedLines` (v10.6) — OpenCode's per-line managed packs.
   // - `packId` / `managedVersions` / `managedVersionsUnavailable` /
   //   `nextRunBinary` (v7.0) — the version manager. Same trap, and it is worth
   //   restating rather than assuming the list above covers it: this parse is
@@ -5224,6 +5227,7 @@ export function downgradeProviderCliStateToV10(
     macosRequirement: _macosRequirement,
     // (v10.5) the per-provider native subagent setting.
     nativeSubagents: _nativeSubagents,
+    managedLines: _managedLines,
     ...rest
   } = state;
   const parsed = providerCliStateSchemaV10.safeParse({
