@@ -11,8 +11,19 @@ import {
 import { TextSegment } from "@/components/chat/segments/text-segment";
 import { BotChatTranscript } from "@/components/bots/bot-chat-transcript";
 import { BotMessageComposer } from "@/components/bots/bot-message-composer";
+import { BotReadFailure } from "@/components/bots/bot-read-failure";
 import { formatUsd } from "@/lib/usage-analytics/cost-format";
 import type { BotMemberResolver } from "@/lib/bots/bot-member-names";
+
+/**
+ * The open post's thread as the channel's thread list has it: listed; not
+ * listed yet, as a just-posted thread is until the next read; or unknown,
+ * because the read failed.
+ */
+export type BotThreadPanelThread =
+  | { readonly kind: "listed"; readonly thread: BotThreadSummary }
+  | { readonly kind: "pending" }
+  | { readonly kind: "failed"; readonly retry: () => void };
 
 /**
  * A thread of a bot's channel, in Slack's thread panel (Tracy Bots): the
@@ -27,8 +38,7 @@ export function BotThreadPanel(props: {
   readonly botId: string;
   readonly hostId: string;
   readonly botTitle: string;
-  /** The listed thread; `null` while a post's thread is not listed yet. */
-  readonly thread: BotThreadSummary | null;
+  readonly thread: BotThreadPanelThread;
   /** The viewer's own name for their posts, as the channel shows them. */
   readonly anchorSenderLabel: (senderUserId: string | null) => string;
   readonly resolveMember: BotMemberResolver;
@@ -39,12 +49,12 @@ export function BotThreadPanel(props: {
     botId,
     hostId,
     botTitle,
-    thread,
     anchorSenderLabel,
     resolveMember,
     onClose,
     onOpenUnderTheHood,
   } = props;
+  const thread = props.thread.kind === "listed" ? props.thread.thread : null;
   return (
     <section
       aria-label="Thread"
@@ -91,17 +101,7 @@ export function BotThreadPanel(props: {
         </Button>
       </header>
       {thread === null ? (
-        <div
-          className="flex flex-1 items-center justify-center py-10 text-muted-foreground"
-          aria-busy="true"
-          data-testid="bot-thread-loading"
-        >
-          <AgentSpinningDots
-            className={undefined}
-            testId={undefined}
-            variant={undefined}
-          />
-        </div>
+        <UnlistedThread thread={props.thread} />
       ) : (
         <>
           <div className="flex shrink-0 flex-col gap-2 px-2 pt-2">
@@ -153,6 +153,36 @@ export function BotThreadPanel(props: {
 }
 
 const THREAD_SURFACE = { kind: "thread" } as const;
+
+/** A thread the list cannot show yet: waited for, or failed to read. */
+function UnlistedThread(props: {
+  readonly thread: BotThreadPanelThread;
+}): ReactNode {
+  if (props.thread.kind === "failed") {
+    return (
+      <div className="p-4">
+        <BotReadFailure
+          message="Couldn't load this thread."
+          onRetry={props.thread.retry}
+          testId="bot-thread-error"
+        />
+      </div>
+    );
+  }
+  return (
+    <div
+      className="flex flex-1 items-center justify-center py-10 text-muted-foreground"
+      aria-busy="true"
+      data-testid="bot-thread-loading"
+    >
+      <AgentSpinningDots
+        className={undefined}
+        testId={undefined}
+        variant={undefined}
+      />
+    </div>
+  );
+}
 
 /** The post the thread answers, drawn as the channel draws it. */
 function ThreadAnchor(props: {

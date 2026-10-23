@@ -490,6 +490,27 @@ describe("useRenderedMessages bot rows", () => {
     expect(row?.announcement).toEqual(announcement);
   });
 
+  it("keeps an announcement made mid-turn when the turn's records merge into one row", () => {
+    const announcement: BotAnnouncement = { kind: "policy", link: null };
+    const inTurn = (
+      record: Extract<Message, { role: "assistant" }>,
+    ): Extract<Message, { role: "assistant" }> => ({
+      ...record,
+      turnId: "turn-1",
+    });
+    const { result } = renderRows([
+      inTurn(assistantRecord("m-1", undefined)),
+      inTurn(assistantRecord("m-2", announcement)),
+      inTurn(assistantRecord("m-3", undefined)),
+    ]);
+
+    const rows = result.current.filter(
+      (candidate) => candidate.role === "assistant",
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0].announcement).toEqual(announcement);
+  });
+
   it("leaves the key absent on an assistant row that announces nothing", () => {
     const { result } = renderRows([assistantRecord("m-plain", undefined)]);
 

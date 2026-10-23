@@ -3,11 +3,18 @@ import { useNavigate } from "@tanstack/react-router";
 import { useStore } from "zustand";
 import { useShallow } from "zustand/react/shallow";
 import type { BotTaskEntry } from "@traycer/protocol/host/bot/schemas";
-import type { BotThreadSummary } from "@traycer/protocol/host/bot/conversation-schemas";
+import type { UseQueryResult } from "@tanstack/react-query";
+import type {
+  BotThreadListResponse,
+  BotThreadSummary,
+} from "@traycer/protocol/host/bot/conversation-schemas";
+import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { BackgroundItemsPanel } from "@/components/chat/chat-background-items-panel";
 import { BotChatTranscript } from "@/components/bots/bot-chat-transcript";
+import { BotReadFailure } from "@/components/bots/bot-read-failure";
 import { UNRESOLVED_BOT_MEMBERS } from "@/lib/bots/bot-member-names";
 import { BotTranscriptPaused } from "@/components/bots/bot-transcript-paused";
 import { useEpicGetTaskContexts } from "@/hooks/epic/use-epic-get-task-contexts-query";
@@ -87,10 +94,12 @@ export function BotUnderTheHoodPanel(props: {
     onSelectSession,
   } = props;
   const client = useTabHostClient();
+  // Threads are listed by the bound host, and only by one that has the list.
   const threadListSupported =
     useHostMethodSupport(hostId, "bot.thread.list") === true;
+  const threadListEnabled = !paused && threadListSupported;
   const threadList = useBotThreadListQuery(client, botId, {
-    enabled: !paused && threadListSupported,
+    enabled: threadListEnabled,
     poll: false,
   });
   const threads = threadList.data?.threads ?? EMPTY_THREADS;
@@ -113,13 +122,13 @@ export function BotUnderTheHoodPanel(props: {
           {usageSupported ? (
             <BotCostSection costs={costs} environmentLabel={environmentLabel} />
           ) : null}
-          {paused ? null : (
+          {threadListEnabled ? (
             <BotThreadsList
-              threads={threads}
+              threadList={threadList}
               sessionChatId={sessionChatId}
               onSelectSession={onSelectSession}
             />
-          )}
+          ) : null}
           <BotTasksList tasks={tasks} />
           {paused ? null : (
             <BotTrunkState
@@ -236,11 +245,10 @@ function CostRow(props: {
  * and its cost when known. Choosing one shows its session's transcript.
  */
 function BotThreadsList(props: {
-  readonly threads: ReadonlyArray<BotThreadSummary>;
+  readonly threadList: UseQueryResult<BotThreadListResponse, HostRpcError>;
   readonly sessionChatId: string | null;
   readonly onSelectSession: (sessionChatId: string) => void;
 }): ReactNode {
-  const { threads, sessionChatId, onSelectSession } = props;
   return (
     <section
       aria-label="Threads"
@@ -250,49 +258,87 @@ function BotThreadsList(props: {
       <h3 className="text-ui-xs tracking-[0.08em] text-muted-foreground uppercase">
         Threads
       </h3>
-      {threads.length === 0 ? (
-        <p className="py-1 text-ui-xs text-muted-foreground">No threads yet.</p>
-      ) : (
-        <ul className="flex flex-col gap-1">
-          {threads.map((thread) => (
-            <li key={thread.threadId}>
-              <button
-                type="button"
-                data-testid="bot-thread-row"
-                data-session-chat-id={thread.sessionChatId}
-                aria-current={
-                  thread.sessionChatId === sessionChatId ? "true" : undefined
-                }
-                onClick={() => onSelectSession(thread.sessionChatId)}
-                className={cn(
-                  "flex w-full flex-col gap-0.5 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-foreground/6 focus-visible:outline-2 focus-visible:outline-ring focus-visible:-outline-offset-2",
-                  thread.sessionChatId === sessionChatId && "bg-foreground/6",
-                )}
-              >
-                <span className="truncate text-ui-sm text-foreground">
-                  {threadExcerpt(thread)}
-                </span>
-                <span className="flex flex-wrap gap-x-2 text-ui-xs text-muted-foreground">
-                  <span>
-                    {thread.replyCount === 1
-                      ? "1 reply"
-                      : `${thread.replyCount} replies`}
-                  </span>
-                  {thread.costUsd === null ? null : (
-                    <span
-                      className="tabular-nums"
-                      data-testid="bot-thread-row-cost"
-                    >
-                      {formatUsd(thread.costUsd)}
-                    </span>
-                  )}
-                </span>
-              </button>
-            </li>
-          ))}
-        </ul>
-      )}
+      <BotThreadsListBody {...props} />
     </section>
+  );
+}
+
+/** The list once it has answered, and what stands in until it has. */
+function BotThreadsListBody(props: {
+  readonly threadList: UseQueryResult<BotThreadListResponse, HostRpcError>;
+  readonly sessionChatId: string | null;
+  readonly onSelectSession: (sessionChatId: string) => void;
+}): ReactNode {
+  const { threadList, sessionChatId, onSelectSession } = props;
+  const threads = threadList.data?.threads;
+  if (threads === undefined) {
+    if (threadList.isError) {
+      return (
+        <BotReadFailure
+          message="Couldn't load the threads."
+          onRetry={() => void threadList.refetch()}
+          testId="bot-threads-error"
+        />
+      );
+    }
+    return (
+      <div
+        className="py-1 text-muted-foreground"
+        aria-busy="true"
+        data-testid="bot-threads-loading"
+      >
+        <AgentSpinningDots
+          className={undefined}
+          testId={undefined}
+          variant={undefined}
+        />
+      </div>
+    );
+  }
+  if (threads.length === 0) {
+    return (
+      <p className="py-1 text-ui-xs text-muted-foreground">No threads yet.</p>
+    );
+  }
+  return (
+    <ul className="flex flex-col gap-1">
+      {threads.map((thread) => (
+        <li key={thread.threadId}>
+          <button
+            type="button"
+            data-testid="bot-thread-row"
+            data-session-chat-id={thread.sessionChatId}
+            aria-current={
+              thread.sessionChatId === sessionChatId ? "true" : undefined
+            }
+            onClick={() => onSelectSession(thread.sessionChatId)}
+            className={cn(
+              "flex w-full flex-col gap-0.5 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-foreground/6 focus-visible:outline-2 focus-visible:outline-ring focus-visible:-outline-offset-2",
+              thread.sessionChatId === sessionChatId && "bg-foreground/6",
+            )}
+          >
+            <span className="truncate text-ui-sm text-foreground">
+              {threadExcerpt(thread)}
+            </span>
+            <span className="flex flex-wrap gap-x-2 text-ui-xs text-muted-foreground">
+              <span>
+                {thread.replyCount === 1
+                  ? "1 reply"
+                  : `${thread.replyCount} replies`}
+              </span>
+              {thread.costUsd === null ? null : (
+                <span
+                  className="tabular-nums"
+                  data-testid="bot-thread-row-cost"
+                >
+                  {formatUsd(thread.costUsd)}
+                </span>
+              )}
+            </span>
+          </button>
+        </li>
+      ))}
+    </ul>
   );
 }
 

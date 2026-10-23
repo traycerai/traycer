@@ -65,7 +65,8 @@ export type BotTranscriptSurface =
       readonly kind: "channel";
       /** The thread line under a post, by the post's message id. */
       readonly threadLine: (postMessageId: string) => ChatBotThreadLine | null;
-      readonly openThread: (postMessageId: string) => void;
+      /** Opens a post's thread; `null` where threads cannot be opened. */
+      readonly openThread: ((postMessageId: string) => void) | null;
     }
   | { readonly kind: "thread" };
 

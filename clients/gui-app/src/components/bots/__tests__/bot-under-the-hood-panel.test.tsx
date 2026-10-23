@@ -20,10 +20,15 @@ const mocks = vi.hoisted(() => {
   const answers: Record<string, UsageAnswer> = {};
   return {
     client: { stub: "tab-host-client" },
+    refetchThreads: vi.fn<() => void>(),
     state: {
       usageSupported: true,
       answers,
       threads: [] as BotThreadSummary[],
+      threadListSupported: true,
+      // `false`: the thread list has not answered (pending, or failed).
+      threadListAnswered: true,
+      threadListError: false,
     },
   };
 });
@@ -38,13 +43,19 @@ vi.mock("@/hooks/host/use-tab-host-client", () => ({
   useTabHostClient: () => mocks.client,
 }));
 vi.mock("@/hooks/host/use-host-supports-method", () => ({
-  useHostMethodSupport: () => true,
+  useHostMethodSupport: () => mocks.state.threadListSupported,
 }));
 vi.mock("@/hooks/usage-analytics/use-usage-summary-support", () => ({
   useUsageSummarySupported: () => mocks.state.usageSupported,
 }));
 vi.mock("@/hooks/bots/use-bot-thread-list-query", () => ({
-  useBotThreadListQuery: () => ({ data: { threads: mocks.state.threads } }),
+  useBotThreadListQuery: () => ({
+    data: mocks.state.threadListAnswered
+      ? { threads: mocks.state.threads }
+      : undefined,
+    isError: mocks.state.threadListError,
+    refetch: mocks.refetchThreads,
+  }),
 }));
 vi.mock("@/hooks/epic/use-epic-get-task-contexts-query", () => ({
   useEpicGetTaskContexts: () => ({ tasksById: new Map() }),
@@ -160,6 +171,9 @@ beforeEach(() => {
   mocks.state.usageSupported = true;
   mocks.state.answers = {};
   mocks.state.threads = [];
+  mocks.state.threadListSupported = true;
+  mocks.state.threadListAnswered = true;
+  mocks.state.threadListError = false;
 });
 
 afterEach(() => {
@@ -263,5 +277,37 @@ describe("<BotUnderTheHoodPanel /> sessions", () => {
     );
     expect(within(second).getByText("4 replies")).toBeTruthy();
     expect(within(second).queryByTestId("bot-thread-row-cost")).toBeNull();
+  });
+});
+
+describe("<BotUnderTheHoodPanel /> thread list unavailable", () => {
+  it("lists no threads on a host without the thread list", () => {
+    mocks.state.threadListSupported = false;
+    mocks.state.threadListAnswered = false;
+    render(<Panel sessionChatId={null} onSelectSession={vi.fn()} />);
+
+    expect(screen.queryByTestId("bot-threads")).toBeNull();
+  });
+
+  it("says the thread list failed, not that there are no threads, and reads it again on Retry", async () => {
+    const user = userEvent.setup();
+    mocks.state.threadListAnswered = false;
+    mocks.state.threadListError = true;
+    render(<Panel sessionChatId={null} onSelectSession={vi.fn()} />);
+
+    const threads = screen.getByTestId("bot-threads");
+    expect(within(threads).queryByText("No threads yet.")).toBeNull();
+    const failure = within(threads).getByTestId("bot-threads-error");
+    await user.click(within(failure).getByRole("button", { name: "Retry" }));
+    expect(mocks.refetchThreads).toHaveBeenCalledTimes(1);
+  });
+
+  it("waits for the thread list before saying there are none", () => {
+    mocks.state.threadListAnswered = false;
+    render(<Panel sessionChatId={null} onSelectSession={vi.fn()} />);
+
+    const threads = screen.getByTestId("bot-threads");
+    expect(within(threads).getByTestId("bot-threads-loading")).toBeTruthy();
+    expect(within(threads).queryByText("No threads yet.")).toBeNull();
   });
 });

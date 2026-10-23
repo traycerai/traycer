@@ -6,7 +6,7 @@
  * each post, the chat the thread panel reads, and where each box writes.
  */
 import type { ReactNode } from "react";
-import { cleanup, render, screen, within } from "@testing-library/react";
+import { act, cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import {
   afterEach,
@@ -39,6 +39,7 @@ const mocks = vi.hoisted(() => {
   return {
     client: { stub: "tab-host-client" },
     markRead: vi.fn<(entity: { epicId: string; chatId: string }) => void>(),
+    refetchThreads: vi.fn<() => void>(),
     markReadMutation: {
       mutate: (entity: { epicId: string; chatId: string }): void => {
         mocks.markRead(entity);
@@ -55,6 +56,9 @@ const mocks = vi.hoisted(() => {
       threadListSupported: true,
       conversations: [] as Array<{ conversationId: string; createdAt: number }>,
       threads: [] as BotThreadSummary[],
+      // `false`: the thread list has not answered (pending, or failed).
+      threadListAnswered: true,
+      threadListError: false,
       chats,
     },
   };
@@ -83,7 +87,13 @@ vi.mock("@/hooks/bots/use-bot-thread-list-query", () => ({
     args: { enabled: boolean; poll: boolean },
   ) => {
     mocks.threadListCalls.push({ botId, ...args });
-    return { data: { threads: mocks.state.threads } };
+    return {
+      data: mocks.state.threadListAnswered
+        ? { threads: mocks.state.threads }
+        : undefined,
+      isError: mocks.state.threadListError,
+      refetch: mocks.refetchThreads,
+    };
   },
 }));
 vi.mock("@/hooks/notifications/use-notification-indicators-query", () => ({
@@ -139,9 +149,10 @@ vi.mock("@/components/bots/bot-message-composer", () => ({
 function PostStub(props: {
   readonly postId: string;
   readonly threadLine: (postMessageId: string) => ChatBotThreadLine | null;
-  readonly openThread: (postMessageId: string) => void;
+  readonly openThread: ((postMessageId: string) => void) | null;
 }): ReactNode {
   const line = props.threadLine(props.postId);
+  const openThread = props.openThread;
   return (
     <div data-testid={`stub-post-${props.postId}`}>
       <span
@@ -155,11 +166,13 @@ function PostStub(props: {
         }
         data-unread={line === null ? "" : String(line.unread)}
       />
-      <button
-        type="button"
-        data-testid={`stub-open-${props.postId}`}
-        onClick={() => props.openThread(props.postId)}
-      />
+      {openThread === null ? null : (
+        <button
+          type="button"
+          data-testid={`stub-open-${props.postId}`}
+          onClick={() => openThread(props.postId)}
+        />
+      )}
     </div>
   );
 }
@@ -215,10 +228,12 @@ interface MountOptions {
 function mount(options: MountOptions): {
   readonly onOpenThread: Mock<(id: string | null) => void>;
   readonly onOpenUnderTheHood: Mock<(id: string) => void>;
+  /** Renders the same view again, reading the mocks' current state. */
+  readonly rerender: () => void;
 } {
   const onOpenThread = vi.fn<(id: string | null) => void>();
   const onOpenUnderTheHood = vi.fn<(id: string) => void>();
-  render(
+  const tree = (): ReactNode => (
     <TooltipProvider>
       <ChatExpansionTestProviders tileInstanceId="tile-1">
         <BotChannelView
@@ -232,9 +247,14 @@ function mount(options: MountOptions): {
           onOpenUnderTheHood={onOpenUnderTheHood}
         />
       </ChatExpansionTestProviders>
-    </TooltipProvider>,
+    </TooltipProvider>
   );
-  return { onOpenThread, onOpenUnderTheHood };
+  const result = render(tree());
+  return {
+    onOpenThread,
+    onOpenUnderTheHood,
+    rerender: () => result.rerender(tree()),
+  };
 }
 
 function lastThreadListCall(): ThreadListCall {
@@ -253,12 +273,18 @@ beforeEach(() => {
     { conversationId: "conversation-channel", createdAt: 1_000 },
   ];
   mocks.state.threads = [];
+  mocks.state.threadListAnswered = true;
+  mocks.state.threadListError = false;
   mocks.state.chats = {};
   mocks.postIds = [];
+  // jsdom reports no focus until an element takes it; the window starts in
+  // the person's foreground here, and a case that needs it elsewhere says so.
+  vi.spyOn(document, "hasFocus").mockReturnValue(true);
 });
 
 afterEach(() => {
   cleanup();
+  vi.restoreAllMocks();
 });
 
 describe("<BotChannelView /> channel", () => {
@@ -444,5 +470,75 @@ describe("<BotChannelView /> open thread", () => {
     mocks.state.chats = { "thread-b": indicator(false, false) };
     mount({ paused: false, openThreadPostId: "post-b" });
     expect(mocks.markRead).not.toHaveBeenCalled();
+  });
+
+  it("leaves a verdict unread while the tab is not on screen, and reads it when the person comes back", () => {
+    mocks.state.chats = { "thread-a": indicator(true, false) };
+    mocks.state.paneVisible = false;
+    const { rerender } = mount({ paused: false, openThreadPostId: "post-a" });
+    expect(mocks.markRead).not.toHaveBeenCalled();
+
+    mocks.state.paneVisible = true;
+    rerender();
+    expect(mocks.markRead).toHaveBeenCalledTimes(1);
+    expect(mocks.markRead).toHaveBeenCalledWith({
+      epicId: BOT_ID,
+      chatId: "thread-a",
+    });
+  });
+
+  it("leaves a verdict unread while the window is in the background, and reads it when the window returns", () => {
+    mocks.state.chats = { "thread-a": indicator(true, false) };
+    const hasFocus = vi.spyOn(document, "hasFocus").mockReturnValue(false);
+    mount({ paused: false, openThreadPostId: "post-a" });
+    expect(mocks.markRead).not.toHaveBeenCalled();
+
+    hasFocus.mockReturnValue(true);
+    act(() => {
+      window.dispatchEvent(new Event("focus"));
+    });
+    expect(mocks.markRead).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not read a cached thread's verdict while the channel is paused", () => {
+    mocks.state.chats = { "thread-a": indicator(true, false) };
+    mount({ paused: true, openThreadPostId: "post-a" });
+    expect(screen.queryByTestId("bot-thread-panel")).toBeNull();
+    expect(mocks.markRead).not.toHaveBeenCalled();
+  });
+});
+
+describe("<BotChannelView /> thread list unavailable", () => {
+  it("offers no thread on a host without the thread list", () => {
+    mocks.state.threadListSupported = false;
+    mocks.state.threadListAnswered = false;
+    mocks.postIds = ["post-a"];
+    mount({ paused: false, openThreadPostId: "post-a" });
+
+    expect(screen.queryByTestId("stub-open-post-a")).toBeNull();
+    expect(screen.queryByTestId("bot-thread-panel")).toBeNull();
+    expect(screen.queryByTestId("bot-thread-loading")).toBeNull();
+  });
+
+  it("says the thread list failed and reads it again on Retry, rather than loading forever", async () => {
+    const user = userEvent.setup();
+    mocks.state.threadListAnswered = false;
+    mocks.state.threadListError = true;
+    mount({ paused: false, openThreadPostId: "post-a" });
+
+    const panel = screen.getByTestId("bot-thread-panel");
+    expect(within(panel).queryByTestId("bot-thread-loading")).toBeNull();
+    const failure = within(panel).getByTestId("bot-thread-error");
+    await user.click(within(failure).getByRole("button", { name: "Retry" }));
+    expect(mocks.refetchThreads).toHaveBeenCalledTimes(1);
+  });
+
+  it("waits for a just-posted thread the list has not answered yet", () => {
+    mocks.state.threads = [thread("thread-a", "post-a", { replyCount: 1 })];
+    mount({ paused: false, openThreadPostId: "post-new" });
+
+    const panel = screen.getByTestId("bot-thread-panel");
+    expect(within(panel).getByTestId("bot-thread-loading")).toBeTruthy();
+    expect(within(panel).queryByTestId("bot-thread-error")).toBeNull();
   });
 });
