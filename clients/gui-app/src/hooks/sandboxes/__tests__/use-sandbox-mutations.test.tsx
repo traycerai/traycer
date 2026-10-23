@@ -11,11 +11,7 @@ import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 import type { HostSandboxState } from "@traycer/protocol/host/host-status";
-import type { SandboxCreateRequest } from "@traycer/protocol/host/sandbox-control";
-import {
-  SANDBOX_VERB_FETCH_TIMEOUT_MS,
-  type SandboxCreateFetchResult,
-} from "@traycer-clients/shared/host-client/sandbox-control";
+import { SANDBOX_VERB_FETCH_TIMEOUT_MS } from "@traycer-clients/shared/host-client/sandbox-control";
 import {
   createFakeSandboxBinding,
   refusal,
@@ -50,10 +46,6 @@ vi.mock("@/lib/auth-error-toast", () => ({
   toastFromAuthError: state.toastFromAuthError,
 }));
 
-import {
-  SandboxCreateError,
-  useSandboxCreate,
-} from "@/hooks/sandboxes/use-sandbox-create-mutation";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useSandboxAutomationOpen } from "@/hooks/sandboxes/use-sandbox-automation-open-mutation";
 import { useSandboxDestroy } from "@/hooks/sandboxes/use-sandbox-destroy-mutation";
@@ -682,37 +674,6 @@ async function mutationEnded(queryClient: QueryClient): Promise<void> {
   });
 }
 
-const CREATE_REQUEST: SandboxCreateRequest = {
-  os: "linux",
-  cpus: 2,
-  memoryMb: 4096,
-  diskMb: null,
-  region: "us-east",
-  displayName: "build-box",
-  idleMinutes: 30,
-  burst: false,
-  createdByHostId: null,
-  createdByAgentId: null,
-  environmentId: null,
-  destroyAfterRestingMinutes: null,
-  createdByTaskId: null,
-  clientRequestId: null,
-};
-
-const CREATE_OK: SandboxCreateFetchResult = {
-  kind: "ok",
-  accepted: {
-    sandboxId: "sbx_1",
-    hostId: "host-1",
-    sandbox: sandboxSummaryFixture({ state: "creating" }),
-  },
-};
-
-const CREATE_FAILED: SandboxCreateFetchResult = {
-  kind: "network-error",
-  detail: "the request never completed (TypeError)",
-};
-
 describe("settling under another account", () => {
   beforeEach(() => {
     state.binding = createFakeSandboxBinding();
@@ -736,211 +697,6 @@ describe("settling under another account", () => {
     expect(state.requestFleetRefresh).not.toHaveBeenCalled();
     expect(invalidate).not.toHaveBeenCalled();
   }
-
-  describe("useSandboxCreate", () => {
-    function startCreate() {
-      signInAs("user-a");
-      const { queryClient, invalidate, wrapper } = setup();
-      const pending = deferred<SandboxCreateFetchResult>();
-      state.binding?.auth.createSandbox.mockImplementation(
-        () => pending.promise,
-      );
-      const view = renderHook(() => useSandboxCreate(), { wrapper });
-      act(() => {
-        view.result.current.mutate({
-          request: CREATE_REQUEST,
-          teamName: null,
-          teamId: null,
-        });
-      });
-      return { queryClient, invalidate, pending };
-    }
-
-    async function waitForCall() {
-      await waitFor(() => {
-        expect(state.binding?.auth.createSandbox).toHaveBeenCalledTimes(1);
-      });
-    }
-
-    it("says nothing and moves no cache when B is signed in by the time A's create lands", async () => {
-      const { queryClient, invalidate, pending } = startCreate();
-      await waitForCall();
-
-      signInAs("user-b");
-      pending.resolve(CREATE_OK);
-      await mutationEnded(queryClient);
-
-      expectNothingMoved(invalidate);
-    });
-
-    it("toasts no error and moves no cache when A's create fails after B signed in", async () => {
-      const { queryClient, invalidate, pending } = startCreate();
-      await waitForCall();
-
-      signInAs("user-b");
-      pending.resolve(CREATE_FAILED);
-      await mutationEnded(queryClient);
-
-      expectNothingMoved(invalidate);
-    });
-
-    it("toasts no error and moves no cache when A's request rejects after B signed in", async () => {
-      const { queryClient, invalidate, pending } = startCreate();
-      await waitForCall();
-
-      signInAs("user-b");
-      pending.reject(new Error("the transport threw"));
-      await mutationEnded(queryClient);
-
-      expectNothingMoved(invalidate);
-    });
-
-    it("says nothing when A signed out and nobody is signed in by the time the create lands", async () => {
-      const { queryClient, invalidate, pending } = startCreate();
-      await waitForCall();
-
-      signInAs(null);
-      pending.resolve(CREATE_OK);
-      await mutationEnded(queryClient);
-
-      expectNothingMoved(invalidate);
-    });
-
-    it("control: with the same account throughout, a landed create toasts Created, refreshes the directory once and invalidates the registered hosts", async () => {
-      const { queryClient, invalidate, pending } = startCreate();
-      await waitForCall();
-
-      pending.resolve(CREATE_OK);
-      await mutationEnded(queryClient);
-
-      expect(state.toastSuccess).toHaveBeenCalledTimes(1);
-      expect(state.toastSuccess).toHaveBeenCalledWith("Created build-box");
-      expect(state.binding?.directory.refresh).toHaveBeenCalledTimes(1);
-      expect(invalidatedKeys(invalidate)).toEqual([REGISTERED_HOSTS_KEY]);
-    });
-
-    it("control: with the same account throughout, a failed create toasts the error once and still refreshes and invalidates", async () => {
-      const { queryClient, invalidate, pending } = startCreate();
-      await waitForCall();
-
-      pending.resolve(CREATE_FAILED);
-      await mutationEnded(queryClient);
-
-      expect(state.toastFromAuthError).toHaveBeenCalledTimes(1);
-      expect(state.toastFromAuthError.mock.lastCall?.[1]).toBe(
-        "Couldn't create the sandbox.",
-      );
-      expect(state.toastSuccess).not.toHaveBeenCalled();
-      expect(state.binding?.directory.refresh).toHaveBeenCalledTimes(1);
-      expect(invalidatedKeys(invalidate)).toEqual([REGISTERED_HOSTS_KEY]);
-    });
-  });
-
-  describe("useSandboxCreate refusals", () => {
-    const TEAM_REQUEST: SandboxCreateRequest = {
-      ...CREATE_REQUEST,
-      environmentId: "env-acme",
-    };
-
-    async function createRefusedAs(
-      failure: SandboxCreateFetchResult,
-      teamName: string | null,
-    ): Promise<unknown> {
-      signInAs("user-a");
-      state.binding?.auth.createSandbox.mockResolvedValue(failure);
-      const { wrapper } = setup();
-      const { result } = renderHook(() => useSandboxCreate(), { wrapper });
-      let rejection: unknown = null;
-      await act(async () => {
-        try {
-          await result.current.mutateAsync({
-            request: TEAM_REQUEST,
-            teamName,
-            teamId: teamName === null ? null : "team-acme",
-          });
-        } catch (error: unknown) {
-          rejection = error;
-        }
-      });
-      return rejection;
-    }
-
-    it("rejects a refused create with a SandboxCreateError carrying the refusal code", async () => {
-      const rejection = await createRefusedAs(
-        refusal(402, "insufficient_credit"),
-        "acme",
-      );
-
-      expect(rejection).toBeInstanceOf(SandboxCreateError);
-      if (!(rejection instanceof SandboxCreateError)) return;
-      expect(rejection.code).toBe("insufficient_credit");
-      // `refusal()` carries no reason: nothing to pass on.
-      expect(rejection.reason).toBeNull();
-    });
-
-    it("carries the refusal's reason, so an unverified credit check can be told from a denied one", async () => {
-      for (const reason of ["unverified", "denied"]) {
-        const rejection = await createRefusedAs(
-          { ...refusal(402, "insufficient_credit"), reason },
-          "acme",
-        );
-
-        expect(rejection).toBeInstanceOf(SandboxCreateError);
-        if (!(rejection instanceof SandboxCreateError)) return;
-        expect(rejection.code).toBe("insufficient_credit");
-        expect(rejection.reason).toBe(reason);
-        cleanup();
-      }
-    });
-
-    it("rejects a failure with no refusal code as a SandboxCreateError whose code is null", async () => {
-      const rejection = await createRefusedAs(CREATE_FAILED, "acme");
-
-      expect(rejection).toBeInstanceOf(SandboxCreateError);
-      if (!(rejection instanceof SandboxCreateError)) return;
-      expect(rejection.code).toBeNull();
-      expect(rejection.reason).toBeNull();
-      expect(rejection.message).toBe(
-        "Couldn't reach Traycer. Try again in a moment.",
-      );
-    });
-
-    it("names the team in the error and the toast when the team's environment is refused as not found", async () => {
-      const rejection = await createRefusedAs(
-        refusal(404, "environment_not_found"),
-        "acme",
-      );
-
-      expect(rejection).toBeInstanceOf(SandboxCreateError);
-      if (!(rejection instanceof SandboxCreateError)) return;
-      expect(rejection.code).toBe("environment_not_found");
-      expect(rejection.message).toBe("You are not a member of acme.");
-      expect(state.toastFromAuthError).toHaveBeenCalledTimes(1);
-      const [toasted, title] = state.toastFromAuthError.mock.calls[0];
-      expect(toasted.message).toBe("You are not a member of acme.");
-      expect(title).toBe("Couldn't create the sandbox.");
-    });
-
-    it("names no team when none was picked", async () => {
-      const rejection = await createRefusedAs(
-        refusal(404, "environment_not_found"),
-        null,
-      );
-
-      expect(rejection).toBeInstanceOf(SandboxCreateError);
-      if (!(rejection instanceof SandboxCreateError)) return;
-      expect(rejection.message).not.toContain("acme");
-      expect(rejection.message).not.toContain("not a member");
-    });
-
-    it("sends the request unchanged, without the team name", async () => {
-      await createRefusedAs(refusal(404, "environment_not_found"), "acme");
-
-      expect(state.binding?.auth.createSandbox).toHaveBeenCalledWith(
-        TEAM_REQUEST,
-      );
-    });
-  });
 
   describe("useSandboxDestroy", () => {
     function startDestroy() {

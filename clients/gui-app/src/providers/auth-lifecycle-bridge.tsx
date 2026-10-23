@@ -9,7 +9,7 @@ import { draftRuntimeRegistry } from "@/stores/home/draft-runtime-registry";
 import { fileEditRuntimeRegistry } from "@/lib/workspace/file-edit-runtime-registry";
 import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope-store";
 import { useAddHostDialogStore } from "@/stores/settings/add-host-dialog-store";
-import { useSandboxCreateDialogStore } from "@/stores/settings/sandbox-create-dialog-store";
+import { useStagedSandboxStore } from "@/stores/composer/staged-sandbox-store";
 import { useProvidersFocusStore } from "@/stores/settings/providers-focus-store";
 import { useProfileSyncModalStore } from "@/stores/settings/profile-sync-modal-store";
 import { useProviderLinkDialogStore } from "@/stores/providers/provider-link-dialog-store";
@@ -104,10 +104,6 @@ export function EpicSessionLifecycleBridge(
       // host B already owns is absent from that snapshot and gets announced as
       // the machine that just connected.
       useAddHostDialogStore.getState().closeDialog();
-      // The New sandbox dialog is the same shape: left open it would show
-      // account B what A typed and A's last failure, which can name A's team.
-      // `closeDialog` drops the draft, the failure and the created line too.
-      useSandboxCreateDialogStore.getState().closeDialog();
       // The Providers deep-link intent is the third module-level store on this
       // boundary, and the most dangerous of them: `focusHostId` names account
       // A's machine and `startSignIn` asks Providers to begin a sign-in flow
@@ -117,6 +113,10 @@ export function EpicSessionLifecycleBridge(
       // host, profile and sign-in flag together; the tab half is separate.
       useProvidersFocusStore.getState().clearFocusHarnessId();
       useProvidersFocusStore.getState().clearFocusTab();
+      // A staged sandbox names the outgoing account's configuration, its
+      // create key and the host it made; it persists per device, so account B
+      // would otherwise send into A's team or resubmit A's create.
+      useStagedSandboxStore.getState().clearAll();
       // The Sync profiles dialog is mounted at the app root and survives a
       // switch, so its module-level store is on this boundary too: left
       // standing, account B would see A's open dialog - A's profile names and

@@ -78,12 +78,6 @@ import {
 } from "@/lib/sandboxes/sandbox-egress-event-line";
 import { cn } from "@/lib/utils";
 import { useAuthStore } from "@/stores/auth/auth-store";
-import { useSandboxCreateDialogStore } from "@/stores/settings/sandbox-create-dialog-store";
-import type { SandboxCreateBelongsTo } from "@/components/hosts/sandbox-create-model";
-import {
-  confirmTeamWake,
-  teamWakeAsks,
-} from "@/stores/hosts/team-wake-confirm-store";
 
 /**
  * The card a sandbox host shows above its identity card in Settings: its
@@ -96,10 +90,9 @@ import {
  * date and the balance, and offers only destroy, behind a typed
  * confirmation.
  *
- * A team sandbox says who created it and whose bundle the
- * running wake is on, asks before its Resume or Start bills the person, and
- * always asks for its name before a destroy. It has no personal cost view:
- * the cost read lists only the person's own sandboxes. A team pod says how
+ * A team sandbox says who created it and whose bundle the running wake is
+ * on, and always asks for its name before a destroy. It has no personal cost
+ * view: the cost read lists only the person's own sandboxes. A team pod says how
  * many more shells it has room for instead.
  */
 export function SandboxCard(props: {
@@ -107,12 +100,6 @@ export function SandboxCard(props: {
   /** The sandbox host's own health, which gates the secrets readiness line. */
   readonly hostState: HostHealthState;
   readonly sandbox: HostScopeSandbox;
-  /**
-   * What "New sandbox like this" preselects: this sandbox's owner, or `null`
-   * when it is a team's whose id has not been read yet, which offers no
-   * "like this" (it would open on Personal).
-   */
-  readonly likeThis: SandboxCreateBelongsTo | null;
   /**
    * Called once a destroy has settled (the sandbox is gone), for a row the
    * destroy removes from the host list; `null` when the row outlives it.
@@ -182,7 +169,6 @@ export function SandboxCard(props: {
           actions={actions}
           frozen={frozen}
           teamOwned={teamOwned}
-          likeThis={props.likeThis}
           onDestroyed={props.onDestroyed}
         />
       )}
@@ -857,23 +843,15 @@ function SandboxRepairAction(props: { readonly hostId: string }): ReactNode {
   );
 }
 
-/**
- * The card's actions, then "New sandbox like this", which opens the create
- * form with this sandbox's owner preselected (its environment only, not its
- * shape). A pod offers no "like this": a pod is the team's Automations host,
- * not a sandbox a person creates.
- */
+/** The card's actions. A sandbox is created from the pickers, not here. */
 function SandboxCardFooter(props: {
   readonly summary: SandboxSummary;
   readonly actions: readonly SandboxCardAction[];
   readonly frozen: boolean;
   readonly teamOwned: boolean;
-  readonly likeThis: SandboxCreateBelongsTo | null;
   readonly onDestroyed: (() => void) | null;
 }): ReactNode {
-  const openCreateSandbox = useSandboxCreateDialogStore((s) => s.openDialog);
-  const likeThis = props.summary.kind === "automation" ? null : props.likeThis;
-  if (props.actions.length === 0 && likeThis === null) return null;
+  if (props.actions.length === 0) return null;
   return (
     <CardFooter className="flex flex-wrap gap-2">
       {props.actions.length === 0 ? null : (
@@ -884,17 +862,6 @@ function SandboxCardFooter(props: {
           teamOwned={props.teamOwned}
           onDestroyed={props.onDestroyed}
         />
-      )}
-      {likeThis === null ? null : (
-        <Button
-          type="button"
-          variant="ghost"
-          size="sm"
-          data-testid="sandbox-card-new-like-this"
-          onClick={() => openCreateSandbox(likeThis, null)}
-        >
-          New sandbox like this
-        </Button>
       )}
     </CardFooter>
   );
@@ -909,7 +876,6 @@ function SandboxActions(props: {
 }): ReactNode {
   const { summary } = props;
   const verb = useSandboxVerb(summary.id);
-  const wakeAsks = teamWakeAsks(props.teamOwned, summary.kind, props.frozen);
   const pendingVerb = verb.isPending ? verb.variables : null;
   return (
     <>
@@ -944,11 +910,7 @@ function SandboxActions(props: {
                     ),
                 });
               };
-              // Only a wake bills: Suspend and Stop never ask.
-              confirmTeamWake(
-                wakeAsks && (action === "resume" || action === "start"),
-                run,
-              );
+              run();
             }}
           >
             {pendingVerb === action ? (

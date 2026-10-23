@@ -110,6 +110,16 @@ export function costLine(
   return `${formatSandboxDollars(priceMcPerHour)} an hour while awake · ${usesCreditsClause(configuration)}`;
 }
 
+/**
+ * The cost line where this server prices no shape: what it costs is said
+ * on the created sandbox's own row.
+ */
+export function unpricedCostLine(
+  configuration: SandboxConfigurationCopy,
+): string {
+  return `Billed by the hour while awake · ${usesCreditsClause(configuration)}`;
+}
+
 /** The chip's short price: `$0.12/h`. */
 export function shortPriceLabel(priceMcPerHour: number): string {
   return `${formatSandboxDollars(priceMcPerHour)}/h`;
@@ -231,18 +241,22 @@ export const CHANGE_LABEL = "Change";
 
 // ── Chip ──────────────────────────────────────────────────────────────────
 
-/** The chip of a staged create: `New Acme sandbox · 2 vCPU · 4 GB · $0.12/h`. */
+/**
+ * The chip of a staged create: `New Acme sandbox · 2 vCPU · 4 GB · $0.12/h`.
+ * `priceIsFrom` reads the price as a lower bound (`from $0.12/h`): the
+ * balance is short, or the price is the region's smallest shape's.
+ */
 export function stagedChipLabel(args: {
   readonly configuration: SandboxConfigurationCopy;
   readonly cpus: number;
   readonly memoryMb: number;
-  readonly priceMcPerHour: number;
-  readonly needsCredits: boolean;
+  readonly priceMcPerHour: number | null;
+  readonly priceIsFrom: boolean;
 }): string {
-  const price = args.needsCredits
-    ? `from ${shortPriceLabel(args.priceMcPerHour)}`
-    : shortPriceLabel(args.priceMcPerHour);
-  return `${newSandboxRowLabel(args.configuration)} · ${sandboxShapeLabel(args.cpus, args.memoryMb)} · ${price}`;
+  const head = `${newSandboxRowLabel(args.configuration)} · ${sandboxShapeLabel(args.cpus, args.memoryMb)}`;
+  if (args.priceMcPerHour === null) return head;
+  const price = shortPriceLabel(args.priceMcPerHour);
+  return `${head} · ${args.priceIsFrom ? `from ${price}` : price}`;
 }
 
 /** A resting pick: `api-refactor · suspended, resumes on send`. */

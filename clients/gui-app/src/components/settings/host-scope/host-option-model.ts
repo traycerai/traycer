@@ -3,6 +3,7 @@ import type { HostSandboxState } from "@traycer/protocol/host/host-status";
 import { isSandboxAsleep } from "@traycer-clients/shared/host-client/sandbox-control";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import { isSandboxHostDirectoryEntry } from "@traycer-clients/shared/host-client/remote-fetcher";
+import type { SandboxSummary } from "@traycer/protocol/host/sandbox-control";
 import {
   isUnenrolledSandboxOption,
   type HostScopeOption,
@@ -441,11 +442,9 @@ export function sandboxStateWord(sandbox: HostScopeSandbox): string | null {
  * - `hidden`: left out of this list.
  *
  * The Automations pod (`kind: "automation"`) is a slim host for scheduled
- * runs: the host list shows it with the user's sandboxes, and
- * of the pickers only a surface that `offersAutomations` does: the new
- * terminal picker, whose verbs the slim host serves (the slim host
- * plan). Every other picker targets full-host work (an agent, a worktree, an
- * epic) and hides it.
+ * runs: the host list shows it with the user's sandboxes, and no picker
+ * offers it. It is reached by its `automation` alias and the configuration's
+ * Sandboxes page.
  *
  * `listsAgentSandboxes` is the host list (Settings), every other surface is a
  * picker. A picker fails CLOSED on a sandbox whose control-plane row has not
@@ -465,7 +464,12 @@ export type HostPickerGroup =
 export function hostOptionPickerGroup(
   host: HostScopeOption,
   listsAgentSandboxes: boolean,
-  offersAutomations: boolean,
+  /**
+   * The viewer a composer picker is scoped to, or `null` for every other
+   * list. A composer offers only the sandboxes the viewer started or kept;
+   * the mode adds that `hidden` arm and changes no other.
+   */
+  composerViewer: ComposerPickerViewer | null,
 ): HostPickerGroup {
   if (host.entry?.kind === "pool") return "hidden";
   if (host.sandbox === null) return "personal";
@@ -475,10 +479,41 @@ export function hostOptionPickerGroup(
   const summary = host.sandbox.summary;
   if (summary === null) return listsAgentSandboxes ? "sandbox" : "hidden";
   if (summary.kind === "automation") {
-    return listsAgentSandboxes || offersAutomations ? "sandbox" : "hidden";
+    return listsAgentSandboxes ? "sandbox" : "hidden";
   }
   if (summary.burst) return listsAgentSandboxes ? "agent-sandbox" : "hidden";
+  if (
+    composerViewer !== null &&
+    !viewerStartedOrKept(host.sandbox, summary, composerViewer)
+  ) {
+    return "hidden";
+  }
   return "sandbox";
+}
+
+/** Who a composer picker lists sandboxes for. */
+export interface ComposerPickerViewer {
+  /** `null` while signed out: no team sandbox is then the viewer's. */
+  readonly userId: string | null;
+}
+
+/**
+ * Whether the viewer started this sandbox or kept it. A personal sandbox is
+ * its owner's (the control plane lists only the viewer's own), so it is
+ * theirs; a team sandbox is theirs when they created it or kept it, so a
+ * teammate's sandbox, kept or not, stays on the team's Sandboxes page.
+ */
+function viewerStartedOrKept(
+  sandbox: HostScopeSandbox,
+  summary: SandboxSummary,
+  viewer: ComposerPickerViewer,
+): boolean {
+  if (!sandbox.teamOwned) return true;
+  if (viewer.userId === null) return false;
+  return (
+    summary.createdBy?.userId === viewer.userId ||
+    summary.keptBy?.userId === viewer.userId
+  );
 }
 
 /**
@@ -486,12 +521,11 @@ export function hostOptionPickerGroup(
  * picker offers. The host list keeps the Automations pod, burst sandboxes and
  * an unconfirmed sandbox (`summary === null`) visible for management.
  * Activating one would route the window's new work to a scheduled-run pod or
- * a task-owned sandbox, which every full-host picker hides for that reason;
- * the terminal picker offering the Automations pod does not make it a
- * default host.
+ * a task-owned sandbox, which every picker hides for that reason. Asked
+ * without the composer's viewer, so who started a sandbox never decides it.
  */
 export function hostOptionCanActivate(host: HostScopeOption): boolean {
-  return hostOptionPickerGroup(host, false, false) !== "hidden";
+  return hostOptionPickerGroup(host, false, null) !== "hidden";
 }
 
 /**
@@ -549,7 +583,7 @@ interface MutableTeamGroup {
 export function groupHostOptions(
   hosts: readonly HostScopeOption[],
   listsAgentSandboxes: boolean,
-  offersAutomations: boolean,
+  composerViewer: ComposerPickerViewer | null,
   keepHostId: string | null,
 ): HostPickerGroups {
   const personal: HostScopeOption[] = [];
@@ -560,7 +594,7 @@ export function groupHostOptions(
     const group = hostOptionPickerGroup(
       host,
       listsAgentSandboxes,
-      offersAutomations,
+      composerViewer,
     );
     const owner = hostOptionTeamOwner(host);
     let target = { sandboxes, agentSandboxes };
@@ -593,6 +627,43 @@ export function groupHostOptions(
           a.teamId.localeCompare(b.teamId),
       ),
   };
+}
+
+/**
+ * A composer picker's host groups: `Yours` (the person's computers) and
+ * `Sandboxes you started` (every configuration together, the viewer's own
+ * and the team sandboxes they started or kept, never an agent's), in the
+ * list's order. `keepHostId` is the row the composer is pointed at, which is
+ * never dropped (see {@link groupHostOptions}).
+ */
+export interface ComposerHostGroups {
+  readonly yours: readonly HostScopeOption[];
+  readonly started: readonly HostScopeOption[];
+}
+
+export function groupComposerHostOptions(
+  hosts: readonly HostScopeOption[],
+  viewer: ComposerPickerViewer,
+  keepHostId: string | null,
+): ComposerHostGroups {
+  const groups = groupHostOptions(hosts, false, viewer, keepHostId);
+  return {
+    yours: groups.personal,
+    started: [
+      ...groups.sandboxes,
+      ...groups.teams.flatMap((team) => team.sandboxes),
+    ],
+  };
+}
+
+/** `N awake` beside the collapsed `Sandboxes you started` count. */
+export function awakeSandboxCount(hosts: readonly HostScopeOption[]): number {
+  return hosts.filter(
+    (host) =>
+      host.sandbox !== null &&
+      !host.sandbox.frozen &&
+      host.sandbox.state === "awake",
+  ).length;
 }
 
 /**
@@ -649,7 +720,7 @@ export function pickableHostOptions(
   hosts: readonly HostScopeOption[],
   keepHostId: string | null,
 ): readonly HostScopeOption[] {
-  const groups = groupHostOptions(hosts, false, false, keepHostId);
+  const groups = groupHostOptions(hosts, false, null, keepHostId);
   return [
     ...groups.personal,
     ...groups.sandboxes,
@@ -669,7 +740,7 @@ export function appWideHostOptions(
   hosts: readonly HostScopeOption[],
   keepHostId: string | null,
 ): readonly HostScopeOption[] {
-  const groups = groupHostOptions(hosts, false, false, keepHostId);
+  const groups = groupHostOptions(hosts, false, null, keepHostId);
   return [
     ...groups.personal,
     ...groups.sandboxes.filter(

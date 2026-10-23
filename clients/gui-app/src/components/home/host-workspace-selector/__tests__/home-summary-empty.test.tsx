@@ -196,6 +196,15 @@ const ABSENT_SUMMARY: WorktreeWorkspaceSummaryV15 = {
   presence: "absent",
 };
 
+// The picker's sandbox staging reads the account and the catalogue; this suite
+// stages nothing (`sandboxStaging={null}`) and has no auth runtime.
+vi.mock("@/hooks/auth/use-auth-user-query", () => ({
+  useAuthUser: () => ({ data: null }),
+}));
+vi.mock("@/hooks/sandboxes/use-sandbox-catalogue-query", () => ({
+  useSandboxCatalogue: () => ({ data: undefined }),
+}));
+
 vi.mock("@/components/ui/select", () => ({
   Select: (props: { readonly children: ReactNode }) => (
     <div>{props.children}</div>
@@ -410,6 +419,7 @@ function renderControl(layout: "inline" | "stacked") {
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
         <ActiveHostWorkspaceControls
+          sandboxStaging={null}
           disabled={false}
           stagingKey={{
             surface: "landing",
@@ -460,6 +470,7 @@ function renderControlInWorkspaceRow(rowWidth: number): QueryClient {
         <ComposerWorkspaceRow
           workspaceControls={
             <ActiveHostWorkspaceControls
+              sandboxStaging={null}
               disabled={false}
               stagingKey={{
                 surface: "landing",
@@ -508,6 +519,7 @@ function DelayedBranchValidationHarness() {
   return (
     <>
       <ActiveHostWorkspaceControls
+        sandboxStaging={null}
         disabled={false}
         stagingKey={{ surface: "landing", hostId: "host-home", draftId: null }}
         workspaceSeed={null}

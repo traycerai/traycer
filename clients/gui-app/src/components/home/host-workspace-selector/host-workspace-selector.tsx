@@ -37,7 +37,10 @@ import type {
 } from "@traycer/protocol/host/worktree-schemas";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcRegistry } from "@/lib/host";
-import { useComposerSurfaceHostPin } from "@/hooks/host/use-composer-surface-host-pin";
+import {
+  useComposerSurfaceHostKey,
+  useComposerSurfaceHostPin,
+} from "@/hooks/host/use-composer-surface-host-pin";
 import { useAddressableHostId } from "@/hooks/host/use-addressable-host-id";
 import { useHostClientFor } from "@/hooks/host/use-host-client-for";
 import { useHostDirectoryList } from "@/hooks/host/use-host-directory-list-query";
@@ -160,6 +163,13 @@ import { useRecentWorkspaces } from "./use-recent-workspaces";
 import { RecentWorkspacesSection } from "./recent-workspaces-section";
 
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
+import { ConsequencesBlock } from "@/components/composer/consequences-block";
+import {
+  useSandboxStaging,
+  type SandboxStaging,
+  type SandboxStagingSurface,
+} from "@/components/composer/use-sandbox-staging";
+import type { HostSwitcherComposerMode } from "@/components/settings/host-scope/host-switcher";
 /**
  *
  *
@@ -380,6 +390,12 @@ function HomeSurface(props: HomeSurfaceProps) {
   // have to agree on which machine they describe. That resolution is the
   // composer surface pin (pin ?? effective), so read the same primitive.
   const landingHostId = useComposerSurfaceHostPin().resolvedHostId;
+  const surfaceKey = useComposerSurfaceHostKey();
+  // The landing composer creates the task, so there is none yet.
+  const sandboxStaging = useMemo<SandboxStagingSurface>(
+    () => ({ surfaceKey, task: null }),
+    [surfaceKey],
+  );
   const stagingKey = useMemo<WorktreeStagingKey>(
     () => ({
       surface: "landing",
@@ -390,6 +406,7 @@ function HomeSurface(props: HomeSurfaceProps) {
   );
   return (
     <ActiveHostWorkspaceControls
+      sandboxStaging={sandboxStaging}
       stagingKey={stagingKey}
       layout="inline"
       workspaceSeed={null}
@@ -441,6 +458,13 @@ type ActiveHostWorkspaceControlsProps = {
   readonly layout: "inline" | "stacked";
   readonly hostScope: HostWorkspaceControlsHostScope;
   readonly disabled: boolean;
+  /**
+   * A composer's sandbox staging (sandboxes redesign D9): the picker offers
+   * New sandbox rows, a pick only stages, and the consequences block renders
+   * under the row. `null` for a surface that does not create work on a new
+   * host (the fork dialogs, the terminal-agent launcher).
+   */
+  readonly sandboxStaging: SandboxStagingSurface | null;
 };
 
 export function ActiveHostWorkspaceControls(
@@ -497,6 +521,11 @@ export function ActiveHostWorkspaceControls(
     activeHostId === null
       ? null
       : (listedHostOption ?? unavailableHostOption(activeHostId, hostLabel));
+  const staging = useSandboxStaging({
+    surface: props.sandboxStaging,
+    memoryHostId: activeHostId,
+    hosts: hostOptions.hosts,
+  });
   const visibleHostOptions = hostPickerOptionsForScope(
     props.hostScope,
     selectedHostOption,
@@ -596,12 +625,13 @@ export function ActiveHostWorkspaceControls(
           isLoading={hostOptions.isLoading}
           listsFailed={hostOptions.listsFailed}
           onRetryLists={hostOptions.retryLists}
-          offersAutomations={false}
+          composer={stagingComposer(staging)}
           // `pin`, not `bind`: since P1.2 a pick here writes this composer's
           // surface pin and never rebinds the window. (The two intents gate
           // rows identically; only `view` differs.)
           intent="pin"
         />
+        <SandboxStagingExtras staging={staging} />
         <section
           aria-label="Workspaces"
           data-testid="host-workspace-selector-folders-section"
@@ -640,11 +670,11 @@ export function ActiveHostWorkspaceControls(
       isLoading={hostOptions.isLoading}
       listsFailed={hostOptions.listsFailed}
       onRetryLists={hostOptions.retryLists}
-      offersAutomations={false}
+      composer={stagingComposer(staging)}
       surface="inline"
     />
   );
-  return (
+  const rows = (
     <HomeWorkspaceRows
       workspaceSource={workspaceSource}
       resolvedFolders={resolved.folders}
@@ -658,6 +688,36 @@ export function ActiveHostWorkspaceControls(
       hostSlot={deviceSelect}
       disabled={disabled}
     />
+  );
+  return (
+    <>
+      {rows}
+      <SandboxStagingExtras staging={staging} />
+    </>
+  );
+}
+
+function stagingComposer(
+  staging: SandboxStaging | null,
+): HostSwitcherComposerMode | null {
+  return staging === null ? null : staging.composer;
+}
+
+/** The consequences block under the staged host, and the shape sheet. */
+function SandboxStagingExtras(props: {
+  readonly staging: SandboxStaging | null;
+}): ReactNode {
+  if (props.staging === null) return null;
+  return (
+    <>
+      {props.staging.consequences === null ? null : (
+        <ConsequencesBlock
+          input={props.staging.consequences}
+          onMoveFirst={null}
+        />
+      )}
+      {props.staging.sheet}
+    </>
   );
 }
 
@@ -3227,7 +3287,7 @@ function InEpicSurface(props: InEpicSurfaceProps) {
       isLoading={hostOptions.isLoading}
       listsFailed={hostOptions.listsFailed}
       onRetryLists={hostOptions.retryLists}
-      offersAutomations={false}
+      composer={null}
       surface="inline"
       keepFocusableWhenDisabled={surface.kind === "terminal-agent"}
     />

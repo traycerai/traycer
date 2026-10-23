@@ -89,7 +89,10 @@ import {
 } from "@/lib/drafts/draft-mirror-coordinator";
 import { resolveLandingPlacement } from "@/lib/composer/landing-placement";
 import { toastRepointedStagingReset } from "@/lib/composer/repointed-staging-toast";
-import { subscribeFollowingSurfaceReset } from "@/stores/host/surface-host-selection-store";
+import {
+  newConversationSurfaceKey,
+  subscribeFollowingSurfaceReset,
+} from "@/stores/host/surface-host-selection-store";
 import { ComposerHostNotice } from "@/components/home/composer/composer-host-notice";
 import { useComposerHostNotice } from "@/hooks/composer/use-composer-host-notice";
 import { composerTopNotice } from "@/components/home/composer/composer-mirror-line-model";
@@ -133,6 +136,12 @@ import { hostQueryKeys } from "@/lib/query-keys";
 import { deriveWorkspaceMode } from "@/lib/worktree/workspace-mode";
 import { cn } from "@/lib/utils";
 import { ActiveHostWorkspaceControls } from "@/components/home/host-workspace-selector/host-workspace-selector";
+import {
+  stagingSurfaceKey,
+  useInTaskSandboxStagingSurface,
+} from "@/components/composer/use-sandbox-staging";
+import { useStagedSandboxSend } from "@/components/composer/use-staged-sandbox-send";
+import { composerDisplayPlainText } from "@/lib/composer/composer-clipboard";
 import { isHostSwitcherListInteraction } from "@/components/settings/host-scope/host-switcher-portal";
 import type { HostWorkspaceControlsHostScope } from "@/components/home/host-workspace-selector/host-workspace-controls-scope";
 import { modalWorkspaceHostScope } from "./new-conversation-modal-host-scope";
@@ -914,6 +923,29 @@ export function NewConversationModalBody(props: {
     !attachmentPending &&
     workspaceCanStart &&
     hasSubmittableContent;
+  // The staged sandbox's send (sandboxes plan D1). The modal's workspace is
+  // bucketed by host, so the new host's starts empty with nothing to reset.
+  // `handleSubmit` is declared below and reads this hook, hence the ref.
+  // A request that names its host stages nothing: naming the machine IS the
+  // request. Otherwise the picker offers New sandbox rows keyed by this Epic's
+  // placement pin.
+  const sandboxStaging = useInTaskSandboxStagingSurface(
+    epicId,
+    newConversationSurfaceKey(epicId),
+    hostId,
+  );
+  const stagedSubmitRef = useRef<() => void>(() => undefined);
+  const submitOnSandbox = useCallback((): boolean => {
+    stagedSubmitRef.current();
+    return true;
+  }, []);
+  const stagedSend = useStagedSandboxSend({
+    surfaceKey: stagingSurfaceKey(sandboxStaging),
+    resolvedHostId,
+    canSubmit,
+    submit: submitOnSandbox,
+    prepareHandoff: noopPrepareHandoff,
+  });
   const composerDisabledHint =
     mutationDisabledHint(permissionRole, isDisconnected, "make changes") ??
     workspaceAvailability.disabledHint;
@@ -961,6 +993,7 @@ export function NewConversationModalBody(props: {
     });
   const workspaceControls = (
     <ActiveHostWorkspaceControls
+      sandboxStaging={sandboxStaging}
       disabled={false}
       stagingKey={stagingKey}
       layout="inline"
@@ -1426,6 +1459,9 @@ export function NewConversationModalBody(props: {
     const editor = editorRef.current;
     if (editor === null) return;
     const captured = editor.getJSON();
+    // A staged sandbox takes the first send: it is created or woken, and
+    // this submit runs again on it once it is ready. The draft stays.
+    if (stagedSend.intercept(composerDisplayPlainText(captured))) return;
     // The draft this submit is FOR. The editor stays editable across the reads
     // below and the create ends in `cleanupAfterSubmit`, which clears the draft
     // store and the editor - so without this, a sentence typed during the read
@@ -1718,10 +1754,14 @@ export function NewConversationModalBody(props: {
     // the machine the chip stopped showing are bytes the create's host never
     // received.
     submitTarget,
+    stagedSend,
     submitPreparedDraft,
     teamSandboxHarnessBlocked,
     toolbarStore,
   ]);
+  useEffect(() => {
+    stagedSubmitRef.current = handleSubmit;
+  }, [handleSubmit]);
   // The re-entry itself. Declared AFTER `handleSubmit` so it can name it
   // directly - that is the whole point of routing through state instead of a
   // ref.
@@ -1855,10 +1895,13 @@ export function NewConversationModalBody(props: {
       workspaceDisabledHint={composerDisabledHint}
       header={header}
       topBanner={
-        <ComposerHostNotice
-          notice={topNotice.notice}
-          onDismiss={topNotice.dismiss}
-        />
+        <>
+          {stagedSend.line}
+          <ComposerHostNotice
+            notice={topNotice.notice}
+            onDismiss={topNotice.dismiss}
+          />
+        </>
       }
       // Same rule as the landing composer's row (`landing-composer.tsx`): six
       // pills do not fit a phone-width row, so below `md` the agent-mode pill
@@ -2083,3 +2126,5 @@ function useGlobalWorkspaceSnapshot(
     }),
   );
 }
+
+function noopPrepareHandoff(): void {}

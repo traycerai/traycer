@@ -83,6 +83,9 @@ import {
 import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 import { ComposerModeSwitcher } from "@/components/home/composer/composer-mode-switcher";
 import { useComposerPlacement } from "@/hooks/host/use-composer-placement";
+import { useComposerSurfaceHostKey } from "@/hooks/host/use-composer-surface-host-pin";
+import { useStagedSandboxSend } from "@/components/composer/use-staged-sandbox-send";
+import { composerDisplayPlainText } from "@/lib/composer/composer-clipboard";
 import { subscribeFollowingSurfaceReset } from "@/stores/host/surface-host-selection-store";
 import { ComposerHostNotice } from "@/components/home/composer/composer-host-notice";
 import { LandingTeamChatLine } from "@/components/home/composer/landing-team-chat-line";
@@ -476,6 +479,31 @@ export function LandingComposer(props: LandingComposerProps) {
     hasSubmittableContent,
   });
 
+  // The staged sandbox's send (sandboxes plan D1). Phase 2 resets the
+  // draft's workspace to the new host's, which starts empty, then resubmits.
+  const composerSurfaceKey = useComposerSurfaceHostKey();
+  // The latest `handleSubmit`, which is declared below and reads this hook.
+  const stagedSubmitRef = useRef<() => boolean>(() => false);
+  const prepareSandboxHandoff = useCallback(
+    (hostId: string): void => {
+      const id = draftId ?? createdUnboundDraftIdRef.current;
+      if (id === null) return;
+      useLandingDraftStore.getState().restoreDraftWorkspaceForHost(id, hostId);
+    },
+    [draftId],
+  );
+  const submitOnSandbox = useCallback(
+    (): boolean => stagedSubmitRef.current(),
+    [],
+  );
+  const stagedSend = useStagedSandboxSend({
+    surfaceKey: composerSurfaceKey,
+    resolvedHostId,
+    canSubmit,
+    submit: submitOnSandbox,
+    prepareHandoff: prepareSandboxHandoff,
+  });
+
   // Submit-time refusal copy (selection model §54). The G4 re-point used to
   // share this slot; it narrates as a toast now, and only when it actually
   // reset staged intent — see the effect below.
@@ -636,6 +664,17 @@ export function LandingComposer(props: LandingComposerProps) {
     if (!canSubmit) return false;
     const toolbar = toolbarStore.getState();
     if (toolbar.selection.modelSlug.length === 0) return false;
+    // A staged sandbox takes the first send: it is created or woken, and
+    // this submit runs again on it once it is ready. The draft stays.
+    if (
+      stagedSend.intercept(
+        composerDisplayPlainText(
+          editorRef.current?.getJSON() ?? EMPTY_DRAFT_RUNTIME_CONTENT,
+        ),
+      )
+    ) {
+      return false;
+    }
     // Submit is "delete the draft here, create the chat". A draft this host
     // does not own is sent as it is: its retirement receipt keeps the row
     // from being ingested back here, and its cloud row is retracted on the
@@ -676,9 +715,13 @@ export function LandingComposer(props: LandingComposerProps) {
     pickerStore,
     raiseHostNotice,
     setComposerExpanded,
+    stagedSend,
     teamSandboxHarnessBlockedFor,
     toolbarStore,
   ]);
+  useEffect(() => {
+    stagedSubmitRef.current = handleSubmit;
+  }, [handleSubmit]);
 
   const dispatchStartTerminal = useCallback(
     (launch: TerminalAgentLaunch): boolean => {
@@ -759,6 +802,7 @@ export function LandingComposer(props: LandingComposerProps) {
       expansion={composerExpansion}
       topBanner={
         <>
+          {stagedSend.line}
           <ComposerHostNotice
             notice={hostNotice}
             onDismiss={dismissHostNotice}

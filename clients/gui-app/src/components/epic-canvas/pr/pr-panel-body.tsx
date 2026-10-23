@@ -161,7 +161,7 @@ function PrPanelHostPicker(props: { readonly pin: SurfaceHostPin }): ReactNode {
         isLoading={options.isLoading}
         listsFailed={options.listsFailed}
         onRetryLists={options.retryLists}
-        offersAutomations={false}
+        composer={null}
         intent="pin"
         surface="inline"
       />

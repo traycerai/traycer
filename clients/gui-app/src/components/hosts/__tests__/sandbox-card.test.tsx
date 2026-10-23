@@ -75,6 +75,14 @@ vi.mock("@/providers/use-runner-host", () => ({
   }),
 }));
 vi.mock("@/lib/host/fleet-refresh", () => ({ requestFleetRefresh: vi.fn() }));
+// The destroy dialog reads the host's running-session count; this suite has no
+// host runtime.
+vi.mock("@/hooks/sandboxes/use-sandbox-session-report", () => ({
+  useSandboxSessionReport: () => ({
+    report: { kind: "unknown" },
+    failed: false,
+  }),
+}));
 // The secrets section's live parts talk to the sandbox host itself; the card's
 // own suite has no host runtime, and they have their own tests.
 vi.mock("@/hooks/sandboxes/use-sandbox-egress-events", () => ({
@@ -160,7 +168,6 @@ function renderCardOnHost(
         hostName="Host name"
         hostState={hostState}
         sandbox={sandbox}
-        likeThis={{ kind: "personal" }}
         onDestroyed={onDestroyed}
       />
     </QueryClientProvider>,
