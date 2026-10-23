@@ -7082,6 +7082,35 @@ export const epicSchemaSurfaceBaseline = {
                           "profileId",
                           "labelSnapshot"
                         ]
+                      },
+                      "announcement": {
+                        "type": "object",
+                        "properties": {
+                          "kind": {
+                            "type": "string",
+                            "enum": [
+                              "proposal",
+                              "automation",
+                              "bot-created",
+                              "policy"
+                            ]
+                          },
+                          "link": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "minLength": 1
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "link"
+                        ]
                       }
                     },
                     "required": [
@@ -17131,6 +17160,36 @@ export const epicSchemaSurfaceBaseline = {
                         "required": [
                           "profileId",
                           "labelSnapshot"
+                        ],
+                        "additionalProperties": false
+                      },
+                      "announcement": {
+                        "type": "object",
+                        "properties": {
+                          "kind": {
+                            "type": "string",
+                            "enum": [
+                              "proposal",
+                              "automation",
+                              "bot-created",
+                              "policy"
+                            ]
+                          },
+                          "link": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "minLength": 1
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "link"
                         ],
                         "additionalProperties": false
                       }
