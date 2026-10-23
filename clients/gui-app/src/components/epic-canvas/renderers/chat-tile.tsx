@@ -320,6 +320,7 @@ import { ChatTileRestoreResultToasts } from "./chat-tile-restore-result-toasts";
 import { HostWorkspaceSelector } from "@/components/home/host-workspace-selector/host-workspace-selector";
 import type { FatalErrorDetails } from "@traycer/protocol/framework/ws-protocol";
 import type { StreamConnectionStatus } from "@traycer-clients/shared/host-transport/i-stream-session";
+import { plainTextPromptContent } from "@traycer-clients/shared/epic/plain-text-content";
 import type { TraycerNextStepOption } from "@/markdown/traycer-next-steps";
 import {
   ChatDockWorkspaceControls,
@@ -336,7 +337,6 @@ import {
   canModifyChatMessages,
   shouldGenerateChatTitleForSubmittedMessage,
   userMessageSenderForProfile,
-  plainTextPromptContent,
   composerTurnStatus,
   resolvedTurnStatus,
   chatTileCanAct,

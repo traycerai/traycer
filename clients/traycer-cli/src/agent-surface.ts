@@ -100,6 +100,7 @@ export const READONLY_REFUSED_COMMANDS: Readonly<Record<string, string>> = {
   "profile enable": PROFILE_CHANGE_REFUSAL,
   "profile disable": PROFILE_CHANGE_REFUSAL,
   "profile remove": PROFILE_CHANGE_REFUSAL,
+  "task create": "this session cannot start Tasks.",
 };
 
 /**
