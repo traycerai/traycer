@@ -1,4 +1,4 @@
-import { CREDITS_PAGE } from "@/components/settings/environment/credits-page-placeholder";
+import { CREDITS_PAGE } from "@/components/settings/panels/credits-settings.definitions";
 import { alwaysAvailable } from "@/lib/settings/settings-availability";
 import { defineSettingsSection } from "@/lib/settings-search/settings-definitions";
 

@@ -107,9 +107,10 @@ function MoveSheetBody(props: {
     accept.mutate(moveAcceptRequest(data, choices), {
       onSuccess: (response) => {
         if (response.outcome === "plan_changed") {
+          // The accept's success invalidates `environment.move.plan`, which
+          // re-reads the plan the sheet shows.
           setPlanChanged(true);
           setChoices(new Map());
-          void plan.refetch().catch(ignoreError);
           return;
         }
         props.onClose();

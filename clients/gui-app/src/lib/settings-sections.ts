@@ -411,7 +411,7 @@ export const SETTINGS_SECTIONS: ReadonlyArray<SettingsSection> = [
     group: "account",
   },
   // Account, beside Usage: credits are the person's to add and spend. The
-  // page is E8's, mounted through `environment/credits-panel-placeholder`.
+  // page is E8's (`panels/credits-settings-panel`).
   {
     id: "credits",
     label: "Credits",

@@ -38,7 +38,7 @@ import { PermissionsSettingsPanel } from "@/components/settings/panels/permissio
 import { FallbackSettingsPanel } from "@/components/settings/panels/fallback-settings-panel";
 import { NotificationsSettingsPanel } from "@/components/settings/panels/notifications-settings-panel";
 import { UsageSettingsPanel } from "@/components/settings/panels/usage-settings-panel";
-import { CreditsSettingsPanel } from "@/components/settings/environment/credits-panel-placeholder";
+import { CreditsSettingsPanel } from "@/components/settings/panels/credits-settings-panel";
 import { SandboxesSettingsPanel } from "@/components/settings/environment/sandboxes-page-slot";
 import { MembersSettingsPanel } from "@/components/settings/environment/members-settings-panel";
 import { useSystemTabModalActions } from "@/stores/tabs/use-system-tab-modal";
