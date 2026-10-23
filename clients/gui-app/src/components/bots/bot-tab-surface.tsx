@@ -389,6 +389,7 @@ function BotTabContent(props: {
               botId={botId}
               hostId={hostId}
               botTitle={snapshot.bot.title}
+              appConversationChatId={snapshot.bot.appConversationChatId}
               paused={paused}
               resolveMember={resolveMember}
               openThreadPostId={openThreadPostId}
