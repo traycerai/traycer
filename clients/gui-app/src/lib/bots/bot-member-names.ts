@@ -26,20 +26,32 @@ export type BotMemberResolver = (userId: string) => BotMember | null;
 export const UNRESOLVED_BOT_MEMBERS: BotMemberResolver = () => null;
 
 /**
- * A user row's sender label in a bot chat: "You" for the viewer, the
- * member's name for another member, and the raw user id when the directory
- * does not know them or they have no name. Agent senders label as in any
- * other chat.
+ * A user row's sender label in a bot channel, as Slack names every message's
+ * sender: the viewer by their own account name ("You" when it has none),
+ * another member by the name the directory gives, and the raw user id when
+ * the directory does not know them or they have no name. Agent senders label
+ * as in any other chat.
  */
 export function botUserSenderLabel(
   sender: OpenUserMessageSender,
   context: SenderDisplayContext,
   resolveMember: BotMemberResolver,
 ): string {
-  if (sender.type === "user" && context.profile?.userId !== sender.userId) {
-    return resolveMember(sender.userId)?.displayName ?? sender.userId;
+  if (sender.type !== "user") return resolveSenderLabel(sender, context);
+  return botMemberName(sender.userId, context.profile, resolveMember);
+}
+
+/** A member's name on a bot channel's row; see {@link botUserSenderLabel}. */
+export function botMemberName(
+  userId: string,
+  viewer: SenderDisplayContext["profile"],
+  resolveMember: BotMemberResolver,
+): string {
+  if (viewer?.userId === userId) {
+    const own = viewer.userName.trim();
+    return own.length > 0 ? own : "You";
   }
-  return resolveSenderLabel(sender, context);
+  return resolveMember(userId)?.displayName ?? userId;
 }
 
 /**

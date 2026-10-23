@@ -1,14 +1,11 @@
 import { memo, useContext, type ReactElement } from "react";
-import type { ConversationRequest } from "@traycer/protocol/persistence/epic/messages";
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import type {
   ChatMessage as ChatMessageModel,
   MessageSegment,
 } from "@/stores/composer/chat-store";
-import { ChatConversationRequestContext } from "./chat-conversation-request-context";
+import { ChatBotMessage } from "./chat-bot-message";
+import { ChatBotPresentationContext } from "./chat-bot-presentation-context";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { GuiHarnessId } from "@traycer/protocol/host/index";
 import { AssistantMessageBody } from "./chat-message-assistant-body";
@@ -238,6 +235,7 @@ function renderAssistantMessage(props: ChatMessageProps): ReactElement {
 
 function ChatMessageImpl(props: ChatMessageProps) {
   const { actions, message } = props;
+  const botPresentation = useContext(ChatBotPresentationContext);
   // The list withholds these rows (`withholdUnpaintedRows`); this is the same
   // predicate for a model that reaches a `ChatMessage` some other way. It
   // returns before the role branches below, so the row's `system` role and
@@ -246,6 +244,12 @@ function ChatMessageImpl(props: ChatMessageProps) {
   const specialSegment = singleSpecialSegment(message.segments);
   if (specialSegment !== null) {
     return renderSpecialSegment(specialSegment);
+  }
+  // A bot's channel or thread draws its rows in Slack's layout; the bot's
+  // own sessions (trunk, thread forks) provide no presentation and keep the
+  // transcript's.
+  if (botPresentation !== null && message.role !== "system") {
+    return <ChatBotMessage message={message} presentation={botPresentation} />;
   }
   if (message.role === "assistant") {
     return renderAssistantMessage(props);
@@ -274,23 +278,6 @@ function ChatMessageImpl(props: ChatMessageProps) {
       instanceId={message.id}
     />
   );
-  // Only a bot conversation's user rows carry a picture: several members
-  // write into one conversation, and the picture says which one this is.
-  const sender =
-    message.senderAvatarUrl === undefined ? (
-      overline
-    ) : (
-      <span className="flex items-center gap-1.5">
-        <Avatar size="sm" data-testid="chat-sender-avatar">
-          <AvatarImage src={message.senderAvatarUrl} alt="" />
-          <AvatarFallback>
-            {senderLabel.slice(0, 1).toUpperCase()}
-          </AvatarFallback>
-        </Avatar>
-        {overline}
-      </span>
-    );
-
   return (
     <div
       className={cn(
@@ -298,53 +285,11 @@ function ChatMessageImpl(props: ChatMessageProps) {
         messageAlignmentClass(message),
       )}
     >
-      {message.agentSenderInfo === null ? sender : null}
+      {message.agentSenderInfo === null ? overline : null}
       <UserMessageBody
         message={message}
         actions={actions?.type === "user" ? actions : null}
       />
-      {message.conversationRequest === undefined ? null : (
-        <ConversationRequestLine request={message.conversationRequest} />
-      )}
-    </div>
-  );
-}
-
-/**
- * The state of the request a bot-conversation user row opened: `Open` until
- * the bot's trunk resolves it, `Resolved` after, with a jump to the reply
- * that resolved it when the surface can scroll to one. Read off the USER
- * row, which is where the host keeps it; the reply row is a plain assistant
- * message and says nothing about the request.
- */
-function ConversationRequestLine(props: {
-  readonly request: ConversationRequest;
-}): ReactElement {
-  const { request } = props;
-  const scrollToMessage = useContext(ChatConversationRequestContext);
-  const open = request.resolvedAt === null;
-  const replyId = request.resolvedByMessageId;
-  return (
-    <div
-      className="flex flex-wrap items-center gap-2 text-ui-xs text-muted-foreground"
-      data-testid="conversation-request"
-      data-request-id={request.requestId}
-      data-request-state={open ? "open" : "resolved"}
-    >
-      <Badge variant={open ? "warning" : "success"} size="xs">
-        {open ? "Open" : "Resolved"}
-      </Badge>
-      {open || replyId === null || scrollToMessage === null ? null : (
-        <Button
-          type="button"
-          variant="link"
-          size="xs"
-          onClick={() => scrollToMessage(replyId)}
-          data-testid="conversation-request-reply-link"
-        >
-          See reply
-        </Button>
-      )}
     </div>
   );
 }

@@ -20,7 +20,11 @@ import {
   ChatMessages,
   type ChatMessageScrollRequest,
 } from "@/components/chat/chat-messages";
-import { ChatConversationRequestContext } from "@/components/chat/chat-conversation-request-context";
+import {
+  ChatBotPresentationContext,
+  type ChatBotPresentation,
+  type ChatBotThreadLine,
+} from "@/components/chat/chat-bot-presentation-context";
 import { ChatContainerContext } from "@/components/chat/chat-container-context";
 import { queuedPromptMessageIds } from "@/components/chat/chat-queue-utils";
 import { useSubagentDrillIn } from "@/components/chat/segments/subagent-open-as-chat";
@@ -52,6 +56,20 @@ import {
 } from "@/stores/chats/rendered-messages";
 import type { SetupCardWindowIdentity } from "@traycer/protocol/host/agent/gui/subscribe-windowed";
 
+/**
+ * What a bot chat is to the person reading it: the bot's channel, whose
+ * posts each open a thread, or one of those threads.
+ */
+export type BotTranscriptSurface =
+  | {
+      readonly kind: "channel";
+      /** The thread line under a post, by the post's message id. */
+      readonly threadLine: (postMessageId: string) => ChatBotThreadLine | null;
+      /** Opens a post's thread; `null` where threads cannot be opened. */
+      readonly openThread: ((postMessageId: string) => void) | null;
+    }
+  | { readonly kind: "thread" };
+
 const NO_COLLABORATORS: SenderDisplayContext["collaborators"] = [];
 const EMPTY_SETUP_CARD_WINDOWS: ReadonlyArray<SetupCardWindowIdentity> = [];
 
@@ -67,8 +85,11 @@ const EMPTY_SETUP_CARD_WINDOWS: ReadonlyArray<SetupCardWindowIdentity> = [];
  * the Epic tile's chrome (composer, dock, restore, plan actions), because a
  * bot chat has none of those.
  *
- * `linkRequests` wires the user rows' "See reply" link to a scroll of this
- * list, so a resolved request lands on the reply that resolved it.
+ * `surface` says what the chat is to the person. A channel and a thread
+ * draw their rows in Slack's layout: a channel post carries the line that
+ * opens its thread, and a thread's resolved request jumps to the reply in
+ * this list that resolved it. `null` is one of the bot's own sessions (the
+ * trunk, a thread's session): the plain transcript, read-only.
  *
  * `resolveMember` names and pictures the members whose messages the chat
  * carries; a member it does not know shows as their user id.
@@ -79,18 +100,11 @@ export function BotChatTranscript(props: {
   readonly hostId: string;
   readonly title: string;
   readonly instanceId: string;
-  readonly linkRequests: boolean;
+  readonly surface: BotTranscriptSurface | null;
   readonly resolveMember: BotMemberResolver;
 }): ReactNode {
-  const {
-    botId,
-    chatId,
-    hostId,
-    title,
-    instanceId,
-    linkRequests,
-    resolveMember,
-  } = props;
+  const { botId, chatId, hostId, title, instanceId, surface, resolveMember } =
+    props;
   const handle = useChatSessionHandleForContainer(botId, chatId, hostId, true);
   if (handle === null) {
     return (
@@ -116,7 +130,7 @@ export function BotChatTranscript(props: {
         hostId={hostId}
         title={title}
         instanceId={instanceId}
-        linkRequests={linkRequests}
+        surface={surface}
         resolveMember={resolveMember}
       />
     </TileErrorBoundary>
@@ -130,7 +144,7 @@ function BotChatTranscriptBody(props: {
   readonly hostId: string;
   readonly title: string;
   readonly instanceId: string;
-  readonly linkRequests: boolean;
+  readonly surface: BotTranscriptSurface | null;
   readonly resolveMember: BotMemberResolver;
 }): ReactNode {
   const {
@@ -140,7 +154,7 @@ function BotChatTranscriptBody(props: {
     hostId,
     title,
     instanceId,
-    linkRequests,
+    surface,
     resolveMember,
   } = props;
   const state = useStore(
@@ -319,6 +333,24 @@ function BotChatTranscriptBody(props: {
     );
   }, []);
   const getMessageActions = useCallback(() => null, []);
+  const presentation = useMemo<ChatBotPresentation | null>(() => {
+    if (surface === null) return null;
+    if (surface.kind === "thread") {
+      return {
+        botTitle: title,
+        scrollToMessage,
+        threadLine: null,
+        openThread: null,
+      };
+    }
+    return {
+      botTitle: title,
+      // A post's verdict is in its thread, which the thread line opens.
+      scrollToMessage: null,
+      threadLine: surface.threadLine,
+      openThread: surface.openThread,
+    };
+  }, [scrollToMessage, surface, title]);
 
   const transcriptWindow = isWindowedTranscript(state)
     ? state.transcriptWindow
@@ -326,9 +358,7 @@ function BotChatTranscriptBody(props: {
 
   return (
     <ChatContainerContext.Provider value={botId}>
-      <ChatConversationRequestContext.Provider
-        value={linkRequests ? scrollToMessage : null}
-      >
+      <ChatBotPresentationContext.Provider value={presentation}>
         <div
           data-chat-keyboard-scroll-scope=""
           data-active="true"
@@ -359,7 +389,7 @@ function BotChatTranscriptBody(props: {
             subagentDrillIn={subagentDrillIn}
           />
         </div>
-      </ChatConversationRequestContext.Provider>
+      </ChatBotPresentationContext.Provider>
     </ChatContainerContext.Provider>
   );
 }
