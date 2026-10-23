@@ -68,9 +68,12 @@ vi.mock("@/lib/analytics", () => ({
 
 import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
 import {
+  useAccountHostScope,
   useHostScope,
   usePersonalHostScope,
 } from "@/components/settings/host-scope/use-host-scope";
+import { PERSONAL_PICK } from "@/lib/settings-environment-pages";
+import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
 import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope-store";
 
 function makeClient(hostId: string): HostClient<HostRpcRegistry> {
@@ -130,6 +133,10 @@ function renderBothScopes() {
 afterEach(() => {
   cleanup();
   useSettingsHostScopeStore.setState({ scopedHostId: null });
+  useSettingsEnvironmentPickStore.setState({
+    pick: null,
+    defaultPick: PERSONAL_PICK,
+  });
   harness.hosts = [];
   harness.activeHostId = null;
   harness.ambientClient = null;
@@ -197,5 +204,72 @@ describe("usePersonalHostScope", () => {
 
     expect(result.current.personal.hostId).toBe(PICKED_HOST_ID);
     expect(result.current.personal.status).toBe("following");
+  });
+});
+
+describe("usePersonalHostScope under the Environment dropdown's pick", () => {
+  const LOCAL_PICK = {
+    kind: "local",
+    hostId: PICKED_HOST_ID,
+    hostName: "Old laptop",
+  } as const;
+
+  it("reads a Local row's computer, while the account scope stays on the window's host", () => {
+    installTwoHosts();
+    useSettingsEnvironmentPickStore.setState({ pick: LOCAL_PICK });
+
+    const { result } = renderHook(() => ({
+      personal: usePersonalHostScope(),
+      account: useAccountHostScope(),
+    }));
+
+    expect(result.current.personal.hostId).toBe(PICKED_HOST_ID);
+    expect(result.current.personal.isViewingActive).toBe(false);
+    expect(result.current.personal.client).toBe(harness.overrideClient);
+    expect(result.current.account.hostId).toBe(WINDOW_HOST_ID);
+    expect(result.current.account.client).toBe(harness.ambientClient);
+  });
+
+  it("reads the default Local row when the person has picked nothing", () => {
+    installTwoHosts();
+    useSettingsEnvironmentPickStore.setState({
+      pick: null,
+      defaultPick: LOCAL_PICK,
+    });
+
+    const { result } = renderHook(() => usePersonalHostScope());
+
+    expect(result.current.hostId).toBe(PICKED_HOST_ID);
+  });
+
+  it("returns to the window's host when the pick goes back to Personal, and stays there for a team", () => {
+    installTwoHosts();
+    useSettingsEnvironmentPickStore.setState({ pick: LOCAL_PICK });
+    const { result } = renderHook(() => usePersonalHostScope());
+    expect(result.current.hostId).toBe(PICKED_HOST_ID);
+
+    act(() => {
+      useSettingsEnvironmentPickStore.getState().setPick(PERSONAL_PICK);
+    });
+    expect(result.current.hostId).toBe(WINDOW_HOST_ID);
+
+    act(() => {
+      useSettingsEnvironmentPickStore
+        .getState()
+        .setPick({ kind: "team", environmentId: "env-team" });
+    });
+    expect(result.current.hostId).toBe(WINDOW_HOST_ID);
+  });
+
+  it("is not re-pointed by the Host group's pick while a Local row is picked", () => {
+    installTwoHosts();
+    useSettingsEnvironmentPickStore.setState({ pick: LOCAL_PICK });
+    const { result } = renderBothScopes();
+
+    act(() => {
+      result.current.hostGroup.setHostId(WINDOW_HOST_ID);
+    });
+
+    expect(result.current.personal.hostId).toBe(PICKED_HOST_ID);
   });
 });

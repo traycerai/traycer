@@ -26,6 +26,24 @@ vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
   };
 });
 
+// The Environment dropdown reads each registered computer's
+// `environment.status` and negotiated version, and the footer's Sandboxes link
+// reads the environment list: all `useQuery`s, and this suite mounts no query
+// client. "No host has answered" is the honest empty answer; the picker's own
+// rows are covered by environment-picker.test.tsx.
+vi.mock("@/hooks/environment/use-registered-host-environment-statuses", () => ({
+  useRegisteredHostEnvironmentStatuses: () => new Map(),
+}));
+vi.mock("@/hooks/host/use-host-negotiated-method-version", () => ({
+  useHostNegotiatedMethodVersions: () => new Map(),
+}));
+vi.mock("@/hooks/bots/use-environment-list-query", () => ({
+  useEnvironmentListQuery: () => ({ data: undefined }),
+}));
+vi.mock("@/components/settings/move-sheet", () => ({
+  MoveSheet: () => null,
+}));
+
 vi.mock("@/components/settings/host-scope/add-host-dialog", () => ({
   AddHostDialog: () => null,
 }));

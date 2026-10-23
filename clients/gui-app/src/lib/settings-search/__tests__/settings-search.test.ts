@@ -230,13 +230,15 @@ describe("settings search", () => {
       ["MCP servers", "mcp-servers", "MCP servers"],
       ["Skills", "skills", "Skills"],
       ["Agent definitions", "agent-definitions", "Agent definitions"],
-      ["Machine setup", "machine-setup", "Machine setup"],
       ["Providers", "providers", "Providers"],
+      ["Permissions", "permissions", "Permissions"],
+      ["Sandboxes", "sandboxes", "Sandboxes"],
+      ["Members", "members", "Members"],
     ] as const) {
-      expect(pageScopeFor(query, section, label), query).toBe("Personal");
+      expect(pageScopeFor(query, section, label), query).toBe("Environment");
     }
     for (const [query, section, label] of [
-      ["Permissions", "permissions", "Permissions"],
+      ["Credits", "credits", "Credits"],
       ["Notifications", "notifications", "Notifications"],
     ] as const) {
       expect(pageScopeFor(query, section, label), query).toBe("Account");
@@ -251,12 +253,19 @@ describe("settings search", () => {
     expect(landingFor("secrets", DESKTOP)).toBe("secrets#<top>");
   });
 
-  it("opens MCP servers, Agent definitions and Machine setup on their own words", () => {
+  it("opens MCP servers and Agent definitions on their own words", () => {
     expect(landingFor("mcp servers", DESKTOP)).toBe("mcp-servers#<top>");
     expect(landingFor("agent definitions", DESKTOP)).toBe(
       "agent-definitions#<top>",
     );
-    expect(landingFor("machine setup", DESKTOP)).toBe("machine-setup#<top>");
+  });
+
+  it("no longer offers Machine setup as a page of its own", () => {
+    expect(
+      searchSettings("machine setup", DESKTOP).some(
+        (result) => result.entry.section === "machine-setup",
+      ),
+    ).toBe(false);
   });
 
   it("reaches the Agent office default view row, group breadcrumb included", () => {
