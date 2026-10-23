@@ -985,6 +985,24 @@ lists each version with Undo (Restore on a revoked secret, sent with
 the line that a change reaches only the copy stored here. A held secret's
 row keeps its "Waiting for you" badge.
 
+**Environment ▸ Retrospective sheet and Stop sharing.** On a 1.1 host,
+Overview shows `Shared by an earlier version` / `This computer stopped
+sharing on …` / `This computer went back to your own settings.`
+(`environment.status` planes and `returnedFromTeam`), the `Details` verb on
+the earlier-version line, and `Stop sharing from this computer` while any
+plane is not `stopped` and not fully `local`. `Details` opens the
+retrospective sheet (`environment.review@1.1` evidence and held rows); Got it
+records acknowledgement (`environment.review.record`) and Escape does not. A
+Local picker row's subtitle and `Move to Personal` / `finish moving` verb
+come from those planes (E4's slot). The Secrets page's `N items from {host}
+is/are not in use · Review them` line opens the same sheet for that host's
+held rows. `Keep as a secret` collects Add-secret's binding (kind, protocol,
+hosts, port, swap sites, gateway consent) with no value field, then
+`environment.review.heldApply`. Stop sharing opens the preview
+(`environment.move.stopPreview`) and confirm (`environment.move.stop`) after
+every needs-choice row has Keep locally, Remove from this computer, or
+Resolve.
+
 **Personal ▸ Notices and "needs you"** (`personal/personal-page-notices.tsx`).
 Under a Personal page's status line, for the item
 kinds the page edits: each convergence notice from `environment.notices`

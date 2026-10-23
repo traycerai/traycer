@@ -1,4 +1,5 @@
 import type { EnvironmentStatusResponseV11 } from "@traycer/protocol/host/environment-schemas";
+import { cohortFromPlanes } from "@/components/settings/move/cohort-rows";
 
 /**
  * The verb at the end of a Local row: `Move to Personal` opens the move
@@ -8,8 +9,8 @@ import type { EnvironmentStatusResponseV11 } from "@traycer/protocol/host/enviro
 export type LocalRowVerb = "move_to_personal" | "finish_moving";
 
 /**
- * STUB (P5 replaces its body): the cohort rule for a
- * host's Local row, read from its `environment.status` (`planes`).
+ * The cohort rule for a host's Local row, read from its
+ * `environment.status` (`planes`).
  *
  * - `none`: the host has no Local row.
  * - `local`: it has one, with this subtitle (the text before the verb) and
@@ -29,7 +30,19 @@ export type LocalRowCohort =
     };
 
 export function localRowCohort(
-  _status: EnvironmentStatusResponseV11,
+  status: EnvironmentStatusResponseV11,
 ): LocalRowCohort | null {
-  return null;
+  const cohort = cohortFromPlanes(
+    status.planes,
+    status.pendingUploads.length > 0,
+  );
+  if (!cohort.hasLocalRow || cohort.subtitle === null) {
+    return { kind: "none" };
+  }
+  return {
+    kind: "local",
+    subtitle: cohort.subtitle,
+    verb: cohort.verb,
+    defaultsToLocal: cohort.defaultToLocalRow,
+  };
 }
