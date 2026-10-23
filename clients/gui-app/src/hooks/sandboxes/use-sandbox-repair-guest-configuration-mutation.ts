@@ -6,6 +6,9 @@ import type {
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostRpcRegistry } from "@/lib/host";
 import { useHostScopedMutation } from "@/hooks/host/use-host-scoped-mutation";
+import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
+import { useHostMutation } from "@/hooks/host/use-host-query";
+import { toastFromHostError } from "@/lib/host-error-toast";
 import { sandboxMutationKeys } from "@/lib/query-keys";
 
 const NO_INVALIDATIONS: readonly [] = [];
@@ -31,5 +34,33 @@ export function useSandboxRepairGuestConfiguration(): UseMutationResult<
     mutationKey: sandboxMutationKeys.repairGuestConfiguration(),
     errorMessage: "Couldn't repair this sandbox's setup.",
     invalidateMethods: NO_INVALIDATIONS,
+  });
+}
+
+/**
+ * The same repair on a named sandbox host, for a surface that lists many
+ * (Settings › Sandboxes' `Retry applying`): addressed to that host's own
+ * client, never the window's.
+ */
+export function useSandboxRepairGuestConfigurationOnHost(
+  hostId: string,
+): UseMutationResult<
+  ResponseOfMethod<HostRpcRegistry, "host.sandbox.repairGuestConfiguration">,
+  HostRpcError,
+  RequestOfMethod<HostRpcRegistry, "host.sandbox.repairGuestConfiguration">
+> {
+  const client = useHostClientForHostId(hostId);
+  return useHostMutation<
+    HostRpcRegistry,
+    "host.sandbox.repairGuestConfiguration"
+  >({
+    client,
+    method: "host.sandbox.repairGuestConfiguration",
+    options: {
+      mutationKey: sandboxMutationKeys.repairGuestConfigurationOn(hostId),
+      onError: (error) =>
+        toastFromHostError(error, "Couldn't repair this sandbox's setup."),
+    },
+    mapVariables: (variables) => variables,
   });
 }

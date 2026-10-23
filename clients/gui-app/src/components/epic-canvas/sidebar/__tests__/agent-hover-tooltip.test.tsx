@@ -157,16 +157,13 @@ vi.mock("@/stores/epics/left-panel-store", () => ({
   useEpicLeftPanelStore: (selector: (state: unknown) => unknown) =>
     selector({ setActivePanelIdAndExpand: h.setPanel }),
 }));
-// Until the sandboxes settings section exists, Details opens Devices, the
-// current place sandboxes are managed.
-vi.mock("@/lib/settings-navigation", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@/lib/settings-navigation")>()),
-  navigateToSettingsSection: h.openDetails,
+vi.mock("@/stores/sandboxes/sandbox-details-store", () => ({
+  openSandboxDetails: h.openDetails,
 }));
-vi.mock("@/components/epic-canvas/sidebar/agent-sandbox-keep-confirm", () => ({
-  AgentSandboxKeepConfirm: (props: {
-    readonly sandbox: { readonly id: string };
-  }) => <div data-testid="keep-dialog">{props.sandbox.id}</div>,
+vi.mock("@/components/hosts/sandbox-confirm-dialogs", () => ({
+  SandboxKeepDialog: (props: { readonly sandbox: { readonly id: string } }) => (
+    <div data-testid="keep-dialog">{props.sandbox.id}</div>
+  ),
 }));
 
 const worktreeTooltipSpy = vi.hoisted(() => vi.fn());
@@ -627,7 +624,7 @@ describe("AgentHoverTooltip host section", () => {
     );
   });
 
-  it("opens the Devices settings section from Details", async () => {
+  it("opens Details for the row from the viewer's list", async () => {
     h.sandboxes = [sandboxRow({})];
     renderAgent({
       hostId: "host-sbx",
@@ -636,7 +633,7 @@ describe("AgentHoverTooltip host section", () => {
     });
 
     await userEvent.click(screen.getByRole("button", { name: "Details" }));
-    expect(h.openDetails).toHaveBeenCalledWith("devices");
+    expect(h.openDetails).toHaveBeenCalledWith("sbx-1");
   });
 
   it("shows only the approved label, configuration, reach and task files for a task-only host", async () => {

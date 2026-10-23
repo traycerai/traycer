@@ -123,6 +123,12 @@ vi.mock("@/hooks/sandboxes/use-refresh-sandbox-costs", () => ({
 vi.mock("@/hooks/sandboxes/use-sandbox-catalogue-query", () => ({
   useSandboxCatalogue: () => ({ data: mocks.catalogue }),
 }));
+vi.mock("@/hooks/sandboxes/use-sandbox-session-report", () => ({
+  useSandboxSessionReport: () => ({
+    report: { kind: "unknown" },
+    failed: false,
+  }),
+}));
 vi.mock("@/hooks/sandboxes/use-sandbox-costs-query", () => ({
   useSandboxCosts: () => ({ data: mocks.costs, isError: false }),
 }));
@@ -852,6 +858,11 @@ describe("<SandboxCard /> destroy", () => {
   function openDestroy(): void {
     fireEvent.click(screen.getByTestId("sandbox-card-destroy"));
   }
+  function typeName(): void {
+    fireEvent.change(screen.getByTestId("sandbox-confirm-destroy-typed"), {
+      target: { value: NAME },
+    });
+  }
 
   it("asks for confirmation on a non-burst row and destroys nothing until it is given", async () => {
     renderCard(sandboxOf("suspended", false, { burst: false }));
@@ -859,11 +870,12 @@ describe("<SandboxCard /> destroy", () => {
 
     const dialog = await screen.findByTestId("confirm-destructive-dialog");
     expect(within(dialog).getByText(`Destroy ${NAME}?`)).toBeDefined();
-    expect(within(dialog).getByText(/can't be recovered/)).toBeDefined();
-    // No typed confirmation on a row that is not frozen.
-    expect(screen.queryByTestId("sandbox-card-destroy-typed")).toBeNull();
+    expect(
+      within(dialog).getByText(/The disk is not recoverable/),
+    ).toBeDefined();
     expect(mocks.binding?.auth.destroySandbox).not.toHaveBeenCalled();
 
+    typeName();
     fireEvent.click(screen.getByTestId("confirm-action"));
     await waitFor(() => {
       expect(mocks.binding?.auth.destroySandbox).toHaveBeenCalledWith("sbx_1");
@@ -892,6 +904,7 @@ describe("<SandboxCard /> destroy", () => {
     renderCard(sandboxOf("suspended", false, {}));
     openDestroy();
     await screen.findByTestId("confirm-destructive-dialog");
+    typeName();
     fireEvent.click(screen.getByTestId("confirm-action"));
 
     await waitFor(() => {
@@ -907,6 +920,7 @@ describe("<SandboxCard /> destroy", () => {
     renderCard(sandboxOf("suspended", false, {}));
     openDestroy();
     await screen.findByTestId("confirm-destructive-dialog");
+    typeName();
     fireEvent.click(screen.getByTestId("confirm-action"));
     await waitFor(() => {
       expect(mocks.toastSuccess).toHaveBeenCalledWith(`Destroyed ${NAME}`);
@@ -917,6 +931,7 @@ describe("<SandboxCard /> destroy", () => {
     async function confirmDestroy(): Promise<void> {
       openDestroy();
       await screen.findByTestId("confirm-destructive-dialog");
+      typeName();
       fireEvent.click(screen.getByTestId("confirm-action"));
     }
 
@@ -975,12 +990,12 @@ describe("<SandboxCard /> destroy", () => {
     });
   });
 
-  describe("the typed-name gate on a frozen row", () => {
+  describe("the typed-name gate", () => {
     async function openFrozen(): Promise<HTMLElement> {
       renderCard(sandboxOf("suspended", true, {}));
       openDestroy();
       await screen.findByTestId("confirm-destructive-dialog");
-      const input = screen.getByTestId("sandbox-card-destroy-typed");
+      const input = screen.getByTestId("sandbox-confirm-destroy-typed");
       if (!(input instanceof HTMLInputElement)) {
         throw new Error("the typed confirmation is not an input");
       }
@@ -1029,7 +1044,9 @@ describe("<SandboxCard /> destroy", () => {
         expect(screen.queryByTestId("confirm-destructive-dialog")).toBeNull();
       });
       openDestroy();
-      const reopened = await screen.findByTestId("sandbox-card-destroy-typed");
+      const reopened = await screen.findByTestId(
+        "sandbox-confirm-destroy-typed",
+      );
       expect(reopened).toHaveProperty("value", "");
     });
   });

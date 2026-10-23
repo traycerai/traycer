@@ -23,7 +23,7 @@ import type { RoleClaim } from "@traycer/protocol/persistence/epic/role-claims";
 import type { SandboxSummary } from "@traycer/protocol/host/sandbox-control";
 import type { WorktreeBindingOwnerKind } from "@traycer/protocol/host/worktree-schemas";
 import { HoverCard } from "@/components/ui/hover-card";
-import { AgentSandboxKeepConfirm } from "@/components/epic-canvas/sidebar/agent-sandbox-keep-confirm";
+import { SandboxKeepDialog } from "@/components/hosts/sandbox-confirm-dialogs";
 import { WorktreeOwnerMetadataTooltip } from "@/components/worktree/worktree-owner-metadata";
 import { AgentRoleHoverContent } from "@/components/epic-canvas/sidebar/agent-role-badges";
 import { AgentHostSection } from "@/components/epic-canvas/sidebar/agent-host-section";
@@ -115,7 +115,7 @@ export function AgentHoverTooltip(props: AgentHoverTooltipProps): ReactNode {
     <>
       <AgentHoverTooltipContent {...props} onKeep={setKeepSandbox} />
       {keepSandbox === null ? null : (
-        <AgentSandboxKeepConfirm
+        <SandboxKeepDialog
           sandbox={keepSandbox}
           open
           onOpenChange={(open) => {

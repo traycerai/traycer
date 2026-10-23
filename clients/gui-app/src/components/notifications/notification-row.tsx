@@ -49,6 +49,7 @@ import { cn } from "@/lib/utils";
 import { useRunnerHostOrNull } from "@/providers/use-runner-host";
 import {
   type MergedNotificationRow,
+  sandboxIdOfNotificationRow,
   useMergedNotificationRow,
 } from "@/stores/notifications/merged-notifications";
 import {
@@ -185,7 +186,7 @@ export function NotificationRow(props: NotificationRowProps): ReactNode {
     hasLocalHost: runnerHost?.hasLocalHost ?? false,
     localHostId: localHost?.hostId ?? null,
     body: row.body,
-    hasPayload: row.payload !== null,
+    hasPayload: rowHasDestination(row),
   });
   const isRead = row.readAt !== null;
   const originUnavailability = originRefusal({
@@ -335,6 +336,14 @@ function NotificationRowWithSecrets(props: {
       )}
     </div>
   );
+}
+
+/**
+ * Whether activating the row goes somewhere: its payload, or for a sandbox
+ * push (which has none) the Sandboxes row its key names.
+ */
+function rowHasDestination(row: MergedNotificationRow): boolean {
+  return row.payload !== null || sandboxIdOfNotificationRow(row) !== null;
 }
 
 function resolvePackRowPresentation(options: {

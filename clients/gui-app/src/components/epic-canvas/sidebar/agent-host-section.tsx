@@ -21,7 +21,6 @@ import { useSandboxCatalogue } from "@/hooks/sandboxes/use-sandbox-catalogue-que
 import { useSandboxCosts } from "@/hooks/sandboxes/use-sandbox-costs-query";
 import { tileIntent } from "@/lib/canvas/tile-open/intent";
 import { useSampledNow } from "@/lib/relative-time";
-import { navigateToSettingsSection } from "@/lib/settings-navigation";
 import {
   AGENT_SANDBOX,
   burstIdleLine,
@@ -49,6 +48,7 @@ import {
 import { cn } from "@/lib/utils";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useEpicLeftPanelStore } from "@/stores/epics/left-panel-store";
+import { openSandboxDetails } from "@/stores/sandboxes/sandbox-details-store";
 import {
   tabSurfaceKey,
   useSurfaceHostSelectionStore,
@@ -310,7 +310,7 @@ function HostActions(props: {
         type="button"
         size="xs"
         variant="ghost"
-        onClick={() => navigateToSettingsSection("devices")}
+        onClick={() => openSandboxDetails(sandbox.id)}
       >
         {DETAILS}
       </Button>

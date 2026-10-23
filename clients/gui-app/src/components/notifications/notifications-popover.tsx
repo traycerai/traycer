@@ -64,7 +64,9 @@ import {
   useMergedNotificationsActions,
   useNotificationCenterHostState,
   useRecentNotificationIds,
+  sandboxIdOfNotificationRow,
 } from "@/stores/notifications/merged-notifications";
+import { useOpenSandboxesPage } from "@/hooks/sandboxes/use-open-sandboxes-page";
 import {
   type CloudNotificationsConnectionState,
   useCloudNotificationsStore,
@@ -475,8 +477,16 @@ export function NotificationsPopover(
     revealArrivals();
   }, [scrollToTop, revealArrivals, newArrivalCount]);
 
+  const openSandboxesPage = useOpenSandboxesPage();
   const handleActivate = useCallback(
     (row: MergedNotificationRow) => {
+      const sandboxId = sandboxIdOfNotificationRow(row);
+      if (sandboxId !== null) {
+        actions.markAsRead(row);
+        openSandboxesPage(sandboxId);
+        onNavigate();
+        return;
+      }
       if (row.payload === null) return;
       activate({
         payload: row.payload,
@@ -497,7 +507,7 @@ export function NotificationsPopover(
         }),
       });
     },
-    [actions, activate, onNavigate],
+    [actions, activate, onNavigate, openSandboxesPage],
   );
 
   const handleAcknowledge = useCallback(

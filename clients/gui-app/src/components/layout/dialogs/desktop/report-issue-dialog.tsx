@@ -138,6 +138,7 @@ const ROUTE_TEMPLATE_LABELS: Readonly<
   "/settings/opening-behavior": "Settings - Opening behavior",
   "/settings/permissions": "Settings - Permissions",
   "/settings/providers": "Settings - Providers",
+  "/settings/sandboxes": "Settings - Sandboxes",
   "/settings/secrets": "Settings - Secrets",
   "/settings/service": "Settings - Service",
   "/settings/shell": "Settings - Variables and shells",

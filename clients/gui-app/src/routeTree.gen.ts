@@ -46,6 +46,7 @@ import { Route as SettingsNotificationsRouteImport } from "./routes/settings.not
 import { Route as SettingsOpeningBehaviorRouteImport } from "./routes/settings.opening-behavior";
 import { Route as SettingsPermissionsRouteImport } from "./routes/settings.permissions";
 import { Route as SettingsProvidersRouteImport } from "./routes/settings.providers";
+import { Route as SettingsSandboxesRouteImport } from "./routes/settings.sandboxes";
 import { Route as SettingsSecretsRouteImport } from "./routes/settings.secrets";
 import { Route as SettingsServiceRouteImport } from "./routes/settings.service";
 import { Route as SettingsShellRouteImport } from "./routes/settings.shell";
@@ -243,6 +244,11 @@ const SettingsProvidersRoute = SettingsProvidersRouteImport.update({
   path: "/providers",
   getParentRoute: () => SettingsRoute,
 } as any);
+const SettingsSandboxesRoute = SettingsSandboxesRouteImport.update({
+  id: "/sandboxes",
+  path: "/sandboxes",
+  getParentRoute: () => SettingsRoute,
+} as any);
 const SettingsSecretsRoute = SettingsSecretsRouteImport.update({
   id: "/secrets",
   path: "/secrets",
@@ -315,6 +321,7 @@ export interface FileRoutesByFullPath {
   "/settings/opening-behavior": typeof SettingsOpeningBehaviorRoute;
   "/settings/permissions": typeof SettingsPermissionsRoute;
   "/settings/providers": typeof SettingsProvidersRoute;
+  "/settings/sandboxes": typeof SettingsSandboxesRoute;
   "/settings/secrets": typeof SettingsSecretsRoute;
   "/settings/service": typeof SettingsServiceRoute;
   "/settings/shell": typeof SettingsShellRoute;
@@ -359,6 +366,7 @@ export interface FileRoutesByTo {
   "/settings/opening-behavior": typeof SettingsOpeningBehaviorRoute;
   "/settings/permissions": typeof SettingsPermissionsRoute;
   "/settings/providers": typeof SettingsProvidersRoute;
+  "/settings/sandboxes": typeof SettingsSandboxesRoute;
   "/settings/secrets": typeof SettingsSecretsRoute;
   "/settings/service": typeof SettingsServiceRoute;
   "/settings/shell": typeof SettingsShellRoute;
@@ -406,6 +414,7 @@ export interface FileRoutesById {
   "/settings/opening-behavior": typeof SettingsOpeningBehaviorRoute;
   "/settings/permissions": typeof SettingsPermissionsRoute;
   "/settings/providers": typeof SettingsProvidersRoute;
+  "/settings/sandboxes": typeof SettingsSandboxesRoute;
   "/settings/secrets": typeof SettingsSecretsRoute;
   "/settings/service": typeof SettingsServiceRoute;
   "/settings/shell": typeof SettingsShellRoute;
@@ -454,6 +463,7 @@ export interface FileRouteTypes {
     | "/settings/opening-behavior"
     | "/settings/permissions"
     | "/settings/providers"
+    | "/settings/sandboxes"
     | "/settings/secrets"
     | "/settings/service"
     | "/settings/shell"
@@ -498,6 +508,7 @@ export interface FileRouteTypes {
     | "/settings/opening-behavior"
     | "/settings/permissions"
     | "/settings/providers"
+    | "/settings/sandboxes"
     | "/settings/secrets"
     | "/settings/service"
     | "/settings/shell"
@@ -544,6 +555,7 @@ export interface FileRouteTypes {
     | "/settings/opening-behavior"
     | "/settings/permissions"
     | "/settings/providers"
+    | "/settings/sandboxes"
     | "/settings/secrets"
     | "/settings/service"
     | "/settings/shell"
@@ -829,6 +841,13 @@ declare module "@tanstack/react-router" {
       preLoaderRoute: typeof SettingsProvidersRouteImport;
       parentRoute: typeof SettingsRoute;
     };
+    "/settings/sandboxes": {
+      id: "/settings/sandboxes";
+      path: "/sandboxes";
+      fullPath: "/settings/sandboxes";
+      preLoaderRoute: typeof SettingsSandboxesRouteImport;
+      parentRoute: typeof SettingsRoute;
+    };
     "/settings/secrets": {
       id: "/settings/secrets";
       path: "/secrets";
@@ -919,6 +938,7 @@ interface SettingsRouteChildren {
   SettingsOpeningBehaviorRoute: typeof SettingsOpeningBehaviorRoute;
   SettingsPermissionsRoute: typeof SettingsPermissionsRoute;
   SettingsProvidersRoute: typeof SettingsProvidersRoute;
+  SettingsSandboxesRoute: typeof SettingsSandboxesRoute;
   SettingsSecretsRoute: typeof SettingsSecretsRoute;
   SettingsServiceRoute: typeof SettingsServiceRoute;
   SettingsShellRoute: typeof SettingsShellRoute;
@@ -954,6 +974,7 @@ const SettingsRouteChildren: SettingsRouteChildren = {
   SettingsOpeningBehaviorRoute: SettingsOpeningBehaviorRoute,
   SettingsPermissionsRoute: SettingsPermissionsRoute,
   SettingsProvidersRoute: SettingsProvidersRoute,
+  SettingsSandboxesRoute: SettingsSandboxesRoute,
   SettingsSecretsRoute: SettingsSecretsRoute,
   SettingsServiceRoute: SettingsServiceRoute,
   SettingsShellRoute: SettingsShellRoute,
