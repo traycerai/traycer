@@ -229,6 +229,7 @@ export function botSnapshotFrame(
     bot,
     tasks,
     openRequestCount,
+    conversationsRevision: null,
     boundHost: {
       hostId: bot.boundHostId,
       epoch: bot.hostEpoch,
