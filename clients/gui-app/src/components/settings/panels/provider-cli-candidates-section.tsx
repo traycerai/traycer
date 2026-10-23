@@ -347,21 +347,6 @@ function isManagedLineSelected(
 }
 
 /**
- * A PATH binary on the 2.x line is one Traycer does not pick up on its own:
- * OpenCode 2 runs through the Managed 2.x row. Only said where that row
- * exists.
- */
-function pathLineAdvisory(
-  candidate: ProviderCliCandidate,
-  offersManagedLines: boolean,
-): string | null {
-  if (!offersManagedLines || candidate.kind !== "path") return null;
-  if (candidate.version === null) return null;
-  if (/^v?2\./.exec(candidate.version) === null) return null;
-  return `This binary is OpenCode ${candidate.version}. Traycer runs OpenCode 2 through Managed 2.x.`;
-}
-
-/**
  * An empty candidate list means "nothing runnable was found on this machine",
  * not "nothing detected yet": the host only omits the bundled row for the
  * providers it ships no binary for (`PROVIDERS_WITHOUT_BUNDLED_BINARY`), and
@@ -794,7 +779,6 @@ function CandidateTable({
           candidate={row.candidate}
           managedLine={row.line}
           rowSelection={{ kind: "bundled", line: row.line }}
-          lineAdvisory={null}
           managedInstallState={row.managedInstallState}
           packPreparing={row.packPreparing}
           nextRunBinary={nextRunBinary}
@@ -824,7 +808,6 @@ function CandidateTable({
             candidate={candidate}
             managedLine={null}
             rowSelection={selectionFor(candidate)}
-            lineAdvisory={pathLineAdvisory(candidate, managedLines.length > 0)}
             managedInstallState={managedInstallState}
             packPreparing={packPreparing}
             nextRunBinary={nextRunBinary}
@@ -968,7 +951,6 @@ function CandidateRow({
   candidate,
   managedLine,
   rowSelection,
-  lineAdvisory,
   managedInstallState,
   packPreparing,
   nextRunBinary,
@@ -990,8 +972,6 @@ function CandidateRow({
   readonly managedLine: OpencodeLine | null;
   /** What picking this row's radio stores. */
   readonly rowSelection: ProviderSelection;
-  /** A note on this row's binary that is not a resolver advisory. */
-  readonly lineAdvisory: string | null;
   // Provider-level (not per-candidate - see that schema's comment), so only
   // meaningful for the bundled row; other candidates ignore it. Still the
   // source for `bundledPathLabel`, which asks a different question than the
@@ -1017,7 +997,6 @@ function CandidateRow({
   const presentation = candidateRowPresentation({
     candidate,
     managedLine,
-    lineAdvisory,
     managedInstallState,
     packPreparing,
     nextRunBinary,
@@ -1079,7 +1058,6 @@ type CandidateRowPresentation = {
 function candidateRowPresentation(args: {
   readonly candidate: ProviderCliCandidate;
   readonly managedLine: OpencodeLine | null;
-  readonly lineAdvisory: string | null;
   readonly managedInstallState: ProviderManagedInstallState | null;
   readonly packPreparing: ProviderPackPreparing | null;
   readonly nextRunBinary: ProviderNextRunBinary | null;
@@ -1102,7 +1080,7 @@ function candidateRowPresentation(args: {
       args.candidate.kind === "path" &&
       args.advisory?.kind === "row-incompatibility"
         ? args.advisory.detail
-        : args.lineAdvisory,
+        : null,
     unavailable:
       !args.candidate.available &&
       !args.candidate.versionPending &&

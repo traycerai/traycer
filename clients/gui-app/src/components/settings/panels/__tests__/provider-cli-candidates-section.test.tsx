@@ -1,4 +1,10 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  within,
+} from "@testing-library/react";
 import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
 import type {
   ProviderAdvisory,
@@ -1824,36 +1830,28 @@ describe("ProviderCliCandidatesSection: OpenCode Managed lines", () => {
     expect(screen.queryByText("Default")).toBeNull();
   });
 
-  it("says a PATH 2.x binary runs through Managed 2.x", () => {
-    renderSection(
-      opencodeState({
-        selected: { kind: "bundled" },
-        withLines: true,
-        candidates: [
-          pathCandidate({ path: "/usr/local/bin/opencode", version: "2.0.5" }),
-        ],
-      }),
-    );
-    const info = screen.getByLabelText(
-      "Why this PATH binary is not used automatically",
-    );
-    expect(tooltipTextNear(info)).toContain(
-      "Traycer runs OpenCode 2 through Managed 2.x.",
-    );
-  });
-
-  it("says nothing about a PATH 1.x binary", () => {
-    renderSection(
-      opencodeState({
-        selected: { kind: "bundled" },
-        withLines: true,
-        candidates: [
-          pathCandidate({ path: "/usr/local/bin/opencode", version: "1.14.0" }),
-        ],
-      }),
-    );
-    expect(
-      screen.queryByLabelText("Why this PATH binary is not used automatically"),
-    ).toBeNull();
-  });
+  it.each([["2.0.5"], ["1.14.0"]])(
+    "shows a PATH %s binary's version with no advisory",
+    (version) => {
+      renderSection(
+        opencodeState({
+          selected: { kind: "bundled" },
+          withLines: true,
+          candidates: [
+            pathCandidate({ path: "/usr/local/bin/opencode", version }),
+          ],
+        }),
+      );
+      const row = screen.getByRole("radio", {
+        name: "Select /usr/local/bin/opencode",
+      }).parentElement?.parentElement;
+      if (!row) throw new Error("PATH candidate row not rendered");
+      expect(within(row).getByText(`v${version}`)).toBeDefined();
+      expect(
+        screen.queryByLabelText(
+          "Why this PATH binary is not used automatically",
+        ),
+      ).toBeNull();
+    },
+  );
 });
