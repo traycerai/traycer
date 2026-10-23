@@ -83,7 +83,12 @@ export function formatAgentListPage(
   const showArchived = rendered.some(hasArchiveEnrichment);
   // Gated on a row printing the marker: only an `other_principal` row does.
   const showUnreachable = rendered.some(isOtherPrincipalAgent);
-  const showOwner = rendered.some((agent) => formatOwnerToken(agent) !== "");
+  // Gated on a PRINTED row, like the activity gate below: the token is new, so
+  // there are no older bytes to keep for an agent the response holds and no
+  // row prints.
+  const showOwner = pageSections.some((section) =>
+    section.rows.some((row) => formatOwnerToken(row.agent) !== ""),
+  );
   const showRunConfig = full && rendered.some(hasRunConfigEnrichment);
   const showOwnerHostConnectivity =
     full && rendered.some(hasConnectivityEnrichment);
