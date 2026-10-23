@@ -68,7 +68,7 @@ daemon (`useDaemonProcess: false`): leave it off.
 
 A team pull request into `main` runs **no CI, on purpose**, except the CodeQL
 scan: every required check reports passed, so a merge needs review only, and
-the commit hook is the only other check before merge. Pull requests from
+the commit hook is the only other automatic check before merge. Pull requests from
 forks and bots, and into any other branch, run every check; watch them with
 `gh pr checks --watch` and fix what they report.
 
