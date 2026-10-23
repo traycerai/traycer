@@ -36,8 +36,8 @@ on:
     types: [opened, synchronize, reopened, labeled]
   push:
     branches: [main]
-  # Check a branch against the released baselines before merging it:
-  # `gh workflow run protocol-compat.yml --ref <branch>`.
+  # A manual trigger for a sparing branch run, when a check is actually
+  # needed before the merge (AGENTS.md, "When CI runs").
   workflow_dispatch:
 
 permissions:
