@@ -757,6 +757,8 @@ export function hostRpcToCliError(err: unknown): unknown {
  *   - every other `HostTransportFailureError` → `HOST_UNREACHABLE`: the
  *     connection failed before the request went out, or the failure is
  *     replayable, so nothing below applies and a retry is safe.
+ *   - the exact `RPC_ERROR` shutdown refusal → `HOST_BUSY`: the host is
+ *     stopping and refused this request; its message is preserved.
  *   - everything else, including `RPC_ERROR` → `UNEXPECTED`: `RPC_ERROR` is the
  *     host's catch-all for any resolver error (e.g. "agent not found"), so it
  *     must NOT be reported as "host not running" - the host answered. A
@@ -929,6 +931,14 @@ function mapHostRpcError(err: HostRpcError): CliError {
       exitCode: 1,
     });
   }
+  if (isHostShuttingDown(err)) {
+    return cliError({
+      code: CLI_ERROR_CODES.HOST_BUSY,
+      message: err.message,
+      details: null,
+      exitCode: 1,
+    });
+  }
   const code =
     err.code === "UNAUTHORIZED"
       ? CLI_ERROR_CODES.AUTH_REJECTED
@@ -939,6 +949,16 @@ function mapHostRpcError(err: HostRpcError): CliError {
     details: null,
     exitCode: 1,
   });
+}
+
+// The host's admission latch refuses work during shutdown with this fixed
+// message under its generic wire code. Match both exactly so other resolver
+// failures remain unexpected; classification does not retry the request.
+function isHostShuttingDown(err: HostRpcError): boolean {
+  return (
+    err.code === "RPC_ERROR" &&
+    err.message === "EntityMemoryManager is shutting down"
+  );
 }
 
 // Best-effort fallback: an `RPC_ERROR` whose message still indicates an access
