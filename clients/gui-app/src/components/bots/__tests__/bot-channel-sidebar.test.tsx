@@ -92,6 +92,7 @@ function bot(botId: string, environmentId: string, title: string): BotRecord {
     model: "opus",
     effort: null,
     profile: null,
+    directive: null,
     trunkChatId: `trunk-${botId}`,
     boundHostId: null,
     hostEpoch: 0,

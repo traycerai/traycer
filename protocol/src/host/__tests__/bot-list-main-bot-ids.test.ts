@@ -14,6 +14,7 @@ const BOT_ROW = {
   model: "model-a",
   effort: null,
   profile: null,
+  directive: null,
   trunkChatId: "chat-1",
   boundHostId: "host-1",
   hostEpoch: 0,
