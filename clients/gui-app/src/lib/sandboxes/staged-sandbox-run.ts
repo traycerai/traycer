@@ -159,7 +159,9 @@ async function startTarget(
     createdByHostId: null,
     createdByAgentId: null,
     environmentId,
-    destroyAfterRestingMinutes: target.shape.destroyAfterRestingMinutes,
+    // The shape's `null` is "never"; on a create `null` is the configuration's
+    // default and `0` is never.
+    destroyAfterRestingMinutes: target.shape.destroyAfterRestingMinutes ?? 0,
     // The task does not exist yet: it is created on the new host in phase 2.
     createdByTaskId: null,
     clientRequestId,

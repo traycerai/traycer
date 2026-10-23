@@ -38,6 +38,7 @@ import {
 import { useSandboxControlUnavailableReason } from "@/hooks/sandboxes/use-sandbox-control-unavailable-reason";
 import { useSandboxCosts } from "@/hooks/sandboxes/use-sandbox-costs-query";
 import { useSandboxList } from "@/hooks/sandboxes/use-sandbox-list-query";
+import { useSettlePendingSandboxReveal } from "@/hooks/sandboxes/use-open-sandboxes-page";
 import { useRefreshSandboxCosts } from "@/hooks/sandboxes/use-refresh-sandbox-costs";
 import { useSandboxSessionReport } from "@/hooks/sandboxes/use-sandbox-session-report";
 import { useOpenLink } from "@/lib/links/open-link";
@@ -88,6 +89,8 @@ import {
   type StageShape,
 } from "@/lib/sandboxes/sandbox-stage-model";
 import { useEffectiveHostId } from "@/hooks/host/use-effective-host-id";
+import { useComposerSurfaceHostKey } from "@/hooks/host/use-composer-surface-host-pin";
+import { useStagedSandboxStore } from "@/stores/composer/staged-sandbox-store";
 import {
   rememberedSandboxShape,
   useSandboxShapeMemoryStore,
@@ -112,7 +115,11 @@ export function SandboxesSettingsPanel(): ReactNode {
   const { configurations, teamEnvironmentIds, complete } =
     useSandboxConfigurations();
   const selectedId = useSandboxesPageStore((s) => s.configurationId);
-  const revealSandboxId = useSandboxesPageStore((s) => s.revealSandboxId);
+  useSettlePendingSandboxReveal();
+  // A held reveal waits for its configuration, or the wrong page consumes it.
+  const revealSandboxId = useSandboxesPageStore((s) =>
+    s.revealConfigurationPending ? null : s.revealSandboxId,
+  );
   const configuration =
     configurations.find(
       (candidate) =>
@@ -256,25 +263,47 @@ function defaultShapeLine(
  * a team's shared, editable defaults are a later change, and the gear on a
  * New row changes one sandbox only.
  */
-function SandboxDefaultsSection(props: {
-  readonly configuration: SandboxPageConfiguration;
-}): ReactNode {
+function configurationMemoryKey(
+  configuration: SandboxPageConfiguration,
+): string {
+  return configuration.kind === "team" ? configuration.teamId : "personal";
+}
+
+/**
+ * A configuration's New row shape: the person's own pick behind its gear,
+ * remembered under the host their composer follows, else the spec's
+ * default; `null` before the catalogue answers.
+ */
+function useConfigurationStageShape(configuration: SandboxPageConfiguration): {
+  readonly catalogue: SandboxCatalogue | null;
+  readonly memoryHostId: string | null;
+  readonly shape: StageShape | null;
+} {
   const catalogue = useSandboxCatalogue(true).data ?? null;
-  const { configuration } = props;
-  // The person's own pick behind this configuration's gear, remembered
-  // under the host their composer follows; the spec's defaults until then.
   const memoryHostId = useEffectiveHostId();
   const remembered = useSandboxShapeMemoryStore((s) =>
     rememberedSandboxShape(
       s.byHost,
       memoryHostId,
-      configuration.kind === "team" ? configuration.teamId : "personal",
+      configurationMemoryKey(configuration),
     ),
   );
-  const stageShape =
-    catalogue === null
-      ? null
-      : rememberedOrDefaultStageShape(catalogue, remembered);
+  return {
+    catalogue,
+    memoryHostId,
+    shape:
+      catalogue === null
+        ? null
+        : rememberedOrDefaultStageShape(catalogue, remembered),
+  };
+}
+
+function SandboxDefaultsSection(props: {
+  readonly configuration: SandboxPageConfiguration;
+}): ReactNode {
+  const { configuration } = props;
+  const { catalogue, shape: stageShape } =
+    useConfigurationStageShape(configuration);
   const shape = defaultShapeLine(catalogue, stageShape);
   const idleMinutes =
     stageShape === null ? SANDBOX_DEFAULT_IDLE_MINUTES : stageShape.idleMinutes;
@@ -443,6 +472,7 @@ function SandboxListSection(props: {
       refetching={list.isFetching}
       onRetry={() => void list.refetch()}
       rows={configurationRows}
+      configuration={configuration}
     />
   );
   if (configurationRows === null || configurationRows.length === 0) {
@@ -551,6 +581,7 @@ function SandboxListGate(props: {
   readonly refetching: boolean;
   readonly onRetry: () => void;
   readonly rows: readonly SandboxSummary[] | null;
+  readonly configuration: SandboxPageConfiguration;
 }): ReactNode {
   if (props.unavailable !== null) {
     return (
@@ -585,12 +616,48 @@ function SandboxListGate(props: {
       </div>
     );
   }
-  return <SandboxesEmpty />;
+  return <SandboxesEmpty configuration={props.configuration} />;
 }
 
-function SandboxesEmpty(): ReactNode {
+/**
+ * `New task`: the landing composer with this configuration's New sandbox row
+ * staged in its remembered or default shape. Nothing is created until the
+ * send.
+ */
+function SandboxesEmpty(props: {
+  readonly configuration: SandboxPageConfiguration;
+}): ReactNode {
+  const { configuration } = props;
   const { close } = useSystemTabModalActions();
   const router = useRouter();
+  const surfaceKey = useComposerSurfaceHostKey();
+  const { catalogue, memoryHostId, shape } =
+    useConfigurationStageShape(configuration);
+  const stageNewRow = (): void => {
+    if (catalogue === null || shape === null) return;
+    const provider = stageProviderFor(catalogue, shape.os);
+    useStagedSandboxStore.getState().stage(surfaceKey, {
+      kind: "new",
+      configuration:
+        configuration.kind === "team"
+          ? {
+              kind: "team",
+              teamId: configuration.teamId,
+              teamName: configuration.teamName,
+            }
+          : { kind: "personal" },
+      shape,
+      name: "",
+      wakeString:
+        provider === null ? null : wakeString(provider.suspendFidelity),
+    });
+    useSandboxShapeMemoryStore
+      .getState()
+      .rememberConfiguration(
+        memoryHostId,
+        configurationMemoryKey(configuration),
+      );
+  };
   return (
     <div
       className="flex flex-col items-start gap-3 px-5 py-6"
@@ -602,6 +669,7 @@ function SandboxesEmpty(): ReactNode {
         variant="outline"
         size="sm"
         onClick={() => {
+          stageNewRow();
           close();
           void router.navigate({ to: "/" });
         }}

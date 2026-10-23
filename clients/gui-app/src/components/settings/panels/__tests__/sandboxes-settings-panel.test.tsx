@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -57,23 +58,38 @@ const CATALOGUE: SandboxCatalogue = {
 
 const mocks = vi.hoisted(() => ({
   sandboxes: [] as readonly SandboxSummary[],
+  /** `false` while the list query has not answered. */
+  listed: true,
+  configurations: [{ kind: "personal" }] as SandboxPageConfiguration[],
   catalogue: null as SandboxCatalogue | null,
 }));
 
 vi.mock("@tanstack/react-router", () => ({
   useRouter: () => ({ navigate: vi.fn() }),
 }));
-vi.mock("@/hooks/sandboxes/use-sandbox-configurations", () => ({
-  useSandboxConfigurations: () => ({
-    configurations: [{ kind: "personal" }],
-    teamEnvironmentIds: new Set<string>(),
-    complete: true,
+vi.mock(
+  "@/hooks/sandboxes/use-sandbox-configurations",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@/hooks/sandboxes/use-sandbox-configurations")
+    >()),
+    useSandboxConfigurations: () => ({
+      configurations: mocks.configurations,
+      teamEnvironmentIds: new Set(
+        mocks.configurations.flatMap((configuration) =>
+          configuration.kind === "team" && configuration.environmentId !== null
+            ? [configuration.environmentId]
+            : [],
+        ),
+      ),
+      complete: true,
+    }),
+    useSandboxWakeString: () => null,
   }),
-  useSandboxWakeString: () => null,
-}));
+);
 vi.mock("@/hooks/sandboxes/use-sandbox-list-query", () => ({
   useSandboxList: () => ({
-    data: { sandboxes: mocks.sandboxes },
+    data: mocks.listed ? { sandboxes: mocks.sandboxes } : undefined,
     isError: false,
     isFetching: false,
     refetch: vi.fn(),
@@ -87,6 +103,9 @@ vi.mock("@/hooks/sandboxes/use-refresh-sandbox-costs", () => ({
 }));
 vi.mock("@/hooks/sandboxes/use-sandbox-catalogue-query", () => ({
   useSandboxCatalogue: () => ({ data: mocks.catalogue }),
+}));
+vi.mock("@/hooks/host/use-composer-surface-host-pin", () => ({
+  useComposerSurfaceHostKey: () => "landing:window-test",
 }));
 vi.mock("@/hooks/host/use-effective-host-id", () => ({
   useEffectiveHostId: () => "laptop",
@@ -113,7 +132,7 @@ vi.mock("@/providers/use-runner-host", () => ({
 }));
 vi.mock("@/lib/links/open-link", () => ({ useOpenLink: () => vi.fn() }));
 vi.mock("@/stores/tabs/use-system-tab-modal", () => ({
-  useSystemTabModalActions: () => ({ close: vi.fn() }),
+  useSystemTabModalActions: () => ({ close: vi.fn(), openSettings: vi.fn() }),
 }));
 // The actions have their own verbs and dialogs; the page's contract is which
 // primary action each row offers, so the stub renders the model's own pick.
@@ -136,6 +155,12 @@ vi.mock("@/components/settings/panels/sandbox-row-actions", () => ({
 }));
 
 import { SandboxesSettingsPanel } from "@/components/settings/panels/sandboxes-settings-panel";
+import { useOpenSandboxesPage } from "@/hooks/sandboxes/use-open-sandboxes-page";
+import { useSandboxesPageStore } from "@/stores/sandboxes/sandboxes-page-store";
+import {
+  readStagedSandbox,
+  useStagedSandboxStore,
+} from "@/stores/composer/staged-sandbox-store";
 
 function row(id: string, overrides: Partial<SandboxSummary>): SandboxSummary {
   return sandboxSummaryFixture({
@@ -168,7 +193,14 @@ function names(): string[] {
 describe("<SandboxesSettingsPanel />", () => {
   beforeEach(() => {
     mocks.sandboxes = [];
+    mocks.listed = true;
+    mocks.configurations = [{ kind: "personal" }];
     mocks.catalogue = null;
+    useSandboxesPageStore.setState({
+      configurationId: { kind: "personal" },
+      revealSandboxId: null,
+      revealConfigurationPending: false,
+    });
     useSandboxShapeMemoryStore.setState({
       byHost: {},
       lastConfigurationByHost: {},
@@ -295,10 +327,73 @@ describe("<SandboxesSettingsPanel />", () => {
     ).toEqual(["idle-a", "idle-c"]);
   });
 
+  it("reveals a notification's team row on its team once a list that had not answered settles", () => {
+    mocks.configurations = [
+      { kind: "personal" },
+      {
+        kind: "team",
+        teamId: "team-1",
+        teamName: "Acme",
+        environmentId: "env-acme",
+      },
+    ];
+    mocks.listed = false;
+    let open: (sandboxId: string) => void = () => undefined;
+    function Opener() {
+      open = useOpenSandboxesPage();
+      return null;
+    }
+    const { rerender } = render(
+      <>
+        <Opener />
+        <SandboxesSettingsPanel />
+      </>,
+    );
+    act(() => open("team-box"));
+
+    mocks.listed = true;
+    mocks.sandboxes = [
+      row("team-box", {
+        environmentId: "env-acme",
+        burst: false,
+        state: "suspended",
+      }),
+    ];
+    rerender(
+      <>
+        <Opener />
+        <SandboxesSettingsPanel />
+      </>,
+    );
+
+    expect(useSandboxesPageStore.getState().configurationId).toEqual({
+      kind: "team",
+      teamId: "team-1",
+    });
+    expect(rowOf("team-box").className).toContain("bg-info/10");
+  });
+
   it("says No sandboxes yet. when the configuration has none", () => {
     renderPanel([]);
     expect(screen.getByTestId("sandboxes-empty").textContent).toContain(
       "No sandboxes yet.",
     );
+  });
+
+  it("stages this configuration's New sandbox row on the landing composer from New task, creating nothing", () => {
+    useStagedSandboxStore.setState({ bySurface: {} });
+    mocks.catalogue = CATALOGUE;
+    renderPanel([]);
+
+    fireEvent.click(screen.getByRole("button", { name: "New task" }));
+
+    const stage = readStagedSandbox("landing:window-test");
+    expect(stage?.phase).toBe("staged");
+    expect(stage?.target).toMatchObject({
+      kind: "new",
+      configuration: { kind: "personal" },
+      shape: { os: "linux", cpus: 2, memoryMb: 4096, region: "us-east" },
+    });
+    useStagedSandboxStore.setState({ bySurface: {} });
   });
 });

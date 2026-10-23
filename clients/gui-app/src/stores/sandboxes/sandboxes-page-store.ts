@@ -12,11 +12,18 @@ interface SandboxesPageStore {
    * this. `null` when nothing is waiting.
    */
   readonly revealSandboxId: string | null;
+  /**
+   * The reveal is held until the sandbox list and the teams settle, which
+   * name the configuration the row belongs to; the page shows no reveal
+   * meanwhile.
+   */
+  readonly revealConfigurationPending: boolean;
 }
 
 export const useSandboxesPageStore = create<SandboxesPageStore>(() => ({
   configurationId: { kind: "personal" },
   revealSandboxId: null,
+  revealConfigurationPending: false,
 }));
 
 export function setSandboxesPageConfiguration(
@@ -33,9 +40,21 @@ export function revealSandboxOnPage(
   useSandboxesPageStore.setState({
     configurationId,
     revealSandboxId: sandboxId,
+    revealConfigurationPending: false,
+  });
+}
+
+/** One row to reveal once its configuration is known. */
+export function holdSandboxReveal(sandboxId: string): void {
+  useSandboxesPageStore.setState({
+    revealSandboxId: sandboxId,
+    revealConfigurationPending: true,
   });
 }
 
 export function clearSandboxReveal(): void {
-  useSandboxesPageStore.setState({ revealSandboxId: null });
+  useSandboxesPageStore.setState({
+    revealSandboxId: null,
+    revealConfigurationPending: false,
+  });
 }

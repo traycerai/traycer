@@ -18,6 +18,26 @@ describe("sandboxDetailsEntry", () => {
     expect(exported.status["Support reference"]).toBe("sbx_support_42");
   });
 
+  it("lists Kept with no time, since the summary carries none for it", () => {
+    const summary = sandboxSummaryFixture({
+      keptBy: { userId: "u-priya", displayName: "Priya" },
+      lastTransitionAt: NOW - 60_000,
+    });
+    const entry = sandboxDetailsEntry({
+      summary,
+      cost: null,
+      wakeString: null,
+      viewerUserId: null,
+      now: NOW,
+    });
+    const kept = entry.history.find((event) => event.label === "Kept");
+    expect(kept?.at).toBeNull();
+    expect(entry.history.at(-1)?.label).toBe("Kept");
+    expect(
+      entry.export().history.find((event) => event.event === "Kept")?.at,
+    ).toBeNull();
+  });
+
   it("carries no path, route or guest-authored text in the export", () => {
     const summary = sandboxSummaryFixture({
       state: "awake",

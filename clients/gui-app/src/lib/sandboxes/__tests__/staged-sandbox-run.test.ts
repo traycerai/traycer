@@ -262,6 +262,21 @@ describe("runStagedSandbox creating", () => {
     expect(auth.environmentReads).toEqual([]);
   });
 
+  it("sends a resting period the sheet cleared as 0, never as the configuration default", async () => {
+    useStagedSandboxStore.getState().stage(surfaceKey, {
+      kind: "new",
+      configuration: { kind: "personal" },
+      shape: { ...SHAPE, destroyAfterRestingMinutes: null },
+      name: "",
+      wakeString: null,
+    });
+    const { auth, deps } = harness({}, true);
+
+    await run(false, deps);
+
+    expect(auth.requests[0].destroyAfterRestingMinutes).toBe(0);
+  });
+
   it("creates a team sandbox in the team's environment under the name the sheet set", async () => {
     useStagedSandboxStore.getState().stage(surfaceKey, TEAM_NEW);
     const { auth, deps } = harness({}, true);

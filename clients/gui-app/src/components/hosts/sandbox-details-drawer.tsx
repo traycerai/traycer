@@ -130,10 +130,16 @@ function SandboxDetailsSections(props: {
               key={`${event.at}:${event.label}:${event.value}`}
               className="wrap-anywhere"
             >
-              <span className="text-muted-foreground">
-                {formatSandboxDate(event.at, true)}
-              </span>
-              {` · ${event.label}`}
+              {event.at === null ? (
+                event.label
+              ) : (
+                <>
+                  <span className="text-muted-foreground">
+                    {formatSandboxDate(event.at, true)}
+                  </span>
+                  {` · ${event.label}`}
+                </>
+              )}
               {event.value.length === 0 ? null : ` ${event.value}`}
             </li>
           ))}

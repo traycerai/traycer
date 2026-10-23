@@ -551,8 +551,8 @@ export interface SandboxCreateRequest {
    */
   readonly environmentId: string | null;
   /**
-   * Minutes the sandbox may rest before it is destroyed, or `null` for the
-   * configuration's default. Unlike a patch, `null` here never means "never".
+   * Minutes the sandbox may rest before it is destroyed; `0` means never, as
+   * on a patch, and `null` takes the configuration's default.
    */
   readonly destroyAfterRestingMinutes: number | null;
   /** The task an agent creates the sandbox for; `null` from the GUI. */

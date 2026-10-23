@@ -35,9 +35,10 @@ export interface SandboxDetailsRow {
   readonly value: string;
 }
 
-/** One History event, oldest first. */
+/** One History event, oldest first; untimed events after the timed ones. */
 export interface SandboxDetailsEvent {
-  readonly at: number;
+  /** `null` when the summary carries no time for it (Kept). */
+  readonly at: number | null;
   readonly label: string;
   readonly value: string;
 }
@@ -53,7 +54,7 @@ export interface SandboxDetailsExport {
   readonly exportedAt: number;
   readonly status: Readonly<Record<string, string>>;
   readonly history: readonly {
-    readonly at: string;
+    readonly at: string | null;
     readonly event: string;
     readonly detail: string;
   }[];
@@ -200,8 +201,10 @@ function historyEvents(input: SandboxDetailsInput): SandboxDetailsEvent[] {
     });
   }
   if (summary.keptBy !== null) {
+    // The summary carries no keep time, and `lastTransitionAt` moves on
+    // every later transition.
     events.push({
-      at: summary.lastTransitionAt,
+      at: null,
       label: "Kept",
       value: `by ${sandboxMemberName(summary.keptBy, viewerUserId)}`,
     });
@@ -209,7 +212,14 @@ function historyEvents(input: SandboxDetailsInput): SandboxDetailsEvent[] {
   if (summary.destroyedAt !== null) {
     events.push({ at: summary.destroyedAt, label: "Destroyed", value: "" });
   }
-  return events.sort((a, b) => a.at - b.at);
+  return events.sort(byTime);
+}
+
+function byTime(a: SandboxDetailsEvent, b: SandboxDetailsEvent): number {
+  if (a.at === null || b.at === null) {
+    return (a.at === null ? 1 : 0) - (b.at === null ? 1 : 0);
+  }
+  return a.at - b.at;
 }
 
 export function sandboxDetailsEntry(
@@ -227,7 +237,7 @@ export function sandboxDetailsEntry(
       exportedAt: input.now,
       status: Object.fromEntries(status.map((row) => [row.label, row.value])),
       history: history.map((event) => ({
-        at: new Date(event.at).toISOString(),
+        at: event.at === null ? null : new Date(event.at).toISOString(),
         event: event.label,
         detail: event.value,
       })),

@@ -10,10 +10,6 @@ describe("sandboxIdOfNotificationRow", () => {
     expect(sandboxIdOfNotificationRow({ source: "cloud", sourceId })).toBe(id);
   });
 
-  it("keeps a warning and a destroy of one sandbox as distinct keys", () => {
-    expect("sandbox-warning:sbx_9:7d").not.toBe("sandbox-destroyed:sbx_9:done");
-  });
-
   it("is null for other rows, a local row, or a key with no id segment", () => {
     expect(
       sandboxIdOfNotificationRow({ source: "cloud", sourceId: "entry-1" }),

@@ -71,12 +71,18 @@ export function useSandboxDestroyBatch(): UseMutationResult<
       if (binding === null) {
         throw new Error("Sign in to destroy these sandboxes.");
       }
-      const listed = await binding.auth.listSandboxes();
-      if (listed.kind !== "ok") {
-        throw new Error(sandboxFailureMessage(listed));
-      }
       const results: SandboxBatchResult[] = [];
       for (const target of targets) {
+        // Read again right before this destroy: another member may have
+        // resumed or kept the row while the batch worked through the others.
+        const listed = await binding.auth.listSandboxes();
+        if (listed.kind !== "ok") {
+          results.push({
+            ...target,
+            outcome: { kind: "failed", message: sandboxFailureMessage(listed) },
+          });
+          continue;
+        }
         const row =
           listed.response.sandboxes.find((s) => s.id === target.sandboxId) ??
           null;

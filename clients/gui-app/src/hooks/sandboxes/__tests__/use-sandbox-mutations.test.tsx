@@ -48,6 +48,7 @@ vi.mock("@/lib/auth-error-toast", () => ({
 
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useSandboxAutomationOpen } from "@/hooks/sandboxes/use-sandbox-automation-open-mutation";
+import { useSandboxDestroyBatch } from "@/hooks/sandboxes/use-sandbox-destroy-batch-mutation";
 import { useSandboxDestroy } from "@/hooks/sandboxes/use-sandbox-destroy-mutation";
 import { useSandboxKeep } from "@/hooks/sandboxes/use-sandbox-keep-mutation";
 import { useSandboxPatch } from "@/hooks/sandboxes/use-sandbox-patch-mutation";
@@ -538,6 +539,46 @@ describe("useSandboxKeep", () => {
     });
     expect(outcome).toBe("gone");
     expect(state.toastFromAuthError).not.toHaveBeenCalled();
+  });
+});
+
+describe("useSandboxDestroyBatch", () => {
+  beforeEach(() => {
+    state.binding = createFakeSandboxBinding();
+  });
+  afterEach(cleanup);
+
+  it("skips a row another member resumed while the batch destroyed the one before it", async () => {
+    const idle = (id: string) =>
+      sandboxSummaryFixture({ id, burst: true, state: "suspended" });
+    state.binding?.auth.listSandboxes
+      .mockResolvedValueOnce({
+        kind: "ok",
+        response: { sandboxes: [idle("sbx_1"), idle("sbx_2")] },
+      })
+      .mockResolvedValueOnce({
+        kind: "ok",
+        response: {
+          sandboxes: [
+            sandboxSummaryFixture({ id: "sbx_2", burst: true, state: "awake" }),
+          ],
+        },
+      });
+    const { wrapper } = setup();
+    const { result } = renderHook(() => useSandboxDestroyBatch(), { wrapper });
+
+    let outcomes: readonly string[] = [];
+    await act(async () => {
+      const results = await result.current.mutateAsync([
+        { sandboxId: "sbx_1", name: "one" },
+        { sandboxId: "sbx_2", name: "two" },
+      ]);
+      outcomes = results.map((entry) => entry.outcome.kind);
+    });
+
+    expect(state.binding?.auth.destroySandbox).toHaveBeenCalledTimes(1);
+    expect(state.binding?.auth.destroySandbox).toHaveBeenCalledWith("sbx_1");
+    expect(outcomes).toEqual(["destroyed", "skipped"]);
   });
 });
 

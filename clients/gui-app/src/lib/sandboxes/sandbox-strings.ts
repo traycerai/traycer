@@ -218,7 +218,8 @@ export function idleAndRestingLine(
   destroyAfterRestingMinutes: number | null,
 ): string {
   const idle = `Suspends after ${idleMinutes} idle min`;
-  return destroyAfterRestingMinutes === null
+  // `0` is never, as the server spells it.
+  return destroyAfterRestingMinutes === null || destroyAfterRestingMinutes === 0
     ? `${idle} · ${KEPT_UNTIL_YOU_DESTROY_IT}`
     : `${idle} · destroyed after ${restingPeriodLabel(destroyAfterRestingMinutes)}`;
 }

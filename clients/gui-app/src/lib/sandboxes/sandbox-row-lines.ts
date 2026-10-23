@@ -877,7 +877,8 @@ export interface SandboxPeriodDraft {
 
 /** A stored period in its largest whole unit, for the inputs. */
 export function sandboxPeriodDraft(minutes: number | null): SandboxPeriodDraft {
-  if (minutes === null) return { value: "", unit: "days" };
+  // Empty is never, which the server spells `0`.
+  if (minutes === null || minutes === 0) return { value: "", unit: "days" };
   if (minutes % SANDBOX_PERIOD_UNIT_MINUTES.days === 0) {
     return {
       value: String(minutes / SANDBOX_PERIOD_UNIT_MINUTES.days),
