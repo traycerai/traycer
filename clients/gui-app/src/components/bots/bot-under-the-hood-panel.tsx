@@ -100,7 +100,6 @@ export function BotUnderTheHoodPanel(props: {
   const threadListEnabled = !paused && threadListSupported;
   const threadList = useBotThreadListQuery(client, botId, {
     enabled: threadListEnabled,
-    poll: false,
   });
   const threads = threadList.data?.threads ?? EMPTY_THREADS;
   const shownThread =
@@ -111,7 +110,7 @@ export function BotUnderTheHoodPanel(props: {
   const usageSupported = useUsageSummarySupported(hostId);
   const costs = useBotCostsQuery(client, {
     botId,
-    trunkChatId,
+    threadList: threadList.data,
     environmentBotIds,
     enabled: usageSupported,
   });

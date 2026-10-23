@@ -97,6 +97,7 @@ function snapshot(input: {
     bot: input.record,
     tasks: input.tasks,
     openRequestCount: input.openRequestCount,
+    conversationsRevision: null,
     boundHost: { hostId: input.hostId, epoch: 2, isThisHost: input.isThisHost },
   };
 }

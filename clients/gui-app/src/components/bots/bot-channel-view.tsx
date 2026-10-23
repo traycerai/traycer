@@ -293,11 +293,8 @@ function useChannelThreads(args: {
 } {
   const { client, botId, hostId, paused } = args;
   const supported = useHostMethodSupport(hostId, "bot.thread.list") === true;
-  // Polled only while the channel is on screen.
-  const paneVisible = usePaneVisible();
   const threadList = useBotThreadListQuery(client, botId, {
     enabled: !paused && supported,
-    poll: paneVisible,
   });
   const threads = threadList.data?.threads ?? EMPTY_THREADS;
   const threadsByPost = useMemo(() => {

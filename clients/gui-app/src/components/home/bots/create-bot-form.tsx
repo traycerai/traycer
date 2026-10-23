@@ -348,7 +348,7 @@ export function CreateBotForm(props: {
  * what the bot needs and where to set it up, never which machines were
  * looked at.
  */
-function CreateBotNoHost(props: {
+export function CreateBotNoHost(props: {
   readonly checking: boolean;
   readonly environmentLabel: string;
   readonly someUnchecked: boolean;

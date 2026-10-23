@@ -1,8 +1,9 @@
 /**
  * The bot tab's sidebar (Tracy Bots, decision 41): every environment is a
  * section, every bot in it a `# name` channel, unread channels are marked, and
- * a section ends with "Add a bot" for that environment. The real sidebar runs
- * over mocked reads and the real bot-tabs store; the create form and the
+ * a section ends with "Add a bot" for that environment, and a team's section
+ * opens with its onboarding. The real sidebar runs over mocked reads and the
+ * real bot-tabs store; the create form, the onboarding card and the
  * navigation helper are stubs that record what they were given.
  */
 import { cleanup, render, screen, within } from "@testing-library/react";
@@ -72,6 +73,16 @@ vi.mock("@/components/home/bots/create-bot-form", () => ({
       data-testid="stub-create-bot-form"
       data-environment-id={props.environmentId}
       data-environment-label={props.environmentLabel}
+    />
+  ),
+}));
+
+vi.mock("@/components/home/bots/bot-onboarding-card", () => ({
+  BotOnboardingCard: (props: { environmentId: string; teamName: string }) => (
+    <div
+      data-testid="stub-bot-onboarding-card"
+      data-environment-id={props.environmentId}
+      data-team-name={props.teamName}
     />
   ),
 }));
@@ -295,6 +306,39 @@ describe("<BotChannelSidebar /> Add a bot", () => {
     expect(within(orphan).getByTestId("bot-channel-row")).toBeTruthy();
     expect(
       within(orphan).queryByRole("button", { name: "Add a bot" }),
+    ).toBeNull();
+  });
+});
+
+describe("<BotChannelSidebar /> team onboarding", () => {
+  it("opens each team section with its onboarding, and no other section", async () => {
+    const user = userEvent.setup();
+    mocks.state.bots = [
+      ...mocks.state.bots,
+      bot("bot-orphan", "env-left", "orphan-bot"),
+    ];
+    mount("bot-release");
+
+    const cards = screen.getAllByTestId("stub-bot-onboarding-card");
+    expect(
+      cards.map((card) => [
+        card.getAttribute("data-environment-id"),
+        card.getAttribute("data-team-name"),
+      ]),
+    ).toEqual([
+      ["env-team", "Acme"],
+      ["env-empty", "Quiet team"],
+    ]);
+    expect(
+      within(section("env-team")).getByTestId("stub-bot-onboarding-card"),
+    ).toBe(cards[0]);
+
+    // A collapsed section hides it with the rest of its body.
+    await user.click(
+      within(section("env-team")).getByRole("button", { name: "Acme" }),
+    );
+    expect(
+      within(section("env-team")).queryByTestId("stub-bot-onboarding-card"),
     ).toBeNull();
   });
 });

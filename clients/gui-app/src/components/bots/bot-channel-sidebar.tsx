@@ -4,6 +4,7 @@ import { ChevronDown, ChevronRight, Hash, Plus } from "lucide-react";
 import type { BotRecord } from "@traycer/protocol/host/bot/schemas";
 import type { EnvironmentDescriptor } from "@traycer/protocol/host/environment/contracts";
 import { CreateBotForm } from "@/components/home/bots/create-bot-form";
+import { BotOnboardingCard } from "@/components/home/bots/bot-onboarding-card";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import { useConnectableHostIds } from "@/hooks/host/use-connectable-host-ids";
 import { useBotListQuery } from "@/hooks/bots/use-bot-list-query";
@@ -32,7 +33,8 @@ const NO_CHAT_IDS: ReadonlyArray<string> = [];
  * A channel with a reply the person has not read is bold, as Slack marks an
  * unread channel. Each section ends with "Add a bot", which opens the create
  * form for that environment, so the environment is the section's and never
- * a default; the form picks the machine itself.
+ * a default; the form picks the machine itself. A team's section opens with
+ * its onboarding until the team's bots exist (`BotOnboardingCard`).
  *
  * Read through the tab's host: the lists are cloud-backed, so any host gives
  * the same answer. A channel opens that bot's tab, through this tab's host,
@@ -164,6 +166,16 @@ function SidebarSection(props: {
         )}
         <span className="truncate">{group.label}</span>
       </button>
+      {collapsed ||
+      !group.canCreate ||
+      group.ownerKind !== "organization" ? null : (
+        <BotOnboardingCard
+          environmentId={group.environmentId}
+          teamName={group.label}
+          connectableHostIds={connectableHostIds}
+          environmentBindings={environmentBindings}
+        />
+      )}
       <ul className="flex flex-col gap-0.5">
         {shown.map((bot) => (
           <li key={bot.botId}>

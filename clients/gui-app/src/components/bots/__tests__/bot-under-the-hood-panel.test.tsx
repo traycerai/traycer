@@ -2,8 +2,9 @@
  * The bot's under-the-hood view (Tracy Bots, decision 43): what the bot and
  * its environment have cost, the threads it runs, and the transcript of its
  * trunk or of one thread's session. The real panel and the real cost query run
- * over a mocked `host.usage.summary` read per bot; the transcript is a stub
- * that exposes the chat it was handed.
+ * over a mocked thread listing (the bot's and its trunk's figures) and a
+ * mocked `host.usage.summary` read per bot (the environment's); the
+ * transcript is a stub that exposes the chat it was handed.
  */
 import { useState, type ReactNode } from "react";
 import { cleanup, render, screen, within } from "@testing-library/react";
@@ -25,6 +26,7 @@ const mocks = vi.hoisted(() => {
       usageSupported: true,
       answers,
       threads: [] as BotThreadSummary[],
+      trunkCostUsd: null as number | null,
       threadListSupported: true,
       // `false`: the thread list has not answered (pending, or failed).
       threadListAnswered: true,
@@ -51,7 +53,10 @@ vi.mock("@/hooks/usage-analytics/use-usage-summary-support", () => ({
 vi.mock("@/hooks/bots/use-bot-thread-list-query", () => ({
   useBotThreadListQuery: () => ({
     data: mocks.state.threadListAnswered
-      ? { threads: mocks.state.threads }
+      ? {
+          threads: mocks.state.threads,
+          trunkCostUsd: mocks.state.trunkCostUsd,
+        }
       : undefined,
     isError: mocks.state.threadListError,
     refetch: mocks.refetchThreads,
@@ -171,6 +176,7 @@ beforeEach(() => {
   mocks.state.usageSupported = true;
   mocks.state.answers = {};
   mocks.state.threads = [];
+  mocks.state.trunkCostUsd = null;
   mocks.state.threadListSupported = true;
   mocks.state.threadListAnswered = true;
   mocks.state.threadListError = false;
@@ -181,43 +187,55 @@ afterEach(() => {
 });
 
 describe("<BotUnderTheHoodPanel /> cost", () => {
-  it("shows the bot's total, its trunk's share, and the sum across its environment's bots", () => {
+  it("shows the bot's total as its trunk's plus its threads', the trunk's share, and the sum across its environment's bots", () => {
+    mocks.state.trunkCostUsd = 3.25;
+    mocks.state.threads = [
+      thread("thread-a", "Please review the release", { costUsd: 9 }),
+      thread("thread-b", "Why is nightly red?", { costUsd: 0.25 }),
+    ];
     mocks.state.answers = {
-      [BOT_ID]: answer(12.5, [
-        { chatId: "session-thread-a", knownCostUsd: 9.25 },
-        { chatId: TRUNK_ID, knownCostUsd: 3.25 },
-      ]),
+      [BOT_ID]: answer(2, [{ chatId: TRUNK_ID, knownCostUsd: 2 }]),
       [SIBLING_ID]: answer(7.5, [{ chatId: "other-trunk", knownCostUsd: 7.5 }]),
     };
     render(<Panel sessionChatId={null} onSelectSession={vi.fn()} />);
 
     expect(cost("bot-cost-bot")).toBe("$12.50");
     expect(cost("bot-cost-trunk")).toBe("$3.25");
-    expect(cost("bot-cost-environment")).toBe("$20.00");
+    expect(cost("bot-cost-environment")).toBe("$9.50");
     expect(
       within(screen.getByTestId("bot-costs")).getByText("Acme"),
     ).toBeTruthy();
   });
 
-  it("shows a trunk with no turns as $0.00", () => {
-    mocks.state.answers = {
-      [BOT_ID]: answer(4, [{ chatId: "session-thread-a", knownCostUsd: 4 }]),
-      [SIBLING_ID]: answer(1, []),
-    };
+  it("shows the bot's total as unknown while a thread's cost is, and the trunk's regardless", () => {
+    mocks.state.trunkCostUsd = 3.25;
+    mocks.state.threads = [
+      thread("thread-a", "Please review the release", { costUsd: 9 }),
+      thread("thread-b", "Why is nightly red?", { costUsd: null }),
+    ];
     render(<Panel sessionChatId={null} onSelectSession={vi.fn()} />);
 
-    expect(cost("bot-cost-bot")).toBe("$4.00");
-    expect(cost("bot-cost-trunk")).toBe("$0.00");
+    expect(cost("bot-cost-bot")).toBe("—");
+    expect(cost("bot-cost-trunk")).toBe("$3.25");
   });
 
-  it("shows the environment's figure as unknown while one of its bots has not answered, and the bot's own regardless", () => {
+  it("shows the bot's figures as unknown while the thread list has not answered", () => {
+    mocks.state.threadListAnswered = false;
+    mocks.state.trunkCostUsd = 3.25;
+    render(<Panel sessionChatId={null} onSelectSession={vi.fn()} />);
+
+    expect(cost("bot-cost-bot")).toBe("—");
+    expect(cost("bot-cost-trunk")).toBe("—");
+  });
+
+  it("shows the environment's figure as unknown while one of its bots has not answered", () => {
+    mocks.state.trunkCostUsd = 0;
     mocks.state.answers = {
       [BOT_ID]: answer(12.5, [{ chatId: TRUNK_ID, knownCostUsd: 3.25 }]),
     };
     render(<Panel sessionChatId={null} onSelectSession={vi.fn()} />);
 
-    expect(cost("bot-cost-bot")).toBe("$12.50");
-    expect(cost("bot-cost-trunk")).toBe("$3.25");
+    expect(cost("bot-cost-bot")).toBe("$0.00");
     expect(cost("bot-cost-environment")).toBe("—");
   });
 

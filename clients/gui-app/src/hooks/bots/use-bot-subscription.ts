@@ -10,7 +10,9 @@ import {
   type BotSubscribeServerFrame,
   type BotTaskEntry,
 } from "@traycer/protocol/host/bot/schemas";
+import type { HostRpcRegistry } from "@traycer/protocol/host/index";
 import { botQueryKeys } from "@/lib/query-keys/bot-query-keys";
+import { hostQueryKeys } from "@/lib/query-keys/host-query-keys";
 import { useWsStreamClient } from "@/lib/host/stream-runtime-context";
 import { useStreamAuthRevalidator } from "@/lib/host/stream-auth-revalidator";
 import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
@@ -36,6 +38,12 @@ export interface BotSubscriptionSnapshot {
   readonly tasks: ReadonlyArray<BotTaskEntry>;
   /** `null` when the serving host does not know the count. */
   readonly openRequestCount: number | null;
+  /**
+   * Moves when a row is written to the bot's channel or a thread on its
+   * bound host; the bot's thread listing is read again when it does. `null`
+   * when the serving host is not the bound one.
+   */
+  readonly conversationsRevision: number | null;
   readonly boundHost: {
     /** `null` when no host runs the bot. */
     readonly hostId: string | null;
@@ -220,6 +228,7 @@ function toSnapshot(
     bot: frame.bot,
     tasks: frame.tasks,
     openRequestCount: frame.openRequestCount,
+    conversationsRevision: frame.conversationsRevision,
     boundHost: frame.boundHost,
   };
 }
@@ -273,10 +282,25 @@ function createSharedSubscription(
     }
     shared.lastEvent = frame;
     notifyConsumers();
-    queryClient.setQueryData(
-      botQueryKeys.subscription(args),
-      toSnapshot(frame),
-    );
+    const key = botQueryKeys.subscription(args);
+    const previous =
+      queryClient.getQueryData<BotSubscriptionSnapshot | null>(key) ?? null;
+    queryClient.setQueryData(key, toSnapshot(frame));
+    // A reply, a post or a verdict on the bound host: the threads' reply
+    // counts and costs moved, so their listing is read again.
+    if (
+      previous !== null &&
+      frame.conversationsRevision !== null &&
+      frame.conversationsRevision !== previous.conversationsRevision
+    ) {
+      void queryClient.invalidateQueries({
+        queryKey: hostQueryKeys.method<HostRpcRegistry, "bot.thread.list">(
+          args.hostId,
+          "bot.thread.list",
+          { botId: args.botId },
+        ),
+      });
+    }
   });
 
   session.onStatusChange((status, reason) => {

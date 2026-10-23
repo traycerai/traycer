@@ -26,7 +26,6 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 interface ThreadListCall {
   readonly botId: string;
   readonly enabled: boolean;
-  readonly poll: boolean;
 }
 
 interface IndicatorState {
@@ -49,7 +48,6 @@ const mocks = vi.hoisted(() => {
     threadListCalls: [] as Array<{
       botId: string;
       enabled: boolean;
-      poll: boolean;
     }>,
     state: {
       paneVisible: true,
@@ -84,7 +82,7 @@ vi.mock("@/hooks/bots/use-bot-thread-list-query", () => ({
   useBotThreadListQuery: (
     _client: unknown,
     botId: string,
-    args: { enabled: boolean; poll: boolean },
+    args: { enabled: boolean },
   ) => {
     mocks.threadListCalls.push({ botId, ...args });
     return {
@@ -307,25 +305,11 @@ describe("<BotChannelView /> channel", () => {
     ).toBe("conversation-channel");
   });
 
-  it("reads the thread list only while the pane is on screen, and not at all while paused or unsupported", () => {
+  it("reads the thread list, and not at all while paused or unsupported", () => {
     mount({ paused: false, openThreadPostId: null });
-    expect(lastThreadListCall()).toEqual({
-      botId: BOT_ID,
-      enabled: true,
-      poll: true,
-    });
+    expect(lastThreadListCall()).toEqual({ botId: BOT_ID, enabled: true });
     cleanup();
 
-    mocks.state.paneVisible = false;
-    mount({ paused: false, openThreadPostId: null });
-    expect(lastThreadListCall()).toEqual({
-      botId: BOT_ID,
-      enabled: true,
-      poll: false,
-    });
-    cleanup();
-
-    mocks.state.paneVisible = true;
     mount({ paused: true, openThreadPostId: null });
     expect(lastThreadListCall().enabled).toBe(false);
     cleanup();

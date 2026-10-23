@@ -686,8 +686,9 @@ export type BotSubscribeOpenRequest = z.infer<
 
 /**
  * The bot as one subscriber sees it. `snapshot` opens the stream and is
- * re-sent whole whenever the bot row, its task list, a task's last check-in
- * or its open-request count changes on this host; `deleted` ends it (the bot
+ * re-sent whole whenever the bot row, its task list, a task's last check-in,
+ * its open-request count or its conversations' rows change on this host;
+ * `deleted` ends it (the bot
  * was archived, or the caller lost it). The conversation rows stay
  * authoritative for open requests; `openRequestCount` is a hint, as the GUI
  * spec says.
@@ -705,6 +706,13 @@ export const botSubscribeServerFrameSchema = lazySchema(() =>
        * (a later snapshot carries the count).
        */
       openRequestCount: z.number().int().nonnegative().nullable(),
+      /**
+       * Changes whenever a row is written to the bot's channel or a thread
+       * record on the bound host (a post, a reply, an announcement, a
+       * verdict): a changed value says to read the threads' listing again.
+       * `null` when the serving host is not the bound one.
+       */
+      conversationsRevision: z.number().int().nonnegative().nullable(),
       /** `boundHostId` and `hostEpoch` restated for cheap comparison. */
       boundHost: z.object({
         /** Null when no host runs the bot. */
