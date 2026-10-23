@@ -87,6 +87,7 @@ function bot(botId: string, createdByUserId: string | null): BotRecord {
     createdAt: 1_000,
     archivedAt: null,
     directive: null,
+    appConversationChatId: null,
   };
 }
 
