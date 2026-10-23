@@ -194,6 +194,7 @@ function bot(botId: string, environmentId: string, title: string): BotRecord {
     hostEpoch: 0,
     createdAt: 1_000,
     archivedAt: null,
+    directive: null,
   };
 }
 

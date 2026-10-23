@@ -172,6 +172,7 @@ function snapshotFrame(
       hostEpoch: 0,
       createdAt: 1_760_000_000_000,
       archivedAt: null,
+      directive: null,
     },
     tasks,
     openRequestCount,

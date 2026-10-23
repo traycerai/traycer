@@ -149,6 +149,7 @@ const BOT: BotRecord = {
   hostEpoch: 1,
   createdAt: 1_000,
   archivedAt: null,
+  directive: null,
 };
 
 function mountPanel(bot: BotRecord, isMain: boolean | null): void {

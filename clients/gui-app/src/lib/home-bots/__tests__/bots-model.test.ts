@@ -51,6 +51,7 @@ function bot(
     hostEpoch: 0,
     createdAt: 1_000,
     archivedAt,
+    directive: null,
   };
 }
 

@@ -1637,6 +1637,11 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
+  "bot.updateDirective": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
   "bot.delete": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
   "bot.claimAuthority": {
     mode: "fifo",

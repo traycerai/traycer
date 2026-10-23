@@ -239,6 +239,7 @@ function botCreateResponse(): BotCreateResponse {
       hostEpoch: 1,
       createdAt: 1_000,
       archivedAt: null,
+      directive: null,
     },
     appConversationChatId: "conversation-1",
   };
@@ -521,6 +522,7 @@ describe("<CreateBotForm /> create goes to the chosen host", () => {
       effort: null,
       profile: null,
       requestKey: LOWERCASE_UUID,
+      directive: null,
     });
     const record = lookupBotTab(useBotTabsStore.getState().tabs, BOT_ID);
     expect(record?.hostId).toBe(LOCAL);
@@ -599,6 +601,7 @@ describe("<CreateBotForm /> create goes to the chosen host", () => {
       effort: null,
       profile: null,
       requestKey: LOWERCASE_UUID,
+      directive: null,
     });
     expect(lookupBotTab(useBotTabsStore.getState().tabs, BOT_ID)?.hostId).toBe(
       LOCAL,
@@ -613,6 +616,44 @@ describe("<CreateBotForm /> create goes to the chosen host", () => {
     await user.type(screen.getByTestId("create-bot-title"), "   ");
 
     expect(submitButton().disabled).toBe(true);
+  });
+});
+
+describe("<CreateBotForm /> directive", () => {
+  it("sends a null directive when the directive field is left empty", async () => {
+    const user = userEvent.setup();
+    mountForm(TEAM_WITH_LOCAL);
+
+    await createBot(user);
+
+    expect(mocks.createAsync).toHaveBeenCalledTimes(1);
+    expect(mocks.createAsync.mock.calls[0]?.[0].directive).toBeNull();
+  });
+
+  it("sends a null directive when the directive field holds only whitespace", async () => {
+    const user = userEvent.setup();
+    mountForm(TEAM_WITH_LOCAL);
+
+    await user.type(screen.getByTestId("create-bot-directive"), "   ");
+    await createBot(user);
+
+    expect(mocks.createAsync.mock.calls[0]?.[0].directive).toBeNull();
+  });
+
+  it("sends the typed directive trimmed", async () => {
+    const user = userEvent.setup();
+    mountForm(TEAM_WITH_LOCAL);
+
+    await user.type(
+      screen.getByTestId("create-bot-directive"),
+      "  Own the release checklist.  ",
+    );
+    await createBot(user);
+
+    expect(mocks.createAsync).toHaveBeenCalledTimes(1);
+    expect(mocks.createAsync.mock.calls[0]?.[0].directive).toBe(
+      "Own the release checklist.",
+    );
   });
 });
 
@@ -788,6 +829,7 @@ describe("<CreateBotForm /> failed create", () => {
           effort: null,
           profile: null,
           requestKey: "0c5f4b8e-3a1d-4f6b-9e2a-7d8c1b2a3f40",
+          directive: null,
         },
         options,
       )

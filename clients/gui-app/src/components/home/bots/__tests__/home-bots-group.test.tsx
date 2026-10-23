@@ -86,6 +86,7 @@ function bot(botId: string, createdByUserId: string | null): BotRecord {
     hostEpoch: 1,
     createdAt: 1_000,
     archivedAt: null,
+    directive: null,
   };
 }
 
