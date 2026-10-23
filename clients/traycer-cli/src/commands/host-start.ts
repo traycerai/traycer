@@ -1833,9 +1833,11 @@ export async function runHostStart(
       // its task XML) the same cap macOS gets from its LaunchAgent plist. The helper
       // dedups when the inherited env already carries it (the macOS plist case).
       env.NODE_OPTIONS = withHostNodeOptions(env.NODE_OPTIONS);
-      // macOS only: switch off libmalloc's cache of freed large blocks for the
-      // host process. Like the V8 cap above it is read at creation; see the
-      // module for the measurement and why the host drops it from its own env.
+      // The platform's allocator setting for the host process: libmalloc's
+      // cache of freed large blocks off on macOS, glibc's arena maximum on
+      // Linux. Like the V8 cap above each is read at creation; see the module
+      // for the measurements, what each costs, and why the host drops both
+      // from its own env.
       applyHostAllocatorEnv(env, process.platform);
       // The host resolves its slot from its own `config.environment` (baked
       // per build) - the supervisor passes no environment arg or env. It also
