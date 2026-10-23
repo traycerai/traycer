@@ -1,3 +1,4 @@
+import "@/components/settings/details/environment-details-providers";
 import { useMemo, useState, type ReactNode } from "react";
 import {
   queryOptions,
