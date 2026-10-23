@@ -102,6 +102,7 @@ export function environmentStatusFixture(
     consent: null,
     planes: { records: "moved", broker: "moved", room: "moved" },
     returnedFromTeam: null,
+    stoppedAt: null,
     principal: { kind: "personal" },
     reachability: "connected",
     bindingGeneration: 1,

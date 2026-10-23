@@ -69,6 +69,7 @@ export function useProvidersSkillsMutate(): UseMutationResult<
           {
             providerId: variables.providerId,
             executableWriteGrant: null,
+            expectedEnvironmentId: null,
             mutation: {
               kind: "skills",
               scope: variables.scope,

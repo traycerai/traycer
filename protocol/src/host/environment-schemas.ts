@@ -263,7 +263,8 @@ export type EnvironmentPlaneState = z.infer<typeof environmentPlaneStateSchema>;
  * secrets and the room's files each stand; a `@1.0` answer upgrades as fully
  * moved, which is what a host that predates the move had done. `returnedFromTeam`
  * is when this computer went back to its own settings after a team, null when
- * it never did.
+ * it never did. `stoppedAt` is when this computer stopped sharing, null while
+ * it shares or never did.
  */
 export const environmentStatusResponseSchemaV11 = lazySchema(() =>
   environmentStatusResponseSchema.extend({
@@ -279,6 +280,7 @@ export const environmentStatusResponseSchemaV11 = lazySchema(() =>
       })
       .default({ records: "moved", broker: "moved", room: "moved" }),
     returnedFromTeam: z.object({ at: z.number() }).nullable().default(null),
+    stoppedAt: z.number().nullable().default(null),
   }),
 );
 export type EnvironmentStatusResponseV11 = z.infer<
@@ -1113,6 +1115,27 @@ export const environmentSecretsDestroyResponseSchema = lazySchema(() =>
 );
 export type EnvironmentSecretsDestroyResponse = z.infer<
   typeof environmentSecretsDestroyResponseSchema
+>;
+
+/**
+ * `environment.secrets.destroy@1.1`: `@1.0` plus `revoked`, the answer to a
+ * Remove of the current version at its confirmation.
+ */
+export const environmentSecretsDestroyResponseSchemaV11 = lazySchema(() =>
+  z.discriminatedUnion("outcome", [
+    z.object({
+      outcome: z.literal("destroyed"),
+      destroyedAt: z.number(),
+    }),
+    z.object({
+      outcome: z.literal("refused"),
+      code: z.string().min(1).max(64),
+    }),
+    z.object({ outcome: z.literal("revoked") }),
+  ]),
+);
+export type EnvironmentSecretsDestroyResponseV11 = z.infer<
+  typeof environmentSecretsDestroyResponseSchemaV11
 >;
 
 /**

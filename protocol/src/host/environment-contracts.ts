@@ -109,7 +109,7 @@ export const environmentSecretsDestroyV11 = defineRpcContract({
   method: "environment.secrets.destroy",
   schemaVersion: { major: 1, minor: 1 } as const,
   requestSchema: schemas.environmentSecretsDestroyRequestSchemaV11,
-  responseSchema: schemas.environmentSecretsDestroyResponseSchema,
+  responseSchema: schemas.environmentSecretsDestroyResponseSchemaV11,
 });
 
 export const environmentSecretsDestroyUpgradeV10ToV11 = defineUpgradePath<
@@ -172,6 +172,7 @@ export const environmentStatusUpgradeV10ToV11 = defineUpgradePath<
     consent: null,
     planes: { records: "moved", broker: "moved", room: "moved" },
     returnedFromTeam: null,
+    stoppedAt: null,
   }),
 });
 
@@ -549,9 +550,12 @@ export const ENVIRONMENT_RPC_METHODS = {
           contract: environmentSecretsDestroyV10,
           upgradeFromPreviousVersion: null,
         },
+        // `revoked` is an outcome `@1.0` cannot carry: the host never
+        // answers it to a `@1.0` caller.
         1: {
           contract: environmentSecretsDestroyV11,
           upgradeFromPreviousVersion: environmentSecretsDestroyUpgradeV10ToV11,
+          responseGrowthProjectionGated: true,
         },
       },
       downgradePathsFromLatest: {},

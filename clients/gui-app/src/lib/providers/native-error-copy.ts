@@ -1,6 +1,8 @@
-import type { ProviderNativeErrorCode } from "@traycer/protocol/host/provider-native-schemas";
+import type { ProviderNativeMutateErrorCode } from "@traycer/protocol/host/provider-native-schemas";
 
-const NATIVE_ERROR_COPY: Readonly<Record<ProviderNativeErrorCode, string>> = {
+const NATIVE_ERROR_COPY: Readonly<
+  Record<ProviderNativeMutateErrorCode, string>
+> = {
   duplicate_name: "A server with this name already exists in this scope.",
   unsupported_scope: "This action is not supported for the selected scope.",
   unsupported_action: "This action is not supported for this provider.",
@@ -22,10 +24,12 @@ const NATIVE_ERROR_COPY: Readonly<Record<ProviderNativeErrorCode, string>> = {
   server_not_found:
     "This server is no longer in this provider's configuration. Refresh the list.",
   change_shadowed: "Not changed: another settings file decides this.",
+  environment_mismatch:
+    "Not changed: this computer no longer holds this configuration.",
 };
 
 export function nativeErrorMessage(
-  code: ProviderNativeErrorCode,
+  code: ProviderNativeMutateErrorCode,
   detail: string | null,
 ): string {
   if (detail !== null && detail.trim().length > 0) return detail.trim();

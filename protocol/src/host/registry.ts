@@ -1373,9 +1373,11 @@ import {
   providersNativeMutateRequestSchema,
   providersNativeMutateRequestSchemaV10Preimage,
   providersNativeMutateRequestSchemaV11,
+  providersNativeMutateRequestSchemaV14,
   providersNativeMutateResponseSchema,
   providersNativeMutateResponseSchemaV10Preimage,
   providersNativeMutateResponseSchemaV11Preimage,
+  providersNativeMutateResponseSchemaV14,
   providersCancelLoginResponseSchemaV10,
   providersClearApiKeyRequestSchema,
   providersClearApiKeyRequestSchemaV10,
@@ -4707,6 +4709,18 @@ export const providersNativeMutateV13 = defineRpcContract({
   responseSchema: providersNativeMutateResponseSchema,
 });
 
+/**
+ * `providers.nativeMutate@1.4`: `expectedEnvironmentId`, which fences a team
+ * configuration's edit to the host serving that environment, and the
+ * `environment_mismatch` refusal it answers otherwise.
+ */
+export const providersNativeMutateV14 = defineRpcContract({
+  method: "providers.nativeMutate",
+  schemaVersion: { major: 1, minor: 4 } as const,
+  requestSchema: providersNativeMutateRequestSchemaV14,
+  responseSchema: providersNativeMutateResponseSchemaV14,
+});
+
 export const providersNativeMutateUpgradeV10ToV11 = defineUpgradePath<
   typeof providersNativeMutateV10,
   typeof providersNativeMutateV11
@@ -4734,6 +4748,16 @@ export const providersNativeMutateUpgradeV12ToV13 = defineUpgradePath<
   from: { major: 1, minor: 2 },
   to: { major: 1, minor: 3 },
   upgradeRequest: (request) => ({ ...request, executableWriteGrant: null }),
+  upgradeResponse: (response) => response,
+});
+
+export const providersNativeMutateUpgradeV13ToV14 = defineUpgradePath<
+  typeof providersNativeMutateV13,
+  typeof providersNativeMutateV14
+>({
+  from: { major: 1, minor: 3 },
+  to: { major: 1, minor: 4 },
+  upgradeRequest: (request) => ({ ...request, expectedEnvironmentId: null }),
   upgradeResponse: (response) => response,
 });
 
@@ -12217,7 +12241,7 @@ const HOST_RPC_PROVIDERS_REGISTRY_DEFINITION = {
   "providers.nativeMutate": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 3,
+      latestMinor: 4,
       versions: {
         0: {
           contract: providersNativeMutateV10,
@@ -12235,6 +12259,13 @@ const HOST_RPC_PROVIDERS_REGISTRY_DEFINITION = {
         3: {
           contract: providersNativeMutateV13,
           upgradeFromPreviousVersion: providersNativeMutateUpgradeV12ToV13,
+        },
+        // `environment_mismatch` is a code `@1.3` cannot carry: the host
+        // never answers it to a `@1.3` caller.
+        4: {
+          contract: providersNativeMutateV14,
+          upgradeFromPreviousVersion: providersNativeMutateUpgradeV13ToV14,
+          responseGrowthProjectionGated: true,
         },
       },
       downgradePathsFromLatest: {},
