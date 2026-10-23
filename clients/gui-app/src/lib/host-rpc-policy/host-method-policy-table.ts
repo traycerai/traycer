@@ -2479,6 +2479,79 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
+  // The environments redesign: the move, a configuration through the server
+  // pool, members and the retrospective sheet. Reads take the latest answer;
+  // every write is ordered and never joined.
+  "environment.move.plan": { ...LATEST_SCHEDULING, poll: null },
+  "environment.move.stopPreview": { ...LATEST_SCHEDULING, poll: null },
+  "environment.configuration.items": { ...LATEST_SCHEDULING, poll: null },
+  "environment.history": { ...LATEST_SCHEDULING, poll: null },
+  "environment.members.removePreview": { ...LATEST_SCHEDULING, poll: null },
+  "environment.move.accept": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "environment.move.stop": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "environment.configuration.items.put": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "environment.configuration.items.delete": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "environment.configuration.mcpServers.put": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "environment.configuration.skills.upload": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "environment.configuration.policy.put": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "environment.members.invite": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "environment.members.setRole": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "environment.members.remove": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "environment.members.noticeSeen": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "environment.review.heldApply": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "environment.review.record": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
   "config.env.list": { ...LATEST_SCHEDULING, poll: null },
   "config.env.set": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
   "config.env.delete": {

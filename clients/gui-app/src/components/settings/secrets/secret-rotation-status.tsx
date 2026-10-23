@@ -34,7 +34,7 @@ export function SecretRotationStatus(props: {
     cacheKeyIdentity: undefined,
     client: props.client,
     method: "environment.secrets.rotation",
-    params: { secretId: props.secretId },
+    params: { secretId: props.secretId, environmentId: null },
     options: { enabled: true, poll: moving },
   });
   const current = rotation.data?.rotation;

@@ -46,6 +46,7 @@ export function SupportEnvironmentBridge(): ReactNode {
 }
 
 const NO_PARAMS = {};
+const OWN_ENVIRONMENT_PARAMS = { environmentId: null };
 
 function SupportEnvironmentHost(props: { readonly hostId: string }): ReactNode {
   const { hostId } = props;
@@ -85,7 +86,7 @@ function SupportEnvironmentHost(props: { readonly hostId: string }): ReactNode {
     cacheKeyIdentity: undefined,
     client,
     method: "environment.secrets.list",
-    params: NO_PARAMS,
+    params: OWN_ENVIRONMENT_PARAMS,
     options: { enabled: statusSupported === true && listSupported === true },
   });
   const reach = useHostQuery<HostRpcRegistry, "environment.reachDiagnostics">({
@@ -253,7 +254,7 @@ function SupportRotationRead(props: {
     cacheKeyIdentity: undefined,
     client: props.client,
     method: "environment.secrets.rotation",
-    params: { secretId },
+    params: { secretId, environmentId: null },
     options: { enabled: true, poll: moving },
   });
   const current: EnvironmentSecretsRotationResponse["rotation"] | undefined =

@@ -1,5 +1,5 @@
 import {
-  type HostNotificationEntryV23,
+  type HostNotificationEntryV24,
   type HostNotificationOutcome,
 } from "@traycer/protocol/host/notifications/host-notifications";
 import {
@@ -33,7 +33,7 @@ export interface HostNotificationPresentation {
  * generic copy instead of throwing or exposing untrusted raw error text.
  */
 export function formatHostNotificationPresentation(
-  entry: HostNotificationEntryV23,
+  entry: HostNotificationEntryV24,
 ): HostNotificationPresentation {
   const known = parseKnownHostNotificationPayloadForKind(
     entry.kind,
@@ -118,6 +118,95 @@ export function formatHostNotificationPresentation(
     case "team.plan.unlinked":
     case "team.pods.full":
       return teamNotificationPresentation(entry.kind, known);
+    case "environment.move.stalled":
+    case "environment.apply.failed":
+    case "team.role.changed":
+    case "team.host.returned":
+    case "secret.removed":
+      return environmentNotificationPresentation(entry.kind, known);
+  }
+}
+
+/** The environments rows: what happened to a configuration, by name. */
+function environmentNotificationPresentation(
+  kind:
+    | "environment.move.stalled"
+    | "environment.apply.failed"
+    | "team.role.changed"
+    | "team.host.returned"
+    | "secret.removed",
+  known: HostNotificationKnownPayload | null,
+): HostNotificationPresentation {
+  switch (kind) {
+    case "environment.move.stalled":
+      return {
+        title: "Move to Personal stalled",
+        body:
+          known?.kind === "environment_move_stalled"
+            ? `${known.hostName} • ${known.remaining === 1 ? "1 item" : `${known.remaining} items`} not moved yet`
+            : "A computer's move to Personal stopped before it finished",
+      };
+    case "environment.apply.failed":
+      return {
+        title: "Setting not applied",
+        body:
+          known?.kind === "environment_apply_failed"
+            ? `${known.hostName} • ${known.itemKey} could not be applied`
+            : "A host could not apply a setting",
+      };
+    case "team.role.changed":
+      return {
+        title: "Your role changed",
+        body:
+          known?.kind === "team_role_changed"
+            ? `${known.teamName} • You are now ${roleName(known.to)}, were ${roleName(known.from)}`
+            : "Your role in a team changed",
+      };
+    case "team.host.returned":
+      return {
+        title: "Computer back on your own settings",
+        body:
+          known?.kind === "team_host_returned"
+            ? `${known.hostName} • No longer runs ${known.teamName}`
+            : "A computer no longer runs a team's settings",
+      };
+    case "secret.removed":
+      return {
+        title: "Secret removed",
+        body:
+          known?.kind === "secret_removed"
+            ? `${known.secretName} • ${secretRemovedStatus(known.outcome)}`
+            : "A secret was removed",
+      };
+  }
+}
+
+/** A role read off a payload as a string; a role newer than this build reads as-is. */
+function roleName(role: string): string {
+  switch (role) {
+    case "owner":
+      return "an owner";
+    case "admin":
+      return "an admin";
+    case "editor":
+      return "an editor";
+    case "viewer":
+      return "a viewer";
+    default:
+      return role;
+  }
+}
+
+function secretRemovedStatus(
+  outcome: "revoked" | "cleanup_requested" | "destroyed",
+): string {
+  switch (outcome) {
+    case "revoked":
+      return "Revoked";
+    case "cleanup_requested":
+      return "Revoked; removing it from its hosts";
+    case "destroyed":
+      return "Destroyed";
   }
 }
 
@@ -412,6 +501,11 @@ export function hostOperationKnownCopy(
     case "team_installing_admin_gone":
     case "team_plan_unlinked":
     case "team_pods_full":
+    case "environment_move_stalled":
+    case "environment_apply_failed":
+    case "team_role_changed":
+    case "team_host_returned":
+    case "secret_removed":
       return null;
     case "worktree_deletion": {
       const taskTitle = nonEmptyTitle(payload.taskTitle ?? null);
@@ -507,6 +601,11 @@ function knownTaskTitle(payload: HostNotificationKnownPayload): string | null {
     case "team_installing_admin_gone":
     case "team_plan_unlinked":
     case "team_pods_full":
+    case "environment_move_stalled":
+    case "environment_apply_failed":
+    case "team_role_changed":
+    case "team_host_returned":
+    case "secret_removed":
       return null;
   }
 }
@@ -534,6 +633,11 @@ function knownAgentName(payload: HostNotificationKnownPayload): string | null {
     case "team_installing_admin_gone":
     case "team_plan_unlinked":
     case "team_pods_full":
+    case "environment_move_stalled":
+    case "environment_apply_failed":
+    case "team_role_changed":
+    case "team_host_returned":
+    case "secret_removed":
       return null;
   }
 }
@@ -561,6 +665,11 @@ function knownChatTitle(payload: HostNotificationKnownPayload): string | null {
     case "team_installing_admin_gone":
     case "team_plan_unlinked":
     case "team_pods_full":
+    case "environment_move_stalled":
+    case "environment_apply_failed":
+    case "team_role_changed":
+    case "team_host_returned":
+    case "secret_removed":
       return null;
   }
 }
@@ -593,6 +702,11 @@ function knownStoppedReason(
     case "team_installing_admin_gone":
     case "team_plan_unlinked":
     case "team_pods_full":
+    case "environment_move_stalled":
+    case "environment_apply_failed":
+    case "team_role_changed":
+    case "team_host_returned":
+    case "secret_removed":
       return null;
   }
 }
@@ -624,6 +738,11 @@ function knownProviderId(
     case "team_installing_admin_gone":
     case "team_plan_unlinked":
     case "team_pods_full":
+    case "environment_move_stalled":
+    case "environment_apply_failed":
+    case "team_role_changed":
+    case "team_host_returned":
+    case "secret_removed":
       return null;
   }
 }
@@ -667,6 +786,11 @@ function knownUnverified(payload: HostNotificationKnownPayload): boolean {
     case "team_installing_admin_gone":
     case "team_plan_unlinked":
     case "team_pods_full":
+    case "environment_move_stalled":
+    case "environment_apply_failed":
+    case "team_role_changed":
+    case "team_host_returned":
+    case "secret_removed":
       return false;
   }
 }
@@ -696,6 +820,11 @@ function knownBackgroundWorkRunning(
     case "team_installing_admin_gone":
     case "team_plan_unlinked":
     case "team_pods_full":
+    case "environment_move_stalled":
+    case "environment_apply_failed":
+    case "team_role_changed":
+    case "team_host_returned":
+    case "secret_removed":
       return false;
   }
 }

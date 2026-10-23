@@ -408,7 +408,7 @@ function mountVersions(
   const { client } = buildEnvironmentClient({
     hostId: HOST_ID,
     handlers: {
-      "environment.secrets.versions": () => ({ versions }),
+      "environment.secrets.versions": () => ({ versions, removal: null }),
       "environment.secrets.undo": () => undoAnswer,
     },
   });

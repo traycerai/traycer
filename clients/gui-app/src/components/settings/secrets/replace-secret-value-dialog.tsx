@@ -90,7 +90,12 @@ export function ReplaceSecretValueDialog(props: {
     try {
       const answer = await props.client.request(
         "environment.secrets.replaceValue",
-        { secretId: secret.secretId, value, expectedVersionId },
+        {
+          secretId: secret.secretId,
+          value,
+          expectedVersionId,
+          environmentId: null,
+        },
       );
       const outcome = replaceOutcome(answer);
       // The row and the list follow the server whichever open is showing.

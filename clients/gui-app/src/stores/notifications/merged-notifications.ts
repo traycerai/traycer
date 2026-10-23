@@ -1998,8 +1998,9 @@ function agentSurfaceFromHostEntry(
 }
 
 /**
- * Payload kinds whose row is complete on itself: a rotation and the team
- * rows name secrets, hosts and people, never a chat to open.
+ * Payload kinds whose row is complete on itself: a rotation, the team rows
+ * and the environment rows name secrets, hosts and people, never a chat to
+ * open.
  */
 const ROW_COMPLETE_PAYLOAD_KINDS = [
   "secret_rotated",
@@ -2010,6 +2011,11 @@ const ROW_COMPLETE_PAYLOAD_KINDS = [
   "team_installing_admin_gone",
   "team_plan_unlinked",
   "team_pods_full",
+  "environment_move_stalled",
+  "environment_apply_failed",
+  "team_role_changed",
+  "team_host_returned",
+  "secret_removed",
 ] as const satisfies readonly HostNotificationKnownPayload["kind"][];
 
 type RowCompletePayload = Extract<

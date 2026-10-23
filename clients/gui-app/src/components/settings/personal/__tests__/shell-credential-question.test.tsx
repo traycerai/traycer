@@ -45,7 +45,7 @@ import {
   recordNegotiatedHostMethods,
   resetNegotiatedManifests,
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
-import type { EnvironmentStatusResponse } from "@traycer/protocol/host/environment-schemas";
+import type { EnvironmentStatusResponseV11 } from "@traycer/protocol/host/environment-schemas";
 import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
 import { PersonalPageFrame } from "@/components/settings/personal/personal-page-frame";
 import { ShellSettingsPanel } from "@/components/settings/panels/shell-settings-panel";
@@ -61,7 +61,7 @@ import {
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 
 const HOST_ID = "host-a";
-const READY_STATUS: EnvironmentStatusResponse = environmentStatusFixture({
+const READY_STATUS: EnvironmentStatusResponseV11 = environmentStatusFixture({
   items: [itemStatusFixture({ kind: "variable", key: "EXISTING" })],
 });
 /** `sk-` and a long run: a known token shape, whatever the variable is called. */
@@ -89,7 +89,7 @@ interface Rendered {
 
 function renderShellPage(options: {
   /** `null`: the host's `environment.status` read never resolves. */
-  readonly status: EnvironmentStatusResponse | null;
+  readonly status: EnvironmentStatusResponseV11 | null;
   /** The methods the host advertises; the config family is always there. */
   readonly environmentMethods: readonly string[];
   readonly existingVariables: readonly { key: string; value: string }[];

@@ -29,7 +29,7 @@ import {
   hostNotificationsSubscribeServerFrameSchemaV12,
   hostNotificationsSubscribeServerFrameSchemaV13,
   HOST_NOTIFICATIONS_FEED_PARTITION_SNAPSHOT_MINOR,
-  hostNotificationsListDowngradeV23ToV10,
+  hostNotificationsListDowngradeV24ToV10,
   hostNotificationsListResponseSchema,
   hostNotificationsListResponseSchemaV10,
   hostNotificationsListResponseSchemaV21,
@@ -271,7 +271,7 @@ describe("registry wiring", () => {
       hostNotificationsListUpgradeV21ToV22,
     );
     expect(line.downgradePathsFromLatest[1]).toBe(
-      hostNotificationsListDowngradeV23ToV10,
+      hostNotificationsListDowngradeV24ToV10,
     );
   });
 
@@ -546,7 +546,7 @@ describe("channel-emission capability", () => {
 
 describe("@2.3 -> @1.0 downgrade", () => {
   it("cannot hand a v1.1.7 caller an arm it has no parser for", () => {
-    const result = hostNotificationsListDowngradeV23ToV10.downgradeResponse({
+    const result = hostNotificationsListDowngradeV24ToV10.downgradeResponse({
       entries: [AGENT_STOPPED_ENTRY, OPERATION_FINISHED_ENTRY],
       nextCursor: { kind: "chronological", updatedAt: 1, id: "x" },
     });

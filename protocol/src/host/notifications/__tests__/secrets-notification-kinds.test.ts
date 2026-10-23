@@ -7,7 +7,7 @@ import {
   hostNotificationEntrySchemaV23,
   hostNotificationSecretExportMintedPayloadSchema,
   hostNotificationSecretGrantRequestPayloadSchema,
-  hostNotificationsListDowngradeV23ToV10,
+  hostNotificationsListDowngradeV24ToV10,
   hostNotificationsListResponseSchemaV10,
   parseKnownHostNotificationPayloadForKind,
   visibleHostNotificationKinds,
@@ -269,7 +269,7 @@ describe("secrets notification presentation", () => {
 
 describe("@2.3 -> @1.0 downgrade with secrets rows", () => {
   it("does not let a secrets entry through to the 1.0 response", () => {
-    const result = hostNotificationsListDowngradeV23ToV10.downgradeResponse({
+    const result = hostNotificationsListDowngradeV24ToV10.downgradeResponse({
       entries: [
         hostNotificationEntrySchemaV23.parse(GRANT_ENTRY),
         hostNotificationEntrySchemaV23.parse(AGENT_STOPPED_ENTRY),

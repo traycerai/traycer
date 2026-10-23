@@ -64,6 +64,7 @@ function VersionRow(props: {
           secretId: secret.secretId,
           versionId: version.versionId,
           regrant: secret.revoked,
+          environmentId: null,
         });
         if (answer.outcome === "refused") {
           setNote(refusalText("undo", answer.code));
@@ -72,7 +73,11 @@ function VersionRow(props: {
       } else {
         const answer = await props.client.request(
           "environment.secrets.destroy",
-          { secretId: secret.secretId, versionId: version.versionId },
+          {
+            secretId: secret.secretId,
+            versionId: version.versionId,
+            environmentId: null,
+          },
         );
         if (answer.outcome === "refused") {
           setNote(refusalText("destroy", answer.code));
@@ -170,7 +175,7 @@ export function SecretVersionsList(props: {
     cacheKeyIdentity: undefined,
     client: props.client,
     method: "environment.secrets.versions",
-    params: { secretId: props.secret.secretId },
+    params: { secretId: props.secret.secretId, environmentId: null },
     options: { enabled: true },
   });
   const reread = (): void => {

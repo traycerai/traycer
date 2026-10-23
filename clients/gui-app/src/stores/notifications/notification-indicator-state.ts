@@ -1,6 +1,6 @@
 import {
   HOST_NOTIFICATION_PENDING_PROMPT_KINDS,
-  type HostNotificationEntryV23,
+  type HostNotificationEntryV24,
   type HostNotificationsCloudFeedRowV13,
   type HostNotificationsEntityRef,
   type HostNotificationsIndicatorState,
@@ -295,7 +295,7 @@ interface CloudIndicatorAccumulator {
 /** Exact entity -> origin host -> latest terminal entry in causal write order. */
 type CloudTerminalCandidate = {
   readonly entryId: string;
-  readonly entry: HostNotificationEntryV23;
+  readonly entry: HostNotificationEntryV24;
 };
 
 type CloudTerminalWinners = Map<string, Map<string, CloudTerminalCandidate>>;
@@ -349,7 +349,7 @@ function collectCloudIndicatorEntry(
  * prompts belong to their browser tab and do not decorate the requesting chat.
  */
 function indicatorContribution(
-  entry: HostNotificationEntryV23,
+  entry: HostNotificationEntryV24,
 ): HostNotificationsIndicatorState | null {
   if (
     entry.kind === "browser.human.needed" ||
@@ -385,7 +385,7 @@ function retainLatestTerminal(input: {
   readonly entityId: string;
   readonly originHostId: string;
   readonly entryId: string;
-  readonly candidate: HostNotificationEntryV23;
+  readonly candidate: HostNotificationEntryV24;
 }): void {
   if (!isTerminalEntry(input.candidate)) return;
   const originWinners = terminalWinnersForEntity(input.winners, input.entityId);
@@ -420,7 +420,7 @@ function terminalCandidateSupersedes(
   return terminalEntryIsNewer(candidate, current);
 }
 
-function isAutomaticRecoveryEntry(entry: HostNotificationEntryV23): boolean {
+function isAutomaticRecoveryEntry(entry: HostNotificationEntryV24): boolean {
   return (
     entry.kind === "agent.stopped" &&
     "automaticRecovery" in entry.payload &&
@@ -430,19 +430,19 @@ function isAutomaticRecoveryEntry(entry: HostNotificationEntryV23): boolean {
 
 function terminalEntriesForEpic(
   winners: CloudTerminalWinners,
-): ReadonlyArray<HostNotificationEntryV23> {
+): ReadonlyArray<HostNotificationEntryV24> {
   return [...winners.values()].flatMap(terminalEntriesForOrigins);
 }
 
 function terminalEntriesForOrigins(
   winners: Map<string, CloudTerminalCandidate>,
-): ReadonlyArray<HostNotificationEntryV23> {
+): ReadonlyArray<HostNotificationEntryV24> {
   return [...winners.values()].map((candidate) => candidate.entry);
 }
 
 function mergeTerminalContributions(
   current: HostNotificationsIndicatorState | undefined,
-  entries: ReadonlyArray<HostNotificationEntryV23>,
+  entries: ReadonlyArray<HostNotificationEntryV24>,
 ): HostNotificationsIndicatorState | undefined {
   return entries.reduce<HostNotificationsIndicatorState | undefined>(
     (merged, entry) => {
@@ -466,7 +466,7 @@ function terminalWinnersForEntity(
   return created;
 }
 
-function isTerminalEntry(entry: HostNotificationEntryV23): boolean {
+function isTerminalEntry(entry: HostNotificationEntryV24): boolean {
   return entry.severity === "failure" || entry.severity === "done";
 }
 
@@ -485,7 +485,7 @@ function terminalEntryIsNewer(
 }
 
 function terminalIndicatorContribution(
-  entry: HostNotificationEntryV23,
+  entry: HostNotificationEntryV24,
 ): HostNotificationsIndicatorState | null {
   if (entry.readAt !== null || !isTerminalEntry(entry)) return null;
   return {

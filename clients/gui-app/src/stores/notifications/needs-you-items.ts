@@ -1,7 +1,7 @@
 import { useMemo } from "react";
 import {
   parseKnownHostNotificationPayloadForKind,
-  type HostNotificationEntryV23,
+  type HostNotificationEntryV24,
   type HostNotificationsCloudFeedRowV13,
 } from "@traycer/protocol/host/notifications/contracts";
 import {
@@ -96,7 +96,7 @@ export function groupNeedsYouByEpic(
 }
 
 /** The chat title a prompt entry carries, for the item's "task · agent" line. */
-function agentTitleOfEntry(entry: HostNotificationEntryV23): string | null {
+function agentTitleOfEntry(entry: HostNotificationEntryV24): string | null {
   const known = parseKnownHostNotificationPayloadForKind(
     entry.kind,
     entry.payload,

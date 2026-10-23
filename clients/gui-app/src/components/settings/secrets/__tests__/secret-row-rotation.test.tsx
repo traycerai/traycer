@@ -194,7 +194,7 @@ function buildRotationHost(
       },
       "environment.secrets.versions": () => {
         reads.versions += 1;
-        return { versions: [...state.versions] };
+        return { versions: [...state.versions], removal: null };
       },
       "environment.secrets.replaceValue": (request) => {
         replaceRequests.push(request);

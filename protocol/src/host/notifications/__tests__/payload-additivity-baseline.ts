@@ -740,4 +740,121 @@ export const PAYLOAD_FINGERPRINT_BASELINE = {
     },
     required: ["kind", "environmentId", "teamName", "podCount"],
   },
+  environment_move_stalled: {
+    type: "object",
+    properties: {
+      kind: {
+        type: "string",
+        const: "environment_move_stalled",
+      },
+      hostId: {
+        type: "string",
+        minLength: 1,
+      },
+      hostName: {
+        type: "string",
+      },
+      remaining: {
+        type: "integer",
+        minimum: 0,
+        maximum: 9007199254740991,
+      },
+      reason: {
+        type: "string",
+        minLength: 1,
+      },
+    },
+    required: ["kind", "hostId", "hostName", "remaining", "reason"],
+  },
+  environment_apply_failed: {
+    type: "object",
+    properties: {
+      kind: {
+        type: "string",
+        const: "environment_apply_failed",
+      },
+      hostId: {
+        type: "string",
+        minLength: 1,
+      },
+      hostName: {
+        type: "string",
+      },
+      itemKey: {
+        type: "string",
+        minLength: 1,
+      },
+      reason: {
+        type: "string",
+        minLength: 1,
+      },
+    },
+    required: ["kind", "hostId", "hostName", "itemKey", "reason"],
+  },
+  team_role_changed: {
+    type: "object",
+    properties: {
+      kind: {
+        type: "string",
+        const: "team_role_changed",
+      },
+      environmentId: {
+        type: "string",
+        minLength: 1,
+      },
+      teamName: {
+        type: "string",
+      },
+      from: {
+        type: "string",
+        minLength: 1,
+      },
+      to: {
+        type: "string",
+        minLength: 1,
+      },
+    },
+    required: ["kind", "environmentId", "teamName", "from", "to"],
+  },
+  team_host_returned: {
+    type: "object",
+    properties: {
+      kind: {
+        type: "string",
+        const: "team_host_returned",
+      },
+      environmentId: {
+        type: "string",
+        minLength: 1,
+      },
+      teamName: {
+        type: "string",
+      },
+      hostName: {
+        type: "string",
+      },
+    },
+    required: ["kind", "environmentId", "teamName", "hostName"],
+  },
+  secret_removed: {
+    type: "object",
+    properties: {
+      kind: {
+        type: "string",
+        const: "secret_removed",
+      },
+      environmentId: {
+        type: "string",
+        minLength: 1,
+      },
+      secretName: {
+        type: "string",
+      },
+      outcome: {
+        type: "string",
+        enum: ["revoked", "cleanup_requested", "destroyed"],
+      },
+    },
+    required: ["kind", "environmentId", "secretName", "outcome"],
+  },
 } satisfies Record<HostNotificationKnownPayloadKind, JsonSchemaFingerprint>;

@@ -35,7 +35,7 @@ export function SecretsPage(props: {
     cacheKeyIdentity: undefined,
     client: props.client,
     method: "environment.secrets.list",
-    params: {},
+    params: { environmentId: null },
     options: { enabled: true },
   });
 

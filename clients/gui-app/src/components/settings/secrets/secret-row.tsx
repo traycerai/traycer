@@ -109,7 +109,7 @@ export function SecretRow(props: {
     cacheKeyIdentity: undefined,
     client: props.client,
     method: "environment.secrets.versions",
-    params: { secretId: secret.secretId },
+    params: { secretId: secret.secretId, environmentId: null },
     options: { enabled: removing },
   });
   const currentVersion = (versions.data?.versions ?? []).find(
@@ -125,6 +125,7 @@ export function SecretRow(props: {
       const result = await props.client.request("environment.secrets.verify", {
         target: "secret",
         secretId: secret.secretId,
+        environmentId: null,
       });
       setLine(secretVerifyLine(result, secret.protocol ?? "", "row"));
     } catch (error) {
