@@ -3,19 +3,24 @@ import { Avatar as AvatarPrimitive } from "radix-ui";
 
 import { cn } from "@/lib/utils";
 
+// `square` is the rounded-square picture of a chat app's message list (a bot
+// channel's rows), where a column of circles would read as a people list.
 function Avatar({
   className,
   size = "default",
+  shape = "circle",
   ...props
 }: React.ComponentProps<typeof AvatarPrimitive.Root> & {
   size?: "default" | "sm" | "lg";
+  shape?: "circle" | "square";
 }) {
   return (
     <AvatarPrimitive.Root
       data-slot="avatar"
       data-size={size}
+      data-shape={shape}
       className={cn(
-        "group/avatar relative flex size-8 shrink-0 rounded-full select-none after:absolute after:inset-0 after:rounded-full after:border after:border-border after:mix-blend-darken data-[size=lg]:size-10 data-[size=sm]:size-6 dark:after:mix-blend-lighten",
+        "group/avatar relative flex size-8 shrink-0 rounded-full select-none after:absolute after:inset-0 after:rounded-full after:border after:border-border after:mix-blend-darken data-[size=lg]:size-10 data-[size=sm]:size-6 data-[shape=square]:rounded-md data-[shape=square]:after:rounded-md dark:after:mix-blend-lighten",
         className,
       )}
       {...props}
@@ -31,7 +36,7 @@ function AvatarImage({
     <AvatarPrimitive.Image
       data-slot="avatar-image"
       className={cn(
-        "aspect-square size-full rounded-full object-cover",
+        "aspect-square size-full rounded-full object-cover group-data-[shape=square]/avatar:rounded-md",
         className,
       )}
       {...props}
@@ -50,7 +55,7 @@ function AvatarFallback({
         // `bg-foreground/8` per `ui/skeleton.tsx`: unlike the group-overflow
         // chip below, this fallback carries no ring, so on a dialog/popover
         // surface in a preset theme the initials used to float on nothing.
-        "flex size-full items-center justify-center rounded-full bg-foreground/8 text-ui-sm text-muted-foreground group-data-[size=sm]/avatar:text-ui-xs",
+        "flex size-full items-center justify-center rounded-full bg-foreground/8 text-ui-sm text-muted-foreground group-data-[size=sm]/avatar:text-ui-xs group-data-[shape=square]/avatar:rounded-md",
         className,
       )}
       {...props}

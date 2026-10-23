@@ -254,8 +254,8 @@ function mountTranscript(messages: ReadonlyArray<Message>): {
         chatId={CHAT_ID}
         hostId="host-1"
         title="Release Bot"
-        instanceId="bot-conversation:test"
-        linkRequests
+        instanceId="bot-thread:test"
+        surface={{ kind: "thread" }}
         resolveMember={UNRESOLVED_BOT_MEMBERS}
       />
     </StrictMode>

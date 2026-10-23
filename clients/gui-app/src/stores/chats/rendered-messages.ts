@@ -12,6 +12,7 @@ import type {
   AssistantTurnProfile,
   ChatSessionAnchor,
 } from "@traycer/protocol/persistence/epic/schemas";
+import type { BotAnnouncement } from "@traycer/protocol/persistence/epic/messages";
 import type {
   ChatActiveTurn,
   ChatApprovalState,
@@ -2373,6 +2374,8 @@ interface AssistantTurnAccumulator {
   envCredentialVar: string | null;
   /** Cumulative turn cost (USD) from the contributing record's final usage. */
   costUsd: number | null;
+  /** The bot announcement a channel's bot row is; `null` on every other turn. */
+  announcement: BotAnnouncement | null;
   imageResolutionsByBlockId: Map<
     string,
     ReadonlyArray<AssistantMarkdownImageResolution>
@@ -2968,6 +2971,8 @@ function addAssistantMessageToAccumulator(
     // which may be processed after an earlier sibling. Take the LATEST non-null
     // (last-wins) so the final cumulative cost is not pinned to a stale partial.
     existing.costUsd = message.usage?.costUsd ?? existing.costUsd;
+    existing.announcement =
+      existing.announcement ?? message.announcement ?? null;
     existing.turnMessageIds = [
       ...(existing.turnMessageIds ?? [existing.messageId]),
       message.messageId,
@@ -2991,6 +2996,7 @@ function addAssistantMessageToAccumulator(
     serviceTier: message.serviceTier,
     envCredentialVar: message.envCredentialVar,
     costUsd: message.usage?.costUsd ?? null,
+    announcement: message.announcement ?? null,
     imageResolutionsByBlockId: new Map(),
     generatedImageBlockIdByHash: new Map(),
   };
@@ -3780,6 +3786,10 @@ function renderAssistantTurnSlice(
     // and an explicit `undefined` would be a present key whose value is the
     // one thing a reader must not treat as an identity.
     ...(input.acc.turnId === null ? {} : { turnId: input.acc.turnId }),
+    // Only a bot channel's bot rows carry one; absent everywhere else.
+    ...(input.acc.announcement === null
+      ? {}
+      : { announcement: input.acc.announcement }),
     // Assistant rows render no provider/model label above the bubble (it moved
     // to the elapsed-footer hover, which reads `assistantMeta`), so there's no
     // sender label to carry here.
@@ -4137,6 +4147,8 @@ function renderLiveAssistant(
     // A live turn has no final cost yet; it surfaces once the turn completes
     // and re-renders via the persisted path. The live footer is suppressed.
     costUsd: null,
+    // An announcement is a host-written record, never a streamed turn.
+    announcement: null,
     imageResolutionsByBlockId: new Map(),
     generatedImageBlockIdByHash: new Map(),
   };

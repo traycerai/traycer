@@ -145,25 +145,50 @@ export function useBotOpenMutation(
   });
 }
 
+/** The host a send went through, captured before it left. */
+interface BotConversationSendContext {
+  readonly hostId: string | null;
+}
+
 /**
- * One human message into a conversation. Accepted whether or not the bound
+ * One member's message: a post on the channel (`threadId: null`), which
+ * opens a thread, or a reply in a thread. Accepted whether or not the bound
  * host is reachable: `delivery: "queued"` means the message waits in the
  * cross-host mailbox and the row appears when the bound host drains it. No
  * toast on error - the composer states the refusal inline, under the field.
+ *
+ * A send adds a thread or a reply, so the channel's thread list is read
+ * again on the host the send went through.
  */
 export function useBotConversationSendMutation(
   client: HostClient<HostRpcRegistry> | null,
 ): UseMutationResult<
   BotConversationSendResponse,
   HostRpcError,
-  BotConversationSendRequest
+  BotConversationSendRequest,
+  BotConversationSendContext
 > {
-  return useHostMutation<HostRpcRegistry, "bot.conversation.send">({
+  const queryClient = useQueryClient();
+  return useHostMutation<
+    HostRpcRegistry,
+    "bot.conversation.send",
+    BotConversationSendContext
+  >({
     client,
     method: "bot.conversation.send",
     mapVariables: (variables) => variables,
     options: {
       mutationKey: botMutationKeys.conversationSend(),
+      onMutate: () => ({ hostId: client?.getActiveHostId() ?? null }),
+      onSuccess: (_response, _variables, context) => {
+        if (context.hostId === null) return;
+        void queryClient.invalidateQueries({
+          queryKey: hostQueryKeys.methodScope(
+            context.hostId,
+            "bot.thread.list",
+          ),
+        });
+      },
     },
   });
 }

@@ -245,7 +245,7 @@ describe("botPausedCopy", () => {
     ] as const) {
       const copy = botPausedCopy(reason, ENVIRONMENT_LABEL);
       expect(copy.text).toBe(
-        "This bot's conversation can't be shown here. Messages you send still reach it.",
+        "This bot's channel can't be shown here. Messages you send still reach it.",
       );
       expect(copy.retry).toBe(false);
       expect(copy.text).not.toMatch(/back|away/i);

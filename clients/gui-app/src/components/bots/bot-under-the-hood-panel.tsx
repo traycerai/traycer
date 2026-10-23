@@ -3,12 +3,23 @@ import { useNavigate } from "@tanstack/react-router";
 import { useStore } from "zustand";
 import { useShallow } from "zustand/react/shallow";
 import type { BotTaskEntry } from "@traycer/protocol/host/bot/schemas";
+import type { BotThreadSummary } from "@traycer/protocol/host/bot/conversation-schemas";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { BackgroundItemsPanel } from "@/components/chat/chat-background-items-panel";
 import { BotChatTranscript } from "@/components/bots/bot-chat-transcript";
 import { UNRESOLVED_BOT_MEMBERS } from "@/lib/bots/bot-member-names";
 import { BotTranscriptPaused } from "@/components/bots/bot-transcript-paused";
 import { useEpicGetTaskContexts } from "@/hooks/epic/use-epic-get-task-contexts-query";
+import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
+import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
+import { useBotThreadListQuery } from "@/hooks/bots/use-bot-thread-list-query";
+import {
+  useBotCostsQuery,
+  type BotCosts,
+} from "@/hooks/bots/use-bot-costs-query";
+import { useUsageSummarySupported } from "@/hooks/usage-analytics/use-usage-summary-support";
+import { formatUsd } from "@/lib/usage-analytics/cost-format";
 import { useChatSessionHandleForContainer } from "@/lib/registries/chat-session-registry";
 import {
   deliveredTaskCheckins,
@@ -30,16 +41,18 @@ import type { ChatSessionStoreHandle } from "@/stores/chats/chat-session-store";
 import { cn } from "@/lib/utils";
 
 const EMPTY_TASK_IDS: ReadonlyArray<string> = [];
+const EMPTY_THREADS: ReadonlyArray<BotThreadSummary> = [];
 const EMPTY_STOP_IDS: ReadonlySet<string> = new Set();
 const noop = (): void => undefined;
 const noStop = (): string | null => null;
 
 /**
- * What the bot is doing (Tracy Bots): the tasks it tracks and when each
- * checks in, the check-ins waiting on its queue, the ones it has already
- * read, the background work its trunk is running, and the trunk transcript
- * itself - the existing chat view, read-only, with no composer: a person
- * talks to the bot in the conversation, never on its trunk.
+ * What the bot is doing (Tracy Bots): what it and its environment have
+ * cost, its threads, the tasks it tracks and when each checks in, the
+ * check-ins waiting on its queue, the ones it has already read, the
+ * background work its trunk is running, and the transcript of the trunk or
+ * of a thread's session - the existing chat view, read-only, with no
+ * composer: a person talks to the bot in its channel, never on a session.
  */
 export function BotUnderTheHoodPanel(props: {
   readonly botId: string;
@@ -49,10 +62,16 @@ export function BotUnderTheHoodPanel(props: {
   readonly tasks: ReadonlyArray<BotTaskEntry>;
   /** The stream's open-request hint; `null` is unknown and renders nothing. */
   readonly openRequestCount: number | null;
-  /** The bot is paused from this tab: the trunk is the serving host's to
-   * show, so a placeholder stands in for it. The task list comes from the
+  /** The bot is paused from this tab: the sessions are the serving host's to
+   * show, so a placeholder stands in for them. The task list comes from the
    * stream snapshot and keeps rendering. */
   readonly paused: boolean;
+  /** The bot's environment, named on its cost line, and every bot in it. */
+  readonly environmentLabel: string;
+  readonly environmentBotIds: ReadonlyArray<string>;
+  /** The thread session whose transcript is shown; `null` shows the trunk. */
+  readonly sessionChatId: string | null;
+  readonly onSelectSession: (sessionChatId: string | null) => void;
 }): ReactNode {
   const {
     botId,
@@ -62,11 +81,45 @@ export function BotUnderTheHoodPanel(props: {
     tasks,
     openRequestCount,
     paused,
+    environmentLabel,
+    environmentBotIds,
+    sessionChatId,
+    onSelectSession,
   } = props;
+  const client = useTabHostClient();
+  const threadListSupported =
+    useHostMethodSupport(hostId, "bot.thread.list") === true;
+  const threadList = useBotThreadListQuery(client, botId, {
+    enabled: !paused && threadListSupported,
+    poll: false,
+  });
+  const threads = threadList.data?.threads ?? EMPTY_THREADS;
+  const shownThread =
+    sessionChatId === null
+      ? null
+      : (threads.find((thread) => thread.sessionChatId === sessionChatId) ??
+        null);
+  const usageSupported = useUsageSummarySupported(hostId);
+  const costs = useBotCostsQuery(client, {
+    botId,
+    trunkChatId,
+    environmentBotIds,
+    enabled: usageSupported,
+  });
   return (
     <div className="@container flex min-h-0 flex-1 flex-col">
       <div className="grid min-h-0 flex-1 grid-rows-[auto_minmax(0,1fr)] @3xl:grid-cols-[minmax(0,2fr)_minmax(0,3fr)] @3xl:grid-rows-1">
         <div className="flex min-h-0 flex-col gap-4 overflow-y-auto border-b border-border/60 p-4 @3xl:border-r @3xl:border-b-0">
+          {usageSupported ? (
+            <BotCostSection costs={costs} environmentLabel={environmentLabel} />
+          ) : null}
+          {paused ? null : (
+            <BotThreadsList
+              threads={threads}
+              sessionChatId={sessionChatId}
+              onSelectSession={onSelectSession}
+            />
+          )}
           <BotTasksList tasks={tasks} />
           {paused ? null : (
             <BotTrunkState
@@ -78,25 +131,168 @@ export function BotUnderTheHoodPanel(props: {
           )}
         </div>
         <div className="flex min-h-0 flex-col">
-          <h3 className="shrink-0 px-4 pt-3 pb-1 text-ui-xs tracking-[0.08em] text-muted-foreground uppercase">
-            Trunk
-          </h3>
+          <div className="flex shrink-0 items-center gap-2 px-4 pt-3 pb-1">
+            <h3
+              className="min-w-0 flex-1 truncate text-ui-xs tracking-[0.08em] text-muted-foreground uppercase"
+              data-testid="bot-session-heading"
+            >
+              {shownThread === null
+                ? "Trunk"
+                : `Thread: ${threadExcerpt(shownThread)}`}
+            </h3>
+            {sessionChatId === null ? null : (
+              <Button
+                type="button"
+                variant="ghost"
+                size="xs"
+                onClick={() => onSelectSession(null)}
+              >
+                Show trunk
+              </Button>
+            )}
+          </div>
           {paused ? (
             <BotTranscriptPaused />
           ) : (
             <BotChatTranscript
+              key={sessionChatId ?? trunkChatId}
               botId={botId}
-              chatId={trunkChatId}
+              chatId={sessionChatId ?? trunkChatId}
               hostId={hostId}
               title={botTitle}
-              instanceId={`bot-trunk:${botId}`}
-              linkRequests={false}
+              instanceId={
+                sessionChatId === null
+                  ? `bot-trunk:${botId}`
+                  : `bot-thread-session:${sessionChatId}`
+              }
+              surface={null}
               resolveMember={UNRESOLVED_BOT_MEMBERS}
             />
           )}
         </div>
       </div>
     </div>
+  );
+}
+
+/** A thread named by the start of the post it answers. */
+function threadExcerpt(thread: BotThreadSummary): string {
+  const text = thread.anchor?.text.trim() ?? "";
+  if (text.length === 0) return "Thread";
+  return text.length > 60 ? `${text.slice(0, 60)}…` : text;
+}
+
+/**
+ * What the bot has cost and what its environment has, as the usage the
+ * person can see records it; no figure per person (decision 43).
+ */
+function BotCostSection(props: {
+  readonly costs: BotCosts;
+  readonly environmentLabel: string;
+}): ReactNode {
+  const { costs, environmentLabel } = props;
+  return (
+    <section
+      aria-label="Cost"
+      className="flex flex-col gap-1"
+      data-testid="bot-costs"
+    >
+      <h3 className="text-ui-xs tracking-[0.08em] text-muted-foreground uppercase">
+        Cost
+      </h3>
+      <dl className="grid grid-cols-[minmax(0,1fr)_auto] gap-x-3 gap-y-0.5 text-ui-sm">
+        <CostRow label="This bot" usd={costs.botUsd} testId="bot-cost-bot" />
+        <CostRow label="Trunk" usd={costs.trunkUsd} testId="bot-cost-trunk" />
+        <CostRow
+          label={environmentLabel}
+          usd={costs.environmentUsd}
+          testId="bot-cost-environment"
+        />
+      </dl>
+    </section>
+  );
+}
+
+function CostRow(props: {
+  readonly label: string;
+  readonly usd: number | null;
+  readonly testId: string;
+}): ReactNode {
+  return (
+    <>
+      <dt className="truncate text-muted-foreground">{props.label}</dt>
+      <dd
+        className="text-right tabular-nums text-foreground"
+        data-testid={props.testId}
+      >
+        {props.usd === null ? "—" : formatUsd(props.usd)}
+      </dd>
+    </>
+  );
+}
+
+/**
+ * The bot's threads, most recent first: the post each answers, its replies
+ * and its cost when known. Choosing one shows its session's transcript.
+ */
+function BotThreadsList(props: {
+  readonly threads: ReadonlyArray<BotThreadSummary>;
+  readonly sessionChatId: string | null;
+  readonly onSelectSession: (sessionChatId: string) => void;
+}): ReactNode {
+  const { threads, sessionChatId, onSelectSession } = props;
+  return (
+    <section
+      aria-label="Threads"
+      className="flex flex-col gap-1"
+      data-testid="bot-threads"
+    >
+      <h3 className="text-ui-xs tracking-[0.08em] text-muted-foreground uppercase">
+        Threads
+      </h3>
+      {threads.length === 0 ? (
+        <p className="py-1 text-ui-xs text-muted-foreground">No threads yet.</p>
+      ) : (
+        <ul className="flex flex-col gap-1">
+          {threads.map((thread) => (
+            <li key={thread.threadId}>
+              <button
+                type="button"
+                data-testid="bot-thread-row"
+                data-session-chat-id={thread.sessionChatId}
+                aria-current={
+                  thread.sessionChatId === sessionChatId ? "true" : undefined
+                }
+                onClick={() => onSelectSession(thread.sessionChatId)}
+                className={cn(
+                  "flex w-full flex-col gap-0.5 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-foreground/6 focus-visible:outline-2 focus-visible:outline-ring focus-visible:-outline-offset-2",
+                  thread.sessionChatId === sessionChatId && "bg-foreground/6",
+                )}
+              >
+                <span className="truncate text-ui-sm text-foreground">
+                  {threadExcerpt(thread)}
+                </span>
+                <span className="flex flex-wrap gap-x-2 text-ui-xs text-muted-foreground">
+                  <span>
+                    {thread.replyCount === 1
+                      ? "1 reply"
+                      : `${thread.replyCount} replies`}
+                  </span>
+                  {thread.costUsd === null ? null : (
+                    <span
+                      className="tabular-nums"
+                      data-testid="bot-thread-row-cost"
+                    >
+                      {formatUsd(thread.costUsd)}
+                    </span>
+                  )}
+                </span>
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
   );
 }
 
@@ -280,8 +476,8 @@ function BotTrunkStateBody(props: {
         {openRequestCount !== null && openRequestCount > 0 ? (
           <p className="text-ui-xs text-muted-foreground">
             {openRequestCount === 1
-              ? "1 request in the conversation is still open."
-              : `${openRequestCount} requests in the conversation are still open.`}
+              ? "1 request in the channel is still open."
+              : `${openRequestCount} requests in the channel are still open.`}
           </p>
         ) : null}
         {overdue === null ? null : (

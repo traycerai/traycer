@@ -43,7 +43,7 @@ export function botPausedCopy(
     case "bound-to-sandbox":
     case "bound-host-not-observable":
       return {
-        text: "This bot's conversation can't be shown here. Messages you send still reach it.",
+        text: "This bot's channel can't be shown here. Messages you send still reach it.",
         retry: false,
       };
     case "reachability-unknown":
