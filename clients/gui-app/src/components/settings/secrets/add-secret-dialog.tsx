@@ -1,11 +1,6 @@
 import { useRef, useState, type ReactNode } from "react";
-import { ExternalLink } from "lucide-react";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { EnvironmentSecretsCreateResponse } from "@traycer/protocol/host/environment-schemas";
-import {
-  SANDBOX_SECRET_FORM_KINDS,
-  type SandboxSecretFormKind,
-} from "@traycer/protocol/host/secret-intake-catalogue";
 import { SecretIntakeFields } from "@/components/settings/secrets/secret-intake-fields";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
@@ -20,9 +15,9 @@ import {
 import type { HostRpcRegistry } from "@/lib/host";
 import { secretChangeRefusalLine } from "@/lib/sandboxes/secret-change-refusal-copy";
 import {
+  DESKTOP_SECRET_KINDS,
   SECRET_KIND_LABEL,
-  SECRET_KIND_ON_THE_WEB,
-  isDesktopSecretKind,
+  type DesktopSecretKind,
   secretKindHint,
   secretKindUnsupportedReason,
 } from "@/lib/sandboxes/secret-intake-copy";
@@ -39,6 +34,7 @@ import {
   type SecretVerifyLine,
 } from "@/lib/sandboxes/secret-verify-copy";
 import {
+  SECRET_CUSTODY_SENTENCE,
   SECRET_SAVED_OFFLINE,
   secretSaveConfirmationLines,
 } from "@/lib/sandboxes/secrets-page-copy";
@@ -47,10 +43,10 @@ import { cn } from "@/lib/utils";
 /**
  * Settings ▸ Personal ▸ Secrets ▸ Add a secret:
  * kind first, then the kind's form with Verify, then the confirmation of
- * where the value becomes readable. API keys, model provider keys and
- * database logins are added here; every other kind is listed and opens its
- * form on the web; a kind no protocol of which is brokered is greyed with
- * the catalogue's own line.
+ * where the value becomes readable. Only the kinds whose form lives in the
+ * app (API keys, model provider keys and database logins) are offered; SSH,
+ * the cloud and certificate kinds have no row. A kind no protocol of which
+ * is brokered is greyed with the catalogue's own line.
  *
  * The typed value lives in this component's state only: Verify and Save send
  * it by a direct request, so it reaches no query or mutation cache, and
@@ -103,12 +99,11 @@ function createOutcomeNote(
 }
 
 function KindOption(props: {
-  readonly kind: SandboxSecretFormKind;
-  readonly onPick: (kind: SandboxSecretFormKind) => void;
+  readonly kind: DesktopSecretKind;
+  readonly onPick: (kind: DesktopSecretKind) => void;
 }): ReactNode {
   const { kind } = props;
   const unsupported = secretKindUnsupportedReason(kind);
-  const onTheWeb = unsupported === null && !isDesktopSecretKind(kind);
   return (
     <li>
       <button
@@ -124,14 +119,8 @@ function KindOption(props: {
         data-testid={`secret-kind-option-${kind}`}
         data-unsupported={unsupported === null ? undefined : "true"}
       >
-        <span className="flex items-center justify-between gap-2 text-ui-sm font-medium text-foreground">
+        <span className="text-ui-sm font-medium text-foreground">
           {SECRET_KIND_LABEL[kind]}
-          {onTheWeb ? (
-            <span className="flex shrink-0 items-center gap-1 text-ui-xs font-normal text-muted-foreground">
-              {SECRET_KIND_ON_THE_WEB}
-              <ExternalLink className="size-3" aria-hidden />
-            </span>
-          ) : null}
         </span>
         <span className="text-ui-xs text-muted-foreground">
           {unsupported ?? secretKindHint(kind)}
@@ -142,14 +131,14 @@ function KindOption(props: {
 }
 
 function KindPicker(props: {
-  readonly onPick: (kind: SandboxSecretFormKind) => void;
+  readonly onPick: (kind: DesktopSecretKind) => void;
 }): ReactNode {
   return (
     <ul
       className="grid grid-cols-1 gap-2 sm:grid-cols-2"
       data-testid="secret-kind-picker"
     >
-      {SANDBOX_SECRET_FORM_KINDS.map((kind) => (
+      {DESKTOP_SECRET_KINDS.map((kind) => (
         <KindOption key={kind} kind={kind} onPick={props.onPick} />
       ))}
     </ul>
@@ -187,8 +176,6 @@ export function AddSecretDialog(props: {
   readonly open: boolean;
   readonly client: HostClient<HostRpcRegistry>;
   readonly onOpenChange: (open: boolean) => void;
-  /** A kind whose form lives on the web: open it there. */
-  readonly onOpenOnTheWeb: (kind: SandboxSecretFormKind) => void;
   /** A secret was saved: re-read the list. */
   readonly onSaved: () => void;
 }): ReactNode {
@@ -212,12 +199,7 @@ export function AddSecretDialog(props: {
     props.onOpenChange(false);
   };
 
-  const pick = (kind: SandboxSecretFormKind): void => {
-    if (!isDesktopSecretKind(kind)) {
-      props.onOpenOnTheWeb(kind);
-      close(false);
-      return;
-    }
+  const pick = (kind: DesktopSecretKind): void => {
     setStep({ kind: "form", form: initialSecretForm(kind) });
   };
 
@@ -297,6 +279,12 @@ export function AddSecretDialog(props: {
           {step.kind === "form" ? (
             <>
               <SecretIntakeFields state={step.form} onChange={changeForm} />
+              <p
+                className="max-w-[72ch] text-ui-xs text-muted-foreground"
+                data-testid="secret-custody-sentence"
+              >
+                {SECRET_CUSTODY_SENTENCE}
+              </p>
               <Note note={verifyNote} testId="secret-form-verify-line" />
               <FormProblem form={step.form} />
             </>
@@ -306,6 +294,9 @@ export function AddSecretDialog(props: {
               className="flex flex-col gap-2 text-ui-sm"
               data-testid="secret-save-confirmation"
             >
+              <p className="max-w-[72ch] text-ui-xs text-muted-foreground">
+                {SECRET_CUSTODY_SENTENCE}
+              </p>
               {secretSaveConfirmationLines(
                 step.form.name,
                 step.form.mode,

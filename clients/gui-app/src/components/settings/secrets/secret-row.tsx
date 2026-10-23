@@ -7,6 +7,8 @@ import { SecretVersionsList } from "@/components/settings/secrets/secret-version
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
+import { useHostQuery } from "@/hooks/host/use-host-query";
 import type { HostRpcRegistry } from "@/lib/host";
 import {
   secretKindLabel,
@@ -24,6 +26,7 @@ import {
   SECRET_RECOVERY_TITLE,
   SECRET_RESTART_LINE,
   SECRET_REVOKED_LABEL,
+  secretRemovePreview,
 } from "@/lib/sandboxes/secrets-page-copy";
 import { cn } from "@/lib/utils";
 
@@ -77,9 +80,10 @@ function RecoveryOrder(): ReactNode {
 /**
  * One secret on Settings ▸ Personal ▸ Secrets: its name, what it is and
  * where it goes, where its value is readable, Verify, Replace value with the
- * replacement's progress, and its versions with the recovery order. No value
- * is ever here. Verify and the versions act on the secret by id, so they work
- * for every kind, those added on the web included.
+ * replacement's progress, Remove's confirmation, and its versions with the
+ * recovery order. No value is ever here. Verify and the versions act on the
+ * secret by id, so they work for every kind, those already stored included.
+ * A held secret's pending-review badge stays; P5 adds its verbs.
  */
 export function SecretRow(props: {
   readonly secret: EnvironmentSecret;
@@ -93,10 +97,26 @@ export function SecretRow(props: {
   const [verifying, setVerifying] = useState(false);
   const [line, setLine] = useState<SecretVerifyLine | null>(null);
   const [replacing, setReplacing] = useState(false);
+  const [removing, setRemoving] = useState(false);
   // Each accepted replacement remounts the status, so it reads the new
   // rotation from the start and re-reads it until it settles.
   const [replacements, setReplacements] = useState(0);
   const [showVersions, setShowVersions] = useState(false);
+  const versions = useHostQuery<
+    HostRpcRegistry,
+    "environment.secrets.versions"
+  >({
+    cacheKeyIdentity: undefined,
+    client: props.client,
+    method: "environment.secrets.versions",
+    params: { secretId: secret.secretId },
+    options: { enabled: removing },
+  });
+  const currentVersion = (versions.data?.versions ?? []).find(
+    (version) => version.current,
+  );
+  const versionLabel =
+    currentVersion === undefined ? "unknown" : String(currentVersion.ordinal);
 
   const verify = async (): Promise<void> => {
     setVerifying(true);
@@ -175,6 +195,15 @@ export function SecretRow(props: {
           >
             Versions
           </Button>
+          <Button
+            type="button"
+            size="sm"
+            variant="ghost"
+            onClick={() => setRemoving(true)}
+            data-testid="secret-row-remove"
+          >
+            Remove
+          </Button>
         </div>
       </div>
       {secret.revoked ? null : (
@@ -228,6 +257,26 @@ export function SecretRow(props: {
           props.onChanged();
         }}
         onStale={props.onChanged}
+      />
+      <ConfirmDestructiveDialog
+        open={removing}
+        onOpenChange={setRemoving}
+        title={`Remove ${secret.name}?`}
+        description={secretRemovePreview({
+          origin: "unknown",
+          version: versionLabel,
+          hosts: "unknown",
+        })}
+        cascadeSummary={null}
+        actionLabel="Remove"
+        isPending={false}
+        blockedReason={null}
+        onConfirm={() => {
+          // No `environment.secrets.remove` on the wire yet (P3 owns the
+          // three Remove outcomes; E3p owns the method). Confirm closes
+          // without a call so the preview is reachable.
+          setRemoving(false);
+        }}
       />
     </li>
   );

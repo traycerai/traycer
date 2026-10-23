@@ -2,22 +2,18 @@ import { useState, type ReactNode } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Plus } from "lucide-react";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
-import type { SandboxSecretFormKind } from "@traycer/protocol/host/secret-intake-catalogue";
 import { AddSecretDialog } from "@/components/settings/secrets/add-secret-dialog";
 import { SecretRow } from "@/components/settings/secrets/secret-row";
 import { Button } from "@/components/ui/button";
 import { useHostQuery } from "@/hooks/host/use-host-query";
 import type { HostRpcRegistry } from "@/lib/host";
-import { useOpenLink } from "@/lib/links/open-link";
 import { ignoreError } from "@/lib/browser-view/ignore-error";
 import { SECRET_READS } from "@/lib/environment/delta-fed-reads";
 import { hostQueryKeys } from "@/lib/query-keys";
-import { secretsDashboardAddUrl } from "@/lib/sandboxes/secrets-dashboard";
 import {
   SECRETS_ADD_LABEL,
   SECRETS_EMPTY_TEXT,
 } from "@/lib/sandboxes/secrets-page-copy";
-import { useRunnerHostOrNull } from "@/providers/use-runner-host";
 
 /**
  * Settings ▸ Personal ▸ Secrets on a host that serves `environment.secrets.*`:
@@ -32,8 +28,6 @@ export function SecretsPage(props: {
   readonly hostName: (hostId: string) => string;
 }): ReactNode {
   const queryClient = useQueryClient();
-  const runnerHost = useRunnerHostOrNull();
-  const openLink = useOpenLink();
   const [adding, setAdding] = useState(false);
   const list = useHostQuery<HostRpcRegistry, "environment.secrets.list">({
     cacheKeyIdentity: undefined,
@@ -51,15 +45,6 @@ export function SecretsPage(props: {
         })
         .catch(ignoreError);
     }
-  };
-
-  const openOnTheWeb = (kind: SandboxSecretFormKind): void => {
-    if (runnerHost === null) return;
-    void openLink(
-      secretsDashboardAddUrl(runnerHost.signInUrl, kind),
-      "account",
-      null,
-    ).catch(ignoreError);
   };
 
   const secrets = list.data?.secrets ?? null;
@@ -121,7 +106,6 @@ export function SecretsPage(props: {
         open={adding}
         client={props.client}
         onOpenChange={setAdding}
-        onOpenOnTheWeb={openOnTheWeb}
         onSaved={reread}
       />
     </section>

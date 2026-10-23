@@ -60,9 +60,9 @@ const SECRET_KIND_HINT: Readonly<Record<SandboxSecretFormKind, string>> = {
 };
 
 /**
- * The kinds added here. The others are set up on the web, where their own
- * forms live (the SSH key and host-key check, the cloud and certificate
- * forms); the picker still lists them, so every kind is one click from here.
+ * The kinds whose form lives in the app. SSH, the cloud and certificate
+ * kinds have no row: secrets are values and logins. The protocol catalogue
+ * is unchanged.
  */
 export const DESKTOP_SECRET_KINDS = [
   "api_key",
@@ -76,9 +76,6 @@ export function isDesktopSecretKind(
 ): kind is DesktopSecretKind {
   return DESKTOP_SECRET_KINDS.some((desktop) => desktop === kind);
 }
-
-/** The picker's line for a kind set up on the web. */
-export const SECRET_KIND_ON_THE_WEB = "Set up on the web";
 
 export const SECRET_PROTOCOL_LABEL: Readonly<
   Record<SandboxRouteProtocol, string>

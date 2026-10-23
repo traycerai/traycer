@@ -15,7 +15,11 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import type { HostRpcRegistry } from "@/lib/host";
 import { replaceOutcome } from "@/lib/sandboxes/secret-replace-outcome";
-import { SECRET_SCOPE_LINE } from "@/lib/sandboxes/secrets-page-copy";
+import {
+  SECRET_CUSTODY_SENTENCE,
+  SECRET_RESTART_LINE,
+  SECRET_SCOPE_LINE,
+} from "@/lib/sandboxes/secrets-page-copy";
 
 /**
  * Replace value: a rotation, compare-and-set on the version the list showed
@@ -124,6 +128,18 @@ export function ReplaceSecretValueDialog(props: {
           <DialogDescription>{SECRET_SCOPE_LINE}</DialogDescription>
         </DialogHeader>
         <div className="flex flex-col gap-1.5 px-5">
+          <p
+            className="max-w-[72ch] text-ui-xs text-muted-foreground"
+            data-testid="secret-replace-custody"
+          >
+            {SECRET_CUSTODY_SENTENCE}
+          </p>
+          <p
+            className="max-w-[72ch] text-ui-xs text-muted-foreground"
+            data-testid="secret-replace-restart"
+          >
+            {SECRET_RESTART_LINE}
+          </p>
           <Label htmlFor="replace-secret-value">New value</Label>
           <Input
             id="replace-secret-value"

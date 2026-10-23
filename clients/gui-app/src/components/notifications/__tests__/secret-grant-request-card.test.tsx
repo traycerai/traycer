@@ -1,6 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import type { ReactNode } from "react";
 import type { SecretRequestDecision } from "@traycer/protocol/host/sandbox-secrets";
 import type { SecretRequestDecideOutcome } from "@/hooks/sandboxes/use-secret-request-decide-mutation";
 import type { SecretsNotificationDetail } from "@/lib/notifications/secrets-notification-detail";
@@ -35,13 +34,6 @@ vi.mock("@/hooks/sandboxes/use-secret-request-decide-mutation", () => ({
       mutate: mocks.mutate,
     };
   },
-}));
-vi.mock("@/components/providers/secrets-dashboard-link", () => ({
-  SecretsDashboardLink: (props: { readonly testId: string }): ReactNode => (
-    <a href="https://dashboard.test/secrets" data-testid={props.testId}>
-      Open Secrets
-    </a>
-  ),
 }));
 
 import { SecretGrantRequestCard } from "@/components/notifications/secret-grant-request-card";

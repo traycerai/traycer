@@ -7,7 +7,7 @@ import type { SandboxSecretMode } from "@traycer/protocol/host/secret-intake-cat
  */
 
 export const SECRETS_EMPTY_TEXT =
-  "Secrets are keys and logins your agents use. On a sandbox they are used without being seen; on a computer you own they are set as values.";
+  "Values and logins your agents use. On your computers they are set as values; on sandboxes agents use them without seeing them.";
 
 export const SECRETS_ADD_LABEL = "Add a secret";
 
@@ -50,9 +50,16 @@ export const SECRET_PENDING_REVIEW_LABEL = "Waiting for you";
 export const SECRET_SCOPE_LINE =
   "This changes the copy stored here. If the same credential is stored anywhere else, that copy needs its own replacement.";
 
-/** After a replacement: what a running tool on an owned host keeps. */
+/**
+ * On every secret and key Add and Replace: where the value is stored and
+ * who can read it. Personal's sentence; a team's is P1's.
+ */
+export const SECRET_CUSTODY_SENTENCE =
+  "Stored encrypted in Traycer's cloud. Computers running Personal receive the value, readable by their tools and agents; sandboxes use it through the broker.";
+
+/** After a replacement, and on Replace itself: what a running tool keeps. */
 export const SECRET_RESTART_LINE =
-  "A tool already running on this computer keeps the old value until it restarts.";
+  "Tools already running keep the old value until they restart.";
 
 export const SECRET_REPLACE_STALE =
   "Changed somewhere else just now. Look again before you replace it.";
@@ -64,11 +71,24 @@ export const SECRET_SAVED_OFFLINE =
 export const SECRET_RECOVERY_TITLE = "If this secret leaked";
 
 export const SECRET_RECOVERY_STEPS: readonly string[] = [
-  "Revoke it first, in the dashboard: every sandbox stops using the old value within seconds, and each computer you own that holds it as a plain value is listed for you to clear.",
+  "Remove it first: every sandbox stops using the old value, and each computer that holds it as a value keeps it until its tools restart.",
   "Rotate the credential at the service it belongs to.",
   "Replace the value here.",
   "Grant it again.",
 ];
+
+/**
+ * Remove's confirmation: where the value came from, its current version,
+ * which hosts hold it, and that running tools keep it until they restart.
+ * A fact the wire does not yet name reads `unknown`.
+ */
+export function secretRemovePreview(input: {
+  readonly origin: string;
+  readonly version: string;
+  readonly hosts: string;
+}): string {
+  return `Came from ${input.origin}. Current version ${input.version}. Held on ${input.hosts}. Tools already running keep it until they restart.`;
+}
 
 export const SECRET_RECOVERY_FALLBACK =
   "If Traycer can't be reached, stopping the sandbox ends its sessions.";

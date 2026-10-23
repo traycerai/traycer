@@ -40,7 +40,6 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ProviderList } from "@/components/providers/provider-list";
 import { HarnessIcon } from "@/components/home/pickers/harness-icon";
 import { useProvidersList } from "@/hooks/providers/use-providers-list-query";
-import { AccountManagedCredentialsLine } from "@/components/providers/secrets-dashboard-link";
 import { useProvidersSetEnabled } from "@/hooks/providers/use-providers-set-enabled-mutation";
 import { useProvidersSettingsFileStatus } from "@/hooks/providers/use-providers-settings-file-status-query";
 import {
@@ -54,6 +53,7 @@ import {
 } from "@/hooks/providers/use-providers-set-profile-enabled-mutation";
 import { useRefreshProviders } from "@/hooks/providers/use-refresh-providers";
 import { useHostClient } from "@/lib/host";
+import { navigateToSettingsSection } from "@/lib/settings-navigation";
 import { useProvidersFocusStore } from "@/stores/settings/providers-focus-store";
 import {
   HostScopeConnecting,
@@ -1656,6 +1656,31 @@ function CredentialsManagedInAccountOr(props: {
     useProvidersList({ enabled: true, subscribed: true }).data
       ?.credentialsManagedInAccount === true;
   return managedInAccount ? <AccountManagedCredentialsLine /> : props.children;
+}
+
+function AccountManagedCredentialsLine(): ReactNode {
+  return (
+    <div
+      data-testid="credentials-managed-in-account"
+      className="flex flex-wrap items-center gap-x-2 gap-y-1 text-ui-xs text-muted-foreground"
+    >
+      <p className="min-w-0">
+        Sign-ins and keys for sandboxes are stored in your account, where agents
+        can use them and never read them.
+      </p>
+      <Button
+        type="button"
+        size="sm"
+        variant="outline"
+        data-testid="credentials-managed-in-account-link"
+        onClick={() => {
+          navigateToSettingsSection("secrets");
+        }}
+      >
+        Secrets
+      </Button>
+    </div>
+  );
 }
 
 function ProviderTabBody({
