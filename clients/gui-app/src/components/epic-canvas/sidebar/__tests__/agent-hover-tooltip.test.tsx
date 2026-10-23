@@ -1,12 +1,179 @@
-import { cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
 import type { RoleClaim } from "@traycer/protocol/persistence/epic/role-claims";
+import {
+  sandboxSummarySchema,
+  type SandboxSummary,
+} from "@traycer/protocol/host/sandbox-control";
+import type { TaskHostRow } from "@traycer/protocol/host/task-host-summary";
+import type { TaskHostsView } from "@/hooks/epic/use-task-hosts-view";
+import {
+  hoverAlsoInTask,
+  hoverTaskConfiguration,
+  hoverTodayCost,
+  KEEP_THIS_SANDBOX,
+  reachSentence,
+  REACH_UNNAMED_HOSTS,
+  SESSIONS_UNKNOWN,
+  shortPriceLabel,
+  TASK_FILES,
+} from "@/lib/sandboxes/sandbox-strings";
+
+/**
+ * Only the nondeterministic boundaries are replaced: the cloud reads, the host
+ * RPCs, auth and the tile/panel openers. The projection choice and the host
+ * section are the real ones.
+ */
+const h = vi.hoisted(() => {
+  const state: {
+    sandboxes: object[];
+    taskHosts: object;
+    cost: object[];
+    busySessionCount: number | null;
+    statusUpdatedAt: number | null;
+    listUpdatedAt: number | null;
+    listFetching: boolean;
+    refetchAgents: Mock;
+    refetchTerminals: Mock;
+    agents: object[];
+    terminals: object[];
+    teams: object[];
+    setPanel: Mock;
+    openDetails: Mock;
+    openTile: Mock;
+  } = {
+    sandboxes: [],
+    taskHosts: { kind: "none" },
+    cost: [],
+    busySessionCount: null,
+    statusUpdatedAt: null,
+    listUpdatedAt: null,
+    listFetching: false,
+    refetchAgents: vi.fn(),
+    refetchTerminals: vi.fn(),
+    agents: [],
+    terminals: [],
+    teams: [],
+    setPanel: vi.fn(),
+    openDetails: vi.fn(),
+    openTile: vi.fn(),
+  };
+  return state;
+});
+
+vi.mock("@/hooks/sandboxes/use-sandbox-list-query", () => ({
+  useSandboxList: () => ({ data: { sandboxes: h.sandboxes } }),
+}));
+vi.mock("@/hooks/epic/use-task-hosts-view", () => ({
+  useTaskHostsView: () => h.taskHosts,
+}));
+vi.mock("@/hooks/sandboxes/use-sandbox-costs-query", () => ({
+  useSandboxCosts: () => ({ data: { sandboxes: h.cost } }),
+}));
+vi.mock("@/hooks/sandboxes/use-refresh-sandbox-costs", () => ({
+  useRefreshSandboxCosts: () => undefined,
+}));
+vi.mock("@/hooks/sandboxes/use-sandbox-catalogue-query", () => ({
+  useSandboxCatalogue: () => ({
+    data: {
+      providers: [
+        { provider: "tensorlake", os: ["linux"], suspendFidelity: "memory" },
+      ],
+    },
+  }),
+}));
+vi.mock("@/hooks/auth/use-registered-hosts-query", () => ({
+  useRegisteredHosts: () => ({
+    data: {
+      hosts: [{ hostId: "host-sbx", owner: { kind: "team", name: "Acme" } }],
+    },
+  }),
+}));
+vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
+  useHostClientForHostId: () => null,
+}));
+vi.mock("@/hooks/host/use-host-query", () => ({
+  useHostQuery: (args: { readonly method: string }) => {
+    if (args.method === "host.status") {
+      return {
+        isError: false,
+        dataUpdatedAt: h.statusUpdatedAt ?? Date.now(),
+        data:
+          h.busySessionCount === null
+            ? undefined
+            : { busySessionCount: h.busySessionCount },
+      };
+    }
+    const snapshot = {
+      isError: false,
+      isFetching: h.listFetching,
+      dataUpdatedAt: h.listUpdatedAt ?? Date.now(),
+    };
+    if (args.method === "agent.list") {
+      return {
+        ...snapshot,
+        refetch: h.refetchAgents,
+        data: { agents: h.agents },
+      };
+    }
+    return {
+      ...snapshot,
+      refetch: h.refetchTerminals,
+      data: { sessions: h.terminals },
+    };
+  },
+}));
+vi.mock("@/hooks/use-epic-store", () => ({
+  useMaybeEpicStore: (
+    selector: (state: unknown) => unknown,
+    _fallback: unknown,
+  ) =>
+    selector({
+      chats: {
+        byId: {
+          "agent-1": { id: "agent-1", hostId: "host-t", title: "Reviewer" },
+          "agent-2": { id: "agent-2", hostId: "host-t", title: "Planner" },
+          "agent-3": { id: "agent-3", hostId: "host-sbx", title: "Creator" },
+        },
+      },
+      tuiAgents: { byId: {} },
+    }),
+}));
+vi.mock("@/stores/auth/auth-store", () => ({
+  useAuthStore: (selector: (state: unknown) => unknown) =>
+    selector({
+      shareableTeams: h.teams,
+      contextMetadata: { userId: "user-1" },
+    }),
+}));
+vi.mock("@/hooks/epic/use-epic-tile-navigation", () => ({
+  useEpicTileNavigation: () => ({ openTile: h.openTile }),
+}));
+vi.mock("@/components/epic-canvas/view-tab-context", () => ({
+  useEpicViewTabId: () => "tab-1",
+}));
+vi.mock("@/stores/epics/left-panel-store", () => ({
+  useEpicLeftPanelStore: (selector: (state: unknown) => unknown) =>
+    selector({ setActivePanelIdAndExpand: h.setPanel }),
+}));
+// Until the sandboxes settings section exists, Details opens Devices, the
+// current place sandboxes are managed.
+vi.mock("@/lib/settings-navigation", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/settings-navigation")>()),
+  navigateToSettingsSection: h.openDetails,
+}));
+vi.mock("@/components/epic-canvas/sidebar/agent-sandbox-keep-confirm", () => ({
+  AgentSandboxKeepConfirm: (props: {
+    readonly sandbox: { readonly id: string };
+  }) => <div data-testid="keep-dialog">{props.sandbox.id}</div>,
+}));
 
 const worktreeTooltipSpy = vi.hoisted(() => vi.fn());
 vi.mock("@/components/worktree/worktree-owner-metadata", () => ({
   WorktreeOwnerMetadataTooltip: (props: {
     readonly trigger: React.ReactElement;
+    readonly hostSection?: React.ReactNode;
     readonly supplementalContent: React.ReactNode | null;
     readonly side: "top" | "right" | "bottom" | "left";
   }) => {
@@ -14,6 +181,7 @@ vi.mock("@/components/worktree/worktree-owner-metadata", () => ({
     return (
       <div data-testid="worktree-owner-tooltip" data-side={props.side}>
         {props.trigger}
+        <div data-testid="worktree-host-section">{props.hostSection}</div>
         <div data-testid="worktree-supplemental">
           {props.supplementalContent}
         </div>
@@ -45,8 +213,8 @@ interface HoverOverrides {
 
 const NO_EXTRA: Pick<HoverOverrides, "extraContent"> = { extraContent: null };
 
-function renderHover(overrides: HoverOverrides) {
-  render(
+function hoverTree(overrides: HoverOverrides) {
+  return (
     <TooltipProvider>
       <AgentHoverTooltip
         trigger={<button type="button">Reviewer</button>}
@@ -60,13 +228,33 @@ function renderHover(overrides: HoverOverrides) {
         extraContent={overrides.extraContent}
         side={overrides.side}
       />
-    </TooltipProvider>,
+    </TooltipProvider>
   );
+}
+
+function renderHover(overrides: HoverOverrides) {
+  return render(hoverTree(overrides));
 }
 
 afterEach(() => {
   cleanup();
   worktreeTooltipSpy.mockClear();
+  h.sandboxes = [];
+  h.taskHosts = { kind: "none" };
+  h.cost = [];
+  h.busySessionCount = null;
+  h.statusUpdatedAt = null;
+  h.listUpdatedAt = null;
+  h.listFetching = false;
+  h.refetchAgents.mockClear();
+  h.refetchTerminals.mockClear();
+  vi.useRealTimers();
+  h.agents = [];
+  h.terminals = [];
+  h.teams = [];
+  h.setPanel.mockClear();
+  h.openDetails.mockClear();
+  h.openTile.mockClear();
 });
 
 /**
@@ -319,5 +507,337 @@ describe("AgentHoverTooltip", () => {
     expect(tooltip.textContent).toContain("Reviewer");
     expect(tooltip.textContent).toContain("Working · large model");
     expect(screen.getAllByText("Reviewer")).toHaveLength(2);
+  });
+});
+
+function sandboxRow(overrides: Partial<SandboxSummary>): SandboxSummary {
+  const parsed = sandboxSummarySchema.parse({
+    id: "sbx-1",
+    hostId: "host-sbx",
+    kind: "agent",
+    provider: "tensorlake",
+    region: "us",
+    os: "linux",
+    cpus: 2,
+    memoryMb: 4096,
+    diskMb: 10240,
+    displayName: "build-box",
+    state: "awake",
+    frozen: false,
+    failureCode: null,
+    idleMinutes: 30,
+    destroyAfterRestingMinutes: 7 * 24 * 60,
+    burst: false,
+    createdByHostId: null,
+    createdByAgentId: null,
+    createdAt: 0,
+    lastTransitionAt: Date.now() - 12 * 60_000,
+    lastActivityAt: null,
+    destroyedAt: null,
+    priceMcPerHour: { awakeMc: 120, suspendedMc: 1, stoppedMc: 1 },
+    createdBy: { userId: "user-1", displayName: "Sam" },
+    wakePayer: { userId: "user-1", displayName: "Sam" },
+  });
+  return { ...parsed, ...overrides };
+}
+
+function taskHostRow(overrides: Partial<TaskHostRow>): TaskHostRow {
+  return {
+    hostId: "host-t",
+    label: "team-box",
+    principal: { kind: "team", id: "team-1" },
+    reach: "same_principal",
+    ...overrides,
+  };
+}
+
+function tasksView(...hosts: readonly TaskHostRow[]): TaskHostsView {
+  return { kind: "hosts", hosts };
+}
+
+function renderAgent(
+  overrides: Pick<
+    HoverOverrides,
+    "hostId" | "ownerKind" | "ownerHostUnreachable"
+  >,
+) {
+  return renderHover({
+    ...overrides,
+    roleClaims: [],
+    side: "top",
+    ...NO_EXTRA,
+  });
+}
+
+describe("AgentHoverTooltip host section", () => {
+  it("shows host identity, cost, payer, shape and actions for a row in the viewer's sandbox list", () => {
+    h.sandboxes = [sandboxRow({})];
+    h.cost = [{ sandboxId: "sbx-1", todayMillicredits: 2000 }];
+    h.busySessionCount = 3;
+    h.agents = [
+      { id: "agent-3", hostId: "host-sbx", title: "Creator", active: true },
+    ];
+    h.terminals = [
+      {
+        sessionId: "t-1",
+        title: "build",
+        status: "running",
+        sessionKind: "terminal",
+      },
+    ];
+    renderAgent({
+      hostId: "host-sbx",
+      ownerKind: "chat",
+      ownerHostUnreachable: false,
+    });
+
+    const text = screen.getByTestId("worktree-host-section").textContent;
+    expect(text).toContain("Host");
+    expect(text).toContain("build-box");
+    expect(text).toContain("Acme");
+    expect(text).toContain(shortPriceLabel(120));
+    expect(text).toContain("Sandbox · Linux · 2 vCPU · 4 GB");
+    expect(text).toContain("started by you");
+    expect(text).toContain("paid by you");
+    expect(text).toMatch(/\d+ min awake/);
+    expect(text).toContain(hoverTodayCost(2000));
+    expect(text).toContain("Suspends after 30 idle min");
+    expect(text).toContain("destroyed after 7 resting days");
+    expect(text).toContain("Creator, build");
+    expect(text).toContain("1 more in other tasks");
+    for (const name of ["Open terminal", "Files", "Details"]) {
+      expect(screen.getByRole("button", { name })).toBeDefined();
+    }
+    expect(screen.queryByRole("button", { name: TASK_FILES })).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: KEEP_THIS_SANDBOX }),
+    ).toBeNull();
+  });
+
+  it("says sessions are unknown rather than inventing a count when no status is held", () => {
+    h.sandboxes = [sandboxRow({})];
+    renderAgent({
+      hostId: "host-sbx",
+      ownerKind: "chat",
+      ownerHostUnreachable: false,
+    });
+
+    expect(screen.getByTestId("worktree-host-section").textContent).toContain(
+      SESSIONS_UNKNOWN,
+    );
+  });
+
+  it("opens the Devices settings section from Details", async () => {
+    h.sandboxes = [sandboxRow({})];
+    renderAgent({
+      hostId: "host-sbx",
+      ownerKind: "chat",
+      ownerHostUnreachable: false,
+    });
+
+    await userEvent.click(screen.getByRole("button", { name: "Details" }));
+    expect(h.openDetails).toHaveBeenCalledWith("devices");
+  });
+
+  it("shows only the approved label, configuration, reach and task files for a task-only host", async () => {
+    h.teams = [{ teamId: "team-1", slug: "acme" }];
+    h.taskHosts = tasksView(taskHostRow({ reach: "other_principal" }));
+    renderAgent({
+      hostId: "host-t",
+      ownerKind: "chat",
+      ownerHostUnreachable: false,
+    });
+
+    // A task row never authorizes the owner card: it is the plain card with the
+    // host section, not the worktree tooltip.
+    expect(screen.queryByTestId("worktree-owner-tooltip")).toBeNull();
+    await userEvent.hover(screen.getByRole("button", { name: "Reviewer" }));
+    const card = await screen.findByTestId("agent-host-hover-agent-1");
+    const text = card.textContent;
+
+    expect(text).toContain("team-box");
+    expect(text).toContain(hoverTaskConfiguration("acme"));
+    expect(text).toContain(reachSentence(REACH_UNNAMED_HOSTS));
+    // Other agents the task shows on that host; never the viewing agent.
+    expect(text).toContain(hoverAlsoInTask("Planner"));
+    expect(text).not.toContain("Reviewer,");
+
+    expect(screen.getByRole("button", { name: TASK_FILES })).toBeDefined();
+    for (const name of ["Open terminal", "Details", KEEP_THIS_SANDBOX]) {
+      expect(screen.queryByRole("button", { name })).toBeNull();
+    }
+    expect(text).not.toMatch(/\$|paid by|vCPU|started by|awake|Suspends/);
+
+    await userEvent.click(screen.getByRole("button", { name: TASK_FILES }));
+    expect(h.setPanel).toHaveBeenCalledWith("tab-1", "artifacts");
+  });
+
+  it("names the configuration generically when the viewer is not in the team, and omits the reach sentence for a reachable host", async () => {
+    h.taskHosts = tasksView(taskHostRow({ reach: "same_principal" }));
+    renderAgent({
+      hostId: "host-t",
+      ownerKind: "chat",
+      ownerHostUnreachable: false,
+    });
+
+    await userEvent.hover(screen.getByRole("button", { name: "Reviewer" }));
+    const text = (await screen.findByTestId("agent-host-hover-agent-1"))
+      .textContent;
+
+    expect(text).toContain(hoverTaskConfiguration(null));
+    expect(text).not.toContain(reachSentence(REACH_UNNAMED_HOSTS));
+  });
+
+  it("gives a person's own computer no host section", () => {
+    h.taskHosts = tasksView(taskHostRow({ label: null }));
+    renderAgent({
+      hostId: "host-t",
+      ownerKind: "chat",
+      ownerHostUnreachable: false,
+    });
+
+    expect(screen.queryByText("Host")).toBeNull();
+    expect(screen.getByTestId("worktree-owner-tooltip")).toBeDefined();
+  });
+
+  it("keeps the host section for an unreachable owner and drops owner metadata", async () => {
+    h.sandboxes = [sandboxRow({})];
+    renderAgent({
+      hostId: "host-sbx",
+      ownerKind: "chat",
+      ownerHostUnreachable: true,
+    });
+
+    expect(screen.queryByTestId("worktree-owner-tooltip")).toBeNull();
+    await userEvent.hover(screen.getByRole("button", { name: "Reviewer" }));
+    const text = (await screen.findByTestId("agent-host-hover-agent-1"))
+      .textContent;
+
+    expect(text).toContain("build-box");
+    expect(text).toContain(SESSIONS_UNKNOWN);
+    expect(
+      screen.getByRole("button", { name: "Files" }).hasAttribute("disabled"),
+    ).toBe(true);
+  });
+
+  it("keeps the Keep dialog open after the hover card closes", async () => {
+    h.sandboxes = [sandboxRow({ burst: true, createdByAgentId: "agent-3" })];
+    renderAgent({
+      hostId: "host-sbx",
+      ownerKind: null,
+      ownerHostUnreachable: false,
+    });
+
+    const trigger = screen.getByRole("button", { name: "Reviewer" });
+    await userEvent.hover(trigger);
+    await userEvent.click(
+      await screen.findByRole("button", { name: KEEP_THIS_SANDBOX }),
+    );
+    expect(screen.getByTestId("keep-dialog").textContent).toBe("sbx-1");
+
+    await userEvent.unhover(trigger);
+    await waitFor(() => {
+      expect(screen.queryByTestId("agent-host-hover-agent-1")).toBeNull();
+    });
+    expect(screen.getByTestId("keep-dialog").textContent).toBe("sbx-1");
+  });
+
+  describe("held session snapshot", () => {
+    const SHOWN = "Creator, build";
+
+    function holdSessions(count: number, at: number): void {
+      h.sandboxes = [sandboxRow({})];
+      h.busySessionCount = count;
+      h.statusUpdatedAt = at;
+      h.listUpdatedAt = at;
+      h.agents = [
+        { id: "agent-3", hostId: "host-sbx", title: "Creator", active: true },
+      ];
+      h.terminals = [
+        {
+          sessionId: "t-1",
+          title: "build",
+          status: "running",
+          sessionKind: "terminal",
+        },
+      ];
+    }
+
+    function sectionText(): string {
+      return screen.getByTestId("worktree-host-section").textContent;
+    }
+
+    it("stops trusting a held host.status exactly 30 seconds after it was read", () => {
+      vi.useFakeTimers();
+      holdSessions(3, Date.now());
+      renderAgent({
+        hostId: "host-sbx",
+        ownerKind: "chat",
+        ownerHostUnreachable: false,
+      });
+      expect(sectionText()).toContain(SHOWN);
+
+      act(() => {
+        vi.advanceTimersByTime(29_999);
+      });
+      expect(sectionText()).toContain(SHOWN);
+      expect(sectionText()).not.toContain(SESSIONS_UNKNOWN);
+
+      act(() => {
+        vi.advanceTimersByTime(1);
+      });
+      expect(sectionText()).toContain(SESSIONS_UNKNOWN);
+      expect(sectionText()).not.toContain(SHOWN);
+    });
+
+    it("shows unknown while the task lists predate a newer held count, then the refreshed names", () => {
+      const base = Date.now();
+      holdSessions(3, base);
+      const view = renderAgent({
+        hostId: "host-sbx",
+        ownerKind: "chat",
+        ownerHostUnreachable: false,
+      });
+      // A fresh element each time, so React re-renders and re-reads the mocks.
+      const rerenderSame = (current: typeof view): void => {
+        current.rerender(
+          hoverTree({
+            hostId: "host-sbx",
+            ownerKind: "chat",
+            ownerHostUnreachable: false,
+            roleClaims: [],
+            side: "top",
+            ...NO_EXTRA,
+          }),
+        );
+      };
+      expect(sectionText()).toContain(SHOWN);
+      expect(sectionText()).toContain("1 more in other tasks");
+      // The held status asks the task lists to refresh once.
+      expect(h.refetchAgents).toHaveBeenCalledTimes(1);
+      expect(h.refetchTerminals).toHaveBeenCalledTimes(1);
+
+      // A newer count lands while both snapshots are older than it: combining
+      // them would call the new work "in other tasks".
+      h.busySessionCount = 5;
+      h.statusUpdatedAt = base + 1_000;
+      rerenderSame(view);
+      expect(sectionText()).toContain(SESSIONS_UNKNOWN);
+      expect(sectionText()).not.toContain(SHOWN);
+      expect(sectionText()).not.toContain("more in other tasks");
+      expect(h.refetchAgents).toHaveBeenCalledTimes(2);
+      expect(h.refetchTerminals).toHaveBeenCalledTimes(2);
+
+      // A snapshot that is still being fetched is not current either.
+      h.listUpdatedAt = base + 1_000;
+      h.listFetching = true;
+      rerenderSame(view);
+      expect(sectionText()).toContain(SESSIONS_UNKNOWN);
+
+      h.listFetching = false;
+      rerenderSame(view);
+      expect(sectionText()).toContain(SHOWN);
+      expect(sectionText()).toContain("3 more in other tasks");
+    });
   });
 });
