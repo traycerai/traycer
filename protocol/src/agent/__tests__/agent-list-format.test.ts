@@ -1860,3 +1860,35 @@ describe("not-reachable marker (agent.list@10.2 reach)", () => {
     expect(secondPage).toContain(UNREACHABLE_LEGEND);
   });
 });
+
+describe("formatAgentListPage owner token", () => {
+  const OWNER_LEGEND = "owner: <@handle>:";
+
+  it("prints a teammate's row with owner: @handle, on compact rows too, and explains it only when a row carries one", () => {
+    const caller = agent({ id: "caller", isSelf: true });
+    // `ownerLabel` is host-side enrichment the wire schema has no key for, so
+    // it is attached the way the host's direct listing attaches it.
+    const theirs = {
+      ...agent({ id: "theirs", parentId: "caller" }),
+      ownerLabel: "@tanveer",
+    };
+    const mine = agent({ id: "mine", parentId: "caller" });
+
+    for (const detail of ["compact", "full"] as const) {
+      const output = formatAgentListPage(
+        response([caller, theirs, mine], "caller"),
+        { detail, page: null },
+      );
+
+      expect(agentLine(output, "theirs ")).toContain("owner: @tanveer");
+      expect(agentLine(output, "mine ")).not.toContain("owner:");
+      expect(output).toContain(OWNER_LEGEND);
+    }
+
+    const withoutOwners = formatAgentListPage(
+      response([caller, mine], "caller"),
+      { detail: "full", page: null },
+    );
+    expect(withoutOwners).not.toContain("owner:");
+  });
+});

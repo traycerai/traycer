@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   applyHostAllocatorEnv,
+  MALLOC_ARENA_MAX_ENV,
   MALLOC_LARGE_CACHE_ENV,
 } from "../host-allocator-env";
 
@@ -23,16 +24,43 @@ describe("applyHostAllocatorEnv", () => {
     expect(env[MALLOC_LARGE_CACHE_ENV]).toBe("");
   });
 
-  it("adds no key on linux", () => {
+  it("sets MALLOC_ARENA_MAX=2 on linux when the key is absent", () => {
     const env: NodeJS.ProcessEnv = {};
     applyHostAllocatorEnv(env, "linux");
-    expect(MALLOC_LARGE_CACHE_ENV in env).toBe(false);
+    expect(env[MALLOC_ARENA_MAX_ENV]).toBe("2");
   });
 
-  it("adds no key on win32", () => {
+  it('keeps an existing linux value of "8"', () => {
+    const env: NodeJS.ProcessEnv = { [MALLOC_ARENA_MAX_ENV]: "8" };
+    applyHostAllocatorEnv(env, "linux");
+    expect(env[MALLOC_ARENA_MAX_ENV]).toBe("8");
+  });
+
+  it('keeps an existing linux value of ""', () => {
+    const env: NodeJS.ProcessEnv = { [MALLOC_ARENA_MAX_ENV]: "" };
+    applyHostAllocatorEnv(env, "linux");
+    expect(env[MALLOC_ARENA_MAX_ENV]).toBe("");
+  });
+
+  // Each allocator reads only its own platform's variable, and the host
+  // deletes both unconditionally, so setting the other platform's on a host
+  // would be a variable nothing reads travelling to every child until the
+  // host dropped it.
+  it("sets each platform's own variable and never the other's", () => {
+    const darwin: NodeJS.ProcessEnv = {};
+    applyHostAllocatorEnv(darwin, "darwin");
+    expect(MALLOC_ARENA_MAX_ENV in darwin).toBe(false);
+
+    const linux: NodeJS.ProcessEnv = {};
+    applyHostAllocatorEnv(linux, "linux");
+    expect(MALLOC_LARGE_CACHE_ENV in linux).toBe(false);
+  });
+
+  it("adds neither key on win32", () => {
     const env: NodeJS.ProcessEnv = {};
     applyHostAllocatorEnv(env, "win32");
     expect(MALLOC_LARGE_CACHE_ENV in env).toBe(false);
+    expect(MALLOC_ARENA_MAX_ENV in env).toBe(false);
   });
 
   it("leaves other keys untouched", () => {

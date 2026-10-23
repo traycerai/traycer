@@ -1004,9 +1004,11 @@ describe("runHostStart - installed-record launch path", () => {
     const previousUnsetValue = process.env.TRAYCER_TEST_UNSET;
     const previousStagingToken = process.env.TRAYCER_STAGING_RELEASE_TOKEN;
     const previousMallocLargeCache = process.env.MallocLargeCache;
+    const previousMallocArenaMax = process.env.MALLOC_ARENA_MAX;
     process.env.TRAYCER_TEST_UNSET = "inherited";
     process.env.TRAYCER_STAGING_RELEASE_TOKEN = "parent-secret";
     delete process.env.MallocLargeCache;
+    delete process.env.MALLOC_ARENA_MAX;
 
     const invoke = () =>
       runHostStart(
@@ -1033,6 +1035,11 @@ describe("runHostStart - installed-record launch path", () => {
         delete process.env.MallocLargeCache;
       } else {
         process.env.MallocLargeCache = previousMallocLargeCache;
+      }
+      if (previousMallocArenaMax === undefined) {
+        delete process.env.MALLOC_ARENA_MAX;
+      } else {
+        process.env.MALLOC_ARENA_MAX = previousMallocArenaMax;
       }
     }
 
@@ -1067,8 +1074,14 @@ describe("runHostStart - installed-record launch path", () => {
     expect(call?.env.EXTRA_FROM_OVERRIDE).toBe("1");
     expect(call?.env.TRAYCER_TEST_UNSET).toBeUndefined();
     expect(call?.env.TERM_PROGRAM).toBe("traycer");
+    // Each platform's own allocator setting reaches the host it launches, and
+    // the other platform's never does: a variable that allocator does not read
+    // would travel to every child until the host dropped it.
     expect(call?.env.MallocLargeCache).toBe(
       process.platform === "darwin" ? "0" : undefined,
+    );
+    expect(call?.env.MALLOC_ARENA_MAX).toBe(
+      process.platform === "linux" ? "2" : undefined,
     );
     expect(call?.windowsHide).toBe(process.platform === "win32");
     // Production launch must NOT route through a shell - the spawn

@@ -102,7 +102,8 @@ export const CLI_ERROR_CODES = {
   // progress, so the CLI refused to reinstall/restart it. The desktop maps
   // this to its "host busy" flow (surface the host, run the renderer's
   // compat probe) rather than treating it as a hard failure. Cleared with
-  // `--force`.
+  // `--force`. Also used when the host refuses an RPC during shutdown; that
+  // refusal keeps its shutdown message and is not retried.
   HOST_BUSY: "E_HOST_BUSY",
   // A durable schema-v2 update attempt owns the mutation boundary. This is
   // deliberately NOT HOST_BUSY: retrying with --force can override a live

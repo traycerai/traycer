@@ -2052,6 +2052,55 @@ describe("<ChatTile />", () => {
     expect(frame.turnId).toBe("turn-1");
   });
 
+  it("draws the working row, not a 'Setting up' status, under an opening prompt the host is still preparing", async () => {
+    renderChatTile();
+
+    await waitForChatTileLoaded();
+
+    act(() => {
+      chatHarness.callbacks().onMessageDeliveryChanged({
+        kind: "messageDeliveryChanged",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ARTIFACT.id,
+        delivery: {
+          messageId: "message-1",
+          revision: 1,
+          state: { phase: "preparing" },
+        },
+      });
+    });
+    // Nothing else is on screen yet, so the row carries the wait itself.
+    expect(screen.getByText("Setting up")).not.toBeNull();
+
+    act(() => {
+      chatHarness.callbacks().onTurnStateChanged({
+        kind: "turnStateChanged",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ARTIFACT.id,
+        runStatus: "running",
+        activeTurn: {
+          agentMode: "regular",
+          sameTurnSteeringSupported: false,
+          turnId: "turn-1",
+          status: "running",
+          harnessId: "claude",
+          model: "haiku",
+          profileId: null,
+          userMessageId: "message-1",
+          startedAt: 2,
+          updatedAt: 2,
+          reasoningEffort: null,
+          serviceTier: null,
+        },
+      });
+    });
+
+    expect(screen.getByTestId("assistant-run-indicator")).not.toBeNull();
+    expect(screen.queryByText("Setting up")).toBeNull();
+  });
+
   describe("the workspace selector's owner-active guard", () => {
     function sendFromComposer(): void {
       const sendButton = screen.getByRole("button", { name: "Send" });

@@ -472,13 +472,10 @@ traycer agent create --surface gui --harness codex --model <model-id> \
 
 ### Start a Task Every Night
 
-On a machine where you ran `traycer login`, a cron entry that starts one Task per night, even if the job runs twice:
+On a machine where you ran `traycer login`, add this as one line in your crontab, replacing `<model-id>` with your model id. It starts one Task per day, even if the job runs twice:
 
 ```bash
-0 6 * * * traycer host ensure && traycer task create \
-  --title "Nightly triage" --workspace /srv/app --harness codex --model <model-id> \
-  --message "Triage last night's failed CI runs and list the causes." \
-  --idempotency-key "nightly-$(date +\%F)"
+0 6 * * * traycer host ensure && traycer task create --title "Nightly triage" --workspace /srv/app --harness codex --model <model-id> --message "Triage last night's failed CI runs and list the causes." --idempotency-key "nightly-$(date +\%F)"
 ```
 
 The first agent spends your provider plan as soon as it starts. Without `--idempotency-key`, every run starts its own Task.

@@ -112,30 +112,29 @@ const DELIVERING_USER_MESSAGE_ACTIONS: Readonly<
 };
 
 /**
- * A preparing row beside the chat's setup card: still copy-only, with no
+ * A preparing row whose wait is already on screen: still copy-only, with no
  * status of its own. See {@link deliveringUserMessageActionsFor}.
  */
-const PREPARING_BESIDE_SETUP_CARD_ACTIONS = deliveringUserMessageActions(null);
+const PREPARING_WAIT_SHOWN_ACTIONS = deliveringUserMessageActions(null);
 
 /**
  * The actions of a row the host has accepted and not started. `pending` always
  * reads "Sending": the host has not yet confirmed it has the prompt, and nothing
  * else on screen says so.
  *
- * `preparing` reads "Setting up" only when the transcript has no setup card.
- * With one, the wait is already on screen in one of two places, and a status
- * here would repeat it. While a workspace is still being created or set up, the
- * card itself spins. Once none is - the card reads ready, failed, or is an
- * earlier window's - the pre-turn "Working…" row is showing: the host marks the
- * turn activating before the phase moves to `preparing`, and
- * `useRenderedMessages` suppresses that row only while the card is in flight.
+ * `preparing` reads "Setting up" only when nothing else on screen shows the
+ * wait, and a status here would repeat it. Two things can: the setup card,
+ * which spins while a workspace is still being created or set up, and the
+ * pre-turn "Working…" row, which a send owns from Enter and which
+ * `useRenderedMessages` suppresses only while that card is in flight.
  */
 export function deliveringUserMessageActionsFor(
   phase: ChatMessageDeliveryPhase,
   setupCardShown: boolean,
+  workingRowShown: boolean,
 ): ChatMessageUserActions {
-  if (phase === "preparing" && setupCardShown) {
-    return PREPARING_BESIDE_SETUP_CARD_ACTIONS;
+  if (phase === "preparing" && (setupCardShown || workingRowShown)) {
+    return PREPARING_WAIT_SHOWN_ACTIONS;
   }
   return DELIVERING_USER_MESSAGE_ACTIONS[phase];
 }
@@ -188,6 +187,12 @@ export interface ChatMessageActionsInput {
    * "Setting up" status while it does - see `deliveringUserMessageActionsFor`.
    */
   readonly setupCardShown: boolean;
+  /**
+   * Whether the rendered transcript carries the pre-turn "Working…" row
+   * (`transcriptShowsWorkingRow`). A preparing opening prompt drops its own
+   * "Setting up" status while it does, as it does beside a setup card.
+   */
+  readonly workingRowShown: boolean;
   readonly interviewDeliveryRetryProtocolSupported: boolean;
   readonly currentComposerSettings: ChatRunSettings;
   readonly editSettings: ChatRunSettings;
@@ -387,6 +392,7 @@ export function useChatMessageActions(
     canAct,
     messageDelivery,
     setupCardShown,
+    workingRowShown,
     interviewDeliveryRetryProtocolSupported,
     currentComposerSettings,
     editSettings,
@@ -1040,7 +1046,11 @@ export function useChatMessageActions(
         persistentMessageId,
       );
       if (deliveryPhase !== null) {
-        return deliveringUserMessageActionsFor(deliveryPhase, setupCardShown);
+        return deliveringUserMessageActionsFor(
+          deliveryPhase,
+          setupCardShown,
+          workingRowShown,
+        );
       }
       if (
         inlineEditLocksMessageActions(activeInlineEdit, persistentMessageId)
@@ -1111,6 +1121,7 @@ export function useChatMessageActions(
       mentionRoots,
       messageDelivery,
       setupCardShown,
+      workingRowShown,
       pendingActions,
       acceptedActions,
       chatActions,

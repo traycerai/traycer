@@ -89,8 +89,8 @@ export interface ChatMessageUserActions {
    * The phase a row the host is still delivering shows under it, `null`
    * otherwise. Such a row offers copy only (`enabled` is false and nothing is
    * being edited); it becomes an ordinary message when it starts. A preparing
-   * row beside the chat's setup card is also `null`: the card, or once it is no
-   * longer in flight the pre-turn "Working…" row, already shows that wait (see
+   * row is also `null` while the chat's setup card or the pre-turn "Working…"
+   * row is on screen, because either already shows that wait (see
    * `deliveringUserMessageActionsFor`).
    */
   readonly deliveryPhase: ChatMessageDeliveryPhase | null;

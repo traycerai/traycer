@@ -24,6 +24,7 @@ import type {
 import type { MessageSegment } from "@/stores/composer/chat-store";
 import { collectAssistantReplyText } from "@/lib/chat/collect-assistant-reply-text";
 import {
+  transcriptShowsWorkingRow,
   useRenderedMessages,
   type RenderedMessagesDisplayContext,
   type RenderedMessagesInput,
@@ -7704,6 +7705,26 @@ describe("useRenderedMessages: the working row is built from the pending turn", 
     expect(working?.elapsedStartedAt).toBe(SENT_AT);
     expect(working?.assistantMeta?.provider).toBe(SETTINGS.harnessId);
     expect(working?.createdAt).toBeGreaterThan(SENT_AT);
+  });
+
+  it("transcriptShowsWorkingRow reads true with the trailing working row and false without it", () => {
+    const withRow = renderRenderedMessages({
+      pendingUserMessages: [sentMessage],
+      pendingTurn,
+      runStatus: "idle",
+      activeTurn: null,
+    });
+    expect(workingRow(withRow.result.current)).toBeDefined();
+    expect(transcriptShowsWorkingRow(withRow.result.current)).toBe(true);
+
+    const withoutRow = renderRenderedMessages({
+      pendingUserMessages: [sentMessage],
+      pendingTurn: null,
+      runStatus: "idle",
+      activeTurn: null,
+    });
+    expect(workingRow(withoutRow.result.current)).toBeUndefined();
+    expect(transcriptShowsWorkingRow(withoutRow.result.current)).toBe(false);
   });
 
   it("shows no working row for the same pending message once there is no pendingTurn and the chat is idle", () => {
