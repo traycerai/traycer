@@ -261,8 +261,8 @@ function BotMainSection(props: {
       <span className="text-ui-sm font-medium text-foreground">Main bot</span>
       <p className="text-ui-xs text-muted-foreground">
         {isMain
-          ? "This is the environment's main bot: it tidies the shared memory when it runs over its limit. To hand that over, make another bot main."
-          : "The main bot tidies the environment's shared memory when it runs over its limit."}
+          ? "This is the main bot: it tidies the shared memory when it runs over its limit. To hand that over, make another bot main."
+          : "The main bot tidies the shared memory when it runs over its limit."}
       </p>
       {isMain ? null : (
         <div>

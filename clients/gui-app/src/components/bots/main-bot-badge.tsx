@@ -9,7 +9,7 @@ import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 export function MainBotBadge(props: { readonly testId: string }): ReactNode {
   return (
     <TooltipWrapper
-      label="The main bot tidies this environment's shared memory."
+      label="The main bot tidies the shared memory."
       side="top"
       sideOffset={6}
       align={undefined}
