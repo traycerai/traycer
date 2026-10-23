@@ -68,9 +68,10 @@ export type BotReplyOutcome =
  * with no conversation is refused; this command never creates one.
  *
  * `--wait <duration>` then follows the conversation until the bot answers the
- * request, for at most that long. Only the host the bot runs on can follow
- * its conversations, so on any other host `--wait` is refused before
- * anything is sent.
+ * request, for at most that long: the channel for the post's resolution, and
+ * the thread the post opened for the reply's text. Only the host the bot runs
+ * on can follow its conversations, so on any other host `--wait` is refused
+ * before anything is sent.
  */
 export function buildBotSendCommand(opts: {
   readonly bot: string;
@@ -124,6 +125,7 @@ export function buildBotSendCommand(opts: {
       client,
       botId: bot.botId,
       conversationId,
+      threadId: sent.threadId,
       requestId: sent.requestId,
       timeoutMs: waitMs,
     }).finally(() => {
@@ -235,11 +237,15 @@ export function parseWaitDuration(value: string): number {
 }
 
 /**
- * Follows one conversation over `chat.subscribe` until the user row holding
+ * Follows a conversation over `chat.subscribe` until the user row holding
  * `requestId` is resolved, or `timeoutMs` passes.
  *
  * Resolution is recorded on the user row (`conversationRequest.resolvedAt`,
- * and `resolvedByMessageId` naming the reply). The follower keeps the part of
+ * and `resolvedByMessageId` naming the reply). A post's reply is written to
+ * the thread the post opened (`threadId`), not to the channel holding the
+ * post: once the channel says which reply resolved it, the thread is followed
+ * for that reply's row, within what is left of the timeout, and a reply not
+ * read back by then is reported by its id. Each follower keeps the part of
  * the windowed index it needs - epoch, revision, row count and the skeleton's
  * row ids and roles - so it can tell which rows it has read:
  *
@@ -256,17 +262,78 @@ export function parseWaitDuration(value: string): number {
  * A reconnect re-subscribes on its own; the host then sends a fresh snapshot
  * and skeleton, and the follower starts over within the person's timeout.
  */
-export function waitForBotReply(input: {
+export async function waitForBotReply(input: {
   readonly client: BotStreamClient;
   readonly botId: string;
   readonly conversationId: string;
+  /** The thread the request's post opened; `null` when it opened none. */
+  readonly threadId: string | null;
   readonly requestId: string;
   readonly timeoutMs: number;
 }): Promise<BotReplyOutcome> {
-  return new Promise<BotReplyOutcome>((resolve, reject) => {
+  const deadline = Date.now() + input.timeoutMs;
+  const onChannel = await follow({
+    client: input.client,
+    botId: input.botId,
+    chatId: input.conversationId,
+    requestId: input.requestId,
+    timeoutMs: input.timeoutMs,
+    target: { kind: "request", replyElsewhere: input.threadId !== null },
+  });
+  if (onChannel.kind !== "resolved-by" || input.threadId === null) {
+    return onChannel.kind === "resolved-by"
+      ? {
+          kind: "replied",
+          replyMessageId: onChannel.replyMessageId,
+          text: null,
+        }
+      : onChannel;
+  }
+  const { replyMessageId } = onChannel;
+  const onThread = await follow({
+    client: input.client,
+    botId: input.botId,
+    chatId: input.threadId,
+    requestId: input.requestId,
+    timeoutMs: Math.max(1, deadline - Date.now()),
+    target: { kind: "reply", replyMessageId },
+  });
+  // The request is answered either way; only the text can be missing.
+  return onThread.kind === "replied"
+    ? onThread
+    : { kind: "replied", replyMessageId, text: null };
+}
+
+/**
+ * What one follower looks for: the request row (and, unless the reply is on
+ * another chat, the reply that resolved it), or one known reply row.
+ */
+type FollowTarget =
+  | { readonly kind: "request"; readonly replyElsewhere: boolean }
+  | { readonly kind: "reply"; readonly replyMessageId: string };
+
+/** A follower's end: an outcome, or the reply id to read from the thread. */
+type FollowOutcome =
+  | BotReplyOutcome
+  | { readonly kind: "resolved-by"; readonly replyMessageId: string };
+
+function follow(input: {
+  readonly client: BotStreamClient;
+  readonly botId: string;
+  readonly chatId: string;
+  readonly requestId: string;
+  readonly timeoutMs: number;
+  readonly target: FollowTarget;
+}): Promise<FollowOutcome> {
+  return new Promise<FollowOutcome>((resolve, reject) => {
     new ReplyFollower(input, resolve, reject).start();
   });
 }
+
+type RequestState =
+  | { readonly kind: "unseen" }
+  | { readonly kind: "open" }
+  | { readonly kind: "resolved"; readonly by: string | null };
 
 /** What the follower knows about one row of the current index. */
 interface KnownRow {
@@ -309,13 +376,11 @@ class ReplyFollower {
   // ---- what the rows read so far say ------------------------------------ //
   /** Reply text by message id. */
   private readonly replies = new Map<string, string>();
-  /** The request row as last read: open, or resolved by a reply (or none). */
-  private request:
-    | { readonly kind: "unseen" }
-    | { readonly kind: "open" }
-    | { readonly kind: "resolved"; readonly by: string | null } = {
-    kind: "unseen",
-  };
+  /**
+   * The request row as last read: open, or resolved by a reply (or none). A
+   * follower of a known reply starts, and starts over, at that reply.
+   */
+  private request: RequestState;
   /** One fresh snapshot is spent looking for a reply row before giving up. */
   private replyResnapshotSpent = false;
 
@@ -323,18 +388,27 @@ class ReplyFollower {
     private readonly input: {
       readonly client: BotStreamClient;
       readonly botId: string;
-      readonly conversationId: string;
+      readonly chatId: string;
       readonly requestId: string;
       readonly timeoutMs: number;
+      readonly target: FollowTarget;
     },
-    private readonly resolve: (outcome: BotReplyOutcome) => void,
+    private readonly resolve: (outcome: FollowOutcome) => void,
     private readonly reject: (error: unknown) => void,
-  ) {}
+  ) {
+    this.request = this.initialRequest();
+  }
+
+  private initialRequest(): RequestState {
+    return this.input.target.kind === "reply"
+      ? { kind: "resolved", by: this.input.target.replyMessageId }
+      : { kind: "unseen" };
+  }
 
   start(): void {
     const session = this.input.client.subscribe("chat.subscribe", {
       epicId: this.input.botId,
-      chatId: this.input.conversationId,
+      chatId: this.input.chatId,
       resume: null,
     });
     this.session = session;
@@ -553,6 +627,7 @@ class ReplyFollower {
         this.replies.set(message.messageId, replyText(message));
         continue;
       }
+      if (this.input.target.kind === "reply") continue;
       const request = message.conversationRequest;
       if (request === undefined || request.requestId !== this.input.requestId)
         continue;
@@ -577,6 +652,16 @@ class ReplyFollower {
       if (text !== undefined) {
         this.finish(() =>
           this.resolve({ kind: "replied", replyMessageId, text }),
+        );
+        return;
+      }
+      // The reply is the thread's row: the thread's follower reads it.
+      if (
+        this.input.target.kind === "request" &&
+        this.input.target.replyElsewhere
+      ) {
+        this.finish(() =>
+          this.resolve({ kind: "resolved-by", replyMessageId }),
         );
         return;
       }
@@ -635,7 +720,7 @@ class ReplyFollower {
       kind: "loadRange",
       hasBinaryPayload: false,
       epicId: this.input.botId,
-      chatId: this.input.conversationId,
+      chatId: this.input.chatId,
       request: {
         requestId,
         epoch: this.epoch,
@@ -658,7 +743,7 @@ class ReplyFollower {
       kind: "resnapshot",
       hasBinaryPayload: false,
       epicId: this.input.botId,
-      chatId: this.input.conversationId,
+      chatId: this.input.chatId,
     });
   }
 
@@ -669,7 +754,7 @@ class ReplyFollower {
    */
   private startOver(epoch: number | null): void {
     this.replies.clear();
-    this.request = { kind: "unseen" };
+    this.request = this.initialRequest();
     this.epoch = epoch;
     this.revision = null;
     this.rowCount = 0;
