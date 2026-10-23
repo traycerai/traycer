@@ -51,6 +51,7 @@ export interface EnvironmentMembersListResult {
 type Requested = {
   readonly environmentId: string | null;
   readonly hostId: string | null;
+  readonly viewerUserId: string;
   readonly cursors: ReadonlyArray<string | null>;
 };
 
@@ -74,6 +75,8 @@ const EMPTY_LIST: EnvironmentMembersListResult = {
  * Every page of `environment.members@1.1` for `environmentId`. The id is
  * never rewritten to Personal. A page that fails surfaces as `isError`
  * with an empty list, so a truncated admin list is never shown as complete.
+ * Pages are partitioned by viewer so an account switch cannot serve the
+ * previous viewer's invitedAddress rows from the same host cache.
  */
 export function useEnvironmentMembersList(
   client: HostClient<HostRpcRegistry> | null,
@@ -82,18 +85,21 @@ export function useEnvironmentMembersList(
 ): EnvironmentMembersListResult {
   const queryClient = useQueryClient();
   const hostId = useReactiveHostReadiness(client).hostId;
+  const viewerUserId = useCloudChatViewerId();
   const [requested, setRequested] = useState<Requested>({
     environmentId,
     hostId,
+    viewerUserId,
     cursors: FIRST_PAGE,
   });
   let cursors = requested.cursors;
   if (
     requested.environmentId !== environmentId ||
-    requested.hostId !== hostId
+    requested.hostId !== hostId ||
+    requested.viewerUserId !== viewerUserId
   ) {
     cursors = FIRST_PAGE;
-    setRequested({ environmentId, hostId, cursors });
+    setRequested({ environmentId, hostId, viewerUserId, cursors });
   }
   const requests = useMemo(
     (): ReadonlyArray<HostRequestSpec<HostRpcRegistry, typeof METHOD>> =>
@@ -128,27 +134,41 @@ export function useEnvironmentMembersList(
   >({
     client,
     requests,
-    cacheKeyIdentity: undefined,
+    cacheKeyIdentity: viewerUserId,
     options: {
-      enabled: enabled && environmentId !== null,
+      enabled: enabled && environmentId !== null && viewerUserId.length > 0,
       refetchOnWindowFocus: false,
     },
     combine,
   });
   if (
     environmentId !== null &&
+    viewerUserId.length > 0 &&
     combined.pages.length === cursors.length &&
     !combined.isError
   ) {
     const walked = cursorsNamedByPages(cursors, combined.pages, (cursor) =>
-      cachedPage(queryClient, hostId, environmentId, cursor),
+      cachedPage(queryClient, hostId, viewerUserId, {
+        environmentId,
+        cursor,
+      }),
     );
     if (!sameCursors(walked, cursors)) {
-      setRequested({ environmentId, hostId, cursors: walked });
+      setRequested({ environmentId, hostId, viewerUserId, cursors: walked });
     }
   }
   return useMemo((): EnvironmentMembersListResult => {
     if (!enabled || environmentId === null) return EMPTY_LIST;
+    if (viewerUserId.length === 0) {
+      return {
+        members: [],
+        legacyMembers: [],
+        legacyRoleNoticeSeenAt: null,
+        isPending: true,
+        isError: false,
+        error: null,
+      };
+    }
     if (combined.isError) {
       return {
         members: [],
@@ -197,7 +217,7 @@ export function useEnvironmentMembersList(
       isError: false,
       error: null,
     };
-  }, [combined, enabled, environmentId]);
+  }, [combined, enabled, environmentId, viewerUserId]);
 }
 
 export interface TeamEnvironmentDescriptor {
@@ -276,15 +296,17 @@ function cursorsNamedByPages(
 function cachedPage(
   queryClient: QueryClient,
   hostId: string | null,
-  environmentId: string,
-  cursor: string | null,
+  viewerUserId: string,
+  params: { readonly environmentId: string; readonly cursor: string | null },
 ): EnvironmentMembersResponseV11 | undefined {
-  return queryClient.getQueryData<EnvironmentMembersResponseV11>(
-    queryKeys.hostMethod<HostRpcRegistry, typeof METHOD>(hostId, METHOD, {
-      environmentId,
-      cursor,
-    }),
-  );
+  return queryClient.getQueryData<EnvironmentMembersResponseV11>([
+    ...queryKeys.hostMethod<HostRpcRegistry, typeof METHOD>(
+      hostId,
+      METHOD,
+      params,
+    ),
+    viewerUserId,
+  ]);
 }
 
 function walkChain(

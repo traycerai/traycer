@@ -4,23 +4,27 @@ import { EnvironmentMoveStalledCard } from "@/components/notifications/environme
 import { SecretRemovedCard } from "@/components/notifications/secret-removed-card";
 import { TeamHostReturnedCard } from "@/components/notifications/team-host-returned-card";
 import { TeamRoleChangedCard } from "@/components/notifications/team-role-changed-card";
-import { DETAILS_LABEL } from "@/components/settings/members/copy";
+import { SettingsDetailsButton } from "@/components/settings/details/settings-details-button";
 import { dataHandlingNoticeText } from "@/components/settings/members/data-handling-notice-text";
 import { isTeamRole } from "@/components/settings/members/types";
 import { carryViewedHostIntoSettingsScope } from "@/components/settings/host-scope/carry-viewed-host-into-settings";
-import { Button } from "@/components/ui/button";
 import type { EnvironmentNotificationDetail } from "@/lib/notifications/environment-notification-detail";
+import type { DetailsSubject } from "@/lib/settings-details-entry";
 import { navigateToSettingsSection } from "@/lib/settings-navigation";
 
 /**
- * Extra content under a P2 notification row. Details stays a slot until
- * P3's SettingsDetailsButton runtime lands; the button is present so none
- * of the five kinds leave the slot empty.
+ * Extra content under a P2 notification row. Details is P3's
+ * SettingsDetailsButton so none of the five kinds leave the slot empty.
  */
 export function EnvironmentNotificationExtra(props: {
   readonly detail: EnvironmentNotificationDetail;
 }): ReactNode {
-  const details = pendingDetails();
+  const details = (
+    <SettingsDetailsButton
+      subject={detailsSubject(props.detail)}
+      title={detailsTitle(props.detail)}
+    />
+  );
   if (props.detail.kind === "team_role_changed") {
     const role = isTeamRole(props.detail.to) ? props.detail.to : "viewer";
     return (
@@ -75,16 +79,42 @@ export function EnvironmentNotificationExtra(props: {
   );
 }
 
-function pendingDetails(): ReactNode {
-  return (
-    <Button
-      type="button"
-      variant="link"
-      size="sm"
-      disabled
-      data-testid="environment-notification-details"
-    >
-      {DETAILS_LABEL}
-    </Button>
-  );
+function detailsSubject(detail: EnvironmentNotificationDetail): DetailsSubject {
+  if (
+    detail.kind === "team_role_changed" ||
+    detail.kind === "team_host_returned"
+  ) {
+    return { environmentId: detail.environmentId, kind: "member", key: "" };
+  }
+  if (detail.kind === "environment_move_stalled") {
+    return {
+      environmentId: detail.environmentId ?? "",
+      kind: "move",
+      key: detail.hostId,
+    };
+  }
+  if (detail.kind === "environment_apply_failed") {
+    return {
+      environmentId: detail.environmentId ?? "",
+      kind: "chip",
+      key: "",
+    };
+  }
+  return { environmentId: detail.environmentId, kind: "secret", key: "" };
+}
+
+function detailsTitle(detail: EnvironmentNotificationDetail): string {
+  if (
+    detail.kind === "team_role_changed" ||
+    detail.kind === "team_host_returned"
+  ) {
+    return "Member details";
+  }
+  if (detail.kind === "environment_move_stalled") {
+    return "Move";
+  }
+  if (detail.kind === "environment_apply_failed") {
+    return "Settings delivery";
+  }
+  return "Secrets";
 }

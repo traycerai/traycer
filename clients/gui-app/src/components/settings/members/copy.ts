@@ -35,8 +35,6 @@ export const ACCEPT_LABEL = "Accept";
 
 export const PENDING_REMOVAL_LABEL = "pending";
 
-export const DETAILS_LABEL = "Details";
-
 export function membersHeaderLine(teamName: string): string {
   return `Who is in ${teamName} and what each person can change. Seats and allowances are on the dashboard.`;
 }
