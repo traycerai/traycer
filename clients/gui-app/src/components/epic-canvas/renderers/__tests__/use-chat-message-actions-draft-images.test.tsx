@@ -246,6 +246,7 @@ function baseInput(
     canAct: true,
     messageDelivery: null,
     setupCardShown: false,
+    workingRowShown: false,
     interviewDeliveryRetryProtocolSupported: false,
     currentComposerSettings: SETTINGS,
     editSettings: SETTINGS,
@@ -954,10 +955,11 @@ describe("performEditSubmit (via revertOnEdit.onDontRevert)", () => {
  * `setupCardShown` has to reach the row's actions, not just the helper that
  * reads it.
  */
-describe("opening prompt delivery status beside the setup card", () => {
+describe("opening prompt delivery status beside the setup card or working row", () => {
   function deliveryPhaseFor(
     phase: ChatMessageDeliveryPhase,
     setupCardShown: boolean,
+    workingRowShown: boolean,
   ): ChatMessageDeliveryPhase | null {
     const { result } = renderHook(
       () =>
@@ -969,6 +971,7 @@ describe("opening prompt delivery status beside the setup card", () => {
               state: { phase },
             },
             setupCardShown,
+            workingRowShown,
           }),
         ),
       { wrapper },
@@ -982,15 +985,48 @@ describe("opening prompt delivery status beside the setup card", () => {
   }
 
   it("preparing beside a setup card shows no status", () => {
-    expect(deliveryPhaseFor("preparing", true)).toBeNull();
+    expect(deliveryPhaseFor("preparing", true, false)).toBeNull();
   });
 
   it("preparing with no setup card still shows 'Setting up'", () => {
-    expect(deliveryPhaseFor("preparing", false)).toBe("preparing");
+    expect(deliveryPhaseFor("preparing", false, false)).toBe("preparing");
+  });
+
+  it("preparing beside the working row shows no status", () => {
+    expect(deliveryPhaseFor("preparing", false, true)).toBeNull();
+  });
+
+  it("pending beside the working row still shows 'Sending'", () => {
+    expect(deliveryPhaseFor("pending", false, true)).toBe("pending");
   });
 
   it("pending beside a setup card still shows 'Sending'", () => {
-    expect(deliveryPhaseFor("pending", true)).toBe("pending");
+    expect(deliveryPhaseFor("pending", true, false)).toBe("pending");
+  });
+
+  it("drops the status when the working row appears on a later render", () => {
+    const stable = baseInput({
+      messageDelivery: {
+        messageId: TARGET_MESSAGE_ID,
+        revision: 1,
+        state: { phase: "preparing" },
+      },
+    });
+    const { result, rerender } = renderHook(
+      ({ workingRowShown }: { readonly workingRowShown: boolean }) =>
+        useChatMessageActions({ ...stable, workingRowShown }),
+      { wrapper, initialProps: { workingRowShown: false } },
+    );
+    expect(result.current.messageActionsFor(baseMessage())).toMatchObject({
+      type: "user",
+      deliveryPhase: "preparing",
+    });
+
+    rerender({ workingRowShown: true });
+    expect(result.current.messageActionsFor(baseMessage())).toMatchObject({
+      type: "user",
+      deliveryPhase: null,
+    });
   });
 
   it("drops the status when a setup card appears on a later render", () => {
