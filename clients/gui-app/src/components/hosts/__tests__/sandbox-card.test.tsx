@@ -203,6 +203,7 @@ const COST: SandboxCost = {
   },
   pendingMillicredits: 500,
   segments: [],
+  todayMillicredits: 0,
 };
 
 beforeEach(() => {
@@ -452,7 +453,11 @@ describe("<SandboxCard /> per state", () => {
   });
 
   it("shows the cost view and the runway warning when the figures and the warning are in", () => {
-    mocks.costs = { sandboxes: [COST], awakeBurnMillicreditsPerHour: 120 };
+    mocks.costs = {
+      sandboxes: [COST],
+      awakeBurnMillicreditsPerHour: 120,
+      todayYoursMillicredits: 0,
+    };
     mocks.warning = { kind: "critical", runwayMinutes: 20 };
     renderCard(sandboxOf("awake", false, {}));
     expect(screen.getByTestId("sandbox-card-cost-now").textContent).toBe(

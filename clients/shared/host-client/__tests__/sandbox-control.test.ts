@@ -22,8 +22,10 @@ import {
   getSandboxAutomationViaHttp,
   isSandboxAsleep,
   isSandboxFrozenInEffect,
+  keepSandboxViaHttp,
   listSandboxesViaHttp,
   openSandboxAutomationViaHttp,
+  patchSandboxViaHttp,
   runSandboxVerbViaHttp,
   SANDBOX_VERB_FETCH_TIMEOUT_MS,
   type EnsureSandboxAwakeDeps,
@@ -506,6 +508,72 @@ describe("destroySandboxViaHttp", () => {
   });
 });
 
+describe("patchSandboxViaHttp", () => {
+  it("PATCHes the sandbox with the request as its body", async () => {
+    const fetchMock = stubFetch(async () => jsonResponse(200, {}));
+    const request = {
+      displayName: null,
+      idleMinutes: 45,
+      destroyAfterRestingMinutes: 0,
+    };
+    expect(await patchSandboxViaHttp(BASE, BEARER, "sbx_1", request)).toEqual({
+      kind: "ok",
+      settled: true,
+    });
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(String(url)).toBe(`${BASE}/api/sandboxes/sbx_1`);
+    expect(init?.method).toBe("PATCH");
+    expect(JSON.parse(String(init?.body))).toEqual(request);
+  });
+
+  it("refuses an id that is not one plain path segment before any request", async () => {
+    const fetchMock = stubFetch(async () => jsonResponse(200, {}));
+    for (const id of UNSAFE_IDS) {
+      expect(
+        await patchSandboxViaHttp(BASE, BEARER, id, {
+          displayName: "x",
+          idleMinutes: null,
+          destroyAfterRestingMinutes: null,
+        }),
+      ).toEqual(INVALID_ID_RESULT);
+    }
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("keepSandboxViaHttp", () => {
+  it("POSTs to the sandbox's keep route with no body", async () => {
+    const fetchMock = stubFetch(async () => jsonResponse(200, {}));
+    expect(await keepSandboxViaHttp(BASE, BEARER, "sbx_1")).toEqual({
+      kind: "ok",
+      settled: true,
+    });
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(String(url)).toBe(`${BASE}/api/sandboxes/sbx_1/keep`);
+    expect(init?.method).toBe("POST");
+    expect(init?.body).toBeNull();
+  });
+
+  it("hands a 404 sandbox_not_found, a keep that lost to the idle timer, to the caller", async () => {
+    stubFetch(async () => jsonResponse(404, { code: "sandbox_not_found" }));
+    expect(await keepSandboxViaHttp(BASE, BEARER, "sbx_1")).toMatchObject({
+      kind: "refused",
+      status: 404,
+      code: "sandbox_not_found",
+    });
+  });
+
+  it("refuses an id that is not one plain path segment before any request", async () => {
+    const fetchMock = stubFetch(async () => jsonResponse(200, {}));
+    for (const id of UNSAFE_IDS) {
+      expect(await keepSandboxViaHttp(BASE, BEARER, id)).toEqual(
+        INVALID_ID_RESULT,
+      );
+    }
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
 describe("fetchSandboxCostsViaHttp", () => {
   const COSTS = {
     sandboxes: [
@@ -599,6 +667,9 @@ describe("the other sandbox routes parse or fail the same way", () => {
       createdByHostId: null,
       createdByAgentId: null,
       environmentId: null,
+      destroyAfterRestingMinutes: null,
+      createdByTaskId: null,
+      clientRequestId: null,
     });
     expect(fetchMock.mock.calls[0][1]?.headers).toMatchObject({
       "Content-Type": "application/json",

@@ -134,6 +134,11 @@ export const sandboxMutationKeys = {
     ["auth", "sandbox", "destroy", sandboxId] as const,
   // Per sandbox, like destroy: the card's suspend / resume / stop / start.
   verb: (sandboxId: string) => ["auth", "sandbox", "verb", sandboxId] as const,
+  // Per sandbox, like destroy: the rename and the idle and resting periods.
+  patch: (sandboxId: string) =>
+    ["auth", "sandbox", "patch", sandboxId] as const,
+  // Per sandbox, like destroy.
+  keep: (sandboxId: string) => ["auth", "sandbox", "keep", sandboxId] as const,
   // Per HOST: the tab open that wakes it knows the host, not the sandbox id.
   wake: (hostId: string) => ["auth", "sandbox", "wake", hostId] as const,
   // Per account, like create: the first open creates the row and can take

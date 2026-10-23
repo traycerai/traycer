@@ -21,8 +21,10 @@ import {
   fetchSandboxCatalogueViaHttp,
   fetchSandboxCostsViaHttp,
   getSandboxAutomationViaHttp,
+  keepSandboxViaHttp,
   listSandboxesViaHttp,
   openSandboxAutomationViaHttp,
+  patchSandboxViaHttp,
   runSandboxVerbViaHttp,
 } from "@traycer-clients/shared/host-client/sandbox-control";
 import {
@@ -51,6 +53,7 @@ import {
   parseSandboxAutomationOpenTarget,
   parseSandboxCreateRequest,
   parseSandboxLifecycleVerb,
+  parseSandboxPatchRequest,
   parseSecretRequestDecision,
   parseStoredAuthTokens,
   parseStoredCredentialsIdentity,
@@ -278,6 +281,34 @@ export function registerAuthIpc(bridge: RunnerIpcBridge): void {
         bearerToken,
         sandboxId,
       );
+    },
+  );
+
+  bridge.handleInvoke(
+    RunnerHostInvoke.patchSandbox,
+    async (
+      _event,
+      bearerToken: unknown,
+      sandboxId: unknown,
+      request: unknown,
+    ) => {
+      assertString(bearerToken, "patchSandbox.bearerToken");
+      assertString(sandboxId, "patchSandbox.sandboxId");
+      return patchSandboxViaHttp(
+        config.serverBaseUrl,
+        bearerToken,
+        sandboxId,
+        parseSandboxPatchRequest(request),
+      );
+    },
+  );
+
+  bridge.handleInvoke(
+    RunnerHostInvoke.keepSandbox,
+    async (_event, bearerToken: unknown, sandboxId: unknown) => {
+      assertString(bearerToken, "keepSandbox.bearerToken");
+      assertString(sandboxId, "keepSandbox.sandboxId");
+      return keepSandboxViaHttp(config.serverBaseUrl, bearerToken, sandboxId);
     },
   );
 

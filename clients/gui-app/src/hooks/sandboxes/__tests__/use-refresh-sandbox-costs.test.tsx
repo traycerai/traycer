@@ -111,6 +111,7 @@ function costRow(
     },
     pendingMillicredits: 0,
     segments: [],
+    todayMillicredits: 0,
   };
 }
 
@@ -118,7 +119,7 @@ function costsOf(
   awakeBurnMillicreditsPerHour: number,
   ...sandboxes: readonly SandboxCost[]
 ): UserSandboxCost {
-  return { sandboxes, awakeBurnMillicreditsPerHour };
+  return { sandboxes, awakeBurnMillicreditsPerHour, todayYoursMillicredits: 0 };
 }
 
 function fireTurn(harnessId: GuiHarnessId): void {
