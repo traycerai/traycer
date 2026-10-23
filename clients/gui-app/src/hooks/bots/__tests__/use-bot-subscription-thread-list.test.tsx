@@ -1,17 +1,23 @@
 /**
  * A reply in a thread moves the channel without a poll (Tracy Bots T43b):
  * the bot's `bot.subscribe` snapshot carries `conversationsRevision`, and a
- * changed value reads the bot's `bot.thread.list` again. The real
- * subscription hook and the real thread-list query run over a stub stream
- * session and the mock host messenger.
+ * changed value reads the bot's `bot.thread.list` again, even while an
+ * earlier read of the same key is still in flight. The real subscription
+ * hook and the real thread-list query run over a stub stream session and the
+ * mock host messenger, which holds each read until the test answers it.
  */
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import {
+  QueryClient,
+  QueryClientProvider,
+  type QueryKey,
+} from "@tanstack/react-query";
 import { act, cleanup, render, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SchemaVersion } from "@traycer/protocol/framework/versioned-stream-rpc";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import type { BotSubscribeServerFrame } from "@traycer/protocol/host/bot/schemas";
+import type { BotThreadListResponse } from "@traycer/protocol/host/bot/conversation-schemas";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
@@ -34,6 +40,7 @@ import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtur
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import { hostRpcSchedulingPolicy } from "@/lib/host-rpc-policy/host-method-policy-table";
+import { hostQueryKeys } from "@/lib/query-keys/host-query-keys";
 import {
   __resetBotSubscriptionsForTesting,
   useBotSubscriptionForClient,
@@ -161,20 +168,27 @@ function snapshot(
 function fixture(): {
   readonly session: StubSession;
   readonly listReads: { value: number };
+  readonly pendingReads: Array<(response: BotThreadListResponse) => void>;
   readonly queryClient: QueryClient;
+  readonly threadListKey: QueryKey;
   readonly render: () => void;
 } {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false, staleTime: 0, gcTime: 0 } },
   });
   const listReads = { value: 0 };
+  // Each `bot.thread.list` dispatch parks here instead of answering inline,
+  // so the test controls exactly when (and with what body) it resolves.
+  const pendingReads: Array<(response: BotThreadListResponse) => void> = [];
   const messenger = new MockHostMessenger<HostRpcRegistry>({
     registry: hostRpcRegistry,
-    requestId: () => "req-1",
+    requestId: () => `req-${listReads.value + 1}`,
     handlers: {
       "bot.thread.list": () => {
         listReads.value += 1;
-        return { threads: [], trunkCostUsd: 0 };
+        return new Promise<BotThreadListResponse>((resolve) => {
+          pendingReads.push(resolve);
+        });
       },
     },
   });
@@ -192,21 +206,35 @@ function fixture(): {
   const session = new StubSession();
   const streamClient = new StubHostStreamClient(session);
 
+  function ThreadList(): ReactNode {
+    useBotThreadListQuery(requester, BOT_ID, { enabled: true });
+    return null;
+  }
+
+  // Mirrors `BotTabBody`'s real gate (`bot-tab-surface.tsx`): the
+  // channel/thread-list reader mounts only once the bot's subscription has
+  // produced its first snapshot, never unconditionally alongside it.
   function Harness(): ReactNode {
-    useBotSubscriptionForClient({
+    const subscription = useBotSubscriptionForClient({
       hostId: HOST_ID,
       botId: BOT_ID,
       enabled: true,
       client: streamClient,
     });
-    useBotThreadListQuery(requester, BOT_ID, { enabled: true });
-    return null;
+    if (subscription.snapshot === null) return null;
+    return <ThreadList />;
   }
 
   return {
     session,
     listReads,
+    pendingReads,
     queryClient,
+    threadListKey: hostQueryKeys.method<HostRpcRegistry, "bot.thread.list">(
+      HOST_ID,
+      "bot.thread.list",
+      { botId: BOT_ID },
+    ),
     render: () => {
       render(
         <QueryClientProvider client={queryClient}>
@@ -227,15 +255,59 @@ describe("the bot's thread listing follows its subscription", () => {
   it("reads the listing again when the conversations' revision moves, and not for a snapshot that leaves it", async () => {
     const world = fixture();
     world.render();
-    await waitFor(() => expect(world.listReads.value).toBe(1));
-
     act(() => world.session.emit(snapshot(3, 0)));
+    await waitFor(() => expect(world.listReads.value).toBe(1));
+    act(() => world.pendingReads[0]?.({ threads: [], trunkCostUsd: 0 }));
+    await waitFor(() => expect(world.queryClient.isFetching()).toBe(0));
+
     // The open-request count moved; the rows did not.
     act(() => world.session.emit(snapshot(3, 1)));
     act(() => world.session.emit(snapshot(4, 1)));
 
     await waitFor(() => expect(world.listReads.value).toBe(2));
+    act(() => world.pendingReads[1]?.({ threads: [], trunkCostUsd: 0 }));
     await waitFor(() => expect(world.queryClient.isFetching()).toBe(0));
     expect(world.listReads.value).toBe(2);
+  });
+
+  it("reads the listing again when a reply's revision moves while the first read is in flight, and keeps the fresh body", async () => {
+    const world = fixture();
+    world.render();
+
+    // No snapshot yet: the thread-list reader is not mounted (the real
+    // gate), so no `bot.thread.list` dispatch has gone out.
+    expect(world.listReads.value).toBe(0);
+
+    // The first snapshot mounts the gated reader, which issues the first
+    // read and holds it open with nothing cached. It also caches the
+    // subscription snapshot the revision check compares against.
+    act(() => world.session.emit(snapshot(0, 0)));
+    await waitFor(() => expect(world.listReads.value).toBe(1));
+    expect(
+      world.queryClient.getQueryState(world.threadListKey)?.data,
+    ).toBeUndefined();
+
+    // A reply moves the revision while that first read is unanswered.
+    act(() => world.session.emit(snapshot(1, 0)));
+    await waitFor(() => expect(world.listReads.value).toBe(2));
+
+    // The second read answers with the post-reply body, then the first,
+    // started before the reply, answers with its stale one.
+    act(() => {
+      world.pendingReads[1]?.({ threads: [], trunkCostUsd: 1.5 });
+      world.pendingReads[0]?.({ threads: [], trunkCostUsd: 0 });
+    });
+
+    // Settled is the query's own `fetchStatus`, not a timer or a call count.
+    await waitFor(() =>
+      expect(
+        world.queryClient.getQueryState(world.threadListKey)?.fetchStatus,
+      ).toBe("idle"),
+    );
+    expect(world.listReads.value).toBe(2);
+    expect(world.queryClient.getQueryState(world.threadListKey)?.data).toEqual({
+      threads: [],
+      trunkCostUsd: 1.5,
+    });
   });
 });

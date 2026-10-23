@@ -310,12 +310,11 @@ function BotTabContent(props: {
     return match?.label ?? snapshot.bot.environmentId;
   }, [environments.data, snapshot.bot.environmentId]);
   const botList = useBotListQuery(client, true);
-  const environmentBotIds = useMemo(
+  const environmentBots = useMemo(
     () =>
-      environmentBotIdsOf(
-        botList.data?.bots ?? NO_BOTS,
-        snapshot.bot.environmentId,
-      ),
+      botList.data === undefined
+        ? null
+        : environmentBotsOf(botList.data.bots, snapshot.bot.environmentId),
     [botList.data, snapshot.bot.environmentId],
   );
   const paused = pausedReason !== null;
@@ -409,7 +408,7 @@ function BotTabContent(props: {
               openRequestCount={snapshot.openRequestCount}
               paused={paused}
               environmentLabel={environmentLabel}
-              environmentBotIds={environmentBotIds}
+              environmentBots={environmentBots}
               sessionChatId={sessionChatId}
               onSelectSession={setSessionChatId}
             />
@@ -426,16 +425,12 @@ function BotTabContent(props: {
   );
 }
 
-const NO_BOTS: ReadonlyArray<BotRecord> = [];
-
-/** The bots of one environment, by id, as the list names them. */
-function environmentBotIdsOf(
+/** The bots of one environment, as the list names them. */
+function environmentBotsOf(
   bots: ReadonlyArray<BotRecord>,
   environmentId: string,
-): ReadonlyArray<string> {
-  return bots
-    .filter((bot) => bot.environmentId === environmentId)
-    .map((bot) => bot.botId);
+): ReadonlyArray<BotRecord> {
+  return bots.filter((bot) => bot.environmentId === environmentId);
 }
 
 function ErrorNotice(props: {

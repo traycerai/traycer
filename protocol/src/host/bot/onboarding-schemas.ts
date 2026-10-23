@@ -54,12 +54,25 @@ export const botOnboardingGithubSchema = lazySchema(() =>
 );
 export type BotOnboardingGithub = z.infer<typeof botOnboardingGithubSchema>;
 
-/** The areas the team chose, and when its bots were created (`null` before). */
+/**
+ * The areas the team chose, and when every one of them was set up (`null`
+ * before). `pending` names each chosen area whose bot exists but is not set
+ * up yet, with the host it runs on (`null` while it is bound to none):
+ * that host finishes its routine, announcement and first turn, so a
+ * completion there is what finishes the onboarding.
+ */
 export const botOnboardingChoiceSchema = lazySchema(() =>
   z.object({
     areas: z.array(botOnboardingAreaKeySchema),
     chosenAt: z.number().int().nonnegative(),
     completedAt: z.number().int().nonnegative().nullable(),
+    pending: z.array(
+      z.object({
+        area: botOnboardingAreaKeySchema,
+        botId: botIdSchema,
+        hostId: z.string().min(1).nullable(),
+      }),
+    ),
   }),
 );
 export type BotOnboardingChoice = z.infer<typeof botOnboardingChoiceSchema>;
@@ -108,9 +121,12 @@ export type BotOnboardingChooseResponse = z.infer<
 
 /**
  * Creates the chosen bots on the serving host, each with its area's
- * directive and routines, and marks the onboarding complete. Refused until
- * the set is unlocked. Safe to repeat: a repeat answers with the bots the
- * first made. The run settings are the new bots'.
+ * directive, routine, announcement and first turn, and marks the onboarding
+ * complete once every chosen area is set up. A bot an earlier try made on
+ * another host is left to that host and answered in `choice.pending`; the
+ * onboarding then stays incomplete. Refused until the set is unlocked. Safe
+ * to repeat: a repeat answers with the bots the first made. The run
+ * settings are the new bots'.
  */
 export const botOnboardingCompleteRequestSchema = lazySchema(() =>
   z.object({

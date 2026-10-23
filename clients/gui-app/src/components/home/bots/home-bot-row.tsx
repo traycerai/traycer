@@ -67,6 +67,8 @@ export function HomeBotRow(props: {
   readonly createdBy: string | null;
   /** Whether the bot is its environment's main bot (decision 30). */
   readonly isMain: boolean;
+  /** The team's chat is locked by its onboarding (`teamOnboardingGate`): the row does not open. */
+  readonly entryLocked: boolean;
 }): ReactNode {
   const {
     bot,
@@ -108,10 +110,10 @@ export function HomeBotRow(props: {
       type="button"
       data-testid="home-bot-row"
       data-bot-id={row.botId}
-      disabled={hostId === null}
+      disabled={hostId === null || props.entryLocked}
       className="group flex w-full items-center gap-3 rounded-md px-2 py-2 text-left transition-colors hover:bg-foreground/6 focus-visible:outline-2 focus-visible:outline-ring focus-visible:-outline-offset-2"
       onClick={() => {
-        if (hostId === null) return;
+        if (hostId === null || props.entryLocked) return;
         // An open tab keeps its host - unless this client can no longer
         // dial it (a restored tab, a host gone since): then it opens again
         // through this window's host, which finds the one serving the bot.

@@ -6,6 +6,8 @@ import type { EnvironmentDescriptor } from "@traycer/protocol/host/environment/c
 import { CreateBotForm } from "@/components/home/bots/create-bot-form";
 import { BotOnboardingCard } from "@/components/home/bots/bot-onboarding-card";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
+import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
+import { useTeamOnboardingGate } from "@/hooks/bots/use-team-onboarding-gate";
 import { useConnectableHostIds } from "@/hooks/host/use-connectable-host-ids";
 import { useBotListQuery } from "@/hooks/bots/use-bot-list-query";
 import { useEnvironmentListQuery } from "@/hooks/bots/use-environment-list-query";
@@ -34,7 +36,9 @@ const NO_CHAT_IDS: ReadonlyArray<string> = [];
  * unread channel. Each section ends with "Add a bot", which opens the create
  * form for that environment, so the environment is the section's and never
  * a default; the form picks the machine itself. A team's section opens with
- * its onboarding until the team's bots exist (`BotOnboardingCard`).
+ * its onboarding until the team's bots exist (`BotOnboardingCard`), and
+ * while its onboarding locks the team's chat (`teamOnboardingGate`) the
+ * section offers no "Add a bot" and its channels do not open.
  *
  * Read through the tab's host: the lists are cloud-backed, so any host gives
  * the same answer. A channel opens that bot's tab, through this tab's host,
@@ -139,6 +143,18 @@ function SidebarSection(props: {
   } = props;
   const [collapsed, setCollapsed] = useState(false);
   const [creating, setCreating] = useState(false);
+  const isTeam = group.canCreate && group.ownerKind === "organization";
+  const client = useTabHostClient();
+  const tabHostId = useTabHostId();
+  const { gate } = useTeamOnboardingGate({
+    client,
+    hostId: tabHostId,
+    environmentId: group.environmentId,
+    isTeam,
+    botCount: group.bots.length,
+  });
+  const locked = gate === "locked";
+  const canCreate = group.canCreate && !locked;
   // A collapsed section still lists the channel in view and the unread ones,
   // as Slack's does.
   const shown = collapsed
@@ -166,12 +182,11 @@ function SidebarSection(props: {
         )}
         <span className="truncate">{group.label}</span>
       </button>
-      {collapsed ||
-      !group.canCreate ||
-      group.ownerKind !== "organization" ? null : (
+      {collapsed || !isTeam ? null : (
         <BotOnboardingCard
           environmentId={group.environmentId}
           teamName={group.label}
+          botCount={group.bots.length}
           connectableHostIds={connectableHostIds}
           environmentBindings={environmentBindings}
         />
@@ -183,12 +198,13 @@ function SidebarSection(props: {
               bot={bot}
               active={bot.botId === activeBotId}
               unread={unreadBotIds.has(bot.botId)}
+              locked={locked}
               onOpen={() => onOpenChannel(bot)}
             />
           </li>
         ))}
       </ul>
-      {collapsed || !group.canCreate ? null : (
+      {collapsed || !canCreate ? null : (
         <button
           type="button"
           aria-expanded={creating}
@@ -200,7 +216,7 @@ function SidebarSection(props: {
           Add a bot
         </button>
       )}
-      {creating && !collapsed && group.canCreate ? (
+      {creating && !collapsed && canCreate ? (
         <CreateBotForm
           environmentId={group.environmentId}
           environmentLabel={group.label}
@@ -217,12 +233,14 @@ function ChannelRow(props: {
   readonly bot: BotRecord;
   readonly active: boolean;
   readonly unread: boolean;
+  readonly locked: boolean;
   readonly onOpen: () => void;
 }): ReactNode {
-  const { bot, active, unread, onOpen } = props;
+  const { bot, active, unread, locked, onOpen } = props;
   return (
     <button
       type="button"
+      disabled={locked}
       data-testid="bot-channel-row"
       data-bot-id={bot.botId}
       data-unread={unread ? "true" : "false"}

@@ -287,19 +287,23 @@ function createSharedSubscription(
       queryClient.getQueryData<BotSubscriptionSnapshot | null>(key) ?? null;
     queryClient.setQueryData(key, toSnapshot(frame));
     // A reply, a post or a verdict on the bound host: the threads' reply
-    // counts and costs moved, so their listing is read again.
+    // counts and costs moved, so their listing is read again. A read already
+    // in flight may predate the move, and an invalidation joins a running
+    // first read (nothing cached yet) rather than replacing it, so that read
+    // is cancelled first and the listing read afresh.
     if (
       previous !== null &&
       frame.conversationsRevision !== null &&
       frame.conversationsRevision !== previous.conversationsRevision
     ) {
-      void queryClient.invalidateQueries({
-        queryKey: hostQueryKeys.method<HostRpcRegistry, "bot.thread.list">(
-          args.hostId,
-          "bot.thread.list",
-          { botId: args.botId },
-        ),
-      });
+      const queryKey = hostQueryKeys.method<HostRpcRegistry, "bot.thread.list">(
+        args.hostId,
+        "bot.thread.list",
+        { botId: args.botId },
+      );
+      void queryClient
+        .cancelQueries({ queryKey })
+        .then(() => queryClient.invalidateQueries({ queryKey }));
     }
   });
 

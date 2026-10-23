@@ -3,7 +3,9 @@
  * with a read-only mark where the installing admin can only read, "Connect
  * GitHub" to an admin and "Waiting for an admin" to anyone else; step 2 keeps
  * the team's ticks; "Open your channels" creates the chosen bots once the set
- * holds a repository and opens the first channel. The real query and
+ * holds a repository and opens the first channel; an area whose bot another
+ * host has not finished is marked, and its completion goes to that host; a
+ * team that pre-dates onboarding sees no card. The real query and
  * mutation hooks run over the mock host messenger, so every assertion on a
  * request is on what the host was sent; the model picker and the toolbar
  * store hook are replaced, the store itself is the production one.
@@ -45,8 +47,14 @@ const ENV = "env-team";
 const BOT_A = "bot_01ARZ3NDEKTSV4RRFFQ69G5FAV";
 const BOT_B = "bot_01ARZ3NDEKTSV4RRFFQ69G5FAW";
 
+const PENDING_HOST = "host-pending";
+
 const mocks = vi.hoisted(() => ({
   requester: null as object | null,
+  /** The hosts the card asked for a client, in order. */
+  clientHostIds: [] as Array<string | null>,
+  connectable: [] as string[],
+  botCount: 0,
   supported: true,
   navigateToTabIntent: vi.fn<(intent: unknown) => void>(),
   openLink: vi.fn<(url: string, kind: string) => Promise<void>>(),
@@ -66,8 +74,12 @@ vi.mock("@/hooks/host/use-tab-host-client", () => ({
   useTabHostClient: () => mocks.requester,
 }));
 vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
-  useHostClientForHostId: (hostId: string | null) =>
-    hostId === HOST_ID ? mocks.requester : null,
+  useHostClientForHostId: (hostId: string | null) => {
+    mocks.clientHostIds.push(hostId);
+    return hostId !== null && mocks.connectable.includes(hostId)
+      ? mocks.requester
+      : null;
+  },
 }));
 vi.mock("@/hooks/host/use-host-supports-method", () => ({
   useHostSupportsMethod: (hostId: string | null, method: string) =>
@@ -242,6 +254,7 @@ function mount(read: BotOnboardingReadResponse): World {
           areas: params.areas,
           chosenAt: 2_000,
           completedAt: null,
+          pending: [],
         };
         world.read = { ...world.read, choice };
         return { choice };
@@ -249,7 +262,12 @@ function mount(read: BotOnboardingReadResponse): World {
       "bot.onboarding.complete": (params) => {
         world.completes.push(params);
         const areas = world.read.choice?.areas ?? [];
-        const choice = { areas, chosenAt: 2_000, completedAt: 3_000 };
+        const choice = {
+          areas,
+          chosenAt: 2_000,
+          completedAt: 3_000,
+          pending: [],
+        };
         world.read = { ...world.read, choice };
         return {
           choice,
@@ -278,7 +296,8 @@ function mount(read: BotOnboardingReadResponse): World {
       <BotOnboardingCard
         environmentId={ENV}
         teamName="acme"
-        connectableHostIds={[HOST_ID]}
+        botCount={mocks.botCount}
+        connectableHostIds={mocks.connectable}
         environmentBindings={boundHere()}
       />
     </QueryClientProvider>,
@@ -301,6 +320,9 @@ function checkbox(key: string): HTMLElement {
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.supported = true;
+  mocks.clientHostIds = [];
+  mocks.connectable = [HOST_ID];
+  mocks.botCount = 0;
   mocks.openLink.mockResolvedValue(undefined);
   useBotTabsStore.setState({ tabs: {} });
 });
@@ -366,6 +388,20 @@ describe("<BotOnboardingCard /> before the set holds a repository", () => {
       expect.anything(),
     );
     expect(screen.queryByTestId("bot-onboarding-waiting-for-admin")).toBeNull();
+  });
+
+  it("shows nothing to a team that has bots and no onboarding record, which pre-dates onboarding", async () => {
+    mocks.botCount = 2;
+    const world = mount({
+      github: NO_SET,
+      unlocked: false,
+      choice: null,
+      catalog: CATALOG,
+    });
+
+    await waitFor(() => expect(world.reads).toBe(1));
+    await waitFor(() => expect(world.queryClient.isFetching()).toBe(0));
+    expect(screen.queryByTestId("bot-onboarding-card")).toBeNull();
   });
 
   it("shows nothing on a host that does not serve onboarding", () => {
@@ -447,7 +483,12 @@ describe("<BotOnboardingCard /> once the set holds a repository", () => {
     const world = mount({
       github: CONNECTED,
       unlocked: true,
-      choice: { areas: ["alerts"], chosenAt: 1_000, completedAt: null },
+      choice: {
+        areas: ["alerts"],
+        chosenAt: 1_000,
+        completedAt: null,
+        pending: [],
+      },
       catalog: CATALOG,
     });
 
@@ -465,7 +506,12 @@ describe("<BotOnboardingCard /> once the set holds a repository", () => {
 });
 
 describe("<BotOnboardingCard /> after onboarding", () => {
-  const completed = { areas: ["alerts"], chosenAt: 1_000, completedAt: 2_000 };
+  const completed = {
+    areas: ["alerts"],
+    chosenAt: 1_000,
+    completedAt: 2_000,
+    pending: [],
+  };
 
   it("tells an admin the set needs a new installing admin, with the page where one takes over", async () => {
     mount({
@@ -507,5 +553,59 @@ describe("<BotOnboardingCard /> after onboarding", () => {
       screen.queryByTestId("bot-onboarding-needs-installing-admin"),
     ).toBeNull();
     expect(screen.queryByTestId("bot-onboarding-card")).toBeNull();
+  });
+});
+
+describe("<BotOnboardingCard /> with an area another host has not finished", () => {
+  const pendingChoice = (hostId: string) => ({
+    areas: ["ci-speed-and-cost", "trunk-watch"],
+    chosenAt: 1_000,
+    completedAt: null,
+    pending: [{ area: "trunk-watch", botId: BOT_B, hostId }],
+  });
+
+  it("marks the area and sends the completion to the host its bot runs on", async () => {
+    mocks.connectable = [HOST_ID, PENDING_HOST];
+    const world = mount({
+      github: CONNECTED,
+      unlocked: true,
+      choice: pendingChoice(PENDING_HOST),
+      catalog: CATALOG,
+    });
+
+    const open = await screen.findByTestId("bot-onboarding-open");
+    expect(
+      within(area("trunk-watch")).getByTestId("bot-onboarding-pending"),
+    ).toBeTruthy();
+    expect(
+      within(area("ci-speed-and-cost")).queryByTestId("bot-onboarding-pending"),
+    ).toBeNull();
+    await waitFor(() => expect(open.hasAttribute("disabled")).toBe(false));
+    expect(mocks.clientHostIds.at(-1)).toBe(PENDING_HOST);
+    await userEvent.click(open);
+
+    await waitFor(() => expect(world.completes).toHaveLength(1));
+    await waitFor(() =>
+      expect(
+        lookupBotTab(useBotTabsStore.getState().tabs, BOT_A),
+      ).toMatchObject({ hostId: PENDING_HOST }),
+    );
+  });
+
+  it("waits, completing nothing, while that host is out of reach", async () => {
+    const world = mount({
+      github: CONNECTED,
+      unlocked: true,
+      choice: pendingChoice("host-gone"),
+      catalog: CATALOG,
+    });
+
+    const open = await screen.findByTestId("bot-onboarding-open");
+    expect(
+      within(area("trunk-watch")).getByTestId("bot-onboarding-pending"),
+    ).toBeTruthy();
+    expect(open.hasAttribute("disabled")).toBe(true);
+    await userEvent.click(open);
+    expect(world.completes).toEqual([]);
   });
 });

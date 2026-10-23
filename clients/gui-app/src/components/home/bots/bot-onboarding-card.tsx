@@ -4,6 +4,7 @@ import { useStore } from "zustand";
 import { Check } from "lucide-react";
 import type {
   BotOnboardingArea,
+  BotOnboardingChoice,
   BotOnboardingGithub,
   BotOnboardingReadResponse,
 } from "@traycer/protocol/host/bot/onboarding-schemas";
@@ -20,17 +21,19 @@ import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
 import { fallbackSeedSource } from "@/lib/composer/composer-seed-source";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
-import { useHostSupportsMethod } from "@/hooks/host/use-host-supports-method";
 import { useHostsAdvertisingMethod } from "@/hooks/host/use-hosts-advertising-method";
 import { useReactiveLocalHostId } from "@/hooks/host/use-reactive-local-host-id";
 import { useEffectiveHostId } from "@/hooks/host/use-effective-host-id";
-import { useBotOnboardingQuery } from "@/hooks/bots/use-bot-onboarding-query";
+import { useTeamOnboardingGate } from "@/hooks/bots/use-team-onboarding-gate";
 import {
   useBotOnboardingChooseMutation,
   useBotOnboardingCompleteMutation,
 } from "@/hooks/bots/use-bot-mutations";
 import type { HostEnvironmentBindings } from "@/hooks/bots/use-host-environment-bindings-query";
-import { chooseBotCreateHost } from "@/lib/home-bots/bot-create-host";
+import {
+  chooseBotCreateHost,
+  type BotCreateHostChoice,
+} from "@/lib/home-bots/bot-create-host";
 import { teamGithubDashboardUrl } from "@/lib/sandboxes/secrets-dashboard";
 import { botTabIntent } from "@/lib/tab-navigation/intents";
 import { navigateToTabIntent } from "@/lib/tab-navigation";
@@ -52,7 +55,10 @@ import { cn } from "@/lib/utils";
  *    is kept as the team's choice.
  * 3. Channels: once the set holds a repository, "Open your channels" creates
  *    the chosen bots on the host they will run on and opens the first one's
- *    channel, where it has announced itself.
+ *    channel, where it has announced itself. A bot an earlier try made on
+ *    another host is that host's to finish (`choice.pending`): the next
+ *    "Open your channels" goes to that host when this client reaches it, and
+ *    the area reads "Still being set up" until it is done.
  *
  * After onboarding the card leaves, except to tell an admin the set needs a
  * new installing admin, with the page where one takes over.
@@ -65,17 +71,20 @@ export function BotOnboardingCard(props: {
   readonly environmentId: string;
   /** The team's handle, which names its dashboard pages. */
   readonly teamName: string;
+  /** The team's bots as its list shows them now (`teamOnboardingGate`). */
+  readonly botCount: number;
   readonly connectableHostIds: ReadonlyArray<string>;
   readonly environmentBindings: HostEnvironmentBindings;
 }): ReactNode {
-  const tabHostId = useTabHostId();
   const client = useTabHostClient();
-  const supported = useHostSupportsMethod(tabHostId, "bot.onboarding.read");
-  const onboarding = useBotOnboardingQuery(
+  const tabHostId = useTabHostId();
+  const { gate, onboarding } = useTeamOnboardingGate({
     client,
-    props.environmentId,
-    supported,
-  );
+    hostId: tabHostId,
+    environmentId: props.environmentId,
+    isTeam: true,
+    botCount: props.botCount,
+  });
   const data = onboarding.data;
   if (data === undefined) return null;
   if (data.choice !== null && data.choice.completedAt !== null) {
@@ -83,6 +92,8 @@ export function BotOnboardingCard(props: {
       <NeedsInstallingAdmin github={data.github} teamName={props.teamName} />
     );
   }
+  // A team that pre-dates onboarding is never asked to onboard.
+  if (gate === "none") return null;
   return <OnboardingSteps {...props} data={data} />;
 }
 
@@ -143,7 +154,8 @@ function OnboardingSteps(props: {
     failedHostIds: environmentBindings.failedHostIds,
     creatingHostIds: completingHostIds,
   });
-  const hostId = hostChoice.kind === "chosen" ? hostChoice.hostId : null;
+  const pending = pendingOf(data);
+  const hostId = completionHostId(pending, completingHostIds, hostChoice);
   const namedClient = useHostClientForHostId(hostId);
   const createClient = hostId === null ? null : namedClient;
   const complete = useBotOnboardingCompleteMutation(createClient);
@@ -233,10 +245,11 @@ function OnboardingSteps(props: {
       <BotsStep
         catalog={data.catalog}
         chosen={chosen}
+        pendingAreas={pending.map((entry) => entry.area)}
         disabled={complete.isPending}
         onToggle={toggle}
       />
-      {data.unlocked && hostChoice.kind !== "chosen" ? (
+      {data.unlocked && pending.length === 0 && hostChoice.kind !== "chosen" ? (
         <CreateBotNoHost
           checking={hostChoice.kind === "checking"}
           environmentLabel={teamName}
@@ -286,6 +299,33 @@ function OnboardingSteps(props: {
   );
 }
 
+/** The chosen areas whose bot another host has not finished yet. */
+function pendingOf(
+  data: BotOnboardingReadResponse,
+): BotOnboardingChoice["pending"] {
+  return data.choice?.pending ?? [];
+}
+
+/**
+ * Where "Open your channels" sends the completion. While an area is pending,
+ * only its own host can finish it: there, when this client reaches it, or
+ * nowhere until it does. Otherwise the host the app picks for the bots.
+ */
+function completionHostId(
+  pending: BotOnboardingChoice["pending"],
+  completingHostIds: ReadonlySet<string>,
+  hostChoice: BotCreateHostChoice,
+): string | null {
+  if (pending.length > 0) {
+    return (
+      pending
+        .map((entry) => entry.hostId)
+        .find((id) => id !== null && completingHostIds.has(id)) ?? null
+    );
+  }
+  return hostChoice.kind === "chosen" ? hostChoice.hostId : null;
+}
+
 function StepTrail(props: { readonly unlocked: boolean }): ReactNode {
   const { unlocked } = props;
   return (
@@ -304,10 +344,11 @@ function StepTrail(props: { readonly unlocked: boolean }): ReactNode {
 function BotsStep(props: {
   readonly catalog: ReadonlyArray<BotOnboardingArea>;
   readonly chosen: ReadonlyArray<string>;
+  readonly pendingAreas: ReadonlyArray<string>;
   readonly disabled: boolean;
   readonly onToggle: (area: string, checked: boolean) => void;
 }): ReactNode {
-  const { catalog, chosen, disabled, onToggle } = props;
+  const { catalog, chosen, pendingAreas, disabled, onToggle } = props;
   const ticked = catalog.filter((entry) => entry.tickedByDefault);
   const more = catalog.filter((entry) => !entry.tickedByDefault);
   return (
@@ -323,6 +364,7 @@ function BotsStep(props: {
       <AreaList
         areas={ticked}
         chosen={chosen}
+        pendingAreas={pendingAreas}
         disabled={disabled}
         onToggle={onToggle}
       />
@@ -332,6 +374,7 @@ function BotsStep(props: {
           <AreaList
             areas={more}
             chosen={chosen}
+            pendingAreas={pendingAreas}
             disabled={disabled}
             onToggle={onToggle}
           />
@@ -422,6 +465,7 @@ function GithubStep(props: {
 function AreaList(props: {
   readonly areas: ReadonlyArray<BotOnboardingArea>;
   readonly chosen: ReadonlyArray<string>;
+  readonly pendingAreas: ReadonlyArray<string>;
   readonly disabled: boolean;
   readonly onToggle: (area: string, checked: boolean) => void;
 }): ReactNode {
@@ -432,6 +476,7 @@ function AreaList(props: {
           <AreaRow
             entry={entry}
             checked={props.chosen.includes(entry.area)}
+            pending={props.pendingAreas.includes(entry.area)}
             disabled={props.disabled}
             onToggle={props.onToggle}
           />
@@ -444,10 +489,12 @@ function AreaList(props: {
 function AreaRow(props: {
   readonly entry: BotOnboardingArea;
   readonly checked: boolean;
+  /** Its bot exists on a host that has not finished setting it up. */
+  readonly pending: boolean;
   readonly disabled: boolean;
   readonly onToggle: (area: string, checked: boolean) => void;
 }): ReactNode {
-  const { entry, checked, disabled, onToggle } = props;
+  const { entry, checked, pending, disabled, onToggle } = props;
   const id = useId();
   return (
     <label
@@ -463,7 +510,14 @@ function AreaRow(props: {
         onCheckedChange={(value) => onToggle(entry.area, value === true)}
       />
       <span className="flex min-w-0 flex-col gap-0.5">
-        <span className="font-medium text-foreground">{entry.title}</span>
+        <span className="flex min-w-0 items-center gap-1.5">
+          <span className="font-medium text-foreground">{entry.title}</span>
+          {pending ? (
+            <Badge variant="secondary" data-testid="bot-onboarding-pending">
+              Still being set up
+            </Badge>
+          ) : null}
+        </span>
         <span className="text-muted-foreground">{entry.description}</span>
         {entry.when === null ? null : (
           <span className="text-muted-foreground">{entry.when}</span>
