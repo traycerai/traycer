@@ -108,7 +108,7 @@ function stageSend(input: {
 }): void {
   hoisted.callHostRpc.mockImplementation(
     routeRpc({
-      "bot.list": () => ({ bots: input.bots }),
+      "bot.list": () => ({ bots: input.bots, mainBotIds: null }),
       "bot.conversation.list": () => ({ conversations: input.conversations }),
       "bot.conversation.send": () => ({
         messageId: "msg-sent",
@@ -421,7 +421,7 @@ describe("bot send on a host without bots", () => {
         routeRpc({
           "bot.list": () => {
             if (missing === "bot.list") throw unsupportedRpcError(missing);
-            return { bots: [botRecord({ botId: BOT_ID_A })] };
+            return { bots: [botRecord({ botId: BOT_ID_A })], mainBotIds: null };
           },
           "bot.conversation.list": () => {
             if (missing === "bot.conversation.list") {

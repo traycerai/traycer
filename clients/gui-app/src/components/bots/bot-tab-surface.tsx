@@ -35,6 +35,8 @@ import { useBotTabsStore } from "@/stores/bots/bot-tabs-store";
 import { BotConversationView } from "@/components/bots/bot-conversation-view";
 import { BotUnderTheHoodPanel } from "@/components/bots/bot-under-the-hood-panel";
 import { BotSettingsPanel } from "@/components/bots/bot-settings-panel";
+import { MainBotBadge } from "@/components/bots/main-bot-badge";
+import { isMainBot, type MainBotIds } from "@/lib/bots/bot-main";
 import {
   botPausedCopy,
   botTabMoveTarget,
@@ -260,6 +262,7 @@ function BotTabBody(props: {
       onRetry={resubscribe}
       view={view}
       onViewChange={setView}
+      mainBotIds={botList.data?.mainBotIds}
     />
   );
 }
@@ -277,6 +280,8 @@ function BotTabContent(props: {
   readonly onRetry: () => void;
   readonly view: BotTabView;
   readonly onViewChange: (view: BotTabView) => void;
+  /** `bot.list`'s main bots; `undefined` until the list answers. */
+  readonly mainBotIds: MainBotIds | undefined;
 }): ReactNode {
   const {
     botId,
@@ -289,8 +294,10 @@ function BotTabContent(props: {
     onRetry,
     view,
     onViewChange,
+    mainBotIds,
   } = props;
   const client = useTabHostClient();
+  const isMain = isMainBot(mainBotIds, snapshot.bot);
   const environments = useEnvironmentListQuery(client, true);
   const environmentLabel = useMemo(() => {
     const match = environments.data?.environments.find(
@@ -311,7 +318,11 @@ function BotTabContent(props: {
 
   return (
     <div className="flex h-full min-h-0 flex-col" data-testid="bot-tab">
-      <BotTabHeader snapshot={snapshot} environmentLabel={environmentLabel} />
+      <BotTabHeader
+        snapshot={snapshot}
+        environmentLabel={environmentLabel}
+        isMain={isMain === true}
+      />
       {streamError === null ? null : (
         // A fatal close AFTER a snapshot: the last reading stays on screen,
         // marked as such, and the retry sits on top of it.
@@ -386,7 +397,7 @@ function BotTabContent(props: {
           />
         </TabsContent>
         <TabsContent value="settings" className="flex min-h-0 flex-1 flex-col">
-          <BotSettingsPanel bot={snapshot.bot} />
+          <BotSettingsPanel bot={snapshot.bot} isMain={isMain} />
         </TabsContent>
       </Tabs>
     </div>
@@ -418,8 +429,9 @@ function ErrorNotice(props: {
 function BotTabHeader(props: {
   readonly snapshot: BotSubscriptionSnapshot;
   readonly environmentLabel: string;
+  readonly isMain: boolean;
 }): ReactNode {
-  const { snapshot, environmentLabel } = props;
+  const { snapshot, environmentLabel, isMain } = props;
   const openRequests = snapshot.openRequestCount;
   return (
     <header className="flex flex-wrap items-center gap-3 px-4 pt-4 pb-3">
@@ -427,12 +439,15 @@ function BotTabHeader(props: {
         <Bot className="size-4.5" aria-hidden="true" />
       </span>
       <div className="flex min-w-0 flex-1 flex-col">
-        <h1
-          className="truncate text-ui-md font-semibold text-foreground"
-          data-testid="bot-tab-title"
-        >
-          {snapshot.bot.title}
-        </h1>
+        <div className="flex min-w-0 items-center gap-2">
+          <h1
+            className="truncate text-ui-md font-semibold text-foreground"
+            data-testid="bot-tab-title"
+          >
+            {snapshot.bot.title}
+          </h1>
+          {isMain ? <MainBotBadge testId="bot-tab-main" /> : null}
+        </div>
         <p className="truncate text-ui-xs text-muted-foreground">
           {environmentLabel}
         </p>

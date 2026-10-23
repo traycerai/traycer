@@ -37,7 +37,9 @@ const mocks = vi.hoisted(() => {
         refetch: environmentRefetch,
       },
       bots: {
-        data: undefined as { bots: BotRecord[] } | undefined,
+        data: undefined as
+          | { bots: BotRecord[]; mainBotIds: Record<string, string> | null }
+          | undefined,
         isError: false,
         refetch: botRefetch,
       },
@@ -52,6 +54,7 @@ const mocks = vi.hoisted(() => {
     },
     groupProps: [] as Array<{
       environmentId: string;
+      mainBotId: string | null;
       directoryHostIds: ReadonlySet<string>;
       connectableHostIds: ReadonlySet<string>;
       connectableResolved: boolean;
@@ -125,7 +128,12 @@ vi.mock("@/hooks/bots/use-environment-host-lists-query", () => ({
 }));
 vi.mock("@/components/home/bots/home-bots-group", () => ({
   HomeBotsGroupCard: (props: {
-    group: { environmentId: string; label: string; bots: unknown[] };
+    group: {
+      environmentId: string;
+      label: string;
+      bots: unknown[];
+      mainBotId: string | null;
+    };
     hostReach: {
       directoryHostIds: ReadonlySet<string>;
       connectableHostIds: ReadonlySet<string>;
@@ -136,6 +144,7 @@ vi.mock("@/components/home/bots/home-bots-group", () => ({
   }) => {
     mocks.groupProps.push({
       environmentId: props.group.environmentId,
+      mainBotId: props.group.mainBotId,
       directoryHostIds: props.hostReach.directoryHostIds,
       connectableHostIds: props.hostReach.connectableHostIds,
       connectableResolved: props.hostReach.connectableResolved,
@@ -195,6 +204,7 @@ function resolveBothQueries(): void {
       bot("bot_01ARZ3NDEKTSV4RRFFQ69G5FAV", "env-team", "Release Bot"),
       bot("bot_01ARZ3NDEKTSV4RRFFQ69G5FAW", "env-personal", "Triage Bot"),
     ],
+    mainBotIds: null,
   };
 }
 
@@ -315,6 +325,30 @@ describe("HomeBotsSection capability gate", () => {
   });
 });
 
+describe("HomeBotsSection main bots", () => {
+  it("hands each group the main bot bot.list names for its environment", () => {
+    resolveBothQueries();
+    mocks.state.bots.data = {
+      bots: mocks.state.bots.data?.bots ?? [],
+      mainBotIds: { "env-team": "bot_01ARZ3NDEKTSV4RRFFQ69G5FAV" },
+    };
+    mountSection();
+
+    expect(latestGroupProps("env-personal").mainBotId).toBeNull();
+    expect(latestGroupProps("env-team").mainBotId).toBe(
+      "bot_01ARZ3NDEKTSV4RRFFQ69G5FAV",
+    );
+  });
+
+  it("names no main bot when the host predates the field", () => {
+    resolveBothQueries();
+    mountSection();
+
+    expect(latestGroupProps("env-personal").mainBotId).toBeNull();
+    expect(latestGroupProps("env-team").mainBotId).toBeNull();
+  });
+});
+
 describe("HomeBotsSection live list", () => {
   it("keeps bot.list current through the change stream on a supported host", () => {
     mountSection();
@@ -363,6 +397,7 @@ describe("HomeBotsSection supported states", () => {
     mocks.state.environments.data = { environments: [PERSONAL, TEAM] };
     mocks.state.bots.data = {
       bots: [bot("bot_01ARZ3NDEKTSV4RRFFQ69G5FAV", "env-team", "Release Bot")],
+      mainBotIds: null,
     };
     mountSection();
 

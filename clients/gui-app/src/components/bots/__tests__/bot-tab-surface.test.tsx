@@ -55,6 +55,7 @@ const mocks = vi.hoisted(() => ({
     paneVisible: true,
     connectable: { hostIds: [] as string[], resolved: true },
     listedBotIds: undefined as string[] | undefined,
+    mainBotIds: null as Record<string, string> | null,
     support: null as boolean | null,
     membersSupport: null as boolean | null,
     openResult: null as OpenResult | null,
@@ -124,7 +125,10 @@ vi.mock("@/hooks/bots/use-bot-list-query", () => ({
     data:
       mocks.state.listedBotIds === undefined
         ? undefined
-        : { bots: mocks.state.listedBotIds.map((botId) => ({ botId })) },
+        : {
+            bots: mocks.state.listedBotIds.map((botId) => ({ botId })),
+            mainBotIds: mocks.state.mainBotIds,
+          },
   }),
 }));
 vi.mock("@/hooks/bots/use-bot-list-changed-subscription", () => ({
@@ -169,13 +173,15 @@ vi.mock("@/components/bots/bot-under-the-hood-panel", () => ({
     <div data-testid="stub-under-the-hood" data-paused={String(props.paused)} />
   ),
 }));
-// The panel takes the bot and nothing else: no prop says which host serves the
-// tab, so no control can be gated on it. The stub lists the props it was given.
+// The panel takes the bot and whether it is main, and nothing else: no prop
+// says which host serves the tab, so no control can be gated on it. The stub
+// lists the props it was given.
 vi.mock("@/components/bots/bot-settings-panel", () => ({
-  BotSettingsPanel: (props: object) => (
+  BotSettingsPanel: (props: { isMain: boolean | null }) => (
     <div
       data-testid="stub-settings"
       data-prop-names={Object.keys(props).join(",")}
+      data-is-main={String(props.isMain)}
     />
   ),
 }));
@@ -250,6 +256,7 @@ beforeEach(() => {
   mocks.state.paneVisible = true;
   mocks.state.connectable = { hostIds: [TAB_HOST, BOUND_HOST], resolved: true };
   mocks.state.listedBotIds = undefined;
+  mocks.state.mainBotIds = null;
   mocks.state.support = true;
   mocks.state.openResult = answer({ kind: "serve-here", claimed: null });
   useBotTabsStore.setState({ tabs: {} });
@@ -512,7 +519,7 @@ describe("<BotTabSurface /> paused", () => {
     ).toBe("true");
   });
 
-  it("keeps Settings ungated: the panel is given the bot and no editing flag", async () => {
+  it("keeps Settings ungated: the panel is given the bot and whether it is main, and no editing flag", async () => {
     const user = userEvent.setup();
     mocks.state.openResult = answer({
       kind: "paused",
@@ -523,7 +530,7 @@ describe("<BotTabSurface /> paused", () => {
     await user.click(screen.getByTestId("bot-tab-view-settings"));
     expect(
       screen.getByTestId("stub-settings").getAttribute("data-prop-names"),
-    ).toBe("bot");
+    ).toBe("bot,isMain");
   });
 
   it("asks again on Retry and drops the banner when the answer changes", async () => {
@@ -641,6 +648,53 @@ describe("<BotTabSurface /> re-subscribe on return", () => {
     expect(mocks.open.mock.calls.length).toBe(callsAfterMount);
     expect(mocks.resubscribe).not.toHaveBeenCalled();
   });
+});
+
+describe("<BotTabSurface /> main bot", () => {
+  it("marks the header of the bot bot.list names as its environment's main bot", () => {
+    mocks.state.listedBotIds = [BOT_ID, OTHER_BOT_ID];
+    mocks.state.mainBotIds = { "env-team": BOT_ID };
+    render(surface());
+
+    expect(screen.getByTestId("bot-tab-main").textContent).toBe("Main");
+  });
+
+  it.each([
+    ["another bot is main", { "env-team": OTHER_BOT_ID }],
+    ["this bot is main only in another environment", { "env-other": BOT_ID }],
+    ["the host predates the field", null],
+  ])("leaves the header unmarked when %s", (_name, mainBotIds) => {
+    mocks.state.listedBotIds = [BOT_ID, OTHER_BOT_ID];
+    mocks.state.mainBotIds = mainBotIds;
+    render(surface());
+
+    expect(screen.queryByTestId("bot-tab-main")).toBeNull();
+  });
+
+  it("leaves the header unmarked until bot.list has answered", () => {
+    render(surface());
+
+    expect(screen.queryByTestId("bot-tab-main")).toBeNull();
+  });
+
+  it.each([
+    ["is main", { "env-team": BOT_ID }, "true"],
+    ["is not main", { "env-team": OTHER_BOT_ID }, "false"],
+    ["is not known", null, "null"],
+  ])(
+    "tells the settings panel whether the bot is main: %s",
+    async (_name, mainBotIds, expected) => {
+      const user = userEvent.setup();
+      mocks.state.listedBotIds = [BOT_ID, OTHER_BOT_ID];
+      mocks.state.mainBotIds = mainBotIds;
+      render(surface());
+
+      await user.click(screen.getByTestId("bot-tab-view-settings"));
+      expect(
+        screen.getByTestId("stub-settings").getAttribute("data-is-main"),
+      ).toBe(expected);
+    },
+  );
 });
 
 describe("<BotTabSurface /> tab lifetime", () => {

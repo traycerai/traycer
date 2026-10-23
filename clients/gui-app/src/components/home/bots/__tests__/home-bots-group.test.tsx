@@ -89,7 +89,10 @@ function bot(botId: string, createdByUserId: string | null): BotRecord {
   };
 }
 
-function group(ownerKind: HomeBotsGroup["ownerKind"]): HomeBotsGroup {
+function group(
+  ownerKind: HomeBotsGroup["ownerKind"],
+  mainBotId: string | null,
+): HomeBotsGroup {
   return {
     environmentId: "env-1",
     label: ownerKind === "organization" ? "acme" : "Personal",
@@ -100,14 +103,18 @@ function group(ownerKind: HomeBotsGroup["ownerKind"]): HomeBotsGroup {
       bot("bot-teammate", "user-teammate"),
       bot("bot-stranger", "user-stranger"),
     ],
+    mainBotId,
   };
 }
 
-function mountCard(ownerKind: HomeBotsGroup["ownerKind"]): void {
+function mountCard(
+  ownerKind: HomeBotsGroup["ownerKind"],
+  mainBotId: string | null,
+): void {
   render(
     <StrictMode>
       <HomeBotsGroupCard
-        group={group(ownerKind)}
+        group={group(ownerKind, mainBotId)}
         hostReach={{
           directoryHostIds: new Set(),
           connectableHostIds: new Set(),
@@ -163,7 +170,7 @@ afterEach(() => {
 
 describe("<HomeBotsGroupCard /> attribution", () => {
   it("names who made each team bot from the team's directory, asked of the band's host", () => {
-    mountCard("organization");
+    mountCard("organization", null);
 
     expect(mocks.supportQueries).toContainEqual({
       hostId: HOST,
@@ -181,7 +188,7 @@ describe("<HomeBotsGroupCard /> attribution", () => {
   });
 
   it("asks no directory and says nothing for a personal environment's bots", () => {
-    mountCard("user");
+    mountCard("user", null);
 
     expect(mocks.memberQueries.every((query) => !query.enabled)).toBe(true);
     expect(
@@ -196,7 +203,7 @@ describe("<HomeBotsGroupCard /> attribution", () => {
 
   it("keeps the viewer's own line but names no teammate on a host without environment.members", () => {
     mocks.supported = false;
-    mountCard("organization");
+    mountCard("organization", null);
 
     expect(mocks.memberQueries.every((query) => !query.enabled)).toBe(true);
     expect(createdBy()).toEqual({
@@ -204,5 +211,27 @@ describe("<HomeBotsGroupCard /> attribution", () => {
       "bot-teammate": "none",
       "bot-stranger": "none",
     });
+  });
+});
+
+describe("<HomeBotsGroupCard /> main bot", () => {
+  function mainBadgeOwners(): ReadonlyArray<string> {
+    return BOT_IDS.filter((botId) => {
+      const row = screen.getByRole("button", { name: new RegExp(`^${botId}`) });
+      return within(row).queryByTestId("home-bot-main") !== null;
+    });
+  }
+
+  it("marks only the main bot's row", () => {
+    mountCard("organization", "bot-teammate");
+
+    expect(mainBadgeOwners()).toEqual(["bot-teammate"]);
+    expect(screen.getAllByText("Main")).toHaveLength(1);
+  });
+
+  it("marks no row when the group names no main bot", () => {
+    mountCard("organization", null);
+
+    expect(mainBadgeOwners()).toEqual([]);
   });
 });

@@ -1,7 +1,8 @@
 /**
  * Write keys for the Personal settings the host forwards to the person's
  * environment (`environment.*`): agent definitions and machine setup, plus the
- * Tracy Bots host binding (`environment.host.bind`).
+ * Tracy Bots host binding (`environment.host.bind`) and main bot
+ * (`environment.setMainBot`).
  */
 export const environmentMutationKeys = {
   agentDefinitionsPut: () => ["environment.agentDefinitions.put"] as const,
@@ -14,4 +15,5 @@ export const environmentMutationKeys = {
   localOverrideClear: () => ["config.env.localOverride.clear"] as const,
   remoteAccessSet: () => ["host.remoteAccess.set"] as const,
   hostBind: () => ["environment.host.bind"] as const,
+  setMainBot: () => ["environment.setMainBot"] as const,
 };

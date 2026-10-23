@@ -1003,6 +1003,36 @@ export type ChatQueuedTaskOverdueItem = z.infer<
   typeof chatQueuedTaskOverdueItemSchema
 >;
 
+/**
+ * The ask that the environment's main bot curate its shared memory
+ * (Tracy Bots, `chat.subscribe@1.35`): the memory tag every bot of the
+ * environment reads has passed its ceiling. Queued on the main bot's TRUNK
+ * chat, by the host that runs it, and CONTENT-FREE like the task-checkin and
+ * task-overdue items: the usage is read from the environment room at
+ * dispatch, one item per trunk at a time. `description` is the chip's label
+ * and nothing more.
+ *
+ * Same narrowed status enum and `delivery` / `targetTurnId` pair as the other
+ * host-authored arms. A peer below `1.35` is never sent one: the host's
+ * per-minor frame projection OMITS it, from the queue and from the queue
+ * events alike, as it omits the task-overdue item below `1.27`.
+ */
+export const chatQueuedMemoryCurationItemSchema = lazySchema(() =>
+  z.object({
+    kind: z.literal("memory-curation"),
+    queueItemId: z.string(),
+    description: z.string(),
+    delivery: chatQueueItemDeliverySchema.default("next_turn"),
+    targetTurnId: z.string().nullable().default(null),
+    status: z.enum(["pending", "steering", "paused"]).default("pending"),
+    createdAt: z.number(),
+    updatedAt: z.number(),
+  }),
+);
+export type ChatQueuedMemoryCurationItem = z.infer<
+  typeof chatQueuedMemoryCurationItemSchema
+>;
+
 // A plain `z.union` with the REQUIRED-`kind` arms FIRST - deliberately not
 // a `z.discriminatedUnion`, which rejects a payload missing the discriminant
 // even when the literal is defaulted (verified against this repo's zod). Legacy
@@ -1131,6 +1161,7 @@ export const chatQueuedItemSchema = lazySchema(() =>
     chatQueuedConversationMessageItemSchema,
     chatQueuedTaskCheckinItemSchema,
     chatQueuedTaskOverdueItemSchema,
+    chatQueuedMemoryCurationItemSchema,
     chatQueuedPromptItemSchema,
   ]),
 );
@@ -1154,6 +1185,7 @@ export const openChatQueuedItemSchema = lazySchema(() =>
     chatQueuedConversationMessageItemSchema,
     chatQueuedTaskCheckinItemSchema,
     chatQueuedTaskOverdueItemSchema,
+    chatQueuedMemoryCurationItemSchema,
     openChatQueuedPromptItemSchema,
   ]),
 );
@@ -1161,6 +1193,29 @@ export const openChatQueuedItemSchema = lazySchema(() =>
 export const openChatQueueStateSchema = lazySchema(() =>
   chatQueueStateSchema.extend({
     items: z.array(openChatQueuedItemSchema),
+  }),
+);
+
+// Wire-freeze of the open queue as `chat.subscribe@1.32` through `@1.34` ship
+// it: the six arms that existed before `1.35` added the memory-curation item,
+// over the live prompt item with its sender reopened. Its own union, NOT
+// derived from the live open one, so a later arm cannot reach those lines
+// through it. Bound to their snapshot and `queueChanged` frames.
+const openChatQueuedItemSchemaPreMemoryCuration = lazySchema(() =>
+  z.union([
+    chatQueuedManagedCommandItemSchema,
+    chatQueuedPortForwardItemSchema,
+    chatQueuedConversationMessageItemSchema,
+    chatQueuedTaskCheckinItemSchema,
+    chatQueuedTaskOverdueItemSchema,
+    openChatQueuedPromptItemSchema,
+  ]),
+);
+const openChatQueueStateSchemaPreMemoryCuration = lazySchema(() =>
+  z.object({
+    status: z.enum(["idle", "running", "paused"]),
+    items: z.array(openChatQueuedItemSchemaPreMemoryCuration),
+    pausedReason: z.string().nullable().optional(),
   }),
 );
 
@@ -3611,10 +3666,12 @@ const chatSubscribeCommonServerFrameSchemas =
       ...draftImageAckCauseFields,
     },
   });
+// The open-harness common frames as `chat.subscribe@1.32` and `@1.33` ship
+// them: the queue frozen at its six pre-memory-curation arms.
 const chatSubscribeCommonServerFrameSchemasOpenHarness =
   buildChatSubscribeCommonServerFrameSchemas({
     message: openUserMessageSchema,
-    queue: openChatQueueStateSchema,
+    queue: openChatQueueStateSchemaPreMemoryCuration,
     event: openChatEventSchema,
     action: chatActionSchema,
     approval: chatApprovalStateSchema,
@@ -3628,7 +3685,29 @@ const chatSubscribeCommonServerFrameSchemasOpenHarness =
     },
   });
 
+// The common frames as `chat.subscribe@1.34` ships them: `queueChanged`
+// carries `sendWouldQueue`, over the queue frozen at its six
+// pre-memory-curation arms.
 const chatSubscribeCommonServerFrameSchemasOpenHarnessV134 =
+  buildChatSubscribeCommonServerFrameSchemas({
+    message: openUserMessageSchema,
+    queue: openChatQueueStateSchemaPreMemoryCuration,
+    event: openChatEventSchema,
+    action: chatActionSchema,
+    approval: chatApprovalStateSchema,
+    fileEditApproval: chatFileEditApprovalStateSchema,
+    interviewAnswered: interviewAnsweredServerFrameSchema,
+    interviewErrored: interviewErroredServerFrameSchema,
+    extraQueueChangedFields: { sendWouldQueue: z.boolean().optional() },
+    extraActionAckFields: {
+      ...fallbackGraceHoldLeaseFields,
+      ...draftImageAckCauseFields,
+    },
+  });
+
+// The live common frames (`chat.subscribe@1.35`): `1.34`'s over the live
+// open queue, which may carry a memory-curation item.
+const chatSubscribeCommonServerFrameSchemasOpenHarnessV135 =
   buildChatSubscribeCommonServerFrameSchemas({
     message: openUserMessageSchema,
     queue: openChatQueueStateSchema,
@@ -3913,11 +3992,19 @@ const chatSubscribeSharedServerFrameSchemasOpenHarness = [
   blockDeltaServerFrameSchema(openRuntimeEventSchema),
 ];
 
-// The live shared frames (`chat.subscribe@1.34`): the live open-harness common
-// set over the same `blockDelta`.
+// The shared frames `chat.subscribe@1.34` ships: its common set over the same
+// `blockDelta`.
 const chatSubscribeSharedServerFrameSchemasOpenHarnessV134 = [
   messageDeliveryChangedServerFrameSchema,
   ...chatSubscribeCommonServerFrameSchemasOpenHarnessV134,
+  blockDeltaServerFrameSchema(openRuntimeEventSchema),
+];
+
+// The live shared frames (`chat.subscribe@1.35`): the live open-harness common
+// set over the same `blockDelta`.
+const chatSubscribeSharedServerFrameSchemasOpenHarnessV135 = [
+  messageDeliveryChangedServerFrameSchema,
+  ...chatSubscribeCommonServerFrameSchemasOpenHarnessV135,
   blockDeltaServerFrameSchema(openRuntimeEventSchema),
 ];
 
@@ -6152,17 +6239,38 @@ const chatSubscribeWindowedSnapshotServerFrameSchema = lazySchema(() =>
   }),
 );
 
+// The snapshot as `chat.subscribe@1.32` and `@1.33` ship it: no
+// `sendWouldQueue` (`1.34`) and the queue frozen at its six
+// pre-memory-curation arms (`1.35`). Older lines extend it with their own
+// queue and tail.
 const chatSubscribeWindowedSnapshotServerFrameSchemaOpenHarness = lazySchema(
   () =>
     z.object({
       kind: z.literal("snapshot"),
       ...textFrameFields,
       ...chatReferenceFields,
-      snapshot: openChatWindowedSnapshotSchema.omit({ sendWouldQueue: true }),
+      snapshot: openChatWindowedSnapshotSchema
+        .omit({ sendWouldQueue: true })
+        .extend({ queue: openChatQueueStateSchemaPreMemoryCuration }),
     }),
 );
 
+// The snapshot as `chat.subscribe@1.34` ships it: the queue frozen at its six
+// pre-memory-curation arms.
 const chatSubscribeWindowedSnapshotServerFrameSchemaOpenHarnessV134 =
+  lazySchema(() =>
+    z.object({
+      kind: z.literal("snapshot"),
+      ...textFrameFields,
+      ...chatReferenceFields,
+      snapshot: openChatWindowedSnapshotSchema.extend({
+        queue: openChatQueueStateSchemaPreMemoryCuration,
+      }),
+    }),
+  );
+
+// The live snapshot (`chat.subscribe@1.35`).
+const chatSubscribeWindowedSnapshotServerFrameSchemaOpenHarnessV135 =
   lazySchema(() =>
     z.object({
       kind: z.literal("snapshot"),
@@ -6913,16 +7021,8 @@ const chatSubscribeServerFrameSchemaV133 = lazySchema(() =>
     ...chatSubscribeSharedServerFrameSchemasOpenHarness,
   ]),
 );
-/**
- * The live windowed union as a READER decodes it (`chat.subscribe@1.34`): the
- * union above with the snapshot, the `range` response, the three
- * sender-bearing common frames and the `blockDelta` bound to their
- * open-harness copies. The frames a peer DRIVES through - `turnStateChanged`
- * (the active turn, the fallback tuples) and the snapshot's record head - keep
- * the closed enum; see `open-harness-wire.ts`. Every frame the writer builds
- * is assignable to this type; the client parses with this schema.
- */
-export const openChatSubscribeWindowedServerFrameSchema = lazySchema(() =>
+/** Frozen 1.34: the queue carries no memory-curation item (`1.35`). */
+const chatSubscribeServerFrameSchemaV134 = lazySchema(() =>
   z.discriminatedUnion("kind", [
     chatSubscribeWindowedSnapshotServerFrameSchemaOpenHarnessV134,
     chatSubscribeSkeletonChunkServerFrameSchemaV119,
@@ -6935,6 +7035,31 @@ export const openChatSubscribeWindowedServerFrameSchema = lazySchema(() =>
     chatSubscribeHeldUpdatesChangedServerFrameSchema,
     chatSubscribeThinkingTokensServerFrameSchema,
     ...chatSubscribeSharedServerFrameSchemasOpenHarnessV134,
+  ]),
+);
+
+/**
+ * The live windowed union as a READER decodes it (`chat.subscribe@1.35`): the
+ * union above with the snapshot, the `range` response, the three
+ * sender-bearing common frames and the `blockDelta` bound to their
+ * open-harness copies. The frames a peer DRIVES through - `turnStateChanged`
+ * (the active turn, the fallback tuples) and the snapshot's record head - keep
+ * the closed enum; see `open-harness-wire.ts`. Every frame the writer builds
+ * is assignable to this type; the client parses with this schema.
+ */
+export const openChatSubscribeWindowedServerFrameSchema = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    chatSubscribeWindowedSnapshotServerFrameSchemaOpenHarnessV135,
+    chatSubscribeSkeletonChunkServerFrameSchemaV119,
+    chatSubscribeAccumulatedChangesServerFrameSchema,
+    chatSubscribeIndexChangedServerFrameSchema,
+    chatSubscribeRangeServerFrameSchemaOpenHarness,
+    chatSubscribeTurnStateChangedServerFrameSchemaV134,
+    chatSubscribeManagedCommandsChangedServerFrameSchema,
+    chatSubscribePortForwardsChangedServerFrameSchema,
+    chatSubscribeHeldUpdatesChangedServerFrameSchema,
+    chatSubscribeThinkingTokensServerFrameSchema,
+    ...chatSubscribeSharedServerFrameSchemasOpenHarnessV135,
   ]),
 );
 export type OpenChatSubscribeWindowedServerFrame = z.infer<
@@ -7987,6 +8112,32 @@ export const chatSubscribeV133 = defineStreamRpcContract({
 export const chatSubscribeV134 = defineStreamRpcContract({
   method: "chat.subscribe",
   schemaVersion: { major: 1, minor: 34 } as const,
+  openRequestSchema: chatSubscribeOpenRequestSchemaV119,
+  serverFrameSchema: chatSubscribeServerFrameSchemaV134,
+  clientFrameSchema: chatSubscribeWindowedClientFrameSchema,
+});
+
+/**
+ * The memory-curation line (Tracy Bots T44b).
+ *
+ * `1.35` adds one union member and no key, frame or enum value: the
+ * `memory-curation` queue item (`chatQueuedMemoryCurationItemSchema`), the
+ * ask that the environment's main bot curate the shared memory tag that
+ * passed its ceiling, waiting on the main bot's TRUNK chat's queue. The host
+ * reads the usage from the environment room at dispatch, so the item carries
+ * no content.
+ *
+ * PROJECTION, like `1.27`'s task-overdue item: `1.32` through `1.34` bind the
+ * hand-frozen six-arm open queue (`openChatQueueStateSchemaPreMemoryCuration`),
+ * every older line its own freeze, and the host OMITS the item - from the
+ * queue and from the queue events alike - for every peer below `1.35`, since
+ * there is no sibling shape to degrade it into.
+ *
+ * The open request and the client frames are `1.34`'s, unchanged.
+ */
+export const chatSubscribeV135 = defineStreamRpcContract({
+  method: "chat.subscribe",
+  schemaVersion: { major: 1, minor: 35 } as const,
   openRequestSchema: chatSubscribeOpenRequestSchemaV119,
   serverFrameSchema: openChatSubscribeWindowedServerFrameSchema,
   clientFrameSchema: chatSubscribeWindowedClientFrameSchema,

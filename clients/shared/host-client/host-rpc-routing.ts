@@ -418,6 +418,7 @@ export const HOST_UNARY_RPC_ROUTES = {
   "environment.secrets.undo": "target-host",
   "environment.secrets.verify": "target-host",
   "environment.secrets.versions": "target-host",
+  "environment.setMainBot": "target-host",
   "environment.setup.attempts": "target-host",
   "environment.setup.get": "target-host",
   "environment.setup.put": "target-host",
