@@ -22,6 +22,7 @@ import type {
   SandboxCreateFetchResult,
   SandboxAutomationOpenTarget,
   SandboxCreateRequest,
+  SandboxPatchRequest,
   EnvironmentProvidersFetchResult,
   SandboxGrantsFetchResult,
   TeamEnvironmentFetchResult,
@@ -133,6 +134,15 @@ export interface AuthBridgeSurface {
     request: SandboxCreateRequest,
   ): Promise<SandboxCreateFetchResult>;
   destroySandbox(
+    bearerToken: string,
+    sandboxId: string,
+  ): Promise<SandboxVerbFetchResult>;
+  patchSandbox(
+    bearerToken: string,
+    sandboxId: string,
+    request: SandboxPatchRequest,
+  ): Promise<SandboxVerbFetchResult>;
+  keepSandbox(
     bearerToken: string,
     sandboxId: string,
   ): Promise<SandboxVerbFetchResult>;
@@ -278,6 +288,21 @@ export function buildAuthBridge(): AuthBridgeSurface {
     destroySandbox: (bearerToken, sandboxId) =>
       ipcRenderer.invoke(
         RunnerHostInvoke.destroySandbox,
+        bearerToken,
+        sandboxId,
+      ) as Promise<SandboxVerbFetchResult>,
+
+    patchSandbox: (bearerToken, sandboxId, request) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.patchSandbox,
+        bearerToken,
+        sandboxId,
+        request,
+      ) as Promise<SandboxVerbFetchResult>,
+
+    keepSandbox: (bearerToken, sandboxId) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.keepSandbox,
         bearerToken,
         sandboxId,
       ) as Promise<SandboxVerbFetchResult>,

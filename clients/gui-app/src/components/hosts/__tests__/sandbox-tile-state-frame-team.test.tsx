@@ -30,7 +30,6 @@ import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtu
 import { ChatServingWitnessContext } from "@/lib/chats/chat-serving-witness";
 import { PoolChatServingWitness } from "@/lib/chats/pool-chat-serving-witness";
 import { useAuthStore } from "@/stores/auth/auth-store";
-import { useTeamWakeConfirmStore } from "@/stores/hosts/team-wake-confirm-store";
 
 const HOST_ID = "host-sbx-1";
 const VIEWER = "user-viewer";
@@ -81,7 +80,6 @@ vi.mock("@/lib/host/fleet-refresh", () => ({ requestFleetRefresh: vi.fn() }));
 vi.mock("@/lib/auth-error-toast", () => ({ toastFromAuthError: vi.fn() }));
 
 import { SandboxTileStateFrame } from "@/components/hosts/sandbox-tile-state-frame";
-import { TeamWakeConfirmDialogHost } from "@/components/hosts/team-wake-confirm-dialog";
 
 /**
  * The tile overlay's Resume or Start on a TEAM sandbox asks before it bills
@@ -141,7 +139,6 @@ function renderFrame(): void {
       <SandboxTileStateFrame chat={null}>
         <textarea data-testid="tile-body" />
       </SandboxTileStateFrame>
-      <TeamWakeConfirmDialogHost />
     </QueryClientProvider>,
   );
 }
@@ -150,7 +147,6 @@ beforeEach(() => {
   mocks.binding = createFakeSandboxBinding();
   mocks.entry = null;
   mocks.list = null;
-  useTeamWakeConfirmStore.setState({ pending: null });
   useAuthStore.setState({
     status: "signed-in",
     contextMetadata: { userId: VIEWER, username: "viewer" },
@@ -158,75 +154,39 @@ beforeEach(() => {
 });
 afterEach(() => {
   cleanup();
-  useTeamWakeConfirmStore.setState({ pending: null });
   useAuthStore.setState({ status: "signed-out", contextMetadata: null });
 });
 
 describe("<SandboxTileStateFrame /> wake on a team sandbox", () => {
-  it("opens the confirm on Resume and calls no verb until Resume is pressed", async () => {
-    setEntry({
-      state: "suspended",
-      frozen: false,
-      owner: TEAM,
-      profile: "agent",
-      summary: {},
-    });
-    renderFrame();
+  it.each([
+    ["suspended", "resume"],
+    ["stopped", "start"],
+  ] as const)(
+    "runs the %s team sandbox's verb at once, with no confirm",
+    async (state, verb) => {
+      setEntry({
+        state,
+        frozen: false,
+        owner: TEAM,
+        profile: "agent",
+        summary: {},
+      });
+      renderFrame();
 
-    fireEvent.click(screen.getByTestId("sandbox-tile-overlay-wake"));
+      fireEvent.click(screen.getByTestId("sandbox-tile-overlay-wake"));
 
-    const dialog = await screen.findByTestId("team-wake-confirm");
-    expect(dialog.textContent).toContain(
-      "Opening this resumes it on your bundle.",
-    );
-    expect(mocks.binding?.auth.runSandboxVerb).not.toHaveBeenCalled();
-
-    fireEvent.click(screen.getByTestId("team-wake-confirm-resume"));
-    await waitFor(() => {
-      expect(mocks.binding?.auth.runSandboxVerb).toHaveBeenCalledWith(
-        "sbx_1",
-        "resume",
-        expect.any(Number),
-      );
-    });
-  });
-
-  it("calls nothing on Cancel", async () => {
-    setEntry({
-      state: "suspended",
-      frozen: false,
-      owner: TEAM,
-      profile: "agent",
-      summary: {},
-    });
-    renderFrame();
-
-    fireEvent.click(screen.getByTestId("sandbox-tile-overlay-wake"));
-    await screen.findByTestId("team-wake-confirm");
-    fireEvent.click(screen.getByTestId("team-wake-confirm-cancel"));
-
-    await waitFor(() => {
+      await waitFor(() => {
+        expect(mocks.binding?.auth.runSandboxVerb).toHaveBeenCalledWith(
+          "sbx_1",
+          verb,
+          expect.any(Number),
+        );
+      });
       expect(screen.queryByTestId("team-wake-confirm")).toBeNull();
-    });
-    expect(mocks.binding?.auth.runSandboxVerb).not.toHaveBeenCalled();
-  });
+    },
+  );
 
-  it("asks before Start of a stopped team sandbox too", async () => {
-    setEntry({
-      state: "stopped",
-      frozen: false,
-      owner: TEAM,
-      profile: "agent",
-      summary: {},
-    });
-    renderFrame();
-
-    fireEvent.click(screen.getByTestId("sandbox-tile-overlay-wake"));
-    await screen.findByTestId("team-wake-confirm");
-    expect(mocks.binding?.auth.runSandboxVerb).not.toHaveBeenCalled();
-  });
-
-  it("does not ask for a team pod: Start calls the verb at once", async () => {
+  it("runs a team pod's Start at once", async () => {
     setEntry({
       state: "released",
       frozen: false,
@@ -245,29 +205,6 @@ describe("<SandboxTileStateFrame /> wake on a team sandbox", () => {
         expect.any(Number),
       );
     });
-    expect(screen.queryByTestId("team-wake-confirm")).toBeNull();
-  });
-
-  it("does not ask for a sandbox the person owns", async () => {
-    for (const owner of [undefined, { kind: "user", id: VIEWER } as const]) {
-      setEntry({
-        state: "suspended",
-        frozen: false,
-        owner,
-        profile: "agent",
-        summary: {},
-      });
-      renderFrame();
-
-      fireEvent.click(screen.getByTestId("sandbox-tile-overlay-wake"));
-
-      await waitFor(() => {
-        expect(mocks.binding?.auth.runSandboxVerb).toHaveBeenCalledTimes(1);
-      });
-      expect(screen.queryByTestId("team-wake-confirm")).toBeNull();
-      cleanup();
-      mocks.binding = createFakeSandboxBinding();
-    }
   });
 });
 

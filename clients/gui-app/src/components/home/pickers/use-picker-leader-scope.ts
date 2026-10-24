@@ -1,4 +1,5 @@
-import { useEffect, useRef } from "react";
+import { use, useEffect, useRef } from "react";
+import { KeyboardOwnerContext } from "@/hooks/use-primary-action-shortcut";
 import type { ProviderId } from "@/components/home/data/landing-options";
 import {
   harnessAvailabilityUnsettled,
@@ -66,8 +67,10 @@ interface PickerLeaderScopeInput {
  * keypress.
  */
 export function usePickerLeaderScope(input: PickerLeaderScopeInput): void {
+  // A picker left open in a surface kept mounted while not shown holds no
+  // leader keys.
+  const open = use(KeyboardOwnerContext) && input.open;
   const {
-    open,
     railEntries,
     onEntryChange,
     reasoning,

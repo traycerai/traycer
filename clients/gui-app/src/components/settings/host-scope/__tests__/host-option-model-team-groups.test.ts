@@ -102,7 +102,7 @@ describe("groupHostOptions teams", () => {
         sandboxRow("own-2", undefined, {}),
       ],
       true,
-      false,
+      null,
       null,
     );
     expect(groups.teams).toEqual([]);
@@ -112,7 +112,7 @@ describe("groupHostOptions teams", () => {
     const groups = groupHostOptions(
       [sandboxRow("own-1", ME, {}), sandboxRow("team-a-1", TEAM_A, {})],
       true,
-      false,
+      null,
       null,
     );
     expect(ids(groups.sandboxes)).toEqual(["own-1"]);
@@ -131,7 +131,7 @@ describe("groupHostOptions teams", () => {
         sandboxRow("team-a-burst", TEAM_A, { burst: true }),
       ],
       true,
-      false,
+      null,
       null,
     );
     expect(ids(groups.agentSandboxes)).toEqual([]);
@@ -147,7 +147,7 @@ describe("groupHostOptions teams", () => {
         sandboxRow("team-a-burst", TEAM_A, { burst: true }),
       ],
       false,
-      false,
+      null,
       null,
     );
     const everywhere = [
@@ -170,26 +170,21 @@ describe("groupHostOptions teams", () => {
         sandboxRow("team-a-pod", TEAM_A, { kind: "automation" }),
       ],
       true,
-      false,
+      null,
       null,
     );
     expect(ids(groups.sandboxes)).toEqual([]);
     expect(ids(groups.teams[0].sandboxes)).toEqual(["team-a-1", "team-a-pod"]);
   });
 
-  it("lists a team's pod for a picker that offers automations, and hides it from one that does not", () => {
+  it("never lists a team's pod in a picker", () => {
     const rows = [
       sandboxRow("team-a-1", TEAM_A, {}),
       sandboxRow("team-a-pod", TEAM_A, { kind: "automation" }),
     ];
-    const offering = groupHostOptions(rows, false, true, null);
-    expect(ids(offering.teams[0].sandboxes)).toEqual([
-      "team-a-1",
-      "team-a-pod",
-    ]);
-    const plain = groupHostOptions(rows, false, false, null);
-    expect(ids(plain.teams[0].sandboxes)).toEqual(["team-a-1"]);
-    expect(ids(plain.sandboxes)).toEqual([]);
+    const picker = groupHostOptions(rows, false, null, null);
+    expect(ids(picker.teams[0].sandboxes)).toEqual(["team-a-1"]);
+    expect(ids(picker.sandboxes)).toEqual([]);
   });
 
   it("makes one group per team, ordered by team name then team id, rows in input order", () => {
@@ -203,7 +198,7 @@ describe("groupHostOptions teams", () => {
         sandboxRow("alpha-2", TEAM_A, {}),
       ],
       true,
-      false,
+      null,
       null,
     );
     expect(groups.teams.map((team) => team.teamName)).toEqual([
@@ -225,7 +220,7 @@ describe("groupHostOptions teams", () => {
         sandboxRow("early", { kind: "team", id: "team-1", name: "Same" }, {}),
       ],
       true,
-      false,
+      null,
       null,
     );
     expect(groups.teams.map((team) => team.teamId)).toEqual([
@@ -272,7 +267,7 @@ describe("groupHostOptions teams", () => {
         noItemBurst,
       ],
       true,
-      false,
+      null,
       null,
     );
     expect(groups.teams).toEqual([]);
@@ -290,7 +285,7 @@ describe("groupHostOptions teams", () => {
         sandboxRow("mine-burst", ME, { burst: true }),
       ],
       true,
-      false,
+      null,
       null,
     );
     expect(groups.teams).toEqual([]);
@@ -302,7 +297,7 @@ describe("groupHostOptions teams", () => {
     const groups = groupHostOptions(
       [personalRow("p-team", TEAM_A), personalRow("p-me", ME)],
       true,
-      false,
+      null,
       null,
     );
     expect(ids(groups.personal)).toEqual(["p-team", "p-me"]);
@@ -311,11 +306,11 @@ describe("groupHostOptions teams", () => {
 
   it("lists a team row that has not answered (summary null) on the host list, and hides it from a picker", () => {
     const rows = [sandboxRow("team-a-unconfirmed", TEAM_A, null)];
-    const hostList = groupHostOptions(rows, true, false, null);
+    const hostList = groupHostOptions(rows, true, null, null);
     expect(ids(hostList.teams[0].sandboxes)).toEqual(["team-a-unconfirmed"]);
     expect(ids(hostList.sandboxes)).toEqual([]);
 
-    const picker = groupHostOptions(rows, false, false, null);
+    const picker = groupHostOptions(rows, false, null, null);
     expect(picker.teams.flatMap((team) => ids(team.sandboxes))).toEqual([]);
     expect(picker.teams.flatMap((team) => ids(team.agentSandboxes))).toEqual(
       [],
@@ -328,13 +323,13 @@ describe("groupHostOptions teams", () => {
       sandboxRow("team-a-1", TEAM_A, {}),
       sandboxRow("team-a-burst", TEAM_A, { burst: true }),
     ];
-    const kept = groupHostOptions(rows, false, false, "team-a-burst");
+    const kept = groupHostOptions(rows, false, null, "team-a-burst");
     expect(kept.teams).toHaveLength(1);
     expect(ids(kept.teams[0].sandboxes)).toEqual(["team-a-1", "team-a-burst"]);
     expect(ids(kept.teams[0].agentSandboxes)).toEqual([]);
     expect(ids(kept.sandboxes)).toEqual([]);
 
-    const notKept = groupHostOptions(rows, false, false, "someone-else");
+    const notKept = groupHostOptions(rows, false, null, "someone-else");
     expect(ids(notKept.teams[0].sandboxes)).toEqual(["team-a-1"]);
   });
 });

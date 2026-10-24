@@ -22,6 +22,7 @@ import * as Sentry from "@sentry/electron/main";
 import { parseRetryAfterHeader } from "@sentry/core";
 import type { Layer0UnavailableCause } from "@traycer/protocol/host/lifecycle/layer0-frame";
 import type { HostFsLayout } from "../host/host-paths";
+import type { HostEnsureFailure } from "../host/host-controller-types";
 import { readHostLayer0Record } from "../host/host-state";
 import { log, resolveDesktopLogPath } from "./logger";
 import {
@@ -153,6 +154,7 @@ const SIGHTING_DEDUPE_MAX_ENTRIES = 200;
 export class DesktopSupportService {
   private readonly appName: string;
   private readonly host: SupportHostSnapshotProvider;
+  private readonly readHostEnsureFailure: () => Promise<HostEnsureFailure | null>;
   private readonly authSession: SupportAuthSessionProvider;
   private readonly hostLayout: HostFsLayout;
   private readonly frozenEvidenceByKey = new Map<string, FrozenEvidenceEntry>();
@@ -162,6 +164,7 @@ export class DesktopSupportService {
   constructor(options: {
     readonly appName: string;
     readonly host: SupportHostSnapshotProvider;
+    readonly readHostEnsureFailure: () => Promise<HostEnsureFailure | null>;
     readonly authSession: SupportAuthSessionProvider;
     // Environment-scoped layout matching the host supervisor's writes.
     // Production passes the prod layout; `make dev-desktop` passes the
@@ -170,6 +173,7 @@ export class DesktopSupportService {
   }) {
     this.appName = options.appName;
     this.host = options.host;
+    this.readHostEnsureFailure = options.readHostEnsureFailure;
     this.authSession = options.authSession;
     this.hostLayout = options.hostLayout;
   }
@@ -177,6 +181,8 @@ export class DesktopSupportService {
   async getSnapshot(): Promise<SupportSnapshot> {
     const host = this.host.getSnapshot();
     const authSession = this.authSession.get();
+    // A failed status probe must not prevent a report of that failure.
+    const ensureFailure = await this.readHostEnsureFailure().catch(() => null);
     const layer0 = await readHostLayer0Record(this.hostLayout);
     const browserLogs = await existingBrowserLogDescriptors(this.hostLayout);
     return {
@@ -200,6 +206,7 @@ export class DesktopSupportService {
         pid: host?.pid ?? null,
         hostId: host?.hostId ?? null,
         layer0,
+        ensureFailure,
       },
       logs: [
         {
@@ -445,6 +452,9 @@ export class DesktopSupportService {
     // consent toggle is off, not just individually omitted per-key.
     const contexts: Record<string, Record<string, unknown>> = includeDiagnostics
       ? deepScrubSupportValue({
+          ...(snapshot.host.ensureFailure === null
+            ? {}
+            : { hostStartup: { ...snapshot.host.ensureFailure } }),
           ...(snapshot.host.layer0 === null
             ? {}
             : { layer0: { ...snapshot.host.layer0 } }),
@@ -693,6 +703,10 @@ export class DesktopSupportService {
             host: {
               status: snapshot.host.status,
               version: snapshot.host.version,
+              ensureFailure:
+                snapshot.host.ensureFailure === null
+                  ? null
+                  : deepScrubSupportValue({ ...snapshot.host.ensureFailure }),
             },
           }
         : {}),

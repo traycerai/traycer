@@ -188,6 +188,25 @@ export interface LandingComposerSubmitArgs {
    * team sandbox, read by the caller at submit.
    */
   readonly teamSandboxHarnessBlocked: boolean;
+  /**
+   * Told once whether the create went out, once `submit` returned no
+   * refusal: `true` as it is dispatched, `false` where the submission stops
+   * short (a hold, an image that could not be read, the draft moving or
+   * closing first). `null` where the caller does not wait on it.
+   */
+  readonly settled: ((dispatched: boolean) => void) | null;
+}
+
+export interface LandingTerminalAgentArgs {
+  readonly launch: TerminalAgentLaunch;
+  /** The caller-owned draft the Start replaces, or null. */
+  readonly draftId: string | null;
+  /** As `LandingComposerSubmitArgs.owner`. */
+  readonly owner: LandingOwnerTeam | null;
+  /** Whether `launch.harnessId` is one a team sandbox does not offer. */
+  readonly teamSandboxHarnessBlocked: boolean;
+  /** As `LandingComposerSubmitArgs.settled`. */
+  readonly settled: ((dispatched: boolean) => void) | null;
 }
 
 export interface TerminalAgentLaunch {
@@ -202,19 +221,16 @@ export interface TerminalAgentLaunch {
 
 /**
  * Both actions return the submit-time placement refusal (selection model §54)
- * instead of dispatching, or `null` when the create was dispatched. The caller
- * renders the message inline on the composer - never a toast-and-proceed, and
- * never a silent fallback onto another host.
+ * instead of dispatching, or `null` otherwise; `settled` then says whether the
+ * create went out. The caller renders the message inline on the composer -
+ * never a toast-and-proceed, and never a silent fallback onto another host.
  */
 export interface LandingComposerActions {
   readonly submit: (
     args: LandingComposerSubmitArgs,
   ) => LandingPlacementRefusal | null;
   readonly selectTerminalAgent: (
-    launch: TerminalAgentLaunch,
-    draftId: string | null,
-    owner: LandingOwnerTeam | null,
-    teamSandboxHarnessBlocked: boolean,
+    args: LandingTerminalAgentArgs,
   ) => LandingPlacementRefusal | null;
   /**
    * Whether a create started here is still running.
@@ -1130,14 +1146,18 @@ export function useLandingComposerActions(
     [finalizeSubmission, refusedOverWireHashCap],
   );
 
+  /**
+   * Whether a submission attempt started; one that did tells `args.settled`
+   * itself (see `DraftSubmissionAttempt.onSettled`).
+   */
   const dispatchSubmission = useCallback(
     (
       args: LandingComposerSubmitArgs,
       workspaceContext: LandingWorkspaceContext,
       hostId: string,
-    ) => {
+    ): boolean => {
       const { editor } = args;
-      if (editor === null) return;
+      if (editor === null) return false;
 
       const normalized = normalizeComposerContentWithSelection(
         editor.getJSON(),
@@ -1146,14 +1166,14 @@ export function useLandingComposerActions(
       const editorContent = normalized.content;
       const text = extractPlainTextFromComposerJSONContent(editorContent);
       const hasImages = containsImageAtoms(editorContent);
-      if (text.trim().length === 0 && !hasImages) return;
+      if (text.trim().length === 0 && !hasImages) return false;
       const draftId = ensureSubmissionDraft(
         args.draftId,
         editorContent,
         hostId,
       );
       const runtime = draftRuntimeRegistry.getOrHydrate(draftId);
-      if (runtime === null) return;
+      if (runtime === null) return false;
       // The runtime's stored content already reflects the latest edit (every
       // keystroke flows through `onDocumentChange` synchronously, well before
       // a later submit click) or was just seeded verbatim by
@@ -1166,8 +1186,9 @@ export function useLandingComposerActions(
       }
       const attempt = runtime.startSubmission(
         captureSubmissionPlacement(draftId),
+        args.settled,
       );
-      if (attempt === null) return;
+      if (attempt === null) return false;
       const exactArgs = { ...args, draftId };
 
       // The live editor content is hash-only (landing pastes hashes, never
@@ -1189,7 +1210,7 @@ export function useLandingComposerActions(
           attempt,
           hostId,
         });
-        return;
+        return true;
       }
       // …unless the host takes the hashes THEMSELVES, which is the whole point
       // of `epic.create@1.2`: the bytes crossed the relay once at paste, and a
@@ -1220,7 +1241,7 @@ export function useLandingComposerActions(
           text,
           workspaceContext,
         });
-        return;
+        return true;
       }
       const sessionBytes = sessionBase64ByHash(hashes);
       if (sessionBytes !== null) {
@@ -1237,7 +1258,7 @@ export function useLandingComposerActions(
           attempt,
           hostId,
         });
-        return;
+        return true;
       }
       // Async (session-cold / restored draft) path only — the sync paths above
       // finalize in-stack and clear the editor before any re-entry is possible, so
@@ -1252,7 +1273,7 @@ export function useLandingComposerActions(
         // gets a live attempt and then bails here, so without completing it
         // that draft stays `isSubmitting` with nothing left to settle it.
         draftRuntimeRegistry.complete(attempt);
-        return;
+        return true;
       }
       submissionInFlightRef.current = true;
       void resolveBase64ByHash(hashes, draftImageByteTargetForHost(hostId))
@@ -1308,6 +1329,7 @@ export function useLandingComposerActions(
         .finally(() => {
           submissionInFlightRef.current = false;
         });
+      return true;
     },
     [dispatchByHashSubmission, finalizeSubmission, submitClient],
   );
@@ -1529,20 +1551,21 @@ export function useLandingComposerActions(
         queryClient,
         placement.hostId,
       );
-      if (workspaceContext.worktreeIntentSuspended) return null;
-      dispatchSubmission(args, workspaceContext, placement.hostId);
+      if (
+        workspaceContext.worktreeIntentSuspended ||
+        !dispatchSubmission(args, workspaceContext, placement.hostId)
+      ) {
+        args.settled?.(false);
+      }
       return null;
     },
     [dispatchSubmission, queryClient, resolveAdmittedPlacement],
   );
 
   const selectTerminalAgent = useCallback(
-    (
-      launch: TerminalAgentLaunch,
-      draftId: string | null,
-      owner: LandingOwnerTeam | null,
-      teamSandboxHarnessBlocked: boolean,
-    ): LandingPlacementRefusal | null => {
+    (args: LandingTerminalAgentArgs): LandingPlacementRefusal | null => {
+      const { launch, draftId, owner, teamSandboxHarnessBlocked, settled } =
+        args;
       const placement = resolveAdmittedPlacement();
       if (placement.kind === "refused") {
         return { message: placement.message };
@@ -1557,8 +1580,12 @@ export function useLandingComposerActions(
         queryClient,
         placement.hostId,
       );
-      if (workspaceContext.worktreeIntentSuspended) return null;
+      if (workspaceContext.worktreeIntentSuspended) {
+        settled?.(false);
+        return null;
+      }
       dispatchTerminalAgent(launch, workspaceContext, placement.hostId, owner);
+      settled?.(true);
       return null;
     },
     [dispatchTerminalAgent, queryClient, resolveAdmittedPlacement],

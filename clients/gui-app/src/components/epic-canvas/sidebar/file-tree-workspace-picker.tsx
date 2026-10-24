@@ -81,7 +81,7 @@ export function FileTreeWorkspacePicker(props: FileTreeWorkspacePickerProps) {
     >
       <WorktreePickerHostSection
         surfaceKey={props.surfaceKey}
-        offersAutomations={false}
+        composer={null}
       />
       <WorktreeFolderListBody
         isPending={listQuery.isPending}

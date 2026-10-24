@@ -36,6 +36,7 @@ export function WorktreeOwnerMetadataTooltip(props: {
   readonly epicId: string;
   readonly ownerId: string;
   readonly ownerKind: WorktreeBindingOwnerKind;
+  readonly hostSection?: ReactElement | null;
   readonly supplementalContent: ReactNode | null;
   readonly side: "top" | "right" | "bottom" | "left";
 }): ReactNode {
@@ -153,6 +154,12 @@ export function WorktreeOwnerMetadataTooltip(props: {
           >
             {props.title}
           </span>
+          {props.hostSection === undefined ||
+          props.hostSection === null ? null : (
+            <div className="w-0 min-w-full border-b border-border/70">
+              {props.hostSection}
+            </div>
+          )}
           <WorktreeOwnerSettingsHeader
             ownerId={props.ownerId}
             hostId={props.hostId}

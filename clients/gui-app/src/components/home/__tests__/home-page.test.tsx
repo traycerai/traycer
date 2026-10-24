@@ -320,6 +320,7 @@ vi.mock("@/components/home/composer/landing-composer", () => ({
         slashCatalog: null,
         owner: null,
         teamSandboxHarnessBlocked: false,
+        settled: null,
         toolbar: {
           selection: {
             harnessId: "codex",

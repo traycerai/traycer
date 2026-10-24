@@ -14,6 +14,11 @@ const OPENCODE_FAMILY_HARNESSES: ReadonlySet<string> = new Set([
   "huggingface",
 ]);
 
+/** Whether `harnessId` runs the `opencode` binary, and so a chat's line. */
+export function isOpencodeFamilyHarness(harnessId: string): boolean {
+  return OPENCODE_FAMILY_HARNESSES.has(harnessId);
+}
+
 /**
  * The OpenCode line an open chat runs, for the catalogs its composer reads:
  * the line on its record, or 1 for a chat whose OpenCode-family session
@@ -23,8 +28,7 @@ const OPENCODE_FAMILY_HARNESSES: ReadonlySet<string> = new Set([
 export function chatOpencodeLine(chat: ChatLineFacts): OpencodeLine | null {
   if (chat.opencodeLine !== undefined) return chat.opencodeLine;
   const chainHarness = chat.activeSessionChain?.harnessId;
-  return chainHarness !== undefined &&
-    OPENCODE_FAMILY_HARNESSES.has(chainHarness)
+  return chainHarness !== undefined && isOpencodeFamilyHarness(chainHarness)
     ? 1
     : null;
 }

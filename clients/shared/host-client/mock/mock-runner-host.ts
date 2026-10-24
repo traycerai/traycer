@@ -4,8 +4,10 @@ import {
   fetchSandboxCatalogueViaHttp,
   fetchSandboxCostsViaHttp,
   getSandboxAutomationViaHttp,
+  keepSandboxViaHttp,
   listSandboxesViaHttp,
   openSandboxAutomationViaHttp,
+  patchSandboxViaHttp,
   runSandboxVerbViaHttp,
   type SandboxAutomationFetchResult,
   type SandboxAutomationOpenFetchResult,
@@ -35,6 +37,7 @@ import type {
   SandboxAutomationOpenTarget,
   SandboxCreateRequest,
   SandboxLifecycleVerb,
+  SandboxPatchRequest,
 } from "@traycer/protocol/host/sandbox-control";
 import type { Disposable } from "../../platform/uri-callback";
 import type { NotificationFeedOccurrence } from "../../notifications/feed-delivery";
@@ -664,6 +667,26 @@ export class MockRunnerHost implements IRunnerHost {
     sandboxId: string,
   ): Promise<SandboxVerbFetchResult> {
     return destroySandboxViaHttp(this.serverBaseUrl, bearerToken, sandboxId);
+  }
+
+  patchSandbox(
+    bearerToken: string,
+    sandboxId: string,
+    request: SandboxPatchRequest,
+  ): Promise<SandboxVerbFetchResult> {
+    return patchSandboxViaHttp(
+      this.serverBaseUrl,
+      bearerToken,
+      sandboxId,
+      request,
+    );
+  }
+
+  keepSandbox(
+    bearerToken: string,
+    sandboxId: string,
+  ): Promise<SandboxVerbFetchResult> {
+    return keepSandboxViaHttp(this.serverBaseUrl, bearerToken, sandboxId);
   }
 
   runSandboxVerb(

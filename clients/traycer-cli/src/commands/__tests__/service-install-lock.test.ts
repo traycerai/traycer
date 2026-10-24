@@ -11,6 +11,7 @@ import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CommandContext } from "../../runner/runner";
 import type { ServiceInstallArgs } from "../service-install";
+import { writeInstalledHostFixture } from "./service-install-host-fixture";
 
 // A `host service install --takeover` that Desktop's force restart bound to
 // one host process (`--expect-host-pid`) waits for the real CLI lock before it
@@ -191,7 +192,7 @@ function baseArgs(overrides: Partial<ServiceInstallArgs>): ServiceInstallArgs {
 describe.skipIf(process.platform === "win32")(
   "host service install --takeover - genuine cli-lock contention",
   () => {
-    beforeEach(() => {
+    beforeEach(async () => {
       workHome = mkdtempSync(
         join(tmpdir(), "traycer-service-install-lock-test-"),
       );
@@ -199,6 +200,11 @@ describe.skipIf(process.platform === "win32")(
       process.env.HOME = workHome;
       process.env.USERPROFILE = workHome;
       vi.resetModules();
+      // The registration starts the installed host, so the command refuses
+      // without a real install record and executable (`service-install-missing-host.test.ts`).
+      writeInstalledHostFixture(
+        (await import("../../store/paths")).hostInstallRecordPath("production"),
+      );
       mocks.takeoverMock.mockReset();
       mocks.takeoverMock.mockResolvedValue({
         kind: "cli-host-stopped",

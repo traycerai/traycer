@@ -42,15 +42,11 @@ vi.mock("@/lib/host", async (importOriginal) => ({
 }));
 
 import { useSandboxWakeForOpenedTile } from "@/hooks/sandboxes/use-sandbox-wake-on-tile-open";
-import {
-  settleTeamWake,
-  useTeamWakeConfirmStore,
-} from "@/stores/hosts/team-wake-confirm-store";
 
 /**
- * A tab opened on a TEAM sandbox waits for the confirm before it
- * wakes the sandbox on the opener's bundle; a team pod and a personal sandbox
- * wake at once. A frozen team sandbox's refusal blames the payer's bundle.
+ * A tab opened on a sandbox wakes it at once, a team's included: the payer is
+ * said where the action is offered, not asked here. A frozen team sandbox's
+ * refusal blames the payer's bundle.
  */
 
 function entryFor(input: {
@@ -141,26 +137,20 @@ async function settleWake(): Promise<void> {
   });
 }
 
-function pending(): boolean {
-  return useTeamWakeConfirmStore.getState().pending !== null;
-}
-
 beforeEach(() => {
   vi.useFakeTimers();
   mocks.binding = createFakeSandboxBinding();
   mocks.entry = null;
   mocks.toastWarning.mockClear();
   mocks.toastError.mockClear();
-  useTeamWakeConfirmStore.setState({ pending: null });
 });
 afterEach(() => {
   cleanup();
-  useTeamWakeConfirmStore.setState({ pending: null });
   vi.useRealTimers();
 });
 
 describe("useSandboxWakeForOpenedTile on a team sandbox", () => {
-  it("waits for the confirm: no list read and no verb until Resume, then wakes once", async () => {
+  it("wakes a suspended team sandbox at once, once", async () => {
     const binding = open(
       entryFor({
         state: "suspended",
@@ -176,14 +166,6 @@ describe("useSandboxWakeForOpenedTile on a team sandbox", () => {
     });
     await settleWake();
 
-    expect(pending()).toBe(true);
-    expect(binding.auth.listSandboxes).not.toHaveBeenCalled();
-    expect(binding.auth.runSandboxVerb).not.toHaveBeenCalled();
-
-    settleTeamWake(true);
-    await settleWake();
-
-    expect(pending()).toBe(false);
     expect(binding.auth.runSandboxVerb).toHaveBeenCalledTimes(1);
     expect(binding.auth.runSandboxVerb).toHaveBeenCalledWith(
       "sbx_1",
@@ -192,29 +174,7 @@ describe("useSandboxWakeForOpenedTile on a team sandbox", () => {
     );
   });
 
-  it("wakes nothing when the confirm is cancelled", async () => {
-    const binding = open(
-      entryFor({
-        state: "suspended",
-        frozen: false,
-        owner: TEAM,
-        profile: "agent",
-      }),
-    );
-    scriptListUntilVerb(binding, "suspended");
-
-    renderHook(() => useSandboxWakeForOpenedTile(HOST_ID), {
-      wrapper: wrapper(),
-    });
-    await settleWake();
-    settleTeamWake(false);
-    await settleWake();
-
-    expect(binding.auth.listSandboxes).not.toHaveBeenCalled();
-    expect(binding.auth.runSandboxVerb).not.toHaveBeenCalled();
-  });
-
-  it("wakes a team pod at once, without asking", async () => {
+  it("wakes a team pod at once", async () => {
     const binding = open(
       entryFor({
         state: "released",
@@ -230,7 +190,6 @@ describe("useSandboxWakeForOpenedTile on a team sandbox", () => {
     });
     await settleWake();
 
-    expect(pending()).toBe(false);
     expect(binding.auth.runSandboxVerb).toHaveBeenCalledWith(
       "sbx_1",
       "start",
@@ -238,7 +197,7 @@ describe("useSandboxWakeForOpenedTile on a team sandbox", () => {
     );
   });
 
-  it("wakes a personal sandbox at once, without asking", async () => {
+  it("wakes a personal sandbox at once", async () => {
     const binding = open(
       entryFor({
         state: "suspended",
@@ -254,7 +213,6 @@ describe("useSandboxWakeForOpenedTile on a team sandbox", () => {
     });
     await settleWake();
 
-    expect(pending()).toBe(false);
     expect(binding.auth.runSandboxVerb).toHaveBeenCalledTimes(1);
   });
 });
@@ -274,10 +232,9 @@ describe("useSandboxWakeForOpenedTile on a frozen sandbox", () => {
     return binding;
   }
 
-  it("says its payer's bundle is out on a team sandbox, asks nothing and sends no verb", async () => {
+  it("says its payer's bundle is out on a team sandbox and sends no verb", async () => {
     const binding = await openFrozen(TEAM);
 
-    expect(pending()).toBe(false);
     expect(binding.auth.runSandboxVerb).not.toHaveBeenCalled();
     expect(mocks.toastWarning).toHaveBeenCalledTimes(1);
     expect(mocks.toastWarning).toHaveBeenCalledWith("This sandbox is frozen", {

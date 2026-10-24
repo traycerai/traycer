@@ -228,12 +228,12 @@ describe("sandbox grouping predicates", () => {
   });
 
   it("puts each row in the group the host list and the pickers agree on", () => {
-    expect(hostOptionPickerGroup(personal, false, false)).toBe("personal");
-    expect(hostOptionPickerGroup(normal, false, false)).toBe("sandbox");
-    expect(hostOptionPickerGroup(burst, true, false)).toBe("agent-sandbox");
-    expect(hostOptionPickerGroup(burst, false, false)).toBe("hidden");
-    expect(hostOptionPickerGroup(unanswered, false, false)).toBe("hidden");
-    expect(hostOptionPickerGroup(unanswered, true, false)).toBe("sandbox");
+    expect(hostOptionPickerGroup(personal, false, null)).toBe("personal");
+    expect(hostOptionPickerGroup(normal, false, null)).toBe("sandbox");
+    expect(hostOptionPickerGroup(burst, true, null)).toBe("agent-sandbox");
+    expect(hostOptionPickerGroup(burst, false, null)).toBe("hidden");
+    expect(hostOptionPickerGroup(unanswered, false, null)).toBe("hidden");
+    expect(hostOptionPickerGroup(unanswered, true, null)).toBe("sandbox");
   });
 
   it("offers Activate for exactly the rows a picker offers", () => {
@@ -258,7 +258,7 @@ describe("sandbox grouping predicates", () => {
     const groups = groupHostOptions(
       [normal, burst, personal, unanswered],
       false,
-      false,
+      null,
       "b",
     );
     expect(groups.personal.map((h) => h.hostId)).toEqual(["p"]);
@@ -343,12 +343,12 @@ describe("sleeping sandbox picks", () => {
       connectable: true,
       kind: "automation",
     });
-    expect(hostOptionPickerGroup(pod, false, false)).toBe("hidden");
-    expect(hostOptionPickerGroup(pod, true, false)).toBe("sandbox");
+    expect(hostOptionPickerGroup(pod, false, null)).toBe("hidden");
+    expect(hostOptionPickerGroup(pod, true, null)).toBe("sandbox");
     expect(pickableHostOptions([pod], null)).toEqual([]);
   });
 
-  it("offers the Automations pod to a picker that offersAutomations, hides it from the rest, and never activates it", () => {
+  it("hides the Automations pod from every picker, shows it in the host list, and never activates it", () => {
     for (const state of ["awake", "released"] as const) {
       const pod = sandboxOption({
         state,
@@ -356,20 +356,15 @@ describe("sleeping sandbox picks", () => {
         connectable: state === "awake",
         kind: "automation",
       });
-      expect(hostOptionPickerGroup(pod, false, true)).toBe("sandbox");
-      expect(hostOptionPickerGroup(pod, true, true)).toBe("sandbox");
-      expect(hostOptionPickerGroup(pod, false, false)).toBe("hidden");
+      expect(hostOptionPickerGroup(pod, false, null)).toBe("hidden");
+      expect(hostOptionPickerGroup(pod, false, { userId: "u" })).toBe("hidden");
+      expect(hostOptionPickerGroup(pod, true, null)).toBe("sandbox");
       expect(hostOptionCanActivate(pod)).toBe(false);
-      expect(
-        groupHostOptions([pod], false, true, null).sandboxes.map(
-          (h) => h.hostId,
-        ),
-      ).toEqual(["s"]);
-      expect(groupHostOptions([pod], false, false, null).sandboxes).toEqual([]);
+      expect(groupHostOptions([pod], false, null, null).sandboxes).toEqual([]);
     }
   });
 
-  it("does not let offersAutomations unhide a burst sandbox or an unanswered one", () => {
+  it("does not let a composer viewer unhide a burst sandbox or an unanswered one", () => {
     const burstRow = hostScopeOptionFixture({
       hostId: "b",
       kind: "sandbox",
@@ -390,8 +385,9 @@ describe("sleeping sandbox picks", () => {
         teamOwned: false,
       },
     });
-    expect(hostOptionPickerGroup(burstRow, false, true)).toBe("hidden");
-    expect(hostOptionPickerGroup(unansweredRow, false, true)).toBe("hidden");
+    const viewer = { userId: "u" };
+    expect(hostOptionPickerGroup(burstRow, false, viewer)).toBe("hidden");
+    expect(hostOptionPickerGroup(unansweredRow, false, viewer)).toBe("hidden");
   });
 
   it("treats a released, not frozen pod as a sleeping pick and a frozen one as not", () => {
