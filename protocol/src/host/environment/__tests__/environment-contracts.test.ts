@@ -601,8 +601,12 @@ const REDESIGN_WIRE_CASES: readonly RedesignWireCase[] = [
   {
     method: "environment.move.stop",
     contract: environmentMoveStopV10,
-    request: { choices: [{ key: "TOKEN", choice: "keep_locally" }] },
-    badRequest: { choices: [{ key: "TOKEN", choice: "burn" }] },
+    request: {
+      choices: [{ kind: "variable", key: "TOKEN", choice: "keep_locally" }],
+    },
+    badRequest: {
+      choices: [{ kind: "variable", key: "TOKEN", choice: "burn" }],
+    },
     response: { outcome: "stopped" },
     badResponse: { outcome: "gone" },
   },

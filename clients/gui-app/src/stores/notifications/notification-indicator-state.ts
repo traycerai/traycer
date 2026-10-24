@@ -1,7 +1,7 @@
 import {
   HOST_NOTIFICATION_PENDING_PROMPT_KINDS,
   type HostNotificationEntryV24,
-  type HostNotificationsCloudFeedRowV13,
+  type HostNotificationsCloudFeedRowV14,
   type HostNotificationsEntityRef,
   type HostNotificationsIndicatorState,
   type HostNotificationsIndicatorStateResponse,
@@ -172,7 +172,7 @@ function selectHostIndicatorState(
  * stable.
  */
 export function selectCloudNotificationIndicators(
-  rows: Readonly<Partial<Record<string, HostNotificationsCloudFeedRowV13>>>,
+  rows: Readonly<Partial<Record<string, HostNotificationsCloudFeedRowV14>>>,
   epicIds: ReadonlyArray<string>,
   chatIds: ReadonlyArray<string>,
 ): HostNotificationsIndicatorStateResponse {
@@ -188,7 +188,7 @@ export interface CloudNotificationIndicatorProjection {
 }
 
 export function selectCloudNotificationIndicatorProjection(
-  rows: Readonly<Partial<Record<string, HostNotificationsCloudFeedRowV13>>>,
+  rows: Readonly<Partial<Record<string, HostNotificationsCloudFeedRowV14>>>,
   epicIds: ReadonlyArray<string>,
   chatIds: ReadonlyArray<string>,
 ): CloudNotificationIndicatorProjection {
@@ -236,7 +236,7 @@ export function selectCloudNotificationIndicatorProjection(
 }
 
 function cloudIndicatorEntryIsWanted(
-  row: HostNotificationsCloudFeedRowV13,
+  row: HostNotificationsCloudFeedRowV14,
   wantedEpicIds: ReadonlySet<string>,
   wantedChatIds: ReadonlySet<string>,
 ): boolean {
@@ -302,7 +302,7 @@ type CloudTerminalWinners = Map<string, Map<string, CloudTerminalCandidate>>;
 
 function collectCloudIndicatorEntry(
   accumulator: CloudIndicatorAccumulator,
-  row: HostNotificationsCloudFeedRowV13,
+  row: HostNotificationsCloudFeedRowV14,
 ): void {
   const { entry, originHostId } = row;
   const contribution = indicatorContribution(entry);

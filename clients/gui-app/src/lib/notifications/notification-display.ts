@@ -23,7 +23,7 @@ import {
 import type { AppLocalNotificationEntry } from "@/stores/notifications/app-local-notifications-store";
 import type {
   HostNotificationEntryV24,
-  HostNotificationsCloudFeedRowV13,
+  HostNotificationsCloudFeedRowV14,
 } from "@traycer/protocol/host/notifications/contracts";
 import {
   notificationEntityFromHostEntry,
@@ -505,7 +505,7 @@ export async function displayHostChannelEmission(
 
 /** Cloud copies use the origin's semantic key, never their replica row id. */
 export async function displayCloudSnapshotArrivals(
-  entries: ReadonlyArray<HostNotificationsCloudFeedRowV13>,
+  entries: ReadonlyArray<HostNotificationsCloudFeedRowV14>,
   target: NotificationDisplayTarget,
 ): Promise<void> {
   const focused = readFocusedHostNotificationPresence();

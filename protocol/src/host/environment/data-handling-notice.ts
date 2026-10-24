@@ -9,11 +9,10 @@ export const DATA_HANDLING_NOTICE = {
   title: "How Traycer handles this",
   recipients: [
     "Traycer's cloud broker stores the value encrypted.",
-    "The computers running this configuration receive the value, and their tools and agents can read it.",
     "The sandboxes running this configuration use the value through the broker.",
   ],
   destinations:
-    "A Personal value reaches only the computers and sandboxes that run your Personal configuration. A team value reaches every computer and sandbox that runs the team's configuration.",
+    "A Personal value also reaches the computers that run your Personal configuration, and their tools and agents can read it. A team value reaches no computer.",
   authority:
     "Share a work credential only if you have the authority to share it.",
   deletionLimits:

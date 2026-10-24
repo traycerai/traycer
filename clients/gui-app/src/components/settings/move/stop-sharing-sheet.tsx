@@ -7,6 +7,7 @@
 import { useState, type ReactNode } from "react";
 import {
   stopChoiceEntries,
+  stopRowAddress,
   stopSharingConfirmEnabled,
   type StopChoiceEntry,
   type StopChoiceMap,
@@ -130,10 +131,10 @@ function StopSharingBody(props: {
                 <ul className="flex flex-col gap-2">
                   {props.managed.map((row) => (
                     <PreviewRow
-                      key={row.key}
+                      key={stopRowAddress(row)}
                       label={row.label}
                       detail={row.detail}
-                      testId={`stop-sharing-managed-${row.key}`}
+                      testId={`stop-sharing-managed-${row.kind}-${row.key}`}
                     />
                   ))}
                 </ul>
@@ -147,21 +148,22 @@ function StopSharingBody(props: {
                 <ul className="flex flex-col gap-3">
                   {props.needsChoice.map((row) => (
                     <li
-                      key={row.key}
+                      key={stopRowAddress(row)}
                       className="flex flex-col gap-1.5"
-                      data-testid={`stop-sharing-choice-row-${row.key}`}
+                      data-testid={`stop-sharing-choice-row-${row.kind}-${row.key}`}
                     >
                       <PreviewRow
                         label={row.label}
                         detail={row.detail}
-                        testId={`stop-sharing-choice-label-${row.key}`}
+                        testId={`stop-sharing-choice-label-${row.kind}-${row.key}`}
                       />
                       <p className="text-ui-xs text-muted-foreground">
                         {stopChoiceReasonLine(row.reason)}
                       </p>
                       <div className="flex flex-wrap gap-1.5">
                         {STOP_CHOICES.map((action) => {
-                          const selected = choices[row.key] === action.choice;
+                          const selected =
+                            choices[stopRowAddress(row)] === action.choice;
                           return (
                             <Button
                               key={action.choice}
@@ -170,10 +172,14 @@ function StopSharingBody(props: {
                               variant="outline"
                               aria-pressed={selected}
                               disabled={props.confirmPending}
-                              data-testid={`stop-sharing-choice-${row.key}-${action.choice}`}
+                              data-testid={`stop-sharing-choice-${row.kind}-${row.key}-${action.choice}`}
                               onClick={() =>
                                 setChoices(
-                                  selectChoice(choices, row.key, action.choice),
+                                  selectChoice(
+                                    choices,
+                                    stopRowAddress(row),
+                                    action.choice,
+                                  ),
                                 )
                               }
                             >
@@ -242,8 +248,8 @@ function PreviewRow(props: {
 
 function selectChoice(
   current: StopChoiceMap,
-  key: string,
+  address: string,
   choice: StopChoice,
 ): StopChoiceMap {
-  return { ...current, [key]: choice };
+  return { ...current, [address]: choice };
 }

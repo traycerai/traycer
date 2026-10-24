@@ -179,9 +179,13 @@ export const environmentMoveStopPreviewV10 = defineRpcContract({
   responseSchema: environmentMoveStopPreviewResponseSchema,
 });
 
-/** One `needsChoice` row's answer, by its key. */
+/**
+ * One `needsChoice` row's answer, by the row's `kind` and `key`: a key alone
+ * does not name a row, since a variable and a skill can share one.
+ */
 export const environmentMoveStopChoiceSchema = lazySchema(() =>
   z.object({
+    kind: environmentItemKindSchema,
     key: z.string().min(1),
     choice: z.enum(["keep_locally", "remove_from_this_computer", "resolve"]),
   }),

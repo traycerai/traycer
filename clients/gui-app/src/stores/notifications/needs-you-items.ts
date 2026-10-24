@@ -2,7 +2,7 @@ import { useMemo } from "react";
 import {
   parseKnownHostNotificationPayloadForKind,
   type HostNotificationEntryV24,
-  type HostNotificationsCloudFeedRowV13,
+  type HostNotificationsCloudFeedRowV14,
 } from "@traycer/protocol/host/notifications/contracts";
 import {
   useRegisteredEpicLiveAgents,
@@ -107,7 +107,7 @@ function agentTitleOfEntry(entry: HostNotificationEntryV24): string | null {
 }
 
 function cloudAgentTitle(
-  row: HostNotificationsCloudFeedRowV13 | undefined,
+  row: HostNotificationsCloudFeedRowV14 | undefined,
 ): string | null {
   if (row === undefined) return null;
   const title = row.presentation.chatTitle;

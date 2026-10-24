@@ -47,6 +47,7 @@ export function StopSharingSession(props: {
     stop.mutate(
       {
         choices: choices.map((entry) => ({
+          kind: entry.kind,
           key: entry.key,
           choice: entry.choice,
         })),
