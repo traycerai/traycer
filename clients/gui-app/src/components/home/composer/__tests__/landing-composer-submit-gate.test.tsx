@@ -696,6 +696,91 @@ describe("LandingComposer direct submit gate", () => {
     expect(readStagedSandbox("landing:window-test")).toBeNull();
   });
 
+  it("hands off the next draft's send when the draft that sent closes while the sandbox boots", async () => {
+    landingDrafts.drafts = [
+      { id: "draft-a", closed: false },
+      { id: "draft-b", closed: false },
+    ];
+    onTestFinished(() => {
+      landingDrafts.drafts = [];
+    });
+    const store = useStagedSandboxStore.getState();
+    store.stage("landing:window-test", {
+      kind: "existing",
+      hostId: "host-test",
+      sandboxId: "sbx-build",
+      name: "build-box",
+      configuration: { kind: "personal" },
+      verb: "resume",
+    });
+    store.begin("landing:window-test", false, Date.now());
+    store.report("landing:window-test", {
+      ownerId: "draft-a",
+      sendTaken: true,
+    });
+    const draftA = render(
+      <LandingComposer
+        draftId="draft-a"
+        pendingCreateId={null}
+        initialSettings={null}
+        workspaceControls={() => null}
+      />,
+    );
+    draftA.unmount();
+    await act(async () => {
+      await Promise.resolve();
+    });
+    act(() => {
+      landingDrafts.drafts = [
+        { id: "draft-a", closed: true },
+        { id: "draft-b", closed: false },
+      ];
+      for (const listener of landingDrafts.listeners) listener();
+    });
+    expect(readStagedSandbox("landing:window-test")).toMatchObject({
+      phase: "creating",
+      ownerId: null,
+      sendTaken: false,
+    });
+
+    const draftB = (
+      <LandingComposer
+        draftId="draft-b"
+        pendingCreateId={null}
+        initialSettings={null}
+        workspaceControls={() => null}
+      />
+    );
+    const view = render(draftB);
+    const installEditor = testState.installEditor;
+    if (installEditor === null) throw new Error("expected ComposerBody seam");
+    installEditor();
+    const snapshot = testState.snapshot;
+    if (snapshot === null) throw new Error("expected snapshot seam");
+    snapshot();
+    view.rerender(draftB);
+    fireEvent.click(screen.getByRole("button", { name: "Submit landing" }));
+    expect(testState.submit).not.toHaveBeenCalled();
+    expect(readStagedSandbox("landing:window-test")).toMatchObject({
+      ownerId: "draft-b",
+      sendTaken: true,
+    });
+
+    // The new host takes the resubmit.
+    testState.submit.mockReturnValueOnce(null);
+    act(() => {
+      testState.catalogHostId = "host-test";
+      testState.toolbarStore?.setState({
+        catalog: { hostId: "host-test", harnesses: [], modelsLoaded: true },
+      });
+      useStagedSandboxStore.getState().report("landing:window-test", {
+        phase: "handoff",
+        createdHostId: "host-test",
+      });
+    });
+    expect(testState.submit).toHaveBeenCalledTimes(1);
+  });
+
   it("waits for the new sandbox's agent pack before launching a staged Start there", () => {
     useStagedSandboxStore.getState().stage("landing:window-test", {
       kind: "new",

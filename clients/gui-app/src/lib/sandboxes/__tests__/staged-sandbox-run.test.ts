@@ -231,6 +231,13 @@ function harness(overrides: Partial<Script>, wakeResult: boolean) {
 }
 
 function run(fresh: boolean, deps: StagedSandboxRunDeps): Promise<void> {
+  // A run starts from a send, made by a draft whose composer is mounted,
+  // unless the case set up its own ask.
+  const stage = readStagedSandbox(surfaceKey);
+  if (stage !== null && !stage.sendTaken && !stage.openTerminal) {
+    useStagedSandboxStore.getState().report(surfaceKey, { sendTaken: true });
+    onTestFinished(holdHandoffOwner(surfaceKey, null, ownerGoneOnUnmount));
+  }
   return runStagedSandbox(
     surfaceKey,
     fresh,
@@ -516,6 +523,28 @@ describe("runStagedSandbox settling", () => {
       ).toBe(NEW_HOST_ID);
     },
   );
+
+  it("ends a boot whose send was abandoned and not claimed again, on the new host with nothing sent", async () => {
+    useStagedSandboxStore.getState().stage(surfaceKey, PERSONAL_NEW);
+    // A send started it; its draft closed mid-create (`holdHandoffOwner`).
+    useStagedSandboxStore
+      .getState()
+      .report(surfaceKey, { sendTaken: false, openTerminal: false });
+    const { deps } = harness({}, true);
+    // Straight to the run: `run` would stand a send in for the abandoned one.
+    await runStagedSandbox(
+      surfaceKey,
+      false,
+      { fallbackName: "fallback-box", taskId: null },
+      deps,
+    );
+
+    expect(readStagedSandbox(surfaceKey)).toBeNull();
+    expect(useLandingPanelStore.getState().terminalRequest).toBeNull();
+    expect(useSurfaceHostSelectionStore.getState().selections[surfaceKey]).toBe(
+      NEW_HOST_ID,
+    );
+  });
 
   it("keeps polling until the host is dialable, then hands off", async () => {
     useStagedSandboxStore.getState().stage(surfaceKey, PERSONAL_NEW);

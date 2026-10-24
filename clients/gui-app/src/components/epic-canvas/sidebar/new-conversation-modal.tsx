@@ -61,6 +61,10 @@ import {
   DialogContent,
   DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  PortalConcealmentProvider,
+  usePortalConcealed,
+} from "@/components/ui/portal-concealment-context";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { useCreateTuiAgentForClient } from "@/hooks/agent/use-create-tui-agent";
 import { useComposerDictation } from "@/hooks/composer/use-composer-dictation";
@@ -513,6 +517,11 @@ export function NewConversationModalHost(props: {
   );
   // Closes the request the send was made from, never one filed after it was
   // handed off.
+  // Hidden, the body's own overlays (a toolbar popover left open, a menu)
+  // un-present with it, and re-present intact when it is shown again: a tab
+  // can be activated from outside the page, with no input that would have
+  // dismissed them.
+  const concealed = usePortalConcealed() || !isOpen;
   const onSubmitted = useCallback(() => {
     const store = useNewConversationModalOpenStore.getState();
     if (bodyRequest !== null && store.request === bodyRequest) store.close();
@@ -531,21 +540,23 @@ export function NewConversationModalHost(props: {
       {mountBody
         ? createPortal(
             <DialogOverlayBoundaryContext.Provider value={overlayBoundaryEl}>
-              <SurfaceActivityProvider active>
-                <KeyboardOwnerContext value={isOpen}>
-                  <NewConversationTransientContext.Provider value={transient}>
-                    <NewConversationModalBody
-                      epicId={epicId}
-                      tabId={tabId}
-                      placement={bodyRequest.placement}
-                      parentId={bodyRequest.parentId}
-                      hostId={bodyRequest.hostId}
-                      dismissPickerRef={dismissPickerRef}
-                      onSubmitted={onSubmitted}
-                    />
-                  </NewConversationTransientContext.Provider>
-                </KeyboardOwnerContext>
-              </SurfaceActivityProvider>
+              <PortalConcealmentProvider value={concealed}>
+                <SurfaceActivityProvider active>
+                  <KeyboardOwnerContext value={isOpen}>
+                    <NewConversationTransientContext.Provider value={transient}>
+                      <NewConversationModalBody
+                        epicId={epicId}
+                        tabId={tabId}
+                        placement={bodyRequest.placement}
+                        parentId={bodyRequest.parentId}
+                        hostId={bodyRequest.hostId}
+                        dismissPickerRef={dismissPickerRef}
+                        onSubmitted={onSubmitted}
+                      />
+                    </NewConversationTransientContext.Provider>
+                  </KeyboardOwnerContext>
+                </SurfaceActivityProvider>
+              </PortalConcealmentProvider>
             </DialogOverlayBoundaryContext.Provider>,
             bodyContainer,
           )

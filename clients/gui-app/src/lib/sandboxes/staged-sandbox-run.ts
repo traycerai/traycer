@@ -469,19 +469,17 @@ export function settleVerdict(
 /**
  * Phase 2's start: the surface is pinned to the new host and the stage moves
  * to `handoff`; the surface resubmits once its placement resolves there. A
- * stage with nothing to resubmit ends here, its terminal asked of the landing
+ * stage with no send to resubmit ends here, its terminal asked of the landing
  * panel if one was: one only an explicit terminal ask started, or one whose
- * sending draft is gone (its modal's tab or its start page closed meanwhile),
- * whose automatic send is abandoned.
+ * sending draft is gone (its modal's tab or its start page closed meanwhile)
+ * with no other send claiming it since.
  */
 function handOff(surfaceKey: string, hostId: string): void {
   useSurfaceHostSelectionStore.getState().setSelection(surfaceKey, hostId);
   const stage = readStagedSandbox(surfaceKey);
   if (
     stage !== null &&
-    (stage.sendTaken
-      ? !handoffOwnerLive(surfaceKey, stage.ownerId)
-      : stage.openTerminal)
+    (!stage.sendTaken || !handoffOwnerLive(surfaceKey, stage.ownerId))
   ) {
     if (stage.openTerminal) {
       useLandingPanelStore.getState().requestTerminal(surfaceKey, hostId);

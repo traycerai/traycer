@@ -845,17 +845,19 @@ describe("startStagedTerminal", () => {
       kind: "taken",
       starts: true,
     },
+    // Stopped short under a key that may have an accepted create behind it:
+    // taken as Keep waiting or Retry takes it, never left to the fallback host.
     {
       stage: "timed out",
       failure: { kind: "timed-out", step: "booting" } as const,
-      kind: "not-taken",
-      starts: null,
+      kind: "taken",
+      starts: false,
     },
     {
       stage: "unverified",
       failure: { kind: "unverified" } as const,
-      kind: "not-taken",
-      starts: null,
+      kind: "taken",
+      starts: false,
     },
   ])(
     "on a create $stage: $kind, starting a run: $starts",
@@ -873,9 +875,29 @@ describe("startStagedTerminal", () => {
       expect(startStagedTerminal(SURFACE, start).kind).toBe(kind);
 
       expect(start.mock.calls).toEqual(starts === null ? [] : [[starts]]);
-      expect(readStagedSandbox(SURFACE)?.openTerminal).toBe(kind === "taken");
+      expect(readStagedSandbox(SURFACE)?.openTerminal).toBe(true);
     },
   );
+
+  it("wakes again under the same key for a terminal asked after a wake that failed", () => {
+    const store = useStagedSandboxStore.getState();
+    store.stage(SURFACE, {
+      kind: "existing",
+      hostId: NEW_HOST,
+      sandboxId: "sbx-1",
+      name: "api-refactor",
+      configuration: { kind: "personal" },
+      verb: "resume",
+    });
+    store.begin(SURFACE, false, Date.now());
+    store.report(SURFACE, {
+      failure: { kind: "failed", code: "wake", step: "booting" },
+    });
+    const start = vi.fn();
+
+    expect(startStagedTerminal(SURFACE, start).kind).toBe("taken");
+    expect(start.mock.calls).toEqual([[false]]);
+  });
 
   it("takes the ask on a stage nothing ran for yet, starting its first run", () => {
     useStagedSandboxStore.getState().stage(SURFACE, {
@@ -909,6 +931,83 @@ describe("startStagedTerminal", () => {
     useStagedSandboxStore.getState().report(SURFACE, { phase: "handoff" });
 
     expect(startStagedTerminal(SURFACE, vi.fn()).kind).toBe("not-taken");
+  });
+});
+
+/** A modal tab's composer: its line, its send and its phase 2. */
+function TabComposer(props: {
+  readonly tabId: string;
+  readonly submit: () => boolean;
+}) {
+  const send = useStagedSandboxSend({
+    surfaceKey: SURFACE,
+    terminal: null,
+    taskId: null,
+    ownerId: props.tabId,
+  });
+  useStagedSandboxHandoff({
+    surfaceKey: SURFACE,
+    resolvedHostId: NEW_HOST,
+    canSubmit: true,
+    submit: props.submit,
+    prepareHandoff: noPrepare,
+    ownerId: props.tabId,
+    watchOwner: ownerGoneOnUnmount,
+  });
+  return <>{send.line}</>;
+}
+
+describe("useStagedSandboxSend after the sending tab is gone", () => {
+  it("hands off another tab's Retry once the tab whose send failed closed", async () => {
+    stageCreated("creating", { kind: "unverified" });
+    useStagedSandboxStore.getState().report(SURFACE, {
+      createdSandboxId: null,
+      createdHostId: null,
+      ownerId: "tab-a",
+      sendTaken: true,
+    });
+    const submitA = vi.fn(() => true);
+    const submitB = vi.fn(() => true);
+    const client = new QueryClient();
+    const view = render(
+      <QueryClientProvider client={client}>
+        <TabComposer tabId="tab-a" submit={submitA} />
+      </QueryClientProvider>,
+    );
+    view.rerender(
+      <QueryClientProvider client={client}>
+        <TabComposer tabId="tab-b" submit={submitB} />
+      </QueryClientProvider>,
+    );
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(readStagedSandbox(SURFACE)).toMatchObject({
+      ownerId: null,
+      sendTaken: false,
+    });
+
+    fireEvent.click(screen.getByTestId("sandbox-refusal-retry"));
+    expect(readStagedSandbox(SURFACE)).toMatchObject({
+      ownerId: "tab-b",
+      sendTaken: true,
+    });
+    expect(mocks.runStagedSandbox).toHaveBeenCalledWith(
+      SURFACE,
+      false,
+      expect.any(Object),
+      expect.any(Object),
+    );
+
+    act(() => {
+      useStagedSandboxStore.getState().report(SURFACE, {
+        failure: null,
+        createdHostId: NEW_HOST,
+        phase: "handoff",
+      });
+    });
+    expect(submitB).toHaveBeenCalledTimes(1);
+    expect(submitA).not.toHaveBeenCalled();
   });
 });
 

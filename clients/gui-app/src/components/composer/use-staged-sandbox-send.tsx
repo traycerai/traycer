@@ -34,6 +34,7 @@ import {
 } from "@/lib/sandboxes/staged-sandbox-run";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import {
+  handoffOwnerLive,
   holdHandoffOwner,
   readStagedSandbox,
   stagedCreateNeedsFreshKey,
@@ -128,12 +129,13 @@ export type StagedTerminalAsk =
  * An explicit terminal ask on a surface's stage (a Settings row's Open
  * terminal, the landing panel's `+`) is a first action, as a send is: the
  * stage is marked to open a folderless terminal on its sandbox once it is
- * awake, and its create or wake starts when none is running. It takes the
- * ask while nothing ran, while its run is on its way, or after a failure the
- * next run starts over from (a new key). A sandbox that is up with settings
- * that did not apply is awake: its terminal opens there now. Any other
- * stage (handing off, or stopped where only the line's own actions go on)
- * leaves the ask to the caller.
+ * awake, and its create or wake starts when none is running. A run that
+ * stopped short starts again as the line's Retry or Keep waiting would, under
+ * the key the stage's rule names. A sandbox that is up with settings that did
+ * not apply is awake: its terminal opens there now. While a stage holds the
+ * surface the ask never falls through to the host the surface falls back to;
+ * only a stage in its handoff (the surface is already on the sandbox) leaves
+ * it to the caller.
  */
 export function startStagedTerminal(
   surfaceKey: string,
@@ -146,13 +148,10 @@ export function startStagedTerminal(
   if (current.failure?.kind === "settings" && current.createdHostId !== null) {
     return { kind: "awake", hostId: current.createdHostId };
   }
-  const fresh = stagedCreateNeedsFreshKey(current);
-  const running = current.phase === "creating" && current.failure === null;
-  if (!running && current.phase !== "staged" && !fresh) {
-    return { kind: "not-taken" };
-  }
   useStagedSandboxStore.getState().report(surfaceKey, { openTerminal: true });
-  if (!running) start(fresh);
+  if (current.phase === "staged" || current.failure !== null) {
+    start(stagedCreateNeedsFreshKey(current));
+  }
   return { kind: "taken" };
 }
 
@@ -198,11 +197,28 @@ export function useStagedSandboxSend(input: {
     },
     [runner, surfaceKey, taskId],
   );
+  // A line action on a stage whose sending draft is gone (its modal's tab or
+  // its start page closed) is this draft's: the handoff resubmits it. A stage
+  // carrying a terminal ask and no send keeps to the terminal.
+  const runFromLine = useCallback(
+    (fresh: boolean): void => {
+      if (surfaceKey === null) return;
+      const current = readStagedSandbox(surfaceKey);
+      if (current !== null && !handoffOwnerLive(surfaceKey, current.ownerId)) {
+        useStagedSandboxStore.getState().report(surfaceKey, {
+          ownerId,
+          sendTaken: current.sendTaken || !current.openTerminal,
+        });
+      }
+      run(fresh);
+    },
+    [ownerId, run, surfaceKey],
+  );
   const newHost = useNewHostActions(
     surfaceKey,
     stage?.createdHostId ?? null,
     terminal,
-    run,
+    runFromLine,
   );
 
   const intercept = useCallback(
@@ -224,8 +240,8 @@ export function useStagedSandboxSend(input: {
       // A first action that stopped short leaves a stage like any other: the
       // send runs it again. The action it hands off is the owner's alone; one
       // in flight takes any other send and records nothing, and the chip says
-      // it is busy. A boot only a terminal ask started has no send yet: this
-      // one is handed off with it.
+      // it is busy. A boot with no send (a terminal ask started it, or the
+      // draft that sent is gone) is handed off with this one.
       if (current.phase === "staged" || current.failure !== null) {
         messageTextRef.current = messageText;
         setFallbackName(stagedSandboxFallbackName(messageText));
@@ -297,12 +313,12 @@ export function useStagedSandboxSend(input: {
         name={stage.target.name.length > 0 ? stage.target.name : fallbackName}
         facts={facts}
         actions={{
-          onKeepWaiting: () => run(false),
+          onKeepWaiting: () => runFromLine(false),
           onCancel: () => useStagedSandboxStore.getState().cancel(surfaceKey),
           onChooseAnotherHost: () =>
             useStagedSandboxStore.getState().clear(surfaceKey),
-          onRetryCreation: () => run(true),
-          onRetry: () => run(stagedCreateNeedsFreshKey(stage)),
+          onRetryCreation: () => runFromLine(true),
+          onRetry: () => runFromLine(stagedCreateNeedsFreshKey(stage)),
           onChangeShape: () => {
             useStagedSandboxStore.getState().cancel(surfaceKey);
             openStagedShapeSheet(surfaceKey);

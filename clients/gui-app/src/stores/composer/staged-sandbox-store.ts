@@ -352,9 +352,10 @@ export function handoffOwnerLive(
 
 /**
  * Holds a draft's phase 2 mounted for a surface. Once none is mounted and the
- * draft is gone (`watch`), a handoff still waiting on it is cleared: the
- * sandbox stays awake and the draft stays, so only the automatic send is
- * abandoned.
+ * draft is gone (`watch`), its send is abandoned, the draft kept: a handoff
+ * still waiting on it is cleared (the sandbox stays awake), and a stage still
+ * on its way, or stopped short, is left to the surface's next send or line
+ * action to claim, with any terminal ask it carries.
  */
 export function holdHandoffOwner(
   surfaceKey: string,
@@ -373,13 +374,12 @@ export function holdHandoffOwner(
     owner.stopWatching?.();
     owner.stopWatching = null;
     const stage = readStagedSandbox(surfaceKey);
-    if (
-      stage !== null &&
-      stage.phase === "handoff" &&
-      stage.failure === null &&
-      stage.sendTaken &&
-      stage.ownerId === ownerId
-    ) {
+    if (stage === null || !stage.sendTaken || stage.ownerId !== ownerId) return;
+    if (stage.phase === "creating") {
+      useStagedSandboxStore
+        .getState()
+        .report(surfaceKey, { sendTaken: false, ownerId: null });
+    } else if (stage.phase === "handoff" && stage.failure === null) {
       useStagedSandboxStore.getState().clear(surfaceKey);
     }
   };

@@ -122,6 +122,8 @@ const testState = vi.hoisted(() => ({
   installEditor: null as (() => void) | null,
   /** How many composer bodies mounted: one per editor instance. */
   bodyMounts: 0,
+  /** A toolbar popover the person left open in the composer. */
+  toolbarPopoverOpen: false,
   placement: ((): { current: PlacementTargetShape } => ({
     current: {
       resolvedHostId: "host-a",
@@ -145,6 +147,8 @@ function terminalLaunch(harnessId: TuiHarnessId): TerminalAgentLaunch {
 
 vi.mock("@/components/home/composer/composer-body", async () => {
   const React = await import("react");
+  const { Popover, PopoverAnchor, PopoverContent } =
+    await import("@/components/ui/popover");
   return {
     ComposerBody: (props: ComposerBodyProps) => {
       testState.bodySubmit = props.onSubmit;
@@ -159,6 +163,20 @@ vi.mock("@/components/home/composer/composer-body", async () => {
         "div",
         { "data-testid": "composer-body-mock" },
         props.topBanner,
+        React.createElement(
+          Popover,
+          { open: testState.toolbarPopoverOpen },
+          React.createElement(PopoverAnchor, null),
+          React.createElement(
+            PopoverContent,
+            {},
+            React.createElement(
+              "span",
+              { "data-testid": "toolbar-popover-mock" },
+              "Models",
+            ),
+          ),
+        ),
       );
     },
   };
@@ -511,6 +529,7 @@ afterEach(() => {
   testState.stagedSendInput = null;
   testState.stagedHandoffInput = null;
   testState.bodyMounts = 0;
+  testState.toolbarPopoverOpen = false;
   useStagedSandboxStore.setState({ bySurface: {} });
   useNewConversationModalOpenStore.getState().close();
   testState.catalogHostId = null;
@@ -894,6 +913,21 @@ describe("new-conversation modal host while a staged sandbox boots", () => {
     setOpen(false, null);
 
     expect(testState.dismissSuggestion).toHaveBeenCalledTimes(1);
+  });
+
+  it("un-presents a toolbar popover left open when the modal hides without input, and shows it again on reopen", () => {
+    testState.toolbarPopoverOpen = true;
+    renderHost();
+    sendOnStagedSandbox();
+    expect(screen.getByTestId("toolbar-popover-mock")).toBeDefined();
+
+    // A tab activated from outside the page (a notification): no click or
+    // focus move dismissed the popover.
+    setOpen(false, null);
+    expect(screen.queryByTestId("toolbar-popover-mock")).toBeNull();
+
+    setOpen(true, null);
+    expect(screen.getByTestId("toolbar-popover-mock")).toBeDefined();
   });
 
   it("holds a request filed while the send is handed off, and keeps it open after the send", () => {
