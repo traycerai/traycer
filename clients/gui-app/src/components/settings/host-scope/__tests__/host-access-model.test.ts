@@ -19,7 +19,6 @@ import {
   REMOTE_ACCESS_QUESTION,
   REMOTE_ACCESS_TEXT,
   remoteAccessQuestionShown,
-  REVIEW_LINK_LABEL,
   reviewText,
   sameOverrideTarget,
   SETUP_STEPS,
@@ -89,14 +88,11 @@ describe("the fixed copy", () => {
     ]);
   });
 
-  it("words the moved notice, the review link and the team line", () => {
+  it("words the moved notice and the team line", () => {
     expect(MOVED_NOTICE_TEXT).toBe(
       "Your settings moved to Personal. Review what changed.",
     );
-    expect(REVIEW_LINK_LABEL).toBe("Review in the dashboard");
-    expect(teamOwnedText("Acme")).toBe(
-      "These settings belong to Acme. Change them in the dashboard.",
-    );
+    expect(teamOwnedText("Acme")).toBe("These settings belong to Acme.");
     expect(keepLocalText("dev-box")).toBe("Keep dev-box's value on dev-box");
     expect(keptUndoFailedText("dev-box")).toBe(
       "Kept on dev-box, but couldn't undo the change everywhere.",

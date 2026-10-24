@@ -117,16 +117,13 @@ describe("settings search", () => {
     expect(labelsFor("proxy", DESKTOP)).toContain("Variables and shells");
   });
 
-  it("reaches the replay card by the words the old General row owned", () => {
-    // The tour's replay moved out of General, and its vocabulary moved with
-    // it: these queries appear in no label anywhere and must still land on
-    // the card, anchor included, rather than at the top of a page.
-    expect(landingFor("walkthrough", DESKTOP)).toBe(
-      "getting-started#getting-started-product-tour",
+  it("reaches Start a task and the download card on Getting started", () => {
+    expect(landingFor("start a task", DESKTOP)).toBe(
+      "getting-started#getting-started-start-task",
     );
-    for (const query of ["product tour", "first run", "intro"]) {
-      expect(labelsFor(query, DESKTOP)).toContain("Initial tour");
-    }
+    expect(landingFor("another computer", DESKTOP)).toBe(
+      "getting-started#getting-started-install",
+    );
   });
 
   it("reaches the Notifications page by its former name, Inbox", () => {
@@ -230,13 +227,15 @@ describe("settings search", () => {
       ["MCP servers", "mcp-servers", "MCP servers"],
       ["Skills", "skills", "Skills"],
       ["Agent definitions", "agent-definitions", "Agent definitions"],
-      ["Machine setup", "machine-setup", "Machine setup"],
       ["Providers", "providers", "Providers"],
+      ["Permissions", "permissions", "Permissions"],
+      ["Sandboxes", "sandboxes", "Sandboxes"],
+      ["Members", "members", "Members"],
     ] as const) {
-      expect(pageScopeFor(query, section, label), query).toBe("Personal");
+      expect(pageScopeFor(query, section, label), query).toBe("Environment");
     }
     for (const [query, section, label] of [
-      ["Permissions", "permissions", "Permissions"],
+      ["Credits", "credits", "Credits"],
       ["Notifications", "notifications", "Notifications"],
     ] as const) {
       expect(pageScopeFor(query, section, label), query).toBe("Account");
@@ -251,12 +250,19 @@ describe("settings search", () => {
     expect(landingFor("secrets", DESKTOP)).toBe("secrets#<top>");
   });
 
-  it("opens MCP servers, Agent definitions and Machine setup on their own words", () => {
+  it("opens MCP servers and Agent definitions on their own words", () => {
     expect(landingFor("mcp servers", DESKTOP)).toBe("mcp-servers#<top>");
     expect(landingFor("agent definitions", DESKTOP)).toBe(
       "agent-definitions#<top>",
     );
-    expect(landingFor("machine setup", DESKTOP)).toBe("machine-setup#<top>");
+  });
+
+  it("no longer offers Machine setup as a page of its own", () => {
+    expect(
+      searchSettings("machine setup", DESKTOP).some(
+        (result) => result.entry.section === "machine-setup",
+      ),
+    ).toBe(false);
   });
 
   it("reaches the Agent office default view row, group breadcrumb included", () => {

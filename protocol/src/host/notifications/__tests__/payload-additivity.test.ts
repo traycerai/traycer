@@ -22,6 +22,11 @@ import {
   hostNotificationTeamMemberRemovedPayloadSchema,
   hostNotificationTeamPlanUnlinkedPayloadSchema,
   hostNotificationTeamPodsFullPayloadSchema,
+  hostNotificationEnvironmentMoveStalledPayloadSchema,
+  hostNotificationEnvironmentApplyFailedPayloadSchema,
+  hostNotificationTeamRoleChangedPayloadSchema,
+  hostNotificationTeamHostReturnedPayloadSchema,
+  hostNotificationSecretRemovedPayloadSchema,
   hostNotificationTeamPolicyAuthorityExpiredPayloadSchema,
   hostNotificationTeamPolicyUnappliedPayloadSchema,
   hostNotificationWorkspaceOperationFailedPayloadSchema,
@@ -66,6 +71,11 @@ const LIVE_PAYLOAD_SCHEMAS: Record<
     hostNotificationTeamInstallingAdminGonePayloadSchema,
   team_plan_unlinked: hostNotificationTeamPlanUnlinkedPayloadSchema,
   team_pods_full: hostNotificationTeamPodsFullPayloadSchema,
+  environment_move_stalled: hostNotificationEnvironmentMoveStalledPayloadSchema,
+  environment_apply_failed: hostNotificationEnvironmentApplyFailedPayloadSchema,
+  team_role_changed: hostNotificationTeamRoleChangedPayloadSchema,
+  team_host_returned: hostNotificationTeamHostReturnedPayloadSchema,
+  secret_removed: hostNotificationSecretRemovedPayloadSchema,
 };
 
 const KINDS = [
@@ -89,6 +99,11 @@ const KINDS = [
   "team_installing_admin_gone",
   "team_plan_unlinked",
   "team_pods_full",
+  "environment_move_stalled",
+  "environment_apply_failed",
+  "team_role_changed",
+  "team_host_returned",
+  "secret_removed",
 ] as const satisfies readonly HostNotificationKnownPayloadKind[];
 
 describe("host notification payload additivity", () => {

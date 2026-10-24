@@ -12,8 +12,13 @@ import {
   type PersonalPageStatusLine,
 } from "@/components/settings/personal/personal-page-status";
 import type { HostRpcRegistry } from "@/lib/host";
+import type { EnvironmentPick } from "@/lib/settings-environment-pages";
+import type { SettingsSectionId } from "@/lib/settings-sections";
 
 export interface PersonalPageContextValue {
+  /** The page, and the configuration the Environment dropdown picked. */
+  readonly section: SettingsSectionId;
+  readonly pick: EnvironmentPick;
   readonly state: PersonalHostState;
   readonly line: PersonalPageStatusLine | null;
   readonly hostName: string;

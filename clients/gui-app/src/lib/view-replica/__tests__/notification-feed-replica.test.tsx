@@ -164,6 +164,47 @@ describe("notification feed replica", () => {
     expect(useCloudNotificationsStore.getState().summary).toEqual(FEED_SUMMARY);
   });
 
+  it("paints a cached row of an environments-redesign kind", async () => {
+    const previous = new ViewReplicaStore(
+      createIndexedDbViewReplicaBackend(
+        () => globalThis.indexedDB,
+        VIEW_REPLICA_DB_NAME,
+      ),
+    );
+    await previous.warm(ACCOUNT);
+    const base = feedRow("removed-1");
+    previous.write(
+      notificationFeedReplicaService,
+      address(),
+      {
+        rows: [
+          {
+            ...base,
+            entry: {
+              ...base.entry,
+              kind: "secret.removed",
+              outcome: "completed",
+            },
+          },
+        ],
+        summary: FEED_SUMMARY,
+        cloudFeedVersion: { major: 1, minor: 4 },
+      },
+      { observedAt: 100, sourceGeneration: 7 },
+    );
+    await previous.drain();
+
+    await viewReplicaStore.warm(ACCOUNT);
+    const hit = viewReplicaStore.read(
+      notificationFeedReplicaService,
+      address(),
+    );
+
+    expect(hit?.page.rows.map((row) => row.entry.kind)).toEqual([
+      "secret.removed",
+    ]);
+  });
+
   it("stops admitting the cached feed once the account is refused", async () => {
     await seedPreviousSession(["entry-1"]);
     await viewReplicaStore.warm(ACCOUNT);

@@ -111,9 +111,10 @@ const NO_BRIDGES: SettingsAvailabilityContext = {
 };
 
 export const SETTINGS_SEARCH_FIXTURES = [
-  // The checklist's cards always render - an unavailable guide is disabled in
-  // place, not withheld - so the replay card's anchor is there with and
-  // without a runner host, which is what these two shells assert.
+  // The checklist's always-on cards (start a task, install) own anchors and
+  // render with and without a runner host, which is what these two shells
+  // assert. Credits is gated on a staged sandbox, so it contributes to the
+  // page rather than owning an anchor.
   {
     section: "getting-started",
     hostScope: null,

@@ -7,20 +7,18 @@ import { AlertTriangle, Check, Circle } from "lucide-react";
 import { toast } from "sonner";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type {
-  EnvironmentStatusResponse,
+  EnvironmentStatusResponseV11,
   LocalOverride,
 } from "@traycer/protocol/host/environment-schemas";
 import {
   isProfileEnabled,
   type ProviderId,
 } from "@traycer/protocol/host/provider-schemas";
-import { DashboardLinkButton } from "@/components/settings/host-scope/dashboard-link-button";
 import {
   LOCAL_VALUES_RESTART_NOTE,
   localOverrideLabel,
   MOVED_NOTICE_TEXT,
   movedNoticeShown,
-  REVIEW_LINK_LABEL,
   SETUP_STEPS,
   setupView,
   TERMINAL_ACCOUNT_SENTENCE,
@@ -31,6 +29,7 @@ import { RemoteAccessSection } from "@/components/settings/host-scope/remote-acc
 import { TeamOwnedLine } from "@/components/settings/host-scope/team-owned-line";
 import { HOST_OVERVIEW } from "@/components/settings/panels/host-overview.definitions";
 import { HostOverviewTabSections } from "@/components/settings/panels/host-overview-tabs";
+import { HostOverviewSettingsCard } from "@/components/settings/panels/host-overview-settings-card";
 import { SettingsGroup } from "@/components/settings/settings-group";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
@@ -49,7 +48,7 @@ import { useProvidersSetProfileEnabledForClient } from "@/hooks/providers/use-pr
 import type { HostRpcRegistry } from "@/lib/host";
 import { providerDisplayName } from "@/lib/provider-ordering";
 import { environmentMutationKeys } from "@/lib/query-keys";
-import { personalReviewUrl } from "@/lib/sandboxes/secrets-dashboard";
+import { navigateToSettingsSection } from "@/lib/settings-navigation";
 import { cn } from "@/lib/utils";
 import { useHostAccessPromptsStore } from "@/stores/hosts/host-access-prompts-store";
 
@@ -91,7 +90,11 @@ export function HostOverviewAccessTab(
   }
   return (
     <HostOverviewTabSections>
-      <AccessTabBody client={props.client} hostId={props.hostId} />
+      <AccessTabBody
+        client={props.client}
+        hostId={props.hostId}
+        hostName={props.hostName}
+      />
     </HostOverviewTabSections>
   );
 }
@@ -99,6 +102,7 @@ export function HostOverviewAccessTab(
 function AccessTabBody(props: {
   readonly client: HostClient<HostRpcRegistry>;
   readonly hostId: string | null;
+  readonly hostName: string;
 }): ReactNode {
   const status = useEnvironmentStatusRead(props.client, props.hostId, true);
   if (status.supported === false) {
@@ -130,6 +134,7 @@ function AccessTabBody(props: {
     <AccessSections
       client={props.client}
       hostId={props.hostId}
+      hostName={props.hostName}
       status={status.data}
     />
   );
@@ -147,10 +152,20 @@ function AccessTabBody(props: {
 function AccessSections(props: {
   readonly client: HostClient<HostRpcRegistry>;
   readonly hostId: string | null;
-  readonly status: EnvironmentStatusResponse;
+  readonly hostName: string;
+  readonly status: EnvironmentStatusResponseV11;
 }): ReactNode {
+  const { hostId } = props;
   return (
     <>
+      {hostId === null ? null : (
+        <HostOverviewSettingsCard
+          client={props.client}
+          hostId={hostId}
+          hostName={props.hostName}
+          status={props.status}
+        />
+      )}
       <MovedNotice
         client={props.client}
         hostId={props.hostId}
@@ -177,7 +192,7 @@ function AccessSections(props: {
 function MovedNotice(props: {
   readonly client: HostClient<HostRpcRegistry>;
   readonly hostId: string | null;
-  readonly status: EnvironmentStatusResponse;
+  readonly status: EnvironmentStatusResponseV11;
 }): ReactNode {
   const setupDone =
     props.status.setup !== null &&
@@ -219,11 +234,17 @@ function MovedNotice(props: {
         >
           Dismiss
         </Button>
-        <DashboardLinkButton
-          page={personalReviewUrl}
-          label={REVIEW_LINK_LABEL}
-          testId="moved-to-personal-review-link"
-        />
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          data-testid="moved-to-personal-review-link"
+          onClick={() => {
+            navigateToSettingsSection("secrets");
+          }}
+        >
+          Review
+        </Button>
       </div>
     </div>
   );

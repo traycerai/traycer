@@ -13,6 +13,8 @@ export interface ProviderLinkTarget {
   readonly providerId: string;
   /** `null` links a new profile rather than one on this host only. */
   readonly profileId: string | null;
+  /** Captured when a team opens Link; absent on the existing host path. */
+  readonly environmentId?: string | null;
 }
 
 interface ProviderLinkDialogState {

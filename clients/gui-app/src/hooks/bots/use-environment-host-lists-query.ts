@@ -2,8 +2,8 @@ import { useCallback, useMemo } from "react";
 import type { UseQueryResult } from "@tanstack/react-query";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type {
-  EnvironmentHostListResponse,
-  EnvironmentHostRecord,
+  EnvironmentHostListResponseV11,
+  EnvironmentHostRecordV11,
 } from "@traycer/protocol/host/environment/contracts";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcRegistry } from "@/lib/host";
@@ -22,7 +22,7 @@ export interface EnvironmentHostLists {
    */
   readonly hostsByEnvironmentId: ReadonlyMap<
     string,
-    ReadonlyArray<EnvironmentHostRecord>
+    ReadonlyArray<EnvironmentHostRecordV11>
   >;
   /** Environments whose last read FAILED (refused, timed out), including a
    * refetch of a list that had answered before; never in the map. */
@@ -61,11 +61,13 @@ export function useEnvironmentHostLists(
   // answer moves rather than new ones every render.
   const combine = useCallback(
     (
-      results: Array<UseQueryResult<EnvironmentHostListResponse, HostRpcError>>,
+      results: Array<
+        UseQueryResult<EnvironmentHostListResponseV11, HostRpcError>
+      >,
     ): EnvironmentHostLists => {
       const hostsByEnvironmentId = new Map<
         string,
-        ReadonlyArray<EnvironmentHostRecord>
+        ReadonlyArray<EnvironmentHostRecordV11>
       >();
       const failedEnvironmentIds = new Set<string>();
       const failedRefetches: Array<() => Promise<unknown>> = [];

@@ -115,7 +115,9 @@ export type AnalyticsSettingsSection =
   | "getting-started"
   | "browser"
   | "browser-agent-access"
+  | "credits"
   | "mcp-servers"
+  | "members"
   | "skills"
   | "agent-definitions"
   | "machine-setup"
@@ -1414,9 +1416,11 @@ const ANALYTICS_SETTINGS_SECTIONS = new Set<string>(
     permissions: true,
     providers: true,
     sandboxes: true,
+    members: true,
     secrets: true,
     shell: true,
     usage: true,
+    credits: true,
     worktrees: true,
   } satisfies Record<AnalyticsSettingsSection, true>),
 );

@@ -15,6 +15,7 @@ import { useHostMutation } from "@/hooks/host/use-host-query";
 import { environmentMutationKeys, hostQueryKeys } from "@/lib/query-keys";
 import { useCloudChatViewerId } from "@/hooks/chats/use-cloud-chat-queries";
 import { hostEnvironmentBindingQueryKey } from "@/hooks/bots/use-host-environment-bindings-query";
+import { hostListEnvironmentId } from "@/hooks/environment/environment-host-list-key";
 
 const HOST_LIST_METHOD = "environment.host.list";
 
@@ -133,25 +134,4 @@ function cachedEnvironmentIdsOfHost(
     }
   }
   return [...ids];
-}
-
-/**
- * The environment an `environment.host.list` key asks about, under any host
- * scope (`["host", hostId?, method, { environmentId }, ...]`); `null` for any
- * other key.
- */
-function hostListEnvironmentId(queryKey: readonly unknown[]): string | null {
-  if (!hostQueryKeys.matchesMethodOnAnyHost(queryKey, HOST_LIST_METHOD)) {
-    return null;
-  }
-  const params = queryKey[queryKey.indexOf(HOST_LIST_METHOD) + 1];
-  if (
-    typeof params === "object" &&
-    params !== null &&
-    "environmentId" in params &&
-    typeof params.environmentId === "string"
-  ) {
-    return params.environmentId;
-  }
-  return null;
 }

@@ -186,7 +186,7 @@ function buildRotationHost(
     handlers: {
       "environment.secrets.list": () => {
         reads.list += 1;
-        return { secrets: [...state.secrets] };
+        return { removed: [], secrets: [...state.secrets] };
       },
       "environment.secrets.rotation": () => {
         reads.rotation += 1;
@@ -194,7 +194,7 @@ function buildRotationHost(
       },
       "environment.secrets.versions": () => {
         reads.versions += 1;
-        return { versions: [...state.versions] };
+        return { versions: [...state.versions], removal: null };
       },
       "environment.secrets.replaceValue": (request) => {
         replaceRequests.push(request);
@@ -280,6 +280,37 @@ async function openVersions(): Promise<HTMLElement[]> {
   return screen.findAllByTestId("secret-version");
 }
 
+describe("the Replace dialog's copy", () => {
+  it("says who holds the value and that running tools keep the old one", async () => {
+    renderPage(buildRotationHost({ rotation: enforcingRotation() }));
+    await openReplaceDialog();
+
+    expect(screen.getByTestId("secret-replace-custody").textContent).toBe(
+      "Stored encrypted in Traycer's cloud. Computers running Personal receive the value, readable by their tools and agents; sandboxes use it through the broker.",
+    );
+    expect(screen.getByTestId("secret-replace-restart").textContent).toBe(
+      SECRET_RESTART_LINE,
+    );
+  });
+});
+
+describe("Remove", () => {
+  it("previews what Remove does, with the current version, and names no web page", async () => {
+    renderPage(buildRotationHost({ rotation: enforcingRotation() }));
+
+    fireEvent.click(await screen.findByTestId("secret-row-remove"));
+
+    const dialog = await screen.findByTestId("confirm-destructive-dialog");
+    await waitFor(() => {
+      expect(dialog.textContent).toContain("Current version 3.");
+    });
+    expect(dialog.textContent).toContain(
+      "Came from unknown. Current version 3. Held on unknown. Tools already running keep it until they restart.",
+    );
+    expect(dialog.textContent).not.toMatch(/on the web|dashboard/i);
+  });
+});
+
 describe("Replace value", () => {
   it("sends the typed value against the version the list showed, then shows the rotation and the restart line", async () => {
     const host = buildRotationHost({ rotation: enforcingRotation() });
@@ -291,7 +322,12 @@ describe("Replace value", () => {
       expect(screen.queryByTestId("replace-secret-dialog")).toBeNull();
     });
     expect(host.replaceRequests).toEqual([
-      { secretId: "sec-1", value: TYPED_VALUE, expectedVersionId: "ver-3" },
+      {
+        secretId: "sec-1",
+        value: TYPED_VALUE,
+        expectedVersionId: "ver-3",
+        environmentId: null,
+      },
     ]);
     const headline = await screen.findByTestId("secret-rotation-headline");
     expect(headline.textContent).toBe(
@@ -467,8 +503,9 @@ describe("a secret's versions", () => {
       "destroyed",
     ]);
     expect(rows[0].textContent).toContain("Version 3");
+    // The current version leaves through the row's Remove, never from here.
     expect(within(rows[0]).queryByTestId("secret-version-undo")).toBeNull();
-    expect(within(rows[0]).getByTestId("secret-version-destroy")).toBeTruthy();
+    expect(within(rows[0]).queryByTestId("secret-version-destroy")).toBeNull();
     expect(within(rows[1]).getByTestId("secret-version-undo").textContent).toBe(
       "Undo",
     );
@@ -501,7 +538,12 @@ describe("a secret's versions", () => {
 
     await waitFor(() => {
       expect(host.undoRequests).toEqual([
-        { secretId: "sec-1", versionId: "ver-2", regrant: false },
+        {
+          secretId: "sec-1",
+          versionId: "ver-2",
+          regrant: false,
+          environmentId: null,
+        },
       ]);
     });
     await waitFor(() => {
@@ -523,7 +565,12 @@ describe("a secret's versions", () => {
 
     await waitFor(() => {
       expect(host.undoRequests).toEqual([
-        { secretId: "sec-1", versionId: "ver-2", regrant: true },
+        {
+          secretId: "sec-1",
+          versionId: "ver-2",
+          regrant: true,
+          environmentId: null,
+        },
       ]);
     });
   });
@@ -557,7 +604,7 @@ describe("a secret's versions", () => {
 
     await waitFor(() => {
       expect(host.destroyRequests).toEqual([
-        { secretId: "sec-1", versionId: "ver-2" },
+        { secretId: "sec-1", versionId: "ver-2", environmentId: null },
       ]);
     });
     await waitFor(() => {
@@ -581,18 +628,19 @@ describe("a secret's versions", () => {
   });
 
   it("says the current value cannot be destroyed when the host refuses", async () => {
+    // An Undo landed between render and click: the replaced version is now current.
     const host = buildRotationHost({
       destroyAnswer: { outcome: "refused", code: "version_current" },
     });
     renderPage(host);
     const rows = await openVersions();
 
-    fireEvent.click(within(rows[0]).getByTestId("secret-version-destroy"));
+    fireEvent.click(within(rows[1]).getByTestId("secret-version-destroy"));
     const dialog = await screen.findByTestId("confirm-destructive-dialog");
     fireEvent.click(within(dialog).getByTestId("confirm-action"));
 
     expect(
-      (await within(rows[0]).findByTestId("secret-version-note")).textContent,
+      (await within(rows[1]).findByTestId("secret-version-note")).textContent,
     ).toBe("This is the current value. Replace or revoke it first.");
   });
 });

@@ -40,7 +40,6 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ProviderList } from "@/components/providers/provider-list";
 import { HarnessIcon } from "@/components/home/pickers/harness-icon";
 import { useProvidersList } from "@/hooks/providers/use-providers-list-query";
-import { AccountManagedCredentialsLine } from "@/components/providers/secrets-dashboard-link";
 import { useProvidersSetEnabled } from "@/hooks/providers/use-providers-set-enabled-mutation";
 import { useProvidersSettingsFileStatus } from "@/hooks/providers/use-providers-settings-file-status-query";
 import {
@@ -54,6 +53,7 @@ import {
 } from "@/hooks/providers/use-providers-set-profile-enabled-mutation";
 import { useRefreshProviders } from "@/hooks/providers/use-refresh-providers";
 import { useHostClient } from "@/lib/host";
+import { navigateToSettingsSection } from "@/lib/settings-navigation";
 import { useProvidersFocusStore } from "@/stores/settings/providers-focus-store";
 import {
   HostScopeConnecting,
@@ -64,6 +64,7 @@ import {
   usePersonalHostScope,
   type HostScope,
 } from "@/components/settings/host-scope/use-host-scope";
+import { LocalRowNote } from "@/components/settings/environment/local-row-note";
 import type { HostRpcRegistry } from "@/lib/host";
 import { HostRuntimeContext } from "@/lib/host/runtime";
 import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
@@ -127,6 +128,11 @@ import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { useHostCredentialRefusal } from "@/hooks/host/use-host-credential-refusal";
 
 type ProviderId = ProviderCliState["providerId"];
+import { useConfigurationSource } from "@/components/settings/environment/configuration-source";
+import { TeamProviders } from "@/components/settings/environment/team-providers";
+import { TeamMcpServers } from "@/components/settings/environment/team-mcp-servers";
+import { TeamSkillsPage } from "@/components/settings/environment/team-skills";
+
 type ProviderProfile = ProviderCliState["profiles"][number];
 type ProvidersListQuery = UseQueryResult<
   ResponseOfMethod<HostRpcRegistry, "providers.list">,
@@ -399,6 +405,17 @@ function ProviderCheckedTimestamp({
 }
 
 export function ProvidersSettingsPanel() {
+  const source = useConfigurationSource();
+  const view = useContext(ProvidersPanelViewContext);
+  if (source.kind === "pool") {
+    if (view === "mcp-servers") return <TeamMcpServers />;
+    if (view === "skills") return <TeamSkillsPage />;
+    return <TeamProviders />;
+  }
+  return <HostProvidersSettingsPanel />;
+}
+
+function HostProvidersSettingsPanel() {
   const scope = usePersonalHostScope();
   const setHostId = scope.setHostId;
   // A deep link that already knows which machine needs attention — the
@@ -1470,13 +1487,15 @@ function ProviderDetail({
         }
       />
       <div className="flex flex-1 flex-col md:min-h-0">
-        {/* Nothing renders between the provider header and the tab rail. The
+        {/* Nothing renders between the provider header and the tab rail but
+            the Local row's note, which says whose settings these are. The
             API-key card used to sit here, above the bar, so a provider's only
             real setting appeared outside the tabs that were supposed to hold
             its settings; it is now the whole body of the `account` tab. That
             matters more now that the rail is PINNED: anything parked here would
             occupy fixed height at the top of the pane forever, not just until
             you scrolled past it. */}
+        <LocalRowNote />
         <Tabs
           value={activeTab}
           onValueChange={(value) => {
@@ -1656,6 +1675,31 @@ function CredentialsManagedInAccountOr(props: {
     useProvidersList({ enabled: true, subscribed: true }).data
       ?.credentialsManagedInAccount === true;
   return managedInAccount ? <AccountManagedCredentialsLine /> : props.children;
+}
+
+function AccountManagedCredentialsLine(): ReactNode {
+  return (
+    <div
+      data-testid="credentials-managed-in-account"
+      className="flex flex-wrap items-center gap-x-2 gap-y-1 text-ui-xs text-muted-foreground"
+    >
+      <p className="min-w-0">
+        Sign-ins and keys for sandboxes are stored in your account, where agents
+        can use them and never read them.
+      </p>
+      <Button
+        type="button"
+        size="sm"
+        variant="outline"
+        data-testid="credentials-managed-in-account-link"
+        onClick={() => {
+          navigateToSettingsSection("secrets");
+        }}
+      >
+        Secrets
+      </Button>
+    </div>
+  );
 }
 
 function ProviderTabBody({

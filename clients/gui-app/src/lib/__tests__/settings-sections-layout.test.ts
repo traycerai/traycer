@@ -61,9 +61,9 @@ describe("Layout section placement and digit reassignment", () => {
     const devicesIndex = sections.findIndex(
       (section) => section.id === "devices",
     );
-    // Four Personal pages (MCP servers, Skills, Agent definitions, Machine
-    // setup) and the two dev-only proof pages sit ahead of Sessions.
-    expect(devicesIndex).toBe(21);
+    // Eleven Environment pages after Providers (Machine setup is retired from
+    // navigation) and the two dev-only proof pages sit ahead of Sessions.
+    expect(devicesIndex).toBe(23);
     for (const id of [
       "mcp-servers",
       "skills",
@@ -73,10 +73,12 @@ describe("Layout section placement and digit reassignment", () => {
       "browser-agent-access",
       "secrets",
       "agent-definitions",
-      "machine-setup",
       "devices",
       "usage",
+      "credits",
       "permissions",
+      "sandboxes",
+      "members",
       "notifications",
       "host",
       "worktrees",
@@ -87,30 +89,53 @@ describe("Layout section placement and digit reassignment", () => {
     }
   });
 
-  it("lists the Personal pages in their order, with MCP servers, Skills, Agent definitions and Machine setup in place", () => {
+  it("lists the Environment pages in their order, Permissions after Skills and Machine setup retired", () => {
     setMobileApp(false);
-    const personal = visibleSettingsSections().filter(
+    const environment = visibleSettingsSections().filter(
       (section) => section.group === "personal",
     );
-    expect(personal.map((section) => section.label)).toEqual([
+    expect(environment.map((section) => section.label)).toEqual([
       "Providers",
       "MCP servers",
       "Skills",
+      "Permissions",
       "Model routing",
       "Variables and shells",
       "Agent selection",
       "Browser agent access",
       "Secrets",
+      "Sandboxes",
+      "Members",
       "Agent definitions",
-      "Machine setup",
     ]);
   });
 
-  it("pushes host (Overview) to index 26, past the single-digit leader limit", () => {
+  it("keeps each group contiguous, so the sidebar draws one heading per group", () => {
+    setMobileApp(false);
+    // The dev-only proof pages are Application-group entries filed after
+    // Environment; the production list never has them.
+    const production = visibleSettingsSections()
+      .filter((section) => !section.id.startsWith("dev-"))
+      .map((section) => section.group);
+    const runs = production.filter((group, i) => group !== production[i - 1]);
+    expect(new Set(runs).size).toBe(runs.length);
+  });
+
+  it("places Credits straight after Usage in Account", () => {
+    setMobileApp(false);
+    const ids = visibleSettingsSections().map((section) => section.id);
+    expect(ids.indexOf("credits")).toBe(ids.indexOf("usage") + 1);
+    expect(
+      visibleSettingsSections().find((section) => section.id === "permissions")
+        ?.group,
+    ).toBe("personal");
+  });
+
+  it("pushes host (Overview) to index 28, past the single-digit leader limit", () => {
     setMobileApp(false);
     const sections = visibleSettingsSections();
     const hostIndex = sections.findIndex((section) => section.id === "host");
-    expect(hostIndex).toBe(26);
+    expect(hostIndex).toBe(28);
     expect(hostIndex).toBeGreaterThan(SINGLE_DIGIT_LEADER_INDEX_LIMIT);
     expect(hostIndex).toBeGreaterThanOrEqual(SINGLE_DIGIT_LEADER_INDEX_LIMIT);
   });

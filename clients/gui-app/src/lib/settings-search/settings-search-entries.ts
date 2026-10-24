@@ -27,13 +27,15 @@ import { OPENING_BEHAVIOR } from "@/components/settings/panels/opening-behavior.
 import { PERMISSIONS } from "@/components/settings/panels/permissions-settings.definitions";
 import { PROVIDERS } from "@/components/settings/panels/providers-settings.definitions";
 import { SECRETS } from "@/components/settings/panels/secrets.definitions";
-import { SANDBOXES } from "@/components/settings/panels/sandboxes-settings.definitions";
 import { AGENT_DEFINITIONS } from "@/components/settings/panels/agent-definitions.definitions";
 import { MACHINE_SETUP } from "@/components/settings/panels/machine-setup.definitions";
 import { MCP_SERVERS } from "@/components/settings/panels/mcp-servers.definitions";
 import { SKILLS } from "@/components/settings/panels/skills.definitions";
 import { SHELL } from "@/components/settings/panels/shell-settings.definitions";
 import { USAGE } from "@/components/settings/panels/usage-settings.definitions";
+import { CREDITS } from "@/components/settings/environment/credits-page.definitions";
+import { SANDBOXES } from "@/components/settings/environment/sandboxes-page.definitions";
+import { MEMBERS } from "@/components/settings/environment/members-page.definitions";
 import { WORKTREES } from "@/components/settings/panels/worktrees-settings.definitions";
 import { LAYOUT_LAUNCH_ENTRIES } from "@/components/layout-editor/layout-search.definitions";
 import {
@@ -57,18 +59,20 @@ export const SETTINGS_SEARCH_COLLECTIONS: ReadonlyArray<AnySettingsSectionCollec
     PROVIDERS,
     MCP_SERVERS,
     SKILLS,
+    PERMISSIONS,
     FALLBACK,
     SHELL,
     AGENT_SELECTION,
     BROWSER_AGENT_ACCESS,
     SECRETS,
-    SANDBOXES,
     AGENT_DEFINITIONS,
+    SANDBOXES,
+    MEMBERS,
     MACHINE_SETUP,
     DEVICES,
     LINK_PHONE,
     USAGE,
-    PERMISSIONS,
+    CREDITS,
     HOST_NOTIFICATIONS,
     DELETE_ACCOUNT,
     HOST_OVERVIEW,

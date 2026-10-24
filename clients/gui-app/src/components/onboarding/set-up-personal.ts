@@ -63,7 +63,7 @@ export interface SetUpPersonalFacts {
  * computer's own sign-in does not count, since it is not one of the person's
  * settings.
  */
-function providerSetUp(providers: readonly ProviderCliState[]): boolean {
+export function providerSetUp(providers: readonly ProviderCliState[]): boolean {
   return providers.some(
     (provider) =>
       (provider.apiKey.configured && provider.apiKey.source === "stored") ||

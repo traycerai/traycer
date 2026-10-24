@@ -12,6 +12,8 @@ import {
   PersonalPageContext,
 } from "@/components/settings/personal/personal-page-context";
 import { PersonalPageNotices } from "@/components/settings/personal/personal-page-notices";
+import { PageChip } from "@/components/settings/personal/page-chip";
+import { useEnvironmentPick } from "@/stores/settings/settings-environment-pick-store";
 import { TeamOwnedLine } from "@/components/settings/host-scope/team-owned-line";
 import { usePersonalHostScope } from "@/components/settings/host-scope/use-host-scope";
 import {
@@ -28,7 +30,13 @@ import {
 } from "@/hooks/environment/use-environment-reads";
 import { useRereadOnStaleWrite } from "@/hooks/environment/use-reread-on-stale-write";
 import type { HostRpcRegistry } from "@/lib/host";
-import type { SettingsSectionId } from "@/lib/settings-sections";
+import {
+  SETTINGS_SECTIONS,
+  type SettingsSectionId,
+} from "@/lib/settings-sections";
+import { ConfigurationSourceBoundary } from "@/components/settings/environment/configuration-source-boundary";
+import { useTeamViewingHost } from "@/hooks/environment/team/use-team-viewing-host";
+import type { EnvironmentPick } from "@/lib/settings-environment-pages";
 import { cn } from "@/lib/utils";
 
 interface WindowHostEnvironment {
@@ -114,19 +122,89 @@ export function PersonalPageFrame(props: {
   readonly section: SettingsSectionId;
   readonly children: ReactNode;
 }): ReactNode {
+  const pick = useEnvironmentPick();
+  const environmentPage = SETTINGS_SECTIONS.some(
+    (section) => section.id === props.section && section.group === "personal",
+  );
+  if (pick.kind === "team" && environmentPage) {
+    return (
+      <ConfigurationSourceBoundary
+        key={pick.environmentId}
+        environmentId={pick.environmentId}
+      >
+        <TeamPageFrame section={props.section} pick={pick}>
+          {props.children}
+        </TeamPageFrame>
+      </ConfigurationSourceBoundary>
+    );
+  }
   const kinds = personalPageItemKinds(props.section);
-  if (kinds === null) return props.children;
+  if (
+    kinds === null &&
+    props.section !== "permissions" &&
+    props.section !== "secrets" &&
+    props.section !== "members"
+  )
+    return props.children;
+  if (kinds === null)
+    return (
+      <PersonalPageContext.Provider
+        value={{
+          section: props.section,
+          pick,
+          state: { kind: "unknown" },
+          line: null,
+          hostName: "",
+          hostId: null,
+          client: null,
+          localOverrides: NO_OVERRIDES,
+          notices: NO_NOTICES,
+          review: NO_REVIEW,
+        }}
+      >
+        {props.children}
+      </PersonalPageContext.Provider>
+    );
   return (
-    <PersonalPageFrameForKinds kinds={kinds}>
+    <PersonalPageFrameForKinds section={props.section} kinds={kinds}>
       {props.children}
     </PersonalPageFrameForKinds>
   );
 }
 
+/** Team pages never read the window host's Personal notices or values. */
+function TeamPageFrame(props: {
+  readonly section: SettingsSectionId;
+  readonly pick: EnvironmentPick;
+  readonly children: ReactNode;
+}): ReactNode {
+  const scope = useTeamViewingHost();
+  return (
+    <PersonalPageContext.Provider
+      value={{
+        section: props.section,
+        pick: props.pick,
+        state: { kind: "unknown" },
+        line: null,
+        hostName: scope.viewingHost?.hostLabel ?? "",
+        hostId: scope.viewingHost?.hostId ?? null,
+        client: scope.client,
+        localOverrides: NO_OVERRIDES,
+        notices: NO_NOTICES,
+        review: NO_REVIEW,
+      }}
+    >
+      {props.children}
+    </PersonalPageContext.Provider>
+  );
+}
+
 function PersonalPageFrameForKinds(props: {
+  readonly section: SettingsSectionId;
   readonly kinds: ReadonlySet<string>;
   readonly children: ReactNode;
 }): ReactNode {
+  const pick = useEnvironmentPick();
   const environment = useWindowHostEnvironmentState(props.kinds);
   const { state, hostName } = environment;
   // A save on this page that lost to a change made elsewhere re-reads it.
@@ -136,7 +214,9 @@ function PersonalPageFrameForKinds(props: {
   // team's host, whose settings are the team's.
   const readOnly = state.kind === "unsupported" || teamNameOf(state) !== null;
   return (
-    <PersonalPageContext.Provider value={{ ...environment, line }}>
+    <PersonalPageContext.Provider
+      value={{ ...environment, line, section: props.section, pick }}
+    >
       {readOnly ? (
         <div className="contents">
           <PersonalPageReadOnlyLine />
@@ -199,11 +279,14 @@ function PersonalPageStatusBanner(props: {
 export function PersonalPageHeaderStatus(): ReactNode {
   const value = useContext(PersonalPageContext);
   if (value === null) return null;
+  if (value.pick.kind === "team")
+    return <PageChip section={value.section} pick={value.pick} />;
   if (value.state.kind === "unsupported" || teamNameOf(value.state) !== null) {
     return null;
   }
   return (
     <>
+      <PageChip section={value.section} pick={value.pick} />
       {value.line === null ? null : (
         <PersonalPageStatusBanner line={value.line} />
       )}

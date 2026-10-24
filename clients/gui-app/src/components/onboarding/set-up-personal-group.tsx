@@ -41,7 +41,7 @@ export function SetUpPersonalGroup(props: {
     cacheKeyIdentity: undefined,
     client,
     method: "environment.secrets.list",
-    params: {},
+    params: { environmentId: null },
     options: { enabled: secretsSupported === true },
   });
   const status = useEnvironmentStatusRead(client, hostId, true);

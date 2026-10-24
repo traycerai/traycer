@@ -1,6 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createContext, use, type ReactNode } from "react";
-import { act, cleanup, render, renderHook } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  render,
+  renderHook,
+  screen,
+} from "@testing-library/react";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
@@ -79,7 +85,30 @@ vi.mock("@/providers/host-runtime-provider", () => {
   };
 });
 
+// `usePersonalHostScope` is the one scope hook the Environment wrapper reads;
+// it composes the host lists and the pick store. The case below hands the
+// wrapper the scope that pick would produce (its own derivation is covered by
+// use-personal-host-scope.test.tsx), so what is under test is the re-provide.
+const personalScopeRef = vi.hoisted<{ value: HostScope | null }>(() => ({
+  value: null,
+}));
+vi.mock(
+  "@/components/settings/host-scope/use-host-scope",
+  async (original) => ({
+    ...(await original<
+      typeof import("@/components/settings/host-scope/use-host-scope")
+    >()),
+    usePersonalHostScope: () => {
+      if (personalScopeRef.value === null) {
+        throw new Error("test personal scope not configured");
+      }
+      return personalScopeRef.value;
+    },
+  }),
+);
+
 import { HostRuntimeContext, useHostClient } from "@/lib/host/runtime";
+import { EnvironmentHostBinding } from "@/components/settings/environment/environment-host-binding";
 import { useScopedHostBinding } from "@/components/settings/host-scope/use-scoped-host-binding";
 import {
   hostScopeFixture,
@@ -87,6 +116,7 @@ import {
 } from "@/components/settings/host-scope/host-scope-fixture";
 import type { HostScope } from "@/components/settings/host-scope/use-host-scope";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
+import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
 
 const HOST_B: HostDirectoryEntry = {
   ...mockLocalHostEntry,
@@ -139,6 +169,8 @@ afterEach(() => {
   cleanup();
   useSelectionAuthorityStore.getState().reset();
   spineRef.value = null;
+  personalScopeRef.value = null;
+  useSettingsEnvironmentPickStore.setState({ pick: null });
   bindingRef.value = null;
   messengerRef.value = null;
 });
@@ -334,6 +366,73 @@ describe("useHostClient under a re-provided binding", () => {
           client: requesterForHostB(),
         })}
       />,
+    );
+
+    await expect(endpointHostIdOfNextRequest()).resolves.toBe(
+      mockLocalHostEntry.hostId,
+    );
+  });
+  it("lands a request beneath EnvironmentHostBinding on the Local row's host", async () => {
+    // The Environment dropdown names host B (a Local row) while the app is on
+    // A: the Agent definitions and Browser agent access pages read the ambient
+    // binding, so this wrapper is the only thing that moves them to B.
+    personalScopeRef.value = scopeShowingHostB({
+      status: "ready",
+      client: requesterForHostB(),
+    });
+
+    render(
+      <EnvironmentHostBinding>
+        <HostClientProbe />
+      </EnvironmentHostBinding>,
+    );
+
+    await expect(endpointHostIdOfNextRequest()).resolves.toBe(HOST_B.hostId);
+  });
+
+  it("shows the unusable host beneath EnvironmentHostBinding, never the window's host, until the Local row's host resolves", async () => {
+    useSettingsEnvironmentPickStore.setState({
+      pick: { kind: "local", hostId: HOST_B.hostId, hostName: "Old laptop" },
+    });
+    personalScopeRef.value = scopeShowingHostB({
+      status: "unreachable",
+      client: null,
+      activeHostId: mockLocalHostEntry.hostId,
+    });
+
+    const { rerender } = render(
+      <EnvironmentHostBinding>
+        <HostClientProbe />
+      </EnvironmentHostBinding>,
+    );
+
+    expect(seenClient.value).toBeNull();
+    expect(screen.getByText(`Can't reach ${HOST_B.hostId} from here`));
+
+    personalScopeRef.value = scopeShowingHostB({
+      status: "ready",
+      client: requesterForHostB(),
+      activeHostId: mockLocalHostEntry.hostId,
+    });
+    rerender(
+      <EnvironmentHostBinding>
+        <HostClientProbe />
+      </EnvironmentHostBinding>,
+    );
+
+    await expect(endpointHostIdOfNextRequest()).resolves.toBe(HOST_B.hostId);
+  });
+
+  it("leaves a request beneath EnvironmentHostBinding on the effective host when the pick follows the window", async () => {
+    personalScopeRef.value = scopeShowingHostB({
+      status: "following",
+      client: requesterForHostB(),
+    });
+
+    render(
+      <EnvironmentHostBinding>
+        <HostClientProbe />
+      </EnvironmentHostBinding>,
     );
 
     await expect(endpointHostIdOfNextRequest()).resolves.toBe(

@@ -25,9 +25,9 @@ import {
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
-  ProvidersLinkCompleteRequest,
+  ProvidersLinkCompleteRequestV11,
   ProvidersLinkCompleteResponse,
-  ProvidersLinkRequest,
+  ProvidersLinkRequestV11,
   ProvidersLinkResponse,
 } from "@traycer/protocol/host/environment-schemas";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
@@ -47,10 +47,10 @@ const LINK_ID = "link-1";
 const SIGN_IN_URL = "https://claude.ai/oauth/authorize?state=abc";
 
 type LinkHandler = (
-  request: ProvidersLinkRequest,
+  request: ProvidersLinkRequestV11,
 ) => Promise<ProvidersLinkResponse>;
 type CompleteHandler = (
-  request: ProvidersLinkCompleteRequest,
+  request: ProvidersLinkCompleteRequestV11,
 ) => Promise<ProvidersLinkCompleteResponse>;
 
 const linkMock = vi.hoisted(() => ({
@@ -105,6 +105,8 @@ function personalPage(children: ReactNode): ReactNode {
   return (
     <PersonalPageContext.Provider
       value={{
+        section: "providers",
+        pick: { kind: "personal" },
         state: { kind: "ready", status: environmentStatusFixture({}) },
         line: null,
         hostName: HOST_NAME,
@@ -193,6 +195,7 @@ describe("the intro", () => {
     expect(linkMock.link).toHaveBeenCalledWith({
       providerId: "claude-code",
       profileId: PROFILE_ID,
+      environmentId: null,
     });
   });
 
@@ -205,6 +208,7 @@ describe("the intro", () => {
     expect(linkMock.link).toHaveBeenCalledWith({
       providerId: "claude-code",
       profileId: null,
+      environmentId: null,
     });
   });
 });
@@ -237,6 +241,7 @@ describe("a sign-in URL with a pasted code", () => {
     expect(linkMock.complete).toHaveBeenCalledWith({
       linkId: LINK_ID,
       code: "abc#def",
+      environmentId: null,
     });
     expect(linked.textContent).toBe("Linked as a@x.test.");
   });
@@ -309,6 +314,7 @@ describe("a mismatch", () => {
     expect(linkMock.link).toHaveBeenLastCalledWith({
       providerId: "claude-code",
       profileId: PROFILE_ID,
+      environmentId: null,
     });
   });
 
@@ -325,6 +331,7 @@ describe("a mismatch", () => {
     expect(linkMock.link).toHaveBeenLastCalledWith({
       providerId: "claude-code",
       profileId: null,
+      environmentId: null,
     });
 
     linkMock.complete.mockResolvedValueOnce(
@@ -343,6 +350,7 @@ describe("a mismatch", () => {
     expect(linkMock.link).toHaveBeenLastCalledWith({
       providerId: "claude-code",
       profileId: null,
+      environmentId: null,
     });
   });
 });
@@ -384,6 +392,7 @@ describe("a device code", () => {
     expect(linkMock.complete).toHaveBeenLastCalledWith({
       linkId: LINK_ID,
       code: null,
+      environmentId: null,
     });
     expect(dialogState()).toBe("device");
 
@@ -446,6 +455,7 @@ describe("a device code", () => {
     expect(linkMock.link).toHaveBeenLastCalledWith({
       providerId: "codex",
       profileId: PROFILE_ID,
+      environmentId: null,
     });
     expect(dialogState()).toBe("device");
   });
@@ -486,6 +496,7 @@ describe("a local handoff", () => {
     expect(linkMock.complete).toHaveBeenLastCalledWith({
       linkId: LINK_ID,
       code: null,
+      environmentId: null,
     });
     expect(dialogState()).toBe("linking");
 
@@ -518,6 +529,7 @@ describe("an expired sign-in", () => {
     expect(linkMock.link).toHaveBeenLastCalledWith({
       providerId: "claude-code",
       profileId: PROFILE_ID,
+      environmentId: null,
     });
   });
 });
@@ -570,6 +582,7 @@ describe("a refused start", () => {
     expect(linkMock.link).toHaveBeenLastCalledWith({
       providerId: "claude-code",
       profileId: PROFILE_ID,
+      environmentId: null,
     });
   });
 
