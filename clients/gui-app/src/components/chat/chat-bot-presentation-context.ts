@@ -40,6 +40,17 @@ export interface ChatBotPresentation {
     | null;
   /** Opens the thread of a channel post; `null` in a thread. */
   readonly openThread: ((postMessageId: string) => void) | null;
+  /**
+   * Opens the thread under a question or proposal, by the announcement's
+   * message id: its thread when it has one, else a box whose first reply
+   * opens it. `null` in a thread.
+   */
+  readonly openAnnouncementThread: ((announcementId: string) => void) | null;
+  /**
+   * Posts one of a bot reply's options as the person's next message in the
+   * thread; `null` in the channel.
+   */
+  readonly chooseOption: ((choice: string) => void) | null;
 }
 
 export const ChatBotPresentationContext =

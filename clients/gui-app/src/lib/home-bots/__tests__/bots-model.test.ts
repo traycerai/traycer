@@ -72,6 +72,7 @@ function trackingTask(
     nextAt,
     state: "tracking",
     endedReason: null,
+    createdByUserId: null,
   };
 }
 
@@ -84,6 +85,7 @@ function endedTask(taskId: string, lastCheckinAt: number | null): BotTaskEntry {
     nextAt: null,
     state: "ended",
     endedReason: "by-bot",
+    createdByUserId: null,
   };
 }
 
