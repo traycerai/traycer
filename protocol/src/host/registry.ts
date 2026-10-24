@@ -6233,122 +6233,6 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
       downgradePathsFromLatest: {},
     },
   },
-  // The signed-in user's team environments, proxied from the cloud. An
-  // optional capability, never a floor method - see `environment/contracts.ts`.
-  "environment.list": {
-    degrade: { kind: "unsupported" },
-    1: {
-      latestMinor: 1,
-      versions: {
-        0: {
-          contract: environmentListV10,
-          upgradeFromPreviousVersion: null,
-        },
-        1: {
-          contract: environmentListV11,
-          upgradeFromPreviousVersion: environmentListUpgradeV10ToV11,
-        },
-      },
-      downgradePathsFromLatest: {},
-    },
-  },
-  // The one environment this host is bound to, and rebinding it. Optional
-  // capabilities like `environment.list`.
-  "environment.host.read": {
-    degrade: { kind: "unsupported" },
-    1: {
-      latestMinor: 0,
-      versions: {
-        0: {
-          contract: environmentHostReadV10,
-          upgradeFromPreviousVersion: null,
-        },
-      },
-      downgradePathsFromLatest: {},
-    },
-  },
-  // A named host's binding, served by the server pool from the account's
-  // binding records; `environment.host.read` stays the host's own answer.
-  "environment.binding.read": {
-    degrade: { kind: "unsupported" },
-    1: {
-      latestMinor: 0,
-      versions: {
-        0: {
-          contract: environmentBindingReadV10,
-          upgradeFromPreviousVersion: null,
-        },
-      },
-      downgradePathsFromLatest: {},
-    },
-  },
-  "environment.host.bind": {
-    degrade: { kind: "unsupported" },
-    1: {
-      latestMinor: 0,
-      versions: {
-        0: {
-          contract: environmentHostBindV10,
-          upgradeFromPreviousVersion: null,
-        },
-      },
-      downgradePathsFromLatest: {},
-    },
-  },
-  // The hosts of a team environment the caller may see. Optional like its
-  // siblings.
-  "environment.host.list": {
-    degrade: { kind: "unsupported" },
-    1: {
-      latestMinor: 1,
-      versions: {
-        0: {
-          contract: environmentHostListV10,
-          upgradeFromPreviousVersion: null,
-        },
-        // `enrolledByUserId` and `boundAt` gain null, which `@1.0` cannot
-        // carry: the resolver leaves such rows out of a `@1.0` answer.
-        1: {
-          contract: environmentHostListV11,
-          upgradeFromPreviousVersion: environmentHostListUpgradeV10ToV11,
-          responseGrowthProjectionGated: true,
-        },
-      },
-      downgradePathsFromLatest: {},
-    },
-  },
-  // The people in an environment, by name and avatar. Optional like its
-  // siblings.
-  "environment.members": {
-    degrade: { kind: "unsupported" },
-    1: {
-      latestMinor: 1,
-      versions: {
-        0: {
-          contract: environmentMembersV10,
-          upgradeFromPreviousVersion: null,
-        },
-        1: {
-          contract: environmentMembersV11,
-          upgradeFromPreviousVersion: environmentMembersUpgradeV10ToV11,
-        },
-      },
-      downgradePathsFromLatest: {},
-    },
-  },
-  "environment.setMainBot": {
-    degrade: { kind: "unsupported" },
-    1: {
-      latestMinor: 0,
-      versions: {
-        0: {
-          contract: environmentSetMainBotV10,
-          upgradeFromPreviousVersion: null,
-        },
-      },
-      downgradePathsFromLatest: {},
-    },
-  },
   "config.shell.get": {
     degrade: { kind: "unsupported" },
     1: {
@@ -8995,6 +8879,122 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
 // `_NoOverlappingHostRpcMethods` assertion below is what keeps a method from
 // silently existing in more than one of them.
 const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
+  // The signed-in user's team environments, proxied from the cloud. An
+  // optional capability, never a floor method - see `environment/contracts.ts`.
+  "environment.list": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 1,
+      versions: {
+        0: {
+          contract: environmentListV10,
+          upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: environmentListV11,
+          upgradeFromPreviousVersion: environmentListUpgradeV10ToV11,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  // The one environment this host is bound to, and rebinding it. Optional
+  // capabilities like `environment.list`.
+  "environment.host.read": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: environmentHostReadV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  // A named host's binding, served by the server pool from the account's
+  // binding records; `environment.host.read` stays the host's own answer.
+  "environment.binding.read": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: environmentBindingReadV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "environment.host.bind": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: environmentHostBindV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  // The hosts of a team environment the caller may see. Optional like its
+  // siblings.
+  "environment.host.list": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 1,
+      versions: {
+        0: {
+          contract: environmentHostListV10,
+          upgradeFromPreviousVersion: null,
+        },
+        // `enrolledByUserId` and `boundAt` gain null, which `@1.0` cannot
+        // carry: the resolver leaves such rows out of a `@1.0` answer.
+        1: {
+          contract: environmentHostListV11,
+          upgradeFromPreviousVersion: environmentHostListUpgradeV10ToV11,
+          responseGrowthProjectionGated: true,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  // The people in an environment, by name and avatar. Optional like its
+  // siblings.
+  "environment.members": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 1,
+      versions: {
+        0: {
+          contract: environmentMembersV10,
+          upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: environmentMembersV11,
+          upgradeFromPreviousVersion: environmentMembersUpgradeV10ToV11,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "environment.setMainBot": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: environmentSetMainBotV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
   "chat.prestartRuntime": {
     1: {
       latestMinor: 0,
