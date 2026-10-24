@@ -75,7 +75,7 @@ import {
   type StagedSandboxTarget,
 } from "@/stores/composer/staged-sandbox-store";
 import {
-  setSandboxesPageConfiguration,
+  requestSandboxesPageConfiguration,
   type SandboxesPageConfigurationId,
 } from "@/stores/sandboxes/sandboxes-page-store";
 import { useSystemTabModalActions } from "@/stores/tabs/use-system-tab-modal";
@@ -366,7 +366,7 @@ export function useSandboxStaging(input: {
       },
       onOpenShape: setSheetKey,
       onManage: () => {
-        setSandboxesPageConfiguration(
+        requestSandboxesPageConfiguration(
           managedConfiguration(stage, input.hosts, memoryHostId),
         );
         openSettings({

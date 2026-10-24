@@ -158,6 +158,8 @@ vi.mock("@/components/settings/panels/sandbox-row-actions", () => ({
 import { SandboxesSettingsPanel } from "@/components/settings/panels/sandboxes-settings-panel";
 import { useOpenSandboxesPage } from "@/hooks/sandboxes/use-open-sandboxes-page";
 import { useSandboxesPageStore } from "@/stores/sandboxes/sandboxes-page-store";
+import { PERSONAL_PICK } from "@/lib/settings-environment-pages";
+import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
 import {
   readStagedSandbox,
   useStagedSandboxStore,
@@ -198,9 +200,13 @@ describe("<SandboxesSettingsPanel />", () => {
     mocks.configurations = [{ kind: "personal" }];
     mocks.catalogue = null;
     useSandboxesPageStore.setState({
-      configurationId: { kind: "personal" },
+      requestedConfiguration: null,
       revealSandboxId: null,
       revealConfigurationPending: false,
+    });
+    useSettingsEnvironmentPickStore.setState({
+      pick: null,
+      defaultPick: PERSONAL_PICK,
     });
     useSandboxShapeMemoryStore.setState({
       byHost: {},
@@ -367,11 +373,38 @@ describe("<SandboxesSettingsPanel />", () => {
       </>,
     );
 
-    expect(useSandboxesPageStore.getState().configurationId).toEqual({
+    // The page moved the Environment group's pick to the row's team.
+    expect(useSettingsEnvironmentPickStore.getState().pick).toEqual({
       kind: "team",
-      teamId: "team-1",
+      environmentId: "env-acme",
     });
     expect(rowOf("team-box").className).toContain("bg-info/10");
+  });
+
+  it("lists the Environment group's picked configuration, with no picker of its own", () => {
+    mocks.configurations = [
+      { kind: "personal" },
+      {
+        kind: "team",
+        teamId: "team-1",
+        teamName: "Acme",
+        environmentId: "env-acme",
+      },
+    ];
+    renderPanel([
+      row("mine", { environmentId: null, createdBy: null }),
+      row("acme-box", { environmentId: "env-acme" }),
+    ]);
+    expect(names()).toEqual(["mine"]);
+    expect(screen.queryByTestId("sandboxes-configuration")).toBeNull();
+
+    act(() => {
+      useSettingsEnvironmentPickStore
+        .getState()
+        .setPick({ kind: "team", environmentId: "env-acme" });
+    });
+
+    expect(names()).toEqual(["acme-box"]);
   });
 
   it("says No sandboxes yet. when the configuration has none", () => {

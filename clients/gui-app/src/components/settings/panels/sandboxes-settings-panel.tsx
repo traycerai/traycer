@@ -23,13 +23,6 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useSandboxCatalogue } from "@/hooks/sandboxes/use-sandbox-catalogue-query";
 import {
@@ -39,7 +32,12 @@ import {
 import { useSandboxControlUnavailableReason } from "@/hooks/sandboxes/use-sandbox-control-unavailable-reason";
 import { useSandboxCosts } from "@/hooks/sandboxes/use-sandbox-costs-query";
 import { useSandboxList } from "@/hooks/sandboxes/use-sandbox-list-query";
-import { useSettlePendingSandboxReveal } from "@/hooks/sandboxes/use-open-sandboxes-page";
+import {
+  useApplyRequestedSandboxesConfiguration,
+  useSettlePendingSandboxReveal,
+} from "@/hooks/sandboxes/use-open-sandboxes-page";
+import type { EnvironmentPick } from "@/lib/settings-environment-pages";
+import { useEnvironmentPick } from "@/stores/settings/settings-environment-pick-store";
 import { useRefreshSandboxCosts } from "@/hooks/sandboxes/use-refresh-sandbox-costs";
 import { useSandboxSessionReport } from "@/hooks/sandboxes/use-sandbox-session-report";
 import { useOpenLink } from "@/lib/links/open-link";
@@ -102,7 +100,6 @@ import { useRunnerHost } from "@/providers/use-runner-host";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import {
   clearSandboxReveal,
-  setSandboxesPageConfiguration,
   useSandboxesPageStore,
 } from "@/stores/sandboxes/sandboxes-page-store";
 import { useSystemTabModalActions } from "@/stores/tabs/use-system-tab-modal";
@@ -116,20 +113,18 @@ import { useSystemTabModalActions } from "@/stores/tabs/use-system-tab-modal";
 export function SandboxesSettingsPanel(): ReactNode {
   const { configurations, teamEnvironmentIds, complete } =
     useSandboxConfigurations();
-  const selectedId = useSandboxesPageStore((s) => s.configurationId);
+  // The configuration is the Environment group's pick; a caller that opens
+  // the page on one moves that pick.
+  const pick = useEnvironmentPick();
+  useApplyRequestedSandboxesConfiguration();
   useSettlePendingSandboxReveal();
   // A held reveal waits for its configuration, or the wrong page consumes it.
   const revealSandboxId = useSandboxesPageStore((s) =>
-    s.revealConfigurationPending ? null : s.revealSandboxId,
+    s.revealConfigurationPending || s.requestedConfiguration !== null
+      ? null
+      : s.revealSandboxId,
   );
-  const configuration =
-    configurations.find(
-      (candidate) =>
-        candidate.kind === selectedId.kind &&
-        (candidate.kind === "personal" ||
-          (selectedId.kind === "team" &&
-            candidate.teamId === selectedId.teamId)),
-    ) ?? configurations[0];
+  const configuration = configurationForPick(configurations, pick);
   const runnerHost = useRunnerHost();
   const openLink = useOpenLink();
   const team = configuration.kind === "team";
@@ -163,10 +158,6 @@ export function SandboxesSettingsPanel(): ReactNode {
               Team usage and credits ↗
             </Button>
           ) : null}
-          <ConfigurationPicker
-            configurations={configurations}
-            selected={configuration}
-          />
         </div>
       }
     >
@@ -190,48 +181,23 @@ function configurationKey(configuration: SandboxPageConfiguration): string {
 }
 
 /**
- * The configuration choice at the top of the page: Personal and each team.
- * The configuration is never a filter of the list.
+ * The Environment group's pick as this page's configuration: Personal, or the
+ * team whose environment it names. Personal while that team is unresolved;
+ * its list waits for the teams there.
  */
-function ConfigurationPicker(props: {
-  readonly configurations: readonly SandboxPageConfiguration[];
-  readonly selected: SandboxPageConfiguration;
-}): ReactNode {
-  if (props.configurations.length < 2) return null;
-  return (
-    <Select
-      value={configurationKey(props.selected)}
-      onValueChange={(value) => {
-        const next = props.configurations.find(
-          (candidate) => configurationKey(candidate) === value,
-        );
-        if (next === undefined) return;
-        setSandboxesPageConfiguration(
-          next.kind === "team"
-            ? { kind: "team", teamId: next.teamId }
-            : { kind: "personal" },
-        );
-      }}
-    >
-      <SelectTrigger
-        className="w-48"
-        aria-label="Configuration"
-        data-testid="sandboxes-configuration"
-      >
-        <SelectValue />
-      </SelectTrigger>
-      <SelectContent>
-        {props.configurations.map((candidate) => (
-          <SelectItem
-            key={configurationKey(candidate)}
-            value={configurationKey(candidate)}
-          >
-            {candidate.kind === "team" ? candidate.teamName : "Personal"}
-          </SelectItem>
-        ))}
-      </SelectContent>
-    </Select>
-  );
+function configurationForPick(
+  configurations: readonly SandboxPageConfiguration[],
+  pick: EnvironmentPick,
+): SandboxPageConfiguration {
+  const team =
+    pick.kind === "team"
+      ? configurations.find(
+          (candidate) =>
+            candidate.kind === "team" &&
+            candidate.environmentId === pick.environmentId,
+        )
+      : undefined;
+  return team ?? configurations[0];
 }
 
 // ── Defaults ────────────────────────────────────────────────────────────────

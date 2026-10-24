@@ -673,12 +673,27 @@ const NO_ROW_ACTIONS: SandboxRowActions = { primary: null, menu: [] };
 /**
  * One matrix; a cell not listed is hidden. `Details` is on every row and is
  * not part of it. A row between two states offers only Details (and Destroy
- * from a stuck suspend or stop, as the card always did).
+ * from a stuck suspend or stop, as the card always did). An agent's sandbox
+ * has no Idle settings until it is kept: it destroys itself when idle, and
+ * Keep applies the configuration's defaults.
  */
 export function sandboxRowActions(input: {
   readonly summary: SandboxSummary;
   readonly unreachable: boolean;
   /** A frozen row's remedy is the viewer's own top-up. */
+  readonly frozenNeedsOwnCredits: boolean;
+}): SandboxRowActions {
+  const actions = matrixRowActions(input);
+  if (!input.summary.burst) return actions;
+  return {
+    primary: actions.primary,
+    menu: actions.menu.filter((action) => action !== "idle-settings"),
+  };
+}
+
+function matrixRowActions(input: {
+  readonly summary: SandboxSummary;
+  readonly unreachable: boolean;
   readonly frozenNeedsOwnCredits: boolean;
 }): SandboxRowActions {
   const { summary } = input;

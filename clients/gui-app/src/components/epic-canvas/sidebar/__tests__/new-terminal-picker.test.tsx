@@ -56,6 +56,18 @@ const bindingsQuery = vi.hoisted(() => ({
   current: null as BindingsQueryStub | null,
 }));
 
+/** The staged sandbox, and what the picker hands its staged send. */
+const staged = vi.hoisted(() => ({
+  staging: null as object | null,
+  send: null as {
+    readonly canSubmit: boolean;
+    readonly submit: () => boolean;
+  } | null,
+}));
+
+/** The staged sandbox's host: dialable, with its own folderless cwd. */
+const SANDBOX_HOST = "sbx-host";
+
 // Sandbox staging has its own suites (`composer/__tests__`): here the picker
 // stages nothing and the send is never intercepted.
 vi.mock(
@@ -70,23 +82,60 @@ vi.mock(
       groups: [],
       collaborators: null,
     }),
-    useSandboxStaging: () => null,
+    useSandboxStaging: () => staged.staging,
   }),
 );
 vi.mock("@/components/composer/use-staged-sandbox-send", () => ({
-  useStagedSandboxSend: () => ({ intercept: () => false, line: null }),
+  useStagedSandboxSend: (input: {
+    readonly canSubmit: boolean;
+    readonly submit: () => boolean;
+  }) => {
+    staged.send = input;
+    return { intercept: () => false, line: null };
+  },
 }));
 
+const SANDBOX_BINDINGS = {
+  data: { rows: [], folderlessCwd: "/home/sandbox" },
+  isPending: false,
+  isError: false,
+  isFetching: false,
+};
 vi.mock("@/hooks/worktree/use-worktree-list-bindings-for-epic-query", () => ({
   useWorktreeListBindingsForEpic: () => bindingsQuery.current,
   useWorktreeListBindingsForEpicForClient: () => bindingsQuery.current,
   useTerminalWorkspaceBindings: () => bindingsQuery.current,
-  useTerminalWorkspaceBindingsForClient: () => bindingsQuery.current,
+  // The sandbox's own client (see `useHostClientForHostId` below) reads its
+  // own, empty bindings.
+  useTerminalWorkspaceBindingsForClient: (input: {
+    readonly client: unknown;
+  }) =>
+    input.client === SANDBOX_HOST ? SANDBOX_BINDINGS : bindingsQuery.current,
 }));
 
 vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
-  useHostClientForHostId: () => null,
+  // Only the staged sandbox's host is named here; it stands in for its client.
+  useHostClientForHostId: (hostId: string | null) =>
+    hostId === SANDBOX_HOST ? SANDBOX_HOST : null,
 }));
+// The picker reads a directory entry only for the staged sandbox's host.
+vi.mock("@/hooks/host/use-host-directory-entry", () => ({
+  useHostDirectoryEntry: (hostId: string | null) =>
+    hostId === SANDBOX_HOST ? { hostId: SANDBOX_HOST } : null,
+}));
+vi.mock("@/lib/host/transport-key", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@/lib/host/transport-key")>();
+  return {
+    ...actual,
+    dialableHostEndpoint: (
+      entry: Parameters<typeof actual.dialableHostEndpoint>[0],
+    ) =>
+      entry !== null && entry.hostId === SANDBOX_HOST
+        ? "sbx-endpoint"
+        : actual.dialableHostEndpoint(entry),
+  };
+});
 
 vi.mock("@/hooks/agent/use-host-reachability", () => ({
   useHostReachability: () => ({
@@ -239,6 +288,8 @@ describe("<NewTerminalPicker />", () => {
     retryBindings.mockClear();
     useSurfaceHostSelectionStore.getState().resetForTests();
     stubLoadedBindings();
+    staged.staging = null;
+    staged.send = null;
   });
 
   afterEach(() => {
@@ -248,6 +299,30 @@ describe("<NewTerminalPicker />", () => {
       reportIssueContext: null,
     });
     resetEpicTerminalDurableCreatesForTests();
+  });
+
+  it("hands a staged sandbox its own directory, not a workspace row on another host", () => {
+    // The task binds workspace rows on host-1 and host-2; the sandbox was
+    // created and handed off.
+    staged.staging = {
+      composer: null,
+      stage: { phase: "handoff", createdHostId: SANDBOX_HOST },
+      consequences: null,
+      sheet: null,
+    };
+    const tabId = openPicker();
+    const send = staged.send;
+    if (send === null) throw new Error("expected the staged send");
+
+    expect(send.canSubmit).toBe(true);
+    act(() => {
+      expect(send.submit()).toBe(true);
+    });
+
+    const launched = tabTiles(tabId).filter(
+      (tile) => launchedTerminalCwd(tile) !== undefined,
+    );
+    expect(launched.map(launchedTerminalCwd)).toEqual(["/home/sandbox"]);
   });
 
   it("opens a popover with the host section and workspace rows", () => {

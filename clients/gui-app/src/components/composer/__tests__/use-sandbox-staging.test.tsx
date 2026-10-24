@@ -523,7 +523,7 @@ describe("useSandboxStaging surfaces", () => {
 
   it("opens Settings › Sandboxes on Personal when nothing is staged", () => {
     useSandboxesPageStore.setState({
-      configurationId: { kind: "team", teamId: "stale-team" },
+      requestedConfiguration: { kind: "team", teamId: "stale-team" },
     });
     const { composer } = mount([LAPTOP]);
 
@@ -531,7 +531,7 @@ describe("useSandboxStaging surfaces", () => {
 
     expect(mocks.openSettings).toHaveBeenCalledTimes(1);
     expect(mocks.openSettings.mock.calls[0][0].section).toBe("sandboxes");
-    expect(useSandboxesPageStore.getState().configurationId).toEqual({
+    expect(useSandboxesPageStore.getState().requestedConfiguration).toEqual({
       kind: "personal",
     });
   });
@@ -545,7 +545,7 @@ describe("useSandboxStaging surfaces", () => {
     act(() => staging().composer.onManage());
 
     expect(mocks.openSettings.mock.calls[0][0].section).toBe("sandboxes");
-    expect(useSandboxesPageStore.getState().configurationId).toEqual({
+    expect(useSandboxesPageStore.getState().requestedConfiguration).toEqual({
       kind: "team",
       teamId: staged.teamId,
     });

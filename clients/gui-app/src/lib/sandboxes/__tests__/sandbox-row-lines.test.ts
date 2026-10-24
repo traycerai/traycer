@@ -44,11 +44,32 @@ const MATRIX: readonly MatrixCase[] = [
     menu: AWAKE_MENU,
   },
   {
+    // It destroys itself when idle: no Idle settings until it is kept.
     name: "awake agent",
     summary: { state: "awake", burst: true },
     unreachable: false,
     frozenNeedsOwnCredits: false,
     primary: "keep",
+    menu: AWAKE_MENU.filter((action) => action !== "idle-settings"),
+  },
+  {
+    name: "stopped agent",
+    summary: { state: "stopped", burst: true },
+    unreachable: false,
+    frozenNeedsOwnCredits: false,
+    primary: "start",
+    menu: ["rename", "destroy"],
+  },
+  {
+    name: "awake agent, kept",
+    summary: {
+      state: "awake",
+      burst: false,
+      keptBy: { userId: "u-priya", displayName: "Priya" },
+    },
+    unreachable: false,
+    frozenNeedsOwnCredits: false,
+    primary: "suspend",
     menu: AWAKE_MENU,
   },
   {

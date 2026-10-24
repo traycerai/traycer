@@ -22,6 +22,7 @@ import { useCallback, useMemo, useRef, useState, type ReactNode } from "react";
 import type { WorktreeBindingSelectorRowV12 } from "@traycer/protocol/host";
 import { Button } from "@/components/ui/button";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
+import { useFolderlessTerminalTarget } from "@/components/epic-canvas/sidebar/use-folderless-terminal-target";
 import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
 import { createReportIssueContext } from "@/lib/report-issue-context";
 import { WorktreeFolderListBody } from "@/components/worktree/worktree-folder-list-body";
@@ -143,7 +144,6 @@ export function NewTerminalPickerBody(props: NewTerminalPickerBodyProps) {
     epicId,
     surfaceKey,
     resolvedHostId: pin.resolvedHostId,
-    launchTarget,
     onLaunch: launchOnce,
   });
   const handleLaunch = useCallback(() => {
@@ -306,13 +306,13 @@ function noopPrepareHandoff(): void {}
  * The staging of the terminal picker's New sandbox rows: the picker's
  * composer mode, and the send that creates the sandbox on `Open terminal`,
  * then launches folderless on it once the pin resolves there and its
- * directory is known.
+ * directory is known. That directory is the sandbox's own, whatever workspace
+ * rows the task binds on other hosts.
  */
 function useTerminalStagedLaunch(input: {
   readonly epicId: string;
   readonly surfaceKey: string;
   readonly resolvedHostId: string | null;
-  readonly launchTarget: TerminalLaunchTarget | null;
   readonly onLaunch: (target: TerminalLaunchTarget) => void;
 }): {
   readonly staging: SandboxStaging | null;
@@ -320,7 +320,7 @@ function useTerminalStagedLaunch(input: {
   readonly consequences: ConsequencesInput | null;
   readonly stagedSend: StagedSandboxSend;
 } {
-  const { launchTarget, onLaunch, surfaceKey } = input;
+  const { onLaunch, surfaceKey } = input;
   const hostOptions = useHostOptions();
   const task = useSandboxStagingTask(input.epicId);
   const surface = useMemo(() => ({ surfaceKey, task }), [surfaceKey, task]);
@@ -329,11 +329,10 @@ function useTerminalStagedLaunch(input: {
     memoryHostId: input.resolvedHostId,
     hosts: hostOptions.hosts,
   });
-  const stagedHostId = staging?.stage?.createdHostId ?? null;
-  const sandboxTarget =
-    launchTarget !== null && launchTarget.hostId === stagedHostId
-      ? launchTarget
-      : null;
+  const sandboxTarget = useFolderlessTerminalTarget(
+    input.epicId,
+    staging?.stage?.createdHostId ?? null,
+  );
   const launchOnSandbox = useCallback((): boolean => {
     if (sandboxTarget === null) return false;
     onLaunch(sandboxTarget);

@@ -354,7 +354,7 @@ describe("<EpicSessionLifecycleBridge />", () => {
 
     expect(useSandboxDetailsStore.getState().sandboxId).toBeNull();
     expect(useSandboxesPageStore.getState()).toMatchObject({
-      configurationId: { kind: "personal" },
+      requestedConfiguration: null,
       revealSandboxId: null,
     });
   });
