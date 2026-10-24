@@ -155,6 +155,12 @@ describe("sandbox control plane mirror", () => {
     it("reads a list with a bad entry as none and still parses the catalogue", () => {
       expect(shapesOf([SMALL, { ...DEFAULT, cpus: "two" }])).toBeNull();
     });
+
+    // Prevents a client staging a size no rung is the default of.
+    it("reads a list without exactly one default as none", () => {
+      expect(shapesOf([SMALL, { ...DEFAULT, default: false }])).toBeNull();
+      expect(shapesOf([{ ...SMALL, default: true }, DEFAULT])).toBeNull();
+    });
   });
 
   describe("creatable and notCreatableReason", () => {

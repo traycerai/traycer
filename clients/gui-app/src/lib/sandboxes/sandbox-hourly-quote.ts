@@ -7,6 +7,7 @@ import { formatCredits } from "@/lib/sandboxes/sandbox-pricing";
 import {
   defaultStageShape,
   stagePrice,
+  stageProviderFor,
 } from "@/lib/sandboxes/sandbox-stage-model";
 import {
   stagedNewShape,
@@ -43,17 +44,28 @@ export function formatAwakeHourlyPrice(quote: SandboxHourlyQuote): string {
     : `from ${dollars} an hour while awake`;
 }
 
+/**
+ * The default shape's quote: the default stage's own when its provider lists
+ * shapes, so the figure is the sandbox a New row would create; else the
+ * first priced provider's smallest-shape price.
+ */
 function defaultSmallestQuote(
   catalogue: SandboxCatalogue,
 ): SandboxHourlyQuote | null {
-  const provider = firstPricedProvider(catalogue, null);
-  if (provider !== null && provider.shapes !== null) {
-    const shape = defaultStageShape(catalogue);
-    const price = shape === null ? null : stagePrice(catalogue, shape);
+  const staged = defaultStageShape(catalogue);
+  const stagedProvider =
+    staged === null ? null : stageProviderFor(catalogue, staged.os);
+  if (
+    staged !== null &&
+    stagedProvider !== null &&
+    stagedProvider.shapes !== null
+  ) {
+    const price = stagePrice(catalogue, staged);
     if (price !== null) {
       return { awakeMc: price.awakeMcPerHour, exact: price.exact };
     }
   }
+  const provider = firstPricedProvider(catalogue, null);
   const region = provider?.regions[0];
   if (region === undefined) return null;
   return { awakeMc: region.fromPriceMcPerHour.awakeMc, exact: true };

@@ -236,6 +236,42 @@ describe("CreditsSettingsPanel", () => {
     );
   });
 
+  // The first creatable provider serves Windows only and lists no shapes; its
+  // $0.50 floor must not stand in for the Linux default rung (46 mc, $0.05).
+  it("quotes the default stage's provider, not the first priced one", () => {
+    mocks.data = userWith(
+      userSubscription({
+        totalPlanCredits: 100,
+        consumedFromPlan: 30,
+        bonusCredits: 0,
+        consumedFromBonus: 0,
+        bundleRemaining: 0,
+      }),
+      [],
+    );
+    const [windowsOnly] = CATALOGUE.providers;
+    const [linuxListed] = LISTED_SHAPES_CATALOGUE.providers;
+    mocks.catalogue = {
+      providers: [
+        {
+          ...windowsOnly,
+          os: ["windows"],
+          regions: windowsOnly.regions.map((region) => ({
+            ...region,
+            fromPriceMcPerHour: { awakeMc: 500, suspendedMc: 4, stoppedMc: 2 },
+          })),
+        },
+        linuxListed,
+      ],
+    };
+
+    render(<CreditsSettingsPanel />);
+
+    expect(screen.getByTestId("credits-hourly-price").textContent).toBe(
+      "$0.05 an hour while awake",
+    );
+  });
+
   it("quotes the staged listed shape", () => {
     mocks.data = userWith(
       userSubscription({

@@ -5,7 +5,9 @@ import {
   consequencesShownSubject,
   defaultStageShape,
   priceClause,
+  rememberedOrDefaultStageShape,
   stagePrice,
+  stageSmallestShape,
   type ConsequencesInput,
 } from "@/lib/sandboxes/sandbox-stage-model";
 import type {
@@ -257,6 +259,65 @@ describe("defaultStageShape", () => {
       cpus: 4,
       memoryMb: 8192,
       diskMb: 40960,
+    });
+  });
+});
+
+describe("listed shapes", () => {
+  const RATES: SandboxCataloguePricing = {
+    vcpuHourMillicredits: 10,
+    memoryGbHourMillicredits: 5,
+    diskGbHourMillicredits: 1,
+    multiplier: 1,
+  };
+  const LARGE = { cpus: 4, memoryMb: 8192, diskMb: 40960, default: false };
+  const MIDDLE = { cpus: 2, memoryMb: 8192, diskMb: 20480, default: false };
+  const SMALLEST = { cpus: 2, memoryMb: 4096, diskMb: 20480, default: true };
+  const STAGED = {
+    os: "linux",
+    region: "us-east",
+    cpus: 2,
+    memoryMb: 4096,
+    diskMb: 20480,
+    idleMinutes: 30,
+    destroyAfterRestingMinutes: null,
+  } as const;
+
+  function listed(pricing: SandboxCataloguePricing | null): SandboxCatalogue {
+    const [provider] = catalogue(pricing, "linux").providers;
+    return {
+      providers: [{ ...provider, shapes: [LARGE, MIDDLE, SMALLEST] }],
+    };
+  }
+
+  // The bounds (3 vCPU, 6 GB, 30 GB) admit the unlisted size, so only the list rejects it.
+  it("keeps a remembered listed shape and drops an unlisted one inside the bounds", () => {
+    const remembered = { ...STAGED, cpus: 4, memoryMb: 8192, diskMb: 40960 };
+    expect(rememberedOrDefaultStageShape(listed(null), remembered)).toBe(
+      remembered,
+    );
+    expect(
+      rememberedOrDefaultStageShape(listed(null), {
+        ...STAGED,
+        cpus: 3,
+        memoryMb: 6144,
+        diskMb: 30720,
+      }),
+    ).toMatchObject({ cpus: 2, memoryMb: 4096, diskMb: 20480 });
+  });
+
+  it("prices the smallest listed shape from the region's rates, else its from price", () => {
+    // 2 × 10 + 4 × 5 + 20 × 1
+    expect(stageSmallestShape(listed(RATES), STAGED)).toEqual({
+      isStaged: true,
+      awakeMcPerHour: 60,
+    });
+    expect(
+      stageSmallestShape(listed(RATES), { ...STAGED, ...LARGE }),
+    ).toMatchObject({ isStaged: false });
+    expect(stageSmallestShape(listed(null), STAGED)).toEqual({
+      isStaged: true,
+      awakeMcPerHour: 80,
     });
   });
 });
