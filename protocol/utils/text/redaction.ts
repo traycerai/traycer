@@ -406,3 +406,55 @@ export function reduceRequestTargetToPath(value: string): string {
     queryStart === -1 ? value : value.slice(0, queryStart),
   );
 }
+
+/**
+ * One space-free word of a home folder's name that a separator closes: any
+ * character but a separator and those no folder name holds on any OS (`"`,
+ * `:`, `<`, `>`, `|`, `*`, `?`, and `` ` ``, which only quotes one), so a
+ * Windows name's apostrophe or parentheses (`Syn'thetic`, `Name (Work)`) stay
+ * inside it. Leaving out `<` and `>` is also what makes the rule idempotent:
+ * `<redacted>` is not a name.
+ */
+const HOME_FOLDER_NAME_WORD = String.raw`[^\s/\\:"\x60<>|*?]+`;
+
+/**
+ * A name nothing closes (the path ends at it): also stops at the characters
+ * that end a path quoted in prose or a stack line (`'`, `(`, `)`, `,`, `;`),
+ * except an apostrophe between two name characters.
+ */
+const HOME_FOLDER_NAME_CHAR = String.raw`[^\s/\\:'"\x60<>|()*?,;]`;
+const HOME_FOLDER_NAME_BARE = `${HOME_FOLDER_NAME_CHAR}+(?:'${HOME_FOLDER_NAME_CHAR}+)*`;
+
+/**
+ * The segment right after a `Users` (macOS, Windows) or `home` (Linux) path
+ * segment, under either separator, and under doubled ones (a JSON-escaped
+ * Windows path). Where a separator follows, the whole segment goes, with any
+ * run of spaces or tabs before or between its words (a macOS full-name
+ * folder, `/Users/Mary Jane/...`); where none does, only the bare name, so
+ * `/Users/name is missing` and `'/home/name' failed, see /tmp/x` keep their
+ * prose. Whitespace after the last word is not taken, so a home root in prose
+ * (`under /Users/ and /home/`) is not read as a name.
+ */
+const HOME_FOLDER_NAME_PATTERN = new RegExp(
+  String.raw`((?:^|[/\\])(?:Users|home)[/\\]+)([^\S\r\n]*${HOME_FOLDER_NAME_WORD}(?:[^\S\r\n]+${HOME_FOLDER_NAME_WORD})*(?=[/\\])|${HOME_FOLDER_NAME_BARE})`,
+  "gi",
+);
+
+/**
+ * The OS account's home-folder name, wherever an absolute path carries it:
+ * `/Users/<name>/.traycer/host/install/host-main.cjs` becomes
+ * `/Users/<redacted>/.traycer/host/install/host-main.cjs`. Only that one
+ * segment goes, so a stack frame stays readable, and every machine with the
+ * same install layout renders the same path, so Sentry groups on one form
+ * instead of one per person.
+ *
+ * Not part of {@link redactSensitiveText}: a home path is not a credential,
+ * and the log and support-bundle writers that call it keep their own path
+ * policy (the support bundle pseudonymizes whole paths). Telemetry egress
+ * applies both.
+ *
+ * Idempotent.
+ */
+export function redactHomeDirectoryNames(value: string): string {
+  return value.replace(HOME_FOLDER_NAME_PATTERN, `$1${REDACTED}`);
+}

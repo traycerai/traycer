@@ -80,4 +80,188 @@ describe("shared client Sentry scrub", () => {
       "https://authn.test/api/v3/auth/link/status",
     );
   });
+
+  describe("home-folder names", () => {
+    function buildEvent(name: string, winName: string): ClientSentryEvent {
+      return {
+        breadcrumbs: [
+          {
+            message: `Worker thread errored with 'Cannot find module '/Users/${name}/.traycer/host/install/host-runtime/spawn-broker-worker.cjs''`,
+            data: { spawnfile: `/home/${name}/.traycer/bin/tool` },
+          },
+        ],
+        exception: {
+          values: [
+            {
+              value: `ENOENT C:\\Users\\${winName}\\.traycer\\x`,
+              stacktrace: {
+                frames: [
+                  {
+                    filename: `/Users/${name}/.traycer/host/install/host-main.cjs`,
+                    abs_path: `/Users/${name}/.traycer/host/install/host-main.cjs`,
+                  },
+                  {
+                    filename: `/home/${name}/.traycer/host/install/host-main.cjs`,
+                    abs_path: `/home/${name}/.traycer/host/install/host-main.cjs`,
+                  },
+                  {
+                    filename: `C:\\Users\\${winName}\\.traycer\\host\\install\\host-main.cjs`,
+                    abs_path: `C:\\Users\\${winName}\\.traycer\\host\\install\\host-main.cjs`,
+                  },
+                ],
+              },
+            },
+          ],
+        },
+      };
+    }
+
+    it("redacts the folder name in breadcrumbs, messages and every stack frame", () => {
+      const event = buildEvent("synthetic-user", "SyntheticUser");
+      scrubSentryEventInPlace(event);
+      expect(event.breadcrumbs?.[0]?.message).toBe(
+        "Worker thread errored with 'Cannot find module '/Users/<redacted>/.traycer/host/install/host-runtime/spawn-broker-worker.cjs''",
+      );
+      expect(event.breadcrumbs?.[0]?.data?.["spawnfile"]).toBe(
+        "/home/<redacted>/.traycer/bin/tool",
+      );
+      const value = event.exception?.values?.[0];
+      expect(value?.value).toBe("ENOENT C:\\Users\\<redacted>\\.traycer\\x");
+      expect(value?.stacktrace?.frames).toEqual([
+        {
+          filename: "/Users/<redacted>/.traycer/host/install/host-main.cjs",
+          abs_path: "/Users/<redacted>/.traycer/host/install/host-main.cjs",
+        },
+        {
+          filename: "/home/<redacted>/.traycer/host/install/host-main.cjs",
+          abs_path: "/home/<redacted>/.traycer/host/install/host-main.cjs",
+        },
+        {
+          filename:
+            "C:\\Users\\<redacted>\\.traycer\\host\\install\\host-main.cjs",
+          abs_path:
+            "C:\\Users\\<redacted>\\.traycer\\host\\install\\host-main.cjs",
+        },
+      ]);
+      const json = JSON.stringify(event);
+      expect(json).not.toContain("synthetic-user");
+      expect(json).not.toContain("SyntheticUser");
+    });
+
+    it("groups events that differ only by the home name, and is idempotent", () => {
+      const a = buildEvent("synthetic-user", "SyntheticUser");
+      const b = buildEvent("other-synthetic-user", "OtherSyntheticUser");
+      scrubSentryEventInPlace(a);
+      scrubSentryEventInPlace(b);
+      expect(a.exception?.values?.[0]?.stacktrace?.frames).toEqual(
+        b.exception?.values?.[0]?.stacktrace?.frames,
+      );
+      const once = JSON.stringify(a);
+      scrubSentryEventInPlace(a);
+      expect(JSON.stringify(a)).toBe(once);
+    });
+
+    it("redacts the home folder in debug_meta images, matching the frame paths", () => {
+      const event: ClientSentryEvent = {
+        exception: {
+          values: [
+            {
+              stacktrace: {
+                frames: [
+                  {
+                    filename: "/Users/synthetic-user/.traycer/cli/main.js",
+                    abs_path: "/Users/synthetic-user/.traycer/cli/main.js",
+                  },
+                ],
+              },
+            },
+          ],
+        },
+        debug_meta: {
+          images: [
+            {
+              type: "sourcemap",
+              code_file: "/Users/synthetic-user/.traycer/cli/main.js",
+              debug_id: "11111111-1111-4111-8111-111111111111",
+            },
+            {
+              type: "macho",
+              code_file:
+                "/Users/synthetic-user/Applications/Traycer.app/Contents/MacOS/Traycer",
+              debug_file:
+                "/Users/synthetic-user/Applications/Traycer.app/Contents/MacOS/Traycer",
+              debug_id: "22222222-2222-4222-8222-222222222222",
+            },
+          ],
+        },
+      };
+      scrubSentryEventInPlace(event);
+      const redacted = "/Users/<redacted>/.traycer/cli/main.js";
+      const frame = event.exception?.values?.[0]?.stacktrace?.frames?.[0];
+      expect(frame?.abs_path).toBe(redacted);
+      expect(frame?.filename).toBe(redacted);
+      expect(event.debug_meta?.images).toEqual([
+        {
+          type: "sourcemap",
+          code_file: redacted,
+          debug_id: "11111111-1111-4111-8111-111111111111",
+        },
+        {
+          type: "macho",
+          code_file:
+            "/Users/<redacted>/Applications/Traycer.app/Contents/MacOS/Traycer",
+          debug_file:
+            "/Users/<redacted>/Applications/Traycer.app/Contents/MacOS/Traycer",
+          debug_id: "22222222-2222-4222-8222-222222222222",
+        },
+      ]);
+      expect(event.debug_meta?.images?.[0]?.code_file).toBe(frame?.abs_path);
+      expect(JSON.stringify(event)).not.toContain("synthetic-user");
+    });
+
+    it("redacts a home folder name that contains consecutive spaces", () => {
+      const event: ClientSentryEvent = {
+        breadcrumbs: [
+          {
+            message:
+              "Cannot find module 'C:\\Users\\Synthetic  User\\.traycer\\cli\\main.js'",
+          },
+        ],
+        exception: {
+          values: [
+            {
+              stacktrace: {
+                frames: [
+                  {
+                    filename:
+                      "C:\\Users\\Synthetic  User\\.traycer\\cli\\main.js",
+                  },
+                ],
+              },
+            },
+          ],
+        },
+      };
+      scrubSentryEventInPlace(event);
+      expect(event.breadcrumbs?.[0]?.message).toBe(
+        "Cannot find module 'C:\\Users\\<redacted>\\.traycer\\cli\\main.js'",
+      );
+      expect(
+        event.exception?.values?.[0]?.stacktrace?.frames?.[0]?.filename,
+      ).toBe("C:\\Users\\<redacted>\\.traycer\\cli\\main.js");
+      expect(JSON.stringify(event)).not.toContain("Synthetic");
+    });
+
+    it("redacts the folder name in a breadcrumb file URL", () => {
+      const breadcrumb = {
+        data: {
+          url: "file:///Users/synthetic-user/Applications/Traycer.app/x.html",
+        },
+      };
+      scrubSentryBreadcrumbInPlace(breadcrumb);
+      expect(breadcrumb.data.url).toBe(
+        "null/Users/<redacted>/Applications/Traycer.app/x.html",
+      );
+    });
+  });
 });

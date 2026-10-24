@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  redactHomeDirectoryNames,
   redactSensitiveText,
   reduceRequestTargetToPath,
   reduceUrlToOriginAndPath,
@@ -161,5 +162,74 @@ describe("arbitrary-key stem classifier", () => {
     expect(redactSensitiveText("Authorization: token ghs_x")).toBe(
       "Authorization: token <redacted>",
     );
+  });
+});
+
+describe("redactHomeDirectoryNames", () => {
+  it.each([
+    [
+      "/Users/synthetic-user/.traycer/host/install/host-main.cjs",
+      "/Users/<redacted>/.traycer/host/install/host-main.cjs",
+    ],
+    [
+      "/home/synthetic-user/.traycer/host/install/host-runtime/spawn-broker-worker.cjs",
+      "/home/<redacted>/.traycer/host/install/host-runtime/spawn-broker-worker.cjs",
+    ],
+    [
+      "C:\\Users\\SyntheticUser\\.traycer\\host\\install\\host-main.cjs",
+      "C:\\Users\\<redacted>\\.traycer\\host\\install\\host-main.cjs",
+    ],
+    ["C:/Users/SyntheticUser/x", "C:/Users/<redacted>/x"],
+    ["C:\\\\Users\\\\SyntheticUser\\\\x", "C:\\\\Users\\\\<redacted>\\\\x"],
+    ["file:///Users/synthetic-user/x.js", "file:///Users/<redacted>/x.js"],
+    ["/Users/Synthetic User/.traycer/x", "/Users/<redacted>/.traycer/x"],
+    ["/Users/Synthetic  User/.traycer/x", "/Users/<redacted>/.traycer/x"],
+    ["/Users/Synthetic\tUser/.traycer/x", "/Users/<redacted>/.traycer/x"],
+    [
+      "C:\\Users\\Synthetic  User\\.traycer\\cli\\main.js",
+      "C:\\Users\\<redacted>\\.traycer\\cli\\main.js",
+    ],
+    ["/home/synthetic-user", "/home/<redacted>"],
+    ["open '/home/synthetic-user'", "open '/home/<redacted>'"],
+    ["/var/home/synthetic-user/x", "/var/home/<redacted>/x"],
+    ["c:\\users\\SyntheticUser\\x", "c:\\users\\<redacted>\\x"],
+    ["/homework/x", "/homework/x"],
+    ["/myhome/x", "/myhome/x"],
+    ["/opt/traycer/x", "/opt/traycer/x"],
+    ["/Users", "/Users"],
+    ["/Users/<redacted>/x", "/Users/<redacted>/x"],
+    // Windows folder names may carry an apostrophe or parentheses; a
+    // following separator ends the name, so all of it goes.
+    [
+      "C:\\Users\\Syn'thetic\\.traycer\\x",
+      "C:\\Users\\<redacted>\\.traycer\\x",
+    ],
+    [
+      "C:\\Users\\Synthetic (Work)\\.traycer\\x",
+      "C:\\Users\\<redacted>\\.traycer\\x",
+    ],
+    ["/Users/Syn'thetic/.traycer/x", "/Users/<redacted>/.traycer/x"],
+    ["/home/Syn'thetic", "/home/<redacted>"],
+    // Leading whitespace is part of a separator-closed name.
+    ["/Users/ Synthetic/.traycer/x", "/Users/<redacted>/.traycer/x"],
+    ["/home/\tSynthetic/.traycer/x", "/home/<redacted>/.traycer/x"],
+    [
+      "C:\\Users\\ Synthetic\\.traycer\\x",
+      "C:\\Users\\<redacted>\\.traycer\\x",
+    ],
+    [
+      "C:\\Users\\\tSynthetic\\.traycer\\x",
+      "C:\\Users\\<redacted>\\.traycer\\x",
+    ],
+    // A home root in prose with no name after it is left alone.
+    ["under /Users/ and /home/ only", "under /Users/ and /home/ only"],
+    // Prose after a quoted home path is not taken for the name.
+    [
+      "open '/home/synthetic-user' failed, see /tmp/x",
+      "open '/home/<redacted>' failed, see /tmp/x",
+    ],
+  ])("rewrites %j to %j", (input, expected) => {
+    expect(redactHomeDirectoryNames(input)).toBe(expected);
+    expect(redactHomeDirectoryNames(expected)).toBe(expected);
   });
 });
