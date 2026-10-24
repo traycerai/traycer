@@ -482,6 +482,7 @@ export function LandingComposer(props: LandingComposerProps) {
     packPreparingHint: packGate.hint,
     packBlocked: packGate.blocked,
     profileDisabled: profileEligibility.disabled,
+    stagedAhead: workspaceGate.stagedAhead,
   });
   const canSubmit = landingComposerCanSubmit({
     isSubmitting,
@@ -963,16 +964,23 @@ export function LandingComposer(props: LandingComposerProps) {
  * user with an unusable workspace would sit through `Preparing… 40%` and find
  * the button still dead once the download finished, with the real reason only
  * appearing then.
+ *
+ * A staged sandbox ahead of its handoff drops the profile and pack gates:
+ * they are this host's, and the send runs again on the sandbox under its own.
  */
 function resolveLandingSubmitBlock(args: {
   readonly workspaceDisabledHint: string | null;
   readonly packPreparingHint: string | null;
   readonly packBlocked: boolean;
   readonly profileDisabled: boolean;
+  readonly stagedAhead: boolean;
 }): {
   readonly submitBlocked: boolean;
   readonly submitBlockedHint: string | null;
 } {
+  if (args.stagedAhead) {
+    return { submitBlocked: false, submitBlockedHint: null };
+  }
   return {
     submitBlocked: args.profileDisabled || args.packBlocked,
     submitBlockedHint:

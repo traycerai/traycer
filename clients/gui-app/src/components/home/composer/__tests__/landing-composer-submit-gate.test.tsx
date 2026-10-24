@@ -45,6 +45,10 @@ const testState = vi.hoisted(() => ({
   catalogHostId: null as string | null,
   /** Whether the current host's workspace can start a send. */
   workspaceReady: true,
+  /** Whether the current host's selected profile is ineligible. */
+  profileDisabled: false,
+  /** Whether the current host's provider pack is still downloading. */
+  packBlocked: false,
   /** The resolved host's `providers.list`, `undefined` until it answers. */
   providers: undefined as
     | ReadonlyArray<{ readonly providerId: string; readonly profiles: [] }>
@@ -262,7 +266,11 @@ vi.mock("@/hooks/providers/use-provider-pack-gate", () => ({
   // hook stubbed to its "nothing to report" answer so these gate tests stay
   // about the gate they name. `blocked: false` is also the hook's real
   // fail-open answer before `providers.list` resolves.
-  useProviderPackGate: () => ({ blocked: false, hint: null, preparing: null }),
+  useProviderPackGate: () => ({
+    blocked: testState.packBlocked,
+    hint: testState.packBlocked ? "Preparing Claude Code… 40%" : null,
+    preparing: null,
+  }),
   useProviderPackGateForClient: () => ({
     blocked: false,
     hint: null,
@@ -272,7 +280,7 @@ vi.mock("@/hooks/providers/use-provider-pack-gate", () => ({
 
 vi.mock("@/components/chat/composer/use-profile-eligibility-gate", () => ({
   useProfileEligibilityGate: () => ({
-    disabled: false,
+    disabled: testState.profileDisabled,
     profileLabel: null,
     enablePending: false,
     enableProfile: vi.fn(),
@@ -400,6 +408,8 @@ afterEach(() => {
   testState.catalogHostId = null;
   testState.providers = undefined;
   testState.workspaceReady = true;
+  testState.profileDisabled = false;
+  testState.packBlocked = false;
 });
 
 describe("LandingComposer direct submit gate", () => {
@@ -551,6 +561,56 @@ describe("LandingComposer direct submit gate", () => {
         ?.ownerId,
     ).toBe("pending-test");
   });
+
+  it.each([
+    ["selected profile is ineligible", "profileDisabled"],
+    ["provider pack is downloading", "packBlocked"],
+  ] as const)(
+    "lets a staged sandbox take a send though this host's %s",
+    (_label, gate) => {
+      testState[gate] = true;
+      useStagedSandboxStore.getState().stage("landing:window-test", {
+        kind: "new",
+        configuration: { kind: "personal" },
+        shape: {
+          os: "linux",
+          cpus: 2,
+          memoryMb: 4096,
+          diskMb: null,
+          region: "us-east",
+          idleMinutes: 30,
+          destroyAfterRestingMinutes: null,
+        },
+        name: "",
+        wakeString: null,
+      });
+      const composer = (
+        <LandingComposer
+          draftId={null}
+          pendingCreateId="pending-test"
+          initialSettings={null}
+          workspaceControls={() => null}
+        />
+      );
+      const view = render(composer);
+      const installEditor = testState.installEditor;
+      if (installEditor === null) throw new Error("expected ComposerBody seam");
+      installEditor();
+      const snapshot = testState.snapshot;
+      if (snapshot === null) throw new Error("expected snapshot seam");
+      snapshot();
+      view.rerender(composer);
+
+      fireEvent.click(screen.getByRole("button", { name: "Submit landing" }));
+
+      // The intercept took the send: it recorded the sending draft.
+      expect(testState.submit).not.toHaveBeenCalled();
+      expect(
+        useStagedSandboxStore.getState().bySurface["landing:window-test"]
+          ?.ownerId,
+      ).toBe("pending-test");
+    },
+  );
 
   it("lets a staged sandbox take a terminal agent's Start though this host's workspace folder is unresolved", () => {
     testState.workspaceReady = false;

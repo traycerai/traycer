@@ -7,11 +7,18 @@ import { useStagedSandboxStore } from "@/stores/composer/staged-sandbox-store";
 export interface StagedWorkspaceGate {
   readonly canStart: boolean;
   readonly disabledHint: string | null;
+  /**
+   * Whether a staged sandbox takes this send ahead of the handoff. The
+   * source host's provider checks (its profile, its provider pack) gate
+   * nothing then: the send runs again on the sandbox, under that host's.
+   */
+  readonly stagedAhead: boolean;
 }
 
 const EMPTY_SANDBOX_GATE: StagedWorkspaceGate = {
   canStart: true,
   disabledHint: null,
+  stagedAhead: true,
 };
 
 /**
@@ -32,5 +39,6 @@ export function useStagedWorkspaceGate(
   return {
     canStart: workspaceComposerCanStart(availability),
     disabledHint: availability.disabledHint,
+    stagedAhead: false,
   };
 }
