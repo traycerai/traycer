@@ -1,14 +1,31 @@
 import { useCallback } from "react";
+import type { UseMutationResult } from "@tanstack/react-query";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import type {
+  HostRpcError,
+  RequestOfMethod,
+  ResponseOfMethod,
+} from "@traycer-clients/shared/host-transport/host-messenger";
 import type {
   MembersInviteOutcome,
   MembersRemoveOutcome,
   MembersSetRoleOutcome,
   TeamRole,
 } from "@/components/settings/members/types";
-import { useHostScopedMutationForClient } from "@/hooks/host/use-host-scoped-mutation";
+import {
+  useHostScopedMutationForClient,
+  type HostScopedMutationContext,
+} from "@/hooks/host/use-host-scoped-mutation";
 import type { HostRpcRegistry } from "@/lib/host";
 import { environmentMutationKeys } from "@/lib/query-keys";
+
+type MembersWriteMutation<Method extends keyof HostRpcRegistry & string> =
+  UseMutationResult<
+    ResponseOfMethod<HostRpcRegistry, Method>,
+    HostRpcError,
+    RequestOfMethod<HostRpcRegistry, Method>,
+    HostScopedMutationContext<undefined>
+  >;
 
 export interface EnvironmentMembersWrites {
   readonly invite: (input: {
@@ -23,6 +40,10 @@ export interface EnvironmentMembersWrites {
     readonly userId: string;
   }) => Promise<MembersRemoveOutcome>;
   readonly noticeSeen: () => void;
+  /** The requests behind `invite`, `setRole` and `remove`: their pending state. */
+  readonly inviteMutation: MembersWriteMutation<"environment.members.invite">;
+  readonly setRoleMutation: MembersWriteMutation<"environment.members.setRole">;
+  readonly removeMutation: MembersWriteMutation<"environment.members.remove">;
 }
 
 /**
@@ -121,5 +142,8 @@ export function useEnvironmentMembersWrites(
     setRole,
     remove,
     noticeSeen,
+    inviteMutation,
+    setRoleMutation,
+    removeMutation,
   };
 }

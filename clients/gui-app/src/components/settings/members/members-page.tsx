@@ -259,6 +259,9 @@ export function MembersPage(props: MembersPageProps): ReactNode {
       onInvite={writes.invite}
       onSetRole={writes.setRole}
       onRemove={onRemove}
+      invitePending={writes.inviteMutation.isPending}
+      setRolePending={writes.setRoleMutation.isPending}
+      removePending={writes.removeMutation.isPending}
       hostLabel={hostLabel}
       onNoticeSeen={onNoticeSeen}
     />

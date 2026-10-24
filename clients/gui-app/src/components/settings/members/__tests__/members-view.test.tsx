@@ -9,7 +9,13 @@ import {
 import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
-import type { EnvironmentMembersRemovePreviewResponse } from "@traycer/protocol/host/environment/contracts";
+import type {
+  EnvironmentMembersInviteResponse,
+  EnvironmentMembersRemovePreviewResponse,
+  EnvironmentMembersRemoveResponse,
+  EnvironmentMembersSetRoleResponse,
+} from "@traycer/protocol/host/environment/contracts";
+import type { MockHandlerMap } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import {
   mountTeamPage,
   requireTeamHostClient,
@@ -24,6 +30,11 @@ import type {
   MembersSetRoleOutcome,
   TeamRole,
 } from "@/components/settings/members/types";
+import {
+  useEnvironmentMembersWrites,
+  type EnvironmentMembersWrites,
+} from "@/hooks/environment/use-environment-members-writes";
+import type { HostRpcRegistry } from "@/lib/host";
 import { RunnerHostContext } from "@/providers/runner-host-context";
 
 afterEach(() => {
@@ -132,6 +143,9 @@ function renderView(options: {
           }
           onSetRole={onSetRole}
           onRemove={onRemove}
+          invitePending={false}
+          setRolePending={false}
+          removePending={false}
           hostLabel={(hostId) => (hostId === "host-local" ? "This Mac" : null)}
           onNoticeSeen={onNoticeSeen}
         />
@@ -397,5 +411,163 @@ describe("MembersView preview completions", () => {
     await waitFor(() =>
       expect(onRemove).toHaveBeenCalledWith({ userId: "u-admin2" }),
     );
+  });
+});
+
+describe("MembersView pending writes", () => {
+  /** A host answer the test holds until it settles it. */
+  function heldAnswer<Response>(): {
+    readonly answer: () => Promise<Response>;
+    readonly settle: (response: Response) => Promise<void>;
+  } {
+    const release: { current: ((response: Response) => void) | null } = {
+      current: null,
+    };
+    return {
+      answer: () =>
+        new Promise((resolve) => {
+          release.current = resolve;
+        }),
+      settle: async (response) => {
+        const settle = release.current;
+        if (settle === null) throw new Error("no request held");
+        await act(async () => {
+          settle(response);
+          await Promise.resolve();
+        });
+      },
+    };
+  }
+
+  /**
+   * The view wired to the real writes, as the page wires it, beside a button
+   * that sends a write outside the view: whatever the view shows as pending
+   * can only come from the request itself.
+   */
+  function renderWired(options: {
+    readonly members: readonly MembersListMember[];
+    readonly handlers: MockHandlerMap<HostRpcRegistry>;
+    readonly send: (writes: EnvironmentMembersWrites) => void;
+  }): void {
+    const harness = mountTeamPage(
+      { kind: "host" },
+      {
+        "environment.members.removePreview": () => PREVIEW,
+        ...options.handlers,
+      },
+    );
+    function Wired(): ReactNode {
+      const writes = useEnvironmentMembersWrites(
+        requireTeamHostClient(),
+        "env-1",
+      );
+      return (
+        <>
+          <button type="button" onClick={() => options.send(writes)}>
+            Send elsewhere
+          </button>
+          <MembersView
+            client={requireTeamHostClient()}
+            environmentId="env-1"
+            teamName="Acme"
+            teamHandle="acme"
+            currentUserId="u-admin"
+            viewerRole="admin"
+            membersRead="ready"
+            members={options.members}
+            legacyMembers={[]}
+            legacyRoleNoticeSeenAt={1}
+            rowDetails={() => null}
+            onRetryMembers={() => undefined}
+            onInvite={writes.invite}
+            onSetRole={writes.setRole}
+            onRemove={writes.remove}
+            invitePending={writes.inviteMutation.isPending}
+            setRolePending={writes.setRoleMutation.isPending}
+            removePending={writes.removeMutation.isPending}
+            hostLabel={() => null}
+            onNoticeSeen={() => undefined}
+          />
+        </>
+      );
+    }
+    render(
+      <harness.Wrapper>
+        <RunnerHostContext.Provider value={dashboardRunnerHost()}>
+          <Wired />
+        </RunnerHostContext.Provider>
+      </harness.Wrapper>,
+    );
+  }
+
+  it("holds Send invite while an invite request is pending, and frees it once the host answers", async () => {
+    const user = userEvent.setup();
+    const host = heldAnswer<EnvironmentMembersInviteResponse>();
+    renderWired({
+      members: [ADMIN, EDITOR],
+      handlers: { "environment.members.invite": host.answer },
+      send: (writes) => {
+        void writes.invite({ email: "other@acme.test", role: "editor" });
+      },
+    });
+    await user.click(screen.getByRole("button", { name: "Send elsewhere" }));
+    await user.click(screen.getByRole("button", { name: "Invite" }));
+    await user.type(
+      await screen.findByTestId("members-invite-email"),
+      "new@acme.test",
+    );
+    const submit = screen.getByTestId<HTMLButtonElement>(
+      "members-invite-submit",
+    );
+    await waitFor(() => expect(submit.disabled).toBe(true));
+    await host.settle({ outcome: "sent", seatDelta: null });
+    await waitFor(() => expect(submit.disabled).toBe(false));
+  });
+
+  it("holds Remove while a remove request is pending, and frees it once the host answers", async () => {
+    const user = userEvent.setup();
+    const host = heldAnswer<EnvironmentMembersRemoveResponse>();
+    renderWired({
+      members: [ADMIN, SECOND_ADMIN, EDITOR],
+      handlers: { "environment.members.remove": host.answer },
+      send: (writes) => {
+        void writes.remove({ userId: "u-admin2" });
+      },
+    });
+    await user.click(screen.getByRole("button", { name: "Send elsewhere" }));
+    const editorRow = screen
+      .getAllByTestId("members-row")
+      .find((row) => row.getAttribute("data-member-id") === "u-editor");
+    if (editorRow === undefined) throw new Error("editor row missing");
+    await user.click(within(editorRow).getByRole("button", { name: "Remove" }));
+    await screen.findByTestId("members-remove-preview-table");
+    const confirm = screen.getByTestId<HTMLButtonElement>(
+      "members-remove-confirm",
+    );
+    await waitFor(() => expect(confirm.disabled).toBe(true));
+    await host.settle({ outcome: "revoked" });
+    await waitFor(() => expect(confirm.disabled).toBe(false));
+  });
+
+  it("holds the demotion while a role change is pending, and frees it once the host answers", async () => {
+    const user = userEvent.setup();
+    const host = heldAnswer<EnvironmentMembersSetRoleResponse>();
+    renderWired({
+      members: [ADMIN, SECOND_ADMIN, EDITOR],
+      handlers: { "environment.members.setRole": host.answer },
+      send: (writes) => {
+        void writes.setRole({ userId: "u-editor", role: "viewer" });
+      },
+    });
+    await user.click(screen.getByRole("button", { name: "Send elsewhere" }));
+    await user.click(screen.getByRole("combobox", { name: "Role for Grace" }));
+    await user.click(await screen.findByRole("option", { name: "Viewer" }));
+    await screen.findByTestId("members-demotion-loss");
+    const confirm = screen.getByTestId<HTMLButtonElement>(
+      "members-demotion-confirm",
+    );
+    await waitFor(() => expect(confirm.disabled).toBe(true));
+    await host.settle({ outcome: "changed" });
+    await waitFor(() => expect(confirm.disabled).toBe(false));
   });
 });

@@ -220,6 +220,10 @@ export function MembersView(props: {
   readonly onRemove: (input: {
     readonly userId: string;
   }) => Promise<MembersRemoveOutcome>;
+  /** Whether the invite, set-role and remove requests are in flight. */
+  readonly invitePending: boolean;
+  readonly setRolePending: boolean;
+  readonly removePending: boolean;
   /** The name a host id shows as, null when this window does not know it. */
   readonly hostLabel: (hostId: string) => string | null;
   readonly onNoticeSeen: () => void;
@@ -239,6 +243,9 @@ export function MembersView(props: {
     onInvite,
     onSetRole,
     onRemove,
+    invitePending,
+    setRolePending,
+    removePending,
     hostLabel,
     onNoticeSeen,
   } = props;
@@ -246,14 +253,9 @@ export function MembersView(props: {
   const peopleCount = acceptedPeopleCount(members);
   const pendingCount = pendingInviteCount(members);
   const [inviteOpen, setInviteOpen] = useState(false);
-  const [inviteBusy, setInviteBusy] = useState(false);
   const [removeTarget, setRemoveTarget] = useState<PendingRemove | null>(null);
-
-  const [removeBusy, setRemoveBusy] = useState(false);
   const [removeRefusal, setRemoveRefusal] = useState<string | null>(null);
   const [demotion, setDemotion] = useState<PendingDemotion | null>(null);
-
-  const [demotionBusy, setDemotionBusy] = useState(false);
   const [demotionRefusal, setDemotionRefusal] = useState<string | null>(null);
   const [banner, setBanner] = useState<string | null>(null);
   const removing = removeTargetOfKind(removeTarget, "accepted");
@@ -336,62 +338,31 @@ export function MembersView(props: {
 
   const confirmRemove = (): void => {
     if (removeTarget === null) return;
-    setRemoveBusy(true);
-    void onRemove({ userId: removeTarget.member.userId })
-      .then(
-        (outcome) => {
-          const refusal = refusalFromRemove(teamName, outcome);
-          if (refusal !== null) {
-            setRemoveRefusal(refusal);
-            setBanner(refusal);
-            return;
-          }
-          closeRemove();
-        },
-        () => undefined,
-      )
-      .finally(() => {
-        setRemoveBusy(false);
-      });
+    void onRemove({ userId: removeTarget.member.userId }).then((outcome) => {
+      const refusal = refusalFromRemove(teamName, outcome);
+      if (refusal !== null) {
+        setRemoveRefusal(refusal);
+        setBanner(refusal);
+        return;
+      }
+      closeRemove();
+    });
   };
 
   const confirmDemotion = (): void => {
     if (demotion === null) return;
-    setDemotionBusy(true);
     void onSetRole({
       userId: demotion.member.userId,
       role: demotion.nextRole,
-    })
-      .then(
-        (outcome) => {
-          const refusal = refusalFromSetRole(teamName, outcome);
-          if (refusal !== null) {
-            setDemotionRefusal(refusal);
-            setBanner(refusal);
-            return;
-          }
-          closeDemotion();
-        },
-        () => undefined,
-      )
-      .finally(() => {
-        setDemotionBusy(false);
-      });
-  };
-
-  const invite = (input: {
-    readonly email: string;
-    readonly role: TeamRole;
-  }): Promise<MembersInviteOutcome> => {
-    setInviteBusy(true);
-    return onInvite(input)
-      .then(
-        (outcome) => outcome,
-        (): MembersInviteOutcome => ({ outcome: "forbidden" }),
-      )
-      .finally(() => {
-        setInviteBusy(false);
-      });
+    }).then((outcome) => {
+      const refusal = refusalFromSetRole(teamName, outcome);
+      if (refusal !== null) {
+        setDemotionRefusal(refusal);
+        setBanner(refusal);
+        return;
+      }
+      closeDemotion();
+    });
   };
 
   const seatsPage = (signInUrl: string): string => {
@@ -465,16 +436,16 @@ export function MembersView(props: {
       <InviteDialog
         open={inviteOpen}
         teamName={teamName}
-        busy={inviteBusy}
+        busy={invitePending}
         onOpenChange={setInviteOpen}
-        onInvite={invite}
+        onInvite={onInvite}
       />
       <RemovePreviewDialog
         open={removing !== null}
         memberName={targetName(removing)}
         teamName={teamName}
         preview={removePreview}
-        busy={removeBusy}
+        busy={removePending}
         blockedReason={removeRefusal}
         onOpenChange={(open) => {
           if (!open) closeRemove();
@@ -490,7 +461,7 @@ export function MembersView(props: {
         teamName={teamName}
         nextRoleLabel={demotion === null ? "" : ROLE_LABELS[demotion.nextRole]}
         preview={demotionPreview}
-        busy={demotionBusy}
+        busy={setRolePending}
         blockedReason={demotionRefusal}
         onOpenChange={(open) => {
           if (!open) closeDemotion();
@@ -504,7 +475,7 @@ export function MembersView(props: {
         open={revoking !== null}
         teamName={teamName}
         member={revoking}
-        busy={removeBusy}
+        busy={removePending}
         blockedReason={removeRefusal}
         onOpenChange={(open) => {
           if (!open) closeRemove();
