@@ -18,7 +18,11 @@ import {
   vi,
   type Mock,
 } from "vitest";
-import type { BotThreadSummary } from "@traycer/protocol/host/bot/conversation-schemas";
+import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import type {
+  BotConversationSendRequest,
+  BotThreadSummary,
+} from "@traycer/protocol/host/bot/conversation-schemas";
 import { ChatExpansionTestProviders } from "@/components/chat/__tests__/chat-expansion-test-providers";
 import type { ChatBotThreadLine } from "@/components/chat/chat-bot-presentation-context";
 import type { BotTranscriptSurface } from "@/components/bots/bot-chat-transcript";
@@ -40,6 +44,14 @@ const mocks = vi.hoisted(() => {
     client: { stub: "tab-host-client" },
     markRead: vi.fn<(entity: { epicId: string; chatId: string }) => void>(),
     refetchThreads: vi.fn<() => void>(),
+    send: vi.fn<
+      (
+        variables: BotConversationSendRequest,
+        options: { onError: (error: HostRpcError) => void },
+      ) => void
+    >(),
+    toastFromHostError:
+      vi.fn<(error: HostRpcError, fallback: string) => void>(),
     markReadMutation: {
       mutate: (entity: { epicId: string; chatId: string }): void => {
         mocks.markRead(entity);
@@ -60,6 +72,8 @@ const mocks = vi.hoisted(() => {
       // `false`: the thread list has not answered (pending, or failed).
       threadListAnswered: true,
       threadListError: false,
+      // Whether a `bot.conversation.send` is in flight.
+      sending: false,
       chats,
     },
   };
@@ -97,6 +111,15 @@ vi.mock("@/hooks/bots/use-bot-thread-list-query", () => ({
     };
   },
 }));
+vi.mock("@/hooks/bots/use-bot-mutations", () => ({
+  useBotConversationSendMutation: () => ({
+    mutate: mocks.send,
+    isPending: mocks.state.sending,
+  }),
+}));
+vi.mock("@/lib/host-error-toast", () => ({
+  toastFromHostError: mocks.toastFromHostError,
+}));
 vi.mock("@/hooks/notifications/use-notification-indicators-query", () => ({
   useNotificationIndicators: () => ({ epics: {}, chats: mocks.state.chats }),
 }));
@@ -128,10 +151,23 @@ vi.mock("@/components/bots/bot-chat-transcript", () => ({
               />
             ))
           : null}
+        {surface !== null && surface.kind === "channel" ? (
+          <ChannelChoice chooseOption={surface.chooseOption} />
+        ) : null}
       </div>
     );
   },
 }));
+/** The channel surface's option pick, or a mark that none can be sent now. */
+function ChannelChoice(props: {
+  readonly chooseOption: ((choice: string) => void) | null;
+}): ReactNode {
+  if (props.chooseOption === null) {
+    return <span data-testid="stub-choose-unavailable" />;
+  }
+  return <ChooseStub chooseOption={props.chooseOption} />;
+}
+
 vi.mock("@/components/bots/bot-message-composer", () => ({
   BotMessageComposer: (props: {
     conversationId: string;
@@ -149,6 +185,19 @@ vi.mock("@/components/bots/bot-message-composer", () => ({
     />
   ),
 }));
+
+function ChooseStub(props: {
+  readonly chooseOption: (choice: string) => void;
+}): ReactNode {
+  const { chooseOption } = props;
+  return (
+    <button
+      type="button"
+      data-testid="stub-choose"
+      onClick={() => chooseOption("Ship it")}
+    />
+  );
+}
 
 function PostStub(props: {
   readonly postId: string;
@@ -254,6 +303,8 @@ function mount(options: MountOptions): {
   readonly rerender: () => void;
   /** Renders the view again with the tab's open-thread selection changed. */
   readonly reopen: (openThread: BotOpenThread | null) => void;
+  /** Renders the view again with the channel paused or resumed. */
+  readonly setPaused: (paused: boolean) => void;
 } {
   const onOpenThread = vi.fn<(open: BotOpenThread | null) => void>();
   const onOpenUnderTheHood = vi.fn<(id: string) => void>();
@@ -267,7 +318,7 @@ function mount(options: MountOptions): {
             hostId={HOST_ID}
             botTitle="Release Bot"
             appConversationChatId={mocks.state.appConversationChatId}
-            paused={options.paused}
+            paused={currentPaused}
             resolveMember={resolveMember}
             openThread={openThread}
             onOpenThread={onOpenThread}
@@ -277,6 +328,7 @@ function mount(options: MountOptions): {
       </TooltipProvider>
     </QueryClientProvider>
   );
+  let currentPaused = options.paused;
   let current: BotOpenThread | null =
     options.openThreadPostId === null
       ? null
@@ -288,6 +340,10 @@ function mount(options: MountOptions): {
     rerender: () => result.rerender(tree(current)),
     reopen: (openThread) => {
       current = openThread;
+      result.rerender(tree(current));
+    },
+    setPaused: (paused) => {
+      currentPaused = paused;
       result.rerender(tree(current));
     },
   };
@@ -312,6 +368,7 @@ beforeEach(() => {
   mocks.state.threads = [];
   mocks.state.threadListAnswered = true;
   mocks.state.threadListError = false;
+  mocks.state.sending = false;
   mocks.state.chats = {};
   mocks.postIds = [];
   // jsdom reports no focus until an element takes it; the window starts in
@@ -515,6 +572,52 @@ describe("<BotChannelView /> channel", () => {
     ).toBe("question-1");
   });
 
+  it("posts a direct reply's chosen option as a new top-level post in the channel", async () => {
+    const user = userEvent.setup();
+    mount({ paused: false, openThreadPostId: null });
+    expect(mocks.send).not.toHaveBeenCalled();
+
+    await user.click(screen.getByTestId("stub-choose"));
+
+    expect(mocks.send).toHaveBeenCalledTimes(1);
+    expect(mocks.send.mock.calls[0][0]).toEqual({
+      botId: BOT_ID,
+      conversationId: "conversation-channel",
+      text: "Ship it",
+      threadId: null,
+      announcementId: null,
+    });
+  });
+
+  it("offers no option to pick while an earlier pick is still being sent", () => {
+    mocks.state.sending = true;
+    mount({ paused: false, openThreadPostId: null });
+
+    expect(screen.getByTestId("stub-choose-unavailable")).toBeTruthy();
+    expect(screen.queryByTestId("stub-choose")).toBeNull();
+  });
+
+  it("tells the person when a pick could not be sent", async () => {
+    const user = userEvent.setup();
+    mount({ paused: false, openThreadPostId: null });
+    await user.click(screen.getByTestId("stub-choose"));
+    const failure = new HostRpcError({
+      code: "RPC_ERROR",
+      message: "host refused the pick",
+      requestId: "req-1",
+      method: "bot.conversation.send",
+      fatalDetails: null,
+    });
+
+    mocks.send.mock.calls[0][1].onError(failure);
+
+    expect(mocks.toastFromHostError).toHaveBeenCalledTimes(1);
+    expect(mocks.toastFromHostError).toHaveBeenCalledWith(
+      failure,
+      "Couldn't send your choice.",
+    );
+  });
+
   it("posts at the channel's top level, not under an announcement", () => {
     mount({ paused: false, openThreadPostId: null });
 
@@ -523,6 +626,157 @@ describe("<BotChannelView /> channel", () => {
         .getByTestId("stub-bot-channel-composer")
         .getAttribute("data-announcement-id"),
     ).toBe("none");
+  });
+});
+
+describe("<BotChannelView /> channel read mark", () => {
+  it("marks the channel read when it is shown unread, and leaves a read one alone", () => {
+    mocks.state.chats = { "conversation-channel": indicator(true, false) };
+    mount({ paused: false, openThreadPostId: null });
+    expect(mocks.markRead).toHaveBeenCalledTimes(1);
+    expect(mocks.markRead).toHaveBeenCalledWith({
+      epicId: BOT_ID,
+      chatId: "conversation-channel",
+    });
+    cleanup();
+    mocks.markRead.mockClear();
+
+    mocks.state.chats = { "conversation-channel": indicator(false, false) };
+    mount({ paused: false, openThreadPostId: null });
+    expect(mocks.markRead).not.toHaveBeenCalled();
+  });
+
+  it("marks the channel read for a failure as well as a done mark", () => {
+    mocks.state.chats = { "conversation-channel": indicator(false, true) };
+    mount({ paused: false, openThreadPostId: null });
+    expect(mocks.markRead).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves the channel unread while its tab is not on screen, and reads it when the person comes back", () => {
+    mocks.state.chats = { "conversation-channel": indicator(true, false) };
+    mocks.state.paneVisible = false;
+    const { rerender } = mount({ paused: false, openThreadPostId: null });
+    expect(mocks.markRead).not.toHaveBeenCalled();
+
+    mocks.state.paneVisible = true;
+    rerender();
+    expect(mocks.markRead).toHaveBeenCalledTimes(1);
+    expect(mocks.markRead).toHaveBeenCalledWith({
+      epicId: BOT_ID,
+      chatId: "conversation-channel",
+    });
+  });
+
+  it("leaves the channel unread while the window is in the background, and reads it when the window returns", () => {
+    mocks.state.chats = { "conversation-channel": indicator(true, false) };
+    const hasFocus = vi.spyOn(document, "hasFocus").mockReturnValue(false);
+    mount({ paused: false, openThreadPostId: null });
+    expect(mocks.markRead).not.toHaveBeenCalled();
+
+    hasFocus.mockReturnValue(true);
+    act(() => {
+      window.dispatchEvent(new Event("focus"));
+    });
+    expect(mocks.markRead).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves the channel unread while it is paused behind its placeholder, and reads it once it resumes", () => {
+    mocks.state.chats = { "conversation-channel": indicator(true, false) };
+    const { setPaused } = mount({ paused: true, openThreadPostId: null });
+    expect(screen.getByTestId("bot-transcript-paused")).toBeTruthy();
+    expect(screen.queryByTestId("stub-transcript-channel")).toBeNull();
+    expect(mocks.markRead).not.toHaveBeenCalled();
+
+    setPaused(false);
+    expect(screen.queryByTestId("bot-transcript-paused")).toBeNull();
+    expect(screen.getByTestId("stub-transcript-channel")).toBeTruthy();
+    expect(mocks.markRead).toHaveBeenCalledTimes(1);
+    expect(mocks.markRead).toHaveBeenCalledWith({
+      epicId: BOT_ID,
+      chatId: "conversation-channel",
+    });
+  });
+});
+
+describe("<BotChannelView /> channel read mark beside an open thread", () => {
+  /** The `ResizeObserver`s the view made, to report a size for the channel's section. */
+  const observers: FakeResizeObserver[] = [];
+
+  class FakeResizeObserver implements ResizeObserver {
+    readonly observed: Element[] = [];
+
+    constructor(private readonly callback: ResizeObserverCallback) {
+      observers.push(this);
+    }
+
+    observe(element: Element): void {
+      this.observed.push(element);
+    }
+
+    unobserve(): void {}
+
+    disconnect(): void {
+      this.observed.length = 0;
+    }
+
+    report(width: number): void {
+      const entry = { contentRect: { width } } as ResizeObserverEntry;
+      this.callback([entry], this);
+    }
+  }
+
+  /** Reports `width` for the channel section, the way the browser does once it lays out. */
+  function reportChannelWidth(width: number): void {
+    const section = screen.getByTestId("bot-channel");
+    const observer = observers.find((candidate) =>
+      candidate.observed.includes(section),
+    );
+    if (observer === undefined) {
+      throw new Error("the channel section is not observed");
+    }
+    act(() => {
+      observer.report(width);
+    });
+  }
+
+  beforeEach(() => {
+    observers.length = 0;
+    mocks.state.threads = [
+      thread("thread-a", "post-a", { replyCount: 2, lastReplyAt: 7_000 }),
+    ];
+    mocks.postIds = ["post-a"];
+    mocks.state.chats = { "conversation-channel": indicator(true, false) };
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("leaves the channel unread while it is hidden beside the thread, and reads it when the pane is wide enough to show it", () => {
+    vi.stubGlobal("ResizeObserver", FakeResizeObserver);
+    mount({ paused: false, openThreadPostId: "post-a" });
+    expect(screen.getByTestId("bot-thread-panel")).toBeTruthy();
+    // Not measured yet: the channel is taken as hidden.
+    expect(mocks.markRead).not.toHaveBeenCalled();
+
+    // A narrow pane hides the channel section, so it has no width.
+    reportChannelWidth(0);
+    expect(mocks.markRead).not.toHaveBeenCalled();
+
+    // A wide pane shows the channel beside the thread.
+    reportChannelWidth(480);
+    expect(mocks.markRead).toHaveBeenCalledTimes(1);
+    expect(mocks.markRead).toHaveBeenCalledWith({
+      epicId: BOT_ID,
+      chatId: "conversation-channel",
+    });
+  });
+
+  it("leaves the channel unread beside an open thread where nothing can measure it", () => {
+    vi.stubGlobal("ResizeObserver", undefined);
+    mount({ paused: false, openThreadPostId: "post-a" });
+    expect(screen.getByTestId("bot-thread-panel")).toBeTruthy();
+    expect(mocks.markRead).not.toHaveBeenCalled();
   });
 });
 

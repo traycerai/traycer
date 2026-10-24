@@ -636,6 +636,7 @@ import {
   botSubscribeV10,
   botUpdateRunSettingsV10,
   botUpdateDirectiveV10,
+  botUpdateReplyModeV10,
   botUpdateTitleV10,
 } from "@traycer/protocol/host/bot/contracts";
 import {
@@ -8992,6 +8993,19 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
       versions: {
         0: {
           contract: botUpdateDirectiveV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "bot.updateReplyMode": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: botUpdateReplyModeV10,
           upgradeFromPreviousVersion: null,
         },
       },

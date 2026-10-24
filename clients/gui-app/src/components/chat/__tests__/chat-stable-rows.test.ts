@@ -379,6 +379,32 @@ describe("computeStableChatTimelineRows", () => {
     expect(afterSame.result[0]).toBe(withOptions);
     expect(afterSame).toBe(afterOptions);
   });
+
+  // A bot's direct reply names the post it answers from the row, so a row
+  // that gains or changes it must re-render and one that keeps it must not.
+  it("treats a bot reply's repliesTo arriving or changing as a real change, and the same one as no change at all", () => {
+    const withoutReplies: ChatMessage = makeMessage(0, "assistant");
+    const state = computeStableChatTimelineRows(
+      [withoutReplies],
+      EMPTY_STABLE_CHAT_TIMELINE_ROWS_STATE,
+    );
+
+    const withReplies: ChatMessage = { ...withoutReplies, repliesTo: "post-1" };
+    const afterReplies = computeStableChatTimelineRows([withReplies], state);
+    expect(afterReplies.result[0]).toBe(withReplies);
+
+    const sameNewObject: ChatMessage = { ...withReplies };
+    const afterSame = computeStableChatTimelineRows(
+      [sameNewObject],
+      afterReplies,
+    );
+    expect(afterSame.result[0]).toBe(withReplies);
+    expect(afterSame).toBe(afterReplies);
+
+    const otherPost: ChatMessage = { ...withReplies, repliesTo: "post-2" };
+    const afterOther = computeStableChatTimelineRows([otherPost], afterSame);
+    expect(afterOther.result[0]).toBe(otherPost);
+  });
 });
 
 describe("didChatTimelineKeySequenceChange", () => {
