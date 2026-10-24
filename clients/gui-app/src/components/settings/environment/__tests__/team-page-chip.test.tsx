@@ -104,6 +104,33 @@ describe("the team page chip", () => {
     expect(harness.paramsOf("environment.host.list")).toHaveLength(reads);
   });
 
+  it("rereads the host reports until a host that has never reported does", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    let lastReportedAt: number | null = null;
+    const harness = mountTeamPage(poolSource("editor"), {
+      "environment.host.list": () => ({
+        hosts: [{ ...hostReporting("applied"), applied: [], lastReportedAt }],
+      }),
+    });
+    render(
+      <div data-testid="page-chip">
+        <PageChip section="shell" pick={PICK} />
+      </div>,
+      { wrapper: harness.Wrapper },
+    );
+
+    await waitFor(() => {
+      expect(chipText()).toBe("Applying on Mac mini…");
+    });
+    lastReportedAt = 1;
+    act(() => {
+      vi.advanceTimersByTime(5_000);
+    });
+    await waitFor(() => {
+      expect(chipText()).toBe("✓ On Mac mini");
+    });
+  });
+
   it("rereads the host reports after a save, so a later failure replaces the success", async () => {
     let state: EnvironmentHostItemApply["state"] = "applied";
     const harness = mountTeamPage(poolSource("editor"), {

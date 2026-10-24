@@ -42,13 +42,19 @@ function reportRows(
   return rows;
 }
 
-/** Whether a page-scoped report has an item the host has yet to settle. */
+/**
+ * Whether a host has yet to settle this page: it has never reported, or a
+ * page-scoped item is still on its way.
+ */
 export function poolReportPending(
   host: ConfigurationHostReport,
   kinds: ReadonlySet<string> | null,
 ): boolean {
-  return reportRows(host, kinds).some(
-    (row) => row.state === "received" || row.state === "waiting_resume",
+  return (
+    host.lastReportedAt === null ||
+    reportRows(host, kinds).some(
+      (row) => row.state === "received" || row.state === "waiting_resume",
+    )
   );
 }
 

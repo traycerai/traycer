@@ -470,9 +470,7 @@ describe("<AgentDefinitionsSettingsPanel />", () => {
     renderPage([REVIEWER], { ...DEFAULT_RIG, failList: true });
 
     expect(
-      await screen.findByText(
-        "Couldn't read your agent definitions from this host.",
-      ),
+      await screen.findByText("Couldn't read these agent definitions."),
     ).toBeTruthy();
     expect(screen.queryByText("No agent definitions yet.")).toBeNull();
     expect(screen.queryByRole("textbox", { name: "File name" })).toBeNull();
