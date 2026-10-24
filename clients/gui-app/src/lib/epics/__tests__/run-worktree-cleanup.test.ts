@@ -244,7 +244,12 @@ describe("runWorktreeCleanup on a current host", () => {
       source: "task_sweep",
       epicId: "epic-1",
     });
-    commandCallbacks().onTargetComplete("/wt/sweep", true, undefined);
+    commandCallbacks().onTargetComplete(
+      "/wt/sweep",
+      true,
+      undefined,
+      undefined,
+    );
     commandCallbacks().onCommandComplete({
       requestedCount: 1,
       deletedCount: 1,
@@ -271,16 +276,15 @@ describe("runWorktreeCleanup on a current host", () => {
     const promise = runTaskCleanup(["/wt/removed", "/wt/declined", "/wt/busy"]);
     reachHost();
     const callbacks = commandCallbacks();
-    callbacks.onTargetComplete("/wt/removed", true, undefined);
+    callbacks.onTargetComplete("/wt/removed", true, undefined, undefined);
     // A decline is `deleted: false`, not a thrown failure - both are failures
     // for the tally, and neither stops its siblings.
-    callbacks.onTargetComplete("/wt/declined", false, undefined);
-    callbacks.onTargetFailed(
-      "/wt/busy",
-      "worktree is busy",
-      undefined,
-      undefined,
-    );
+    callbacks.onTargetComplete("/wt/declined", false, undefined, undefined);
+    callbacks.onTargetFailed("/wt/busy", "worktree is busy", {
+      holders: undefined,
+      code: undefined,
+      errorTail: undefined,
+    });
     callbacks.onCommandComplete({
       requestedCount: 3,
       deletedCount: 1,
@@ -302,7 +306,7 @@ describe("runWorktreeCleanup on a current host", () => {
   it("reports targets the host settled while detached as unconfirmed", async () => {
     const promise = runTaskCleanup(["/wt/seen", "/wt/missed"]);
     reachHost();
-    commandCallbacks().onTargetComplete("/wt/seen", true, undefined);
+    commandCallbacks().onTargetComplete("/wt/seen", true, undefined, undefined);
     // The host does not replay per-target frames to a late observer, so
     // `command.complete` is terminal for anything still open.
     commandCallbacks().onCommandComplete({
@@ -321,7 +325,7 @@ describe("runWorktreeCleanup on a current host", () => {
   it("reports a drop after the command reached the host as unconfirmed, without replaying it", async () => {
     const promise = runTaskCleanup(["/wt/a", "/wt/b"]);
     reachHost();
-    commandCallbacks().onTargetComplete("/wt/a", true, undefined);
+    commandCallbacks().onTargetComplete("/wt/a", true, undefined, undefined);
     commandCallbacks().onConnectionStatus("reconnecting", null);
 
     await expect(promise).resolves.toEqual({
@@ -373,7 +377,7 @@ describe("runWorktreeCleanup on a current host", () => {
     const promise = runTaskCleanup(["/wt/a"]);
     commandCallbacks().onConnectionStatus("connecting", null);
     reachHost();
-    commandCallbacks().onTargetComplete("/wt/a", true, undefined);
+    commandCallbacks().onTargetComplete("/wt/a", true, undefined, undefined);
     commandCallbacks().onCommandComplete({
       requestedCount: 1,
       deletedCount: 1,
@@ -533,8 +537,8 @@ describe("runWorktreeCleanup stopOwners paths", () => {
     expect(legacyMock.paths).toEqual([]);
 
     reachHost();
-    commandCallbacks().onTargetComplete("/wt/idle", true, undefined);
-    commandCallbacks().onTargetComplete("/wt/busy", true, undefined);
+    commandCallbacks().onTargetComplete("/wt/idle", true, undefined, undefined);
+    commandCallbacks().onTargetComplete("/wt/busy", true, undefined, undefined);
     commandCallbacks().onCommandComplete({
       requestedCount: 2,
       deletedCount: 2,
@@ -579,7 +583,7 @@ describe("runWorktreeCleanup stopOwners paths", () => {
     expect(legacyMock.stopOwnersByPath.get("/wt/busy")).toBe(true);
 
     legacyCallbacksFor("/wt/busy").onComplete(true);
-    commandCallbacks().onTargetComplete("/wt/idle", true, undefined);
+    commandCallbacks().onTargetComplete("/wt/idle", true, undefined, undefined);
     commandCallbacks().onCommandComplete({
       requestedCount: 1,
       deletedCount: 1,
