@@ -6,6 +6,7 @@ import {
 } from "@tanstack/react-query";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import type { RequiredHostMethodVersion } from "@traycer/protocol/host-transport/remote/rpc-types";
 import type {
   EnvironmentDescriptorV11,
   EnvironmentListResponseV11,
@@ -24,6 +25,15 @@ import { resolvePoolTierHostClient } from "@/lib/host/binding-host-client";
 import { queryKeys } from "@/lib/query-keys";
 
 const METHOD = "environment.members";
+
+/**
+ * The members read the GUI needs: `@1.0` names no roles, and its upgrade
+ * would show every member as a viewer.
+ */
+export const ENVIRONMENT_MEMBERS_FLOOR: RequiredHostMethodVersion = {
+  method: METHOD,
+  version: { major: 1, minor: 1 },
+};
 
 const FIRST_PAGE: ReadonlyArray<string | null> = [null];
 
@@ -146,6 +156,7 @@ export function useEnvironmentMembersList(
     client,
     requests,
     cacheKeyIdentity: viewerUserId,
+    requiredHostMethodVersion: () => ENVIRONMENT_MEMBERS_FLOOR,
     options: {
       enabled: enabled && environmentId !== null && viewerUserId.length > 0,
       refetchOnWindowFocus: false,

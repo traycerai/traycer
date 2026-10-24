@@ -9,6 +9,7 @@ import type {
 } from "@traycer/protocol/host/environment/contracts";
 import {
   mountTeamPage,
+  mountTeamPageNegotiating,
   requireTeamHostClient,
   resetTeamPageHarness,
 } from "@/components/settings/environment/__tests__/team-configuration-test-support";
@@ -34,11 +35,18 @@ vi.mock("@/hooks/chats/use-cloud-chat-queries", async (importOriginal) => ({
   useCloudChatViewerId: () => "u-admin",
 }));
 // The host's handshake is the external boundary: it serves every Members
-// method unless a test says `environment.members` is not served.
-const handshake = vi.hoisted(() => ({ servesMembers: true }));
+// method, `environment.members` at @1.1, unless a test says otherwise.
+const handshake = vi.hoisted(() => ({
+  servesMembers: true,
+  membersVersion: { major: 1, minor: 1 },
+}));
 vi.mock("@/hooks/host/use-host-supports-method", () => ({
   useHostMethodSupport: (_hostId: string | null, method: string) =>
     method === "environment.members" ? handshake.servesMembers : true,
+  useHostMethodSchemaVersion: (_hostId: string | null, method: string) =>
+    method === "environment.members" && handshake.servesMembers
+      ? handshake.membersVersion
+      : null,
   useHostSupportsMethod: () => true,
 }));
 
@@ -47,6 +55,7 @@ afterEach(() => {
   resetTeamPageHarness();
   useHostNotificationsStore.setState({ byId: {} });
   handshake.servesMembers = true;
+  handshake.membersVersion = { major: 1, minor: 1 };
 });
 
 const TEAM: EnvironmentDescriptorV11 = {
@@ -221,6 +230,58 @@ describe("MembersPage members read", () => {
     expect(screen.getByTestId("members-needs-update").textContent).toBe(
       "These members need an updated host.",
     );
+    expect(harness.paramsOf("environment.members")).toHaveLength(0);
+  });
+
+  it("shows a host that negotiates environment.members@1.0 as needing an update, not a team of viewers", async () => {
+    handshake.membersVersion = { major: 1, minor: 0 };
+    // What a @1.0 page reads as once upgraded: every member a viewer.
+    const harness = mountTeamPageNegotiating(
+      { kind: "host" },
+      {
+        "environment.list": () => ({ environments: [TEAM] }),
+        "environment.members": () =>
+          membersPage([
+            member("u-admin", "Ada", "viewer"),
+            member("u-priya", "Priya", "viewer"),
+          ]),
+      },
+      { "environment.members": { major: 1, minor: 0 } },
+    );
+    render(<MembersPage environmentId="env-a" />, {
+      wrapper: harness.Wrapper,
+    });
+
+    expect(
+      (await screen.findByTestId("members-needs-update")).textContent,
+    ).toBe("These members need an updated host.");
+    expect(screen.queryByTestId("members-row")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Invite" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+    expect(harness.paramsOf("environment.members")).toHaveLength(0);
+  });
+
+  it("shows a read the connection refuses below environment.members@1.1 as needing an update", async () => {
+    // The handshake read at render says @1.1; the connection carrying the
+    // read negotiated @1.0, as after a host is replaced in place.
+    const harness = mountTeamPageNegotiating(
+      { kind: "host" },
+      {
+        "environment.list": () => ({ environments: [TEAM] }),
+        "environment.members": () =>
+          membersPage([member("u-admin", "Ada", "viewer")]),
+      },
+      { "environment.members": { major: 1, minor: 0 } },
+    );
+    render(<MembersPage environmentId="env-a" />, {
+      wrapper: harness.Wrapper,
+    });
+
+    expect(
+      (await screen.findByTestId("members-needs-update")).textContent,
+    ).toBe("These members need an updated host.");
+    expect(screen.queryByTestId("members-row")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
     expect(harness.paramsOf("environment.members")).toHaveLength(0);
   });
 
